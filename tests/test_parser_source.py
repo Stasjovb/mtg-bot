@@ -44,6 +44,11 @@ from mtg_bot.cards.parser_source import (
     _parse_warp_line,
 )
 from mtg_bot.cards.tokens import TOKEN_PRINTINGS
+from mtg_bot.effects.modifiers import (
+    ContinuousModifier,
+    GrantKeyword,
+    PowerToughnessBonus,
+)
 
 
 # ---------- _parse_clause ----------
@@ -2301,32 +2306,52 @@ def test_build_creature_printing_accepts_pure_sacrifice_cost_activated_ability()
 
 def test_parse_static_ability_line_artifact_pt_only():
     """Cloudsculpt Technician's exact static-ability line — bare
-    P/T modifier, no granted keyword."""
+    P/T modifier, no granted keyword. PR-D continuous-effects shape:
+    P/T contribution rides on a layer-7c
+    ContinuousModifier(PowerToughnessBonus); the legacy
+    requires_artifact_you_control gate stays as the surface today."""
     result = _parse_static_ability_line(
         "As long as you control an artifact, this creature gets +1/+0."
     )
     assert result == (StaticAbility(
         scope=StaticScope.SELF,
-        power_bonus=1,
-        toughness_bonus=0,
+        continuous_effect=ContinuousModifier(
+            layer=7,
+            payload=PowerToughnessBonus(power_bonus=1, toughness_bonus=0),
+        ),
         requires_artifact_you_control=True,
     ),)
 
 
 def test_parse_static_ability_line_artifact_pt_and_keyword():
     """Gravblade Heavy's exact static-ability line — P/T modifier
-    plus an ``and has <keyword>`` tail."""
+    plus an ``and has <keyword>`` tail. Compound P/T + keyword statics
+    fan out into one StaticAbility for the layer-7c P/T contribution +
+    one per keyword for the layer-6 GrantKeyword."""
     result = _parse_static_ability_line(
         "As long as you control an artifact, this creature gets +1/+0 "
         "and has deathtouch."
     )
-    assert result == (StaticAbility(
-        scope=StaticScope.SELF,
-        power_bonus=1,
-        toughness_bonus=0,
-        granted_keywords=frozenset({"deathtouch"}),
-        requires_artifact_you_control=True,
-    ),)
+    assert result == (
+        StaticAbility(
+            scope=StaticScope.SELF,
+            continuous_effect=ContinuousModifier(
+                layer=7,
+                payload=PowerToughnessBonus(
+                    power_bonus=1, toughness_bonus=0,
+                ),
+            ),
+            requires_artifact_you_control=True,
+        ),
+        StaticAbility(
+            scope=StaticScope.SELF,
+            continuous_effect=ContinuousModifier(
+                layer=6,
+                payload=GrantKeyword("deathtouch"),
+            ),
+            requires_artifact_you_control=True,
+        ),
+    )
 
 
 def test_parse_static_ability_line_extracts_pt_amounts():
@@ -2337,8 +2362,10 @@ def test_parse_static_ability_line_extracts_pt_amounts():
     )
     assert result == (StaticAbility(
         scope=StaticScope.SELF,
-        power_bonus=2,
-        toughness_bonus=3,
+        continuous_effect=ContinuousModifier(
+            layer=7,
+            payload=PowerToughnessBonus(power_bonus=2, toughness_bonus=3),
+        ),
         requires_artifact_you_control=True,
     ),)
 
@@ -2350,8 +2377,10 @@ def test_parse_static_ability_line_strips_whitespace():
     )
     assert _parse_static_ability_line(line) == (StaticAbility(
         scope=StaticScope.SELF,
-        power_bonus=1,
-        toughness_bonus=0,
+        continuous_effect=ContinuousModifier(
+            layer=7,
+            payload=PowerToughnessBonus(power_bonus=1, toughness_bonus=0),
+        ),
         requires_artifact_you_control=True,
     ),)
 
@@ -2376,8 +2405,10 @@ def test_parse_static_ability_line_recognizes_active_turn_condition():
         "As long as it's your turn, this creature gets +2/+0."
     ) == (StaticAbility(
         scope=StaticScope.SELF,
-        power_bonus=2,
-        toughness_bonus=0,
+        continuous_effect=ContinuousModifier(
+            layer=7,
+            payload=PowerToughnessBonus(power_bonus=2, toughness_bonus=0),
+        ),
         active_turn_only=True,
     ),)
 
@@ -2414,8 +2445,10 @@ def test_parse_clause_recognizes_static_ability():
     assert parsed is not None
     assert parsed.statics == (StaticAbility(
         scope=StaticScope.SELF,
-        power_bonus=1,
-        toughness_bonus=0,
+        continuous_effect=ContinuousModifier(
+            layer=7,
+            payload=PowerToughnessBonus(power_bonus=1, toughness_bonus=0),
+        ),
         requires_artifact_you_control=True,
     ),)
     assert parsed.keywords == ()
@@ -2444,8 +2477,12 @@ def test_build_creature_printing_handles_simple_static_ability():
     assert printing.static_abilities == (
         StaticAbility(
             scope=StaticScope.SELF,
-            power_bonus=1,
-            toughness_bonus=0,
+            continuous_effect=ContinuousModifier(
+                layer=7,
+                payload=PowerToughnessBonus(
+                    power_bonus=1, toughness_bonus=0,
+                ),
+            ),
             requires_artifact_you_control=True,
         ),
     )
@@ -2475,8 +2512,12 @@ def test_build_creature_printing_handles_static_with_keyword_line():
     assert printing.static_abilities == (
         StaticAbility(
             scope=StaticScope.SELF,
-            power_bonus=1,
-            toughness_bonus=0,
+            continuous_effect=ContinuousModifier(
+                layer=7,
+                payload=PowerToughnessBonus(
+                    power_bonus=1, toughness_bonus=0,
+                ),
+            ),
             requires_artifact_you_control=True,
         ),
     )

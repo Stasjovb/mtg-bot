@@ -39,20 +39,30 @@ from mtg_bot.cards.parser.statics import (
     _parse_static_ability_line,
 )
 from mtg_bot.cards.parser_source import OracleParserCardSource
+from mtg_bot.effects.modifiers import (
+    ContinuousModifier,
+    GrantKeyword,
+    PowerToughnessBonus,
+)
 
 
 # ---------- "you've cast two or more spells this turn" → requires_spells_cast_this_turn=2 ----------
 
 
 def test_spells_cast_two_or_more_parses_to_static():
+    # PR-D continuous-effects shape: P/T contribution rides on a
+    # layer-7c ContinuousModifier(PowerToughnessBonus); the legacy
+    # requires_spells_cast_this_turn gate stays as the surface today.
     parsed = _parse_static_ability_line(
         "As long as you've cast two or more spells this turn, this "
         "creature gets +2/+0."
     )
     assert parsed == (StaticAbility(
         scope=StaticScope.SELF,
-        power_bonus=2,
-        toughness_bonus=0,
+        continuous_effect=ContinuousModifier(
+            layer=7,
+            payload=PowerToughnessBonus(power_bonus=2, toughness_bonus=0),
+        ),
         requires_spells_cast_this_turn=2,
     ),)
 
@@ -60,17 +70,33 @@ def test_spells_cast_two_or_more_parses_to_static():
 def test_spells_cast_two_or_more_with_keyword_rider():
     # The ``and has <keyword>`` tail must compose with the new
     # condition the same way it composes with the artifact condition.
+    # Compound P/T + keyword statics fan out into one StaticAbility
+    # for the layer-7c P/T contribution + one per keyword for the
+    # layer-6 GrantKeyword.
     parsed = _parse_static_ability_line(
         "As long as you've cast two or more spells this turn, this "
         "creature gets +2/+0 and has flying."
     )
-    assert parsed == (StaticAbility(
-        scope=StaticScope.SELF,
-        power_bonus=2,
-        toughness_bonus=0,
-        granted_keywords=frozenset({"flying"}),
-        requires_spells_cast_this_turn=2,
-    ),)
+    assert parsed == (
+        StaticAbility(
+            scope=StaticScope.SELF,
+            continuous_effect=ContinuousModifier(
+                layer=7,
+                payload=PowerToughnessBonus(
+                    power_bonus=2, toughness_bonus=0,
+                ),
+            ),
+            requires_spells_cast_this_turn=2,
+        ),
+        StaticAbility(
+            scope=StaticScope.SELF,
+            continuous_effect=ContinuousModifier(
+                layer=6,
+                payload=GrantKeyword("flying"),
+            ),
+            requires_spells_cast_this_turn=2,
+        ),
+    )
 
 
 def test_spells_cast_two_or_more_does_not_set_other_gates():

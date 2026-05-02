@@ -25,21 +25,31 @@ from mtg_bot.cards.parser.statics import (
     _parse_static_ability_line,
 )
 from mtg_bot.cards.parser_source import OracleParserCardSource
+from mtg_bot.effects.modifiers import (
+    ContinuousModifier,
+    GrantKeyword,
+    PowerToughnessBonus,
+)
 
 
 # ---------- Trailing-shape happy paths ----------
 
 
 def test_trailing_shape_spells_cast_parses_to_static():
-    # The exact Brightspear Zealot oracle line.
+    # The exact Brightspear Zealot oracle line. PR-D continuous-effects
+    # shape: P/T contribution rides on a layer-7c
+    # ContinuousModifier(PowerToughnessBonus); the legacy
+    # requires_spells_cast_this_turn gate stays as the surface today.
     parsed = _parse_static_ability_line(
         "This creature gets +2/+0 as long as you've cast two or more "
         "spells this turn."
     )
     assert parsed == (StaticAbility(
         scope=StaticScope.SELF,
-        power_bonus=2,
-        toughness_bonus=0,
+        continuous_effect=ContinuousModifier(
+            layer=7,
+            payload=PowerToughnessBonus(power_bonus=2, toughness_bonus=0),
+        ),
         requires_spells_cast_this_turn=2,
     ),)
 
@@ -51,26 +61,43 @@ def test_trailing_shape_artifact_parses_to_static():
     )
     assert parsed == (StaticAbility(
         scope=StaticScope.SELF,
-        power_bonus=1,
-        toughness_bonus=0,
+        continuous_effect=ContinuousModifier(
+            layer=7,
+            payload=PowerToughnessBonus(power_bonus=1, toughness_bonus=0),
+        ),
         requires_artifact_you_control=True,
     ),)
 
 
 def test_trailing_shape_with_keyword_rider():
     # The ``and has <keyword>`` tail sits between the P/T modifier and
-    # the ``as long as`` clause in the trailing shape.
+    # the ``as long as`` clause in the trailing shape. Compound P/T +
+    # keyword statics fan out: one StaticAbility for the layer-7c P/T
+    # contribution + one per keyword for the layer-6 GrantKeyword.
     parsed = _parse_static_ability_line(
         "This creature gets +1/+0 and has deathtouch as long as you "
         "control an artifact."
     )
-    assert parsed == (StaticAbility(
-        scope=StaticScope.SELF,
-        power_bonus=1,
-        toughness_bonus=0,
-        granted_keywords=frozenset({"deathtouch"}),
-        requires_artifact_you_control=True,
-    ),)
+    assert parsed == (
+        StaticAbility(
+            scope=StaticScope.SELF,
+            continuous_effect=ContinuousModifier(
+                layer=7,
+                payload=PowerToughnessBonus(
+                    power_bonus=1, toughness_bonus=0,
+                ),
+            ),
+            requires_artifact_you_control=True,
+        ),
+        StaticAbility(
+            scope=StaticScope.SELF,
+            continuous_effect=ContinuousModifier(
+                layer=6,
+                payload=GrantKeyword("deathtouch"),
+            ),
+            requires_artifact_you_control=True,
+        ),
+    )
 
 
 def test_trailing_shape_with_multiword_keyword_rider():
@@ -81,13 +108,26 @@ def test_trailing_shape_with_multiword_keyword_rider():
         "This creature gets +1/+1 and has first strike as long as "
         "you've cast two or more spells this turn."
     )
-    assert parsed == (StaticAbility(
-        scope=StaticScope.SELF,
-        power_bonus=1,
-        toughness_bonus=1,
-        granted_keywords=frozenset({"first strike"}),
-        requires_spells_cast_this_turn=2,
-    ),)
+    assert parsed == (
+        StaticAbility(
+            scope=StaticScope.SELF,
+            continuous_effect=ContinuousModifier(
+                layer=7,
+                payload=PowerToughnessBonus(
+                    power_bonus=1, toughness_bonus=1,
+                ),
+            ),
+            requires_spells_cast_this_turn=2,
+        ),
+        StaticAbility(
+            scope=StaticScope.SELF,
+            continuous_effect=ContinuousModifier(
+                layer=6,
+                payload=GrantKeyword("first strike"),
+            ),
+            requires_spells_cast_this_turn=2,
+        ),
+    )
 
 
 # ---------- Leading vs. trailing equivalence ----------
@@ -145,8 +185,10 @@ def test_trailing_shape_active_turn_parses_to_static():
     )
     assert parsed == (StaticAbility(
         scope=StaticScope.SELF,
-        power_bonus=1,
-        toughness_bonus=1,
+        continuous_effect=ContinuousModifier(
+            layer=7,
+            payload=PowerToughnessBonus(power_bonus=1, toughness_bonus=1),
+        ),
         active_turn_only=True,
     ),)
 

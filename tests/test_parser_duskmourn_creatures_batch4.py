@@ -219,18 +219,38 @@ def test_parse_delirium_trailing_static_line():
     # ``_strip_static_ability_word_prefix`` helper, then the trailing
     # ``as long as <gate>`` shape claims with the new
     # ``requires_delirium`` kwarg from the gate phrasebook.
+    # PR-D continuous-effects shape: P/T contribution rides on a
+    # layer-7c ContinuousModifier(PowerToughnessBonus); the keyword
+    # rides on a layer-6 ContinuousModifier(GrantKeyword); compound
+    # statics fan out into one StaticAbility per ContinuousModifier.
+    from mtg_bot.effects.modifiers import (
+        ContinuousModifier, GrantKeyword, PowerToughnessBonus,
+    )
     parsed = _parse_static_ability_line(
         "Delirium — This creature gets +1/+1 and has trample as long "
         "as there are four or more card types among cards in your "
         "graveyard."
     )
-    assert parsed == (StaticAbility(
-        scope=StaticScope.SELF,
-        power_bonus=1,
-        toughness_bonus=1,
-        granted_keywords=frozenset({"trample"}),
-        requires_delirium=True,
-    ),)
+    assert parsed == (
+        StaticAbility(
+            scope=StaticScope.SELF,
+            continuous_effect=ContinuousModifier(
+                layer=7,
+                payload=PowerToughnessBonus(
+                    power_bonus=1, toughness_bonus=1,
+                ),
+            ),
+            requires_delirium=True,
+        ),
+        StaticAbility(
+            scope=StaticScope.SELF,
+            continuous_effect=ContinuousModifier(
+                layer=6,
+                payload=GrantKeyword("trample"),
+            ),
+            requires_delirium=True,
+        ),
+    )
 
 
 def test_parse_static_line_unrecognized_gate_after_delirium_prefix():
@@ -264,16 +284,26 @@ def test_wildfire_wickerfolk_carries_delirium_static():
     # The claimed printing must actually carry the
     # ``requires_delirium=True`` field on its static ability so the
     # engine gates the +1/+1 / trample bonus on the four-card-types
-    # threshold rather than applying it unconditionally.
+    # threshold rather than applying it unconditionally. PR-D
+    # continuous-effects shape: compound P/T + keyword statics fan out
+    # into two StaticAbility instances, both gated by requires_delirium.
+    from mtg_bot.effects.modifiers import (
+        ContinuousModifier, GrantKeyword, PowerToughnessBonus,
+    )
     src = OracleParserCardSource()
     ww = src.get_printings()["Wildfire Wickerfolk"]
     assert "haste" in ww.keywords
-    assert len(ww.static_abilities) == 1
-    static = ww.static_abilities[0]
-    assert static.power_bonus == 1
-    assert static.toughness_bonus == 1
-    assert static.granted_keywords == frozenset({"trample"})
-    assert static.requires_delirium is True
+    assert len(ww.static_abilities) == 2
+    pt_static, kw_static = ww.static_abilities
+    assert pt_static.continuous_effect == ContinuousModifier(
+        layer=7,
+        payload=PowerToughnessBonus(power_bonus=1, toughness_bonus=1),
+    )
+    assert pt_static.requires_delirium is True
+    assert kw_static.continuous_effect == ContinuousModifier(
+        layer=6, payload=GrantKeyword("trample"),
+    )
+    assert kw_static.requires_delirium is True
 
 
 # ---------- ``basic_land`` SearchLibraryForCard filter ----------
@@ -339,8 +369,13 @@ def test_spineseeker_centipede_carries_basic_land_etb_and_delirium_static():
     # new ``basic_land`` filter into its ETB trigger and the
     # ``requires_delirium=True`` field into its static — otherwise the
     # parser could mis-claim the card with a different effect that
-    # passed the surface-text gate.
+    # passed the surface-text gate. PR-D continuous-effects shape:
+    # compound P/T + keyword statics fan out into two StaticAbility
+    # instances.
     from mtg_bot.effects.generic import SearchLibraryForCard
+    from mtg_bot.effects.modifiers import (
+        ContinuousModifier, GrantKeyword, PowerToughnessBonus,
+    )
     src = OracleParserCardSource()
     sc = src.get_printings()["Spineseeker Centipede"]
     assert len(sc.triggered_abilities) == 1
@@ -348,12 +383,17 @@ def test_spineseeker_centipede_carries_basic_land_etb_and_delirium_static():
     assert trig.effect == SearchLibraryForCard(
         filter_name="basic_land", may_fail=True,
     )
-    assert len(sc.static_abilities) == 1
-    static = sc.static_abilities[0]
-    assert static.power_bonus == 1
-    assert static.toughness_bonus == 2
-    assert static.granted_keywords == frozenset({"vigilance"})
-    assert static.requires_delirium is True
+    assert len(sc.static_abilities) == 2
+    pt_static, kw_static = sc.static_abilities
+    assert pt_static.continuous_effect == ContinuousModifier(
+        layer=7,
+        payload=PowerToughnessBonus(power_bonus=1, toughness_bonus=2),
+    )
+    assert pt_static.requires_delirium is True
+    assert kw_static.continuous_effect == ContinuousModifier(
+        layer=6, payload=GrantKeyword("vigilance"),
+    )
+    assert kw_static.requires_delirium is True
 
 
 # ---------- ``ReturnCreatureFromYourGraveyardToHand`` max_mv ----------

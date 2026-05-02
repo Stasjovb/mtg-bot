@@ -295,27 +295,40 @@ def test_creature_phrase_still_resolves_after_batch11():
 # ---------- Static-condition: "you've cast three or more spells this turn" ----------
 
 def test_three_or_more_spells_leading_shape_parses_to_static():
+    # PR-D continuous-effects shape: P/T contribution rides on a
+    # layer-7c ContinuousModifier(PowerToughnessBonus); the legacy
+    # requires_spells_cast_this_turn gate stays as the surface today.
+    from mtg_bot.effects.modifiers import (
+        ContinuousModifier, PowerToughnessBonus,
+    )
     parsed = _parse_static_ability_line(
         "As long as you've cast three or more spells this turn, this "
         "creature gets +3/+0."
     )
     assert parsed == (StaticAbility(
         scope=StaticScope.SELF,
-        power_bonus=3,
-        toughness_bonus=0,
+        continuous_effect=ContinuousModifier(
+            layer=7,
+            payload=PowerToughnessBonus(power_bonus=3, toughness_bonus=0),
+        ),
         requires_spells_cast_this_turn=3,
     ),)
 
 
 def test_three_or_more_spells_trailing_shape_parses_to_static():
+    from mtg_bot.effects.modifiers import (
+        ContinuousModifier, PowerToughnessBonus,
+    )
     parsed = _parse_static_ability_line(
         "This creature gets +3/+0 as long as you've cast three or more "
         "spells this turn."
     )
     assert parsed == (StaticAbility(
         scope=StaticScope.SELF,
-        power_bonus=3,
-        toughness_bonus=0,
+        continuous_effect=ContinuousModifier(
+            layer=7,
+            payload=PowerToughnessBonus(power_bonus=3, toughness_bonus=0),
+        ),
         requires_spells_cast_this_turn=3,
     ),)
 
@@ -335,17 +348,36 @@ def test_three_or_more_spells_leading_and_trailing_are_equivalent():
 
 
 def test_three_or_more_spells_with_keyword_rider_leading():
+    # Compound P/T + keyword statics fan out into two StaticAbility
+    # instances — one for the layer-7c P/T contribution and one for
+    # the layer-6 GrantKeyword.
+    from mtg_bot.effects.modifiers import (
+        ContinuousModifier, GrantKeyword, PowerToughnessBonus,
+    )
     parsed = _parse_static_ability_line(
         "As long as you've cast three or more spells this turn, this "
         "creature gets +2/+0 and has trample."
     )
-    assert parsed == (StaticAbility(
-        scope=StaticScope.SELF,
-        power_bonus=2,
-        toughness_bonus=0,
-        granted_keywords=frozenset({"trample"}),
-        requires_spells_cast_this_turn=3,
-    ),)
+    assert parsed == (
+        StaticAbility(
+            scope=StaticScope.SELF,
+            continuous_effect=ContinuousModifier(
+                layer=7,
+                payload=PowerToughnessBonus(
+                    power_bonus=2, toughness_bonus=0,
+                ),
+            ),
+            requires_spells_cast_this_turn=3,
+        ),
+        StaticAbility(
+            scope=StaticScope.SELF,
+            continuous_effect=ContinuousModifier(
+                layer=6,
+                payload=GrantKeyword("trample"),
+            ),
+            requires_spells_cast_this_turn=3,
+        ),
+    )
 
 
 def test_three_or_more_spells_distinct_from_two_or_more():

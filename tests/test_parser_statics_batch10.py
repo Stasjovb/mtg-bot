@@ -23,19 +23,29 @@ from mtg_bot.cards.parser.statics import (
     _STATIC_CONDITION_KWARGS,
     _parse_static_ability_line,
 )
+from mtg_bot.effects.modifiers import (
+    ContinuousModifier,
+    GrantKeyword,
+    PowerToughnessBonus,
+)
 
 
 # ---------- "it's your turn" → active_turn_only=True ----------
 
 
 def test_active_turn_leading_shape_parses_to_static():
+    # PR-D continuous-effects shape: P/T contribution rides on a
+    # layer-7c ContinuousModifier(PowerToughnessBonus); the legacy
+    # active_turn_only gate stays as the surface today.
     parsed = _parse_static_ability_line(
         "As long as it's your turn, this creature gets +2/+0."
     )
     assert parsed == (StaticAbility(
         scope=StaticScope.SELF,
-        power_bonus=2,
-        toughness_bonus=0,
+        continuous_effect=ContinuousModifier(
+            layer=7,
+            payload=PowerToughnessBonus(power_bonus=2, toughness_bonus=0),
+        ),
         active_turn_only=True,
     ),)
 
@@ -46,8 +56,10 @@ def test_active_turn_trailing_shape_parses_to_static():
     )
     assert parsed == (StaticAbility(
         scope=StaticScope.SELF,
-        power_bonus=2,
-        toughness_bonus=0,
+        continuous_effect=ContinuousModifier(
+            layer=7,
+            payload=PowerToughnessBonus(power_bonus=2, toughness_bonus=0),
+        ),
         active_turn_only=True,
     ),)
 
@@ -65,17 +77,33 @@ def test_active_turn_leading_and_trailing_are_equivalent():
 
 
 def test_active_turn_with_keyword_rider_leading():
+    # Compound P/T + keyword statics fan out into one StaticAbility
+    # for the layer-7c P/T contribution + one per keyword for the
+    # layer-6 GrantKeyword.
     parsed = _parse_static_ability_line(
         "As long as it's your turn, this creature gets +1/+0 and has "
         "flying."
     )
-    assert parsed == (StaticAbility(
-        scope=StaticScope.SELF,
-        power_bonus=1,
-        toughness_bonus=0,
-        granted_keywords=frozenset({"flying"}),
-        active_turn_only=True,
-    ),)
+    assert parsed == (
+        StaticAbility(
+            scope=StaticScope.SELF,
+            continuous_effect=ContinuousModifier(
+                layer=7,
+                payload=PowerToughnessBonus(
+                    power_bonus=1, toughness_bonus=0,
+                ),
+            ),
+            active_turn_only=True,
+        ),
+        StaticAbility(
+            scope=StaticScope.SELF,
+            continuous_effect=ContinuousModifier(
+                layer=6,
+                payload=GrantKeyword("flying"),
+            ),
+            active_turn_only=True,
+        ),
+    )
 
 
 def test_active_turn_with_keyword_rider_trailing():
@@ -83,13 +111,26 @@ def test_active_turn_with_keyword_rider_trailing():
         "This creature gets +1/+0 and has deathtouch as long as it's "
         "your turn."
     )
-    assert parsed == (StaticAbility(
-        scope=StaticScope.SELF,
-        power_bonus=1,
-        toughness_bonus=0,
-        granted_keywords=frozenset({"deathtouch"}),
-        active_turn_only=True,
-    ),)
+    assert parsed == (
+        StaticAbility(
+            scope=StaticScope.SELF,
+            continuous_effect=ContinuousModifier(
+                layer=7,
+                payload=PowerToughnessBonus(
+                    power_bonus=1, toughness_bonus=0,
+                ),
+            ),
+            active_turn_only=True,
+        ),
+        StaticAbility(
+            scope=StaticScope.SELF,
+            continuous_effect=ContinuousModifier(
+                layer=6,
+                payload=GrantKeyword("deathtouch"),
+            ),
+            active_turn_only=True,
+        ),
+    )
 
 
 def test_active_turn_with_multiword_keyword_rider():
@@ -100,13 +141,26 @@ def test_active_turn_with_multiword_keyword_rider():
         "As long as it's your turn, this creature gets +1/+1 and has "
         "first strike."
     )
-    assert parsed == (StaticAbility(
-        scope=StaticScope.SELF,
-        power_bonus=1,
-        toughness_bonus=1,
-        granted_keywords=frozenset({"first strike"}),
-        active_turn_only=True,
-    ),)
+    assert parsed == (
+        StaticAbility(
+            scope=StaticScope.SELF,
+            continuous_effect=ContinuousModifier(
+                layer=7,
+                payload=PowerToughnessBonus(
+                    power_bonus=1, toughness_bonus=1,
+                ),
+            ),
+            active_turn_only=True,
+        ),
+        StaticAbility(
+            scope=StaticScope.SELF,
+            continuous_effect=ContinuousModifier(
+                layer=6,
+                payload=GrantKeyword("first strike"),
+            ),
+            active_turn_only=True,
+        ),
+    )
 
 
 def test_active_turn_does_not_set_other_gates():

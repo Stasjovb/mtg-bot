@@ -277,5 +277,14 @@ def test_alpharael_dreaming_acolyte_printing_metadata():
     # Static deathtouch on own turn.
     assert len(a.static_abilities) == 1
     sa = a.static_abilities[0]
-    assert "deathtouch" in sa.granted_keywords
-    assert sa.active_turn_only is True
+    # PR-D continuous-effects shape: keyword rides on a layer-6
+    # ``ContinuousModifier(GrantKeyword)`` and the during-your-turn
+    # gate is a structural ``condition=DuringYourTurn()``.
+    from mtg_bot.effects.conditions import DuringYourTurn
+    from mtg_bot.effects.modifiers import ContinuousModifier, GrantKeyword
+    assert sa.continuous_effect == ContinuousModifier(
+        layer=6, payload=GrantKeyword("deathtouch"),
+    )
+    assert sa.condition == DuringYourTurn()
+    assert sa.granted_keywords == frozenset()
+    assert sa.active_turn_only is False

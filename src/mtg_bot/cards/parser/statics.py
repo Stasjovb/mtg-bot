@@ -83,6 +83,7 @@ import re
 
 from mtg_bot.cards.base import StaticAbility, StaticScope
 from mtg_bot.cards.parser.keywords import _KEYWORD_LINES
+from mtg_bot.effects.conditions import DuringYourTurn
 from mtg_bot.effects.modifiers import (
     ContinuousModifier,
     GrantKeyword,
@@ -545,6 +546,12 @@ def _parse_static_ability_line(
         # controller. Alpharael, Dreaming Acolyte prints in this form;
         # name-substitution above converts the card's own name to "this
         # creature" so the regex sees the generic self-reference.
+        #
+        # PR-D continuous-effects shape: keyword rides on a layer-6
+        # ``ContinuousModifier(GrantKeyword)`` and the during-your-turn
+        # gate moves to a structural ``condition=DuringYourTurn()``. The
+        # legacy ``granted_keywords`` / ``active_turn_only`` fields are
+        # left at their defaults — no fallback hybrid.
         dtk = _DURING_YOUR_TURN_SELF_HAS_KEYWORD_LINE.match(stripped)
         if dtk is not None:
             kw_raw = dtk.group("keyword").strip().capitalize()
@@ -553,8 +560,11 @@ def _parse_static_ability_line(
                 return (
                     StaticAbility(
                         scope=StaticScope.SELF,
-                        granted_keywords=frozenset({engine_keyword}),
-                        active_turn_only=True,
+                        condition=DuringYourTurn(),
+                        continuous_effect=ContinuousModifier(
+                            layer=6,
+                            payload=GrantKeyword(engine_keyword),
+                        ),
                     ),
                 )
             return ()
@@ -586,19 +596,49 @@ def _parse_static_ability_line(
     cond_kwargs = _STATIC_CONDITION_KWARGS.get(condition)
     if cond_kwargs is None:
         return ()
-    granted: frozenset[str] = frozenset()
+    engine_keyword: str | None = None
     keyword = m.group("keyword")
     if keyword is not None:
         engine_keyword = _KEYWORD_LINES.get(keyword.strip().capitalize())
         if engine_keyword is None:
             return ()
-        granted = frozenset({engine_keyword})
-    return (
-        StaticAbility(
-            scope=StaticScope.SELF,
-            power_bonus=int(m.group("power")),
-            toughness_bonus=int(m.group("toughness")),
-            granted_keywords=granted,
-            **cond_kwargs,
-        ),
-    )
+    # PR-D continuous-effects shape: P/T contribution rides on a
+    # layer-7c ``ContinuousModifier(PowerToughnessBonus)``; each
+    # granted keyword rides on its own layer-6
+    # ``ContinuousModifier(GrantKeyword)``. A compound P/T + keyword
+    # static fans out into one StaticAbility per ContinuousModifier
+    # — same pattern as the anthem migration. The shared scope and
+    # ``**cond_kwargs`` legacy condition-gate are duplicated across
+    # the emitted instances; ``applies_to`` therefore fires/refuses
+    # on each one consistently. Migrated statics carry empty
+    # ``granted_keywords`` / zero ``power_bonus`` / zero
+    # ``toughness_bonus`` fields — no fallback hybrid.
+    power_bonus = int(m.group("power"))
+    toughness_bonus = int(m.group("toughness"))
+    statics: list[StaticAbility] = []
+    if power_bonus or toughness_bonus:
+        statics.append(
+            StaticAbility(
+                scope=StaticScope.SELF,
+                continuous_effect=ContinuousModifier(
+                    layer=7,
+                    payload=PowerToughnessBonus(
+                        power_bonus=power_bonus,
+                        toughness_bonus=toughness_bonus,
+                    ),
+                ),
+                **cond_kwargs,
+            )
+        )
+    if engine_keyword is not None:
+        statics.append(
+            StaticAbility(
+                scope=StaticScope.SELF,
+                continuous_effect=ContinuousModifier(
+                    layer=6,
+                    payload=GrantKeyword(engine_keyword),
+                ),
+                **cond_kwargs,
+            )
+        )
+    return tuple(statics)

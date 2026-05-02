@@ -412,18 +412,26 @@ def test_unrelated_subject_returns_empty_tuple():
 
 def test_during_your_turn_self_has_keyword_produces_self_scope_static():
     # ``During your turn, this creature has <keyword>.`` is now a
-    # recognized self-scope form: active_turn_only=True, SELF scope,
-    # with the stated keyword. Alpharael, Dreaming Acolyte prints in
-    # this exact surface form. Returns a 1-tuple in the new shape.
+    # recognized self-scope form: condition=DuringYourTurn(), SELF
+    # scope, keyword granted via a layer-6
+    # ContinuousModifier(GrantKeyword). Alpharael, Dreaming Acolyte
+    # prints in this exact surface form. Returns a 1-tuple in the new
+    # shape.
     from mtg_bot.cards.base import StaticScope
+    from mtg_bot.effects.conditions import DuringYourTurn
+    from mtg_bot.effects.modifiers import ContinuousModifier, GrantKeyword
     result = _parse_static_ability_line(
         "During your turn, this creature has deathtouch."
     )
     assert len(result) == 1
     static = result[0]
     assert static.scope == StaticScope.SELF
-    assert "deathtouch" in static.granted_keywords
-    assert static.active_turn_only is True
+    assert static.condition == DuringYourTurn()
+    assert static.continuous_effect == ContinuousModifier(
+        layer=6, payload=GrantKeyword("deathtouch"),
+    )
+    assert static.granted_keywords == frozenset()
+    assert static.active_turn_only is False
 
 
 def test_self_scope_line_does_not_match_anthem_directly():

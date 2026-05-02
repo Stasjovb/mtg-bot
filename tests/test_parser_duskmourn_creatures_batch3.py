@@ -364,15 +364,23 @@ def test_rampaging_soulrager_carries_unlocked_doors_static():
     # The claimed printing must actually carry the new gate field on
     # its static ability — otherwise the engine wouldn't gate the +3/+0
     # bonus on the door threshold and the printing would over-pump
-    # whenever it's on the battlefield.
+    # whenever it's on the battlefield. PR-D continuous-effects shape:
+    # P/T contribution rides on a layer-7c
+    # ContinuousModifier(PowerToughnessBonus); the legacy
+    # requires_unlocked_doors_among_rooms gate stays as the surface today.
     from mtg_bot.cards.parser.source import OracleParserCardSource
+    from mtg_bot.effects.modifiers import (
+        ContinuousModifier, PowerToughnessBonus,
+    )
     src = OracleParserCardSource()
     soulrager = src.get_printings()["Rampaging Soulrager"]
     statics = soulrager.static_abilities
     assert len(statics) == 1
     static = statics[0]
-    assert static.power_bonus == 3
-    assert static.toughness_bonus == 0
+    assert static.continuous_effect == ContinuousModifier(
+        layer=7,
+        payload=PowerToughnessBonus(power_bonus=3, toughness_bonus=0),
+    )
     assert static.requires_unlocked_doors_among_rooms == 2
 
 

@@ -302,8 +302,19 @@ def test_build_artifact_printing_routes_static_into_static_bucket():
     }
     printing = _build_artifact_printing(card)
     assert printing is not None
+    # PR-D continuous-effects shape: P/T contribution rides on a
+    # layer-7c ContinuousModifier(PowerToughnessBonus). The legacy
+    # power_bonus field is zero on migrated statics — read from the
+    # continuous_effect payload instead.
+    from mtg_bot.effects.modifiers import (
+        ContinuousModifier, PowerToughnessBonus,
+    )
     assert len(printing.static_abilities) == 1
-    assert printing.static_abilities[0].power_bonus == 1
+    sa = printing.static_abilities[0]
+    assert sa.continuous_effect == ContinuousModifier(
+        layer=7,
+        payload=PowerToughnessBonus(power_bonus=1, toughness_bonus=1),
+    )
 
 
 def test_source_claims_melded_moxite():
