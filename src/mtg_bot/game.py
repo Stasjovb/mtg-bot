@@ -632,6 +632,8 @@ def _layer6_entries_for(
       ``"lose_all_abilities"`` entry sourced by that permanent
       with its ``etb_timestamp``.
     """
+    from mtg_bot.effects.modifiers import GrantKeyword
+
     entries: list["ContinuousEffect"] = [
         ce for ce in state.continuous_effects
         if ce.layer == 6 and ce.target_id == obj.id
@@ -653,6 +655,35 @@ def _layer6_entries_for(
                         f"{source.printing.name} grants {kw}"
                     ),
                 ))
+            # PR D continuous-effects: anthem keyword grants migrated to
+            # ``ContinuousModifier(layer=6, GrantKeyword)`` declarations
+            # are synthesized into layer-6 entries here too so the
+            # within-layer-6 timestamp walk interleaves them with
+            # ``lose_all_abilities`` wipes correctly. The legacy
+            # ``granted_keywords`` walk above stays for non-migrated
+            # callers (Equipment riders contribute via equipment_bonuses
+            # below; SELF-scope statics still use granted_keywords).
+            ce_mod = ability.continuous_effect
+            if ce_mod is None or ce_mod.layer != 6:
+                continue
+            if not isinstance(ce_mod.payload, GrantKeyword):
+                continue
+            if ce_mod.subject_filter is not None and not ce_mod.subject_filter.test(
+                obj, state,
+            ):
+                continue
+            entries.append(ContinuousEffect(
+                source_id=source.id,
+                layer=6,
+                timestamp=source.etb_timestamp,
+                kind="grant_keyword",
+                target_id=obj.id,
+                params=(ce_mod.payload.keyword,),
+                description=(
+                    f"{source.printing.name} grants "
+                    f"{ce_mod.payload.keyword}"
+                ),
+            ))
     # Equipment keyword riders.
     for source in state.battlefield:
         if source.attached_to != obj.id:
@@ -735,16 +766,17 @@ def effective_keywords(state: GameState, obj: GameObject) -> frozenset[str]:
             kws.add(ce.params[0])
     # ContinuousModifier contributions from StaticAbility declarations.
     # Walked after the registry-based layer-6 pass so the existing
-    # grant_keyword / lose_all_abilities ordering is preserved.  The
-    # modifier grammar's GrantKeyword / RemoveKeyword payloads are
-    # layer-6 operations; for the current EoE pool (Mechan Shieldmate
-    # RemoveKeyword("defender")) no interaction with lose_all_abilities
-    # exists, so post-walk application is CR-correct.
-    from mtg_bot.effects.modifiers import GrantKeyword, RemoveKeyword, walk_continuous_modifiers
+    # grant_keyword / lose_all_abilities ordering is preserved. Only
+    # ``RemoveKeyword`` payloads are folded in here — ``GrantKeyword``
+    # payloads are already synthesized into the layer-6 timestamp walk
+    # above (via ``_layer6_entries_for``), so re-adding them here would
+    # re-grant a wiped keyword.  RemoveKeyword has no lose_all_abilities
+    # interaction in the current EoE pool (Mechan Shieldmate
+    # RemoveKeyword("defender") never overlaps with a layer-6 wipe), so
+    # post-walk application is CR-correct.
+    from mtg_bot.effects.modifiers import RemoveKeyword, walk_continuous_modifiers
     for _src_id, mod in walk_continuous_modifiers(state, obj):
-        if isinstance(mod.payload, GrantKeyword):
-            kws.add(mod.payload.keyword)
-        elif isinstance(mod.payload, RemoveKeyword):
+        if isinstance(mod.payload, RemoveKeyword):
             kws.discard(mod.payload.keyword)
     # CR 122 named counters that grant keywords — currently just the
     # "flying counter" custom counter type (DSK Ghost Vacuum). The
