@@ -1,28 +1,29 @@
 """Modifier-grammar primitives — :class:`ContinuousModifier` (CR 613)
 and :class:`ReplacementEffect` (CR 614).
 
-This module is the architectural pillar that replaces the per-card
-boolean-flag anti-pattern and literal-line recognizers in
-``printing_keywords.py`` / ``equipment_builder.py`` / ``statics.py``
-anthem family. Decomposition: a modifier is either a
+This module is the architectural pillar that replaced the per-card
+boolean-flag anti-pattern and literal-line recognizers across the
+parser. Decomposition: a modifier is either a
 :class:`ContinuousModifier` (CR 613 layer system — P/T mod, keyword
 grant/remove, type add) or a :class:`ReplacementEffect` (CR 614 —
 intercept events; transforms ``MultiplyCount(×N)``, ``AddToCount(+N)``,
 ``AddInstances(+N)``, ``Replace(other_event)``, ``Prevent``).
 
 Today every replacement-flag surface in the EoE pool is a native
-``StaticAbility.replacement_effect`` declaration on the printing —
-both the battlefield-resident family (``is_token_doubler`` /
-``is_counter_doubler`` / ``extra_etb_trigger`` /
-``replaces_draw_with_extra_when_hand_at_most_one``) and the
-moving-card family (``shuffles_into_library_instead_of_graveyard``).
-:func:`_collect_replacement_effects` walks both: a battlefield pass
-gates on ``source.controller_id == affected_player_id``, and a
-moving-card pass on ``card.owner_id == affected_player_id`` for any
-event whose ``subjects`` carry a ``"card"`` key. The continuous-
-effect side (anthem family, Mechan Shieldmate, Illvoi Infiltrator)
-is partially migrated; :func:`walk_continuous_modifiers` is the
-consumer-facing dispatcher.
+``StaticAbility.replacement_effect`` declaration on the printing.
+Reference cards: Exalted Sunborn (token-doubling MultiplyCount(×2)),
+Loading Zone (counter-doubling MultiplyCount(×2)), Starfield
+Vocalist (extra ETB trigger AddInstances(+1)), Quantum Riddler (draw
++1 when hand at most one AddToCount(+1)), and Nexus of Fate / Green
+Sun's Zenith (Replace destination = library instead of graveyard).
+:func:`_collect_replacement_effects` walks both surfaces: a
+battlefield pass gates on ``source.controller_id ==
+affected_player_id``, and a moving-card pass on ``card.owner_id ==
+affected_player_id`` for any event whose ``subjects`` carry a
+``"card"`` key. The continuous-effect side has fully landed too —
+the anthem family, Mechan Shieldmate, and Illvoi Infiltrator all
+flow through ``StaticAbility.continuous_effect: ContinuousModifier``;
+:func:`walk_continuous_modifiers` is the consumer-facing dispatcher.
 """
 
 from __future__ import annotations
