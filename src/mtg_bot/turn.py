@@ -308,6 +308,7 @@ def move_off_battlefield(
         ce for ce in state.continuous_effects
         if ce.target_id != obj.id
     ]
+    state._invalidate_layered_cache()
     # Layer-1 copy revert: if the leaving object was a copy
     # (Clone, Cytoshape, Mirage Mirror), restore the printing
     # from the captured ``original_printing`` snapshot so a

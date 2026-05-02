@@ -507,13 +507,27 @@ def _source_layer6_wiped(
     via the within-layer dependency rule even when this returns
     True — the dependency reorders the wipe and the grant within
     layer 6 so the recipients keep the granted abilities.
+
+    Memoized per ``(source.id, state._layered_cache_version)`` —
+    called inside the doubly-nested ``_static_bonuses`` walk
+    (~850k times in a self-play game per the 2026-05-02 perf
+    audit). The cache lives on ``state`` and is invalidated by
+    every site that mutates ``state.continuous_effects``.
     """
-    return any(
+    sid = source.id
+    cv = state._layered_cache_version
+    cache = state._layer6_wiped_cache
+    cached = cache.get(sid)
+    if cached is not None and cached[0] == cv:
+        return cached[1]
+    wiped = any(
         ce.layer == 6
         and ce.kind == "lose_all_abilities"
-        and ce.target_id == source.id
+        and ce.target_id == sid
         for ce in state.continuous_effects
     )
+    cache[sid] = (cv, wiped)
+    return wiped
 
 
 def _static_bonuses(
@@ -2331,6 +2345,29 @@ class GameState:
     # COUNTS deaths from any player — the printed clause doesn't
     # specify "you control", so a dies on either side suffices.
     creatures_died_this_turn: int = 0
+    # Layered-walk memoization. Bumped by ``_invalidate_layered_cache``
+    # whenever ``continuous_effects`` mutates. Cache entries store
+    # ``(version_at_compute, result)``; on lookup, an entry whose
+    # version doesn't match the current ``_layered_cache_version`` is
+    # treated as stale and recomputed. Per-state (not shared across
+    # clones — clone defaults to fresh empty cache + version=0).
+    # Currently caches ``_source_layer6_wiped`` only (~5% of profile
+    # at a single source.id; called 850k times in a single self-play
+    # game inside the doubly-nested ``_static_bonuses`` walk). The
+    # mechanism is general — future memoizations of ``_static_bonuses``
+    # / ``_compute_effective_pt`` / ``effective_keywords`` will reuse
+    # the same version counter and add their own per-key cache slots.
+    _layered_cache_version: int = 0
+    _layer6_wiped_cache: dict[int, tuple[int, bool]] = field(
+        default_factory=dict
+    )
+
+    def _invalidate_layered_cache(self) -> None:
+        """Invalidate every cached layered-walk result. Called by every
+        site that mutates ``continuous_effects``. Cheap: just bumps a
+        counter — stale dict entries are dropped lazily on the next
+        lookup miss."""
+        self._layered_cache_version += 1
 
     def active_player(self) -> Player:
         return self.players[self.active_player_idx]
@@ -2401,6 +2438,7 @@ class GameState:
             expires_at_player_id=expires_at_player_id,
         )
         self.continuous_effects.append(effect)
+        self._invalidate_layered_cache()
         return effect
 
     def grant_pt_pump_ueot(
@@ -2599,6 +2637,7 @@ class GameState:
                 continue
             dropped.append(ce)
         self.continuous_effects = kept
+        self._invalidate_layered_cache()
         return dropped
 
     def remove_continuous_effects_from_source(
@@ -2633,6 +2672,7 @@ class GameState:
             else:
                 kept.append(ce)
         self.continuous_effects = kept
+        self._invalidate_layered_cache()
         return dropped
 
     def creatures_controlled_by(self, player_id: int) -> list[GameObject]:

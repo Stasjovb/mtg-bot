@@ -2078,6 +2078,7 @@ class EnduringDiesReturnAsEnchantmentEffect(Effect):
                 and ce.target_id == source.id
             )
         ]
+        state._invalidate_layered_cache()
         put_into_battlefield(state, source, owner.id)
         # Mark the returned permanent as no-longer-a-creature. The
         # flag is sticky for the rest of this GameObject's life on
@@ -2146,6 +2147,7 @@ class PerigeeBeckonerDiesReturnTappedEffect(Effect):
                 and ce.target_id == source.id
             )
         ]
+        state._invalidate_layered_cache()
         put_into_battlefield(state, source, owner.id)
         source.tapped = True
         state.log.append(
