@@ -4430,19 +4430,20 @@ def _parse_effect(phrase: str) -> Effect | None:
     # ----------------------------------------------------------------
     # Aura-context effect-phrase recognizers (audit-litdispatch-auras).
     # Each entry routes a single Aura trigger body to its existing
-    # engine class via the unified effect grammar, replacing a
-    # whole-line entry that previously lived in
-    # ``mtg_bot.cards.parser.enchantment_builder._AURA_LITERAL_TRIGGER_LINES``.
-    # The trigger condition phrase (``this Aura enters`` /
-    # ``enchanted creature is dealt damage`` /
-    # ``At the beginning of your end step``) is already resolved by
-    # the predicate-trigger phrasebook in ``triggers.py``; these
-    # recognizers complete the round trip so the whole oracle line
-    # parses through the standard ``_parse_triggered_ability_line``
-    # path with no dedicated literal-table lookup. Each recognizer
-    # is a literal effect-phrase — only one or two cards in the pool
-    # ship the matching surface today, and broader generalization is
-    # deferred until a third example exists.
+    # engine class via the unified effect grammar. (Historical note:
+    # these recognizers were extracted from the now-retired
+    # ``_AURA_LITERAL_TRIGGER_LINES`` whole-line dispatch table when
+    # the bespoke surface was closed 2026-05-01/02.) The trigger
+    # condition phrase (``this Aura enters`` / ``enchanted creature
+    # is dealt damage`` / ``At the beginning of your end step``) is
+    # already resolved by the predicate-trigger phrasebook in
+    # ``triggers.py``; these recognizers complete the round trip so
+    # the whole oracle line parses through the standard
+    # ``_parse_triggered_ability_line`` path with no dedicated
+    # literal-table lookup. Each recognizer is a literal
+    # effect-phrase — only one or two cards in the pool ship the
+    # matching surface today, and broader generalization is deferred
+    # until a third example exists.
     # ----------------------------------------------------------------
     # ``destroy it`` — anaphoric Aura-context body. Used by
     # Cryoshatter's compound becomes-tapped-or-dealt-damage line
