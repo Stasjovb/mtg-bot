@@ -253,6 +253,7 @@ from mtg_bot.effects.generic.graveyard import (
     ReanimateTargetCreatureCardFromDefendersGraveyard,
     ReturnAllCreaturesFromYourGraveyardToBattlefield,
     ReturnCreatureFromYourGraveyardToBattlefield,
+    ReturnFromGraveyard,
 )
 
 from mtg_bot.effects.generic.zone_moves import (
@@ -495,6 +496,7 @@ __all__ = [
     "ReanimateTargetCreatureCardFromDefendersGraveyard",
     "ReturnAllCreaturesFromYourGraveyardToBattlefield",
     "ReturnCreatureFromYourGraveyardToBattlefield",
+    "ReturnFromGraveyard",
     # zone_moves
     "OwnerPutsTargetArtifactOrCreatureOnTopOrBottomOfLibrary",
     "OwnerPutsTargetWarpedExileCardOnBottomOfLibrary",

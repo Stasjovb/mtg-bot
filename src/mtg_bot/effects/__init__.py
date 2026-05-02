@@ -182,6 +182,7 @@ from mtg_bot.effects.generic import (
     ReturnCreatureFromYourGraveyardToBattlefield,
     ReturnCreatureFromYourGraveyardToHand,
     ReturnExiledPermanentToOwnerTapped,
+    ReturnFromGraveyard,
     ReturnTargetArtifactCardFromYourGraveyardToHand,
     ReturnTargetCreatureToOwnersHand,
     ReturnTargetLandFromGraveyardToHand,

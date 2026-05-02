@@ -4,30 +4,25 @@ Houses the unified ``ReturnFromGraveyard`` base and its constructor-sugar
 subclasses (the legacy ``Return*FromGraveyard*`` family). Each subclass
 preserves its public name and constructor surface for parser-dispatch /
 test stability; the base does the actual zone-walk + filter + move +
-optional rider work."""
+optional rider work.
+
+Sibling cluster files for adjacent surface areas:
+  * ``bounce.py`` — battlefield-to-hand bounces and the legacy bounce
+    sugar classes (also re-exports several ``ReturnFromGraveyard``
+    subclasses for cards whose printed text starts with "return" but
+    whose engine semantics live here).
+  * ``zone_moves.py`` — generic zone-to-zone primitives that don't
+    fit the graveyard-return family.
+"""
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Callable, Literal
+from dataclasses import dataclass
+from typing import TYPE_CHECKING, Literal
 
-from mtg_bot.effects.base import (
-    Effect, Target, TriggeredAbility,
-    _apply_damage, _multicolored_permanents_count,
-    _find_moonlit_replacement_source,
-)
-from mtg_bot.effects.generic.targets_helpers import (
-    _eff_subtypes,
-    _slot_target_still_legal,
-    _fizzle_message,
-    _describe_targets,
-    _describe_filter,
-    _bounce_to_hand,
-)
+from mtg_bot.effects.base import Effect, Target
 
 if TYPE_CHECKING:
-    from mtg_bot.cards import ManaCost, CardPrinting
-    from mtg_bot.effects.formulas import Formula
     from mtg_bot.game import GameState
 
 
