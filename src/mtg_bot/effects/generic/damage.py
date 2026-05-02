@@ -1,0 +1,727 @@
+"""Generic effects cluster module. Behavior and API unchanged from
+the pre-split mtg_bot.effects.generic monolith; this is a pure file move."""
+
+from __future__ import annotations
+
+from dataclasses import dataclass, field
+from typing import TYPE_CHECKING
+
+from mtg_bot.effects.base import (
+    Effect, Target, TriggeredAbility,
+    _apply_damage, _multicolored_permanents_count,
+    _find_moonlit_replacement_source,
+)
+from mtg_bot.effects.generic.targets_helpers import (
+    _eff_subtypes,
+    _slot_target_still_legal,
+    _fizzle_message,
+    _describe_targets,
+    _describe_filter,
+    _bounce_to_hand,
+)
+
+if TYPE_CHECKING:
+    from mtg_bot.cards import ManaCost
+    from mtg_bot.effects.formulas import Formula
+    from mtg_bot.game import GameState
+
+
+@dataclass(frozen=True)
+class DealDamage(Effect):
+    """Unified deal-damage primitive driven by ``targets``.
+
+    Replaces the eleven pre-PR-#3 deal-damage recognizer-classes at
+    the static-amount level (``DealDamageAnyTarget``,
+    ``DealDamageToTargetCreature``, ``DealDamageToOpponentCreature``,
+    ``DealDamageToTargetTappedCreature``,
+    ``DealDamageToTargetOpponent``). The ``targets`` field — typically
+    a single ``TargetSpec`` for damage today — declares the legal-
+    target shape via the ``TargetFilter`` grammar; the resolve walk
+    re-verifies legality at fire time per CR 608.2b and applies the
+    damage to whichever slots survive.
+
+    Bespoke-amount damage classes (count-source artifact / cards-in-
+    hand, X-base-plus-creature-count Focus Fire, excess-rider
+    Lander, Spacecraft-boosted) keep their own engine classes —
+    they need bespoke amount logic — but consult ``targets[0].filter``
+    via ``Effect._enumerate_for_filter`` to share the same target-
+    grammar plumbing.
+    """
+
+    amount: int = 0
+    targets: tuple = ()
+
+    def resolve(
+        self, state: "GameState", controller_id: int,
+        targets: tuple[Target, ...] = (),
+    ) -> None:
+        if not targets:
+            return
+        # Re-verify each chosen target against its slot's filter at
+        # resolution per CR 608.2b. Slots whose object is no longer
+        # legal (creature untapped, blocking creature stopped blocking,
+        # etc.) log a fizzle line and skip — the user-visible feedback
+        # mirrors the legacy per-class messages ("is no longer tapped
+        # — damage fizzles") with a generic phrasing the unified
+        # dispatcher can produce without introspecting the filter.
+        from mtg_bot.effects.targets import SlotRef, TargetSpec
+        prior = getattr(state, "resolving_controller_id", None)
+        try:
+            state.resolving_controller_id = controller_id
+            for slot, chosen in zip(self.targets, targets):
+                if isinstance(slot, SlotRef):
+                    # Back-references aren't in the targets tuple
+                    # under PR #3 — defensively skip.
+                    continue
+                if not isinstance(slot, TargetSpec):
+                    continue
+                if not _slot_target_still_legal(state, slot, chosen):
+                    state.log.append(_fizzle_message(state, chosen))
+                    continue
+                _apply_damage(state, chosen, self.amount)
+        finally:
+            state.resolving_controller_id = prior
+
+    def describe(self) -> str:
+        return f"deals {self.amount} damage to {_describe_targets(self.targets)}"
+
+
+@dataclass(frozen=True)
+class DealDamageToTargetOpponent(DealDamage):
+    """``DealDamage`` constructor sugar for "deals N damage to target
+    opponent".
+
+    Filter is ``IsPlayer() & ControlledByOpponent()``; the
+    ``ControlledByOpponent`` arm makes the spell's caster (the
+    "you" in MTG parlance) ineligible.
+
+    NB: ``amount`` defaults to 1 to mirror the legacy class's default;
+    most call sites pass an explicit value but a few constructed it
+    bare.
+    """
+
+    amount: int = 1
+
+    def __post_init__(self) -> None:
+        from mtg_bot.effects.object_predicates import (
+            ControlledByOpponent, IsPlayer,
+        )
+        from mtg_bot.effects.targets import TargetSpec
+        object.__setattr__(
+            self, "targets",
+            (TargetSpec(IsPlayer() & ControlledByOpponent()),),
+        )
+
+
+
+@dataclass(frozen=True)
+class DealNDamageToEachCreature(Effect):
+    """Deal ``amount`` damage to each creature on the battlefield.
+
+    Snapshot semantics: the victim list is captured before any damage
+    is applied, so any deaths mid-pass don't affect what gets damaged.
+    Marks damage via _apply_damage (the same helper used by targeted
+    burn), which routes through creature toughness for SBAs.
+    """
+
+    amount: int
+
+    def resolve(
+        self, state: "GameState", controller_id: int,
+        targets: tuple[Target, ...] = (),
+    ) -> None:
+        victims = [
+            o for o in state.battlefield if o.printing.is_creature
+        ]
+        for o in victims:
+            _apply_damage(state, ("creature", o.id), self.amount)
+
+    def describe(self) -> str:
+        return f"deals {self.amount} damage to each creature"
+
+
+
+@dataclass(frozen=True)
+class DealDamageEachOpponent(Effect):
+    """Deal ``amount`` damage to each living opponent. Untargeted — mass
+    burn half of Ruinous Rampage's choice.
+    """
+
+    amount: int = 1
+
+    def resolve(
+        self, state: "GameState", controller_id: int,
+        targets: tuple[Target, ...] = (),
+    ) -> None:
+        for p in state.players:
+            if p.id == controller_id or p.has_lost:
+                continue
+            p.life -= self.amount
+            state.log.append(
+                f"P{p.id} takes {self.amount} (life: {p.life})"
+            )
+
+    def describe(self) -> str:
+        return f"deals {self.amount} damage to each opponent"
+
+
+
+@dataclass(frozen=True)
+class DealDamageToControllerAndAddMana(Effect):
+    """Ancient Tomb's mana ability: "{T}: Add {C}{C}. This land deals
+    2 damage to you." Two-step: self-damage + pool fill. Paired with
+    is_mana_ability=True so it bypasses the stack.
+    """
+
+    damage: int = 2
+    produces: tuple[tuple[str, int], ...] = (("C", 2),)
+
+    def resolve(
+        self, state: "GameState", controller_id: int,
+        targets: tuple[Target, ...] = (),
+    ) -> None:
+        from mtg_bot.game import ManaCoin
+
+        p = state.player_by_id(controller_id)
+        p.life -= self.damage
+        state.log.append(
+            f"{state.resolving_source.printing.name if state.resolving_source else 'land'} "
+            f"deals {self.damage} to P{controller_id} (life: {p.life})"
+        )
+        for color, count in self.produces:
+            for _ in range(count):
+                p.mana_pool.append(ManaCoin(color=color))
+
+    def describe(self) -> str:
+        return (
+            f"add "
+            + "".join("{" + c + "}" for c, n in self.produces for _ in range(n))
+            + f"; this land deals {self.damage} damage to you"
+        )
+
+
+
+@dataclass(frozen=True)
+class DealDamageEqualToSourcePowerAnyTarget(Effect):
+    """Source deals damage equal to its (effective) power to any target
+    (creature or player).
+
+    Matches "this creature deals damage equal to its power to any
+    target" — Infernal Phantom's dies trigger in DSK. The amount is
+    snapshot from ``state.resolving_source.effective_power`` at resolve
+    time. For a dies-trigger source the GameObject is already in the
+    graveyard but ``state.resolving_source`` still references the
+    pre-death object so its layer-7 power can be read; if the power is
+    nonpositive the damage is a no-op (CR 119.5: "if the amount of
+    damage that would be dealt is 0 or less, no damage is dealt").
+
+    Bespoke amount (driven by source power) so the class survives the
+    PR #3 collapse, but the legal-target pool now consults
+    ``self.targets[0].filter`` via the structural ``TargetFilter``
+    grammar — same any-target expansion ``DealDamage`` uses.
+    """
+
+    targets: tuple = ()
+
+    def __post_init__(self) -> None:
+        if not self.targets:
+            from mtg_bot.effects.targets import TargetSpec, any_target_filter
+            object.__setattr__(
+                self, "targets",
+                (TargetSpec(any_target_filter()),),
+            )
+
+    def resolve(
+        self, state: "GameState", controller_id: int,
+        targets: tuple[Target, ...] = (),
+    ) -> None:
+        from mtg_bot.game import effective_power
+        if not targets:
+            return
+        source = state.resolving_source
+        if source is None:
+            return
+        amount = effective_power(state, source)
+        if amount <= 0:
+            return
+        if not _slot_target_still_legal(state, self.targets[0], targets[0]):
+            return
+        prior = getattr(state, "resolving_controller_id", None)
+        try:
+            state.resolving_controller_id = controller_id
+            _apply_damage(state, targets[0], amount)
+        finally:
+            state.resolving_controller_id = prior
+
+    def describe(self) -> str:
+        return (
+            "deals damage equal to this creature's power to any target"
+        )
+
+
+
+@dataclass(frozen=True)
+class DealDamageAnyTarget(DealDamage):
+    """``DealDamage`` constructor sugar for "deals N damage to any
+    target".
+
+    Identical at the engine level to
+    ``DealDamage(amount=N, targets=(TargetSpec(any_target_filter()),))``;
+    the subclass is sugar so the parser can emit a self-describing
+    name in the AST and existing parser tests' equality assertions
+    keep their per-shape granularity. No extra fields, no behavioural
+    overrides — every code path is the unified ``DealDamage`` resolve.
+    """
+
+    def __post_init__(self) -> None:
+        from mtg_bot.effects.targets import TargetSpec, any_target_filter
+        # Frozen dataclass: bypass __setattr__ via __dict__ write.
+        object.__setattr__(
+            self, "targets",
+            (TargetSpec(any_target_filter()),),
+        )
+
+
+@dataclass(frozen=True)
+class DealDamageToTargetCreature(DealDamage):
+    """``DealDamage`` constructor sugar for "deals N damage to (up to
+    one) target creature".
+
+    ``optional=True`` flips the slot's ``count_min`` to 0 so the
+    targeting pipeline treats the slot as ``0..1`` ("up to one
+    target creature"); default ``False`` is the bare 1..1 form.
+    """
+
+    optional: bool = False
+
+    def __post_init__(self) -> None:
+        from mtg_bot.effects.object_predicates import IsCreature
+        from mtg_bot.effects.targets import TargetSpec
+        spec = TargetSpec(
+            IsCreature(),
+            count_min=0 if self.optional else 1,
+            count_max=1,
+        )
+        object.__setattr__(self, "targets", (spec,))
+
+
+
+@dataclass(frozen=True)
+class DealDamageToTargetCreatureWithExcessLanderRider(Effect):
+    """Orbital Plunge `{3}{R}`:
+    "Orbital Plunge deals 6 damage to target creature. If excess damage
+    was dealt this way, create a Lander token."
+
+    Excess damage is the portion of the 6 that exceeded what was needed
+    to mark lethal on the target — ``damage_amount - max(0, effective
+    toughness - damage already marked)``. We check >0 after the damage
+    is applied. Lifelink/deathtouch are not modeled here; in real MTG
+    "excess" is resolved through rule 120.3e which handles that, but
+    for our simplified model, comparing amount to remaining toughness
+    is sufficient.
+
+    Bespoke amount-and-rider so the class survives PR #3's damage
+    collapse; legal-target pool now consults
+    ``self.targets[0].filter`` (``IsCreature()``) via the structural
+    target-grammar plumbing.
+    """
+
+    amount: int = 6
+    targets: tuple = ()
+
+    def __post_init__(self) -> None:
+        if not self.targets:
+            from mtg_bot.effects.object_predicates import IsCreature
+            from mtg_bot.effects.targets import TargetSpec
+            object.__setattr__(
+                self, "targets", (TargetSpec(IsCreature()),),
+            )
+
+    def resolve(
+        self, state: "GameState", controller_id: int,
+        targets: tuple[Target, ...] = (),
+    ) -> None:
+        from mtg_bot.actions import put_into_battlefield
+        from mtg_bot.cards import TOKEN_PRINTINGS
+        from mtg_bot.game import Zone, effective_toughness
+
+        if not targets:
+            return
+        prior = getattr(state, "resolving_controller_id", None)
+        try:
+            state.resolving_controller_id = controller_id
+            if not _slot_target_still_legal(
+                state, self.targets[0], targets[0]
+            ):
+                return
+            kind, target_id = targets[0]
+            obj = next(
+                (o for o in state.battlefield if o.id == target_id), None
+            )
+            excess = 0
+            if obj is not None:
+                remaining = max(0, effective_toughness(state, obj) - obj.damage)
+                excess = max(0, self.amount - remaining)
+            _apply_damage(state, targets[0], self.amount)
+            if excess > 0:
+                lander = state.new_object(
+                    TOKEN_PRINTINGS["Lander"],
+                    owner_id=controller_id,
+                    zone=Zone.BATTLEFIELD,
+                )
+                put_into_battlefield(state, lander, controller_id)
+                state.log.append(
+                    f"Orbital Plunge dealt {excess} excess damage; "
+                    f"P{controller_id} creates a Lander token"
+                )
+        finally:
+            state.resolving_controller_id = prior
+
+    def describe(self) -> str:
+        return (
+            f"deals {self.amount} damage to target creature; if excess "
+            f"damage was dealt this way, create a Lander token"
+        )
+
+
+
+@dataclass(frozen=True)
+class DealDamageToOpponentCreatureByArtifactCount(Effect):
+    """Deal damage equal to the number of artifacts you control to
+    target creature an opponent controls.
+
+    Matches Warmaker Gunship's ETB. Counts include lands that are also
+    artifacts (there aren't any in EoE) and tokens like Lander.
+
+    Bespoke amount (artifact count) so the class survives PR #3's
+    damage collapse, but the legal-target pool now consults
+    ``self.targets[0].filter`` via the structural ``TargetFilter``
+    grammar — ``IsCreature() & ControlledByOpponent()``.
+    """
+
+    targets: tuple = ()
+
+    def __post_init__(self) -> None:
+        if not self.targets:
+            from mtg_bot.effects.object_predicates import (
+                ControlledByOpponent, IsCreature,
+            )
+            from mtg_bot.effects.targets import TargetSpec
+            object.__setattr__(
+                self, "targets",
+                (TargetSpec(IsCreature() & ControlledByOpponent()),),
+            )
+
+    def resolve(
+        self, state: "GameState", controller_id: int,
+        targets: tuple[Target, ...] = (),
+    ) -> None:
+        if not targets:
+            return
+        prior = getattr(state, "resolving_controller_id", None)
+        try:
+            state.resolving_controller_id = controller_id
+            if not _slot_target_still_legal(
+                state, self.targets[0], targets[0]
+            ):
+                return
+            artifact_count = sum(
+                1 for o in state.battlefield
+                if o.controller_id == controller_id and o.printing.is_artifact
+            )
+            if artifact_count <= 0:
+                return
+            _apply_damage(state, targets[0], artifact_count)
+        finally:
+            state.resolving_controller_id = prior
+
+    def describe(self) -> str:
+        return (
+            "deals damage equal to the number of artifacts you control to "
+            "target creature an opponent controls"
+        )
+
+
+
+@dataclass(frozen=True)
+class DealDamageToOpponentCreatureByCardsInHand(Effect):
+    """Deal damage equal to the number of cards in your hand to target
+    creature an opponent controls.
+
+    Matches Roaring Furnace's door trigger oracle: "this Room deals
+    damage equal to the number of cards in your hand to target creature
+    an opponent controls". The hand size is read at resolve time from
+    the controller's ``hand`` (post any cast/pay-cost effects, mirroring
+    MTG's resolution-time evaluation of the count).
+
+    The Room itself is NOT in the controller's hand at resolution time
+    (it's already on the battlefield by the time the door trigger
+    resolves), so a hand-of-N + the cast Room produces N damage, not
+    N+1 — same hand count an opponent or a third-party observer would
+    see at resolve time.
+
+    Bespoke amount (hand size) so the class survives PR #3's damage
+    collapse, but the legal-target pool now consults
+    ``self.targets[0].filter`` — ``IsCreature() & ControlledByOpponent()``.
+    """
+
+    targets: tuple = ()
+
+    def __post_init__(self) -> None:
+        if not self.targets:
+            from mtg_bot.effects.object_predicates import (
+                ControlledByOpponent, IsCreature,
+            )
+            from mtg_bot.effects.targets import TargetSpec
+            object.__setattr__(
+                self, "targets",
+                (TargetSpec(IsCreature() & ControlledByOpponent()),),
+            )
+
+    def resolve(
+        self, state: "GameState", controller_id: int,
+        targets: tuple[Target, ...] = (),
+    ) -> None:
+        if not targets:
+            return
+        prior = getattr(state, "resolving_controller_id", None)
+        try:
+            state.resolving_controller_id = controller_id
+            if not _slot_target_still_legal(
+                state, self.targets[0], targets[0]
+            ):
+                return
+            hand_size = len(state.player_by_id(controller_id).hand)
+            if hand_size <= 0:
+                return
+            _apply_damage(state, targets[0], hand_size)
+        finally:
+            state.resolving_controller_id = prior
+
+    def describe(self) -> str:
+        return (
+            "deals damage equal to the number of cards in your hand to "
+            "target creature an opponent controls"
+        )
+
+
+
+@dataclass(frozen=True)
+class DealDamageToTargetCreatureSpacecraftBoosted(Effect):
+    """Deal ``base`` damage to a target creature; ``boosted`` instead
+    if you control a Spacecraft.
+
+    Matches Invasive Maneuvers (3/5). Any-target creature.
+
+    Bespoke amount (Spacecraft-conditional) so the class survives
+    PR #3's damage collapse; legal-target pool now consults
+    ``self.targets[0].filter`` (``IsCreature()``) via the structural
+    target-grammar plumbing.
+    """
+
+    base: int = 3
+    boosted: int = 5
+    targets: tuple = ()
+
+    def __post_init__(self) -> None:
+        if not self.targets:
+            from mtg_bot.effects.object_predicates import IsCreature
+            from mtg_bot.effects.targets import TargetSpec
+            object.__setattr__(
+                self, "targets", (TargetSpec(IsCreature()),),
+            )
+
+    def _amount(self, state: "GameState", controller_id: int) -> int:
+        has_spacecraft = any(
+            o.controller_id == controller_id and o.printing.is_spacecraft
+            for o in state.battlefield
+        )
+        return self.boosted if has_spacecraft else self.base
+
+    def resolve(
+        self, state: "GameState", controller_id: int,
+        targets: tuple[Target, ...] = (),
+    ) -> None:
+        if not targets:
+            return
+        prior = getattr(state, "resolving_controller_id", None)
+        try:
+            state.resolving_controller_id = controller_id
+            if not _slot_target_still_legal(
+                state, self.targets[0], targets[0]
+            ):
+                return
+            _apply_damage(
+                state, targets[0], self._amount(state, controller_id),
+            )
+        finally:
+            state.resolving_controller_id = prior
+
+    def describe(self) -> str:
+        return (
+            f"deals {self.base} damage to target creature, {self.boosted} "
+            f"instead if you control a Spacecraft"
+        )
+
+
+
+@dataclass(frozen=True)
+class DealDamageToOpponentCreature(DealDamage):
+    """``DealDamage`` constructor sugar for "deals N damage to target
+    creature an opponent controls".
+
+    The filter ``IsCreature() & ControlledByOpponent()`` reads
+    ``state.resolving_controller_id`` (pinned by
+    ``Effect._enumerate_for_filter``) so the legal-target pool is
+    restricted to creatures the spell's caster doesn't control.
+    """
+
+    def __post_init__(self) -> None:
+        from mtg_bot.effects.object_predicates import (
+            ControlledByOpponent, IsCreature,
+        )
+        from mtg_bot.effects.targets import TargetSpec
+        object.__setattr__(
+            self, "targets",
+            (TargetSpec(IsCreature() & ControlledByOpponent()),),
+        )
+
+
+
+@dataclass(frozen=True)
+class DealDamageToTargetTappedCreature(DealDamage):
+    """``DealDamage`` constructor sugar for "deals N damage to target
+    tapped creature".
+
+    Filter is ``IsCreature() & IsTapped()``; the unified
+    ``DealDamage.resolve`` re-verifies the slot's filter against the
+    current battlefield at resolution time, so a target that
+    untapped between cast and resolve fails the recheck and the
+    damage application is skipped per CR 608.2b.
+    """
+
+    def __post_init__(self) -> None:
+        from mtg_bot.effects.object_predicates import IsCreature, IsTapped
+        from mtg_bot.effects.targets import TargetSpec
+        object.__setattr__(
+            self, "targets",
+            (TargetSpec(IsCreature() & IsTapped()),),
+        )
+
+
+
+@dataclass(frozen=True)
+class DrawCardsAndLoseLifeEqualToResolvingDamage(Effect):
+    """"You draw that many cards and lose that much life." — the granted
+    UEOT trigger body Requiem Monolith installs on the target creature.
+
+    Reads ``state.resolving_combat_damage_amount`` (set by the dealt-
+    damage fire helper to the incoming damage amount, regardless of
+    whether the damage was combat or non-combat) and applies it to the
+    granted creature's controller — ``state.resolving_source`` is set
+    to the granted creature itself by ``_fire_enchanted_dealt_damage_
+    triggers``, so the creature's controller drives both the draw and
+    the life-loss step.
+
+    No-op if the resolving amount is 0 or the resolving source is None
+    (defensive — the helper sets both correctly).
+    """
+
+    def resolve(
+        self, state: "GameState", controller_id: int,
+        targets: tuple[Target, ...] = (),
+    ) -> None:
+        from mtg_bot.turn import draw_card
+
+        amount = state.resolving_combat_damage_amount
+        if amount <= 0:
+            return
+        source = state.resolving_source
+        if source is None:
+            return
+        owner = state.player_by_id(source.controller_id)
+        for _ in range(amount):
+            draw_card(state, owner.id)
+        owner.life -= amount
+        state.log.append(
+            f"P{owner.id} draws {amount} and loses {amount} life "
+            f"(life: {owner.life})"
+        )
+
+    def describe(self) -> str:
+        return "you draw that many cards and lose that much life"
+
+
+@dataclass(frozen=True)
+class MayHaveSourceDealDamageToTarget(Effect):
+    """"That creature's controller may have <source> deal N damage to
+    it." — Requiem Monolith's optional-ping body.
+
+    The TARGET's controller (NOT the activator/resolving controller)
+    chooses whether to take the optional damage. Anaphoric to the
+    target chosen by an upstream sub-effect in the same ``Sequence``
+    (typically ``GrantTriggeredAbilityUEOT``); the target tuple is
+    threaded through by ``Sequence.resolve``'s pass-through (Sequence
+    forwards its ``targets`` to every sub-effect, untargeted ones
+    accept the parameter via ``targets: tuple = ()`` and ignore it,
+    anaphoric ones like this primitive read ``targets[0]`` directly).
+
+    Declares ``requires_target=False`` so ``Sequence.__post_init__``'s
+    "at most one targeting sub-effect" check still permits the
+    upstream targeter alongside this primitive.
+
+    On accept, the source deals ``amount`` damage to the chosen
+    creature via direct ``damage`` write + ``_fire_enchanted_dealt_
+    damage_triggers`` (which fires any UEOT-granted dealt-damage
+    triggers on the target — e.g. the trigger the preceding
+    ``GrantTriggeredAbilityUEOT`` just installed).
+    """
+
+    amount: int = 1
+
+    def resolve(
+        self, state: "GameState", controller_id: int,
+        targets: tuple[Target, ...] = (),
+    ) -> None:
+        from mtg_bot.combat import _fire_enchanted_dealt_damage_triggers
+
+        if not targets:
+            return
+        kind, target_id = targets[0]
+        if kind != "creature":
+            return
+        tgt = next(
+            (o for o in state.battlefield if o.id == target_id), None
+        )
+        if tgt is None:
+            return
+        source = state.resolving_source
+        if source is None:
+            return
+        target_controller = state.player_by_id(tgt.controller_id)
+        if target_controller.has_lost or target_controller.agent is None:
+            return
+        accept = target_controller.agent.choose_yes_no(
+            state, target_controller.id,
+            f"have {source.printing.name} deal {self.amount} damage "
+            f"to {tgt.printing.name}",
+        )
+        if not accept:
+            state.log.append(
+                f"P{target_controller.id} declines the optional "
+                f"{self.amount} damage from {source.printing.name}"
+            )
+            return
+        tgt.damage += self.amount
+        tgt.damaged_this_turn = True
+        state.log.append(
+            f"{source.printing.name} deals {self.amount} to "
+            f"{tgt.printing.name}"
+        )
+        _fire_enchanted_dealt_damage_triggers(state, tgt, self.amount)
+
+    def describe(self) -> str:
+        return (
+            f"that creature's controller may have this artifact "
+            f"deal {self.amount} damage to it"
+        )
