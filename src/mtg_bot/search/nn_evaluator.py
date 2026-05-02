@@ -50,16 +50,27 @@ from mtg_bot.game import GameState as EngineGameState
 from mtg_bot.search.evaluator import Evaluator
 from mtg_bot.search.protocol import GameState, PlayerID
 
-# Hidden-layer widths. 3 hidden layers, ReLU between. ~420k params
-# at these sizes (51 → 512 → 512 → 256 → 1). Original arch was
-# (128, 128, 64) ≈ 25k params; the 2026-05-02 v2 evaluation showed
-# the 25k net was statistically indistinguishable from the heuristic
-# (45-55 over 100 games at PIMC defaults). 17× more capacity gives
-# the network room to fit deeper patterns; with 398k samples in the
-# pool, the data-to-param ratio stays around 1× which is workable
-# for a value-only fit. If we add a policy head later (A4 in the
-# AlphaZero-style upgrade plan), expect to scale up further.
-HIDDEN_SIZES: tuple[int, ...] = (512, 512, 256)
+# Hidden-layer widths. 3 hidden layers, ReLU between. ~25k params at
+# these sizes (51 → 128 → 128 → 64 → 1).
+#
+# History: the 2026-05-02 architecture-scaling experiment bumped
+# this to (512, 512, 256) ≈ 420k params (commit fd095a1) testing
+# the hypothesis "v2 didn't beat heuristic because the 25k network
+# was capacity-bound." v3 (the 420k network trained on the same
+# 398k samples) was strictly WORSE: 23-77 vs heuristic vs v2's
+# 45-55 — capacity wasn't the constraint. The bigger network
+# fit the heuristic-driven training distribution tighter and
+# generalized worse to the MCTS-driven evaluation distribution,
+# and value-only training without policy supervision can't
+# direct search any more than the heuristic does.
+#
+# The actual gating items are A4 (policy head — the network
+# learns to predict MCTS visit-count distributions per state, not
+# just outcomes) and A5 (PUCT MCTS — uses the policy as a search
+# prior). Once those land we can re-explore capacity with a
+# richer training signal. Until then, the 25k arch is the
+# known-OK baseline.
+HIDDEN_SIZES: tuple[int, ...] = (128, 128, 64)
 
 
 class _ValueMLP(nn.Module):
