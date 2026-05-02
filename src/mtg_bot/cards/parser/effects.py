@@ -189,6 +189,7 @@ from mtg_bot.effects.bespoke import (
     TerminalVelocityEffect,
 )
 from mtg_bot.effects.combinators import (
+    ConditionalIfYouControlSubtype,
     IfNot,
     IfYouDo,
     MayDo,
@@ -3496,6 +3497,44 @@ def _parse_effect(phrase: str) -> Effect | None:
         "You may play it this turn"
     ):
         return ExileTopOfLibraryMayPlayThisTurn(amount=1)
+    # Unholy Annex's end-step trigger body — three-sentence body
+    # composed of an unconditional draw, a Demon-or-not gate, and the
+    # alternate "otherwise" branch. Maps to
+    # ``Sequence(DrawCards(1), ConditionalIfYouControlSubtype(
+    # subtype="Demon",
+    # then_effect=Sequence(EachOpponentLosesLife(2), GainLife(2)),
+    # else_effect=LoseLife(2)))``. The
+    # ``ConditionalIfYouControlSubtype`` combinator reads
+    # ``effective_subtypes`` so a creature granted ``Demon`` by a
+    # Cytoshape / Conspiracy effect counts the same as a printed Demon
+    # (matches every other "if you control a <subtype>" gate in this
+    # pool). Multi-sentence literal recognizer because the body crosses
+    # two internal periods and the ``Otherwise`` continuation is an
+    # anaphoric else-arm referencing the prior gate — the sentence-
+    # splitter can't model that as a standalone clause. Only Unholy
+    # Annex in the pool today fits this exact "draw + subtype-gate +
+    # else" surface; broader grammar (a parameterized recognizer over
+    # <unconditional-effect>. If you control a <subtype>, <then>.
+    # Otherwise, <else>) deferred until a second example exists, at
+    # which point the regex's capture groups would feed the same
+    # ``Sequence`` + ``ConditionalIfYouControlSubtype`` composition
+    # automatically.
+    if phrase == (
+        "draw a card. If you control a Demon, "
+        "each opponent loses 2 life and you gain 2 life. "
+        "Otherwise, you lose 2 life"
+    ):
+        return Sequence(effects=(
+            DrawCards(amount=1),
+            ConditionalIfYouControlSubtype(
+                subtype="Demon",
+                then_effect=Sequence(effects=(
+                    EachOpponentLosesLife(amount=2),
+                    GainLife(amount=2),
+                )),
+                else_effect=LoseLife(amount=2),
+            ),
+        ))
     # Monoist Circuit-Feeder's ETB body — paired-target opposite-polarity
     # pump/debuff with a shared X. The compound-effect splitter can't
     # carve this body cleanly: ``Sequence`` supports only one targeting
