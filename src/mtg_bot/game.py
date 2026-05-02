@@ -2763,24 +2763,10 @@ class GameState:
         new_players: list[Player] = []
         for p in self.players:
             np = _clone_player(p)
-            # Library cards are shared by reference: the LIST is fresh
-            # (so list mutations — pop/append/remove/extend — don't
-            # leak across clones) but the GameObjects inside are the
-            # same Python instances. Safe because library cards are
-            # not mutated in-place in the engine — they only get
-            # mutated when they LEAVE the library zone (draw → hand,
-            # mill → graveyard, exile, search-and-shuffle), and those
-            # paths build a new GameObject reference into the
-            # destination zone. By the time any in-place mutation
-            # happens, the card is no longer in our library.
-            # Hand/graveyard/exile/mana_pool stay deep-cloned: hand
-            # and graveyard cards are routinely mutated in-place
-            # (cast, discard, return, dies-trigger flags). Library is
-            # the unique zone where sharing is safe.
-            np.library = list(p.library)
+            np.library = [clone_obj(o) for o in p.library]
             np.hand = [clone_obj(o) for o in p.hand]
-            np.graveyard = list(p.graveyard)
-            np.exile = list(p.exile)
+            np.graveyard = [clone_obj(o) for o in p.graveyard]
+            np.exile = [clone_obj(o) for o in p.exile]
             np.mana_pool = [_clone_mana_coin(c) for c in p.mana_pool]
             new_players.append(np)
 
