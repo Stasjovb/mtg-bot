@@ -18,8 +18,9 @@ Currently supports three land kinds:
   the static-side ``make_colorless_land`` simplification, which also
   ignores those abilities. The land taps for generic via the
   auto-tap-for-cost generic-mana fallback.
-- **EoS bespoke lands** — complex multi-ability EoS reprints claimed
-  by name in ``_BESPOKE_EOS_LANDS`` before any generic grammar arm.
+- **EoS bespoke lands** — historical name-keyed dispatch table
+  ``_BESPOKE_EOS_LANDS`` retired on 2026-05-01 (every entry had been
+  migrated to a parameterized recognizer; the table sat empty).
 - **Planet lands** (``Land — Planet`` subtype, EoE) — claimed by the
   parameterized ``_try_build_planet_land`` recognizer that captures
   the produced color and drops Station + tier-gated abilities.
@@ -377,17 +378,6 @@ def _try_build_plaza_of_heroes_land(
 #   - Inventors' Fair    → _try_build_legendary_artifact_search_land
 #   - Plaza of Heroes    → _try_build_plaza_of_heroes_land
 # ---------------------------------------------------------------------------
-def _make_bespoke_eos_lands() -> dict[str, CardPrinting]:
-    return {}
-
-
-_BESPOKE_EOS_LANDS: dict[str, CardPrinting] = _make_bespoke_eos_lands()
-
-# Set codes that carry full bespoke implementations in the static registry.
-# The colorless-utility-land simplifier already skips "eos" and "spg";
-# we gate the bespoke table on the same set codes so only true reprints
-# are claimed here.
-_BESPOKE_EOS_SETS: frozenset[str] = frozenset({"eos", "eoe", "spg"})
 
 
 # ---------------------------------------------------------------------------
@@ -848,15 +838,6 @@ def _build_land_printing(card: dict) -> CardPrinting | None:
             return None
         color = m.group(1)
         return make_basic_land(name=card["name"], color=color)
-    # Bespoke EoS lands: name-keyed exact dispatch before all grammar arms.
-    # Checked first so complex multi-ability shapes (Blinkmoth Nexus, Contested
-    # War Zone, Grove of the Burnwillows, …) can't accidentally partially-match
-    # a generic recognizer. Gated on set code so a main-set card with the same
-    # name doesn't get hijacked.
-    if card.get("set") in _BESPOKE_EOS_SETS:
-        bespoke = _BESPOKE_EOS_LANDS.get(card["name"])
-        if bespoke is not None:
-            return bespoke
     # Non-basic land shapes follow.
     plaza = _try_build_plaza_of_heroes_land(
         card, text, supertypes, subtypes,

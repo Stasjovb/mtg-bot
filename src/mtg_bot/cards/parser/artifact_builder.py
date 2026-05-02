@@ -133,7 +133,8 @@ to a ``Sequence`` of generic primitives):
   literal-effect recognizer in ``effects.py``.
 
 Two additional cards are claimed via the expanded unified grammar
-(migrated from ``_BESPOKE_ARTIFACT_BUILDERS`` in this round):
+(historically claimed by the now-retired ``_BESPOKE_ARTIFACT_BUILDERS``
+table — both factories were deleted on 2026-05-01):
 
 * **Thrumming Hivepool** — ``Affinity for Slivers`` keyword line
   (parsed by the new ``_parse_affinity_line`` recognizer in
@@ -239,101 +240,6 @@ from mtg_bot.effects.predicates import Controlled, Event, YOU
 # ``CreateNTokensFromLastExileRecall`` / ``SacrificeSelf`` for the
 # former; ``PutEachCreatureCardExiledWithSourceOntoBattlefieldUnder
 # YourControl`` for the latter).
-_LITERAL_ACTIVATED_LINES: dict[str, "callable"] = {}
-
-
-# Literal trigger-line dispatch. Same shape as
-# ``_LITERAL_ACTIVATED_LINES`` but emits a tuple of ``TriggeredAbility``
-# (one or more arms) instead of a single ``ActivatedAbility``. Used for
-# trigger lines whose surface form falls outside the unified
-# ``_parse_clause`` grammar (bespoke effect bodies that can't be
-# expressed as primitives). Empty today — every printing whose ETB
-# trigger previously routed through this table now claims via the
-# unified clause grammar.
-_LITERAL_TRIGGER_LINES: dict[str, "callable"] = {}
-
-
-def _build_found_footage() -> CardPrinting:
-    """Found Footage: ``{1}`` Artifact - Clue with the printed
-    informational static ``You may look at face-down creatures your
-    opponents control any time.`` plus the activated ability
-    ``{2}, Sacrifice this artifact: Surveil 2, then draw a card.``
-
-    The static is surface-only fidelity — the engine doesn't model
-    hidden information for face-down permanents, so the
-    ``looks_at_opponents_face_down_creatures`` flag is informational
-    today (no engine consequence). The activated body is the unified-
-    grammar Sequence(Surveil(2), DrawCards(1)) the activated parser
-    already produces, materialized directly here so the bespoke factory
-    matches the static-registry shape exactly without a parser round-
-    trip. ``subtype="Clue"`` lands the Clue subtype on the printing's
-    type line — first Clue in the engine pool.
-    """
-    return make_artifact(
-        "Found Footage", "{1}",
-        subtype="Clue",
-        looks_at_opponents_face_down_creatures=True,
-        activated_abilities=(
-            ActivatedAbility(
-                cost=ActivationCost(
-                    mana=parse_mana_cost("{2}"),
-                    mana_str="{2}",
-                    sacrifice_self=True,
-                ),
-                effect=Sequence(
-                    effects=(Surveil(amount=2), DrawCards(amount=1)),
-                ),
-            ),
-        ),
-    )
-
-
-def _build_thrumming_hivepool() -> CardPrinting:
-    """Thrumming Hivepool: Affinity for Slivers cost reduction, double
-    strike + haste anthem for Slivers you control, and an upkeep trigger
-    creating two 1/1 colorless Sliver tokens.
-    """
-    return make_artifact(
-        "Thrumming Hivepool", "{6}",
-        cost_reductions=(
-            CostReduction(
-                amount=1,
-                condition=PerControlled(HasSubtype("Sliver")),
-            ),
-        ),
-        static_abilities=(
-            StaticAbility(
-                scope=StaticScope.SLIVERS_YOU_CONTROL,
-                granted_keywords=frozenset({"double strike", "haste"}),
-            ),
-        ),
-        triggered_abilities=(
-            TriggeredAbility(
-                event=Event.BEGINNING_OF_UPKEEP, predicate=Controlled(YOU),
-                effect=CreateToken(
-                    token_printing=TOKEN_PRINTINGS["Sliver"],
-                    count=2,
-                ),
-            ),
-        ),
-    )
-
-
-# Name-keyed bespoke dispatch for artifacts whose oracle text uses
-# shapes the unified ``_parse_clause`` grammar and the per-line flag /
-# cost-reduction dispatchers don't yet cover. Each factory mirrors
-# the corresponding ``make_artifact`` call in ``eoe_spells.py`` exactly.
-# Thrumming Hivepool and Found Footage were migrated to the unified
-# clause grammar (``_parse_affinity_line`` for the Affinity rider,
-# ``_ANTHEM_SUBJECT_SCOPES["slivers you control"]`` for the Sliver
-# anthem, ``"your upkeep"`` in ``_AT_BEGINNING_OF_PHRASES`` for the
-# upkeep token trigger, and
-# ``_parse_looks_at_opponents_face_down_line`` in
-# ``printing_keywords.py`` for the looks-at-face-down-creatures
-# static).
-_BESPOKE_ARTIFACT_BUILDERS: dict[str, "callable[[], CardPrinting]"] = {}
-
-
 def _build_artifact_printing(card: dict) -> CardPrinting | None:
     """Try to produce a ``CardPrinting`` for a pure-Artifact ``card`` (a
     Scryfall record). Returns ``None`` if the card is not a pure
@@ -350,13 +256,6 @@ def _build_artifact_printing(card: dict) -> CardPrinting | None:
     supertype faithfully. They still fall through if their body
     contains lines outside the unified grammar.
     """
-    # Bespoke name-keyed dispatch wins over the unified clause grammar.
-    # These artifacts use shapes (affinity, anthem statics) the unified
-    # ``_parse_clause`` grammar doesn't model — claim them directly.
-    bespoke = _BESPOKE_ARTIFACT_BUILDERS.get(card.get("name", ""))
-    if bespoke is not None:
-        return bespoke()
-
     supertypes, card_types, subtypes = _parse_type_line(
         card.get("type_line", "")
     )
@@ -419,18 +318,7 @@ def _build_artifact_printing(card: dict) -> CardPrinting | None:
         # ``_parse_clause`` grammar (the multi-sentence literal-effect
         # recognizers in ``effects.py`` keep the anaphoric bodies
         # intact while still mapping to ``Sequence`` of generic
-        # primitives). The dispatch site is preserved so a future
-        # bespoke single-card body whose anaphora can't be expressed
-        # through the unified grammar can land here without restoring
-        # the surrounding boilerplate.
-        literal_activated_factory = _LITERAL_ACTIVATED_LINES.get(line)
-        if literal_activated_factory is not None:
-            activated.append(literal_activated_factory())
-            continue
-        literal_trigger_factory = _LITERAL_TRIGGER_LINES.get(line)
-        if literal_trigger_factory is not None:
-            triggers.extend(literal_trigger_factory())
-            continue
+        # primitives).
         clause = _parse_clause(line)
         if clause is None:
             # Anything the unified parser doesn't recognize - composite
