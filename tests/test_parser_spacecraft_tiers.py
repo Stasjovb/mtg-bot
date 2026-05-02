@@ -264,12 +264,22 @@ def test_build_spacecraft_printing_claims_tier_gated_anthem_static_body():
     assert printing.station_threshold == 6
     assert printing.stationed_keywords == frozenset({"flying"})
     assert printing.triggered_abilities == ()
+    from mtg_bot.effects.modifiers import (
+        ContinuousModifier, PowerToughnessBonus,
+    )
+    # PR-D pilot: pure P/T anthems are now ContinuousModifier-shaped;
+    # the tier_threshold rider stamps onto the same StaticAbility,
+    # carried alongside the continuous_effect.
     assert printing.static_abilities == (
         StaticAbility(
             scope=StaticScope.OTHER_CREATURES_YOU_CONTROL,
-            power_bonus=1,
-            toughness_bonus=1,
             tier_threshold=2,
+            continuous_effect=ContinuousModifier(
+                layer=7,
+                payload=PowerToughnessBonus(
+                    power_bonus=1, toughness_bonus=1,
+                ),
+            ),
         ),
     )
 

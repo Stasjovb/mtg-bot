@@ -83,6 +83,7 @@ import re
 
 from mtg_bot.cards.base import StaticAbility, StaticScope
 from mtg_bot.cards.parser.keywords import _KEYWORD_LINES
+from mtg_bot.effects.modifiers import ContinuousModifier, PowerToughnessBonus
 
 
 # Ability-word prefix stripper for static lines. Mirrors the trigger-
@@ -381,12 +382,36 @@ def _parse_anthem_static_line(line: str) -> StaticAbility | None:
                 return None
             engine_keywords.add(ek)
         granted = frozenset(engine_keywords)
+    active_turn_only = m.group("turn_rider") is not None
+    if (power_bonus or toughness_bonus) and not granted:
+        # PR D continuous-effects pilot: pure P/T-only anthems
+        # (no keyword-tail) are now expressed as a layer-7c
+        # ContinuousModifier(PowerToughnessBonus) declaration. The
+        # walker in ``mtg_bot.game._static_bonuses`` (added 2026-05-01,
+        # commit 24d5038) folds the contribution into effective P/T
+        # exactly the same way the legacy ``StaticAbility.power_bonus``
+        # / ``.toughness_bonus`` field reads did. Compound anthems
+        # (P/T + keyword in one line) and pure-keyword anthems still
+        # use the legacy field path — those need either a multi-payload
+        # ContinuousModifier or a tuple-of-StaticAbility return shape;
+        # follow-up todo 1d4f2a5c covers that broader migration.
+        return StaticAbility(
+            scope=scope,
+            active_turn_only=active_turn_only,
+            continuous_effect=ContinuousModifier(
+                layer=7,
+                payload=PowerToughnessBonus(
+                    power_bonus=power_bonus,
+                    toughness_bonus=toughness_bonus,
+                ),
+            ),
+        )
     return StaticAbility(
         scope=scope,
         power_bonus=power_bonus,
         toughness_bonus=toughness_bonus,
         granted_keywords=granted,
-        active_turn_only=m.group("turn_rider") is not None,
+        active_turn_only=active_turn_only,
     )
 
 

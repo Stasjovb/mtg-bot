@@ -32,6 +32,7 @@ from mtg_bot.cards.parser.statics import (
     _parse_static_ability_line,
 )
 from mtg_bot.cards.parser_source import OracleParserCardSource
+from mtg_bot.effects.modifiers import ContinuousModifier, PowerToughnessBonus
 
 
 # ---------- Anthem P/T-only happy paths ----------
@@ -40,26 +41,35 @@ from mtg_bot.cards.parser_source import OracleParserCardSource
 def test_inclusive_anthem_pt_only_parses_to_static():
     # ``Creatures you control get +N/+M.`` — inclusive subject, no
     # ``Other``, no keyword tail. Maps to CREATURES_YOU_CONTROL.
+    # PR-D-pilot shape: pure P/T anthems are now expressed as a
+    # layer-7 ContinuousModifier(PowerToughnessBonus); the legacy
+    # power_bonus/toughness_bonus fields default to 0 and the bonus
+    # is contributed by ``_static_bonuses``'s layer-7c walker.
     parsed = _parse_static_ability_line(
         "Creatures you control get +1/+1."
     )
     assert parsed == StaticAbility(
         scope=StaticScope.CREATURES_YOU_CONTROL,
-        power_bonus=1,
-        toughness_bonus=1,
+        continuous_effect=ContinuousModifier(
+            layer=7,
+            payload=PowerToughnessBonus(power_bonus=1, toughness_bonus=1),
+        ),
     )
 
 
 def test_exclusive_anthem_pt_only_parses_to_static():
     # ``Other creatures you control get +N/+M.`` — exclusive subject
-    # ("Other") maps to OTHER_CREATURES_YOU_CONTROL.
+    # ("Other") maps to OTHER_CREATURES_YOU_CONTROL. Same PR-D-pilot
+    # ContinuousModifier shape as the inclusive case.
     parsed = _parse_static_ability_line(
         "Other creatures you control get +2/+1."
     )
     assert parsed == StaticAbility(
         scope=StaticScope.OTHER_CREATURES_YOU_CONTROL,
-        power_bonus=2,
-        toughness_bonus=1,
+        continuous_effect=ContinuousModifier(
+            layer=7,
+            payload=PowerToughnessBonus(power_bonus=2, toughness_bonus=1),
+        ),
     )
 
 
@@ -130,15 +140,18 @@ def test_during_your_turn_pt_anthem_sets_active_turn_only():
     # your turn, `` rider sets ``active_turn_only=True``; the rest of
     # the parse proceeds as if the rider weren't present (subject
     # capitalization shifts to lowercase, which the regex tolerates
-    # via the ``[Oo]`` character class).
+    # via the ``[Oo]`` character class). Pure P/T anthem → PR-D-pilot
+    # ContinuousModifier shape.
     parsed = _parse_static_ability_line(
         "During your turn, other creatures you control get +1/+0."
     )
     assert parsed == StaticAbility(
         scope=StaticScope.OTHER_CREATURES_YOU_CONTROL,
-        power_bonus=1,
-        toughness_bonus=0,
         active_turn_only=True,
+        continuous_effect=ContinuousModifier(
+            layer=7,
+            payload=PowerToughnessBonus(power_bonus=1, toughness_bonus=0),
+        ),
     )
 
 
@@ -160,15 +173,18 @@ def test_during_your_turn_keyword_anthem_sets_active_turn_only():
 def test_during_your_turn_inclusive_subject():
     # The rider also rides on the inclusive (``Creatures you control``)
     # subject. After the rider the subject is lowercase ("creatures"),
-    # which the ``[Cc]`` character class accepts.
+    # which the ``[Cc]`` character class accepts. Pure P/T anthem →
+    # PR-D-pilot ContinuousModifier shape.
     parsed = _parse_static_ability_line(
         "During your turn, creatures you control get +1/+1."
     )
     assert parsed == StaticAbility(
         scope=StaticScope.CREATURES_YOU_CONTROL,
-        power_bonus=1,
-        toughness_bonus=1,
         active_turn_only=True,
+        continuous_effect=ContinuousModifier(
+            layer=7,
+            payload=PowerToughnessBonus(power_bonus=1, toughness_bonus=1),
+        ),
     )
 
 
