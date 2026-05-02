@@ -389,77 +389,44 @@ class ReturnTargetArtifactCardFromYourGraveyardToHand(ReturnFromGraveyard):
 
 
 @dataclass(frozen=True)
-class ReturnCreatureFromYourGraveyardToHand(Effect):
-    """Target creature (or artifact/Spacecraft) card from your graveyard
-    goes to your hand.
+class ReturnCreatureFromYourGraveyardToHand(ReturnFromGraveyard):
+    """``ReturnFromGraveyard`` constructor sugar for "return target
+    creature card from your graveyard to your hand" with optional
+    widening / mv-cap riders.
 
-    ``max_mv`` (default 0 = "no cap") narrows the legal-target pool to
-    cards whose printed mana value is ≤ the threshold.
+    ``max_mv`` (default 0 = "no cap") — narrows the legal-target pool
+    to cards whose printed mana value is ≤ the threshold (Savior of
+    the Small).
 
-    ``or_spacecraft`` widens the legal-target pool to also include
-    Spacecraft cards in the graveyard. Matches "return target creature
-    or Spacecraft card" — Fell Gravship.
+    ``or_spacecraft`` — widens the legal-target pool to also include
+    Spacecraft cards (Fell Gravship's "return target creature or
+    Spacecraft card").
 
-    ``or_artifact`` widens the pool to also include artifact cards.
-    Matches Interceptor Mechan's "return target artifact or creature
-    card from your graveyard to your hand."
+    ``or_artifact`` — widens the pool to also include artifact cards
+    (Interceptor Mechan's "return target artifact or creature card").
+
+    All three rider fields live on the unified base; ``__post_init__``
+    only pins ``creature=True``. Constructor and equality semantics
+    are preserved.
     """
 
-    max_mv: int = 0
-    or_spacecraft: bool = False
-    or_artifact: bool = False
-
-    def requires_target(self) -> bool:
-        return True
-
-    def legal_targets(
-        self, state: "GameState", controller_id: int
-    ) -> list[Target]:
-        p = state.player_by_id(controller_id)
-        return [
-            ("graveyard_creature", c.id)
-            for c in p.graveyard
-            if (
-                c.printing.is_creature
-                or (self.or_spacecraft and c.printing.is_spacecraft)
-                or (self.or_artifact and c.printing.is_artifact)
-            )
-            and (self.max_mv == 0 or c.printing.mana_cost.total <= self.max_mv)
-        ]
-
-    def resolve(
-        self, state: "GameState", controller_id: int,
-        targets: tuple[Target, ...] = (),
-    ) -> None:
-        from mtg_bot.game import Zone
-
-        if not targets:
-            return
-        kind, target_id = targets[0]
-        if kind != "graveyard_creature":
-            return
-        p = state.player_by_id(controller_id)
-        card = next((c for c in p.graveyard if c.id == target_id), None)
-        if card is None:
-            return
-        from mtg_bot.game import reveal_to_all
-        p.graveyard.remove(card)
-        card.zone = Zone.HAND
-        p.hand.append(card)
-        reveal_to_all(state, card)
-        state.log.append(
-            f"{card.printing.name} returns from P{controller_id}'s "
-            f"graveyard to hand"
-        )
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "creature", True)
+        object.__setattr__(self, "destination", "hand")
 
     def describe(self) -> str:
+        # Preserve the legacy printed phrasing exactly.
         extras = []
         if self.or_artifact:
             extras.append("artifact")
         if self.or_spacecraft:
             extras.append("Spacecraft")
         if extras:
-            type_phrase = "artifact or creature" if "artifact" in extras else "creature or Spacecraft"
+            type_phrase = (
+                "artifact or creature"
+                if "artifact" in extras
+                else "creature or Spacecraft"
+            )
         else:
             type_phrase = "creature"
         if self.max_mv > 0:
