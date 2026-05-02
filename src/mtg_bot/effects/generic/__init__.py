@@ -1,264 +1,191 @@
 """Generic, reusable effects — damage, life, counters, zone moves,
 tokens, pumps, search, draw, tap/untap, etc. Card-agnostic primitives that
 many printings reuse. Card-specific one-off effects live in ``bespoke.py``.
+
+This package is organised into per-cluster submodules (``damage``,
+``pump``, ``counters``, ``destroy``, ``tap``, ``exile``, ``bounce``,
+``tokens``, ``mana``, ``search``, ``library_lookat``, ``life``,
+``discard``, ``draw_mill``, ``grant_keywords``, ``become_type``,
+``attach``, ``graveyard``, ``zone_moves``, ``delayed_actions``,
+``control``, ``stack_control``, ``opponent_punishers``, ``text_change``,
+``misc``, plus the shared ``targets_helpers``). Every public name is
+re-exported here, so consumers can keep doing
+``from mtg_bot.effects.generic import X`` exactly as before.
 """
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
-from typing import TYPE_CHECKING
-
-from mtg_bot.effects.base import (
-    Effect, Target, TriggeredAbility,
-    _apply_damage, _multicolored_permanents_count,
-    _find_moonlit_replacement_source,
-)
-
-if TYPE_CHECKING:
-    from mtg_bot.cards import ManaCost
-    from mtg_bot.effects.formulas import Formula
-    from mtg_bot.game import GameState
-
-
-# DealDamage and its helpers moved earlier in the file (above
-# DealDamageToTargetOpponent at line ~1620 in the pre-collapse
-# layout) so the sugar subclasses can reference DealDamage at class-
-# definition time. See the canonical DealDamage definition near the
-# top of the module.
-
-
-
-# ---------------------------------------------------------------------------
-# Threaten core (gain control + untap + grant haste UEOT, on a single target)
-# ---------------------------------------------------------------------------
-
-# ---------------------------------------------------------------------------
-# Paired-target opposite-polarity pump/debuff (audit-monoist-chorale).
-#
-# Models a single resolving effect that picks TWO distinct creature
-# targets — one matching ``positive_kind`` (e.g. ``"my_creature"``) and
-# one matching ``negative_kind`` (e.g. ``"creature"`` for an opponent's
-# creature) — and grants opposite UEOT P/T deltas keyed off a shared X
-# computed at resolve time from a ``Formula``.
-#
-# Why not a ``Sequence``: the engine's ``Sequence`` combinator restricts
-# itself to a SINGLE targeting sub-effect by design (the cast-time
-# target-selection pipeline picks one target prompt per cast).
-# Two-target paired-polarity bodies (Monoist Circuit-Feeder) need both
-# slots filled atomically, with a shared X, in one trigger firing —
-# decomposing into ``Sequence(PumpYourCreature, DebuffOppCreature)``
-# would either double-prompt the targeting pipeline (illegal) or drop
-# one of the targets (silent no-op, forbidden).
-#
-# Future direction (Option B in the audit notes): extend the
-# ``Effect.targets`` grammar to declare ``targets: tuple[TargetSpec,
-# ...]`` with multiple slots and wire the cast/activation pipeline to
-# ask the agent for one target per slot. That refactor unblocks
-# multi-target spells generally; until then this primitive is the
-# contained "ship-now" answer for the paired-polarity shape.
-# ---------------------------------------------------------------------------
-
-
-# ---------------------------------------------------------------------------
-# Reanimate from defending player's graveyard, tapped + attacking
-# (audit-monoist-chorale).
-#
-# Models the Chorale of the Void attacks-trigger reanimate body:
-# "put target creature card from defending player's graveyard onto the
-# battlefield under your control tapped and attacking".
-#
-# 2-player simplification: legal targets = any creature card in any
-# opponent's graveyard. The engine's combat model doesn't thread the
-# per-attacker defending-player identity into a slot the resolving
-# effect can read, so the multi-defender / multiplayer / planeswalker-
-# defender variants degrade to "any opponent's graveyard" — matching
-# the printed text exactly in 2-player and approximating it elsewhere.
-# When the engine grows a per-attacker defending-player slot, this
-# primitive will read it; the public API doesn't need to change.
-#
-# The reanimated card enters tapped AND attacking. Combat-state
-# bookkeeping marks the card ``attacking=True`` and clears
-# ``summoning_sick`` so it's a "real" attacker for the rest of the
-# combat phase. The engine's combat damage path reads
-# ``obj.attacking`` and applies damage to the defending player by id
-# (via the ``defending_player_id`` argument threaded from
-# ``resolve_combat_damage``); the engine doesn't carry a
-# per-attacker defender slot today, so the new attacker rides the
-# combat phase's single defender id implicitly.
-# ---------------------------------------------------------------------------
-
-
 from mtg_bot.effects.generic.targets_helpers import (
-    _eff_subtypes,
-    _slot_target_still_legal,
-    _fizzle_message,
-    _describe_targets,
-    _describe_filter,
     _bounce_to_hand,
+    _describe_filter,
+    _describe_targets,
+    _eff_subtypes,
+    _fizzle_message,
+    _slot_target_still_legal,
 )
 
 from mtg_bot.effects.generic.damage import (
     DealDamage,
-    DealDamageToTargetOpponent,
-    DealDamageEachOpponent,
-    DealNDamageToEachCreature,
-    DealDamageToControllerAndAddMana,
-    DealDamageEqualToSourcePowerAnyTarget,
     DealDamageAnyTarget,
-    DealDamageToTargetCreature,
-    DealDamageToTargetCreatureWithExcessLanderRider,
+    DealDamageEachOpponent,
+    DealDamageEqualToSourcePowerAnyTarget,
+    DealDamageToControllerAndAddMana,
+    DealDamageToOpponentCreature,
     DealDamageToOpponentCreatureByArtifactCount,
     DealDamageToOpponentCreatureByCardsInHand,
+    DealDamageToTargetCreature,
     DealDamageToTargetCreatureSpacecraftBoosted,
-    DealDamageToOpponentCreature,
+    DealDamageToTargetCreatureWithExcessLanderRider,
+    DealDamageToTargetOpponent,
     DealDamageToTargetTappedCreature,
-    MayHaveSourceDealDamageToTarget,
+    DealNDamageToEachCreature,
     DrawCardsAndLoseLifeEqualToResolvingDamage,
+    MayHaveSourceDealDamageToTarget,
 )
 
 from mtg_bot.effects.generic.grant_keywords import (
+    GrantActivatedAbility,
+    GrantKeywords,
+    GrantTriggeredAbility,
+    GrantTriggeredAbilityUEOT,
     GrantUnblockable,
     GrantUnblockableUEOT,
-    GrantTriggeredAbilityUEOT,
-    GrantKeywords,
-    GrantActivatedAbility,
-    GrantTriggeredAbility,
 )
 
 from mtg_bot.effects.generic.pump import (
-    Pump,
-    PumpTargetOtherCreatureByXOverXWhereXIsSourcePower,
     DoubleTargetCreaturesPowerUEOT,
-    PumpTargetCreatureUntilEOT,
-    SetBasePTUntilEOT,
-    SetBasePTConditionalUntilEOT,
-    PumpSelfUntilEOT,
-    PumpCreaturesYouControlUntilEOT,
+    PairedTargetPumpDebuffUEOT,
+    Pump,
     PumpCreaturesOpponentsControlUntilEOT,
+    PumpCreaturesYouControlUntilEOT,
+    PumpSelfUntilEOT,
     PumpSelfXPowerUEOT,
-    SwitchSourcePowerToughnessUEOT,
     PumpTargetArtifactOrCreatureUntilEOT,
+    PumpTargetCreatureUntilEOT,
+    PumpTargetOtherCreatureByXOverXWhereXIsSourcePower,
+    SetBasePTConditionalUntilEOT,
+    SetBasePTUntilEOT,
+    SwitchSourcePowerToughnessUEOT,
     ThreatenTargetCreatureUEOT,
     _signed,
-    PairedTargetPumpDebuffUEOT,
 )
 
 from mtg_bot.effects.generic.counters import (
-    PutPlusOneCounters,
-    PutPlusOneCountersOnEachCreatureYouControlEqualToSourcePower,
-    PutPlusOneCounterOnEachOfUpToNTargetCreatures,
-    PutPlusOneCounterOnTargetCreature,
-    PutPlusOneCountersAndGrantKeywordsUEOTOnTargetCreatureYouControl,
-    PutPlusOneCounterOnEachCreatureYouControl,
-    PutPlusOneCounterOnSelf,
-    PutPlusOneCounterOnOpponentsCreature,
-    PutPlusOneCounterOnCreatureYouControl,
-    PutPlusOneCountersOnSelfPerOtherCreatureOrArtifact,
-    PutChargeCountersOnTargetSpacecraftYouControl,
-    PutChargeCountersOnTargetSpacecraftOrPlanetYouControl,
+    MovePlusOneCounterBetweenPermanentsYouControl,
+    MoveSelfCountersToTargetCreatureYouControl,
     PutChargeCountersOnSelf,
+    PutChargeCountersOnTargetSpacecraftOrPlanetYouControl,
+    PutChargeCountersOnTargetSpacecraftYouControl,
+    PutLoyaltyCounterOnSelf,
+    PutPlusOneCounterOnCreatureYouControl,
+    PutPlusOneCounterOnEachCreatureYouControl,
+    PutPlusOneCounterOnEachOfUpToNTargetCreatures,
+    PutPlusOneCounterOnOpponentsCreature,
+    PutPlusOneCounterOnSelf,
+    PutPlusOneCounterOnTargetCreature,
+    PutPlusOneCounters,
+    PutPlusOneCountersAndGrantKeywordsUEOTOnTargetCreatureYouControl,
+    PutPlusOneCountersOnEachCreatureYouControlEqualToSourcePower,
+    PutPlusOneCountersOnSelfPerOtherCreatureOrArtifact,
     PutPoisonCountersOnTargetPlayer,
     PutStunCounterOnTappedCreature,
-    PutLoyaltyCounterOnSelf,
-    MoveSelfCountersToTargetCreatureYouControl,
-    MovePlusOneCounterBetweenPermanentsYouControl,
 )
 
 from mtg_bot.effects.generic.destroy import (
     Destroy,
-    DestroyTargetCreature,
+    DestroyAllCreatures,
+    DestroyEachNonlandPermanentWithMVEqualToSourceChargeCounters,
     DestroyEnchantedPermanent,
     DestroyTargetArtifact,
-    DestroyTargetNoncreaturePermanent,
+    DestroyTargetArtifactEnchantmentOrFlyingCreature,
+    DestroyTargetArtifactOrTappedCreature,
+    DestroyTargetCreature,
     DestroyTargetLand,
+    DestroyTargetNoncreaturePermanent,
     DestroyTargetNonlandPermanent,
+    DestroyTargetNonlandPermanentWithLanderForController,
     DestroyUpToOneTargetNonlandPermanent,
     RegenerateTargetCreature,
-    DestroyEachNonlandPermanentWithMVEqualToSourceChargeCounters,
-    DestroyTargetArtifactOrTappedCreature,
-    DestroyTargetArtifactEnchantmentOrFlyingCreature,
-    DestroyAllCreatures,
-    DestroyTargetNonlandPermanentWithLanderForController,
 )
 
 from mtg_bot.effects.generic.tap import (
-    Tap,
-    UntapTargetLand,
     IfGainedLifeThisTurnUntapSelf,
-    TapTargetOpponentPermanentAndStunIt,
+    PhaseOutEquippedCreature,
+    Tap,
     TapAndStunUpToOneTargetCreature,
     TapAnotherTargetCreature,
-    TapUpToOneTargetCreature,
-    TapTargetArtifactOrCreature,
-    UntapTargetOtherPermanent,
-    PhaseOutEquippedCreature,
     TapEnchantedPermanent,
+    TapTargetArtifactOrCreature,
+    TapTargetOpponentPermanentAndStunIt,
+    TapUpToOneTargetCreature,
+    UntapTargetLand,
+    UntapTargetOtherPermanent,
 )
 
 from mtg_bot.effects.generic.exile import (
+    CreateNTokensFromLastExileRecall,
     Exile,
-    ExileTargetCreatureUntilSourceLeaves,
-    ExileOpponentsNonlandPermanentUntilLeaves,
-    ExileTargetCreature,
-    ExileTargetCreatureWithPowerOrToughnessAtMost,
-    ExileTargetCardFromGraveyard,
-    ExileTargetAttackingCreatureUntilEndStep,
-    ExileEachOpponentsGraveyard,
-    ExileAllGraveyards,
     ExileAllArtifactsWithManaValueAtMost,
     ExileAllCreaturesAndSpacecraft,
+    ExileAllGraveyards,
+    ExileAllMatchingUntilSourceLeaves,
+    ExileEachOpponentsGraveyard,
+    ExileOpponentsNonlandPermanentUntilLeaves,
+    ExileTargetAttackingCreatureUntilEndStep,
+    ExileTargetCardFromGraveyard,
+    ExileTargetCreature,
+    ExileTargetCreatureUntilSourceLeaves,
+    ExileTargetCreatureWithPowerOrToughnessAtMost,
     ExileTopOfLibraryMayPlayThisTurn,
     ExileTopXOfLibraryMayPlayThisTurn,
-    ExileAllMatchingUntilSourceLeaves,
-    WarpExileSelf,
-    ReturnExiledPermanentToOwnerTapped,
     MoveEachExiledWithSourceToOwnersGraveyard,
-    CreateNTokensFromLastExileRecall,
     PutEachCreatureCardExiledWithSourceOntoBattlefieldUnderYourControl,
     ReanimateOneExiledWithSourceWithCounters,
+    ReturnExiledPermanentToOwnerTapped,
     SacrificeSelf,
     SacrificeSelfPreservingExileLink,
+    WarpExileSelf,
 )
 
 from mtg_bot.effects.generic.bounce import (
     Bounce,
-    ReturnTargetCreatureToOwnersHand,
-    ReturnTargetPermanentYouControlToOwnersHand,
-    ReturnUpToNTargetCreaturesToOwnersHands,
-    ReturnTargetArtifactCardFromYourGraveyardToHand,
     ReturnCreatureFromYourGraveyardToHand,
+    ReturnTargetArtifactCardFromYourGraveyardToHand,
+    ReturnTargetCreatureToOwnersHand,
+    ReturnTargetLandFromGraveyardToHand,
+    ReturnTargetPermanentYouControlToOwnersHand,
     ReturnUpToNCreaturesFromYourGraveyardToHand,
     ReturnUpToNNonlandPermanentCardsFromGraveyardToHand,
-    ReturnTargetLandFromGraveyardToHand,
     ReturnUpToNSmallCreaturesFromGraveyardWithCounters,
+    ReturnUpToNTargetCreaturesToOwnersHands,
 )
 
 from mtg_bot.effects.generic.delayed_actions import (
+    RemoveChargeCountersFromSourceDelayed,
     SacrificeSourceDelayed,
     ScheduleSelfSacAtNextEndStep,
-    RemoveChargeCountersFromSourceDelayed,
 )
 
 from mtg_bot.effects.generic.tokens import (
     CreateLanderAndScheduleSacrifice,
-    CreateTokenAndAttachSelf,
-    CreateTokenPerMulticoloredPermanent,
     CreateToken,
+    CreateTokenAndAttachSelf,
     CreateTokenCopyOfTargetCreatureYouControl,
+    CreateTokenPerMulticoloredPermanent,
     CreateXTokensOfTargetPermanentWithHasteEndStepSac,
 )
 
 from mtg_bot.effects.generic.mana import (
+    AddChargeCounterManaOfChosenColor,
     AddManaToPool,
     AddNManaOfChosenColor,
-    AddChargeCounterManaOfChosenColor,
     AddOneManaFromControlledLandsProductions,
     AddOneManaOfChosenPermanentColor,
 )
 
 from mtg_bot.effects.generic.search import (
-    SearchLibraryForCard,
     SearchLibraryForBasicLandTapped,
+    SearchLibraryForCard,
     SearchLibraryForEquipmentToBattlefield,
     SearchLibraryForGreenCreatureWithMVAtMostX,
 )
@@ -267,51 +194,51 @@ from mtg_bot.effects.generic.library_lookat import (
     LookAtTopNRevealOrCounter,
     LookAtTopTwoSplitHandGraveyard,
     LookTopNPutOneInHandRestToGraveyard,
-    PeekTopMayBattlefieldIfLandElseHand,
     ManifestDread,
-    ManifestDreadThenPutPlusOneCountersOnIt,
     ManifestDreadThenAttachSelf,
-    Surveil,
+    ManifestDreadThenPutPlusOneCountersOnIt,
+    PeekTopMayBattlefieldIfLandElseHand,
     SelfMill,
+    Surveil,
 )
 
 from mtg_bot.effects.generic.life import (
-    GainLife,
-    SetLifeToHalfStartingRoundedUp,
-    TargetPlayerLosesLife,
-    EachOpponentDiscardsOrLosesLife,
-    LoseLife,
-    EachOpponentLosesLife,
-    TargetOpponentLosesNYouGainN,
-    TargetOpponentLosesLife,
-    GrantLifeToEachOpponent,
     DefendingPlayerLosesHalfLifeRoundedUp,
+    EachOpponentDiscardsOrLosesLife,
+    EachOpponentLosesLife,
+    GainLife,
+    GrantLifeToEachOpponent,
+    LoseLife,
+    SetLifeToHalfStartingRoundedUp,
+    TargetOpponentLosesLife,
+    TargetOpponentLosesNYouGainN,
+    TargetPlayerLosesLife,
 )
 
 from mtg_bot.effects.generic.discard import (
-    DiscardSelf,
     DiscardHandThenDrawN,
+    DiscardSelf,
     EachOpponentDiscards,
     EachOpponentExilesCardFromHandWithCastPermission,
+    TargetOpponentDiscards,
     TargetOpponentDiscardsCasterChoice,
     TargetOpponentLookHandMayDiscard,
-    TargetOpponentDiscards,
 )
 
 from mtg_bot.effects.generic.draw_mill import (
-    EachOpponentMillsCards,
-    DrawCardsEqualToResolvingCounterAmount,
-    DrawCardsEqualToResolvingCombatDamage,
     DrawCardPerMulticoloredPermanent,
-    MillTargetPlayer,
     DrawCards,
-    EachPlayerDraws,
     DrawCardsByConditionMultiplier,
+    DrawCardsEqualToResolvingCombatDamage,
+    DrawCardsEqualToResolvingCounterAmount,
+    EachOpponentMillsCards,
+    EachPlayerDraws,
+    MillTargetPlayer,
 )
 
 from mtg_bot.effects.generic.become_type import (
-    BecomeType,
     BecomeLandCreatureUEOT,
+    BecomeType,
     BecomesCopyOfTargetLand,
     TargetArtifactBecomesCreatureUEOT,
 )
@@ -322,10 +249,10 @@ from mtg_bot.effects.generic.attach import (
 )
 
 from mtg_bot.effects.generic.graveyard import (
-    ReturnCreatureFromYourGraveyardToBattlefield,
-    ReturnAllCreaturesFromYourGraveyardToBattlefield,
     PutCardFromGraveyardOnBottomOfLibrary,
     ReanimateTargetCreatureCardFromDefendersGraveyard,
+    ReturnAllCreaturesFromYourGraveyardToBattlefield,
+    ReturnCreatureFromYourGraveyardToBattlefield,
 )
 
 from mtg_bot.effects.generic.zone_moves import (
@@ -337,23 +264,23 @@ from mtg_bot.effects.generic.zone_moves import (
 )
 
 from mtg_bot.effects.generic.control import (
-    ControlTargetOpponentNextTurn,
     ChangeControllerToCombatDamageSource,
+    ControlTargetOpponentNextTurn,
     GainControlOfTargetSliverPermanently,
 )
 
 from mtg_bot.effects.generic.stack_control import (
     CopyTargetInstantOrSorceryYouControl,
     CounterTargetSpell,
-    TakeExtraTurnAfterThisOne,
     PreventAllCombatDamageThisTurn,
+    TakeExtraTurnAfterThisOne,
 )
 
 from mtg_bot.effects.generic.opponent_punishers import (
-    EachOpponentSacrificesCreature,
-    TargetOpponentSacrificesCreatureOtherThanEnchanted,
     EachOpponentExilesOwnCreature,
+    EachOpponentSacrificesCreature,
     EachOpponentSacsOrDiscardsOrTakesSourcePowerDamage,
+    TargetOpponentSacrificesCreatureOtherThanEnchanted,
 )
 
 from mtg_bot.effects.generic.text_change import (
@@ -363,6 +290,236 @@ from mtg_bot.effects.generic.text_change import (
 
 from mtg_bot.effects.generic.misc import (
     CytoshapeBecomeCopyUEOT,
-    ScuttlemuttColorChangeUEOT,
     LockOrUnlockDoorOfTargetRoomYouControl,
+    ScuttlemuttColorChangeUEOT,
 )
+
+__all__ = [
+    # targets_helpers (private but historically importable for tests)
+    "_bounce_to_hand",
+    "_describe_filter",
+    "_describe_targets",
+    "_eff_subtypes",
+    "_fizzle_message",
+    "_slot_target_still_legal",
+    "_signed",
+    # damage
+    "DealDamage",
+    "DealDamageAnyTarget",
+    "DealDamageEachOpponent",
+    "DealDamageEqualToSourcePowerAnyTarget",
+    "DealDamageToControllerAndAddMana",
+    "DealDamageToOpponentCreature",
+    "DealDamageToOpponentCreatureByArtifactCount",
+    "DealDamageToOpponentCreatureByCardsInHand",
+    "DealDamageToTargetCreature",
+    "DealDamageToTargetCreatureSpacecraftBoosted",
+    "DealDamageToTargetCreatureWithExcessLanderRider",
+    "DealDamageToTargetOpponent",
+    "DealDamageToTargetTappedCreature",
+    "DealNDamageToEachCreature",
+    "DrawCardsAndLoseLifeEqualToResolvingDamage",
+    "MayHaveSourceDealDamageToTarget",
+    # grant_keywords
+    "GrantActivatedAbility",
+    "GrantKeywords",
+    "GrantTriggeredAbility",
+    "GrantTriggeredAbilityUEOT",
+    "GrantUnblockable",
+    "GrantUnblockableUEOT",
+    # pump
+    "DoubleTargetCreaturesPowerUEOT",
+    "PairedTargetPumpDebuffUEOT",
+    "Pump",
+    "PumpCreaturesOpponentsControlUntilEOT",
+    "PumpCreaturesYouControlUntilEOT",
+    "PumpSelfUntilEOT",
+    "PumpSelfXPowerUEOT",
+    "PumpTargetArtifactOrCreatureUntilEOT",
+    "PumpTargetCreatureUntilEOT",
+    "PumpTargetOtherCreatureByXOverXWhereXIsSourcePower",
+    "SetBasePTConditionalUntilEOT",
+    "SetBasePTUntilEOT",
+    "SwitchSourcePowerToughnessUEOT",
+    "ThreatenTargetCreatureUEOT",
+    # counters
+    "MovePlusOneCounterBetweenPermanentsYouControl",
+    "MoveSelfCountersToTargetCreatureYouControl",
+    "PutChargeCountersOnSelf",
+    "PutChargeCountersOnTargetSpacecraftOrPlanetYouControl",
+    "PutChargeCountersOnTargetSpacecraftYouControl",
+    "PutLoyaltyCounterOnSelf",
+    "PutPlusOneCounterOnCreatureYouControl",
+    "PutPlusOneCounterOnEachCreatureYouControl",
+    "PutPlusOneCounterOnEachOfUpToNTargetCreatures",
+    "PutPlusOneCounterOnOpponentsCreature",
+    "PutPlusOneCounterOnSelf",
+    "PutPlusOneCounterOnTargetCreature",
+    "PutPlusOneCounters",
+    "PutPlusOneCountersAndGrantKeywordsUEOTOnTargetCreatureYouControl",
+    "PutPlusOneCountersOnEachCreatureYouControlEqualToSourcePower",
+    "PutPlusOneCountersOnSelfPerOtherCreatureOrArtifact",
+    "PutPoisonCountersOnTargetPlayer",
+    "PutStunCounterOnTappedCreature",
+    # destroy
+    "Destroy",
+    "DestroyAllCreatures",
+    "DestroyEachNonlandPermanentWithMVEqualToSourceChargeCounters",
+    "DestroyEnchantedPermanent",
+    "DestroyTargetArtifact",
+    "DestroyTargetArtifactEnchantmentOrFlyingCreature",
+    "DestroyTargetArtifactOrTappedCreature",
+    "DestroyTargetCreature",
+    "DestroyTargetLand",
+    "DestroyTargetNoncreaturePermanent",
+    "DestroyTargetNonlandPermanent",
+    "DestroyTargetNonlandPermanentWithLanderForController",
+    "DestroyUpToOneTargetNonlandPermanent",
+    "RegenerateTargetCreature",
+    # tap
+    "IfGainedLifeThisTurnUntapSelf",
+    "PhaseOutEquippedCreature",
+    "Tap",
+    "TapAndStunUpToOneTargetCreature",
+    "TapAnotherTargetCreature",
+    "TapEnchantedPermanent",
+    "TapTargetArtifactOrCreature",
+    "TapTargetOpponentPermanentAndStunIt",
+    "TapUpToOneTargetCreature",
+    "UntapTargetLand",
+    "UntapTargetOtherPermanent",
+    # exile
+    "CreateNTokensFromLastExileRecall",
+    "Exile",
+    "ExileAllArtifactsWithManaValueAtMost",
+    "ExileAllCreaturesAndSpacecraft",
+    "ExileAllGraveyards",
+    "ExileAllMatchingUntilSourceLeaves",
+    "ExileEachOpponentsGraveyard",
+    "ExileOpponentsNonlandPermanentUntilLeaves",
+    "ExileTargetAttackingCreatureUntilEndStep",
+    "ExileTargetCardFromGraveyard",
+    "ExileTargetCreature",
+    "ExileTargetCreatureUntilSourceLeaves",
+    "ExileTargetCreatureWithPowerOrToughnessAtMost",
+    "ExileTopOfLibraryMayPlayThisTurn",
+    "ExileTopXOfLibraryMayPlayThisTurn",
+    "MoveEachExiledWithSourceToOwnersGraveyard",
+    "PutEachCreatureCardExiledWithSourceOntoBattlefieldUnderYourControl",
+    "ReanimateOneExiledWithSourceWithCounters",
+    "ReturnExiledPermanentToOwnerTapped",
+    "SacrificeSelf",
+    "SacrificeSelfPreservingExileLink",
+    "WarpExileSelf",
+    # bounce / return-to-hand
+    "Bounce",
+    "ReturnCreatureFromYourGraveyardToHand",
+    "ReturnTargetArtifactCardFromYourGraveyardToHand",
+    "ReturnTargetCreatureToOwnersHand",
+    "ReturnTargetLandFromGraveyardToHand",
+    "ReturnTargetPermanentYouControlToOwnersHand",
+    "ReturnUpToNCreaturesFromYourGraveyardToHand",
+    "ReturnUpToNNonlandPermanentCardsFromGraveyardToHand",
+    "ReturnUpToNSmallCreaturesFromGraveyardWithCounters",
+    "ReturnUpToNTargetCreaturesToOwnersHands",
+    # delayed_actions
+    "RemoveChargeCountersFromSourceDelayed",
+    "SacrificeSourceDelayed",
+    "ScheduleSelfSacAtNextEndStep",
+    # tokens
+    "CreateLanderAndScheduleSacrifice",
+    "CreateToken",
+    "CreateTokenAndAttachSelf",
+    "CreateTokenCopyOfTargetCreatureYouControl",
+    "CreateTokenPerMulticoloredPermanent",
+    "CreateXTokensOfTargetPermanentWithHasteEndStepSac",
+    # mana
+    "AddChargeCounterManaOfChosenColor",
+    "AddManaToPool",
+    "AddNManaOfChosenColor",
+    "AddOneManaFromControlledLandsProductions",
+    "AddOneManaOfChosenPermanentColor",
+    # search
+    "SearchLibraryForBasicLandTapped",
+    "SearchLibraryForCard",
+    "SearchLibraryForEquipmentToBattlefield",
+    "SearchLibraryForGreenCreatureWithMVAtMostX",
+    # library_lookat
+    "LookAtTopNRevealOrCounter",
+    "LookAtTopTwoSplitHandGraveyard",
+    "LookTopNPutOneInHandRestToGraveyard",
+    "ManifestDread",
+    "ManifestDreadThenAttachSelf",
+    "ManifestDreadThenPutPlusOneCountersOnIt",
+    "PeekTopMayBattlefieldIfLandElseHand",
+    "SelfMill",
+    "Surveil",
+    # life
+    "DefendingPlayerLosesHalfLifeRoundedUp",
+    "EachOpponentDiscardsOrLosesLife",
+    "EachOpponentLosesLife",
+    "GainLife",
+    "GrantLifeToEachOpponent",
+    "LoseLife",
+    "SetLifeToHalfStartingRoundedUp",
+    "TargetOpponentLosesLife",
+    "TargetOpponentLosesNYouGainN",
+    "TargetPlayerLosesLife",
+    # discard
+    "DiscardHandThenDrawN",
+    "DiscardSelf",
+    "EachOpponentDiscards",
+    "EachOpponentExilesCardFromHandWithCastPermission",
+    "TargetOpponentDiscards",
+    "TargetOpponentDiscardsCasterChoice",
+    "TargetOpponentLookHandMayDiscard",
+    # draw_mill
+    "DrawCardPerMulticoloredPermanent",
+    "DrawCards",
+    "DrawCardsByConditionMultiplier",
+    "DrawCardsEqualToResolvingCombatDamage",
+    "DrawCardsEqualToResolvingCounterAmount",
+    "EachOpponentMillsCards",
+    "EachPlayerDraws",
+    "MillTargetPlayer",
+    # become_type
+    "BecomeLandCreatureUEOT",
+    "BecomeType",
+    "BecomesCopyOfTargetLand",
+    "TargetArtifactBecomesCreatureUEOT",
+    # attach
+    "AttachToTargetCreatureYouControl",
+    "EquipToTargetCreatureYouControl",
+    # graveyard
+    "PutCardFromGraveyardOnBottomOfLibrary",
+    "ReanimateTargetCreatureCardFromDefendersGraveyard",
+    "ReturnAllCreaturesFromYourGraveyardToBattlefield",
+    "ReturnCreatureFromYourGraveyardToBattlefield",
+    # zone_moves
+    "OwnerPutsTargetArtifactOrCreatureOnTopOrBottomOfLibrary",
+    "OwnerPutsTargetWarpedExileCardOnBottomOfLibrary",
+    "PutBasicLandFromHandOntoBattlefieldTapped",
+    "SacrificeNLandsYouControl",
+    "ShuffleZonesIntoLibrary",
+    # control
+    "ChangeControllerToCombatDamageSource",
+    "ControlTargetOpponentNextTurn",
+    "GainControlOfTargetSliverPermanently",
+    # stack_control
+    "CopyTargetInstantOrSorceryYouControl",
+    "CounterTargetSpell",
+    "PreventAllCombatDamageThisTurn",
+    "TakeExtraTurnAfterThisOne",
+    # opponent_punishers
+    "EachOpponentExilesOwnCreature",
+    "EachOpponentSacrificesCreature",
+    "EachOpponentSacsOrDiscardsOrTakesSourcePowerDamage",
+    "TargetOpponentSacrificesCreatureOtherThanEnchanted",
+    # text_change
+    "MagicalHackTextChangeEffect",
+    "SleightOfMindTextChangeEffect",
+    # misc
+    "CytoshapeBecomeCopyUEOT",
+    "LockOrUnlockDoorOfTargetRoomYouControl",
+    "ScuttlemuttColorChangeUEOT",
+]
