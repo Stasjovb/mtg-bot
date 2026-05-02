@@ -46,20 +46,6 @@ from mtg_bot.cards.base import (
 )
 from mtg_bot.cards.parser.clause import _parse_clause
 from mtg_bot.cards.parser.text import _strip_reminder_text
-from mtg_bot.effects import (
-    DrawCards,
-    LoseLife,
-    PumpTargetCreatureUntilEOT,
-    Sequence,
-)
-from mtg_bot.effects.state_predicates import LoneAttackerForYou
-from mtg_bot.effects.predicates import (
-    YOU,
-    Controlled,
-    Event,
-    IsSelf,
-    StateBound,
-)
 
 
 # ---------------------------------------------------------------------------
@@ -81,81 +67,11 @@ def _half(
     )
 
 
-def _build_derelict_attic_widows_walk() -> CardPrinting:
-    """Derelict Attic // Widow's Walk ``{2}{B}`` // ``{3}{B}``.
-
-    Derelict Attic oracle:
-        When you unlock this door, you draw two cards and you lose 2
-        life.
-
-    Widow's Walk oracle:
-        Whenever a creature you control attacks alone, it gets +1/+0
-        and gains deathtouch until end of turn.
-
-    Derelict Attic is a pure door trigger reusing
-    ``Sequence(DrawCards(2), LoseLife(2))`` — both primitives already
-    exist (Drowned Diner uses the same Sequence shape with
-    ``DiscardSelf`` instead of ``LoseLife``). Widow's Walk hooks the
-    once-per-pass ``Event.YOU_ATTACK`` event with the new
-    ``LoneAttackerForYou`` predicate, which gates firing on exactly
-    one creature attacking AND that lone attacker being controlled by
-    the source's (Room's) controller. We deliberately use
-    ``YOU_ATTACK`` instead of the per-attacker ``Event.ATTACKS`` —
-    ``ATTACKS`` dispatches inside the per-attacker loop in
-    ``combat.declare_attackers``, so a "lone attacker" check would
-    falsely match the first of N attackers before its siblings are
-    declared. ``YOU_ATTACK`` fires once after the entire pass, when
-    every attacker has flipped to ``attacking=True``, giving the
-    predicate the post-declaration battlefield to count.
-
-    The pump effect is ``PumpTargetCreatureUntilEOT`` with the
-    standard "target attacking creature you control" rider — when
-    ``LoneAttackerForYou`` matches, only one creature is attacking,
-    so ``attacking_only=True & you_control_only=True`` narrows
-    legal targets to that single attacker. The PickFirst agent
-    deterministically picks it.
-    """
-    return make_room(
-        _half(
-            "Derelict Attic", "{2}{B}",
-            triggered_abilities=(
-                TriggeredAbility(
-                    event=Event.ENTERS, predicate=IsSelf(),
-                    effect=Sequence(
-                        effects=(
-                            DrawCards(amount=2),
-                            LoseLife(amount=2),
-                        ),
-                    ),
-                ),
-            ),
-        ),
-        _half(
-            "Widow's Walk", "{3}{B}",
-            triggered_abilities=(
-                TriggeredAbility(
-                    event=Event.YOU_ATTACK,
-                    predicate=Controlled(YOU) & StateBound(LoneAttackerForYou()),
-                    effect=PumpTargetCreatureUntilEOT(
-                        power_bonus=1,
-                        toughness_bonus=0,
-                        granted_keywords=frozenset({"deathtouch"}),
-                        attacking_only=True,
-                        you_control_only=True,
-                    ),
-                ),
-            ),
-        ),
-    )
-
-
 # ---------------------------------------------------------------------------
 # Dispatch table: combined card name → factory
 # ---------------------------------------------------------------------------
 
-_ROOM_BUILDERS: dict[str, "callable[[], CardPrinting]"] = {
-    "Derelict Attic // Widow's Walk": _build_derelict_attic_widows_walk,
-}
+_ROOM_BUILDERS: dict[str, "callable[[], CardPrinting]"] = {}
 
 
 # Combined-card names that the unified-grammar path is allowed to
@@ -170,6 +86,7 @@ _ROOM_BUILDERS: dict[str, "callable[[], CardPrinting]"] = {
 _UNIFIED_ROOM_NAMES: frozenset[str] = frozenset({
     "Bottomless Pool // Locker Room",
     "Charred Foyer // Warped Space",
+    "Derelict Attic // Widow's Walk",
     "Funeral Room // Awakening Hall",
     "Glassworks // Shattered Yard",
     "Grand Entryway // Elegant Rotunda",

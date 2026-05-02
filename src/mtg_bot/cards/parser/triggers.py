@@ -76,6 +76,8 @@ from mtg_bot.cards.base import (
     DrawCardsEqualToResolvingCounterAmount,
     Effect,
     IfGainedLifeThisTurnUntapSelf,
+    PumpSelfUntilEOT,
+    PumpTargetCreatureUntilEOT,
     PutPlusOneCounterOnSelf,
     PutPlusOneCountersOnSelfPerOtherCreatureOrArtifact,
     TriggeredAbility,
@@ -101,6 +103,7 @@ from mtg_bot.effects.object_predicates import (
 from mtg_bot.effects.state_predicates import (
     AnyPlayerControlsNoCreatures,
     Delirium,
+    LoneAttackerForYou,
     OpponentControlsMoreLandsThanYou,
     SpellsCastThisTurn,
     VoidActive,
@@ -1017,6 +1020,29 @@ _PREDICATE_TRIGGER_PHRASES: dict[
     # attacker count, so the per-pass dispatch is the right semantic
     # for the printed phrasing.
     "you attack": (Event.YOU_ATTACK, Controlled(YOU)),
+    # ``Whenever a creature you control attacks alone`` — Widow's
+    # Walk's once-per-pass attack-alone trigger. Same once-per-
+    # declare-attackers ``Event.YOU_ATTACK`` family as ``"you
+    # attack"`` above (one fire per pass, not per attacker), with
+    # the additional ``StateBound(LoneAttackerForYou())`` predicate
+    # gating firing on exactly one creature attacking AND that lone
+    # attacker being controlled by the source's controller. The
+    # ``YOU_ATTACK`` event fires once after the entire pass — when
+    # every attacker has flipped to ``attacking=True`` — giving the
+    # state predicate the post-declaration battlefield to count;
+    # using ``Event.ATTACKS`` here would falsely match the first of
+    # N attackers before its siblings are declared. Effect-side
+    # rewrite below in ``_parse_triggered_ability_line`` handles the
+    # anaphoric ``"it gets …"`` body: the parser's default normalize-
+    # and-self-pump path lands on ``PumpSelfUntilEOT`` (which would
+    # pump the Room, not the attacker), so a context-dependent
+    # rewrite swaps it to ``PumpTargetCreatureUntilEOT(attacking_only=
+    # True, you_control_only=True)`` whose legal-target pool collapses
+    # to the lone attacker via the predicate's uniqueness guarantee.
+    "a creature you control attacks alone": (
+        Event.YOU_ATTACK,
+        Controlled(YOU) & StateBound(LoneAttackerForYou()),
+    ),
     # ``Whenever an opponent discards a card`` — Entropic Battlecruiser's
     # 1+ tier trigger. ``Event.DISCARDS_CARD`` carries a single subject
     # ``"player"`` (the discarding player); ``Controlled(by=OPPONENT)``
@@ -2142,6 +2168,34 @@ def _parse_triggered_ability_line(
         and isinstance(effect, DrawCardsEqualToResolvingCombatDamage)
     ):
         effect = DrawCardsEqualToResolvingCounterAmount()
+    # Context-dependent effect rewrite for ``"a creature you control
+    # attacks alone"`` triggers: the printed body's anaphoric ``"it
+    # gets +N/+M and gains <kw> until end of turn"`` refers to the
+    # lone attacker (not the source). The unified effect grammar
+    # strips the leading ``"it "`` and lands on
+    # ``PumpSelfUntilEOT`` (which pumps the source — wrong, since
+    # the source is the Room/permanent, not the attacker). Rewrite
+    # to ``PumpTargetCreatureUntilEOT(attacking_only=True,
+    # you_control_only=True)`` whose legal-target pool collapses to
+    # the lone attacker — the predicate's
+    # ``StateBound(LoneAttackerForYou())`` already guarantees
+    # exactly one creature is attacking, so the targeted pump
+    # trivially picks it. Same context-rewrite precedent as the
+    # COUNTERS_ADDED → DrawCardsEqualToResolvingCounterAmount swap
+    # above. Future printings whose condition phrase reads
+    # ``"a creature you control attacks alone"`` get the same
+    # routing for free.
+    if (
+        condition == "a creature you control attacks alone"
+        and isinstance(effect, PumpSelfUntilEOT)
+    ):
+        effect = PumpTargetCreatureUntilEOT(
+            power_bonus=effect.power_bonus,
+            toughness_bonus=effect.toughness_bonus,
+            granted_keywords=effect.granted_keywords,
+            attacking_only=True,
+            you_control_only=True,
+        )
     # Compound predicate-trigger lookup wins when the condition phrase
     # is claimed by the multi-arm table (e.g. ``"this creature enters
     # or dies"`` → two ``(Event, Predicate)`` arms). The single-arm
