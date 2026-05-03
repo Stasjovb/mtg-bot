@@ -61,7 +61,7 @@ from mtg_bot.training.data_gen import (
     save_dataset,
 )
 from mtg_bot.training.grid import grid_search, heuristic_weight_grid
-from mtg_bot.training.progress import DataGenProgress
+from mtg_bot.training.progress import DataGenProgress, EvalProgress
 from mtg_bot.training.registry import ModelMetadata, Registry
 from mtg_bot.training.replay_capture import (
     ReplayRecorder,
@@ -81,6 +81,7 @@ __all__ = [
     "PimcConfig",
     "Registry",
     "DataGenProgress",
+    "EvalProgress",
     "ReplayCaptureConfig",
     "ReplayRecorder",
     "TrainingHistory",
