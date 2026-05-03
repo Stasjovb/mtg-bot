@@ -112,6 +112,17 @@ def main() -> None:
             "to disable progress emission entirely."
         ),
     )
+    parser.add_argument(
+        "--compile", dest="compile_model", action="store_true",
+        help=(
+            "Wrap the model in ``torch.compile`` (PyTorch 2.x) — "
+            "fuses kernels and removes per-op interpreter overhead. "
+            "Pays a 10-30 s compile cost on the first batch; net "
+            "win over 100 epochs is typically 1.5-3x. Off by "
+            "default (compile path can be flaky on edge-case ops); "
+            "recommended on for any real GPU training run."
+        ),
+    )
     args = parser.parse_args()
 
     if not args.data_dir.is_dir():
@@ -193,6 +204,7 @@ def main() -> None:
             "progress_path": progress_path,
             "run_id": peeked_version,
             "notes": args.notes,
+            "compile_model": args.compile_model,
         }
         if has_any_policy:
             train_kwargs["policy_targets"] = policy_targets
