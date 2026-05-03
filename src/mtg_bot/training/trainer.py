@@ -41,7 +41,6 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import torch.optim as optim
-from torch.utils.data import DataLoader, TensorDataset
 
 from mtg_bot.search.nn_evaluator import _ValueMLP, _ValuePolicyMLP
 from mtg_bot.training.progress import atomic_write_json, git_short_sha
@@ -98,6 +97,7 @@ def train_value_network(
     policy_targets: Optional[np.ndarray] = None,
     action_masks: Optional[np.ndarray] = None,
     policy_loss_weight: float = 1.0,
+    compile_model: bool = False,
 ) -> TrainingHistory:
     """Fit a value (or value+policy) network to the supplied
     training data and write the final state_dict to
@@ -137,6 +137,21 @@ def train_value_network(
     written at ``weights_out_path`` always reflects the FINAL
     epoch, not the best-val-loss epoch — early stopping isn't
     implemented yet.
+
+    Performance notes:
+
+    - All training and validation tensors are moved to ``device_obj``
+      ONCE before the epoch loop and sliced via index selection on
+      device for each batch — no per-batch host→device copy. For
+      the current 1.1 M × 51-feature dataset this is ~3 GB of GPU
+      memory, well under a 32 GB Blackwell card.
+    - ``compile_model=True`` (opt-in) wraps the model in
+      ``torch.compile`` — eliminates per-op interpreter overhead by
+      capturing the forward graph and fusing kernels. First batch
+      pays a 10-30 s compile cost; per-epoch wall amortizes 2-3x
+      faster on tiny models (Python overhead, not matmuls, was the
+      bottleneck). Saved weights are unaffected — the underlying
+      module's state_dict is what gets written.
     """
     if features.shape[0] != outcomes.shape[0]:
         raise ValueError(
@@ -191,44 +206,75 @@ def train_value_network(
     val_idx = perm[:n_val]
     train_idx = perm[n_val:]
 
-    x_train = torch.from_numpy(features[train_idx]).float()
-    y_train = torch.from_numpy(outcomes[train_idx]).float().unsqueeze(1)
-    x_val = torch.from_numpy(features[val_idx]).float()
-    y_val = torch.from_numpy(outcomes[val_idx]).float().unsqueeze(1)
+    # Move every tensor to ``device_obj`` ONCE here, before the epoch
+    # loop. The previous ``DataLoader(TensorDataset(...))`` shape did
+    # numpy → host-tensor → device-tensor copy on every batch — which
+    # at our model size dominated wall-clock (the matmul itself is
+    # ~microseconds; the per-batch host→device hop is ~ms). For the
+    # current 1.1 M × 51-feature dataset this is ~3 GB on the GPU,
+    # well under the RTX 5090's 32 GB. Index-shuffled slicing of the
+    # device tensors is essentially free per batch.
+    x_train = torch.from_numpy(features[train_idx]).float().to(device_obj)
+    y_train = torch.from_numpy(
+        outcomes[train_idx]
+    ).float().unsqueeze(1).to(device_obj)
+    x_val = torch.from_numpy(features[val_idx]).float().to(device_obj)
+    y_val = torch.from_numpy(
+        outcomes[val_idx]
+    ).float().unsqueeze(1).to(device_obj)
 
     if with_policy:
-        # Pack policy targets, action masks, and a per-row "has
-        # supervision" flag into the dataloader alongside features
-        # and outcomes. The flag (computed once here) is the cheap
-        # gate that lets the inner loop skip the policy loss for
-        # rows where MCTS didn't provide visits.
-        p_train = torch.from_numpy(policy_targets[train_idx]).float()
+        # Per-row "has supervision" flag computed once on host and
+        # moved with the rest. The flag gates the policy CE so rows
+        # without MCTS visits contribute zero.
+        p_train = torch.from_numpy(
+            policy_targets[train_idx]
+        ).float().to(device_obj)
         m_train = torch.from_numpy(
             action_masks[train_idx],
-        ).bool()
-        has_pol_train = torch.from_numpy(
-            (policy_targets[train_idx].sum(axis=-1) > 0.5),
-        ).float().unsqueeze(1)
-        p_val = torch.from_numpy(policy_targets[val_idx]).float()
-        m_val = torch.from_numpy(action_masks[val_idx]).bool()
-        has_pol_val = torch.from_numpy(
-            (policy_targets[val_idx].sum(axis=-1) > 0.5),
-        ).float().unsqueeze(1)
-        train_loader = DataLoader(
-            TensorDataset(
-                x_train, y_train, p_train, m_train, has_pol_train,
-            ),
-            batch_size=batch_size, shuffle=True,
-            generator=torch.Generator().manual_seed(rng_seed),
-        )
+        ).bool().to(device_obj)
+        has_pol_train = (
+            p_train.sum(dim=-1, keepdim=True) > 0.5
+        ).float()
+        p_val = torch.from_numpy(
+            policy_targets[val_idx]
+        ).float().to(device_obj)
+        m_val = torch.from_numpy(
+            action_masks[val_idx]
+        ).bool().to(device_obj)
+        has_pol_val = (
+            p_val.sum(dim=-1, keepdim=True) > 0.5
+        ).float()
         model = _ValuePolicyMLP().to(device_obj)
     else:
-        train_loader = DataLoader(
-            TensorDataset(x_train, y_train),
-            batch_size=batch_size, shuffle=True,
-            generator=torch.Generator().manual_seed(rng_seed),
-        )
         model = _ValueMLP().to(device_obj)
+
+    if compile_model:
+        # ``torch.compile`` fuses kernels and removes per-op Python
+        # overhead — biggest win on tiny models like ours where
+        # interpreter cost dominates compute. First forward pass
+        # incurs ~10-30 s of compilation; amortizes across 100
+        # epochs. Wrap AFTER ``.to(device_obj)`` so the compiled
+        # graph captures the right device.
+        #
+        # ``torch.compile``'s default ``inductor`` backend depends
+        # on Triton, which isn't packaged for Windows as of writing
+        # (Triton is Linux-first). Probe the import once here so a
+        # missing-Triton install on Windows degrades to a printed
+        # warning + no compile, rather than crashing on the first
+        # forward pass several seconds into training.
+        try:
+            import triton  # noqa: F401
+            model = torch.compile(model)
+        except ImportError:
+            import warnings
+            warnings.warn(
+                "torch.compile requested but Triton is not "
+                "installed; falling back to eager execution. "
+                "Triton isn't packaged for Windows yet — install "
+                "on Linux to benefit, or omit --compile.",
+                RuntimeWarning, stacklevel=2,
+            )
 
     optimizer = optim.Adam(model.parameters(), lr=learning_rate)
     mse = nn.MSELoss()
@@ -314,6 +360,15 @@ def train_value_network(
         denom = has_supervision.sum().clamp(min=1.0)
         return weighted.sum() / denom
 
+    # CPU-side generator drives the per-epoch shuffle. ``torch.randperm``
+    # on CPU is reproducible with a seeded ``Generator``; the resulting
+    # index tensor is moved to ``device_obj`` once per epoch and used
+    # to slice the device-resident training tensors. This replaces the
+    # pre-refactor ``DataLoader(TensorDataset(...))`` shape, which paid
+    # a per-batch numpy → host-tensor → device-tensor copy cost.
+    n_train = x_train.shape[0]
+    shuffle_gen = torch.Generator(device="cpu").manual_seed(rng_seed)
+
     try:
         for epoch in range(epochs):
             # Train.
@@ -321,15 +376,17 @@ def train_value_network(
             train_total: list[float] = []
             train_value: list[float] = []
             train_policy: list[float] = []
-            for batch in train_loader:
-                if with_policy:
-                    bx, by, bp, bm, bhas = (
-                        t.to(device_obj) for t in batch
-                    )
-                else:
-                    bx, by = (t.to(device_obj) for t in batch)
+            perm = torch.randperm(n_train, generator=shuffle_gen)
+            perm = perm.to(device_obj, non_blocking=True)
+            for start in range(0, n_train, batch_size):
+                idx = perm[start:start + batch_size]
+                bx = x_train.index_select(0, idx)
+                by = y_train.index_select(0, idx)
                 optimizer.zero_grad()
                 if with_policy:
+                    bp = p_train.index_select(0, idx)
+                    bm = m_train.index_select(0, idx)
+                    bhas = has_pol_train.index_select(0, idx)
                     v_pred, p_logits = model(bx)
                     v_loss = mse(v_pred, by)
                     p_loss = _policy_loss(p_logits, bp, bm, bhas)
@@ -354,22 +411,16 @@ def train_value_network(
                 else float("nan")
             )
 
-            # Val (skip if no val data).
+            # Val (skip if no val data). Tensors are already on
+            # ``device_obj`` from the upfront move; no per-call copy.
             if n_val > 0:
                 model.eval()
                 with torch.no_grad():
                     if with_policy:
-                        v_pred_val, p_logits_val = model(
-                            x_val.to(device_obj),
-                        )
-                        v_loss_val = mse(
-                            v_pred_val, y_val.to(device_obj),
-                        ).item()
+                        v_pred_val, p_logits_val = model(x_val)
+                        v_loss_val = mse(v_pred_val, y_val).item()
                         p_loss_val = _policy_loss(
-                            p_logits_val,
-                            p_val.to(device_obj),
-                            m_val.to(device_obj),
-                            has_pol_val.to(device_obj),
+                            p_logits_val, p_val, m_val, has_pol_val,
                         ).item()
                         val_loss = (
                             v_loss_val
@@ -378,10 +429,8 @@ def train_value_network(
                         history.val_value_losses.append(v_loss_val)
                         history.val_policy_losses.append(p_loss_val)
                     else:
-                        val_pred = model(x_val.to(device_obj))
-                        val_loss = mse(
-                            val_pred, y_val.to(device_obj),
-                        ).item()
+                        val_pred = model(x_val)
+                        val_loss = mse(val_pred, y_val).item()
                         history.val_value_losses.append(val_loss)
                         history.val_policy_losses.append(
                             float("nan")
@@ -409,9 +458,13 @@ def train_value_network(
         raise
 
     # Save final weights. (Move back to CPU so the state_dict is
-    # device-agnostic when loaded.)
-    model.to("cpu")
-    torch.save(model.state_dict(), weights_out_path)
+    # device-agnostic when loaded.) When the model is ``torch.compile``-
+    # wrapped, save the underlying module — its state_dict is the
+    # canonical form that ``NNEvaluator(weights_path=...)`` expects to
+    # load (without any ``_orig_mod.`` key prefix).
+    save_target = getattr(model, "_orig_mod", model)
+    save_target.to("cpu")
+    torch.save(save_target.state_dict(), weights_out_path)
     history.weights_path = weights_out_path
 
     _emit("completed", current_epoch=epochs)

@@ -68,6 +68,36 @@ def test_writes_weights_file(tmp_path: Path):
 # ---------- learning ---------------------------------------------------------
 
 
+def test_compile_model_falls_back_when_triton_missing(tmp_path: Path):
+    """``compile_model=True`` should never crash a training run —
+    it should issue a warning and proceed in eager mode if Triton
+    isn't installed (the inductor backend's hard dep, which isn't
+    packaged for Windows). Verifies the fallback path produces a
+    saved weights file and the same TrainingHistory shape as the
+    no-compile path."""
+    features, outcomes = _synthetic_dataset(64)
+    # We don't assert the warning fires (the test box may have
+    # Triton installed if it's Linux). We DO assert the run
+    # completes and writes a usable weights file regardless.
+    import warnings
+    with warnings.catch_warnings():
+        warnings.simplefilter("default")
+        history = train_value_network(
+            features=features, outcomes=outcomes,
+            weights_out_path=tmp_path / "w.pt",
+            epochs=2, batch_size=16, device="cpu",
+            compile_model=True,
+        )
+    assert isinstance(history, TrainingHistory)
+    assert len(history.train_losses) == 2
+    assert (tmp_path / "w.pt").is_file()
+    # Loaded state_dict should have plain key names — no
+    # ``_orig_mod.`` prefix from torch.compile (we save the
+    # underlying module's state_dict, not the wrapper's).
+    sd = torch.load(tmp_path / "w.pt", map_location="cpu")
+    assert all(not k.startswith("_orig_mod.") for k in sd.keys())
+
+
 def test_training_reduces_loss_on_synthetic_data(tmp_path: Path):
     """Train for a few epochs on a tractable synthetic problem;
     final train loss should be lower than first-epoch loss. Catches
