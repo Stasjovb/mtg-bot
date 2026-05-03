@@ -69,6 +69,8 @@ if _SRC.is_dir() and str(_SRC) not in sys.path:
 import os  # noqa: E402
 
 from mtg_bot.training import (  # noqa: E402
+    DataGenProgress,
+    EvalProgress,
     HeuristicConfig,
     NNPimcConfig,
     PimcConfig,
@@ -118,6 +120,8 @@ def _self_play(
     enable_mulligans: bool = False,
     per_game_timeout_sec: float | None = None,
     hidden_sizes: tuple[int, ...] | None = None,
+    progress_path: Path | None = None,
+    run_id: str | None = None,
 ) -> tuple[int, int, float]:
     """Run one self-play data-gen pass. Returns (n_samples,
     n_policy_rows, elapsed_seconds). Both seats use the same
@@ -126,6 +130,12 @@ def _self_play(
     ``hidden_sizes`` must match the saved weights' trunk shape,
     or every worker crashes at NNEvaluator load with state_dict
     size mismatch. Caller threads from bootstrap metadata.
+
+    When ``progress_path`` is set, builds a ``DataGenProgress``
+    so the training UI shows live games-done / win-rate / ETA.
+    Useful in long iterate runs where the self-play phase
+    consumes 80%+ of wall time and the UI would otherwise be
+    silent for ~40 min per iteration.
     """
     cfg = NNPimcConfig(
         weights_path=str(weights_path),
@@ -139,19 +149,42 @@ def _self_play(
         puct=True,
         hidden_sizes=hidden_sizes,
     )
-    started = time.perf_counter()
-    features, outcomes, policy_targets, action_masks = (
-        generate_training_data_parallel(
-            p0_factory=cfg.build,
-            p1_factory=cfg.build,
-            n_games=n_games,
-            base_seed=seed,
-            n_workers=n_workers,
-            with_policy=True,
-            enable_mulligans=enable_mulligans,
-            per_game_timeout_sec=per_game_timeout_sec,
+    progress: DataGenProgress | None = None
+    if progress_path is not None:
+        progress_path.parent.mkdir(parents=True, exist_ok=True)
+        worker_count = (
+            n_workers if n_workers is not None
+            else max(1, (os.cpu_count() or 1) - 2)
         )
-    )
+        progress = DataGenProgress(
+            progress_path=progress_path,
+            run_id=run_id or progress_path.stem,
+            n_games_total=n_games,
+            n_workers=worker_count,
+            command="iterate_alphazero self-play",
+            notes="iterate_alphazero self-play",
+        )
+    started = time.perf_counter()
+    try:
+        features, outcomes, policy_targets, action_masks = (
+            generate_training_data_parallel(
+                p0_factory=cfg.build,
+                p1_factory=cfg.build,
+                n_games=n_games,
+                base_seed=seed,
+                n_workers=n_workers,
+                with_policy=True,
+                enable_mulligans=enable_mulligans,
+                per_game_timeout_sec=per_game_timeout_sec,
+                progress=progress,
+            )
+        )
+    except BaseException:
+        if progress is not None:
+            progress.finalize(status="failed")
+        raise
+    if progress is not None:
+        progress.finalize(status="completed")
     elapsed = time.perf_counter() - started
     save_dataset(
         features, outcomes, output,
@@ -174,6 +207,7 @@ def _train_next(
     notes: str,
     window_recent: int | None,
     hidden_sizes: tuple[int, ...] | None = None,
+    progress_path: Path | None = None,
 ) -> str:
     """Run train_nn.py via subprocess so its progress JSON / hub
     UI / registry plumbing all behave the same as a manual train.
@@ -204,6 +238,13 @@ def _train_next(
     ]
     if hidden_sizes is not None:
         cmd.extend(["--hidden-sizes", ",".join(str(s) for s in hidden_sizes)])
+    if progress_path is not None:
+        # Override train_nn.py's default ``training_progress/<peeked
+        # _version>.json`` so the iterate-loop's training cards have
+        # iter-N-tagged filenames (matches the self-play / eval cards
+        # so all of one iteration's UI artifacts are visually grouped).
+        progress_path.parent.mkdir(parents=True, exist_ok=True)
+        cmd.extend(["--progress-path", str(progress_path)])
     # train_nn.py loads the WHOLE dir; --window-recent isn't
     # supported there yet. For now, we honor it by symlinking /
     # copying the recent files into a temp subdir and pointing
@@ -248,6 +289,9 @@ def _eval_match(
     enable_mulligans: bool = False,
     per_game_timeout_sec: float | None = None,
     hidden_sizes: tuple[int, ...] | None = None,
+    progress_path: Path | None = None,
+    run_id: str | None = None,
+    opponent_label: str = "previous",
 ) -> tuple[int, int, int, float]:
     """Head-to-head match: new (seat 0) vs old (seat 1). Returns
     (new_wins, old_wins, draws, elapsed_seconds).
@@ -295,6 +339,22 @@ def _eval_match(
             batch_size=1,
         ).build
 
+    progress: EvalProgress | None = None
+    if progress_path is not None:
+        progress_path.parent.mkdir(parents=True, exist_ok=True)
+        worker_count = (
+            n_workers if n_workers is not None
+            else max(1, (os.cpu_count() or 1) - 2)
+        )
+        progress = EvalProgress(
+            progress_path=progress_path,
+            run_id=run_id or progress_path.stem,
+            n_games_total=n_games,
+            n_workers=worker_count,
+            opponent_label=opponent_label,
+            command="iterate_alphazero acceptance-gate eval",
+            notes=f"iterate eval vs {opponent_label}",
+        )
     started = time.perf_counter()
     stats = run_match_parallel(
         p0_factory=new_cfg.build,
@@ -304,6 +364,7 @@ def _eval_match(
         n_workers=n_workers,
         enable_mulligans=enable_mulligans,
         per_game_timeout_sec=per_game_timeout_sec,
+        progress=progress,
     )
     elapsed = time.perf_counter() - started
     return (
@@ -494,10 +555,16 @@ def main() -> None:
         print(f"[iterate] Self-playing with {best_version}...")
 
         # 1. Self-play data gen
+        iter_label = f"iter_{n_done + 1:03d}"
+        progress_dir = Path("training_progress")
         data_path = (
             args.data_dir
-            / f"iter_{n_done + 1:03d}_{best_version}_{_now_stamp()}.npz"
+            / f"{iter_label}_{best_version}_{_now_stamp()}.npz"
         )
+        self_play_progress_path = (
+            progress_dir / f"{iter_label}_self_play_{best_version}.json"
+        )
+        self_play_run_id = f"{iter_label}_self_play_{best_version}"
         n_samples, n_policy, gen_elapsed = _self_play(
             weights_path=best_weights,
             n_games=args.games_per_iteration,
@@ -509,6 +576,8 @@ def main() -> None:
             enable_mulligans=args.enable_mulligans,
             per_game_timeout_sec=args.per_game_timeout_sec,
             hidden_sizes=iter_hidden_sizes,
+            progress_path=self_play_progress_path,
+            run_id=self_play_run_id,
         )
         print(
             f"[iterate]   gen done in {gen_elapsed/60:.1f}m: "
@@ -517,6 +586,10 @@ def main() -> None:
         )
 
         # 2. Train next version
+        peeked_train_version = registry.next_version_id()
+        train_progress_path = (
+            progress_dir / f"{iter_label}_train_{peeked_train_version}.json"
+        )
         new_version = _train_next(
             data_dir=args.data_dir,
             registry_root=args.registry_root,
@@ -531,6 +604,7 @@ def main() -> None:
             ),
             window_recent=args.window_recent,
             hidden_sizes=iter_hidden_sizes,
+            progress_path=train_progress_path,
         )
         new_weights = registry.weights_path(new_version)
         print(f"[iterate]   trained: {new_version}")
@@ -547,6 +621,10 @@ def main() -> None:
                 f"[iterate]   eval-gate: {new_version} vs "
                 f"{best_version}, {args.eval_games} games..."
             )
+            eval_progress_path = (
+                progress_dir
+                / f"{iter_label}_eval_{new_version}_vs_{best_version}.json"
+            )
             wins_new, wins_old, draws, eval_elapsed = _eval_match(
                 new_weights=new_weights,
                 old_weights=best_weights,
@@ -558,6 +636,9 @@ def main() -> None:
                 enable_mulligans=args.enable_mulligans,
                 per_game_timeout_sec=args.per_game_timeout_sec,
                 hidden_sizes=iter_hidden_sizes,
+                progress_path=eval_progress_path,
+                run_id=eval_progress_path.stem,
+                opponent_label=best_version,
             )
             n_decided = wins_new + wins_old
             win_rate = wins_new / n_decided if n_decided else 0.0
