@@ -145,14 +145,14 @@ class NNPimcConfig:
       from an A4-wiring training run (registry's
       ``metadata.json["with_policy"]`` is True for those).
     - ``puct=True``: use PUCT selection in MCTS, treating the
-      policy head's softmax as a per-action prior. Requires
-      ``batch_size=1`` per the A5 commit's guard (PUCT + batched
-      leaf eval is not supported in this commit). Pass both flags
-      together for AlphaZero-style search; either alone is
-      defensible (with_policy=True without puct: dual-head
-      weights for value lookup; puct=True without with_policy:
-      rejected at MCTS construction since the value-only model
-      can't produce a policy).
+      policy head's softmax as a per-action prior. Pair with
+      ``with_policy=True`` for AlphaZero-style search. After
+      ``feature/batched-puct`` landed, PUCT supports
+      ``batch_size>1`` — leaves are batched into one
+      ``batch_evaluate_with_policy`` call, with each leaf's policy
+      stashed on the per-node cache. ``puct=True`` without
+      ``with_policy`` is rejected at MCTS construction (value-only
+      model can't produce a policy prior).
     """
 
     weights_path: str

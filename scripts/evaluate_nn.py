@@ -200,17 +200,15 @@ def main() -> None:
         use_puct = metadata_with_policy
     else:
         use_puct = args.puct
-    # PUCT requires batch_size=1 per the A5 commit's guard. If the
-    # caller asked for both, override the batch and warn.
+    # PUCT now supports batched leaf evaluation (the feature/batched-puct
+    # merge plumbed batch_evaluate_with_policy through _search_batched and
+    # dropped the construction-time rejection in MCTS). The CLI default of
+    # nn_batch_size=32 flows through unchanged to the strategy config,
+    # which builds an MCTS that fans 32 leaves into one NN forward per
+    # selection cycle and stashes the per-leaf policy on the cache for the
+    # PUCT prior. UCB1 was already on this path. The previous override
+    # that forced batch_size=1 under PUCT is removed.
     nn_batch_size = args.nn_batch_size
-    if use_puct and nn_batch_size > 1:
-        print(
-            f"# Note: --puct forces nn_batch_size=1 (B1 batched eval"
-            f" + PUCT not supported in this commit; was "
-            f"{nn_batch_size}).",
-            file=sys.stderr,
-        )
-        nn_batch_size = 1
 
     # Configs (picklable frozen dataclasses) so we can ship the
     # factories across multiprocessing.Pool worker boundaries.
