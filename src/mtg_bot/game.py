@@ -231,6 +231,24 @@ class _CowList(list):
         self._clone_each = None
         self._share_group = None
 
+    def fork(self) -> None:
+        """Public form of ``_fork_if_shared`` for callers that mutate
+        elements in place WITHOUT going through a list mutator.
+
+        Use case: ``search.determinize._determinize_player`` rewrites
+        ``card.printing`` directly on GameObjects in ``player.library``.
+        That's an in-place mutation on the element, not on the list,
+        so the share group never forks naturally — leaving the mutation
+        visible to peers (the source engine state's library). Calling
+        ``library.fork()`` before the mutation isolates ``self`` first,
+        same semantics as a list mutator's implicit fork.
+
+        No-op when already owned (not in a share group) so callers
+        can opt in unconditionally without paying for the check
+        themselves.
+        """
+        self._fork_if_shared()
+
     # --- mutators: fork-then-delegate -----------------------------------
 
     def append(self, item):

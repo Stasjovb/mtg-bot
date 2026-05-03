@@ -26,7 +26,7 @@ from __future__ import annotations
 
 import random
 
-from mtg_bot.game import GameObject, GameState, Zone
+from mtg_bot.game import _CowList, GameObject, GameState, Zone
 
 
 _PUBLIC_ZONES: frozenset[Zone] = frozenset(
@@ -117,7 +117,25 @@ def _determinize_player(
     position, so swaps across zones are valid. Counts stay constant
     because we only mutate ``printing`` / ``original_printing`` on
     existing objects — we don't move objects between zones.
+
+    CoW share-group fork: library/graveyard/exile are ``_CowList``
+    instances that share GameObject references with the source state's
+    sibling lists. The list-level CoW intercepts list mutators
+    (append/pop/etc.) but NOT in-place attribute writes on the
+    elements themselves — so naive ``card.printing = new`` would leak
+    back through the shared GameObject reference into the source
+    state's library, accumulating phantom card identities across
+    successive PIMC determinizations and corrupting future draws.
+    Forcing the fork on ``player.library`` first isolates this
+    determinization's GameObjects from the source. Hand stays deep-
+    cloned by ``GameState.clone`` so it doesn't need the same
+    treatment; we still read from it but the elements there are
+    already independent.
     """
+    library = player.library
+    if isinstance(library, _CowList):
+        library.fork()
+
     hidden: list[GameObject] = []
     for card in player.hand:
         if not viewer_knows(card, viewer_id):
