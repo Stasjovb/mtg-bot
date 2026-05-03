@@ -202,6 +202,52 @@ def test_run_match_deck_pool_sequential_equals_parallel():
     assert seq == par
 
 
+def test_run_match_with_replay_config_writes_replay_files(tmp_path: Path):
+    """When a ReplayCaptureConfig is supplied, run_match writes one
+    .json.gz file per captured game into the configured save_dir.
+    Default capture_every=1 captures every game."""
+    from mtg_bot.training.data_gen import ReplayCaptureConfig
+
+    save_dir = tmp_path / "replays"
+    save_dir.mkdir()
+    cfg = ReplayCaptureConfig(save_dir=str(save_dir))
+    stats = run_match(
+        p0_factory=random_choice_factory,
+        p1_factory=random_choice_factory,
+        n_games=2,
+        base_seed=42,
+        replay_config=cfg,
+    )
+    assert stats.games == 2
+    files = sorted(save_dir.glob("*.json.gz"))
+    assert len(files) == 2
+
+
+def test_run_match_parallel_with_replay_config_captures_subset(
+    tmp_path: Path,
+):
+    """capture_every=2 over 4 games → 2 captures (game_idx 0 and 2)."""
+    from mtg_bot.training.data_gen import ReplayCaptureConfig
+
+    save_dir = tmp_path / "replays_eval"
+    save_dir.mkdir()
+    cfg = ReplayCaptureConfig(save_dir=str(save_dir), capture_every=2)
+    run_match_parallel(
+        p0_factory=random_choice_factory,
+        p1_factory=random_choice_factory,
+        n_games=4,
+        base_seed=42,
+        n_workers=2,
+        replay_config=cfg,
+    )
+    files = sorted(save_dir.glob("*.json.gz"))
+    assert len(files) == 2
+    names = [f.name for f in files]
+    assert all("seed42" in n for n in names)
+    assert any("idx0000" in n for n in names)
+    assert any("idx0002" in n for n in names)
+
+
 def test_run_match_parallel_progress_finalizes_on_zero_games(tmp_path: Path):
     """Empty-pool short-circuit still finalizes the tracker — the
     UI shouldn't see a stale 'running' file after a 0-game eval."""
