@@ -135,18 +135,40 @@ class NNPimcConfig:
     works.
 
     ``batch_size`` defaults to 32 to capture the B1 batched-leaf-
-    evaluation win on the NN forward pass.
+    evaluation win on the value-only NN forward pass.
+
+    AlphaZero opt-in:
+
+    - ``with_policy=True``: load the saved weights as a dual-head
+      ``_ValuePolicyMLP``. Required when the saved weights came
+      from an A4-wiring training run (registry's
+      ``metadata.json["with_policy"]`` is True for those).
+    - ``puct=True``: use PUCT selection in MCTS, treating the
+      policy head's softmax as a per-action prior. Requires
+      ``batch_size=1`` per the A5 commit's guard (PUCT + batched
+      leaf eval is not supported in this commit). Pass both flags
+      together for AlphaZero-style search; either alone is
+      defensible (with_policy=True without puct: dual-head
+      weights for value lookup; puct=True without with_policy:
+      rejected at MCTS construction since the value-only model
+      can't produce a policy).
     """
 
     weights_path: str
     samples: int = 4
     inner_nodes: int = 200
     batch_size: int = 32
+    with_policy: bool = False
+    puct: bool = False
 
     def build(self, seed: int = 0) -> SearchStrategy:
-        evaluator = NNEvaluator(weights_path=Path(self.weights_path))
+        evaluator = NNEvaluator(
+            weights_path=Path(self.weights_path),
+            with_policy=self.with_policy,
+        )
         inner_nodes = self.inner_nodes
         batch_size = self.batch_size
+        puct = self.puct
         rng_seed_inner = seed + 100
         rng_seed_outer = seed + 200
 
@@ -156,6 +178,7 @@ class NNPimcConfig:
                 budget_factory=lambda: Budget(max_nodes=inner_nodes),
                 rng=random.Random(rng_seed_inner),
                 batch_size=batch_size,
+                puct=puct,
             )
 
         return PIMC(
@@ -170,6 +193,8 @@ class NNPimcConfig:
             "samples": self.samples,
             "inner_nodes": self.inner_nodes,
             "batch_size": self.batch_size,
+            "with_policy": self.with_policy,
+            "puct": self.puct,
         }
 
     @classmethod
@@ -179,6 +204,8 @@ class NNPimcConfig:
             samples=d["samples"],
             inner_nodes=d["inner_nodes"],
             batch_size=d.get("batch_size", 32),
+            with_policy=d.get("with_policy", False),
+            puct=d.get("puct", False),
         )
 
 

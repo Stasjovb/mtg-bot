@@ -98,9 +98,25 @@ def main() -> None:
             "Pass 0 to also force sequential."
         ),
     )
+    parser.add_argument(
+        "--puct", action="store_true",
+        help=(
+            "Use PUCT selection in MCTS, treating the dual-head "
+            "NN's policy head as a search prior. Auto-detected "
+            "for registered versions whose metadata has "
+            "with_policy=True; pass explicitly when using "
+            "--weights or to force on/off."
+        ),
+    )
+    parser.add_argument(
+        "--no-puct", dest="puct", action="store_false",
+        help="Force UCB1 selection even on dual-head weights.",
+    )
+    parser.set_defaults(puct=None)
     args = parser.parse_args()
 
     registry: Registry | None = None
+    metadata_with_policy = False
     if args.version is not None:
         registry = Registry(args.registry_root)
         if not registry.has(args.version):
@@ -111,11 +127,35 @@ def main() -> None:
             )
         weights_path = registry.weights_path(args.version)
         label = args.version
+        # Pull the with_policy flag from the registry. v1 / v2
+        # predate the field and default to False. v4+ trained via
+        # A4-wiring will set it True.
+        meta = registry.load_metadata(args.version)
+        metadata_with_policy = bool(getattr(meta, "with_policy", False))
     else:
         if not args.weights.is_file():
             sys.exit(f"--weights {args.weights} not found")
         weights_path = args.weights
         label = str(args.weights)
+
+    # Resolve --puct: explicit flag wins; otherwise auto-detect from
+    # registry metadata (dual-head weights default to PUCT, value-
+    # only default to UCB1).
+    if args.puct is None:
+        use_puct = metadata_with_policy
+    else:
+        use_puct = args.puct
+    # PUCT requires batch_size=1 per the A5 commit's guard. If the
+    # caller asked for both, override the batch and warn.
+    nn_batch_size = args.nn_batch_size
+    if use_puct and nn_batch_size > 1:
+        print(
+            f"# Note: --puct forces nn_batch_size=1 (B1 batched eval"
+            f" + PUCT not supported in this commit; was "
+            f"{nn_batch_size}).",
+            file=sys.stderr,
+        )
+        nn_batch_size = 1
 
     # Configs (picklable frozen dataclasses) so we can ship the
     # factories across multiprocessing.Pool worker boundaries.
@@ -123,16 +163,16 @@ def main() -> None:
     # of frozen dataclasses do. NNPimcConfig carries weights_path
     # rather than an NNEvaluator instance — workers reload weights
     # from disk inside ``build``, which always pickles cleanly.
-    # Batched leaf evaluation (B1) helps the NN side substantially:
-    # one (B, FEATURE_DIM) forward pass beats B single-state
-    # forwards by ~5-25× in steady-state CPU benches. The heuristic
-    # side has no batched compute and pays virtual-loss bookkeeping
-    # for nothing — keep it at batch_size=1.
+    # Batched leaf evaluation (B1) helps the value-only NN side
+    # substantially; PUCT-mode NN forfeits B1 in exchange for the
+    # policy prior steering search.
     nn_cfg = NNPimcConfig(
         weights_path=str(weights_path),
         samples=args.samples,
         inner_nodes=args.nodes,
-        batch_size=args.nn_batch_size,
+        batch_size=nn_batch_size,
+        with_policy=metadata_with_policy or use_puct,
+        puct=use_puct,
     )
     heuristic_cfg = PimcConfig(
         samples=args.samples,
