@@ -526,7 +526,7 @@ def _play_one_game_recording(
     # Local import — action_encoding pulls in legal-action
     # enumeration, which is heavier than this file's outer surface.
     from mtg_bot.training.action_encoding import (
-        ACTION_VOCAB_SIZE, encode, legal_action_mask,
+        ACTION_VOCAB_SIZE, EncodingOverflowError, encode, legal_action_mask,
     )
 
     samples: list[
@@ -575,11 +575,26 @@ def _play_one_game_recording(
                     active_policy = np.zeros(
                         ACTION_VOCAB_SIZE, dtype=_DTYPE_POLICY,
                     )
-                    total = float(sum(visits.values()))
+                    # Drop overflowing decisions from the distribution
+                    # and renormalize over what's left — same fallback
+                    # PUCT (mcts.py) and legal_action_mask use. If
+                    # everything overflows, skip policy supervision
+                    # for this row (zeros + the trainer's value-only
+                    # path picks it up).
+                    counted = 0.0
                     for d, count in visits.items():
-                        slot = encode(d, engine, active)
-                        active_policy[slot] += count / total
-                    active_mask = legal_action_mask(engine, active)
+                        try:
+                            slot = encode(d, engine, active)
+                        except EncodingOverflowError:
+                            continue
+                        active_policy[slot] += count
+                        counted += count
+                    if counted > 0:
+                        active_policy /= counted
+                        active_mask = legal_action_mask(engine, active)
+                    else:
+                        active_policy = zero_policy
+                        active_mask = zero_mask
                 else:
                     active_policy = zero_policy
                     active_mask = zero_mask
