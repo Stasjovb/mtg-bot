@@ -61,21 +61,37 @@ class MatchStats:
     """Aggregate result of ``run_match``.
 
     ``wins[0]`` / ``wins[1]``: games player 0 / player 1 won.
-    ``draws``: games that ended in a draw or hit the decision cap.
-    ``games``: total games played (== wins[0] + wins[1] + draws).
-    ``avg_decisions``: mean decisions across all games. Spots
-    pathological game-length blowups even when the win rate looks
-    fine.
+    ``draws``: games that ended in a draw — i.e. the engine hit
+    the ``decision_cap`` without a terminal state. Real MTG draws
+    in our model are rare; most "draws" are decision-cap timeouts.
+    ``games``: number of games that COMPLETED (wins + draws).
+    Worker-crashed and per-game-timeout games are dropped from
+    the dataset entirely — they contribute to ``crashed`` but
+    NOT to ``wins`` / ``draws`` / ``games``. So the invariant is
+    ``games == wins[0] + wins[1] + draws``, NOT ``== n_games``;
+    the input ``n_games`` is the requested count, ``games`` is
+    what actually contributed signal.
+    ``crashed``: games dropped because a worker raised an
+    exception (engine-state corruption — todo e3b7d9c1) or
+    blew through the per-game wall-clock timeout (todo
+    d4f2a8c1). Reported separately so the win-rate denominator
+    isn't polluted by what amounts to "no signal".
+    ``avg_decisions``: mean decisions across non-crashed games.
+    Spots pathological game-length blowups even when the win
+    rate looks fine.
     """
 
     wins: dict[PlayerID, int]
     draws: int
     games: int
     avg_decisions: float
+    crashed: int = 0
 
     def win_rate(self, player_id: PlayerID) -> float:
-        """Fraction of games ``player_id`` won. Draws don't count
-        for either side."""
+        """Fraction of completed games ``player_id`` won. Draws
+        count in the denominator (someone tied), but crashed /
+        timed-out games are excluded entirely — they have no
+        signal to contribute."""
         return self.wins.get(player_id, 0) / self.games if self.games else 0.0
 
 
@@ -233,7 +249,9 @@ def _log_crashed_games(crashed: list[int], n_games: int) -> None:
         f"# WARNING: {len(crashed)}/{n_games} games crashed in the "
         f"eval pool and were dropped (engine state corruption — see "
         f"worker stderr above for tracebacks). Crashed games are "
-        f"counted as draws. Affected game indices: {crashed[:20]}"
+        f"EXCLUDED from MatchStats — they don't pollute the win-rate "
+        f"denominator; ``MatchStats.crashed`` carries the count "
+        f"separately. Affected game indices: {crashed[:20]}"
         f"{' ...' if len(crashed) > 20 else ''}",
         file=sys.stderr,
     )
@@ -354,23 +372,42 @@ def _aggregate_results(
     results: list[tuple[Optional[PlayerID], int]], n_games: int,
 ) -> MatchStats:
     """Aggregate per-game ``(winner_or_None, decisions)`` results
-    into a ``MatchStats``."""
+    into a ``MatchStats``.
+
+    Distinguishes crashed/timed-out games (sentinel
+    ``(None, 0)``) from real draws (``(None, decisions > 0)``,
+    typically the decision-cap timeout from
+    ``_play_capped_game``). Crashed games are EXCLUDED entirely
+    from ``wins`` / ``draws`` / ``games`` / ``avg_decisions`` —
+    they contribute zero signal so they shouldn't pollute the
+    win rate. Counted separately under ``MatchStats.crashed`` so
+    the loss isn't silent.
+    """
     wins: dict[PlayerID, int] = {0: 0, 1: 0}
     draws = 0
+    crashed = 0
     total_decisions = 0
     for winner, decisions in results:
+        if winner is None and decisions == 0:
+            # Worker crash or per-game timeout sentinel — drop.
+            crashed += 1
+            continue
         total_decisions += decisions
         if winner == 0:
             wins[0] += 1
         elif winner == 1:
             wins[1] += 1
         else:
+            # Real draw: decision-cap timeout (winner=None,
+            # decisions=decision_cap > 0).
             draws += 1
+    completed = wins[0] + wins[1] + draws
     return MatchStats(
         wins=wins,
         draws=draws,
-        games=n_games,
-        avg_decisions=total_decisions / n_games if n_games else 0.0,
+        games=completed,
+        avg_decisions=total_decisions / completed if completed else 0.0,
+        crashed=crashed,
     )
 
 

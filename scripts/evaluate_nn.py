@@ -358,6 +358,7 @@ def main() -> None:
     print(
         f"# NN won {stats.wins[0]}, heuristic won {stats.wins[1]}, "
         f"draws {stats.draws} / {stats.games}"
+        + (f" ({stats.crashed} crashed/dropped)" if stats.crashed else "")
     )
     print(f"# NN win rate: {stats.win_rate(0):.1%}")
     print(f"# Avg decisions per game: {stats.avg_decisions:.0f}")
@@ -367,6 +368,7 @@ def main() -> None:
             "wins": stats.wins[0],
             "losses": stats.wins[1],
             "draws": stats.draws,
+            "crashed": stats.crashed,
             "n_games": stats.games,
             "win_rate": stats.win_rate(0),
             "avg_decisions": stats.avg_decisions,
