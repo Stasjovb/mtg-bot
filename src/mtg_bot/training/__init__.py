@@ -48,6 +48,7 @@ from __future__ import annotations
 
 from mtg_bot.training.config import (
     HeuristicConfig,
+    NNPimcConfig,
     PimcConfig,
     random_choice_factory,
 )
@@ -75,6 +76,7 @@ __all__ = [
     "HeuristicConfig",
     "MatchStats",
     "ModelMetadata",
+    "NNPimcConfig",
     "PimcConfig",
     "Registry",
     "ReplayCaptureConfig",
