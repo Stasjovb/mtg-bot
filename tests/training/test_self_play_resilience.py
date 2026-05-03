@@ -266,3 +266,13 @@ def test_run_match_parallel_with_progress_survives_crashes(
     assert payload["status"] == "completed"
     assert payload["n_games_done"] == n_games
     assert payload["ended_at"] is not None
+    # Crashed games go into the dedicated EvalProgress.crashed
+    # counter (not draws) so the UI's win_rate stays honest. Note
+    # this differs from MatchStats, which folds crashes into draws
+    # to keep wins+draws==n_games — both views are intentional.
+    assert payload["crashed"] == n_games
+    assert payload["draws"] == 0
+    assert payload["wins_new"] == 0
+    assert payload["wins_old"] == 0
+    # win_rate sentinel is 0.0 when there are no decided games.
+    assert payload["win_rate"] == 0.0

@@ -192,16 +192,16 @@ def run_match_parallel(
                 winner, decisions = result
                 # ``_play_one_match_game_indexed`` converts engine-
                 # level worker crashes into a ``(None, 0)`` sentinel.
-                # Remember the index so we can print a loud summary
-                # at the end of the run; the progress tracker still
-                # sees ``winner=None, decisions=0`` and folds it
-                # into draws (a follow-up commit splits the crash
-                # count out into its own counter so the UI can show
-                # them separately without polluting the win-rate).
-                if winner is None and decisions == 0:
+                # Surface them through the progress tracker as
+                # ``crashed=True`` so the UI sees a dedicated counter
+                # without polluting wins_new / wins_old / draws /
+                # win_rate; remember the index so we can print a
+                # loud stderr summary at the end of the run.
+                crashed = winner is None and decisions == 0
+                if crashed:
                     crashed_game_indices.append(game_idx)
                 progress.record_game(
-                    winner=winner, decisions=decisions,
+                    winner=winner, decisions=decisions, crashed=crashed,
                 )
     except BaseException:
         progress.finalize(status="failed")

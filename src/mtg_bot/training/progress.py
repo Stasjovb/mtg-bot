@@ -247,10 +247,20 @@ class EvalProgress:
 
     ``record_game`` takes ``winner`` (0, 1, or None for draw / decision-
     cap timeout) and the per-game decision count for the running
-    average. Aggregated stats published to the snapshot JSON:
+    average. Pass ``crashed=True`` for games where a worker raised an
+    engine-level exception and was dropped — those increment a
+    dedicated ``crashed`` counter instead of polluting the
+    wins/draws columns (see ``run_match_parallel`` for the producer
+    side). Aggregated stats published to the snapshot JSON:
 
     - ``wins_new`` / ``wins_old`` / ``draws``
-    - ``win_rate``        — wins_new / decided games (excludes draws)
+    - ``crashed``         — games dropped due to worker-side engine
+      exceptions; kept out of wins_new/wins_old/draws/win_rate so
+      a 1/1000 corruption bug doesn't pollute the head-to-head
+      number. Total games seen is still ``n_games_done`` =
+      wins_new + wins_old + draws + crashed.
+    - ``win_rate``        — wins_new / decided games (excludes draws
+      and crashes)
     - ``avg_decisions``   — running mean of per-game decision counts
     - ``elapsed_seconds`` / ``estimated_remaining_seconds`` /
       ``per_game_seconds_avg`` / ``games_per_hour`` (same as data_gen)
@@ -275,6 +285,7 @@ class EvalProgress:
     _wins_new: int = field(default=0, init=False)
     _wins_old: int = field(default=0, init=False)
     _draws: int = field(default=0, init=False)
+    _crashed: int = field(default=0, init=False)
     _total_decisions: int = field(default=0, init=False)
     _status: str = field(default="running", init=False)
     _begun: bool = field(default=False, init=False)
@@ -300,14 +311,27 @@ class EvalProgress:
         *,
         winner: Optional[int],
         decisions: int = 0,
+        crashed: bool = False,
     ) -> None:
         """Account one finished game. ``winner=0`` is a new-model
         win, ``winner=1`` an opponent win, ``winner=None`` a draw
         (decision-cap timeout or genuine repetition). ``decisions``
-        is folded into the running average."""
+        is folded into the running average.
+
+        Pass ``crashed=True`` for games dropped by the eval pool's
+        worker-crash handler (see ``self_play.run_match_parallel``).
+        Crashed games increment ``crashed`` instead of any of
+        wins_new / wins_old / draws — that keeps win_rate (and the
+        UI's head-to-head number) honest by excluding games that
+        never reached a clean conclusion. They DO still count
+        toward ``n_games_done`` so the progress bar advances.
+        Default ``False`` preserves the existing call-site contract.
+        """
         self._games_done += 1
         self._total_decisions += int(decisions)
-        if winner == 0:
+        if crashed:
+            self._crashed += 1
+        elif winner == 0:
             self._wins_new += 1
         elif winner == 1:
             self._wins_old += 1
@@ -365,6 +389,7 @@ class EvalProgress:
             "wins_new": int(self._wins_new),
             "wins_old": int(self._wins_old),
             "draws": int(self._draws),
+            "crashed": int(self._crashed),
             "win_rate": float(win_rate),
             "avg_decisions": float(avg_decisions),
             "elapsed_seconds": float(elapsed),
