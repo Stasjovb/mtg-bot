@@ -79,6 +79,7 @@ from mtg_bot.training import (  # noqa: E402
     generate_training_data_parallel,
     save_dataset,
 )
+from mtg_bot.training.data_gen import ReplayCaptureConfig  # noqa: E402
 from mtg_bot.training.self_play import run_match_parallel  # noqa: E402
 
 _STATE_FILENAME = "iterate_state.json"
@@ -124,6 +125,7 @@ def _self_play(
     progress_path: Path | None = None,
     run_id: str | None = None,
     deck_pool: list[Deck] | None = None,
+    replay_config: ReplayCaptureConfig | None = None,
 ) -> tuple[int, int, float]:
     """Run one self-play data-gen pass. Returns (n_samples,
     n_policy_rows, elapsed_seconds). Both seats use the same
@@ -165,6 +167,10 @@ def _self_play(
             n_workers=worker_count,
             command="iterate_alphazero self-play",
             notes="iterate_alphazero self-play",
+            replays_dir=(
+                replay_config.save_dir if replay_config is not None
+                else None
+            ),
         )
     started = time.perf_counter()
     try:
@@ -180,6 +186,7 @@ def _self_play(
                 per_game_timeout_sec=per_game_timeout_sec,
                 progress=progress,
                 deck_pool=deck_pool,
+                replay_config=replay_config,
             )
         )
     except BaseException:
@@ -296,6 +303,7 @@ def _eval_match(
     run_id: str | None = None,
     opponent_label: str = "previous",
     deck_pool: list[Deck] | None = None,
+    replay_config: ReplayCaptureConfig | None = None,
 ) -> tuple[int, int, int, float]:
     """Head-to-head match: new (seat 0) vs old (seat 1). Returns
     (new_wins, old_wins, draws, elapsed_seconds).
@@ -358,6 +366,10 @@ def _eval_match(
             opponent_label=opponent_label,
             command="iterate_alphazero acceptance-gate eval",
             notes=f"iterate eval vs {opponent_label}",
+            replays_dir=(
+                replay_config.save_dir if replay_config is not None
+                else None
+            ),
         )
     started = time.perf_counter()
     stats = run_match_parallel(
@@ -370,6 +382,7 @@ def _eval_match(
         per_game_timeout_sec=per_game_timeout_sec,
         progress=progress,
         deck_pool=deck_pool,
+        replay_config=replay_config,
     )
     elapsed = time.perf_counter() - started
     return (
@@ -509,6 +522,35 @@ def main() -> None:
             "you'd actually deploy."
         ),
     )
+    parser.add_argument(
+        "--replays-dir", type=Path, default=Path("replays"),
+        help=(
+            "Parent directory for captured replay files. Each iter "
+            "phase writes its sample of replays to a subdirectory "
+            "named after its run_id (e.g. replays/iter_001_self_play_v6/). "
+            "The training UI surfaces these via 'View N games' links "
+            "on each card, and the main mtg_bot UI loads them in its "
+            "scrubber when started with --replays-root pointing here. "
+            "Default 'replays' is what mtg_bot.ui defaults to, so the "
+            "default-on-default case Just Works."
+        ),
+    )
+    parser.add_argument(
+        "--capture-every-self-play", type=int, default=25,
+        help=(
+            "Capture every Nth self-play game as a viewable replay "
+            "(default 25 — at 500 games/iter that's 20 captures per "
+            "iteration). Pass 0 to disable replay capture for self-play."
+        ),
+    )
+    parser.add_argument(
+        "--capture-every-eval", type=int, default=10,
+        help=(
+            "Capture every Nth eval game as a viewable replay "
+            "(default 10 — at 200 games/iter that's 20 captures per "
+            "iteration). Pass 0 to disable replay capture for eval."
+        ),
+    )
     args = parser.parse_args()
 
     args.data_dir.mkdir(parents=True, exist_ok=True)
@@ -605,6 +647,16 @@ def main() -> None:
             progress_dir / f"{iter_label}_self_play_{best_version}.json"
         )
         self_play_run_id = f"{iter_label}_self_play_{best_version}"
+        self_play_replay_config: ReplayCaptureConfig | None = None
+        if args.capture_every_self_play > 0:
+            sp_replays_dir = args.replays_dir / self_play_run_id
+            sp_replays_dir.mkdir(parents=True, exist_ok=True)
+            self_play_replay_config = ReplayCaptureConfig(
+                save_dir=str(sp_replays_dir),
+                capture_every=args.capture_every_self_play,
+                nn_weights_path=str(best_weights),
+                nn_version_label=best_version,
+            )
         n_samples, n_policy, gen_elapsed = _self_play(
             weights_path=best_weights,
             n_games=args.games_per_iteration,
@@ -619,6 +671,7 @@ def main() -> None:
             progress_path=self_play_progress_path,
             run_id=self_play_run_id,
             deck_pool=deck_pool,
+            replay_config=self_play_replay_config,
         )
         print(
             f"[iterate]   gen done in {gen_elapsed/60:.1f}m: "
@@ -666,6 +719,17 @@ def main() -> None:
                 progress_dir
                 / f"{iter_label}_eval_{new_version}_vs_{best_version}.json"
             )
+            eval_run_id = eval_progress_path.stem
+            eval_replay_config: ReplayCaptureConfig | None = None
+            if args.capture_every_eval > 0:
+                ev_replays_dir = args.replays_dir / eval_run_id
+                ev_replays_dir.mkdir(parents=True, exist_ok=True)
+                eval_replay_config = ReplayCaptureConfig(
+                    save_dir=str(ev_replays_dir),
+                    capture_every=args.capture_every_eval,
+                    nn_weights_path=str(new_weights),
+                    nn_version_label=new_version,
+                )
             wins_new, wins_old, draws, eval_elapsed = _eval_match(
                 new_weights=new_weights,
                 old_weights=best_weights,
@@ -678,9 +742,10 @@ def main() -> None:
                 per_game_timeout_sec=args.per_game_timeout_sec,
                 hidden_sizes=iter_hidden_sizes,
                 progress_path=eval_progress_path,
-                run_id=eval_progress_path.stem,
+                run_id=eval_run_id,
                 opponent_label=best_version,
                 deck_pool=deck_pool,
+                replay_config=eval_replay_config,
             )
             n_decided = wins_new + wins_old
             win_rate = wins_new / n_decided if n_decided else 0.0
