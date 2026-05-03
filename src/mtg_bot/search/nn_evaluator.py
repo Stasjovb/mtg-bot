@@ -222,6 +222,7 @@ class NNEvaluator(Evaluator):
         *,
         device: str = "cpu",
         with_policy: bool = False,
+        hidden_sizes: tuple[int, ...] = HIDDEN_SIZES,
     ) -> None:
         # ``with_policy=False`` (default) preserves bit-exact backward
         # compat with v1/v2 weights — same _ValueMLP, same forward
@@ -232,12 +233,24 @@ class NNEvaluator(Evaluator):
         # a value-only checkpoint into a dual-head evaluator (or vice
         # versa) raises a shape-mismatch error from PyTorch — that's
         # the intended loud failure mode.
+        #
+        # ``hidden_sizes`` overrides the trunk shape so the same
+        # NNEvaluator class can host networks of any capacity. The
+        # caller is responsible for matching the shape to the saved
+        # weights — load-time mismatches surface as PyTorch
+        # state_dict shape errors, the same loud failure as for the
+        # value-only-vs-dual-head mismatch above. Registry lookups
+        # (``evaluate_nn.py``, ``NNPimcConfig.build``) read the
+        # ``hidden_sizes`` field from each version's metadata and
+        # pass it here, so per-version architectures coexist.
         self.device = torch.device(device)
         self.with_policy = with_policy
         if with_policy:
-            self.model: nn.Module = _ValuePolicyMLP()
+            self.model: nn.Module = _ValuePolicyMLP(
+                hidden_sizes=hidden_sizes,
+            )
         else:
-            self.model = _ValueMLP()
+            self.model = _ValueMLP(hidden_sizes=hidden_sizes)
         if weights_path is not None:
             state_dict = torch.load(
                 weights_path, map_location=self.device,

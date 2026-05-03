@@ -42,7 +42,9 @@ import torch.nn as nn
 import torch.nn.functional as F
 import torch.optim as optim
 
-from mtg_bot.search.nn_evaluator import _ValueMLP, _ValuePolicyMLP
+from mtg_bot.search.nn_evaluator import (
+    HIDDEN_SIZES, _ValueMLP, _ValuePolicyMLP,
+)
 from mtg_bot.training.progress import atomic_write_json, git_short_sha
 
 
@@ -98,6 +100,7 @@ def train_value_network(
     action_masks: Optional[np.ndarray] = None,
     policy_loss_weight: float = 1.0,
     compile_model: bool = False,
+    hidden_sizes: tuple[int, ...] = HIDDEN_SIZES,
 ) -> TrainingHistory:
     """Fit a value (or value+policy) network to the supplied
     training data and write the final state_dict to
@@ -245,9 +248,9 @@ def train_value_network(
         has_pol_val = (
             p_val.sum(dim=-1, keepdim=True) > 0.5
         ).float()
-        model = _ValuePolicyMLP().to(device_obj)
+        model = _ValuePolicyMLP(hidden_sizes=hidden_sizes).to(device_obj)
     else:
-        model = _ValueMLP().to(device_obj)
+        model = _ValueMLP(hidden_sizes=hidden_sizes).to(device_obj)
 
     if compile_model:
         # ``torch.compile`` fuses kernels and removes per-op Python

@@ -98,6 +98,39 @@ def test_compile_model_falls_back_when_triton_missing(tmp_path: Path):
     assert all(not k.startswith("_orig_mod.") for k in sd.keys())
 
 
+def test_custom_hidden_sizes_roundtrip(tmp_path: Path):
+    """Train with a non-default trunk shape, save, reload through
+    NNEvaluator at the matching shape, run a forward pass. Catches
+    any place the trunk size assumption was hardcoded.
+
+    Uses a deliberately weird shape (not (128,128,64) or any other
+    tested default) so a regression that ignores the kwarg and
+    falls back to the module-level HIDDEN_SIZES constant trips the
+    state_dict shape check at load time.
+    """
+    features, outcomes = _synthetic_dataset(64)
+    custom = (96, 48, 24)  # not equal to any other default in the codebase
+    history = train_value_network(
+        features=features, outcomes=outcomes,
+        weights_out_path=tmp_path / "w.pt",
+        epochs=2, batch_size=16, device="cpu",
+        hidden_sizes=custom,
+    )
+    assert isinstance(history, TrainingHistory)
+
+    # Reload through NNEvaluator at the same shape — must succeed.
+    ev = NNEvaluator(weights_path=tmp_path / "w.pt", hidden_sizes=custom)
+    # Forward pass shape: a 1×FEATURE_DIM input → 1×1 value.
+    x = torch.zeros(1, FEATURE_DIM)
+    out = ev.model(x)
+    assert out.shape == (1, 1)
+
+    # Reloading at the WRONG shape must surface as a clear error.
+    import pytest
+    with pytest.raises(RuntimeError, match=r"size mismatch|shape"):
+        NNEvaluator(weights_path=tmp_path / "w.pt")  # uses default shape
+
+
 def test_training_reduces_loss_on_synthetic_data(tmp_path: Path):
     """Train for a few epochs on a tractable synthetic problem;
     final train loss should be lower than first-epoch loss. Catches
