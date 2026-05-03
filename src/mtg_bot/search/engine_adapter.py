@@ -67,6 +67,7 @@ from mtg_bot.search.resolution_channel import (
     KIND_CARD_FROM_LIBRARY, KIND_CARD_FROM_OPPONENT_HAND,
     KIND_DEVOUR_LANDS, KIND_DISCARD, KIND_MODE, KIND_SACRIFICE,
     KIND_SHOCK_LIFE, KIND_SURVEIL, KIND_TARGET, KIND_X,
+    KIND_YES_NO,
     ResolutionChannelAgent, _ResolutionPause,
 )
 from mtg_bot.search.resolution_decisions import (
@@ -76,6 +77,7 @@ from mtg_bot.search.resolution_decisions import (
     ResolutionModeDecision, ResolutionSacrificeDecision,
     ResolutionShockLifeDecision, ResolutionSurveilDecision,
     ResolutionTargetDecision, ResolutionXDecision,
+    ResolutionYesNoDecision,
 )
 from mtg_bot.search.tactical import DefaultTacticalAgent
 from mtg_bot.simulate import _advance_to_next_active_player, _next_alive
@@ -114,6 +116,7 @@ _RESOLUTION_KIND_TO_DECISION_CLASS = {
     KIND_CARD_FROM_LIBRARY: ResolutionCardFromLibraryDecision,
     KIND_CARD_FROM_OPPONENT_HAND: ResolutionCardFromOpponentHandDecision,
     KIND_DEVOUR_LANDS: ResolutionDevourLandsDecision,
+    KIND_YES_NO: ResolutionYesNoDecision,
 }
 
 
@@ -318,6 +321,12 @@ class MtgGameStateAdapter:
                 ResolutionDevourLandsDecision(land_ids=subset)
                 for subset in opts
             ]
+        if kind == KIND_YES_NO:
+            # opts is always (True, False) — channel agent supplies
+            # both branches; the prompt itself isn't part of the
+            # decision space. Yes-first matches the order the channel
+            # agent enumerates.
+            return [ResolutionYesNoDecision(yes=v) for v in opts]
         raise RuntimeError(f"unknown resolution kind: {kind!r}")
 
     def chance_outcomes(self) -> list[tuple[Decision, float]]:

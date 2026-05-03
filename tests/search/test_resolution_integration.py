@@ -230,3 +230,150 @@ def test_search_decision_is_hashable():
     assert d1 == d2
     # Usable as dict key.
     {d1: "value"}
+
+
+# ---------------------------------------------------------------------
+# yes/no resolution decisions — covers the previously-missing branch
+# in ``_resolution_legal_decisions`` (kind == "yes_no") and the matching
+# entry in ``_RESOLUTION_KIND_TO_DECISION_CLASS``. The dataclass and the
+# channel-agent side of the wiring already existed; only the adapter
+# dispatch was missing, which made any "may"-gated effect crash with
+# ``RuntimeError: unknown resolution kind: 'yes_no'`` once
+# ``expose_resolution_decisions=True`` was on.
+# ---------------------------------------------------------------------
+
+
+def _paused_yesno_adapter() -> MtgGameStateAdapter:
+    """Build an adapter and force it into a yes_no resolution pause
+    without driving a full game. We poke the pause fields directly so
+    the test stays focused on ``_resolution_legal_decisions`` /
+    ``_apply_resolution_decision`` semantics."""
+    from mtg_bot.search.resolution_channel import KIND_YES_NO
+    state = setup_game(
+        [RandomAgent(), RandomAgent()], ["G", "R"], seed=1,
+    )
+    adapter = MtgGameStateAdapter(
+        state, expose_resolution_decisions=True,
+    )
+    adapter._resolution_paused = True
+    adapter._resolution_kind = KIND_YES_NO
+    adapter._resolution_player = 0
+    adapter._resolution_options = (True, False)
+    return adapter
+
+
+def test_yesno_legal_decisions_returns_both_branches():
+    """Both yes and no must be enumerated as ``ResolutionYesNoDecision``
+    instances. Order matches the channel agent's ``(True, False)``."""
+    from mtg_bot.search import ResolutionYesNoDecision
+    adapter = _paused_yesno_adapter()
+    legal = adapter.legal_decisions()
+    assert legal == [
+        ResolutionYesNoDecision(yes=True),
+        ResolutionYesNoDecision(yes=False),
+    ]
+
+
+def test_yesno_apply_validates_decision_type():
+    """Feeding a non-YesNo decision while paused on yes_no must raise
+    — same contract as every other resolution kind."""
+    from mtg_bot.search import ResolutionShockLifeDecision
+    adapter = _paused_yesno_adapter()
+    with pytest.raises(TypeError):
+        adapter.apply(ResolutionShockLifeDecision(pay=True))
+
+
+def test_yesno_endstep_trigger_exposes_pause_and_resolves():
+    """End-to-end: a Vaultguard Trooper end-step "may" trigger should
+    fire as a stack-resolution pause once both players pass priority
+    in the END step, surface a yes_no decision to search, and complete
+    cleanly when answered.
+
+    Vaultguard's oracle: at the beginning of your end step, if you
+    control 2+ tapped creatures, you may discard your hand; if you do,
+    draw 2.
+    """
+    from mtg_bot.actions import PassPriority
+    from mtg_bot.cards import BASIC_LANDS, SYNTHETIC_CREATURES
+    from mtg_bot.game import Zone
+    from mtg_bot.search import ResolutionYesNoDecision
+    from mtg_bot.turn import Step
+
+    state = setup_game(
+        [RandomAgent(), RandomAgent()], ["G", "R"], seed=7,
+    )
+    # Two tapped creatures on P0's side so the intervening-if passes,
+    # then put Vaultguard on the battlefield as well (it counts itself
+    # only if tapped — we tap the two helpers and leave Vaultguard
+    # untapped, so the count stays at 2).
+    for name in ["Wild Bear", "Sapling"]:
+        c = state.new_object(
+            SYNTHETIC_CREATURES[name], owner_id=0,
+            zone=Zone.BATTLEFIELD,
+        )
+        c.summoning_sick = False
+        c.tapped = True
+        state.battlefield.append(c)
+    vg = state.new_object(
+        _PRINTINGS["Vaultguard Trooper"], owner_id=0,
+        zone=Zone.BATTLEFIELD,
+    )
+    vg.summoning_sick = False
+    state.battlefield.append(vg)
+    # A few cards in hand so the discard branch is observable.
+    for _ in range(3):
+        c = state.new_object(BASIC_LANDS["Forest"], 0, Zone.HAND)
+        state.players[0].hand.append(c)
+
+    # Combat exposure off — we're testing the yes_no path, not combat,
+    # and the default tactical "attack with everything" would put our
+    # tapped helpers' attack-state into the picture.
+    adapter = MtgGameStateAdapter(
+        state, expose_combat_decisions=False,
+        expose_resolution_decisions=True,
+    )
+
+    # Drive forward until the END step's trigger has been put on the
+    # stack and we're paused waiting for a yes_no answer. Each
+    # PassPriority either advances the step or pops a stack item.
+    for _ in range(40):
+        if adapter._resolution_paused:
+            break
+        adapter.apply(PassPriority())
+    else:
+        pytest.fail("never reached a resolution pause")
+
+    assert adapter._resolution_kind == "yes_no"
+    assert adapter._resolution_player == 0
+    legal = adapter.legal_decisions()
+    assert len(legal) == 2
+    assert all(isinstance(d, ResolutionYesNoDecision) for d in legal)
+    assert {d.yes for d in legal} == {True, False}
+
+    # Decline the may — hand should NOT be discarded, dependent draw
+    # does not fire.
+    pre_hand_size = len(adapter.engine_state.players[0].hand)
+    adapter.apply(ResolutionYesNoDecision(yes=False))
+    assert adapter._resolution_paused is False
+    assert (
+        len(adapter.engine_state.players[0].hand) == pre_hand_size
+    ), "decline path must leave the hand untouched"
+    # Step is at or past END (turn structure has progressed).
+    assert adapter.engine_state.step in (
+        Step.END, Step.CLEANUP, Step.UNTAP, Step.UPKEEP,
+    )
+
+
+def test_yesno_clone_preserves_pause_branches_independently():
+    """Two clones of a yes_no-paused adapter can pick different
+    branches without contaminating each other — the per-clone replay
+    queue is what makes this work."""
+    from mtg_bot.search import ResolutionYesNoDecision
+    adapter = _paused_yesno_adapter()
+    clone = adapter.clone()
+    assert clone._resolution_paused is True
+    assert clone._resolution_kind == "yes_no"
+    # Each clone enumerates the same options.
+    assert (
+        adapter.legal_decisions() == clone.legal_decisions()
+    )

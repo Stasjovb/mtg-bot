@@ -66,6 +66,7 @@ from mtg_bot.search.resolution_decisions import (
     ResolutionSurveilDecision,
     ResolutionTargetDecision,
     ResolutionXDecision,
+    ResolutionYesNoDecision,
 )
 from mtg_bot.search.evaluator import (
     Evaluator,
@@ -128,6 +129,7 @@ __all__ = [
     "ResolutionSurveilDecision",
     "ResolutionTargetDecision",
     "ResolutionXDecision",
+    "ResolutionYesNoDecision",
     "SearchStrategy",
     "attack_aggressive_prior",
     "block_biggest_attacker_first_prior",
