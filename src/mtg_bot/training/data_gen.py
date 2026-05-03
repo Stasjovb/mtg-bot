@@ -53,6 +53,7 @@ from mtg_bot.replay import save_replay
 from mtg_bot.search.engine_adapter import MtgGameStateAdapter
 from mtg_bot.search.protocol import CHANCE_PLAYER, PlayerID
 from mtg_bot.simulate import setup_game
+from mtg_bot.training._worker_threads import pin_worker_torch_threads
 from mtg_bot.training.config import StrategyFactory
 from mtg_bot.training.progress import DataGenProgress
 from mtg_bot.training.replay_capture import (
@@ -450,6 +451,16 @@ def _generate_one_game_data(
         0: p0_factory(base_seed + 100 * game_idx),
         1: p1_factory(base_seed + 100 * game_idx + 50),
     }
+    # Pin torch CPU threads to 1 in this worker process. Strategy
+    # factories that use the NN evaluator have just imported torch;
+    # without this pin every worker inherits the default of "host
+    # CPU count" threads — 30 workers x 32 MKL threads on a 32-core
+    # box means ~960 threads thrashing 32 cores (~30-40% effective
+    # utilization). The trainer has the same pin on CPU (commit
+    # 3ad808f); this is the data-gen worker equivalent. No-op when
+    # torch isn't loaded (heuristic-only runs); idempotent across
+    # games (set_num_threads is process-global).
+    pin_worker_torch_threads()
     rng = random.Random(base_seed + 100 * game_idx + 99)
 
     recorder: Optional[ReplayRecorder] = None
