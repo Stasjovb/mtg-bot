@@ -41,11 +41,13 @@ from dataclasses import dataclass
 from typing import Optional
 
 from mtg_bot.agents import RandomAgent
+from mtg_bot.decks import Deck
 from mtg_bot.search.engine_adapter import MtgGameStateAdapter
 from mtg_bot.search.protocol import CHANCE_PLAYER, PlayerID
 from mtg_bot.simulate import setup_game
 from mtg_bot.training._worker_threads import pin_worker_torch_threads
 from mtg_bot.training.config import StrategyFactory
+from mtg_bot.training.data_gen import _sample_decks_for_game
 from mtg_bot.training.progress import EvalProgress
 
 
@@ -103,6 +105,7 @@ def run_match(
     decision_cap: int = _DEFAULT_DECISION_CAP,
     enable_mulligans: bool = False,
     per_game_timeout_sec: Optional[float] = None,
+    deck_pool: Optional[list[Deck]] = None,
 ) -> MatchStats:
     """Play ``n_games`` of ``p0_factory`` vs ``p1_factory`` and
     aggregate stats.
@@ -121,7 +124,7 @@ def run_match(
     results = [
         _play_one_match_game(
             game_idx, p0_factory, p1_factory, base_seed, decision_cap,
-            enable_mulligans, per_game_timeout_sec,
+            enable_mulligans, per_game_timeout_sec, deck_pool,
         )
         for game_idx in range(n_games)
     ]
@@ -138,6 +141,7 @@ def run_match_parallel(
     progress: Optional[EvalProgress] = None,
     enable_mulligans: bool = False,
     per_game_timeout_sec: Optional[float] = None,
+    deck_pool: Optional[list[Deck]] = None,
 ) -> MatchStats:
     """Same contract as ``run_match`` but distributes games across a
     ``multiprocessing.Pool``.
@@ -180,7 +184,7 @@ def run_match_parallel(
 
     args_list = [
         (i, p0_factory, p1_factory, base_seed, decision_cap,
-         enable_mulligans, per_game_timeout_sec)
+         enable_mulligans, per_game_timeout_sec, deck_pool)
         for i in range(n_games)
     ]
     if progress is None:
@@ -329,20 +333,40 @@ def _play_one_match_game(
     decision_cap: int,
     enable_mulligans: bool = False,
     per_game_timeout_sec: Optional[float] = None,
+    deck_pool: Optional[list[Deck]] = None,
 ) -> tuple[Optional[PlayerID], int]:
     """Play one game and return ``(winner_or_None, decisions)``.
     Used by both the sequential and parallel match drivers — same
-    seed derivation logic in both paths so the results match."""
+    seed derivation logic in both paths so the results match.
+
+    When ``deck_pool`` is provided, two distinct decks are sampled
+    per game (deterministic per ``(base_seed, game_idx)``); both
+    seats use real archetypes from the pool. When ``None``, falls
+    back to the legacy mono-color synthetic decks (G vs R), matching
+    ``data_gen``'s back-compat default.
+    """
     engine_seed = base_seed + game_idx
-    engine = setup_game(
-        [
-            RandomAgent(rng=random.Random(engine_seed + 1)),
-            RandomAgent(rng=random.Random(engine_seed + 2)),
-        ],
-        ["G", "R"],
-        seed=engine_seed,
-        enable_mulligans=enable_mulligans,
-    )
+    seat_agents = [
+        RandomAgent(rng=random.Random(engine_seed + 1)),
+        RandomAgent(rng=random.Random(engine_seed + 2)),
+    ]
+    if deck_pool is not None:
+        deck_p0, deck_p1 = _sample_decks_for_game(
+            deck_pool, game_idx, base_seed,
+        )
+        engine = setup_game(
+            seat_agents,
+            decks=[deck_p0.cards, deck_p1.cards],
+            seed=engine_seed,
+            enable_mulligans=enable_mulligans,
+        )
+    else:
+        engine = setup_game(
+            seat_agents,
+            ["G", "R"],
+            seed=engine_seed,
+            enable_mulligans=enable_mulligans,
+        )
     adapter = MtgGameStateAdapter(engine, expose_combat_decisions=True)
     strategies = {
         0: p0_factory(base_seed + 100 * game_idx),
