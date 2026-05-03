@@ -182,3 +182,102 @@ def test_zero_val_split_skips_validation(tmp_path: Path):
     )
     for v in history.val_losses:
         assert np.isnan(v)
+
+
+# ---------- A4-wiring: AlphaZero mode (dual-head training) ------------------
+
+
+def _synthetic_alphazero_dataset(
+    n: int, seed: int = 0,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    """Synthetic AlphaZero-shape data: random features, value
+    target depends on first feature, policy target is one-hot on
+    a slot picked from the second feature, action mask covers
+    a small legal subset. Half the rows have policy supervision
+    (sum=1) and half are value-only (sum=0) so the trainer's
+    per-row gate gets exercised."""
+    from mtg_bot.training.action_encoding import ACTION_VOCAB_SIZE
+    rng = np.random.default_rng(seed)
+    features = rng.standard_normal((n, FEATURE_DIM)).astype(np.float32)
+    outcomes = np.tanh(features[:, 0]).astype(np.float32)
+    policy_targets = np.zeros((n, ACTION_VOCAB_SIZE), dtype=np.float32)
+    action_masks = np.zeros((n, ACTION_VOCAB_SIZE), dtype=np.bool_)
+    for i in range(n):
+        if i % 2 == 0:
+            slot = int(features[i, 1] * 50) % ACTION_VOCAB_SIZE
+            policy_targets[i, slot] = 1.0
+            for j in range(slot, slot + 10):
+                action_masks[i, j % ACTION_VOCAB_SIZE] = True
+    return features, outcomes, policy_targets, action_masks
+
+
+def test_alphazero_mode_runs_and_returns_dual_losses(tmp_path: Path):
+    """``policy_targets`` + ``action_masks`` provided → trainer
+    builds ``_ValuePolicyMLP``, returns history with both value and
+    policy loss components per epoch."""
+    f, o, p, m = _synthetic_alphazero_dataset(64)
+    history = train_value_network(
+        features=f, outcomes=o,
+        policy_targets=p, action_masks=m,
+        weights_out_path=tmp_path / "az.pt",
+        epochs=3, batch_size=16, device="cpu",
+    )
+    assert len(history.train_value_losses) == 3
+    assert len(history.train_policy_losses) == 3
+    assert len(history.val_value_losses) == 3
+    assert len(history.val_policy_losses) == 3
+    assert all(not np.isnan(v) for v in history.train_value_losses)
+    assert all(not np.isnan(v) for v in history.train_policy_losses)
+
+
+def test_alphazero_mode_loads_into_dual_head_evaluator(tmp_path: Path):
+    """Saved weights round-trip into ``NNEvaluator(with_policy=True)``
+    cleanly. The state_dict shape must match ``_ValuePolicyMLP``."""
+    from mtg_bot.search import NNEvaluator
+    f, o, p, m = _synthetic_alphazero_dataset(64)
+    out = tmp_path / "az.pt"
+    train_value_network(
+        features=f, outcomes=o,
+        policy_targets=p, action_masks=m,
+        weights_out_path=out,
+        epochs=2, batch_size=16, device="cpu",
+    )
+    evaluator = NNEvaluator(weights_path=out, with_policy=True)
+    x = torch.from_numpy(f[:1])
+    with torch.no_grad():
+        v, _p_logits = evaluator.model(x)
+    assert v.shape == (1, 1)
+    assert -1.0 <= float(v) <= 1.0
+
+
+def test_alphazero_rejects_lonely_policy_arg(tmp_path: Path):
+    """Passing only one of (policy_targets, action_masks) raises."""
+    from mtg_bot.training.action_encoding import ACTION_VOCAB_SIZE
+    f, o = _synthetic_dataset(32)
+    p = np.zeros((32, ACTION_VOCAB_SIZE), dtype=np.float32)
+    with pytest.raises(ValueError, match="must be provided together"):
+        train_value_network(
+            features=f, outcomes=o,
+            policy_targets=p,
+            weights_out_path=tmp_path / "x.pt",
+            epochs=1, device="cpu",
+        )
+
+
+def test_alphazero_rows_with_no_supervision_dont_break_training(
+    tmp_path: Path,
+):
+    """All rows are value-only (policy_target sum = 0). Trainer
+    runs without errors; policy loss term is zero per batch
+    (gate normalizes by max(supervision_count, 1) → loss 0)."""
+    from mtg_bot.training.action_encoding import ACTION_VOCAB_SIZE
+    f, o = _synthetic_dataset(64)
+    p = np.zeros((64, ACTION_VOCAB_SIZE), dtype=np.float32)
+    m = np.zeros((64, ACTION_VOCAB_SIZE), dtype=np.bool_)
+    history = train_value_network(
+        features=f, outcomes=o,
+        policy_targets=p, action_masks=m,
+        weights_out_path=tmp_path / "x.pt",
+        epochs=2, batch_size=16, device="cpu",
+    )
+    assert all(v == 0.0 for v in history.train_policy_losses)

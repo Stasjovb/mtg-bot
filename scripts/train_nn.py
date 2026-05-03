@@ -118,16 +118,31 @@ def main() -> None:
         sys.exit(f"--data-dir {args.data_dir} is not a directory")
 
     print(f"# Loading data from {args.data_dir}")
-    features, outcomes = load_all_datasets(args.data_dir)
+    # Always pull policy supervision arrays. ``include_policy=True``
+    # zero-pads value-only files so the concatenated arrays align —
+    # mixed dirs (some pre-A2.3 .npz, some post-A2.3) load cleanly.
+    features, outcomes, policy_targets, action_masks = (
+        load_all_datasets(args.data_dir, include_policy=True)
+    )
     if features.shape[0] == 0:
         sys.exit(
             f"No .npz files found in {args.data_dir}. Generate data "
             f"with scripts/generate_training_data.py first."
         )
     data_files = sorted(p.name for p in args.data_dir.glob("*.npz"))
+    n_policy_rows = int(
+        (policy_targets.sum(axis=-1) > 0.5).sum()
+    )
+    has_any_policy = n_policy_rows > 0
     print(
         f"# {features.shape[0]} samples from {len(data_files)} files, "
         f"FEATURE_DIM={features.shape[1]}"
+    )
+    print(
+        f"# Policy supervision: {n_policy_rows} / "
+        f"{features.shape[0]} rows "
+        f"({n_policy_rows / features.shape[0]:.1%}). Mode: "
+        f"{'AlphaZero (dual-head)' if has_any_policy else 'value-only'}"
     )
 
     device = args.device or auto_device()
@@ -160,19 +175,29 @@ def main() -> None:
     with tempfile.TemporaryDirectory() as tmp:
         tmp_weights = Path(tmp) / "weights.pt"
         started = time.perf_counter()
-        history = train_value_network(
-            features=features, outcomes=outcomes,
-            weights_out_path=tmp_weights,
-            epochs=args.epochs,
-            batch_size=args.batch_size,
-            learning_rate=args.lr,
-            val_split=args.val_split,
-            device=device,
-            rng_seed=args.seed,
-            progress_path=progress_path,
-            run_id=peeked_version,
-            notes=args.notes,
-        )
+        # Dispatch on schema: if any row carries policy supervision,
+        # forward the policy_targets / action_masks arrays so the
+        # trainer trains the dual-head ``_ValuePolicyMLP``. Otherwise
+        # train the value-only ``_ValueMLP`` (existing behavior; old
+        # v1/v2 weights still load via ``NNEvaluator()`` default).
+        train_kwargs: dict = {
+            "features": features,
+            "outcomes": outcomes,
+            "weights_out_path": tmp_weights,
+            "epochs": args.epochs,
+            "batch_size": args.batch_size,
+            "learning_rate": args.lr,
+            "val_split": args.val_split,
+            "device": device,
+            "rng_seed": args.seed,
+            "progress_path": progress_path,
+            "run_id": peeked_version,
+            "notes": args.notes,
+        }
+        if has_any_policy:
+            train_kwargs["policy_targets"] = policy_targets
+            train_kwargs["action_masks"] = action_masks
+        history = train_value_network(**train_kwargs)
         elapsed = time.perf_counter() - started
 
         metadata = ModelMetadata(
@@ -180,10 +205,12 @@ def main() -> None:
             created_at="",  # filled in by Registry.register
             feature_dim=FEATURE_DIM,
             hidden_sizes=list(HIDDEN_SIZES),
+            with_policy=has_any_policy,
             training={
                 "data_dir": str(args.data_dir),
                 "data_files": data_files,
                 "n_samples": int(features.shape[0]),
+                "n_policy_rows": n_policy_rows,
                 "epochs": args.epochs,
                 "batch_size": args.batch_size,
                 "learning_rate": args.lr,
@@ -195,6 +222,10 @@ def main() -> None:
             training_history={
                 "train_losses": history.train_losses,
                 "val_losses": history.val_losses,
+                "train_value_losses": history.train_value_losses,
+                "val_value_losses": history.val_value_losses,
+                "train_policy_losses": history.train_policy_losses,
+                "val_policy_losses": history.val_policy_losses,
                 "final_train_loss": history.train_losses[-1],
                 "final_val_loss": history.val_losses[-1],
                 "best_val_loss": history.best_val_loss,
@@ -207,10 +238,19 @@ def main() -> None:
 
     print(f"\n# Done in {elapsed:.1f}s. Registered as {version}.")
     print(f"# Weights:  {registry.weights_path(version)}")
-    print(f"# Final train MSE: {history.train_losses[-1]:.4f}")
-    print(f"# Final val MSE:   {history.val_losses[-1]:.4f}")
+    print(f"# Final train loss: {history.train_losses[-1]:.4f}")
+    print(f"# Final val loss:   {history.val_losses[-1]:.4f}")
+    if has_any_policy:
+        print(
+            f"#   value:  train={history.train_value_losses[-1]:.4f} "
+            f"val={history.val_value_losses[-1]:.4f}"
+        )
+        print(
+            f"#   policy: train={history.train_policy_losses[-1]:.4f} "
+            f"val={history.val_policy_losses[-1]:.4f}"
+        )
     print(
-        f"# Best val MSE: {history.best_val_loss:.4f} "
+        f"# Best val loss: {history.best_val_loss:.4f} "
         f"at epoch {history.best_val_epoch}"
     )
 
