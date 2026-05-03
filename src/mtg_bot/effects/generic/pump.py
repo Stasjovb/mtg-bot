@@ -786,15 +786,14 @@ class PumpCreaturesOpponentsControlUntilEOT(Effect):
     control get -3/-0 until end of turn" (one-time snapshot).
 
     Set ``until_caster_next_turn=True`` for the "until your next turn"
-    variant (Mouth of the Storm). The P/T bonus is written to the
-    ``extended_temp_power_bonus`` / ``extended_temp_toughness_bonus``
-    fields tagged with the resolving controller's id; the keyword
-    grant rides ``ApplyEffect(GrantKeywords(...), EndOfYourNextTurn())``
-    and writes a layer-6 ``grant_keyword`` registry entry with
-    ``expires_at="controller_untap"`` and the controller as the
-    expiring player. Both expire at the start (``run_untap_step``) of
-    that controller's NEXT turn, so the opponent's full subsequent
-    turn keeps the debuff applied.
+    variant (Mouth of the Storm). The P/T bonus is written via
+    ``grant_pt_pump_until_player_next_turn`` (layer-7 sublayer-2
+    ``pump_pt`` registry entry, ``expires_at="controller_untap"``,
+    ``expires_at_player_id`` = caster). The keyword grant rides
+    ``ApplyEffect(GrantKeywords(...), EndOfYourNextTurn())`` and writes
+    a layer-6 ``grant_keyword`` registry entry under the same lifetime.
+    Both expire at the start (``run_untap_step``) of the caster's NEXT
+    turn — the opponent's full subsequent turn keeps the debuff applied.
     """
 
     power_bonus: int = 0

@@ -433,22 +433,20 @@ class GameObject:
     # multiple pumps hit the same object.
     temp_power_bonus: int = 0
     temp_toughness_bonus: int = 0
-    # Extended-temporal-scope P/T bonuses: "until your next turn" —
-    # expire at the START (untap step) of player
-    # ``extended_temp_expires_at_player_id``, NOT at this turn's
-    # cleanup. Stacked additively, contribute to effective_power /
-    # effective_toughness like the regular temp_* fields. Matches
-    # Mouth of the Storm's "creatures your opponents control get -3/-0
-    # until your next turn." Set
-    # ``extended_temp_expires_at_player_id`` to the casting/source
-    # controller's id; their next untap clears these. The companion
-    # keyword grant for this lifetime now flows through
-    # ``ApplyEffect(GrantKeywords(...), EndOfYourNextTurn())`` —
-    # registry entries with ``expires_at="controller_untap"`` —
-    # rather than a parallel ``extended_temp_keywords`` field.
-    extended_temp_power_bonus: int = 0
-    extended_temp_toughness_bonus: int = 0
-    extended_temp_expires_at_player_id: Optional[int] = None
+    # The legacy ``extended_temp_power_bonus`` /
+    # ``extended_temp_toughness_bonus`` / ``extended_temp_keywords`` /
+    # ``extended_temp_expires_at_player_id`` fields ("until your next
+    # turn" mirrors keyed on the casting controller) have been retired.
+    # P/T deltas at that lifetime now flow through layer-7 ``pump_pt``
+    # registry entries with ``expires_at="controller_untap"`` (read by
+    # ``_compute_effective_pt``); keyword grants ride
+    # ``ApplyEffect(GrantKeywords(...), EndOfYourNextTurn())`` (layer-6
+    # ``grant_keyword`` entries under the same lifetime). Both expire
+    # via ``run_untap_step``'s
+    # ``expire_continuous_effects("controller_untap", player_id=ap.id)``
+    # call. ``temp_keywords`` was retired on the same sweep — keyword
+    # UEOT grants ride ``grant_keyword`` registry entries with
+    # ``expires_at="cleanup"``.
     # Equipment attachment: if this object is Equipment, ``attached_to``
     # is the id of the creature it's attached to (or None if unattached).
     # Plays no role if the object isn't Equipment.
@@ -1066,9 +1064,9 @@ def effective_keywords(state: GameState, obj: GameObject) -> frozenset[str]:
     - ``"lose_all_abilities"`` clears the set entirely.
     - ``"grant_keyword"`` adds ``params[0]``. UEOT grants carry
       ``expires_at="cleanup"`` (dropped at this turn's cleanup);
-      "until your next turn" grants carry ``expires_at=
-      "controller_untap"`` with the controller's id (dropped at
-      that controller's next untap step).
+      "until your next turn" grants carry
+      ``expires_at="controller_untap"`` with the controller's id
+      (dropped at that controller's next untap step).
 
     Static-anthem keyword grants from a Sliver-lord-style source
     are synthesized as layer-6 ``grant_keyword`` entries with the
@@ -2039,8 +2037,10 @@ def _compute_effective_pt(
       - 7b (sublayer 1): set base P/T — most-recent registry
         ``"set_base_pt"`` wins; falls back to dynamic P/T formula,
         then printed.
-      - 7c (sublayer 2): modify P/T — anthem static bonuses + UEOT
-        pump bonuses (legacy fields).
+      - 7c (sublayer 2): modify P/T — anthem static bonuses, UEOT
+        pump bonuses (legacy ``temp_*`` field cache), and
+        "until your next turn" pump bonuses (registry walk over
+        ``pump_pt`` entries with ``expires_at="controller_untap"``).
       - 7d (sublayer 3): counters — +1/+1 counters add equally.
       - 7e (sublayer 4): switch P/T — each layer-7 sublayer-4
         ``"switch_pt"`` registry entry contributes one swap, walked
@@ -2111,13 +2111,31 @@ def _compute_effective_pt(
             base_t = obj.printing.toughness or 0
     # 7c: modify P/T (anthems, pumps).
     power_bonus, toughness_bonus, _ = _static_bonuses(state, obj)
+    # Layer-7c registry pumps: ``"pump_pt"`` entries with
+    # ``expires_at="controller_untap"`` carry the "until your next
+    # turn" P/T deltas (Mouth of the Storm). UEOT pump entries
+    # (``expires_at="cleanup"``) still flow through the
+    # ``temp_power_bonus`` / ``temp_toughness_bonus`` field-mirror
+    # path; that migration is a separate sweep tracked by the audit.
+    extended_pump_p = 0
+    extended_pump_t = 0
+    for ce in state.continuous_effects:
+        if (
+            ce.layer == 7
+            and ce.sublayer == 2
+            and ce.kind == "pump_pt"
+            and ce.target_id == obj.id
+            and ce.expires_at == "controller_untap"
+        ):
+            extended_pump_p += ce.params[0]
+            extended_pump_t += ce.params[1]
     p = (
         base_p + power_bonus
-        + obj.temp_power_bonus + obj.extended_temp_power_bonus
+        + obj.temp_power_bonus + extended_pump_p
     )
     t = (
         base_t + toughness_bonus
-        + obj.temp_toughness_bonus + obj.extended_temp_toughness_bonus
+        + obj.temp_toughness_bonus + extended_pump_t
     )
     # 7d: counters. +1/+1 and -1/-1 are normally cancelled out by
     # the CR 704.5n SBA before this read, but if they coexist
@@ -2799,22 +2817,16 @@ class GameState:
         """Helper for the layer-7 sublayer-2 ``"pump_pt"`` extended-
         temporal grant — "until your next turn" pumps. Mouth of the
         Storm's "creatures your opponents control get -3/-0 until
-        your next turn" is the canonical case. Writes a registry
-        entry with ``expires_at="controller_untap"`` and
-        ``expires_at_player_id=until_player_id``, AND mirrors the
-        deltas onto the legacy ``extended_temp_*`` cache fields. The
-        entry expires at ``until_player_id``'s next untap step —
-        ``run_untap_step`` calls ``expire_continuous_effects(
-        "controller_untap", player_id=ap.id)``."""
+        your next turn" is the canonical case. Writes a single
+        registry entry with ``expires_at="controller_untap"`` and
+        ``expires_at_player_id=until_player_id``; ``_compute_effective_pt``
+        walks the registry directly for these entries, so no field
+        mirror is needed (``extended_temp_*`` was retired in this
+        sweep). The entry expires at ``until_player_id``'s next
+        untap step — ``run_untap_step`` calls
+        ``expire_continuous_effects("controller_untap", player_id=ap.id)``."""
         if power == 0 and toughness == 0:
             return None  # type: ignore[return-value]
-        target = next(
-            (o for o in self.battlefield if o.id == target_id), None,
-        )
-        if target is not None:
-            target.extended_temp_power_bonus += power
-            target.extended_temp_toughness_bonus += toughness
-            target.extended_temp_expires_at_player_id = until_player_id
         return self.add_continuous_effect(
             source_id=source_id,
             layer=7,

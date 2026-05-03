@@ -14,7 +14,9 @@ All four finite durations are wired end-to-end:
   controller) — dropped at the controller's next untap step in
   ``run_untap_step``. Exercised end-to-end by
   ``PumpCreaturesOpponentsControlUntilEOT``'s
-  ``until_caster_next_turn=True`` keyword path.
+  ``until_caster_next_turn=True`` keyword path, and by the
+  registry-walk reader in ``_compute_effective_pt`` for P/T pumps
+  scoped ``until your next turn`` (e.g. Mouth of the Storm).
 - ``EndOfCombat`` (``"end_of_combat"``) — dropped at the
   end-of-combat step in ``clear_combat_state`` (combat.py). No
   production card uses this duration today; the wiring is in place
@@ -87,9 +89,12 @@ class EndOfTurn(Duration):
 class EndOfYourNextTurn(Duration):
     """``until your next turn``: dropped at the start of the controller's
     next untap step. Maps to ``expires_at="controller_untap"`` with the
-    controller id stored in ``expires_at_player_id`` — the same key
-    used by Mouth-of-the-Storm-style pumps in ``GameState.expire_*``.
-    Exercised end-to-end by ``PumpCreaturesOpponentsControlUntilEOT``'s
+    controller id stored in ``expires_at_player_id`` — the lifetime used
+    by Mouth-of-the-Storm-style pumps (P/T) and keyword grants under the
+    same scope. ``run_untap_step`` calls
+    ``state.expire_continuous_effects("controller_untap", player_id=ap.id)``
+    to drop these at the right moment. Exercised end-to-end by
+    ``PumpCreaturesOpponentsControlUntilEOT``'s
     ``until_caster_next_turn=True`` keyword grant via ``ApplyEffect``."""
 
     def to_expires(

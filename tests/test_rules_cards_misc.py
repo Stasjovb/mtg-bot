@@ -6841,7 +6841,15 @@ def test_mouth_of_the_storm_debuff_persists_through_cleanup():
     # Casting turn's cleanup — debuff stays.
     run_cleanup_step(state)
     assert effective_power(state, op) == base_p - 3
-    assert op.extended_temp_power_bonus == -3
+    # Registry entry survives cleanup (it's tagged
+    # ``expires_at="controller_untap"``, not ``"cleanup"``).
+    assert any(
+        ce.kind == "pump_pt"
+        and ce.target_id == op.id
+        and ce.expires_at == "controller_untap"
+        and ce.params == (-3, 0)
+        for ce in state.continuous_effects
+    )
 
 
 def test_mouth_of_the_storm_debuff_clears_at_caster_next_untap():
@@ -6866,12 +6874,24 @@ def test_mouth_of_the_storm_debuff_clears_at_caster_next_untap():
     run_cleanup_step(state)
     state.active_player_idx = 1
     run_untap_step(state)  # opponent's untap — debuff still active
-    assert op.extended_temp_power_bonus == -3
+    # Registry entry survives the opponent's untap (its
+    # expires_at_player_id is the caster, not the opponent).
+    assert any(
+        ce.kind == "pump_pt"
+        and ce.target_id == op.id
+        and ce.expires_at == "controller_untap"
+        for ce in state.continuous_effects
+    )
     assert effective_power(state, op) == base_p - 3
     run_cleanup_step(state)
     state.active_player_idx = 0
     run_untap_step(state)  # caster's next untap — debuff clears now
-    assert op.extended_temp_power_bonus == 0
+    assert not any(
+        ce.kind == "pump_pt"
+        and ce.target_id == op.id
+        and ce.expires_at == "controller_untap"
+        for ce in state.continuous_effects
+    )
     assert effective_power(state, op) == base_p
 
 
@@ -6893,7 +6913,13 @@ def test_mouth_of_the_storm_debuff_skips_caster_own_creatures():
         until_caster_next_turn=True,
     ).resolve(state, controller_id=0)
     assert effective_power(state, own) == base_p
-    assert own.extended_temp_power_bonus == 0
+    # No registry entry was written for the caster's own creature.
+    assert not any(
+        ce.kind == "pump_pt"
+        and ce.target_id == own.id
+        and ce.expires_at == "controller_untap"
+        for ce in state.continuous_effects
+    )
 
 
 def test_mass_keyword_grant_until_your_next_turn_persists_then_expires():
