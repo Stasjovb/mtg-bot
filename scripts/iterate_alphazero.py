@@ -240,6 +240,7 @@ def _eval_match(
     seed: int,
     enable_mulligans: bool = False,
     per_game_timeout_sec: float | None = None,
+    hidden_sizes: tuple[int, ...] | None = None,
 ) -> tuple[int, int, int, float]:
     """Head-to-head match: new (seat 0) vs old (seat 1). Returns
     (new_wins, old_wins, draws, elapsed_seconds).
@@ -247,7 +248,13 @@ def _eval_match(
     ``old_weights=None`` falls back to a heuristic opponent (useful
     for the very first iteration where there's no "old NN" to
     compare against, OR for sanity-check eval against the
-    heuristic baseline)."""
+    heuristic baseline).
+
+    ``hidden_sizes`` must match the saved weights' trunk shape for
+    BOTH new and old — they're trained at the same capacity per the
+    iterate loop's contract (see main()'s ``iter_hidden_sizes``).
+    Without it the worker NNEvaluator load fails with state_dict
+    size mismatch and every game crashes."""
     # Both NN seats run with batch_size=32 — PUCT now supports batched
     # leaf evaluation (feature/batched-puct), so the eval-match path
     # picks up the same per-call speedup the data-gen path got. The
@@ -260,6 +267,7 @@ def _eval_match(
         batch_size=32,
         with_policy=True,
         puct=True,
+        hidden_sizes=hidden_sizes,
     )
     if old_weights is not None:
         old_cfg = NNPimcConfig(
@@ -269,6 +277,7 @@ def _eval_match(
             batch_size=32,
             with_policy=True,
             puct=True,
+            hidden_sizes=hidden_sizes,
         )
         p1_build = old_cfg.build
     else:
@@ -492,6 +501,7 @@ def main() -> None:
             output=data_path,
             enable_mulligans=args.enable_mulligans,
             per_game_timeout_sec=args.per_game_timeout_sec,
+            hidden_sizes=iter_hidden_sizes,
         )
         print(
             f"[iterate]   gen done in {gen_elapsed/60:.1f}m: "
@@ -540,6 +550,7 @@ def main() -> None:
                 seed=cycle_seed + 7777,
                 enable_mulligans=args.enable_mulligans,
                 per_game_timeout_sec=args.per_game_timeout_sec,
+                hidden_sizes=iter_hidden_sizes,
             )
             n_decided = wins_new + wins_old
             win_rate = wins_new / n_decided if n_decided else 0.0
