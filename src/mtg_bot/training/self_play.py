@@ -86,6 +86,7 @@ def run_match(
     base_seed: int = 0,
     decision_cap: int = _DEFAULT_DECISION_CAP,
     enable_mulligans: bool = False,
+    per_game_timeout_sec: Optional[float] = None,
 ) -> MatchStats:
     """Play ``n_games`` of ``p0_factory`` vs ``p1_factory`` and
     aggregate stats.
@@ -104,7 +105,7 @@ def run_match(
     results = [
         _play_one_match_game(
             game_idx, p0_factory, p1_factory, base_seed, decision_cap,
-            enable_mulligans,
+            enable_mulligans, per_game_timeout_sec,
         )
         for game_idx in range(n_games)
     ]
@@ -120,6 +121,7 @@ def run_match_parallel(
     n_workers: Optional[int] = None,
     progress: Optional[EvalProgress] = None,
     enable_mulligans: bool = False,
+    per_game_timeout_sec: Optional[float] = None,
 ) -> MatchStats:
     """Same contract as ``run_match`` but distributes games across a
     ``multiprocessing.Pool``.
@@ -162,7 +164,7 @@ def run_match_parallel(
 
     args_list = [
         (i, p0_factory, p1_factory, base_seed, decision_cap,
-         enable_mulligans)
+         enable_mulligans, per_game_timeout_sec)
         for i in range(n_games)
     ]
     if progress is None:
@@ -308,6 +310,7 @@ def _play_one_match_game(
     base_seed: int,
     decision_cap: int,
     enable_mulligans: bool = False,
+    per_game_timeout_sec: Optional[float] = None,
 ) -> tuple[Optional[PlayerID], int]:
     """Play one game and return ``(winner_or_None, decisions)``.
     Used by both the sequential and parallel match drivers — same
@@ -337,6 +340,13 @@ def _play_one_match_game(
     # heuristic strategies); idempotent across games.
     pin_worker_torch_threads()
     rng = random.Random(base_seed + 100 * game_idx + 99)
+    if per_game_timeout_sec is not None and per_game_timeout_sec > 0:
+        from mtg_bot.training._timeout import run_with_timeout
+        return run_with_timeout(
+            _play_capped_game,
+            (adapter, strategies, rng, decision_cap),
+            per_game_timeout_sec,
+        )
     return _play_capped_game(adapter, strategies, rng, decision_cap)
 
 

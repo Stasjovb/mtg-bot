@@ -181,6 +181,7 @@ def generate_training_data(
     with_policy: bool = False,
     progress: Optional[DataGenProgress] = None,
     enable_mulligans: bool = False,
+    per_game_timeout_sec: Optional[float] = None,
 ) -> tuple[np.ndarray, ...]:
     """Play ``n_games`` and return training arrays.
 
@@ -220,6 +221,7 @@ def generate_training_data(
             replay_config=replay_config,
             deck_pool=deck_pool,
             enable_mulligans=enable_mulligans,
+            per_game_timeout_sec=per_game_timeout_sec,
         )
         chunks.append(chunk)
         if progress is not None:
@@ -246,6 +248,7 @@ def generate_training_data_parallel(
     with_policy: bool = False,
     progress: Optional[DataGenProgress] = None,
     enable_mulligans: bool = False,
+    per_game_timeout_sec: Optional[float] = None,
 ) -> tuple[np.ndarray, ...]:
     """Same contract as ``generate_training_data`` but distributes
     games across a ``multiprocessing.Pool``. Same ``with_policy``
@@ -285,7 +288,7 @@ def generate_training_data_parallel(
         (
             i, p0_factory, p1_factory, base_seed,
             decision_cap, sample_every, replay_config, deck_pool,
-            enable_mulligans,
+            enable_mulligans, per_game_timeout_sec,
         )
         for i in range(n_games)
     ]
@@ -364,7 +367,7 @@ def _play_one_parallel_game(
     (
         game_idx, p0_factory, p1_factory, base_seed,
         decision_cap, sample_every, replay_config, deck_pool,
-        enable_mulligans,
+        enable_mulligans, per_game_timeout_sec,
     ) = args
     try:
         chunk = _generate_one_game_data(
@@ -372,6 +375,7 @@ def _play_one_parallel_game(
             p0_factory=p0_factory, p1_factory=p1_factory,
             base_seed=base_seed,
             enable_mulligans=enable_mulligans,
+            per_game_timeout_sec=per_game_timeout_sec,
             decision_cap=decision_cap, sample_every=sample_every,
             replay_config=replay_config,
             deck_pool=deck_pool,
@@ -412,6 +416,7 @@ def _generate_one_game_data(
     replay_config: Optional[ReplayCaptureConfig] = None,
     deck_pool: Optional[list[Deck]] = None,
     enable_mulligans: bool = False,
+    per_game_timeout_sec: Optional[float] = None,
 ) -> _GameChunk:
     """Play one game and return its 4-tuple training arrays.
 
@@ -479,10 +484,18 @@ def _generate_one_game_data(
         # snapshot reflects "game 0, before any actions taken."
         recorder.record(adapter.engine_state)
 
-    winner, samples = _play_one_game_recording(
-        adapter, strategies, rng, decision_cap, sample_every,
-        replay_recorder=recorder,
-    )
+    if per_game_timeout_sec is not None and per_game_timeout_sec > 0:
+        from mtg_bot.training._timeout import run_with_timeout
+        winner, samples = run_with_timeout(
+            _play_one_game_recording,
+            (adapter, strategies, rng, decision_cap, sample_every, recorder),
+            per_game_timeout_sec,
+        )
+    else:
+        winner, samples = _play_one_game_recording(
+            adapter, strategies, rng, decision_cap, sample_every,
+            replay_recorder=recorder,
+        )
 
     if recorder is not None and replay_config is not None:
         replay = recorder.to_replay(metadata={
