@@ -161,12 +161,23 @@ class NNPimcConfig:
     batch_size: int = 32
     with_policy: bool = False
     puct: bool = False
+    # ``hidden_sizes`` carries the trunk shape the saved weights were
+    # trained at. ``None`` = use NNEvaluator's default (the registry-
+    # baseline (128, 128, 64)); workers loading a non-default-arch
+    # version (e.g. v7's wider 1024-1024-512 trunk) must set this
+    # explicitly so the model the state_dict loads into has the
+    # matching shape. ``evaluate_nn.py`` reads it from the version's
+    # metadata.json and threads it through this field.
+    hidden_sizes: Optional[tuple[int, ...]] = None
 
     def build(self, seed: int = 0) -> SearchStrategy:
-        evaluator = NNEvaluator(
-            weights_path=Path(self.weights_path),
-            with_policy=self.with_policy,
-        )
+        eval_kwargs: dict[str, Any] = {
+            "weights_path": Path(self.weights_path),
+            "with_policy": self.with_policy,
+        }
+        if self.hidden_sizes is not None:
+            eval_kwargs["hidden_sizes"] = self.hidden_sizes
+        evaluator = NNEvaluator(**eval_kwargs)
         inner_nodes = self.inner_nodes
         batch_size = self.batch_size
         puct = self.puct
@@ -196,10 +207,15 @@ class NNPimcConfig:
             "batch_size": self.batch_size,
             "with_policy": self.with_policy,
             "puct": self.puct,
+            "hidden_sizes": (
+                list(self.hidden_sizes)
+                if self.hidden_sizes is not None else None
+            ),
         }
 
     @classmethod
     def from_dict(cls, d: dict[str, Any]) -> "NNPimcConfig":
+        hidden_sizes = d.get("hidden_sizes")
         return cls(
             weights_path=d["weights_path"],
             samples=d["samples"],
@@ -207,6 +223,9 @@ class NNPimcConfig:
             batch_size=d.get("batch_size", 32),
             with_policy=d.get("with_policy", False),
             puct=d.get("puct", False),
+            hidden_sizes=(
+                tuple(hidden_sizes) if hidden_sizes is not None else None
+            ),
         )
 
 

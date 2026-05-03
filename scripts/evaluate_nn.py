@@ -177,11 +177,21 @@ def main() -> None:
         # A4-wiring will set it True.
         meta = registry.load_metadata(args.version)
         metadata_with_policy = bool(getattr(meta, "with_policy", False))
+        # Pull the trunk shape too, so workers reconstruct the
+        # ``_ValueMLP`` / ``_ValuePolicyMLP`` at the matching
+        # capacity. Falls back to ``None`` for legacy versions —
+        # NNEvaluator's default still matches v1-v6 (the registry
+        # baseline (128, 128, 64)) so missing metadata is benign.
+        meta_hidden = getattr(meta, "hidden_sizes", None)
+        metadata_hidden_sizes = (
+            tuple(meta_hidden) if meta_hidden is not None else None
+        )
     else:
         if not args.weights.is_file():
             sys.exit(f"--weights {args.weights} not found")
         weights_path = args.weights
         label = str(args.weights)
+        metadata_hidden_sizes = None
 
     # Resolve --puct: explicit flag wins; otherwise auto-detect from
     # registry metadata (dual-head weights default to PUCT, value-
@@ -250,6 +260,7 @@ def main() -> None:
             batch_size=nn_batch_size,
             with_policy=metadata_with_policy or use_puct,
             puct=use_puct,
+            hidden_sizes=metadata_hidden_sizes,
         )
     heuristic_cfg = PimcConfig(
         samples=args.samples,

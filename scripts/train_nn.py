@@ -123,7 +123,30 @@ def main() -> None:
             "recommended on for any real GPU training run."
         ),
     )
+    parser.add_argument(
+        "--hidden-sizes", default=None,
+        help=(
+            "Comma-separated trunk shape (e.g. '1024,1024,512') "
+            "overriding the registry-baseline (128, 128, 64). "
+            "Saved into the version's metadata.json so loading via "
+            "--version (in evaluate_nn.py / iterate_alphazero.py) "
+            "rebuilds an evaluator at the matching shape. Useful "
+            "for capacity-experiment training runs without making "
+            "old versions unloadable."
+        ),
+    )
     args = parser.parse_args()
+    if args.hidden_sizes is not None:
+        try:
+            hidden_sizes = tuple(
+                int(x.strip()) for x in args.hidden_sizes.split(",")
+            )
+        except ValueError as exc:
+            sys.exit(f"--hidden-sizes parse error: {exc}")
+        if not hidden_sizes:
+            sys.exit("--hidden-sizes must list at least one layer")
+    else:
+        hidden_sizes = HIDDEN_SIZES
 
     if not args.data_dir.is_dir():
         sys.exit(f"--data-dir {args.data_dir} is not a directory")
@@ -205,6 +228,7 @@ def main() -> None:
             "run_id": peeked_version,
             "notes": args.notes,
             "compile_model": args.compile_model,
+            "hidden_sizes": hidden_sizes,
         }
         if has_any_policy:
             train_kwargs["policy_targets"] = policy_targets
@@ -216,7 +240,7 @@ def main() -> None:
             version="",  # filled in by Registry.register
             created_at="",  # filled in by Registry.register
             feature_dim=FEATURE_DIM,
-            hidden_sizes=list(HIDDEN_SIZES),
+            hidden_sizes=list(hidden_sizes),
             with_policy=has_any_policy,
             training={
                 "data_dir": str(args.data_dir),
