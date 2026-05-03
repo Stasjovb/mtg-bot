@@ -412,6 +412,21 @@ class RandomAgent(Agent):
     def choose_discard(self, state, player_id, hand_card_ids):
         return self.rng.choice(hand_card_ids)
 
+    def choose_mulligan(self, state, player_id, hand, mulls_taken):
+        # Use the same extreme-only heuristic DefaultTacticalAgent uses
+        # so the eval / data-gen pipelines (which pass RandomAgent
+        # instances to setup_game as the seat-level fallback agent) get
+        # mulligan behavior when ``enable_mulligans=True``. Random
+        # mulligan choices would add noise without information; the
+        # heuristic is deterministic but cheap and hits the worst-case
+        # opening hands (0 or all lands).
+        from mtg_bot.mulligan import heuristic_mulligan_decision
+        return heuristic_mulligan_decision(hand, mulls_taken)
+
+    def choose_bottom(self, state, player_id, hand, n):
+        from mtg_bot.mulligan import heuristic_bottom_choice
+        return heuristic_bottom_choice(hand, n)
+
     def choose_surveil(self, state, player_id, top_card_id):
         # Coin flip: mill or keep. Good enough for a random-action baseline.
         return self.rng.random() < 0.5
