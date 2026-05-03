@@ -31,6 +31,7 @@ from mtg_bot.agents import RandomAgent
 from mtg_bot.search.engine_adapter import MtgGameStateAdapter
 from mtg_bot.search.protocol import CHANCE_PLAYER, PlayerID
 from mtg_bot.simulate import setup_game
+from mtg_bot.training._worker_threads import pin_worker_torch_threads
 from mtg_bot.training.config import StrategyFactory
 
 
@@ -174,6 +175,15 @@ def _play_one_match_game(
         0: p0_factory(base_seed + 100 * game_idx),
         1: p1_factory(base_seed + 100 * game_idx + 50),
     }
+    # Pin torch CPU threads to 1 in this worker process. Strategy
+    # factories that use the NN evaluator have just imported torch;
+    # without this pin, every worker inherits the default of "host
+    # CPU count" threads and 30 workers x 32 MKL threads thrash the
+    # 32 host cores (~30-40% effective utilization). The trainer
+    # has the analogous pin (commit 3ad808f); this is the worker-
+    # side equivalent. No-op when torch isn't loaded (random /
+    # heuristic strategies); idempotent across games.
+    pin_worker_torch_threads()
     rng = random.Random(base_seed + 100 * game_idx + 99)
     return _play_capped_game(adapter, strategies, rng, decision_cap)
 
