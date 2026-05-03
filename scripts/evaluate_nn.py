@@ -26,6 +26,7 @@ import argparse
 import random
 import sys
 import time
+from datetime import datetime, timezone
 from pathlib import Path
 
 _HERE = Path(__file__).resolve().parent
@@ -33,7 +34,7 @@ _SRC = _HERE.parent / "src"
 if _SRC.is_dir() and str(_SRC) not in sys.path:
     sys.path.insert(0, str(_SRC))
 
-from mtg_bot.training import run_match  # noqa: E402
+from mtg_bot.training import EvalProgress, run_match  # noqa: E402
 from mtg_bot.training.config import (  # noqa: E402
     HeuristicConfig, NNPimcConfig, PimcConfig,
 )
@@ -113,6 +114,18 @@ def main() -> None:
         help="Force UCB1 selection even on dual-head weights.",
     )
     parser.set_defaults(puct=None)
+    parser.add_argument(
+        "--progress-path", default=None,
+        help=(
+            "Where to write live per-game progress JSON for the "
+            "training UI. Defaults to "
+            "<cwd>/training_progress/eval_<version>_<stamp>.json. "
+            "Pass an explicit path to override; pass an empty string "
+            "to disable progress emission entirely. The sequential "
+            "(workers<=1) path doesn't emit progress — workers > 1 "
+            "is the parallel path that streams completions."
+        ),
+    )
     args = parser.parse_args()
 
     registry: Registry | None = None
@@ -193,8 +206,42 @@ def main() -> None:
         f"vs heuristic(seat 1), samples={args.samples} nodes={args.nodes}, "
         f"NN batch_size={args.nn_batch_size}, {worker_label}"
     )
+
+    # Progress file: parallel-only (the sequential path is for
+    # debugging and doesn't need UI integration). Default path mirrors
+    # train_nn.py's pattern — one file per run, named by version +
+    # timestamp so consecutive evals don't clobber.
+    progress: EvalProgress | None = None
+    is_parallel = not (args.workers is not None and args.workers <= 1)
+    if is_parallel and args.progress_path != "":
+        if args.progress_path is None:
+            stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+            run_id = f"eval_{label}_{stamp}"
+            progress_path = Path("training_progress") / f"{run_id}.json"
+        else:
+            progress_path = Path(args.progress_path)
+            run_id = progress_path.stem
+        n_workers = args.workers
+        if n_workers is None:
+            import os as _os
+            n_workers = max(1, (_os.cpu_count() or 1) - 2)
+        progress = EvalProgress(
+            progress_path=progress_path,
+            run_id=run_id,
+            n_games_total=args.n_games,
+            n_workers=int(n_workers),
+            opponent_label="heuristic",
+            command=" ".join(sys.argv),
+            notes=(
+                f"NN({label}) vs heuristic, samples={args.samples} "
+                f"nodes={args.nodes} seed={args.seed} "
+                f"nn_batch_size={nn_batch_size}"
+            ),
+        )
+        print(f"# progress: {progress_path}")
+
     started = time.perf_counter()
-    if args.workers is not None and args.workers <= 1:
+    if not is_parallel:
         stats = run_match(
             p0_factory=nn_cfg.build,
             p1_factory=heuristic_cfg.build,
@@ -208,6 +255,7 @@ def main() -> None:
             n_games=args.n_games,
             base_seed=args.seed,
             n_workers=args.workers,
+            progress=progress,
         )
     elapsed = time.perf_counter() - started
 

@@ -1,20 +1,23 @@
 """Progress reporting for long-running training runs.
 
-Two consumers today: the NN trainer (epoch-by-epoch loss) and the
-self-play data generator (game-by-game throughput). Both write
+Three consumers today: the NN trainer (epoch-by-epoch loss), the
+self-play data generator (game-by-game throughput), and the
+NN-vs-baseline evaluator (game-by-game win rate). All three write
 ``<run_id>.json`` files into a shared progress directory; the
 ``mtg_bot.training_ui`` Flask app reads them. A polling reader sees
 a stable file (atomic temp + ``os.replace``).
 
-The data-gen tracker batches its writes — the work it tracks is
-1-10s per game, so the in-memory counters update on every game
-completion but only flush to disk every ``flush_interval_s``
-(default 5s). That keeps disk traffic at ~12 writes/min regardless
-of game count, which is what we want for "no perf impact."
+The game-tracking trackers (data-gen, eval) batch their writes — the
+work they track is seconds-to-minutes per game, so the in-memory
+counters update on every game completion but only flush to disk
+every ``flush_interval_s`` (default 5s). That keeps disk traffic at
+~12 writes/min regardless of game count, which is what we want for
+"no perf impact."
 
 Schema discriminator: each payload carries ``kind`` so the UI knows
-whether to render an epoch chart (``kind="training"``) or a
-games-played card (``kind="data_gen"``).
+whether to render an epoch chart (``kind="training"``), a games-
+played card (``kind="data_gen"``), or a head-to-head win-rate card
+(``kind="eval"``).
 """
 
 from __future__ import annotations
@@ -223,6 +226,151 @@ class DataGenProgress:
             "per_game_seconds_avg": float(avg),
             "games_per_hour": float(games_per_hour),
             "samples_per_hour": float(samples_per_hour),
+            "command": self.command,
+            "git_commit": self._git_commit,
+            "notes": self.notes,
+        }
+        atomic_write_json(self.progress_path, payload)
+        self._last_flush_perf = now
+
+
+@dataclass
+class EvalProgress:
+    """Tracker for an NN-vs-opponent head-to-head evaluation match.
+
+    Mirrors :class:`DataGenProgress`'s shape — same begin / record_game
+    / finalize lifecycle, same ``flush_interval_s`` batching — but
+    tracks win counts from the new model's perspective rather than
+    sample counts. The new model is conventionally seat 0; the
+    opponent (baseline heuristic, or an older registered version) is
+    seat 1.
+
+    ``record_game`` takes ``winner`` (0, 1, or None for draw / decision-
+    cap timeout) and the per-game decision count for the running
+    average. Aggregated stats published to the snapshot JSON:
+
+    - ``wins_new`` / ``wins_old`` / ``draws``
+    - ``win_rate``        — wins_new / decided games (excludes draws)
+    - ``avg_decisions``   — running mean of per-game decision counts
+    - ``elapsed_seconds`` / ``estimated_remaining_seconds`` /
+      ``per_game_seconds_avg`` / ``games_per_hour`` (same as data_gen)
+    - ``opponent_label``  — free-form description so the UI can
+      render "v4 vs heuristic" or "v5 vs v4" without re-deriving it
+    """
+
+    progress_path: Path
+    run_id: str
+    n_games_total: int
+    n_workers: int
+    opponent_label: str = "heuristic"
+    command: str = ""
+    notes: str = ""
+    flush_interval_s: float = 5.0
+
+    _started_perf: float = field(default=0.0, init=False)
+    _started_iso: str = field(default="", init=False)
+    _git_commit: Optional[str] = field(default=None, init=False)
+    _last_flush_perf: float = field(default=0.0, init=False)
+    _games_done: int = field(default=0, init=False)
+    _wins_new: int = field(default=0, init=False)
+    _wins_old: int = field(default=0, init=False)
+    _draws: int = field(default=0, init=False)
+    _total_decisions: int = field(default=0, init=False)
+    _status: str = field(default="running", init=False)
+    _begun: bool = field(default=False, init=False)
+
+    def __post_init__(self) -> None:
+        self.progress_path = Path(self.progress_path)
+        self._started_perf = time.monotonic()
+        self._started_iso = datetime.now(timezone.utc).isoformat(
+            timespec="seconds",
+        )
+        self._git_commit = git_short_sha()
+        self._last_flush_perf = self._started_perf - self.flush_interval_s
+
+    def begin(self) -> None:
+        """Write an initial 'running, 0 games done' snapshot. Useful
+        because PUCT eval games can be multi-minute affairs and we
+        want the run visible in the UI before the first finishes."""
+        self._begun = True
+        self._flush_now()
+
+    def record_game(
+        self,
+        *,
+        winner: Optional[int],
+        decisions: int = 0,
+    ) -> None:
+        """Account one finished game. ``winner=0`` is a new-model
+        win, ``winner=1`` an opponent win, ``winner=None`` a draw
+        (decision-cap timeout or genuine repetition). ``decisions``
+        is folded into the running average."""
+        self._games_done += 1
+        self._total_decisions += int(decisions)
+        if winner == 0:
+            self._wins_new += 1
+        elif winner == 1:
+            self._wins_old += 1
+        else:
+            self._draws += 1
+        if not self._begun:
+            self.begin()
+            return
+        self._maybe_flush()
+
+    def finalize(self, status: str = "completed") -> None:
+        """Emit the final snapshot. ``status`` is 'completed' on
+        normal exit, 'failed' if the eval bailed out partway."""
+        self._status = status
+        self._flush_now(ended=True)
+
+    def _maybe_flush(self) -> None:
+        now = time.monotonic()
+        if now - self._last_flush_perf >= self.flush_interval_s:
+            self._flush_now(_perf_now=now)
+
+    def _flush_now(
+        self,
+        *,
+        ended: bool = False,
+        _perf_now: Optional[float] = None,
+    ) -> None:
+        now = _perf_now if _perf_now is not None else time.monotonic()
+        elapsed = max(now - self._started_perf, 0.0)
+        done = self._games_done
+        total = self.n_games_total
+        avg = (elapsed / done) if done > 0 else 0.0
+        remaining = max(total - done, 0)
+        eta = avg * remaining if avg > 0 else 0.0
+        games_per_hour = (done / elapsed * 3600.0) if elapsed > 0 else 0.0
+        decided = self._wins_new + self._wins_old
+        win_rate = (self._wins_new / decided) if decided > 0 else 0.0
+        avg_decisions = (
+            self._total_decisions / done if done > 0 else 0.0
+        )
+        ended_at = (
+            datetime.now(timezone.utc).isoformat(timespec="seconds")
+            if ended else None
+        )
+        payload: dict[str, Any] = {
+            "run_id": self.run_id,
+            "kind": "eval",
+            "status": self._status,
+            "started_at": self._started_iso,
+            "ended_at": ended_at,
+            "n_games_total": int(total),
+            "n_games_done": int(done),
+            "n_workers": int(self.n_workers),
+            "opponent_label": self.opponent_label,
+            "wins_new": int(self._wins_new),
+            "wins_old": int(self._wins_old),
+            "draws": int(self._draws),
+            "win_rate": float(win_rate),
+            "avg_decisions": float(avg_decisions),
+            "elapsed_seconds": float(elapsed),
+            "estimated_remaining_seconds": float(eta),
+            "per_game_seconds_avg": float(avg),
+            "games_per_hour": float(games_per_hour),
             "command": self.command,
             "git_commit": self._git_commit,
             "notes": self.notes,

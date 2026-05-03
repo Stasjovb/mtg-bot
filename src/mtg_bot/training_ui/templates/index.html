@@ -34,6 +34,7 @@
     background: var(--bg); border: 1px solid var(--border); color: var(--muted); }
   .kind-tag.data_gen { color: #93c5fd; border-color: #1e3a5f; }
   .kind-tag.training { color: #c4b5fd; border-color: #4c1d95; }
+  .kind-tag.eval { color: #67e8f9; border-color: #155e75; }
   .badge { font-size: 0.72rem; padding: 3px 10px; border-radius: 999px; font-weight: 600;
     letter-spacing: 0.04em; text-transform: uppercase; }
   .badge.running { background: #1e3a5f; color: #93c5fd; animation: pulse 1.6s infinite; }
@@ -56,6 +57,7 @@
     border-radius: 999px;
   }
   .progress-fill.training { background: var(--purple); }
+  .progress-fill.eval { background: #06b6d4; }
   .progress-fill.completed { background: var(--green); }
   .progress-fill.failed { background: var(--red); }
   .progress-pct { font-family: monospace; font-size: 0.9rem; min-width: 64px; text-align: right; }
@@ -162,6 +164,12 @@ function pctOfTraining(run) {
   return Math.min(100, 100 * (run.current_epoch || 0) / total);
 }
 
+function pctOfEval(run) {
+  const total = run.n_games_total || 0;
+  if (!total) return 0;
+  return Math.min(100, 100 * (run.n_games_done || 0) / total);
+}
+
 function kindOf(run) {
   // Older trainer runs (pre-instrumentation) wrote no `kind`. Treat
   // them as training so the UI doesn't drop them.
@@ -203,6 +211,28 @@ function ensureCard(run) {
         <div class="stat"><div class="stat-label">Games / hr</div><div class="stat-value" data-field="gph">—</div></div>
         <div class="stat"><div class="stat-label">Samples / hr</div><div class="stat-value" data-field="sph">—</div></div>
         <div class="stat"><div class="stat-label">P0 / P1 / draws</div><div class="stat-value" data-field="winrate">—</div></div>
+      </div>`;
+  } else if (k === 'eval') {
+    el.innerHTML = `
+      <div class="run-header">
+        <span class="kind-tag eval">eval</span>
+        <span class="run-id" data-field="run-id"></span>
+        <span class="badge" data-field="status"></span>
+        <span class="run-meta" data-field="meta"></span>
+      </div>
+      <div class="progress-row">
+        <div class="progress-bar"><div class="progress-fill eval" data-field="fill" style="width:0%"></div></div>
+        <div class="progress-pct" data-field="pct">0%</div>
+      </div>
+      <div class="stats">
+        <div class="stat"><div class="stat-label">Games</div><div class="stat-value" data-field="games">—</div></div>
+        <div class="stat"><div class="stat-label">Win rate</div><div class="stat-value" data-field="winrate">—</div></div>
+        <div class="stat"><div class="stat-label">New / opp / draws</div><div class="stat-value" data-field="record">—</div></div>
+        <div class="stat"><div class="stat-label">Opponent</div><div class="stat-value" data-field="opp">—</div></div>
+        <div class="stat"><div class="stat-label">Workers</div><div class="stat-value" data-field="workers">—</div></div>
+        <div class="stat"><div class="stat-label">Elapsed</div><div class="stat-value" data-field="elapsed">—</div></div>
+        <div class="stat"><div class="stat-label">ETA</div><div class="stat-value" data-field="eta">—</div></div>
+        <div class="stat"><div class="stat-label">Games / hr</div><div class="stat-value" data-field="gph">—</div></div>
       </div>`;
   } else {
     el.innerHTML = `
@@ -248,18 +278,22 @@ function fillRun(el, run) {
   if (run.notes) metaParts.push(run.notes);
   el.querySelector('[data-field="meta"]').textContent = metaParts.join(' · ');
 
-  const pct = (kindOf(run) === 'data_gen') ? pctOfDataGen(run) : pctOfTraining(run);
+  const k = kindOf(run);
+  const pct = k === 'data_gen' ? pctOfDataGen(run)
+    : k === 'eval' ? pctOfEval(run)
+    : pctOfTraining(run);
   const fill = el.querySelector('[data-field="fill"]');
   fill.style.width = pct.toFixed(1) + '%';
-  // Progress fill color: blue for data_gen running, purple for
-  // training running, green when completed, red when failed.
+  // Progress fill color: blue for data_gen, cyan for eval, purple
+  // for training, green when completed, red when failed.
   let fillCls = 'progress-fill';
-  if (kindOf(run) === 'training') fillCls += ' training';
+  if (k === 'training') fillCls += ' training';
+  if (k === 'eval') fillCls += ' eval';
   if (status === 'completed' || status === 'failed') fillCls += ' ' + status;
   fill.className = fillCls;
   el.querySelector('[data-field="pct"]').textContent = pct.toFixed(1) + '%';
 
-  if (kindOf(run) === 'data_gen') {
+  if (k === 'data_gen') {
     const total = run.n_games_total || 0;
     const done = run.n_games_done || 0;
     el.querySelector('[data-field="games"]').textContent = done + ' / ' + total;
@@ -272,6 +306,22 @@ function fillRun(el, run) {
     el.querySelector('[data-field="sph"]').textContent = fmtNum(run.samples_per_hour, 0);
     el.querySelector('[data-field="winrate"]').textContent =
       (run.p0_wins || 0) + ' / ' + (run.p1_wins || 0) + ' / ' + (run.draws || 0);
+  } else if (k === 'eval') {
+    const total = run.n_games_total || 0;
+    const done = run.n_games_done || 0;
+    const winRatePct = (run.win_rate != null && isFinite(run.win_rate))
+      ? (run.win_rate * 100).toFixed(1) + '%' : '—';
+    el.querySelector('[data-field="games"]').textContent = done + ' / ' + total;
+    el.querySelector('[data-field="winrate"]').textContent = winRatePct;
+    el.querySelector('[data-field="record"]').textContent =
+      (run.wins_new || 0) + ' / ' + (run.wins_old || 0) + ' / ' + (run.draws || 0);
+    el.querySelector('[data-field="opp"]').textContent =
+      esc(run.opponent_label || 'unknown');
+    el.querySelector('[data-field="workers"]').textContent = String(run.n_workers || '—');
+    el.querySelector('[data-field="elapsed"]').textContent = fmtSeconds(run.elapsed_seconds);
+    el.querySelector('[data-field="eta"]').textContent =
+      status === 'running' ? fmtSeconds(run.estimated_remaining_seconds) : '—';
+    el.querySelector('[data-field="gph"]').textContent = fmtNum(run.games_per_hour, 0);
   } else {
     const totalLoss = (run.train_losses || []).slice(-1)[0];
     const valueLoss = (run.train_value_losses || []).slice(-1)[0];
@@ -355,7 +405,7 @@ function renderActive(active) {
   }
   if (!active.length) {
     // Clean any stale active card scaffolds before showing the empty state.
-    activeEl.innerHTML = '<div class="empty">No active runs. Kick one off with <code>scripts/generate_training_data.py</code> or <code>scripts/train_nn.py</code>.</div>';
+    activeEl.innerHTML = '<div class="empty">No active runs. Kick one off with <code>scripts/generate_training_data.py</code>, <code>scripts/train_nn.py</code>, or <code>scripts/evaluate_nn.py</code>.</div>';
     return;
   }
   // Reuse existing card elements where run_id matches; remove any
@@ -391,7 +441,7 @@ function renderOlder(runs) {
   }
   const rows = runs.map(r => {
     const k = kindOf(r);
-    const label = k === 'data_gen' ? 'data gen' : 'training';
+    const label = k === 'data_gen' ? 'data gen' : k === 'eval' ? 'eval' : 'training';
     if (k === 'data_gen') {
       return `<tr>
         <td><span class="run-id">${esc(r.run_id)}</span></td>
@@ -400,6 +450,20 @@ function renderOlder(runs) {
         <td class="num">${(r.n_games_done || 0)} / ${(r.n_games_total || 0)}</td>
         <td class="num">${esc(fmtNum(r.n_samples))}</td>
         <td class="num">${(r.p0_wins||0)}/${(r.p1_wins||0)}/${(r.draws||0)}</td>
+        <td class="num">${esc(fmtSeconds(r.elapsed_seconds))}</td>
+        <td class="num">${esc(r.started_at || '')}</td>
+      </tr>`;
+    }
+    if (k === 'eval') {
+      const winRatePct = (r.win_rate != null && isFinite(r.win_rate))
+        ? (r.win_rate * 100).toFixed(1) + '%' : '—';
+      return `<tr>
+        <td><span class="run-id">${esc(r.run_id)}</span></td>
+        <td><span class="kind-tag ${k}">${label}</span></td>
+        <td><span class="badge ${statusClass(r.status)}">${esc(r.status || 'unknown')}</span></td>
+        <td class="num">${(r.n_games_done || 0)} / ${(r.n_games_total || 0)}</td>
+        <td class="num">${esc(winRatePct)}</td>
+        <td class="num">${(r.wins_new||0)}/${(r.wins_old||0)}/${(r.draws||0)}</td>
         <td class="num">${esc(fmtSeconds(r.elapsed_seconds))}</td>
         <td class="num">${esc(r.started_at || '')}</td>
       </tr>`;
