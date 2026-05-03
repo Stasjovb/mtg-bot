@@ -141,6 +141,22 @@ class DefaultTacticalAgent(Agent):
         # policies can override to favor Prevent first, etc.
         return tuple(range(len(candidates)))
 
+    def choose_mulligan(self, state, player_id, hand, mulls_taken):
+        # Default tactical: always keep. Pre-game decisions aren't
+        # search-driven, so this preserves the engine's pre-mulligan
+        # behavior when ``setup_game(enable_mulligans=True)`` is used
+        # without plugging in a real mulligan policy. Smarter agents
+        # (heuristic deck-quality classifier / NN with mulligan
+        # training) override.
+        return False
+
+    def choose_bottom(self, state, player_id, hand, n):
+        # Default tactical: bottom the first ``n`` cards in hand
+        # order. Deterministic so two clones of the same state with
+        # the same agent reach the same library order. A real
+        # tactical policy would bottom the LEAST useful ``n`` cards.
+        return [c.id for c in hand[:n]]
+
     def choose_convoke_creatures(
         self, state, player_id, candidates,
         remaining_generic, remaining_colored,
