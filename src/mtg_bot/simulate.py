@@ -89,6 +89,8 @@ def setup_game(
     colors: Optional[list[str]] = None,
     seed: Optional[int] = None,
     decks: Optional[list[list[str]]] = None,
+    enable_mulligans: bool = False,
+    max_mulligans: int = 7,
 ) -> GameState:
     """Build a fresh game state.
 
@@ -103,6 +105,33 @@ def setup_game(
       will use.
 
     Exactly one of ``colors`` and ``decks`` must be provided.
+
+    Mulligan handling
+    -----------------
+    Default ``enable_mulligans=False`` deals 7 cards to each player
+    and proceeds — the original Stage-1 simplification. Existing
+    callers (tests, training data-gen, eval) keep their previous
+    behavior unchanged.
+
+    With ``enable_mulligans=True`` each player runs the London-
+    mulligan loop:
+
+    1. Deal 7 cards.
+    2. Ask ``agent.choose_mulligan(state, player_id, hand, mulls_taken)``.
+       If True, shuffle the hand back into the library, redraw 7,
+       increment ``mulls_taken``, and ask again.
+    3. On the first False, the player has decided to keep — call
+       ``agent.choose_bottom(state, player_id, hand, n=mulls_taken)``
+       to pick which cards go to the bottom of the library
+       (modern London rule: number bottomed = number of mulligans
+       taken, no free first mulligan).
+
+    ``max_mulligans`` is a safety cap (default 7 — matches the
+    CR 103.4 floor of 0 cards; mulliganing 7 times yields a hand of
+    exactly 0 after bottoming and is a guaranteed loss). On the
+    last allowed offer the agent is forced to keep regardless of
+    its choice. Set higher for stress tests; lower for shorter
+    decision space.
     """
     if (colors is None) == (decks is None):
         raise ValueError(
@@ -142,6 +171,77 @@ def setup_game(
         rng.shuffle(p.library)
         for _ in range(7):
             draw_card(state, p.id)
+
+    if enable_mulligans:
+        # Each player decides independently. Per-player loop:
+        # mulligan-or-keep, until keep (or max_mulligans hit), then
+        # bottom ``mulls_taken`` cards. The shuffle on mulligan uses
+        # the same setup-scoped ``rng`` as the initial shuffle so the
+        # whole setup phase is deterministic in ``seed``.
+        for p, agent in zip(state.players, agents):
+            mulls_taken = 0
+            while True:
+                hand = list(p.hand)
+                if mulls_taken >= max_mulligans:
+                    # Forced keep — return the remaining cards back
+                    # before bottoming so we don't run the agent for
+                    # a no-op decision when there's nothing to choose.
+                    break
+                if not agent.choose_mulligan(
+                    state, p.id, hand, mulls_taken,
+                ):
+                    break
+                # Mulligan: shuffle hand back, redraw 7.
+                while p.hand:
+                    card = p.hand.pop()
+                    card.zone = Zone.LIBRARY
+                    p.library.append(card)
+                rng.shuffle(p.library)
+                for _ in range(7):
+                    draw_card(state, p.id)
+                mulls_taken += 1
+            # Kept — bottom ``mulls_taken`` cards.
+            if mulls_taken > 0:
+                hand = list(p.hand)
+                bottom_ids = agent.choose_bottom(
+                    state, p.id, hand, mulls_taken,
+                )
+                # Validate: must be ``mulls_taken`` distinct ids
+                # from the kept hand. Defensive — a buggy agent
+                # could return wrong-shaped output and we'd rather
+                # surface it loudly than silently advance with a
+                # broken hand.
+                if len(bottom_ids) != mulls_taken:
+                    raise ValueError(
+                        f"P{p.id} agent.choose_bottom returned "
+                        f"{len(bottom_ids)} ids, expected "
+                        f"{mulls_taken}"
+                    )
+                if len(set(bottom_ids)) != len(bottom_ids):
+                    raise ValueError(
+                        f"P{p.id} agent.choose_bottom returned "
+                        f"duplicate ids: {bottom_ids}"
+                    )
+                hand_id_set = {c.id for c in hand}
+                if not all(oid in hand_id_set for oid in bottom_ids):
+                    raise ValueError(
+                        f"P{p.id} agent.choose_bottom returned ids "
+                        f"not in hand: {set(bottom_ids) - hand_id_set}"
+                    )
+                # Move the chosen cards to the bottom of the library
+                # in the agent's stated order (last id ends up
+                # directly atop earlier-placed bottomed cards). The
+                # remaining hand stays in its original order.
+                by_id = {c.id: c for c in p.hand}
+                for oid in bottom_ids:
+                    card = by_id[oid]
+                    p.hand.remove(card)
+                    card.zone = Zone.LIBRARY
+                    # Bottom = end of the list (top is index 0 by
+                    # convention in this engine — see ``draw_card``
+                    # which pops index 0).
+                    p.library.append(card)
+
     state.active_player_idx = 0
     state.priority_player_idx = 0
     state.step = Step.UNTAP

@@ -299,6 +299,55 @@ class Agent:
         """
         return legend_object_ids[0]
 
+    def choose_mulligan(
+        self,
+        state: "GameState",
+        player_id: int,
+        hand: list["GameObject"],
+        mulls_taken: int,
+    ) -> bool:
+        """Pre-game London-mulligan decision: should ``player_id``
+        send the current 7-card hand back and redraw?
+
+        Called by ``simulate.setup_game(enable_mulligans=True)``
+        immediately after the initial 7 are dealt and again after
+        each mulligan redraw. ``mulls_taken`` is the number of
+        previous mulligans on this hand (0 on first decision, 1 after
+        one mull, etc.).
+
+        Return ``True`` to mulligan, ``False`` to keep. After
+        ``False`` the engine calls :meth:`choose_bottom` so the
+        player can put ``mulls_taken`` cards on the bottom of the
+        library (London rule — modern MTG, no free first mulligan).
+
+        Default: keep on first hand. Concrete agents override for
+        a real mulligan policy (heuristic / NN / human).
+        """
+        return False
+
+    def choose_bottom(
+        self,
+        state: "GameState",
+        player_id: int,
+        hand: list["GameObject"],
+        n: int,
+    ) -> list[int]:
+        """Pick ``n`` card ids from the kept hand to put on the
+        bottom of the library, after the player decides to keep at
+        ``mulls_taken=n`` mulligans.
+
+        Returns a list of object ids in the order they go on the
+        bottom (first id ends up deepest in the library, last id
+        directly above it; engine reverses so the order returned is
+        applied in order). Implementations must return ``n`` distinct
+        ids drawn from ``[c.id for c in hand]``.
+
+        Default: bottom the first ``n`` cards (deterministic, agnostic
+        to card identity). Concrete agents override to bottom by
+        usefulness (always send back the worst cards).
+        """
+        return [c.id for c in hand[:n]]
+
     def choose_replacement_order(
         self,
         candidates: list,
