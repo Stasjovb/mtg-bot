@@ -180,6 +180,7 @@ def generate_training_data(
     deck_pool: Optional[list[Deck]] = None,
     with_policy: bool = False,
     progress: Optional[DataGenProgress] = None,
+    enable_mulligans: bool = False,
 ) -> tuple[np.ndarray, ...]:
     """Play ``n_games`` and return training arrays.
 
@@ -218,6 +219,7 @@ def generate_training_data(
             decision_cap=decision_cap, sample_every=sample_every,
             replay_config=replay_config,
             deck_pool=deck_pool,
+            enable_mulligans=enable_mulligans,
         )
         chunks.append(chunk)
         if progress is not None:
@@ -243,6 +245,7 @@ def generate_training_data_parallel(
     deck_pool: Optional[list[Deck]] = None,
     with_policy: bool = False,
     progress: Optional[DataGenProgress] = None,
+    enable_mulligans: bool = False,
 ) -> tuple[np.ndarray, ...]:
     """Same contract as ``generate_training_data`` but distributes
     games across a ``multiprocessing.Pool``. Same ``with_policy``
@@ -282,6 +285,7 @@ def generate_training_data_parallel(
         (
             i, p0_factory, p1_factory, base_seed,
             decision_cap, sample_every, replay_config, deck_pool,
+            enable_mulligans,
         )
         for i in range(n_games)
     ]
@@ -360,12 +364,14 @@ def _play_one_parallel_game(
     (
         game_idx, p0_factory, p1_factory, base_seed,
         decision_cap, sample_every, replay_config, deck_pool,
+        enable_mulligans,
     ) = args
     try:
         chunk = _generate_one_game_data(
             game_idx=game_idx,
             p0_factory=p0_factory, p1_factory=p1_factory,
             base_seed=base_seed,
+            enable_mulligans=enable_mulligans,
             decision_cap=decision_cap, sample_every=sample_every,
             replay_config=replay_config,
             deck_pool=deck_pool,
@@ -405,6 +411,7 @@ def _generate_one_game_data(
     sample_every: int,
     replay_config: Optional[ReplayCaptureConfig] = None,
     deck_pool: Optional[list[Deck]] = None,
+    enable_mulligans: bool = False,
 ) -> _GameChunk:
     """Play one game and return its 4-tuple training arrays.
 
@@ -436,6 +443,7 @@ def _generate_one_game_data(
             ],
             decks=[deck_p0.cards, deck_p1.cards],
             seed=engine_seed,
+            enable_mulligans=enable_mulligans,
         )
     else:
         engine = setup_game(
@@ -445,6 +453,7 @@ def _generate_one_game_data(
             ],
             ["G", "R"],
             seed=engine_seed,
+            enable_mulligans=enable_mulligans,
         )
     adapter = MtgGameStateAdapter(engine, expose_combat_decisions=True)
     strategies = {

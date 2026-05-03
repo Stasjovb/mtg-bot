@@ -146,6 +146,19 @@ def main() -> None:
             "UI. Defaults to the --output stem (e.g. 'gen0_smoke')."
         ),
     )
+    parser.add_argument(
+        "--enable-mulligans", action="store_true",
+        help=(
+            "Run the London-mulligan loop at game start. Each "
+            "player's seat-level agent (RandomAgent here) decides "
+            "keep / mulligan via the extreme-only heuristic in "
+            "``mtg_bot.mulligan`` (mulligan only on 0-land or all-"
+            "land hands). Reduces the worst MTG variance source "
+            "(mana screw / flood) at the cost of slightly longer "
+            "setup. Default off — preserves the Stage-1 "
+            "deal-7-and-go behavior for reproducibility."
+        ),
+    )
     args = parser.parse_args()
 
     args.output.parent.mkdir(parents=True, exist_ok=True)
@@ -255,6 +268,7 @@ def main() -> None:
                     deck_pool=deck_pool,
                     with_policy=True,
                     progress=progress,
+                    enable_mulligans=args.enable_mulligans,
                 )
             )
         else:
@@ -268,6 +282,7 @@ def main() -> None:
                     deck_pool=deck_pool,
                     with_policy=True,
                     progress=progress,
+                    enable_mulligans=args.enable_mulligans,
                 )
             )
     except BaseException:

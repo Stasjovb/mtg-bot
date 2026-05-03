@@ -142,20 +142,22 @@ class DefaultTacticalAgent(Agent):
         return tuple(range(len(candidates)))
 
     def choose_mulligan(self, state, player_id, hand, mulls_taken):
-        # Default tactical: always keep. Pre-game decisions aren't
-        # search-driven, so this preserves the engine's pre-mulligan
-        # behavior when ``setup_game(enable_mulligans=True)`` is used
-        # without plugging in a real mulligan policy. Smarter agents
-        # (heuristic deck-quality classifier / NN with mulligan
-        # training) override.
-        return False
+        # Extreme-only heuristic: mulligan if 0 lands or all lands;
+        # keep everything else. The London rule still bottoms a
+        # card per mulligan taken, so the policy stays cost-
+        # disciplined. Pre-game decisions aren't search-driven so
+        # a deterministic closed-form heuristic is fine; smarter
+        # agents (NN-trained on mulligan supervision) override.
+        from mtg_bot.mulligan import heuristic_mulligan_decision
+        return heuristic_mulligan_decision(hand, mulls_taken)
 
     def choose_bottom(self, state, player_id, hand, n):
-        # Default tactical: bottom the first ``n`` cards in hand
-        # order. Deterministic so two clones of the same state with
-        # the same agent reach the same library order. A real
-        # tactical policy would bottom the LEAST useful ``n`` cards.
-        return [c.id for c in hand[:n]]
+        # Bottom the highest-mana-value non-land cards first
+        # (slowest to deploy, worst tempo if drawn). Deterministic
+        # — two clones of the same state with the same agent
+        # produce the same library order, important for search.
+        from mtg_bot.mulligan import heuristic_bottom_choice
+        return heuristic_bottom_choice(hand, n)
 
     def choose_convoke_creatures(
         self, state, player_id, candidates,

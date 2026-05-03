@@ -85,6 +85,7 @@ def run_match(
     n_games: int,
     base_seed: int = 0,
     decision_cap: int = _DEFAULT_DECISION_CAP,
+    enable_mulligans: bool = False,
 ) -> MatchStats:
     """Play ``n_games`` of ``p0_factory`` vs ``p1_factory`` and
     aggregate stats.
@@ -103,6 +104,7 @@ def run_match(
     results = [
         _play_one_match_game(
             game_idx, p0_factory, p1_factory, base_seed, decision_cap,
+            enable_mulligans,
         )
         for game_idx in range(n_games)
     ]
@@ -117,6 +119,7 @@ def run_match_parallel(
     decision_cap: int = _DEFAULT_DECISION_CAP,
     n_workers: Optional[int] = None,
     progress: Optional[EvalProgress] = None,
+    enable_mulligans: bool = False,
 ) -> MatchStats:
     """Same contract as ``run_match`` but distributes games across a
     ``multiprocessing.Pool``.
@@ -158,7 +161,8 @@ def run_match_parallel(
         return MatchStats(wins={0: 0, 1: 0}, draws=0, games=0, avg_decisions=0.0)
 
     args_list = [
-        (i, p0_factory, p1_factory, base_seed, decision_cap)
+        (i, p0_factory, p1_factory, base_seed, decision_cap,
+         enable_mulligans)
         for i in range(n_games)
     ]
     if progress is None:
@@ -303,6 +307,7 @@ def _play_one_match_game(
     p1_factory: StrategyFactory,
     base_seed: int,
     decision_cap: int,
+    enable_mulligans: bool = False,
 ) -> tuple[Optional[PlayerID], int]:
     """Play one game and return ``(winner_or_None, decisions)``.
     Used by both the sequential and parallel match drivers — same
@@ -315,6 +320,7 @@ def _play_one_match_game(
         ],
         ["G", "R"],
         seed=engine_seed,
+        enable_mulligans=enable_mulligans,
     )
     adapter = MtgGameStateAdapter(engine, expose_combat_decisions=True)
     strategies = {

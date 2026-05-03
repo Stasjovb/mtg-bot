@@ -158,6 +158,20 @@ def main() -> None:
             "is the parallel path that streams completions."
         ),
     )
+    parser.add_argument(
+        "--enable-mulligans", action="store_true",
+        help=(
+            "Run the London-mulligan loop at game start for both "
+            "seats. Each player's seat-level fallback agent uses "
+            "the extreme-only heuristic from ``mtg_bot.mulligan`` "
+            "(mulligan only on 0-land or all-land hands). "
+            "Reduces the largest MTG variance source (mana screw / "
+            "flood) so head-to-head signal stabilizes faster — "
+            "particularly useful for evals where 100-game error "
+            "bars are wide. Default off — preserves the Stage-1 "
+            "deal-7-and-go behavior for comparison with prior runs."
+        ),
+    )
     args = parser.parse_args()
 
     registry: Registry | None = None
@@ -321,6 +335,7 @@ def main() -> None:
                 p1_factory=heuristic_cfg.build,
                 n_games=args.n_games,
                 base_seed=args.seed,
+                enable_mulligans=args.enable_mulligans,
             )
         else:
             stats = run_match_parallel(
@@ -330,6 +345,7 @@ def main() -> None:
                 base_seed=args.seed,
                 n_workers=args.workers,
                 progress=progress,
+                enable_mulligans=args.enable_mulligans,
             )
     finally:
         if nn_server_proxy is not None:
