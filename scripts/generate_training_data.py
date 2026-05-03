@@ -169,6 +169,17 @@ def main() -> None:
             "corruption hang (todo d4f2a8c1)."
         ),
     )
+    parser.add_argument(
+        "--hang-dump-dir", type=Path, default=None,
+        help=(
+            "When --per-game-timeout-sec fires, write a structured "
+            "hang dump (meta.json + faulthandler all-thread "
+            "traceback.txt) to this directory before returning the "
+            "sentinel. Lets a hang be re-loaded into a single-game "
+            "reproducer for triage. Default off — set to e.g. "
+            "debug_hangs/triage to enable."
+        ),
+    )
     args = parser.parse_args()
 
     args.output.parent.mkdir(parents=True, exist_ok=True)
@@ -266,6 +277,12 @@ def main() -> None:
             f"# replay capture: every {args.capture_every} game(s) -> "
             f"{args.save_replays_to}{nn_part}"
         )
+    hang_dump_dir = (
+        str(args.hang_dump_dir) if args.hang_dump_dir is not None else None
+    )
+    if hang_dump_dir is not None:
+        args.hang_dump_dir.mkdir(parents=True, exist_ok=True)
+        print(f"# hang dumps -> {hang_dump_dir}")
     started = time.perf_counter()
     try:
         if n_workers == 1:
@@ -279,6 +296,8 @@ def main() -> None:
                     with_policy=True,
                     progress=progress,
                     enable_mulligans=args.enable_mulligans,
+                    per_game_timeout_sec=args.per_game_timeout_sec,
+                    hang_dump_dir=hang_dump_dir,
                 )
             )
         else:
@@ -293,6 +312,8 @@ def main() -> None:
                     with_policy=True,
                     progress=progress,
                     enable_mulligans=args.enable_mulligans,
+                    per_game_timeout_sec=args.per_game_timeout_sec,
+                    hang_dump_dir=hang_dump_dir,
                 )
             )
     except BaseException:
