@@ -297,16 +297,34 @@ def generate_training_data_parallel(
     # its ``game_idx`` and sort at the end so the concatenated arrays
     # are deterministic in ``base_seed`` (locked in by tests).
     indexed: list[tuple[int, _GameChunk]] = []
+    crashed_games: list[int] = []
     with mp.Pool(processes=n_workers) as pool:
         for game_idx, chunk in pool.imap_unordered(
             _play_one_parallel_game, args_list, chunksize=1,
         ):
             indexed.append((game_idx, chunk))
+            # ``_play_one_parallel_game`` converts engine-level
+            # crashes into empty chunks (winner=None, 0 samples).
+            # Count them so the driver can surface a loud summary
+            # at the end — a silent partial-skip would mask the
+            # underlying engine bug.
+            if chunk[0].shape[0] == 0 and chunk[4] is None:
+                crashed_games.append(game_idx)
             if progress is not None:
                 progress.record_game(
                     n_samples=int(chunk[0].shape[0]),
                     outcome_p0=_winner_to_p0_outcome(chunk[4]),
                 )
+    if crashed_games:
+        import sys
+        print(
+            f"# WARNING: {len(crashed_games)}/{n_games} games crashed "
+            f"in the worker pool and were dropped (engine state "
+            f"corruption — see worker stderr above for tracebacks). "
+            f"Affected game indices: {crashed_games[:20]}"
+            f"{' ...' if len(crashed_games) > 20 else ''}",
+            file=sys.stderr,
+        )
     indexed.sort(key=lambda t: t[0])
     chunks = [c for _, c in indexed]
     f, o, p, m = _concat_chunks([c[:4] for c in chunks])
@@ -324,19 +342,45 @@ def _play_one_parallel_game(
     The driver uses ``game_idx`` to re-sort results from
     ``imap_unordered`` so the concatenated arrays stay deterministic.
     Lives at module top level (not nested) so multiprocessing can
-    pickle it across the spawn boundary."""
+    pickle it across the spawn boundary.
+
+    Engine-level errors (state corruption bugs that surface at
+    scale — ~1 in 1000 games for heuristic-vs-heuristic PIMC as of
+    2026-05-03) are caught here and converted to an empty chunk
+    so a single bad game doesn't take down the entire pool.
+    Without this, ``pool.imap_unordered`` re-raises the worker
+    exception and aborts the whole run, losing all in-flight
+    sample data (``save_dataset`` only writes after every game
+    completes). The traceback is logged to worker stderr so
+    failures are visible in the pool's stderr relay; the
+    parent's progress tracker still records the game as
+    "completed" with 0 samples / no winner.
+    """
     (
         game_idx, p0_factory, p1_factory, base_seed,
         decision_cap, sample_every, replay_config, deck_pool,
     ) = args
-    chunk = _generate_one_game_data(
-        game_idx=game_idx,
-        p0_factory=p0_factory, p1_factory=p1_factory,
-        base_seed=base_seed,
-        decision_cap=decision_cap, sample_every=sample_every,
-        replay_config=replay_config,
-        deck_pool=deck_pool,
-    )
+    try:
+        chunk = _generate_one_game_data(
+            game_idx=game_idx,
+            p0_factory=p0_factory, p1_factory=p1_factory,
+            base_seed=base_seed,
+            decision_cap=decision_cap, sample_every=sample_every,
+            replay_config=replay_config,
+            deck_pool=deck_pool,
+        )
+    except Exception as exc:  # noqa: BLE001 - intentional broad catch
+        import sys
+        import traceback
+        print(
+            f"[worker] game {game_idx} crashed "
+            f"({type(exc).__name__}: {exc}); dropping this game, "
+            f"pool continues.",
+            file=sys.stderr,
+        )
+        traceback.print_exc(file=sys.stderr)
+        f, o, p, m = _empty_arrays()
+        chunk = (f, o, p, m, None)
     return game_idx, chunk
 
 
