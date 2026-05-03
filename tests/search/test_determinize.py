@@ -322,6 +322,65 @@ def test_determinize_eventually_visits_every_printing_in_every_position():
         )
 
 
+def test_determinize_in_place_does_not_leak_to_source_state():
+    """The PIMC bug fix (todo f8c2a4d1): when the caller follows the
+    intended pattern of ``state.clone()`` followed by ``determinize(
+    cloned, viewer_id, in_place=True)``, the determinization must
+    NOT mutate the source state's library cards.
+
+    The leak: ``state.clone()`` sets up a CoW share group on
+    library/graveyard/exile so they share GameObject references with
+    the source until the first list-mutator forks them. But the
+    determinizer rewrites ``card.printing`` directly on the GameObject
+    — that's not a list-level mutation, so the share group stays
+    intact and the source state's library cards see the new printings
+    too. Over many MCTS calls per game, the source state's library
+    accumulates whatever the determinizer happened to bind it to,
+    producing the phantom-card-in-replay bug seen on iter_002 (P1
+    drew 4 Biomechan Engineers from a deck that contained 1).
+
+    Pin: a 5-card library + a clone + a determinize on the clone
+    must leave the source's library card-printings untouched.
+    """
+    state = _new_state()
+    p1 = state.players[1]
+    starter_names = ("Plains", "Island", "Swamp", "Mountain", "Forest")
+    p1.library = [
+        state.new_object(BASIC_LANDS[n], 1, Zone.LIBRARY)
+        for n in starter_names
+    ]
+    cloned = state.clone()
+    determinize(
+        cloned, viewer_id=0, rng=random.Random(0), in_place=True,
+    )
+    # Source's library card printings remain exactly as set up.
+    src_names = [c.printing.name for c in state.players[1].library]
+    assert src_names == list(starter_names)
+
+
+def test_determinize_in_place_isolated_under_repeated_pimc_pattern():
+    """Stress version of the leak test: under PIMC, the same source
+    state is cloned + determinized many times in a row (one per
+    sample × one per MCTS-call × one per priority moment ≈ 1000s/
+    game). Each repetition is an independent rebinding; none of them
+    should accumulate on the source.
+    """
+    state = _new_state()
+    p1 = state.players[1]
+    starter_names = ("Plains", "Island", "Swamp", "Mountain", "Forest")
+    p1.library = [
+        state.new_object(BASIC_LANDS[n], 1, Zone.LIBRARY)
+        for n in starter_names
+    ]
+    for seed in range(50):
+        cloned = state.clone()
+        determinize(
+            cloned, viewer_id=0, rng=random.Random(seed), in_place=True,
+        )
+    src_names = [c.printing.name for c in state.players[1].library]
+    assert src_names == list(starter_names)
+
+
 def test_determinize_preserves_original_printing_alongside_printing():
     # original_printing is set by "becomes a copy" effects; for hand
     # cards it's typically None. Still, the determinizer must permute
