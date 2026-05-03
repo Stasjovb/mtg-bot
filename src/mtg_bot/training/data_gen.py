@@ -635,7 +635,21 @@ def _play_one_game_recording(
                         counted += count
                     if counted > 0:
                         active_policy /= counted
-                        active_mask = legal_action_mask(engine, active)
+                        # Pass the adapter (not the raw engine) so
+                        # ``_combat_phase`` resolves correctly via
+                        # ``adapter.combat_phase`` and the attacker /
+                        # blocker slots get enumerated when the
+                        # sample point IS a combat sub-decision. Raw
+                        # engine state has no ``combat_phase`` attr,
+                        # so the combat branches in ``_enumerate_legal``
+                        # short-circuit and combat-decision samples
+                        # would carry policy mass on slots the mask
+                        # said were illegal. The trainer's
+                        # ``masked_fill(~mask, -1e9)`` then makes
+                        # masked CE explode (~1e9 per affected row);
+                        # gen0's v4 final policy_loss=613,242 was
+                        # entirely this — see commit message.
+                        active_mask = legal_action_mask(adapter, active)
                     else:
                         active_policy = zero_policy
                         active_mask = zero_mask

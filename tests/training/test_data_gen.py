@@ -336,6 +336,39 @@ def test_runs_with_tiny_pimc_on_real_engine():
     assert np.all(np.isin(outcomes, [-1.0, 0.0, 1.0]))
 
 
+def test_policy_targets_live_inside_action_mask_for_combat_decisions():
+    """Trainer invariant: every slot a sample's ``policy_target``
+    assigns positive probability to MUST be True in that sample's
+    ``action_mask``. The trainer's ``masked_fill(~mask, -1e9)`` makes
+    masked-CE explode (~1e9 per affected row) for any policy-on-
+    masked-out-slot violation; the gen0 v4 train hit this with
+    final policy_loss=613,242 because data-gen passed the raw
+    engine state (not the adapter) to ``legal_action_mask``,
+    making ``_combat_phase`` resolve to ``None`` and the attacker /
+    blocker slot enumeration short-circuit. Enough games at PIMC
+    budget that combat decisions get sampled (PIMC needs visits ≥ 1
+    to emit a policy target, and combat happens early in the game)."""
+    config = PimcConfig(samples=1, inner_nodes=4)
+    factory = lambda seed, _c=config: _c.build(seed)
+    f, o, p, m = generate_training_data(
+        p0_factory=factory, p1_factory=factory,
+        n_games=3, base_seed=0, with_policy=True,
+    )
+    has_pol = p.sum(axis=-1) > 0.5  # supervised rows
+    assert has_pol.any(), (
+        "expected some PIMC policy supervision; bump n_games / nodes"
+    )
+    # Any slot where mask is False should have zero policy mass.
+    leaked = (p * (~m)).sum(axis=-1)
+    bad_rows = leaked > 1e-6
+    assert not bad_rows.any(), (
+        f"{int(bad_rows.sum())} / {int(has_pol.sum())} supervised rows "
+        f"carry policy mass on slots the action_mask says are illegal — "
+        f"trainer will blow up CE on these. Total leaked mass: "
+        f"{float(leaked[bad_rows].sum()):.4f}"
+    )
+
+
 # ---------- generate_training_data_parallel ---------------------------------
 
 
