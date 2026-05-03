@@ -119,7 +119,10 @@ def heuristic_eval_annotator() -> SnapshotAnnotator:
 
 
 def nn_eval_annotator(
-    weights_path: Path, version_label: Optional[str] = None,
+    weights_path: Path,
+    version_label: Optional[str] = None,
+    hidden_sizes: Optional[tuple[int, ...]] = None,
+    with_policy: bool = False,
 ) -> SnapshotAnnotator:
     """Returns an annotator that adds ``nn_eval``: ``{p0, p1,
     version}`` to each snapshot. ``version`` is the registry version
@@ -127,11 +130,22 @@ def nn_eval_annotator(
     produced the scores when comparing replays across training
     iterations.
 
+    ``hidden_sizes`` and ``with_policy`` must match the saved weights'
+    architecture (trunk shape and presence of a policy head). Without
+    them, NNEvaluator builds the legacy default _ValueMLP and the
+    state_dict load fails on any modern (dual-head, big-trunk)
+    checkpoint. iterate_alphazero passes both through.
+
     Same engine-state-direct treatment as the heuristic annotator
     (bypasses the protocol's terminal short-circuit; uses engine
     fields directly)."""
     from mtg_bot.search.nn_evaluator import NNEvaluator
-    evaluator = NNEvaluator(weights_path=weights_path)
+    nn_kwargs: dict[str, Any] = {"weights_path": weights_path}
+    if hidden_sizes is not None:
+        nn_kwargs["hidden_sizes"] = hidden_sizes
+    if with_policy:
+        nn_kwargs["with_policy"] = True
+    evaluator = NNEvaluator(**nn_kwargs)
     label = version_label if version_label is not None else str(weights_path)
 
     def annotate(state: EngineGameState) -> dict[str, Any]:

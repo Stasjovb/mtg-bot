@@ -656,6 +656,8 @@ def main() -> None:
                 capture_every=args.capture_every_self_play,
                 nn_weights_path=str(best_weights),
                 nn_version_label=best_version,
+                nn_hidden_sizes=iter_hidden_sizes,
+                nn_with_policy=True,
             )
         n_samples, n_policy, gen_elapsed = _self_play(
             weights_path=best_weights,
@@ -729,6 +731,8 @@ def main() -> None:
                     capture_every=args.capture_every_eval,
                     nn_weights_path=str(new_weights),
                     nn_version_label=new_version,
+                    nn_hidden_sizes=iter_hidden_sizes,
+                    nn_with_policy=True,
                 )
             wins_new, wins_old, draws, eval_elapsed = _eval_match(
                 new_weights=new_weights,

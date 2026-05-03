@@ -78,6 +78,88 @@ def test_capture_config_should_capture_respects_modulus():
     assert cfg.should_capture(6)
 
 
+def test_capture_config_build_recorder_passes_arch_to_nn_annotator(
+    tmp_path: Path,
+):
+    """ReplayCaptureConfig.build_recorder() must propagate hidden_sizes
+    and with_policy to nn_eval_annotator → NNEvaluator. Without that,
+    a config tagged with a modern (dual-head, big-trunk) checkpoint
+    blows up at load time on a state_dict mismatch — which broke the
+    first iterate run with deck_pool + replay capture in production."""
+    import torch
+
+    from mtg_bot.search.nn_evaluator import _ValuePolicyMLP
+
+    hidden_sizes = (32, 24, 16)
+    weights_path = tmp_path / "tiny_dual_head.pt"
+    model = _ValuePolicyMLP(hidden_sizes=hidden_sizes)
+    torch.save(model.state_dict(), weights_path)
+
+    cfg = ReplayCaptureConfig(
+        save_dir=str(tmp_path),
+        nn_weights_path=str(weights_path),
+        nn_version_label="tiny",
+        nn_hidden_sizes=hidden_sizes,
+        nn_with_policy=True,
+    )
+    # build_recorder() loads the NN — would raise RuntimeError if
+    # the architecture kwargs weren't threaded through.
+    recorder = cfg.build_recorder()
+    # Two annotators: the always-on heuristic plus the NN one.
+    assert len(recorder.annotators) == 2
+
+
+def test_nn_eval_annotator_annotates_running_and_terminal_states(
+    tmp_path: Path,
+):
+    """nn_eval_annotator's inner ``annotate`` returns ``nn_eval`` with
+    p0/p1 floats + version on a running state, and the terminal value
+    fast-path on a finished state. Pins both branches."""
+    import torch
+
+    from mtg_bot.search.nn_evaluator import _ValuePolicyMLP
+    from mtg_bot.simulate import setup_game
+    from mtg_bot.training.replay_capture import nn_eval_annotator
+
+    hidden_sizes = (16, 16)
+    weights_path = tmp_path / "tiny.pt"
+    torch.save(
+        _ValuePolicyMLP(hidden_sizes=hidden_sizes).state_dict(),
+        weights_path,
+    )
+    annotate = nn_eval_annotator(
+        weights_path,
+        version_label="tiny",
+        hidden_sizes=hidden_sizes,
+        with_policy=True,
+    )
+
+    # Build a real running engine state via setup_game so the
+    # evaluator gets a well-formed input. RandomAgent isn't needed —
+    # the annotator only inspects state, never asks for decisions.
+    from mtg_bot.agents import RandomAgent
+    state = setup_game(
+        agents=[RandomAgent(), RandomAgent()],
+        colors=["G", "R"],
+        seed=0,
+    )
+    out = annotate(state)
+    assert "nn_eval" in out
+    assert out["nn_eval"]["version"] == "tiny"
+    assert isinstance(out["nn_eval"]["p0"], float)
+    assert isinstance(out["nn_eval"]["p1"], float)
+
+    # Terminal-state branch: hand-set the engine to "p0 wins" and
+    # confirm the annotator reads off the engine state directly
+    # (skipping the NN forward).
+    state.winner_id = 0
+    state.is_draw = False
+    out_terminal = annotate(state)
+    assert out_terminal["nn_eval"]["p0"] == 1.0
+    assert out_terminal["nn_eval"]["p1"] == -1.0
+    assert out_terminal["nn_eval"]["version"] == "tiny"
+
+
 def test_capture_config_replay_path_is_deterministic_in_inputs(tmp_path: Path):
     cfg = ReplayCaptureConfig(
         save_dir=str(tmp_path), capture_every=1, filename_prefix="exp1",
