@@ -82,6 +82,22 @@
 
   .section-title { font-size: 0.72rem; font-weight: 700; letter-spacing: 0.12em;
     text-transform: uppercase; color: var(--muted); margin: 24px 0 10px; }
+
+  .replays-footer { margin-top: 14px; padding-top: 12px;
+    border-top: 1px solid var(--border); font-size: 0.85rem;
+    color: var(--muted); }
+  .replays-footer .replays-toggle { background: none; border: 0;
+    color: var(--blue); cursor: pointer; padding: 0; font: inherit;
+    text-decoration: underline; }
+  .replays-footer .replays-toggle:hover { color: #93c5fd; }
+  .replays-footer .replays-list { margin-top: 10px; display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+    gap: 4px 14px; font-family: monospace; font-size: 0.8rem; }
+  .replays-footer .replays-list a { color: var(--text);
+    text-decoration: none; }
+  .replays-footer .replays-list a:hover { color: var(--blue);
+    text-decoration: underline; }
+  .replays-footer .replays-empty { font-style: italic; }
 </style>
 </head>
 <body>
@@ -211,7 +227,8 @@ function ensureCard(run) {
         <div class="stat"><div class="stat-label">Games / hr</div><div class="stat-value" data-field="gph">—</div></div>
         <div class="stat"><div class="stat-label">Samples / hr</div><div class="stat-value" data-field="sph">—</div></div>
         <div class="stat"><div class="stat-label">P0 / P1 / draws</div><div class="stat-value" data-field="winrate">—</div></div>
-      </div>`;
+      </div>
+      <div class="replays-footer" data-field="replays"></div>`;
   } else if (k === 'eval') {
     el.innerHTML = `
       <div class="run-header">
@@ -233,7 +250,8 @@ function ensureCard(run) {
         <div class="stat"><div class="stat-label">Elapsed</div><div class="stat-value" data-field="elapsed">—</div></div>
         <div class="stat"><div class="stat-label">ETA</div><div class="stat-value" data-field="eta">—</div></div>
         <div class="stat"><div class="stat-label">Games / hr</div><div class="stat-value" data-field="gph">—</div></div>
-      </div>`;
+      </div>
+      <div class="replays-footer" data-field="replays"></div>`;
   } else {
     el.innerHTML = `
       <div class="run-header">
@@ -306,6 +324,7 @@ function fillRun(el, run) {
     el.querySelector('[data-field="sph"]').textContent = fmtNum(run.samples_per_hour, 0);
     el.querySelector('[data-field="winrate"]').textContent =
       (run.p0_wins || 0) + ' / ' + (run.p1_wins || 0) + ' / ' + (run.draws || 0);
+    renderReplaysFooter(el, run);
   } else if (k === 'eval') {
     const total = run.n_games_total || 0;
     const done = run.n_games_done || 0;
@@ -322,6 +341,7 @@ function fillRun(el, run) {
     el.querySelector('[data-field="eta"]').textContent =
       status === 'running' ? fmtSeconds(run.estimated_remaining_seconds) : '—';
     el.querySelector('[data-field="gph"]').textContent = fmtNum(run.games_per_hour, 0);
+    renderReplaysFooter(el, run);
   } else {
     const totalLoss = (run.train_losses || []).slice(-1)[0];
     const valueLoss = (run.train_value_losses || []).slice(-1)[0];
@@ -336,6 +356,92 @@ function fillRun(el, run) {
     el.querySelector('[data-field="value"]').textContent = fmtLoss(valueLoss);
     el.querySelector('[data-field="policy"]').textContent = fmtLoss(policyLoss);
     drawTrainingChart(el, run);
+  }
+}
+
+// Cache the per-run replay listings so we don't re-fetch on every poll.
+// Key: run_id. Value: { count, replays, fetched_at }.
+const replayCache = new Map();
+
+function mainUiBase() {
+  // The main mtg_bot UI runs on port 5002; reuse this page's protocol
+  // and host so the link works for both localhost AND tailscale access.
+  return window.location.protocol + '//' + window.location.hostname + ':5002';
+}
+
+function renderReplaysFooter(el, run) {
+  const footer = el.querySelector('[data-field="replays"]');
+  if (!footer) return;
+  // No replays_dir means iterate ran with capture disabled for this
+  // phase — surface that explicitly so the user knows the link's
+  // absence isn't a bug.
+  if (!run.replays_dir) {
+    footer.innerHTML = '<span class="replays-empty">'
+      + 'replay capture: off for this run</span>';
+    return;
+  }
+  const cached = replayCache.get(run.run_id);
+  // For running cards, the captured-game count grows over time, so
+  // refresh the cache periodically. For finalized runs, fetch once and
+  // keep — file count won't change.
+  const isRunning = run.status === 'running';
+  const ttlMs = isRunning ? 15000 : Infinity;
+  const stale = !cached
+    || (isRunning && Date.now() - cached.fetched_at > ttlMs);
+  if (stale) {
+    fetch('/api/runs/' + encodeURIComponent(run.run_id) + '/replays')
+      .then(r => r.ok ? r.json() : Promise.reject(r.status))
+      .then(data => {
+        replayCache.set(run.run_id, {
+          count: data.count, replays: data.replays || [],
+          fetched_at: Date.now(),
+        });
+        // Re-render now that data is in.
+        renderReplaysFooter(el, run);
+      })
+      .catch(() => { /* swallow — try again next tick */ });
+    if (!cached) {
+      footer.innerHTML = '<span class="replays-empty">'
+        + 'loading captured games…</span>';
+      return;
+    }
+  }
+  const count = cached ? cached.count : 0;
+  const replays = cached ? cached.replays : [];
+  if (count === 0) {
+    footer.innerHTML = '<span class="replays-empty">'
+      + 'capture is on but no games saved yet</span>';
+    return;
+  }
+  // The expander state is persisted on the footer node so re-renders
+  // don't collapse the user's pane unintentionally.
+  const expanded = footer.dataset.expanded === '1';
+  const verb = expanded ? 'Hide' : 'View';
+  const label = `${verb} ${count} captured game${count === 1 ? '' : 's'}`;
+  let html = '<button type="button" class="replays-toggle">'
+    + esc(label) + '</button>';
+  if (expanded) {
+    const base = mainUiBase();
+    html += '<div class="replays-list">';
+    for (const r of replays) {
+      // Strip "game_" prefix and ".json.gz" suffix to get the
+      // human-readable game tag like "seed5000123_idx0050".
+      const tag = r.filename
+        .replace(/\.json\.gz$/, '')
+        .replace(/^game_/, '');
+      const url = base + '/?replay=' + encodeURIComponent(r.subpath);
+      html += '<a href="' + esc(url) + '" target="_blank" rel="noopener">'
+        + esc(tag) + '</a>';
+    }
+    html += '</div>';
+  }
+  footer.innerHTML = html;
+  const btn = footer.querySelector('.replays-toggle');
+  if (btn) {
+    btn.addEventListener('click', () => {
+      footer.dataset.expanded = expanded ? '' : '1';
+      renderReplaysFooter(el, run);
+    });
   }
 }
 

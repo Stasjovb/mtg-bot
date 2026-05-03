@@ -11,10 +11,12 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+from mtg_bot.decks import Deck
 from mtg_bot.training import (
     EvalProgress, MatchStats, random_choice_factory, run_match,
 )
 from mtg_bot.training.self_play import run_match_parallel
+from tests.training.test_data_gen import build_mono_color_deck
 
 
 def test_run_match_returns_stats_with_correct_total():
@@ -144,6 +146,106 @@ def test_run_match_parallel_with_progress_emits_snapshot(tmp_path: Path):
     assert payload["wins_old"] == stats.wins[1]
     assert payload["draws"] == stats.draws
     assert payload["opponent_label"] == "random"
+
+
+def test_run_match_parallel_with_deck_pool_uses_pool_decks():
+    """When deck_pool is supplied, the parallel match path samples
+    from the pool (per-game seed) and the games still aggregate
+    into a valid MatchStats. Same accounting invariants as the
+    legacy mono-color path."""
+    pool = [
+        Deck(draft_id="g_deck", build_index=0,
+             cards=build_mono_color_deck("G", seed=1)),
+        Deck(draft_id="r_deck", build_index=0,
+             cards=build_mono_color_deck("R", seed=2)),
+    ]
+    stats = run_match_parallel(
+        p0_factory=random_choice_factory,
+        p1_factory=random_choice_factory,
+        n_games=2,
+        base_seed=42,
+        n_workers=2,
+        deck_pool=pool,
+    )
+    assert isinstance(stats, MatchStats)
+    assert stats.wins[0] + stats.wins[1] + stats.draws + stats.crashed == 2
+
+
+def test_run_match_deck_pool_sequential_equals_parallel():
+    """Strong invariant mirroring data_gen's: same deck_pool +
+    base_seed gives identical MatchStats across sequential and
+    parallel paths. Without this, switching workers between runs
+    would silently shift evaluation results."""
+    pool = [
+        Deck(draft_id="g_deck", build_index=0,
+             cards=build_mono_color_deck("G", seed=1)),
+        Deck(draft_id="r_deck", build_index=0,
+             cards=build_mono_color_deck("R", seed=2)),
+        Deck(draft_id="w_deck", build_index=0,
+             cards=build_mono_color_deck("W", seed=3)),
+    ]
+    seq = run_match(
+        p0_factory=random_choice_factory,
+        p1_factory=random_choice_factory,
+        n_games=3,
+        base_seed=7,
+        deck_pool=pool,
+    )
+    par = run_match_parallel(
+        p0_factory=random_choice_factory,
+        p1_factory=random_choice_factory,
+        n_games=3,
+        base_seed=7,
+        n_workers=2,
+        deck_pool=pool,
+    )
+    assert seq == par
+
+
+def test_run_match_with_replay_config_writes_replay_files(tmp_path: Path):
+    """When a ReplayCaptureConfig is supplied, run_match writes one
+    .json.gz file per captured game into the configured save_dir.
+    Default capture_every=1 captures every game."""
+    from mtg_bot.training.data_gen import ReplayCaptureConfig
+
+    save_dir = tmp_path / "replays"
+    save_dir.mkdir()
+    cfg = ReplayCaptureConfig(save_dir=str(save_dir))
+    stats = run_match(
+        p0_factory=random_choice_factory,
+        p1_factory=random_choice_factory,
+        n_games=2,
+        base_seed=42,
+        replay_config=cfg,
+    )
+    assert stats.games == 2
+    files = sorted(save_dir.glob("*.json.gz"))
+    assert len(files) == 2
+
+
+def test_run_match_parallel_with_replay_config_captures_subset(
+    tmp_path: Path,
+):
+    """capture_every=2 over 4 games → 2 captures (game_idx 0 and 2)."""
+    from mtg_bot.training.data_gen import ReplayCaptureConfig
+
+    save_dir = tmp_path / "replays_eval"
+    save_dir.mkdir()
+    cfg = ReplayCaptureConfig(save_dir=str(save_dir), capture_every=2)
+    run_match_parallel(
+        p0_factory=random_choice_factory,
+        p1_factory=random_choice_factory,
+        n_games=4,
+        base_seed=42,
+        n_workers=2,
+        replay_config=cfg,
+    )
+    files = sorted(save_dir.glob("*.json.gz"))
+    assert len(files) == 2
+    names = [f.name for f in files]
+    assert all("seed42" in n for n in names)
+    assert any("idx0000" in n for n in names)
+    assert any("idx0002" in n for n in names)
 
 
 def test_run_match_parallel_progress_finalizes_on_zero_games(tmp_path: Path):

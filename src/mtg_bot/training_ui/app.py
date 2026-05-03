@@ -105,4 +105,53 @@ def create_app(progress_dir: Path) -> Flask:
             abort(404)
         return jsonify(run)
 
+    @app.route("/api/runs/<run_id>/replays")
+    def api_run_replays(run_id: str):
+        """List captured replay files for a given run.
+
+        The producer (iterate_alphazero) writes ``replays_dir`` into
+        the run's progress JSON pointing at the directory it captured
+        into. This endpoint reads that hint and returns the
+        ``.json.gz`` files alongside the subpath the main mtg_bot UI
+        needs to load them via ``/api/load_replay/<subpath>``. Subpath
+        = ``<replays_dir.name>/<filename>``, since the main UI's
+        ``--replays-root`` is meant to point at the parent directory.
+        """
+        progress_dir: Path = app.config["PROGRESS_DIR"]
+        candidate = progress_dir / f"{run_id}.json"
+        run = _read_run_file(candidate) if candidate.is_file() else None
+        if run is None:
+            for r in _list_runs(progress_dir):
+                if r.get("run_id") == run_id:
+                    run = r
+                    break
+        if run is None:
+            abort(404)
+        replays_dir_str = run.get("replays_dir")
+        if not replays_dir_str:
+            return jsonify({
+                "replays_dir": None,
+                "replays": [],
+                "count": 0,
+                "note": "this run did not capture replays",
+            })
+        replays_dir = Path(replays_dir_str)
+        if not replays_dir.is_dir():
+            return jsonify({
+                "replays_dir": str(replays_dir),
+                "replays": [],
+                "count": 0,
+                "note": "replays_dir does not exist (yet?)",
+            })
+        files = sorted(p.name for p in replays_dir.glob("*.json.gz"))
+        subdir = replays_dir.name
+        return jsonify({
+            "replays_dir": str(replays_dir),
+            "replays": [
+                {"filename": name, "subpath": f"{subdir}/{name}"}
+                for name in files
+            ],
+            "count": len(files),
+        })
+
     return app

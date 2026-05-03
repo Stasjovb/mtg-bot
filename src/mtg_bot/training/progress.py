@@ -113,6 +113,11 @@ class DataGenProgress:
     command: str = ""
     notes: str = ""
     flush_interval_s: float = 5.0
+    # Where this run is writing captured replay files (one .json.gz per
+    # captured game). Surfaced into the snapshot JSON so the UI can
+    # link from this run's card directly to its game list.
+    # ``None`` means no replays are being captured for this run.
+    replays_dir: Optional[str] = None
 
     # Internal state — populated in __post_init__ and update()
     _started_perf: float = field(default=0.0, init=False)
@@ -229,6 +234,7 @@ class DataGenProgress:
             "command": self.command,
             "git_commit": self._git_commit,
             "notes": self.notes,
+            "replays_dir": self.replays_dir,
         }
         atomic_write_json(self.progress_path, payload)
         self._last_flush_perf = now
@@ -276,6 +282,8 @@ class EvalProgress:
     command: str = ""
     notes: str = ""
     flush_interval_s: float = 5.0
+    # See ``DataGenProgress.replays_dir`` — same contract.
+    replays_dir: Optional[str] = None
 
     _started_perf: float = field(default=0.0, init=False)
     _started_iso: str = field(default="", init=False)
@@ -399,6 +407,7 @@ class EvalProgress:
             "command": self.command,
             "git_commit": self._git_commit,
             "notes": self.notes,
+            "replays_dir": self.replays_dir,
         }
         atomic_write_json(self.progress_path, payload)
         self._last_flush_perf = now

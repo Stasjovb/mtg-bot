@@ -41,12 +41,18 @@ from dataclasses import dataclass
 from typing import Optional
 
 from mtg_bot.agents import RandomAgent
+from mtg_bot.decks import Deck
+from mtg_bot.replay import save_replay
 from mtg_bot.search.engine_adapter import MtgGameStateAdapter
 from mtg_bot.search.protocol import CHANCE_PLAYER, PlayerID
 from mtg_bot.simulate import setup_game
 from mtg_bot.training._worker_threads import pin_worker_torch_threads
 from mtg_bot.training.config import StrategyFactory
+from mtg_bot.training.data_gen import (
+    ReplayCaptureConfig, _now_iso, _sample_decks_for_game,
+)
 from mtg_bot.training.progress import EvalProgress
+from mtg_bot.training.replay_capture import ReplayRecorder
 
 
 # Hard cap on decisions per game. A pathological infinite priority
@@ -103,6 +109,8 @@ def run_match(
     decision_cap: int = _DEFAULT_DECISION_CAP,
     enable_mulligans: bool = False,
     per_game_timeout_sec: Optional[float] = None,
+    deck_pool: Optional[list[Deck]] = None,
+    replay_config: Optional[ReplayCaptureConfig] = None,
 ) -> MatchStats:
     """Play ``n_games`` of ``p0_factory`` vs ``p1_factory`` and
     aggregate stats.
@@ -121,7 +129,8 @@ def run_match(
     results = [
         _play_one_match_game(
             game_idx, p0_factory, p1_factory, base_seed, decision_cap,
-            enable_mulligans, per_game_timeout_sec,
+            enable_mulligans, per_game_timeout_sec, deck_pool,
+            replay_config,
         )
         for game_idx in range(n_games)
     ]
@@ -138,6 +147,8 @@ def run_match_parallel(
     progress: Optional[EvalProgress] = None,
     enable_mulligans: bool = False,
     per_game_timeout_sec: Optional[float] = None,
+    deck_pool: Optional[list[Deck]] = None,
+    replay_config: Optional[ReplayCaptureConfig] = None,
 ) -> MatchStats:
     """Same contract as ``run_match`` but distributes games across a
     ``multiprocessing.Pool``.
@@ -180,7 +191,8 @@ def run_match_parallel(
 
     args_list = [
         (i, p0_factory, p1_factory, base_seed, decision_cap,
-         enable_mulligans, per_game_timeout_sec)
+         enable_mulligans, per_game_timeout_sec, deck_pool,
+         replay_config)
         for i in range(n_games)
     ]
     if progress is None:
@@ -329,20 +341,47 @@ def _play_one_match_game(
     decision_cap: int,
     enable_mulligans: bool = False,
     per_game_timeout_sec: Optional[float] = None,
+    deck_pool: Optional[list[Deck]] = None,
+    replay_config: Optional[ReplayCaptureConfig] = None,
 ) -> tuple[Optional[PlayerID], int]:
     """Play one game and return ``(winner_or_None, decisions)``.
     Used by both the sequential and parallel match drivers — same
-    seed derivation logic in both paths so the results match."""
+    seed derivation logic in both paths so the results match.
+
+    When ``deck_pool`` is provided, two distinct decks are sampled
+    per game (deterministic per ``(base_seed, game_idx)``); both
+    seats use real archetypes from the pool. When ``None``, falls
+    back to the legacy mono-color synthetic decks (G vs R), matching
+    ``data_gen``'s back-compat default.
+
+    When ``replay_config`` is supplied AND ``should_capture(game_idx)``
+    returns True, snapshots are recorded after each priority moment
+    and saved to ``replay_path(base_seed, game_idx)`` after the game
+    completes. Mirrors data_gen's capture pattern so the same replay
+    files / format are produced for self-play and eval games.
+    """
     engine_seed = base_seed + game_idx
-    engine = setup_game(
-        [
-            RandomAgent(rng=random.Random(engine_seed + 1)),
-            RandomAgent(rng=random.Random(engine_seed + 2)),
-        ],
-        ["G", "R"],
-        seed=engine_seed,
-        enable_mulligans=enable_mulligans,
-    )
+    seat_agents = [
+        RandomAgent(rng=random.Random(engine_seed + 1)),
+        RandomAgent(rng=random.Random(engine_seed + 2)),
+    ]
+    if deck_pool is not None:
+        deck_p0, deck_p1 = _sample_decks_for_game(
+            deck_pool, game_idx, base_seed,
+        )
+        engine = setup_game(
+            seat_agents,
+            decks=[deck_p0.cards, deck_p1.cards],
+            seed=engine_seed,
+            enable_mulligans=enable_mulligans,
+        )
+    else:
+        engine = setup_game(
+            seat_agents,
+            ["G", "R"],
+            seed=engine_seed,
+            enable_mulligans=enable_mulligans,
+        )
     adapter = MtgGameStateAdapter(engine, expose_combat_decisions=True)
     strategies = {
         0: p0_factory(base_seed + 100 * game_idx),
@@ -358,14 +397,39 @@ def _play_one_match_game(
     # heuristic strategies); idempotent across games.
     pin_worker_torch_threads()
     rng = random.Random(base_seed + 100 * game_idx + 99)
+
+    recorder: Optional[ReplayRecorder] = None
+    if replay_config is not None and replay_config.should_capture(game_idx):
+        recorder = replay_config.build_recorder()
+        # Capture the initial state too so the first scrubber frame
+        # shows "before any actions taken." Mirrors data_gen.
+        recorder.record(adapter.engine_state)
+
     if per_game_timeout_sec is not None and per_game_timeout_sec > 0:
         from mtg_bot.training._timeout import run_with_timeout
-        return run_with_timeout(
+        winner, decisions = run_with_timeout(
             _play_capped_game,
-            (adapter, strategies, rng, decision_cap),
+            (adapter, strategies, rng, decision_cap, recorder),
             per_game_timeout_sec,
         )
-    return _play_capped_game(adapter, strategies, rng, decision_cap)
+    else:
+        winner, decisions = _play_capped_game(
+            adapter, strategies, rng, decision_cap, recorder,
+        )
+
+    if recorder is not None and replay_config is not None:
+        replay = recorder.to_replay(metadata={
+            "game_idx": game_idx,
+            "base_seed": base_seed,
+            "engine_seed": engine_seed,
+            "winner": winner,
+            "n_decisions": len(recorder.snapshots),
+            "captured_at": _now_iso(),
+            "annotated_with_nn_version": replay_config.nn_version_label,
+        })
+        save_replay(replay, replay_config.replay_path(base_seed, game_idx))
+
+    return winner, decisions
 
 
 def _aggregate_results(
@@ -416,11 +480,19 @@ def _play_capped_game(
     strategies: dict[PlayerID, "object"],
     rng: random.Random,
     decision_cap: int,
+    replay_recorder: Optional[ReplayRecorder] = None,
 ) -> tuple[PlayerID | None, int]:
     """Play one game with a hard decision cap. Returns
     ``(winner_id_or_None, decisions_made)``. If the cap is hit
     without termination, returns ``(None, decision_cap)`` — caller
-    counts that as a draw."""
+    counts that as a draw.
+
+    When ``replay_recorder`` is supplied, captures a snapshot of
+    the engine state after each applied decision (the initial
+    pre-action state is captured by the caller). Snapshot cost is
+    ~5 ms per priority moment, dwarfed by typical PIMC decision
+    time, so capture-on means a small wall-clock hit but no skew.
+    """
     decisions = 0
     while not adapter.is_terminal() and decisions < decision_cap:
         active = adapter.active_player()
@@ -433,6 +505,8 @@ def _play_capped_game(
             decision = strategies[active].choose(adapter, active)
         adapter.apply(decision)
         decisions += 1
+        if replay_recorder is not None:
+            replay_recorder.record(adapter.engine_state)
     if adapter.is_terminal():
         return adapter.winner(), decisions
     return None, decisions
