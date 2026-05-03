@@ -117,12 +117,15 @@ def test_mcts_puct_default_is_false_and_skips_validation():
     assert mcts.puct is False
 
 
-def test_mcts_puct_with_batch_size_gt_1_rejected():
-    """PUCT + batched eval is documented as unsupported until the
-    batched-with-policy plumbing lands. Construction must reject it
-    rather than silently dropping the policy head."""
+def test_mcts_puct_with_batch_size_gt_1_requires_batched_policy_fn():
+    """PUCT + batched eval is supported when the evaluator exposes
+    ``batch_evaluate_with_policy``; otherwise it must fail loudly at
+    construction. Catches partially-implemented evaluators that
+    define ``evaluate_with_policy`` (single) but forgot the batched
+    companion. ``_CountingPolicyEvaluator`` only ships the single
+    form, so it's the natural fixture for this assertion."""
     eval_ = _CountingPolicyEvaluator()
-    with pytest.raises(ValueError, match="batch_size"):
+    with pytest.raises(ValueError, match="batch_evaluate_with_policy"):
         MCTS(
             evaluator=eval_,
             budget_factory=lambda: Budget(max_nodes=10),
