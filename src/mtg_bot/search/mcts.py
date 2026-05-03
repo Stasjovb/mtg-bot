@@ -224,15 +224,13 @@ class MCTS(SearchStrategy):
         bit-exact — same selection, same backprop, same
         deterministic outcome under a seeded RNG.
 
-        Combination ``puct=True`` + ``batch_size > 1`` is currently
-        unsupported. The serial path's per-leaf evaluation makes it
-        natural to thread (value, policy) through together; the
-        batched path would need ``batch_evaluate_with_policy`` and
-        a per-leaf policy-cache install in the same loop. The
-        evaluator already exposes a batched-with-policy entry point
-        — it's the MCTS-side plumbing that's not yet there. Raise
-        loudly so a caller asking for both gets a clear failure
-        rather than silent UCB1.
+        Combination ``puct=True`` + ``batch_size > 1`` is supported:
+        ``_search_batched`` routes through
+        ``evaluator.batch_evaluate_with_policy`` and stashes each
+        leaf's policy on its ``_policy_cache`` so subsequent
+        expansions from that node reuse the cached distribution.
+        Requires the evaluator to also expose
+        ``batch_evaluate_with_policy``; we validate that here too.
         """
         if batch_size < 1:
             raise ValueError(
@@ -250,11 +248,23 @@ class MCTS(SearchStrategy):
                     f"{type(evaluator).__name__} which does not."
                 )
             if batch_size > 1:
-                raise ValueError(
-                    "puct=True + batch_size>1 is not currently "
-                    "supported. Use batch_size=1 with puct=True, or "
-                    "puct=False with batch_size>1."
+                # The batched PUCT path also needs the batched-
+                # with-policy entry point. ``NNEvaluator(with_policy
+                # =True)`` provides it; anything else must duck-type
+                # it. We don't fall back to N single-state calls
+                # because the whole point of batch_size>1 is one
+                # forward pass per batch — silent fallback would
+                # erase the perf win without telling the caller.
+                batched_policy_fn = getattr(
+                    evaluator, "batch_evaluate_with_policy", None,
                 )
+                if not callable(batched_policy_fn):
+                    raise ValueError(
+                        "puct=True with batch_size>1 requires an "
+                        "evaluator with batch_evaluate_with_policy("
+                        "states, player_id); got "
+                        f"{type(evaluator).__name__} which does not."
+                    )
         self.evaluator = evaluator
         self.budget_factory = budget_factory
         self.rng = rng or random.Random()
@@ -348,9 +358,35 @@ class MCTS(SearchStrategy):
         the design rationale. Terminal leaves short-circuit to the
         evaluator's terminal handling and are backpropped
         immediately without entering the batch (no NN value to
-        wait on)."""
+        wait on).
+
+        Under PUCT (``self.puct=True``), the batched evaluator is
+        ``batch_evaluate_with_policy`` rather than ``batch_evaluate``
+        — one forward pass yields both heads for every leaf. Each
+        leaf's policy gets stashed on ``_Node._policy_cache`` so
+        when the leaf later becomes an interior node and starts
+        expanding children, ``_stamp_prior`` reads the cached
+        distribution rather than triggering a second forward pass.
+        That preserves the "exactly one policy query per node"
+        invariant that the serial PUCT path enforces via
+        ``_evaluate_leaf``.
+
+        Cache invariant under batching: a pending leaf has no
+        ``_policy_cache`` yet (it's queued for the upcoming batch
+        call). If the next ``_select_and_expand`` would descend
+        through a still-pending leaf and try to expand a grandchild,
+        ``_stamp_prior`` would have to fire a synchronous single-
+        state forward pass — defeating the cache. We avoid this by
+        flushing the batch early: if the descent is about to enter
+        a pending leaf, we break out of inner-loop collection,
+        fire ``batch_evaluate_with_policy``, populate the leaves'
+        caches, and then resume collecting. The effective batch
+        size is bounded by both ``batch_size`` and the tree's
+        breadth at the current frontier.
+        """
         while not budget.exhausted():
             pending: list[_Node] = []
+            pending_set: set[int] = set()
             terminal_results: list[tuple[_Node, float]] = []
             # Collect a batch worth of leaves. Each non-terminal
             # leaf gets virtual loss applied so the next selection
@@ -359,7 +395,20 @@ class MCTS(SearchStrategy):
             for _ in range(batch_size):
                 if budget.exhausted():
                     break
-                leaf = self._select_and_expand(root, player_id)
+                # The pending_blockers set is consulted only in the
+                # PUCT path (see _select_and_expand) to keep the cache
+                # invariant. Under UCB1 it's harmlessly ignored — the
+                # set is cheap to build either way.
+                leaf = self._select_and_expand(
+                    root, player_id, pending_blockers=pending_set,
+                )
+                if leaf is None:
+                    # ``_select_and_expand`` aborted because it would
+                    # have descended into a still-pending leaf. Fire
+                    # the batch we've collected so far, populate the
+                    # caches, then restart the outer loop to continue
+                    # collecting from a fresh state.
+                    break
                 budget.consume_node()
                 if leaf.is_leaf():
                     # Terminal — evaluator short-circuits to ±1/0
@@ -371,6 +420,7 @@ class MCTS(SearchStrategy):
                 else:
                     self._apply_virtual_loss(leaf)
                     pending.append(leaf)
+                    pending_set.add(id(leaf))
 
             # Backprop terminal leaves first — they have real
             # values immediately. Order doesn't affect correctness.
@@ -380,12 +430,28 @@ class MCTS(SearchStrategy):
             # Batch-evaluate the non-terminal leaves and backprop.
             if pending:
                 states = [leaf.state for leaf in pending]
-                values = self.evaluator.batch_evaluate(
-                    states, player_id,
-                )
-                for leaf, value in zip(pending, values):
-                    self._revert_virtual_loss(leaf)
-                    self._backprop(leaf, value, player_id)
+                if self.puct:
+                    # One forward pass, both heads. Each (value,
+                    # policy) pair lines up with the matching leaf
+                    # by index. Stash the policy on the leaf so
+                    # subsequent expansions from that node read the
+                    # cached distribution and don't trigger a
+                    # second forward pass.
+                    pairs = self.evaluator.batch_evaluate_with_policy(
+                        states, player_id,
+                    )
+                    for leaf, (value, policy) in zip(pending, pairs):
+                        if leaf._policy_cache is None:
+                            leaf._policy_cache = policy
+                        self._revert_virtual_loss(leaf)
+                        self._backprop(leaf, value, player_id)
+                else:
+                    values = self.evaluator.batch_evaluate(
+                        states, player_id,
+                    )
+                    for leaf, value in zip(pending, values):
+                        self._revert_virtual_loss(leaf)
+                        self._backprop(leaf, value, player_id)
 
     # ------------------------------------------------------------------
     # Internals
@@ -393,7 +459,8 @@ class MCTS(SearchStrategy):
 
     def _select_and_expand(
         self, root: _Node, root_player: PlayerID,
-    ) -> _Node:
+        pending_blockers: Optional[set[int]] = None,
+    ) -> Optional[_Node]:
         """Walk down the tree until we find a node to score.
 
         - At chance nodes, sample an outcome by its probability and
@@ -410,6 +477,14 @@ class MCTS(SearchStrategy):
         regardless of whose turn it is at the descent node — the
         policy head's "what does it think *I* should do" is more
         useful than per-active-player priors that flip every node.
+
+        ``pending_blockers`` (PUCT-only) is the id-set of leaves
+        currently in the in-flight batch. If a descent would land
+        on (or pass through) one of these nodes, expansion of its
+        children would require a not-yet-populated policy cache —
+        breaking the "no double evaluation" invariant. Returning
+        ``None`` signals the caller to flush the current batch
+        before continuing. Under UCB1 the set is ignored.
         """
         node = root
         while not node.is_leaf():
@@ -443,6 +518,18 @@ class MCTS(SearchStrategy):
                         parent_n, self.exploration_c,
                     ),
                 )
+                # Cache-invariant guard: if we're about to descend
+                # into a leaf that's still queued for the in-flight
+                # batch, its ``_policy_cache`` is empty. Expanding
+                # one of its grandchildren would force ``_stamp_prior``
+                # to fire a synchronous single-state forward pass
+                # — exactly the duplicate eval the caller is trying
+                # to prevent. Signal "flush the batch first".
+                if (
+                    pending_blockers is not None
+                    and id(node) in pending_blockers
+                ):
+                    return None
             else:
                 node = max(
                     node.children,
