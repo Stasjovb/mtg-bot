@@ -204,35 +204,55 @@ def main() -> None:
         )
     started = time.perf_counter()
     if n_workers == 1:
-        features, outcomes = generate_training_data(
-            p0_factory=factory, p1_factory=factory,
-            n_games=args.n_games, base_seed=args.seed,
-            sample_every=args.sample_every,
-            replay_config=replay_config,
-            deck_pool=deck_pool,
+        features, outcomes, policy_targets, action_masks = (
+            generate_training_data(
+                p0_factory=factory, p1_factory=factory,
+                n_games=args.n_games, base_seed=args.seed,
+                sample_every=args.sample_every,
+                replay_config=replay_config,
+                deck_pool=deck_pool,
+                with_policy=True,
+            )
         )
     else:
-        features, outcomes = generate_training_data_parallel(
-            p0_factory=factory, p1_factory=factory,
-            n_games=args.n_games, base_seed=args.seed,
-            n_workers=n_workers,
-            sample_every=args.sample_every,
-            replay_config=replay_config,
-            deck_pool=deck_pool,
+        features, outcomes, policy_targets, action_masks = (
+            generate_training_data_parallel(
+                p0_factory=factory, p1_factory=factory,
+                n_games=args.n_games, base_seed=args.seed,
+                n_workers=n_workers,
+                sample_every=args.sample_every,
+                replay_config=replay_config,
+                deck_pool=deck_pool,
+                with_policy=True,
+            )
         )
     elapsed = time.perf_counter() - started
 
-    save_dataset(features, outcomes, args.output)
+    # Always emit the AlphaZero schema. PIMC strategies populate
+    # the policy_targets / action_masks; baseline-strategy runs
+    # produce all-zero policy supervision (still safe to write —
+    # the trainer skips policy loss for rows where
+    # policy_targets.sum(-1) < 0.5).
+    save_dataset(
+        features, outcomes, args.output,
+        policy_targets=policy_targets, action_masks=action_masks,
+    )
     n = features.shape[0]
     pos = int((outcomes > 0).sum())
     neg = int((outcomes < 0).sum())
     zero = int((outcomes == 0).sum())
+    # Rows where the strategy provided MCTS visits — only these
+    # contribute to the policy loss. Active player's row at sample
+    # points where ``choose_with_visits`` returned non-empty visits.
+    n_policy = int((policy_targets.sum(axis=-1) > 0.5).sum())
     print(
         f"# Done in {elapsed:.1f}s ({elapsed / 60:.1f}m). Saved "
         f"{n} samples to {args.output}.\n"
         f"# Outcome distribution: +1={pos} ({pos / n:.1%}) "
         f"-1={neg} ({neg / n:.1%}) "
-        f"0={zero} ({zero / n:.1%})"
+        f"0={zero} ({zero / n:.1%})\n"
+        f"# Policy supervision: {n_policy} / {n} rows "
+        f"({n_policy / n:.1%}) carry visit-count targets"
     )
 
 

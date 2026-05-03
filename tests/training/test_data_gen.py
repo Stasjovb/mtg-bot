@@ -178,6 +178,146 @@ def test_load_all_datasets_empty_dir_returns_empty(tmp_path: Path):
     assert outcomes.shape == (0,)
 
 
+# ---------- A2.3: policy supervision in the npz schema ---------------------
+
+
+def test_save_and_load_with_policy_roundtrip(tmp_path: Path):
+    """Save a dataset with policy_targets + action_masks; load it
+    back with ``with_policy=True``; arrays compare equal."""
+    from mtg_bot.training.action_encoding import ACTION_VOCAB_SIZE
+    n = 4
+    features = np.random.rand(n, FEATURE_DIM).astype(np.float32)
+    outcomes = np.array([1, -1, 0, 1], dtype=np.float32)
+    policy_targets = np.zeros(
+        (n, ACTION_VOCAB_SIZE), dtype=np.float32,
+    )
+    policy_targets[0, 0] = 1.0
+    policy_targets[1, 5] = 0.7
+    policy_targets[1, 12] = 0.3
+    action_masks = np.zeros((n, ACTION_VOCAB_SIZE), dtype=np.bool_)
+    action_masks[0, 0] = True
+    action_masks[1, [5, 12]] = True
+    path = tmp_path / "session.npz"
+    save_dataset(
+        features, outcomes, path,
+        policy_targets=policy_targets, action_masks=action_masks,
+    )
+    f2, o2, p2, m2 = load_dataset(path, with_policy=True)
+    np.testing.assert_array_equal(features, f2)
+    np.testing.assert_array_equal(outcomes, o2)
+    np.testing.assert_array_equal(policy_targets, p2)
+    np.testing.assert_array_equal(action_masks, m2)
+
+
+def test_load_dataset_old_format_returns_none_for_policy(tmp_path: Path):
+    """An old value-only file (no policy_targets key) loads cleanly
+    with ``with_policy=True`` — policy/mask come back as ``None``
+    so callers can synthesize zero arrays."""
+    features = np.zeros((3, FEATURE_DIM), dtype=np.float32)
+    outcomes = np.zeros((3,), dtype=np.float32)
+    path = tmp_path / "old.npz"
+    save_dataset(features, outcomes, path)  # no policy args
+    f, o, pols, masks = load_dataset(path, with_policy=True)
+    assert pols is None
+    assert masks is None
+
+
+def test_save_dataset_rejects_lonely_policy_arg(tmp_path: Path):
+    """``policy_targets`` and ``action_masks`` must come together
+    or both omitted — half-supplied is a programming error."""
+    import pytest
+    from mtg_bot.training.action_encoding import ACTION_VOCAB_SIZE
+    f = np.zeros((2, FEATURE_DIM), dtype=np.float32)
+    o = np.zeros((2,), dtype=np.float32)
+    p = np.zeros((2, ACTION_VOCAB_SIZE), dtype=np.float32)
+    with pytest.raises(ValueError, match="must be provided together"):
+        save_dataset(
+            f, o, tmp_path / "x.npz", policy_targets=p,
+        )
+    with pytest.raises(ValueError, match="must be provided together"):
+        save_dataset(
+            f, o, tmp_path / "y.npz",
+            action_masks=p.astype(np.bool_),
+        )
+
+
+def test_load_all_datasets_mixed_old_and_new(tmp_path: Path):
+    """A directory with one old-format and one new-format file
+    loads cleanly with ``include_policy=True``: old rows get
+    zero-padded policy supervision so the concatenated arrays
+    align row-for-row."""
+    from mtg_bot.training.action_encoding import ACTION_VOCAB_SIZE
+    # Old-format file (value-only).
+    f_old = np.ones((2, FEATURE_DIM), dtype=np.float32)
+    o_old = np.array([1, -1], dtype=np.float32)
+    save_dataset(f_old, o_old, tmp_path / "a_old.npz")
+    # New-format file (with policy).
+    f_new = np.full((3, FEATURE_DIM), 2.0, dtype=np.float32)
+    o_new = np.array([0, 1, -1], dtype=np.float32)
+    p_new = np.zeros((3, ACTION_VOCAB_SIZE), dtype=np.float32)
+    p_new[0, 7] = 1.0
+    p_new[2, 11] = 1.0
+    m_new = np.zeros((3, ACTION_VOCAB_SIZE), dtype=np.bool_)
+    m_new[0, [3, 7]] = True
+    m_new[2, [11, 99]] = True
+    save_dataset(
+        f_new, o_new, tmp_path / "b_new.npz",
+        policy_targets=p_new, action_masks=m_new,
+    )
+    f, o, p, m = load_all_datasets(tmp_path, include_policy=True)
+    assert f.shape == (5, FEATURE_DIM)
+    assert o.shape == (5,)
+    assert p.shape == (5, ACTION_VOCAB_SIZE)
+    assert m.shape == (5, ACTION_VOCAB_SIZE)
+    # First 2 rows from the old file have zero-padded policy supervision.
+    assert p[0:2].sum() == 0.0
+    assert not m[0:2].any()
+    # Last 3 rows have the synthesized policy.
+    assert p[2, 7] == 1.0
+    assert p[4, 11] == 1.0
+    assert m[2, 3]
+    assert m[4, 99]
+
+
+def test_load_all_datasets_default_drops_policy(tmp_path: Path):
+    """Default ``include_policy=False`` returns only (features,
+    outcomes) even when files contain policy data — backward compat
+    with pre-A2.3 callers."""
+    from mtg_bot.training.action_encoding import ACTION_VOCAB_SIZE
+    f = np.zeros((2, FEATURE_DIM), dtype=np.float32)
+    o = np.zeros((2,), dtype=np.float32)
+    p = np.zeros((2, ACTION_VOCAB_SIZE), dtype=np.float32)
+    m = np.zeros((2, ACTION_VOCAB_SIZE), dtype=np.bool_)
+    save_dataset(
+        f, o, tmp_path / "x.npz",
+        policy_targets=p, action_masks=m,
+    )
+    out = load_all_datasets(tmp_path)
+    assert len(out) == 2
+    assert out[0].shape == (2, FEATURE_DIM)
+    assert out[1].shape == (2,)
+
+
+def test_generate_training_data_with_policy_returns_4tuple():
+    """``with_policy=True`` produces the 4-tuple schema. Random
+    strategies don't have visit counts, so the policy_targets are
+    all-zero — but the array still has the right shape."""
+    from mtg_bot.training.action_encoding import ACTION_VOCAB_SIZE
+    f, o, p, m = generate_training_data(
+        p0_factory=random_choice_factory,
+        p1_factory=random_choice_factory,
+        n_games=2, base_seed=42, with_policy=True,
+    )
+    n = f.shape[0]
+    assert f.shape == (n, FEATURE_DIM)
+    assert o.shape == (n,)
+    assert p.shape == (n, ACTION_VOCAB_SIZE)
+    assert m.shape == (n, ACTION_VOCAB_SIZE)
+    # RandomChoice has no visits → all rows are value-only.
+    assert p.sum() == 0.0
+    assert not m.any()
+
+
 # ---------- end-to-end with tiny PIMC ---------------------------------------
 
 
@@ -496,19 +636,26 @@ def test_play_one_game_recording_captures_visits_at_sample_points():
     # row carries visits.
     found_with_visits = False
     found_none_partner = False
-    for feats, viewer, visits in samples:
-        if visits is not None:
+    for feats, viewer, policy_target, action_mask in samples:
+        # A2.3: visits are now encoded into a (ACTION_VOCAB_SIZE,)
+        # policy_target array. "Has supervision" = sum > 0.5
+        # (a normalized distribution sums to 1.0 + float noise).
+        if policy_target.sum() > 0.5:
             found_with_visits = True
-            # Synthetic distribution puts 100 on the favorite.
-            # MTG often has only 1 legal action at a priority
-            # moment (forced PassPriority etc.); single-entry
-            # dicts are normal. The constant we care about is
-            # that the fake strategy's 100-on-favorite signal
-            # made it through — assert max==100 and skip the
-            # min check (which is only meaningful when len>1).
-            assert max(visits.values()) == 100
+            # The synthetic dict was {legal[0]: 100, legal[1]: 1, ...},
+            # normalized — the favorite slot ends up with the
+            # largest fraction. We just check that the policy is
+            # non-zero on at least one slot and that the mask is
+            # set on at least one slot.
+            assert action_mask.any(), (
+                "active row has policy supervision but no legal "
+                "slot in the action mask — encoder broken"
+            )
         else:
             found_none_partner = True
+            # Value-only row: policy_target is all-zero, mask
+            # all-False.
+            assert not action_mask.any()
 
     assert found_with_visits, (
         "no sample carried visits — _play_one_game_recording "
@@ -549,8 +696,12 @@ def test_play_one_game_recording_falls_back_when_visits_empty():
     )
 
     assert len(samples) > 0
-    for _feats, _viewer, visits in samples:
-        assert visits is None, (
-            "RandomChoice has no visit data; samples should be "
-            "value-only"
+    for _feats, _viewer, policy_target, action_mask in samples:
+        assert policy_target.sum() == 0.0, (
+            "RandomChoice has no visit data; policy target "
+            "should be all-zero"
+        )
+        assert not action_mask.any(), (
+            "RandomChoice has no visit data; action mask "
+            "should be all-False"
         )

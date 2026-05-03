@@ -63,6 +63,11 @@ _DEFAULT_DECISION_CAP = 4000
 
 _DTYPE_FEATURES = np.float32
 _DTYPE_OUTCOMES = np.float32
+# Policy targets: per-slot probabilities. float32 keeps storage
+# matched to features; precision well above what cross-entropy
+# needs. Must match the dtype the AlphaZero trainer feeds into
+# the loss function — float64 would be a wasteful upcast.
+_DTYPE_POLICY = np.float32
 
 
 @dataclass(frozen=True)
@@ -111,10 +116,19 @@ class ReplayCaptureConfig:
         return ReplayRecorder(annotators=annotators)
 
 
-def _empty_arrays() -> tuple[np.ndarray, np.ndarray]:
+def _empty_arrays() -> tuple[
+    np.ndarray, np.ndarray, np.ndarray, np.ndarray,
+]:
+    """Empty arrays matching the post-A2.3 4-tuple schema. Use for
+    the no-games / no-samples paths in the data-gen functions.
+    Lazy-imports ``ACTION_VOCAB_SIZE`` to avoid the ``training`` →
+    ``training.action_encoding`` dep at module-load time."""
+    from mtg_bot.training.action_encoding import ACTION_VOCAB_SIZE
     return (
         np.zeros((0, FEATURE_DIM), dtype=_DTYPE_FEATURES),
         np.zeros((0,), dtype=_DTYPE_OUTCOMES),
+        np.zeros((0, ACTION_VOCAB_SIZE), dtype=_DTYPE_POLICY),
+        np.zeros((0, ACTION_VOCAB_SIZE), dtype=np.bool_),
     )
 
 
@@ -153,24 +167,33 @@ def generate_training_data(
     sample_every: int = 1,
     replay_config: Optional[ReplayCaptureConfig] = None,
     deck_pool: Optional[list[Deck]] = None,
-) -> tuple[np.ndarray, np.ndarray]:
-    """Play ``n_games`` and return ``(features, outcomes)`` arrays.
+    with_policy: bool = False,
+) -> tuple[np.ndarray, ...]:
+    """Play ``n_games`` and return training arrays.
 
-    For each non-chance decision in each game, captures
-    ``extract_features(state, viewer)`` for both viewers (0 and 1)
-    and labels each with the eventual game outcome from that
-    viewer's perspective: +1 / -1 / 0.
+    For each non-chance decision (every Nth, ``sample_every``),
+    captures ``extract_features(state, viewer)`` for both viewers
+    (0 and 1) and labels each with the eventual game outcome from
+    that viewer's perspective (+1/-1/0).
 
-    ``sample_every=N`` keeps every Nth decision (1 = all). Useful
-    for thinning when games are very long.
+    Default returns ``(features, outcomes)`` — the value-only
+    schema that pre-A2.3 callers expect. Pass ``with_policy=True``
+    for the AlphaZero schema:
 
-    Returns:
-        features: ``np.float32`` array of shape ``(samples, FEATURE_DIM)``.
-        outcomes: ``np.float32`` array of shape ``(samples,)``, values
-            in ``{-1.0, 0.0, +1.0}``.
+    Returns a 2-tuple (default) or 4-tuple (with_policy=True):
+        features:       ``(N, FEATURE_DIM)`` float32.
+        outcomes:       ``(N,)`` float32 in ``{-1, 0, +1}``.
+        policy_targets: ``(N, ACTION_VOCAB_SIZE)`` float32 — visit
+            distribution per row, all-zero for rows without policy
+            supervision (data-doubled non-active-viewer rows;
+            baseline-strategy rows).
+        action_masks:   ``(N, ACTION_VOCAB_SIZE)`` bool — legal-
+            slot mask per row, all-False for rows without policy
+            supervision.
 
     Deterministic in ``base_seed`` — same call produces the same
-    arrays.
+    arrays. Trainer code should detect "no policy supervision" via
+    ``policy_targets.sum(-1) > 0.5`` per row.
     """
     chunks = [
         _generate_one_game_data(
@@ -183,7 +206,10 @@ def generate_training_data(
         )
         for i in range(n_games)
     ]
-    return _concat_chunks(chunks)
+    f, o, p, m = _concat_chunks(chunks)
+    if with_policy:
+        return f, o, p, m
+    return f, o
 
 
 def generate_training_data_parallel(
@@ -196,9 +222,11 @@ def generate_training_data_parallel(
     sample_every: int = 1,
     replay_config: Optional[ReplayCaptureConfig] = None,
     deck_pool: Optional[list[Deck]] = None,
-) -> tuple[np.ndarray, np.ndarray]:
+    with_policy: bool = False,
+) -> tuple[np.ndarray, ...]:
     """Same contract as ``generate_training_data`` but distributes
-    games across a ``multiprocessing.Pool``.
+    games across a ``multiprocessing.Pool``. Same ``with_policy``
+    flag controlling 2-tuple vs 4-tuple return.
 
     Identical output to the sequential function for the same
     ``base_seed`` — per-game seeds are derived from ``game_idx``, not
@@ -224,7 +252,8 @@ def generate_training_data_parallel(
     if n_workers < 1:
         raise ValueError(f"n_workers must be >= 1, got {n_workers}")
     if n_games == 0:
-        return _empty_arrays()
+        f, o, p, m = _empty_arrays()
+        return (f, o, p, m) if with_policy else (f, o)
 
     args_list = [
         (
@@ -238,16 +267,19 @@ def generate_training_data_parallel(
     # lifetime so import cost is paid once per worker.
     with mp.Pool(processes=n_workers) as pool:
         chunks = pool.map(_play_one_parallel_game, args_list)
-    return _concat_chunks(chunks)
+    f, o, p, m = _concat_chunks(chunks)
+    if with_policy:
+        return f, o, p, m
+    return f, o
 
 
 def _play_one_parallel_game(
     args: tuple,
-) -> tuple[np.ndarray, np.ndarray]:
-    """Top-level pickleable worker. Plays one game, returns
-    ``(features, outcomes)`` arrays for it. Lives at module top
-    level (not nested) so multiprocessing can pickle it across the
-    spawn boundary."""
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    """Top-level pickleable worker. Plays one game, returns the
+    4-tuple ``(features, outcomes, policy_targets, action_masks)``
+    arrays for it. Lives at module top level (not nested) so
+    multiprocessing can pickle it across the spawn boundary."""
     (
         game_idx, p0_factory, p1_factory, base_seed,
         decision_cap, sample_every, replay_config, deck_pool,
@@ -272,8 +304,8 @@ def _generate_one_game_data(
     sample_every: int,
     replay_config: Optional[ReplayCaptureConfig] = None,
     deck_pool: Optional[list[Deck]] = None,
-) -> tuple[np.ndarray, np.ndarray]:
-    """Play one game and return its ``(features, outcomes)`` arrays.
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    """Play one game and return its 4-tuple training arrays.
 
     The single source of truth for per-game data extraction; both
     sequential and parallel drivers call this so they produce
@@ -347,26 +379,27 @@ def _generate_one_game_data(
     if not samples:
         return _empty_arrays()
     outcome_label = _outcome_label(winner)
-    # Drop the per-sample visit dict here — A2.1 captures it for
-    # downstream A2.3 schema work but ``save_dataset`` still writes
-    # the value-only ``(features, outcomes)`` shape. Once A2.3
-    # extends the NPZ schema, this unpacking grows to forward the
-    # visits as a third array.
     features = np.stack(
-        [f for f, _, _ in samples], axis=0,
+        [f for f, _, _, _ in samples], axis=0,
     ).astype(_DTYPE_FEATURES)
     outcomes = np.asarray(
-        [outcome_label[v] for _, v, _ in samples],
+        [outcome_label[v] for _, v, _, _ in samples],
         dtype=_DTYPE_OUTCOMES,
     )
-    return features, outcomes
+    policy_targets = np.stack(
+        [p for _, _, p, _ in samples], axis=0,
+    ).astype(_DTYPE_POLICY)
+    action_masks = np.stack(
+        [m for _, _, _, m in samples], axis=0,
+    ).astype(np.bool_)
+    return features, outcomes, policy_targets, action_masks
 
 
 def _concat_chunks(
-    chunks: list[tuple[np.ndarray, np.ndarray]],
-) -> tuple[np.ndarray, np.ndarray]:
-    """Concat per-game ``(features, outcomes)`` chunks into the final
-    arrays. Skips empty chunks (zero-decision games hit the cap)."""
+    chunks: list[tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]],
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    """Concat per-game 4-tuple chunks into the final arrays. Skips
+    empty chunks (zero-decision games hit the cap)."""
     nonempty = [c for c in chunks if c[0].size > 0]
     if not nonempty:
         return _empty_arrays()
@@ -376,7 +409,13 @@ def _concat_chunks(
     outcomes = np.concatenate(
         [c[1] for c in nonempty], axis=0,
     ).astype(_DTYPE_OUTCOMES)
-    return features, outcomes
+    policy_targets = np.concatenate(
+        [c[2] for c in nonempty], axis=0,
+    ).astype(_DTYPE_POLICY)
+    action_masks = np.concatenate(
+        [c[3] for c in nonempty], axis=0,
+    ).astype(np.bool_)
+    return features, outcomes, policy_targets, action_masks
 
 
 def _outcome_label(
@@ -398,28 +437,46 @@ def _play_one_game_recording(
     replay_recorder: Optional[ReplayRecorder] = None,
 ) -> tuple[
     PlayerID | None,
-    list[tuple[np.ndarray, PlayerID, Optional[dict]]],
+    list[tuple[np.ndarray, PlayerID, np.ndarray, np.ndarray]],
 ]:
     """Play one game with the decision cap, recording features at
     every Nth non-chance decision from both player perspectives.
 
-    When ``replay_recorder`` is set, also captures a snapshot of the
-    engine state after each ``adapter.apply(decision)`` — both
+    When ``replay_recorder`` is set, also captures a snapshot of
+    the engine state after each ``adapter.apply(decision)`` — both
     chance and player decisions. The recorder's annotators (eval
     values, etc.) run inline.
 
-    Returns ``(winner_or_None, samples)`` where ``samples`` is a list
-    of ``(features, viewer_id, visits_or_None)`` triples. Visit
-    counts are captured ONLY for the active player's sample at
-    sample-points where the strategy's ``choose_with_visits``
-    returns a non-empty dict — that's the policy supervision
-    signal for A4. The non-active viewer's sample (the data-
-    doubling row) and any sample from a strategy without visit
-    counts (e.g., ``RandomChoice``) get ``None``; downstream
-    consumers (A2.3 NPZ schema) treat ``None`` as "value-only,
-    no policy target".
+    Returns ``(winner_or_None, samples)`` where each sample is a
+    4-tuple ``(features, viewer_id, policy_target, action_mask)``:
+
+    - ``features``      : ``(FEATURE_DIM,)`` float32, viewer-side.
+    - ``viewer_id``     : the player whose perspective this is.
+    - ``policy_target`` : ``(ACTION_VOCAB_SIZE,)`` float32. For
+      the active player's row at a sample point where
+      ``choose_with_visits`` returned non-empty visits, this is
+      the normalized visit distribution encoded into slot indices
+      via ``action_encoding.encode``. All zeros for the data-
+      doubling non-active-viewer row, and for any row from a
+      strategy with no visit data (RandomChoice etc.). The
+      trainer detects "no policy supervision" by checking
+      ``policy_target.sum() < 0.5``.
+    - ``action_mask``   : ``(ACTION_VOCAB_SIZE,)`` bool. True at
+      slots that were legal at the sample point. All-False for
+      rows without policy supervision (mask is irrelevant to
+      value-only loss).
     """
-    samples: list[tuple[np.ndarray, PlayerID, Optional[dict]]] = []
+    # Local import — action_encoding pulls in legal-action
+    # enumeration, which is heavier than this file's outer surface.
+    from mtg_bot.training.action_encoding import (
+        ACTION_VOCAB_SIZE, encode, legal_action_mask,
+    )
+
+    samples: list[
+        tuple[np.ndarray, PlayerID, np.ndarray, np.ndarray]
+    ] = []
+    zero_policy = np.zeros(ACTION_VOCAB_SIZE, dtype=_DTYPE_POLICY)
+    zero_mask = np.zeros(ACTION_VOCAB_SIZE, dtype=np.bool_)
     decision_idx = 0
     while not adapter.is_terminal() and decision_idx < decision_cap:
         active = adapter.active_player()
@@ -449,21 +506,36 @@ def _play_one_game_recording(
                     # search bottomed out). Pick a legal default
                     # without re-running the search.
                     decision = list(adapter.legal_decisions())[0]
-                # Capture features from both viewers' perspectives.
-                # Same state, opposite outcomes — twice the data
-                # with no extra game-play cost. Only the active
-                # player's sample carries a policy target — the
-                # non-active viewer's "visits" would be the
-                # active player's decisions seen from the other
-                # side, not their own policy.
+                # Encode visits → slot-indexed normalized dist +
+                # legal mask once per sample point. Shared across
+                # the two viewer rows below — only the active
+                # row gets the policy supervision; the data-
+                # doubling non-active row gets zeros (its
+                # "policy" would be the active player's
+                # distribution viewed from the wrong seat).
                 engine = adapter.engine_state
+                if visits:
+                    active_policy = np.zeros(
+                        ACTION_VOCAB_SIZE, dtype=_DTYPE_POLICY,
+                    )
+                    total = float(sum(visits.values()))
+                    for d, count in visits.items():
+                        slot = encode(d, engine, active)
+                        active_policy[slot] += count / total
+                    active_mask = legal_action_mask(engine, active)
+                else:
+                    active_policy = zero_policy
+                    active_mask = zero_mask
                 for viewer in (0, 1):
                     feats = extract_features(engine, viewer)
-                    sample_visits = (
-                        visits if (viewer == active and visits)
-                        else None
-                    )
-                    samples.append((feats, viewer, sample_visits))
+                    if viewer == active and visits:
+                        samples.append(
+                            (feats, viewer, active_policy, active_mask)
+                        )
+                    else:
+                        samples.append(
+                            (feats, viewer, zero_policy, zero_mask)
+                        )
             else:
                 decision = strategies[active].choose(adapter, active)
         adapter.apply(decision)
@@ -475,51 +547,168 @@ def _play_one_game_recording(
 
 
 def save_dataset(
-    features: np.ndarray, outcomes: np.ndarray, path: Path,
+    features: np.ndarray,
+    outcomes: np.ndarray,
+    path: Path,
+    *,
+    policy_targets: Optional[np.ndarray] = None,
+    action_masks: Optional[np.ndarray] = None,
 ) -> None:
-    """Save ``(features, outcomes)`` to a single ``.npz`` file.
-    Compressed — datasets are small (~10KB per game) but compression
-    is free so why not."""
-    if features.shape[0] != outcomes.shape[0]:
+    """Save ``(features, outcomes)`` plus optional policy
+    supervision arrays to a single ``.npz`` file.
+
+    Schema (the policy keys exist only when supplied):
+
+    - ``features``       : ``(N, FEATURE_DIM)`` float32
+    - ``outcomes``       : ``(N,)`` float32 in ``{-1, 0, +1}``
+    - ``policy_targets`` : ``(N, ACTION_VOCAB_SIZE)`` float32 —
+      each row is a normalized visit distribution over the legal
+      action slots. Rows with no policy supervision (data-doubled
+      non-active-viewer rows, baseline-strategy rows) are emitted
+      as all-zeros — the trainer detects ``policy_targets.sum(-1)
+      < threshold`` to skip the policy loss for those rows.
+    - ``action_masks``   : ``(N, ACTION_VOCAB_SIZE)`` bool — True
+      where the slot was legal at the sample point. Rows with no
+      policy supervision get all-False (trainer doesn't need the
+      mask there).
+
+    Compressed — datasets are small even with policy supervision
+    (zeros + bool masks compress aggressively).
+    """
+    n = features.shape[0]
+    if outcomes.shape[0] != n:
         raise ValueError(
-            f"features rows {features.shape[0]} != outcomes len "
-            f"{outcomes.shape[0]}"
+            f"features rows {n} != outcomes len {outcomes.shape[0]}"
         )
     if features.shape[1] != FEATURE_DIM:
         raise ValueError(
             f"features have dim {features.shape[1]}, expected "
             f"FEATURE_DIM={FEATURE_DIM}"
         )
-    np.savez_compressed(path, features=features, outcomes=outcomes)
+    if (policy_targets is None) != (action_masks is None):
+        raise ValueError(
+            "policy_targets and action_masks must be provided "
+            "together (or both omitted)"
+        )
+    arrays: dict[str, np.ndarray] = {
+        "features": features,
+        "outcomes": outcomes,
+    }
+    if policy_targets is not None and action_masks is not None:
+        if policy_targets.shape[0] != n or action_masks.shape[0] != n:
+            raise ValueError(
+                f"policy_targets / action_masks rows must equal "
+                f"features rows ({n}); got "
+                f"{policy_targets.shape[0]} / {action_masks.shape[0]}"
+            )
+        if policy_targets.shape[1] != action_masks.shape[1]:
+            raise ValueError(
+                f"policy_targets cols {policy_targets.shape[1]} != "
+                f"action_masks cols {action_masks.shape[1]}"
+            )
+        arrays["policy_targets"] = policy_targets
+        arrays["action_masks"] = action_masks
+    np.savez_compressed(path, **arrays)
 
 
-def load_dataset(path: Path) -> tuple[np.ndarray, np.ndarray]:
-    """Load a single ``.npz`` saved by ``save_dataset``."""
+def load_dataset(
+    path: Path,
+    *,
+    with_policy: bool = False,
+) -> tuple[np.ndarray, ...]:
+    """Load a single ``.npz`` saved by ``save_dataset``.
+
+    Default returns ``(features, outcomes)`` for backward compat
+    with pre-A2.3 callers. Pass ``with_policy=True`` to also pull
+    policy supervision arrays — ``(features, outcomes,
+    policy_targets, action_masks)``. For value-only files (no
+    ``policy_targets`` key in the npz), the policy arrays come
+    back as ``None``; ``load_all_datasets`` is the helper that
+    handles the value-only ↔ value+policy mixing transparently.
+    """
     with np.load(path) as data:
-        return data["features"], data["outcomes"]
+        features = data["features"]
+        outcomes = data["outcomes"]
+        if not with_policy:
+            return features, outcomes
+        if "policy_targets" in data.files:
+            return (
+                features,
+                outcomes,
+                data["policy_targets"],
+                data["action_masks"],
+            )
+        return features, outcomes, None, None
 
 
 def load_all_datasets(
     directory: Path,
-) -> tuple[np.ndarray, np.ndarray]:
+    *,
+    include_policy: bool = False,
+) -> tuple[np.ndarray, ...]:
     """Load and concatenate every ``*.npz`` in ``directory``.
 
-    Returns ``(features, outcomes)`` matching ``generate_training_data``'s
-    contract. Empty arrays if the directory has no .npz files.
+    By default returns ``(features, outcomes)`` to preserve the
+    pre-A2.3 value-only callers' contract — files that contain
+    policy supervision have those arrays silently dropped. Pass
+    ``include_policy=True`` to also pull policy_targets and
+    action_masks back; value-only files are padded out with zero
+    policy_targets / all-False action_masks so the concatenated
+    arrays align row-for-row.
+
+    The 4-tuple shape (when ``include_policy=True``) is what the
+    A4-wiring trainer reads: it inspects ``policy_targets.sum(-1)
+    > 0`` per row to decide which rows contribute to the policy
+    loss.
+
+    Empty arrays if the directory has no .npz files.
     """
+    from mtg_bot.training.action_encoding import ACTION_VOCAB_SIZE
+
     paths = sorted(directory.glob("*.npz"))
     if not paths:
+        empty_features = np.zeros((0, FEATURE_DIM), dtype=_DTYPE_FEATURES)
+        empty_outcomes = np.zeros((0,), dtype=_DTYPE_OUTCOMES)
+        if not include_policy:
+            return empty_features, empty_outcomes
         return (
-            np.zeros((0, FEATURE_DIM), dtype=_DTYPE_FEATURES),
-            np.zeros((0,), dtype=_DTYPE_OUTCOMES),
+            empty_features,
+            empty_outcomes,
+            np.zeros((0, ACTION_VOCAB_SIZE), dtype=_DTYPE_POLICY),
+            np.zeros((0, ACTION_VOCAB_SIZE), dtype=np.bool_),
         )
     feature_chunks: list[np.ndarray] = []
     outcome_chunks: list[np.ndarray] = []
+    policy_chunks: list[np.ndarray] = []
+    mask_chunks: list[np.ndarray] = []
     for path in paths:
-        feats, outs = load_dataset(path)
+        if include_policy:
+            feats, outs, pols, masks = load_dataset(
+                path, with_policy=True,
+            )
+            n_rows = feats.shape[0]
+            if pols is None:
+                # Old-format file — synthesize zero supervision so
+                # the trainer treats every row as value-only.
+                pols = np.zeros(
+                    (n_rows, ACTION_VOCAB_SIZE), dtype=_DTYPE_POLICY,
+                )
+                masks = np.zeros(
+                    (n_rows, ACTION_VOCAB_SIZE), dtype=np.bool_,
+                )
+            policy_chunks.append(pols)
+            mask_chunks.append(masks)
+        else:
+            feats, outs = load_dataset(path)
         feature_chunks.append(feats)
         outcome_chunks.append(outs)
+    features_all = np.concatenate(feature_chunks, axis=0)
+    outcomes_all = np.concatenate(outcome_chunks, axis=0)
+    if not include_policy:
+        return features_all, outcomes_all
     return (
-        np.concatenate(feature_chunks, axis=0),
-        np.concatenate(outcome_chunks, axis=0),
+        features_all,
+        outcomes_all,
+        np.concatenate(policy_chunks, axis=0),
+        np.concatenate(mask_chunks, axis=0),
     )
