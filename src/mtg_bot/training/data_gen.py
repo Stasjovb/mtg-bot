@@ -108,6 +108,13 @@ class ReplayCaptureConfig:
     nn_weights_path: Optional[str] = None
     nn_version_label: Optional[str] = None
     filename_prefix: str = "game"
+    # Architecture overrides for the NN annotator. Required when the
+    # captured run uses anything other than the legacy default trunk
+    # shape (modern iterate runs all do — v6 is 1024-1024-512). Stored
+    # as tuple so the dataclass stays frozen + picklable across the
+    # multiprocessing boundary.
+    nn_hidden_sizes: Optional[tuple[int, ...]] = None
+    nn_with_policy: bool = False
 
     def should_capture(self, game_idx: int) -> bool:
         return game_idx % self.capture_every == 0
@@ -123,6 +130,8 @@ class ReplayCaptureConfig:
             annotators.append(nn_eval_annotator(
                 Path(self.nn_weights_path),
                 version_label=self.nn_version_label,
+                hidden_sizes=self.nn_hidden_sizes,
+                with_policy=self.nn_with_policy,
             ))
         return ReplayRecorder(annotators=annotators)
 
