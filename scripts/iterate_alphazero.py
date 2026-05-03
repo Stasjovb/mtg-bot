@@ -79,6 +79,9 @@ from mtg_bot.training import (  # noqa: E402
     generate_training_data_parallel,
     save_dataset,
 )
+from mtg_bot.training._iterate_helpers import (  # noqa: E402
+    find_foreign_npzs,
+)
 from mtg_bot.training.data_gen import ReplayCaptureConfig  # noqa: E402
 from mtg_bot.training.self_play import run_match_parallel  # noqa: E402
 
@@ -457,8 +460,17 @@ def main() -> None:
         ),
     )
     parser.add_argument(
-        "--data-dir", type=Path, default=Path("training_data"),
-        help="Where self-play .npz files land (default training_data/).",
+        "--data-dir", type=Path, default=Path("iterate_data"),
+        help=(
+            "Where self-play .npz files land AND the dir passed to "
+            "train_nn.py for its glob (default iterate_data/). The "
+            "default is dedicated to iterate so train_nn.py won't "
+            "co-glob stale debug npzs that happen to be in "
+            "training_data/ (today's bug — gen0_smoke.npz had 603 "
+            "leaky rows that exploded v7's policy CE). Pass an "
+            "explicit path if you want to share a dir; just confirm "
+            "no foreign npzs are present."
+        ),
     )
     parser.add_argument(
         "--registry-root", type=Path,
@@ -571,6 +583,22 @@ def main() -> None:
 
     args.data_dir.mkdir(parents=True, exist_ok=True)
     args.registry_root.mkdir(parents=True, exist_ok=True)
+
+    # Defense-in-depth: scan the data dir for foreign npzs that don't
+    # match the iter_*.npz pattern. train_nn.py globs everything in
+    # the dir, so a stale debug npz here will get mixed into training
+    # — that's how today's policy-CE explosion happened (gen0_smoke.npz
+    # in training_data/ leaked 603 mask-mismatched rows into v7).
+    foreign_npzs = find_foreign_npzs(args.data_dir)
+    if foreign_npzs:
+        sys.exit(
+            f"[iterate] {args.data_dir} contains {len(foreign_npzs)} "
+            f"non-iter .npz file(s): {foreign_npzs[:10]}"
+            f"{' ...' if len(foreign_npzs) > 10 else ''}\n"
+            f"train_nn.py would glob these into the training mix and "
+            f"potentially corrupt the policy head. Move them out (or "
+            f"point --data-dir at a dedicated iterate dir) and retry."
+        )
 
     deck_pool: list[Deck] | None = None
     if args.deck_pool is not None:
