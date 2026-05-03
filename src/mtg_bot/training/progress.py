@@ -129,6 +129,7 @@ class DataGenProgress:
     _p0_wins: int = field(default=0, init=False)
     _p1_wins: int = field(default=0, init=False)
     _draws: int = field(default=0, init=False)
+    _crashed: int = field(default=0, init=False)
     _status: str = field(default="running", init=False)
     _begun: bool = field(default=False, init=False)
 
@@ -155,22 +156,40 @@ class DataGenProgress:
     def record_game(
         self,
         *,
-        n_samples: int,
-        outcome_p0: float,
+        n_samples: int = 0,
+        outcome_p0: float = 0.0,
+        crashed: bool = False,
     ) -> None:
         """Account one finished game. ``outcome_p0`` is the +1 / -1 /
         0 outcome from p0's perspective (the value the trainer learns
         on for viewer 0). Anything > 0.5 → p0 win, < -0.5 → p1 win,
         else draw; the threshold avoids float-equality fragility for
-        the +1/0/-1 case."""
+        the +1/0/-1 case.
+
+        Pass ``crashed=True`` for games dropped by the worker-crash /
+        per-game-timeout sentinel handler (see
+        ``data_gen._play_one_parallel_game``). Crashed games increment
+        the ``crashed`` counter instead of polluting wins / draws —
+        that keeps the live UI's draws number honest by excluding
+        games that never reached a clean conclusion. They DO still
+        count toward ``n_games_done`` so the progress bar advances.
+        Mirror of the ``EvalProgress.record_game`` shape; same fix as
+        feature/drop-crashed-games (962d58b) but for the data-gen
+        side. ``n_samples`` and ``outcome_p0`` are ignored when
+        crashed=True (caller will pass 0/0.0 anyway since the chunk
+        is empty).
+        """
         self._games_done += 1
-        self._samples += int(n_samples)
-        if outcome_p0 > 0.5:
-            self._p0_wins += 1
-        elif outcome_p0 < -0.5:
-            self._p1_wins += 1
+        if crashed:
+            self._crashed += 1
         else:
-            self._draws += 1
+            self._samples += int(n_samples)
+            if outcome_p0 > 0.5:
+                self._p0_wins += 1
+            elif outcome_p0 < -0.5:
+                self._p1_wins += 1
+            else:
+                self._draws += 1
         # Lazy first-snapshot — caller may not have called begin().
         if not self._begun:
             self.begin()
@@ -226,6 +245,7 @@ class DataGenProgress:
             "p0_wins": int(self._p0_wins),
             "p1_wins": int(self._p1_wins),
             "draws": int(self._draws),
+            "crashed": int(self._crashed),
             "elapsed_seconds": float(elapsed),
             "estimated_remaining_seconds": float(eta),
             "per_game_seconds_avg": float(avg),

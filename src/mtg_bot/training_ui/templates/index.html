@@ -227,6 +227,7 @@ function ensureCard(run) {
         <div class="stat"><div class="stat-label">Games / hr</div><div class="stat-value" data-field="gph">—</div></div>
         <div class="stat"><div class="stat-label">Samples / hr</div><div class="stat-value" data-field="sph">—</div></div>
         <div class="stat"><div class="stat-label">P0 / P1 / draws</div><div class="stat-value" data-field="winrate">—</div></div>
+        <div class="stat"><div class="stat-label">Crashed</div><div class="stat-value" data-field="crashed">—</div></div>
       </div>
       <div class="replays-footer" data-field="replays"></div>`;
   } else if (k === 'eval') {
@@ -324,6 +325,8 @@ function fillRun(el, run) {
     el.querySelector('[data-field="sph"]').textContent = fmtNum(run.samples_per_hour, 0);
     el.querySelector('[data-field="winrate"]').textContent =
       (run.p0_wins || 0) + ' / ' + (run.p1_wins || 0) + ' / ' + (run.draws || 0);
+    el.querySelector('[data-field="crashed"]').textContent =
+      String(run.crashed || 0);
     renderReplaysFooter(el, run);
   } else if (k === 'eval') {
     const total = run.n_games_total || 0;

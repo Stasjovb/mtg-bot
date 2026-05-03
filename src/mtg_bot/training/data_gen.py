@@ -191,6 +191,7 @@ def generate_training_data(
     progress: Optional[DataGenProgress] = None,
     enable_mulligans: bool = False,
     per_game_timeout_sec: Optional[float] = None,
+    hang_dump_dir: Optional[str] = None,
 ) -> tuple[np.ndarray, ...]:
     """Play ``n_games`` and return training arrays.
 
@@ -231,6 +232,7 @@ def generate_training_data(
             deck_pool=deck_pool,
             enable_mulligans=enable_mulligans,
             per_game_timeout_sec=per_game_timeout_sec,
+            hang_dump_dir=hang_dump_dir,
         )
         chunks.append(chunk)
         if progress is not None:
@@ -258,6 +260,7 @@ def generate_training_data_parallel(
     progress: Optional[DataGenProgress] = None,
     enable_mulligans: bool = False,
     per_game_timeout_sec: Optional[float] = None,
+    hang_dump_dir: Optional[str] = None,
 ) -> tuple[np.ndarray, ...]:
     """Same contract as ``generate_training_data`` but distributes
     games across a ``multiprocessing.Pool``. Same ``with_policy``
@@ -297,7 +300,7 @@ def generate_training_data_parallel(
         (
             i, p0_factory, p1_factory, base_seed,
             decision_cap, sample_every, replay_config, deck_pool,
-            enable_mulligans, per_game_timeout_sec,
+            enable_mulligans, per_game_timeout_sec, hang_dump_dir,
         )
         for i in range(n_games)
     ]
@@ -321,17 +324,26 @@ def generate_training_data_parallel(
         ):
             indexed.append((game_idx, chunk))
             # ``_play_one_parallel_game`` converts engine-level
-            # crashes into empty chunks (winner=None, 0 samples).
-            # Count them so the driver can surface a loud summary
-            # at the end — a silent partial-skip would mask the
-            # underlying engine bug.
-            if chunk[0].shape[0] == 0 and chunk[4] is None:
+            # crashes AND per-game timeouts into empty chunks
+            # (winner=None, 0 samples). Count them so the driver
+            # can surface a loud summary at the end — a silent
+            # partial-skip would mask the underlying engine bug —
+            # AND so the live progress tracker bucketizes them
+            # under ``crashed`` rather than treating the 0.0
+            # ``outcome_p0`` as a real draw (today's bug).
+            crashed = (
+                chunk[0].shape[0] == 0 and chunk[4] is None
+            )
+            if crashed:
                 crashed_games.append(game_idx)
             if progress is not None:
-                progress.record_game(
-                    n_samples=int(chunk[0].shape[0]),
-                    outcome_p0=_winner_to_p0_outcome(chunk[4]),
-                )
+                if crashed:
+                    progress.record_game(crashed=True)
+                else:
+                    progress.record_game(
+                        n_samples=int(chunk[0].shape[0]),
+                        outcome_p0=_winner_to_p0_outcome(chunk[4]),
+                    )
     if crashed_games:
         import sys
         print(
@@ -376,7 +388,7 @@ def _play_one_parallel_game(
     (
         game_idx, p0_factory, p1_factory, base_seed,
         decision_cap, sample_every, replay_config, deck_pool,
-        enable_mulligans, per_game_timeout_sec,
+        enable_mulligans, per_game_timeout_sec, hang_dump_dir,
     ) = args
     try:
         chunk = _generate_one_game_data(
@@ -388,6 +400,7 @@ def _play_one_parallel_game(
             decision_cap=decision_cap, sample_every=sample_every,
             replay_config=replay_config,
             deck_pool=deck_pool,
+            hang_dump_dir=hang_dump_dir,
         )
     except Exception as exc:  # noqa: BLE001 - intentional broad catch
         import sys
@@ -426,6 +439,7 @@ def _generate_one_game_data(
     deck_pool: Optional[list[Deck]] = None,
     enable_mulligans: bool = False,
     per_game_timeout_sec: Optional[float] = None,
+    hang_dump_dir: Optional[str] = None,
 ) -> _GameChunk:
     """Play one game and return its 4-tuple training arrays.
 
@@ -495,11 +509,37 @@ def _generate_one_game_data(
 
     if per_game_timeout_sec is not None and per_game_timeout_sec > 0:
         from mtg_bot.training._timeout import run_with_timeout
-        winner, samples = run_with_timeout(
-            _play_one_game_recording,
-            (adapter, strategies, rng, decision_cap, sample_every, recorder),
-            per_game_timeout_sec,
-        )
+        try:
+            winner, samples = run_with_timeout(
+                _play_one_game_recording,
+                (adapter, strategies, rng, decision_cap, sample_every, recorder),
+                per_game_timeout_sec,
+            )
+        except TimeoutError as exc:
+            # Drop a structured hang dump before letting the worker-
+            # crash sentinel handler convert this to an empty chunk.
+            # ``hang_dump_dir`` is opt-in (default off) — without it
+            # the timeout still works exactly as before.
+            if hang_dump_dir is not None:
+                from mtg_bot.training._hang_dump import (
+                    dump_hang_diagnostics,
+                )
+                dump_hang_diagnostics(
+                    hang_dump_dir,
+                    base_seed=base_seed,
+                    game_idx=game_idx,
+                    engine_seed=engine_seed,
+                    error_type="TimeoutError",
+                    error_message=str(exc),
+                    extra={
+                        "phase": "data_gen",
+                        "decision_cap": decision_cap,
+                        "sample_every": sample_every,
+                        "enable_mulligans": enable_mulligans,
+                        "per_game_timeout_sec": per_game_timeout_sec,
+                    },
+                )
+            raise
     else:
         winner, samples = _play_one_game_recording(
             adapter, strategies, rng, decision_cap, sample_every,

@@ -69,6 +69,11 @@ training_progress/
 # --save-replays-to. Regenerable; can be huge for long training runs.
 replays/
 
+# Hang diagnostics — meta.json + traceback.txt dumped per per-game
+# timeout event by iterate_alphazero. Useful for debugging the engine
+# hang bug (todo 9c5e3b71) but never something we'd commit.
+debug_hangs/
+
 # 17lands public data + parsed deck cache. The raw CSVs are 100s of
 # MB; the parsed deck JSON is much smaller but still derived data.
 # Regenerable via scripts/fetch_17lands_data.py.

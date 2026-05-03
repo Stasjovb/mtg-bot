@@ -111,6 +111,7 @@ def run_match(
     per_game_timeout_sec: Optional[float] = None,
     deck_pool: Optional[list[Deck]] = None,
     replay_config: Optional[ReplayCaptureConfig] = None,
+    hang_dump_dir: Optional[str] = None,
 ) -> MatchStats:
     """Play ``n_games`` of ``p0_factory`` vs ``p1_factory`` and
     aggregate stats.
@@ -130,7 +131,7 @@ def run_match(
         _play_one_match_game(
             game_idx, p0_factory, p1_factory, base_seed, decision_cap,
             enable_mulligans, per_game_timeout_sec, deck_pool,
-            replay_config,
+            replay_config, hang_dump_dir,
         )
         for game_idx in range(n_games)
     ]
@@ -149,6 +150,7 @@ def run_match_parallel(
     per_game_timeout_sec: Optional[float] = None,
     deck_pool: Optional[list[Deck]] = None,
     replay_config: Optional[ReplayCaptureConfig] = None,
+    hang_dump_dir: Optional[str] = None,
 ) -> MatchStats:
     """Same contract as ``run_match`` but distributes games across a
     ``multiprocessing.Pool``.
@@ -192,7 +194,7 @@ def run_match_parallel(
     args_list = [
         (i, p0_factory, p1_factory, base_seed, decision_cap,
          enable_mulligans, per_game_timeout_sec, deck_pool,
-         replay_config)
+         replay_config, hang_dump_dir)
         for i in range(n_games)
     ]
     if progress is None:
@@ -343,6 +345,7 @@ def _play_one_match_game(
     per_game_timeout_sec: Optional[float] = None,
     deck_pool: Optional[list[Deck]] = None,
     replay_config: Optional[ReplayCaptureConfig] = None,
+    hang_dump_dir: Optional[str] = None,
 ) -> tuple[Optional[PlayerID], int]:
     """Play one game and return ``(winner_or_None, decisions)``.
     Used by both the sequential and parallel match drivers — same
@@ -407,11 +410,36 @@ def _play_one_match_game(
 
     if per_game_timeout_sec is not None and per_game_timeout_sec > 0:
         from mtg_bot.training._timeout import run_with_timeout
-        winner, decisions = run_with_timeout(
-            _play_capped_game,
-            (adapter, strategies, rng, decision_cap, recorder),
-            per_game_timeout_sec,
-        )
+        try:
+            winner, decisions = run_with_timeout(
+                _play_capped_game,
+                (adapter, strategies, rng, decision_cap, recorder),
+                per_game_timeout_sec,
+            )
+        except TimeoutError as exc:
+            # Drop a structured hang dump before the outer worker-
+            # crash sentinel handler converts this to a (None, 0)
+            # tuple. ``hang_dump_dir`` is opt-in; without it the
+            # timeout still works exactly as before.
+            if hang_dump_dir is not None:
+                from mtg_bot.training._hang_dump import (
+                    dump_hang_diagnostics,
+                )
+                dump_hang_diagnostics(
+                    hang_dump_dir,
+                    base_seed=base_seed,
+                    game_idx=game_idx,
+                    engine_seed=engine_seed,
+                    error_type="TimeoutError",
+                    error_message=str(exc),
+                    extra={
+                        "phase": "eval",
+                        "decision_cap": decision_cap,
+                        "enable_mulligans": enable_mulligans,
+                        "per_game_timeout_sec": per_game_timeout_sec,
+                    },
+                )
+            raise
     else:
         winner, decisions = _play_capped_game(
             adapter, strategies, rng, decision_cap, recorder,
