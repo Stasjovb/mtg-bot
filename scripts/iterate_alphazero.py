@@ -68,6 +68,7 @@ if _SRC.is_dir() and str(_SRC) not in sys.path:
 
 import os  # noqa: E402
 
+from mtg_bot.decks import Deck, decks_from_json  # noqa: E402
 from mtg_bot.training import (  # noqa: E402
     DataGenProgress,
     EvalProgress,
@@ -122,6 +123,7 @@ def _self_play(
     hidden_sizes: tuple[int, ...] | None = None,
     progress_path: Path | None = None,
     run_id: str | None = None,
+    deck_pool: list[Deck] | None = None,
 ) -> tuple[int, int, float]:
     """Run one self-play data-gen pass. Returns (n_samples,
     n_policy_rows, elapsed_seconds). Both seats use the same
@@ -177,6 +179,7 @@ def _self_play(
                 enable_mulligans=enable_mulligans,
                 per_game_timeout_sec=per_game_timeout_sec,
                 progress=progress,
+                deck_pool=deck_pool,
             )
         )
     except BaseException:
@@ -292,6 +295,7 @@ def _eval_match(
     progress_path: Path | None = None,
     run_id: str | None = None,
     opponent_label: str = "previous",
+    deck_pool: list[Deck] | None = None,
 ) -> tuple[int, int, int, float]:
     """Head-to-head match: new (seat 0) vs old (seat 1). Returns
     (new_wins, old_wins, draws, elapsed_seconds).
@@ -365,6 +369,7 @@ def _eval_match(
         enable_mulligans=enable_mulligans,
         per_game_timeout_sec=per_game_timeout_sec,
         progress=progress,
+        deck_pool=deck_pool,
     )
     elapsed = time.perf_counter() - started
     return (
@@ -490,10 +495,45 @@ def main() -> None:
             "Pass 0 or negative to disable."
         ),
     )
+    parser.add_argument(
+        "--deck-pool", type=Path, default=None,
+        help=(
+            "Path to a deck-pool JSON (e.g. data/17lands/eoe_decks."
+            "json.gz). When set, every self-play and eval game samples "
+            "two distinct real archetypes from the pool deterministi"
+            "cally per (base_seed, game_idx); both seats use them. "
+            "When omitted, falls back to the legacy mono-color "
+            "synthetic G/R decks — fast and reproducible but the "
+            "resulting policy doesn't transfer to real EOE play. "
+            "Use the pool for any run that's meant to produce a model "
+            "you'd actually deploy."
+        ),
+    )
     args = parser.parse_args()
 
     args.data_dir.mkdir(parents=True, exist_ok=True)
     args.registry_root.mkdir(parents=True, exist_ok=True)
+
+    deck_pool: list[Deck] | None = None
+    if args.deck_pool is not None:
+        if not args.deck_pool.is_file():
+            sys.exit(f"--deck-pool {args.deck_pool} not found")
+        deck_pool = decks_from_json(args.deck_pool)
+        if not deck_pool:
+            sys.exit(
+                f"--deck-pool {args.deck_pool} loaded 0 decks"
+            )
+        avg_size = sum(d.card_count for d in deck_pool) / len(deck_pool)
+        print(
+            f"[iterate] loaded {len(deck_pool)} decks from "
+            f"{args.deck_pool} (avg {avg_size:.1f} cards/deck)"
+        )
+    else:
+        print(
+            "[iterate] --deck-pool not set; using legacy mono-color "
+            "G/R synthetic decks (policy will not transfer to real "
+            "EOE play)"
+        )
 
     registry = Registry(args.registry_root)
     if not registry.has(args.bootstrap_version):
@@ -578,6 +618,7 @@ def main() -> None:
             hidden_sizes=iter_hidden_sizes,
             progress_path=self_play_progress_path,
             run_id=self_play_run_id,
+            deck_pool=deck_pool,
         )
         print(
             f"[iterate]   gen done in {gen_elapsed/60:.1f}m: "
@@ -639,6 +680,7 @@ def main() -> None:
                 progress_path=eval_progress_path,
                 run_id=eval_progress_path.stem,
                 opponent_label=best_version,
+                deck_pool=deck_pool,
             )
             n_decided = wins_new + wins_old
             win_rate = wins_new / n_decided if n_decided else 0.0
