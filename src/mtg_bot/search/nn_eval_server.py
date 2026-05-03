@@ -390,7 +390,10 @@ class NNEvalServer:
             while not self._stop_evt.is_set():
                 try:
                     msg = conn.recv()
-                except (EOFError, OSError, ConnectionError):
+                except (EOFError, OSError, ConnectionError, TypeError):
+                    # TypeError shows up on Windows when the handle is
+                    # closed mid-recv (the C-level read returns None,
+                    # which the multiprocessing layer can't decode).
                     return
                 if not isinstance(msg, tuple) or len(msg) != 3:
                     self._logger.warning(
@@ -492,27 +495,30 @@ class NNEvalServer:
         for req in batch:
             groups.setdefault(req.kind, []).append(req)
 
-        try:
-            for kind, reqs in groups.items():
-                if kind == MSG_KIND_VALUE:
-                    self._run_value(reqs)
-                elif kind == MSG_KIND_VALUE_POLICY:
-                    self._run_value_policy(reqs)
-                elif kind == MSG_KIND_VALUE_BATCH:
-                    self._run_value_batch(reqs)
-                elif kind == MSG_KIND_VALUE_POLICY_BATCH:
-                    self._run_value_policy_batch(reqs)
-                else:
-                    for r in reqs:
-                        self._send(
-                            r.conn, r.conn_lock,
-                            (r.seq, REPLY_ERROR,
-                             f"unknown kind: {kind!r}"),
-                        )
-        finally:
-            self.batches_dispatched += 1
-            self.requests_served += len(batch)
-            self.batch_sizes.append(len(batch))
+        # Telemetry update BEFORE the per-request sends so a client
+        # that's racing the dispatcher (e.g. round-trips fast and
+        # stops the server immediately after the last reply) always
+        # sees consistent counters by the time its reply arrives.
+        self.batches_dispatched += 1
+        self.requests_served += len(batch)
+        self.batch_sizes.append(len(batch))
+
+        for kind, reqs in groups.items():
+            if kind == MSG_KIND_VALUE:
+                self._run_value(reqs)
+            elif kind == MSG_KIND_VALUE_POLICY:
+                self._run_value_policy(reqs)
+            elif kind == MSG_KIND_VALUE_BATCH:
+                self._run_value_batch(reqs)
+            elif kind == MSG_KIND_VALUE_POLICY_BATCH:
+                self._run_value_policy_batch(reqs)
+            else:
+                for r in reqs:
+                    self._send(
+                        r.conn, r.conn_lock,
+                        (r.seq, REPLY_ERROR,
+                         f"unknown kind: {kind!r}"),
+                    )
 
     # ---- per-kind handlers ------------------------------------------------
 
