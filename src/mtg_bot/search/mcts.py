@@ -1,4 +1,4 @@
-"""Monte Carlo Tree Search with UCB1 selection, chance-node sampling,
+"""Monte Carlo Tree Search with UCB1/PUCT selection, chance-node sampling,
 and evaluator-at-leaf.
 
 Scope: two-player zero-sum games. Chance nodes are expanded but not
@@ -19,8 +19,12 @@ Injectable pieces:
   prior-driven policy for large action spaces).
 - ``budget_factory``   — time or node cap per ``choose()`` call.
 
-Selection (UCB1) and backprop are still hardcoded here; extract to
-their own policies if and when we need alternates (PUCT, RAVE, etc.).
+Selection: UCB1 by default (``puct=False``), or AlphaZero-style PUCT
+with a network-supplied policy prior (``puct=True``). PUCT requires an
+evaluator that implements ``evaluate_with_policy(state, player_id) ->
+(value, policy_array)``; ``NNEvaluator(with_policy=True)`` is the
+intended source. UCB1 stays bit-exact with the pre-PUCT MCTS so old
+benchmarks and tests don't drift.
 """
 
 from __future__ import annotations
@@ -28,6 +32,8 @@ from __future__ import annotations
 import math
 import random
 from typing import Iterator, Optional
+
+import numpy as np
 
 from mtg_bot.search.budget import Budget
 from mtg_bot.search.evaluator import Evaluator
@@ -63,6 +69,7 @@ class _Node:
     __slots__ = (
         "state", "parent", "decision", "children",
         "pending_decisions", "visits", "total_value", "virtual_loss",
+        "prior", "_policy_cache",
     )
 
     def __init__(
@@ -96,6 +103,24 @@ class _Node:
         # equal real stats, and behavior is bit-exact with the
         # pre-batched MCTS.
         self.virtual_loss: int = 0
+        # PUCT prior P(s, a): the network's predicted probability that
+        # ``self.decision`` is the best move at the parent. Used by
+        # ``puct_score``; unused under UCB1. Populated by
+        # ``MCTS._make_child`` when ``puct=True`` from the parent's
+        # cached policy distribution. 0.0 is the safe default — under
+        # UCB1 it's never read, and under PUCT a child whose decision
+        # somehow can't be encoded falls through to the small constant
+        # exploration the formula provides at large parent-visit
+        # counts (better than crashing mid-search).
+        self.prior: float = 0.0
+        # Cached policy distribution from
+        # ``evaluator.evaluate_with_policy(state, root_player)``. Stays
+        # ``None`` under UCB1; populated lazily in PUCT mode the first
+        # time the node either gets expanded or evaluated as a leaf
+        # (whichever happens first). Reused across all subsequent child
+        # expansions from this node so the network sees one forward pass
+        # per node, not one per child.
+        self._policy_cache: Optional[np.ndarray] = None
 
     def is_leaf(self) -> bool:
         return self.state.is_terminal()
@@ -110,6 +135,30 @@ class _Node:
             return math.inf
         exploit = (self.total_value - self.virtual_loss) / n
         explore = c * math.sqrt(math.log(parent_visits) / n)
+        return exploit + explore
+
+    def puct_score(self, parent_visits: int, c: float) -> float:
+        """AlphaZero-style PUCT score:
+
+            Q + c · P(s,a) · √N_parent / (1 + N_child)
+
+        where ``Q`` is the running mean value (from the parent's
+        perspective, matching ``ucb1``), ``P(s,a)`` is this child's
+        prior from the parent's cached policy, and the +1 in the
+        denominator keeps the formula finite when ``N_child == 0``.
+
+        At ``N_child == 0`` the exploit term is undefined (no value
+        backed up yet); we fall through to pure-prior exploration:
+        ``c · P · √N_parent`` (which is exactly the explore term with
+        ``1 + N_child = 1``). Differs from UCB1 here, where unvisited
+        children return ``+inf`` to force-pick first. PUCT *wants* to
+        weight unvisited children by prior — that's the whole point.
+        """
+        n = self.visits + self.virtual_loss
+        explore = c * self.prior * math.sqrt(parent_visits) / (1 + n)
+        if n == 0:
+            return explore
+        exploit = (self.total_value - self.virtual_loss) / n
         return exploit + explore
 
 
@@ -129,6 +178,7 @@ class MCTS(SearchStrategy):
         exploration_c: float = math.sqrt(2),
         expansion_policy: Optional[ExpansionPolicy] = None,
         batch_size: int = 1,
+        puct: bool = False,
     ) -> None:
         """
         ``evaluator`` scores leaves from ``player_id``'s perspective
@@ -138,7 +188,11 @@ class MCTS(SearchStrategy):
         ``Budget`` — one per ``choose`` call.
 
         ``exploration_c`` is UCB1's exploration constant. ``√2`` is
-        the theoretical default for values in ``[-1, 1]``.
+        the theoretical default for values in ``[-1, 1]``. Under PUCT
+        the same constant scales the prior-weighted explore term;
+        AlphaZero's published value is ~1.25–4. ``√2`` is fine as a
+        starting point and lets a single MCTS share the constant
+        across the two selection rules.
 
         ``expansion_policy`` controls tree growth. Defaults to
         ``FullEnumeration`` — preserves classic MCTS behavior.
@@ -159,11 +213,48 @@ class MCTS(SearchStrategy):
         because Python↔C overhead amortizes across the batch.
         Heuristic and rollout evaluators see no win from batching
         and should leave ``batch_size=1``.
+
+        ``puct`` switches selection from UCB1 to AlphaZero PUCT:
+        ``Q + c · P(s,a) · √N_parent / (1 + N_child)`` where
+        ``P(s,a)`` is the network's policy at the parent. Requires
+        an evaluator that exposes ``evaluate_with_policy(state,
+        player_id) -> (value, np.ndarray)``; we validate that here
+        rather than waiting for the first search call to fail.
+        ``puct=False`` (default) preserves the classic UCB1 path
+        bit-exact — same selection, same backprop, same
+        deterministic outcome under a seeded RNG.
+
+        Combination ``puct=True`` + ``batch_size > 1`` is currently
+        unsupported. The serial path's per-leaf evaluation makes it
+        natural to thread (value, policy) through together; the
+        batched path would need ``batch_evaluate_with_policy`` and
+        a per-leaf policy-cache install in the same loop. The
+        evaluator already exposes a batched-with-policy entry point
+        — it's the MCTS-side plumbing that's not yet there. Raise
+        loudly so a caller asking for both gets a clear failure
+        rather than silent UCB1.
         """
         if batch_size < 1:
             raise ValueError(
                 f"batch_size must be >= 1, got {batch_size!r}"
             )
+        if puct:
+            # Construction-time validation: PUCT needs a policy head.
+            # ``NNEvaluator(with_policy=True)`` is the canonical
+            # source; anything else must duck-type the same method.
+            policy_fn = getattr(evaluator, "evaluate_with_policy", None)
+            if not callable(policy_fn):
+                raise ValueError(
+                    "puct=True requires an evaluator with "
+                    "evaluate_with_policy(state, player_id); got "
+                    f"{type(evaluator).__name__} which does not."
+                )
+            if batch_size > 1:
+                raise ValueError(
+                    "puct=True + batch_size>1 is not currently "
+                    "supported. Use batch_size=1 with puct=True, or "
+                    "puct=False with batch_size>1."
+                )
         self.evaluator = evaluator
         self.budget_factory = budget_factory
         self.rng = rng or random.Random()
@@ -173,6 +264,7 @@ class MCTS(SearchStrategy):
             else FullEnumeration()
         )
         self.batch_size = batch_size
+        self.puct = puct
 
     def choose(
         self, state: GameState, player_id: PlayerID
@@ -234,9 +326,14 @@ class MCTS(SearchStrategy):
     ) -> None:
         """Today's iteration loop, factored out for symmetry with
         ``_search_batched``. Bit-exact with the pre-batching MCTS
-        — no virtual loss is applied along the way."""
+        — no virtual loss is applied along the way.
+
+        ``player_id`` is also the *root player* in PUCT mode and gets
+        threaded down to ``_select_and_expand`` / ``_evaluate_leaf``
+        so the policy head sees the search from the same viewer
+        perspective at every node."""
         while not budget.exhausted():
-            leaf = self._select_and_expand(root)
+            leaf = self._select_and_expand(root, player_id)
             value = self._evaluate_leaf(leaf, player_id)
             self._backprop(leaf, value, player_id)
             budget.consume_node()
@@ -262,7 +359,7 @@ class MCTS(SearchStrategy):
             for _ in range(batch_size):
                 if budget.exhausted():
                     break
-                leaf = self._select_and_expand(root)
+                leaf = self._select_and_expand(root, player_id)
                 budget.consume_node()
                 if leaf.is_leaf():
                     # Terminal — evaluator short-circuits to ±1/0
@@ -294,7 +391,9 @@ class MCTS(SearchStrategy):
     # Internals
     # ------------------------------------------------------------------
 
-    def _select_and_expand(self, root: _Node) -> _Node:
+    def _select_and_expand(
+        self, root: _Node, root_player: PlayerID,
+    ) -> _Node:
         """Walk down the tree until we find a node to score.
 
         - At chance nodes, sample an outcome by its probability and
@@ -302,16 +401,23 @@ class MCTS(SearchStrategy):
         - At real-player nodes, ask the ``ExpansionPolicy`` whether
           to add a new child. If yes and the pending-iterator has
           more decisions, expand and return the new child.
-        - Otherwise, descend into the UCB1-best existing child.
+        - Otherwise, descend into the UCB1-best existing child
+          (or PUCT-best when ``self.puct``).
         - At terminals, return as-is.
+
+        ``root_player`` flows through to ``_make_child`` so PUCT
+        priors are computed from the root viewer's perspective
+        regardless of whose turn it is at the descent node — the
+        policy head's "what does it think *I* should do" is more
+        useful than per-active-player priors that flip every node.
         """
         node = root
         while not node.is_leaf():
             if node.state.active_player() == CHANCE_PLAYER:
-                node = self._descend_chance(node)
+                node = self._descend_chance(node, root_player)
                 continue
 
-            expanded = self._try_expand(node)
+            expanded = self._try_expand(node, root_player)
             if expanded is not None:
                 return expanded
 
@@ -323,19 +429,30 @@ class MCTS(SearchStrategy):
                 # ProgressiveWidening could get here if it caps
                 # children at 0.)
                 return node
-            # Fully widened (per policy) — UCB1 descent. Parent
-            # visits is the augmented count (real + virtual_loss) so
-            # the exploration term reflects pending in-flight
-            # evaluations during batched search; identical to today
-            # when virtual_loss is zero everywhere.
+            # Fully widened (per policy) — UCB1 / PUCT descent.
+            # Parent visits is the augmented count (real +
+            # virtual_loss) so the exploration term reflects
+            # pending in-flight evaluations during batched search;
+            # identical to today when virtual_loss is zero
+            # everywhere.
             parent_n = node.visits + node.virtual_loss
-            node = max(
-                node.children,
-                key=lambda c: c.ucb1(parent_n, self.exploration_c),
-            )
+            if self.puct:
+                node = max(
+                    node.children,
+                    key=lambda c: c.puct_score(
+                        parent_n, self.exploration_c,
+                    ),
+                )
+            else:
+                node = max(
+                    node.children,
+                    key=lambda c: c.ucb1(parent_n, self.exploration_c),
+                )
         return node
 
-    def _try_expand(self, node: _Node) -> Optional[_Node]:
+    def _try_expand(
+        self, node: _Node, root_player: PlayerID,
+    ) -> Optional[_Node]:
         """If the policy permits and the pending iterator has more,
         expand a new child and return it. Otherwise return None."""
         if not self.expansion_policy.should_expand(node):
@@ -344,12 +461,30 @@ class MCTS(SearchStrategy):
             decision = next(node.pending_decisions)
         except StopIteration:
             return None
-        return self._make_child(node, decision)
+        return self._make_child(node, decision, root_player)
 
-    def _make_child(self, parent: _Node, decision: Decision) -> _Node:
+    def _make_child(
+        self,
+        parent: _Node,
+        decision: Decision,
+        root_player: PlayerID,
+    ) -> _Node:
         """Build and attach a new child for ``decision`` at
         ``parent``. The child's pending-decisions iterator is
-        freshly built from the expansion policy."""
+        freshly built from the expansion policy.
+
+        Under PUCT, also stamp the child's ``prior`` from the
+        parent's cached policy distribution (computing the
+        distribution on first call). Encoding errors are tolerated:
+        an unencodable decision (an action-vocab gap or a decision
+        that legality enumerated but the codec doesn't know how to
+        place) leaves ``prior=0.0``, which means PUCT treats it as
+        no-prior — explore by visit-count alone. That's a soft
+        failure rather than a crash because legality and
+        encodability can drift slightly under engine evolution and
+        we'd rather lose a little selection signal than abort the
+        search.
+        """
         child_state = parent.state.clone()
         child_state.apply(decision)
         pending = (
@@ -362,10 +497,44 @@ class MCTS(SearchStrategy):
             decision=decision,
             pending_decisions=pending,
         )
+        if self.puct:
+            self._stamp_prior(parent, child, decision, root_player)
         parent.children.append(child)
         return child
 
-    def _descend_chance(self, node: _Node) -> _Node:
+    def _stamp_prior(
+        self,
+        parent: _Node,
+        child: _Node,
+        decision: Decision,
+        root_player: PlayerID,
+    ) -> None:
+        """Set ``child.prior`` from ``parent._policy_cache[encode(d)]``,
+        populating the cache on first call.
+
+        Lazy-imported codec because ``mtg_bot.training`` pulls in
+        ``mtg_bot.search`` at package init — importing at module load
+        would create a cycle. By the time any search runs the cycle
+        has resolved.
+        """
+        if parent._policy_cache is None:
+            _, policy = self.evaluator.evaluate_with_policy(
+                parent.state, root_player,
+            )
+            parent._policy_cache = policy
+        from mtg_bot.training import action_encoding as ae
+        eng = getattr(parent.state, "engine_state", parent.state)
+        try:
+            slot = ae.encode(decision, eng, root_player)
+        except ae.EncodingOverflowError:
+            # Decision didn't fit in the fixed vocab. Leave prior 0;
+            # PUCT will explore by visit-count alone for this child.
+            return
+        child.prior = float(parent._policy_cache[slot])
+
+    def _descend_chance(
+        self, node: _Node, root_player: PlayerID,
+    ) -> _Node:
         """Sample a chance outcome, either picking the existing
         child for that outcome or creating one."""
         outcomes = node.state.chance_outcomes()
@@ -376,14 +545,36 @@ class MCTS(SearchStrategy):
             if child.decision == decision:
                 return child
         # First time we sampled this outcome — create the child.
-        return self._make_child(node, decision)
+        # Chance nodes don't have a meaningful policy prior (they
+        # aren't a real player's choice), so PUCT priors at chance
+        # children stay 0.0. They never get UCB-selected anyway —
+        # they're sampled by weight.
+        return self._make_child(node, decision, root_player)
 
     def _evaluate_leaf(
         self, leaf: _Node, root_player: PlayerID
     ) -> float:
         """Return the leaf's value from ``root_player``'s perspective,
         in ``[-1, 1]``. The evaluator handles terminal vs non-terminal
-        internally."""
+        internally.
+
+        Under PUCT we route through ``evaluate_with_policy`` so the
+        single forward pass produces both heads at once; the policy
+        gets cached on the leaf for any future expansion from this
+        node, avoiding a second forward pass when the leaf later
+        becomes an interior node. Terminal leaves still go through
+        the value-only path because the policy head is undefined
+        there (no legal action; ``evaluate_with_policy`` returns the
+        all-zeros vector for terminals, which we don't bother
+        caching — a terminal never gets expanded).
+        """
+        if self.puct and not leaf.is_leaf():
+            value, policy = self.evaluator.evaluate_with_policy(
+                leaf.state, root_player,
+            )
+            if leaf._policy_cache is None:
+                leaf._policy_cache = policy
+            return value
         return self.evaluator.evaluate(leaf.state, root_player)
 
     def _backprop(

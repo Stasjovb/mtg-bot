@@ -251,7 +251,7 @@ def test_mcts_progressive_widening_grows_narrower_tree_than_full():
     budget = Budget(max_nodes=15)
     budget.start()
     while not budget.exhausted():
-        leaf = full_mcts._select_and_expand(full_root)
+        leaf = full_mcts._select_and_expand(full_root, 0)
         val = full_mcts._evaluate_leaf(leaf, 0)
         full_mcts._backprop(leaf, val, 0)
         budget.consume_node()
@@ -259,7 +259,7 @@ def test_mcts_progressive_widening_grows_narrower_tree_than_full():
     budget = Budget(max_nodes=15)
     budget.start()
     while not budget.exhausted():
-        leaf = narrow_mcts._select_and_expand(narrow_root)
+        leaf = narrow_mcts._select_and_expand(narrow_root, 0)
         val = narrow_mcts._evaluate_leaf(leaf, 0)
         narrow_mcts._backprop(leaf, val, 0)
         budget.consume_node()
