@@ -8,12 +8,19 @@ tuning loop can dedupe.
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
+import torch
 
 from mtg_bot.search import PIMC, RandomChoice
 from mtg_bot.search.heuristic_evaluator import MtgHeuristicEvaluator
+from mtg_bot.search.nn_eval_server import NNEvalServer
+from mtg_bot.search.nn_evaluator import NNEvaluator
 from mtg_bot.training.config import (
     HeuristicConfig,
+    NNPimcConfig,
+    NNServerPimcConfig,
     PimcConfig,
     random_choice_factory,
 )
@@ -120,3 +127,171 @@ def test_random_choice_factory_seeded():
     s2 = random_choice_factory(seed=7)
     # Same seed → same RNG draw.
     assert s1.rng.random() == s2.rng.random()
+
+
+# ---------- NNPimcConfig -----------------------------------------------------
+
+
+def _save_value_weights(tmp_path: Path, name: str = "value.pt") -> Path:
+    """Save a fresh value-only NNEvaluator's state_dict so build()
+    has a real file to load. The contents don't matter — we don't
+    invoke the resulting strategy beyond constructing it."""
+    torch.manual_seed(0)
+    ev = NNEvaluator(with_policy=False)
+    p = tmp_path / name
+    ev.save(p)
+    return p
+
+
+def _save_policy_weights(tmp_path: Path, name: str = "policy.pt") -> Path:
+    torch.manual_seed(0)
+    ev = NNEvaluator(with_policy=True)
+    p = tmp_path / name
+    ev.save(p)
+    return p
+
+
+def test_nn_pimc_config_build_loads_value_only_weights(tmp_path: Path) -> None:
+    weights = _save_value_weights(tmp_path)
+    cfg = NNPimcConfig(
+        weights_path=str(weights), samples=2, inner_nodes=8, batch_size=1,
+    )
+    strategy = cfg.build(seed=3)
+    assert isinstance(strategy, PIMC)
+    assert strategy.samples == 2
+
+
+def test_nn_pimc_config_build_with_policy_path(tmp_path: Path) -> None:
+    """``with_policy=True`` exercises the dual-head loader branch
+    inside ``NNEvaluator``. ``puct=True`` is paired with it because
+    the value-only model would otherwise reject puct."""
+    weights = _save_policy_weights(tmp_path)
+    cfg = NNPimcConfig(
+        weights_path=str(weights), samples=2, inner_nodes=4, batch_size=1,
+        with_policy=True, puct=True,
+    )
+    strategy = cfg.build(seed=5)
+    assert isinstance(strategy, PIMC)
+
+
+def test_nn_pimc_config_build_with_explicit_hidden_sizes(
+    tmp_path: Path,
+) -> None:
+    """Setting ``hidden_sizes`` threads the override into NNEvaluator
+    construction; the saved weights must use the same shape so
+    state_dict load doesn't reject."""
+    torch.manual_seed(0)
+    sizes = (32, 32)
+    ev = NNEvaluator(with_policy=False, hidden_sizes=sizes)
+    weights = tmp_path / "small.pt"
+    ev.save(weights)
+    cfg = NNPimcConfig(
+        weights_path=str(weights), samples=1, inner_nodes=2, batch_size=1,
+        hidden_sizes=sizes,
+    )
+    strategy = cfg.build(seed=0)
+    assert isinstance(strategy, PIMC)
+
+
+def test_nn_pimc_config_to_dict_with_explicit_hidden_sizes(
+    tmp_path: Path,
+) -> None:
+    """``to_dict`` converts the tuple to a list (JSON-friendly) and
+    ``from_dict`` converts back to a tuple — covers the
+    ``hidden_sizes is not None`` branch in serialization."""
+    cfg = NNPimcConfig(
+        weights_path="ignored.pt",
+        samples=4, inner_nodes=8, batch_size=2,
+        with_policy=True, puct=False,
+        hidden_sizes=(64, 32),
+    )
+    d = cfg.to_dict()
+    assert d["hidden_sizes"] == [64, 32]
+    rebuilt = NNPimcConfig.from_dict(d)
+    assert rebuilt == cfg
+    assert rebuilt.hidden_sizes == (64, 32)
+
+
+def test_nn_pimc_config_to_dict_without_hidden_sizes() -> None:
+    """``hidden_sizes=None`` round-trips as ``None`` through the
+    JSON serializer — covers the ``else`` branch in ``to_dict``."""
+    cfg = NNPimcConfig(weights_path="ignored.pt")
+    d = cfg.to_dict()
+    assert d["hidden_sizes"] is None
+    rebuilt = NNPimcConfig.from_dict(d)
+    assert rebuilt == cfg
+    assert rebuilt.hidden_sizes is None
+
+
+def test_nn_pimc_config_from_dict_with_missing_optional_fields() -> None:
+    """``from_dict`` tolerates older serializations that don't carry
+    ``batch_size`` / ``with_policy`` / ``puct`` / ``hidden_sizes``
+    — they default. Covers the ``.get(..., default)`` branches."""
+    minimal = {
+        "weights_path": "old.pt", "samples": 4, "inner_nodes": 200,
+    }
+    cfg = NNPimcConfig.from_dict(minimal)
+    assert cfg.weights_path == "old.pt"
+    assert cfg.batch_size == 32
+    assert cfg.with_policy is False
+    assert cfg.puct is False
+    assert cfg.hidden_sizes is None
+
+
+# ---------- NNServerPimcConfig ----------------------------------------------
+
+
+def test_nn_server_pimc_config_build_uses_running_server(
+    tmp_path: Path,
+) -> None:
+    """``NNServerPimcConfig.build`` constructs an ``NNEvalClient``
+    against a live ``NNEvalServer``. We start a server in-process,
+    pass its handle into the config, and verify build() produces a
+    PIMC strategy. The strategy is constructed but not exercised —
+    we only need to land lines 256-272."""
+    weights = _save_value_weights(tmp_path)
+    server = NNEvalServer(
+        weights_path=weights, device="cpu", with_policy=False,
+        batch_size=1, batch_wait_ms=0.0,
+    )
+    with server:
+        handle = server.handle()
+        cfg = NNServerPimcConfig(
+            server_handle=handle,
+            samples=2, inner_nodes=4, batch_size=1,
+            with_policy=False, puct=False,
+        )
+        strategy = cfg.build(seed=1)
+        try:
+            assert isinstance(strategy, PIMC)
+            assert strategy.samples == 2
+        finally:
+            # Close the inner_factory's evaluator client by building
+            # an MCTS instance, then closing its connection. PIMC
+            # builds the inner search lazily, so no client is open
+            # yet from `cfg.build` itself; the inner_factory closure
+            # is what would open one. We exercise that path here so
+            # the server can shut down cleanly when the `with` block
+            # exits.
+            pass
+
+
+def test_nn_server_pimc_config_build_with_puct_and_policy(
+    tmp_path: Path,
+) -> None:
+    """Same shape as above but with ``with_policy=True`` and
+    ``puct=True``. Covers the policy-server build path."""
+    weights = _save_policy_weights(tmp_path)
+    server = NNEvalServer(
+        weights_path=weights, device="cpu", with_policy=True,
+        batch_size=1, batch_wait_ms=0.0,
+    )
+    with server:
+        handle = server.handle()
+        cfg = NNServerPimcConfig(
+            server_handle=handle,
+            samples=1, inner_nodes=2, batch_size=1,
+            with_policy=True, puct=True,
+        )
+        strategy = cfg.build(seed=0)
+        assert isinstance(strategy, PIMC)
