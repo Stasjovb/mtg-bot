@@ -55,7 +55,7 @@ def test_index_returns_html_page(client):
     body = res.get_data(as_text=True)
     # Sanity-check key DOM hooks the JS depends on.
     assert "<html" in body.lower()
-    assert 'id="latest"' in body
+    assert 'id="active"' in body
     assert 'id="older"' in body
     assert 'id="refresh-indicator"' in body
     # Pulls Chart.js from CDN (no Python-side dep).

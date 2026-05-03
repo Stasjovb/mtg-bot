@@ -54,12 +54,22 @@ from mtg_bot.search.engine_adapter import MtgGameStateAdapter
 from mtg_bot.search.protocol import CHANCE_PLAYER, PlayerID
 from mtg_bot.simulate import setup_game
 from mtg_bot.training.config import StrategyFactory
+from mtg_bot.training.progress import DataGenProgress
 from mtg_bot.training.replay_capture import (
     ReplayRecorder, heuristic_eval_annotator, nn_eval_annotator,
 )
 
 
 _DEFAULT_DECISION_CAP = 4000
+
+# Type alias: per-game chunk + winner. Winner is the PlayerID of the
+# game's victor or None for a draw; the tracker uses it to compute
+# the live winrate without having to re-parse the outcomes array
+# (which holds per-viewer signs that look symmetric).
+_GameChunk = tuple[
+    np.ndarray, np.ndarray, np.ndarray, np.ndarray,
+    Optional[PlayerID],
+]
 
 _DTYPE_FEATURES = np.float32
 _DTYPE_OUTCOMES = np.float32
@@ -168,6 +178,7 @@ def generate_training_data(
     replay_config: Optional[ReplayCaptureConfig] = None,
     deck_pool: Optional[list[Deck]] = None,
     with_policy: bool = False,
+    progress: Optional[DataGenProgress] = None,
 ) -> tuple[np.ndarray, ...]:
     """Play ``n_games`` and return training arrays.
 
@@ -195,8 +206,11 @@ def generate_training_data(
     arrays. Trainer code should detect "no policy supervision" via
     ``policy_targets.sum(-1) > 0.5`` per row.
     """
-    chunks = [
-        _generate_one_game_data(
+    if progress is not None:
+        progress.begin()
+    chunks: list[_GameChunk] = []
+    for i in range(n_games):
+        chunk = _generate_one_game_data(
             game_idx=i,
             p0_factory=p0_factory, p1_factory=p1_factory,
             base_seed=base_seed,
@@ -204,9 +218,13 @@ def generate_training_data(
             replay_config=replay_config,
             deck_pool=deck_pool,
         )
-        for i in range(n_games)
-    ]
-    f, o, p, m = _concat_chunks(chunks)
+        chunks.append(chunk)
+        if progress is not None:
+            progress.record_game(
+                n_samples=int(chunk[0].shape[0]),
+                outcome_p0=_winner_to_p0_outcome(chunk[4]),
+            )
+    f, o, p, m = _concat_chunks([c[:4] for c in chunks])
     if with_policy:
         return f, o, p, m
     return f, o
@@ -223,6 +241,7 @@ def generate_training_data_parallel(
     replay_config: Optional[ReplayCaptureConfig] = None,
     deck_pool: Optional[list[Deck]] = None,
     with_policy: bool = False,
+    progress: Optional[DataGenProgress] = None,
 ) -> tuple[np.ndarray, ...]:
     """Same contract as ``generate_training_data`` but distributes
     games across a ``multiprocessing.Pool``. Same ``with_policy``
@@ -231,8 +250,11 @@ def generate_training_data_parallel(
     Identical output to the sequential function for the same
     ``base_seed`` — per-game seeds are derived from ``game_idx``, not
     worker assignment, so the same game produces the same samples
-    no matter which worker plays it. ``Pool.map`` preserves input
-    order so concatenation is deterministic too.
+    no matter which worker plays it. We use ``imap_unordered`` so
+    the live progress tracker can report completions as they land,
+    then sort the per-game chunks by ``game_idx`` before concatenation
+    so the output arrays remain deterministic in ``base_seed``
+    (locked in by tests).
 
     ``n_workers`` defaults to ``cpu_count() - 2`` (leaves a few cores
     for OS / Python main / the user's other work). Pass an explicit
@@ -262,12 +284,32 @@ def generate_training_data_parallel(
         )
         for i in range(n_games)
     ]
+    if progress is not None:
+        progress.begin()
     # Pool() with no start method falls back to the platform default —
     # spawn on Windows, fork on Unix. Workers persist for pool
     # lifetime so import cost is paid once per worker.
+    #
+    # ``imap_unordered`` instead of ``map`` so completions stream
+    # back as workers finish, letting the progress tracker emit
+    # snapshots throughout the run rather than only at the end.
+    # Results arrive out of order; we tag each per-game result with
+    # its ``game_idx`` and sort at the end so the concatenated arrays
+    # are deterministic in ``base_seed`` (locked in by tests).
+    indexed: list[tuple[int, _GameChunk]] = []
     with mp.Pool(processes=n_workers) as pool:
-        chunks = pool.map(_play_one_parallel_game, args_list)
-    f, o, p, m = _concat_chunks(chunks)
+        for game_idx, chunk in pool.imap_unordered(
+            _play_one_parallel_game, args_list, chunksize=1,
+        ):
+            indexed.append((game_idx, chunk))
+            if progress is not None:
+                progress.record_game(
+                    n_samples=int(chunk[0].shape[0]),
+                    outcome_p0=_winner_to_p0_outcome(chunk[4]),
+                )
+    indexed.sort(key=lambda t: t[0])
+    chunks = [c for _, c in indexed]
+    f, o, p, m = _concat_chunks([c[:4] for c in chunks])
     if with_policy:
         return f, o, p, m
     return f, o
@@ -275,16 +317,19 @@ def generate_training_data_parallel(
 
 def _play_one_parallel_game(
     args: tuple,
-) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+) -> tuple[int, _GameChunk]:
     """Top-level pickleable worker. Plays one game, returns the
-    4-tuple ``(features, outcomes, policy_targets, action_masks)``
-    arrays for it. Lives at module top level (not nested) so
-    multiprocessing can pickle it across the spawn boundary."""
+    ``(game_idx, chunk)`` pair where ``chunk`` is the 5-tuple
+    ``(features, outcomes, policy_targets, action_masks, winner)``.
+    The driver uses ``game_idx`` to re-sort results from
+    ``imap_unordered`` so the concatenated arrays stay deterministic.
+    Lives at module top level (not nested) so multiprocessing can
+    pickle it across the spawn boundary."""
     (
         game_idx, p0_factory, p1_factory, base_seed,
         decision_cap, sample_every, replay_config, deck_pool,
     ) = args
-    return _generate_one_game_data(
+    chunk = _generate_one_game_data(
         game_idx=game_idx,
         p0_factory=p0_factory, p1_factory=p1_factory,
         base_seed=base_seed,
@@ -292,6 +337,17 @@ def _play_one_parallel_game(
         replay_config=replay_config,
         deck_pool=deck_pool,
     )
+    return game_idx, chunk
+
+
+def _winner_to_p0_outcome(winner: Optional[PlayerID]) -> float:
+    """Convert a per-game winner (0, 1, or None) into the +1 / -1 / 0
+    outcome from p0's perspective. Used by the progress tracker to
+    keep a live winrate without re-parsing ``outcomes`` (which holds
+    per-viewer signs that look symmetric in aggregate)."""
+    if winner is None:
+        return 0.0
+    return 1.0 if winner == 0 else -1.0
 
 
 def _generate_one_game_data(
@@ -304,7 +360,7 @@ def _generate_one_game_data(
     sample_every: int,
     replay_config: Optional[ReplayCaptureConfig] = None,
     deck_pool: Optional[list[Deck]] = None,
-) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+) -> _GameChunk:
     """Play one game and return its 4-tuple training arrays.
 
     The single source of truth for per-game data extraction; both
@@ -377,7 +433,8 @@ def _generate_one_game_data(
         save_replay(replay, replay_config.replay_path(base_seed, game_idx))
 
     if not samples:
-        return _empty_arrays()
+        f, o, p, m = _empty_arrays()
+        return f, o, p, m, winner
     outcome_label = _outcome_label(winner)
     features = np.stack(
         [f for f, _, _, _ in samples], axis=0,
@@ -392,7 +449,7 @@ def _generate_one_game_data(
     action_masks = np.stack(
         [m for _, _, _, m in samples], axis=0,
     ).astype(np.bool_)
-    return features, outcomes, policy_targets, action_masks
+    return features, outcomes, policy_targets, action_masks, winner
 
 
 def _concat_chunks(

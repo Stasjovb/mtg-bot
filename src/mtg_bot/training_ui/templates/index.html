@@ -3,13 +3,14 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>NN Training Progress</title>
+<title>Training Pipeline Progress</title>
 <style>
   *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
   :root {
     --bg: #0f1117; --surface: #1a1d27; --border: #2a2d3a;
     --text: #e2e8f0; --muted: #8892a4;
     --green: #22c55e; --red: #ef4444; --amber: #f59e0b; --blue: #3b82f6;
+    --purple: #a855f7;
     --radius: 12px;
   }
   body {
@@ -27,6 +28,11 @@
 
   .run-header { display: flex; align-items: center; gap: 10px; margin-bottom: 14px; flex-wrap: wrap; }
   .run-id { font-family: monospace; font-size: 0.95rem; color: var(--text); }
+  .kind-tag { font-size: 0.65rem; padding: 2px 8px; border-radius: 4px;
+    font-weight: 600; letter-spacing: 0.06em; text-transform: uppercase;
+    background: var(--bg); border: 1px solid var(--border); color: var(--muted); }
+  .kind-tag.data_gen { color: #93c5fd; border-color: #1e3a5f; }
+  .kind-tag.training { color: #c4b5fd; border-color: #4c1d95; }
   .badge { font-size: 0.72rem; padding: 3px 10px; border-radius: 999px; font-weight: 600;
     letter-spacing: 0.04em; text-transform: uppercase; }
   .badge.running { background: #1e3a5f; color: #93c5fd; animation: pulse 1.6s infinite; }
@@ -48,6 +54,7 @@
     height: 100%; background: var(--blue); transition: width 0.4s ease;
     border-radius: 999px;
   }
+  .progress-fill.training { background: var(--purple); }
   .progress-fill.completed { background: var(--green); }
   .progress-fill.failed { background: var(--red); }
   .progress-pct { font-family: monospace; font-size: 0.9rem; min-width: 64px; text-align: right; }
@@ -60,7 +67,7 @@
     letter-spacing: 0.08em; margin-bottom: 4px; }
   .stat-value { font-size: 0.95rem; font-family: monospace; }
 
-  #chart-wrap { margin-top: 20px; height: 240px; }
+  .chart-wrap { margin-top: 20px; height: 240px; }
 
   table { width: 100%; border-collapse: collapse; font-size: 0.85rem; }
   th, td { padding: 8px 10px; text-align: left; border-bottom: 1px solid var(--border); }
@@ -77,11 +84,11 @@
 <body>
 <div class="page">
   <header>
-    <h1>NN Training Progress</h1>
+    <h1>Training Pipeline Progress</h1>
     <span id="refresh-indicator">loading…</span>
   </header>
 
-  <div id="latest"></div>
+  <div id="active"></div>
 
   <div class="section-title">Older runs</div>
   <div id="older"></div>
@@ -89,11 +96,25 @@
 
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
 <script>
+// Pipeline progress UI. Polls /api/runs every REFRESH_MS and re-renders
+// in place — runs are identified by run_id, and DOM scaffolding is
+// reused across polls so values tick live without page reloads or
+// chart flicker.
+//
+// Each run has a `kind` discriminator:
+//   - "data_gen"  → games-progress card (games/samples/winrate)
+//   - "training"  → epochs-progress card (value/policy loss chart)
+// The "active" pane stacks all currently-running cards (top to
+// bottom in started_at order — gen tends to land before training);
+// completed/failed runs drop to the older-runs table.
 const REFRESH_MS = 2000;
 const refreshEl = document.getElementById('refresh-indicator');
-const latestEl = document.getElementById('latest');
+const activeEl = document.getElementById('active');
 const olderEl = document.getElementById('older');
-let chart = null;
+
+// One Chart.js instance per training run, keyed by run_id, so we can
+// refresh data without re-instantiating (avoids canvas flicker).
+const charts = {};
 
 function esc(s) {
   return String(s == null ? '' : s)
@@ -111,6 +132,13 @@ function fmtSeconds(s) {
   return h + 'h ' + (m % 60) + 'm';
 }
 
+function fmtNum(v, digits) {
+  if (v == null || !isFinite(v)) return '—';
+  return Number(v).toLocaleString(undefined, {
+    minimumFractionDigits: digits || 0, maximumFractionDigits: digits || 0,
+  });
+}
+
 function fmtLoss(v) {
   if (v == null || !isFinite(v)) return '—';
   return Number(v).toFixed(4);
@@ -121,114 +149,237 @@ function statusClass(s) {
   return 'unknown';
 }
 
-function pctOf(run) {
+function pctOfDataGen(run) {
+  const total = run.n_games_total || 0;
+  if (!total) return 0;
+  return Math.min(100, 100 * (run.n_games_done || 0) / total);
+}
+
+function pctOfTraining(run) {
   const total = run.total_epochs || 0;
   if (!total) return 0;
   return Math.min(100, 100 * (run.current_epoch || 0) / total);
 }
 
-function renderLatest(run) {
-  if (!run) {
-    latestEl.innerHTML = '<div class="empty">No training runs yet. Start one with <code>scripts/train_nn.py</code>.</div>';
-    if (chart) { chart.destroy(); chart = null; }
-    return;
-  }
-  const status = statusClass(run.status);
-  const pct = pctOf(run);
-  const trainLoss = (run.train_losses || []).slice(-1)[0];
-  const valLoss = (run.val_losses || []).slice(-1)[0];
+function kindOf(run) {
+  // Older trainer runs (pre-instrumentation) wrote no `kind`. Treat
+  // them as training so the UI doesn't drop them.
+  return run.kind || 'training';
+}
 
-  // build/refresh the structural bits exactly once per run_id so we
-  // don't blow away the chart canvas on every refresh.
-  if (latestEl.dataset.runId !== run.run_id) {
-    latestEl.dataset.runId = run.run_id;
-    latestEl.innerHTML = `
-      <div class="card" id="latest-card">
-        <div class="run-header">
-          <span class="run-id" id="lt-run-id"></span>
-          <span class="badge" id="lt-status"></span>
-          <span class="run-meta" id="lt-meta"></span>
-        </div>
-        <div class="progress-row">
-          <div class="progress-bar"><div class="progress-fill" id="lt-fill" style="width:0%"></div></div>
-          <div class="progress-pct" id="lt-pct">0%</div>
-        </div>
-        <div class="stats">
-          <div class="stat"><div class="stat-label">Epoch</div><div class="stat-value" id="lt-epoch">—</div></div>
-          <div class="stat"><div class="stat-label">Elapsed</div><div class="stat-value" id="lt-elapsed">—</div></div>
-          <div class="stat"><div class="stat-label">ETA</div><div class="stat-value" id="lt-eta">—</div></div>
-          <div class="stat"><div class="stat-label">Avg / epoch</div><div class="stat-value" id="lt-avg">—</div></div>
-          <div class="stat"><div class="stat-label">Train loss</div><div class="stat-value" id="lt-train">—</div></div>
-          <div class="stat"><div class="stat-label">Val loss</div><div class="stat-value" id="lt-val">—</div></div>
-        </div>
-        <div id="chart-wrap"><canvas id="loss-chart"></canvas></div>
+// Build the static DOM for one run card. Idempotent: if a card with
+// the same run_id already exists, return it without rebuilding.
+// data-* attributes carry kind so re-renders only rebuild when kind
+// changes (e.g. a renamed run file).
+function ensureCard(run) {
+  const id = 'card-' + cssEscape(run.run_id);
+  let el = document.getElementById(id);
+  if (el && el.dataset.kind === kindOf(run)) return el;
+  if (el) el.remove();
+  const k = kindOf(run);
+  el = document.createElement('div');
+  el.id = id;
+  el.className = 'card';
+  el.dataset.kind = k;
+  if (k === 'data_gen') {
+    el.innerHTML = `
+      <div class="run-header">
+        <span class="kind-tag data_gen">data gen</span>
+        <span class="run-id" data-field="run-id"></span>
+        <span class="badge" data-field="status"></span>
+        <span class="run-meta" data-field="meta"></span>
+      </div>
+      <div class="progress-row">
+        <div class="progress-bar"><div class="progress-fill" data-field="fill" style="width:0%"></div></div>
+        <div class="progress-pct" data-field="pct">0%</div>
+      </div>
+      <div class="stats">
+        <div class="stat"><div class="stat-label">Games</div><div class="stat-value" data-field="games">—</div></div>
+        <div class="stat"><div class="stat-label">Samples</div><div class="stat-value" data-field="samples">—</div></div>
+        <div class="stat"><div class="stat-label">Workers</div><div class="stat-value" data-field="workers">—</div></div>
+        <div class="stat"><div class="stat-label">Elapsed</div><div class="stat-value" data-field="elapsed">—</div></div>
+        <div class="stat"><div class="stat-label">ETA</div><div class="stat-value" data-field="eta">—</div></div>
+        <div class="stat"><div class="stat-label">Games / hr</div><div class="stat-value" data-field="gph">—</div></div>
+        <div class="stat"><div class="stat-label">Samples / hr</div><div class="stat-value" data-field="sph">—</div></div>
+        <div class="stat"><div class="stat-label">P0 / P1 / draws</div><div class="stat-value" data-field="winrate">—</div></div>
       </div>`;
-    if (chart) { chart.destroy(); chart = null; }
+  } else {
+    el.innerHTML = `
+      <div class="run-header">
+        <span class="kind-tag training">training</span>
+        <span class="run-id" data-field="run-id"></span>
+        <span class="badge" data-field="status"></span>
+        <span class="run-meta" data-field="meta"></span>
+      </div>
+      <div class="progress-row">
+        <div class="progress-bar"><div class="progress-fill training" data-field="fill" style="width:0%"></div></div>
+        <div class="progress-pct" data-field="pct">0%</div>
+      </div>
+      <div class="stats">
+        <div class="stat"><div class="stat-label">Epoch</div><div class="stat-value" data-field="epoch">—</div></div>
+        <div class="stat"><div class="stat-label">Elapsed</div><div class="stat-value" data-field="elapsed">—</div></div>
+        <div class="stat"><div class="stat-label">ETA</div><div class="stat-value" data-field="eta">—</div></div>
+        <div class="stat"><div class="stat-label">Avg / epoch</div><div class="stat-value" data-field="avg">—</div></div>
+        <div class="stat"><div class="stat-label">Total loss</div><div class="stat-value" data-field="total">—</div></div>
+        <div class="stat"><div class="stat-label">Value loss</div><div class="stat-value" data-field="value">—</div></div>
+        <div class="stat"><div class="stat-label">Policy loss</div><div class="stat-value" data-field="policy">—</div></div>
+      </div>
+      <div class="chart-wrap"><canvas data-field="chart"></canvas></div>`;
   }
+  return el;
+}
 
-  document.getElementById('lt-run-id').textContent = run.run_id;
-  const statusEl = document.getElementById('lt-status');
+function cssEscape(s) {
+  // CSS.escape exists in modern browsers; minimal fallback for our
+  // run_id alphabet (which is conservative anyway).
+  return (window.CSS && CSS.escape) ? CSS.escape(s) : String(s).replace(/[^a-zA-Z0-9_-]/g, '_');
+}
+
+function fillRun(el, run) {
+  const status = statusClass(run.status);
+  el.querySelector('[data-field="run-id"]').textContent = run.run_id;
+  const statusEl = el.querySelector('[data-field="status"]');
   statusEl.textContent = run.status || 'unknown';
   statusEl.className = 'badge ' + status;
   const metaParts = [];
   if (run.git_commit) metaParts.push(run.git_commit);
   if (run.started_at) metaParts.push(run.started_at);
   if (run.notes) metaParts.push(run.notes);
-  document.getElementById('lt-meta').textContent = metaParts.join(' · ');
+  el.querySelector('[data-field="meta"]').textContent = metaParts.join(' · ');
 
-  const fill = document.getElementById('lt-fill');
+  const pct = (kindOf(run) === 'data_gen') ? pctOfDataGen(run) : pctOfTraining(run);
+  const fill = el.querySelector('[data-field="fill"]');
   fill.style.width = pct.toFixed(1) + '%';
-  fill.className = 'progress-fill ' + status;
-  document.getElementById('lt-pct').textContent = pct.toFixed(1) + '%';
+  // Progress fill color: blue for data_gen running, purple for
+  // training running, green when completed, red when failed.
+  let fillCls = 'progress-fill';
+  if (kindOf(run) === 'training') fillCls += ' training';
+  if (status === 'completed' || status === 'failed') fillCls += ' ' + status;
+  fill.className = fillCls;
+  el.querySelector('[data-field="pct"]').textContent = pct.toFixed(1) + '%';
 
-  document.getElementById('lt-epoch').textContent =
-    (run.current_epoch || 0) + ' / ' + (run.total_epochs || 0);
-  document.getElementById('lt-elapsed').textContent = fmtSeconds(run.elapsed_seconds);
-  document.getElementById('lt-eta').textContent =
-    status === 'running' ? fmtSeconds(run.estimated_remaining_seconds) : '—';
-  document.getElementById('lt-avg').textContent = fmtSeconds(run.per_epoch_seconds_avg);
-  document.getElementById('lt-train').textContent = fmtLoss(trainLoss);
-  document.getElementById('lt-val').textContent = fmtLoss(valLoss);
-
-  drawChart(run);
+  if (kindOf(run) === 'data_gen') {
+    const total = run.n_games_total || 0;
+    const done = run.n_games_done || 0;
+    el.querySelector('[data-field="games"]').textContent = done + ' / ' + total;
+    el.querySelector('[data-field="samples"]').textContent = fmtNum(run.n_samples);
+    el.querySelector('[data-field="workers"]').textContent = String(run.n_workers || '—');
+    el.querySelector('[data-field="elapsed"]').textContent = fmtSeconds(run.elapsed_seconds);
+    el.querySelector('[data-field="eta"]').textContent =
+      status === 'running' ? fmtSeconds(run.estimated_remaining_seconds) : '—';
+    el.querySelector('[data-field="gph"]').textContent = fmtNum(run.games_per_hour, 0);
+    el.querySelector('[data-field="sph"]').textContent = fmtNum(run.samples_per_hour, 0);
+    el.querySelector('[data-field="winrate"]').textContent =
+      (run.p0_wins || 0) + ' / ' + (run.p1_wins || 0) + ' / ' + (run.draws || 0);
+  } else {
+    const totalLoss = (run.train_losses || []).slice(-1)[0];
+    const valueLoss = (run.train_value_losses || []).slice(-1)[0];
+    const policyLoss = (run.train_policy_losses || []).slice(-1)[0];
+    el.querySelector('[data-field="epoch"]').textContent =
+      (run.current_epoch || 0) + ' / ' + (run.total_epochs || 0);
+    el.querySelector('[data-field="elapsed"]').textContent = fmtSeconds(run.elapsed_seconds);
+    el.querySelector('[data-field="eta"]').textContent =
+      status === 'running' ? fmtSeconds(run.estimated_remaining_seconds) : '—';
+    el.querySelector('[data-field="avg"]').textContent = fmtSeconds(run.per_epoch_seconds_avg);
+    el.querySelector('[data-field="total"]').textContent = fmtLoss(totalLoss);
+    el.querySelector('[data-field="value"]').textContent = fmtLoss(valueLoss);
+    el.querySelector('[data-field="policy"]').textContent = fmtLoss(policyLoss);
+    drawTrainingChart(el, run);
+  }
 }
 
-function drawChart(run) {
-  const canvas = document.getElementById('loss-chart');
+function drawTrainingChart(el, run) {
+  const canvas = el.querySelector('[data-field="chart"]');
   if (!canvas) return;
   const labels = (run.train_losses || []).map((_, i) => i + 1);
-  const train = run.train_losses || [];
-  const val = (run.val_losses || []).map(v => isFinite(v) ? v : null);
-  if (!chart) {
-    chart = new Chart(canvas, {
+  // Build datasets dynamically: include policy series only when the
+  // run actually trained a policy head (any non-NaN value present).
+  const trainTotal = run.train_losses || [];
+  const valTotal = (run.val_losses || []).map(v => isFinite(v) ? v : null);
+  const trainValue = run.train_value_losses || [];
+  const valValue = (run.val_value_losses || []).map(v => isFinite(v) ? v : null);
+  const trainPolicy = run.train_policy_losses || [];
+  const valPolicy = (run.val_policy_losses || []).map(v => isFinite(v) ? v : null);
+  const hasPolicy = trainPolicy.some(v => isFinite(v));
+  const datasets = [
+    { label: 'train (total)', data: trainTotal, borderColor: '#3b82f6',
+      backgroundColor: 'rgba(59,130,246,0.10)', tension: 0.2, pointRadius: 0 },
+    { label: 'val (total)', data: valTotal, borderColor: '#f59e0b',
+      backgroundColor: 'rgba(245,158,11,0.10)', tension: 0.2, pointRadius: 0,
+      spanGaps: true },
+  ];
+  if (hasPolicy) {
+    datasets.push(
+      { label: 'train value', data: trainValue, borderColor: '#22c55e',
+        backgroundColor: 'rgba(34,197,94,0.05)', tension: 0.2, pointRadius: 0,
+        borderDash: [4, 3] },
+      { label: 'train policy', data: trainPolicy, borderColor: '#a855f7',
+        backgroundColor: 'rgba(168,85,247,0.05)', tension: 0.2, pointRadius: 0,
+        borderDash: [4, 3] },
+    );
+  }
+  const existing = charts[run.run_id];
+  if (!existing) {
+    charts[run.run_id] = new Chart(canvas, {
       type: 'line',
-      data: {
-        labels,
-        datasets: [
-          { label: 'train', data: train, borderColor: '#3b82f6',
-            backgroundColor: 'rgba(59,130,246,0.15)', tension: 0.2, pointRadius: 0 },
-          { label: 'val', data: val, borderColor: '#f59e0b',
-            backgroundColor: 'rgba(245,158,11,0.15)', tension: 0.2, pointRadius: 0,
-            spanGaps: true },
-        ],
-      },
+      data: { labels, datasets },
       options: {
         animation: false,
         responsive: true, maintainAspectRatio: false,
         scales: {
           x: { title: { display: true, text: 'epoch', color: '#8892a4' },
                ticks: { color: '#8892a4' }, grid: { color: '#2a2d3a' } },
-          y: { title: { display: true, text: 'MSE', color: '#8892a4' },
+          y: { title: { display: true, text: 'loss', color: '#8892a4' },
                ticks: { color: '#8892a4' }, grid: { color: '#2a2d3a' } },
         },
         plugins: { legend: { labels: { color: '#e2e8f0' } } },
       },
     });
   } else {
-    chart.data.labels = labels;
-    chart.data.datasets[0].data = train;
-    chart.data.datasets[1].data = val;
-    chart.update('none');
+    existing.data.labels = labels;
+    existing.data.datasets = datasets;
+    existing.update('none');
+  }
+}
+
+function renderActive(active) {
+  // Prune charts whose run no longer appears in active. (Completed
+  // runs slide into the older-runs table where there's no chart.)
+  const liveIds = new Set(active.map(r => r.run_id));
+  for (const id of Object.keys(charts)) {
+    if (!liveIds.has(id)) {
+      try { charts[id].destroy(); } catch (e) { /* ignore */ }
+      delete charts[id];
+    }
+  }
+  if (!active.length) {
+    // Clean any stale active card scaffolds before showing the empty state.
+    activeEl.innerHTML = '<div class="empty">No active runs. Kick one off with <code>scripts/generate_training_data.py</code> or <code>scripts/train_nn.py</code>.</div>';
+    return;
+  }
+  // Reuse existing card elements where run_id matches; remove any
+  // that no longer appear (they've moved to older-runs). This keeps
+  // chart canvases stable across polls.
+  const existing = new Map();
+  for (const child of Array.from(activeEl.children)) {
+    if (child.id && child.id.startsWith('card-')) {
+      existing.set(child.id, child);
+    }
+  }
+  const wantIds = new Set(active.map(r => 'card-' + cssEscape(r.run_id)));
+  for (const [id, el] of existing) {
+    if (!wantIds.has(id)) el.remove();
+  }
+  // Render in started_at order so the gen card sits above the
+  // train card during a typical iteration (gen starts first).
+  const ordered = [...active].sort(
+    (a, b) => (a.started_at || '').localeCompare(b.started_at || ''),
+  );
+  for (const run of ordered) {
+    const card = ensureCard(run);
+    if (!card.parentNode) activeEl.appendChild(card);
+    else activeEl.appendChild(card); // re-append to enforce order
+    fillRun(card, run);
   }
 }
 
@@ -238,14 +389,30 @@ function renderOlder(runs) {
     return;
   }
   const rows = runs.map(r => {
+    const k = kindOf(r);
+    const label = k === 'data_gen' ? 'data gen' : 'training';
+    if (k === 'data_gen') {
+      return `<tr>
+        <td><span class="run-id">${esc(r.run_id)}</span></td>
+        <td><span class="kind-tag ${k}">${label}</span></td>
+        <td><span class="badge ${statusClass(r.status)}">${esc(r.status || 'unknown')}</span></td>
+        <td class="num">${(r.n_games_done || 0)} / ${(r.n_games_total || 0)}</td>
+        <td class="num">${esc(fmtNum(r.n_samples))}</td>
+        <td class="num">${(r.p0_wins||0)}/${(r.p1_wins||0)}/${(r.draws||0)}</td>
+        <td class="num">${esc(fmtSeconds(r.elapsed_seconds))}</td>
+        <td class="num">${esc(r.started_at || '')}</td>
+      </tr>`;
+    }
     const trainFinal = (r.train_losses || []).slice(-1)[0];
     const valFinal = (r.val_losses || []).slice(-1)[0];
+    const lossCell = `${esc(fmtLoss(trainFinal))} / ${esc(fmtLoss(valFinal))}`;
     return `<tr>
       <td><span class="run-id">${esc(r.run_id)}</span></td>
+      <td><span class="kind-tag ${k}">${label}</span></td>
       <td><span class="badge ${statusClass(r.status)}">${esc(r.status || 'unknown')}</span></td>
       <td class="num">${(r.current_epoch || 0)} / ${(r.total_epochs || 0)}</td>
-      <td class="num">${esc(fmtLoss(trainFinal))}</td>
-      <td class="num">${esc(fmtLoss(valFinal))}</td>
+      <td class="num">${lossCell}</td>
+      <td class="num">—</td>
       <td class="num">${esc(fmtSeconds(r.elapsed_seconds))}</td>
       <td class="num">${esc(r.started_at || '')}</td>
     </tr>`;
@@ -254,8 +421,9 @@ function renderOlder(runs) {
     <div class="card">
       <table>
         <thead><tr>
-          <th>run</th><th>status</th><th>epochs</th>
-          <th>train</th><th>val</th><th>duration</th><th>started</th>
+          <th>run</th><th>kind</th><th>status</th>
+          <th>progress</th><th>loss / samples</th><th>winrate</th>
+          <th>duration</th><th>started</th>
         </tr></thead>
         <tbody>${rows}</tbody>
       </table>
@@ -267,8 +435,10 @@ async function refresh() {
     const res = await fetch('/api/runs');
     const data = await res.json();
     const runs = data.runs || [];
-    renderLatest(runs[0] || null);
-    renderOlder(runs.slice(1));
+    const active = runs.filter(r => statusClass(r.status) === 'running');
+    const older = runs.filter(r => statusClass(r.status) !== 'running');
+    renderActive(active);
+    renderOlder(older);
     refreshEl.textContent = 'updated ' + new Date().toLocaleTimeString();
   } catch (e) {
     refreshEl.textContent = 'error: ' + e.message;

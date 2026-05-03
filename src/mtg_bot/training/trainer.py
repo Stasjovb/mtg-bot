@@ -30,14 +30,11 @@ params).
 
 from __future__ import annotations
 
-import json
-import os
-import subprocess
 import time
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Optional
+from typing import Optional
 
 import numpy as np
 import torch
@@ -47,6 +44,7 @@ import torch.optim as optim
 from torch.utils.data import DataLoader, TensorDataset
 
 from mtg_bot.search.nn_evaluator import _ValueMLP, _ValuePolicyMLP
+from mtg_bot.training.progress import atomic_write_json, git_short_sha
 
 
 @dataclass
@@ -81,52 +79,6 @@ def auto_device() -> str:
     """Return ``"cuda"`` when a CUDA device is available, else
     ``"cpu"``. Convenience for callers that don't care which."""
     return "cuda" if torch.cuda.is_available() else "cpu"
-
-
-def _git_short_sha() -> Optional[str]:
-    """Best-effort current git commit short SHA; ``None`` if not in
-    a git repo or git isn't on PATH. Stamped onto the progress JSON
-    so a viewer can correlate runs to code state."""
-    try:
-        result = subprocess.run(
-            ["git", "rev-parse", "--short", "HEAD"],
-            capture_output=True, text=True, timeout=3, check=False,
-        )
-        if result.returncode == 0:
-            return result.stdout.strip() or None
-    except (FileNotFoundError, subprocess.SubprocessError, OSError):
-        pass
-    return None
-
-
-def _atomic_write_json(path: Path, payload: dict[str, Any]) -> None:
-    """Write ``payload`` to ``path`` atomically: serialize to a
-    sibling ``.tmp`` file then ``os.replace`` it into place. Replace
-    is atomic on both POSIX and Windows, so a polling reader either
-    sees the previous version or the new one — never a half-file.
-
-    Windows wrinkle: if a reader currently has the destination file
-    open (even just for the duration of a ``read_text`` call),
-    ``os.replace`` raises ``PermissionError`` because Windows MOVEFILE
-    requires deletable access. The contention window for a 2-second
-    polling reader doing one fast read is small (~ms), so a tight
-    retry loop reliably wins. If we can't get through after ~1s,
-    raise — that's a real bug, not a transient race.
-    """
-    tmp = path.with_suffix(path.suffix + ".tmp")
-    tmp.parent.mkdir(parents=True, exist_ok=True)
-    with tmp.open("w", encoding="utf-8") as f:
-        json.dump(payload, f, indent=2, sort_keys=True)
-    delay = 0.005
-    for _ in range(20):
-        try:
-            os.replace(tmp, path)
-            return
-        except PermissionError:
-            time.sleep(delay)
-            delay = min(delay * 2, 0.1)
-    # One last try; let the exception propagate if it still fails.
-    os.replace(tmp, path)
 
 
 def train_value_network(
@@ -298,7 +250,7 @@ def train_value_network(
             timespec="seconds"
         )
         started_perf = time.perf_counter()
-        git_commit = _git_short_sha()
+        git_commit = git_short_sha()
 
     def _emit(status: str, current_epoch: int) -> None:
         if not progress_enabled:
@@ -310,6 +262,7 @@ def train_value_network(
         eta = avg * remaining_epochs if avg > 0 else 0.0
         payload = {
             "run_id": run_id,
+            "kind": "training",
             "started_at": started_at_iso,
             "total_epochs": int(epochs),
             "current_epoch": int(done),
@@ -318,11 +271,15 @@ def train_value_network(
             "estimated_remaining_seconds": float(eta),
             "train_losses": list(history.train_losses),
             "val_losses": list(history.val_losses),
+            "train_value_losses": list(history.train_value_losses),
+            "val_value_losses": list(history.val_value_losses),
+            "train_policy_losses": list(history.train_policy_losses),
+            "val_policy_losses": list(history.val_policy_losses),
             "status": status,
             "git_commit": git_commit,
             "notes": notes,
         }
-        _atomic_write_json(progress_path, payload)
+        atomic_write_json(progress_path, payload)
 
     # Initial "running" snapshot so the UI shows the run immediately,
     # before the first epoch finishes (epochs can be ~30s each at

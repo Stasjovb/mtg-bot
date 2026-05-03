@@ -34,6 +34,7 @@ import os  # noqa: E402
 
 from mtg_bot.decks import decks_from_json  # noqa: E402
 from mtg_bot.training import (  # noqa: E402
+    DataGenProgress,
     PimcConfig,
     Registry,
     ReplayCaptureConfig,
@@ -127,6 +128,24 @@ def main() -> None:
             "to learn from."
         ),
     )
+    parser.add_argument(
+        "--progress-file", type=Path, default=None,
+        help=(
+            "Path to a JSON progress file. When set, a snapshot of "
+            "games done / samples / winrate / throughput is flushed "
+            "every ~5s (and at end of run) so the training UI can "
+            "show live progress. Defaults to "
+            "<output>.progress.json next to the output .npz when "
+            "omitted; pass an empty string to disable entirely."
+        ),
+    )
+    parser.add_argument(
+        "--run-id", default=None,
+        help=(
+            "Identifier for this run as it appears in the training "
+            "UI. Defaults to the --output stem (e.g. 'gen0_smoke')."
+        ),
+    )
     args = parser.parse_args()
 
     args.output.parent.mkdir(parents=True, exist_ok=True)
@@ -187,12 +206,34 @@ def main() -> None:
             "(annotation only matters when replays are written)"
         )
 
+    run_id = args.run_id or args.output.stem
+    progress: DataGenProgress | None = None
+    progress_path: Path | None = None
+    # ``--progress-file ""`` disables; ``--progress-file PATH`` overrides;
+    # default writes <output_stem>.json under ./training_progress/ so
+    # the UI on port 5003 picks it up alongside trainer runs.
+    if args.progress_file is None:
+        progress_path = Path("training_progress") / f"{run_id}.json"
+    elif str(args.progress_file).strip():
+        progress_path = args.progress_file
+    if progress_path is not None:
+        command_str = " ".join(sys.argv)
+        progress = DataGenProgress(
+            progress_path=progress_path,
+            run_id=run_id,
+            n_games_total=args.n_games,
+            n_workers=n_workers,
+            command=command_str,
+        )
+
     print(
         f"# generate_training_data: {args.n_games} games "
         f"(samples={args.samples}, nodes={args.nodes}, "
         f"sample_every={args.sample_every}, seed={args.seed}, "
         f"n_workers={n_workers})"
     )
+    if progress_path is not None:
+        print(f"# progress: {progress_path}")
     if replay_config is not None:
         nn_part = (
             f", annotated_with={args.annotate_with_nn_version}"
@@ -203,29 +244,38 @@ def main() -> None:
             f"{args.save_replays_to}{nn_part}"
         )
     started = time.perf_counter()
-    if n_workers == 1:
-        features, outcomes, policy_targets, action_masks = (
-            generate_training_data(
-                p0_factory=factory, p1_factory=factory,
-                n_games=args.n_games, base_seed=args.seed,
-                sample_every=args.sample_every,
-                replay_config=replay_config,
-                deck_pool=deck_pool,
-                with_policy=True,
+    try:
+        if n_workers == 1:
+            features, outcomes, policy_targets, action_masks = (
+                generate_training_data(
+                    p0_factory=factory, p1_factory=factory,
+                    n_games=args.n_games, base_seed=args.seed,
+                    sample_every=args.sample_every,
+                    replay_config=replay_config,
+                    deck_pool=deck_pool,
+                    with_policy=True,
+                    progress=progress,
+                )
             )
-        )
-    else:
-        features, outcomes, policy_targets, action_masks = (
-            generate_training_data_parallel(
-                p0_factory=factory, p1_factory=factory,
-                n_games=args.n_games, base_seed=args.seed,
-                n_workers=n_workers,
-                sample_every=args.sample_every,
-                replay_config=replay_config,
-                deck_pool=deck_pool,
-                with_policy=True,
+        else:
+            features, outcomes, policy_targets, action_masks = (
+                generate_training_data_parallel(
+                    p0_factory=factory, p1_factory=factory,
+                    n_games=args.n_games, base_seed=args.seed,
+                    n_workers=n_workers,
+                    sample_every=args.sample_every,
+                    replay_config=replay_config,
+                    deck_pool=deck_pool,
+                    with_policy=True,
+                    progress=progress,
+                )
             )
-        )
+    except BaseException:
+        if progress is not None:
+            progress.finalize(status="failed")
+        raise
+    if progress is not None:
+        progress.finalize(status="completed")
     elapsed = time.perf_counter() - started
 
     # Always emit the AlphaZero schema. PIMC strategies populate
