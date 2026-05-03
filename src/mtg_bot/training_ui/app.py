@@ -66,11 +66,15 @@ def create_app(progress_dir: Path) -> Flask:
     progress_dir = Path(progress_dir).resolve()
 
     # Templates live next to this file (mirroring how mtg_bot.ui.py
-    # uses src/mtg_bot/templates).
+    # uses src/mtg_bot/templates). Static assets — favicon, etc. —
+    # live in the sibling ``static/`` and are served at ``/static/``
+    # by Flask's default static_url_path.
     template_dir = Path(__file__).parent / "templates"
+    static_dir = Path(__file__).parent / "static"
     app = Flask(
         __name__,
         template_folder=str(template_dir),
+        static_folder=str(static_dir),
     )
     app.config["PROGRESS_DIR"] = progress_dir
 
