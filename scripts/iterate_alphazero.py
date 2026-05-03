@@ -117,10 +117,16 @@ def _self_play(
     output: Path,
     enable_mulligans: bool = False,
     per_game_timeout_sec: float | None = None,
+    hidden_sizes: tuple[int, ...] | None = None,
 ) -> tuple[int, int, float]:
     """Run one self-play data-gen pass. Returns (n_samples,
     n_policy_rows, elapsed_seconds). Both seats use the same
-    NN-driven PUCT config — that's what makes it self-play."""
+    NN-driven PUCT config — that's what makes it self-play.
+
+    ``hidden_sizes`` must match the saved weights' trunk shape,
+    or every worker crashes at NNEvaluator load with state_dict
+    size mismatch. Caller threads from bootstrap metadata.
+    """
     cfg = NNPimcConfig(
         weights_path=str(weights_path),
         samples=samples,
@@ -131,6 +137,7 @@ def _self_play(
         batch_size=32,
         with_policy=True,
         puct=True,
+        hidden_sizes=hidden_sizes,
     )
     started = time.perf_counter()
     features, outcomes, policy_targets, action_masks = (
