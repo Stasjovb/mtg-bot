@@ -160,10 +160,10 @@ def test_indexed_worker_preserves_game_idx_on_crash(capfd):
 
 def test_run_match_parallel_no_progress_survives_crashes(capfd):
     """A factory that raises every game produces a MatchStats whose
-    draws==n_games (every crash → draw) and emits a loud stderr
-    summary listing the crashed indices. The pool itself completes
-    normally — this is the contract the eval CLI relies on so a
-    1/1000 corruption bug can't tank a 100-game match."""
+    ``crashed == n_games`` (all dropped) and ``games == 0`` (nothing
+    contributed signal). The pool itself completes normally — this
+    is the contract the eval CLI relies on so a 1/1000 corruption
+    bug can't tank a 100-game match."""
     n_games = 4
     stats = run_match_parallel(
         p0_factory=_raising_factory,
@@ -172,11 +172,13 @@ def test_run_match_parallel_no_progress_survives_crashes(capfd):
         base_seed=0,
         n_workers=2,
     )
-    assert stats.games == n_games
-    # Every game crashed → every game should be a draw with 0
-    # decisions logged. Wins must be exactly zero on both sides.
+    # Every game crashed → all dropped from the dataset; nothing
+    # contributed signal. Wins / draws / games are all zero;
+    # ``crashed`` carries the loss-of-signal count.
+    assert stats.crashed == n_games
+    assert stats.games == 0
     assert stats.wins == {0: 0, 1: 0}
-    assert stats.draws == n_games
+    assert stats.draws == 0
     assert stats.avg_decisions == 0.0
 
     err = capfd.readouterr().err
@@ -188,11 +190,12 @@ def test_run_match_parallel_no_progress_partial_crash(
     monkeypatch, capfd: Any,
 ):
     """Mixed scenario — only one game's strategy raises; the rest
-    play to completion. The crashed game shows up as +1 draw on top
-    of any organic draws, and ``wins+draws == n_games`` still
-    holds. This is the production scenario: 99/100 games complete
-    normally and 1 dies in the engine. The env-var-based selector
-    lets the configuration cross the spawn boundary into workers."""
+    play to completion. The crashed game is DROPPED from
+    ``games`` / ``wins`` / ``draws`` and recorded under
+    ``crashed``; the remaining 4 games contribute the win-rate
+    signal. This is the production scenario: 99/100 games
+    complete normally and 1 dies in the engine; the dropped one
+    shouldn't pollute the win rate's denominator."""
     n_games = 5
     base_seed = 13
     # ``_play_one_match_game`` builds p0's strategy with seed
@@ -208,16 +211,16 @@ def test_run_match_parallel_no_progress_partial_crash(
         n_workers=2,
     )
 
-    assert stats.games == n_games
-    # Sum invariant must always hold even with crashes folded in.
-    assert stats.wins[0] + stats.wins[1] + stats.draws == n_games
-    # Exactly one game crashed → at least one draw. The other four
-    # play to completion (no decision-cap timeouts at the default
-    # cap with random play), so this is a tight bound.
-    assert stats.draws >= 1
+    # Exactly 1 game crashed; the remaining 4 contributed signal.
+    assert stats.crashed == 1
+    assert stats.games == n_games - 1  # 4 completed
+    # New invariant: wins + draws == games (excludes crashed).
+    assert stats.wins[0] + stats.wins[1] + stats.draws == stats.games
+    # No organic decision-cap timeouts at default cap with random
+    # play, so all 4 completed games are decisive.
+    assert stats.draws == 0
     # The non-crashed games contributed real decisions, so the
-    # average must be strictly positive (a pure-crash run would
-    # have avg_decisions==0).
+    # average must be strictly positive.
     assert stats.avg_decisions > 0
 
     err = capfd.readouterr().err
@@ -253,8 +256,11 @@ def test_run_match_parallel_with_progress_survives_crashes(
         progress=progress,
     )
 
-    assert stats.games == n_games
-    assert stats.draws == n_games
+    # All games crashed → all dropped from MatchStats; ``crashed``
+    # carries the count.
+    assert stats.crashed == n_games
+    assert stats.games == 0
+    assert stats.draws == 0
     assert stats.wins == {0: 0, 1: 0}
 
     err = capfd.readouterr().err
@@ -266,10 +272,9 @@ def test_run_match_parallel_with_progress_survives_crashes(
     assert payload["status"] == "completed"
     assert payload["n_games_done"] == n_games
     assert payload["ended_at"] is not None
-    # Crashed games go into the dedicated EvalProgress.crashed
-    # counter (not draws) so the UI's win_rate stays honest. Note
-    # this differs from MatchStats, which folds crashes into draws
-    # to keep wins+draws==n_games — both views are intentional.
+    # MatchStats and EvalProgress now align on the same convention:
+    # crashed games are excluded from wins / draws / games (they
+    # carry no signal) and surface only via the ``crashed`` field.
     assert payload["crashed"] == n_games
     assert payload["draws"] == 0
     assert payload["wins_new"] == 0
