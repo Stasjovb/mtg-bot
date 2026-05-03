@@ -17,6 +17,17 @@ Parallel mode: ``run_match_parallel`` distributes the N games
 across a ``multiprocessing.Pool``. Per-game seeds are derived from
 ``game_idx``, not worker assignment, so the result is identical to
 the sequential ``run_match`` for the same ``base_seed``.
+
+Worker-crash resilience: the parallel path catches engine-level
+exceptions inside each worker (state-corruption bugs that surface
+~1-in-1000 games in PIMC self-play) and converts them to a
+``(None, 0)`` "crashed" sentinel so a single bad game can't tank
+the whole eval. The driver tracks crashed-game indices and emits a
+loud stderr summary at the end of the run; the crashes are also
+counted toward ``MatchStats.draws`` (consistent with how decision-
+cap timeouts are counted — both represent "game didn't reach a
+clean conclusion") so the total still satisfies
+``wins[0] + wins[1] + draws == games``.
 """
 
 from __future__ import annotations
@@ -24,6 +35,8 @@ from __future__ import annotations
 import multiprocessing as mp
 import os
 import random
+import sys
+import traceback
 from dataclasses import dataclass
 from typing import Optional
 
@@ -151,6 +164,17 @@ def run_match_parallel(
     if progress is None:
         with mp.Pool(processes=n_workers) as pool:
             results = pool.map(_play_one_match_game_packed, args_list)
+        # ``_play_one_match_game_packed`` returns a ``(None, 0)``
+        # sentinel for any worker-side crash. We re-pair each result
+        # with its game_idx (preserved by pool.map's input ordering)
+        # so the driver can log which games died and account for
+        # them as draws — keeps ``wins+draws == n_games`` honest
+        # rather than letting crashes silently disappear.
+        crashed_game_indices = [
+            i for i, (winner, decisions) in enumerate(results)
+            if winner is None and decisions == 0
+        ]
+        _log_crashed_games(crashed_game_indices, n_games)
         return _aggregate_results(results, n_games)
 
     # Progress-tracked path: stream completions via imap_unordered.
@@ -158,6 +182,7 @@ def run_match_parallel(
     # aggregation (imap_unordered preserves identity but not order).
     progress.begin()
     indexed: list[tuple[int, tuple[Optional[PlayerID], int]]] = []
+    crashed_game_indices: list[int] = []
     try:
         with mp.Pool(processes=n_workers) as pool:
             for game_idx, result in pool.imap_unordered(
@@ -165,13 +190,47 @@ def run_match_parallel(
             ):
                 indexed.append((game_idx, result))
                 winner, decisions = result
-                progress.record_game(winner=winner, decisions=decisions)
+                # ``_play_one_match_game_indexed`` converts engine-
+                # level worker crashes into a ``(None, 0)`` sentinel.
+                # Remember the index so we can print a loud summary
+                # at the end of the run; the progress tracker still
+                # sees ``winner=None, decisions=0`` and folds it
+                # into draws (a follow-up commit splits the crash
+                # count out into its own counter so the UI can show
+                # them separately without polluting the win-rate).
+                if winner is None and decisions == 0:
+                    crashed_game_indices.append(game_idx)
+                progress.record_game(
+                    winner=winner, decisions=decisions,
+                )
     except BaseException:
         progress.finalize(status="failed")
         raise
     progress.finalize(status="completed")
+    _log_crashed_games(crashed_game_indices, n_games)
     indexed.sort(key=lambda t: t[0])
     return _aggregate_results([r for _, r in indexed], n_games)
+
+
+def _log_crashed_games(crashed: list[int], n_games: int) -> None:
+    """Print a loud stderr summary if any worker games crashed.
+
+    Mirrors ``data_gen``'s post-pool warning: a silent partial-skip
+    would mask the underlying engine bug (today's residual ~1/1000
+    PIMC state-corruption bug). Crashed games are still counted as
+    draws in ``MatchStats`` so the totals satisfy
+    ``wins+draws == n_games``; this print is purely operator-facing.
+    """
+    if not crashed:
+        return
+    print(
+        f"# WARNING: {len(crashed)}/{n_games} games crashed in the "
+        f"eval pool and were dropped (engine state corruption — see "
+        f"worker stderr above for tracebacks). Crashed games are "
+        f"counted as draws. Affected game indices: {crashed[:20]}"
+        f"{' ...' if len(crashed) > 20 else ''}",
+        file=sys.stderr,
+    )
 
 
 def _play_one_match_game_packed(
@@ -180,8 +239,34 @@ def _play_one_match_game_packed(
     """Top-level pickleable worker. Unpacks the args tuple and
     delegates to ``_play_one_match_game``. Lives at module top
     level (not nested) so multiprocessing can pickle it across
-    the spawn boundary."""
-    return _play_one_match_game(*args)
+    the spawn boundary.
+
+    Engine-level errors (state-corruption bugs that surface at scale —
+    ~1 in 1000 PIMC games as of 2026-05-02) are caught here and
+    converted to a ``(None, 0)`` sentinel so a single bad game
+    doesn't take down the entire eval pool. Without this catch,
+    ``pool.map`` re-raises the worker exception and aborts the whole
+    run, losing the ~99 games of useful data already played. The
+    traceback is logged to worker stderr so failures stay visible
+    via the pool's stderr relay; the driver re-detects the sentinel
+    by ``winner is None and decisions == 0`` and surfaces a loud
+    summary at the end of the run.
+
+    Mirrors the worker-crash handling in
+    ``mtg_bot.training.data_gen._play_one_parallel_game``.
+    """
+    game_idx = args[0]
+    try:
+        return _play_one_match_game(*args)
+    except Exception as exc:  # noqa: BLE001 - intentional broad catch
+        print(
+            f"[worker] eval game {game_idx} crashed "
+            f"({type(exc).__name__}: {exc}); dropping this game, "
+            f"pool continues.",
+            file=sys.stderr,
+        )
+        traceback.print_exc(file=sys.stderr)
+        return None, 0
 
 
 def _play_one_match_game_indexed(
@@ -191,8 +276,25 @@ def _play_one_match_game_indexed(
     with its ``game_idx`` so the progress-tracked driver can re-sort
     ``imap_unordered`` results into deterministic input order before
     aggregating. The unindexed variant uses ``pool.map`` which
-    preserves order on its own and doesn't need this tagging."""
-    return args[0], _play_one_match_game(*args)
+    preserves order on its own and doesn't need this tagging.
+
+    Same worker-crash handling as the packed variant: engine-level
+    exceptions are caught and converted to the ``(game_idx, (None, 0))``
+    sentinel so one bad game doesn't tank the whole eval; the driver
+    keys off ``winner is None and decisions == 0`` to detect crashes.
+    """
+    game_idx = args[0]
+    try:
+        return game_idx, _play_one_match_game(*args)
+    except Exception as exc:  # noqa: BLE001 - intentional broad catch
+        print(
+            f"[worker] eval game {game_idx} crashed "
+            f"({type(exc).__name__}: {exc}); dropping this game, "
+            f"pool continues.",
+            file=sys.stderr,
+        )
+        traceback.print_exc(file=sys.stderr)
+        return game_idx, (None, 0)
 
 
 def _play_one_match_game(
