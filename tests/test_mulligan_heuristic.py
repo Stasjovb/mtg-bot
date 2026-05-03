@@ -172,3 +172,59 @@ def test_bottom_returns_distinct_ids():
     )
     bottom = heuristic_bottom_choice(hand, 3)
     assert len(set(bottom)) == 3
+
+
+def test_bottom_handles_int_mana_cost():
+    """``card.printing.mana_cost`` is sometimes a plain ``int``
+    rather than a ``ManaCost`` instance — production hit this on
+    multiple v6-vs-v5 eval games as ``TypeError: 'int' object is
+    not callable`` from ``cost.total()``. The defensive guard in
+    ``_mana_value`` should accept both shapes."""
+    from dataclasses import dataclass
+
+    @dataclass
+    class _IntCostPrinting:
+        is_land: bool = False
+        mana_cost: int = 5  # plain int, not a ManaCost
+
+    @dataclass
+    class _IntCostCard:
+        id: int
+        printing: _IntCostPrinting
+
+    hand = [
+        _IntCostCard(id=1, printing=_IntCostPrinting(mana_cost=2)),
+        _IntCostCard(id=2, printing=_IntCostPrinting(mana_cost=8)),
+        _IntCostCard(id=3, printing=_IntCostPrinting(mana_cost=4)),
+    ]
+    # Bottom 1 card → highest mana value (id=2, cost 8) goes first.
+    # If the int-cost branch wasn't handled, this would raise
+    # TypeError instead.
+    bottom = heuristic_bottom_choice(hand, 1)
+    assert bottom == [2]
+
+
+def test_bottom_handles_missing_mana_cost():
+    """Some printings have no ``mana_cost`` attribute at all
+    (e.g. tokens). Defensive ``getattr(..., None)`` plus the
+    ``isinstance``/``callable`` checks should fall back to 0
+    rather than raising."""
+    from dataclasses import dataclass
+
+    @dataclass
+    class _NoCostPrinting:
+        is_land: bool = False
+        # no mana_cost attribute
+
+    @dataclass
+    class _NoCostCard:
+        id: int
+        printing: _NoCostPrinting
+
+    hand = [
+        _NoCostCard(id=1, printing=_NoCostPrinting()),
+        _NoCostCard(id=2, printing=_NoCostPrinting()),
+    ]
+    # All cards have mana_value=0 → tie-break on id; first id wins.
+    bottom = heuristic_bottom_choice(hand, 1)
+    assert bottom == [1]

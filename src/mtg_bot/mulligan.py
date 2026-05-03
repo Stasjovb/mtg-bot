@@ -34,11 +34,26 @@ def _is_land(card: "GameObject") -> bool:
 def _mana_value(card: "GameObject") -> int:
     """Total mana cost of the card's printed mana_cost. Lands and
     cards without a mana_cost return 0 (lands are free, and the
-    handful of {0}-cost cards correctly compare as cheapest)."""
+    handful of {0}-cost cards correctly compare as cheapest).
+
+    Defensive against ``mana_cost`` being either a ``ManaCost``
+    instance (the typical case — has a ``.total()`` method) or
+    a plain ``int`` (some printings store the integer cost
+    directly). Anything else (including ``None``) falls back to
+    0. The mulligan policy uses this only for ranking, so the
+    exact value matters less than not raising on the lookup —
+    a TypeError in the bottom-pick path would crash the whole
+    setup_game call.
+    """
     cost = getattr(card.printing, "mana_cost", None)
     if cost is None:
         return 0
-    return cost.total()
+    if isinstance(cost, int):
+        return cost
+    total = getattr(cost, "total", None)
+    if callable(total):
+        return total()
+    return 0
 
 
 def heuristic_mulligan_decision(
