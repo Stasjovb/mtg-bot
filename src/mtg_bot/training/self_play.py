@@ -32,6 +32,7 @@ from mtg_bot.search.engine_adapter import MtgGameStateAdapter
 from mtg_bot.search.protocol import CHANCE_PLAYER, PlayerID
 from mtg_bot.simulate import setup_game
 from mtg_bot.training.config import StrategyFactory
+from mtg_bot.training.progress import EvalProgress
 
 
 # Hard cap on decisions per game. A pathological infinite priority
@@ -101,6 +102,7 @@ def run_match_parallel(
     base_seed: int = 0,
     decision_cap: int = _DEFAULT_DECISION_CAP,
     n_workers: Optional[int] = None,
+    progress: Optional[EvalProgress] = None,
 ) -> MatchStats:
     """Same contract as ``run_match`` but distributes games across a
     ``multiprocessing.Pool``.
@@ -108,8 +110,7 @@ def run_match_parallel(
     Identical output to the sequential function for the same
     ``base_seed`` — per-game seeds are derived from ``game_idx``,
     not worker assignment, so each game produces the same result
-    no matter which worker plays it. ``Pool.map`` preserves input
-    order so aggregation is deterministic too.
+    no matter which worker plays it.
 
     ``n_workers`` defaults to ``cpu_count() - 2`` (leaves a few
     cores for OS / Python main / other work). Pass an explicit int
@@ -123,21 +124,53 @@ def run_match_parallel(
     Worker spawn cost on Windows is ~1-2s per worker, paid once per
     pool. Dominates wall-clock at very small ``n_games``; amortizes
     away past a few dozen games.
+
+    When ``progress`` is supplied, results stream back via
+    ``imap_unordered`` and the tracker is fed per-game so the UI
+    sees live win-rate updates. The tracker is finalized
+    ('completed' or 'failed') by this function before returning;
+    the caller doesn't need to call ``finalize`` itself. With no
+    progress tracker the legacy ``pool.map`` blocking path is used
+    so existing callers keep their exact behavior (no per-game
+    Python overhead).
     """
     if n_workers is None:
         n_workers = max(1, (os.cpu_count() or 1) - 2)
     if n_workers < 1:
         raise ValueError(f"n_workers must be >= 1, got {n_workers}")
     if n_games == 0:
+        if progress is not None:
+            progress.finalize(status="completed")
         return MatchStats(wins={0: 0, 1: 0}, draws=0, games=0, avg_decisions=0.0)
 
     args_list = [
         (i, p0_factory, p1_factory, base_seed, decision_cap)
         for i in range(n_games)
     ]
-    with mp.Pool(processes=n_workers) as pool:
-        results = pool.map(_play_one_match_game_packed, args_list)
-    return _aggregate_results(results, n_games)
+    if progress is None:
+        with mp.Pool(processes=n_workers) as pool:
+            results = pool.map(_play_one_match_game_packed, args_list)
+        return _aggregate_results(results, n_games)
+
+    # Progress-tracked path: stream completions via imap_unordered.
+    # Wrap args with the game_idx so we can re-sort for deterministic
+    # aggregation (imap_unordered preserves identity but not order).
+    progress.begin()
+    indexed: list[tuple[int, tuple[Optional[PlayerID], int]]] = []
+    try:
+        with mp.Pool(processes=n_workers) as pool:
+            for game_idx, result in pool.imap_unordered(
+                _play_one_match_game_indexed, args_list, chunksize=1,
+            ):
+                indexed.append((game_idx, result))
+                winner, decisions = result
+                progress.record_game(winner=winner, decisions=decisions)
+    except BaseException:
+        progress.finalize(status="failed")
+        raise
+    progress.finalize(status="completed")
+    indexed.sort(key=lambda t: t[0])
+    return _aggregate_results([r for _, r in indexed], n_games)
 
 
 def _play_one_match_game_packed(
@@ -148,6 +181,17 @@ def _play_one_match_game_packed(
     level (not nested) so multiprocessing can pickle it across
     the spawn boundary."""
     return _play_one_match_game(*args)
+
+
+def _play_one_match_game_indexed(
+    args: tuple,
+) -> tuple[int, tuple[Optional[PlayerID], int]]:
+    """Same as ``_play_one_match_game_packed`` but tags each result
+    with its ``game_idx`` so the progress-tracked driver can re-sort
+    ``imap_unordered`` results into deterministic input order before
+    aggregating. The unindexed variant uses ``pool.map`` which
+    preserves order on its own and doesn't need this tagging."""
+    return args[0], _play_one_match_game(*args)
 
 
 def _play_one_match_game(
