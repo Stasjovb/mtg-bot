@@ -126,6 +126,7 @@ def _self_play(
     run_id: str | None = None,
     deck_pool: list[Deck] | None = None,
     replay_config: ReplayCaptureConfig | None = None,
+    hang_dump_dir: str | None = None,
 ) -> tuple[int, int, float]:
     """Run one self-play data-gen pass. Returns (n_samples,
     n_policy_rows, elapsed_seconds). Both seats use the same
@@ -187,6 +188,7 @@ def _self_play(
                 progress=progress,
                 deck_pool=deck_pool,
                 replay_config=replay_config,
+                hang_dump_dir=hang_dump_dir,
             )
         )
     except BaseException:
@@ -304,6 +306,7 @@ def _eval_match(
     opponent_label: str = "previous",
     deck_pool: list[Deck] | None = None,
     replay_config: ReplayCaptureConfig | None = None,
+    hang_dump_dir: str | None = None,
 ) -> tuple[int, int, int, float]:
     """Head-to-head match: new (seat 0) vs old (seat 1). Returns
     (new_wins, old_wins, draws, elapsed_seconds).
@@ -383,6 +386,7 @@ def _eval_match(
         progress=progress,
         deck_pool=deck_pool,
         replay_config=replay_config,
+        hang_dump_dir=hang_dump_dir,
     )
     elapsed = time.perf_counter() - started
     return (
@@ -551,6 +555,18 @@ def main() -> None:
             "iteration). Pass 0 to disable replay capture for eval."
         ),
     )
+    parser.add_argument(
+        "--hang-dump-dir", type=Path, default=Path("debug_hangs"),
+        help=(
+            "Parent directory for per-game hang diagnostics. When a "
+            "self-play or eval game hits the per-game timeout, the "
+            "worker writes meta.json + traceback.txt under "
+            "<hang-dump-dir>/<run_id>/ before returning the sentinel. "
+            "Reproducible inputs (seed + config) plus a "
+            "faulthandler.dump_traceback of all threads. Default "
+            "'debug_hangs' (gitignored). Pass empty string to disable."
+        ),
+    )
     args = parser.parse_args()
 
     args.data_dir.mkdir(parents=True, exist_ok=True)
@@ -659,6 +675,10 @@ def main() -> None:
                 nn_hidden_sizes=iter_hidden_sizes,
                 nn_with_policy=True,
             )
+        sp_hang_dir = (
+            str(args.hang_dump_dir / self_play_run_id)
+            if str(args.hang_dump_dir) else None
+        )
         n_samples, n_policy, gen_elapsed = _self_play(
             weights_path=best_weights,
             n_games=args.games_per_iteration,
@@ -674,6 +694,7 @@ def main() -> None:
             run_id=self_play_run_id,
             deck_pool=deck_pool,
             replay_config=self_play_replay_config,
+            hang_dump_dir=sp_hang_dir,
         )
         print(
             f"[iterate]   gen done in {gen_elapsed/60:.1f}m: "
@@ -734,6 +755,10 @@ def main() -> None:
                     nn_hidden_sizes=iter_hidden_sizes,
                     nn_with_policy=True,
                 )
+            eval_hang_dir = (
+                str(args.hang_dump_dir / eval_run_id)
+                if str(args.hang_dump_dir) else None
+            )
             wins_new, wins_old, draws, eval_elapsed = _eval_match(
                 new_weights=new_weights,
                 old_weights=best_weights,
@@ -750,6 +775,7 @@ def main() -> None:
                 opponent_label=best_version,
                 deck_pool=deck_pool,
                 replay_config=eval_replay_config,
+                hang_dump_dir=eval_hang_dir,
             )
             n_decided = wins_new + wins_old
             win_rate = wins_new / n_decided if n_decided else 0.0
