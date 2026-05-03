@@ -1,0 +1,278 @@
+"""Tests for ``run_match_parallel``'s worker-crash resilience.
+
+Mirrors the worker-crash handling in
+``mtg_bot.training.data_gen._play_one_parallel_game``. The
+production motivation: a residual ~1-in-1000 PIMC engine state-
+corruption bug surfaces as a ``ValueError`` mid-game; without
+catching it inside the worker, ``pool.map`` / ``pool.imap_unordered``
+re-raises and aborts the entire eval (losing ~99 games of useful
+data). The fix is to catch ``Exception`` in the worker, emit a
+traceback to stderr, and return a ``(None, 0)`` "crashed" sentinel
+that the driver re-detects, counts toward
+``MatchStats.draws``, and surfaces via a loud stderr summary.
+
+The contract the tests pin down:
+
+1. ``_play_one_match_game_packed`` returns ``(None, 0)`` and writes
+   a traceback to stderr when the inner game raises.
+2. ``_play_one_match_game_indexed`` returns ``(game_idx, (None, 0))``
+   on the same error path (preserves the ``game_idx`` so the parallel
+   driver can still re-sort ``imap_unordered`` results).
+3. ``run_match_parallel`` (no-progress / ``pool.map`` path) survives
+   a factory that raises mid-game, counts the crashed game as a
+   draw in ``MatchStats``, and emits a ``# WARNING: K/N games
+   crashed ...`` summary to stderr.
+4. ``run_match_parallel`` (progress-tracked / ``imap_unordered``
+   path) survives the same scenario, finalizes the progress tracker
+   with status='completed', and emits the same stderr summary.
+
+The tests use a module-level ``RaisesOnceFactory`` so multiprocessing
+can pickle it across the spawn boundary on Windows.
+"""
+
+from __future__ import annotations
+
+import random
+from pathlib import Path
+from typing import Any
+
+from mtg_bot.training import (
+    EvalProgress, random_choice_factory,
+)
+from mtg_bot.training.self_play import (
+    _play_one_match_game_indexed,
+    _play_one_match_game_packed,
+    run_match_parallel,
+)
+
+
+# Module-level so multiprocessing can pickle this across spawn.
+class _RaisingStrategy:
+    """Strategy that raises ``ValueError`` on its first ``choose``
+    call. Stand-in for the residual ~1/1000 PIMC engine state-
+    corruption bug ("card N not castable by PX") that the eval pool
+    must survive without aborting."""
+
+    def __init__(self, message: str = "simulated engine corruption") -> None:
+        self.message = message
+
+    def choose(self, state, player_id):  # noqa: ANN001 - matches search API
+        raise ValueError(self.message)
+
+    def choose_with_visits(self, state, player_id):  # noqa: ANN001
+        return {}
+
+
+def _raising_factory(seed: int) -> _RaisingStrategy:
+    """Top-level pickleable factory: every game built with this
+    factory raises on its first decision. Used to simulate the
+    state-corruption bug in tests."""
+    return _RaisingStrategy()
+
+
+# Selectively raises based on the ``MTG_BOT_EVAL_CRASH_SEEDS`` env
+# var (comma-separated seed integers). Env vars cross the spawn
+# boundary on Windows; module-level globals don't. Lets a parallel
+# test simulate "only game K crashes" without needing Manager IPC.
+import os as _os
+
+
+def _crash_seeds_from_env() -> set[int]:
+    raw = _os.environ.get("MTG_BOT_EVAL_CRASH_SEEDS", "")
+    return {int(s) for s in raw.split(",") if s.strip()}
+
+
+class _SelectiveRaisingStrategy:
+    """Raises iff its construction seed is listed in
+    ``MTG_BOT_EVAL_CRASH_SEEDS`` — otherwise plays as a
+    ``RandomChoice``. Lets us simulate "only game K crashes" in a
+    parallel test where the env var crosses the spawn boundary."""
+
+    def __init__(self, seed: int) -> None:
+        self._raises = seed in _crash_seeds_from_env()
+        self._inner = random.Random(seed)
+
+    def choose(self, state, player_id):  # noqa: ANN001
+        if self._raises:
+            raise ValueError(
+                f"simulated engine corruption (seed={self._inner!r})"
+            )
+        legal = state.legal_decisions()
+        if not legal:
+            raise ValueError("no legal decisions")
+        return self._inner.choice(legal)
+
+    def choose_with_visits(self, state, player_id):  # noqa: ANN001
+        return {}
+
+
+def _selective_raising_factory(seed: int) -> _SelectiveRaisingStrategy:
+    """Top-level pickleable factory paired with
+    ``_SelectiveRaisingStrategy``. Set
+    ``MTG_BOT_EVAL_CRASH_SEEDS=<seed>,<seed>,...`` BEFORE spawning
+    the pool — workers re-import the module and re-read the env var."""
+    return _SelectiveRaisingStrategy(seed)
+
+
+# ---------- worker-level wrappers ------------------------------------------
+
+
+def test_packed_worker_returns_sentinel_on_crash(capfd):
+    """``_play_one_match_game_packed`` catches engine errors and
+    returns ``(None, 0)`` rather than re-raising. Traceback is
+    routed to stderr so the pool's stderr relay surfaces the cause."""
+    args = (
+        0,                          # game_idx
+        _raising_factory,           # p0_factory — raises mid-game
+        random_choice_factory,      # p1_factory
+        0,                          # base_seed
+        100,                        # decision_cap
+    )
+    result = _play_one_match_game_packed(args)
+    assert result == (None, 0)
+    err = capfd.readouterr().err
+    assert "[worker] eval game 0 crashed" in err
+    assert "ValueError" in err
+    assert "simulated engine corruption" in err
+
+
+def test_indexed_worker_preserves_game_idx_on_crash(capfd):
+    """``_play_one_match_game_indexed`` must still return its
+    ``game_idx`` when the inner game crashes, otherwise the
+    progress-tracked driver can't re-sort ``imap_unordered``
+    results back into deterministic input order."""
+    args = (
+        7,                          # game_idx — must come back unchanged
+        _raising_factory,
+        random_choice_factory,
+        0,
+        100,
+    )
+    game_idx, result = _play_one_match_game_indexed(args)
+    assert game_idx == 7
+    assert result == (None, 0)
+    err = capfd.readouterr().err
+    assert "[worker] eval game 7 crashed" in err
+
+
+# ---------- run_match_parallel: pool.map (no-progress) path ----------------
+
+
+def test_run_match_parallel_no_progress_survives_crashes(capfd):
+    """A factory that raises every game produces a MatchStats whose
+    draws==n_games (every crash → draw) and emits a loud stderr
+    summary listing the crashed indices. The pool itself completes
+    normally — this is the contract the eval CLI relies on so a
+    1/1000 corruption bug can't tank a 100-game match."""
+    n_games = 4
+    stats = run_match_parallel(
+        p0_factory=_raising_factory,
+        p1_factory=random_choice_factory,
+        n_games=n_games,
+        base_seed=0,
+        n_workers=2,
+    )
+    assert stats.games == n_games
+    # Every game crashed → every game should be a draw with 0
+    # decisions logged. Wins must be exactly zero on both sides.
+    assert stats.wins == {0: 0, 1: 0}
+    assert stats.draws == n_games
+    assert stats.avg_decisions == 0.0
+
+    err = capfd.readouterr().err
+    assert "# WARNING:" in err
+    assert f"{n_games}/{n_games} games crashed" in err
+
+
+def test_run_match_parallel_no_progress_partial_crash(
+    monkeypatch, capfd: Any,
+):
+    """Mixed scenario — only one game's strategy raises; the rest
+    play to completion. The crashed game shows up as +1 draw on top
+    of any organic draws, and ``wins+draws == n_games`` still
+    holds. This is the production scenario: 99/100 games complete
+    normally and 1 dies in the engine. The env-var-based selector
+    lets the configuration cross the spawn boundary into workers."""
+    n_games = 5
+    base_seed = 13
+    # ``_play_one_match_game`` builds p0's strategy with seed
+    # ``base_seed + 100*game_idx`` — make game 2's p0 strategy raise.
+    target_seed = base_seed + 100 * 2
+    monkeypatch.setenv("MTG_BOT_EVAL_CRASH_SEEDS", str(target_seed))
+
+    stats = run_match_parallel(
+        p0_factory=_selective_raising_factory,
+        p1_factory=random_choice_factory,
+        n_games=n_games,
+        base_seed=base_seed,
+        n_workers=2,
+    )
+
+    assert stats.games == n_games
+    # Sum invariant must always hold even with crashes folded in.
+    assert stats.wins[0] + stats.wins[1] + stats.draws == n_games
+    # Exactly one game crashed → at least one draw. The other four
+    # play to completion (no decision-cap timeouts at the default
+    # cap with random play), so this is a tight bound.
+    assert stats.draws >= 1
+    # The non-crashed games contributed real decisions, so the
+    # average must be strictly positive (a pure-crash run would
+    # have avg_decisions==0).
+    assert stats.avg_decisions > 0
+
+    err = capfd.readouterr().err
+    assert "# WARNING:" in err
+    assert "1/5 games crashed" in err
+
+
+# ---------- run_match_parallel: imap_unordered (progress) path -------------
+
+
+def test_run_match_parallel_with_progress_survives_crashes(
+    tmp_path: Path, capfd: Any,
+):
+    """The progress-tracked path also has to swallow worker crashes.
+    Verifies the progress JSON finalizes at status='completed' (not
+    'failed') and the crashed games are recorded — same as a no-
+    progress run, just with the extra UI-facing snapshot."""
+    n_games = 3
+    progress = EvalProgress(
+        progress_path=tmp_path / "eval.json",
+        run_id="eval",
+        n_games_total=n_games,
+        n_workers=2,
+        opponent_label="random",
+        flush_interval_s=0.0,
+    )
+    stats = run_match_parallel(
+        p0_factory=_raising_factory,
+        p1_factory=random_choice_factory,
+        n_games=n_games,
+        base_seed=0,
+        n_workers=2,
+        progress=progress,
+    )
+
+    assert stats.games == n_games
+    assert stats.draws == n_games
+    assert stats.wins == {0: 0, 1: 0}
+
+    err = capfd.readouterr().err
+    assert "# WARNING:" in err
+    assert f"{n_games}/{n_games} games crashed" in err
+
+    import json
+    payload = json.loads((tmp_path / "eval.json").read_text(encoding="utf-8"))
+    assert payload["status"] == "completed"
+    assert payload["n_games_done"] == n_games
+    assert payload["ended_at"] is not None
+    # Crashed games go into the dedicated EvalProgress.crashed
+    # counter (not draws) so the UI's win_rate stays honest. Note
+    # this differs from MatchStats, which folds crashes into draws
+    # to keep wins+draws==n_games — both views are intentional.
+    assert payload["crashed"] == n_games
+    assert payload["draws"] == 0
+    assert payload["wins_new"] == 0
+    assert payload["wins_old"] == 0
+    # win_rate sentinel is 0.0 when there are no decided games.
+    assert payload["win_rate"] == 0.0

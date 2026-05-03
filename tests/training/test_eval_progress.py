@@ -120,6 +120,81 @@ def test_win_rate_zero_when_only_draws(tmp_path: Path):
     assert payload["win_rate"] == 0.0
 
 
+def test_crashed_games_increment_dedicated_counter(tmp_path: Path):
+    """``record_game(crashed=True)`` must increment a dedicated
+    ``crashed`` counter and stay OUT of wins_new / wins_old / draws,
+    so a 1-in-1000 worker corruption bug doesn't pollute the head-
+    to-head win rate. Total games seen is still
+    ``n_games_done == wins_new + wins_old + draws + crashed``."""
+    progress = _make(tmp_path / "run.json", total=4)
+    progress.begin()
+    progress.record_game(winner=0, decisions=300)        # new wins
+    progress.record_game(winner=1, decisions=400)        # opp wins
+    progress.record_game(winner=None, decisions=350)     # draw
+    progress.record_game(
+        winner=None, decisions=0, crashed=True,
+    )                                                    # crashed
+    progress.finalize(status="completed")
+
+    payload = json.loads((tmp_path / "run.json").read_text(encoding="utf-8"))
+    assert payload["wins_new"] == 1
+    assert payload["wins_old"] == 1
+    assert payload["draws"] == 1
+    assert payload["crashed"] == 1
+    assert payload["n_games_done"] == 4
+    # win_rate is computed over decided games only (excludes draws
+    # AND crashes) — 1 win out of 2 decided games = 0.5.
+    assert payload["win_rate"] == 0.5
+
+
+def test_crashed_kwarg_default_is_false(tmp_path: Path):
+    """Existing call sites that don't pass ``crashed`` must keep
+    their behavior. The kwarg defaults to False so a
+    ``record_game(winner=None, decisions=0)`` call still increments
+    ``draws``, not ``crashed`` — and the new ``crashed`` field is 0."""
+    progress = _make(tmp_path / "run.json", total=2)
+    progress.begin()
+    progress.record_game(winner=None, decisions=0)
+    progress.record_game(winner=0, decisions=200)
+    progress.finalize(status="completed")
+    payload = json.loads((tmp_path / "run.json").read_text(encoding="utf-8"))
+    assert payload["draws"] == 1
+    assert payload["crashed"] == 0
+    assert payload["wins_new"] == 1
+
+
+def test_payload_always_includes_crashed_field(tmp_path: Path):
+    """Even on a run with zero crashes — and on the initial 'begin'
+    snapshot before any games are recorded — the payload schema
+    must include the ``crashed`` key so downstream consumers
+    (UI, log parsers) don't have to special-case its absence."""
+    progress = _make(tmp_path / "run.json", total=5)
+    progress.begin()
+    payload = json.loads((tmp_path / "run.json").read_text(encoding="utf-8"))
+    assert "crashed" in payload
+    assert payload["crashed"] == 0
+
+
+def test_crashed_does_not_pollute_win_rate(tmp_path: Path):
+    """All crashes (no decided games) → win_rate stays at the 0.0
+    sentinel rather than dividing by something that includes the
+    crash count. Mirrors the all-draws case but via the crash
+    path. Important: a 100-game eval where every game crashed
+    must NOT report a 0% or 100% win rate (both lies); 0.0 here
+    means "no decided games" and the UI surfaces that honestly."""
+    progress = _make(tmp_path / "run.json", total=3)
+    progress.begin()
+    for _ in range(3):
+        progress.record_game(winner=None, decisions=0, crashed=True)
+    progress.finalize(status="completed")
+    payload = json.loads((tmp_path / "run.json").read_text(encoding="utf-8"))
+    assert payload["wins_new"] == 0
+    assert payload["wins_old"] == 0
+    assert payload["draws"] == 0
+    assert payload["crashed"] == 3
+    assert payload["win_rate"] == 0.0
+
+
 def test_atomic_writes_under_concurrent_reads(tmp_path: Path):
     """Same atomicity guarantee as DataGenProgress — flushing every
     record_game while a tight-poll reader is open should never
