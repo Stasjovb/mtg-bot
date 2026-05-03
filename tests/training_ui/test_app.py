@@ -135,6 +135,67 @@ def test_progress_dir_missing_at_create_time_still_serves(tmp_path: Path):
     assert res.get_json() == {"runs": []}
 
 
+def test_api_run_replays_no_replays_dir(client):
+    """A run that didn't capture replays returns an empty list with
+    a human-readable note rather than 404 — the UI shows a 'capture
+    off' chip in that case."""
+    c, progress_dir = client
+    _write_run(progress_dir, "iter_001_self_play_v6", replays_dir=None)
+    res = c.get("/api/runs/iter_001_self_play_v6/replays")
+    assert res.status_code == 200
+    payload = res.get_json()
+    assert payload["count"] == 0
+    assert payload["replays"] == []
+    assert "did not capture" in payload["note"]
+
+
+def test_api_run_replays_lists_files(client, tmp_path: Path):
+    """When replays_dir is set and exists, the endpoint returns the
+    contained .json.gz files with subpaths suitable for the main UI's
+    ``/api/load_replay/<subpath>`` route."""
+    c, progress_dir = client
+    rep_dir = tmp_path / "replays" / "iter_001_self_play_v6"
+    rep_dir.mkdir(parents=True)
+    (rep_dir / "game_seed42_idx0000.json.gz").write_bytes(b"")
+    (rep_dir / "game_seed42_idx0025.json.gz").write_bytes(b"")
+    (rep_dir / "ignore_me.txt").write_text("not a replay")
+    _write_run(
+        progress_dir, "iter_001_self_play_v6",
+        replays_dir=str(rep_dir),
+    )
+    res = c.get("/api/runs/iter_001_self_play_v6/replays")
+    assert res.status_code == 200
+    payload = res.get_json()
+    assert payload["count"] == 2
+    subpaths = [r["subpath"] for r in payload["replays"]]
+    assert subpaths == [
+        "iter_001_self_play_v6/game_seed42_idx0000.json.gz",
+        "iter_001_self_play_v6/game_seed42_idx0025.json.gz",
+    ]
+
+
+def test_api_run_replays_dir_missing(client):
+    """If replays_dir was set but the directory doesn't exist on
+    disk (e.g. iterate aborted before any capture, or a stale path),
+    return empty + a hint rather than crashing the UI."""
+    c, progress_dir = client
+    _write_run(
+        progress_dir, "iter_001_self_play_v6",
+        replays_dir="/no/such/path",
+    )
+    res = c.get("/api/runs/iter_001_self_play_v6/replays")
+    assert res.status_code == 200
+    payload = res.get_json()
+    assert payload["count"] == 0
+    assert "does not exist" in payload["note"]
+
+
+def test_api_run_replays_unknown_run(client):
+    c, _ = client
+    res = c.get("/api/runs/nope/replays")
+    assert res.status_code == 404
+
+
 def test_run_id_falls_back_to_filename_stem(client):
     """A progress file missing the run_id key should still appear
     in /api/runs, identified by its filename stem. Defensive — we
