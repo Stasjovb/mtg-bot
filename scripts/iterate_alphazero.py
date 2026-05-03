@@ -166,10 +166,21 @@ def _train_next(
     seed: int,
     notes: str,
     window_recent: int | None,
+    hidden_sizes: tuple[int, ...] | None = None,
 ) -> str:
     """Run train_nn.py via subprocess so its progress JSON / hub
     UI / registry plumbing all behave the same as a manual train.
-    Returns the registered version ID (e.g. ``v5``)."""
+    Returns the registered version ID (e.g. ``v5``).
+
+    When ``hidden_sizes`` is set, passes ``--hidden-sizes
+    "h1,h2,...,hn"`` to train_nn.py so the new model trains at
+    the same trunk capacity as the bootstrap version. Without
+    this, iterations of a non-default-arch bootstrap (e.g. v6's
+    1024-1024-512 trunk) would silently regress to the
+    registry-baseline 128-128-64; the new model would have ~5%
+    of the bootstrap's parameters and the acceptance gate would
+    always reject it.
+    """
     import subprocess
 
     cmd = [
@@ -184,6 +195,8 @@ def _train_next(
         "--seed", str(seed),
         "--notes", notes,
     ]
+    if hidden_sizes is not None:
+        cmd.extend(["--hidden-sizes", ",".join(str(s) for s in hidden_sizes)])
     # train_nn.py loads the WHOLE dir; --window-recent isn't
     # supported there yet. For now, we honor it by symlinking /
     # copying the recent files into a temp subdir and pointing
@@ -412,6 +425,22 @@ def main() -> None:
             f"in {args.registry_root}. Train one first via "
             f"scripts/train_nn.py."
         )
+    # Inherit the trunk shape from the bootstrap version so each
+    # iteration trains at the same capacity. Without this, an
+    # iterate run starting from v6 (1024-1024-512) would silently
+    # train v7 / v8 / ... at the registry-baseline 128-128-64,
+    # reducing param count by ~95% per iteration and making the
+    # acceptance gate impossible to clear.
+    bootstrap_meta = registry.load_metadata(args.bootstrap_version)
+    iter_hidden_sizes = (
+        tuple(bootstrap_meta.hidden_sizes)
+        if getattr(bootstrap_meta, "hidden_sizes", None) else None
+    )
+    if iter_hidden_sizes:
+        print(
+            f"[iterate] hidden_sizes inherited from "
+            f"{args.bootstrap_version}: {iter_hidden_sizes}"
+        )
 
     # Initialize the iterate state from the bootstrap version (or
     # resume from disk if the loop was interrupted earlier).
@@ -484,6 +513,7 @@ def main() -> None:
                 f"self-play driven by {best_version}"
             ),
             window_recent=args.window_recent,
+            hidden_sizes=iter_hidden_sizes,
         )
         new_weights = registry.weights_path(new_version)
         print(f"[iterate]   trained: {new_version}")
