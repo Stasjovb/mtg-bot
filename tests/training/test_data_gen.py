@@ -8,6 +8,7 @@ test runs in single-digit seconds).
 
 from __future__ import annotations
 
+import json
 import random
 from pathlib import Path
 
@@ -738,3 +739,144 @@ def test_play_one_game_recording_falls_back_when_visits_empty():
             "RandomChoice has no visit data; action mask "
             "should be all-False"
         )
+
+
+# ---------- DataGenProgress wiring ------------------------------------------
+
+from mtg_bot.training import DataGenProgress  # noqa: E402
+
+
+def _make_progress(progress_path: Path, total: int, workers: int = 1):
+    return DataGenProgress(
+        progress_path=progress_path,
+        run_id=progress_path.stem,
+        n_games_total=total,
+        n_workers=workers,
+        flush_interval_s=0.0,  # flush every record so the file is current
+    )
+
+
+def test_generate_training_data_threads_progress(tmp_path: Path):
+    """Sequential driver calls progress.begin() once and
+    progress.record_game() per game. Covers the
+    ``if progress is not None:`` branches (lines 222 + 237)."""
+    progress = _make_progress(tmp_path / "seq.json", total=2)
+    f, o = generate_training_data(
+        p0_factory=random_choice_factory,
+        p1_factory=random_choice_factory,
+        n_games=2, base_seed=17,
+        progress=progress,
+    )
+    progress.finalize(status="completed")
+    payload = json.loads((tmp_path / "seq.json").read_text(encoding="utf-8"))
+    assert payload["n_games_done"] == 2
+    assert payload["n_games_total"] == 2
+    # The samples count should match the array we got back.
+    assert payload["n_samples"] == int(f.shape[0])
+
+
+def test_parallel_threads_progress(tmp_path: Path):
+    """Parallel driver also calls progress.begin() and
+    progress.record_game() per completed game. Covers lines
+    305 + 330-334."""
+    progress = _make_progress(tmp_path / "par.json", total=2, workers=2)
+    f, o = generate_training_data_parallel(
+        p0_factory=random_choice_factory,
+        p1_factory=random_choice_factory,
+        n_games=2, base_seed=17, n_workers=2,
+        progress=progress,
+    )
+    progress.finalize(status="completed")
+    payload = json.loads((tmp_path / "par.json").read_text(encoding="utf-8"))
+    assert payload["n_games_done"] == 2
+    assert payload["n_samples"] == int(f.shape[0])
+
+
+# ---------- with_policy=True parallel return shape --------------------------
+
+
+def test_parallel_with_policy_returns_four_tuple():
+    """``with_policy=True`` switches the parallel return from
+    (features, outcomes) to (features, outcomes, policy_targets,
+    action_masks). Covers line 349."""
+    from mtg_bot.training.action_encoding import ACTION_VOCAB_SIZE
+
+    f, o, p, m = generate_training_data_parallel(
+        p0_factory=random_choice_factory,
+        p1_factory=random_choice_factory,
+        n_games=2, base_seed=5, n_workers=2,
+        with_policy=True,
+    )
+    assert f.shape[1] == FEATURE_DIM
+    assert o.shape == (f.shape[0],)
+    assert p.shape == (f.shape[0], ACTION_VOCAB_SIZE)
+    assert m.shape == (f.shape[0], ACTION_VOCAB_SIZE)
+    # RandomChoice returns no visits, so all policy targets are zero
+    # and all masks are all-False.
+    assert p.sum() == 0.0
+    assert not m.any()
+
+
+def test_parallel_with_policy_zero_games_returns_empty_four_tuple():
+    """``n_games=0 + with_policy=True`` returns the empty 4-tuple
+    via ``_empty_arrays``. Covers the ``return (f,o,p,m) if
+    with_policy else (f,o)`` branch in the early-return."""
+    from mtg_bot.training.action_encoding import ACTION_VOCAB_SIZE
+
+    f, o, p, m = generate_training_data_parallel(
+        p0_factory=random_choice_factory,
+        p1_factory=random_choice_factory,
+        n_games=0, n_workers=2,
+        with_policy=True,
+    )
+    assert f.shape == (0, FEATURE_DIM)
+    assert o.shape == (0,)
+    assert p.shape == (0, ACTION_VOCAB_SIZE)
+    assert m.shape == (0, ACTION_VOCAB_SIZE)
+
+
+# ---------- worker crash resilience -----------------------------------------
+
+
+# Top-level pickleable strategy + factory for the parallel crash test.
+# The fix in _play_one_parallel_game catches the raised exception,
+# prints a traceback to worker stderr, and returns an empty chunk
+# (winner=None, 0 samples) so the pool keeps going.
+class _DataGenRaisingStrategy:
+    """Raises ``ValueError`` on the first ``choose_with_visits`` call.
+    Picklable across the spawn boundary because it's at module top
+    level and holds no closures."""
+
+    def __init__(self, message: str = "simulated engine corruption") -> None:
+        self.message = message
+
+    def choose(self, state, player_id):  # noqa: ANN001
+        raise ValueError(self.message)
+
+    def choose_with_visits(self, state, player_id):  # noqa: ANN001
+        raise ValueError(self.message)
+
+
+def _data_gen_raising_factory(seed: int) -> _DataGenRaisingStrategy:
+    """Top-level pickleable factory: every game built with this
+    factory raises on its first decision."""
+    return _DataGenRaisingStrategy()
+
+
+def test_parallel_worker_crash_is_caught_and_warns(capfd):
+    """A raising strategy in a worker triggers the broad
+    ``except Exception`` in ``_play_one_parallel_game`` (lines
+    392-404). All games end up as empty chunks (winner=None,
+    0 samples), the driver counts them as crashed and prints a
+    ``# WARNING: K/N games crashed`` summary to stderr (lines
+    335-344). The driver does not re-raise."""
+    f, o = generate_training_data_parallel(
+        p0_factory=_data_gen_raising_factory,
+        p1_factory=_data_gen_raising_factory,
+        n_games=2, base_seed=0, n_workers=2,
+    )
+    # Every game crashed → no samples landed in the arrays.
+    assert f.shape == (0, FEATURE_DIM)
+    assert o.shape == (0,)
+    captured = capfd.readouterr()
+    assert "games crashed" in captured.err
