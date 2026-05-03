@@ -63,6 +63,49 @@ def test_finalize_writes_complete_payload(tmp_path: Path):
     assert "git_commit" in payload
 
 
+def test_crashed_games_increment_crashed_not_draws(tmp_path: Path):
+    """``record_game(crashed=True)`` increments the crashed counter
+    rather than the draws counter. Mirrors the eval-side
+    EvalProgress.crashed semantics — keeps the live UI's draws
+    number honest by excluding games that never reached a clean
+    conclusion (per-game timeouts + worker engine-state crashes).
+
+    This is the fix for the bug where 31 'draws' showed up early in
+    a self-play run; those were actually crashed/timed-out games
+    being counted as outcome_p0=0.0 → draws.
+    """
+    progress = _make(tmp_path / "run.json", total=10, workers=2)
+    progress.begin()
+    progress.record_game(n_samples=10, outcome_p0=1.0)   # p0 win
+    progress.record_game(crashed=True)                    # crash
+    progress.record_game(n_samples=20, outcome_p0=-1.0)  # p1 win
+    progress.record_game(crashed=True)                    # timeout
+    progress.record_game(n_samples=30, outcome_p0=0.0)   # real draw
+    progress.finalize(status="completed")
+
+    payload = json.loads((tmp_path / "run.json").read_text(encoding="utf-8"))
+    assert payload["n_games_done"] == 5
+    assert payload["p0_wins"] == 1
+    assert payload["p1_wins"] == 1
+    assert payload["draws"] == 1   # only the real draw
+    assert payload["crashed"] == 2
+    # n_samples accumulated from non-crashed games only — empty
+    # chunks contribute 0 anyway, but the explicit ignore protects
+    # against a future caller passing nonzero n_samples by mistake.
+    assert payload["n_samples"] == 60
+
+
+def test_payload_includes_crashed_field_at_zero(tmp_path: Path):
+    """A run with no crashes still emits ``crashed: 0`` in the JSON
+    so the UI never has to handle the missing-key case."""
+    progress = _make(tmp_path / "run.json", total=2)
+    progress.begin()
+    progress.record_game(n_samples=5, outcome_p0=1.0)
+    progress.finalize(status="completed")
+    payload = json.loads((tmp_path / "run.json").read_text(encoding="utf-8"))
+    assert payload["crashed"] == 0
+
+
 def test_record_game_throttles_disk_writes(tmp_path: Path):
     """With a long flush interval, only ``begin`` and ``finalize``
     should touch disk — the in-memory counters keep accumulating.
