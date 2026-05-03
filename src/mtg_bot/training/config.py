@@ -37,6 +37,7 @@ from mtg_bot.search import (
 )
 from mtg_bot.search.evaluator import Evaluator
 from mtg_bot.search.heuristic_evaluator import MtgHeuristicEvaluator
+from mtg_bot.search.nn_eval_server import NNEvalClient, NNServerHandle
 from mtg_bot.search.nn_evaluator import NNEvaluator
 from mtg_bot.search.strategy import SearchStrategy
 
@@ -206,6 +207,53 @@ class NNPimcConfig:
             batch_size=d.get("batch_size", 32),
             with_policy=d.get("with_policy", False),
             puct=d.get("puct", False),
+        )
+
+
+@dataclass(frozen=True)
+class NNServerPimcConfig:
+    """Mirror of :class:`NNPimcConfig` but backed by a remote
+    :class:`NNEvalClient` instead of a local :class:`NNEvaluator`.
+
+    Carries an :class:`NNServerHandle` so workers can rebuild a
+    client over the IPC boundary at ``build`` time. The handle is a
+    frozen dataclass of pickle-friendly types (address, authkey
+    bytes, with_policy bool), which means this whole config pickles
+    cleanly across spawn-based multiprocessing pools — same
+    pattern as :class:`NNPimcConfig` carrying ``weights_path``.
+
+    The server is started OUT-OF-BAND by the launcher (CLI script)
+    BEFORE the worker pool spins up; workers just need the handle.
+    """
+
+    server_handle: NNServerHandle
+    samples: int = 4
+    inner_nodes: int = 200
+    batch_size: int = 32
+    with_policy: bool = False
+    puct: bool = False
+
+    def build(self, seed: int = 0) -> SearchStrategy:
+        evaluator = NNEvalClient(self.server_handle)
+        inner_nodes = self.inner_nodes
+        batch_size = self.batch_size
+        puct = self.puct
+        rng_seed_inner = seed + 100
+        rng_seed_outer = seed + 200
+
+        def inner_factory() -> MCTS:
+            return MCTS(
+                evaluator=evaluator,
+                budget_factory=lambda: Budget(max_nodes=inner_nodes),
+                rng=random.Random(rng_seed_inner),
+                batch_size=batch_size,
+                puct=puct,
+            )
+
+        return PIMC(
+            inner_factory=inner_factory,
+            samples=self.samples,
+            rng=random.Random(rng_seed_outer),
         )
 
 

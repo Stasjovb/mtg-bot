@@ -36,10 +36,13 @@ if _SRC.is_dir() and str(_SRC) not in sys.path:
 
 from mtg_bot.training import EvalProgress, run_match  # noqa: E402
 from mtg_bot.training.config import (  # noqa: E402
-    HeuristicConfig, NNPimcConfig, PimcConfig,
+    HeuristicConfig, NNPimcConfig, NNServerPimcConfig, PimcConfig,
 )
 from mtg_bot.training.self_play import run_match_parallel  # noqa: E402
 from mtg_bot.training.registry import Registry  # noqa: E402
+from mtg_bot.search.nn_eval_server import (  # noqa: E402
+    launch_server_subprocess,
+)
 
 
 def main() -> None:
@@ -97,6 +100,35 @@ def main() -> None:
             "cpu_count() - 2. Pass 1 to force sequential (useful "
             "for debugging — easier traces, no spawn overhead). "
             "Pass 0 to also force sequential."
+        ),
+    )
+    parser.add_argument(
+        "--use-nn-server", action="store_true",
+        help=(
+            "Run a centralized GPU inference server for NN evaluation. "
+            "All workers ship feature vectors (and masks for the policy "
+            "path) to the server over IPC instead of loading the model "
+            "into each worker process. Server batches across workers "
+            "and runs one forward per dispatch."
+        ),
+    )
+    parser.add_argument(
+        "--server-batch-size", type=int, default=32,
+        help="Server-side max batch size (default 32).",
+    )
+    parser.add_argument(
+        "--server-batch-wait-ms", type=float, default=5.0,
+        help=(
+            "Server-side per-batch wait window in ms (default 5.0). "
+            "Server pulls the first item, then waits up to this long "
+            "for additional items before dispatching."
+        ),
+    )
+    parser.add_argument(
+        "--server-device", default=None,
+        help=(
+            "Device for the inference server (default: auto — cuda "
+            "if available, else cpu)."
         ),
     )
     parser.add_argument(
@@ -179,14 +211,46 @@ def main() -> None:
     # Batched leaf evaluation (B1) helps the value-only NN side
     # substantially; PUCT-mode NN forfeits B1 in exchange for the
     # policy prior steering search.
-    nn_cfg = NNPimcConfig(
-        weights_path=str(weights_path),
-        samples=args.samples,
-        inner_nodes=args.nodes,
-        batch_size=nn_batch_size,
-        with_policy=metadata_with_policy or use_puct,
-        puct=use_puct,
-    )
+    nn_server_proxy = None
+    if args.use_nn_server:
+        # Launch the inference server BEFORE the worker pool spawns.
+        # Workers receive the picklable handle inside their config and
+        # build NNEvalClients on demand. Defaults to GPU when available.
+        import torch as _torch
+        server_device = args.server_device or (
+            "cuda" if _torch.cuda.is_available() else "cpu"
+        )
+        nn_server_proxy = launch_server_subprocess(
+            weights_path=Path(weights_path),
+            device=server_device,
+            with_policy=metadata_with_policy or use_puct,
+            batch_size=args.server_batch_size,
+            batch_wait_ms=args.server_batch_wait_ms,
+        )
+        handle = nn_server_proxy.handle()
+        print(
+            f"# nn_eval_server: device={server_device} "
+            f"batch_size={args.server_batch_size} "
+            f"batch_wait_ms={args.server_batch_wait_ms} "
+            f"address={handle.address}"
+        )
+        nn_cfg = NNServerPimcConfig(
+            server_handle=handle,
+            samples=args.samples,
+            inner_nodes=args.nodes,
+            batch_size=nn_batch_size,
+            with_policy=metadata_with_policy or use_puct,
+            puct=use_puct,
+        )
+    else:
+        nn_cfg = NNPimcConfig(
+            weights_path=str(weights_path),
+            samples=args.samples,
+            inner_nodes=args.nodes,
+            batch_size=nn_batch_size,
+            with_policy=metadata_with_policy or use_puct,
+            puct=use_puct,
+        )
     heuristic_cfg = PimcConfig(
         samples=args.samples,
         inner_nodes=args.nodes,
@@ -241,22 +305,26 @@ def main() -> None:
         print(f"# progress: {progress_path}")
 
     started = time.perf_counter()
-    if not is_parallel:
-        stats = run_match(
-            p0_factory=nn_cfg.build,
-            p1_factory=heuristic_cfg.build,
-            n_games=args.n_games,
-            base_seed=args.seed,
-        )
-    else:
-        stats = run_match_parallel(
-            p0_factory=nn_cfg.build,
-            p1_factory=heuristic_cfg.build,
-            n_games=args.n_games,
-            base_seed=args.seed,
-            n_workers=args.workers,
-            progress=progress,
-        )
+    try:
+        if not is_parallel:
+            stats = run_match(
+                p0_factory=nn_cfg.build,
+                p1_factory=heuristic_cfg.build,
+                n_games=args.n_games,
+                base_seed=args.seed,
+            )
+        else:
+            stats = run_match_parallel(
+                p0_factory=nn_cfg.build,
+                p1_factory=heuristic_cfg.build,
+                n_games=args.n_games,
+                base_seed=args.seed,
+                n_workers=args.workers,
+                progress=progress,
+            )
+    finally:
+        if nn_server_proxy is not None:
+            nn_server_proxy.stop()
     elapsed = time.perf_counter() - started
 
     print(
