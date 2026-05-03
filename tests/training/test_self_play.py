@@ -8,9 +8,13 @@ so each test case finishes in single-digit seconds.
 
 from __future__ import annotations
 
+import json
+from pathlib import Path
+
 from mtg_bot.training import (
-    MatchStats, random_choice_factory, run_match,
+    EvalProgress, MatchStats, random_choice_factory, run_match,
 )
+from mtg_bot.training.self_play import run_match_parallel
 
 
 def test_run_match_returns_stats_with_correct_total():
@@ -97,3 +101,68 @@ def test_run_match_decision_cap_treats_unfinished_as_draw():
     assert stats.draws == 3
     assert stats.wins == {0: 0, 1: 0}
     assert stats.avg_decisions == 2  # every game stopped at cap
+
+
+def test_run_match_parallel_with_progress_emits_snapshot(tmp_path: Path):
+    """The progress-tracked parallel path must produce the same
+    MatchStats as the unindexed path AND leave a finalized
+    progress JSON on disk. Two-game smoke is enough to exercise
+    the imap_unordered → record_game → finalize flow."""
+    progress = EvalProgress(
+        progress_path=tmp_path / "eval.json",
+        run_id="eval",
+        n_games_total=4,
+        n_workers=2,
+        opponent_label="random",
+        flush_interval_s=0.0,
+    )
+    stats = run_match_parallel(
+        p0_factory=random_choice_factory,
+        p1_factory=random_choice_factory,
+        n_games=4,
+        base_seed=0,
+        n_workers=2,
+        progress=progress,
+    )
+    # Same aggregation as the no-progress path (both call
+    # _aggregate_results on equivalent inputs).
+    expected = run_match_parallel(
+        p0_factory=random_choice_factory,
+        p1_factory=random_choice_factory,
+        n_games=4,
+        base_seed=0,
+        n_workers=2,
+    )
+    assert stats == expected
+
+    payload = json.loads((tmp_path / "eval.json").read_text(encoding="utf-8"))
+    assert payload["kind"] == "eval"
+    assert payload["status"] == "completed"
+    assert payload["n_games_total"] == 4
+    assert payload["n_games_done"] == 4
+    assert payload["wins_new"] == stats.wins[0]
+    assert payload["wins_old"] == stats.wins[1]
+    assert payload["draws"] == stats.draws
+    assert payload["opponent_label"] == "random"
+
+
+def test_run_match_parallel_progress_finalizes_on_zero_games(tmp_path: Path):
+    """Empty-pool short-circuit still finalizes the tracker — the
+    UI shouldn't see a stale 'running' file after a 0-game eval."""
+    progress = EvalProgress(
+        progress_path=tmp_path / "empty.json",
+        run_id="empty",
+        n_games_total=0,
+        n_workers=1,
+    )
+    stats = run_match_parallel(
+        p0_factory=random_choice_factory,
+        p1_factory=random_choice_factory,
+        n_games=0,
+        n_workers=1,
+        progress=progress,
+    )
+    assert stats.games == 0
+    payload = json.loads((tmp_path / "empty.json").read_text(encoding="utf-8"))
+    assert payload["status"] == "completed"
+    assert payload["ended_at"] is not None
