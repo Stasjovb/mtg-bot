@@ -1,4 +1,5 @@
 import subprocess
+from pathlib import Path
 
 import pytest
 
@@ -305,12 +306,21 @@ def test_play_html_route_is_removed(client):
 
 def test_parse_args_defaults():
     args = parse_args([])
-    assert args == CliArgs(host="127.0.0.1", port=5002)
+    assert args == CliArgs(
+        host="127.0.0.1", port=5002, replays_root=None,
+    )
 
 
 def test_parse_args_overrides():
     args = parse_args(["--host", "0.0.0.0", "--port", "8080"])
-    assert args == CliArgs(host="0.0.0.0", port=8080)
+    assert args == CliArgs(
+        host="0.0.0.0", port=8080, replays_root=None,
+    )
+
+
+def test_parse_args_replays_root():
+    args = parse_args(["--replays-root", "some/dir"])
+    assert args.replays_root == Path("some/dir")
 
 
 class _FakeCompletedProcess:
@@ -1111,3 +1121,82 @@ def test_load_replay_rejects_wrong_extension(tmp_path, fake_index):
     client, _ = _replay_client(tmp_path, fake_index)
     resp = client.get("/api/load_replay/foo.txt")
     assert resp.status_code == 400
+
+
+def test_list_replays_recursive_finds_subdir_files(tmp_path, fake_index):
+    """iterate_alphazero writes replays into per-run subdirectories
+    (replays/iter_001_self_play_v6/foo.json.gz). list_replays must
+    surface them as POSIX-style relative subpaths so the load route
+    can route through ``<path:filename>`` cleanly on any host OS."""
+    from mtg_bot.replay import REPLAY_FORMAT_VERSION, Replay, save_replay
+    replays_dir = tmp_path / "replays"
+    sub = replays_dir / "iter_001_self_play_v6"
+    sub.mkdir(parents=True)
+    save_replay(
+        Replay(
+            format_version=REPLAY_FORMAT_VERSION,
+            metadata={"game_idx": 0, "winner": 0},
+            snapshots=[
+                {"turn_number": 1, "step": "untap", "is_over": False,
+                 "players": [
+                     {"id": 0, "life": 20, "hand": [], "graveyard": [],
+                      "exile": [], "battlefield": []},
+                     {"id": 1, "life": 20, "hand": [], "graveyard": [],
+                      "exile": [], "battlefield": []},
+                 ],
+                 "stack": [], "log": []},
+            ],
+        ),
+        sub / "game_seed42_idx0000.json.gz",
+    )
+    app = create_app(card_index=fake_index, replays_root=replays_dir)
+    app.config["TESTING"] = True
+    body = app.test_client().get("/api/list_replays").get_json()
+    assert "iter_001_self_play_v6/game_seed42_idx0000.json.gz" \
+        in body["replays"]
+
+
+def test_load_replay_accepts_subpath(tmp_path, fake_index):
+    """Loading a per-run subpath like ``iter_001_self_play_v6/foo.json.gz``
+    must succeed and put the replay in the cache."""
+    from mtg_bot.replay import REPLAY_FORMAT_VERSION, Replay, save_replay
+    replays_dir = tmp_path / "replays"
+    sub = replays_dir / "iter_001_self_play_v6"
+    sub.mkdir(parents=True)
+    save_replay(
+        Replay(
+            format_version=REPLAY_FORMAT_VERSION,
+            metadata={"game_idx": 0, "winner": 0},
+            snapshots=[
+                {"turn_number": 1, "step": "untap", "is_over": False,
+                 "players": [
+                     {"id": 0, "life": 20, "hand": [], "graveyard": [],
+                      "exile": [], "battlefield": []},
+                     {"id": 1, "life": 20, "hand": [], "graveyard": [],
+                      "exile": [], "battlefield": []},
+                 ],
+                 "stack": [], "log": []},
+            ],
+        ),
+        sub / "game_seed42_idx0000.json.gz",
+    )
+    app = create_app(card_index=fake_index, replays_root=replays_dir)
+    app.config["TESTING"] = True
+    client = app.test_client()
+    resp = client.get(
+        "/api/load_replay/iter_001_self_play_v6/game_seed42_idx0000.json.gz",
+    )
+    assert resp.status_code == 200
+    body = resp.get_json()
+    assert "game_id" in body
+    assert body["snapshot_count"] == 1
+
+
+def test_load_replay_rejects_dotdot_component(tmp_path, fake_index):
+    """Even though forward slashes are now allowed, an explicit ..
+    component must still be rejected (defense in depth)."""
+    client, _ = _replay_client(tmp_path, fake_index)
+    resp = client.get("/api/load_replay/sub/../game_seed0_idx0000.json.gz")
+    # Werkzeug may normalize the URL before routing; either 400 or
+    # 404 is acceptable as long as the request doesn't succeed.
+    assert resp.status_code in (400, 404)

@@ -289,13 +289,21 @@ def create_app(
     def api_list_replays():
         """Return the .json.gz files available in ``replays_root``.
 
-        The UI calls this to populate a "load replay" picker. Path
-        traversal isn't a risk here (we only return basenames), but
-        we do require the file to be inside ``replays_root`` when
-        loading."""
+        Scans recursively so iterate_alphazero's per-run subdirectories
+        (``replays/iter_001_self_play_v6/foo.json.gz`` etc.) show up.
+        Returned filenames are POSIX-style relative subpaths so the
+        ``/api/load_replay/<subpath>`` endpoint can locate them
+        unambiguously regardless of host OS path-separator quirks.
+        Path traversal isn't a risk here (we only return paths
+        rooted at ``replays_root``), but we still require the file
+        to resolve inside ``replays_root`` when loading.
+        """
         if not replays_dir.is_dir():
             return jsonify({"replays": []})
-        files = sorted(p.name for p in replays_dir.glob("*.json.gz"))
+        files = sorted(
+            p.relative_to(replays_dir).as_posix()
+            for p in replays_dir.rglob("*.json.gz")
+        )
         return jsonify({"replays": files, "root": str(replays_dir)})
 
     @app.route("/api/load_replay/<path:filename>")
@@ -303,25 +311,27 @@ def create_app(
         """Load a saved replay file into the cache and return a
         game_id the existing scrubber UI can use.
 
-        The replay's snapshots fill the ``snapshots`` list; engine
-        states are all None (replays don't carry engine state, by
-        design — see ``mtg_bot/replay.py``). The recommend endpoint
-        falls back to its stub when engine_state is None.
-
-        Filename validation: must end in .json.gz, must not contain
-        path components, must resolve inside ``replays_root``.
+        ``filename`` may be a single basename (legacy flat layout —
+        ``foo.json.gz``) or a POSIX-style subpath under ``replays_root``
+        (``iter_001_self_play_v6/foo.json.gz``). Backslashes and
+        leading dots are rejected; the resolved path must still live
+        inside ``replays_root`` (defense-in-depth against any OS
+        path-handling oddity).
         """
         from mtg_bot.replay import load_replay
 
-        # Reject any path-traversal component before we even touch
-        # the filesystem. Filename should be a single path component.
-        if "/" in filename or "\\" in filename or filename.startswith("."):
+        # Reject Windows-style separators and any traversal-suggesting
+        # leading dot. Forward slashes ARE allowed now to support the
+        # per-run subdirectories iterate_alphazero produces.
+        if "\\" in filename or filename.startswith("."):
+            abort(400, description="invalid replay filename")
+        # Block .. anywhere as a component to keep the resolve() check
+        # below from being the only line of defense.
+        if any(part == ".." for part in filename.split("/")):
             abort(400, description="invalid replay filename")
         if not filename.endswith(".json.gz"):
             abort(400, description="replay filename must end in .json.gz")
         target = (replays_dir / filename).resolve()
-        # Confirm the resolved path still lives inside replays_dir
-        # (defense in depth against odd OS path semantics).
         try:
             target.relative_to(replays_dir)
         except ValueError:
@@ -526,6 +536,7 @@ def create_app(
 class CliArgs:
     host: str
     port: int
+    replays_root: Optional[Path]
 
 
 def parse_args(argv: Optional[list[str]] = None) -> CliArgs:
@@ -547,8 +558,21 @@ def parse_args(argv: Optional[list[str]] = None) -> CliArgs:
         default=5002,
         help="Port to listen on (default: 5002).",
     )
+    parser.add_argument(
+        "--replays-root",
+        type=Path,
+        default=None,
+        help=(
+            "Directory to serve replay files from. ``/api/list_replays`` "
+            "scans this recursively, so iterate_alphazero's per-run "
+            "subdirectories (replays/iter_001_self_play_v6/...) show up. "
+            "Default: 'replays' under the cwd."
+        ),
+    )
     ns = parser.parse_args(argv)
-    return CliArgs(host=ns.host, port=ns.port)
+    return CliArgs(
+        host=ns.host, port=ns.port, replays_root=ns.replays_root,
+    )
 
 
 def detect_tailscale_ip() -> Optional[str]:
@@ -591,7 +615,9 @@ def main(argv: Optional[list[str]] = None) -> None:
     args = parse_args(argv)
     for url in describe_urls(args.host, args.port):
         print(f"Serving at {url}")
-    create_app().run(host=args.host, port=args.port, debug=False)
+    create_app(replays_root=args.replays_root).run(
+        host=args.host, port=args.port, debug=False,
+    )
 
 
 if __name__ == "__main__":  # pragma: no cover
