@@ -1289,7 +1289,8 @@ class MutinousMassacreEffect(Effect):
     The "choose odd or even" pick goes through ``choose_mode`` with
     descriptions ``["odd", "even"]``. Surviving creatures (those whose
     mana value parity differed from the chosen one) are all stolen via
-    ``temp_original_controller_id``, untapped, and given haste UEOT.
+    ``grant_control_change_ueot`` (layer-2 ``control_change`` registry
+    entry, expires at cleanup), untapped, and given haste UEOT.
     """
 
     def resolve(
@@ -1371,8 +1372,12 @@ class SystemsOverrideEffect(Effect):
     a Spacecraft, put ten charge counters on it; if so, remove ten
     at the beginning of the next end step.
 
-    Control reverts on cleanup via ``temp_original_controller_id``. The
-    ten-counter remove is scheduled as a delayed end-step action
+    Control reverts on cleanup via the layer-2 ``control_change``
+    registry entry written by ``grant_control_change_ueot`` (the entry's
+    ``expires_at="cleanup"`` is dropped by ``run_cleanup_step``'s
+    ``expire_continuous_effects("cleanup")`` call, and the per-object
+    controller cache is refreshed in the same pass). The ten-counter
+    remove is scheduled as a delayed end-step action
     (``"remove_charge_counters"``) resolved in run_delayed_end_step_triggers.
     """
 

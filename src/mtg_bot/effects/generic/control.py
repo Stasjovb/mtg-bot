@@ -159,7 +159,11 @@ class GainControlOfTargetSliverPermanently(Effect):
             )
             return
         obj.controller_id = controller_id
-        # Permanent gain of control: do NOT set temp_original_controller_id.
+        # Permanent gain of control: no UEOT registry entry, no
+        # cleanup revert. (Pre-registry, this branch contrasted itself
+        # with a now-retired ``temp_original_controller_id`` UEOT
+        # mirror; UEOT reverts now flow through the layer-2 registry
+        # path.)
         state.log.append(
             f"P{controller_id} permanently gains control of "
             f"{obj.printing.name}"

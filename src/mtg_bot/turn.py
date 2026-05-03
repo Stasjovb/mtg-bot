@@ -1052,10 +1052,10 @@ def run_cleanup_step(state: GameState) -> None:
         obj.temp_toughness_bonus = 0
         # Regenerate shield: unconsumed shields wear off at cleanup.
         obj.regeneration_shield = False
-        # Revert "gain control until end of turn" effects.
-        if obj.temp_original_controller_id is not None:
-            obj.controller_id = obj.temp_original_controller_id
-            obj.temp_original_controller_id = None
+        # UEOT "gain control" reverts are handled above by the layer-2
+        # ``control_change`` registry path (``expire_continuous_effects
+        # ("cleanup")`` + the controller-refresh loop). The legacy
+        # ``temp_original_controller_id`` field has been retired.
     # Expire impulse-cast flags on exiled cards — "may play this
     # turn" lasts only until the end of the turn.
     for p in state.players:

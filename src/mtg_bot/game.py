@@ -459,21 +459,19 @@ class GameObject:
     # move_off_battlefield returns all cards tagged with its id from
     # exile back to their owner's battlefield.
     exiled_by_source: Optional[int] = None
-    # "Gain control of ~ until end of turn" tracking: when this object
-    # is controlled UEOT, ``temp_original_controller_id`` stores the
-    # controller it came from. run_cleanup_step swaps ``controller_id``
-    # back and clears this field. None = no temporary-control effect.
-    temp_original_controller_id: Optional[int] = None
     # Baseline controller captured the first time a layer-2
     # control-change continuous effect targets this permanent
-    # (Tractor Beam attaching). When the registry has no
-    # ``"control_change"`` entries for this object,
+    # (Tractor Beam attaching, or a UEOT control-change like Mutinous
+    # Massacre / Systems Override / Threaten). When the registry has
+    # no ``"control_change"`` entries for this object,
     # ``effective_controller`` falls back to this value. Cleared by
-    # ``move_off_battlefield``'s revert path when the last
-    # control-grant entry is removed. Distinct from the UEOT
-    # ``temp_original_controller_id`` mechanism — this baseline is
-    # specifically the "controller before any aura-grant continuous
-    # effect" and outlives end-of-turn cleanup.
+    # ``move_off_battlefield``'s revert path and by
+    # ``run_cleanup_step``'s controller refresh when the last
+    # control-grant entry is removed. The legacy
+    # ``temp_original_controller_id`` UEOT-revert field has been retired
+    # — UEOT control-grants now flow through
+    # ``grant_control_change_ueot``'s layer-2 registry entry +
+    # baseline-capture, expiring at cleanup.
     controller_id_before_any_aura_swap: Optional[int] = None
     # Planeswalker loyalty counters. Initialized to printing.loyalty
     # when a planeswalker enters the battlefield. State-based actions
@@ -2992,9 +2990,8 @@ class GameState:
           on the clone after calling ``.clone()``.
 
         GameObject integer id references (``attached_to``,
-        ``exiled_by_source``, ``temp_original_controller_id``) carry
-        integer ids — those stay valid without remapping because the
-        new objects keep the same id.
+        ``exiled_by_source``) carry integer ids — those stay valid
+        without remapping because the new objects keep the same id.
 
         Performance: this is a search hot path (thousands of clones
         per MCTS decision). Per-object cloning uses a shallow

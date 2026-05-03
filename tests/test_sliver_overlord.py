@@ -124,7 +124,7 @@ def test_gain_control_persists_past_cleanup():
     )
     run_cleanup_step(state)
     assert s.controller_id == 0, (
-        "control should persist (no temp_original_controller_id set)"
+        "control should persist (no UEOT control_change registry entry)"
     )
 
 
