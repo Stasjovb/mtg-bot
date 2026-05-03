@@ -159,6 +159,16 @@ def main() -> None:
             "deal-7-and-go behavior for reproducibility."
         ),
     )
+    parser.add_argument(
+        "--per-game-timeout-sec", type=float, default=300.0,
+        help=(
+            "Wall-clock cap per individual game (default 300s, ~50x "
+            "typical). Worker converts a stuck game into an empty "
+            "chunk via TimeoutError, pool keeps running. Pass 0 or "
+            "negative to disable. Mitigates the rare engine-state-"
+            "corruption hang (todo d4f2a8c1)."
+        ),
+    )
     args = parser.parse_args()
 
     args.output.parent.mkdir(parents=True, exist_ok=True)

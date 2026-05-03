@@ -116,6 +116,7 @@ def _self_play(
     n_workers: int | None,
     output: Path,
     enable_mulligans: bool = False,
+    per_game_timeout_sec: float | None = None,
 ) -> tuple[int, int, float]:
     """Run one self-play data-gen pass. Returns (n_samples,
     n_policy_rows, elapsed_seconds). Both seats use the same
@@ -141,6 +142,7 @@ def _self_play(
             n_workers=n_workers,
             with_policy=True,
             enable_mulligans=enable_mulligans,
+            per_game_timeout_sec=per_game_timeout_sec,
         )
     )
     elapsed = time.perf_counter() - started
@@ -224,6 +226,7 @@ def _eval_match(
     n_workers: int | None,
     seed: int,
     enable_mulligans: bool = False,
+    per_game_timeout_sec: float | None = None,
 ) -> tuple[int, int, int, float]:
     """Head-to-head match: new (seat 0) vs old (seat 1). Returns
     (new_wins, old_wins, draws, elapsed_seconds).
@@ -271,6 +274,7 @@ def _eval_match(
         base_seed=seed,
         n_workers=n_workers,
         enable_mulligans=enable_mulligans,
+        per_game_timeout_sec=per_game_timeout_sec,
     )
     elapsed = time.perf_counter() - started
     return (
@@ -383,6 +387,19 @@ def main() -> None:
             "behavior so v6/v7-onwards comparisons stay clean."
         ),
     )
+    parser.add_argument(
+        "--per-game-timeout-sec", type=float, default=300.0,
+        help=(
+            "Wall-clock cap per individual self-play / eval game "
+            "(default 300s, ~50x typical). When a single game "
+            "exceeds this budget the worker raises TimeoutError, "
+            "the data-gen empty-chunk handler / eval-pool-resilience "
+            "draw conversion absorbs it, and the pool advances. "
+            "Mitigates the rare engine-state-corruption hang (todo "
+            "d4f2a8c1; underlying root-cause work is todo 9c5e3b71). "
+            "Pass 0 or negative to disable."
+        ),
+    )
     args = parser.parse_args()
 
     args.data_dir.mkdir(parents=True, exist_ok=True)
@@ -445,6 +462,7 @@ def main() -> None:
             n_workers=args.workers,
             output=data_path,
             enable_mulligans=args.enable_mulligans,
+            per_game_timeout_sec=args.per_game_timeout_sec,
         )
         print(
             f"[iterate]   gen done in {gen_elapsed/60:.1f}m: "
@@ -491,6 +509,7 @@ def main() -> None:
                 n_workers=args.workers,
                 seed=cycle_seed + 7777,
                 enable_mulligans=args.enable_mulligans,
+                per_game_timeout_sec=args.per_game_timeout_sec,
             )
             n_decided = wins_new + wins_old
             win_rate = wins_new / n_decided if n_decided else 0.0
