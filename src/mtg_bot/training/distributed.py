@@ -560,6 +560,145 @@ def run_shard_local(
     return output_path
 
 
+class _AggregateProgressPoller:
+    """Periodically reads all per-shard progress JSONs in
+    ``progress_dir`` matching ``<run_id>_shard_*.json`` and writes a
+    rolled-up ``<run_id>.json`` summing the counters across shards.
+
+    The training UI (``training_progress/`` viewer) globs that
+    directory for run cards; without this aggregate it would render
+    one card per shard, each showing ``X / iter_total`` where X is
+    that shard's share. The aggregate gives the user one coherent
+    "iter card" with the cluster-wide totals; individual per-shard
+    files still exist for diagnostic drill-down (the UI filters them
+    out of the top-level listing by the ``_shard_`` substring).
+
+    ``kind`` is ``"data_gen"`` for self-play or ``"eval"`` — controls
+    which set of summed fields ends up in the JSON. Both share the
+    progress / total / status / elapsed shape so the UI renderer
+    doesn't need to special-case distributed runs.
+    """
+
+    _SUM_FIELDS = (
+        "n_games_done", "n_samples", "n_workers", "crashed",
+        "p0_wins", "p1_wins", "draws",
+        "wins_new", "wins_old",
+    )
+
+    def __init__(
+        self,
+        progress_dir: Path,
+        run_id: str,
+        n_games_total: int,
+        kind: str,
+        *,
+        opponent_label: Optional[str] = None,
+        interval_s: float = 2.0,
+    ) -> None:
+        self._progress_dir = Path(progress_dir)
+        self._run_id = run_id
+        self._n_games_total = n_games_total
+        self._kind = kind
+        self._opponent_label = opponent_label
+        self._interval_s = interval_s
+        self._aggregate_path = self._progress_dir / f"{run_id}.json"
+        self._started_perf = time.monotonic()
+        self._started_iso = datetime.now(timezone.utc).isoformat(
+            timespec="seconds",
+        )
+        self._stop_event = threading.Event()
+        self._thread: Optional[threading.Thread] = None
+
+    def start(self) -> None:
+        self._write("running")
+        self._thread = threading.Thread(
+            target=self._loop,
+            name=f"agg-progress-{self._run_id}",
+            daemon=True,
+        )
+        self._thread.start()
+
+    def stop(self, status: str) -> None:
+        self._stop_event.set()
+        if self._thread is not None:
+            self._thread.join(timeout=5.0)
+        self._write(status)
+
+    def _loop(self) -> None:
+        while not self._stop_event.wait(self._interval_s):
+            self._write("running")
+
+    def _write(self, status: str) -> None:
+        from mtg_bot.training.progress import atomic_write_json
+        sums = {f: 0 for f in self._SUM_FIELDS}
+        machines: list[dict[str, Any]] = []
+        ended_ats: list[str] = []
+        pattern = f"{self._run_id}_shard_*.json"
+        for path in sorted(self._progress_dir.glob(pattern)):
+            try:
+                shard = json.loads(path.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError):
+                continue
+            for f in self._SUM_FIELDS:
+                v = shard.get(f, 0)
+                if isinstance(v, (int, float)):
+                    sums[f] += v
+            label = path.stem.split("_shard_", 1)[-1]
+            machines.append({
+                "label": label,
+                "status": shard.get("status", "unknown"),
+                "n_games_done": shard.get("n_games_done", 0),
+                "n_workers": shard.get("n_workers", 0),
+                "crashed": shard.get("crashed", 0),
+            })
+            if shard.get("ended_at"):
+                ended_ats.append(shard["ended_at"])
+        elapsed = max(time.monotonic() - self._started_perf, 0.0)
+        done = sums["n_games_done"]
+        total = self._n_games_total
+        avg = (elapsed / done) if done > 0 else 0.0
+        eta = avg * max(total - done, 0)
+        ended_at = (
+            max(ended_ats) if ended_ats and status != "running" else None
+        )
+        payload: dict[str, Any] = {
+            "run_id": self._run_id,
+            "kind": self._kind,
+            "status": status,
+            "started_at": self._started_iso,
+            "ended_at": ended_at,
+            "n_games_total": int(total),
+            "n_games_done": int(done),
+            "n_workers": int(sums["n_workers"]),
+            "crashed": int(sums["crashed"]),
+            "elapsed_seconds": float(elapsed),
+            "estimated_remaining_seconds": float(eta),
+            "per_game_seconds_avg": float(avg),
+            "machines": machines,
+        }
+        if self._kind == "data_gen":
+            payload["n_samples"] = int(sums["n_samples"])
+            payload["p0_wins"] = int(sums["p0_wins"])
+            payload["p1_wins"] = int(sums["p1_wins"])
+            payload["draws"] = int(sums["draws"])
+            if elapsed > 0:
+                payload["games_per_hour"] = done / elapsed * 3600.0
+                payload["samples_per_hour"] = (
+                    sums["n_samples"] / elapsed * 3600.0
+                )
+        else:
+            decided = sums["wins_new"] + sums["wins_old"]
+            payload["wins_new"] = int(sums["wins_new"])
+            payload["wins_old"] = int(sums["wins_old"])
+            payload["draws"] = int(sums["draws"])
+            payload["win_rate"] = (
+                sums["wins_new"] / decided if decided > 0 else 0.0
+            )
+            if self._opponent_label is not None:
+                payload["opponent_label"] = self._opponent_label
+        atomic_write_json(self._aggregate_path, payload)
+
+
 def _loopback_queue_url(queue_url: str) -> str:
     """Rewrite the queue URL's host to ``127.0.0.1`` so the master's
     own local shard skips Tailscale name resolution. On Windows that
@@ -659,6 +798,14 @@ def run_distributed_self_play(
             bundle_url=bundle_url,
         )
 
+    aggregator = _AggregateProgressPoller(
+        progress_dir=progress_dir,
+        run_id=run_id_prefix,
+        n_games_total=total_games,
+        kind="data_gen",
+    )
+    aggregator.start()
+
     # All shards run concurrently — they pull from the same queue,
     # so there's no static partitioning to worry about. Local
     # shards' mp.Pool runs in this process; remote shards block on
@@ -677,11 +824,18 @@ def run_distributed_self_play(
     finally:
         executor.shutdown(wait=False)
 
-    # Drain — each shard returns its list of npz paths.
-    for fut in concurrent.futures.as_completed(futures):
-        shard_paths = fut.result()
-        with output_paths_lock:
-            output_paths.extend(shard_paths)
+    failed = False
+    try:
+        for fut in concurrent.futures.as_completed(futures):
+            try:
+                shard_paths = fut.result()
+            except BaseException:
+                failed = True
+                raise
+            with output_paths_lock:
+                output_paths.extend(shard_paths)
+    finally:
+        aggregator.stop("failed" if failed else "completed")
     return output_paths
 
 
@@ -760,6 +914,15 @@ def run_distributed_eval(
             bundle_url=bundle_url,
         )
 
+    aggregator = _AggregateProgressPoller(
+        progress_dir=progress_dir,
+        run_id=run_id_prefix,
+        n_games_total=total_games,
+        kind="eval",
+        opponent_label=spec.opponent_label,
+    )
+    aggregator.start()
+
     futures: dict[concurrent.futures.Future, ShardConfig] = {}
     n_threads = max(1, len(shards_config.shards))
     executor = concurrent.futures.ThreadPoolExecutor(
@@ -772,11 +935,19 @@ def run_distributed_eval(
     finally:
         executor.shutdown(wait=False)
 
-    for fut in concurrent.futures.as_completed(futures):
-        shard_counts = fut.result()
-        with totals_lock:
-            for k in totals:
-                totals[k] += int(shard_counts.get(k, 0))
+    failed = False
+    try:
+        for fut in concurrent.futures.as_completed(futures):
+            try:
+                shard_counts = fut.result()
+            except BaseException:
+                failed = True
+                raise
+            with totals_lock:
+                for k in totals:
+                    totals[k] += int(shard_counts.get(k, 0))
+    finally:
+        aggregator.stop("failed" if failed else "completed")
     return totals
 
 

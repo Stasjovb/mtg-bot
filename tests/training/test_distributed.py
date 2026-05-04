@@ -1223,6 +1223,112 @@ def test_weight_push_failure_propagates(monkeypatch, tmp_path):
         )
 
 
+# ---- _AggregateProgressPoller ----------------------------------
+
+
+def test_aggregate_progress_poller_sums_data_gen_shards(tmp_path: Path):
+    """Aggregator reads all per-shard self-play JSONs in
+    ``progress_dir`` matching ``<run_id>_shard_*.json`` and sums the
+    counters into a single ``<run_id>.json``."""
+    from mtg_bot.training.distributed import _AggregateProgressPoller
+
+    pdir = tmp_path
+    run_id = "iter_001_self_play_v6"
+    # Three shards mid-run, with different progress.
+    for label, done, samples, p0, p1, dr, cr, nw in (
+        ("local", 30, 4500, 12, 8, 10, 0, 16),
+        ("mac", 50, 7200, 25, 20, 5, 0, 14),
+        ("win", 5, 600, 2, 2, 1, 0, 4),
+    ):
+        (pdir / f"{run_id}_shard_{label}.json").write_text(
+            json.dumps({
+                "run_id": f"{run_id}_shard_{label}",
+                "kind": "data_gen",
+                "status": "running",
+                "n_games_total": 200, "n_games_done": done,
+                "n_samples": samples, "n_workers": nw,
+                "p0_wins": p0, "p1_wins": p1, "draws": dr,
+                "crashed": cr,
+            }), encoding="utf-8",
+        )
+    poller = _AggregateProgressPoller(
+        progress_dir=pdir, run_id=run_id,
+        n_games_total=200, kind="data_gen",
+    )
+    poller._write("running")  # one snapshot, no thread needed
+    agg = json.loads((pdir / f"{run_id}.json").read_text())
+    assert agg["run_id"] == run_id
+    assert agg["kind"] == "data_gen"
+    assert agg["status"] == "running"
+    assert agg["n_games_total"] == 200
+    assert agg["n_games_done"] == 85
+    assert agg["n_samples"] == 4500 + 7200 + 600
+    assert agg["n_workers"] == 16 + 14 + 4
+    assert agg["p0_wins"] == 39
+    assert agg["p1_wins"] == 30
+    assert agg["draws"] == 16
+    assert agg["crashed"] == 0
+    assert {m["label"] for m in agg["machines"]} == {"local", "mac", "win"}
+
+
+def test_aggregate_progress_poller_sums_eval_shards(tmp_path: Path):
+    """Aggregator handles eval-kind shards: sums wins_new, wins_old,
+    draws, computes overall win_rate from the totals."""
+    from mtg_bot.training.distributed import _AggregateProgressPoller
+
+    pdir = tmp_path
+    run_id = "iter_002_eval_v8_vs_v7"
+    for label, n, wn, wo, dr in (
+        ("local", 30, 12, 18, 0),
+        ("mac", 50, 22, 28, 0),
+        ("win", 20, 8, 12, 0),
+    ):
+        (pdir / f"{run_id}_shard_{label}.json").write_text(
+            json.dumps({
+                "run_id": f"{run_id}_shard_{label}",
+                "kind": "eval",
+                "status": "running",
+                "n_games_total": 100, "n_games_done": n,
+                "n_workers": 4,
+                "wins_new": wn, "wins_old": wo, "draws": dr,
+                "crashed": 0,
+            }), encoding="utf-8",
+        )
+    poller = _AggregateProgressPoller(
+        progress_dir=pdir, run_id=run_id,
+        n_games_total=100, kind="eval",
+        opponent_label="v7",
+    )
+    poller._write("completed")
+    agg = json.loads((pdir / f"{run_id}.json").read_text())
+    assert agg["status"] == "completed"
+    assert agg["n_games_done"] == 100
+    assert agg["wins_new"] == 42
+    assert agg["wins_old"] == 58
+    assert agg["draws"] == 0
+    # win_rate from cluster totals.
+    assert abs(agg["win_rate"] - 42 / 100) < 1e-9
+    assert agg["opponent_label"] == "v7"
+
+
+def test_aggregate_progress_poller_handles_missing_shard_files(
+    tmp_path: Path,
+):
+    """No per-shard files yet (poller fired before any shard wrote
+    its first snapshot) shouldn't crash; aggregate JSON should still
+    appear with zeroed counts."""
+    from mtg_bot.training.distributed import _AggregateProgressPoller
+
+    poller = _AggregateProgressPoller(
+        progress_dir=tmp_path, run_id="iter_x",
+        n_games_total=100, kind="data_gen",
+    )
+    poller._write("running")
+    agg = json.loads((tmp_path / "iter_x.json").read_text())
+    assert agg["n_games_done"] == 0
+    assert agg["machines"] == []
+
+
 # ---- EventLog + helpers ----------------------------------------
 
 

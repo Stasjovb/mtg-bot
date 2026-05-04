@@ -108,6 +108,28 @@ def test_api_runs_skips_unparseable_files(client):
     assert [r["run_id"] for r in runs] == ["v1"]
 
 
+def test_api_runs_skips_per_shard_files_from_distributed_runs(client):
+    """Distributed runs write per-shard JSONs alongside the
+    rolled-up aggregate. The aggregate has no ``_shard_`` in its
+    filename; per-shard cards would just clutter the listing. UI
+    skips anything matching ``*_shard_*.json``."""
+    c, progress_dir = client
+    _write_run(progress_dir, "iter_001_self_play_v6",
+               started_at="2026-05-04T10:00:00+00:00",
+               status="running")
+    # Mimics what run_shard_pull writes per-shard.
+    _write_run(progress_dir, "iter_001_self_play_v6_shard_local",
+               started_at="2026-05-04T10:00:00+00:00",
+               status="running")
+    _write_run(progress_dir, "iter_001_self_play_v6_shard_macbook",
+               started_at="2026-05-04T10:00:00+00:00",
+               status="running")
+    res = c.get("/api/runs")
+    assert res.status_code == 200
+    runs = res.get_json()["runs"]
+    assert [r["run_id"] for r in runs] == ["iter_001_self_play_v6"]
+
+
 def test_api_run_detail_by_id(client):
     c, progress_dir = client
     _write_run(progress_dir, "v7", status="running", current_epoch=12)

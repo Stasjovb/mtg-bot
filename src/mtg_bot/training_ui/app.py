@@ -45,11 +45,18 @@ def _list_runs(progress_dir: Path) -> list[dict[str, Any]]:
     """All progress JSON files in ``progress_dir``, deserialized and
     sorted by ``started_at`` descending (newest first). Files that
     fail to parse are silently skipped — the producer's atomic
-    write should make that vanishingly rare in practice."""
+    write should make that vanishingly rare in practice.
+
+    Per-shard files from distributed runs (``*_shard_*.json``) are
+    skipped: the orchestrator writes a rolled-up ``<run_id>.json``
+    aggregate alongside them, and the UI shows that one card
+    instead of N per-shard cards."""
     if not progress_dir.is_dir():
         return []
     runs: list[dict[str, Any]] = []
     for path in progress_dir.glob("*.json"):
+        if "_shard_" in path.name:
+            continue
         run = _read_run_file(path)
         if run is not None:
             runs.append(run)
