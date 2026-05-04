@@ -234,20 +234,18 @@ class BeliefWeightedDeterminizer:
         # Diagnostic counters reset on every ``__call__``.
         self.last_ess: float = 0.0
         self.last_evaluator_calls: int = 0
-        # Posterior memoization. The played history is invariant for
-        # the duration of a single ISMCTS ``choose()`` call (the game
-        # loop only appends to it BETWEEN moves via ``observe_action``,
-        # never during search). So once we've drawn m_candidates seeds
-        # and computed their log-weights, we can reuse both across
-        # every iteration of that choose() — collapsing what would be
-        # ``total_iters`` separate scoring passes into a single one
-        # per game-move. Cached as (viewer_id, history_length) →
-        # (seeds_tuple, log_weights). Cache invalidates the moment a
-        # new moment lands on ``self.played_history``.
-        self._posterior_cache: Optional[
-            tuple[
-                PlayerID, int, tuple[int, ...], np.ndarray, float,
-            ]
+        # Persistent particle pool (Sequential Importance Sampling).
+        # ``_particles_state`` holds (viewer_id, seeds, log_weights,
+        # scored_history_len). Across ``__call__`` invocations the
+        # pool is REUSED and its log-weights are updated
+        # INCREMENTALLY by scoring only newly-appended moments —
+        # cold-call cost goes from O(m * H_total) to O(m * Δh). The
+        # pool re-initializes when the viewer changes (rare; one
+        # determinizer per ISMCTS instance) or on the first call
+        # past the conditional-activation gate (initial scoring of
+        # all current moments).
+        self._particles_state: Optional[
+            tuple[PlayerID, tuple[int, ...], np.ndarray, int]
         ] = None
 
     # ------------------------------------------------------------------
@@ -308,41 +306,64 @@ class BeliefWeightedDeterminizer:
                     engine_state, viewer_id, rng, in_place=in_place,
                 )
 
-        # Reuse the previous (seeds, log_weights, ess) if the played
-        # history hasn't grown since they were computed and the
-        # viewer is the same. Within a single ISMCTS choose() call
-        # the history is constant — caching collapses the
-        # m_candidates-particle scoring pass from once per iteration
-        # to once per choose().
+        # Persistent particle filter (Sequential Importance Sampling).
+        # Across ``__call__`` invocations within a game we reuse the
+        # SAME m_candidates seeds and update their log-weights
+        # incrementally as the played_history grows. Cold-call cost
+        # per game-move goes from O(m * H_total) to O(m * Δh) where
+        # Δh is the number of moments appended since last call.
         history_len = len(self.played_history)
-        cached = self._posterior_cache
-        if (
-            cached is not None
-            and cached[0] == viewer_id
-            and cached[1] == history_len
-        ):
-            seeds_tuple, log_weights, cached_ess = (
-                cached[2], cached[3], cached[4],
-            )
-            seeds = list(seeds_tuple)
-            self.last_ess = cached_ess
-            normalized = _normalize_log_weights(log_weights)
-        else:
-            # Each particle is identified by an independent seed drawn
-            # from ``rng``. Drawing seeds (rather than passing ``rng``
-            # directly to each determinization) keeps the particles
-            # independently reproducible and lets the resampling step
-            # pick a particle by replaying its seed.
+        state = self._particles_state
+        if state is not None and state[0] != viewer_id:
+            # Different viewer than the pool was initialized for —
+            # scrap and start over. (Architecturally: each ISMCTS
+            # strategy owns its own determinizer, so this branch is
+            # exercised primarily by tests reusing a sampler across
+            # opponents.)
+            state = None
+            self._particles_state = None
+
+        if state is None:
+            # First scoring pass for this viewer: draw a fresh seed
+            # pool and score against ALL currently observed moments.
             seeds = [
                 rng.randrange(1 << 62) for _ in range(self.m_candidates)
             ]
-            log_weights = self._score_particles_batched(viewer_id, seeds)
-            normalized = _normalize_log_weights(log_weights)
-            self.last_ess = _effective_sample_size(normalized)
-            self._posterior_cache = (
-                viewer_id, history_len, tuple(seeds), log_weights,
-                self.last_ess,
+            log_weights = self._score_particles_batched(
+                viewer_id, seeds, h_start=0, h_end=history_len,
             )
+        else:
+            scored_viewer, seeds_tuple, log_weights, scored_len = state
+            seeds = list(seeds_tuple)
+            log_weights = log_weights.copy()
+            if history_len > scored_len:
+                # Incremental update: score only the newly-appended
+                # moments and add to existing log-weights. Pre-existing
+                # weights stay valid because log P(A_{1:T} | H) =
+                # log P(A_{1:t} | H) + log P(A_{t+1:T} | H) — the per-
+                # moment log-likelihoods are additive.
+                delta = self._score_particles_batched(
+                    viewer_id, seeds,
+                    h_start=scored_len, h_end=history_len,
+                )
+                log_weights = log_weights + delta
+            elif history_len < scored_len:
+                # History shrank — abnormal (the caller is supposed
+                # to only append). Treat as a fresh init for safety.
+                seeds = [
+                    rng.randrange(1 << 62)
+                    for _ in range(self.m_candidates)
+                ]
+                log_weights = self._score_particles_batched(
+                    viewer_id, seeds, h_start=0, h_end=history_len,
+                )
+            # else history unchanged → reuse cached log_weights.
+
+        normalized = _normalize_log_weights(log_weights)
+        self.last_ess = _effective_sample_size(normalized)
+        self._particles_state = (
+            viewer_id, tuple(seeds), log_weights, history_len,
+        )
 
         # Sample one particle index from the categorical(normalized).
         # ``rng.random()`` is the user-supplied stream; using it
@@ -368,13 +389,22 @@ class BeliefWeightedDeterminizer:
         self,
         viewer_id: PlayerID,
         seeds: Sequence[int],
+        h_start: int = 0,
+        h_end: Optional[int] = None,
     ) -> np.ndarray:
         """Score every particle in ``seeds`` against the played
-        history in one batched pass.
+        history slice ``[h_start, h_end)`` in one batched pass.
 
         Returns a length-``len(seeds)`` log-likelihood array — the
         same shape and semantics as calling ``_score_particle`` once
-        per seed, but with the NN evaluations batched.
+        per seed, but with the NN evaluations batched. ``h_end``
+        defaults to ``len(self.played_history)``.
+
+        The slice form lets the SIS persistent-particle path score
+        only newly-appended moments per game-move. Per-moment seed
+        mixing still uses the absolute ``h_idx`` so the cache keys
+        and per-moment determinizations remain bit-equivalent to the
+        full-pass version.
 
         Algorithm (three phases, all opponent moments only):
 
@@ -407,6 +437,9 @@ class BeliefWeightedDeterminizer:
         """
         from mtg_bot.training import action_encoding as ae
 
+        if h_end is None:
+            h_end = len(self.played_history)
+
         # Phase 1: collect work items. Each entry is a tuple of
         # (particle_idx, cache_key, reconstructed_engine_state,
         # opponent_id, decision). Cache_key is None when we can
@@ -422,7 +455,8 @@ class BeliefWeightedDeterminizer:
         seen_in_misses: dict[Any, int] = {}
 
         for p_idx, seed in enumerate(seeds):
-            for h_idx, moment in enumerate(self.played_history):
+            for h_idx in range(h_start, h_end):
+                moment = self.played_history[h_idx]
                 if moment.actor == viewer_id:
                     continue
                 opponent = moment.actor
