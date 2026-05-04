@@ -118,7 +118,7 @@ def test_transforms_are_pure_dont_mutate_input():
 
 def test_event_pattern_default_filters_empty():
     p = EventPattern(event=Event.WOULD_CREATE_TOKEN)
-    assert p.subject_filters == {}
+    assert p.subject_filters == ()
 
 
 def test_event_pattern_with_filters():
@@ -126,7 +126,37 @@ def test_event_pattern_with_filters():
         event=Event.WOULD_PLACE_COUNTER,
         subject_filters={"obj": IsCreature()},
     )
-    assert "obj" in p.subject_filters
+    # Mapping input is canonicalized to a sorted tuple of pairs.
+    assert p.subject_filters == (("obj", IsCreature()),)
+
+
+def test_event_pattern_filters_canonicalize_order():
+    # Caller-supplied order doesn't matter — the canonical (sorted)
+    # form makes structurally-equal patterns hash-equal.
+    a = EventPattern(
+        event=Event.WOULD_PLACE_COUNTER,
+        subject_filters={"b": IsCreature(), "a": IsCreature()},
+    )
+    b = EventPattern(
+        event=Event.WOULD_PLACE_COUNTER,
+        subject_filters=(("a", IsCreature()), ("b", IsCreature())),
+    )
+    assert a == b
+    assert hash(a) == hash(b)
+
+
+def test_event_pattern_is_hashable():
+    # Regression: EventPattern (and therefore the wrapping
+    # ReplacementEffect / StaticAbility / CardPrinting) must be
+    # hashable so they can serve as dict keys / set members for
+    # search-side caches.
+    p = EventPattern(event=Event.WOULD_CREATE_TOKEN)
+    hash(p)
+    p2 = EventPattern(
+        event=Event.WOULD_PLACE_COUNTER,
+        subject_filters={"obj": IsCreature()},
+    )
+    hash(p2)
 
 
 def test_replacement_effect_default_scope_filter_none():
