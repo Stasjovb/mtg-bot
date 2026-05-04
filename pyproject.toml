@@ -53,13 +53,17 @@ markers = [
 
 [tool.coverage.run]
 source = ["mtg_bot"]
-# Branch coverage is disabled because it forces coverage.py to use
-# sys.settrace / sys.monitoring in trace mode, which triggers a Windows
-# access-violation crash under Python 3.13 during the simulation sweep
-# tests (deep call chain through state_based_actions + _static_bonuses).
-# With branch=false, coverage.py uses PEP 669 sys.monitoring in sysmon
-# mode — faster and crash-free. Re-enable once coverage gains branch
-# support under sysmon.
+# `core = "sysmon"` pins coverage.py to its PEP 669 sys.monitoring
+# backend on Python 3.12+. Under Python 3.11 (which lacks PEP 669)
+# coverage.py silently falls back to its legacy C settrace tracer,
+# which produced an intermittent Windows access-violation crash during
+# the simulation sweep tests (deep call chain through
+# state_based_actions + _static_bonuses). 3.13 + sysmon is crash-free.
+# Branch coverage is also disabled because coverage.py's sysmon
+# backend does not yet support branch tracking; turning it on would
+# force the legacy tracer back in and resurrect the crash. Re-enable
+# `branch` once coverage gains branch support under sysmon. See
+# docs/segfault-fix.md for the full diagnosis.
 branch = false
 core = "sysmon"
 
