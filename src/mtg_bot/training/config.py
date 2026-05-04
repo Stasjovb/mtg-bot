@@ -31,6 +31,7 @@ from typing import Any, Callable, Optional
 
 from mtg_bot.search import (
     Budget,
+    ISMCTS,
     MCTS,
     PIMC,
     RandomChoice,
@@ -169,6 +170,12 @@ class NNPimcConfig:
     # matching shape. ``evaluate_nn.py`` reads it from the version's
     # metadata.json and threads it through this field.
     hidden_sizes: Optional[tuple[int, ...]] = None
+    # When True, ``build`` returns ISMCTS instead of PIMC. The class
+    # name is historical — kept for serialization compatibility with
+    # in-flight specs and saved JSON. Matched-budget conversion:
+    # ``total_iterations = samples * inner_nodes`` (same total search
+    # work as PIMC's K independent searches of N nodes each).
+    use_ismcts: bool = False
 
     def build(self, seed: int = 0) -> SearchStrategy:
         eval_kwargs: dict[str, Any] = {
@@ -178,6 +185,15 @@ class NNPimcConfig:
         if self.hidden_sizes is not None:
             eval_kwargs["hidden_sizes"] = self.hidden_sizes
         evaluator = NNEvaluator(**eval_kwargs)
+        if self.use_ismcts:
+            total_iters = max(1, self.samples * self.inner_nodes)
+            return ISMCTS(
+                evaluator=evaluator,
+                budget_factory=lambda: Budget(max_nodes=total_iters),
+                rng=random.Random(seed + 300),
+                batch_size=self.batch_size,
+                puct=self.puct,
+            )
         inner_nodes = self.inner_nodes
         batch_size = self.batch_size
         puct = self.puct
@@ -211,6 +227,7 @@ class NNPimcConfig:
                 list(self.hidden_sizes)
                 if self.hidden_sizes is not None else None
             ),
+            "use_ismcts": self.use_ismcts,
         }
 
     @classmethod
@@ -226,6 +243,7 @@ class NNPimcConfig:
             hidden_sizes=(
                 tuple(hidden_sizes) if hidden_sizes is not None else None
             ),
+            use_ismcts=d.get("use_ismcts", False),
         )
 
 

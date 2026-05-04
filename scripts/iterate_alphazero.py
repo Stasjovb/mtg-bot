@@ -440,6 +440,7 @@ def _self_play_distributed(
     total_games: int,
     queue_url: str,
     bundle_url: str | None = None,
+    use_ismcts: bool = False,
 ) -> tuple[int, int, float]:
     """Distributed self-play: dispatch the iter's games across the
     shards in ``shards_config``, gather all per-shard npzs into the
@@ -473,6 +474,7 @@ def _self_play_distributed(
         hang_dump_root=(
             str(hang_dump_root) if hang_dump_root is not None else None
         ),
+        use_ismcts=use_ismcts,
     )
     started = time.perf_counter()
     npz_paths = run_distributed_self_play(
@@ -525,6 +527,7 @@ def _eval_match_distributed(
     queue_url: str,
     bundle_url: str | None,
     opponent_label: str,
+    use_ismcts: bool = False,
 ) -> tuple[int, int, int, float]:
     """Distributed eval-gate match. Mirrors ``_eval_match``'s return
     contract ``(new_wins, old_wins, draws, elapsed_seconds)`` so
@@ -547,6 +550,7 @@ def _eval_match_distributed(
             str(hang_dump_root) if hang_dump_root is not None else None
         ),
         opponent_label=opponent_label,
+        use_ismcts=use_ismcts,
     )
     started = time.perf_counter()
     counts = run_distributed_eval(
@@ -978,6 +982,19 @@ def main() -> None:
         ),
     )
     parser.add_argument(
+        "--use-ismcts", action="store_true",
+        help=(
+            "Use Information Set MCTS instead of PIMC for both self-"
+            "play and eval-gate searches. Matched-budget conversion: "
+            "ISMCTS's total_iterations = samples * inner_nodes (same "
+            "total search work as PIMC's K independent searches of "
+            "N nodes each). Off by default — flip on after running "
+            "scripts/bench_ismcts_vs_pimc_strength.py to confirm "
+            "ISMCTS is at least as strong on the current weights "
+            "+ budget. See docs/ISMCTS_MIGRATION.md."
+        ),
+    )
+    parser.add_argument(
         "--reconcile-state", action="store_true",
         help=(
             "Recover from a partial-iter crash where the trainer "
@@ -1212,6 +1229,7 @@ def main() -> None:
                 total_games=args.games_per_iteration,
                 queue_url=args.queue_url,
                 bundle_url=args.bundle_url,
+                use_ismcts=args.use_ismcts,
             )
         print(
             f"[iterate]   gen done in {gen_elapsed/60:.1f}m: "
@@ -1322,6 +1340,7 @@ def main() -> None:
                         queue_url=args.queue_url,
                         bundle_url=args.bundle_url,
                         opponent_label=best_version,
+                        use_ismcts=args.use_ismcts,
                     )
                 )
             n_decided = wins_new + wins_old

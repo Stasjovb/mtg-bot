@@ -226,7 +226,8 @@ def test_nn_pimc_config_to_dict_without_hidden_sizes() -> None:
 def test_nn_pimc_config_from_dict_with_missing_optional_fields() -> None:
     """``from_dict`` tolerates older serializations that don't carry
     ``batch_size`` / ``with_policy`` / ``puct`` / ``hidden_sizes``
-    — they default. Covers the ``.get(..., default)`` branches."""
+    / ``use_ismcts`` — they default. Covers the ``.get(..., default)``
+    branches."""
     minimal = {
         "weights_path": "old.pt", "samples": 4, "inner_nodes": 200,
     }
@@ -236,6 +237,37 @@ def test_nn_pimc_config_from_dict_with_missing_optional_fields() -> None:
     assert cfg.with_policy is False
     assert cfg.puct is False
     assert cfg.hidden_sizes is None
+    assert cfg.use_ismcts is False
+
+
+def test_nn_pimc_config_use_ismcts_flag_switches_strategy(
+    tmp_path: Path,
+) -> None:
+    """``use_ismcts=True`` makes ``build()`` return ISMCTS instead of
+    PIMC. Matched-budget conversion: total_iterations = samples *
+    inner_nodes (the bench script's convention; same total search
+    work as PIMC's K independent searches of N nodes each)."""
+    from mtg_bot.search.ismcts import ISMCTS
+    weights = _save_value_weights(tmp_path)
+    cfg_pimc = NNPimcConfig(
+        weights_path=str(weights), samples=2, inner_nodes=4,
+    )
+    cfg_ismcts = NNPimcConfig(
+        weights_path=str(weights), samples=2, inner_nodes=4,
+        use_ismcts=True,
+    )
+    assert isinstance(cfg_pimc.build(seed=0), PIMC)
+    assert isinstance(cfg_ismcts.build(seed=0), ISMCTS)
+
+
+def test_nn_pimc_config_use_ismcts_round_trips_through_dict() -> None:
+    """The flag survives JSON serialization so distributed shards
+    receive the same search-algorithm choice the orchestrator made."""
+    cfg = NNPimcConfig(
+        weights_path="x.pt", samples=4, inner_nodes=200,
+        use_ismcts=True,
+    )
+    assert NNPimcConfig.from_dict(cfg.to_dict()).use_ismcts is True
 
 
 # ---------- NNServerPimcConfig ----------------------------------------------
