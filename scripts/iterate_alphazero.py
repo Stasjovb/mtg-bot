@@ -83,6 +83,12 @@ from mtg_bot.training._iterate_helpers import (  # noqa: E402
     find_foreign_npzs,
 )
 from mtg_bot.training.data_gen import ReplayCaptureConfig  # noqa: E402
+from mtg_bot.training.distributed import (  # noqa: E402
+    SelfPlayJobSpec,
+    ShardsConfig,
+    load_shards_config,
+    run_distributed_self_play,
+)
 from mtg_bot.training.self_play import run_match_parallel  # noqa: E402
 
 _STATE_FILENAME = "iterate_state.json"
@@ -207,6 +213,83 @@ def _self_play(
     )
     n_samples = features.shape[0]
     n_policy = int((policy_targets.sum(axis=-1) > 0.5).sum())
+    return n_samples, n_policy, elapsed
+
+
+def _self_play_distributed(
+    *,
+    shards_config: ShardsConfig,
+    weights_path: Path,
+    samples: int,
+    nodes: int,
+    seed: int,
+    enable_mulligans: bool,
+    per_game_timeout_sec: float | None,
+    hidden_sizes: tuple[int, ...] | None,
+    deck_pool_path: Path | None,
+    capture_every: int,
+    nn_version_label: str | None,
+    replays_root: Path,
+    hang_dump_root: Path | None,
+    progress_dir: Path,
+    output_dir: Path,
+    run_id_prefix: str,
+) -> tuple[int, int, float]:
+    """Distributed self-play: dispatch the iter's games across the
+    shards in ``shards_config``, gather all per-shard npzs into the
+    master's ``output_dir``, return aggregate ``(n_samples,
+    n_policy_rows, elapsed_seconds)``.
+
+    All ``Path`` fields the orchestrator threads to per-shard runs
+    are converted to strings up front (the spec must JSON-serialize
+    cleanly so SSH can ship it base64-encoded to remote shards).
+
+    Aggregate counts are computed by re-loading each shard's npz
+    (cheap — these files are 10-100 MB and we'd be loading them
+    from disk in the next training step anyway). ``elapsed`` is the
+    orchestrator's wall time, which under multi-machine load is the
+    SLOWEST shard's wall — that's the right number for the
+    iteration loop's ETA bookkeeping.
+    """
+    spec = SelfPlayJobSpec(
+        weights_path=str(weights_path),
+        samples=samples,
+        inner_nodes=nodes,
+        hidden_sizes=hidden_sizes,
+        base_seed=seed,
+        enable_mulligans=enable_mulligans,
+        per_game_timeout_sec=per_game_timeout_sec,
+        deck_pool_path=str(deck_pool_path) if deck_pool_path else None,
+        with_policy=True,
+        capture_every=capture_every,
+        nn_version_label=nn_version_label,
+        replays_root=str(replays_root),
+        hang_dump_root=(
+            str(hang_dump_root) if hang_dump_root is not None else None
+        ),
+    )
+    started = time.perf_counter()
+    npz_paths = run_distributed_self_play(
+        shards_config, spec,
+        progress_dir=progress_dir,
+        output_dir=output_dir,
+        run_id_prefix=run_id_prefix,
+    )
+    elapsed = time.perf_counter() - started
+
+    # Aggregate counts across shards. ``np.load`` only memory-maps
+    # the array headers by default, so this is fast even on big
+    # files.
+    import numpy as np
+    n_samples = 0
+    n_policy = 0
+    for p in npz_paths:
+        with np.load(p) as data:
+            n_samples += int(data["features"].shape[0])
+            if "policy_targets" in data.files:
+                n_policy += int(
+                    (data["policy_targets"].sum(axis=-1) > 0.5).sum()
+                )
     return n_samples, n_policy, elapsed
 
 
@@ -579,6 +662,20 @@ def main() -> None:
             "'debug_hangs' (gitignored). Pass empty string to disable."
         ),
     )
+    parser.add_argument(
+        "--shards-config", type=Path, default=None,
+        help=(
+            "Path to a JSON shards config (see "
+            "``mtg_bot.training.distributed`` docstring). When set, "
+            "each iter's self-play step is dispatched across the "
+            "configured shards (one or more local + any remote "
+            "machines reachable over SSH/Tailscale). The "
+            "--games-per-iteration count is overridden by the sum "
+            "of per-shard ``n_games``. Without this flag, self-play "
+            "runs entirely on the master via the existing single-"
+            "process pool (unchanged behavior)."
+        ),
+    )
     args = parser.parse_args()
 
     args.data_dir.mkdir(parents=True, exist_ok=True)
@@ -598,6 +695,18 @@ def main() -> None:
             f"train_nn.py would glob these into the training mix and "
             f"potentially corrupt the policy head. Move them out (or "
             f"point --data-dir at a dedicated iterate dir) and retry."
+        )
+
+    shards_cfg: ShardsConfig | None = None
+    if args.shards_config is not None:
+        if not args.shards_config.is_file():
+            sys.exit(f"--shards-config {args.shards_config} not found")
+        shards_cfg = load_shards_config(args.shards_config)
+        print(
+            f"[iterate] distributed self-play across "
+            f"{len(shards_cfg.shards)} shards "
+            f"(total games per iter override: {shards_cfg.total_games}); "
+            f"hosts: {[s.host for s in shards_cfg.shards]}"
         )
 
     deck_pool: list[Deck] | None = None
@@ -707,23 +816,49 @@ def main() -> None:
             str(args.hang_dump_dir / self_play_run_id)
             if str(args.hang_dump_dir) else None
         )
-        n_samples, n_policy, gen_elapsed = _self_play(
-            weights_path=best_weights,
-            n_games=args.games_per_iteration,
-            samples=args.samples,
-            nodes=args.nodes,
-            seed=cycle_seed,
-            n_workers=args.workers,
-            output=data_path,
-            enable_mulligans=args.enable_mulligans,
-            per_game_timeout_sec=args.per_game_timeout_sec,
-            hidden_sizes=iter_hidden_sizes,
-            progress_path=self_play_progress_path,
-            run_id=self_play_run_id,
-            deck_pool=deck_pool,
-            replay_config=self_play_replay_config,
-            hang_dump_dir=sp_hang_dir,
-        )
+        if shards_cfg is None:
+            n_samples, n_policy, gen_elapsed = _self_play(
+                weights_path=best_weights,
+                n_games=args.games_per_iteration,
+                samples=args.samples,
+                nodes=args.nodes,
+                seed=cycle_seed,
+                n_workers=args.workers,
+                output=data_path,
+                enable_mulligans=args.enable_mulligans,
+                per_game_timeout_sec=args.per_game_timeout_sec,
+                hidden_sizes=iter_hidden_sizes,
+                progress_path=self_play_progress_path,
+                run_id=self_play_run_id,
+                deck_pool=deck_pool,
+                replay_config=self_play_replay_config,
+                hang_dump_dir=sp_hang_dir,
+            )
+        else:
+            # Distributed: each shard writes its own npz to args.data_dir
+            # under ``iter_NNN_<bootstrap>_shard_<label>_<utc>.npz``.
+            # train_nn.py globs the dir, so the master sees all shards'
+            # data at training time without any further work here.
+            n_samples, n_policy, gen_elapsed = _self_play_distributed(
+                shards_config=shards_cfg,
+                weights_path=best_weights,
+                samples=args.samples,
+                nodes=args.nodes,
+                seed=cycle_seed,
+                enable_mulligans=args.enable_mulligans,
+                per_game_timeout_sec=args.per_game_timeout_sec,
+                hidden_sizes=iter_hidden_sizes,
+                deck_pool_path=args.deck_pool,
+                capture_every=args.capture_every_self_play,
+                nn_version_label=best_version,
+                replays_root=args.replays_dir,
+                hang_dump_root=(
+                    args.hang_dump_dir if str(args.hang_dump_dir) else None
+                ),
+                progress_dir=progress_dir,
+                output_dir=args.data_dir,
+                run_id_prefix=f"{iter_label}_self_play_{best_version}",
+            )
         print(
             f"[iterate]   gen done in {gen_elapsed/60:.1f}m: "
             f"{n_samples} samples, {n_policy} with policy "
