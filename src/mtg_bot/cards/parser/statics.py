@@ -18,7 +18,7 @@ and falls back to the trailing regex.
 Recognized self-scope conditions today:
 
 * ``you control an artifact`` →
-  ``requires_artifact_you_control=True`` (Cloudsculpt Technician,
+  ``condition=ControlPermanent(IsArtifact())`` (Cloudsculpt Technician,
   Gravblade Heavy).
 * ``you've cast two or more spells this turn`` →
   ``requires_spells_cast_this_turn=2`` (Brightspear Zealot, via the
@@ -83,12 +83,13 @@ import re
 
 from mtg_bot.cards.base import StaticAbility, StaticScope
 from mtg_bot.cards.parser.keywords import _KEYWORD_LINES
-from mtg_bot.effects.conditions import DuringYourTurn
+from mtg_bot.effects.conditions import ControlPermanent, DuringYourTurn
 from mtg_bot.effects.modifiers import (
     ContinuousModifier,
     GrantKeyword,
     PowerToughnessBonus,
 )
+from mtg_bot.effects.object_predicates import IsArtifact
 
 
 # Ability-word prefix stripper for static lines. Mirrors the trigger-
@@ -155,7 +156,9 @@ _STATIC_ABILITY_LINE_TRAILING = re.compile(
 # condition, we deliberately leave it out so the ability falls through
 # and the card gets skipped rather than being silently mis-modeled.
 _STATIC_CONDITION_KWARGS: dict[str, dict[str, object]] = {
-    "you control an artifact": {"requires_artifact_you_control": True},
+    "you control an artifact": {
+        "condition": ControlPermanent(IsArtifact()),
+    },
     "you've cast two or more spells this turn": {
         "requires_spells_cast_this_turn": 2
     },

@@ -412,7 +412,7 @@ def test_three_or_more_spells_does_not_set_other_gates():
     assert len(parsed) == 1
     static = parsed[0]
     assert static.requires_spells_cast_this_turn == 3
-    assert static.requires_artifact_you_control is False
+    assert static.condition is None
     assert static.active_turn_only is False
     assert static.tier_threshold == 0
 

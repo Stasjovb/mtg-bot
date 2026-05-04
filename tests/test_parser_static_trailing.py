@@ -25,11 +25,13 @@ from mtg_bot.cards.parser.statics import (
     _parse_static_ability_line,
 )
 from mtg_bot.cards.parser_source import OracleParserCardSource
+from mtg_bot.effects.conditions import ControlPermanent
 from mtg_bot.effects.modifiers import (
     ContinuousModifier,
     GrantKeyword,
     PowerToughnessBonus,
 )
+from mtg_bot.effects.object_predicates import IsArtifact
 
 
 # ---------- Trailing-shape happy paths ----------
@@ -65,7 +67,7 @@ def test_trailing_shape_artifact_parses_to_static():
             layer=7,
             payload=PowerToughnessBonus(power_bonus=1, toughness_bonus=0),
         ),
-        requires_artifact_you_control=True,
+        condition=ControlPermanent(IsArtifact()),
     ),)
 
 
@@ -87,7 +89,7 @@ def test_trailing_shape_with_keyword_rider():
                     power_bonus=1, toughness_bonus=0,
                 ),
             ),
-            requires_artifact_you_control=True,
+            condition=ControlPermanent(IsArtifact()),
         ),
         StaticAbility(
             scope=StaticScope.SELF,
@@ -95,7 +97,7 @@ def test_trailing_shape_with_keyword_rider():
                 layer=6,
                 payload=GrantKeyword("deathtouch"),
             ),
-            requires_artifact_you_control=True,
+            condition=ControlPermanent(IsArtifact()),
         ),
     )
 

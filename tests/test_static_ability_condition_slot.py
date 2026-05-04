@@ -135,6 +135,45 @@ def test_replacement_effect_slot_holds_value():
     assert sa.replacement_effect is re
 
 
+def test_control_artifact_condition_blocks_when_no_artifact():
+    """The artifact-gate static (formerly the ``requires_artifact_you_
+    control`` boolean field) now rides on the structural
+    ``ControlPermanent(IsArtifact())`` condition. Without an artifact on
+    the controller's side of the battlefield, ``applies_to`` returns
+    False — same semantics as the legacy field gate."""
+    state, bear = _arena()
+    state.active_player_idx = 0
+    sa = StaticAbility(
+        scope=StaticScope.SELF,
+        power_bonus=1,
+        condition=ControlPermanent(IsArtifact()),
+    )
+    # No artifact in play — condition fails, applies_to is False.
+    assert sa.applies_to(bear, bear, state) is False
+
+
+def test_control_artifact_condition_passes_when_artifact_present():
+    """Mirror of the previous test: with an artifact on the controller's
+    battlefield, the condition evaluates True and ``applies_to`` returns
+    True."""
+    from mtg_bot.cards.tokens import TOKEN_PRINTINGS
+    from mtg_bot.game import Zone
+
+    state, bear = _arena()
+    state.active_player_idx = 0
+    # Lander is a non-creature artifact token.
+    lander = state.new_object(
+        TOKEN_PRINTINGS["Lander"], 0, Zone.BATTLEFIELD,
+    )
+    state.battlefield.append(lander)
+    sa = StaticAbility(
+        scope=StaticScope.SELF,
+        power_bonus=1,
+        condition=ControlPermanent(IsArtifact()),
+    )
+    assert sa.applies_to(bear, bear, state) is True
+
+
 def test_continuous_effect_slot_holds_value():
     """The slot accepts a ``ContinuousModifier`` instance and exposes
     it for the PR-D continuous-effect dispatcher to discover."""
