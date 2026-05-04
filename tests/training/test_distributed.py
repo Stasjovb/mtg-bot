@@ -1381,6 +1381,144 @@ def test_aggregate_progress_poller_handles_missing_shard_files(
     assert agg["machines"] == []
 
 
+def test_aggregate_progress_poller_emits_games_per_hour_data_gen(
+    tmp_path: Path,
+):
+    """``games_per_hour`` and ``samples_per_hour`` must always be
+    present on the data_gen aggregate, both running and completed,
+    so the UI never sees a missing field. Pin elapsed to a known
+    value by overwriting ``_started_perf``."""
+    import time as time_mod
+    from mtg_bot.training.distributed import _AggregateProgressPoller
+
+    pdir = tmp_path
+    run_id = "iter_010_self_play_v3"
+    for label, done, samples in (
+        ("local", 30, 4500),
+        ("mac", 50, 7200),
+    ):
+        (pdir / f"{run_id}_shard_{label}.json").write_text(
+            json.dumps({
+                "kind": "data_gen", "status": "running",
+                "n_games_total": 200, "n_games_done": done,
+                "n_samples": samples, "n_workers": 4,
+                "p0_wins": 0, "p1_wins": 0, "draws": 0, "crashed": 0,
+            }), encoding="utf-8",
+        )
+    poller = _AggregateProgressPoller(
+        progress_dir=pdir, run_id=run_id,
+        n_games_total=200, kind="data_gen",
+    )
+    poller._started_perf = time_mod.monotonic() - 60.0
+    poller._write("running")
+    agg = json.loads((pdir / f"{run_id}.json").read_text())
+    assert "games_per_hour" in agg
+    assert "samples_per_hour" in agg
+    expected_gph = 80 / 60.0 * 3600.0
+    expected_sph = 11700 / 60.0 * 3600.0
+    assert abs(agg["games_per_hour"] - expected_gph) / expected_gph < 0.05
+    assert abs(agg["samples_per_hour"] - expected_sph) / expected_sph < 0.05
+
+    poller._write("completed")
+    agg2 = json.loads((pdir / f"{run_id}.json").read_text())
+    assert "games_per_hour" in agg2
+    assert "samples_per_hour" in agg2
+
+
+def test_aggregate_progress_poller_emits_games_per_hour_eval(
+    tmp_path: Path,
+):
+    """``games_per_hour`` must always be present on the eval
+    aggregate so the eval card's rate field renders."""
+    import time as time_mod
+    from mtg_bot.training.distributed import _AggregateProgressPoller
+
+    pdir = tmp_path
+    run_id = "iter_011_eval_v3_vs_v2"
+    for label, n, wn, wo in (
+        ("local", 30, 12, 18),
+        ("mac", 50, 22, 28),
+    ):
+        (pdir / f"{run_id}_shard_{label}.json").write_text(
+            json.dumps({
+                "kind": "eval", "status": "running",
+                "n_games_total": 100, "n_games_done": n,
+                "n_workers": 4,
+                "wins_new": wn, "wins_old": wo, "draws": 0,
+                "crashed": 0, "avg_decisions": 0.0,
+            }), encoding="utf-8",
+        )
+    poller = _AggregateProgressPoller(
+        progress_dir=pdir, run_id=run_id,
+        n_games_total=100, kind="eval",
+    )
+    poller._started_perf = time_mod.monotonic() - 120.0
+    poller._write("running")
+    agg = json.loads((pdir / f"{run_id}.json").read_text())
+    assert "games_per_hour" in agg
+    expected = 80 / 120.0 * 3600.0
+    assert abs(agg["games_per_hour"] - expected) / expected < 0.05
+
+    poller._write("completed")
+    agg2 = json.loads((pdir / f"{run_id}.json").read_text())
+    assert "games_per_hour" in agg2
+
+
+def test_aggregate_progress_poller_eval_avg_decisions_weighted(
+    tmp_path: Path,
+):
+    """Eval aggregate's ``avg_decisions`` is the per-game-weighted
+    mean of each shard's ``avg_decisions``. The shards report a mean
+    over their own games, so a shard's decision total is
+    ``avg_decisions * n_games_done``; the cluster mean is the sum of
+    those totals divided by total games."""
+    from mtg_bot.training.distributed import _AggregateProgressPoller
+
+    pdir = tmp_path
+    run_id = "iter_012_eval_v4_vs_v3"
+    rows = (
+        ("local", 30, 11.5),
+        ("mac", 50, 14.25),
+        ("win", 20, 9.75),
+    )
+    for label, n, avg_dec in rows:
+        (pdir / f"{run_id}_shard_{label}.json").write_text(
+            json.dumps({
+                "kind": "eval", "status": "running",
+                "n_games_total": 100, "n_games_done": n,
+                "n_workers": 4,
+                "wins_new": 0, "wins_old": 0, "draws": 0,
+                "crashed": 0, "avg_decisions": avg_dec,
+            }), encoding="utf-8",
+        )
+    poller = _AggregateProgressPoller(
+        progress_dir=pdir, run_id=run_id,
+        n_games_total=100, kind="eval",
+    )
+    poller._write("running")
+    agg = json.loads((pdir / f"{run_id}.json").read_text())
+    expected = sum(n * d for _, n, d in rows) / sum(n for _, n, _ in rows)
+    assert abs(agg["avg_decisions"] - expected) < 1e-9
+
+
+def test_aggregate_progress_poller_eval_avg_decisions_zero_when_empty(
+    tmp_path: Path,
+):
+    """No per-shard files yet (poller fired before first snapshot)
+    must still produce ``avg_decisions == 0.0`` rather than crashing
+    or omitting the field."""
+    from mtg_bot.training.distributed import _AggregateProgressPoller
+
+    poller = _AggregateProgressPoller(
+        progress_dir=tmp_path, run_id="iter_y",
+        n_games_total=100, kind="eval",
+    )
+    poller._write("running")
+    agg = json.loads((tmp_path / "iter_y.json").read_text())
+    assert agg["avg_decisions"] == 0.0
+    assert agg["games_per_hour"] == 0.0
+
+
 # ---- EventLog + helpers ----------------------------------------
 
 

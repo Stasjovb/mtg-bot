@@ -633,6 +633,7 @@ class _AggregateProgressPoller:
         sums = {f: 0 for f in self._SUM_FIELDS}
         machines: list[dict[str, Any]] = []
         ended_ats: list[str] = []
+        decisions_weighted_total = 0.0
         pattern = f"{self._run_id}_shard_*.json"
         for path in sorted(self._progress_dir.glob(pattern)):
             # Eval shards write a sibling ``..._shard_<label>_result.json``
@@ -648,6 +649,13 @@ class _AggregateProgressPoller:
                 v = shard.get(f, 0)
                 if isinstance(v, (int, float)):
                     sums[f] += v
+            shard_done = shard.get("n_games_done", 0)
+            shard_avg_dec = shard.get("avg_decisions", 0)
+            if (
+                isinstance(shard_done, (int, float))
+                and isinstance(shard_avg_dec, (int, float))
+            ):
+                decisions_weighted_total += shard_avg_dec * shard_done
             label = path.stem.split("_shard_", 1)[-1]
             machines.append({
                 "label": label,
@@ -663,6 +671,7 @@ class _AggregateProgressPoller:
         total = self._n_games_total
         avg = (elapsed / done) if done > 0 else 0.0
         eta = avg * max(total - done, 0)
+        games_per_hour = (done / elapsed * 3600.0) if elapsed > 0 else 0.0
         ended_at = (
             max(ended_ats) if ended_ats and status != "running" else None
         )
@@ -679,26 +688,30 @@ class _AggregateProgressPoller:
             "elapsed_seconds": float(elapsed),
             "estimated_remaining_seconds": float(eta),
             "per_game_seconds_avg": float(avg),
+            "games_per_hour": float(games_per_hour),
             "machines": machines,
         }
         if self._kind == "data_gen":
+            samples_per_hour = (
+                sums["n_samples"] / elapsed * 3600.0 if elapsed > 0 else 0.0
+            )
             payload["n_samples"] = int(sums["n_samples"])
             payload["p0_wins"] = int(sums["p0_wins"])
             payload["p1_wins"] = int(sums["p1_wins"])
             payload["draws"] = int(sums["draws"])
-            if elapsed > 0:
-                payload["games_per_hour"] = done / elapsed * 3600.0
-                payload["samples_per_hour"] = (
-                    sums["n_samples"] / elapsed * 3600.0
-                )
+            payload["samples_per_hour"] = float(samples_per_hour)
         else:
             decided = sums["wins_new"] + sums["wins_old"]
+            avg_decisions = (
+                decisions_weighted_total / done if done > 0 else 0.0
+            )
             payload["wins_new"] = int(sums["wins_new"])
             payload["wins_old"] = int(sums["wins_old"])
             payload["draws"] = int(sums["draws"])
             payload["win_rate"] = (
                 sums["wins_new"] / decided if decided > 0 else 0.0
             )
+            payload["avg_decisions"] = float(avg_decisions)
             if self._opponent_label is not None:
                 payload["opponent_label"] = self._opponent_label
         atomic_write_json(self._aggregate_path, payload)
