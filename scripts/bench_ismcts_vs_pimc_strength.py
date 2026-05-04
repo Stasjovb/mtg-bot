@@ -731,8 +731,8 @@ def main(argv: Optional[list[str]] = None) -> None:
         ),
     )
     parser.add_argument(
-        "--progress-dir", type=Path,
-        default=Path("training_progress"),
+        "--progress-dir", type=str,
+        default="training_progress",
         help=(
             "Directory the bench writes a live progress JSON into "
             "(``<run_id>.json``) so the training UI can render it "
@@ -740,7 +740,7 @@ def main(argv: Optional[list[str]] = None) -> None:
             "under cwd — same directory the trainer / data-gen / "
             "eval drivers write into. Pass an explicit path to "
             "route output elsewhere. Pass ``--progress-dir ''`` "
-            "(empty) to disable progress reporting."
+            "(empty string) to disable progress reporting."
         ),
     )
     args = parser.parse_args(argv)
@@ -798,7 +798,7 @@ def main(argv: Optional[list[str]] = None) -> None:
     )
     bench_run_id = f"bench_{progress_stamp}"
     progress: Optional[BenchProgress] = None
-    if args.progress_dir and str(args.progress_dir) != "":
+    if args.progress_dir:
         progress_path = (
             Path(args.progress_dir) / f"{bench_run_id}.json"
         )

@@ -403,3 +403,29 @@ def test_record_pairing_result_clamps_negative_wins(tmp_path: Path):
     # ci_low/ci_high stay finite even with the negative input.
     assert 0.0 <= p["ci_low"] <= 1.0
     assert 0.0 <= p["ci_high"] <= 1.0
+
+
+def test_wilson_helper_clamps_out_of_range_inputs():
+    """``_wilson_interval`` defensively clamps successes outside the
+    [0, trials] window rather than raising. Mirrors the ValueError
+    path of the script-level helper, but inside the snapshot writer
+    we never want a bad count to take down the whole flush.
+    """
+    from mtg_bot.training.progress import _wilson_interval
+
+    # successes < 0 — clamp up to 0.
+    low, high = _wilson_interval(-1, 10)
+    assert 0.0 <= low <= high <= 1.0
+    # successes > trials — clamp down to trials.
+    low, high = _wilson_interval(11, 10)
+    assert 0.0 <= low <= high <= 1.0
+
+
+def test_classify_verdict_weaker_branch():
+    """``_classify_verdict`` hits its 'weaker' branch when the upper
+    CI bound is strictly below 0.5 — covered here since the
+    BenchProgress lifecycle tests don't naturally hit a 100%-loss
+    pairing."""
+    from mtg_bot.training.progress import _classify_verdict
+
+    assert _classify_verdict(0.05, 0.45) == "weaker"
