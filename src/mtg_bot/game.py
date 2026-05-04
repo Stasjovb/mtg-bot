@@ -167,6 +167,26 @@ class _CowList(list):
         self._clone_each = None
         self._share_group = None
 
+    @classmethod
+    def _new_uninitialized(cls, iterable):
+        """Build a ``_CowList`` skipping the default-attr init.
+
+        ``GameState.clone`` immediately overwrites ``_owned``,
+        ``_clone_each``, and ``_share_group`` after construction.
+        The default ``__init__`` writes those three attrs only to
+        have them stomped a few lines later — pure waste in the hot
+        clone path. This factory does the underlying ``list.__init__``
+        and leaves the three attrs unset; the caller is responsible
+        for assigning them.
+
+        DO NOT use this outside the clone path: the resulting
+        instance has no ``_owned`` attr, so any read before the
+        caller assigns one will ``AttributeError``.
+        """
+        new = cls.__new__(cls)
+        list.__init__(new, iterable)
+        return new
+
     def _fork_if_shared(self) -> None:
         """If we're sharing GameObjects with sibling lists, isolate
         ``self`` from those siblings NOW so the upcoming in-place
@@ -3035,8 +3055,15 @@ class GameState:
         safe to share).
         """
         # Build the id->new_obj map by deep-copying every GameObject
-        # referenced anywhere in the state. We walk zones in a fixed
-        # order and copy each object exactly once.
+        # referenced anywhere in the state. Bulk paths
+        # (battlefield + each player's hand) populate the map
+        # directly without per-call ``get`` lookups since those zones
+        # are mutually disjoint by construction. Cross-zone aliases
+        # appear only on rare references — ``stack[i].source``,
+        # ``resolving_source``, ``resolving_cost_paid_objects`` —
+        # which call the closure below; the closure consults ``id_map``
+        # to share the existing clone with the battlefield/hand walk
+        # when the object lives in either zone.
         id_map: dict[int, GameObject] = {}
 
         def clone_obj(o: GameObject) -> GameObject:
@@ -3097,9 +3124,6 @@ class GameState:
                 src_ex = _CowList(src_ex)
                 p.exile = src_ex
 
-            new_lib = _CowList(src_lib)
-            new_gy = _CowList(src_gy)
-            new_ex = _CowList(src_ex)
             # Splice each new (clone-side) list into its source-side
             # sibling's share group (creating one if absent). The
             # share group is a single mutable list referenced by every
@@ -3109,6 +3133,19 @@ class GameState:
             # elements into the OTHER members (see ``_fork_if_shared``
             # for why) and the mutator keeps the originals —
             # preserving caller-held element references.
+            #
+            # ``_new_uninitialized`` skips the default-attr init that
+            # the regular ``_CowList`` constructor would do; we
+            # overwrite those three attrs immediately below anyway.
+            new_lib = _CowList._new_uninitialized(src_lib)
+            new_gy = _CowList._new_uninitialized(src_gy)
+            new_ex = _CowList._new_uninitialized(src_ex)
+            new_lib._clone_each = _clone_game_object
+            new_lib._owned = False
+            new_gy._clone_each = _clone_game_object
+            new_gy._owned = False
+            new_ex._clone_each = _clone_game_object
+            new_ex._owned = False
             for clone_side, src_side in (
                 (new_lib, src_lib),
                 (new_gy, src_gy),
@@ -3128,17 +3165,35 @@ class GameState:
                     # list object.
                     group = src_side._share_group
                     group.append(clone_side)
-                clone_side._owned = False
-                clone_side._clone_each = _clone_game_object
                 clone_side._share_group = group
             np.library = new_lib
             np.graveyard = new_gy
             np.exile = new_ex
-            np.hand = [clone_obj(o) for o in p.hand]
+            # Hand objects are guaranteed unique within (and across)
+            # players (a card lives in exactly one zone at any moment
+            # in MTG), so the per-call ``id_map.get`` lookup is dead
+            # work. Skip the closure: clone directly and populate
+            # ``id_map`` in the same pass so a stack-source / resolving-
+            # source reference into the hand still resolves to the
+            # same instance.
+            new_hand = []
+            for o in p.hand:
+                new_o = _clone_game_object(o)
+                id_map[o.id] = new_o
+                new_hand.append(new_o)
+            np.hand = new_hand
             np.mana_pool = [_clone_mana_coin(c) for c in p.mana_pool]
             new_players.append(np)
 
-        new_battlefield = [clone_obj(o) for o in self.battlefield]
+        # Same disjointness argument applies to battlefield: an object
+        # is in exactly one of (battlefield, hand, library, graveyard,
+        # exile, stack) at any moment, so the bulk battlefield walk
+        # writes directly into ``id_map`` without redundant lookups.
+        new_battlefield = []
+        for o in self.battlefield:
+            new_o = _clone_game_object(o)
+            id_map[o.id] = new_o
+            new_battlefield.append(new_o)
 
         # Stack items must point at the cloned GameObject for their
         # source. All other fields are immutable; share by reference.
