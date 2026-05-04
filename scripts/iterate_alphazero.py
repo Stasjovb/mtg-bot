@@ -234,6 +234,8 @@ def _self_play_distributed(
     progress_dir: Path,
     output_dir: Path,
     run_id_prefix: str,
+    total_games: int,
+    queue_url: str,
     bundle_url: str | None = None,
 ) -> tuple[int, int, float]:
     """Distributed self-play: dispatch the iter's games across the
@@ -275,6 +277,8 @@ def _self_play_distributed(
         progress_dir=progress_dir,
         output_dir=output_dir,
         run_id_prefix=run_id_prefix,
+        total_games=total_games,
+        queue_url=queue_url,
         bundle_url=bundle_url,
     )
     elapsed = time.perf_counter() - started
@@ -669,13 +673,14 @@ def main() -> None:
         help=(
             "Path to a JSON shards config (see "
             "``mtg_bot.training.distributed`` docstring). When set, "
-            "each iter's self-play step is dispatched across the "
-            "configured shards (one or more local + any remote "
-            "machines reachable over SSH/Tailscale). The "
-            "--games-per-iteration count is overridden by the sum "
-            "of per-shard ``n_games``. Without this flag, self-play "
-            "runs entirely on the master via the existing single-"
-            "process pool (unchanged behavior)."
+            "each iter's self-play step runs in pull-mode: every "
+            "shard (local + remote, SSH/Tailscale-reachable) drains "
+            "the master's queue at ``/queue/take``. The total games "
+            "per iter is taken from --games-per-iteration; per-shard "
+            "``n_games`` in the JSON is ignored in pull mode (slow "
+            "machines do less work, fast ones do more, automatically). "
+            "Without this flag, self-play runs entirely on the master "
+            "via the existing single-process pool."
         ),
     )
     parser.add_argument(
@@ -689,6 +694,18 @@ def main() -> None:
             "auth on the remote (Tailscale-only). When omitted, "
             "remote-side code-sync is skipped — make sure remotes "
             "are already at the right commit before running."
+        ),
+    )
+    parser.add_argument(
+        "--queue-url", default=None,
+        help=(
+            "Base URL of the master's pull-mode work queue (typically "
+            "``http://<master-tailnet-name>:5099``, served by "
+            "``scripts/serve_setup_scripts.py``). Required when "
+            "``--shards-config`` is set: every shard (local + remote) "
+            "POSTs ``/queue/take`` here for batches of game indices "
+            "until the iter's queue drains. Without this flag the "
+            "distributed orchestrator can't dispatch work."
         ),
     )
     args = parser.parse_args()
@@ -716,11 +733,16 @@ def main() -> None:
     if args.shards_config is not None:
         if not args.shards_config.is_file():
             sys.exit(f"--shards-config {args.shards_config} not found")
+        if not args.queue_url:
+            sys.exit(
+                "--shards-config requires --queue-url (the master's "
+                "pull-mode queue endpoint, e.g. "
+                "http://<master-tailnet>:5099)"
+            )
         shards_cfg = load_shards_config(args.shards_config)
         print(
-            f"[iterate] distributed self-play across "
-            f"{len(shards_cfg.shards)} shards "
-            f"(total games per iter override: {shards_cfg.total_games}); "
+            f"[iterate] pull-model distributed self-play across "
+            f"{len(shards_cfg.shards)} shards via {args.queue_url}; "
             f"hosts: {[s.host for s in shards_cfg.shards]}"
         )
 
@@ -873,6 +895,8 @@ def main() -> None:
                 progress_dir=progress_dir,
                 output_dir=args.data_dir,
                 run_id_prefix=f"{iter_label}_self_play_{best_version}",
+                total_games=args.games_per_iteration,
+                queue_url=args.queue_url,
                 bundle_url=args.bundle_url,
             )
         print(
