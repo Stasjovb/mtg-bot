@@ -707,6 +707,330 @@ def test_remote_pull_command_windows_uses_cmd_syntax():
     assert "--queue-url=http://master:5099" in cmd
 
 
+# ---- weight-push step ------------------------------------------
+
+
+def test_remote_mkdir_command_posix_quotes_path():
+    """POSIX uses ``mkdir -p`` with shlex-quoted target."""
+    from mtg_bot.training.distributed import _build_remote_mkdir_command
+
+    shard = ShardConfig(
+        host="mac", n_games=10, user="g",
+        repo_path="/Users/g/repo",
+        venv_python=".venv-py313/bin/python",
+    )
+    cmd = _build_remote_mkdir_command(
+        shard, "/Users/g/repo/trained_weights/v6",
+    )
+    assert cmd == "mkdir -p /Users/g/repo/trained_weights/v6"
+
+
+def test_remote_mkdir_command_windows_uses_powershell_new_item():
+    """cmd.exe ``mkdir`` silently fails on existing dirs over SSH;
+    PowerShell ``New-Item -Force`` is genuinely idempotent."""
+    from mtg_bot.training.distributed import _build_remote_mkdir_command
+
+    shard = ShardConfig(
+        host="winbox", n_games=10, user="g",
+        repo_path="C:\\Users\\g\\Projects\\mtg-bot",
+        venv_python=".venv-py313\\Scripts\\python.exe",
+    )
+    cmd = _build_remote_mkdir_command(
+        shard, "C:/Users/g/Projects/mtg-bot/trained_weights/v6",
+    )
+    assert cmd == (
+        "powershell -Command \"New-Item -ItemType Directory -Force "
+        "-Path 'C:/Users/g/Projects/mtg-bot/trained_weights/v6'\""
+    )
+
+
+class _RecordingSubprocess:
+    """Records every (cmd, kwargs) pair instead of exec'ing. Used to
+    pin the order + shape of subprocess calls inside
+    ``run_shard_remote`` without touching the network."""
+
+    def __init__(self) -> None:
+        self.calls: list[list[str]] = []
+
+    def __call__(self, cmd, *args, **kwargs):
+        self.calls.append(list(cmd))
+
+        class _Result:
+            returncode = 0
+            stdout = ""
+            stderr = ""
+        return _Result()
+
+
+def _capture_run_shard_remote_calls(
+    monkeypatch, shard, spec, *, bundle_url=None, tmp_path,
+):
+    """Drive ``run_shard_remote`` end-to-end with all subprocess calls
+    redirected to a recorder. Returns the recorded command list."""
+    from mtg_bot.training import distributed as dist
+
+    rec = _RecordingSubprocess()
+    monkeypatch.setattr(dist, "_run_subprocess", rec)
+    monkeypatch.setattr(dist.subprocess, "run", rec)
+
+    class _NoopPoller:
+        def __init__(self, *a, **kw): pass
+        def start(self): pass
+        def stop(self): pass
+    monkeypatch.setattr(dist, "_ProgressPoller", _NoopPoller)
+
+    dist.run_shard_remote(
+        shard, spec,
+        queue_url="http://master:5099",
+        run_id="iter_002_self_play_v7",
+        iter_total_games=500,
+        batch_size_default=4,
+        progress_dir=tmp_path / "training_progress",
+        output_dir=tmp_path / "iterate_data",
+        run_id_prefix="iter_002_self_play_v7",
+        stamp="20260503T230000Z",
+        bundle_url=bundle_url,
+    )
+    return rec.calls
+
+
+def test_weight_push_posix_command_shape(monkeypatch, tmp_path):
+    """POSIX shard: weight-push step issues ``ssh ... mkdir -p
+    <repo>/<parent>`` then ``scp <abs_master>/<weights> remote:<repo>/
+    <weights>``."""
+    from mtg_bot.training.distributed import SelfPlayJobSpec
+
+    monkeypatch.chdir(tmp_path)
+    weights_rel = "trained_weights/v7/weights.pt"
+    (tmp_path / "trained_weights" / "v7").mkdir(parents=True)
+    (tmp_path / weights_rel).write_bytes(b"fake-weights")
+
+    spec = SelfPlayJobSpec(
+        weights_path=weights_rel,
+        samples=2, inner_nodes=10, hidden_sizes=(64,),
+        base_seed=0, enable_mulligans=False,
+        per_game_timeout_sec=None,
+    )
+    shard = ShardConfig(
+        host="macbook", n_games=10, user="g",
+        repo_path="/Users/g/repo",
+        venv_python=".venv-py313/bin/python",
+    )
+    calls = _capture_run_shard_remote_calls(
+        monkeypatch, shard, spec, tmp_path=tmp_path,
+    )
+    mkdir_call = next(
+        c for c in calls if c[0] == "ssh" and "mkdir -p" in c[-1]
+    )
+    assert "mkdir -p /Users/g/repo/trained_weights/v7" in mkdir_call[-1]
+
+    scp_pushes = [
+        c for c in calls
+        if c[0] == "scp"
+        and any(p.endswith(":/Users/g/repo/trained_weights/v7/weights.pt")
+                for p in c)
+    ]
+    assert len(scp_pushes) == 1
+    push = scp_pushes[0]
+    abs_master_src = str((tmp_path / weights_rel).resolve())
+    assert abs_master_src in push
+    assert "g@macbook:/Users/g/repo/trained_weights/v7/weights.pt" in push
+
+
+def test_weight_push_windows_command_shape(monkeypatch, tmp_path):
+    """Windows shard: mkdir routes through PowerShell New-Item; scp
+    dst is forward-slashed (cmd.exe + scp both accept ``C:/...``,
+    and scp's quoting layer rejects mixed separators)."""
+    from mtg_bot.training.distributed import SelfPlayJobSpec
+
+    monkeypatch.chdir(tmp_path)
+    weights_rel = "trained_weights/v7/weights.pt"
+    (tmp_path / "trained_weights" / "v7").mkdir(parents=True)
+    (tmp_path / weights_rel).write_bytes(b"fake-weights")
+
+    spec = SelfPlayJobSpec(
+        weights_path=weights_rel,
+        samples=2, inner_nodes=10, hidden_sizes=(64,),
+        base_seed=0, enable_mulligans=False,
+        per_game_timeout_sec=None,
+    )
+    shard = ShardConfig(
+        host="winbox", n_games=10, user="g",
+        repo_path="C:\\Users\\g\\Projects\\mtg-bot",
+        venv_python=".venv-py313\\Scripts\\python.exe",
+    )
+    calls = _capture_run_shard_remote_calls(
+        monkeypatch, shard, spec, tmp_path=tmp_path,
+    )
+    mkdir_call = next(
+        c for c in calls if c[0] == "ssh" and "powershell" in c[-1]
+    )
+    assert (
+        "powershell -Command \"New-Item -ItemType Directory -Force "
+        "-Path 'C:/Users/g/Projects/mtg-bot/trained_weights/v7'\""
+    ) in mkdir_call[-1]
+
+    scp_pushes = [
+        c for c in calls
+        if c[0] == "scp"
+        and any(
+            p.endswith(
+                ":C:/Users/g/Projects/mtg-bot/"
+                "trained_weights/v7/weights.pt"
+            )
+            for p in c
+        )
+    ]
+    assert len(scp_pushes) == 1
+    push = scp_pushes[0]
+    dst_target = (
+        "g@winbox:C:/Users/g/Projects/mtg-bot/"
+        "trained_weights/v7/weights.pt"
+    )
+    assert dst_target in push
+    for arg in push:
+        if arg.startswith("g@"):
+            assert "\\" not in arg
+
+
+def test_run_shard_remote_call_sequence(monkeypatch, tmp_path):
+    """End-to-end ordering: bundle-sync → mkdir → weight-scp → ssh
+    self-play → final progress + events scp-back. Mocks all
+    subprocess execution and the progress poller; runs the full
+    function and asserts the call order."""
+    from mtg_bot.training.distributed import SelfPlayJobSpec
+
+    monkeypatch.chdir(tmp_path)
+    weights_rel = "trained_weights/v7/weights.pt"
+    (tmp_path / "trained_weights" / "v7").mkdir(parents=True)
+    (tmp_path / weights_rel).write_bytes(b"fake-weights")
+
+    spec = SelfPlayJobSpec(
+        weights_path=weights_rel,
+        samples=2, inner_nodes=10, hidden_sizes=(64,),
+        base_seed=0, enable_mulligans=False,
+        per_game_timeout_sec=None,
+    )
+    shard = ShardConfig(
+        host="macbook", n_games=10, user="g",
+        repo_path="/Users/g/repo",
+        venv_python=".venv-py313/bin/python",
+    )
+    calls = _capture_run_shard_remote_calls(
+        monkeypatch, shard, spec,
+        bundle_url="http://master:5099/repo.bundle",
+        tmp_path=tmp_path,
+    )
+
+    def _classify(c: list[str]) -> str:
+        if c[0] == "ssh":
+            tail = c[-1]
+            if "git fetch" in tail and "repo.bundle" in tail:
+                return "bundle_sync"
+            if "mkdir -p" in tail or "New-Item" in tail:
+                return "mkdir"
+            if "run_self_play_shard.py" in tail:
+                return "self_play"
+            if "iterate_data" in tail and (
+                "ls " in tail or "dir /b" in tail
+            ):
+                return "list_npzs"
+            return f"ssh_other:{tail[:40]}"
+        if c[0] == "scp":
+            target_idx = next(
+                (i for i, a in enumerate(c) if "@" in a), None
+            )
+            if target_idx is None:
+                return "scp_unknown"
+            target = c[target_idx]
+            if target.startswith("g@") and ":" in target:
+                rhs = target.split(":", 1)[1]
+                if rhs.endswith("weights.pt") and target_idx == len(c) - 1:
+                    return "weight_push"
+                if rhs.endswith(".json"):
+                    return "progress_pull"
+                if rhs.endswith(".jsonl"):
+                    return "events_pull"
+            return "scp_other"
+        return f"other:{c[0]}"
+
+    seq = [_classify(c) for c in calls]
+    bundle_idx = seq.index("bundle_sync")
+    mkdir_idx = seq.index("mkdir")
+    weight_idx = seq.index("weight_push")
+    self_play_idx = seq.index("self_play")
+    progress_pull_idx = seq.index("progress_pull")
+    events_pull_idx = seq.index("events_pull")
+
+    assert (
+        bundle_idx < mkdir_idx < weight_idx
+        < self_play_idx < progress_pull_idx < events_pull_idx
+    ), f"unexpected order: {seq}"
+
+
+def test_weight_push_failure_propagates(monkeypatch, tmp_path):
+    """If the scp push fails (non-zero exit / OSError), the error
+    must propagate. We previously had a silent-failure version that
+    burned a debug session — pin this so it doesn't regress."""
+    from mtg_bot.training import distributed as dist
+    from mtg_bot.training.distributed import SelfPlayJobSpec
+
+    monkeypatch.chdir(tmp_path)
+    weights_rel = "trained_weights/v7/weights.pt"
+    (tmp_path / "trained_weights" / "v7").mkdir(parents=True)
+    (tmp_path / weights_rel).write_bytes(b"fake-weights")
+
+    class _Boom:
+        def __init__(self): self.calls = []
+        def __call__(self, cmd, *a, **kw):
+            self.calls.append(list(cmd))
+            if cmd[0] == "scp":
+                raise subprocess.CalledProcessError(
+                    1, cmd, output="", stderr="permission denied",
+                )
+
+            class _Result:
+                returncode = 0
+                stdout = ""
+                stderr = ""
+            return _Result()
+
+    import subprocess
+    boom = _Boom()
+    monkeypatch.setattr(dist, "_run_subprocess", boom)
+    monkeypatch.setattr(dist.subprocess, "run", boom)
+
+    class _NoopPoller:
+        def __init__(self, *a, **kw): pass
+        def start(self): pass
+        def stop(self): pass
+    monkeypatch.setattr(dist, "_ProgressPoller", _NoopPoller)
+
+    spec = SelfPlayJobSpec(
+        weights_path=weights_rel,
+        samples=2, inner_nodes=10, hidden_sizes=(64,),
+        base_seed=0, enable_mulligans=False,
+        per_game_timeout_sec=None,
+    )
+    shard = ShardConfig(
+        host="macbook", n_games=10, user="g",
+        repo_path="/Users/g/repo",
+        venv_python=".venv-py313/bin/python",
+    )
+    with pytest.raises(subprocess.CalledProcessError):
+        dist.run_shard_remote(
+            shard, spec,
+            queue_url="http://master:5099",
+            run_id="iter_002",
+            iter_total_games=10,
+            batch_size_default=2,
+            progress_dir=tmp_path / "training_progress",
+            output_dir=tmp_path / "iterate_data",
+            run_id_prefix="iter_002",
+            stamp="20260503T230000Z",
+        )
+
+
 # ---- EventLog + helpers ----------------------------------------
 
 

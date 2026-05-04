@@ -1148,6 +1148,21 @@ class _ProgressPoller:
             self._stop_event.wait(self._interval_s)
 
 
+def _build_remote_mkdir_command(
+    shard: ShardConfig, remote_dir: str,
+) -> str:
+    """Idempotent ``mkdir -p`` equivalent for the remote shell. cmd.exe
+    ``mkdir`` is finicky over OpenSSH-Server (silently fails on
+    existing dirs), so on Windows we route through PowerShell's
+    ``New-Item -Force`` which is genuinely idempotent."""
+    if _is_windows_remote(shard):
+        return (
+            f"powershell -Command \"New-Item -ItemType Directory "
+            f"-Force -Path '{remote_dir}'\""
+        )
+    return f"mkdir -p {shlex.quote(remote_dir)}"
+
+
 def _build_remote_bundle_sync_command(
     shard: ShardConfig, bundle_url: str,
 ) -> str:
@@ -1193,12 +1208,15 @@ def run_shard_remote(
 
     Sequence:
     1. Code sync from master's git bundle (if ``bundle_url`` is set).
-    2. Start a poller that periodically scps the remote progress
+    2. Push the master's current weights file to the remote at the
+       same relative path. Failures here propagate — a stale weights
+       file on the remote silently produces zero-sample games.
+    3. Start a poller that periodically scps the remote progress
        JSON back for the master UI.
-    3. Block on ``ssh ... run_self_play_shard.py --mode=pull`` —
+    4. Block on ``ssh ... run_self_play_shard.py --mode=pull`` —
        the wrapper loops fetching from /queue/take until empty.
-    4. Stop poller; final progress scp.
-    5. scp every per-batch npz back to ``output_dir``. Filenames
+    5. Stop poller; final progress scp.
+    6. scp every per-batch npz back to ``output_dir``. Filenames
        follow ``{run_id}_shard_{label}_chunk_{NNNN}_{stamp}.npz``,
        which is what ``run_shard_pull`` writes server-side.
 
@@ -1245,7 +1263,36 @@ def run_shard_remote(
         sync_cmd = _build_remote_bundle_sync_command(shard, bundle_url)
         _run_subprocess(_ssh_cmd(shard, sync_cmd), timeout=300)
 
-    # 2. Progress poller.
+    # 2. Weight push. Master-trained weights at <master_cwd>/<weights_path>
+    # need to land at <repo_path>/<weights_path> on the remote. Without
+    # this, iter #2+ silently produces samples=0 games on remotes
+    # because their weights file is stale or missing.
+    print(
+        f"[shard {shard.display_label}] pushing weights "
+        f"{spec.weights_path} to {shard.host}...",
+        file=sys.stderr,
+    )
+    local_weights = (Path.cwd() / spec.weights_path).resolve()
+    weights_posix = spec.weights_path.replace("\\", "/")
+    remote_weights = _remote_join(shard, remote_repo, weights_posix)
+    remote_weights_parent = _remote_join(
+        shard, remote_repo, str(PurePosixPath(weights_posix).parent),
+    )
+    _run_subprocess(
+        _ssh_cmd(shard, _build_remote_mkdir_command(
+            shard, remote_weights_parent,
+        )),
+        timeout=30,
+    )
+    _run_subprocess(
+        _scp_cmd(
+            shard, str(local_weights), remote_weights,
+            from_remote=False,
+        ),
+        timeout=300,
+    )
+
+    # 3. Progress poller.
     poller = _ProgressPoller(
         shard,
         remote_progress_path=remote_progress,
@@ -1253,7 +1300,7 @@ def run_shard_remote(
     )
     poller.start()
 
-    # 3. The actual pull-mode invocation. Blocks until queue drains.
+    # 4. The actual pull-mode invocation. Blocks until queue drains.
     print(
         f"[shard {shard.display_label}] pull-mode self-play on "
         f"{shard.host} (batch_size={batch_size})...",
@@ -1299,7 +1346,7 @@ def run_shard_remote(
         except Exception:  # noqa: BLE001
             pass
 
-    # 4. Pull all per-batch npzs back. The remote wrote them under
+    # 5. Pull all per-batch npzs back. The remote wrote them under
     # iterate_data/ with a known prefix; we glob via SSH ``ls`` + scp
     # each. (Bulk scp of a glob has shell-quoting issues across cmd
     # vs bash, so we list + transfer one at a time.)
