@@ -332,11 +332,15 @@ def run_step(
             return
 
     if step == Step.DRAW:
-        # Starting player skips their very first draw step.
-        starting_player_first_draw = (
-            state.turn_number == 1 and state.active_player_idx == 0
-        )
-        if not starting_player_first_draw:
+        # Starting player skips their very first draw step. On turn 1
+        # the active player IS the starting player (turn_number only
+        # ticks past 1 after the first turn ends), so checking
+        # turn_number alone is correct regardless of which seat is
+        # starting — the previous ``active_player_idx == 0`` condition
+        # encoded a hidden "seat 0 is always starting" assumption that
+        # broke once data-gen started alternating starting seats per
+        # game_idx.
+        if state.turn_number != 1:
             run_draw_step(state)
 
     elif step == Step.DECLARE_ATTACKERS:

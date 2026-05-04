@@ -664,12 +664,12 @@ class MtgGameStateAdapter:
 
         elif step == Step.DRAW:
             # Starting player skips their very first draw step —
-            # same rule run_step enforces.
-            starting_player_first_draw = (
-                self._state.turn_number == 1
-                and self._state.active_player_idx == 0
-            )
-            if not starting_player_first_draw:
+            # same rule run_step enforces. ``turn_number == 1`` alone
+            # is the correct condition: on turn 1 the active player
+            # IS the starting player regardless of which seat they
+            # occupy, so this works for both standard (seat 0 starts)
+            # and alternating-seat (seat 1 starts) games.
+            if self._state.turn_number != 1:
                 run_draw_step(self._state)
 
         elif step == Step.BEGINNING_OF_COMBAT:

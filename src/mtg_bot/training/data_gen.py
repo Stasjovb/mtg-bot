@@ -453,6 +453,20 @@ def _generate_one_game_data(
     seats' libraries. When ``deck_pool`` is None, falls back to the
     legacy mono-color synthetic decks (G vs R) for backward compat.
 
+    Starting-seat alternation: for ``game_idx % 2 == 1``, player 1
+    starts on the play instead of player 0. Going first is
+    structurally advantageous in MTG, so without alternation the
+    seat-0 wins-on-the-play bias bleeds into the value labels (v6
+    self-play hit 80.8% seat-0 wins, biasing every viewer=0 turn-1
+    feature row toward +1 and every viewer=1 turn-1 row toward -1
+    — the model learns "I'm seated at seat 0 → I win" rather than
+    evaluating position quality). The features are seat-symmetric
+    (see ``mtg_bot.features``) so flipping who starts averages the
+    advantage out across game_idx without remapping winners or
+    swapping strategies; the data is per-viewer-perspective and the
+    label is ``winner == viewer``, which is correct regardless of
+    who started.
+
     When ``replay_config`` is set and ``should_capture(game_idx)``
     returns True, also writes a per-game replay file to disk before
     returning. The annotators (heuristic + optional NN eval) are
@@ -483,6 +497,9 @@ def _generate_one_game_data(
             seed=engine_seed,
             enable_mulligans=enable_mulligans,
         )
+    if game_idx % 2 == 1:
+        engine.active_player_idx = 1
+        engine.priority_player_idx = 1
     adapter = MtgGameStateAdapter(engine, expose_combat_decisions=True)
     strategies = {
         0: p0_factory(base_seed + 100 * game_idx),
