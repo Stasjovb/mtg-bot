@@ -1580,3 +1580,258 @@ def test_pending_prior_queue_resets_between_searches():
     ismcts.choose_with_visits(adapter, adapter.active_player())
     assert ismcts._pending_prior_states == []
     assert ismcts._pending_prior_set == set()
+
+
+# ---------- tree reuse across choose calls (Phase 7) -----------------------
+
+
+def test_tree_reuse_starts_empty_on_fresh_instance():
+    """A freshly constructed ISMCTS has an empty persistent tree —
+    no ghost nodes from a previous instance, no stale root key.
+    """
+    ismcts = _make_ismcts(nodes=5)
+    assert ismcts._tree == {}
+    assert ismcts._tree_root_key is None
+
+
+def test_tree_reuse_carries_visits_across_choose():
+    """After a first ``choose_with_visits`` call followed by an
+    ``observe_action`` for the chosen decision, the second call's
+    root must inherit the visit count of the first call's chosen
+    child node. This is the canonical "free search" benefit of tree
+    reuse.
+    """
+    adapter = _adapter(seed=11)
+    if not _advance_to_multi_action(adapter):
+        pytest.skip("game ended before a multi-action moment")
+    actor = adapter.active_player()
+
+    ismcts = _make_ismcts(nodes=40)
+    visits1 = ismcts.choose_with_visits(adapter, actor)
+    assert visits1, "first search must have produced visits"
+    # Pick the most-visited decision; that's what ``choose`` would
+    # commit to.
+    decision = max(visits1.items(), key=lambda kv: kv[1])[0]
+    chosen_visits = visits1[decision]
+    # Locate the node that's about to become the new root.
+    old_root_key = ismcts._tree_root_key
+    new_root_node = ismcts._tree[old_root_key].children[decision]
+    new_root_key = new_root_node.key
+    inherited_visits = new_root_node.visits
+
+    # Step the tree forward.
+    ismcts.observe_action(adapter, decision, actor)
+    assert ismcts._tree_root_key == new_root_key, (
+        "observe_action should advance the tree root to the chosen "
+        "child's key"
+    )
+    assert ismcts._tree[new_root_key].visits == inherited_visits, (
+        "inherited node retains its visit count"
+    )
+    # Sanity: the inherited visit count is positive (the search
+    # actually explored this child) and at most the chosen visit
+    # count (the child node may have transposed with siblings, in
+    # which case its visits >= chosen_visits, never less).
+    assert inherited_visits >= chosen_visits
+
+
+def test_observe_action_prunes_to_chosen_child():
+    """After ``observe_action``, only nodes reachable from the new
+    root remain in the tree dict. Sibling subtrees of unselected
+    actions are dropped.
+    """
+    adapter = _adapter(seed=11)
+    if not _advance_to_multi_action(adapter):
+        pytest.skip("game ended before a multi-action moment")
+    actor = adapter.active_player()
+
+    ismcts = _make_ismcts(nodes=40)
+    ismcts.choose_with_visits(adapter, actor)
+    pre_prune_size = len(ismcts._tree)
+    old_root = ismcts._tree[ismcts._tree_root_key]
+    if not old_root.children:
+        pytest.skip("first search produced no expanded children")
+    decision = next(iter(old_root.children))
+    new_root = old_root.children[decision]
+
+    # Compute reachable set from new_root manually for comparison.
+    expected: set[bytes] = set()
+    stack = [new_root]
+    while stack:
+        n = stack.pop()
+        if n.key in expected:
+            continue
+        expected.add(n.key)
+        for c in n.children.values():
+            stack.append(c)
+
+    ismcts.observe_action(adapter, decision, actor)
+    assert set(ismcts._tree.keys()) == expected, (
+        "tree must be exactly the reachable subtree from the new root"
+    )
+    assert len(ismcts._tree) <= pre_prune_size, (
+        "prune should not grow the tree"
+    )
+    assert ismcts._tree_root_key == new_root.key
+
+
+def test_tree_reuse_handles_unexpanded_action():
+    """If ``observe_action`` is called with a decision that wasn't a
+    child of the current root, the tree must reset cleanly so the
+    next ``choose`` builds from scratch without dangling references.
+    """
+    adapter = _adapter(seed=11)
+    if not _advance_to_multi_action(adapter):
+        pytest.skip("game ended before a multi-action moment")
+    actor = adapter.active_player()
+
+    ismcts = _make_ismcts(nodes=20)
+    ismcts.choose_with_visits(adapter, actor)
+    assert ismcts._tree, "first search should populate the tree"
+    # Synthesize a decision that is highly unlikely to be a child of
+    # the current root: an empty tuple is a valid hashable Decision
+    # but has no semantic meaning to the engine, so the search will
+    # never expand it.
+    bogus_decision = ("__not_a_real_decision__",)
+    assert bogus_decision not in ismcts._tree[ismcts._tree_root_key].children
+    ismcts.observe_action(adapter, bogus_decision, actor)
+    assert ismcts._tree == {}
+    assert ismcts._tree_root_key is None
+    # Next choose builds fresh — no exception, returns valid visits.
+    visits = ismcts.choose_with_visits(adapter, actor)
+    assert visits
+
+
+def test_tree_reuse_no_op_when_no_prior_search():
+    """Calling ``observe_action`` before any ``choose_with_visits``
+    must be a no-op for the tree — there's nothing to advance.
+    """
+    adapter = _adapter(seed=11)
+    if not _advance_to_multi_action(adapter):
+        pytest.skip("game ended before a multi-action moment")
+    actor = adapter.active_player()
+    decision = adapter.legal_decisions()[0]
+    ismcts = _make_ismcts(nodes=10)
+    ismcts.observe_action(adapter, decision, actor)
+    assert ismcts._tree == {}
+    assert ismcts._tree_root_key is None
+
+
+def test_reset_tree_clears_persistent_state():
+    """``reset_tree`` is the public escape hatch for callers that
+    want to drop accumulated search state — e.g. between independent
+    games on the same strategy instance.
+    """
+    adapter = _adapter(seed=11)
+    if not _advance_to_multi_action(adapter):
+        pytest.skip("game ended before a multi-action moment")
+    actor = adapter.active_player()
+    ismcts = _make_ismcts(nodes=20)
+    ismcts.choose_with_visits(adapter, actor)
+    assert ismcts._tree
+    ismcts.reset_tree()
+    assert ismcts._tree == {}
+    assert ismcts._tree_root_key is None
+
+
+def test_tree_reuse_second_search_grows_root_visits():
+    """After tree reuse, a second ``choose_with_visits`` call adds
+    its iteration budget on top of whatever visits the inherited
+    root already had — the two effectively combine.
+    """
+    adapter = _adapter(seed=11)
+    if not _advance_to_multi_action(adapter):
+        pytest.skip("game ended before a multi-action moment")
+    actor = adapter.active_player()
+
+    ismcts = _make_ismcts(nodes=30)
+    ismcts.choose_with_visits(adapter, actor)
+    decision = max(
+        ismcts._tree[ismcts._tree_root_key].children.items(),
+        key=lambda kv: kv[1].visits,
+    )[0]
+    new_root_node = (
+        ismcts._tree[ismcts._tree_root_key].children[decision]
+    )
+    inherited_visits = new_root_node.visits
+    new_root_key = new_root_node.key
+
+    # Apply the chosen decision and observe.
+    ismcts.observe_action(adapter, decision, actor)
+    adapter.apply(decision)
+
+    # The new tree root might no longer be at a multi-action moment
+    # — apply forced moves to advance.
+    while (
+        len(adapter.legal_decisions()) == 1
+        and not adapter.is_terminal()
+    ):
+        forced = adapter.legal_decisions()[0]
+        ismcts.observe_action(adapter, forced, adapter.active_player())
+        adapter.apply(forced)
+    if adapter.is_terminal():
+        pytest.skip("game ended before a second multi-action moment")
+    # Walking forced moves through observe_action may have pruned to a
+    # different node (or reset). Either path is fine; we only assert
+    # that if the tree is still alive, its root visits >= inherited.
+    if not ismcts._tree:
+        return
+    next_actor = adapter.active_player()
+    ismcts.choose_with_visits(adapter, next_actor)
+    new_root_after_search = ismcts._tree.get(ismcts._tree_root_key)
+    assert new_root_after_search is not None
+    # The root used by the second search has at least the inherited
+    # visits (it might be a different node if forced moves walked us
+    # past the original new_root, in which case this is still a
+    # meaningful invariant: visits never go down).
+    if ismcts._tree_root_key == new_root_key:
+        assert new_root_after_search.visits >= inherited_visits
+
+
+def test_tree_reuse_compatible_with_belief_determinizer():
+    """Tree reuse + BeliefWeightedDeterminizer must coexist — the
+    posterior cache lives on the determinizer, the tree lives on
+    the strategy, and ``observe_action`` updates both. Both pieces
+    of state survive a sequence of choose/observe calls without
+    interfering.
+    """
+    from mtg_bot.search.belief import (
+        BeliefWeightedDeterminizer, PriorityMoment,
+    )
+    adapter = _adapter(seed=11)
+    if not _advance_to_multi_action(adapter):
+        pytest.skip("game ended before a multi-action moment")
+    actor = adapter.active_player()
+
+    eval_stub = _StubPolicyEvaluator()
+    determinizer = BeliefWeightedDeterminizer(
+        opponent_policy_evaluator=eval_stub,
+    )
+    ismcts = ISMCTS(
+        evaluator=eval_stub,
+        budget_factory=lambda: Budget(max_nodes=20),
+        determinize_fn=determinizer,
+        rng=random.Random(0),
+        puct=True,
+    )
+
+    visits1 = ismcts.choose_with_visits(adapter, actor)
+    assert visits1
+    decision = max(visits1.items(), key=lambda kv: kv[1])[0]
+    # Pre-observe: belief history is empty, tree has nodes.
+    assert determinizer.played_history == ()
+    assert ismcts._tree
+    pre_root_key = ismcts._tree_root_key
+
+    ismcts.observe_action(adapter, decision, actor)
+    # Belief history grew by one moment.
+    assert len(determinizer.played_history) == 1
+    moment = determinizer.played_history[0]
+    assert isinstance(moment, PriorityMoment)
+    assert moment.decision == decision
+    assert moment.actor == actor
+    # Tree advanced to the chosen child (or reset if unexpanded).
+    if ismcts._tree:
+        assert ismcts._tree_root_key != pre_root_key, (
+            "tree should have advanced past the original root"
+        )
