@@ -152,8 +152,9 @@ class BeliefWeightedDeterminizer:
         ``O(m_candidates * len(played_history))`` policy queries per
         ``__call__``, mitigated by the cache.
 
-        ``cache_max_size`` bounds the (printings_tuple, history_index)
-        cache. FIFO eviction; ``OrderedDict.popitem(last=False)``.
+        ``cache_max_size`` bounds the ((hand_names, library_names),
+        history_index) cache. FIFO eviction;
+        ``OrderedDict.popitem(last=False)``.
 
         ``log_prob_floor`` is the minimum log-probability assigned to
         an action with zero probability under a candidate hand —
@@ -339,9 +340,12 @@ class BeliefWeightedDeterminizer:
             cache_key = (hand_key, h_idx)
             cached = self._cache.get(cache_key)
             if cached is None:
+                # ``evaluate_logits`` calls ``state.is_terminal()`` on
+                # the input — that's an adapter method, so wrap the
+                # raw engine state in an adapter before passing.
                 value, logits = (
                     self.opponent_policy_evaluator.evaluate_logits(
-                        reconstructed, opponent,
+                        MtgGameStateAdapter(reconstructed), opponent,
                     )
                 )
                 # ``value`` is unused for the policy likelihood;
@@ -395,22 +399,24 @@ class BeliefWeightedDeterminizer:
 def _opponent_hand_key(
     state: EngineGameState, opponent: PlayerID,
 ) -> tuple[Any, ...]:
-    """Cache key built from the opponent's hand printings + library
-    printings (in zone order). The library order matters because the
-    NN may consult library top via features (we don't know which
-    features it uses, so be conservative). Printings are frozen
-    dataclasses and hashable.
+    """Cache key built from the opponent's hand + library printing
+    NAMES (in zone order). Library order matters because the NN may
+    consult library top via features (we don't know which features it
+    uses, so be conservative). Including library order trades a bit
+    of cache-miss rate for correctness.
 
-    Hand printings alone would be a tighter key but two
-    determinizations with the same hand printings but different
-    library orders can produce different ``evaluate_logits`` outputs
-    if any feature ever reads the library. Including library
-    printings in the key trades a bit of cache-miss rate for
-    correctness.
+    We key by ``printing.name`` rather than the printing object
+    itself: at least one ``CardPrinting`` field (``StaticAbility`` ->
+    ``ReplacementEffect`` -> ``EventPattern.subject_filters``, a
+    ``Mapping`` defaulting to ``dict``) is mutably-typed and breaks
+    ``hash``. Names are unique per card and ``extract_features`` only
+    reads identity-equivalent fields, so name keys are sufficient.
+    Fixing ``EventPattern.subject_filters`` to a frozen container is
+    the right structural fix; tracked as a follow-up.
     """
     player = state.players[opponent]
-    hand = tuple(c.printing for c in player.hand)
-    library = tuple(c.printing for c in player.library)
+    hand = tuple(c.printing.name for c in player.hand)
+    library = tuple(c.printing.name for c in player.library)
     return (hand, library)
 
 

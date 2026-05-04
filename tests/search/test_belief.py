@@ -151,7 +151,12 @@ class _DeterministicSlotEvaluator:
     def evaluate_logits(self, state, player_id):
         self.calls += 1
         logits = np.zeros(ae.ACTION_VOCAB_SIZE, dtype=np.float32)
-        hand = state.players[player_id].hand
+        # The real ``NNEvaluator.evaluate_logits`` takes a GameState
+        # protocol object (the adapter); ``BeliefWeightedDeterminizer``
+        # passes the same. Reach through to the engine state for hand
+        # access.
+        engine = getattr(state, "engine_state", state)
+        hand = engine.players[player_id].hand
         names = {c.printing.name for c in hand}
         if self.favored_printing_names <= names:
             logits[self.favored_slot] = self.boost
@@ -781,3 +786,98 @@ def test_categorical_draw_concentrated_distribution():
     rng = random.Random(42)
     for _ in range(100):
         assert _categorical_draw(p, rng) == 1
+
+
+# ---------- runtime-integration regressions --------------------------------
+#
+# Both regressions caught by the smoke run on 2026-05-04 right after the
+# Phase 6.5 wireup landed. The agent's existing tests passed because they
+# used a mock evaluator that didn't call ``state.is_terminal()`` and the
+# cache-key path never hit a real ``StaticAbility``-bearing printing. The
+# 3-way bench at production budget exercises both at game 1's first
+# decision under the synthetic G/R deck.
+
+
+class _ProtocolEvaluator:
+    """Mimics ``NNEvaluator.evaluate_logits``: calls ``state.is_terminal()``
+    and ``state.winner()`` on the input — i.e. requires the GameState
+    protocol (the adapter), not a raw engine state.
+    """
+
+    def __init__(self) -> None:
+        self.calls = 0
+
+    def evaluate_logits(self, state, player_id):
+        self.calls += 1
+        # The real evaluator does this exact check first thing.
+        if state.is_terminal():
+            return 0.0, np.zeros(ae.ACTION_VOCAB_SIZE, dtype=np.float32)
+        # Touch winner() too; some real evaluators do.
+        _ = state.winner()
+        return 0.0, np.zeros(ae.ACTION_VOCAB_SIZE, dtype=np.float32)
+
+
+def test_score_particle_passes_adapter_to_evaluator():
+    """Regression: the belief sampler used to pass the raw engine
+    state to ``evaluate_logits``, which then crashed with
+    ``AttributeError: 'GameState' object has no attribute
+    'is_terminal'``. The fix wraps the reconstructed state in
+    ``MtgGameStateAdapter`` before the evaluator call.
+    """
+    adapter = _adapter(seed=11)
+    opponent = 1
+    log = _drive_to_opponent_moments(adapter, opponent, max_steps=20)
+    if not log:
+        pytest.skip("no opponent priority moments under seed=11")
+
+    sampler = BeliefWeightedDeterminizer(
+        opponent_policy_evaluator=_ProtocolEvaluator(),
+        played_history=log[:2],
+        m_candidates=4,
+    )
+    s = adapter.engine_state.clone()
+    # Should not raise.
+    sampler(s, viewer_id=0, rng=random.Random(99), in_place=True)
+
+
+def test_opponent_hand_key_is_hashable_for_real_printings():
+    """Regression: the cache key used to be a tuple of ``CardPrinting``
+    objects, which is unhashable because ``EventPattern.subject_filters``
+    is a ``Mapping`` defaulting to ``dict``. The fix keys by printing
+    name. Verify the cache key is hashable for a real synthetic-deck
+    state (the G/R pool exercises ``StaticAbility``-bearing printings
+    like ``Loading Zone``).
+    """
+    from mtg_bot.search.belief import _opponent_hand_key
+
+    state = _engine_state(seed=0)
+    key = _opponent_hand_key(state, opponent=1)
+    # Must hash without raising; the bug was a TypeError here.
+    hash(key)
+
+
+def test_belief_end_to_end_with_protocol_evaluator_on_synthetic_deck():
+    """End-to-end: drive several opponent moments, then run the
+    sampler under a protocol-conforming evaluator and confirm it
+    returns without raising and produces a valid post-state.
+    """
+    adapter = _adapter(seed=11)
+    opponent = 1
+    viewer = 0
+    log = _drive_to_opponent_moments(adapter, opponent, max_steps=30)
+    if len(log) < 2:
+        pytest.skip("need at least 2 opponent moments under seed=11")
+
+    sampler = BeliefWeightedDeterminizer(
+        opponent_policy_evaluator=_ProtocolEvaluator(),
+        played_history=log,
+        m_candidates=8,
+    )
+    s = adapter.engine_state.clone()
+    out = sampler(s, viewer_id=viewer, rng=random.Random(7), in_place=True)
+    assert out is s  # in_place
+    # Viewer's hand size preserved by determinization.
+    assert (
+        len(out.players[viewer].hand)
+        == len(adapter.engine_state.players[viewer].hand)
+    )
