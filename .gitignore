@@ -74,6 +74,11 @@ replays/
 # hang bug (todo 9c5e3b71) but never something we'd commit.
 debug_hangs/
 
+# Bench reports written by scripts/bench_ismcts_vs_pimc_strength.py.
+# JSON-per-run (timestamped); regenerable; track strength trends across
+# NN versions over time but the artifacts themselves are operator-local.
+bench_results/
+
 # 17lands public data + parsed deck cache. The raw CSVs are 100s of
 # MB; the parsed deck JSON is much smaller but still derived data.
 # Regenerable via scripts/fetch_17lands_data.py.
