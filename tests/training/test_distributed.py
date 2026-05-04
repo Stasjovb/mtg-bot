@@ -323,37 +323,143 @@ def test_run_distributed_two_local_shards_both_produce_npz(
     assert all(p.is_file() for p in paths)
 
 
-def test_run_distributed_remote_shards_raise_not_implemented(
-    tmp_path: Path,
-):
-    """Today remote shards aren't wired up — the orchestrator
-    surfaces NotImplementedError so the user can't accidentally
-    config a remote shard before the SSH runner lands."""
+def test_spec_round_trips_through_to_dict_from_dict():
+    """SelfPlayJobSpec.to_dict + from_dict is a no-op. Round-trip
+    is what enables the remote-shard wrapper to receive the spec via
+    base64-encoded JSON over SSH."""
+    from mtg_bot.training.distributed import SelfPlayJobSpec
+
+    original = SelfPlayJobSpec(
+        weights_path="trained_weights/v6/weights.pt",
+        samples=4, inner_nodes=200,
+        hidden_sizes=(1024, 1024, 512),
+        base_seed=2_000_000,
+        enable_mulligans=True,
+        per_game_timeout_sec=450.0,
+        deck_pool_path="data/17lands/eoe_decks.json.gz",
+        with_policy=True,
+        decision_cap=4000,
+        sample_every=1,
+        capture_every=25,
+        nn_version_label="v6",
+        replays_root="replays",
+        hang_dump_root="debug_hangs",
+    )
+    rt = SelfPlayJobSpec.from_dict(original.to_dict())
+    assert rt == original
+
+
+def test_shard_config_round_trips_through_to_dict_from_dict():
+    s = ShardConfig(
+        host="win-1080ti", n_games=150, label="win",
+        seed_offset=1_000_000, n_workers=8,
+        user="gregg",
+        repo_path="C:\\Users\\gregg\\Projects\\mtg-bot",
+        venv_python=".venv-py313\\Scripts\\python.exe",
+        ssh_port=22,
+    )
+    rt = ShardConfig.from_dict(s.to_dict())
+    assert rt == s
+
+
+def test_remote_command_uses_wrapper_script_with_b64_args():
+    """The remote one-liner invokes ``run_self_play_shard.py`` with
+    base64-encoded spec + shard JSON. Both encodings must round-trip
+    cleanly so the remote can rebuild the dataclasses."""
+    import base64
+
     from mtg_bot.training.distributed import (
         SelfPlayJobSpec,
-        run_distributed_self_play,
+        _build_remote_self_play_command,
     )
 
-    weights_path, hidden_sizes = _tiny_dual_head_weights(tmp_path)
     spec = SelfPlayJobSpec(
-        weights_path=str(weights_path),
-        samples=1, inner_nodes=10,
-        hidden_sizes=hidden_sizes,
-        base_seed=0,
-        enable_mulligans=False,
-        per_game_timeout_sec=None,
+        weights_path="trained_weights/v6/weights.pt",
+        samples=4, inner_nodes=200, hidden_sizes=(64, 64),
+        base_seed=42, enable_mulligans=False,
+        per_game_timeout_sec=300.0,
     )
-    cfg = ShardsConfig(shards=(
-        ShardConfig(
-            host="remote-mac", n_games=2,
-            user="u", repo_path="/r",
-            venv_python=".venv/bin/python",
-        ),
-    ))
-    with pytest.raises(NotImplementedError, match="remote shard runner"):
-        run_distributed_self_play(
-            cfg, spec,
-            progress_dir=tmp_path / "p",
-            output_dir=tmp_path / "out",
-            run_id_prefix="iter_001",
+    shard = ShardConfig(
+        host="macbook", n_games=10, user="g",
+        repo_path="/Users/g/repo",
+        venv_python=".venv-py313/bin/python",
+    )
+    cmd = _build_remote_self_play_command(
+        shard, spec,
+        run_id_prefix="iter_001_self_play_v6",
+        stamp="20260503T230000Z",
+    )
+    # POSIX cd + venv invocation.
+    assert "cd /Users/g/repo" in cmd
+    assert ".venv-py313/bin/python" in cmd
+    assert "scripts/run_self_play_shard.py" in cmd
+    # Both encoded args present and decode back to the originals.
+    for name, expected in (("--spec-b64=", spec), ("--shard-b64=", shard)):
+        marker = name
+        i = cmd.index(marker) + len(marker)
+        # The encoded value runs until the next space.
+        end = cmd.index(" ", i)
+        encoded = cmd[i:end]
+        decoded = json.loads(
+            base64.b64decode(encoded.encode("ascii")).decode("utf-8")
         )
+        if name.startswith("--spec"):
+            assert (
+                SelfPlayJobSpec.from_dict(decoded) == expected
+            )
+        else:
+            assert ShardConfig.from_dict(decoded) == expected
+
+
+def test_remote_command_windows_uses_cmd_syntax():
+    """A Windows shard (``.exe`` venv python) must use cmd.exe-style
+    ``cd /d "path" && set PYTHONPATH=src && "..\\python.exe" ...``
+    instead of POSIX bash form."""
+    from mtg_bot.training.distributed import (
+        SelfPlayJobSpec,
+        _build_remote_self_play_command,
+    )
+
+    spec = SelfPlayJobSpec(
+        weights_path="trained_weights/v6/weights.pt",
+        samples=4, inner_nodes=200, hidden_sizes=(64, 64),
+        base_seed=42, enable_mulligans=False,
+        per_game_timeout_sec=300.0,
+    )
+    shard = ShardConfig(
+        host="win-box", n_games=10, user="g",
+        repo_path="C:\\Users\\g\\Projects\\mtg-bot",
+        venv_python=".venv-py313\\Scripts\\python.exe",
+    )
+    cmd = _build_remote_self_play_command(
+        shard, spec,
+        run_id_prefix="iter_001", stamp="20260503T000000Z",
+    )
+    assert 'cd /d "C:\\Users\\g\\Projects\\mtg-bot"' in cmd
+    assert "set PYTHONPATH=src" in cmd
+    assert '".venv-py313\\Scripts\\python.exe"' in cmd
+
+
+def test_run_self_play_shard_script_exists_and_imports():
+    """Smoke that the script file exists at scripts/run_self_play_
+    shard.py and is at least importable / has --help. The deeper
+    integration (run a fake shard end-to-end) is covered by
+    test_run_shard_local — we don't need a duplicate via
+    subprocess."""
+    import os
+    import subprocess
+    import sys as _sys
+
+    repo_root = Path(__file__).resolve().parents[2]
+    script = repo_root / "scripts" / "run_self_play_shard.py"
+    assert script.is_file()
+    # Use the same interpreter running the test — works regardless
+    # of where the worktree lives relative to the venv.
+    env = {**os.environ, "PYTHONPATH": str(repo_root / "src")}
+    res = subprocess.run(
+        [_sys.executable, str(script), "--help"],
+        capture_output=True, text=True, env=env, timeout=30,
+    )
+    assert res.returncode == 0, res.stderr
+    assert "--spec-b64" in res.stdout
+    assert "--shard-b64" in res.stdout

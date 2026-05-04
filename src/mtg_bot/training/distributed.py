@@ -26,10 +26,14 @@ from __future__ import annotations
 
 import concurrent.futures
 import json
+import shlex
+import subprocess
+import sys
+import threading
 import time
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from pathlib import Path
+from pathlib import Path, PurePosixPath, PureWindowsPath
 from typing import Any, Callable, Optional
 
 
@@ -85,6 +89,33 @@ class ShardConfig:
     @property
     def display_label(self) -> str:
         return self.label or self.host
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "host": self.host,
+            "n_games": self.n_games,
+            "label": self.label,
+            "seed_offset": self.seed_offset,
+            "n_workers": self.n_workers,
+            "user": self.user,
+            "repo_path": self.repo_path,
+            "venv_python": self.venv_python,
+            "ssh_port": self.ssh_port,
+        }
+
+    @classmethod
+    def from_dict(cls, d: dict[str, Any]) -> "ShardConfig":
+        return cls(
+            host=d["host"],
+            n_games=int(d["n_games"]),
+            label=d.get("label", ""),
+            seed_offset=int(d.get("seed_offset", 0)),
+            n_workers=d.get("n_workers"),
+            user=d.get("user"),
+            repo_path=d.get("repo_path"),
+            venv_python=d.get("venv_python"),
+            ssh_port=int(d.get("ssh_port", 22)),
+        )
 
     def __post_init__(self) -> None:
         # Validate up-front — easier to catch a malformed config at
@@ -236,7 +267,16 @@ class SelfPlayJobSpec:
     every shard — only the per-shard count + seed-offset differs.
     Frozen so it crosses the multiprocessing pickle boundary cleanly
     when iterate hands it to local-shard workers via ``generate_
-    training_data_parallel``."""
+    training_data_parallel``.
+
+    All path fields (``weights_path``, ``deck_pool_path``,
+    ``replays_root``, ``hang_dump_root``) are RELATIVE to the repo
+    root by convention, so the same spec works for both local and
+    remote shards (which have different absolute paths but the same
+    relative layout). Local shards run with cwd at the master's
+    repo root; remote shards' wrapper script ``cd``s into the
+    remote's repo root before resolving paths.
+    """
 
     weights_path: str
     samples: int
@@ -253,6 +293,53 @@ class SelfPlayJobSpec:
     nn_version_label: Optional[str] = None
     replays_root: Optional[str] = None
     hang_dump_root: Optional[str] = None
+
+    def to_dict(self) -> dict[str, Any]:
+        """JSON-serializable dict. Used by ``run_self_play_shard.py``
+        to round-trip the spec across the SSH boundary — the remote
+        receives the spec via ``--spec-json '<base64-encoded JSON>'``
+        and reconstructs."""
+        return {
+            "weights_path": self.weights_path,
+            "samples": self.samples,
+            "inner_nodes": self.inner_nodes,
+            "hidden_sizes": (
+                list(self.hidden_sizes) if self.hidden_sizes is not None
+                else None
+            ),
+            "base_seed": self.base_seed,
+            "enable_mulligans": self.enable_mulligans,
+            "per_game_timeout_sec": self.per_game_timeout_sec,
+            "deck_pool_path": self.deck_pool_path,
+            "with_policy": self.with_policy,
+            "decision_cap": self.decision_cap,
+            "sample_every": self.sample_every,
+            "capture_every": self.capture_every,
+            "nn_version_label": self.nn_version_label,
+            "replays_root": self.replays_root,
+            "hang_dump_root": self.hang_dump_root,
+        }
+
+    @classmethod
+    def from_dict(cls, d: dict[str, Any]) -> "SelfPlayJobSpec":
+        hs = d.get("hidden_sizes")
+        return cls(
+            weights_path=d["weights_path"],
+            samples=int(d["samples"]),
+            inner_nodes=int(d["inner_nodes"]),
+            hidden_sizes=tuple(hs) if hs is not None else None,
+            base_seed=int(d["base_seed"]),
+            enable_mulligans=bool(d["enable_mulligans"]),
+            per_game_timeout_sec=d.get("per_game_timeout_sec"),
+            deck_pool_path=d.get("deck_pool_path"),
+            with_policy=bool(d.get("with_policy", True)),
+            decision_cap=int(d.get("decision_cap", 4000)),
+            sample_every=int(d.get("sample_every", 1)),
+            capture_every=int(d.get("capture_every", 0)),
+            nn_version_label=d.get("nn_version_label"),
+            replays_root=d.get("replays_root"),
+            hang_dump_root=d.get("hang_dump_root"),
+        )
 
 
 def run_shard_local(
@@ -457,6 +544,187 @@ def run_distributed_self_play(
     return [output_paths[s.display_label] for s in shards_config.shards]
 
 
+def _is_windows_remote(shard: ShardConfig) -> bool:
+    """Cheap heuristic to pick remote path semantics: ``.exe`` ending
+    on the venv python path is unambiguously Windows. POSIX shells
+    don't use that suffix."""
+    return (shard.venv_python or "").endswith(".exe")
+
+
+def _remote_join(shard: ShardConfig, *parts: str) -> str:
+    """Join path parts using the remote's OS conventions. We don't
+    actually run on the remote — this just produces the string the
+    remote shell will interpret. POSIX uses ``/``; Windows uses
+    ``\\`` for the venv path but cmd.exe handles ``/`` fine for
+    plain file references, so we keep ``/`` for portability EXCEPT
+    when joining with the venv_python (which already carries its OS
+    separator)."""
+    if _is_windows_remote(shard):
+        # cmd.exe accepts forward slashes for cd / file args; we
+        # join with ``/`` for everything except the venv python
+        # which was supplied with backslashes by the user.
+        return "/".join(parts)
+    return str(PurePosixPath(*parts))
+
+
+def _ssh_target(shard: ShardConfig) -> str:
+    return f"{shard.user}@{shard.host}"
+
+
+def _ssh_cmd(shard: ShardConfig, remote_command: str) -> list[str]:
+    """SSH invocation for a shell command on the remote. Sends one
+    argument string the remote shell will interpret. The remote
+    shell is bash on POSIX and cmd.exe on Windows OpenSSH-Server
+    default — both handle ``&&`` and simple variable assignment, so
+    a single command string portable to both is achievable.
+    """
+    return [
+        "ssh",
+        "-o", "BatchMode=yes",      # never prompt for password
+        "-o", "StrictHostKeyChecking=accept-new",
+        "-p", str(shard.ssh_port),
+        _ssh_target(shard),
+        remote_command,
+    ]
+
+
+def _scp_cmd(
+    shard: ShardConfig, src: str, dst: str, *, from_remote: bool,
+) -> list[str]:
+    """``scp`` invocation. ``from_remote=True`` pulls from remote to
+    local; ``False`` pushes."""
+    target = _ssh_target(shard)
+    if from_remote:
+        return [
+            "scp", "-P", str(shard.ssh_port),
+            "-o", "BatchMode=yes",
+            "-o", "StrictHostKeyChecking=accept-new",
+            f"{target}:{src}", str(dst),
+        ]
+    return [
+        "scp", "-P", str(shard.ssh_port),
+        "-o", "BatchMode=yes",
+        "-o", "StrictHostKeyChecking=accept-new",
+        str(src), f"{target}:{dst}",
+    ]
+
+
+def _run_subprocess(
+    cmd: list[str], *, timeout: Optional[float] = None,
+) -> subprocess.CompletedProcess:
+    """Wrapper that captures both streams + raises on non-zero exit.
+    Also gives us ONE place to instrument later (logging, retry)."""
+    return subprocess.run(
+        cmd, capture_output=True, text=True,
+        timeout=timeout, check=True,
+    )
+
+
+def _build_remote_self_play_command(
+    shard: ShardConfig,
+    spec: SelfPlayJobSpec,
+    *,
+    run_id_prefix: str,
+    stamp: str,
+) -> str:
+    """Produce the one-line shell command the remote will run.
+
+    Both shards (local + remote) use the SAME entry point —
+    ``scripts/run_self_play_shard.py`` — so the production code
+    path is the same. The remote receives the full spec + shard
+    config as base64-encoded JSON args (avoids quoting hazards
+    that differ between cmd.exe and bash).
+
+    Path conventions:
+    - All path fields in ``spec`` are relative to repo root, so
+      cmd.exe and bash resolve them identically once we ``cd`` in.
+    - ``shard.venv_python`` is OS-specific (already configured per
+      shard in shards-config), wrapped in quotes for safety.
+    - ``run_id_prefix`` and ``stamp`` are ASCII-only by convention
+      (no quoting needed).
+    """
+    import base64
+    spec_b64 = base64.b64encode(
+        json.dumps(spec.to_dict()).encode("utf-8"),
+    ).decode("ascii")
+    shard_b64 = base64.b64encode(
+        json.dumps(shard.to_dict()).encode("utf-8"),
+    ).decode("ascii")
+
+    args = (
+        f"scripts/run_self_play_shard.py "
+        f"--spec-b64={spec_b64} "
+        f"--shard-b64={shard_b64} "
+        f"--run-id-prefix={run_id_prefix} "
+        f"--stamp={stamp}"
+    )
+    repo_path = shard.repo_path or ""
+    venv_python = shard.venv_python or ""
+    if _is_windows_remote(shard):
+        return (
+            f'cd /d "{repo_path}" && '
+            f'set PYTHONPATH=src && '
+            f'"{venv_python}" {args}'
+        )
+    return (
+        f'cd {shlex.quote(repo_path)} && '
+        f'PYTHONPATH=src {shlex.quote(venv_python)} {args}'
+    )
+
+
+class _ProgressPoller:
+    """Periodically scp the remote's per-shard progress JSON back to
+    the master so the training UI shows live updates. Stops when
+    ``stop()`` is called. Errors are swallowed — a failed scp on
+    one tick must not break the run; the next tick retries.
+    """
+
+    def __init__(
+        self,
+        shard: ShardConfig,
+        remote_progress_path: str,
+        local_progress_path: Path,
+        interval_s: float = 5.0,
+    ) -> None:
+        self._shard = shard
+        self._remote_path = remote_progress_path
+        self._local_path = local_progress_path
+        self._interval_s = interval_s
+        self._stop_event = threading.Event()
+        self._thread: Optional[threading.Thread] = None
+
+    def start(self) -> None:
+        self._thread = threading.Thread(
+            target=self._loop,
+            name=f"progress-poll-{self._shard.display_label}",
+            daemon=True,
+        )
+        self._thread.start()
+
+    def stop(self) -> None:
+        self._stop_event.set()
+        if self._thread is not None:
+            self._thread.join(timeout=10.0)
+
+    def _loop(self) -> None:
+        while not self._stop_event.is_set():
+            try:
+                cmd = _scp_cmd(
+                    self._shard,
+                    self._remote_path, str(self._local_path),
+                    from_remote=True,
+                )
+                # Don't raise on non-zero: the file may not yet
+                # exist on the remote (worker startup).
+                subprocess.run(
+                    cmd, capture_output=True, text=True,
+                    timeout=self._interval_s + 5,
+                )
+            except Exception:  # noqa: BLE001
+                pass
+            self._stop_event.wait(self._interval_s)
+
+
 def run_shard_remote(
     shard: ShardConfig,
     spec: SelfPlayJobSpec,
@@ -466,14 +734,99 @@ def run_shard_remote(
     run_id_prefix: str,
     stamp: str,
 ) -> Path:
-    """Run a single shard on a remote machine via SSH, scp the
-    resulting ``.npz`` back to the master's ``output_dir``, return
-    the local path.
+    """Run one shard on a remote machine.
 
-    Stub today — implementation lands in the next commit on this
-    branch.
+    Sequence:
+    1. ``ssh ... git pull`` so master commits propagate before each
+       run.
+    2. (Weight sync deferred — the remote's repo is expected to
+       carry the current best version at the same relative path.
+       A follow-up commit can scp updated weights when iterate
+       advances ``current_best``.)
+    3. Start a poller that periodically scps the remote progress
+       JSON back so the master UI shows live updates.
+    4. Block on ``ssh ... run_self_play_shard.py`` (the wrapper
+       calls ``run_shard_local`` on the remote).
+    5. Stop the poller; final progress scp.
+    6. scp the npz back; return local path.
+
+    Raises ``subprocess.CalledProcessError`` on SSH/SCP non-zero
+    exits — the caller re-surfaces it.
     """
-    raise NotImplementedError(
-        f"remote shard runner not yet implemented (shard host="
-        f"{shard.host!r}). Use ``host=\"local\"`` shards for now."
+    run_id_full = f"{run_id_prefix}_shard_{shard.display_label}"
+    npz_basename = (
+        f"{run_id_prefix}_shard_{shard.display_label}_{stamp}.npz"
     )
+
+    output_dir.mkdir(parents=True, exist_ok=True)
+    progress_dir.mkdir(parents=True, exist_ok=True)
+    local_npz_path = output_dir / npz_basename
+    local_progress_path = progress_dir / f"{run_id_full}.json"
+    # Remote-side absolute paths (the wrapper script writes to the
+    # repo's iterate_data/ + training_progress/ subdirs by default).
+    remote_repo = shard.repo_path or ""
+    remote_npz = _remote_join(
+        shard, remote_repo, "iterate_data", npz_basename,
+    )
+    remote_progress = _remote_join(
+        shard, remote_repo, "training_progress", f"{run_id_full}.json",
+    )
+
+    # 1. git pull
+    if _is_windows_remote(shard):
+        pull_cmd_str = f'cd /d "{remote_repo}" && git pull'
+    else:
+        pull_cmd_str = f'cd {shlex.quote(remote_repo)} && git pull'
+    print(
+        f"[shard {shard.display_label}] git pull on {shard.host}...",
+        file=sys.stderr,
+    )
+    _run_subprocess(_ssh_cmd(shard, pull_cmd_str), timeout=120)
+
+    # 3. Progress poller running while the run is in flight.
+    poller = _ProgressPoller(
+        shard,
+        remote_progress_path=remote_progress,
+        local_progress_path=local_progress_path,
+    )
+    poller.start()
+
+    # 4. The actual self-play invocation.
+    print(
+        f"[shard {shard.display_label}] running self-play "
+        f"({shard.n_games} games) on {shard.host}...",
+        file=sys.stderr,
+    )
+    try:
+        run_cmd = _build_remote_self_play_command(
+            shard, spec,
+            run_id_prefix=run_id_prefix, stamp=stamp,
+        )
+        _run_subprocess(_ssh_cmd(shard, run_cmd))
+    finally:
+        # 5. Stop poller + best-effort final progress scp.
+        poller.stop()
+        try:
+            _run_subprocess(
+                _scp_cmd(
+                    shard, remote_progress, str(local_progress_path),
+                    from_remote=True,
+                ),
+                timeout=30,
+            )
+        except Exception:  # noqa: BLE001
+            pass
+
+    # 6. Pull the npz back.
+    print(
+        f"[shard {shard.display_label}] pulling npz back...",
+        file=sys.stderr,
+    )
+    _run_subprocess(
+        _scp_cmd(
+            shard, remote_npz, str(local_npz_path),
+            from_remote=True,
+        ),
+        timeout=120,
+    )
+    return local_npz_path
