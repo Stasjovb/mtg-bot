@@ -222,3 +222,158 @@ def test_load_metadata_reads_sibling_json(tmp_path: Path):
     )
     assert with_policy is True
     assert hidden == (1024, 1024, 512)
+
+
+# --- BenchProgress wiring -------------------------------------------
+
+
+def _fake_match_stats(
+    *, challenger_wins: int, defender_wins: int,
+    draws: int = 0, crashed: int = 0,
+):
+    """Build a ``MatchStats``-shaped object the bench's
+    ``_run_pairwise`` will consume. The bench reads ``stats.games``
+    (decided), ``stats.wins[0]/[1]``, ``stats.draws``,
+    ``stats.crashed``, ``stats.avg_decisions``.
+    """
+    from mtg_bot.training.self_play import MatchStats
+
+    return MatchStats(
+        wins={0: challenger_wins, 1: defender_wins},
+        draws=draws,
+        crashed=crashed,
+        games=challenger_wins + defender_wins,
+        avg_decisions=42.0,
+    )
+
+
+def test_run_pairwise_with_progress_writes_lifecycle(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+):
+    """``_run_pairwise(progress=...)`` must open a pairing on the
+    BenchProgress tracker, push the totals, and finish the pairing
+    cleanly. The on-disk JSON should reflect the completed pairing
+    after the call returns.
+    """
+    from mtg_bot.training import BenchProgress
+
+    bench = _load_module()
+
+    # Replace ``run_match_parallel`` with a stub that returns a known
+    # win count, so we can run the wiring without launching real
+    # subprocess pools or NN evaluators.
+    fake_stats = _fake_match_stats(
+        challenger_wins=3, defender_wins=1, draws=0, crashed=0,
+    )
+
+    def _fake_run_match_parallel(**kwargs):
+        return fake_stats
+
+    monkeypatch.setattr(
+        bench, "run_match_parallel", _fake_run_match_parallel,
+    )
+
+    progress_path = tmp_path / "bench_run.json"
+    progress = BenchProgress(
+        progress_path=progress_path,
+        run_id="bench_run",
+        weights_path="fake/v6/weights.pt",
+        n_games_per_pairing=4,
+        budgets=[(4, 200)],
+    )
+    progress.begin()
+
+    result = bench._run_pairwise(
+        challenger_label="ISMCTS-uniform",
+        challenger_factory=lambda seed=0: None,
+        defender_label="PIMC",
+        defender_factory=lambda seed=0: None,
+        n_games=4,
+        base_seed=0,
+        workers=1,
+        progress=progress,
+        samples=4,
+        inner_nodes=200,
+        total_iterations=800,
+    )
+    progress.finalize(status="completed")
+
+    payload = json.loads(progress_path.read_text(encoding="utf-8"))
+    assert payload["kind"] == "bench"
+    assert payload["status"] == "completed"
+    assert len(payload["pairings"]) == 1
+    p = payload["pairings"][0]
+    assert p["status"] == "completed"
+    assert p["challenger"] == "ISMCTS-uniform"
+    assert p["defender"] == "PIMC"
+    assert p["challenger_wins"] == 3
+    assert p["defender_wins"] == 1
+    assert p["n_decided"] == 4
+    assert p["samples"] == 4
+    assert p["inner_nodes"] == 200
+    assert p["total_iterations"] == 800
+    assert result.challenger_wins == 3
+    assert result.defender_wins == 1
+
+
+def test_run_pairwise_progress_marks_failure_on_exception(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+):
+    """If ``run_match_parallel`` raises, the BenchProgress pairing
+    should be closed with ``status="failed"`` so the UI doesn't
+    show it stuck at running, and the original exception should
+    propagate so the bench script still exits non-zero.
+    """
+    from mtg_bot.training import BenchProgress
+
+    bench = _load_module()
+
+    def _exploding_run_match_parallel(**kwargs):
+        raise RuntimeError("synthetic worker pool failure")
+
+    monkeypatch.setattr(
+        bench, "run_match_parallel",
+        _exploding_run_match_parallel,
+    )
+
+    progress = BenchProgress(
+        progress_path=tmp_path / "boom.json",
+        run_id="boom",
+        weights_path="fake.pt",
+        n_games_per_pairing=2,
+        budgets=[(2, 50)],
+    )
+    progress.begin()
+
+    with pytest.raises(RuntimeError, match="synthetic"):
+        bench._run_pairwise(
+            challenger_label="A",
+            challenger_factory=lambda seed=0: None,
+            defender_label="B",
+            defender_factory=lambda seed=0: None,
+            n_games=2,
+            base_seed=0,
+            workers=1,
+            progress=progress,
+        )
+    payload = json.loads(
+        (tmp_path / "boom.json").read_text(encoding="utf-8"),
+    )
+    p = payload["pairings"][0]
+    assert p["status"] == "failed"
+
+
+def test_help_advertises_progress_dir_flag():
+    """``--help`` should advertise ``--progress-dir`` so operators
+    discover the wiring."""
+    proc = subprocess.run(
+        [sys.executable, str(_SCRIPT_PATH), "--help"],
+        capture_output=True, text=True,
+        env={
+            **{k: v for k, v in __import__("os").environ.items()},
+            "PYTHONPATH": str(_REPO_ROOT / "src"),
+        },
+    )
+    assert proc.returncode == 0, proc.stderr
+    assert "--progress-dir" in proc.stdout
+    assert "training_progress" in proc.stdout

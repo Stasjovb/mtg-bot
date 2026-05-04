@@ -65,6 +65,7 @@ from mtg_bot.search.nn_evaluator import NNEvaluator  # noqa: E402
 from mtg_bot.search.strategy import SearchStrategy  # noqa: E402
 from mtg_bot.simulate import setup_game  # noqa: E402
 from mtg_bot.training.config import NNPimcConfig  # noqa: E402
+from mtg_bot.training.progress import BenchProgress  # noqa: E402
 from mtg_bot.training.self_play import run_match_parallel  # noqa: E402
 from mtg_bot.training.trainer import auto_device  # noqa: E402
 
@@ -327,27 +328,55 @@ def _run_pairwise(
     n_games: int,
     base_seed: int,
     workers: Optional[int],
+    progress: Optional[BenchProgress] = None,
+    samples: Optional[int] = None,
+    inner_nodes: Optional[int] = None,
+    total_iterations: Optional[int] = None,
 ) -> _PairwiseResult:
     """Play one alternating-seats A/B match and return a
     ``_PairwiseResult`` from the challenger's POV. Challenger plays
     seat 0; ``run_match_parallel`` with ``alternate_seats=True`` swaps
     seats on odd games and remaps the winner so ``wins[0]`` always
     means "challenger won."
+
+    If ``progress`` is provided, the pairing is opened on the tracker
+    before play and the totals are pushed via
+    :meth:`BenchProgress.record_pairing_result` once the match returns
+    — ``run_match_parallel`` returns aggregate stats only, so we can't
+    drip per-game updates through the tracker. The pairing is closed
+    with ``finish_pairing(status="completed")`` on success or with
+    ``"failed"`` if the match raises.
     """
+    if progress is not None:
+        progress.start_pairing(
+            challenger=challenger_label,
+            defender=defender_label,
+            n_games=n_games,
+            samples=samples,
+            inner_nodes=inner_nodes,
+            total_iterations=total_iterations,
+        )
     print(
         f"# A/B: {challenger_label} (seat 0) vs {defender_label} "
         f"(seat 1) over {n_games} games (alternating seats)",
         file=sys.stderr, flush=True,
     )
     started = time.perf_counter()
-    stats = run_match_parallel(
-        p0_factory=challenger_factory,
-        p1_factory=defender_factory,
-        n_games=n_games,
-        base_seed=base_seed,
-        n_workers=workers,
-        alternate_seats=True,
-    )
+    try:
+        stats = run_match_parallel(
+            p0_factory=challenger_factory,
+            p1_factory=defender_factory,
+            n_games=n_games,
+            base_seed=base_seed,
+            n_workers=workers,
+            alternate_seats=True,
+        )
+    except Exception:
+        if progress is not None:
+            # Mark the pairing as failed so the UI doesn't show it
+            # stuck at 'running' forever, then re-raise.
+            progress.finish_pairing(status="failed")
+        raise
     elapsed = time.perf_counter() - started
 
     decided = stats.games
@@ -356,6 +385,16 @@ def _run_pairwise(
     win_rate = challenger_wins / decided if decided else 0.0
     ci_low, ci_high = wilson_interval(challenger_wins, decided)
     verdict = classify(win_rate, ci_low, ci_high)
+
+    if progress is not None:
+        progress.record_pairing_result(
+            challenger_wins=challenger_wins,
+            defender_wins=defender_wins,
+            draws=stats.draws,
+            crashed=stats.crashed,
+            elapsed_seconds=elapsed,
+        )
+        progress.finish_pairing(status="completed")
 
     print(
         f"# Done in {elapsed:.1f}s ({elapsed / 60:.1f}m). "
@@ -406,6 +445,7 @@ def run_one_budget(
     belief_m_candidates: int = 64,
     belief_min_opponent_moments: int = 3,
     nn_device: Optional[str] = None,
+    progress: Optional[BenchProgress] = None,
 ) -> _BudgetResult:
     """Play matched-budget A/B match(es) and report stats.
 
@@ -469,6 +509,10 @@ def run_one_budget(
         n_games=n_games,
         base_seed=base_seed,
         workers=workers,
+        progress=progress,
+        samples=samples,
+        inner_nodes=inner_nodes,
+        total_iterations=total_iterations,
     ))
 
     if include_belief:
@@ -483,6 +527,10 @@ def run_one_budget(
             n_games=n_games,
             base_seed=base_seed + 1_000_000,
             workers=workers,
+            progress=progress,
+            samples=samples,
+            inner_nodes=inner_nodes,
+            total_iterations=total_iterations,
         ))
         pairwise_results.append(_run_pairwise(
             challenger_label="ISMCTS-belief",
@@ -492,6 +540,10 @@ def run_one_budget(
             n_games=n_games,
             base_seed=base_seed + 2_000_000,
             workers=workers,
+            progress=progress,
+            samples=samples,
+            inner_nodes=inner_nodes,
+            total_iterations=total_iterations,
         ))
 
     wallclock = wallclock_bench(pimc_cfg, ismcts_uniform_cfg, wallclock_seeds)
@@ -678,6 +730,19 @@ def main(argv: Optional[list[str]] = None) -> None:
             "when --include-belief is set."
         ),
     )
+    parser.add_argument(
+        "--progress-dir", type=Path,
+        default=Path("training_progress"),
+        help=(
+            "Directory the bench writes a live progress JSON into "
+            "(``<run_id>.json``) so the training UI can render it "
+            "while the bench runs. Default: ``training_progress`` "
+            "under cwd — same directory the trainer / data-gen / "
+            "eval drivers write into. Pass an explicit path to "
+            "route output elsewhere. Pass ``--progress-dir ''`` "
+            "(empty) to disable progress reporting."
+        ),
+    )
     args = parser.parse_args(argv)
 
     if not args.weights_path.is_file():
@@ -724,29 +789,72 @@ def main(argv: Optional[list[str]] = None) -> None:
         file=sys.stderr, flush=True,
     )
 
-    results: list[_BudgetResult] = []
-    overall_started = time.perf_counter()
-    for samples, inner_nodes in budgets:
-        result = run_one_budget(
-            weights_path=args.weights_path,
-            samples=samples,
-            inner_nodes=inner_nodes,
-            n_games=args.n_games,
-            base_seed=args.base_seed,
-            workers=args.workers,
-            nn_batch_size=args.nn_batch_size,
-            metadata_with_policy=metadata_with_policy,
-            metadata_hidden_sizes=metadata_hidden_sizes,
-            wallclock_seeds=list(args.wallclock_seeds),
+    # Stage the BenchProgress tracker so the training UI can render
+    # this run live (alongside data-gen / training / eval cards).
+    # ``--progress-dir ''`` disables tracking entirely; otherwise we
+    # land at ``<progress_dir>/bench_<stamp>.json``.
+    progress_stamp = datetime.now(timezone.utc).strftime(
+        "%Y%m%dT%H%M%SZ",
+    )
+    bench_run_id = f"bench_{progress_stamp}"
+    progress: Optional[BenchProgress] = None
+    if args.progress_dir and str(args.progress_dir) != "":
+        progress_path = (
+            Path(args.progress_dir) / f"{bench_run_id}.json"
+        )
+        progress_path.parent.mkdir(parents=True, exist_ok=True)
+        progress = BenchProgress(
+            progress_path=progress_path,
+            run_id=bench_run_id,
+            weights_path=str(args.weights_path),
+            n_games_per_pairing=args.n_games,
+            budgets=tuple(budgets),
             include_belief=args.include_belief,
-            belief_m_candidates=args.belief_m_candidates,
-            belief_min_opponent_moments=(
-                args.belief_min_opponent_moments
+            belief_m_candidates=(
+                args.belief_m_candidates
+                if args.include_belief else None
             ),
             nn_device=nn_device,
+            command=" ".join(sys.argv),
         )
-        results.append(result)
+        progress.begin()
+        print(
+            f"# progress: {progress_path}",
+            file=sys.stderr, flush=True,
+        )
+
+    results: list[_BudgetResult] = []
+    overall_started = time.perf_counter()
+    try:
+        for samples, inner_nodes in budgets:
+            result = run_one_budget(
+                weights_path=args.weights_path,
+                samples=samples,
+                inner_nodes=inner_nodes,
+                n_games=args.n_games,
+                base_seed=args.base_seed,
+                workers=args.workers,
+                nn_batch_size=args.nn_batch_size,
+                metadata_with_policy=metadata_with_policy,
+                metadata_hidden_sizes=metadata_hidden_sizes,
+                wallclock_seeds=list(args.wallclock_seeds),
+                include_belief=args.include_belief,
+                belief_m_candidates=args.belief_m_candidates,
+                belief_min_opponent_moments=(
+                    args.belief_min_opponent_moments
+                ),
+                nn_device=nn_device,
+                progress=progress,
+            )
+            results.append(result)
+    except Exception:
+        if progress is not None:
+            progress.finalize(status="failed")
+        raise
     overall_elapsed = time.perf_counter() - overall_started
+
+    if progress is not None:
+        progress.finalize(status="completed")
 
     stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
     out_path = args.out or (
