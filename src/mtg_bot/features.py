@@ -119,6 +119,22 @@ def extract_features(
     Pure function: same input → same output, no mutation, no
     randomness. Two-player only — opponent is whichever player isn't
     ``viewer_id``.
+
+    **Seat-id symmetry invariant.** Self-play exhibits a strong
+    seat-0 win bias (engine-structural — going first wins games),
+    so any signal in the feature vector that lets the value head
+    distinguish "I am seated at index 0" from "I am seated at
+    index 1" becomes a training shortcut: with ~70-80% seat-0 wins,
+    seat-0 viewer rows skew +1 and seat-1 viewer rows skew -1, and
+    the model latches onto seat id instead of evaluating the
+    position. The features here are strictly viewer-relative —
+    every per-side block is keyed off ``player_id`` (not list
+    index), the global ``is_viewer_turn`` compares ids, and nothing
+    here reads ``state.priority_player_idx`` or ``state.turn_number``
+    directly. Pinned by ``test_features_are_invariant_under_seat_swap``
+    and friends in ``tests/test_features.py``; if those start
+    failing, a leak has been introduced and must be fixed before
+    training a new value head.
     """
     out = np.zeros(FEATURE_DIM, dtype=_DTYPE)
 
