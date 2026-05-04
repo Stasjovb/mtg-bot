@@ -134,6 +134,7 @@ class BeliefWeightedDeterminizer:
         ess_warn_threshold: float = 1.0,
         nn_batch_size: int = 256,
         min_opponent_moments: int = 3,
+        ess_resample_threshold: float = 0.5,
     ) -> None:
         """Construct the sampler.
 
@@ -188,6 +189,19 @@ class BeliefWeightedDeterminizer:
         from the prior — and skipping the m * H scoring pass cuts
         cold-call cost on early-game decisions where wallclock
         dominates. Set to 0 to disable the gate (always run belief).
+
+        ``ess_resample_threshold`` (default 0.5) controls when
+        Sequential Importance Sampling triggers a multinomial
+        resample of the particle pool: after each weight update,
+        if ``ESS < ess_resample_threshold * m_candidates`` the
+        sampler draws ``m_candidates`` new seeds with probabilities
+        proportional to current normalized weights, replaces the
+        particle pool with those new seeds, and resets all log-
+        weights to 0 (uniform prior over the replaced pool). The
+        diagnostic counter ``last_resample_count`` records the
+        cumulative resample fires across the determinizer's life.
+        Set to 0 to disable resampling (pure SIS, will degenerate
+        on long histories).
         """
         if m_candidates < 1:
             raise ValueError(
@@ -205,6 +219,11 @@ class BeliefWeightedDeterminizer:
             raise ValueError(
                 f"min_opponent_moments must be >= 0, got "
                 f"{min_opponent_moments!r}"
+            )
+        if not (0.0 <= ess_resample_threshold <= 1.0):
+            raise ValueError(
+                f"ess_resample_threshold must be in [0, 1], got "
+                f"{ess_resample_threshold!r}"
             )
         if not callable(getattr(
             opponent_policy_evaluator, "evaluate_logits", None,
@@ -224,6 +243,7 @@ class BeliefWeightedDeterminizer:
         self.ess_warn_threshold = ess_warn_threshold
         self.nn_batch_size = nn_batch_size
         self.min_opponent_moments = min_opponent_moments
+        self.ess_resample_threshold = ess_resample_threshold
         # FIFO cache keyed on (opponent_hand_printings_tuple,
         # history_index) → (legal_mask, logits). Uses an OrderedDict
         # so popitem(last=False) gives FIFO eviction, no extra
@@ -234,6 +254,10 @@ class BeliefWeightedDeterminizer:
         # Diagnostic counters reset on every ``__call__``.
         self.last_ess: float = 0.0
         self.last_evaluator_calls: int = 0
+        # Cumulative diagnostic — increments every time SIS triggers
+        # a resample. Tests + perf-monitor read this to verify the
+        # ESS-based resampler is firing under degenerate weights.
+        self.last_resample_count: int = 0
         # Persistent particle pool (Sequential Importance Sampling).
         # ``_particles_state`` holds (viewer_id, seeds, log_weights,
         # scored_history_len). Across ``__call__`` invocations the
@@ -243,7 +267,9 @@ class BeliefWeightedDeterminizer:
         # pool re-initializes when the viewer changes (rare; one
         # determinizer per ISMCTS instance) or on the first call
         # past the conditional-activation gate (initial scoring of
-        # all current moments).
+        # all current moments). When ESS falls below the configured
+        # fraction of m_candidates the seeds are resampled
+        # multinomially with replacement and weights reset to zero.
         self._particles_state: Optional[
             tuple[PlayerID, tuple[int, ...], np.ndarray, int]
         ] = None
@@ -361,6 +387,32 @@ class BeliefWeightedDeterminizer:
 
         normalized = _normalize_log_weights(log_weights)
         self.last_ess = _effective_sample_size(normalized)
+
+        # ESS-based resampling: when weight is concentrated on a
+        # small subset of particles the effective sample size drops
+        # and SIS becomes a degenerate point estimate. Drawing
+        # m_candidates new seeds with probability proportional to
+        # current weights (and resetting log-weights to zero)
+        # restores diversity at the cost of a fresh scoring pass
+        # over the full history (the resampled seeds carry no past).
+        # We pay that cost lazily — the next __call__ that adds new
+        # moments will incrementally score them; the ALREADY-scored
+        # history is rolled into the seeds' identity by the
+        # categorical resample step.
+        if (
+            self.ess_resample_threshold > 0.0
+            and self.last_ess
+            < self.ess_resample_threshold * self.m_candidates
+            and self.m_candidates > 1
+        ):
+            seeds, log_weights = _resample_particles(
+                seeds, normalized, rng,
+            )
+            normalized = _normalize_log_weights(log_weights)
+            # Post-resample ESS == m_candidates (uniform weights).
+            self.last_ess = float(self.m_candidates)
+            self.last_resample_count += 1
+
         self._particles_state = (
             viewer_id, tuple(seeds), log_weights, history_len,
         )
@@ -712,6 +764,37 @@ def _effective_sample_size(normalized: np.ndarray) -> float:
     return 1.0 / s
 
 
+def _resample_particles(
+    seeds: Sequence[int],
+    normalized: np.ndarray,
+    rng: random.Random,
+) -> tuple[list[int], np.ndarray]:
+    """Multinomial resample of the particle pool.
+
+    Draws ``len(seeds)`` indices from a categorical distribution
+    parameterized by ``normalized`` (with replacement) using
+    ``_categorical_draw`` and the caller's ``rng`` — keeping the
+    whole sampler reproducible under one seed. Returns ``(new_seeds,
+    fresh_log_weights)`` where ``fresh_log_weights`` is an all-zeros
+    array (uniform priors over the resampled pool, ready to receive
+    incremental updates from future moments).
+
+    Concentration of the categorical doesn't degrade resample
+    correctness — when one particle holds nearly all weight the
+    resample collapses the pool to copies of that particle's seed.
+    Subsequent incremental updates against new moments will then
+    discover differential likelihood across those copies (different
+    h_idx mixing produces different reconstructed hands per moment),
+    re-spreading the weights.
+    """
+    n = len(seeds)
+    new_seeds: list[int] = []
+    for _ in range(n):
+        idx = _categorical_draw(normalized, rng)
+        new_seeds.append(seeds[idx])
+    return new_seeds, np.zeros(n, dtype=np.float64)
+
+
 def _categorical_draw(
     probabilities: np.ndarray, rng: random.Random,
 ) -> int:
@@ -737,4 +820,5 @@ def _categorical_draw(
 __all__ = [
     "BeliefWeightedDeterminizer",
     "PriorityMoment",
+    "_resample_particles",
 ]
