@@ -435,6 +435,62 @@ def test_run_distributed_two_local_shards_both_produce_npz(
         assert t["in_flight"] == 0  # n_workers=1: refill at empty
 
 
+def test_run_distributed_eval_two_local_shards_aggregate_counts(
+    tmp_path: Path,
+):
+    """End-to-end smoke for the distributed eval orchestrator: two
+    local shards play 4 head-to-head games (NN-vs-NN with the same
+    weights for both seats — winner outcome is just whoever the
+    engine picks). Returns aggregated counts that sum to 4."""
+    from mtg_bot.training.distributed import (
+        EvalJobSpec, run_distributed_eval,
+    )
+
+    weights_path, hidden_sizes = _tiny_dual_head_weights(tmp_path)
+    progress_dir = tmp_path / "training_progress"
+    spec = EvalJobSpec(
+        new_weights_path=str(weights_path),
+        old_weights_path=str(weights_path),
+        samples=1, inner_nodes=10,
+        hidden_sizes=hidden_sizes,
+        base_seed=0,
+        enable_mulligans=False,
+        per_game_timeout_sec=None,
+        opponent_label="self",
+    )
+    cfg = ShardsConfig(shards=(
+        ShardConfig(host="local", n_games=2, label="A", n_workers=1),
+        ShardConfig(host="local", n_games=2, label="B", n_workers=1),
+    ))
+    queue_url, server = _start_queue_server()
+    try:
+        counts = run_distributed_eval(
+            cfg, spec,
+            progress_dir=progress_dir,
+            run_id_prefix="iter_001_eval_test",
+            total_games=4,
+            queue_url=queue_url,
+        )
+    finally:
+        server.shutdown()
+    assert counts["n_games"] == 4
+    assert (
+        counts["wins_new"] + counts["wins_old"]
+        + counts["draws"] + counts["crashed"]
+    ) == 4
+    for label in ("A", "B"):
+        ev = (
+            progress_dir
+            / f"iter_001_eval_test_shard_{label}_events.jsonl"
+        )
+        assert ev.is_file()
+        events = [json.loads(line) for line in ev.read_text().splitlines()]
+        assert events[0]["event"] == "shard_start"
+        assert events[0]["mode"] == "eval"
+        assert events[-1]["event"] == "shard_end"
+        assert events[-1]["status"] == "completed"
+
+
 def test_spec_to_dict_normalizes_windows_paths_to_forward_slashes():
     """Smoke for the cross-platform path serialization fix. iterate
     runs on Windows and produces ``str(Path(...))`` with backslashes;
@@ -577,6 +633,136 @@ def test_remote_pull_command_posix_round_trips_b64_args():
             )
         else:
             assert ShardConfig.from_dict(decoded) == expected
+
+
+def test_eval_spec_round_trips_through_to_dict_from_dict():
+    """``EvalJobSpec.to_dict`` + ``from_dict`` round-trip cleanly with
+    backslash-path normalization on Windows-style paths."""
+    from mtg_bot.training.distributed import EvalJobSpec
+
+    spec = EvalJobSpec(
+        new_weights_path="trained_weights\\v7\\weights.pt",
+        old_weights_path="trained_weights\\v6\\weights.pt",
+        samples=4, inner_nodes=200, hidden_sizes=(1024, 1024, 512),
+        base_seed=2_007_777,
+        enable_mulligans=True,
+        per_game_timeout_sec=300.0,
+        deck_pool_path="data\\17lands\\eoe_decks.json.gz",
+        capture_every=10,
+        nn_new_version_label="v7",
+        nn_old_version_label="v6",
+        replays_root="replays",
+        hang_dump_root="debug_hangs",
+        opponent_label="v6",
+    )
+    d = spec.to_dict()
+    assert d["new_weights_path"] == "trained_weights/v7/weights.pt"
+    assert d["old_weights_path"] == "trained_weights/v6/weights.pt"
+    assert d["deck_pool_path"] == "data/17lands/eoe_decks.json.gz"
+    rt = EvalJobSpec.from_dict(d)
+    # to_dict normalized paths; from_dict preserves the normalized
+    # values, so the round-trip equals a posix-paths version.
+    assert rt.new_weights_path == "trained_weights/v7/weights.pt"
+    assert rt.old_weights_path == "trained_weights/v6/weights.pt"
+    assert rt.deck_pool_path == "data/17lands/eoe_decks.json.gz"
+    assert rt.samples == 4 and rt.inner_nodes == 200
+    assert rt.hidden_sizes == (1024, 1024, 512)
+    assert rt.opponent_label == "v6"
+
+
+def test_eval_spec_old_weights_can_be_none():
+    """``old_weights_path=None`` runs the heuristic-opponent path —
+    ``to_dict`` keeps it as null, ``from_dict`` accepts."""
+    from mtg_bot.training.distributed import EvalJobSpec
+
+    spec = EvalJobSpec(
+        new_weights_path="weights.pt", old_weights_path=None,
+        samples=2, inner_nodes=10, hidden_sizes=None,
+        base_seed=0, enable_mulligans=False,
+        per_game_timeout_sec=None,
+    )
+    d = spec.to_dict()
+    assert d["old_weights_path"] is None
+    rt = EvalJobSpec.from_dict(d)
+    assert rt.old_weights_path is None
+
+
+def test_remote_eval_command_posix_round_trips():
+    """``_build_remote_eval_command`` produces the SSH one-liner that
+    starts an eval shard on a POSIX remote: ``--mode=eval`` and an
+    ``EvalJobSpec`` (not ``SelfPlayJobSpec``) base64'd into
+    ``--spec-b64``."""
+    import base64
+    from mtg_bot.training.distributed import (
+        EvalJobSpec, _build_remote_eval_command,
+    )
+
+    spec = EvalJobSpec(
+        new_weights_path="trained_weights/v7/weights.pt",
+        old_weights_path="trained_weights/v6/weights.pt",
+        samples=4, inner_nodes=200, hidden_sizes=(64, 64),
+        base_seed=42, enable_mulligans=False,
+        per_game_timeout_sec=300.0,
+    )
+    shard = ShardConfig(
+        host="macbook", n_games=10, user="g",
+        repo_path="/Users/g/repo",
+        venv_python=".venv-py313/bin/python",
+    )
+    cmd = _build_remote_eval_command(
+        shard, spec,
+        queue_url="http://master:5099",
+        run_id="iter_001_eval_v7_vs_v6",
+        iter_total_games=500,
+        stamp="20260503T230000Z",
+    )
+    assert "cd /Users/g/repo" in cmd
+    assert "scripts/run_self_play_shard.py" in cmd
+    assert "--mode=eval" in cmd
+    assert "--queue-url=http://master:5099" in cmd
+    assert "--run-id=iter_001_eval_v7_vs_v6" in cmd
+    assert "--iter-total-games=500" in cmd
+    assert "--batch-size" not in cmd
+    assert "--stamp=20260503T230000Z" in cmd
+    # spec_b64 decodes back to an EvalJobSpec with both weights paths.
+    marker = "--spec-b64="
+    i = cmd.index(marker) + len(marker)
+    encoded = cmd[i:cmd.index(" ", i)]
+    decoded = json.loads(
+        base64.b64decode(encoded.encode("ascii")).decode("utf-8"),
+    )
+    rt = EvalJobSpec.from_dict(decoded)
+    assert rt.new_weights_path == "trained_weights/v7/weights.pt"
+    assert rt.old_weights_path == "trained_weights/v6/weights.pt"
+
+
+def test_remote_eval_command_windows_uses_cmd_syntax():
+    from mtg_bot.training.distributed import (
+        EvalJobSpec, _build_remote_eval_command,
+    )
+
+    spec = EvalJobSpec(
+        new_weights_path="trained_weights/v7/weights.pt",
+        old_weights_path=None,
+        samples=2, inner_nodes=10, hidden_sizes=(64,),
+        base_seed=0, enable_mulligans=False,
+        per_game_timeout_sec=None,
+    )
+    shard = ShardConfig(
+        host="win-box", n_games=10, user="g",
+        repo_path="C:\\Users\\g\\Projects\\mtg-bot",
+        venv_python=".venv-py313\\Scripts\\python.exe",
+    )
+    cmd = _build_remote_eval_command(
+        shard, spec,
+        queue_url="http://master:5099",
+        run_id="iter_001_eval", iter_total_games=500,
+        stamp="20260503T000000Z",
+    )
+    assert 'cd /d "C:\\Users\\g\\Projects\\mtg-bot"' in cmd
+    assert "set PYTHONPATH=src" in cmd
+    assert '".venv-py313\\Scripts\\python.exe"' in cmd
+    assert "--mode=eval" in cmd
 
 
 def test_remote_join_windows_normalizes_to_forward_slashes():

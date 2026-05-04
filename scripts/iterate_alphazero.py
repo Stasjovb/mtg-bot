@@ -84,9 +84,11 @@ from mtg_bot.training._iterate_helpers import (  # noqa: E402
 )
 from mtg_bot.training.data_gen import ReplayCaptureConfig  # noqa: E402
 from mtg_bot.training.distributed import (  # noqa: E402
+    EvalJobSpec,
     SelfPlayJobSpec,
     ShardsConfig,
     load_shards_config,
+    run_distributed_eval,
     run_distributed_self_play,
 )
 from mtg_bot.training.self_play import run_match_parallel  # noqa: E402
@@ -297,6 +299,70 @@ def _self_play_distributed(
                     (data["policy_targets"].sum(axis=-1) > 0.5).sum()
                 )
     return n_samples, n_policy, elapsed
+
+
+def _eval_match_distributed(
+    *,
+    shards_config: ShardsConfig,
+    new_weights: Path,
+    old_weights: Path | None,
+    n_games: int,
+    samples: int,
+    nodes: int,
+    seed: int,
+    enable_mulligans: bool,
+    per_game_timeout_sec: float | None,
+    hidden_sizes: tuple[int, ...] | None,
+    deck_pool_path: Path | None,
+    capture_every: int,
+    new_version_label: str | None,
+    old_version_label: str | None,
+    replays_root: Path,
+    hang_dump_root: Path | None,
+    progress_dir: Path,
+    run_id_prefix: str,
+    queue_url: str,
+    bundle_url: str | None,
+    opponent_label: str,
+) -> tuple[int, int, int, float]:
+    """Distributed eval-gate match. Mirrors ``_eval_match``'s return
+    contract ``(new_wins, old_wins, draws, elapsed_seconds)`` so
+    iterate's caller doesn't change shape."""
+    spec = EvalJobSpec(
+        new_weights_path=str(new_weights),
+        old_weights_path=str(old_weights) if old_weights else None,
+        samples=samples,
+        inner_nodes=nodes,
+        hidden_sizes=hidden_sizes,
+        base_seed=seed,
+        enable_mulligans=enable_mulligans,
+        per_game_timeout_sec=per_game_timeout_sec,
+        deck_pool_path=str(deck_pool_path) if deck_pool_path else None,
+        capture_every=capture_every,
+        nn_new_version_label=new_version_label,
+        nn_old_version_label=old_version_label,
+        replays_root=str(replays_root),
+        hang_dump_root=(
+            str(hang_dump_root) if hang_dump_root is not None else None
+        ),
+        opponent_label=opponent_label,
+    )
+    started = time.perf_counter()
+    counts = run_distributed_eval(
+        shards_config, spec,
+        progress_dir=progress_dir,
+        run_id_prefix=run_id_prefix,
+        total_games=n_games,
+        queue_url=queue_url,
+        bundle_url=bundle_url,
+    )
+    elapsed = time.perf_counter() - started
+    return (
+        int(counts["wins_new"]),
+        int(counts["wins_old"]),
+        int(counts["draws"]),
+        elapsed,
+    )
 
 
 def _train_next(
@@ -528,13 +594,14 @@ def main() -> None:
         help="Train/val split fraction (default 0.1).",
     )
     parser.add_argument(
-        "--eval-games", type=int, default=40,
+        "--eval-games", type=int, default=500,
         help=(
-            "Games per acceptance-gate eval (default 40). The "
-            "smaller this is, the noisier the gate decision. 40 "
-            "games at threshold 0.55 has roughly +/- 15 pts of "
-            "noise — wide. Bigger eval tightens the CI at the "
-            "cost of more wall-clock per iteration."
+            "Games per acceptance-gate eval (default 500). With the "
+            "distributed eval path (``--shards-config``), 500 games "
+            "fit in roughly the same wall as 100 single-machine "
+            "games. At threshold 0.55, 500 games has ~+/- 4.4 pts "
+            "of noise vs ~+/- 15 pts at 40 games — tightens the gate "
+            "decision substantially."
         ),
     )
     parser.add_argument(
@@ -962,24 +1029,54 @@ def main() -> None:
                 str(args.hang_dump_dir / eval_run_id)
                 if str(args.hang_dump_dir) else None
             )
-            wins_new, wins_old, draws, eval_elapsed = _eval_match(
-                new_weights=new_weights,
-                old_weights=best_weights,
-                n_games=args.eval_games,
-                samples=args.samples,
-                nodes=args.nodes,
-                n_workers=args.workers,
-                seed=cycle_seed + 7777,
-                enable_mulligans=args.enable_mulligans,
-                per_game_timeout_sec=args.per_game_timeout_sec,
-                hidden_sizes=iter_hidden_sizes,
-                progress_path=eval_progress_path,
-                run_id=eval_run_id,
-                opponent_label=best_version,
-                deck_pool=deck_pool,
-                replay_config=eval_replay_config,
-                hang_dump_dir=eval_hang_dir,
-            )
+            if shards_cfg is None:
+                wins_new, wins_old, draws, eval_elapsed = _eval_match(
+                    new_weights=new_weights,
+                    old_weights=best_weights,
+                    n_games=args.eval_games,
+                    samples=args.samples,
+                    nodes=args.nodes,
+                    n_workers=args.workers,
+                    seed=cycle_seed + 7777,
+                    enable_mulligans=args.enable_mulligans,
+                    per_game_timeout_sec=args.per_game_timeout_sec,
+                    hidden_sizes=iter_hidden_sizes,
+                    progress_path=eval_progress_path,
+                    run_id=eval_run_id,
+                    opponent_label=best_version,
+                    deck_pool=deck_pool,
+                    replay_config=eval_replay_config,
+                    hang_dump_dir=eval_hang_dir,
+                )
+            else:
+                wins_new, wins_old, draws, eval_elapsed = (
+                    _eval_match_distributed(
+                        shards_config=shards_cfg,
+                        new_weights=new_weights,
+                        old_weights=best_weights,
+                        n_games=args.eval_games,
+                        samples=args.samples,
+                        nodes=args.nodes,
+                        seed=cycle_seed + 7777,
+                        enable_mulligans=args.enable_mulligans,
+                        per_game_timeout_sec=args.per_game_timeout_sec,
+                        hidden_sizes=iter_hidden_sizes,
+                        deck_pool_path=args.deck_pool,
+                        capture_every=args.capture_every_eval,
+                        new_version_label=new_version,
+                        old_version_label=best_version,
+                        replays_root=args.replays_dir,
+                        hang_dump_root=(
+                            args.hang_dump_dir
+                            if str(args.hang_dump_dir) else None
+                        ),
+                        progress_dir=progress_dir,
+                        run_id_prefix=eval_run_id,
+                        queue_url=args.queue_url,
+                        bundle_url=args.bundle_url,
+                        opponent_label=best_version,
+                    )
+                )
             n_decided = wins_new + wins_old
             win_rate = wins_new / n_decided if n_decided else 0.0
             eval_summary = {

@@ -353,6 +353,81 @@ class SelfPlayJobSpec:
         )
 
 
+@dataclass(frozen=True)
+class EvalJobSpec:
+    """Eval-mode counterpart to ``SelfPlayJobSpec``: parameters for an
+    acceptance-gate match between two NN versions across the cluster.
+
+    Two weights paths because every eval game pits ``new`` (seat 0)
+    against ``old`` (seat 1). ``old_weights_path=None`` falls back to a
+    heuristic opponent — useful for sanity-check evals against the
+    baseline. Path fields normalize to forward slashes in
+    ``to_dict()`` for the same cross-platform reasons documented on
+    ``SelfPlayJobSpec``.
+    """
+
+    new_weights_path: str
+    old_weights_path: Optional[str]
+    samples: int
+    inner_nodes: int
+    hidden_sizes: Optional[tuple[int, ...]]
+    base_seed: int
+    enable_mulligans: bool
+    per_game_timeout_sec: Optional[float]
+    deck_pool_path: Optional[str] = None
+    capture_every: int = 0
+    nn_new_version_label: Optional[str] = None
+    nn_old_version_label: Optional[str] = None
+    replays_root: Optional[str] = None
+    hang_dump_root: Optional[str] = None
+    opponent_label: str = "previous"
+
+    def to_dict(self) -> dict[str, Any]:
+        def _posix(p):
+            return p.replace("\\", "/") if isinstance(p, str) else p
+        return {
+            "new_weights_path": _posix(self.new_weights_path),
+            "old_weights_path": _posix(self.old_weights_path),
+            "samples": self.samples,
+            "inner_nodes": self.inner_nodes,
+            "hidden_sizes": (
+                list(self.hidden_sizes) if self.hidden_sizes is not None
+                else None
+            ),
+            "base_seed": self.base_seed,
+            "enable_mulligans": self.enable_mulligans,
+            "per_game_timeout_sec": self.per_game_timeout_sec,
+            "deck_pool_path": _posix(self.deck_pool_path),
+            "capture_every": self.capture_every,
+            "nn_new_version_label": self.nn_new_version_label,
+            "nn_old_version_label": self.nn_old_version_label,
+            "replays_root": _posix(self.replays_root),
+            "hang_dump_root": _posix(self.hang_dump_root),
+            "opponent_label": self.opponent_label,
+        }
+
+    @classmethod
+    def from_dict(cls, d: dict[str, Any]) -> "EvalJobSpec":
+        hs = d.get("hidden_sizes")
+        return cls(
+            new_weights_path=d["new_weights_path"],
+            old_weights_path=d.get("old_weights_path"),
+            samples=int(d["samples"]),
+            inner_nodes=int(d["inner_nodes"]),
+            hidden_sizes=tuple(hs) if hs is not None else None,
+            base_seed=int(d["base_seed"]),
+            enable_mulligans=bool(d["enable_mulligans"]),
+            per_game_timeout_sec=d.get("per_game_timeout_sec"),
+            deck_pool_path=d.get("deck_pool_path"),
+            capture_every=int(d.get("capture_every", 0)),
+            nn_new_version_label=d.get("nn_new_version_label"),
+            nn_old_version_label=d.get("nn_old_version_label"),
+            replays_root=d.get("replays_root"),
+            hang_dump_root=d.get("hang_dump_root"),
+            opponent_label=d.get("opponent_label", "previous"),
+        )
+
+
 def run_shard_local(
     shard: ShardConfig,
     spec: SelfPlayJobSpec,
@@ -610,6 +685,101 @@ def run_distributed_self_play(
     return output_paths
 
 
+def run_distributed_eval(
+    shards_config: ShardsConfig,
+    spec: EvalJobSpec,
+    *,
+    progress_dir: Path,
+    run_id_prefix: str,
+    total_games: int,
+    queue_url: str,
+    bundle_url: Optional[str] = None,
+) -> dict[str, int]:
+    """Eval counterpart to ``run_distributed_self_play``. Initializes
+    a queue of ``total_games``, dispatches every shard concurrently
+    to play eval games (new vs old), and returns the cluster-aggregate
+    counts as a dict::
+
+        {"n_games": int, "wins_new": int, "wins_old": int,
+         "draws": int, "crashed": int}
+
+    The orchestrator's caller (typically iterate's eval-gate) maps
+    this onto its existing ``MatchStats`` shape.
+    """
+    import threading as _threading
+    import urllib.request
+    import json as _json
+
+    stamp = _now_stamp()
+    progress_dir.mkdir(parents=True, exist_ok=True)
+
+    init_url = f"{queue_url.rstrip('/')}/queue/init"
+    init_body = _json.dumps({
+        "run_id": run_id_prefix,
+        "total_games": total_games,
+    }).encode("utf-8")
+    req = urllib.request.Request(
+        init_url, data=init_body,
+        headers={"Content-Type": "application/json"},
+    )
+    with urllib.request.urlopen(req, timeout=10) as resp:
+        if resp.status != 200:
+            raise RuntimeError(
+                f"queue init failed at {init_url}: HTTP {resp.status}"
+            )
+
+    totals = {
+        "n_games": 0, "wins_new": 0, "wins_old": 0,
+        "draws": 0, "crashed": 0,
+    }
+    totals_lock = _threading.Lock()
+
+    def _local_runner(shard: ShardConfig) -> dict[str, int]:
+        n_workers = shard.n_workers
+        if n_workers is None:
+            import os
+            n_workers = max(1, (os.cpu_count() or 1) - 2)
+        return run_shard_eval_pull(
+            spec,
+            queue_url=_loopback_queue_url(queue_url),
+            run_id=run_id_prefix,
+            n_workers=n_workers,
+            label=shard.display_label,
+            iter_total_games=total_games,
+            progress_dir=progress_dir,
+        )
+
+    def _remote_runner(shard: ShardConfig) -> dict[str, int]:
+        return run_shard_eval_remote(
+            shard, spec,
+            queue_url=queue_url,
+            run_id=run_id_prefix,
+            iter_total_games=total_games,
+            progress_dir=progress_dir,
+            stamp=stamp,
+            bundle_url=bundle_url,
+        )
+
+    futures: dict[concurrent.futures.Future, ShardConfig] = {}
+    n_threads = max(1, len(shards_config.shards))
+    executor = concurrent.futures.ThreadPoolExecutor(
+        max_workers=n_threads, thread_name_prefix="dist-eval",
+    )
+    try:
+        for shard in shards_config.shards:
+            runner = _local_runner if shard.is_local else _remote_runner
+            futures[executor.submit(runner, shard)] = shard
+    finally:
+        executor.shutdown(wait=False)
+
+    for fut in concurrent.futures.as_completed(futures):
+        shard_counts = fut.result()
+        with totals_lock:
+            for k in totals:
+                totals[k] += int(shard_counts.get(k, 0))
+    return totals
+
+
 class EventLog:
     """JSONL event log per shard. One JSON object per line:
     ``{"ts": <iso8601>, "event": <type>, ...kwargs}``. Plain stdlib
@@ -706,6 +876,23 @@ def _play_one_parallel_game_timed(args: tuple) -> tuple:
     t0 = _time.perf_counter()
     game_idx, chunk = _play_one_parallel_game(args)
     return game_idx, chunk, _time.perf_counter() - t0
+
+
+def _play_one_match_game_timed(args: tuple) -> tuple:
+    """Wrap ``_play_one_match_game_indexed`` with ``perf_counter`` so
+    the eval shard gets per-game wall time. Top-level so the worker
+    pickles across the spawn boundary.
+
+    Returns ``(game_idx, (winner, decisions), wall_seconds)``.
+    """
+    import time as _time
+
+    from mtg_bot.training.self_play import (  # type: ignore
+        _play_one_match_game_indexed,
+    )
+    t0 = _time.perf_counter()
+    game_idx, result = _play_one_match_game_indexed(args)
+    return game_idx, result, _time.perf_counter() - t0
 
 
 def run_shard_pull(
@@ -978,6 +1165,241 @@ def run_shard_pull(
     return npz_paths
 
 
+def run_shard_eval_pull(
+    spec: EvalJobSpec,
+    *,
+    queue_url: str,
+    run_id: str,
+    n_workers: int,
+    label: str,
+    iter_total_games: int,
+    progress_dir: Optional[Path] = None,
+) -> dict[str, int]:
+    """Eval counterpart to ``run_shard_pull``: continuously feeds
+    n_workers worker processes from the master's pull-queue, where
+    each game is one match (new-NN seat 0 vs old-NN-or-heuristic
+    seat 1). Returns the shard's aggregated counts as a dict so the
+    orchestrator can sum across shards into a single ``MatchStats``.
+    """
+    import concurrent.futures as _cf
+    import json as _json
+    import time as _time
+    import urllib.request
+
+    from mtg_bot.decks import decks_from_json
+    from mtg_bot.training import NNPimcConfig
+    from mtg_bot.training.config import HeuristicConfig, PimcConfig
+    from mtg_bot.training.data_gen import ReplayCaptureConfig
+    from mtg_bot.training.progress import EvalProgress
+
+    new_cfg = NNPimcConfig(
+        weights_path=spec.new_weights_path,
+        samples=spec.samples, inner_nodes=spec.inner_nodes,
+        batch_size=32, with_policy=True, puct=True,
+        hidden_sizes=spec.hidden_sizes,
+    )
+    if spec.old_weights_path is not None:
+        old_cfg = NNPimcConfig(
+            weights_path=spec.old_weights_path,
+            samples=spec.samples, inner_nodes=spec.inner_nodes,
+            batch_size=32, with_policy=True, puct=True,
+            hidden_sizes=spec.hidden_sizes,
+        )
+        p1_factory = old_cfg.build
+    else:
+        p1_factory = PimcConfig(
+            samples=spec.samples, inner_nodes=spec.inner_nodes,
+            heuristic=HeuristicConfig(), batch_size=1,
+        ).build
+    p0_factory = new_cfg.build
+
+    deck_pool = None
+    if spec.deck_pool_path is not None:
+        deck_pool = decks_from_json(Path(spec.deck_pool_path))
+
+    replay_config: Optional[ReplayCaptureConfig] = None
+    replays_subdir: Optional[str] = None
+    if spec.capture_every > 0 and spec.replays_root is not None:
+        replays_subdir = str(
+            Path(spec.replays_root) / f"{run_id}_shard_{label}"
+        )
+        Path(replays_subdir).mkdir(parents=True, exist_ok=True)
+        replay_config = ReplayCaptureConfig(
+            save_dir=replays_subdir,
+            capture_every=spec.capture_every,
+            nn_weights_path=spec.new_weights_path,
+            nn_version_label=spec.nn_new_version_label,
+            nn_hidden_sizes=spec.hidden_sizes,
+            nn_with_policy=True,
+        )
+
+    hang_dump_dir: Optional[str] = None
+    if spec.hang_dump_root is not None:
+        hang_dump_dir = str(
+            Path(spec.hang_dump_root) / f"{run_id}_shard_{label}"
+        )
+
+    progress: Optional[EvalProgress] = None
+    events: Optional[EventLog] = None
+    if progress_dir is not None:
+        progress_dir.mkdir(parents=True, exist_ok=True)
+        progress = EvalProgress(
+            progress_path=progress_dir / f"{run_id}_shard_{label}.json",
+            run_id=f"{run_id}_shard_{label}",
+            n_games_total=iter_total_games,
+            n_workers=n_workers,
+            opponent_label=spec.opponent_label,
+            command="distributed_eval (pull-mode shard)",
+            notes=(
+                f"pull-mode eval shard {label} (one of N workers in "
+                f"iter {run_id})"
+            ),
+            replays_dir=replays_subdir,
+        )
+        progress.begin()
+        events = EventLog(
+            progress_dir / f"{run_id}_shard_{label}_events.jsonl"
+        )
+        events.record(
+            "shard_start",
+            run_id=run_id, label=label, mode="eval",
+            iter_total_games=iter_total_games,
+            n_workers=n_workers,
+            base_seed=spec.base_seed,
+            samples=spec.samples, inner_nodes=spec.inner_nodes,
+            new_weights_path=spec.new_weights_path,
+            old_weights_path=spec.old_weights_path,
+            new_weights_digest=_weights_digest(spec.new_weights_path),
+            old_weights_digest=(
+                _weights_digest(spec.old_weights_path)
+                if spec.old_weights_path else None
+            ),
+            machine=_machine_metadata(),
+        )
+
+    take_url = f"{queue_url.rstrip('/')}/queue/take"
+    wins_new = 0
+    wins_old = 0
+    draws = 0
+    crashed = 0
+    n_games = 0
+
+    def _take_one() -> tuple[Optional[int], int, float]:
+        req_body = _json.dumps({
+            "run_id": run_id, "batch_size": 1,
+        }).encode("utf-8")
+        req = urllib.request.Request(
+            take_url, data=req_body,
+            headers={"Content-Type": "application/json"},
+        )
+        take_t0 = _time.perf_counter()
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            response = _json.loads(resp.read().decode("utf-8"))
+        take_wall = _time.perf_counter() - take_t0
+        games = response.get("games", [])
+        return (
+            games[0] if games else None,
+            response.get("remaining", 0),
+            take_wall,
+        )
+
+    def _build_args(game_idx: int) -> tuple:
+        return (
+            game_idx, p0_factory, p1_factory, spec.base_seed,
+            4000,  # decision_cap, mirrors run_match's default
+            spec.enable_mulligans, spec.per_game_timeout_sec,
+            deck_pool, replay_config, hang_dump_dir,
+        )
+
+    shard_t0 = _time.perf_counter()
+    try:
+        with _cf.ProcessPoolExecutor(max_workers=n_workers) as exe:
+            in_flight: dict[_cf.Future, int] = {}
+            queue_drained = False
+            while True:
+                while len(in_flight) < n_workers and not queue_drained:
+                    game_idx, remaining, take_wall = _take_one()
+                    if events is not None:
+                        events.record(
+                            "game_take",
+                            game_idx=game_idx,
+                            remaining_after=remaining,
+                            take_wall_s=take_wall,
+                            in_flight=len(in_flight),
+                        )
+                    if game_idx is None:
+                        queue_drained = True
+                        break
+                    fut = exe.submit(
+                        _play_one_match_game_timed,
+                        _build_args(game_idx),
+                    )
+                    in_flight[fut] = game_idx
+                if not in_flight:
+                    break
+                done, _pending = _cf.wait(
+                    list(in_flight.keys()),
+                    return_when=_cf.FIRST_COMPLETED,
+                )
+                for fut in done:
+                    in_flight.pop(fut)
+                    game_idx, (winner, decisions), wall_s = fut.result()
+                    is_crash = winner is None and decisions == 0
+                    n_games += 1
+                    if is_crash:
+                        crashed += 1
+                    elif winner == 0:
+                        wins_new += 1
+                    elif winner == 1:
+                        wins_old += 1
+                    else:
+                        draws += 1
+                    if progress is not None:
+                        progress.record_game(
+                            winner=winner, decisions=decisions,
+                            crashed=is_crash,
+                        )
+                    if events is not None:
+                        events.record(
+                            "game_end",
+                            game_idx=int(game_idx),
+                            wall_s=wall_s,
+                            winner=winner,
+                            decisions=decisions,
+                            crashed=is_crash,
+                        )
+    except BaseException as exc:
+        if progress is not None:
+            progress.finalize(status="failed")
+        if events is not None:
+            events.record(
+                "shard_end",
+                status="failed",
+                error=repr(exc),
+                n_games=n_games, wins_new=wins_new,
+                wins_old=wins_old, draws=draws, crashed=crashed,
+                wall_s=_time.perf_counter() - shard_t0,
+            )
+        raise
+    if progress is not None:
+        progress.finalize(status="completed")
+    if events is not None:
+        events.record(
+            "shard_end",
+            status="completed",
+            n_games=n_games, wins_new=wins_new,
+            wins_old=wins_old, draws=draws, crashed=crashed,
+            wall_s=_time.perf_counter() - shard_t0,
+        )
+    return {
+        "n_games": n_games,
+        "wins_new": wins_new,
+        "wins_old": wins_old,
+        "draws": draws,
+        "crashed": crashed,
+    }
+
+
 def _is_windows_remote(shard: ShardConfig) -> bool:
     """Cheap heuristic to pick remote path semantics: ``.exe`` ending
     on the venv python path is unambiguously Windows. POSIX shells
@@ -1107,6 +1529,50 @@ def _build_remote_pull_command(
     )
 
 
+def _build_remote_eval_command(
+    shard: ShardConfig,
+    spec: EvalJobSpec,
+    *,
+    queue_url: str,
+    run_id: str,
+    iter_total_games: int,
+    stamp: str,
+) -> str:
+    """Eval counterpart to ``_build_remote_pull_command``. Same shape;
+    ``--mode=eval`` and an ``EvalJobSpec`` instead of ``SelfPlayJobSpec``.
+    """
+    import base64
+    spec_b64 = base64.b64encode(
+        json.dumps(spec.to_dict()).encode("utf-8"),
+    ).decode("ascii")
+    shard_b64 = base64.b64encode(
+        json.dumps(shard.to_dict()).encode("utf-8"),
+    ).decode("ascii")
+
+    args = (
+        f"scripts/run_self_play_shard.py "
+        f"--mode=eval "
+        f"--spec-b64={spec_b64} "
+        f"--shard-b64={shard_b64} "
+        f"--queue-url={queue_url} "
+        f"--run-id={run_id} "
+        f"--iter-total-games={iter_total_games} "
+        f"--stamp={stamp}"
+    )
+    repo_path = shard.repo_path or ""
+    venv_python = shard.venv_python or ""
+    if _is_windows_remote(shard):
+        return (
+            f'cd /d "{repo_path}" && '
+            f'set PYTHONPATH=src && '
+            f'"{venv_python}" {args}'
+        )
+    return (
+        f'cd {shlex.quote(repo_path)} && '
+        f'PYTHONPATH=src {shlex.quote(venv_python)} {args}'
+    )
+
+
 class _ProgressPoller:
     """Periodically scp the remote's per-shard progress JSON back to
     the master so the training UI shows live updates. Stops when
@@ -1202,6 +1668,39 @@ def _build_remote_bundle_sync_command(
     )
 
 
+def _push_weights_to_remote(
+    shard: ShardConfig, remote_repo: str, weights_path: str,
+) -> None:
+    """scp ``<master_cwd>/<weights_path>`` to ``<repo_path>/<weights_path>``
+    on the remote. Idempotent ``mkdir`` first so the parent dir exists.
+    Failures propagate — a missing weights file on the remote silently
+    breaks the shard."""
+    print(
+        f"[shard {shard.display_label}] pushing weights "
+        f"{weights_path} to {shard.host}...",
+        file=sys.stderr,
+    )
+    local_weights = (Path.cwd() / weights_path).resolve()
+    weights_posix = weights_path.replace("\\", "/")
+    remote_weights = _remote_join(shard, remote_repo, weights_posix)
+    remote_weights_parent = _remote_join(
+        shard, remote_repo, str(PurePosixPath(weights_posix).parent),
+    )
+    _run_subprocess(
+        _ssh_cmd(shard, _build_remote_mkdir_command(
+            shard, remote_weights_parent,
+        )),
+        timeout=30,
+    )
+    _run_subprocess(
+        _scp_cmd(
+            shard, str(local_weights), remote_weights,
+            from_remote=False,
+        ),
+        timeout=300,
+    )
+
+
 def run_shard_remote(
     shard: ShardConfig,
     spec: SelfPlayJobSpec,
@@ -1267,34 +1766,10 @@ def run_shard_remote(
         sync_cmd = _build_remote_bundle_sync_command(shard, bundle_url)
         _run_subprocess(_ssh_cmd(shard, sync_cmd), timeout=300)
 
-    # 2. Weight push. Master-trained weights at <master_cwd>/<weights_path>
-    # need to land at <repo_path>/<weights_path> on the remote. Without
-    # this, iter #2+ silently produces samples=0 games on remotes
-    # because their weights file is stale or missing.
-    print(
-        f"[shard {shard.display_label}] pushing weights "
-        f"{spec.weights_path} to {shard.host}...",
-        file=sys.stderr,
-    )
-    local_weights = (Path.cwd() / spec.weights_path).resolve()
-    weights_posix = spec.weights_path.replace("\\", "/")
-    remote_weights = _remote_join(shard, remote_repo, weights_posix)
-    remote_weights_parent = _remote_join(
-        shard, remote_repo, str(PurePosixPath(weights_posix).parent),
-    )
-    _run_subprocess(
-        _ssh_cmd(shard, _build_remote_mkdir_command(
-            shard, remote_weights_parent,
-        )),
-        timeout=30,
-    )
-    _run_subprocess(
-        _scp_cmd(
-            shard, str(local_weights), remote_weights,
-            from_remote=False,
-        ),
-        timeout=300,
-    )
+    # 2. Weight push. Without this, iter #2+ silently produces
+    # samples=0 games on remotes because their weights file is stale
+    # or missing.
+    _push_weights_to_remote(shard, remote_repo, spec.weights_path)
 
     # 3. Progress poller.
     poller = _ProgressPoller(
@@ -1398,3 +1873,103 @@ def run_shard_remote(
         )
         local_paths.append(local_npz)
     return local_paths
+
+
+def run_shard_eval_remote(
+    shard: ShardConfig,
+    spec: EvalJobSpec,
+    *,
+    queue_url: str,
+    run_id: str,
+    iter_total_games: int,
+    progress_dir: Path,
+    stamp: str,
+    bundle_url: Optional[str] = None,
+) -> dict[str, int]:
+    """Run an eval shard on a remote machine. Mirrors
+    ``run_shard_remote`` but pushes BOTH NN weights files (new + old),
+    invokes the wrapper in eval mode, and returns aggregated counts
+    parsed from a JSON result file scp'd back from the remote.
+    """
+    run_id_full = f"{run_id}_shard_{shard.display_label}"
+    progress_dir.mkdir(parents=True, exist_ok=True)
+    local_progress_path = progress_dir / f"{run_id_full}.json"
+    local_events_path = progress_dir / f"{run_id_full}_events.jsonl"
+    local_result_path = progress_dir / f"{run_id_full}_result.json"
+
+    remote_repo = shard.repo_path or ""
+    remote_progress = _remote_join(
+        shard, remote_repo, "training_progress", f"{run_id_full}.json",
+    )
+    remote_events = _remote_join(
+        shard, remote_repo, "training_progress",
+        f"{run_id_full}_events.jsonl",
+    )
+    remote_result = _remote_join(
+        shard, remote_repo, "training_progress",
+        f"{run_id_full}_result.json",
+    )
+
+    if bundle_url:
+        print(
+            f"[shard {shard.display_label}] sync from bundle on "
+            f"{shard.host}...", file=sys.stderr,
+        )
+        _run_subprocess(
+            _ssh_cmd(shard, _build_remote_bundle_sync_command(
+                shard, bundle_url,
+            )),
+            timeout=300,
+        )
+
+    _push_weights_to_remote(shard, remote_repo, spec.new_weights_path)
+    if spec.old_weights_path is not None:
+        _push_weights_to_remote(
+            shard, remote_repo, spec.old_weights_path,
+        )
+
+    poller = _ProgressPoller(
+        shard,
+        remote_progress_path=remote_progress,
+        local_progress_path=local_progress_path,
+    )
+    poller.start()
+
+    print(
+        f"[shard {shard.display_label}] pull-mode eval on "
+        f"{shard.host}...",
+        file=sys.stderr,
+    )
+    try:
+        run_cmd = _build_remote_eval_command(
+            shard, spec,
+            queue_url=queue_url,
+            run_id=run_id,
+            iter_total_games=iter_total_games,
+            stamp=stamp,
+        )
+        _run_subprocess(_ssh_cmd(shard, run_cmd))
+    finally:
+        poller.stop()
+        for remote_path, local_path in (
+            (remote_progress, local_progress_path),
+            (remote_events, local_events_path),
+            (remote_result, local_result_path),
+        ):
+            try:
+                _run_subprocess(
+                    _scp_cmd(
+                        shard, remote_path, str(local_path),
+                        from_remote=True,
+                    ),
+                    timeout=30,
+                )
+            except Exception:  # noqa: BLE001
+                pass
+
+    if not local_result_path.is_file():
+        raise RuntimeError(
+            f"eval shard {shard.display_label} produced no result "
+            f"file at {local_result_path}; check stderr."
+        )
+    return json.loads(local_result_path.read_text(encoding="utf-8"))

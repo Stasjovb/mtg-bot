@@ -1,15 +1,16 @@
-"""Run one self-play shard. Pull-mode only.
+"""Run one shard. Pull-mode self-play (--mode=pull) or eval (--mode=eval).
 
 Used by the master's local shard AND every remote shard, invoked
-via ``ssh ... run_self_play_shard.py --mode=pull ...``. Decodes the
-base64-encoded ``SelfPlayJobSpec`` + ``ShardConfig``, then runs
-``run_shard_pull`` which feeds a pool of N workers from the master's
-``/queue/take`` endpoint one game at a time. Returns the list of
-emitted npz paths via stdout JSON when done.
+via ``ssh ... run_self_play_shard.py --mode=... ...``. Decodes the
+base64-encoded spec + shard config, then runs the appropriate worker
+loop which feeds a pool of N workers from the master's
+``/queue/take`` endpoint one game at a time.
 
-CLI surface kept small: this script decodes args, calls
-``run_shard_pull``, and exits. Everything else lives in
-``mtg_bot.training.distributed``.
+self-play emits per-batch npzs under ``--output-dir`` and prints
+``{"npz_paths": [...]}``. Eval writes a single result JSON under
+``--progress-dir/{run_id}_shard_<label>_result.json`` and prints
+``{"result_path": "..."}``. The orchestrator scps that file back and
+parses it.
 """
 
 from __future__ import annotations
@@ -26,8 +27,10 @@ if _SRC.is_dir() and str(_SRC) not in sys.path:
     sys.path.insert(0, str(_SRC))
 
 from mtg_bot.training.distributed import (  # noqa: E402
+    EvalJobSpec,
     SelfPlayJobSpec,
     ShardConfig,
+    run_shard_eval_pull,
     run_shard_pull,
 )
 
@@ -39,15 +42,19 @@ def _decode_b64_json(s: str) -> dict:
 def main(argv=None) -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
-        "--mode", default="pull", choices=["pull"],
+        "--mode", default="pull", choices=["pull", "eval"],
         help=(
-            "Shard mode. Only ``pull`` today; the static-partition "
-            "mode was retired in favor of master-served work-queue."
+            "``pull`` runs self-play (single NN, dual seats, emits "
+            "training data); ``eval`` runs head-to-head between two "
+            "NN versions (or NN-vs-heuristic) and emits a result JSON."
         ),
     )
     parser.add_argument(
         "--spec-b64", required=True,
-        help="base64-encoded JSON of SelfPlayJobSpec.to_dict()",
+        help=(
+            "base64-encoded JSON of either SelfPlayJobSpec.to_dict() "
+            "(--mode=pull) or EvalJobSpec.to_dict() (--mode=eval)."
+        ),
     )
     parser.add_argument(
         "--shard-b64", required=True,
@@ -57,25 +64,19 @@ def main(argv=None) -> None:
         "--queue-url", required=True,
         help=(
             "Master's queue endpoint base URL (e.g. "
-            "``http://desktop-master:5099``). The script POSTs "
-            "``/queue/take`` here repeatedly."
+            "``http://desktop-master:5099``)."
         ),
     )
     parser.add_argument(
         "--run-id", required=True,
         help=(
-            "Per-iter queue + run identifier (typically iterate's "
-            "``iter_NNN_self_play_<bootstrap>``). Master groups "
-            "concurrent workers' takes by this id."
+            "Per-iter queue + run identifier. Master groups concurrent "
+            "workers' takes by this id."
         ),
     )
     parser.add_argument(
         "--iter-total-games", type=int, required=True,
-        help=(
-            "Iter's total game count (the queue size). Used only "
-            "to set the per-shard progress JSON's ``n_games_total`` "
-            "so the UI can show 'this shard did X of Y'."
-        ),
+        help="Iter's total game count (the queue size).",
     )
     parser.add_argument(
         "--stamp", required=True,
@@ -83,13 +84,13 @@ def main(argv=None) -> None:
     )
     parser.add_argument(
         "--output-dir", type=Path, default=Path("iterate_data"),
+        help="Self-play npz output dir. Ignored in --mode=eval.",
     )
     parser.add_argument(
         "--progress-dir", type=Path, default=Path("training_progress"),
     )
     args = parser.parse_args(argv)
 
-    spec = SelfPlayJobSpec.from_dict(_decode_b64_json(args.spec_b64))
     shard = ShardConfig.from_dict(_decode_b64_json(args.shard_b64))
 
     import os
@@ -98,18 +99,39 @@ def main(argv=None) -> None:
         else max(1, (os.cpu_count() or 1) - 2)
     )
 
-    npz_paths = run_shard_pull(
-        spec,
+    if args.mode == "pull":
+        spec = SelfPlayJobSpec.from_dict(_decode_b64_json(args.spec_b64))
+        npz_paths = run_shard_pull(
+            spec,
+            queue_url=args.queue_url,
+            run_id=args.run_id,
+            n_workers=n_workers,
+            output_dir=args.output_dir,
+            label=shard.display_label,
+            stamp=args.stamp,
+            iter_total_games=args.iter_total_games,
+            progress_dir=args.progress_dir,
+        )
+        print(json.dumps({"npz_paths": [str(p) for p in npz_paths]}))
+        return
+
+    eval_spec = EvalJobSpec.from_dict(_decode_b64_json(args.spec_b64))
+    counts = run_shard_eval_pull(
+        eval_spec,
         queue_url=args.queue_url,
         run_id=args.run_id,
         n_workers=n_workers,
-        output_dir=args.output_dir,
         label=shard.display_label,
-        stamp=args.stamp,
         iter_total_games=args.iter_total_games,
         progress_dir=args.progress_dir,
     )
-    print(json.dumps({"npz_paths": [str(p) for p in npz_paths]}))
+    args.progress_dir.mkdir(parents=True, exist_ok=True)
+    result_path = (
+        args.progress_dir
+        / f"{args.run_id}_shard_{shard.display_label}_result.json"
+    )
+    result_path.write_text(json.dumps(counts), encoding="utf-8")
+    print(json.dumps({"result_path": str(result_path), **counts}))
 
 
 if __name__ == "__main__":
