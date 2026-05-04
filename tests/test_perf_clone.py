@@ -98,3 +98,35 @@ def test_clone_is_at_least_10x_faster_than_deepcopy():
         f"Likely regression in GameState.clone — investigate before "
         f"lowering this floor."
     )
+
+
+# Per-call wall-clock floor in microseconds. Set generously so the
+# test doesn't flap on a slow CI box: a 30%-improvement target lands
+# us at ~18us on a fresh dev machine (M1 / Ryzen / Windows desktop);
+# 50us is "something genuinely went catastrophically wrong" territory.
+# Tighten only if we see a clear, reproducible win we don't want
+# silently regressed.
+_PER_CLONE_WALL_FLOOR_US = 50.0
+
+
+def test_clone_per_call_wall_clock_under_floor():
+    """Wall-clock floor as a coarse regression baseline.
+
+    Pinning a per-call microsecond ceiling (vs the deepcopy ratio
+    guard above) catches a regression where ``clone()`` itself slows
+    down without ``deepcopy`` slowing equivalently — e.g. someone
+    swaps the slot cloner for a deep copy of one specific field, or
+    re-introduces ``copy.deepcopy(rng)``. The floor is loose
+    (~2.5x typical measurement) so a noisy CI machine doesn't
+    flap. If this fires after a real change, look at the profile
+    before relaxing.
+    """
+    state = _build_mid_game_state()
+    for _ in range(_WARMUP):
+        state.clone()
+    t_clone = _time_calls(state.clone, _N_CALLS)
+    per_us = t_clone * 1_000_000 / _N_CALLS
+    assert per_us < _PER_CLONE_WALL_FLOOR_US, (
+        f"clone() wall-clock {per_us:.1f}us/call exceeds "
+        f"{_PER_CLONE_WALL_FLOOR_US}us floor. Likely regression."
+    )
