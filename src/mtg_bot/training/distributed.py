@@ -495,35 +495,20 @@ def run_distributed_self_play(
     total_games: int,
     queue_url: str,
     bundle_url: Optional[str] = None,
-    batch_size_default: int = 5,
 ) -> list[Path]:
     """Pull-model orchestrator. Initializes a queue of ``total_games``
     on master, dispatches every shard concurrently to pull from it,
-    returns the list of every per-batch ``.npz`` produced (across
-    all shards). Master's training step globs ``output_dir`` so the
-    union becomes the iter's training mix automatically.
+    returns the list of every ``.npz`` produced. Master's training
+    step globs ``output_dir`` so the union becomes the iter's training
+    mix automatically.
 
-    Why pull-model: the previous static-partitioning design (where
-    each shard ran a fixed ``n_games``) capped iter throughput at
-    ``max(per_shard_wall)`` — slower remote dragged the whole iter.
-    Pull-model lets fast machines naturally do more work and slower
-    machines do less, giving wall ≈ ``total_work / total_throughput``.
-
-    ``queue_url``: the master's queue endpoint base, e.g.
-    ``http://desktop-master:5099``. Iterate spawns
-    ``serve_setup_scripts.py`` (or relies on it being already up)
-    and passes that URL here.
-
-    ``bundle_url``: master's git-bundle endpoint. When set, each
-    remote shard fetches a fresh bundle before pulling its first
-    batch so code changes propagate. When None, no remote-side
-    code sync.
-
-    ``batch_size_default`` is the default chunk size handed out per
-    ``/queue/take``. A shard can override via ``ShardConfig.n_workers``
-    (each batch is sized to fill the shard's pool roughly once,
-    minimizing tail-of-iter waste — a slow shard finishing its last
-    batch only delays the iter by ~one game's worth of wall).
+    Each shard runs ``run_shard_pull``, which opens a pool of
+    ``n_workers`` worker processes and continuously feeds them games
+    one at a time from ``/queue/take``. As any worker finishes its
+    game, the shard pulls the next available game and dispatches it
+    to that worker. Slow machines pull fewer total games; fast ones
+    pull more — wall ≈ ``total_games / sum(per_machine_throughput)``
+    instead of being capped by the slowest shard.
     """
     import threading as _threading
     import urllib.request
@@ -554,7 +539,6 @@ def run_distributed_self_play(
     output_paths_lock = _threading.Lock()
 
     def _local_runner(shard: ShardConfig) -> list[Path]:
-        # n_workers default: cpu_count - 2 (mirrors mp.Pool default).
         n_workers = shard.n_workers
         if n_workers is None:
             import os
@@ -563,7 +547,6 @@ def run_distributed_self_play(
             spec,
             queue_url=queue_url,
             run_id=run_id_prefix,
-            batch_size=max(1, n_workers),
             n_workers=n_workers,
             output_dir=output_dir,
             label=shard.display_label,
@@ -578,7 +561,6 @@ def run_distributed_self_play(
             queue_url=queue_url,
             run_id=run_id_prefix,
             iter_total_games=total_games,
-            batch_size_default=batch_size_default,
             progress_dir=progress_dir,
             output_dir=output_dir,
             run_id_prefix=run_id_prefix,
@@ -715,7 +697,6 @@ def run_shard_pull(
     *,
     queue_url: str,
     run_id: str,
-    batch_size: int,
     n_workers: int,
     output_dir: Path,
     label: str,
@@ -723,33 +704,23 @@ def run_shard_pull(
     iter_total_games: int,
     progress_dir: Optional[Path] = None,
 ) -> list[Path]:
-    """Pull-model self-play worker — used by both the master's local
-    shard and each remote shard.
+    """Continuously feed ``n_workers`` worker processes from the
+    master's pull-queue. Each worker plays one game, returns its
+    chunk, then is given the next available game. Loop until the
+    queue is drained AND all in-flight games have finished.
 
-    Loops: ``POST queue_url/queue/take`` → if empty, exit; else run
-    ``mp.Pool.map`` over the batch's game-idxes → concat chunks →
-    save per-batch npz → repeat. Same ``mp.Pool`` instance serves
-    every batch (warm across iterations), so per-batch overhead is
-    one HTTP round-trip + one ``save_dataset`` call — the spawn
-    cost (~30s on Windows) is paid once at the start of the shard,
-    amortized over hundreds of games.
-
-    Per-batch npzs land under ``output_dir`` named
-    ``{run_id}_shard_{label}_chunk_{NNNN}_{stamp}.npz`` — the
-    ``shard_{label}`` segment matches the existing foreign-npz
-    pattern (``find_foreign_npzs``) and the chunk-index keeps
-    multi-batch outputs from collapsing onto a single name. Master's
-    training step globs ``output_dir`` and trains on the union of
-    every shard's batches.
+    Maximum concurrency = ``n_workers``; each ``/queue/take`` pulls
+    one game (the worker that just freed up gets the next idx). Per-
+    game completions are accumulated; an npz is flushed every
+    ``n_workers`` games for crash resilience and reasonable file
+    granularity, plus one final flush at shard end.
 
     Per-shard progress JSON gets ``n_games_total = iter_total_games``
-    (the iter's queue size, not just this shard's eventual share)
-    so the training UI shows "this shard did X of Y" honestly — in
-    pull mode we don't know in advance how many games each shard
-    will end up with.
+    so the training UI shows "this shard did X of Y" honestly — pull
+    mode doesn't know in advance how many games each shard will run.
     """
+    import concurrent.futures as _cf
     import json as _json
-    import multiprocessing as mp
     import time as _time
     import urllib.request
 
@@ -825,7 +796,6 @@ def run_shard_pull(
             run_id=run_id,
             label=label,
             iter_total_games=iter_total_games,
-            batch_size=batch_size,
             n_workers=n_workers,
             base_seed=spec.base_seed,
             samples=spec.samples,
@@ -836,58 +806,102 @@ def run_shard_pull(
         )
 
     output_dir.mkdir(parents=True, exist_ok=True)
+    take_url = f"{queue_url.rstrip('/')}/queue/take"
     npz_paths: list[Path] = []
     chunk_idx = 0
-    take_url = f"{queue_url.rstrip('/')}/queue/take"
-    shard_t0 = _time.perf_counter()
     n_games_completed = 0
     n_games_crashed = 0
+    pending_chunks: list = []
+    flush_every = max(1, n_workers)
 
+    def _take_one() -> tuple[Optional[int], int, float]:
+        req_body = _json.dumps({
+            "run_id": run_id, "batch_size": 1,
+        }).encode("utf-8")
+        req = urllib.request.Request(
+            take_url, data=req_body,
+            headers={"Content-Type": "application/json"},
+        )
+        take_t0 = _time.perf_counter()
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            response = _json.loads(resp.read().decode("utf-8"))
+        take_wall = _time.perf_counter() - take_t0
+        games = response.get("games", [])
+        return (
+            games[0] if games else None,
+            response.get("remaining", 0),
+            take_wall,
+        )
+
+    def _build_args(game_idx: int) -> tuple:
+        return (
+            game_idx, factory, factory, spec.base_seed,
+            spec.decision_cap, spec.sample_every,
+            replay_config, deck_pool,
+            spec.enable_mulligans, spec.per_game_timeout_sec,
+            hang_dump_dir,
+        )
+
+    def _flush() -> None:
+        nonlocal chunk_idx
+        if not pending_chunks:
+            return
+        f, o, p, m = _concat_chunks(
+            [c[:4] for _, c, _ in pending_chunks]
+        )
+        output_path = output_dir / (
+            f"{run_id}_shard_{label}_chunk_"
+            f"{chunk_idx:04d}_{stamp}.npz"
+        )
+        save_dataset(
+            f, o, output_path,
+            policy_targets=p, action_masks=m,
+        )
+        npz_paths.append(output_path)
+        if events is not None:
+            events.record(
+                "batch_saved",
+                chunk_idx=chunk_idx,
+                npz_path=str(output_path),
+                n_samples=int(f.shape[0]) if f.size else 0,
+                n_games=len(pending_chunks),
+            )
+        chunk_idx += 1
+        pending_chunks.clear()
+
+    shard_t0 = _time.perf_counter()
     try:
-        with mp.Pool(processes=n_workers) as pool:
+        with _cf.ProcessPoolExecutor(max_workers=n_workers) as exe:
+            in_flight: dict[_cf.Future, int] = {}
+            queue_drained = False
             while True:
-                req_body = _json.dumps({
-                    "run_id": run_id, "batch_size": batch_size,
-                }).encode("utf-8")
-                req = urllib.request.Request(
-                    take_url, data=req_body,
-                    headers={"Content-Type": "application/json"},
-                )
-                take_t0 = _time.perf_counter()
-                with urllib.request.urlopen(req, timeout=30) as resp:
-                    response = _json.loads(
-                        resp.read().decode("utf-8"),
+                while len(in_flight) < n_workers and not queue_drained:
+                    game_idx, remaining, take_wall = _take_one()
+                    if events is not None:
+                        events.record(
+                            "game_take",
+                            game_idx=game_idx,
+                            remaining_after=remaining,
+                            take_wall_s=take_wall,
+                            in_flight=len(in_flight),
+                        )
+                    if game_idx is None:
+                        queue_drained = True
+                        break
+                    fut = exe.submit(
+                        _play_one_parallel_game_timed,
+                        _build_args(game_idx),
                     )
-                take_wall = _time.perf_counter() - take_t0
-                game_idxes = response.get("games", [])
-                remaining = response.get("remaining", 0)
-                if events is not None:
-                    events.record(
-                        "batch_take",
-                        chunk_idx=chunk_idx,
-                        n_games=len(game_idxes),
-                        game_idxes=list(game_idxes),
-                        remaining_after=remaining,
-                        take_wall_s=take_wall,
-                    )
-                if not game_idxes:
+                    in_flight[fut] = game_idx
+                if not in_flight:
                     break
-
-                args_list = [
-                    (idx, factory, factory, spec.base_seed,
-                     spec.decision_cap, spec.sample_every,
-                     replay_config, deck_pool,
-                     spec.enable_mulligans, spec.per_game_timeout_sec,
-                     hang_dump_dir)
-                    for idx in game_idxes
-                ]
-                batch_t0 = _time.perf_counter()
-                results = pool.map(
-                    _play_one_parallel_game_timed, args_list,
+                done, _pending = _cf.wait(
+                    list(in_flight.keys()),
+                    return_when=_cf.FIRST_COMPLETED,
                 )
-                batch_wall = _time.perf_counter() - batch_t0
-
-                for game_idx, chunk, wall_s in results:
+                for fut in done:
+                    in_flight.pop(fut)
+                    game_idx, chunk, wall_s = fut.result()
                     n_samples = int(chunk[0].shape[0])
                     crashed = n_samples == 0 and chunk[4] is None
                     if crashed:
@@ -907,36 +921,20 @@ def run_shard_pull(
                         events.record(
                             "game_end",
                             game_idx=int(game_idx),
-                            chunk_idx=chunk_idx,
                             wall_s=wall_s,
                             n_samples=n_samples,
                             winner=chunk[4],
                             crashed=crashed,
                         )
-
-                chunks_only = [chunk for _, chunk, _ in results]
-                f, o, p, m = _concat_chunks(
-                    [c[:4] for c in chunks_only]
-                )
-                output_path = output_dir / (
-                    f"{run_id}_shard_{label}_chunk_"
-                    f"{chunk_idx:04d}_{stamp}.npz"
-                )
-                save_dataset(
-                    f, o, output_path,
-                    policy_targets=p, action_masks=m,
-                )
-                npz_paths.append(output_path)
-                if events is not None:
-                    events.record(
-                        "batch_saved",
-                        chunk_idx=chunk_idx,
-                        npz_path=str(output_path),
-                        n_samples=int(f.shape[0]) if f.size else 0,
-                        batch_wall_s=batch_wall,
-                    )
-                chunk_idx += 1
+                    pending_chunks.append((game_idx, chunk, wall_s))
+                    if len(pending_chunks) >= flush_every:
+                        _flush()
+            _flush()
     except BaseException as exc:
+        try:
+            _flush()
+        except Exception:  # noqa: BLE001
+            pass
         if progress is not None:
             progress.finalize(status="failed")
         if events is not None:
@@ -1050,7 +1048,6 @@ def _build_remote_pull_command(
     queue_url: str,
     run_id: str,
     iter_total_games: int,
-    batch_size: int,
     stamp: str,
 ) -> str:
     """Produce the one-line shell command the remote runs to start
@@ -1078,7 +1075,6 @@ def _build_remote_pull_command(
         f"--queue-url={queue_url} "
         f"--run-id={run_id} "
         f"--iter-total-games={iter_total_games} "
-        f"--batch-size={batch_size} "
         f"--stamp={stamp}"
     )
     repo_path = shard.repo_path or ""
@@ -1197,7 +1193,6 @@ def run_shard_remote(
     queue_url: str,
     run_id: str,
     iter_total_games: int,
-    batch_size_default: int,
     progress_dir: Path,
     output_dir: Path,
     run_id_prefix: str,
@@ -1245,13 +1240,6 @@ def run_shard_remote(
     # Per-shard npz output dir on the remote.
     remote_iterate_data = _remote_join(
         shard, remote_repo, "iterate_data",
-    )
-
-    # Per-shard batch size: one batch ≈ one round of all workers
-    # running ~one game. Minimizes tail-of-iter waste.
-    batch_size = (
-        shard.n_workers if shard.n_workers and shard.n_workers > 0
-        else batch_size_default
     )
 
     # 1. Code sync.
@@ -1303,7 +1291,7 @@ def run_shard_remote(
     # 4. The actual pull-mode invocation. Blocks until queue drains.
     print(
         f"[shard {shard.display_label}] pull-mode self-play on "
-        f"{shard.host} (batch_size={batch_size})...",
+        f"{shard.host}...",
         file=sys.stderr,
     )
     try:
@@ -1312,7 +1300,6 @@ def run_shard_remote(
             queue_url=queue_url,
             run_id=run_id,
             iter_total_games=iter_total_games,
-            batch_size=batch_size,
             stamp=stamp,
         )
         # No timeout — the run loops indefinitely waiting on master.

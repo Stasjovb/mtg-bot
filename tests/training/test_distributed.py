@@ -382,27 +382,18 @@ def test_run_distributed_two_local_shards_both_produce_npz(
             run_id_prefix="iter_001_self_play_v1",
             total_games=4,
             queue_url=queue_url,
-            batch_size_default=2,
         )
     finally:
         server.shutdown()
-    # 4 total games drained across two pools — at minimum one batch
-    # per shard (pool empties on the same response that hits the end
-    # of the queue), but could be more if one shard wins the race.
-    assert len(paths) >= 1
+    # 4 games drained, two shards each writing one npz per game
+    # (flush_every = n_workers = 1). Total npzs = 4 regardless of
+    # how the shards split the work.
+    assert len(paths) == 4
     assert all(p.is_file() for p in paths)
-    # Each batch's filename includes its shard label; both A and B
-    # should appear at least once unless one shard happened to do
-    # zero rounds (very unlikely with batch_size=2 on a 4-game queue
-    # split between two equally-fast workers, but possible). The
-    # weaker assertion is that every produced file's parent dir is
-    # the configured output_dir.
     assert all(
         p.parent == out_dir.resolve() or p.parent == out_dir
         for p in paths
     )
-    # Every shard writes a JSONL event log alongside the progress
-    # JSON. Both shards' logs must exist and end with shard_end.
     for shard_label in ("A", "B"):
         events_path = (
             progress_dir
@@ -412,21 +403,11 @@ def test_run_distributed_two_local_shards_both_produce_npz(
         lines = events_path.read_text(encoding="utf-8").splitlines()
         assert lines, f"events log {events_path.name} is empty"
         events = [json.loads(line) for line in lines]
-        # First event is shard_start with machine metadata.
         assert events[0]["event"] == "shard_start"
         assert "machine" in events[0]
         assert "host" in events[0]["machine"]
-        # Final event is shard_end with status.
         assert events[-1]["event"] == "shard_end"
         assert events[-1]["status"] == "completed"
-        # At least one game_end + one batch_saved must be present
-        # (the shard ran games, not just polled an empty queue).
-        kinds = {e["event"] for e in events}
-        # If this shard happened to lose every batch race, only
-        # shard_start + batch_take(empty) + shard_end are present.
-        # Both shards producing zero batches is impossible (4 games,
-        # two workers, batch_size=2): at least one must run a batch.
-    # Across both shards combined, we should see per-game events.
     all_events: list[dict] = []
     for shard_label in ("A", "B"):
         events_path = (
@@ -440,11 +421,18 @@ def test_run_distributed_two_local_shards_both_produce_npz(
         f"expected 4 game_end events across both shards, got "
         f"{len(game_ends)}"
     )
-    # game_end carries per-game wall time + n_samples.
     for ge in game_ends:
         assert "wall_s" in ge and ge["wall_s"] > 0
         assert "n_samples" in ge
         assert "game_idx" in ge
+    # Per-worker take produces game_take events: 4 successful takes
+    # + 2 empty takes (one per shard hitting the end of the queue).
+    game_takes = [e for e in all_events if e["event"] == "game_take"]
+    assert len(game_takes) == 6
+    successful = [t for t in game_takes if t["game_idx"] is not None]
+    assert len(successful) == 4
+    for t in game_takes:
+        assert t["in_flight"] == 0  # n_workers=1: refill at empty
 
 
 def test_spec_to_dict_normalizes_windows_paths_to_forward_slashes():
@@ -561,7 +549,6 @@ def test_remote_pull_command_posix_round_trips_b64_args():
         queue_url="http://master:5099",
         run_id="iter_001_self_play_v6",
         iter_total_games=500,
-        batch_size=8,
         stamp="20260503T230000Z",
     )
     # POSIX cd + venv invocation.
@@ -572,7 +559,7 @@ def test_remote_pull_command_posix_round_trips_b64_args():
     assert "--queue-url=http://master:5099" in cmd
     assert "--run-id=iter_001_self_play_v6" in cmd
     assert "--iter-total-games=500" in cmd
-    assert "--batch-size=8" in cmd
+    assert "--batch-size" not in cmd  # worker-driven pulls drop batching
     assert "--stamp=20260503T230000Z" in cmd
     # Both encoded args present and decode back to the originals.
     for name, expected in (("--spec-b64=", spec), ("--shard-b64=", shard)):
@@ -698,13 +685,14 @@ def test_remote_pull_command_windows_uses_cmd_syntax():
         shard, spec,
         queue_url="http://master:5099",
         run_id="iter_001", iter_total_games=500,
-        batch_size=8, stamp="20260503T000000Z",
+        stamp="20260503T000000Z",
     )
     assert 'cd /d "C:\\Users\\g\\Projects\\mtg-bot"' in cmd
     assert "set PYTHONPATH=src" in cmd
     assert '".venv-py313\\Scripts\\python.exe"' in cmd
     assert "--mode=pull" in cmd
     assert "--queue-url=http://master:5099" in cmd
+    assert "--batch-size" not in cmd
 
 
 # ---- weight-push step ------------------------------------------
@@ -784,7 +772,6 @@ def _capture_run_shard_remote_calls(
         queue_url="http://master:5099",
         run_id="iter_002_self_play_v7",
         iter_total_games=500,
-        batch_size_default=4,
         progress_dir=tmp_path / "training_progress",
         output_dir=tmp_path / "iterate_data",
         run_id_prefix="iter_002_self_play_v7",
@@ -1023,7 +1010,6 @@ def test_weight_push_failure_propagates(monkeypatch, tmp_path):
             queue_url="http://master:5099",
             run_id="iter_002",
             iter_total_games=10,
-            batch_size_default=2,
             progress_dir=tmp_path / "training_progress",
             output_dir=tmp_path / "iterate_data",
             run_id_prefix="iter_002",

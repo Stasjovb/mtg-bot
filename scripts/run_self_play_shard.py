@@ -2,11 +2,10 @@
 
 Used by the master's local shard AND every remote shard, invoked
 via ``ssh ... run_self_play_shard.py --mode=pull ...``. Decodes the
-base64-encoded ``SelfPlayJobSpec`` + ``ShardConfig``, then loops
-fetching batches from the master's ``/queue/take`` endpoint, running
-each batch through a warm ``mp.Pool``, and writing per-batch npzs
-into ``--output-dir``. Returns the list of all per-batch paths via
-stdout JSON when done.
+base64-encoded ``SelfPlayJobSpec`` + ``ShardConfig``, then runs
+``run_shard_pull`` which feeds a pool of N workers from the master's
+``/queue/take`` endpoint one game at a time. Returns the list of
+emitted npz paths via stdout JSON when done.
 
 CLI surface kept small: this script decodes args, calls
 ``run_shard_pull``, and exits. Everything else lives in
@@ -79,14 +78,6 @@ def main(argv=None) -> None:
         ),
     )
     parser.add_argument(
-        "--batch-size", type=int, required=True,
-        help=(
-            "Games per ``/queue/take`` request. Sized to roughly "
-            "fill the local mp.Pool once (i.e. ~ N_workers) so "
-            "tail-of-iter waste is at most one game's wall."
-        ),
-    )
-    parser.add_argument(
         "--stamp", required=True,
         help="UTC timestamp string (filename-safe).",
     )
@@ -101,16 +92,16 @@ def main(argv=None) -> None:
     spec = SelfPlayJobSpec.from_dict(_decode_b64_json(args.spec_b64))
     shard = ShardConfig.from_dict(_decode_b64_json(args.shard_b64))
 
+    import os
     n_workers = (
         shard.n_workers if shard.n_workers and shard.n_workers > 0
-        else max(1, args.batch_size)
+        else max(1, (os.cpu_count() or 1) - 2)
     )
 
     npz_paths = run_shard_pull(
         spec,
         queue_url=args.queue_url,
         run_id=args.run_id,
-        batch_size=args.batch_size,
         n_workers=n_workers,
         output_dir=args.output_dir,
         label=shard.display_label,
