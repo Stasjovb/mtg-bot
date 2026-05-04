@@ -35,6 +35,7 @@
   .kind-tag.data_gen { color: #93c5fd; border-color: #1e3a5f; }
   .kind-tag.training { color: #c4b5fd; border-color: #4c1d95; }
   .kind-tag.eval { color: #67e8f9; border-color: #155e75; }
+  .kind-tag.bench { color: #fcd34d; border-color: #78350f; }
   .badge { font-size: 0.72rem; padding: 3px 10px; border-radius: 999px; font-weight: 600;
     letter-spacing: 0.04em; text-transform: uppercase; }
   .badge.running { background: #1e3a5f; color: #93c5fd; animation: pulse 1.6s infinite; }
@@ -58,6 +59,7 @@
   }
   .progress-fill.training { background: var(--purple); }
   .progress-fill.eval { background: #06b6d4; }
+  .progress-fill.bench { background: #f59e0b; }
   .progress-fill.completed { background: var(--green); }
   .progress-fill.failed { background: var(--red); }
   .progress-pct { font-family: monospace; font-size: 0.9rem; min-width: 64px; text-align: right; }
@@ -98,6 +100,33 @@
   .replays-footer .replays-list a:hover { color: var(--blue);
     text-decoration: underline; }
   .replays-footer .replays-empty { font-style: italic; }
+
+  /* Bench cards: per-pairing table + verdict pills. */
+  .pairings-wrap { margin-top: 14px; overflow-x: auto; }
+  .pairings { width: 100%; border-collapse: collapse;
+    font-size: 0.82rem; }
+  .pairings th, .pairings td { padding: 6px 8px;
+    border-bottom: 1px solid var(--border); text-align: left;
+    vertical-align: middle; }
+  .pairings th { font-size: 0.65rem; color: var(--muted);
+    text-transform: uppercase; letter-spacing: 0.08em;
+    font-weight: 600; }
+  .pairings td.num { font-family: monospace; }
+  .pairings td.match-up { font-family: monospace;
+    white-space: nowrap; }
+  .verdict { font-size: 0.65rem; padding: 2px 8px;
+    border-radius: 4px; font-weight: 600; letter-spacing: 0.04em;
+    text-transform: uppercase; }
+  .verdict.stronger { background: #14532d; color: #4ade80; }
+  .verdict.weaker { background: #4c1d1d; color: #fca5a5; }
+  .verdict.comparable { background: #2a2d3a; color: var(--muted); }
+  .verdict.pending { background: #1e3a5f; color: #93c5fd;
+    animation: pulse 1.6s infinite; }
+  .pairing-status { font-size: 0.65rem; color: var(--muted);
+    text-transform: uppercase; letter-spacing: 0.06em; }
+  .pairing-status.running { color: #93c5fd; }
+  .pairing-status.completed { color: #4ade80; }
+  .pairing-status.failed { color: #fca5a5; }
 </style>
 </head>
 <body>
@@ -186,6 +215,14 @@ function pctOfEval(run) {
   return Math.min(100, 100 * (run.n_games_done || 0) / total);
 }
 
+function pctOfBench(run) {
+  // n_games_total is the sum of n_games across all started pairings;
+  // n_games_done is the per-pairing in-flight tally aggregated.
+  const total = run.n_games_total || 0;
+  if (!total) return 0;
+  return Math.min(100, 100 * (run.n_games_done || 0) / total);
+}
+
 function kindOf(run) {
   // Older trainer runs (pre-instrumentation) wrote no `kind`. Treat
   // them as training so the UI doesn't drop them.
@@ -253,6 +290,37 @@ function ensureCard(run) {
         <div class="stat"><div class="stat-label">Games / hr</div><div class="stat-value" data-field="gph">—</div></div>
       </div>
       <div class="replays-footer" data-field="replays"></div>`;
+  } else if (k === 'bench') {
+    el.innerHTML = `
+      <div class="run-header">
+        <span class="kind-tag bench">bench</span>
+        <span class="run-id" data-field="run-id"></span>
+        <span class="badge" data-field="status"></span>
+        <span class="run-meta" data-field="meta"></span>
+      </div>
+      <div class="progress-row">
+        <div class="progress-bar"><div class="progress-fill bench" data-field="fill" style="width:0%"></div></div>
+        <div class="progress-pct" data-field="pct">0%</div>
+      </div>
+      <div class="stats">
+        <div class="stat"><div class="stat-label">Games</div><div class="stat-value" data-field="games">—</div></div>
+        <div class="stat"><div class="stat-label">Pairings</div><div class="stat-value" data-field="pairings-count">—</div></div>
+        <div class="stat"><div class="stat-label">Per pairing</div><div class="stat-value" data-field="ngames">—</div></div>
+        <div class="stat"><div class="stat-label">Budget</div><div class="stat-value" data-field="budget">—</div></div>
+        <div class="stat"><div class="stat-label">Belief m</div><div class="stat-value" data-field="belief-m">—</div></div>
+        <div class="stat"><div class="stat-label">Device</div><div class="stat-value" data-field="device">—</div></div>
+        <div class="stat"><div class="stat-label">Weights</div><div class="stat-value" data-field="weights">—</div></div>
+        <div class="stat"><div class="stat-label">Elapsed</div><div class="stat-value" data-field="elapsed">—</div></div>
+      </div>
+      <div class="pairings-wrap"><table class="pairings"><thead><tr>
+        <th>match-up</th>
+        <th>games</th>
+        <th>win rate</th>
+        <th>Wilson 95% CI</th>
+        <th>verdict</th>
+        <th>elapsed</th>
+        <th>status</th>
+      </tr></thead><tbody data-field="pairings"></tbody></table></div>`;
   } else {
     el.innerHTML = `
       <div class="run-header">
@@ -300,14 +368,17 @@ function fillRun(el, run) {
   const k = kindOf(run);
   const pct = k === 'data_gen' ? pctOfDataGen(run)
     : k === 'eval' ? pctOfEval(run)
+    : k === 'bench' ? pctOfBench(run)
     : pctOfTraining(run);
   const fill = el.querySelector('[data-field="fill"]');
   fill.style.width = pct.toFixed(1) + '%';
-  // Progress fill color: blue for data_gen, cyan for eval, purple
-  // for training, green when completed, red when failed.
+  // Progress fill color: blue for data_gen, cyan for eval, amber
+  // for bench, purple for training; green when completed,
+  // red when failed.
   let fillCls = 'progress-fill';
   if (k === 'training') fillCls += ' training';
   if (k === 'eval') fillCls += ' eval';
+  if (k === 'bench') fillCls += ' bench';
   if (status === 'completed' || status === 'failed') fillCls += ' ' + status;
   fill.className = fillCls;
   el.querySelector('[data-field="pct"]').textContent = pct.toFixed(1) + '%';
@@ -345,6 +416,8 @@ function fillRun(el, run) {
       status === 'running' ? fmtSeconds(run.estimated_remaining_seconds) : '—';
     el.querySelector('[data-field="gph"]').textContent = fmtNum(run.games_per_hour, 0);
     renderReplaysFooter(el, run);
+  } else if (k === 'bench') {
+    fillBenchCard(el, run);
   } else {
     const totalLoss = (run.train_losses || []).slice(-1)[0];
     const valueLoss = (run.train_value_losses || []).slice(-1)[0];
@@ -448,6 +521,94 @@ function renderReplaysFooter(el, run) {
   }
 }
 
+function fmtPct(v) {
+  if (v == null || !isFinite(v)) return '—';
+  return (v * 100).toFixed(1) + '%';
+}
+
+function fmtBudget(budgets) {
+  // Bench JSON stores budgets as a list of [samples, inner_nodes]
+  // pairs. Render each as "K:N" so the UI matches the CLI flag
+  // operators recognize.
+  if (!Array.isArray(budgets) || !budgets.length) return '—';
+  return budgets.map(b => {
+    if (!Array.isArray(b) || b.length < 2) return '—';
+    return b[0] + ':' + b[1];
+  }).join(', ');
+}
+
+function fillBenchCard(el, run) {
+  // Run-level summary stats.
+  const total = run.n_games_total || 0;
+  const done = run.n_games_done || 0;
+  el.querySelector('[data-field="games"]').textContent =
+    done + ' / ' + total;
+  const pairings = Array.isArray(run.pairings) ? run.pairings : [];
+  el.querySelector('[data-field="pairings-count"]').textContent =
+    String(pairings.length);
+  el.querySelector('[data-field="ngames"]').textContent =
+    String(run.n_games_per_pairing || '—');
+  el.querySelector('[data-field="budget"]').textContent =
+    fmtBudget(run.budgets);
+  el.querySelector('[data-field="belief-m"]').textContent =
+    run.include_belief
+      ? String(run.belief_m_candidates || '—')
+      : 'off';
+  el.querySelector('[data-field="device"]').textContent =
+    esc(run.nn_device || '—');
+  // Show only the basename of the weights path so the stat cell
+  // doesn't overflow on long absolute paths.
+  const weights = run.weights_path || '';
+  const tail = weights.split(/[\\/]/).slice(-2).join('/') || '—';
+  const wEl = el.querySelector('[data-field="weights"]');
+  wEl.textContent = tail;
+  wEl.title = weights;
+  el.querySelector('[data-field="elapsed"]').textContent =
+    fmtSeconds(run.elapsed_seconds);
+
+  // Per-pairing rows.
+  const tbody = el.querySelector('[data-field="pairings"]');
+  if (!pairings.length) {
+    tbody.innerHTML = `<tr><td colspan="7"
+      style="color:var(--muted);font-style:italic;
+      text-align:center;padding:14px">
+      no pairings yet — first match starts shortly</td></tr>`;
+    return;
+  }
+  const rows = pairings.map(p => {
+    const decided = p.n_decided || 0;
+    const totalGames = p.n_games || 0;
+    const wins = (p.challenger_wins || 0)
+      + ' / ' + (p.defender_wins || 0)
+      + ((p.draws || 0) ? (' / ' + p.draws + 'd') : '')
+      + ((p.crashed || 0) ? (' / ' + p.crashed + 'x') : '');
+    const ci = (decided > 0)
+      ? '[' + fmtPct(p.ci_low) + ', ' + fmtPct(p.ci_high) + ']'
+      : '—';
+    const verdict = p.verdict || 'pending';
+    const matchUp = esc(p.challenger || '?')
+      + ' vs ' + esc(p.defender || '?');
+    const pStatus = p.status || 'running';
+    return '<tr>'
+      + '<td class="match-up">' + matchUp + '</td>'
+      + '<td class="num">' + (p.n_games_done || 0)
+        + ' / ' + totalGames
+        + ' <span style="color:var(--muted)">(' + wins + ')</span>'
+        + '</td>'
+      + '<td class="num">' + esc(fmtPct(p.win_rate)) + '</td>'
+      + '<td class="num">' + esc(ci) + '</td>'
+      + '<td><span class="verdict ' + esc(verdict) + '">'
+        + esc(verdict) + '</span></td>'
+      + '<td class="num">' + esc(fmtSeconds(p.elapsed_seconds))
+        + '</td>'
+      + '<td><span class="pairing-status '
+        + esc(statusClass(pStatus)) + '">'
+        + esc(pStatus) + '</span></td>'
+      + '</tr>';
+  }).join('');
+  tbody.innerHTML = rows;
+}
+
 function drawTrainingChart(el, run) {
   const canvas = el.querySelector('[data-field="chart"]');
   if (!canvas) return;
@@ -514,7 +675,7 @@ function renderActive(active) {
   }
   if (!active.length) {
     // Clean any stale active card scaffolds before showing the empty state.
-    activeEl.innerHTML = '<div class="empty">No active runs. Kick one off with <code>scripts/generate_training_data.py</code>, <code>scripts/train_nn.py</code>, or <code>scripts/evaluate_nn.py</code>.</div>';
+    activeEl.innerHTML = '<div class="empty">No active runs. Kick one off with <code>scripts/generate_training_data.py</code>, <code>scripts/train_nn.py</code>, <code>scripts/evaluate_nn.py</code>, or <code>scripts/bench_ismcts_vs_pimc_strength.py</code>.</div>';
     return;
   }
   // Reuse existing card elements where run_id matches; remove any
@@ -550,7 +711,10 @@ function renderOlder(runs) {
   }
   const rows = runs.map(r => {
     const k = kindOf(r);
-    const label = k === 'data_gen' ? 'data gen' : k === 'eval' ? 'eval' : 'training';
+    const label = k === 'data_gen' ? 'data gen'
+      : k === 'eval' ? 'eval'
+      : k === 'bench' ? 'bench'
+      : 'training';
     if (k === 'data_gen') {
       return `<tr>
         <td><span class="run-id">${esc(r.run_id)}</span></td>
@@ -573,6 +737,35 @@ function renderOlder(runs) {
         <td class="num">${(r.n_games_done || 0)} / ${(r.n_games_total || 0)}</td>
         <td class="num">${esc(winRatePct)}</td>
         <td class="num">${(r.wins_new||0)}/${(r.wins_old||0)}/${(r.draws||0)}</td>
+        <td class="num">${esc(fmtSeconds(r.elapsed_seconds))}</td>
+        <td class="num">${esc(r.started_at || '')}</td>
+      </tr>`;
+    }
+    if (k === 'bench') {
+      // Aggregate verdict counts across pairings; "loss/samples"
+      // column repurposed to show "<n_pairings> pairings", and
+      // the "winrate" column shows the verdict mix
+      // (e.g. "1 stronger / 2 comparable").
+      const pairings = Array.isArray(r.pairings) ? r.pairings : [];
+      const verdicts = { stronger: 0, comparable: 0,
+        weaker: 0, pending: 0 };
+      for (const p of pairings) {
+        const v = p.verdict || 'pending';
+        verdicts[v] = (verdicts[v] || 0) + 1;
+      }
+      const verdictParts = [];
+      for (const v of ['stronger', 'comparable', 'weaker', 'pending']) {
+        if (verdicts[v]) verdictParts.push(verdicts[v] + ' ' + v);
+      }
+      const verdictCell = verdictParts.length
+        ? verdictParts.join(' / ') : '—';
+      return `<tr>
+        <td><span class="run-id">${esc(r.run_id)}</span></td>
+        <td><span class="kind-tag ${k}">${label}</span></td>
+        <td><span class="badge ${statusClass(r.status)}">${esc(r.status || 'unknown')}</span></td>
+        <td class="num">${(r.n_games_done || 0)} / ${(r.n_games_total || 0)}</td>
+        <td class="num">${pairings.length} pairings</td>
+        <td class="num">${esc(verdictCell)}</td>
         <td class="num">${esc(fmtSeconds(r.elapsed_seconds))}</td>
         <td class="num">${esc(r.started_at || '')}</td>
       </tr>`;

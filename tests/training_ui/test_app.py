@@ -237,3 +237,142 @@ def test_run_id_falls_back_to_filename_stem(client):
     res = c.get("/api/runs")
     runs = res.get_json()["runs"]
     assert any(r["run_id"] == "v_orphan" for r in runs)
+
+
+# --- Bench cards ----------------------------------------------------
+
+
+def test_index_html_contains_bench_card_scaffolding():
+    """Sanity that the bench card scaffolding (kind-tag.bench class,
+    fillBenchCard JS function, pairings table CSS) is rendered into
+    the page so the front-end can instantiate bench cards without a
+    further fetch.
+    """
+    from pathlib import Path as _P
+    from mtg_bot.training_ui.app import create_app
+
+    app = create_app(_P("training_progress"))
+    test_client = app.test_client()
+    body = test_client.get("/").get_data(as_text=True)
+    # CSS class for the bench tag.
+    assert ".kind-tag.bench" in body
+    # Per-pairing verdict pill class.
+    assert ".verdict.stronger" in body
+    # JS render path.
+    assert "fillBenchCard" in body
+    assert "pctOfBench" in body
+
+
+def _bench_payload(run_id: str, **overrides) -> dict:
+    payload = {
+        "run_id": run_id,
+        "kind": "bench",
+        "status": "running",
+        "started_at": "2026-05-04T12:00:00+00:00",
+        "ended_at": None,
+        "weights_path": "trained_weights/v10/weights.pt",
+        "n_games_per_pairing": 8,
+        "n_games_total": 16,
+        "n_games_done": 5,
+        "budgets": [[4, 200]],
+        "include_belief": True,
+        "belief_m_candidates": 8,
+        "nn_device": "cpu",
+        "elapsed_seconds": 480.2,
+        "command": "scripts/bench_ismcts_vs_pimc_strength.py",
+        "git_commit": "deadbeef",
+        "notes": "",
+        "pairings": [
+            {
+                "challenger": "ISMCTS-uniform",
+                "defender": "PIMC",
+                "n_games": 8,
+                "samples": 4,
+                "inner_nodes": 200,
+                "total_iterations": 800,
+                "started_at": "2026-05-04T12:00:00+00:00",
+                "ended_at": None,
+                "n_games_done": 5,
+                "n_decided": 5,
+                "challenger_wins": 4,
+                "defender_wins": 1,
+                "draws": 0,
+                "crashed": 0,
+                "elapsed_seconds": 480.2,
+                "win_rate": 0.8,
+                "ci_low": 0.376,
+                "ci_high": 0.964,
+                "verdict": "comparable",
+                "status": "running",
+            },
+        ],
+    }
+    payload.update(overrides)
+    return payload
+
+
+def test_bench_run_appears_in_api_runs(client):
+    c, progress_dir = client
+    (progress_dir / "bench_v10.json").write_text(
+        json.dumps(_bench_payload("bench_v10")),
+        encoding="utf-8",
+    )
+    res = c.get("/api/runs")
+    assert res.status_code == 200
+    runs = res.get_json()["runs"]
+    bench_runs = [r for r in runs if r.get("kind") == "bench"]
+    assert len(bench_runs) == 1
+    r = bench_runs[0]
+    # All bench-shaped fields the UI renderer reads must round-trip.
+    for key in (
+        "run_id", "kind", "status", "started_at", "weights_path",
+        "n_games_per_pairing", "n_games_total", "n_games_done",
+        "budgets", "include_belief", "belief_m_candidates",
+        "nn_device", "elapsed_seconds", "pairings",
+    ):
+        assert key in r, f"missing {key!r} in {r!r}"
+    assert len(r["pairings"]) == 1
+    p = r["pairings"][0]
+    for key in (
+        "challenger", "defender", "n_games", "n_games_done",
+        "n_decided", "challenger_wins", "defender_wins", "draws",
+        "crashed", "win_rate", "ci_low", "ci_high", "verdict",
+        "status", "samples", "inner_nodes", "total_iterations",
+    ):
+        assert key in p, f"missing pairing field {key!r}"
+
+
+def test_bench_run_detail_endpoint(client):
+    c, progress_dir = client
+    (progress_dir / "bench_v10.json").write_text(
+        json.dumps(_bench_payload("bench_v10")),
+        encoding="utf-8",
+    )
+    res = c.get("/api/runs/bench_v10")
+    assert res.status_code == 200
+    body = res.get_json()
+    assert body["kind"] == "bench"
+    assert body["pairings"][0]["verdict"] == "comparable"
+
+
+def test_bench_completed_run_listed_with_others(client):
+    """A completed bench run sits alongside training / eval / data-gen
+    runs in /api/runs, sorted by started_at desc."""
+    c, progress_dir = client
+    _write_run(progress_dir, "v3_train",
+               started_at="2026-05-04T11:00:00+00:00",
+               status="completed")
+    bench = _bench_payload(
+        "bench_v10", status="completed",
+        started_at="2026-05-04T12:00:00+00:00",
+        ended_at="2026-05-04T12:30:00+00:00",
+    )
+    bench["pairings"][0]["status"] = "completed"
+    bench["pairings"][0]["verdict"] = "stronger"
+    (progress_dir / "bench_v10.json").write_text(
+        json.dumps(bench), encoding="utf-8",
+    )
+    res = c.get("/api/runs")
+    runs = res.get_json()["runs"]
+    # bench_v10 sorts above v3_train (later started_at).
+    assert [r["run_id"] for r in runs] == ["bench_v10", "v3_train"]
