@@ -545,6 +545,7 @@ def _eval_match(
         deck_pool=deck_pool,
         replay_config=replay_config,
         hang_dump_dir=hang_dump_dir,
+        alternate_seats=True,
     )
     elapsed = time.perf_counter() - started
     return (

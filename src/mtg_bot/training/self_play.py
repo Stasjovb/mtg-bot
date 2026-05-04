@@ -151,6 +151,7 @@ def run_match_parallel(
     deck_pool: Optional[list[Deck]] = None,
     replay_config: Optional[ReplayCaptureConfig] = None,
     hang_dump_dir: Optional[str] = None,
+    alternate_seats: bool = False,
 ) -> MatchStats:
     """Same contract as ``run_match`` but distributes games across a
     ``multiprocessing.Pool``.
@@ -197,9 +198,17 @@ def run_match_parallel(
          replay_config, hang_dump_dir)
         for i in range(n_games)
     ]
+    packed_worker = (
+        _play_one_match_game_alternating_packed if alternate_seats
+        else _play_one_match_game_packed
+    )
+    indexed_worker = (
+        _play_one_match_game_alternating_indexed if alternate_seats
+        else _play_one_match_game_indexed
+    )
     if progress is None:
         with mp.Pool(processes=n_workers) as pool:
-            results = pool.map(_play_one_match_game_packed, args_list)
+            results = pool.map(packed_worker, args_list)
         # ``_play_one_match_game_packed`` returns a ``(None, 0)``
         # sentinel for any worker-side crash. We re-pair each result
         # with its game_idx (preserved by pool.map's input ordering)
@@ -222,7 +231,7 @@ def run_match_parallel(
     try:
         with mp.Pool(processes=n_workers) as pool:
             for game_idx, result in pool.imap_unordered(
-                _play_one_match_game_indexed, args_list, chunksize=1,
+                indexed_worker, args_list, chunksize=1,
             ):
                 indexed.append((game_idx, result))
                 winner, decisions = result
@@ -333,6 +342,47 @@ def _play_one_match_game_indexed(
         )
         traceback.print_exc(file=sys.stderr)
         return game_idx, (None, 0)
+
+
+def _play_one_match_game_alternating_packed(
+    args: tuple,
+) -> tuple[Optional[PlayerID], int]:
+    """``pool.map`` counterpart to
+    ``_play_one_match_game_alternating_indexed`` — same swap-on-odd-
+    game_idx logic, no game_idx tagging in the return."""
+    game_idx = args[0]
+    if game_idx % 2 == 0:
+        return _play_one_match_game_packed(args)
+    swapped = (args[0], args[2], args[1], *args[3:])
+    winner, decisions = _play_one_match_game_packed(swapped)
+    remapped = None if winner is None else 1 - winner
+    return remapped, decisions
+
+
+def _play_one_match_game_alternating_indexed(
+    args: tuple,
+) -> tuple[int, tuple[Optional[PlayerID], int]]:
+    """Like ``_play_one_match_game_indexed`` but neutralizes seat-
+    order bias by playing odd-indexed games with the two factories
+    swapped. The returned winner is remapped so seat 0 in the result
+    always means "the original ``p0_factory`` won" — the caller
+    aggregates wins[0]/wins[1] without needing to know about the
+    swap.
+
+    Use case: eval-gate matches where seat 0 has a structural engine
+    advantage. v6-vs-v6 (identical NN) showed wins[0] = 77% on a
+    500-game match without alternation; with alternation it should
+    converge to 50% within stat noise.
+    """
+    game_idx = args[0]
+    if game_idx % 2 == 0:
+        return _play_one_match_game_indexed(args)
+    swapped = (args[0], args[2], args[1], *args[3:])
+    game_idx_returned, (winner, decisions) = (
+        _play_one_match_game_indexed(swapped)
+    )
+    remapped = None if winner is None else 1 - winner
+    return game_idx_returned, (remapped, decisions)
 
 
 def _play_one_match_game(

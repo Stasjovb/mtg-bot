@@ -248,6 +248,91 @@ def test_run_match_parallel_with_replay_config_captures_subset(
     assert any("idx0002" in n for n in names)
 
 
+def test_alternating_worker_swaps_factories_on_odd_game_idx():
+    """Direct unit test of ``_play_one_match_game_alternating_indexed``.
+    Builds a stub worker that records which factory ran in seat 0
+    so the test can verify the swap happens on odd ``game_idx`` and
+    NOT on even ``game_idx``."""
+    from mtg_bot.training.self_play import (
+        _play_one_match_game_alternating_indexed,
+    )
+
+    # Sentinel "factories" — we don't care that they're not real
+    # factories because we monkeypatch the inner playing function.
+    f_new = ("FACTORY", "new")
+    f_old = ("FACTORY", "old")
+
+    captured: list[tuple] = []
+
+    def fake_play(game_idx, p0, p1, *_args):
+        captured.append((game_idx, p0, p1))
+        # Always return p0 wins so we can verify the remap.
+        return 0, 5  # winner=0, decisions=5
+
+    import mtg_bot.training.self_play as sp
+    real = sp._play_one_match_game
+    sp._play_one_match_game = fake_play
+    try:
+        # Even game_idx — no swap.
+        gid, (winner, decisions) = (
+            _play_one_match_game_alternating_indexed(
+                (0, f_new, f_old, 0, 100, False, None, None, None, None),
+            )
+        )
+        assert captured[-1] == (0, f_new, f_old)
+        # winner=0 returned from engine = p0 won = "new" won.
+        assert winner == 0
+
+        # Odd game_idx — swap.
+        gid, (winner, decisions) = (
+            _play_one_match_game_alternating_indexed(
+                (1, f_new, f_old, 0, 100, False, None, None, None, None),
+            )
+        )
+        # Inner call saw f_old as p0 (swapped).
+        assert captured[-1] == (1, f_old, f_new)
+        # Engine returned winner=0 (its p0 = swapped = old won). Caller-
+        # facing winner remaps to 1 (the original p0 = new lost).
+        assert winner == 1
+    finally:
+        sp._play_one_match_game = real
+
+
+def test_run_match_parallel_alternate_seats_neutralizes_p0_bias():
+    """End-to-end: with two RandomChoice factories that have a strong
+    seat-0 bias (RandomChoice always picks the first legal action,
+    which favors the player on the move), ``alternate_seats=True``
+    pulls wins[0] back toward 50% relative to the no-alternation
+    baseline."""
+    # 16 games is enough to see the bias swing without making the
+    # test slow. RandomChoice gives wins[0] ~70%+ on tiny synthetic
+    # decks; the alternating variant collapses that toward parity.
+    no_alt = run_match_parallel(
+        p0_factory=random_choice_factory,
+        p1_factory=random_choice_factory,
+        n_games=16, base_seed=0, n_workers=2,
+    )
+    alt = run_match_parallel(
+        p0_factory=random_choice_factory,
+        p1_factory=random_choice_factory,
+        n_games=16, base_seed=0, n_workers=2,
+        alternate_seats=True,
+    )
+    # Both runs played 16 games with the same seeds, so individual
+    # game outcomes are reproducible. We expect the alternating run
+    # to have a more even split — wins[0] in the alt run should be
+    # closer to wins[1] than in the no-alt run.
+    no_alt_skew = abs(no_alt.wins[0] - no_alt.wins[1])
+    alt_skew = abs(alt.wins[0] - alt.wins[1])
+    assert alt_skew <= no_alt_skew, (
+        f"alternation didn't reduce seat skew: "
+        f"no_alt={no_alt.wins} alt={alt.wins}"
+    )
+    # And the totals still add up to n_games regardless.
+    assert no_alt.wins[0] + no_alt.wins[1] + no_alt.draws == 16
+    assert alt.wins[0] + alt.wins[1] + alt.draws == 16
+
+
 def test_run_match_parallel_progress_finalizes_on_zero_games(tmp_path: Path):
     """Empty-pool short-circuit still finalizes the tracker — the
     UI shouldn't see a stale 'running' file after a 0-game eval."""

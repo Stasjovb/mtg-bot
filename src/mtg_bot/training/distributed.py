@@ -879,19 +879,22 @@ def _play_one_parallel_game_timed(args: tuple) -> tuple:
 
 
 def _play_one_match_game_timed(args: tuple) -> tuple:
-    """Wrap ``_play_one_match_game_indexed`` with ``perf_counter`` so
-    the eval shard gets per-game wall time. Top-level so the worker
-    pickles across the spawn boundary.
+    """Eval shard worker. Wraps the seat-alternating match player
+    with ``perf_counter`` so we get per-game wall time. The
+    alternating variant swaps factories on odd ``game_idx`` and
+    remaps the returned winner — neutralizes the engine's seat-0
+    advantage so wins[0] across a match means "the original
+    ``p0_factory`` won" without a structural bias.
 
     Returns ``(game_idx, (winner, decisions), wall_seconds)``.
     """
     import time as _time
 
     from mtg_bot.training.self_play import (  # type: ignore
-        _play_one_match_game_indexed,
+        _play_one_match_game_alternating_indexed,
     )
     t0 = _time.perf_counter()
-    game_idx, result = _play_one_match_game_indexed(args)
+    game_idx, result = _play_one_match_game_alternating_indexed(args)
     return game_idx, result, _time.perf_counter() - t0
 
 
