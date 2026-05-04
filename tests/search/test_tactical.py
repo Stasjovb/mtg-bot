@@ -150,6 +150,121 @@ def test_choose_mana_color_picks_first_option():
     assert agent.choose_mana_color(s, 0, ["B", "G"]) == "B"
 
 
+def test_choose_modes_returns_first_only():
+    agent = DefaultTacticalAgent()
+    s = _state()
+    assert agent.choose_modes(s, 0, ["a", "b", "c"]) == [0]
+
+
+def test_choose_permanent_to_tap_picks_first():
+    agent = DefaultTacticalAgent()
+    s = _state()
+    assert agent.choose_permanent_to_tap(s, 0, [10, 11, 12]) == 10
+
+
+def test_choose_permanent_to_tap_none_when_empty():
+    agent = DefaultTacticalAgent()
+    s = _state()
+    assert agent.choose_permanent_to_tap(s, 0, []) is None
+
+
+def test_choose_legend_keep_picks_first():
+    agent = DefaultTacticalAgent()
+    s = _state()
+    assert agent.choose_legend_keep(s, 0, [10, 11, 12]) == 10
+
+
+def test_choose_replacement_order_returns_identity_ordering():
+    """CR 616.1 default: identity ordering matches dispatcher order."""
+    agent = DefaultTacticalAgent()
+    s = _state()
+    candidates = ["fake_repl_0", "fake_repl_1", "fake_repl_2"]
+    assert agent.choose_replacement_order(
+        candidates, s, affected_player_id=0,
+    ) == (0, 1, 2)
+
+
+def test_choose_replacement_order_empty_candidates():
+    agent = DefaultTacticalAgent()
+    s = _state()
+    assert agent.choose_replacement_order(
+        [], s, affected_player_id=0,
+    ) == ()
+
+
+def test_choose_mulligan_delegates_to_heuristic():
+    """Default tactical mulligan uses the extreme-only heuristic."""
+    agent = DefaultTacticalAgent()
+    s = _state()
+    # Empty hand is degenerate; the heuristic returns False at the
+    # max mull count anyway. We just need to drive the call to cover
+    # the import-and-return path.
+    result = agent.choose_mulligan(s, 0, hand=[], mulls_taken=0)
+    assert isinstance(result, bool)
+
+
+def test_choose_bottom_delegates_to_heuristic():
+    """Default tactical bottom uses the heuristic-bottom-choice util."""
+    agent = DefaultTacticalAgent()
+    s = _state()
+
+    # Build a tiny hand: heuristic_bottom_choice consumes objects with
+    # ``.printing.card_types`` and ``.printing.mana_cost.total``. We
+    # build minimal stand-ins; mana_cost.total drives the bottom
+    # ordering for non-lands.
+    class _Cost:
+        def __init__(self, total):
+            self._total = total
+
+        def total(self):
+            return self._total
+
+    class _Printing:
+        def __init__(self, card_types, mv, is_land):
+            self.card_types = card_types
+            self.mana_cost = _Cost(mv)
+            self.is_land = is_land
+
+    class _Card:
+        def __init__(self, oid, card_types, mv, is_land=False):
+            self.id = oid
+            self.printing = _Printing(card_types, mv, is_land)
+
+    hand = [
+        _Card(1, ("Creature",), 2),
+        _Card(2, ("Creature",), 5),  # highest MV non-land — bottoms first
+        _Card(3, ("Land",), 0, is_land=True),
+    ]
+    bottom = agent.choose_bottom(s, 0, hand=hand, n=1)
+    assert bottom == [2]
+
+
+def test_choose_convoke_creatures_returns_all_candidates():
+    """Default tactical convokes every candidate in input order."""
+    agent = DefaultTacticalAgent()
+    s = _state()
+    candidates = [10, 20, 30]
+    assert agent.choose_convoke_creatures(
+        s, 0, candidates,
+        remaining_generic=2, remaining_colored=[],
+    ) == [10, 20, 30]
+
+
+def test_choose_sac_for_mana_returns_ids_in_input_order():
+    """Default tactical sac-for-mana hands every candidate id back."""
+    agent = DefaultTacticalAgent()
+    s = _state()
+    candidates = [
+        (10, (("R", 1),)),
+        (11, (("C", 1),)),
+        (12, (("any", 1),)),
+    ]
+    assert agent.choose_sac_for_mana(
+        s, 0, candidates,
+        remaining_generic=2, remaining_colored=[],
+    ) == [10, 11, 12]
+
+
 def test_defaults_cover_every_base_agent_method():
     """Every abstract method on Agent has a concrete override in
     DefaultTacticalAgent — otherwise mid-resolution callbacks would
