@@ -44,7 +44,7 @@ class Formula(ABC):
 
     @abstractmethod
     def value(self, state: "GameState", controller_id: int) -> int:
-        ...
+        ...  # pragma: no cover
 
 
 @dataclass(frozen=True)
