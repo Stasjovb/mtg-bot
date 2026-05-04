@@ -207,6 +207,17 @@ class ISMCTS(SearchStrategy):
         self.c_puct = c_puct
         self.batch_size = batch_size
         self.puct = puct
+        # Per-search deferred-prior queue. Re-initialized at the top
+        # of every ``choose_with_visits`` call (and reset in its
+        # ``finally``); also initialized here so direct callers of
+        # ``_search_serial`` / ``_search_batched`` (e.g. test spies
+        # that drive the search machinery without going through
+        # ``choose_with_visits``) don't trip on a missing attribute.
+        # See ``_stamp_prior`` for the per-search semantics.
+        self._pending_prior_states: list[
+            tuple[_Node, MtgGameStateAdapter]
+        ] = []
+        self._pending_prior_set: set[int] = set()
 
     # ------------------------------------------------------------------
     # SearchStrategy surface
@@ -300,17 +311,39 @@ class ISMCTS(SearchStrategy):
         tree: dict[bytes, _Node] = {root_key: _Node(root_key)}
         root = tree[root_key]
 
+        # Per-search queue of parents whose policy logits haven't been
+        # fetched yet. Strategy A (see module docstring + commit msg):
+        # ``_stamp_prior`` enqueues new (parent, pre_apply_sub) tuples
+        # here when ``parent._policy_logits is None`` instead of
+        # invoking ``evaluate_logits`` synchronously, and the batched
+        # search loop flushes the queue alongside the leaf batch in a
+        # single ``batch_evaluate_logits`` call. Parents already in the
+        # queue (re-encountered before the next flush) are deduped via
+        # ``_pending_prior_set``. Stored as a list so order is stable
+        # for the batched call. Initialized fresh per search so cached
+        # state can't leak between ``choose_with_visits`` invocations.
+        self._pending_prior_states: list[
+            tuple[_Node, MtgGameStateAdapter]
+        ] = []
+        self._pending_prior_set: set[int] = set()
+
         budget = self.budget_factory()
         budget.start()
-        if self.batch_size == 1:
-            self._search_serial(
-                state, player_id, root, tree, budget,
-            )
-        else:
-            self._search_batched(
-                state, player_id, root, tree, budget,
-                self.batch_size,
-            )
+        try:
+            if self.batch_size == 1:
+                self._search_serial(
+                    state, player_id, root, tree, budget,
+                )
+            else:
+                self._search_batched(
+                    state, player_id, root, tree, budget,
+                    self.batch_size,
+                )
+        finally:
+            # Drop the queue references so the cloned adapters don't
+            # outlive the search call.
+            self._pending_prior_states = []
+            self._pending_prior_set = set()
 
         return {d: c.visits for d, c in root.children.items()}
 
@@ -331,9 +364,45 @@ class ISMCTS(SearchStrategy):
             leaf, path = self._select_and_expand(
                 sub, root, tree, viewer,
             )
+            # Flush any deferred prior-stamp requests created during
+            # selection. With ``batch_size=1`` there is no leaf-batch
+            # to amortize against, so we issue a single call per
+            # iteration when the queue is non-empty. This still
+            # batches when one iteration enqueues multiple parents
+            # (rare under serial selection, common under root-touch),
+            # and keeps the serial path's behavior aligned with the
+            # batched path: ``_stamp_prior`` defers uniformly, the
+            # search loop flushes uniformly.
+            self._flush_pending_priors(viewer)
             value = self._evaluate_leaf(leaf, sub, viewer)
             self._backprop(path, value)
             budget.consume_node()
+
+    def _flush_pending_priors(self, viewer: PlayerID) -> None:
+        """Issue ``batch_evaluate_logits`` on every queued (parent,
+        pre_apply_sub) tuple, cache the resulting logits on each
+        parent, and re-stamp existing children's priors. Used by
+        the serial search path; the batched path inlines the same
+        work into the leaf-batch flush for a single fused network
+        call.
+        """
+        if not self._pending_prior_states:
+            return
+        pending = self._pending_prior_states
+        self._pending_prior_states = []
+        self._pending_prior_set = set()
+        states = [s for _, s in pending]
+        pairs = self.evaluator.batch_evaluate_logits(states, viewer)
+        for (parent, pre_apply_sub), (_value, logits) in zip(
+            pending, pairs,
+        ):
+            if parent._policy_logits is None:
+                parent._policy_logits = logits
+            for child_decision, child_node in parent.children.items():
+                self._stamp_child_prior(
+                    parent, child_node, child_decision,
+                    pre_apply_sub, viewer,
+                )
 
     def _search_batched(
         self,
@@ -353,6 +422,19 @@ class ISMCTS(SearchStrategy):
         its OWN per-iteration determinization. The leaves are
         independent ``MtgGameStateAdapter`` instances, which is what
         ``batch_evaluate`` expects — same as in ``MCTS``.
+
+        Prior-batching wrinkle: when ``puct=True`` the leaf batch
+        also carries any parents queued by ``_stamp_prior`` for
+        deferred policy-prior stamping. The queue
+        (``_pending_prior_states``) is filled during selection
+        whenever ``_stamp_prior`` hits a parent with no cached
+        logits; the flush below runs ``batch_evaluate_logits`` on
+        ``leaves + parents`` as a single concatenated batch, then
+        distributes leaf logits to leaves and parent logits to
+        parents — re-stamping every already-expanded child of each
+        flushed parent so children whose ``prior=0`` got recorded
+        on first expansion are upgraded to the real prior in time
+        for the next batch.
         """
         while not budget.exhausted():
             pending: list[tuple[_Node, list[_Node], MtgGameStateAdapter]] = []
@@ -375,22 +457,65 @@ class ISMCTS(SearchStrategy):
             for path, value in terminal_results:
                 self._backprop(path, value)
 
-            if pending:
-                states = [s for _, _, s in pending]
+            # Snapshot the deferred-prior queue and reset it BEFORE
+            # we issue the network call, so any side effects of the
+            # backprop / re-stamp paths can't accidentally feed back
+            # into this flush.
+            pending_priors = self._pending_prior_states
+            self._pending_prior_states = []
+            self._pending_prior_set = set()
+
+            if pending or pending_priors:
                 if self.puct:
+                    leaf_states = [s for _, _, s in pending]
+                    parent_states = [s for _, s in pending_priors]
+                    # Concatenated batch: leaves first, parents
+                    # second. The split index lets us slice the
+                    # response into leaf logits and parent logits
+                    # without zipping past the boundary.
+                    combined = leaf_states + parent_states
                     pairs = self.evaluator.batch_evaluate_logits(
-                        states, viewer,
+                        combined, viewer,
                     )
+                    leaf_pairs = pairs[: len(leaf_states)]
+                    parent_pairs = pairs[len(leaf_states):]
                     for (leaf, path, _), (value, logits) in zip(
-                        pending, pairs,
+                        pending, leaf_pairs,
                     ):
                         if leaf._policy_logits is None:
                             leaf._policy_logits = logits
                         self._revert_virtual_loss(path)
                         self._backprop(path, value)
+                    # Distribute parent logits and re-stamp all
+                    # already-expanded children's priors. The value
+                    # head's output for parents is unused (parents
+                    # are not leaves of any path here).
+                    for (parent, pre_apply_sub), (_value, logits) in zip(
+                        pending_priors, parent_pairs,
+                    ):
+                        if parent._policy_logits is None:
+                            parent._policy_logits = logits
+                        # Re-stamp every expanded child — this is
+                        # cheap (np softmax on a length-
+                        # ACTION_VOCAB_SIZE row, plus one ae.encode
+                        # per child) and reverses the prior=0
+                        # placeholder set during deferred expansion.
+                        for child_decision, child_node in (
+                            parent.children.items()
+                        ):
+                            self._stamp_child_prior(
+                                parent, child_node, child_decision,
+                                pre_apply_sub, viewer,
+                            )
                 else:
+                    # Non-PUCT path: only leaves go through
+                    # ``batch_evaluate``; the prior-defer queue is
+                    # never populated (``_stamp_prior`` is gated on
+                    # ``self.puct`` at the call site), so
+                    # ``pending_priors`` is empty here by construction.
+                    leaf_states = [s for _, _, s in pending]
                     values = self.evaluator.batch_evaluate(
-                        states, viewer,
+                        leaf_states, viewer,
                     )
                     for (_, path, _), value in zip(pending, values):
                         self._revert_virtual_loss(path)
@@ -588,21 +713,83 @@ class ISMCTS(SearchStrategy):
         ``pre_apply_sub`` is the adapter BEFORE ``decision`` was
         applied — needed because ``action_encoding.encode`` is
         positional and reads zone indices from the pre-apply state.
-        It's also where the network gets queried on first touch: when
-        ``parent._policy_logits`` is None we call
-        ``evaluator.evaluate_logits`` on the pre-apply adapter and
-        cache the raw logits on the parent. Subsequent expansions
-        from this parent re-use the cached logits + the (possibly
-        wider) current union mask, never re-querying the network.
 
-        Encoding errors are tolerated (same as MCTS): an unencodable
-        decision leaves ``prior=0.0``.
+        First-touch (``parent._policy_logits is None``) is *deferred*
+        rather than synchronous: instead of calling
+        ``evaluate_logits`` here on a single state — which dominated
+        ISMCTS wall time per the 2026-05-04 profile, ~74% of
+        ``choose_with_visits`` was spent in 213 single-state forwards
+        of the 1024×1024×512 dual-head MLP — we leave ``child.prior``
+        at its 0.0 default, queue ``(parent, pre_apply_sub)`` on
+        ``_pending_prior_states``, and let the next batched flush in
+        ``_search_batched`` populate ``parent._policy_logits`` via
+        ``batch_evaluate_logits`` alongside the leaf batch. The flush
+        path then re-stamps every existing child from the freshly-
+        cached logits, so a child whose prior was 0 on its first
+        expansion gets its real prior on the next flush boundary.
+
+        PUCT exploration with ``prior=0.0`` collapses the explore
+        bonus to zero (``c * 0 * sqrt(A) / (1+N) == 0``); on a fresh
+        unvisited child with no Q yet, the score is 0 — same as every
+        other unvisited child whose prior hasn't landed yet. The
+        ``max`` tiebreak is deterministic (insertion order in
+        ``children``), so the first unvisited child in legality
+        order wins selection on those iterations. That's the
+        Monte Carlo noise the deferred-stamp path trades for the
+        ~50× wall-time win — acceptable because the profile shows
+        only ~213 first-touches across 800 iterations and even those
+        iterations continue to update the tree once the real prior
+        lands.
+
+        On subsequent expansions from a parent whose logits are
+        already cached, this method works exactly as before: encode
+        the decision, mask + softmax via ``_apply_policy_mask``,
+        and write the slot probability to ``child.prior``. Encoding
+        errors leave ``prior=0.0``.
+
+        Subsequent expansions from this parent re-use the cached
+        logits + the (possibly wider) current union mask, never
+        re-querying the network.
         """
         if parent._policy_logits is None:
-            _, logits = self.evaluator.evaluate_logits(
-                pre_apply_sub, viewer,
-            )
-            parent._policy_logits = logits
+            # Deferred path: queue this parent for the next batched
+            # flush. Dedupe by parent identity so a parent that
+            # spawns multiple new children before a flush only goes
+            # on the queue once. The bound state is the very first
+            # ``pre_apply_sub`` we saw at this parent — it's the
+            # right state to query the network on (the parent's
+            # info-set state); subsequent ``pre_apply_sub`` clones
+            # at the same parent are observably equivalent for the
+            # network's purposes (same info-set, same features).
+            parent_id = id(parent)
+            if parent_id not in self._pending_prior_set:
+                self._pending_prior_set.add(parent_id)
+                self._pending_prior_states.append(
+                    (parent, pre_apply_sub),
+                )
+            return
+        # Logits already cached on the parent — stamp inline as
+        # before. This is the steady-state hot path (called on
+        # every newly-expanded child at every iteration after the
+        # parent's first touch was flushed).
+        self._stamp_child_prior(
+            parent, child, decision, pre_apply_sub, viewer,
+        )
+
+    def _stamp_child_prior(
+        self,
+        parent: _Node,
+        child: _Node,
+        decision: Decision,
+        pre_apply_sub: MtgGameStateAdapter,
+        viewer: PlayerID,
+    ) -> None:
+        """Inner helper: with ``parent._policy_logits`` populated,
+        encode ``decision`` against ``pre_apply_sub`` and write the
+        masked-softmax slot probability to ``child.prior``. Shared by
+        ``_stamp_prior`` (steady-state) and the deferred-flush path
+        in ``_search_batched`` (re-stamp after logits arrive).
+        """
         from mtg_bot.training import action_encoding as ae
         try:
             slot = ae.encode(
@@ -612,11 +799,6 @@ class ISMCTS(SearchStrategy):
             return
         except Exception:
             return
-        # The child's action is legal in *this* iteration's
-        # determinization (we just expanded it from a legal_now
-        # entry), so by construction the parent's union mask now
-        # has slot True. Compute the masked-softmax distribution and
-        # read off this slot.
         distribution = _apply_policy_mask(
             parent._policy_logits, parent._union_mask,
         )
