@@ -117,6 +117,7 @@ class _NNIsmctsConfig:
     puct: bool = True
     hidden_sizes: Optional[tuple[int, ...]] = None
     use_belief_weighted: bool = False
+    belief_m_candidates: int = 64
 
     def build(self, seed: int = 0) -> SearchStrategy:
         eval_kwargs: dict[str, Any] = {
@@ -140,6 +141,7 @@ class _NNIsmctsConfig:
             )
             ismcts_kwargs["determinize_fn"] = BeliefWeightedDeterminizer(
                 opponent_policy_evaluator=evaluator,
+                m_candidates=self.belief_m_candidates,
             )
         return ISMCTS(**ismcts_kwargs)
 
@@ -392,6 +394,7 @@ def run_one_budget(
     metadata_hidden_sizes: Optional[tuple[int, ...]],
     wallclock_seeds: list[int],
     include_belief: bool = False,
+    belief_m_candidates: int = 64,
 ) -> _BudgetResult:
     """Play matched-budget A/B match(es) and report stats.
 
@@ -438,6 +441,7 @@ def run_one_budget(
             puct=metadata_with_policy,
             hidden_sizes=metadata_hidden_sizes,
             use_belief_weighted=True,
+            belief_m_candidates=belief_m_candidates,
         )
 
     pairwise_results: list[_PairwiseResult] = []
@@ -628,6 +632,15 @@ def main(argv: Optional[list[str]] = None) -> None:
             "Phase 6's belief-weighted determinizer."
         ),
     )
+    parser.add_argument(
+        "--belief-m-candidates", type=int, default=64,
+        help=(
+            "Particle count for the belief-weighted determinizer. "
+            "Higher = better posterior approximation, linearly higher "
+            "cold-call cost. Default 64. Only used when "
+            "--include-belief is set."
+        ),
+    )
     args = parser.parse_args(argv)
 
     if not args.weights_path.is_file():
@@ -672,6 +685,7 @@ def main(argv: Optional[list[str]] = None) -> None:
             metadata_hidden_sizes=metadata_hidden_sizes,
             wallclock_seeds=list(args.wallclock_seeds),
             include_belief=args.include_belief,
+            belief_m_candidates=args.belief_m_candidates,
         )
         results.append(result)
     overall_elapsed = time.perf_counter() - overall_started
@@ -695,6 +709,7 @@ def main(argv: Optional[list[str]] = None) -> None:
         "nn_batch_size": args.nn_batch_size,
         "workers": args.workers,
         "include_belief": args.include_belief,
+        "belief_m_candidates": args.belief_m_candidates,
         "matched_budget_formula": (
             "ismcts.total_iterations = pimc.samples * pimc.inner_nodes"
         ),
