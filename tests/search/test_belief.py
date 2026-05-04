@@ -297,16 +297,19 @@ def test_likelihood_scoring_concentrates_on_consistent_hand():
     # returned current-state hand (different hidden pools = different
     # permutation results).
     source_state = log[0].state
-    sampler = BeliefWeightedDeterminizer(
-        opponent_policy_evaluator=favored_evaluator,
-        played_history=log[:1],  # just the first opponent moment
-        m_candidates=64,
-    )
-    # Run many samples; count the frequency of the target name
-    # appearing in the opponent's hand of the resampled state.
+    # Fresh sampler per trial: the production posterior cache
+    # (constant played_history → fixed particles across iterations)
+    # is correct for ISMCTS but collapses all 80 trials onto one
+    # particle set when the sampler is reused. This test wants
+    # independent samples; create a new sampler each trial.
     posterior_with_target = 0
     n_trials = 80
     for trial in range(n_trials):
+        sampler = BeliefWeightedDeterminizer(
+            opponent_policy_evaluator=favored_evaluator,
+            played_history=log[:1],
+            m_candidates=64,
+        )
         s = source_state.clone()
         sampler(s, viewer, random.Random(1000 + trial), in_place=True)
         names = {c.printing.name for c in s.players[opponent].hand}
@@ -316,12 +319,12 @@ def test_likelihood_scoring_concentrates_on_consistent_hand():
     # Uniform-prior baseline: same setup but no history. The target
     # printing's frequency should be the prior probability.
     prior_with_target = 0
-    sampler_prior = BeliefWeightedDeterminizer(
-        opponent_policy_evaluator=favored_evaluator,
-        played_history=[],
-        m_candidates=64,
-    )
     for trial in range(n_trials):
+        sampler_prior = BeliefWeightedDeterminizer(
+            opponent_policy_evaluator=favored_evaluator,
+            played_history=[],
+            m_candidates=64,
+        )
         s = source_state.clone()
         sampler_prior(
             s, viewer, random.Random(1000 + trial), in_place=True,

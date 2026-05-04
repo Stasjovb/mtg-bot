@@ -132,6 +132,7 @@ class BeliefWeightedDeterminizer:
         cache_max_size: int = 4096,
         log_prob_floor: float = _LOG_PROB_FLOOR,
         ess_warn_threshold: float = 1.0,
+        nn_batch_size: int = 256,
     ) -> None:
         """Construct the sampler.
 
@@ -167,6 +168,15 @@ class BeliefWeightedDeterminizer:
         below which the particle filter is flagged as degenerate;
         ``last_ess`` is set on each ``__call__`` and a value
         ``< ess_warn_threshold`` is informational for now.
+
+        ``nn_batch_size`` is the chunk size for the batched
+        ``batch_evaluate_logits`` call. The sampler collects all
+        cache-miss states across particles+moments, dedupes by cache
+        key, then evaluates them in one or more chunks of this size.
+        Default 256 — large enough to amortize Python<->torch
+        overhead on CPU and to fill GPU SMs without overcommitting
+        memory at the typical (m_candidates=64) * (history=25) =
+        1600-state working set.
         """
         if m_candidates < 1:
             raise ValueError(
@@ -175,6 +185,10 @@ class BeliefWeightedDeterminizer:
         if cache_max_size < 1:
             raise ValueError(
                 f"cache_max_size must be >= 1, got {cache_max_size!r}"
+            )
+        if nn_batch_size < 1:
+            raise ValueError(
+                f"nn_batch_size must be >= 1, got {nn_batch_size!r}"
             )
         if not callable(getattr(
             opponent_policy_evaluator, "evaluate_logits", None,
@@ -192,6 +206,7 @@ class BeliefWeightedDeterminizer:
         self.cache_max_size = cache_max_size
         self.log_prob_floor = log_prob_floor
         self.ess_warn_threshold = ess_warn_threshold
+        self.nn_batch_size = nn_batch_size
         # FIFO cache keyed on (opponent_hand_printings_tuple,
         # history_index) → (legal_mask, logits). Uses an OrderedDict
         # so popitem(last=False) gives FIFO eviction, no extra
@@ -202,6 +217,21 @@ class BeliefWeightedDeterminizer:
         # Diagnostic counters reset on every ``__call__``.
         self.last_ess: float = 0.0
         self.last_evaluator_calls: int = 0
+        # Posterior memoization. The played history is invariant for
+        # the duration of a single ISMCTS ``choose()`` call (the game
+        # loop only appends to it BETWEEN moves via ``observe_action``,
+        # never during search). So once we've drawn m_candidates seeds
+        # and computed their log-weights, we can reuse both across
+        # every iteration of that choose() — collapsing what would be
+        # ``total_iters`` separate scoring passes into a single one
+        # per game-move. Cached as (viewer_id, history_length) →
+        # (seeds_tuple, log_weights). Cache invalidates the moment a
+        # new moment lands on ``self.played_history``.
+        self._posterior_cache: Optional[
+            tuple[
+                PlayerID, int, tuple[int, ...], np.ndarray, float,
+            ]
+        ] = None
 
     # ------------------------------------------------------------------
     # Determinizer-callback surface
@@ -243,20 +273,41 @@ class BeliefWeightedDeterminizer:
                 engine_state, viewer_id, rng, in_place=in_place,
             )
 
-        # Each particle is identified by an independent seed drawn
-        # from ``rng``. Drawing seeds (rather than passing ``rng``
-        # directly to each determinization) keeps the particles
-        # independently reproducible and lets the resampling step
-        # pick a particle by replaying its seed.
-        seeds = [rng.randrange(1 << 62) for _ in range(self.m_candidates)]
-        log_weights = np.empty(self.m_candidates, dtype=np.float64)
-        for i, seed in enumerate(seeds):
-            log_weights[i] = self._score_particle(
-                engine_state, viewer_id, seed,
+        # Reuse the previous (seeds, log_weights, ess) if the played
+        # history hasn't grown since they were computed and the
+        # viewer is the same. Within a single ISMCTS choose() call
+        # the history is constant — caching collapses the
+        # m_candidates-particle scoring pass from once per iteration
+        # to once per choose().
+        history_len = len(self.played_history)
+        cached = self._posterior_cache
+        if (
+            cached is not None
+            and cached[0] == viewer_id
+            and cached[1] == history_len
+        ):
+            seeds_tuple, log_weights, cached_ess = (
+                cached[2], cached[3], cached[4],
             )
-
-        normalized = _normalize_log_weights(log_weights)
-        self.last_ess = _effective_sample_size(normalized)
+            seeds = list(seeds_tuple)
+            self.last_ess = cached_ess
+            normalized = _normalize_log_weights(log_weights)
+        else:
+            # Each particle is identified by an independent seed drawn
+            # from ``rng``. Drawing seeds (rather than passing ``rng``
+            # directly to each determinization) keeps the particles
+            # independently reproducible and lets the resampling step
+            # pick a particle by replaying its seed.
+            seeds = [
+                rng.randrange(1 << 62) for _ in range(self.m_candidates)
+            ]
+            log_weights = self._score_particles_batched(viewer_id, seeds)
+            normalized = _normalize_log_weights(log_weights)
+            self.last_ess = _effective_sample_size(normalized)
+            self._posterior_cache = (
+                viewer_id, history_len, tuple(seeds), log_weights,
+                self.last_ess,
+            )
 
         # Sample one particle index from the categorical(normalized).
         # ``rng.random()`` is the user-supplied stream; using it
@@ -278,6 +329,164 @@ class BeliefWeightedDeterminizer:
     # Scoring
     # ------------------------------------------------------------------
 
+    def _score_particles_batched(
+        self,
+        viewer_id: PlayerID,
+        seeds: Sequence[int],
+    ) -> np.ndarray:
+        """Score every particle in ``seeds`` against the played
+        history in one batched pass.
+
+        Returns a length-``len(seeds)`` log-likelihood array — the
+        same shape and semantics as calling ``_score_particle`` once
+        per seed, but with the NN evaluations batched.
+
+        Algorithm (three phases, all opponent moments only):
+
+        1. **Collect**: for each (particle, h_idx) pair where
+           ``moment.actor != viewer_id``, clone the historical state,
+           re-determinize under the particle's seed (mixed with
+           ``h_idx``, matching the per-particle code path), and
+           record a work item. Compute the cache key from the
+           reconstructed hand + library names, and decide which work
+           items map to cache misses.
+
+        2. **Evaluate**: batch the cache-miss states in chunks of
+           ``self.nn_batch_size`` and call
+           ``opponent_policy_evaluator.batch_evaluate_logits`` once
+           per chunk. Compute legal masks per state. Stash
+           ``(mask, logits)`` into the cache.
+
+        3. **Score**: walk the work items, look up the (mask,
+           logits) from the cache, encode ``moment.decision`` to a
+           slot, and accumulate ``_slot_log_prob`` into the
+           per-particle weight.
+
+        The fast equivalence with the per-particle path is exact
+        when ``nn_batch_size`` is large enough to fit all misses in
+        one chunk. With chunking, the only behavioral difference is
+        that cache fill happens in batches, not per-call — visible
+        as ``last_evaluator_calls`` reporting batch count rather
+        than per-state count (each batched call counts as 1 here).
+        Tests pin the math, not the call-count granularity.
+        """
+        from mtg_bot.training import action_encoding as ae
+
+        # Phase 1: collect work items. Each entry is a tuple of
+        # (particle_idx, cache_key, reconstructed_engine_state,
+        # opponent_id, decision). Cache_key is None when we can
+        # short-circuit the work item (e.g. encoding will fail; we
+        # use a sentinel "skip and floor" mark instead).
+        work_items: list[
+            tuple[int, Any, EngineGameState, PlayerID, Decision]
+        ] = []
+        miss_states: list[MtgGameStateAdapter] = []
+        miss_keys: list[Any] = []
+        miss_engine_states: list[EngineGameState] = []
+        miss_opponents: list[PlayerID] = []
+        seen_in_misses: dict[Any, int] = {}
+
+        for p_idx, seed in enumerate(seeds):
+            for h_idx, moment in enumerate(self.played_history):
+                if moment.actor == viewer_id:
+                    continue
+                opponent = moment.actor
+                # Mix scheme matches the per-particle reference path
+                # (h_idx=0 uses raw seed; later h_idx mixes via the
+                # golden-ratio constant) so this batched version is
+                # bit-equivalent to the per-particle one for the
+                # same inputs.
+                if h_idx == 0:
+                    moment_rng = random.Random(seed)
+                else:
+                    mix = (
+                        seed * 0x9E3779B97F4A7C15 + h_idx
+                    ) & ((1 << 63) - 1)
+                    moment_rng = random.Random(mix)
+                reconstructed = moment.state.clone()
+                _uniform_determinize(
+                    reconstructed, viewer_id, moment_rng,
+                    in_place=True,
+                )
+                hand_key = _opponent_hand_key(reconstructed, opponent)
+                cache_key = (hand_key, h_idx)
+                work_items.append(
+                    (p_idx, cache_key, reconstructed, opponent,
+                     moment.decision),
+                )
+                # Queue a fresh evaluation for any cache key we
+                # haven't already cached and haven't already queued
+                # within this call.
+                if (
+                    cache_key not in self._cache
+                    and cache_key not in seen_in_misses
+                ):
+                    seen_in_misses[cache_key] = len(miss_states)
+                    miss_states.append(
+                        MtgGameStateAdapter(reconstructed),
+                    )
+                    miss_engine_states.append(reconstructed)
+                    miss_keys.append(cache_key)
+                    miss_opponents.append(opponent)
+
+        # Phase 2: batched NN evaluation. ``batch_evaluate_logits``
+        # takes a single ``player_id`` per call. In a 2-player game
+        # all opponent moments share one opponent (the non-viewer);
+        # we partition by ``opponent_id`` defensively for
+        # robustness against multi-opponent extensions.
+        if miss_states:
+            by_opp: dict[PlayerID, list[int]] = {}
+            for k, opp in enumerate(miss_opponents):
+                by_opp.setdefault(opp, []).append(k)
+            for opp, indices in by_opp.items():
+                # Chunk to avoid memory blow-up on huge histories.
+                for chunk_start in range(
+                    0, len(indices), self.nn_batch_size,
+                ):
+                    chunk = indices[
+                        chunk_start: chunk_start + self.nn_batch_size
+                    ]
+                    states_chunk = [miss_states[i] for i in chunk]
+                    results = self._batch_or_loop(states_chunk, opp)
+                    self.last_evaluator_calls += 1
+                    for k, (_, logits) in zip(chunk, results):
+                        engine = miss_engine_states[k]
+                        mask = ae.legal_action_mask(engine, opp)
+                        self._cache[miss_keys[k]] = (mask, logits)
+                    self._evict_if_oversize()
+
+        # Phase 3: per-work-item scoring. Walk the items in original
+        # order so per-particle accumulation is deterministic.
+        log_weights = np.zeros(len(seeds), dtype=np.float64)
+        for p_idx, cache_key, reconstructed, opponent, decision in (
+            work_items
+        ):
+            cached = self._cache.get(cache_key)
+            if cached is None:
+                # Should not happen — phase 2 just populated every
+                # missing key. Defensive: floor and continue.
+                log_weights[p_idx] += self.log_prob_floor
+                continue
+            mask, logits = cached
+            # LRU bump (cheap).
+            self._cache.move_to_end(cache_key)
+            try:
+                slot = ae.encode(decision, reconstructed, opponent)
+            except ae.EncodingOverflowError:
+                # Action slot unreachable in this candidate.
+                log_weights[p_idx] += self.log_prob_floor
+                continue
+            except Exception:
+                # Encoding error (e.g. zone mismatch under candidate
+                # determinization). Same handling.
+                log_weights[p_idx] += self.log_prob_floor
+                continue
+            log_p = _slot_log_prob(
+                logits, mask, slot, self.log_prob_floor,
+            )
+            log_weights[p_idx] += log_p
+        return log_weights
+
     def _score_particle(
         self,
         engine_state: EngineGameState,
@@ -286,105 +495,48 @@ class BeliefWeightedDeterminizer:
     ) -> float:
         """Return ``log P(played_history | particle)``.
 
+        Thin compatibility wrapper around
+        ``_score_particles_batched`` for the single-particle case;
+        kept for tests that probe the per-particle math directly.
+
         For each historical priority moment whose actor is NOT
-        ``viewer_id`` (i.e. an opponent priority moment), clone the
-        historical state, re-determinize it under the particle's seed,
-        evaluate the opponent NN's policy at the reconstructed state,
-        and add ``log P(action_taken)``. Sum across moments.
+        ``viewer_id``, clones the historical state, re-determinizes
+        it under the particle's seed, evaluates the opponent NN's
+        policy, and adds ``log P(action_taken)``. Sum across moments.
 
-        Viewer-action moments are SKIPPED — the played_history log
-        captures every priority moment in the game (game loops can't
-        easily filter at append time without knowing the search
-        viewer), and only opponent moments contribute likelihood
-        signal under the Bayesian setup. The viewer's own actions are
-        deterministic from the viewer's perspective (the viewer chose
-        them with full information about their own hand) so
-        P(viewer_action | candidate_opponent_hand) is independent of
-        the candidate and contributes nothing to the posterior weight.
-
-        Cache hits skip the evaluator call. Cache key is the opponent
-        hand's printing tuple at the reconstructed state plus the
-        history index; same hand at the same moment → same NN call →
-        same policy distribution.
+        Viewer-action moments are SKIPPED — only opponent moments
+        contribute likelihood signal: viewer-action probability is
+        independent of the candidate hand.
         """
-        from mtg_bot.training import action_encoding as ae
+        # ``engine_state`` is intentionally unused — the historical
+        # moment states (``moment.state``) carry the per-moment
+        # context; the live current state is only used by ``__call__``
+        # for the final resample step.
+        _ = engine_state
+        log_weights = self._score_particles_batched(viewer_id, [seed])
+        return float(log_weights[0])
 
-        log_likelihood = 0.0
-        for h_idx, moment in enumerate(self.played_history):
-            if moment.actor == viewer_id:
-                continue
-            opponent = moment.actor
-            # Per-moment determinization. The first moment (h_idx=0)
-            # uses the particle's seed unmixed so its permutation is
-            # the same one applied at the current state in
-            # ``__call__``'s resample step — that's what makes the
-            # particle a coherent "hidden hand hypothesis" rather
-            # than just an RNG identifier. Subsequent moments mix in
-            # ``h_idx`` so the same particle yields distinct (but
-            # reproducible) permutations across moments; without the
-            # mix every moment's permutation would be identical
-            # modulo zone shape and the per-moment likelihoods would
-            # be redundant.
-            if h_idx == 0:
-                moment_rng = random.Random(seed)
-            else:
-                mix = (
-                    seed * 0x9E3779B97F4A7C15 + h_idx
-                ) & ((1 << 63) - 1)
-                moment_rng = random.Random(mix)
-            reconstructed = moment.state.clone()
-            _uniform_determinize(
-                reconstructed, viewer_id, moment_rng, in_place=True,
-            )
-            hand_key = _opponent_hand_key(reconstructed, opponent)
-            cache_key = (hand_key, h_idx)
-            cached = self._cache.get(cache_key)
-            if cached is None:
-                # ``evaluate_logits`` calls ``state.is_terminal()`` on
-                # the input — that's an adapter method, so wrap the
-                # raw engine state in an adapter before passing.
-                value, logits = (
-                    self.opponent_policy_evaluator.evaluate_logits(
-                        MtgGameStateAdapter(reconstructed), opponent,
-                    )
-                )
-                # ``value`` is unused for the policy likelihood;
-                # ``logits`` is the raw policy head.
-                _ = value
-                mask = ae.legal_action_mask(reconstructed, opponent)
-                self._cache[cache_key] = (mask, logits)
-                self._evict_if_oversize()
-                self.last_evaluator_calls += 1
-            else:
-                mask, logits = cached
-                # Re-touch for FIFO-vs-LRU hybrid: an entry just
-                # accessed gets bumped to the end so FIFO eviction
-                # behaves like simple LRU when access patterns favor
-                # recent entries. Cheap; doesn't change correctness.
-                self._cache.move_to_end(cache_key)
-
-            try:
-                slot = ae.encode(
-                    moment.decision, reconstructed, opponent,
-                )
-            except ae.EncodingOverflowError:
-                # The action's slot is unreachable in this candidate
-                # — equivalent to zero probability under the policy
-                # (the network can't represent it). Floor the log-
-                # probability and continue.
-                log_likelihood += self.log_prob_floor
-                continue
-            except Exception:
-                # Other encoding errors (e.g. zone mismatch under
-                # candidate determinization) — same handling: floor.
-                log_likelihood += self.log_prob_floor
-                continue
-
-            log_p = _slot_log_prob(
-                logits, mask, slot, self.log_prob_floor,
-            )
-            log_likelihood += log_p
-        return log_likelihood
+    def _batch_or_loop(
+        self,
+        states: Sequence[MtgGameStateAdapter],
+        player_id: PlayerID,
+    ) -> list[tuple[float, np.ndarray]]:
+        """Call the evaluator's batched API if available; otherwise
+        fall back to a loop over per-state ``evaluate_logits``. Lets
+        the sampler interoperate with the test mocks (which only
+        implement ``evaluate_logits``) and the production
+        ``NNEvaluator`` (which has both) on the same code path.
+        """
+        batch_fn = getattr(
+            self.opponent_policy_evaluator,
+            "batch_evaluate_logits", None,
+        )
+        if callable(batch_fn):
+            return batch_fn(states, player_id)
+        return [
+            self.opponent_policy_evaluator.evaluate_logits(s, player_id)
+            for s in states
+        ]
 
     def _evict_if_oversize(self) -> None:
         while len(self._cache) > self.cache_max_size:
