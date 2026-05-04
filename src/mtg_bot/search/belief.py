@@ -134,6 +134,7 @@ class BeliefWeightedDeterminizer:
         ess_warn_threshold: float = 1.0,
         nn_batch_size: int = 256,
         min_opponent_moments: int = 3,
+        ess_resample_threshold: float = 0.5,
     ) -> None:
         """Construct the sampler.
 
@@ -188,6 +189,19 @@ class BeliefWeightedDeterminizer:
         from the prior — and skipping the m * H scoring pass cuts
         cold-call cost on early-game decisions where wallclock
         dominates. Set to 0 to disable the gate (always run belief).
+
+        ``ess_resample_threshold`` (default 0.5) controls when
+        Sequential Importance Sampling triggers a multinomial
+        resample of the particle pool: after each weight update,
+        if ``ESS < ess_resample_threshold * m_candidates`` the
+        sampler draws ``m_candidates`` new seeds with probabilities
+        proportional to current normalized weights, replaces the
+        particle pool with those new seeds, and resets all log-
+        weights to 0 (uniform prior over the replaced pool). The
+        diagnostic counter ``last_resample_count`` records the
+        cumulative resample fires across the determinizer's life.
+        Set to 0 to disable resampling (pure SIS, will degenerate
+        on long histories).
         """
         if m_candidates < 1:
             raise ValueError(
@@ -205,6 +219,11 @@ class BeliefWeightedDeterminizer:
             raise ValueError(
                 f"min_opponent_moments must be >= 0, got "
                 f"{min_opponent_moments!r}"
+            )
+        if not (0.0 <= ess_resample_threshold <= 1.0):
+            raise ValueError(
+                f"ess_resample_threshold must be in [0, 1], got "
+                f"{ess_resample_threshold!r}"
             )
         if not callable(getattr(
             opponent_policy_evaluator, "evaluate_logits", None,
@@ -224,6 +243,7 @@ class BeliefWeightedDeterminizer:
         self.ess_warn_threshold = ess_warn_threshold
         self.nn_batch_size = nn_batch_size
         self.min_opponent_moments = min_opponent_moments
+        self.ess_resample_threshold = ess_resample_threshold
         # FIFO cache keyed on (opponent_hand_printings_tuple,
         # history_index) → (legal_mask, logits). Uses an OrderedDict
         # so popitem(last=False) gives FIFO eviction, no extra
@@ -234,20 +254,24 @@ class BeliefWeightedDeterminizer:
         # Diagnostic counters reset on every ``__call__``.
         self.last_ess: float = 0.0
         self.last_evaluator_calls: int = 0
-        # Posterior memoization. The played history is invariant for
-        # the duration of a single ISMCTS ``choose()`` call (the game
-        # loop only appends to it BETWEEN moves via ``observe_action``,
-        # never during search). So once we've drawn m_candidates seeds
-        # and computed their log-weights, we can reuse both across
-        # every iteration of that choose() — collapsing what would be
-        # ``total_iters`` separate scoring passes into a single one
-        # per game-move. Cached as (viewer_id, history_length) →
-        # (seeds_tuple, log_weights). Cache invalidates the moment a
-        # new moment lands on ``self.played_history``.
-        self._posterior_cache: Optional[
-            tuple[
-                PlayerID, int, tuple[int, ...], np.ndarray, float,
-            ]
+        # Cumulative diagnostic — increments every time SIS triggers
+        # a resample. Tests + perf-monitor read this to verify the
+        # ESS-based resampler is firing under degenerate weights.
+        self.last_resample_count: int = 0
+        # Persistent particle pool (Sequential Importance Sampling).
+        # ``_particles_state`` holds (viewer_id, seeds, log_weights,
+        # scored_history_len). Across ``__call__`` invocations the
+        # pool is REUSED and its log-weights are updated
+        # INCREMENTALLY by scoring only newly-appended moments —
+        # cold-call cost goes from O(m * H_total) to O(m * Δh). The
+        # pool re-initializes when the viewer changes (rare; one
+        # determinizer per ISMCTS instance) or on the first call
+        # past the conditional-activation gate (initial scoring of
+        # all current moments). When ESS falls below the configured
+        # fraction of m_candidates the seeds are resampled
+        # multinomially with replacement and weights reset to zero.
+        self._particles_state: Optional[
+            tuple[PlayerID, tuple[int, ...], np.ndarray, int]
         ] = None
 
     # ------------------------------------------------------------------
@@ -308,41 +332,90 @@ class BeliefWeightedDeterminizer:
                     engine_state, viewer_id, rng, in_place=in_place,
                 )
 
-        # Reuse the previous (seeds, log_weights, ess) if the played
-        # history hasn't grown since they were computed and the
-        # viewer is the same. Within a single ISMCTS choose() call
-        # the history is constant — caching collapses the
-        # m_candidates-particle scoring pass from once per iteration
-        # to once per choose().
+        # Persistent particle filter (Sequential Importance Sampling).
+        # Across ``__call__`` invocations within a game we reuse the
+        # SAME m_candidates seeds and update their log-weights
+        # incrementally as the played_history grows. Cold-call cost
+        # per game-move goes from O(m * H_total) to O(m * Δh) where
+        # Δh is the number of moments appended since last call.
         history_len = len(self.played_history)
-        cached = self._posterior_cache
-        if (
-            cached is not None
-            and cached[0] == viewer_id
-            and cached[1] == history_len
-        ):
-            seeds_tuple, log_weights, cached_ess = (
-                cached[2], cached[3], cached[4],
-            )
-            seeds = list(seeds_tuple)
-            self.last_ess = cached_ess
-            normalized = _normalize_log_weights(log_weights)
-        else:
-            # Each particle is identified by an independent seed drawn
-            # from ``rng``. Drawing seeds (rather than passing ``rng``
-            # directly to each determinization) keeps the particles
-            # independently reproducible and lets the resampling step
-            # pick a particle by replaying its seed.
+        state = self._particles_state
+        if state is not None and state[0] != viewer_id:
+            # Different viewer than the pool was initialized for —
+            # scrap and start over. (Architecturally: each ISMCTS
+            # strategy owns its own determinizer, so this branch is
+            # exercised primarily by tests reusing a sampler across
+            # opponents.)
+            state = None
+            self._particles_state = None
+
+        if state is None:
+            # First scoring pass for this viewer: draw a fresh seed
+            # pool and score against ALL currently observed moments.
             seeds = [
                 rng.randrange(1 << 62) for _ in range(self.m_candidates)
             ]
-            log_weights = self._score_particles_batched(viewer_id, seeds)
-            normalized = _normalize_log_weights(log_weights)
-            self.last_ess = _effective_sample_size(normalized)
-            self._posterior_cache = (
-                viewer_id, history_len, tuple(seeds), log_weights,
-                self.last_ess,
+            log_weights = self._score_particles_batched(
+                viewer_id, seeds, h_start=0, h_end=history_len,
             )
+        else:
+            scored_viewer, seeds_tuple, log_weights, scored_len = state
+            seeds = list(seeds_tuple)
+            log_weights = log_weights.copy()
+            if history_len > scored_len:
+                # Incremental update: score only the newly-appended
+                # moments and add to existing log-weights. Pre-existing
+                # weights stay valid because log P(A_{1:T} | H) =
+                # log P(A_{1:t} | H) + log P(A_{t+1:T} | H) — the per-
+                # moment log-likelihoods are additive.
+                delta = self._score_particles_batched(
+                    viewer_id, seeds,
+                    h_start=scored_len, h_end=history_len,
+                )
+                log_weights = log_weights + delta
+            elif history_len < scored_len:
+                # History shrank — abnormal (the caller is supposed
+                # to only append). Treat as a fresh init for safety.
+                seeds = [
+                    rng.randrange(1 << 62)
+                    for _ in range(self.m_candidates)
+                ]
+                log_weights = self._score_particles_batched(
+                    viewer_id, seeds, h_start=0, h_end=history_len,
+                )
+            # else history unchanged → reuse cached log_weights.
+
+        normalized = _normalize_log_weights(log_weights)
+        self.last_ess = _effective_sample_size(normalized)
+
+        # ESS-based resampling: when weight is concentrated on a
+        # small subset of particles the effective sample size drops
+        # and SIS becomes a degenerate point estimate. Drawing
+        # m_candidates new seeds with probability proportional to
+        # current weights (and resetting log-weights to zero)
+        # restores diversity at the cost of a fresh scoring pass
+        # over the full history (the resampled seeds carry no past).
+        # We pay that cost lazily — the next __call__ that adds new
+        # moments will incrementally score them; the ALREADY-scored
+        # history is rolled into the seeds' identity by the
+        # categorical resample step.
+        if (
+            self.ess_resample_threshold > 0.0
+            and self.last_ess
+            < self.ess_resample_threshold * self.m_candidates
+            and self.m_candidates > 1
+        ):
+            seeds, log_weights = _resample_particles(
+                seeds, normalized, rng,
+            )
+            normalized = _normalize_log_weights(log_weights)
+            # Post-resample ESS == m_candidates (uniform weights).
+            self.last_ess = float(self.m_candidates)
+            self.last_resample_count += 1
+
+        self._particles_state = (
+            viewer_id, tuple(seeds), log_weights, history_len,
+        )
 
         # Sample one particle index from the categorical(normalized).
         # ``rng.random()`` is the user-supplied stream; using it
@@ -368,13 +441,22 @@ class BeliefWeightedDeterminizer:
         self,
         viewer_id: PlayerID,
         seeds: Sequence[int],
+        h_start: int = 0,
+        h_end: Optional[int] = None,
     ) -> np.ndarray:
         """Score every particle in ``seeds`` against the played
-        history in one batched pass.
+        history slice ``[h_start, h_end)`` in one batched pass.
 
         Returns a length-``len(seeds)`` log-likelihood array — the
         same shape and semantics as calling ``_score_particle`` once
-        per seed, but with the NN evaluations batched.
+        per seed, but with the NN evaluations batched. ``h_end``
+        defaults to ``len(self.played_history)``.
+
+        The slice form lets the SIS persistent-particle path score
+        only newly-appended moments per game-move. Per-moment seed
+        mixing still uses the absolute ``h_idx`` so the cache keys
+        and per-moment determinizations remain bit-equivalent to the
+        full-pass version.
 
         Algorithm (three phases, all opponent moments only):
 
@@ -407,6 +489,9 @@ class BeliefWeightedDeterminizer:
         """
         from mtg_bot.training import action_encoding as ae
 
+        if h_end is None:
+            h_end = len(self.played_history)
+
         # Phase 1: collect work items. Each entry is a tuple of
         # (particle_idx, cache_key, reconstructed_engine_state,
         # opponent_id, decision). Cache_key is None when we can
@@ -422,7 +507,8 @@ class BeliefWeightedDeterminizer:
         seen_in_misses: dict[Any, int] = {}
 
         for p_idx, seed in enumerate(seeds):
-            for h_idx, moment in enumerate(self.played_history):
+            for h_idx in range(h_start, h_end):
+                moment = self.played_history[h_idx]
                 if moment.actor == viewer_id:
                     continue
                 opponent = moment.actor
@@ -678,6 +764,37 @@ def _effective_sample_size(normalized: np.ndarray) -> float:
     return 1.0 / s
 
 
+def _resample_particles(
+    seeds: Sequence[int],
+    normalized: np.ndarray,
+    rng: random.Random,
+) -> tuple[list[int], np.ndarray]:
+    """Multinomial resample of the particle pool.
+
+    Draws ``len(seeds)`` indices from a categorical distribution
+    parameterized by ``normalized`` (with replacement) using
+    ``_categorical_draw`` and the caller's ``rng`` — keeping the
+    whole sampler reproducible under one seed. Returns ``(new_seeds,
+    fresh_log_weights)`` where ``fresh_log_weights`` is an all-zeros
+    array (uniform priors over the resampled pool, ready to receive
+    incremental updates from future moments).
+
+    Concentration of the categorical doesn't degrade resample
+    correctness — when one particle holds nearly all weight the
+    resample collapses the pool to copies of that particle's seed.
+    Subsequent incremental updates against new moments will then
+    discover differential likelihood across those copies (different
+    h_idx mixing produces different reconstructed hands per moment),
+    re-spreading the weights.
+    """
+    n = len(seeds)
+    new_seeds: list[int] = []
+    for _ in range(n):
+        idx = _categorical_draw(normalized, rng)
+        new_seeds.append(seeds[idx])
+    return new_seeds, np.zeros(n, dtype=np.float64)
+
+
 def _categorical_draw(
     probabilities: np.ndarray, rng: random.Random,
 ) -> int:
@@ -703,4 +820,5 @@ def _categorical_draw(
 __all__ = [
     "BeliefWeightedDeterminizer",
     "PriorityMoment",
+    "_resample_particles",
 ]

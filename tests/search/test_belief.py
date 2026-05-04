@@ -33,7 +33,7 @@ from mtg_bot.actions import PassPriority
 from mtg_bot.search.belief import (
     BeliefWeightedDeterminizer, PriorityMoment,
     _categorical_draw, _effective_sample_size, _normalize_log_weights,
-    _slot_log_prob,
+    _resample_particles, _slot_log_prob,
 )
 from mtg_bot.search.engine_adapter import MtgGameStateAdapter
 from mtg_bot.simulate import setup_game
@@ -936,3 +936,291 @@ def test_belief_end_to_end_with_protocol_evaluator_on_synthetic_deck():
         len(out.players[viewer].hand)
         == len(adapter.engine_state.players[viewer].hand)
     )
+
+
+# ---------- persistent particles (SIS) -------------------------------------
+
+
+def test_persistent_particles_reuse_seeds_across_calls():
+    """When played_history grows by a single moment, the sampler must
+    reuse the SAME particle seeds — only their log-weights are
+    updated. Cold-call cost goes from O(m * H_total) to O(m * Δh).
+
+    Captures the underlying invariant: the seeds tuple in
+    ``_particles_state`` is identity-stable across same-viewer calls
+    when the resample trigger doesn't fire (we set the threshold to
+    zero to suppress resampling for this test).
+    """
+    adapter = _adapter(seed=11)
+    log = _drive_to_opponent_moments(adapter, opponent=1, max_steps=30)
+    if len(log) < 4:
+        pytest.skip("need at least 4 opponent moments under seed=11")
+
+    sampler = BeliefWeightedDeterminizer(
+        opponent_policy_evaluator=_UniformPolicyEvaluator(),
+        played_history=log[:1],
+        m_candidates=8,
+        min_opponent_moments=0,
+        ess_resample_threshold=0.0,  # disable resampling
+    )
+    sampler(
+        adapter.engine_state.clone(), viewer_id=0,
+        rng=random.Random(0), in_place=False,
+    )
+    seeds_after_call_1 = sampler._particles_state[1]
+    assert sampler._particles_state[3] == 1  # scored 1 moment
+
+    # Append a moment and call again — same seeds, new history_len.
+    sampler.played_history = tuple(log[:2])
+    sampler(
+        adapter.engine_state.clone(), viewer_id=0,
+        rng=random.Random(99), in_place=False,
+    )
+    seeds_after_call_2 = sampler._particles_state[1]
+    assert sampler._particles_state[3] == 2  # now scored 2 moments
+    assert seeds_after_call_2 == seeds_after_call_1
+
+    # And another — still same seeds.
+    sampler.played_history = tuple(log[:3])
+    sampler(
+        adapter.engine_state.clone(), viewer_id=0,
+        rng=random.Random(123), in_place=False,
+    )
+    assert sampler._particles_state[1] == seeds_after_call_1
+    assert sampler._particles_state[3] == 3
+
+
+def test_persistent_particles_incremental_scoring_matches_batch():
+    """Building the history one moment at a time — calling the
+    sampler after each append — must produce the same per-particle
+    log-weights as a single from-scratch call against the full
+    history. SIS likelihood is additive across moments by
+    construction; this pins that invariant in code.
+
+    We use the deterministic-seed path (Random(0) drives both the
+    initial seed draw and downstream use) and disable resampling so
+    the only divergence source would be a math bug, not a
+    multinomial draw difference.
+    """
+    adapter = _adapter(seed=11)
+    log = _drive_to_opponent_moments(adapter, opponent=1, max_steps=30)
+    if len(log) < 4:
+        pytest.skip("need at least 4 opponent moments under seed=11")
+    history = log[:4]
+
+    # Sampler A: incremental — append one moment at a time, call
+    # between each append.
+    incremental = BeliefWeightedDeterminizer(
+        opponent_policy_evaluator=_UniformPolicyEvaluator(),
+        played_history=history[:1],
+        m_candidates=4,
+        min_opponent_moments=0,
+        ess_resample_threshold=0.0,
+    )
+    rng_inc = random.Random(2027)
+    incremental(
+        adapter.engine_state.clone(), viewer_id=0, rng=rng_inc,
+        in_place=False,
+    )
+    for i in range(2, len(history) + 1):
+        incremental.played_history = tuple(history[:i])
+        incremental(
+            adapter.engine_state.clone(), viewer_id=0, rng=rng_inc,
+            in_place=False,
+        )
+
+    # Sampler B: from-scratch — start with the full history.
+    one_shot = BeliefWeightedDeterminizer(
+        opponent_policy_evaluator=_UniformPolicyEvaluator(),
+        played_history=history,
+        m_candidates=4,
+        min_opponent_moments=0,
+        ess_resample_threshold=0.0,
+    )
+    rng_one = random.Random(2027)
+    one_shot(
+        adapter.engine_state.clone(), viewer_id=0, rng=rng_one,
+        in_place=False,
+    )
+
+    # Same seeds (drawn from same rng) and same per-moment math →
+    # bit-identical log-weights. (Resampling disabled.)
+    assert incremental._particles_state[1] == one_shot._particles_state[1]
+    inc_weights = incremental._particles_state[2]
+    one_weights = one_shot._particles_state[2]
+    assert np.allclose(inc_weights, one_weights, atol=1e-12), (
+        f"incremental weights {inc_weights} should equal "
+        f"one-shot weights {one_weights}"
+    )
+
+
+def test_resample_triggered_by_low_ess():
+    """Configure an evaluator that puts heavy weight on hands
+    containing a particular printing. Append several moments and
+    confirm ``last_resample_count`` increments — i.e. the SIS pool
+    actually triggers a resample once weight concentrates on a
+    minority of seeds.
+    """
+    adapter = _adapter(seed=11)
+    log = _drive_to_opponent_moments(
+        adapter, opponent=1, max_steps=30, multi_action_only=True,
+    )
+    if len(log) < 3:
+        pytest.skip("need at least 3 opponent multi-action moments")
+    target = _pick_rare_hand_printing(log[0].state, opponent=1)
+    if target is None:
+        pytest.skip("no rare-singleton printing in opp hand at this moment")
+
+    favored = _DeterministicSlotEvaluator(
+        favored_printing_names={target}, boost=10.0,
+    )
+    sampler = BeliefWeightedDeterminizer(
+        opponent_policy_evaluator=favored,
+        played_history=log[:1],
+        m_candidates=16,
+        min_opponent_moments=0,
+        ess_resample_threshold=0.5,
+    )
+    rng = random.Random(7)
+    initial_count = sampler.last_resample_count
+    # Drive the history forward; biasing evaluator concentrates
+    # weight onto the few seeds whose reconstructed hand contains
+    # ``target``, dropping ESS until the threshold trips.
+    for i in range(1, min(len(log), 6) + 1):
+        sampler.played_history = tuple(log[:i])
+        sampler(
+            adapter.engine_state.clone(), viewer_id=0,
+            rng=rng, in_place=False,
+        )
+    # At least one resample fired across that walk.
+    assert sampler.last_resample_count > initial_count, (
+        f"expected ess-based resample to fire under heavy bias; "
+        f"last_resample_count={sampler.last_resample_count}"
+    )
+
+
+def test_resample_disabled_at_threshold_zero():
+    """ess_resample_threshold=0 must disable the resampler entirely
+    even under a degenerate evaluator that drives ESS to 1.
+    """
+    adapter = _adapter(seed=11)
+    log = _drive_to_opponent_moments(
+        adapter, opponent=1, max_steps=30, multi_action_only=True,
+    )
+    if len(log) < 2:
+        pytest.skip("need at least 2 opponent multi-action moments")
+    target = _pick_rare_hand_printing(log[0].state, opponent=1)
+    if target is None:
+        pytest.skip("no rare-singleton printing in opp hand at this moment")
+    favored = _DeterministicSlotEvaluator(
+        favored_printing_names={target}, boost=10.0,
+    )
+    sampler = BeliefWeightedDeterminizer(
+        opponent_policy_evaluator=favored,
+        played_history=log[:2],
+        m_candidates=16,
+        min_opponent_moments=0,
+        ess_resample_threshold=0.0,
+    )
+    sampler(
+        adapter.engine_state.clone(), viewer_id=0,
+        rng=random.Random(7), in_place=False,
+    )
+    assert sampler.last_resample_count == 0
+
+
+def test_viewer_change_reinitializes_pool():
+    """Reusing one sampler across two viewers must scrap and
+    re-init the particle pool: per-viewer log-weights mean different
+    things (each viewer's opponent is a different player). The
+    ``viewer_id`` slot of ``_particles_state`` reflects the latest
+    call, and ``scored_history_len`` resets to the (now)
+    full-history scoring after the fresh init.
+    """
+    adapter = _adapter(seed=11)
+    log = _drive_to_opponent_moments(adapter, opponent=1, max_steps=30)
+    if not log:
+        pytest.skip("no opponent moments under seed=11")
+
+    sampler = BeliefWeightedDeterminizer(
+        opponent_policy_evaluator=_UniformPolicyEvaluator(),
+        played_history=log,
+        m_candidates=4,
+        min_opponent_moments=0,
+        ess_resample_threshold=0.0,
+    )
+    sampler(
+        adapter.engine_state.clone(), viewer_id=0,
+        rng=random.Random(0), in_place=False,
+    )
+    state_v0 = sampler._particles_state
+    assert state_v0[0] == 0
+    # Now switch viewer. The pool must re-init under the new
+    # viewer_id; the stored viewer flips to 1.
+    sampler(
+        adapter.engine_state.clone(), viewer_id=1,
+        rng=random.Random(7),  # different rng so seeds differ too
+        in_place=False,
+    )
+    state_v1 = sampler._particles_state
+    assert state_v1[0] == 1
+    assert state_v1[1] != state_v0[1], (
+        "fresh seed draw under different viewer should yield "
+        "distinct seeds"
+    )
+
+
+def test_score_particle_compatibility_wrapper_still_works():
+    """The single-particle ``_score_particle`` API is used by the
+    existing ``test_score_particle_log_likelihood_separates_consistent_vs_inconsistent``
+    test. The SIS refactor preserves it as a thin wrapper around
+    ``_score_particles_batched``.
+    """
+    adapter = _adapter(seed=11)
+    log = _drive_to_opponent_moments(
+        adapter, opponent=1, max_steps=30, multi_action_only=True,
+    )
+    if not log:
+        pytest.skip("no opponent multi-action moments under seed=11")
+    sampler = BeliefWeightedDeterminizer(
+        opponent_policy_evaluator=_UniformPolicyEvaluator(),
+        played_history=log[:2],
+        m_candidates=4,
+        min_opponent_moments=0,
+    )
+    log_w = sampler._score_particle(
+        adapter.engine_state.clone(), viewer_id=0, seed=2027,
+    )
+    assert math.isfinite(log_w)
+
+
+def test_resample_particles_helper_returns_zero_weights():
+    """Direct unit test on the resample helper: returns
+    ``len(seeds)`` indices drawn from the categorical and zero
+    log-weights (uniform priors over the resampled pool).
+    """
+    seeds = [1001, 1002, 1003, 1004]
+    # Mass concentrated on index 0.
+    p = np.array([0.97, 0.01, 0.01, 0.01], dtype=np.float64)
+    rng = random.Random(0)
+    new_seeds, new_log_weights = _resample_particles(seeds, p, rng)
+    assert len(new_seeds) == 4
+    # Resampled seeds are drawn FROM the input pool.
+    for s in new_seeds:
+        assert s in seeds
+    # Index 0 dominates: most copies should be 1001.
+    assert new_seeds.count(1001) >= 3
+    assert np.allclose(new_log_weights, 0.0)
+
+
+def test_resample_threshold_validation():
+    with pytest.raises(ValueError, match="ess_resample_threshold"):
+        BeliefWeightedDeterminizer(
+            opponent_policy_evaluator=_UniformPolicyEvaluator(),
+            ess_resample_threshold=-0.1,
+        )
+    with pytest.raises(ValueError, match="ess_resample_threshold"):
+        BeliefWeightedDeterminizer(
+            opponent_policy_evaluator=_UniformPolicyEvaluator(),
+            ess_resample_threshold=1.5,
+        )
