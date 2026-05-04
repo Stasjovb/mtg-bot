@@ -441,6 +441,7 @@ def _self_play_distributed(
     queue_url: str,
     bundle_url: str | None = None,
     use_ismcts: bool = False,
+    use_belief_weighted: bool = False,
 ) -> tuple[int, int, float]:
     """Distributed self-play: dispatch the iter's games across the
     shards in ``shards_config``, gather all per-shard npzs into the
@@ -475,6 +476,7 @@ def _self_play_distributed(
             str(hang_dump_root) if hang_dump_root is not None else None
         ),
         use_ismcts=use_ismcts,
+        use_belief_weighted=use_belief_weighted,
     )
     started = time.perf_counter()
     npz_paths = run_distributed_self_play(
@@ -528,6 +530,7 @@ def _eval_match_distributed(
     bundle_url: str | None,
     opponent_label: str,
     use_ismcts: bool = False,
+    use_belief_weighted: bool = False,
 ) -> tuple[int, int, int, float]:
     """Distributed eval-gate match. Mirrors ``_eval_match``'s return
     contract ``(new_wins, old_wins, draws, elapsed_seconds)`` so
@@ -551,6 +554,7 @@ def _eval_match_distributed(
         ),
         opponent_label=opponent_label,
         use_ismcts=use_ismcts,
+        use_belief_weighted=use_belief_weighted,
     )
     started = time.perf_counter()
     counts = run_distributed_eval(
@@ -995,6 +999,20 @@ def main() -> None:
         ),
     )
     parser.add_argument(
+        "--use-belief-weighted", action="store_true",
+        help=(
+            "Wire ISMCTS's per-iteration determinize_fn callback to "
+            "BeliefWeightedDeterminizer (Phase 6) — particle-filter "
+            "samples conditioned on the opponent's observed action "
+            "history. Requires --use-ismcts (belief weighting has no "
+            "PIMC analogue). The game loop populates the played-"
+            "history log via ISMCTS.observe_action; the determinizer "
+            "scores particles with the ISMCTS evaluator's policy "
+            "head. See docs/ISMCTS_MIGRATION.md (Phase 6) and the "
+            "Phase 6.5 wireup."
+        ),
+    )
+    parser.add_argument(
         "--reconcile-state", action="store_true",
         help=(
             "Recover from a partial-iter crash where the trainer "
@@ -1021,6 +1039,14 @@ def main() -> None:
         ),
     )
     args = parser.parse_args()
+
+    if args.use_belief_weighted and not args.use_ismcts:
+        parser.error(
+            "--use-belief-weighted requires --use-ismcts; belief-"
+            "weighted determinization is meaningless for PIMC's K-"
+            "independent-trees structure (no shared determinize_fn "
+            "callback). See docs/ISMCTS_MIGRATION.md (Phase 6)."
+        )
 
     args.data_dir.mkdir(parents=True, exist_ok=True)
     args.registry_root.mkdir(parents=True, exist_ok=True)
@@ -1230,6 +1256,7 @@ def main() -> None:
                 queue_url=args.queue_url,
                 bundle_url=args.bundle_url,
                 use_ismcts=args.use_ismcts,
+                use_belief_weighted=args.use_belief_weighted,
             )
         print(
             f"[iterate]   gen done in {gen_elapsed/60:.1f}m: "
@@ -1341,6 +1368,7 @@ def main() -> None:
                         bundle_url=args.bundle_url,
                         opponent_label=best_version,
                         use_ismcts=args.use_ismcts,
+                        use_belief_weighted=args.use_belief_weighted,
                     )
                 )
             n_decided = wins_new + wins_old

@@ -101,6 +101,13 @@ class _NNIsmctsConfig:
     ``with_policy`` / ``puct`` / ``hidden_sizes`` mirror NNPimcConfig
     so the bench can drive the same NN through both search wrappers
     with identical evaluator settings.
+
+    ``use_belief_weighted=True`` swaps the ISMCTS ``determinize_fn``
+    callback from the uniform sampler to ``BeliefWeightedDeterminizer``
+    (Phase 6); the determinizer is constructed with an empty
+    played_history that the bench's game loop populates per-game via
+    ``ISMCTS.observe_action`` (see Phase 6.5 wireup in
+    ``self_play._play_capped_game``).
     """
 
     weights_path: str
@@ -109,6 +116,7 @@ class _NNIsmctsConfig:
     with_policy: bool = True
     puct: bool = True
     hidden_sizes: Optional[tuple[int, ...]] = None
+    use_belief_weighted: bool = False
 
     def build(self, seed: int = 0) -> SearchStrategy:
         eval_kwargs: dict[str, Any] = {
@@ -119,13 +127,21 @@ class _NNIsmctsConfig:
             eval_kwargs["hidden_sizes"] = self.hidden_sizes
         evaluator = NNEvaluator(**eval_kwargs)
         total = self.total_iterations
-        return ISMCTS(
-            evaluator=evaluator,
-            budget_factory=lambda: Budget(max_nodes=total),
-            rng=random.Random(seed + 300),
-            batch_size=self.batch_size,
-            puct=self.puct,
-        )
+        ismcts_kwargs: dict[str, Any] = {
+            "evaluator": evaluator,
+            "budget_factory": lambda: Budget(max_nodes=total),
+            "rng": random.Random(seed + 300),
+            "batch_size": self.batch_size,
+            "puct": self.puct,
+        }
+        if self.use_belief_weighted:
+            from mtg_bot.search.belief import (
+                BeliefWeightedDeterminizer,
+            )
+            ismcts_kwargs["determinize_fn"] = BeliefWeightedDeterminizer(
+                opponent_policy_evaluator=evaluator,
+            )
+        return ISMCTS(**ismcts_kwargs)
 
 
 # --------------------------------------------------------------------
@@ -249,25 +265,118 @@ def wallclock_bench(
 
 
 @dataclass
-class _BudgetResult:
-    """One budget-point's results in the JSON report."""
+class _PairwiseResult:
+    """One pairwise A/B match's stats — ``challenger`` plays seat 0,
+    ``defender`` plays seat 1, seats are alternated. Win-rate is from
+    the challenger's perspective; verdict classifies the challenger
+    against the 50% null."""
 
-    samples: int
-    inner_nodes: int
-    total_iterations: int
+    challenger: str
+    defender: str
     n_games: int
     decided_games: int
     crashed: int
     draws: int
-    ismcts_wins: int
-    pimc_wins: int
-    ismcts_win_rate: float
+    challenger_wins: int
+    defender_wins: int
+    challenger_win_rate: float
     ci_low: float
     ci_high: float
     verdict: str
     avg_decisions: float
     elapsed_seconds: float
+
+
+@dataclass
+class _BudgetResult:
+    """One budget-point's results in the JSON report.
+
+    Two-way mode populates ``pairwise`` with one entry: ISMCTS-uniform
+    vs PIMC. Three-way mode (``--include-belief``) adds two more:
+    ISMCTS-belief vs PIMC, and ISMCTS-belief vs ISMCTS-uniform. All
+    pairwise verdicts are reported so the operator can read both the
+    "is belief weighting better than uniform?" and "is belief weighting
+    better than PIMC?" signals from one report.
+    """
+
+    samples: int
+    inner_nodes: int
+    total_iterations: int
+    n_games: int
+    pairwise: list[_PairwiseResult] = field(default_factory=list)
     wallclock: dict[str, Any] = field(default_factory=dict)
+
+
+def _run_pairwise(
+    *,
+    challenger_label: str,
+    challenger_factory,
+    defender_label: str,
+    defender_factory,
+    n_games: int,
+    base_seed: int,
+    workers: Optional[int],
+) -> _PairwiseResult:
+    """Play one alternating-seats A/B match and return a
+    ``_PairwiseResult`` from the challenger's POV. Challenger plays
+    seat 0; ``run_match_parallel`` with ``alternate_seats=True`` swaps
+    seats on odd games and remaps the winner so ``wins[0]`` always
+    means "challenger won."
+    """
+    print(
+        f"# A/B: {challenger_label} (seat 0) vs {defender_label} "
+        f"(seat 1) over {n_games} games (alternating seats)",
+        file=sys.stderr, flush=True,
+    )
+    started = time.perf_counter()
+    stats = run_match_parallel(
+        p0_factory=challenger_factory,
+        p1_factory=defender_factory,
+        n_games=n_games,
+        base_seed=base_seed,
+        n_workers=workers,
+        alternate_seats=True,
+    )
+    elapsed = time.perf_counter() - started
+
+    decided = stats.games
+    challenger_wins = stats.wins.get(0, 0)
+    defender_wins = stats.wins.get(1, 0)
+    win_rate = challenger_wins / decided if decided else 0.0
+    ci_low, ci_high = wilson_interval(challenger_wins, decided)
+    verdict = classify(win_rate, ci_low, ci_high)
+
+    print(
+        f"# Done in {elapsed:.1f}s ({elapsed / 60:.1f}m). "
+        f"{challenger_label} won {challenger_wins}, "
+        f"{defender_label} won {defender_wins}, "
+        f"draws {stats.draws}, crashed {stats.crashed} / decided "
+        f"{decided}.",
+        file=sys.stderr, flush=True,
+    )
+    print(
+        f"# {challenger_label} win rate: {win_rate:.1%}  Wilson 95% "
+        f"CI: [{ci_low:.1%}, {ci_high:.1%}]  → {challenger_label} "
+        f"is {verdict.upper()} vs {defender_label}",
+        file=sys.stderr, flush=True,
+    )
+
+    return _PairwiseResult(
+        challenger=challenger_label,
+        defender=defender_label,
+        n_games=n_games,
+        decided_games=decided,
+        crashed=stats.crashed,
+        draws=stats.draws,
+        challenger_wins=challenger_wins,
+        defender_wins=defender_wins,
+        challenger_win_rate=win_rate,
+        ci_low=ci_low,
+        ci_high=ci_high,
+        verdict=verdict,
+        avg_decisions=stats.avg_decisions,
+        elapsed_seconds=elapsed,
+    )
 
 
 def run_one_budget(
@@ -282,12 +391,18 @@ def run_one_budget(
     metadata_with_policy: bool,
     metadata_hidden_sizes: Optional[tuple[int, ...]],
     wallclock_seeds: list[int],
+    include_belief: bool = False,
 ) -> _BudgetResult:
-    """Play one matched-budget A/B match and report stats.
+    """Play matched-budget A/B match(es) and report stats.
 
-    PIMC at (K=samples, N=inner_nodes), ISMCTS at total_iterations=K*N.
-    ISMCTS plays seat 0 (so ``wins[0]`` = ISMCTS wins after seat
-    alternation remap inside ``run_match_parallel``).
+    Two-way (default): ISMCTS-uniform vs PIMC.
+    Three-way (``include_belief=True``): ISMCTS-uniform vs PIMC,
+        ISMCTS-belief vs PIMC, ISMCTS-belief vs ISMCTS-uniform.
+
+    PIMC runs at (K=samples, N=inner_nodes); both ISMCTS variants run
+    at total_iterations=K*N. Belief weighting doesn't change the
+    iteration count (it changes the per-iteration sampling
+    distribution).
     """
     if n_games % 2 != 0:
         raise ValueError(
@@ -305,7 +420,7 @@ def run_one_budget(
         puct=metadata_with_policy,
         hidden_sizes=metadata_hidden_sizes,
     )
-    ismcts_cfg = _NNIsmctsConfig(
+    ismcts_uniform_cfg = _NNIsmctsConfig(
         weights_path=str(weights_path),
         total_iterations=total_iterations,
         batch_size=nn_batch_size,
@@ -313,47 +428,54 @@ def run_one_budget(
         puct=metadata_with_policy,
         hidden_sizes=metadata_hidden_sizes,
     )
+    ismcts_belief_cfg: Optional[_NNIsmctsConfig] = None
+    if include_belief:
+        ismcts_belief_cfg = _NNIsmctsConfig(
+            weights_path=str(weights_path),
+            total_iterations=total_iterations,
+            batch_size=nn_batch_size,
+            with_policy=metadata_with_policy,
+            puct=metadata_with_policy,
+            hidden_sizes=metadata_hidden_sizes,
+            use_belief_weighted=True,
+        )
 
-    print(
-        f"# A/B: ISMCTS(total={total_iterations}, seat 0) vs "
-        f"PIMC(samples={samples}, nodes={inner_nodes}, seat 1) "
-        f"over {n_games} games (alternating seats)",
-        file=sys.stderr, flush=True,
-    )
-    started = time.perf_counter()
-    stats = run_match_parallel(
-        p0_factory=ismcts_cfg.build,
-        p1_factory=pimc_cfg.build,
+    pairwise_results: list[_PairwiseResult] = []
+
+    pairwise_results.append(_run_pairwise(
+        challenger_label="ISMCTS-uniform",
+        challenger_factory=ismcts_uniform_cfg.build,
+        defender_label="PIMC",
+        defender_factory=pimc_cfg.build,
         n_games=n_games,
         base_seed=base_seed,
-        n_workers=workers,
-        alternate_seats=True,
-    )
-    elapsed = time.perf_counter() - started
+        workers=workers,
+    ))
 
-    decided = stats.games  # wins + draws (excludes crashed)
-    ismcts_wins = stats.wins.get(0, 0)
-    pimc_wins = stats.wins.get(1, 0)
-    win_rate = (
-        ismcts_wins / decided if decided else 0.0
-    )
-    ci_low, ci_high = wilson_interval(ismcts_wins, decided)
-    verdict = classify(win_rate, ci_low, ci_high)
+    if include_belief:
+        # Distinct base_seed offsets per pairwise so the three
+        # matches don't share game-seed sequences and end up
+        # coupled in their decisions.
+        pairwise_results.append(_run_pairwise(
+            challenger_label="ISMCTS-belief",
+            challenger_factory=ismcts_belief_cfg.build,
+            defender_label="PIMC",
+            defender_factory=pimc_cfg.build,
+            n_games=n_games,
+            base_seed=base_seed + 1_000_000,
+            workers=workers,
+        ))
+        pairwise_results.append(_run_pairwise(
+            challenger_label="ISMCTS-belief",
+            challenger_factory=ismcts_belief_cfg.build,
+            defender_label="ISMCTS-uniform",
+            defender_factory=ismcts_uniform_cfg.build,
+            n_games=n_games,
+            base_seed=base_seed + 2_000_000,
+            workers=workers,
+        ))
 
-    print(
-        f"# Done in {elapsed:.1f}s ({elapsed / 60:.1f}m). "
-        f"ISMCTS won {ismcts_wins}, PIMC won {pimc_wins}, "
-        f"draws {stats.draws}, crashed {stats.crashed} / decided "
-        f"{decided}.",
-        file=sys.stderr, flush=True,
-    )
-    print(
-        f"# ISMCTS win rate: {win_rate:.1%}  Wilson 95% CI: "
-        f"[{ci_low:.1%}, {ci_high:.1%}]  → ISMCTS is {verdict.upper()}",
-        file=sys.stderr, flush=True,
-    )
-
-    wallclock = wallclock_bench(pimc_cfg, ismcts_cfg, wallclock_seeds)
+    wallclock = wallclock_bench(pimc_cfg, ismcts_uniform_cfg, wallclock_seeds)
     if wallclock["pimc_median_ms"] is not None:
         print(
             f"# wall-clock: PIMC median "
@@ -368,17 +490,7 @@ def run_one_budget(
         inner_nodes=inner_nodes,
         total_iterations=total_iterations,
         n_games=n_games,
-        decided_games=decided,
-        crashed=stats.crashed,
-        draws=stats.draws,
-        ismcts_wins=ismcts_wins,
-        pimc_wins=pimc_wins,
-        ismcts_win_rate=win_rate,
-        ci_low=ci_low,
-        ci_high=ci_high,
-        verdict=verdict,
-        avg_decisions=stats.avg_decisions,
-        elapsed_seconds=elapsed,
+        pairwise=pairwise_results,
         wallclock=wallclock,
     )
 
@@ -503,6 +615,19 @@ def main(argv: Optional[list[str]] = None) -> None:
             "seeds; pass an empty list to disable."
         ),
     )
+    parser.add_argument(
+        "--include-belief", action="store_true",
+        help=(
+            "Run a 3-way comparison instead of the default 2-way: "
+            "PIMC vs ISMCTS-uniform vs ISMCTS-belief. Adds two extra "
+            "matches per budget point — ISMCTS-belief vs PIMC and "
+            "ISMCTS-belief vs ISMCTS-uniform — so the report carries "
+            "all three pairwise verdicts. Off by default; the 2-way "
+            "PIMC vs ISMCTS-uniform comparison still gates Phase 5 "
+            "deletion of PIMC. Use this flag when bench-driving "
+            "Phase 6's belief-weighted determinizer."
+        ),
+    )
     args = parser.parse_args(argv)
 
     if not args.weights_path.is_file():
@@ -546,6 +671,7 @@ def main(argv: Optional[list[str]] = None) -> None:
             metadata_with_policy=metadata_with_policy,
             metadata_hidden_sizes=metadata_hidden_sizes,
             wallclock_seeds=list(args.wallclock_seeds),
+            include_belief=args.include_belief,
         )
         results.append(result)
     overall_elapsed = time.perf_counter() - overall_started
@@ -568,6 +694,7 @@ def main(argv: Optional[list[str]] = None) -> None:
         "base_seed": args.base_seed,
         "nn_batch_size": args.nn_batch_size,
         "workers": args.workers,
+        "include_belief": args.include_belief,
         "matched_budget_formula": (
             "ismcts.total_iterations = pimc.samples * pimc.inner_nodes"
         ),
