@@ -447,6 +447,53 @@ def test_run_distributed_two_local_shards_both_produce_npz(
         assert "game_idx" in ge
 
 
+def test_spec_to_dict_normalizes_windows_paths_to_forward_slashes():
+    """Smoke for the cross-platform path serialization fix. iterate
+    runs on Windows and produces ``str(Path(...))`` with backslashes;
+    when the spec ships to the Mac via base64-JSON, the literal
+    backslashes are interpreted as filename characters (POSIX) and
+    every NN load fails. ``to_dict()`` normalizes path fields to
+    forward slashes so the wire format is platform-neutral.
+
+    Reproduced from a real iter run where every Mac game had
+    ``samples=0 wall_s=0.009`` because ``trained_weights\\v6\\
+    weights.pt`` doesn't exist on the Mac as a literal filename.
+    """
+    from mtg_bot.training.distributed import SelfPlayJobSpec
+
+    spec = SelfPlayJobSpec(
+        weights_path="tmp_iter\\registry\\v6\\weights.pt",
+        samples=2, inner_nodes=50, hidden_sizes=(64,),
+        base_seed=0, enable_mulligans=False,
+        per_game_timeout_sec=None,
+        deck_pool_path="data\\17lands\\eoe_decks.json.gz",
+        replays_root="tmp_iter\\replays",
+        hang_dump_root="tmp_iter\\hangs",
+    )
+    d = spec.to_dict()
+    assert d["weights_path"] == "tmp_iter/registry/v6/weights.pt"
+    assert d["deck_pool_path"] == "data/17lands/eoe_decks.json.gz"
+    assert d["replays_root"] == "tmp_iter/replays"
+    assert d["hang_dump_root"] == "tmp_iter/hangs"
+
+
+def test_spec_to_dict_handles_none_path_fields():
+    """Optional path fields stay None when not set; the path-
+    normalizer must not crash on None."""
+    from mtg_bot.training.distributed import SelfPlayJobSpec
+
+    spec = SelfPlayJobSpec(
+        weights_path="weights.pt",
+        samples=1, inner_nodes=1, hidden_sizes=None,
+        base_seed=0, enable_mulligans=False,
+        per_game_timeout_sec=None,
+    )
+    d = spec.to_dict()
+    assert d["deck_pool_path"] is None
+    assert d["replays_root"] is None
+    assert d["hang_dump_root"] is None
+
+
 def test_spec_round_trips_through_to_dict_from_dict():
     """SelfPlayJobSpec.to_dict + from_dict is a no-op. Round-trip
     is what enables the remote-shard wrapper to receive the spec via

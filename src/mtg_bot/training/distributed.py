@@ -298,9 +298,20 @@ class SelfPlayJobSpec:
         """JSON-serializable dict. Used by ``run_self_play_shard.py``
         to round-trip the spec across the SSH boundary — the remote
         receives the spec via ``--spec-json '<base64-encoded JSON>'``
-        and reconstructs."""
+        and reconstructs.
+
+        Path fields are normalized to forward slashes here so the
+        wire format is platform-neutral. iterate runs on Windows and
+        produces ``tmp/foo\\bar.pt`` from ``str(Path(...))``; the Mac
+        remote then opens a literal filename with embedded ``\\``
+        characters and crashes. Forward slashes work on both Windows
+        (cmd.exe + Python both accept them) and POSIX, so we settle
+        on them universally for the wire format.
+        """
+        def _posix(p):
+            return p.replace("\\", "/") if isinstance(p, str) else p
         return {
-            "weights_path": self.weights_path,
+            "weights_path": _posix(self.weights_path),
             "samples": self.samples,
             "inner_nodes": self.inner_nodes,
             "hidden_sizes": (
@@ -310,14 +321,14 @@ class SelfPlayJobSpec:
             "base_seed": self.base_seed,
             "enable_mulligans": self.enable_mulligans,
             "per_game_timeout_sec": self.per_game_timeout_sec,
-            "deck_pool_path": self.deck_pool_path,
+            "deck_pool_path": _posix(self.deck_pool_path),
             "with_policy": self.with_policy,
             "decision_cap": self.decision_cap,
             "sample_every": self.sample_every,
             "capture_every": self.capture_every,
             "nn_version_label": self.nn_version_label,
-            "replays_root": self.replays_root,
-            "hang_dump_root": self.hang_dump_root,
+            "replays_root": _posix(self.replays_root),
+            "hang_dump_root": _posix(self.hang_dump_root),
         }
 
     @classmethod
@@ -484,7 +495,7 @@ def run_distributed_self_play(
     total_games: int,
     queue_url: str,
     bundle_url: Optional[str] = None,
-    batch_size_default: int = 25,
+    batch_size_default: int = 5,
 ) -> list[Path]:
     """Pull-model orchestrator. Initializes a queue of ``total_games``
     on master, dispatches every shard concurrently to pull from it,
