@@ -294,6 +294,7 @@ class SelfPlayJobSpec:
     replays_root: Optional[str] = None
     hang_dump_root: Optional[str] = None
     use_ismcts: bool = False
+    use_belief_weighted: bool = False
 
     def to_dict(self) -> dict[str, Any]:
         """JSON-serializable dict. Used by ``run_self_play_shard.py``
@@ -331,6 +332,7 @@ class SelfPlayJobSpec:
             "replays_root": _posix(self.replays_root),
             "hang_dump_root": _posix(self.hang_dump_root),
             "use_ismcts": self.use_ismcts,
+            "use_belief_weighted": self.use_belief_weighted,
         }
 
     @classmethod
@@ -353,6 +355,7 @@ class SelfPlayJobSpec:
             replays_root=d.get("replays_root"),
             hang_dump_root=d.get("hang_dump_root"),
             use_ismcts=bool(d.get("use_ismcts", False)),
+            use_belief_weighted=bool(d.get("use_belief_weighted", False)),
         )
 
 
@@ -385,6 +388,7 @@ class EvalJobSpec:
     hang_dump_root: Optional[str] = None
     opponent_label: str = "previous"
     use_ismcts: bool = False
+    use_belief_weighted: bool = False
 
     def to_dict(self) -> dict[str, Any]:
         def _posix(p):
@@ -409,6 +413,7 @@ class EvalJobSpec:
             "hang_dump_root": _posix(self.hang_dump_root),
             "opponent_label": self.opponent_label,
             "use_ismcts": self.use_ismcts,
+            "use_belief_weighted": self.use_belief_weighted,
         }
 
     @classmethod
@@ -431,6 +436,7 @@ class EvalJobSpec:
             hang_dump_root=d.get("hang_dump_root"),
             opponent_label=d.get("opponent_label", "previous"),
             use_ismcts=bool(d.get("use_ismcts", False)),
+            use_belief_weighted=bool(d.get("use_belief_weighted", False)),
         )
 
 
@@ -475,6 +481,7 @@ def run_shard_local(
         puct=True,
         hidden_sizes=spec.hidden_sizes,
         use_ismcts=spec.use_ismcts,
+        use_belief_weighted=spec.use_belief_weighted,
     )
 
     deck_pool = None
@@ -1145,6 +1152,7 @@ def run_shard_pull(
         puct=True,
         hidden_sizes=spec.hidden_sizes,
         use_ismcts=spec.use_ismcts,
+        use_belief_weighted=spec.use_belief_weighted,
     )
     factory = cfg.build
 
@@ -1398,6 +1406,7 @@ def run_shard_eval_pull(
         batch_size=32, with_policy=True, puct=True,
         hidden_sizes=spec.hidden_sizes,
         use_ismcts=spec.use_ismcts,
+        use_belief_weighted=spec.use_belief_weighted,
     )
     if spec.old_weights_path is not None:
         old_cfg = NNPimcConfig(
@@ -1406,6 +1415,7 @@ def run_shard_eval_pull(
             batch_size=32, with_policy=True, puct=True,
             hidden_sizes=spec.hidden_sizes,
             use_ismcts=spec.use_ismcts,
+            use_belief_weighted=spec.use_belief_weighted,
         )
         p1_factory = old_cfg.build
     else:

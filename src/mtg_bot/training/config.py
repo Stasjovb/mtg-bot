@@ -176,6 +176,28 @@ class NNPimcConfig:
     # ``total_iterations = samples * inner_nodes`` (same total search
     # work as PIMC's K independent searches of N nodes each).
     use_ismcts: bool = False
+    # When True, the ISMCTS ``determinize_fn`` callback is wired to
+    # ``BeliefWeightedDeterminizer`` (Phase 6) rather than the uniform
+    # sampler. Requires ``use_ismcts=True``; rejected at __post_init__
+    # otherwise — belief weighting is meaningless for PIMC's K-
+    # independent-trees structure (no shared search state to bias).
+    # The determinizer is constructed with an empty played_history;
+    # the game loop populates it via ``ISMCTS.observe_action`` calls
+    # as the game progresses (see Phase 6.5 wireup in
+    # ``data_gen._play_one_game_recording`` and
+    # ``self_play._play_capped_game``).
+    use_belief_weighted: bool = False
+
+    def __post_init__(self) -> None:
+        if self.use_belief_weighted and not self.use_ismcts:
+            raise ValueError(
+                "use_belief_weighted=True requires use_ismcts=True; "
+                "belief-weighted determinization only applies to "
+                "ISMCTS's per-iteration determinize_fn callback. "
+                "PIMC builds K independent search trees with their "
+                "own root determinizations and has no equivalent "
+                "seam."
+            )
 
     def build(self, seed: int = 0) -> SearchStrategy:
         eval_kwargs: dict[str, Any] = {
@@ -187,13 +209,23 @@ class NNPimcConfig:
         evaluator = NNEvaluator(**eval_kwargs)
         if self.use_ismcts:
             total_iters = max(1, self.samples * self.inner_nodes)
-            return ISMCTS(
-                evaluator=evaluator,
-                budget_factory=lambda: Budget(max_nodes=total_iters),
-                rng=random.Random(seed + 300),
-                batch_size=self.batch_size,
-                puct=self.puct,
-            )
+            ismcts_kwargs: dict[str, Any] = {
+                "evaluator": evaluator,
+                "budget_factory": lambda: Budget(max_nodes=total_iters),
+                "rng": random.Random(seed + 300),
+                "batch_size": self.batch_size,
+                "puct": self.puct,
+            }
+            if self.use_belief_weighted:
+                from mtg_bot.search.belief import (
+                    BeliefWeightedDeterminizer,
+                )
+                ismcts_kwargs["determinize_fn"] = (
+                    BeliefWeightedDeterminizer(
+                        opponent_policy_evaluator=evaluator,
+                    )
+                )
+            return ISMCTS(**ismcts_kwargs)
         inner_nodes = self.inner_nodes
         batch_size = self.batch_size
         puct = self.puct
@@ -228,6 +260,7 @@ class NNPimcConfig:
                 if self.hidden_sizes is not None else None
             ),
             "use_ismcts": self.use_ismcts,
+            "use_belief_weighted": self.use_belief_weighted,
         }
 
     @classmethod
@@ -244,6 +277,7 @@ class NNPimcConfig:
                 tuple(hidden_sizes) if hidden_sizes is not None else None
             ),
             use_ismcts=d.get("use_ismcts", False),
+            use_belief_weighted=d.get("use_belief_weighted", False),
         )
 
 

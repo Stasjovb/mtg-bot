@@ -270,6 +270,73 @@ def test_nn_pimc_config_use_ismcts_round_trips_through_dict() -> None:
     assert NNPimcConfig.from_dict(cfg.to_dict()).use_ismcts is True
 
 
+# ---------- NNPimcConfig.use_belief_weighted (Phase 6.5) --------------------
+
+
+def test_nn_pimc_config_use_belief_weighted_requires_ismcts() -> None:
+    """``use_belief_weighted=True`` without ``use_ismcts=True`` is
+    rejected at construction. Belief-weighted determinization is a
+    seam on ISMCTS's per-iteration determinize_fn callback; PIMC
+    builds K independent search trees and has no equivalent hook.
+    """
+    with pytest.raises(ValueError, match="requires use_ismcts"):
+        NNPimcConfig(
+            weights_path="x.pt", samples=4, inner_nodes=200,
+            use_ismcts=False,
+            use_belief_weighted=True,
+        )
+
+
+def test_nn_pimc_config_use_belief_weighted_builds_belief_determinizer(
+    tmp_path: Path,
+) -> None:
+    """``use_belief_weighted=True`` + ``use_ismcts=True`` constructs
+    an ISMCTS whose ``_determinize`` is a ``BeliefWeightedDeterminizer``
+    instance (not the module-level uniform determinize).
+    """
+    from mtg_bot.search.belief import BeliefWeightedDeterminizer
+    from mtg_bot.search.ismcts import ISMCTS
+
+    weights = _save_value_weights(tmp_path)
+    cfg = NNPimcConfig(
+        weights_path=str(weights), samples=2, inner_nodes=4,
+        use_ismcts=True,
+        use_belief_weighted=True,
+    )
+    strategy = cfg.build(seed=0)
+    assert isinstance(strategy, ISMCTS)
+    assert isinstance(
+        strategy._determinize, BeliefWeightedDeterminizer,
+    )
+    # Empty played_history at construction; populated during play
+    # via ISMCTS.observe_action calls in the game loop.
+    assert strategy._determinize.played_history == ()
+
+
+def test_nn_pimc_config_use_belief_weighted_round_trips_through_dict() -> None:
+    """The Phase 6.5 flag survives JSON serialization so distributed
+    shards build the same determinizer the orchestrator chose."""
+    cfg = NNPimcConfig(
+        weights_path="x.pt", samples=4, inner_nodes=200,
+        use_ismcts=True,
+        use_belief_weighted=True,
+    )
+    rebuilt = NNPimcConfig.from_dict(cfg.to_dict())
+    assert rebuilt.use_belief_weighted is True
+    assert rebuilt.use_ismcts is True
+
+
+def test_nn_pimc_config_use_belief_weighted_default_is_false() -> None:
+    """The new flag defaults to off and is omitted from older
+    serializations cleanly via the ``.get(..., False)`` branch."""
+    cfg = NNPimcConfig(weights_path="x.pt", samples=4, inner_nodes=200)
+    assert cfg.use_belief_weighted is False
+    minimal = {
+        "weights_path": "old.pt", "samples": 4, "inner_nodes": 200,
+    }
+    assert NNPimcConfig.from_dict(minimal).use_belief_weighted is False
+
+
 # ---------- NNServerPimcConfig ----------------------------------------------
 
 
