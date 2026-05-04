@@ -677,6 +677,14 @@ def _play_one_game_recording(
     ] = []
     zero_policy = np.zeros(ACTION_VOCAB_SIZE, dtype=_DTYPE_POLICY)
     zero_mask = np.zeros(ACTION_VOCAB_SIZE, dtype=np.bool_)
+    # Skip the per-decision adapter clone for observe_action wiring
+    # when no strategy implements it (the common case for PIMC /
+    # heuristic / random self-play). Cloning is ~milliseconds per
+    # priority moment but compounds to seconds across ~3000-decision
+    # games — only pay it for belief-tracking ISMCTS strategies.
+    observe_action_active = any(
+        hasattr(s, "observe_action") for s in strategies.values()
+    )
     decision_idx = 0
     while not adapter.is_terminal() and decision_idx < decision_cap:
         active = adapter.active_player()
@@ -781,7 +789,25 @@ def _play_one_game_recording(
                         )
             else:
                 decision = strategies[active].choose(adapter, active)
+        # Snapshot the pre-apply state so observe_action can be fed
+        # the priority-moment state, not the post-apply state. Skip
+        # the clone (and the observe_action loop) entirely when no
+        # strategy implements observe_action — the clone cost is
+        # nontrivial across thousands of decisions.
+        if observe_action_active and active != CHANCE_PLAYER:
+            pre_apply_state = adapter.clone()
+        else:
+            pre_apply_state = None
         adapter.apply(decision)
+        if pre_apply_state is not None:
+            for seat in (0, 1):
+                strategy = strategies.get(seat)
+                if strategy is None:
+                    continue
+                if hasattr(strategy, "observe_action"):
+                    strategy.observe_action(
+                        pre_apply_state, decision, active,
+                    )
         if replay_recorder is not None:
             replay_recorder.record(adapter.engine_state, decision=decision)
         decision_idx += 1

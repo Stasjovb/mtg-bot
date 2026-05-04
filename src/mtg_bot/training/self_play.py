@@ -572,6 +572,15 @@ def _play_capped_game(
     time, so capture-on means a small wall-clock hit but no skew.
     """
     decisions = 0
+    # Skip the per-decision adapter clone for observe_action wiring
+    # when no strategy implements it (the common case for PIMC /
+    # heuristic / random eval). Cloning is ~milliseconds per priority
+    # moment but compounds across thousands of decisions — only pay
+    # it for belief-tracking ISMCTS strategies. Mirrors the same
+    # guard in data_gen._play_one_game_recording.
+    observe_action_active = any(
+        hasattr(s, "observe_action") for s in strategies.values()
+    )
     while not adapter.is_terminal() and decisions < decision_cap:
         active = adapter.active_player()
         if active == CHANCE_PLAYER:
@@ -581,7 +590,20 @@ def _play_capped_game(
             decision = rng.choices(choices, weights=weights, k=1)[0]
         else:
             decision = strategies[active].choose(adapter, active)
+        if observe_action_active and active != CHANCE_PLAYER:
+            pre_apply_state = adapter.clone()
+        else:
+            pre_apply_state = None
         adapter.apply(decision)
+        if pre_apply_state is not None:
+            for seat in (0, 1):
+                strategy = strategies.get(seat)
+                if strategy is None:
+                    continue
+                if hasattr(strategy, "observe_action"):
+                    strategy.observe_action(
+                        pre_apply_state, decision, active,
+                    )
         decisions += 1
         if replay_recorder is not None:
             replay_recorder.record(adapter.engine_state, decision=decision)
