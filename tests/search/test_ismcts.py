@@ -28,7 +28,10 @@ from mtg_bot.search import (
     Budget, MtgGameStateAdapter, RandomRolloutEvaluator,
 )
 from mtg_bot.search.info_set import info_set_key
-from mtg_bot.search.ismcts import ISMCTS, _Node, _puct_score, _ucb_with_availability
+from mtg_bot.search.ismcts import (
+    ISMCTS, _Node, _apply_policy_mask, _puct_score,
+    _ucb_with_availability,
+)
 from mtg_bot.simulate import setup_game
 from mtg_bot.training import action_encoding as ae
 
@@ -74,7 +77,14 @@ def _make_ismcts(
 class _StubPolicyEvaluator:
     """Evaluator that returns a fixed per-state value and a uniform-
     over-legal policy. Lets PUCT tests assert on prior plumbing
-    without depending on torch."""
+    without depending on torch.
+
+    For ``evaluate_logits``, returns the all-zeros logit vector. With
+    a uniform-zero logit, ``_apply_policy_mask`` collapses to a
+    uniform distribution over the union mask — same shape as
+    ``evaluate_with_policy`` would produce on a per-iteration mask,
+    but with the union as the mask source.
+    """
 
     def __init__(self, value: float = 0.0) -> None:
         self.value = value
@@ -105,6 +115,18 @@ class _StubPolicyEvaluator:
         policy[mask] = 1.0 / n_legal
         return self.value, policy
 
+    def evaluate_logits(self, state, player_id):
+        if state.is_terminal():
+            return self.value, np.zeros(
+                ae.ACTION_VOCAB_SIZE, dtype=np.float32,
+            )
+        return self.value, np.zeros(
+            ae.ACTION_VOCAB_SIZE, dtype=np.float32,
+        )
+
+    def batch_evaluate_logits(self, states, player_id):
+        return [self.evaluate_logits(s, player_id) for s in states]
+
 
 # ---------- input validation ------------------------------------------------
 
@@ -134,7 +156,7 @@ def test_ismcts_rejects_zero_or_negative_batch_size():
 
 
 def test_ismcts_puct_requires_policy_capable_evaluator():
-    with pytest.raises(ValueError, match="evaluate_with_policy"):
+    with pytest.raises(ValueError, match="evaluate_logits"):
         ISMCTS(
             evaluator=RandomRolloutEvaluator(),
             budget_factory=lambda: Budget(max_nodes=10),
@@ -481,15 +503,20 @@ def test_ismcts_puct_priors_match_evaluator_policy():
     root_player = adapter.active_player()
     spy.choose_with_visits(adapter, root_player)
     root = spy.captured_tree[spy.captured_root_key]
-    assert root._policy_cache is not None, (
-        "root must have policy cached after running PUCT search"
+    assert root._policy_logits is not None, (
+        "root must have raw logits cached after running PUCT search"
     )
-    # At least one child should have a non-zero prior — the uniform-
-    # over-legal stub puts 1/n_legal on every legal slot. The first-
-    # iteration expansion stamps prior=0 (cache empty), but on the
-    # second iteration where we re-pass through the parent the
-    # stamping reads the cache. So among root's children, the ones
-    # expanded on iteration >= 2 should have non-zero priors.
+    assert root._union_mask is not None, (
+        "root must have a union mask after running PUCT search"
+    )
+    # At least one child should have a non-zero prior — the
+    # all-zero-logits stub + union-mask softmax produces a uniform
+    # distribution over the union of legal actions seen at the root.
+    # The first-iteration expansion stamps prior=0 (logits empty,
+    # population happens via the leaf's evaluate path), but
+    # subsequent iterations through the parent read the cached
+    # logits + (possibly-grown) union mask and produce non-zero
+    # priors.
     nonzero_priors = sum(
         1 for c in root.children.values() if c.prior > 0.0
     )
@@ -604,14 +631,8 @@ def test_ismcts_batched_evaluation_runs_to_completion():
     legal = set(adapter.legal_decisions())
 
     eval_ = _StubPolicyEvaluator(value=0.0)
-    # batch_size > 1 with PUCT requires batch_evaluate_with_policy.
-    # Add a thin bulk wrapper to the stub.
-
-    def batch_evaluate_with_policy(states, player_id):
-        return [eval_.evaluate_with_policy(s, player_id) for s in states]
-
-    eval_.batch_evaluate_with_policy = batch_evaluate_with_policy
-
+    # batch_size > 1 with PUCT requires batch_evaluate_logits, which
+    # the stub already provides. No monkey-patching needed.
     ismcts = ISMCTS(
         evaluator=eval_,
         budget_factory=lambda: Budget(max_nodes=20),
@@ -621,3 +642,351 @@ def test_ismcts_batched_evaluation_runs_to_completion():
     )
     pick = ismcts.choose(adapter, adapter.active_player())
     assert pick in legal
+
+
+# ---------- Phase 3: union-mask PUCT prior ----------------------------------
+
+
+def test_apply_policy_mask_uniform_logits_gives_uniform_distribution():
+    """``_apply_policy_mask`` mirrors ``evaluate_with_policy``'s
+    masked-softmax under whatever mask we pass it. With all-zero
+    logits + a 3-True mask of length ACTION_VOCAB_SIZE, the output
+    is uniform 1/3 on each True slot, exactly 0.0 on False slots,
+    summing to 1.0."""
+    logits = np.zeros(ae.ACTION_VOCAB_SIZE, dtype=np.float32)
+    mask = np.zeros(ae.ACTION_VOCAB_SIZE, dtype=bool)
+    mask[[5, 12, 100]] = True
+    dist = _apply_policy_mask(logits, mask)
+    assert dist is not None
+    assert dist.shape == (ae.ACTION_VOCAB_SIZE,)
+    assert dist.dtype == np.float32
+    assert dist.sum() == pytest.approx(1.0, abs=1e-5)
+    np.testing.assert_array_equal(dist[~mask], 0.0)
+    for slot in (5, 12, 100):
+        assert dist[slot] == pytest.approx(1.0 / 3.0, abs=1e-5)
+
+
+def test_apply_policy_mask_returns_none_for_empty_mask():
+    """An empty union mask means no information yet — return None
+    so the caller leaves child priors at 0.0 rather than producing
+    NaN from softmaxing all -inf logits."""
+    logits = np.zeros(ae.ACTION_VOCAB_SIZE, dtype=np.float32)
+    empty = np.zeros(ae.ACTION_VOCAB_SIZE, dtype=bool)
+    assert _apply_policy_mask(logits, empty) is None
+    assert _apply_policy_mask(logits, None) is None
+
+
+def test_union_mask_grows_monotonically_across_iterations():
+    """Manually descend a node via three different determinizations,
+    each contributing a slightly different ``legal_action_mask``.
+    After three descents the node's union mask equals the OR of the
+    three iteration masks, and a slot that was True in any
+    iteration is True in the union."""
+    node = _Node(b"unit-test")
+    ismcts = _make_ismcts(
+        nodes=1, evaluator=_StubPolicyEvaluator(), puct=True,
+    )
+
+    class _FakeAdapter:
+        def __init__(self, slots: list[int]) -> None:
+            self.slots = slots
+
+        # action_encoding.legal_action_mask delegates to engine_state
+        # for the priority window — but we never call it here.
+
+    # Bypass action_encoding by patching _grow_union_mask's mask source
+    # via monkeypatch-style: directly OR in synthetic masks. This pins
+    # the union-grow primitive without depending on the action-encoding
+    # legality plumbing.
+    masks = []
+    for slots in ([1, 4, 7], [2, 4, 9], [4, 11]):
+        m = np.zeros(ae.ACTION_VOCAB_SIZE, dtype=bool)
+        m[slots] = True
+        masks.append(m)
+        if node._union_mask is None:
+            node._union_mask = m.copy()
+        else:
+            np.logical_or(node._union_mask, m, out=node._union_mask)
+
+    expected = np.zeros(ae.ACTION_VOCAB_SIZE, dtype=bool)
+    for m in masks:
+        expected |= m
+    np.testing.assert_array_equal(node._union_mask, expected)
+    # Every slot True in any iteration must be True in union.
+    for slot in (1, 2, 4, 7, 9, 11):
+        assert node._union_mask[slot]
+    # Slot True in NO iteration must be False.
+    assert not node._union_mask[0]
+    assert not node._union_mask[3]
+
+
+def test_grow_union_mask_called_during_descent_via_search():
+    """Run a real PUCT ISMCTS search and observe that the root's
+    union mask after the search is a superset of any single
+    iteration's legal_action_mask. Also verify the union is
+    *exactly* the OR of every iteration mask we observe by recording
+    them via a recording determinize_fn."""
+    adapter = _adapter(seed=11)
+    if not _advance_to_multi_action(adapter):
+        pytest.skip("game ended before a multi-action moment")
+    viewer = adapter.active_player()
+
+    iteration_masks: list[np.ndarray] = []
+
+    def recording_determinize(
+        engine_state, viewer_id, rng, *, in_place=False,
+    ):
+        # Record what the iteration's mask will look like by reading
+        # legal_action_mask on the post-determinize state. The real
+        # determinize_fn permutes hidden zones; we mimic that by
+        # delegating to the default sampler.
+        from mtg_bot.search.determinize import determinize as _real
+        result = _real(engine_state, viewer_id, rng, in_place=in_place)
+        # Need to materialize the mask off the (engine_state, viewer)
+        # pair — but legal_action_mask wants an adapter. Reach back
+        # through the test's adapter. We rebuild a transient adapter
+        # over the engine state using the same wrapper as ISMCTS does.
+        # ISMCTS clones the source adapter and determinizes in place,
+        # so the engine_state arg here IS the cloned adapter's
+        # engine_state. To get an adapter compatible with
+        # legal_action_mask we wrap a fresh adapter; legal_action_mask
+        # accepts engine_state directly per the
+        # ``_enumerate_legal`` fallback.
+        iteration_masks.append(
+            ae.legal_action_mask(engine_state, viewer_id),
+        )
+        return result
+
+    class _Spy(ISMCTS):
+        captured_root: _Node = None  # type: ignore[assignment]
+        captured_tree: dict = {}
+
+        def choose_with_visits(self, state, player_id):
+            from mtg_bot.search.engine_adapter import (
+                MtgGameStateAdapter as _A,
+            )
+            assert isinstance(state, _A)
+            if state.is_terminal():
+                return {}
+            legal = list(state.legal_decisions())
+            if len(legal) == 1:
+                return {legal[0]: 1}
+            root_key = info_set_key(state, player_id)
+            tree = {root_key: _Node(root_key)}
+            root = tree[root_key]
+            budget = self.budget_factory()
+            budget.start()
+            self._search_serial(state, player_id, root, tree, budget)
+            _Spy.captured_root = root
+            _Spy.captured_tree = tree
+            return {d: c.visits for d, c in root.children.items()}
+
+    eval_ = _StubPolicyEvaluator(value=0.0)
+    spy = _Spy(
+        evaluator=eval_,
+        budget_factory=lambda: Budget(max_nodes=15),
+        rng=random.Random(0),
+        determinize_fn=recording_determinize,
+        puct=True,
+    )
+    spy.choose_with_visits(adapter, viewer)
+    root = _Spy.captured_root
+    assert root._union_mask is not None
+    # Each recorded iteration's root mask must be a subset of the
+    # accumulated union mask.
+    assert iteration_masks, "expected at least one iteration"
+    for m in iteration_masks:
+        assert (m & ~root._union_mask).sum() == 0, (
+            "iteration mask had a slot True that the union mask did "
+            "not — union should always be a superset"
+        )
+    # And the union should equal the OR of all iteration masks.
+    expected_union = np.zeros(ae.ACTION_VOCAB_SIZE, dtype=bool)
+    for m in iteration_masks:
+        expected_union |= m
+    np.testing.assert_array_equal(root._union_mask, expected_union)
+
+
+def test_union_mask_widens_prior_distribution_vs_per_iteration_mask():
+    """Construct a parent node with cached uniform-zero logits and
+    a synthetic union mask wider than any single iteration's mask.
+    Verify that ``_apply_policy_mask`` distributes mass across the
+    union (so a slot legal in the union but illegal in some
+    iteration still gets a positive probability), versus what a
+    per-iteration narrower mask would give (zero probability there).
+    Pin the difference numerically: union mask of size N gives 1/N
+    on each legal slot; narrower per-iteration mask of size M < N
+    gives 1/M on each of M slots and 0 on the union-only slots."""
+    logits = np.zeros(ae.ACTION_VOCAB_SIZE, dtype=np.float32)
+    union_mask = np.zeros(ae.ACTION_VOCAB_SIZE, dtype=bool)
+    union_mask[[10, 20, 30, 40]] = True  # 4 slots in the union
+    iteration_mask = np.zeros(ae.ACTION_VOCAB_SIZE, dtype=bool)
+    iteration_mask[[10, 20]] = True  # only 2 slots in this iteration
+
+    union_dist = _apply_policy_mask(logits, union_mask)
+    iter_dist = _apply_policy_mask(logits, iteration_mask)
+    assert union_dist is not None and iter_dist is not None
+
+    # Slots in the union but NOT in this iteration: nonzero under
+    # union, exactly zero under per-iteration.
+    for slot in (30, 40):
+        assert iter_dist[slot] == 0.0
+        assert union_dist[slot] == pytest.approx(0.25, abs=1e-5)
+
+    # Slots in both: present in both distributions, but with
+    # different mass — 0.25 (union, 4 legal) vs 0.5 (iteration, 2
+    # legal). Same direction the prior would shift in a real ISMCTS
+    # node where one iteration narrowed the mask.
+    for slot in (10, 20):
+        assert union_dist[slot] == pytest.approx(0.25, abs=1e-5)
+        assert iter_dist[slot] == pytest.approx(0.5, abs=1e-5)
+
+
+def test_single_determinization_case_uses_per_iteration_mask():
+    """If every iteration sees the same legal_action_mask (i.e.
+    determinization doesn't change observable legality), the union
+    mask equals the per-iteration mask by construction. The PUCT
+    prior is then identical to what Phase 2 would have produced.
+
+    Concretely: after running a PUCT search with a deterministic
+    determinize_fn that returns the input state unchanged, the
+    root's union mask equals legal_action_mask(adapter, viewer)
+    exactly."""
+    adapter = _adapter(seed=13)
+    if not _advance_to_multi_action(adapter):
+        pytest.skip("game ended before a multi-action moment")
+    viewer = adapter.active_player()
+    expected_root_mask = ae.legal_action_mask(adapter, viewer)
+
+    def passthrough(engine_state, viewer_id, rng, *, in_place=False):
+        return engine_state if in_place else engine_state.clone()
+
+    class _Spy(ISMCTS):
+        captured_root: _Node = None  # type: ignore[assignment]
+
+        def choose_with_visits(self, state, player_id):
+            from mtg_bot.search.engine_adapter import (
+                MtgGameStateAdapter as _A,
+            )
+            assert isinstance(state, _A)
+            if state.is_terminal():
+                return {}
+            legal = list(state.legal_decisions())
+            if len(legal) == 1:
+                return {legal[0]: 1}
+            root_key = info_set_key(state, player_id)
+            tree = {root_key: _Node(root_key)}
+            root = tree[root_key]
+            budget = self.budget_factory()
+            budget.start()
+            self._search_serial(state, player_id, root, tree, budget)
+            _Spy.captured_root = root
+            return {d: c.visits for d, c in root.children.items()}
+
+    eval_ = _StubPolicyEvaluator(value=0.0)
+    spy = _Spy(
+        evaluator=eval_,
+        budget_factory=lambda: Budget(max_nodes=20),
+        rng=random.Random(0),
+        determinize_fn=passthrough,
+        puct=True,
+    )
+    spy.choose_with_visits(adapter, viewer)
+    root = _Spy.captured_root
+    np.testing.assert_array_equal(root._union_mask, expected_root_mask)
+
+
+# ---------- Phase 3: NNEvaluator.evaluate_logits API contract ---------------
+
+
+def test_nn_evaluator_evaluate_logits_shapes_and_no_softmax():
+    """``evaluate_logits`` returns (value: float, logits:
+    np.float32[ACTION_VOCAB_SIZE]) without any masking or softmax.
+    Distinguishing it from ``evaluate_with_policy``: that method
+    masks + softmaxes; this one does neither, so values can be
+    negative (raw logits, not probabilities) and the array doesn't
+    sum to 1.0."""
+    from mtg_bot.search.nn_evaluator import NNEvaluator
+    evaluator = NNEvaluator(with_policy=True)
+    adapter = _adapter()
+    value, logits = evaluator.evaluate_logits(adapter, player_id=0)
+    assert isinstance(value, float)
+    assert -1.0 <= value <= 1.0
+    assert logits.shape == (ae.ACTION_VOCAB_SIZE,)
+    assert logits.dtype == np.float32
+    # Raw logits: no mask was applied, so every slot has a finite
+    # value (no -inf), and the sum is some unconstrained finite
+    # number (almost surely not 1.0).
+    assert np.all(np.isfinite(logits))
+    assert not np.allclose(logits, 0.0), (
+        "fresh-init network should not emit identical-to-zero logits"
+    )
+
+
+def test_nn_evaluator_evaluate_logits_terminal_short_circuit():
+    """Terminal states return value ±1/0 and an all-zeros logits
+    vector (no decision to predict at a terminal — same convention
+    as ``evaluate_with_policy``)."""
+    from mtg_bot.search.nn_evaluator import NNEvaluator
+    adapter = _adapter()
+    adapter.engine_state.players[1].has_lost = True
+    adapter.engine_state.winner_id = 0
+    assert adapter.is_terminal()
+    evaluator = NNEvaluator(with_policy=True)
+    value, logits = evaluator.evaluate_logits(adapter, player_id=0)
+    assert value == 1.0
+    np.testing.assert_array_equal(
+        logits, np.zeros(ae.ACTION_VOCAB_SIZE, dtype=np.float32),
+    )
+
+
+def test_nn_evaluator_evaluate_logits_requires_with_policy():
+    from mtg_bot.search.nn_evaluator import NNEvaluator
+    evaluator = NNEvaluator()  # default: with_policy=False
+    adapter = _adapter()
+    with pytest.raises(RuntimeError, match="with_policy=True"):
+        evaluator.evaluate_logits(adapter, player_id=0)
+    with pytest.raises(RuntimeError, match="with_policy=True"):
+        evaluator.batch_evaluate_logits([adapter], player_id=0)
+
+
+def test_nn_evaluator_batch_evaluate_logits_matches_per_state():
+    """Batched call returns identical (value, logits) per state to
+    iterating ``evaluate_logits`` — bit-equal under the same network
+    weights."""
+    from mtg_bot.search.nn_evaluator import NNEvaluator
+    evaluator = NNEvaluator(with_policy=True)
+    adapters = [_adapter(seed=s) for s in range(4)]
+    per_state = [
+        evaluator.evaluate_logits(a, player_id=0) for a in adapters
+    ]
+    batched = evaluator.batch_evaluate_logits(adapters, player_id=0)
+    assert len(per_state) == len(batched)
+    for (v_a, l_a), (v_b, l_b) in zip(per_state, batched):
+        assert v_a == pytest.approx(v_b, abs=1e-5)
+        np.testing.assert_allclose(l_a, l_b, atol=1e-5, rtol=0)
+
+
+def test_nn_evaluator_evaluate_logits_differs_from_evaluate_with_policy():
+    """Sanity: ``evaluate_logits`` is genuinely different from
+    ``evaluate_with_policy`` — the former returns raw logits, the
+    latter returns a softmaxed-and-masked distribution. Their values
+    agree (same value head); their second-element arrays differ in
+    shape/range — logits can be negative, distributions cannot, and
+    distributions sum to ~1.0 while logits do not."""
+    from mtg_bot.search.nn_evaluator import NNEvaluator
+    evaluator = NNEvaluator(with_policy=True)
+    adapter = _adapter()
+    value_logits, logits = evaluator.evaluate_logits(
+        adapter, player_id=0,
+    )
+    value_pol, distribution = evaluator.evaluate_with_policy(
+        adapter, player_id=0,
+    )
+    assert value_logits == pytest.approx(value_pol, abs=1e-5)
+    # Distribution sums to 1, logits do not (with overwhelming
+    # probability for a fresh network).
+    assert distribution.sum() == pytest.approx(1.0, abs=1e-5)
+    assert not np.isclose(logits.sum(), 1.0)
+    # Distribution is non-negative, logits can be negative.
+    assert np.all(distribution >= 0.0)

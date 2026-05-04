@@ -488,6 +488,111 @@ class NNEvaluator(Evaluator):
                 out[idx] = (values[k], policy)
         return out
 
+    def evaluate_logits(
+        self, state: GameState, player_id: PlayerID,
+    ) -> tuple[float, np.ndarray]:
+        """Forward pass returning value + RAW (unmasked, un-softmaxed)
+        policy logits.
+
+        Returns ``(value, logits)`` where ``logits`` is a length-
+        ACTION_VOCAB_SIZE float32 array straight off the policy head.
+        No legal-action mask is applied; no softmax is taken. Callers
+        that want a probability distribution must mask + softmax
+        themselves with whichever mask is appropriate to their use
+        case.
+
+        Motivation: ISMCTS wants the prior at an information-set node
+        to span the *union* of legal actions across the
+        determinizations seen at that node, not the per-iteration
+        determinization's narrower mask. Re-querying the network on
+        every union-mask growth is wasteful — instead the search
+        caches raw logits once per node and re-masks cheaply on the
+        host as the union grows.
+
+        Terminal states short-circuit identically to
+        ``evaluate_with_policy``: value is the engine's true result,
+        logits is the all-zeros vector (no decision to predict).
+
+        Requires ``with_policy=True`` at construction.
+        """
+        if not self.with_policy:
+            raise RuntimeError(
+                "evaluate_logits requires with_policy=True at "
+                "NNEvaluator construction"
+            )
+        ae = _action_encoding()
+        vocab_size = ae.ACTION_VOCAB_SIZE
+        if state.is_terminal():
+            winner = state.winner()
+            if winner is None:
+                value = 0.0
+            else:
+                value = 1.0 if winner == player_id else -1.0
+            logits = np.zeros(vocab_size, dtype=np.float32)
+            return value, logits
+        engine = self._engine_state(state)
+        features = extract_features(engine, player_id)
+        with torch.no_grad():
+            x = torch.from_numpy(features).unsqueeze(0).to(self.device)
+            value_t, logits_t = self.model(x)
+            value = value_t.item()
+            logits = logits_t.squeeze(0).cpu().numpy().astype(
+                np.float32, copy=False,
+            )
+        return value, logits
+
+    def batch_evaluate_logits(
+        self,
+        states: Sequence[GameState],
+        player_id: PlayerID,
+    ) -> list[tuple[float, np.ndarray]]:
+        """Batched companion to ``evaluate_logits``. Returns one
+        ``(value, logits)`` tuple per state, in input order, with
+        terminal states short-circuited to (±1/0, all-zeros)."""
+        if not self.with_policy:
+            raise RuntimeError(
+                "batch_evaluate_logits requires with_policy=True at "
+                "NNEvaluator construction"
+            )
+        ae = _action_encoding()
+        vocab_size = ae.ACTION_VOCAB_SIZE
+        out: list[tuple[float, np.ndarray]] = [
+            (0.0, np.zeros(vocab_size, dtype=np.float32))
+            for _ in states
+        ]
+        if not states:
+            return out
+        nonterminal_indices: list[int] = []
+        nonterminal_features: list[np.ndarray] = []
+        for i, s in enumerate(states):
+            if s.is_terminal():
+                winner = s.winner()
+                if winner is None:
+                    value = 0.0
+                else:
+                    value = 1.0 if winner == player_id else -1.0
+                out[i] = (
+                    value, np.zeros(vocab_size, dtype=np.float32),
+                )
+                continue
+            engine = self._engine_state(s)
+            nonterminal_indices.append(i)
+            nonterminal_features.append(
+                extract_features(engine, player_id)
+            )
+        if nonterminal_features:
+            stacked = np.stack(nonterminal_features, axis=0)
+            with torch.no_grad():
+                x = torch.from_numpy(stacked).to(self.device)
+                value_t, logits_t = self.model(x)
+                values = value_t.squeeze(-1).cpu().tolist()
+                logits_np = logits_t.cpu().numpy().astype(
+                    np.float32, copy=False,
+                )
+            for k, idx in enumerate(nonterminal_indices):
+                out[idx] = (values[k], logits_np[k].copy())
+        return out
+
     def save(self, path: Path) -> None:
         """Persist ``state_dict`` to disk. Standard PyTorch convention."""
         torch.save(self.model.state_dict(), path)

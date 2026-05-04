@@ -26,24 +26,25 @@ weighted determinization) hooks in later — Phase 2 wires it as a
 parameter and uses the uniform sampler. Nothing else in this module
 changes when Phase 6 lands.
 
-PUCT support is wired up in this phase (per the design doc question
-2 walkthrough). The leaf-state-relative legal mask used by
-``evaluator.evaluate_with_policy`` works correctly for a determinized
-leaf — verified in the design doc — so the existing ``NNEvaluator``
-plugs in without modification. Per-iteration masking is what we use
-here; the union-mask refinement (mask = OR of masks across
-determinizations) is left as a TODO for a later iteration since it
-requires extra bookkeeping that isn't on the critical path for
-Phase 2's correctness.
-"""
+PUCT support uses a *union* mask for the policy prior (Phase 3 of
+the migration plan). At any ISMCTS node the policy distribution is
+computed from the network's raw logits + the OR of every
+``legal_action_mask`` seen at that node across iterations.
+Children whose action is legal in some determinizations but not the
+current one therefore get a non-zero prior — matching the
+information-set semantics of the trained policy head, which
+represents ``P(action | information set)``.
 
-# TODO(phase-2-followup): per-iteration legal mask is leaf-state-
-# relative. Cowling §4 suggests a union mask over consistent worlds
-# would be slightly more accurate (children get a non-zero prior even
-# in iterations where they're momentarily masked off). Worth
-# revisiting after Phase 4's eval-gate numbers come in; the simpler
-# per-iteration mask is fine for correctness and matches the existing
-# PUCT contract.
+The union mask grows monotonically (False → True only). Logits are
+fetched once per node from ``evaluator.evaluate_logits`` and cached;
+re-masking + re-softmaxing on the host is cheap (one ndarray of
+length ACTION_VOCAB_SIZE per stamp) so we don't bother caching the
+post-softmax distribution. Value comes from the per-iteration
+determinized leaf state via the standard
+``evaluate_with_policy`` / ``evaluate_logits`` value head — that's
+the right thing to evaluate (a specific world), no aggregation
+needed across worlds.
+"""
 
 from __future__ import annotations
 
@@ -85,7 +86,7 @@ class _Node:
 
     __slots__ = (
         "key", "children", "visits", "total_value", "availability",
-        "virtual_loss", "prior", "_policy_cache",
+        "virtual_loss", "prior", "_policy_logits", "_union_mask",
     )
 
     def __init__(self, key: bytes) -> None:
@@ -97,20 +98,27 @@ class _Node:
         self.virtual_loss: int = 0
         # PUCT prior P(parent_info_set, decision-to-this-child).
         # Stamped at expansion time when ``puct=True`` from the
-        # parent's cached policy distribution. 0.0 default; under
-        # UCB1 it's never read.
+        # parent's cached raw logits + union mask. 0.0 default;
+        # under UCB1 it's never read.
         self.prior: float = 0.0
-        # Cached policy distribution from
-        # ``evaluator.evaluate_with_policy(state, root_player)`` for
-        # *this* node's leaf state at the iteration where the policy
-        # was first queried. Reused across all subsequent expansions
-        # from this node so the network sees one forward pass per
-        # node, not one per child. The leaf state used for the
-        # forward pass is the per-iteration determinized state — the
-        # mask is leaf-state-relative per the
-        # ``evaluate_with_policy`` contract, and that matches how the
-        # MCTS path already works.
-        self._policy_cache: Optional[np.ndarray] = None
+        # Cached RAW policy logits (no mask, no softmax) from
+        # ``evaluator.evaluate_logits`` for this node. Populated lazily
+        # on first use. Re-used across every expansion from this node;
+        # the host re-applies whatever mask is current to convert
+        # logits → distribution. Storing logits instead of post-
+        # softmax means a growing union mask doesn't force a fresh
+        # network call.
+        self._policy_logits: Optional[np.ndarray] = None
+        # OR of every ``legal_action_mask`` observed at this node
+        # across iterations. Bool array of shape
+        # ``(ACTION_VOCAB_SIZE,)``. Lazy-initialized on first descent
+        # touch (None until then). The mask grows monotonically —
+        # a slot only ever flips False → True, never the reverse —
+        # so any prior we stamped against an earlier (narrower) mask
+        # remains semantically valid; the only bug it could mask is
+        # a child seeing a slightly-too-narrow distribution between
+        # the time it was stamped and the next descent's growth.
+        self._union_mask: Optional[np.ndarray] = None
 
 
 class ISMCTS(SearchStrategy):
@@ -160,8 +168,10 @@ class ISMCTS(SearchStrategy):
 
         ``puct=True`` (default for ISMCTS) routes selection through
         the AlphaZero PUCT formula with a network policy prior. The
-        evaluator must expose ``evaluate_with_policy``; we validate
-        that here. ``puct=False`` falls back to UCB1-with-
+        evaluator must expose ``evaluate_logits`` (and
+        ``batch_evaluate_logits`` for ``batch_size>1``); the
+        union-mask prior path masks + softmaxes the raw logits on
+        the host. ``puct=False`` falls back to UCB1-with-
         availability — useful for unit tests that don't want a
         policy-capable evaluator.
         """
@@ -170,23 +180,25 @@ class ISMCTS(SearchStrategy):
                 f"batch_size must be >= 1, got {batch_size!r}"
             )
         if puct:
-            policy_fn = getattr(evaluator, "evaluate_with_policy", None)
-            if not callable(policy_fn):
+            logits_fn = getattr(evaluator, "evaluate_logits", None)
+            if not callable(logits_fn):
                 raise ValueError(
                     "puct=True requires an evaluator with "
-                    "evaluate_with_policy(state, player_id); got "
+                    "evaluate_logits(state, player_id) for union-mask "
+                    "priors; got "
                     f"{type(evaluator).__name__} which does not."
                 )
             if batch_size > 1:
-                batched_policy_fn = getattr(
-                    evaluator, "batch_evaluate_with_policy", None,
+                batched_logits_fn = getattr(
+                    evaluator, "batch_evaluate_logits", None,
                 )
-                if not callable(batched_policy_fn):
+                if not callable(batched_logits_fn):
                     raise ValueError(
                         "puct=True with batch_size>1 requires an "
-                        "evaluator with batch_evaluate_with_policy("
-                        "states, player_id); got "
-                        f"{type(evaluator).__name__} which does not."
+                        "evaluator with batch_evaluate_logits("
+                        "states, player_id) for union-mask priors; "
+                        f"got {type(evaluator).__name__} which does "
+                        "not."
                     )
         self.evaluator = evaluator
         self.budget_factory = budget_factory
@@ -314,14 +326,14 @@ class ISMCTS(SearchStrategy):
             if pending:
                 states = [s for _, _, s in pending]
                 if self.puct:
-                    pairs = self.evaluator.batch_evaluate_with_policy(
+                    pairs = self.evaluator.batch_evaluate_logits(
                         states, viewer,
                     )
-                    for (leaf, path, _), (value, policy) in zip(
+                    for (leaf, path, _), (value, logits) in zip(
                         pending, pairs,
                     ):
-                        if leaf._policy_cache is None:
-                            leaf._policy_cache = policy
+                        if leaf._policy_logits is None:
+                            leaf._policy_logits = logits
                         self._revert_virtual_loss(path)
                         self._backprop(path, value)
                 else:
@@ -356,6 +368,29 @@ class ISMCTS(SearchStrategy):
             in_place=True,
         )
         return sub
+
+    def _grow_union_mask(
+        self,
+        node: _Node,
+        sub: MtgGameStateAdapter,
+        viewer: PlayerID,
+    ) -> None:
+        """OR this iteration's ``legal_action_mask`` into
+        ``node._union_mask``. Called at every descent step that lands
+        at ``node``. The mask is computed from the per-iteration
+        adapter ``sub`` — by construction the per-iteration mask is a
+        subset of the union mask after this call.
+
+        Lazy-allocates ``_union_mask`` on first touch so untouched
+        nodes (e.g. nodes the search never visited under PUCT) don't
+        carry the bool array.
+        """
+        from mtg_bot.training import action_encoding as ae
+        iter_mask = ae.legal_action_mask(sub, viewer)
+        if node._union_mask is None:
+            node._union_mask = iter_mask.copy()
+        else:
+            np.logical_or(node._union_mask, iter_mask, out=node._union_mask)
 
     def _select_and_expand(
         self,
@@ -392,6 +427,16 @@ class ISMCTS(SearchStrategy):
                 # transient adapter state.
                 break
             legal_set = set(legal_now)
+
+            # PUCT prior accuracy: OR this iteration's
+            # legal_action_mask into the node's union mask before any
+            # stamping happens. The union mask grows monotonically;
+            # priors stamped on subsequent expansions reflect the
+            # widest set of legal actions ever seen at this
+            # information set, not just the per-iteration narrower
+            # subset.
+            if self.puct:
+                self._grow_union_mask(node, sub, viewer)
 
             # Bookkeeping: every child of ``node`` whose action is
             # legal in this iteration's determinization gets its
@@ -485,29 +530,27 @@ class ISMCTS(SearchStrategy):
         pre_apply_sub: MtgGameStateAdapter,
         viewer: PlayerID,
     ) -> None:
-        """Set ``child.prior`` from the parent's cached policy
-        distribution.
+        """Set ``child.prior`` from the parent's cached raw logits +
+        union mask.
 
         ``pre_apply_sub`` is the adapter BEFORE ``decision`` was
         applied — needed because ``action_encoding.encode`` is
         positional and reads zone indices from the pre-apply state.
-        It's also where the policy gets queried on first touch:
-        when ``parent._policy_cache`` is None we call
-        ``evaluator.evaluate_with_policy`` on the pre-apply adapter
-        and cache the result on the parent. Subsequent expansions
-        from this parent reuse the cached distribution.
+        It's also where the network gets queried on first touch: when
+        ``parent._policy_logits`` is None we call
+        ``evaluator.evaluate_logits`` on the pre-apply adapter and
+        cache the raw logits on the parent. Subsequent expansions
+        from this parent re-use the cached logits + the (possibly
+        wider) current union mask, never re-querying the network.
 
         Encoding errors are tolerated (same as MCTS): an unencodable
         decision leaves ``prior=0.0``.
         """
-        if parent._policy_cache is None:
-            # Lazy-populate the parent's policy cache from the pre-
-            # apply state. This mirrors MCTS's first-touch caching
-            # in _stamp_prior.
-            _, policy = self.evaluator.evaluate_with_policy(
+        if parent._policy_logits is None:
+            _, logits = self.evaluator.evaluate_logits(
                 pre_apply_sub, viewer,
             )
-            parent._policy_cache = policy
+            parent._policy_logits = logits
         from mtg_bot.training import action_encoding as ae
         try:
             slot = ae.encode(
@@ -517,8 +560,18 @@ class ISMCTS(SearchStrategy):
             return
         except Exception:
             return
+        # The child's action is legal in *this* iteration's
+        # determinization (we just expanded it from a legal_now
+        # entry), so by construction the parent's union mask now
+        # has slot True. Compute the masked-softmax distribution and
+        # read off this slot.
+        distribution = _apply_policy_mask(
+            parent._policy_logits, parent._union_mask,
+        )
+        if distribution is None:
+            return
         try:
-            child.prior = float(parent._policy_cache[slot])
+            child.prior = float(distribution[slot])
         except (IndexError, ValueError):
             return
 
@@ -532,15 +585,18 @@ class ISMCTS(SearchStrategy):
         determinization. Mirrors ``MCTS._evaluate_leaf`` semantics:
         terminal states short-circuit through the evaluator's
         terminal handling; non-terminal PUCT leaves call
-        ``evaluate_with_policy`` and stash the policy on the leaf
-        for use by future expansions from this node.
+        ``evaluate_logits`` and stash the raw logits on the leaf for
+        use by future expansions from this node. The value comes
+        from the same forward pass; per-iteration determinization is
+        the right state for the value head (we want the value of
+        this concrete world, not an average over consistent worlds).
         """
         if self.puct and not sub.is_terminal():
-            value, policy = self.evaluator.evaluate_with_policy(
+            value, logits = self.evaluator.evaluate_logits(
                 sub, viewer,
             )
-            if leaf._policy_cache is None:
-                leaf._policy_cache = policy
+            if leaf._policy_logits is None:
+                leaf._policy_logits = logits
             return value
         return self.evaluator.evaluate(sub, viewer)
 
@@ -579,6 +635,30 @@ class ISMCTS(SearchStrategy):
     def _revert_virtual_loss(self, path: list[_Node]) -> None:
         for node in path:
             node.virtual_loss -= 1
+
+
+def _apply_policy_mask(
+    raw_logits: np.ndarray, union_mask: Optional[np.ndarray],
+) -> Optional[np.ndarray]:
+    """Apply ``union_mask`` to ``raw_logits`` and softmax. Returns the
+    resulting distribution as a float32 ndarray of length
+    ``ACTION_VOCAB_SIZE``; illegal slots are exactly 0.0, legal slots
+    sum to 1.0. Returns ``None`` if ``union_mask`` is missing or
+    has no True slot — caller treats that as "no prior available"
+    and leaves children's priors at 0.0.
+
+    Mirrors what ``NNEvaluator.evaluate_with_policy`` does internally
+    but with our chosen mask, not the per-iteration leaf mask.
+    """
+    if union_mask is None:
+        return None
+    if not union_mask.any():
+        return None
+    row = raw_logits.astype(np.float32, copy=True)
+    row[~union_mask] = -np.inf
+    row -= row.max()  # safe: max is finite (at least one legal slot)
+    exp = np.exp(row)
+    return (exp / exp.sum()).astype(np.float32, copy=False)
 
 
 def _ucb_with_availability(child: _Node, c: float) -> float:
