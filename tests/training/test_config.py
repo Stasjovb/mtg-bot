@@ -337,6 +337,56 @@ def test_nn_pimc_config_use_belief_weighted_default_is_false() -> None:
     assert NNPimcConfig.from_dict(minimal).use_belief_weighted is False
 
 
+# ---------- NNPimcConfig.device (Tier 1.1 GPU NN) ---------------------------
+
+
+def test_nn_pimc_config_device_default_is_none() -> None:
+    """``device`` defaults to ``None`` — meaning "use NNEvaluator's
+    default" (currently CPU). This preserves the production
+    multiprocessing-data-gen contract that workers stay CPU-only."""
+    cfg = NNPimcConfig(weights_path="x.pt", samples=4, inner_nodes=200)
+    assert cfg.device is None
+
+
+def test_nn_pimc_config_device_round_trips_through_dict() -> None:
+    """Explicit ``device`` survives JSON serialization so distributed
+    shards instantiate the evaluator on the same device the
+    orchestrator chose."""
+    cfg = NNPimcConfig(
+        weights_path="x.pt", samples=4, inner_nodes=200,
+        device="cpu",
+    )
+    rebuilt = NNPimcConfig.from_dict(cfg.to_dict())
+    assert rebuilt.device == "cpu"
+    assert rebuilt == cfg
+
+
+def test_nn_pimc_config_device_missing_in_dict_defaults_to_none() -> None:
+    """Older serializations without ``device`` decode cleanly with
+    ``device=None`` via the ``.get(...)`` branch."""
+    minimal = {
+        "weights_path": "old.pt", "samples": 4, "inner_nodes": 200,
+    }
+    assert NNPimcConfig.from_dict(minimal).device is None
+
+
+def test_nn_pimc_config_device_threaded_into_evaluator(
+    tmp_path: Path,
+) -> None:
+    """``device="cpu"`` is passed through to ``NNEvaluator``; the
+    constructed strategy's evaluator carries a CPU torch device."""
+    weights = _save_value_weights(tmp_path)
+    cfg = NNPimcConfig(
+        weights_path=str(weights), samples=2, inner_nodes=4,
+        batch_size=1, device="cpu",
+    )
+    strategy = cfg.build(seed=0)
+    # PIMC's inner_factory closes over the evaluator; build one MCTS
+    # to inspect.
+    mcts = strategy.inner_factory()
+    assert str(mcts.evaluator.device) == "cpu"
+
+
 # ---------- NNServerPimcConfig ----------------------------------------------
 
 

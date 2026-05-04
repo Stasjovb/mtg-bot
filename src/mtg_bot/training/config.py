@@ -196,6 +196,14 @@ class NNPimcConfig:
     # has at least this many opponent (non-viewer) priority moments.
     # Default 3. Set to 0 to disable.
     belief_min_opponent_moments: int = 3
+    # Torch device for the underlying ``NNEvaluator``. ``None`` means
+    # "use NNEvaluator's default" (currently CPU) — preserves the
+    # production data_gen / self-play default of CPU-only workers
+    # (per the CLAUDE.md note: multiprocessing workers stay CPU-only
+    # to avoid creating one CUDA context per worker process). The
+    # bench may opt into ``"cuda"`` for matched-budget runs where the
+    # batched-leaf NN forward dominates the per-chunk wall-clock.
+    device: Optional[str] = None
 
     def __post_init__(self) -> None:
         if self.use_belief_weighted and not self.use_ismcts:
@@ -215,6 +223,8 @@ class NNPimcConfig:
         }
         if self.hidden_sizes is not None:
             eval_kwargs["hidden_sizes"] = self.hidden_sizes
+        if self.device is not None:
+            eval_kwargs["device"] = self.device
         evaluator = NNEvaluator(**eval_kwargs)
         if self.use_ismcts:
             total_iters = max(1, self.samples * self.inner_nodes)
@@ -278,6 +288,7 @@ class NNPimcConfig:
             "belief_min_opponent_moments": (
                 self.belief_min_opponent_moments
             ),
+            "device": self.device,
         }
 
     @classmethod
@@ -299,6 +310,7 @@ class NNPimcConfig:
             belief_min_opponent_moments=d.get(
                 "belief_min_opponent_moments", 3,
             ),
+            device=d.get("device"),
         )
 
 
