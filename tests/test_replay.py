@@ -75,6 +75,32 @@ def test_to_dict_round_trips_via_from_dict():
     assert Replay.from_dict(replay.to_dict()) == replay
 
 
+def test_load_v1_replay_injects_decision_none(tmp_path: Path):
+    """Files written under v1 (no ``decision`` per snapshot) load
+    cleanly: each snapshot gets ``decision=None``, the in-memory
+    Replay is stamped at the current format version."""
+    path = tmp_path / "legacy_v1.json.gz"
+    payload = json.dumps({
+        "format_version": 1,
+        "metadata": {"game_idx": 0, "winner": 0},
+        "snapshots": [
+            {"turn_number": 1, "step": "untap", "is_over": False,
+             "players": [{"id": 0, "life": 20}, {"id": 1, "life": 20}]},
+            {"turn_number": 1, "step": "upkeep", "is_over": False,
+             "players": [{"id": 0, "life": 20}, {"id": 1, "life": 19}],
+             "heuristic_eval": {"p0": 0.0, "p1": 0.0}},
+        ],
+    }).encode("utf-8")
+    with gzip.open(path, "wb") as f:
+        f.write(payload)
+    replay = load_replay(path)
+    assert replay.format_version == REPLAY_FORMAT_VERSION
+    assert all(s["decision"] is None for s in replay.snapshots)
+    # Pre-existing fields survive.
+    assert replay.snapshots[0]["turn_number"] == 1
+    assert replay.snapshots[1]["heuristic_eval"] == {"p0": 0.0, "p1": 0.0}
+
+
 def test_compressed_file_is_smaller_than_raw_json(tmp_path: Path):
     """Sanity that gzip is doing its job — saved file should be
     smaller than the equivalent uncompressed JSON. Not a tight

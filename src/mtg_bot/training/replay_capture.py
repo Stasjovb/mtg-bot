@@ -35,6 +35,7 @@ from typing import Any, Callable, Optional
 from mtg_bot.game import GameState as EngineGameState
 from mtg_bot.replay import REPLAY_FORMAT_VERSION, Replay
 from mtg_bot.serialize import serialize_state
+from mtg_bot.training.replay_decisions import decision_to_json
 
 # An "annotator" is a function that takes the current engine state
 # and returns a dict to merge into the snapshot. Returning an empty
@@ -57,10 +58,25 @@ class ReplayRecorder:
     annotators: list[SnapshotAnnotator] = field(default_factory=list)
     snapshots: list[dict[str, Any]] = field(default_factory=list)
 
-    def record(self, state: EngineGameState) -> None:
+    def record(
+        self,
+        state: EngineGameState,
+        decision: Any = None,
+    ) -> None:
         """Capture a snapshot of ``state``. Called once per priority
-        moment by the data-gen loop (after each applied decision)."""
+        moment by the data-gen loop (after each applied decision).
+
+        ``decision`` is the action that was just applied to produce
+        ``state`` — encoded into JSON via ``decision_to_json`` and
+        stored under the ``decision`` key on the snapshot. The very
+        first record (the pre-game initial state) is captured with
+        ``decision=None`` because no action preceded it; the JSON
+        ``decision`` field is then ``None`` on that snapshot.
+        """
         snap = serialize_state(state)
+        snap["decision"] = (
+            None if decision is None else decision_to_json(decision)
+        )
         for annotator in self.annotators:
             extra = annotator(state)
             if extra:

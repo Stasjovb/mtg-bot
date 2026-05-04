@@ -19,9 +19,25 @@ Optional snapshot annotations (added by ``ReplayRecorder``):
 - ``nn_eval``: ``{p0: float, p1: float}`` — same but from a
   trained NN. Present only when capture was annotated with
   ``--annotate-with-nn-version``.
+- ``decision``: JSON-encoded ``Decision`` (v2+ only). The action
+  taken at this priority moment, encoded by
+  ``training.replay_decisions.decision_to_json``. The very first
+  snapshot (initial pre-game state) carries ``"decision": None``
+  because no action preceded it. Phase 6's likelihood pairs
+  ``(snapshots[i-1], snapshots[i].decision)`` to compute
+  ``P(decision | pre-state)``.
 
 Format-version field is stamped into the file so future format
 changes can detect old replays and either migrate or refuse.
+
+Version history:
+
+- v1: per-snapshot dicts with the ``serialize_state`` shape plus
+  optional ``heuristic_eval`` / ``nn_eval`` annotations. No
+  per-snapshot ``decision`` field. Loadable by current readers,
+  which inject ``decision = None`` on every snapshot for
+  compatibility.
+- v2 (current): adds the ``decision`` annotation to each snapshot.
 """
 
 from __future__ import annotations
@@ -34,7 +50,11 @@ from typing import Any
 
 # Bump if the format changes incompatibly. Old readers that don't
 # recognize the version should refuse rather than silently mis-parse.
-REPLAY_FORMAT_VERSION: int = 1
+REPLAY_FORMAT_VERSION: int = 2
+
+# Versions this build can read. Newer-than-current versions are
+# refused; older versions are migrated forward at load time.
+_SUPPORTED_FORMAT_VERSIONS: frozenset[int] = frozenset({1, 2})
 
 
 @dataclass
@@ -56,16 +76,27 @@ class Replay:
     @classmethod
     def from_dict(cls, d: dict[str, Any]) -> "Replay":
         version = d.get("format_version")
-        if version != REPLAY_FORMAT_VERSION:
+        if version not in _SUPPORTED_FORMAT_VERSIONS:
             raise ValueError(
                 f"replay format version {version!r} is not supported "
-                f"(this build reads v{REPLAY_FORMAT_VERSION}). The file "
-                f"was written by a different version of the codebase."
+                f"(this build reads {sorted(_SUPPORTED_FORMAT_VERSIONS)}). "
+                f"The file was written by a different version of the "
+                f"codebase."
             )
+        snapshots = list(d.get("snapshots", []))
+        if version == 1:
+            # v1 snapshots have no ``decision`` field. Inject ``None``
+            # on each so callers don't have to special-case version
+            # at access time. Also stamp the in-memory ``Replay`` as
+            # v2 so re-saving migrates the file forward.
+            snapshots = [
+                {**snap, "decision": None} for snap in snapshots
+            ]
+            version = REPLAY_FORMAT_VERSION
         return cls(
             format_version=version,
             metadata=dict(d.get("metadata", {})),
-            snapshots=list(d.get("snapshots", [])),
+            snapshots=snapshots,
         )
 
 
