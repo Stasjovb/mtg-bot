@@ -1,0 +1,783 @@
+"""Tests for ``mtg_bot.search.belief.BeliefWeightedDeterminizer``.
+
+Phase 6 of the ISMCTS migration. The sampler is a particle-filter
+posterior over opponent hidden state given the action history. These
+tests pin the behaviors that flow from that:
+
+- Empty history → reduces to uniform ``determinize``.
+- Likelihood scoring favors candidates consistent with observed
+  actions (high prob under the NN beats low prob).
+- Long histories don't underflow log-sum-exp.
+- The (printings, history-index) cache short-circuits repeat NN
+  queries.
+- Zero-probability actions (e.g. action illegal under a candidate
+  determinization) don't annihilate the particle — the floor keeps
+  it alive at a heavy penalty.
+- Callback contract: returns an ``EngineGameState``, viewer's hand
+  preserved, opponent's hand printings come from the deck-list-
+  consistent unknown pool.
+"""
+
+from __future__ import annotations
+
+import math
+import random
+from collections import Counter
+from typing import Optional
+
+import numpy as np
+import pytest
+
+from mtg_bot.agents import RandomAgent
+from mtg_bot.actions import PassPriority
+from mtg_bot.search.belief import (
+    BeliefWeightedDeterminizer, PriorityMoment,
+    _categorical_draw, _effective_sample_size, _normalize_log_weights,
+    _slot_log_prob,
+)
+from mtg_bot.search.engine_adapter import MtgGameStateAdapter
+from mtg_bot.simulate import setup_game
+from mtg_bot.training import action_encoding as ae
+
+
+# ---------- helpers ---------------------------------------------------------
+
+
+def _engine_state(seed: int = 42):
+    """Fresh engine state from the synthetic G/R deck pair."""
+    return setup_game(
+        [RandomAgent(), RandomAgent()], ["G", "R"], seed=seed,
+    )
+
+
+def _adapter(seed: int = 42) -> MtgGameStateAdapter:
+    return MtgGameStateAdapter(_engine_state(seed))
+
+
+def _pick_rare_hand_printing(state, player_id: int) -> Optional[str]:
+    """Pick a printing in ``player_id``'s hand that occurs only once
+    in the hand+library pool. Used by the likelihood-favoring tests
+    to move the posterior measurably away from the uniform prior.
+    Returns ``None`` if no singleton is available in the hand.
+    """
+    pool = Counter()
+    for c in state.players[player_id].hand:
+        pool[c.printing.name] += 1
+    for c in state.players[player_id].library:
+        pool[c.printing.name] += 1
+    for c in state.players[player_id].hand:
+        if pool[c.printing.name] == 1:
+            return c.printing.name
+    return None
+
+
+def _drive_to_opponent_moments(
+    adapter: MtgGameStateAdapter,
+    opponent: int,
+    max_steps: int = 80,
+    multi_action_only: bool = False,
+) -> list[PriorityMoment]:
+    """Walk the adapter forward driving each priority moment with the
+    first legal action and capturing pre-action snapshots whenever
+    ``opponent`` had priority. Returns the captured priority-moment
+    log; the adapter is left at whatever state it advanced into.
+
+    With ``multi_action_only=True`` only moments where the opponent
+    had a non-trivial choice (>1 legal decision) are recorded — the
+    likelihood is degenerate at forced moves and they don't help the
+    posterior, so the likelihood-favoring tests filter to those.
+    """
+    log: list[PriorityMoment] = []
+    for _ in range(max_steps):
+        if adapter.is_terminal():
+            break
+        legal = adapter.legal_decisions()
+        if not legal:
+            break
+        actor = adapter.active_player()
+        decision = legal[0]
+        if actor == opponent and (
+            not multi_action_only or len(legal) > 1
+        ):
+            log.append(
+                PriorityMoment(
+                    state=adapter.engine_state.clone(),
+                    decision=decision,
+                    actor=actor,
+                )
+            )
+        adapter.apply(decision)
+    return log
+
+
+class _UniformPolicyEvaluator:
+    """Returns zero-logits + zero-value. Combined with the legal
+    mask, that's a uniform-over-legal policy. Lets us test the
+    plumbing without involving torch / a trained model.
+    """
+
+    def __init__(self) -> None:
+        self.calls = 0
+
+    def evaluate_logits(self, state, player_id):
+        self.calls += 1
+        return 0.0, np.zeros(ae.ACTION_VOCAB_SIZE, dtype=np.float32)
+
+
+class _DeterministicSlotEvaluator:
+    """Returns logits that put high mass on a chosen slot for a
+    chosen-printing-tuple key, low mass elsewhere.
+
+    Used for the likelihood-favors-consistent-hand test: configure
+    the evaluator to score "PassPriority" highly when the opponent's
+    hand contains a particular printing tuple, and uniformly
+    otherwise. The posterior should then concentrate on candidate
+    determinizations matching that tuple.
+    """
+
+    def __init__(
+        self,
+        favored_printing_names: Optional[set[str]] = None,
+        favored_slot: int = ae.encode(
+            PassPriority(), _engine_state(0), 0,
+        ),
+        boost: float = 10.0,
+    ) -> None:
+        self.favored_printing_names = favored_printing_names or set()
+        self.favored_slot = favored_slot
+        self.boost = boost
+        self.calls = 0
+
+    def evaluate_logits(self, state, player_id):
+        self.calls += 1
+        logits = np.zeros(ae.ACTION_VOCAB_SIZE, dtype=np.float32)
+        hand = state.players[player_id].hand
+        names = {c.printing.name for c in hand}
+        if self.favored_printing_names <= names:
+            logits[self.favored_slot] = self.boost
+        return 0.0, logits
+
+
+# ---------- input validation ------------------------------------------------
+
+
+def test_belief_rejects_zero_m_candidates():
+    with pytest.raises(ValueError, match="m_candidates"):
+        BeliefWeightedDeterminizer(
+            opponent_policy_evaluator=_UniformPolicyEvaluator(),
+            m_candidates=0,
+        )
+
+
+def test_belief_rejects_zero_cache_size():
+    with pytest.raises(ValueError, match="cache_max_size"):
+        BeliefWeightedDeterminizer(
+            opponent_policy_evaluator=_UniformPolicyEvaluator(),
+            cache_max_size=0,
+        )
+
+
+def test_belief_rejects_evaluator_without_evaluate_logits():
+    class NoLogits:
+        def evaluate(self, state, player_id):
+            return 0.0
+
+    with pytest.raises(ValueError, match="evaluate_logits"):
+        BeliefWeightedDeterminizer(opponent_policy_evaluator=NoLogits())
+
+
+# ---------- empty-history reduction to uniform ------------------------------
+
+
+def test_empty_history_matches_uniform_distribution():
+    """With no history the posterior IS the prior: weights are
+    uninformative, the chosen particle is determined entirely by
+    ``rng``. Verify that across many samples the distribution of
+    sampled opponent hands matches what the uniform sampler produces
+    from the same seeds.
+    """
+    state = _engine_state(seed=42)
+    viewer = 0
+    opponent = 1
+
+    # Capture the multiset of opponent hand printings under the
+    # belief sampler with no history vs the uniform sampler, for
+    # 50 independent rngs. They should match exactly because both
+    # collapse to ``determinize`` with the same caller-supplied rng.
+    from mtg_bot.search.determinize import determinize as uniform
+
+    sampler = BeliefWeightedDeterminizer(
+        opponent_policy_evaluator=_UniformPolicyEvaluator(),
+        played_history=[],
+        m_candidates=8,
+    )
+    belief_results = []
+    uniform_results = []
+    for seed in range(50):
+        # Identical input states for both samplers.
+        s_b = state.clone()
+        s_u = state.clone()
+        sampler(s_b, viewer, random.Random(seed), in_place=True)
+        uniform(s_u, viewer, random.Random(seed), in_place=True)
+        belief_results.append(
+            tuple(c.printing.name for c in s_b.players[opponent].hand)
+        )
+        uniform_results.append(
+            tuple(c.printing.name for c in s_u.players[opponent].hand)
+        )
+
+    # The empty-history fast path bypasses the particle filter and
+    # reduces to uniform ``determinize`` with the caller's rng — so
+    # the two streams should agree exactly.
+    assert belief_results == uniform_results
+    # And the result should be non-trivial: at least 5 distinct
+    # opponent hand multisets across 50 samples.
+    assert len(set(belief_results)) >= 5
+
+
+def test_empty_history_ess_equals_m_candidates():
+    state = _engine_state(seed=42)
+    sampler = BeliefWeightedDeterminizer(
+        opponent_policy_evaluator=_UniformPolicyEvaluator(),
+        played_history=[],
+        m_candidates=16,
+    )
+    sampler(state.clone(), viewer_id=0, rng=random.Random(0))
+    # Empty history → no particle filter is run; ess defaults to N.
+    assert sampler.last_ess == 16
+    assert sampler.last_evaluator_calls == 0
+
+
+# ---------- likelihood scoring favors consistent hands ----------------------
+
+
+def test_likelihood_scoring_concentrates_on_consistent_hand():
+    """Build a state with a one-step opponent priority moment and
+    ``PassPriority`` as the action taken. Configure the evaluator so
+    that ``PassPriority`` gets boosted logits when the opponent's
+    hand contains a target printing — and uniform otherwise.
+
+    Sample many times under the belief filter and verify that the
+    target-printing frequency in the sampled opponent hand is higher
+    than under uniform sampling.
+    """
+    adapter = _adapter(seed=11)
+    opponent = 1
+    viewer = 0
+    log = _drive_to_opponent_moments(
+        adapter, opponent, max_steps=60, multi_action_only=True,
+    )
+    if not log:
+        pytest.skip("no opponent multi-action priority moments under seed=11")
+
+    # Pick a printing the opponent currently holds that's RARE in
+    # the pool (1 copy in hand+library) — that way the prior puts
+    # low mass on candidate worlds that include it, and the boost
+    # has room to move the posterior measurably above the prior.
+    target_name = _pick_rare_hand_printing(
+        log[0].state, opponent,
+    )
+    if target_name is None:
+        pytest.skip("no rare-singleton printing in opp hand at this moment")
+
+    favored_evaluator = _DeterministicSlotEvaluator(
+        favored_printing_names={target_name},
+        boost=10.0,
+    )
+    # Use the HISTORICAL state itself as the source — that aligns
+    # the per-particle seed's "hand at historical moment" with its
+    # "hand at current moment" so the posterior over opponent hand
+    # composition is observable. Without this, the seed's effect on
+    # historical scoring is decorrelated from its effect on the
+    # returned current-state hand (different hidden pools = different
+    # permutation results).
+    source_state = log[0].state
+    sampler = BeliefWeightedDeterminizer(
+        opponent_policy_evaluator=favored_evaluator,
+        played_history=log[:1],  # just the first opponent moment
+        m_candidates=64,
+    )
+    # Run many samples; count the frequency of the target name
+    # appearing in the opponent's hand of the resampled state.
+    posterior_with_target = 0
+    n_trials = 80
+    for trial in range(n_trials):
+        s = source_state.clone()
+        sampler(s, viewer, random.Random(1000 + trial), in_place=True)
+        names = {c.printing.name for c in s.players[opponent].hand}
+        if target_name in names:
+            posterior_with_target += 1
+
+    # Uniform-prior baseline: same setup but no history. The target
+    # printing's frequency should be the prior probability.
+    prior_with_target = 0
+    sampler_prior = BeliefWeightedDeterminizer(
+        opponent_policy_evaluator=favored_evaluator,
+        played_history=[],
+        m_candidates=64,
+    )
+    for trial in range(n_trials):
+        s = source_state.clone()
+        sampler_prior(
+            s, viewer, random.Random(1000 + trial), in_place=True,
+        )
+        names = {c.printing.name for c in s.players[opponent].hand}
+        if target_name in names:
+            prior_with_target += 1
+
+    # Posterior should land the target in the opponent's hand
+    # measurably more often than the prior — by at least a 5pp
+    # margin. The boost is heavy (logit=10 vs 0); even with a
+    # uniform-when-not-favored fallback, the ratio of posterior
+    # weight on hands-with-target vs hands-without should be
+    # ~exp(slot_log_p_with_target - slot_log_p_without) per moment.
+    posterior_rate = posterior_with_target / n_trials
+    prior_rate = prior_with_target / n_trials
+    assert posterior_rate > prior_rate + 0.05, (
+        f"posterior ({posterior_rate:.2%}) should exceed prior "
+        f"({prior_rate:.2%}) by at least 5pp when likelihood "
+        f"favors hands containing {target_name!r}"
+    )
+
+
+def test_score_particle_log_likelihood_separates_consistent_vs_inconsistent():
+    """Direct unit test on the per-particle log-likelihood: a hand
+    where the favored printing appears yields a higher log-weight
+    than one where it doesn't.
+    """
+    adapter = _adapter(seed=11)
+    opponent = 1
+    viewer = 0
+    log = _drive_to_opponent_moments(
+        adapter, opponent, max_steps=60, multi_action_only=True,
+    )
+    if not log:
+        pytest.skip("no opponent multi-action moments under seed=11")
+
+    target = _pick_rare_hand_printing(log[0].state, opponent)
+    if target is None:
+        pytest.skip("no rare-singleton printing in opp hand at this moment")
+    favored = _DeterministicSlotEvaluator(
+        favored_printing_names={target}, boost=10.0,
+    )
+    sampler = BeliefWeightedDeterminizer(
+        opponent_policy_evaluator=favored,
+        played_history=log[:1],
+        m_candidates=4,
+    )
+
+    # Try many seeds and partition log-likelihoods by whether the
+    # candidate determinization places ``target`` in the opponent's
+    # hand at the historical moment. Bigger log-weight on the
+    # "target-in-hand" stratum.
+    from mtg_bot.search.determinize import determinize
+
+    with_target_logws = []
+    without_target_logws = []
+    for seed in range(200):
+        # Reproduce exactly the per-moment determinization
+        # ``_score_particle`` would do for ``seed`` at h_idx=0.
+        moment = log[0]
+        reconstructed = moment.state.clone()
+        # Mirror BeliefWeightedDeterminizer's per-moment seed: at
+        # h_idx=0 the seed is unmixed so the moment's permutation
+        # matches the current-state permutation we'd resample to.
+        determinize(
+            reconstructed, viewer,
+            random.Random(seed), in_place=True,
+        )
+        names = {
+            c.printing.name
+            for c in reconstructed.players[opponent].hand
+        }
+        logw = sampler._score_particle(
+            adapter.engine_state.clone(), viewer, seed,
+        )
+        if target in names:
+            with_target_logws.append(logw)
+        else:
+            without_target_logws.append(logw)
+
+    if not with_target_logws or not without_target_logws:
+        pytest.skip("seed sweep didn't sample both strata")
+    avg_with = float(np.mean(with_target_logws))
+    avg_without = float(np.mean(without_target_logws))
+    # The boost is logit=10 vs uniform-zero on the favored slot, so
+    # log P(slot|favored) - log P(slot|uniform) ≈ 10 - log K (where K
+    # is the legal-action count). Even with realistic K (~5-15) the
+    # ratio should be strongly positive.
+    assert avg_with > avg_without + 1.0, (
+        f"avg log-weight with target ({avg_with:.3f}) should exceed "
+        f"avg log-weight without ({avg_without:.3f}) by >1.0; "
+        f"diff={avg_with - avg_without:.3f}"
+    )
+
+
+# ---------- numerical hygiene -----------------------------------------------
+
+
+def test_long_history_does_not_underflow():
+    """30 priority moments × ~log(uniform-over-K) per moment yields a
+    log-likelihood of order -tens. The resampler must not produce
+    NaN / Inf weights and the normalized vector must sum to 1.
+    """
+    adapter = _adapter(seed=37)
+    opponent = 1
+    log = _drive_to_opponent_moments(adapter, opponent, max_steps=200)
+    if len(log) < 5:
+        pytest.skip("not enough opponent priority moments at seed=37")
+    long_log = log[:30] if len(log) >= 30 else log
+
+    sampler = BeliefWeightedDeterminizer(
+        opponent_policy_evaluator=_UniformPolicyEvaluator(),
+        played_history=long_log,
+        m_candidates=8,
+    )
+
+    # ``__call__`` should run and produce a valid state.
+    s = adapter.engine_state.clone()
+    out = sampler(s, viewer_id=0, rng=random.Random(7), in_place=True)
+    assert out is s
+    # Last ess should be in [1, m_candidates] — finite.
+    assert math.isfinite(sampler.last_ess)
+    assert 0.0 < sampler.last_ess <= 8.0
+
+
+def test_normalize_log_weights_handles_minus_inf():
+    log_weights = np.array(
+        [0.0, -math.inf, -math.inf, -1.0], dtype=np.float64,
+    )
+    p = _normalize_log_weights(log_weights)
+    assert math.isclose(p.sum(), 1.0, abs_tol=1e-9)
+    # The two -inf entries should get zero weight.
+    assert p[1] == 0.0
+    assert p[2] == 0.0
+    # Index 0 (highest log-weight) should get more mass than index 3.
+    assert p[0] > p[3]
+
+
+def test_normalize_log_weights_all_minus_inf_falls_back_uniform():
+    log_weights = np.array(
+        [-math.inf, -math.inf, -math.inf], dtype=np.float64,
+    )
+    p = _normalize_log_weights(log_weights)
+    assert math.isclose(p.sum(), 1.0, abs_tol=1e-9)
+    # Uniform fallback: every entry equals 1/N.
+    assert all(abs(x - 1.0 / 3.0) < 1e-9 for x in p)
+
+
+def test_normalize_log_weights_large_negative_values():
+    """Log-weights of order -60 each shouldn't underflow because of
+    the log-sum-exp shift."""
+    log_weights = np.array(
+        [-60.0, -61.0, -62.0, -63.0], dtype=np.float64,
+    )
+    p = _normalize_log_weights(log_weights)
+    assert math.isclose(p.sum(), 1.0, abs_tol=1e-9)
+    assert all(0.0 <= x <= 1.0 for x in p)
+    assert p[0] > p[3]
+
+
+def test_effective_sample_size_uniform_equals_n():
+    p = np.full(8, 1.0 / 8, dtype=np.float64)
+    assert math.isclose(_effective_sample_size(p), 8.0, abs_tol=1e-9)
+
+
+def test_effective_sample_size_concentrated_equals_one():
+    p = np.zeros(8, dtype=np.float64)
+    p[3] = 1.0
+    assert math.isclose(_effective_sample_size(p), 1.0, abs_tol=1e-9)
+
+
+# ---------- caching ---------------------------------------------------------
+
+
+def test_cache_hits_reduce_evaluator_calls():
+    """Two ``__call__`` invocations with the same input should reuse
+    the cache and dramatically cut the second call's evaluator-call
+    count.
+    """
+    adapter = _adapter(seed=11)
+    opponent = 1
+    log = _drive_to_opponent_moments(adapter, opponent, max_steps=20)
+    if not log:
+        pytest.skip("no opponent priority moments under seed=11")
+
+    evaluator = _UniformPolicyEvaluator()
+    sampler = BeliefWeightedDeterminizer(
+        opponent_policy_evaluator=evaluator,
+        played_history=log[:3],
+        m_candidates=16,
+    )
+
+    # First call: cold cache.
+    s1 = adapter.engine_state.clone()
+    sampler(s1, viewer_id=0, rng=random.Random(123), in_place=True)
+    first_call_count = sampler.last_evaluator_calls
+    assert first_call_count > 0
+
+    # Second call: SAME seed → same particle seeds → same cache
+    # keys. Should be served almost entirely from cache.
+    s2 = adapter.engine_state.clone()
+    sampler(s2, viewer_id=0, rng=random.Random(123), in_place=True)
+    second_call_count = sampler.last_evaluator_calls
+    assert second_call_count == 0, (
+        f"cache should fully cover identical seed; got "
+        f"{second_call_count} fresh evaluator calls"
+    )
+
+
+def test_cache_eviction_bounded():
+    """With cache_max_size set tight, the cache shouldn't grow
+    unboundedly across many calls.
+    """
+    adapter = _adapter(seed=11)
+    opponent = 1
+    log = _drive_to_opponent_moments(adapter, opponent, max_steps=20)
+    if not log:
+        pytest.skip("no opponent priority moments under seed=11")
+
+    sampler = BeliefWeightedDeterminizer(
+        opponent_policy_evaluator=_UniformPolicyEvaluator(),
+        played_history=log[:2],
+        m_candidates=4,
+        cache_max_size=8,
+    )
+    for trial in range(20):
+        s = adapter.engine_state.clone()
+        sampler(
+            s, viewer_id=0,
+            rng=random.Random(trial * 31), in_place=True,
+        )
+    # Cache must respect the bound.
+    assert len(sampler._cache) <= 8
+
+
+# ---------- zero-prob action floor ------------------------------------------
+
+
+def test_slot_log_prob_floor_for_illegal_slot():
+    logits = np.array([1.0, 1.0, 1.0], dtype=np.float32)
+    # Mask says slot 1 is illegal.
+    mask = np.array([True, False, True], dtype=bool)
+    floor = math.log(1e-12)
+    p = _slot_log_prob(logits, mask, slot=1, floor=floor)
+    assert p == floor
+
+
+def test_slot_log_prob_floor_for_out_of_range_slot():
+    logits = np.array([0.5, 0.5], dtype=np.float32)
+    mask = np.array([True, True], dtype=bool)
+    floor = -25.0
+    assert _slot_log_prob(logits, mask, slot=99, floor=floor) == floor
+    assert _slot_log_prob(logits, mask, slot=-1, floor=floor) == floor
+
+
+def test_zero_prob_action_does_not_eliminate_particle():
+    """An action whose slot is masked illegal under the candidate
+    determinization should yield ``log_prob_floor``, not -inf — the
+    particle survives with a heavy but finite penalty.
+    """
+    # Build a synthetic test directly through ``_score_particle``:
+    # construct a PriorityMoment whose decision can't be encoded in
+    # the candidate's reconstructed state. The simplest trigger is
+    # an unencodable card_id.
+    from mtg_bot.actions import CastSpell
+
+    adapter = _adapter(seed=11)
+    opponent = 1
+    log = _drive_to_opponent_moments(adapter, opponent, max_steps=20)
+    if not log:
+        pytest.skip("no opponent priority moments under seed=11")
+
+    # Replace the first moment's decision with a CastSpell against a
+    # non-existent card id. encode() will raise; the floor catches it.
+    bogus_moment = PriorityMoment(
+        state=log[0].state.clone(),
+        decision=CastSpell(card_id=10**9),
+        actor=opponent,
+    )
+
+    sampler = BeliefWeightedDeterminizer(
+        opponent_policy_evaluator=_UniformPolicyEvaluator(),
+        played_history=[bogus_moment],
+        m_candidates=4,
+        log_prob_floor=math.log(1e-9),
+    )
+    floor = math.log(1e-9)
+    log_w = sampler._score_particle(
+        adapter.engine_state.clone(), viewer_id=0, seed=42,
+    )
+    # All particles get the floor; total log-weight == 1 * floor.
+    assert math.isclose(log_w, floor, abs_tol=1e-9)
+    # The sampler still runs (no NaN, no exception).
+    s = adapter.engine_state.clone()
+    sampler(s, viewer_id=0, rng=random.Random(0), in_place=True)
+
+
+# ---------- determinizer callback contract ----------------------------------
+
+
+def test_callback_returns_engine_game_state():
+    """The callback must return an ``EngineGameState`` (matching the
+    uniform determinizer's return type) so ISMCTS can drop it in.
+    """
+    adapter = _adapter(seed=11)
+    sampler = BeliefWeightedDeterminizer(
+        opponent_policy_evaluator=_UniformPolicyEvaluator(),
+        played_history=[],
+    )
+    out = sampler(
+        adapter.engine_state.clone(), viewer_id=0,
+        rng=random.Random(0), in_place=True,
+    )
+    from mtg_bot.game import GameState
+    assert isinstance(out, GameState)
+
+
+def test_callback_preserves_viewer_hand():
+    """The viewer's own hand is known to them — printings must NOT
+    be permuted by determinization. Same invariant the uniform
+    sampler holds; verify the belief sampler upholds it too.
+    """
+    adapter = _adapter(seed=11)
+    opponent = 1
+    log = _drive_to_opponent_moments(adapter, opponent, max_steps=20)
+
+    viewer = 0
+    pre_hand = [
+        (c.id, c.printing.name)
+        for c in adapter.engine_state.players[viewer].hand
+    ]
+    sampler = BeliefWeightedDeterminizer(
+        opponent_policy_evaluator=_UniformPolicyEvaluator(),
+        played_history=log,
+        m_candidates=4,
+    )
+    s = adapter.engine_state.clone()
+    sampler(s, viewer_id=viewer, rng=random.Random(0), in_place=True)
+    post_hand = [
+        (c.id, c.printing.name)
+        for c in s.players[viewer].hand
+    ]
+    assert pre_hand == post_hand
+
+
+def test_callback_opponent_hand_drawn_from_deck_pool():
+    """The opponent's resampled hand printings must be a subset of
+    the deck-list-consistent unknown pool — i.e. printings that
+    actually exist in the opponent's hand+library before
+    determinization.
+    """
+    adapter = _adapter(seed=11)
+    opponent = 1
+    viewer = 0
+    log = _drive_to_opponent_moments(adapter, opponent, max_steps=20)
+
+    pool = Counter()
+    for c in adapter.engine_state.players[opponent].hand:
+        pool[c.printing.name] += 1
+    for c in adapter.engine_state.players[opponent].library:
+        pool[c.printing.name] += 1
+
+    sampler = BeliefWeightedDeterminizer(
+        opponent_policy_evaluator=_UniformPolicyEvaluator(),
+        played_history=log[:2],
+        m_candidates=8,
+    )
+    for trial in range(10):
+        s = adapter.engine_state.clone()
+        sampler(
+            s, viewer_id=viewer,
+            rng=random.Random(trial), in_place=True,
+        )
+        post_hand = Counter(
+            c.printing.name for c in s.players[opponent].hand
+        )
+        post_lib = Counter(
+            c.printing.name for c in s.players[opponent].library
+        )
+        # hand+library multiset equals the pre-state pool by
+        # construction (determinize permutes; doesn't add or drop).
+        combined = post_hand + post_lib
+        assert combined == pool
+
+
+def test_callback_engine_state_consistent_no_share_groups():
+    """Successive ``__call__`` invocations must not corrupt the
+    source engine state via CoW share-group bugs (same hazard the
+    uniform sampler defends against in determinize._determinize_player).
+    """
+    adapter = _adapter(seed=11)
+    opponent = 1
+    viewer = 0
+    log = _drive_to_opponent_moments(adapter, opponent, max_steps=20)
+
+    sampler = BeliefWeightedDeterminizer(
+        opponent_policy_evaluator=_UniformPolicyEvaluator(),
+        played_history=log[:1],
+        m_candidates=4,
+    )
+    # Snapshot the source state's library multiset.
+    source_lib_pre = Counter(
+        c.printing.name
+        for c in adapter.engine_state.players[opponent].library
+    )
+    for trial in range(15):
+        s = adapter.engine_state.clone()
+        sampler(
+            s, viewer_id=viewer,
+            rng=random.Random(trial * 7), in_place=True,
+        )
+    source_lib_post = Counter(
+        c.printing.name
+        for c in adapter.engine_state.players[opponent].library
+    )
+    # The source state's library multiset must be unchanged.
+    assert source_lib_pre == source_lib_post
+
+
+def test_callback_in_place_false_leaves_input_untouched():
+    """``in_place=False`` should clone before mutating, so the input
+    state is unaffected.
+    """
+    adapter = _adapter(seed=11)
+    sampler = BeliefWeightedDeterminizer(
+        opponent_policy_evaluator=_UniformPolicyEvaluator(),
+        played_history=[],
+    )
+    src = adapter.engine_state.clone()
+    pre_opp_hand_ids = [c.id for c in src.players[1].hand]
+    out = sampler(src, viewer_id=0, rng=random.Random(0), in_place=False)
+    assert out is not src
+    post_opp_hand_ids = [c.id for c in src.players[1].hand]
+    # Source IDs unchanged. (Printings would be unchanged anyway in
+    # the in_place=False case — this just verifies we didn't trash
+    # the source.)
+    assert pre_opp_hand_ids == post_opp_hand_ids
+
+
+# ---------- categorical-draw helper -----------------------------------------
+
+
+def test_categorical_draw_distribution():
+    """Sample many times from a known distribution and verify
+    empirical frequencies match within a reasonable tolerance.
+    """
+    p = np.array([0.7, 0.2, 0.1], dtype=np.float64)
+    rng = random.Random(0)
+    counts = Counter()
+    for _ in range(2000):
+        idx = _categorical_draw(p, rng)
+        counts[idx] += 1
+    freq = {k: v / 2000 for k, v in counts.items()}
+    assert abs(freq.get(0, 0) - 0.7) < 0.05
+    assert abs(freq.get(1, 0) - 0.2) < 0.05
+    assert abs(freq.get(2, 0) - 0.1) < 0.05
+
+
+def test_categorical_draw_concentrated_distribution():
+    p = np.array([0.0, 1.0, 0.0], dtype=np.float64)
+    rng = random.Random(42)
+    for _ in range(100):
+        assert _categorical_draw(p, rng) == 1
