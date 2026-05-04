@@ -212,3 +212,148 @@ def test_load_shard_must_be_object(tmp_path: Path):
     )
     with pytest.raises(ValueError, match="must be an object"):
         load_shards_config(p)
+
+
+# ---- run_shard_local + run_distributed_self_play ----------------
+
+
+def _tiny_dual_head_weights(tmp_path: Path) -> tuple[Path, tuple[int, int]]:
+    """Save a tiny dual-head net to disk; return (path, hidden_sizes).
+    Caller passes both into a SelfPlayJobSpec so NNEvaluator loads
+    cleanly."""
+    import torch
+    from mtg_bot.search.nn_evaluator import _ValuePolicyMLP
+    hidden_sizes = (16, 16)
+    weights_path = tmp_path / "tiny_dual_head.pt"
+    torch.save(
+        _ValuePolicyMLP(hidden_sizes=hidden_sizes).state_dict(),
+        weights_path,
+    )
+    return weights_path, hidden_sizes
+
+
+def test_run_shard_local_writes_npz_with_per_shard_filename(
+    tmp_path: Path,
+):
+    """End-to-end smoke for the local-shard runner: builds the
+    NNPimcConfig + DataGenProgress, runs ``generate_training_data_
+    parallel`` with the shard's slice, saves the npz at the per-
+    shard path. Tiny model + 2 games + samples=1 + nodes=10 keeps
+    wall under ~10s while still exercising the full pipeline."""
+    from mtg_bot.training.distributed import (
+        SelfPlayJobSpec,
+        run_shard_local,
+    )
+
+    weights_path, hidden_sizes = _tiny_dual_head_weights(tmp_path)
+    out_dir = tmp_path / "iterate_data"
+    progress_dir = tmp_path / "training_progress"
+    spec = SelfPlayJobSpec(
+        weights_path=str(weights_path),
+        samples=1, inner_nodes=10,
+        hidden_sizes=hidden_sizes,
+        base_seed=0,
+        enable_mulligans=False,
+        per_game_timeout_sec=None,
+        with_policy=True,
+    )
+    shard = ShardConfig(host="local", n_games=2, label="L0")
+    npz_path = run_shard_local(
+        shard, spec,
+        progress_dir=progress_dir,
+        output_dir=out_dir,
+        run_id_prefix="iter_001_self_play_v1",
+        stamp="20260503T230000Z",
+    )
+    assert npz_path.is_file()
+    assert "shard_L0" in npz_path.name
+    assert npz_path.suffix == ".npz"
+    # Progress JSON exists and is finalized.
+    progress_files = list(progress_dir.glob("*.json"))
+    assert len(progress_files) == 1
+    progress = json.loads(progress_files[0].read_text(encoding="utf-8"))
+    assert progress["status"] == "completed"
+    assert progress["n_games_total"] == 2
+    assert progress["n_games_done"] == 2
+
+
+def test_run_distributed_two_local_shards_both_produce_npz(
+    tmp_path: Path,
+):
+    """Smoke for the orchestrator with two local shards. Today the
+    orchestrator runs local shards inline (no concurrent local
+    shards — they'd contend on the master's CPU). The test pins:
+    both shards produce npzs in the configured output dir, in
+    shards-config order."""
+    from mtg_bot.training.distributed import (
+        SelfPlayJobSpec,
+        run_distributed_self_play,
+    )
+
+    weights_path, hidden_sizes = _tiny_dual_head_weights(tmp_path)
+    out_dir = tmp_path / "iterate_data"
+    progress_dir = tmp_path / "training_progress"
+    spec = SelfPlayJobSpec(
+        weights_path=str(weights_path),
+        samples=1, inner_nodes=10,
+        hidden_sizes=hidden_sizes,
+        base_seed=0,
+        enable_mulligans=False,
+        per_game_timeout_sec=None,
+        with_policy=True,
+    )
+    cfg = ShardsConfig(shards=(
+        ShardConfig(host="local", n_games=2, label="A"),
+        ShardConfig(host="local", n_games=2, label="B",
+                    seed_offset=1_000_000),
+    ))
+    paths = run_distributed_self_play(
+        cfg, spec,
+        progress_dir=progress_dir,
+        output_dir=out_dir,
+        run_id_prefix="iter_001_self_play_v1",
+    )
+    assert len(paths) == 2
+    # Each shard's npz lives in the configured output_dir, names
+    # carry the shard label.
+    assert all(p.parent == out_dir.resolve() or p.parent == out_dir
+               for p in paths)
+    assert "shard_A" in paths[0].name
+    assert "shard_B" in paths[1].name
+    assert all(p.is_file() for p in paths)
+
+
+def test_run_distributed_remote_shards_raise_not_implemented(
+    tmp_path: Path,
+):
+    """Today remote shards aren't wired up — the orchestrator
+    surfaces NotImplementedError so the user can't accidentally
+    config a remote shard before the SSH runner lands."""
+    from mtg_bot.training.distributed import (
+        SelfPlayJobSpec,
+        run_distributed_self_play,
+    )
+
+    weights_path, hidden_sizes = _tiny_dual_head_weights(tmp_path)
+    spec = SelfPlayJobSpec(
+        weights_path=str(weights_path),
+        samples=1, inner_nodes=10,
+        hidden_sizes=hidden_sizes,
+        base_seed=0,
+        enable_mulligans=False,
+        per_game_timeout_sec=None,
+    )
+    cfg = ShardsConfig(shards=(
+        ShardConfig(
+            host="remote-mac", n_games=2,
+            user="u", repo_path="/r",
+            venv_python=".venv/bin/python",
+        ),
+    ))
+    with pytest.raises(NotImplementedError, match="remote shard runner"):
+        run_distributed_self_play(
+            cfg, spec,
+            progress_dir=tmp_path / "p",
+            output_dir=tmp_path / "out",
+            run_id_prefix="iter_001",
+        )
