@@ -253,6 +253,54 @@ def test_unlocked_doors_among_rooms_condition_passes_at_threshold():
     assert sa.applies_to(bear, bear, state) is True
 
 
+def test_delirium_active_condition_blocks_below_threshold():
+    """The Delirium gate (formerly the ``requires_delirium`` boolean
+    field) now rides on the ``DeliriumActive`` Condition. With an empty
+    graveyard, the condition fails and ``applies_to`` returns False."""
+    from mtg_bot.effects.conditions import DeliriumActive
+
+    state, bear = _arena()
+    state.active_player_idx = 0
+    sa = StaticAbility(
+        scope=StaticScope.SELF,
+        power_bonus=1,
+        condition=DeliriumActive(),
+    )
+    assert sa.applies_to(bear, bear, state) is False
+
+
+def test_delirium_active_condition_passes_at_threshold():
+    """With four distinct card types in the controller's graveyard, the
+    Delirium condition evaluates True and ``applies_to`` returns True.
+    Same threshold and card-type taxonomy as the trigger-side
+    StatePredicate sibling."""
+    from mtg_bot.cards.parser.source import OracleParserCardSource
+    from mtg_bot.effects.conditions import DeliriumActive
+    from mtg_bot.game import Zone
+
+    state, bear = _arena()
+    state.active_player_idx = 0
+    printings = OracleParserCardSource().get_printings()
+    needed = {"Creature", "Sorcery", "Instant", "Land"}
+    seen: set[str] = set()
+    for prn in printings.values():
+        types = set(prn.card_types) & needed
+        if not types - seen:
+            continue
+        obj = state.new_object(prn, 0, Zone.GRAVEYARD)
+        state.players[0].graveyard.append(obj)
+        seen.update(types)
+        if seen >= needed:
+            break
+    assert seen >= needed
+    sa = StaticAbility(
+        scope=StaticScope.SELF,
+        power_bonus=1,
+        condition=DeliriumActive(),
+    )
+    assert sa.applies_to(bear, bear, state) is True
+
+
 def test_continuous_effect_slot_holds_value():
     """The slot accepts a ``ContinuousModifier`` instance and exposes
     it for the PR-D continuous-effect dispatcher to discover."""

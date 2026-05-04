@@ -87,6 +87,7 @@ from mtg_bot.cards.parser.keywords import _KEYWORD_LINES
 from mtg_bot.effects.conditions import (
     AtLeastNSpellsCastThisTurn,
     ControlPermanent,
+    DeliriumActive,
     DuringYourTurn,
     UnlockedDoorsAmongRoomsAtLeast,
 )
@@ -194,13 +195,13 @@ _STATIC_CONDITION_KWARGS: dict[str, dict[str, object]] = {
     # — the ``Delirium —`` ability word strips through
     # ``_strip_static_ability_word_prefix`` (no rules consequence per
     # CR 207.2c) and the trailing ``as long as`` tail lands here. Maps
-    # to ``requires_delirium=True``; the engine gate walks the
+    # to ``condition=DeliriumActive()``; the Condition walks the
     # controller's graveyard, counts distinct card types, and applies
     # the ability only when the total clears four. Same threshold as
-    # the trigger-side ``Delirium()`` predicate so static and trigger
+    # the trigger-side ``Delirium`` StatePredicate so static and trigger
     # evaluations agree on game-state semantics.
     "there are four or more card types among cards in your graveyard": {
-        "requires_delirium": True
+        "condition": DeliriumActive(),
     },
 }
 
