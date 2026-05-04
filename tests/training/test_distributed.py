@@ -1311,6 +1311,58 @@ def test_aggregate_progress_poller_sums_eval_shards(tmp_path: Path):
     assert agg["opponent_label"] == "v7"
 
 
+def test_aggregate_progress_poller_skips_eval_result_files(
+    tmp_path: Path,
+):
+    """Eval shards on remotes write a sibling ``_result.json`` with
+    the same counts as the per-shard progress JSON. The aggregator
+    must skip it; otherwise every remote shard's wins/draws/crashed
+    get double-counted in the cluster total. Reproduced from a real
+    iter run where ``wins_new + wins_old + crashed`` summed to 871
+    on a 500-game eval."""
+    from mtg_bot.training.distributed import _AggregateProgressPoller
+
+    pdir = tmp_path
+    run_id = "iter_004_eval_v10_vs_v7"
+    # Three shard JSONs (the canonical per-shard EvalProgress output).
+    for label, wn, wo in (
+        ("local", 80, 50),
+        ("mac", 200, 120),
+        ("win", 50, 30),
+    ):
+        (pdir / f"{run_id}_shard_{label}.json").write_text(
+            json.dumps({
+                "kind": "eval", "status": "completed",
+                "n_games_total": 500, "n_games_done": wn + wo,
+                "n_workers": 4,
+                "wins_new": wn, "wins_old": wo, "draws": 0,
+                "crashed": 0,
+            }), encoding="utf-8",
+        )
+    # Two ``_result.json`` files written by the SSH wrapper for the
+    # remote shards — same numbers as the corresponding shard file.
+    for label, wn, wo in (("mac", 200, 120), ("win", 50, 30)):
+        (pdir / f"{run_id}_shard_{label}_result.json").write_text(
+            json.dumps({
+                "n_games": wn + wo,
+                "wins_new": wn, "wins_old": wo, "draws": 0,
+                "crashed": 0,
+            }), encoding="utf-8",
+        )
+    poller = _AggregateProgressPoller(
+        progress_dir=pdir, run_id=run_id,
+        n_games_total=500, kind="eval",
+    )
+    poller._write("completed")
+    agg = json.loads((pdir / f"{run_id}.json").read_text())
+    assert agg["wins_new"] == 80 + 200 + 50  # NOT double-counted
+    assert agg["wins_old"] == 50 + 120 + 30
+    assert agg["n_games_done"] == 530  # sum across 3 shards only
+    # Machines list also excludes the _result entries.
+    labels = sorted(m["label"] for m in agg["machines"])
+    assert labels == ["local", "mac", "win"]
+
+
 def test_aggregate_progress_poller_handles_missing_shard_files(
     tmp_path: Path,
 ):

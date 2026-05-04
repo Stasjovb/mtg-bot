@@ -635,6 +635,11 @@ class _AggregateProgressPoller:
         ended_ats: list[str] = []
         pattern = f"{self._run_id}_shard_*.json"
         for path in sorted(self._progress_dir.glob(pattern)):
+            # Eval shards write a sibling ``..._shard_<label>_result.json``
+            # carrying the same wins/draws/crashed counts. Including it
+            # in the sum would double-count every remote shard's games.
+            if path.stem.endswith("_result"):
+                continue
             try:
                 shard = json.loads(path.read_text(encoding="utf-8"))
             except (OSError, json.JSONDecodeError):

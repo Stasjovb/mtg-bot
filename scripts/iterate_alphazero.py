@@ -1096,8 +1096,8 @@ def main() -> None:
             if win_rate >= args.acceptance_threshold:
                 promoted = True
                 print(
-                    f"[iterate]   promote {new_version} → best "
-                    f"(win_rate {win_rate:.1%} ≥ "
+                    f"[iterate]   promote {new_version} -> best "
+                    f"(win_rate {win_rate:.1%} >= "
                     f"{args.acceptance_threshold:.1%})"
                 )
             else:
