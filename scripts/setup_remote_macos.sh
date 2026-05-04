@@ -99,9 +99,31 @@ fi
 cd "$REPO_PATH"
 
 # --- 3. venv + install ----------------------------------------------
+# Homebrew's python@3.13 occasionally ships an ensurepip that fails
+# on first venv creation (network / sandbox quirks). When that
+# happens, fall back to ``--without-pip`` and bootstrap pip via the
+# canonical get-pip.py — the resulting venv is identical.
 if [[ ! -d ".venv-py313" ]]; then
     echo "[setup] creating .venv-py313"
-    python3.13 -m venv .venv-py313
+    if ! python3.13 -m venv .venv-py313 2>&1; then
+        echo "[setup] venv with ensurepip failed; falling back to" \
+             "--without-pip + get-pip.py bootstrap..."
+        # Wipe any partial venv from the failed attempt — get-pip.py
+        # would otherwise refuse to install over a half-initialized
+        # tree.
+        rm -rf .venv-py313
+        python3.13 -m venv --without-pip .venv-py313
+        curl -sSL https://bootstrap.pypa.io/get-pip.py \
+            | .venv-py313/bin/python3
+    fi
+fi
+# If the user's previous attempt left a venv with no pip (most likely
+# cause: ``--without-pip`` succeeded but bootstrap got interrupted),
+# install pip now before we try to use it.
+if [[ ! -x ".venv-py313/bin/pip" ]]; then
+    echo "[setup] venv has no pip; bootstrapping via get-pip.py..."
+    curl -sSL https://bootstrap.pypa.io/get-pip.py \
+        | .venv-py313/bin/python3
 fi
 echo "[setup] upgrading pip"
 .venv-py313/bin/pip install --quiet --upgrade pip
