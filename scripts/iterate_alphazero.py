@@ -234,6 +234,7 @@ def _self_play_distributed(
     progress_dir: Path,
     output_dir: Path,
     run_id_prefix: str,
+    bundle_url: str | None = None,
 ) -> tuple[int, int, float]:
     """Distributed self-play: dispatch the iter's games across the
     shards in ``shards_config``, gather all per-shard npzs into the
@@ -274,6 +275,7 @@ def _self_play_distributed(
         progress_dir=progress_dir,
         output_dir=output_dir,
         run_id_prefix=run_id_prefix,
+        bundle_url=bundle_url,
     )
     elapsed = time.perf_counter() - started
 
@@ -676,6 +678,19 @@ def main() -> None:
             "process pool (unchanged behavior)."
         ),
     )
+    parser.add_argument(
+        "--bundle-url", default=None,
+        help=(
+            "URL of the master's git-bundle endpoint (typically "
+            "``http://<master-tailnet-name>:5099/repo.bundle``, "
+            "served by ``scripts/serve_setup_scripts.py``). When "
+            "set, each remote shard fetches a fresh bundle before "
+            "running so master commits propagate without GitHub "
+            "auth on the remote (Tailscale-only). When omitted, "
+            "remote-side code-sync is skipped — make sure remotes "
+            "are already at the right commit before running."
+        ),
+    )
     args = parser.parse_args()
 
     args.data_dir.mkdir(parents=True, exist_ok=True)
@@ -858,6 +873,7 @@ def main() -> None:
                 progress_dir=progress_dir,
                 output_dir=args.data_dir,
                 run_id_prefix=f"{iter_label}_self_play_{best_version}",
+                bundle_url=args.bundle_url,
             )
         print(
             f"[iterate]   gen done in {gen_elapsed/60:.1f}m: "

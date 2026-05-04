@@ -481,6 +481,7 @@ def run_distributed_self_play(
     progress_dir: Path,
     output_dir: Path,
     run_id_prefix: str,
+    bundle_url: Optional[str] = None,
 ) -> list[Path]:
     """Orchestrate every shard's self-play in parallel, return the
     list of per-shard ``.npz`` paths.
@@ -492,8 +493,12 @@ def run_distributed_self_play(
     via ``concurrent.futures.ThreadPoolExecutor`` since SSH I/O is
     blocking but not CPU-bound.
 
-    Future commit on this branch wires up the remote-shard runner;
-    today remote shards raise ``NotImplementedError``.
+    ``bundle_url`` is the master's git-bundle endpoint (typically
+    ``http://<master-tailnet>:5099/repo.bundle``). When set, each
+    remote shard fetches a fresh bundle from it before running so
+    code changes propagate without GitHub auth on remotes. When
+    None, code-sync is skipped — caller is responsible for keeping
+    remotes up-to-date.
     """
     stamp = _now_stamp()
     output_paths: dict[str, Path] = {}
@@ -519,6 +524,7 @@ def run_distributed_self_play(
                     output_dir=output_dir,
                     run_id_prefix=run_id_prefix,
                     stamp=stamp,
+                    bundle_url=bundle_url,
                 )
                 futures[fut] = shard
         finally:
@@ -725,6 +731,33 @@ class _ProgressPoller:
             self._stop_event.wait(self._interval_s)
 
 
+def _build_remote_bundle_sync_command(
+    shard: ShardConfig, bundle_url: str,
+) -> str:
+    """Sync the remote's working tree to the latest master commits
+    via a Tailscale-served git bundle. Avoids needing GitHub auth on
+    the remote (curl gets the bundle over Tailscale; git fetches
+    from the local bundle file; git reset --hard advances HEAD).
+
+    Refspec ``main`` is hard-coded — that's what iterate runs from.
+    Other branches stay on whatever they were.
+    """
+    repo_path = shard.repo_path or ""
+    if _is_windows_remote(shard):
+        return (
+            f'cd /d "{repo_path}" && '
+            f'curl.exe -sSL {bundle_url} -o "%TEMP%\\repo.bundle" && '
+            f'git fetch "%TEMP%\\repo.bundle" main && '
+            f'git reset --hard FETCH_HEAD'
+        )
+    return (
+        f'cd {shlex.quote(repo_path)} && '
+        f'curl -sSL {bundle_url} -o /tmp/repo.bundle && '
+        f'git fetch /tmp/repo.bundle main && '
+        f'git reset --hard FETCH_HEAD'
+    )
+
+
 def run_shard_remote(
     shard: ShardConfig,
     spec: SelfPlayJobSpec,
@@ -733,12 +766,16 @@ def run_shard_remote(
     output_dir: Path,
     run_id_prefix: str,
     stamp: str,
+    bundle_url: Optional[str] = None,
 ) -> Path:
     """Run one shard on a remote machine.
 
     Sequence:
-    1. ``ssh ... git pull`` so master commits propagate before each
-       run.
+    1. Code sync. If ``bundle_url`` is set, curl a fresh git bundle
+       from the master and ``git reset --hard`` to its main — works
+       without GitHub auth on the remote (Tailscale-only). If
+       ``bundle_url`` is None, skip the sync entirely (caller is
+       responsible for the remote being up-to-date).
     2. (Weight sync deferred — the remote's repo is expected to
        carry the current best version at the same relative path.
        A follow-up commit can scp updated weights when iterate
@@ -772,16 +809,14 @@ def run_shard_remote(
         shard, remote_repo, "training_progress", f"{run_id_full}.json",
     )
 
-    # 1. git pull
-    if _is_windows_remote(shard):
-        pull_cmd_str = f'cd /d "{remote_repo}" && git pull'
-    else:
-        pull_cmd_str = f'cd {shlex.quote(remote_repo)} && git pull'
-    print(
-        f"[shard {shard.display_label}] git pull on {shard.host}...",
-        file=sys.stderr,
-    )
-    _run_subprocess(_ssh_cmd(shard, pull_cmd_str), timeout=120)
+    # 1. Code sync via Tailscale-served bundle (no GitHub auth needed).
+    if bundle_url:
+        print(
+            f"[shard {shard.display_label}] sync from bundle on "
+            f"{shard.host}...", file=sys.stderr,
+        )
+        sync_cmd = _build_remote_bundle_sync_command(shard, bundle_url)
+        _run_subprocess(_ssh_cmd(shard, sync_cmd), timeout=300)
 
     # 3. Progress poller running while the run is in flight.
     poller = _ProgressPoller(
