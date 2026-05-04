@@ -99,9 +99,38 @@ fi
 cd "$REPO_PATH"
 
 # --- 3. venv + install ----------------------------------------------
+# Homebrew's python@3.13 occasionally ships an ensurepip that fails
+# on first venv creation (network / sandbox quirks). When that
+# happens, fall back to ``--without-pip`` and bootstrap pip via the
+# canonical get-pip.py — the resulting venv is identical.
+#
+# Re-runs after a partial failure: if .venv-py313 exists but has no
+# python3 (most likely a half-built tree from an earlier ensurepip
+# crash), we wipe + recreate. Otherwise we keep what's there and
+# only fix missing pip.
+if [[ -d ".venv-py313" && ! -x ".venv-py313/bin/python3" ]]; then
+    echo "[setup] existing .venv-py313 is incomplete (no python3);" \
+         "recreating from scratch"
+    rm -rf .venv-py313
+fi
 if [[ ! -d ".venv-py313" ]]; then
     echo "[setup] creating .venv-py313"
-    python3.13 -m venv .venv-py313
+    if ! python3.13 -m venv .venv-py313 2>&1; then
+        echo "[setup] venv with ensurepip failed; falling back to" \
+             "--without-pip + get-pip.py bootstrap..."
+        rm -rf .venv-py313
+        python3.13 -m venv --without-pip .venv-py313
+        curl -sSL https://bootstrap.pypa.io/get-pip.py \
+            | .venv-py313/bin/python3
+    fi
+fi
+# Bootstrap pip if it's missing (covers both the --without-pip path
+# above and the case where a prior partial run left python3 but no
+# pip).
+if [[ ! -x ".venv-py313/bin/pip" ]]; then
+    echo "[setup] venv has no pip; bootstrapping via get-pip.py..."
+    curl -sSL https://bootstrap.pypa.io/get-pip.py \
+        | .venv-py313/bin/python3
 fi
 echo "[setup] upgrading pip"
 .venv-py313/bin/pip install --quiet --upgrade pip
