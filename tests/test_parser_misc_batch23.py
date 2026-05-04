@@ -401,6 +401,69 @@ def test_tezzeret_skipped_for_unknown_name():
     assert result is None
 
 
+def test_planeswalker_skipped_for_multiple_subtypes():
+    """A planeswalker with more than one printed subtype is rejected
+    by the single-subtype guard — the engine takes a single-subtype
+    string for planeswalkers."""
+    card = {
+        "name": "Two Subtype Walker",
+        "mana_cost": "{3}",
+        "oracle_text": _TEZZERET_ORACLE,
+        "type_line": "Legendary Planeswalker — Tezzeret Bolas",
+        "loyalty": "4",
+        "set": "eoe",
+    }
+    result = _build_planeswalker_printing(card)
+    assert result is None
+
+
+def test_planeswalker_skipped_when_loyalty_missing():
+    """A planeswalker with no printed loyalty falls through."""
+    card = {
+        "name": "Tezzeret, Cruel Captain",
+        "mana_cost": "{3}",
+        "oracle_text": _TEZZERET_ORACLE,
+        "type_line": "Legendary Planeswalker — Tezzeret",
+        "set": "eoe",
+        # No "loyalty" key.
+    }
+    result = _build_planeswalker_printing(card)
+    assert result is None
+
+
+def test_planeswalker_skipped_when_loyalty_unparseable():
+    """A planeswalker with a non-integer loyalty string falls through.
+    Covers the ``int(loyalty_str)`` ValueError defensive branch."""
+    card = {
+        "name": "Tezzeret, Cruel Captain",
+        "mana_cost": "{3}",
+        "oracle_text": _TEZZERET_ORACLE,
+        "type_line": "Legendary Planeswalker — Tezzeret",
+        "loyalty": "X",  # not an integer
+        "set": "eoe",
+    }
+    result = _build_planeswalker_printing(card)
+    assert result is None
+
+
+def test_planeswalker_skips_blank_lines_in_oracle_text():
+    """A blank line in the oracle text is skipped (not treated as a
+    parse failure). The remaining recognized line still produces the
+    expected trigger."""
+    oracle_with_blank = (
+        "\n"
+        + _TEZZERET_ORACLE
+        + "\n\n"  # trailing blanks
+    )
+    card = _planeswalker_card(
+        "Tezzeret, Cruel Captain", "{3}", oracle_with_blank,
+        type_line="Legendary Planeswalker — Tezzeret",
+    )
+    result = _build_planeswalker_printing(card)
+    assert result is not None
+    assert len(result.triggered_abilities) == 1
+
+
 # ---------------------------------------------------------------------------
 # Pain for All
 # ---------------------------------------------------------------------------

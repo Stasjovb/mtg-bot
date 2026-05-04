@@ -445,6 +445,95 @@ def test_room_builder_skips_unknown_room():
     assert _build_room_printing(card) is None
 
 
+def test_room_builder_skips_card_with_wrong_face_count():
+    """A Room dict with !=2 faces returns None (defensive branch).
+    Real Rooms always have two faces; this guard covers a degenerate
+    payload reaching the per-face builder."""
+    from mtg_bot.cards.parser.room_builder import (
+        _build_room_printing_from_faces,
+    )
+    card = {
+        "name": "Glassworks // Shattered Yard",
+        "type_line": "Enchantment — Room // Enchantment — Room",
+        "card_faces": [],  # 0 faces — fails the len-check
+    }
+    assert _build_room_printing_from_faces(card) is None
+
+
+def test_room_builder_returns_none_when_first_half_unparseable():
+    """When the first face's oracle text contains an unrecognized
+    line, the builder returns None for the whole card so the caller
+    falls through to the bespoke dispatch."""
+    from mtg_bot.cards.parser.room_builder import (
+        _build_room_printing_from_faces,
+    )
+    # First face has gibberish oracle text the unified-grammar can't claim;
+    # the second face is a real working half so the failure must be
+    # attributed to the first.
+    card = {
+        "name": "Glassworks // Shattered Yard",
+        "type_line": "Enchantment — Room // Enchantment — Room",
+        "card_faces": [
+            {
+                "name": "Bogus Half",
+                "mana_cost": "{2}",
+                "oracle_text": (
+                    "This sentence makes no sense to the parser at all."
+                ),
+            },
+            {
+                "name": "Sound Half",
+                "mana_cost": "{3}",
+                "oracle_text": "",
+            },
+        ],
+    }
+    assert _build_room_printing_from_faces(card) is None
+
+
+def test_room_builder_returns_none_when_second_half_unparseable():
+    """Mirror of the previous test — a sound first half, broken
+    second half. Exercises the second-half-None defensive branch."""
+    from mtg_bot.cards.parser.room_builder import (
+        _build_room_printing_from_faces,
+    )
+    card = {
+        "name": "Glassworks // Shattered Yard",
+        "type_line": "Enchantment — Room // Enchantment — Room",
+        "card_faces": [
+            {
+                "name": "Sound Half",
+                "mana_cost": "{2}",
+                "oracle_text": "",
+            },
+            {
+                "name": "Bogus Half",
+                "mana_cost": "{3}",
+                "oracle_text": (
+                    "This sentence makes no sense to the parser at all."
+                ),
+            },
+        ],
+    }
+    assert _build_room_printing_from_faces(card) is None
+
+
+def test_room_builder_face_with_only_keyword_lines_returns_none():
+    """A Room half whose only oracle text is a printed keyword (a shape
+    the unified path doesn't claim — keywords / activated abilities on
+    a Room half pass through to the bespoke dispatch). Covers the
+    'fall through to bespoke' branch in _build_half_from_face."""
+    from mtg_bot.cards.parser.room_builder import _build_half_from_face
+    face = {
+        "name": "Keyword Half",
+        "mana_cost": "{2}",
+        "oracle_text": "Flying",
+    }
+    # The unified path doesn't claim keyword halves; this half-builder
+    # call surfaces as None so the bespoke path can claim the card.
+    assert _build_half_from_face(face) is None
+
+
 # ---------------------------------------------------------------------------
 # Behavioral: Funeral Room dies-trigger drains opponents
 # ---------------------------------------------------------------------------

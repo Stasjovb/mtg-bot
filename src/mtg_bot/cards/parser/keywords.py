@@ -50,7 +50,7 @@ def _parse_keyword_line(line: str) -> tuple[str, ...] | None:
     only appear mid-sentence, not as a printed keyword line.
     """
     pieces = [p.strip() for p in line.split(", ")]
-    if not pieces:
+    if not pieces:  # pragma: no cover - defensive; ``str.split`` always returns ≥1 piece
         return None
     normalized = [pieces[0]] + [
         p[:1].upper() + p[1:] if p else p for p in pieces[1:]
