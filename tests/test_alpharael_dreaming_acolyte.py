@@ -287,4 +287,3 @@ def test_alpharael_dreaming_acolyte_printing_metadata():
     )
     assert sa.condition == DuringYourTurn()
     assert sa.granted_keywords == frozenset()
-    assert sa.active_turn_only is False

@@ -32,10 +32,10 @@ Recognized self-scope conditions today:
   variant; adding it keeps the parser ready for printings that
   raise the bar (and makes the threshold-vs-phrase mapping explicit
   in the phrasebook rather than implicit in regex generality).
-* ``it's your turn`` → ``active_turn_only=True``. Forward-looking
+* ``it's your turn`` → ``condition=DuringYourTurn()``. Forward-looking
   grammar coverage; no EoE card prints in the leading/trailing
-  self-scope shape with this condition today, but the engine field
-  exists and the surface phrase is unambiguous.
+  self-scope shape with this condition today, but the Condition cousin
+  already exists and the surface phrase is unambiguous.
 
 Other "As long as" conditions (entered-this-turn, void, you-control-a-
 creature, etc.) have no matching engine gate; they intentionally don't
@@ -54,8 +54,9 @@ shapes recognized:
 * ``... get +N/+M and have <keyword>.`` — combined P/T + keyword
   anthem.
 * Optional leading ``During your turn, `` rider on any of the above
-  sets ``active_turn_only=True``. Memorial Team Leader prints in this
-  shape (``During your turn, other creatures you control get +1/+0.``).
+  sets ``condition=DuringYourTurn()``. Memorial Team Leader prints in
+  this shape (``During your turn, other creatures you control get
+  +1/+0.``).
 
 Anthem lines do NOT carry an ``As long as`` condition today; the
 self-scope condition phrasebook is therefore not consulted. If a future
@@ -174,7 +175,7 @@ _STATIC_CONDITION_KWARGS: dict[str, dict[str, object]] = {
     "you've cast three or more spells this turn": {
         "condition": AtLeastNSpellsCastThisTurn(3),
     },
-    "it's your turn": {"active_turn_only": True},
+    "it's your turn": {"condition": DuringYourTurn()},
     # Duskmourn "doors among Rooms" gate. Rampaging Soulrager prints
     # ``This creature gets +3/+0 as long as there are two or more
     # unlocked doors among Rooms you control.`` — the trailing-shape
@@ -407,7 +408,13 @@ def _parse_anthem_static_line(line: str) -> tuple[StaticAbility, ...]:
                 return ()
             ekws.append(ek)
         engine_keywords = tuple(ekws)
-    active_turn_only = m.group("turn_rider") is not None
+    # The optional ``During your turn, `` rider gates the static on the
+    # active player being the source's controller; rides on the
+    # structural ``DuringYourTurn`` Condition rather than a legacy
+    # boolean field.
+    turn_condition = (
+        DuringYourTurn() if m.group("turn_rider") is not None else None
+    )
     statics: list[StaticAbility] = []
     if power_bonus or toughness_bonus:
         # P/T contribution rides on a layer-7c PowerToughnessBonus
@@ -416,7 +423,7 @@ def _parse_anthem_static_line(line: str) -> tuple[StaticAbility, ...]:
         statics.append(
             StaticAbility(
                 scope=scope,
-                active_turn_only=active_turn_only,
+                condition=turn_condition,
                 continuous_effect=ContinuousModifier(
                     layer=7,
                     payload=PowerToughnessBonus(
@@ -433,7 +440,7 @@ def _parse_anthem_static_line(line: str) -> tuple[StaticAbility, ...]:
         statics.append(
             StaticAbility(
                 scope=scope,
-                active_turn_only=active_turn_only,
+                condition=turn_condition,
                 continuous_effect=ContinuousModifier(
                     layer=6,
                     payload=GrantKeyword(ek),

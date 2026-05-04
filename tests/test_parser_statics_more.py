@@ -110,7 +110,6 @@ def test_spells_cast_two_or_more_does_not_set_other_gates():
     )
     assert len(parsed) == 1
     static = parsed[0]
-    assert static.active_turn_only is False
     assert static.condition == AtLeastNSpellsCastThisTurn(2)
     assert static.tier_threshold == 0
 

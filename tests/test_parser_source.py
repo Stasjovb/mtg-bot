@@ -44,7 +44,7 @@ from mtg_bot.cards.parser_source import (
     _parse_warp_line,
 )
 from mtg_bot.cards.tokens import TOKEN_PRINTINGS
-from mtg_bot.effects.conditions import ControlPermanent
+from mtg_bot.effects.conditions import ControlPermanent, DuringYourTurn
 from mtg_bot.effects.modifiers import (
     ContinuousModifier,
     GrantKeyword,
@@ -2411,7 +2411,7 @@ def test_parse_static_ability_line_recognizes_active_turn_condition():
             layer=7,
             payload=PowerToughnessBonus(power_bonus=2, toughness_bonus=0),
         ),
-        active_turn_only=True,
+        condition=DuringYourTurn(),
     ),)
 
 

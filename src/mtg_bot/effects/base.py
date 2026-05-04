@@ -537,17 +537,12 @@ class StaticAbility:
     time and fold in applicable bonuses — no layers system yet, so the
     ordering-of-continuous-effects subtleties from the comprehensive rules
     don't apply.
-
-    ``active_turn_only=True`` gates the ability on "it's the source
-    controller's turn", matching EoE riders like "During your turn,
-    [anthem]".
     """
 
     scope: str
     granted_keywords: frozenset[str] = frozenset()
     power_bonus: int = 0
     toughness_bonus: int = 0
-    active_turn_only: bool = False
     # Tiered abilities on Spacecraft: the ability is only active when the
     # source has ``tier_threshold`` or more charge counters. 0 = always on.
     tier_threshold: int = 0
@@ -640,12 +635,6 @@ class StaticAbility:
             return False
         if target.controller_id != source.controller_id:
             return False
-        # "During your turn" gate.
-        if self.active_turn_only:
-            if state is None:
-                return False
-            if state.players[state.active_player_idx].id != source.controller_id:
-                return False
         # Spacecraft tier gate — source needs enough charge counters.
         if self.tier_threshold > 0 and source.charge_counters < self.tier_threshold:
             return False

@@ -28,6 +28,7 @@ from mtg_bot.cards.parser_source import OracleParserCardSource
 from mtg_bot.effects.conditions import (
     AtLeastNSpellsCastThisTurn,
     ControlPermanent,
+    DuringYourTurn,
 )
 from mtg_bot.effects.modifiers import (
     ContinuousModifier,
@@ -194,7 +195,7 @@ def test_trailing_shape_active_turn_parses_to_static():
             layer=7,
             payload=PowerToughnessBonus(power_bonus=1, toughness_bonus=1),
         ),
-        active_turn_only=True,
+        condition=DuringYourTurn(),
     ),)
 
 

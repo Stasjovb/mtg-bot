@@ -86,18 +86,17 @@ def test_condition_passes_when_condition_true():
     assert sa.applies_to(bear, bear, state) is True
 
 
-def test_condition_anded_with_legacy_field():
-    """Both the legacy ``active_turn_only`` field and the new
-    ``condition`` slot must pass for ``applies_to`` to return True.
-    ANDing means EITHER gate failing blocks application."""
+def test_compound_condition_blocks_when_either_clause_false():
+    """Two structural conditions combined with ``&`` gate the static
+    on BOTH clauses being true; either clause failing blocks
+    application."""
     state, bear = _arena()
     state.active_player_idx = 0
-    # Legacy gate passes (active turn) but condition fails (no
+    # Turn clause passes (active turn) but artifact clause fails (no
     # artifact controlled).
     sa = StaticAbility(
         scope=StaticScope.CREATURES_YOU_CONTROL,
-        active_turn_only=True,
-        condition=ControlPermanent(IsArtifact()),
+        condition=DuringYourTurn() & ControlPermanent(IsArtifact()),
     )
     assert sa.applies_to(bear, bear, state) is False
 
