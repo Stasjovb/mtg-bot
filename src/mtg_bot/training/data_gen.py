@@ -526,10 +526,13 @@ def _generate_one_game_data(
 
     if per_game_timeout_sec is not None and per_game_timeout_sec > 0:
         from mtg_bot.training._timeout import run_with_timeout
+        from mtg_bot.training._hang_progress import HangProgress
+        progress = HangProgress()
         try:
             winner, samples = run_with_timeout(
                 _play_one_game_recording,
-                (adapter, strategies, rng, decision_cap, sample_every, recorder),
+                (adapter, strategies, rng, decision_cap, sample_every,
+                 recorder, progress),
                 per_game_timeout_sec,
             )
         except TimeoutError as exc:
@@ -554,6 +557,7 @@ def _generate_one_game_data(
                         "sample_every": sample_every,
                         "enable_mulligans": enable_mulligans,
                         "per_game_timeout_sec": per_game_timeout_sec,
+                        "progress": progress.snapshot(),
                     },
                 )
             raise
@@ -635,6 +639,7 @@ def _play_one_game_recording(
     decision_cap: int,
     sample_every: int,
     replay_recorder: Optional[ReplayRecorder] = None,
+    progress: Optional["object"] = None,
 ) -> tuple[
     PlayerID | None,
     list[tuple[np.ndarray, PlayerID, np.ndarray, np.ndarray]],
@@ -811,6 +816,19 @@ def _play_one_game_recording(
         if replay_recorder is not None:
             replay_recorder.record(adapter.engine_state, decision=decision)
         decision_idx += 1
+        # Update the optional shared progress sentinel so the timeout
+        # handler (in the parent thread) can read decisions_completed
+        # + last decision repr if this game ends up dumping. Pure
+        # attribute writes — no lock, no allocation on the steady state.
+        # n_legal=-1 means "not measured" — we'd have to enumerate
+        # legal actions twice per decision otherwise (the search did it
+        # internally, but the result isn't exposed back to us).
+        if progress is not None:
+            try:
+                progress.record(active, decision, -1)
+            except Exception:  # noqa: BLE001
+                # Diagnostic capture must never break the game loop.
+                pass
     winner = adapter.winner() if adapter.is_terminal() else None
     return winner, samples
 
