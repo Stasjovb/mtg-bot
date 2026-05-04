@@ -1216,6 +1216,372 @@ def test_observe_action_history_actors_match_apply_order():
     assert recorded == expected_actors
 
 
+# ---------- deferred prior-stamping (Strategy A) ---------------------------
+
+
+class _CountingPolicyEvaluator:
+    """Same shape as ``_StubPolicyEvaluator`` but counts how many times
+    each network entry point is invoked. Lets the deferred-stamp tests
+    distinguish single-state forwards (the *expensive* path being
+    eliminated) from batched forwards (the path we want everything to
+    flow through)."""
+
+    def __init__(self, value: float = 0.0) -> None:
+        self.value = value
+        self.evaluate_calls = 0
+        self.evaluate_logits_calls = 0
+        self.batch_evaluate_calls = 0
+        self.batch_evaluate_logits_calls = 0
+        # Track batch sizes too — verifies that parent-flush logits
+        # actually rode along with the leaf batch, not a separate call.
+        self.batch_evaluate_logits_sizes: list[int] = []
+
+    def evaluate(self, state, player_id):
+        self.evaluate_calls += 1
+        if state.is_terminal():
+            winner = state.winner()
+            if winner is None:
+                return 0.0
+            return 1.0 if winner == player_id else -1.0
+        return self.value
+
+    def batch_evaluate(self, states, player_id):
+        self.batch_evaluate_calls += 1
+        return [self.evaluate(s, player_id) for s in states]
+
+    def evaluate_with_policy(self, state, player_id):
+        if state.is_terminal():
+            return self.value, np.zeros(
+                ae.ACTION_VOCAB_SIZE, dtype=np.float32,
+            )
+        mask = ae.legal_action_mask(state, player_id)
+        n_legal = int(mask.sum())
+        if n_legal == 0:
+            return self.value, np.zeros(
+                ae.ACTION_VOCAB_SIZE, dtype=np.float32,
+            )
+        policy = np.zeros(ae.ACTION_VOCAB_SIZE, dtype=np.float32)
+        policy[mask] = 1.0 / n_legal
+        return self.value, policy
+
+    def evaluate_logits(self, state, player_id):
+        self.evaluate_logits_calls += 1
+        return self._evaluate_logits_inner(state)
+
+    def _evaluate_logits_inner(self, state):
+        # Shared body so ``batch_evaluate_logits`` can build the
+        # per-state result without inflating ``evaluate_logits_calls``
+        # (which is the very counter the deferred-stamp tests assert
+        # on — counting the batched path's internal element-wise work
+        # would defeat the whole point of distinguishing single-state
+        # forwards from batched ones).
+        if state.is_terminal():
+            return self.value, np.zeros(
+                ae.ACTION_VOCAB_SIZE, dtype=np.float32,
+            )
+        return self.value, np.zeros(
+            ae.ACTION_VOCAB_SIZE, dtype=np.float32,
+        )
+
+    def batch_evaluate_logits(self, states, player_id):
+        self.batch_evaluate_logits_calls += 1
+        self.batch_evaluate_logits_sizes.append(len(states))
+        return [self._evaluate_logits_inner(s) for s in states]
+
+
+def test_first_iteration_uses_zero_prior_no_single_state_stamp():
+    """The deferred-stamp design forbids ``_stamp_prior`` from issuing
+    a single-state ``evaluate_logits`` call. All policy-prior fetches
+    must flow through ``batch_evaluate_logits``: the batched leaf-
+    batch flush when ``batch_size > 1``, the per-iteration micro-batch
+    flush when ``batch_size == 1``.
+
+    The remaining single-state ``evaluate_logits`` callsite is
+    ``_evaluate_leaf``, which only fires under ``batch_size == 1`` —
+    and even there, it's the LEAF evaluation (value head + leaf-node
+    logits cache), not the prior-stamp path.
+
+    Pin: with ``batch_size > 1``, a 1-iteration search makes ZERO
+    single-state ``evaluate_logits`` calls (leaf goes through the
+    batched path too). With ``batch_size == 1``, the only remaining
+    single-state calls come from ``_evaluate_leaf`` (one per leaf,
+    not from any ``_stamp_prior``-driven path).
+    """
+    adapter = _adapter(seed=11)
+    if not _advance_to_multi_action(adapter):
+        pytest.skip("game ended before a multi-action moment")
+
+    # Batched path: deferred stamp + batched leaf eval = zero
+    # single-state forwards, period.
+    ev = _CountingPolicyEvaluator(value=0.0)
+    ismcts = ISMCTS(
+        evaluator=ev,
+        budget_factory=lambda: Budget(max_nodes=1),
+        rng=random.Random(0),
+        puct=True,
+        batch_size=4,
+    )
+    ismcts.choose_with_visits(adapter, adapter.active_player())
+    assert ev.evaluate_logits_calls == 0, (
+        "deferred-stamp design under batch_size>1 forbids single-state "
+        f"evaluate_logits during search; got "
+        f"{ev.evaluate_logits_calls} call(s)"
+    )
+    assert ev.batch_evaluate_logits_calls >= 1, (
+        f"expected at least one batched forward; got "
+        f"{ev.batch_evaluate_logits_calls}"
+    )
+
+    # Serial path: only ``_evaluate_leaf`` may call single-state
+    # evaluate_logits. With a 1-iteration budget, that's at most 1
+    # call. The deferred-stamp queue must STILL flush through
+    # batch_evaluate_logits — otherwise we'd see the prior-stamp
+    # single-state forward we just eliminated.
+    ev2 = _CountingPolicyEvaluator(value=0.0)
+    ismcts2 = ISMCTS(
+        evaluator=ev2,
+        budget_factory=lambda: Budget(max_nodes=1),
+        rng=random.Random(0),
+        puct=True,
+        batch_size=1,
+    )
+    ismcts2.choose_with_visits(adapter, adapter.active_player())
+    # 1 evaluate_logits at the leaf is fine; 2+ would mean the prior
+    # stamp regressed to the synchronous code path.
+    assert ev2.evaluate_logits_calls <= 1, (
+        "serial-path evaluate_logits must come only from "
+        f"_evaluate_leaf; got {ev2.evaluate_logits_calls} (the "
+        "prior-stamp single-state call is back)"
+    )
+    assert ev2.batch_evaluate_logits_calls >= 1, (
+        "serial path must still flush the deferred-prior queue via "
+        "batch_evaluate_logits"
+    )
+
+
+def test_deferred_priors_get_stamped_before_search_returns():
+    """Once a search has flushed all of its iterations, every node in
+    the tree that has children visited (i.e. was used as a parent
+    during expansion) must have its policy logits cached. A node
+    with ``children`` non-empty but ``_policy_logits is None``
+    indicates the deferred-stamp queue leaked across the search
+    boundary — which would mean the priors on those children were
+    never upgraded from the 0.0 placeholder.
+    """
+    adapter = _adapter(seed=11)
+    if not _advance_to_multi_action(adapter):
+        pytest.skip("game ended before a multi-action moment")
+
+    class _Spy(ISMCTS):
+        captured_tree: dict = {}
+
+        def choose_with_visits(self, state, player_id):
+            from mtg_bot.search.engine_adapter import (
+                MtgGameStateAdapter as _A,
+            )
+            assert isinstance(state, _A)
+            if state.is_terminal():
+                return {}
+            legal = list(state.legal_decisions())
+            if len(legal) == 1:
+                return {legal[0]: 1}
+            root_key = info_set_key(state, player_id)
+            tree = {root_key: _Node(root_key)}
+            root = tree[root_key]
+            self._pending_prior_states = []
+            self._pending_prior_set = set()
+            budget = self.budget_factory()
+            budget.start()
+            try:
+                self._search_batched(
+                    state, player_id, root, tree, budget,
+                    self.batch_size,
+                )
+            finally:
+                self._pending_prior_states = []
+                self._pending_prior_set = set()
+            _Spy.captured_tree = tree
+            return {d: c.visits for d, c in root.children.items()}
+
+    ev = _CountingPolicyEvaluator()
+    spy = _Spy(
+        evaluator=ev,
+        budget_factory=lambda: Budget(max_nodes=40),
+        rng=random.Random(0),
+        puct=True,
+        batch_size=8,
+    )
+    spy.choose_with_visits(adapter, adapter.active_player())
+    leaks = [
+        node for node in _Spy.captured_tree.values()
+        if node.children and node._policy_logits is None
+    ]
+    assert not leaks, (
+        f"{len(leaks)} parent node(s) ended the search with children "
+        f"but no cached logits; deferred-stamp queue leaked across "
+        f"the search boundary"
+    )
+
+
+def test_deferred_prior_stamp_re_stamps_existing_children():
+    """When a parent's logits arrive via the batched flush, EVERY
+    child already attached to that parent must be re-stamped from the
+    freshly-cached logits + union mask. With the
+    ``_CountingPolicyEvaluator`` (zero logits) and a non-empty union
+    mask, the masked-softmax distribution is uniform over the union.
+    The root sees every iteration as a parent, accumulates many
+    children, and after the search every one of those children must
+    have a non-zero prior — proof that the re-stamp path actually
+    wrote each child, not just the one that triggered the flush.
+    """
+    adapter = _adapter(seed=11)
+    if not _advance_to_multi_action(adapter):
+        pytest.skip("game ended before a multi-action moment")
+
+    class _Spy(ISMCTS):
+        captured_root: _Node = None  # type: ignore[assignment]
+
+        def choose_with_visits(self, state, player_id):
+            from mtg_bot.search.engine_adapter import (
+                MtgGameStateAdapter as _A,
+            )
+            assert isinstance(state, _A)
+            if state.is_terminal():
+                return {}
+            legal = list(state.legal_decisions())
+            if len(legal) == 1:
+                return {legal[0]: 1}
+            root_key = info_set_key(state, player_id)
+            tree = {root_key: _Node(root_key)}
+            root = tree[root_key]
+            self._pending_prior_states = []
+            self._pending_prior_set = set()
+            budget = self.budget_factory()
+            budget.start()
+            try:
+                self._search_batched(
+                    state, player_id, root, tree, budget,
+                    self.batch_size,
+                )
+            finally:
+                self._pending_prior_states = []
+                self._pending_prior_set = set()
+            _Spy.captured_root = root
+            return {d: c.visits for d, c in root.children.items()}
+
+    ev = _CountingPolicyEvaluator()
+    spy = _Spy(
+        evaluator=ev,
+        budget_factory=lambda: Budget(max_nodes=30),
+        rng=random.Random(0),
+        puct=True,
+        batch_size=8,
+    )
+    spy.choose_with_visits(adapter, adapter.active_player())
+    root = _Spy.captured_root
+    assert root._policy_logits is not None
+    assert root.children, "root should have expanded children"
+    # All-zero logits + union mask → uniform-over-union distribution.
+    # Every legal child of the root sits in the union (we descended
+    # to it under that mask), so its prior is 1 / |union|.
+    nonzero = [c for c in root.children.values() if c.prior > 0.0]
+    assert len(nonzero) == len(root.children), (
+        f"expected every root child to have a re-stamped non-zero "
+        f"prior; got {len(nonzero)}/{len(root.children)} non-zero"
+    )
+
+
+def test_pending_prior_queue_dedupes_repeated_parents_in_batch():
+    """A parent that spawns multiple unexpanded children within the
+    SAME batch must only enqueue once. Without dedup the
+    batch_evaluate_logits call would re-issue the same forward for
+    every child — wasted work and a regression on the win.
+    """
+    adapter = _adapter(seed=11)
+    if not _advance_to_multi_action(adapter):
+        pytest.skip("game ended before a multi-action moment")
+
+    ev = _CountingPolicyEvaluator()
+    ismcts = ISMCTS(
+        evaluator=ev,
+        budget_factory=lambda: Budget(max_nodes=40),
+        rng=random.Random(0),
+        puct=True,
+        batch_size=8,  # each batch sees up to 8 expansions through root
+    )
+    ismcts.choose_with_visits(adapter, adapter.active_player())
+    # The root is the parent for many iterations; it must have
+    # appeared on the prior queue at most ONCE per batch — i.e. its
+    # contribution to total batch sizes is bounded by the number of
+    # batches (= 40 / 8 = 5). Combined with leaf states (at most one
+    # per iteration) plus deeper-level parents, the *total* per-call
+    # batched footprint stays comfortably below 40 + (40/8) * (some
+    # small constant for unique-parents-per-batch).
+    #
+    # Concretely: total elements across all batched calls is
+    # bounded by budget (40) + total unique parents flushed.
+    total_in_batches = sum(ev.batch_evaluate_logits_sizes)
+    # Lower bound: at least 40 leaf states must show up (one per
+    # iteration). Upper bound: a generous slack times the budget —
+    # if dedup were broken, this would balloon to thousands.
+    assert total_in_batches >= 40
+    assert total_in_batches <= 80, (
+        f"batched footprint {total_in_batches} suggests parent "
+        f"queue dedup is broken; expected ~ budget + parents-per-batch"
+    )
+
+
+def test_prior_stamp_batched_chooses_legal_decision_under_real_network():
+    """End-to-end: a real-NN PUCT search with the deferred-stamp path
+    completes without errors and returns a legal decision. The
+    network is the value-only-equivalent ``NNEvaluator(with_policy=
+    True)`` — small fresh-init weights, fast — driving the same code
+    paths as production at a tiny budget.
+    """
+    from mtg_bot.search.nn_evaluator import NNEvaluator
+
+    adapter = _adapter(seed=11)
+    if not _advance_to_multi_action(adapter):
+        pytest.skip("game ended before a multi-action moment")
+    legal = set(adapter.legal_decisions())
+
+    evaluator = NNEvaluator(with_policy=True)
+    ismcts = ISMCTS(
+        evaluator=evaluator,
+        budget_factory=lambda: Budget(max_nodes=12),
+        rng=random.Random(0),
+        puct=True,
+        batch_size=4,
+    )
+    pick = ismcts.choose(adapter, adapter.active_player())
+    assert pick in legal
+
+
+def test_pending_prior_queue_resets_between_searches():
+    """A second ``choose_with_visits`` call must not see queue state
+    left over from the first. Re-running the same search twice must
+    produce clean queues each time."""
+    adapter = _adapter(seed=11)
+    if not _advance_to_multi_action(adapter):
+        pytest.skip("game ended before a multi-action moment")
+
+    ev = _CountingPolicyEvaluator()
+    ismcts = ISMCTS(
+        evaluator=ev,
+        budget_factory=lambda: Budget(max_nodes=8),
+        rng=random.Random(0),
+        puct=True,
+        batch_size=4,
+    )
+    ismcts.choose_with_visits(adapter, adapter.active_player())
+    assert ismcts._pending_prior_states == []
+    assert ismcts._pending_prior_set == set()
+
+    ismcts.choose_with_visits(adapter, adapter.active_player())
+    assert ismcts._pending_prior_states == []
+    assert ismcts._pending_prior_set == set()
+
+
 # ---------- tree reuse across choose calls (Phase 7) -----------------------
 
 
