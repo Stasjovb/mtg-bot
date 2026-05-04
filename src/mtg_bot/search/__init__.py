@@ -22,6 +22,12 @@ Module map:
                    ``choose()``, aggregates visit counts. The
                    integration point between the determinizer and the
                    search; MTG-aware (talks to ``MtgGameStateAdapter``).
+- ``ismcts``     — ``ISMCTS``: Single-Observer Information Set MCTS.
+                   Single tree keyed by information-set hash; per-
+                   iteration determinization during selection. The
+                   modern replacement for ``PIMC`` — fixes strategy
+                   fusion, non-locality, and root-illegal phantom
+                   visits.
 - ``determinize`` — ``determinize(state, viewer_id, rng)`` root sampler
                    used by PIMC. See ``docs/HIDDEN_INFO_MODEL.md``.
 - ``expansion``  — ``ExpansionPolicy`` ABC + ``FullEnumeration`` (classic)
@@ -79,6 +85,7 @@ from mtg_bot.search.expansion import (
 )
 from mtg_bot.search.harness import MatchResult, play_one_game, run_match
 from mtg_bot.search.heuristic_evaluator import MtgHeuristicEvaluator
+from mtg_bot.search.ismcts import ISMCTS
 from mtg_bot.search.mcts import MCTS
 from mtg_bot.search.nn_evaluator import NNEvaluator
 from mtg_bot.search.pimc import PIMC
@@ -108,6 +115,7 @@ __all__ = [
     "ExpansionPolicy",
     "FullEnumeration",
     "GameState",
+    "ISMCTS",
     "MCTS",
     "MatchResult",
     "MtgGameStateAdapter",
