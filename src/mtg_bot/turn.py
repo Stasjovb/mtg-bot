@@ -1056,7 +1056,26 @@ def run_cleanup_step(state: GameState) -> None:
         # ``temp_original_controller_id`` field has been retired.
     # Expire impulse-cast flags on exiled cards — "may play this
     # turn" lasts only until the end of the turn.
+    #
+    # The loop iterates ``p.exile`` and mutates each ELEMENT in place
+    # (no list mutator). Under ``GameState.clone``'s CoW share-group
+    # design, ``p.exile`` may share its GameObjects with one or more
+    # peer states (parent + sibling rollouts in MCTS). Element-level
+    # attribute writes don't trigger ``_fork_if_shared`` — peers
+    # would silently see the flag flip too. That's the long-tail
+    # corruption that surfaced as ``ValueError: card N not castable
+    # by PX`` past a few hundred PIMC self-play games (todo
+    # e3b7d9c1): a rollout that walked through cleanup cleared an
+    # impulse-castable card's flag on the source state, then the
+    # source's heuristic chose to cast that very card and the apply
+    # path couldn't find it under any of the legal cast-source
+    # predicates. ``fork()`` (a no-op when already owned) gives self
+    # an isolated GameObject pool before the in-place mutation runs.
+    from mtg_bot.game import _CowList
+
     for p in state.players:
+        if isinstance(p.exile, _CowList):
+            p.exile.fork()
         for c in p.exile:
             c.playable_from_exile_this_turn = False
     # Empty each player's mana pool. MTG's real rule empties at end of

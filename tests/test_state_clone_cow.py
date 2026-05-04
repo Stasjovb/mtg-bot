@@ -523,3 +523,154 @@ def test_clone_obj_helper_isolated_through_cow_fork():
     assert cl_first_after is cl_first  # clone kept the original
     assert src_first_after is not src_first  # source got a fresh clone
     assert src_first_after.id == src_first.id
+
+
+def test_iterate_and_mutate_after_explicit_fork_is_isolated():
+    """Demonstrates the escape hatch for the cleanup-step pattern that
+    bypasses CoW::
+
+        for c in p.exile:
+            c.playable_from_exile_this_turn = False
+
+    The loop iterates the list (read-only) and mutates each ELEMENT
+    in place. No list-mutator (append/pop/remove/__setitem__) is
+    called, so the share group never forks naturally — and the in-
+    place attribute write would otherwise hit a GameObject that's
+    still shared with every peer ``_CowList``. That's the
+    long-tail corruption that surfaced as ``ValueError: card N not
+    castable by PX`` past a few hundred PIMC self-play games (todo
+    e3b7d9c1): a rollout that walked through cleanup cleared an
+    impulse-castable card's flag on the source state, then the
+    source's heuristic chose to cast that very card and the apply
+    path couldn't find it under any of the legal cast-source
+    predicates.
+
+    The fix is to call ``p.exile.fork()`` (the public entry point of
+    ``_fork_if_shared``) BEFORE the iteration. That's a no-op when
+    already owned, but for shared lists it gives ``self`` an
+    isolated GameObject pool — peers receive fresh clones — so the
+    subsequent attribute writes only touch ``self``'s elements.
+    """
+    from mtg_bot.cards import ManaCost
+    from mtg_bot.game import GameState, LogBuffer, Player
+
+    printing = CardPrinting(
+        name="ImpulseCard",
+        mana_cost_str="{1}",
+        mana_cost=ManaCost(generic=1),
+        type_line="Creature",
+        supertypes=(),
+        card_types=("Creature",),
+        subtypes=(),
+        power=1,
+        toughness=1,
+    )
+    impulse_card = GameObject(
+        id=42,
+        printing=printing,
+        owner_id=0,
+        controller_id=0,
+        zone=Zone.EXILE,
+    )
+    impulse_card.playable_from_exile_this_turn = True
+
+    p0 = Player(
+        id=0, life=20,
+        library=[], hand=[], graveyard=[],
+        exile=[impulse_card], mana_pool=[], agent=None,
+    )
+    p1 = Player(
+        id=1, life=20,
+        library=[], hand=[], graveyard=[],
+        exile=[], mana_pool=[], agent=None,
+    )
+    state = GameState(players=[p0, p1], rng=random.Random(0))
+    state.log = LogBuffer()
+    state.log.enabled = False
+
+    clone = state.clone()
+    # Sanity: pre-fork, source and clone share the same GameObject.
+    assert state.players[0].exile[0] is clone.players[0].exile[0]
+    assert state.players[0].exile[0].playable_from_exile_this_turn is True
+
+    # Mimic the cleanup-step pattern, prefixed with the fork() escape
+    # hatch (the same pattern ``run_cleanup_step`` now uses).
+    state.players[0].exile.fork()
+    for c in state.players[0].exile:
+        c.playable_from_exile_this_turn = False
+
+    # Source flipped (intended); clone is untouched.
+    assert (
+        state.players[0].exile[0].playable_from_exile_this_turn is False
+    )
+    assert (
+        clone.players[0].exile[0].playable_from_exile_this_turn is True
+    ), (
+        "Even after explicit ``fork()``, the source-side mutation "
+        "leaked into the clone — CoW peer-fork is broken."
+    )
+    # The clone now holds a fresh GameObject; the source still holds
+    # the original impulse_card (peer-fork direction: self keeps
+    # originals, peers get clones).
+    assert state.players[0].exile[0] is impulse_card
+    assert clone.players[0].exile[0] is not impulse_card
+    assert clone.players[0].exile[0].id == impulse_card.id
+
+
+def test_run_cleanup_step_does_not_leak_to_peer():
+    """Drive the actual ``run_cleanup_step`` on a CoW source state and
+    confirm a peer state's exile flag survives. Pre-fix this fails
+    because turn.py's cleanup loop iterates ``p.exile`` and writes
+    ``c.playable_from_exile_this_turn = False`` on each element
+    without ever forking the share group.
+    """
+    from mtg_bot.cards import ManaCost
+    from mtg_bot.game import GameState, LogBuffer, Player
+    from mtg_bot.turn import Step, run_cleanup_step
+
+    printing = CardPrinting(
+        name="ImpulseCard",
+        mana_cost_str="{1}",
+        mana_cost=ManaCost(generic=1),
+        type_line="Creature",
+        supertypes=(),
+        card_types=("Creature",),
+        subtypes=(),
+        power=1,
+        toughness=1,
+    )
+    card = GameObject(
+        id=99,
+        printing=printing,
+        owner_id=0,
+        controller_id=0,
+        zone=Zone.EXILE,
+    )
+    card.playable_from_exile_this_turn = True
+
+    p0 = Player(
+        id=0, life=20,
+        library=[], hand=[], graveyard=[],
+        exile=[card], mana_pool=[], agent=None,
+    )
+    p1 = Player(
+        id=1, life=20,
+        library=[], hand=[], graveyard=[],
+        exile=[], mana_pool=[], agent=None,
+    )
+    state = GameState(players=[p0, p1], rng=random.Random(0))
+    state.log = LogBuffer()
+    state.log.enabled = False
+    state.step = Step.CLEANUP
+
+    peer = state.clone()
+    assert peer.players[0].exile[0].playable_from_exile_this_turn is True
+
+    # Run the real cleanup on ``state``. Should not affect ``peer``.
+    run_cleanup_step(state)
+
+    assert state.players[0].exile[0].playable_from_exile_this_turn is False
+    assert peer.players[0].exile[0].playable_from_exile_this_turn is True, (
+        "run_cleanup_step on the source flipped the impulse-cast flag "
+        "on a peer state's GameObject — the cleanup loop bypasses CoW."
+    )
