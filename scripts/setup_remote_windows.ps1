@@ -67,6 +67,47 @@ try { & git --version | Out-Null } catch {
         [System.Environment]::GetEnvironmentVariable("Path", "User")
 }
 
+# --- 2b. GitHub CLI + auth -----------------------------------------
+# GH CLI is the cleanest auth flow on both Mac + Win for cloning
+# private repos. ``gh auth login`` runs once interactively in the
+# user's terminal (browser device-code flow), then ``gh auth setup-
+# git`` wires git's credential helper so subsequent clones / pulls
+# just work without re-prompts.
+try { & gh --version | Out-Null } catch {
+    Write-Host "[setup] installing gh CLI via winget..."
+    winget install --silent --accept-source-agreements --accept-package-agreements `
+        --id GitHub.cli
+    $env:Path = `
+        [System.Environment]::GetEnvironmentVariable("Path", "Machine") + ";" + `
+        [System.Environment]::GetEnvironmentVariable("Path", "User")
+}
+Write-Host "[setup] gh: $((gh --version | Select-Object -First 1))"
+
+# Auth check. ``gh auth status`` exits non-zero when not logged in.
+& gh auth status 2>$null
+if ($LASTEXITCODE -ne 0) {
+    Write-Warning @"
+
+===========================================================
+GitHub authentication required.
+
+Run these in YOUR PowerShell (needs a browser for the device-code flow):
+
+    gh auth login
+    # Choose: GitHub.com → HTTPS → "Login with a web browser"
+    gh auth setup-git
+
+Then re-run this setup script:
+
+    iex (iwr http://{{MASTER_TAILNET_NAME}}:5099/setup_remote.ps1).Content
+
+===========================================================
+"@
+    exit 1
+}
+# Ensure git's credential helper is wired to gh (idempotent).
+& gh auth setup-git | Out-Null
+
 # --- 3. Clone / pull the repo --------------------------------------
 $repoPath = $env:REPO_PATH
 if (-not (Test-Path "$repoPath\.git")) {
