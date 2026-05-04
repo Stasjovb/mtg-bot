@@ -167,6 +167,26 @@ class _CowList(list):
         self._clone_each = None
         self._share_group = None
 
+    @classmethod
+    def _new_uninitialized(cls, iterable):
+        """Build a ``_CowList`` skipping the default-attr init.
+
+        ``GameState.clone`` immediately overwrites ``_owned``,
+        ``_clone_each``, and ``_share_group`` after construction.
+        The default ``__init__`` writes those three attrs only to
+        have them stomped a few lines later — pure waste in the hot
+        clone path. This factory does the underlying ``list.__init__``
+        and leaves the three attrs unset; the caller is responsible
+        for assigning them.
+
+        DO NOT use this outside the clone path: the resulting
+        instance has no ``_owned`` attr, so any read before the
+        caller assigns one will ``AttributeError``.
+        """
+        new = cls.__new__(cls)
+        list.__init__(new, iterable)
+        return new
+
     def _fork_if_shared(self) -> None:
         """If we're sharing GameObjects with sibling lists, isolate
         ``self`` from those siblings NOW so the upcoming in-place
@@ -3035,8 +3055,15 @@ class GameState:
         safe to share).
         """
         # Build the id->new_obj map by deep-copying every GameObject
-        # referenced anywhere in the state. We walk zones in a fixed
-        # order and copy each object exactly once.
+        # referenced anywhere in the state. Bulk paths
+        # (battlefield + each player's hand) populate the map
+        # directly without per-call ``get`` lookups since those zones
+        # are mutually disjoint by construction. Cross-zone aliases
+        # appear only on rare references — ``stack[i].source``,
+        # ``resolving_source``, ``resolving_cost_paid_objects`` —
+        # which call the closure below; the closure consults ``id_map``
+        # to share the existing clone with the battlefield/hand walk
+        # when the object lives in either zone.
         id_map: dict[int, GameObject] = {}
 
         def clone_obj(o: GameObject) -> GameObject:
@@ -3097,9 +3124,6 @@ class GameState:
                 src_ex = _CowList(src_ex)
                 p.exile = src_ex
 
-            new_lib = _CowList(src_lib)
-            new_gy = _CowList(src_gy)
-            new_ex = _CowList(src_ex)
             # Splice each new (clone-side) list into its source-side
             # sibling's share group (creating one if absent). The
             # share group is a single mutable list referenced by every
@@ -3109,6 +3133,19 @@ class GameState:
             # elements into the OTHER members (see ``_fork_if_shared``
             # for why) and the mutator keeps the originals —
             # preserving caller-held element references.
+            #
+            # ``_new_uninitialized`` skips the default-attr init that
+            # the regular ``_CowList`` constructor would do; we
+            # overwrite those three attrs immediately below anyway.
+            new_lib = _CowList._new_uninitialized(src_lib)
+            new_gy = _CowList._new_uninitialized(src_gy)
+            new_ex = _CowList._new_uninitialized(src_ex)
+            new_lib._clone_each = _clone_game_object
+            new_lib._owned = False
+            new_gy._clone_each = _clone_game_object
+            new_gy._owned = False
+            new_ex._clone_each = _clone_game_object
+            new_ex._owned = False
             for clone_side, src_side in (
                 (new_lib, src_lib),
                 (new_gy, src_gy),
@@ -3128,17 +3165,35 @@ class GameState:
                     # list object.
                     group = src_side._share_group
                     group.append(clone_side)
-                clone_side._owned = False
-                clone_side._clone_each = _clone_game_object
                 clone_side._share_group = group
             np.library = new_lib
             np.graveyard = new_gy
             np.exile = new_ex
-            np.hand = [clone_obj(o) for o in p.hand]
+            # Hand objects are guaranteed unique within (and across)
+            # players (a card lives in exactly one zone at any moment
+            # in MTG), so the per-call ``id_map.get`` lookup is dead
+            # work. Skip the closure: clone directly and populate
+            # ``id_map`` in the same pass so a stack-source / resolving-
+            # source reference into the hand still resolves to the
+            # same instance.
+            new_hand = []
+            for o in p.hand:
+                new_o = _clone_game_object(o)
+                id_map[o.id] = new_o
+                new_hand.append(new_o)
+            np.hand = new_hand
             np.mana_pool = [_clone_mana_coin(c) for c in p.mana_pool]
             new_players.append(np)
 
-        new_battlefield = [clone_obj(o) for o in self.battlefield]
+        # Same disjointness argument applies to battlefield: an object
+        # is in exactly one of (battlefield, hand, library, graveyard,
+        # exile, stack) at any moment, so the bulk battlefield walk
+        # writes directly into ``id_map`` without redundant lookups.
+        new_battlefield = []
+        for o in self.battlefield:
+            new_o = _clone_game_object(o)
+            id_map[o.id] = new_o
+            new_battlefield.append(new_o)
 
         # Stack items must point at the cloned GameObject for their
         # source. All other fields are immutable; share by reference.
@@ -3146,20 +3201,27 @@ class GameState:
         # must be remapped through ``clone_obj`` so search rollouts see
         # cloned objects (sacrificed permanents now sitting in a player
         # graveyard) rather than stale originals.
-        new_stack: list[StackItem] = []
-        for item in self.stack:
-            ni = _clone_stack_item(item)
-            ni.source = clone_obj(item.source)
-            if item.cost_paid_objects:
-                ni.cost_paid_objects = tuple(
-                    clone_obj(o) for o in item.cost_paid_objects
-                )
-            new_stack.append(ni)
+        if self.stack:
+            new_stack: list[StackItem] = []
+            for item in self.stack:
+                ni = _clone_stack_item(item)
+                ni.source = clone_obj(item.source)
+                if item.cost_paid_objects:
+                    ni.cost_paid_objects = tuple(
+                        clone_obj(o) for o in item.cost_paid_objects
+                    )
+                new_stack.append(ni)
+        else:
+            new_stack = []
 
         new_log = LogBuffer()
         new_log.enabled = self.log.enabled
 
-        new_rng = random.Random()
+        # ``random.Random()`` runs the C-level seed routine that draws
+        # from os.urandom — ~5us on Windows. We're about to overwrite
+        # the state with ``setstate`` anyway, so the seed is dead work.
+        # Bypass ``__init__`` via ``__new__`` and load state directly.
+        new_rng = random.Random.__new__(random.Random)
         new_rng.setstate(self.rng.getstate())
 
         new_resolving_source = (
@@ -3171,56 +3233,90 @@ class GameState:
             if self.resolving_cost_paid_objects else ()
         )
 
-        new_state = GameState(
-            players=new_players,
-            battlefield=new_battlefield,
-            stack=new_stack,
-            active_player_idx=self.active_player_idx,
-            priority_player_idx=self.priority_player_idx,
-            turn_number=self.turn_number,
-            step=self.step,
-            next_object_id=self.next_object_id,
-            continuous_effects=list(self.continuous_effects),
-            next_timestamp=self.next_timestamp,
-            log=new_log,
-            rng=new_rng,
-            winner_id=self.winner_id,
-            is_draw=self.is_draw,
-            permanent_left_battlefield_this_turn=(
-                self.permanent_left_battlefield_this_turn
-            ),
-            spell_warped_this_turn=self.spell_warped_this_turn,
-            once_per_turn_fired=set(self.once_per_turn_fired),
-            delayed_triggers=[dict(d) for d in self.delayed_triggers],
-            resolving_source=new_resolving_source,
-            resolving_controller_id=self.resolving_controller_id,
-            resolving_x_value=self.resolving_x_value,
-            resolving_kicked=self.resolving_kicked,
-            resolving_modes=self.resolving_modes,
-            resolving_additional_cost_choice_id=(
-                self.resolving_additional_cost_choice_id
-            ),
-            resolving_combat_damage_amount=(
-                self.resolving_combat_damage_amount
-            ),
-            resolving_combat_damage_source_controller_id=(
-                self.resolving_combat_damage_source_controller_id
-            ),
-            resolving_counter_amount=self.resolving_counter_amount,
-            resolving_cost_paid_objects=new_resolving_cost_paid_objects,
-            pending_end_of_combat_sacrifices=list(
-                self.pending_end_of_combat_sacrifices
-            ),
-            players_who_created_tokens_this_turn=set(
-                self.players_who_created_tokens_this_turn
-            ),
-            ability_resolutions_this_turn=dict(
-                self.ability_resolutions_this_turn
-            ),
-            prevent_combat_damage_this_turn=(
-                self.prevent_combat_damage_this_turn
-            ),
-            extra_turn_queue=list(self.extra_turn_queue),
-            creatures_died_this_turn=self.creatures_died_this_turn,
+        # Fast path: bypass the dataclass ``__init__`` and assign each
+        # slot directly. The dataclass-generated ``__init__`` walks 30+
+        # kwargs, runs default-factory callables for any unspecified
+        # field, and re-validates against the slot descriptors —
+        # ~1.6us. ``__new__`` + manual slot assignment is ~0.5us, and
+        # we get to skip allocating empty containers when the source
+        # has no entries (the common case during search: an idle
+        # decision-point state has empty ``stack`` /
+        # ``continuous_effects`` / ``once_per_turn_fired`` / etc.).
+        new_state = GameState.__new__(GameState)
+        new_state.players = new_players
+        new_state.battlefield = new_battlefield
+        new_state.stack = new_stack
+        new_state.active_player_idx = self.active_player_idx
+        new_state.priority_player_idx = self.priority_player_idx
+        new_state.turn_number = self.turn_number
+        new_state.step = self.step
+        new_state.next_object_id = self.next_object_id
+        # Empty-collection short-circuit: ``list()`` on an empty list
+        # still allocates a fresh list object — ~0.05us each. With
+        # ~5 such fields, that's ~0.25us we recover when they're
+        # empty (the common case).
+        new_state.continuous_effects = (
+            list(self.continuous_effects) if self.continuous_effects else []
         )
+        new_state.next_timestamp = self.next_timestamp
+        new_state.log = new_log
+        new_state.rng = new_rng
+        new_state.winner_id = self.winner_id
+        new_state.is_draw = self.is_draw
+        new_state.permanent_left_battlefield_this_turn = (
+            self.permanent_left_battlefield_this_turn
+        )
+        new_state.spell_warped_this_turn = self.spell_warped_this_turn
+        new_state.once_per_turn_fired = (
+            set(self.once_per_turn_fired) if self.once_per_turn_fired else set()
+        )
+        new_state.delayed_triggers = (
+            [dict(d) for d in self.delayed_triggers]
+            if self.delayed_triggers else []
+        )
+        new_state.resolving_source = new_resolving_source
+        new_state.resolving_controller_id = self.resolving_controller_id
+        new_state.resolving_x_value = self.resolving_x_value
+        new_state.resolving_kicked = self.resolving_kicked
+        new_state.resolving_modes = self.resolving_modes
+        new_state.resolving_additional_cost_choice_id = (
+            self.resolving_additional_cost_choice_id
+        )
+        new_state.resolving_combat_damage_amount = (
+            self.resolving_combat_damage_amount
+        )
+        new_state.resolving_combat_damage_source_controller_id = (
+            self.resolving_combat_damage_source_controller_id
+        )
+        new_state.resolving_counter_amount = self.resolving_counter_amount
+        new_state.resolving_cost_paid_objects = new_resolving_cost_paid_objects
+        new_state.last_exile_recall_count = self.last_exile_recall_count
+        new_state.suppress_exiled_by_source_on_leave_for = (
+            self.suppress_exiled_by_source_on_leave_for
+        )
+        new_state.pending_end_of_combat_sacrifices = (
+            list(self.pending_end_of_combat_sacrifices)
+            if self.pending_end_of_combat_sacrifices else []
+        )
+        new_state.players_who_created_tokens_this_turn = (
+            set(self.players_who_created_tokens_this_turn)
+            if self.players_who_created_tokens_this_turn else set()
+        )
+        new_state.ability_resolutions_this_turn = (
+            dict(self.ability_resolutions_this_turn)
+            if self.ability_resolutions_this_turn else {}
+        )
+        new_state.prevent_combat_damage_this_turn = (
+            self.prevent_combat_damage_this_turn
+        )
+        new_state.extra_turn_queue = (
+            list(self.extra_turn_queue) if self.extra_turn_queue else []
+        )
+        new_state.creatures_died_this_turn = self.creatures_died_this_turn
+        # Layered-walk memo cache is per-state and intentionally NOT
+        # shared with the source: the cache gets repopulated lazily
+        # on the new state's next walk. Same-shape default the
+        # dataclass __init__ would have produced.
+        new_state._layered_cache_version = 0
+        new_state._layer6_wiped_cache = {}
         return new_state
