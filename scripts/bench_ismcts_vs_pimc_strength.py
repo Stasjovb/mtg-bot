@@ -66,6 +66,7 @@ from mtg_bot.search.strategy import SearchStrategy  # noqa: E402
 from mtg_bot.simulate import setup_game  # noqa: E402
 from mtg_bot.training.config import NNPimcConfig  # noqa: E402
 from mtg_bot.training.self_play import run_match_parallel  # noqa: E402
+from mtg_bot.training.trainer import auto_device  # noqa: E402
 
 
 # Default points at the v6 weights in the main checkout. The
@@ -119,6 +120,10 @@ class _NNIsmctsConfig:
     use_belief_weighted: bool = False
     belief_m_candidates: int = 64
     belief_min_opponent_moments: int = 3
+    # Torch device for the underlying ``NNEvaluator``. ``None`` means
+    # "use NNEvaluator's default" (CPU) — current production behavior.
+    # The bench may opt into ``"cuda"`` for matched-budget runs.
+    device: Optional[str] = None
 
     def build(self, seed: int = 0) -> SearchStrategy:
         eval_kwargs: dict[str, Any] = {
@@ -127,6 +132,8 @@ class _NNIsmctsConfig:
         }
         if self.hidden_sizes is not None:
             eval_kwargs["hidden_sizes"] = self.hidden_sizes
+        if self.device is not None:
+            eval_kwargs["device"] = self.device
         evaluator = NNEvaluator(**eval_kwargs)
         total = self.total_iterations
         ismcts_kwargs: dict[str, Any] = {
@@ -398,6 +405,7 @@ def run_one_budget(
     include_belief: bool = False,
     belief_m_candidates: int = 64,
     belief_min_opponent_moments: int = 3,
+    nn_device: Optional[str] = None,
 ) -> _BudgetResult:
     """Play matched-budget A/B match(es) and report stats.
 
@@ -425,6 +433,7 @@ def run_one_budget(
         with_policy=metadata_with_policy,
         puct=metadata_with_policy,
         hidden_sizes=metadata_hidden_sizes,
+        device=nn_device,
     )
     ismcts_uniform_cfg = _NNIsmctsConfig(
         weights_path=str(weights_path),
@@ -433,6 +442,7 @@ def run_one_budget(
         with_policy=metadata_with_policy,
         puct=metadata_with_policy,
         hidden_sizes=metadata_hidden_sizes,
+        device=nn_device,
     )
     ismcts_belief_cfg: Optional[_NNIsmctsConfig] = None
     if include_belief:
@@ -446,6 +456,7 @@ def run_one_budget(
             use_belief_weighted=True,
             belief_m_candidates=belief_m_candidates,
             belief_min_opponent_moments=belief_min_opponent_moments,
+            device=nn_device,
         )
 
     pairwise_results: list[_PairwiseResult] = []
@@ -646,6 +657,18 @@ def main(argv: Optional[list[str]] = None) -> None:
         ),
     )
     parser.add_argument(
+        "--nn-device", type=str, default="cpu",
+        choices=("cpu", "cuda", "auto"),
+        help=(
+            "Torch device for the NN evaluator (PIMC + ISMCTS). "
+            "'cpu' (default) preserves the current CPU-only worker "
+            "behavior. 'cuda' forces CUDA (errors out if not "
+            "available). 'auto' picks cuda when available, else cpu. "
+            "Bench-only knob; production data_gen / self-play stays "
+            "on CPU per the multiprocessing-data-gen contract."
+        ),
+    )
+    parser.add_argument(
         "--belief-min-opponent-moments", type=int, default=3,
         help=(
             "Conditional-activation gate: skip the belief scoring "
@@ -675,12 +698,29 @@ def main(argv: Optional[list[str]] = None) -> None:
     if args.with_policy is not None:
         metadata_with_policy = args.with_policy
 
+    # Resolve --nn-device: 'auto' -> auto_device(); 'cuda' -> verify
+    # cuda is available so we fail loudly here rather than per-worker
+    # at first NNEvaluator construction.
+    if args.nn_device == "auto":
+        nn_device = auto_device()
+    elif args.nn_device == "cuda":
+        import torch
+        if not torch.cuda.is_available():
+            parser.error(
+                "--nn-device cuda requested but torch.cuda.is_available() "
+                "is False on this host."
+            )
+        nn_device = "cuda"
+    else:
+        nn_device = "cpu"
+
     print(
         f"# weights: {args.weights_path}\n"
         f"# with_policy={metadata_with_policy} "
         f"hidden_sizes={metadata_hidden_sizes}\n"
         f"# budgets: {budgets}\n"
-        f"# n_games per budget: {args.n_games}",
+        f"# n_games per budget: {args.n_games}\n"
+        f"# nn_device: {nn_device} (cli={args.nn_device})",
         file=sys.stderr, flush=True,
     )
 
@@ -703,6 +743,7 @@ def main(argv: Optional[list[str]] = None) -> None:
             belief_min_opponent_moments=(
                 args.belief_min_opponent_moments
             ),
+            nn_device=nn_device,
         )
         results.append(result)
     overall_elapsed = time.perf_counter() - overall_started
@@ -725,6 +766,8 @@ def main(argv: Optional[list[str]] = None) -> None:
         "base_seed": args.base_seed,
         "nn_batch_size": args.nn_batch_size,
         "workers": args.workers,
+        "nn_device": nn_device,
+        "nn_device_cli": args.nn_device,
         "include_belief": args.include_belief,
         "belief_m_candidates": args.belief_m_candidates,
         "belief_min_opponent_moments": (

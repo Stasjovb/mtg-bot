@@ -1,0 +1,104 @@
+{
+  "base_seed": 0,
+  "belief_m_candidates": 8,
+  "belief_min_opponent_moments": 3,
+  "budgets": [
+    {
+      "inner_nodes": 10,
+      "n_games": 4,
+      "pairwise": [
+        {
+          "avg_decisions": 851.75,
+          "challenger": "ISMCTS-uniform",
+          "challenger_win_rate": 0.0,
+          "challenger_wins": 0,
+          "ci_high": 0.48990002040399916,
+          "ci_low": 0.0,
+          "crashed": 0,
+          "decided_games": 4,
+          "defender": "PIMC",
+          "defender_wins": 4,
+          "draws": 0,
+          "elapsed_seconds": 7.871488600037992,
+          "n_games": 4,
+          "verdict": "weaker"
+        },
+        {
+          "avg_decisions": 770.75,
+          "challenger": "ISMCTS-belief",
+          "challenger_win_rate": 0.0,
+          "challenger_wins": 0,
+          "ci_high": 0.48990002040399916,
+          "ci_low": 0.0,
+          "crashed": 0,
+          "decided_games": 4,
+          "defender": "PIMC",
+          "defender_wins": 4,
+          "draws": 0,
+          "elapsed_seconds": 134.800851100008,
+          "n_games": 4,
+          "verdict": "weaker"
+        },
+        {
+          "avg_decisions": 1274.75,
+          "challenger": "ISMCTS-belief",
+          "challenger_win_rate": 0.25,
+          "challenger_wins": 1,
+          "ci_high": 0.6993639475573634,
+          "ci_low": 0.045586062644636216,
+          "crashed": 0,
+          "decided_games": 4,
+          "defender": "ISMCTS-uniform",
+          "defender_wins": 3,
+          "draws": 0,
+          "elapsed_seconds": 424.98617039999226,
+          "n_games": 4,
+          "verdict": "comparable"
+        }
+      ],
+      "samples": 1,
+      "total_iterations": 10,
+      "wallclock": {
+        "ismcts_median_ms": 9.777700004633516,
+        "ismcts_seconds_per_call": [
+          0.010095999983604997,
+          0.012970699986908585,
+          0.008844000054523349,
+          0.008783500001300126,
+          0.009777700004633516
+        ],
+        "pimc_median_ms": 3.9142000023275614,
+        "pimc_seconds_per_call": [
+          0.004196499998215586,
+          0.004271799989510328,
+          0.003914200002327561,
+          0.0033325999975204468,
+          0.003739000007044524
+        ],
+        "seeds": [
+          11,
+          42,
+          77,
+          99,
+          2026
+        ]
+      }
+    }
+  ],
+  "hidden_sizes": [
+    1024,
+    1024,
+    512
+  ],
+  "include_belief": true,
+  "matched_budget_formula": "ismcts.total_iterations = pimc.samples * pimc.inner_nodes",
+  "n_games_per_budget": 4,
+  "nn_batch_size": 32,
+  "nn_device": "cpu",
+  "nn_device_cli": "cpu",
+  "overall_elapsed_seconds": 567.9552444999572,
+  "stamp": "20260504T194627Z",
+  "weights_path": "..\\..\\mtg-bot\\trained_weights\\v10\\weights.pt",
+  "with_policy": true,
+  "workers": 2
+}
