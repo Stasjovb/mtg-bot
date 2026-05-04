@@ -217,3 +217,115 @@ def test_build_repo_bundle_helper_returns_nonempty_bytes(tmp_path: Path):
         data.startswith(b"# v2 git bundle\n")
         or data.startswith(b"# v3 git bundle\n")
     )
+
+
+# ---- pull-model queue endpoints ---------------------------------
+
+
+def _queue_app():
+    serve = _load_module()
+    app = serve.create_app(
+        repo_url="(unused)", master_pubkey="",
+        master_tailnet_name="m", port=5099,
+        template_dir=_REPO_ROOT / "scripts",
+        repo_root=None,
+    )
+    return app.test_client()
+
+
+def test_queue_init_then_take_advances_through_all_games():
+    c = _queue_app()
+    res = c.post("/queue/init", json={
+        "run_id": "iter_001", "total_games": 10,
+    })
+    assert res.status_code == 200
+    res = c.post("/queue/take", json={
+        "run_id": "iter_001", "batch_size": 5,
+    })
+    body = res.get_json()
+    assert body["games"] == [0, 1, 2, 3, 4]
+    assert body["remaining"] == 5
+    res = c.post("/queue/take", json={
+        "run_id": "iter_001", "batch_size": 5,
+    })
+    body = res.get_json()
+    assert body["games"] == [5, 6, 7, 8, 9]
+    assert body["remaining"] == 0
+    res = c.post("/queue/take", json={
+        "run_id": "iter_001", "batch_size": 5,
+    })
+    body = res.get_json()
+    assert body["games"] == []
+    assert body["remaining"] == 0
+
+
+def test_queue_take_with_partial_batch_at_end():
+    c = _queue_app()
+    c.post("/queue/init", json={"run_id": "r", "total_games": 7})
+    c.post("/queue/take", json={"run_id": "r", "batch_size": 5})
+    res = c.post("/queue/take", json={"run_id": "r", "batch_size": 5})
+    body = res.get_json()
+    assert body["games"] == [5, 6]
+    assert body["remaining"] == 0
+
+
+def test_queue_take_unknown_run_id_404():
+    c = _queue_app()
+    res = c.post("/queue/take", json={
+        "run_id": "never-init", "batch_size": 5,
+    })
+    assert res.status_code == 404
+
+
+def test_queue_init_validates_inputs():
+    c = _queue_app()
+    res = c.post("/queue/init", json={"total_games": 10})
+    assert res.status_code == 400
+    res = c.post("/queue/init", json={"run_id": "r"})
+    assert res.status_code == 400
+    res = c.post("/queue/init", json={"run_id": "r", "total_games": 0})
+    assert res.status_code == 400
+
+
+def test_queue_isolated_per_run_id():
+    c = _queue_app()
+    c.post("/queue/init", json={"run_id": "A", "total_games": 5})
+    c.post("/queue/init", json={"run_id": "B", "total_games": 7})
+    res = c.post("/queue/take", json={"run_id": "A", "batch_size": 3})
+    assert res.get_json()["games"] == [0, 1, 2]
+    res = c.post("/queue/take", json={"run_id": "B", "batch_size": 3})
+    assert res.get_json()["games"] == [0, 1, 2]
+
+
+def test_queue_status_reflects_state():
+    c = _queue_app()
+    c.post("/queue/init", json={"run_id": "r", "total_games": 10})
+    c.post("/queue/take", json={"run_id": "r", "batch_size": 4})
+    res = c.get("/queue/status")
+    body = res.get_json()
+    assert body["queues"]["r"] == {
+        "next": 4, "total": 10, "remaining": 6,
+    }
+
+
+def test_queue_concurrent_takes_no_overlap():
+    """Threading correctness: 50 threads each grabbing batch=1 from
+    a 50-total queue should get exactly 50 unique game-idxes
+    (0..49, in some order). Pinned because the bug class is "two
+    workers return the same game" which is silently wrong and
+    doubles the policy gradient on those rows."""
+    import concurrent.futures
+
+    c = _queue_app()
+    c.post("/queue/init", json={"run_id": "r", "total_games": 50})
+
+    def take():
+        return c.post(
+            "/queue/take", json={"run_id": "r", "batch_size": 1},
+        ).get_json()["games"]
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=50) as ex:
+        results = list(ex.map(lambda _: take(), range(50)))
+
+    flat = [g for batch in results for g in batch]
+    assert sorted(flat) == list(range(50))

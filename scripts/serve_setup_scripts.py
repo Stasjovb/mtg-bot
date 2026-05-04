@@ -30,6 +30,7 @@ import argparse
 import socket
 import subprocess
 import sys
+import threading
 from pathlib import Path
 from typing import Optional
 
@@ -38,7 +39,9 @@ _SRC = _HERE.parent / "src"
 if _SRC.is_dir() and str(_SRC) not in sys.path:
     sys.path.insert(0, str(_SRC))
 
-from flask import Flask, Response, render_template_string  # noqa: E402
+from flask import (  # noqa: E402
+    Flask, Response, jsonify, render_template_string, request,
+)
 
 
 _LANDING_HTML = """<!doctype html>
@@ -215,6 +218,75 @@ def create_app(
             master_tailnet_name=master_tailnet_name,
         )
         return Response(body, mimetype="text/x-powershell")
+
+    # ---- pull-model self-play queue ------------------------------
+    # In-memory queue state, keyed by run_id (e.g.
+    # "iter_001_self_play_v6"). Each iter creates a fresh queue;
+    # there's no persistence — if the master restarts mid-iter,
+    # workers will see "queue not initialized" and bail. That's
+    # the right outcome (iter is dead anyway).
+    _queues: dict[str, dict] = {}
+    _queues_lock = threading.Lock()
+
+    @app.route("/queue/init", methods=["POST"])
+    def queue_init():
+        """Initialize the queue for a fresh run. Body:
+        ``{"run_id": str, "total_games": int}``. Idempotent — re-init
+        with the same total_games is a no-op; with a different total
+        replaces the queue (intentional — caller knows what they're
+        doing, e.g. extending an iter)."""
+        data = request.get_json(silent=True) or {}
+        run_id = data.get("run_id")
+        total = data.get("total_games")
+        if not run_id or not isinstance(total, int) or total <= 0:
+            return jsonify({"error": "run_id + total_games required"}), 400
+        with _queues_lock:
+            _queues[run_id] = {"next": 0, "total": total}
+        return jsonify({"ok": True, "run_id": run_id, "total_games": total})
+
+    @app.route("/queue/take", methods=["POST"])
+    def queue_take():
+        """Hand out the next batch of game indices for ``run_id``.
+        Body: ``{"run_id": str, "batch_size": int}``. Returns
+        ``{"games": [int, ...]}`` — empty list means queue is
+        drained (worker should exit its loop).
+
+        Atomic: the lock-protected slice + advance ensures two
+        workers calling concurrently can't get overlapping ranges.
+        """
+        data = request.get_json(silent=True) or {}
+        run_id = data.get("run_id")
+        batch_size = int(data.get("batch_size", 25))
+        if batch_size < 1:
+            return jsonify({"error": "batch_size must be >= 1"}), 400
+        with _queues_lock:
+            q = _queues.get(run_id)
+            if q is None:
+                return jsonify({"error": f"unknown run_id {run_id!r}"}), 404
+            start = q["next"]
+            end = min(start + batch_size, q["total"])
+            q["next"] = end
+        return jsonify({
+            "games": list(range(start, end)),
+            "remaining": q["total"] - end,
+        })
+
+    @app.route("/queue/status", methods=["GET"])
+    def queue_status():
+        """Diagnostic: report current state of all queues. Useful to
+        eyeball "is the master making progress" without polling each
+        shard's progress JSON."""
+        with _queues_lock:
+            return jsonify({
+                "queues": {
+                    rid: {
+                        "next": q["next"],
+                        "total": q["total"],
+                        "remaining": q["total"] - q["next"],
+                    }
+                    for rid, q in _queues.items()
+                },
+            })
 
     @app.route("/repo.bundle")
     def repo_bundle():
