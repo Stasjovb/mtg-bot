@@ -459,11 +459,14 @@ def _play_one_match_game(
         recorder.record(adapter.engine_state)
 
     if per_game_timeout_sec is not None and per_game_timeout_sec > 0:
+        from mtg_bot.training._hang_progress import HangProgress
         from mtg_bot.training._timeout import run_with_timeout
+        progress = HangProgress()
         try:
             winner, decisions = run_with_timeout(
                 _play_capped_game,
-                (adapter, strategies, rng, decision_cap, recorder),
+                (adapter, strategies, rng, decision_cap, recorder,
+                 progress),
                 per_game_timeout_sec,
             )
         except TimeoutError as exc:
@@ -487,6 +490,7 @@ def _play_one_match_game(
                         "decision_cap": decision_cap,
                         "enable_mulligans": enable_mulligans,
                         "per_game_timeout_sec": per_game_timeout_sec,
+                        "progress": progress.snapshot(),
                     },
                 )
             raise
@@ -559,6 +563,7 @@ def _play_capped_game(
     rng: random.Random,
     decision_cap: int,
     replay_recorder: Optional[ReplayRecorder] = None,
+    progress: Optional["object"] = None,
 ) -> tuple[PlayerID | None, int]:
     """Play one game with a hard decision cap. Returns
     ``(winner_id_or_None, decisions_made)``. If the cap is hit
@@ -607,6 +612,15 @@ def _play_capped_game(
         decisions += 1
         if replay_recorder is not None:
             replay_recorder.record(adapter.engine_state, decision=decision)
+        # Update the optional shared progress sentinel — see
+        # mtg_bot.training._hang_progress for rationale. Pure attribute
+        # writes; no allocations on the steady-state path.
+        if progress is not None:
+            try:
+                progress.record(active, decision, -1)
+            except Exception:  # noqa: BLE001
+                # Diagnostic capture must never break the game loop.
+                pass
     if adapter.is_terminal():
         return adapter.winner(), decisions
     return None, decisions
