@@ -25,7 +25,10 @@ from mtg_bot.cards.parser.statics import (
     _parse_static_ability_line,
 )
 from mtg_bot.cards.parser_source import OracleParserCardSource
-from mtg_bot.effects.conditions import ControlPermanent
+from mtg_bot.effects.conditions import (
+    AtLeastNSpellsCastThisTurn,
+    ControlPermanent,
+)
 from mtg_bot.effects.modifiers import (
     ContinuousModifier,
     GrantKeyword,
@@ -52,7 +55,7 @@ def test_trailing_shape_spells_cast_parses_to_static():
             layer=7,
             payload=PowerToughnessBonus(power_bonus=2, toughness_bonus=0),
         ),
-        requires_spells_cast_this_turn=2,
+        condition=AtLeastNSpellsCastThisTurn(2),
     ),)
 
 
@@ -119,7 +122,7 @@ def test_trailing_shape_with_multiword_keyword_rider():
                     power_bonus=1, toughness_bonus=1,
                 ),
             ),
-            requires_spells_cast_this_turn=2,
+            condition=AtLeastNSpellsCastThisTurn(2),
         ),
         StaticAbility(
             scope=StaticScope.SELF,
@@ -127,7 +130,7 @@ def test_trailing_shape_with_multiword_keyword_rider():
                 layer=6,
                 payload=GrantKeyword("first strike"),
             ),
-            requires_spells_cast_this_turn=2,
+            condition=AtLeastNSpellsCastThisTurn(2),
         ),
     )
 

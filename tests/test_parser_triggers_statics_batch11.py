@@ -76,6 +76,7 @@ from mtg_bot.cards.parser.triggers import (
     _parse_trigger_phrase,
     _parse_triggered_ability_line,
 )
+from mtg_bot.effects.conditions import AtLeastNSpellsCastThisTurn
 from mtg_bot.effects.predicates import (
     Event,
     IsSelf,
@@ -311,7 +312,7 @@ def test_three_or_more_spells_leading_shape_parses_to_static():
             layer=7,
             payload=PowerToughnessBonus(power_bonus=3, toughness_bonus=0),
         ),
-        requires_spells_cast_this_turn=3,
+        condition=AtLeastNSpellsCastThisTurn(3),
     ),)
 
 
@@ -329,7 +330,7 @@ def test_three_or_more_spells_trailing_shape_parses_to_static():
             layer=7,
             payload=PowerToughnessBonus(power_bonus=3, toughness_bonus=0),
         ),
-        requires_spells_cast_this_turn=3,
+        condition=AtLeastNSpellsCastThisTurn(3),
     ),)
 
 
@@ -367,7 +368,7 @@ def test_three_or_more_spells_with_keyword_rider_leading():
                     power_bonus=2, toughness_bonus=0,
                 ),
             ),
-            requires_spells_cast_this_turn=3,
+            condition=AtLeastNSpellsCastThisTurn(3),
         ),
         StaticAbility(
             scope=StaticScope.SELF,
@@ -375,7 +376,7 @@ def test_three_or_more_spells_with_keyword_rider_leading():
                 layer=6,
                 payload=GrantKeyword("trample"),
             ),
-            requires_spells_cast_this_turn=3,
+            condition=AtLeastNSpellsCastThisTurn(3),
         ),
     )
 
@@ -396,8 +397,8 @@ def test_three_or_more_spells_distinct_from_two_or_more():
     )
     assert len(two) == 1
     assert len(three) == 1
-    assert two[0].requires_spells_cast_this_turn == 2
-    assert three[0].requires_spells_cast_this_turn == 3
+    assert two[0].condition == AtLeastNSpellsCastThisTurn(2)
+    assert three[0].condition == AtLeastNSpellsCastThisTurn(3)
     assert two != three
 
 
@@ -411,8 +412,7 @@ def test_three_or_more_spells_does_not_set_other_gates():
     )
     assert len(parsed) == 1
     static = parsed[0]
-    assert static.requires_spells_cast_this_turn == 3
-    assert static.condition is None
+    assert static.condition == AtLeastNSpellsCastThisTurn(3)
     assert static.active_turn_only is False
     assert static.tier_threshold == 0
 
@@ -426,7 +426,7 @@ def test_three_or_more_spells_phrase_pinned_in_phrasebook():
     )
     assert _STATIC_CONDITION_KWARGS[
         "you've cast three or more spells this turn"
-    ] == {"requires_spells_cast_this_turn": 3}
+    ] == {"condition": AtLeastNSpellsCastThisTurn(3)}
 
 
 def test_existing_static_conditions_still_resolve():

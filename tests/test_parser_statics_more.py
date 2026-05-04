@@ -39,6 +39,7 @@ from mtg_bot.cards.parser.statics import (
     _parse_static_ability_line,
 )
 from mtg_bot.cards.parser_source import OracleParserCardSource
+from mtg_bot.effects.conditions import AtLeastNSpellsCastThisTurn
 from mtg_bot.effects.modifiers import (
     ContinuousModifier,
     GrantKeyword,
@@ -63,7 +64,7 @@ def test_spells_cast_two_or_more_parses_to_static():
             layer=7,
             payload=PowerToughnessBonus(power_bonus=2, toughness_bonus=0),
         ),
-        requires_spells_cast_this_turn=2,
+        condition=AtLeastNSpellsCastThisTurn(2),
     ),)
 
 
@@ -86,7 +87,7 @@ def test_spells_cast_two_or_more_with_keyword_rider():
                     power_bonus=2, toughness_bonus=0,
                 ),
             ),
-            requires_spells_cast_this_turn=2,
+            condition=AtLeastNSpellsCastThisTurn(2),
         ),
         StaticAbility(
             scope=StaticScope.SELF,
@@ -94,7 +95,7 @@ def test_spells_cast_two_or_more_with_keyword_rider():
                 layer=6,
                 payload=GrantKeyword("flying"),
             ),
-            requires_spells_cast_this_turn=2,
+            condition=AtLeastNSpellsCastThisTurn(2),
         ),
     )
 
@@ -110,7 +111,7 @@ def test_spells_cast_two_or_more_does_not_set_other_gates():
     assert len(parsed) == 1
     static = parsed[0]
     assert static.active_turn_only is False
-    assert static.condition is None
+    assert static.condition == AtLeastNSpellsCastThisTurn(2)
     assert static.tier_threshold == 0
 
 
@@ -192,7 +193,7 @@ def test_phrasebook_includes_the_new_condition():
     )
     assert _STATIC_CONDITION_KWARGS[
         "you've cast two or more spells this turn"
-    ] == {"requires_spells_cast_this_turn": 2}
+    ] == {"condition": AtLeastNSpellsCastThisTurn(2)}
 
 
 # ---------- End-to-end: existing claims still resolve ----------

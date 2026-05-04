@@ -174,7 +174,6 @@ def test_active_turn_does_not_set_other_gates():
     static = parsed[0]
     assert static.active_turn_only is True
     assert static.condition is None
-    assert static.requires_spells_cast_this_turn == 0
     assert static.tier_threshold == 0
 
 

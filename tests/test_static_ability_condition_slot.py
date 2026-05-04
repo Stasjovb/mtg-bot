@@ -174,6 +174,41 @@ def test_control_artifact_condition_passes_when_artifact_present():
     assert sa.applies_to(bear, bear, state) is True
 
 
+def test_at_least_n_spells_cast_condition_blocks_below_threshold():
+    """The spells-cast-this-turn gate (formerly the
+    ``requires_spells_cast_this_turn`` integer field) now rides on the
+    ``AtLeastNSpellsCastThisTurn`` Condition. Below the threshold,
+    ``applies_to`` returns False — same semantics as the legacy field
+    gate."""
+    from mtg_bot.effects.conditions import AtLeastNSpellsCastThisTurn
+
+    state, bear = _arena()
+    state.active_player_idx = 0
+    state.players[0].spells_cast_this_turn = 1  # below threshold of 2
+    sa = StaticAbility(
+        scope=StaticScope.SELF,
+        power_bonus=2,
+        condition=AtLeastNSpellsCastThisTurn(2),
+    )
+    assert sa.applies_to(bear, bear, state) is False
+
+
+def test_at_least_n_spells_cast_condition_passes_at_threshold():
+    """At or above the threshold, the condition evaluates True and
+    ``applies_to`` returns True."""
+    from mtg_bot.effects.conditions import AtLeastNSpellsCastThisTurn
+
+    state, bear = _arena()
+    state.active_player_idx = 0
+    state.players[0].spells_cast_this_turn = 2  # at threshold
+    sa = StaticAbility(
+        scope=StaticScope.SELF,
+        power_bonus=2,
+        condition=AtLeastNSpellsCastThisTurn(2),
+    )
+    assert sa.applies_to(bear, bear, state) is True
+
+
 def test_continuous_effect_slot_holds_value():
     """The slot accepts a ``ContinuousModifier`` instance and exposes
     it for the PR-D continuous-effect dispatcher to discover."""

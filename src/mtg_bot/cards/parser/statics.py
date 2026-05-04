@@ -21,13 +21,13 @@ Recognized self-scope conditions today:
   ``condition=ControlPermanent(IsArtifact())`` (Cloudsculpt Technician,
   Gravblade Heavy).
 * ``you've cast two or more spells this turn`` →
-  ``requires_spells_cast_this_turn=2`` (Brightspear Zealot, via the
-  trailing shape).
+  ``condition=AtLeastNSpellsCastThisTurn(2)`` (Brightspear Zealot, via
+  the trailing shape).
 * ``you've cast three or more spells this turn`` →
-  ``requires_spells_cast_this_turn=3``. Batch-11 forward-looking
-  variant of the existing ``two or more`` phrase — same engine gate
-  field with a higher threshold. No EoE printing today uses this
-  threshold but the engine accepts any ``int >= 0`` and the surface
+  ``condition=AtLeastNSpellsCastThisTurn(3)``. Batch-11 forward-looking
+  variant of the existing ``two or more`` phrase — same Condition
+  cousin with a higher threshold. No EoE printing today uses this
+  threshold but the Condition accepts any ``int >= 0`` and the surface
   phrasing is the natural one-word substitution from the ``two``
   variant; adding it keeps the parser ready for printings that
   raise the bar (and makes the threshold-vs-phrase mapping explicit
@@ -83,7 +83,11 @@ import re
 
 from mtg_bot.cards.base import StaticAbility, StaticScope
 from mtg_bot.cards.parser.keywords import _KEYWORD_LINES
-from mtg_bot.effects.conditions import ControlPermanent, DuringYourTurn
+from mtg_bot.effects.conditions import (
+    AtLeastNSpellsCastThisTurn,
+    ControlPermanent,
+    DuringYourTurn,
+)
 from mtg_bot.effects.modifiers import (
     ContinuousModifier,
     GrantKeyword,
@@ -160,15 +164,15 @@ _STATIC_CONDITION_KWARGS: dict[str, dict[str, object]] = {
         "condition": ControlPermanent(IsArtifact()),
     },
     "you've cast two or more spells this turn": {
-        "requires_spells_cast_this_turn": 2
+        "condition": AtLeastNSpellsCastThisTurn(2),
     },
     # Batch 11 — forward-looking N=3 variant. Same engine gate as the
-    # ``two or more`` entry above with a higher threshold; the engine
-    # accepts any non-negative integer for ``requires_spells_cast_this_
-    # turn`` and the surface phrasing is the natural one-word
+    # ``two or more`` entry above with a higher threshold; the
+    # ``AtLeastNSpellsCastThisTurn`` Condition accepts any non-negative
+    # integer and the surface phrasing is the natural one-word
     # substitution. No EoE card prints this threshold today.
     "you've cast three or more spells this turn": {
-        "requires_spells_cast_this_turn": 3
+        "condition": AtLeastNSpellsCastThisTurn(3),
     },
     "it's your turn": {"active_turn_only": True},
     # Duskmourn "doors among Rooms" gate. Rampaging Soulrager prints

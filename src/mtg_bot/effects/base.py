@@ -551,10 +551,6 @@ class StaticAbility:
     # Tiered abilities on Spacecraft: the ability is only active when the
     # source has ``tier_threshold`` or more charge counters. 0 = always on.
     tier_threshold: int = 0
-    # Minimum spells_cast_this_turn the controller must have reached for
-    # the ability to apply. 0 means "always on". Matches EoE's
-    # "as long as you've cast two or more spells this turn" riders.
-    requires_spells_cast_this_turn: int = 0
     # Minimum unlocked doors among Rooms the source's controller
     # controls for the ability to apply. 0 means "always on". Matches
     # Duskmourn's "as long as there are two or more unlocked doors
@@ -653,16 +649,6 @@ class StaticAbility:
         # Spacecraft tier gate — source needs enough charge counters.
         if self.tier_threshold > 0 and source.charge_counters < self.tier_threshold:
             return False
-        # "As long as you've cast N or more spells this turn" gate.
-        if self.requires_spells_cast_this_turn > 0:
-            if state is None:
-                return False
-            controller = state.player_by_id(source.controller_id)
-            if (
-                controller.spells_cast_this_turn
-                < self.requires_spells_cast_this_turn
-            ):
-                return False
         # "As long as there are N or more unlocked doors among Rooms
         # you control" gate. Walks the controller's battlefield and
         # sums ``len(unlocked_halves)`` across every Room. A Room with
