@@ -207,6 +207,25 @@ class ISMCTS(SearchStrategy):
         self.c_puct = c_puct
         self.batch_size = batch_size
         self.puct = puct
+        # Tree reuse across choose_with_visits() calls — the standard
+        # AlphaGo/AlphaZero optimization. The tree persists between
+        # game-decisions; on the next ``choose_with_visits`` call the
+        # state's info-set key is looked up and (if present) the
+        # corresponding ``_Node`` becomes the new root with all of its
+        # accumulated visits, value, availability counts, and cached
+        # policy logits intact. ``observe_action`` prunes the tree
+        # down to the chosen child's reachable subtree after every
+        # applied decision so memory stays bounded.
+        self._tree: dict[bytes, _Node] = {}
+        # Tracks the info-set key the search descended FROM on its
+        # most recent ``choose_with_visits`` call. Required because
+        # ``observe_action`` is called with a pre-apply state but the
+        # tree may have advanced past it (e.g. the actor whose
+        # ``choose`` was just called has the root on its info set;
+        # an opponent's action still needs to be applied to step the
+        # tree forward). We snapshot the root key at search time so
+        # we can locate which node to descend from.
+        self._tree_root_key: Optional[bytes] = None
 
     # ------------------------------------------------------------------
     # SearchStrategy surface
@@ -226,7 +245,8 @@ class ISMCTS(SearchStrategy):
         decision: Decision,
         actor: PlayerID,
     ) -> None:
-        """Record a priority-moment observation for belief tracking.
+        """Record a priority-moment observation for belief tracking
+        AND advance/prune the persistent ISMCTS tree.
 
         Called by the game loop once after every ``adapter.apply`` —
         regardless of whose turn it was — so the strategy's
@@ -241,11 +261,25 @@ class ISMCTS(SearchStrategy):
         unconditionally — opponent identity is determined per-search-
         call by the viewer passed to ``choose``.
 
-        No-op when ``self._determinize`` is the uniform sampler (or
-        anything other than a ``BeliefWeightedDeterminizer``); under
-        plain ISMCTS the call is silent overhead and game-loop sites
-        don't have to branch.
+        Tree-reuse semantics: if a persistent tree exists from a
+        previous ``choose_with_visits`` call, we attempt to walk from
+        the recorded root by ``decision`` into the matching child
+        node. When found, that child becomes the new root and all
+        unreachable nodes are dropped from the tree dict (a flat dict
+        + transposition merging means orphan removal is a reachability
+        sweep). When not found — either because the action wasn't
+        explored under the search budget, or because some intermediate
+        priority moment was skipped — the tree is cleared and the
+        next ``choose_with_visits`` rebuilds from scratch. Either way
+        memory stays bounded by the recent reachable subtree.
+
+        Belief-history append is unchanged from earlier phases — it
+        runs *only* when a ``BeliefWeightedDeterminizer`` is plugged
+        in, and is independent of tree state. Plain ISMCTS still
+        benefits from tree reuse without any belief machinery.
         """
+        self._advance_tree_root(decision)
+
         # Local import to avoid a top-level cycle: belief.py imports
         # from search.determinize, which is a peer of this module.
         # Keeping the dependency on belief lazy means the plain-ISMCTS
@@ -272,6 +306,63 @@ class ISMCTS(SearchStrategy):
             *determinizer.played_history, moment,
         )
 
+    # ------------------------------------------------------------------
+    # Tree reuse helpers
+    # ------------------------------------------------------------------
+
+    def reset_tree(self) -> None:
+        """Drop the persistent tree. Called automatically at the start
+        of each game by the data-gen / self-play loops if they want
+        a clean slate; exposed publicly so tests and ad-hoc callers
+        can force a rebuild without re-instantiating the strategy.
+        """
+        self._tree = {}
+        self._tree_root_key = None
+
+    def _advance_tree_root(self, decision: Decision) -> None:
+        """Walk the persistent tree forward by one observed
+        ``decision`` and prune to the new root's reachable subtree.
+
+        No-op when there's no current root (first call of a game, or
+        immediately after a previous prune emptied the tree). When the
+        decision wasn't a child of the current root, clear the tree —
+        the ISMCTS budget didn't explore that branch under the
+        previous search, so we have nothing useful to carry forward.
+        """
+        if not self._tree or self._tree_root_key is None:
+            return
+        current_root = self._tree.get(self._tree_root_key)
+        if current_root is None:
+            # Defensive: tree dict and root key are out of sync.
+            self.reset_tree()
+            return
+        new_root = current_root.children.get(decision)
+        if new_root is None:
+            # Action wasn't expanded under the previous search.
+            # Discard the whole tree; next search starts fresh.
+            self.reset_tree()
+            return
+        # Reachability sweep from the new root. Transposition merging
+        # means a child node may be reachable from multiple parents,
+        # so a simple "delete everything except subtree" doesn't
+        # apply — we BFS from the new root collecting reachable keys
+        # and rebuild the dict from that set. Cycles are possible in
+        # principle (info-set graph isn't a DAG when transpositions
+        # send descendants back to ancestors); the visited set guards
+        # against re-traversal.
+        reachable: dict[bytes, _Node] = {}
+        stack: list[_Node] = [new_root]
+        while stack:
+            node = stack.pop()
+            if node.key in reachable:
+                continue
+            reachable[node.key] = node
+            for child in node.children.values():
+                if child.key not in reachable:
+                    stack.append(child)
+        self._tree = reachable
+        self._tree_root_key = new_root.key
+
     def choose_with_visits(
         self, state: GameState, player_id: PlayerID
     ) -> dict[Decision, int]:
@@ -297,8 +388,30 @@ class ISMCTS(SearchStrategy):
             return {legal[0]: 1}
 
         root_key = info_set_key(state, player_id)
-        tree: dict[bytes, _Node] = {root_key: _Node(root_key)}
-        root = tree[root_key]
+        # Tree-reuse path: if the persistent tree already has a node
+        # for this info set (carried over from a previous choose_with_
+        # _visits call followed by observe_action prunes that landed
+        # us here), reuse it as the root. The accumulated visits +
+        # cached policy logits + union mask + priors all stay live,
+        # giving the new search a head start. Otherwise build a fresh
+        # root and start a fresh tree.
+        existing = self._tree.get(root_key)
+        if existing is not None:
+            tree = self._tree
+            root = existing
+        else:
+            # No reuse — either the first search of the game, or the
+            # previous search's chosen action wasn't a child of the
+            # tree's last root (so observe_action cleared it). Build a
+            # new tree dict; replace whatever was there since stale
+            # nodes from a different position would just be dead
+            # weight under the new root's info-set.
+            tree = {root_key: _Node(root_key)}
+            root = tree[root_key]
+            self._tree = tree
+        # Snapshot the root key so observe_action can step the tree
+        # forward by one decision after the agent commits.
+        self._tree_root_key = root_key
 
         budget = self.budget_factory()
         budget.start()
