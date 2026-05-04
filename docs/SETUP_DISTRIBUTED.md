@@ -12,8 +12,71 @@ The two target machines today are:
 - **MacBook Pro M-series + 48 GB RAM** — macOS, Apple Silicon
   native PyTorch wheels, Remote Login (built-in SSH server).
 
-Both go through the same logical steps, with OS-specific commands
-called out where they differ.
+## Quick path: serve setup scripts from the master
+
+The master can host the per-OS install scripts on a tiny Tailscale-
+accessible HTTP server, with the master's repo URL + ssh public key
+already templated in. Each remote then runs a single one-liner — no
+manual scp / env vars / pubkey paste.
+
+**On the master**, once:
+
+```bash
+PYTHONPATH=src .venv-py313/Scripts/python.exe scripts/serve_setup_scripts.py
+```
+
+(Default port 5099. Auto-detects the master's tailnet name, the
+repo's git remote, and the user's `~/.ssh/id_ed25519.pub`.)
+
+**On each remote** (one-time):
+
+```bash
+# macOS: in Terminal
+curl -sSL http://<master-tailnet-name>:5099/setup_remote.sh | bash
+
+# Windows: in elevated PowerShell
+iex (iwr http://<master-tailnet-name>:5099/setup_remote.ps1).Content
+```
+
+What that does:
+- Installs Python 3.13 (Homebrew on Mac, winget on Windows) if missing.
+- `git clone` the repo to `~/projects/mtg-bot` (Mac) or
+  `%USERPROFILE%\Projects\mtg-bot` (Windows).
+- Creates `.venv-py313`, `pip install -e .[dev]`, plus PyTorch
+  (native ARM on Mac, CPU-only on Windows).
+- Appends the master's public key to `~/.ssh/authorized_keys` with
+  the right permissions.
+- Windows only: enables OpenSSH Server, opens the firewall, sets
+  the right ACL on `authorized_keys` (silent reject without it).
+- Runs the distributed-self-play tests as a smoke check.
+
+Two manual remaining steps per remote:
+1. **Install + log in to Tailscale** (browser auth flow can't be
+   scripted). Mac: `brew install --cask tailscale && open
+   /Applications/Tailscale.app`. Windows: download from
+   https://tailscale.com/download/windows.
+2. **Smoke test SSH** from the master:
+   `ssh <user>@<remote-tailnet-name> "echo ok"` — should work without
+   prompting.
+
+Then back on the master, push the bootstrap data files (one-time
+per remote, plus once per `current_best` advancement):
+
+```bash
+PYTHONPATH=src .venv-py313/Scripts/python.exe scripts/push_master_data.py \
+    --shards-config shards_config.json --shard <remote-name>
+# OR explicit:
+PYTHONPATH=src .venv-py313/Scripts/python.exe scripts/push_master_data.py \
+    --host <remote-tailnet-name> --user <u> --repo-path <p>
+```
+
+That copies the bootstrap version's weights + the EOE deck pool to
+the remote's repo (matching relative paths, so `iterate` finds them).
+
+The long-form below is the manual path — useful for debugging when
+the quick path doesn't apply (no Tailscale yet, scripts misbehaving,
+etc.). Both go through the same logical steps with OS-specific
+commands called out where they differ.
 
 ---
 
