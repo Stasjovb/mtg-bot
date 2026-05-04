@@ -133,6 +133,7 @@ class BeliefWeightedDeterminizer:
         log_prob_floor: float = _LOG_PROB_FLOOR,
         ess_warn_threshold: float = 1.0,
         nn_batch_size: int = 256,
+        min_opponent_moments: int = 3,
     ) -> None:
         """Construct the sampler.
 
@@ -177,6 +178,16 @@ class BeliefWeightedDeterminizer:
         overhead on CPU and to fill GPU SMs without overcommitting
         memory at the typical (m_candidates=64) * (history=25) =
         1600-state working set.
+
+        ``min_opponent_moments`` (default 3) is a conditional-
+        activation gate: the sampler falls back to the uniform
+        determinizer until ``played_history`` contains at least this
+        many opponent (non-viewer) priority moments. Below the
+        threshold the posterior is approximately uniform anyway —
+        too few observations for the likelihood to differentiate
+        from the prior — and skipping the m * H scoring pass cuts
+        cold-call cost on early-game decisions where wallclock
+        dominates. Set to 0 to disable the gate (always run belief).
         """
         if m_candidates < 1:
             raise ValueError(
@@ -189,6 +200,11 @@ class BeliefWeightedDeterminizer:
         if nn_batch_size < 1:
             raise ValueError(
                 f"nn_batch_size must be >= 1, got {nn_batch_size!r}"
+            )
+        if min_opponent_moments < 0:
+            raise ValueError(
+                f"min_opponent_moments must be >= 0, got "
+                f"{min_opponent_moments!r}"
             )
         if not callable(getattr(
             opponent_policy_evaluator, "evaluate_logits", None,
@@ -207,6 +223,7 @@ class BeliefWeightedDeterminizer:
         self.log_prob_floor = log_prob_floor
         self.ess_warn_threshold = ess_warn_threshold
         self.nn_batch_size = nn_batch_size
+        self.min_opponent_moments = min_opponent_moments
         # FIFO cache keyed on (opponent_hand_printings_tuple,
         # history_index) → (legal_mask, logits). Uses an OrderedDict
         # so popitem(last=False) gives FIFO eviction, no extra
@@ -272,6 +289,24 @@ class BeliefWeightedDeterminizer:
             return _uniform_determinize(
                 engine_state, viewer_id, rng, in_place=in_place,
             )
+
+        # Conditional-activation gate: until we've observed at least
+        # ``min_opponent_moments`` opponent (non-viewer) actions, the
+        # likelihood signal is too weak to differentiate the
+        # posterior from the uniform prior in any consistent way —
+        # and the cold-call cost is wasted on early-game decisions
+        # where wallclock dominates iteration throughput. O(H)
+        # check; cheaper than the gate's avoided work by orders of
+        # magnitude.
+        if self.min_opponent_moments > 0:
+            opp_moment_count = sum(
+                1 for m in self.played_history if m.actor != viewer_id
+            )
+            if opp_moment_count < self.min_opponent_moments:
+                self.last_ess = float(self.m_candidates)
+                return _uniform_determinize(
+                    engine_state, viewer_id, rng, in_place=in_place,
+                )
 
         # Reuse the previous (seeds, log_weights, ess) if the played
         # history hasn't grown since they were computed and the

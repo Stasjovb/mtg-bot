@@ -309,6 +309,11 @@ def test_likelihood_scoring_concentrates_on_consistent_hand():
             opponent_policy_evaluator=favored_evaluator,
             played_history=log[:1],
             m_candidates=64,
+            # Disable the conditional-activation gate; this test
+            # exercises the likelihood-separation property even with
+            # a single opponent moment, which is below the default
+            # threshold of 3.
+            min_opponent_moments=0,
         )
         s = source_state.clone()
         sampler(s, viewer, random.Random(1000 + trial), in_place=True)
@@ -324,6 +329,7 @@ def test_likelihood_scoring_concentrates_on_consistent_hand():
             opponent_policy_evaluator=favored_evaluator,
             played_history=[],
             m_candidates=64,
+            min_opponent_moments=0,
         )
         s = source_state.clone()
         sampler_prior(
@@ -857,6 +863,52 @@ def test_opponent_hand_key_is_hashable_for_real_printings():
     key = _opponent_hand_key(state, opponent=1)
     # Must hash without raising; the bug was a TypeError here.
     hash(key)
+
+
+def test_min_opponent_moments_gate_skips_belief_below_threshold():
+    """Conditional-activation gate: with fewer than the configured
+    threshold of opponent moments, the sampler short-circuits to
+    uniform without calling the evaluator.
+    """
+    adapter = _adapter(seed=11)
+    log = _drive_to_opponent_moments(adapter, opponent=1, max_steps=20)
+    if len(log) < 2:
+        pytest.skip("need at least 2 opponent moments")
+    evaluator = _UniformPolicyEvaluator()
+    sampler = BeliefWeightedDeterminizer(
+        opponent_policy_evaluator=evaluator,
+        played_history=log[:2],  # only 2 opponent moments
+        m_candidates=4,
+        min_opponent_moments=3,  # threshold above current count
+    )
+    s = adapter.engine_state.clone()
+    sampler(s, viewer_id=0, rng=random.Random(7), in_place=True)
+    assert evaluator.calls == 0, (
+        "gate should skip the evaluator when opponent moments are "
+        "below threshold"
+    )
+    assert sampler.last_evaluator_calls == 0
+
+
+def test_min_opponent_moments_gate_runs_belief_at_threshold():
+    """Above threshold, belief runs normally."""
+    adapter = _adapter(seed=11)
+    log = _drive_to_opponent_moments(adapter, opponent=1, max_steps=20)
+    if len(log) < 3:
+        pytest.skip("need at least 3 opponent moments")
+    evaluator = _UniformPolicyEvaluator()
+    sampler = BeliefWeightedDeterminizer(
+        opponent_policy_evaluator=evaluator,
+        played_history=log[:3],
+        m_candidates=4,
+        min_opponent_moments=3,
+    )
+    s = adapter.engine_state.clone()
+    sampler(s, viewer_id=0, rng=random.Random(7), in_place=True)
+    assert evaluator.calls > 0, (
+        "evaluator should be called when opponent moments meet "
+        "threshold"
+    )
 
 
 def test_belief_end_to_end_with_protocol_evaluator_on_synthetic_deck():
