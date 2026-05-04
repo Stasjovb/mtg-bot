@@ -208,6 +208,51 @@ def test_at_least_n_spells_cast_condition_passes_at_threshold():
     assert sa.applies_to(bear, bear, state) is True
 
 
+def test_unlocked_doors_among_rooms_condition_blocks_below_threshold():
+    """The 'unlocked doors among Rooms you control' gate (formerly the
+    ``requires_unlocked_doors_among_rooms`` integer field) now rides on
+    the ``UnlockedDoorsAmongRoomsAtLeast`` Condition. With no Rooms in
+    play, the condition fails and ``applies_to`` returns False."""
+    from mtg_bot.effects.conditions import UnlockedDoorsAmongRoomsAtLeast
+
+    state, bear = _arena()
+    state.active_player_idx = 0
+    sa = StaticAbility(
+        scope=StaticScope.SELF,
+        power_bonus=3,
+        condition=UnlockedDoorsAmongRoomsAtLeast(2),
+    )
+    assert sa.applies_to(bear, bear, state) is False
+
+
+def test_unlocked_doors_among_rooms_condition_passes_at_threshold():
+    """A controlled Room with both halves unlocked contributes 2 doors;
+    at the threshold ``applies_to`` returns True. Mirrors the engine
+    semantics of the legacy field gate exactly — a per-half count, not
+    a per-Room count."""
+    from mtg_bot.effects.conditions import UnlockedDoorsAmongRoomsAtLeast
+    from mtg_bot.cards.parser.source import OracleParserCardSource
+    from mtg_bot.game import Zone
+
+    state, bear = _arena()
+    state.active_player_idx = 0
+    # Find any Room printing in the parser pool to use as a fixture.
+    printings = OracleParserCardSource().get_printings()
+    room_p = next(
+        p for p in printings.values()
+        if "Room" in p.subtypes
+    )
+    room = state.new_object(room_p, 0, Zone.BATTLEFIELD)
+    room.unlocked_halves = frozenset(h.name for h in room_p.room_halves)
+    state.battlefield.append(room)
+    sa = StaticAbility(
+        scope=StaticScope.SELF,
+        power_bonus=3,
+        condition=UnlockedDoorsAmongRoomsAtLeast(2),
+    )
+    assert sa.applies_to(bear, bear, state) is True
+
+
 def test_continuous_effect_slot_holds_value():
     """The slot accepts a ``ContinuousModifier`` instance and exposes
     it for the PR-D continuous-effect dispatcher to discover."""

@@ -546,16 +546,6 @@ class StaticAbility:
     # Tiered abilities on Spacecraft: the ability is only active when the
     # source has ``tier_threshold`` or more charge counters. 0 = always on.
     tier_threshold: int = 0
-    # Minimum unlocked doors among Rooms the source's controller
-    # controls for the ability to apply. 0 means "always on". Matches
-    # Duskmourn's "as long as there are two or more unlocked doors
-    # among Rooms you control" rider (Rampaging Soulrager). The count
-    # walks the controller's battlefield, sums ``len(unlocked_halves)``
-    # over every Room object, and gates on the total reaching the
-    # threshold. Distinct from a Room-count gate because a single Room
-    # with both halves unlocked counts as two doors here, mirroring the
-    # printed "doors" wording exactly.
-    requires_unlocked_doors_among_rooms: int = 0
     # DSK "Delirium" gate: when ``True`` the ability is inert unless the
     # source's controller has at least four distinct card types among
     # cards in their graveyard (CR 205.2a card-type taxonomy — supertypes
@@ -638,25 +628,6 @@ class StaticAbility:
         # Spacecraft tier gate — source needs enough charge counters.
         if self.tier_threshold > 0 and source.charge_counters < self.tier_threshold:
             return False
-        # "As long as there are N or more unlocked doors among Rooms
-        # you control" gate. Walks the controller's battlefield and
-        # sums ``len(unlocked_halves)`` across every Room. A Room with
-        # both halves unlocked contributes 2; a Room with one half
-        # unlocked contributes 1; a Room not on the controller's
-        # battlefield contributes 0. Matches the printed "doors"
-        # wording exactly — a per-half count rather than a per-Room
-        # count.
-        if self.requires_unlocked_doors_among_rooms > 0:
-            if state is None:
-                return False
-            total_doors = sum(
-                len(o.unlocked_halves)
-                for o in state.battlefield
-                if o.controller_id == source.controller_id
-                and "Room" in o.printing.subtypes
-            )
-            if total_doors < self.requires_unlocked_doors_among_rooms:
-                return False
         # "As long as there are four or more card types among cards in
         # your graveyard" gate (DSK Delirium). Walks the controller's
         # graveyard once and counts distinct card-type entries from the

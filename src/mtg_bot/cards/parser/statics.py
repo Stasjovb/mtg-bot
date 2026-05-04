@@ -88,6 +88,7 @@ from mtg_bot.effects.conditions import (
     AtLeastNSpellsCastThisTurn,
     ControlPermanent,
     DuringYourTurn,
+    UnlockedDoorsAmongRoomsAtLeast,
 )
 from mtg_bot.effects.modifiers import (
     ContinuousModifier,
@@ -180,12 +181,12 @@ _STATIC_CONDITION_KWARGS: dict[str, dict[str, object]] = {
     # ``This creature gets +3/+0 as long as there are two or more
     # unlocked doors among Rooms you control.`` — the trailing-shape
     # static line lands here via its ``as long as <condition>`` tail.
-    # Maps to ``requires_unlocked_doors_among_rooms=2``; the engine
-    # gate walks the controller's battlefield, sums
+    # Maps to ``condition=UnlockedDoorsAmongRoomsAtLeast(2)``; the
+    # condition walks the controller's battlefield, sums
     # ``len(unlocked_halves)`` over every Room, and applies the
     # ability only when the total clears the threshold.
     "there are two or more unlocked doors among Rooms you control": {
-        "requires_unlocked_doors_among_rooms": 2
+        "condition": UnlockedDoorsAmongRoomsAtLeast(2),
     },
     # Duskmourn "Delirium" gate. Wildfire Wickerfolk prints
     # ``Delirium — This creature gets +1/+1 and has trample as long as
