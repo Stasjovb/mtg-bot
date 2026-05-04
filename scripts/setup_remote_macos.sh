@@ -49,6 +49,44 @@ if ! command -v python3.13 >/dev/null 2>&1; then
 fi
 echo "[setup] python3.13: $(python3.13 --version)"
 
+# --- 1b. GitHub CLI + auth ------------------------------------------
+# GH CLI gives the cleanest auth flow for cloning private repos:
+# ``gh auth login`` runs once interactively in the user's terminal
+# (browser-based device-code flow), then ``gh auth setup-git`` wires
+# git's credential helper so subsequent clones / pulls just work.
+if ! command -v gh >/dev/null 2>&1; then
+    if ! command -v brew >/dev/null 2>&1; then
+        echo "ERROR: brew not found; can't install gh CLI." >&2
+        exit 1
+    fi
+    echo "[setup] installing gh CLI via Homebrew..."
+    brew install gh
+fi
+echo "[setup] gh: $(gh --version | head -1)"
+
+if ! gh auth status >/dev/null 2>&1; then
+    cat >&2 <<EOF
+
+===========================================================
+GitHub authentication required.
+
+Run this in YOUR TERMINAL (needs a browser for the device-code flow):
+
+    gh auth login
+    # Choose: GitHub.com → HTTPS → "Login with a web browser"
+    gh auth setup-git
+
+Then re-run this setup script:
+
+    curl -sSL http://{{MASTER_TAILNET_NAME}}:5099/setup_remote.sh | bash
+
+===========================================================
+EOF
+    exit 1
+fi
+# Ensure git's credential helper is wired to gh (idempotent).
+gh auth setup-git >/dev/null
+
 # --- 2. Clone / pull the repo ---------------------------------------
 if [[ ! -d "$REPO_PATH/.git" ]]; then
     mkdir -p "$(dirname "$REPO_PATH")"

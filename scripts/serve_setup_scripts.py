@@ -67,6 +67,10 @@ _LANDING_HTML = """<!doctype html>
 <h2>What the scripts do</h2>
 <ul>
   <li>Install Python 3.13 (via Homebrew on Mac, winget on Windows) if missing.</li>
+  <li>Install the GitHub CLI (<code>gh</code>) and check authentication.
+      If not logged in, the script exits with instructions to run
+      <code>gh auth login</code> + <code>gh auth setup-git</code>
+      interactively, then re-run the one-liner.</li>
   <li>Clone <code>{{ repo_url }}</code> into a default path under the user's home.</li>
   <li>Create <code>.venv-py313</code> + install the package + PyTorch.</li>
   <li>Append the master's public key to <code>~/.ssh/authorized_keys</code>.</li>
@@ -74,6 +78,14 @@ _LANDING_HTML = """<!doctype html>
   <li>Run the distributed-self-play tests as a smoke check.</li>
 </ul>
 <p>Tailscale install + login still needs a browser, so it stays manual on each remote.</p>
+<h2>One-time GitHub auth (per remote)</h2>
+<p>Each remote needs to be logged in to GitHub via <code>gh</code>
+before the scripts can clone. After running the one-liner once and
+seeing the auth prompt:</p>
+<pre><code>gh auth login    # GitHub.com → HTTPS → "Login with a web browser"
+gh auth setup-git</code></pre>
+<p>Then re-run the curl/iex one-liner above — the clone will succeed
+and the rest of setup proceeds.</p>
 </body></html>
 """
 
