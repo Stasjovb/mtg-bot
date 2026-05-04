@@ -545,6 +545,45 @@ def test_remote_pull_command_posix_round_trips_b64_args():
             assert ShardConfig.from_dict(decoded) == expected
 
 
+def test_remote_join_windows_normalizes_to_forward_slashes():
+    """Windows scp's quoting rejects mixed-separator paths like
+    ``C:\\Users\\foo/sub/bar``. ``_remote_join`` normalizes
+    backslashes in any input segment to ``/`` so the whole path is
+    forward-slashed; cmd.exe handles ``C:/...`` fine, scp parses it,
+    SSH server resolves it. Pinned because we hit this in the smoke
+    (events JSONL silently failed to scp back from the Win10 box)."""
+    from mtg_bot.training.distributed import _remote_join
+
+    shard = ShardConfig(
+        host="winbox", n_games=10, user="g",
+        repo_path="C:\\Users\\g\\Projects\\mtg-bot",
+        venv_python=".venv-py313\\Scripts\\python.exe",
+    )
+    joined = _remote_join(
+        shard, "C:\\Users\\g\\Projects\\mtg-bot",
+        "training_progress", "iter_001_events.jsonl",
+    )
+    assert "\\" not in joined
+    assert joined == (
+        "C:/Users/g/Projects/mtg-bot/training_progress/"
+        "iter_001_events.jsonl"
+    )
+
+
+def test_remote_join_posix_uses_forward_slashes():
+    from mtg_bot.training.distributed import _remote_join
+
+    shard = ShardConfig(
+        host="mac", n_games=10, user="g",
+        repo_path="/Users/g/repo",
+        venv_python=".venv-py313/bin/python",
+    )
+    joined = _remote_join(
+        shard, "/Users/g/repo", "training_progress", "x.json",
+    )
+    assert joined == "/Users/g/repo/training_progress/x.json"
+
+
 def test_remote_bundle_sync_command_posix():
     """POSIX shell uses ``/tmp/repo.bundle`` + bash quoting."""
     from mtg_bot.training.distributed import (

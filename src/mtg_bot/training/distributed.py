@@ -958,16 +958,19 @@ def _is_windows_remote(shard: ShardConfig) -> bool:
 def _remote_join(shard: ShardConfig, *parts: str) -> str:
     """Join path parts using the remote's OS conventions. We don't
     actually run on the remote — this just produces the string the
-    remote shell will interpret. POSIX uses ``/``; Windows uses
-    ``\\`` for the venv path but cmd.exe handles ``/`` fine for
-    plain file references, so we keep ``/`` for portability EXCEPT
-    when joining with the venv_python (which already carries its OS
-    separator)."""
+    remote shell will interpret.
+
+    POSIX: ``/`` separator via ``PurePosixPath``.
+
+    Windows: all forward slashes, even inside ``C:\\Users\\...`` —
+    cmd.exe handles ``C:/Users/...`` fine, AND scp's quoting layer
+    rejects mixed-separator paths like ``C:\\Users\\.../sub/file``
+    (it double-escapes the backslashes and the SSH server can't
+    find the path). So we rewrite every backslash in each input to
+    ``/`` and join with ``/``.
+    """
     if _is_windows_remote(shard):
-        # cmd.exe accepts forward slashes for cd / file args; we
-        # join with ``/`` for everything except the venv python
-        # which was supplied with backslashes by the user.
-        return "/".join(parts)
+        return "/".join(p.replace("\\", "/") for p in parts)
     return str(PurePosixPath(*parts))
 
 
@@ -1294,14 +1297,22 @@ def run_shard_remote(
         # cmd.exe: ``dir /b`` lists basenames only.
         list_cmd = (
             f'cd /d "{remote_repo}" && '
-            f'dir /b iterate_data\\{prefix}*.npz'
+            f'dir /b iterate_data\\{prefix}*.npz 2>nul'
         )
     else:
         list_cmd = (
             f'cd {shlex.quote(remote_repo)} && '
-            f'ls iterate_data/{prefix}*.npz | xargs -n1 basename'
+            f'ls iterate_data/{prefix}*.npz 2>/dev/null '
+            f'| xargs -n1 basename'
         )
-    list_proc = _run_subprocess(_ssh_cmd(shard, list_cmd), timeout=30)
+    # Don't ``check=True`` here: a shard that lost every batch race
+    # (or whose self-play crashed before producing any output) is
+    # not a bug at the listing layer. Both ``dir /b`` and ``ls`` exit
+    # non-zero on no-match; we treat that as zero files and move on.
+    list_proc = subprocess.run(
+        _ssh_cmd(shard, list_cmd),
+        capture_output=True, text=True, timeout=30,
+    )
     basenames = [
         line.strip() for line in list_proc.stdout.splitlines()
         if line.strip()
