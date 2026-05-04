@@ -285,10 +285,21 @@ class BeliefWeightedDeterminizer:
     ) -> float:
         """Return ``log P(played_history | particle)``.
 
-        For each historical priority moment, clone the historical
-        state, re-determinize it under the particle's seed, evaluate
-        the opponent NN's policy at the reconstructed state, and add
-        ``log P(action_taken)``. Sum across moments.
+        For each historical priority moment whose actor is NOT
+        ``viewer_id`` (i.e. an opponent priority moment), clone the
+        historical state, re-determinize it under the particle's seed,
+        evaluate the opponent NN's policy at the reconstructed state,
+        and add ``log P(action_taken)``. Sum across moments.
+
+        Viewer-action moments are SKIPPED — the played_history log
+        captures every priority moment in the game (game loops can't
+        easily filter at append time without knowing the search
+        viewer), and only opponent moments contribute likelihood
+        signal under the Bayesian setup. The viewer's own actions are
+        deterministic from the viewer's perspective (the viewer chose
+        them with full information about their own hand) so
+        P(viewer_action | candidate_opponent_hand) is independent of
+        the candidate and contributes nothing to the posterior weight.
 
         Cache hits skip the evaluator call. Cache key is the opponent
         hand's printing tuple at the reconstructed state plus the
@@ -299,6 +310,8 @@ class BeliefWeightedDeterminizer:
 
         log_likelihood = 0.0
         for h_idx, moment in enumerate(self.played_history):
+            if moment.actor == viewer_id:
+                continue
             opponent = moment.actor
             # Per-moment determinization. The first moment (h_idx=0)
             # uses the particle's seed unmixed so its permutation is

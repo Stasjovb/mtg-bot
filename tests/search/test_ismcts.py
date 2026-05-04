@@ -990,3 +990,227 @@ def test_nn_evaluator_evaluate_logits_differs_from_evaluate_with_policy():
     assert not np.isclose(logits.sum(), 1.0)
     # Distribution is non-negative, logits can be negative.
     assert np.all(distribution >= 0.0)
+
+
+# ---------- observe_action wireup (Phase 6.5) -------------------------------
+
+
+def test_observe_action_is_noop_with_default_uniform_determinizer():
+    """``observe_action`` must be silent when the determinize_fn is
+    anything other than a ``BeliefWeightedDeterminizer``. The default
+    uniform sampler has no played_history attribute; the call should
+    not raise and should not stash state on the strategy."""
+    adapter = _adapter(seed=11)
+    if not _advance_to_multi_action(adapter):
+        pytest.skip("game ended before a multi-action moment")
+    legal = adapter.legal_decisions()
+    decision = legal[0]
+    actor = adapter.active_player()
+    ismcts = _make_ismcts(nodes=10)
+    # Pre-call: determinize_fn is the module-level uniform fn.
+    ismcts.observe_action(adapter, decision, actor)
+    # Post-call: still the same callable; nothing stashed.
+    from mtg_bot.search.determinize import determinize as _uniform
+    assert ismcts._determinize is _uniform
+
+
+def test_observe_action_appends_to_belief_determinizer_history():
+    """With a ``BeliefWeightedDeterminizer`` plugged in, each
+    ``observe_action`` call appends a ``PriorityMoment`` to the
+    determinizer's ``played_history``. The state attached is a
+    *clone* of the supplied adapter's engine state so subsequent
+    in-place mutations (the game loop's apply) don't corrupt the
+    recorded snapshot.
+    """
+    from mtg_bot.search.belief import (
+        BeliefWeightedDeterminizer, PriorityMoment,
+    )
+    adapter = _adapter(seed=11)
+    if not _advance_to_multi_action(adapter):
+        pytest.skip("game ended before a multi-action moment")
+    actor = adapter.active_player()
+    legal = adapter.legal_decisions()
+    decision = legal[0]
+
+    eval_stub = _StubPolicyEvaluator()
+    determinizer = BeliefWeightedDeterminizer(
+        opponent_policy_evaluator=eval_stub,
+    )
+    ismcts = ISMCTS(
+        evaluator=eval_stub,
+        budget_factory=lambda: Budget(max_nodes=10),
+        determinize_fn=determinizer,
+        rng=random.Random(0),
+        puct=True,
+    )
+
+    pre_turn = adapter.engine_state.turn_number
+    assert determinizer.played_history == ()
+
+    ismcts.observe_action(adapter, decision, actor)
+    assert len(determinizer.played_history) == 1
+    moment = determinizer.played_history[0]
+    assert isinstance(moment, PriorityMoment)
+    assert moment.decision == decision
+    assert moment.actor == actor
+    # State attached is a clone — same turn number captured.
+    assert moment.state.turn_number == pre_turn
+    # Attached state is independent from the live adapter: mutating
+    # the live engine_state's turn_number doesn't change the snapshot.
+    adapter.engine_state.turn_number = pre_turn + 5
+    assert moment.state.turn_number == pre_turn
+
+    # A second call appends a second moment; order preserved.
+    ismcts.observe_action(adapter, decision, actor)
+    assert len(determinizer.played_history) == 2
+
+
+def test_observe_action_accepts_engine_state_directly():
+    """``observe_action`` takes either an ``MtgGameStateAdapter`` or
+    a raw ``GameState``; both clone the engine state for the snapshot.
+    The game loop has the adapter; some callers (e.g. tests, replay
+    inspection tools) may have the raw engine state.
+    """
+    from mtg_bot.search.belief import BeliefWeightedDeterminizer
+    adapter = _adapter(seed=11)
+    if not _advance_to_multi_action(adapter):
+        pytest.skip("game ended before a multi-action moment")
+    actor = adapter.active_player()
+    decision = adapter.legal_decisions()[0]
+    eval_stub = _StubPolicyEvaluator()
+    determinizer = BeliefWeightedDeterminizer(
+        opponent_policy_evaluator=eval_stub,
+    )
+    ismcts = ISMCTS(
+        evaluator=eval_stub,
+        budget_factory=lambda: Budget(max_nodes=10),
+        determinize_fn=determinizer,
+        rng=random.Random(0),
+        puct=True,
+    )
+    ismcts.observe_action(adapter.engine_state, decision, actor)
+    assert len(determinizer.played_history) == 1
+
+
+class _BeliefSafePolicyEvaluator:
+    """Evaluator that returns zero-logits + zero-value for any input
+    shape. The determinizer's ``_score_particle`` calls
+    ``evaluate_logits(state, player_id)`` with a raw engine state
+    (not an adapter), so the stub used here can't use
+    ``state.is_terminal()`` like ``_StubPolicyEvaluator`` does — it
+    must accept either shape uniformly. Zero logits combined with
+    the legal mask collapses to a uniform-over-legal policy, the
+    same behavior as ``_UniformPolicyEvaluator`` in test_belief.
+    """
+
+    def evaluate(self, state, player_id):
+        return 0.0
+
+    def batch_evaluate(self, states, player_id):
+        return [0.0 for _ in states]
+
+    def evaluate_logits(self, state, player_id):
+        return 0.0, np.zeros(ae.ACTION_VOCAB_SIZE, dtype=np.float32)
+
+    def batch_evaluate_logits(self, states, player_id):
+        return [
+            (0.0, np.zeros(ae.ACTION_VOCAB_SIZE, dtype=np.float32))
+            for _ in states
+        ]
+
+
+def test_self_play_loop_populates_belief_history_via_observe_action(
+    tmp_path,
+):
+    """Integration: the self_play module's _play_capped_game calls
+    ``strategy.observe_action`` after each ``adapter.apply``. Driving
+    a short game with a belief-weighted ISMCTS strategy should
+    accumulate a played_history matching the priority moments visited
+    in order.
+    """
+    from mtg_bot.search.belief import BeliefWeightedDeterminizer
+    from mtg_bot.training.self_play import _play_capped_game
+
+    eval_stub_p0 = _BeliefSafePolicyEvaluator()
+    eval_stub_p1 = _BeliefSafePolicyEvaluator()
+    determinizer_p0 = BeliefWeightedDeterminizer(
+        opponent_policy_evaluator=eval_stub_p0,
+    )
+    determinizer_p1 = BeliefWeightedDeterminizer(
+        opponent_policy_evaluator=eval_stub_p1,
+    )
+    ismcts_p0 = ISMCTS(
+        evaluator=eval_stub_p0,
+        budget_factory=lambda: Budget(max_nodes=4),
+        determinize_fn=determinizer_p0,
+        rng=random.Random(1),
+        puct=True,
+    )
+    ismcts_p1 = ISMCTS(
+        evaluator=eval_stub_p1,
+        budget_factory=lambda: Budget(max_nodes=4),
+        determinize_fn=determinizer_p1,
+        rng=random.Random(2),
+        puct=True,
+    )
+
+    adapter = _adapter(seed=11)
+    strategies = {0: ismcts_p0, 1: ismcts_p1}
+    rng = random.Random(99)
+
+    winner, decisions = _play_capped_game(
+        adapter, strategies, rng,
+        decision_cap=20,  # Short cap — we only need a few moments.
+    )
+
+    # Both seats observed every priority moment (they observe ALL
+    # actions, not just the opponent's; the determinizer filters
+    # opponent moments at score time).
+    assert len(determinizer_p0.played_history) > 0
+    assert (
+        len(determinizer_p0.played_history)
+        == len(determinizer_p1.played_history)
+    )
+    # Recorded actor labels span at least one seat (likely both,
+    # but if the cap hits before seat 1 gets priority that's fine).
+    actors_seen = {m.actor for m in determinizer_p0.played_history}
+    assert actors_seen.issubset({0, 1})
+
+
+def test_observe_action_history_actors_match_apply_order():
+    """The actor recorded in each PriorityMoment must equal the seat
+    that held priority at apply time (matches the
+    ``observe_action(state, decision, actor)`` contract: actor is the
+    player who chose, not the one observing). Drive a short adapter
+    forward manually and assert the recorded sequence.
+    """
+    from mtg_bot.search.belief import BeliefWeightedDeterminizer
+
+    eval_stub = _StubPolicyEvaluator()
+    determinizer = BeliefWeightedDeterminizer(
+        opponent_policy_evaluator=eval_stub,
+    )
+    ismcts = ISMCTS(
+        evaluator=eval_stub,
+        budget_factory=lambda: Budget(max_nodes=4),
+        determinize_fn=determinizer,
+        rng=random.Random(0),
+        puct=True,
+    )
+
+    adapter = _adapter(seed=11)
+    expected_actors: list[int] = []
+    for _ in range(8):
+        if adapter.is_terminal():
+            break
+        legal = adapter.legal_decisions()
+        if not legal:
+            break
+        actor = adapter.active_player()
+        decision = legal[0]
+        expected_actors.append(actor)
+        ismcts.observe_action(adapter, decision, actor)
+        adapter.apply(decision)
+
+    recorded = [m.actor for m in determinizer.played_history]
+    assert recorded == expected_actors

@@ -220,6 +220,58 @@ class ISMCTS(SearchStrategy):
             return self.rng.choice(list(state.legal_decisions()))
         return max(visits.items(), key=lambda kv: kv[1])[0]
 
+    def observe_action(
+        self,
+        state: GameState,
+        decision: Decision,
+        actor: PlayerID,
+    ) -> None:
+        """Record a priority-moment observation for belief tracking.
+
+        Called by the game loop once after every ``adapter.apply`` —
+        regardless of whose turn it was — so the strategy's
+        determinizer can accumulate the opponent action history that
+        belief-weighted determinization conditions on.
+
+        ``state`` must be the pre-apply adapter (or its underlying
+        engine state); ``decision`` is the action that was just
+        applied; ``actor`` is the player who held priority. The
+        ``BeliefWeightedDeterminizer`` filters ``actor != viewer`` at
+        score time, so all observed actions are recorded
+        unconditionally — opponent identity is determined per-search-
+        call by the viewer passed to ``choose``.
+
+        No-op when ``self._determinize`` is the uniform sampler (or
+        anything other than a ``BeliefWeightedDeterminizer``); under
+        plain ISMCTS the call is silent overhead and game-loop sites
+        don't have to branch.
+        """
+        # Local import to avoid a top-level cycle: belief.py imports
+        # from search.determinize, which is a peer of this module.
+        # Keeping the dependency on belief lazy means the plain-ISMCTS
+        # path has no knowledge of belief.py at all.
+        from mtg_bot.search.belief import (
+            BeliefWeightedDeterminizer, PriorityMoment,
+        )
+        determinizer = self._determinize
+        if not isinstance(determinizer, BeliefWeightedDeterminizer):
+            return
+        # The determinizer's particle-filter machinery clones the
+        # snapshot per-iteration before re-determinizing, so we
+        # capture an engine-state clone here so subsequent in-place
+        # mutations to ``state`` (the live adapter the game loop
+        # reuses) don't corrupt the recorded moment.
+        if isinstance(state, MtgGameStateAdapter):
+            engine_state = state.engine_state.clone()
+        else:
+            engine_state = state.clone()
+        moment = PriorityMoment(
+            state=engine_state, decision=decision, actor=actor,
+        )
+        determinizer.played_history = (
+            *determinizer.played_history, moment,
+        )
+
     def choose_with_visits(
         self, state: GameState, player_id: PlayerID
     ) -> dict[Decision, int]:
