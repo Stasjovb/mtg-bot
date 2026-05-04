@@ -411,6 +411,49 @@ def test_remote_command_uses_wrapper_script_with_b64_args():
             assert ShardConfig.from_dict(decoded) == expected
 
 
+def test_remote_bundle_sync_command_posix():
+    """POSIX shell uses ``/tmp/repo.bundle`` + bash quoting."""
+    from mtg_bot.training.distributed import (
+        _build_remote_bundle_sync_command,
+    )
+    shard = ShardConfig(
+        host="macbook", n_games=10, user="g",
+        repo_path="/Users/g/repo",
+        venv_python=".venv-py313/bin/python",
+    )
+    cmd = _build_remote_bundle_sync_command(
+        shard, "http://master:5099/repo.bundle",
+    )
+    assert "cd /Users/g/repo" in cmd
+    assert "curl -sSL http://master:5099/repo.bundle -o /tmp/repo.bundle" in cmd
+    assert "git fetch /tmp/repo.bundle main" in cmd
+    assert "git reset --hard FETCH_HEAD" in cmd
+
+
+def test_remote_bundle_sync_command_windows():
+    """Windows shell uses ``%TEMP%\\repo.bundle`` + cmd.exe ``cd /d``
+    + ``curl.exe`` (the explicit ``.exe`` so cmd doesn't accidentally
+    pick up a PowerShell alias on PATH)."""
+    from mtg_bot.training.distributed import (
+        _build_remote_bundle_sync_command,
+    )
+    shard = ShardConfig(
+        host="winbox", n_games=10, user="g",
+        repo_path="C:\\Users\\g\\Projects\\mtg-bot",
+        venv_python=".venv-py313\\Scripts\\python.exe",
+    )
+    cmd = _build_remote_bundle_sync_command(
+        shard, "http://master:5099/repo.bundle",
+    )
+    assert 'cd /d "C:\\Users\\g\\Projects\\mtg-bot"' in cmd
+    assert (
+        'curl.exe -sSL http://master:5099/repo.bundle '
+        '-o "%TEMP%\\repo.bundle"'
+    ) in cmd
+    assert 'git fetch "%TEMP%\\repo.bundle" main' in cmd
+    assert "git reset --hard FETCH_HEAD" in cmd
+
+
 def test_remote_command_windows_uses_cmd_syntax():
     """A Windows shard (``.exe`` venv python) must use cmd.exe-style
     ``cd /d "path" && set PYTHONPATH=src && "..\\python.exe" ...``

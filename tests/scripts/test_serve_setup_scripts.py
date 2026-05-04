@@ -136,3 +136,84 @@ def test_no_pubkey_warns_in_rendered_script(tmp_path: Path):
     # warning. Just confirm the rendered output is non-empty and
     # didn't break.
     assert "set -euo pipefail" in res.get_data(as_text=True)
+
+
+# ---- /repo.bundle endpoint --------------------------------------
+
+
+def _init_tiny_repo(tmp_path: Path) -> Path:
+    import subprocess as sp
+    repo = tmp_path / "fake-repo"
+    repo.mkdir()
+    sp.run(["git", "init", "-q", "--initial-branch=main"],
+           cwd=repo, check=True)
+    sp.run(["git", "config", "user.email", "t@example"],
+           cwd=repo, check=True)
+    sp.run(["git", "config", "user.name", "t"], cwd=repo, check=True)
+    (repo / "README.md").write_text("hi", encoding="utf-8")
+    sp.run(["git", "add", "-A"], cwd=repo, check=True)
+    sp.run(["git", "commit", "-q", "-m", "init"], cwd=repo, check=True)
+    return repo
+
+
+def test_repo_bundle_endpoint_returns_valid_git_bundle(tmp_path: Path):
+    """Hits /repo.bundle on a real git repo + verifies that git can
+    clone from the returned bytes. Round-trips the full contract:
+    master serves bundle → remote consumes bundle."""
+    import subprocess as sp
+
+    serve = _load_module()
+    repo = _init_tiny_repo(tmp_path)
+
+    app = serve.create_app(
+        repo_url="(unused)",
+        master_pubkey="",
+        master_tailnet_name="m",
+        port=5099,
+        template_dir=_REPO_ROOT / "scripts",
+        repo_root=repo,
+    )
+    client = app.test_client()
+    res = client.get("/repo.bundle")
+    assert res.status_code == 200
+    assert res.mimetype == "application/x-git-bundle"
+    # Persist + clone from it like a remote would.
+    bundle = tmp_path / "repo.bundle"
+    bundle.write_bytes(res.get_data())
+    clone = tmp_path / "clone"
+    sp.run(["git", "clone", "-q", str(bundle), str(clone)], check=True)
+    assert (clone / "README.md").read_text(encoding="utf-8") == "hi"
+
+
+def test_repo_bundle_endpoint_500s_when_repo_root_unconfigured():
+    """If serve_setup_scripts is started without a repo_root, the
+    bundle endpoint should return 500 rather than raise / silently
+    misbehave."""
+    serve = _load_module()
+    app = serve.create_app(
+        repo_url="(unused)",
+        master_pubkey="",
+        master_tailnet_name="m",
+        port=5099,
+        template_dir=_REPO_ROOT / "scripts",
+        repo_root=None,
+    )
+    client = app.test_client()
+    res = client.get("/repo.bundle")
+    assert res.status_code == 500
+
+
+def test_build_repo_bundle_helper_returns_nonempty_bytes(tmp_path: Path):
+    """Direct unit-test of the helper used by the endpoint. Bundles
+    are binary; no specific size to pin, but they have a stable
+    magic prefix."""
+    serve = _load_module()
+    repo = _init_tiny_repo(tmp_path)
+    data = serve.build_repo_bundle(repo)
+    assert isinstance(data, bytes)
+    assert len(data) > 0
+    # Git bundle files start with one of these signatures.
+    assert (
+        data.startswith(b"# v2 git bundle\n")
+        or data.startswith(b"# v3 git bundle\n")
+    )

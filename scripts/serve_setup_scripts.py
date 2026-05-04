@@ -31,6 +31,7 @@ import socket
 import subprocess
 import sys
 from pathlib import Path
+from typing import Optional
 
 _HERE = Path(__file__).resolve().parent
 _SRC = _HERE.parent / "src"
@@ -122,6 +123,25 @@ def _detect_repo_url(repo_root: Path) -> str:
         return ""
 
 
+def build_repo_bundle(repo_root: Path) -> bytes:
+    """Run ``git bundle create -`` in ``repo_root`` and return the
+    bundle bytes.
+
+    ``--all`` packs every ref (every branch, every tag) so remotes
+    can checkout any branch the master has — they'll typically only
+    need ``main``, but we don't want to silently exclude branches.
+
+    The bundle is binary, ~5-50 MB depending on repo size. Master's
+    ``serve_setup_scripts.py`` builds one fresh on each request so
+    remote ``git pull``-equivalents always see the latest commits.
+    """
+    result = subprocess.run(
+        ["git", "-C", str(repo_root), "bundle", "create", "-", "--all"],
+        capture_output=True, check=True, timeout=120,
+    )
+    return result.stdout
+
+
 def _read_pubkey(pubkey_path: Path) -> str:
     if not pubkey_path.is_file():
         return ""
@@ -157,6 +177,7 @@ def create_app(
     posix_repo_path: str = "$HOME/projects/mtg-bot",
     windows_repo_path: str = "$env:USERPROFILE\\Projects\\mtg-bot",
     template_dir: Path = _HERE,
+    repo_root: Optional[Path] = None,
 ) -> Flask:
     app = Flask(__name__)
 
@@ -194,6 +215,33 @@ def create_app(
             master_tailnet_name=master_tailnet_name,
         )
         return Response(body, mimetype="text/x-powershell")
+
+    @app.route("/repo.bundle")
+    def repo_bundle():
+        """Stream the master's repo as a git bundle — every ref,
+        current commits. Remotes use this in lieu of ``git pull
+        origin`` so they don't need GitHub auth (only Tailscale
+        access). The orchestrator's ``run_shard_remote`` curls this
+        URL before each iter to refresh the remote's working tree.
+
+        Re-builds on every request — the latest committed state is
+        always served. ~few hundred ms on this repo size; only fires
+        at iter boundaries so the cost is negligible.
+        """
+        if repo_root is None:
+            return Response(
+                "repo_root not configured", status=500,
+                mimetype="text/plain",
+            )
+        try:
+            data = build_repo_bundle(repo_root)
+        except (subprocess.CalledProcessError,
+                subprocess.TimeoutExpired) as exc:
+            return Response(
+                f"git bundle failed: {exc}", status=500,
+                mimetype="text/plain",
+            )
+        return Response(data, mimetype="application/x-git-bundle")
 
     return app
 
@@ -260,6 +308,7 @@ def main(argv=None) -> None:
         master_pubkey=pubkey,
         master_tailnet_name=master_tailnet_name,
         port=args.port,
+        repo_root=args.repo_root,
     )
     print(
         f"[serve_setup] master={master_tailnet_name} repo={repo_url} "
