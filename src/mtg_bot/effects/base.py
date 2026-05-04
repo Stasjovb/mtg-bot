@@ -537,49 +537,15 @@ class StaticAbility:
     time and fold in applicable bonuses — no layers system yet, so the
     ordering-of-continuous-effects subtleties from the comprehensive rules
     don't apply.
-
-    ``active_turn_only=True`` gates the ability on "it's the source
-    controller's turn", matching EoE riders like "During your turn,
-    [anthem]".
-
-    ``requires_artifact_you_control=True`` gates the ability on the source's
-    controller having at least one non-land artifact on the battlefield —
-    the common "as long as you control an artifact" rider in EoE's
-    blue/black artifacts-matter subtheme.
     """
 
     scope: str
     granted_keywords: frozenset[str] = frozenset()
     power_bonus: int = 0
     toughness_bonus: int = 0
-    active_turn_only: bool = False
     # Tiered abilities on Spacecraft: the ability is only active when the
     # source has ``tier_threshold`` or more charge counters. 0 = always on.
     tier_threshold: int = 0
-    requires_artifact_you_control: bool = False
-    # Minimum spells_cast_this_turn the controller must have reached for
-    # the ability to apply. 0 means "always on". Matches EoE's
-    # "as long as you've cast two or more spells this turn" riders.
-    requires_spells_cast_this_turn: int = 0
-    # Minimum unlocked doors among Rooms the source's controller
-    # controls for the ability to apply. 0 means "always on". Matches
-    # Duskmourn's "as long as there are two or more unlocked doors
-    # among Rooms you control" rider (Rampaging Soulrager). The count
-    # walks the controller's battlefield, sums ``len(unlocked_halves)``
-    # over every Room object, and gates on the total reaching the
-    # threshold. Distinct from a Room-count gate because a single Room
-    # with both halves unlocked counts as two doors here, mirroring the
-    # printed "doors" wording exactly.
-    requires_unlocked_doors_among_rooms: int = 0
-    # DSK "Delirium" gate: when ``True`` the ability is inert unless the
-    # source's controller has at least four distinct card types among
-    # cards in their graveyard (CR 205.2a card-type taxonomy — supertypes
-    # and subtypes don't count). Mirrors the
-    # ``mtg_bot.effects.predicates.Delirium`` predicate's runtime check
-    # so static and trigger evaluations of "Delirium —" share the same
-    # game-state semantics; the field is False by default so existing
-    # statics (no Delirium gate) keep their always-on behaviour.
-    requires_delirium: bool = False
     # DSK Rooms: when this static lives on a Room half, this is the
     # half-name (matches a key in ``CardPrinting.room_halves``). While
     # the half is locked (not in ``unlocked_halves``), the ability is
@@ -612,13 +578,13 @@ class StaticAbility:
     # ─── Modifier-grammar slots (additive; PR D consumers and later) ───
     # Optional structural condition gating ``applies_to``. When
     # present, evaluated against ``(state, source.controller_id,
-    # chosen_targets=None)`` and AND-ed with the existing per-field
-    # gate checks above. Lets a card declare its activation
-    # condition compositionally (e.g. ``DuringYourTurn() &
-    # ControlPermanent(IsArtifact())``) instead of toggling a
-    # legacy boolean flag. Existing per-field gates stay as the
-    # surface today; PR D / future PRs collapse them by routing
-    # through the synthesized condition path on the way down.
+    # chosen_targets=None)``. The source of truth for every
+    # "as long as" rider on the static surface — printed conditions
+    # like "as long as you control an artifact" or "during your turn"
+    # ride here as ``ControlPermanent(IsArtifact())`` /
+    # ``DuringYourTurn()`` rather than per-field boolean flags. ``None``
+    # (default) is "no condition" and the gate short-circuits to
+    # always-on.
     condition: "Condition | None" = None
     # Optional CR 614 replacement effect carried by this static.
     # Collected by :func:`mtg_bot.effects.modifiers
@@ -650,84 +616,14 @@ class StaticAbility:
             return False
         if target.controller_id != source.controller_id:
             return False
-        # "During your turn" gate.
-        if self.active_turn_only:
-            if state is None:
-                return False
-            if state.players[state.active_player_idx].id != source.controller_id:
-                return False
         # Spacecraft tier gate — source needs enough charge counters.
         if self.tier_threshold > 0 and source.charge_counters < self.tier_threshold:
             return False
-        # "As long as you control an artifact" gate.
-        if self.requires_artifact_you_control:
-            if state is None:
-                return False
-            has_artifact = any(
-                o.controller_id == source.controller_id
-                and o.printing.is_artifact
-                for o in state.battlefield
-            )
-            if not has_artifact:
-                return False
-        # "As long as you've cast N or more spells this turn" gate.
-        if self.requires_spells_cast_this_turn > 0:
-            if state is None:
-                return False
-            controller = state.player_by_id(source.controller_id)
-            if (
-                controller.spells_cast_this_turn
-                < self.requires_spells_cast_this_turn
-            ):
-                return False
-        # "As long as there are N or more unlocked doors among Rooms
-        # you control" gate. Walks the controller's battlefield and
-        # sums ``len(unlocked_halves)`` across every Room. A Room with
-        # both halves unlocked contributes 2; a Room with one half
-        # unlocked contributes 1; a Room not on the controller's
-        # battlefield contributes 0. Matches the printed "doors"
-        # wording exactly — a per-half count rather than a per-Room
-        # count.
-        if self.requires_unlocked_doors_among_rooms > 0:
-            if state is None:
-                return False
-            total_doors = sum(
-                len(o.unlocked_halves)
-                for o in state.battlefield
-                if o.controller_id == source.controller_id
-                and "Room" in o.printing.subtypes
-            )
-            if total_doors < self.requires_unlocked_doors_among_rooms:
-                return False
-        # "As long as there are four or more card types among cards in
-        # your graveyard" gate (DSK Delirium). Walks the controller's
-        # graveyard once and counts distinct card-type entries from the
-        # comprehensive-rules taxonomy; short-circuits as soon as the
-        # running set hits four. Mirrors the
-        # ``mtg_bot.effects.predicates.Delirium`` predicate's check so
-        # the static and trigger sides agree on game-state semantics.
-        if self.requires_delirium:
-            if state is None:
-                return False
-            from mtg_bot.effects.state_predicates import _DELIRIUM_CARD_TYPES
-            controller = state.player_by_id(source.controller_id)
-            seen: set[str] = set()
-            for card in controller.graveyard:
-                for t in card.printing.card_types:
-                    if t in _DELIRIUM_CARD_TYPES:
-                        seen.add(t)
-                        if len(seen) >= 4:
-                            break
-                if len(seen) >= 4:
-                    break
-            if len(seen) < 4:
-                return False
         # Optional structural condition gate. Evaluated against
-        # ``(state, source.controller_id)``; ANDed with all the per-
-        # field gates above so a card declaring its condition
-        # compositionally still respects any legacy boolean toggles
-        # the parser also emits. ``None`` (default) is "no condition"
-        # and short-circuits to the existing always-on behaviour.
+        # ``(state, source.controller_id)``; the source of truth for
+        # every "as long as" rider on the static surface today. ``None``
+        # (default) is "no condition" and short-circuits to the existing
+        # always-on behaviour.
         if self.condition is not None:
             if state is None:
                 return False

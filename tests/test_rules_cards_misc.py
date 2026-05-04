@@ -799,11 +799,13 @@ def test_gravblade_heavy_self_buff_plus_deathtouch():
 def test_self_static_missing_state_returns_false():
     """applies_to with state=None on a conditional static returns False."""
     from mtg_bot.effects import StaticAbility, StaticScope
+    from mtg_bot.effects.conditions import ControlPermanent
+    from mtg_bot.effects.object_predicates import IsArtifact
 
     ab = StaticAbility(
         scope=StaticScope.SELF,
         power_bonus=1,
-        requires_artifact_you_control=True,
+        condition=ControlPermanent(IsArtifact()),
     )
     state = _arena()
     tech = state.new_object(

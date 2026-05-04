@@ -23,6 +23,7 @@ from mtg_bot.cards.base import (
 )
 from mtg_bot.cards.parser.source import OracleParserCardSource
 from mtg_bot.cards.parser.triggers import _parse_triggered_ability_line
+from mtg_bot.effects.conditions import UnlockedDoorsAmongRoomsAtLeast
 from mtg_bot.effects.object_predicates import (
     HasPowerAtMost,
     IsCreature,
@@ -279,7 +280,7 @@ def test_static_unlocked_doors_gate_inactive_below_threshold():
     static = StaticAbility(
         scope=StaticScope.SELF,
         power_bonus=3,
-        requires_unlocked_doors_among_rooms=2,
+        condition=UnlockedDoorsAmongRoomsAtLeast(2),
     )
     assert static.applies_to(src, src, state) is False
 
@@ -312,7 +313,7 @@ def test_static_unlocked_doors_gate_active_at_threshold():
     static = StaticAbility(
         scope=StaticScope.SELF,
         power_bonus=3,
-        requires_unlocked_doors_among_rooms=2,
+        condition=UnlockedDoorsAmongRoomsAtLeast(2),
     )
     # Exactly 2 doors unlocked on the lone Room → applies.
     assert static.applies_to(src, src, state) is True
@@ -345,7 +346,7 @@ def test_static_unlocked_doors_gate_ignores_opponent_rooms():
     static = StaticAbility(
         scope=StaticScope.SELF,
         power_bonus=3,
-        requires_unlocked_doors_among_rooms=2,
+        condition=UnlockedDoorsAmongRoomsAtLeast(2),
     )
     assert static.applies_to(src, src, state) is False
 
@@ -381,7 +382,7 @@ def test_rampaging_soulrager_carries_unlocked_doors_static():
         layer=7,
         payload=PowerToughnessBonus(power_bonus=3, toughness_bonus=0),
     )
-    assert static.requires_unlocked_doors_among_rooms == 2
+    assert static.condition == UnlockedDoorsAmongRoomsAtLeast(2)
 
 
 # ---------- intervening-``while`` trigger shape ----------

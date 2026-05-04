@@ -18,24 +18,24 @@ and falls back to the trailing regex.
 Recognized self-scope conditions today:
 
 * ``you control an artifact`` →
-  ``requires_artifact_you_control=True`` (Cloudsculpt Technician,
+  ``condition=ControlPermanent(IsArtifact())`` (Cloudsculpt Technician,
   Gravblade Heavy).
 * ``you've cast two or more spells this turn`` →
-  ``requires_spells_cast_this_turn=2`` (Brightspear Zealot, via the
-  trailing shape).
+  ``condition=AtLeastNSpellsCastThisTurn(2)`` (Brightspear Zealot, via
+  the trailing shape).
 * ``you've cast three or more spells this turn`` →
-  ``requires_spells_cast_this_turn=3``. Batch-11 forward-looking
-  variant of the existing ``two or more`` phrase — same engine gate
-  field with a higher threshold. No EoE printing today uses this
-  threshold but the engine accepts any ``int >= 0`` and the surface
+  ``condition=AtLeastNSpellsCastThisTurn(3)``. Batch-11 forward-looking
+  variant of the existing ``two or more`` phrase — same Condition
+  cousin with a higher threshold. No EoE printing today uses this
+  threshold but the Condition accepts any ``int >= 0`` and the surface
   phrasing is the natural one-word substitution from the ``two``
   variant; adding it keeps the parser ready for printings that
   raise the bar (and makes the threshold-vs-phrase mapping explicit
   in the phrasebook rather than implicit in regex generality).
-* ``it's your turn`` → ``active_turn_only=True``. Forward-looking
+* ``it's your turn`` → ``condition=DuringYourTurn()``. Forward-looking
   grammar coverage; no EoE card prints in the leading/trailing
-  self-scope shape with this condition today, but the engine field
-  exists and the surface phrase is unambiguous.
+  self-scope shape with this condition today, but the Condition cousin
+  already exists and the surface phrase is unambiguous.
 
 Other "As long as" conditions (entered-this-turn, void, you-control-a-
 creature, etc.) have no matching engine gate; they intentionally don't
@@ -54,8 +54,9 @@ shapes recognized:
 * ``... get +N/+M and have <keyword>.`` — combined P/T + keyword
   anthem.
 * Optional leading ``During your turn, `` rider on any of the above
-  sets ``active_turn_only=True``. Memorial Team Leader prints in this
-  shape (``During your turn, other creatures you control get +1/+0.``).
+  sets ``condition=DuringYourTurn()``. Memorial Team Leader prints in
+  this shape (``During your turn, other creatures you control get
+  +1/+0.``).
 
 Anthem lines do NOT carry an ``As long as`` condition today; the
 self-scope condition phrasebook is therefore not consulted. If a future
@@ -83,12 +84,19 @@ import re
 
 from mtg_bot.cards.base import StaticAbility, StaticScope
 from mtg_bot.cards.parser.keywords import _KEYWORD_LINES
-from mtg_bot.effects.conditions import DuringYourTurn
+from mtg_bot.effects.conditions import (
+    AtLeastNSpellsCastThisTurn,
+    ControlPermanent,
+    DeliriumActive,
+    DuringYourTurn,
+    UnlockedDoorsAmongRoomsAtLeast,
+)
 from mtg_bot.effects.modifiers import (
     ContinuousModifier,
     GrantKeyword,
     PowerToughnessBonus,
 )
+from mtg_bot.effects.object_predicates import IsArtifact
 
 
 # Ability-word prefix stripper for static lines. Mirrors the trigger-
@@ -155,29 +163,31 @@ _STATIC_ABILITY_LINE_TRAILING = re.compile(
 # condition, we deliberately leave it out so the ability falls through
 # and the card gets skipped rather than being silently mis-modeled.
 _STATIC_CONDITION_KWARGS: dict[str, dict[str, object]] = {
-    "you control an artifact": {"requires_artifact_you_control": True},
+    "you control an artifact": {
+        "condition": ControlPermanent(IsArtifact()),
+    },
     "you've cast two or more spells this turn": {
-        "requires_spells_cast_this_turn": 2
+        "condition": AtLeastNSpellsCastThisTurn(2),
     },
     # Batch 11 — forward-looking N=3 variant. Same engine gate as the
-    # ``two or more`` entry above with a higher threshold; the engine
-    # accepts any non-negative integer for ``requires_spells_cast_this_
-    # turn`` and the surface phrasing is the natural one-word
+    # ``two or more`` entry above with a higher threshold; the
+    # ``AtLeastNSpellsCastThisTurn`` Condition accepts any non-negative
+    # integer and the surface phrasing is the natural one-word
     # substitution. No EoE card prints this threshold today.
     "you've cast three or more spells this turn": {
-        "requires_spells_cast_this_turn": 3
+        "condition": AtLeastNSpellsCastThisTurn(3),
     },
-    "it's your turn": {"active_turn_only": True},
+    "it's your turn": {"condition": DuringYourTurn()},
     # Duskmourn "doors among Rooms" gate. Rampaging Soulrager prints
     # ``This creature gets +3/+0 as long as there are two or more
     # unlocked doors among Rooms you control.`` — the trailing-shape
     # static line lands here via its ``as long as <condition>`` tail.
-    # Maps to ``requires_unlocked_doors_among_rooms=2``; the engine
-    # gate walks the controller's battlefield, sums
+    # Maps to ``condition=UnlockedDoorsAmongRoomsAtLeast(2)``; the
+    # condition walks the controller's battlefield, sums
     # ``len(unlocked_halves)`` over every Room, and applies the
     # ability only when the total clears the threshold.
     "there are two or more unlocked doors among Rooms you control": {
-        "requires_unlocked_doors_among_rooms": 2
+        "condition": UnlockedDoorsAmongRoomsAtLeast(2),
     },
     # Duskmourn "Delirium" gate. Wildfire Wickerfolk prints
     # ``Delirium — This creature gets +1/+1 and has trample as long as
@@ -185,13 +195,13 @@ _STATIC_CONDITION_KWARGS: dict[str, dict[str, object]] = {
     # — the ``Delirium —`` ability word strips through
     # ``_strip_static_ability_word_prefix`` (no rules consequence per
     # CR 207.2c) and the trailing ``as long as`` tail lands here. Maps
-    # to ``requires_delirium=True``; the engine gate walks the
+    # to ``condition=DeliriumActive()``; the Condition walks the
     # controller's graveyard, counts distinct card types, and applies
     # the ability only when the total clears four. Same threshold as
-    # the trigger-side ``Delirium()`` predicate so static and trigger
+    # the trigger-side ``Delirium`` StatePredicate so static and trigger
     # evaluations agree on game-state semantics.
     "there are four or more card types among cards in your graveyard": {
-        "requires_delirium": True
+        "condition": DeliriumActive(),
     },
 }
 
@@ -400,7 +410,13 @@ def _parse_anthem_static_line(line: str) -> tuple[StaticAbility, ...]:
                 return ()
             ekws.append(ek)
         engine_keywords = tuple(ekws)
-    active_turn_only = m.group("turn_rider") is not None
+    # The optional ``During your turn, `` rider gates the static on the
+    # active player being the source's controller; rides on the
+    # structural ``DuringYourTurn`` Condition rather than a legacy
+    # boolean field.
+    turn_condition = (
+        DuringYourTurn() if m.group("turn_rider") is not None else None
+    )
     statics: list[StaticAbility] = []
     if power_bonus or toughness_bonus:
         # P/T contribution rides on a layer-7c PowerToughnessBonus
@@ -409,7 +425,7 @@ def _parse_anthem_static_line(line: str) -> tuple[StaticAbility, ...]:
         statics.append(
             StaticAbility(
                 scope=scope,
-                active_turn_only=active_turn_only,
+                condition=turn_condition,
                 continuous_effect=ContinuousModifier(
                     layer=7,
                     payload=PowerToughnessBonus(
@@ -426,7 +442,7 @@ def _parse_anthem_static_line(line: str) -> tuple[StaticAbility, ...]:
         statics.append(
             StaticAbility(
                 scope=scope,
-                active_turn_only=active_turn_only,
+                condition=turn_condition,
                 continuous_effect=ContinuousModifier(
                     layer=6,
                     payload=GrantKeyword(ek),

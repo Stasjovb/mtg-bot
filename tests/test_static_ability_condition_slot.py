@@ -86,18 +86,17 @@ def test_condition_passes_when_condition_true():
     assert sa.applies_to(bear, bear, state) is True
 
 
-def test_condition_anded_with_legacy_field():
-    """Both the legacy ``active_turn_only`` field and the new
-    ``condition`` slot must pass for ``applies_to`` to return True.
-    ANDing means EITHER gate failing blocks application."""
+def test_compound_condition_blocks_when_either_clause_false():
+    """Two structural conditions combined with ``&`` gate the static
+    on BOTH clauses being true; either clause failing blocks
+    application."""
     state, bear = _arena()
     state.active_player_idx = 0
-    # Legacy gate passes (active turn) but condition fails (no
+    # Turn clause passes (active turn) but artifact clause fails (no
     # artifact controlled).
     sa = StaticAbility(
         scope=StaticScope.CREATURES_YOU_CONTROL,
-        active_turn_only=True,
-        condition=ControlPermanent(IsArtifact()),
+        condition=DuringYourTurn() & ControlPermanent(IsArtifact()),
     )
     assert sa.applies_to(bear, bear, state) is False
 
@@ -133,6 +132,173 @@ def test_replacement_effect_slot_holds_value():
         replacement_effect=re,
     )
     assert sa.replacement_effect is re
+
+
+def test_control_artifact_condition_blocks_when_no_artifact():
+    """The artifact-gate static (formerly the ``requires_artifact_you_
+    control`` boolean field) now rides on the structural
+    ``ControlPermanent(IsArtifact())`` condition. Without an artifact on
+    the controller's side of the battlefield, ``applies_to`` returns
+    False — same semantics as the legacy field gate."""
+    state, bear = _arena()
+    state.active_player_idx = 0
+    sa = StaticAbility(
+        scope=StaticScope.SELF,
+        power_bonus=1,
+        condition=ControlPermanent(IsArtifact()),
+    )
+    # No artifact in play — condition fails, applies_to is False.
+    assert sa.applies_to(bear, bear, state) is False
+
+
+def test_control_artifact_condition_passes_when_artifact_present():
+    """Mirror of the previous test: with an artifact on the controller's
+    battlefield, the condition evaluates True and ``applies_to`` returns
+    True."""
+    from mtg_bot.cards.tokens import TOKEN_PRINTINGS
+    from mtg_bot.game import Zone
+
+    state, bear = _arena()
+    state.active_player_idx = 0
+    # Lander is a non-creature artifact token.
+    lander = state.new_object(
+        TOKEN_PRINTINGS["Lander"], 0, Zone.BATTLEFIELD,
+    )
+    state.battlefield.append(lander)
+    sa = StaticAbility(
+        scope=StaticScope.SELF,
+        power_bonus=1,
+        condition=ControlPermanent(IsArtifact()),
+    )
+    assert sa.applies_to(bear, bear, state) is True
+
+
+def test_at_least_n_spells_cast_condition_blocks_below_threshold():
+    """The spells-cast-this-turn gate (formerly the
+    ``requires_spells_cast_this_turn`` integer field) now rides on the
+    ``AtLeastNSpellsCastThisTurn`` Condition. Below the threshold,
+    ``applies_to`` returns False — same semantics as the legacy field
+    gate."""
+    from mtg_bot.effects.conditions import AtLeastNSpellsCastThisTurn
+
+    state, bear = _arena()
+    state.active_player_idx = 0
+    state.players[0].spells_cast_this_turn = 1  # below threshold of 2
+    sa = StaticAbility(
+        scope=StaticScope.SELF,
+        power_bonus=2,
+        condition=AtLeastNSpellsCastThisTurn(2),
+    )
+    assert sa.applies_to(bear, bear, state) is False
+
+
+def test_at_least_n_spells_cast_condition_passes_at_threshold():
+    """At or above the threshold, the condition evaluates True and
+    ``applies_to`` returns True."""
+    from mtg_bot.effects.conditions import AtLeastNSpellsCastThisTurn
+
+    state, bear = _arena()
+    state.active_player_idx = 0
+    state.players[0].spells_cast_this_turn = 2  # at threshold
+    sa = StaticAbility(
+        scope=StaticScope.SELF,
+        power_bonus=2,
+        condition=AtLeastNSpellsCastThisTurn(2),
+    )
+    assert sa.applies_to(bear, bear, state) is True
+
+
+def test_unlocked_doors_among_rooms_condition_blocks_below_threshold():
+    """The 'unlocked doors among Rooms you control' gate (formerly the
+    ``requires_unlocked_doors_among_rooms`` integer field) now rides on
+    the ``UnlockedDoorsAmongRoomsAtLeast`` Condition. With no Rooms in
+    play, the condition fails and ``applies_to`` returns False."""
+    from mtg_bot.effects.conditions import UnlockedDoorsAmongRoomsAtLeast
+
+    state, bear = _arena()
+    state.active_player_idx = 0
+    sa = StaticAbility(
+        scope=StaticScope.SELF,
+        power_bonus=3,
+        condition=UnlockedDoorsAmongRoomsAtLeast(2),
+    )
+    assert sa.applies_to(bear, bear, state) is False
+
+
+def test_unlocked_doors_among_rooms_condition_passes_at_threshold():
+    """A controlled Room with both halves unlocked contributes 2 doors;
+    at the threshold ``applies_to`` returns True. Mirrors the engine
+    semantics of the legacy field gate exactly — a per-half count, not
+    a per-Room count."""
+    from mtg_bot.effects.conditions import UnlockedDoorsAmongRoomsAtLeast
+    from mtg_bot.cards.parser.source import OracleParserCardSource
+    from mtg_bot.game import Zone
+
+    state, bear = _arena()
+    state.active_player_idx = 0
+    # Find any Room printing in the parser pool to use as a fixture.
+    printings = OracleParserCardSource().get_printings()
+    room_p = next(
+        p for p in printings.values()
+        if "Room" in p.subtypes
+    )
+    room = state.new_object(room_p, 0, Zone.BATTLEFIELD)
+    room.unlocked_halves = frozenset(h.name for h in room_p.room_halves)
+    state.battlefield.append(room)
+    sa = StaticAbility(
+        scope=StaticScope.SELF,
+        power_bonus=3,
+        condition=UnlockedDoorsAmongRoomsAtLeast(2),
+    )
+    assert sa.applies_to(bear, bear, state) is True
+
+
+def test_delirium_active_condition_blocks_below_threshold():
+    """The Delirium gate (formerly the ``requires_delirium`` boolean
+    field) now rides on the ``DeliriumActive`` Condition. With an empty
+    graveyard, the condition fails and ``applies_to`` returns False."""
+    from mtg_bot.effects.conditions import DeliriumActive
+
+    state, bear = _arena()
+    state.active_player_idx = 0
+    sa = StaticAbility(
+        scope=StaticScope.SELF,
+        power_bonus=1,
+        condition=DeliriumActive(),
+    )
+    assert sa.applies_to(bear, bear, state) is False
+
+
+def test_delirium_active_condition_passes_at_threshold():
+    """With four distinct card types in the controller's graveyard, the
+    Delirium condition evaluates True and ``applies_to`` returns True.
+    Same threshold and card-type taxonomy as the trigger-side
+    StatePredicate sibling."""
+    from mtg_bot.cards.parser.source import OracleParserCardSource
+    from mtg_bot.effects.conditions import DeliriumActive
+    from mtg_bot.game import Zone
+
+    state, bear = _arena()
+    state.active_player_idx = 0
+    printings = OracleParserCardSource().get_printings()
+    needed = {"Creature", "Sorcery", "Instant", "Land"}
+    seen: set[str] = set()
+    for prn in printings.values():
+        types = set(prn.card_types) & needed
+        if not types - seen:
+            continue
+        obj = state.new_object(prn, 0, Zone.GRAVEYARD)
+        state.players[0].graveyard.append(obj)
+        seen.update(types)
+        if seen >= needed:
+            break
+    assert seen >= needed
+    sa = StaticAbility(
+        scope=StaticScope.SELF,
+        power_bonus=1,
+        condition=DeliriumActive(),
+    )
+    assert sa.applies_to(bear, bear, state) is True
 
 
 def test_continuous_effect_slot_holds_value():

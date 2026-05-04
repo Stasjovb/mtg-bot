@@ -28,6 +28,7 @@ from mtg_bot.cards.parser.statics import (
     _parse_static_ability_line,
     _strip_static_ability_word_prefix,
 )
+from mtg_bot.effects.conditions import DeliriumActive
 
 
 def _claimed_names() -> frozenset[str]:
@@ -105,7 +106,7 @@ def test_static_delirium_gate_inactive_below_threshold():
         power_bonus=1,
         toughness_bonus=1,
         granted_keywords=frozenset({"trample"}),
-        requires_delirium=True,
+        condition=DeliriumActive(),
     )
     assert static.applies_to(src, src, state) is False
 
@@ -144,7 +145,7 @@ def test_static_delirium_gate_active_at_threshold():
         power_bonus=1,
         toughness_bonus=1,
         granted_keywords=frozenset({"trample"}),
-        requires_delirium=True,
+        condition=DeliriumActive(),
     )
     assert static.applies_to(src, src, state) is True
 
@@ -167,7 +168,7 @@ def test_static_delirium_gate_requires_state_object():
         scope=StaticScope.SELF,
         power_bonus=1,
         toughness_bonus=1,
-        requires_delirium=True,
+        condition=DeliriumActive(),
     )
     assert static.applies_to(src, src, None) is False
 
@@ -205,7 +206,7 @@ def test_static_delirium_gate_ignores_opponent_graveyard():
         scope=StaticScope.SELF,
         power_bonus=1,
         toughness_bonus=1,
-        requires_delirium=True,
+        condition=DeliriumActive(),
     )
     assert static.applies_to(src, src, state) is False
 
@@ -240,7 +241,7 @@ def test_parse_delirium_trailing_static_line():
                     power_bonus=1, toughness_bonus=1,
                 ),
             ),
-            requires_delirium=True,
+            condition=DeliriumActive(),
         ),
         StaticAbility(
             scope=StaticScope.SELF,
@@ -248,7 +249,7 @@ def test_parse_delirium_trailing_static_line():
                 layer=6,
                 payload=GrantKeyword("trample"),
             ),
-            requires_delirium=True,
+            condition=DeliriumActive(),
         ),
     )
 
@@ -299,11 +300,11 @@ def test_wildfire_wickerfolk_carries_delirium_static():
         layer=7,
         payload=PowerToughnessBonus(power_bonus=1, toughness_bonus=1),
     )
-    assert pt_static.requires_delirium is True
+    assert pt_static.condition == DeliriumActive()
     assert kw_static.continuous_effect == ContinuousModifier(
         layer=6, payload=GrantKeyword("trample"),
     )
-    assert kw_static.requires_delirium is True
+    assert kw_static.condition == DeliriumActive()
 
 
 # ---------- ``basic_land`` SearchLibraryForCard filter ----------
@@ -389,11 +390,11 @@ def test_spineseeker_centipede_carries_basic_land_etb_and_delirium_static():
         layer=7,
         payload=PowerToughnessBonus(power_bonus=1, toughness_bonus=2),
     )
-    assert pt_static.requires_delirium is True
+    assert pt_static.condition == DeliriumActive()
     assert kw_static.continuous_effect == ContinuousModifier(
         layer=6, payload=GrantKeyword("vigilance"),
     )
-    assert kw_static.requires_delirium is True
+    assert kw_static.condition == DeliriumActive()
 
 
 # ---------- ``ReturnCreatureFromYourGraveyardToHand`` max_mv ----------

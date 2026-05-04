@@ -23,6 +23,7 @@ from mtg_bot.cards.parser.statics import (
     _STATIC_CONDITION_KWARGS,
     _parse_static_ability_line,
 )
+from mtg_bot.effects.conditions import DuringYourTurn
 from mtg_bot.effects.modifiers import (
     ContinuousModifier,
     GrantKeyword,
@@ -46,7 +47,7 @@ def test_active_turn_leading_shape_parses_to_static():
             layer=7,
             payload=PowerToughnessBonus(power_bonus=2, toughness_bonus=0),
         ),
-        active_turn_only=True,
+        condition=DuringYourTurn(),
     ),)
 
 
@@ -60,7 +61,7 @@ def test_active_turn_trailing_shape_parses_to_static():
             layer=7,
             payload=PowerToughnessBonus(power_bonus=2, toughness_bonus=0),
         ),
-        active_turn_only=True,
+        condition=DuringYourTurn(),
     ),)
 
 
@@ -93,7 +94,7 @@ def test_active_turn_with_keyword_rider_leading():
                     power_bonus=1, toughness_bonus=0,
                 ),
             ),
-            active_turn_only=True,
+            condition=DuringYourTurn(),
         ),
         StaticAbility(
             scope=StaticScope.SELF,
@@ -101,7 +102,7 @@ def test_active_turn_with_keyword_rider_leading():
                 layer=6,
                 payload=GrantKeyword("flying"),
             ),
-            active_turn_only=True,
+            condition=DuringYourTurn(),
         ),
     )
 
@@ -120,7 +121,7 @@ def test_active_turn_with_keyword_rider_trailing():
                     power_bonus=1, toughness_bonus=0,
                 ),
             ),
-            active_turn_only=True,
+            condition=DuringYourTurn(),
         ),
         StaticAbility(
             scope=StaticScope.SELF,
@@ -128,7 +129,7 @@ def test_active_turn_with_keyword_rider_trailing():
                 layer=6,
                 payload=GrantKeyword("deathtouch"),
             ),
-            active_turn_only=True,
+            condition=DuringYourTurn(),
         ),
     )
 
@@ -150,7 +151,7 @@ def test_active_turn_with_multiword_keyword_rider():
                     power_bonus=1, toughness_bonus=1,
                 ),
             ),
-            active_turn_only=True,
+            condition=DuringYourTurn(),
         ),
         StaticAbility(
             scope=StaticScope.SELF,
@@ -158,7 +159,7 @@ def test_active_turn_with_multiword_keyword_rider():
                 layer=6,
                 payload=GrantKeyword("first strike"),
             ),
-            active_turn_only=True,
+            condition=DuringYourTurn(),
         ),
     )
 
@@ -172,9 +173,7 @@ def test_active_turn_does_not_set_other_gates():
     )
     assert len(parsed) == 1
     static = parsed[0]
-    assert static.active_turn_only is True
-    assert static.requires_artifact_you_control is False
-    assert static.requires_spells_cast_this_turn == 0
+    assert static.condition == DuringYourTurn()
     assert static.tier_threshold == 0
 
 
@@ -240,5 +239,5 @@ def test_active_turn_phrase_pinned_in_phrasebook():
     # Pin the new entry so an accidental revert is loud.
     assert "it's your turn" in _STATIC_CONDITION_KWARGS
     assert _STATIC_CONDITION_KWARGS["it's your turn"] == {
-        "active_turn_only": True,
+        "condition": DuringYourTurn(),
     }

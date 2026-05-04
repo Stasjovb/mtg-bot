@@ -40,6 +40,7 @@ from mtg_bot.cards.parser.statics import (
     _parse_static_ability_line,
 )
 from mtg_bot.cards.parser_source import OracleParserCardSource
+from mtg_bot.effects.conditions import DuringYourTurn
 from mtg_bot.effects.modifiers import (
     ContinuousModifier,
     GrantKeyword,
@@ -228,7 +229,7 @@ def test_during_your_turn_pt_anthem_sets_active_turn_only():
     assert parsed == (
         StaticAbility(
             scope=StaticScope.OTHER_CREATURES_YOU_CONTROL,
-            active_turn_only=True,
+            condition=DuringYourTurn(),
             continuous_effect=ContinuousModifier(
                 layer=7,
                 payload=PowerToughnessBonus(power_bonus=1, toughness_bonus=0),
@@ -249,7 +250,7 @@ def test_during_your_turn_keyword_anthem_sets_active_turn_only():
     assert parsed == (
         StaticAbility(
             scope=StaticScope.OTHER_CREATURES_YOU_CONTROL,
-            active_turn_only=True,
+            condition=DuringYourTurn(),
             continuous_effect=ContinuousModifier(
                 layer=6,
                 payload=GrantKeyword("haste"),
@@ -269,7 +270,7 @@ def test_during_your_turn_inclusive_subject():
     assert parsed == (
         StaticAbility(
             scope=StaticScope.CREATURES_YOU_CONTROL,
-            active_turn_only=True,
+            condition=DuringYourTurn(),
             continuous_effect=ContinuousModifier(
                 layer=7,
                 payload=PowerToughnessBonus(power_bonus=1, toughness_bonus=1),
@@ -431,7 +432,6 @@ def test_during_your_turn_self_has_keyword_produces_self_scope_static():
         layer=6, payload=GrantKeyword("deathtouch"),
     )
     assert static.granted_keywords == frozenset()
-    assert static.active_turn_only is False
 
 
 def test_self_scope_line_does_not_match_anthem_directly():

@@ -44,11 +44,13 @@ from mtg_bot.cards.parser_source import (
     _parse_warp_line,
 )
 from mtg_bot.cards.tokens import TOKEN_PRINTINGS
+from mtg_bot.effects.conditions import ControlPermanent, DuringYourTurn
 from mtg_bot.effects.modifiers import (
     ContinuousModifier,
     GrantKeyword,
     PowerToughnessBonus,
 )
+from mtg_bot.effects.object_predicates import IsArtifact
 
 
 # ---------- _parse_clause ----------
@@ -2319,7 +2321,7 @@ def test_parse_static_ability_line_artifact_pt_only():
             layer=7,
             payload=PowerToughnessBonus(power_bonus=1, toughness_bonus=0),
         ),
-        requires_artifact_you_control=True,
+        condition=ControlPermanent(IsArtifact()),
     ),)
 
 
@@ -2341,7 +2343,7 @@ def test_parse_static_ability_line_artifact_pt_and_keyword():
                     power_bonus=1, toughness_bonus=0,
                 ),
             ),
-            requires_artifact_you_control=True,
+            condition=ControlPermanent(IsArtifact()),
         ),
         StaticAbility(
             scope=StaticScope.SELF,
@@ -2349,7 +2351,7 @@ def test_parse_static_ability_line_artifact_pt_and_keyword():
                 layer=6,
                 payload=GrantKeyword("deathtouch"),
             ),
-            requires_artifact_you_control=True,
+            condition=ControlPermanent(IsArtifact()),
         ),
     )
 
@@ -2366,7 +2368,7 @@ def test_parse_static_ability_line_extracts_pt_amounts():
             layer=7,
             payload=PowerToughnessBonus(power_bonus=2, toughness_bonus=3),
         ),
-        requires_artifact_you_control=True,
+        condition=ControlPermanent(IsArtifact()),
     ),)
 
 
@@ -2381,7 +2383,7 @@ def test_parse_static_ability_line_strips_whitespace():
             layer=7,
             payload=PowerToughnessBonus(power_bonus=1, toughness_bonus=0),
         ),
-        requires_artifact_you_control=True,
+        condition=ControlPermanent(IsArtifact()),
     ),)
 
 
@@ -2409,7 +2411,7 @@ def test_parse_static_ability_line_recognizes_active_turn_condition():
             layer=7,
             payload=PowerToughnessBonus(power_bonus=2, toughness_bonus=0),
         ),
-        active_turn_only=True,
+        condition=DuringYourTurn(),
     ),)
 
 
@@ -2449,7 +2451,7 @@ def test_parse_clause_recognizes_static_ability():
             layer=7,
             payload=PowerToughnessBonus(power_bonus=1, toughness_bonus=0),
         ),
-        requires_artifact_you_control=True,
+        condition=ControlPermanent(IsArtifact()),
     ),)
     assert parsed.keywords == ()
     assert parsed.trigger is None
@@ -2483,7 +2485,7 @@ def test_build_creature_printing_handles_simple_static_ability():
                     power_bonus=1, toughness_bonus=0,
                 ),
             ),
-            requires_artifact_you_control=True,
+            condition=ControlPermanent(IsArtifact()),
         ),
     )
     assert printing.triggered_abilities == ()
@@ -2518,7 +2520,7 @@ def test_build_creature_printing_handles_static_with_keyword_line():
                     power_bonus=1, toughness_bonus=0,
                 ),
             ),
-            requires_artifact_you_control=True,
+            condition=ControlPermanent(IsArtifact()),
         ),
     )
 

@@ -495,3 +495,68 @@ class HandSizeAtMost(Condition):
 
     def matches(self, state, viewer_id, chosen_targets=None):
         return len(state.player_by_id(viewer_id).hand) <= self.n
+
+
+@dataclass(frozen=True)
+class UnlockedDoorsAmongRoomsAtLeast(Condition):
+    """The viewer controls Rooms whose total ``len(unlocked_halves)``
+    sum to at least ``n``.
+
+    Walks the viewer's battlefield and sums ``len(unlocked_halves)``
+    over every Room object — a single Room with both halves unlocked
+    contributes 2; a Room with one half unlocked contributes 1; a Room
+    not on the viewer's battlefield contributes 0. The "doors" wording
+    is intentional and printed on the Duskmourn rider it gates: a
+    per-half count rather than a per-Room count.
+
+    Models Rampaging Soulrager's ``This creature gets +3/+0 as long as
+    there are two or more unlocked doors among Rooms you control.``
+    rider via ``UnlockedDoorsAmongRoomsAtLeast(2)``.
+    """
+
+    n: int
+
+    def matches(self, state, viewer_id, chosen_targets=None):
+        total_doors = sum(
+            len(o.unlocked_halves)
+            for o in state.battlefield
+            if o.controller_id == viewer_id
+            and "Room" in o.printing.subtypes
+        )
+        return total_doors >= self.n
+
+
+@dataclass(frozen=True)
+class DeliriumActive(Condition):
+    """The viewer has at least four distinct card types among cards in
+    their graveyard.
+
+    Walks the viewer's graveyard once and counts distinct card-type
+    entries from the comprehensive-rules taxonomy (CR 205.2a — Creature,
+    Land, Sorcery, Instant, Enchantment, Artifact, Planeswalker,
+    Battle, Tribal); supertypes (Legendary, Snow, Basic) and subtypes
+    don't count. Short-circuits as soon as the running set hits four.
+
+    Mirrors :class:`mtg_bot.effects.state_predicates.Delirium` — the
+    StatePredicate sibling used at the trigger layer — so static and
+    trigger evaluations of "Delirium —" share the same game-state
+    semantics. Models Wildfire Wickerfolk's ``Delirium — This creature
+    gets +1/+1 and has trample as long as there are four or more
+    card types among cards in your graveyard.`` rider.
+    """
+
+    def matches(self, state, viewer_id, chosen_targets=None):
+        from mtg_bot.effects.state_predicates import _DELIRIUM_CARD_TYPES
+
+        try:
+            player = state.player_by_id(viewer_id)
+        except (KeyError, AttributeError):
+            return False
+        seen: set[str] = set()
+        for card in player.graveyard:
+            for t in card.printing.card_types:
+                if t in _DELIRIUM_CARD_TYPES:
+                    seen.add(t)
+                    if len(seen) >= 4:
+                        return True
+        return False
