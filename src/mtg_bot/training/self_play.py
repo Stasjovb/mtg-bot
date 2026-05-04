@@ -584,7 +584,7 @@ def _play_capped_game(
         adapter.apply(decision)
         decisions += 1
         if replay_recorder is not None:
-            replay_recorder.record(adapter.engine_state)
+            replay_recorder.record(adapter.engine_state, decision=decision)
     if adapter.is_terminal():
         return adapter.winner(), decisions
     return None, decisions

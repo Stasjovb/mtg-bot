@@ -38,6 +38,24 @@ def test_recorder_with_no_annotators_records_raw_snapshots():
     # No annotator → no eval keys.
     assert "heuristic_eval" not in snap
     assert "nn_eval" not in snap
+    # Recorded with decision=None (default) → key present, value None.
+    assert snap["decision"] is None
+
+
+def test_recorder_stores_decision_when_provided():
+    """Passing ``decision=`` threads through to the snapshot's
+    ``decision`` JSON field."""
+    from mtg_bot.actions import PassPriority
+    from mtg_bot.agents import RandomAgent
+    from mtg_bot.simulate import setup_game
+    state = setup_game(
+        agents=[RandomAgent(), RandomAgent()],
+        colors=["G", "R"], seed=0,
+    )
+    rec = ReplayRecorder()
+    rec.record(state, decision=PassPriority())
+    snap = rec.snapshots[0]
+    assert snap["decision"] == {"kind": "PassPriority"}
 
 
 def test_heuristic_annotator_attaches_eval_per_snapshot():
@@ -283,3 +301,86 @@ def test_parallel_replay_files_match_sequential(tmp_path: Path):
         for key in ("game_idx", "base_seed", "engine_seed", "winner",
                     "n_decisions", "annotated_with_nn_version"):
             assert seq_replay.metadata[key] == par_replay.metadata[key]
+
+
+# ---------- decision capture (Phase 6 prereq) -------------------------------
+
+
+def test_v2_replay_round_trips_decisions(tmp_path: Path):
+    """Build a recorder, hand it several representative decisions,
+    save the replay, load it back. Each snapshot's ``decision``
+    deserializes to the same Decision instance."""
+    from mtg_bot.actions import (
+        ActivateAbility, CastSpell, DeclareAttackers, PassPriority, PlayLand,
+    )
+    from mtg_bot.agents import RandomAgent
+    from mtg_bot.replay import REPLAY_FORMAT_VERSION, save_replay
+    from mtg_bot.search.combat_decisions import AttackerDecision, BlockerDecision
+    from mtg_bot.search.resolution_decisions import ResolutionTargetDecision
+    from mtg_bot.simulate import setup_game
+    from mtg_bot.training.replay_decisions import decision_from_json
+
+    state = setup_game(
+        agents=[RandomAgent(), RandomAgent()],
+        colors=["G", "R"], seed=0,
+    )
+    rec = ReplayRecorder()
+    expected = [
+        None,  # initial pre-game state
+        PassPriority(),
+        PlayLand(card_id=42),
+        CastSpell(card_id=7, kicked=True),
+        ActivateAbility(source_id=11, ability_index=0),
+        DeclareAttackers(attacker_ids=frozenset({3, 5})),
+        AttackerDecision(attacker_id=3, attack=True),
+        BlockerDecision(blocker_id=8, attacker_id=None),
+        ResolutionTargetDecision(target=("creature", 7)),
+    ]
+    for d in expected:
+        rec.record(state, decision=d)
+    replay = rec.to_replay(metadata={"game_idx": 1})
+    assert replay.format_version == REPLAY_FORMAT_VERSION
+
+    path = tmp_path / "v2.json.gz"
+    save_replay(replay, path)
+    loaded = load_replay(path)
+    assert len(loaded.snapshots) == len(expected)
+    for snap, original in zip(loaded.snapshots, expected):
+        if original is None:
+            assert snap["decision"] is None
+        else:
+            assert decision_from_json(snap["decision"]) == original
+
+
+def test_end_to_end_replay_capture_records_decisions(tmp_path: Path):
+    """Run two games with replay capture enabled. Every snapshot
+    after the first carries a non-None decision that round-trips
+    through ``decision_from_json``."""
+    from mtg_bot.training.replay_decisions import decision_from_json
+
+    save_dir = tmp_path / "replays"
+    cfg = ReplayCaptureConfig(save_dir=str(save_dir), capture_every=1)
+    generate_training_data(
+        p0_factory=random_choice_factory,
+        p1_factory=random_choice_factory,
+        n_games=2, base_seed=42, replay_config=cfg,
+    )
+    files = sorted(save_dir.glob("*.json.gz"))
+    assert len(files) == 2
+    saw_a_real_game = False
+    for f in files:
+        replay = load_replay(f)
+        assert len(replay.snapshots) >= 1
+        # First snapshot is the pre-game initial state — no decision.
+        assert replay.snapshots[0]["decision"] is None
+        # Every subsequent snapshot must carry an action that decodes.
+        for snap in replay.snapshots[1:]:
+            saw_a_real_game = True
+            assert snap["decision"] is not None
+            decoded = decision_from_json(snap["decision"])
+            # Sanity: encoding is bijective end-to-end.
+            from mtg_bot.training.replay_decisions import decision_to_json
+            assert decision_to_json(decoded) == snap["decision"]
+    # At least one game advanced past turn 0; otherwise this test
+    # would silently pass with zero decisions checked.
+    assert saw_a_real_game

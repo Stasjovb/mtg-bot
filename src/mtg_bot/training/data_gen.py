@@ -783,7 +783,7 @@ def _play_one_game_recording(
                 decision = strategies[active].choose(adapter, active)
         adapter.apply(decision)
         if replay_recorder is not None:
-            replay_recorder.record(adapter.engine_state)
+            replay_recorder.record(adapter.engine_state, decision=decision)
         decision_idx += 1
     winner = adapter.winner() if adapter.is_terminal() else None
     return winner, samples
