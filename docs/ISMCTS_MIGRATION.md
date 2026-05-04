@@ -203,9 +203,143 @@ the literature suggests measurable gains.
 - The writer-side filter in `data_gen.py` (subsumed; was a bandaid).
 - Any test that pinned PIMC-specific behavior.
 
+### Phase 6: belief-weighted determinization (opponent modeling)
+
+Plain ISMCTS uniform-samples determinizations from the deck-list-
+consistent unknown pool. Real Magic players don't reason that way:
+"opponent passed in a spot where any version of their hand with
+removal would have used it; therefore P(removal) decreased". We
+should be doing the same — sampling determinizations from a
+posterior that conditions on the opponent's observed action history.
+
+**Bayesian formulation.** Let *H* be a possible hand for the
+opponent (consistent with the public history — discards, exiles,
+mulligans, hand-size cap), and let *A* be the sequence of actions
+they actually took. We want the posterior
+
+    P(H | A) ∝ P(A | H) · P(H)
+
+- P(H) — the prior — is what `determinize.py` already samples from
+  uniformly. Stays uniform here (we don't have card-frequency priors
+  beyond the deck list).
+- P(A | H) — the likelihood — is the opponent's policy given that
+  they actually held *H*. We have a model for this: the trained NN
+  policy head. For each step in *A* where the opponent had priority,
+  reconstruct the engine state with hand *H*, query the NN's policy
+  distribution, and read off the probability of the action they
+  actually took. Multiply across the sequence.
+- Reweighted sampling: instead of uniform sampling K determinizations,
+  sample-and-importance-weight (or run a particle filter): generate
+  a pool of M candidate determinizations (M >> K), score each with
+  the likelihood, normalize, then sample K from the reweighted
+  distribution.
+
+**What this fixes.** The "opponent probably doesn't have a removal
+spell" reasoning falls out automatically. In any candidate world
+where the opponent had removal, P(A | H) drops — they would have
+used it in the spots where it was a strong play, and they didn't.
+Worlds without removal get a higher likelihood and dominate the
+posterior. ISMCTS then sees a non-uniform mix of worlds and its
+visit counts naturally weight toward the "no removal" interpretation.
+
+**Where it hooks in.** This sits cleanly on top of plain ISMCTS
+from Phase 2. The ISMCTS search loop's `self.determinize_fn(state,
+viewer, rng=...)` callback is the only seam that changes — point
+it at a `belief_weighted_determinize` function instead of the
+plain one. The rest of the search is identical. The Phase 1
+information-set keying isn't affected (still keyed by viewer-
+visible state); only the per-iteration sampling distribution shifts.
+
+**Complications worth flagging now**:
+
+- **Action history length × policy queries**. Computing P(A | H)
+  for an N-action history requires N policy-head forward passes per
+  candidate determinization. With M candidates and N=20 turns × 5
+  actions/turn = 100 actions, that's 100 × M NN queries per
+  reweight. Cache aggressively (the same hand evaluated across
+  successive reweights overlaps heavily; an LRU keyed on the
+  hand's printing tuple should kill 80% of the cost).
+- **Self-play vs opponent-policy mismatch**. We're using *our* NN
+  to model the opponent. That's correct *if* the opponent is the
+  same NN (true in self-play and in eval-gate matches). For real
+  opponents (humans, off-policy bots) it's a strong simplification
+  — the opponent might play a strategy our model doesn't reflect.
+  In an iterate-loop context where every game is bot-vs-bot,
+  this isn't a problem.
+- **Numerical underflow**. Likelihoods multiply across actions and
+  go to zero fast. Compute log-likelihoods, normalize via
+  log-sum-exp before re-exponentiating to weights. Standard
+  particle-filter hygiene.
+- **First-move bias**. At turn 0 there's no observed action history
+  → posterior = prior → uniform. The first few decisions of an
+  iter or game contribute uniform-sampled determinizations and
+  Phase 6 reduces to Phase 2 there. That's correct, just worth
+  expecting.
+- **Forward-simulating the opponent's decisions**. To compute P(A
+  | H) at each opponent decision point, you need to reconstruct
+  the engine state *as it was at that moment*, not just at the
+  current root. Either (a) record opponent-decision-point snapshots
+  during the played-game-so-far (cheap; replay machinery already
+  records priority moments), or (b) replay the action history
+  forward from the initial state with the candidate hand each
+  time (expensive). (a) is the right answer; the replay system
+  was already designed around the priority-moment snapshot pattern.
+
+**Concrete implementation steps**:
+
+1. New module `mtg_bot/search/belief.py` exposing
+   `belief_weighted_determinize(state, viewer, rng, *, opponent_policy,
+   action_history, m_candidates=64)`. Returns one sampled state.
+2. Particle-filter mechanics: generate m_candidate uniform
+   determinizations, score each with the opponent NN against the
+   recorded priority-moment snapshots, normalize weights, resample
+   one (or maintain a running particle set across game-state
+   updates if we want to track belief over the whole game — this
+   is a nicer architecture but more invasive).
+3. Wire as the `determinize_fn` for ISMCTS via NNPimcConfig
+   replacement; keep uniform determinization available behind a
+   flag for A/B comparison.
+4. Eval against plain ISMCTS on a held-out seed set. Belief-
+   weighted should be at least as strong on hand-info-sensitive
+   matchups (decks with removal, counters, situational cards);
+   neutral or slightly worse on aggro mirrors (less hidden info to
+   reason about).
+
+**Effort estimate**: ~3-5 days, on top of Phases 1-5. Most of the
+code is straightforward (sample + score + resample), but caching
+strategy + the priority-moment snapshot wiring need careful
+engineering. Phase 6 is *additive* over plain ISMCTS — ship Phases
+1-5 first, then layer this on; don't try to build it all at once.
+
+**Variants worth considering after the basic version works**:
+
+- **Sequential particle filter with persistent state**. Instead of
+  re-scoring from scratch every search call, maintain a particle
+  set across the whole game. Update by reweighting each time the
+  opponent acts. Cheaper and more accurate (particles get
+  progressively concentrated as info accumulates).
+- **POMCP-style integrated belief MCTS**. Move belief-tracking
+  inside the search rather than at root sampling. ISMCTS already
+  does this implicitly through its information-set tree; POMCP
+  formalizes it as a particle distribution at each node. Heavy
+  reformulation; only worth it if particle-filter ISMCTS proves
+  insufficient.
+
+References:
+
+- Russell & Norvig 4th ed. §17.6 (POMDPs and belief states — the
+  textbook framework).
+- Silver & Veness 2010, "Monte-Carlo Planning in Large POMDPs"
+  (POMCP — the canonical particle-filter MCTS).
+- Cowling, Whitehouse, Powley 2015 (referenced for ISMCTS variants
+  in card games — they explicitly discuss bluffing and inference
+  in Phantom Bridge, which is the same problem class).
+
 ## Effort estimate
 
-Best case 1 week, worst case 2-3. The phases that take time:
+Phases 1-5 (plain ISMCTS): best case 1 week, worst case 2-3.
+Phase 6 (belief-weighted determinization): additional 3-5 days,
+shipped after 1-5 are validated.
 
 - Phase 1 (info-set identity): ~2 days. Subtle equivalence-relation
   bugs are hard to spot. Heavy reliance on property tests
@@ -220,6 +354,10 @@ Best case 1 week, worst case 2-3. The phases that take time:
   fixed seed set, eval-gate iter loop end-to-end, smooth out edge
   cases.
 - Phase 5 (deletion): few hours.
+- Phase 6 (belief-weighted determinization): ~3-5 days. Particle
+  filter + NN-policy-as-likelihood + priority-moment snapshot
+  wiring + caching. Layered cleanly on top of plain ISMCTS via the
+  `determinize_fn` callback; don't co-develop with Phases 1-5.
 
 ## Open questions to resolve before starting
 
