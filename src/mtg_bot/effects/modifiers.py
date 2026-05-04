@@ -30,7 +30,7 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any, Mapping
+from typing import TYPE_CHECKING, Any, Iterable, Mapping
 
 if TYPE_CHECKING:
     from mtg_bot.effects.object_predicates import ObjectPredicate
@@ -159,9 +159,17 @@ class EventPattern:
 
     ``event`` is one of the existing :class:`Event` enum values
     (specifically the WOULD_X family for replacements — see the enum
-    docs). ``subject_filters`` is an optional per-slot mapping of
-    ``slot_name -> ObjectPredicate`` that further narrows which
-    firings the replacement cares about.
+    docs). ``subject_filters`` is an optional per-slot specification
+    of ``slot_name -> ObjectPredicate`` pairs that further narrow
+    which firings the replacement cares about.
+
+    The field is stored as a ``tuple[tuple[str, ObjectPredicate], ...]``
+    in canonical (slot-name-sorted) order so the dataclass's structural
+    equality and ``__hash__`` work — a plain ``dict`` is unhashable, and
+    making the wrapping ``CardPrinting`` hashable transitively requires
+    every nested field to be hashable too. For ergonomics the
+    constructor accepts a ``Mapping`` *or* an iterable of pairs and
+    normalizes both to the canonical tuple form.
 
     Example: a counter-doubler that only doubles +1/+1 counters going
     onto creatures you control composes:
@@ -179,9 +187,24 @@ class EventPattern:
     """
 
     event: "Event"
-    subject_filters: Mapping[str, "ObjectPredicate"] = field(
-        default_factory=dict
+    subject_filters: "tuple[tuple[str, ObjectPredicate], ...]" = field(
+        default=()
     )
+
+    def __post_init__(self) -> None:
+        # Accept ``Mapping`` or any iterable of ``(slot, predicate)``
+        # pairs at construction; canonicalize to a slot-name-sorted
+        # tuple of pairs so equal patterns produce equal tuples (and
+        # therefore equal hashes) regardless of caller-supplied order.
+        raw = self.subject_filters
+        if isinstance(raw, Mapping):
+            pairs: Iterable[tuple[str, "ObjectPredicate"]] = raw.items()
+        else:
+            pairs = raw  # already a sequence of pairs
+        canonical = tuple(sorted(pairs, key=lambda p: p[0]))
+        # frozen dataclass — bypass the immutability guard for the
+        # one-time normalization in the constructor.
+        object.__setattr__(self, "subject_filters", canonical)
 
 
 # ────────────────────────────────────────────────────────────────────
@@ -545,7 +568,7 @@ def _collect_replacement_effects(
 
 
 def _subject_filters_match(
-    filters: Mapping[str, "ObjectPredicate"],
+    filters: "tuple[tuple[str, ObjectPredicate], ...]",
     subjects: Mapping[str, Any],
     state: "GameState",
 ) -> bool:
@@ -553,8 +576,11 @@ def _subject_filters_match(
 
     A missing subject (the event didn't carry that slot) fails the
     filter — the predicate can't evaluate without an object.
+
+    ``filters`` is the canonical tuple-of-pairs form produced by
+    :class:`EventPattern.__post_init__`.
     """
-    for slot, pred in filters.items():
+    for slot, pred in filters:
         obj = subjects.get(slot)
         if obj is None:
             return False
