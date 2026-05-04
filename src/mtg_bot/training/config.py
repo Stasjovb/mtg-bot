@@ -187,6 +187,15 @@ class NNPimcConfig:
     # ``data_gen._play_one_game_recording`` and
     # ``self_play._play_capped_game``).
     use_belief_weighted: bool = False
+    # Number of particles in the belief-weighted determinizer. Higher
+    # = better posterior approximation, linearly higher cold-call
+    # cost. Default 64. Ignored unless ``use_belief_weighted=True``.
+    belief_m_candidates: int = 64
+    # Conditional-activation gate. Skip the belief scoring pass and
+    # fall back to uniform determinization until the played history
+    # has at least this many opponent (non-viewer) priority moments.
+    # Default 3. Set to 0 to disable.
+    belief_min_opponent_moments: int = 3
 
     def __post_init__(self) -> None:
         if self.use_belief_weighted and not self.use_ismcts:
@@ -223,6 +232,10 @@ class NNPimcConfig:
                 ismcts_kwargs["determinize_fn"] = (
                     BeliefWeightedDeterminizer(
                         opponent_policy_evaluator=evaluator,
+                        m_candidates=self.belief_m_candidates,
+                        min_opponent_moments=(
+                            self.belief_min_opponent_moments
+                        ),
                     )
                 )
             return ISMCTS(**ismcts_kwargs)
@@ -261,6 +274,10 @@ class NNPimcConfig:
             ),
             "use_ismcts": self.use_ismcts,
             "use_belief_weighted": self.use_belief_weighted,
+            "belief_m_candidates": self.belief_m_candidates,
+            "belief_min_opponent_moments": (
+                self.belief_min_opponent_moments
+            ),
         }
 
     @classmethod
@@ -278,6 +295,10 @@ class NNPimcConfig:
             ),
             use_ismcts=d.get("use_ismcts", False),
             use_belief_weighted=d.get("use_belief_weighted", False),
+            belief_m_candidates=d.get("belief_m_candidates", 64),
+            belief_min_opponent_moments=d.get(
+                "belief_min_opponent_moments", 3,
+            ),
         )
 
 
