@@ -277,14 +277,80 @@ def test_run_shard_local_writes_npz_with_per_shard_filename(
     assert progress["n_games_done"] == 2
 
 
+# ---- pull-model queue test server -------------------------------
+
+
+def _start_queue_server() -> tuple[str, "object"]:
+    """Spin up an in-process http.server with /queue/init and
+    /queue/take. Returns ``(base_url, server)``; caller invokes
+    ``server.shutdown()`` to stop. State is per-server so tests don't
+    cross-contaminate."""
+    import http.server
+    import json as _json
+    import socket
+    import threading as _threading
+
+    state: dict = {"queues": {}, "lock": _threading.Lock()}
+
+    class Handler(http.server.BaseHTTPRequestHandler):
+        def log_message(self, *args, **kwargs):  # silence stderr
+            pass
+
+        def _reply(self, status: int, body_obj: dict) -> None:
+            payload = _json.dumps(body_obj).encode("utf-8")
+            self.send_response(status)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(payload)))
+            self.end_headers()
+            self.wfile.write(payload)
+
+        def do_POST(self):  # noqa: N802 — http.server API name
+            length = int(self.headers.get("Content-Length", "0"))
+            raw = self.rfile.read(length).decode("utf-8")
+            data = _json.loads(raw) if raw else {}
+            if self.path == "/queue/init":
+                run_id = data["run_id"]
+                total = int(data["total_games"])
+                with state["lock"]:
+                    state["queues"][run_id] = {"next": 0, "total": total}
+                self._reply(200, {"ok": True})
+            elif self.path == "/queue/take":
+                run_id = data["run_id"]
+                bs = int(data.get("batch_size", 25))
+                with state["lock"]:
+                    q = state["queues"].get(run_id)
+                    if q is None:
+                        self._reply(404, {"error": "unknown run_id"})
+                        return
+                    start = q["next"]
+                    end = min(start + bs, q["total"])
+                    q["next"] = end
+                    remaining = q["total"] - end
+                self._reply(200, {
+                    "games": list(range(start, end)),
+                    "remaining": remaining,
+                })
+            else:
+                self._reply(404, {"error": "not found"})
+
+    sock = socket.socket()
+    sock.bind(("127.0.0.1", 0))
+    port = sock.getsockname()[1]
+    sock.close()
+    server = http.server.ThreadingHTTPServer(("127.0.0.1", port), Handler)
+    thread = _threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    return f"http://127.0.0.1:{port}", server
+
+
 def test_run_distributed_two_local_shards_both_produce_npz(
     tmp_path: Path,
 ):
-    """Smoke for the orchestrator with two local shards. Today the
-    orchestrator runs local shards inline (no concurrent local
-    shards — they'd contend on the master's CPU). The test pins:
-    both shards produce npzs in the configured output dir, in
-    shards-config order."""
+    """Pull-model smoke for the orchestrator with two local shards
+    sharing one queue. Both shards open their own mp.Pool, both pull
+    from the same /queue/take. Together they should drain a 4-game
+    queue and produce ≥1 per-batch npz each (the exact split is
+    nondeterministic — pull-mode is the point)."""
     from mtg_bot.training.distributed import (
         SelfPlayJobSpec,
         run_distributed_self_play,
@@ -303,24 +369,82 @@ def test_run_distributed_two_local_shards_both_produce_npz(
         with_policy=True,
     )
     cfg = ShardsConfig(shards=(
-        ShardConfig(host="local", n_games=2, label="A"),
-        ShardConfig(host="local", n_games=2, label="B",
+        ShardConfig(host="local", n_games=2, label="A", n_workers=1),
+        ShardConfig(host="local", n_games=2, label="B", n_workers=1,
                     seed_offset=1_000_000),
     ))
-    paths = run_distributed_self_play(
-        cfg, spec,
-        progress_dir=progress_dir,
-        output_dir=out_dir,
-        run_id_prefix="iter_001_self_play_v1",
-    )
-    assert len(paths) == 2
-    # Each shard's npz lives in the configured output_dir, names
-    # carry the shard label.
-    assert all(p.parent == out_dir.resolve() or p.parent == out_dir
-               for p in paths)
-    assert "shard_A" in paths[0].name
-    assert "shard_B" in paths[1].name
+    queue_url, server = _start_queue_server()
+    try:
+        paths = run_distributed_self_play(
+            cfg, spec,
+            progress_dir=progress_dir,
+            output_dir=out_dir,
+            run_id_prefix="iter_001_self_play_v1",
+            total_games=4,
+            queue_url=queue_url,
+            batch_size_default=2,
+        )
+    finally:
+        server.shutdown()
+    # 4 total games drained across two pools — at minimum one batch
+    # per shard (pool empties on the same response that hits the end
+    # of the queue), but could be more if one shard wins the race.
+    assert len(paths) >= 1
     assert all(p.is_file() for p in paths)
+    # Each batch's filename includes its shard label; both A and B
+    # should appear at least once unless one shard happened to do
+    # zero rounds (very unlikely with batch_size=2 on a 4-game queue
+    # split between two equally-fast workers, but possible). The
+    # weaker assertion is that every produced file's parent dir is
+    # the configured output_dir.
+    assert all(
+        p.parent == out_dir.resolve() or p.parent == out_dir
+        for p in paths
+    )
+    # Every shard writes a JSONL event log alongside the progress
+    # JSON. Both shards' logs must exist and end with shard_end.
+    for shard_label in ("A", "B"):
+        events_path = (
+            progress_dir
+            / f"iter_001_self_play_v1_shard_{shard_label}_events.jsonl"
+        )
+        assert events_path.is_file(), f"missing {events_path.name}"
+        lines = events_path.read_text(encoding="utf-8").splitlines()
+        assert lines, f"events log {events_path.name} is empty"
+        events = [json.loads(line) for line in lines]
+        # First event is shard_start with machine metadata.
+        assert events[0]["event"] == "shard_start"
+        assert "machine" in events[0]
+        assert "host" in events[0]["machine"]
+        # Final event is shard_end with status.
+        assert events[-1]["event"] == "shard_end"
+        assert events[-1]["status"] == "completed"
+        # At least one game_end + one batch_saved must be present
+        # (the shard ran games, not just polled an empty queue).
+        kinds = {e["event"] for e in events}
+        # If this shard happened to lose every batch race, only
+        # shard_start + batch_take(empty) + shard_end are present.
+        # Both shards producing zero batches is impossible (4 games,
+        # two workers, batch_size=2): at least one must run a batch.
+    # Across both shards combined, we should see per-game events.
+    all_events: list[dict] = []
+    for shard_label in ("A", "B"):
+        events_path = (
+            progress_dir
+            / f"iter_001_self_play_v1_shard_{shard_label}_events.jsonl"
+        )
+        for line in events_path.read_text(encoding="utf-8").splitlines():
+            all_events.append(json.loads(line))
+    game_ends = [e for e in all_events if e["event"] == "game_end"]
+    assert len(game_ends) == 4, (
+        f"expected 4 game_end events across both shards, got "
+        f"{len(game_ends)}"
+    )
+    # game_end carries per-game wall time + n_samples.
+    for ge in game_ends:
+        assert "wall_s" in ge and ge["wall_s"] > 0
+        assert "n_samples" in ge
+        assert "game_idx" in ge
 
 
 def test_spec_round_trips_through_to_dict_from_dict():
@@ -362,15 +486,16 @@ def test_shard_config_round_trips_through_to_dict_from_dict():
     assert rt == s
 
 
-def test_remote_command_uses_wrapper_script_with_b64_args():
-    """The remote one-liner invokes ``run_self_play_shard.py`` with
-    base64-encoded spec + shard JSON. Both encodings must round-trip
-    cleanly so the remote can rebuild the dataclasses."""
+def test_remote_pull_command_posix_round_trips_b64_args():
+    """The remote one-liner invokes ``run_self_play_shard.py
+    --mode=pull`` with base64-encoded spec + shard JSON. Both
+    encodings must round-trip cleanly so the remote can rebuild the
+    dataclasses."""
     import base64
 
     from mtg_bot.training.distributed import (
         SelfPlayJobSpec,
-        _build_remote_self_play_command,
+        _build_remote_pull_command,
     )
 
     spec = SelfPlayJobSpec(
@@ -384,15 +509,24 @@ def test_remote_command_uses_wrapper_script_with_b64_args():
         repo_path="/Users/g/repo",
         venv_python=".venv-py313/bin/python",
     )
-    cmd = _build_remote_self_play_command(
+    cmd = _build_remote_pull_command(
         shard, spec,
-        run_id_prefix="iter_001_self_play_v6",
+        queue_url="http://master:5099",
+        run_id="iter_001_self_play_v6",
+        iter_total_games=500,
+        batch_size=8,
         stamp="20260503T230000Z",
     )
     # POSIX cd + venv invocation.
     assert "cd /Users/g/repo" in cmd
     assert ".venv-py313/bin/python" in cmd
     assert "scripts/run_self_play_shard.py" in cmd
+    assert "--mode=pull" in cmd
+    assert "--queue-url=http://master:5099" in cmd
+    assert "--run-id=iter_001_self_play_v6" in cmd
+    assert "--iter-total-games=500" in cmd
+    assert "--batch-size=8" in cmd
+    assert "--stamp=20260503T230000Z" in cmd
     # Both encoded args present and decode back to the originals.
     for name, expected in (("--spec-b64=", spec), ("--shard-b64=", shard)):
         marker = name
@@ -454,13 +588,13 @@ def test_remote_bundle_sync_command_windows():
     assert "git reset --hard FETCH_HEAD" in cmd
 
 
-def test_remote_command_windows_uses_cmd_syntax():
+def test_remote_pull_command_windows_uses_cmd_syntax():
     """A Windows shard (``.exe`` venv python) must use cmd.exe-style
     ``cd /d "path" && set PYTHONPATH=src && "..\\python.exe" ...``
     instead of POSIX bash form."""
     from mtg_bot.training.distributed import (
         SelfPlayJobSpec,
-        _build_remote_self_play_command,
+        _build_remote_pull_command,
     )
 
     spec = SelfPlayJobSpec(
@@ -474,13 +608,102 @@ def test_remote_command_windows_uses_cmd_syntax():
         repo_path="C:\\Users\\g\\Projects\\mtg-bot",
         venv_python=".venv-py313\\Scripts\\python.exe",
     )
-    cmd = _build_remote_self_play_command(
+    cmd = _build_remote_pull_command(
         shard, spec,
-        run_id_prefix="iter_001", stamp="20260503T000000Z",
+        queue_url="http://master:5099",
+        run_id="iter_001", iter_total_games=500,
+        batch_size=8, stamp="20260503T000000Z",
     )
     assert 'cd /d "C:\\Users\\g\\Projects\\mtg-bot"' in cmd
     assert "set PYTHONPATH=src" in cmd
     assert '".venv-py313\\Scripts\\python.exe"' in cmd
+    assert "--mode=pull" in cmd
+    assert "--queue-url=http://master:5099" in cmd
+
+
+# ---- EventLog + helpers ----------------------------------------
+
+
+def test_event_log_appends_jsonl_one_line_per_record(tmp_path: Path):
+    """``EventLog.record(event, **kwargs)`` writes one JSON object
+    per line, each line carrying its own UTC timestamp + event +
+    arbitrary kwargs. Append-only, so re-opening + recording adds
+    rather than overwriting."""
+    from mtg_bot.training.distributed import EventLog
+
+    log_path = tmp_path / "shard_x_events.jsonl"
+    log = EventLog(log_path)
+    log.record("shard_start", run_id="r", n_workers=4)
+    log.record("game_end", game_idx=0, wall_s=1.23)
+    # Re-instantiate to confirm append (not truncate).
+    log2 = EventLog(log_path)
+    log2.record("shard_end", status="completed", n_games=1)
+    lines = log_path.read_text(encoding="utf-8").splitlines()
+    assert len(lines) == 3
+    parsed = [json.loads(line) for line in lines]
+    assert parsed[0]["event"] == "shard_start"
+    assert parsed[0]["run_id"] == "r"
+    assert parsed[1]["event"] == "game_end"
+    assert parsed[1]["wall_s"] == 1.23
+    assert parsed[2]["event"] == "shard_end"
+    # All entries carry an iso-8601 ts (cheap shape check; full
+    # parsing is overkill).
+    for p in parsed:
+        assert "T" in p["ts"]
+
+
+def test_event_log_handles_non_json_native_kwargs(tmp_path: Path):
+    """``Path`` and other non-JSON values must serialize via ``str``
+    without raising — observability should never break a self-play
+    run."""
+    from mtg_bot.training.distributed import EventLog
+
+    log = EventLog(tmp_path / "ev.jsonl")
+    log.record("batch_saved", npz_path=tmp_path / "out.npz")
+    line = (tmp_path / "ev.jsonl").read_text(encoding="utf-8").strip()
+    parsed = json.loads(line)
+    assert "npz_path" in parsed
+    assert "out.npz" in parsed["npz_path"]
+
+
+def test_machine_metadata_returns_basic_fields():
+    """Smoke for the machine-metadata helper. Specific fields must
+    be present so cross-machine analysis can group by host. Don't
+    pin exact values — they vary by box."""
+    from mtg_bot.training.distributed import _machine_metadata
+
+    info = _machine_metadata()
+    assert "host" in info
+    assert "platform" in info
+    assert "python_version" in info
+    assert "cpu_count" in info
+    assert info["cpu_count"] is None or info["cpu_count"] >= 1
+
+
+def test_weights_digest_is_stable_for_same_file(tmp_path: Path):
+    """SHA-256 prefix is stable for identical bytes, different for
+    distinct bytes. Used to confirm "every shard ran the same
+    weights" in cross-machine analysis."""
+    from mtg_bot.training.distributed import _weights_digest
+
+    a = tmp_path / "a.pt"
+    b = tmp_path / "b.pt"
+    a.write_bytes(b"weights-version-1" * 100)
+    b.write_bytes(b"weights-version-2" * 100)
+    da1 = _weights_digest(str(a))
+    da2 = _weights_digest(str(a))
+    db = _weights_digest(str(b))
+    assert da1 == da2
+    assert da1 != db
+    assert isinstance(da1, str) and len(da1) == 16
+
+
+def test_weights_digest_returns_none_for_missing_file(tmp_path: Path):
+    """Missing weights file shouldn't raise — observability is
+    best-effort."""
+    from mtg_bot.training.distributed import _weights_digest
+
+    assert _weights_digest(str(tmp_path / "nope.pt")) is None
 
 
 def test_run_self_play_shard_script_exists_and_imports():

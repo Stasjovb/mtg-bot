@@ -481,73 +481,471 @@ def run_distributed_self_play(
     progress_dir: Path,
     output_dir: Path,
     run_id_prefix: str,
+    total_games: int,
+    queue_url: str,
     bundle_url: Optional[str] = None,
+    batch_size_default: int = 25,
 ) -> list[Path]:
-    """Orchestrate every shard's self-play in parallel, return the
-    list of per-shard ``.npz`` paths.
+    """Pull-model orchestrator. Initializes a queue of ``total_games``
+    on master, dispatches every shard concurrently to pull from it,
+    returns the list of every per-batch ``.npz`` produced (across
+    all shards). Master's training step globs ``output_dir`` so the
+    union becomes the iter's training mix automatically.
 
-    Local shards run in-process (one at a time today — both shards'
-    inner ``mp.Pool``s would otherwise compete for the same CPU
-    cores; rely on the user putting at most one ``host="local"``
-    shard in the config). Remote shards are dispatched concurrently
-    via ``concurrent.futures.ThreadPoolExecutor`` since SSH I/O is
-    blocking but not CPU-bound.
+    Why pull-model: the previous static-partitioning design (where
+    each shard ran a fixed ``n_games``) capped iter throughput at
+    ``max(per_shard_wall)`` — slower remote dragged the whole iter.
+    Pull-model lets fast machines naturally do more work and slower
+    machines do less, giving wall ≈ ``total_work / total_throughput``.
 
-    ``bundle_url`` is the master's git-bundle endpoint (typically
-    ``http://<master-tailnet>:5099/repo.bundle``). When set, each
-    remote shard fetches a fresh bundle from it before running so
-    code changes propagate without GitHub auth on remotes. When
-    None, code-sync is skipped — caller is responsible for keeping
-    remotes up-to-date.
+    ``queue_url``: the master's queue endpoint base, e.g.
+    ``http://desktop-master:5099``. Iterate spawns
+    ``serve_setup_scripts.py`` (or relies on it being already up)
+    and passes that URL here.
+
+    ``bundle_url``: master's git-bundle endpoint. When set, each
+    remote shard fetches a fresh bundle before pulling its first
+    batch so code changes propagate. When None, no remote-side
+    code sync.
+
+    ``batch_size_default`` is the default chunk size handed out per
+    ``/queue/take``. A shard can override via ``ShardConfig.n_workers``
+    (each batch is sized to fill the shard's pool roughly once,
+    minimizing tail-of-iter waste — a slow shard finishing its last
+    batch only delays the iter by ~one game's worth of wall).
     """
+    import threading as _threading
+    import urllib.request
+    import json as _json
+
     stamp = _now_stamp()
-    output_paths: dict[str, Path] = {}
+    output_dir.mkdir(parents=True, exist_ok=True)
+    progress_dir.mkdir(parents=True, exist_ok=True)
 
-    # Run all remote shards concurrently in threads (SSH I/O is the
-    # bottleneck, not the master's CPU).  Local shards run inline
-    # after — they hold the master's mp.Pool so concurrent local
-    # shards would just contend with each other.
-    remote_shards = [s for s in shards_config.shards if not s.is_local]
-    local_shards = [s for s in shards_config.shards if s.is_local]
+    # Initialize the queue. The run_id_prefix doubles as the queue
+    # key — same value workers send back to /queue/take.
+    init_url = f"{queue_url.rstrip('/')}/queue/init"
+    init_body = _json.dumps({
+        "run_id": run_id_prefix,
+        "total_games": total_games,
+    }).encode("utf-8")
+    req = urllib.request.Request(
+        init_url, data=init_body,
+        headers={"Content-Type": "application/json"},
+    )
+    with urllib.request.urlopen(req, timeout=10) as resp:
+        if resp.status != 200:
+            raise RuntimeError(
+                f"queue init failed at {init_url}: HTTP {resp.status}"
+            )
 
-    futures: dict[concurrent.futures.Future, ShardConfig] = {}
-    if remote_shards:
-        executor = concurrent.futures.ThreadPoolExecutor(
-            max_workers=len(remote_shards),
-            thread_name_prefix="dist-self-play",
+    output_paths: list[Path] = []
+    output_paths_lock = _threading.Lock()
+
+    def _local_runner(shard: ShardConfig) -> list[Path]:
+        # n_workers default: cpu_count - 2 (mirrors mp.Pool default).
+        n_workers = shard.n_workers
+        if n_workers is None:
+            import os
+            n_workers = max(1, (os.cpu_count() or 1) - 2)
+        return run_shard_pull(
+            spec,
+            queue_url=queue_url,
+            run_id=run_id_prefix,
+            batch_size=max(1, n_workers),
+            n_workers=n_workers,
+            output_dir=output_dir,
+            label=shard.display_label,
+            stamp=stamp,
+            iter_total_games=total_games,
+            progress_dir=progress_dir,
         )
-        try:
-            for shard in remote_shards:
-                fut = executor.submit(
-                    run_shard_remote, shard, spec,
-                    progress_dir=progress_dir,
-                    output_dir=output_dir,
-                    run_id_prefix=run_id_prefix,
-                    stamp=stamp,
-                    bundle_url=bundle_url,
-                )
-                futures[fut] = shard
-        finally:
-            executor.shutdown(wait=False)
 
-    # Local shards run inline — they want all the master's CPU.
-    for shard in local_shards:
-        path = run_shard_local(
+    def _remote_runner(shard: ShardConfig) -> list[Path]:
+        return run_shard_remote(
             shard, spec,
+            queue_url=queue_url,
+            run_id=run_id_prefix,
+            iter_total_games=total_games,
+            batch_size_default=batch_size_default,
             progress_dir=progress_dir,
             output_dir=output_dir,
             run_id_prefix=run_id_prefix,
             stamp=stamp,
+            bundle_url=bundle_url,
         )
-        output_paths[shard.display_label] = path
 
-    # Drain the remote futures.
-    for fut, shard in futures.items():
-        output_paths[shard.display_label] = fut.result()
+    # All shards run concurrently — they pull from the same queue,
+    # so there's no static partitioning to worry about. Local
+    # shards' mp.Pool runs in this process; remote shards block on
+    # SSH (lots of idle wall time waiting on the network call to
+    # finish before a thread can do useful work, but the master
+    # CPU isn't held).
+    futures: dict[concurrent.futures.Future, ShardConfig] = {}
+    n_threads = max(1, len(shards_config.shards))
+    executor = concurrent.futures.ThreadPoolExecutor(
+        max_workers=n_threads, thread_name_prefix="dist-self-play",
+    )
+    try:
+        for shard in shards_config.shards:
+            runner = _local_runner if shard.is_local else _remote_runner
+            futures[executor.submit(runner, shard)] = shard
+    finally:
+        executor.shutdown(wait=False)
 
-    # Return in shards-config order so callers get deterministic
-    # ordering for any downstream concat that's order-sensitive.
-    return [output_paths[s.display_label] for s in shards_config.shards]
+    # Drain — each shard returns its list of npz paths.
+    for fut in concurrent.futures.as_completed(futures):
+        shard_paths = fut.result()
+        with output_paths_lock:
+            output_paths.extend(shard_paths)
+    return output_paths
+
+
+class EventLog:
+    """Append-only JSONL event log per shard. One JSON object per
+    line: ``{"ts": <iso8601>, "event": <type>, ...kwargs}``. Plain
+    stdlib so it ships with the worker over SSH (no extra deps on
+    remotes). Thread-safe for the in-process master shard's case
+    where the orchestrator and the pool driver may both write.
+
+    Sits next to the per-shard progress JSON in ``progress_dir`` so
+    everything observability-related is in one place. ``run_shard_
+    remote`` scps it back to the master at end-of-shard so analysis
+    on the host has every machine's events in one file tree.
+    """
+
+    def __init__(self, path: Path) -> None:
+        self._path = path
+        path.parent.mkdir(parents=True, exist_ok=True)
+        self._lock = threading.Lock()
+
+    @property
+    def path(self) -> Path:
+        return self._path
+
+    def record(self, event: str, **kwargs: Any) -> None:
+        """Append one line. ``default=str`` swallows non-JSON-native
+        values (Path, datetime, etc.) into their string repr — the
+        log is for human + ad-hoc analysis, not strict round-trip."""
+        line = json.dumps(
+            {
+                "ts": datetime.now(timezone.utc).isoformat(),
+                "event": event,
+                **kwargs,
+            },
+            default=str,
+        )
+        with self._lock, self._path.open("a", encoding="utf-8") as f:
+            f.write(line + "\n")
+
+
+def _machine_metadata() -> dict[str, Any]:
+    """Best-effort machine info captured once per shard at startup.
+    Useful when one shard's results look weird and you want to know
+    "did this run on the M2 Mac or the 1080Ti box; same torch
+    version?". Cheap enough that we always emit it."""
+    import os
+    import platform
+    info: dict[str, Any] = {
+        "host": platform.node(),
+        "platform": platform.platform(),
+        "python_version": sys.version.split()[0],
+        "cpu_count": os.cpu_count(),
+    }
+    try:  # noqa: SIM105
+        import torch  # type: ignore
+        info["torch_version"] = torch.__version__
+        info["cuda_available"] = bool(torch.cuda.is_available())
+    except Exception:  # noqa: BLE001
+        pass
+    return info
+
+
+def _weights_digest(weights_path: str) -> Optional[str]:
+    """SHA-256 hex prefix of the weights file. Lets cross-machine
+    analysis confirm "same weights ran on every shard" — a stale
+    weights file on one remote would silently bias the iter's
+    training mix toward that worker's policy."""
+    try:
+        import hashlib
+        h = hashlib.sha256()
+        with open(weights_path, "rb") as f:
+            for chunk in iter(lambda: f.read(65536), b""):
+                h.update(chunk)
+        return h.hexdigest()[:16]
+    except OSError:
+        return None
+
+
+def _play_one_parallel_game_timed(args: tuple) -> tuple:
+    """Wrap ``_play_one_parallel_game`` with a ``perf_counter`` pair
+    so the pull-mode worker gets per-game wall time without engine
+    instrumentation. Top-level so multiprocessing can pickle it
+    across the spawn boundary.
+
+    Returns ``(game_idx, chunk, wall_seconds)``. ``chunk`` is the
+    same 5-tuple the original wrapper returns.
+    """
+    import time as _time
+
+    from mtg_bot.training.data_gen import _play_one_parallel_game
+    t0 = _time.perf_counter()
+    game_idx, chunk = _play_one_parallel_game(args)
+    return game_idx, chunk, _time.perf_counter() - t0
+
+
+def run_shard_pull(
+    spec: SelfPlayJobSpec,
+    *,
+    queue_url: str,
+    run_id: str,
+    batch_size: int,
+    n_workers: int,
+    output_dir: Path,
+    label: str,
+    stamp: str,
+    iter_total_games: int,
+    progress_dir: Optional[Path] = None,
+) -> list[Path]:
+    """Pull-model self-play worker — used by both the master's local
+    shard and each remote shard.
+
+    Loops: ``POST queue_url/queue/take`` → if empty, exit; else run
+    ``mp.Pool.map`` over the batch's game-idxes → concat chunks →
+    save per-batch npz → repeat. Same ``mp.Pool`` instance serves
+    every batch (warm across iterations), so per-batch overhead is
+    one HTTP round-trip + one ``save_dataset`` call — the spawn
+    cost (~30s on Windows) is paid once at the start of the shard,
+    amortized over hundreds of games.
+
+    Per-batch npzs land under ``output_dir`` named
+    ``{run_id}_shard_{label}_chunk_{NNNN}_{stamp}.npz`` — the
+    ``shard_{label}`` segment matches the existing foreign-npz
+    pattern (``find_foreign_npzs``) and the chunk-index keeps
+    multi-batch outputs from collapsing onto a single name. Master's
+    training step globs ``output_dir`` and trains on the union of
+    every shard's batches.
+
+    Per-shard progress JSON gets ``n_games_total = iter_total_games``
+    (the iter's queue size, not just this shard's eventual share)
+    so the training UI shows "this shard did X of Y" honestly — in
+    pull mode we don't know in advance how many games each shard
+    will end up with.
+    """
+    import json as _json
+    import multiprocessing as mp
+    import time as _time
+    import urllib.request
+
+    from mtg_bot.decks import decks_from_json
+    from mtg_bot.training import (
+        NNPimcConfig, save_dataset,
+    )
+    from mtg_bot.training.data_gen import (
+        ReplayCaptureConfig, _concat_chunks,
+        _winner_to_p0_outcome,
+    )
+    from mtg_bot.training.progress import DataGenProgress
+
+    cfg = NNPimcConfig(
+        weights_path=spec.weights_path,
+        samples=spec.samples,
+        inner_nodes=spec.inner_nodes,
+        batch_size=32,
+        with_policy=spec.with_policy,
+        puct=True,
+        hidden_sizes=spec.hidden_sizes,
+    )
+    factory = cfg.build
+
+    deck_pool = None
+    if spec.deck_pool_path is not None:
+        deck_pool = decks_from_json(Path(spec.deck_pool_path))
+
+    replay_config: Optional[ReplayCaptureConfig] = None
+    replays_subdir: Optional[str] = None
+    if spec.capture_every > 0 and spec.replays_root is not None:
+        replays_subdir = str(
+            Path(spec.replays_root) / f"{run_id}_shard_{label}"
+        )
+        Path(replays_subdir).mkdir(parents=True, exist_ok=True)
+        replay_config = ReplayCaptureConfig(
+            save_dir=replays_subdir,
+            capture_every=spec.capture_every,
+            nn_weights_path=spec.weights_path,
+            nn_version_label=spec.nn_version_label,
+            nn_hidden_sizes=spec.hidden_sizes,
+            nn_with_policy=spec.with_policy,
+        )
+
+    hang_dump_dir: Optional[str] = None
+    if spec.hang_dump_root is not None:
+        hang_dump_dir = str(
+            Path(spec.hang_dump_root) / f"{run_id}_shard_{label}"
+        )
+
+    progress: Optional[DataGenProgress] = None
+    events: Optional[EventLog] = None
+    if progress_dir is not None:
+        progress_dir.mkdir(parents=True, exist_ok=True)
+        progress = DataGenProgress(
+            progress_path=progress_dir / f"{run_id}_shard_{label}.json",
+            run_id=f"{run_id}_shard_{label}",
+            n_games_total=iter_total_games,
+            n_workers=n_workers,
+            command="distributed_self_play (pull-mode shard)",
+            notes=(
+                f"pull-mode shard {label} (one of N workers in iter "
+                f"{run_id})"
+            ),
+            replays_dir=replays_subdir,
+        )
+        progress.begin()
+        events = EventLog(
+            progress_dir / f"{run_id}_shard_{label}_events.jsonl"
+        )
+        events.record(
+            "shard_start",
+            run_id=run_id,
+            label=label,
+            iter_total_games=iter_total_games,
+            batch_size=batch_size,
+            n_workers=n_workers,
+            base_seed=spec.base_seed,
+            samples=spec.samples,
+            inner_nodes=spec.inner_nodes,
+            weights_path=spec.weights_path,
+            weights_digest=_weights_digest(spec.weights_path),
+            machine=_machine_metadata(),
+        )
+
+    output_dir.mkdir(parents=True, exist_ok=True)
+    npz_paths: list[Path] = []
+    chunk_idx = 0
+    take_url = f"{queue_url.rstrip('/')}/queue/take"
+    shard_t0 = _time.perf_counter()
+    n_games_completed = 0
+    n_games_crashed = 0
+
+    try:
+        with mp.Pool(processes=n_workers) as pool:
+            while True:
+                req_body = _json.dumps({
+                    "run_id": run_id, "batch_size": batch_size,
+                }).encode("utf-8")
+                req = urllib.request.Request(
+                    take_url, data=req_body,
+                    headers={"Content-Type": "application/json"},
+                )
+                take_t0 = _time.perf_counter()
+                with urllib.request.urlopen(req, timeout=30) as resp:
+                    response = _json.loads(
+                        resp.read().decode("utf-8"),
+                    )
+                take_wall = _time.perf_counter() - take_t0
+                game_idxes = response.get("games", [])
+                remaining = response.get("remaining", 0)
+                if events is not None:
+                    events.record(
+                        "batch_take",
+                        chunk_idx=chunk_idx,
+                        n_games=len(game_idxes),
+                        game_idxes=list(game_idxes),
+                        remaining_after=remaining,
+                        take_wall_s=take_wall,
+                    )
+                if not game_idxes:
+                    break
+
+                args_list = [
+                    (idx, factory, factory, spec.base_seed,
+                     spec.decision_cap, spec.sample_every,
+                     replay_config, deck_pool,
+                     spec.enable_mulligans, spec.per_game_timeout_sec,
+                     hang_dump_dir)
+                    for idx in game_idxes
+                ]
+                batch_t0 = _time.perf_counter()
+                results = pool.map(
+                    _play_one_parallel_game_timed, args_list,
+                )
+                batch_wall = _time.perf_counter() - batch_t0
+
+                for game_idx, chunk, wall_s in results:
+                    n_samples = int(chunk[0].shape[0])
+                    crashed = n_samples == 0 and chunk[4] is None
+                    if crashed:
+                        n_games_crashed += 1
+                    n_games_completed += 1
+                    if progress is not None:
+                        if crashed:
+                            progress.record_game(crashed=True)
+                        else:
+                            progress.record_game(
+                                n_samples=n_samples,
+                                outcome_p0=_winner_to_p0_outcome(
+                                    chunk[4],
+                                ),
+                            )
+                    if events is not None:
+                        events.record(
+                            "game_end",
+                            game_idx=int(game_idx),
+                            chunk_idx=chunk_idx,
+                            wall_s=wall_s,
+                            n_samples=n_samples,
+                            winner=chunk[4],
+                            crashed=crashed,
+                        )
+
+                chunks_only = [chunk for _, chunk, _ in results]
+                f, o, p, m = _concat_chunks(
+                    [c[:4] for c in chunks_only]
+                )
+                output_path = output_dir / (
+                    f"{run_id}_shard_{label}_chunk_"
+                    f"{chunk_idx:04d}_{stamp}.npz"
+                )
+                save_dataset(
+                    f, o, output_path,
+                    policy_targets=p, action_masks=m,
+                )
+                npz_paths.append(output_path)
+                if events is not None:
+                    events.record(
+                        "batch_saved",
+                        chunk_idx=chunk_idx,
+                        npz_path=str(output_path),
+                        n_samples=int(f.shape[0]) if f.size else 0,
+                        batch_wall_s=batch_wall,
+                    )
+                chunk_idx += 1
+    except BaseException as exc:
+        if progress is not None:
+            progress.finalize(status="failed")
+        if events is not None:
+            events.record(
+                "shard_end",
+                status="failed",
+                error=repr(exc),
+                n_games_completed=n_games_completed,
+                n_games_crashed=n_games_crashed,
+                n_batches=chunk_idx,
+                wall_s=_time.perf_counter() - shard_t0,
+            )
+        raise
+    if progress is not None:
+        progress.finalize(status="completed")
+    if events is not None:
+        events.record(
+            "shard_end",
+            status="completed",
+            n_games_completed=n_games_completed,
+            n_games_crashed=n_games_crashed,
+            n_batches=chunk_idx,
+            wall_s=_time.perf_counter() - shard_t0,
+        )
+    return npz_paths
 
 
 def _is_windows_remote(shard: ShardConfig) -> bool:
@@ -626,28 +1024,24 @@ def _run_subprocess(
     )
 
 
-def _build_remote_self_play_command(
+def _build_remote_pull_command(
     shard: ShardConfig,
     spec: SelfPlayJobSpec,
     *,
-    run_id_prefix: str,
+    queue_url: str,
+    run_id: str,
+    iter_total_games: int,
+    batch_size: int,
     stamp: str,
 ) -> str:
-    """Produce the one-line shell command the remote will run.
+    """Produce the one-line shell command the remote runs to start
+    its pull-mode worker. Same wrapper script as the master's local
+    shard uses, just invoked over SSH.
 
-    Both shards (local + remote) use the SAME entry point —
-    ``scripts/run_self_play_shard.py`` — so the production code
-    path is the same. The remote receives the full spec + shard
-    config as base64-encoded JSON args (avoids quoting hazards
-    that differ between cmd.exe and bash).
-
-    Path conventions:
-    - All path fields in ``spec`` are relative to repo root, so
-      cmd.exe and bash resolve them identically once we ``cd`` in.
-    - ``shard.venv_python`` is OS-specific (already configured per
-      shard in shards-config), wrapped in quotes for safety.
-    - ``run_id_prefix`` and ``stamp`` are ASCII-only by convention
-      (no quoting needed).
+    Spec + shard configs ride as base64-encoded JSON to avoid
+    quoting hazards across cmd.exe vs bash. ``queue_url`` is plain
+    ASCII (no quoting needed); the rest of the args are integers
+    or short strings.
     """
     import base64
     spec_b64 = base64.b64encode(
@@ -659,9 +1053,13 @@ def _build_remote_self_play_command(
 
     args = (
         f"scripts/run_self_play_shard.py "
+        f"--mode=pull "
         f"--spec-b64={spec_b64} "
         f"--shard-b64={shard_b64} "
-        f"--run-id-prefix={run_id_prefix} "
+        f"--queue-url={queue_url} "
+        f"--run-id={run_id} "
+        f"--iter-total-games={iter_total_games} "
+        f"--batch-size={batch_size} "
         f"--stamp={stamp}"
     )
     repo_path = shard.repo_path or ""
@@ -762,54 +1160,64 @@ def run_shard_remote(
     shard: ShardConfig,
     spec: SelfPlayJobSpec,
     *,
+    queue_url: str,
+    run_id: str,
+    iter_total_games: int,
+    batch_size_default: int,
     progress_dir: Path,
     output_dir: Path,
     run_id_prefix: str,
     stamp: str,
     bundle_url: Optional[str] = None,
-) -> Path:
-    """Run one shard on a remote machine.
+) -> list[Path]:
+    """Run one shard on a remote machine in pull mode.
 
     Sequence:
-    1. Code sync. If ``bundle_url`` is set, curl a fresh git bundle
-       from the master and ``git reset --hard`` to its main — works
-       without GitHub auth on the remote (Tailscale-only). If
-       ``bundle_url`` is None, skip the sync entirely (caller is
-       responsible for the remote being up-to-date).
-    2. (Weight sync deferred — the remote's repo is expected to
-       carry the current best version at the same relative path.
-       A follow-up commit can scp updated weights when iterate
-       advances ``current_best``.)
-    3. Start a poller that periodically scps the remote progress
-       JSON back so the master UI shows live updates.
-    4. Block on ``ssh ... run_self_play_shard.py`` (the wrapper
-       calls ``run_shard_local`` on the remote).
-    5. Stop the poller; final progress scp.
-    6. scp the npz back; return local path.
+    1. Code sync from master's git bundle (if ``bundle_url`` is set).
+    2. Start a poller that periodically scps the remote progress
+       JSON back for the master UI.
+    3. Block on ``ssh ... run_self_play_shard.py --mode=pull`` —
+       the wrapper loops fetching from /queue/take until empty.
+    4. Stop poller; final progress scp.
+    5. scp every per-batch npz back to ``output_dir``. Filenames
+       follow ``{run_id}_shard_{label}_chunk_{NNNN}_{stamp}.npz``,
+       which is what ``run_shard_pull`` writes server-side.
+
+    Returns the list of local-side npz paths (one per batch the
+    remote produced). The orchestrator concatenates lists across
+    all shards.
 
     Raises ``subprocess.CalledProcessError`` on SSH/SCP non-zero
     exits — the caller re-surfaces it.
     """
-    run_id_full = f"{run_id_prefix}_shard_{shard.display_label}"
-    npz_basename = (
-        f"{run_id_prefix}_shard_{shard.display_label}_{stamp}.npz"
-    )
+    run_id_full = f"{run_id}_shard_{shard.display_label}"
 
     output_dir.mkdir(parents=True, exist_ok=True)
     progress_dir.mkdir(parents=True, exist_ok=True)
-    local_npz_path = output_dir / npz_basename
     local_progress_path = progress_dir / f"{run_id_full}.json"
-    # Remote-side absolute paths (the wrapper script writes to the
-    # repo's iterate_data/ + training_progress/ subdirs by default).
+    local_events_path = progress_dir / f"{run_id_full}_events.jsonl"
+
     remote_repo = shard.repo_path or ""
-    remote_npz = _remote_join(
-        shard, remote_repo, "iterate_data", npz_basename,
-    )
     remote_progress = _remote_join(
         shard, remote_repo, "training_progress", f"{run_id_full}.json",
     )
+    remote_events = _remote_join(
+        shard, remote_repo, "training_progress",
+        f"{run_id_full}_events.jsonl",
+    )
+    # Per-shard npz output dir on the remote.
+    remote_iterate_data = _remote_join(
+        shard, remote_repo, "iterate_data",
+    )
 
-    # 1. Code sync via Tailscale-served bundle (no GitHub auth needed).
+    # Per-shard batch size: one batch ≈ one round of all workers
+    # running ~one game. Minimizes tail-of-iter waste.
+    batch_size = (
+        shard.n_workers if shard.n_workers and shard.n_workers > 0
+        else batch_size_default
+    )
+
+    # 1. Code sync.
     if bundle_url:
         print(
             f"[shard {shard.display_label}] sync from bundle on "
@@ -818,7 +1226,7 @@ def run_shard_remote(
         sync_cmd = _build_remote_bundle_sync_command(shard, bundle_url)
         _run_subprocess(_ssh_cmd(shard, sync_cmd), timeout=300)
 
-    # 3. Progress poller running while the run is in flight.
+    # 2. Progress poller.
     poller = _ProgressPoller(
         shard,
         remote_progress_path=remote_progress,
@@ -826,21 +1234,26 @@ def run_shard_remote(
     )
     poller.start()
 
-    # 4. The actual self-play invocation.
+    # 3. The actual pull-mode invocation. Blocks until queue drains.
     print(
-        f"[shard {shard.display_label}] running self-play "
-        f"({shard.n_games} games) on {shard.host}...",
+        f"[shard {shard.display_label}] pull-mode self-play on "
+        f"{shard.host} (batch_size={batch_size})...",
         file=sys.stderr,
     )
     try:
-        run_cmd = _build_remote_self_play_command(
+        run_cmd = _build_remote_pull_command(
             shard, spec,
-            run_id_prefix=run_id_prefix, stamp=stamp,
+            queue_url=queue_url,
+            run_id=run_id,
+            iter_total_games=iter_total_games,
+            batch_size=batch_size,
+            stamp=stamp,
         )
+        # No timeout — the run loops indefinitely waiting on master.
         _run_subprocess(_ssh_cmd(shard, run_cmd))
     finally:
-        # 5. Stop poller + best-effort final progress scp.
         poller.stop()
+        # Final progress JSON snapshot.
         try:
             _run_subprocess(
                 _scp_cmd(
@@ -851,17 +1264,60 @@ def run_shard_remote(
             )
         except Exception:  # noqa: BLE001
             pass
+        # Pull the JSONL event log too — this is where machine
+        # metadata, per-game wall times, and per-batch throughput
+        # live for cross-machine analysis. Failure isn't fatal: if
+        # the shard crashed before opening the file there's nothing
+        # to fetch, but we still want the npzs back.
+        try:
+            _run_subprocess(
+                _scp_cmd(
+                    shard, remote_events, str(local_events_path),
+                    from_remote=True,
+                ),
+                timeout=30,
+            )
+        except Exception:  # noqa: BLE001
+            pass
 
-    # 6. Pull the npz back.
+    # 4. Pull all per-batch npzs back. The remote wrote them under
+    # iterate_data/ with a known prefix; we glob via SSH ``ls`` + scp
+    # each. (Bulk scp of a glob has shell-quoting issues across cmd
+    # vs bash, so we list + transfer one at a time.)
     print(
-        f"[shard {shard.display_label}] pulling npz back...",
+        f"[shard {shard.display_label}] collecting per-batch npzs"
+        f" from {shard.host}...",
         file=sys.stderr,
     )
-    _run_subprocess(
-        _scp_cmd(
-            shard, remote_npz, str(local_npz_path),
-            from_remote=True,
-        ),
-        timeout=120,
-    )
-    return local_npz_path
+    prefix = f"{run_id}_shard_{shard.display_label}_chunk_"
+    if _is_windows_remote(shard):
+        # cmd.exe: ``dir /b`` lists basenames only.
+        list_cmd = (
+            f'cd /d "{remote_repo}" && '
+            f'dir /b iterate_data\\{prefix}*.npz'
+        )
+    else:
+        list_cmd = (
+            f'cd {shlex.quote(remote_repo)} && '
+            f'ls iterate_data/{prefix}*.npz | xargs -n1 basename'
+        )
+    list_proc = _run_subprocess(_ssh_cmd(shard, list_cmd), timeout=30)
+    basenames = [
+        line.strip() for line in list_proc.stdout.splitlines()
+        if line.strip()
+    ]
+    local_paths: list[Path] = []
+    for basename in basenames:
+        remote_npz = _remote_join(
+            shard, remote_repo, "iterate_data", basename,
+        )
+        local_npz = output_dir / basename
+        _run_subprocess(
+            _scp_cmd(
+                shard, remote_npz, str(local_npz),
+                from_remote=True,
+            ),
+            timeout=120,
+        )
+        local_paths.append(local_npz)
+    return local_paths
