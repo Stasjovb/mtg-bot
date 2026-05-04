@@ -1494,3 +1494,467 @@ def test_run_self_play_shard_script_exists_and_imports():
     assert res.returncode == 0, res.stderr
     assert "--spec-b64" in res.stdout
     assert "--shard-b64" in res.stdout
+
+
+# ---- Distributed replay collection --------------------------------
+
+
+class _ScriptedSubprocess:
+    """Records calls and lets tests inject scripted stdout for
+    specific ssh-listing commands. Anything else returns empty
+    stdout. Used to drive the replay-collection ls path."""
+
+    def __init__(
+        self,
+        listing_responses: Optional[dict[str, str]] = None,
+    ) -> None:
+        self.calls: list[list[str]] = []
+        self._listing_responses = listing_responses or {}
+
+    def __call__(self, cmd, *args, **kwargs):
+        self.calls.append(list(cmd))
+        stdout = ""
+        if cmd and cmd[0] == "ssh":
+            tail = cmd[-1]
+            for marker, payload in self._listing_responses.items():
+                if marker in tail:
+                    stdout = payload
+                    break
+
+        class _Result:
+            returncode = 0
+
+            def __init__(self, _stdout):
+                self.stdout = _stdout
+                self.stderr = ""
+        return _Result(stdout)
+
+
+def _drive_run_shard_remote(
+    monkeypatch, shard, spec, *, tmp_path,
+    listing_responses=None,
+):
+    from mtg_bot.training import distributed as dist
+
+    rec = _ScriptedSubprocess(listing_responses=listing_responses)
+    monkeypatch.setattr(dist, "_run_subprocess", rec)
+    monkeypatch.setattr(dist.subprocess, "run", rec)
+
+    class _NoopPoller:
+        def __init__(self, *a, **kw): pass
+        def start(self): pass
+        def stop(self): pass
+    monkeypatch.setattr(dist, "_ProgressPoller", _NoopPoller)
+
+    dist.run_shard_remote(
+        shard, spec,
+        queue_url="http://master:5099",
+        run_id="iter_002_self_play_v7",
+        iter_total_games=500,
+        progress_dir=tmp_path / "training_progress",
+        output_dir=tmp_path / "iterate_data",
+        run_id_prefix="iter_002_self_play_v7",
+        stamp="20260503T230000Z",
+    )
+    return rec.calls
+
+
+def _drive_run_shard_eval_remote(
+    monkeypatch, shard, spec, *, tmp_path,
+    listing_responses=None,
+):
+    from mtg_bot.training import distributed as dist
+
+    rec = _ScriptedSubprocess(listing_responses=listing_responses)
+    monkeypatch.setattr(dist, "_run_subprocess", rec)
+    monkeypatch.setattr(dist.subprocess, "run", rec)
+
+    class _NoopPoller:
+        def __init__(self, *a, **kw): pass
+        def start(self): pass
+        def stop(self): pass
+    monkeypatch.setattr(dist, "_ProgressPoller", _NoopPoller)
+
+    run_id_full = (
+        f"iter_002_eval_v7_shard_{shard.display_label}"
+    )
+    result_path = (
+        tmp_path / "training_progress"
+        / f"{run_id_full}_result.json"
+    )
+    result_path.parent.mkdir(parents=True, exist_ok=True)
+    result_path.write_text(
+        json.dumps({
+            "n_games": 4,
+            "wins_new": 2, "wins_old": 1,
+            "draws": 1, "crashed": 0,
+        }),
+        encoding="utf-8",
+    )
+
+    dist.run_shard_eval_remote(
+        shard, spec,
+        queue_url="http://master:5099",
+        run_id="iter_002_eval_v7",
+        iter_total_games=4,
+        progress_dir=tmp_path / "training_progress",
+        stamp="20260503T230000Z",
+    )
+    return rec.calls
+
+
+def test_replay_collection_posix_command_shape(monkeypatch, tmp_path):
+    """POSIX shard, capture enabled: orchestrator issues an ``ssh ls``
+    of the per-shard remote replay dir and an ``scp`` per listed file
+    pulling each .json.gz into the master's
+    ``<replays_root>/<run_id>_shard_<label>/``."""
+    from mtg_bot.training.distributed import SelfPlayJobSpec
+
+    monkeypatch.chdir(tmp_path)
+    weights_rel = "trained_weights/v7/weights.pt"
+    (tmp_path / "trained_weights" / "v7").mkdir(parents=True)
+    (tmp_path / weights_rel).write_bytes(b"fake")
+
+    spec = SelfPlayJobSpec(
+        weights_path=weights_rel,
+        samples=2, inner_nodes=10, hidden_sizes=(64,),
+        base_seed=0, enable_mulligans=False,
+        per_game_timeout_sec=None,
+        capture_every=10,
+        replays_root="replays",
+    )
+    shard = ShardConfig(
+        host="macbook", n_games=10, user="g",
+        repo_path="/Users/g/repo",
+        venv_python=".venv-py313/bin/python",
+    )
+    run_id_full = "iter_002_self_play_v7_shard_macbook"
+    listing_marker = (
+        f"ls replays/{run_id_full}/*.json.gz"
+    )
+    listing_payload = (
+        "self_play_seed0_idx0001.json.gz\n"
+        "self_play_seed0_idx0010.json.gz\n"
+    )
+    calls = _drive_run_shard_remote(
+        monkeypatch, shard, spec,
+        tmp_path=tmp_path,
+        listing_responses={listing_marker: listing_payload},
+    )
+
+    ls_calls = [
+        c for c in calls
+        if c[0] == "ssh" and listing_marker in c[-1]
+    ]
+    assert len(ls_calls) == 1
+    assert "2>/dev/null" in ls_calls[0][-1]
+    assert "xargs -n1 basename" in ls_calls[0][-1]
+    assert "cd /Users/g/repo" in ls_calls[0][-1]
+
+    replay_pull_targets = [
+        c for c in calls
+        if c[0] == "scp" and any(
+            p.endswith(".json.gz")
+            and "self_play_seed0_idx" in p
+            for p in c
+        )
+    ]
+    assert len(replay_pull_targets) == 2
+    expected_local_dir = tmp_path / "replays" / run_id_full
+    for c in replay_pull_targets:
+        src = next(
+            p for p in c if p.startswith("g@macbook:")
+        )
+        basename = src.rsplit("/", 1)[-1]
+        assert (
+            src
+            == f"g@macbook:/Users/g/repo/replays/{run_id_full}/"
+            f"{basename}"
+        )
+        local_dst = c[-1]
+        assert local_dst == str(expected_local_dir / basename)
+    assert expected_local_dir.is_dir()
+
+
+def test_replay_collection_windows_command_shape(monkeypatch, tmp_path):
+    """Windows shard, capture enabled: ``dir /b`` lists basenames
+    under ``replays\\<run_id>_shard_<label>\\*.json.gz``; scp pulls
+    each file with the forward-slashed remote path."""
+    from mtg_bot.training.distributed import SelfPlayJobSpec
+
+    monkeypatch.chdir(tmp_path)
+    weights_rel = "trained_weights/v7/weights.pt"
+    (tmp_path / "trained_weights" / "v7").mkdir(parents=True)
+    (tmp_path / weights_rel).write_bytes(b"fake")
+
+    spec = SelfPlayJobSpec(
+        weights_path=weights_rel,
+        samples=2, inner_nodes=10, hidden_sizes=(64,),
+        base_seed=0, enable_mulligans=False,
+        per_game_timeout_sec=None,
+        capture_every=10,
+        replays_root="replays",
+    )
+    shard = ShardConfig(
+        host="winbox", n_games=10, user="g",
+        repo_path="C:\\Users\\g\\Projects\\mtg-bot",
+        venv_python=".venv-py313\\Scripts\\python.exe",
+    )
+    run_id_full = "iter_002_self_play_v7_shard_winbox"
+    listing_marker = (
+        f"dir /b replays\\{run_id_full}\\*.json.gz"
+    )
+    listing_payload = (
+        "self_play_seed0_idx0001.json.gz\r\n"
+        "self_play_seed0_idx0010.json.gz\r\n"
+    )
+    calls = _drive_run_shard_remote(
+        monkeypatch, shard, spec,
+        tmp_path=tmp_path,
+        listing_responses={listing_marker: listing_payload},
+    )
+
+    ls_calls = [
+        c for c in calls
+        if c[0] == "ssh" and listing_marker in c[-1]
+    ]
+    assert len(ls_calls) == 1
+    assert "2>nul" in ls_calls[0][-1]
+    assert 'cd /d "C:\\Users\\g\\Projects\\mtg-bot"' in ls_calls[0][-1]
+
+    replay_pull_targets = [
+        c for c in calls
+        if c[0] == "scp" and any(
+            p.endswith(".json.gz")
+            and "self_play_seed0_idx" in p
+            for p in c
+        )
+    ]
+    assert len(replay_pull_targets) == 2
+    expected_local_dir = tmp_path / "replays" / run_id_full
+    for c in replay_pull_targets:
+        src = next(
+            p for p in c if p.startswith("g@winbox:")
+        )
+        assert "\\" not in src
+        basename = src.rsplit("/", 1)[-1]
+        assert (
+            src
+            == f"g@winbox:C:/Users/g/Projects/mtg-bot/replays/"
+            f"{run_id_full}/{basename}"
+        )
+        local_dst = c[-1]
+        assert local_dst == str(expected_local_dir / basename)
+    assert expected_local_dir.is_dir()
+
+
+def test_replay_collection_skipped_when_capture_off(
+    monkeypatch, tmp_path,
+):
+    """``capture_every=0`` (the default): no replay-listing ssh and no
+    replay-pull scp commands fire."""
+    from mtg_bot.training.distributed import SelfPlayJobSpec
+
+    monkeypatch.chdir(tmp_path)
+    weights_rel = "trained_weights/v7/weights.pt"
+    (tmp_path / "trained_weights" / "v7").mkdir(parents=True)
+    (tmp_path / weights_rel).write_bytes(b"fake")
+
+    spec = SelfPlayJobSpec(
+        weights_path=weights_rel,
+        samples=2, inner_nodes=10, hidden_sizes=(64,),
+        base_seed=0, enable_mulligans=False,
+        per_game_timeout_sec=None,
+        capture_every=0,
+        replays_root="replays",
+    )
+    shard = ShardConfig(
+        host="macbook", n_games=10, user="g",
+        repo_path="/Users/g/repo",
+        venv_python=".venv-py313/bin/python",
+    )
+    calls = _drive_run_shard_remote(
+        monkeypatch, shard, spec, tmp_path=tmp_path,
+    )
+    for c in calls:
+        if c[0] == "ssh":
+            assert ".json.gz" not in c[-1], c
+            assert "/replays/" not in c[-1], c
+        if c[0] == "scp":
+            assert not any(p.endswith(".json.gz") for p in c), c
+
+    assert not (tmp_path / "replays").exists()
+
+
+def test_replay_collection_skipped_when_replays_root_none(
+    monkeypatch, tmp_path,
+):
+    """``replays_root=None`` with ``capture_every>0`` is also a skip
+    — capture is off without a destination root."""
+    from mtg_bot.training.distributed import SelfPlayJobSpec
+
+    monkeypatch.chdir(tmp_path)
+    weights_rel = "trained_weights/v7/weights.pt"
+    (tmp_path / "trained_weights" / "v7").mkdir(parents=True)
+    (tmp_path / weights_rel).write_bytes(b"fake")
+
+    spec = SelfPlayJobSpec(
+        weights_path=weights_rel,
+        samples=2, inner_nodes=10, hidden_sizes=(64,),
+        base_seed=0, enable_mulligans=False,
+        per_game_timeout_sec=None,
+        capture_every=10,
+        replays_root=None,
+    )
+    shard = ShardConfig(
+        host="macbook", n_games=10, user="g",
+        repo_path="/Users/g/repo",
+        venv_python=".venv-py313/bin/python",
+    )
+    calls = _drive_run_shard_remote(
+        monkeypatch, shard, spec, tmp_path=tmp_path,
+    )
+    for c in calls:
+        if c[0] == "scp":
+            assert not any(p.endswith(".json.gz") for p in c), c
+
+
+def test_replay_collection_eval_path(monkeypatch, tmp_path):
+    """Eval counterpart: ``run_shard_eval_remote`` issues the same
+    listing + scp shape as the self-play path."""
+    from mtg_bot.training.distributed import EvalJobSpec
+
+    monkeypatch.chdir(tmp_path)
+    new_weights = "trained_weights/v7/weights.pt"
+    old_weights = "trained_weights/v6/weights.pt"
+    (tmp_path / "trained_weights" / "v7").mkdir(parents=True)
+    (tmp_path / "trained_weights" / "v6").mkdir(parents=True)
+    (tmp_path / new_weights).write_bytes(b"new")
+    (tmp_path / old_weights).write_bytes(b"old")
+
+    spec = EvalJobSpec(
+        new_weights_path=new_weights,
+        old_weights_path=old_weights,
+        samples=1, inner_nodes=10, hidden_sizes=(64,),
+        base_seed=0, enable_mulligans=False,
+        per_game_timeout_sec=None,
+        capture_every=5,
+        replays_root="replays",
+    )
+    shard = ShardConfig(
+        host="macbook", n_games=4, user="g",
+        repo_path="/Users/g/repo",
+        venv_python=".venv-py313/bin/python",
+    )
+    run_id_full = "iter_002_eval_v7_shard_macbook"
+    listing_marker = f"ls replays/{run_id_full}/*.json.gz"
+    listing_payload = (
+        "eval_seed0_idx0001.json.gz\n"
+        "eval_seed0_idx0005.json.gz\n"
+    )
+    calls = _drive_run_shard_eval_remote(
+        monkeypatch, shard, spec,
+        tmp_path=tmp_path,
+        listing_responses={listing_marker: listing_payload},
+    )
+
+    ls_calls = [
+        c for c in calls
+        if c[0] == "ssh" and listing_marker in c[-1]
+    ]
+    assert len(ls_calls) == 1
+
+    replay_pulls = [
+        c for c in calls
+        if c[0] == "scp" and any(
+            p.endswith(".json.gz") and "eval_seed0_idx" in p
+            for p in c
+        )
+    ]
+    assert len(replay_pulls) == 2
+    expected_local_dir = tmp_path / "replays" / run_id_full
+    for c in replay_pulls:
+        src = next(p for p in c if p.startswith("g@macbook:"))
+        basename = src.rsplit("/", 1)[-1]
+        assert (
+            src
+            == f"g@macbook:/Users/g/repo/replays/{run_id_full}/"
+            f"{basename}"
+        )
+        assert c[-1] == str(expected_local_dir / basename)
+    assert expected_local_dir.is_dir()
+
+
+def test_replay_collection_eval_skipped_when_capture_off(
+    monkeypatch, tmp_path,
+):
+    """Eval path with capture off: no replay ls or scp."""
+    from mtg_bot.training.distributed import EvalJobSpec
+
+    monkeypatch.chdir(tmp_path)
+    new_weights = "trained_weights/v7/weights.pt"
+    (tmp_path / "trained_weights" / "v7").mkdir(parents=True)
+    (tmp_path / new_weights).write_bytes(b"new")
+
+    spec = EvalJobSpec(
+        new_weights_path=new_weights,
+        old_weights_path=None,
+        samples=1, inner_nodes=10, hidden_sizes=(64,),
+        base_seed=0, enable_mulligans=False,
+        per_game_timeout_sec=None,
+        capture_every=0,
+        replays_root="replays",
+    )
+    shard = ShardConfig(
+        host="macbook", n_games=4, user="g",
+        repo_path="/Users/g/repo",
+        venv_python=".venv-py313/bin/python",
+    )
+    calls = _drive_run_shard_eval_remote(
+        monkeypatch, shard, spec, tmp_path=tmp_path,
+    )
+    for c in calls:
+        if c[0] == "scp":
+            assert not any(p.endswith(".json.gz") for p in c), c
+
+
+def test_replay_collection_handles_empty_listing(monkeypatch, tmp_path):
+    """If the remote shard captured zero replays (typical for eval
+    with low capture-every and few games), the listing returns no
+    files. The orchestrator must not raise, must not create the
+    local subdir, and must not issue any scp commands for replays.
+    """
+    from mtg_bot.training.distributed import SelfPlayJobSpec
+
+    monkeypatch.chdir(tmp_path)
+    weights_rel = "trained_weights/v7/weights.pt"
+    (tmp_path / "trained_weights" / "v7").mkdir(parents=True)
+    (tmp_path / weights_rel).write_bytes(b"fake")
+
+    spec = SelfPlayJobSpec(
+        weights_path=weights_rel,
+        samples=2, inner_nodes=10, hidden_sizes=(64,),
+        base_seed=0, enable_mulligans=False,
+        per_game_timeout_sec=None,
+        capture_every=10,
+        replays_root="replays",
+    )
+    shard = ShardConfig(
+        host="macbook", n_games=10, user="g",
+        repo_path="/Users/g/repo",
+        venv_python=".venv-py313/bin/python",
+    )
+    calls = _drive_run_shard_remote(
+        monkeypatch, shard, spec, tmp_path=tmp_path,
+    )
+    run_id_full = "iter_002_self_play_v7_shard_macbook"
+    listing_marker = f"ls replays/{run_id_full}/*.json.gz"
+    ls_calls = [
+        c for c in calls
+        if c[0] == "ssh" and listing_marker in c[-1]
+    ]
+    assert len(ls_calls) == 1
+    for c in calls:
+        if c[0] == "scp":
+            assert not any(p.endswith(".json.gz") for p in c), c
+    assert not (tmp_path / "replays" / run_id_full).exists()

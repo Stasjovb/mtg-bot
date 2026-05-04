@@ -1880,6 +1880,73 @@ def _push_weights_to_remote(
     )
 
 
+def _pull_remote_replays(
+    shard: ShardConfig,
+    remote_repo: str,
+    replays_root: Optional[str],
+    capture_every: int,
+    run_id_full: str,
+) -> None:
+    """scp every per-game ``.json.gz`` replay from the remote shard's
+    replay subdir back to the master's matching subdir, mirroring what
+    ``run_shard_local`` writes directly. No-op when capture is off
+    (``capture_every <= 0`` or ``replays_root is None``).
+
+    Mirrors the ls+scp loop used for npz collection. The remote shell
+    listing returns no-match exit code (``ls`` / ``dir /b``) when the
+    shard captured zero games; we treat that as zero files and return
+    silently rather than raising.
+    """
+    if capture_every <= 0 or replays_root is None:
+        return
+
+    replays_posix = replays_root.replace("\\", "/")
+    local_replays_dir = (
+        Path.cwd() / replays_posix / run_id_full
+    )
+    print(
+        f"[shard {shard.display_label}] collecting replays from "
+        f"{shard.host}...",
+        file=sys.stderr,
+    )
+    if _is_windows_remote(shard):
+        replays_backslash = replays_posix.replace("/", "\\")
+        list_cmd = (
+            f'cd /d "{remote_repo}" && '
+            f'dir /b {replays_backslash}\\{run_id_full}\\*.json.gz '
+            f'2>nul'
+        )
+    else:
+        list_cmd = (
+            f'cd {shlex.quote(remote_repo)} && '
+            f'ls {replays_posix}/{run_id_full}/*.json.gz '
+            f'2>/dev/null | xargs -n1 basename'
+        )
+    list_proc = subprocess.run(
+        _ssh_cmd(shard, list_cmd),
+        capture_output=True, text=True, timeout=30,
+    )
+    basenames = [
+        line.strip() for line in list_proc.stdout.splitlines()
+        if line.strip()
+    ]
+    if not basenames:
+        return
+    local_replays_dir.mkdir(parents=True, exist_ok=True)
+    for basename in basenames:
+        remote_replay = _remote_join(
+            shard, remote_repo, replays_posix, run_id_full, basename,
+        )
+        local_replay = local_replays_dir / basename
+        _run_subprocess(
+            _scp_cmd(
+                shard, remote_replay, str(local_replay),
+                from_remote=True,
+            ),
+            timeout=120,
+        )
+
+
 def run_shard_remote(
     shard: ShardConfig,
     spec: SelfPlayJobSpec,
@@ -2051,6 +2118,16 @@ def run_shard_remote(
             timeout=120,
         )
         local_paths.append(local_npz)
+
+    # 6. Pull any per-batch replay .json.gz files back. Same shape as
+    # the local-shard path so the training UI's replay viewer
+    # (which only knows about the master's replays_root) finds them.
+    _pull_remote_replays(
+        shard, remote_repo,
+        replays_root=spec.replays_root,
+        capture_every=spec.capture_every,
+        run_id_full=run_id_full,
+    )
     return local_paths
 
 
@@ -2151,4 +2228,11 @@ def run_shard_eval_remote(
             f"eval shard {shard.display_label} produced no result "
             f"file at {local_result_path}; check stderr."
         )
+
+    _pull_remote_replays(
+        shard, remote_repo,
+        replays_root=spec.replays_root,
+        capture_every=spec.capture_every,
+        run_id_full=run_id_full,
+    )
     return json.loads(local_result_path.read_text(encoding="utf-8"))
