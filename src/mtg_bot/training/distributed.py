@@ -485,6 +485,22 @@ def run_shard_local(
     return output_path
 
 
+def _loopback_queue_url(queue_url: str) -> str:
+    """Rewrite the queue URL's host to ``127.0.0.1`` so the master's
+    own local shard skips Tailscale name resolution. On Windows that
+    resolution attempts IPv6 first against the tailnet hostname and
+    burns ~4s per take before falling back; ``localhost`` also has a
+    ~2s penalty. Loopback IP literal hits ~12ms. Remote shards keep
+    the original URL — they reach master via the tailnet."""
+    from urllib.parse import urlsplit, urlunsplit
+    parts = urlsplit(queue_url)
+    netloc = f"127.0.0.1:{parts.port}" if parts.port else "127.0.0.1"
+    return urlunsplit((
+        parts.scheme, netloc, parts.path,
+        parts.query, parts.fragment,
+    ))
+
+
 def run_distributed_self_play(
     shards_config: ShardsConfig,
     spec: SelfPlayJobSpec,
@@ -545,7 +561,7 @@ def run_distributed_self_play(
             n_workers = max(1, (os.cpu_count() or 1) - 2)
         return run_shard_pull(
             spec,
-            queue_url=queue_url,
+            queue_url=_loopback_queue_url(queue_url),
             run_id=run_id_prefix,
             n_workers=n_workers,
             output_dir=output_dir,

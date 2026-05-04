@@ -604,6 +604,26 @@ def test_remote_join_windows_normalizes_to_forward_slashes():
     )
 
 
+def test_loopback_queue_url_rewrites_host_to_127_0_0_1():
+    """Master's own local shard hits the queue endpoint via 127.0.0.1
+    instead of the tailnet hostname. Empirically, on Windows the
+    tailnet-name path adds ~4s per take (IPv6-first DNS); ``localhost``
+    adds ~2s; the IP literal is ~12ms. Pinned because regressing this
+    silently caps the master's contribution to ~10% of any iter."""
+    from mtg_bot.training.distributed import _loopback_queue_url
+
+    assert _loopback_queue_url(
+        "http://desktop-j05412i:5099"
+    ) == "http://127.0.0.1:5099"
+    assert _loopback_queue_url(
+        "http://master.tail123.ts.net:5099"
+    ) == "http://127.0.0.1:5099"
+    assert _loopback_queue_url(
+        "http://h:5099/queue?x=1"
+    ) == "http://127.0.0.1:5099/queue?x=1"
+    assert _loopback_queue_url("http://h") == "http://127.0.0.1"
+
+
 def test_remote_join_posix_uses_forward_slashes():
     from mtg_bot.training.distributed import _remote_join
 
