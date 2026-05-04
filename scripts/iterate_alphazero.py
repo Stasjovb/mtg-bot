@@ -56,6 +56,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import sys
 import time
 from datetime import datetime, timezone
@@ -94,6 +95,14 @@ from mtg_bot.training.distributed import (  # noqa: E402
 from mtg_bot.training.self_play import run_match_parallel  # noqa: E402
 
 _STATE_FILENAME = "iterate_state.json"
+_VERSION_DIR_RE = re.compile(r"^v(\d+)$")
+
+
+class ReconcileError(RuntimeError):
+    """Raised when iterate_state.json drifts from the registry in a
+    way the auto-reconciler refuses to fix on its own. The user must
+    inspect and either patch the state file by hand or rerun without
+    ``--reconcile-state`` and let the loop crash loudly."""
 
 
 def _load_iterate_state(registry_root: Path) -> dict:
@@ -114,6 +123,198 @@ def _save_iterate_state(registry_root: Path, state: dict) -> None:
     with tmp.open("w", encoding="utf-8") as f:
         json.dump(state, f, indent=2, sort_keys=True)
     os.replace(tmp, path)
+
+
+def _scan_version_dirs(registry_root: Path) -> list[int]:
+    """Return sorted version numbers from ``v\\d+`` subdirs under
+    ``registry_root``. Mirrors ``Registry.list_versions`` semantics
+    (including the complete-files filter) but goes through the
+    filesystem directly so the reconciler can detect partially-written
+    orphans where weights.pt landed but metadata.json did not."""
+    if not registry_root.is_dir():
+        return []
+    nums: list[int] = []
+    for child in registry_root.iterdir():
+        if not child.is_dir():
+            continue
+        match = _VERSION_DIR_RE.match(child.name)
+        if match is None:
+            continue
+        nums.append(int(match.group(1)))
+    nums.sort()
+    return nums
+
+
+def _highest_known_version(state: dict, bootstrap_version: str) -> int:
+    """Largest version number the state file is aware of: max of
+    bootstrap, current_best, and every recorded trained_version in
+    history. Used to detect orphan version dirs the loop never wrote
+    a history entry for."""
+    candidates = [bootstrap_version, state.get("current_best", "")]
+    for entry in state.get("history", []):
+        v = entry.get("trained_version", "")
+        if v:
+            candidates.append(v)
+    max_n = 0
+    for v in candidates:
+        m = _VERSION_DIR_RE.match(v) if v else None
+        if m is not None:
+            max_n = max(max_n, int(m.group(1)))
+    return max_n
+
+
+def _find_eval_progress(
+    progress_dir: Path, iter_idx_one_based: int, new_version: str,
+) -> Path | None:
+    """Locate the per-iter eval card written by ``EvalProgress``.
+    Filename pattern from main(): ``iter_NNN_eval_<new>_vs_<old>.json``.
+    Returns the first match (iter+new uniquely identify the file)
+    or None if none exists."""
+    if not progress_dir.is_dir():
+        return None
+    label = f"iter_{iter_idx_one_based:03d}_eval_{new_version}_vs_"
+    for p in progress_dir.glob(f"{label}*.json"):
+        return p
+    return None
+
+
+def _reconcile_iterate_state(
+    state: dict,
+    registry_root: Path,
+    progress_dir: Path,
+    bootstrap_version: str,
+    acceptance_threshold: float,
+) -> dict:
+    """Reconcile ``iterate_state.json`` with what's actually on disk.
+
+    Crash-recovery cases handled (see module docstring + the
+    ``--reconcile-state`` flag in main()):
+
+    * Case A — state matches reality. No-op; returns the input state.
+    * Case B — exactly one orphan version dir whose number is one
+      above the highest version the state knows about. The trainer
+      wrote ``v{N}/`` but the iter loop crashed before persisting
+      the promotion decision. Read the eval progress card written
+      by ``EvalProgress`` for that iter; use its ``win_rate`` to
+      decide promotion; rewrite state. If no eval card exists (eval
+      never ran, or crashed before the first flush) raise so the
+      user reconciles by hand.
+    * Case C — ``current_best`` references a version whose dir is
+      missing. Registry corruption; raise.
+
+    Anything more elaborate (multi-orphan, version gaps, etc.) is
+    out of scope and raises ``ReconcileError``.
+    """
+    current_best = state.get("current_best", bootstrap_version)
+    iterations_completed = int(state.get("iterations_completed", 0))
+
+    cb_match = _VERSION_DIR_RE.match(current_best)
+    if cb_match is None:
+        raise ReconcileError(
+            f"current_best={current_best!r} does not match v\\d+ pattern"
+        )
+    if not (registry_root / current_best).is_dir():
+        raise ReconcileError(
+            f"current_best={current_best} but {registry_root / current_best} "
+            f"does not exist (Case C: registry corruption). Refusing to "
+            f"touch state. Inspect the registry by hand."
+        )
+
+    version_nums = _scan_version_dirs(registry_root)
+    if not version_nums:
+        raise ReconcileError(
+            f"no v\\d+ directories under {registry_root}; "
+            f"can't reconcile against an empty registry"
+        )
+    max_dir_n = version_nums[-1]
+    max_known_n = _highest_known_version(state, bootstrap_version)
+
+    if max_dir_n == max_known_n:
+        print(
+            f"[reconcile] state matches reality "
+            f"(max version v{max_dir_n}, "
+            f"iterations_completed={iterations_completed}); no-op"
+        )
+        return state
+
+    if max_dir_n < max_known_n:
+        raise ReconcileError(
+            f"state knows about v{max_known_n} but registry max is "
+            f"v{max_dir_n} (Case C: missing version dir). Refusing "
+            f"to touch state."
+        )
+
+    if max_dir_n - max_known_n > 1:
+        raise ReconcileError(
+            f"registry max is v{max_dir_n} but state's highest known "
+            f"version is v{max_known_n}: {max_dir_n - max_known_n} "
+            f"orphans is more than one partial-iter crash can produce. "
+            f"Refusing to auto-reconcile."
+        )
+
+    orphan_n = max_dir_n
+    orphan_version = f"v{orphan_n}"
+    orphan_iter_idx = iterations_completed + 1
+
+    eval_path = _find_eval_progress(
+        progress_dir, orphan_iter_idx, orphan_version,
+    )
+    if eval_path is None:
+        raise ReconcileError(
+            f"orphan {orphan_version} for iter {orphan_iter_idx} but no "
+            f"eval progress card found under {progress_dir} matching "
+            f"iter_{orphan_iter_idx:03d}_eval_{orphan_version}_vs_*.json. "
+            f"The crash likely fired before / during eval; "
+            f"can't infer promote/keep without a win-rate. Reconcile "
+            f"iterate_state.json by hand."
+        )
+
+    with eval_path.open("r", encoding="utf-8") as f:
+        eval_payload = json.load(f)
+
+    n_decided = (
+        int(eval_payload.get("wins_new", 0))
+        + int(eval_payload.get("wins_old", 0))
+    )
+    if n_decided <= 0:
+        raise ReconcileError(
+            f"eval card {eval_path} has no decided games "
+            f"(wins_new+wins_old=0); cannot infer a win-rate. "
+            f"Reconcile iterate_state.json by hand."
+        )
+    win_rate = float(eval_payload.get("win_rate", 0.0))
+    promoted = win_rate >= acceptance_threshold
+
+    decision = "promoting" if promoted else "keeping"
+    print(
+        f"[reconcile] iter {orphan_iter_idx} produced {orphan_version}; "
+        f"eval shows win_rate={win_rate:.1%}, "
+        f"threshold={acceptance_threshold:.1%}; {decision}"
+    )
+
+    new_state = {
+        "current_best": (
+            orphan_version if promoted else current_best
+        ),
+        "iterations_completed": orphan_iter_idx,
+        "history": list(state.get("history", [])) + [{
+            "iteration": orphan_iter_idx,
+            "trained_version": orphan_version,
+            "promoted": promoted,
+            "eval": {
+                "vs": current_best,
+                "wins_new": int(eval_payload.get("wins_new", 0)),
+                "wins_old": int(eval_payload.get("wins_old", 0)),
+                "draws": int(eval_payload.get("draws", 0)),
+                "win_rate": win_rate,
+                "elapsed_seconds": float(
+                    eval_payload.get("elapsed_seconds", 0.0)
+                ),
+            },
+            "reconciled": True,
+        }],
+    }
+    return new_state
 
 
 def _now_stamp() -> str:
@@ -776,6 +977,32 @@ def main() -> None:
             "distributed orchestrator can't dispatch work."
         ),
     )
+    parser.add_argument(
+        "--reconcile-state", action="store_true",
+        help=(
+            "Recover from a partial-iter crash where the trainer "
+            "wrote v{N}/ but the iter loop crashed before persisting "
+            "the promotion decision into iterate_state.json. At "
+            "startup, scan the registry; if exactly one orphan version "
+            "is present past iterations_completed, read the per-iter "
+            "eval card under training_progress/ and rewrite the state "
+            "with the implied promote/keep decision. Off by default — "
+            "without this flag the script asserts state matches "
+            "reality and crashes on mismatch (silent state mutation "
+            "is dangerous). See ``_reconcile_iterate_state`` for the "
+            "exact rules and which cases refuse to auto-fix."
+        ),
+    )
+    parser.add_argument(
+        "--progress-dir", type=Path, default=Path("training_progress"),
+        help=(
+            "Directory the iterate loop writes per-iter self-play / "
+            "train / eval progress JSON cards to. Default "
+            "training_progress/ matches the legacy hardcoded path. "
+            "Used by ``--reconcile-state`` to find the orphan iter's "
+            "eval card."
+        ),
+    )
     args = parser.parse_args()
 
     args.data_dir.mkdir(parents=True, exist_ok=True)
@@ -880,6 +1107,25 @@ def main() -> None:
             f"current_best={state['current_best']}, "
             f"iterations_completed={state['iterations_completed']}"
         )
+        if args.reconcile_state:
+            try:
+                reconciled = _reconcile_iterate_state(
+                    state,
+                    args.registry_root,
+                    args.progress_dir,
+                    args.bootstrap_version,
+                    args.acceptance_threshold,
+                )
+            except ReconcileError as e:
+                sys.exit(f"[reconcile] FAILED: {e}")
+            if reconciled is not state:
+                state = reconciled
+                _save_iterate_state(args.registry_root, state)
+                print(
+                    f"[reconcile] state rewritten: "
+                    f"current_best={state['current_best']}, "
+                    f"iterations_completed={state['iterations_completed']}"
+                )
 
     for iter_idx in range(args.n_iterations):
         n_done = state["iterations_completed"]
@@ -896,7 +1142,7 @@ def main() -> None:
 
         # 1. Self-play data gen
         iter_label = f"iter_{n_done + 1:03d}"
-        progress_dir = Path("training_progress")
+        progress_dir = args.progress_dir
         data_path = (
             args.data_dir
             / f"{iter_label}_{best_version}_{_now_stamp()}.npz"
