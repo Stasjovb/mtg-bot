@@ -613,21 +613,26 @@ def run_distributed_self_play(
 
 
 class EventLog:
-    """Append-only JSONL event log per shard. One JSON object per
-    line: ``{"ts": <iso8601>, "event": <type>, ...kwargs}``. Plain
-    stdlib so it ships with the worker over SSH (no extra deps on
-    remotes). Thread-safe for the in-process master shard's case
-    where the orchestrator and the pool driver may both write.
+    """JSONL event log per shard. One JSON object per line:
+    ``{"ts": <iso8601>, "event": <type>, ...kwargs}``. Plain stdlib
+    so it ships with the worker over SSH (no extra deps on remotes).
+    Thread-safe for the in-process master shard's case where the
+    orchestrator and the pool driver may both write.
 
     Sits next to the per-shard progress JSON in ``progress_dir`` so
     everything observability-related is in one place. ``run_shard_
     remote`` scps it back to the master at end-of-shard so analysis
     on the host has every machine's events in one file tree.
+
+    Truncates the file on construction: re-running the same iter
+    (retries after a crash, repeated test runs) replaces the prior
+    events file rather than appending to it.
     """
 
     def __init__(self, path: Path) -> None:
         self._path = path
         path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("", encoding="utf-8")
         self._lock = threading.Lock()
 
     @property

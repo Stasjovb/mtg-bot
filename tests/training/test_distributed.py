@@ -710,32 +710,37 @@ def test_remote_pull_command_windows_uses_cmd_syntax():
 # ---- EventLog + helpers ----------------------------------------
 
 
-def test_event_log_appends_jsonl_one_line_per_record(tmp_path: Path):
+def test_event_log_writes_one_line_per_record_and_truncates_on_reopen(
+    tmp_path: Path,
+):
     """``EventLog.record(event, **kwargs)`` writes one JSON object
     per line, each line carrying its own UTC timestamp + event +
-    arbitrary kwargs. Append-only, so re-opening + recording adds
-    rather than overwriting."""
+    arbitrary kwargs. Re-instantiating ``EventLog`` on the same path
+    truncates — re-running the same iter shouldn't accumulate stale
+    events from prior runs."""
     from mtg_bot.training.distributed import EventLog
 
     log_path = tmp_path / "shard_x_events.jsonl"
     log = EventLog(log_path)
     log.record("shard_start", run_id="r", n_workers=4)
     log.record("game_end", game_idx=0, wall_s=1.23)
-    # Re-instantiate to confirm append (not truncate).
-    log2 = EventLog(log_path)
-    log2.record("shard_end", status="completed", n_games=1)
     lines = log_path.read_text(encoding="utf-8").splitlines()
-    assert len(lines) == 3
+    assert len(lines) == 2
     parsed = [json.loads(line) for line in lines]
     assert parsed[0]["event"] == "shard_start"
     assert parsed[0]["run_id"] == "r"
     assert parsed[1]["event"] == "game_end"
     assert parsed[1]["wall_s"] == 1.23
-    assert parsed[2]["event"] == "shard_end"
-    # All entries carry an iso-8601 ts (cheap shape check; full
-    # parsing is overkill).
     for p in parsed:
         assert "T" in p["ts"]
+
+    log2 = EventLog(log_path)
+    log2.record("shard_end", status="completed", n_games=1)
+    lines2 = log_path.read_text(encoding="utf-8").splitlines()
+    assert len(lines2) == 1
+    parsed2 = json.loads(lines2[0])
+    assert parsed2["event"] == "shard_end"
+    assert parsed2["status"] == "completed"
 
 
 def test_event_log_handles_non_json_native_kwargs(tmp_path: Path):
