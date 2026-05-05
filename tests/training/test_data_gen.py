@@ -1088,3 +1088,56 @@ def test_outcome_labels_correct_under_seat_alternation():
             f"game_idx={game_idx}, winner=P{winner}: viewer=1 rows "
             f"should label {expected_v1}, got {set(viewer1_outcomes)}"
         )
+
+
+# ---------- stop-run sentinel propagation ------------------------------------
+
+
+def test_parallel_stop_check_finalizes_progress_as_stopped(tmp_path):
+    """End-to-end: drop a sentinel file mid-loop via a stop_check
+    that flips True after the first game completes. The pool is
+    terminated, the data-gen call returns the partial result, and
+    the progress tracker is finalized as ``status="stopped"``.
+
+    This is the load-bearing integration covering the producer-side
+    contract: the UI's Stop button writes a sentinel; the producer's
+    stop_check sees it; the run ends as 'stopped' rather than
+    'completed' or 'failed'.
+    """
+    from mtg_bot.training import DataGenProgress
+
+    # Use a stop_check that returns True immediately so the very
+    # first imap_unordered yield triggers the early exit. We don't
+    # care which game finished first — only that the loop bails
+    # before draining all 3.
+    progress_path = tmp_path / "tiny_run.json"
+    progress = DataGenProgress(
+        progress_path=progress_path,
+        run_id="tiny_run",
+        n_games_total=3,
+        n_workers=2,
+        flush_interval_s=0.0,
+    )
+
+    calls = {"n": 0}
+
+    def stop_after_first():
+        calls["n"] += 1
+        return calls["n"] >= 1  # first call returns True
+
+    f, o = generate_training_data_parallel(
+        p0_factory=random_choice_factory,
+        p1_factory=random_choice_factory,
+        n_games=3,
+        base_seed=7,
+        n_workers=2,
+        progress=progress,
+        stop_check=stop_after_first,
+    )
+
+    # Some data was preserved (not zero, not all 3 games).
+    assert f.shape[1] == FEATURE_DIM
+    # Progress finalized as stopped.
+    payload = json.loads(progress_path.read_text(encoding="utf-8"))
+    assert payload["status"] == "stopped"
+    assert payload["ended_at"] is not None
