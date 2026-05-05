@@ -1021,6 +1021,95 @@ class _EarlyStopPoller:
             )
 
 
+@dataclass(frozen=True)
+class ShardSelfPlayReport:
+    """Outcome of a single self-play shard from the orchestrator's
+    point of view. Returned by :func:`run_shard_remote` and the local
+    runner wrapper inside :func:`run_distributed_self_play`.
+
+    Per-shard SSH / rsync flows used to raise on the first non-zero
+    exit, killing the entire master process and discarding the OTHER
+    shards' completed work. The orchestrator now catches and converts
+    every per-shard failure into a ``ShardSelfPlayReport`` so siblings'
+    data is preserved; the aggregator drops the failed shard's
+    contribution and continues.
+
+    ``npz_paths`` is the list of master-local npz files that were
+    successfully scp'd back from the shard — partial data is allowed
+    (a shard that crashed mid-run after producing N batches is still
+    worth N batches of training data). ``error`` is a short
+    human-readable failure description; ``error_stage`` names which
+    pipeline stage failed (e.g. ``"self_play"``, ``"weight_push"``)
+    so the user's stderr summary points at the right place.
+    """
+
+    shard_label: str
+    success: bool
+    npz_paths: list[Path]
+    error: Optional[str] = None
+    error_stage: Optional[str] = None
+
+
+@dataclass(frozen=True)
+class ShardEvalReport:
+    """Eval-side counterpart to :class:`ShardSelfPlayReport`. ``counts``
+    is the parsed result-JSON dict (n_games / wins_new / wins_old /
+    draws / crashed). On failure it is an all-zeros dict so the
+    aggregator can sum it without special-casing.
+    """
+
+    shard_label: str
+    success: bool
+    counts: dict[str, int]
+    error: Optional[str] = None
+    error_stage: Optional[str] = None
+
+
+def _mark_shard_progress_failed(
+    progress_path: Path, *, shard_label: str, note: str,
+) -> None:
+    """Write (or merge into) the per-shard progress JSON to mark it
+    ``status="failed"`` so the training UI's per-shard card shows the
+    failure rather than freezing on its last "running" snapshot.
+
+    If the file exists, merge — preserves the last counters the poller
+    pulled back so the user can still see "shard finished N/M games
+    before the SSH wrapper died". If absent, write a minimal payload
+    just to register the failure. Errors here are swallowed: a master
+    that can't write a status file is a much smaller problem than a
+    master that abandons live shards mid-iter, and the loud stderr log
+    in the caller already records what went wrong.
+    """
+    payload: dict[str, Any]
+    try:
+        if progress_path.is_file():
+            payload = json.loads(
+                progress_path.read_text(encoding="utf-8"),
+            )
+        else:
+            payload = {
+                "run_id": progress_path.stem,
+                "kind": "data_gen",
+                "n_games_total": 0,
+                "n_games_done": 0,
+            }
+        payload["status"] = "failed"
+        payload["error_note"] = note
+        payload["ended_at"] = datetime.now(timezone.utc).isoformat(
+            timespec="seconds",
+        )
+        progress_path.parent.mkdir(parents=True, exist_ok=True)
+        progress_path.write_text(
+            json.dumps(payload), encoding="utf-8",
+        )
+    except Exception as e:  # noqa: BLE001
+        print(
+            f"[shard {shard_label}] failed to mark progress JSON "
+            f"as failed at {progress_path}: {type(e).__name__}: {e}",
+            file=sys.stderr,
+        )
+
+
 def _loopback_queue_url(queue_url: str) -> str:
     """Rewrite the queue URL's host to ``127.0.0.1`` so the master's
     own local shard skips Tailscale name resolution. On Windows that
@@ -1100,25 +1189,66 @@ def run_distributed_self_play(
 
     output_paths: list[Path] = []
     output_paths_lock = _threading.Lock()
+    reports: list[ShardSelfPlayReport] = []
+    reports_lock = _threading.Lock()
 
-    def _local_runner(shard: ShardConfig) -> list[Path]:
+    def _local_runner(shard: ShardConfig) -> ShardSelfPlayReport:
+        """Local shard wrapper. Mirrors :func:`run_shard_remote`'s
+        contract: catches per-shard failures and converts them into
+        a :class:`ShardSelfPlayReport`. Without this, a local-shard
+        crash takes the whole iter down even when remotes finished
+        cleanly.
+        """
         n_workers = shard.n_workers
         if n_workers is None:
             import os
             n_workers = max(1, (os.cpu_count() or 1) - 2)
-        return run_shard_pull(
-            spec,
-            queue_url=_loopback_queue_url(queue_url),
-            run_id=run_id_prefix,
-            n_workers=n_workers,
-            output_dir=output_dir,
-            label=shard.display_label,
-            stamp=stamp,
-            iter_total_games=total_games,
-            progress_dir=progress_dir,
+        label = shard.display_label
+        local_progress_path = (
+            progress_dir / f"{run_id_prefix}_shard_{label}.json"
         )
+        try:
+            paths = run_shard_pull(
+                spec,
+                queue_url=_loopback_queue_url(queue_url),
+                run_id=run_id_prefix,
+                n_workers=n_workers,
+                output_dir=output_dir,
+                label=label,
+                stamp=stamp,
+                iter_total_games=total_games,
+                progress_dir=progress_dir,
+            )
+            return ShardSelfPlayReport(
+                shard_label=label, success=True,
+                npz_paths=list(paths),
+            )
+        except Exception as e:  # noqa: BLE001
+            print(
+                f"[shard {label}] FAILURE in local shard: "
+                f"{type(e).__name__}: {e}. Continuing with sibling "
+                f"shards' data.",
+                file=sys.stderr,
+            )
+            _mark_shard_progress_failed(
+                local_progress_path, shard_label=label,
+                note=f"local_shard: {type(e).__name__}: {e}",
+            )
+            # Local shards write npzs to ``output_dir`` directly via
+            # ``run_shard_pull``; recover whatever made it to disk.
+            recovered: list[Path] = sorted(
+                output_dir.glob(
+                    f"{run_id_prefix}_shard_{label}_chunk_*.npz",
+                ),
+            )
+            return ShardSelfPlayReport(
+                shard_label=label, success=False,
+                npz_paths=recovered,
+                error=f"{type(e).__name__}: {e}",
+                error_stage="local_shard",
+            )
 
-    def _remote_runner(shard: ShardConfig) -> list[Path]:
+    def _remote_runner(shard: ShardConfig) -> ShardSelfPlayReport:
         return run_shard_remote(
             shard, spec,
             queue_url=queue_url,
@@ -1170,20 +1300,68 @@ def run_distributed_self_play(
     finally:
         executor.shutdown(wait=False)
 
-    failed = False
+    # Per-shard failures are converted to ShardSelfPlayReport inside
+    # the runners; the orchestrator only sees raises here for things
+    # the runners don't catch (KeyboardInterrupt, internal bugs).
+    # Those still bubble up since they are not "one shard's SSH
+    # glitch" — they're a genuine reason to abort the iter.
+    interrupted = False
     try:
         for fut in concurrent.futures.as_completed(futures):
             try:
-                shard_paths = fut.result()
+                report = fut.result()
             except BaseException:
-                failed = True
+                interrupted = True
                 raise
-            with output_paths_lock:
-                output_paths.extend(shard_paths)
+            with reports_lock:
+                reports.append(report)
+            if report.success or report.npz_paths:
+                with output_paths_lock:
+                    output_paths.extend(report.npz_paths)
     finally:
         if early_stop is not None:
             early_stop.stop()
-        aggregator.stop("failed" if failed else "completed")
+        any_failed = any(not r.success for r in reports) or interrupted
+        aggregator.stop("failed" if any_failed else "completed")
+
+    # Loud post-iter summary so the user can see at a glance which
+    # shards succeeded and which didn't.
+    failed_reports = [r for r in reports if not r.success]
+    if failed_reports:
+        print(
+            f"[orchestrator] {len(failed_reports)} of "
+            f"{len(reports)} shards FAILED: "
+            + ", ".join(
+                f"{r.shard_label}({r.error_stage})"
+                for r in failed_reports
+            ),
+            file=sys.stderr,
+        )
+        recovered_from_failed = sum(
+            len(r.npz_paths) for r in failed_reports
+        )
+        if recovered_from_failed:
+            print(
+                f"[orchestrator] recovered "
+                f"{recovered_from_failed} npz file(s) from failed "
+                f"shards via post-failure rsync.",
+                file=sys.stderr,
+            )
+
+    if reports and all(not r.success for r in reports) and not output_paths:
+        # All shards failed AND we recovered no usable npzs — this
+        # iter has nothing to train on. Raise a descriptive error so
+        # the iterate driver fails the iteration cleanly rather than
+        # silently producing a 0-game training step.
+        raise RuntimeError(
+            "all distributed self-play shards failed and no npz "
+            "files were recovered; refusing to return an empty "
+            f"training mix. Failures: "
+            + "; ".join(
+                f"{r.shard_label}({r.error_stage}): {r.error}"
+                for r in failed_reports
+            ),
+        )
     return output_paths
 
 
@@ -1244,23 +1422,58 @@ def run_distributed_eval(
         "draws": 0, "crashed": 0,
     }
     totals_lock = _threading.Lock()
+    reports: list[ShardEvalReport] = []
+    reports_lock = _threading.Lock()
+    zero_counts = {
+        "n_games": 0, "wins_new": 0, "wins_old": 0,
+        "draws": 0, "crashed": 0,
+    }
 
-    def _local_runner(shard: ShardConfig) -> dict[str, int]:
+    def _local_runner(shard: ShardConfig) -> ShardEvalReport:
+        """Local-shard wrapper for eval. Same shape as the self-play
+        side: convert per-shard exceptions into a failure
+        :class:`ShardEvalReport` so siblings' counts survive."""
         n_workers = shard.n_workers
         if n_workers is None:
             import os
             n_workers = max(1, (os.cpu_count() or 1) - 2)
-        return run_shard_eval_pull(
-            spec,
-            queue_url=_loopback_queue_url(queue_url),
-            run_id=run_id_prefix,
-            n_workers=n_workers,
-            label=shard.display_label,
-            iter_total_games=total_games,
-            progress_dir=progress_dir,
+        label = shard.display_label
+        local_progress_path = (
+            progress_dir / f"{run_id_prefix}_shard_{label}.json"
         )
+        try:
+            counts = run_shard_eval_pull(
+                spec,
+                queue_url=_loopback_queue_url(queue_url),
+                run_id=run_id_prefix,
+                n_workers=n_workers,
+                label=label,
+                iter_total_games=total_games,
+                progress_dir=progress_dir,
+            )
+            return ShardEvalReport(
+                shard_label=label, success=True,
+                counts=dict(counts),
+            )
+        except Exception as e:  # noqa: BLE001
+            print(
+                f"[shard {label}] FAILURE in local eval shard: "
+                f"{type(e).__name__}: {e}. Continuing with sibling "
+                f"shards' counts.",
+                file=sys.stderr,
+            )
+            _mark_shard_progress_failed(
+                local_progress_path, shard_label=label,
+                note=f"local_shard: {type(e).__name__}: {e}",
+            )
+            return ShardEvalReport(
+                shard_label=label, success=False,
+                counts=dict(zero_counts),
+                error=f"{type(e).__name__}: {e}",
+                error_stage="local_shard",
+            )
 
-    def _remote_runner(shard: ShardConfig) -> dict[str, int]:
+    def _remote_runner(shard: ShardConfig) -> ShardEvalReport:
         return run_shard_eval_remote(
             shard, spec,
             queue_url=queue_url,
@@ -1305,21 +1518,50 @@ def run_distributed_eval(
     finally:
         executor.shutdown(wait=False)
 
-    failed = False
+    interrupted = False
     try:
         for fut in concurrent.futures.as_completed(futures):
             try:
-                shard_counts = fut.result()
+                report = fut.result()
             except BaseException:
-                failed = True
+                interrupted = True
                 raise
+            with reports_lock:
+                reports.append(report)
             with totals_lock:
                 for k in totals:
-                    totals[k] += int(shard_counts.get(k, 0))
+                    totals[k] += int(report.counts.get(k, 0))
     finally:
         if early_stop is not None:
             early_stop.stop()
-        aggregator.stop("failed" if failed else "completed")
+        any_failed = any(not r.success for r in reports) or interrupted
+        aggregator.stop("failed" if any_failed else "completed")
+
+    failed_reports = [r for r in reports if not r.success]
+    if failed_reports:
+        print(
+            f"[orchestrator] {len(failed_reports)} of "
+            f"{len(reports)} eval shards FAILED: "
+            + ", ".join(
+                f"{r.shard_label}({r.error_stage})"
+                for r in failed_reports
+            ),
+            file=sys.stderr,
+        )
+
+    if reports and all(not r.success for r in reports):
+        # No shard produced usable counts. The eval gate would
+        # otherwise treat 0-of-0 as a draw and either gate or
+        # un-gate based on tiebreaker rules — both are wrong when
+        # the data is missing. Raise so the caller can decide.
+        raise RuntimeError(
+            "all distributed eval shards failed; no counts to "
+            "aggregate. Failures: "
+            + "; ".join(
+                f"{r.shard_label}({r.error_stage}): {r.error}"
+                for r in failed_reports
+            ),
+        )
     return totals
 
 
@@ -2422,31 +2664,40 @@ def run_shard_remote(
     run_id_prefix: str,
     stamp: str,
     bundle_url: Optional[str] = None,
-) -> list[Path]:
+) -> ShardSelfPlayReport:
     """Run one shard on a remote machine in pull mode.
 
     Sequence:
     1. Code sync from master's git bundle (if ``bundle_url`` is set).
     2. Push the master's current weights file to the remote at the
-       same relative path. Failures here propagate — a stale weights
-       file on the remote silently produces zero-sample games.
+       same relative path. A stale weights file on the remote
+       silently produces zero-sample games, so a failure here is
+       fatal *for this shard*.
     3. Start a poller that periodically scps the remote progress
        JSON back for the master UI.
     4. Block on ``ssh ... run_self_play_shard.py --mode=pull`` —
        the wrapper loops fetching from /queue/take until empty.
-    5. Stop poller; final progress scp.
+    5. Stop poller; final progress + events scp.
     6. scp every per-batch npz back to ``output_dir``. Filenames
        follow ``{run_id}_shard_{label}_chunk_{NNNN}_{stamp}.npz``,
        which is what ``run_shard_pull`` writes server-side.
+    7. scp any per-game replay JSON files back.
 
-    Returns the list of local-side npz paths (one per batch the
-    remote produced). The orchestrator concatenates lists across
-    all shards.
+    Returns a :class:`ShardSelfPlayReport` describing the outcome
+    (success flag, npzs collected, optional error/stage). Per-shard
+    SSH / rsync failures do NOT propagate — they are caught, logged
+    loudly to stderr, the per-shard progress JSON is marked
+    ``status="failed"``, and the post-shard rsync stages still run
+    so any data the shard managed to put on disk before the wrapper
+    died is recovered. The orchestrator aggregates whatever it gets;
+    one Tailscale glitch no longer kills 50 minutes of cluster work.
 
-    Raises ``subprocess.CalledProcessError`` on SSH/SCP non-zero
-    exits — the caller re-surfaces it.
+    The shard-level retry decision is OUT of scope here — the master
+    moves on to the next shard either way. Re-runs of failed shards
+    are a higher-level concern (re-queueing on the next iter).
     """
-    run_id_full = f"{run_id}_shard_{shard.display_label}"
+    label = shard.display_label
+    run_id_full = f"{run_id}_shard_{label}"
 
     output_dir.mkdir(parents=True, exist_ok=True)
     progress_dir.mkdir(parents=True, exist_ok=True)
@@ -2461,52 +2712,87 @@ def run_shard_remote(
         shard, remote_repo, "training_progress",
         f"{run_id_full}_events.jsonl",
     )
-    # Per-shard npz output dir on the remote.
-    remote_iterate_data = _remote_join(
-        shard, remote_repo, "iterate_data",
-    )
 
-    # 1. Code sync.
-    if bundle_url:
-        print(
-            f"[shard {shard.display_label}] sync from bundle on "
-            f"{shard.host}...", file=sys.stderr,
-        )
-        sync_cmd = _build_remote_bundle_sync_command(shard, bundle_url)
-        _run_subprocess(_ssh_cmd(shard, sync_cmd), timeout=300)
+    # Track failure state so the post-shard data-collection block
+    # still runs but knows whether to mark progress as failed.
+    error: Optional[str] = None
+    error_stage: Optional[str] = None
+    poller: Optional[_ProgressPoller] = None
+    local_paths: list[Path] = []
 
-    # 2. Weight push. Without this, iter #2+ silently produces
-    # samples=0 games on remotes because their weights file is stale
-    # or missing.
-    _push_weights_to_remote(shard, remote_repo, spec.weights_path)
-
-    # 3. Progress poller.
-    poller = _ProgressPoller(
-        shard,
-        remote_progress_path=remote_progress,
-        local_progress_path=local_progress_path,
-    )
-    poller.start()
-
-    # 4. The actual pull-mode invocation. Blocks until queue drains.
-    print(
-        f"[shard {shard.display_label}] pull-mode self-play on "
-        f"{shard.host}...",
-        file=sys.stderr,
-    )
     try:
-        run_cmd = _build_remote_pull_command(
-            shard, spec,
-            queue_url=queue_url,
-            run_id=run_id,
-            iter_total_games=iter_total_games,
-            stamp=stamp,
+        # 1. Code sync.
+        if bundle_url:
+            print(
+                f"[shard {label}] sync from bundle on "
+                f"{shard.host}...", file=sys.stderr,
+            )
+            sync_cmd = _build_remote_bundle_sync_command(shard, bundle_url)
+            try:
+                _run_subprocess(_ssh_cmd(shard, sync_cmd), timeout=300)
+            except (subprocess.CalledProcessError,
+                    subprocess.TimeoutExpired, OSError) as e:
+                error_stage = "bundle_sync"
+                error = f"{type(e).__name__}: {e}"
+                raise
+
+        # 2. Weight push. Without this, iter #2+ silently produces
+        # samples=0 games on remotes because their weights file is
+        # stale or missing.
+        try:
+            _push_weights_to_remote(shard, remote_repo, spec.weights_path)
+        except (subprocess.CalledProcessError,
+                subprocess.TimeoutExpired, OSError) as e:
+            error_stage = "weight_push"
+            error = f"{type(e).__name__}: {e}"
+            raise
+
+        # 3. Progress poller.
+        poller = _ProgressPoller(
+            shard,
+            remote_progress_path=remote_progress,
+            local_progress_path=local_progress_path,
         )
-        # No timeout — the run loops indefinitely waiting on master.
-        _run_subprocess(_ssh_cmd(shard, run_cmd))
+        poller.start()
+
+        # 4. The actual pull-mode invocation. Blocks until queue drains.
+        print(
+            f"[shard {label}] pull-mode self-play on "
+            f"{shard.host}...",
+            file=sys.stderr,
+        )
+        try:
+            run_cmd = _build_remote_pull_command(
+                shard, spec,
+                queue_url=queue_url,
+                run_id=run_id,
+                iter_total_games=iter_total_games,
+                stamp=stamp,
+            )
+            # No timeout — the run loops indefinitely waiting on master.
+            _run_subprocess(_ssh_cmd(shard, run_cmd))
+        except (subprocess.CalledProcessError,
+                subprocess.TimeoutExpired, OSError) as e:
+            error_stage = "self_play"
+            error = f"{type(e).__name__}: {e}"
+            raise
+    except (subprocess.CalledProcessError,
+            subprocess.TimeoutExpired, OSError) as e:
+        # Loud log so the user sees the failure during a run; the
+        # ShardSelfPlayReport carries the same info up to the
+        # orchestrator's post-iter summary.
+        print(
+            f"[shard {label}] FAILURE during {error_stage}: "
+            f"{type(e).__name__}: {e}. Continuing with rsync to "
+            f"recover any data the shard already wrote.",
+            file=sys.stderr,
+        )
     finally:
-        poller.stop()
-        # Final progress JSON snapshot.
+        if poller is not None:
+            poller.stop()
+        # Final progress JSON snapshot. Best-effort even on failure:
+        # the remote may have a useful progress snapshot we want to
+        # mirror back before overwriting status.
         try:
             _run_subprocess(
                 _scp_cmd(
@@ -2533,16 +2819,17 @@ def run_shard_remote(
         except Exception:  # noqa: BLE001
             pass
 
-    # 5. Pull all per-batch npzs back. The remote wrote them under
-    # iterate_data/ with a known prefix; we glob via SSH ``ls`` + scp
-    # each. (Bulk scp of a glob has shell-quoting issues across cmd
-    # vs bash, so we list + transfer one at a time.)
+    # 5. Pull all per-batch npzs back. Today (2026-05-05) we hit a
+    # case where the Mac's run_self_play_shard.py finished all 329
+    # games and wrote 24 npz files but ssh.exe lingered; the data
+    # was on disk and the rsync below recovered every byte. So we
+    # try this even on failure.
     print(
-        f"[shard {shard.display_label}] collecting per-batch npzs"
+        f"[shard {label}] collecting per-batch npzs"
         f" from {shard.host}...",
         file=sys.stderr,
     )
-    prefix = f"{run_id}_shard_{shard.display_label}_chunk_"
+    prefix = f"{run_id}_shard_{label}_chunk_"
     if _is_windows_remote(shard):
         # cmd.exe: ``dir /b`` lists basenames only.
         list_cmd = (
@@ -2559,39 +2846,88 @@ def run_shard_remote(
     # (or whose self-play crashed before producing any output) is
     # not a bug at the listing layer. Both ``dir /b`` and ``ls`` exit
     # non-zero on no-match; we treat that as zero files and move on.
-    list_proc = subprocess.run(
-        _ssh_cmd(shard, list_cmd),
-        capture_output=True, text=True, timeout=30,
-    )
-    basenames = [
-        line.strip() for line in list_proc.stdout.splitlines()
-        if line.strip()
-    ]
-    local_paths: list[Path] = []
+    try:
+        list_proc = subprocess.run(
+            _ssh_cmd(shard, list_cmd),
+            capture_output=True, text=True, timeout=30,
+        )
+        basenames = [
+            line.strip() for line in list_proc.stdout.splitlines()
+            if line.strip()
+        ]
+    except (subprocess.SubprocessError, OSError) as e:
+        # The listing itself failed (SSH unreachable). Record but
+        # don't override an earlier-stage error.
+        if error is None:
+            error_stage = "list_npzs"
+            error = f"{type(e).__name__}: {e}"
+        print(
+            f"[shard {label}] FAILURE listing remote npzs: "
+            f"{type(e).__name__}: {e}",
+            file=sys.stderr,
+        )
+        basenames = []
     for basename in basenames:
         remote_npz = _remote_join(
             shard, remote_repo, "iterate_data", basename,
         )
         local_npz = output_dir / basename
-        _run_subprocess(
-            _scp_cmd(
-                shard, remote_npz, str(local_npz),
-                from_remote=True,
-            ),
-            timeout=120,
-        )
-        local_paths.append(local_npz)
+        try:
+            _run_subprocess(
+                _scp_cmd(
+                    shard, remote_npz, str(local_npz),
+                    from_remote=True,
+                ),
+                timeout=120,
+            )
+            local_paths.append(local_npz)
+        except (subprocess.SubprocessError, OSError) as e:
+            # Record but continue — partial data from this shard is
+            # still useful. Don't override an earlier-stage error.
+            if error is None:
+                error_stage = "scp_npz"
+                error = (
+                    f"{type(e).__name__}: {e} (basename={basename})"
+                )
+            print(
+                f"[shard {label}] FAILURE pulling {basename}: "
+                f"{type(e).__name__}: {e}",
+                file=sys.stderr,
+            )
 
     # 6. Pull any per-batch replay .json.gz files back. Same shape as
     # the local-shard path so the training UI's replay viewer
     # (which only knows about the master's replays_root) finds them.
-    _pull_remote_replays(
-        shard, remote_repo,
-        replays_root=spec.replays_root,
-        capture_every=spec.capture_every,
-        run_id_full=run_id_full,
+    # Wrapped — replay-pull failures shouldn't sink an otherwise-
+    # successful shard's data.
+    try:
+        _pull_remote_replays(
+            shard, remote_repo,
+            replays_root=spec.replays_root,
+            capture_every=spec.capture_every,
+            run_id_full=run_id_full,
+        )
+    except (subprocess.SubprocessError, OSError) as e:
+        print(
+            f"[shard {label}] WARNING: replay pull failed: "
+            f"{type(e).__name__}: {e}",
+            file=sys.stderr,
+        )
+
+    success = error is None
+    if not success:
+        _mark_shard_progress_failed(
+            local_progress_path,
+            shard_label=label,
+            note=f"{error_stage}: {error}",
+        )
+    return ShardSelfPlayReport(
+        shard_label=label,
+        success=success,
+        npz_paths=local_paths,
+        error=error,
+        error_stage=error_stage,
     )
-    return local_paths
 
 
 def run_shard_eval_remote(
@@ -2604,13 +2940,21 @@ def run_shard_eval_remote(
     progress_dir: Path,
     stamp: str,
     bundle_url: Optional[str] = None,
-) -> dict[str, int]:
-    """Run an eval shard on a remote machine. Mirrors
-    ``run_shard_remote`` but pushes BOTH NN weights files (new + old),
-    invokes the wrapper in eval mode, and returns aggregated counts
-    parsed from a JSON result file scp'd back from the remote.
+) -> ShardEvalReport:
+    """Eval counterpart to :func:`run_shard_remote`. Mirrors the
+    self-play remote runner but pushes BOTH NN weights files
+    (new + old), invokes the wrapper in eval mode, and returns
+    aggregated counts parsed from a JSON result file scp'd back from
+    the remote.
+
+    Like :func:`run_shard_remote`, per-shard SSH / rsync failures do
+    NOT propagate. The function returns a :class:`ShardEvalReport`
+    with ``success=False`` and zero counts on failure; the
+    orchestrator aggregates whatever shards succeeded and decides
+    whether to fail the eval (e.g. zero shards succeeded).
     """
-    run_id_full = f"{run_id}_shard_{shard.display_label}"
+    label = shard.display_label
+    run_id_full = f"{run_id}_shard_{label}"
     progress_dir.mkdir(parents=True, exist_ok=True)
     local_progress_path = progress_dir / f"{run_id_full}.json"
     local_events_path = progress_dir / f"{run_id_full}_events.jsonl"
@@ -2629,47 +2973,84 @@ def run_shard_eval_remote(
         f"{run_id_full}_result.json",
     )
 
-    if bundle_url:
-        print(
-            f"[shard {shard.display_label}] sync from bundle on "
-            f"{shard.host}...", file=sys.stderr,
-        )
-        _run_subprocess(
-            _ssh_cmd(shard, _build_remote_bundle_sync_command(
-                shard, bundle_url,
-            )),
-            timeout=300,
-        )
+    error: Optional[str] = None
+    error_stage: Optional[str] = None
+    poller: Optional[_ProgressPoller] = None
+    zero_counts = {
+        "n_games": 0, "wins_new": 0, "wins_old": 0,
+        "draws": 0, "crashed": 0,
+    }
 
-    _push_weights_to_remote(shard, remote_repo, spec.new_weights_path)
-    if spec.old_weights_path is not None:
-        _push_weights_to_remote(
-            shard, remote_repo, spec.old_weights_path,
-        )
-
-    poller = _ProgressPoller(
-        shard,
-        remote_progress_path=remote_progress,
-        local_progress_path=local_progress_path,
-    )
-    poller.start()
-
-    print(
-        f"[shard {shard.display_label}] pull-mode eval on "
-        f"{shard.host}...",
-        file=sys.stderr,
-    )
     try:
-        run_cmd = _build_remote_eval_command(
-            shard, spec,
-            queue_url=queue_url,
-            run_id=run_id,
-            iter_total_games=iter_total_games,
-            stamp=stamp,
+        if bundle_url:
+            print(
+                f"[shard {label}] sync from bundle on "
+                f"{shard.host}...", file=sys.stderr,
+            )
+            try:
+                _run_subprocess(
+                    _ssh_cmd(shard, _build_remote_bundle_sync_command(
+                        shard, bundle_url,
+                    )),
+                    timeout=300,
+                )
+            except (subprocess.CalledProcessError,
+                    subprocess.TimeoutExpired, OSError) as e:
+                error_stage = "bundle_sync"
+                error = f"{type(e).__name__}: {e}"
+                raise
+
+        try:
+            _push_weights_to_remote(
+                shard, remote_repo, spec.new_weights_path,
+            )
+            if spec.old_weights_path is not None:
+                _push_weights_to_remote(
+                    shard, remote_repo, spec.old_weights_path,
+                )
+        except (subprocess.CalledProcessError,
+                subprocess.TimeoutExpired, OSError) as e:
+            error_stage = "weight_push"
+            error = f"{type(e).__name__}: {e}"
+            raise
+
+        poller = _ProgressPoller(
+            shard,
+            remote_progress_path=remote_progress,
+            local_progress_path=local_progress_path,
         )
-        _run_subprocess(_ssh_cmd(shard, run_cmd))
+        poller.start()
+
+        print(
+            f"[shard {label}] pull-mode eval on "
+            f"{shard.host}...",
+            file=sys.stderr,
+        )
+        try:
+            run_cmd = _build_remote_eval_command(
+                shard, spec,
+                queue_url=queue_url,
+                run_id=run_id,
+                iter_total_games=iter_total_games,
+                stamp=stamp,
+            )
+            _run_subprocess(_ssh_cmd(shard, run_cmd))
+        except (subprocess.CalledProcessError,
+                subprocess.TimeoutExpired, OSError) as e:
+            error_stage = "eval"
+            error = f"{type(e).__name__}: {e}"
+            raise
+    except (subprocess.CalledProcessError,
+            subprocess.TimeoutExpired, OSError) as e:
+        print(
+            f"[shard {label}] FAILURE during {error_stage}: "
+            f"{type(e).__name__}: {e}. Continuing with rsync to "
+            f"recover any partial result.",
+            file=sys.stderr,
+        )
     finally:
-        poller.stop()
+        if poller is not None:
+            poller.stop()
         for remote_path, local_path in (
             (remote_progress, local_progress_path),
             (remote_events, local_events_path),
@@ -2686,16 +3067,87 @@ def run_shard_eval_remote(
             except Exception:  # noqa: BLE001
                 pass
 
+    # If the shard never produced a result file we can't aggregate
+    # its counts — but other shards may have, so this is no longer
+    # fatal. Return a failure report and let the orchestrator decide.
     if not local_result_path.is_file():
-        raise RuntimeError(
-            f"eval shard {shard.display_label} produced no result "
-            f"file at {local_result_path}; check stderr."
+        if error is None:
+            error_stage = "no_result_file"
+            error = (
+                f"eval shard {label} produced no result file at "
+                f"{local_result_path}"
+            )
+            print(
+                f"[shard {label}] FAILURE: no result file at "
+                f"{local_result_path}",
+                file=sys.stderr,
+            )
+        _mark_shard_progress_failed(
+            local_progress_path,
+            shard_label=label,
+            note=f"{error_stage}: {error}",
+        )
+        return ShardEvalReport(
+            shard_label=label,
+            success=False,
+            counts=dict(zero_counts),
+            error=error,
+            error_stage=error_stage,
         )
 
-    _pull_remote_replays(
-        shard, remote_repo,
-        replays_root=spec.replays_root,
-        capture_every=spec.capture_every,
-        run_id_full=run_id_full,
+    # Replay pull is best-effort: don't sink an otherwise-successful
+    # shard's counts on a replay rsync hiccup.
+    try:
+        _pull_remote_replays(
+            shard, remote_repo,
+            replays_root=spec.replays_root,
+            capture_every=spec.capture_every,
+            run_id_full=run_id_full,
+        )
+    except (subprocess.SubprocessError, OSError) as e:
+        print(
+            f"[shard {label}] WARNING: replay pull failed: "
+            f"{type(e).__name__}: {e}",
+            file=sys.stderr,
+        )
+
+    try:
+        counts = json.loads(
+            local_result_path.read_text(encoding="utf-8"),
+        )
+    except (OSError, json.JSONDecodeError) as e:
+        if error is None:
+            error_stage = "result_parse"
+            error = f"{type(e).__name__}: {e}"
+            print(
+                f"[shard {label}] FAILURE parsing result file: "
+                f"{type(e).__name__}: {e}",
+                file=sys.stderr,
+            )
+        _mark_shard_progress_failed(
+            local_progress_path,
+            shard_label=label,
+            note=f"{error_stage}: {error}",
+        )
+        return ShardEvalReport(
+            shard_label=label,
+            success=False,
+            counts=dict(zero_counts),
+            error=error,
+            error_stage=error_stage,
+        )
+
+    success = error is None
+    if not success:
+        _mark_shard_progress_failed(
+            local_progress_path,
+            shard_label=label,
+            note=f"{error_stage}: {error}",
+        )
+    return ShardEvalReport(
+        shard_label=label,
+        success=success,
+        counts=counts,
+        error=error,
+        error_stage=error_stage,
     )
-    return json.loads(local_result_path.read_text(encoding="utf-8"))
