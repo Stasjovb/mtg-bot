@@ -379,6 +379,13 @@ class SelfPlayJobSpec:
     hang_dump_root: Optional[str] = None
     use_ismcts: bool = False
     use_belief_weighted: bool = False
+    # Dual-head architecture string for the shard's NNEvaluator. ``None``
+    # means "use NNEvaluator's default", which is "shared" — the back-
+    # compat path. Iterate threads the bootstrap-or-promoted version's
+    # metadata.architecture in here so remote shards instantiate the
+    # right ``_ValuePolicyMLP*`` class.
+    architecture: Optional[str] = None
+    policy_hidden_sizes: Optional[tuple[int, ...]] = None
     # Bundle of priority short-circuit / filter heuristics applied by
     # ``MtgGameStateAdapter`` during search. Self-play default = every
     # flag ON (see ``HeuristicsConfig`` defaults). Per-heuristic
@@ -424,6 +431,11 @@ class SelfPlayJobSpec:
             "use_ismcts": self.use_ismcts,
             "use_belief_weighted": self.use_belief_weighted,
             "heuristics": self.heuristics.to_dict(),
+            "architecture": self.architecture,
+            "policy_hidden_sizes": (
+                list(self.policy_hidden_sizes)
+                if self.policy_hidden_sizes is not None else None
+            ),
         }
 
     @classmethod
@@ -456,6 +468,11 @@ class SelfPlayJobSpec:
             use_ismcts=bool(d.get("use_ismcts", False)),
             use_belief_weighted=bool(d.get("use_belief_weighted", False)),
             heuristics=heuristics,
+            architecture=d.get("architecture"),
+            policy_hidden_sizes=(
+                tuple(d["policy_hidden_sizes"])
+                if d.get("policy_hidden_sizes") is not None else None
+            ),
         )
 
 
@@ -489,6 +506,13 @@ class EvalJobSpec:
     opponent_label: str = "previous"
     use_ismcts: bool = False
     use_belief_weighted: bool = False
+    # Architecture strings for the new and old NN sides of the eval
+    # match. ``None`` defaults to NNEvaluator's "shared". Iterate threads
+    # the metadata.architecture for each version in here so the eval
+    # workers instantiate the right dual-head class for each side.
+    new_architecture: Optional[str] = None
+    old_architecture: Optional[str] = None
+    policy_hidden_sizes: Optional[tuple[int, ...]] = None
     # Bundle of priority short-circuit / filter heuristics. Eval
     # default = every flag OFF (``HeuristicsConfig.disabled()``):
     # match outcomes determine acceptance, so the strength-vs-
@@ -525,6 +549,12 @@ class EvalJobSpec:
             "use_ismcts": self.use_ismcts,
             "use_belief_weighted": self.use_belief_weighted,
             "heuristics": self.heuristics.to_dict(),
+            "new_architecture": self.new_architecture,
+            "old_architecture": self.old_architecture,
+            "policy_hidden_sizes": (
+                list(self.policy_hidden_sizes)
+                if self.policy_hidden_sizes is not None else None
+            ),
         }
 
     @classmethod
@@ -557,6 +587,12 @@ class EvalJobSpec:
             use_ismcts=bool(d.get("use_ismcts", False)),
             use_belief_weighted=bool(d.get("use_belief_weighted", False)),
             heuristics=heuristics,
+            new_architecture=d.get("new_architecture"),
+            old_architecture=d.get("old_architecture"),
+            policy_hidden_sizes=(
+                tuple(d["policy_hidden_sizes"])
+                if d.get("policy_hidden_sizes") is not None else None
+            ),
         )
 
 
@@ -600,6 +636,8 @@ def run_shard_local(
         with_policy=spec.with_policy,
         puct=True,
         hidden_sizes=spec.hidden_sizes,
+        architecture=spec.architecture,
+        policy_hidden_sizes=spec.policy_hidden_sizes,
         use_ismcts=spec.use_ismcts,
         use_belief_weighted=spec.use_belief_weighted,
     )
@@ -1733,6 +1771,8 @@ def run_shard_pull(
         with_policy=spec.with_policy,
         puct=True,
         hidden_sizes=spec.hidden_sizes,
+        architecture=spec.architecture,
+        policy_hidden_sizes=spec.policy_hidden_sizes,
         use_ismcts=spec.use_ismcts,
         use_belief_weighted=spec.use_belief_weighted,
     )
@@ -2025,6 +2065,8 @@ def run_shard_eval_pull(
         samples=spec.samples, inner_nodes=spec.inner_nodes,
         batch_size=32, with_policy=True, puct=True,
         hidden_sizes=spec.hidden_sizes,
+        architecture=spec.new_architecture,
+        policy_hidden_sizes=spec.policy_hidden_sizes,
         use_ismcts=spec.use_ismcts,
         use_belief_weighted=spec.use_belief_weighted,
     )
@@ -2034,6 +2076,8 @@ def run_shard_eval_pull(
             samples=spec.samples, inner_nodes=spec.inner_nodes,
             batch_size=32, with_policy=True, puct=True,
             hidden_sizes=spec.hidden_sizes,
+            architecture=spec.old_architecture,
+            policy_hidden_sizes=spec.policy_hidden_sizes,
             use_ismcts=spec.use_ismcts,
             use_belief_weighted=spec.use_belief_weighted,
         )

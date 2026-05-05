@@ -139,6 +139,8 @@ def nn_eval_annotator(
     version_label: Optional[str] = None,
     hidden_sizes: Optional[tuple[int, ...]] = None,
     with_policy: bool = False,
+    architecture: Optional[str] = None,
+    policy_hidden_sizes: Optional[tuple[int, ...]] = None,
 ) -> SnapshotAnnotator:
     """Returns an annotator that adds ``nn_eval``: ``{p0, p1,
     version}`` to each snapshot. ``version`` is the registry version
@@ -161,6 +163,10 @@ def nn_eval_annotator(
         nn_kwargs["hidden_sizes"] = hidden_sizes
     if with_policy:
         nn_kwargs["with_policy"] = True
+    if architecture is not None:
+        nn_kwargs["architecture"] = architecture
+    if policy_hidden_sizes is not None:
+        nn_kwargs["policy_hidden_sizes"] = policy_hidden_sizes
     evaluator = NNEvaluator(**nn_kwargs)
     label = version_label if version_label is not None else str(weights_path)
 

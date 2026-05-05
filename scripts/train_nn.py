@@ -37,7 +37,11 @@ if _SRC.is_dir() and str(_SRC) not in sys.path:
     sys.path.insert(0, str(_SRC))
 
 from mtg_bot.features import FEATURE_DIM  # noqa: E402
-from mtg_bot.search.nn_evaluator import HIDDEN_SIZES  # noqa: E402
+from mtg_bot.search.nn_evaluator import (  # noqa: E402
+    ARCHITECTURE_SHARED,
+    HIDDEN_SIZES,
+    SUPPORTED_ARCHITECTURES,
+)
 from mtg_bot.training import (  # noqa: E402
     auto_device, load_all_datasets, train_value_network,
 )
@@ -136,6 +140,34 @@ def main() -> None:
         ),
     )
     parser.add_argument(
+        "--architecture",
+        choices=list(SUPPORTED_ARCHITECTURES),
+        default=ARCHITECTURE_SHARED,
+        help=(
+            "Dual-head model class: 'shared' (default, back-compat "
+            "with v1-v15) uses a single trunk feeding both value and "
+            "policy heads. 'separate' instantiates parallel value_"
+            "trunk + policy_trunk MLPs, eliminating the shared-"
+            "bottleneck competition between heads (the value head's "
+            "louder gradient saturates a shared trunk's representation "
+            "and crowds the policy head's branchy-row signal out — see "
+            "iter_002 v13 training analysis). Switching from 'shared' "
+            "to 'separate' (or vice versa) invalidates the existing "
+            "v-chain — the new architecture must train fresh. The "
+            "choice is recorded in metadata.json so loaders can "
+            "dispatch."
+        ),
+    )
+    parser.add_argument(
+        "--policy-hidden-sizes", default=None,
+        help=(
+            "Optional comma-separated trunk shape for the policy_trunk "
+            "when --architecture=separate. Defaults to mirror "
+            "--hidden-sizes. Useful for asymmetric capacity allocation "
+            "(e.g. trim the policy trunk if VRAM matters)."
+        ),
+    )
+    parser.add_argument(
         "--policy-loss-weight", type=float, default=1.0,
         help=(
             "Coefficient on the policy-head CE in the combined loss "
@@ -160,6 +192,24 @@ def main() -> None:
             sys.exit("--hidden-sizes must list at least one layer")
     else:
         hidden_sizes = HIDDEN_SIZES
+
+    policy_hidden_sizes: tuple[int, ...] | None = None
+    if args.policy_hidden_sizes is not None:
+        if args.architecture != "separate":
+            sys.exit(
+                "--policy-hidden-sizes only applies when "
+                "--architecture=separate"
+            )
+        try:
+            policy_hidden_sizes = tuple(
+                int(x.strip()) for x in args.policy_hidden_sizes.split(",")
+            )
+        except ValueError as exc:
+            sys.exit(f"--policy-hidden-sizes parse error: {exc}")
+        if not policy_hidden_sizes:
+            sys.exit(
+                "--policy-hidden-sizes must list at least one layer"
+            )
 
     if not args.data_dir.is_dir():
         sys.exit(f"--data-dir {args.data_dir} is not a directory")
@@ -247,6 +297,9 @@ def main() -> None:
             train_kwargs["policy_targets"] = policy_targets
             train_kwargs["action_masks"] = action_masks
             train_kwargs["policy_loss_weight"] = args.policy_loss_weight
+            train_kwargs["architecture"] = args.architecture
+            if policy_hidden_sizes is not None:
+                train_kwargs["policy_hidden_sizes"] = policy_hidden_sizes
         history = train_value_network(**train_kwargs)
         elapsed = time.perf_counter() - started
 
@@ -256,6 +309,13 @@ def main() -> None:
             feature_dim=FEATURE_DIM,
             hidden_sizes=list(hidden_sizes),
             with_policy=has_any_policy,
+            # Architecture is meaningful only for dual-head training
+            # (``has_any_policy=True``); for value-only runs we still
+            # default to "shared" so the field is present and stable.
+            architecture=(
+                args.architecture if has_any_policy
+                else ARCHITECTURE_SHARED
+            ),
             training={
                 "data_dir": str(args.data_dir),
                 "data_files": data_files,
@@ -268,6 +328,10 @@ def main() -> None:
                 "device": device,
                 "rng_seed": args.seed,
                 "duration_seconds": elapsed,
+                "policy_hidden_sizes": (
+                    list(policy_hidden_sizes)
+                    if policy_hidden_sizes is not None else None
+                ),
             },
             training_history={
                 "train_losses": history.train_losses,

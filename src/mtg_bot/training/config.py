@@ -170,6 +170,20 @@ class NNPimcConfig:
     # matching shape. ``evaluate_nn.py`` reads it from the version's
     # metadata.json and threads it through this field.
     hidden_sizes: Optional[tuple[int, ...]] = None
+    # ``architecture`` carries which dual-head model class the saved
+    # weights were trained under: ``"shared"`` (default, back-compat
+    # with v1-v15) or ``"separate"`` (v16+ separate-trunks runs). The
+    # workers' NNEvaluator needs to instantiate the matching class so
+    # the state_dict load doesn't fail with a key-mismatch error.
+    # Ignored when ``with_policy=False`` (the value-only ``_ValueMLP``
+    # has no architectural choice). Iterate / evaluate scripts read
+    # this from the version's metadata.json and thread it through.
+    architecture: Optional[str] = None
+    # ``policy_hidden_sizes`` carries the ``policy_trunk`` shape for
+    # ``architecture="separate"`` runs trained with an asymmetric
+    # ``--policy-hidden-sizes``. ``None`` mirrors ``hidden_sizes``,
+    # which is what the symmetric default uses.
+    policy_hidden_sizes: Optional[tuple[int, ...]] = None
     # When True, ``build`` returns ISMCTS instead of PIMC. The class
     # name is historical — kept for serialization compatibility with
     # in-flight specs and saved JSON. Matched-budget conversion:
@@ -223,6 +237,10 @@ class NNPimcConfig:
         }
         if self.hidden_sizes is not None:
             eval_kwargs["hidden_sizes"] = self.hidden_sizes
+        if self.architecture is not None:
+            eval_kwargs["architecture"] = self.architecture
+        if self.policy_hidden_sizes is not None:
+            eval_kwargs["policy_hidden_sizes"] = self.policy_hidden_sizes
         if self.device is not None:
             eval_kwargs["device"] = self.device
         evaluator = NNEvaluator(**eval_kwargs)
@@ -282,6 +300,11 @@ class NNPimcConfig:
                 list(self.hidden_sizes)
                 if self.hidden_sizes is not None else None
             ),
+            "architecture": self.architecture,
+            "policy_hidden_sizes": (
+                list(self.policy_hidden_sizes)
+                if self.policy_hidden_sizes is not None else None
+            ),
             "use_ismcts": self.use_ismcts,
             "use_belief_weighted": self.use_belief_weighted,
             "belief_m_candidates": self.belief_m_candidates,
@@ -294,6 +317,7 @@ class NNPimcConfig:
     @classmethod
     def from_dict(cls, d: dict[str, Any]) -> "NNPimcConfig":
         hidden_sizes = d.get("hidden_sizes")
+        policy_hidden_sizes = d.get("policy_hidden_sizes")
         return cls(
             weights_path=d["weights_path"],
             samples=d["samples"],
@@ -303,6 +327,11 @@ class NNPimcConfig:
             puct=d.get("puct", False),
             hidden_sizes=(
                 tuple(hidden_sizes) if hidden_sizes is not None else None
+            ),
+            architecture=d.get("architecture"),
+            policy_hidden_sizes=(
+                tuple(policy_hidden_sizes)
+                if policy_hidden_sizes is not None else None
             ),
             use_ismcts=d.get("use_ismcts", False),
             use_belief_weighted=d.get("use_belief_weighted", False),
