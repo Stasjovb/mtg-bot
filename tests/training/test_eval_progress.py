@@ -21,6 +21,8 @@ import threading
 import time
 from pathlib import Path
 
+import pytest
+
 from mtg_bot.training import EvalProgress
 
 
@@ -173,6 +175,49 @@ def test_payload_always_includes_crashed_field(tmp_path: Path):
     payload = json.loads((tmp_path / "run.json").read_text(encoding="utf-8"))
     assert "crashed" in payload
     assert payload["crashed"] == 0
+    # ``timed_out`` shares the same always-emitted contract.
+    assert "timed_out" in payload
+    assert payload["timed_out"] == 0
+
+
+def test_timed_out_games_increment_dedicated_counter(tmp_path: Path):
+    """``record_game(timed_out=True)`` must increment a counter
+    distinct from ``crashed``, and stay OUT of wins_new / wins_old /
+    draws / win_rate. Lets the UI tell engine bugs (crashed) apart
+    from CPU-contention slow games (timed_out)."""
+    progress = _make(tmp_path / "run.json", total=5)
+    progress.begin()
+    progress.record_game(winner=0, decisions=300)              # new wins
+    progress.record_game(winner=1, decisions=400)              # opp wins
+    progress.record_game(winner=None, decisions=0, crashed=True)
+    progress.record_game(winner=None, decisions=0, timed_out=True)
+    progress.record_game(winner=None, decisions=0, timed_out=True)
+    progress.finalize(status="completed")
+
+    payload = json.loads((tmp_path / "run.json").read_text(encoding="utf-8"))
+    assert payload["wins_new"] == 1
+    assert payload["wins_old"] == 1
+    assert payload["draws"] == 0
+    assert payload["crashed"] == 1
+    assert payload["timed_out"] == 2
+    assert payload["n_games_done"] == 5
+    # win_rate counts decided games only (excludes draws / crashes /
+    # timeouts) — 1 win out of 2 decided games = 0.5.
+    assert payload["win_rate"] == 0.5
+
+
+def test_eval_record_game_rejects_both_crashed_and_timed_out(
+    tmp_path: Path,
+):
+    """``crashed`` and ``timed_out`` are mutually exclusive on the
+    eval-side tracker too. Caller bug should fail loudly rather
+    than silently double-counting."""
+    progress = _make(tmp_path / "run.json", total=1)
+    progress.begin()
+    with pytest.raises(ValueError, match="mutually exclusive"):
+        progress.record_game(
+            winner=None, decisions=0, crashed=True, timed_out=True,
+        )
 
 
 def test_crashed_does_not_pollute_win_rate(tmp_path: Path):
