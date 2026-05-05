@@ -1381,6 +1381,69 @@ def test_aggregate_progress_poller_handles_missing_shard_files(
     assert agg["machines"] == []
 
 
+def test_aggregate_progress_poller_machines_carry_per_host_perf_stats(
+    tmp_path: Path,
+):
+    """The per-machine sub-card UI surfaces three perf-only stats per
+    host: secs/game, crashes, workers. The aggregator is the source of
+    truth for that grouping, so each entry in ``agg['machines']`` must
+    include ``elapsed_seconds`` (raw) and ``per_game_seconds``
+    (precomputed elapsed_seconds / n_games_done; ``None`` when
+    n_games_done is 0). The host label is parsed from the shard
+    filename suffix (the part after ``_shard_``)."""
+    from mtg_bot.training.distributed import _AggregateProgressPoller
+
+    pdir = tmp_path
+    run_id = "iter_007_self_play_v9"
+    # Two real-world host suffixes: hyphenated tailnet hostnames; one
+    # finished, one mid-run with non-zero crashes.
+    (pdir / f"{run_id}_shard_greggs-macbook-pro.json").write_text(
+        json.dumps({
+            "run_id": f"{run_id}_shard_greggs-macbook-pro",
+            "kind": "data_gen", "status": "completed",
+            "n_games_total": 200, "n_games_done": 100,
+            "n_samples": 12000, "n_workers": 14,
+            "p0_wins": 60, "p1_wins": 40, "draws": 0,
+            "crashed": 3, "elapsed_seconds": 600.0,
+        }), encoding="utf-8",
+    )
+    (pdir / f"{run_id}_shard_desktop-j05412i.json").write_text(
+        json.dumps({
+            "run_id": f"{run_id}_shard_desktop-j05412i",
+            "kind": "data_gen", "status": "running",
+            "n_games_total": 200, "n_games_done": 0,
+            "n_samples": 0, "n_workers": 16,
+            "p0_wins": 0, "p1_wins": 0, "draws": 0,
+            "crashed": 0, "elapsed_seconds": 5.0,
+        }), encoding="utf-8",
+    )
+    poller = _AggregateProgressPoller(
+        progress_dir=pdir, run_id=run_id,
+        n_games_total=400, kind="data_gen",
+    )
+    poller._write("running")
+    agg = json.loads((pdir / f"{run_id}.json").read_text())
+    by_label = {m["label"]: m for m in agg["machines"]}
+    # Host suffix is parsed from the shard filename, NOT the run_id
+    # field — labels with hyphens round-trip verbatim.
+    assert set(by_label) == {"greggs-macbook-pro", "desktop-j05412i"}
+    mac = by_label["greggs-macbook-pro"]
+    assert mac["n_games_done"] == 100
+    assert mac["n_workers"] == 14
+    assert mac["crashed"] == 3
+    assert mac["elapsed_seconds"] == 600.0
+    # 600s / 100 games = 6.0 s/game.
+    assert mac["per_game_seconds"] == pytest.approx(6.0)
+    desk = by_label["desktop-j05412i"]
+    assert desk["n_games_done"] == 0
+    assert desk["n_workers"] == 16
+    assert desk["crashed"] == 0
+    assert desk["elapsed_seconds"] == 5.0
+    # Zero-divide guard: per_game_seconds must be None, not 0.0 or NaN.
+    # The UI distinguishes "no data yet" from "0 secs/game".
+    assert desk["per_game_seconds"] is None
+
+
 def test_aggregate_progress_poller_emits_games_per_hour_data_gen(
     tmp_path: Path,
 ):
