@@ -31,6 +31,8 @@ import tempfile
 import time
 from pathlib import Path
 
+import numpy as np
+
 _HERE = Path(__file__).resolve().parent
 _SRC = _HERE.parent / "src"
 if _SRC.is_dir() and str(_SRC) not in sys.path:
@@ -42,6 +44,74 @@ from mtg_bot.training import (  # noqa: E402
     auto_device, load_all_datasets, train_value_network,
 )
 from mtg_bot.training.registry import ModelMetadata, Registry  # noqa: E402
+
+
+def _downsample_one_legal_rows(
+    features: np.ndarray,
+    outcomes: np.ndarray,
+    policy_targets: np.ndarray,
+    action_masks: np.ndarray,
+    *,
+    keep_frac: float,
+    seed: int,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, int, int]:
+    """Drop a fraction of one-legal-action supervised rows.
+
+    Why: when ~84% of supervised rows have exactly one legal action,
+    their CE loss is trivially 0 and they dominate the policy-head
+    gradient with zero learning signal. Downsampling them lets the
+    sparse multi-legal rows (where MCTS visit-count distribution
+    actually carries signal) drive the gradient.
+
+    A row is "one-legal-supervised" iff
+    ``action_mask.sum(-1) == 1`` AND ``policy_target.sum(-1) > 0.5``.
+    Value-only rows (no policy supervision) are kept fully — they
+    contribute nothing to the policy gradient anyway.
+
+    Returns the downsampled (features, outcomes, policy_targets,
+    action_masks) along with (n_one_legal_total, n_one_legal_kept)
+    for logging.
+    """
+    if not (0.0 < keep_frac <= 1.0):
+        raise ValueError(
+            f"keep_frac must be in (0.0, 1.0]; got {keep_frac}"
+        )
+
+    has_policy = policy_targets.sum(axis=-1) > 0.5
+    n_legal = action_masks.sum(axis=-1)
+    one_legal_supervised = has_policy & (n_legal == 1)
+    n_one_legal_total = int(one_legal_supervised.sum())
+
+    if keep_frac >= 1.0 or n_one_legal_total == 0:
+        return (
+            features,
+            outcomes,
+            policy_targets,
+            action_masks,
+            n_one_legal_total,
+            n_one_legal_total,
+        )
+
+    rng = np.random.default_rng(seed)
+    # Build keep-mask: every non-one-legal-supervised row stays;
+    # one-legal-supervised rows pass with probability ``keep_frac``.
+    keep_mask = np.ones(features.shape[0], dtype=bool)
+    one_legal_idx = np.flatnonzero(one_legal_supervised)
+    n_keep = int(round(n_one_legal_total * keep_frac))
+    if n_keep < n_one_legal_total:
+        # rng.permutation is reproducible given the seed.
+        shuffled = rng.permutation(one_legal_idx)
+        drop = shuffled[n_keep:]
+        keep_mask[drop] = False
+
+    return (
+        features[keep_mask],
+        outcomes[keep_mask],
+        policy_targets[keep_mask],
+        action_masks[keep_mask],
+        n_one_legal_total,
+        n_keep,
+    )
 
 
 def _git_commit() -> str | None:
@@ -148,7 +218,29 @@ def main() -> None:
             "branchy rows where it actually has signal to learn."
         ),
     )
+    parser.add_argument(
+        "--one-legal-keep-frac", type=float, default=1.0,
+        help=(
+            "Fraction of one-legal-action supervised rows to keep "
+            "before training (default 1.0 = no downsample). When "
+            "<1.0, only this fraction of rows whose action_mask has "
+            "exactly one legal slot AND that carry policy supervision "
+            "are retained; multi-legal supervised rows and value-only "
+            "rows are kept fully. The companion fix to "
+            "--policy-loss-weight: rather than reweighting the loss, "
+            "rebalances the dataset so the policy head's gradient is "
+            "dominated by branchy rows with real visit-count signal. "
+            "At 0.1, the ~84%% one-legal share drops to ~8.4%% so "
+            "branchy supervised rows become the majority. Seeded "
+            "from --seed for reproducibility. Must be in (0.0, 1.0]."
+        ),
+    )
     args = parser.parse_args()
+    if not (0.0 < args.one_legal_keep_frac <= 1.0):
+        parser.error(
+            "--one-legal-keep-frac must be in (0.0, 1.0]; got "
+            f"{args.one_legal_keep_frac}"
+        )
     if args.hidden_sizes is not None:
         try:
             hidden_sizes = tuple(
@@ -177,6 +269,30 @@ def main() -> None:
             f"with scripts/generate_training_data.py first."
         )
     data_files = sorted(p.name for p in args.data_dir.glob("*.npz"))
+
+    if args.one_legal_keep_frac < 1.0:
+        n_before = features.shape[0]
+        (
+            features,
+            outcomes,
+            policy_targets,
+            action_masks,
+            n_one_legal_total,
+            n_one_legal_kept,
+        ) = _downsample_one_legal_rows(
+            features, outcomes, policy_targets, action_masks,
+            keep_frac=args.one_legal_keep_frac,
+            seed=args.seed,
+        )
+        print(
+            f"[train_nn] downsampled one-legal rows: kept "
+            f"{n_one_legal_kept} of {n_one_legal_total} "
+            f"(kept_frac={args.one_legal_keep_frac}); "
+            f"final dataset: {features.shape[0]} rows "
+            f"(was {n_before})",
+            file=sys.stderr,
+        )
+
     n_policy_rows = int(
         (policy_targets.sum(axis=-1) > 0.5).sum()
     )
@@ -268,6 +384,7 @@ def main() -> None:
                 "device": device,
                 "rng_seed": args.seed,
                 "duration_seconds": elapsed,
+                "one_legal_keep_frac": args.one_legal_keep_frac,
             },
             training_history={
                 "train_losses": history.train_losses,

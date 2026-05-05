@@ -673,6 +673,7 @@ def _train_next(
     hidden_sizes: tuple[int, ...] | None = None,
     progress_path: Path | None = None,
     policy_loss_weight: float = 1.0,
+    one_legal_keep_frac: float = 1.0,
 ) -> str:
     """Run train_nn.py via subprocess so its progress JSON / hub
     UI / registry plumbing all behave the same as a manual train.
@@ -693,6 +694,12 @@ def _train_next(
     one-legal-action (CE=0 trivially) and value loss (~0.5 at
     epoch 1) dominates the gradient ~3:1. Bumping this to 3-10
     rebalances toward the policy head's branchy-row signal.
+
+    ``one_legal_keep_frac`` (default 1.0 = no downsample) drops the
+    given fraction of one-legal-action supervised rows BEFORE training
+    so the policy head's gradient is dominated by branchy rows. Set
+    e.g. 0.1 to keep only 10%% of trivial one-legal rows. Orthogonal
+    to ``policy_loss_weight`` — both can be combined.
     """
     import subprocess
 
@@ -708,6 +715,7 @@ def _train_next(
         "--seed", str(seed),
         "--notes", notes,
         "--policy-loss-weight", str(policy_loss_weight),
+        "--one-legal-keep-frac", str(one_legal_keep_frac),
     ]
     if hidden_sizes is not None:
         cmd.extend(["--hidden-sizes", ",".join(str(s) for s in hidden_sizes)])
@@ -910,6 +918,18 @@ def main() -> None:
             "supervised rows are one-legal-action (CE=0 trivially) "
             "and value loss dominates the gradient ~3:1. Bump to "
             "3-10 to rebalance toward branchy-row signal."
+        ),
+    )
+    parser.add_argument(
+        "--one-legal-keep-frac", type=float, default=1.0,
+        help=(
+            "Fraction of one-legal-action supervised rows to keep "
+            "before training (default 1.0 = no downsample). The "
+            "data-side companion to --policy-loss-weight: rather "
+            "than reweighting the loss, drops trivial one-legal "
+            "rows so branchy rows with real visit-count signal "
+            "dominate the policy gradient. Threaded through to "
+            "train_nn.py. Must be in (0.0, 1.0]."
         ),
     )
     parser.add_argument(
@@ -1199,6 +1219,12 @@ def main() -> None:
             "weighted determinization is meaningless for PIMC's K-"
             "independent-trees structure (no shared determinize_fn "
             "callback). See docs/ISMCTS_MIGRATION.md (Phase 6)."
+        )
+
+    if not (0.0 < args.one_legal_keep_frac <= 1.0):
+        parser.error(
+            "--one-legal-keep-frac must be in (0.0, 1.0]; got "
+            f"{args.one_legal_keep_frac}"
         )
 
     args.data_dir.mkdir(parents=True, exist_ok=True)
@@ -1517,6 +1543,7 @@ def main() -> None:
             hidden_sizes=iter_hidden_sizes,
             progress_path=train_progress_path,
             policy_loss_weight=args.policy_loss_weight,
+            one_legal_keep_frac=args.one_legal_keep_frac,
         )
         new_weights = registry.weights_path(new_version)
         print(f"[iterate]   trained: {new_version}")
