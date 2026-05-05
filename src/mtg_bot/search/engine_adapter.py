@@ -62,6 +62,9 @@ from mtg_bot.legal import legal_actions
 from mtg_bot.search._opp_capabilities import (
     opp_can_act, opp_capability_hash,
 )
+from mtg_bot.search._player_capabilities import (
+    has_player_capability_to_act, player_capability_hash,
+)
 from mtg_bot.search.combat_decisions import (
     AttackerDecision, BlockerDecision,
 )
@@ -211,20 +214,27 @@ class MtgGameStateAdapter:
         # crosses an ``apply()`` boundary.
         self._legal_actions_cache_player: Optional[PlayerID] = None
         self._legal_actions_cache_value: Optional[list[Action]] = None
-        # Per-decision-moment cache of the opp-capability "can act"
+        # Per-decision-moment cache of the player-capability "can act"
         # bool. Keyed on a structural hash from
-        # ``_opp_capabilities.opp_capability_hash``. The cache covers
-        # the non-active-player priority moments that account for the
-        # bulk of repeat priority loops (between phases / after stack
-        # adds / after stack resolves) — when opp has nothing to do,
-        # we short-circuit ``legal_decisions`` to ``[PassPriority()]``
-        # without enumerating ``legal_actions``. See
-        # ``_opp_capabilities.py`` for the conservatism contract and
-        # documented limitations.
-        # Stored as ``(opp_id, hash, can_act_bool)``; one entry per
-        # adapter is sufficient (only one opp at a time).
+        # ``_player_capabilities.player_capability_hash``. Covers BOTH
+        # the non-active-player priority moments (instant-speed only)
+        # AND the active-player priority moments (sorcery-speed-aware
+        # when stack is empty + step is main phase). When the priority
+        # holder has no possible action, we short-circuit
+        # ``legal_decisions`` to ``[PassPriority()]`` without
+        # enumerating ``legal_actions``. With both players auto-passing
+        # in their respective windows, "quiet" turns advance through
+        # priority round in microseconds. See
+        # ``_player_capabilities.py`` for the conservatism contract
+        # and documented limitations (continuous-effect grants,
+        # cost-reduction effects, etc.).
+        # Stored as ``(player_id, is_active_player, hash, can_act)``;
+        # one entry per adapter is sufficient (only one priority
+        # holder at a time). Attribute name retained as
+        # ``_opp_cap_cache`` for compat with tests that touched it
+        # directly under the opp-only era.
         self._opp_cap_cache: Optional[
-            tuple[PlayerID, int, bool]
+            tuple[PlayerID, bool, int, bool]
         ] = None
         # Drive forward until we either hit a terminal state or a
         # priority moment where the caller must decide.
@@ -248,30 +258,47 @@ class MtgGameStateAdapter:
         self._legal_actions_cache_value = None
         self._opp_cap_cache = None
 
-    def _opp_can_act_cached(self, opp_id: PlayerID) -> bool:
-        """Return ``opp_can_act(state, opp_id)``, memoized via the
-        structural hash from ``opp_capability_hash``.
+    def _can_act_cached(
+        self, player_id: PlayerID, *, is_active_player: bool,
+    ) -> bool:
+        """Return ``has_player_capability_to_act(state, player_id,
+        is_active_player=...)``, memoized via the structural hash
+        from ``player_capability_hash``.
 
-        Cache structure: ``(opp_id, hash, can_act_bool)`` — one entry
-        per adapter, replaced on miss. The hash check is O(opp's hand
-        + opp's battlefield); a hit avoids the full
-        ``opp_can_act`` walk (which itself avoids ``legal_actions``).
+        Cache structure: ``(player_id, is_active_player, hash,
+        can_act_bool)`` — one entry per adapter, replaced on miss.
+        The hash check is O(player's hand + battlefield + graveyard
+        + exile); a hit avoids the full capability walk (which itself
+        avoids ``legal_actions``).
         """
-        h = opp_capability_hash(self._state, opp_id)
+        h = player_capability_hash(
+            self._state, player_id, is_active_player=is_active_player,
+        )
         cached = self._opp_cap_cache
         if (
             cached is not None
-            and cached[0] == opp_id
-            and cached[1] == h
+            and cached[0] == player_id
+            and cached[1] == is_active_player
+            and cached[2] == h
         ):
-            return cached[2]
-        can_act = opp_can_act(self._state, opp_id)
-        self._opp_cap_cache = (opp_id, h, can_act)
+            return cached[3]
+        can_act = has_player_capability_to_act(
+            self._state, player_id, is_active_player=is_active_player,
+        )
+        self._opp_cap_cache = (player_id, is_active_player, h, can_act)
         return can_act
 
+    # Backwards-compat alias for the original opp-only cached check.
+    def _opp_can_act_cached(self, opp_id: PlayerID) -> bool:
+        """Legacy alias preserved for tests. Equivalent to
+        ``_can_act_cached(opp_id, is_active_player=False)``."""
+        return self._can_act_cached(opp_id, is_active_player=False)
+
     def _can_short_circuit_to_pass(self) -> bool:
-        """True iff the current decision moment is an opp priority
-        window AND opp has no instant-speed capability. When this
+        """True iff the current decision moment is a priority window
+        whose holder has no possible action. Auto-passes BOTH the
+        active player AND the non-active player (each with their
+        appropriate sorcery-window-aware capability check). When this
         returns True, ``legal_decisions`` may safely return
         ``[PassPriority()]`` without enumerating ``legal_actions``.
 
@@ -279,8 +306,7 @@ class MtgGameStateAdapter:
         * Not terminal.
         * Not a resolution-pause moment.
         * Not a combat sub-decision moment.
-        * Player with priority is NOT the active player.
-        * ``_opp_can_act_cached`` returns False.
+        * The priority holder's capability check returns False.
         """
         if self._state.is_over():
             return False
@@ -288,12 +314,13 @@ class MtgGameStateAdapter:
             return False
         if self._combat_phase != _COMBAT_NONE:
             return False
-        # Engine priority must be on the non-active player.
         priority_idx = self._state.priority_player_idx
-        if priority_idx == self._state.active_player_idx:
-            return False
-        opp_id = self._state.players[priority_idx].id
-        return not self._opp_can_act_cached(opp_id)
+        active_idx = self._state.active_player_idx
+        is_active_priority = (priority_idx == active_idx)
+        priority_pid = self._state.players[priority_idx].id
+        return not self._can_act_cached(
+            priority_pid, is_active_player=is_active_priority,
+        )
 
     def _legal_actions_cached(
         self, player_id: PlayerID,
@@ -408,11 +435,12 @@ class MtgGameStateAdapter:
             return []
         if self._resolution_paused:
             return self._resolution_legal_decisions()
-        # Opp-capability auto-pass: when the non-active player has
-        # priority and a structural-hash-keyed check confirms they
-        # have no instant-speed action available, return PassPriority
+        # Capability auto-pass: when the priority holder has no
+        # possible action (instant-speed for opp / non-active priority
+        # windows; sorcery-aware union for active priority windows in
+        # main phases with empty stack), return PassPriority
         # immediately without enumerating ``legal_actions``. See
-        # ``_opp_capabilities.py`` for the conservatism contract.
+        # ``_player_capabilities.py`` for the conservatism contract.
         if self._can_short_circuit_to_pass():
             return [PassPriority()]
         if self._combat_phase == _COMBAT_ATTACKERS:
