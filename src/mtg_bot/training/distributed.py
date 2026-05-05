@@ -1862,6 +1862,24 @@ def _ssh_target(shard: ShardConfig) -> str:
     return f"{shard.user}@{shard.host}"
 
 
+# TCP-keepalive options applied to every ssh / scp invocation. Without
+# them, a Tailscale glitch that drops the network briefly leaves master
+# holding a half-dead socket; the OS-level keepalive timeout is hours.
+# With ServerAliveInterval=30 + ServerAliveCountMax=5, ssh itself sends
+# a no-op every 30s and considers the connection dead after 5 misses
+# (~150s). The shard's actual python work can still take 30+ minutes —
+# these keepalives don't bound the legitimate work, only the time it
+# takes to NOTICE a wedged socket.
+#
+# Observed 2026-05-05: master's SSH to Mac wedged for 90+ min after
+# Mac dropped off Tailscale briefly mid-iteration; iter_002 hung in
+# the rsync-back stage even though Mac's python process had finished.
+_SSH_KEEPALIVE_OPTS = (
+    "-o", "ServerAliveInterval=30",
+    "-o", "ServerAliveCountMax=5",
+)
+
+
 def _ssh_cmd(shard: ShardConfig, remote_command: str) -> list[str]:
     """SSH invocation for a shell command on the remote. Sends one
     argument string the remote shell will interpret. The remote
@@ -1873,6 +1891,7 @@ def _ssh_cmd(shard: ShardConfig, remote_command: str) -> list[str]:
         "ssh",
         "-o", "BatchMode=yes",      # never prompt for password
         "-o", "StrictHostKeyChecking=accept-new",
+        *_SSH_KEEPALIVE_OPTS,
         "-p", str(shard.ssh_port),
         _ssh_target(shard),
         remote_command,
@@ -1890,12 +1909,14 @@ def _scp_cmd(
             "scp", "-P", str(shard.ssh_port),
             "-o", "BatchMode=yes",
             "-o", "StrictHostKeyChecking=accept-new",
+            *_SSH_KEEPALIVE_OPTS,
             f"{target}:{src}", str(dst),
         ]
     return [
         "scp", "-P", str(shard.ssh_port),
         "-o", "BatchMode=yes",
         "-o", "StrictHostKeyChecking=accept-new",
+        *_SSH_KEEPALIVE_OPTS,
         str(src), f"{target}:{dst}",
     ]
 
