@@ -2597,3 +2597,53 @@ def test_urlopen_with_retry_total_wall_bound():
         "above the 60s OS-default connect-timeout that we're "
         "trying to undercut. Tighten the constants."
     )
+
+
+# ---- SSH/SCP keepalive guard ---------------------------------------
+#
+# Regression: 2026-05-05 master's SSH to Mac wedged for 90+ min after
+# Mac dropped off Tailscale briefly mid-iteration; the OS-level
+# keepalive timeout is hours, so the orchestrator stalled even though
+# Mac's python process had finished. Fix: every ssh / scp invocation
+# carries -o ServerAliveInterval=30 -o ServerAliveCountMax=5 so ssh
+# itself notices a dead socket in ~150s.
+
+def test_ssh_cmd_carries_serveralive_options():
+    """Every shard ssh invocation must opt in to TCP keepalive."""
+    from mtg_bot.training.distributed import (
+        ShardConfig, _ssh_cmd,
+    )
+    shard = ShardConfig(
+        host="my-mac", n_games=10, user="g",
+        repo_path="/r", venv_python=".venv/bin/python",
+    )
+    cmd = _ssh_cmd(shard, "echo ok")
+    # Pairs come back-to-back: ('-o', 'ServerAliveInterval=30').
+    pairs = [(cmd[i], cmd[i + 1]) for i in range(len(cmd) - 1)]
+    assert ("-o", "ServerAliveInterval=30") in pairs, (
+        f"missing ServerAliveInterval in {cmd!r}"
+    )
+    assert ("-o", "ServerAliveCountMax=5") in pairs, (
+        f"missing ServerAliveCountMax in {cmd!r}"
+    )
+
+
+def test_scp_cmd_carries_serveralive_options_both_directions():
+    """Both pull (from_remote=True) and push (False) carry keepalive."""
+    from mtg_bot.training.distributed import (
+        ShardConfig, _scp_cmd,
+    )
+    shard = ShardConfig(
+        host="my-mac", n_games=10, user="g",
+        repo_path="/r", venv_python=".venv/bin/python",
+    )
+    pull = _scp_cmd(shard, "/remote/x", "local/x", from_remote=True)
+    push = _scp_cmd(shard, "local/x", "/remote/x", from_remote=False)
+    for cmd, label in ((pull, "pull"), (push, "push")):
+        pairs = [(cmd[i], cmd[i + 1]) for i in range(len(cmd) - 1)]
+        assert ("-o", "ServerAliveInterval=30") in pairs, (
+            f"{label} missing ServerAliveInterval: {cmd!r}"
+        )
+        assert ("-o", "ServerAliveCountMax=5") in pairs, (
+            f"{label} missing ServerAliveCountMax: {cmd!r}"
+        )
