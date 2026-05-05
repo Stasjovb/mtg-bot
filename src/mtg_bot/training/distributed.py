@@ -878,6 +878,149 @@ class _AggregateProgressPoller:
         atomic_write_json(self._aggregate_path, payload)
 
 
+class _EarlyStopPoller:
+    """Watches the per-shard progress JSONs and POSTs
+    ``/queue/close/<run_id>`` once the cluster has accumulated
+    ``target_games`` successful completions. "Successful" =
+    ``n_games_done - crashed - timed_out`` summed across shards.
+
+    Pairs with the over-queue mechanism in
+    :func:`run_distributed_self_play` and :func:`run_distributed_eval`:
+    those initialize the queue with ``target_games + slack_extra``;
+    this poller closes the queue early once ``target_games`` are
+    actually in. Stragglers' games are abandoned because we already
+    have what we need. Defends against the long-tail "499/500 stuck
+    for 5 min" pattern observed on the cluster.
+
+    The closing POST fires AT MOST ONCE — once the threshold trips,
+    subsequent ticks short-circuit. Network blips between threshold
+    and POST are absorbed by the same retry helper used elsewhere;
+    if the master is genuinely unreachable the poller logs a warning
+    and gives up (the queue will drain on its own once the slack
+    indices are consumed, just slower).
+
+    Read path is filesystem only — no shard liveness check. A hung
+    shard's stale JSON simply stops contributing to the sum; the
+    other shards' progress carries the threshold over the line.
+    """
+
+    _SUM_FIELDS = ("n_games_done", "crashed", "timed_out")
+
+    def __init__(
+        self,
+        progress_dir: Path,
+        run_id: str,
+        target_games: int,
+        queue_url: str,
+        *,
+        interval_s: float = 3.0,
+        urlopen=None,
+    ) -> None:
+        self._progress_dir = Path(progress_dir)
+        self._run_id = run_id
+        self._target_games = int(target_games)
+        self._queue_url = queue_url.rstrip("/")
+        self._interval_s = interval_s
+        # Injectable for tests so we don't need a real HTTP server.
+        self._urlopen = urlopen
+        self._stop_event = threading.Event()
+        self._thread: Optional[threading.Thread] = None
+        self._closed = False
+        self._close_failed = False
+
+    def start(self) -> None:
+        self._thread = threading.Thread(
+            target=self._loop,
+            name=f"early-stop-{self._run_id}",
+            daemon=True,
+        )
+        self._thread.start()
+
+    def stop(self) -> None:
+        self._stop_event.set()
+        if self._thread is not None:
+            self._thread.join(timeout=5.0)
+
+    @property
+    def closed(self) -> bool:
+        """True once this poller has successfully POSTed
+        ``/queue/close``. Tests inspect this; orchestrator code
+        doesn't need it (the close is a fire-and-forget signal)."""
+        return self._closed
+
+    def _loop(self) -> None:
+        # First check fires immediately so unit tests that pre-populate
+        # the JSONs can observe the close without waiting an interval.
+        # Subsequent ticks wait first, so we don't busy-loop.
+        first = True
+        while True:
+            if not first and self._stop_event.wait(self._interval_s):
+                return
+            first = False
+            if self._closed:
+                return
+            successful = self._read_successful()
+            if successful >= self._target_games:
+                self._send_close()
+                return
+
+    def _read_successful(self) -> int:
+        """Sum ``n_games_done - crashed - timed_out`` across all
+        ``<run_id>_shard_*.json`` files in ``progress_dir``. Skips
+        unreadable / partially-written files (the next tick will
+        catch them). Skips ``..._result.json`` files to avoid double-
+        counting eval shards (mirrors _AggregateProgressPoller)."""
+        sums = {f: 0 for f in self._SUM_FIELDS}
+        pattern = f"{self._run_id}_shard_*.json"
+        for path in self._progress_dir.glob(pattern):
+            if path.stem.endswith("_result"):
+                continue
+            try:
+                shard = json.loads(path.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError):
+                continue
+            for f in self._SUM_FIELDS:
+                v = shard.get(f, 0)
+                if isinstance(v, (int, float)):
+                    sums[f] += int(v)
+        return sums["n_games_done"] - sums["crashed"] - sums["timed_out"]
+
+    def _send_close(self) -> None:
+        """Best-effort POST to ``/queue/close/<run_id>``. On failure
+        the next tick retries — but :meth:`_loop` exits after a
+        successful close, so a permanent failure is logged once and
+        we move on (the queue will drain naturally)."""
+        import urllib.request
+        url = f"{self._queue_url}/queue/close/{self._run_id}"
+        req = urllib.request.Request(
+            url, data=b"", method="POST",
+            headers={"Content-Type": "application/json"},
+        )
+        try:
+            if self._urlopen is not None:
+                resp = self._urlopen(req)
+                status = getattr(resp, "status", 200)
+            else:
+                resp = _urlopen_with_retry(req)
+                status = resp.status
+            if 200 <= status < 300:
+                self._closed = True
+            else:
+                self._close_failed = True
+                print(
+                    f"[early-stop] {url} returned HTTP {status}; "
+                    f"queue will drain naturally.",
+                    file=sys.stderr,
+                )
+        except Exception as exc:  # noqa: BLE001
+            self._close_failed = True
+            print(
+                f"[early-stop] failed to POST {url}: {exc}; queue "
+                f"will drain naturally.",
+                file=sys.stderr,
+            )
+
+
 def _loopback_queue_url(queue_url: str) -> str:
     """Rewrite the queue URL's host to ``127.0.0.1`` so the master's
     own local shard skips Tailscale name resolution. On Windows that
@@ -904,12 +1047,13 @@ def run_distributed_self_play(
     total_games: int,
     queue_url: str,
     bundle_url: Optional[str] = None,
+    slack_extra: int = 0,
 ) -> list[Path]:
-    """Pull-model orchestrator. Initializes a queue of ``total_games``
-    on master, dispatches every shard concurrently to pull from it,
-    returns the list of every ``.npz`` produced. Master's training
-    step globs ``output_dir`` so the union becomes the iter's training
-    mix automatically.
+    """Pull-model orchestrator. Initializes a queue of
+    ``total_games + slack_extra`` on master, dispatches every shard
+    concurrently to pull from it, and returns the list of every
+    ``.npz`` produced. Master's training step globs ``output_dir`` so
+    the union becomes the iter's training mix automatically.
 
     Each shard runs ``run_shard_pull``, which opens a pool of
     ``n_workers`` worker processes and continuously feeds them games
@@ -918,6 +1062,12 @@ def run_distributed_self_play(
     to that worker. Slow machines pull fewer total games; fast ones
     pull more — wall ≈ ``total_games / sum(per_machine_throughput)``
     instead of being capped by the slowest shard.
+
+    ``slack_extra`` enables straggler tolerance: the queue is
+    over-sized so the orchestrator can early-stop once
+    ``total_games`` successful completions are in, abandoning slack.
+    Set to 0 (default) to retain the legacy "drain the whole queue"
+    behavior.
     """
     import threading as _threading
     import urllib.request
@@ -927,12 +1077,14 @@ def run_distributed_self_play(
     output_dir.mkdir(parents=True, exist_ok=True)
     progress_dir.mkdir(parents=True, exist_ok=True)
 
+    queued_games = int(total_games) + max(0, int(slack_extra))
+
     # Initialize the queue. The run_id_prefix doubles as the queue
     # key — same value workers send back to /queue/take.
     init_url = f"{queue_url.rstrip('/')}/queue/init"
     init_body = _json.dumps({
         "run_id": run_id_prefix,
-        "total_games": total_games,
+        "total_games": queued_games,
     }).encode("utf-8")
     req = urllib.request.Request(
         init_url, data=init_body,
@@ -987,6 +1139,19 @@ def run_distributed_self_play(
     )
     aggregator.start()
 
+    # Early-stop: once `total_games` successful completions are in,
+    # close the queue so shards drain. Only useful when `slack_extra
+    # > 0`; with no slack the queue caps out at the target anyway.
+    early_stop: Optional[_EarlyStopPoller] = None
+    if slack_extra > 0:
+        early_stop = _EarlyStopPoller(
+            progress_dir=progress_dir,
+            run_id=run_id_prefix,
+            target_games=total_games,
+            queue_url=queue_url,
+        )
+        early_stop.start()
+
     # All shards run concurrently — they pull from the same queue,
     # so there's no static partitioning to worry about. Local
     # shards' mp.Pool runs in this process; remote shards block on
@@ -1016,6 +1181,8 @@ def run_distributed_self_play(
             with output_paths_lock:
                 output_paths.extend(shard_paths)
     finally:
+        if early_stop is not None:
+            early_stop.stop()
         aggregator.stop("failed" if failed else "completed")
     return output_paths
 
@@ -1029,17 +1196,22 @@ def run_distributed_eval(
     total_games: int,
     queue_url: str,
     bundle_url: Optional[str] = None,
+    slack_extra: int = 0,
 ) -> dict[str, int]:
     """Eval counterpart to ``run_distributed_self_play``. Initializes
-    a queue of ``total_games``, dispatches every shard concurrently
-    to play eval games (new vs old), and returns the cluster-aggregate
-    counts as a dict::
+    a queue of ``total_games + slack_extra``, dispatches every shard
+    concurrently to play eval games (new vs old), and returns the
+    cluster-aggregate counts as a dict::
 
         {"n_games": int, "wins_new": int, "wins_old": int,
          "draws": int, "crashed": int}
 
     The orchestrator's caller (typically iterate's eval-gate) maps
     this onto its existing ``MatchStats`` shape.
+
+    ``slack_extra`` enables the same straggler-tolerance early-stop
+    used by self-play: queue ``total + slack``, close once ``total``
+    successful games are in.
     """
     import threading as _threading
     import urllib.request
@@ -1048,10 +1220,12 @@ def run_distributed_eval(
     stamp = _now_stamp()
     progress_dir.mkdir(parents=True, exist_ok=True)
 
+    queued_games = int(total_games) + max(0, int(slack_extra))
+
     init_url = f"{queue_url.rstrip('/')}/queue/init"
     init_body = _json.dumps({
         "run_id": run_id_prefix,
-        "total_games": total_games,
+        "total_games": queued_games,
     }).encode("utf-8")
     req = urllib.request.Request(
         init_url, data=init_body,
@@ -1106,6 +1280,19 @@ def run_distributed_eval(
     )
     aggregator.start()
 
+    # Same straggler-tolerance scheme as self-play: close the queue
+    # once `total_games` successful completions are in, abandoning
+    # the slack indices.
+    early_stop: Optional[_EarlyStopPoller] = None
+    if slack_extra > 0:
+        early_stop = _EarlyStopPoller(
+            progress_dir=progress_dir,
+            run_id=run_id_prefix,
+            target_games=total_games,
+            queue_url=queue_url,
+        )
+        early_stop.start()
+
     futures: dict[concurrent.futures.Future, ShardConfig] = {}
     n_threads = max(1, len(shards_config.shards))
     executor = concurrent.futures.ThreadPoolExecutor(
@@ -1130,6 +1317,8 @@ def run_distributed_eval(
                 for k in totals:
                     totals[k] += int(shard_counts.get(k, 0))
     finally:
+        if early_stop is not None:
+            early_stop.stop()
         aggregator.stop("failed" if failed else "completed")
     return totals
 

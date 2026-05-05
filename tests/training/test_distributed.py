@@ -8,6 +8,7 @@ real remotes. These tests pin the static config layer.
 from __future__ import annotations
 
 import json
+import time
 from pathlib import Path
 
 import pytest
@@ -312,7 +313,9 @@ def _start_queue_server() -> tuple[str, "object"]:
                 run_id = data["run_id"]
                 total = int(data["total_games"])
                 with state["lock"]:
-                    state["queues"][run_id] = {"next": 0, "total": total}
+                    state["queues"][run_id] = {
+                        "next": 0, "total": total, "closed": False,
+                    }
                 self._reply(200, {"ok": True})
             elif self.path == "/queue/take":
                 run_id = data["run_id"]
@@ -322,6 +325,11 @@ def _start_queue_server() -> tuple[str, "object"]:
                     if q is None:
                         self._reply(404, {"error": "unknown run_id"})
                         return
+                    if q.get("closed"):
+                        self._reply(200, {
+                            "games": [], "remaining": 0, "closed": True,
+                        })
+                        return
                     start = q["next"]
                     end = min(start + bs, q["total"])
                     q["next"] = end
@@ -330,6 +338,15 @@ def _start_queue_server() -> tuple[str, "object"]:
                     "games": list(range(start, end)),
                     "remaining": remaining,
                 })
+            elif self.path.startswith("/queue/close/"):
+                run_id = self.path[len("/queue/close/"):]
+                with state["lock"]:
+                    q = state["queues"].get(run_id)
+                    if q is None:
+                        self._reply(404, {"error": "unknown run_id"})
+                        return
+                    q["closed"] = True
+                self._reply(200, {"ok": True, "closed": True})
             else:
                 self._reply(404, {"error": "not found"})
 
@@ -489,6 +506,100 @@ def test_run_distributed_eval_two_local_shards_aggregate_counts(
         assert events[0]["mode"] == "eval"
         assert events[-1]["event"] == "shard_end"
         assert events[-1]["status"] == "completed"
+
+
+def test_run_distributed_self_play_with_slack_initializes_overqueue(
+    tmp_path: Path,
+):
+    """slack_extra=2 with target=4 should size the queue at 6.
+    With 4 actual games' worth of work (2 games per shard,
+    n_workers=1), the queue server's /queue/take handlers will
+    drain only 4 idxes before the early-stop poller closes the
+    queue. The slack indices (4, 5) are abandoned."""
+    from mtg_bot.training.distributed import (
+        SelfPlayJobSpec,
+        run_distributed_self_play,
+    )
+
+    weights_path, hidden_sizes = _tiny_dual_head_weights(tmp_path)
+    out_dir = tmp_path / "iterate_data"
+    progress_dir = tmp_path / "training_progress"
+    spec = SelfPlayJobSpec(
+        weights_path=str(weights_path),
+        samples=1, inner_nodes=10,
+        hidden_sizes=hidden_sizes,
+        base_seed=0,
+        enable_mulligans=False,
+        per_game_timeout_sec=None,
+        with_policy=True,
+    )
+    cfg = ShardsConfig(shards=(
+        ShardConfig(host="local", n_games=2, label="A", n_workers=1),
+        ShardConfig(host="local", n_games=2, label="B", n_workers=1,
+                    seed_offset=1_000_000),
+    ))
+    queue_url, server = _start_queue_server()
+    try:
+        paths = run_distributed_self_play(
+            cfg, spec,
+            progress_dir=progress_dir,
+            output_dir=out_dir,
+            run_id_prefix="iter_overq_self_play",
+            total_games=4,
+            queue_url=queue_url,
+            slack_extra=2,
+        )
+    finally:
+        server.shutdown()
+    # Run completes without hanging. Number of completed games is
+    # at most the queue size; with the early-stop poller closing
+    # at 4 successful, we expect ≤ 6 npzs and ≥ 4.
+    assert 4 <= len(paths) <= 6
+    assert all(p.is_file() for p in paths)
+
+
+def test_run_distributed_eval_with_slack_initializes_overqueue(
+    tmp_path: Path,
+):
+    """Eval-side counterpart: slack_extra raises the queue cap; the
+    early-stop poller closes once target_games successful results
+    are in. The aggregate counts should reflect at-least-target
+    games (slack may or may not have started before close)."""
+    from mtg_bot.training.distributed import (
+        EvalJobSpec, run_distributed_eval,
+    )
+
+    weights_path, hidden_sizes = _tiny_dual_head_weights(tmp_path)
+    progress_dir = tmp_path / "training_progress"
+    spec = EvalJobSpec(
+        new_weights_path=str(weights_path),
+        old_weights_path=str(weights_path),
+        samples=1, inner_nodes=10,
+        hidden_sizes=hidden_sizes,
+        base_seed=0,
+        enable_mulligans=False,
+        per_game_timeout_sec=None,
+        opponent_label="self",
+    )
+    cfg = ShardsConfig(shards=(
+        ShardConfig(host="local", n_games=2, label="A", n_workers=1),
+        ShardConfig(host="local", n_games=2, label="B", n_workers=1),
+    ))
+    queue_url, server = _start_queue_server()
+    try:
+        counts = run_distributed_eval(
+            cfg, spec,
+            progress_dir=progress_dir,
+            run_id_prefix="iter_overq_eval",
+            total_games=4,
+            queue_url=queue_url,
+            slack_extra=2,
+        )
+    finally:
+        server.shutdown()
+    # Run completes without hanging; counts are at least the target.
+    assert counts["n_games"] >= 4
+    assert counts["n_games"] <= 6
 
 
 def test_spec_to_dict_normalizes_windows_paths_to_forward_slashes():
@@ -1728,6 +1839,278 @@ def test_aggregate_progress_poller_eval_avg_decisions_zero_when_empty(
     agg = json.loads((tmp_path / "iter_y.json").read_text())
     assert agg["avg_decisions"] == 0.0
     assert agg["games_per_hour"] == 0.0
+
+
+# ---- _EarlyStopPoller ------------------------------------------
+
+
+def _write_shard_progress(
+    progress_dir: Path,
+    run_id: str,
+    label: str,
+    *,
+    n_games_done: int,
+    crashed: int = 0,
+    timed_out: int = 0,
+) -> None:
+    """Test helper: emit a per-shard progress JSON in the layout the
+    aggregate poller and the early-stop poller both consume."""
+    payload = {
+        "run_id": run_id,
+        "n_games_done": n_games_done,
+        "crashed": crashed,
+        "timed_out": timed_out,
+    }
+    (progress_dir / f"{run_id}_shard_{label}.json").write_text(
+        json.dumps(payload), encoding="utf-8",
+    )
+
+
+def test_early_stop_poller_closes_queue_when_threshold_hit(tmp_path: Path):
+    """500 successful completions in the per-shard JSONs → exactly
+    one POST to /queue/close/<run_id>. "Successful" =
+    n_games_done - crashed - timed_out. Crashed and timed_out games
+    DON'T count toward the target — those are abandoned slack."""
+    from mtg_bot.training.distributed import _EarlyStopPoller
+
+    progress_dir = tmp_path / "training_progress"
+    progress_dir.mkdir()
+    # Two shards, total successful = 480 + 20 = 500.
+    _write_shard_progress(
+        progress_dir, "r", "A", n_games_done=300, crashed=2, timed_out=1,
+    )
+    _write_shard_progress(
+        progress_dir, "r", "B", n_games_done=203,
+    )
+    # Successful = (300-2-1) + 203 = 500 — should trip immediately.
+    posted: list[str] = []
+
+    class FakeResp:
+        status = 200
+
+    def fake_urlopen(req):
+        posted.append(req.full_url)
+        return FakeResp()
+
+    poller = _EarlyStopPoller(
+        progress_dir=progress_dir,
+        run_id="r",
+        target_games=500,
+        queue_url="http://master:5099",
+        interval_s=0.05,
+        urlopen=fake_urlopen,
+    )
+    poller.start()
+    # Let the first tick fire — first iter is no-wait so a brief
+    # join is enough.
+    if poller._thread is not None:
+        poller._thread.join(timeout=2.0)
+    poller.stop()
+    assert posted == ["http://master:5099/queue/close/r"]
+    assert poller.closed is True
+
+
+def test_early_stop_poller_does_not_close_below_threshold(tmp_path: Path):
+    """499 successful (one short) → no POST. Run completes via the
+    queue draining naturally."""
+    from mtg_bot.training.distributed import _EarlyStopPoller
+
+    progress_dir = tmp_path / "training_progress"
+    progress_dir.mkdir()
+    _write_shard_progress(progress_dir, "r", "A", n_games_done=499)
+    posted: list[str] = []
+
+    poller = _EarlyStopPoller(
+        progress_dir=progress_dir,
+        run_id="r",
+        target_games=500,
+        queue_url="http://master:5099",
+        interval_s=0.05,
+        urlopen=lambda req: posted.append(req.full_url),
+    )
+    poller.start()
+    time.sleep(0.3)  # several ticks
+    poller.stop()
+    assert posted == []
+    assert poller.closed is False
+
+
+def test_early_stop_poller_subtracts_crashed_and_timed_out(tmp_path: Path):
+    """505 raw n_games_done but 6 crashes + 4 timeouts → 495
+    successful → no close. The whole point of the design is that
+    timed_out / crashed games don't count toward the target."""
+    from mtg_bot.training.distributed import _EarlyStopPoller
+
+    progress_dir = tmp_path / "training_progress"
+    progress_dir.mkdir()
+    _write_shard_progress(
+        progress_dir, "r", "A",
+        n_games_done=505, crashed=6, timed_out=4,
+    )
+    posted: list[str] = []
+
+    poller = _EarlyStopPoller(
+        progress_dir=progress_dir,
+        run_id="r",
+        target_games=500,
+        queue_url="http://master:5099",
+        interval_s=0.05,
+        urlopen=lambda req: posted.append(req.full_url),
+    )
+    poller.start()
+    time.sleep(0.3)
+    poller.stop()
+    assert posted == []
+
+
+def test_early_stop_poller_closes_only_once(tmp_path: Path):
+    """After the threshold trips and the close POST succeeds, the
+    poller exits. Subsequent ticks don't re-POST."""
+    from mtg_bot.training.distributed import _EarlyStopPoller
+
+    progress_dir = tmp_path / "training_progress"
+    progress_dir.mkdir()
+    _write_shard_progress(progress_dir, "r", "A", n_games_done=500)
+
+    class FakeResp:
+        status = 200
+
+    posted: list[str] = []
+
+    def fake_urlopen(req):
+        posted.append(req.full_url)
+        return FakeResp()
+
+    poller = _EarlyStopPoller(
+        progress_dir=progress_dir, run_id="r",
+        target_games=500, queue_url="http://m:5099",
+        interval_s=0.02, urlopen=fake_urlopen,
+    )
+    poller.start()
+    # Even after several ticks would have fired, only one POST.
+    time.sleep(0.3)
+    poller.stop()
+    assert len(posted) == 1
+
+
+def test_early_stop_poller_skips_eval_result_files(tmp_path: Path):
+    """Eval shards write a sibling ``..._shard_<label>_result.json``
+    with the same wins/draws counts. Including it would double-count.
+    Mirrors _AggregateProgressPoller's filter."""
+    from mtg_bot.training.distributed import _EarlyStopPoller
+
+    progress_dir = tmp_path / "training_progress"
+    progress_dir.mkdir()
+    _write_shard_progress(progress_dir, "r", "A", n_games_done=300)
+    # Result file mirrors A's count — must be ignored.
+    (progress_dir / "r_shard_A_result.json").write_text(
+        json.dumps({"n_games_done": 300, "crashed": 0, "timed_out": 0}),
+        encoding="utf-8",
+    )
+    posted: list[str] = []
+
+    poller = _EarlyStopPoller(
+        progress_dir=progress_dir, run_id="r",
+        target_games=500, queue_url="http://m:5099",
+        interval_s=0.02, urlopen=lambda req: posted.append(req.full_url),
+    )
+    poller.start()
+    time.sleep(0.2)
+    poller.stop()
+    # 300 < 500, so no close (would be 600 if result file
+    # double-counted).
+    assert posted == []
+
+
+def test_early_stop_poller_handles_unreadable_shard_files(tmp_path: Path):
+    """A partially-written progress JSON (mid-atomic-write) must not
+    crash the poller — skip and try again next tick."""
+    from mtg_bot.training.distributed import _EarlyStopPoller
+
+    progress_dir = tmp_path / "training_progress"
+    progress_dir.mkdir()
+    # Half-written JSON — JSONDecodeError on read.
+    (progress_dir / "r_shard_BAD.json").write_text(
+        "{not json", encoding="utf-8",
+    )
+    _write_shard_progress(progress_dir, "r", "OK", n_games_done=500)
+
+    class FakeResp:
+        status = 200
+
+    posted: list[str] = []
+
+    def fake_urlopen(req):
+        posted.append(req.full_url)
+        return FakeResp()
+
+    poller = _EarlyStopPoller(
+        progress_dir=progress_dir, run_id="r",
+        target_games=500, queue_url="http://m:5099",
+        interval_s=0.02, urlopen=fake_urlopen,
+    )
+    poller.start()
+    time.sleep(0.2)
+    poller.stop()
+    assert len(posted) == 1
+
+
+def test_early_stop_poller_close_post_failure_logs_and_gives_up(
+    tmp_path: Path, capsys,
+):
+    """If the close POST raises, the poller logs to stderr and stops
+    trying — the queue will drain on its own once slack indices run
+    out, just slower. Don't make the orchestrator hang waiting for a
+    well-meaning POST."""
+    from mtg_bot.training.distributed import _EarlyStopPoller
+
+    progress_dir = tmp_path / "training_progress"
+    progress_dir.mkdir()
+    _write_shard_progress(progress_dir, "r", "A", n_games_done=500)
+
+    def boom(req):
+        raise ConnectionError("master unreachable")
+
+    poller = _EarlyStopPoller(
+        progress_dir=progress_dir, run_id="r",
+        target_games=500, queue_url="http://m:5099",
+        interval_s=0.02, urlopen=boom,
+    )
+    poller.start()
+    time.sleep(0.2)
+    poller.stop()
+    # Failure path is logged, not raised. Run keeps going on slack.
+    assert poller.closed is False
+    err = capsys.readouterr().err
+    assert "early-stop" in err
+
+
+def test_early_stop_poller_close_non_2xx_logs_and_gives_up(
+    tmp_path: Path, capsys,
+):
+    """A 4xx/5xx response from the close endpoint is treated the
+    same as a network failure: log + give up. We don't want to spin
+    on /queue/close calls that the master is rejecting."""
+    from mtg_bot.training.distributed import _EarlyStopPoller
+
+    progress_dir = tmp_path / "training_progress"
+    progress_dir.mkdir()
+    _write_shard_progress(progress_dir, "r", "A", n_games_done=500)
+
+    class FakeResp:
+        status = 500
+
+    poller = _EarlyStopPoller(
+        progress_dir=progress_dir, run_id="r",
+        target_games=500, queue_url="http://m:5099",
+        interval_s=0.02, urlopen=lambda req: FakeResp(),
+    )
+    poller.start()
+    time.sleep(0.2)
+    poller.stop()
+    assert poller.closed is False
+    err = capsys.readouterr().err
+    assert "HTTP 500" in err or "early-stop" in err
 
 
 # ---- EventLog + helpers ----------------------------------------
