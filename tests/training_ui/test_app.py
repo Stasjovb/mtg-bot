@@ -404,6 +404,11 @@ def test_aggregated_run_machines_array_passes_through(client):
     assert set(by_label) == {"greggs-macbook-pro", "desktop-j05412i"}
     mac = by_label["greggs-macbook-pro"]
     # Every field the UI's renderMachines() reads must round-trip.
+    # Note: ``timed_out`` is the new sibling of ``crashed`` —
+    # missing-key in the input must round-trip as 0 in output if
+    # the UI treats it as a number, but we don't pin that here
+    # (the source-of-truth aggregator test does); the per-machine
+    # entry from the static payload echoes back what's there.
     for key in (
         "label", "n_games_done", "n_workers", "crashed",
         "elapsed_seconds", "per_game_seconds",
@@ -415,6 +420,63 @@ def test_aggregated_run_machines_array_passes_through(client):
     # polls /api/runs but the detail route shares _read_run_file).
     detail = c.get("/api/runs/iter_001_self_play_v6").get_json()
     assert len(detail["machines"]) == 2
+
+
+def test_timed_out_roundtrips_through_api(client):
+    """Per-run ``timed_out`` and per-machine ``timed_out`` fields
+    flow through ``/api/runs`` so the UI's renderMachines() can
+    show the new "timed out" stat alongside "crashes". Pin the
+    schema here so the API contract is locked in even if the
+    aggregator changes its summing logic."""
+    c, progress_dir = client
+    payload = {
+        "run_id": "iter_010_self_play_v11",
+        "kind": "data_gen",
+        "status": "running",
+        "started_at": "2026-05-04T05:53:36+00:00",
+        "n_games_total": 500,
+        "n_games_done": 100,
+        "n_workers": 30,
+        "elapsed_seconds": 605.0,
+        "crashed": 4,
+        "timed_out": 7,
+        "machines": [
+            {
+                "label": "greggs-macbook-pro",
+                "status": "running",
+                "n_games_done": 60,
+                "n_workers": 14,
+                "crashed": 2,
+                "timed_out": 5,
+                "elapsed_seconds": 600.0,
+                "per_game_seconds": 10.0,
+            },
+            {
+                "label": "desktop-j05412i",
+                "status": "running",
+                "n_games_done": 40,
+                "n_workers": 16,
+                "crashed": 2,
+                "timed_out": 2,
+                "elapsed_seconds": 540.0,
+                "per_game_seconds": 13.5,
+            },
+        ],
+    }
+    (progress_dir / "iter_010_self_play_v11.json").write_text(
+        json.dumps(payload), encoding="utf-8",
+    )
+    res = c.get("/api/runs")
+    runs = res.get_json()["runs"]
+    assert len(runs) == 1
+    run = runs[0]
+    assert run["crashed"] == 4
+    assert run["timed_out"] == 7
+    by_label = {m["label"]: m for m in run["machines"]}
+    assert by_label["greggs-macbook-pro"]["crashed"] == 2
+    assert by_label["greggs-macbook-pro"]["timed_out"] == 5
+    assert by_label["desktop-j05412i"]["crashed"] == 2
+    assert by_label["desktop-j05412i"]["timed_out"] == 2
 
 
 # --- Stop-run endpoint --------------------------------------------

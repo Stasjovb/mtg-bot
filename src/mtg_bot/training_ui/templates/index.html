@@ -131,9 +131,9 @@
   .pairing-status.failed { color: #fca5a5; }
 
   /* Per-machine sub-cards inside aggregated training-progress cards.
-     One row per host with three perf-only stats: secs/game, crashes,
-     workers. Compact — uses the same dark surface + border the parent
-     stats grid uses, just smaller padding and font. */
+     One row per host with four perf-only stats: secs/game, crashes,
+     timed out, workers. Compact — uses the same dark surface + border
+     the parent stats grid uses, just smaller padding and font. */
   .machines { margin-top: 14px; display: flex;
     flex-direction: column; gap: 4px; }
   .machines-label { font-size: 0.7rem; color: var(--muted);
@@ -409,6 +409,7 @@ function ensureCard(run) {
         <div class="stat"><div class="stat-label">Samples / hr</div><div class="stat-value" data-field="sph">—</div></div>
         <div class="stat"><div class="stat-label">P0 / P1 / draws</div><div class="stat-value" data-field="winrate">—</div></div>
         <div class="stat"><div class="stat-label">Crashed</div><div class="stat-value" data-field="crashed">—</div></div>
+        <div class="stat"><div class="stat-label">Timed out</div><div class="stat-value" data-field="timed-out">—</div></div>
       </div>
       <div class="machines" data-field="machines" hidden></div>
       <div class="replays-footer" data-field="replays"></div>`;
@@ -437,6 +438,8 @@ function ensureCard(run) {
         <div class="stat"><div class="stat-label">Elapsed</div><div class="stat-value" data-field="elapsed">—</div></div>
         <div class="stat"><div class="stat-label">ETA</div><div class="stat-value" data-field="eta">—</div></div>
         <div class="stat"><div class="stat-label">Games / hr</div><div class="stat-value" data-field="gph">—</div></div>
+        <div class="stat"><div class="stat-label">Crashed</div><div class="stat-value" data-field="crashed">—</div></div>
+        <div class="stat"><div class="stat-label">Timed out</div><div class="stat-value" data-field="timed-out">—</div></div>
       </div>
       <div class="machines" data-field="machines" hidden></div>
       <div class="replays-footer" data-field="replays"></div>`;
@@ -584,6 +587,8 @@ function fillRun(el, run) {
       (run.p0_wins || 0) + ' / ' + (run.p1_wins || 0) + ' / ' + (run.draws || 0);
     el.querySelector('[data-field="crashed"]').textContent =
       String(run.crashed || 0);
+    el.querySelector('[data-field="timed-out"]').textContent =
+      String(run.timed_out || 0);
     renderMachines(el, run);
     renderReplaysFooter(el, run);
   } else if (k === 'eval') {
@@ -602,6 +607,10 @@ function fillRun(el, run) {
     el.querySelector('[data-field="eta"]').textContent =
       status === 'running' ? fmtSeconds(run.estimated_remaining_seconds) : '—';
     el.querySelector('[data-field="gph"]').textContent = fmtNum(run.games_per_hour, 0);
+    el.querySelector('[data-field="crashed"]').textContent =
+      String(run.crashed || 0);
+    el.querySelector('[data-field="timed-out"]').textContent =
+      String(run.timed_out || 0);
     renderMachines(el, run);
     renderReplaysFooter(el, run);
   } else if (k === 'bench') {
@@ -724,8 +733,8 @@ function renderMachines(el, run) {
   // Aggregated distributed runs include a `machines` array (one entry
   // per shard). Render as a compact row of mini sub-cards inside the
   // parent card showing performance-only stats: secs/game, crashes,
-  // workers. Single-machine runs (no aggregator) won't have this key
-  // and the section stays hidden.
+  // timed out, workers. Single-machine runs (no aggregator) won't
+  // have this key and the section stays hidden.
   const slot = el.querySelector('[data-field="machines"]');
   if (!slot) return;
   const machines = Array.isArray(run.machines) ? run.machines : [];
@@ -760,6 +769,11 @@ function renderMachines(el, run) {
         + '<div class="machine-stat-label">crashes</div>'
         + '<div class="machine-stat-value">'
         + String(m.crashed || 0) + '</div>'
+      + '</div>'
+      + '<div class="machine-stat">'
+        + '<div class="machine-stat-label">timed out</div>'
+        + '<div class="machine-stat-value">'
+        + String(m.timed_out || 0) + '</div>'
       + '</div>'
       + '<div class="machine-stat">'
         + '<div class="machine-stat-label">workers</div>'

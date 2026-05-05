@@ -78,14 +78,17 @@ class MatchStats:
     ``games == wins[0] + wins[1] + draws``, NOT ``== n_games``;
     the input ``n_games`` is the requested count, ``games`` is
     what actually contributed signal.
-    ``crashed``: games dropped because a worker raised an
-    exception (engine-state corruption — todo e3b7d9c1) or
-    blew through the per-game wall-clock timeout (todo
-    d4f2a8c1). Reported separately so the win-rate denominator
-    isn't polluted by what amounts to "no signal".
-    ``avg_decisions``: mean decisions across non-crashed games.
-    Spots pathological game-length blowups even when the win
-    rate looks fine.
+    ``crashed``: games dropped because a worker raised an engine-
+    level exception (state-corruption bug — todo e3b7d9c1).
+    Reported separately from ``timed_out`` so engine bugs are
+    visible distinct from CPU-contention slow games.
+    ``timed_out``: games dropped because the worker blew through
+    the per-game wall-clock timeout (TimeoutError from
+    run_with_timeout). Different root cause from ``crashed``;
+    same handling — excluded from win-rate denominator entirely.
+    ``avg_decisions``: mean decisions across non-crashed/non-timed-
+    out games. Spots pathological game-length blowups even when
+    the win rate looks fine.
     """
 
     wins: dict[PlayerID, int]
@@ -93,6 +96,7 @@ class MatchStats:
     games: int
     avg_decisions: float
     crashed: int = 0
+    timed_out: int = 0
 
     def win_rate(self, player_id: PlayerID) -> float:
         """Fraction of completed games ``player_id`` won. Draws
@@ -217,25 +221,39 @@ def run_match_parallel(
     if progress is None:
         with mp.Pool(processes=n_workers) as pool:
             results = pool.map(packed_worker, args_list)
-        # ``_play_one_match_game_packed`` returns a ``(None, 0)``
-        # sentinel for any worker-side crash. We re-pair each result
-        # with its game_idx (preserved by pool.map's input ordering)
-        # so the driver can log which games died and account for
-        # them as draws — keeps ``wins+draws == n_games`` honest
-        # rather than letting crashes silently disappear.
-        crashed_game_indices = [
-            i for i, (winner, decisions) in enumerate(results)
-            if winner is None and decisions == 0
-        ]
+        # ``_play_one_match_game_packed`` tags each result with an
+        # outcome_kind ("completed" / "crashed" / "timed_out") in
+        # the trailing slot. Bucket the affected indices into
+        # crashed vs timed-out lists so the driver can print
+        # separate loud-stderr summaries for engine bugs vs
+        # CPU-contention timeouts.
+        crashed_game_indices: list[int] = []
+        timed_out_game_indices: list[int] = []
+        for i, entry in enumerate(results):
+            if len(entry) >= 3:
+                outcome_kind = entry[2]
+            else:
+                winner, decisions = entry[0], entry[1]
+                outcome_kind = (
+                    "crashed"
+                    if winner is None and decisions == 0
+                    else "completed"
+                )
+            if outcome_kind == "crashed":
+                crashed_game_indices.append(i)
+            elif outcome_kind == "timed_out":
+                timed_out_game_indices.append(i)
         _log_crashed_games(crashed_game_indices, n_games)
+        _log_timed_out_games(timed_out_game_indices, n_games)
         return _aggregate_results(results, n_games)
 
     # Progress-tracked path: stream completions via imap_unordered.
     # Wrap args with the game_idx so we can re-sort for deterministic
     # aggregation (imap_unordered preserves identity but not order).
     progress.begin()
-    indexed: list[tuple[int, tuple[Optional[PlayerID], int]]] = []
+    indexed: list[tuple[int, tuple]] = []
     crashed_game_indices: list[int] = []
+    timed_out_game_indices: list[int] = []
     stopped_early = False
     try:
         with mp.Pool(processes=n_workers) as pool:
@@ -243,19 +261,32 @@ def run_match_parallel(
                 indexed_worker, args_list, chunksize=1,
             ):
                 indexed.append((game_idx, result))
-                winner, decisions = result
-                # ``_play_one_match_game_indexed`` converts engine-
-                # level worker crashes into a ``(None, 0)`` sentinel.
-                # Surface them through the progress tracker as
-                # ``crashed=True`` so the UI sees a dedicated counter
-                # without polluting wins_new / wins_old / draws /
-                # win_rate; remember the index so we can print a
-                # loud stderr summary at the end of the run.
-                crashed = winner is None and decisions == 0
+                # Workers tag each result with an outcome_kind in
+                # the trailing slot ("completed" / "crashed" /
+                # "timed_out") so the driver can distinguish engine
+                # bugs from per-game wall-clock timeouts. Surface
+                # both through the progress tracker as dedicated
+                # counters so the live UI tells them apart.
+                if len(result) >= 3:
+                    winner, decisions, outcome_kind = (
+                        result[0], result[1], result[2],
+                    )
+                else:
+                    winner, decisions = result[0], result[1]
+                    outcome_kind = (
+                        "crashed"
+                        if winner is None and decisions == 0
+                        else "completed"
+                    )
+                crashed = outcome_kind == "crashed"
+                timed_out = outcome_kind == "timed_out"
                 if crashed:
                     crashed_game_indices.append(game_idx)
+                elif timed_out:
+                    timed_out_game_indices.append(game_idx)
                 progress.record_game(
-                    winner=winner, decisions=decisions, crashed=crashed,
+                    winner=winner, decisions=decisions,
+                    crashed=crashed, timed_out=timed_out,
                 )
                 # User-requested stop via the UI sentinel — terminate
                 # pending dispatches and exit the loop. Same trade-off
@@ -274,6 +305,7 @@ def run_match_parallel(
         status="stopped" if stopped_early else "completed",
     )
     _log_crashed_games(crashed_game_indices, n_games)
+    _log_timed_out_games(timed_out_game_indices, n_games)
     indexed.sort(key=lambda t: t[0])
     return _aggregate_results([r for _, r in indexed], n_games)
 
@@ -301,9 +333,32 @@ def _log_crashed_games(crashed: list[int], n_games: int) -> None:
     )
 
 
+def _log_timed_out_games(timed_out: list[int], n_games: int) -> None:
+    """Print a loud stderr summary if any worker games hit the
+    per-game wall-clock timeout.
+
+    Companion to ``_log_crashed_games``: same shape, different root
+    cause. Timed-out games are usually slow-but-progressing games
+    under MKL/CPU contention rather than engine bugs; tracking them
+    separately lets the operator tell the two failure modes apart.
+    """
+    if not timed_out:
+        return
+    print(
+        f"# WARNING: {len(timed_out)}/{n_games} games hit the per-"
+        f"game wall-clock timeout in the eval pool and were dropped "
+        f"(slow games under CPU contention or genuine engine hangs). "
+        f"Timed-out games are EXCLUDED from MatchStats; "
+        f"``MatchStats.timed_out`` carries the count separately. "
+        f"Affected game indices: {timed_out[:20]}"
+        f"{' ...' if len(timed_out) > 20 else ''}",
+        file=sys.stderr,
+    )
+
+
 def _play_one_match_game_packed(
     args: tuple,
-) -> tuple[Optional[PlayerID], int]:
+) -> tuple[Optional[PlayerID], int, str]:
     """Top-level pickleable worker. Unpacks the args tuple and
     delegates to ``_play_one_match_game``. Lives at module top
     level (not nested) so multiprocessing can pickle it across
@@ -311,21 +366,33 @@ def _play_one_match_game_packed(
 
     Engine-level errors (state-corruption bugs that surface at scale —
     ~1 in 1000 PIMC games as of 2026-05-02) are caught here and
-    converted to a ``(None, 0)`` sentinel so a single bad game
-    doesn't take down the entire eval pool. Without this catch,
+    converted to a ``(None, 0, "crashed")`` sentinel so a single bad
+    game doesn't take down the entire eval pool. Without this catch,
     ``pool.map`` re-raises the worker exception and aborts the whole
     run, losing the ~99 games of useful data already played. The
     traceback is logged to worker stderr so failures stay visible
-    via the pool's stderr relay; the driver re-detects the sentinel
-    by ``winner is None and decisions == 0`` and surfaces a loud
-    summary at the end of the run.
+    via the pool's stderr relay; the driver reads the trailing
+    outcome-kind string to bucket each empty result.
+
+    Per-game wall-clock ``TimeoutError`` (out of
+    ``run_with_timeout``) is caught separately and tagged
+    ``"timed_out"`` so the driver can report it as a distinct
+    counter rather than lumping it under ``crashed``.
 
     Mirrors the worker-crash handling in
     ``mtg_bot.training.data_gen._play_one_parallel_game``.
     """
     game_idx = args[0]
     try:
-        return _play_one_match_game(*args)
+        winner, decisions = _play_one_match_game(*args)
+        return winner, decisions, "completed"
+    except TimeoutError as exc:
+        print(
+            f"[worker] eval game {game_idx} timed out "
+            f"({exc}); dropping this game, pool continues.",
+            file=sys.stderr,
+        )
+        return None, 0, "timed_out"
     except Exception as exc:  # noqa: BLE001 - intentional broad catch
         print(
             f"[worker] eval game {game_idx} crashed "
@@ -334,40 +401,30 @@ def _play_one_match_game_packed(
             file=sys.stderr,
         )
         traceback.print_exc(file=sys.stderr)
-        return None, 0
+        return None, 0, "crashed"
 
 
 def _play_one_match_game_indexed(
     args: tuple,
-) -> tuple[int, tuple[Optional[PlayerID], int]]:
+) -> tuple[int, tuple[Optional[PlayerID], int, str]]:
     """Same as ``_play_one_match_game_packed`` but tags each result
     with its ``game_idx`` so the progress-tracked driver can re-sort
     ``imap_unordered`` results into deterministic input order before
     aggregating. The unindexed variant uses ``pool.map`` which
     preserves order on its own and doesn't need this tagging.
 
-    Same worker-crash handling as the packed variant: engine-level
-    exceptions are caught and converted to the ``(game_idx, (None, 0))``
-    sentinel so one bad game doesn't tank the whole eval; the driver
-    keys off ``winner is None and decisions == 0`` to detect crashes.
+    Same worker-crash / timeout handling as the packed variant:
+    engine-level exceptions become ``(None, 0, "crashed")`` and
+    per-game timeouts become ``(None, 0, "timed_out")``; the driver
+    keys off the trailing string to bucket the result.
     """
     game_idx = args[0]
-    try:
-        return game_idx, _play_one_match_game(*args)
-    except Exception as exc:  # noqa: BLE001 - intentional broad catch
-        print(
-            f"[worker] eval game {game_idx} crashed "
-            f"({type(exc).__name__}: {exc}); dropping this game, "
-            f"pool continues.",
-            file=sys.stderr,
-        )
-        traceback.print_exc(file=sys.stderr)
-        return game_idx, (None, 0)
+    return game_idx, _play_one_match_game_packed(args)
 
 
 def _play_one_match_game_alternating_packed(
     args: tuple,
-) -> tuple[Optional[PlayerID], int]:
+) -> tuple[Optional[PlayerID], int, str]:
     """``pool.map`` counterpart to
     ``_play_one_match_game_alternating_indexed`` — same swap-on-odd-
     game_idx logic, no game_idx tagging in the return."""
@@ -375,14 +432,14 @@ def _play_one_match_game_alternating_packed(
     if game_idx % 2 == 0:
         return _play_one_match_game_packed(args)
     swapped = (args[0], args[2], args[1], *args[3:])
-    winner, decisions = _play_one_match_game_packed(swapped)
+    winner, decisions, outcome_kind = _play_one_match_game_packed(swapped)
     remapped = None if winner is None else 1 - winner
-    return remapped, decisions
+    return remapped, decisions, outcome_kind
 
 
 def _play_one_match_game_alternating_indexed(
     args: tuple,
-) -> tuple[int, tuple[Optional[PlayerID], int]]:
+) -> tuple[int, tuple[Optional[PlayerID], int, str]]:
     """Like ``_play_one_match_game_indexed`` but neutralizes seat-
     order bias by playing odd-indexed games with the two factories
     swapped. The returned winner is remapped so seat 0 in the result
@@ -399,11 +456,11 @@ def _play_one_match_game_alternating_indexed(
     if game_idx % 2 == 0:
         return _play_one_match_game_indexed(args)
     swapped = (args[0], args[2], args[1], *args[3:])
-    game_idx_returned, (winner, decisions) = (
+    game_idx_returned, (winner, decisions, outcome_kind) = (
         _play_one_match_game_indexed(swapped)
     )
     remapped = None if winner is None else 1 - winner
-    return game_idx_returned, (remapped, decisions)
+    return game_idx_returned, (remapped, decisions, outcome_kind)
 
 
 def _play_one_match_game(
@@ -540,28 +597,46 @@ def _play_one_match_game(
 
 
 def _aggregate_results(
-    results: list[tuple[Optional[PlayerID], int]], n_games: int,
+    results: list[tuple],
+    n_games: int,
 ) -> MatchStats:
-    """Aggregate per-game ``(winner_or_None, decisions)`` results
-    into a ``MatchStats``.
+    """Aggregate per-game results into a ``MatchStats``.
 
-    Distinguishes crashed/timed-out games (sentinel
-    ``(None, 0)``) from real draws (``(None, decisions > 0)``,
-    typically the decision-cap timeout from
-    ``_play_capped_game``). Crashed games are EXCLUDED entirely
-    from ``wins`` / ``draws`` / ``games`` / ``avg_decisions`` —
-    they contribute zero signal so they shouldn't pollute the
-    win rate. Counted separately under ``MatchStats.crashed`` so
-    the loss isn't silent.
+    Accepts either the legacy 2-tuple ``(winner, decisions)`` (from
+    the synchronous ``_play_one_match_game`` path which doesn't
+    catch worker exceptions) or the 3-tuple ``(winner, decisions,
+    outcome_kind)`` produced by the pool workers. The trailing
+    ``outcome_kind`` is one of ``"completed"`` / ``"crashed"`` /
+    ``"timed_out"`` — both crashed and timed_out are EXCLUDED
+    entirely from ``wins`` / ``draws`` / ``games`` /
+    ``avg_decisions`` (they contribute zero signal so they
+    shouldn't pollute the win rate) and counted separately under
+    ``MatchStats.crashed`` / ``MatchStats.timed_out``.
+
+    Real draws (``winner=None``, ``decisions=decision_cap > 0``,
+    outcome_kind=``"completed"``) keep the existing behavior —
+    counted in ``draws`` and ``games``.
     """
     wins: dict[PlayerID, int] = {0: 0, 1: 0}
     draws = 0
     crashed = 0
+    timed_out = 0
     total_decisions = 0
-    for winner, decisions in results:
-        if winner is None and decisions == 0:
-            # Worker crash or per-game timeout sentinel — drop.
+    for entry in results:
+        if len(entry) >= 3:
+            winner, decisions, outcome_kind = entry[0], entry[1], entry[2]
+        else:
+            winner, decisions = entry[0], entry[1]
+            outcome_kind = (
+                "crashed"
+                if winner is None and decisions == 0
+                else "completed"
+            )
+        if outcome_kind == "crashed":
             crashed += 1
+            continue
+        if outcome_kind == "timed_out":
+            timed_out += 1
             continue
         total_decisions += decisions
         if winner == 0:
@@ -579,6 +654,7 @@ def _aggregate_results(
         games=completed,
         avg_decisions=total_decisions / completed if completed else 0.0,
         crashed=crashed,
+        timed_out=timed_out,
     )
 
 

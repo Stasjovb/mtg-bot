@@ -1363,6 +1363,9 @@ def test_aggregate_progress_poller_sums_data_gen_shards(tmp_path: Path):
     assert agg["p1_wins"] == 30
     assert agg["draws"] == 16
     assert agg["crashed"] == 0
+    # Shards above didn't set timed_out; aggregator must treat the
+    # missing key as zero rather than crashing.
+    assert agg["timed_out"] == 0
     assert {m["label"] for m in agg["machines"]} == {"local", "mac", "win"}
 
 
@@ -1456,6 +1459,56 @@ def test_aggregate_progress_poller_skips_eval_result_files(
     # Machines list also excludes the _result entries.
     labels = sorted(m["label"] for m in agg["machines"])
     assert labels == ["local", "mac", "win"]
+
+
+def test_aggregate_progress_poller_sums_timed_out_across_shards(
+    tmp_path: Path,
+):
+    """Per-shard ``timed_out`` counts must roll up into the
+    cluster-wide aggregate alongside ``crashed``. Pin both data_gen
+    and eval shapes — the field flows through ``_SUM_FIELDS`` so the
+    UI can render distinct "crashed" / "timed out" stats on the
+    rolled-up card and on each per-machine sub-row."""
+    from mtg_bot.training.distributed import _AggregateProgressPoller
+
+    pdir = tmp_path
+    run_id = "iter_011_self_play_v11"
+    for label, done, samples, p0, p1, dr, cr, to_, nw in (
+        ("local", 30, 4500, 12, 8, 10, 0, 1, 16),
+        ("mac", 50, 7200, 25, 20, 5, 1, 2, 14),
+        ("win", 5, 600, 2, 2, 1, 0, 0, 4),
+    ):
+        (pdir / f"{run_id}_shard_{label}.json").write_text(
+            json.dumps({
+                "run_id": f"{run_id}_shard_{label}",
+                "kind": "data_gen",
+                "status": "running",
+                "n_games_total": 200, "n_games_done": done,
+                "n_samples": samples, "n_workers": nw,
+                "p0_wins": p0, "p1_wins": p1, "draws": dr,
+                "crashed": cr, "timed_out": to_,
+                "elapsed_seconds": 100.0,
+            }), encoding="utf-8",
+        )
+    poller = _AggregateProgressPoller(
+        progress_dir=pdir, run_id=run_id,
+        n_games_total=200, kind="data_gen",
+    )
+    poller._write("running")
+    agg = json.loads((pdir / f"{run_id}.json").read_text())
+    # Run-level totals: crashed and timed_out flow as separate
+    # cluster-wide counters.
+    assert agg["crashed"] == 1
+    assert agg["timed_out"] == 3
+    # Per-machine sub-row entries also carry both — that's what
+    # the UI's renderMachines reads.
+    by_label = {m["label"]: m for m in agg["machines"]}
+    assert by_label["local"]["crashed"] == 0
+    assert by_label["local"]["timed_out"] == 1
+    assert by_label["mac"]["crashed"] == 1
+    assert by_label["mac"]["timed_out"] == 2
+    assert by_label["win"]["crashed"] == 0
+    assert by_label["win"]["timed_out"] == 0
 
 
 def test_aggregate_progress_poller_handles_missing_shard_files(

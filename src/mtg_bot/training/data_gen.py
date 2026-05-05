@@ -64,13 +64,18 @@ from mtg_bot.training.replay_capture import (
 
 _DEFAULT_DECISION_CAP = 4000
 
-# Type alias: per-game chunk + winner. Winner is the PlayerID of the
-# game's victor or None for a draw; the tracker uses it to compute
-# the live winrate without having to re-parse the outcomes array
-# (which holds per-viewer signs that look symmetric).
+# Type alias: per-game chunk + winner + outcome-kind label. Winner
+# is the PlayerID of the game's victor or None for a draw / crash /
+# timeout; the tracker uses it to compute the live winrate without
+# having to re-parse the outcomes array (which holds per-viewer
+# signs that look symmetric). The trailing string is one of
+# "completed" / "crashed" / "timed_out" so the driver can
+# distinguish engine-level exceptions from per-game wall-clock
+# timeouts (different root causes that both produce a winner=None
+# empty chunk — the UI now reports them as separate counters).
 _GameChunk = tuple[
     np.ndarray, np.ndarray, np.ndarray, np.ndarray,
-    Optional[PlayerID],
+    Optional[PlayerID], str,
 ]
 
 _DTYPE_FEATURES = np.float32
@@ -340,28 +345,33 @@ def generate_training_data_parallel(
     # are deterministic in ``base_seed`` (locked in by tests).
     indexed: list[tuple[int, _GameChunk]] = []
     crashed_games: list[int] = []
+    timed_out_games: list[int] = []
     stopped_early = False
     with mp.Pool(processes=n_workers) as pool:
         for game_idx, chunk in pool.imap_unordered(
             _play_one_parallel_game, args_list, chunksize=1,
         ):
             indexed.append((game_idx, chunk))
-            # ``_play_one_parallel_game`` converts engine-level
+            # ``_play_one_parallel_game`` converts both engine-level
             # crashes AND per-game timeouts into empty chunks
-            # (winner=None, 0 samples). Count them so the driver
-            # can surface a loud summary at the end — a silent
-            # partial-skip would mask the underlying engine bug —
-            # AND so the live progress tracker bucketizes them
-            # under ``crashed`` rather than treating the 0.0
-            # ``outcome_p0`` as a real draw (today's bug).
-            crashed = (
-                chunk[0].shape[0] == 0 and chunk[4] is None
-            )
+            # (winner=None, 0 samples) but tags each with an outcome
+            # kind ("crashed" / "timed_out" / "completed") in
+            # ``chunk[5]``. We track them separately so the live
+            # progress UI can show real exceptions vs slow-game
+            # timeouts as distinct counters — same root cause for
+            # both is "no signal", different diagnostic implications.
+            outcome_kind = chunk[5] if len(chunk) > 5 else "completed"
+            crashed = outcome_kind == "crashed"
+            timed_out = outcome_kind == "timed_out"
             if crashed:
                 crashed_games.append(game_idx)
+            elif timed_out:
+                timed_out_games.append(game_idx)
             if progress is not None:
                 if crashed:
                     progress.record_game(crashed=True)
+                elif timed_out:
+                    progress.record_game(timed_out=True)
                 else:
                     progress.record_game(
                         n_samples=int(chunk[0].shape[0]),
@@ -391,6 +401,16 @@ def generate_training_data_parallel(
             f"corruption — see worker stderr above for tracebacks). "
             f"Affected game indices: {crashed_games[:20]}"
             f"{' ...' if len(crashed_games) > 20 else ''}",
+            file=sys.stderr,
+        )
+    if timed_out_games:
+        import sys
+        print(
+            f"# WARNING: {len(timed_out_games)}/{n_games} games hit "
+            f"the per-game wall-clock timeout and were dropped (slow "
+            f"games under CPU contention or genuine engine hangs). "
+            f"Affected game indices: {timed_out_games[:20]}"
+            f"{' ...' if len(timed_out_games) > 20 else ''}",
             file=sys.stderr,
         )
     indexed.sort(key=lambda t: t[0])
@@ -430,6 +450,13 @@ def _play_one_parallel_game(
     failures are visible in the pool's stderr relay; the
     parent's progress tracker still records the game as
     "completed" with 0 samples / no winner.
+
+    Per-game wall-clock ``TimeoutError`` (out of
+    ``run_with_timeout``) is caught separately so the driver can
+    bucket it under the dedicated ``timed_out`` counter rather than
+    ``crashed``. Both produce an empty chunk with ``winner=None``;
+    the trailing ``outcome_kind`` element of the chunk tuple is
+    what the driver reads to tell them apart.
     """
     (
         game_idx, p0_factory, p1_factory, base_seed,
@@ -450,6 +477,15 @@ def _play_one_parallel_game(
             hang_dump_dir=hang_dump_dir,
             heuristics=heuristics,
         )
+    except TimeoutError as exc:
+        import sys
+        print(
+            f"[worker] game {game_idx} timed out "
+            f"({exc}); dropping this game, pool continues.",
+            file=sys.stderr,
+        )
+        f, o, p, m = _empty_arrays()
+        chunk = (f, o, p, m, None, "timed_out")
     except Exception as exc:  # noqa: BLE001 - intentional broad catch
         import sys
         import traceback
@@ -461,7 +497,7 @@ def _play_one_parallel_game(
         )
         traceback.print_exc(file=sys.stderr)
         f, o, p, m = _empty_arrays()
-        chunk = (f, o, p, m, None)
+        chunk = (f, o, p, m, None, "crashed")
     return game_idx, chunk
 
 
@@ -633,7 +669,7 @@ def _generate_one_game_data(
 
     if not samples:
         f, o, p, m = _empty_arrays()
-        return f, o, p, m, winner
+        return f, o, p, m, winner, "completed"
     outcome_label = _outcome_label(winner)
     features = np.stack(
         [f for f, _, _, _ in samples], axis=0,
@@ -648,7 +684,10 @@ def _generate_one_game_data(
     action_masks = np.stack(
         [m for _, _, _, m in samples], axis=0,
     ).astype(np.bool_)
-    return features, outcomes, policy_targets, action_masks, winner
+    return (
+        features, outcomes, policy_targets, action_masks, winner,
+        "completed",
+    )
 
 
 def _concat_chunks(

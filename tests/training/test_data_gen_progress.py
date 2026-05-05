@@ -138,6 +138,46 @@ def test_payload_includes_crashed_field_at_zero(tmp_path: Path):
     progress.finalize(status="completed")
     payload = json.loads((tmp_path / "run.json").read_text(encoding="utf-8"))
     assert payload["crashed"] == 0
+    # ``timed_out`` is the new sibling of ``crashed`` — same
+    # always-emitted contract so the UI doesn't have to handle a
+    # missing key.
+    assert payload["timed_out"] == 0
+
+
+def test_timed_out_games_increment_separate_counter(tmp_path: Path):
+    """``record_game(timed_out=True)`` increments a counter
+    distinct from ``crashed``. Mirrors the same shape as
+    ``crashed`` (excluded from wins / draws, still counted in
+    ``n_games_done``) but lets the UI tell engine bugs apart from
+    per-game wall-clock timeouts at a glance."""
+    progress = _make(tmp_path / "run.json", total=10, workers=2)
+    progress.begin()
+    progress.record_game(n_samples=10, outcome_p0=1.0)   # p0 win
+    progress.record_game(crashed=True)                    # real exception
+    progress.record_game(timed_out=True)                  # 300s timeout
+    progress.record_game(timed_out=True)                  # another timeout
+    progress.record_game(n_samples=20, outcome_p0=-1.0)  # p1 win
+    progress.finalize(status="completed")
+
+    payload = json.loads((tmp_path / "run.json").read_text(encoding="utf-8"))
+    assert payload["n_games_done"] == 5
+    assert payload["p0_wins"] == 1
+    assert payload["p1_wins"] == 1
+    assert payload["draws"] == 0
+    assert payload["crashed"] == 1
+    assert payload["timed_out"] == 2
+    # Timed-out games contribute zero samples — same as crashed.
+    assert payload["n_samples"] == 30
+
+
+def test_record_game_rejects_both_crashed_and_timed_out(tmp_path: Path):
+    """``crashed`` and ``timed_out`` are mutually exclusive — a game
+    is one or the other, not both. Caller bug should fail loudly
+    rather than silently double-counting."""
+    progress = _make(tmp_path / "run.json", total=1, workers=1)
+    progress.begin()
+    with pytest.raises(ValueError, match="mutually exclusive"):
+        progress.record_game(crashed=True, timed_out=True)
 
 
 def test_record_game_throttles_disk_writes(tmp_path: Path):

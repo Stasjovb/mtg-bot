@@ -109,6 +109,7 @@ function basePayload(overrides = {}) {
         n_games_done: 60,
         n_workers: 14,
         crashed: 2,
+        timed_out: 1,
         elapsed_seconds: 600.0,
         per_game_seconds: 10.0,
       },
@@ -118,6 +119,7 @@ function basePayload(overrides = {}) {
         n_games_done: 40,
         n_workers: 16,
         crashed: 0,
+        timed_out: 3,
         elapsed_seconds: 540.0,
         per_game_seconds: 13.5,
       },
@@ -146,12 +148,12 @@ describe('training UI per-machine sub-cards', () => {
     );
     expect(labels).toEqual(['desktop-j05412i', 'greggs-macbook-pro']);
 
-    // Each row has exactly three stat cells in a stable order:
-    // secs/game, crashes, workers.
+    // Each row has exactly four stat cells in a stable order:
+    // secs/game, crashes, timed out, workers.
     for (const row of rows) {
       const labelEls = row.querySelectorAll('.machine-stat-label');
       expect(Array.from(labelEls).map((e) => e.textContent))
-        .toEqual(['secs/game', 'crashes', 'workers']);
+        .toEqual(['secs/game', 'crashes', 'timed out', 'workers']);
     }
 
     // Verify the actual values for the macbook row.
@@ -163,7 +165,7 @@ describe('training UI per-machine sub-cards', () => {
       macRow.querySelectorAll('.machine-stat-value'),
     ).map((e) => e.textContent);
     // 10s lands in the >=10 branch (1 decimal) of fmtSecsPerGame.
-    expect(macVals).toEqual(['10.0s', '2', '14']);
+    expect(macVals).toEqual(['10.0s', '2', '1', '14']);
 
     // ...and for the desktop row.
     const deskRow = Array.from(rows).find(
@@ -173,7 +175,7 @@ describe('training UI per-machine sub-cards', () => {
     const deskVals = Array.from(
       deskRow.querySelectorAll('.machine-stat-value'),
     ).map((e) => e.textContent);
-    expect(deskVals).toEqual(['13.5s', '0', '16']);
+    expect(deskVals).toEqual(['13.5s', '0', '3', '16']);
   });
 
   it('hides the sub-card slot when machines is missing or empty', () => {
@@ -199,6 +201,7 @@ describe('training UI per-machine sub-cards', () => {
           n_games_done: 0,
           n_workers: 8,
           crashed: 0,
+          timed_out: 0,
           elapsed_seconds: 5.0,
           per_game_seconds: null,
         },
@@ -211,9 +214,11 @@ describe('training UI per-machine sub-cards', () => {
     const vals = Array.from(
       row.querySelectorAll('.machine-stat-value'),
     ).map((e) => e.textContent);
+    // Stat order: secs/game, crashes, timed out, workers.
     expect(vals[0]).toBe('—');
     expect(vals[1]).toBe('0');
-    expect(vals[2]).toBe('8');
+    expect(vals[2]).toBe('0');
+    expect(vals[3]).toBe('8');
   });
 
   it('renders sub-cards for training-kind runs too', () => {
@@ -231,6 +236,48 @@ describe('training UI per-machine sub-cards', () => {
     fillRun(card, run);
     const rows = card.querySelectorAll('.machine-row');
     expect(rows.length).toBe(2);
+  });
+
+  it('renders crashed and timed_out as distinct stats on the data_gen card', () => {
+    // Pin the user-facing split: the run-level card now shows two
+    // separate stat cells (Crashed and Timed out) so the operator
+    // can tell engine bugs apart from CPU-contention slow games at
+    // a glance.
+    const run = basePayload({
+      crashed: 4,
+      timed_out: 7,
+    });
+    const card = ensureCard(run);
+    document.getElementById('active').appendChild(card);
+    fillRun(card, run);
+
+    const crashedEl = card.querySelector('[data-field="crashed"]');
+    const timedOutEl = card.querySelector('[data-field="timed-out"]');
+    expect(crashedEl).not.toBeNull();
+    expect(timedOutEl).not.toBeNull();
+    expect(crashedEl.textContent).toBe('4');
+    expect(timedOutEl.textContent).toBe('7');
+  });
+
+  it('renders crashed and timed_out as distinct stats on the eval card', () => {
+    const run = basePayload({
+      kind: 'eval',
+      wins_new: 12,
+      wins_old: 18,
+      draws: 0,
+      win_rate: 0.4,
+      opponent_label: 'v7',
+      crashed: 1,
+      timed_out: 3,
+    });
+    const card = ensureCard(run);
+    document.getElementById('active').appendChild(card);
+    fillRun(card, run);
+
+    const crashedEl = card.querySelector('[data-field="crashed"]');
+    const timedOutEl = card.querySelector('[data-field="timed-out"]');
+    expect(crashedEl.textContent).toBe('1');
+    expect(timedOutEl.textContent).toBe('3');
   });
 
   it('does NOT add a sub-card slot to bench cards', () => {

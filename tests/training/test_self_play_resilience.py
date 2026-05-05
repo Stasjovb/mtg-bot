@@ -129,7 +129,7 @@ def test_packed_worker_returns_sentinel_on_crash(capfd):
         100,                        # decision_cap
     )
     result = _play_one_match_game_packed(args)
-    assert result == (None, 0)
+    assert result == (None, 0, "crashed")
     err = capfd.readouterr().err
     assert "[worker] eval game 0 crashed" in err
     assert "ValueError" in err
@@ -150,7 +150,7 @@ def test_indexed_worker_preserves_game_idx_on_crash(capfd):
     )
     game_idx, result = _play_one_match_game_indexed(args)
     assert game_idx == 7
-    assert result == (None, 0)
+    assert result == (None, 0, "crashed")
     err = capfd.readouterr().err
     assert "[worker] eval game 7 crashed" in err
 

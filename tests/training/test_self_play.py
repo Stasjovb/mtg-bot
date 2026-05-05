@@ -274,7 +274,7 @@ def test_alternating_worker_swaps_factories_on_odd_game_idx():
     sp._play_one_match_game = fake_play
     try:
         # Even game_idx — no swap.
-        gid, (winner, decisions) = (
+        gid, (winner, decisions, kind) = (
             _play_one_match_game_alternating_indexed(
                 (0, f_new, f_old, 0, 100, False, None, None, None, None),
             )
@@ -282,9 +282,10 @@ def test_alternating_worker_swaps_factories_on_odd_game_idx():
         assert captured[-1] == (0, f_new, f_old)
         # winner=0 returned from engine = p0 won = "new" won.
         assert winner == 0
+        assert kind == "completed"
 
         # Odd game_idx — swap.
-        gid, (winner, decisions) = (
+        gid, (winner, decisions, kind) = (
             _play_one_match_game_alternating_indexed(
                 (1, f_new, f_old, 0, 100, False, None, None, None, None),
             )
@@ -294,6 +295,7 @@ def test_alternating_worker_swaps_factories_on_odd_game_idx():
         # Engine returned winner=0 (its p0 = swapped = old won). Caller-
         # facing winner remaps to 1 (the original p0 = new lost).
         assert winner == 1
+        assert kind == "completed"
     finally:
         sp._play_one_match_game = real
 
