@@ -662,6 +662,7 @@ def _train_next(
     window_recent: int | None,
     hidden_sizes: tuple[int, ...] | None = None,
     progress_path: Path | None = None,
+    policy_loss_weight: float = 1.0,
 ) -> str:
     """Run train_nn.py via subprocess so its progress JSON / hub
     UI / registry plumbing all behave the same as a manual train.
@@ -675,6 +676,13 @@ def _train_next(
     registry-baseline 128-128-64; the new model would have ~5%
     of the bootstrap's parameters and the acceptance gate would
     always reject it.
+
+    ``policy_loss_weight`` scales the policy CE in the combined loss
+    (default 1.0). Iter_002 v13 training showed the policy head
+    plateaus at ~0.157 because ~84% of supervised rows are
+    one-legal-action (CE=0 trivially) and value loss (~0.5 at
+    epoch 1) dominates the gradient ~3:1. Bumping this to 3-10
+    rebalances toward the policy head's branchy-row signal.
     """
     import subprocess
 
@@ -689,6 +697,7 @@ def _train_next(
         "--val-split", str(val_split),
         "--seed", str(seed),
         "--notes", notes,
+        "--policy-loss-weight", str(policy_loss_weight),
     ]
     if hidden_sizes is not None:
         cmd.extend(["--hidden-sizes", ",".join(str(s) for s in hidden_sizes)])
@@ -881,6 +890,17 @@ def main() -> None:
     parser.add_argument(
         "--val-split", type=float, default=0.1,
         help="Train/val split fraction (default 0.1).",
+    )
+    parser.add_argument(
+        "--policy-loss-weight", type=float, default=1.0,
+        help=(
+            "Coefficient on the policy-head CE in the combined "
+            "training loss (default 1.0). Iter_002 v13 training "
+            "showed the policy head plateaus at ~0.157 — ~84%% of "
+            "supervised rows are one-legal-action (CE=0 trivially) "
+            "and value loss dominates the gradient ~3:1. Bump to "
+            "3-10 to rebalance toward branchy-row signal."
+        ),
     )
     parser.add_argument(
         "--eval-games", type=int, default=500,
@@ -1468,6 +1488,7 @@ def main() -> None:
             window_recent=args.window_recent,
             hidden_sizes=iter_hidden_sizes,
             progress_path=train_progress_path,
+            policy_loss_weight=args.policy_loss_weight,
         )
         new_weights = registry.weights_path(new_version)
         print(f"[iterate]   trained: {new_version}")

@@ -391,3 +391,46 @@ def test_alphazero_target_on_illegal_slot_does_not_explode_loss(
     for v in history.val_policy_losses:
         assert v < 100.0, f"val loss exploded: {v}"
         assert np.isfinite(v), f"val loss not finite: {v}"
+
+
+def test_alphazero_policy_loss_weight_scales_combined_loss(
+    tmp_path: Path,
+):
+    """Bumping ``policy_loss_weight`` from 1.0 to a larger value
+    must visibly reweight the combined loss. Smoke-pin: at weight 5.0
+    the policy term contributes ~5x more to ``total_loss`` than at
+    weight 1.0 on the same data, so the train_total at epoch 1 must
+    be measurably larger when the weight is higher.
+
+    Defends the iter_002 v13 finding: with weight=1.0 the policy
+    head plateaus because value loss dominates the gradient ~3:1.
+    Weight=5.0 puts policy in the lead. This test pins the knob's
+    end-to-end effect (CLI default → train_value_network kwarg →
+    combined-loss math).
+    """
+    f, o, p, m = _synthetic_alphazero_dataset(64)
+
+    h_default = train_value_network(
+        features=f, outcomes=o,
+        policy_targets=p, action_masks=m,
+        weights_out_path=tmp_path / "az_default.pt",
+        epochs=1, batch_size=16, device="cpu",
+    )
+    h_boosted = train_value_network(
+        features=f, outcomes=o,
+        policy_targets=p, action_masks=m,
+        weights_out_path=tmp_path / "az_boosted.pt",
+        epochs=1, batch_size=16, device="cpu",
+        policy_loss_weight=5.0,
+    )
+    # train_value and train_policy are unaffected by the weight (they
+    # are the raw per-component losses); the COMBINED train_loss
+    # incorporates weight * policy_loss. Same data + same epochs +
+    # cpu = the per-component values track but the combined diverges.
+    assert (
+        h_boosted.train_losses[0] > h_default.train_losses[0]
+    ), (
+        f"weight=5.0 should produce larger combined loss "
+        f"(was {h_boosted.train_losses[0]}) than weight=1.0 "
+        f"(was {h_default.train_losses[0]})"
+    )
