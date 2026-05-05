@@ -109,6 +109,25 @@ _COMBAT_ATTACKERS = "attackers"
 _COMBAT_BLOCKERS = "blockers"
 
 
+# Steps at which the active player's empty-stack priority is pruned to
+# ``[PassPriority()]`` when ``phase_prune_enabled`` is True. These are
+# the steps where casting an instant is *almost never* the right move
+# for the active player: their own upkeep / draw / beginning-of-combat /
+# end step. See ``docs/SEARCH_LIMITATIONS.md`` entry #6 for the
+# acceptable-failure cases (pump-before-upkeep-trigger, mana-sink-end-
+# step, end-step-flash-creature, BoC combat tricks). Note: opponent's
+# priority during these same steps is NOT pruned — opp-side instants
+# during your upkeep/end-step (responding to triggers, casting flash
+# creatures) are real plays. The opp-capability auto-pass handles those
+# moments separately.
+_PHASE_PRUNE_STEPS: frozenset[Step] = frozenset({
+    Step.UPKEEP,
+    Step.DRAW,
+    Step.BEGINNING_OF_COMBAT,
+    Step.END,
+})
+
+
 # Maps the ``_ResolutionPause.kind`` value to the search-side
 # decision class the adapter expects when search answers that pause.
 _RESOLUTION_KIND_TO_DECISION_CLASS = {
@@ -144,10 +163,22 @@ class MtgGameStateAdapter:
         tactical_agent: Optional[Agent] = None,
         expose_combat_decisions: bool = True,
         expose_resolution_decisions: bool = False,
+        phase_prune_enabled: bool = True,
     ) -> None:
         self._state = engine_state
         self._tactical = tactical_agent or DefaultTacticalAgent()
         self._expose_resolution = expose_resolution_decisions
+        # Phase-based active-priority prune. When True (default), the
+        # active player auto-passes priority during their own UPKEEP /
+        # DRAW / BEGINNING_OF_COMBAT / END steps if the stack is empty
+        # — a training-time heuristic that skips ~15-30% of priority
+        # moments at the cost of a small set of niche legitimate plays
+        # (pump-before-upkeep-trigger, mana-sink-end-step, end-step-
+        # flash-creature, BoC combat tricks). See SEARCH_LIMITATIONS
+        # entry #6. Defaulted ON for training; CLIs may flip it off
+        # for tournament / eval mode where correctness matters more
+        # than throughput.
+        self._phase_prune_enabled = phase_prune_enabled
         # Agent installation. With resolution exposure we need the
         # ``ResolutionChannelAgent`` to intercept callbacks; non-
         # exposed callbacks fall through to the tactical policy.
@@ -294,6 +325,52 @@ class MtgGameStateAdapter:
         ``_can_act_cached(opp_id, is_active_player=False)``."""
         return self._can_act_cached(opp_id, is_active_player=False)
 
+    def _should_phase_prune_priority(self) -> bool:
+        """Phase-based heuristic: active player auto-passes priority
+        during their own UPKEEP / DRAW / BEGINNING_OF_COMBAT / END step
+        when the stack is empty.
+
+        This is a training-time heuristic (NOT CR-correct). It catches
+        the "player HAS castable instants but it's a stupid phase to
+        use them" case — composes ABOVE the opp-capability auto-pass
+        which catches the "opp has nothing castable" case.
+
+        Conditions to fire:
+        * ``phase_prune_enabled`` is True.
+        * Not terminal.
+        * Not a resolution-pause moment.
+        * Not a combat sub-decision moment.
+        * Player with priority IS the active player (this is the
+          active-side prune; opp-side instants during these steps are
+          real plays — opp-capability handles those).
+        * Stack is empty (a non-empty stack means there's something
+          to potentially respond to; stay engaged).
+        * Step is in ``_PHASE_PRUNE_STEPS``.
+
+        Documented divergence from optimal play, see
+        ``docs/SEARCH_LIMITATIONS.md`` entry #6.
+        """
+        if not self._phase_prune_enabled:
+            return False
+        if self._state.is_over():
+            return False
+        if self._resolution_paused:
+            return False
+        if self._combat_phase != _COMBAT_NONE:
+            return False
+        # Active-only: opp's priority during these same steps still
+        # exposes legitimate flash / triggered-response windows.
+        if (
+            self._state.priority_player_idx
+            != self._state.active_player_idx
+        ):
+            return False
+        # Stack non-empty means there's a spell / ability waiting to
+        # resolve; the active player might want to respond to it.
+        if len(self._state.stack) > 0:
+            return False
+        return self._state.step in _PHASE_PRUNE_STEPS
+
     def _can_short_circuit_to_pass(self) -> bool:
         """True iff the current decision moment is a priority window
         whose holder has no possible action. Auto-passes BOTH the
@@ -357,6 +434,7 @@ class MtgGameStateAdapter:
         c._state = self._state.clone()
         c._tactical = self._tactical
         c._expose_resolution = self._expose_resolution
+        c._phase_prune_enabled = self._phase_prune_enabled
         # Resolution-channel agent is per-adapter-instance so each
         # clone has its own replay queue. Snapshot/restore preserves
         # queue state from the source.
@@ -435,6 +513,15 @@ class MtgGameStateAdapter:
             return []
         if self._resolution_paused:
             return self._resolution_legal_decisions()
+        # Phase-based active-priority prune: cheap step-membership
+        # check, fires BEFORE the capability hash compute. When the
+        # active player has priority during their own UPKEEP / DRAW /
+        # BEGINNING_OF_COMBAT / END step with empty stack, short-
+        # circuit to ``[PassPriority()]`` without enumerating
+        # ``legal_actions``. See ``docs/SEARCH_LIMITATIONS.md`` entry
+        # #6 for the documented divergence from optimal play.
+        if self._should_phase_prune_priority():
+            return [PassPriority()]
         # Capability auto-pass: when the priority holder has no
         # possible action (instant-speed for opp / non-active priority
         # windows; sorcery-aware union for active priority windows in
