@@ -193,9 +193,63 @@ class MtgGameStateAdapter:
         self._resolution_options: tuple = ()
         self._pre_action_clone: Optional[EngineGameState] = None
         self._pending_replay_decision: Optional[Decision] = None
+        # Per-decision-moment cache of ``legal.legal_actions`` results.
+        # ISMCTS calls ``legal_decisions`` AND ``legal_action_mask`` AND
+        # ``_grow_union_mask`` (downstream of mask) all on the SAME
+        # engine state per descent step — three identical enumerations
+        # of a function that consumes 37% of self-play wall time per
+        # ``docs/perf_self_play_20260504.md``. Cache one entry keyed by
+        # the player whose priority-window legal set was computed; the
+        # cache is invalidated whenever any engine-state mutation runs
+        # (every ``apply()`` and every internal step transition that
+        # alters ``self._state``). The cache stores the list reference
+        # itself; callers that need a private copy do their own
+        # ``list(...)`` of it. Lifetime: per priority moment, never
+        # crosses an ``apply()`` boundary.
+        self._legal_actions_cache_player: Optional[PlayerID] = None
+        self._legal_actions_cache_value: Optional[list[Action]] = None
         # Drive forward until we either hit a terminal state or a
         # priority moment where the caller must decide.
         self._advance_to_next_decision()
+
+    # ---------------------------------------------------------------
+    # Per-decision-moment legal_actions cache
+    # ---------------------------------------------------------------
+
+    def _invalidate_legal_actions_cache(self) -> None:
+        """Drop any cached ``legal_actions`` result. Called from every
+        site that mutates ``self._state`` (or replaces it with a new
+        clone via the resolution-pause snapshot path). Cheap: two
+        attribute writes.
+        """
+        self._legal_actions_cache_player = None
+        self._legal_actions_cache_value = None
+
+    def _legal_actions_cached(
+        self, player_id: PlayerID,
+    ) -> list[Action]:
+        """Return ``legal.legal_actions(self._state, player_id)``,
+        memoized for the current decision moment. The first call after
+        an ``apply()`` (or other state-mutating event) computes and
+        stores; subsequent calls within the same decision moment for
+        the same ``player_id`` return the cached list directly.
+
+        The cached list is the SAME object across cache hits — callers
+        must treat it as read-only. ``legal_decisions`` already does
+        ``list(...)`` on the result before exposing it to search; the
+        mask helper iterates without mutating. If a hypothetical
+        future caller needs a private copy, they should ``list(...)``
+        the result themselves.
+        """
+        if (
+            self._legal_actions_cache_value is not None
+            and self._legal_actions_cache_player == player_id
+        ):
+            return self._legal_actions_cache_value
+        result = legal_actions(self._state, player_id)
+        self._legal_actions_cache_player = player_id
+        self._legal_actions_cache_value = result
+        return result
 
     # ---------------------------------------------------------------
     # search.GameState protocol
@@ -239,6 +293,21 @@ class MtgGameStateAdapter:
             if self._pre_action_clone is not None else None
         )
         c._pending_replay_decision = self._pending_replay_decision
+        # Cache lifetime is per-adapter-per-priority-moment: the clone
+        # starts with an empty cache. Sharing the source's cached list
+        # with the clone would be tempting (the engine_state at clone
+        # time is a deep copy of the source's, so legal_actions would
+        # match) — but ISMCTS calls ``_fresh_determinization`` which
+        # MUTATES ``c.engine_state`` in place right after this clone
+        # returns, permuting hidden-zone printings. After that mutation
+        # a shared cache would silently return stale entries (e.g. for
+        # the Mm'menon cast-from-library-top check, which inspects
+        # ``library[0]``). Starting with an empty cache forces the
+        # next ``legal_decisions`` call on the clone to re-enumerate
+        # against the post-determinization state — which is what we
+        # want and is no worse than the pre-cache behavior.
+        c._legal_actions_cache_player = None
+        c._legal_actions_cache_value = None
         return c
 
     def active_player(self) -> PlayerID:
@@ -283,7 +352,7 @@ class MtgGameStateAdapter:
                 BlockerDecision(blocker_id=next_id, attacker_id=None)
             )
             return options
-        return list(legal_actions(self._state, self.active_player()))
+        return list(self._legal_actions_cached(self.active_player()))
 
     def _resolution_legal_decisions(self) -> list[Decision]:
         """Materialize resolution-pause options as search-side
@@ -345,6 +414,15 @@ class MtgGameStateAdapter:
     def apply(self, decision: Decision) -> None:
         if self._state.is_over():
             raise ValueError("apply() called on terminal state")
+
+        # Cache invariant: any ``apply()`` will mutate ``self._state``
+        # (or replace it via resolution-pause rollback). Dropping the
+        # cached legal_actions here guarantees the next
+        # ``legal_decisions()`` call re-enumerates against the fresh
+        # state. Putting the invalidation at the top of ``apply()``
+        # rather than inside each mutator is the simplest invariant
+        # that survives every dispatch branch below.
+        self._invalidate_legal_actions_cache()
 
         # Resolution-pause answer routing — consume a Resolution*
         # decision, push to the channel agent's replay queue, rollback
@@ -809,8 +887,16 @@ class MtgGameStateAdapter:
         determinizer) reaches through this to operate on the engine
         directly; the rest of search should stay on the protocol
         surface. Mutating it bypasses adapter bookkeeping (priority
-        counter, combat phase, resolution-pause snapshot) and is
-        unsupported."""
+        counter, combat phase, resolution-pause snapshot,
+        legal_actions cache) and is unsupported.
+
+        Callers that DO need to mutate the engine state directly (the
+        ISMCTS / PIMC determinizer being the canonical example) must
+        either (a) only do so on a freshly-cloned adapter whose cache
+        was empty to begin with — see ``clone()`` — or (b) call
+        ``_invalidate_legal_actions_cache()`` after the mutation to
+        drop any stale entries.
+        """
         return self._state
 
     @property
