@@ -61,6 +61,18 @@ _QUEUE_HTTP_ATTEMPT_TIMEOUT_S = 10.0  # connect-or-read-or-fail
 _QUEUE_HTTP_RETRIES = 3              # total attempts incl. the first
 _QUEUE_HTTP_BACKOFF_BASE_S = 0.5     # 0.5s, then 1.0s between attempts
 
+# Hard upper-bound timeout on a single shard's SSH session. Defends
+# against the post-shard SSH-still-alive hang where Tailscale keeps
+# the TCP connection healthy after the remote python has exited via
+# the script-wrapper's explicit-exit path, causing the SSH client
+# never to see a protocol-level close. On expiry, master's per-shard
+# try/except catches ``TimeoutExpired``, the post-failure rsync
+# recovers any data on disk, and the orchestration proceeds with
+# surviving shards' data. 90 min covers ~3x the typical 500-game
+# self-play wall + rsync; tunable via ``iterate_alphazero
+# --shard-ssh-timeout-min``.
+_DEFAULT_SHARD_SSH_TIMEOUT_S = 90 * 60
+
 
 @dataclass(frozen=True)
 class _QueueHTTPResponse:
@@ -1137,6 +1149,7 @@ def run_distributed_self_play(
     queue_url: str,
     bundle_url: Optional[str] = None,
     slack_extra: int = 0,
+    shard_ssh_timeout_s: float = _DEFAULT_SHARD_SSH_TIMEOUT_S,
 ) -> list[Path]:
     """Pull-model orchestrator. Initializes a queue of
     ``total_games + slack_extra`` on master, dispatches every shard
@@ -1259,6 +1272,7 @@ def run_distributed_self_play(
             run_id_prefix=run_id_prefix,
             stamp=stamp,
             bundle_url=bundle_url,
+            shard_ssh_timeout_s=shard_ssh_timeout_s,
         )
 
     aggregator = _AggregateProgressPoller(
@@ -1375,6 +1389,7 @@ def run_distributed_eval(
     queue_url: str,
     bundle_url: Optional[str] = None,
     slack_extra: int = 0,
+    shard_ssh_timeout_s: float = _DEFAULT_SHARD_SSH_TIMEOUT_S,
 ) -> dict[str, int]:
     """Eval counterpart to ``run_distributed_self_play``. Initializes
     a queue of ``total_games + slack_extra``, dispatches every shard
@@ -1482,6 +1497,7 @@ def run_distributed_eval(
             progress_dir=progress_dir,
             stamp=stamp,
             bundle_url=bundle_url,
+            shard_ssh_timeout_s=shard_ssh_timeout_s,
         )
 
     aggregator = _AggregateProgressPoller(
@@ -2310,7 +2326,6 @@ _SSH_KEEPALIVE_OPTS = (
     "-o", "ServerAliveCountMax=5",
 )
 
-
 def _ssh_cmd(shard: ShardConfig, remote_command: str) -> list[str]:
     """SSH invocation for a shell command on the remote. Sends one
     argument string the remote shell will interpret. The remote
@@ -2664,6 +2679,7 @@ def run_shard_remote(
     run_id_prefix: str,
     stamp: str,
     bundle_url: Optional[str] = None,
+    shard_ssh_timeout_s: float = _DEFAULT_SHARD_SSH_TIMEOUT_S,
 ) -> ShardSelfPlayReport:
     """Run one shard on a remote machine in pull mode.
 
@@ -2769,8 +2785,15 @@ def run_shard_remote(
                 iter_total_games=iter_total_games,
                 stamp=stamp,
             )
-            # No timeout — the run loops indefinitely waiting on master.
-            _run_subprocess(_ssh_cmd(shard, run_cmd))
+            # Hard timeout breaks the post-shard SSH-still-alive hang
+            # (Tailscale keeps TCP healthy after remote explicit-exit;
+            # ssh client never sees protocol close). On expiry, the
+            # outer per-shard try/except catches TimeoutExpired and
+            # the rsync-recovery flow runs in finally.
+            _run_subprocess(
+                _ssh_cmd(shard, run_cmd),
+                timeout=shard_ssh_timeout_s,
+            )
         except (subprocess.CalledProcessError,
                 subprocess.TimeoutExpired, OSError) as e:
             error_stage = "self_play"
@@ -2940,6 +2963,7 @@ def run_shard_eval_remote(
     progress_dir: Path,
     stamp: str,
     bundle_url: Optional[str] = None,
+    shard_ssh_timeout_s: float = _DEFAULT_SHARD_SSH_TIMEOUT_S,
 ) -> ShardEvalReport:
     """Eval counterpart to :func:`run_shard_remote`. Mirrors the
     self-play remote runner but pushes BOTH NN weights files
@@ -3034,7 +3058,11 @@ def run_shard_eval_remote(
                 iter_total_games=iter_total_games,
                 stamp=stamp,
             )
-            _run_subprocess(_ssh_cmd(shard, run_cmd))
+            # Hard timeout — same rationale as run_shard_remote.
+            _run_subprocess(
+                _ssh_cmd(shard, run_cmd),
+                timeout=shard_ssh_timeout_s,
+            )
         except (subprocess.CalledProcessError,
                 subprocess.TimeoutExpired, OSError) as e:
             error_stage = "eval"
