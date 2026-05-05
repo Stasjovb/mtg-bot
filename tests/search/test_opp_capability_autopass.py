@@ -295,9 +295,12 @@ def test_does_not_auto_pass_when_opp_holds_unaffordable_instant(
     assert any(isinstance(d, CastSpell) for d in decisions)
 
 
-def test_active_player_priority_unaffected(monkeypatch):
-    """Auto-pass is OPP-only. Even if the active player has nothing
-    to do, ``legal_decisions`` still goes through ``legal_actions``."""
+def test_active_player_priority_also_short_circuits(monkeypatch):
+    """As of feature/active-player-capability-autopass, the active
+    player's priority window is ALSO eligible for the capability
+    auto-pass. With an empty hand / no lands / no abilities, even at
+    sorcery-window timing, the only legal action is PassPriority —
+    enumerate-free."""
     state = _empty_state()
     _strip_player_zones(state, 0)  # strip ACTIVE player.
     adapter = MtgGameStateAdapter(state)
@@ -310,9 +313,11 @@ def test_active_player_priority_unaffected(monkeypatch):
     spy = _spy_legal_actions(monkeypatch)
     decisions = adapter.legal_decisions()
 
-    # Active-player path always enumerates.
-    assert spy.call_count == 1
-    assert any(isinstance(d, PassPriority) for d in decisions)
+    # Auto-pass fired — no enumeration.
+    assert decisions == [PassPriority()]
+    assert spy.call_count == 0, (
+        "active-player auto-pass path must not invoke legal_actions"
+    )
 
 
 # ---------------------------------------------------------------------
@@ -380,7 +385,8 @@ def test_capability_cache_recomputes_after_state_change():
     # Prime the cache: capability is False (auto-pass — empty hand).
     _ = adapter.legal_decisions()
     assert adapter._opp_cap_cache is not None
-    assert adapter._opp_cap_cache[2] is False  # can_act
+    # Cache shape: (player_id, is_active_player, hash, can_act_bool).
+    assert adapter._opp_cap_cache[3] is False  # can_act
 
     # Drop a {2}{R} instant into opp's hand.
     printings = get_active_source().get_printings()
@@ -394,7 +400,7 @@ def test_capability_cache_recomputes_after_state_change():
     )
     assert can_act_now is True
     # Cache replaced with the new hash + new bool.
-    assert adapter._opp_cap_cache[2] is True
+    assert adapter._opp_cap_cache[3] is True
 
 
 def test_clone_starts_with_empty_cache():

@@ -32,11 +32,33 @@ from mtg_bot.turn import Step
 
 
 def _fresh_adapter(seed: int = 42, colors=None) -> MtgGameStateAdapter:
+    """Construct an adapter and drive it to PRECOMBAT_MAIN at active-
+    player priority with at least one capability (a payable land in
+    hand). Without that drive, the active-player capability auto-pass
+    would short-circuit ``legal_decisions`` to ``[PassPriority()]``
+    before the legal_actions cache is populated, which obscures the
+    cache invariants under test here.
+    """
     colors = colors or ["G", "R"]
     state = setup_game(
         [RandomAgent(), RandomAgent()], colors, seed=seed,
     )
-    return MtgGameStateAdapter(state)
+    adapter = MtgGameStateAdapter(state)
+    # Drive past UPKEEP / DRAW into PRECOMBAT_MAIN. The setup_game
+    # default deck builder seeds the active player's hand with at
+    # least a few cards (lands + creatures), so PRECOMBAT_MAIN at
+    # active-player priority will have land-play / sorcery-cast
+    # capability and the cache is exercised normally.
+    for _ in range(50):
+        if adapter.engine_state.step == Step.PRECOMBAT_MAIN and (
+            adapter.engine_state.priority_player_idx
+            == adapter.engine_state.active_player_idx
+        ):
+            return adapter
+        adapter.apply(PassPriority())
+    pytest.fail(
+        "could not drive _fresh_adapter to PRECOMBAT_MAIN active priority"
+    )
 
 
 def _drive_to_step(
@@ -241,7 +263,12 @@ def test_legal_actions_cache_invalidated_by_resolution_pause(
     state = setup_game(
         [RandomAgent(), RandomAgent()], ["G", "R"], seed=42,
     )
-    for _ in range(5):
+    # 7 Mountains: Bombard costs {2}{R}, so casting two of them in a
+    # row consumes 6 mana. Anything less leaves the active player
+    # unable to pay the second cost AFTER the first cast resolves
+    # (the cache test below relies on a continuing instant-speed
+    # capability to keep auto-pass off).
+    for _ in range(7):
         m = state.new_object(
             BASIC_LANDS["Mountain"], owner_id=0, zone=Zone.BATTLEFIELD,
         )
@@ -250,6 +277,18 @@ def test_legal_actions_cache_invalidated_by_resolution_pause(
         printings["Bombard"], owner_id=0, zone=Zone.HAND,
     )
     state.players[0].hand.append(bombard)
+    # Add a SECOND payable instant (a second Bombard) so the active
+    # player still has an instant-speed capability after casting the
+    # first Bombard. Without this, the post-cast priority moment has
+    # Bombard #1 on the stack (so we're at instant-only timing — not
+    # a sorcery window) AND no instants in hand, so the active-player
+    # auto-pass fires and the assertion below (which expects one
+    # ``legal_actions`` enumeration on the post-resolve priority
+    # moment) sees zero.
+    bombard2 = state.new_object(
+        printings["Bombard"], owner_id=0, zone=Zone.HAND,
+    )
+    state.players[0].hand.append(bombard2)
     for name in ["Wild Bear", "Sapling"]:
         c = state.new_object(
             SYNTHETIC_CREATURES[name], owner_id=1,
