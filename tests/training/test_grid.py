@@ -13,6 +13,8 @@ from mtg_bot.training import (
     heuristic_weight_grid, random_choice_factory,
 )
 
+from tests._test_decks import simple_test_deck_pool
+
 
 def test_heuristic_weight_grid_sums_to_one():
     grid = heuristic_weight_grid(step=0.1)
@@ -53,8 +55,7 @@ def test_grid_search_runs_each_config_against_opponent():
         grid=grid,
         opponent_factory=random_choice_factory,
         n_games=2,
-        base_seed=0,
-    )
+        base_seed=0, deck_pool=simple_test_deck_pool(),)
     assert len(results) == 2
     for cfg, stats in results:
         assert stats.games == 2
@@ -72,8 +73,7 @@ def test_grid_search_results_sorted_by_win_rate_descending():
         grid=grid,
         opponent_factory=random_choice_factory,
         n_games=2,
-        base_seed=0,
-    )
+        base_seed=0, deck_pool=simple_test_deck_pool(),)
     win_rates = [stats.win_rate(0) for _, stats in results]
     assert win_rates == sorted(win_rates, reverse=True)
 
@@ -93,8 +93,7 @@ def test_grid_search_progress_callback_fires_per_config():
         opponent_factory=random_choice_factory,
         n_games=2,
         base_seed=0,
-        progress_callback=cb,
-    )
+        progress_callback=cb, deck_pool=simple_test_deck_pool(),)
     assert len(calls) == len(grid)
     # idx is 0-based and total is the same for every call.
     for i, (idx, total, _, games) in enumerate(calls):
@@ -108,6 +107,5 @@ def test_grid_search_silent_when_no_callback():
     grid = [PimcConfig(samples=1, inner_nodes=4)]
     results = grid_search(
         grid=grid, opponent_factory=random_choice_factory,
-        n_games=1, base_seed=0,
-    )
+        n_games=1, base_seed=0, deck_pool=simple_test_deck_pool(),)
     assert len(results) == 1

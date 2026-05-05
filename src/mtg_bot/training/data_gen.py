@@ -460,10 +460,11 @@ def _generate_one_game_data(
     bit-identical results for the same ``(game_idx, base_seed,
     factories)``.
 
-    When ``deck_pool`` is provided, two distinct decks are sampled
-    from the pool deterministically (per-game seed) and used as the
-    seats' libraries. When ``deck_pool`` is None, falls back to the
-    legacy mono-color synthetic decks (G vs R) for backward compat.
+    Two distinct decks are sampled from ``deck_pool`` deterministically
+    (per-game seed) and used as the seats' libraries. ``deck_pool`` is
+    required — the synthetic mono-color G/R fallback was removed; every
+    self-play / eval data point now comes from a real deck distribution
+    by construction.
 
     Starting-seat alternation: for ``game_idx % 2 == 1``, player 1
     starts on the play instead of player 0. Going first is
@@ -485,30 +486,26 @@ def _generate_one_game_data(
     built fresh per game in the worker — NN model load happens
     once per captured game (a few ms; negligible vs game length).
     """
+    if deck_pool is None:
+        raise ValueError(
+            "deck_pool is required; the synthetic mono-color G/R "
+            "fallback was removed. Pass a real deck pool (typically "
+            "loaded via ``mtg_bot.decks.decks_from_json`` from "
+            "``data/17lands/eoe_decks.json.gz``)."
+        )
     engine_seed = base_seed + game_idx
-    if deck_pool is not None:
-        deck_p0, deck_p1 = _sample_decks_for_game(
-            deck_pool, game_idx, base_seed,
-        )
-        engine = setup_game(
-            [
-                RandomAgent(rng=random.Random(engine_seed + 1)),
-                RandomAgent(rng=random.Random(engine_seed + 2)),
-            ],
-            decks=[deck_p0.cards, deck_p1.cards],
-            seed=engine_seed,
-            enable_mulligans=enable_mulligans,
-        )
-    else:
-        engine = setup_game(
-            [
-                RandomAgent(rng=random.Random(engine_seed + 1)),
-                RandomAgent(rng=random.Random(engine_seed + 2)),
-            ],
-            ["G", "R"],
-            seed=engine_seed,
-            enable_mulligans=enable_mulligans,
-        )
+    deck_p0, deck_p1 = _sample_decks_for_game(
+        deck_pool, game_idx, base_seed,
+    )
+    engine = setup_game(
+        [
+            RandomAgent(rng=random.Random(engine_seed + 1)),
+            RandomAgent(rng=random.Random(engine_seed + 2)),
+        ],
+        decks=[deck_p0.cards, deck_p1.cards],
+        seed=engine_seed,
+        enable_mulligans=enable_mulligans,
+    )
     if game_idx % 2 == 1:
         engine.active_player_idx = 1
         engine.priority_player_idx = 1

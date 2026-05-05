@@ -103,6 +103,7 @@ def test_self_play_dumps_on_timeout(tmp_path: Path, monkeypatch):
     from mtg_bot.training import _timeout
     from mtg_bot.training import random_choice_factory
     from mtg_bot.training.self_play import _play_one_match_game
+    from tests._test_decks import simple_test_deck_pool
 
     def fake_run_with_timeout(*args, **kwargs):
         raise TimeoutError("simulated worker hang")
@@ -119,6 +120,7 @@ def test_self_play_dumps_on_timeout(tmp_path: Path, monkeypatch):
             decision_cap=4000,
             per_game_timeout_sec=300.0,
             hang_dump_dir=str(dump_dir),
+            deck_pool=simple_test_deck_pool(),
         )
     files = sorted(dump_dir.iterdir())
     assert len(files) == 2  # meta.json + traceback.txt
@@ -139,6 +141,7 @@ def test_self_play_no_dump_when_dir_omitted(
     from mtg_bot.training import _timeout
     from mtg_bot.training import random_choice_factory
     from mtg_bot.training.self_play import _play_one_match_game
+    from tests._test_decks import simple_test_deck_pool
 
     monkeypatch.setattr(
         _timeout, "run_with_timeout",
@@ -154,6 +157,7 @@ def test_self_play_no_dump_when_dir_omitted(
             decision_cap=4000,
             per_game_timeout_sec=300.0,
             hang_dump_dir=None,
+            deck_pool=simple_test_deck_pool(),
         )
     # No dump dir was created (or written into) — there's nothing
     # to assert besides "no files leaked into tmp_path".
@@ -164,6 +168,7 @@ def test_data_gen_dumps_on_timeout(tmp_path: Path, monkeypatch):
     from mtg_bot.training import _timeout
     from mtg_bot.training import random_choice_factory
     from mtg_bot.training.data_gen import _generate_one_game_data
+    from tests._test_decks import simple_test_deck_pool
 
     monkeypatch.setattr(
         _timeout, "run_with_timeout",
@@ -181,6 +186,7 @@ def test_data_gen_dumps_on_timeout(tmp_path: Path, monkeypatch):
             sample_every=1,
             per_game_timeout_sec=300.0,
             hang_dump_dir=str(dump_dir),
+            deck_pool=simple_test_deck_pool(),
         )
     files = sorted(dump_dir.iterdir())
     assert len(files) == 2

@@ -28,6 +28,7 @@ cards.
 from __future__ import annotations
 
 from mtg_bot.cards.source import get_active_source
+from mtg_bot.decks import Deck
 
 
 # Pinned (creature_name, basic_land) pairs for each color. These
@@ -84,3 +85,23 @@ def simple_test_decklists(
     default here makes the test diffs purely a constructor swap.
     """
     return [simple_test_decklist(c0), simple_test_decklist(c1)]
+
+
+def simple_test_deck_pool(
+    colors: tuple[str, ...] = ("G", "R"),
+) -> list[Deck]:
+    """A small ``deck_pool`` for ``run_match`` / ``generate_training_data``
+    fixture use. Each color produces one ``Deck`` whose ``cards`` is
+    ``simple_test_decklist(color)``. Default is two distinct decks so
+    ``_sample_decks_for_game`` returns a real two-deck pair (rather
+    than a mirror match) — matches the legacy production behavior of
+    sampling distinct archetypes per game.
+    """
+    return [
+        Deck(
+            draft_id=f"{color.lower()}_deck",
+            build_index=0,
+            cards=simple_test_decklist(color),
+        )
+        for color in colors
+    ]

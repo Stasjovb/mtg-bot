@@ -409,11 +409,11 @@ def _play_one_match_game(
     Used by both the sequential and parallel match drivers — same
     seed derivation logic in both paths so the results match.
 
-    When ``deck_pool`` is provided, two distinct decks are sampled
-    per game (deterministic per ``(base_seed, game_idx)``); both
-    seats use real archetypes from the pool. When ``None``, falls
-    back to the legacy mono-color synthetic decks (G vs R), matching
-    ``data_gen``'s back-compat default.
+    Two distinct decks are sampled per game from ``deck_pool``
+    (deterministic per ``(base_seed, game_idx)``); both seats use
+    real archetypes from the pool. ``deck_pool`` is required — the
+    synthetic mono-color G/R fallback was removed; every eval game
+    now comes from a real deck distribution by construction.
 
     When ``replay_config`` is supplied AND ``should_capture(game_idx)``
     returns True, snapshots are recorded after each priority moment
@@ -421,28 +421,27 @@ def _play_one_match_game(
     completes. Mirrors data_gen's capture pattern so the same replay
     files / format are produced for self-play and eval games.
     """
+    if deck_pool is None:
+        raise ValueError(
+            "deck_pool is required; the synthetic mono-color G/R "
+            "fallback was removed. Pass a real deck pool (typically "
+            "loaded via ``mtg_bot.decks.decks_from_json`` from "
+            "``data/17lands/eoe_decks.json.gz``)."
+        )
     engine_seed = base_seed + game_idx
     seat_agents = [
         RandomAgent(rng=random.Random(engine_seed + 1)),
         RandomAgent(rng=random.Random(engine_seed + 2)),
     ]
-    if deck_pool is not None:
-        deck_p0, deck_p1 = _sample_decks_for_game(
-            deck_pool, game_idx, base_seed,
-        )
-        engine = setup_game(
-            seat_agents,
-            decks=[deck_p0.cards, deck_p1.cards],
-            seed=engine_seed,
-            enable_mulligans=enable_mulligans,
-        )
-    else:
-        engine = setup_game(
-            seat_agents,
-            ["G", "R"],
-            seed=engine_seed,
-            enable_mulligans=enable_mulligans,
-        )
+    deck_p0, deck_p1 = _sample_decks_for_game(
+        deck_pool, game_idx, base_seed,
+    )
+    engine = setup_game(
+        seat_agents,
+        decks=[deck_p0.cards, deck_p1.cards],
+        seed=engine_seed,
+        enable_mulligans=enable_mulligans,
+    )
     adapter = MtgGameStateAdapter(
         engine, expose_combat_decisions=True,
         heuristics=heuristics,

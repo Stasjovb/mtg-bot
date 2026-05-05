@@ -14,8 +14,9 @@ for AlphaZero-style iteration; that comes later.
 
 from __future__ import annotations
 
-from typing import Iterable
+from typing import Iterable, Optional
 
+from mtg_bot.decks import Deck
 from mtg_bot.training.config import (
     HeuristicConfig,
     PimcConfig,
@@ -30,6 +31,7 @@ def grid_search(
     n_games: int,
     base_seed: int = 0,
     progress_callback=None,
+    deck_pool: Optional[list[Deck]] = None,
 ) -> list[tuple[PimcConfig, MatchStats]]:
     """For each config in ``grid``, play ``n_games`` against
     ``opponent_factory`` (P1) and return results sorted by P0
@@ -53,6 +55,7 @@ def grid_search(
             p1_factory=opponent_factory,
             n_games=n_games,
             base_seed=base_seed,
+            deck_pool=deck_pool,
         )
         results.append((config, stats))
         if progress_callback is not None:
