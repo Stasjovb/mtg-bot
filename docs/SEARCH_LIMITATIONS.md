@@ -361,6 +361,112 @@ The player can still cast spells / activate abilities — but cannot end the pri
 
 ---
 
+## 8. Lethal-detect alpha-strike heuristic (training optimization)
+
+**Location**: `src/mtg_bot/search/_lethal_detect.py`,
+`MtgGameStateAdapter.legal_decisions` is unaffected — the
+short-circuit lives upstream in
+`ISMCTS.choose_with_visits` (around line 411 with the
+`enable_lethal_detect` constructor flag, default True). When the
+adapter is at an `AttackerDecision` priority moment AND
+`detect_lethal_attack` returns a non-None lethal subset, the search
+loop is skipped and `{decision: 1}` for the matching `AttackerDecision`
+is returned.
+
+**What this is**: a HEURISTIC, not a CR-correct optimization. It
+is NOT a lossless search shortcut; it's a pattern-matched
+short-circuit that fires only when ALL of these hold:
+
+- Single opponent.
+- Opp has empty hand (no instants / sorceries to react with).
+- Opp has no non-mana activated abilities on any permanent.
+- Opp has no triggered abilities keyed on combat events
+  (`attacks` / `blocks` / `deals_combat_damage` / `dealt_damage`).
+- None of opp's blockers have first/double strike, indestructible,
+  hexproof, or shroud.
+- With opp greedily blocking the biggest attackers, the smallest
+  unblocked attackers' summed power (minus any lifelink lifegain
+  from blockers) clears opp's life total.
+
+When fired, the heuristic emits "attack with all eligible attackers"
+since sending fewer can only reduce unblocked damage. The full set
+short-circuits ALL per-attacker sub-decisions in the same combat
+phase (each sub-decision's `choose_with_visits` call independently
+recomputes the heuristic against the same engine state and routes
+through it).
+
+**Why this is sometimes wrong**: 
+
+| Edge case | Why missed | Bot misbehavior |
+|---|---|---|
+| Opp could topdeck a sweeper next turn | We don't see the unrevealed library | Heuristic fires; opp clears the board on their turn — but that doesn't matter because we KILLED them this turn anyway. NOT a misbehavior. |
+| Opp has prevent / damage-redirection effects | Continuous-effect detection isn't part of the gates | Bot commits to attacks; combat resolves with prevented damage, opp survives. |
+| Opp is a player whose loss condition isn't "life ≤ 0" (poison, milling triggers) | Heuristic only checks `opp.life <= 0` after damage | Bot commits to attacks; opp's actual loss path may not trigger. |
+| Damage assignment to multiple blockers wouldn't trade favorably | Heuristic doesn't reason about post-block board state | The bot "wins" but if the kill was actually impossible (e.g., damage prevention, blocker abilities trigger before damage), the bot loses. The CR-correct gates above are designed to rule out these cases — if a gate is missing for a real card, the bot loses the game. |
+| First strike on OUR side wasn't checked (CR + factor) | We don't model that strike-step damage helps us; the heuristic counts NORMAL damage step | Conservative — first strike on attackers can ONLY help us (more damage chances), so missing it just means false-negatives (some lethals we don't detect). Safe. |
+| Non-life-loss kill conditions (mill / commander / poison) | Not supported | Heuristic always uses life-total; bot relies on search for those win paths. |
+
+**Failure mode**: bot commits to attack-everything (which is what
+the heuristic does today). If the math was wrong and the kill
+doesn't actually happen, our creatures are tapped, our turn ends,
+opp kills us. **Catastrophic when wrong**, hence the conservative
+posture in `_lethal_detect.py` — every gate aborts on any potential
+disruption.
+
+**Safety contract**: the gates list here MUST stay in sync with
+the implementation. Any new combat-disrupting card mechanic
+(damage prevention, redirected damage, "creatures attacking gain
+shroud", etc.) needs to either:
+1. Be detected by an existing gate (e.g. flagged as a
+   non-mana activated ability or combat trigger), OR
+2. Add a NEW gate that aborts when the mechanic is present.
+
+**When it matters**:
+
+- **Training**: heuristic fires on guaranteed-lethal turns; bypasses
+  the per-turn search budget allowing earlier (uncertain) decisions
+  to consume more budget. Per-turn wall savings + cleaner
+  end-game training signal (value target = +1.0 with confidence;
+  policy target concentrated on the lethal play).
+- **Tournament play**: same wins, plus opp's plausible
+  response is often already captured by the gates (empty hand
+  rules out instants; no combat triggers rules out fog effects).
+  Disable via `enable_lethal_detect=False` if you want strict
+  search-derived recommendations and full visibility into the
+  search policy at end-game positions.
+
+**Mitigation in place**:
+
+- Conservative-ABORT posture: false-positive lethal (declaring win
+  when we can't actually win) is catastrophic; false-negative (missing
+  real lethal, falling through to search) is just a missed
+  optimization. Every gate errs toward false-negative.
+- Counter `ISMCTS._lethal_detect_fires` exposes firing rate for
+  benchmarking; reset via `reset_lethal_detect_count()`.
+
+**Acceptable for**: training, self-play, casual play.
+
+**Caveats for**: tournament play (still safe correctness-wise; just
+hides search-based combat reasoning from the policy).
+
+**Fix scope if/when needed**:
+- Extend gates to recognize damage-prevention / redirection effects
+  (continuous-effect search at the GameState level).
+- Optimize the "send minimal subset" decision so the bot doesn't
+  always commit ALL eligible attackers (let some stay back for
+  opp's potential counter-attack next turn — but if we detected
+  lethal, there IS no next turn for opp; this is a dead optimization).
+- Add support for non-life-loss kill conditions
+  (poison counters, "lose the game" rider abilities).
+
+**Impact estimate**: minor wall savings per game (depends on
+end-game frequency); the bigger win is training-signal quality at
+the moment-of-truth turn. Expected per-game wall delta: 1-3% (most
+games don't reach an alpha-strike-with-tapped-out-opp position; when
+they do, the heuristic wipes 5-15 attacker sub-decisions of search).
+
+---
+
 ## Tracked but not in this doc
 
 Things tracked elsewhere that you might also want to know about:
