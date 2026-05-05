@@ -224,15 +224,31 @@ def main() -> None:
         raise
     overall = time.perf_counter() - overall_start
 
-    if progress is not None:
-        progress.finish_pairing(status="completed")
-
     walls = sorted(x[1] for x in results)
     n = len(walls)
     def pct(p):
         # walls[idx] where idx = ceil(n * p / 100) - 1, clamped
         idx = max(0, min(n - 1, int(round(n * p / 100)) - 1))
         return walls[idx]
+
+    mean_per_game_wall = sum(walls) / n if n > 0 else 0.0
+    # Throughput numbers — pinned to the same definitions used by
+    # the BenchProgress pairings entry so the stdout block and the
+    # JSON never disagree:
+    #   sec/game/worker = mean per-game wall (seconds)
+    #   games/hour      = 3600 / mean_per_game_wall * n_workers
+    sec_per_game_per_worker = mean_per_game_wall
+    games_per_hour = (
+        3600.0 / mean_per_game_wall * args.workers
+        if mean_per_game_wall > 0 else 0.0
+    )
+
+    if progress is not None:
+        progress.set_throughput_stats(
+            games_per_hour=games_per_hour,
+            sec_per_game_per_worker=sec_per_game_per_worker,
+        )
+        progress.finish_pairing(status="completed")
 
     print(f"\n# Done in {overall/60:.1f} min wall (overall pool time)")
     print(f"# Per-game wall (n={n}):")
@@ -243,7 +259,10 @@ def main() -> None:
     print(f"#   p95  = {pct(95):.1f}s")
     print(f"#   p99  = {pct(99):.1f}s")
     print(f"#   max  = {walls[-1]:.1f}s")
-    print(f"#   mean = {sum(walls)/n:.1f}s")
+    print(f"#   mean = {mean_per_game_wall:.1f}s")
+    print(f"# Throughput (workers={args.workers}):")
+    print(f"#   sec/game/worker = {sec_per_game_per_worker:.1f}s")
+    print(f"#   games/hour      = {games_per_hour:.1f}")
     crashed = [r for r in results if r[3] != "ok"]
     if crashed:
         print(f"# crashed: {len(crashed)}")
