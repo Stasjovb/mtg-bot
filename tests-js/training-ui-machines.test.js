@@ -38,13 +38,26 @@ const INLINE_JS = extractInlineScript(TEMPLATE_HTML);
 
 beforeEach(() => {
   // Reset to the minimum fixture the inline script reads at load time.
+  // The script now also touches the stop-modal elements during its
+  // top-level wiring (addEventListener on the cancel/confirm buttons),
+  // so include the modal scaffold even though this file only asserts
+  // on per-machine sub-cards.
   document.documentElement.innerHTML =
     '<head><meta charset="utf-8"></head><body>'
     + '<div class="page">'
     + '<header><span id="refresh-indicator">loading…</span></header>'
     + '<div id="active"></div>'
     + '<div id="older"></div>'
-    + '</div></body>';
+    + '</div>'
+    + '<div class="modal-overlay" id="stop-modal">'
+    + '<div class="modal">'
+    + '<h2 id="stop-modal-title">Stop run?</h2>'
+    + '<p id="stop-modal-body"></p>'
+    + '<div class="modal-actions">'
+    + '<button id="stop-modal-cancel">Cancel</button>'
+    + '<button id="stop-modal-confirm">Stop run</button>'
+    + '</div></div></div>'
+    + '</body>';
 
   // Stub fetch — the script kicks off refresh() at end of load. Returning
   // an empty runs list keeps that path quiet without errors.
