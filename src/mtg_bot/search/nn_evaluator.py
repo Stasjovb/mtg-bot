@@ -197,6 +197,109 @@ class _ValuePolicyMLP(nn.Module):
         return value, policy_logits
 
 
+class _ValuePolicyMLPSeparate(nn.Module):
+    """Two-headed network with SEPARATE trunks for value and policy.
+
+    Where ``_ValuePolicyMLP`` ties both heads to a single shared trunk
+    (and the louder value gradient saturates the trunk's bottleneck
+    representation, crowding the policy head's branchy-row signal out),
+    this variant builds two parallel MLPs — ``value_trunk`` and
+    ``policy_trunk`` — that consume the raw input independently. Each
+    head sits on top of its own trunk's last hidden activation, so the
+    two heads no longer compete for shared capacity.
+
+    Public API matches ``_ValuePolicyMLP``: ``forward(x) →
+    (value, policy_logits)`` with shapes ``(B, 1)`` and
+    ``(B, ACTION_VOCAB_SIZE)``. ``NNEvaluator`` and the trainer can
+    use either class through identical call sites; the dispatch on
+    architecture happens at construction time.
+
+    State_dict layout differs from the shared-trunk variant — keys
+    are ``value_trunk.*`` + ``policy_trunk.*`` + ``value_head.*`` +
+    ``policy_head.*`` instead of the shared ``trunk.*``. Saved weights
+    from the two architectures are NOT cross-loadable; the metadata's
+    ``architecture`` field tells the loader which class to instantiate.
+
+    Param count at HIDDEN_SIZES = (128, 128, 64) and ACTION_VOCAB_SIZE
+    = 517: roughly 2x the shared-trunk variant (each trunk independently
+    holds the same parameter count as the shared trunk; the heads are
+    unchanged).
+    """
+
+    def __init__(
+        self,
+        input_dim: int = FEATURE_DIM,
+        hidden_sizes: tuple[int, ...] = HIDDEN_SIZES,
+        policy_hidden_sizes: Optional[tuple[int, ...]] = None,
+        policy_dim: Optional[int] = None,
+    ) -> None:
+        super().__init__()
+        if policy_dim is None:
+            policy_dim = _action_encoding().ACTION_VOCAB_SIZE
+        if policy_hidden_sizes is None:
+            policy_hidden_sizes = hidden_sizes
+
+        def _build_trunk(sizes: tuple[int, ...]) -> tuple[nn.Sequential, int]:
+            layers: list[nn.Module] = []
+            prev = input_dim
+            for size in sizes:
+                layers.append(nn.Linear(prev, size))
+                layers.append(nn.ReLU())
+                prev = size
+            return nn.Sequential(*layers), prev
+
+        self.value_trunk, v_last = _build_trunk(hidden_sizes)
+        self.policy_trunk, p_last = _build_trunk(policy_hidden_sizes)
+        self.value_head = nn.Sequential(
+            nn.Linear(v_last, 1),
+            nn.Tanh(),
+        )
+        self.policy_head = nn.Linear(p_last, policy_dim)
+
+    def forward(
+        self, x: torch.Tensor,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        v_features = self.value_trunk(x)
+        value = self.value_head(v_features)
+        p_features = self.policy_trunk(x)
+        policy_logits = self.policy_head(p_features)
+        return value, policy_logits
+
+
+# Architecture identifier strings for ``NNEvaluator`` /
+# ``train_value_network`` dispatch. Recorded into each version's
+# ``metadata.json`` so loaders can route weights to the right class.
+ARCHITECTURE_SHARED = "shared"
+ARCHITECTURE_SEPARATE = "separate"
+SUPPORTED_ARCHITECTURES: tuple[str, ...] = (
+    ARCHITECTURE_SHARED, ARCHITECTURE_SEPARATE,
+)
+
+
+def _build_dual_head_model(
+    architecture: str,
+    *,
+    hidden_sizes: tuple[int, ...] = HIDDEN_SIZES,
+    policy_hidden_sizes: Optional[tuple[int, ...]] = None,
+) -> nn.Module:
+    """Instantiate the dual-head model class matching ``architecture``.
+
+    Centralized so trainer + NNEvaluator dispatch the same way. Raises
+    ``ValueError`` on an unknown architecture string.
+    """
+    if architecture == ARCHITECTURE_SHARED:
+        return _ValuePolicyMLP(hidden_sizes=hidden_sizes)
+    if architecture == ARCHITECTURE_SEPARATE:
+        return _ValuePolicyMLPSeparate(
+            hidden_sizes=hidden_sizes,
+            policy_hidden_sizes=policy_hidden_sizes,
+        )
+    raise ValueError(
+        f"unknown architecture {architecture!r}; "
+        f"expected one of {SUPPORTED_ARCHITECTURES}"
+    )
+
+
 class NNEvaluator(Evaluator):
     """Wraps a ``_ValueMLP`` in the ``Evaluator`` interface.
 
@@ -223,6 +326,8 @@ class NNEvaluator(Evaluator):
         device: str = "cpu",
         with_policy: bool = False,
         hidden_sizes: tuple[int, ...] = HIDDEN_SIZES,
+        architecture: str = ARCHITECTURE_SHARED,
+        policy_hidden_sizes: Optional[tuple[int, ...]] = None,
     ) -> None:
         # ``with_policy=False`` (default) preserves bit-exact backward
         # compat with v1/v2 weights — same _ValueMLP, same forward
@@ -243,11 +348,37 @@ class NNEvaluator(Evaluator):
         # (``evaluate_nn.py``, ``NNPimcConfig.build``) read the
         # ``hidden_sizes`` field from each version's metadata and
         # pass it here, so per-version architectures coexist.
+        # ``architecture`` selects WHICH dual-head class hosts the
+        # policy / value heads when ``with_policy=True``:
+        # - ``"shared"`` (default, back-compat): single shared trunk
+        #   feeds both heads. The state_dict layout v1-v15 was trained
+        #   under, so old weights load cleanly when this is left at
+        #   the default.
+        # - ``"separate"``: two parallel trunks, one per head. Each
+        #   trunk independently consumes the raw input and feeds its
+        #   own head. The two heads stop competing for shared trunk
+        #   capacity, fixing the ~3:1 value-vs-policy gradient
+        #   saturation observed in iter_002 v13. State_dict keys are
+        #   ``value_trunk.*`` + ``policy_trunk.*`` (vs the shared
+        #   variant's ``trunk.*``) — incompatible with shared-trunk
+        #   weights, so the architecture choice is recorded in each
+        #   version's metadata.json and threaded through here.
+        # Ignored when ``with_policy=False`` (the value-only
+        # ``_ValueMLP`` has no policy head and so no architectural
+        # choice to make).
+        if architecture not in SUPPORTED_ARCHITECTURES:
+            raise ValueError(
+                f"architecture must be one of "
+                f"{SUPPORTED_ARCHITECTURES}; got {architecture!r}"
+            )
         self.device = torch.device(device)
         self.with_policy = with_policy
+        self.architecture = architecture
         if with_policy:
-            self.model: nn.Module = _ValuePolicyMLP(
+            self.model: nn.Module = _build_dual_head_model(
+                architecture,
                 hidden_sizes=hidden_sizes,
+                policy_hidden_sizes=policy_hidden_sizes,
             )
         else:
             self.model = _ValueMLP(hidden_sizes=hidden_sizes)
