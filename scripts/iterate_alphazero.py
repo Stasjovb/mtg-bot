@@ -367,6 +367,19 @@ def _now_stamp() -> str:
     return datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
 
 
+def _compute_slack_extra(target_games: int, slack_pct: float) -> int:
+    """Compute the number of EXTRA games to queue beyond
+    ``target_games`` for straggler tolerance.
+
+    Returns ``ceil(target_games * slack_pct)``. Negative slack_pct
+    is clamped to 0 (no over-queue, legacy behavior).
+    """
+    import math
+    if slack_pct is None or slack_pct <= 0:
+        return 0
+    return int(math.ceil(target_games * slack_pct))
+
+
 def _self_play(
     *,
     weights_path: Path,
@@ -496,6 +509,7 @@ def _self_play_distributed(
     total_games: int,
     queue_url: str,
     bundle_url: str | None = None,
+    slack_extra: int = 0,
     use_ismcts: bool = False,
     use_belief_weighted: bool = False,
     heuristics: HeuristicsConfig | None = None,
@@ -545,6 +559,7 @@ def _self_play_distributed(
         total_games=total_games,
         queue_url=queue_url,
         bundle_url=bundle_url,
+        slack_extra=slack_extra,
     )
     elapsed = time.perf_counter() - started
 
@@ -587,6 +602,7 @@ def _eval_match_distributed(
     queue_url: str,
     bundle_url: str | None,
     opponent_label: str,
+    slack_extra: int = 0,
     use_ismcts: bool = False,
     use_belief_weighted: bool = False,
 ) -> tuple[int, int, int, float]:
@@ -622,6 +638,7 @@ def _eval_match_distributed(
         total_games=n_games,
         queue_url=queue_url,
         bundle_url=bundle_url,
+        slack_extra=slack_extra,
     )
     elapsed = time.perf_counter() - started
     return (
@@ -1046,6 +1063,21 @@ def main() -> None:
         ),
     )
     parser.add_argument(
+        "--queue-slack-pct", type=float, default=0.1,
+        help=(
+            "Over-queue ratio for distributed self-play and eval. "
+            "The queue is initialized at "
+            "``ceil(target_games * (1 + queue_slack_pct))``; an "
+            "early-stop poller closes the queue once "
+            "``target_games`` SUCCESSFUL completions are in (n_games_"
+            "done - crashed - timed_out across all shards). Slack "
+            "indices that haven't been taken are abandoned. Default "
+            "0.1 (10%%) trades ~10%% extra compute for elimination of "
+            "the long-tail straggler wait. Set to 0 for the legacy "
+            "drain-the-whole-queue behavior."
+        ),
+    )
+    parser.add_argument(
         "--use-ismcts", action="store_true",
         help=(
             "Use Information Set MCTS instead of PIMC for both self-"
@@ -1375,6 +1407,9 @@ def main() -> None:
                 total_games=args.games_per_iteration,
                 queue_url=args.queue_url,
                 bundle_url=args.bundle_url,
+                slack_extra=_compute_slack_extra(
+                    args.games_per_iteration, args.queue_slack_pct,
+                ),
                 use_ismcts=args.use_ismcts,
                 use_belief_weighted=args.use_belief_weighted,
                 heuristics=HeuristicsConfig(
@@ -1540,6 +1575,9 @@ def main() -> None:
                         queue_url=args.queue_url,
                         bundle_url=args.bundle_url,
                         opponent_label=best_version,
+                        slack_extra=_compute_slack_extra(
+                            args.eval_games, args.queue_slack_pct,
+                        ),
                         use_ismcts=args.use_ismcts,
                         use_belief_weighted=args.use_belief_weighted,
                     )

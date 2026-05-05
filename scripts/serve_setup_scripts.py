@@ -255,8 +255,32 @@ def create_app(
         if not run_id or not isinstance(total, int) or total <= 0:
             return jsonify({"error": "run_id + total_games required"}), 400
         with _queues_lock:
-            _queues[run_id] = {"next": 0, "total": total}
+            _queues[run_id] = {"next": 0, "total": total, "closed": False}
         return jsonify({"ok": True, "run_id": run_id, "total_games": total})
+
+    @app.route("/queue/close/<run_id>", methods=["POST"])
+    def queue_close(run_id: str):
+        """Mark the queue for ``run_id`` as closed: subsequent
+        ``/queue/take`` calls return an empty list with
+        ``remaining=0`` regardless of how many indices remain. Used
+        by the orchestrator to early-stop a run once enough games
+        have completed successfully — the over-queue slack is
+        abandoned, in-flight stragglers are no longer blocking.
+
+        Idempotent: closing an already-closed queue is a no-op.
+        Returns 404 if the run_id was never initialized."""
+        with _queues_lock:
+            q = _queues.get(run_id)
+            if q is None:
+                return jsonify({"error": f"unknown run_id {run_id!r}"}), 404
+            q["closed"] = True
+            return jsonify({
+                "ok": True,
+                "run_id": run_id,
+                "closed": True,
+                "next": q["next"],
+                "total": q["total"],
+            })
 
     @app.route("/queue/take", methods=["POST"])
     def queue_take():
@@ -293,6 +317,16 @@ def create_app(
             q = _queues.get(run_id)
             if q is None:
                 return jsonify({"error": f"unknown run_id {run_id!r}"}), 404
+            # Early-stop signal from the orchestrator: refuse to
+            # hand out new games even though indices remain. The
+            # in-flight games are still in flight; the abandoned
+            # slack is the over-queue safety margin we don't need.
+            if q.get("closed"):
+                return jsonify({
+                    "games": [],
+                    "remaining": 0,
+                    "closed": True,
+                })
             start = q["next"]
             end = min(start + batch_size, q["total"])
             q["next"] = end
@@ -313,6 +347,7 @@ def create_app(
                         "next": q["next"],
                         "total": q["total"],
                         "remaining": q["total"] - q["next"],
+                        "closed": bool(q.get("closed")),
                     }
                     for rid, q in _queues.items()
                 },

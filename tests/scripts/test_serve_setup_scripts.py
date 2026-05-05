@@ -345,8 +345,80 @@ def test_queue_status_reflects_state():
     res = c.get("/queue/status")
     body = res.get_json()
     assert body["queues"]["r"] == {
-        "next": 4, "total": 10, "remaining": 6,
+        "next": 4, "total": 10, "remaining": 6, "closed": False,
     }
+
+
+def test_queue_close_makes_take_return_empty():
+    """Early-stop: once /queue/close/<run_id> is POSTed, subsequent
+    /queue/take calls for that run_id return an empty list with
+    remaining=0 even though indices remain. Slack is abandoned —
+    the orchestrator already has enough successful games."""
+    c = _queue_app()
+    c.post("/queue/init", json={"run_id": "r", "total_games": 10})
+    res = c.post("/queue/take", json={"run_id": "r", "batch_size": 3})
+    assert res.get_json()["games"] == [0, 1, 2]
+    res = c.post("/queue/close/r")
+    assert res.status_code == 200
+    body = res.get_json()
+    assert body["closed"] is True
+    assert body["next"] == 3
+    assert body["total"] == 10
+    res = c.post("/queue/take", json={"run_id": "r", "batch_size": 3})
+    assert res.status_code == 200
+    body = res.get_json()
+    assert body["games"] == []
+    assert body["remaining"] == 0
+    assert body["closed"] is True
+
+
+def test_queue_close_unknown_run_id_404():
+    """Closing a run_id that was never initialized returns 404 so
+    the orchestrator detects a master/queue mismatch instead of
+    silently no-op'ing."""
+    c = _queue_app()
+    res = c.post("/queue/close/never-init")
+    assert res.status_code == 404
+
+
+def test_queue_close_is_idempotent():
+    """Closing twice is a no-op (no error). The orchestrator's
+    poller may race with itself or retry on transient HTTP failures;
+    both calls should succeed."""
+    c = _queue_app()
+    c.post("/queue/init", json={"run_id": "r", "total_games": 5})
+    res1 = c.post("/queue/close/r")
+    assert res1.status_code == 200
+    assert res1.get_json()["closed"] is True
+    res2 = c.post("/queue/close/r")
+    assert res2.status_code == 200
+    assert res2.get_json()["closed"] is True
+
+
+def test_queue_close_isolated_per_run_id():
+    """Closing run A must not close run B. Different iters share the
+    same server; a self-play run-id finishing must not break a
+    concurrent eval run-id."""
+    c = _queue_app()
+    c.post("/queue/init", json={"run_id": "A", "total_games": 5})
+    c.post("/queue/init", json={"run_id": "B", "total_games": 5})
+    c.post("/queue/close/A")
+    res = c.post("/queue/take", json={"run_id": "A", "batch_size": 3})
+    assert res.get_json()["games"] == []
+    res = c.post("/queue/take", json={"run_id": "B", "batch_size": 3})
+    assert res.get_json()["games"] == [0, 1, 2]
+
+
+def test_queue_status_reports_closed_flag():
+    """Diagnostic endpoint surfaces the closed flag so an operator
+    can eyeball whether the master has signaled early-stop."""
+    c = _queue_app()
+    c.post("/queue/init", json={"run_id": "r", "total_games": 10})
+    res = c.get("/queue/status")
+    assert res.get_json()["queues"]["r"]["closed"] is False
+    c.post("/queue/close/r")
+    res = c.get("/queue/status")
+    assert res.get_json()["queues"]["r"]["closed"] is True
 
 
 def test_queue_concurrent_takes_no_overlap():

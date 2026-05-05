@@ -272,3 +272,41 @@ def test_orphan_with_no_decided_games_raises(tmp_path: Path):
             state, registry_root, progress_dir,
             bootstrap_version="v4", acceptance_threshold=0.55,
         )
+
+
+# ---- _compute_slack_extra ---------------------------------------
+
+
+def test_compute_slack_extra_default_10pct():
+    """Default --queue-slack-pct=0.1 → 10% over-queue. 500 → 50."""
+    iz = _load_module()
+    assert iz._compute_slack_extra(500, 0.1) == 50
+
+
+def test_compute_slack_extra_zero_pct_disables_overqueue():
+    """slack_pct=0 disables over-queue (legacy "drain everything"
+    behavior). The orchestrator skips poller startup when this
+    returns 0."""
+    iz = _load_module()
+    assert iz._compute_slack_extra(500, 0.0) == 0
+
+
+def test_compute_slack_extra_rounds_up():
+    """5% of 33 = 1.65 → ceil = 2. Never silently round down or we'd
+    miss "I want some slack" for small target sizes."""
+    iz = _load_module()
+    assert iz._compute_slack_extra(33, 0.05) == 2
+
+
+def test_compute_slack_extra_negative_clamps_to_zero():
+    """Negative percentages don't make sense — clamp to 0 instead
+    of negative-sizing the queue."""
+    iz = _load_module()
+    assert iz._compute_slack_extra(500, -0.5) == 0
+
+
+def test_compute_slack_extra_large_pct():
+    """50% over-queue: 500 → 250. The user should be able to dial
+    slack arbitrarily; no implicit upper cap."""
+    iz = _load_module()
+    assert iz._compute_slack_extra(500, 0.5) == 250
