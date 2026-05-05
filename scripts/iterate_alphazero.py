@@ -339,6 +339,7 @@ def _self_play(
     deck_pool: list[Deck] | None = None,
     replay_config: ReplayCaptureConfig | None = None,
     hang_dump_dir: str | None = None,
+    phase_prune_enabled: bool = True,
 ) -> tuple[int, int, float]:
     """Run one self-play data-gen pass. Returns (n_samples,
     n_policy_rows, elapsed_seconds). Both seats use the same
@@ -401,6 +402,7 @@ def _self_play(
                 deck_pool=deck_pool,
                 replay_config=replay_config,
                 hang_dump_dir=hang_dump_dir,
+                phase_prune_enabled=phase_prune_enabled,
             )
         )
     except BaseException:
@@ -442,6 +444,7 @@ def _self_play_distributed(
     bundle_url: str | None = None,
     use_ismcts: bool = False,
     use_belief_weighted: bool = False,
+    phase_prune_enabled: bool = True,
 ) -> tuple[int, int, float]:
     """Distributed self-play: dispatch the iter's games across the
     shards in ``shards_config``, gather all per-shard npzs into the
@@ -477,6 +480,7 @@ def _self_play_distributed(
         ),
         use_ismcts=use_ismcts,
         use_belief_weighted=use_belief_weighted,
+        phase_prune_enabled=phase_prune_enabled,
     )
     started = time.perf_counter()
     npz_paths = run_distributed_self_play(
@@ -1013,6 +1017,20 @@ def main() -> None:
         ),
     )
     parser.add_argument(
+        "--no-phase-priority-prune", action="store_true",
+        help=(
+            "Disable the phase-based active-priority prune in the "
+            "self-play adapter. With the prune enabled (default), the "
+            "active player auto-passes during their own UPKEEP / DRAW "
+            "/ BEGINNING_OF_COMBAT / END step when the stack is empty "
+            "-- a training-time heuristic that skips many priority "
+            "moments at the cost of a small set of niche legitimate "
+            "plays. Pass this flag for tournament / correctness-"
+            "sensitive runs. See docs/SEARCH_LIMITATIONS.md entry #6 "
+            "for the full list of acceptable-failure cases."
+        ),
+    )
+    parser.add_argument(
         "--reconcile-state", action="store_true",
         help=(
             "Recover from a partial-iter crash where the trainer "
@@ -1227,6 +1245,7 @@ def main() -> None:
                 deck_pool=deck_pool,
                 replay_config=self_play_replay_config,
                 hang_dump_dir=sp_hang_dir,
+                phase_prune_enabled=not args.no_phase_priority_prune,
             )
         else:
             # Distributed: each shard writes its own npz to args.data_dir
@@ -1257,6 +1276,7 @@ def main() -> None:
                 bundle_url=args.bundle_url,
                 use_ismcts=args.use_ismcts,
                 use_belief_weighted=args.use_belief_weighted,
+                phase_prune_enabled=not args.no_phase_priority_prune,
             )
         print(
             f"[iterate]   gen done in {gen_elapsed/60:.1f}m: "

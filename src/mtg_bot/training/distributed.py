@@ -295,6 +295,9 @@ class SelfPlayJobSpec:
     hang_dump_root: Optional[str] = None
     use_ismcts: bool = False
     use_belief_weighted: bool = False
+    # Phase-based active-priority prune (training heuristic). Defaults
+    # ON for self-play; see ``docs/SEARCH_LIMITATIONS.md`` entry #6.
+    phase_prune_enabled: bool = True
 
     def to_dict(self) -> dict[str, Any]:
         """JSON-serializable dict. Used by ``run_self_play_shard.py``
@@ -333,6 +336,7 @@ class SelfPlayJobSpec:
             "hang_dump_root": _posix(self.hang_dump_root),
             "use_ismcts": self.use_ismcts,
             "use_belief_weighted": self.use_belief_weighted,
+            "phase_prune_enabled": self.phase_prune_enabled,
         }
 
     @classmethod
@@ -356,6 +360,9 @@ class SelfPlayJobSpec:
             hang_dump_root=d.get("hang_dump_root"),
             use_ismcts=bool(d.get("use_ismcts", False)),
             use_belief_weighted=bool(d.get("use_belief_weighted", False)),
+            phase_prune_enabled=bool(
+                d.get("phase_prune_enabled", True),
+            ),
         )
 
 
@@ -389,6 +396,11 @@ class EvalJobSpec:
     opponent_label: str = "previous"
     use_ismcts: bool = False
     use_belief_weighted: bool = False
+    # Phase-based active-priority prune. For eval/tournament play
+    # this defaults OFF — the strength-vs-throughput tradeoff that
+    # justifies the prune in training does not apply when match
+    # outcomes determine acceptance.
+    phase_prune_enabled: bool = False
 
     def to_dict(self) -> dict[str, Any]:
         def _posix(p):
@@ -414,6 +426,7 @@ class EvalJobSpec:
             "opponent_label": self.opponent_label,
             "use_ismcts": self.use_ismcts,
             "use_belief_weighted": self.use_belief_weighted,
+            "phase_prune_enabled": self.phase_prune_enabled,
         }
 
     @classmethod
@@ -437,6 +450,9 @@ class EvalJobSpec:
             opponent_label=d.get("opponent_label", "previous"),
             use_ismcts=bool(d.get("use_ismcts", False)),
             use_belief_weighted=bool(d.get("use_belief_weighted", False)),
+            phase_prune_enabled=bool(
+                d.get("phase_prune_enabled", False),
+            ),
         )
 
 
@@ -560,6 +576,7 @@ def run_shard_local(
                 deck_pool=deck_pool,
                 replay_config=replay_config,
                 hang_dump_dir=hang_dump_dir,
+                phase_prune_enabled=spec.phase_prune_enabled,
             )
         )
     except BaseException:
@@ -1250,7 +1267,7 @@ def run_shard_pull(
             spec.decision_cap, spec.sample_every,
             replay_config, deck_pool,
             spec.enable_mulligans, spec.per_game_timeout_sec,
-            hang_dump_dir,
+            hang_dump_dir, spec.phase_prune_enabled,
         )
 
     def _flush() -> None:
@@ -1521,6 +1538,7 @@ def run_shard_eval_pull(
             4000,  # decision_cap, mirrors run_match's default
             spec.enable_mulligans, spec.per_game_timeout_sec,
             deck_pool, replay_config, hang_dump_dir,
+            spec.phase_prune_enabled,
         )
 
     shard_t0 = _time.perf_counter()
