@@ -304,6 +304,10 @@ class SelfPlayJobSpec:
     # Skip-empty-combat short-circuit (training heuristic). Defaults
     # ON for self-play; see ``docs/SEARCH_LIMITATIONS.md`` entry #9.
     skip_empty_combat_enabled: bool = True
+    # Skip our priority on opp's POSTCOMBAT_MAIN (training heuristic).
+    # Defaults ON for self-play; see ``docs/SEARCH_LIMITATIONS.md``
+    # entry #10.
+    skip_opp_postcombat_main_enabled: bool = True
 
     def to_dict(self) -> dict[str, Any]:
         """JSON-serializable dict. Used by ``run_self_play_shard.py``
@@ -345,6 +349,9 @@ class SelfPlayJobSpec:
             "phase_prune_enabled": self.phase_prune_enabled,
             "force_landdrop_enabled": self.force_landdrop_enabled,
             "skip_empty_combat_enabled": self.skip_empty_combat_enabled,
+            "skip_opp_postcombat_main_enabled": (
+                self.skip_opp_postcombat_main_enabled
+            ),
         }
 
     @classmethod
@@ -376,6 +383,9 @@ class SelfPlayJobSpec:
             ),
             skip_empty_combat_enabled=bool(
                 d.get("skip_empty_combat_enabled", True),
+            ),
+            skip_opp_postcombat_main_enabled=bool(
+                d.get("skip_opp_postcombat_main_enabled", True),
             ),
         )
 
@@ -424,6 +434,10 @@ class EvalJobSpec:
     # to pump or remove), so this is safer than the others to leave
     # ON, but eval still defaults conservative.
     skip_empty_combat_enabled: bool = False
+    # Skip our priority on opp's POSTCOMBAT_MAIN. Defaults OFF for
+    # eval — the heuristic forgoes potential reactive plays that
+    # match outcomes might depend on.
+    skip_opp_postcombat_main_enabled: bool = False
 
     def to_dict(self) -> dict[str, Any]:
         def _posix(p):
@@ -452,6 +466,9 @@ class EvalJobSpec:
             "phase_prune_enabled": self.phase_prune_enabled,
             "force_landdrop_enabled": self.force_landdrop_enabled,
             "skip_empty_combat_enabled": self.skip_empty_combat_enabled,
+            "skip_opp_postcombat_main_enabled": (
+                self.skip_opp_postcombat_main_enabled
+            ),
         }
 
     @classmethod
@@ -483,6 +500,9 @@ class EvalJobSpec:
             ),
             skip_empty_combat_enabled=bool(
                 d.get("skip_empty_combat_enabled", False),
+            ),
+            skip_opp_postcombat_main_enabled=bool(
+                d.get("skip_opp_postcombat_main_enabled", False),
             ),
         )
 
@@ -610,6 +630,9 @@ def run_shard_local(
                 phase_prune_enabled=spec.phase_prune_enabled,
                 force_landdrop_enabled=spec.force_landdrop_enabled,
                 skip_empty_combat_enabled=spec.skip_empty_combat_enabled,
+                skip_opp_postcombat_main_enabled=(
+                    spec.skip_opp_postcombat_main_enabled
+                ),
             )
         )
     except BaseException:
@@ -1303,6 +1326,7 @@ def run_shard_pull(
             hang_dump_dir, spec.phase_prune_enabled,
             spec.force_landdrop_enabled,
             spec.skip_empty_combat_enabled,
+            spec.skip_opp_postcombat_main_enabled,
         )
 
     def _flush() -> None:
@@ -1576,6 +1600,7 @@ def run_shard_eval_pull(
             spec.phase_prune_enabled,
             spec.force_landdrop_enabled,
             spec.skip_empty_combat_enabled,
+            spec.skip_opp_postcombat_main_enabled,
         )
 
     shard_t0 = _time.perf_counter()

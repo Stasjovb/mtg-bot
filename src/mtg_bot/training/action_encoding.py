@@ -953,6 +953,11 @@ def _enumerate_legal(state: Any, viewer: PlayerID) -> list:
     skip_empty_combat_fn = getattr(state, "_should_skip_empty_combat", None)
     if skip_empty_combat_fn is not None and skip_empty_combat_fn():
         return [PassPriority()]
+    skip_opp_pcm_fn = getattr(
+        state, "_should_skip_opp_postcombat_main", None,
+    )
+    if skip_opp_pcm_fn is not None and skip_opp_pcm_fn():
+        return [PassPriority()]
     short_circuit_fn = getattr(state, "_can_short_circuit_to_pass", None)
     if short_circuit_fn is not None and short_circuit_fn():
         return [PassPriority()]

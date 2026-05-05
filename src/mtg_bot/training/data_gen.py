@@ -195,6 +195,7 @@ def generate_training_data(
     phase_prune_enabled: bool = True,
     force_landdrop_enabled: bool = True,
     skip_empty_combat_enabled: bool = True,
+    skip_opp_postcombat_main_enabled: bool = True,
 ) -> tuple[np.ndarray, ...]:
     """Play ``n_games`` and return training arrays.
 
@@ -239,6 +240,9 @@ def generate_training_data(
             phase_prune_enabled=phase_prune_enabled,
             force_landdrop_enabled=force_landdrop_enabled,
             skip_empty_combat_enabled=skip_empty_combat_enabled,
+            skip_opp_postcombat_main_enabled=(
+                skip_opp_postcombat_main_enabled
+            ),
         )
         chunks.append(chunk)
         if progress is not None:
@@ -270,6 +274,7 @@ def generate_training_data_parallel(
     phase_prune_enabled: bool = True,
     force_landdrop_enabled: bool = True,
     skip_empty_combat_enabled: bool = True,
+    skip_opp_postcombat_main_enabled: bool = True,
 ) -> tuple[np.ndarray, ...]:
     """Same contract as ``generate_training_data`` but distributes
     games across a ``multiprocessing.Pool``. Same ``with_policy``
@@ -312,6 +317,7 @@ def generate_training_data_parallel(
             enable_mulligans, per_game_timeout_sec, hang_dump_dir,
             phase_prune_enabled, force_landdrop_enabled,
             skip_empty_combat_enabled,
+            skip_opp_postcombat_main_enabled,
         )
         for i in range(n_games)
     ]
@@ -402,6 +408,7 @@ def _play_one_parallel_game(
         enable_mulligans, per_game_timeout_sec, hang_dump_dir,
         phase_prune_enabled, force_landdrop_enabled,
         skip_empty_combat_enabled,
+        skip_opp_postcombat_main_enabled,
     ) = args
     try:
         chunk = _generate_one_game_data(
@@ -417,6 +424,9 @@ def _play_one_parallel_game(
             phase_prune_enabled=phase_prune_enabled,
             force_landdrop_enabled=force_landdrop_enabled,
             skip_empty_combat_enabled=skip_empty_combat_enabled,
+            skip_opp_postcombat_main_enabled=(
+                skip_opp_postcombat_main_enabled
+            ),
         )
     except Exception as exc:  # noqa: BLE001 - intentional broad catch
         import sys
@@ -459,6 +469,7 @@ def _generate_one_game_data(
     phase_prune_enabled: bool = True,
     force_landdrop_enabled: bool = True,
     skip_empty_combat_enabled: bool = True,
+    skip_opp_postcombat_main_enabled: bool = True,
 ) -> _GameChunk:
     """Play one game and return its 4-tuple training arrays.
 
@@ -524,6 +535,7 @@ def _generate_one_game_data(
         phase_prune_enabled=phase_prune_enabled,
         force_landdrop_enabled=force_landdrop_enabled,
         skip_empty_combat_enabled=skip_empty_combat_enabled,
+        skip_opp_postcombat_main_enabled=skip_opp_postcombat_main_enabled,
     )
     strategies = {
         0: p0_factory(base_seed + 100 * game_idx),

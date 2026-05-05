@@ -181,6 +181,7 @@ class MtgGameStateAdapter:
         phase_prune_enabled: bool = True,
         force_landdrop_enabled: bool = True,
         skip_empty_combat_enabled: bool = True,
+        skip_opp_postcombat_main_enabled: bool = True,
     ) -> None:
         self._state = engine_state
         self._tactical = tactical_agent or DefaultTacticalAgent()
@@ -214,6 +215,17 @@ class MtgGameStateAdapter:
         # without enumerating legal_actions for either side. See
         # SEARCH_LIMITATIONS entry #9.
         self._skip_empty_combat_enabled = skip_empty_combat_enabled
+        # Skip our priority during opp's POSTCOMBAT_MAIN with empty
+        # stack. When True (default), if it's opp's turn and we're
+        # being asked to act at their second main with nothing on the
+        # stack, return ``[PassPriority()]`` immediately. The bigger
+        # opp-capability auto-pass already catches the "we have nothing
+        # castable" subset; this catches the "we DO have a castable
+        # instant but it's pointless to use it at opp end-of-main-2"
+        # remainder. See SEARCH_LIMITATIONS entry #10.
+        self._skip_opp_postcombat_main_enabled = (
+            skip_opp_postcombat_main_enabled
+        )
         # Agent installation. With resolution exposure we need the
         # ``ResolutionChannelAgent`` to intercept callbacks; non-
         # exposed callbacks fall through to the tactical policy.
@@ -522,6 +534,46 @@ class MtgGameStateAdapter:
                 return False
         return True
 
+    def _should_skip_opp_postcombat_main(self) -> bool:
+        """Skip our priority window during the opponent's POSTCOMBAT_MAIN
+        when the stack is empty. The capability auto-pass already
+        handles the "we have nothing castable" subset; this fires for
+        the remaining case (we DO have a castable instant but
+        responding at opp end-of-main-2 is essentially never useful —
+        any reasonable instant timing is BEFORE their combat or AT
+        their end step, not in the dead window between).
+
+        Conditions to fire:
+        * ``skip_opp_postcombat_main_enabled`` is True.
+        * Not terminal / not resolution-paused / not in a factored
+          combat sub-decision.
+        * Stack is empty.
+        * Step is ``POSTCOMBAT_MAIN``.
+        * Player with priority is the NON-active player (it's opp's
+          turn and we hold priority).
+
+        Documented divergence from optimal play, see
+        ``docs/SEARCH_LIMITATIONS.md`` entry #10.
+        """
+        if not self._skip_opp_postcombat_main_enabled:
+            return False
+        if self._state.is_over():
+            return False
+        if self._resolution_paused:
+            return False
+        if self._combat_phase != _COMBAT_NONE:
+            return False
+        if len(self._state.stack) > 0:
+            return False
+        if self._state.step != Step.POSTCOMBAT_MAIN:
+            return False
+        # Active-only's complement: the priority holder must be the
+        # NON-active player (we're being asked to act on opp's turn).
+        return (
+            self._state.priority_player_idx
+            != self._state.active_player_idx
+        )
+
     def _can_short_circuit_to_pass(self) -> bool:
         """True iff the current decision moment is a priority window
         whose holder has no possible action. Auto-passes BOTH the
@@ -588,6 +640,9 @@ class MtgGameStateAdapter:
         c._phase_prune_enabled = self._phase_prune_enabled
         c._force_landdrop_enabled = self._force_landdrop_enabled
         c._skip_empty_combat_enabled = self._skip_empty_combat_enabled
+        c._skip_opp_postcombat_main_enabled = (
+            self._skip_opp_postcombat_main_enabled
+        )
         # Resolution-channel agent is per-adapter-instance so each
         # clone has its own replay queue. Snapshot/restore preserves
         # queue state from the source.
@@ -682,6 +737,10 @@ class MtgGameStateAdapter:
         # Fires for both active and opp priority. See
         # ``docs/SEARCH_LIMITATIONS.md`` entry #9.
         if self._should_skip_empty_combat():
+            return [PassPriority()]
+        # Skip our priority during opp's POSTCOMBAT_MAIN with empty
+        # stack. See ``docs/SEARCH_LIMITATIONS.md`` entry #10.
+        if self._should_skip_opp_postcombat_main():
             return [PassPriority()]
         # Capability auto-pass: when the priority holder has no
         # possible action (instant-speed for opp / non-active priority

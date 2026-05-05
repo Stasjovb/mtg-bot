@@ -510,6 +510,50 @@ Fires for **both** active and opponent priority windows: with no attackers there
 
 ---
 
+## 10. Skip our priority on opponent's POSTCOMBAT_MAIN (training heuristic)
+
+**Location**: `MtgGameStateAdapter.legal_decisions` (`src/mtg_bot/search/engine_adapter.py`) — see `_should_skip_opp_postcombat_main()`. Returns `[PassPriority()]` immediately when ALL of these hold:
+
+- `skip_opp_postcombat_main_enabled` is True (default for `SelfPlayJobSpec`, OFF for `EvalJobSpec`)
+- Not terminal / not resolution-paused / not in a factored combat sub-decision
+- Stack is empty
+- Step is `POSTCOMBAT_MAIN`
+- Player with priority is the **non-active** player (we're being asked to act on opp's turn)
+
+**Why this is sometimes wrong**: real MTG allows priority during opp's main 2 with empty stack. Edge cases the heuristic skips:
+
+| Edge case | Bot misbehavior |
+|---|---|
+| Counterspell on opp's about-to-be-cast spell next turn | Misses the pre-emptive timing (rare; opp would normally respond at end of turn) |
+| Cast a flash creature on opp's end of turn | Better timed AT end step itself (entry #6 phase-prune already auto-passes our active end step, but the natural end-of-opp-turn flash window is at OPP'S end step, not their main 2) |
+| Activate a "do X this turn" ability before EoT | Same — usually timed at end step proper |
+| Trigger that fires during opp's main 2 | Engine handles trigger firing; we just can't respond with an instant |
+
+**Failure mode**: bot passes priority during opp's main 2 even when an instant could be cast. Conservative-WRONG. The natural reactive timing for our instants on opp's turn is usually:
+- BEFORE opp's combat (during their precombat main, where capability auto-pass already fires)
+- AT opp's end step (where this heuristic doesn't apply)
+
+So the dead window we're skipping is genuinely a low-value priority moment for our instant-speed plays.
+
+**Why this complements capability auto-pass** (entry #3): capability auto-pass fires for the priority holder when they have nothing castable. This entry catches the remaining case: it IS opp's turn, we DO have a castable instant, but acting at opp's main-2 dead window is essentially never optimal. The capability check would let us through; this rule doesn't.
+
+**When it matters**:
+
+- For training: removes 1-2 priority moments per opp turn (we get priority once during opp's main 2; capability check fires when we can't act, this fires when we can but shouldn't). Estimated 5-6% wall delta.
+- For tournament play: marginal correctness loss. Pre-emptive instant timing on opp's main 2 is a niche play. Default OFF for eval.
+
+**Mitigation**: `skip_opp_postcombat_main_enabled=False` on `MtgGameStateAdapter` (or via Spec). `EvalJobSpec` defaults OFF; `SelfPlayJobSpec` defaults ON.
+
+**Acceptable for**: training, self-play data_gen.
+
+**NOT acceptable for**: tournament play, eval matches, any test where pre-emptive instant timing matters.
+
+**Fix scope if/when needed**: trivial to disable per-spec. To recover the lost plays, train the policy to value these windows directly (same shape of fix as the other priority short-circuits).
+
+**Impact estimate**: ~5-6% per-game wall reduction during training. Composes additively with capability auto-pass (#3) since it catches the "have castable but pointless" case capability misses.
+
+---
+
 ## Tracked but not in this doc
 
 Things tracked elsewhere that you might also want to know about:
