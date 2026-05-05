@@ -36,6 +36,7 @@ from mtg_bot.search._opp_capabilities import (
 )
 from mtg_bot.simulate import setup_game
 from mtg_bot.training import action_encoding as ae
+from tests._test_decks import simple_test_decklists  # noqa: E402
 
 
 # ---------------------------------------------------------------------
@@ -48,8 +49,7 @@ def _empty_state(seed: int = 42):
     setup_game's deck builder gives them. Tests that need a clean
     slate clear hand/battlefield manually.
     """
-    return setup_game(
-        [RandomAgent(), RandomAgent()], ["G", "R"], seed=seed,
+    return setup_game([RandomAgent(), RandomAgent()], decks=simple_test_decklists(), seed=seed,
     )
 
 

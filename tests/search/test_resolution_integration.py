@@ -25,6 +25,7 @@ from mtg_bot.search import (
 from mtg_bot.simulate import setup_game
 
 from mtg_bot.cards.source import get_active_source
+from tests._test_decks import simple_test_decklists  # noqa: E402
 
 _PRINTINGS = get_active_source().get_printings()
 
@@ -33,8 +34,7 @@ def _adapter_with_targetable_setup() -> MtgGameStateAdapter:
     """Build a state where P0 can cast a 2-damage spell on one of
     several creatures P1 controls. Force the state into a
     precombat-main moment where the spell is actually legal."""
-    state = setup_game(
-        [RandomAgent(), RandomAgent()], ["G", "R"], seed=42,
+    state = setup_game([RandomAgent(), RandomAgent()], decks=simple_test_decklists(), seed=42,
     )
     # Give P0 five Mountains so they can pay {2}{R} for Bombard.
     from mtg_bot.cards import BASIC_LANDS
@@ -185,8 +185,7 @@ def test_shock_life_now_exposed_as_resolution_decision():
     if not SHOCK_LANDS:
         pytest.skip("no shock lands in the pool")
 
-    state = setup_game(
-        [RandomAgent(), RandomAgent()], ["G", "R"], seed=42,
+    state = setup_game([RandomAgent(), RandomAgent()], decks=simple_test_decklists(), seed=42,
     )
     shock_name = next(iter(SHOCK_LANDS))
     shock = state.new_object(
@@ -249,8 +248,7 @@ def _paused_yesno_adapter() -> MtgGameStateAdapter:
     the test stays focused on ``_resolution_legal_decisions`` /
     ``_apply_resolution_decision`` semantics."""
     from mtg_bot.search.resolution_channel import KIND_YES_NO
-    state = setup_game(
-        [RandomAgent(), RandomAgent()], ["G", "R"], seed=1,
+    state = setup_game([RandomAgent(), RandomAgent()], decks=simple_test_decklists(), seed=1,
     )
     adapter = MtgGameStateAdapter(
         state, expose_resolution_decisions=True,
@@ -299,8 +297,7 @@ def test_yesno_endstep_trigger_exposes_pause_and_resolves():
     from mtg_bot.search import ResolutionYesNoDecision
     from mtg_bot.turn import Step
 
-    state = setup_game(
-        [RandomAgent(), RandomAgent()], ["G", "R"], seed=7,
+    state = setup_game([RandomAgent(), RandomAgent()], decks=simple_test_decklists(), seed=7,
     )
     # Two tapped creatures on P0's side so the intervening-if passes,
     # then put Vaultguard on the battlefield as well (it counts itself

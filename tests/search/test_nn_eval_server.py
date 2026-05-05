@@ -34,6 +34,7 @@ from mtg_bot.search.nn_evaluator import (
     NNEvaluator, _ValueMLP, _ValuePolicyMLP,
 )
 from mtg_bot.simulate import setup_game
+from tests._test_decks import simple_test_decklists  # noqa: E402
 
 
 # ---------- fixtures --------------------------------------------------------
@@ -44,8 +45,7 @@ def adapter():
     """A real MTG state adapter — gives the client realistic
     feature vectors / masks so the round-trip exercises the full
     extract→ship→forward→reply path."""
-    state = setup_game(
-        [RandomAgent(), RandomAgent()], ["G", "R"], seed=42,
+    state = setup_game([RandomAgent(), RandomAgent()], decks=simple_test_decklists(), seed=42,
     )
     return MtgGameStateAdapter(state)
 

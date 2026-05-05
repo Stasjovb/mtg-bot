@@ -38,10 +38,12 @@ def test_deterministic_with_seed():
     assert a.turn_number == b.turn_number
 
 
-def test_two_different_colors_play_each_other():
-    state = simulate_game(
+def test_two_different_decks_play_each_other():
+    from mtg_bot.simulate import simulate_game as _sg
+    from tests._test_decks import simple_test_decklists as _decks
+    state = _sg(
         agents=[RandomAgent(), RandomAgent()],
-        colors=["W", "B"],
+        decks=_decks("W", "B"),
         seed=3,
         max_turns=300,
     )
@@ -191,9 +193,7 @@ import pytest  # noqa: E402
 from mtg_bot.cards.source import get_active_source  # noqa: E402
 from mtg_bot.simulate import setup_game  # noqa: E402
 
-
-def build_mono_color_deck(color: str, seed: int | None = None) -> list[str]:
-    return get_active_source().build_mono_color_deck(color, seed=seed)
+from tests._test_decks import simple_test_decklist  # noqa: E402
 
 
 def _two_color_deck(c1: str, c2: str) -> list[str]:
@@ -231,9 +231,9 @@ def _two_color_deck(c1: str, c2: str) -> list[str]:
 
 
 def test_setup_game_accepts_explicit_decks():
-    """The new path: pass decks instead of colors."""
-    deck0 = build_mono_color_deck("G", seed=0)
-    deck1 = build_mono_color_deck("R", seed=1)
+    """The only deck-build path: pass decks explicitly."""
+    deck0 = simple_test_decklist("G")
+    deck1 = simple_test_decklist("R")
     state = setup_game(
         agents=[RandomAgent(), RandomAgent()],
         decks=[deck0, deck1],
@@ -247,22 +247,15 @@ def test_setup_game_accepts_explicit_decks():
     assert len(state.players[1].hand) == 7
 
 
-def test_setup_game_rejects_both_colors_and_decks():
-    deck = build_mono_color_deck("G", seed=0)
-    with pytest.raises(ValueError, match="exactly one"):
-        setup_game(
-            agents=[RandomAgent()],
-            colors=["G"], decks=[deck],
-        )
-
-
-def test_setup_game_rejects_neither_colors_nor_decks():
-    with pytest.raises(ValueError, match="exactly one"):
-        setup_game(agents=[RandomAgent(), RandomAgent()])
+def test_setup_game_requires_decks():
+    """``decks`` is mandatory — there's no alternative deck-build
+    path on setup_game."""
+    with pytest.raises((TypeError, ValueError)):
+        setup_game(agents=[RandomAgent(), RandomAgent()])  # type: ignore[call-arg]
 
 
 def test_setup_game_rejects_decks_length_mismatch():
-    deck = build_mono_color_deck("G", seed=0)
+    deck = simple_test_decklist("G")
     with pytest.raises(ValueError, match="decks length"):
         setup_game(
             agents=[RandomAgent(), RandomAgent()],
@@ -280,22 +273,16 @@ def test_setup_game_rejects_unknown_card_in_deck():
         )
 
 
-def test_setup_game_explicit_deck_matches_color_path():
-    """Sanity: a deck built via build_mono_color_deck and passed
-    via decks= should produce a state functionally equivalent to
-    passing colors=. Verifies the decks= path doesn't introduce
-    drift from existing behavior."""
-    deck0 = build_mono_color_deck("G", seed=12345)
-    deck1 = build_mono_color_deck("R", seed=12346)
+def test_setup_game_explicit_deck_library_composition():
+    """A deck passed via ``decks=`` materializes as the exact
+    multiset of cards in the player's library + hand."""
+    deck0 = simple_test_decklist("G")
+    deck1 = simple_test_decklist("R")
     state_via_decks = setup_game(
         agents=[RandomAgent(), RandomAgent()],
         decks=[deck0, deck1],
         seed=42,
     )
-    # We can't assert byte-equality vs the colors= path because the
-    # internal seed routing is different (colors= derives per-player
-    # seeds from the top-level rng), but we CAN assert library
-    # composition (multiset of cards) is the same.
     assert sorted(c.printing.name for c in state_via_decks.players[0].library
                   + state_via_decks.players[0].hand) == sorted(deck0)
     assert sorted(c.printing.name for c in state_via_decks.players[1].library
@@ -314,14 +301,6 @@ def test_two_color_deck_game_runs_to_completion():
     that a winner OR draw is set."""
     deck_gr = _two_color_deck("G", "R")
     deck_wu = _two_color_deck("W", "U")
-    state = simulate_game(
-        agents=[RandomAgent(), RandomAgent()],
-        seed=11, max_turns=200,
-    )
-    # First, sanity that the existing color path still works (no
-    # regression from the refactor).
-    assert state.is_over()
-    # Now the new path with explicit 2-color decks.
     from mtg_bot.simulate import setup_game as _setup_game
     from mtg_bot.simulate import run_turn
     s2 = _setup_game(

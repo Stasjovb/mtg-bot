@@ -17,6 +17,7 @@ from mtg_bot.simulate import run_turn
 from mtg_bot.turn import Step
 
 from mtg_bot.cards.source import get_active_source
+from tests._test_decks import simple_test_decklists  # noqa: E402
 
 _PRINTINGS = get_active_source().get_printings()
 
@@ -76,7 +77,7 @@ def test_run_turn_logs_start_of_turn_marker():
             RandomAgent(rng=random.Random(0)),
             RandomAgent(rng=random.Random(1)),
         ],
-        colors=["G", "R"],
+        decks=simple_test_decklists(),
         seed=0,
         max_turns=4,
     )

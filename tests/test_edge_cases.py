@@ -17,6 +17,7 @@ from mtg_bot.simulate import simulate_game
 from mtg_bot.turn import draw_card, run_cleanup_step, state_based_actions
 
 from mtg_bot.cards.source import get_active_source
+from tests._test_decks import simple_test_decklists  # noqa: E402
 
 
 # -----------------------
@@ -234,7 +235,7 @@ def test_state_based_actions_is_idempotent_once_draw_set():
 
 def test_simulate_rejects_mismatched_agents_and_colors():
     with pytest.raises(ValueError, match="same length"):
-        simulate_game(agents=[RandomAgent()], colors=["G", "R"], seed=0)
+        simulate_game(agents=[RandomAgent()], decks=simple_test_decklists(), seed=0)
 
 
 def test_simulate_verbose_prints(capsys):

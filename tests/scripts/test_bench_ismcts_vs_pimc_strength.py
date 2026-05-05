@@ -31,6 +31,7 @@ from mtg_bot.agents import RandomAgent
 from mtg_bot.search import MtgGameStateAdapter
 from mtg_bot.search.strategy import SearchStrategy
 from mtg_bot.simulate import setup_game
+from tests._test_decks import simple_test_decklists  # noqa: E402
 
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -142,10 +143,8 @@ def test_ismcts_factory_builds_and_chooses_legal_decision():
     strategy = cfg.build(seed=0)
     assert isinstance(strategy, SearchStrategy)
 
-    engine = setup_game(
-        [RandomAgent(rng=random.Random(1)),
-         RandomAgent(rng=random.Random(2))],
-        ["G", "R"], seed=0,
+    engine = setup_game([RandomAgent(rng=random.Random(1)),
+         RandomAgent(rng=random.Random(2))], decks=simple_test_decklists(), seed=0,
     )
     adapter = MtgGameStateAdapter(engine, expose_combat_decisions=True)
     while (

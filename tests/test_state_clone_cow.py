@@ -33,6 +33,7 @@ from mtg_bot.agents import RandomAgent
 from mtg_bot.cards import CardPrinting
 from mtg_bot.game import GameObject, Zone, _CowList
 from mtg_bot.simulate import simulate_game
+from tests._test_decks import simple_test_decklists  # noqa: E402
 
 
 def _mid_game_state(seed: int = 17, max_turns: int = 5):
@@ -41,7 +42,7 @@ def _mid_game_state(seed: int = 17, max_turns: int = 5):
         RandomAgent(name="a1", rng=random.Random(202)),
     ]
     return simulate_game(
-        agents=agents, colors=["G", "R"], seed=seed, max_turns=max_turns,
+        agents=agents, decks=simple_test_decklists(), seed=seed, max_turns=max_turns,
     )
 
 
@@ -400,8 +401,7 @@ def test_mcts_on_mtg_does_not_corrupt_state():
     )
     from mtg_bot.simulate import setup_game
 
-    state = setup_game(
-        [RandomAgent(), RandomAgent()], ["G", "R"], seed=42,
+    state = setup_game([RandomAgent(), RandomAgent()], decks=simple_test_decklists(), seed=42,
     )
     adapter = MtgGameStateAdapter(state)
     mcts = MCTS(
@@ -725,17 +725,24 @@ def test_clone_battlefield_mutation_does_not_leak_to_source():
     if not state.battlefield:
         return
     src_first_id = state.battlefield[0].id
+    # Snapshot the pre-clone state — random play may have left the
+    # permanent already tapped/damaged before the clone, and the
+    # invariant we're testing is "clone-side mutation doesn't leak",
+    # not specific initial values.
+    src_initial_tapped = state.battlefield[0].tapped
+    src_initial_damage = state.battlefield[0].damage
+    src_initial_counters = state.battlefield[0].plus_one_counters
 
     clone = state.clone()
-    clone.battlefield[0].tapped = True
-    clone.battlefield[0].damage = 99
-    clone.battlefield[0].plus_one_counters = 7
+    clone.battlefield[0].tapped = not src_initial_tapped
+    clone.battlefield[0].damage = src_initial_damage + 99
+    clone.battlefield[0].plus_one_counters = src_initial_counters + 7
 
     src_obj = state.battlefield[0]
     assert src_obj.id == src_first_id
-    assert src_obj.tapped is False
-    assert src_obj.damage == 0
-    assert src_obj.plus_one_counters == 0
+    assert src_obj.tapped is src_initial_tapped
+    assert src_obj.damage == src_initial_damage
+    assert src_obj.plus_one_counters == src_initial_counters
 
 
 def test_clone_explicit_state_field_round_trip():

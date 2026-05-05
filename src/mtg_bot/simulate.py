@@ -491,8 +491,18 @@ def simulate_game(
     verbose: bool = False,
     on_snapshot: Optional[SnapshotCallback] = None,
     snapshot_granularity: SnapshotGranularity = "step",
+    decks: Optional[list[list[str]]] = None,
 ) -> GameState:
     """Run a full game.
+
+    Provide each player's library via either ``decks`` (the production
+    path — explicit decklists) or ``colors`` (the playground path —
+    each color is materialized into a default mono-color deck via the
+    active card source).
+
+    When neither is provided, falls back to the legacy ``["G", "R"]``
+    default so single-line "just play a game" callers (``__main__``,
+    quick tests) keep their previous behavior unchanged.
 
     When ``on_snapshot`` is provided it is called with the current ``GameState``
     once after setup, after each step inside every turn, and once at game end.
@@ -517,18 +527,24 @@ def simulate_game(
     priority_on_snapshot = (
         on_snapshot if snapshot_granularity == "priority" else None
     )
-    if colors is None:
+    if decks is None and colors is None:
         colors = ["G", "R"]
+    n_seats = len(decks) if decks is not None else len(colors)  # type: ignore[arg-type]
     if agents is None:
         rng = random.Random(seed)
         agents = [
             RandomAgent(rng=random.Random(rng.randint(0, 10**9)))
-            for _ in range(len(colors))
+            for _ in range(n_seats)
         ]
-    if len(agents) != len(colors):
+    if len(agents) != n_seats:
+        if decks is not None:
+            raise ValueError("agents and decks must have same length")
         raise ValueError("agents and colors must have same length")
 
-    state = setup_game(agents, colors, seed=seed)
+    if decks is not None:
+        state = setup_game(agents, decks=decks, seed=seed)
+    else:
+        state = setup_game(agents, colors, seed=seed)
     if on_snapshot is not None:
         on_snapshot(state)
     while not state.is_over() and state.turn_number <= max_turns:

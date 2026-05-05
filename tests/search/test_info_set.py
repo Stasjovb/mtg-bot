@@ -33,6 +33,7 @@ from mtg_bot.search.engine_adapter import (
 from mtg_bot.search.info_set import info_set_key
 from mtg_bot.simulate import setup_game
 from mtg_bot.turn import Step
+from tests._test_decks import simple_test_decklists  # noqa: E402
 
 
 # ---------- helpers ---------------------------------------------------------
@@ -49,8 +50,7 @@ def _new_state(num_players: int = 2) -> GameState:
 def _seeded_real_state(seed: int) -> GameState:
     """Real two-player ``setup_game`` state with mono-color decks.
     Use for property tests that need realistic library / hand shapes."""
-    return setup_game(
-        [RandomAgent(), RandomAgent()], ["G", "R"], seed=seed,
+    return setup_game([RandomAgent(), RandomAgent()], decks=simple_test_decklists(), seed=seed,
     )
 
 

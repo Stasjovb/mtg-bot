@@ -31,6 +31,7 @@ from mtg_bot.search import (
 from mtg_bot.simulate import setup_game
 from mtg_bot.training import action_encoding as ae
 from mtg_bot.turn import Step
+from tests._test_decks import simple_test_decklists  # noqa: E402
 
 
 def _fresh_adapter(seed: int = 42, colors=None) -> MtgGameStateAdapter:
@@ -270,8 +271,7 @@ def test_legal_actions_cache_invalidated_by_resolution_pause(
     from mtg_bot.game import Zone
 
     printings = get_active_source().get_printings()
-    state = setup_game(
-        [RandomAgent(), RandomAgent()], ["G", "R"], seed=42,
+    state = setup_game([RandomAgent(), RandomAgent()], decks=simple_test_decklists(), seed=42,
     )
     # 7 Mountains: Bombard costs {2}{R}, so casting two of them in a
     # row consumes 6 mana. Anything less leaves the active player

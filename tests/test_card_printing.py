@@ -19,6 +19,7 @@ from __future__ import annotations
 from mtg_bot.agents import RandomAgent
 from mtg_bot.cards.parser_source import OracleParserCardSource
 from mtg_bot.simulate import setup_game
+from tests._test_decks import simple_test_decklists  # noqa: E402
 
 
 def test_card_printings_in_synthetic_decks_are_hashable():
@@ -27,8 +28,7 @@ def test_card_printings_in_synthetic_decks_are_hashable():
     setup just lands aren't on the battlefield yet, but exercise the
     other zones for symmetry), graveyard, and exile.
     """
-    state = setup_game(
-        [RandomAgent(), RandomAgent()], ["G", "R"], seed=0,
+    state = setup_game([RandomAgent(), RandomAgent()], decks=simple_test_decklists(), seed=0,
     )
     seen = 0
     for player in state.players:

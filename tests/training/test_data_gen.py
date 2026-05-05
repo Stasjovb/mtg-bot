@@ -470,25 +470,23 @@ def test_parallel_with_pimc_config_factory():
 
 import pytest  # noqa: E402
 
-from mtg_bot.cards.source import get_active_source  # noqa: E402
 from mtg_bot.decks import Deck  # noqa: E402
 from mtg_bot.training.data_gen import _sample_decks_for_game  # noqa: E402
 
-
-def build_mono_color_deck(color: str, seed: int | None = None) -> list[str]:
-    return get_active_source().build_mono_color_deck(color, seed=seed)
+from tests._test_decks import simple_test_decklist  # noqa: E402
 
 
 def _two_player_pool() -> list[Deck]:
-    """A small pool of distinct mono-color synthetic decks. Cheap
-    to build; uses cards we know are in our printing registry."""
+    """A small pool of distinct test decks across three colors.
+    Cheap to build; uses real cards we know are in the active card
+    source's printing registry."""
     return [
         Deck(draft_id="g_deck", build_index=0,
-             cards=build_mono_color_deck("G", seed=1)),
+             cards=simple_test_decklist("G")),
         Deck(draft_id="r_deck", build_index=0,
-             cards=build_mono_color_deck("R", seed=2)),
+             cards=simple_test_decklist("R")),
         Deck(draft_id="w_deck", build_index=0,
-             cards=build_mono_color_deck("W", seed=3)),
+             cards=simple_test_decklist("W")),
     ]
 
 
@@ -525,7 +523,7 @@ def test_sample_decks_single_deck_pool_mirrors():
     """Pool with just one deck → both seats get the same deck (mirror)."""
     pool = [
         Deck(draft_id="only", build_index=0,
-             cards=build_mono_color_deck("G", seed=0)),
+             cards=simple_test_decklist("G")),
     ]
     a, b = _sample_decks_for_game(pool, game_idx=0, base_seed=0)
     assert a is b
@@ -592,7 +590,7 @@ def test_deck_pool_with_short_decks_works():
     accepts them via the deck_pool path."""
     short_deck = (
         ["Forest"] * 17
-        + build_mono_color_deck("G", seed=0)[:23]
+        + simple_test_decklist("G")[:23]
     )
     pool = [
         Deck(draft_id="a", build_index=0, cards=short_deck),
@@ -642,12 +640,10 @@ def test_play_one_game_recording_captures_visits_at_sample_points():
     carry the strategy's visit dict; the non-active player's
     same-state sample (data-doubling row) should carry ``None``.
     Random / no-visits strategies fall through with ``None``."""
-    engine = setup_game(
-        [
+    engine = setup_game([
             RandomAgent(rng=random.Random(11)),
             RandomAgent(rng=random.Random(22)),
-        ],
-        ["G", "R"], seed=42,
+        ], decks=simple_test_decklists(), seed=42,
     )
     adapter = MtgGameStateAdapter(
         engine, expose_combat_decisions=True,
@@ -716,12 +712,10 @@ def test_play_one_game_recording_filters_illegal_pimc_visits():
     """
     from mtg_bot.actions import CastSpell
 
-    engine = setup_game(
-        [
+    engine = setup_game([
             RandomAgent(rng=random.Random(11)),
             RandomAgent(rng=random.Random(22)),
-        ],
-        ["G", "R"], seed=42,
+        ], decks=simple_test_decklists(), seed=42,
     )
     adapter = MtgGameStateAdapter(
         engine, expose_combat_decisions=True,
@@ -792,12 +786,10 @@ def test_play_one_game_recording_falls_back_when_visits_empty():
     None on both rows). Catches a regression where the empty-dict
     path tries to argmax over nothing or skips the sample entirely.
     """
-    engine = setup_game(
-        [
+    engine = setup_game([
             RandomAgent(rng=random.Random(11)),
             RandomAgent(rng=random.Random(22)),
-        ],
-        ["G", "R"], seed=42,
+        ], decks=simple_test_decklists(), seed=42,
     )
     adapter = MtgGameStateAdapter(
         engine, expose_combat_decisions=True,
@@ -828,6 +820,7 @@ def test_play_one_game_recording_falls_back_when_visits_empty():
 # ---------- DataGenProgress wiring ------------------------------------------
 
 from mtg_bot.training import DataGenProgress  # noqa: E402
+from tests._test_decks import simple_test_decklists  # noqa: E402
 
 
 def _make_progress(progress_path: Path, total: int, workers: int = 1):
@@ -983,12 +976,10 @@ def _engine_for_game_idx(game_idx: int, base_seed: int = 0):
     # path. Even simpler: replicate the setup block exactly here —
     # this test fails loudly if the production helper drifts.
     engine_seed = base_seed + game_idx
-    engine = setup_game(
-        [
+    engine = setup_game([
             RandomAgent(rng=random.Random(engine_seed + 1)),
             RandomAgent(rng=random.Random(engine_seed + 2)),
-        ],
-        ["G", "R"],
+        ], decks=simple_test_decklists(),
         seed=engine_seed,
     )
     if game_idx % 2 == 1:

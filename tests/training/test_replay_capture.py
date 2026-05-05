@@ -13,6 +13,7 @@ from mtg_bot.training import (
     generate_training_data, generate_training_data_parallel,
     heuristic_eval_annotator, random_choice_factory,
 )
+from tests._test_decks import simple_test_decklists
 
 
 # ---------- ReplayRecorder ---------------------------------------------------
@@ -26,7 +27,7 @@ def test_recorder_with_no_annotators_records_raw_snapshots():
                 .RandomAgent(),
                 __import__("mtg_bot.agents", fromlist=["RandomAgent"])
                 .RandomAgent()],
-        colors=["G", "R"], seed=0,
+        decks=simple_test_decklists(), seed=0,
     )
     rec = ReplayRecorder()
     rec.record(state)
@@ -50,7 +51,7 @@ def test_recorder_stores_decision_when_provided():
     from mtg_bot.simulate import setup_game
     state = setup_game(
         agents=[RandomAgent(), RandomAgent()],
-        colors=["G", "R"], seed=0,
+        decks=simple_test_decklists(), seed=0,
     )
     rec = ReplayRecorder()
     rec.record(state, decision=PassPriority())
@@ -63,7 +64,7 @@ def test_heuristic_annotator_attaches_eval_per_snapshot():
     from mtg_bot.agents import RandomAgent
     state = setup_game(
         agents=[RandomAgent(), RandomAgent()],
-        colors=["G", "R"], seed=0,
+        decks=simple_test_decklists(), seed=0,
     )
     rec = ReplayRecorder(annotators=[heuristic_eval_annotator()])
     rec.record(state)
@@ -158,7 +159,7 @@ def test_nn_eval_annotator_annotates_running_and_terminal_states(
     from mtg_bot.agents import RandomAgent
     state = setup_game(
         agents=[RandomAgent(), RandomAgent()],
-        colors=["G", "R"],
+        decks=simple_test_decklists(),
         seed=0,
     )
     out = annotate(state)
@@ -322,7 +323,7 @@ def test_v2_replay_round_trips_decisions(tmp_path: Path):
 
     state = setup_game(
         agents=[RandomAgent(), RandomAgent()],
-        colors=["G", "R"], seed=0,
+        decks=simple_test_decklists(), seed=0,
     )
     rec = ReplayRecorder()
     expected = [

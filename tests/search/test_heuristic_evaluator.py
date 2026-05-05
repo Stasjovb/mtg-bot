@@ -12,13 +12,13 @@ from mtg_bot.search.heuristic_evaluator import MtgHeuristicEvaluator
 from mtg_bot.simulate import setup_game
 
 from mtg_bot.cards.source import get_active_source
+from tests._test_decks import simple_test_decklists  # noqa: E402
 
 _PRINTINGS = get_active_source().get_printings()
 
 
 def _adapter(seed: int = 42) -> MtgGameStateAdapter:
-    state = setup_game(
-        [RandomAgent(), RandomAgent()], ["G", "R"], seed=seed,
+    state = setup_game([RandomAgent(), RandomAgent()], decks=simple_test_decklists(), seed=seed,
     )
     return MtgGameStateAdapter(state)
 

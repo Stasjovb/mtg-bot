@@ -20,6 +20,7 @@ import pytest
 from mtg_bot.agents import Agent, RandomAgent
 from mtg_bot.game import Zone
 from mtg_bot.simulate import setup_game
+from tests._test_decks import simple_test_decklists  # noqa: E402
 
 
 @dataclass
@@ -78,7 +79,7 @@ def test_default_disabled_preserves_seven_card_hands():
     """Without ``enable_mulligans``, both players get 7 cards and
     the call doesn't touch ``choose_mulligan`` (existing tests +
     training pipelines unaffected)."""
-    state = setup_game([RandomAgent(), RandomAgent()], colors=["G", "R"], seed=0)
+    state = setup_game([RandomAgent(), RandomAgent()], decks=simple_test_decklists(), seed=0)
     assert len(state.players[0].hand) == 7
     assert len(state.players[1].hand) == 7
 
@@ -93,7 +94,7 @@ def test_default_agent_keeps_first_hand():
     # under the new rule.
     state = setup_game(
         [Agent(), Agent()],
-        colors=["G", "R"],
+        decks=simple_test_decklists(),
         seed=0,
         enable_mulligans=True,
     )
@@ -117,7 +118,7 @@ def test_n_mulligans_leaves_seven_minus_n_in_hand(mulls):
             _MullThenKeepAgent(mulls_to_take=mulls),
             _MullThenKeepAgent(mulls_to_take=0),
         ],
-        colors=["G", "R"],
+        decks=simple_test_decklists(),
         seed=42,
         enable_mulligans=True,
         max_mulligans=10,
@@ -144,7 +145,7 @@ def test_max_mulligans_forces_keep():
     reached). Final hand: 5 cards."""
     state = setup_game(
         [_AlwaysMullAgent(), _AlwaysMullAgent()],
-        colors=["G", "R"],
+        decks=simple_test_decklists(),
         seed=0,
         enable_mulligans=True,
         max_mulligans=2,
@@ -158,11 +159,11 @@ def test_mulligan_is_deterministic_in_seed():
     of training runs that may use mulligan policies)."""
     a = setup_game(
         [_MullThenKeepAgent(mulls_to_take=2), RandomAgent()],
-        colors=["G", "R"], seed=12345, enable_mulligans=True,
+        decks=simple_test_decklists(), seed=12345, enable_mulligans=True,
     )
     b = setup_game(
         [_MullThenKeepAgent(mulls_to_take=2), RandomAgent()],
-        colors=["G", "R"], seed=12345, enable_mulligans=True,
+        decks=simple_test_decklists(), seed=12345, enable_mulligans=True,
     )
     a_p0_lib = [c.printing.name for c in a.players[0].library]
     b_p0_lib = [c.printing.name for c in b.players[0].library]
@@ -183,7 +184,7 @@ def test_bottom_validation_rejects_buggy_agent(bad_mode):
     with pytest.raises(ValueError):
         setup_game(
             [_BadBottomAgent(bad_mode=bad_mode), RandomAgent()],
-            colors=["G", "R"], seed=0, enable_mulligans=True,
+            decks=simple_test_decklists(), seed=0, enable_mulligans=True,
         )
 
 
@@ -193,7 +194,7 @@ def test_zones_are_consistent_after_mulligan():
     forth — easy to leave a stale zone tag."""
     state = setup_game(
         [_MullThenKeepAgent(mulls_to_take=3), _MullThenKeepAgent(mulls_to_take=0)],
-        colors=["G", "R"],
+        decks=simple_test_decklists(),
         seed=7,
         enable_mulligans=True,
     )

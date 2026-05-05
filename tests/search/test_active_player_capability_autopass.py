@@ -43,6 +43,7 @@ from mtg_bot.search._player_capabilities import (
 )
 from mtg_bot.simulate import setup_game
 from mtg_bot.turn import Step
+from tests._test_decks import simple_test_decklists  # noqa: E402
 
 
 # ---------------------------------------------------------------------
@@ -53,8 +54,7 @@ from mtg_bot.turn import Step
 def _empty_state(seed: int = 42):
     """Two-player setup; tests that need a clean slate clear
     hand/battlefield manually."""
-    return setup_game(
-        [RandomAgent(), RandomAgent()], ["G", "R"], seed=seed,
+    return setup_game([RandomAgent(), RandomAgent()], decks=simple_test_decklists(), seed=seed,
     )
 
 
@@ -71,8 +71,10 @@ def _spy_legal_actions(monkeypatch):
 
 
 def _strip_player_zones(state, player_idx: int) -> None:
-    """Empty hand / battlefield / graveyard / exile / mana_pool for
-    a single player so capability checks have nothing to fire on."""
+    """Empty hand / battlefield / graveyard / exile / mana_pool /
+    library for a single player so capability checks have nothing
+    to fire on. Clears the library too — turn advancement during
+    the test may otherwise draw a fresh capability-granting card."""
     p = state.players[player_idx]
     state.battlefield = [
         o for o in state.battlefield
@@ -82,6 +84,7 @@ def _strip_player_zones(state, player_idx: int) -> None:
     p.graveyard = []
     p.exile = []
     p.mana_pool = []
+    p.library = []
 
 
 def _give_basic_land(

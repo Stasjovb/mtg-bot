@@ -16,7 +16,7 @@ from mtg_bot.training import (
     EvalProgress, MatchStats, random_choice_factory, run_match,
 )
 from mtg_bot.training.self_play import run_match_parallel
-from tests.training.test_data_gen import build_mono_color_deck
+from tests._test_decks import simple_test_decklist
 
 
 def test_run_match_returns_stats_with_correct_total():
@@ -155,9 +155,9 @@ def test_run_match_parallel_with_deck_pool_uses_pool_decks():
     legacy mono-color path."""
     pool = [
         Deck(draft_id="g_deck", build_index=0,
-             cards=build_mono_color_deck("G", seed=1)),
+             cards=simple_test_decklist("G")),
         Deck(draft_id="r_deck", build_index=0,
-             cards=build_mono_color_deck("R", seed=2)),
+             cards=simple_test_decklist("R")),
     ]
     stats = run_match_parallel(
         p0_factory=random_choice_factory,
@@ -178,11 +178,11 @@ def test_run_match_deck_pool_sequential_equals_parallel():
     would silently shift evaluation results."""
     pool = [
         Deck(draft_id="g_deck", build_index=0,
-             cards=build_mono_color_deck("G", seed=1)),
+             cards=simple_test_decklist("G")),
         Deck(draft_id="r_deck", build_index=0,
-             cards=build_mono_color_deck("R", seed=2)),
+             cards=simple_test_decklist("R")),
         Deck(draft_id="w_deck", build_index=0,
-             cards=build_mono_color_deck("W", seed=3)),
+             cards=simple_test_decklist("W")),
     ]
     seq = run_match(
         p0_factory=random_choice_factory,

@@ -22,6 +22,7 @@ from mtg_bot.search import (
 from mtg_bot.search.heuristic_evaluator import MtgHeuristicEvaluator
 from mtg_bot.simulate import setup_game
 from mtg_bot.turn import Step
+from tests._test_decks import simple_test_decklists  # noqa: E402
 
 
 def _adapter_with_combat_ready_state(
@@ -29,8 +30,7 @@ def _adapter_with_combat_ready_state(
 ) -> MtgGameStateAdapter:
     """Build a mid-game-ish state with creatures on both sides,
     wrapped in a combat-exposing adapter."""
-    state = setup_game(
-        [RandomAgent(), RandomAgent()], ["G", "R"], seed=seed,
+    state = setup_game([RandomAgent(), RandomAgent()], decks=simple_test_decklists(), seed=seed,
     )
     for _ in range(2):
         p0_bear = state.new_object(
@@ -155,8 +155,7 @@ def test_mcts_blocks_lethal_attacker_with_idle_blocker():
     the bot literally never blocked because MCTS never saw a
     BlockerDecision in ``legal_decisions`` — this test pins that
     fix."""
-    state = setup_game(
-        [RandomAgent(), RandomAgent()], ["G", "R"], seed=42,
+    state = setup_game([RandomAgent(), RandomAgent()], decks=simple_test_decklists(), seed=42,
     )
     p0_bear = state.new_object(
         SYNTHETIC_CREATURES["Wild Bear"], owner_id=0, zone=Zone.BATTLEFIELD,

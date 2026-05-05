@@ -34,14 +34,14 @@ from mtg_bot.search.ismcts import (
 )
 from mtg_bot.simulate import setup_game
 from mtg_bot.training import action_encoding as ae
+from tests._test_decks import simple_test_decklists  # noqa: E402
 
 
 # ---------- helpers ---------------------------------------------------------
 
 
 def _adapter(seed: int = 42, **kwargs) -> MtgGameStateAdapter:
-    state = setup_game(
-        [RandomAgent(), RandomAgent()], ["G", "R"], seed=seed,
+    state = setup_game([RandomAgent(), RandomAgent()], decks=simple_test_decklists(), seed=seed,
     )
     # Default the training-time priority short-circuits OFF so search
     # tests exercise the MCTS loop. Tests that want to exercise the

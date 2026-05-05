@@ -272,12 +272,12 @@ def test_sorcery_speed_actions_suppressed_when_not_active_player():
 from mtg_bot.agents import RandomAgent  # noqa: E402
 from mtg_bot.recommend import recommend_from_state  # noqa: E402
 from mtg_bot.simulate import setup_game  # noqa: E402
+from tests._test_decks import simple_test_decklists  # noqa: E402
 
 
 def _live_state(seed: int = 7):
     """Build a real engine state at turn 1, ready for recommendations."""
-    return setup_game(
-        [RandomAgent(), RandomAgent()], ["G", "R"], seed=seed,
+    return setup_game([RandomAgent(), RandomAgent()], decks=simple_test_decklists(), seed=seed,
     )
 
 
