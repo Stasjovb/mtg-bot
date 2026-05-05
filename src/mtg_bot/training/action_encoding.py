@@ -944,6 +944,15 @@ def _enumerate_legal(state: Any, viewer: PlayerID) -> list:
     # underlying ``legal.legal_actions`` invocation per priority
     # moment. Falls back to a direct call when ``state`` is a raw
     # engine state.
+    # First: honour the adapter's opp-capability auto-pass — when
+    # the non-active player has priority and the capability check
+    # says "no instant-speed action available", the adapter returns
+    # ``[PassPriority()]`` from ``legal_decisions`` without calling
+    # ``legal_actions``. The mask must agree, otherwise the mask
+    # would expose phantom "legal" slots the engine would refuse.
+    short_circuit_fn = getattr(state, "_can_short_circuit_to_pass", None)
+    if short_circuit_fn is not None and short_circuit_fn():
+        return [PassPriority()]
     cached_fn = getattr(state, "_legal_actions_cached", None)
     if cached_fn is not None:
         return cached_fn(viewer)
