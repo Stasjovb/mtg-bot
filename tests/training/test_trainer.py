@@ -434,3 +434,151 @@ def test_alphazero_policy_loss_weight_scales_combined_loss(
         f"(was {h_boosted.train_losses[0]}) than weight=1.0 "
         f"(was {h_default.train_losses[0]})"
     )
+
+
+# ---------- separate-trunks architecture ------------------------------------
+
+
+def test_alphazero_mode_separate_architecture_runs_and_descends_loss(
+    tmp_path: Path,
+):
+    """``architecture="separate"`` builds the parallel-trunks model;
+    training should still reduce loss across epochs on a tractable
+    synthetic dataset. Pins that the dispatch reaches the right class
+    AND that the optimizer is updating the parameters of both trunks
+    (a wiring bug where one trunk was disconnected from the loss
+    would manifest as flat loss for that head's component)."""
+    f, o, p, m = _synthetic_alphazero_dataset(128, seed=1)
+    history = train_value_network(
+        features=f, outcomes=o,
+        policy_targets=p, action_masks=m,
+        weights_out_path=tmp_path / "sep.pt",
+        epochs=5, batch_size=32, learning_rate=1e-3,
+        device="cpu", rng_seed=0,
+        architecture="separate",
+    )
+    # Total loss descended.
+    assert history.train_losses[-1] < history.train_losses[0], (
+        f"loss didn't drop: {history.train_losses}"
+    )
+    # Both heads got gradient — neither component is flat.
+    assert history.train_value_losses[-1] != history.train_value_losses[0]
+    assert history.train_policy_losses[-1] != history.train_policy_losses[0]
+
+
+def test_alphazero_mode_separate_state_dict_has_two_trunks(
+    tmp_path: Path,
+):
+    """After training in separate mode, the saved state_dict carries
+    ``value_trunk.*`` + ``policy_trunk.*`` keys (vs the shared
+    variant's bare ``trunk.*``). Verifies the trainer wired the right
+    class through and the file format reflects it."""
+    f, o, p, m = _synthetic_alphazero_dataset(64)
+    out = tmp_path / "sep.pt"
+    train_value_network(
+        features=f, outcomes=o,
+        policy_targets=p, action_masks=m,
+        weights_out_path=out,
+        epochs=2, batch_size=16, device="cpu",
+        architecture="separate",
+    )
+    sd = torch.load(out, map_location="cpu")
+    keys = set(sd.keys())
+    assert any(k.startswith("value_trunk.") for k in keys), keys
+    assert any(k.startswith("policy_trunk.") for k in keys), keys
+    assert any(k.startswith("value_head.") for k in keys), keys
+    assert any(k.startswith("policy_head.") for k in keys), keys
+    # Cross-check: NO bare trunk.* keys (those are the shared schema).
+    assert not any(k.startswith("trunk.") for k in keys), keys
+
+
+def test_alphazero_mode_separate_round_trips_into_evaluator(
+    tmp_path: Path,
+):
+    """Saved separate-trunks weights load via
+    ``NNEvaluator(architecture="separate")``. Forward pass returns
+    the dual tuple."""
+    f, o, p, m = _synthetic_alphazero_dataset(64)
+    out = tmp_path / "sep.pt"
+    train_value_network(
+        features=f, outcomes=o,
+        policy_targets=p, action_masks=m,
+        weights_out_path=out,
+        epochs=2, batch_size=16, device="cpu",
+        architecture="separate",
+    )
+    evaluator = NNEvaluator(
+        weights_path=out,
+        with_policy=True,
+        architecture="separate",
+    )
+    x = torch.from_numpy(f[:1])
+    with torch.no_grad():
+        v, p_logits = evaluator.model(x)
+    assert v.shape == (1, 1)
+    assert -1.0 <= float(v) <= 1.0
+    from mtg_bot.training.action_encoding import ACTION_VOCAB_SIZE
+    assert p_logits.shape == (1, ACTION_VOCAB_SIZE)
+
+
+def test_alphazero_mode_default_architecture_is_shared(tmp_path: Path):
+    """Back-compat invariant: train_value_network without an explicit
+    architecture builds the shared-trunk model so v15-style training
+    runs aren't silently switched to separate mode."""
+    f, o, p, m = _synthetic_alphazero_dataset(48)
+    out = tmp_path / "shared.pt"
+    train_value_network(
+        features=f, outcomes=o,
+        policy_targets=p, action_masks=m,
+        weights_out_path=out,
+        epochs=1, batch_size=16, device="cpu",
+    )
+    sd = torch.load(out, map_location="cpu")
+    keys = set(sd.keys())
+    # Shared schema: bare trunk.* keys, no value_trunk.* / policy_trunk.*.
+    assert any(k.startswith("trunk.") for k in keys), keys
+    assert not any(k.startswith("value_trunk.") for k in keys), keys
+    assert not any(k.startswith("policy_trunk.") for k in keys), keys
+
+
+def test_alphazero_rejects_unknown_architecture(tmp_path: Path):
+    """Typos / invalid architecture strings surface loudly."""
+    f, o, p, m = _synthetic_alphazero_dataset(32)
+    with pytest.raises(ValueError, match="architecture"):
+        train_value_network(
+            features=f, outcomes=o,
+            policy_targets=p, action_masks=m,
+            weights_out_path=tmp_path / "x.pt",
+            epochs=1, device="cpu",
+            architecture="not-a-real-arch",
+        )
+
+
+def test_alphazero_mode_separate_supports_asymmetric_policy_trunk(
+    tmp_path: Path,
+):
+    """``policy_hidden_sizes`` lets the policy_trunk diverge from the
+    value_trunk's shape. Saved state_dict reflects the asymmetric
+    layout, and loading at the matching shape works."""
+    f, o, p, m = _synthetic_alphazero_dataset(48)
+    out = tmp_path / "asym.pt"
+    train_value_network(
+        features=f, outcomes=o,
+        policy_targets=p, action_masks=m,
+        weights_out_path=out,
+        epochs=1, batch_size=16, device="cpu",
+        architecture="separate",
+        hidden_sizes=(32, 16),
+        policy_hidden_sizes=(48, 24),
+    )
+    evaluator = NNEvaluator(
+        weights_path=out,
+        with_policy=True,
+        architecture="separate",
+        hidden_sizes=(32, 16),
+        policy_hidden_sizes=(48, 24),
+    )
+    x = torch.from_numpy(f[:1])
+    with torch.no_grad():
+        v, p_logits = evaluator.model(x)
+    assert v.shape == (1, 1)

@@ -20,7 +20,13 @@ from mtg_bot.search import (
     Budget, MCTS, MtgGameStateAdapter, NNEvaluator,
 )
 from mtg_bot.search.nn_evaluator import (
-    HIDDEN_SIZES, _ValueMLP, _ValuePolicyMLP,
+    ARCHITECTURE_SEPARATE,
+    ARCHITECTURE_SHARED,
+    HIDDEN_SIZES,
+    _ValueMLP,
+    _ValuePolicyMLP,
+    _ValuePolicyMLPSeparate,
+    _build_dual_head_model,
 )
 from mtg_bot.simulate import setup_game
 from mtg_bot.training.action_encoding import (
@@ -405,3 +411,160 @@ def test_batch_evaluate_with_policy_mixes_terminal_and_nonterminal():
     assert val_n2 == pytest.approx(val_ref, abs=1e-5)
     np.testing.assert_allclose(pol_n0, pol_ref, atol=1e-5, rtol=0)
     np.testing.assert_allclose(pol_n2, pol_ref, atol=1e-5, rtol=0)
+
+
+# ---------- separate-trunks architecture ------------------------------------
+
+
+def test_value_policy_mlp_separate_forward_shape():
+    """Synthetic batch through ``_ValuePolicyMLPSeparate`` returns the
+    same dual-tuple shape as the shared-trunk variant: ``(B, 1)`` value
+    + ``(B, ACTION_VOCAB_SIZE)`` policy. Same public contract."""
+    net = _ValuePolicyMLPSeparate()
+    x = torch.zeros(8, FEATURE_DIM)
+    value, policy = net(x)
+    assert value.shape == (8, 1)
+    assert policy.shape == (8, ACTION_VOCAB_SIZE)
+    assert torch.all(value >= -1.0) and torch.all(value <= 1.0)
+
+
+def test_value_policy_mlp_separate_state_dict_has_both_trunks():
+    """State_dict layout pin: separate-trunks model exposes both
+    ``value_trunk.*`` and ``policy_trunk.*`` keys (vs the shared
+    variant's single ``trunk.*``). Catches accidental sharing-by-
+    aliasing in the constructor."""
+    net = _ValuePolicyMLPSeparate()
+    keys = set(net.state_dict().keys())
+    assert any(k.startswith("value_trunk.") for k in keys), keys
+    assert any(k.startswith("policy_trunk.") for k in keys), keys
+    assert any(k.startswith("value_head.") for k in keys), keys
+    assert any(k.startswith("policy_head.") for k in keys), keys
+    # No bare ``trunk.*`` keys (those come from the shared variant).
+    assert not any(
+        k.startswith("trunk.") for k in keys
+    ), f"unexpected shared-trunk keys: {keys}"
+
+
+def test_value_policy_mlp_separate_param_count_exceeds_shared():
+    """Parallel-trunks variant has roughly 2x the trunk parameters of
+    the shared variant at the same hidden_sizes (heads are unchanged
+    so the delta is exactly one extra trunk worth of weights)."""
+    shared = _ValuePolicyMLP()
+    separate = _ValuePolicyMLPSeparate()
+    shared_params = sum(p.numel() for p in shared.parameters())
+    separate_params = sum(p.numel() for p in separate.parameters())
+    # The extra trunk adds at least the input→hidden_sizes[0] and
+    # any subsequent hidden-to-hidden Linear layers — well over zero.
+    assert separate_params > shared_params, (
+        f"separate {separate_params} not > shared {shared_params}"
+    )
+
+
+def test_value_policy_mlp_separate_supports_asymmetric_policy_trunk():
+    """A custom ``policy_hidden_sizes`` lets the policy_trunk diverge
+    from the value_trunk. The two trunks become independently sized."""
+    net = _ValuePolicyMLPSeparate(
+        hidden_sizes=(64, 32),
+        policy_hidden_sizes=(128, 128, 64),
+    )
+    x = torch.zeros(2, FEATURE_DIM)
+    value, policy = net(x)
+    assert value.shape == (2, 1)
+    assert policy.shape == (2, ACTION_VOCAB_SIZE)
+
+
+def test_build_dual_head_model_dispatch():
+    """``_build_dual_head_model`` returns the right class for each
+    architecture string and raises on unknown values."""
+    shared = _build_dual_head_model(ARCHITECTURE_SHARED)
+    separate = _build_dual_head_model(ARCHITECTURE_SEPARATE)
+    assert isinstance(shared, _ValuePolicyMLP)
+    assert isinstance(separate, _ValuePolicyMLPSeparate)
+    with pytest.raises(ValueError, match="unknown architecture"):
+        _build_dual_head_model("nonsense")
+
+
+def test_nn_evaluator_separate_architecture_uses_separate_class():
+    """``NNEvaluator(with_policy=True, architecture="separate")``
+    instantiates ``_ValuePolicyMLPSeparate`` rather than the shared
+    variant — the dispatch the loader relies on."""
+    ev = NNEvaluator(
+        with_policy=True, architecture=ARCHITECTURE_SEPARATE,
+    )
+    assert isinstance(ev.model, _ValuePolicyMLPSeparate)
+    assert ev.architecture == ARCHITECTURE_SEPARATE
+
+
+def test_nn_evaluator_default_architecture_is_shared():
+    """Back-compat: ``NNEvaluator(with_policy=True)`` without an
+    explicit architecture still builds the shared-trunk class so
+    v1-v15 weights load unchanged."""
+    ev = NNEvaluator(with_policy=True)
+    assert isinstance(ev.model, _ValuePolicyMLP)
+    assert ev.architecture == ARCHITECTURE_SHARED
+
+
+def test_nn_evaluator_rejects_unknown_architecture():
+    """Loud failure for typos / invalid architecture strings rather
+    than silent fall-through to a default."""
+    with pytest.raises(ValueError, match="architecture"):
+        NNEvaluator(with_policy=True, architecture="nonsense")
+
+
+def test_nn_evaluator_separate_save_load_round_trip(tmp_path: Path):
+    """One synthetic SGD step on a separate-trunks model, save weights,
+    reload through ``NNEvaluator(architecture="separate")``, predictions
+    match. Pins that the state_dict format the trainer writes for
+    separate matches what NNEvaluator reads at load time."""
+    a = NNEvaluator(
+        with_policy=True, architecture=ARCHITECTURE_SEPARATE,
+    )
+    a.model.train()
+    optimizer = torch.optim.SGD(a.model.parameters(), lr=0.01)
+    x = torch.randn(4, FEATURE_DIM)
+    target_value = torch.zeros(4, 1)
+    target_policy_idx = torch.zeros(4, dtype=torch.long)
+    value, logits = a.model(x)
+    loss = (
+        ((value - target_value) ** 2).mean()
+        + torch.nn.functional.cross_entropy(logits, target_policy_idx)
+    )
+    optimizer.zero_grad()
+    loss.backward()
+    optimizer.step()
+    a.model.eval()
+
+    weights_path = tmp_path / "sep.pt"
+    a.save(weights_path)
+    assert weights_path.exists()
+
+    b = NNEvaluator(
+        weights_path=weights_path,
+        with_policy=True,
+        architecture=ARCHITECTURE_SEPARATE,
+    )
+    adapter = _adapter()
+    val_a, pol_a = a.evaluate_with_policy(adapter, player_id=0)
+    val_b, pol_b = b.evaluate_with_policy(adapter, player_id=0)
+    assert val_a == val_b
+    np.testing.assert_array_equal(pol_a, pol_b)
+
+
+def test_nn_evaluator_separate_weights_dont_load_into_shared(
+    tmp_path: Path,
+):
+    """Cross-loading is rejected loudly: a separate-trunks state_dict
+    does not match a shared-trunk model's keys, and PyTorch raises
+    on the load. The two architectures are distinct schemas — the
+    metadata-driven dispatch is the only correct way to load them."""
+    a = NNEvaluator(
+        with_policy=True, architecture=ARCHITECTURE_SEPARATE,
+    )
+    weights_path = tmp_path / "sep.pt"
+    a.save(weights_path)
+    with pytest.raises(RuntimeError):
+        NNEvaluator(
+            weights_path=weights_path,
+            with_policy=True,
+            architecture=ARCHITECTURE_SHARED,
+        )
