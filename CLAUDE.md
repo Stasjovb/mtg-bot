@@ -85,3 +85,18 @@
 - Card pool target: **Edge of Eternities** (Scryfall set code `eoe`). Raw data is cached at `data/edge_of_eternities.json`; regenerate via `scripts/fetch_eoe.py`.
 - Real EoE cards come online as mechanics are implemented. Until then, Stage-1 uses synthetic vanilla creatures defined in `src/mtg_bot/cards.py`.
 - Architectural decisions that are locked in: full stack-and-priority simulation (not resolve-immediately); Scryfall JSON as the card data source.
+
+## Documenting deliberate divergences
+
+Any shortcut, heuristic, search optimization, or incorrect / outdated implementation of real MTG comprehensive rules **must be documented in `docs/SEARCH_LIMITATIONS.md`** at the time it lands.
+
+This applies to (non-exhaustive):
+
+- Engine code that intentionally diverges from current CR (e.g., outdated combat damage assignment, simplified mana ability rules, unmodeled state-based actions, missing layers).
+- Search-side optimizations that approximate or skip legal decisions (e.g., capability-based priority short-circuits, factored decompositions of joint decisions, heuristic move pruning).
+- Workarounds that "land" via filter rather than fix (e.g., the data_gen writer-side root-legal visit filter).
+- Known-incorrect interactions between specific card mechanics that we accept rather than fix.
+
+For each entry, the doc requires: location (file:line), what the shortcut is, why it's OK or which scenarios make it not-OK, failure mode, fix-scope estimate, and impact estimate (perf gain or strength cost).
+
+If you ship a feature that takes any deliberate shortcut without updating `SEARCH_LIMITATIONS.md`, you're shipping technical debt that nobody else will know about. Pause and add the entry first.
