@@ -38,6 +38,40 @@ def _make(progress_path: Path, *, total: int = 10, workers: int = 4,
     )
 
 
+def test_finalize_with_stopped_status_round_trips(tmp_path: Path):
+    """The Stop-run feature finalizes interrupted runs as
+    ``status="stopped"``. The tracker accepts it as a valid string,
+    writes it to JSON, and the UI's run-listing renders it without
+    crashing (covered separately under tests/training_ui)."""
+    progress = _make(tmp_path / "run.json", total=10, workers=2)
+    progress.begin()
+    progress.record_game(n_samples=5, outcome_p0=1.0)
+    progress.finalize(status="stopped")
+    payload = json.loads((tmp_path / "run.json").read_text(encoding="utf-8"))
+    assert payload["status"] == "stopped"
+    assert payload["ended_at"] is not None
+    # Partial counts preserved.
+    assert payload["n_games_done"] == 1
+    assert payload["n_samples"] == 5
+
+
+def test_cycle_id_round_trips_in_payload(tmp_path: Path):
+    """When a parent iter cycle owns the run, ``cycle_id`` lands in
+    the JSON so the UI can resolve a stop click on the child to the
+    parent cycle."""
+    progress = DataGenProgress(
+        progress_path=tmp_path / "run.json",
+        run_id="iter_001_self_play_v6",
+        n_games_total=10,
+        n_workers=2,
+        cycle_id="iter_001_cycle",
+    )
+    progress.begin()
+    progress.finalize(status="completed")
+    payload = json.loads((tmp_path / "run.json").read_text(encoding="utf-8"))
+    assert payload["cycle_id"] == "iter_001_cycle"
+
+
 def test_finalize_writes_complete_payload(tmp_path: Path):
     progress = _make(tmp_path / "run.json", total=3, workers=2)
     progress.begin()

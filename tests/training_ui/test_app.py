@@ -417,6 +417,106 @@ def test_aggregated_run_machines_array_passes_through(client):
     assert len(detail["machines"]) == 2
 
 
+# --- Stop-run endpoint --------------------------------------------
+
+
+def test_stop_endpoint_writes_sentinel_for_single_run(client):
+    c, progress_dir = client
+    _write_run(progress_dir, "iter_001_self_play_v6",
+               status="running")
+    res = c.post("/api/runs/iter_001_self_play_v6/stop",
+                 json={"reason": "ui-button"})
+    assert res.status_code == 200
+    body = res.get_json()
+    assert body["ok"] is True
+    assert body["run_id"] == "iter_001_self_play_v6"
+    assert body["stopped_target"] == "iter_001_self_play_v6"
+    assert body["is_cycle_stop"] is False
+    sentinel = progress_dir / ".STOP_iter_001_self_play_v6"
+    assert sentinel.is_file()
+
+
+def test_stop_endpoint_targets_cycle_when_run_has_parent(client):
+    """A child run with a cycle_id back-pointer should redirect the
+    stop to the cycle, so the whole iter aborts rather than just the
+    in-flight stage."""
+    c, progress_dir = client
+    _write_run(progress_dir, "iter_001_self_play_v6",
+               status="running",
+               cycle_id="iter_001_cycle")
+    res = c.post("/api/runs/iter_001_self_play_v6/stop")
+    assert res.status_code == 200
+    body = res.get_json()
+    assert body["stopped_target"] == "iter_001_cycle"
+    assert body["is_cycle_stop"] is True
+    # Sentinel landed on the cycle, NOT the child.
+    assert (progress_dir / ".STOP_iter_001_cycle").is_file()
+    assert not (
+        progress_dir / ".STOP_iter_001_self_play_v6"
+    ).is_file()
+
+
+def test_stop_endpoint_is_idempotent(client):
+    c, progress_dir = client
+    _write_run(progress_dir, "iter_001", status="running")
+    res1 = c.post("/api/runs/iter_001/stop", json={"reason": "first"})
+    res2 = c.post("/api/runs/iter_001/stop", json={"reason": "second"})
+    assert res1.status_code == 200
+    assert res2.status_code == 200
+    sentinel = progress_dir / ".STOP_iter_001"
+    body = json.loads(sentinel.read_text(encoding="utf-8"))
+    assert body["reason"] == "second"
+
+
+def test_stop_endpoint_404_for_unknown_run(client):
+    c, _ = client
+    res = c.post("/api/runs/nope/stop")
+    assert res.status_code == 404
+
+
+def test_stop_endpoint_handles_empty_body(client):
+    """The UI may POST without a body; the endpoint must not 400
+    on empty body / missing JSON content-type."""
+    c, progress_dir = client
+    _write_run(progress_dir, "iter_001", status="running")
+    res = c.post("/api/runs/iter_001/stop")
+    assert res.status_code == 200
+
+
+def test_stop_status_endpoint_reports_pending(client):
+    c, progress_dir = client
+    _write_run(progress_dir, "iter_001_self_play_v6",
+               status="running",
+               cycle_id="iter_001_cycle")
+    # Before stop: not requested.
+    res = c.get("/api/runs/iter_001_self_play_v6/stop")
+    assert res.status_code == 200
+    assert res.get_json()["stop_requested"] is False
+    # Trigger stop, then re-check: cycle_sentinel is True.
+    c.post("/api/runs/iter_001_self_play_v6/stop")
+    res = c.get("/api/runs/iter_001_self_play_v6/stop")
+    body = res.get_json()
+    assert body["stop_requested"] is True
+    assert body["cycle_sentinel"] is True
+    assert body["own_sentinel"] is False
+
+
+def test_index_html_contains_stop_button_scaffolding():
+    """Stop-button + modal markup and JS are in the rendered page so
+    the front-end can wire them without an extra fetch."""
+    from pathlib import Path as _P
+    from mtg_bot.training_ui.app import create_app
+    app = create_app(_P("training_progress"))
+    client = app.test_client()
+    body = client.get("/").get_data(as_text=True)
+    assert 'class="stop-btn"' in body
+    assert 'id="stop-modal"' in body
+    assert "showStopModal" in body
+    assert "pendingStops" in body
+    # New "stopped" badge styling.
+    assert ".badge.stopped" in body
+
+
 def test_bench_completed_run_listed_with_others(client):
     """A completed bench run sits alongside training / eval / data-gen
     runs in /api/runs, sorted by started_at desc."""

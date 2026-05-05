@@ -94,9 +94,53 @@ from mtg_bot.training.distributed import (  # noqa: E402
     run_distributed_self_play,
 )
 from mtg_bot.training.self_play import run_match_parallel  # noqa: E402
+from mtg_bot.training.stop_signal import (  # noqa: E402
+    cleanup_orphans, stop_requested, sentinel_path,
+)
 
 _STATE_FILENAME = "iterate_state.json"
 _VERSION_DIR_RE = re.compile(r"^v(\d+)$")
+
+
+def _write_cycle_progress(
+    *,
+    progress_dir: Path,
+    cycle_id: str,
+    iter_idx_one_based: int,
+    n_iterations: int,
+    started_iso: str,
+    started_perf: float,
+    stage: str,
+    status: str = "running",
+    ended: bool = False,
+    notes: str = "",
+) -> None:
+    """Write a cycle-level progress JSON the UI can render and target
+    with a Stop click. Distinct ``kind="cycle"`` so the UI can choose
+    to render a compact "iter N of M, stage=<self_play|train|eval>"
+    card; the back-end stop endpoint matches on the run_id field
+    regardless of kind.
+    """
+    from datetime import datetime, timezone
+    from mtg_bot.training.progress import atomic_write_json
+    elapsed = max(time.perf_counter() - started_perf, 0.0)
+    payload = {
+        "run_id": cycle_id,
+        "kind": "cycle",
+        "status": status,
+        "iter_idx": iter_idx_one_based,
+        "n_iterations": n_iterations,
+        "stage": stage,
+        "started_at": started_iso,
+        "ended_at": (
+            datetime.now(timezone.utc).isoformat(timespec="seconds")
+            if ended else None
+        ),
+        "elapsed_seconds": float(elapsed),
+        "notes": notes,
+    }
+    progress_dir.mkdir(parents=True, exist_ok=True)
+    atomic_write_json(progress_dir / f"{cycle_id}.json", payload)
 
 
 class ReconcileError(RuntimeError):
@@ -341,6 +385,8 @@ def _self_play(
     replay_config: ReplayCaptureConfig | None = None,
     hang_dump_dir: str | None = None,
     heuristics: HeuristicsConfig | None = None,
+    cycle_id: str | None = None,
+    stop_check: "callable | None" = None,
 ) -> tuple[int, int, float]:
     """Run one self-play data-gen pass. Returns (n_samples,
     n_policy_rows, elapsed_seconds). Both seats use the same
@@ -386,6 +432,7 @@ def _self_play(
                 replay_config.save_dir if replay_config is not None
                 else None
             ),
+            cycle_id=cycle_id,
         )
     started = time.perf_counter()
     try:
@@ -404,13 +451,19 @@ def _self_play(
                 replay_config=replay_config,
                 hang_dump_dir=hang_dump_dir,
                 heuristics=heuristics,
+                stop_check=stop_check,
             )
         )
     except BaseException:
         if progress is not None:
             progress.finalize(status="failed")
         raise
-    if progress is not None:
+    # generate_training_data_parallel finalizes the progress tracker
+    # itself with status="stopped" when the sentinel fires; only
+    # finalize as completed on a clean run-to-end.
+    if progress is not None and (
+        stop_check is None or not stop_check()
+    ):
         progress.finalize(status="completed")
     elapsed = time.perf_counter() - started
     save_dataset(
@@ -679,6 +732,8 @@ def _eval_match(
     deck_pool: list[Deck] | None = None,
     replay_config: ReplayCaptureConfig | None = None,
     hang_dump_dir: str | None = None,
+    cycle_id: str | None = None,
+    stop_check: "callable | None" = None,
 ) -> tuple[int, int, int, float]:
     """Head-to-head match: new (seat 0) vs old (seat 1). Returns
     (new_wins, old_wins, draws, elapsed_seconds).
@@ -745,6 +800,7 @@ def _eval_match(
                 replay_config.save_dir if replay_config is not None
                 else None
             ),
+            cycle_id=cycle_id,
         )
     started = time.perf_counter()
     stats = run_match_parallel(
@@ -760,6 +816,7 @@ def _eval_match(
         replay_config=replay_config,
         hang_dump_dir=hang_dump_dir,
         alternate_seats=True,
+        stop_check=stop_check,
     )
     elapsed = time.perf_counter() - started
     return (
@@ -1189,7 +1246,11 @@ def main() -> None:
                     f"iterations_completed={state['iterations_completed']}"
                 )
 
+    from datetime import datetime, timezone
+    user_stopped = False
     for iter_idx in range(args.n_iterations):
+        if user_stopped:
+            break
         n_done = state["iterations_completed"]
         cycle_seed = args.seed + 1_000_000 * (n_done + 1)
         best_version = state["current_best"]
@@ -1213,6 +1274,51 @@ def main() -> None:
             progress_dir / f"{iter_label}_self_play_{best_version}.json"
         )
         self_play_run_id = f"{iter_label}_self_play_{best_version}"
+
+        # Cycle-level progress JSON: a parent card the user can target
+        # with a single Stop click to abort the whole iter (self-play
+        # + train + eval). Children carry a back-pointer so the UI
+        # stop endpoint resolves their click to this cycle_id.
+        cycle_id = f"{iter_label}_cycle"
+        cycle_started_iso = datetime.now(timezone.utc).isoformat(
+            timespec="seconds",
+        )
+        cycle_started_perf = time.perf_counter()
+        # Sweep stale sentinels so a leftover .STOP_iter_001_cycle from
+        # a previous session doesn't trigger an immediate abort. We
+        # only keep sentinels for run_ids we're about to spawn this
+        # cycle.
+        active_ids = [
+            cycle_id, self_play_run_id,
+            f"{iter_label}_train",
+            f"{iter_label}_eval",
+        ]
+        cleanup_orphans(progress_dir, active_ids)
+        # If the cycle-level sentinel already exists at this point
+        # (set between the cleanup and now? Or set externally?), skip
+        # the iter entirely. Defensive — normal flow has
+        # cleanup_orphans drop everything.
+        if stop_requested(progress_dir, cycle_id):
+            print(
+                f"[iterate]   stop sentinel already present for "
+                f"{cycle_id}; skipping iter."
+            )
+            user_stopped = True
+            break
+        _write_cycle_progress(
+            progress_dir=progress_dir,
+            cycle_id=cycle_id,
+            iter_idx_one_based=n_done + 1,
+            n_iterations=state["iterations_completed"]
+            + args.n_iterations,
+            started_iso=cycle_started_iso,
+            started_perf=cycle_started_perf,
+            stage="self_play",
+        )
+
+        def _cycle_stop_check() -> bool:
+            return stop_requested(progress_dir, cycle_id)
+
         self_play_replay_config: ReplayCaptureConfig | None = None
         if args.capture_every_self_play > 0:
             sp_replays_dir = args.replays_dir / self_play_run_id
@@ -1249,6 +1355,8 @@ def main() -> None:
                 heuristics=HeuristicsConfig(
                     phase_prune_enabled=not args.no_phase_priority_prune,
                 ),
+                cycle_id=cycle_id,
+                stop_check=_cycle_stop_check,
             )
         else:
             # Distributed: each shard writes its own npz to args.data_dir
@@ -1289,6 +1397,32 @@ def main() -> None:
             f"({n_policy / n_samples:.1%})"
         )
 
+        # Stage boundary: if a stop sentinel appeared during self-
+        # play (or was set just now), short-circuit the rest of the
+        # cycle. Self-play may have already finalized as 'stopped'
+        # via its stop_check; the cycle JSON still needs to be
+        # finalized so the parent card flips out of 'running'.
+        if _cycle_stop_check():
+            print(
+                f"[iterate]   stop sentinel detected after "
+                f"self-play; aborting cycle {cycle_id}"
+            )
+            _write_cycle_progress(
+                progress_dir=progress_dir,
+                cycle_id=cycle_id,
+                iter_idx_one_based=n_done + 1,
+                n_iterations=state["iterations_completed"]
+                + args.n_iterations,
+                started_iso=cycle_started_iso,
+                started_perf=cycle_started_perf,
+                stage="self_play",
+                status="stopped",
+                ended=True,
+                notes="stopped via UI sentinel",
+            )
+            user_stopped = True
+            break
+
         # 2. Train next version
         peeked_train_version = registry.next_version_id()
         train_progress_path = (
@@ -1312,6 +1446,28 @@ def main() -> None:
         )
         new_weights = registry.weights_path(new_version)
         print(f"[iterate]   trained: {new_version}")
+
+        if _cycle_stop_check():
+            print(
+                f"[iterate]   stop sentinel detected after train; "
+                f"keeping trained weights {new_version} but skipping "
+                f"eval/promote for cycle {cycle_id}"
+            )
+            _write_cycle_progress(
+                progress_dir=progress_dir,
+                cycle_id=cycle_id,
+                iter_idx_one_based=n_done + 1,
+                n_iterations=state["iterations_completed"]
+                + args.n_iterations,
+                started_iso=cycle_started_iso,
+                started_perf=cycle_started_perf,
+                stage="train",
+                status="stopped",
+                ended=True,
+                notes="stopped via UI sentinel",
+            )
+            user_stopped = True
+            break
 
         # 3. Acceptance gate (skip on the first iteration — there's
         # no apples-to-apples comparison to make. Just promote.)
@@ -1364,6 +1520,8 @@ def main() -> None:
                     deck_pool=deck_pool,
                     replay_config=eval_replay_config,
                     hang_dump_dir=eval_hang_dir,
+                    cycle_id=cycle_id,
+                    stop_check=_cycle_stop_check,
                 )
             else:
                 wins_new, wins_old, draws, eval_elapsed = (
@@ -1444,10 +1602,34 @@ def main() -> None:
             state["current_best"] = new_version
         _save_iterate_state(args.registry_root, state)
 
-    print(
-        f"\n[iterate] Loop done. {args.n_iterations} iterations "
-        f"completed. Current best: {state['current_best']}."
-    )
+        # Cycle complete: finalize the cycle progress JSON so the UI
+        # flips the parent card out of 'running'. Stage boundaries
+        # above already short-circuit on a stop sentinel, so reaching
+        # here means the cycle ran to completion.
+        _write_cycle_progress(
+            progress_dir=progress_dir,
+            cycle_id=cycle_id,
+            iter_idx_one_based=n_done + 1,
+            n_iterations=state["iterations_completed"]
+            + args.n_iterations - 1,
+            started_iso=cycle_started_iso,
+            started_perf=cycle_started_perf,
+            stage="completed",
+            status="completed",
+            ended=True,
+        )
+
+    if user_stopped:
+        print(
+            "\n[iterate] Loop aborted by user stop request "
+            f"(after {state['iterations_completed']} completed "
+            f"iterations). Current best: {state['current_best']}."
+        )
+    else:
+        print(
+            f"\n[iterate] Loop done. {args.n_iterations} iterations "
+            f"completed. Current best: {state['current_best']}."
+        )
 
 
 if __name__ == "__main__":

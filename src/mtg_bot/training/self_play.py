@@ -38,7 +38,7 @@ import random
 import sys
 import traceback
 from dataclasses import dataclass
-from typing import Optional
+from typing import Callable, Optional
 
 from mtg_bot.agents import RandomAgent
 from mtg_bot.decks import Deck
@@ -157,6 +157,7 @@ def run_match_parallel(
     hang_dump_dir: Optional[str] = None,
     alternate_seats: bool = False,
     heuristics: Optional[HeuristicsConfig] = None,
+    stop_check: Optional[Callable[[], bool]] = None,
 ) -> MatchStats:
     """Same contract as ``run_match`` but distributes games across a
     ``multiprocessing.Pool``.
@@ -235,6 +236,7 @@ def run_match_parallel(
     progress.begin()
     indexed: list[tuple[int, tuple[Optional[PlayerID], int]]] = []
     crashed_game_indices: list[int] = []
+    stopped_early = False
     try:
         with mp.Pool(processes=n_workers) as pool:
             for game_idx, result in pool.imap_unordered(
@@ -255,10 +257,22 @@ def run_match_parallel(
                 progress.record_game(
                     winner=winner, decisions=decisions, crashed=crashed,
                 )
+                # User-requested stop via the UI sentinel — terminate
+                # pending dispatches and exit the loop. Same trade-off
+                # as data_gen: in-flight games on workers are
+                # killed; previously-completed results are preserved.
+                # See ``docs/SEARCH_LIMITATIONS.md``.
+                if stop_check is not None and stop_check():
+                    stopped_early = True
+                    pool.terminate()
+                    pool.join()
+                    break
     except BaseException:
         progress.finalize(status="failed")
         raise
-    progress.finalize(status="completed")
+    progress.finalize(
+        status="stopped" if stopped_early else "completed",
+    )
     _log_crashed_games(crashed_game_indices, n_games)
     indexed.sort(key=lambda t: t[0])
     return _aggregate_results([r for _, r in indexed], n_games)

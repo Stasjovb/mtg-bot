@@ -42,7 +42,7 @@ import random
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Iterable, Optional
+from typing import Callable, Iterable, Optional
 
 import numpy as np
 
@@ -267,10 +267,23 @@ def generate_training_data_parallel(
     per_game_timeout_sec: Optional[float] = None,
     hang_dump_dir: Optional[str] = None,
     heuristics: Optional[HeuristicsConfig] = None,
+    stop_check: Optional[Callable[[], bool]] = None,
 ) -> tuple[np.ndarray, ...]:
     """Same contract as ``generate_training_data`` but distributes
     games across a ``multiprocessing.Pool``. Same ``with_policy``
     flag controlling 2-tuple vs 4-tuple return.
+
+    ``stop_check`` is an optional zero-arg callable polled between
+    completed-game results (one per imap_unordered yield). When it
+    returns ``True``, the driver stops draining the pool, terminates
+    the workers, and returns whatever results have already landed
+    plus an empty-chunk tail for the un-played game indices. The
+    progress tracker (if supplied) is finalized with status
+    ``"stopped"`` so the UI sees the run as user-aborted rather than
+    completed/failed. In-flight games run to natural completion
+    (``pool.terminate()`` with timeout would lose their data); we
+    simply stop dispatching new ones. v1 design — not mid-game
+    responsive; see ``docs/SEARCH_LIMITATIONS.md``.
 
     Identical output to the sequential function for the same
     ``base_seed`` — per-game seeds are derived from ``game_idx``, not
@@ -327,6 +340,7 @@ def generate_training_data_parallel(
     # are deterministic in ``base_seed`` (locked in by tests).
     indexed: list[tuple[int, _GameChunk]] = []
     crashed_games: list[int] = []
+    stopped_early = False
     with mp.Pool(processes=n_workers) as pool:
         for game_idx, chunk in pool.imap_unordered(
             _play_one_parallel_game, args_list, chunksize=1,
@@ -353,6 +367,22 @@ def generate_training_data_parallel(
                         n_samples=int(chunk[0].shape[0]),
                         outcome_p0=_winner_to_p0_outcome(chunk[4]),
                     )
+            # User-requested stop: terminate the pool's pending work
+            # and break out, preserving the data we already have. We
+            # call ``pool.terminate()`` rather than letting the pool
+            # drain naturally because the queued args could be
+            # hundreds of games (~hours of wall-time on a slow eval
+            # bench) and the user wants the run to end now. In-flight
+            # games on the workers when terminate() lands DO get
+            # killed mid-game — their partial progress is lost, but
+            # everything that's already arrived in ``indexed`` is
+            # safe. Documented divergence: stops fire at imap-yield
+            # boundaries, not mid-game decision points.
+            if stop_check is not None and stop_check():
+                stopped_early = True
+                pool.terminate()
+                pool.join()
+                break
     if crashed_games:
         import sys
         print(
@@ -366,6 +396,13 @@ def generate_training_data_parallel(
     indexed.sort(key=lambda t: t[0])
     chunks = [c for _, c in indexed]
     f, o, p, m = _concat_chunks([c[:4] for c in chunks])
+    if stopped_early and progress is not None:
+        # Caller will see the early return; finalize the tracker so
+        # the UI labels the run as user-aborted rather than leaving
+        # it 'running' forever. Caller-driven finalize is also
+        # supported (caller may want extra metadata) — that's a
+        # no-op idempotent overwrite.
+        progress.finalize(status="stopped")
     if with_policy:
         return f, o, p, m
     return f, o

@@ -1,9 +1,13 @@
 """Flask app showing live progress of NN training runs.
 
-Read-only viewer over the JSON files written by
+Mostly-read viewer over the JSON files written by
 ``train_value_network(progress_path=...)``. The trainer is the
-producer; this UI is one of (potentially) many consumers. We never
-write back into the progress directory.
+producer; this UI is one of (potentially) many consumers. The only
+write surface is ``POST /api/runs/<run_id>/stop``, which drops a
+``.STOP_<run_id>`` sentinel file in the progress directory — long-
+running producers (iterate cycle, self-play pool, eval pool, queue
+server) check for the sentinel at stage boundaries and exit
+cleanly when they see it.
 
 Each run is one ``<run_id>.json`` file in ``progress_dir`` (default
 ``training_progress/`` under the cwd of the process serving the UI).
@@ -18,7 +22,11 @@ import json
 from pathlib import Path
 from typing import Any, Optional
 
-from flask import Flask, abort, jsonify, render_template
+from flask import Flask, abort, jsonify, render_template, request
+
+from mtg_bot.training.stop_signal import (
+    sentinel_path, stop_requested, write_stop,
+)
 
 
 def _read_run_file(path: Path) -> Optional[dict[str, Any]]:
@@ -159,6 +167,87 @@ def create_app(progress_dir: Path) -> Flask:
                 for name in files
             ],
             "count": len(files),
+        })
+
+    @app.route("/api/runs/<run_id>/stop", methods=["POST"])
+    def api_run_stop(run_id: str):
+        """Request a stop for ``run_id``.
+
+        Writes a sentinel file ``.STOP_<target_id>`` in the progress
+        directory. The producer (iterate cycle / self-play /
+        eval pool / queue server) polls for that sentinel at stage
+        boundaries and exits cleanly, finalizing its progress JSON
+        with ``status="stopped"``.
+
+        Cycle-vs-single-run targeting: when the run's progress JSON
+        has a ``cycle_id`` field (set by ``iterate_alphazero`` for
+        all child stages — self-play, train, eval), the sentinel is
+        written for the cycle, which propagates to the in-flight
+        child via the dual-id check in
+        ``stop_signal.stop_requested``. Otherwise the sentinel is
+        written for the single run.
+
+        Idempotent — calling twice does NOT error; the second call
+        refreshes the sentinel's timestamp + reason. Body is an
+        optional JSON ``{"reason": str}`` for log/audit metadata.
+        """
+        progress_dir: Path = app.config["PROGRESS_DIR"]
+        candidate = progress_dir / f"{run_id}.json"
+        run = _read_run_file(candidate) if candidate.is_file() else None
+        if run is None:
+            for r in _list_runs(progress_dir):
+                if r.get("run_id") == run_id:
+                    run = r
+                    break
+        if run is None:
+            abort(404)
+        body = request.get_json(silent=True) or {}
+        reason = body.get("reason") if isinstance(body, dict) else None
+        # Cycle-aware targeting: a child stage's progress JSON carries
+        # a ``cycle_id`` back-pointer when iterate_alphazero owns it.
+        # Stopping the cycle is what the user typically wants — the
+        # iter loop checks the cycle sentinel between stages and
+        # short-circuits the rest of the cycle.
+        cycle_id = run.get("cycle_id")
+        target_id = cycle_id if cycle_id else run_id
+        path = write_stop(progress_dir, target_id, reason=reason)
+        return jsonify({
+            "ok": True,
+            "run_id": run_id,
+            "stopped_target": target_id,
+            "is_cycle_stop": bool(cycle_id),
+            "sentinel_path": str(path),
+        })
+
+    @app.route("/api/runs/<run_id>/stop", methods=["GET"])
+    def api_run_stop_status(run_id: str):
+        """Diagnostic: report whether a stop has been requested for
+        ``run_id`` (or its parent cycle, if any). Useful for the UI
+        to show "stop pending" between the click and the next
+        producer-side stage boundary, and for tests."""
+        progress_dir: Path = app.config["PROGRESS_DIR"]
+        candidate = progress_dir / f"{run_id}.json"
+        run = _read_run_file(candidate) if candidate.is_file() else None
+        if run is None:
+            for r in _list_runs(progress_dir):
+                if r.get("run_id") == run_id:
+                    run = r
+                    break
+        if run is None:
+            abort(404)
+        cycle_id = run.get("cycle_id")
+        own = sentinel_path(progress_dir, run_id).is_file()
+        cycle = bool(cycle_id) and sentinel_path(
+            progress_dir, cycle_id,
+        ).is_file()
+        return jsonify({
+            "run_id": run_id,
+            "cycle_id": cycle_id,
+            "stop_requested": own or cycle or stop_requested(
+                progress_dir, run_id, cycle_id=cycle_id,
+            ),
+            "own_sentinel": own,
+            "cycle_sentinel": cycle,
         })
 
     return app

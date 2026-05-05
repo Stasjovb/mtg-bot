@@ -41,6 +41,7 @@
   .badge.running { background: #1e3a5f; color: #93c5fd; animation: pulse 1.6s infinite; }
   .badge.completed { background: #14532d; color: #4ade80; }
   .badge.failed { background: #4c1d1d; color: #fca5a5; }
+  .badge.stopped { background: #4c2d1d; color: #fcd34d; }
   .badge.unknown { background: #2a2d3a; color: var(--muted); }
   @keyframes pulse {
     0%, 100% { opacity: 1; }
@@ -62,6 +63,7 @@
   .progress-fill.bench { background: #f59e0b; }
   .progress-fill.completed { background: var(--green); }
   .progress-fill.failed { background: var(--red); }
+  .progress-fill.stopped { background: var(--amber); }
   .progress-pct { font-family: monospace; font-size: 0.9rem; min-width: 64px; text-align: right; }
 
   .stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
@@ -150,6 +152,46 @@
   .machine-stat-label { font-size: 0.6rem; color: var(--muted);
     text-transform: uppercase; letter-spacing: 0.06em; }
   .machine-stat-value { font-family: monospace; font-size: 0.82rem; }
+
+  /* Stop-run button + confirmation modal. The button sits on the
+     right side of every running card's header; the modal is a single
+     full-page overlay that gets reused across all clicks. */
+  .stop-btn {
+    margin-left: auto; padding: 4px 12px; font-size: 0.75rem;
+    font-weight: 600; letter-spacing: 0.04em; text-transform: uppercase;
+    background: transparent; color: #fca5a5; border: 1px solid #4c1d1d;
+    border-radius: 6px; cursor: pointer; font-family: inherit;
+  }
+  .stop-btn:hover { background: #4c1d1d; color: #fecaca; }
+  .stop-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+  .stop-pending { color: var(--amber); font-size: 0.72rem;
+    margin-left: 8px; font-style: italic; }
+
+  .modal-overlay {
+    position: fixed; inset: 0; background: rgba(0, 0, 0, 0.7);
+    display: none; align-items: center; justify-content: center;
+    z-index: 1000;
+  }
+  .modal-overlay.show { display: flex; }
+  .modal {
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: var(--radius); padding: 24px 28px;
+    max-width: 480px; width: 90vw;
+  }
+  .modal h2 { font-size: 1.05rem; margin-bottom: 12px; }
+  .modal p { font-size: 0.88rem; color: var(--muted);
+    margin-bottom: 18px; line-height: 1.5; }
+  .modal .modal-actions { display: flex; gap: 10px;
+    justify-content: flex-end; }
+  .modal button { padding: 8px 16px; font-size: 0.85rem;
+    font-weight: 600; border-radius: 6px; cursor: pointer;
+    font-family: inherit; }
+  .modal .btn-cancel { background: transparent; color: var(--text);
+    border: 1px solid var(--border); }
+  .modal .btn-cancel:hover { background: var(--bg); }
+  .modal .btn-confirm-stop { background: #4c1d1d; color: #fecaca;
+    border: 1px solid #7f1d1d; }
+  .modal .btn-confirm-stop:hover { background: #7f1d1d; color: #fff; }
 </style>
 </head>
 <body>
@@ -163,6 +205,26 @@
 
   <div class="section-title">Older runs</div>
   <div id="older"></div>
+</div>
+
+<div class="modal-overlay" id="stop-modal">
+  <div class="modal" role="dialog" aria-labelledby="stop-modal-title">
+    <h2 id="stop-modal-title">Stop run?</h2>
+    <p id="stop-modal-body">
+      This will set a stop flag the producer checks at stage
+      boundaries. In-flight games finish; new dispatches will be
+      skipped. Partial data is preserved.
+    </p>
+    <div class="modal-actions">
+      <button type="button" class="btn-cancel" id="stop-modal-cancel">
+        Cancel
+      </button>
+      <button type="button" class="btn-confirm-stop"
+              id="stop-modal-confirm">
+        Stop run
+      </button>
+    </div>
+  </div>
 </div>
 
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
@@ -216,9 +278,64 @@ function fmtLoss(v) {
 }
 
 function statusClass(s) {
-  if (s === 'running' || s === 'completed' || s === 'failed') return s;
+  if (s === 'running' || s === 'completed' || s === 'failed'
+      || s === 'stopped') return s;
   return 'unknown';
 }
+
+// Stop-button + modal wiring. One overlay reused across clicks.
+// `pendingStops` tracks runs whose stop has been ack'd by the
+// backend but whose progress JSON hasn't yet flipped status — the UI
+// shows "stop pending…" until the producer reaches a stage boundary
+// and finalizes the run as 'stopped'.
+const pendingStops = new Set();
+const stopModal = document.getElementById('stop-modal');
+const stopModalBody = document.getElementById('stop-modal-body');
+const stopModalCancel = document.getElementById('stop-modal-cancel');
+const stopModalConfirm = document.getElementById('stop-modal-confirm');
+let _pendingStopRunId = null;
+
+function showStopModal(runId) {
+  _pendingStopRunId = runId;
+  stopModalBody.textContent =
+    `Stop ${runId}? In-flight games will finish; new dispatches `
+    + 'will be skipped. Partial data is preserved.';
+  stopModal.classList.add('show');
+  stopModalConfirm.focus();
+}
+
+function hideStopModal() {
+  _pendingStopRunId = null;
+  stopModal.classList.remove('show');
+}
+
+stopModalCancel.addEventListener('click', hideStopModal);
+stopModal.addEventListener('click', (e) => {
+  // Click outside modal box → cancel.
+  if (e.target === stopModal) hideStopModal();
+});
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape' && stopModal.classList.contains('show')) {
+    hideStopModal();
+  }
+});
+
+stopModalConfirm.addEventListener('click', async () => {
+  const runId = _pendingStopRunId;
+  if (!runId) { hideStopModal(); return; }
+  try {
+    const res = await fetch(
+      '/api/runs/' + encodeURIComponent(runId) + '/stop',
+      { method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ reason: 'ui-button' }) },
+    );
+    if (res.ok) pendingStops.add(runId);
+  } catch (e) {
+    // Best-effort — UI will retry next poll. Don't block the user.
+  }
+  hideStopModal();
+  refresh();
+});
 
 function pctOfDataGen(run) {
   const total = run.n_games_total || 0;
@@ -273,6 +390,10 @@ function ensureCard(run) {
         <span class="run-id" data-field="run-id"></span>
         <span class="badge" data-field="status"></span>
         <span class="run-meta" data-field="meta"></span>
+        <button type="button" class="stop-btn" data-field="stop"
+                hidden>Stop</button>
+        <span class="stop-pending" data-field="stop-pending"
+              hidden>stop pending…</span>
       </div>
       <div class="progress-row">
         <div class="progress-bar"><div class="progress-fill" data-field="fill" style="width:0%"></div></div>
@@ -298,6 +419,10 @@ function ensureCard(run) {
         <span class="run-id" data-field="run-id"></span>
         <span class="badge" data-field="status"></span>
         <span class="run-meta" data-field="meta"></span>
+        <button type="button" class="stop-btn" data-field="stop"
+                hidden>Stop</button>
+        <span class="stop-pending" data-field="stop-pending"
+              hidden>stop pending…</span>
       </div>
       <div class="progress-row">
         <div class="progress-bar"><div class="progress-fill eval" data-field="fill" style="width:0%"></div></div>
@@ -322,6 +447,10 @@ function ensureCard(run) {
         <span class="run-id" data-field="run-id"></span>
         <span class="badge" data-field="status"></span>
         <span class="run-meta" data-field="meta"></span>
+        <button type="button" class="stop-btn" data-field="stop"
+                hidden>Stop</button>
+        <span class="stop-pending" data-field="stop-pending"
+              hidden>stop pending…</span>
       </div>
       <div class="progress-row">
         <div class="progress-bar"><div class="progress-fill bench" data-field="fill" style="width:0%"></div></div>
@@ -353,6 +482,10 @@ function ensureCard(run) {
         <span class="run-id" data-field="run-id"></span>
         <span class="badge" data-field="status"></span>
         <span class="run-meta" data-field="meta"></span>
+        <button type="button" class="stop-btn" data-field="stop"
+                hidden>Stop</button>
+        <span class="stop-pending" data-field="stop-pending"
+              hidden>stop pending…</span>
       </div>
       <div class="progress-row">
         <div class="progress-bar"><div class="progress-fill training" data-field="fill" style="width:0%"></div></div>
@@ -385,6 +518,32 @@ function fillRun(el, run) {
   const statusEl = el.querySelector('[data-field="status"]');
   statusEl.textContent = run.status || 'unknown';
   statusEl.className = 'badge ' + status;
+
+  // Stop button: visible only on running runs. If the user has
+  // already clicked stop and the backend ack'd, show "stop pending"
+  // chip until the producer flips status to 'stopped'.
+  const stopBtn = el.querySelector('[data-field="stop"]');
+  const stopPending = el.querySelector('[data-field="stop-pending"]');
+  if (stopBtn) {
+    if (status === 'running') {
+      const isPending = pendingStops.has(run.run_id);
+      stopBtn.hidden = isPending;
+      if (stopPending) stopPending.hidden = !isPending;
+      // Bind exactly once per element. ensureCard rebuilds the el on
+      // kind changes, so this handler is fresh per scaffold.
+      if (!stopBtn.dataset.wired) {
+        stopBtn.dataset.wired = '1';
+        stopBtn.addEventListener('click', () => {
+          showStopModal(run.run_id);
+        });
+      }
+    } else {
+      stopBtn.hidden = true;
+      if (stopPending) stopPending.hidden = true;
+      // Producer flipped to terminal status — drop the pending badge.
+      pendingStops.delete(run.run_id);
+    }
+  }
   const metaParts = [];
   if (run.git_commit) metaParts.push(run.git_commit);
   if (run.started_at) metaParts.push(run.started_at);
@@ -405,7 +564,8 @@ function fillRun(el, run) {
   if (k === 'training') fillCls += ' training';
   if (k === 'eval') fillCls += ' eval';
   if (k === 'bench') fillCls += ' bench';
-  if (status === 'completed' || status === 'failed') fillCls += ' ' + status;
+  if (status === 'completed' || status === 'failed'
+      || status === 'stopped') fillCls += ' ' + status;
   fill.className = fillCls;
   el.querySelector('[data-field="pct"]').textContent = pct.toFixed(1) + '%';
 
