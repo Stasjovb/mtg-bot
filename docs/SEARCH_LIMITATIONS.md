@@ -605,6 +605,67 @@ The "no creatures + no haste + no animator" conjunction means nothing the player
 
 ---
 
+## 12. Stop-run sentinel fires at stage boundaries, not mid-game (UI cost-of-control)
+
+**Location**:
+
+- `src/mtg_bot/training/stop_signal.py` (the sentinel-file
+  primitives)
+- `src/mtg_bot/training/data_gen.py:343` (sentinel poll between
+  ``imap_unordered`` results in
+  ``generate_training_data_parallel``)
+- `src/mtg_bot/training/self_play.py:249` (sentinel poll in
+  ``run_match_parallel``'s eval pool)
+- `scripts/iterate_alphazero.py` cycle loop (sentinel poll between
+  self-play / train / eval stages)
+- `scripts/serve_setup_scripts.py:queue_take` (sentinel poll on
+  every ``/queue/take`` from a remote)
+
+**What we do today**: when the user clicks the Stop-run button in
+the training UI, the back-end writes ``training_progress/.STOP_<id>``.
+Producers check for that sentinel at *boundaries* — between
+completed-game results in a multiprocessing pool, between
+``/queue/take`` requests from a remote, between iter stages
+(self-play → train → eval). They do NOT check it inside an
+in-flight game's per-decision loop.
+
+**Why we ship this v1 anyway**:
+- Mid-game responsiveness would require a per-decision sentinel
+  poll inside the search hot-path (PIMC / ISMCTS evaluate
+  candidate moves several thousand times per game) and would
+  measurably slow self-play. The intended use of Stop is
+  abort-and-retry, not pause-mid-decision; a few-minute wait at
+  production wall budgets is acceptable.
+- In-flight game data is preserved when stops fire at imap-yield
+  boundaries (the ``indexed`` list is built incrementally; the
+  rows already in it land in the .npz). Mid-game termination
+  would lose that game's samples to no purpose.
+
+**Failure mode**: user clicks Stop. The UI ack's immediately and
+shows "stop pending…". The producer (multiprocessing pool of
+self-play games) finishes the in-flight games on its workers
+(could be up to ~2 min at production decision budgets) before its
+``imap_unordered`` loop reads the sentinel and breaks. The user
+sees "running" for ~minutes after clicking.
+
+**Fix scope when prioritized**:
+- *Per-decision sentinel poll* — small code change (add the check
+  inside ``MtgGameStateAdapter.legal_decisions`` or the search
+  driver's per-iteration loop) but adds an mtime-aware filesystem
+  poll to the inner search loop. Mitigatable with caching (only
+  re-stat every N decisions / every M ms).
+- *HTTP control endpoint* — replace the file sentinel with an
+  in-process control channel (queue between UI and producer); is
+  more invasive (requires the producer to expose a port, requires
+  remotes to call it through Tailscale).
+
+**Impact estimate**: pure cost-of-UX, no strength implications.
+For now: stop-click latency = remaining wall time of the longest
+in-flight game (= ~30s-2min depending on decision budget).
+Acceptable for v1.
+
+---
+
 ## Tracked but not in this doc
 
 Things tracked elsewhere that you might also want to know about:
