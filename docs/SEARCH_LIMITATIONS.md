@@ -99,31 +99,72 @@ Below the noise floor against the ordered-damage-assignment fix.
 
 ---
 
-## 3. Opp priority auto-pass via capability hash
+## 3. Priority auto-pass via capability hash (opp + active player)
 
-**Location** (planned, in `feature/opp-capability-autopass` branch
-as of 2026-05-04): `MtgGameStateAdapter.legal_decisions` short-circuits
-to `[PassPriority()]` when the non-active player's capability set is
-empty. The capability set is computed once and re-validated by hashing
-`(opp.hand, opp.mana_available, opp.untapped_permanents_with_abilities)`
-and only recomputing on hash mismatch.
+**Location**: `MtgGameStateAdapter.legal_decisions` short-circuits to
+`[PassPriority()]` when the priority holder's capability set is empty.
+Capability checks live in `src/mtg_bot/search/_player_capabilities.py`
+(`has_player_capability_to_act` + `player_capability_hash`); the
+adapter cache lives at `src/mtg_bot/search/engine_adapter.py:208-228`
+(`_opp_cap_cache` 4-tuple keyed on `(player_id, is_active_player,
+hash, can_act)`).
+
+Two flavors:
+
+- **Opp side** (priority on the non-active player): instant-speed-only
+  capability check — cards in hand castable at instant speed,
+  warp-from-graveyard / impulse-from-exile at instant speed.
+- **Active side** (priority on the active player): instant-speed
+  union plus, when at sorcery-window timing (stack empty + main
+  phase + active priority), sorcery-speed castables, land plays with
+  drops remaining, sorcery-speed warp / impulse / Lightstall casts,
+  activated abilities (sorcery-speed), and spacecraft station crew.
+  At pre-combat / declare-attackers steps, eligible-attacker
+  presence is a capability too (defensive — the engine_adapter's
+  factored combat phase already handles attackers ahead of priority,
+  but a future code path that opens a priority window before
+  `_combat_phase` is set won't silently auto-pass through what
+  should be an attacker declaration).
+
+The capability check is computed once per priority moment and
+re-validated by hashing
+`(player.hand, player.mana_available,
+player.untapped_permanents_with_abilities, gy_flags, exile_flags,
+step/turn/stack/priority/active/continuous_effects_count)` plus, for
+active player, `(lands_played_this_turn, is_sorcery_window, life)`.
+Cache invalidated on every `apply()`.
 
 **Why this is sometimes wrong**: the hash inputs don't capture every
-state change that could affect the opp's possible actions. Specifically:
+state change that could affect the priority holder's possible
+actions. The same documented limitations apply equally to opp and
+active-player capability checks (the same hash machinery feeds
+both):
 
 | Edge case | Why missed | Bot misbehavior |
 |---|---|---|
-| Continuous effect from opp grants opp new instant-speed access (Vedalken Orrery, Teferi Mage of Zhalfir grants them flash) | Hash doesn't depend on continuous-effects layer | Bot auto-passes when opp could have cast a (now-flash) creature |
-| Cost-reduction effect lands mid-turn (Goblin Electromancer ETBs from active player's spell → opp's instants get cheaper) | Hash uses raw mana_available, not effective costs | Bot auto-passes when opp could afford something whose cost just got reduced |
-| Continuous effect grants opp permanent a new activated ability (rare) | Hash doesn't enumerate continuous-effect-granted abilities | Bot auto-passes when opp could activate the granted ability |
-| Effect makes opp spells castable from a new zone (Yawgmoth's Will → graveyard cast; very rare in current pool) | We don't model graveyard-cast capability fully here | Bot auto-passes when opp could cast from graveyard |
+| Continuous effect grants the priority holder new instant-speed access (Vedalken Orrery, Teferi Mage of Zhalfir grants them flash) | Hash doesn't depend on continuous-effects layer beyond the count | Bot auto-passes when the priority holder could have cast a (now-flash) creature |
+| Cost-reduction effect lands mid-turn (Goblin Electromancer ETBs from active player's spell → opp's / active's instants get cheaper) | Hash uses raw mana_available, not effective costs | Bot auto-passes when the priority holder could afford something whose cost just got reduced |
+| Continuous effect grants a permanent a new activated ability (rare) | Hash captures id-set count delta, not effective set | Bot auto-passes when the priority holder could activate the granted ability |
+| Effect makes spells castable from a new zone (Yawgmoth's Will → graveyard cast; very rare in current pool) | Zone-castable flags watched at coarse granularity | Bot auto-passes when the priority holder could cast from graveyard |
 | Mana-cost change via card-type change (e.g., color-changing effect altering hybrid cost availability) | Hash uses face-value cost, not derived | Bot auto-passes if a now-castable cost wasn't recognized |
 
-**Failure mode**: bot passes priority when opp had a meaningful
-action available. Opp gets the play; bot didn't get to consider it.
-Note this is conservative-WRONG — the bot's miss is "didn't take a
-chance to act" — never "took an illegal action" or "made an
-impossible play."
+**Failure mode**: bot passes priority when the priority holder had a
+meaningful action available. Note this is conservative-WRONG — the
+bot's miss is "didn't take a chance to act" — never "took an illegal
+action" or "made an impossible play."
+
+**Engine-contract interaction**: today's `legal_actions` enumerator
+returns early at non-sorcery timing BEFORE walking the activated-
+ability block (see `legal.py` — `if not _is_sorcery_timing: return
+actions` after the hand-cast loop). This means BOTH opp at non-active
+priority AND active player during instant-only windows (combat
+substeps, upkeep/draw/end with non-empty stack, etc.) never receive
+`ActivateAbility` actions from the engine. The capability check
+matches that contract: at non-sorcery timing,
+`_has_instant_speed_activatable` returns False unconditionally. If
+a future engine change DOES start surfacing `ActivateAbility` at
+non-sorcery timing, the capability-check function is the place to
+extend (the structural hash already covers permanent shape).
 
 **When it matters**: very rare in the current EoE pool + synthetic
 G/R deck. Common enough in formats with lots of cost-reduction or
@@ -143,14 +184,20 @@ mis-plays don't shift the policy gradient).
 plays one game live" scenarios where every decision matters.
 
 **Fix scope if/when needed**:
-- Include continuous-effect "grants opp instant-speed" predicates in the hash
+- Include continuous-effect "grants the priority holder instant-speed" predicates in the hash
 - Track effective costs (cost-reduction-aware mana check) instead of raw mana
-- Specifically scan for `ContinuousEffect` types known to affect opp action availability
-- Add a config flag `--no-opp-capability-autopass` for matches where strict play matters
+- Specifically scan for `ContinuousEffect` types known to affect action availability
+- Add a config flag `--no-capability-autopass` for matches where strict play matters
 
-**Impact estimate**: currently +20-35% per-game self-play
-throughput. Strength cost in mis-played positions: negligible at
-current model strength + EoE-only pool.
+**Impact estimate**: combined opp + active auto-pass currently fires
+on **~84% of priority moments** in random-walk RandomAgent self-play
+(seed 0, 500 decisions; opp-only was ~45%). Per-game self-play
+profile (v12 weights, samples=4 inner_nodes=200, ISMCTS, base_seed=200,
+decision_cap=200): clean wall **52.2s → 48.8s (-6.5%)**;
+`legal_actions` calls **433,526 → 156,337 (-64%)** on top of the
+opp-only baseline. Strength cost in mis-played positions: negligible
+at current model strength + EoE-only pool. See
+`docs/perf_active_autopass_20260504.md` for the full delta.
 
 ---
 
