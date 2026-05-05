@@ -1,10 +1,13 @@
-"""Tests for ``mtg_bot.mulligan.heuristic_*`` — the extreme-only
+"""Tests for ``mtg_bot.mulligan.heuristic_*`` — the two-tier
 mulligan policy and the high-MV-first bottom selector.
 
-The policy is deliberately conservative: only the catastrophic
-hands (0 lands, all lands) mulligan; everything else keeps. These
-tests pin both the conservative behavior (don't mulligan borderline
-hands) AND the extreme behavior (do mulligan the actual disasters).
+Decision rule:
+
+* mulls_taken < 2: mulligan if n_lands in {0, 1, 6, 7}; keep 2-5.
+* mulls_taken >= 2: mulligan iff n_lands == 0.
+
+These tests pin both the screw/flood behavior at the first two
+looks AND the narrowing to zero-land-only at the third look.
 """
 
 from __future__ import annotations
@@ -68,35 +71,74 @@ def test_mulligan_when_all_lands():
     assert heuristic_mulligan_decision(hand, 0) is True
 
 
-def test_keep_one_land():
-    """Borderline 1-land hand keeps under this conservative policy.
-    A smarter policy might mulligan; we don't, by design."""
+def test_mulligan_one_land_at_first_looks():
+    """1-land hand mulligans at first or second look (mulls < 2)."""
     hand = _h((True, 0), *[(False, 3)] * 6)
-    assert heuristic_mulligan_decision(hand, 0) is False
+    assert heuristic_mulligan_decision(hand, 0) is True
+    assert heuristic_mulligan_decision(hand, 1) is True
 
 
-def test_keep_six_lands():
-    """Mirror: 6 lands + 1 spell. Borderline flood, but the policy
-    keeps."""
+def test_keep_one_land_at_third_look():
+    """At mulls_taken >= 2, the policy narrows to zero-land-only —
+    a 1-land hand keeps, because the bottoming cost outweighs
+    further optimization on a borderline hand."""
+    hand = _h((True, 0), *[(False, 3)] * 6)
+    assert heuristic_mulligan_decision(hand, 2) is False
+    assert heuristic_mulligan_decision(hand, 3) is False
+
+
+def test_mulligan_six_lands_at_first_looks():
+    """6-land flood mulligans at first or second look (mulls < 2)."""
     hand = _h(*[(True, 0)] * 6, (False, 4))
-    assert heuristic_mulligan_decision(hand, 0) is False
+    assert heuristic_mulligan_decision(hand, 0) is True
+    assert heuristic_mulligan_decision(hand, 1) is True
+
+
+def test_keep_six_lands_at_third_look():
+    """At mulls_taken >= 2, even the 6-land flood keeps — only zero
+    lands triggers a third mulligan."""
+    hand = _h(*[(True, 0)] * 6, (False, 4))
+    assert heuristic_mulligan_decision(hand, 2) is False
 
 
 def test_keep_balanced_hand():
+    """2-5 land hand always keeps regardless of mulls_taken."""
     hand = _h(
         (True, 0), (True, 0), (True, 0),  # 3 lands
         (False, 1), (False, 2), (False, 3), (False, 4),  # 4 spells
     )
+    for mulls in range(7):
+        assert heuristic_mulligan_decision(hand, mulls) is False
+
+
+def test_keep_two_land_hand():
+    """2 lands is the lower threshold for keep at first look."""
+    hand = _h((True, 0), (True, 0), *[(False, 3)] * 5)
     assert heuristic_mulligan_decision(hand, 0) is False
 
 
-def test_decision_independent_of_mulls_taken():
-    """The extreme-only policy doesn't change with mulligan count
-    (we always mulligan if extreme; the engine forces keep at
-    max_mulligans, but the policy itself is mulls-agnostic)."""
+def test_keep_five_land_hand():
+    """5 lands is the upper threshold for keep at first look."""
+    hand = _h(*[(True, 0)] * 5, (False, 3), (False, 4))
+    assert heuristic_mulligan_decision(hand, 0) is False
+
+
+def test_zero_lands_mulligans_at_every_mull_count():
+    """0 lands is the only condition that mulligans at every level —
+    pinned across the full mulligan ladder so the third-look
+    narrowing doesn't accidentally include flood/screw too."""
     hand_no_lands = _h(*[(False, 2)] * 7)
     for mulls in range(7):
         assert heuristic_mulligan_decision(hand_no_lands, mulls) is True
+
+
+def test_seven_lands_mulligans_at_first_looks_then_keeps():
+    """All-lands at mulls < 2 mulligans (severe flood); at mulls >= 2
+    it keeps because the rule narrows to zero-land-only."""
+    all_lands = _h(*[(True, 0)] * 7)
+    assert heuristic_mulligan_decision(all_lands, 0) is True
+    assert heuristic_mulligan_decision(all_lands, 1) is True
+    assert heuristic_mulligan_decision(all_lands, 2) is False
 
 
 def test_empty_hand_keeps():
@@ -104,6 +146,7 @@ def test_empty_hand_keeps():
     lands`` or ``no lands`` meaningfully — return False (keep) so
     the engine doesn't loop forever on an impossible hand."""
     assert heuristic_mulligan_decision([], 0) is False
+    assert heuristic_mulligan_decision([], 5) is False
 
 
 # ---------- bottom choice ---------------------------------------------------

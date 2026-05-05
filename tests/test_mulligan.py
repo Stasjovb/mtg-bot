@@ -87,8 +87,12 @@ def test_default_agent_keeps_first_hand():
     """The base ``Agent.choose_mulligan`` defaults to "keep" so an
     agent that doesn't override stays at 7 cards and doesn't bottom
     anything even with ``enable_mulligans=True``."""
+    # Use the bare ``Agent`` (always-keep) here — RandomAgent now
+    # uses the two-tier mulligan heuristic and at seed=0 happens
+    # to draw a 1-land hand on at least one seat, which mulligans
+    # under the new rule.
     state = setup_game(
-        [RandomAgent(), RandomAgent()],
+        [Agent(), Agent()],
         colors=["G", "R"],
         seed=0,
         enable_mulligans=True,

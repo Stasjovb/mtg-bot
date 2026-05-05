@@ -3,16 +3,17 @@
 Pre-game decision-making is its own little corner of the engine —
 ``simulate.setup_game`` calls ``Agent.choose_mulligan`` once per
 player at game start, and ``Agent.choose_bottom`` once after the
-final keep. This module provides a generic extreme-only heuristic
-that any agent can plug in. The base ``Agent`` defaults to "always
-keep" (preserves Stage-1 behavior); concrete agents that want a
-real policy delegate to the helpers here.
+final keep. This module provides a generic two-tier mulligan
+heuristic that any agent can plug in. The base ``Agent`` defaults
+to "always keep" (preserves Stage-1 behavior); concrete agents
+that want a real policy delegate to the helpers here.
 
-The policy is deliberately simple and conservative — it only
-mulligans the catastrophically-bad opening hands (no lands or all
-lands). Everything else keeps. This catches the worst variance
-source (mana screw / mana flood at game 1 turn 1) while staying
-agent-agnostic and doing nothing surprising on borderline hands.
+The policy mulligans the screw (≤1 land) and flood (≥6 lands)
+ends through the first two looks, then narrows to "only mulligan
+zero lands" at the third look and beyond — by that point the
+London-mulligan bottoming cost (3+ cards) outweighs further
+optimization on borderline hands. See
+``heuristic_mulligan_decision`` for the exact rule.
 
 A future smarter policy can replace ``heuristic_mulligan_decision``
 without changing any caller — it's a pure function of (hand,
@@ -62,23 +63,35 @@ def heuristic_mulligan_decision(
     """Should this hand be mulliganed? Returns True for mulligan,
     False for keep.
 
-    Decision rule: mulligan only if the hand has zero lands or
-    every card is a land. Both extremes are essentially unwinnable
-    (mana-screw or mana-flood at turn 1) and a free 7-redraw is
-    almost always better even at the cost of bottoming a card.
-    Every other hand keeps — borderline cases (1 land, 6 lands,
-    weird curves) are left to play out.
+    Decision rule (the "aggressive" 7-card heuristic):
 
-    The London-mulligan rule still bottoms ``mulls_taken`` cards
-    on keep, so this isn't a free reroll: each mulligan costs a
-    card. Limiting mulligans to the extremes preserves that cost
-    discipline.
+    * At ``mulls_taken < 2`` (first or second look): mulligan if the
+      land count is in ``{0, 1, 6, 7}`` — both the screw end (≤1 land)
+      and the flood end (≥6 lands) are unkeepable at this mulligan
+      cost. Hands with 2-5 lands keep.
+    * At ``mulls_taken >= 2`` (already paid for two mulligans):
+      mulligan only if the hand has zero lands. By the third look the
+      bottoming cost (3+ cards) outweighs the marginal improvement
+      from any non-zero-land hand; even a mana-flood 6/7 keeps. Only
+      the truly catastrophic 0-land hand justifies a third mull.
+
+    The London-mulligan rule still bottoms ``mulls_taken`` cards on
+    keep, so each mulligan costs a card. The two-tier policy spends
+    that cost where it matters most (early flood/screw) and stops
+    paying it once the hand size starts hurting.
+
+    The decision is a pure function of ``(hand, mulls_taken)`` —
+    no engine state, no RNG. Two clones of the same opening with
+    the same ``mulls_taken`` make identical choices, important for
+    search reproducibility.
     """
     cards = list(hand)
     if not cards:
         return False  # empty hand is a forced-keep edge case
     n_lands = sum(1 for c in cards if _is_land(c))
-    return n_lands == 0 or n_lands == len(cards)
+    if mulls_taken < 2:
+        return n_lands <= 1 or n_lands >= 6
+    return n_lands == 0
 
 
 def heuristic_bottom_choice(
