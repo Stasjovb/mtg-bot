@@ -952,6 +952,17 @@ class _EarlyStopPoller:
     Read path is filesystem only — no shard liveness check. A hung
     shard's stale JSON simply stops contributing to the sum; the
     other shards' progress carries the threshold over the line.
+
+    Reads only shard JSONs whose ``started_at`` is at or after the
+    poller's instantiation time. Stale JSONs from prior runs with
+    the same ``run_id`` are silently ignored — without this filter,
+    rerunning an iter (e.g. ``iter_003_self_play_v13``) with shard
+    JSONs left over from a previous attempt makes the very first
+    tick read the prior run's ``n_games_done`` and POST close
+    immediately, dropping the new run's shards before they begin
+    (observed 2026-05-05 with ``--queue-slack-pct 0.1``). Shards
+    without a ``started_at`` field are also skipped, since we can't
+    tell which run they belong to.
     """
 
     _SUM_FIELDS = ("n_games_done", "crashed", "timed_out")
@@ -977,6 +988,18 @@ class _EarlyStopPoller:
         self._thread: Optional[threading.Thread] = None
         self._closed = False
         self._close_failed = False
+        # Stale-JSON filter: any shard JSON written before this
+        # timestamp is from a prior run with the same ``run_id`` and
+        # must NOT count toward the early-stop threshold. ISO 8601
+        # with seconds precision matches what DataGenProgress /
+        # EvalProgress write in the per-shard JSON's ``started_at``;
+        # lexical comparison on those strings is order-preserving.
+        self._start_iso = datetime.now(timezone.utc).isoformat(
+            timespec="seconds",
+        )
+        # Set on the first stale-JSON skip so we log once per run
+        # rather than on every tick.
+        self._logged_stale_skip = False
 
     def start(self) -> None:
         self._thread = threading.Thread(
@@ -1019,9 +1042,15 @@ class _EarlyStopPoller:
         ``<run_id>_shard_*.json`` files in ``progress_dir``. Skips
         unreadable / partially-written files (the next tick will
         catch them). Skips ``..._result.json`` files to avoid double-
-        counting eval shards (mirrors _AggregateProgressPoller)."""
+        counting eval shards (mirrors _AggregateProgressPoller).
+
+        Also skips shard JSONs whose ``started_at`` is missing or
+        predates this poller's instantiation — those are leftovers
+        from a prior run with the same ``run_id`` and would
+        prematurely trip the close (see class docstring)."""
         sums = {f: 0 for f in self._SUM_FIELDS}
         pattern = f"{self._run_id}_shard_*.json"
+        stale_paths: list[str] = []
         for path in self._progress_dir.glob(pattern):
             if path.stem.endswith("_result"):
                 continue
@@ -1029,10 +1058,28 @@ class _EarlyStopPoller:
                 shard = json.loads(path.read_text(encoding="utf-8"))
             except (OSError, json.JSONDecodeError):
                 continue
+            shard_started = shard.get("started_at")
+            # ISO 8601 strings compare lexically. A missing or older
+            # timestamp means this JSON predates the current run.
+            if (
+                not isinstance(shard_started, str)
+                or shard_started < self._start_iso
+            ):
+                stale_paths.append(path.name)
+                continue
             for f in self._SUM_FIELDS:
                 v = shard.get(f, 0)
                 if isinstance(v, (int, float)):
                     sums[f] += int(v)
+        if stale_paths and not self._logged_stale_skip:
+            self._logged_stale_skip = True
+            print(
+                f"[early-stop] {self._run_id}: ignoring "
+                f"{len(stale_paths)} stale shard JSON(s) from a prior "
+                f"run (started_at < {self._start_iso}): "
+                f"{', '.join(sorted(stale_paths))}",
+                file=sys.stderr,
+            )
         return sums["n_games_done"] - sums["crashed"] - sums["timed_out"]
 
     def _send_close(self) -> None:
