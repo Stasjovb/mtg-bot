@@ -1,4 +1,4 @@
-"""Tiny deck fixtures for tests that just need *some* deck to feed
+"""Deck fixtures for tests that just need *some* deck to feed
 ``setup_game(decks=...)``.
 
 Replaces the synthetic mono-color path that used to live on the
@@ -18,11 +18,12 @@ exactly 2 Forests in their library at start"), build the decklist
 inline — those tests already do that and shouldn't reach for a
 generic helper.
 
-The decks are deliberately tiny in card-name variety (one creature
-per color + the matching basic) so the underlying card-data load
-stays fast and the deterministic RNG-driven tests don't have their
-expected outputs perturbed by the deck-builder picking different
-cards.
+The deck builder mirrors the legacy mono-color shape (24 basics +
+36 nonland cards in the chosen color or colorless) so the same
+breadth of engine code paths gets exercised — casting from hand,
+playing lands, etc. The only requirement on the active card
+source is that it expose enough cards to fill the 36-card nonland
+slots.
 """
 
 from __future__ import annotations
@@ -31,46 +32,41 @@ from mtg_bot.cards.source import get_active_source
 from mtg_bot.decks import Deck
 
 
-# Pinned (creature_name, basic_land) pairs for each color. These
-# names come from the EoE card pool and have stayed put across
-# parser-claim revisions; they're checked at import time below so
-# a future card-data swap that drops one of these surfaces loudly
-# rather than silently making every test fixture deck empty.
-_COLOR_TO_CARDS: dict[str, tuple[str, str]] = {
-    "W": ("Astelli Reclaimer", "Plains"),
-    "U": ("Cloudsculpt Technician", "Island"),
-    "B": ("Beamsaw Prospector", "Swamp"),
-    "R": ("Frontline War-Rager", "Mountain"),
-    "G": ("Blooming Stinger", "Forest"),
+# Same color → basic-land mapping the legacy mono-color path used.
+_COLOR_TO_BASIC: dict[str, str] = {
+    "W": "Plains", "U": "Island", "B": "Swamp",
+    "R": "Mountain", "G": "Forest",
 }
 
 
 def simple_test_decklist(color: str = "G") -> list[str]:
-    """Return a 60-card decklist of cards in the active source.
+    """Return a 60-card decklist drawn from the active card source.
 
-    24 of the matching basic land + 36 copies of one creature in
-    that color. Deterministic and tiny; sized to the legacy 60-card
-    pre-EOE-pool fixture decks so existing tests' library-size /
-    hand-size assertions continue to work without modification.
+    24 basics of the chosen color + 36 nonland cards in that color
+    (or colorless, since colorless generic costs can be paid from any
+    basic land). Deterministic — same color always produces the same
+    decklist — so RNG-sensitive tests don't get perturbed by the
+    deck-builder picking different cards on different runs.
 
     Use ``simple_test_decklists`` for the standard two-seat pair.
     """
-    if color not in _COLOR_TO_CARDS:
+    if color not in _COLOR_TO_BASIC:
         raise ValueError(
             f"unknown color {color!r}; expected one of "
-            f"{sorted(_COLOR_TO_CARDS)}"
+            f"{sorted(_COLOR_TO_BASIC)}"
         )
-    creature, land = _COLOR_TO_CARDS[color]
+    land_name = _COLOR_TO_BASIC[color]
     printings = get_active_source().get_printings()
-    if creature not in printings or land not in printings:
-        raise RuntimeError(
-            f"test fixture cards {creature!r} / {land!r} are not in "
-            f"the active card source's pool. The source has likely "
-            f"changed; pick a replacement card name from "
-            f"``get_active_source().get_printings()`` and update "
-            f"``_COLOR_TO_CARDS`` in this module."
-        )
-    return [creature] * 36 + [land] * 24
+    candidates = sorted(
+        name for name, p in printings.items()
+        if "Land" not in p.card_types
+        and (color in p.mana_cost.colors or not p.mana_cost.colors)
+    )
+    if not candidates:
+        raise ValueError(f"no nonland cards in color {color}")
+    deck = [candidates[i % len(candidates)] for i in range(36)]
+    deck.extend([land_name] * 24)
+    return deck
 
 
 def simple_test_decklists(
