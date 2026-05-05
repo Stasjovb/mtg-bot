@@ -80,6 +80,17 @@
 - Ad-hoc screenshot the live UI:
   `.venv/Scripts/python.exe scripts/screenshot_ui.py --url http://127.0.0.1:5002 --out ui.png`
 
+## Distributed flow (master + remotes)
+
+The cluster is one master (Win11 desktop) + N remotes (Mac, Win10).
+For day-to-day operations — running iterations, running remote
+benches that surface in the training UI, monitoring, aborting — see
+**[`docs/RUNNING_DISTRIBUTED.md`](docs/RUNNING_DISTRIBUTED.md)**.
+
+For one-time per-machine bootstrap (Python, repo clone, SSH keys,
+Tailscale enrollment), see
+[`docs/SETUP_DISTRIBUTED.md`](docs/SETUP_DISTRIBUTED.md).
+
 ## Scope reminders
 
 - Card pool target: **Edge of Eternities** (Scryfall set code `eoe`). Raw data is cached at `data/edge_of_eternities.json`; regenerate via `scripts/fetch_eoe.py`.
