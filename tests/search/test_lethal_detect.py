@@ -430,6 +430,137 @@ def test_lethal_detect_skipped_when_opp_has_combat_trigger_alt_string():
     assert detect_lethal_attack(state, player_id=0) is None
 
 
+def test_lethal_detect_skipped_when_opp_has_self_animator_land():
+    """Opp controls a noncreature permanent (a basic land here, mutated
+    to carry a manland-style activated ability) whose effect animates
+    the land into a 2/2 creature UEOT. Even with empty hand, no combat
+    triggers, and no problematic blocker keywords, the heuristic must
+    abort — opp can animate a fresh blocker mid-combat and soak the
+    smallest unblocked attacker."""
+    from dataclasses import replace
+    from mtg_bot.effects.base import (
+        ActivatedAbility, ActivationCost,
+    )
+    from mtg_bot.effects.generic.become_type import BecomeLandCreatureUEOT
+    state = _setup_state()
+    state.players[1].life = 2
+    atk_id = _give_creature(state, 0, "Wild Bear")  # 2/2
+    # Put a Forest on opp's battlefield, then mutate its printing to
+    # carry a manland-style activated ability (Mishra's Factory shape:
+    # a non-tap mana cost activates "this land becomes a 2/2 creature").
+    forest = state.new_object(
+        BASIC_LANDS["Forest"], owner_id=1, zone=Zone.BATTLEFIELD,
+    )
+    forest.controller_id = 1
+    forest.tapped = False
+    state.battlefield.append(forest)
+    animator_ability = ActivatedAbility(
+        cost=ActivationCost(),
+        effect=BecomeLandCreatureUEOT(power=2, toughness=2),
+    )
+    forest.printing = replace(
+        forest.printing,
+        activated_abilities=(animator_ability,),
+    )
+    # Sanity: the forest is still a noncreature permanent.
+    from mtg_bot.game import is_creature_now
+    assert is_creature_now(forest) is False
+    # Heuristic aborts even though life=2 and our Wild Bear is 2/2.
+    assert detect_lethal_attack(state, player_id=0) is None
+    # Without the animator ability mutation it would fire (control —
+    # the regular-Forest case is already covered by
+    # test_lethal_detect_skipped_when_opp_has_mana, but re-asserting
+    # here ties this test's premise back to a known-firing baseline).
+    forest.printing = replace(forest.printing, activated_abilities=())
+    assert detect_lethal_attack(state, player_id=0) == {atk_id}
+
+
+def test_lethal_detect_fires_with_regular_basic_land_only():
+    """Control: opp controls a regular basic land (no animation
+    ability, just the implicit tap-for-mana). Heuristic still fires."""
+    state = _setup_state()
+    state.players[1].life = 2
+    atk_id = _give_creature(state, 0, "Wild Bear")
+    forest = state.new_object(
+        BASIC_LANDS["Forest"], owner_id=1, zone=Zone.BATTLEFIELD,
+    )
+    forest.controller_id = 1
+    forest.tapped = False
+    state.battlefield.append(forest)
+    # No mutation — basic Forest has no printed activated abilities.
+    assert detect_lethal_attack(state, player_id=0) == {atk_id}
+
+
+def test_lethal_detect_animator_gate_skips_already_animated_creatures():
+    """The animator gate only checks NONcreature permanents — already-
+    animated (or natively-creature) opp permanents are handled by the
+    existing blocker-keyword / blocker-count gates. Verify the new
+    gate doesn't re-abort on a creature that happens to also have the
+    animation ability on its printing (defensive — a manland that's
+    already a creature this turn is just a regular blocker)."""
+    from dataclasses import replace
+    from mtg_bot.effects.base import (
+        ActivatedAbility, ActivationCost,
+    )
+    from mtg_bot.effects.generic.become_type import BecomeLandCreatureUEOT
+    from mtg_bot.search._lethal_detect import (
+        _opp_has_self_animator_permanent,
+    )
+    state = _setup_state()
+    state.players[1].life = 2
+    _give_creature(state, 0, "Wild Bear")
+    # Opp Wild Bear with a manland-style ability bolted on. It's
+    # already a creature, so the new animator gate should NOT count it
+    # (the existing creature-blocker gates handle it).
+    bear_id = _give_creature(state, 1, "Wild Bear")
+    bear = next(o for o in state.battlefield if o.id == bear_id)
+    animator_ability = ActivatedAbility(
+        cost=ActivationCost(),
+        effect=BecomeLandCreatureUEOT(power=2, toughness=2),
+    )
+    bear.printing = replace(
+        bear.printing,
+        activated_abilities=(animator_ability,),
+    )
+    # The animator gate (in isolation) does not flag an already-creature
+    # permanent.
+    assert _opp_has_self_animator_permanent(state, opp_id=1) is False
+
+
+def test_lethal_detect_animator_gate_skips_mana_abilities():
+    """Mana abilities (``is_mana_ability=True``) are skipped by the
+    animator gate even if their effect class were to coincidentally
+    match — we shouldn't be flagging mana sources as animators.
+    (Defensive: today no real card combines mana-ability=True with a
+    BecomeLandCreatureUEOT effect, but the skip keeps the gate honest
+    if a future synthetic card does.)"""
+    from dataclasses import replace
+    from mtg_bot.effects.base import (
+        ActivatedAbility, ActivationCost,
+    )
+    from mtg_bot.effects.generic.become_type import BecomeLandCreatureUEOT
+    from mtg_bot.search._lethal_detect import (
+        _opp_has_self_animator_permanent,
+    )
+    state = _setup_state()
+    forest = state.new_object(
+        BASIC_LANDS["Forest"], owner_id=1, zone=Zone.BATTLEFIELD,
+    )
+    forest.controller_id = 1
+    state.battlefield.append(forest)
+    weird_ability = ActivatedAbility(
+        cost=ActivationCost(tap_self=True),
+        effect=BecomeLandCreatureUEOT(power=2, toughness=2),
+        is_mana_ability=True,
+    )
+    forest.printing = replace(
+        forest.printing,
+        activated_abilities=(weird_ability,),
+    )
+    # Mana-ability skip: the animator gate alone does NOT flag this.
+    assert _opp_has_self_animator_permanent(state, opp_id=1) is False
+
+
 def test_lethal_detect_returns_none_with_no_opp():
     """3+ player game (or all opps lost) — single-opp gate fails."""
     state = _setup_state()

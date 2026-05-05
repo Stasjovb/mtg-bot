@@ -382,6 +382,9 @@ short-circuit that fires only when ALL of these hold:
 - Opp has no non-mana activated abilities on any permanent.
 - Opp has no triggered abilities keyed on combat events
   (`attacks` / `blocks` / `deals_combat_damage` / `dealt_damage`).
+- Opp controls no noncreature permanent with a self-animation
+  activated ability (manland-style — `BecomeLandCreatureUEOT` on
+  `printing.activated_abilities` of a noncreature permanent).
 - None of opp's blockers have first/double strike, indestructible,
   hexproof, or shroud.
 - With opp greedily blocking the biggest attackers, the smallest
@@ -405,6 +408,7 @@ through it).
 | Damage assignment to multiple blockers wouldn't trade favorably | Heuristic doesn't reason about post-block board state | The bot "wins" but if the kill was actually impossible (e.g., damage prevention, blocker abilities trigger before damage), the bot loses. The CR-correct gates above are designed to rule out these cases — if a gate is missing for a real card, the bot loses the game. |
 | First strike on OUR side wasn't checked (CR + factor) | We don't model that strike-step damage helps us; the heuristic counts NORMAL damage step | Conservative — first strike on attackers can ONLY help us (more damage chances), so missing it just means false-negatives (some lethals we don't detect). Safe. |
 | Non-life-loss kill conditions (mill / commander / poison) | Not supported | Heuristic always uses life-total; bot relies on search for those win paths. |
+| Future self-animation effect class (artifact-animator, copy-of-creature animator, etc.) | Animator gate only checks `isinstance(ability.effect, BecomeLandCreatureUEOT)` — the only self-animation Effect class in the engine today | Bot commits to attacks; opp animates a noncreature artifact / token-source into a fresh blocker, soaks the smallest unblocked attacker, we lose. **When adding a new self-animation Effect class, append it to `_SELF_ANIMATION_EFFECT_CLASSES` in `_lethal_detect.py`.** |
 
 **Failure mode**: bot commits to attack-everything (which is what
 the heuristic does today). If the math was wrong and the kill

@@ -64,6 +64,7 @@ from __future__ import annotations
 from typing import Optional
 
 from mtg_bot.combat import eligible_attackers, eligible_blockers
+from mtg_bot.effects.generic.become_type import BecomeLandCreatureUEOT
 from mtg_bot.game import (
     GameObject,
     GameState,
@@ -71,6 +72,29 @@ from mtg_bot.game import (
     effective_power,
     effective_triggered_abilities,
     is_creature_now,
+)
+
+
+# Effect classes that — when found on an activated ability of a
+# noncreature opp permanent — represent self-animation (the permanent
+# turns itself into a creature, typically until end of turn). If opp
+# controls a noncreature permanent with one of these as a top-level
+# activated-ability effect, the heuristic aborts: opp could animate the
+# permanent into a blocker mid-combat (e.g. a manland like Mishra's
+# Factory, Mutavault) and soak our lethal attacker.
+#
+# Currently only ``BecomeLandCreatureUEOT`` qualifies (the engine's
+# only self-animation effect class). Forward compatibility note: any
+# future Effect class that animates the source permanent into a
+# creature (e.g. an artifact-animator, a permanent-becomes-creature
+# effect that doesn't ride the land path) must be added to this tuple
+# or the gate will silently let it through. We check ``isinstance(...)``
+# at the TOP LEVEL of ``ability.effect`` only — wrapping in
+# ``ApplyEffect`` is uncommon for ``BecomeLandCreatureUEOT`` (per its
+# docstring, the class itself composes ``ApplyEffect(BecomeType(...))``
+# internally).
+_SELF_ANIMATION_EFFECT_CLASSES: tuple[type, ...] = (
+    BecomeLandCreatureUEOT,
 )
 
 
@@ -173,12 +197,55 @@ def _opp_has_non_mana_activated_ability(
     return False
 
 
+def _opp_has_self_animator_permanent(
+    state: GameState, opp_id: int,
+) -> bool:
+    """Return True if opp controls a noncreature permanent whose
+    printing has an activated ability that animates the permanent into
+    a creature (e.g. a manland like Mishra's Factory, Mutavault).
+
+    A noncreature permanent that can animate itself mid-combat into a
+    blocker breaks the "fixed eligible-blocker set" assumption the
+    heuristic relies on: we'd commit to attack-everything based on the
+    current blockers, then opp animates a fresh blocker, soaks our
+    smallest unblocked attacker, and we lose. Conservative-ABORT.
+
+    Walks ``obj.printing.activated_abilities`` directly (rather than
+    ``effective_activated_abilities``) — printed text is the source of
+    truth for "can this permanent become a creature." Skips mana
+    abilities (``is_mana_ability=True``) since those don't animate.
+    Checks ``isinstance(ability.effect, ...)`` at top level only;
+    ``ApplyEffect``-wrapped variants are uncommon for the relevant
+    class per its docstring.
+    """
+    for o in state.battlefield:
+        if o.controller_id != opp_id:
+            continue
+        # Already-creature permanents are handled by the existing
+        # blocker-keyword / blocker-count gates downstream — only the
+        # NONcreature case represents a hidden blocker that could be
+        # summoned mid-combat. ``is_creature_now`` covers natively-
+        # creature printings, stationed Spacecraft, and already-
+        # animated permanents whose UEOT cache is still set.
+        if is_creature_now(o):
+            continue
+        for ability in o.printing.activated_abilities:
+            if ability.is_mana_ability:
+                continue
+            if isinstance(
+                ability.effect, _SELF_ANIMATION_EFFECT_CLASSES,
+            ):
+                return True
+    return False
+
+
 def _opp_can_disrupt(
     state: GameState, opp_id: int,
 ) -> bool:
     """Return True if opp could plausibly disrupt the alpha strike.
     Combines: empty hand, no non-mana activated abilities, no
-    combat-triggered abilities.
+    combat-triggered abilities, no noncreature permanent that can
+    animate itself into a blocker.
 
     The "tapped out" piece is implicit: even if opp has untapped
     lands, with empty hand and no instant-speed activated abilities,
@@ -198,6 +265,11 @@ def _opp_can_disrupt(
 
     # No non-mana activated abilities anywhere on opp's side.
     if _opp_has_non_mana_activated_ability(state, opp_id):
+        return True
+
+    # No noncreature permanent that could animate itself into a
+    # blocker mid-combat (manland-style).
+    if _opp_has_self_animator_permanent(state, opp_id):
         return True
 
     return False
@@ -234,6 +306,9 @@ def detect_lethal_attack(
     - Opp has empty hand.
     - Opp has no non-mana activated abilities on any permanent.
     - Opp has no triggered abilities keyed on combat events.
+    - Opp controls no noncreature permanent with a self-animation
+      activated ability (manland-style — would otherwise animate into
+      a blocker mid-combat).
     - None of opp's blockers have first/double strike, indestructible,
       hexproof, or shroud.
     - Active player has at least one untapped creature eligible to
