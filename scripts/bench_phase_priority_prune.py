@@ -44,7 +44,9 @@ if str(_SRC) not in sys.path:
 
 from mtg_bot.actions import PassPriority  # noqa: E402
 from mtg_bot.agents import RandomAgent  # noqa: E402
-from mtg_bot.search import MtgGameStateAdapter  # noqa: E402
+from mtg_bot.search import (  # noqa: E402
+    HeuristicsConfig, MtgGameStateAdapter,
+)
 from mtg_bot.simulate import setup_game  # noqa: E402
 
 
@@ -66,7 +68,10 @@ def _play_one_game(
         ["G", "R"], seed=seed,
     )
     adapter = MtgGameStateAdapter(
-        state, phase_prune_enabled=phase_prune_enabled,
+        state,
+        heuristics=HeuristicsConfig(
+            phase_prune_enabled=phase_prune_enabled,
+        ),
     )
     rng = random.Random(seed + 99)
 

@@ -36,6 +36,8 @@ from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath, PureWindowsPath
 from typing import Any, Callable, Optional
 
+from mtg_bot.search.heuristics_config import HeuristicsConfig
+
 
 @dataclass(frozen=True)
 class ShardConfig:
@@ -295,22 +297,12 @@ class SelfPlayJobSpec:
     hang_dump_root: Optional[str] = None
     use_ismcts: bool = False
     use_belief_weighted: bool = False
-    # Phase-based active-priority prune (training heuristic). Defaults
-    # ON for self-play; see ``docs/SEARCH_LIMITATIONS.md`` entry #6.
-    phase_prune_enabled: bool = True
-    # Forced second-main land drop (training heuristic). Defaults ON
-    # for self-play; see ``docs/SEARCH_LIMITATIONS.md`` entry #7.
-    force_landdrop_enabled: bool = True
-    # Skip-empty-combat short-circuit (training heuristic). Defaults
-    # ON for self-play; see ``docs/SEARCH_LIMITATIONS.md`` entry #9.
-    skip_empty_combat_enabled: bool = True
-    # Skip our priority on opp's POSTCOMBAT_MAIN (training heuristic).
-    # Defaults ON for self-play; see ``docs/SEARCH_LIMITATIONS.md``
-    # entry #10.
-    skip_opp_postcombat_main_enabled: bool = True
-    # Skip-dead-main1 (training heuristic). Defaults ON for self-play;
-    # see ``docs/SEARCH_LIMITATIONS.md`` entry #11.
-    skip_dead_main1_enabled: bool = True
+    # Bundle of priority short-circuit / filter heuristics applied by
+    # ``MtgGameStateAdapter`` during search. Self-play default = every
+    # flag ON (see ``HeuristicsConfig`` defaults). Per-heuristic
+    # rationale + acceptable-failure cases at SEARCH_LIMITATIONS
+    # entries #6, #7, #9, #10, #11.
+    heuristics: HeuristicsConfig = field(default_factory=HeuristicsConfig)
 
     def to_dict(self) -> dict[str, Any]:
         """JSON-serializable dict. Used by ``run_self_play_shard.py``
@@ -349,18 +341,20 @@ class SelfPlayJobSpec:
             "hang_dump_root": _posix(self.hang_dump_root),
             "use_ismcts": self.use_ismcts,
             "use_belief_weighted": self.use_belief_weighted,
-            "phase_prune_enabled": self.phase_prune_enabled,
-            "force_landdrop_enabled": self.force_landdrop_enabled,
-            "skip_empty_combat_enabled": self.skip_empty_combat_enabled,
-            "skip_opp_postcombat_main_enabled": (
-                self.skip_opp_postcombat_main_enabled
-            ),
-            "skip_dead_main1_enabled": self.skip_dead_main1_enabled,
+            "heuristics": self.heuristics.to_dict(),
         }
 
     @classmethod
     def from_dict(cls, d: dict[str, Any]) -> "SelfPlayJobSpec":
         hs = d.get("hidden_sizes")
+        # ``heuristics`` is a nested dict on the wire; missing key →
+        # production self-play default (every flag True). Older payloads
+        # written before this field existed produce that same default.
+        h = d.get("heuristics")
+        heuristics = (
+            HeuristicsConfig.from_dict(h) if h is not None
+            else HeuristicsConfig()
+        )
         return cls(
             weights_path=d["weights_path"],
             samples=int(d["samples"]),
@@ -379,21 +373,7 @@ class SelfPlayJobSpec:
             hang_dump_root=d.get("hang_dump_root"),
             use_ismcts=bool(d.get("use_ismcts", False)),
             use_belief_weighted=bool(d.get("use_belief_weighted", False)),
-            phase_prune_enabled=bool(
-                d.get("phase_prune_enabled", True),
-            ),
-            force_landdrop_enabled=bool(
-                d.get("force_landdrop_enabled", True),
-            ),
-            skip_empty_combat_enabled=bool(
-                d.get("skip_empty_combat_enabled", True),
-            ),
-            skip_opp_postcombat_main_enabled=bool(
-                d.get("skip_opp_postcombat_main_enabled", True),
-            ),
-            skip_dead_main1_enabled=bool(
-                d.get("skip_dead_main1_enabled", True),
-            ),
+            heuristics=heuristics,
         )
 
 
@@ -427,29 +407,16 @@ class EvalJobSpec:
     opponent_label: str = "previous"
     use_ismcts: bool = False
     use_belief_weighted: bool = False
-    # Phase-based active-priority prune. For eval/tournament play
-    # this defaults OFF — the strength-vs-throughput tradeoff that
-    # justifies the prune in training does not apply when match
-    # outcomes determine acceptance.
-    phase_prune_enabled: bool = False
-    # Forced second-main land drop. Defaults OFF for eval (same
-    # rationale: match outcomes are load-bearing, the heuristic
-    # forces a play that may differ from optimal).
-    force_landdrop_enabled: bool = False
-    # Skip-empty-combat short-circuit. Defaults OFF for eval — the
-    # 0-attacking-creatures gate is correctness-tight (no creature
-    # to pump or remove), so this is safer than the others to leave
-    # ON, but eval still defaults conservative.
-    skip_empty_combat_enabled: bool = False
-    # Skip our priority on opp's POSTCOMBAT_MAIN. Defaults OFF for
-    # eval — the heuristic forgoes potential reactive plays that
-    # match outcomes might depend on.
-    skip_opp_postcombat_main_enabled: bool = False
-    # Skip-dead-main1. Defaults OFF for eval — the rare niche plays
-    # the heuristic skips (cast a sorcery early enough to be relevant
-    # to a turn-1 effect; activate a non-mana ability) might matter
-    # in the tight margin of an eval match.
-    skip_dead_main1_enabled: bool = False
+    # Bundle of priority short-circuit / filter heuristics. Eval
+    # default = every flag OFF (``HeuristicsConfig.disabled()``):
+    # match outcomes determine acceptance, so the strength-vs-
+    # throughput tradeoff that justifies the heuristics in self-play
+    # does not apply here. See SEARCH_LIMITATIONS entries #6, #7, #9,
+    # #10, #11 for the per-heuristic rationale and the niche plays
+    # the eval-default avoids skipping.
+    heuristics: HeuristicsConfig = field(
+        default_factory=HeuristicsConfig.disabled,
+    )
 
     def to_dict(self) -> dict[str, Any]:
         def _posix(p):
@@ -475,18 +442,20 @@ class EvalJobSpec:
             "opponent_label": self.opponent_label,
             "use_ismcts": self.use_ismcts,
             "use_belief_weighted": self.use_belief_weighted,
-            "phase_prune_enabled": self.phase_prune_enabled,
-            "force_landdrop_enabled": self.force_landdrop_enabled,
-            "skip_empty_combat_enabled": self.skip_empty_combat_enabled,
-            "skip_opp_postcombat_main_enabled": (
-                self.skip_opp_postcombat_main_enabled
-            ),
-            "skip_dead_main1_enabled": self.skip_dead_main1_enabled,
+            "heuristics": self.heuristics.to_dict(),
         }
 
     @classmethod
     def from_dict(cls, d: dict[str, Any]) -> "EvalJobSpec":
         hs = d.get("hidden_sizes")
+        # ``heuristics`` round-trips as a nested dict. Missing key →
+        # eval default (every flag OFF). Older payloads written
+        # before this field existed produce that same default.
+        h = d.get("heuristics")
+        heuristics = (
+            HeuristicsConfig.from_dict(h) if h is not None
+            else HeuristicsConfig.disabled()
+        )
         return cls(
             new_weights_path=d["new_weights_path"],
             old_weights_path=d.get("old_weights_path"),
@@ -505,21 +474,7 @@ class EvalJobSpec:
             opponent_label=d.get("opponent_label", "previous"),
             use_ismcts=bool(d.get("use_ismcts", False)),
             use_belief_weighted=bool(d.get("use_belief_weighted", False)),
-            phase_prune_enabled=bool(
-                d.get("phase_prune_enabled", False),
-            ),
-            force_landdrop_enabled=bool(
-                d.get("force_landdrop_enabled", False),
-            ),
-            skip_empty_combat_enabled=bool(
-                d.get("skip_empty_combat_enabled", False),
-            ),
-            skip_opp_postcombat_main_enabled=bool(
-                d.get("skip_opp_postcombat_main_enabled", False),
-            ),
-            skip_dead_main1_enabled=bool(
-                d.get("skip_dead_main1_enabled", False),
-            ),
+            heuristics=heuristics,
         )
 
 
@@ -643,13 +598,7 @@ def run_shard_local(
                 deck_pool=deck_pool,
                 replay_config=replay_config,
                 hang_dump_dir=hang_dump_dir,
-                phase_prune_enabled=spec.phase_prune_enabled,
-                force_landdrop_enabled=spec.force_landdrop_enabled,
-                skip_empty_combat_enabled=spec.skip_empty_combat_enabled,
-                skip_opp_postcombat_main_enabled=(
-                    spec.skip_opp_postcombat_main_enabled
-                ),
-                skip_dead_main1_enabled=spec.skip_dead_main1_enabled,
+                heuristics=spec.heuristics,
             )
         )
     except BaseException:
@@ -1340,11 +1289,7 @@ def run_shard_pull(
             spec.decision_cap, spec.sample_every,
             replay_config, deck_pool,
             spec.enable_mulligans, spec.per_game_timeout_sec,
-            hang_dump_dir, spec.phase_prune_enabled,
-            spec.force_landdrop_enabled,
-            spec.skip_empty_combat_enabled,
-            spec.skip_opp_postcombat_main_enabled,
-            spec.skip_dead_main1_enabled,
+            hang_dump_dir, spec.heuristics,
         )
 
     def _flush() -> None:
@@ -1615,11 +1560,7 @@ def run_shard_eval_pull(
             4000,  # decision_cap, mirrors run_match's default
             spec.enable_mulligans, spec.per_game_timeout_sec,
             deck_pool, replay_config, hang_dump_dir,
-            spec.phase_prune_enabled,
-            spec.force_landdrop_enabled,
-            spec.skip_empty_combat_enabled,
-            spec.skip_opp_postcombat_main_enabled,
-            spec.skip_dead_main1_enabled,
+            spec.heuristics,
         )
 
     shard_t0 = _time.perf_counter()
