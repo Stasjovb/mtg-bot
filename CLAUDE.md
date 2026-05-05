@@ -103,7 +103,7 @@ Tailscale enrollment), see
 ## Scope reminders
 
 - Card pool target: **Edge of Eternities** (Scryfall set code `eoe`). Raw data is cached at `data/edge_of_eternities.json`; regenerate via `scripts/fetch_eoe.py`.
-- Real EoE cards come online as mechanics are implemented. Until then, Stage-1 uses synthetic vanilla creatures defined in `src/mtg_bot/cards.py`.
+- Self-play / eval data-gen and the iterate-AlphaZero loop run on the real 17lands deck pool at `data/17lands/eoe_decks.json.gz` (5000 EoE archetypes). `iterate_alphazero.py` requires `--deck-pool` and `data_gen` / `self_play` raise on missing pool — there is no synthetic mono-color fallback any more.
 - Architectural decisions that are locked in: full stack-and-priority simulation (not resolve-immediately); Scryfall JSON as the card data source.
 
 ## Documenting deliberate divergences
