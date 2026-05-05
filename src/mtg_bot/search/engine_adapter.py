@@ -57,7 +57,8 @@ from mtg_bot.combat import (
     clear_combat_state, eligible_attackers, eligible_blockers,
     resolve_combat_damage,
 )
-from mtg_bot.game import GameState as EngineGameState
+from mtg_bot.effects.generic.become_type import BecomeLandCreatureUEOT
+from mtg_bot.game import GameState as EngineGameState, is_creature_now
 from mtg_bot.legal import legal_actions
 from mtg_bot.search._opp_capabilities import (
     opp_can_act, opp_capability_hash,
@@ -182,6 +183,7 @@ class MtgGameStateAdapter:
         force_landdrop_enabled: bool = True,
         skip_empty_combat_enabled: bool = True,
         skip_opp_postcombat_main_enabled: bool = True,
+        skip_dead_main1_enabled: bool = True,
     ) -> None:
         self._state = engine_state
         self._tactical = tactical_agent or DefaultTacticalAgent()
@@ -226,6 +228,14 @@ class MtgGameStateAdapter:
         self._skip_opp_postcombat_main_enabled = (
             skip_opp_postcombat_main_enabled
         )
+        # Skip-dead-main1: at active PRECOMBAT_MAIN with empty stack,
+        # no creatures in play, no haste-creature in hand, and no
+        # noncreature permanent that can animate, return
+        # ``[PassPriority()]``. The "no haste, no animator, no
+        # creatures already" conditions mean nothing this player does
+        # at main 1 has a different effect from doing it at main 2.
+        # See SEARCH_LIMITATIONS entry #11.
+        self._skip_dead_main1_enabled = skip_dead_main1_enabled
         # Agent installation. With resolution exposure we need the
         # ``ResolutionChannelAgent`` to intercept callbacks; non-
         # exposed callbacks fall through to the tactical policy.
@@ -574,6 +584,90 @@ class MtgGameStateAdapter:
             != self._state.active_player_idx
         )
 
+    def _should_skip_dead_main1(self) -> bool:
+        """Skip the active player's PRECOMBAT_MAIN priority window
+        when the player has nothing useful to do that's specific to
+        main 1 (vs main 2). Returns ``[PassPriority()]`` to cascade
+        through the dead window.
+
+        Conditions to fire:
+        * ``skip_dead_main1_enabled`` is True.
+        * Not terminal / not resolution-paused / not in a factored
+          combat sub-decision.
+        * Stack is empty.
+        * Step is ``PRECOMBAT_MAIN``.
+        * Player with priority IS the active player.
+        * Active player controls 0 creatures on the battlefield.
+        * Active player has no card in hand whose printing has the
+          ``haste`` keyword (i.e. no haste creature to cast for an
+          immediate attack).
+        * Active player controls no noncreature permanent whose
+          printing has an activated ability that animates it into a
+          creature (e.g. manlands like Mishra's Factory).
+
+        The "no creatures + no haste + no animator" conjunction means
+        nothing the player does at main 1 has a different effect from
+        doing it at main 2 — there's no creature to attack with even
+        if a creature gets cast or animated. Auto-passing main 1 is
+        functionally equivalent to playing through it.
+
+        Documented divergence from optimal play, see
+        ``docs/SEARCH_LIMITATIONS.md`` entry #11.
+        """
+        if not self._skip_dead_main1_enabled:
+            return False
+        if self._state.is_over():
+            return False
+        if self._resolution_paused:
+            return False
+        if self._combat_phase != _COMBAT_NONE:
+            return False
+        if len(self._state.stack) > 0:
+            return False
+        if self._state.step != Step.PRECOMBAT_MAIN:
+            return False
+        if (
+            self._state.priority_player_idx
+            != self._state.active_player_idx
+        ):
+            return False
+        active = self._state.players[self._state.active_player_idx]
+        active_id = active.id
+        # No creatures in play. Use ``is_creature_now`` (which respects
+        # natively-printed creature types AND animation cache flag) —
+        # ``permanent_is_creature`` alone is False on natively-printed
+        # creatures and only True when an animation effect has run.
+        for obj in self._state.battlefield:
+            if obj.controller_id != active_id:
+                continue
+            if is_creature_now(obj):
+                return False
+        # No haste creature in hand.
+        for card in active.hand:
+            keywords = getattr(card.printing, "keywords", frozenset())
+            if "haste" in keywords:
+                return False
+        # No noncreature animator on battlefield. We only check
+        # ``BecomeLandCreatureUEOT`` here — the only self-animation
+        # Effect class today. Future Effect classes that also animate
+        # permanents would need to be added to this isinstance check
+        # (e.g. an artifact-self-animator class). False-negative is
+        # safe (heuristic doesn't fire when it could; just less
+        # perf gain); false-positive is the dangerous direction
+        # (heuristic fires when an animatable permanent exists), but
+        # that requires a NEW effect class we haven't yet added.
+        for obj in self._state.battlefield:
+            if obj.controller_id != active_id:
+                continue
+            if is_creature_now(obj):
+                continue
+            for ability in obj.printing.activated_abilities:
+                if ability.is_mana_ability:
+                    continue
+                if isinstance(ability.effect, BecomeLandCreatureUEOT):
+                    return False
+        return True
+
     def _can_short_circuit_to_pass(self) -> bool:
         """True iff the current decision moment is a priority window
         whose holder has no possible action. Auto-passes BOTH the
@@ -643,6 +737,7 @@ class MtgGameStateAdapter:
         c._skip_opp_postcombat_main_enabled = (
             self._skip_opp_postcombat_main_enabled
         )
+        c._skip_dead_main1_enabled = self._skip_dead_main1_enabled
         # Resolution-channel agent is per-adapter-instance so each
         # clone has its own replay queue. Snapshot/restore preserves
         # queue state from the source.
@@ -741,6 +836,11 @@ class MtgGameStateAdapter:
         # Skip our priority during opp's POSTCOMBAT_MAIN with empty
         # stack. See ``docs/SEARCH_LIMITATIONS.md`` entry #10.
         if self._should_skip_opp_postcombat_main():
+            return [PassPriority()]
+        # Skip-dead-main1: at active PRECOMBAT_MAIN with no creatures
+        # in play, no haste-creature in hand, and no animator
+        # permanent. See ``docs/SEARCH_LIMITATIONS.md`` entry #11.
+        if self._should_skip_dead_main1():
             return [PassPriority()]
         # Capability auto-pass: when the priority holder has no
         # possible action (instant-speed for opp / non-active priority

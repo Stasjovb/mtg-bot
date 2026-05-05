@@ -554,6 +554,53 @@ So the dead window we're skipping is genuinely a low-value priority moment for o
 
 ---
 
+## 11. Skip-dead-main1 priority short-circuit (training heuristic)
+
+**Location**: `MtgGameStateAdapter.legal_decisions` (`src/mtg_bot/search/engine_adapter.py`) — see `_should_skip_dead_main1()`. Returns `[PassPriority()]` immediately when ALL of these hold:
+
+- `skip_dead_main1_enabled` is True (default for `SelfPlayJobSpec`, OFF for `EvalJobSpec`)
+- Not terminal / not resolution-paused / not in a factored combat sub-decision
+- Stack is empty
+- Step is `PRECOMBAT_MAIN`
+- Player with priority IS the active player
+- Active player controls 0 creatures on the battlefield
+- Active player has no card in hand whose printing has the printed `haste` keyword
+- Active player controls no noncreature permanent with an activated ability that animates it (currently checks for `BecomeLandCreatureUEOT`; see fragility note below)
+
+The "no creatures + no haste + no animator" conjunction means nothing the player does at main 1 has a different effect from doing it at main 2 — there's no creature to attack with even if a creature gets cast or animated. Auto-passing main 1 is functionally equivalent to playing through it.
+
+**Why the manland exception**: a creature-land like Mishra's Factory in play means the player CAN attack this turn (animate, then attack). Skipping main 1 in that case loses the chance to play extra lands or cast spells before deciding to animate. The check walks the active player's noncreature permanents looking for an `ActivatedAbility` whose `effect` is `BecomeLandCreatureUEOT`. Mana abilities are skipped (`is_mana_ability == True`).
+
+**Fragility — manland detection is conservative-WRONG**: the `isinstance(ability.effect, BecomeLandCreatureUEOT)` check covers the only self-animation Effect class today, but a future card could introduce a NEW Effect class for artifact-self-animation or other animator patterns. If that lands without updating this check, the heuristic would fire when it shouldn't (false-positive), causing the bot to skip main 1 with an animator available. **Mitigation**: when adding a new self-animation Effect class, add it to the isinstance tuple here (and to the related lethal-detect gate in `_lethal_detect.py`).
+
+**Why this is sometimes wrong** (other than the manland fragility):
+
+| Edge case | Bot misbehavior |
+|---|---|
+| Cast a land-cycling card or ramp spell at main 1 to enable a turn-2 play | Misses if the card itself has no haste keyword |
+| Activate a non-mana ability that needs sorcery timing AND must happen before combat | Edge case; usually a planeswalker activation, none in EoE today |
+| Play a turn-1 mana ramp / scry / brainstorm-style effect that wants to happen NOW | Effect still happens at main 2; functional difference is small |
+| Cast a sorcery whose effect benefits combat (e.g. tutor for removal) | Tutor at main 1 vs main 2 differs only if the tutored card needs to be cast pre-combat — which our heuristic explicitly rules out (no creatures, no haste) |
+
+**Failure mode**: bot passes priority during dead-main-1 turns even when a sorcery COULD be cast. Conservative-WRONG. The miss is on the rare "I have a sorcery that affects combat OR my opp's combat" case which is genuinely rare on turns where I have 0 creatures and no haste.
+
+**When it matters**:
+
+- For training: removes ~2-4 priority moments per affected turn (active main 1 + opp's response window). Fires reliably turns 1-2 (no creatures yet); rarely after that (once you cast a creature, it sticks). Estimated 2-4% wall delta.
+- For tournament play: marginal correctness loss. Default OFF for eval.
+
+**Mitigation**: `skip_dead_main1_enabled=False` on `MtgGameStateAdapter` (or via Spec). `EvalJobSpec` defaults OFF; `SelfPlayJobSpec` defaults ON.
+
+**Acceptable for**: training, self-play data_gen.
+
+**NOT acceptable for**: tournament play, eval matches, scenarios with non-mana sorcery-speed activated abilities that matter pre-combat.
+
+**Fix scope if/when needed**: trivial to disable per-spec. To recover the lost plays, train the policy to value these windows directly. To extend the manland gate to new Effect classes, edit the isinstance tuple in `_should_skip_dead_main1`.
+
+**Impact estimate**: ~2-4% per-game wall reduction during training. Smaller than the others on this branch (only fires on the first 1-2 turns); main value is decision-tree simplification for the early-game policy training signal.
+
+---
+
 ## Tracked but not in this doc
 
 Things tracked elsewhere that you might also want to know about:

@@ -43,7 +43,20 @@ def _fresh_adapter(seed: int = 42, colors=None) -> MtgGameStateAdapter:
     state = setup_game(
         [RandomAgent(), RandomAgent()], colors, seed=seed,
     )
-    adapter = MtgGameStateAdapter(state)
+    # Disable training-time priority short-circuits — these cache
+    # tests verify the legal_actions cache lifecycle, which is only
+    # populated when ``legal_decisions`` actually reaches the
+    # cached_fn path. With phase-prune / skip-empty-combat /
+    # skip-dead-main1 / etc. firing, the short-circuit returns
+    # ``[PassPriority()]`` before the cache ever populates.
+    adapter = MtgGameStateAdapter(
+        state,
+        phase_prune_enabled=False,
+        force_landdrop_enabled=False,
+        skip_empty_combat_enabled=False,
+        skip_opp_postcombat_main_enabled=False,
+        skip_dead_main1_enabled=False,
+    )
     # Drive past UPKEEP / DRAW into PRECOMBAT_MAIN. The setup_game
     # default deck builder seeds the active player's hand with at
     # least a few cards (lands + creatures), so PRECOMBAT_MAIN at

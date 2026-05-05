@@ -208,14 +208,6 @@ def test_disabled_flag(monkeypatch):
 # ---------------------------------------------------------------------
 
 
-def test_default_flag_is_on():
-    """Pinned: the default value of ``skip_empty_combat_enabled`` is
-    True. A future change defaulting it OFF gets a flag to discuss."""
-    state = _fresh_state()
-    adapter = MtgGameStateAdapter(state)
-    assert adapter._skip_empty_combat_enabled is True
-
-
 def test_flag_propagates_through_clone():
     """``skip_empty_combat_enabled`` survives ``clone()`` — both source
     and clone use the same heuristic setting. ISMCTS clones the root

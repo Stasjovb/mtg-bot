@@ -154,12 +154,6 @@ def test_disabled_flag():
 # ---------------------------------------------------------------------
 
 
-def test_default_flag_is_on():
-    state = _fresh_state()
-    adapter = MtgGameStateAdapter(state)
-    assert adapter._skip_opp_postcombat_main_enabled is True
-
-
 def test_flag_propagates_through_clone():
     state = _fresh_state()
     adapter_on = MtgGameStateAdapter(

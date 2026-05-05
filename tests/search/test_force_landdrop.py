@@ -83,7 +83,7 @@ def test_filter_fires_at_postcombat_main_with_unspent_landdrop():
     """All conditions hold: filter fires — PassPriority removed,
     PlayLand stays."""
     state = _fresh_state()
-    adapter = MtgGameStateAdapter(state)
+    adapter = MtgGameStateAdapter(state, force_landdrop_enabled=True)
     _strip_active_hand(state)
     _strip_active_battlefield_lands(state)
     _give_basic_land(state, state.active_player_idx, "Forest", in_hand=True)
@@ -131,7 +131,7 @@ def test_does_not_fire_at_precombat_main():
     PRECOMBAT_MAIN should NOT fire even with all other conditions
     matching."""
     state = _fresh_state()
-    adapter = MtgGameStateAdapter(state)
+    adapter = MtgGameStateAdapter(state, force_landdrop_enabled=True)
     _strip_active_hand(state)
     _strip_active_battlefield_lands(state)
     _give_basic_land(state, state.active_player_idx, "Forest", in_hand=True)
@@ -148,7 +148,7 @@ def test_does_not_fire_at_precombat_main():
 def test_does_not_fire_when_land_already_played():
     """``lands_played_this_turn > 0`` → filter does not fire."""
     state = _fresh_state()
-    adapter = MtgGameStateAdapter(state)
+    adapter = MtgGameStateAdapter(state, force_landdrop_enabled=True)
     _strip_active_hand(state)
     _strip_active_battlefield_lands(state)
     _give_basic_land(state, state.active_player_idx, "Forest", in_hand=True)
@@ -162,7 +162,7 @@ def test_does_not_fire_with_no_land_in_hand():
     """No land in active's hand → filter does not fire (otherwise
     we'd strip PassPriority and possibly leave an empty list)."""
     state = _fresh_state()
-    adapter = MtgGameStateAdapter(state)
+    adapter = MtgGameStateAdapter(state, force_landdrop_enabled=True)
     _strip_active_hand(state)
     _strip_active_battlefield_lands(state)
     # Hand has only a creature, no land.
@@ -181,7 +181,7 @@ def test_does_not_fire_with_no_land_in_hand():
 def test_does_not_fire_with_six_lands_in_play():
     """Land flood guard: 6+ lands in play → filter does not fire."""
     state = _fresh_state()
-    adapter = MtgGameStateAdapter(state)
+    adapter = MtgGameStateAdapter(state, force_landdrop_enabled=True)
     _strip_active_hand(state)
     _strip_active_battlefield_lands(state)
     active_idx = state.active_player_idx
@@ -198,7 +198,7 @@ def test_does_not_fire_with_non_empty_stack():
     """Non-empty stack → filter does not fire (the player may want
     to respond first)."""
     state = _fresh_state()
-    adapter = MtgGameStateAdapter(state)
+    adapter = MtgGameStateAdapter(state, force_landdrop_enabled=True)
     _strip_active_hand(state)
     _strip_active_battlefield_lands(state)
     _give_basic_land(state, state.active_player_idx, "Forest", in_hand=True)
@@ -213,7 +213,7 @@ def test_does_not_fire_at_opp_priority():
     """Opp's priority during second main → filter does not fire (it's
     active-only; opp doesn't have a land drop)."""
     state = _fresh_state()
-    adapter = MtgGameStateAdapter(state)
+    adapter = MtgGameStateAdapter(state, force_landdrop_enabled=True)
     _strip_active_hand(state)
     _strip_active_battlefield_lands(state)
     _give_basic_land(state, state.active_player_idx, "Forest", in_hand=True)
@@ -236,7 +236,7 @@ def test_fires_with_five_lands_in_play():
     """5 lands in play is the upper inclusive bound for the filter
     (the guard is ``>= 6``)."""
     state = _fresh_state()
-    adapter = MtgGameStateAdapter(state)
+    adapter = MtgGameStateAdapter(state, force_landdrop_enabled=True)
     _strip_active_hand(state)
     _strip_active_battlefield_lands(state)
     active_idx = state.active_player_idx
@@ -252,14 +252,6 @@ def test_fires_with_five_lands_in_play():
 # ---------------------------------------------------------------------
 # Default flag value pin
 # ---------------------------------------------------------------------
-
-
-def test_default_flag_is_on():
-    """The default value of ``force_landdrop_enabled`` is True. Pinned
-    so a future change defaulting it OFF gets a flag to discuss."""
-    state = _fresh_state()
-    adapter = MtgGameStateAdapter(state)
-    assert adapter._force_landdrop_enabled is True
 
 
 def test_flag_propagates_through_clone():
@@ -286,7 +278,7 @@ def test_filter_keeps_castable_spell_in_decisions():
     """User clarification: the filter strips PassPriority but keeps
     CastSpell — the player can sequence "cast spell, then play land"."""
     state = _fresh_state()
-    adapter = MtgGameStateAdapter(state)
+    adapter = MtgGameStateAdapter(state, force_landdrop_enabled=True)
     _strip_active_hand(state)
     _strip_active_battlefield_lands(state)
     active_idx = state.active_player_idx

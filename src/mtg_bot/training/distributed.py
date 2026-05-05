@@ -308,6 +308,9 @@ class SelfPlayJobSpec:
     # Defaults ON for self-play; see ``docs/SEARCH_LIMITATIONS.md``
     # entry #10.
     skip_opp_postcombat_main_enabled: bool = True
+    # Skip-dead-main1 (training heuristic). Defaults ON for self-play;
+    # see ``docs/SEARCH_LIMITATIONS.md`` entry #11.
+    skip_dead_main1_enabled: bool = True
 
     def to_dict(self) -> dict[str, Any]:
         """JSON-serializable dict. Used by ``run_self_play_shard.py``
@@ -352,6 +355,7 @@ class SelfPlayJobSpec:
             "skip_opp_postcombat_main_enabled": (
                 self.skip_opp_postcombat_main_enabled
             ),
+            "skip_dead_main1_enabled": self.skip_dead_main1_enabled,
         }
 
     @classmethod
@@ -386,6 +390,9 @@ class SelfPlayJobSpec:
             ),
             skip_opp_postcombat_main_enabled=bool(
                 d.get("skip_opp_postcombat_main_enabled", True),
+            ),
+            skip_dead_main1_enabled=bool(
+                d.get("skip_dead_main1_enabled", True),
             ),
         )
 
@@ -438,6 +445,11 @@ class EvalJobSpec:
     # eval — the heuristic forgoes potential reactive plays that
     # match outcomes might depend on.
     skip_opp_postcombat_main_enabled: bool = False
+    # Skip-dead-main1. Defaults OFF for eval — the rare niche plays
+    # the heuristic skips (cast a sorcery early enough to be relevant
+    # to a turn-1 effect; activate a non-mana ability) might matter
+    # in the tight margin of an eval match.
+    skip_dead_main1_enabled: bool = False
 
     def to_dict(self) -> dict[str, Any]:
         def _posix(p):
@@ -469,6 +481,7 @@ class EvalJobSpec:
             "skip_opp_postcombat_main_enabled": (
                 self.skip_opp_postcombat_main_enabled
             ),
+            "skip_dead_main1_enabled": self.skip_dead_main1_enabled,
         }
 
     @classmethod
@@ -503,6 +516,9 @@ class EvalJobSpec:
             ),
             skip_opp_postcombat_main_enabled=bool(
                 d.get("skip_opp_postcombat_main_enabled", False),
+            ),
+            skip_dead_main1_enabled=bool(
+                d.get("skip_dead_main1_enabled", False),
             ),
         )
 
@@ -633,6 +649,7 @@ def run_shard_local(
                 skip_opp_postcombat_main_enabled=(
                     spec.skip_opp_postcombat_main_enabled
                 ),
+                skip_dead_main1_enabled=spec.skip_dead_main1_enabled,
             )
         )
     except BaseException:
@@ -1327,6 +1344,7 @@ def run_shard_pull(
             spec.force_landdrop_enabled,
             spec.skip_empty_combat_enabled,
             spec.skip_opp_postcombat_main_enabled,
+            spec.skip_dead_main1_enabled,
         )
 
     def _flush() -> None:
@@ -1601,6 +1619,7 @@ def run_shard_eval_pull(
             spec.force_landdrop_enabled,
             spec.skip_empty_combat_enabled,
             spec.skip_opp_postcombat_main_enabled,
+            spec.skip_dead_main1_enabled,
         )
 
     shard_t0 = _time.perf_counter()

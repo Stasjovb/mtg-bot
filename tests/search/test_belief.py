@@ -51,7 +51,17 @@ def _engine_state(seed: int = 42):
 
 
 def _adapter(seed: int = 42) -> MtgGameStateAdapter:
-    return MtgGameStateAdapter(_engine_state(seed))
+    # Disable training-time priority short-circuits so belief search
+    # tests exercise the actual decision branching they're designed
+    # for instead of being short-circuited at the root.
+    return MtgGameStateAdapter(
+        _engine_state(seed),
+        phase_prune_enabled=False,
+        force_landdrop_enabled=False,
+        skip_empty_combat_enabled=False,
+        skip_opp_postcombat_main_enabled=False,
+        skip_dead_main1_enabled=False,
+    )
 
 
 def _pick_rare_hand_printing(state, player_id: int) -> Optional[str]:

@@ -116,6 +116,7 @@ def run_match(
     force_landdrop_enabled: bool = True,
     skip_empty_combat_enabled: bool = True,
     skip_opp_postcombat_main_enabled: bool = True,
+    skip_dead_main1_enabled: bool = True,
 ) -> MatchStats:
     """Play ``n_games`` of ``p0_factory`` vs ``p1_factory`` and
     aggregate stats.
@@ -138,6 +139,7 @@ def run_match(
             replay_config, hang_dump_dir, phase_prune_enabled,
             force_landdrop_enabled, skip_empty_combat_enabled,
             skip_opp_postcombat_main_enabled,
+            skip_dead_main1_enabled,
         )
         for game_idx in range(n_games)
     ]
@@ -162,6 +164,7 @@ def run_match_parallel(
     force_landdrop_enabled: bool = True,
     skip_empty_combat_enabled: bool = True,
     skip_opp_postcombat_main_enabled: bool = True,
+    skip_dead_main1_enabled: bool = True,
 ) -> MatchStats:
     """Same contract as ``run_match`` but distributes games across a
     ``multiprocessing.Pool``.
@@ -207,7 +210,8 @@ def run_match_parallel(
          enable_mulligans, per_game_timeout_sec, deck_pool,
          replay_config, hang_dump_dir, phase_prune_enabled,
          force_landdrop_enabled, skip_empty_combat_enabled,
-         skip_opp_postcombat_main_enabled)
+         skip_opp_postcombat_main_enabled,
+         skip_dead_main1_enabled)
         for i in range(n_games)
     ]
     packed_worker = (
@@ -412,6 +416,7 @@ def _play_one_match_game(
     force_landdrop_enabled: bool = True,
     skip_empty_combat_enabled: bool = True,
     skip_opp_postcombat_main_enabled: bool = True,
+    skip_dead_main1_enabled: bool = True,
 ) -> tuple[Optional[PlayerID], int]:
     """Play one game and return ``(winner_or_None, decisions)``.
     Used by both the sequential and parallel match drivers — same
@@ -457,6 +462,7 @@ def _play_one_match_game(
         force_landdrop_enabled=force_landdrop_enabled,
         skip_empty_combat_enabled=skip_empty_combat_enabled,
         skip_opp_postcombat_main_enabled=skip_opp_postcombat_main_enabled,
+        skip_dead_main1_enabled=skip_dead_main1_enabled,
     )
     strategies = {
         0: p0_factory(base_seed + 100 * game_idx),

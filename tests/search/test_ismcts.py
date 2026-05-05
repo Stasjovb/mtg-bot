@@ -43,6 +43,14 @@ def _adapter(seed: int = 42, **kwargs) -> MtgGameStateAdapter:
     state = setup_game(
         [RandomAgent(), RandomAgent()], ["G", "R"], seed=seed,
     )
+    # Default the training-time priority short-circuits OFF so search
+    # tests exercise the MCTS loop. Tests that want to exercise the
+    # heuristics can override via kwargs.
+    kwargs.setdefault("phase_prune_enabled", False)
+    kwargs.setdefault("force_landdrop_enabled", False)
+    kwargs.setdefault("skip_empty_combat_enabled", False)
+    kwargs.setdefault("skip_opp_postcombat_main_enabled", False)
+    kwargs.setdefault("skip_dead_main1_enabled", False)
     return MtgGameStateAdapter(state, **kwargs)
 
 

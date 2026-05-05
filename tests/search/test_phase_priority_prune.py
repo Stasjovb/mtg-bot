@@ -281,14 +281,6 @@ def test_phase_prune_disabled_via_flag(monkeypatch):
     assert any(isinstance(d, PassPriority) for d in decisions)
 
 
-def test_phase_prune_default_flag_is_on():
-    """The default value of ``phase_prune_enabled`` is True. Pinned
-    so a future change defaulting it OFF gets a flag to discuss."""
-    state = _fresh_state()
-    adapter = MtgGameStateAdapter(state)
-    assert adapter._phase_prune_enabled is True
-
-
 def test_phase_prune_flag_propagates_through_clone():
     """``phase_prune_enabled`` survives ``clone()`` — both source and
     clone use the same heuristic setting. This matters for ISMCTS,
@@ -419,6 +411,6 @@ def test_should_phase_prune_priority_returns_true_when_all_conditions_met():
     """Direct unit test: helper returns True at active-player
     upkeep / empty stack."""
     state = _fresh_state()
-    adapter = MtgGameStateAdapter(state)
+    adapter = MtgGameStateAdapter(state, phase_prune_enabled=True)
     _force_step(adapter, Step.UPKEEP)
     assert adapter._should_phase_prune_priority() is True

@@ -38,7 +38,18 @@ def _adapter(seed: int = 42) -> MtgGameStateAdapter:
     state = setup_game(
         [RandomAgent(), RandomAgent()], ["G", "R"], seed=seed,
     )
-    return MtgGameStateAdapter(state)
+    # Disable training-time priority short-circuits so the search
+    # tests actually exercise the MCTS loop. With those heuristics
+    # firing at the root, ``legal_decisions`` returns
+    # ``[PassPriority()]`` and the search never branches.
+    return MtgGameStateAdapter(
+        state,
+        phase_prune_enabled=False,
+        force_landdrop_enabled=False,
+        skip_empty_combat_enabled=False,
+        skip_opp_postcombat_main_enabled=False,
+        skip_dead_main1_enabled=False,
+    )
 
 
 def _adapter_at_precombat_main(seed: int = 42) -> MtgGameStateAdapter:
