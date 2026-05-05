@@ -55,6 +55,16 @@ def _spy_legal_actions(monkeypatch):
     return spy
 
 
+def _disable_capability_short_circuit(monkeypatch, adapter):
+    """Force ``_can_short_circuit_to_pass`` to False so the only
+    short-circuit under test is phase-prune. Without this, the
+    capability auto-pass (merged earlier) fires before phase-prune
+    can be observed via the spy on ``legal_actions``."""
+    monkeypatch.setattr(
+        adapter, "_can_short_circuit_to_pass", lambda: False,
+    )
+
+
 def _force_step(adapter: MtgGameStateAdapter, step: Step) -> None:
     """Force the adapter into ``step`` by setting engine fields directly.
 
@@ -183,6 +193,7 @@ def test_phase_prune_active_combat_substeps_do_NOT_prune(monkeypatch):
         state = _fresh_state()
         adapter = MtgGameStateAdapter(state)
         _force_step(adapter, step)
+        _disable_capability_short_circuit(monkeypatch, adapter)
 
         spy = _spy_legal_actions(monkeypatch)
         adapter.legal_decisions()
@@ -205,6 +216,7 @@ def test_phase_prune_non_empty_stack_does_NOT_prune(monkeypatch):
     # True. The contents don't have to be a real spell — the prune
     # check only inspects ``len(stack)``, never the items themselves.
     adapter.engine_state.stack.append(object())
+    _disable_capability_short_circuit(monkeypatch, adapter)
 
     spy = _spy_legal_actions(monkeypatch)
     adapter.legal_decisions()
@@ -248,6 +260,7 @@ def test_phase_prune_disabled_via_flag(monkeypatch):
     state = _fresh_state()
     adapter = MtgGameStateAdapter(state, phase_prune_enabled=False)
     _force_step(adapter, Step.UPKEEP)
+    _disable_capability_short_circuit(monkeypatch, adapter)
 
     spy = _spy_legal_actions(monkeypatch)
     decisions = adapter.legal_decisions()

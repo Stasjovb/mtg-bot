@@ -450,6 +450,7 @@ def test_adapter_does_not_auto_pass_active_with_castable_instant_in_combat(
     adapter._legal_actions_cache_player = None
     adapter._legal_actions_cache_value = None
     adapter._opp_cap_cache = None
+    adapter._phase_prune_enabled = False
 
     spy = _spy_legal_actions(monkeypatch)
     decisions = adapter.legal_decisions()
@@ -502,6 +503,7 @@ def test_adapter_auto_passes_active_when_only_sorcery_at_combat(
     adapter._legal_actions_cache_player = None
     adapter._legal_actions_cache_value = None
     adapter._opp_cap_cache = None
+    adapter._phase_prune_enabled = False
 
     spy = _spy_legal_actions(monkeypatch)
     decisions = adapter.legal_decisions()
@@ -573,7 +575,9 @@ def test_active_capability_cache_hit_returns_immediately():
     _strip_player_zones(state, 0)
     _give_basic_land(state, 0, "Forest", tapped=False)
     state.players[0].lands_played_this_turn = 1
-    adapter = MtgGameStateAdapter(state)
+    # Disable phase-prune so the capability cache (under test here)
+    # actually populates instead of being short-circuited.
+    adapter = MtgGameStateAdapter(state, phase_prune_enabled=False)
 
     decisions_a = adapter.legal_decisions()
     assert decisions_a == [PassPriority()]
@@ -594,7 +598,7 @@ def test_active_capability_cache_invalidated_by_apply():
     _strip_player_zones(state, 0)
     _give_basic_land(state, 0, "Forest", tapped=False)
     state.players[0].lands_played_this_turn = 1
-    adapter = MtgGameStateAdapter(state)
+    adapter = MtgGameStateAdapter(state, phase_prune_enabled=False)
 
     _ = adapter.legal_decisions()
     assert adapter._opp_cap_cache is not None
@@ -614,7 +618,7 @@ def test_active_capability_cache_recomputes_after_state_change():
     for _ in range(3):
         _give_basic_land(state, 0, "Mountain", tapped=False)
     state.players[0].lands_played_this_turn = 1  # consume land drop
-    adapter = MtgGameStateAdapter(state)
+    adapter = MtgGameStateAdapter(state, phase_prune_enabled=False)
 
     _ = adapter.legal_decisions()
     assert adapter._opp_cap_cache is not None
