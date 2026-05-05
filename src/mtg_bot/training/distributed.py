@@ -39,6 +39,88 @@ from typing import Any, Callable, Optional
 from mtg_bot.search.heuristics_config import HeuristicsConfig
 
 
+# ---- queue HTTP retry policy -------------------------------------
+#
+# Tailscale local network; <100ms typical RTT. A momentary blip on
+# the tailnet (lost ARP, reconnect, brief NIC stall) should NOT kill
+# a shard that's been running for 30-60 minutes. We saw exactly that
+# on 2026-05-04: a Mac shard hit a 60s OS-level TCP-connect ETIMEDOUT
+# on `/queue/take` (errno 60 on macOS) — the urllib `timeout=30` only
+# applies AFTER the TCP connection is established, so the OS default
+# bit us first. The fix: a tight per-attempt timeout plus a small
+# bounded number of retries with exponential backoff. Tight timeout
+# + retries beats one long blocking call when the failure mode is a
+# transient blip; for a real outage the shard still fails, just
+# faster.
+#
+# Worst-case wall before final failure with the constants below:
+#   10 + 0.5 + 10 + 1.0 + 10 = 31.5 seconds
+# (vs the 60s OS-default that bit us). Most blips resolve on the
+# first retry well under 1s.
+_QUEUE_HTTP_ATTEMPT_TIMEOUT_S = 10.0  # connect-or-read-or-fail
+_QUEUE_HTTP_RETRIES = 3              # total attempts incl. the first
+_QUEUE_HTTP_BACKOFF_BASE_S = 0.5     # 0.5s, then 1.0s between attempts
+
+
+@dataclass(frozen=True)
+class _QueueHTTPResponse:
+    """Minimal response shape returned by :func:`_urlopen_with_retry`:
+    just the status code and the body bytes. Wrapping these here lets
+    callers check ``resp.status`` without keeping the underlying
+    ``http.client.HTTPResponse`` open across the retry boundary."""
+
+    status: int
+    body: bytes
+
+
+def _urlopen_with_retry(
+    req,
+    *,
+    timeout: float = _QUEUE_HTTP_ATTEMPT_TIMEOUT_S,
+    retries: int = _QUEUE_HTTP_RETRIES,
+    backoff_base: float = _QUEUE_HTTP_BACKOFF_BASE_S,
+    sleep=time.sleep,
+) -> _QueueHTTPResponse:
+    """Open ``req`` via :mod:`urllib.request` with a tight per-attempt
+    timeout and a small bounded number of retries with exponential
+    backoff. Returns a :class:`_QueueHTTPResponse` (status + body
+    bytes); the underlying response object is closed before return.
+
+    On the cluster's Tailscale network typical RTT is 6-65ms, so a
+    queue endpoint should resolve in well under 100ms. If a single
+    attempt exceeds ``timeout`` seconds (or any ``URLError`` /
+    ``ConnectionError`` / ``TimeoutError`` is raised), the helper
+    sleeps ``backoff_base * 2**attempt`` and tries again. After
+    ``retries`` total attempts it re-raises the last exception, so
+    callers see the original failure mode (URLError, etc.) — only
+    transient blips are absorbed silently.
+
+    ``sleep`` is parameterized so tests can stub it without inserting
+    real sleep delays.
+    """
+    import urllib.error
+    import urllib.request as _urllib_request
+    last_exc: Optional[BaseException] = None
+    for attempt in range(retries):
+        try:
+            with _urllib_request.urlopen(req, timeout=timeout) as resp:
+                return _QueueHTTPResponse(
+                    status=resp.status, body=resp.read(),
+                )
+        except (
+            urllib.error.URLError,
+            TimeoutError,
+            ConnectionError,
+        ) as exc:
+            last_exc = exc
+            if attempt + 1 == retries:
+                raise
+            sleep(backoff_base * (2 ** attempt))
+    # Unreachable: the loop either returns or re-raises.
+    assert last_exc is not None  # pragma: no cover
+    raise last_exc  # pragma: no cover
+
+
 @dataclass(frozen=True)
 class ShardConfig:
     """One shard of a distributed self-play run.
@@ -856,11 +938,13 @@ def run_distributed_self_play(
         init_url, data=init_body,
         headers={"Content-Type": "application/json"},
     )
-    with urllib.request.urlopen(req, timeout=10) as resp:
-        if resp.status != 200:
-            raise RuntimeError(
-                f"queue init failed at {init_url}: HTTP {resp.status}"
-            )
+    # Tight per-attempt timeout + bounded retries — see comment on
+    # ``_QUEUE_HTTP_ATTEMPT_TIMEOUT_S`` for the rationale.
+    init_resp = _urlopen_with_retry(req)
+    if init_resp.status != 200:
+        raise RuntimeError(
+            f"queue init failed at {init_url}: HTTP {init_resp.status}"
+        )
 
     output_paths: list[Path] = []
     output_paths_lock = _threading.Lock()
@@ -973,11 +1057,13 @@ def run_distributed_eval(
         init_url, data=init_body,
         headers={"Content-Type": "application/json"},
     )
-    with urllib.request.urlopen(req, timeout=10) as resp:
-        if resp.status != 200:
-            raise RuntimeError(
-                f"queue init failed at {init_url}: HTTP {resp.status}"
-            )
+    # Tight per-attempt timeout + bounded retries — see comment on
+    # ``_QUEUE_HTTP_ATTEMPT_TIMEOUT_S`` for the rationale.
+    init_resp = _urlopen_with_retry(req)
+    if init_resp.status != 200:
+        raise RuntimeError(
+            f"queue init failed at {init_url}: HTTP {init_resp.status}"
+        )
 
     totals = {
         "n_games": 0, "wins_new": 0, "wins_old": 0,
@@ -1300,8 +1386,10 @@ def run_shard_pull(
             headers={"Content-Type": "application/json"},
         )
         take_t0 = _time.perf_counter()
-        with urllib.request.urlopen(req, timeout=30) as resp:
-            response = _json.loads(resp.read().decode("utf-8"))
+        # Tight per-attempt timeout + bounded retries — see comment
+        # on ``_QUEUE_HTTP_ATTEMPT_TIMEOUT_S`` for the rationale.
+        resp_body = _urlopen_with_retry(req).body
+        response = _json.loads(resp_body.decode("utf-8"))
         take_wall = _time.perf_counter() - take_t0
         games = response.get("games", [])
         return (
@@ -1607,8 +1695,10 @@ def run_shard_eval_pull(
             headers={"Content-Type": "application/json"},
         )
         take_t0 = _time.perf_counter()
-        with urllib.request.urlopen(req, timeout=30) as resp:
-            response = _json.loads(resp.read().decode("utf-8"))
+        # Tight per-attempt timeout + bounded retries — see comment
+        # on ``_QUEUE_HTTP_ATTEMPT_TIMEOUT_S`` for the rationale.
+        resp_body = _urlopen_with_retry(req).body
+        response = _json.loads(resp_body.decode("utf-8"))
         take_wall = _time.perf_counter() - take_t0
         games = response.get("games", [])
         return (
