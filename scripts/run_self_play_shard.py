@@ -18,6 +18,7 @@ from __future__ import annotations
 import argparse
 import base64
 import json
+import os
 import sys
 from pathlib import Path
 
@@ -39,7 +40,13 @@ def _decode_b64_json(s: str) -> dict:
     return json.loads(base64.b64decode(s.encode("ascii")).decode("utf-8"))
 
 
-def main(argv=None) -> None:
+def _run(argv=None) -> None:
+    """Parse args and dispatch to ``run_shard_pull`` /
+    ``run_shard_eval_pull``.
+
+    Separated from ``main`` so ``main`` can wrap it in the
+    ``os._exit`` finalizer without ballooning the indented body.
+    """
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
         "--mode", default="pull", choices=["pull", "eval"],
@@ -93,7 +100,6 @@ def main(argv=None) -> None:
 
     shard = ShardConfig.from_dict(_decode_b64_json(args.shard_b64))
 
-    import os
     n_workers = (
         shard.n_workers if shard.n_workers and shard.n_workers > 0
         else max(1, (os.cpu_count() or 1) - 2)
@@ -132,6 +138,81 @@ def main(argv=None) -> None:
     )
     result_path.write_text(json.dumps(counts), encoding="utf-8")
     print(json.dumps({"result_path": str(result_path), **counts}))
+
+
+def main(argv=None) -> None:
+    """Top-level entry. Always exits via ``os._exit`` to bypass
+    Python's normal interpreter shutdown.
+
+    Why: ``run_shard_pull`` / ``run_shard_eval_pull`` use
+    ``concurrent.futures.ProcessPoolExecutor``, which spawns
+    non-daemon management threads
+    (``_queue_management_thread`` and friends) that stay alive while
+    any worker process is alive. We already replaced
+    ``with ... as exe:`` with explicit ``shutdown(wait=False)`` so
+    the executor's exit path doesn't block on hung futures, but
+    Python's at-exit machinery still joins those non-daemon threads,
+    which join the still-alive workers, so the interpreter never
+    returns from ``main()``. Concrete repro: 2026-05-05 a Mac shard
+    stayed alive 50+ min after self-play completed and all data was
+    on disk; master's SSH session never saw EOF, the orchestrator
+    never proceeded to rsync-back.
+
+    By the time we reach the ``finally`` block here:
+    - ``run_shard_pull`` / ``run_shard_eval_pull`` have flushed every
+      ``.npz`` via their internal ``_flush()``,
+    - ``progress.finalize(...)`` has written the per-shard progress
+      JSON,
+    - the ``shard_end`` event has been written to ``events.jsonl``,
+    - in eval mode, ``result_path.write_text(...)`` above has
+      written the result JSON the orchestrator scps back.
+
+    So everything that needs to be on disk IS on disk. The only
+    things ``os._exit`` skips are pure-process cleanup
+    (worker-process termination, thread joins, GC) — exactly what's
+    hanging us. See ``docs/SEARCH_LIMITATIONS.md`` for the full
+    rationale and the proper-fix scope estimate.
+
+    Caveat: any ``atexit`` handler registered by an import is NOT
+    going to run. If you need teardown work to happen on shard exit,
+    do it explicitly before this function returns, not via
+    ``atexit.register``.
+    """
+    exit_code = 0
+    try:
+        _run(argv)
+    except SystemExit as e:
+        # argparse exits via SystemExit on --help or bad args.
+        # Preserve whatever exit code it picked.
+        code = getattr(e, "code", 0)
+        if isinstance(code, int):
+            exit_code = code
+        elif code is None:
+            exit_code = 0
+        else:
+            # SystemExit with a string message: emit it, exit 1.
+            sys.stderr.write(str(code) + "\n")
+            exit_code = 1
+    except BaseException:
+        import traceback
+        traceback.print_exc()
+        exit_code = 1
+    finally:
+        # All on-disk artifacts (npzs, progress JSON, events.jsonl,
+        # eval result.json) were already written inside ``_run``
+        # before we got here; flush stdio so any pending prints
+        # (e.g. the final ``{"npz_paths": [...]}`` line the
+        # orchestrator parses) reach the parent SSH process before
+        # the kernel tears the pipe down.
+        try:
+            sys.stdout.flush()
+        except Exception:  # noqa: BLE001
+            pass
+        try:
+            sys.stderr.flush()
+        except Exception:  # noqa: BLE001
+            pass
+        os._exit(exit_code)
 
 
 if __name__ == "__main__":

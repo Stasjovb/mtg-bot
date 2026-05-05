@@ -666,6 +666,78 @@ Acceptable for v1.
 
 ---
 
+## 13. Shard script exits via ``os._exit`` (process-cleanup workaround)
+
+**Location**: `scripts/run_self_play_shard.py` — `main()`'s
+`finally` block calls `os._exit(exit_code)` after stdio flush.
+
+**What we do today**: the shard script's `main()` is wrapped in
+`try / except / finally` such that the LAST thing it does is
+`os._exit(exit_code)`. This bypasses Python's normal interpreter
+shutdown — no `atexit` handlers, no non-daemon thread joins, no
+final GC.
+
+**Why it's the lesser evil**:
+`run_shard_pull` / `run_shard_eval_pull` use
+`concurrent.futures.ProcessPoolExecutor`. We already replaced the
+context-manager exit (`shutdown(wait=True)`) with explicit
+`shutdown(wait=False)` (commit `b3ebc39`,
+`feature/processpool-shutdown-nowait`) so the executor's cleanup
+path doesn't block on hung futures. But Python's at-exit machinery
+joins non-daemon threads — and `ProcessPoolExecutor` spawns
+internal management threads (`_queue_management_thread` and
+friends) that are non-daemon by default and stay alive as long as
+any worker process is alive. `shutdown(wait=False)` doesn't kill
+those threads; it just doesn't WAIT for them. So `main()` returns,
+then Python's normal shutdown blocks forever joining them, while
+they're blocked joining still-running C-extension worker code.
+
+By the time we reach the `finally` block, every artifact the
+orchestrator depends on is already on disk:
+- `.npz` chunks written via `_flush()` inside `run_shard_pull`,
+- the per-shard progress JSON via `progress.finalize(...)`,
+- the `shard_end` event in `events.jsonl`,
+- (eval mode) the per-shard `_result.json` written in
+  `run_self_play_shard.py:_run` itself.
+
+The only thing `os._exit` skips is process / thread cleanup — and
+the OS reaps the orphan worker processes when the parent dies, so
+no resource leaks.
+
+**Failure mode**: any code path that registers an `atexit` handler
+expecting it to run on shard exit will silently NOT run. If you
+need teardown work, do it explicitly before `_run` returns, not
+via `atexit.register`. (Today, nothing in the import graph of
+`run_self_play_shard.py` registers a teardown that matters; the
+worry is hypothetical / future.)
+
+Concrete repro of the underlying hang (2026-05-05): a Mac shard's
+`run_self_play_shard.py` process stayed alive 50+ min after
+self-play completed; master's SSH session never saw EOF, so the
+orchestrator never proceeded to rsync-back. Required manual
+`kill` of the remote Python.
+
+**Fix scope when prioritized** (proper fix that doesn't need
+`os._exit`): medium — at least ~50 lines across `run_shard_pull` +
+`run_shard_eval_pull`. Either:
+- Replace `concurrent.futures.ProcessPoolExecutor` with
+  `multiprocessing.Pool` (whose `terminate()` actually kills
+  workers — same pattern `bench_per_game_wall.py` already uses),
+  or
+- Subclass `ProcessPoolExecutor` and override `_queue_management_
+  thread` creation to mark it daemon (relies on private API; could
+  break across Python versions).
+
+The second is fragile; the first is the recommended direction
+when someone has time.
+
+**Impact estimate**: removes the orchestrator hang entirely
+(was: per-iteration risk of master SSH session hanging until
+manual kill, blocking the entire iteration sweep). No strength
+implications, no perf cost on the happy path.
+
+---
+
 ## Tracked but not in this doc
 
 Things tracked elsewhere that you might also want to know about:
