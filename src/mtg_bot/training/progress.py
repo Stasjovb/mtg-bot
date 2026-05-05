@@ -467,6 +467,12 @@ class _PairingState:
     verdict: str = "pending"
     status: str = "running"
     ended_at: Optional[str] = None
+    # Throughput stats — populated post-hoc by bench drivers that
+    # know their per-game wall-mean and worker count (e.g.
+    # ``bench_per_game_wall.py``). None when the bench doesn't
+    # report them, so the UI can choose to hide the column.
+    games_per_hour: Optional[float] = None
+    sec_per_game_per_worker: Optional[float] = None
 
     def to_payload(self) -> dict[str, Any]:
         return {
@@ -490,6 +496,14 @@ class _PairingState:
             "ci_high": float(self.ci_high),
             "verdict": self.verdict,
             "status": self.status,
+            "games_per_hour": (
+                float(self.games_per_hour)
+                if self.games_per_hour is not None else None
+            ),
+            "sec_per_game_per_worker": (
+                float(self.sec_per_game_per_worker)
+                if self.sec_per_game_per_worker is not None else None
+            ),
         }
 
 
@@ -723,6 +737,39 @@ class BenchProgress:
         if elapsed_seconds is not None:
             cur.elapsed_seconds = float(elapsed_seconds)
         self._recompute_current(force_elapsed=elapsed_seconds is None)
+        self._flush_now()
+
+    def set_throughput_stats(
+        self,
+        *,
+        games_per_hour: Optional[float],
+        sec_per_game_per_worker: Optional[float],
+    ) -> None:
+        """Stamp throughput stats onto the current pairing.
+
+        Bench drivers that know their per-game wall-mean and worker
+        count (e.g. ``bench_per_game_wall.py``) call this once after
+        all games finish but before ``finish_pairing``. The values
+        flow through to the JSON pairings entry so the training UI
+        can render a games/hour column for at-a-glance comparison
+        across machines.
+
+        Pairings whose drivers don't compute these (the strength
+        A/B bench, for example) simply omit the call and the fields
+        stay ``None`` in the snapshot.
+        """
+        if self._current is None:
+            raise RuntimeError(
+                "BenchProgress.set_throughput_stats called before "
+                "start_pairing"
+            )
+        self._current.games_per_hour = (
+            float(games_per_hour) if games_per_hour is not None else None
+        )
+        self._current.sec_per_game_per_worker = (
+            float(sec_per_game_per_worker)
+            if sec_per_game_per_worker is not None else None
+        )
         self._flush_now()
 
     def finish_pairing(self, status: str = "completed") -> None:

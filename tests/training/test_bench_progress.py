@@ -429,3 +429,83 @@ def test_classify_verdict_weaker_branch():
     from mtg_bot.training.progress import _classify_verdict
 
     assert _classify_verdict(0.05, 0.45) == "weaker"
+
+
+def test_throughput_stats_default_none(tmp_path: Path):
+    """Pairings that never call ``set_throughput_stats`` keep both
+    throughput fields at ``None`` in the JSON. The strength A/B
+    bench falls in this bucket — the UI should be able to detect
+    'no throughput data' and hide the column."""
+    progress = _make(tmp_path / "run.json")
+    progress.begin()
+    progress.start_pairing(challenger="A", defender="B", n_games=2)
+    progress.record_pairing_result(
+        challenger_wins=1, defender_wins=1, draws=0,
+    )
+    progress.finish_pairing(status="completed")
+    progress.finalize(status="completed")
+    payload = json.loads((tmp_path / "run.json").read_text(encoding="utf-8"))
+    p = payload["pairings"][0]
+    assert "games_per_hour" in p
+    assert "sec_per_game_per_worker" in p
+    assert p["games_per_hour"] is None
+    assert p["sec_per_game_per_worker"] is None
+
+
+def test_set_throughput_stats_lands_in_json(tmp_path: Path):
+    """``set_throughput_stats`` stamps the two numbers onto the
+    current pairing and forces a flush so the UI sees them
+    immediately. Mirrors the bench_per_game_wall.py end-of-run
+    call site."""
+    progress = _make(tmp_path / "run.json")
+    progress.begin()
+    progress.start_pairing(challenger="A", defender="B", n_games=4)
+    progress.record_pairing_result(
+        challenger_wins=2, defender_wins=2, draws=0,
+    )
+    # Synthetic throughput: 24 workers, 60s mean per game →
+    # 3600 / 60 * 24 = 1440 games/hour.
+    progress.set_throughput_stats(
+        games_per_hour=1440.0,
+        sec_per_game_per_worker=60.0,
+    )
+    payload = json.loads((tmp_path / "run.json").read_text(encoding="utf-8"))
+    p = payload["pairings"][0]
+    assert p["games_per_hour"] == 1440.0
+    assert p["sec_per_game_per_worker"] == 60.0
+    # Survives finalize roundtrip too.
+    progress.finish_pairing(status="completed")
+    progress.finalize(status="completed")
+    payload = json.loads((tmp_path / "run.json").read_text(encoding="utf-8"))
+    p = payload["pairings"][0]
+    assert p["games_per_hour"] == 1440.0
+    assert p["sec_per_game_per_worker"] == 60.0
+
+
+def test_set_throughput_stats_accepts_none(tmp_path: Path):
+    """Drivers that compute one stat but not the other (or want to
+    reset) can pass ``None``; the field stores ``None`` in the JSON
+    rather than crashing on float-cast."""
+    progress = _make(tmp_path / "run.json")
+    progress.begin()
+    progress.start_pairing(challenger="A", defender="B", n_games=2)
+    progress.set_throughput_stats(
+        games_per_hour=None, sec_per_game_per_worker=None,
+    )
+    payload = json.loads((tmp_path / "run.json").read_text(encoding="utf-8"))
+    p = payload["pairings"][0]
+    assert p["games_per_hour"] is None
+    assert p["sec_per_game_per_worker"] is None
+
+
+def test_set_throughput_stats_before_start_raises(tmp_path: Path):
+    progress = _make(tmp_path / "run.json")
+    progress.begin()
+    try:
+        progress.set_throughput_stats(
+            games_per_hour=100.0, sec_per_game_per_worker=10.0,
+        )
+    except RuntimeError as e:
+        assert "start_pairing" in str(e)
+    else:  # pragma: no cover
+        raise AssertionError("expected RuntimeError")
