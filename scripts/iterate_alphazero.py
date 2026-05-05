@@ -510,6 +510,7 @@ def _self_play_distributed(
     queue_url: str,
     bundle_url: str | None = None,
     slack_extra: int = 0,
+    shard_ssh_timeout_s: float | None = None,
     use_ismcts: bool = False,
     use_belief_weighted: bool = False,
     heuristics: HeuristicsConfig | None = None,
@@ -551,6 +552,9 @@ def _self_play_distributed(
         heuristics=heuristics if heuristics is not None else HeuristicsConfig(),
     )
     started = time.perf_counter()
+    extra_kwargs: dict = {}
+    if shard_ssh_timeout_s is not None:
+        extra_kwargs["shard_ssh_timeout_s"] = shard_ssh_timeout_s
     npz_paths = run_distributed_self_play(
         shards_config, spec,
         progress_dir=progress_dir,
@@ -560,6 +564,7 @@ def _self_play_distributed(
         queue_url=queue_url,
         bundle_url=bundle_url,
         slack_extra=slack_extra,
+        **extra_kwargs,
     )
     elapsed = time.perf_counter() - started
 
@@ -603,6 +608,7 @@ def _eval_match_distributed(
     bundle_url: str | None,
     opponent_label: str,
     slack_extra: int = 0,
+    shard_ssh_timeout_s: float | None = None,
     use_ismcts: bool = False,
     use_belief_weighted: bool = False,
 ) -> tuple[int, int, int, float]:
@@ -631,6 +637,9 @@ def _eval_match_distributed(
         use_belief_weighted=use_belief_weighted,
     )
     started = time.perf_counter()
+    extra_kwargs: dict = {}
+    if shard_ssh_timeout_s is not None:
+        extra_kwargs["shard_ssh_timeout_s"] = shard_ssh_timeout_s
     counts = run_distributed_eval(
         shards_config, spec,
         progress_dir=progress_dir,
@@ -639,6 +648,7 @@ def _eval_match_distributed(
         queue_url=queue_url,
         bundle_url=bundle_url,
         slack_extra=slack_extra,
+        **extra_kwargs,
     )
     elapsed = time.perf_counter() - started
     return (
@@ -1098,6 +1108,23 @@ def main() -> None:
         ),
     )
     parser.add_argument(
+        "--shard-ssh-timeout-min", type=float, default=90.0,
+        help=(
+            "Hard upper-bound timeout (in MINUTES) on a single "
+            "shard's SSH session. Defends against the post-shard "
+            "SSH-still-alive hang where Tailscale keeps the TCP "
+            "connection healthy after the remote python's explicit "
+            "exit, causing the SSH client never to see a "
+            "protocol-level close. On expiry, master's per-shard "
+            "try/except catches TimeoutExpired, the post-failure "
+            "rsync recovers any data on disk, and the orchestration "
+            "proceeds with surviving shards' data. Default 90 min "
+            "covers ~3x the typical 500-game self-play wall plus "
+            "rsync. Tune up for very-large iterations, down for "
+            "faster failure recovery."
+        ),
+    )
+    parser.add_argument(
         "--use-ismcts", action="store_true",
         help=(
             "Use Information Set MCTS instead of PIMC for both self-"
@@ -1430,6 +1457,7 @@ def main() -> None:
                 slack_extra=_compute_slack_extra(
                     args.games_per_iteration, args.queue_slack_pct,
                 ),
+                shard_ssh_timeout_s=args.shard_ssh_timeout_min * 60,
                 use_ismcts=args.use_ismcts,
                 use_belief_weighted=args.use_belief_weighted,
                 heuristics=HeuristicsConfig(
@@ -1599,6 +1627,7 @@ def main() -> None:
                         slack_extra=_compute_slack_extra(
                             args.eval_games, args.queue_slack_pct,
                         ),
+                        shard_ssh_timeout_s=args.shard_ssh_timeout_min * 60,
                         use_ismcts=args.use_ismcts,
                         use_belief_weighted=args.use_belief_weighted,
                     )

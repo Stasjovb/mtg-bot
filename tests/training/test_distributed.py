@@ -4169,3 +4169,112 @@ def test_mark_shard_progress_failed_swallows_write_errors(
         )
     finally:
         monkeypatch.setattr(type(progress), "write_text", real_write_text)
+
+
+# ---- shard SSH hard-timeout regression -----------------------------
+#
+# Pin: every per-shard SSH call goes through ``_run_subprocess`` with a
+# bounded ``timeout`` so a Tailscale-keeps-the-TCP-alive hang can't wedge
+# the orchestrator forever. The default is _DEFAULT_SHARD_SSH_TIMEOUT_S
+# (90 min); the orchestrator threads through the value provided by the
+# caller. If the timeout fires, master's per-shard try/except catches
+# ``TimeoutExpired`` and the rsync-recovery flow runs in finally.
+
+def test_shard_ssh_timeout_default_is_finite_and_threaded(monkeypatch):
+    """``_run_subprocess`` for the shard SSH must be invoked with
+    ``timeout=...`` (not None). The default is the module-level
+    constant; the orchestrator threads through any explicit value."""
+    import subprocess as _subprocess
+    from mtg_bot.training import distributed as dmod
+
+    captured: list[dict] = []
+
+    def fake_run_subprocess(cmd, *, timeout=None):
+        captured.append({"cmd": cmd, "timeout": timeout})
+        return _subprocess.CompletedProcess(args=cmd, returncode=0)
+
+    monkeypatch.setattr(dmod, "_run_subprocess", fake_run_subprocess)
+    # Find a call that includes _ssh_cmd of the run-shard kind. The
+    # default constant should be > 0 and finite.
+    assert dmod._DEFAULT_SHARD_SSH_TIMEOUT_S > 0
+    assert dmod._DEFAULT_SHARD_SSH_TIMEOUT_S < 24 * 60 * 60  # < 1 day
+    # 90-min default specifically is the documented value.
+    assert dmod._DEFAULT_SHARD_SSH_TIMEOUT_S == 90 * 60
+
+
+def test_run_shard_remote_uses_supplied_ssh_timeout(monkeypatch, tmp_path):
+    """``run_shard_remote(shard_ssh_timeout_s=X)`` propagates X into
+    the subprocess call's ``timeout=`` kwarg. Without this pinning,
+    the post-shard hang would block forever on the SSH wrapper."""
+    import subprocess as _subprocess
+    from mtg_bot.training import distributed as dmod
+    from mtg_bot.training.distributed import (
+        ShardConfig, SelfPlayJobSpec,
+    )
+
+    captured: list[dict] = []
+
+    def fake_run_subprocess(cmd, *, timeout=None):
+        captured.append({"cmd": list(cmd), "timeout": timeout})
+        return _subprocess.CompletedProcess(args=cmd, returncode=0)
+
+    # Stub the rsync stages so we don't try real scp.
+    monkeypatch.setattr(dmod, "_run_subprocess", fake_run_subprocess)
+    monkeypatch.setattr(
+        dmod, "_remote_join", lambda *a, **kw: "/r/x",
+    )
+    monkeypatch.setattr(dmod, "_is_windows_remote", lambda s: False)
+    # Stub list+scp listing (no files to recover).
+    monkeypatch.setattr(
+        _subprocess, "run",
+        lambda *a, **kw: _subprocess.CompletedProcess(
+            args=list(a[0]) if a else [], returncode=0, stdout="", stderr="",
+        ),
+    )
+
+    weights_rel = "trained_weights/v7/weights.pt"
+    (tmp_path / "trained_weights" / "v7").mkdir(parents=True)
+    (tmp_path / weights_rel).write_bytes(b"fake")
+    spec = SelfPlayJobSpec(
+        weights_path=weights_rel,
+        samples=2, inner_nodes=10, hidden_sizes=(64,),
+        base_seed=0, enable_mulligans=False,
+        per_game_timeout_sec=None, capture_every=10,
+        replays_root="replays",
+    )
+    shard = ShardConfig(
+        host="my-mac", n_games=10, user="g",
+        repo_path="/r", venv_python=".venv-py313/bin/python",
+    )
+
+    custom_timeout = 600.0
+    dmod.run_shard_remote(
+        shard, spec,
+        queue_url="http://localhost:5099",
+        run_id="test_run",
+        iter_total_games=10,
+        progress_dir=tmp_path / "progress",
+        output_dir=tmp_path / "out",
+        run_id_prefix="test_run",
+        stamp="20260505T000000Z",
+        shard_ssh_timeout_s=custom_timeout,
+    )
+
+    # Find the run-shard SSH call (the one that runs run_self_play_shard.py).
+    shard_run_calls = [
+        c for c in captured
+        if any(
+            "run_self_play_shard.py" in str(arg)
+            for arg in c["cmd"]
+        )
+    ]
+    assert shard_run_calls, (
+        "expected at least one ssh call invoking run_self_play_shard.py; "
+        f"got: {[c['cmd'] for c in captured]}"
+    )
+    # Pin: the ssh call carries the supplied timeout, not None.
+    for c in shard_run_calls:
+        assert c["timeout"] == custom_timeout, (
+            f"shard ssh timeout was {c['timeout']!r}, "
+            f"expected {custom_timeout}"
+        )
