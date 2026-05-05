@@ -128,6 +128,21 @@ _PHASE_PRUNE_STEPS: frozenset[Step] = frozenset({
 })
 
 
+# Steps at which the priority window is pruned to ``[PassPriority()]``
+# when ``skip_empty_combat_enabled`` is True AND there are no attacking
+# creatures on the battlefield. These are the post-declaration priority
+# windows of the combat sub-steps — when no creature attacked, there's
+# nothing to respond to with combat tricks (no creature to pump, no
+# attack to redirect, no damage to prevent), and the step's priority
+# windows can be cascaded through. See SEARCH_LIMITATIONS entry #9.
+_EMPTY_COMBAT_PRUNE_STEPS: frozenset[Step] = frozenset({
+    Step.DECLARE_ATTACKERS,
+    Step.DECLARE_BLOCKERS,
+    Step.COMBAT_DAMAGE,
+    Step.END_OF_COMBAT,
+})
+
+
 # Maps the ``_ResolutionPause.kind`` value to the search-side
 # decision class the adapter expects when search answers that pause.
 _RESOLUTION_KIND_TO_DECISION_CLASS = {
@@ -165,6 +180,7 @@ class MtgGameStateAdapter:
         expose_resolution_decisions: bool = False,
         phase_prune_enabled: bool = True,
         force_landdrop_enabled: bool = True,
+        skip_empty_combat_enabled: bool = True,
     ) -> None:
         self._state = engine_state
         self._tactical = tactical_agent or DefaultTacticalAgent()
@@ -189,6 +205,15 @@ class MtgGameStateAdapter:
         # priority window without playing a land. See
         # SEARCH_LIMITATIONS entry #7.
         self._force_landdrop_enabled = force_landdrop_enabled
+        # Skip-empty-combat short-circuit. When True (default), at any
+        # combat sub-step priority window (DECLARE_ATTACKERS,
+        # DECLARE_BLOCKERS, COMBAT_DAMAGE, END_OF_COMBAT) with empty
+        # stack AND no attacking creatures on the battlefield, return
+        # ``[PassPriority()]`` immediately. The cascade through both
+        # players' auto-passes drives the step transition through
+        # without enumerating legal_actions for either side. See
+        # SEARCH_LIMITATIONS entry #9.
+        self._skip_empty_combat_enabled = skip_empty_combat_enabled
         # Agent installation. With resolution exposure we need the
         # ``ResolutionChannelAgent`` to intercept callbacks; non-
         # exposed callbacks fall through to the tactical policy.
@@ -452,6 +477,51 @@ class MtgGameStateAdapter:
             return False
         return True
 
+    def _should_skip_empty_combat(self) -> bool:
+        """Skip-empty-combat heuristic: at any combat sub-step priority
+        window with empty stack and no attacking creatures on the
+        battlefield, return ``[PassPriority()]`` to cascade through
+        without enumerating legal_actions for either side.
+
+        Conditions to fire:
+        * ``skip_empty_combat_enabled`` is True.
+        * Not terminal.
+        * Not a resolution-pause moment.
+        * Not a combat sub-decision moment (factored attacker/blocker
+          path is unaffected — those are pre-declaration windows).
+        * Stack is empty.
+        * Step is in ``_EMPTY_COMBAT_PRUNE_STEPS``
+          (DECLARE_ATTACKERS, DECLARE_BLOCKERS, COMBAT_DAMAGE,
+          END_OF_COMBAT).
+        * No creature on the battlefield is currently attacking.
+
+        Fires for BOTH active and opponent priority windows: with no
+        attackers there are no combat tricks to play, so opp's
+        instant-speed window is also dead.
+
+        Documented divergence from optimal play, see
+        ``docs/SEARCH_LIMITATIONS.md`` entry #9.
+        """
+        if not self._skip_empty_combat_enabled:
+            return False
+        if self._state.is_over():
+            return False
+        if self._resolution_paused:
+            return False
+        if self._combat_phase != _COMBAT_NONE:
+            return False
+        if len(self._state.stack) > 0:
+            return False
+        if self._state.step not in _EMPTY_COMBAT_PRUNE_STEPS:
+            return False
+        # No attacking creatures → nothing to respond to with combat
+        # tricks. Both players' priority windows can be cascaded
+        # through.
+        for obj in self._state.battlefield:
+            if obj.attacking:
+                return False
+        return True
+
     def _can_short_circuit_to_pass(self) -> bool:
         """True iff the current decision moment is a priority window
         whose holder has no possible action. Auto-passes BOTH the
@@ -517,6 +587,7 @@ class MtgGameStateAdapter:
         c._expose_resolution = self._expose_resolution
         c._phase_prune_enabled = self._phase_prune_enabled
         c._force_landdrop_enabled = self._force_landdrop_enabled
+        c._skip_empty_combat_enabled = self._skip_empty_combat_enabled
         # Resolution-channel agent is per-adapter-instance so each
         # clone has its own replay queue. Snapshot/restore preserves
         # queue state from the source.
@@ -603,6 +674,14 @@ class MtgGameStateAdapter:
         # ``legal_actions``. See ``docs/SEARCH_LIMITATIONS.md`` entry
         # #6 for the documented divergence from optimal play.
         if self._should_phase_prune_priority():
+            return [PassPriority()]
+        # Skip-empty-combat: at any combat sub-step priority window
+        # (DECLARE_ATTACKERS / DECLARE_BLOCKERS / COMBAT_DAMAGE /
+        # END_OF_COMBAT) with empty stack and no attacking creatures
+        # on the battlefield, short-circuit to ``[PassPriority()]``.
+        # Fires for both active and opp priority. See
+        # ``docs/SEARCH_LIMITATIONS.md`` entry #9.
+        if self._should_skip_empty_combat():
             return [PassPriority()]
         # Capability auto-pass: when the priority holder has no
         # possible action (instant-speed for opp / non-active priority

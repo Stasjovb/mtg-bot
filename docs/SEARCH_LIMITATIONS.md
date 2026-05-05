@@ -467,6 +467,49 @@ they do, the heuristic wipes 5-15 attacker sub-decisions of search).
 
 ---
 
+## 9. Skip-empty-combat priority short-circuit (training heuristic)
+
+**Location**: `MtgGameStateAdapter.legal_decisions` (`src/mtg_bot/search/engine_adapter.py`) — see `_should_skip_empty_combat()`. Returns `[PassPriority()]` immediately (no `legal_actions` enumeration) when ALL of these hold:
+
+- `skip_empty_combat_enabled` is True (default for `SelfPlayJobSpec`, OFF for `EvalJobSpec`)
+- Not terminal / not resolution-paused / not in a factored combat sub-decision
+- Stack is empty
+- Step is one of: `DECLARE_ATTACKERS`, `DECLARE_BLOCKERS`, `COMBAT_DAMAGE`, `END_OF_COMBAT`
+- No creature on the battlefield is currently attacking
+
+Fires for **both** active and opponent priority windows: with no attackers there's nothing to pump, redirect, or remove with combat tricks, so opp's instant-speed window is also dead.
+
+**Why this is sometimes wrong** under CR: real MTG allows priority during these windows even with no attacks. Edge cases the heuristic skips:
+
+| Edge case | Step | Bot misbehavior |
+|---|---|---|
+| Cast non-combat instant during empty combat phase | Any of the 4 | Misses end-of-step effects timed to combat (rare) |
+| Counterspell setup for next turn | Any of the 4 | Misses pre-emptive instant timing |
+| "At end of combat" triggers fire even with no combat | EoC | The trigger still fires (engine handles), but bot can't respond to it with an instant |
+| "Whenever a player passes priority during combat..." trigger | Any of the 4 | Hypothetical card mechanic; would need a new gate |
+| Sacrifice for end-of-turn benefit timed at EoC | EoC | Better timed at end step proper anyway, so usually OK |
+
+**Failure mode**: bot passes priority during empty combat steps even when an instant could be cast. Conservative-WRONG (never plays an illegal action; just skips windows where instants are *technically* legal but rarely useful with no attackers).
+
+**Why this composes well with phase-prune** (entry #6): phase-prune already covers `BEGINNING_OF_COMBAT` and `END` steps for active player. This entry covers the OTHER combat sub-steps — and crucially fires for opp priority too (phase-prune is active-only). The capability auto-pass (#3) catches "opp has nothing castable" but doesn't fire when opp has castable instants, which is the case this entry adds.
+
+**When it matters**:
+
+- For training: removes ~10 priority moments per affected combat phase from the search tree. Fires reliably turns 1-2 (no creatures yet) + occasional board-wipe turns. Composes with phase-prune for ~15-20% additional wall reduction estimated.
+- For tournament play: marginal correctness loss. Empty-combat-instant plays are rare; expert decks rarely need them. Default OFF for eval.
+
+**Mitigation**: `skip_empty_combat_enabled=False` on `MtgGameStateAdapter` (or via the Spec). `EvalJobSpec` defaults OFF; `SelfPlayJobSpec` defaults ON.
+
+**Acceptable for**: training, self-play data_gen.
+
+**NOT acceptable for**: tournament play, eval matches against real opponents, any test where empty-combat-instant timing matters.
+
+**Fix scope if/when needed**: add gates for triggered abilities that depend on combat steps with no attackers, OR train the policy to skip these windows on its own (same shape of fix as phase-prune).
+
+**Impact estimate**: ~15-20% per-game wall reduction during training (estimated; needs measurement). Composes additively with phase-prune (#6) since it covers the combat sub-steps phase-prune misses.
+
+---
+
 ## Tracked but not in this doc
 
 Things tracked elsewhere that you might also want to know about:

@@ -950,6 +950,9 @@ def _enumerate_legal(state: Any, viewer: PlayerID) -> list:
     # ``[PassPriority()]`` from ``legal_decisions`` without calling
     # ``legal_actions``. The mask must agree, otherwise the mask
     # would expose phantom "legal" slots the engine would refuse.
+    skip_empty_combat_fn = getattr(state, "_should_skip_empty_combat", None)
+    if skip_empty_combat_fn is not None and skip_empty_combat_fn():
+        return [PassPriority()]
     short_circuit_fn = getattr(state, "_can_short_circuit_to_pass", None)
     if short_circuit_fn is not None and short_circuit_fn():
         return [PassPriority()]

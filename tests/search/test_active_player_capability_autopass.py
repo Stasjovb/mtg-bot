@@ -452,6 +452,7 @@ def test_adapter_does_not_auto_pass_active_with_castable_instant_in_combat(
     adapter._opp_cap_cache = None
     adapter._phase_prune_enabled = False
     adapter._force_landdrop_enabled = False
+    adapter._skip_empty_combat_enabled = False
 
     spy = _spy_legal_actions(monkeypatch)
     decisions = adapter.legal_decisions()
@@ -506,6 +507,7 @@ def test_adapter_auto_passes_active_when_only_sorcery_at_combat(
     adapter._opp_cap_cache = None
     adapter._phase_prune_enabled = False
     adapter._force_landdrop_enabled = False
+    adapter._skip_empty_combat_enabled = False
 
     spy = _spy_legal_actions(monkeypatch)
     decisions = adapter.legal_decisions()

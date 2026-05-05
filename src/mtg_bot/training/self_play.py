@@ -114,6 +114,7 @@ def run_match(
     hang_dump_dir: Optional[str] = None,
     phase_prune_enabled: bool = True,
     force_landdrop_enabled: bool = True,
+    skip_empty_combat_enabled: bool = True,
 ) -> MatchStats:
     """Play ``n_games`` of ``p0_factory`` vs ``p1_factory`` and
     aggregate stats.
@@ -134,7 +135,7 @@ def run_match(
             game_idx, p0_factory, p1_factory, base_seed, decision_cap,
             enable_mulligans, per_game_timeout_sec, deck_pool,
             replay_config, hang_dump_dir, phase_prune_enabled,
-            force_landdrop_enabled,
+            force_landdrop_enabled, skip_empty_combat_enabled,
         )
         for game_idx in range(n_games)
     ]
@@ -157,6 +158,7 @@ def run_match_parallel(
     alternate_seats: bool = False,
     phase_prune_enabled: bool = True,
     force_landdrop_enabled: bool = True,
+    skip_empty_combat_enabled: bool = True,
 ) -> MatchStats:
     """Same contract as ``run_match`` but distributes games across a
     ``multiprocessing.Pool``.
@@ -201,7 +203,7 @@ def run_match_parallel(
         (i, p0_factory, p1_factory, base_seed, decision_cap,
          enable_mulligans, per_game_timeout_sec, deck_pool,
          replay_config, hang_dump_dir, phase_prune_enabled,
-         force_landdrop_enabled)
+         force_landdrop_enabled, skip_empty_combat_enabled)
         for i in range(n_games)
     ]
     packed_worker = (
@@ -404,6 +406,7 @@ def _play_one_match_game(
     hang_dump_dir: Optional[str] = None,
     phase_prune_enabled: bool = True,
     force_landdrop_enabled: bool = True,
+    skip_empty_combat_enabled: bool = True,
 ) -> tuple[Optional[PlayerID], int]:
     """Play one game and return ``(winner_or_None, decisions)``.
     Used by both the sequential and parallel match drivers — same
@@ -447,6 +450,7 @@ def _play_one_match_game(
         engine, expose_combat_decisions=True,
         phase_prune_enabled=phase_prune_enabled,
         force_landdrop_enabled=force_landdrop_enabled,
+        skip_empty_combat_enabled=skip_empty_combat_enabled,
     )
     strategies = {
         0: p0_factory(base_seed + 100 * game_idx),

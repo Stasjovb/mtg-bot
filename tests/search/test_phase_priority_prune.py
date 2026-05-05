@@ -191,7 +191,10 @@ def test_phase_prune_active_combat_substeps_do_NOT_prune(monkeypatch):
     # COMBAT_DAMAGE and END_OF_COMBAT.
     for step in (Step.COMBAT_DAMAGE, Step.END_OF_COMBAT):
         state = _fresh_state()
-        adapter = MtgGameStateAdapter(state)
+        # Disable skip-empty-combat too — with no attacking creatures
+        # in the fresh fixture, that heuristic would also fire and
+        # mask the spy call we're asserting.
+        adapter = MtgGameStateAdapter(state, skip_empty_combat_enabled=False)
         _force_step(adapter, step)
         _disable_capability_short_circuit(monkeypatch, adapter)
 

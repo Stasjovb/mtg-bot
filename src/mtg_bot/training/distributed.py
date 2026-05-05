@@ -301,6 +301,9 @@ class SelfPlayJobSpec:
     # Forced second-main land drop (training heuristic). Defaults ON
     # for self-play; see ``docs/SEARCH_LIMITATIONS.md`` entry #7.
     force_landdrop_enabled: bool = True
+    # Skip-empty-combat short-circuit (training heuristic). Defaults
+    # ON for self-play; see ``docs/SEARCH_LIMITATIONS.md`` entry #9.
+    skip_empty_combat_enabled: bool = True
 
     def to_dict(self) -> dict[str, Any]:
         """JSON-serializable dict. Used by ``run_self_play_shard.py``
@@ -341,6 +344,7 @@ class SelfPlayJobSpec:
             "use_belief_weighted": self.use_belief_weighted,
             "phase_prune_enabled": self.phase_prune_enabled,
             "force_landdrop_enabled": self.force_landdrop_enabled,
+            "skip_empty_combat_enabled": self.skip_empty_combat_enabled,
         }
 
     @classmethod
@@ -369,6 +373,9 @@ class SelfPlayJobSpec:
             ),
             force_landdrop_enabled=bool(
                 d.get("force_landdrop_enabled", True),
+            ),
+            skip_empty_combat_enabled=bool(
+                d.get("skip_empty_combat_enabled", True),
             ),
         )
 
@@ -412,6 +419,11 @@ class EvalJobSpec:
     # rationale: match outcomes are load-bearing, the heuristic
     # forces a play that may differ from optimal).
     force_landdrop_enabled: bool = False
+    # Skip-empty-combat short-circuit. Defaults OFF for eval — the
+    # 0-attacking-creatures gate is correctness-tight (no creature
+    # to pump or remove), so this is safer than the others to leave
+    # ON, but eval still defaults conservative.
+    skip_empty_combat_enabled: bool = False
 
     def to_dict(self) -> dict[str, Any]:
         def _posix(p):
@@ -439,6 +451,7 @@ class EvalJobSpec:
             "use_belief_weighted": self.use_belief_weighted,
             "phase_prune_enabled": self.phase_prune_enabled,
             "force_landdrop_enabled": self.force_landdrop_enabled,
+            "skip_empty_combat_enabled": self.skip_empty_combat_enabled,
         }
 
     @classmethod
@@ -467,6 +480,9 @@ class EvalJobSpec:
             ),
             force_landdrop_enabled=bool(
                 d.get("force_landdrop_enabled", False),
+            ),
+            skip_empty_combat_enabled=bool(
+                d.get("skip_empty_combat_enabled", False),
             ),
         )
 
@@ -593,6 +609,7 @@ def run_shard_local(
                 hang_dump_dir=hang_dump_dir,
                 phase_prune_enabled=spec.phase_prune_enabled,
                 force_landdrop_enabled=spec.force_landdrop_enabled,
+                skip_empty_combat_enabled=spec.skip_empty_combat_enabled,
             )
         )
     except BaseException:
@@ -1285,6 +1302,7 @@ def run_shard_pull(
             spec.enable_mulligans, spec.per_game_timeout_sec,
             hang_dump_dir, spec.phase_prune_enabled,
             spec.force_landdrop_enabled,
+            spec.skip_empty_combat_enabled,
         )
 
     def _flush() -> None:
@@ -1557,6 +1575,7 @@ def run_shard_eval_pull(
             deck_pool, replay_config, hang_dump_dir,
             spec.phase_prune_enabled,
             spec.force_landdrop_enabled,
+            spec.skip_empty_combat_enabled,
         )
 
     shard_t0 = _time.perf_counter()
