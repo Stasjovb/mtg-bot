@@ -54,7 +54,9 @@ from typing import Callable, Optional, Sequence
 
 import numpy as np
 
+from mtg_bot.search._lethal_detect import detect_lethal_attack
 from mtg_bot.search.budget import Budget
+from mtg_bot.search.combat_decisions import AttackerDecision
 from mtg_bot.search.determinize import determinize as _default_determinize
 from mtg_bot.search.engine_adapter import MtgGameStateAdapter
 from mtg_bot.search.evaluator import Evaluator
@@ -143,6 +145,7 @@ class ISMCTS(SearchStrategy):
         c_puct: float = 1.0,
         batch_size: int = 1,
         puct: bool = True,
+        enable_lethal_detect: bool = True,
     ) -> None:
         """``evaluator`` scores leaves from ``player_id``'s perspective.
 
@@ -174,6 +177,18 @@ class ISMCTS(SearchStrategy):
         the host. ``puct=False`` falls back to UCB1-with-
         availability — useful for unit tests that don't want a
         policy-capable evaluator.
+
+        ``enable_lethal_detect`` (default True) gates the alpha-strike
+        heuristic short-circuit in ``choose_with_visits``. When True
+        and the adapter is at an ``AttackerDecision`` priority moment,
+        the heuristic checks whether attacking with the lethal subset
+        produces guaranteed lethal damage to the (single) opponent;
+        if so, the search loop is skipped and a ``{decision: 1}``
+        single-confident-decision dict is returned for the head
+        pending attacker. See ``_lethal_detect.detect_lethal_attack``
+        for the conservative gates. Disable for tournament play where
+        every search-derived recommendation matters; safe to keep on
+        for training and self-play.
         """
         if batch_size < 1:
             raise ValueError(
@@ -207,6 +222,11 @@ class ISMCTS(SearchStrategy):
         self.c_puct = c_puct
         self.batch_size = batch_size
         self.puct = puct
+        self.enable_lethal_detect = enable_lethal_detect
+        # Counter incremented every time the lethal-detect heuristic
+        # short-circuits search. Exposed for benchmark / test
+        # introspection. Reset by ``reset_lethal_detect_count``.
+        self._lethal_detect_fires: int = 0
         # Per-search deferred-prior queue. Re-initialized at the top
         # of every ``choose_with_visits`` call (and reset in its
         # ``finally``); also initialized here so direct callers of
@@ -398,6 +418,23 @@ class ISMCTS(SearchStrategy):
         if len(legal) == 1:
             return {legal[0]: 1}
 
+        # Lethal-detect short-circuit. When the adapter is at an
+        # AttackerDecision sub-decision moment AND the heuristic detects
+        # guaranteed lethal alpha strike, route the head pending
+        # attacker through ``attack=True`` (if it's in the lethal subset)
+        # or ``attack=False`` (if not — e.g. defenders that can't
+        # contribute, or attackers we deliberately hold back). This
+        # skips the entire search loop for the alpha-strike turn.
+        # Conservative — see _lethal_detect.detect_lethal_attack for
+        # the gates. False positives are catastrophic; the gates err
+        # toward false-negative (search runs normally when in doubt).
+        lethal_decision = self._maybe_lethal_attacker_decision(
+            state, player_id, legal,
+        )
+        if lethal_decision is not None:
+            self._lethal_detect_fires += 1
+            return {lethal_decision: 1}
+
         root_key = info_set_key(state, player_id)
         # Tree-reuse path: if the persistent tree already has a node
         # for this info set (carried over from a previous choose_with_
@@ -459,6 +496,77 @@ class ISMCTS(SearchStrategy):
             self._pending_prior_set = set()
 
         return {d: c.visits for d, c in root.children.items()}
+
+    # ------------------------------------------------------------------
+    # Lethal-detect short-circuit
+    # ------------------------------------------------------------------
+
+    def _maybe_lethal_attacker_decision(
+        self,
+        state: MtgGameStateAdapter,
+        player_id: PlayerID,
+        legal: list[Decision],
+    ) -> Optional[Decision]:
+        """If the heuristic is enabled, the adapter is at an
+        AttackerDecision priority moment, and the heuristic detects
+        guaranteed lethal, return the appropriate AttackerDecision
+        for the head pending attacker. Otherwise return None.
+
+        The decision returned is one of the ``legal`` options — the
+        AttackerDecision for the head pending attacker with
+        ``attack=True`` if the head is in the lethal subset, or
+        ``attack=False`` if not.
+
+        Aborts (returns None) if:
+        - The heuristic is disabled.
+        - We're not at an attacker sub-decision moment.
+        - The viewer is not the active player whose attackers these
+          are (sanity gate; should match for active-player priority
+          during attacker-decision phase).
+        - ``detect_lethal_attack`` returns None.
+        """
+        if not self.enable_lethal_detect:
+            return None
+        # Only fires at attacker-decision sub-moments. Combat phase
+        # check on the adapter is the cleanest gate.
+        if state.combat_phase != "attackers":
+            return None
+        # The adapter exposes one AttackerDecision pair per call —
+        # legal must be exactly the (attack=True, attack=False) pair
+        # for the head pending attacker. If it isn't, something
+        # else is going on; abort.
+        if not all(isinstance(d, AttackerDecision) for d in legal):
+            return None
+        # Sanity: the active_player() returned by the adapter during
+        # attacker-decision phase is the turn holder. If the search
+        # is being driven from a different viewer's perspective, we
+        # don't know whether THIS viewer's attackers produce lethal
+        # for this viewer — abort.
+        if state.active_player() != player_id:
+            return None
+        # Run the heuristic against the underlying engine state.
+        lethal_set = detect_lethal_attack(state.engine_state, player_id)
+        if lethal_set is None:
+            return None
+        # Pick the matching legal decision: attack=True if the head
+        # pending attacker is in the lethal set, attack=False
+        # otherwise. (eligible_attackers used by the heuristic
+        # mirrors the adapter's pending list, so the head should
+        # always be in the lethal set when one was detected today
+        # — defensive fallthrough handles edge cases.)
+        head_id = legal[0].attacker_id
+        want_attack = head_id in lethal_set
+        for d in legal:
+            if d.attacker_id == head_id and d.attack == want_attack:
+                return d
+        # Defensive: legal didn't contain the expected pairing.
+        return None
+
+    def reset_lethal_detect_count(self) -> None:
+        """Reset the lethal-detect fire counter to zero. Useful for
+        tests / benchmarks that want to measure firings over a
+        specific game-window."""
+        self._lethal_detect_fires = 0
 
     # ------------------------------------------------------------------
     # Search loops
