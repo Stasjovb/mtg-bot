@@ -127,6 +127,29 @@
   .pairing-status.running { color: #93c5fd; }
   .pairing-status.completed { color: #4ade80; }
   .pairing-status.failed { color: #fca5a5; }
+
+  /* Per-machine sub-cards inside aggregated training-progress cards.
+     One row per host with three perf-only stats: secs/game, crashes,
+     workers. Compact — uses the same dark surface + border the parent
+     stats grid uses, just smaller padding and font. */
+  .machines { margin-top: 14px; display: flex;
+    flex-direction: column; gap: 4px; }
+  .machines-label { font-size: 0.7rem; color: var(--muted);
+    text-transform: uppercase; letter-spacing: 0.08em;
+    margin-bottom: 2px; }
+  .machine-row { display: grid;
+    grid-template-columns: 1fr repeat(3, minmax(80px, auto));
+    align-items: center; gap: 12px;
+    padding: 6px 10px; background: var(--bg);
+    border: 1px solid var(--border); border-radius: 8px;
+    font-size: 0.78rem; }
+  .machine-label { font-family: monospace; color: var(--text);
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .machine-stat { display: flex; flex-direction: column; gap: 2px;
+    text-align: right; }
+  .machine-stat-label { font-size: 0.6rem; color: var(--muted);
+    text-transform: uppercase; letter-spacing: 0.06em; }
+  .machine-stat-value { font-family: monospace; font-size: 0.82rem; }
 </style>
 </head>
 <body>
@@ -266,6 +289,7 @@ function ensureCard(run) {
         <div class="stat"><div class="stat-label">P0 / P1 / draws</div><div class="stat-value" data-field="winrate">—</div></div>
         <div class="stat"><div class="stat-label">Crashed</div><div class="stat-value" data-field="crashed">—</div></div>
       </div>
+      <div class="machines" data-field="machines" hidden></div>
       <div class="replays-footer" data-field="replays"></div>`;
   } else if (k === 'eval') {
     el.innerHTML = `
@@ -289,6 +313,7 @@ function ensureCard(run) {
         <div class="stat"><div class="stat-label">ETA</div><div class="stat-value" data-field="eta">—</div></div>
         <div class="stat"><div class="stat-label">Games / hr</div><div class="stat-value" data-field="gph">—</div></div>
       </div>
+      <div class="machines" data-field="machines" hidden></div>
       <div class="replays-footer" data-field="replays"></div>`;
   } else if (k === 'bench') {
     el.innerHTML = `
@@ -342,6 +367,7 @@ function ensureCard(run) {
         <div class="stat"><div class="stat-label">Value loss</div><div class="stat-value" data-field="value">—</div></div>
         <div class="stat"><div class="stat-label">Policy loss</div><div class="stat-value" data-field="policy">—</div></div>
       </div>
+      <div class="machines" data-field="machines" hidden></div>
       <div class="chart-wrap"><canvas data-field="chart"></canvas></div>`;
   }
   return el;
@@ -398,6 +424,7 @@ function fillRun(el, run) {
       (run.p0_wins || 0) + ' / ' + (run.p1_wins || 0) + ' / ' + (run.draws || 0);
     el.querySelector('[data-field="crashed"]').textContent =
       String(run.crashed || 0);
+    renderMachines(el, run);
     renderReplaysFooter(el, run);
   } else if (k === 'eval') {
     const total = run.n_games_total || 0;
@@ -415,6 +442,7 @@ function fillRun(el, run) {
     el.querySelector('[data-field="eta"]').textContent =
       status === 'running' ? fmtSeconds(run.estimated_remaining_seconds) : '—';
     el.querySelector('[data-field="gph"]').textContent = fmtNum(run.games_per_hour, 0);
+    renderMachines(el, run);
     renderReplaysFooter(el, run);
   } else if (k === 'bench') {
     fillBenchCard(el, run);
@@ -431,6 +459,7 @@ function fillRun(el, run) {
     el.querySelector('[data-field="total"]').textContent = fmtLoss(totalLoss);
     el.querySelector('[data-field="value"]').textContent = fmtLoss(valueLoss);
     el.querySelector('[data-field="policy"]').textContent = fmtLoss(policyLoss);
+    renderMachines(el, run);
     drawTrainingChart(el, run);
   }
 }
@@ -519,6 +548,67 @@ function renderReplaysFooter(el, run) {
       renderReplaysFooter(el, run);
     });
   }
+}
+
+function fmtSecsPerGame(v) {
+  // Per-host secs/game: small magnitudes (single-digit seconds) are
+  // common for fast vanilla-creature games, so two-decimal precision
+  // is more useful than rounding to whole seconds.
+  if (v == null || !isFinite(v) || v < 0) return '—';
+  if (v >= 100) return v.toFixed(0) + 's';
+  if (v >= 10) return v.toFixed(1) + 's';
+  return v.toFixed(2) + 's';
+}
+
+function renderMachines(el, run) {
+  // Aggregated distributed runs include a `machines` array (one entry
+  // per shard). Render as a compact row of mini sub-cards inside the
+  // parent card showing performance-only stats: secs/game, crashes,
+  // workers. Single-machine runs (no aggregator) won't have this key
+  // and the section stays hidden.
+  const slot = el.querySelector('[data-field="machines"]');
+  if (!slot) return;
+  const machines = Array.isArray(run.machines) ? run.machines : [];
+  if (!machines.length) {
+    slot.hidden = true;
+    slot.innerHTML = '';
+    return;
+  }
+  slot.hidden = false;
+  // Stable label sort so the row order doesn't shuffle between polls
+  // (machines come from a glob; sort keys would otherwise depend on
+  // filename collation).
+  const sorted = [...machines].sort(
+    (a, b) => String(a.label || '').localeCompare(String(b.label || '')),
+  );
+  let html = '<div class="machines-label">Per machine</div>';
+  for (const m of sorted) {
+    const secsPerGame = (m.per_game_seconds != null
+      && isFinite(m.per_game_seconds))
+      ? m.per_game_seconds
+      : (m.elapsed_seconds && m.n_games_done
+        ? m.elapsed_seconds / m.n_games_done
+        : null);
+    html += '<div class="machine-row">'
+      + '<div class="machine-label">' + esc(m.label || '?') + '</div>'
+      + '<div class="machine-stat">'
+        + '<div class="machine-stat-label">secs/game</div>'
+        + '<div class="machine-stat-value">'
+        + esc(fmtSecsPerGame(secsPerGame)) + '</div>'
+      + '</div>'
+      + '<div class="machine-stat">'
+        + '<div class="machine-stat-label">crashes</div>'
+        + '<div class="machine-stat-value">'
+        + String(m.crashed || 0) + '</div>'
+      + '</div>'
+      + '<div class="machine-stat">'
+        + '<div class="machine-stat-label">workers</div>'
+        + '<div class="machine-stat-value">'
+        + String(m.n_workers || 0) + '</div>'
+      + '</div>'
+      + '</div>';
+  }
+  slot.innerHTML = html;
 }
 
 function fmtPct(v) {
