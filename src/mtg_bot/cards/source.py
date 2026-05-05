@@ -25,13 +25,6 @@ class CardSource(Protocol):
         """All card printings keyed by name (lands + nonlands)."""
         ...  # pragma: no cover
 
-    def build_mono_color_deck(
-        self, color: str, seed: int | None = None
-    ) -> list[str]:
-        """Return a 60-card mono-color deck of card names drawn from
-        this source's pool."""
-        ...  # pragma: no cover
-
 
 _active_source: CardSource = OracleParserCardSource()
 

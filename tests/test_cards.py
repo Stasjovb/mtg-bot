@@ -62,19 +62,3 @@ def test_make_creature_keywords_from_tuple():
     assert "haste" in c.keywords
 
 
-def test_build_deck_is_60_cards():
-    deck = get_active_source().build_mono_color_deck("G", seed=1)
-    assert len(deck) == 60
-    assert deck.count("Forest") == 24
-    # Every non-Forest card must be a card in the pool whose color is either
-    # green or colorless (colorless cards get included in any mono-color deck).
-    for name in deck:
-        if name == "Forest":
-            continue
-        assert name in _PRINTINGS
-        colors = _PRINTINGS[name].mana_cost.colors
-        assert "G" in colors or not colors
-
-
-def test_build_deck_is_deterministic_with_seed():
-    assert get_active_source().build_mono_color_deck("R", seed=7) == get_active_source().build_mono_color_deck("R", seed=7)
