@@ -181,7 +181,21 @@ def create_app(
     windows_repo_path: str = "$env:USERPROFILE\\Projects\\mtg-bot",
     template_dir: Path = _HERE,
     repo_root: Optional[Path] = None,
+    progress_dir: Optional[Path] = None,
 ) -> Flask:
+    """Build the master HTTP server. ``progress_dir`` (when set)
+    enables Stop-button propagation to remotes: each ``/queue/take``
+    request first checks for a ``.STOP_<run_id>`` sentinel, and on
+    hit returns 410 Gone with a ``"stopped"`` body so remotes drain
+    cleanly without playing extra games. Default ``None`` falls back
+    to the old behavior (no stop check) for callers that haven't
+    plumbed a progress_dir through yet."""
+    # Local import to avoid scripts/ depending on the package at module
+    # import time during early bootstrap.
+    from mtg_bot.training.stop_signal import (  # noqa: WPS433
+        stop_requested as _stop_requested,
+    )
+
     app = Flask(__name__)
 
     @app.route("/")
@@ -253,12 +267,28 @@ def create_app(
 
         Atomic: the lock-protected slice + advance ensures two
         workers calling concurrently can't get overlapping ranges.
+
+        Stop-button propagation: when ``progress_dir`` is configured
+        and a ``.STOP_<run_id>`` sentinel exists, returns 410 Gone
+        with body ``{"stopped": True}``. Remotes treat 410 as a
+        clean drain signal — they exit their take-loop after
+        finishing their current game, the same way they handle 404
+        on a master shutdown.
         """
         data = request.get_json(silent=True) or {}
         run_id = data.get("run_id")
         batch_size = int(data.get("batch_size", 25))
         if batch_size < 1:
             return jsonify({"error": "batch_size must be >= 1"}), 400
+        if progress_dir is not None and run_id and _stop_requested(
+            progress_dir, run_id,
+        ):
+            return jsonify({
+                "stopped": True,
+                "run_id": run_id,
+                "games": [],
+                "remaining": 0,
+            }), 410
         with _queues_lock:
             q = _queues.get(run_id)
             if q is None:
@@ -357,6 +387,16 @@ def main(argv=None) -> None:
             "GitHub)."
         ),
     )
+    parser.add_argument(
+        "--progress-dir", type=Path, default=None,
+        help=(
+            "Path to the master's training_progress directory. When "
+            "set, /queue/take checks for a .STOP_<run_id> sentinel "
+            "before handing out games and returns 410 Gone if "
+            "present, so the UI's Stop button propagates cleanly to "
+            "remotes."
+        ),
+    )
     args = parser.parse_args(argv)
 
     repo_url = args.repo_url or _detect_repo_url(args.repo_root)
@@ -381,6 +421,7 @@ def main(argv=None) -> None:
         master_tailnet_name=master_tailnet_name,
         port=args.port,
         repo_root=args.repo_root,
+        progress_dir=args.progress_dir,
     )
     print(
         f"[serve_setup] master={master_tailnet_name} repo={repo_url} "

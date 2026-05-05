@@ -233,6 +233,47 @@ def _queue_app():
     return app.test_client()
 
 
+def test_queue_take_returns_410_when_stop_sentinel_present(tmp_path: Path):
+    """Stop-button propagation to remotes: a master-side
+    .STOP_<run_id> sentinel turns subsequent /queue/take into a 410
+    Gone with ``stopped: True``. Remotes treat 410 the same as 404
+    (drain + exit)."""
+    serve = _load_module()
+    app = serve.create_app(
+        repo_url="(unused)", master_pubkey="",
+        master_tailnet_name="m", port=5099,
+        template_dir=_REPO_ROOT / "scripts",
+        repo_root=None,
+        progress_dir=tmp_path,
+    )
+    c = app.test_client()
+    c.post("/queue/init", json={
+        "run_id": "iter_001", "total_games": 10,
+    })
+    # Drop the sentinel.
+    (tmp_path / ".STOP_iter_001").write_text("{}", encoding="utf-8")
+    res = c.post("/queue/take", json={
+        "run_id": "iter_001", "batch_size": 5,
+    })
+    assert res.status_code == 410
+    body = res.get_json()
+    assert body["stopped"] is True
+    assert body["games"] == []
+
+
+def test_queue_take_no_progress_dir_keeps_legacy_behavior():
+    """Default ``progress_dir=None`` keeps the old behavior: stops
+    are not even considered. Backward-compat for any caller that
+    builds the app without plumbing a progress dir."""
+    c = _queue_app()  # no progress_dir
+    c.post("/queue/init", json={"run_id": "iter_001", "total_games": 5})
+    res = c.post("/queue/take", json={
+        "run_id": "iter_001", "batch_size": 5,
+    })
+    assert res.status_code == 200
+    assert res.get_json()["games"] == [0, 1, 2, 3, 4]
+
+
 def test_queue_init_then_take_advances_through_all_games():
     c = _queue_app()
     res = c.post("/queue/init", json={
