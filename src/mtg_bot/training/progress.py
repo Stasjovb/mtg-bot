@@ -119,6 +119,11 @@ class DataGenProgress:
     # link from this run's card directly to its game list.
     # ``None`` means no replays are being captured for this run.
     replays_dir: Optional[str] = None
+    # Parent iteration's cycle_id, when this run is a child stage of an
+    # iterate_alphazero cycle. Surfaces into the progress JSON so the
+    # UI's Stop button knows whether to stop the cycle (whole iter
+    # aborts) or just this child run. ``None`` means standalone run.
+    cycle_id: Optional[str] = None
 
     # Internal state — populated in __post_init__ and update()
     _started_perf: float = field(default=0.0, init=False)
@@ -199,7 +204,9 @@ class DataGenProgress:
 
     def finalize(self, status: str = "completed") -> None:
         """Emit the final snapshot. Caller passes 'completed' on
-        success, 'failed' on exception. The snapshot is forced
+        success, 'failed' on exception, 'stopped' on user-requested
+        abort via the Stop button (sentinel file under
+        ``training_progress/.STOP_<run_id>``). The snapshot is forced
         regardless of when the last flush happened, and includes
         ``ended_at`` so consumers know the run is terminal."""
         self._status = status
@@ -256,6 +263,7 @@ class DataGenProgress:
             "git_commit": self._git_commit,
             "notes": self.notes,
             "replays_dir": self.replays_dir,
+            "cycle_id": self.cycle_id,
         }
         atomic_write_json(self.progress_path, payload)
         self._last_flush_perf = now
@@ -305,6 +313,8 @@ class EvalProgress:
     flush_interval_s: float = 5.0
     # See ``DataGenProgress.replays_dir`` — same contract.
     replays_dir: Optional[str] = None
+    # See ``DataGenProgress.cycle_id`` — same contract.
+    cycle_id: Optional[str] = None
 
     _started_perf: float = field(default=0.0, init=False)
     _started_iso: str = field(default="", init=False)
@@ -373,7 +383,10 @@ class EvalProgress:
 
     def finalize(self, status: str = "completed") -> None:
         """Emit the final snapshot. ``status`` is 'completed' on
-        normal exit, 'failed' if the eval bailed out partway."""
+        normal exit, 'failed' if the eval bailed out partway,
+        'stopped' if the user clicked the Stop button (sentinel
+        file under ``training_progress/.STOP_<run_id>`` was seen at
+        a stage boundary)."""
         self._status = status
         self._flush_now(ended=True)
 
@@ -429,6 +442,7 @@ class EvalProgress:
             "git_commit": self._git_commit,
             "notes": self.notes,
             "replays_dir": self.replays_dir,
+            "cycle_id": self.cycle_id,
         }
         atomic_write_json(self.progress_path, payload)
         self._last_flush_perf = now
@@ -597,6 +611,8 @@ class BenchProgress:
     command: str = ""
     notes: str = ""
     flush_interval_s: float = 5.0
+    # See ``DataGenProgress.cycle_id`` — same contract.
+    cycle_id: Optional[str] = None
 
     _started_perf: float = field(default=0.0, init=False)
     _started_iso: str = field(default="", init=False)
@@ -792,9 +808,12 @@ class BenchProgress:
         self._current = None
 
     def finalize(self, status: str = "completed") -> None:
-        """Emit the final run-level snapshot. Any still-active pairing
-        is force-finalized with the same status so the UI doesn't
-        leave orphan 'running' rows behind."""
+        """Emit the final run-level snapshot. ``status`` is
+        'completed' on normal exit, 'failed' on exception, or
+        'stopped' when the user requested a stop via the UI sentinel.
+        Any still-active pairing is force-finalized with the same
+        status so the UI doesn't leave orphan 'running' rows behind.
+        """
         if self._current is not None:
             # Mirror the run-level status onto the orphan pairing.
             self.finish_pairing(status=status)
@@ -879,6 +898,7 @@ class BenchProgress:
             "command": self.command,
             "git_commit": self._git_commit,
             "notes": self.notes,
+            "cycle_id": self.cycle_id,
         }
         atomic_write_json(self.progress_path, payload)
         self._last_flush_perf = now
