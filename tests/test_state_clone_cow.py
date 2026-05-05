@@ -92,14 +92,15 @@ def test_cowlist_shared_forks_on_first_mutation():
     assert cloned == []
 
     # First mutation on src forks: src keeps originals + appended;
-    # peer gets the cloned pool.
+    # peer gets the cloned pool. Post-optimization, only ``_owned`` is
+    # the canonical "out of share group" indicator — ``_clone_each``
+    # and ``_share_group`` are intentionally NOT reset on the
+    # transition because they're never read once ``_owned=True``
+    # (see ``_fork`` in game.py for the perf rationale: those writes
+    # were ~3 attribute stores per fork of pure hygiene cost).
     src.append(99)
     assert src._owned is True
-    assert src._clone_each is None
-    assert src._share_group is None
     assert peer._owned is True
-    assert peer._clone_each is None
-    assert peer._share_group is None
     # Src kept its original element identities and appended the new value.
     assert list(src) == [1, 2, 3, 99]
     # Peer has the cloned elements installed.
@@ -818,3 +819,214 @@ def test_clone_chain_explicit_fields_isolated():
     assert a.creatures_died_this_turn == 1
     assert b.creatures_died_this_turn == 2
     assert c.creatures_died_this_turn == 3
+
+
+# --- _CowList fork-optimization regression tests --------------------------
+#
+# These exercise the post-optimization ``_fork`` slow-path + inlined
+# ``_owned``-check fast-path on the mutators. The two invariants that
+# matter for both correctness AND perf:
+#
+#   1. After any fork, the mutator (``self``) and the peer that becomes
+#      owned MUST have ``_share_group = None``. Skipping this nulling
+#      leaves a self<->group<->peer cycle that the cyclic-GC has to
+#      collect rather than refcount-reclaim, which measurably regresses
+#      the per-iteration ISMCTS fork loop.
+#   2. The in-mutator ``if not self._owned: self._fork()`` form must
+#      stay equivalent to the previous ``self._fork_if_shared()`` call
+#      for every list mutator, including the rarely-hit ones (sort,
+#      __imul__, etc.).
+
+
+def test_fork_breaks_share_group_cycle():
+    """After a 2-member share group forks, neither side may still
+    point at the original ``_share_group`` list. Otherwise the cycle
+    self -> group -> [self, peer] -> peer -> group makes the cyclic GC
+    do work the refcount path could have done — a measurable
+    regression on tight per-iteration fork loops (the per-clone case
+    in ISMCTS rollout).
+    """
+    src = _CowList([1, 2, 3])
+    peer = _CowList([1, 2, 3])
+    src._owned = False
+    peer._owned = False
+    src._clone_each = lambda x: -x
+    peer._clone_each = lambda x: -x
+    group = [src, peer]
+    src._share_group = group
+    peer._share_group = group
+
+    # Trigger fork via append on src.
+    src.append(99)
+
+    assert src._owned is True
+    assert peer._owned is True
+    assert src._share_group is None, (
+        "self's _share_group must be cleared after fork to break the "
+        "self<->group<->peer cycle (cyclic-GC perf trap)."
+    )
+    assert peer._share_group is None, (
+        "peer's _share_group must be cleared after fork to break the "
+        "cycle on the peer side too."
+    )
+
+
+def test_fork_breaks_share_group_cycle_three_member():
+    """Same invariant for 3-member share groups: after self forks, the
+    remaining peers form a NEW group together (not the old one), and
+    self drops its reference to the old group."""
+    a = _CowList([1, 2, 3])
+    b = _CowList([1, 2, 3])
+    c = _CowList([1, 2, 3])
+    group = [a, b, c]
+    for cow in (a, b, c):
+        cow._owned = False
+        cow._clone_each = lambda x: -x
+        cow._share_group = group
+
+    a.append(99)
+
+    assert a._owned is True
+    assert a._share_group is None
+    # b and c remain shared (in a smaller group of two), so they are
+    # still ``_owned=False`` and reference the new (peer-only) group.
+    assert b._owned is False
+    assert c._owned is False
+    new_group = b._share_group
+    assert new_group is c._share_group  # both point at the same new list
+    assert new_group is not group  # a fresh list, not the old one
+    assert a not in new_group
+    assert b in new_group and c in new_group
+
+
+def test_fork_three_member_subsequent_fork_isolates_remaining_peer():
+    """After a 3-member group's first fork (a forks; b/c become a new
+    2-member group), a subsequent fork on b should still work and
+    leave c owned. Pins the chained-fork correctness across the new
+    fast-path size==2 branch."""
+    a = _CowList([1, 2, 3])
+    b = _CowList([1, 2, 3])
+    c = _CowList([1, 2, 3])
+    group = [a, b, c]
+    for cow in (a, b, c):
+        cow._owned = False
+        cow._clone_each = lambda x: [x]  # distinct clones
+        cow._share_group = group
+
+    # First fork: a leaves the group.
+    a.append(99)
+    # Second fork: b leaves what's left (a 2-member group of b, c).
+    b.pop()
+
+    assert a._owned and b._owned and c._owned
+    assert a._share_group is None
+    assert b._share_group is None
+    assert c._share_group is None
+
+
+def test_fork_inlined_check_dispatches_each_mutator():
+    """Every mutator (post-optimization, with the fast-path check
+    inlined as ``if not self._owned: self._fork()``) must still drive
+    the fork on a freshly-shared list. Sister test to
+    ``test_cowlist_each_mutator_forks`` but specifically validates
+    the inline form (rather than calling _fork_if_shared() through a
+    bound method)."""
+    def make_pair(elements):
+        a = _CowList(elements)
+        b = _CowList(elements)
+        a._owned = False
+        b._owned = False
+        a._clone_each = lambda x: x
+        b._clone_each = lambda x: x
+        group = [a, b]
+        a._share_group = group
+        b._share_group = group
+        return a, b
+
+    # Each mutator on the LHS forks (LHS keeps originals + delta;
+    # RHS becomes owned with original elements).
+    cases = [
+        ("append",       lambda lst: lst.append(99)),
+        ("extend",       lambda lst: lst.extend([4, 5])),
+        ("insert",       lambda lst: lst.insert(0, 0)),
+        ("remove",       lambda lst: lst.remove(2)),
+        ("pop_default",  lambda lst: lst.pop()),
+        ("pop_index",    lambda lst: lst.pop(0)),
+        ("clear",        lambda lst: lst.clear()),
+        ("reverse",      lambda lst: lst.reverse()),
+        ("sort",         lambda lst: lst.sort()),
+        ("setitem",      lambda lst: lst.__setitem__(0, 99)),
+        ("delitem",      lambda lst: lst.__delitem__(0)),
+        ("iadd",         lambda lst: lst.__iadd__([4])),
+        ("imul",         lambda lst: lst.__imul__(2)),
+    ]
+    for label, mutate in cases:
+        a, b = make_pair([1, 2, 3])
+        mutate(a)
+        assert a._owned is True, f"{label}: did not fork self"
+        assert b._owned is True, f"{label}: did not fork peer"
+        assert a._share_group is None, (
+            f"{label}: did not break share_group cycle on self"
+        )
+        assert b._share_group is None, (
+            f"{label}: did not break share_group cycle on peer"
+        )
+
+
+def test_fork_owned_no_op_skips_share_group_writes():
+    """When ``_fork_if_shared`` is called on an already-owned list,
+    nothing happens — including no spurious writes to ``_share_group``
+    or ``_clone_each``. Pins that the fast-path branch returns
+    immediately on the inline check."""
+    cow = _CowList([1, 2, 3])
+    # Deliberately set non-None values; the no-op must NOT clear them.
+    sentinel_group = ["sentinel"]
+    sentinel_cloner = lambda x: x
+    cow._share_group = sentinel_group
+    cow._clone_each = sentinel_cloner
+    assert cow._owned is True
+
+    cow._fork_if_shared()  # no-op
+    cow.append(4)  # owned mutator, also no-op fork
+
+    # Sentinels untouched: the fast-path didn't even probe these.
+    assert cow._share_group is sentinel_group
+    assert cow._clone_each is sentinel_cloner
+
+
+def test_fork_iteration_followed_by_explicit_fork():
+    """Verifies the public ``fork()`` entry point still drives the
+    underlying ``_fork`` via the inline ``if self._owned`` guard. This
+    is the ``run_cleanup_step`` pattern (``p.exile.fork()`` before an
+    in-place attribute mutation loop)."""
+    cloned = []
+
+    def clone_each(x):
+        cloned.append(x)
+        return [x]  # distinct clones
+
+    src = _CowList([1, 2, 3])
+    peer = _CowList([1, 2, 3])
+    src._owned = False
+    peer._owned = False
+    src._clone_each = clone_each
+    peer._clone_each = clone_each
+    group = [src, peer]
+    src._share_group = group
+    peer._share_group = group
+
+    # Public fork() — same code path as the cleanup-step pattern.
+    src.fork()
+    assert src._owned is True
+    assert peer._owned is True
+    assert src._share_group is None
+    assert peer._share_group is None
+    assert cloned == [1, 2, 3]
+    # src kept its originals; peer got the clones.
+    assert list(src) == [1, 2, 3]
+    assert list(peer) == [[1], [2], [3]]
+
+    # Subsequent fork() on owned src is a fast-path no-op.
+    cloned.clear()
+    src.fork()
+    assert cloned == []
