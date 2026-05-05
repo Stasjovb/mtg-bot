@@ -1256,12 +1256,20 @@ def test_run_shard_remote_call_sequence(monkeypatch, tmp_path):
     ), f"unexpected order: {seq}"
 
 
-def test_weight_push_failure_propagates(monkeypatch, tmp_path):
-    """If the scp push fails (non-zero exit / OSError), the error
-    must propagate. We previously had a silent-failure version that
-    burned a debug session — pin this so it doesn't regress."""
+def test_weight_push_failure_returns_failure_report(monkeypatch, tmp_path):
+    """If the scp weight-push fails (non-zero exit), the per-shard
+    runner must NOT raise — it returns a ``ShardSelfPlayReport`` with
+    ``success=False`` and an ``error_stage`` of ``"weight_push"``.
+    This is the resilience contract: one shard's SSH/SCP glitch can't
+    kill the master; the orchestrator aggregates whatever sibling
+    shards produced and continues. The failure is loud (printed to
+    stderr) and surfaces in the report's ``error`` field — not
+    silent."""
     from mtg_bot.training import distributed as dist
-    from mtg_bot.training.distributed import SelfPlayJobSpec
+    from mtg_bot.training.distributed import (
+        ShardSelfPlayReport,
+        SelfPlayJobSpec,
+    )
 
     monkeypatch.chdir(tmp_path)
     weights_rel = "trained_weights/v7/weights.pt"
@@ -1272,7 +1280,9 @@ def test_weight_push_failure_propagates(monkeypatch, tmp_path):
         def __init__(self): self.calls = []
         def __call__(self, cmd, *a, **kw):
             self.calls.append(list(cmd))
-            if cmd[0] == "scp":
+            if cmd[0] == "scp" and any(
+                p.endswith("weights.pt") for p in cmd
+            ):
                 raise subprocess.CalledProcessError(
                     1, cmd, output="", stderr="permission denied",
                 )
@@ -1305,17 +1315,32 @@ def test_weight_push_failure_propagates(monkeypatch, tmp_path):
         repo_path="/Users/g/repo",
         venv_python=".venv-py313/bin/python",
     )
-    with pytest.raises(subprocess.CalledProcessError):
-        dist.run_shard_remote(
-            shard, spec,
-            queue_url="http://master:5099",
-            run_id="iter_002",
-            iter_total_games=10,
-            progress_dir=tmp_path / "training_progress",
-            output_dir=tmp_path / "iterate_data",
-            run_id_prefix="iter_002",
-            stamp="20260503T230000Z",
-        )
+    report = dist.run_shard_remote(
+        shard, spec,
+        queue_url="http://master:5099",
+        run_id="iter_002",
+        iter_total_games=10,
+        progress_dir=tmp_path / "training_progress",
+        output_dir=tmp_path / "iterate_data",
+        run_id_prefix="iter_002",
+        stamp="20260503T230000Z",
+    )
+    assert isinstance(report, ShardSelfPlayReport)
+    assert report.success is False
+    assert report.error_stage == "weight_push"
+    assert "permission denied" in (report.error or "") or (
+        "CalledProcessError" in (report.error or "")
+    )
+    assert report.npz_paths == []
+    # Per-shard progress JSON marked failed so the UI sees it.
+    progress_json = (
+        tmp_path / "training_progress"
+        / "iter_002_shard_macbook.json"
+    )
+    assert progress_json.is_file()
+    payload = json.loads(progress_json.read_text(encoding="utf-8"))
+    assert payload["status"] == "failed"
+    assert "weight_push" in payload.get("error_note", "")
 
 
 # ---- _AggregateProgressPoller ----------------------------------
@@ -2647,3 +2672,1117 @@ def test_scp_cmd_carries_serveralive_options_both_directions():
         assert ("-o", "ServerAliveCountMax=5") in pairs, (
             f"{label} missing ServerAliveCountMax: {cmd!r}"
         )
+
+
+# ---- Per-shard SSH resilience -----------------------------------
+#
+# Today (2026-05-05) we hit a recurring failure where a Tailscale
+# blip / lingering ssh.exe / remote python crash made one shard's
+# ``_run_subprocess`` raise CalledProcessError. The exception
+# propagated up through the master and killed the iter, throwing
+# away other shards' completed work. The tests below pin the new
+# resilience contract:
+#
+# 1. Per-shard SSH/SCP failures are caught inside the runner, not
+#    raised. The runner returns a ShardSelfPlayReport / ShardEvalReport
+#    with success=False.
+# 2. Even on failure, the post-shard rsync stages still run — partial
+#    data on disk gets recovered.
+# 3. The orchestrator continues to other shards and aggregates
+#    whatever data it gets.
+# 4. Only when ALL shards fail and ZERO npzs are recovered does the
+#    orchestrator raise.
+
+
+def test_run_shard_remote_ssh_run_failure_returns_failure_report(
+    monkeypatch, tmp_path,
+):
+    """The self-play SSH run command raises CalledProcessError (the
+    most common failure mode on the cluster: Tailscale glitch, remote
+    python crash, manual kill of ssh.exe). The runner catches it,
+    logs loudly to stderr, marks the per-shard progress JSON failed,
+    and returns a failure report. It does NOT propagate the
+    exception."""
+    import subprocess
+    from mtg_bot.training import distributed as dist
+    from mtg_bot.training.distributed import (
+        ShardSelfPlayReport, SelfPlayJobSpec,
+    )
+
+    monkeypatch.chdir(tmp_path)
+    weights_rel = "trained_weights/v7/weights.pt"
+    (tmp_path / "trained_weights" / "v7").mkdir(parents=True)
+    (tmp_path / weights_rel).write_bytes(b"fake")
+
+    class _FailOnSelfPlay:
+        def __init__(self): self.calls = []
+        def __call__(self, cmd, *a, **kw):
+            self.calls.append(list(cmd))
+            if (cmd[0] == "ssh"
+                    and "run_self_play_shard.py" in cmd[-1]):
+                raise subprocess.CalledProcessError(
+                    255, cmd, output="",
+                    stderr="ssh: connection closed",
+                )
+
+            class _Result:
+                returncode = 0
+                stdout = ""
+                stderr = ""
+            return _Result()
+
+    rec = _FailOnSelfPlay()
+    monkeypatch.setattr(dist, "_run_subprocess", rec)
+    monkeypatch.setattr(dist.subprocess, "run", rec)
+
+    class _NoopPoller:
+        def __init__(self, *a, **kw): pass
+        def start(self): pass
+        def stop(self): pass
+    monkeypatch.setattr(dist, "_ProgressPoller", _NoopPoller)
+
+    spec = SelfPlayJobSpec(
+        weights_path=weights_rel,
+        samples=2, inner_nodes=10, hidden_sizes=(64,),
+        base_seed=0, enable_mulligans=False,
+        per_game_timeout_sec=None,
+    )
+    shard = ShardConfig(
+        host="macbook", n_games=10, user="g",
+        repo_path="/Users/g/repo",
+        venv_python=".venv-py313/bin/python",
+    )
+    report = dist.run_shard_remote(
+        shard, spec,
+        queue_url="http://master:5099",
+        run_id="iter_002",
+        iter_total_games=10,
+        progress_dir=tmp_path / "training_progress",
+        output_dir=tmp_path / "iterate_data",
+        run_id_prefix="iter_002",
+        stamp="20260503T230000Z",
+    )
+    assert isinstance(report, ShardSelfPlayReport)
+    assert report.success is False
+    assert report.error_stage == "self_play"
+    assert "ssh" in (report.error or "").lower() or (
+        "CalledProcessError" in (report.error or "")
+    )
+    # Post-failure rsync stages still ran:
+    classes = []
+    for c in rec.calls:
+        if c[0] == "scp":
+            # Find the user@host:path arg; for from_remote=True it's
+            # the second-to-last positional (followed by local dest).
+            remote_arg = next(
+                (a for a in c if "@" in a and ":" in a), None,
+            )
+            if remote_arg is not None:
+                rhs = remote_arg.split(":", 1)[1]
+                if rhs.endswith(".json"):
+                    classes.append("progress_pull")
+                elif rhs.endswith(".jsonl"):
+                    classes.append("events_pull")
+        if c[0] == "ssh" and (
+            "iterate_data" in c[-1]
+            and ("ls " in c[-1] or "dir /b" in c[-1])
+        ):
+            classes.append("list_npzs")
+    assert "progress_pull" in classes, (
+        "expected progress JSON rsync attempt after SSH failure"
+    )
+    assert "events_pull" in classes, (
+        "expected events JSONL rsync attempt after SSH failure"
+    )
+    assert "list_npzs" in classes, (
+        "expected npz listing attempt after SSH failure (the data "
+        "may still be on the remote disk after the wrapper died)"
+    )
+
+    # Per-shard progress JSON marked failed.
+    progress_json = (
+        tmp_path / "training_progress" / "iter_002_shard_macbook.json"
+    )
+    assert progress_json.is_file()
+    payload = json.loads(progress_json.read_text(encoding="utf-8"))
+    assert payload["status"] == "failed"
+    assert "self_play" in payload.get("error_note", "")
+
+
+def test_run_shard_remote_recovers_npzs_after_ssh_failure(
+    monkeypatch, tmp_path,
+):
+    """Real-world case from 2026-05-05: Mac shard ran 329 games and
+    wrote 24 npzs, then ssh.exe lingered and we manually killed it.
+    The data was on disk; the orchestrator should pull it back. This
+    test pins that behavior with a scripted listing."""
+    import subprocess
+    from mtg_bot.training import distributed as dist
+    from mtg_bot.training.distributed import SelfPlayJobSpec
+
+    monkeypatch.chdir(tmp_path)
+    weights_rel = "trained_weights/v7/weights.pt"
+    (tmp_path / "trained_weights" / "v7").mkdir(parents=True)
+    (tmp_path / weights_rel).write_bytes(b"fake")
+
+    listing_payload = (
+        "iter_002_shard_macbook_chunk_0001_20260503T230000Z.npz\n"
+        "iter_002_shard_macbook_chunk_0002_20260503T230000Z.npz\n"
+    )
+
+    class _FailMidPlayWithRecoverableNpzs:
+        def __init__(self): self.calls = []
+        def __call__(self, cmd, *a, **kw):
+            self.calls.append(list(cmd))
+            tail = cmd[-1] if cmd else ""
+            stdout = ""
+            if cmd[0] == "ssh":
+                if "run_self_play_shard.py" in tail:
+                    raise subprocess.CalledProcessError(
+                        255, cmd, output="", stderr="killed",
+                    )
+                if "iterate_data" in tail and (
+                    "ls " in tail or "dir /b" in tail
+                ):
+                    stdout = listing_payload
+
+            class _Result:
+                returncode = 0
+                stderr = ""
+                def __init__(self_, _stdout):
+                    self_.stdout = _stdout
+            return _Result(stdout)
+
+    rec = _FailMidPlayWithRecoverableNpzs()
+    monkeypatch.setattr(dist, "_run_subprocess", rec)
+    monkeypatch.setattr(dist.subprocess, "run", rec)
+
+    class _NoopPoller:
+        def __init__(self, *a, **kw): pass
+        def start(self): pass
+        def stop(self): pass
+    monkeypatch.setattr(dist, "_ProgressPoller", _NoopPoller)
+
+    spec = SelfPlayJobSpec(
+        weights_path=weights_rel,
+        samples=2, inner_nodes=10, hidden_sizes=(64,),
+        base_seed=0, enable_mulligans=False,
+        per_game_timeout_sec=None,
+    )
+    shard = ShardConfig(
+        host="macbook", n_games=329, user="g",
+        repo_path="/Users/g/repo",
+        venv_python=".venv-py313/bin/python",
+    )
+    report = dist.run_shard_remote(
+        shard, spec,
+        queue_url="http://master:5099",
+        run_id="iter_002",
+        iter_total_games=329,
+        progress_dir=tmp_path / "training_progress",
+        output_dir=tmp_path / "iterate_data",
+        run_id_prefix="iter_002",
+        stamp="20260503T230000Z",
+    )
+    # Failure report — but with the 2 npzs recovered.
+    assert report.success is False
+    assert report.error_stage == "self_play"
+    assert len(report.npz_paths) == 2, (
+        f"expected 2 npzs recovered, got {report.npz_paths}"
+    )
+
+
+def test_run_shard_eval_remote_ssh_failure_returns_failure_report(
+    monkeypatch, tmp_path,
+):
+    """Eval-side mirror: an SSH run failure on the eval shard
+    returns a ShardEvalReport with success=False and zero counts
+    rather than raising."""
+    import subprocess
+    from mtg_bot.training import distributed as dist
+    from mtg_bot.training.distributed import (
+        ShardEvalReport, EvalJobSpec,
+    )
+
+    monkeypatch.chdir(tmp_path)
+    new_weights = "trained_weights/v7/weights.pt"
+    old_weights = "trained_weights/v6/weights.pt"
+    (tmp_path / "trained_weights" / "v7").mkdir(parents=True)
+    (tmp_path / "trained_weights" / "v6").mkdir(parents=True)
+    (tmp_path / new_weights).write_bytes(b"new")
+    (tmp_path / old_weights).write_bytes(b"old")
+
+    class _FailOnEval:
+        def __init__(self): self.calls = []
+        def __call__(self, cmd, *a, **kw):
+            self.calls.append(list(cmd))
+            if (cmd[0] == "ssh"
+                    and "run_self_play_shard.py" in cmd[-1]
+                    and "--mode=eval" in cmd[-1]):
+                raise subprocess.CalledProcessError(
+                    255, cmd, output="",
+                    stderr="ssh: tailscale unreachable",
+                )
+
+            class _Result:
+                returncode = 0
+                stdout = ""
+                stderr = ""
+            return _Result()
+
+    rec = _FailOnEval()
+    monkeypatch.setattr(dist, "_run_subprocess", rec)
+    monkeypatch.setattr(dist.subprocess, "run", rec)
+
+    class _NoopPoller:
+        def __init__(self, *a, **kw): pass
+        def start(self): pass
+        def stop(self): pass
+    monkeypatch.setattr(dist, "_ProgressPoller", _NoopPoller)
+
+    spec = EvalJobSpec(
+        new_weights_path=new_weights,
+        old_weights_path=old_weights,
+        samples=1, inner_nodes=10, hidden_sizes=(16,),
+        base_seed=0, enable_mulligans=False,
+        per_game_timeout_sec=None,
+        opponent_label="v6",
+    )
+    shard = ShardConfig(
+        host="macbook", n_games=10, user="g",
+        repo_path="/Users/g/repo",
+        venv_python=".venv-py313/bin/python",
+    )
+    report = dist.run_shard_eval_remote(
+        shard, spec,
+        queue_url="http://master:5099",
+        run_id="iter_002_eval_v7",
+        iter_total_games=10,
+        progress_dir=tmp_path / "training_progress",
+        stamp="20260503T230000Z",
+    )
+    assert isinstance(report, ShardEvalReport)
+    assert report.success is False
+    assert report.error_stage in ("eval", "no_result_file")
+    assert report.counts == {
+        "n_games": 0, "wins_new": 0, "wins_old": 0,
+        "draws": 0, "crashed": 0,
+    }
+
+
+def test_run_distributed_self_play_one_local_shard_fails(
+    monkeypatch, tmp_path,
+):
+    """Integration smoke: three local shards, one fails. The
+    orchestrator must complete with the other two shards' npzs and
+    not raise. The failed shard's per-shard progress JSON is marked
+    ``status=failed``; the aggregator's status is ``failed`` (any
+    failed shard taints the iter for monitoring) but the npz list
+    is non-empty."""
+    from mtg_bot.training import distributed as dist
+    from mtg_bot.training.distributed import (
+        SelfPlayJobSpec,
+        run_distributed_self_play,
+    )
+
+    weights_path, hidden_sizes = _tiny_dual_head_weights(tmp_path)
+    out_dir = tmp_path / "iterate_data"
+    progress_dir = tmp_path / "training_progress"
+    spec = SelfPlayJobSpec(
+        weights_path=str(weights_path),
+        samples=1, inner_nodes=10,
+        hidden_sizes=hidden_sizes,
+        base_seed=0,
+        enable_mulligans=False,
+        per_game_timeout_sec=None,
+        with_policy=True,
+    )
+    cfg = ShardsConfig(shards=(
+        ShardConfig(host="local", n_games=2, label="A", n_workers=1),
+        ShardConfig(host="local", n_games=2, label="B", n_workers=1,
+                    seed_offset=1_000_000),
+        ShardConfig(host="local", n_games=2, label="BOOM", n_workers=1,
+                    seed_offset=2_000_000),
+    ))
+
+    # Patch ``run_shard_pull`` so the BOOM shard raises but the
+    # other two delegate to the real implementation.
+    real_run_shard_pull = dist.run_shard_pull
+
+    def _selective_pull(*args, **kwargs):
+        if kwargs.get("label") == "BOOM":
+            raise RuntimeError("simulated local shard crash")
+        return real_run_shard_pull(*args, **kwargs)
+
+    monkeypatch.setattr(dist, "run_shard_pull", _selective_pull)
+
+    queue_url, server = _start_queue_server()
+    try:
+        paths = run_distributed_self_play(
+            cfg, spec,
+            progress_dir=progress_dir,
+            output_dir=out_dir,
+            run_id_prefix="iter_resilience",
+            total_games=4,
+            queue_url=queue_url,
+        )
+    finally:
+        server.shutdown()
+
+    # Two surviving shards drained the 4-game queue between them.
+    assert len(paths) == 4, (
+        f"expected 4 npzs from the two surviving shards, got "
+        f"{[p.name for p in paths]}"
+    )
+    assert all(p.is_file() for p in paths)
+    # No npz file ended up tagged with the BOOM shard.
+    assert not any("shard_BOOM" in p.name for p in paths), (
+        f"BOOM shard should have produced no npzs, got {paths}"
+    )
+
+    # Failed shard's per-shard progress JSON marked failed.
+    boom_progress = (
+        progress_dir / "iter_resilience_shard_BOOM.json"
+    )
+    assert boom_progress.is_file()
+    payload = json.loads(boom_progress.read_text(encoding="utf-8"))
+    assert payload["status"] == "failed"
+    assert "local_shard" in payload.get("error_note", "")
+
+    # Aggregator status reflects the partial failure.
+    aggregate = progress_dir / "iter_resilience.json"
+    assert aggregate.is_file()
+    agg_payload = json.loads(aggregate.read_text(encoding="utf-8"))
+    assert agg_payload["status"] == "failed"
+
+
+def test_run_distributed_self_play_all_shards_fail_raises(
+    monkeypatch, tmp_path,
+):
+    """If every shard fails AND no npzs were recovered, the
+    orchestrator raises a descriptive RuntimeError so the iterate
+    driver fails the iter cleanly rather than silently producing a
+    0-game training step."""
+    from mtg_bot.training import distributed as dist
+    from mtg_bot.training.distributed import (
+        SelfPlayJobSpec,
+        run_distributed_self_play,
+    )
+
+    weights_path, hidden_sizes = _tiny_dual_head_weights(tmp_path)
+    out_dir = tmp_path / "iterate_data"
+    progress_dir = tmp_path / "training_progress"
+    spec = SelfPlayJobSpec(
+        weights_path=str(weights_path),
+        samples=1, inner_nodes=10,
+        hidden_sizes=hidden_sizes,
+        base_seed=0,
+        enable_mulligans=False,
+        per_game_timeout_sec=None,
+        with_policy=True,
+    )
+    cfg = ShardsConfig(shards=(
+        ShardConfig(host="local", n_games=2, label="A", n_workers=1),
+        ShardConfig(host="local", n_games=2, label="B", n_workers=1,
+                    seed_offset=1_000_000),
+    ))
+
+    def _always_boom(*args, **kwargs):
+        raise RuntimeError("everyone fails")
+    monkeypatch.setattr(dist, "run_shard_pull", _always_boom)
+
+    queue_url, server = _start_queue_server()
+    try:
+        with pytest.raises(RuntimeError, match="all distributed self-play"):
+            run_distributed_self_play(
+                cfg, spec,
+                progress_dir=progress_dir,
+                output_dir=out_dir,
+                run_id_prefix="iter_all_fail",
+                total_games=4,
+                queue_url=queue_url,
+            )
+    finally:
+        server.shutdown()
+
+
+def test_run_distributed_eval_one_shard_fails_aggregates_rest(
+    monkeypatch, tmp_path,
+):
+    """Eval orchestrator with a failing shard: the surviving shard's
+    counts come through; the failed shard contributes zeros."""
+    from mtg_bot.training import distributed as dist
+    from mtg_bot.training.distributed import (
+        EvalJobSpec, run_distributed_eval,
+    )
+
+    weights_path, hidden_sizes = _tiny_dual_head_weights(tmp_path)
+    progress_dir = tmp_path / "training_progress"
+    spec = EvalJobSpec(
+        new_weights_path=str(weights_path),
+        old_weights_path=str(weights_path),
+        samples=1, inner_nodes=10, hidden_sizes=hidden_sizes,
+        base_seed=0, enable_mulligans=False,
+        per_game_timeout_sec=None,
+        opponent_label="self",
+    )
+    cfg = ShardsConfig(shards=(
+        ShardConfig(host="local", n_games=2, label="A", n_workers=1),
+        ShardConfig(host="local", n_games=2, label="BOOM", n_workers=1),
+    ))
+
+    real_eval_pull = dist.run_shard_eval_pull
+
+    def _selective_eval_pull(*args, **kwargs):
+        if kwargs.get("label") == "BOOM":
+            raise RuntimeError("simulated eval crash")
+        return real_eval_pull(*args, **kwargs)
+    monkeypatch.setattr(dist, "run_shard_eval_pull", _selective_eval_pull)
+
+    queue_url, server = _start_queue_server()
+    try:
+        counts = run_distributed_eval(
+            cfg, spec,
+            progress_dir=progress_dir,
+            run_id_prefix="iter_eval_resilience",
+            total_games=4,
+            queue_url=queue_url,
+        )
+    finally:
+        server.shutdown()
+
+    # Surviving shard A drained at most its share before the queue
+    # ran out; total games <= 4. The BOOM shard contributes zeros.
+    total = (
+        counts["wins_new"] + counts["wins_old"]
+        + counts["draws"] + counts["crashed"]
+    )
+    assert total == counts["n_games"]
+    assert counts["n_games"] >= 1, (
+        f"expected surviving shard to produce >=1 game, got {counts}"
+    )
+
+    # Failed shard's per-shard progress JSON marked failed.
+    boom_progress = (
+        progress_dir / "iter_eval_resilience_shard_BOOM.json"
+    )
+    assert boom_progress.is_file()
+    payload = json.loads(boom_progress.read_text(encoding="utf-8"))
+    assert payload["status"] == "failed"
+
+
+def test_mark_shard_progress_failed_merges_into_existing(tmp_path):
+    """The helper preserves last-known counters when overwriting.
+    Useful when the poller already pulled a partial snapshot back
+    before the shard's SSH wrapper died."""
+    from mtg_bot.training.distributed import _mark_shard_progress_failed
+
+    progress = tmp_path / "iter_x_shard_macbook.json"
+    progress.write_text(json.dumps({
+        "run_id": "iter_x_shard_macbook",
+        "kind": "data_gen",
+        "status": "running",
+        "n_games_total": 100,
+        "n_games_done": 42,
+        "n_samples": 600,
+    }), encoding="utf-8")
+
+    _mark_shard_progress_failed(
+        progress, shard_label="macbook",
+        note="self_play: CalledProcessError: ssh died",
+    )
+    payload = json.loads(progress.read_text(encoding="utf-8"))
+    # Counter preservation:
+    assert payload["n_games_done"] == 42
+    assert payload["n_samples"] == 600
+    # Status flipped:
+    assert payload["status"] == "failed"
+    assert "self_play" in payload["error_note"]
+    assert payload["ended_at"]
+
+
+def test_mark_shard_progress_failed_creates_minimal_when_absent(tmp_path):
+    """If the poller never managed to pull a progress snapshot back
+    (the shard died immediately), the helper still writes a minimal
+    failed-status JSON so the UI knows the shard is dead, not just
+    silent."""
+    from mtg_bot.training.distributed import _mark_shard_progress_failed
+
+    progress = tmp_path / "iter_x_shard_macbook.json"
+    assert not progress.exists()
+    _mark_shard_progress_failed(
+        progress, shard_label="macbook",
+        note="weight_push: scp died",
+    )
+    payload = json.loads(progress.read_text(encoding="utf-8"))
+    assert payload["status"] == "failed"
+    assert "weight_push" in payload["error_note"]
+
+
+def test_run_shard_remote_bundle_sync_failure_returns_failure_report(
+    monkeypatch, tmp_path,
+):
+    """Bundle-sync failure (the very first stage on a remote shard,
+    before weights have even been pushed): runner returns a failure
+    report tagged ``error_stage="bundle_sync"``."""
+    import subprocess
+    from mtg_bot.training import distributed as dist
+    from mtg_bot.training.distributed import (
+        ShardSelfPlayReport, SelfPlayJobSpec,
+    )
+
+    monkeypatch.chdir(tmp_path)
+    weights_rel = "trained_weights/v7/weights.pt"
+    (tmp_path / "trained_weights" / "v7").mkdir(parents=True)
+    (tmp_path / weights_rel).write_bytes(b"fake")
+
+    class _FailOnBundleSync:
+        def __init__(self): self.calls = []
+        def __call__(self, cmd, *a, **kw):
+            self.calls.append(list(cmd))
+            tail = cmd[-1] if cmd else ""
+            if cmd[0] == "ssh" and "git fetch" in tail:
+                raise subprocess.CalledProcessError(
+                    1, cmd, output="", stderr="curl: 404",
+                )
+
+            class _Result:
+                returncode = 0
+                stdout = ""
+                stderr = ""
+            return _Result()
+
+    rec = _FailOnBundleSync()
+    monkeypatch.setattr(dist, "_run_subprocess", rec)
+    monkeypatch.setattr(dist.subprocess, "run", rec)
+
+    class _NoopPoller:
+        def __init__(self, *a, **kw): pass
+        def start(self): pass
+        def stop(self): pass
+    monkeypatch.setattr(dist, "_ProgressPoller", _NoopPoller)
+
+    spec = SelfPlayJobSpec(
+        weights_path=weights_rel,
+        samples=1, inner_nodes=10, hidden_sizes=(16,),
+        base_seed=0, enable_mulligans=False,
+        per_game_timeout_sec=None,
+    )
+    shard = ShardConfig(
+        host="macbook", n_games=10, user="g",
+        repo_path="/Users/g/repo",
+        venv_python=".venv-py313/bin/python",
+    )
+    report = dist.run_shard_remote(
+        shard, spec,
+        queue_url="http://master:5099",
+        run_id="iter_x",
+        iter_total_games=10,
+        progress_dir=tmp_path / "training_progress",
+        output_dir=tmp_path / "iterate_data",
+        run_id_prefix="iter_x",
+        stamp="20260503T230000Z",
+        bundle_url="http://master:5099/repo.bundle",
+    )
+    assert isinstance(report, ShardSelfPlayReport)
+    assert report.success is False
+    assert report.error_stage == "bundle_sync"
+
+
+def test_run_shard_remote_npz_pull_failure_records_partial(
+    monkeypatch, tmp_path,
+):
+    """If listing returns multiple npzs but one of the per-file scps
+    fails, the runner records the partial outcome: it returns a
+    failure report whose ``error_stage`` is ``"scp_npz"`` but whose
+    ``npz_paths`` includes the files that DID transfer. Pulling
+    whatever survived is the whole point of the resilience change."""
+    import subprocess
+    from mtg_bot.training import distributed as dist
+    from mtg_bot.training.distributed import SelfPlayJobSpec
+
+    monkeypatch.chdir(tmp_path)
+    weights_rel = "trained_weights/v7/weights.pt"
+    (tmp_path / "trained_weights" / "v7").mkdir(parents=True)
+    (tmp_path / weights_rel).write_bytes(b"fake")
+
+    listing_payload = (
+        "iter_y_shard_macbook_chunk_0001_20260503T230000Z.npz\n"
+        "iter_y_shard_macbook_chunk_0002_20260503T230000Z.npz\n"
+    )
+
+    class _FailOnSecondNpz:
+        def __init__(self):
+            self.calls = []
+            self.npz_seen = 0
+
+        def __call__(self, cmd, *a, **kw):
+            self.calls.append(list(cmd))
+            tail = cmd[-1] if cmd else ""
+            stdout = ""
+            if cmd[0] == "ssh" and "iterate_data" in tail and (
+                "ls " in tail or "dir /b" in tail
+            ):
+                stdout = listing_payload
+            if cmd[0] == "scp" and any(
+                a.endswith(".npz") for a in cmd
+            ):
+                self.npz_seen += 1
+                if self.npz_seen == 2:
+                    raise subprocess.CalledProcessError(
+                        1, cmd, output="",
+                        stderr="scp: connection reset",
+                    )
+
+            class _Result:
+                returncode = 0
+                stderr = ""
+                def __init__(self_, _stdout):
+                    self_.stdout = _stdout
+            return _Result(stdout)
+
+    rec = _FailOnSecondNpz()
+    monkeypatch.setattr(dist, "_run_subprocess", rec)
+    monkeypatch.setattr(dist.subprocess, "run", rec)
+
+    class _NoopPoller:
+        def __init__(self, *a, **kw): pass
+        def start(self): pass
+        def stop(self): pass
+    monkeypatch.setattr(dist, "_ProgressPoller", _NoopPoller)
+
+    spec = SelfPlayJobSpec(
+        weights_path=weights_rel,
+        samples=1, inner_nodes=10, hidden_sizes=(16,),
+        base_seed=0, enable_mulligans=False,
+        per_game_timeout_sec=None,
+    )
+    shard = ShardConfig(
+        host="macbook", n_games=2, user="g",
+        repo_path="/Users/g/repo",
+        venv_python=".venv-py313/bin/python",
+    )
+    report = dist.run_shard_remote(
+        shard, spec,
+        queue_url="http://master:5099",
+        run_id="iter_y",
+        iter_total_games=2,
+        progress_dir=tmp_path / "training_progress",
+        output_dir=tmp_path / "iterate_data",
+        run_id_prefix="iter_y",
+        stamp="20260503T230000Z",
+    )
+    assert report.success is False
+    assert report.error_stage == "scp_npz"
+    assert len(report.npz_paths) == 1, (
+        f"expected 1 surviving npz, got {report.npz_paths}"
+    )
+
+
+def test_run_shard_remote_npz_listing_failure_records(
+    monkeypatch, tmp_path,
+):
+    """If the npz-listing ssh itself fails (rather than returning
+    empty), the runner records that as ``error_stage=list_npzs``
+    when no earlier-stage error exists."""
+    import subprocess
+    from mtg_bot.training import distributed as dist
+    from mtg_bot.training.distributed import SelfPlayJobSpec
+
+    monkeypatch.chdir(tmp_path)
+    weights_rel = "trained_weights/v7/weights.pt"
+    (tmp_path / "trained_weights" / "v7").mkdir(parents=True)
+    (tmp_path / weights_rel).write_bytes(b"fake")
+
+    class _FailOnListing:
+        def __init__(self): self.calls = []
+        def __call__(self, cmd, *a, **kw):
+            self.calls.append(list(cmd))
+            tail = cmd[-1] if cmd else ""
+            if cmd[0] == "ssh" and "iterate_data" in tail and (
+                "ls " in tail or "dir /b" in tail
+            ):
+                raise subprocess.SubprocessError(
+                    "ssh died during listing",
+                )
+
+            class _Result:
+                returncode = 0
+                stdout = ""
+                stderr = ""
+            return _Result()
+
+    rec = _FailOnListing()
+    monkeypatch.setattr(dist, "_run_subprocess", rec)
+    monkeypatch.setattr(dist.subprocess, "run", rec)
+
+    class _NoopPoller:
+        def __init__(self, *a, **kw): pass
+        def start(self): pass
+        def stop(self): pass
+    monkeypatch.setattr(dist, "_ProgressPoller", _NoopPoller)
+
+    spec = SelfPlayJobSpec(
+        weights_path=weights_rel,
+        samples=1, inner_nodes=10, hidden_sizes=(16,),
+        base_seed=0, enable_mulligans=False,
+        per_game_timeout_sec=None,
+    )
+    shard = ShardConfig(
+        host="macbook", n_games=2, user="g",
+        repo_path="/Users/g/repo",
+        venv_python=".venv-py313/bin/python",
+    )
+    report = dist.run_shard_remote(
+        shard, spec,
+        queue_url="http://master:5099",
+        run_id="iter_z",
+        iter_total_games=2,
+        progress_dir=tmp_path / "training_progress",
+        output_dir=tmp_path / "iterate_data",
+        run_id_prefix="iter_z",
+        stamp="20260503T230000Z",
+    )
+    assert report.success is False
+    assert report.error_stage == "list_npzs"
+    assert report.npz_paths == []
+
+
+def test_run_shard_remote_replay_pull_failure_warned_not_fatal(
+    monkeypatch, tmp_path,
+):
+    """The replay rsync stage runs LAST and is best-effort. If it
+    raises, the per-shard data we already collected (npzs) survives;
+    the runner returns a SUCCESS report (no earlier failure) and a
+    warning is logged."""
+    import subprocess
+    from mtg_bot.training import distributed as dist
+    from mtg_bot.training.distributed import SelfPlayJobSpec
+
+    monkeypatch.chdir(tmp_path)
+    weights_rel = "trained_weights/v7/weights.pt"
+    (tmp_path / "trained_weights" / "v7").mkdir(parents=True)
+    (tmp_path / weights_rel).write_bytes(b"fake")
+
+    listing_payload = (
+        "replay_idx0001.json.gz\nreplay_idx0002.json.gz\n"
+    )
+
+    class _FailOnReplayPull:
+        def __init__(self): self.calls = []
+        def __call__(self, cmd, *a, **kw):
+            self.calls.append(list(cmd))
+            tail = cmd[-1] if cmd else ""
+            stdout = ""
+            if cmd[0] == "ssh" and ".json.gz" in tail:
+                stdout = listing_payload
+            if cmd[0] == "scp" and any(
+                a.endswith(".json.gz") for a in cmd
+            ):
+                raise subprocess.CalledProcessError(
+                    1, cmd, output="", stderr="replay copy died",
+                )
+
+            class _Result:
+                returncode = 0
+                stderr = ""
+                def __init__(self_, _stdout):
+                    self_.stdout = _stdout
+            return _Result(stdout)
+
+    rec = _FailOnReplayPull()
+    monkeypatch.setattr(dist, "_run_subprocess", rec)
+    monkeypatch.setattr(dist.subprocess, "run", rec)
+
+    class _NoopPoller:
+        def __init__(self, *a, **kw): pass
+        def start(self): pass
+        def stop(self): pass
+    monkeypatch.setattr(dist, "_ProgressPoller", _NoopPoller)
+
+    spec = SelfPlayJobSpec(
+        weights_path=weights_rel,
+        samples=1, inner_nodes=10, hidden_sizes=(16,),
+        base_seed=0, enable_mulligans=False,
+        per_game_timeout_sec=None,
+        capture_every=1,
+        replays_root="replays",
+    )
+    shard = ShardConfig(
+        host="macbook", n_games=2, user="g",
+        repo_path="/Users/g/repo",
+        venv_python=".venv-py313/bin/python",
+    )
+    report = dist.run_shard_remote(
+        shard, spec,
+        queue_url="http://master:5099",
+        run_id="iter_w",
+        iter_total_games=2,
+        progress_dir=tmp_path / "training_progress",
+        output_dir=tmp_path / "iterate_data",
+        run_id_prefix="iter_w",
+        stamp="20260503T230000Z",
+    )
+    # Replay-pull failure is a warning, not fatal — npzs went OK so
+    # the report is success.
+    assert report.success is True
+    assert report.error is None
+
+
+def test_run_shard_eval_remote_bundle_sync_failure(monkeypatch, tmp_path):
+    """Eval-side: bundle-sync failure returns a failure report tagged
+    ``error_stage="bundle_sync"`` with zero counts."""
+    import subprocess
+    from mtg_bot.training import distributed as dist
+    from mtg_bot.training.distributed import (
+        ShardEvalReport, EvalJobSpec,
+    )
+
+    monkeypatch.chdir(tmp_path)
+    new_weights = "trained_weights/v7/weights.pt"
+    (tmp_path / "trained_weights" / "v7").mkdir(parents=True)
+    (tmp_path / new_weights).write_bytes(b"new")
+
+    class _FailOnBundleSync:
+        def __init__(self): self.calls = []
+        def __call__(self, cmd, *a, **kw):
+            self.calls.append(list(cmd))
+            tail = cmd[-1] if cmd else ""
+            if cmd[0] == "ssh" and "git fetch" in tail:
+                raise subprocess.CalledProcessError(
+                    1, cmd, output="", stderr="bundle 404",
+                )
+
+            class _Result:
+                returncode = 0
+                stdout = ""
+                stderr = ""
+            return _Result()
+
+    rec = _FailOnBundleSync()
+    monkeypatch.setattr(dist, "_run_subprocess", rec)
+    monkeypatch.setattr(dist.subprocess, "run", rec)
+
+    class _NoopPoller:
+        def __init__(self, *a, **kw): pass
+        def start(self): pass
+        def stop(self): pass
+    monkeypatch.setattr(dist, "_ProgressPoller", _NoopPoller)
+
+    spec = EvalJobSpec(
+        new_weights_path=new_weights,
+        old_weights_path=None,
+        samples=1, inner_nodes=10, hidden_sizes=(16,),
+        base_seed=0, enable_mulligans=False,
+        per_game_timeout_sec=None,
+        opponent_label="rand",
+    )
+    shard = ShardConfig(
+        host="macbook", n_games=4, user="g",
+        repo_path="/Users/g/repo",
+        venv_python=".venv-py313/bin/python",
+    )
+    report = dist.run_shard_eval_remote(
+        shard, spec,
+        queue_url="http://master:5099",
+        run_id="iter_eval",
+        iter_total_games=4,
+        progress_dir=tmp_path / "training_progress",
+        stamp="20260503T230000Z",
+        bundle_url="http://master:5099/repo.bundle",
+    )
+    assert isinstance(report, ShardEvalReport)
+    assert report.success is False
+    # The bundle_sync stage records itself as the failure cause; the
+    # subsequent "no result file" step doesn't override it.
+    assert report.error_stage == "bundle_sync"
+
+
+def test_run_shard_eval_remote_weight_push_failure(monkeypatch, tmp_path):
+    """Eval-side: weight-push failure returns failure report tagged
+    ``weight_push``."""
+    import subprocess
+    from mtg_bot.training import distributed as dist
+    from mtg_bot.training.distributed import EvalJobSpec
+
+    monkeypatch.chdir(tmp_path)
+    new_weights = "trained_weights/v7/weights.pt"
+    (tmp_path / "trained_weights" / "v7").mkdir(parents=True)
+    (tmp_path / new_weights).write_bytes(b"new")
+
+    class _FailOnWeightPush:
+        def __init__(self): self.calls = []
+        def __call__(self, cmd, *a, **kw):
+            self.calls.append(list(cmd))
+            if cmd[0] == "scp" and any(
+                p.endswith("weights.pt") for p in cmd
+            ):
+                raise subprocess.CalledProcessError(
+                    1, cmd, output="", stderr="permission denied",
+                )
+
+            class _Result:
+                returncode = 0
+                stdout = ""
+                stderr = ""
+            return _Result()
+
+    rec = _FailOnWeightPush()
+    monkeypatch.setattr(dist, "_run_subprocess", rec)
+    monkeypatch.setattr(dist.subprocess, "run", rec)
+
+    class _NoopPoller:
+        def __init__(self, *a, **kw): pass
+        def start(self): pass
+        def stop(self): pass
+    monkeypatch.setattr(dist, "_ProgressPoller", _NoopPoller)
+
+    spec = EvalJobSpec(
+        new_weights_path=new_weights,
+        old_weights_path=None,
+        samples=1, inner_nodes=10, hidden_sizes=(16,),
+        base_seed=0, enable_mulligans=False,
+        per_game_timeout_sec=None,
+        opponent_label="rand",
+    )
+    shard = ShardConfig(
+        host="macbook", n_games=4, user="g",
+        repo_path="/Users/g/repo",
+        venv_python=".venv-py313/bin/python",
+    )
+    report = dist.run_shard_eval_remote(
+        shard, spec,
+        queue_url="http://master:5099",
+        run_id="iter_eval",
+        iter_total_games=4,
+        progress_dir=tmp_path / "training_progress",
+        stamp="20260503T230000Z",
+    )
+    assert report.success is False
+    assert report.error_stage == "weight_push"
+
+
+def test_run_shard_eval_remote_corrupt_result_file(monkeypatch, tmp_path):
+    """Eval result file is present but unparseable: returns failure
+    report tagged ``result_parse``."""
+    import subprocess
+    from mtg_bot.training import distributed as dist
+    from mtg_bot.training.distributed import EvalJobSpec
+
+    monkeypatch.chdir(tmp_path)
+    new_weights = "trained_weights/v7/weights.pt"
+    (tmp_path / "trained_weights" / "v7").mkdir(parents=True)
+    (tmp_path / new_weights).write_bytes(b"new")
+
+    rec = _ScriptedSubprocess()
+    monkeypatch.setattr(dist, "_run_subprocess", rec)
+    monkeypatch.setattr(dist.subprocess, "run", rec)
+
+    class _NoopPoller:
+        def __init__(self, *a, **kw): pass
+        def start(self): pass
+        def stop(self): pass
+    monkeypatch.setattr(dist, "_ProgressPoller", _NoopPoller)
+
+    # Pre-write a CORRUPT result file at the path the eval shard
+    # would scp back. _ScriptedSubprocess no-ops the scp so the
+    # corrupt file survives.
+    progress_dir = tmp_path / "training_progress"
+    progress_dir.mkdir(parents=True, exist_ok=True)
+    run_id_full = "iter_eval_shard_macbook"
+    (progress_dir / f"{run_id_full}_result.json").write_text(
+        "{ this is not valid json", encoding="utf-8",
+    )
+
+    spec = EvalJobSpec(
+        new_weights_path=new_weights,
+        old_weights_path=None,
+        samples=1, inner_nodes=10, hidden_sizes=(16,),
+        base_seed=0, enable_mulligans=False,
+        per_game_timeout_sec=None,
+        opponent_label="rand",
+    )
+    shard = ShardConfig(
+        host="macbook", n_games=4, user="g",
+        repo_path="/Users/g/repo",
+        venv_python=".venv-py313/bin/python",
+    )
+    report = dist.run_shard_eval_remote(
+        shard, spec,
+        queue_url="http://master:5099",
+        run_id="iter_eval",
+        iter_total_games=4,
+        progress_dir=progress_dir,
+        stamp="20260503T230000Z",
+    )
+    assert report.success is False
+    assert report.error_stage == "result_parse"
+
+
+def test_run_distributed_eval_all_shards_fail_raises(
+    monkeypatch, tmp_path,
+):
+    """Eval-side mirror: every shard fails -> RuntimeError raised."""
+    from mtg_bot.training import distributed as dist
+    from mtg_bot.training.distributed import (
+        EvalJobSpec, run_distributed_eval,
+    )
+
+    weights_path, hidden_sizes = _tiny_dual_head_weights(tmp_path)
+    progress_dir = tmp_path / "training_progress"
+    spec = EvalJobSpec(
+        new_weights_path=str(weights_path),
+        old_weights_path=str(weights_path),
+        samples=1, inner_nodes=10, hidden_sizes=hidden_sizes,
+        base_seed=0, enable_mulligans=False,
+        per_game_timeout_sec=None,
+        opponent_label="self",
+    )
+    cfg = ShardsConfig(shards=(
+        ShardConfig(host="local", n_games=2, label="A", n_workers=1),
+        ShardConfig(host="local", n_games=2, label="B", n_workers=1),
+    ))
+
+    def _always_boom(*args, **kwargs):
+        raise RuntimeError("eval boom")
+    monkeypatch.setattr(dist, "run_shard_eval_pull", _always_boom)
+
+    queue_url, server = _start_queue_server()
+    try:
+        with pytest.raises(RuntimeError, match="all distributed eval"):
+            run_distributed_eval(
+                cfg, spec,
+                progress_dir=progress_dir,
+                run_id_prefix="iter_all_eval_fail",
+                total_games=4,
+                queue_url=queue_url,
+            )
+    finally:
+        server.shutdown()
+
+
+def test_mark_shard_progress_failed_swallows_write_errors(
+    tmp_path, monkeypatch,
+):
+    """The helper must never raise — a master that can't write a
+    status file is much better than a master that abandons live
+    shards mid-iter. Errors are logged to stderr but swallowed."""
+    from mtg_bot.training import distributed as dist
+
+    # Path inside a non-existent directory tree where mkdir will work
+    # but write_text fails in a contrived way: monkeypatch the helper
+    # to raise from inside.
+    progress = tmp_path / "iter_x_shard_macbook.json"
+
+    real_write_text = type(progress).write_text
+
+    def _explode(self, *a, **kw):
+        raise OSError("disk full")
+    monkeypatch.setattr(type(progress), "write_text", _explode)
+    try:
+        # Should not raise.
+        dist._mark_shard_progress_failed(
+            progress, shard_label="macbook", note="x",
+        )
+    finally:
+        monkeypatch.setattr(type(progress), "write_text", real_write_text)
