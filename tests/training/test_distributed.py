@@ -2378,3 +2378,222 @@ def test_distributed_does_not_use_with_processpoolexecutor_pattern():
         "distributed.py should call `exe.shutdown(wait=False)` to "
         "avoid the hang on per-game timeout."
     )
+
+
+# ---- queue HTTP tight-timeout + bounded retries ------------------
+#
+# Regression: 2026-05-04 a Mac shard lost the iter_002 self-play run
+# at 15:01 UTC with `URLError(TimeoutError(60, 'Operation timed
+# out'))` — an OS-level ETIMEDOUT (errno 60 on macOS) on the TCP
+# connect to /queue/take. The OS-default 60s connect-timeout fired
+# before urllib's `timeout=30` even applied. A momentary Tailscale
+# blip should not kill a 30-60-minute shard. The fix: tight per-
+# attempt timeout + a small bounded number of retries with
+# exponential backoff.
+
+def test_urlopen_with_retry_returns_on_first_success():
+    """Happy path: helper returns immediately on the first successful
+    urlopen and never sleeps."""
+    import io
+    from unittest.mock import patch
+
+    from mtg_bot.training.distributed import _urlopen_with_retry
+
+    class _FakeResp:
+        status = 200
+
+        def __init__(self, body: bytes):
+            self._body = body
+
+        def read(self) -> bytes:
+            return self._body
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return False
+
+    sleeps: list[float] = []
+    calls: list[float] = []
+
+    def _fake_urlopen(req, timeout):
+        calls.append(timeout)
+        return _FakeResp(b'{"ok": true}')
+
+    with patch(
+        "urllib.request.urlopen", side_effect=_fake_urlopen,
+    ):
+        resp = _urlopen_with_retry(
+            "ignored", sleep=lambda s: sleeps.append(s),
+        )
+    assert resp.status == 200
+    assert resp.body == b'{"ok": true}'
+    # Exactly one urlopen call, no sleep on the happy path.
+    assert len(calls) == 1
+    assert sleeps == []
+
+
+def test_urlopen_with_retry_retries_then_succeeds():
+    """The Mac-shard regression scenario: first 1-2 attempts fail
+    with URLError(TimeoutError()), the third succeeds. Helper must
+    return the success response and have slept exactly twice with
+    the expected exponential-backoff pattern."""
+    import urllib.error
+    from unittest.mock import patch
+
+    from mtg_bot.training.distributed import _urlopen_with_retry
+
+    class _FakeResp:
+        status = 200
+
+        def read(self) -> bytes:
+            return b"recovered"
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return False
+
+    attempts = {"n": 0}
+    sleeps: list[float] = []
+
+    def _flaky_urlopen(req, timeout):
+        attempts["n"] += 1
+        if attempts["n"] < 3:
+            raise urllib.error.URLError(
+                TimeoutError(60, "Operation timed out"),
+            )
+        return _FakeResp()
+
+    with patch(
+        "urllib.request.urlopen", side_effect=_flaky_urlopen,
+    ):
+        resp = _urlopen_with_retry(
+            "ignored",
+            backoff_base=0.5,
+            sleep=lambda s: sleeps.append(s),
+        )
+    assert resp.status == 200
+    assert resp.body == b"recovered"
+    assert attempts["n"] == 3
+    # Exponential backoff: 0.5 * 2**0 = 0.5, 0.5 * 2**1 = 1.0.
+    assert sleeps == [0.5, 1.0]
+
+
+def test_urlopen_with_retry_reraises_after_all_attempts_fail():
+    """If every attempt fails, the helper re-raises the last
+    exception so the caller sees the real failure mode (URLError /
+    TimeoutError / ConnectionError) — only transient blips are
+    absorbed silently."""
+    import urllib.error
+    from unittest.mock import patch
+
+    from mtg_bot.training.distributed import _urlopen_with_retry
+
+    sleeps: list[float] = []
+    calls = {"n": 0}
+
+    def _always_fail(req, timeout):
+        calls["n"] += 1
+        raise urllib.error.URLError(TimeoutError(60, "ETIMEDOUT"))
+
+    with patch(
+        "urllib.request.urlopen", side_effect=_always_fail,
+    ):
+        with pytest.raises(urllib.error.URLError):
+            _urlopen_with_retry(
+                "ignored",
+                retries=3,
+                backoff_base=0.5,
+                sleep=lambda s: sleeps.append(s),
+            )
+    # All 3 attempts ran; we slept BETWEEN attempts (so 2 sleeps
+    # total) but did NOT sleep after the final failing attempt.
+    assert calls["n"] == 3
+    assert sleeps == [0.5, 1.0]
+
+
+def test_urlopen_with_retry_retries_on_connection_error():
+    """ConnectionError (from the OS-level connect failure path) is
+    one of the transient blips we want to retry, alongside URLError
+    and bare TimeoutError."""
+    from unittest.mock import patch
+
+    from mtg_bot.training.distributed import _urlopen_with_retry
+
+    class _FakeResp:
+        status = 200
+
+        def read(self) -> bytes:
+            return b"ok"
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return False
+
+    attempts = {"n": 0}
+
+    def _connect_then_succeed(req, timeout):
+        attempts["n"] += 1
+        if attempts["n"] == 1:
+            raise ConnectionResetError("boom")
+        return _FakeResp()
+
+    with patch(
+        "urllib.request.urlopen", side_effect=_connect_then_succeed,
+    ):
+        resp = _urlopen_with_retry(
+            "ignored", sleep=lambda s: None,
+        )
+    assert resp.status == 200
+    assert attempts["n"] == 2
+
+
+def test_urlopen_with_retry_constants_are_tight_for_tailscale():
+    """The whole point of this helper is that the cluster's local
+    Tailscale RTT is 6-65ms. A 10s per-attempt timeout is already
+    150x typical RTT; anything bigger leaves us re-exposed to the
+    OS-default 60s connect-timeout that bit us in iter_002. Pin the
+    constants so a future drive-by tweak is loud."""
+    from mtg_bot.training import distributed as dmod
+
+    assert dmod._QUEUE_HTTP_ATTEMPT_TIMEOUT_S <= 15.0, (
+        "Per-attempt timeout grew above 15s. Tailscale RTT is 6-65ms; "
+        "a single attempt should never need that long. If it does, "
+        "the network is broken and we should fail fast and retry."
+    )
+    assert 2 <= dmod._QUEUE_HTTP_RETRIES <= 5, (
+        "Retry count outside 2-5: too few and a single blip kills "
+        "the shard; too many and a real outage takes minutes to "
+        "surface."
+    )
+    assert dmod._QUEUE_HTTP_BACKOFF_BASE_S <= 1.0, (
+        "Backoff base grew above 1s — total worst-case wall would "
+        "exceed the 60s OS-default that we're trying to undercut."
+    )
+
+
+def test_urlopen_with_retry_total_wall_bound():
+    """The helper's total worst-case wall-clock (sum of per-attempt
+    timeouts + sum of inter-attempt backoffs) must stay below the
+    60s OS-default TCP-connect ETIMEDOUT that bit us in iter_002.
+    This is the headline guarantee of the whole feature."""
+    from mtg_bot.training import distributed as dmod
+
+    timeout_budget = (
+        dmod._QUEUE_HTTP_ATTEMPT_TIMEOUT_S * dmod._QUEUE_HTTP_RETRIES
+    )
+    backoff_budget = sum(
+        dmod._QUEUE_HTTP_BACKOFF_BASE_S * (2 ** i)
+        for i in range(dmod._QUEUE_HTTP_RETRIES - 1)
+    )
+    total = timeout_budget + backoff_budget
+    assert total < 60.0, (
+        f"Worst-case retry wall is {total:.1f}s, which is at or "
+        "above the 60s OS-default connect-timeout that we're "
+        "trying to undercut. Tighten the constants."
+    )
