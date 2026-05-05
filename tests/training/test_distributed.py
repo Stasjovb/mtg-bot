@@ -770,6 +770,63 @@ def test_eval_spec_from_dict_missing_heuristics_defaults_to_all_false():
     assert rebuilt.heuristics == HeuristicsConfig.disabled()
 
 
+def test_self_play_spec_architecture_round_trips():
+    """The architecture + policy_hidden_sizes fields survive the JSON
+    round-trip the SSH wrapper relies on so remote shards instantiate
+    the matching dual-head class."""
+    from mtg_bot.training.distributed import SelfPlayJobSpec
+
+    original = SelfPlayJobSpec(
+        weights_path="w.pt", samples=4, inner_nodes=200,
+        hidden_sizes=(128, 128, 64),
+        base_seed=0, enable_mulligans=False,
+        per_game_timeout_sec=None,
+        architecture="separate",
+        policy_hidden_sizes=(64, 32),
+    )
+    rt = SelfPlayJobSpec.from_dict(original.to_dict())
+    assert rt.architecture == "separate"
+    assert rt.policy_hidden_sizes == (64, 32)
+
+
+def test_self_play_spec_architecture_default_is_none():
+    """Older payloads without architecture decode cleanly with
+    ``architecture=None`` (NNEvaluator's default = "shared")."""
+    from mtg_bot.training.distributed import SelfPlayJobSpec
+
+    rebuilt = SelfPlayJobSpec.from_dict({
+        "weights_path": "w.pt",
+        "samples": 1, "inner_nodes": 1,
+        "hidden_sizes": None,
+        "base_seed": 0,
+        "enable_mulligans": False,
+        "per_game_timeout_sec": None,
+    })
+    assert rebuilt.architecture is None
+    assert rebuilt.policy_hidden_sizes is None
+
+
+def test_eval_spec_architecture_round_trips():
+    """``new_architecture`` / ``old_architecture`` / ``policy_hidden_
+    sizes`` round-trip cleanly so the eval-shard worker can instantiate
+    the right class for each side of the match."""
+    from mtg_bot.training.distributed import EvalJobSpec
+
+    original = EvalJobSpec(
+        new_weights_path="new.pt", old_weights_path="old.pt",
+        samples=4, inner_nodes=200, hidden_sizes=(64, 64),
+        base_seed=42, enable_mulligans=False,
+        per_game_timeout_sec=300.0,
+        new_architecture="separate",
+        old_architecture="shared",
+        policy_hidden_sizes=(48, 24),
+    )
+    rt = EvalJobSpec.from_dict(original.to_dict())
+    assert rt.new_architecture == "separate"
+    assert rt.old_architecture == "shared"
+    assert rt.policy_hidden_sizes == (48, 24)
+
+
 def test_shard_config_round_trips_through_to_dict_from_dict():
     s = ShardConfig(
         host="win-1080ti", n_games=150, label="win",

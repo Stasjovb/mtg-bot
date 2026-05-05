@@ -392,6 +392,8 @@ def _self_play(
     enable_mulligans: bool = False,
     per_game_timeout_sec: float | None = None,
     hidden_sizes: tuple[int, ...] | None = None,
+    architecture: str | None = None,
+    policy_hidden_sizes: tuple[int, ...] | None = None,
     progress_path: Path | None = None,
     run_id: str | None = None,
     deck_pool: list[Deck] | None = None,
@@ -426,6 +428,8 @@ def _self_play(
         with_policy=True,
         puct=True,
         hidden_sizes=hidden_sizes,
+        architecture=architecture,
+        policy_hidden_sizes=policy_hidden_sizes,
     )
     progress: DataGenProgress | None = None
     if progress_path is not None:
@@ -498,6 +502,8 @@ def _self_play_distributed(
     enable_mulligans: bool,
     per_game_timeout_sec: float | None,
     hidden_sizes: tuple[int, ...] | None,
+    architecture: str | None,
+    policy_hidden_sizes: tuple[int, ...] | None,
     deck_pool_path: Path | None,
     capture_every: int,
     nn_version_label: str | None,
@@ -550,6 +556,8 @@ def _self_play_distributed(
         use_ismcts=use_ismcts,
         use_belief_weighted=use_belief_weighted,
         heuristics=heuristics if heuristics is not None else HeuristicsConfig(),
+        architecture=architecture,
+        policy_hidden_sizes=policy_hidden_sizes,
     )
     started = time.perf_counter()
     extra_kwargs: dict = {}
@@ -596,6 +604,9 @@ def _eval_match_distributed(
     enable_mulligans: bool,
     per_game_timeout_sec: float | None,
     hidden_sizes: tuple[int, ...] | None,
+    new_architecture: str | None,
+    old_architecture: str | None,
+    policy_hidden_sizes: tuple[int, ...] | None,
     deck_pool_path: Path | None,
     capture_every: int,
     new_version_label: str | None,
@@ -635,6 +646,9 @@ def _eval_match_distributed(
         opponent_label=opponent_label,
         use_ismcts=use_ismcts,
         use_belief_weighted=use_belief_weighted,
+        new_architecture=new_architecture,
+        old_architecture=old_architecture,
+        policy_hidden_sizes=policy_hidden_sizes,
     )
     started = time.perf_counter()
     extra_kwargs: dict = {}
@@ -674,6 +688,8 @@ def _train_next(
     progress_path: Path | None = None,
     policy_loss_weight: float = 1.0,
     one_legal_keep_frac: float = 1.0,
+    architecture: str = "shared",
+    policy_hidden_sizes: tuple[int, ...] | None = None,
 ) -> str:
     """Run train_nn.py via subprocess so its progress JSON / hub
     UI / registry plumbing all behave the same as a manual train.
@@ -716,9 +732,15 @@ def _train_next(
         "--notes", notes,
         "--policy-loss-weight", str(policy_loss_weight),
         "--one-legal-keep-frac", str(one_legal_keep_frac),
+        "--architecture", architecture,
     ]
     if hidden_sizes is not None:
         cmd.extend(["--hidden-sizes", ",".join(str(s) for s in hidden_sizes)])
+    if policy_hidden_sizes is not None:
+        cmd.extend([
+            "--policy-hidden-sizes",
+            ",".join(str(s) for s in policy_hidden_sizes),
+        ])
     if progress_path is not None:
         # Override train_nn.py's default ``training_progress/<peeked
         # _version>.json`` so the iterate-loop's training cards have
@@ -770,6 +792,9 @@ def _eval_match(
     enable_mulligans: bool = False,
     per_game_timeout_sec: float | None = None,
     hidden_sizes: tuple[int, ...] | None = None,
+    new_architecture: str | None = None,
+    old_architecture: str | None = None,
+    policy_hidden_sizes: tuple[int, ...] | None = None,
     progress_path: Path | None = None,
     run_id: str | None = None,
     opponent_label: str = "previous",
@@ -805,6 +830,8 @@ def _eval_match(
         with_policy=True,
         puct=True,
         hidden_sizes=hidden_sizes,
+        architecture=new_architecture,
+        policy_hidden_sizes=policy_hidden_sizes,
     )
     if old_weights is not None:
         old_cfg = NNPimcConfig(
@@ -815,6 +842,8 @@ def _eval_match(
             with_policy=True,
             puct=True,
             hidden_sizes=hidden_sizes,
+            architecture=old_architecture,
+            policy_hidden_sizes=policy_hidden_sizes,
         )
         p1_build = old_cfg.build
     else:
@@ -908,6 +937,35 @@ def main() -> None:
     parser.add_argument(
         "--val-split", type=float, default=0.1,
         help="Train/val split fraction (default 0.1).",
+    )
+    parser.add_argument(
+        "--architecture",
+        choices=["shared", "separate"],
+        default="shared",
+        help=(
+            "Dual-head model class for trained iterations: 'shared' "
+            "(default, back-compat) keeps the existing single-trunk "
+            "_ValuePolicyMLP. 'separate' switches to the parallel "
+            "value_trunk + policy_trunk _ValuePolicyMLPSeparate, "
+            "fixing the value-vs-policy gradient saturation observed "
+            "at the shared trunk's bottleneck. The architectures are "
+            "NOT cross-loadable: switching from 'shared' to 'separate' "
+            "(or vice versa) breaks the v-chain — the new architecture "
+            "has to bootstrap from random init, so a 'separate' run "
+            "cannot resume a 'shared' v15 baseline. The choice is "
+            "passed to train_nn.py and recorded in metadata.json so "
+            "self-play / eval workers dispatch the right NNEvaluator "
+            "class when loading weights."
+        ),
+    )
+    parser.add_argument(
+        "--policy-hidden-sizes", default=None,
+        help=(
+            "Optional comma-separated trunk shape for the policy_trunk "
+            "when --architecture=separate. Defaults to mirror the "
+            "iterate run's hidden_sizes (inherited from the bootstrap "
+            "version's metadata)."
+        ),
     )
     parser.add_argument(
         "--policy-loss-weight", type=float, default=1.0,
@@ -1299,6 +1357,51 @@ def main() -> None:
             f"[iterate] hidden_sizes inherited from "
             f"{args.bootstrap_version}: {iter_hidden_sizes}"
         )
+    # Architecture: prefer the explicit CLI flag when given; else
+    # inherit from the bootstrap version's metadata so an iterate run
+    # picks up wherever the v-chain was trained. v1-v15 metadata has
+    # no architecture key and back-compat-defaults to "shared".
+    bootstrap_architecture = getattr(
+        bootstrap_meta, "architecture", "shared",
+    )
+    iter_architecture = args.architecture
+    if iter_architecture != bootstrap_architecture:
+        # The architectures aren't cross-loadable, so this combination
+        # bootstrap-from-random-init is the only viable path. Self-play
+        # MUST run against the bootstrap's matching architecture
+        # (otherwise NNEvaluator load fails); training writes the new
+        # architecture for the produced version, and on iter 2 the
+        # promoted version will use that arch end-to-end.
+        print(
+            f"[iterate] WARNING: --architecture={iter_architecture!r} "
+            f"differs from bootstrap {args.bootstrap_version}'s "
+            f"architecture={bootstrap_architecture!r}. Self-play will "
+            f"use {bootstrap_architecture!r} (the bootstrap's saved "
+            f"weights' shape); the trained new version will use "
+            f"{iter_architecture!r} from random init. The two "
+            f"architectures are NOT cross-loadable — once promoted, "
+            f"subsequent iterations run end-to-end on the new arch."
+        )
+    iter_policy_hidden_sizes: tuple[int, ...] | None = None
+    if args.policy_hidden_sizes is not None:
+        if iter_architecture != "separate":
+            sys.exit(
+                "--policy-hidden-sizes only applies when "
+                "--architecture=separate"
+            )
+        try:
+            iter_policy_hidden_sizes = tuple(
+                int(x.strip())
+                for x in args.policy_hidden_sizes.split(",")
+            )
+        except ValueError as exc:
+            sys.exit(f"--policy-hidden-sizes parse error: {exc}")
+        if not iter_policy_hidden_sizes:
+            sys.exit("--policy-hidden-sizes must list at least one layer")
+    print(
+        f"[iterate] architecture: bootstrap={bootstrap_architecture}, "
+        f"new-iters will train as={iter_architecture}"
+    )
 
     # Initialize the iterate state from the bootstrap version (or
     # resume from disk if the loop was interrupted earlier).
@@ -1350,6 +1453,17 @@ def main() -> None:
         cycle_seed = args.seed + 1_000_000 * (n_done + 1)
         best_version = state["current_best"]
         best_weights = registry.weights_path(best_version)
+        # Look up the current best's architecture so the self-play
+        # NNEvaluator instantiates the matching dual-head class. v1-v15
+        # pre-architecture metadata round-trips to "shared" via
+        # ModelMetadata.from_dict.
+        best_meta = registry.load_metadata(best_version)
+        best_architecture = getattr(best_meta, "architecture", "shared")
+        best_policy_hidden_sizes = (
+            tuple(
+                best_meta.training.get("policy_hidden_sizes") or ()
+            ) or None
+        )
 
         print(
             f"\n[iterate] === Iteration {n_done + 1}/"
@@ -1442,6 +1556,8 @@ def main() -> None:
                 enable_mulligans=args.enable_mulligans,
                 per_game_timeout_sec=args.per_game_timeout_sec,
                 hidden_sizes=iter_hidden_sizes,
+                architecture=best_architecture,
+                policy_hidden_sizes=best_policy_hidden_sizes,
                 progress_path=self_play_progress_path,
                 run_id=self_play_run_id,
                 deck_pool=deck_pool,
@@ -1467,6 +1583,8 @@ def main() -> None:
                 enable_mulligans=args.enable_mulligans,
                 per_game_timeout_sec=args.per_game_timeout_sec,
                 hidden_sizes=iter_hidden_sizes,
+                architecture=best_architecture,
+                policy_hidden_sizes=best_policy_hidden_sizes,
                 deck_pool_path=args.deck_pool,
                 capture_every=args.capture_every_self_play,
                 nn_version_label=best_version,
@@ -1544,6 +1662,8 @@ def main() -> None:
             progress_path=train_progress_path,
             policy_loss_weight=args.policy_loss_weight,
             one_legal_keep_frac=args.one_legal_keep_frac,
+            architecture=iter_architecture,
+            policy_hidden_sizes=iter_policy_hidden_sizes,
         )
         new_weights = registry.weights_path(new_version)
         print(f"[iterate]   trained: {new_version}")
@@ -1615,6 +1735,9 @@ def main() -> None:
                     enable_mulligans=args.enable_mulligans,
                     per_game_timeout_sec=args.per_game_timeout_sec,
                     hidden_sizes=iter_hidden_sizes,
+                    new_architecture=iter_architecture,
+                    old_architecture=best_architecture,
+                    policy_hidden_sizes=iter_policy_hidden_sizes,
                     progress_path=eval_progress_path,
                     run_id=eval_run_id,
                     opponent_label=best_version,
@@ -1637,6 +1760,9 @@ def main() -> None:
                         enable_mulligans=args.enable_mulligans,
                         per_game_timeout_sec=args.per_game_timeout_sec,
                         hidden_sizes=iter_hidden_sizes,
+                        new_architecture=iter_architecture,
+                        old_architecture=best_architecture,
+                        policy_hidden_sizes=iter_policy_hidden_sizes,
                         deck_pool_path=args.deck_pool,
                         capture_every=args.capture_every_eval,
                         new_version_label=new_version,

@@ -66,6 +66,15 @@ class ModelMetadata:
     # tournament harness keeps loading those weights into a value-
     # only NNEvaluator. v4+ writes True for AlphaZero-style runs.
     with_policy: bool = False
+    # Dual-head model architecture: ``"shared"`` (single trunk feeds
+    # both heads, original ``_ValuePolicyMLP`` — what v1-v15 used) or
+    # ``"separate"`` (parallel value_trunk + policy_trunk feeding their
+    # own heads, ``_ValuePolicyMLPSeparate``). Default ``"shared"`` so
+    # old metadata.json files (no architecture key) round-trip
+    # unchanged and load via the original class. Ignored when
+    # ``with_policy=False`` (the value-only ``_ValueMLP`` has no
+    # architecture choice).
+    architecture: str = "shared"
     # Training inputs and hyperparameters.
     training: dict[str, Any] = field(default_factory=dict)
     # Per-epoch loss series + summary, from TrainingHistory.
@@ -88,8 +97,9 @@ class ModelMetadata:
     def from_dict(cls, d: dict[str, Any]) -> "ModelMetadata":
         known = {
             "version", "created_at", "feature_dim", "hidden_sizes",
-            "with_policy", "training", "training_history",
-            "evaluation", "git_commit", "notes", "extra",
+            "with_policy", "architecture", "training",
+            "training_history", "evaluation", "git_commit", "notes",
+            "extra",
         }
         # Stuff future-written keys we don't recognize into ``extra``.
         extra = dict(d.get("extra", {}))
@@ -104,6 +114,10 @@ class ModelMetadata:
             # Default False so old metadata.json (no with_policy key)
             # loads as a value-only network — backward compat.
             with_policy=bool(d.get("with_policy", False)),
+            # Default "shared" so old metadata.json (no architecture key)
+            # loads as the original single-trunk dual-head model — back-
+            # compat for v1-v15.
+            architecture=str(d.get("architecture", "shared")),
             training=dict(d.get("training", {})),
             training_history=dict(d.get("training_history", {})),
             evaluation=dict(d.get("evaluation", {})),

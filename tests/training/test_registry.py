@@ -99,6 +99,39 @@ def test_metadata_with_policy_round_trip_true():
     assert restored == m
 
 
+def test_metadata_architecture_defaults_to_shared_for_old_metadata():
+    """v1-v15 metadata.json files predate the architecture field.
+    Loading must default to "shared" so dispatch to NNEvaluator routes
+    to the legacy ``_ValuePolicyMLP`` and old weights still load."""
+    raw = {
+        "version": "v15",
+        "created_at": "2026-05-02T17:00:00Z",
+        "feature_dim": 51,
+        "hidden_sizes": [128, 128, 64],
+        "with_policy": True,
+    }
+    m = ModelMetadata.from_dict(raw)
+    assert m.architecture == "shared"
+    # Forward-compat: round-trip writes the field explicitly.
+    assert m.to_dict()["architecture"] == "shared"
+
+
+def test_metadata_architecture_round_trip_separate():
+    """v16+ separate-trunks metadata round-trips the architecture
+    field cleanly."""
+    m = ModelMetadata(
+        version="v16",
+        created_at="2026-05-04T17:00:00Z",
+        feature_dim=51,
+        hidden_sizes=[128, 128, 64],
+        with_policy=True,
+        architecture="separate",
+    )
+    restored = ModelMetadata.from_dict(m.to_dict())
+    assert restored.architecture == "separate"
+    assert restored == m
+
+
 # ---------- Registry: registration ------------------------------------------
 
 

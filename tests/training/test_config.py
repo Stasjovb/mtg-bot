@@ -387,6 +387,68 @@ def test_nn_pimc_config_device_threaded_into_evaluator(
     assert str(mcts.evaluator.device) == "cpu"
 
 
+# ---------- NNPimcConfig.architecture (separate-trunks dispatch) -----------
+
+
+def test_nn_pimc_config_architecture_default_is_none() -> None:
+    """``architecture`` defaults to ``None`` — meaning "use
+    NNEvaluator's default" (which is "shared"). Preserves back-compat
+    with v1-v15 versions whose metadata predates the field."""
+    cfg = NNPimcConfig(weights_path="x.pt", samples=4, inner_nodes=200)
+    assert cfg.architecture is None
+
+
+def test_nn_pimc_config_architecture_round_trips_through_dict() -> None:
+    """Explicit ``architecture`` survives JSON serialization so
+    remote shards instantiate the matching dual-head class."""
+    cfg = NNPimcConfig(
+        weights_path="x.pt", samples=4, inner_nodes=200,
+        architecture="separate",
+        policy_hidden_sizes=(64, 32),
+    )
+    rebuilt = NNPimcConfig.from_dict(cfg.to_dict())
+    assert rebuilt.architecture == "separate"
+    assert rebuilt.policy_hidden_sizes == (64, 32)
+    assert rebuilt == cfg
+
+
+def test_nn_pimc_config_architecture_missing_in_dict_defaults_to_none() -> None:
+    """Older serializations without ``architecture`` (every saved
+    config before v16) decode cleanly with ``architecture=None``
+    via ``.get(...)``."""
+    minimal = {
+        "weights_path": "old.pt", "samples": 4, "inner_nodes": 200,
+    }
+    rebuilt = NNPimcConfig.from_dict(minimal)
+    assert rebuilt.architecture is None
+    assert rebuilt.policy_hidden_sizes is None
+
+
+def test_nn_pimc_config_architecture_threaded_into_evaluator(
+    tmp_path: Path,
+) -> None:
+    """``architecture="separate"`` flows through to ``NNEvaluator``,
+    which in turn instantiates ``_ValuePolicyMLPSeparate``."""
+    import torch
+    from mtg_bot.search.nn_evaluator import (
+        NNEvaluator, _ValuePolicyMLPSeparate,
+    )
+    # Save a separate-trunks state_dict so the build() path has
+    # something to load.
+    a = NNEvaluator(with_policy=True, architecture="separate")
+    weights_path = tmp_path / "sep.pt"
+    torch.save(a.model.state_dict(), weights_path)
+    cfg = NNPimcConfig(
+        weights_path=str(weights_path),
+        samples=2, inner_nodes=4, batch_size=1,
+        with_policy=True, puct=True,
+        architecture="separate",
+    )
+    strategy = cfg.build(seed=0)
+    mcts = strategy.inner_factory()
+    assert isinstance(mcts.evaluator.model, _ValuePolicyMLPSeparate)
+
+
 # ---------- NNServerPimcConfig ----------------------------------------------
 
 

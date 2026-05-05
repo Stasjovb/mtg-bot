@@ -43,7 +43,12 @@ import torch.nn.functional as F
 import torch.optim as optim
 
 from mtg_bot.search.nn_evaluator import (
-    HIDDEN_SIZES, _ValueMLP, _ValuePolicyMLP,
+    ARCHITECTURE_SEPARATE,
+    ARCHITECTURE_SHARED,
+    HIDDEN_SIZES,
+    SUPPORTED_ARCHITECTURES,
+    _build_dual_head_model,
+    _ValueMLP,
 )
 from mtg_bot.training.progress import atomic_write_json, git_short_sha
 
@@ -101,6 +106,8 @@ def train_value_network(
     policy_loss_weight: float = 1.0,
     compile_model: bool = False,
     hidden_sizes: tuple[int, ...] = HIDDEN_SIZES,
+    architecture: str = ARCHITECTURE_SHARED,
+    policy_hidden_sizes: Optional[tuple[int, ...]] = None,
 ) -> TrainingHistory:
     """Fit a value (or value+policy) network to the supplied
     training data and write the final state_dict to
@@ -114,11 +121,27 @@ def train_value_network(
     distribution from MCTS, all-zero rows = no policy supervision)
     and ``action_masks`` (``(N, ACTION_VOCAB_SIZE)`` bool — legal-
     slot mask per row, all-False for rows without supervision).
-    With both provided, we instantiate ``_ValuePolicyMLP`` instead
-    of ``_ValueMLP``, the loss becomes
+    With both provided, we instantiate the dual-head model
+    (``_ValuePolicyMLP`` for ``architecture="shared"``,
+    ``_ValuePolicyMLPSeparate`` for ``architecture="separate"``)
+    instead of ``_ValueMLP``, the loss becomes
     ``MSE(v, z) + policy_loss_weight · masked_CE(p_pred, π_target)``,
     and the policy CE only sums over rows whose policy_target sum
     is > 0.5 (other rows contribute zero to the policy loss).
+
+    ``architecture`` selects the dual-head model class:
+
+    - ``"shared"`` (default, back-compat): single shared trunk
+      feeds both heads. v1-v15 weights all use this.
+    - ``"separate"``: two parallel trunks, one per head. Each trunk
+      consumes the raw input independently; the heads stop competing
+      for shared trunk capacity. State_dict layout differs from
+      ``"shared"`` (keys are ``value_trunk.*`` + ``policy_trunk.*``
+      + ``value_head.*`` + ``policy_head.*``); the choice is
+      recorded into the trained version's metadata.json so loaders
+      dispatch to the right class. Optional
+      ``policy_hidden_sizes`` lets the policy_trunk diverge from
+      ``hidden_sizes``; default mirrors ``hidden_sizes``.
 
     Value-only mode (default): both ``policy_targets`` and
     ``action_masks`` omitted. Trains ``_ValueMLP`` on MSE, exact
@@ -171,6 +194,11 @@ def train_value_network(
         raise ValueError(
             "policy_targets and action_masks must be provided "
             "together (or both omitted for value-only training)"
+        )
+    if architecture not in SUPPORTED_ARCHITECTURES:
+        raise ValueError(
+            f"architecture must be one of {SUPPORTED_ARCHITECTURES}; "
+            f"got {architecture!r}"
         )
     with_policy = policy_targets is not None
     if with_policy:
@@ -248,7 +276,17 @@ def train_value_network(
         has_pol_val = (
             p_val.sum(dim=-1, keepdim=True) > 0.5
         ).float()
-        model = _ValuePolicyMLP(hidden_sizes=hidden_sizes).to(device_obj)
+        # Dispatch on the architecture string. ``"shared"`` (default,
+        # back-compat) builds the original single-trunk
+        # ``_ValuePolicyMLP``; ``"separate"`` builds the parallel-
+        # trunks ``_ValuePolicyMLPSeparate``. The trainer doesn't
+        # care which beyond keeping the same forward signature
+        # ``(value, policy_logits)``.
+        model = _build_dual_head_model(
+            architecture,
+            hidden_sizes=hidden_sizes,
+            policy_hidden_sizes=policy_hidden_sizes,
+        ).to(device_obj)
     else:
         model = _ValueMLP(hidden_sizes=hidden_sizes).to(device_obj)
 

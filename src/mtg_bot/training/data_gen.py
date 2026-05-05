@@ -121,6 +121,12 @@ class ReplayCaptureConfig:
     # multiprocessing boundary.
     nn_hidden_sizes: Optional[tuple[int, ...]] = None
     nn_with_policy: bool = False
+    # Dual-head architecture for the NN annotator. ``None`` means
+    # "use NNEvaluator's default" (``"shared"``); a separate-trunks
+    # checkpoint requires ``"separate"``. Threaded through from the
+    # version's metadata.architecture by iterate / evaluate scripts.
+    nn_architecture: Optional[str] = None
+    nn_policy_hidden_sizes: Optional[tuple[int, ...]] = None
 
     def should_capture(self, game_idx: int) -> bool:
         return game_idx % self.capture_every == 0
@@ -138,6 +144,8 @@ class ReplayCaptureConfig:
                 version_label=self.nn_version_label,
                 hidden_sizes=self.nn_hidden_sizes,
                 with_policy=self.nn_with_policy,
+                architecture=self.nn_architecture,
+                policy_hidden_sizes=self.nn_policy_hidden_sizes,
             ))
         return ReplayRecorder(annotators=annotators)
 

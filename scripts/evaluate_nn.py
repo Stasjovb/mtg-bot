@@ -200,12 +200,27 @@ def main() -> None:
         metadata_hidden_sizes = (
             tuple(meta_hidden) if meta_hidden is not None else None
         )
+        # Architecture: read from metadata so the dual-head
+        # ``NNEvaluator`` instantiates the matching class. v1-v15
+        # metadata predates the field and defaults to ``"shared"``
+        # via ``ModelMetadata.from_dict``.
+        metadata_architecture = getattr(meta, "architecture", "shared")
+        meta_policy_hidden = (
+            meta.training.get("policy_hidden_sizes")
+            if hasattr(meta, "training") else None
+        )
+        metadata_policy_hidden_sizes = (
+            tuple(meta_policy_hidden)
+            if meta_policy_hidden is not None else None
+        )
     else:
         if not args.weights.is_file():
             sys.exit(f"--weights {args.weights} not found")
         weights_path = args.weights
         label = str(args.weights)
         metadata_hidden_sizes = None
+        metadata_architecture = None
+        metadata_policy_hidden_sizes = None
 
     # Resolve --puct: explicit flag wins; otherwise auto-detect from
     # registry metadata (dual-head weights default to PUCT, value-
@@ -273,6 +288,8 @@ def main() -> None:
             with_policy=metadata_with_policy or use_puct,
             puct=use_puct,
             hidden_sizes=metadata_hidden_sizes,
+            architecture=metadata_architecture,
+            policy_hidden_sizes=metadata_policy_hidden_sizes,
         )
     heuristic_cfg = PimcConfig(
         samples=args.samples,
