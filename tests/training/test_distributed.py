@@ -2254,3 +2254,74 @@ def test_replay_collection_handles_empty_listing(monkeypatch, tmp_path):
         if c[0] == "scp":
             assert not any(p.endswith(".json.gz") for p in c), c
     assert not (tmp_path / "replays" / run_id_full).exists()
+
+
+# ---- ProcessPoolExecutor cleanup must not block on hung workers ----
+#
+# Regression: 2026-05-05 a distributed iter_002 self-play hung at
+# shard cleanup time when 3 Mac games hit the 300s per-game timeout.
+# The shard's `with _cf.ProcessPoolExecutor(...) as exe:` __exit__
+# calls shutdown(wait=True), which waits forever on workers stuck in
+# C-extension code (the timeout abandons the daemon thread but
+# can't kill the underlying process call). The fix is to drop the
+# ``with`` and call ``exe.shutdown(wait=False)`` in a finally block.
+# This test pins the primitive behavior we depend on AND checks the
+# source for the failure-mode-prone pattern.
+
+def test_processpool_shutdown_wait_false_returns_promptly_with_hung_future(
+):
+    """`ProcessPoolExecutor.shutdown(wait=False)` must return promptly
+    even when a submitted future is still running. This is the
+    primitive `run_shard_pull` and the eval shard rely on to avoid
+    hanging when a per-game timeout abandons the worker thread."""
+    import concurrent.futures as _cf
+    import time as _time
+
+    def _hang_briefly():
+        _time.sleep(10.0)
+
+    exe = _cf.ProcessPoolExecutor(max_workers=2)
+    try:
+        fut = exe.submit(_hang_briefly)
+        # Don't wait for it — it would take 10s.
+        t0 = _time.perf_counter()
+        exe.shutdown(wait=False)
+        elapsed = _time.perf_counter() - t0
+        # shutdown(wait=False) returns immediately. With wait=True it
+        # would block for the full sleep duration.
+        assert elapsed < 2.0, (
+            f"shutdown(wait=False) returned in {elapsed:.2f}s; "
+            "expected <2s. The 10s sleep should NOT have been waited "
+            "for. If this fails the worker mode regressed."
+        )
+        assert not fut.cancelled()
+    finally:
+        # If shutdown didn't actually clean up, this would also stall.
+        # But asserting elapsed < 2s above is the real check.
+        del exe
+
+
+def test_distributed_does_not_use_with_processpoolexecutor_pattern():
+    """``with _cf.ProcessPoolExecutor(...) as exe:`` is a hang trap
+    when a worker is stuck in C-extension code — the ``__exit__``
+    calls shutdown(wait=True) which never returns. The source of
+    distributed.py must NOT contain this pattern; instead it should
+    create the executor explicitly and call shutdown(wait=False) in
+    a finally block.
+
+    Hard-coded text check rather than a behavior test because the
+    behavior test requires standing up a fake shard with a hung
+    worker, which is heavy. This is a fast static guard."""
+    import inspect
+    import mtg_bot.training.distributed as dmod
+    src = inspect.getsource(dmod)
+    assert "with _cf.ProcessPoolExecutor" not in src, (
+        "distributed.py uses `with ProcessPoolExecutor(...) as exe:`. "
+        "That pattern hangs forever on workers stuck in C-extension "
+        "code past the per-game timeout. Use explicit creation + "
+        "`exe.shutdown(wait=False)` in a finally block instead."
+    )
+    assert "exe.shutdown(wait=False)" in src, (
+        "distributed.py should call `exe.shutdown(wait=False)` to "
+        "avoid the hang on per-game timeout."
+    )
