@@ -51,6 +51,15 @@
   (If you're on the 3.11 venv and pytest exits with an access violation,
   switch to the 3.13 venv per the previous bullet — that's the fix.
   See `docs/segfault-fix.md`.)
+- **Inner-loop dev iteration: `pytest -n 8 --no-cov`** — ~60s for the
+  full suite vs ~270s with the default sequential+coverage (~4.3×
+  speedup, 7280 pass / 9 skip / 0 flake observed 2026-05-05 on
+  Win11+3.13). Use this while iterating; the default
+  with-coverage run remains the gate before commit (coverage must
+  stay ≥95%). xdist + sysmon are already dev deps; no setup
+  needed. The two contributions are roughly multiplicative:
+  `-n 8` parallelizes across 8 worker processes (~3× alone),
+  `--no-cov` skips sysmon instrumentation (~3× alone).
 - Tests marked `@pytest.mark.isolated` (currently `tests/test_perf_clone.py`)
   are skipped by the default `pytest` invocation — they're sensitive to
   accumulated interpreter state from preceding tests and only run reliably
