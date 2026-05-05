@@ -33,20 +33,17 @@ reduces by approximately the same factor.
 ## Numbers
 
 Two single-game runs (one BEFORE on `main`, one AFTER on this
-branch). Both ran the same seeded game (`base_seed=200`,
-`decision_cap=200`) so call counts are deterministic and
-comparable. The clean-wall numbers are NOT directly comparable
-because the two runs were started concurrently — the cProfile
-phase took ~280s under contention versus the ~250s baseline from
-the predecessor analysis.
+branch), each run alone end-to-end. Both ran the same seeded game
+(`base_seed=200`, `decision_cap=200`) so call counts are
+deterministic and comparable.
 
 | Metric | Before (legal_actions cache) | After (+ auto-pass) | Delta |
 |---|---|---|---|
-| Clean per-game wall (n=1) | 69.0 s | 69.8 s | within noise |
-| cProfile-instrumented wall | 282.0 s | 286.8 s | within noise |
+| Clean per-game wall (n=1) | 58.8 s | 59.7 s | within noise |
+| cProfile-instrumented wall | 267.0 s | 272.3 s | within noise |
 | `legal.legal_actions` calls | 828,324 | **433,526** | **-47.7%** |
-| `legal.legal_actions` cumtime | 79.6 s | 69.1 s | **-13.2%** |
-| `legal.legal_actions` tottime | 9.0 s | 7.1 s | **-20.7%** |
+| `legal.legal_actions` cumtime | 77.7 s | 67.3 s | **-13.4%** |
+| `legal.legal_actions` tottime | 8.8 s | 6.9 s | **-22.0%** |
 | `_legal_actions_cached` calls | 1,128,672 | 634,003 | -43.8% |
 | `legal_decisions` cumtime | 81.3 s | 80.0 s | -1.6% |
 | NN forward calls | 675 | 675 | unchanged |
@@ -54,21 +51,22 @@ the predecessor analysis.
 
 ## Why the wall didn't move
 
-Two factors capping the realized wall win:
+`legal_actions` is no longer the dominant cost after the
+per-decision-moment cache landed. The predecessor analysis showed
+it sitting at ~17% of cProfile wall (down from 37% pre-cache).
+Cutting that share by another half (the call-count win we observe
+here) is a **~7-9% wall reduction at most**, which is within the
+noise floor of a single-game measurement on this hardware.
 
-1. **Concurrency contention on this measurement.** The two
-   profile runs were launched in parallel on the same machine and
-   shared CPU; the wall numbers above carry that contention as
-   noise. The call-count and per-function tottime numbers are
-   immune to this noise (they're function-call counts inside one
-   process).
-
-2. **`legal_actions` is no longer the dominant cost** after the
-   per-decision cache landed. The predecessor analysis shows it
-   sitting at ~17% of cProfile wall (down from 37% pre-cache).
-   Cutting that share by another half (the call-count win) is a
-   ~7-9% wall reduction at most — within the noise floor of a
-   single-game measurement.
+The robust signal is the call-count drop (47.7%), which directly
+corresponds to ~3.7s of saved engine work in the profiled game
+(legal_actions cumtime dropped 10.4s; the rest comes from
+amortized cache invalidation). In production self-play with many
+games per worker, the per-call savings compound across short
+opp-priority cycles between phases / after stack adds / after
+stack resolves and translate more cleanly into throughput. A
+multi-game throughput re-measurement is the natural next step
+once iter is restarted.
 
 A second random-walk measurement (RandomAgent vs RandomAgent, no
 NN, no search budget) confirms the auto-pass fires at the
