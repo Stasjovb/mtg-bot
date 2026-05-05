@@ -1070,7 +1070,7 @@ def test_outcome_labels_correct_under_seat_alternation():
             decision_cap=4000,
             sample_every=1,
         )
-        features, outcomes, _policy, _mask, winner = chunk
+        features, outcomes, _policy, _mask, winner, _kind = chunk
         if winner is None:
             continue  # draws label both viewers 0 — covered by other tests
         # Samples alternate viewer=0, viewer=1 (data-doubling order in

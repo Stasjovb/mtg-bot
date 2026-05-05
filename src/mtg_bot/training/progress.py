@@ -136,6 +136,7 @@ class DataGenProgress:
     _p1_wins: int = field(default=0, init=False)
     _draws: int = field(default=0, init=False)
     _crashed: int = field(default=0, init=False)
+    _timed_out: int = field(default=0, init=False)
     _status: str = field(default="running", init=False)
     _begun: bool = field(default=False, init=False)
 
@@ -165,6 +166,7 @@ class DataGenProgress:
         n_samples: int = 0,
         outcome_p0: float = 0.0,
         crashed: bool = False,
+        timed_out: bool = False,
     ) -> None:
         """Account one finished game. ``outcome_p0`` is the +1 / -1 /
         0 outcome from p0's perspective (the value the trainer learns
@@ -172,22 +174,28 @@ class DataGenProgress:
         else draw; the threshold avoids float-equality fragility for
         the +1/0/-1 case.
 
-        Pass ``crashed=True`` for games dropped by the worker-crash /
-        per-game-timeout sentinel handler (see
-        ``data_gen._play_one_parallel_game``). Crashed games increment
-        the ``crashed`` counter instead of polluting wins / draws —
-        that keeps the live UI's draws number honest by excluding
-        games that never reached a clean conclusion. They DO still
-        count toward ``n_games_done`` so the progress bar advances.
-        Mirror of the ``EvalProgress.record_game`` shape; same fix as
-        feature/drop-crashed-games (962d58b) but for the data-gen
-        side. ``n_samples`` and ``outcome_p0`` are ignored when
-        crashed=True (caller will pass 0/0.0 anyway since the chunk
-        is empty).
+        Pass ``crashed=True`` for games dropped by the worker-crash
+        sentinel handler (real engine-level exception). Pass
+        ``timed_out=True`` for games dropped by the per-game wall-
+        clock timeout (TimeoutError out of run_with_timeout). Both
+        increment dedicated counters separate from wins / draws so
+        the live UI can tell engine bugs (crashed) apart from CPU-
+        contention slow games (timed_out). They DO still count
+        toward ``n_games_done`` so the progress bar advances.
+        ``n_samples`` and ``outcome_p0`` are ignored for both kinds
+        (caller will pass 0/0.0 anyway since the chunk is empty).
+        Passing both is illegal — caller picks one.
         """
+        if crashed and timed_out:
+            raise ValueError(
+                "record_game: crashed and timed_out are mutually "
+                "exclusive"
+            )
         self._games_done += 1
         if crashed:
             self._crashed += 1
+        elif timed_out:
+            self._timed_out += 1
         else:
             self._samples += int(n_samples)
             if outcome_p0 > 0.5:
@@ -254,6 +262,7 @@ class DataGenProgress:
             "p1_wins": int(self._p1_wins),
             "draws": int(self._draws),
             "crashed": int(self._crashed),
+            "timed_out": int(self._timed_out),
             "elapsed_seconds": float(elapsed),
             "estimated_remaining_seconds": float(eta),
             "per_game_seconds_avg": float(avg),
@@ -325,6 +334,7 @@ class EvalProgress:
     _wins_old: int = field(default=0, init=False)
     _draws: int = field(default=0, init=False)
     _crashed: int = field(default=0, init=False)
+    _timed_out: int = field(default=0, init=False)
     _total_decisions: int = field(default=0, init=False)
     _status: str = field(default="running", init=False)
     _begun: bool = field(default=False, init=False)
@@ -351,6 +361,7 @@ class EvalProgress:
         winner: Optional[int],
         decisions: int = 0,
         crashed: bool = False,
+        timed_out: bool = False,
     ) -> None:
         """Account one finished game. ``winner=0`` is a new-model
         win, ``winner=1`` an opponent win, ``winner=None`` a draw
@@ -358,18 +369,27 @@ class EvalProgress:
         is folded into the running average.
 
         Pass ``crashed=True`` for games dropped by the eval pool's
-        worker-crash handler (see ``self_play.run_match_parallel``).
-        Crashed games increment ``crashed`` instead of any of
-        wins_new / wins_old / draws — that keeps win_rate (and the
-        UI's head-to-head number) honest by excluding games that
-        never reached a clean conclusion. They DO still count
-        toward ``n_games_done`` so the progress bar advances.
+        worker-crash handler — a real engine-level exception.
+        Pass ``timed_out=True`` for games dropped by the per-game
+        wall-clock timeout (``TimeoutError``). Both increment
+        dedicated counters separate from wins_new / wins_old /
+        draws — that keeps win_rate honest AND lets the UI tell
+        engine bugs (crashed) apart from CPU-contention slow games
+        (timed_out). Both still count toward ``n_games_done``.
         Default ``False`` preserves the existing call-site contract.
+        Passing both is illegal — caller picks one.
         """
+        if crashed and timed_out:
+            raise ValueError(
+                "record_game: crashed and timed_out are mutually "
+                "exclusive"
+            )
         self._games_done += 1
         self._total_decisions += int(decisions)
         if crashed:
             self._crashed += 1
+        elif timed_out:
+            self._timed_out += 1
         elif winner == 0:
             self._wins_new += 1
         elif winner == 1:
@@ -432,6 +452,7 @@ class EvalProgress:
             "wins_old": int(self._wins_old),
             "draws": int(self._draws),
             "crashed": int(self._crashed),
+            "timed_out": int(self._timed_out),
             "win_rate": float(win_rate),
             "avg_decisions": float(avg_decisions),
             "elapsed_seconds": float(elapsed),

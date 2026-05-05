@@ -634,6 +634,7 @@ class _AggregateProgressPoller:
 
     _SUM_FIELDS = (
         "n_games_done", "n_samples", "n_workers", "crashed",
+        "timed_out",
         "p0_wins", "p1_wins", "draws",
         "wins_new", "wins_old",
     )
@@ -733,6 +734,7 @@ class _AggregateProgressPoller:
                 "n_games_done": shard.get("n_games_done", 0),
                 "n_workers": shard.get("n_workers", 0),
                 "crashed": shard.get("crashed", 0),
+                "timed_out": shard.get("timed_out", 0),
                 "elapsed_seconds": (
                     float(shard_elapsed)
                     if isinstance(shard_elapsed, (int, float))
@@ -761,6 +763,7 @@ class _AggregateProgressPoller:
             "n_games_done": int(done),
             "n_workers": int(sums["n_workers"]),
             "crashed": int(sums["crashed"]),
+            "timed_out": int(sums["timed_out"]),
             "elapsed_seconds": float(elapsed),
             "estimated_remaining_seconds": float(eta),
             "per_game_seconds_avg": float(avg),
@@ -1284,6 +1287,7 @@ def run_shard_pull(
     chunk_idx = 0
     n_games_completed = 0
     n_games_crashed = 0
+    n_games_timed_out = 0
     pending_chunks: list = []
     flush_every = max(1, n_workers)
 
@@ -1376,13 +1380,32 @@ def run_shard_pull(
                     in_flight.pop(fut)
                     game_idx, chunk, wall_s = fut.result()
                     n_samples = int(chunk[0].shape[0])
-                    crashed = n_samples == 0 and chunk[4] is None
+                    # Worker tags each empty chunk with an outcome
+                    # kind ("crashed" / "timed_out" / "completed").
+                    # Pre-feature shards may still produce 5-tuples
+                    # (no kind element); fall back to detecting the
+                    # generic empty-chunk case as "crashed" for
+                    # back-compat with on-disk replays.
+                    outcome_kind = (
+                        chunk[5] if len(chunk) > 5
+                        else (
+                            "crashed"
+                            if n_samples == 0 and chunk[4] is None
+                            else "completed"
+                        )
+                    )
+                    crashed = outcome_kind == "crashed"
+                    timed_out = outcome_kind == "timed_out"
                     if crashed:
                         n_games_crashed += 1
+                    elif timed_out:
+                        n_games_timed_out += 1
                     n_games_completed += 1
                     if progress is not None:
                         if crashed:
                             progress.record_game(crashed=True)
+                        elif timed_out:
+                            progress.record_game(timed_out=True)
                         else:
                             progress.record_game(
                                 n_samples=n_samples,
@@ -1397,7 +1420,9 @@ def run_shard_pull(
                             wall_s=wall_s,
                             n_samples=n_samples,
                             winner=chunk[4],
+                            outcome=outcome_kind,
                             crashed=crashed,
+                            timed_out=timed_out,
                         )
                     pending_chunks.append((game_idx, chunk, wall_s))
                     if len(pending_chunks) >= flush_every:
@@ -1417,6 +1442,7 @@ def run_shard_pull(
                 error=repr(exc),
                 n_games_completed=n_games_completed,
                 n_games_crashed=n_games_crashed,
+                n_games_timed_out=n_games_timed_out,
                 n_batches=chunk_idx,
                 wall_s=_time.perf_counter() - shard_t0,
             )
@@ -1429,6 +1455,7 @@ def run_shard_pull(
             status="completed",
             n_games_completed=n_games_completed,
             n_games_crashed=n_games_crashed,
+            n_games_timed_out=n_games_timed_out,
             n_batches=chunk_idx,
             wall_s=_time.perf_counter() - shard_t0,
         )
@@ -1556,6 +1583,7 @@ def run_shard_eval_pull(
     wins_old = 0
     draws = 0
     crashed = 0
+    timed_out = 0
     n_games = 0
 
     def _take_one() -> tuple[Optional[int], int, float]:
@@ -1618,11 +1646,25 @@ def run_shard_eval_pull(
                 )
                 for fut in done:
                     in_flight.pop(fut)
-                    game_idx, (winner, decisions), wall_s = fut.result()
-                    is_crash = winner is None and decisions == 0
+                    game_idx, result, wall_s = fut.result()
+                    if len(result) >= 3:
+                        winner, decisions, outcome_kind = (
+                            result[0], result[1], result[2],
+                        )
+                    else:
+                        winner, decisions = result[0], result[1]
+                        outcome_kind = (
+                            "crashed"
+                            if winner is None and decisions == 0
+                            else "completed"
+                        )
+                    is_crash = outcome_kind == "crashed"
+                    is_timeout = outcome_kind == "timed_out"
                     n_games += 1
                     if is_crash:
                         crashed += 1
+                    elif is_timeout:
+                        timed_out += 1
                     elif winner == 0:
                         wins_new += 1
                     elif winner == 1:
@@ -1633,6 +1675,7 @@ def run_shard_eval_pull(
                         progress.record_game(
                             winner=winner, decisions=decisions,
                             crashed=is_crash,
+                            timed_out=is_timeout,
                         )
                     if events is not None:
                         events.record(
@@ -1641,7 +1684,9 @@ def run_shard_eval_pull(
                             wall_s=wall_s,
                             winner=winner,
                             decisions=decisions,
+                            outcome=outcome_kind,
                             crashed=is_crash,
+                            timed_out=is_timeout,
                         )
     except BaseException as exc:
         if progress is not None:
@@ -1653,6 +1698,7 @@ def run_shard_eval_pull(
                 error=repr(exc),
                 n_games=n_games, wins_new=wins_new,
                 wins_old=wins_old, draws=draws, crashed=crashed,
+                timed_out=timed_out,
                 wall_s=_time.perf_counter() - shard_t0,
             )
         raise
@@ -1664,6 +1710,7 @@ def run_shard_eval_pull(
             status="completed",
             n_games=n_games, wins_new=wins_new,
             wins_old=wins_old, draws=draws, crashed=crashed,
+            timed_out=timed_out,
             wall_s=_time.perf_counter() - shard_t0,
         )
     return {
@@ -1672,6 +1719,7 @@ def run_shard_eval_pull(
         "wins_old": wins_old,
         "draws": draws,
         "crashed": crashed,
+        "timed_out": timed_out,
     }
 
 
