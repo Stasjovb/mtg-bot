@@ -368,6 +368,127 @@ def test_lethal_detect_opp_already_dead_returns_none():
     assert detect_lethal_attack(state, player_id=0) is None
 
 
+def test_lethal_detect_skipped_when_opp_has_combat_trigger_predicate():
+    """Opp permanent has a triggered ability with the ATTACKS event
+    (predicate-style) — heuristic aborts to avoid reasoning about
+    the trigger's effect."""
+    state = _setup_state()
+    state.players[1].life = 2
+    _give_creature(state, 0, "Wild Bear")
+    blk_id = _give_creature(state, 1, "Wild Bear")
+    blk = next(o for o in state.battlefield if o.id == blk_id)
+    from dataclasses import replace
+    from mtg_bot.effects.base import TriggeredAbility
+    from mtg_bot.effects.predicates import Event
+    from mtg_bot.effects.generic.draw_mill import DrawCards
+    fake_trig = TriggeredAbility(
+        event=Event.ATTACKS, effect=DrawCards(amount=1),
+    )
+    blk.printing = replace(
+        blk.printing, triggered_abilities=(fake_trig,),
+    )
+    assert detect_lethal_attack(state, player_id=0) is None
+
+
+def test_lethal_detect_skipped_when_opp_has_combat_trigger_string_key():
+    """Opp permanent has a triggered ability with a string-key
+    matching one of the combat-event names — abort."""
+    state = _setup_state()
+    state.players[1].life = 2
+    _give_creature(state, 0, "Wild Bear")
+    blk_id = _give_creature(state, 1, "Wild Bear")
+    blk = next(o for o in state.battlefield if o.id == blk_id)
+    from dataclasses import replace
+    from mtg_bot.effects.base import TriggeredAbility
+    from mtg_bot.effects.generic.draw_mill import DrawCards
+    fake_trig = TriggeredAbility(
+        trigger="attacks", effect=DrawCards(amount=1),
+    )
+    blk.printing = replace(
+        blk.printing, triggered_abilities=(fake_trig,),
+    )
+    assert detect_lethal_attack(state, player_id=0) is None
+
+
+def test_lethal_detect_skipped_when_opp_has_combat_trigger_alt_string():
+    """A string-key trigger using the alternate combat-trigger naming
+    convention (e.g. "combat_damage") still aborts."""
+    state = _setup_state()
+    state.players[1].life = 2
+    _give_creature(state, 0, "Wild Bear")
+    blk_id = _give_creature(state, 1, "Wild Bear")
+    blk = next(o for o in state.battlefield if o.id == blk_id)
+    from dataclasses import replace
+    from mtg_bot.effects.base import TriggeredAbility
+    from mtg_bot.effects.generic.draw_mill import DrawCards
+    fake_trig = TriggeredAbility(
+        trigger="combat_damage", effect=DrawCards(amount=1),
+    )
+    blk.printing = replace(
+        blk.printing, triggered_abilities=(fake_trig,),
+    )
+    assert detect_lethal_attack(state, player_id=0) is None
+
+
+def test_lethal_detect_returns_none_with_no_opp():
+    """3+ player game (or all opps lost) — single-opp gate fails."""
+    state = _setup_state()
+    # Mark opp as having lost.
+    state.players[1].has_lost = True
+    state.players[1].life = 2
+    _give_creature(state, 0, "Wild Bear")
+    assert detect_lethal_attack(state, player_id=0) is None
+
+
+def test_lethal_detect_does_not_abort_on_mana_ability_only():
+    """Opp has a creature with an explicit mana-only activated ability
+    (AddMana) — should NOT trigger the abort."""
+    state = _setup_state()
+    state.players[1].life = 2
+    atk_id = _give_creature(state, 0, "Wild Bear")
+    # Add a creature on opp side that has only a mana ability.
+    # Easiest: use a Forest (basic land has tap-for-mana). But a creature
+    # specifically with a mana ability via Llanowar Elves... synthetic
+    # doesn't have one. Inject via mutation.
+    # Skip the creature path — the existing test_lethal_detect_skipped_
+    # when_opp_has_mana already verifies opp Forest doesn't trigger
+    # an abort. This test specifically verifies the AddMana effect
+    # class name is recognized.
+    from dataclasses import replace
+    from mtg_bot.effects.base import (
+        ActivatedAbility, ActivationCost,
+    )
+    # Create a fake mana ability class instance — use the real AddMana
+    # if importable; otherwise synthesize a duck-typed object.
+    try:
+        from mtg_bot.effects.generic.add_mana import AddMana
+        mana_effect = AddMana(amount=1, color="G")
+    except Exception:
+        # Fallback: define a class with the right __name__.
+        class AddMana:
+            pass
+        mana_effect = AddMana()
+    mana_ability = ActivatedAbility(
+        cost=ActivationCost(tap_self=True), effect=mana_effect,
+    )
+    blk_id = _give_creature(state, 1, "Wild Bear")
+    blk = next(o for o in state.battlefield if o.id == blk_id)
+    blk.printing = replace(
+        blk.printing, activated_abilities=(mana_ability,),
+    )
+    # Opp has 1 creature blocker. We have 1 attacker. Unblocked = 0.
+    # So lethal should NOT be detected — but for a different reason
+    # than "mana ability disrupts." Add another attacker.
+    _give_creature(state, 0, "Wild Bear")
+    _give_creature(state, 0, "Wild Bear")
+    # Now we have 3 attackers vs 1 blocker; opp blocks biggest 2/2,
+    # 2 unblocked Wild Bears reach face = 4 damage > opp life 2 = lethal.
+    result = detect_lethal_attack(state, player_id=0)
+    # The mana-only ability did NOT cause an abort; lethal detected.
+    assert result is not None
+    assert atk_id in result
+
+
 # ---------------------------------------------------------------------
 # Integration: ISMCTS short-circuit
 # ---------------------------------------------------------------------
