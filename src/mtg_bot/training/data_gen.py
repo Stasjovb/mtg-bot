@@ -51,6 +51,7 @@ from mtg_bot.decks import Deck
 from mtg_bot.features import FEATURE_DIM, extract_features
 from mtg_bot.replay import save_replay
 from mtg_bot.search.engine_adapter import MtgGameStateAdapter
+from mtg_bot.search.heuristics_config import HeuristicsConfig
 from mtg_bot.search.protocol import CHANCE_PLAYER, PlayerID
 from mtg_bot.simulate import setup_game
 from mtg_bot.training._worker_threads import pin_worker_torch_threads
@@ -192,11 +193,7 @@ def generate_training_data(
     enable_mulligans: bool = False,
     per_game_timeout_sec: Optional[float] = None,
     hang_dump_dir: Optional[str] = None,
-    phase_prune_enabled: bool = True,
-    force_landdrop_enabled: bool = True,
-    skip_empty_combat_enabled: bool = True,
-    skip_opp_postcombat_main_enabled: bool = True,
-    skip_dead_main1_enabled: bool = True,
+    heuristics: Optional[HeuristicsConfig] = None,
 ) -> tuple[np.ndarray, ...]:
     """Play ``n_games`` and return training arrays.
 
@@ -224,6 +221,8 @@ def generate_training_data(
     arrays. Trainer code should detect "no policy supervision" via
     ``policy_targets.sum(-1) > 0.5`` per row.
     """
+    if heuristics is None:
+        heuristics = HeuristicsConfig()
     if progress is not None:
         progress.begin()
     chunks: list[_GameChunk] = []
@@ -238,13 +237,7 @@ def generate_training_data(
             enable_mulligans=enable_mulligans,
             per_game_timeout_sec=per_game_timeout_sec,
             hang_dump_dir=hang_dump_dir,
-            phase_prune_enabled=phase_prune_enabled,
-            force_landdrop_enabled=force_landdrop_enabled,
-            skip_empty_combat_enabled=skip_empty_combat_enabled,
-            skip_opp_postcombat_main_enabled=(
-                skip_opp_postcombat_main_enabled
-            ),
-            skip_dead_main1_enabled=skip_dead_main1_enabled,
+            heuristics=heuristics,
         )
         chunks.append(chunk)
         if progress is not None:
@@ -273,11 +266,7 @@ def generate_training_data_parallel(
     enable_mulligans: bool = False,
     per_game_timeout_sec: Optional[float] = None,
     hang_dump_dir: Optional[str] = None,
-    phase_prune_enabled: bool = True,
-    force_landdrop_enabled: bool = True,
-    skip_empty_combat_enabled: bool = True,
-    skip_opp_postcombat_main_enabled: bool = True,
-    skip_dead_main1_enabled: bool = True,
+    heuristics: Optional[HeuristicsConfig] = None,
 ) -> tuple[np.ndarray, ...]:
     """Same contract as ``generate_training_data`` but distributes
     games across a ``multiprocessing.Pool``. Same ``with_policy``
@@ -305,6 +294,8 @@ def generate_training_data_parallel(
     pool. Dominates wall clock at very small ``n_games``; amortizes
     away past a few dozen games.
     """
+    if heuristics is None:
+        heuristics = HeuristicsConfig()
     if n_workers is None:
         n_workers = max(1, (os.cpu_count() or 1) - 2)
     if n_workers < 1:
@@ -318,10 +309,7 @@ def generate_training_data_parallel(
             i, p0_factory, p1_factory, base_seed,
             decision_cap, sample_every, replay_config, deck_pool,
             enable_mulligans, per_game_timeout_sec, hang_dump_dir,
-            phase_prune_enabled, force_landdrop_enabled,
-            skip_empty_combat_enabled,
-            skip_opp_postcombat_main_enabled,
-            skip_dead_main1_enabled,
+            heuristics,
         )
         for i in range(n_games)
     ]
@@ -410,10 +398,7 @@ def _play_one_parallel_game(
         game_idx, p0_factory, p1_factory, base_seed,
         decision_cap, sample_every, replay_config, deck_pool,
         enable_mulligans, per_game_timeout_sec, hang_dump_dir,
-        phase_prune_enabled, force_landdrop_enabled,
-        skip_empty_combat_enabled,
-        skip_opp_postcombat_main_enabled,
-        skip_dead_main1_enabled,
+        heuristics,
     ) = args
     try:
         chunk = _generate_one_game_data(
@@ -426,13 +411,7 @@ def _play_one_parallel_game(
             replay_config=replay_config,
             deck_pool=deck_pool,
             hang_dump_dir=hang_dump_dir,
-            phase_prune_enabled=phase_prune_enabled,
-            force_landdrop_enabled=force_landdrop_enabled,
-            skip_empty_combat_enabled=skip_empty_combat_enabled,
-            skip_opp_postcombat_main_enabled=(
-                skip_opp_postcombat_main_enabled
-            ),
-            skip_dead_main1_enabled=skip_dead_main1_enabled,
+            heuristics=heuristics,
         )
     except Exception as exc:  # noqa: BLE001 - intentional broad catch
         import sys
@@ -472,11 +451,7 @@ def _generate_one_game_data(
     enable_mulligans: bool = False,
     per_game_timeout_sec: Optional[float] = None,
     hang_dump_dir: Optional[str] = None,
-    phase_prune_enabled: bool = True,
-    force_landdrop_enabled: bool = True,
-    skip_empty_combat_enabled: bool = True,
-    skip_opp_postcombat_main_enabled: bool = True,
-    skip_dead_main1_enabled: bool = True,
+    heuristics: Optional[HeuristicsConfig] = None,
 ) -> _GameChunk:
     """Play one game and return its 4-tuple training arrays.
 
@@ -539,11 +514,7 @@ def _generate_one_game_data(
         engine.priority_player_idx = 1
     adapter = MtgGameStateAdapter(
         engine, expose_combat_decisions=True,
-        phase_prune_enabled=phase_prune_enabled,
-        force_landdrop_enabled=force_landdrop_enabled,
-        skip_empty_combat_enabled=skip_empty_combat_enabled,
-        skip_opp_postcombat_main_enabled=skip_opp_postcombat_main_enabled,
-        skip_dead_main1_enabled=skip_dead_main1_enabled,
+        heuristics=heuristics,
     )
     strategies = {
         0: p0_factory(base_seed + 100 * game_idx),

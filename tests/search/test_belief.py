@@ -36,6 +36,7 @@ from mtg_bot.search.belief import (
     _resample_particles, _slot_log_prob,
 )
 from mtg_bot.search.engine_adapter import MtgGameStateAdapter
+from mtg_bot.search.heuristics_config import HeuristicsConfig
 from mtg_bot.simulate import setup_game
 from mtg_bot.training import action_encoding as ae
 
@@ -55,12 +56,7 @@ def _adapter(seed: int = 42) -> MtgGameStateAdapter:
     # tests exercise the actual decision branching they're designed
     # for instead of being short-circuited at the root.
     return MtgGameStateAdapter(
-        _engine_state(seed),
-        phase_prune_enabled=False,
-        force_landdrop_enabled=False,
-        skip_empty_combat_enabled=False,
-        skip_opp_postcombat_main_enabled=False,
-        skip_dead_main1_enabled=False,
+        _engine_state(seed), heuristics=HeuristicsConfig.disabled(),
     )
 
 

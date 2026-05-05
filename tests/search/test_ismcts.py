@@ -25,7 +25,7 @@ import pytest
 
 from mtg_bot.agents import RandomAgent
 from mtg_bot.search import (
-    Budget, MtgGameStateAdapter, RandomRolloutEvaluator,
+    Budget, HeuristicsConfig, MtgGameStateAdapter, RandomRolloutEvaluator,
 )
 from mtg_bot.search.info_set import info_set_key
 from mtg_bot.search.ismcts import (
@@ -45,12 +45,9 @@ def _adapter(seed: int = 42, **kwargs) -> MtgGameStateAdapter:
     )
     # Default the training-time priority short-circuits OFF so search
     # tests exercise the MCTS loop. Tests that want to exercise the
-    # heuristics can override via kwargs.
-    kwargs.setdefault("phase_prune_enabled", False)
-    kwargs.setdefault("force_landdrop_enabled", False)
-    kwargs.setdefault("skip_empty_combat_enabled", False)
-    kwargs.setdefault("skip_opp_postcombat_main_enabled", False)
-    kwargs.setdefault("skip_dead_main1_enabled", False)
+    # heuristics can override by passing
+    # ``heuristics=HeuristicsConfig(...)``.
+    kwargs.setdefault("heuristics", HeuristicsConfig.disabled())
     return MtgGameStateAdapter(state, **kwargs)
 
 

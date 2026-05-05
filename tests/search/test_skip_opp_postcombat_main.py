@@ -22,7 +22,7 @@ from unittest import mock
 from mtg_bot import legal as legal_mod
 from mtg_bot.actions import PassPriority
 from mtg_bot.agents import RandomAgent
-from mtg_bot.search import MtgGameStateAdapter
+from mtg_bot.search import HeuristicsConfig, MtgGameStateAdapter
 from mtg_bot.simulate import setup_game
 from mtg_bot.turn import Step
 
@@ -139,7 +139,10 @@ def test_does_not_fire_during_factored_combat_decision():
 def test_disabled_flag():
     state = _fresh_state()
     adapter = MtgGameStateAdapter(
-        state, skip_opp_postcombat_main_enabled=False,
+        state,
+        heuristics=HeuristicsConfig(
+            skip_opp_postcombat_main_enabled=False,
+        ),
     )
     opp_idx = 1 - state.active_player_idx
     _force_step(
@@ -157,14 +160,20 @@ def test_disabled_flag():
 def test_flag_propagates_through_clone():
     state = _fresh_state()
     adapter_on = MtgGameStateAdapter(
-        state, skip_opp_postcombat_main_enabled=True,
+        state,
+        heuristics=HeuristicsConfig(
+            skip_opp_postcombat_main_enabled=True,
+        ),
     )
     clone_on = adapter_on.clone()
-    assert clone_on._skip_opp_postcombat_main_enabled is True
+    assert clone_on._heuristics.skip_opp_postcombat_main_enabled is True
 
     state2 = _fresh_state()
     adapter_off = MtgGameStateAdapter(
-        state2, skip_opp_postcombat_main_enabled=False,
+        state2,
+        heuristics=HeuristicsConfig(
+            skip_opp_postcombat_main_enabled=False,
+        ),
     )
     clone_off = adapter_off.clone()
-    assert clone_off._skip_opp_postcombat_main_enabled is False
+    assert clone_off._heuristics.skip_opp_postcombat_main_enabled is False

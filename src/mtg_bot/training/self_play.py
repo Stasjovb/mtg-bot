@@ -44,6 +44,7 @@ from mtg_bot.agents import RandomAgent
 from mtg_bot.decks import Deck
 from mtg_bot.replay import save_replay
 from mtg_bot.search.engine_adapter import MtgGameStateAdapter
+from mtg_bot.search.heuristics_config import HeuristicsConfig
 from mtg_bot.search.protocol import CHANCE_PLAYER, PlayerID
 from mtg_bot.simulate import setup_game
 from mtg_bot.training._worker_threads import pin_worker_torch_threads
@@ -112,11 +113,7 @@ def run_match(
     deck_pool: Optional[list[Deck]] = None,
     replay_config: Optional[ReplayCaptureConfig] = None,
     hang_dump_dir: Optional[str] = None,
-    phase_prune_enabled: bool = True,
-    force_landdrop_enabled: bool = True,
-    skip_empty_combat_enabled: bool = True,
-    skip_opp_postcombat_main_enabled: bool = True,
-    skip_dead_main1_enabled: bool = True,
+    heuristics: Optional[HeuristicsConfig] = None,
 ) -> MatchStats:
     """Play ``n_games`` of ``p0_factory`` vs ``p1_factory`` and
     aggregate stats.
@@ -132,14 +129,13 @@ def run_match(
     result — essential for "does heuristic config A beat config B?"
     comparisons across tuning runs.
     """
+    if heuristics is None:
+        heuristics = HeuristicsConfig()
     results = [
         _play_one_match_game(
             game_idx, p0_factory, p1_factory, base_seed, decision_cap,
             enable_mulligans, per_game_timeout_sec, deck_pool,
-            replay_config, hang_dump_dir, phase_prune_enabled,
-            force_landdrop_enabled, skip_empty_combat_enabled,
-            skip_opp_postcombat_main_enabled,
-            skip_dead_main1_enabled,
+            replay_config, hang_dump_dir, heuristics,
         )
         for game_idx in range(n_games)
     ]
@@ -160,11 +156,7 @@ def run_match_parallel(
     replay_config: Optional[ReplayCaptureConfig] = None,
     hang_dump_dir: Optional[str] = None,
     alternate_seats: bool = False,
-    phase_prune_enabled: bool = True,
-    force_landdrop_enabled: bool = True,
-    skip_empty_combat_enabled: bool = True,
-    skip_opp_postcombat_main_enabled: bool = True,
-    skip_dead_main1_enabled: bool = True,
+    heuristics: Optional[HeuristicsConfig] = None,
 ) -> MatchStats:
     """Same contract as ``run_match`` but distributes games across a
     ``multiprocessing.Pool``.
@@ -196,6 +188,8 @@ def run_match_parallel(
     so existing callers keep their exact behavior (no per-game
     Python overhead).
     """
+    if heuristics is None:
+        heuristics = HeuristicsConfig()
     if n_workers is None:
         n_workers = max(1, (os.cpu_count() or 1) - 2)
     if n_workers < 1:
@@ -208,10 +202,7 @@ def run_match_parallel(
     args_list = [
         (i, p0_factory, p1_factory, base_seed, decision_cap,
          enable_mulligans, per_game_timeout_sec, deck_pool,
-         replay_config, hang_dump_dir, phase_prune_enabled,
-         force_landdrop_enabled, skip_empty_combat_enabled,
-         skip_opp_postcombat_main_enabled,
-         skip_dead_main1_enabled)
+         replay_config, hang_dump_dir, heuristics)
         for i in range(n_games)
     ]
     packed_worker = (
@@ -412,11 +403,7 @@ def _play_one_match_game(
     deck_pool: Optional[list[Deck]] = None,
     replay_config: Optional[ReplayCaptureConfig] = None,
     hang_dump_dir: Optional[str] = None,
-    phase_prune_enabled: bool = True,
-    force_landdrop_enabled: bool = True,
-    skip_empty_combat_enabled: bool = True,
-    skip_opp_postcombat_main_enabled: bool = True,
-    skip_dead_main1_enabled: bool = True,
+    heuristics: Optional[HeuristicsConfig] = None,
 ) -> tuple[Optional[PlayerID], int]:
     """Play one game and return ``(winner_or_None, decisions)``.
     Used by both the sequential and parallel match drivers — same
@@ -458,11 +445,7 @@ def _play_one_match_game(
         )
     adapter = MtgGameStateAdapter(
         engine, expose_combat_decisions=True,
-        phase_prune_enabled=phase_prune_enabled,
-        force_landdrop_enabled=force_landdrop_enabled,
-        skip_empty_combat_enabled=skip_empty_combat_enabled,
-        skip_opp_postcombat_main_enabled=skip_opp_postcombat_main_enabled,
-        skip_dead_main1_enabled=skip_dead_main1_enabled,
+        heuristics=heuristics,
     )
     strategies = {
         0: p0_factory(base_seed + 100 * game_idx),
