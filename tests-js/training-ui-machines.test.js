@@ -221,6 +221,85 @@ describe('training UI per-machine sub-cards', () => {
     expect(vals[3]).toBe('8');
   });
 
+  it('renders sub-cards for eval-kind runs with the same four perf stats', () => {
+    // Mirror the data_gen "renders one mini-row per host" test, but
+    // for kind: 'eval' — the eval card shares the renderMachines()
+    // pipeline with data_gen and must show identical per-host rows
+    // when the iterate-loop dispatches a distributed eval through
+    // run_distributed_eval (which writes a `machines[]` array on the
+    // aggregate JSON).
+    const run = basePayload({
+      kind: 'eval',
+      wins_new: 60,
+      wins_old: 40,
+      draws: 0,
+      win_rate: 0.6,
+      opponent_label: 'v8',
+    });
+    const card = ensureCard(run);
+    document.getElementById('active').appendChild(card);
+    fillRun(card, run);
+
+    const slot = card.querySelector('[data-field="machines"]');
+    expect(slot).not.toBeNull();
+    expect(slot.hidden).toBe(false);
+
+    const rows = slot.querySelectorAll('.machine-row');
+    expect(rows).toHaveLength(2);
+
+    // Same stat order as data_gen: secs/game, crashes, timed out,
+    // workers. Re-asserted here so a future divergence (e.g. an
+    // eval-only column injected ahead of crashes) trips this test.
+    for (const row of rows) {
+      const labelEls = row.querySelectorAll('.machine-stat-label');
+      expect(Array.from(labelEls).map((e) => e.textContent))
+        .toEqual(['secs/game', 'crashes', 'timed out', 'workers']);
+    }
+
+    // Spot-check the macbook row: per_game_seconds=10.0, crashed=2,
+    // timed_out=1, workers=14 — same numbers as the basePayload that
+    // the data_gen test pins.
+    const macRow = Array.from(rows).find(
+      (r) => r.querySelector('.machine-label').textContent
+        === 'greggs-macbook-pro',
+    );
+    const macVals = Array.from(
+      macRow.querySelectorAll('.machine-stat-value'),
+    ).map((e) => e.textContent);
+    expect(macVals).toEqual(['10.0s', '2', '1', '14']);
+
+    const deskRow = Array.from(rows).find(
+      (r) => r.querySelector('.machine-label').textContent
+        === 'desktop-j05412i',
+    );
+    const deskVals = Array.from(
+      deskRow.querySelectorAll('.machine-stat-value'),
+    ).map((e) => e.textContent);
+    expect(deskVals).toEqual(['13.5s', '0', '3', '16']);
+  });
+
+  it('hides the eval sub-card slot when machines is missing', () => {
+    // Single-machine eval (e.g. scripts/eval_chain.py running locally
+    // via run_match_parallel rather than run_distributed_eval) has no
+    // machines[] array on its progress JSON; the eval card must keep
+    // the sub-card slot hidden — same behavior as data_gen.
+    const run = basePayload({
+      kind: 'eval',
+      wins_new: 30,
+      wins_old: 20,
+      draws: 0,
+      win_rate: 0.6,
+      opponent_label: 'v8',
+      machines: undefined,
+    });
+    const card = ensureCard(run);
+    document.getElementById('active').appendChild(card);
+    fillRun(card, run);
+    const slot = card.querySelector('[data-field="machines"]');
+    expect(slot).not.toBeNull();
+    expect(slot.hidden).toBe(true);
+  });
+
   it('renders sub-cards for training-kind runs too', () => {
     const run = basePayload({
       kind: 'training',
