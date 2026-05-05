@@ -1785,6 +1785,93 @@ def test_aggregate_progress_poller_machines_carry_per_host_perf_stats(
     assert desk["per_game_seconds"] is None
 
 
+def test_aggregate_progress_poller_eval_machines_carry_per_host_perf_stats(
+    tmp_path: Path,
+):
+    """Eval-kind aggregator must populate ``machines[]`` with the same
+    per-host perf fields the data_gen aggregator does, so the UI's
+    renderMachines() sub-card row works identically on both card types.
+
+    The aggregator builds ``machines[]`` before branching on kind, so
+    in principle this comes "for free". Pin it explicitly here so a
+    future kind-specific divergence (e.g. moving the build inside the
+    data_gen branch) immediately fails this test instead of silently
+    breaking the eval card's per-machine sub-rows.
+
+    Each entry must carry: label, status, n_games_done, n_workers,
+    crashed, timed_out, elapsed_seconds, and per_game_seconds (None
+    when n_games_done == 0)."""
+    from mtg_bot.training.distributed import _AggregateProgressPoller
+
+    pdir = tmp_path
+    run_id = "iter_007_eval_v9_vs_v8"
+    # Mirror the data_gen perf-stats test but with eval-shape shards:
+    # wins_new/wins_old/draws fields, no n_samples/p0_wins/p1_wins.
+    (pdir / f"{run_id}_shard_greggs-macbook-pro.json").write_text(
+        json.dumps({
+            "run_id": f"{run_id}_shard_greggs-macbook-pro",
+            "kind": "eval", "status": "completed",
+            "n_games_total": 100, "n_games_done": 50,
+            "n_workers": 14,
+            "wins_new": 30, "wins_old": 20, "draws": 0,
+            "crashed": 2, "timed_out": 1,
+            "elapsed_seconds": 600.0,
+        }), encoding="utf-8",
+    )
+    (pdir / f"{run_id}_shard_desktop-j05412i.json").write_text(
+        json.dumps({
+            "run_id": f"{run_id}_shard_desktop-j05412i",
+            "kind": "eval", "status": "running",
+            "n_games_total": 100, "n_games_done": 0,
+            "n_workers": 16,
+            "wins_new": 0, "wins_old": 0, "draws": 0,
+            "crashed": 0, "timed_out": 0,
+            "elapsed_seconds": 5.0,
+        }), encoding="utf-8",
+    )
+    poller = _AggregateProgressPoller(
+        progress_dir=pdir, run_id=run_id,
+        n_games_total=200, kind="eval",
+        opponent_label="v8",
+    )
+    poller._write("running")
+    agg = json.loads((pdir / f"{run_id}.json").read_text())
+    # Top-level eval shape preserved.
+    assert agg["kind"] == "eval"
+    assert agg["opponent_label"] == "v8"
+    assert agg["wins_new"] == 30
+    assert agg["wins_old"] == 20
+    # And machines[] is populated for eval-kind runs with the same
+    # shape data_gen uses — that's the contract the per-machine
+    # sub-card UI relies on.
+    by_label = {m["label"]: m for m in agg["machines"]}
+    assert set(by_label) == {"greggs-macbook-pro", "desktop-j05412i"}
+    mac = by_label["greggs-macbook-pro"]
+    # Every field renderMachines() reads.
+    for key in (
+        "label", "status", "n_games_done", "n_workers",
+        "crashed", "timed_out", "elapsed_seconds", "per_game_seconds",
+    ):
+        assert key in mac, f"missing {key!r} in eval machine entry"
+    assert mac["n_games_done"] == 50
+    assert mac["n_workers"] == 14
+    assert mac["crashed"] == 2
+    assert mac["timed_out"] == 1
+    assert mac["elapsed_seconds"] == 600.0
+    # 600s / 50 games = 12.0 s/game.
+    assert mac["per_game_seconds"] == pytest.approx(12.0)
+    desk = by_label["desktop-j05412i"]
+    assert desk["n_games_done"] == 0
+    assert desk["n_workers"] == 16
+    assert desk["crashed"] == 0
+    assert desk["timed_out"] == 0
+    assert desk["elapsed_seconds"] == 5.0
+    # Zero-divide guard: per_game_seconds is None when n_games_done==0
+    # so the UI can render an em-dash for hosts that haven't finished
+    # their first game yet.
+    assert desk["per_game_seconds"] is None
+
+
 def test_aggregate_progress_poller_emits_games_per_hour_data_gen(
     tmp_path: Path,
 ):

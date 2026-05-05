@@ -479,6 +479,87 @@ def test_timed_out_roundtrips_through_api(client):
     assert by_label["desktop-j05412i"]["timed_out"] == 2
 
 
+def test_eval_aggregated_run_machines_array_passes_through(client):
+    """Eval-kind aggregate JSONs include a ``machines`` array (built by
+    the same _AggregateProgressPoller path the data_gen aggregate
+    uses); the API must pass it through unmodified so the eval card's
+    renderMachines() sub-rows see per-host secs/game, crashes,
+    timed_out and workers.
+
+    Pinned alongside the data_gen variant above so a future API tweak
+    (filtering, schema versioning) can't silently strip the per-host
+    fields off eval runs while leaving data_gen runs intact."""
+    c, progress_dir = client
+    payload = {
+        "run_id": "iter_007_eval_v9_vs_v8",
+        "kind": "eval",
+        "status": "running",
+        "started_at": "2026-05-04T12:30:00+00:00",
+        "n_games_total": 200,
+        "n_games_done": 80,
+        "n_workers": 30,
+        "wins_new": 42,
+        "wins_old": 30,
+        "draws": 1,
+        "crashed": 2,
+        "timed_out": 5,
+        "win_rate": 42 / 72,
+        "elapsed_seconds": 920.0,
+        "opponent_label": "v8",
+        "machines": [
+            {
+                "label": "greggs-macbook-pro",
+                "status": "running",
+                "n_games_done": 40,
+                "n_workers": 14,
+                "crashed": 1,
+                "timed_out": 3,
+                "elapsed_seconds": 900.0,
+                "per_game_seconds": 22.5,
+            },
+            {
+                "label": "desktop-j05412i",
+                "status": "running",
+                "n_games_done": 40,
+                "n_workers": 16,
+                "crashed": 1,
+                "timed_out": 2,
+                "elapsed_seconds": 920.0,
+                "per_game_seconds": 23.0,
+            },
+        ],
+    }
+    (progress_dir / "iter_007_eval_v9_vs_v8.json").write_text(
+        json.dumps(payload), encoding="utf-8",
+    )
+    res = c.get("/api/runs")
+    assert res.status_code == 200
+    runs = res.get_json()["runs"]
+    assert len(runs) == 1
+    assert runs[0]["kind"] == "eval"
+    machines = runs[0]["machines"]
+    assert len(machines) == 2
+    by_label = {m["label"]: m for m in machines}
+    assert set(by_label) == {"greggs-macbook-pro", "desktop-j05412i"}
+    # Every field renderMachines() reads on the eval card must
+    # round-trip end-to-end: label, n_workers, crashed, timed_out,
+    # n_games_done, elapsed_seconds, per_game_seconds.
+    mac = by_label["greggs-macbook-pro"]
+    for key in (
+        "label", "n_games_done", "n_workers", "crashed", "timed_out",
+        "elapsed_seconds", "per_game_seconds",
+    ):
+        assert key in mac, f"missing {key!r} in eval machine entry"
+    assert mac["per_game_seconds"] == 22.5
+    assert mac["crashed"] == 1
+    assert mac["timed_out"] == 3
+    # Detail endpoint also exposes the machines array (the UI currently
+    # polls /api/runs but the detail route shares _read_run_file).
+    detail = c.get("/api/runs/iter_007_eval_v9_vs_v8").get_json()
+    assert detail["kind"] == "eval"
+    assert len(detail["machines"]) == 2
+
+
 # --- Stop-run endpoint --------------------------------------------
 
 
