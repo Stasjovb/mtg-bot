@@ -1,4 +1,4 @@
-"""Tests for ``mtg_bot.training.heuristics_config.HeuristicsConfig``.
+"""Tests for ``mtg_bot.search.heuristics_config.HeuristicsConfig``.
 
 Covers:
 - Default construction (production self-play default = all True).
@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import pytest
 
-from mtg_bot.training.heuristics_config import HeuristicsConfig
+from mtg_bot.search.heuristics_config import HeuristicsConfig
 
 
 def test_default_construction_all_true():

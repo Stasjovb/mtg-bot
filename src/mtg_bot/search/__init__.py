@@ -85,6 +85,7 @@ from mtg_bot.search.expansion import (
 )
 from mtg_bot.search.harness import MatchResult, play_one_game, run_match
 from mtg_bot.search.heuristic_evaluator import MtgHeuristicEvaluator
+from mtg_bot.search.heuristics_config import HeuristicsConfig
 from mtg_bot.search.ismcts import ISMCTS
 from mtg_bot.search.mcts import MCTS
 from mtg_bot.search.nn_evaluator import NNEvaluator
@@ -115,6 +116,7 @@ __all__ = [
     "ExpansionPolicy",
     "FullEnumeration",
     "GameState",
+    "HeuristicsConfig",
     "ISMCTS",
     "MCTS",
     "MatchResult",
