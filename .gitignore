@@ -79,6 +79,12 @@ debug_hangs/
 # NN versions over time but the artifacts themselves are operator-local.
 bench_results/
 
+# cProfile dumps written by scripts/profile_ismcts_choose.py and
+# scripts/profile_self_play_game.py. Per-run, multi-MB binary, never
+# something we'd want in git history. The accompanying analysis docs
+# under docs/ ARE committed.
+profile_results/
+
 # 17lands public data + parsed deck cache. The raw CSVs are 100s of
 # MB; the parsed deck JSON is much smaller but still derived data.
 # Regenerable via scripts/fetch_17lands_data.py.
