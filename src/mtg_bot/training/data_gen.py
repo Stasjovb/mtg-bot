@@ -193,6 +193,7 @@ def generate_training_data(
     per_game_timeout_sec: Optional[float] = None,
     hang_dump_dir: Optional[str] = None,
     phase_prune_enabled: bool = True,
+    force_landdrop_enabled: bool = True,
 ) -> tuple[np.ndarray, ...]:
     """Play ``n_games`` and return training arrays.
 
@@ -235,6 +236,7 @@ def generate_training_data(
             per_game_timeout_sec=per_game_timeout_sec,
             hang_dump_dir=hang_dump_dir,
             phase_prune_enabled=phase_prune_enabled,
+            force_landdrop_enabled=force_landdrop_enabled,
         )
         chunks.append(chunk)
         if progress is not None:
@@ -264,6 +266,7 @@ def generate_training_data_parallel(
     per_game_timeout_sec: Optional[float] = None,
     hang_dump_dir: Optional[str] = None,
     phase_prune_enabled: bool = True,
+    force_landdrop_enabled: bool = True,
 ) -> tuple[np.ndarray, ...]:
     """Same contract as ``generate_training_data`` but distributes
     games across a ``multiprocessing.Pool``. Same ``with_policy``
@@ -304,7 +307,7 @@ def generate_training_data_parallel(
             i, p0_factory, p1_factory, base_seed,
             decision_cap, sample_every, replay_config, deck_pool,
             enable_mulligans, per_game_timeout_sec, hang_dump_dir,
-            phase_prune_enabled,
+            phase_prune_enabled, force_landdrop_enabled,
         )
         for i in range(n_games)
     ]
@@ -393,7 +396,7 @@ def _play_one_parallel_game(
         game_idx, p0_factory, p1_factory, base_seed,
         decision_cap, sample_every, replay_config, deck_pool,
         enable_mulligans, per_game_timeout_sec, hang_dump_dir,
-        phase_prune_enabled,
+        phase_prune_enabled, force_landdrop_enabled,
     ) = args
     try:
         chunk = _generate_one_game_data(
@@ -407,6 +410,7 @@ def _play_one_parallel_game(
             deck_pool=deck_pool,
             hang_dump_dir=hang_dump_dir,
             phase_prune_enabled=phase_prune_enabled,
+            force_landdrop_enabled=force_landdrop_enabled,
         )
     except Exception as exc:  # noqa: BLE001 - intentional broad catch
         import sys
@@ -447,6 +451,7 @@ def _generate_one_game_data(
     per_game_timeout_sec: Optional[float] = None,
     hang_dump_dir: Optional[str] = None,
     phase_prune_enabled: bool = True,
+    force_landdrop_enabled: bool = True,
 ) -> _GameChunk:
     """Play one game and return its 4-tuple training arrays.
 
@@ -510,6 +515,7 @@ def _generate_one_game_data(
     adapter = MtgGameStateAdapter(
         engine, expose_combat_decisions=True,
         phase_prune_enabled=phase_prune_enabled,
+        force_landdrop_enabled=force_landdrop_enabled,
     )
     strategies = {
         0: p0_factory(base_seed + 100 * game_idx),

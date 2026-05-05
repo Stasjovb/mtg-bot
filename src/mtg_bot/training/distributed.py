@@ -298,6 +298,9 @@ class SelfPlayJobSpec:
     # Phase-based active-priority prune (training heuristic). Defaults
     # ON for self-play; see ``docs/SEARCH_LIMITATIONS.md`` entry #6.
     phase_prune_enabled: bool = True
+    # Forced second-main land drop (training heuristic). Defaults ON
+    # for self-play; see ``docs/SEARCH_LIMITATIONS.md`` entry #7.
+    force_landdrop_enabled: bool = True
 
     def to_dict(self) -> dict[str, Any]:
         """JSON-serializable dict. Used by ``run_self_play_shard.py``
@@ -337,6 +340,7 @@ class SelfPlayJobSpec:
             "use_ismcts": self.use_ismcts,
             "use_belief_weighted": self.use_belief_weighted,
             "phase_prune_enabled": self.phase_prune_enabled,
+            "force_landdrop_enabled": self.force_landdrop_enabled,
         }
 
     @classmethod
@@ -362,6 +366,9 @@ class SelfPlayJobSpec:
             use_belief_weighted=bool(d.get("use_belief_weighted", False)),
             phase_prune_enabled=bool(
                 d.get("phase_prune_enabled", True),
+            ),
+            force_landdrop_enabled=bool(
+                d.get("force_landdrop_enabled", True),
             ),
         )
 
@@ -401,6 +408,10 @@ class EvalJobSpec:
     # justifies the prune in training does not apply when match
     # outcomes determine acceptance.
     phase_prune_enabled: bool = False
+    # Forced second-main land drop. Defaults OFF for eval (same
+    # rationale: match outcomes are load-bearing, the heuristic
+    # forces a play that may differ from optimal).
+    force_landdrop_enabled: bool = False
 
     def to_dict(self) -> dict[str, Any]:
         def _posix(p):
@@ -427,6 +438,7 @@ class EvalJobSpec:
             "use_ismcts": self.use_ismcts,
             "use_belief_weighted": self.use_belief_weighted,
             "phase_prune_enabled": self.phase_prune_enabled,
+            "force_landdrop_enabled": self.force_landdrop_enabled,
         }
 
     @classmethod
@@ -452,6 +464,9 @@ class EvalJobSpec:
             use_belief_weighted=bool(d.get("use_belief_weighted", False)),
             phase_prune_enabled=bool(
                 d.get("phase_prune_enabled", False),
+            ),
+            force_landdrop_enabled=bool(
+                d.get("force_landdrop_enabled", False),
             ),
         )
 
@@ -577,6 +592,7 @@ def run_shard_local(
                 replay_config=replay_config,
                 hang_dump_dir=hang_dump_dir,
                 phase_prune_enabled=spec.phase_prune_enabled,
+                force_landdrop_enabled=spec.force_landdrop_enabled,
             )
         )
     except BaseException:
@@ -1268,6 +1284,7 @@ def run_shard_pull(
             replay_config, deck_pool,
             spec.enable_mulligans, spec.per_game_timeout_sec,
             hang_dump_dir, spec.phase_prune_enabled,
+            spec.force_landdrop_enabled,
         )
 
     def _flush() -> None:
@@ -1539,6 +1556,7 @@ def run_shard_eval_pull(
             spec.enable_mulligans, spec.per_game_timeout_sec,
             deck_pool, replay_config, hang_dump_dir,
             spec.phase_prune_enabled,
+            spec.force_landdrop_enabled,
         )
 
     shard_t0 = _time.perf_counter()

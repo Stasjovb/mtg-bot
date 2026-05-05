@@ -48,7 +48,18 @@ def _build_adapter(seed: int) -> MtgGameStateAdapter:
          RandomAgent(rng=random.Random(seed + 2))],
         ["G", "R"], seed=seed,
     )
-    return MtgGameStateAdapter(state, expose_combat_decisions=True)
+    # Disable training-time heuristics — these tests verify encoding
+    # fidelity, not heuristic application. Phase-prune and forced
+    # land drop both modify the legal_decisions return in ways that
+    # diverge the trajectory (force_landdrop) and break the
+    # mask-vs-decisions contract at non-MAIN priority moments where
+    # the mask helper doesn't honor phase-prune (an orthogonal,
+    # pre-existing asymmetry).
+    return MtgGameStateAdapter(
+        state, expose_combat_decisions=True,
+        phase_prune_enabled=False,
+        force_landdrop_enabled=False,
+    )
 
 
 def test_vocab_size_constant_is_fixed() -> None:

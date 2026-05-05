@@ -955,5 +955,19 @@ def _enumerate_legal(state: Any, viewer: PlayerID) -> list:
         return [PassPriority()]
     cached_fn = getattr(state, "_legal_actions_cached", None)
     if cached_fn is not None:
-        return cached_fn(viewer)
-    return list(legal_actions(eng, viewer))
+        decisions = list(cached_fn(viewer))
+    else:
+        decisions = list(legal_actions(eng, viewer))
+    # Honour the adapter's forced-landdrop filter: at second main
+    # with unspent land drop and ≥1 land in hand and <6 lands in
+    # play, ``legal_decisions`` strips ``PassPriority`` from the
+    # returned list. The mask must agree, otherwise the mask would
+    # expose a phantom "pass" slot the policy could pick that the
+    # engine adapter would never actually let it apply. See
+    # ``MtgGameStateAdapter._should_force_landdrop``.
+    force_landdrop_fn = getattr(state, "_should_force_landdrop", None)
+    if force_landdrop_fn is not None and force_landdrop_fn():
+        decisions = [
+            d for d in decisions if not isinstance(d, PassPriority)
+        ]
+    return decisions

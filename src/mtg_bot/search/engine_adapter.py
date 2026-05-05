@@ -164,6 +164,7 @@ class MtgGameStateAdapter:
         expose_combat_decisions: bool = True,
         expose_resolution_decisions: bool = False,
         phase_prune_enabled: bool = True,
+        force_landdrop_enabled: bool = True,
     ) -> None:
         self._state = engine_state
         self._tactical = tactical_agent or DefaultTacticalAgent()
@@ -179,6 +180,15 @@ class MtgGameStateAdapter:
         # for tournament / eval mode where correctness matters more
         # than throughput.
         self._phase_prune_enabled = phase_prune_enabled
+        # Forced second-main land drop. When True (default), at the
+        # active player's POSTCOMBAT_MAIN priority with empty stack,
+        # if the player has not played a land this turn AND has ≥1
+        # land in hand AND has <6 lands on battlefield, ``PassPriority``
+        # is filtered OUT of legal_decisions. The player can still
+        # cast spells / activate abilities, but cannot end the
+        # priority window without playing a land. See
+        # SEARCH_LIMITATIONS entry #7.
+        self._force_landdrop_enabled = force_landdrop_enabled
         # Agent installation. With resolution exposure we need the
         # ``ResolutionChannelAgent`` to intercept callbacks; non-
         # exposed callbacks fall through to the tactical policy.
@@ -371,6 +381,77 @@ class MtgGameStateAdapter:
             return False
         return self._state.step in _PHASE_PRUNE_STEPS
 
+    def _should_force_landdrop(self) -> bool:
+        """Forced second-main land drop heuristic: when the active
+        player is at POSTCOMBAT_MAIN priority with empty stack, has
+        not yet played a land this turn, has at least one land in
+        hand, and controls fewer than six lands, ``PassPriority`` is
+        filtered out of ``legal_decisions``.
+
+        Rationale: at second main with a land in hand and unspent
+        land drop, the optimal play is almost always "play the land"
+        — leaving the land in hand wastes a permanent resource that
+        the player can't recover later. The player MAY still want to
+        cast a spell or activate an ability before playing the land
+        (e.g. tap a creature for mana, then play the land), so we
+        filter rather than force the decision down to PlayLand only.
+        Stripping ``PassPriority`` makes the player play the land at
+        SOME point during the priority window before passing.
+
+        Conditions to fire:
+        * ``force_landdrop_enabled`` is True.
+        * Not terminal.
+        * Not a resolution-pause moment.
+        * Not a combat sub-decision moment.
+        * Player with priority IS the active player.
+        * Stack is empty.
+        * Step is ``POSTCOMBAT_MAIN``.
+        * Active player has ``lands_played_this_turn == 0``.
+        * Active player has at least one land in hand.
+        * Active player controls fewer than six lands.
+
+        Documented divergence from optimal play, see
+        ``docs/SEARCH_LIMITATIONS.md`` entry #7.
+        """
+        if not self._force_landdrop_enabled:
+            return False
+        if self._state.is_over():
+            return False
+        if self._resolution_paused:
+            return False
+        if self._combat_phase != _COMBAT_NONE:
+            return False
+        if (
+            self._state.priority_player_idx
+            != self._state.active_player_idx
+        ):
+            return False
+        if len(self._state.stack) > 0:
+            return False
+        if self._state.step != Step.POSTCOMBAT_MAIN:
+            return False
+        active = self._state.players[self._state.active_player_idx]
+        if active.lands_played_this_turn != 0:
+            return False
+        # Need ≥1 land in hand (otherwise we'd filter out
+        # PassPriority leaving an unplayable empty list).
+        has_land_in_hand = any(
+            obj.printing.is_land for obj in active.hand
+        )
+        if not has_land_in_hand:
+            return False
+        # Land flood guard: once you have 6+ lands in play, holding
+        # the next land for a future turn is often correct (curve is
+        # done, the next land just floods). Six is conservative —
+        # most decks plateau on lands well before that.
+        n_lands_in_play = sum(
+            1 for obj in self._state.battlefield
+            if obj.controller_id == active.id and obj.printing.is_land
+        )
+        if n_lands_in_play >= 6:
+            return False
+        return True
+
     def _can_short_circuit_to_pass(self) -> bool:
         """True iff the current decision moment is a priority window
         whose holder has no possible action. Auto-passes BOTH the
@@ -435,6 +516,7 @@ class MtgGameStateAdapter:
         c._tactical = self._tactical
         c._expose_resolution = self._expose_resolution
         c._phase_prune_enabled = self._phase_prune_enabled
+        c._force_landdrop_enabled = self._force_landdrop_enabled
         # Resolution-channel agent is per-adapter-instance so each
         # clone has its own replay queue. Snapshot/restore preserves
         # queue state from the source.
@@ -551,7 +633,16 @@ class MtgGameStateAdapter:
                 BlockerDecision(blocker_id=next_id, attacker_id=None)
             )
             return options
-        return list(self._legal_actions_cached(self.active_player()))
+        decisions = list(self._legal_actions_cached(self.active_player()))
+        # Forced second-main land drop: at active POSTCOMBAT_MAIN
+        # priority with empty stack, unspent land drop, ≥1 land in
+        # hand, and <6 lands in play, filter PassPriority OUT. The
+        # player can still cast a spell or activate an ability, but
+        # cannot end the priority window without playing a land.
+        # See ``docs/SEARCH_LIMITATIONS.md`` entry #7.
+        if self._should_force_landdrop():
+            decisions = [d for d in decisions if not isinstance(d, PassPriority)]
+        return decisions
 
     def _resolution_legal_decisions(self) -> list[Decision]:
         """Materialize resolution-pause options as search-side

@@ -317,6 +317,50 @@ The check fires BEFORE the capability hash check (it's cheaper). Capability chec
 
 ---
 
+## 7. Forced second-main land drop (training heuristic)
+
+**Location**: `MtgGameStateAdapter.legal_decisions` (`src/mtg_bot/search/engine_adapter.py`) — see `_should_force_landdrop()`. After the full action enumeration, `PassPriority` is filtered OUT of the returned decisions when ALL of these hold:
+
+- `force_landdrop_enabled` is True (default for SelfPlayJobSpec, OFF for EvalJobSpec)
+- Active player == priority player
+- Stack is empty
+- Step is `POSTCOMBAT_MAIN`
+- `lands_played_this_turn == 0`
+- ≥1 land in active player's hand
+- Active player controls fewer than six lands
+
+The player can still cast spells / activate abilities — but cannot end the priority window without playing a land at some point.
+
+**Why this is sometimes wrong** under CR: real MTG allows the active player to skip their land drop. There ARE legitimate reasons to do so:
+
+| Edge case | Example | Bot misbehavior |
+|---|---|---|
+| Hold land for opp's land-destruction trigger | Strip Mine in opp hand at sorcery speed next turn; better to deploy after | Bot gives up the land too early |
+| Reveal-from-hand trigger that scales with lands in hand | "Whenever an opponent reveals X, do Y" — landfall payoff opposite | Bot loses the trigger value |
+| Bottom-of-the-pile color screw | Hand has only off-color land; playing it does nothing useful | Bot wastes a turn on a dead land |
+| Mulligan-style overcommit | Hand is 6+ lands and you've capped at 5; another land just floods | Mitigated by the 6-land guard, but 5-land overflow still possible |
+| Land-cycling to thin the deck | Cycling a fetchland for tempo when no reasonable play exists | Bot doesn't see the option (cycling not modeled either, see entry #4) |
+
+**Failure mode**: bot is forced to play a land when the optimal play is to hold it. Conservative-WRONG in most cases — playing a land when you have <6 in play is correct ~95% of the time on the EoE card pool, and the heuristic explicitly opts out when you're already flooded. The miss is on niche edge cases that the lightly-trained NN couldn't reason about either.
+
+**Why this isn't pure pruning** (and why it's #7 not #6.5): unlike the phase-prune (which short-circuits BEFORE legal_actions), this filter runs AFTER full enumeration and only removes one option (`PassPriority`). It's a play-quality heuristic disguised as a search filter, not a perf optimization.
+
+**When it matters**:
+- For training: bot ALWAYS plays its land at second main when conditions match — removes the "lazy NN holds lands forever" failure mode that early-stage policies fall into. Net positive for training signal quality.
+- For tournament play: small loss. The held-land cases above are real but rare; expert-level deck-building works around them. Default OFF for eval to be safe.
+
+**Mitigation**: `force_landdrop_enabled=False` on `MtgGameStateAdapter` (or via SelfPlayJobSpec / EvalJobSpec). EvalJobSpec defaults OFF; SelfPlayJobSpec defaults ON.
+
+**Acceptable for**: self-play training (the policy benefits from never seeing the "hold land for no reason" trajectory).
+
+**NOT acceptable for**: tournament play, eval matches against real opponents, any test where land-timing optimality matters.
+
+**Fix scope if/when needed**: trivial to disable per-spec. To replace with something better, add a "should I play this land?" feature to the policy network and let the NN decide. Same shape of fix as the phase-prune (entry #6).
+
+**Impact estimate**: not a perf win (filter runs AFTER legal_actions, no work skipped). The win is play-quality: trained models from runs WITH the filter ON should hit "land every turn through ~5 lands" reliably, which is a learnable pattern but a slow one without the inductive bias.
+
+---
+
 ## Tracked but not in this doc
 
 Things tracked elsewhere that you might also want to know about:
