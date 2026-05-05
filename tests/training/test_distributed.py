@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import time
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
@@ -18,6 +19,19 @@ from mtg_bot.training.distributed import (
     ShardsConfig,
     load_shards_config,
 )
+
+
+def _now_iso() -> str:
+    """ISO 8601 UTC timestamp at seconds precision — matches what
+    DataGenProgress / EvalProgress write into per-shard progress
+    JSONs and what _EarlyStopPoller compares against."""
+    return datetime.now(timezone.utc).isoformat(timespec="seconds")
+
+
+def _iso_offset_seconds(seconds: float) -> str:
+    """ISO 8601 UTC timestamp ``seconds`` from now (positive = future)."""
+    when = datetime.now(timezone.utc) + timedelta(seconds=seconds)
+    return when.isoformat(timespec="seconds")
 
 
 # ---- ShardConfig --------------------------------------------------
@@ -1934,11 +1948,23 @@ def _write_shard_progress(
     n_games_done: int,
     crashed: int = 0,
     timed_out: int = 0,
+    started_at: str | None = None,
 ) -> None:
     """Test helper: emit a per-shard progress JSON in the layout the
-    aggregate poller and the early-stop poller both consume."""
+    aggregate poller and the early-stop poller both consume.
+
+    ``started_at`` defaults to "now"; the early-stop poller's
+    stale-JSON filter requires a present timestamp at-or-after its
+    own instantiation. Pass an explicit older value to test the
+    stale-skip path."""
+    if started_at is None:
+        # Use a slightly future timestamp so even the most pessimistic
+        # clock drift between this call and the poller's ``__init__``
+        # later in the test still has the JSON read as "fresh".
+        started_at = _iso_offset_seconds(60)
     payload = {
         "run_id": run_id,
+        "started_at": started_at,
         "n_games_done": n_games_done,
         "crashed": crashed,
         "timed_out": timed_out,
@@ -2193,6 +2219,209 @@ def test_early_stop_poller_close_non_2xx_logs_and_gives_up(
     assert poller.closed is False
     err = capsys.readouterr().err
     assert "HTTP 500" in err or "early-stop" in err
+
+
+def test_early_stop_poller_ignores_stale_prior_run_jsons(
+    tmp_path: Path, capsys,
+):
+    """Repro for the 2026-05-05 bug: a previous attempt at the same
+    iter left ``iter_NNN_self_play_v13_shard_*.json`` on disk with
+    ``n_games_done`` already at the target. Without the stale-JSON
+    filter the poller's first tick (no initial wait by design) would
+    read those and POST close immediately, so the new run's shards
+    saw ``closed: true`` on their very first ``/queue/take`` and
+    exited with ``n_games_done=0``.
+
+    Fix: poller filters out shard JSONs whose ``started_at`` predates
+    its own instantiation. This test pre-populates such a stale JSON
+    and asserts the close is NOT posted."""
+    from mtg_bot.training.distributed import _EarlyStopPoller
+
+    progress_dir = tmp_path / "training_progress"
+    progress_dir.mkdir()
+    # Stale JSON from an hour ago — left over from a prior run.
+    _write_shard_progress(
+        progress_dir, "r", "A",
+        n_games_done=500,
+        started_at=_iso_offset_seconds(-3600),
+    )
+    posted: list[str] = []
+
+    poller = _EarlyStopPoller(
+        progress_dir=progress_dir,
+        run_id="r",
+        target_games=500,
+        queue_url="http://master:5099",
+        interval_s=0.02,
+        urlopen=lambda req: posted.append(req.full_url),
+    )
+    poller.start()
+    time.sleep(0.2)
+    poller.stop()
+    assert posted == []
+    assert poller.closed is False
+    # User-facing log line confirms the skip (only logged once per run).
+    err = capsys.readouterr().err
+    assert "ignoring" in err and "stale" in err
+    assert "r_shard_A.json" in err
+
+
+def test_early_stop_poller_counts_fresh_shard_started_after_init(
+    tmp_path: Path,
+):
+    """Mirror image: a shard JSON with ``started_at`` AFTER the
+    poller's ``__init__`` is the legitimate current-run case and
+    must count toward the threshold (otherwise the early-stop path
+    would never fire)."""
+    from mtg_bot.training.distributed import _EarlyStopPoller
+
+    progress_dir = tmp_path / "training_progress"
+    progress_dir.mkdir()
+    posted: list[str] = []
+
+    class FakeResp:
+        status = 200
+
+    def fake_urlopen(req):
+        posted.append(req.full_url)
+        return FakeResp()
+
+    poller = _EarlyStopPoller(
+        progress_dir=progress_dir,
+        run_id="r",
+        target_games=500,
+        queue_url="http://master:5099",
+        interval_s=0.02,
+        urlopen=fake_urlopen,
+    )
+    # Write the fresh JSON AFTER constructing the poller so its
+    # ``started_at`` lands strictly after ``self._start_iso`` —
+    # plus a 60s future offset for clock-skew slack.
+    _write_shard_progress(
+        progress_dir, "r", "A",
+        n_games_done=500,
+        started_at=_iso_offset_seconds(60),
+    )
+    poller.start()
+    if poller._thread is not None:
+        poller._thread.join(timeout=2.0)
+    poller.stop()
+    assert posted == ["http://master:5099/queue/close/r"]
+    assert poller.closed is True
+
+
+def test_early_stop_poller_mixed_stale_and_fresh_only_counts_fresh(
+    tmp_path: Path,
+):
+    """Realistic in-flight scenario: prior-run JSON for shard A
+    (n_games_done=500, hour-old started_at) AND current-run JSON
+    for shard B (n_games_done=10, started_at=now). The stale A is
+    filtered; only B's 10 count → no close."""
+    from mtg_bot.training.distributed import _EarlyStopPoller
+
+    progress_dir = tmp_path / "training_progress"
+    progress_dir.mkdir()
+    posted: list[str] = []
+    poller = _EarlyStopPoller(
+        progress_dir=progress_dir,
+        run_id="r",
+        target_games=500,
+        queue_url="http://master:5099",
+        interval_s=0.02,
+        urlopen=lambda req: posted.append(req.full_url),
+    )
+    # Stale: from a prior run.
+    _write_shard_progress(
+        progress_dir, "r", "A",
+        n_games_done=500,
+        started_at=_iso_offset_seconds(-3600),
+    )
+    # Fresh: current run, only 10 games in.
+    _write_shard_progress(
+        progress_dir, "r", "B",
+        n_games_done=10,
+        started_at=_iso_offset_seconds(60),
+    )
+    poller.start()
+    time.sleep(0.2)
+    poller.stop()
+    # Without the filter we'd see 510 successful and POST close;
+    # with the filter only B's 10 count, well below 500.
+    assert posted == []
+    assert poller.closed is False
+
+
+def test_early_stop_poller_skips_shard_missing_started_at(
+    tmp_path: Path,
+):
+    """Edge case: a shard JSON without ``started_at`` is treated as
+    untrustworthy (we can't tell which run it belongs to) and
+    skipped. Otherwise a malformed/legacy JSON could trip a false
+    early close."""
+    from mtg_bot.training.distributed import _EarlyStopPoller
+
+    progress_dir = tmp_path / "training_progress"
+    progress_dir.mkdir()
+    # Hand-write a shard JSON missing ``started_at`` entirely.
+    (progress_dir / "r_shard_A.json").write_text(
+        json.dumps({
+            "run_id": "r",
+            "n_games_done": 500,
+            "crashed": 0,
+            "timed_out": 0,
+        }),
+        encoding="utf-8",
+    )
+    posted: list[str] = []
+
+    poller = _EarlyStopPoller(
+        progress_dir=progress_dir,
+        run_id="r",
+        target_games=500,
+        queue_url="http://master:5099",
+        interval_s=0.02,
+        urlopen=lambda req: posted.append(req.full_url),
+    )
+    poller.start()
+    time.sleep(0.2)
+    poller.stop()
+    assert posted == []
+
+
+def test_early_stop_poller_stale_skip_log_fires_once_per_run(
+    tmp_path: Path, capsys,
+):
+    """Reproducibility / log-volume guard: even after many ticks
+    over the same set of stale + missing JSONs, the
+    ``[early-stop] ... ignoring N stale shard JSON(s)`` line is
+    emitted at most once. This both confirms the filter is
+    deterministic for a fixed (start_iso, files) pair and keeps the
+    orchestrator's stderr from spamming."""
+    from mtg_bot.training.distributed import _EarlyStopPoller
+
+    progress_dir = tmp_path / "training_progress"
+    progress_dir.mkdir()
+    _write_shard_progress(
+        progress_dir, "r", "A",
+        n_games_done=500,
+        started_at=_iso_offset_seconds(-3600),
+    )
+
+    poller = _EarlyStopPoller(
+        progress_dir=progress_dir,
+        run_id="r",
+        target_games=500,
+        queue_url="http://master:5099",
+        interval_s=0.02,
+        urlopen=lambda req: None,
+    )
+    poller.start()
+    # Several ticks would have run by now.
+    time.sleep(0.2)
+    poller.stop()
+    err = capsys.readouterr().err
+    # Exactly one "ignoring" line, regardless of how many ticks polled.
+    assert err.count("ignoring") == 1
 
 
 # ---- EventLog + helpers ----------------------------------------
