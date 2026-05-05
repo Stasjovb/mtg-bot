@@ -355,6 +355,68 @@ def test_bench_run_detail_endpoint(client):
     assert body["pairings"][0]["verdict"] == "comparable"
 
 
+def test_aggregated_run_machines_array_passes_through(client):
+    """Aggregated distributed runs include a ``machines`` array; the
+    API must pass it through unmodified so the per-machine sub-card
+    renderer sees the precomputed per-host fields. The training UI
+    turns each entry into a mini sub-card showing secs/game, crashes,
+    and workers."""
+    c, progress_dir = client
+    payload = {
+        "run_id": "iter_001_self_play_v6",
+        "kind": "data_gen",
+        "status": "running",
+        "started_at": "2026-05-04T05:53:36+00:00",
+        "n_games_total": 500,
+        "n_games_done": 100,
+        "n_workers": 30,
+        "elapsed_seconds": 605.0,
+        "machines": [
+            {
+                "label": "greggs-macbook-pro",
+                "status": "running",
+                "n_games_done": 60,
+                "n_workers": 14,
+                "crashed": 2,
+                "elapsed_seconds": 600.0,
+                "per_game_seconds": 10.0,
+            },
+            {
+                "label": "desktop-j05412i",
+                "status": "running",
+                "n_games_done": 40,
+                "n_workers": 16,
+                "crashed": 0,
+                "elapsed_seconds": 540.0,
+                "per_game_seconds": 13.5,
+            },
+        ],
+    }
+    (progress_dir / "iter_001_self_play_v6.json").write_text(
+        json.dumps(payload), encoding="utf-8",
+    )
+    res = c.get("/api/runs")
+    assert res.status_code == 200
+    runs = res.get_json()["runs"]
+    assert len(runs) == 1
+    machines = runs[0]["machines"]
+    by_label = {m["label"]: m for m in machines}
+    assert set(by_label) == {"greggs-macbook-pro", "desktop-j05412i"}
+    mac = by_label["greggs-macbook-pro"]
+    # Every field the UI's renderMachines() reads must round-trip.
+    for key in (
+        "label", "n_games_done", "n_workers", "crashed",
+        "elapsed_seconds", "per_game_seconds",
+    ):
+        assert key in mac, f"missing {key!r} in machine entry"
+    assert mac["per_game_seconds"] == 10.0
+    assert mac["crashed"] == 2
+    # Detail endpoint also exposes the machines array (the UI currently
+    # polls /api/runs but the detail route shares _read_run_file).
+    detail = c.get("/api/runs/iter_001_self_play_v6").get_json()
+    assert len(detail["machines"]) == 2
+
+
 def test_bench_completed_run_listed_with_others(client):
     """A completed bench run sits alongside training / eval / data-gen
     runs in /api/runs, sorted by started_at desc."""

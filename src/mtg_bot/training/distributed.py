@@ -761,12 +761,35 @@ class _AggregateProgressPoller:
             ):
                 decisions_weighted_total += shard_avg_dec * shard_done
             label = path.stem.split("_shard_", 1)[-1]
+            shard_elapsed = shard.get("elapsed_seconds", 0)
+            shard_done_int = shard.get("n_games_done", 0)
+            # Per-host performance stat: secs/game from THIS shard's own
+            # elapsed time, not the aggregator's wall clock. The shard's
+            # elapsed reflects only that machine's actual work; the
+            # aggregate elapsed includes orchestrator startup overhead
+            # and is the same for every machine. Surfaced as a precomputed
+            # field so the UI can render without doing the divide-by-zero
+            # dance per row.
+            if (
+                isinstance(shard_elapsed, (int, float))
+                and isinstance(shard_done_int, (int, float))
+                and shard_done_int > 0
+            ):
+                per_game = float(shard_elapsed) / float(shard_done_int)
+            else:
+                per_game = None
             machines.append({
                 "label": label,
                 "status": shard.get("status", "unknown"),
                 "n_games_done": shard.get("n_games_done", 0),
                 "n_workers": shard.get("n_workers", 0),
                 "crashed": shard.get("crashed", 0),
+                "elapsed_seconds": (
+                    float(shard_elapsed)
+                    if isinstance(shard_elapsed, (int, float))
+                    else 0.0
+                ),
+                "per_game_seconds": per_game,
             })
             if shard.get("ended_at"):
                 ended_ats.append(shard["ended_at"])
