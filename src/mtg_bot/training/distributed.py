@@ -1343,66 +1343,77 @@ def run_shard_pull(
         pending_chunks.clear()
 
     shard_t0 = _time.perf_counter()
+    # Don't use ``with ProcessPoolExecutor(...) as exe:`` here. The
+    # context-manager exit calls ``shutdown(wait=True)``, which blocks
+    # until every still-running future completes. Per-game timeouts
+    # (``_timeout.run_with_timeout``) are thread-based — they raise
+    # ``TimeoutError`` in the parent thread but the daemon work thread
+    # in the worker process keeps running (Windows/CPython can't kill a
+    # thread mid-C-extension call). Result: a Mac shard with 3 games
+    # past the 300s budget will hang forever in ``__exit__`` even
+    # though all completed games are already flushed to disk. Manual
+    # ``shutdown(wait=False)`` returns as soon as no new tasks can be
+    # submitted; the OS reaps the orphan workers when the parent exits.
+    exe = _cf.ProcessPoolExecutor(max_workers=n_workers)
     try:
-        with _cf.ProcessPoolExecutor(max_workers=n_workers) as exe:
-            in_flight: dict[_cf.Future, int] = {}
-            queue_drained = False
-            while True:
-                while len(in_flight) < n_workers and not queue_drained:
-                    game_idx, remaining, take_wall = _take_one()
-                    if events is not None:
-                        events.record(
-                            "game_take",
-                            game_idx=game_idx,
-                            remaining_after=remaining,
-                            take_wall_s=take_wall,
-                            in_flight=len(in_flight),
-                        )
-                    if game_idx is None:
-                        queue_drained = True
-                        break
-                    fut = exe.submit(
-                        _play_one_parallel_game_timed,
-                        _build_args(game_idx),
+        in_flight: dict[_cf.Future, int] = {}
+        queue_drained = False
+        while True:
+            while len(in_flight) < n_workers and not queue_drained:
+                game_idx, remaining, take_wall = _take_one()
+                if events is not None:
+                    events.record(
+                        "game_take",
+                        game_idx=game_idx,
+                        remaining_after=remaining,
+                        take_wall_s=take_wall,
+                        in_flight=len(in_flight),
                     )
-                    in_flight[fut] = game_idx
-                if not in_flight:
+                if game_idx is None:
+                    queue_drained = True
                     break
-                done, _pending = _cf.wait(
-                    list(in_flight.keys()),
-                    return_when=_cf.FIRST_COMPLETED,
+                fut = exe.submit(
+                    _play_one_parallel_game_timed,
+                    _build_args(game_idx),
                 )
-                for fut in done:
-                    in_flight.pop(fut)
-                    game_idx, chunk, wall_s = fut.result()
-                    n_samples = int(chunk[0].shape[0])
-                    crashed = n_samples == 0 and chunk[4] is None
+                in_flight[fut] = game_idx
+            if not in_flight:
+                break
+            done, _pending = _cf.wait(
+                list(in_flight.keys()),
+                return_when=_cf.FIRST_COMPLETED,
+            )
+            for fut in done:
+                in_flight.pop(fut)
+                game_idx, chunk, wall_s = fut.result()
+                n_samples = int(chunk[0].shape[0])
+                crashed = n_samples == 0 and chunk[4] is None
+                if crashed:
+                    n_games_crashed += 1
+                n_games_completed += 1
+                if progress is not None:
                     if crashed:
-                        n_games_crashed += 1
-                    n_games_completed += 1
-                    if progress is not None:
-                        if crashed:
-                            progress.record_game(crashed=True)
-                        else:
-                            progress.record_game(
-                                n_samples=n_samples,
-                                outcome_p0=_winner_to_p0_outcome(
-                                    chunk[4],
-                                ),
-                            )
-                    if events is not None:
-                        events.record(
-                            "game_end",
-                            game_idx=int(game_idx),
-                            wall_s=wall_s,
+                        progress.record_game(crashed=True)
+                    else:
+                        progress.record_game(
                             n_samples=n_samples,
-                            winner=chunk[4],
-                            crashed=crashed,
+                            outcome_p0=_winner_to_p0_outcome(
+                                chunk[4],
+                            ),
                         )
-                    pending_chunks.append((game_idx, chunk, wall_s))
-                    if len(pending_chunks) >= flush_every:
-                        _flush()
-            _flush()
+                if events is not None:
+                    events.record(
+                        "game_end",
+                        game_idx=int(game_idx),
+                        wall_s=wall_s,
+                        n_samples=n_samples,
+                        winner=chunk[4],
+                        crashed=crashed,
+                    )
+                pending_chunks.append((game_idx, chunk, wall_s))
+                if len(pending_chunks) >= flush_every:
+                    _flush()
+        _flush()
     except BaseException as exc:
         try:
             _flush()
@@ -1421,6 +1432,8 @@ def run_shard_pull(
                 wall_s=_time.perf_counter() - shard_t0,
             )
         raise
+    finally:
+        exe.shutdown(wait=False)
     if progress is not None:
         progress.finalize(status="completed")
     if events is not None:
@@ -1587,62 +1600,67 @@ def run_shard_eval_pull(
         )
 
     shard_t0 = _time.perf_counter()
+    # See run_shard_pull above for why this isn't ``with ... as exe``:
+    # ProcessPoolExecutor.__exit__ calls shutdown(wait=True), which
+    # blocks forever on a worker stuck in C-extension code past the
+    # per-game timeout. Manual shutdown(wait=False) returns promptly;
+    # OS reaps orphan workers when the parent exits.
+    exe = _cf.ProcessPoolExecutor(max_workers=n_workers)
     try:
-        with _cf.ProcessPoolExecutor(max_workers=n_workers) as exe:
-            in_flight: dict[_cf.Future, int] = {}
-            queue_drained = False
-            while True:
-                while len(in_flight) < n_workers and not queue_drained:
-                    game_idx, remaining, take_wall = _take_one()
-                    if events is not None:
-                        events.record(
-                            "game_take",
-                            game_idx=game_idx,
-                            remaining_after=remaining,
-                            take_wall_s=take_wall,
-                            in_flight=len(in_flight),
-                        )
-                    if game_idx is None:
-                        queue_drained = True
-                        break
-                    fut = exe.submit(
-                        _play_one_match_game_timed,
-                        _build_args(game_idx),
+        in_flight: dict[_cf.Future, int] = {}
+        queue_drained = False
+        while True:
+            while len(in_flight) < n_workers and not queue_drained:
+                game_idx, remaining, take_wall = _take_one()
+                if events is not None:
+                    events.record(
+                        "game_take",
+                        game_idx=game_idx,
+                        remaining_after=remaining,
+                        take_wall_s=take_wall,
+                        in_flight=len(in_flight),
                     )
-                    in_flight[fut] = game_idx
-                if not in_flight:
+                if game_idx is None:
+                    queue_drained = True
                     break
-                done, _pending = _cf.wait(
-                    list(in_flight.keys()),
-                    return_when=_cf.FIRST_COMPLETED,
+                fut = exe.submit(
+                    _play_one_match_game_timed,
+                    _build_args(game_idx),
                 )
-                for fut in done:
-                    in_flight.pop(fut)
-                    game_idx, (winner, decisions), wall_s = fut.result()
-                    is_crash = winner is None and decisions == 0
-                    n_games += 1
-                    if is_crash:
-                        crashed += 1
-                    elif winner == 0:
-                        wins_new += 1
-                    elif winner == 1:
-                        wins_old += 1
-                    else:
-                        draws += 1
-                    if progress is not None:
-                        progress.record_game(
-                            winner=winner, decisions=decisions,
-                            crashed=is_crash,
-                        )
-                    if events is not None:
-                        events.record(
-                            "game_end",
-                            game_idx=int(game_idx),
-                            wall_s=wall_s,
-                            winner=winner,
-                            decisions=decisions,
-                            crashed=is_crash,
-                        )
+                in_flight[fut] = game_idx
+            if not in_flight:
+                break
+            done, _pending = _cf.wait(
+                list(in_flight.keys()),
+                return_when=_cf.FIRST_COMPLETED,
+            )
+            for fut in done:
+                in_flight.pop(fut)
+                game_idx, (winner, decisions), wall_s = fut.result()
+                is_crash = winner is None and decisions == 0
+                n_games += 1
+                if is_crash:
+                    crashed += 1
+                elif winner == 0:
+                    wins_new += 1
+                elif winner == 1:
+                    wins_old += 1
+                else:
+                    draws += 1
+                if progress is not None:
+                    progress.record_game(
+                        winner=winner, decisions=decisions,
+                        crashed=is_crash,
+                    )
+                if events is not None:
+                    events.record(
+                        "game_end",
+                        game_idx=int(game_idx),
+                        wall_s=wall_s,
+                        winner=winner,
+                        decisions=decisions,
+                        crashed=is_crash,
+                    )
     except BaseException as exc:
         if progress is not None:
             progress.finalize(status="failed")
@@ -1656,6 +1674,8 @@ def run_shard_eval_pull(
                 wall_s=_time.perf_counter() - shard_t0,
             )
         raise
+    finally:
+        exe.shutdown(wait=False)
     if progress is not None:
         progress.finalize(status="completed")
     if events is not None:
