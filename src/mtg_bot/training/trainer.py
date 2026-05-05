@@ -355,7 +355,16 @@ def train_value_network(
         log_softmax of an all-``-1e9`` row is uniform-then-finite
         rather than NaN. The unsupervised-row contribution then
         cleanly multiplies to 0.
+
+        Defensive: zero target mass on action_mask=False slots
+        before computing CE. An inconsistent (target, mask) pair
+        — target_i > 0 where mask_i = False — would otherwise
+        multiply with the masked_fill ``-1e9`` to produce ~1e9
+        per-row CE, which one row in 60k is enough to dominate
+        an entire epoch's batch averages (observed: 7000+ loss
+        with ~46 such rows in a 2.8M-row historical pool).
         """
+        target_dist = target_dist * action_mask.float()
         masked_logits = policy_logits.masked_fill(~action_mask, -1e9)
         log_probs = F.log_softmax(masked_logits, dim=-1)
         per_row_ce = -(target_dist * log_probs).sum(dim=-1)

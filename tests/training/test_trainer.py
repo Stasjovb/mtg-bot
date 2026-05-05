@@ -344,3 +344,50 @@ def test_alphazero_rows_with_no_supervision_dont_break_training(
         epochs=2, batch_size=16, device="cpu",
     )
     assert all(v == 0.0 for v in history.train_policy_losses)
+
+
+def test_alphazero_target_on_illegal_slot_does_not_explode_loss(
+    tmp_path: Path,
+):
+    """One row carrying ``policy_target`` mass on an
+    ``action_mask=False`` slot must not produce a ~1e9 per-row CE
+    that dominates the batch average via the trainer's
+    ``masked_fill(~mask, -1e9)``. Defensive: the loss zeros target
+    mass on illegal slots before computing CE.
+
+    Reproduction: 46 such rows in the historical iterate_data pool
+    drove iter_002's training to train_policy_loss ~7000 and a flat
+    val_policy_loss ~14336 across 7 epochs (gradient was dominated
+    by ``-1e9`` slots, killing learning).
+    """
+    from mtg_bot.training.action_encoding import ACTION_VOCAB_SIZE
+    f, o, p, m = _synthetic_alphazero_dataset(64)
+    # Pick a supervised row (even index per the synthetic builder)
+    # and place 30% of its target mass on a slot the mask marks
+    # illegal. Renormalize the rest down to keep sum=1.0 (matches
+    # how production data is shaped — sums to 1 with mass leaking
+    # onto illegal slots).
+    bad_row = 2
+    legal_slots = np.where(m[bad_row])[0]
+    illegal_slots = np.where(~m[bad_row])[0]
+    assert len(illegal_slots) > 0
+    p[bad_row, :] = 0.0
+    p[bad_row, legal_slots[0]] = 0.7
+    p[bad_row, illegal_slots[0]] = 0.3  # the offending slot
+
+    history = train_value_network(
+        features=f, outcomes=o,
+        policy_targets=p, action_masks=m,
+        weights_out_path=tmp_path / "x.pt",
+        epochs=2, batch_size=16, device="cpu",
+    )
+    # Without the fix: per-row CE on the bad row ≈ 1e9 * 0.3 = 3e8.
+    # That single row drives the batch average past 1e6.
+    # With the fix: loss is bounded by log(ACTION_VOCAB_SIZE) ≈ 6.3
+    # (uniform over the legal slots).
+    for v in history.train_policy_losses:
+        assert v < 100.0, f"loss exploded: {v}"
+        assert np.isfinite(v), f"loss not finite: {v}"
+    for v in history.val_policy_losses:
+        assert v < 100.0, f"val loss exploded: {v}"
+        assert np.isfinite(v), f"val loss not finite: {v}"
