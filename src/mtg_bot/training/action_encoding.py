@@ -906,7 +906,17 @@ def _enumerate_legal(state: Any, viewer: PlayerID) -> list:
     priority window (``legal_actions``), the per-attacker phase
     (``AttackerDecision`` × 2), and the per-blocker phase
     (``BlockerDecision`` × N+1). When given a raw engine state, only
-    the normal priority window is supported."""
+    the normal priority window is supported.
+
+    When ``state`` is an adapter, the priority-window branch routes
+    through the adapter's per-decision-moment ``legal_actions`` cache
+    (``_legal_actions_cached``) so a search loop that calls both
+    ``legal_decisions`` AND ``legal_action_mask`` for the same priority
+    moment only enumerates once. The cache is invalidated by
+    ``adapter.apply``, so freshness is automatic. Engine-state inputs
+    (no adapter context) fall through to ``legal_actions`` directly —
+    same behavior as before, no caching available.
+    """
     eng = _engine_state(state)
     phase = _combat_phase(state)
     if phase == "attackers":
@@ -928,6 +938,13 @@ def _enumerate_legal(state: Any, viewer: PlayerID) -> list:
             )
         out.append(BlockerDecision(blocker_id=head, attacker_id=None))
         return out
-    # Normal priority window. Use the engine-side enumerator directly
-    # — same as the adapter's default branch in legal_decisions().
+    # Normal priority window. Prefer the adapter's cached enumerator
+    # when available so concurrent ``legal_decisions`` /
+    # ``legal_action_mask`` calls in the ISMCTS inner loop share one
+    # underlying ``legal.legal_actions`` invocation per priority
+    # moment. Falls back to a direct call when ``state`` is a raw
+    # engine state.
+    cached_fn = getattr(state, "_legal_actions_cached", None)
+    if cached_fn is not None:
+        return cached_fn(viewer)
     return list(legal_actions(eng, viewer))
