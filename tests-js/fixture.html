@@ -88,3 +88,29 @@
     <div id="zone-modal-cards" class="zone-modal-cards"></div>
   </div>
 </div>
+
+<!-- Interactive-play tab + form. app.js wires events on these at top level;
+     they must exist (even if hidden) so the test fixture doesn't trip on
+     null.addEventListener. Mirrors the panel block in templates/index.html. -->
+<button type="button" id="tab-watch">Watch</button>
+<button type="button" id="tab-play">Play</button>
+<form id="iplay-form" autocomplete="off">
+  <input id="iplay-seed" type="number" value="0">
+  <select id="iplay-my-color"><option value="R" selected>R</option></select>
+  <select id="iplay-bot-color"><option value="G" selected>G</option></select>
+  <select id="iplay-player-id"><option value="0" selected>0</option></select>
+  <input id="iplay-max-turns" type="number" value="200">
+</form>
+
+<!-- Interactive-play decision panel + modal. Same null-guard rationale. -->
+<section id="decision-panel" hidden>
+  <div id="decision-waiting"></div>
+  <div id="decision-body">
+    <div id="decision-prompt"></div>
+    <div id="decision-options"></div>
+  </div>
+</section>
+<div id="decision-modal" hidden>
+  <span id="decision-modal-title"></span>
+  <div id="decision-modal-body"></div>
+</div>
