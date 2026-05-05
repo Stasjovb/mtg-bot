@@ -33,6 +33,7 @@ from mtg_bot.search import (
 from mtg_bot.search.heuristic_evaluator import MtgHeuristicEvaluator
 from mtg_bot.search.protocol import CHANCE_PLAYER
 from mtg_bot.simulate import setup_game
+from tests._test_decks import simple_test_decklists  # noqa: E402
 
 
 # Tiny budgets so a default-suite game finishes in single-digit seconds.
@@ -51,10 +52,8 @@ def _adapter_factory(seed: int):
     placeholders. The adapter overwrites the agents with its tactical
     policy on construction, so the placeholders are just shape-fillers."""
     def make() -> MtgGameStateAdapter:
-        state = setup_game(
-            [RandomAgent(rng=random.Random(seed + 1)),
-             RandomAgent(rng=random.Random(seed + 2))],
-            ["G", "R"], seed=seed,
+        state = setup_game([RandomAgent(rng=random.Random(seed + 1)),
+             RandomAgent(rng=random.Random(seed + 2))], decks=simple_test_decklists(), seed=seed,
         )
         return MtgGameStateAdapter(state)
     return make

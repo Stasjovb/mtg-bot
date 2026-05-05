@@ -29,6 +29,7 @@ from mtg_bot.agents import RandomAgent
 from mtg_bot.search import HeuristicsConfig, MtgGameStateAdapter
 from mtg_bot.simulate import setup_game
 from mtg_bot.turn import Step
+from tests._test_decks import simple_test_decklists  # noqa: E402
 
 
 # ---------------------------------------------------------------------
@@ -37,8 +38,7 @@ from mtg_bot.turn import Step
 
 
 def _fresh_state(seed: int = 42):
-    return setup_game(
-        [RandomAgent(), RandomAgent()], ["G", "R"], seed=seed,
+    return setup_game([RandomAgent(), RandomAgent()], decks=simple_test_decklists(), seed=seed,
     )
 
 

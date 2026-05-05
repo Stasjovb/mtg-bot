@@ -15,12 +15,12 @@ from mtg_bot.actions import PassPriority
 from mtg_bot.agents import RandomAgent
 from mtg_bot.search.belief import BeliefWeightedDeterminizer, PriorityMoment
 from mtg_bot.search.nn_evaluator import NNEvaluator
-from mtg_bot.simulate import setup_game
+from mtg_bot.simulate import _default_deck_for_color as _default_deck, setup_game
 
 
 def main() -> None:
     state = setup_game(
-        [RandomAgent(), RandomAgent()], ["G", "R"], seed=11,
+        [RandomAgent(), RandomAgent()], decks=[_default_deck("G", 11), _default_deck("R", 11)], seed=11,
     )
     weights = Path(__file__).resolve().parent.parent.parent / (
         "mtg-bot/trained_weights/v10/weights.pt"

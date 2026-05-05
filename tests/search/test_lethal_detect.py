@@ -27,6 +27,7 @@ from mtg_bot.search.budget import Budget
 from mtg_bot.search.ismcts import ISMCTS
 from mtg_bot.simulate import setup_game
 from mtg_bot.turn import Step
+from tests._test_decks import simple_test_decklists  # noqa: E402
 
 
 # ---------------------------------------------------------------------
@@ -37,8 +38,7 @@ from mtg_bot.turn import Step
 def _setup_state(seed: int = 42):
     """Two-player setup with stripped zones for both players so the
     test has full control over what's on the battlefield / in hand."""
-    state = setup_game(
-        [RandomAgent(), RandomAgent()], ["G", "R"], seed=seed,
+    state = setup_game([RandomAgent(), RandomAgent()], decks=simple_test_decklists(), seed=seed,
     )
     for idx in range(len(state.players)):
         p = state.players[idx]

@@ -27,6 +27,7 @@ from mtg_bot.actions import (
     PlayLand,
 )
 from mtg_bot.ui import create_app
+from tests._test_decks import simple_test_decklists  # noqa: E402
 
 
 # ---------------------------------------------------------------------------
@@ -73,7 +74,7 @@ class TestSerializeAction:
         from mtg_bot.agents import RandomAgent
         from mtg_bot.legal import legal_actions
 
-        state = setup_game([RandomAgent(), RandomAgent()], colors=["G", "R"], seed=0)
+        state = setup_game([RandomAgent(), RandomAgent()], decks=simple_test_decklists(), seed=0)
         player = state.players[0]
         for obj in player.hand:
             if obj.printing.is_land:
@@ -88,7 +89,7 @@ class TestSerializeAction:
         from mtg_bot.simulate import setup_game
         from mtg_bot.agents import RandomAgent
 
-        state = setup_game([RandomAgent(), RandomAgent()], colors=["G", "R"], seed=0)
+        state = setup_game([RandomAgent(), RandomAgent()], decks=simple_test_decklists(), seed=0)
         for obj in state.players[0].hand:
             if not obj.printing.is_land:
                 action = CastSpell(card_id=obj.id)
@@ -102,7 +103,7 @@ class TestSerializeAction:
         from mtg_bot.simulate import setup_game
         from mtg_bot.agents import RandomAgent
 
-        state = setup_game([RandomAgent(), RandomAgent()], colors=["G", "R"], seed=0)
+        state = setup_game([RandomAgent(), RandomAgent()], decks=simple_test_decklists(), seed=0)
         for obj in state.players[0].hand:
             if not obj.printing.is_land:
                 action = CastSpell(card_id=obj.id, use_warp=True)
@@ -137,7 +138,7 @@ class TestInteractiveAgent:
         from mtg_bot.simulate import setup_game
         from mtg_bot.agents import RandomAgent
 
-        state = setup_game([RandomAgent(), RandomAgent()], colors=["G", "R"], seed=0)
+        state = setup_game([RandomAgent(), RandomAgent()], decks=simple_test_decklists(), seed=0)
         legal = [PassPriority()]
         agent = _make_agent()
         result_holder = []
@@ -160,7 +161,7 @@ class TestInteractiveAgent:
         from mtg_bot.simulate import setup_game
         from mtg_bot.agents import RandomAgent
 
-        state = setup_game([RandomAgent(), RandomAgent()], colors=["G", "R"], seed=0)
+        state = setup_game([RandomAgent(), RandomAgent()], decks=simple_test_decklists(), seed=0)
         legal = [PassPriority()]
         agent = _make_agent()
         result_holder = []
@@ -183,7 +184,7 @@ class TestInteractiveAgent:
         from mtg_bot.simulate import setup_game
         from mtg_bot.agents import RandomAgent
 
-        state = setup_game([RandomAgent(), RandomAgent()], colors=["G", "R"], seed=0)
+        state = setup_game([RandomAgent(), RandomAgent()], decks=simple_test_decklists(), seed=0)
         eligible = list(state.battlefield)[:1] if state.battlefield else []
         agent = _make_agent()
         result_holder = []
@@ -203,7 +204,7 @@ class TestInteractiveAgent:
         from mtg_bot.simulate import setup_game
         from mtg_bot.agents import RandomAgent
 
-        state = setup_game([RandomAgent(), RandomAgent()], colors=["G", "R"], seed=0)
+        state = setup_game([RandomAgent(), RandomAgent()], decks=simple_test_decklists(), seed=0)
         agent = _make_agent()
         result_holder = []
         t = threading.Thread(
@@ -222,7 +223,7 @@ class TestInteractiveAgent:
         from mtg_bot.simulate import setup_game
         from mtg_bot.agents import RandomAgent
 
-        state = setup_game([RandomAgent(), RandomAgent()], colors=["G", "R"], seed=0)
+        state = setup_game([RandomAgent(), RandomAgent()], decks=simple_test_decklists(), seed=0)
         legal_targets = [("player", 1)]
         agent = _make_agent()
         result_holder = []
@@ -242,7 +243,7 @@ class TestInteractiveAgent:
         from mtg_bot.simulate import setup_game
         from mtg_bot.agents import RandomAgent
 
-        state = setup_game([RandomAgent(), RandomAgent()], colors=["G", "R"], seed=0)
+        state = setup_game([RandomAgent(), RandomAgent()], decks=simple_test_decklists(), seed=0)
         agent = _make_agent()
         result = agent.choose_target(state, 0, [])
         assert result is None
@@ -251,7 +252,7 @@ class TestInteractiveAgent:
         from mtg_bot.simulate import setup_game
         from mtg_bot.agents import RandomAgent
 
-        state = setup_game([RandomAgent(), RandomAgent()], colors=["G", "R"], seed=0)
+        state = setup_game([RandomAgent(), RandomAgent()], decks=simple_test_decklists(), seed=0)
         hand_ids = [obj.id for obj in state.players[0].hand]
         if not hand_ids:
             pytest.skip("empty hand")
@@ -271,7 +272,7 @@ class TestInteractiveAgent:
         from mtg_bot.simulate import setup_game
         from mtg_bot.agents import RandomAgent
 
-        state = setup_game([RandomAgent(), RandomAgent()], colors=["G", "R"], seed=0)
+        state = setup_game([RandomAgent(), RandomAgent()], decks=simple_test_decklists(), seed=0)
         top_id = state.players[0].library[0].id if state.players[0].library else 1
         agent = _make_agent()
         result_holder = []
@@ -289,7 +290,7 @@ class TestInteractiveAgent:
         from mtg_bot.simulate import setup_game
         from mtg_bot.agents import RandomAgent
 
-        state = setup_game([RandomAgent(), RandomAgent()], colors=["G", "R"], seed=0)
+        state = setup_game([RandomAgent(), RandomAgent()], decks=simple_test_decklists(), seed=0)
         agent = _make_agent()
         result_holder = []
         t = threading.Thread(
@@ -308,7 +309,7 @@ class TestInteractiveAgent:
         from mtg_bot.simulate import setup_game
         from mtg_bot.agents import RandomAgent
 
-        state = setup_game([RandomAgent(), RandomAgent()], colors=["G", "R"], seed=0)
+        state = setup_game([RandomAgent(), RandomAgent()], decks=simple_test_decklists(), seed=0)
         agent = _make_agent()
         result_holder = []
         t = threading.Thread(
@@ -327,7 +328,7 @@ class TestInteractiveAgent:
         from mtg_bot.simulate import setup_game
         from mtg_bot.agents import RandomAgent
 
-        state = setup_game([RandomAgent(), RandomAgent()], colors=["G", "R"], seed=0)
+        state = setup_game([RandomAgent(), RandomAgent()], decks=simple_test_decklists(), seed=0)
         agent = _make_agent()
         result_holder = []
         t = threading.Thread(
@@ -346,7 +347,7 @@ class TestInteractiveAgent:
         from mtg_bot.simulate import setup_game
         from mtg_bot.agents import RandomAgent
 
-        state = setup_game([RandomAgent(), RandomAgent()], colors=["G", "R"], seed=0)
+        state = setup_game([RandomAgent(), RandomAgent()], decks=simple_test_decklists(), seed=0)
         agent = _make_agent()
         result_holder = []
         t = threading.Thread(
@@ -365,7 +366,7 @@ class TestInteractiveAgent:
         from mtg_bot.simulate import setup_game
         from mtg_bot.agents import RandomAgent
 
-        state = setup_game([RandomAgent(), RandomAgent()], colors=["G", "R"], seed=0)
+        state = setup_game([RandomAgent(), RandomAgent()], decks=simple_test_decklists(), seed=0)
         agent = _make_agent()
         result_holder = []
         t = threading.Thread(
@@ -384,7 +385,7 @@ class TestInteractiveAgent:
         from mtg_bot.simulate import setup_game
         from mtg_bot.agents import RandomAgent
 
-        state = setup_game([RandomAgent(), RandomAgent()], colors=["G", "R"], seed=0)
+        state = setup_game([RandomAgent(), RandomAgent()], decks=simple_test_decklists(), seed=0)
         agent = _make_agent()
         result_holder = []
         t = threading.Thread(
@@ -403,7 +404,7 @@ class TestInteractiveAgent:
         from mtg_bot.simulate import setup_game
         from mtg_bot.agents import RandomAgent
 
-        state = setup_game([RandomAgent(), RandomAgent()], colors=["G", "R"], seed=0)
+        state = setup_game([RandomAgent(), RandomAgent()], decks=simple_test_decklists(), seed=0)
         agent = _make_agent()
         result_holder = []
         t = threading.Thread(
@@ -422,7 +423,7 @@ class TestInteractiveAgent:
         from mtg_bot.simulate import setup_game
         from mtg_bot.agents import RandomAgent
 
-        state = setup_game([RandomAgent(), RandomAgent()], colors=["G", "R"], seed=0)
+        state = setup_game([RandomAgent(), RandomAgent()], decks=simple_test_decklists(), seed=0)
         agent = _make_agent()
         result_holder = []
         t = threading.Thread(
@@ -441,7 +442,7 @@ class TestInteractiveAgent:
         from mtg_bot.simulate import setup_game
         from mtg_bot.agents import RandomAgent
 
-        state = setup_game([RandomAgent(), RandomAgent()], colors=["G", "R"], seed=0)
+        state = setup_game([RandomAgent(), RandomAgent()], decks=simple_test_decklists(), seed=0)
         lib_ids = [obj.id for obj in state.players[0].library[:3]]
         agent = _make_agent()
         result_holder = []
@@ -461,7 +462,7 @@ class TestInteractiveAgent:
         from mtg_bot.simulate import setup_game
         from mtg_bot.agents import RandomAgent
 
-        state = setup_game([RandomAgent(), RandomAgent()], colors=["G", "R"], seed=0)
+        state = setup_game([RandomAgent(), RandomAgent()], decks=simple_test_decklists(), seed=0)
         agent = _make_agent()
         # Empty option list → immediately returns None without blocking
         result = agent.choose_card_from_library(state, 0, [])

@@ -39,6 +39,7 @@ from mtg_bot.search.engine_adapter import MtgGameStateAdapter
 from mtg_bot.search.heuristics_config import HeuristicsConfig
 from mtg_bot.simulate import setup_game
 from mtg_bot.training import action_encoding as ae
+from tests._test_decks import simple_test_decklists  # noqa: E402
 
 
 # ---------- helpers ---------------------------------------------------------
@@ -46,8 +47,7 @@ from mtg_bot.training import action_encoding as ae
 
 def _engine_state(seed: int = 42):
     """Fresh engine state from the synthetic G/R deck pair."""
-    return setup_game(
-        [RandomAgent(), RandomAgent()], ["G", "R"], seed=seed,
+    return setup_game([RandomAgent(), RandomAgent()], decks=simple_test_decklists(), seed=seed,
     )
 
 

@@ -22,9 +22,6 @@ def test_set_active_source_swaps_and_reverts():
         def get_printings(self):
             return {}
 
-        def build_mono_color_deck(self, color, seed=None):
-            return []
-
     original = get_active_source()
     fake = FakeSource()
     try:
@@ -43,12 +40,8 @@ def test_card_source_protocol_is_runtime_compatible():
         def get_printings(self):
             return {}
 
-        def build_mono_color_deck(self, color, seed=None):
-            return []
-
     source: CardSource = Minimal()
     assert source.get_printings() == {}
-    assert source.build_mono_color_deck("G") == []
 
 
 def test_card_source_from_env_default_is_parser():

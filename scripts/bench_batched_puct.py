@@ -32,13 +32,13 @@ from mtg_bot.agents import RandomAgent
 from mtg_bot.search import (
     Budget, MCTS, MtgGameStateAdapter, NNEvaluator,
 )
-from mtg_bot.simulate import setup_game
+from mtg_bot.simulate import _default_deck_for_color as _default_deck, setup_game
 from mtg_bot.turn import Step
 
 
 def _adapter(seed: int = 42) -> MtgGameStateAdapter:
     state = setup_game(
-        [RandomAgent(), RandomAgent()], ["G", "R"], seed=seed,
+        [RandomAgent(), RandomAgent()], decks=[_default_deck("G", seed), _default_deck("R", seed)], seed=seed,
     )
     return MtgGameStateAdapter(state)
 

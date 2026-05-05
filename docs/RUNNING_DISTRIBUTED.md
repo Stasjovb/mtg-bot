@@ -70,8 +70,12 @@ The `scripts/iterate_alphazero.py` driver runs the
     --games-per-iteration 500 \
     --samples 4 \
     --nodes 200 \
-    --workers 16
+    --workers 16 \
+    --deck-pool data/17lands/eoe_decks.json.gz
 ```
+
+`--deck-pool` is **required** — every self-play / eval game samples
+from the real EoE pool. There is no synthetic-deck fallback.
 
 Self-play runs on this machine's `multiprocessing.Pool`. Training
 runs on this machine's GPU (auto-detected). Eval runs on this
@@ -86,7 +90,8 @@ Add `--shards-config` pointing at a JSON file describing the cluster:
     --bootstrap-version v6 \
     --n-iterations 5 \
     --games-per-iteration 1000 \
-    --shards-config shards_config.json
+    --shards-config shards_config.json \
+    --deck-pool data/17lands/eoe_decks.json.gz
 ```
 
 `shards_config.json` shape (see

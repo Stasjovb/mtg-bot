@@ -653,17 +653,6 @@ def test_source_get_printings_returns_only_claimed():
     assert set(source.get_printings()) == set(source.claimed_names)
 
 
-def test_source_build_mono_color_deck_returns_60_cards():
-    deck = OracleParserCardSource().build_mono_color_deck("R", seed=0)
-    assert len(deck) == 60
-    assert deck.count("Mountain") == 24
-
-
-def test_source_build_mono_color_deck_rejects_unknown_color():
-    with pytest.raises(ValueError, match="unknown color"):
-        OracleParserCardSource().build_mono_color_deck("Z", seed=0)
-
-
 # ---------- _parse_spell_effect_phrase ----------
 
 def test_parse_spell_effect_phrase_recognizes_deal_damage_any_target():

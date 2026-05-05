@@ -17,6 +17,7 @@ from mtg_bot.simulate import simulate_game
 from mtg_bot.turn import draw_card, run_cleanup_step, state_based_actions
 
 from mtg_bot.cards.source import get_active_source
+from tests._test_decks import simple_test_decklists  # noqa: E402
 
 
 # -----------------------
@@ -42,20 +43,24 @@ def test_parse_mana_cost_x_is_zero_generic():
     assert parse_mana_cost("{X}{X}{R}").generic == 0
 
 
-def test_build_deck_rejects_unknown_color():
+def test_default_deck_for_color_rejects_unknown_color():
+    """The simulate.simulate_game playground deck builder rejects
+    unknown colors with a clear error."""
+    from mtg_bot.simulate import _default_deck_for_color
     with pytest.raises(ValueError, match="unknown color"):
-        get_active_source().build_mono_color_deck("Z")
+        _default_deck_for_color("Z", seed=0)
 
 
-def test_build_deck_rejects_color_with_no_creatures(monkeypatch):
-    # Fake-out the parser source's printings so a color has no cards,
+def test_default_deck_for_color_rejects_color_with_no_creatures(monkeypatch):
+    # Fake-out the active source's printings so a color has no cards,
     # exercising the "no creatures in color" branch.
     from mtg_bot.cards.source import get_active_source
+    from mtg_bot.simulate import _default_deck_for_color
 
     src = get_active_source()
     monkeypatch.setattr(src, "_printings", {})
     with pytest.raises(ValueError, match="no creatures in color"):
-        src.build_mono_color_deck("G")
+        _default_deck_for_color("G", seed=0)
 
 
 # -----------------------
@@ -234,7 +239,7 @@ def test_state_based_actions_is_idempotent_once_draw_set():
 
 def test_simulate_rejects_mismatched_agents_and_colors():
     with pytest.raises(ValueError, match="same length"):
-        simulate_game(agents=[RandomAgent()], colors=["G", "R"], seed=0)
+        simulate_game(agents=[RandomAgent()], decks=simple_test_decklists(), seed=0)
 
 
 def test_simulate_verbose_prints(capsys):

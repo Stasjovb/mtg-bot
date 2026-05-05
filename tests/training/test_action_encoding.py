@@ -40,13 +40,12 @@ from mtg_bot.training.action_encoding import (
     encode,
     legal_action_mask,
 )
+from tests._test_decks import simple_test_decklists
 
 
 def _build_adapter(seed: int) -> MtgGameStateAdapter:
-    state = setup_game(
-        [RandomAgent(rng=random.Random(seed + 1)),
-         RandomAgent(rng=random.Random(seed + 2))],
-        ["G", "R"], seed=seed,
+    state = setup_game([RandomAgent(rng=random.Random(seed + 1)),
+         RandomAgent(rng=random.Random(seed + 2))], decks=simple_test_decklists(), seed=seed,
     )
     # Disable training-time heuristics — these tests verify encoding
     # fidelity, not heuristic application. Phase-prune and forced

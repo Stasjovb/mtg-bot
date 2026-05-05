@@ -63,7 +63,7 @@ from mtg_bot.search import (  # noqa: E402
 )
 from mtg_bot.search.nn_evaluator import NNEvaluator  # noqa: E402
 from mtg_bot.search.strategy import SearchStrategy  # noqa: E402
-from mtg_bot.simulate import setup_game  # noqa: E402
+from mtg_bot.simulate import _default_deck_for_color as _default_deck, setup_game  # noqa: E402
 from mtg_bot.training.config import NNPimcConfig  # noqa: E402
 from mtg_bot.training.progress import BenchProgress  # noqa: E402
 from mtg_bot.training.self_play import run_match_parallel  # noqa: E402
@@ -216,7 +216,7 @@ def classify(
 
 def _make_state(seed: int) -> MtgGameStateAdapter:
     state = setup_game(
-        [RandomAgent(), RandomAgent()], ["G", "R"], seed=seed,
+        [RandomAgent(), RandomAgent()], decks=[_default_deck("G", seed), _default_deck("R", seed)], seed=seed,
     )
     adapter = MtgGameStateAdapter(state)
     while (

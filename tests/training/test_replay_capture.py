@@ -13,6 +13,7 @@ from mtg_bot.training import (
     generate_training_data, generate_training_data_parallel,
     heuristic_eval_annotator, random_choice_factory,
 )
+from tests._test_decks import simple_test_decklists, simple_test_deck_pool
 
 
 # ---------- ReplayRecorder ---------------------------------------------------
@@ -26,7 +27,7 @@ def test_recorder_with_no_annotators_records_raw_snapshots():
                 .RandomAgent(),
                 __import__("mtg_bot.agents", fromlist=["RandomAgent"])
                 .RandomAgent()],
-        colors=["G", "R"], seed=0,
+        decks=simple_test_decklists(), seed=0,
     )
     rec = ReplayRecorder()
     rec.record(state)
@@ -50,7 +51,7 @@ def test_recorder_stores_decision_when_provided():
     from mtg_bot.simulate import setup_game
     state = setup_game(
         agents=[RandomAgent(), RandomAgent()],
-        colors=["G", "R"], seed=0,
+        decks=simple_test_decklists(), seed=0,
     )
     rec = ReplayRecorder()
     rec.record(state, decision=PassPriority())
@@ -63,7 +64,7 @@ def test_heuristic_annotator_attaches_eval_per_snapshot():
     from mtg_bot.agents import RandomAgent
     state = setup_game(
         agents=[RandomAgent(), RandomAgent()],
-        colors=["G", "R"], seed=0,
+        decks=simple_test_decklists(), seed=0,
     )
     rec = ReplayRecorder(annotators=[heuristic_eval_annotator()])
     rec.record(state)
@@ -158,7 +159,7 @@ def test_nn_eval_annotator_annotates_running_and_terminal_states(
     from mtg_bot.agents import RandomAgent
     state = setup_game(
         agents=[RandomAgent(), RandomAgent()],
-        colors=["G", "R"],
+        decks=simple_test_decklists(),
         seed=0,
     )
     out = annotate(state)
@@ -201,7 +202,7 @@ def test_generate_training_data_writes_replays_when_configured(tmp_path: Path):
     features, outcomes = generate_training_data(
         p0_factory=random_choice_factory,
         p1_factory=random_choice_factory,
-        n_games=2, base_seed=42, replay_config=cfg,
+        n_games=2, base_seed=42, replay_config=cfg, deck_pool=simple_test_deck_pool(),
     )
     # Training data still produced as before.
     assert features.shape[0] == outcomes.shape[0]
@@ -227,7 +228,7 @@ def test_generate_training_data_capture_every_thins_files(tmp_path: Path):
     generate_training_data(
         p0_factory=random_choice_factory,
         p1_factory=random_choice_factory,
-        n_games=4, base_seed=0, replay_config=cfg,
+        n_games=4, base_seed=0, replay_config=cfg, deck_pool=simple_test_deck_pool(),
     )
     files = sorted(save_dir.glob("*.json.gz"))
     # Games 0 and 2 captured.
@@ -245,7 +246,7 @@ def test_generate_training_data_no_replay_config_writes_no_files(tmp_path: Path)
     generate_training_data(
         p0_factory=random_choice_factory,
         p1_factory=random_choice_factory,
-        n_games=2, base_seed=0,
+        n_games=2, base_seed=0, deck_pool=simple_test_deck_pool(),
     )
     assert list(save_dir.glob("*.json.gz")) == []
 
@@ -261,7 +262,7 @@ def test_generate_training_data_parallel_writes_replays(tmp_path: Path):
     features, _ = generate_training_data_parallel(
         p0_factory=random_choice_factory,
         p1_factory=random_choice_factory,
-        n_games=3, base_seed=7, n_workers=2, replay_config=cfg,
+        n_games=3, base_seed=7, n_workers=2, replay_config=cfg, deck_pool=simple_test_deck_pool(),
     )
     assert features.shape[0] > 0
     files = sorted(save_dir.glob("*.json.gz"))
@@ -280,12 +281,12 @@ def test_parallel_replay_files_match_sequential(tmp_path: Path):
     generate_training_data(
         p0_factory=random_choice_factory,
         p1_factory=random_choice_factory,
-        n_games=2, base_seed=99, replay_config=seq_cfg,
+        n_games=2, base_seed=99, replay_config=seq_cfg, deck_pool=simple_test_deck_pool(),
     )
     generate_training_data_parallel(
         p0_factory=random_choice_factory,
         p1_factory=random_choice_factory,
-        n_games=2, base_seed=99, n_workers=2, replay_config=par_cfg,
+        n_games=2, base_seed=99, n_workers=2, replay_config=par_cfg, deck_pool=simple_test_deck_pool(),
     )
     seq_files = sorted(p.name for p in seq_dir.glob("*.json.gz"))
     par_files = sorted(p.name for p in par_dir.glob("*.json.gz"))
@@ -322,7 +323,7 @@ def test_v2_replay_round_trips_decisions(tmp_path: Path):
 
     state = setup_game(
         agents=[RandomAgent(), RandomAgent()],
-        colors=["G", "R"], seed=0,
+        decks=simple_test_decklists(), seed=0,
     )
     rec = ReplayRecorder()
     expected = [
@@ -363,7 +364,7 @@ def test_end_to_end_replay_capture_records_decisions(tmp_path: Path):
     generate_training_data(
         p0_factory=random_choice_factory,
         p1_factory=random_choice_factory,
-        n_games=2, base_seed=42, replay_config=cfg,
+        n_games=2, base_seed=42, replay_config=cfg, deck_pool=simple_test_deck_pool(),
     )
     files = sorted(save_dir.glob("*.json.gz"))
     assert len(files) == 2

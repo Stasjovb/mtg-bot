@@ -75,6 +75,7 @@ def _raising_factory(seed: int) -> _RaisingStrategy:
 # boundary on Windows; module-level globals don't. Lets a parallel
 # test simulate "only game K crashes" without needing Manager IPC.
 import os as _os
+from tests._test_decks import simple_test_deck_pool
 
 
 def _crash_seeds_from_env() -> set[int]:
@@ -127,6 +128,9 @@ def test_packed_worker_returns_sentinel_on_crash(capfd):
         random_choice_factory,      # p1_factory
         0,                          # base_seed
         100,                        # decision_cap
+        False,                      # enable_mulligans
+        None,                       # per_game_timeout_sec
+        simple_test_deck_pool(),    # deck_pool
     )
     result = _play_one_match_game_packed(args)
     assert result == (None, 0, "crashed")
@@ -147,6 +151,9 @@ def test_indexed_worker_preserves_game_idx_on_crash(capfd):
         random_choice_factory,
         0,
         100,
+        False,                      # enable_mulligans
+        None,                       # per_game_timeout_sec
+        simple_test_deck_pool(),    # deck_pool
     )
     game_idx, result = _play_one_match_game_indexed(args)
     assert game_idx == 7
@@ -170,7 +177,7 @@ def test_run_match_parallel_no_progress_survives_crashes(capfd):
         p1_factory=random_choice_factory,
         n_games=n_games,
         base_seed=0,
-        n_workers=2,
+        n_workers=2, deck_pool=simple_test_deck_pool(),
     )
     # Every game crashed → all dropped from the dataset; nothing
     # contributed signal. Wins / draws / games are all zero;
@@ -208,7 +215,7 @@ def test_run_match_parallel_no_progress_partial_crash(
         p1_factory=random_choice_factory,
         n_games=n_games,
         base_seed=base_seed,
-        n_workers=2,
+        n_workers=2, deck_pool=simple_test_deck_pool(),
     )
 
     # Exactly 1 game crashed; the remaining 4 contributed signal.
@@ -253,7 +260,7 @@ def test_run_match_parallel_with_progress_survives_crashes(
         n_games=n_games,
         base_seed=0,
         n_workers=2,
-        progress=progress,
+        progress=progress, deck_pool=simple_test_deck_pool(),
     )
 
     # All games crashed → all dropped from MatchStats; ``crashed``

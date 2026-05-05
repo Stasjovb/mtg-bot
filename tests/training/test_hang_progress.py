@@ -111,6 +111,7 @@ def test_data_gen_timeout_dump_contains_progress(
     from mtg_bot.training import _timeout
     from mtg_bot.training import random_choice_factory
     from mtg_bot.training.data_gen import _generate_one_game_data
+    from tests._test_decks import simple_test_deck_pool
 
     # ``run_with_timeout(func, args, timeout)`` — drive the progress
     # sentinel that's been threaded into ``args`` (it's the LAST entry)
@@ -138,6 +139,7 @@ def test_data_gen_timeout_dump_contains_progress(
             sample_every=1,
             per_game_timeout_sec=300.0,
             hang_dump_dir=str(dump_dir),
+            deck_pool=simple_test_deck_pool(),
         )
     files = sorted(dump_dir.iterdir())
     assert len(files) == 2
@@ -155,6 +157,7 @@ def test_self_play_timeout_dump_contains_progress(
     from mtg_bot.training import _timeout
     from mtg_bot.training import random_choice_factory
     from mtg_bot.training.self_play import _play_one_match_game
+    from tests._test_decks import simple_test_deck_pool
 
     def fake_run_with_timeout(func, args, timeout_sec):
         # In self_play the args tuple is (adapter, strategies, rng,
@@ -177,6 +180,7 @@ def test_self_play_timeout_dump_contains_progress(
             decision_cap=4000,
             per_game_timeout_sec=300.0,
             hang_dump_dir=str(dump_dir),
+            deck_pool=simple_test_deck_pool(),
         )
     files = sorted(dump_dir.iterdir())
     assert len(files) == 2

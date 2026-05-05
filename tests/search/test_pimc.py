@@ -18,6 +18,7 @@ from mtg_bot.search import (
     RandomRolloutEvaluator,
 )
 from mtg_bot.simulate import setup_game
+from tests._test_decks import simple_test_decklists  # noqa: E402
 
 
 # ---------- fakes ------------------------------------------------------------
@@ -62,8 +63,7 @@ class _RecordingDeterminizer:
 
 
 def _fresh_adapter(seed: int = 42, **kwargs) -> MtgGameStateAdapter:
-    state = setup_game(
-        [RandomAgent(), RandomAgent()], ["G", "R"], seed=seed,
+    state = setup_game([RandomAgent(), RandomAgent()], decks=simple_test_decklists(), seed=seed,
     )
     return MtgGameStateAdapter(state, **kwargs)
 

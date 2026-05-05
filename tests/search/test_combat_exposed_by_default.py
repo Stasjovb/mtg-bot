@@ -14,11 +14,11 @@ from mtg_bot.game import Zone
 from mtg_bot.search import AttackerDecision, MtgGameStateAdapter
 from mtg_bot.simulate import setup_game
 from mtg_bot.turn import Step
+from tests._test_decks import simple_test_decklists  # noqa: E402
 
 
 def _state_with_attacker(seed: int = 42):
-    state = setup_game(
-        [RandomAgent(), RandomAgent()], ["G", "R"], seed=seed,
+    state = setup_game([RandomAgent(), RandomAgent()], decks=simple_test_decklists(), seed=seed,
     )
     bear = state.new_object(
         SYNTHETIC_CREATURES["Wild Bear"], owner_id=0,

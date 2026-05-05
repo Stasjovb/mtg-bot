@@ -45,7 +45,7 @@ from mtg_bot.agents import RandomAgent
 from mtg_bot.search import (
     Budget, ISMCTS, MtgGameStateAdapter, RandomRolloutEvaluator,
 )
-from mtg_bot.simulate import setup_game
+from mtg_bot.simulate import _default_deck_for_color as _default_deck, setup_game
 
 
 # Small budget so the per-call time is dominated by the actual
@@ -58,7 +58,7 @@ NUM_CALLS = 5
 
 def _fresh_adapter(seed: int) -> MtgGameStateAdapter:
     state = setup_game(
-        [RandomAgent(), RandomAgent()], ["G", "R"], seed=seed,
+        [RandomAgent(), RandomAgent()], decks=[_default_deck("G", seed), _default_deck("R", seed)], seed=seed,
     )
     adapter = MtgGameStateAdapter(state)
     # Walk past forced moves so the first search has something to do.

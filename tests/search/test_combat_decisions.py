@@ -25,6 +25,7 @@ from mtg_bot.search import (
 )
 from mtg_bot.simulate import setup_game
 from mtg_bot.turn import Step
+from tests._test_decks import simple_test_decklists  # noqa: E402
 
 
 def _setup_with_creatures(
@@ -38,8 +39,7 @@ def _setup_with_creatures(
     so they're combat-ready. Wrap in the adapter."""
     p0_creatures = p0_creatures or []
     p1_creatures = p1_creatures or []
-    state = setup_game(
-        [RandomAgent(), RandomAgent()], ["G", "R"], seed=seed,
+    state = setup_game([RandomAgent(), RandomAgent()], decks=simple_test_decklists(), seed=seed,
     )
     for name in p0_creatures:
         obj = state.new_object(

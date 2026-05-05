@@ -14,6 +14,7 @@ import random
 from mtg_bot.agents import RandomAgent
 from mtg_bot.game import GameState
 from mtg_bot.simulate import simulate_game
+from tests._test_decks import simple_test_decklists  # noqa: E402
 
 
 def test_state_rng_shuffle_is_reproducible() -> None:
@@ -54,7 +55,7 @@ def test_simulate_game_deterministic_with_same_seeds() -> None:
             RandomAgent(name="a1", rng=random.Random(222)),
         ]
         return simulate_game(
-            agents=agents, colors=["G", "R"], seed=42, max_turns=30,
+            agents=agents, decks=simple_test_decklists(), seed=42, max_turns=30,
         )
 
     left = run_once()
@@ -76,7 +77,7 @@ def test_simulate_game_diverges_with_different_seed() -> None:
             RandomAgent(name="a1", rng=random.Random(222)),
         ]
         state = simulate_game(
-            agents=agents, colors=["G", "R"], seed=seed, max_turns=30,
+            agents=agents, decks=simple_test_decklists(), seed=seed, max_turns=30,
         )
         return list(state.log)
 

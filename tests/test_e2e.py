@@ -35,6 +35,7 @@ from playwright.sync_api import sync_playwright  # noqa: E402
 from werkzeug.serving import make_server  # noqa: E402
 
 from mtg_bot.ui import create_app  # noqa: E402
+from tests._test_decks import simple_test_decklists  # noqa: E402
 
 
 class _ServerThread(threading.Thread):
@@ -744,7 +745,7 @@ def lethal_replay_setup(tmp_path_factory):
     for seed in range(0, 200):
         recorder = ReplayRecorder()
         state = simulate_game(
-            colors=["G", "R"], seed=seed, max_turns=80,
+            decks=simple_test_decklists(), seed=seed, max_turns=80,
             on_snapshot=recorder.record,
             snapshot_granularity="step",
         )

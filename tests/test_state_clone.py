@@ -21,6 +21,7 @@ import random
 
 from mtg_bot.agents import RandomAgent
 from mtg_bot.simulate import simulate_game
+from tests._test_decks import simple_test_decklists  # noqa: E402
 
 
 def _battlefield_fingerprint(state) -> list[tuple]:
@@ -44,7 +45,7 @@ def _mid_game_state(seed: int = 17, max_turns: int = 5):
         RandomAgent(name="a1", rng=random.Random(202)),
     ]
     return simulate_game(
-        agents=agents, colors=["G", "R"], seed=seed, max_turns=max_turns,
+        agents=agents, decks=simple_test_decklists(), seed=seed, max_turns=max_turns,
     )
 
 

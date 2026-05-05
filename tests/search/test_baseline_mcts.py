@@ -26,11 +26,11 @@ from mtg_bot.search import (
     mtg_default_prior,
 )
 from mtg_bot.simulate import setup_game
+from tests._test_decks import simple_test_decklists  # noqa: E402
 
 
 def _adapter(seed: int = 42) -> MtgGameStateAdapter:
-    state = setup_game(
-        [RandomAgent(), RandomAgent()], ["G", "R"], seed=seed,
+    state = setup_game([RandomAgent(), RandomAgent()], decks=simple_test_decklists(), seed=seed,
     )
     return MtgGameStateAdapter(state, expose_combat_decisions=True)
 

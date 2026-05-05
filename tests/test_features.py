@@ -24,6 +24,7 @@ from mtg_bot.features import FEATURE_DIM, extract_features
 from mtg_bot.game import GameState, Player, Zone
 from mtg_bot.simulate import setup_game
 from mtg_bot.turn import STEP_ORDER, Step
+from tests._test_decks import simple_test_decklists  # noqa: E402
 
 
 def _empty_two_player_state() -> GameState:
@@ -78,8 +79,7 @@ def test_feature_dim_is_finite_and_reasonable():
 
 
 def test_extract_is_deterministic():
-    state = setup_game(
-        [RandomAgent(), RandomAgent()], ["G", "R"], seed=42,
+    state = setup_game([RandomAgent(), RandomAgent()], decks=simple_test_decklists(), seed=42,
     )
     a = extract_features(state, viewer_id=0)
     b = extract_features(state, viewer_id=0)
@@ -87,8 +87,7 @@ def test_extract_is_deterministic():
 
 
 def test_extract_does_not_mutate_state():
-    state = setup_game(
-        [RandomAgent(), RandomAgent()], ["G", "R"], seed=7,
+    state = setup_game([RandomAgent(), RandomAgent()], decks=simple_test_decklists(), seed=7,
     )
     pre_hand = [
         [c.id for c in p.hand] for p in state.players
@@ -317,8 +316,7 @@ def test_runs_on_real_setup_game_state():
     """Smoke check on a real engine state (drawn, libraries set up,
     everything wired). No specific assertions — just confirms there's
     no crash on the realistic shape."""
-    state = setup_game(
-        [RandomAgent(), RandomAgent()], ["G", "R"], seed=42,
+    state = setup_game([RandomAgent(), RandomAgent()], decks=simple_test_decklists(), seed=42,
     )
     features = extract_features(state, viewer_id=0)
     assert features.shape == (FEATURE_DIM,)
@@ -519,8 +517,7 @@ def test_seat_swap_invariant_on_real_setup_game():
     ``controller_id`` references on every battlefield object stay
     valid — only the list-position changes. Each viewer must see
     identical features in the mirrored state."""
-    state_a = setup_game(
-        [RandomAgent(), RandomAgent()], ["G", "R"], seed=123,
+    state_a = setup_game([RandomAgent(), RandomAgent()], decks=simple_test_decklists(), seed=123,
     )
 
     import copy

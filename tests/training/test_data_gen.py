@@ -24,6 +24,8 @@ from mtg_bot.training import (
 )
 from mtg_bot.training.data_gen import _play_one_game_recording
 
+from tests._test_decks import simple_test_deck_pool
+
 
 # ---------- generate_training_data: shape + content invariants ---------------
 
@@ -34,7 +36,7 @@ def test_generates_correct_shapes_and_dtypes():
     features, outcomes = generate_training_data(
         p0_factory=random_choice_factory,
         p1_factory=random_choice_factory,
-        n_games=2, base_seed=42,
+        n_games=2, base_seed=42, deck_pool=simple_test_deck_pool(),
     )
     assert features.dtype == np.float32
     assert outcomes.dtype == np.float32
@@ -50,7 +52,7 @@ def test_outcomes_are_in_valid_set():
     _, outcomes = generate_training_data(
         p0_factory=random_choice_factory,
         p1_factory=random_choice_factory,
-        n_games=2, base_seed=7,
+        n_games=2, base_seed=7, deck_pool=simple_test_deck_pool(),
     )
     assert np.all(np.isin(outcomes, [-1.0, 0.0, 1.0]))
 
@@ -64,7 +66,7 @@ def test_outcomes_balanced_across_player_perspectives():
     _, outcomes = generate_training_data(
         p0_factory=random_choice_factory,
         p1_factory=random_choice_factory,
-        n_games=4, base_seed=3,
+        n_games=4, base_seed=3, deck_pool=simple_test_deck_pool(),
     )
     # Sum should be exactly 0 (every +1 is paired with a -1 from
     # the opposite viewer).
@@ -75,12 +77,12 @@ def test_deterministic_with_same_seed():
     a_features, a_outcomes = generate_training_data(
         p0_factory=random_choice_factory,
         p1_factory=random_choice_factory,
-        n_games=2, base_seed=99,
+        n_games=2, base_seed=99, deck_pool=simple_test_deck_pool(),
     )
     b_features, b_outcomes = generate_training_data(
         p0_factory=random_choice_factory,
         p1_factory=random_choice_factory,
-        n_games=2, base_seed=99,
+        n_games=2, base_seed=99, deck_pool=simple_test_deck_pool(),
     )
     np.testing.assert_array_equal(a_features, b_features)
     np.testing.assert_array_equal(a_outcomes, b_outcomes)
@@ -92,12 +94,12 @@ def test_sample_every_thins_dataset():
     features_full, _ = generate_training_data(
         p0_factory=random_choice_factory,
         p1_factory=random_choice_factory,
-        n_games=2, base_seed=11, sample_every=1,
+        n_games=2, base_seed=11, sample_every=1, deck_pool=simple_test_deck_pool(),
     )
     features_half, _ = generate_training_data(
         p0_factory=random_choice_factory,
         p1_factory=random_choice_factory,
-        n_games=2, base_seed=11, sample_every=2,
+        n_games=2, base_seed=11, sample_every=2, deck_pool=simple_test_deck_pool(),
     )
     assert features_half.shape[0] < features_full.shape[0]
 
@@ -106,7 +108,7 @@ def test_zero_games_returns_empty_arrays():
     features, outcomes = generate_training_data(
         p0_factory=random_choice_factory,
         p1_factory=random_choice_factory,
-        n_games=0, base_seed=0,
+        n_games=0, base_seed=0, deck_pool=simple_test_deck_pool(),
     )
     assert features.shape == (0, FEATURE_DIM)
     assert outcomes.shape == (0,)
@@ -120,6 +122,7 @@ def test_decision_cap_treats_unfinished_as_draw():
         p1_factory=random_choice_factory,
         n_games=2, base_seed=5,
         decision_cap=2,  # absurdly low
+        deck_pool=simple_test_deck_pool(),
     )
     assert np.all(outcomes == 0.0)
 
@@ -131,7 +134,7 @@ def test_save_and_load_roundtrip(tmp_path: Path):
     features, outcomes = generate_training_data(
         p0_factory=random_choice_factory,
         p1_factory=random_choice_factory,
-        n_games=2, base_seed=42,
+        n_games=2, base_seed=42, deck_pool=simple_test_deck_pool(),
     )
     path = tmp_path / "session.npz"
     save_dataset(features, outcomes, path)
@@ -307,7 +310,7 @@ def test_generate_training_data_with_policy_returns_4tuple():
     f, o, p, m = generate_training_data(
         p0_factory=random_choice_factory,
         p1_factory=random_choice_factory,
-        n_games=2, base_seed=42, with_policy=True,
+        n_games=2, base_seed=42, with_policy=True, deck_pool=simple_test_deck_pool(),
     )
     n = f.shape[0]
     assert f.shape == (n, FEATURE_DIM)
@@ -329,7 +332,7 @@ def test_runs_with_tiny_pimc_on_real_engine():
     factory = lambda seed, _c=config: _c.build(seed)
     features, outcomes = generate_training_data(
         p0_factory=factory, p1_factory=factory,
-        n_games=1, base_seed=0,
+        n_games=1, base_seed=0, deck_pool=simple_test_deck_pool(),
     )
     assert features.shape[1] == FEATURE_DIM
     assert features.shape[0] > 0
@@ -353,7 +356,7 @@ def test_policy_targets_live_inside_action_mask_for_combat_decisions():
     factory = lambda seed, _c=config: _c.build(seed)
     f, o, p, m = generate_training_data(
         p0_factory=factory, p1_factory=factory,
-        n_games=3, base_seed=0, with_policy=True,
+        n_games=3, base_seed=0, with_policy=True, deck_pool=simple_test_deck_pool(),
     )
     has_pol = p.sum(axis=-1) > 0.5  # supervised rows
     assert has_pol.any(), (
@@ -388,12 +391,12 @@ def test_parallel_result_equals_sequential_result():
     seq_f, seq_o = generate_training_data(
         p0_factory=random_choice_factory,
         p1_factory=random_choice_factory,
-        n_games=3, base_seed=42,
+        n_games=3, base_seed=42, deck_pool=simple_test_deck_pool(),
     )
     par_f, par_o = generate_training_data_parallel(
         p0_factory=random_choice_factory,
         p1_factory=random_choice_factory,
-        n_games=3, base_seed=42, n_workers=2,
+        n_games=3, base_seed=42, n_workers=2, deck_pool=simple_test_deck_pool(),
     )
     np.testing.assert_array_equal(seq_f, par_f)
     np.testing.assert_array_equal(seq_o, par_o)
@@ -403,7 +406,7 @@ def test_parallel_zero_games_returns_empty():
     f, o = generate_training_data_parallel(
         p0_factory=random_choice_factory,
         p1_factory=random_choice_factory,
-        n_games=0, n_workers=2,
+        n_games=0, n_workers=2, deck_pool=simple_test_deck_pool(),
     )
     assert f.shape == (0, FEATURE_DIM)
     assert o.shape == (0,)
@@ -415,7 +418,7 @@ def test_parallel_n_workers_validation():
         generate_training_data_parallel(
             p0_factory=random_choice_factory,
             p1_factory=random_choice_factory,
-            n_games=2, n_workers=0,
+            n_games=2, n_workers=0, deck_pool=simple_test_deck_pool(),
         )
 
 
@@ -430,7 +433,7 @@ def test_parallel_default_n_workers_path():
     f, o = generate_training_data_parallel(
         p0_factory=random_choice_factory,
         p1_factory=random_choice_factory,
-        n_games=0, n_workers=None,
+        n_games=0, n_workers=None, deck_pool=simple_test_deck_pool(),
     )
     assert f.shape == (0, FEATURE_DIM)
 
@@ -441,7 +444,7 @@ def test_parallel_invariants_on_real_arrays():
     f, o = generate_training_data_parallel(
         p0_factory=random_choice_factory,
         p1_factory=random_choice_factory,
-        n_games=2, base_seed=11, n_workers=2,
+        n_games=2, base_seed=11, n_workers=2, deck_pool=simple_test_deck_pool(),
     )
     assert f.shape[1] == FEATURE_DIM
     assert f.shape[0] == o.shape[0]
@@ -458,7 +461,7 @@ def test_parallel_with_pimc_config_factory():
     f, o = generate_training_data_parallel(
         p0_factory=config.build,
         p1_factory=config.build,
-        n_games=2, base_seed=0, n_workers=2,
+        n_games=2, base_seed=0, n_workers=2, deck_pool=simple_test_deck_pool(),
     )
     assert f.shape[1] == FEATURE_DIM
     assert f.shape[0] > 0
@@ -470,25 +473,23 @@ def test_parallel_with_pimc_config_factory():
 
 import pytest  # noqa: E402
 
-from mtg_bot.cards.source import get_active_source  # noqa: E402
 from mtg_bot.decks import Deck  # noqa: E402
 from mtg_bot.training.data_gen import _sample_decks_for_game  # noqa: E402
 
-
-def build_mono_color_deck(color: str, seed: int | None = None) -> list[str]:
-    return get_active_source().build_mono_color_deck(color, seed=seed)
+from tests._test_decks import simple_test_decklist  # noqa: E402
 
 
 def _two_player_pool() -> list[Deck]:
-    """A small pool of distinct mono-color synthetic decks. Cheap
-    to build; uses cards we know are in our printing registry."""
+    """A small pool of distinct test decks across three colors.
+    Cheap to build; uses real cards we know are in the active card
+    source's printing registry."""
     return [
         Deck(draft_id="g_deck", build_index=0,
-             cards=build_mono_color_deck("G", seed=1)),
+             cards=simple_test_decklist("G")),
         Deck(draft_id="r_deck", build_index=0,
-             cards=build_mono_color_deck("R", seed=2)),
+             cards=simple_test_decklist("R")),
         Deck(draft_id="w_deck", build_index=0,
-             cards=build_mono_color_deck("W", seed=3)),
+             cards=simple_test_decklist("W")),
     ]
 
 
@@ -525,7 +526,7 @@ def test_sample_decks_single_deck_pool_mirrors():
     """Pool with just one deck → both seats get the same deck (mirror)."""
     pool = [
         Deck(draft_id="only", build_index=0,
-             cards=build_mono_color_deck("G", seed=0)),
+             cards=simple_test_decklist("G")),
     ]
     a, b = _sample_decks_for_game(pool, game_idx=0, base_seed=0)
     assert a is b
@@ -570,21 +571,14 @@ def test_deck_pool_path_parallel_equals_sequential():
     np.testing.assert_array_equal(seq_o, par_o)
 
 
-def test_deck_pool_none_falls_back_to_mono_color():
-    """deck_pool=None preserves the existing mono-color path —
-    regression guard for the existing pipeline."""
-    f1, o1 = generate_training_data(
-        p0_factory=random_choice_factory,
-        p1_factory=random_choice_factory,
-        n_games=1, base_seed=42, deck_pool=None,
-    )
-    f2, o2 = generate_training_data(
-        p0_factory=random_choice_factory,
-        p1_factory=random_choice_factory,
-        n_games=1, base_seed=42,
-    )
-    np.testing.assert_array_equal(f1, f2)
-    np.testing.assert_array_equal(o1, o2)
+def test_deck_pool_none_raises():
+    """deck_pool is required — there's no synthetic-fallback path."""
+    with pytest.raises(ValueError, match="deck_pool is required"):
+        generate_training_data(
+            p0_factory=random_choice_factory,
+            p1_factory=random_choice_factory,
+            n_games=1, base_seed=42, deck_pool=None,
+        )
 
 
 def test_deck_pool_with_short_decks_works():
@@ -592,7 +586,7 @@ def test_deck_pool_with_short_decks_works():
     accepts them via the deck_pool path."""
     short_deck = (
         ["Forest"] * 17
-        + build_mono_color_deck("G", seed=0)[:23]
+        + simple_test_decklist("G")[:23]
     )
     pool = [
         Deck(draft_id="a", build_index=0, cards=short_deck),
@@ -642,12 +636,10 @@ def test_play_one_game_recording_captures_visits_at_sample_points():
     carry the strategy's visit dict; the non-active player's
     same-state sample (data-doubling row) should carry ``None``.
     Random / no-visits strategies fall through with ``None``."""
-    engine = setup_game(
-        [
+    engine = setup_game([
             RandomAgent(rng=random.Random(11)),
             RandomAgent(rng=random.Random(22)),
-        ],
-        ["G", "R"], seed=42,
+        ], decks=simple_test_decklists(), seed=42,
     )
     adapter = MtgGameStateAdapter(
         engine, expose_combat_decisions=True,
@@ -716,12 +708,10 @@ def test_play_one_game_recording_filters_illegal_pimc_visits():
     """
     from mtg_bot.actions import CastSpell
 
-    engine = setup_game(
-        [
+    engine = setup_game([
             RandomAgent(rng=random.Random(11)),
             RandomAgent(rng=random.Random(22)),
-        ],
-        ["G", "R"], seed=42,
+        ], decks=simple_test_decklists(), seed=42,
     )
     adapter = MtgGameStateAdapter(
         engine, expose_combat_decisions=True,
@@ -792,12 +782,10 @@ def test_play_one_game_recording_falls_back_when_visits_empty():
     None on both rows). Catches a regression where the empty-dict
     path tries to argmax over nothing or skips the sample entirely.
     """
-    engine = setup_game(
-        [
+    engine = setup_game([
             RandomAgent(rng=random.Random(11)),
             RandomAgent(rng=random.Random(22)),
-        ],
-        ["G", "R"], seed=42,
+        ], decks=simple_test_decklists(), seed=42,
     )
     adapter = MtgGameStateAdapter(
         engine, expose_combat_decisions=True,
@@ -828,6 +816,7 @@ def test_play_one_game_recording_falls_back_when_visits_empty():
 # ---------- DataGenProgress wiring ------------------------------------------
 
 from mtg_bot.training import DataGenProgress  # noqa: E402
+from tests._test_decks import simple_test_decklists  # noqa: E402
 
 
 def _make_progress(progress_path: Path, total: int, workers: int = 1):
@@ -849,7 +838,7 @@ def test_generate_training_data_threads_progress(tmp_path: Path):
         p0_factory=random_choice_factory,
         p1_factory=random_choice_factory,
         n_games=2, base_seed=17,
-        progress=progress,
+        progress=progress, deck_pool=simple_test_deck_pool(),
     )
     progress.finalize(status="completed")
     payload = json.loads((tmp_path / "seq.json").read_text(encoding="utf-8"))
@@ -868,7 +857,7 @@ def test_parallel_threads_progress(tmp_path: Path):
         p0_factory=random_choice_factory,
         p1_factory=random_choice_factory,
         n_games=2, base_seed=17, n_workers=2,
-        progress=progress,
+        progress=progress, deck_pool=simple_test_deck_pool(),
     )
     progress.finalize(status="completed")
     payload = json.loads((tmp_path / "par.json").read_text(encoding="utf-8"))
@@ -889,7 +878,7 @@ def test_parallel_with_policy_returns_four_tuple():
         p0_factory=random_choice_factory,
         p1_factory=random_choice_factory,
         n_games=2, base_seed=5, n_workers=2,
-        with_policy=True,
+        with_policy=True, deck_pool=simple_test_deck_pool(),
     )
     assert f.shape[1] == FEATURE_DIM
     assert o.shape == (f.shape[0],)
@@ -911,7 +900,7 @@ def test_parallel_with_policy_zero_games_returns_empty_four_tuple():
         p0_factory=random_choice_factory,
         p1_factory=random_choice_factory,
         n_games=0, n_workers=2,
-        with_policy=True,
+        with_policy=True, deck_pool=simple_test_deck_pool(),
     )
     assert f.shape == (0, FEATURE_DIM)
     assert o.shape == (0,)
@@ -957,7 +946,7 @@ def test_parallel_worker_crash_is_caught_and_warns(capfd):
     f, o = generate_training_data_parallel(
         p0_factory=_data_gen_raising_factory,
         p1_factory=_data_gen_raising_factory,
-        n_games=2, base_seed=0, n_workers=2,
+        n_games=2, base_seed=0, n_workers=2, deck_pool=simple_test_deck_pool(),
     )
     # Every game crashed → no samples landed in the arrays.
     assert f.shape == (0, FEATURE_DIM)
@@ -983,12 +972,10 @@ def _engine_for_game_idx(game_idx: int, base_seed: int = 0):
     # path. Even simpler: replicate the setup block exactly here —
     # this test fails loudly if the production helper drifts.
     engine_seed = base_seed + game_idx
-    engine = setup_game(
-        [
+    engine = setup_game([
             RandomAgent(rng=random.Random(engine_seed + 1)),
             RandomAgent(rng=random.Random(engine_seed + 2)),
-        ],
-        ["G", "R"],
+        ], decks=simple_test_decklists(),
         seed=engine_seed,
     )
     if game_idx % 2 == 1:
@@ -1024,6 +1011,7 @@ def test_seat_alternation_balances_physical_seat_winrate():
     n_games = 32
     base_seed = 12345
     seat_wins = {0: 0, 1: 0, None: 0}
+    pool = simple_test_deck_pool()
     for game_idx in range(n_games):
         chunk = _generate_one_game_data(
             game_idx=game_idx,
@@ -1032,6 +1020,7 @@ def test_seat_alternation_balances_physical_seat_winrate():
             base_seed=base_seed,
             decision_cap=4000,
             sample_every=1,
+            deck_pool=pool,
         )
         winner = chunk[4]
         seat_wins[winner] += 1
@@ -1061,6 +1050,7 @@ def test_outcome_labels_correct_under_seat_alternation():
     ``winner == viewer``."""
     from mtg_bot.training.data_gen import _generate_one_game_data
     base_seed = 12345
+    pool = simple_test_deck_pool()
     for game_idx in (0, 1):
         chunk = _generate_one_game_data(
             game_idx=game_idx,
@@ -1069,6 +1059,7 @@ def test_outcome_labels_correct_under_seat_alternation():
             base_seed=base_seed,
             decision_cap=4000,
             sample_every=1,
+            deck_pool=pool,
         )
         features, outcomes, _policy, _mask, winner, _kind = chunk
         if winner is None:

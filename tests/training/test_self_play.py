@@ -16,7 +16,7 @@ from mtg_bot.training import (
     EvalProgress, MatchStats, random_choice_factory, run_match,
 )
 from mtg_bot.training.self_play import run_match_parallel
-from tests.training.test_data_gen import build_mono_color_deck
+from tests._test_decks import simple_test_decklist, simple_test_deck_pool
 
 
 def test_run_match_returns_stats_with_correct_total():
@@ -24,7 +24,7 @@ def test_run_match_returns_stats_with_correct_total():
         p0_factory=random_choice_factory,
         p1_factory=random_choice_factory,
         n_games=4,
-        base_seed=42,
+        base_seed=42, deck_pool=simple_test_deck_pool(),
     )
     assert isinstance(stats, MatchStats)
     assert stats.games == 4
@@ -36,11 +36,11 @@ def test_run_match_is_deterministic_in_base_seed():
     that compare configs across runs."""
     a = run_match(
         random_choice_factory, random_choice_factory,
-        n_games=3, base_seed=99,
+        n_games=3, base_seed=99, deck_pool=simple_test_deck_pool(),
     )
     b = run_match(
         random_choice_factory, random_choice_factory,
-        n_games=3, base_seed=99,
+        n_games=3, base_seed=99, deck_pool=simple_test_deck_pool(),
     )
     assert a == b
 
@@ -52,7 +52,7 @@ def test_run_match_different_seeds_can_produce_different_results():
     for seed in range(8):
         stats = run_match(
             random_choice_factory, random_choice_factory,
-            n_games=2, base_seed=seed,
+            n_games=2, base_seed=seed, deck_pool=simple_test_deck_pool(),
         )
         seen.add((stats.wins[0], stats.wins[1], stats.draws))
     assert len(seen) > 1
@@ -61,7 +61,7 @@ def test_run_match_different_seeds_can_produce_different_results():
 def test_run_match_win_rate_helper():
     stats = run_match(
         random_choice_factory, random_choice_factory,
-        n_games=5, base_seed=0,
+        n_games=5, base_seed=0, deck_pool=simple_test_deck_pool(),
     )
     expected = stats.wins[0] / 5
     assert stats.win_rate(0) == expected
@@ -72,7 +72,7 @@ def test_run_match_zero_games_returns_zero_stats():
     """Edge case: n_games=0 shouldn't crash."""
     stats = run_match(
         random_choice_factory, random_choice_factory,
-        n_games=0, base_seed=0,
+        n_games=0, base_seed=0, deck_pool=simple_test_deck_pool(),
     )
     assert stats.games == 0
     assert stats.wins == {0: 0, 1: 0}
@@ -86,7 +86,7 @@ def test_run_match_records_avg_decisions():
     > 0 for any non-trivial game."""
     stats = run_match(
         random_choice_factory, random_choice_factory,
-        n_games=3, base_seed=11,
+        n_games=3, base_seed=11, deck_pool=simple_test_deck_pool(),
     )
     assert stats.avg_decisions > 0
 
@@ -99,6 +99,7 @@ def test_run_match_decision_cap_treats_unfinished_as_draw():
         random_choice_factory, random_choice_factory,
         n_games=3, base_seed=0,
         decision_cap=2,  # absurdly low
+        deck_pool=simple_test_deck_pool(),
     )
     assert stats.draws == 3
     assert stats.wins == {0: 0, 1: 0}
@@ -124,7 +125,7 @@ def test_run_match_parallel_with_progress_emits_snapshot(tmp_path: Path):
         n_games=4,
         base_seed=0,
         n_workers=2,
-        progress=progress,
+        progress=progress, deck_pool=simple_test_deck_pool(),
     )
     # Same aggregation as the no-progress path (both call
     # _aggregate_results on equivalent inputs).
@@ -133,7 +134,7 @@ def test_run_match_parallel_with_progress_emits_snapshot(tmp_path: Path):
         p1_factory=random_choice_factory,
         n_games=4,
         base_seed=0,
-        n_workers=2,
+        n_workers=2, deck_pool=simple_test_deck_pool(),
     )
     assert stats == expected
 
@@ -155,9 +156,9 @@ def test_run_match_parallel_with_deck_pool_uses_pool_decks():
     legacy mono-color path."""
     pool = [
         Deck(draft_id="g_deck", build_index=0,
-             cards=build_mono_color_deck("G", seed=1)),
+             cards=simple_test_decklist("G")),
         Deck(draft_id="r_deck", build_index=0,
-             cards=build_mono_color_deck("R", seed=2)),
+             cards=simple_test_decklist("R")),
     ]
     stats = run_match_parallel(
         p0_factory=random_choice_factory,
@@ -178,11 +179,11 @@ def test_run_match_deck_pool_sequential_equals_parallel():
     would silently shift evaluation results."""
     pool = [
         Deck(draft_id="g_deck", build_index=0,
-             cards=build_mono_color_deck("G", seed=1)),
+             cards=simple_test_decklist("G")),
         Deck(draft_id="r_deck", build_index=0,
-             cards=build_mono_color_deck("R", seed=2)),
+             cards=simple_test_decklist("R")),
         Deck(draft_id="w_deck", build_index=0,
-             cards=build_mono_color_deck("W", seed=3)),
+             cards=simple_test_decklist("W")),
     ]
     seq = run_match(
         p0_factory=random_choice_factory,
@@ -216,7 +217,7 @@ def test_run_match_with_replay_config_writes_replay_files(tmp_path: Path):
         p1_factory=random_choice_factory,
         n_games=2,
         base_seed=42,
-        replay_config=cfg,
+        replay_config=cfg, deck_pool=simple_test_deck_pool(),
     )
     assert stats.games == 2
     files = sorted(save_dir.glob("*.json.gz"))
@@ -238,7 +239,7 @@ def test_run_match_parallel_with_replay_config_captures_subset(
         n_games=4,
         base_seed=42,
         n_workers=2,
-        replay_config=cfg,
+        replay_config=cfg, deck_pool=simple_test_deck_pool(),
     )
     files = sorted(save_dir.glob("*.json.gz"))
     assert len(files) == 2
@@ -306,24 +307,25 @@ def test_run_match_parallel_alternate_seats_neutralizes_p0_bias():
     which favors the player on the move), ``alternate_seats=True``
     pulls wins[0] back toward 50% relative to the no-alternation
     baseline."""
-    # 16 games is enough to see the bias swing without making the
-    # test slow. RandomChoice gives wins[0] ~70%+ on tiny synthetic
-    # decks; the alternating variant collapses that toward parity.
+    # 32 games — small-N bias swings are noisy on RandomChoice with
+    # the parser-source decks; doubling the sample size gives the
+    # alternation a clear separation from the baseline without making
+    # the test meaningfully slower.
     no_alt = run_match_parallel(
         p0_factory=random_choice_factory,
         p1_factory=random_choice_factory,
-        n_games=16, base_seed=0, n_workers=2,
+        n_games=32, base_seed=0, n_workers=2,
+        deck_pool=simple_test_deck_pool(),
     )
     alt = run_match_parallel(
         p0_factory=random_choice_factory,
         p1_factory=random_choice_factory,
-        n_games=16, base_seed=0, n_workers=2,
-        alternate_seats=True,
+        n_games=32, base_seed=0, n_workers=2,
+        alternate_seats=True, deck_pool=simple_test_deck_pool(),
     )
-    # Both runs played 16 games with the same seeds, so individual
-    # game outcomes are reproducible. We expect the alternating run
-    # to have a more even split — wins[0] in the alt run should be
-    # closer to wins[1] than in the no-alt run.
+    # Both runs played the same games with the same seeds, so the
+    # outcomes are reproducible. We expect the alternating run to
+    # have a more even split.
     no_alt_skew = abs(no_alt.wins[0] - no_alt.wins[1])
     alt_skew = abs(alt.wins[0] - alt.wins[1])
     assert alt_skew <= no_alt_skew, (
@@ -331,8 +333,8 @@ def test_run_match_parallel_alternate_seats_neutralizes_p0_bias():
         f"no_alt={no_alt.wins} alt={alt.wins}"
     )
     # And the totals still add up to n_games regardless.
-    assert no_alt.wins[0] + no_alt.wins[1] + no_alt.draws == 16
-    assert alt.wins[0] + alt.wins[1] + alt.draws == 16
+    assert no_alt.wins[0] + no_alt.wins[1] + no_alt.draws == 32
+    assert alt.wins[0] + alt.wins[1] + alt.draws == 32
 
 
 def test_run_match_parallel_progress_finalizes_on_zero_games(tmp_path: Path):
@@ -349,7 +351,7 @@ def test_run_match_parallel_progress_finalizes_on_zero_games(tmp_path: Path):
         p1_factory=random_choice_factory,
         n_games=0,
         n_workers=1,
-        progress=progress,
+        progress=progress, deck_pool=simple_test_deck_pool(),
     )
     assert stats.games == 0
     payload = json.loads((tmp_path / "empty.json").read_text(encoding="utf-8"))

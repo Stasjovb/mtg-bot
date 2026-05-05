@@ -26,7 +26,7 @@ from mtg_bot.search import (
     ISMCTS, MtgGameStateAdapter, RandomRolloutEvaluator,
 )
 from mtg_bot.search.budget import Budget
-from mtg_bot.simulate import setup_game
+from mtg_bot.simulate import _default_deck_for_color as _default_deck, setup_game
 
 
 def _play_one_game(
@@ -40,7 +40,7 @@ def _play_one_game(
     Returns ``(wall_seconds, total_decisions, lethal_fires, winner_id)``.
     """
     state = setup_game(
-        [RandomAgent(), RandomAgent()], ["G", "R"], seed=seed,
+        [RandomAgent(), RandomAgent()], decks=[_default_deck("G", seed), _default_deck("R", seed)], seed=seed,
     )
 
     def _make_search() -> ISMCTS:

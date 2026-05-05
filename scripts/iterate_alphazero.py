@@ -953,17 +953,15 @@ def main() -> None:
         ),
     )
     parser.add_argument(
-        "--deck-pool", type=Path, default=None,
+        "--deck-pool", type=Path, required=True,
         help=(
             "Path to a deck-pool JSON (e.g. data/17lands/eoe_decks."
-            "json.gz). When set, every self-play and eval game samples "
-            "two distinct real archetypes from the pool deterministi"
-            "cally per (base_seed, game_idx); both seats use them. "
-            "When omitted, falls back to the legacy mono-color "
-            "synthetic G/R decks — fast and reproducible but the "
-            "resulting policy doesn't transfer to real EOE play. "
-            "Use the pool for any run that's meant to produce a model "
-            "you'd actually deploy."
+            "json.gz — the production EoE pool). Every self-play and "
+            "eval game samples two distinct real archetypes from the "
+            "pool deterministically per (base_seed, game_idx); both "
+            "seats use them. Required: there is no synthetic deck "
+            "fallback any more — every iteration loop trains on a "
+            "real-deck distribution by construction."
         ),
     )
     parser.add_argument(
@@ -1160,26 +1158,18 @@ def main() -> None:
             f"hosts: {[s.host for s in shards_cfg.shards]}"
         )
 
-    deck_pool: list[Deck] | None = None
-    if args.deck_pool is not None:
-        if not args.deck_pool.is_file():
-            sys.exit(f"--deck-pool {args.deck_pool} not found")
-        deck_pool = decks_from_json(args.deck_pool)
-        if not deck_pool:
-            sys.exit(
-                f"--deck-pool {args.deck_pool} loaded 0 decks"
-            )
-        avg_size = sum(d.card_count for d in deck_pool) / len(deck_pool)
-        print(
-            f"[iterate] loaded {len(deck_pool)} decks from "
-            f"{args.deck_pool} (avg {avg_size:.1f} cards/deck)"
+    if not args.deck_pool.is_file():
+        sys.exit(f"--deck-pool {args.deck_pool} not found")
+    deck_pool: list[Deck] = decks_from_json(args.deck_pool)
+    if not deck_pool:
+        sys.exit(
+            f"--deck-pool {args.deck_pool} loaded 0 decks"
         )
-    else:
-        print(
-            "[iterate] --deck-pool not set; using legacy mono-color "
-            "G/R synthetic decks (policy will not transfer to real "
-            "EOE play)"
-        )
+    avg_size = sum(d.card_count for d in deck_pool) / len(deck_pool)
+    print(
+        f"[iterate] loaded {len(deck_pool)} decks from "
+        f"{args.deck_pool} (avg {avg_size:.1f} cards/deck)"
+    )
 
     registry = Registry(args.registry_root)
     if not registry.has(args.bootstrap_version):

@@ -30,6 +30,7 @@ import pytest
 
 from mtg_bot.agents import RandomAgent
 from mtg_bot.simulate import simulate_game
+from tests._test_decks import simple_test_decklists  # noqa: E402
 
 
 # Run this module in its own pytest invocation. After ~2000 preceding
@@ -62,7 +63,7 @@ def _build_mid_game_state():
             RandomAgent(name="a0", rng=random.Random(1001)),
             RandomAgent(name="a1", rng=random.Random(2002)),
         ],
-        colors=["G", "R"],
+        decks=simple_test_decklists(),
         seed=17,
         max_turns=5,
     )

@@ -34,7 +34,7 @@ from mtg_bot import legal as legal_mod  # noqa: E402
 from mtg_bot.actions import PassPriority  # noqa: E402
 from mtg_bot.agents import RandomAgent  # noqa: E402
 from mtg_bot.search import MtgGameStateAdapter  # noqa: E402
-from mtg_bot.simulate import setup_game  # noqa: E402
+from mtg_bot.simulate import _default_deck_for_color as _default_deck, setup_game  # noqa: E402
 
 # Try to import the new capability function; fall back to opp-only.
 try:
@@ -52,7 +52,7 @@ def main() -> None:
     seed = 0
 
     state = setup_game(
-        [RandomAgent(), RandomAgent()], ["G", "R"], seed=seed,
+        [RandomAgent(), RandomAgent()], decks=[_default_deck("G", seed), _default_deck("R", seed)], seed=seed,
     )
     adapter = MtgGameStateAdapter(state)
 

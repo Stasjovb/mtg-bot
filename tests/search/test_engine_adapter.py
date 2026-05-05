@@ -19,12 +19,14 @@ from mtg_bot.search import (
 from mtg_bot.simulate import setup_game
 from mtg_bot.turn import Step
 
+from tests._test_decks import simple_test_decklists
 
-def _fresh_adapter(seed: int = 42, colors=None) -> MtgGameStateAdapter:
+
+def _fresh_adapter(seed: int = 42) -> MtgGameStateAdapter:
     """Standard two-player setup wrapped in the adapter."""
-    colors = colors or ["G", "R"]
     state = setup_game(
-        [RandomAgent(), RandomAgent()], colors, seed=seed,
+        [RandomAgent(), RandomAgent()], decks=simple_test_decklists(),
+        seed=seed,
     )
     return MtgGameStateAdapter(state)
 

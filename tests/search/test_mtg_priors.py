@@ -16,11 +16,11 @@ from mtg_bot.search.mtg_priors import (
     mtg_default_prior, priority_action_prior,
 )
 from mtg_bot.simulate import setup_game
+from tests._test_decks import simple_test_decklists  # noqa: E402
 
 
 def _adapter(seed: int = 42, expose_combat: bool = True):
-    state = setup_game(
-        [RandomAgent(), RandomAgent()], ["G", "R"], seed=seed,
+    state = setup_game([RandomAgent(), RandomAgent()], decks=simple_test_decklists(), seed=seed,
     )
     return MtgGameStateAdapter(state, expose_combat_decisions=expose_combat)
 
@@ -28,8 +28,7 @@ def _adapter(seed: int = 42, expose_combat: bool = True):
 def _adapter_with_creatures(p0=None, p1=None, seed=42):
     p0 = p0 or []
     p1 = p1 or []
-    state = setup_game(
-        [RandomAgent(), RandomAgent()], ["G", "R"], seed=seed,
+    state = setup_game([RandomAgent(), RandomAgent()], decks=simple_test_decklists(), seed=seed,
     )
     for name in p0:
         obj = state.new_object(

@@ -26,11 +26,11 @@ from mtg_bot.simulate import setup_game
 from mtg_bot.training.action_encoding import (
     ACTION_VOCAB_SIZE, legal_action_mask,
 )
+from tests._test_decks import simple_test_decklists
 
 
 def _adapter(seed: int = 42) -> MtgGameStateAdapter:
-    state = setup_game(
-        [RandomAgent(), RandomAgent()], ["G", "R"], seed=seed,
+    state = setup_game([RandomAgent(), RandomAgent()], decks=simple_test_decklists(), seed=seed,
     )
     return MtgGameStateAdapter(state)
 
