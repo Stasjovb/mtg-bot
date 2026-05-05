@@ -135,6 +135,19 @@ def main() -> None:
             "old versions unloadable."
         ),
     )
+    parser.add_argument(
+        "--policy-loss-weight", type=float, default=1.0,
+        help=(
+            "Coefficient on the policy-head CE in the combined loss "
+            "(total = value_loss + policy_loss_weight * policy_loss). "
+            "Default 1.0 lets value_loss (~0.5 at epoch 1) dominate "
+            "policy_loss (~0.16 at epoch 1) ~3:1 — the policy head "
+            "plateaus at the floor set by ~84%% one-legal-action rows "
+            "(observed in iter_002 v13 training). Bump to 3.0-10.0 "
+            "to give the policy head enough gradient on the ~2%% of "
+            "branchy rows where it actually has signal to learn."
+        ),
+    )
     args = parser.parse_args()
     if args.hidden_sizes is not None:
         try:
@@ -233,6 +246,7 @@ def main() -> None:
         if has_any_policy:
             train_kwargs["policy_targets"] = policy_targets
             train_kwargs["action_masks"] = action_masks
+            train_kwargs["policy_loss_weight"] = args.policy_loss_weight
         history = train_value_network(**train_kwargs)
         elapsed = time.perf_counter() - started
 
