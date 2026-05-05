@@ -109,20 +109,30 @@ def test_legal_actions_cache_hit_returns_same_object(monkeypatch):
 def test_legal_actions_cache_invalidated_by_apply(monkeypatch):
     """After ``apply()``, the next ``legal_decisions`` must
     re-enumerate. Stale cache hits would silently produce illegal
-    actions in the search tree."""
+    actions in the search tree.
+
+    We exercise this on a player-1 adapter (the auto-pass
+    short-circuit only fires for the non-active player; querying
+    ``_legal_actions_cached`` directly for the ACTIVE player ensures
+    we're outside the auto-pass branch and observing the cache
+    behaviour we want to pin).
+    """
     adapter = _fresh_adapter()
     spy = _spy_legal_actions(monkeypatch)
 
-    _ = adapter.legal_decisions()
+    # Probe the cache directly for the active player (priority is
+    # on them at construction).
+    ap = adapter.engine_state.players[
+        adapter.engine_state.active_player_idx
+    ].id
+    _ = adapter._legal_actions_cached(ap)
     assert spy.call_count == 1
-    # First apply: PassPriority on UPKEEP. This mutates the adapter's
-    # internal pass_count and (after both players pass) advances
-    # steps — guaranteed state mutation.
+    # First apply: PassPriority. This mutates the adapter's internal
+    # pass_count and clears the cache.
     adapter.apply(PassPriority())
     assert spy.call_count == 1  # apply alone shouldn't re-enumerate
-    _ = adapter.legal_decisions()
-    # Now the cache had been blown by apply() and a fresh enumeration
-    # ran.
+    _ = adapter._legal_actions_cached(ap)
+    # Cache blown by apply — fresh enumeration ran.
     assert spy.call_count == 2
 
 
