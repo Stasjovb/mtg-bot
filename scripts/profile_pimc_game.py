@@ -46,14 +46,17 @@ from mtg_bot.search import (  # noqa: E402
 )
 from mtg_bot.search.heuristic_evaluator import MtgHeuristicEvaluator  # noqa: E402
 from mtg_bot.search.protocol import CHANCE_PLAYER  # noqa: E402
-from mtg_bot.simulate import setup_game  # noqa: E402
+from mtg_bot.simulate import (  # noqa: E402
+    _default_deck_for_color as _default_deck, setup_game,
+)
 
 
 def _build_adapter(seed: int) -> MtgGameStateAdapter:
     state = setup_game(
         [RandomAgent(rng=random.Random(seed + 1)),
          RandomAgent(rng=random.Random(seed + 2))],
-        ["G", "R"], seed=seed,
+        decks=[_default_deck("G", seed), _default_deck("R", seed)],
+        seed=seed,
     )
     return MtgGameStateAdapter(state)
 

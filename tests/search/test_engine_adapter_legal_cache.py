@@ -34,7 +34,7 @@ from mtg_bot.turn import Step
 from tests._test_decks import simple_test_decklists  # noqa: E402
 
 
-def _fresh_adapter(seed: int = 42, colors=None) -> MtgGameStateAdapter:
+def _fresh_adapter(seed: int = 42) -> MtgGameStateAdapter:
     """Construct an adapter and drive it to PRECOMBAT_MAIN at active-
     player priority with at least one capability (a payable land in
     hand). Without that drive, the active-player capability auto-pass
@@ -42,9 +42,10 @@ def _fresh_adapter(seed: int = 42, colors=None) -> MtgGameStateAdapter:
     before the legal_actions cache is populated, which obscures the
     cache invariants under test here.
     """
-    colors = colors or ["G", "R"]
     state = setup_game(
-        [RandomAgent(), RandomAgent()], colors, seed=seed,
+        [RandomAgent(), RandomAgent()],
+        decks=simple_test_decklists(),
+        seed=seed,
     )
     # Disable training-time priority short-circuits — these cache
     # tests verify the legal_actions cache lifecycle, which is only

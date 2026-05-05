@@ -74,37 +74,20 @@ def _build_player_from_names(
     return p
 
 
-def _build_player(
-    state: GameState, player_id: int, color: str, agent: Agent, seed: int
-) -> Player:
-    """Mono-color path: build a deck via ``build_mono_color_deck`` and
-    materialize. Kept around because existing tests + the default
-    ``setup_game`` color path still use it."""
-    deck_names = get_active_source().build_mono_color_deck(color, seed=seed)
-    return _build_player_from_names(state, player_id, deck_names, agent)
-
-
 def setup_game(
     agents: list[Agent],
-    colors: Optional[list[str]] = None,
+    decks: list[list[str]],
     seed: Optional[int] = None,
-    decks: Optional[list[list[str]]] = None,
     enable_mulligans: bool = False,
     max_mulligans: int = 7,
 ) -> GameState:
     """Build a fresh game state.
 
-    Two ways to provide each player's library:
-
-    - ``colors``: pass ``["G", "R"]`` and each player gets a mono-
-      color synthetic deck via ``build_mono_color_deck``. Quick and
-      contrived; fine for tests.
-    - ``decks``: pass ``[[card_name, ...], [card_name, ...]]`` — one
-      explicit decklist per agent. Card names must all exist in
-      ``all_printings()``. This is the path the 17lands data ingestion
-      will use.
-
-    Exactly one of ``colors`` and ``decks`` must be provided.
+    ``decks`` is one decklist per agent — a list of card names. Card
+    names must all exist in the active card source's printings dict.
+    This is the only deck-build path: the legacy synthetic mono-color
+    ``colors`` parameter was removed; production data-gen / eval feeds
+    real 17lands archetypes here.
 
     Mulligan handling
     -----------------
@@ -133,15 +116,7 @@ def setup_game(
     its choice. Set higher for stress tests; lower for shorter
     decision space.
     """
-    if (colors is None) == (decks is None):
-        raise ValueError(
-            "exactly one of `colors` or `decks` must be provided"
-        )
-    if colors is not None and len(colors) != len(agents):
-        raise ValueError(
-            f"colors length {len(colors)} != agents length {len(agents)}"
-        )
-    if decks is not None and len(decks) != len(agents):
+    if len(decks) != len(agents):
         raise ValueError(
             f"decks length {len(decks)} != agents length {len(agents)}"
         )
@@ -155,17 +130,9 @@ def setup_game(
     state.rng.seed(seed)
     rng = random.Random(seed)
 
-    if colors is not None:
-        for i, (agent, color) in enumerate(zip(agents, colors)):
-            p = _build_player(
-                state, i, color, agent, rng.randint(0, 10**9),
-            )
-            state.players.append(p)
-    else:
-        assert decks is not None  # narrowed above
-        for i, (agent, deck) in enumerate(zip(agents, decks)):
-            p = _build_player_from_names(state, i, list(deck), agent)
-            state.players.append(p)
+    for i, (agent, deck) in enumerate(zip(agents, decks)):
+        p = _build_player_from_names(state, i, list(deck), agent)
+        state.players.append(p)
 
     for p in state.players:
         rng.shuffle(p.library)
@@ -483,6 +450,41 @@ def run_turn(
             return
 
 
+_COLOR_TO_BASIC: dict[str, str] = {
+    "W": "Plains", "U": "Island", "B": "Swamp", "R": "Mountain", "G": "Forest",
+}
+
+
+def _default_deck_for_color(color: str, *, seed: Optional[int]) -> list[str]:
+    """Build a 60-card deck (24 of the matching basic + 36 nonland
+    cards in that color or colorless) from the active card source.
+
+    The single-color playground path's deck builder. Lives in
+    ``simulate`` rather than on the card source because the engine
+    no longer depends on the source for synthetic-deck generation —
+    production training feeds real 17lands decks via
+    ``setup_game(decks=...)`` and this helper is only used by the
+    one-line "just play a game" entry points (``__main__``, the UI's
+    /api/play playground, ``simulate_game`` with ``colors=``).
+    """
+    if color not in _COLOR_TO_BASIC:
+        raise ValueError(f"unknown color: {color}")
+    rng = random.Random(seed)
+    land_name = _COLOR_TO_BASIC[color]
+    printings = get_active_source().get_printings()
+    candidates = [
+        name for name, p in printings.items()
+        if "Land" not in p.card_types
+        and (color in p.mana_cost.colors or not p.mana_cost.colors)
+    ]
+    if not candidates:
+        raise ValueError(f"no creatures in color {color}")
+    deck = [candidates[i % len(candidates)] for i in range(36)]
+    deck.extend([land_name] * 24)
+    rng.shuffle(deck)
+    return deck
+
+
 def simulate_game(
     agents: Optional[list[Agent]] = None,
     colors: Optional[list[str]] = None,
@@ -495,10 +497,10 @@ def simulate_game(
 ) -> GameState:
     """Run a full game.
 
-    Provide each player's library via either ``decks`` (the production
-    path — explicit decklists) or ``colors`` (the playground path —
-    each color is materialized into a default mono-color deck via the
-    active card source).
+    Provide each player's library via either ``decks`` (production
+    path — explicit decklists) or ``colors`` (playground path —
+    each color is materialized into a default deck on the fly via
+    ``_default_deck_for_color``).
 
     When neither is provided, falls back to the legacy ``["G", "R"]``
     default so single-line "just play a game" callers (``__main__``,
@@ -529,7 +531,11 @@ def simulate_game(
     )
     if decks is None and colors is None:
         colors = ["G", "R"]
-    n_seats = len(decks) if decks is not None else len(colors)  # type: ignore[arg-type]
+    if decks is not None:
+        n_seats = len(decks)
+    else:
+        assert colors is not None
+        n_seats = len(colors)
     if agents is None:
         rng = random.Random(seed)
         agents = [
@@ -541,10 +547,16 @@ def simulate_game(
             raise ValueError("agents and decks must have same length")
         raise ValueError("agents and colors must have same length")
 
-    if decks is not None:
-        state = setup_game(agents, decks=decks, seed=seed)
-    else:
-        state = setup_game(agents, colors, seed=seed)
+    if decks is None:
+        # Playground path: build a single-color deck per seat. The
+        # per-seat sub-seeds keep two seats with the same color from
+        # producing identical libraries.
+        rng = random.Random(seed)
+        decks = [
+            _default_deck_for_color(c, seed=rng.randint(0, 10**9))
+            for c in colors  # type: ignore[arg-type]
+        ]
+    state = setup_game(agents, decks=decks, seed=seed)
     if on_snapshot is not None:
         on_snapshot(state)
     while not state.is_over() and state.turn_number <= max_turns:

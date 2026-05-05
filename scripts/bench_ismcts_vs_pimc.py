@@ -12,12 +12,12 @@ from mtg_bot.search import (
     Budget, ISMCTS, MCTS, MtgGameStateAdapter, PIMC,
     RandomRolloutEvaluator,
 )
-from mtg_bot.simulate import setup_game
+from mtg_bot.simulate import _default_deck_for_color as _default_deck, setup_game
 
 
 def _make_state(seed: int) -> MtgGameStateAdapter:
     state = setup_game(
-        [RandomAgent(), RandomAgent()], ["G", "R"], seed=seed,
+        [RandomAgent(), RandomAgent()], decks=[_default_deck("G", seed), _default_deck("R", seed)], seed=seed,
     )
     adapter = MtgGameStateAdapter(state)
     while (

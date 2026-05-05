@@ -47,7 +47,9 @@ from mtg_bot.agents import RandomAgent  # noqa: E402
 from mtg_bot.search import (  # noqa: E402
     HeuristicsConfig, MtgGameStateAdapter,
 )
-from mtg_bot.simulate import setup_game  # noqa: E402
+from mtg_bot.simulate import (  # noqa: E402
+    _default_deck_for_color as _default_deck, setup_game,
+)
 
 
 def _play_one_game(
@@ -65,7 +67,8 @@ def _play_one_game(
     state = setup_game(
         [RandomAgent(rng=random.Random(seed + 1)),
          RandomAgent(rng=random.Random(seed + 2))],
-        ["G", "R"], seed=seed,
+        decks=[_default_deck("G", seed), _default_deck("R", seed)],
+        seed=seed,
     )
     adapter = MtgGameStateAdapter(
         state,
