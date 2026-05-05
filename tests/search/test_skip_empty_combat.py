@@ -23,7 +23,7 @@ from unittest import mock
 from mtg_bot import legal as legal_mod
 from mtg_bot.actions import PassPriority
 from mtg_bot.agents import RandomAgent
-from mtg_bot.search import MtgGameStateAdapter
+from mtg_bot.search import HeuristicsConfig, MtgGameStateAdapter
 from mtg_bot.simulate import setup_game
 from mtg_bot.turn import Step
 
@@ -196,7 +196,9 @@ def test_disabled_flag(monkeypatch):
     """``skip_empty_combat_enabled=False`` disables the short-circuit
     — legal_decisions enumerates legal_actions normally."""
     state = _fresh_state()
-    adapter = MtgGameStateAdapter(state, skip_empty_combat_enabled=False)
+    adapter = MtgGameStateAdapter(
+        state, heuristics=HeuristicsConfig(skip_empty_combat_enabled=False),
+    )
     _clear_attacking_flags(state)
     _force_step(adapter, Step.COMBAT_DAMAGE)
 
@@ -213,11 +215,16 @@ def test_flag_propagates_through_clone():
     and clone use the same heuristic setting. ISMCTS clones the root
     adapter many times per descent."""
     state = _fresh_state()
-    adapter_on = MtgGameStateAdapter(state, skip_empty_combat_enabled=True)
+    adapter_on = MtgGameStateAdapter(
+        state, heuristics=HeuristicsConfig(skip_empty_combat_enabled=True),
+    )
     clone_on = adapter_on.clone()
-    assert clone_on._skip_empty_combat_enabled is True
+    assert clone_on._heuristics.skip_empty_combat_enabled is True
 
     state2 = _fresh_state()
-    adapter_off = MtgGameStateAdapter(state2, skip_empty_combat_enabled=False)
+    adapter_off = MtgGameStateAdapter(
+        state2,
+        heuristics=HeuristicsConfig(skip_empty_combat_enabled=False),
+    )
     clone_off = adapter_off.clone()
-    assert clone_off._skip_empty_combat_enabled is False
+    assert clone_off._heuristics.skip_empty_combat_enabled is False

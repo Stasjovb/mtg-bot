@@ -23,7 +23,7 @@ from mtg_bot.cards import BASIC_LANDS, SYNTHETIC_CREATURES
 from mtg_bot.effects.base import ActivatedAbility
 from mtg_bot.effects.generic.become_type import BecomeLandCreatureUEOT
 from mtg_bot.game import Zone
-from mtg_bot.search import MtgGameStateAdapter
+from mtg_bot.search import HeuristicsConfig, MtgGameStateAdapter
 from mtg_bot.simulate import setup_game
 from mtg_bot.turn import Step
 
@@ -82,7 +82,9 @@ def _strip_active_creatures_and_hand(state):
 
 def test_fires_with_no_creatures_no_haste_no_animator():
     state = _fresh_state()
-    adapter = MtgGameStateAdapter(state, skip_dead_main1_enabled=True)
+    adapter = MtgGameStateAdapter(
+        state, heuristics=HeuristicsConfig(skip_dead_main1_enabled=True),
+    )
     _strip_active_creatures_and_hand(state)
     _force_main1(adapter)
 
@@ -131,7 +133,9 @@ def test_fires_with_non_haste_creature_in_hand():
     heuristic. Casting it at main 1 vs main 2 is functionally
     equivalent (no attack this turn either way, summoning sick)."""
     state = _fresh_state()
-    adapter = MtgGameStateAdapter(state, skip_dead_main1_enabled=True)
+    adapter = MtgGameStateAdapter(
+        state, heuristics=HeuristicsConfig(skip_dead_main1_enabled=True),
+    )
     _strip_active_creatures_and_hand(state)
     active_id = state.players[state.active_player_idx].id
     bear = state.new_object(
@@ -168,7 +172,9 @@ def test_animator_only_blocks_when_active_controls_it():
     heuristic still fires — the active player can't attack with opp's
     permanent."""
     state = _fresh_state()
-    adapter = MtgGameStateAdapter(state, skip_dead_main1_enabled=True)
+    adapter = MtgGameStateAdapter(
+        state, heuristics=HeuristicsConfig(skip_dead_main1_enabled=True),
+    )
     _strip_active_creatures_and_hand(state)
     opp_id = state.players[1 - state.active_player_idx].id
     manland_printing = _make_manland_printing()
@@ -230,7 +236,9 @@ def test_does_not_fire_with_non_empty_stack():
 
 def test_disabled_flag():
     state = _fresh_state()
-    adapter = MtgGameStateAdapter(state, skip_dead_main1_enabled=False)
+    adapter = MtgGameStateAdapter(
+        state, heuristics=HeuristicsConfig(skip_dead_main1_enabled=False),
+    )
     _strip_active_creatures_and_hand(state)
     _force_main1(adapter)
 
@@ -244,11 +252,16 @@ def test_disabled_flag():
 
 def test_flag_propagates_through_clone():
     state = _fresh_state()
-    adapter_on = MtgGameStateAdapter(state, skip_dead_main1_enabled=True)
+    adapter_on = MtgGameStateAdapter(
+        state, heuristics=HeuristicsConfig(skip_dead_main1_enabled=True),
+    )
     clone_on = adapter_on.clone()
-    assert clone_on._skip_dead_main1_enabled is True
+    assert clone_on._heuristics.skip_dead_main1_enabled is True
 
     state2 = _fresh_state()
-    adapter_off = MtgGameStateAdapter(state2, skip_dead_main1_enabled=False)
+    adapter_off = MtgGameStateAdapter(
+        state2,
+        heuristics=HeuristicsConfig(skip_dead_main1_enabled=False),
+    )
     clone_off = adapter_off.clone()
-    assert clone_off._skip_dead_main1_enabled is False
+    assert clone_off._heuristics.skip_dead_main1_enabled is False

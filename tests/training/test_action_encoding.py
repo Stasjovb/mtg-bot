@@ -19,7 +19,7 @@ from mtg_bot.actions import (
     TurnFaceUp, UnlockRoomHalf,
 )
 from mtg_bot.agents import RandomAgent
-from mtg_bot.search import MtgGameStateAdapter
+from mtg_bot.search import HeuristicsConfig, MtgGameStateAdapter
 from mtg_bot.search.combat_decisions import AttackerDecision, BlockerDecision
 from mtg_bot.search.protocol import CHANCE_PLAYER
 from mtg_bot.simulate import setup_game
@@ -57,8 +57,10 @@ def _build_adapter(seed: int) -> MtgGameStateAdapter:
     # pre-existing asymmetry).
     return MtgGameStateAdapter(
         state, expose_combat_decisions=True,
-        phase_prune_enabled=False,
-        force_landdrop_enabled=False,
+        heuristics=HeuristicsConfig(
+            phase_prune_enabled=False,
+            force_landdrop_enabled=False,
+        ),
     )
 
 

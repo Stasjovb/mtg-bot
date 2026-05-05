@@ -26,7 +26,7 @@ from unittest import mock
 from mtg_bot import legal as legal_mod
 from mtg_bot.actions import PassPriority
 from mtg_bot.agents import RandomAgent
-from mtg_bot.search import MtgGameStateAdapter
+from mtg_bot.search import HeuristicsConfig, MtgGameStateAdapter
 from mtg_bot.simulate import setup_game
 from mtg_bot.turn import Step
 
@@ -194,7 +194,7 @@ def test_phase_prune_active_combat_substeps_do_NOT_prune(monkeypatch):
         # Disable skip-empty-combat too — with no attacking creatures
         # in the fresh fixture, that heuristic would also fire and
         # mask the spy call we're asserting.
-        adapter = MtgGameStateAdapter(state, skip_empty_combat_enabled=False)
+        adapter = MtgGameStateAdapter(state)
         _force_step(adapter, step)
         _disable_capability_short_circuit(monkeypatch, adapter)
 
@@ -261,7 +261,9 @@ def test_phase_prune_disabled_via_flag(monkeypatch):
     the adapter enumerates ``legal_actions`` even at the prunable
     steps with empty stack."""
     state = _fresh_state()
-    adapter = MtgGameStateAdapter(state, phase_prune_enabled=False)
+    adapter = MtgGameStateAdapter(
+        state, heuristics=HeuristicsConfig(phase_prune_enabled=False),
+    )
     _force_step(adapter, Step.UPKEEP)
     _disable_capability_short_circuit(monkeypatch, adapter)
 
@@ -286,14 +288,19 @@ def test_phase_prune_flag_propagates_through_clone():
     clone use the same heuristic setting. This matters for ISMCTS,
     which clones the root adapter many times per descent."""
     state = _fresh_state()
-    adapter_on = MtgGameStateAdapter(state, phase_prune_enabled=True)
+    adapter_on = MtgGameStateAdapter(
+        state, heuristics=HeuristicsConfig(phase_prune_enabled=True),
+    )
     clone_on = adapter_on.clone()
-    assert clone_on._phase_prune_enabled is True
+    assert clone_on._heuristics.phase_prune_enabled is True
 
     state2 = _fresh_state()
-    adapter_off = MtgGameStateAdapter(state2, phase_prune_enabled=False)
+    adapter_off = MtgGameStateAdapter(
+        state2,
+        heuristics=HeuristicsConfig(phase_prune_enabled=False),
+    )
     clone_off = adapter_off.clone()
-    assert clone_off._phase_prune_enabled is False
+    assert clone_off._heuristics.phase_prune_enabled is False
 
 
 # ---------------------------------------------------------------------
@@ -402,7 +409,9 @@ def test_should_phase_prune_priority_returns_false_when_disabled():
     """Direct unit test of the helper: when the flag is off, the
     helper returns False even if every other condition is met."""
     state = _fresh_state()
-    adapter = MtgGameStateAdapter(state, phase_prune_enabled=False)
+    adapter = MtgGameStateAdapter(
+        state, heuristics=HeuristicsConfig(phase_prune_enabled=False),
+    )
     _force_step(adapter, Step.UPKEEP)
     assert adapter._should_phase_prune_priority() is False
 
@@ -411,6 +420,8 @@ def test_should_phase_prune_priority_returns_true_when_all_conditions_met():
     """Direct unit test: helper returns True at active-player
     upkeep / empty stack."""
     state = _fresh_state()
-    adapter = MtgGameStateAdapter(state, phase_prune_enabled=True)
+    adapter = MtgGameStateAdapter(
+        state, heuristics=HeuristicsConfig(phase_prune_enabled=True),
+    )
     _force_step(adapter, Step.UPKEEP)
     assert adapter._should_phase_prune_priority() is True

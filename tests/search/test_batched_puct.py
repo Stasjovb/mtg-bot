@@ -21,7 +21,7 @@ import pytest
 
 from mtg_bot.agents import RandomAgent
 from mtg_bot.search import (
-    Budget, MCTS, MtgGameStateAdapter, NNEvaluator,
+    Budget, HeuristicsConfig, MCTS, MtgGameStateAdapter, NNEvaluator,
 )
 from mtg_bot.search.mcts import _Node
 from mtg_bot.simulate import setup_game
@@ -43,12 +43,7 @@ def _adapter(seed: int = 42) -> MtgGameStateAdapter:
     # firing at the root, ``legal_decisions`` returns
     # ``[PassPriority()]`` and the search never branches.
     return MtgGameStateAdapter(
-        state,
-        phase_prune_enabled=False,
-        force_landdrop_enabled=False,
-        skip_empty_combat_enabled=False,
-        skip_opp_postcombat_main_enabled=False,
-        skip_dead_main1_enabled=False,
+        state, heuristics=HeuristicsConfig.disabled(),
     )
 
 

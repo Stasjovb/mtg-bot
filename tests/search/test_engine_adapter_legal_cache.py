@@ -25,7 +25,9 @@ import pytest
 from mtg_bot import legal as legal_mod
 from mtg_bot.actions import CastSpell, PassPriority
 from mtg_bot.agents import RandomAgent
-from mtg_bot.search import MtgGameStateAdapter, ResolutionTargetDecision
+from mtg_bot.search import (
+    HeuristicsConfig, MtgGameStateAdapter, ResolutionTargetDecision,
+)
 from mtg_bot.simulate import setup_game
 from mtg_bot.training import action_encoding as ae
 from mtg_bot.turn import Step
@@ -50,12 +52,7 @@ def _fresh_adapter(seed: int = 42, colors=None) -> MtgGameStateAdapter:
     # skip-dead-main1 / etc. firing, the short-circuit returns
     # ``[PassPriority()]`` before the cache ever populates.
     adapter = MtgGameStateAdapter(
-        state,
-        phase_prune_enabled=False,
-        force_landdrop_enabled=False,
-        skip_empty_combat_enabled=False,
-        skip_opp_postcombat_main_enabled=False,
-        skip_dead_main1_enabled=False,
+        state, heuristics=HeuristicsConfig.disabled(),
     )
     # Drive past UPKEEP / DRAW into PRECOMBAT_MAIN. The setup_game
     # default deck builder seeds the active player's hand with at

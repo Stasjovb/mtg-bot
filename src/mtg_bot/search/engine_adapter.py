@@ -69,6 +69,7 @@ from mtg_bot.search._player_capabilities import (
 from mtg_bot.search.combat_decisions import (
     AttackerDecision, BlockerDecision,
 )
+from mtg_bot.search.heuristics_config import HeuristicsConfig
 from mtg_bot.search.protocol import Decision, PlayerID
 from mtg_bot.search.resolution_channel import (
     KIND_CARD_FROM_LIBRARY, KIND_CARD_FROM_OPPONENT_HAND,
@@ -179,63 +180,21 @@ class MtgGameStateAdapter:
         tactical_agent: Optional[Agent] = None,
         expose_combat_decisions: bool = True,
         expose_resolution_decisions: bool = False,
-        phase_prune_enabled: bool = True,
-        force_landdrop_enabled: bool = True,
-        skip_empty_combat_enabled: bool = True,
-        skip_opp_postcombat_main_enabled: bool = True,
-        skip_dead_main1_enabled: bool = True,
+        heuristics: Optional[HeuristicsConfig] = None,
     ) -> None:
         self._state = engine_state
         self._tactical = tactical_agent or DefaultTacticalAgent()
         self._expose_resolution = expose_resolution_decisions
-        # Phase-based active-priority prune. When True (default), the
-        # active player auto-passes priority during their own UPKEEP /
-        # DRAW / BEGINNING_OF_COMBAT / END steps if the stack is empty
-        # — a training-time heuristic that skips ~15-30% of priority
-        # moments at the cost of a small set of niche legitimate plays
-        # (pump-before-upkeep-trigger, mana-sink-end-step, end-step-
-        # flash-creature, BoC combat tricks). See SEARCH_LIMITATIONS
-        # entry #6. Defaulted ON for training; CLIs may flip it off
-        # for tournament / eval mode where correctness matters more
-        # than throughput.
-        self._phase_prune_enabled = phase_prune_enabled
-        # Forced second-main land drop. When True (default), at the
-        # active player's POSTCOMBAT_MAIN priority with empty stack,
-        # if the player has not played a land this turn AND has ≥1
-        # land in hand AND has <6 lands on battlefield, ``PassPriority``
-        # is filtered OUT of legal_decisions. The player can still
-        # cast spells / activate abilities, but cannot end the
-        # priority window without playing a land. See
-        # SEARCH_LIMITATIONS entry #7.
-        self._force_landdrop_enabled = force_landdrop_enabled
-        # Skip-empty-combat short-circuit. When True (default), at any
-        # combat sub-step priority window (DECLARE_ATTACKERS,
-        # DECLARE_BLOCKERS, COMBAT_DAMAGE, END_OF_COMBAT) with empty
-        # stack AND no attacking creatures on the battlefield, return
-        # ``[PassPriority()]`` immediately. The cascade through both
-        # players' auto-passes drives the step transition through
-        # without enumerating legal_actions for either side. See
-        # SEARCH_LIMITATIONS entry #9.
-        self._skip_empty_combat_enabled = skip_empty_combat_enabled
-        # Skip our priority during opp's POSTCOMBAT_MAIN with empty
-        # stack. When True (default), if it's opp's turn and we're
-        # being asked to act at their second main with nothing on the
-        # stack, return ``[PassPriority()]`` immediately. The bigger
-        # opp-capability auto-pass already catches the "we have nothing
-        # castable" subset; this catches the "we DO have a castable
-        # instant but it's pointless to use it at opp end-of-main-2"
-        # remainder. See SEARCH_LIMITATIONS entry #10.
-        self._skip_opp_postcombat_main_enabled = (
-            skip_opp_postcombat_main_enabled
+        # All five priority short-circuit / filter heuristics live on
+        # one frozen ``HeuristicsConfig``. Default = production self-
+        # play (every flag True). Eval / correctness-sensitive callers
+        # pass ``HeuristicsConfig.disabled()``. Per-flag rationale and
+        # acceptable-failure cases are documented at the per-helper
+        # docstrings (``_should_phase_prune_priority`` etc.) and at
+        # SEARCH_LIMITATIONS entries #6, #7, #9, #10, #11.
+        self._heuristics = heuristics if heuristics is not None else (
+            HeuristicsConfig()
         )
-        # Skip-dead-main1: at active PRECOMBAT_MAIN with empty stack,
-        # no creatures in play, no haste-creature in hand, and no
-        # noncreature permanent that can animate, return
-        # ``[PassPriority()]``. The "no haste, no animator, no
-        # creatures already" conditions mean nothing this player does
-        # at main 1 has a different effect from doing it at main 2.
-        # See SEARCH_LIMITATIONS entry #11.
-        self._skip_dead_main1_enabled = skip_dead_main1_enabled
         # Agent installation. With resolution exposure we need the
         # ``ResolutionChannelAgent`` to intercept callbacks; non-
         # exposed callbacks fall through to the tactical policy.
@@ -407,7 +366,7 @@ class MtgGameStateAdapter:
         Documented divergence from optimal play, see
         ``docs/SEARCH_LIMITATIONS.md`` entry #6.
         """
-        if not self._phase_prune_enabled:
+        if not self._heuristics.phase_prune_enabled:
             return False
         if self._state.is_over():
             return False
@@ -460,7 +419,7 @@ class MtgGameStateAdapter:
         Documented divergence from optimal play, see
         ``docs/SEARCH_LIMITATIONS.md`` entry #7.
         """
-        if not self._force_landdrop_enabled:
+        if not self._heuristics.force_landdrop_enabled:
             return False
         if self._state.is_over():
             return False
@@ -524,7 +483,7 @@ class MtgGameStateAdapter:
         Documented divergence from optimal play, see
         ``docs/SEARCH_LIMITATIONS.md`` entry #9.
         """
-        if not self._skip_empty_combat_enabled:
+        if not self._heuristics.skip_empty_combat_enabled:
             return False
         if self._state.is_over():
             return False
@@ -565,7 +524,7 @@ class MtgGameStateAdapter:
         Documented divergence from optimal play, see
         ``docs/SEARCH_LIMITATIONS.md`` entry #10.
         """
-        if not self._skip_opp_postcombat_main_enabled:
+        if not self._heuristics.skip_opp_postcombat_main_enabled:
             return False
         if self._state.is_over():
             return False
@@ -614,7 +573,7 @@ class MtgGameStateAdapter:
         Documented divergence from optimal play, see
         ``docs/SEARCH_LIMITATIONS.md`` entry #11.
         """
-        if not self._skip_dead_main1_enabled:
+        if not self._heuristics.skip_dead_main1_enabled:
             return False
         if self._state.is_over():
             return False
@@ -731,13 +690,9 @@ class MtgGameStateAdapter:
         c._state = self._state.clone()
         c._tactical = self._tactical
         c._expose_resolution = self._expose_resolution
-        c._phase_prune_enabled = self._phase_prune_enabled
-        c._force_landdrop_enabled = self._force_landdrop_enabled
-        c._skip_empty_combat_enabled = self._skip_empty_combat_enabled
-        c._skip_opp_postcombat_main_enabled = (
-            self._skip_opp_postcombat_main_enabled
-        )
-        c._skip_dead_main1_enabled = self._skip_dead_main1_enabled
+        # ``HeuristicsConfig`` is frozen, so sharing the reference
+        # across the clone is safe (no aliasing hazard); no copy needed.
+        c._heuristics = self._heuristics
         # Resolution-channel agent is per-adapter-instance so each
         # clone has its own replay queue. Snapshot/restore preserves
         # queue state from the source.

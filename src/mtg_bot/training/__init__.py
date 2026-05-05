@@ -60,6 +60,7 @@ from mtg_bot.training.data_gen import (
     load_dataset,
     save_dataset,
 )
+from mtg_bot.search.heuristics_config import HeuristicsConfig
 from mtg_bot.training.grid import grid_search, heuristic_weight_grid
 from mtg_bot.training.progress import (
     BenchProgress,
@@ -87,6 +88,7 @@ __all__ = [
     "BenchProgress",
     "DataGenProgress",
     "EvalProgress",
+    "HeuristicsConfig",
     "ReplayCaptureConfig",
     "ReplayRecorder",
     "TrainingHistory",

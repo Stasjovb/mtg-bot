@@ -74,6 +74,7 @@ from mtg_bot.training import (  # noqa: E402
     DataGenProgress,
     EvalProgress,
     HeuristicConfig,
+    HeuristicsConfig,
     NNPimcConfig,
     PimcConfig,
     Registry,
@@ -339,7 +340,7 @@ def _self_play(
     deck_pool: list[Deck] | None = None,
     replay_config: ReplayCaptureConfig | None = None,
     hang_dump_dir: str | None = None,
-    phase_prune_enabled: bool = True,
+    heuristics: HeuristicsConfig | None = None,
 ) -> tuple[int, int, float]:
     """Run one self-play data-gen pass. Returns (n_samples,
     n_policy_rows, elapsed_seconds). Both seats use the same
@@ -402,7 +403,7 @@ def _self_play(
                 deck_pool=deck_pool,
                 replay_config=replay_config,
                 hang_dump_dir=hang_dump_dir,
-                phase_prune_enabled=phase_prune_enabled,
+                heuristics=heuristics,
             )
         )
     except BaseException:
@@ -444,7 +445,7 @@ def _self_play_distributed(
     bundle_url: str | None = None,
     use_ismcts: bool = False,
     use_belief_weighted: bool = False,
-    phase_prune_enabled: bool = True,
+    heuristics: HeuristicsConfig | None = None,
 ) -> tuple[int, int, float]:
     """Distributed self-play: dispatch the iter's games across the
     shards in ``shards_config``, gather all per-shard npzs into the
@@ -480,7 +481,7 @@ def _self_play_distributed(
         ),
         use_ismcts=use_ismcts,
         use_belief_weighted=use_belief_weighted,
-        phase_prune_enabled=phase_prune_enabled,
+        heuristics=heuristics if heuristics is not None else HeuristicsConfig(),
     )
     started = time.perf_counter()
     npz_paths = run_distributed_self_play(
@@ -1245,7 +1246,9 @@ def main() -> None:
                 deck_pool=deck_pool,
                 replay_config=self_play_replay_config,
                 hang_dump_dir=sp_hang_dir,
-                phase_prune_enabled=not args.no_phase_priority_prune,
+                heuristics=HeuristicsConfig(
+                    phase_prune_enabled=not args.no_phase_priority_prune,
+                ),
             )
         else:
             # Distributed: each shard writes its own npz to args.data_dir
@@ -1276,7 +1279,9 @@ def main() -> None:
                 bundle_url=args.bundle_url,
                 use_ismcts=args.use_ismcts,
                 use_belief_weighted=args.use_belief_weighted,
-                phase_prune_enabled=not args.no_phase_priority_prune,
+                heuristics=HeuristicsConfig(
+                    phase_prune_enabled=not args.no_phase_priority_prune,
+                ),
             )
         print(
             f"[iterate]   gen done in {gen_elapsed/60:.1f}m: "

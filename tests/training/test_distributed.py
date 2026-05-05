@@ -542,6 +542,7 @@ def test_spec_round_trips_through_to_dict_from_dict():
     """SelfPlayJobSpec.to_dict + from_dict is a no-op. Round-trip
     is what enables the remote-shard wrapper to receive the spec via
     base64-encoded JSON over SSH."""
+    from mtg_bot.search.heuristics_config import HeuristicsConfig
     from mtg_bot.training.distributed import SelfPlayJobSpec
 
     original = SelfPlayJobSpec(
@@ -559,9 +560,103 @@ def test_spec_round_trips_through_to_dict_from_dict():
         nn_version_label="v6",
         replays_root="replays",
         hang_dump_root="debug_hangs",
+        heuristics=HeuristicsConfig(
+            phase_prune_enabled=True,
+            force_landdrop_enabled=False,
+            skip_empty_combat_enabled=True,
+            skip_opp_postcombat_main_enabled=False,
+            skip_dead_main1_enabled=True,
+        ),
     )
     rt = SelfPlayJobSpec.from_dict(original.to_dict())
     assert rt == original
+    assert rt.heuristics == original.heuristics
+
+
+def test_self_play_spec_default_heuristics_all_true():
+    """Self-play default for the ``heuristics`` field = every flag
+    True. Documented as the production default in ``HeuristicsConfig``
+    and pinned here against accidental flips."""
+    from mtg_bot.search.heuristics_config import HeuristicsConfig
+    from mtg_bot.training.distributed import SelfPlayJobSpec
+
+    spec = SelfPlayJobSpec(
+        weights_path="w.pt", samples=1, inner_nodes=1, hidden_sizes=None,
+        base_seed=0, enable_mulligans=False, per_game_timeout_sec=None,
+    )
+    assert spec.heuristics == HeuristicsConfig()
+
+
+def test_self_play_spec_from_dict_missing_heuristics_defaults_to_all_true():
+    """Older payloads written before the heuristics field existed
+    must round-trip into the production self-play default."""
+    from mtg_bot.search.heuristics_config import HeuristicsConfig
+    from mtg_bot.training.distributed import SelfPlayJobSpec
+
+    rebuilt = SelfPlayJobSpec.from_dict({
+        "weights_path": "w.pt",
+        "samples": 1,
+        "inner_nodes": 1,
+        "hidden_sizes": None,
+        "base_seed": 0,
+        "enable_mulligans": False,
+        "per_game_timeout_sec": None,
+    })
+    assert rebuilt.heuristics == HeuristicsConfig()
+
+
+def test_eval_spec_default_heuristics_all_false():
+    """Eval default = ``HeuristicsConfig.disabled()`` (every flag
+    OFF). Pin: match outcomes are load-bearing for acceptance gates."""
+    from mtg_bot.search.heuristics_config import HeuristicsConfig
+    from mtg_bot.training.distributed import EvalJobSpec
+
+    spec = EvalJobSpec(
+        new_weights_path="new.pt", old_weights_path=None,
+        samples=1, inner_nodes=1, hidden_sizes=None,
+        base_seed=0, enable_mulligans=False, per_game_timeout_sec=None,
+    )
+    assert spec.heuristics == HeuristicsConfig.disabled()
+
+
+def test_eval_spec_round_trips_heuristics():
+    from mtg_bot.search.heuristics_config import HeuristicsConfig
+    from mtg_bot.training.distributed import EvalJobSpec
+
+    original = EvalJobSpec(
+        new_weights_path="new.pt", old_weights_path="old.pt",
+        samples=4, inner_nodes=200, hidden_sizes=(64, 64),
+        base_seed=42, enable_mulligans=False,
+        per_game_timeout_sec=300.0,
+        heuristics=HeuristicsConfig(
+            phase_prune_enabled=True,
+            force_landdrop_enabled=True,
+            skip_empty_combat_enabled=False,
+            skip_opp_postcombat_main_enabled=False,
+            skip_dead_main1_enabled=True,
+        ),
+    )
+    rt = EvalJobSpec.from_dict(original.to_dict())
+    assert rt == original
+    assert rt.heuristics == original.heuristics
+
+
+def test_eval_spec_from_dict_missing_heuristics_defaults_to_all_false():
+    """Older payloads → eval default (every flag OFF)."""
+    from mtg_bot.search.heuristics_config import HeuristicsConfig
+    from mtg_bot.training.distributed import EvalJobSpec
+
+    rebuilt = EvalJobSpec.from_dict({
+        "new_weights_path": "new.pt",
+        "old_weights_path": None,
+        "samples": 1,
+        "inner_nodes": 1,
+        "hidden_sizes": None,
+        "base_seed": 0,
+        "enable_mulligans": False,
+        "per_game_timeout_sec": None,
+    })
+    assert rebuilt.heuristics == HeuristicsConfig.disabled()
 
 
 def test_shard_config_round_trips_through_to_dict_from_dict():

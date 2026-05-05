@@ -35,7 +35,7 @@ from mtg_bot.agents import RandomAgent
 from mtg_bot.cards import BASIC_LANDS, SYNTHETIC_CREATURES
 from mtg_bot.cards.source import get_active_source
 from mtg_bot.game import Zone
-from mtg_bot.search import MtgGameStateAdapter
+from mtg_bot.search import HeuristicsConfig, MtgGameStateAdapter
 from mtg_bot.search._player_capabilities import (
     _is_sorcery_window,
     has_player_capability_to_act,
@@ -450,11 +450,7 @@ def test_adapter_does_not_auto_pass_active_with_castable_instant_in_combat(
     adapter._legal_actions_cache_player = None
     adapter._legal_actions_cache_value = None
     adapter._opp_cap_cache = None
-    adapter._phase_prune_enabled = False
-    adapter._force_landdrop_enabled = False
-    adapter._skip_empty_combat_enabled = False
-    adapter._skip_opp_postcombat_main_enabled = False
-    adapter._skip_dead_main1_enabled = False
+    adapter._heuristics = HeuristicsConfig.disabled()
 
     spy = _spy_legal_actions(monkeypatch)
     decisions = adapter.legal_decisions()
@@ -507,11 +503,7 @@ def test_adapter_auto_passes_active_when_only_sorcery_at_combat(
     adapter._legal_actions_cache_player = None
     adapter._legal_actions_cache_value = None
     adapter._opp_cap_cache = None
-    adapter._phase_prune_enabled = False
-    adapter._force_landdrop_enabled = False
-    adapter._skip_empty_combat_enabled = False
-    adapter._skip_opp_postcombat_main_enabled = False
-    adapter._skip_dead_main1_enabled = False
+    adapter._heuristics = HeuristicsConfig.disabled()
 
     spy = _spy_legal_actions(monkeypatch)
     decisions = adapter.legal_decisions()
@@ -585,7 +577,9 @@ def test_active_capability_cache_hit_returns_immediately():
     state.players[0].lands_played_this_turn = 1
     # Disable phase-prune so the capability cache (under test here)
     # actually populates instead of being short-circuited.
-    adapter = MtgGameStateAdapter(state, phase_prune_enabled=False)
+    adapter = MtgGameStateAdapter(
+        state, heuristics=HeuristicsConfig(phase_prune_enabled=False),
+    )
 
     decisions_a = adapter.legal_decisions()
     assert decisions_a == [PassPriority()]
@@ -606,7 +600,9 @@ def test_active_capability_cache_invalidated_by_apply():
     _strip_player_zones(state, 0)
     _give_basic_land(state, 0, "Forest", tapped=False)
     state.players[0].lands_played_this_turn = 1
-    adapter = MtgGameStateAdapter(state, phase_prune_enabled=False)
+    adapter = MtgGameStateAdapter(
+        state, heuristics=HeuristicsConfig(phase_prune_enabled=False),
+    )
 
     _ = adapter.legal_decisions()
     assert adapter._opp_cap_cache is not None
@@ -626,7 +622,9 @@ def test_active_capability_cache_recomputes_after_state_change():
     for _ in range(3):
         _give_basic_land(state, 0, "Mountain", tapped=False)
     state.players[0].lands_played_this_turn = 1  # consume land drop
-    adapter = MtgGameStateAdapter(state, phase_prune_enabled=False)
+    adapter = MtgGameStateAdapter(
+        state, heuristics=HeuristicsConfig(phase_prune_enabled=False),
+    )
 
     _ = adapter.legal_decisions()
     assert adapter._opp_cap_cache is not None
