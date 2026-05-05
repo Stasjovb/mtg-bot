@@ -227,6 +227,49 @@ current model strength + EoE-only pool.
 
 ---
 
+## 6. Phase-based active-player priority prune (training heuristic)
+
+**Location** (planned, in `feature/phase-priority-prune` as of 2026-05-04): `MtgGameStateAdapter.legal_decisions` short-circuits to `[PassPriority()]` when ALL of these hold:
+- Active player == priority player == viewer
+- Stack is empty
+- Current step is one of: **upkeep, draw step, beginning of combat, end step**
+
+The check fires BEFORE the capability hash check (it's cheaper). Capability check still runs for opp priority and for the active player in other phases.
+
+**Why this is sometimes wrong** under CR: real MTG allows casting instants at any priority moment. There ARE legitimate plays in these phases:
+
+| Edge case | Phase | Example | Bot misbehavior |
+|---|---|---|---|
+| Pump spell before upkeep trigger | Upkeep | "At the start of your upkeep, do X" where X depends on creature P/T | Bot doesn't pump first |
+| Mana sink at end of own turn | End step | Floating mana about to disappear; cast instant to use it | Mana wasted (also moot until floating mana modeled — see entry #4) |
+| Modal spell missed in main | End step | Forgot to cast a flash creature in main phase; end step is last chance | Bot doesn't cast it |
+| Combat trick before declaring attackers | BoC | Pump a creature so it can attack profitably; instant removal on opp blockers; tap opp's blockers | Bot misses these |
+| Pre-empting opp's response window | Various | Cast a spell now so opp must respond before their planning starts | Bot doesn't pre-empt |
+| Triggers requiring response | Any | "Whenever you cast a spell" triggers timed for these phases | Not fired |
+
+**Failure mode**: bot passes priority and misses a legitimate instant-speed play. Conservative-WRONG (never plays an illegal action; just doesn't take a legal one). The miss happens on the active player's side, where the held-back action would have been their own choice — opp's response windows are unaffected.
+
+**Highest-risk phase**: **beginning of combat**. This is where genuine combat tricks live (pump-then-attack, instant removal of blockers). A trained model would value these. v12 (near-random) doesn't know how to use them anyway.
+
+**When it matters**:
+- For training: misses < 0.5% of decisions; all in niche cases the lightly-trained NN couldn't exploit anyway. Bot doesn't learn the niche tactics, but the policy gradient isn't measurably affected.
+- For tournament play: real loss. Combat tricks matter. End-step plays matter. Bot gives up clear value here.
+
+**Mitigation**: configurable via the `--no-phase-priority-prune` flag. Default ON for training and self-play data_gen; should be set OFF for tournament/eval matches against real opponents (or against alternate-arch baselines where you want fair search behavior).
+
+**Acceptable for**: training (millions of games; rare miss doesn't shift the gradient).
+
+**NOT acceptable for**: live tournament play, "bot plays one game live" mode, any benchmark whose strength comparison depends on subtle combat or end-step decisions.
+
+**Fix scope if/when needed**: the heuristic is intentionally crude. To recover the missed plays without the runtime cost:
+- Train the policy to predict "should this priority moment be skipped?" — let the NN decide rather than a hardcoded phase rule
+- Or expose phase + stack-empty as a feature to the policy and let it learn
+- Or just disable the heuristic for late-stage training/eval
+
+**Impact estimate**: ~15-30% per-game wall reduction during training, on top of capability auto-pass (entry #3). Composes well — capability catches "no castable spells" case; phase prune catches "have castable spells but wrong phase" case.
+
+---
+
 ## Tracked but not in this doc
 
 Things tracked elsewhere that you might also want to know about:
