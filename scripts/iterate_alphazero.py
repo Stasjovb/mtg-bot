@@ -1721,14 +1721,20 @@ def main() -> None:
             user_stopped = True
             break
 
-        # 3. Acceptance gate (skip on the first iteration — there's
-        # no apples-to-apples comparison to make. Just promote.)
+        # 3. Acceptance gate. Runs whenever the user opted in via
+        # ``--acceptance-threshold > 0``: every freshly-trained
+        # version IS apples-to-apples comparable to the current
+        # best (they're two distinct registered weights). The
+        # earlier ``best_version != bootstrap_version`` guard was
+        # wrong — when iterate is RESUMED from a state where
+        # current_best happens to equal --bootstrap-version (a
+        # totally normal case), it silently skipped the gate and
+        # promoted blind. Observed live on iter 2 of the 2026-05-06
+        # run: v13 promoted without eval despite
+        # --acceptance-threshold 0.55 --eval-games 100 on the CLI.
         promoted = False
         eval_summary = {}
-        if (
-            args.acceptance_threshold > 0
-            and best_version != args.bootstrap_version
-        ):
+        if args.acceptance_threshold > 0 and args.eval_games > 0:
             print(
                 f"[iterate]   eval-gate: {new_version} vs "
                 f"{best_version}, {args.eval_games} games..."
