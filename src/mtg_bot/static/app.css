@@ -422,6 +422,37 @@ body { display: grid; grid-template-columns: 1fr 280px;
 .engine-empty { color: var(--muted); font-style: italic;
                 padding: 0.5em 0; text-align: center; }
 
+/* ---- decision-detail panel (search-tree annotation) ---- */
+
+.search-panel { padding: 0.6em; border-bottom: 1px solid var(--panel-edge);
+                max-height: 42vh; overflow-y: auto; flex: 0 0 auto; }
+.search-header { display: flex; align-items: center;
+                 justify-content: space-between; margin: 0 0 0.3em; }
+.search-header h2 { margin: 0; font-size: 0.95em; color: var(--muted);
+                    text-transform: uppercase; letter-spacing: 0.08em; }
+.search-toggle { background: var(--panel); color: var(--ink);
+                 border: 1px solid var(--panel-edge); border-radius: 3px;
+                 padding: 0.1em 0.55em; cursor: pointer; line-height: 1;
+                 font-size: 0.95em; }
+.search-toggle:hover { background: var(--accent); color: #0b1730; }
+.search-meta { display: flex; flex-wrap: wrap; gap: 0.6em;
+               align-items: baseline; font-size: 0.78em;
+               color: var(--muted); margin-bottom: 0.4em; }
+.search-chosen { color: var(--accent); font-weight: 600; }
+.search-table { width: 100%; border-collapse: collapse;
+                font: 0.85em/1.3 ui-monospace, monospace; }
+.search-table th { text-align: left; padding: 0.3em 0.4em;
+                   border-bottom: 1px solid var(--panel-edge);
+                   color: var(--muted); font-weight: 600;
+                   text-transform: uppercase; letter-spacing: 0.04em;
+                   font-size: 0.85em; }
+.search-table td { padding: 0.25em 0.4em;
+                   border-bottom: 1px dashed var(--panel-edge); }
+.search-table th.num, .search-table td.num { text-align: right; }
+.search-table td.action { color: var(--ink); }
+.search-row.chosen { background: rgba(255, 200, 90, 0.12); }
+.search-row.chosen td.action { color: var(--accent); font-weight: 700; }
+
 /* ---- combat arrows ---- */
 
 .combat-overlay { position: fixed; top: 0; left: 0; width: 100vw; height: 100vh;

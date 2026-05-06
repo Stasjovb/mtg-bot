@@ -58,6 +58,24 @@
     </div>
     <ol id="engine-recs" class="engine-recs"></ol>
   </section>
+  <section id="search-panel" class="search-panel hidden">
+    <header class="search-header">
+      <h2>Decision</h2>
+      <button type="button" id="search-toggle">&minus;</button>
+    </header>
+    <div id="search-body">
+      <div class="search-meta">
+        <span id="search-chosen"></span>
+        <span id="search-budget" class="muted"></span>
+      </div>
+      <table class="search-table">
+        <thead>
+          <tr><th>Action</th><th>Visits</th><th>Q</th><th>Prior</th><th>Leaf V</th></tr>
+        </thead>
+        <tbody id="search-rows"></tbody>
+      </table>
+    </div>
+  </section>
   <aside id="log-panel" class="log-panel hidden">
     <h2>Log</h2>
     <div id="log-body" class="log-body"></div>
