@@ -1028,6 +1028,7 @@ def load_all_datasets(
     directory: Path,
     *,
     include_policy: bool = False,
+    max_files: int | None = None,
 ) -> tuple[np.ndarray, ...]:
     """Load and concatenate every ``*.npz`` in ``directory``.
 
@@ -1044,11 +1045,49 @@ def load_all_datasets(
     > 0`` per row to decide which rows contribute to the policy
     loss.
 
+    ``max_files`` (default ``None`` = load every match) caps the
+    set of npz files to the ``N`` most recent by mtime. Used by
+    the ``--window-recent`` training knob: as ``iterate_data/``
+    accumulates over many iterations, training on the entire
+    history slows linearly with size and biases the model toward
+    early-iteration data. Picking the top-N most-recently-written
+    files preserves the latest self-play distribution while
+    capping load time. ``max_files=0`` raises (caller asked us to
+    train on nothing); ``max_files`` greater than the available
+    file count loads them all (no error — the caller's window is
+    a maximum, not a minimum). Mtime is a fine proxy for
+    generation time — the orchestrator writes each shard at
+    self-play completion, so creation order matches mtime order.
+
     Empty arrays if the directory has no .npz files.
     """
+    import sys
+
     from mtg_bot.training.action_encoding import ACTION_VOCAB_SIZE
 
-    paths = sorted(directory.glob("*.npz"))
+    if max_files is not None and max_files <= 0:
+        raise ValueError(
+            f"max_files must be positive or None; got {max_files}"
+        )
+
+    all_paths = list(directory.glob("*.npz"))
+    if max_files is not None and all_paths:
+        # Sort by mtime descending so the freshest files come
+        # first, take the top ``max_files``. Then re-sort the
+        # kept subset by filename so concatenation order matches
+        # the all-files contract (alphabetical within the loaded
+        # subset). Stable concat order matters for reproducibility
+        # when the same window is re-trained.
+        all_paths.sort(key=lambda p: p.stat().st_mtime, reverse=True)
+        kept = all_paths[:max_files]
+        print(
+            f"loading {len(kept)} of {len(all_paths)} files "
+            f"(window-recent={max_files})",
+            file=sys.stderr,
+        )
+        paths = sorted(kept)
+    else:
+        paths = sorted(all_paths)
     if not paths:
         empty_features = np.zeros((0, FEATURE_DIM), dtype=_DTYPE_FEATURES)
         empty_outcomes = np.zeros((0,), dtype=_DTYPE_OUTCOMES)

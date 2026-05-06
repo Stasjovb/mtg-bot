@@ -251,6 +251,20 @@ def main() -> None:
         ),
     )
     parser.add_argument(
+        "--window-recent", type=int, default=None,
+        help=(
+            "If set, load only the N most-recent (by mtime) .npz "
+            "files from --data-dir instead of the entire directory. "
+            "Default None = load every file. As iterate_data/ "
+            "accumulates over many iterations, training on the "
+            "entire history slows linearly with size and biases "
+            "early data; capping to the latest N files keeps "
+            "training fast and weighted toward fresh self-play. "
+            "Files greater than the available count loads them "
+            "all (no error)."
+        ),
+    )
+    parser.add_argument(
         "--one-legal-keep-frac", type=float, default=1.0,
         help=(
             "Fraction of one-legal-action supervised rows to keep "
@@ -272,6 +286,11 @@ def main() -> None:
         parser.error(
             "--one-legal-keep-frac must be in (0.0, 1.0]; got "
             f"{args.one_legal_keep_frac}"
+        )
+    if args.window_recent is not None and args.window_recent <= 0:
+        parser.error(
+            "--window-recent must be a positive integer; got "
+            f"{args.window_recent}"
         )
     if args.hidden_sizes is not None:
         try:
@@ -307,18 +326,37 @@ def main() -> None:
         sys.exit(f"--data-dir {args.data_dir} is not a directory")
 
     print(f"# Loading data from {args.data_dir}")
+    if args.window_recent is not None:
+        print(
+            f"# Window-recent: loading at most {args.window_recent} "
+            f"most-recent files by mtime"
+        )
     # Always pull policy supervision arrays. ``include_policy=True``
     # zero-pads value-only files so the concatenated arrays align —
     # mixed dirs (some pre-A2.3 .npz, some post-A2.3) load cleanly.
     features, outcomes, policy_targets, action_masks = (
-        load_all_datasets(args.data_dir, include_policy=True)
+        load_all_datasets(
+            args.data_dir,
+            include_policy=True,
+            max_files=args.window_recent,
+        )
     )
     if features.shape[0] == 0:
         sys.exit(
             f"No .npz files found in {args.data_dir}. Generate data "
             f"with scripts/generate_training_data.py first."
         )
-    data_files = sorted(p.name for p in args.data_dir.glob("*.npz"))
+    # Reflect the actually-loaded subset in metadata (not every
+    # file in the dir) when --window-recent is in play; otherwise
+    # this is identical to the all-files glob.
+    all_npz = sorted(args.data_dir.glob("*.npz"))
+    if args.window_recent is not None and len(all_npz) > args.window_recent:
+        loaded_paths = sorted(
+            all_npz, key=lambda p: p.stat().st_mtime, reverse=True,
+        )[:args.window_recent]
+        data_files = sorted(p.name for p in loaded_paths)
+    else:
+        data_files = [p.name for p in all_npz]
 
     if args.one_legal_keep_frac < 1.0:
         n_before = features.shape[0]
@@ -445,6 +483,7 @@ def main() -> None:
                 "rng_seed": args.seed,
                 "duration_seconds": elapsed,
                 "one_legal_keep_frac": args.one_legal_keep_frac,
+                "window_recent": args.window_recent,
                 "policy_hidden_sizes": (
                     list(policy_hidden_sizes)
                     if policy_hidden_sizes is not None else None
