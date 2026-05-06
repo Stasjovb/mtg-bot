@@ -4776,8 +4776,23 @@ class _FakePopen:
 
 
 def _write_progress_json(path: Path, status: str) -> None:
+    """Write a minimal shard progress JSON for watchdog tests.
+
+    Includes ``started_at`` set 1 minute in the future so the
+    watchdog's stale-JSON filter (which rejects JSONs whose
+    ``started_at`` predates the watchdog's instantiation) treats it
+    as a fresh post-watchdog-start write, not a stale prior-run
+    remnant. The 60s offset absorbs any test-timing slop.
+    """
+    from datetime import datetime, timedelta, timezone
+    started_at = (
+        datetime.now(timezone.utc) + timedelta(seconds=60)
+    ).isoformat(timespec="seconds")
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps({"status": status}), encoding="utf-8")
+    path.write_text(
+        json.dumps({"status": status, "started_at": started_at}),
+        encoding="utf-8",
+    )
 
 
 def test_watchdog_terminates_when_status_transitions_to_completed(
@@ -5353,3 +5368,64 @@ def test_run_shard_eval_remote_passes_local_progress_path_to_watchdog(
     assert captured["progress_path"] == expected_progress
     assert captured["shard_label"] == "my-mac"
     assert captured["hard_timeout_s"] == 99.0
+
+
+def test_watchdog_ignores_stale_progress_json_from_prior_run(
+    tmp_path: Path,
+):
+    """Regression for the bug observed live 2026-05-06: a stale
+    shard progress JSON from a PRIOR run of the same run_id (with
+    ``status="completed"`` already written) was sitting on disk
+    before the new run's _ProgressPoller had written a fresh copy.
+    The watchdog read it and terminated the SSH session within
+    seconds of startup, killing remote shards before they could pull
+    any games.
+
+    Fix: same shape as _EarlyStopPoller — reject any JSON whose
+    ``started_at`` predates the watchdog's instantiation. This test
+    pins that behavior.
+    """
+    import subprocess as _subprocess
+    from datetime import datetime, timedelta, timezone
+    from mtg_bot.training.distributed import (
+        _run_ssh_with_terminal_status_watchdog,
+    )
+
+    progress = tmp_path / "iter_001_shard_mac.json"
+    # Stale: status=completed but started_at is 1 hour ago.
+    stale_started_at = (
+        datetime.now(timezone.utc) - timedelta(hours=1)
+    ).isoformat(timespec="seconds")
+    progress.parent.mkdir(parents=True, exist_ok=True)
+    progress.write_text(
+        json.dumps({
+            "status": "completed",
+            "started_at": stale_started_at,
+        }),
+        encoding="utf-8",
+    )
+
+    # Fake Popen that exits cleanly after ~0.5s — simulating the
+    # actual SSH command finishing on its own. The watchdog should
+    # NOT terminate it; it should let the natural exit happen.
+    fake = _FakePopen(auto_finish_after=0.5)
+
+    result = _run_ssh_with_terminal_status_watchdog(
+        ["ssh", "fake", "remote-cmd"],
+        progress_path=progress,
+        hard_timeout_s=10.0,
+        shard_label="mac",
+        poll_interval_s=0.05,
+        terminal_grace_s=0.1,
+        terminate_grace_s=0.5,
+        popen_factory=lambda *a, **kw: fake,
+    )
+
+    # Stale JSON was filtered → watchdog never fired → process
+    # exited on its own.
+    assert fake.terminate_calls == 0, (
+        f"watchdog terminated SSH despite stale JSON; "
+        f"terminate_calls={fake.terminate_calls}. The stale-JSON "
+        "filter is broken — this is the live-2026-05-06 regression."
+    )
+    assert result.returncode == 0
