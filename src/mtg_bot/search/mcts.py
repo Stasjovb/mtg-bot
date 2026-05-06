@@ -31,7 +31,7 @@ from __future__ import annotations
 
 import math
 import random
-from typing import Iterator, Optional
+from typing import Any, Iterator, Optional
 
 import numpy as np
 
@@ -69,7 +69,7 @@ class _Node:
     __slots__ = (
         "state", "parent", "decision", "children",
         "pending_decisions", "visits", "total_value", "virtual_loss",
-        "prior", "_policy_cache",
+        "prior", "_policy_cache", "leaf_nn_value",
     )
 
     def __init__(
@@ -121,6 +121,19 @@ class _Node:
         # expansions from this node so the network sees one forward pass
         # per node, not one per child.
         self._policy_cache: Optional[np.ndarray] = None
+        # Raw NN value at *this state* the first time it was evaluated
+        # as a leaf. Stays ``None`` until the first leaf evaluation
+        # backs a value through here. Captured for the search-annotation
+        # hook (replay viewer's decision-detail panel) so the user
+        # can see what the network thought of each root-child
+        # position before MCTS averaged in the rollouts. Always-on:
+        # populated regardless of UCB1 vs PUCT; the field is just
+        # ignored when the annotator isn't asking. PUCT mode passes
+        # through ``evaluate_with_policy`` (value head + cached
+        # policy); UCB1 mode passes through ``evaluate`` (value
+        # only). Either way the per-node "first leaf value" is the
+        # same scalar.
+        self.leaf_nn_value: Optional[float] = None
 
     def is_leaf(self) -> bool:
         return self.state.is_terminal()
@@ -287,6 +300,85 @@ class MCTS(SearchStrategy):
         # Standard MCTS final-move policy: pick the most-visited child.
         return max(visits.items(), key=lambda kv: kv[1])[0]
 
+    def choose_with_full_stats(
+        self, state: GameState, player_id: PlayerID,
+    ) -> tuple[
+        Optional[Decision],
+        list[dict[str, Any]],
+    ]:
+        """Run a search and return the chosen decision plus per-root-
+        child stats for the search-annotation hook.
+
+        Returns ``(chosen_decision_or_None, candidates)``. Each
+        candidate dict carries ``decision`` (the action), ``visits``
+        (int), ``q`` (Q from the root's perspective — the parent's
+        active-player view, matching ``mean_value`` semantics — None
+        when ``visits == 0``), ``prior`` (PUCT prior; None outside
+        PUCT mode), and ``leaf_value`` (the raw NN value at the
+        child's state on its first leaf evaluation; None when the
+        child was never expanded as a leaf, e.g. budget too small,
+        or when the evaluator doesn't expose a usable per-state
+        scalar).
+
+        ``chosen_decision`` is the most-visited root child (matches
+        ``choose``); ``None`` when no children were expanded (budget
+        too small) so callers can fall back to a legal default.
+
+        Forced moves: when only one legal decision exists, returns
+        ``(decision, [{"decision": d, "visits": 1, "q": None,
+        "prior": None, "leaf_value": None}])``. The synthetic shape
+        keeps the annotation present (so the viewer panel still
+        renders) even though no tree was built.
+        """
+        legal = list(state.legal_decisions())
+        if len(legal) == 1:
+            decision = legal[0]
+            return (
+                decision,
+                [
+                    {
+                        "decision": decision,
+                        "visits": 1,
+                        "q": None,
+                        "prior": None,
+                        "leaf_value": None,
+                    }
+                ],
+            )
+
+        root = _Node(
+            state=state.clone(),
+            pending_decisions=self.expansion_policy.make_decision_iterator(
+                state
+            ),
+        )
+
+        budget = self.budget_factory()
+        budget.start()
+        if self.batch_size == 1:
+            self._search_serial(root, player_id, budget)
+        else:
+            self._search_batched(
+                root, player_id, budget, self.batch_size,
+            )
+
+        candidates = [
+            {
+                "decision": child.decision,
+                "visits": child.visits,
+                "q": child.mean_value() if child.visits > 0 else None,
+                "prior": child.prior if self.puct else None,
+                "leaf_value": child.leaf_nn_value,
+            }
+            for child in root.children
+        ]
+        if not candidates:
+            return (None, [])
+        chosen = max(
+            root.children, key=lambda c: c.visits,
+        ).decision
+        return (chosen, candidates)
+
     def choose_with_visits(
         self, state: GameState, player_id: PlayerID
     ) -> dict[Decision, int]:
@@ -443,6 +535,8 @@ class MCTS(SearchStrategy):
                     for leaf, (value, policy) in zip(pending, pairs):
                         if leaf._policy_cache is None:
                             leaf._policy_cache = policy
+                        if leaf.leaf_nn_value is None:
+                            leaf.leaf_nn_value = float(value)
                         self._revert_virtual_loss(leaf)
                         self._backprop(leaf, value, player_id)
                 else:
@@ -450,6 +544,8 @@ class MCTS(SearchStrategy):
                         states, player_id,
                     )
                     for leaf, value in zip(pending, values):
+                        if leaf.leaf_nn_value is None:
+                            leaf.leaf_nn_value = float(value)
                         self._revert_virtual_loss(leaf)
                         self._backprop(leaf, value, player_id)
 
@@ -661,8 +757,13 @@ class MCTS(SearchStrategy):
             )
             if leaf._policy_cache is None:
                 leaf._policy_cache = policy
+            if leaf.leaf_nn_value is None:
+                leaf.leaf_nn_value = float(value)
             return value
-        return self.evaluator.evaluate(leaf.state, root_player)
+        value = self.evaluator.evaluate(leaf.state, root_player)
+        if leaf.leaf_nn_value is None:
+            leaf.leaf_nn_value = float(value)
+        return value
 
     def _backprop(
         self, leaf: _Node, value_for_root: float,

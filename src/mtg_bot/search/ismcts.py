@@ -89,6 +89,7 @@ class _Node:
     __slots__ = (
         "key", "children", "visits", "total_value", "availability",
         "virtual_loss", "prior", "_policy_logits", "_union_mask",
+        "leaf_nn_value",
     )
 
     def __init__(self, key: bytes) -> None:
@@ -98,6 +99,15 @@ class _Node:
         self.total_value: float = 0.0
         self.availability: int = 0
         self.virtual_loss: int = 0
+        # Raw NN value at this node's state on its first leaf
+        # evaluation — captured for the search-annotation hook so the
+        # replay viewer can show what the network thought of each
+        # root-child position before backprop folded in averaged
+        # rollouts. Always-on; populated lazily the first time the
+        # node sits at the leaf frontier and the evaluator scores
+        # it. None when the node was never evaluated as a leaf
+        # (e.g. budget too small to descend here).
+        self.leaf_nn_value: Optional[float] = None
         # PUCT prior P(parent_info_set, decision-to-this-child).
         # Stamped at expansion time when ``puct=True`` from the
         # parent's cached raw logits + union mask. 0.0 default;
@@ -497,6 +507,89 @@ class ISMCTS(SearchStrategy):
 
         return {d: c.visits for d, c in root.children.items()}
 
+    def choose_with_full_stats(
+        self, state: GameState, player_id: PlayerID,
+    ) -> tuple[Optional[Decision], list[dict]]:
+        """ISMCTS counterpart to ``MCTS.choose_with_full_stats``: run
+        a search and return per-root-child stats so the data-gen /
+        self-play loop can capture a search annotation for the replay
+        viewer's decision-detail panel.
+
+        Returns ``(chosen_decision_or_None, candidates)``. Each
+        candidate carries ``decision``, ``visits``, ``q``
+        (total_value/visits — viewer-perspective in SO-ISMCTS,
+        unchanged from the convention used by the recommendation
+        panel), ``prior`` (the union-mask PUCT prior; None outside
+        PUCT mode), and ``leaf_value`` (the NN value on the child's
+        first leaf evaluation; None when never reached).
+
+        Forced moves and terminal states match
+        ``choose_with_visits``: forced moves return one synthetic
+        candidate with ``visits=1`` and the rest None; terminal
+        states return ``(None, [])``.
+        """
+        if not isinstance(state, MtgGameStateAdapter):
+            raise TypeError(
+                "ISMCTS requires an MtgGameStateAdapter; got "
+                f"{type(state).__name__}."
+            )
+        if state.is_terminal():
+            return (None, [])
+
+        legal = list(state.legal_decisions())
+        if len(legal) == 1:
+            decision = legal[0]
+            return (
+                decision,
+                [
+                    {
+                        "decision": decision,
+                        "visits": 1,
+                        "q": None,
+                        "prior": None,
+                        "leaf_value": None,
+                    }
+                ],
+            )
+
+        # Run choose_with_visits' machinery but read richer stats off
+        # the resulting root. Re-running the search would double the
+        # cost; instead we duplicate the lethal/forced/teardown
+        # bookkeeping here in a thin wrapper. The canonical seed is
+        # re-running choose_with_visits and then reading the tree
+        # — at the cost of one extra path-traversal per call which is
+        # negligible vs the search itself.
+        visits = self.choose_with_visits(state, player_id)
+        if not visits:
+            return (None, [])
+
+        # The persistent tree's current root holds the stats we need
+        # — choose_with_visits stored ``self._tree_root_key`` for
+        # exactly this kind of post-hoc inspection.
+        if self._tree_root_key is None:
+            return (None, [])
+        root = self._tree.get(self._tree_root_key)
+        if root is None:
+            return (None, [])
+        candidates = []
+        for d, child in root.children.items():
+            n = child.visits
+            candidates.append({
+                "decision": d,
+                "visits": n,
+                "q": (
+                    child.total_value / n if n > 0 else None
+                ),
+                "prior": (
+                    child.prior if self.puct else None
+                ),
+                "leaf_value": child.leaf_nn_value,
+            })
+        if not candidates:
+            return (None, [])
+        chosen = max(candidates, key=lambda c: c["visits"])["decision"]
+        return (chosen, candidates)
+
     # ------------------------------------------------------------------
     # Lethal-detect short-circuit
     # ------------------------------------------------------------------
@@ -705,6 +798,8 @@ class ISMCTS(SearchStrategy):
                     ):
                         if leaf._policy_logits is None:
                             leaf._policy_logits = logits
+                        if leaf.leaf_nn_value is None:
+                            leaf.leaf_nn_value = float(value)
                         self._revert_virtual_loss(path)
                         self._backprop(path, value)
                     # Distribute parent logits and re-stamp all
@@ -738,7 +833,9 @@ class ISMCTS(SearchStrategy):
                     values = self.evaluator.batch_evaluate(
                         leaf_states, viewer,
                     )
-                    for (_, path, _), value in zip(pending, values):
+                    for (leaf, path, _), value in zip(pending, values):
+                        if leaf.leaf_nn_value is None:
+                            leaf.leaf_nn_value = float(value)
                         self._revert_virtual_loss(path)
                         self._backprop(path, value)
 
@@ -1052,8 +1149,13 @@ class ISMCTS(SearchStrategy):
             )
             if leaf._policy_logits is None:
                 leaf._policy_logits = logits
+            if leaf.leaf_nn_value is None:
+                leaf.leaf_nn_value = float(value)
             return value
-        return self.evaluator.evaluate(sub, viewer)
+        value = self.evaluator.evaluate(sub, viewer)
+        if leaf.leaf_nn_value is None:
+            leaf.leaf_nn_value = float(value)
+        return value
 
     def _backprop(
         self, path: list[_Node], value_for_root: float,
