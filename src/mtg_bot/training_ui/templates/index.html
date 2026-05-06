@@ -131,7 +131,7 @@
   .pairing-status.failed { color: #fca5a5; }
 
   /* Per-machine sub-cards inside aggregated training-progress cards.
-     One row per host with four perf-only stats: secs/game, crashes,
+     One row per host with five stats: games, secs/game, crashes,
      timed out, workers. Compact — uses the same dark surface + border
      the parent stats grid uses, just smaller padding and font. */
   .machines { margin-top: 14px; display: flex;
@@ -140,7 +140,7 @@
     text-transform: uppercase; letter-spacing: 0.08em;
     margin-bottom: 2px; }
   .machine-row { display: grid;
-    grid-template-columns: 1fr repeat(4, minmax(80px, auto));
+    grid-template-columns: 1fr repeat(5, minmax(80px, auto));
     align-items: center; gap: 12px;
     padding: 6px 10px; background: var(--bg);
     border: 1px solid var(--border); border-radius: 8px;
@@ -732,9 +732,9 @@ function fmtSecsPerGame(v) {
 function renderMachines(el, run) {
   // Aggregated distributed runs include a `machines` array (one entry
   // per shard). Render as a compact row of mini sub-cards inside the
-  // parent card showing performance-only stats: secs/game, crashes,
-  // timed out, workers. Single-machine runs (no aggregator) won't
-  // have this key and the section stays hidden.
+  // parent card showing per-host stats: games (n_games_done),
+  // secs/game, crashes, timed out, workers. Single-machine runs
+  // (no aggregator) won't have this key and the section stays hidden.
   const slot = el.querySelector('[data-field="machines"]');
   if (!slot) return;
   const machines = Array.isArray(run.machines) ? run.machines : [];
@@ -760,6 +760,11 @@ function renderMachines(el, run) {
         : null);
     html += '<div class="machine-row">'
       + '<div class="machine-label">' + esc(m.label || '?') + '</div>'
+      + '<div class="machine-stat">'
+        + '<div class="machine-stat-label">games</div>'
+        + '<div class="machine-stat-value">'
+        + String(m.n_games_done || 0) + '</div>'
+      + '</div>'
       + '<div class="machine-stat">'
         + '<div class="machine-stat-label">secs/game</div>'
         + '<div class="machine-stat-value">'
