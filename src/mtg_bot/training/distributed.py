@@ -2492,24 +2492,42 @@ _WATCHDOG_TERMINAL_GRACE_S = 10.0
 _WATCHDOG_TERMINATE_GRACE_S = 5.0
 
 
-def _read_terminal_status(progress_path: Path) -> Optional[str]:
+def _read_terminal_status(
+    progress_path: Path,
+    *,
+    min_started_at: Optional[str] = None,
+) -> Optional[str]:
     """Best-effort read of the local per-shard progress JSON's
     ``status`` field. Returns the string only if it is one of the
     terminal sentinels (``completed`` / ``failed``); returns None
     otherwise (file missing, partial write mid-flight, non-terminal
     status, malformed JSON). Swallows OSError + JSONDecodeError —
     a transient read failure on one tick is fine; the next tick
-    retries."""
+    retries.
+
+    ``min_started_at`` (optional, ISO 8601 string): if provided,
+    treat the file as not-yet-terminal whenever its ``started_at``
+    is missing or lexically less than the floor. Defends against
+    stale prior-run shard JSONs that say ``status="completed"``
+    sitting on disk before the current run's ``_ProgressPoller`` has
+    written a fresh copy. Same filter shape as ``_EarlyStopPoller``.
+    """
     if not progress_path.is_file():
         return None
     try:
         d = json.loads(progress_path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
         return None
-    status = d.get("status") if isinstance(d, dict) else None
-    if status in ("completed", "failed"):
-        return status
-    return None
+    if not isinstance(d, dict):
+        return None
+    status = d.get("status")
+    if status not in ("completed", "failed"):
+        return None
+    if min_started_at is not None:
+        started_at = d.get("started_at")
+        if not isinstance(started_at, str) or started_at < min_started_at:
+            return None
+    return status
 
 
 def _run_ssh_with_terminal_status_watchdog(
@@ -2555,6 +2573,15 @@ def _run_ssh_with_terminal_status_watchdog(
     code passes ``subprocess.Popen``; tests pass a fake that returns
     a controllable Popen-like object.
     """
+    # Stamp our start. Stale shard JSONs from prior runs of the
+    # same run_id may still be on disk before _ProgressPoller writes
+    # a fresh copy; treat any JSON whose started_at predates this
+    # stamp as not-yet-terminal so we don't terminate the SSH
+    # before the shard has even fired up. Same shape as the
+    # _EarlyStopPoller stale-JSON filter.
+    watchdog_min_started_at = datetime.now(timezone.utc).isoformat(
+        timespec="seconds",
+    )
     proc = popen_factory(
         cmd,
         stdout=subprocess.PIPE,
@@ -2567,7 +2594,10 @@ def _run_ssh_with_terminal_status_watchdog(
         """Polls ``progress_path``. Returns once SSH is done OR after
         terminating the process when terminal status is observed."""
         while not ssh_done_event.wait(timeout=poll_interval_s):
-            status = _read_terminal_status(progress_path)
+            status = _read_terminal_status(
+                progress_path,
+                min_started_at=watchdog_min_started_at,
+            )
             if status is None:
                 continue
             # Give the shard a brief moment to finish any
