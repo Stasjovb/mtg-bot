@@ -4801,8 +4801,14 @@ def test_watchdog_terminates_when_status_transitions_to_completed(
     """As soon as the local progress JSON's ``status`` becomes
     ``completed``, the watchdog (after a short grace) calls
     terminate(). A long auto-finish on the fake Popen ensures
-    the process would otherwise hang past this test."""
-    import subprocess as _subprocess
+    the process would otherwise hang past this test.
+
+    The non-zero exit code that follows the forced terminate() is
+    NOT raised as :class:`CalledProcessError`: the shard reported
+    that it finished cleanly, so the helper returns a
+    :class:`CompletedProcess` and the caller treats the shard as
+    successful.
+    """
     import threading as _t
     from mtg_bot.training.distributed import (
         _run_ssh_with_terminal_status_watchdog,
@@ -4819,17 +4825,16 @@ def test_watchdog_terminates_when_status_transitions_to_completed(
     _t.Timer(0.2, _flip_status).start()
 
     start = time.monotonic()
-    with pytest.raises(_subprocess.CalledProcessError) as excinfo:
-        _run_ssh_with_terminal_status_watchdog(
-            ["ssh", "fake", "remote-cmd"],
-            progress_path=progress,
-            hard_timeout_s=30.0,
-            shard_label="mac",
-            poll_interval_s=0.05,
-            terminal_grace_s=0.1,
-            terminate_grace_s=0.5,
-            popen_factory=lambda *a, **kw: fake,
-        )
+    result = _run_ssh_with_terminal_status_watchdog(
+        ["ssh", "fake", "remote-cmd"],
+        progress_path=progress,
+        hard_timeout_s=30.0,
+        shard_label="mac",
+        poll_interval_s=0.05,
+        terminal_grace_s=0.1,
+        terminate_grace_s=0.5,
+        popen_factory=lambda *a, **kw: fake,
+    )
     elapsed = time.monotonic() - start
 
     # terminate() was called once.
@@ -4842,16 +4847,24 @@ def test_watchdog_terminates_when_status_transitions_to_completed(
         f"watchdog took {elapsed:.2f}s; expected to fire well under "
         "the 15s spec bound after the status transition"
     )
-    # CalledProcessError raised because the watchdog-terminated
-    # process exits with returncode != 0.
-    assert excinfo.value.returncode != 0
+    # CompletedProcess returned (NOT raised): the shard reported
+    # status='completed', the non-zero exit is just an artifact of
+    # the forced terminate(). Returncode is preserved as-is so
+    # callers can still inspect it if they care.
+    assert result.returncode != 0
+    assert result.args == ["ssh", "fake", "remote-cmd"]
 
 
 def test_watchdog_terminates_when_status_transitions_to_failed(
     tmp_path: Path,
 ):
     """``failed`` is also a terminal state; same termination
-    behavior as ``completed``."""
+    behavior as ``completed`` — but the exit semantics differ:
+    a watchdog kill after ``failed`` re-raises as
+    :class:`CalledProcessError` (the shard reported a real
+    failure), whereas a watchdog kill after ``completed`` is
+    swallowed (the shard reported success and the non-zero exit
+    is just the side-effect of yanking SSH)."""
     import subprocess as _subprocess
     import threading as _t
     from mtg_bot.training.distributed import (
@@ -5015,7 +5028,12 @@ def test_watchdog_escalates_to_kill_if_terminate_ignored(
 ):
     """If terminate() doesn't take (e.g. ssh.exe ignoring SIGTERM
     in the Tailscale-hang scenario), the watchdog escalates to
-    kill() after ``terminate_grace_s``. This is the hammer fallback."""
+    kill() after ``terminate_grace_s``. This is the hammer fallback.
+
+    Uses ``failed`` as the terminal status so the helper still
+    raises CalledProcessError on the resulting non-zero exit —
+    the ``completed`` path now treats watchdog termination as
+    success and would not raise."""
     import threading as _t
     from mtg_bot.training.distributed import (
         _run_ssh_with_terminal_status_watchdog,
@@ -5033,7 +5051,7 @@ def test_watchdog_escalates_to_kill_if_terminate_ignored(
 
     _t.Timer(
         0.1,
-        lambda: _write_progress_json(progress, "completed"),
+        lambda: _write_progress_json(progress, "failed"),
     ).start()
 
     import subprocess as _subprocess
@@ -5058,7 +5076,12 @@ def test_watchdog_swallows_oserror_from_terminate(tmp_path: Path):
     """If ``proc.terminate()`` itself raises (e.g. the process
     already exited and the OS returns ESRCH), the watchdog must
     not propagate. Mirrors the ``except OSError: pass`` in the
-    implementation."""
+    implementation.
+
+    Uses ``failed`` as the terminal status so the helper still
+    raises CalledProcessError on the resulting non-zero exit —
+    the ``completed`` path now treats watchdog termination as
+    success and would not raise."""
     import threading as _t
     from mtg_bot.training.distributed import (
         _run_ssh_with_terminal_status_watchdog,
@@ -5078,7 +5101,7 @@ def test_watchdog_swallows_oserror_from_terminate(tmp_path: Path):
     fake = _RaisingPopen(auto_finish_after=60.0)
     _t.Timer(
         0.1,
-        lambda: _write_progress_json(progress, "completed"),
+        lambda: _write_progress_json(progress, "failed"),
     ).start()
 
     import subprocess as _subprocess
