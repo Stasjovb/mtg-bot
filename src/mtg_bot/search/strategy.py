@@ -64,6 +64,40 @@ class SearchStrategy(ABC):
         """
         return {}
 
+    def choose_with_full_stats(
+        self, state: GameState, player_id: PlayerID,
+    ):
+        """Return ``(chosen_decision_or_None, candidates)`` where
+        ``candidates`` is a list of dicts shaped ``{"decision",
+        "visits", "q", "prior", "leaf_value"}``. Used by the
+        replay capture pipeline to attach a search-tree summary
+        annotation to each captured snapshot, populating the replay
+        viewer's decision-detail panel.
+
+        Default implementation derives the candidates from
+        ``choose_with_visits`` with ``q``, ``prior``, and
+        ``leaf_value`` all None — strategies without real search
+        machinery (RandomChoice, scripted openers) still produce a
+        valid annotation, just without per-candidate diagnostics.
+        Returns ``(None, [])`` when no decisions could be derived.
+
+        MCTS / PIMC / ISMCTS override to populate the richer fields
+        from their internal tree state without re-running the
+        search.
+        """
+        visits = self.choose_with_visits(state, player_id)
+        if not visits:
+            return (None, [])
+        candidates = [
+            {
+                "decision": d, "visits": v, "q": None,
+                "prior": None, "leaf_value": None,
+            }
+            for d, v in visits.items()
+        ]
+        chosen = max(candidates, key=lambda c: c["visits"])["decision"]
+        return (chosen, candidates)
+
 
 class RandomChoice(SearchStrategy):
     """Pick uniformly among legal decisions. Zero-heuristic baseline.

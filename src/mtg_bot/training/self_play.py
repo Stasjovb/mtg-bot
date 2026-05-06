@@ -36,9 +36,10 @@ import multiprocessing as mp
 import os
 import random
 import sys
+import time
 import traceback
 from dataclasses import dataclass
-from typing import Callable, Optional
+from typing import Any, Callable, Optional
 
 from mtg_bot.agents import RandomAgent
 from mtg_bot.decks import Deck
@@ -53,7 +54,9 @@ from mtg_bot.training.data_gen import (
     ReplayCaptureConfig, _now_iso, _sample_decks_for_game,
 )
 from mtg_bot.training.progress import EvalProgress
-from mtg_bot.training.replay_capture import ReplayRecorder
+from mtg_bot.training.replay_capture import (
+    ReplayRecorder, build_search_annotation,
+)
 
 
 # Hard cap on decisions per game. A pathological infinite priority
@@ -688,11 +691,44 @@ def _play_capped_game(
     )
     while not adapter.is_terminal() and decisions < decision_cap:
         active = adapter.active_player()
+        # Search-tree annotation captured this iteration; threaded into
+        # the recorder right after the snapshot is appended. Stays None
+        # for chance moves and for non-recording runs so we don't pay
+        # the wallclock-time bookkeeping when nothing reads it.
+        search_annotation: Optional[dict[str, Any]] = None
         if active == CHANCE_PLAYER:
             outcomes = adapter.chance_outcomes()
             choices = [d for d, _ in outcomes]
             weights = [w for _, w in outcomes]
             decision = rng.choices(choices, weights=weights, k=1)[0]
+        elif replay_recorder is not None:
+            # When recording, pull rich stats out of the search in a
+            # single call so the replay carries enough context for
+            # the viewer's decision-detail panel. Strategies that
+            # don't expose ``choose_with_full_stats`` (duck-typed test
+            # baselines, RandomChoice subclasses) fall through to the
+            # plain ``choose`` path — the snapshot's ``search`` field
+            # stays None, matching the viewer's hide-when-absent
+            # contract.
+            strategy = strategies[active]
+            full_stats_fn = getattr(strategy, "choose_with_full_stats", None)
+            if callable(full_stats_fn):
+                _t0 = time.perf_counter()
+                chosen, candidates = full_stats_fn(adapter, active)
+                if chosen is not None:
+                    decision = chosen
+                else:
+                    decision = strategy.choose(adapter, active)
+                if candidates:
+                    elapsed_ms = int((time.perf_counter() - _t0) * 1000)
+                    search_annotation = build_search_annotation(
+                        chosen=decision,
+                        candidates=candidates,
+                        strategy=strategy,
+                        elapsed_ms=elapsed_ms,
+                    )
+            else:
+                decision = strategy.choose(adapter, active)
         else:
             decision = strategies[active].choose(adapter, active)
         if observe_action_active and active != CHANCE_PLAYER:
@@ -712,6 +748,11 @@ def _play_capped_game(
         decisions += 1
         if replay_recorder is not None:
             replay_recorder.record(adapter.engine_state, decision=decision)
+            if search_annotation is not None:
+                replay_recorder.record_search_annotation(
+                    len(replay_recorder.snapshots) - 1,
+                    search_annotation,
+                )
         # Update the optional shared progress sentinel — see
         # mtg_bot.training._hang_progress for rationale. Pure attribute
         # writes; no allocations on the steady-state path.

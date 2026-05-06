@@ -147,6 +147,32 @@
     </div>
     <ol id="engine-recs" class="engine-recs"></ol>
   </section>
+  <section id="search-panel" class="search-panel hidden"
+           aria-label="Search-tree decision detail">
+    <header class="search-header">
+      <h2>Decision</h2>
+      <button type="button" id="search-toggle" class="search-toggle"
+              title="Toggle decision detail">&minus;</button>
+    </header>
+    <div id="search-body" class="search-body">
+      <div class="search-meta">
+        <span id="search-chosen" class="search-chosen"></span>
+        <span id="search-budget" class="muted"></span>
+      </div>
+      <table class="search-table">
+        <thead>
+          <tr>
+            <th>Action</th>
+            <th class="num">Visits</th>
+            <th class="num">Q</th>
+            <th class="num">Prior</th>
+            <th class="num">Leaf V</th>
+          </tr>
+        </thead>
+        <tbody id="search-rows"></tbody>
+      </table>
+    </div>
+  </section>
   <aside id="log-panel" class="log-panel hidden" aria-label="Game log">
     <h2>Log</h2>
     <div id="log-body" class="log-body"></div>

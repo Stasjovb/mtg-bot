@@ -70,6 +70,7 @@ from mtg_bot.training.progress import (
 from mtg_bot.training.registry import ModelMetadata, Registry
 from mtg_bot.training.replay_capture import (
     ReplayRecorder,
+    build_search_annotation,
     heuristic_eval_annotator,
     nn_eval_annotator,
 )
@@ -93,6 +94,7 @@ __all__ = [
     "ReplayRecorder",
     "TrainingHistory",
     "auto_device",
+    "build_search_annotation",
     "generate_training_data",
     "generate_training_data_parallel",
     "grid_search",

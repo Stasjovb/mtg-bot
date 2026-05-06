@@ -39,7 +39,19 @@ const els = {
   zoneModalClose: document.getElementById('zone-modal-close'),
   phaseTracker: document.getElementById('phase-tracker'),
   phaseList: document.getElementById('phase-list'),
+  searchPanel: document.getElementById('search-panel'),
+  searchToggle: document.getElementById('search-toggle'),
+  searchBody: document.getElementById('search-body'),
+  searchChosen: document.getElementById('search-chosen'),
+  searchBudget: document.getElementById('search-budget'),
+  searchRows: document.getElementById('search-rows'),
 };
+
+// `var` (not `let`) so JS unit tests can override. Tracks whether the
+// decision-detail panel's body is collapsed (header + toggle still
+// visible) vs expanded. Independent of whether the panel itself is
+// hidden — that's driven entirely by snapshot.search presence.
+var searchCollapsed = false;
 
 // Engine step order + display labels. Mirrors mtg_bot.turn.STEP_ORDER.
 const PHASE_STEPS = [
@@ -83,6 +95,9 @@ els.btnLast    .addEventListener('click', () => goTo(game ? game.snapshotCount -
 els.btnPlay    .addEventListener('click', togglePlay);
 els.slider     .addEventListener('input', (ev) => goTo(parseInt(ev.target.value, 10)));
 els.btnEngine  .addEventListener('click', toggleEngine);
+if (els.searchToggle) {
+  els.searchToggle.addEventListener('click', toggleSearchPanel);
+}
 
 // Keyboard shortcuts. Guard against firing while typing in the form.
 window.addEventListener('keydown', (ev) => {
@@ -431,6 +446,135 @@ function renderSnapshot(summary, snap) {
   renderLog(els.logBody, snap);
   renderPhaseTracker(snap);
   drawCombatArrows(snap);
+  renderSearchPanel(snap);
+}
+
+// Toggle the decision-detail panel's body open/closed. Header + toggle
+// stay visible either way, but rows + meta block hide when collapsed
+// so the user can keep the panel pinned without burning vertical space
+// during long scrubs.
+function toggleSearchPanel() {
+  searchCollapsed = !searchCollapsed;
+  if (els.searchBody) {
+    els.searchBody.classList.toggle('hidden', searchCollapsed);
+  }
+  if (els.searchToggle) {
+    els.searchToggle.innerHTML = searchCollapsed ? '+' : '&minus;';
+  }
+}
+
+// Render the per-decision search-tree summary into the side panel.
+// Hides the entire panel when the snapshot has no ``search`` field
+// (v1/v2 replays, snapshots that didn't go through a real search,
+// terminal-adjacent snapshots that fell through to a forced-move
+// shortcut without producing visits).
+function renderSearchPanel(snap) {
+  if (!els.searchPanel) return;
+  const search = snap && snap.search;
+  if (!search || !Array.isArray(search.candidates) || search.candidates.length === 0) {
+    els.searchPanel.classList.add('hidden');
+    return;
+  }
+  els.searchPanel.classList.remove('hidden');
+  // Chosen action label — falls back to the most-visited candidate's
+  // action when ``chosen`` is missing (defensive; the writer always
+  // includes it but readers shouldn't crash on a future writer that
+  // omits it).
+  const chosenJson = search.chosen
+    || (search.candidates.length > 0 ? search.candidates[0].action : null);
+  els.searchChosen.textContent = chosenJson
+    ? `Chose: ${formatAction(chosenJson)}` : '';
+  // Budget / timing readout. ``samples`` × ``inner_nodes`` is the
+  // PIMC-of-MCTS shape; raw MCTS reports ``samples=1`` so the line
+  // reads "1 × N nodes" which is still informative. ``elapsed_ms``
+  // is optional — printed when present.
+  const totalVisits = search.candidates.reduce(
+    (acc, c) => acc + (c.visits | 0), 0,
+  );
+  const budgetParts = [];
+  if (typeof search.samples === 'number') {
+    if (typeof search.inner_nodes === 'number') {
+      budgetParts.push(`${search.samples} × ${search.inner_nodes} nodes`);
+    } else {
+      budgetParts.push(`${search.samples} samples`);
+    }
+  }
+  budgetParts.push(`${totalVisits} total visits`);
+  if (typeof search.elapsed_ms === 'number') {
+    budgetParts.push(`${search.elapsed_ms} ms`);
+  }
+  els.searchBudget.textContent = budgetParts.join(' · ');
+  // Rows: candidates come pre-sorted by visits desc from the writer,
+  // but defensive re-sort in case a future producer changes order
+  // (e.g. rewrites for stable diffing across iterations).
+  const rows = [...search.candidates].sort(
+    (a, b) => (b.visits | 0) - (a.visits | 0),
+  );
+  els.searchRows.replaceChildren();
+  for (const c of rows) {
+    const tr = document.createElement('tr');
+    tr.className = 'search-row';
+    const isChosen = chosenJson && actionsEqual(c.action, chosenJson);
+    if (isChosen) tr.classList.add('chosen');
+
+    const tdAction = document.createElement('td');
+    tdAction.className = 'action';
+    tdAction.textContent = formatAction(c.action);
+    tr.appendChild(tdAction);
+
+    const tdVisits = document.createElement('td');
+    tdVisits.className = 'num';
+    tdVisits.textContent = String(c.visits | 0);
+    tr.appendChild(tdVisits);
+
+    const tdQ = document.createElement('td');
+    tdQ.className = 'num';
+    tdQ.textContent = c.q == null ? '—' : Number(c.q).toFixed(3);
+    tr.appendChild(tdQ);
+
+    const tdPrior = document.createElement('td');
+    tdPrior.className = 'num';
+    tdPrior.textContent = c.prior == null ? '—' : Number(c.prior).toFixed(3);
+    tr.appendChild(tdPrior);
+
+    const tdLeaf = document.createElement('td');
+    tdLeaf.className = 'num';
+    tdLeaf.textContent = c.leaf_value == null
+      ? '—' : Number(c.leaf_value).toFixed(3);
+    tr.appendChild(tdLeaf);
+
+    els.searchRows.appendChild(tr);
+  }
+}
+
+// Compact "kind: arg=val" stringifier for an encoded Decision. Returns
+// just the kind when there are no other fields (e.g. PassPriority).
+// Used by the search panel; falls back to JSON.stringify for shapes
+// the table-friendly form doesn't recognize.
+function formatAction(actionJson) {
+  if (!actionJson || typeof actionJson !== 'object') return String(actionJson);
+  const kind = actionJson.kind || '?';
+  const fields = Object.entries(actionJson).filter(([k]) => k !== 'kind');
+  if (fields.length === 0) return kind;
+  const parts = fields.map(([k, v]) => {
+    if (Array.isArray(v)) return `${k}=[${v.length}]`;
+    return `${k}=${v}`;
+  });
+  return `${kind}(${parts.join(', ')})`;
+}
+
+// Stable structural equality for two encoded actions. Decision JSON is
+// shallow (string kind + scalar / list fields), so a JSON.stringify
+// round-trip is safe — the encoder always serializes deterministic
+// orderings (sorted attacker_ids, etc).
+function actionsEqual(a, b) {
+  if (a === b) return true;
+  if (a == null || b == null) return false;
+  try {
+    return JSON.stringify(a) === JSON.stringify(b);
+  } catch (e) {
+    return false;
+  }
 }
 
 function renderPhaseTracker(snap) {

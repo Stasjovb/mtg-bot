@@ -39,10 +39,11 @@ from __future__ import annotations
 import multiprocessing as mp
 import os
 import random
+import time
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Callable, Iterable, Optional
+from typing import Any, Callable, Iterable, Optional
 
 import numpy as np
 
@@ -58,7 +59,8 @@ from mtg_bot.training._worker_threads import pin_worker_torch_threads
 from mtg_bot.training.config import StrategyFactory
 from mtg_bot.training.progress import DataGenProgress
 from mtg_bot.training.replay_capture import (
-    ReplayRecorder, heuristic_eval_annotator, nn_eval_annotator,
+    ReplayRecorder, build_search_annotation, heuristic_eval_annotator,
+    nn_eval_annotator,
 )
 
 
@@ -789,6 +791,12 @@ def _play_one_game_recording(
     decision_idx = 0
     while not adapter.is_terminal() and decision_idx < decision_cap:
         active = adapter.active_player()
+        # Search-tree annotation captured this iteration; threaded into
+        # the recorder right after the snapshot is appended. Stays None
+        # for chance moves and non-sample-point regular moves (the
+        # cheap ``choose`` path doesn't expose tree stats; recording it
+        # would require a second search).
+        search_annotation: Optional[dict[str, Any]] = None
         if active == CHANCE_PLAYER:
             outcomes = adapter.chance_outcomes()
             choices = [d for d, _ in outcomes]
@@ -797,24 +805,54 @@ def _play_one_game_recording(
         else:
             sampling = decision_idx % sample_every == 0
             if sampling:
-                # Capture visits and decision in a SINGLE search:
-                # ``choose_with_visits`` runs the strategy's search
-                # and returns visit counts; ``decision`` is the
-                # argmax (matches what ``.choose()`` would return).
-                # Don't fall through to ``.choose()`` afterward —
-                # that would re-run the search.
-                visits = strategies[active].choose_with_visits(
-                    adapter, active,
+                # Capture visits, decision, AND (when supported) the
+                # full search-tree stats in a SINGLE search.
+                # ``choose_with_full_stats`` returns both the chosen
+                # decision and per-candidate stats — we derive the
+                # visit dict from candidates for policy supervision
+                # and feed the candidates into the replay recorder's
+                # search annotation. Strategies that don't expose the
+                # richer interface (duck-typed test mocks, baseline
+                # implementations) fall through to ``choose_with_
+                # visits`` — the snapshot then carries ``search=None``
+                # for those decisions, matching the contract on the
+                # viewer side.
+                _t0 = (
+                    time.perf_counter() if replay_recorder is not None
+                    else None
                 )
-                if visits:
-                    decision = max(
-                        visits.items(), key=lambda kv: kv[1],
-                    )[0]
+                strategy = strategies[active]
+                full_stats_fn = getattr(strategy, "choose_with_full_stats", None)
+                candidates: list[dict[str, Any]] = []
+                if callable(full_stats_fn):
+                    chosen, candidates = full_stats_fn(adapter, active)
+                    if chosen is not None:
+                        decision = chosen
+                    else:
+                        # No candidates (random/baseline strategy or
+                        # search bottomed out). Pick a legal default
+                        # without re-running the search.
+                        decision = list(adapter.legal_decisions())[0]
+                    visits = {c["decision"]: c["visits"] for c in candidates}
                 else:
-                    # No visit data (random/baseline strategy or
-                    # search bottomed out). Pick a legal default
-                    # without re-running the search.
-                    decision = list(adapter.legal_decisions())[0]
+                    visits = strategy.choose_with_visits(adapter, active)
+                    if visits:
+                        decision = max(
+                            visits.items(), key=lambda kv: kv[1],
+                        )[0]
+                    else:
+                        decision = list(adapter.legal_decisions())[0]
+                if replay_recorder is not None and candidates:
+                    elapsed_ms = (
+                        int((time.perf_counter() - _t0) * 1000)
+                        if _t0 is not None else None
+                    )
+                    search_annotation = build_search_annotation(
+                        chosen=decision,
+                        candidates=candidates,
+                        strategy=strategy,
+                        elapsed_ms=elapsed_ms,
+                    )
                 # Encode visits → slot-indexed normalized dist +
                 # legal mask once per sample point. Shared across
                 # the two viewer rows below — only the active
@@ -911,6 +949,16 @@ def _play_one_game_recording(
                     )
         if replay_recorder is not None:
             replay_recorder.record(adapter.engine_state, decision=decision)
+            if search_annotation is not None:
+                # Attach the search annotation to the snapshot we just
+                # recorded — the post-apply state is the one that
+                # corresponds to ``decision``, and the viewer's
+                # decision-detail panel renders the annotation while
+                # showing the post-apply snapshot.
+                replay_recorder.record_search_annotation(
+                    len(replay_recorder.snapshots) - 1,
+                    search_annotation,
+                )
         decision_idx += 1
         # Update the optional shared progress sentinel so the timeout
         # handler (in the parent thread) can read decisions_completed

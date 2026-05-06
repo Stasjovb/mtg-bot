@@ -142,6 +142,126 @@ class PIMC(SearchStrategy):
                 )
         return visit_totals
 
+    def choose_with_full_stats(
+        self, state: GameState, player_id: PlayerID,
+    ) -> tuple[Optional[Decision], list[dict]]:
+        """PIMC equivalent of ``MCTS.choose_with_full_stats``: run K
+        determinized sub-searches and aggregate the per-root-child
+        stats so the replay viewer can show what the search saw.
+
+        Aggregation rules:
+
+        - ``visits`` summed across sub-searches.
+        - ``q`` is the visit-weighted mean of the per-sub-search Q
+          values (sub-searches with visits==0 on a decision contribute
+          nothing). None when the decision had no visits anywhere.
+        - ``prior`` is the visit-weighted mean of the per-sub-search
+          PUCT prior. None when no sub-search reported a prior (UCB1
+          mode, every world). Different determinized worlds can hand
+          the policy head slightly different states, so the means
+          differ; the viewer just needs a single comparable scalar
+          per candidate.
+        - ``leaf_value`` is the visit-weighted mean of the per-sub-
+          search ``leaf_nn_value`` (the NN value at the child's
+          state on its first leaf evaluation). None when no
+          sub-search recorded one.
+
+        Returns ``(chosen_decision_or_None, candidates)``. Forced
+        moves take the same single-element shape as
+        ``MCTS.choose_with_full_stats``.
+        """
+        if not isinstance(state, MtgGameStateAdapter):
+            raise TypeError(
+                "PIMC requires an MtgGameStateAdapter; got "
+                f"{type(state).__name__}."
+            )
+        legal = list(state.legal_decisions())
+        if len(legal) == 1:
+            decision = legal[0]
+            return (
+                decision,
+                [
+                    {
+                        "decision": decision,
+                        "visits": 1,
+                        "q": None,
+                        "prior": None,
+                        "leaf_value": None,
+                    }
+                ],
+            )
+
+        # Per-decision running aggregates.
+        agg_visits: dict[Decision, int] = {}
+        agg_q_num: dict[Decision, float] = {}      # sum(q_i * visits_i)
+        agg_q_den: dict[Decision, int] = {}        # sum(visits_i where q_i present)
+        agg_prior_num: dict[Decision, float] = {}
+        agg_prior_den: dict[Decision, int] = {}
+        agg_leaf_num: dict[Decision, float] = {}
+        agg_leaf_den: dict[Decision, int] = {}
+        for _ in range(self.samples):
+            sub_seed = self.rng.randrange(1 << 62)
+            adapter = self._build_sub_adapter(state, player_id, sub_seed)
+            inner = self.inner_factory()
+            chosen_fn = getattr(inner, "choose_with_full_stats", None)
+            if chosen_fn is None:
+                # Fallback: inner doesn't expose the richer interface,
+                # so synthesize candidates from visits alone (the only
+                # universal contract). Used by user-supplied inners.
+                visits = inner.choose_with_visits(adapter, player_id)
+                sub_candidates = [
+                    {
+                        "decision": d, "visits": v, "q": None,
+                        "prior": None, "leaf_value": None,
+                    }
+                    for d, v in visits.items()
+                ]
+            else:
+                _, sub_candidates = chosen_fn(adapter, player_id)
+            for c in sub_candidates:
+                d = c["decision"]
+                v = int(c["visits"])
+                agg_visits[d] = agg_visits.get(d, 0) + v
+                if c.get("q") is not None and v > 0:
+                    agg_q_num[d] = (
+                        agg_q_num.get(d, 0.0) + float(c["q"]) * v
+                    )
+                    agg_q_den[d] = agg_q_den.get(d, 0) + v
+                if c.get("prior") is not None and v > 0:
+                    agg_prior_num[d] = (
+                        agg_prior_num.get(d, 0.0)
+                        + float(c["prior"]) * v
+                    )
+                    agg_prior_den[d] = agg_prior_den.get(d, 0) + v
+                if c.get("leaf_value") is not None and v > 0:
+                    agg_leaf_num[d] = (
+                        agg_leaf_num.get(d, 0.0)
+                        + float(c["leaf_value"]) * v
+                    )
+                    agg_leaf_den[d] = agg_leaf_den.get(d, 0) + v
+        if not agg_visits:
+            return (None, [])
+        candidates = []
+        for d, total in agg_visits.items():
+            candidates.append({
+                "decision": d,
+                "visits": total,
+                "q": (
+                    agg_q_num[d] / agg_q_den[d]
+                    if agg_q_den.get(d) else None
+                ),
+                "prior": (
+                    agg_prior_num[d] / agg_prior_den[d]
+                    if agg_prior_den.get(d) else None
+                ),
+                "leaf_value": (
+                    agg_leaf_num[d] / agg_leaf_den[d]
+                    if agg_leaf_den.get(d) else None
+                ),
+            })
+        chosen = max(candidates, key=lambda c: c["visits"])["decision"]
+        return (chosen, candidates)
+
     def _build_sub_adapter(
         self, source: MtgGameStateAdapter, viewer_id: PlayerID, sub_seed: int,
     ) -> MtgGameStateAdapter:

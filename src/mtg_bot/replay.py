@@ -26,6 +26,17 @@ Optional snapshot annotations (added by ``ReplayRecorder``):
   because no action preceded it. Phase 6's likelihood pairs
   ``(snapshots[i-1], snapshots[i].decision)`` to compute
   ``P(decision | pre-state)``.
+- ``search``: JSON dict describing the search-tree state at the
+  decision point (v3+ only). Optional — present only when capture
+  saw a real search annotation (the ``ReplayRecorder.record_search_
+  annotation`` hook fires during data-gen / self-play). Shape:
+  ``{"chosen": <action json>, "candidates": [{"action": ...,
+  "visits": int, "q": float|None, "prior": float|None,
+  "leaf_value": float|None}, ...], "samples": int, "inner_nodes":
+  int, "elapsed_ms": int|None}``. Loaded as ``None`` on snapshots
+  that were never annotated (initial pre-game state, terminal
+  snapshots, forced-move shortcuts that never spun a tree, and
+  every snapshot in a v1/v2 replay).
 
 Format-version field is stamped into the file so future format
 changes can detect old replays and either migrate or refuse.
@@ -37,7 +48,13 @@ Version history:
   per-snapshot ``decision`` field. Loadable by current readers,
   which inject ``decision = None`` on every snapshot for
   compatibility.
-- v2 (current): adds the ``decision`` annotation to each snapshot.
+- v2: adds the ``decision`` annotation to each snapshot. v2
+  files load as v3 with ``search = None`` on every snapshot.
+- v3 (current): adds the optional ``search`` annotation to each
+  snapshot — the per-decision search-tree summary (chosen action,
+  candidates with visits/Q/prior/leaf_value, search budget). The
+  field is None on snapshots without an annotation; the viewer
+  hides the decision panel for those.
 """
 
 from __future__ import annotations
@@ -50,11 +67,11 @@ from typing import Any
 
 # Bump if the format changes incompatibly. Old readers that don't
 # recognize the version should refuse rather than silently mis-parse.
-REPLAY_FORMAT_VERSION: int = 2
+REPLAY_FORMAT_VERSION: int = 3
 
 # Versions this build can read. Newer-than-current versions are
 # refused; older versions are migrated forward at load time.
-_SUPPORTED_FORMAT_VERSIONS: frozenset[int] = frozenset({1, 2})
+_SUPPORTED_FORMAT_VERSIONS: frozenset[int] = frozenset({1, 2, 3})
 
 
 @dataclass
@@ -87,10 +104,20 @@ class Replay:
         if version == 1:
             # v1 snapshots have no ``decision`` field. Inject ``None``
             # on each so callers don't have to special-case version
-            # at access time. Also stamp the in-memory ``Replay`` as
-            # v2 so re-saving migrates the file forward.
+            # at access time. Also fall through into the v2 → v3
+            # migration below so old files end up stamped at the
+            # current format version.
             snapshots = [
                 {**snap, "decision": None} for snap in snapshots
+            ]
+            version = 2
+        if version == 2:
+            # v2 snapshots have no ``search`` field. Inject ``None``
+            # so readers can dot-access without version-checking, and
+            # stamp the in-memory ``Replay`` at the current version
+            # so re-saving migrates the file forward.
+            snapshots = [
+                {**snap, "search": snap.get("search")} for snap in snapshots
             ]
             version = REPLAY_FORMAT_VERSION
         return cls(

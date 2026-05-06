@@ -77,11 +77,50 @@ class ReplayRecorder:
         snap["decision"] = (
             None if decision is None else decision_to_json(decision)
         )
+        # ``search`` defaults to None — populated retroactively by
+        # ``record_search_annotation`` when a real search produced
+        # this decision (the data-gen / self-play loops fire that
+        # hook right before / right after the decision is applied,
+        # threading per-candidate visits, Q-values, NN priors, and
+        # leaf NN values into the snapshot for the viewer's
+        # decision-detail panel). v3+ schema field; absent on v1/v2.
+        snap["search"] = None
         for annotator in self.annotators:
             extra = annotator(state)
             if extra:
                 snap.update(extra)
         self.snapshots.append(snap)
+
+    def record_search_annotation(
+        self,
+        snapshot_index: int,
+        annotation: dict[str, Any],
+    ) -> None:
+        """Attach a search-tree summary to the snapshot at
+        ``snapshot_index``. Called by the data-gen / self-play loop
+        the moment a search-driven decision is picked, so the
+        viewer can later show *why* the bot took that action.
+
+        ``annotation`` is the dict shape documented at the
+        ``Replay`` schema docstring (v3): ``chosen`` (json action),
+        ``candidates`` (list of {action, visits, q, prior,
+        leaf_value}), ``samples`` (PIMC fan-out), ``inner_nodes``
+        (per-subsearch MCTS budget), ``elapsed_ms`` (wallclock for
+        this decision's search; optional). The recorder stores it
+        verbatim — JSON-safe shape is the caller's contract; we
+        validate the snapshot index but not the inner shape so a
+        future writer can carry extra fields without ceremony.
+
+        Raises ``IndexError`` when the snapshot index doesn't exist
+        yet — fail loud rather than silently dropping annotations,
+        which would mask off-by-one bugs in the caller's bookkeeping.
+        """
+        if snapshot_index < 0 or snapshot_index >= len(self.snapshots):
+            raise IndexError(
+                f"snapshot_index {snapshot_index} out of range "
+                f"(have {len(self.snapshots)} snapshots)"
+            )
+        self.snapshots[snapshot_index]["search"] = annotation
 
     def to_replay(self, metadata: dict[str, Any]) -> Replay:
         return Replay(
@@ -89,6 +128,90 @@ class ReplayRecorder:
             metadata=dict(metadata),
             snapshots=list(self.snapshots),
         )
+
+
+def build_search_annotation(
+    chosen: Any,
+    candidates: list[dict[str, Any]],
+    strategy: Any,
+    elapsed_ms: Optional[int] = None,
+) -> dict[str, Any]:
+    """Build the v3 ``search`` snapshot annotation from a strategy's
+    ``choose_with_full_stats`` output.
+
+    Encodes ``chosen`` and each candidate's ``decision`` via
+    ``decision_to_json`` so the JSON payload is the same shape the
+    viewer reads. ``samples`` and ``inner_nodes`` are introspected
+    from the strategy when present (PIMC's ``samples`` for fan-out;
+    PIMC's inner_factory result has ``budget_factory`` if it's an
+    MCTS — best-effort, ``inner_nodes=None`` when the strategy isn't
+    a PIMC-of-MCTS). ``elapsed_ms`` is the wallclock for this
+    decision's whole search; passed in so callers can time the
+    single ``choose_with_full_stats`` call without round-tripping
+    the strategy.
+
+    Candidates are returned sorted by visit count descending so the
+    viewer can iterate in display order without re-sorting on the
+    JS side.
+    """
+    sorted_candidates = sorted(
+        candidates, key=lambda c: int(c["visits"]), reverse=True,
+    )
+    encoded = []
+    for c in sorted_candidates:
+        encoded.append({
+            "action": decision_to_json(c["decision"]),
+            "visits": int(c["visits"]),
+            "q": (
+                float(c["q"]) if c.get("q") is not None else None
+            ),
+            "prior": (
+                float(c["prior"]) if c.get("prior") is not None
+                else None
+            ),
+            "leaf_value": (
+                float(c["leaf_value"])
+                if c.get("leaf_value") is not None else None
+            ),
+        })
+    samples = getattr(strategy, "samples", 1)
+    # PIMC.inner_factory is a zero-arg callable that returns an MCTS-
+    # shaped strategy. MCTS exposes a budget_factory, also zero-arg,
+    # returning a Budget that has a ``max_nodes`` attribute. We
+    # introspect best-effort: if anything raises or is missing, leave
+    # ``inner_nodes`` as None.
+    inner_nodes: Optional[int] = None
+    inner_factory = getattr(strategy, "inner_factory", None)
+    if inner_factory is not None:
+        try:
+            inner_strategy = inner_factory()
+            budget_factory = getattr(inner_strategy, "budget_factory", None)
+            if budget_factory is not None:
+                budget = budget_factory()
+                if hasattr(budget, "max_nodes"):
+                    inner_nodes = int(budget.max_nodes)
+        except Exception:  # noqa: BLE001
+            inner_nodes = None
+    else:
+        # Direct MCTS (no PIMC wrapper) — sample count = 1, budget on
+        # the strategy itself.
+        budget_factory = getattr(strategy, "budget_factory", None)
+        if budget_factory is not None:
+            try:
+                budget = budget_factory()
+                if hasattr(budget, "max_nodes"):
+                    inner_nodes = int(budget.max_nodes)
+            except Exception:  # noqa: BLE001
+                inner_nodes = None
+    return {
+        "chosen": (
+            None if chosen is None else decision_to_json(chosen)
+        ),
+        "candidates": encoded,
+        "samples": int(samples),
+        "inner_nodes": inner_nodes,
+        "elapsed_ms": elapsed_ms,
+    }
 
 
 def _terminal_value(state: EngineGameState, player_id: int) -> float:
