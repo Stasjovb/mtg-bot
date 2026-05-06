@@ -48,6 +48,18 @@
     50% { opacity: 0.55; }
   }
   .run-meta { font-size: 0.78rem; color: var(--muted); font-family: monospace; }
+  /* Training-card metadata pill (currently only used for
+     policy_loss_weight when != 1.0). Lives next to .run-meta in the
+     run-header so the formula behind TOTAL LOSS is visible at a
+     glance. */
+  .meta-pill { font-size: 0.7rem; padding: 2px 8px; border-radius: 4px;
+    font-family: monospace; background: var(--bg);
+    border: 1px solid var(--border); color: var(--muted); }
+  /* Subtitle under TOTAL LOSS / parenthetical under POLICY LOSS:
+     same monospace font as the value, smaller + muted so it reads
+     as supporting information rather than the primary number. */
+  .stat-sub { font-size: 0.7rem; color: var(--muted);
+    font-family: monospace; margin-top: 3px; }
 
   .progress-row { display: flex; align-items: center; gap: 12px; margin-bottom: 8px; }
   .progress-bar {
@@ -277,6 +289,22 @@ function fmtLoss(v) {
   return Number(v).toFixed(4);
 }
 
+// Format the policy_loss_weight scalar for the metadata pill and
+// formula subtitle. Always shows at least one decimal so the user
+// reads it as a float ("5.0", "2.5"), not as an integer count.
+// Non-integer weights preserve up to two decimals, trailing zeros
+// trimmed past the first ("2.5", not "2.50"). The weight is a
+// hyperparameter, not a measured loss — fmtLoss's four decimals
+// would be too noisy.
+function fmtPolicyWeight(w) {
+  if (w == null || !isFinite(w)) return '—';
+  if (Number.isInteger(w)) return Number(w).toFixed(1);
+  // Up to 2 decimals, trim trailing zero past the first.
+  let s = Number(w).toFixed(2);
+  if (s.endsWith('0')) s = s.slice(0, -1);
+  return s;
+}
+
 function statusClass(s) {
   if (s === 'running' || s === 'completed' || s === 'failed'
       || s === 'stopped') return s;
@@ -485,6 +513,7 @@ function ensureCard(run) {
         <span class="run-id" data-field="run-id"></span>
         <span class="badge" data-field="status"></span>
         <span class="run-meta" data-field="meta"></span>
+        <span class="meta-pill" data-field="policy-weight-pill" hidden></span>
         <button type="button" class="stop-btn" data-field="stop"
                 hidden>Stop</button>
         <span class="stop-pending" data-field="stop-pending"
@@ -499,9 +528,9 @@ function ensureCard(run) {
         <div class="stat"><div class="stat-label">Elapsed</div><div class="stat-value" data-field="elapsed">—</div></div>
         <div class="stat"><div class="stat-label">ETA</div><div class="stat-value" data-field="eta">—</div></div>
         <div class="stat"><div class="stat-label">Avg / epoch</div><div class="stat-value" data-field="avg">—</div></div>
-        <div class="stat"><div class="stat-label">Total loss</div><div class="stat-value" data-field="total">—</div></div>
+        <div class="stat" data-field="total-stat"><div class="stat-label">Total loss</div><div class="stat-value" data-field="total">—</div><div class="stat-sub" data-field="total-sub"></div></div>
         <div class="stat"><div class="stat-label">Value loss</div><div class="stat-value" data-field="value">—</div></div>
-        <div class="stat"><div class="stat-label">Policy loss</div><div class="stat-value" data-field="policy">—</div></div>
+        <div class="stat"><div class="stat-label">Policy loss</div><div class="stat-value" data-field="policy">—</div><div class="stat-sub" data-field="policy-sub" hidden></div></div>
       </div>
       <div class="machines" data-field="machines" hidden></div>
       <div class="chart-wrap"><canvas data-field="chart"></canvas></div>`;
@@ -619,6 +648,14 @@ function fillRun(el, run) {
     const totalLoss = (run.train_losses || []).slice(-1)[0];
     const valueLoss = (run.train_value_losses || []).slice(-1)[0];
     const policyLoss = (run.train_policy_losses || []).slice(-1)[0];
+    // Backward-compat: progress files written before policy_loss_weight
+    // was recorded omit the field. Treat absent (or any non-finite
+    // value) as the trainer default 1.0 so old-run cards still render
+    // a sensible TOTAL = VALUE + POLICY formula.
+    const rawW = run.policy_loss_weight;
+    const policyWeight =
+      (typeof rawW === 'number' && isFinite(rawW)) ? rawW : 1.0;
+    const showWeight = policyWeight !== 1.0;
     el.querySelector('[data-field="epoch"]').textContent =
       (run.current_epoch || 0) + ' / ' + (run.total_epochs || 0);
     el.querySelector('[data-field="elapsed"]').textContent = fmtSeconds(run.elapsed_seconds);
@@ -628,6 +665,48 @@ function fillRun(el, run) {
     el.querySelector('[data-field="total"]').textContent = fmtLoss(totalLoss);
     el.querySelector('[data-field="value"]').textContent = fmtLoss(valueLoss);
     el.querySelector('[data-field="policy"]').textContent = fmtLoss(policyLoss);
+
+    // Header pill: only shown when weight differs from the default
+    // 1.0. Keeps the common-case header uncluttered while making the
+    // multiplier impossible to miss when it's been turned up.
+    const pill = el.querySelector('[data-field="policy-weight-pill"]');
+    if (pill) {
+      if (showWeight) {
+        pill.textContent =
+          'policy_loss_weight: ' + fmtPolicyWeight(policyWeight);
+        pill.hidden = false;
+      } else {
+        pill.textContent = '';
+        pill.hidden = true;
+      }
+    }
+
+    // TOTAL LOSS formula subtitle + tooltip. Tooltip mirrors the
+    // subtitle for users who skim or whose layout truncates the cell.
+    const totalStat = el.querySelector('[data-field="total-stat"]');
+    const totalSub = el.querySelector('[data-field="total-sub"]');
+    const formula = showWeight
+      ? 'value + ' + fmtPolicyWeight(policyWeight) + ' × policy'
+      : 'value + policy';
+    if (totalSub) totalSub.textContent = formula;
+    if (totalStat) totalStat.title = formula;
+
+    // POLICY LOSS parenthetical: when the weight ≠ 1.0, append the
+    // weighted contribution next to the raw policy number so the
+    // user can mentally add value + weighted to recover total.
+    const policySub = el.querySelector('[data-field="policy-sub"]');
+    if (policySub) {
+      if (showWeight && typeof policyLoss === 'number'
+          && isFinite(policyLoss)) {
+        policySub.textContent =
+          '(weighted: ' + fmtLoss(policyWeight * policyLoss) + ')';
+        policySub.hidden = false;
+      } else {
+        policySub.textContent = '';
+        policySub.hidden = true;
+      }
+    }
+
     renderMachines(el, run);
     drawTrainingChart(el, run);
   }

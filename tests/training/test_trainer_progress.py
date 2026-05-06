@@ -64,6 +64,54 @@ def test_progress_file_completed_after_training(tmp_path: Path):
     assert payload["started_at"].count("-") >= 2
     # git_commit may be None outside a repo; just check key exists.
     assert "git_commit" in payload
+    # policy_loss_weight is recorded on the progress JSON so the UI
+    # can show the actual scalar baked into the total-loss combination
+    # (``total = value + policy_loss_weight × policy``). Default 1.0
+    # when the caller doesn't pass one.
+    assert payload["policy_loss_weight"] == 1.0
+
+
+def test_progress_records_non_default_policy_loss_weight(tmp_path: Path):
+    """When the trainer is invoked with ``policy_loss_weight != 1.0``,
+    the progress JSON must echo the actual scalar so the UI can show
+    the formula ``total = value + W × policy`` and the user can
+    reconcile what they see on the card.
+
+    AlphaZero mode requires both ``policy_targets`` and ``action_masks``
+    to be present for ``policy_loss_weight`` to actually affect the
+    combined loss math; we wire them in here too. The recorded value
+    is independent of any of that — it is just the scalar threaded
+    into the payload — but pinning the realistic call shape catches
+    a future refactor that accidentally drops the kwarg from the
+    progress writer.
+    """
+    # Local import to avoid a top-level cycle if action_encoding ever
+    # picks up additional dependencies; mirrors the helper in
+    # test_trainer.py.
+    from mtg_bot.training.action_encoding import ACTION_VOCAB_SIZE
+
+    rng = np.random.default_rng(0)
+    n = 32
+    features = rng.standard_normal((n, FEATURE_DIM)).astype(np.float32)
+    outcomes = np.tanh(features[:, 0]).astype(np.float32)
+    policy_targets = np.zeros((n, ACTION_VOCAB_SIZE), dtype=np.float32)
+    action_masks = np.zeros((n, ACTION_VOCAB_SIZE), dtype=np.bool_)
+    for i in range(n):
+        slot = i % ACTION_VOCAB_SIZE
+        policy_targets[i, slot] = 1.0
+        action_masks[i, slot] = True
+
+    progress = tmp_path / "v_weighted.json"
+    train_value_network(
+        features=features, outcomes=outcomes,
+        policy_targets=policy_targets, action_masks=action_masks,
+        weights_out_path=tmp_path / "w.pt",
+        epochs=2, batch_size=8, device="cpu",
+        progress_path=progress, run_id="v_weighted",
+        policy_loss_weight=5.0,
+    )
+    payload = json.loads(progress.read_text(encoding="utf-8"))
+    assert payload["policy_loss_weight"] == 5.0
 
 
 def test_progress_run_id_defaults_to_filename_stem(tmp_path: Path):

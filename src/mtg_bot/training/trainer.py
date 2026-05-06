@@ -362,6 +362,7 @@ def train_value_network(
             "val_value_losses": list(history.val_value_losses),
             "train_policy_losses": list(history.train_policy_losses),
             "val_policy_losses": list(history.val_policy_losses),
+            "policy_loss_weight": float(policy_loss_weight),
             "status": status,
             "git_commit": git_commit,
             "notes": notes,
