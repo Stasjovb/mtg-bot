@@ -251,6 +251,18 @@ def main() -> None:
         ),
     )
     parser.add_argument(
+        "--early-stop-patience", type=int, default=None,
+        help=(
+            "Stop training after the val loss has failed to improve "
+            "for this many consecutive epochs. Default None = disabled "
+            "(run all --epochs). Typical iter runs hit best val loss "
+            "around epoch 25-30 of a 50-epoch budget; the remaining "
+            "~20 epochs are mostly overfitting. Set to 5 to ride "
+            "through plateau noise but still cut the wasted tail. "
+            "Must be a positive int if set."
+        ),
+    )
+    parser.add_argument(
         "--one-legal-keep-frac", type=float, default=1.0,
         help=(
             "Fraction of one-legal-action supervised rows to keep "
@@ -272,6 +284,11 @@ def main() -> None:
         parser.error(
             "--one-legal-keep-frac must be in (0.0, 1.0]; got "
             f"{args.one_legal_keep_frac}"
+        )
+    if args.early_stop_patience is not None and args.early_stop_patience < 1:
+        parser.error(
+            "--early-stop-patience must be a positive int (>= 1); got "
+            f"{args.early_stop_patience}"
         )
     if args.hidden_sizes is not None:
         try:
@@ -408,6 +425,7 @@ def main() -> None:
             "notes": args.notes,
             "compile_model": args.compile_model,
             "hidden_sizes": hidden_sizes,
+            "early_stop_patience": args.early_stop_patience,
         }
         if has_any_policy:
             train_kwargs["policy_targets"] = policy_targets
@@ -449,6 +467,8 @@ def main() -> None:
                     list(policy_hidden_sizes)
                     if policy_hidden_sizes is not None else None
                 ),
+                "early_stop_patience": args.early_stop_patience,
+                "epochs_trained": len(history.train_losses),
             },
             training_history={
                 "train_losses": history.train_losses,

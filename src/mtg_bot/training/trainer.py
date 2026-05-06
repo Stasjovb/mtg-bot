@@ -30,6 +30,7 @@ params).
 
 from __future__ import annotations
 
+import sys
 import time
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -108,6 +109,7 @@ def train_value_network(
     hidden_sizes: tuple[int, ...] = HIDDEN_SIZES,
     architecture: str = ARCHITECTURE_SHARED,
     policy_hidden_sizes: Optional[tuple[int, ...]] = None,
+    early_stop_patience: Optional[int] = None,
 ) -> TrainingHistory:
     """Fit a value (or value+policy) network to the supplied
     training data and write the final state_dict to
@@ -161,8 +163,22 @@ def train_value_network(
     Returns a ``TrainingHistory`` with per-epoch losses (total +
     value + policy components separately). The weights file
     written at ``weights_out_path`` always reflects the FINAL
-    epoch, not the best-val-loss epoch — early stopping isn't
-    implemented yet.
+    epoch trained, not the best-val-loss epoch — best-checkpoint
+    isn't implemented yet (but ``early_stop_patience`` will at
+    least stop the loop once val loss has stopped improving, so
+    the final-epoch weights are typically near the best).
+
+    ``early_stop_patience`` (default ``None`` = disabled) caps the
+    number of epochs trained AFTER the running-best val_loss epoch.
+    With ``patience=5``, training breaks once the current epoch is
+    5 or more epochs past ``best_val_epoch``. ``None`` preserves
+    the original behavior (always run the full ``epochs`` budget);
+    any int must be ``>= 1``. Requires non-empty val data
+    (``val_split > 0`` and at least one row in val) — without val
+    loss to track, early-stop is silently skipped. The progress-
+    JSON ``total_epochs`` field reflects the ACTUAL number of
+    epochs trained when early-stop fires (not the requested
+    ceiling) so the UI's progress bar reads 100% at the real stop.
 
     Performance notes:
 
@@ -199,6 +215,11 @@ def train_value_network(
         raise ValueError(
             f"architecture must be one of {SUPPORTED_ARCHITECTURES}; "
             f"got {architecture!r}"
+        )
+    if early_stop_patience is not None and early_stop_patience < 1:
+        raise ValueError(
+            f"early_stop_patience must be >= 1 (or None to disable); "
+            f"got {early_stop_patience}"
         )
     with_policy = policy_targets is not None
     if with_policy:
@@ -339,19 +360,27 @@ def train_value_network(
         started_perf = time.perf_counter()
         git_commit = git_short_sha()
 
+    # Effective epoch ceiling for progress reporting. Defaults to the
+    # requested ``epochs`` budget; once early-stop fires we overwrite
+    # this with the actual number of epochs trained so the progress
+    # JSON's ``total_epochs`` matches what really ran (UI progress bar
+    # then reads 100% at the real stop, not at the would-have-been
+    # ceiling).
+    effective_total_epochs = int(epochs)
+
     def _emit(status: str, current_epoch: int) -> None:
         if not progress_enabled:
             return
         elapsed = time.perf_counter() - started_perf
         done = max(current_epoch, 0)
         avg = (elapsed / done) if done > 0 else 0.0
-        remaining_epochs = max(epochs - done, 0)
+        remaining_epochs = max(effective_total_epochs - done, 0)
         eta = avg * remaining_epochs if avg > 0 else 0.0
         payload = {
             "run_id": run_id,
             "kind": "training",
             "started_at": started_at_iso,
-            "total_epochs": int(epochs),
+            "total_epochs": int(effective_total_epochs),
             "current_epoch": int(done),
             "elapsed_seconds": float(elapsed),
             "per_epoch_seconds_avg": float(avg),
@@ -496,6 +525,28 @@ def train_value_network(
                 history.best_val_epoch = epoch
 
             _emit("running", current_epoch=epoch + 1)
+
+            # Patience-based early stopping. Only meaningful when we
+            # have val data to track; with no val rows ``best_val_epoch``
+            # stays -1 and val_loss is NaN, so nothing to compare.
+            if (
+                early_stop_patience is not None
+                and n_val > 0
+                and history.best_val_epoch >= 0
+                and (epoch - history.best_val_epoch) >= early_stop_patience
+            ):
+                effective_total_epochs = epoch + 1
+                print(
+                    f"[trainer] early-stop fired at epoch "
+                    f"{epoch + 1} (best was epoch "
+                    f"{history.best_val_epoch + 1}, "
+                    f"patience={early_stop_patience})",
+                    file=sys.stderr,
+                )
+                # Re-emit so total_epochs in progress JSON reflects
+                # the actual stop point before we exit the loop.
+                _emit("running", current_epoch=epoch + 1)
+                break
     except BaseException:
         # Mark the run failed before re-raising so a watcher knows
         # not to keep polling. BaseException so even KeyboardInterrupt
@@ -517,6 +568,8 @@ def train_value_network(
     torch.save(save_target.state_dict(), weights_out_path)
     history.weights_path = weights_out_path
 
-    _emit("completed", current_epoch=epochs)
+    # Use the count of actual training epochs run — equals ``epochs``
+    # when no early-stop fired, or the stop epoch when it did.
+    _emit("completed", current_epoch=len(history.train_losses))
 
     return history
