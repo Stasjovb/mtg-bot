@@ -220,29 +220,27 @@ def test_keyboard_home_end(page):
 
 
 # ------------------------------------------------------------------------
-# Engine recommendations panel
+# Unified Decision panel (search annotation OR engine recommend fallback)
 # ------------------------------------------------------------------------
 
 
-def test_engine_panel_toggle_shows_recommendations(page):
+def test_decision_panel_shows_recommend_fallback_for_live_game(page):
+    """A live /api/play game has engine state but no search annotation,
+    so the Decision panel should auto-populate from the recommend
+    fallback (engine='pimc'). It un-hides itself once the fetch returns."""
     _run_short_game(page, max_turns=6)
-    # Panel starts hidden.
-    assert page.locator("#engine-panel.hidden").count() == 1
-    page.click("#btn-engine")
+    # Wait for the panel to leave the .hidden state (recommend fallback
+    # fires from renderSnapshot → renderSearchPanel).
     page.wait_for_function(
-        "() => document.getElementById('engine-name').textContent !== ''",
+        "() => !document.getElementById('search-panel').classList.contains('hidden')",
         timeout=10_000,
     )
-    assert page.locator("#engine-panel.hidden").count() == 0
-    # Engine self-identifies; the exact name has shifted as the recommender
-    # evolved (stub → pimc). Just verify a non-empty version-style label is
-    # rendered: a name containing a 'v' followed by a digit.
-    name = page.locator("#engine-name").inner_text()
-    assert re.search(r"v\d", name), f"engine name looks empty: {name!r}"
-    # Toggling closes again.
-    page.click("#btn-engine")
-    page.wait_for_timeout(150)
-    assert page.locator("#engine-panel.hidden").count() == 1
+    # Header reads "Priority: Player N" in fallback mode.
+    chosen = page.locator("#search-chosen").inner_text()
+    assert "Priority" in chosen, f"unexpected header: {chosen!r}"
+    # Budget line carries the engine version stamp.
+    budget = page.locator("#search-budget").inner_text()
+    assert re.search(r"v\d", budget), f"engine version missing: {budget!r}"
 
 
 # ------------------------------------------------------------------------

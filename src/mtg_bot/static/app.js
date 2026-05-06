@@ -28,11 +28,6 @@ const els = {
   btnNextTurn: document.getElementById('btn-next-turn'),
   btnLast: document.getElementById('btn-last'),
   combatOverlay: document.getElementById('combat-overlay'),
-  btnEngine: document.getElementById('btn-engine'),
-  enginePanel: document.getElementById('engine-panel'),
-  enginePlayer: document.getElementById('engine-player'),
-  engineName: document.getElementById('engine-name'),
-  engineRecs: document.getElementById('engine-recs'),
   zoneModal: document.getElementById('zone-modal'),
   zoneModalTitle: document.getElementById('zone-modal-title'),
   zoneModalCards: document.getElementById('zone-modal-cards'),
@@ -69,10 +64,6 @@ const PHASE_STEPS = [
   { key: 'cleanup',             label: 'Cleanup',   group: '' },
 ];
 
-// `var` (not `let`) so JS unit tests can inspect/mutate from outside the
-// script's lexical scope. No browser-runtime difference at the top level.
-var engineOpen = false;
-
 const SVG_NS = 'http://www.w3.org/2000/svg';
 
 // Active game state. One of these is live at a time; running a new game
@@ -94,7 +85,6 @@ els.btnNextTurn.addEventListener('click', () => goTo(findNextTurnIdx()));
 els.btnLast    .addEventListener('click', () => goTo(game ? game.snapshotCount - 1 : 0));
 els.btnPlay    .addEventListener('click', togglePlay);
 els.slider     .addEventListener('input', (ev) => goTo(parseInt(ev.target.value, 10)));
-els.btnEngine  .addEventListener('click', toggleEngine);
 if (els.searchToggle) {
   els.searchToggle.addEventListener('click', toggleSearchPanel);
 }
@@ -240,73 +230,6 @@ async function goTo(idx) {
   els.scrubLabel.textContent = scrubLabelFor(snap);
   updateScrubberButtons();
   if (game.playing && idx >= game.snapshotCount - 1) stopPlay();
-  if (engineOpen) refreshEngine();
-}
-
-// ------------------------------------------------------------------------
-// Engine recommendations panel
-// ------------------------------------------------------------------------
-
-function toggleEngine() {
-  engineOpen = !engineOpen;
-  els.enginePanel.classList.toggle('hidden', !engineOpen);
-  els.btnEngine.classList.toggle('active', engineOpen);
-  if (engineOpen && game) refreshEngine();
-}
-
-async function refreshEngine() {
-  if (!engineOpen || !game) return;
-  try {
-    const res = await fetchJSON(
-      `/api/recommend/${game.gameId}/${game.currentIdx}?n=5`,
-    );
-    renderEngineRecs(res);
-  } catch (e) {
-    els.engineName.textContent = 'error: ' + e.message;
-    els.engineRecs.replaceChildren();
-  }
-}
-
-function renderEngineRecs(res) {
-  els.enginePlayer.textContent = `Priority: Player ${res.priority_player_id}`;
-  els.engineName.textContent = `${res.engine} v${res.engine_version}`;
-  els.engineRecs.replaceChildren();
-  if (res.recommendations.length === 0) {
-    const li = document.createElement('li');
-    li.className = 'engine-empty';
-    li.textContent = 'No recommendations at this state';
-    els.engineRecs.appendChild(li);
-    return;
-  }
-  res.recommendations.forEach((r, i) => {
-    const li = document.createElement('li');
-    li.className = 'engine-rec';
-
-    const rank = document.createElement('span');
-    rank.className = 'rank';
-    rank.textContent = `${i + 1}.`;
-
-    const score = document.createElement('span');
-    const sign = r.score > 0 ? 'pos' : r.score < 0 ? 'neg' : 'zero';
-    score.className = 'score ' + sign;
-    score.textContent = (r.score >= 0 ? '+' : '') + r.score.toFixed(2);
-
-    const body = document.createElement('span');
-    body.className = 'body';
-    const label = document.createElement('div');
-    label.className = 'label';
-    label.textContent = r.label;
-    body.appendChild(label);
-    if (r.detail) {
-      const det = document.createElement('div');
-      det.className = 'detail';
-      det.textContent = r.detail;
-      body.appendChild(det);
-    }
-
-    li.append(rank, score, body);
-    els.engineRecs.appendChild(li);
-  });
 }
 
 function scrubLabelFor(snap) {
@@ -463,18 +386,67 @@ function toggleSearchPanel() {
   }
 }
 
-// Render the per-decision search-tree summary into the side panel.
-// Hides the entire panel when the snapshot has no ``search`` field
-// (v1/v2 replays, snapshots that didn't go through a real search,
-// terminal-adjacent snapshots that fell through to a forced-move
-// shortcut without producing visits).
+// Monotonically-increasing token used to discard stale recommend
+// responses when the user scrubs through snapshots faster than the
+// recommend endpoint can answer. Each renderSearchPanel call bumps
+// this; the recommend fetch's then() compares against the latest
+// value and bails if a newer call has started.
+//
+// `var` (not `let`) so JS unit tests can reset it before each test.
+var searchPanelToken = 0;
+
+// Render the unified Decision panel into the side panel. There are
+// three priority-ordered modes:
+//
+//   1. snapshot has a real ``search`` annotation (v3 replays produced
+//      with per-decision MCTS/PIMC stats) — render the full table
+//      with Visits / Q / Prior / Leaf V populated. This is the most
+//      informative view; it always wins when available.
+//   2. no annotation, but the server has an engine state for this
+//      snapshot (live games, /api/play flows) — fetch /api/recommend
+//      and render its recommendations into the same table. Visits /
+//      Prior / Leaf V columns degrade to em dash; Q gets the score
+//      formatted to 3 dp. The chosen-row highlight does not apply
+//      (no ground-truth chosen action).
+//   3. neither — hide the panel entirely. The stub recommender
+//      (engine="stub") returns score=0.0 for everything and is not
+//      worth rendering; that's the all-zeros bug we're fixing.
 function renderSearchPanel(snap) {
   if (!els.searchPanel) return;
+  // Bump the request token so any in-flight recommend fetches from a
+  // previous snapshot will discard their results when they resolve.
+  const token = ++searchPanelToken;
+
   const search = snap && snap.search;
-  if (!search || !Array.isArray(search.candidates) || search.candidates.length === 0) {
-    els.searchPanel.classList.add('hidden');
+  if (search && Array.isArray(search.candidates) && search.candidates.length > 0) {
+    _renderSearchAnnotation(search);
     return;
   }
+
+  // Mode 2 / 3: ask the engine. Hide the panel pre-emptively while
+  // we wait so a stale render doesn't briefly show the previous
+  // snapshot's table; if the response comes back with usable data
+  // we'll un-hide it.
+  els.searchPanel.classList.add('hidden');
+  if (!game) return;
+  const url = `/api/recommend/${game.gameId}/${game.currentIdx}?n=10`;
+  fetchJSON(url).then(res => {
+    // Ignore stale responses (a newer renderSearchPanel call ran).
+    if (token !== searchPanelToken) return;
+    // Stub recommender means we have no real engine evaluation —
+    // showing a panel with all-zero scores is precisely the bug
+    // we're fixing, so hide rather than render.
+    if (res.engine === 'stub') return;
+    if (!res.recommendations || res.recommendations.length === 0) return;
+    _renderRecommendFallback(res);
+  }).catch(() => {
+    // Recommend can fail on terminal snapshots, missing engine
+    // state, etc. Stay hidden — same UX as "no data."
+  });
+}
+
+// Helper: render the v3 "search" annotation into the panel.
+function _renderSearchAnnotation(search) {
   els.searchPanel.classList.remove('hidden');
   // Chosen action label — falls back to the most-visited candidate's
   // action when ``chosen`` is missing (defensive; the writer always
@@ -541,6 +513,55 @@ function renderSearchPanel(snap) {
     tdLeaf.className = 'num';
     tdLeaf.textContent = c.leaf_value == null
       ? '—' : Number(c.leaf_value).toFixed(3);
+    tr.appendChild(tdLeaf);
+
+    els.searchRows.appendChild(tr);
+  }
+}
+
+// Helper: render a /api/recommend response (engine=pimc) into the
+// same panel + table shape as the search annotation, degrading
+// visits/prior/leaf to em dash and putting the rec score in the Q
+// column. No chosen-row tint — this isn't a captured decision.
+function _renderRecommendFallback(res) {
+  els.searchPanel.classList.remove('hidden');
+  els.searchChosen.textContent =
+    `Priority: Player ${res.priority_player_id}`;
+  els.searchBudget.textContent =
+    `${res.engine} v${res.engine_version} · ${res.recommendations.length} options`;
+  // Recs come pre-sorted by score desc from recommend_from_state;
+  // re-sort defensively for the same reason as the annotation path.
+  const rows = [...res.recommendations].sort(
+    (a, b) => (b.score || 0) - (a.score || 0),
+  );
+  els.searchRows.replaceChildren();
+  for (const r of rows) {
+    const tr = document.createElement('tr');
+    tr.className = 'search-row';
+
+    const tdAction = document.createElement('td');
+    tdAction.className = 'action';
+    tdAction.textContent = r.label;
+    tr.appendChild(tdAction);
+
+    const tdVisits = document.createElement('td');
+    tdVisits.className = 'num';
+    tdVisits.textContent = '—';
+    tr.appendChild(tdVisits);
+
+    const tdQ = document.createElement('td');
+    tdQ.className = 'num';
+    tdQ.textContent = r.score == null ? '—' : Number(r.score).toFixed(3);
+    tr.appendChild(tdQ);
+
+    const tdPrior = document.createElement('td');
+    tdPrior.className = 'num';
+    tdPrior.textContent = '—';
+    tr.appendChild(tdPrior);
+
+    const tdLeaf = document.createElement('td');
+    tdLeaf.className = 'num';
+    tdLeaf.textContent = '—';
     tr.appendChild(tdLeaf);
 
     els.searchRows.appendChild(tr);

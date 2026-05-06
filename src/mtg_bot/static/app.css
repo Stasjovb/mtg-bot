@@ -389,40 +389,7 @@ body { display: grid; grid-template-columns: 1fr 280px;
                      padding: 1px 4px; border-radius: 2px;
                      letter-spacing: 0.08em; vertical-align: baseline; }
 
-/* ---- engine recommendations panel ---- */
-
-.engine-toggle { background: var(--panel-edge); color: var(--ink); border: none;
-                 padding: 0.35em 0.8em; border-radius: 3px; cursor: pointer;
-                 font-size: 0.85em; font-weight: 600;
-                 letter-spacing: 0.03em; }
-.engine-toggle:hover { background: var(--accent); color: #0b1730; }
-.engine-toggle.active { background: var(--active-glow); color: #1c1800; }
-
-.engine-panel { padding: 0.6em; border-bottom: 1px solid var(--panel-edge);
-                max-height: 42vh; overflow-y: auto; flex: 0 0 auto; }
-.engine-panel h2 { margin: 0 0 0.4em; font-size: 0.95em; color: var(--muted);
-                   text-transform: uppercase; letter-spacing: 0.08em; }
-.engine-meta { display: flex; justify-content: space-between; align-items: baseline;
-               font-size: 0.75em; color: var(--muted); margin-bottom: 0.5em; }
-.engine-meta #engine-player { color: var(--accent); }
-.engine-recs { list-style: none; margin: 0; padding: 0;
-               font: 0.9em/1.35 ui-monospace, monospace; }
-.engine-rec { display: grid; grid-template-columns: 1.4em 3.4em 1fr;
-              gap: 0.4em; padding: 0.35em 0;
-              border-top: 1px dashed var(--panel-edge); align-items: baseline; }
-.engine-rec:first-child { border-top: none; }
-.engine-rec .rank { color: var(--muted); text-align: right; }
-.engine-rec .score { text-align: right; font-weight: 700; }
-.engine-rec .score.pos { color: var(--win); }
-.engine-rec .score.neg { color: var(--loss); }
-.engine-rec .score.zero { color: var(--muted); }
-.engine-rec .body .label { font-weight: 600; color: var(--ink); }
-.engine-rec .body .detail { color: var(--muted); font-size: 0.85em;
-                             margin-top: 0.1em; }
-.engine-empty { color: var(--muted); font-style: italic;
-                padding: 0.5em 0; text-align: center; }
-
-/* ---- decision-detail panel (search-tree annotation) ---- */
+/* ---- unified Decision panel (search annotation OR engine recommend) ---- */
 
 .search-panel { padding: 0.6em; border-bottom: 1px solid var(--panel-edge);
                 max-height: 42vh; overflow-y: auto; flex: 0 0 auto; }
@@ -510,7 +477,6 @@ body { display: grid; grid-template-columns: 1fr 280px;
   #scrub-slider { min-width: 0; flex: 1 1 100%; order: 4; }
   .scrubber-readout { min-width: 0; flex-direction: row; gap: 0.6em;
                       flex: 0 0 auto; }
-  .engine-toggle { flex: 0 0 auto; }
   .phase-tracker { padding: 0.3em 0.5em; }
 
   .board { grid-column: 1; grid-row: 4; overflow: visible;
@@ -524,7 +490,10 @@ body { display: grid; grid-template-columns: 1fr 280px;
 
   .right-col { grid-column: 1; grid-row: 5;
                border-left: none; border-top: 1px solid var(--panel-edge); }
-  .engine-panel { max-height: 35vh; }
+  /* The 5-column Decision table is cramped on phone widths — let it
+     scroll horizontally rather than crushing every column to 1ch. */
+  .search-panel { overflow-x: auto; }
+  .search-table td, .search-table th { white-space: nowrap; }
 
   .zone-modal { padding: 0.5em; }
   .zone-modal-inner { min-width: 0; max-width: 95vw; padding: 0.7em; }

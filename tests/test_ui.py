@@ -188,25 +188,37 @@ def test_static_app_css_styles_station_bar(client):
         assert sel in css, f"missing {sel!r} in app.css"
 
 
-def test_static_app_js_ships_engine_panel_code(client):
+def test_static_app_js_ships_decision_panel_code(client):
     js = client.get("/static/app.js").get_data(as_text=True)
-    for token in ("toggleEngine", "refreshEngine", "renderEngineRecs",
-                  "engine-panel", "engine-recs", "/api/recommend/"):
+    # The unified Decision panel replaces the old engine-recs panel.
+    # It still calls /api/recommend (as a fallback when there's no
+    # search annotation), but no longer uses the old toggleEngine/
+    # renderEngineRecs path.
+    for token in ("renderSearchPanel", "_renderRecommendFallback",
+                  "_renderSearchAnnotation", "/api/recommend/"):
         assert token in js, f"missing {token!r} in app.js"
+    for absent in ("toggleEngine", "refreshEngine", "renderEngineRecs",
+                   "engine-panel", "engine-recs"):
+        assert absent not in js, f"{absent!r} should be gone from app.js"
 
 
-def test_static_app_css_styles_engine_panel(client):
+def test_static_app_css_styles_decision_panel(client):
     css = client.get("/static/app.css").get_data(as_text=True)
-    for sel in (".engine-panel", ".engine-recs", ".engine-rec",
-                ".engine-toggle", ".right-col"):
+    for sel in (".search-panel", ".search-table", ".search-row.chosen",
+                ".search-toggle", ".right-col"):
         assert sel in css, f"missing {sel!r} in app.css"
 
 
-def test_index_html_has_engine_elements(client):
+def test_index_html_has_decision_panel_elements(client):
     html = client.get("/").get_data(as_text=True)
-    for eid in ("btn-engine", "engine-panel", "engine-player",
-                "engine-name", "engine-recs"):
+    for eid in ("search-panel", "search-toggle", "search-body",
+                "search-chosen", "search-budget", "search-rows"):
         assert f'id="{eid}"' in html, f"missing id={eid!r} in index.html"
+    # And the old engine-panel section is gone.
+    for absent in ("engine-panel", "engine-recs", "btn-engine",
+                   "engine-player", "engine-name"):
+        assert f'id="{absent}"' not in html, (
+            f"id={absent!r} should be removed from index.html")
 
 
 def test_index_html_has_step_turn_buttons(client):
