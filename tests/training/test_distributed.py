@@ -5429,3 +5429,527 @@ def test_watchdog_ignores_stale_progress_json_from_prior_run(
         "filter is broken — this is the live-2026-05-06 regression."
     )
     assert result.returncode == 0
+
+
+# ---- abandon-inflight-on-queue-close ------------------------------
+#
+# Pinning the over-queue early-stop: when the orchestrator POSTs
+# ``/queue/close`` mid-run because we've already collected N
+# successful games globally, each shard's pull loop must STOP TAKING
+# new games AND abandon any games still in flight. Pre-feature
+# behavior was to drain in-flight before returning, which on Mac's
+# 14 workers at the 300s per-game timeout was 5-10+ minutes of
+# pointless wait — exactly the long-tail tax the over-queue was
+# supposed to eliminate.
+#
+# These tests don't spin a real ProcessPoolExecutor; they swap in a
+# ThreadPoolExecutor + a controllable game-runner stub so we can pin
+# "completes in <5s with workers 'busy' for 60s" — the proof we
+# abandoned in-flight rather than waiting for them.
+
+
+def _empty_chunk():
+    """A 6-tuple chunk in the shape ``_play_one_parallel_game``
+    returns for a real game with zero recorded samples (e.g., a game
+    that hit the decision cap). Just ``np`` arrays of size 0 plus a
+    winner and outcome_kind. Used by the abandon-inflight tests as
+    cheap "completed" results so we don't have to spin the engine."""
+    from mtg_bot.training.data_gen import _empty_arrays
+    f, o, p, m = _empty_arrays()
+    return (f, o, p, m, 0, "completed")
+
+
+def _nonempty_chunk(n_samples: int = 3):
+    """A 6-tuple chunk with N rows of synthetic sample data, so
+    ``_concat_chunks`` produces a non-empty npz on flush. Lets the
+    "partial data is preserved" assertion check that completed games
+    DID land on disk before we abandoned the rest. Uses real
+    FEATURE_DIM / ACTION_VOCAB_SIZE so save_dataset's shape check
+    accepts the fake chunk."""
+    import numpy as np
+    from mtg_bot.features import FEATURE_DIM
+    from mtg_bot.training.action_encoding import ACTION_VOCAB_SIZE
+    f = np.zeros((n_samples, FEATURE_DIM), dtype=np.float32)
+    o = np.zeros((n_samples,), dtype=np.float32)
+    p = np.zeros(
+        (n_samples, ACTION_VOCAB_SIZE), dtype=np.float32,
+    )
+    m = np.ones((n_samples, ACTION_VOCAB_SIZE), dtype=np.bool_)
+    return (f, o, p, m, 0, "completed")
+
+
+def _patch_pull_executor_to_threadpool(monkeypatch):
+    """Swap the ProcessPoolExecutor inside ``run_shard_pull`` /
+    ``run_shard_eval_pull`` for a ThreadPoolExecutor so tests don't
+    need to spawn a real worker process. Future API is identical;
+    we only care about ``submit`` / ``shutdown(wait=False)`` / the
+    futures being ``concurrent.futures.Future`` so ``_cf.wait``
+    treats them correctly. ``run_shard_pull`` does ``import
+    concurrent.futures as _cf``, so swapping the attribute on the
+    real ``concurrent.futures`` module wins."""
+    import concurrent.futures as _cf
+    monkeypatch.setattr(
+        _cf, "ProcessPoolExecutor", _cf.ThreadPoolExecutor,
+    )
+
+
+def _patch_take_one_responses(
+    monkeypatch, responses: list[dict],
+) -> list[dict]:
+    """Stub ``_urlopen_with_retry`` so each successive call returns
+    the next entry in ``responses`` (each entry is the JSON body
+    keys: games, remaining, closed). Returns a list of received
+    request URLs for inspection."""
+    import json as _json
+    from mtg_bot.training import distributed as _dist
+
+    seen: list[dict] = []
+    idx = {"i": 0}
+
+    class _FakeResp:
+        status = 200
+
+        def __init__(self, body: bytes):
+            self.body = body
+
+    def _fake_urlopen_with_retry(req, **kwargs):
+        seen.append({"url": getattr(req, "full_url", str(req))})
+        i = min(idx["i"], len(responses) - 1)
+        idx["i"] += 1
+        body = _json.dumps(responses[i]).encode("utf-8")
+        return _FakeResp(body)
+
+    monkeypatch.setattr(
+        _dist, "_urlopen_with_retry", _fake_urlopen_with_retry,
+    )
+    return seen
+
+
+def test_run_shard_pull_abandons_inflight_on_queue_close(
+    tmp_path: Path, monkeypatch,
+):
+    """The flagship test: ``run_shard_pull`` returns PROMPTLY
+    (~well under the 60s per-fake-game wait) when the queue closes
+    mid-run with games still in flight. Without the abandon-on-
+    close fix, the function would block for up to 60s per worker
+    waiting on the dummy futures."""
+    import time
+    from mtg_bot.training import distributed as dist
+    from mtg_bot.training.distributed import (
+        SelfPlayJobSpec, run_shard_pull,
+    )
+
+    _patch_pull_executor_to_threadpool(monkeypatch)
+
+    # The shard only learns the queue closed when a worker frees up
+    # and it goes back to /queue/take. So the realistic shape: take
+    # game 0 (slow), take game 1 (fast), game 1 finishes, next
+    # /queue/take returns ``closed: True``. game 0 is still running
+    # (60s sleep). Pre-fix: outer loop waits for game 0 → 60s.
+    # Post-fix: outer loop breaks on ``queue_closed_early`` → <5s.
+    _patch_take_one_responses(monkeypatch, responses=[
+        {"games": [0], "remaining": 99},
+        {"games": [1], "remaining": 98},
+        {"games": [], "remaining": 0, "closed": True},
+    ])
+
+    def _selective_play(args):
+        game_idx = args[0]
+        if game_idx == 0:
+            time.sleep(60)
+            return game_idx, _empty_chunk(), 60.0
+        # Fast path: lets the outer loop progress to the take that
+        # discovers ``closed: True``.
+        return game_idx, _nonempty_chunk(n_samples=2), 0.0
+
+    monkeypatch.setattr(
+        dist, "_play_one_parallel_game_timed", _selective_play,
+    )
+
+    spec = SelfPlayJobSpec(
+        weights_path="ignored.pt",
+        samples=1, inner_nodes=10,
+        hidden_sizes=None,
+        base_seed=0,
+        enable_mulligans=False,
+        per_game_timeout_sec=None,
+    )
+
+    progress_dir = tmp_path / "training_progress"
+    out_dir = tmp_path / "out"
+    t0 = time.perf_counter()
+    npz_paths = run_shard_pull(
+        spec,
+        queue_url="http://stub",
+        run_id="iter_test",
+        n_workers=2,
+        output_dir=out_dir,
+        label="L0",
+        stamp="20260504T000000Z",
+        iter_total_games=100,
+        progress_dir=progress_dir,
+    )
+    elapsed = time.perf_counter() - t0
+
+    # 60s per slow fake game; pass threshold gives the runtime room
+    # but is well under the no-abandon worst case.
+    assert elapsed < 5.0, (
+        f"run_shard_pull blocked for {elapsed:.1f}s after queue "
+        "close — abandon-inflight is broken (the 60s slow game 0 "
+        "should be abandoned, not waited on)."
+    )
+    # The fast game (game 1) DID complete and was flushed before the
+    # outer loop broke; the slow one (game 0) was abandoned and its
+    # samples are NOT on disk. Net: exactly one npz with one game's
+    # worth of samples.
+    assert len(npz_paths) == 1
+
+    # Events file recorded the early-close, NOT a natural drain.
+    events_path = progress_dir / "iter_test_shard_L0_events.jsonl"
+    events = [
+        json.loads(line) for line in
+        events_path.read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
+    event_types = [e["event"] for e in events]
+    assert "queue_closed" in event_types, (
+        "expected queue_closed event when /queue/take returned "
+        f"closed=True; got {event_types}"
+    )
+    assert "queue_drained" not in event_types
+    # The abandoned-inflight diagnostic is also emitted with the
+    # count of futures we walked away from (game 0 still running).
+    abandoned = [e for e in events if e["event"]
+                 == "shard_abandoned_inflight"]
+    assert len(abandoned) == 1
+    assert abandoned[0]["n_abandoned"] == 1
+
+
+def test_run_shard_pull_natural_drain_still_waits_for_inflight(
+    tmp_path: Path, monkeypatch,
+):
+    """Counterpart pin: when the queue drains naturally (server
+    returns games=[] without ``closed: True``), the shard MUST
+    still wait for in-flight games — the user wants exactly N
+    games and there's no overshoot tolerance. The early-break path
+    is gated on ``closed=True`` only."""
+    import threading
+    import time
+    from mtg_bot.training import distributed as dist
+    from mtg_bot.training.distributed import (
+        SelfPlayJobSpec, run_shard_pull,
+    )
+
+    _patch_pull_executor_to_threadpool(monkeypatch)
+
+    # 2 games; after both are taken the queue drains naturally
+    # (no ``closed: True`` flag).
+    _patch_take_one_responses(monkeypatch, responses=[
+        {"games": [0], "remaining": 1},
+        {"games": [1], "remaining": 0},
+        {"games": [], "remaining": 0},  # natural drain (no closed)
+    ])
+
+    # Worker stub: each game completes after a small delay so the
+    # test exercises the wait-on-inflight path.
+    completed_games = []
+    lock = threading.Lock()
+
+    def _worker(args):
+        time.sleep(0.05)
+        with lock:
+            completed_games.append(args[0])
+        return args[0], _nonempty_chunk(), 0.05
+
+    monkeypatch.setattr(
+        dist, "_play_one_parallel_game_timed", _worker,
+    )
+
+    spec = SelfPlayJobSpec(
+        weights_path="ignored.pt",
+        samples=1, inner_nodes=10,
+        hidden_sizes=None,
+        base_seed=0,
+        enable_mulligans=False,
+        per_game_timeout_sec=None,
+    )
+
+    progress_dir = tmp_path / "training_progress"
+    out_dir = tmp_path / "out"
+    npz_paths = run_shard_pull(
+        spec,
+        queue_url="http://stub",
+        run_id="iter_test",
+        n_workers=2,
+        output_dir=out_dir,
+        label="L0",
+        stamp="20260504T000000Z",
+        iter_total_games=2,
+        progress_dir=progress_dir,
+    )
+    # Both fake games ran to completion — the wait-for-inflight
+    # path was honored, NOT short-circuited.
+    assert len(completed_games) == 2
+    assert sorted(completed_games) == [0, 1]
+    # Both games' samples were flushed to disk.
+    assert len(npz_paths) >= 1
+    # Event log distinguishes natural drain from early close.
+    events_path = progress_dir / "iter_test_shard_L0_events.jsonl"
+    events = [
+        json.loads(line) for line in
+        events_path.read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
+    event_types = [e["event"] for e in events]
+    assert "queue_drained" in event_types
+    assert "queue_closed" not in event_types
+    # No abandon event in a natural drain.
+    assert not any(
+        e["event"] == "shard_abandoned_inflight" for e in events
+    )
+
+
+def test_run_shard_pull_preserves_data_already_completed_pre_close(
+    tmp_path: Path, monkeypatch,
+):
+    """Partial-data preservation: games that completed BEFORE the
+    queue close must end up on disk in the flushed npz, even though
+    we abandon any in-flight games. This is the floor on how much
+    work is "lost" by the early-stop."""
+    import threading
+    import time
+    from mtg_bot.training import distributed as dist
+    from mtg_bot.training.distributed import (
+        SelfPlayJobSpec, run_shard_pull,
+    )
+
+    _patch_pull_executor_to_threadpool(monkeypatch)
+
+    # Three responses: two real games, then closed=True. We stage
+    # the worker stub so games 0 + 1 finish nearly instantly, then
+    # the third take returns ``closed`` and there's nothing in
+    # flight to abandon — but we want to confirm the two completed
+    # games are flushed.
+    _patch_take_one_responses(monkeypatch, responses=[
+        {"games": [0], "remaining": 99},
+        {"games": [1], "remaining": 98},
+        {"games": [], "remaining": 0, "closed": True},
+    ])
+
+    completed_games: list[int] = []
+    lock = threading.Lock()
+
+    def _worker(args):
+        time.sleep(0.01)
+        with lock:
+            completed_games.append(args[0])
+        return args[0], _nonempty_chunk(n_samples=4), 0.01
+
+    monkeypatch.setattr(
+        dist, "_play_one_parallel_game_timed", _worker,
+    )
+
+    spec = SelfPlayJobSpec(
+        weights_path="ignored.pt",
+        samples=1, inner_nodes=10,
+        hidden_sizes=None,
+        base_seed=0,
+        enable_mulligans=False,
+        per_game_timeout_sec=None,
+    )
+
+    progress_dir = tmp_path / "training_progress"
+    out_dir = tmp_path / "out"
+    # n_workers=1 so games run serially: game 0 starts, finishes,
+    # then game 1 starts, finishes, then the next take returns
+    # ``closed: True``. By the time the close hits, 2 games are
+    # already complete and live in pending_chunks.
+    npz_paths = run_shard_pull(
+        spec,
+        queue_url="http://stub",
+        run_id="iter_test",
+        n_workers=1,
+        output_dir=out_dir,
+        label="L0",
+        stamp="20260504T000000Z",
+        iter_total_games=100,
+        progress_dir=progress_dir,
+    )
+
+    # Both pre-close games completed AND landed on disk.
+    assert sorted(completed_games) == [0, 1]
+    assert len(npz_paths) >= 1
+    # The npz contains the per-game samples.
+    import numpy as np
+    total_samples = 0
+    for p in npz_paths:
+        d = np.load(p)
+        total_samples += d["features"].shape[0]
+    assert total_samples == 2 * 4  # 2 games × 4 samples each
+
+
+def test_run_shard_eval_pull_abandons_inflight_on_queue_close(
+    tmp_path: Path, monkeypatch,
+):
+    """Same abandon-inflight pin for the eval shard: when the queue
+    closes mid-run with eval games still running on the fake
+    workers, ``run_shard_eval_pull`` must return promptly rather
+    than block on the slow workers' completion."""
+    import time
+    from mtg_bot.training import distributed as dist
+    from mtg_bot.training.distributed import (
+        EvalJobSpec, run_shard_eval_pull,
+    )
+
+    _patch_pull_executor_to_threadpool(monkeypatch)
+
+    # Same realistic shape as the self-play test: take game 0
+    # (slow), take game 1 (fast), game 1 finishes, then the next
+    # /queue/take returns ``closed: True``. game 0 is still
+    # running. Pre-fix: outer loop waits 60s. Post-fix: <5s.
+    _patch_take_one_responses(monkeypatch, responses=[
+        {"games": [0], "remaining": 99},
+        {"games": [1], "remaining": 98},
+        {"games": [], "remaining": 0, "closed": True},
+    ])
+
+    def _selective_eval(args):
+        game_idx = args[0]
+        if game_idx == 0:
+            time.sleep(60)
+            return game_idx, (0, 1, "completed"), 60.0
+        return game_idx, (1, 5, "completed"), 0.0
+
+    monkeypatch.setattr(
+        dist, "_play_one_match_game_timed", _selective_eval,
+    )
+
+    spec = EvalJobSpec(
+        new_weights_path="ignored.pt",
+        old_weights_path=None,
+        samples=1, inner_nodes=10,
+        hidden_sizes=None,
+        base_seed=0,
+        enable_mulligans=False,
+        per_game_timeout_sec=None,
+    )
+
+    progress_dir = tmp_path / "training_progress"
+    t0 = time.perf_counter()
+    counts = run_shard_eval_pull(
+        spec,
+        queue_url="http://stub",
+        run_id="iter_eval_test",
+        n_workers=2,
+        label="L0",
+        iter_total_games=100,
+        progress_dir=progress_dir,
+    )
+    elapsed = time.perf_counter() - t0
+
+    assert elapsed < 5.0, (
+        f"run_shard_eval_pull blocked for {elapsed:.1f}s after "
+        "queue close — abandon-inflight is broken on the eval "
+        "code path."
+    )
+    # game 1 finished and counted; game 0 was abandoned and
+    # contributes nothing — abandoned games disappear from the
+    # aggregated counts entirely (NOT counted as crashed/timed_out).
+    assert counts["n_games"] == 1
+    assert counts["wins_new"] + counts["wins_old"] == 1
+    assert counts["crashed"] == 0
+    assert counts["timed_out"] == 0
+
+    events_path = (
+        progress_dir / "iter_eval_test_shard_L0_events.jsonl"
+    )
+    events = [
+        json.loads(line) for line in
+        events_path.read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
+    event_types = [e["event"] for e in events]
+    assert "queue_closed" in event_types
+    assert "queue_drained" not in event_types
+    abandoned = [e for e in events if e["event"]
+                 == "shard_abandoned_inflight"]
+    assert len(abandoned) == 1
+    assert abandoned[0]["n_abandoned"] == 1
+
+
+def test_run_shard_eval_pull_natural_drain_waits_for_inflight(
+    tmp_path: Path, monkeypatch,
+):
+    """Mirror of the self-play natural-drain pin: eval shard must
+    NOT short-circuit when the queue drains because all indices
+    were consumed (no ``closed`` flag)."""
+    import threading
+    import time
+    from mtg_bot.training import distributed as dist
+    from mtg_bot.training.distributed import (
+        EvalJobSpec, run_shard_eval_pull,
+    )
+
+    _patch_pull_executor_to_threadpool(monkeypatch)
+
+    _patch_take_one_responses(monkeypatch, responses=[
+        {"games": [0], "remaining": 1},
+        {"games": [1], "remaining": 0},
+        {"games": [], "remaining": 0},  # natural drain
+    ])
+
+    completed: list[int] = []
+    lock = threading.Lock()
+
+    def _eval_worker(args):
+        time.sleep(0.02)
+        with lock:
+            completed.append(args[0])
+        # Even-game wins for new, odd-game wins for old (just to
+        # make sure both branches are exercised).
+        winner = 0 if args[0] % 2 == 0 else 1
+        return args[0], (winner, 5, "completed"), 0.02
+
+    monkeypatch.setattr(
+        dist, "_play_one_match_game_timed", _eval_worker,
+    )
+
+    spec = EvalJobSpec(
+        new_weights_path="ignored.pt",
+        old_weights_path=None,
+        samples=1, inner_nodes=10,
+        hidden_sizes=None,
+        base_seed=0,
+        enable_mulligans=False,
+        per_game_timeout_sec=None,
+    )
+
+    progress_dir = tmp_path / "training_progress"
+    counts = run_shard_eval_pull(
+        spec,
+        queue_url="http://stub",
+        run_id="iter_eval_test",
+        n_workers=2,
+        label="L0",
+        iter_total_games=2,
+        progress_dir=progress_dir,
+    )
+    assert len(completed) == 2
+    # Both games' results are accounted for in the returned counts.
+    assert counts["n_games"] == 2
+    assert counts["wins_new"] + counts["wins_old"] == 2
+
+    events_path = (
+        progress_dir / "iter_eval_test_shard_L0_events.jsonl"
+    )
+    events = [
+        json.loads(line) for line in
+        events_path.read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
+    event_types = [e["event"] for e in events]
+    assert "queue_drained" in event_types
+    assert "queue_closed" not in event_types
+    assert not any(
+        e["event"] == "shard_abandoned_inflight" for e in events
+    )
