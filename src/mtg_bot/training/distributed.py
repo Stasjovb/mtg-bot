@@ -1909,7 +1909,7 @@ def run_shard_pull(
     pending_chunks: list = []
     flush_every = max(1, n_workers)
 
-    def _take_one() -> tuple[Optional[int], int, float]:
+    def _take_one() -> tuple[Optional[int], int, float, bool]:
         req_body = _json.dumps({
             "run_id": run_id, "batch_size": 1,
         }).encode("utf-8")
@@ -1924,10 +1924,15 @@ def run_shard_pull(
         response = _json.loads(resp_body.decode("utf-8"))
         take_wall = _time.perf_counter() - take_t0
         games = response.get("games", [])
+        # ``closed`` is the orchestrator's early-stop flag: queue
+        # closed by /queue/close before its indices ran out. Distinct
+        # from a natural drain (next == total, no ``closed`` key set).
+        closed = bool(response.get("closed", False))
         return (
             games[0] if games else None,
             response.get("remaining", 0),
             take_wall,
+            closed,
         )
 
     def _build_args(game_idx: int) -> tuple:
@@ -1982,9 +1987,16 @@ def run_shard_pull(
     try:
         in_flight: dict[_cf.Future, int] = {}
         queue_drained = False
+        # ``queue_closed_early`` differentiates the over-queue early-
+        # stop case (orchestrator POSTed /queue/close because we
+        # already have N successful games globally) from a natural
+        # drain (next == total). Early-stop means we abandon in-flight
+        # games immediately so the orchestrator can move on; natural
+        # drain still waits for in-flight to finish.
+        queue_closed_early = False
         while True:
             while len(in_flight) < n_workers and not queue_drained:
-                game_idx, remaining, take_wall = _take_one()
+                game_idx, remaining, take_wall, closed = _take_one()
                 if events is not None:
                     events.record(
                         "game_take",
@@ -1995,6 +2007,14 @@ def run_shard_pull(
                     )
                 if game_idx is None:
                     queue_drained = True
+                    queue_closed_early = closed
+                    if events is not None:
+                        events.record(
+                            "queue_closed" if closed
+                            else "queue_drained",
+                            in_flight=len(in_flight),
+                            remaining=remaining,
+                        )
                     break
                 fut = exe.submit(
                     _play_one_parallel_game_timed,
@@ -2002,6 +2022,20 @@ def run_shard_pull(
                 )
                 in_flight[fut] = game_idx
             if not in_flight:
+                break
+            if queue_closed_early:
+                # Over-queue early-stop fired: master closed the queue
+                # because the global success target is met. Abandon
+                # remaining in-flight games — ``finally:
+                # exe.shutdown(wait=False)`` releases them so we
+                # return promptly instead of waiting up to
+                # ``per_game_timeout_sec`` (5 min) for stragglers.
+                # Already-completed pending_chunks get flushed below.
+                if events is not None:
+                    events.record(
+                        "shard_abandoned_inflight",
+                        n_abandoned=len(in_flight),
+                    )
                 break
             done, _pending = _cf.wait(
                 list(in_flight.keys()),
@@ -2222,7 +2256,7 @@ def run_shard_eval_pull(
     timed_out = 0
     n_games = 0
 
-    def _take_one() -> tuple[Optional[int], int, float]:
+    def _take_one() -> tuple[Optional[int], int, float, bool]:
         req_body = _json.dumps({
             "run_id": run_id, "batch_size": 1,
         }).encode("utf-8")
@@ -2237,10 +2271,13 @@ def run_shard_eval_pull(
         response = _json.loads(resp_body.decode("utf-8"))
         take_wall = _time.perf_counter() - take_t0
         games = response.get("games", [])
+        # See run_shard_pull._take_one for the closed/drained split.
+        closed = bool(response.get("closed", False))
         return (
             games[0] if games else None,
             response.get("remaining", 0),
             take_wall,
+            closed,
         )
 
     def _build_args(game_idx: int) -> tuple:
@@ -2262,9 +2299,12 @@ def run_shard_eval_pull(
     try:
         in_flight: dict[_cf.Future, int] = {}
         queue_drained = False
+        # See run_shard_pull for the early-close vs natural-drain
+        # rationale; eval mirrors self-play here.
+        queue_closed_early = False
         while True:
             while len(in_flight) < n_workers and not queue_drained:
-                game_idx, remaining, take_wall = _take_one()
+                game_idx, remaining, take_wall, closed = _take_one()
                 if events is not None:
                     events.record(
                         "game_take",
@@ -2275,6 +2315,14 @@ def run_shard_eval_pull(
                     )
                 if game_idx is None:
                     queue_drained = True
+                    queue_closed_early = closed
+                    if events is not None:
+                        events.record(
+                            "queue_closed" if closed
+                            else "queue_drained",
+                            in_flight=len(in_flight),
+                            remaining=remaining,
+                        )
                     break
                 fut = exe.submit(
                     _play_one_match_game_timed,
@@ -2282,6 +2330,18 @@ def run_shard_eval_pull(
                 )
                 in_flight[fut] = game_idx
             if not in_flight:
+                break
+            if queue_closed_early:
+                # Over-queue early-stop fired: abandon in-flight
+                # eval games. Counts already accumulated for finished
+                # games are written to the result JSON in the
+                # ``finally`` below, so we don't lose data — just the
+                # abandoned games' would-be results.
+                if events is not None:
+                    events.record(
+                        "shard_abandoned_inflight",
+                        n_abandoned=len(in_flight),
+                    )
                 break
             done, _pending = _cf.wait(
                 list(in_flight.keys()),
