@@ -93,6 +93,9 @@ from mtg_bot.training.distributed import (  # noqa: E402
     run_distributed_eval,
     run_distributed_self_play,
 )
+from mtg_bot.training.orphan_sweep import (  # noqa: E402
+    sweep_local_orphans, sweep_remote_orphans,
+)
 from mtg_bot.training.self_play import run_match_parallel  # noqa: E402
 from mtg_bot.training.stop_signal import (  # noqa: E402
     cleanup_orphans, stop_requested, sentinel_path,
@@ -1472,6 +1475,44 @@ def main() -> None:
                     f"[reconcile] state rewritten: "
                     f"current_best={state['current_best']}, "
                     f"iterations_completed={state['iterations_completed']}"
+                )
+
+    # Orphan sweep — kill any prior-run multiprocessing/shard
+    # workers that survived their parent. See
+    # ``mtg_bot.training.orphan_sweep`` for the matcher rules. Runs
+    # before iter 1 begins so the next iteration's fresh workers have
+    # the machine to themselves; otherwise stale orphans (50-700 MB
+    # each) compete for CPU and tank self-play throughput. Loud so
+    # the user can see what's happening.
+    repo_root = str(_HERE.parent.resolve())
+    print(f"[iterate] orphan-sweep: scanning local processes (master "
+          f"PID={os.getpid()}, repo_root={repo_root!r})")
+    try:
+        sweep_local_orphans(repo_root=repo_root, label="local")
+    except Exception as e:  # noqa: BLE001
+        # Sweep is a safety net, not a critical-path action — never
+        # let it abort the run. Log loudly and continue.
+        print(
+            f"[iterate] orphan-sweep: local sweep raised "
+            f"{type(e).__name__}: {e}; continuing.",
+            file=sys.stderr,
+        )
+    if shards_cfg is not None:
+        for shard in shards_cfg.shards:
+            if shard.is_local:
+                continue
+            print(
+                f"[iterate] orphan-sweep: sweeping remote shard "
+                f"{shard.display_label} ({shard.host})..."
+            )
+            try:
+                sweep_remote_orphans(shard)
+            except Exception as e:  # noqa: BLE001
+                print(
+                    f"[iterate] orphan-sweep: remote sweep on "
+                    f"{shard.display_label} raised "
+                    f"{type(e).__name__}: {e}; continuing.",
+                    file=sys.stderr,
                 )
 
     from datetime import datetime, timezone

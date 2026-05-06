@@ -186,3 +186,219 @@ def test_run_shard_pull_does_not_call_os_exit() -> None:
         "called from in-process unit tests where os._exit would kill "
         "the test runner."
     )
+
+
+def test_install_kill_handlers_registers_signals(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """``_install_kill_handlers`` must register SIGTERM (always) and
+    SIGHUP/SIGINT (when available). Defends against the regression
+    where a future refactor accidentally drops one — the watchdog
+    SSH yank only fires SIGTERM, but SIGHUP is what an SSH session
+    drop sends to a child still attached to the controlling tty.
+    """
+    import signal as _signal
+    module = _load_module()
+    seen: list[int] = []
+
+    def fake_signal(sig, handler):
+        seen.append(int(sig))
+        return None
+
+    monkeypatch.setattr(_signal, "signal", fake_signal)
+    module._install_kill_handlers()
+    # SIGTERM always present.
+    assert _signal.SIGTERM in seen
+    # SIGINT always present (POSIX + Windows).
+    assert _signal.SIGINT in seen
+    # SIGHUP only on POSIX.
+    if hasattr(_signal, "SIGHUP"):
+        assert _signal.SIGHUP in seen
+
+
+def test_install_kill_handlers_swallows_value_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """If signal.signal raises ValueError ("only main thread can
+    install signal handlers"), the handler-installer must not
+    propagate. Defense-in-depth for the unlikely path where this
+    runs from a non-main thread."""
+    import signal as _signal
+    module = _load_module()
+
+    def boom(sig, handler):
+        raise ValueError("not main thread")
+
+    monkeypatch.setattr(_signal, "signal", boom)
+    # Must not raise.
+    module._install_kill_handlers()
+
+
+def test_terminate_active_children_calls_terminate_join_kill(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The sequence is: terminate(); join(timeout); kill() if alive.
+    Verifies the survivor branch fires kill()."""
+    module = _load_module()
+
+    class _FakeChild:
+        def __init__(self, alive_after_join: bool) -> None:
+            self._alive_after_join = alive_after_join
+            self.calls: list[str] = []
+
+        def terminate(self) -> None:
+            self.calls.append("terminate")
+
+        def join(self, timeout: float | None = None) -> None:
+            self.calls.append(f"join:{timeout!r}")
+
+        def is_alive(self) -> bool:
+            return self._alive_after_join
+
+        def kill(self) -> None:
+            self.calls.append("kill")
+
+    cooperative = _FakeChild(alive_after_join=False)
+    survivor = _FakeChild(alive_after_join=True)
+
+    monkeypatch.setattr(
+        "multiprocessing.active_children",
+        lambda: [cooperative, survivor],
+    )
+    module._terminate_active_children()
+    # Both got terminate() + join().
+    assert "terminate" in cooperative.calls
+    assert any(c.startswith("join") for c in cooperative.calls)
+    assert "terminate" in survivor.calls
+    assert any(c.startswith("join") for c in survivor.calls)
+    # Only the survivor got kill().
+    assert "kill" not in cooperative.calls
+    assert "kill" in survivor.calls
+
+
+def test_terminate_active_children_swallows_exceptions(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A child whose terminate/join/kill raises (e.g. already dead,
+    permission error) must not stop the loop — survivors after it
+    still get cleaned up."""
+    module = _load_module()
+
+    class _BoomChild:
+        def terminate(self) -> None:
+            raise RuntimeError("boom-terminate")
+
+        def join(self, timeout: float | None = None) -> None:
+            raise RuntimeError("boom-join")
+
+        def is_alive(self) -> bool:
+            return True
+
+        def kill(self) -> None:
+            raise RuntimeError("boom-kill")
+
+    cleaned = {"terminate": False, "kill": False}
+
+    class _OkChild:
+        def terminate(self) -> None:
+            cleaned["terminate"] = True
+
+        def join(self, timeout: float | None = None) -> None:
+            return None
+
+        def is_alive(self) -> bool:
+            return True
+
+        def kill(self) -> None:
+            cleaned["kill"] = True
+
+    monkeypatch.setattr(
+        "multiprocessing.active_children",
+        lambda: [_BoomChild(), _OkChild()],
+    )
+    module._terminate_active_children()
+    assert cleaned["terminate"]
+    assert cleaned["kill"]
+
+
+def test_signal_handler_terminates_children_then_exits(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The SIGTERM/SIGHUP handler must call _terminate_active_children
+    and then os._exit(128 + signum). It is critical that os._exit
+    is called even if children-cleanup raises — otherwise a wedged
+    child would block shutdown forever."""
+    module = _load_module()
+    called = {"term": 0}
+
+    def fake_term() -> None:
+        called["term"] += 1
+
+    monkeypatch.setattr(module, "_terminate_active_children", fake_term)
+
+    with mock.patch.object(module.os, "_exit") as mock_exit:
+        module._signal_killchildren_and_exit(15, None)
+
+    assert called["term"] == 1
+    mock_exit.assert_called_once_with(128 + 15)
+
+
+def test_signal_handler_exits_even_if_terminate_raises(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Defensive: a hung _terminate_active_children must not stop
+    the os._exit. Otherwise a SIGTERM could be partially handled
+    and we'd hang in interpreter shutdown."""
+    module = _load_module()
+
+    def boom_term() -> None:
+        raise RuntimeError("synthetic")
+
+    monkeypatch.setattr(module, "_terminate_active_children", boom_term)
+    with mock.patch.object(module.os, "_exit") as mock_exit:
+        module._signal_killchildren_and_exit(1, None)
+    mock_exit.assert_called_once_with(128 + 1)
+
+
+def test_main_installs_kill_handlers(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The shard wrapper's main() should call _install_kill_handlers
+    before _run executes — otherwise SIGTERM during work doesn't
+    clean up children. Verifies the wiring."""
+    module = _load_module()
+    called = {"installed": False}
+
+    def fake_install() -> None:
+        called["installed"] = True
+
+    monkeypatch.setattr(module, "_install_kill_handlers", fake_install)
+    monkeypatch.setattr(module, "_run", lambda _argv: None)
+    monkeypatch.setattr(module, "_terminate_active_children", lambda: None)
+
+    with mock.patch.object(module.os, "_exit"):
+        module.main([])
+
+    assert called["installed"]
+
+
+def test_main_terminates_children_before_exit(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The clean-exit path also runs _terminate_active_children. If a
+    pool worker is somehow still alive when we hit the finally block,
+    we want it dead before os._exit (which detaches it from us)."""
+    module = _load_module()
+    called = {"term": 0}
+
+    monkeypatch.setattr(module, "_install_kill_handlers", lambda: None)
+    monkeypatch.setattr(module, "_run", lambda _argv: None)
+    monkeypatch.setattr(
+        module, "_terminate_active_children",
+        lambda: called.__setitem__("term", called["term"] + 1),
+    )
+
+    with mock.patch.object(module.os, "_exit"):
+        module.main([])
+
+    assert called["term"] == 1

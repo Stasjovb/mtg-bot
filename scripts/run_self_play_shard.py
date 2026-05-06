@@ -19,6 +19,7 @@ import argparse
 import base64
 import json
 import os
+import signal
 import sys
 from pathlib import Path
 
@@ -140,6 +141,94 @@ def _run(argv=None) -> None:
     print(json.dumps({"result_path": str(result_path), **counts}))
 
 
+def _terminate_active_children() -> None:
+    """Kill every still-alive multiprocessing child of this process.
+
+    Why: when the master's SSH session is yanked (Tailscale glitch,
+    watchdog terminate(), user ctrl-c that doesn't propagate), this
+    shard process receives SIGTERM (POSIX) / TerminateProcess
+    (Windows) — but its ``ProcessPoolExecutor`` worker children are
+    NOT necessarily collected. On Linux/macOS they get reparented to
+    init (PID 1) and run forever; on Windows they reparent to
+    System and accumulate. The session before this fix accumulated
+    141 such orphans on the Mac over a few days of killed runs.
+
+    This handler is registered for SIGTERM and SIGHUP. POSIX raises
+    SIGHUP when the controlling SSH session dies; SIGTERM is what
+    the orchestrator's watchdog fires. Windows doesn't deliver
+    SIGHUP — but ``signal.signal(SIGTERM, ...)`` does fire on
+    ``TerminateProcess`` for Windows console apps run under the
+    standard signal-bridge, so registering it is still useful.
+
+    Calls ``terminate()`` then ``join(0.5)`` per child; nuked via
+    ``kill()`` if still alive. Then ``os._exit(143)`` (128+SIGTERM)
+    to bypass the at-exit thread-join hang the rest of this script
+    is built around.
+    """
+    import multiprocessing as _mp
+    import time as _t
+    children = list(_mp.active_children())
+    for c in children:
+        try:
+            c.terminate()
+        except Exception:  # noqa: BLE001
+            pass
+    deadline = _t.monotonic() + 1.0
+    for c in children:
+        remaining = max(0.0, deadline - _t.monotonic())
+        try:
+            c.join(timeout=remaining)
+        except Exception:  # noqa: BLE001
+            pass
+    for c in children:
+        if c.is_alive():
+            try:
+                c.kill()
+            except Exception:  # noqa: BLE001
+                pass
+
+
+def _signal_killchildren_and_exit(signum, _frame) -> None:
+    """SIGTERM/SIGHUP handler: terminate mp children, then ``os._exit``
+    so we don't get stuck in interpreter shutdown's at-exit thread
+    joins (the same hang the existing ``os._exit`` finalizer is
+    designed to dodge — see ``main`` docstring).
+    """
+    try:
+        _terminate_active_children()
+    except Exception:  # noqa: BLE001
+        pass
+    # 128 + signal number is the convention.
+    try:
+        sys.stdout.flush()
+    except Exception:  # noqa: BLE001
+        pass
+    try:
+        sys.stderr.flush()
+    except Exception:  # noqa: BLE001
+        pass
+    os._exit(128 + int(signum))
+
+
+def _install_kill_handlers() -> None:
+    """Install SIGTERM/SIGHUP handlers. Best-effort: SIGHUP doesn't
+    exist on Windows, and any of these may already be inherited from
+    the parent. We swallow ValueError ("signal only works in main
+    thread") just in case the shard is ever invoked from a non-main
+    thread context (today's path runs main() from __main__, so this
+    is defense-in-depth)."""
+    for name in ("SIGTERM", "SIGHUP", "SIGINT"):
+        sig = getattr(signal, name, None)
+        if sig is None:
+            continue
+        try:
+            signal.signal(sig, _signal_killchildren_and_exit)
+        except (ValueError, OSError):
+            # ValueError: not on main thread; OSError: signal not
+            # installable on this platform.
+            pass
+
+
 def main(argv=None) -> None:
     """Top-level entry. Always exits via ``os._exit`` to bypass
     Python's normal interpreter shutdown.
@@ -178,6 +267,7 @@ def main(argv=None) -> None:
     do it explicitly before this function returns, not via
     ``atexit.register``.
     """
+    _install_kill_handlers()
     exit_code = 0
     try:
         _run(argv)
@@ -198,6 +288,16 @@ def main(argv=None) -> None:
         traceback.print_exc()
         exit_code = 1
     finally:
+        # Terminate any leftover multiprocessing children before
+        # ``os._exit`` so they don't reparent to init/System on
+        # POSIX/Windows. ``shutdown(wait=False)`` inside
+        # ``run_shard_pull`` already returned by here, but in some
+        # paths (early-stop, exception) the workers can still be
+        # alive when the executor's shutdown thread releases.
+        try:
+            _terminate_active_children()
+        except Exception:  # noqa: BLE001
+            pass
         # All on-disk artifacts (npzs, progress JSON, events.jsonl,
         # eval result.json) were already written inside ``_run``
         # before we got here; flush stdio so any pending prints
