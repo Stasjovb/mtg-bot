@@ -129,7 +129,7 @@ function basePayload(overrides = {}) {
 }
 
 describe('training UI per-machine sub-cards', () => {
-  it('renders one mini-row per host with the three perf-only stats', () => {
+  it('renders one mini-row per host with the five stats', () => {
     const run = basePayload();
     const card = ensureCard(run);
     document.getElementById('active').appendChild(card);
@@ -148,12 +148,12 @@ describe('training UI per-machine sub-cards', () => {
     );
     expect(labels).toEqual(['desktop-j05412i', 'greggs-macbook-pro']);
 
-    // Each row has exactly four stat cells in a stable order:
-    // secs/game, crashes, timed out, workers.
+    // Each row has exactly five stat cells in a stable order:
+    // games, secs/game, crashes, timed out, workers.
     for (const row of rows) {
       const labelEls = row.querySelectorAll('.machine-stat-label');
       expect(Array.from(labelEls).map((e) => e.textContent))
-        .toEqual(['secs/game', 'crashes', 'timed out', 'workers']);
+        .toEqual(['games', 'secs/game', 'crashes', 'timed out', 'workers']);
     }
 
     // Verify the actual values for the macbook row.
@@ -165,7 +165,7 @@ describe('training UI per-machine sub-cards', () => {
       macRow.querySelectorAll('.machine-stat-value'),
     ).map((e) => e.textContent);
     // 10s lands in the >=10 branch (1 decimal) of fmtSecsPerGame.
-    expect(macVals).toEqual(['10.0s', '2', '1', '14']);
+    expect(macVals).toEqual(['60', '10.0s', '2', '1', '14']);
 
     // ...and for the desktop row.
     const deskRow = Array.from(rows).find(
@@ -175,7 +175,7 @@ describe('training UI per-machine sub-cards', () => {
     const deskVals = Array.from(
       deskRow.querySelectorAll('.machine-stat-value'),
     ).map((e) => e.textContent);
-    expect(deskVals).toEqual(['13.5s', '0', '3', '16']);
+    expect(deskVals).toEqual(['40', '13.5s', '0', '3', '16']);
   });
 
   it('hides the sub-card slot when machines is missing or empty', () => {
@@ -214,14 +214,15 @@ describe('training UI per-machine sub-cards', () => {
     const vals = Array.from(
       row.querySelectorAll('.machine-stat-value'),
     ).map((e) => e.textContent);
-    // Stat order: secs/game, crashes, timed out, workers.
-    expect(vals[0]).toBe('—');
-    expect(vals[1]).toBe('0');
+    // Stat order: games, secs/game, crashes, timed out, workers.
+    expect(vals[0]).toBe('0');
+    expect(vals[1]).toBe('—');
     expect(vals[2]).toBe('0');
-    expect(vals[3]).toBe('8');
+    expect(vals[3]).toBe('0');
+    expect(vals[4]).toBe('8');
   });
 
-  it('renders sub-cards for eval-kind runs with the same four perf stats', () => {
+  it('renders sub-cards for eval-kind runs with the same five stats', () => {
     // Mirror the data_gen "renders one mini-row per host" test, but
     // for kind: 'eval' — the eval card shares the renderMachines()
     // pipeline with data_gen and must show identical per-host rows
@@ -247,18 +248,19 @@ describe('training UI per-machine sub-cards', () => {
     const rows = slot.querySelectorAll('.machine-row');
     expect(rows).toHaveLength(2);
 
-    // Same stat order as data_gen: secs/game, crashes, timed out,
-    // workers. Re-asserted here so a future divergence (e.g. an
-    // eval-only column injected ahead of crashes) trips this test.
+    // Same stat order as data_gen: games, secs/game, crashes,
+    // timed out, workers. Re-asserted here so a future divergence
+    // (e.g. an eval-only column injected ahead of crashes) trips
+    // this test.
     for (const row of rows) {
       const labelEls = row.querySelectorAll('.machine-stat-label');
       expect(Array.from(labelEls).map((e) => e.textContent))
-        .toEqual(['secs/game', 'crashes', 'timed out', 'workers']);
+        .toEqual(['games', 'secs/game', 'crashes', 'timed out', 'workers']);
     }
 
-    // Spot-check the macbook row: per_game_seconds=10.0, crashed=2,
-    // timed_out=1, workers=14 — same numbers as the basePayload that
-    // the data_gen test pins.
+    // Spot-check the macbook row: n_games_done=60,
+    // per_game_seconds=10.0, crashed=2, timed_out=1, workers=14 —
+    // same numbers as the basePayload that the data_gen test pins.
     const macRow = Array.from(rows).find(
       (r) => r.querySelector('.machine-label').textContent
         === 'greggs-macbook-pro',
@@ -266,7 +268,7 @@ describe('training UI per-machine sub-cards', () => {
     const macVals = Array.from(
       macRow.querySelectorAll('.machine-stat-value'),
     ).map((e) => e.textContent);
-    expect(macVals).toEqual(['10.0s', '2', '1', '14']);
+    expect(macVals).toEqual(['60', '10.0s', '2', '1', '14']);
 
     const deskRow = Array.from(rows).find(
       (r) => r.querySelector('.machine-label').textContent
@@ -275,7 +277,7 @@ describe('training UI per-machine sub-cards', () => {
     const deskVals = Array.from(
       deskRow.querySelectorAll('.machine-stat-value'),
     ).map((e) => e.textContent);
-    expect(deskVals).toEqual(['13.5s', '0', '3', '16']);
+    expect(deskVals).toEqual(['40', '13.5s', '0', '3', '16']);
   });
 
   it('hides the eval sub-card slot when machines is missing', () => {
