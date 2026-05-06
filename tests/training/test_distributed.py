@@ -1233,6 +1233,24 @@ class _RecordingSubprocess:
         return _Result()
 
 
+def _patch_ssh_watchdog_to_recorder(monkeypatch, dist, rec):
+    """Patch ``_run_ssh_with_terminal_status_watchdog`` to delegate to
+    the same recorder used for ``_run_subprocess``. The watchdog
+    helper has a different signature (progress_path / hard_timeout_s
+    / shard_label / etc.) than ``_run_subprocess``, so this adapter
+    drops watchdog-only kwargs and forwards the remaining shape the
+    recorder expects (cmd + timeout)."""
+
+    def _fake_watchdog(cmd, *, progress_path, hard_timeout_s,
+                      shard_label, **_unused):
+        return rec(cmd, timeout=hard_timeout_s)
+
+    monkeypatch.setattr(
+        dist, "_run_ssh_with_terminal_status_watchdog",
+        _fake_watchdog,
+    )
+
+
 def _capture_run_shard_remote_calls(
     monkeypatch, shard, spec, *, bundle_url=None, tmp_path,
 ):
@@ -1243,6 +1261,7 @@ def _capture_run_shard_remote_calls(
     rec = _RecordingSubprocess()
     monkeypatch.setattr(dist, "_run_subprocess", rec)
     monkeypatch.setattr(dist.subprocess, "run", rec)
+    _patch_ssh_watchdog_to_recorder(monkeypatch, dist, rec)
 
     class _NoopPoller:
         def __init__(self, *a, **kw): pass
@@ -2669,6 +2688,7 @@ def _drive_run_shard_remote(
     rec = _ScriptedSubprocess(listing_responses=listing_responses)
     monkeypatch.setattr(dist, "_run_subprocess", rec)
     monkeypatch.setattr(dist.subprocess, "run", rec)
+    _patch_ssh_watchdog_to_recorder(monkeypatch, dist, rec)
 
     class _NoopPoller:
         def __init__(self, *a, **kw): pass
@@ -2698,6 +2718,7 @@ def _drive_run_shard_eval_remote(
     rec = _ScriptedSubprocess(listing_responses=listing_responses)
     monkeypatch.setattr(dist, "_run_subprocess", rec)
     monkeypatch.setattr(dist.subprocess, "run", rec)
+    _patch_ssh_watchdog_to_recorder(monkeypatch, dist, rec)
 
     class _NoopPoller:
         def __init__(self, *a, **kw): pass
@@ -3490,6 +3511,7 @@ def test_run_shard_remote_ssh_run_failure_returns_failure_report(
     rec = _FailOnSelfPlay()
     monkeypatch.setattr(dist, "_run_subprocess", rec)
     monkeypatch.setattr(dist.subprocess, "run", rec)
+    _patch_ssh_watchdog_to_recorder(monkeypatch, dist, rec)
 
     class _NoopPoller:
         def __init__(self, *a, **kw): pass
@@ -3612,6 +3634,7 @@ def test_run_shard_remote_recovers_npzs_after_ssh_failure(
     rec = _FailMidPlayWithRecoverableNpzs()
     monkeypatch.setattr(dist, "_run_subprocess", rec)
     monkeypatch.setattr(dist.subprocess, "run", rec)
+    _patch_ssh_watchdog_to_recorder(monkeypatch, dist, rec)
 
     class _NoopPoller:
         def __init__(self, *a, **kw): pass
@@ -3689,6 +3712,7 @@ def test_run_shard_eval_remote_ssh_failure_returns_failure_report(
     rec = _FailOnEval()
     monkeypatch.setattr(dist, "_run_subprocess", rec)
     monkeypatch.setattr(dist.subprocess, "run", rec)
+    _patch_ssh_watchdog_to_recorder(monkeypatch, dist, rec)
 
     class _NoopPoller:
         def __init__(self, *a, **kw): pass
@@ -4011,6 +4035,7 @@ def test_run_shard_remote_bundle_sync_failure_returns_failure_report(
     rec = _FailOnBundleSync()
     monkeypatch.setattr(dist, "_run_subprocess", rec)
     monkeypatch.setattr(dist.subprocess, "run", rec)
+    _patch_ssh_watchdog_to_recorder(monkeypatch, dist, rec)
 
     class _NoopPoller:
         def __init__(self, *a, **kw): pass
@@ -4100,6 +4125,7 @@ def test_run_shard_remote_npz_pull_failure_records_partial(
     rec = _FailOnSecondNpz()
     monkeypatch.setattr(dist, "_run_subprocess", rec)
     monkeypatch.setattr(dist.subprocess, "run", rec)
+    _patch_ssh_watchdog_to_recorder(monkeypatch, dist, rec)
 
     class _NoopPoller:
         def __init__(self, *a, **kw): pass
@@ -4171,6 +4197,7 @@ def test_run_shard_remote_npz_listing_failure_records(
     rec = _FailOnListing()
     monkeypatch.setattr(dist, "_run_subprocess", rec)
     monkeypatch.setattr(dist.subprocess, "run", rec)
+    _patch_ssh_watchdog_to_recorder(monkeypatch, dist, rec)
 
     class _NoopPoller:
         def __init__(self, *a, **kw): pass
@@ -4249,6 +4276,7 @@ def test_run_shard_remote_replay_pull_failure_warned_not_fatal(
     rec = _FailOnReplayPull()
     monkeypatch.setattr(dist, "_run_subprocess", rec)
     monkeypatch.setattr(dist.subprocess, "run", rec)
+    _patch_ssh_watchdog_to_recorder(monkeypatch, dist, rec)
 
     class _NoopPoller:
         def __init__(self, *a, **kw): pass
@@ -4318,6 +4346,7 @@ def test_run_shard_eval_remote_bundle_sync_failure(monkeypatch, tmp_path):
     rec = _FailOnBundleSync()
     monkeypatch.setattr(dist, "_run_subprocess", rec)
     monkeypatch.setattr(dist.subprocess, "run", rec)
+    _patch_ssh_watchdog_to_recorder(monkeypatch, dist, rec)
 
     class _NoopPoller:
         def __init__(self, *a, **kw): pass
@@ -4386,6 +4415,7 @@ def test_run_shard_eval_remote_weight_push_failure(monkeypatch, tmp_path):
     rec = _FailOnWeightPush()
     monkeypatch.setattr(dist, "_run_subprocess", rec)
     monkeypatch.setattr(dist.subprocess, "run", rec)
+    _patch_ssh_watchdog_to_recorder(monkeypatch, dist, rec)
 
     class _NoopPoller:
         def __init__(self, *a, **kw): pass
@@ -4433,6 +4463,7 @@ def test_run_shard_eval_remote_corrupt_result_file(monkeypatch, tmp_path):
     rec = _ScriptedSubprocess()
     monkeypatch.setattr(dist, "_run_subprocess", rec)
     monkeypatch.setattr(dist.subprocess, "run", rec)
+    _patch_ssh_watchdog_to_recorder(monkeypatch, dist, rec)
 
     class _NoopPoller:
         def __init__(self, *a, **kw): pass
@@ -4591,8 +4622,20 @@ def test_run_shard_remote_uses_supplied_ssh_timeout(monkeypatch, tmp_path):
         captured.append({"cmd": list(cmd), "timeout": timeout})
         return _subprocess.CompletedProcess(args=cmd, returncode=0)
 
+    def fake_watchdog(cmd, *, progress_path, hard_timeout_s,
+                     shard_label, **_unused):
+        # Mirror the shape _run_subprocess fake captures, so the
+        # test's existing assertion on ``timeout=hard_timeout_s``
+        # carries over to the watchdog-based path.
+        captured.append({"cmd": list(cmd), "timeout": hard_timeout_s})
+        return _subprocess.CompletedProcess(args=cmd, returncode=0)
+
     # Stub the rsync stages so we don't try real scp.
     monkeypatch.setattr(dmod, "_run_subprocess", fake_run_subprocess)
+    monkeypatch.setattr(
+        dmod, "_run_ssh_with_terminal_status_watchdog",
+        fake_watchdog,
+    )
     monkeypatch.setattr(
         dmod, "_remote_join", lambda *a, **kw: "/r/x",
     )
@@ -4651,3 +4694,662 @@ def test_run_shard_remote_uses_supplied_ssh_timeout(monkeypatch, tmp_path):
             f"shard ssh timeout was {c['timeout']!r}, "
             f"expected {custom_timeout}"
         )
+
+
+# ---- _run_ssh_with_terminal_status_watchdog -----------------------
+#
+# These tests pin the new watchdog behavior. The watchdog reads the
+# LOCAL per-shard progress JSON (the one ``_ProgressPoller`` keeps
+# fresh by scp'ing the remote copy). When that file transitions to
+# a terminal status (``completed``/``failed``), the watchdog gives
+# a brief grace period for any final flushes and then forcibly
+# terminate()s the SSH subprocess, dodging the Tailscale-keeps-TCP-
+# alive hang. The hard timeout (``hard_timeout_s``) is the floor.
+
+class _FakePopen:
+    """Test double for ``subprocess.Popen``. ``communicate(timeout=)``
+    blocks until either:
+      * ``self._auto_finish_after`` elapses (clean exit at returncode
+        ``self._returncode``), or
+      * ``terminate()``/``kill()`` is called (we record the call and
+        immediately wake ``communicate()`` returning ``self._returncode``
+        unless ``self._terminate_ignores`` is set), or
+      * ``timeout`` elapses (raises ``TimeoutExpired``).
+    """
+
+    def __init__(
+        self,
+        *,
+        auto_finish_after: float = 0.0,
+        returncode: int = 0,
+        terminate_ignores: bool = False,
+        kill_ignores: bool = False,
+    ) -> None:
+        import threading as _t
+        self._auto_finish_after = auto_finish_after
+        self._returncode = returncode
+        self._terminate_ignores = terminate_ignores
+        self._kill_ignores = kill_ignores
+        self._exit_event = _t.Event()
+        self._lock = _t.Lock()
+        self.terminate_calls = 0
+        self.kill_calls = 0
+        self.returncode: Optional[int] = None
+        self._timer: Optional[_t.Timer] = None
+        if auto_finish_after > 0:
+            self._timer = _t.Timer(auto_finish_after, self._auto_exit)
+            self._timer.daemon = True
+            self._timer.start()
+
+    def _auto_exit(self) -> None:
+        with self._lock:
+            if self.returncode is None:
+                self.returncode = self._returncode
+        self._exit_event.set()
+
+    def terminate(self) -> None:
+        with self._lock:
+            self.terminate_calls += 1
+            if self._terminate_ignores:
+                return
+            if self.returncode is None:
+                # Use a SIGTERM-like exit code; CalledProcessError
+                # gets raised because returncode != 0.
+                self.returncode = -15
+        self._exit_event.set()
+
+    def kill(self) -> None:
+        with self._lock:
+            self.kill_calls += 1
+            if self._kill_ignores:
+                return
+            if self.returncode is None:
+                self.returncode = -9
+        self._exit_event.set()
+
+    def communicate(self, timeout=None):
+        import subprocess as _subprocess
+        signaled = self._exit_event.wait(timeout=timeout)
+        if not signaled:
+            raise _subprocess.TimeoutExpired(cmd="fake", timeout=timeout)
+        return ("", "")
+
+
+def _write_progress_json(path: Path, status: str) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps({"status": status}), encoding="utf-8")
+
+
+def test_watchdog_terminates_when_status_transitions_to_completed(
+    tmp_path: Path,
+):
+    """As soon as the local progress JSON's ``status`` becomes
+    ``completed``, the watchdog (after a short grace) calls
+    terminate(). A long auto-finish on the fake Popen ensures
+    the process would otherwise hang past this test."""
+    import subprocess as _subprocess
+    import threading as _t
+    from mtg_bot.training.distributed import (
+        _run_ssh_with_terminal_status_watchdog,
+    )
+
+    progress = tmp_path / "iter_001_shard_mac.json"
+    _write_progress_json(progress, "running")
+
+    fake = _FakePopen(auto_finish_after=60.0)  # would hang well past test
+
+    # Schedule the status flip ~0.2s into the run.
+    def _flip_status():
+        _write_progress_json(progress, "completed")
+    _t.Timer(0.2, _flip_status).start()
+
+    start = time.monotonic()
+    with pytest.raises(_subprocess.CalledProcessError) as excinfo:
+        _run_ssh_with_terminal_status_watchdog(
+            ["ssh", "fake", "remote-cmd"],
+            progress_path=progress,
+            hard_timeout_s=30.0,
+            shard_label="mac",
+            poll_interval_s=0.05,
+            terminal_grace_s=0.1,
+            terminate_grace_s=0.5,
+            popen_factory=lambda *a, **kw: fake,
+        )
+    elapsed = time.monotonic() - start
+
+    # terminate() was called once.
+    assert fake.terminate_calls == 1, (
+        f"expected one terminate() call, got {fake.terminate_calls}"
+    )
+    # Total elapsed: ~0.2s (status flip) + ~0.1s (grace) + small slop.
+    # Assert <15s as the spec requires.
+    assert elapsed < 15.0, (
+        f"watchdog took {elapsed:.2f}s; expected to fire well under "
+        "the 15s spec bound after the status transition"
+    )
+    # CalledProcessError raised because the watchdog-terminated
+    # process exits with returncode != 0.
+    assert excinfo.value.returncode != 0
+
+
+def test_watchdog_terminates_when_status_transitions_to_failed(
+    tmp_path: Path,
+):
+    """``failed`` is also a terminal state; same termination
+    behavior as ``completed``."""
+    import subprocess as _subprocess
+    import threading as _t
+    from mtg_bot.training.distributed import (
+        _run_ssh_with_terminal_status_watchdog,
+    )
+
+    progress = tmp_path / "shard.json"
+    _write_progress_json(progress, "running")
+    fake = _FakePopen(auto_finish_after=60.0)
+
+    _t.Timer(
+        0.1,
+        lambda: _write_progress_json(progress, "failed"),
+    ).start()
+
+    with pytest.raises(_subprocess.CalledProcessError):
+        _run_ssh_with_terminal_status_watchdog(
+            ["ssh", "h", "c"],
+            progress_path=progress,
+            hard_timeout_s=30.0,
+            shard_label="h",
+            poll_interval_s=0.05,
+            terminal_grace_s=0.05,
+            terminate_grace_s=0.5,
+            popen_factory=lambda *a, **kw: fake,
+        )
+    assert fake.terminate_calls == 1
+
+
+def test_watchdog_stays_quiet_when_status_remains_running(
+    tmp_path: Path,
+):
+    """No terminate() call when status never reaches a terminal
+    state. The hard timeout is the only bound — once the fake Popen
+    hits its auto-finish, the helper returns a CompletedProcess."""
+    from mtg_bot.training.distributed import (
+        _run_ssh_with_terminal_status_watchdog,
+    )
+
+    progress = tmp_path / "shard.json"
+    _write_progress_json(progress, "running")
+    fake = _FakePopen(auto_finish_after=0.4, returncode=0)
+
+    result = _run_ssh_with_terminal_status_watchdog(
+        ["ssh", "h", "c"],
+        progress_path=progress,
+        hard_timeout_s=30.0,
+        shard_label="h",
+        poll_interval_s=0.05,
+        terminal_grace_s=0.05,
+        terminate_grace_s=0.5,
+        popen_factory=lambda *a, **kw: fake,
+    )
+
+    assert fake.terminate_calls == 0, (
+        f"watchdog should not have fired; status was 'running' "
+        f"throughout. terminate_calls={fake.terminate_calls}"
+    )
+    assert result.returncode == 0
+
+
+def test_watchdog_stays_quiet_when_progress_json_missing(
+    tmp_path: Path,
+):
+    """If the progress JSON never appears, the watchdog should not
+    fire. The helper just rides the hard timeout / clean exit."""
+    from mtg_bot.training.distributed import (
+        _run_ssh_with_terminal_status_watchdog,
+    )
+
+    progress = tmp_path / "never_written.json"
+    fake = _FakePopen(auto_finish_after=0.3, returncode=0)
+
+    result = _run_ssh_with_terminal_status_watchdog(
+        ["ssh", "h", "c"],
+        progress_path=progress,
+        hard_timeout_s=30.0,
+        shard_label="h",
+        poll_interval_s=0.05,
+        terminal_grace_s=0.05,
+        terminate_grace_s=0.5,
+        popen_factory=lambda *a, **kw: fake,
+    )
+    assert fake.terminate_calls == 0
+    assert result.returncode == 0
+
+
+def test_watchdog_does_not_terminate_if_ssh_exits_during_grace(
+    tmp_path: Path,
+):
+    """Race: status flips to terminal, then the SSH subprocess
+    exits cleanly (e.g. ``os._exit`` actually worked this time)
+    before the grace period elapses. The watchdog must NOT call
+    terminate() in this case — the process is already gone."""
+    import threading as _t
+    from mtg_bot.training.distributed import (
+        _run_ssh_with_terminal_status_watchdog,
+    )
+
+    progress = tmp_path / "shard.json"
+    _write_progress_json(progress, "running")
+    # Long grace period so we have time to also let the fake Popen
+    # auto-finish before the grace expires.
+    fake = _FakePopen(auto_finish_after=0.3, returncode=0)
+
+    # Flip status well before the auto-finish so the watchdog sees
+    # the terminal status and enters its grace wait.
+    _t.Timer(
+        0.1,
+        lambda: _write_progress_json(progress, "completed"),
+    ).start()
+
+    result = _run_ssh_with_terminal_status_watchdog(
+        ["ssh", "h", "c"],
+        progress_path=progress,
+        hard_timeout_s=30.0,
+        shard_label="h",
+        poll_interval_s=0.05,
+        terminal_grace_s=2.0,  # long enough for auto_finish_after
+        terminate_grace_s=0.5,
+        popen_factory=lambda *a, **kw: fake,
+    )
+    assert fake.terminate_calls == 0, (
+        "watchdog called terminate() even though the SSH "
+        "subprocess exited cleanly within the grace period"
+    )
+    assert result.returncode == 0
+
+
+def test_watchdog_hard_timeout_raises_timeoutexpired(tmp_path: Path):
+    """Status never becomes terminal AND auto_finish never fires
+    within ``hard_timeout_s``. The helper must raise
+    ``TimeoutExpired`` exactly like ``subprocess.run(timeout=...)``
+    does — the hard timeout is the floor."""
+    import subprocess as _subprocess
+    from mtg_bot.training.distributed import (
+        _run_ssh_with_terminal_status_watchdog,
+    )
+
+    progress = tmp_path / "shard.json"
+    _write_progress_json(progress, "running")
+    # auto_finish_after well past hard_timeout_s ensures Popen
+    # never wakes communicate() before the timeout expires.
+    fake = _FakePopen(auto_finish_after=60.0)
+
+    with pytest.raises(_subprocess.TimeoutExpired):
+        _run_ssh_with_terminal_status_watchdog(
+            ["ssh", "h", "c"],
+            progress_path=progress,
+            hard_timeout_s=0.3,
+            shard_label="h",
+            poll_interval_s=0.05,
+            terminal_grace_s=0.05,
+            terminate_grace_s=0.2,
+            popen_factory=lambda *a, **kw: fake,
+        )
+
+
+def test_watchdog_escalates_to_kill_if_terminate_ignored(
+    tmp_path: Path,
+):
+    """If terminate() doesn't take (e.g. ssh.exe ignoring SIGTERM
+    in the Tailscale-hang scenario), the watchdog escalates to
+    kill() after ``terminate_grace_s``. This is the hammer fallback."""
+    import threading as _t
+    from mtg_bot.training.distributed import (
+        _run_ssh_with_terminal_status_watchdog,
+    )
+
+    progress = tmp_path / "shard.json"
+    _write_progress_json(progress, "running")
+    # terminate_ignores: terminate() is a no-op. The watchdog should
+    # escalate to kill() after terminate_grace_s. kill() is NOT
+    # ignored, so the process exits.
+    fake = _FakePopen(
+        auto_finish_after=60.0,
+        terminate_ignores=True,
+    )
+
+    _t.Timer(
+        0.1,
+        lambda: _write_progress_json(progress, "completed"),
+    ).start()
+
+    import subprocess as _subprocess
+    with pytest.raises(_subprocess.CalledProcessError):
+        _run_ssh_with_terminal_status_watchdog(
+            ["ssh", "h", "c"],
+            progress_path=progress,
+            hard_timeout_s=30.0,
+            shard_label="h",
+            poll_interval_s=0.05,
+            terminal_grace_s=0.05,
+            terminate_grace_s=0.2,
+            popen_factory=lambda *a, **kw: fake,
+        )
+    assert fake.terminate_calls == 1
+    assert fake.kill_calls == 1, (
+        "expected escalation to kill() when terminate() was ignored"
+    )
+
+
+def test_watchdog_swallows_oserror_from_terminate(tmp_path: Path):
+    """If ``proc.terminate()`` itself raises (e.g. the process
+    already exited and the OS returns ESRCH), the watchdog must
+    not propagate. Mirrors the ``except OSError: pass`` in the
+    implementation."""
+    import threading as _t
+    from mtg_bot.training.distributed import (
+        _run_ssh_with_terminal_status_watchdog,
+    )
+
+    progress = tmp_path / "shard.json"
+    _write_progress_json(progress, "running")
+
+    class _RaisingPopen(_FakePopen):
+        def terminate(self):
+            self.terminate_calls += 1
+            # Simulate the process being already gone.
+            self._exit_event.set()
+            self.returncode = -15
+            raise OSError("[Errno 3] No such process")
+
+    fake = _RaisingPopen(auto_finish_after=60.0)
+    _t.Timer(
+        0.1,
+        lambda: _write_progress_json(progress, "completed"),
+    ).start()
+
+    import subprocess as _subprocess
+    with pytest.raises(_subprocess.CalledProcessError):
+        _run_ssh_with_terminal_status_watchdog(
+            ["ssh", "h", "c"],
+            progress_path=progress,
+            hard_timeout_s=30.0,
+            shard_label="h",
+            poll_interval_s=0.05,
+            terminal_grace_s=0.05,
+            terminate_grace_s=0.2,
+            popen_factory=lambda *a, **kw: fake,
+        )
+    assert fake.terminate_calls == 1
+
+
+def test_watchdog_clean_zero_exit_returns_completedprocess(
+    tmp_path: Path,
+):
+    """Happy path: SSH exits with returncode 0 before the watchdog
+    sees a terminal status. The helper returns a CompletedProcess
+    carrying that returncode."""
+    import subprocess as _subprocess
+    from mtg_bot.training.distributed import (
+        _run_ssh_with_terminal_status_watchdog,
+    )
+
+    progress = tmp_path / "shard.json"
+    _write_progress_json(progress, "running")
+    fake = _FakePopen(auto_finish_after=0.1, returncode=0)
+
+    result = _run_ssh_with_terminal_status_watchdog(
+        ["ssh", "h", "c"],
+        progress_path=progress,
+        hard_timeout_s=30.0,
+        shard_label="h",
+        poll_interval_s=0.05,
+        terminal_grace_s=0.05,
+        terminate_grace_s=0.5,
+        popen_factory=lambda *a, **kw: fake,
+    )
+    assert isinstance(result, _subprocess.CompletedProcess)
+    assert result.returncode == 0
+    assert fake.terminate_calls == 0
+
+
+def test_watchdog_nonzero_exit_raises_calledprocesserror(
+    tmp_path: Path,
+):
+    """If the SSH process exits with returncode != 0 on its own
+    (no watchdog action), the helper raises CalledProcessError —
+    same contract as ``subprocess.run(check=True)``."""
+    import subprocess as _subprocess
+    from mtg_bot.training.distributed import (
+        _run_ssh_with_terminal_status_watchdog,
+    )
+
+    progress = tmp_path / "shard.json"
+    _write_progress_json(progress, "running")
+    fake = _FakePopen(auto_finish_after=0.1, returncode=255)
+
+    with pytest.raises(_subprocess.CalledProcessError) as excinfo:
+        _run_ssh_with_terminal_status_watchdog(
+            ["ssh", "h", "c"],
+            progress_path=progress,
+            hard_timeout_s=30.0,
+            shard_label="h",
+            poll_interval_s=0.05,
+            terminal_grace_s=0.05,
+            terminate_grace_s=0.5,
+            popen_factory=lambda *a, **kw: fake,
+        )
+    assert excinfo.value.returncode == 255
+    assert fake.terminate_calls == 0
+
+
+def test_read_terminal_status_returns_completed(tmp_path: Path):
+    """Helper for the watchdog: returns the status string when it's
+    one of the terminal sentinels."""
+    from mtg_bot.training.distributed import _read_terminal_status
+
+    p = tmp_path / "p.json"
+    p.write_text(json.dumps({"status": "completed"}), encoding="utf-8")
+    assert _read_terminal_status(p) == "completed"
+
+
+def test_read_terminal_status_returns_failed(tmp_path: Path):
+    from mtg_bot.training.distributed import _read_terminal_status
+
+    p = tmp_path / "p.json"
+    p.write_text(json.dumps({"status": "failed"}), encoding="utf-8")
+    assert _read_terminal_status(p) == "failed"
+
+
+def test_read_terminal_status_returns_none_for_running(tmp_path: Path):
+    from mtg_bot.training.distributed import _read_terminal_status
+
+    p = tmp_path / "p.json"
+    p.write_text(json.dumps({"status": "running"}), encoding="utf-8")
+    assert _read_terminal_status(p) is None
+
+
+def test_read_terminal_status_returns_none_for_missing_file(
+    tmp_path: Path,
+):
+    from mtg_bot.training.distributed import _read_terminal_status
+
+    assert _read_terminal_status(tmp_path / "nope.json") is None
+
+
+def test_read_terminal_status_returns_none_for_malformed_json(
+    tmp_path: Path,
+):
+    """Mid-write partial JSON / corrupt files must be tolerated:
+    the next watchdog tick retries."""
+    from mtg_bot.training.distributed import _read_terminal_status
+
+    p = tmp_path / "p.json"
+    p.write_text("{not json", encoding="utf-8")
+    assert _read_terminal_status(p) is None
+
+
+def test_read_terminal_status_returns_none_for_non_dict_root(
+    tmp_path: Path,
+):
+    """Defensive: a JSON list at the root has no .get(), don't
+    crash."""
+    from mtg_bot.training.distributed import _read_terminal_status
+
+    p = tmp_path / "p.json"
+    p.write_text("[]", encoding="utf-8")
+    assert _read_terminal_status(p) is None
+
+
+def test_run_shard_remote_passes_local_progress_path_to_watchdog(
+    monkeypatch, tmp_path,
+):
+    """Pin the wiring: ``run_shard_remote`` calls the watchdog helper
+    with ``progress_path`` set to the local per-shard progress JSON
+    path (``progress_dir / f'{run_id_full}.json'``). Otherwise the
+    watchdog would never see the status transition."""
+    from mtg_bot.training import distributed as dmod
+    from mtg_bot.training.distributed import (
+        ShardConfig as _SC, SelfPlayJobSpec as _SP,
+    )
+    import subprocess as _subprocess
+
+    captured: dict = {}
+
+    def fake_watchdog(cmd, *, progress_path, hard_timeout_s,
+                     shard_label, **_unused):
+        captured["progress_path"] = progress_path
+        captured["shard_label"] = shard_label
+        captured["hard_timeout_s"] = hard_timeout_s
+        return _subprocess.CompletedProcess(args=cmd, returncode=0)
+
+    def fake_run_subprocess(cmd, *, timeout=None):
+        return _subprocess.CompletedProcess(args=cmd, returncode=0)
+
+    monkeypatch.setattr(dmod, "_run_subprocess", fake_run_subprocess)
+    monkeypatch.setattr(
+        dmod, "_run_ssh_with_terminal_status_watchdog", fake_watchdog,
+    )
+    monkeypatch.setattr(
+        _subprocess, "run",
+        lambda *a, **kw: _subprocess.CompletedProcess(
+            args=list(a[0]) if a else [], returncode=0,
+            stdout="", stderr="",
+        ),
+    )
+
+    monkeypatch.chdir(tmp_path)
+    weights_rel = "trained_weights/v7/weights.pt"
+    (tmp_path / "trained_weights" / "v7").mkdir(parents=True)
+    (tmp_path / weights_rel).write_bytes(b"fake")
+
+    spec = _SP(
+        weights_path=weights_rel,
+        samples=2, inner_nodes=10, hidden_sizes=(64,),
+        base_seed=0, enable_mulligans=False,
+        per_game_timeout_sec=None,
+    )
+    shard = _SC(
+        host="my-mac", n_games=10, user="g",
+        repo_path="/r", venv_python=".venv-py313/bin/python",
+    )
+    progress_dir = tmp_path / "progress"
+    dmod.run_shard_remote(
+        shard, spec,
+        queue_url="http://localhost:5099",
+        run_id="iter_001",
+        iter_total_games=10,
+        progress_dir=progress_dir,
+        output_dir=tmp_path / "out",
+        run_id_prefix="iter_001",
+        stamp="20260505T000000Z",
+        shard_ssh_timeout_s=42.0,
+    )
+
+    expected_progress = (
+        progress_dir / "iter_001_shard_my-mac.json"
+    )
+    assert captured["progress_path"] == expected_progress
+    assert captured["shard_label"] == "my-mac"
+    assert captured["hard_timeout_s"] == 42.0
+
+
+def test_run_shard_eval_remote_passes_local_progress_path_to_watchdog(
+    monkeypatch, tmp_path,
+):
+    """Same pin, eval side: ``run_shard_eval_remote`` wires the local
+    progress path into the watchdog."""
+    from mtg_bot.training import distributed as dmod
+    from mtg_bot.training.distributed import (
+        ShardConfig as _SC, EvalJobSpec as _EJS,
+    )
+    import subprocess as _subprocess
+
+    captured: dict = {}
+
+    def fake_watchdog(cmd, *, progress_path, hard_timeout_s,
+                     shard_label, **_unused):
+        captured["progress_path"] = progress_path
+        captured["shard_label"] = shard_label
+        captured["hard_timeout_s"] = hard_timeout_s
+        return _subprocess.CompletedProcess(args=cmd, returncode=0)
+
+    def fake_run_subprocess(cmd, *, timeout=None):
+        return _subprocess.CompletedProcess(args=cmd, returncode=0)
+
+    monkeypatch.setattr(dmod, "_run_subprocess", fake_run_subprocess)
+    monkeypatch.setattr(
+        dmod, "_run_ssh_with_terminal_status_watchdog", fake_watchdog,
+    )
+    monkeypatch.setattr(
+        _subprocess, "run",
+        lambda *a, **kw: _subprocess.CompletedProcess(
+            args=list(a[0]) if a else [], returncode=0,
+            stdout="", stderr="",
+        ),
+    )
+
+    monkeypatch.chdir(tmp_path)
+    new_w = "trained_weights/v7/weights.pt"
+    (tmp_path / "trained_weights" / "v7").mkdir(parents=True)
+    (tmp_path / new_w).write_bytes(b"new")
+
+    progress_dir = tmp_path / "progress"
+    progress_dir.mkdir()
+    # Provide a minimal result file so run_shard_eval_remote returns
+    # without erroring on the missing-file path.
+    run_id_full = "iter_001_eval_v7_shard_my-mac"
+    (progress_dir / f"{run_id_full}_result.json").write_text(
+        json.dumps({
+            "n_games": 1, "wins_new": 1, "wins_old": 0,
+            "draws": 0, "crashed": 0,
+        }),
+        encoding="utf-8",
+    )
+
+    spec = _EJS(
+        new_weights_path=new_w,
+        old_weights_path=None,
+        samples=1, inner_nodes=10, hidden_sizes=(16,),
+        base_seed=0, enable_mulligans=False,
+        per_game_timeout_sec=None,
+        opponent_label="rand",
+    )
+    shard = _SC(
+        host="my-mac", n_games=1, user="g",
+        repo_path="/r", venv_python=".venv-py313/bin/python",
+    )
+    dmod.run_shard_eval_remote(
+        shard, spec,
+        queue_url="http://localhost:5099",
+        run_id="iter_001_eval_v7",
+        iter_total_games=1,
+        progress_dir=progress_dir,
+        stamp="20260505T000000Z",
+        shard_ssh_timeout_s=99.0,
+    )
+
+    expected_progress = (
+        progress_dir / "iter_001_eval_v7_shard_my-mac.json"
+    )
+    assert captured["progress_path"] == expected_progress
+    assert captured["shard_label"] == "my-mac"
+    assert captured["hard_timeout_s"] == 99.0

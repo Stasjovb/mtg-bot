@@ -61,16 +61,14 @@ _QUEUE_HTTP_ATTEMPT_TIMEOUT_S = 10.0  # connect-or-read-or-fail
 _QUEUE_HTTP_RETRIES = 3              # total attempts incl. the first
 _QUEUE_HTTP_BACKOFF_BASE_S = 0.5     # 0.5s, then 1.0s between attempts
 
-# Hard upper-bound timeout on a single shard's SSH session. Defends
-# against the post-shard SSH-still-alive hang where Tailscale keeps
-# the TCP connection healthy after the remote python has exited via
-# the script-wrapper's explicit-exit path, causing the SSH client
-# never to see a protocol-level close. On expiry, master's per-shard
-# try/except catches ``TimeoutExpired``, the post-failure rsync
-# recovers any data on disk, and the orchestration proceeds with
-# surviving shards' data. 90 min covers ~3x the typical 500-game
-# self-play wall + rsync; tunable via ``iterate_alphazero
-# --shard-ssh-timeout-min``.
+# Hard floor timeout on a single shard's SSH session. The watchdog
+# (see ``_run_ssh_with_terminal_status_watchdog``) collapses the
+# typical Tailscale-keeps-TCP-alive hang from many minutes to ~10s
+# by terminating SSH as soon as the per-shard progress JSON shows
+# terminal status; THIS constant only fires when the watchdog never
+# sees a terminal status (e.g. shard died before writing one).
+# 90 min covers ~3x the typical 500-game self-play wall + rsync;
+# tunable via ``iterate_alphazero --shard-ssh-timeout-min``.
 _DEFAULT_SHARD_SSH_TIMEOUT_S = 90 * 60
 
 
@@ -2469,6 +2467,180 @@ def _run_subprocess(
     )
 
 
+# ---- SSH-with-terminal-status watchdog ---------------------------
+#
+# The recurring "shard SSH hangs at 100%" symptom: every shard's
+# per-shard progress JSON shows status="completed" with all data on
+# disk, but ssh.exe keeps the orchestrator stuck for tens of minutes
+# because Tailscale's WireGuard tunnel keeps the underlying TCP
+# connection healthy at the network layer; SSH client never sees a
+# clean close, and ServerAliveInterval/CountMax don't fire either.
+#
+# Root-cause fix: as soon as the LOCAL per-shard progress JSON (kept
+# fresh by ``_ProgressPoller`` running concurrently) transitions to
+# a terminal status, give a brief grace period for any final flushes
+# (events.jsonl, npz saves) and forcibly terminate the SSH subprocess.
+# The existing master-shard-resilience handler then catches the
+# resulting CalledProcessError, and the post-failure rsync recovers
+# any straggling data. Net effect: the hang collapses from 10-90 min
+# to ~10s.
+_WATCHDOG_POLL_INTERVAL_S = 5.0
+_WATCHDOG_TERMINAL_GRACE_S = 10.0
+# After terminate(), how long to wait before escalating to kill().
+# terminate() is gentle (SIGTERM on POSIX, TerminateProcess on
+# Windows); kill() is the hammer (SIGKILL on POSIX).
+_WATCHDOG_TERMINATE_GRACE_S = 5.0
+
+
+def _read_terminal_status(progress_path: Path) -> Optional[str]:
+    """Best-effort read of the local per-shard progress JSON's
+    ``status`` field. Returns the string only if it is one of the
+    terminal sentinels (``completed`` / ``failed``); returns None
+    otherwise (file missing, partial write mid-flight, non-terminal
+    status, malformed JSON). Swallows OSError + JSONDecodeError —
+    a transient read failure on one tick is fine; the next tick
+    retries."""
+    if not progress_path.is_file():
+        return None
+    try:
+        d = json.loads(progress_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    status = d.get("status") if isinstance(d, dict) else None
+    if status in ("completed", "failed"):
+        return status
+    return None
+
+
+def _run_ssh_with_terminal_status_watchdog(
+    cmd: list[str],
+    *,
+    progress_path: Path,
+    hard_timeout_s: float,
+    shard_label: str,
+    poll_interval_s: float = _WATCHDOG_POLL_INTERVAL_S,
+    terminal_grace_s: float = _WATCHDOG_TERMINAL_GRACE_S,
+    terminate_grace_s: float = _WATCHDOG_TERMINATE_GRACE_S,
+    popen_factory: Callable[..., Any] = subprocess.Popen,
+) -> subprocess.CompletedProcess:
+    """Run an SSH subprocess with two complementary safety nets:
+
+    1. **Terminal-status watchdog (proactive).** A daemon thread polls
+       ``progress_path`` (the local per-shard progress JSON, kept
+       fresh by :class:`_ProgressPoller`). As soon as the file's
+       ``status`` field reaches a terminal value
+       (``completed``/``failed``), the watchdog waits a small grace
+       period (~10s) for any final flushes — events.jsonl writes,
+       npz saves — then forcibly ``terminate()``s the SSH
+       subprocess. If the process doesn't exit within
+       ``terminate_grace_s``, escalate to ``kill()``.
+
+    2. **Hard timeout (floor).** ``proc.communicate(timeout=...)``
+       caps total wall time at ``hard_timeout_s``. Bounds the case
+       where the watchdog never sees a terminal status (e.g. shard
+       died before writing one). Raises
+       :class:`subprocess.TimeoutExpired` exactly like
+       :func:`_run_subprocess` would.
+
+    On a clean exit (returncode 0): returns a
+    :class:`subprocess.CompletedProcess`.
+    On any non-zero exit (including watchdog-triggered termination):
+    raises :class:`subprocess.CalledProcessError`.
+    On hard timeout: raises :class:`subprocess.TimeoutExpired`.
+
+    These are the same exceptions ``_run_subprocess(check=True)``
+    raises, so call sites' existing try/except blocks handle both.
+
+    The ``popen_factory`` parameter is a seam for tests — production
+    code passes ``subprocess.Popen``; tests pass a fake that returns
+    a controllable Popen-like object.
+    """
+    proc = popen_factory(
+        cmd,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+    ssh_done_event = threading.Event()
+
+    def _watchdog() -> None:
+        """Polls ``progress_path``. Returns once SSH is done OR after
+        terminating the process when terminal status is observed."""
+        while not ssh_done_event.wait(timeout=poll_interval_s):
+            status = _read_terminal_status(progress_path)
+            if status is None:
+                continue
+            # Give the shard a brief moment to finish any
+            # in-progress writes before we yank the SSH session
+            # out from under it.
+            if ssh_done_event.wait(timeout=terminal_grace_s):
+                # SSH exited on its own during the grace period;
+                # nothing to terminate.
+                return
+            print(
+                f"[shard {shard_label}] shard reports "
+                f"status={status!r}; terminating SSH session "
+                f"after {terminal_grace_s:.0f}s grace.",
+                file=sys.stderr,
+            )
+            try:
+                proc.terminate()
+            except OSError:
+                # Process already gone; nothing to do.
+                return
+            # Escalate to kill() if terminate() didn't take.
+            # ssh.exe in particular has been observed to ignore
+            # the gentle signal in the Tailscale-keeps-TCP-alive
+            # scenario.
+            if not ssh_done_event.wait(timeout=terminate_grace_s):
+                print(
+                    f"[shard {shard_label}] terminate() did not "
+                    f"exit within {terminate_grace_s:.0f}s; "
+                    f"escalating to kill().",
+                    file=sys.stderr,
+                )
+                try:
+                    proc.kill()
+                except OSError:
+                    pass
+            return
+
+    watchdog = threading.Thread(
+        target=_watchdog,
+        name=f"ssh-watchdog-{shard_label}",
+        daemon=True,
+    )
+    watchdog.start()
+    try:
+        stdout, stderr = proc.communicate(timeout=hard_timeout_s)
+    except subprocess.TimeoutExpired:
+        # Hard floor fired. Reap the child so it doesn't linger.
+        try:
+            proc.kill()
+        except OSError:
+            pass
+        try:
+            proc.communicate(timeout=5.0)
+        except (subprocess.TimeoutExpired, OSError):
+            pass
+        raise
+    finally:
+        ssh_done_event.set()
+        watchdog.join(timeout=2.0)
+
+    if proc.returncode != 0:
+        raise subprocess.CalledProcessError(
+            proc.returncode, cmd,
+            output=stdout, stderr=stderr,
+        )
+    return subprocess.CompletedProcess(
+        args=cmd,
+        returncode=proc.returncode,
+        stdout=stdout,
+        stderr=stderr,
+    )
+
+
 def _build_remote_pull_command(
     shard: ShardConfig,
     spec: SelfPlayJobSpec,
@@ -2876,14 +3048,22 @@ def run_shard_remote(
                 iter_total_games=iter_total_games,
                 stamp=stamp,
             )
-            # Hard timeout breaks the post-shard SSH-still-alive hang
-            # (Tailscale keeps TCP healthy after remote explicit-exit;
-            # ssh client never sees protocol close). On expiry, the
-            # outer per-shard try/except catches TimeoutExpired and
-            # the rsync-recovery flow runs in finally.
-            _run_subprocess(
+            # Two-layer defense against the post-shard SSH-still-
+            # alive hang (Tailscale keeps TCP healthy after remote
+            # explicit-exit; ssh client never sees protocol close):
+            # 1. Watchdog terminates the SSH subprocess as soon as
+            #    the local per-shard progress JSON shows terminal
+            #    status — collapses ~10-90 min hang to ~10s grace.
+            # 2. ``shard_ssh_timeout_s`` is the hard floor (only
+            #    bounds the case where the JSON never reaches
+            #    terminal status). On either exit path the outer
+            #    per-shard try/except catches the exception and the
+            #    rsync-recovery flow runs in finally.
+            _run_ssh_with_terminal_status_watchdog(
                 _ssh_cmd(shard, run_cmd),
-                timeout=shard_ssh_timeout_s,
+                progress_path=local_progress_path,
+                hard_timeout_s=shard_ssh_timeout_s,
+                shard_label=label,
             )
         except (subprocess.CalledProcessError,
                 subprocess.TimeoutExpired, OSError) as e:
@@ -3149,10 +3329,16 @@ def run_shard_eval_remote(
                 iter_total_games=iter_total_games,
                 stamp=stamp,
             )
-            # Hard timeout — same rationale as run_shard_remote.
-            _run_subprocess(
+            # Watchdog + hard-timeout floor — same rationale as
+            # run_shard_remote. Eval shards typically finish much
+            # faster than self-play, so a 90-min hard floor with
+            # only the SSH-protocol-close fallback was the worst
+            # offender. The watchdog collapses it to ~10s grace.
+            _run_ssh_with_terminal_status_watchdog(
                 _ssh_cmd(shard, run_cmd),
-                timeout=shard_ssh_timeout_s,
+                progress_path=local_progress_path,
+                hard_timeout_s=shard_ssh_timeout_s,
+                shard_label=label,
             )
         except (subprocess.CalledProcessError,
                 subprocess.TimeoutExpired, OSError) as e:
