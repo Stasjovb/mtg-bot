@@ -2622,7 +2622,13 @@ def _run_ssh_with_terminal_status_watchdog(
 
     On a clean exit (returncode 0): returns a
     :class:`subprocess.CompletedProcess`.
-    On any non-zero exit (including watchdog-triggered termination):
+    On a non-zero exit caused by the watchdog terminating the SSH
+    after the shard reported ``status='completed'``: also returns a
+    :class:`subprocess.CompletedProcess` — the shard finished its
+    work, the non-zero exit is just a side-effect of yanking the SSH
+    out from under it.
+    On any other non-zero exit (including watchdog-triggered
+    termination after ``status='failed'``):
     raises :class:`subprocess.CalledProcessError`.
     On hard timeout: raises :class:`subprocess.TimeoutExpired`.
 
@@ -2649,6 +2655,10 @@ def _run_ssh_with_terminal_status_watchdog(
         text=True,
     )
     ssh_done_event = threading.Event()
+    # Records the terminal status the watchdog observed before
+    # terminating SSH. Stays ``None`` if the watchdog never fired
+    # (proc exited on its own). One-element list for closure mutation.
+    watchdog_terminated_with: list[str | None] = [None]
 
     def _watchdog() -> None:
         """Polls ``progress_path``. Returns once SSH is done OR after
@@ -2673,6 +2683,7 @@ def _run_ssh_with_terminal_status_watchdog(
                 f"after {terminal_grace_s:.0f}s grace.",
                 file=sys.stderr,
             )
+            watchdog_terminated_with[0] = status
             try:
                 proc.terminate()
             except OSError:
@@ -2719,6 +2730,22 @@ def _run_ssh_with_terminal_status_watchdog(
         watchdog.join(timeout=2.0)
 
     if proc.returncode != 0:
+        # When the watchdog killed SSH because the shard self-
+        # reported ``status='completed'``, the shard already finished
+        # its work cleanly — the non-zero exit is purely an artifact
+        # of the forced terminate(). Treat as success so the
+        # orchestrator doesn't mistakenly mark a successful shard as
+        # FAILED (observed live: iter 3 of 2026-05-06 had Mac do
+        # 314/500 games and report completed, watchdog terminated,
+        # the parent self_play summary then showed Mac status=failed
+        # despite all data being collected).
+        if watchdog_terminated_with[0] == "completed":
+            return subprocess.CompletedProcess(
+                args=cmd,
+                returncode=proc.returncode,
+                stdout=stdout,
+                stderr=stderr,
+            )
         raise subprocess.CalledProcessError(
             proc.returncode, cmd,
             output=stdout, stderr=stderr,
