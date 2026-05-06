@@ -302,6 +302,157 @@ def test_load_all_datasets_default_drops_policy(tmp_path: Path):
     assert out[1].shape == (2,)
 
 
+# ---------- max_files window-recent selection -------------------------------
+
+
+def _write_npz_with_mtime(
+    path: Path, features: np.ndarray, outcomes: np.ndarray, mtime: float,
+) -> None:
+    """Save a dataset and stamp its mtime explicitly so window-
+    recent selection is deterministic regardless of the test
+    runner's filesystem timing resolution."""
+    import os
+
+    save_dataset(features, outcomes, path)
+    os.utime(path, (mtime, mtime))
+
+
+def test_load_all_datasets_max_files_picks_most_recent_by_mtime(
+    tmp_path: Path,
+):
+    """``max_files=2`` with three files on disk loads only the 2
+    newest by mtime (oldest is dropped). Concatenation order
+    inside the window stays stable (alphabetical by filename) so
+    repeated loads of the same window produce identical arrays."""
+    f_old = np.full((1, FEATURE_DIM), 0.0, dtype=np.float32)
+    f_mid = np.full((1, FEATURE_DIM), 1.0, dtype=np.float32)
+    f_new = np.full((1, FEATURE_DIM), 2.0, dtype=np.float32)
+    o = np.array([0.0], dtype=np.float32)
+    _write_npz_with_mtime(tmp_path / "old.npz", f_old, o, 1_000_000.0)
+    _write_npz_with_mtime(tmp_path / "mid.npz", f_mid, o, 2_000_000.0)
+    _write_npz_with_mtime(tmp_path / "new.npz", f_new, o, 3_000_000.0)
+
+    features, outcomes = load_all_datasets(tmp_path, max_files=2)
+    # Loaded the 2 most recent (mid + new); the all-zero "old"
+    # row must NOT appear.
+    assert features.shape == (2, FEATURE_DIM)
+    loaded_values = sorted(features[:, 0].tolist())
+    assert loaded_values == [1.0, 2.0]
+    assert outcomes.shape == (2,)
+
+
+def test_load_all_datasets_max_files_none_loads_all(tmp_path: Path):
+    """``max_files=None`` (the default) preserves the existing
+    contract: every .npz in the directory loads."""
+    f1 = np.ones((2, FEATURE_DIM), dtype=np.float32)
+    f2 = np.full((3, FEATURE_DIM), 2.0, dtype=np.float32)
+    o1 = np.array([1, 0], dtype=np.float32)
+    o2 = np.array([0, 1, -1], dtype=np.float32)
+    save_dataset(f1, o1, tmp_path / "a.npz")
+    save_dataset(f2, o2, tmp_path / "b.npz")
+
+    features, outcomes = load_all_datasets(tmp_path, max_files=None)
+    assert features.shape == (5, FEATURE_DIM)
+    assert outcomes.shape == (5,)
+
+
+def test_load_all_datasets_max_files_greater_than_available(
+    tmp_path: Path,
+):
+    """Asking for more files than exist is not an error — the
+    ``max_files`` knob is a maximum, not a minimum. All available
+    files load."""
+    f1 = np.ones((2, FEATURE_DIM), dtype=np.float32)
+    o1 = np.array([1, 0], dtype=np.float32)
+    save_dataset(f1, o1, tmp_path / "only.npz")
+
+    features, outcomes = load_all_datasets(tmp_path, max_files=10)
+    assert features.shape == (2, FEATURE_DIM)
+    assert outcomes.shape == (2,)
+
+
+def test_load_all_datasets_max_files_zero_raises(tmp_path: Path):
+    """``max_files=0`` makes no semantic sense (caller asked us to
+    train on no data); raise rather than silently load zero rows."""
+    import pytest
+
+    f = np.ones((1, FEATURE_DIM), dtype=np.float32)
+    o = np.array([0.0], dtype=np.float32)
+    save_dataset(f, o, tmp_path / "x.npz")
+    with pytest.raises(ValueError, match="max_files must be positive"):
+        load_all_datasets(tmp_path, max_files=0)
+
+
+def test_load_all_datasets_max_files_negative_raises(tmp_path: Path):
+    """Negative ``max_files`` is also rejected (defensive check)."""
+    import pytest
+
+    f = np.ones((1, FEATURE_DIM), dtype=np.float32)
+    o = np.array([0.0], dtype=np.float32)
+    save_dataset(f, o, tmp_path / "x.npz")
+    with pytest.raises(ValueError, match="max_files must be positive"):
+        load_all_datasets(tmp_path, max_files=-1)
+
+
+def test_load_all_datasets_max_files_with_empty_dir(tmp_path: Path):
+    """Empty dir + ``max_files=N`` returns the same empty arrays
+    as the default empty-dir path (no error from the windowing
+    logic)."""
+    features, outcomes = load_all_datasets(tmp_path, max_files=5)
+    assert features.shape == (0, FEATURE_DIM)
+    assert outcomes.shape == (0,)
+
+
+def test_load_all_datasets_max_files_with_include_policy(tmp_path: Path):
+    """The window-recent path returns the 4-tuple shape when
+    ``include_policy=True``, just like the all-files path."""
+    from mtg_bot.training.action_encoding import ACTION_VOCAB_SIZE
+
+    f1 = np.ones((1, FEATURE_DIM), dtype=np.float32)
+    f2 = np.full((1, FEATURE_DIM), 2.0, dtype=np.float32)
+    o = np.array([0.0], dtype=np.float32)
+    p = np.zeros((1, ACTION_VOCAB_SIZE), dtype=np.float32)
+    p[0, 3] = 1.0
+    m = np.zeros((1, ACTION_VOCAB_SIZE), dtype=np.bool_)
+    m[0, 3] = True
+    _write_npz_with_mtime(
+        tmp_path / "old.npz", f1, o, 1_000_000.0,
+    )
+    save_dataset(
+        f2, o, tmp_path / "new.npz",
+        policy_targets=p, action_masks=m,
+    )
+    import os
+    os.utime(tmp_path / "new.npz", (3_000_000.0, 3_000_000.0))
+
+    features, outcomes, policy, masks = load_all_datasets(
+        tmp_path, include_policy=True, max_files=1,
+    )
+    assert features.shape == (1, FEATURE_DIM)
+    assert features[0, 0] == 2.0
+    assert policy.shape == (1, ACTION_VOCAB_SIZE)
+    assert masks.shape == (1, ACTION_VOCAB_SIZE)
+    assert policy[0, 3] == 1.0
+    assert masks[0, 3]
+
+
+def test_load_all_datasets_max_files_logs_count(
+    tmp_path: Path, capsys,
+):
+    """The window-recent path emits a one-line stderr summary for
+    operator transparency: which subset was loaded."""
+    f = np.ones((1, FEATURE_DIM), dtype=np.float32)
+    o = np.array([0.0], dtype=np.float32)
+    _write_npz_with_mtime(tmp_path / "a.npz", f, o, 1_000_000.0)
+    _write_npz_with_mtime(tmp_path / "b.npz", f, o, 2_000_000.0)
+    _write_npz_with_mtime(tmp_path / "c.npz", f, o, 3_000_000.0)
+
+    load_all_datasets(tmp_path, max_files=2)
+    captured = capsys.readouterr()
+    assert "loading 2 of 3 files" in captured.err
+    assert "window-recent=2" in captured.err
+
+
 def test_generate_training_data_with_policy_returns_4tuple():
     """``with_policy=True`` produces the 4-tuple schema. Random
     strategies don't have visit counts, so the policy_targets are

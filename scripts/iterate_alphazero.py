@@ -760,18 +760,15 @@ def _train_next(
         # so all of one iteration's UI artifacts are visually grouped).
         progress_path.parent.mkdir(parents=True, exist_ok=True)
         cmd.extend(["--progress-path", str(progress_path)])
-    # train_nn.py loads the WHOLE dir; --window-recent isn't
-    # supported there yet. For now, we honor it by symlinking /
-    # copying the recent files into a temp subdir and pointing
-    # train_nn there. Punt: just train on the full dir for v4 →
-    # v5 → ... and add windowing as a follow-up if data growth
-    # becomes a problem.
+    # Pass --window-recent through to train_nn.py so the loader
+    # caps its file set to the N most-recent .npz files in
+    # ``data_dir`` rather than the entire accumulated history.
+    # Once iterate_data/ holds hundreds of shards, training the
+    # full dir is both slow and biased toward early-iteration
+    # data; capping to the latest N keeps wall-time bounded and
+    # weights training toward fresh self-play.
     if window_recent is not None:
-        print(
-            "[iterate] --window-recent is not yet wired into "
-            "train_nn.py; ignoring (training on full data dir).",
-            file=sys.stderr,
-        )
+        cmd.extend(["--window-recent", str(window_recent)])
 
     print(f"\n[iterate] Training: {' '.join(cmd)}")
     result = subprocess.run(cmd, check=False)
@@ -1068,9 +1065,12 @@ def main() -> None:
     parser.add_argument(
         "--window-recent", type=int, default=None,
         help=(
-            "If set, train_nn loads only the last N self-play "
-            "files instead of the whole accumulated dir. Currently "
-            "ignored (TODO: wire through train_nn.py)."
+            "If set, train_nn loads only the N most-recent (by "
+            "mtime) .npz files from --data-dir instead of the whole "
+            "accumulated history. Default None = train on the full "
+            "dir. Useful once iterate_data/ has accumulated hundreds "
+            "of shards and per-iteration train wall-time is "
+            "dominated by data load."
         ),
     )
     parser.add_argument(

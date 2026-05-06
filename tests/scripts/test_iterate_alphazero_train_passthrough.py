@@ -150,3 +150,52 @@ def test_train_next_threads_policy_loss_weight_with_keep_frac(
     assert "--one-legal-keep-frac" in cmd
     o_idx = cmd.index("--one-legal-keep-frac")
     assert cmd[o_idx + 1] == "0.1"
+
+
+def test_train_next_threads_window_recent(tmp_path: Path):
+    """``window_recent=50`` must appear as ``--window-recent 50`` on
+    the train_nn argv. Pins the subprocess wiring that replaces
+    the previous 'not yet wired' warning."""
+    data_dir = tmp_path / "data"
+    data_dir.mkdir()
+    registry_root = tmp_path / "weights"
+    registry_root.mkdir()
+
+    cmd = _captured_subprocess_call(
+        data_dir=data_dir,
+        registry_root=registry_root,
+        epochs=1,
+        batch_size=8,
+        learning_rate=1e-3,
+        val_split=0.1,
+        seed=0,
+        notes="test",
+        window_recent=50,
+    )
+    assert "--window-recent" in cmd
+    idx = cmd.index("--window-recent")
+    assert cmd[idx + 1] == "50"
+
+
+def test_train_next_window_recent_none_omits_flag(tmp_path: Path):
+    """``window_recent=None`` (the default) must NOT add
+    ``--window-recent`` to the argv — train_nn's own default
+    handles this, and an explicit ``--window-recent None`` would
+    be argparse-invalid."""
+    data_dir = tmp_path / "data"
+    data_dir.mkdir()
+    registry_root = tmp_path / "weights"
+    registry_root.mkdir()
+
+    cmd = _captured_subprocess_call(
+        data_dir=data_dir,
+        registry_root=registry_root,
+        epochs=1,
+        batch_size=8,
+        learning_rate=1e-3,
+        val_split=0.1,
+        seed=0,
+        notes="test",
+        window_recent=None,
+    )
+    assert "--window-recent" not in cmd
