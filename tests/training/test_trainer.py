@@ -582,3 +582,169 @@ def test_alphazero_mode_separate_supports_asymmetric_policy_trunk(
     with torch.no_grad():
         v, p_logits = evaluator.model(x)
     assert v.shape == (1, 1)
+
+
+# ---------- early stopping --------------------------------------------------
+
+
+def _constant_outcome_dataset(
+    n: int, value: float = 0.0, seed: int = 0,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Synthetic dataset whose target is a fixed constant — random
+    features carry no information about the target, so the optimal
+    predictor is the mean and val loss plateaus essentially
+    immediately. Useful for forcing early-stop to fire fast in
+    tests."""
+    rng = np.random.default_rng(seed)
+    features = rng.standard_normal((n, FEATURE_DIM)).astype(np.float32)
+    outcomes = np.full((n,), value, dtype=np.float32)
+    return features, outcomes
+
+
+def test_early_stop_fires_when_val_loss_plateaus(tmp_path: Path):
+    """With ``early_stop_patience=2`` and a synthetic dataset whose
+    target is a constant (the network learns the mean almost
+    immediately and val loss plateaus), training should break out of
+    the epoch loop BEFORE consuming the full ``epochs`` budget. The
+    saved history records only the epochs that actually ran."""
+    features, outcomes = _constant_outcome_dataset(128, value=0.0)
+    history = train_value_network(
+        features=features, outcomes=outcomes,
+        weights_out_path=tmp_path / "w.pt",
+        epochs=50, batch_size=32, learning_rate=1e-3,
+        device="cpu", rng_seed=0,
+        early_stop_patience=2,
+    )
+    # Plateau dataset: best is hit within ~1-3 epochs, then no
+    # improvement for ``patience``=2 → break. Total trained epochs
+    # should be well under the 50-epoch ceiling.
+    assert len(history.train_losses) < 50, (
+        f"early-stop didn't fire (trained {len(history.train_losses)} "
+        f"epochs of 50)"
+    )
+    assert len(history.val_losses) == len(history.train_losses)
+    assert len(history.train_value_losses) == len(history.train_losses)
+    assert len(history.val_value_losses) == len(history.train_losses)
+    # The break condition: at the stop epoch, (epoch - best_val_epoch)
+    # >= patience.
+    stop_epoch = len(history.train_losses) - 1
+    assert (
+        stop_epoch - history.best_val_epoch
+    ) >= 2, (
+        f"break condition not satisfied: stop={stop_epoch} "
+        f"best={history.best_val_epoch}"
+    )
+
+
+def test_early_stop_disabled_runs_all_epochs(tmp_path: Path):
+    """``early_stop_patience=None`` (default) preserves the original
+    behavior: training runs the full requested ``epochs`` budget
+    even if val loss plateaus. Catches a regression where the new
+    code path is accidentally always-on."""
+    features, outcomes = _constant_outcome_dataset(64, value=0.0)
+    history = train_value_network(
+        features=features, outcomes=outcomes,
+        weights_out_path=tmp_path / "w.pt",
+        epochs=8, batch_size=16, learning_rate=1e-3,
+        device="cpu", rng_seed=0,
+        early_stop_patience=None,
+    )
+    assert len(history.train_losses) == 8
+    assert len(history.val_losses) == 8
+
+
+def test_early_stop_does_not_fire_while_val_loss_keeps_improving(
+    tmp_path: Path,
+):
+    """If val loss keeps improving every epoch, the patience window
+    is reset every epoch and no early-stop break ever happens.
+    Guard against a bug where the patience comparison is off-by-one
+    (e.g. uses >= 0 instead of >= patience and thus stops after the
+    first epoch).
+
+    A small linear-target dataset reliably produces a monotone-down
+    val loss for the first several epochs at lr=1e-3.
+    """
+    rng = np.random.default_rng(0)
+    n = 256
+    features = rng.standard_normal((n, FEATURE_DIM)).astype(np.float32)
+    # Strong, simple linear signal in feature 0 — easy to fit, val
+    # loss will keep dropping for many epochs.
+    outcomes = np.tanh(features[:, 0] * 2.0).astype(np.float32)
+
+    epochs = 6
+    history = train_value_network(
+        features=features, outcomes=outcomes,
+        weights_out_path=tmp_path / "w.pt",
+        epochs=epochs, batch_size=16, learning_rate=1e-3,
+        device="cpu", rng_seed=0,
+        early_stop_patience=5,
+    )
+    # patience=5 with epochs=6 means we'd only break if best_val_epoch
+    # never advances past epoch 0 — but with monotone-down val loss
+    # the best advances every epoch. So all 6 epochs run.
+    assert len(history.train_losses) == epochs
+    assert len(history.val_losses) == epochs
+
+
+def test_early_stop_rejects_non_positive_patience(tmp_path: Path):
+    """``early_stop_patience`` must be a positive int (or None)."""
+    f, o = _synthetic_dataset(32)
+    with pytest.raises(ValueError, match="early_stop_patience"):
+        train_value_network(
+            features=f, outcomes=o,
+            weights_out_path=tmp_path / "x.pt",
+            epochs=2, batch_size=8, device="cpu",
+            early_stop_patience=0,
+        )
+    with pytest.raises(ValueError, match="early_stop_patience"):
+        train_value_network(
+            features=f, outcomes=o,
+            weights_out_path=tmp_path / "x.pt",
+            epochs=2, batch_size=8, device="cpu",
+            early_stop_patience=-3,
+        )
+
+
+def test_early_stop_progress_total_epochs_reflects_actual(tmp_path: Path):
+    """When early-stop fires, the progress JSON's ``total_epochs``
+    field should report the actual number of epochs trained, not the
+    requested ceiling. The UI uses ``current_epoch / total_epochs``
+    for the progress bar; reading the requested ceiling instead would
+    show ~64% complete at a stop epoch of 32/50.
+    """
+    import json
+    features, outcomes = _constant_outcome_dataset(128, value=0.0)
+    progress_path = tmp_path / "progress.json"
+    history = train_value_network(
+        features=features, outcomes=outcomes,
+        weights_out_path=tmp_path / "w.pt",
+        epochs=50, batch_size=32, learning_rate=1e-3,
+        device="cpu", rng_seed=0,
+        early_stop_patience=2,
+        progress_path=progress_path,
+        run_id="test-run",
+    )
+    assert len(history.train_losses) < 50  # early-stop fired
+    payload = json.loads(progress_path.read_text())
+    assert payload["status"] == "completed"
+    assert payload["total_epochs"] == len(history.train_losses)
+    assert payload["current_epoch"] == len(history.train_losses)
+
+
+def test_early_stop_skipped_when_no_val_data(tmp_path: Path):
+    """``val_split=0.0`` → no val rows; ``best_val_epoch`` stays -1
+    and val_loss is NaN. Early-stop's epoch-distance check would
+    trigger spuriously every epoch (epoch - (-1) >= patience for
+    any epoch >= patience-1) without a guard. Verify the guard
+    holds: training runs to completion regardless of patience.
+    """
+    features, outcomes = _constant_outcome_dataset(64, value=0.0)
+    history = train_value_network(
+        features=features, outcomes=outcomes,
+        weights_out_path=tmp_path / "w.pt",
+        epochs=6, batch_size=16, val_split=0.0,
+        device="cpu", rng_seed=0,
+        early_stop_patience=1,
+    )
+    assert len(history.train_losses) == 6

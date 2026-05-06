@@ -690,6 +690,7 @@ def _train_next(
     one_legal_keep_frac: float = 1.0,
     architecture: str = "shared",
     policy_hidden_sizes: tuple[int, ...] | None = None,
+    early_stop_patience: int | None = None,
 ) -> str:
     """Run train_nn.py via subprocess so its progress JSON / hub
     UI / registry plumbing all behave the same as a manual train.
@@ -716,6 +717,13 @@ def _train_next(
     so the policy head's gradient is dominated by branchy rows. Set
     e.g. 0.1 to keep only 10%% of trivial one-legal rows. Orthogonal
     to ``policy_loss_weight`` — both can be combined.
+
+    ``early_stop_patience`` (default ``None`` = run all epochs)
+    forwards ``--early-stop-patience N`` to train_nn.py so training
+    breaks once val loss has stopped improving for N consecutive
+    epochs. Iterate's CLI defaults this to 5 to ship the
+    speedup-by-default; the helper here keeps ``None`` so a direct
+    caller (tests / one-offs) opts in explicitly.
     """
     import subprocess
 
@@ -740,6 +748,10 @@ def _train_next(
         cmd.extend([
             "--policy-hidden-sizes",
             ",".join(str(s) for s in policy_hidden_sizes),
+        ])
+    if early_stop_patience is not None:
+        cmd.extend([
+            "--early-stop-patience", str(early_stop_patience),
         ])
     if progress_path is not None:
         # Override train_nn.py's default ``training_progress/<peeked
@@ -925,6 +937,18 @@ def main() -> None:
     parser.add_argument(
         "--epochs", type=int, default=50,
         help="Training epochs per iteration (default 50).",
+    )
+    parser.add_argument(
+        "--early-stop-patience", type=int, default=5,
+        help=(
+            "Stop the per-iteration training loop after this many "
+            "consecutive epochs without val-loss improvement. Default 5 "
+            "(conservative — small enough to save substantial wall, "
+            "large enough to ride through plateau noise). Empirically "
+            "v10/v13 hit best val loss around epoch 23-27 of a 50-epoch "
+            "budget; the tail is mostly overfitting. Must be a positive "
+            "int. Threaded through to train_nn.py."
+        ),
     )
     parser.add_argument(
         "--batch-size", type=int, default=256,
@@ -1283,6 +1307,12 @@ def main() -> None:
         parser.error(
             "--one-legal-keep-frac must be in (0.0, 1.0]; got "
             f"{args.one_legal_keep_frac}"
+        )
+
+    if args.early_stop_patience < 1:
+        parser.error(
+            "--early-stop-patience must be a positive int (>= 1); got "
+            f"{args.early_stop_patience}"
         )
 
     args.data_dir.mkdir(parents=True, exist_ok=True)
@@ -1664,6 +1694,7 @@ def main() -> None:
             one_legal_keep_frac=args.one_legal_keep_frac,
             architecture=iter_architecture,
             policy_hidden_sizes=iter_policy_hidden_sizes,
+            early_stop_patience=args.early_stop_patience,
         )
         new_weights = registry.weights_path(new_version)
         print(f"[iterate]   trained: {new_version}")
