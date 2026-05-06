@@ -44,8 +44,8 @@ export function loadAppJs() {
   // re-declares `var game = null` which DOES re-assign in script mode,
   // but we belt-and-suspenders here to avoid surprises.
   globalThis.game = null;
-  globalThis.engineOpen = false;
   globalThis._redrawScheduled = false;
+  globalThis.searchPanelToken = 0;
 
   // Run the script in the global (window) scope so var/function
   // declarations become window properties.

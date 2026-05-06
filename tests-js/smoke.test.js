@@ -9,7 +9,7 @@ describe('app.js loader', () => {
     for (const name of [
       'cardEl', 'faceDownCardEl', 'manaPoolEl', 'poisonEl',
       'zoneBox', 'stackItemEl', 'arrowLine',
-      'renderPhaseTracker', 'renderEngineRecs', 'renderSnapshot',
+      'renderPhaseTracker', 'renderSnapshot', 'renderSearchPanel',
       'findNextStepIdx', 'findPrevStepIdx',
       'findNextTurnIdx', 'findPrevTurnIdx',
       'openZoneModal', 'closeZoneModal',
@@ -21,7 +21,6 @@ describe('app.js loader', () => {
 
   it('seeds module state to known defaults on load', () => {
     expect(globalThis.game).toBeNull();
-    expect(globalThis.engineOpen).toBe(false);
     expect(globalThis._redrawScheduled).toBe(false);
   });
 
@@ -32,8 +31,9 @@ describe('app.js loader', () => {
       'scrubber', 'scrub-slider', 'scrub-label', 'scrub-counter',
       'btn-first', 'btn-prev-turn', 'btn-prev-step', 'btn-prev',
       'btn-play', 'btn-next', 'btn-next-step', 'btn-next-turn', 'btn-last',
-      'combat-overlay', 'btn-engine', 'engine-panel', 'engine-player',
-      'engine-name', 'engine-recs',
+      'combat-overlay',
+      'search-panel', 'search-toggle', 'search-body',
+      'search-chosen', 'search-budget', 'search-rows',
       'zone-modal', 'zone-modal-title', 'zone-modal-cards', 'zone-modal-close',
       'phase-tracker', 'phase-list',
     ];
