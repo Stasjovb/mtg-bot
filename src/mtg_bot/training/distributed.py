@@ -1987,12 +1987,19 @@ def run_shard_pull(
     try:
         in_flight: dict[_cf.Future, int] = {}
         queue_drained = False
-        # ``queue_closed_early`` differentiates the over-queue early-
-        # stop case (orchestrator POSTed /queue/close because we
-        # already have N successful games globally) from a natural
-        # drain (next == total). Early-stop means we abandon in-flight
-        # games immediately so the orchestrator can move on; natural
-        # drain still waits for in-flight to finish.
+        # ``queue_closed_early`` records whether the drain came from
+        # the orchestrator's /queue/close (target reached early) or
+        # the queue running out of indices on its own. We previously
+        # distinguished the two — early-stop close abandoned in-flight
+        # games, natural drain waited for them. In practice that
+        # distinction made the long-tail wait painful: when the queue
+        # is sized at target+slack but the timeout rate exceeds slack
+        # (observed 2026-05-05: 13.5% timeouts, 10% slack ⇒ early-stop
+        # never fires), shards drain naturally and then sat for up to
+        # ``per_game_timeout_sec`` (5 min) waiting for stragglers.
+        # Now both drains abandon in-flight after the queue empties:
+        # any games already on disk are flushed below; the pending
+        # ones go nowhere useful by waiting longer.
         queue_closed_early = False
         while True:
             while len(in_flight) < n_workers and not queue_drained:
@@ -2023,18 +2030,22 @@ def run_shard_pull(
                 in_flight[fut] = game_idx
             if not in_flight:
                 break
-            if queue_closed_early:
-                # Over-queue early-stop fired: master closed the queue
-                # because the global success target is met. Abandon
-                # remaining in-flight games — ``finally:
-                # exe.shutdown(wait=False)`` releases them so we
-                # return promptly instead of waiting up to
-                # ``per_game_timeout_sec`` (5 min) for stragglers.
-                # Already-completed pending_chunks get flushed below.
+            if queue_drained:
+                # Queue is empty (early-stop close OR natural drain):
+                # abandon any in-flight games so the orchestrator can
+                # move on. ``finally: exe.shutdown(wait=False)``
+                # releases them. Already-completed pending_chunks get
+                # flushed below. ``reason`` lets log readers tell the
+                # two paths apart for diagnostics.
                 if events is not None:
                     events.record(
                         "shard_abandoned_inflight",
                         n_abandoned=len(in_flight),
+                        reason=(
+                            "queue_closed_early"
+                            if queue_closed_early
+                            else "queue_drained"
+                        ),
                     )
                 break
             done, _pending = _cf.wait(
@@ -2299,8 +2310,9 @@ def run_shard_eval_pull(
     try:
         in_flight: dict[_cf.Future, int] = {}
         queue_drained = False
-        # See run_shard_pull for the early-close vs natural-drain
-        # rationale; eval mirrors self-play here.
+        # See run_shard_pull for the unified-abandon rationale; eval
+        # mirrors self-play here. ``queue_closed_early`` records the
+        # drain reason for the abandon-event log only.
         queue_closed_early = False
         while True:
             while len(in_flight) < n_workers and not queue_drained:
@@ -2331,16 +2343,22 @@ def run_shard_eval_pull(
                 in_flight[fut] = game_idx
             if not in_flight:
                 break
-            if queue_closed_early:
-                # Over-queue early-stop fired: abandon in-flight
-                # eval games. Counts already accumulated for finished
-                # games are written to the result JSON in the
-                # ``finally`` below, so we don't lose data — just the
-                # abandoned games' would-be results.
+            if queue_drained:
+                # Queue is empty (early-stop close OR natural drain):
+                # abandon any in-flight eval games. Counts already
+                # accumulated for finished games are written to the
+                # result JSON in the ``finally`` below, so we don't
+                # lose data — just the abandoned games' would-be
+                # results.
                 if events is not None:
                     events.record(
                         "shard_abandoned_inflight",
                         n_abandoned=len(in_flight),
+                        reason=(
+                            "queue_closed_early"
+                            if queue_closed_early
+                            else "queue_drained"
+                        ),
                     )
                 break
             done, _pending = _cf.wait(

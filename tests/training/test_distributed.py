@@ -5642,20 +5642,28 @@ def test_run_shard_pull_abandons_inflight_on_queue_close(
     assert "queue_drained" not in event_types
     # The abandoned-inflight diagnostic is also emitted with the
     # count of futures we walked away from (game 0 still running).
+    # ``reason`` flags this as the early-close path so log readers
+    # can tell it apart from the natural-drain path.
     abandoned = [e for e in events if e["event"]
                  == "shard_abandoned_inflight"]
     assert len(abandoned) == 1
     assert abandoned[0]["n_abandoned"] == 1
+    assert abandoned[0]["reason"] == "queue_closed_early"
 
 
-def test_run_shard_pull_natural_drain_still_waits_for_inflight(
+def test_run_shard_pull_natural_drain_abandons_inflight(
     tmp_path: Path, monkeypatch,
 ):
-    """Counterpart pin: when the queue drains naturally (server
-    returns games=[] without ``closed: True``), the shard MUST
-    still wait for in-flight games — the user wants exactly N
-    games and there's no overshoot tolerance. The early-break path
-    is gated on ``closed=True`` only."""
+    """Pin the post-fix behavior: when the queue drains naturally
+    (server returns games=[] without ``closed: True``), the shard
+    abandons in-flight games rather than waiting up to
+    ``per_game_timeout_sec`` for them. This is the fix for the
+    ``slack < timeout_rate`` failure mode (observed 2026-05-05:
+    13.5% timeouts, 10% slack ⇒ early-stop never fires, queue
+    drains, shards used to sit on stragglers for 5 min). The
+    event log still distinguishes natural drain from early close
+    via the ``reason`` field on ``shard_abandoned_inflight`` and
+    the queue_drained / queue_closed event names."""
     import threading
     import time
     from mtg_bot.training import distributed as dist
@@ -5666,23 +5674,31 @@ def test_run_shard_pull_natural_drain_still_waits_for_inflight(
     _patch_pull_executor_to_threadpool(monkeypatch)
 
     # 2 games; after both are taken the queue drains naturally
-    # (no ``closed: True`` flag).
+    # (no ``closed: True`` flag). The shard takes game 0 (slow),
+    # takes game 1 (fast), game 1 finishes, shard re-polls and
+    # gets the natural drain. Game 0 is still in flight.
     _patch_take_one_responses(monkeypatch, responses=[
         {"games": [0], "remaining": 1},
         {"games": [1], "remaining": 0},
         {"games": [], "remaining": 0},  # natural drain (no closed)
     ])
 
-    # Worker stub: each game completes after a small delay so the
-    # test exercises the wait-on-inflight path.
-    completed_games = []
+    completed_games: list[int] = []
     lock = threading.Lock()
 
     def _worker(args):
-        time.sleep(0.05)
+        game_idx = args[0]
+        if game_idx == 0:
+            # Slow: would block the shard for 60s if not abandoned.
+            time.sleep(60)
+            with lock:
+                completed_games.append(game_idx)
+            return game_idx, _empty_chunk(), 60.0
+        # Fast: completes quickly so the shard returns to the take
+        # loop and observes the natural drain.
         with lock:
-            completed_games.append(args[0])
-        return args[0], _nonempty_chunk(), 0.05
+            completed_games.append(game_idx)
+        return game_idx, _nonempty_chunk(n_samples=2), 0.0
 
     monkeypatch.setattr(
         dist, "_play_one_parallel_game_timed", _worker,
@@ -5699,6 +5715,7 @@ def test_run_shard_pull_natural_drain_still_waits_for_inflight(
 
     progress_dir = tmp_path / "training_progress"
     out_dir = tmp_path / "out"
+    t0 = time.perf_counter()
     npz_paths = run_shard_pull(
         spec,
         queue_url="http://stub",
@@ -5710,13 +5727,24 @@ def test_run_shard_pull_natural_drain_still_waits_for_inflight(
         iter_total_games=2,
         progress_dir=progress_dir,
     )
-    # Both fake games ran to completion — the wait-for-inflight
-    # path was honored, NOT short-circuited.
-    assert len(completed_games) == 2
-    assert sorted(completed_games) == [0, 1]
-    # Both games' samples were flushed to disk.
-    assert len(npz_paths) >= 1
-    # Event log distinguishes natural drain from early close.
+    elapsed = time.perf_counter() - t0
+
+    # Pre-fix this would block ~60s waiting on game 0; post-fix
+    # the shard abandons it and returns promptly. 5s gives the
+    # runtime room without approaching the slow-game wall-clock.
+    assert elapsed < 5.0, (
+        f"run_shard_pull blocked for {elapsed:.1f}s on natural "
+        "drain — abandon-on-natural-drain is broken."
+    )
+    # Game 1 (fast) completed and was flushed; game 0 (slow) was
+    # abandoned, samples NOT on disk. Exactly one npz with the
+    # one fast game's samples.
+    assert 1 in completed_games
+    assert 0 not in completed_games
+    assert len(npz_paths) == 1
+
+    # Event log: natural drain still uses ``queue_drained`` (not
+    # ``queue_closed`` — the close-flag path is for early-stop).
     events_path = progress_dir / "iter_test_shard_L0_events.jsonl"
     events = [
         json.loads(line) for line in
@@ -5726,10 +5754,15 @@ def test_run_shard_pull_natural_drain_still_waits_for_inflight(
     event_types = [e["event"] for e in events]
     assert "queue_drained" in event_types
     assert "queue_closed" not in event_types
-    # No abandon event in a natural drain.
-    assert not any(
-        e["event"] == "shard_abandoned_inflight" for e in events
-    )
+    # New behavior: abandon event IS emitted, with reason flagging
+    # the natural-drain path so log readers can tell the two paths
+    # apart.
+    abandoned = [
+        e for e in events if e["event"] == "shard_abandoned_inflight"
+    ]
+    assert len(abandoned) == 1
+    assert abandoned[0]["n_abandoned"] == 1
+    assert abandoned[0]["reason"] == "queue_drained"
 
 
 def test_run_shard_pull_preserves_data_already_completed_pre_close(
@@ -5898,14 +5931,18 @@ def test_run_shard_eval_pull_abandons_inflight_on_queue_close(
                  == "shard_abandoned_inflight"]
     assert len(abandoned) == 1
     assert abandoned[0]["n_abandoned"] == 1
+    assert abandoned[0]["reason"] == "queue_closed_early"
 
 
-def test_run_shard_eval_pull_natural_drain_waits_for_inflight(
+def test_run_shard_eval_pull_natural_drain_abandons_inflight(
     tmp_path: Path, monkeypatch,
 ):
-    """Mirror of the self-play natural-drain pin: eval shard must
-    NOT short-circuit when the queue drains because all indices
-    were consumed (no ``closed`` flag)."""
+    """Mirror of the self-play natural-drain pin: eval shard
+    abandons in-flight games when the queue drains naturally
+    (no ``closed`` flag), same as it does on early-stop close.
+    Pre-fix the eval shard waited up to ``per_game_timeout_sec``
+    for stragglers; post-fix it bails as soon as the queue is
+    empty."""
     import threading
     import time
     from mtg_bot.training import distributed as dist
@@ -5915,6 +5952,9 @@ def test_run_shard_eval_pull_natural_drain_waits_for_inflight(
 
     _patch_pull_executor_to_threadpool(monkeypatch)
 
+    # game 0 is slow and would hang the wait-on-inflight loop;
+    # game 1 finishes fast, freeing a worker to re-poll and see
+    # the natural drain.
     _patch_take_one_responses(monkeypatch, responses=[
         {"games": [0], "remaining": 1},
         {"games": [1], "remaining": 0},
@@ -5925,13 +5965,15 @@ def test_run_shard_eval_pull_natural_drain_waits_for_inflight(
     lock = threading.Lock()
 
     def _eval_worker(args):
-        time.sleep(0.02)
+        game_idx = args[0]
+        if game_idx == 0:
+            time.sleep(60)
+            with lock:
+                completed.append(game_idx)
+            return game_idx, (0, 1, "completed"), 60.0
         with lock:
-            completed.append(args[0])
-        # Even-game wins for new, odd-game wins for old (just to
-        # make sure both branches are exercised).
-        winner = 0 if args[0] % 2 == 0 else 1
-        return args[0], (winner, 5, "completed"), 0.02
+            completed.append(game_idx)
+        return game_idx, (1, 5, "completed"), 0.0
 
     monkeypatch.setattr(
         dist, "_play_one_match_game_timed", _eval_worker,
@@ -5948,6 +5990,7 @@ def test_run_shard_eval_pull_natural_drain_waits_for_inflight(
     )
 
     progress_dir = tmp_path / "training_progress"
+    t0 = time.perf_counter()
     counts = run_shard_eval_pull(
         spec,
         queue_url="http://stub",
@@ -5957,10 +6000,21 @@ def test_run_shard_eval_pull_natural_drain_waits_for_inflight(
         iter_total_games=2,
         progress_dir=progress_dir,
     )
-    assert len(completed) == 2
-    # Both games' results are accounted for in the returned counts.
-    assert counts["n_games"] == 2
-    assert counts["wins_new"] + counts["wins_old"] == 2
+    elapsed = time.perf_counter() - t0
+
+    # Pre-fix would block ~60s on game 0; post-fix returns
+    # promptly after game 1 finishes and the natural drain is
+    # observed.
+    assert elapsed < 5.0, (
+        f"run_shard_eval_pull blocked for {elapsed:.1f}s on "
+        "natural drain — abandon-on-natural-drain is broken on "
+        "the eval code path."
+    )
+    # Game 1 counted; game 0 abandoned and contributes nothing.
+    assert 1 in completed
+    assert 0 not in completed
+    assert counts["n_games"] == 1
+    assert counts["wins_new"] + counts["wins_old"] == 1
 
     events_path = (
         progress_dir / "iter_eval_test_shard_L0_events.jsonl"
@@ -5973,6 +6027,9 @@ def test_run_shard_eval_pull_natural_drain_waits_for_inflight(
     event_types = [e["event"] for e in events]
     assert "queue_drained" in event_types
     assert "queue_closed" not in event_types
-    assert not any(
-        e["event"] == "shard_abandoned_inflight" for e in events
-    )
+    abandoned = [
+        e for e in events if e["event"] == "shard_abandoned_inflight"
+    ]
+    assert len(abandoned) == 1
+    assert abandoned[0]["n_abandoned"] == 1
+    assert abandoned[0]["reason"] == "queue_drained"
