@@ -548,3 +548,230 @@ def test_canonical_state_tuple_is_inspectable():
     import marshal
     expected = hashlib.blake2b(marshal.dumps(tup), digest_size=32).digest()
     assert canonical_state_key(a) == expected
+
+
+# ---------------------------------------------------------------------------
+# Optional-field None-vs-value sort safety (audit class)
+# ---------------------------------------------------------------------------
+#
+# These tests guard the bug class identified during the 2026-05-07 audit:
+# fields typed ``Optional[<scalar>]`` that end up as ``None`` for some
+# elements and a ``str`` / ``int`` for others within the same sortable
+# iterable. Python tuple comparison walks elements positionally, and
+# raises ``TypeError: '<' not supported between instances of 'NoneType'
+# and 'str'/'int'`` the first time the comparison hits a mismatched slot.
+#
+# The fix in each case is to coerce ``None`` to a sentinel (``-1`` for
+# Optional[int]; ``""`` for Optional[str]) BEFORE the value enters the
+# sort, so the per-element tuples stay homogeneous. Real values cannot
+# collide with the sentinels — ids/counters/turn numbers are always
+# >= 0, and real string tags (color codes, restriction names, printing
+# names) are always non-empty strings.
+#
+# Each test below constructs a state where two elements differ at the
+# Optional slot, drops them into the relevant zone / registry, and
+# asserts that ``canonical_state_key`` doesn't raise. We also assert
+# the equivalence rule that motivated the original sort still holds
+# (reordering the inputs produces the same digest).
+
+
+def test_mana_pool_with_mixed_none_spend_restriction_sorts_cleanly():
+    """Regression: ``ManaCoin.spend_restriction`` is ``Optional[str]``;
+    a pool holding one unrestricted coin (``spend_restriction=None``)
+    plus one restricted coin (``spend_restriction="artifact_spell"``)
+    used to crash ``canonical_state_key`` inside
+    ``_canonical_mana_pool``'s ``tuple(sorted(Counter(...).items()))``
+    when the sort compared the two ``((color, restriction), count)``
+    pairs and hit the None/str slot. Surfaced live in iter_005
+    self-play (1/1000 games crashed). Fix: coerce None to ``""``
+    before counting."""
+    a = _adapter(seed=21)
+    p = a.engine_state.players[0]
+    # Same color so the sort has to break ties on the restriction slot.
+    unrestricted = ManaCoin(color="W", spend_restriction=None)
+    restricted = ManaCoin(color="W", spend_restriction="artifact_spell")
+    p.mana_pool = [unrestricted, restricted]
+    # Must not raise. Was: TypeError: '<' not supported between
+    # instances of 'NoneType' and 'str'.
+    key_a = canonical_state_key(a)
+    # Reordering the pool list must still hash equal.
+    p.mana_pool = [restricted, unrestricted]
+    key_b = canonical_state_key(a)
+    assert key_a == key_b
+
+
+def test_mana_pool_with_three_distinct_restrictions_sorts_cleanly():
+    """Heavier variant: a pool with three coins covering None, plus
+    two distinct restriction tags. Exercises a deeper sort that has
+    to compare every pair of items, not just two."""
+    a = _adapter(seed=22)
+    p = a.engine_state.players[0]
+    p.mana_pool = [
+        ManaCoin(color="U", spend_restriction=None),
+        ManaCoin(color="U", spend_restriction="legendary_spell"),
+        ManaCoin(color="U", spend_restriction="artifact_spell"),
+    ]
+    # Must not raise.
+    key_a = canonical_state_key(a)
+    # And reversing.
+    p.mana_pool = list(reversed(p.mana_pool))
+    assert canonical_state_key(a) == key_a
+
+
+def test_battlefield_index_with_mixed_none_painter_chosen_color_sorts_cleanly():
+    """Regression: ``GameObject.painter_chosen_color`` is
+    ``Optional[str]`` — None on every non-Painter permanent, "W"/"U"/
+    etc. on a Painter source after its ETB color choice resolves.
+    ``_shape_key`` feeds this slot into the canonical-battlefield-index
+    sort, and a board with one Painter (color set) plus one
+    structurally-similar non-Painter (color=None) used to crash with
+    ``TypeError: '<' not supported between 'NoneType' and 'str'`` when
+    the two shapes tied through the field's prefix. Fix: coerce None
+    to ``""`` inside ``_shape_key``."""
+    a = _adapter(seed=23)
+    state = a.engine_state
+    p0 = state.players[0]
+    if not p0.hand:
+        pytest.skip("need a card to clone onto the battlefield")
+    src = p0.hand[0]
+    # Two near-identical permanents — same printing, same controller,
+    # same scalar fields — but one carries painter_chosen_color="R"
+    # and the other carries None. The shape-key sort has to compare
+    # past the prefix into the painter slot.
+    with_color = GameObject(
+        id=20001, printing=src.printing, owner_id=p0.id,
+        controller_id=p0.id, zone=Zone.BATTLEFIELD,
+        painter_chosen_color="R",
+    )
+    without_color = GameObject(
+        id=20002, printing=src.printing, owner_id=p0.id,
+        controller_id=p0.id, zone=Zone.BATTLEFIELD,
+        painter_chosen_color=None,
+    )
+    state.battlefield.extend([with_color, without_color])
+    # Must not raise.
+    key_a = canonical_state_key(a)
+    # Reordering on the battlefield must still hash equal — the
+    # canonical-index sort is structural.
+    state.battlefield[-2], state.battlefield[-1] = (
+        state.battlefield[-1], state.battlefield[-2],
+    )
+    key_b = canonical_state_key(a)
+    assert key_a == key_b
+
+
+def test_battlefield_index_with_mixed_none_controller_id_before_aura_swap_sorts_cleanly():
+    """Regression: ``GameObject.controller_id_before_any_aura_swap`` is
+    ``Optional[int]`` — None until a layer-2 control-change captures
+    the baseline. Two near-identical permanents where one has the
+    baseline captured (an int) and the other doesn't (None) used to
+    crash the shape-key sort with ``TypeError: '<' not supported
+    between 'NoneType' and 'int'``. Fix: coerce None to ``-1`` inside
+    ``_shape_key`` (real player ids are always >= 0)."""
+    a = _adapter(seed=24)
+    state = a.engine_state
+    p0 = state.players[0]
+    if not p0.hand:
+        pytest.skip("need a card to clone onto the battlefield")
+    src = p0.hand[0]
+    captured = GameObject(
+        id=20011, printing=src.printing, owner_id=p0.id,
+        controller_id=p0.id, zone=Zone.BATTLEFIELD,
+        controller_id_before_any_aura_swap=p0.id,
+    )
+    not_captured = GameObject(
+        id=20012, printing=src.printing, owner_id=p0.id,
+        controller_id=p0.id, zone=Zone.BATTLEFIELD,
+        controller_id_before_any_aura_swap=None,
+    )
+    state.battlefield.extend([captured, not_captured])
+    # Must not raise.
+    key_a = canonical_state_key(a)
+    state.battlefield[-2], state.battlefield[-1] = (
+        state.battlefield[-1], state.battlefield[-2],
+    )
+    key_b = canonical_state_key(a)
+    assert key_a == key_b
+
+
+def test_battlefield_index_with_mixed_none_original_printing_sorts_cleanly():
+    """Regression: ``GameObject.original_printing`` is
+    ``Optional[CardPrinting]`` — None unless a "becomes a copy" effect
+    has previously mutated ``printing`` and snapshotted the original.
+    ``_shape_key`` projects this to ``original_printing.name`` (or
+    None when absent). Two near-identical permanents — one with a
+    snapshotted name string, one without — used to crash the
+    shape-key sort with ``TypeError: '<' not supported between
+    'NoneType' and 'str'``. Fix: coerce None to ``""`` inside
+    ``_shape_key``."""
+    a = _adapter(seed=25)
+    state = a.engine_state
+    p0 = state.players[0]
+    if not p0.hand:
+        pytest.skip("need a card to clone onto the battlefield")
+    src = p0.hand[0]
+    # Use a different printing for the snapshot, sourced from the
+    # opponent's hand if available, else the same printing (the test
+    # only needs the snapshot to be non-None — its content doesn't
+    # otherwise affect the bug).
+    p1 = state.players[1]
+    snapshot_printing = (
+        p1.hand[0].printing if p1.hand else src.printing
+    )
+    with_snapshot = GameObject(
+        id=20021, printing=src.printing, owner_id=p0.id,
+        controller_id=p0.id, zone=Zone.BATTLEFIELD,
+        original_printing=snapshot_printing,
+    )
+    without_snapshot = GameObject(
+        id=20022, printing=src.printing, owner_id=p0.id,
+        controller_id=p0.id, zone=Zone.BATTLEFIELD,
+        original_printing=None,
+    )
+    state.battlefield.extend([with_snapshot, without_snapshot])
+    # Must not raise.
+    key_a = canonical_state_key(a)
+    state.battlefield[-2], state.battlefield[-1] = (
+        state.battlefield[-1], state.battlefield[-2],
+    )
+    key_b = canonical_state_key(a)
+    assert key_a == key_b
+
+
+def test_shape_key_sentinels_distinguish_from_real_values():
+    """The sentinel choices (``-1`` for Optional[int], ``""`` for
+    Optional[str]) must NOT collide with any real value, otherwise a
+    state with the sentinel would hash equal to a state with a real
+    value matching the sentinel. Sanity check: two boards differing
+    only in painter_chosen_color (None vs "R") must hash differently —
+    the sentinel coerces None to "" not to "R", so the keys diverge."""
+    a = _adapter(seed=26)
+    state = a.engine_state
+    p0 = state.players[0]
+    if not p0.hand:
+        pytest.skip("need a card to clone onto the battlefield")
+    src = p0.hand[0]
+    obj = GameObject(
+        id=20031, printing=src.printing, owner_id=p0.id,
+        controller_id=p0.id, zone=Zone.BATTLEFIELD,
+        painter_chosen_color=None,
+    )
+    state.battlefield.append(obj)
+    key_none = canonical_state_key(a)
+    obj.painter_chosen_color = "R"
+    key_red = canonical_state_key(a)
+    # None-coerced-to-"" != "R", so the keys must diverge.
+    assert key_none != key_red
+
+
+def test_mana_pool_sentinel_distinguishes_from_real_restriction():
+    """Companion of the shape-key sentinel test for the mana-pool fix:
+    two pools differing only in spend_restriction (None vs
+    "artifact_spell") must hash differently."""
+    a = _adapter(seed=27)
+    p = a.engine_state.players[0]
+    p.mana_pool = [ManaCoin(color="W", spend_restriction=None)]
+    key_none = canonical_state_key(a)
+    p.mana_pool = [ManaCoin(color="W", spend_restriction="artifact_spell")]
+    key_restricted = canonical_state_key(a)
+    assert key_none != key_restricted
