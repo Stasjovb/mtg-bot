@@ -355,18 +355,8 @@ class NNServerPimcConfig:
     cleanly across spawn-based multiprocessing pools — same
     pattern as :class:`NNPimcConfig` carrying ``weights_path``.
 
-    The server is started OUT-OF-BAND by the launcher (CLI script,
-    or a per-shard runner in :mod:`mtg_bot.training.distributed`)
+    The server is started OUT-OF-BAND by the launcher (CLI script)
     BEFORE the worker pool spins up; workers just need the handle.
-
-    Production parity with :class:`NNPimcConfig`: the fields below
-    that don't appear in the handle (``use_ismcts``,
-    ``use_belief_weighted``, ``belief_*``) only affect search-side
-    construction, not the model load. The model's architecture +
-    weights live with the server, not the config — that's the
-    point. Per-side architecture metadata (``hidden_sizes``,
-    ``architecture``, ``policy_hidden_sizes``) is consumed by the
-    server-startup helper that produced the handle, not here.
     """
 
     server_handle: NNServerHandle
@@ -375,27 +365,6 @@ class NNServerPimcConfig:
     batch_size: int = 32
     with_policy: bool = False
     puct: bool = False
-    # ISMCTS opt-in: same semantics as ``NNPimcConfig.use_ismcts``.
-    # Total iteration count under matched-budget conversion is
-    # ``samples * inner_nodes`` so a search-strategy swap from PIMC
-    # to ISMCTS does the same total search work.
-    use_ismcts: bool = False
-    # Belief-weighted determinizer opt-in. Requires ``use_ismcts=True``;
-    # rejected at __post_init__ otherwise — same constraint
-    # ``NNPimcConfig`` enforces. Determinizer is constructed against
-    # the shared :class:`NNEvalClient` so its opponent-policy scoring
-    # also goes over the IPC boundary.
-    use_belief_weighted: bool = False
-    belief_m_candidates: int = 64
-    belief_min_opponent_moments: int = 3
-
-    def __post_init__(self) -> None:
-        if self.use_belief_weighted and not self.use_ismcts:
-            raise ValueError(
-                "use_belief_weighted=True requires use_ismcts=True; "
-                "belief-weighted determinization only applies to "
-                "ISMCTS's per-iteration determinize_fn callback."
-            )
 
     def build(self, seed: int = 0) -> SearchStrategy:
         evaluator = NNEvalClient(self.server_handle)
@@ -404,32 +373,6 @@ class NNServerPimcConfig:
         puct = self.puct
         rng_seed_inner = seed + 100
         rng_seed_outer = seed + 200
-
-        if self.use_ismcts:
-            if self.use_belief_weighted:
-                # ``BeliefWeightedDeterminizer`` calls
-                # ``opponent_policy_evaluator.evaluate_logits`` for raw
-                # (unmasked, un-softmaxed) policy logits. The IPC server
-                # currently only ships the masked+softmaxed policy via
-                # ``evaluate_with_policy``; raw-logits message kinds
-                # are a follow-up. Bail loudly so a misconfigured spec
-                # doesn't silently fall back to local evaluators.
-                raise NotImplementedError(
-                    "NNServerPimcConfig.build with "
-                    "use_belief_weighted=True is not yet wired — the "
-                    "IPC client does not implement evaluate_logits / "
-                    "batch_evaluate_logits. Use NNPimcConfig (local "
-                    "evaluator) for belief-weighted ISMCTS until "
-                    "raw-logits IPC support lands."
-                )
-            total_iters = max(1, self.samples * self.inner_nodes)
-            return ISMCTS(
-                evaluator=evaluator,
-                budget_factory=lambda: Budget(max_nodes=total_iters),
-                rng=random.Random(seed + 300),
-                batch_size=batch_size,
-                puct=puct,
-            )
 
         def inner_factory() -> MCTS:
             return MCTS(
