@@ -129,6 +129,16 @@ class ReplayCaptureConfig:
     # version's metadata.architecture by iterate / evaluate scripts.
     nn_architecture: Optional[str] = None
     nn_policy_hidden_sizes: Optional[tuple[int, ...]] = None
+    # Diagnostic deep-tree capture. Defaults reproduce production
+    # root-only behavior (depth=1, top_k irrelevant). The diagnostic
+    # script ``capture_annotated_replays.py`` flips these via the
+    # ``--capture-tree-depth`` / ``--capture-top-k`` flags so the
+    # replay viewer can drill into the search subtree under any
+    # candidate. Deep mode skips the production size budget — these
+    # captures are expected to be larger and aren't shipped to the
+    # trainer's replay buffer.
+    tree_depth: int = 1
+    tree_top_k: Optional[int] = None
 
     def should_capture(self, game_idx: int) -> bool:
         return game_idx % self.capture_every == 0
@@ -619,6 +629,12 @@ def _generate_one_game_data(
         # snapshot reflects "game 0, before any actions taken."
         recorder.record(adapter.engine_state)
 
+    tree_depth = (
+        replay_config.tree_depth if replay_config is not None else 1
+    )
+    tree_top_k = (
+        replay_config.tree_top_k if replay_config is not None else None
+    )
     if per_game_timeout_sec is not None and per_game_timeout_sec > 0:
         from mtg_bot.training._timeout import run_with_timeout
         from mtg_bot.training._hang_progress import HangProgress
@@ -627,7 +643,7 @@ def _generate_one_game_data(
             winner, samples = run_with_timeout(
                 _play_one_game_recording,
                 (adapter, strategies, rng, decision_cap, sample_every,
-                 recorder, progress),
+                 recorder, progress, tree_depth, tree_top_k),
                 per_game_timeout_sec,
             )
         except TimeoutError as exc:
@@ -660,6 +676,7 @@ def _generate_one_game_data(
         winner, samples = _play_one_game_recording(
             adapter, strategies, rng, decision_cap, sample_every,
             replay_recorder=recorder,
+            tree_depth=tree_depth, tree_top_k=tree_top_k,
         )
 
     if recorder is not None and replay_config is not None:
@@ -738,6 +755,8 @@ def _play_one_game_recording(
     sample_every: int,
     replay_recorder: Optional[ReplayRecorder] = None,
     progress: Optional["object"] = None,
+    tree_depth: int = 1,
+    tree_top_k: Optional[int] = None,
 ) -> tuple[
     PlayerID | None,
     list[tuple[np.ndarray, PlayerID, np.ndarray, np.ndarray]],
@@ -822,9 +841,30 @@ def _play_one_game_recording(
                     else None
                 )
                 strategy = strategies[active]
+                # Deep-tree capture: when the replay config asks for
+                # depth > 1, prefer ``choose_with_subtree`` so the
+                # annotation carries nested ``children`` per
+                # candidate. Production captures (default depth=1)
+                # take the same ``choose_with_full_stats`` fast path
+                # they always have — zero extra work, no shape change.
+                deep_capture = tree_depth > 1
+                subtree_fn = (
+                    getattr(strategy, "choose_with_subtree", None)
+                    if deep_capture else None
+                )
                 full_stats_fn = getattr(strategy, "choose_with_full_stats", None)
                 candidates: list[dict[str, Any]] = []
-                if callable(full_stats_fn):
+                if callable(subtree_fn):
+                    chosen, candidates = subtree_fn(
+                        adapter, active,
+                        tree_depth=tree_depth, tree_top_k=tree_top_k,
+                    )
+                    if chosen is not None:
+                        decision = chosen
+                    else:
+                        decision = list(adapter.legal_decisions())[0]
+                    visits = {c["decision"]: c["visits"] for c in candidates}
+                elif callable(full_stats_fn):
                     chosen, candidates = full_stats_fn(adapter, active)
                     if chosen is not None:
                         decision = chosen
@@ -852,6 +892,7 @@ def _play_one_game_recording(
                         candidates=candidates,
                         strategy=strategy,
                         elapsed_ms=elapsed_ms,
+                        deep_capture=deep_capture,
                     )
                 # Encode visits → slot-indexed normalized dist +
                 # legal mask once per sample point. Shared across
@@ -971,6 +1012,12 @@ def _play_one_game_recording(
                 # annotation.
                 replay_recorder.record_search_annotation(
                     len(replay_recorder.snapshots) - 2,
+                    search_annotation,
+                )
+                # Soft size sanity check on deep-capture annotations.
+                # No-op for production root-only captures; only fires
+                # when ``children`` is populated.
+                replay_recorder.maybe_warn_deep_annotation_size(
                     search_annotation,
                 )
         decision_idx += 1
