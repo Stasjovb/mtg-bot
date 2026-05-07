@@ -430,7 +430,7 @@ def test_reveal_p1_hides_p0_hand_with_face_down_placeholders(page):
 # These tests exercise the same scrubber / replay-review flow as above but
 # at an iPhone-14-ish viewport with touch enabled. They lock down the
 # responsive CSS rules in app.css under @media (max-width: 640px) and
-# @media (hover: none) — without them, the desktop's 280px right rail and
+# @media (hover: none) — without them, the desktop's 460px right rail and
 # 32em modal min-width overflow a 390px screen.
 
 MOBILE_VIEWPORT = {"width": 390, "height": 844}

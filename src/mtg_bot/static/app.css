@@ -21,7 +21,12 @@
 * { box-sizing: border-box; }
 html, body { margin: 0; padding: 0; background: var(--bg); color: var(--ink);
              font: 14px/1.4 -apple-system, "Segoe UI", system-ui, sans-serif; }
-body { display: grid; grid-template-columns: 1fr 280px;
+/* Right column = 460px so the Decision panel's 5-column candidate
+   table (Action / Visits / Q / Prior / Leaf V) fits without
+   horizontal scroll on desktop. The Action column needs ~18em for
+   ``CastSpell(card_id=NN, kicker=...)``-style labels in a monospace
+   font; cramming everything into 280px forced ugly truncation. */
+body { display: grid; grid-template-columns: 1fr 460px;
        grid-template-rows: auto auto auto 1fr; min-height: 100vh; }
 .hidden { display: none !important; }
 .muted { color: var(--muted); }
