@@ -135,21 +135,26 @@ def _urlopen_with_retry(
 class ShardConfig:
     """One shard of a distributed self-play run.
 
-    A shard is a contiguous range of games run on one machine. Each
-    shard gets its own seed-offset so seed collisions across shards
-    are impossible (different shards play DIFFERENT games, not the
-    same games on different hosts).
+    A shard is a worker (local or SSH-reachable) that pulls games
+    from the master's shared queue. The total number of games per
+    iter comes from the iterate driver's ``--games-per-iteration``;
+    this config carries only worker / SSH info, no per-shard quota
+    (a per-shard ``n_games`` field used to live here, but in pull
+    mode it had no effect — slow machines pull fewer games and fast
+    ones pull more, automatically — so it's been removed).
 
-    ``host="local"`` runs in the master process via the existing
-    ``generate_training_data_parallel``. Any other ``host`` value
-    triggers the SSH remote-shard path.
+    Each shard still gets its own seed-offset so seed collisions
+    across shards are impossible (different shards play DIFFERENT
+    games for the same game-index, not the same games).
+
+    ``host="local"`` runs in the master process via the pull-mode
+    runner. Any other ``host`` value triggers the SSH remote-shard
+    path.
     """
 
     # Where the shard runs. ``"local"`` means in-process on the
     # master; anything else is a Tailscale-reachable hostname or IP.
     host: str
-    # How many games this shard plays.
-    n_games: int
     # Free-form short label for naming output artifacts (e.g. the
     # shard's npz file). Defaults to ``host`` when omitted.
     label: str = ""
@@ -187,7 +192,6 @@ class ShardConfig:
     def to_dict(self) -> dict[str, Any]:
         return {
             "host": self.host,
-            "n_games": self.n_games,
             "label": self.label,
             "seed_offset": self.seed_offset,
             "n_workers": self.n_workers,
@@ -199,9 +203,22 @@ class ShardConfig:
 
     @classmethod
     def from_dict(cls, d: dict[str, Any]) -> "ShardConfig":
+        # Hard removal: ``n_games`` was a per-shard quota in a pre-
+        # pull-queue era. In pull mode it had no effect, so allowing
+        # it to silently linger in shards-config files would mislead
+        # the next reader. Reject up-front with a pointer to the
+        # replacement.
+        if "n_games" in d:
+            raise ValueError(
+                f"shard {d.get('host', '<unknown>')!r}: "
+                "the 'n_games' field has been removed from "
+                "ShardConfig. Total games per iter now comes from "
+                "iterate_alphazero.py's --games-per-iteration "
+                "(every shard pulls from one shared queue). Drop "
+                "the 'n_games' key from your shards-config JSON."
+            )
         return cls(
             host=d["host"],
-            n_games=int(d["n_games"]),
             label=d.get("label", ""),
             seed_offset=int(d.get("seed_offset", 0)),
             n_workers=d.get("n_workers"),
@@ -216,10 +233,6 @@ class ShardConfig:
         # load time than after several minutes of self-play.
         if not self.host:
             raise ValueError("host is required")
-        if self.n_games <= 0:
-            raise ValueError(
-                f"n_games must be positive, got {self.n_games}"
-            )
         if self.seed_offset < 0:
             raise ValueError(
                 f"seed_offset must be non-negative, got {self.seed_offset}"
@@ -243,13 +256,13 @@ class ShardsConfig:
 
     Loaded from JSON. Hand-editing JSON is fine for the 2-3-machine
     setup we have today; if it grows we can migrate to YAML.
+
+    There is no longer a per-config ``total_games`` — the iter total
+    is owned by ``iterate_alphazero.py``'s ``--games-per-iteration``
+    and threaded into the orchestrator at dispatch time.
     """
 
     shards: tuple[ShardConfig, ...]
-
-    @property
-    def total_games(self) -> int:
-        return sum(s.n_games for s in self.shards)
 
     def __post_init__(self) -> None:
         if not self.shards:
@@ -273,17 +286,15 @@ def load_shards_config(path: Path) -> ShardsConfig:
 
         {
           "shards": [
-            {"host": "local", "n_games": 200},
+            {"host": "local"},
             {
               "host": "win-1080ti",
-              "n_games": 150,
               "user": "gregg",
               "repo_path": "C:\\Users\\gregg\\Projects\\mtg-bot",
               "venv_python": ".venv-py313\\Scripts\\python.exe"
             },
             {
               "host": "macbook",
-              "n_games": 150,
               "user": "gregg",
               "repo_path": "/Users/gregg/projects/mtg-bot",
               "venv_python": ".venv-py313/bin/python"
@@ -294,6 +305,11 @@ def load_shards_config(path: Path) -> ShardsConfig:
     seed_offset defaults to position * 1_000_000 (idiomatic pattern,
     no collisions for shards under 1M games each) but can be set
     explicitly per shard.
+
+    The total games per iter is NOT in this config — it comes from
+    iterate_alphazero.py's ``--games-per-iteration``. A legacy
+    ``n_games`` field on any shard entry raises a ``ValueError``
+    pointing at the new contract; see ``ShardConfig.from_dict``.
     """
     with path.open("r", encoding="utf-8") as f:
         raw = json.load(f)
@@ -316,7 +332,10 @@ def load_shards_config(path: Path) -> ShardsConfig:
         # shard 1_000_000, etc. Explicit offsets win over the default.
         if "seed_offset" not in item:
             item = {**item, "seed_offset": i * 1_000_000}
-        shards.append(ShardConfig(**item))
+        # ``from_dict`` rejects legacy fields (e.g. ``n_games``) with a
+        # pointer at the new contract; preferred over ``ShardConfig(
+        # **item)`` which would raise a less actionable TypeError.
+        shards.append(ShardConfig.from_dict(item))
     return ShardsConfig(shards=tuple(shards))
 
 
@@ -610,21 +629,24 @@ def run_shard_local(
     shard: ShardConfig,
     spec: SelfPlayJobSpec,
     *,
+    n_games: int,
     progress_dir: Path,
     output_dir: Path,
     run_id_prefix: str,
     stamp: str,
 ) -> Path:
-    """Run a single shard in-process. Builds the same NNPimcConfig +
-    DataGenProgress + (optional) ReplayCaptureConfig that
-    iterate_alphazero's ``_self_play`` builds, then calls
-    ``generate_training_data_parallel`` for the shard's slice of
-    the workload.
+    """Run a single shard in-process with a fixed pre-allocated game
+    count. Builds the same NNPimcConfig + DataGenProgress + (optional)
+    ReplayCaptureConfig that iterate_alphazero's ``_self_play``
+    builds, then calls ``generate_training_data_parallel`` for the
+    shard's slice of the workload.
+
+    ``n_games`` is the explicit per-shard quota for this push-mode
+    invocation. The pull-mode runner (``run_shard_pull``) is what the
+    orchestrator uses now; this function survives for tests and
+    isolated direct callers that still want push-mode semantics.
 
     Returns the path of the produced ``.npz``.
-
-    Lives in this module (not in a script) so the orchestrator can
-    invoke it from the same process iterate runs in.
     """
     # Imports are local to keep the module's import-cost low for
     # the common "load shards-config to validate" path that doesn't
@@ -697,7 +719,7 @@ def run_shard_local(
     progress = DataGenProgress(
         progress_path=progress_path,
         run_id=f"{run_id_prefix}_shard_{shard.display_label}",
-        n_games_total=shard.n_games,
+        n_games_total=n_games,
         n_workers=(
             shard.n_workers if shard.n_workers is not None
             else max(1, 0)  # generate_training_data_parallel will
@@ -706,7 +728,7 @@ def run_shard_local(
         command="distributed_self_play (local shard)",
         notes=(
             f"distributed shard {shard.display_label} "
-            f"({shard.n_games} games)"
+            f"({n_games} games)"
         ),
         replays_dir=replays_subdir,
     )
@@ -716,7 +738,7 @@ def run_shard_local(
             generate_training_data_parallel(
                 p0_factory=cfg.build,
                 p1_factory=cfg.build,
-                n_games=shard.n_games,
+                n_games=n_games,
                 base_seed=spec.base_seed + shard.seed_offset,
                 n_workers=shard.n_workers,
                 with_policy=True,
