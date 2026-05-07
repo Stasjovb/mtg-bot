@@ -84,7 +84,7 @@ class _Node:
     __slots__ = (
         "state", "parent", "decision", "children",
         "pending_decisions", "visits", "total_value", "virtual_loss",
-        "prior", "_policy_cache", "leaf_nn_value",
+        "prior", "_policy_cache", "leaf_nn_value", "_canonical_key",
     )
 
     def __init__(
@@ -149,6 +149,20 @@ class _Node:
         # only). Either way the per-node "first leaf value" is the
         # same scalar.
         self.leaf_nn_value: Optional[float] = None
+        # Memoized canonical-state-key for the per-search NN-eval
+        # cache. ``None`` until first computed by
+        # ``MCTS._cache_key_for_node`` (or set to a sentinel by paths
+        # that know the state isn't an MTG adapter). The bench's
+        # ``serial`` MCTS path computes the key exactly once per leaf,
+        # so memoizing on the node is mostly a defensive win for the
+        # batched paths in ``_search_batched`` (which used to
+        # recompute the key once for the cache lookup at queueing time
+        # and again at store time after the batched NN call returned)
+        # and for any future code path that re-visits the same node.
+        # Memory cost: one extra slot per node (~8 bytes) holding a
+        # 32-byte digest when populated, dropped with the search tree
+        # at the end of ``choose_with_visits``.
+        self._canonical_key: Optional[bytes] = None
 
     def is_leaf(self) -> bool:
         return self.state.is_terminal()
@@ -695,8 +709,11 @@ class MCTS(SearchStrategy):
                 # produce, so we can backprop it immediately and free
                 # up the batch slot for a leaf that actually needs the
                 # network. Mirrors the cacheless ``_evaluate_leaf``
-                # bookkeeping (leaf_nn_value, _policy_cache).
-                cache_key = self._cache_key(leaf.state)
+                # bookkeeping (leaf_nn_value, _policy_cache). The
+                # node-memoizing helper saves the (otherwise duplicate)
+                # hash recomputation that would happen at store time
+                # below if this leaf turns out to be a cache miss.
+                cache_key = self._cache_key_for_node(leaf)
                 cached = (
                     self._eval_cache.get(cache_key)
                     if cache_key is not None else None
@@ -748,8 +765,11 @@ class MCTS(SearchStrategy):
                             leaf.leaf_nn_value = float(value)
                         # Store in the per-search cache so a later
                         # transposition through the same canonical
-                        # state can short-circuit.
-                        cache_key = self._cache_key(leaf.state)
+                        # state can short-circuit. The hash was
+                        # already computed at the cache-lookup site
+                        # above and memoized on the node, so this
+                        # call hits the slot instead of re-hashing.
+                        cache_key = self._cache_key_for_node(leaf)
                         if cache_key is not None:
                             self._eval_cache[cache_key] = _CachedEval(
                                 value=float(value), policy_logits=policy,
@@ -763,7 +783,7 @@ class MCTS(SearchStrategy):
                     for leaf, value in zip(pending, values):
                         if leaf.leaf_nn_value is None:
                             leaf.leaf_nn_value = float(value)
-                        cache_key = self._cache_key(leaf.state)
+                        cache_key = self._cache_key_for_node(leaf)
                         if cache_key is not None:
                             self._eval_cache[cache_key] = _CachedEval(
                                 value=float(value), policy_logits=None,
@@ -931,7 +951,7 @@ class MCTS(SearchStrategy):
         has resolved.
         """
         if parent._policy_cache is None:
-            cache_key = self._cache_key(parent.state)
+            cache_key = self._cache_key_for_node(parent)
             cached = (
                 self._eval_cache.get(cache_key)
                 if cache_key is not None else None
@@ -986,10 +1006,43 @@ class MCTS(SearchStrategy):
         their evaluators (rollout, heuristic) are cheap enough that
         caching is pointless and the canonical-state hash is
         MTG-specific anyway.
+
+        Note: most internal call sites prefer
+        :meth:`_cache_key_for_node`, which memoizes the digest on the
+        :class:`_Node` so repeated calls during the same search (e.g.
+        ``_search_batched``'s cache-lookup-then-store pattern) only
+        pay the hash cost once per node. This raw method stays as the
+        public hook for tests that monkey-patch it (e.g. the bench
+        script's ``cache_disabled=True`` mode) and for the rare paths
+        that hash a state without a node attached.
         """
         if not hasattr(state, "engine_state"):
             return None
         return canonical_state_key(state)
+
+    def _cache_key_for_node(self, node: _Node) -> Optional[bytes]:
+        """Like :meth:`_cache_key` but memoized on ``node``.
+
+        Computes ``canonical_state_key(node.state)`` on first call and
+        stashes the result in ``_Node._canonical_key`` so subsequent
+        calls return in O(1). For non-MTG states (toys) the slot stays
+        ``None`` and every call falls through to a cheap ``hasattr``
+        check; cycling through the slow path on toys isn't worth a
+        second sentinel because the cache is a no-op for them anyway.
+        """
+        cached = node._canonical_key
+        if cached is not None:
+            return cached
+        # Honor monkey-patched ``_cache_key`` (e.g. the bench's
+        # cache-disabled mode swaps in a ``lambda state: None``).
+        # Tests that override ``_cache_key`` to return ``None``
+        # expect every call to be cacheless; respect that by going
+        # through the override rather than the canonical-state hash
+        # directly.
+        key = self._cache_key(node.state)
+        if key is not None:
+            node._canonical_key = key
+        return key
 
     def _evaluate_leaf(
         self, leaf: _Node, root_player: PlayerID
@@ -1028,7 +1081,7 @@ class MCTS(SearchStrategy):
                 leaf.leaf_nn_value = float(value)
             return value
 
-        cache_key = self._cache_key(leaf.state)
+        cache_key = self._cache_key_for_node(leaf)
         if cache_key is not None:
             cached = self._eval_cache.get(cache_key)
             if cached is not None:
