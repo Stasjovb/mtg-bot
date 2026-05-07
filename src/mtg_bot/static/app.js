@@ -448,6 +448,11 @@ function renderSearchPanel(snap) {
 // Helper: render the v3 "search" annotation into the panel.
 function _renderSearchAnnotation(search) {
   els.searchPanel.classList.remove('hidden');
+  // Build a fresh id->name map from the current snapshot so action
+  // labels can render card / permanent names instead of bare numeric
+  // ids. Falls back gracefully (id-only formatting) when the snapshot
+  // isn't available (e.g. tests that don't install ``game``).
+  const idToName = _buildCardIdMap(_currentSnapshot());
   // Chosen action label — falls back to the most-visited candidate's
   // action when ``chosen`` is missing (defensive; the writer always
   // includes it but readers shouldn't crash on a future writer that
@@ -455,7 +460,7 @@ function _renderSearchAnnotation(search) {
   const chosenJson = search.chosen
     || (search.candidates.length > 0 ? search.candidates[0].action : null);
   els.searchChosen.textContent = chosenJson
-    ? `Chose: ${formatAction(chosenJson)}` : '';
+    ? `Chose: ${formatAction(chosenJson, idToName)}` : '';
   // Budget / timing readout. ``samples`` × ``inner_nodes`` is the
   // PIMC-of-MCTS shape; raw MCTS reports ``samples=1`` so the line
   // reads "1 × N nodes" which is still informative. ``elapsed_ms``
@@ -491,7 +496,7 @@ function _renderSearchAnnotation(search) {
 
     const tdAction = document.createElement('td');
     tdAction.className = 'action';
-    tdAction.textContent = formatAction(c.action);
+    tdAction.textContent = formatAction(c.action, idToName);
     tr.appendChild(tdAction);
 
     const tdVisits = document.createElement('td');
@@ -568,13 +573,151 @@ function _renderRecommendFallback(res) {
   }
 }
 
-// Compact "kind: arg=val" stringifier for an encoded Decision. Returns
-// just the kind when there are no other fields (e.g. PassPriority).
-// Used by the search panel; falls back to JSON.stringify for shapes
-// the table-friendly form doesn't recognize.
-function formatAction(actionJson) {
+// Return the snapshot the user is currently viewing, or null if no
+// game is loaded yet. Pulled out so ``_renderSearchAnnotation`` can
+// build a card-id→name map without poking at module-globals inline.
+function _currentSnapshot() {
+  if (!game || !game.snapCache) return null;
+  return game.snapCache.get(game.currentIdx) || null;
+}
+
+// Walk every zone of a snapshot and collect ``id -> name`` entries
+// for cards / permanents / stack objects. Used by ``formatAction`` to
+// render human-readable labels in the Decision panel.
+//
+// Zones covered: ``players[].hand``, ``players[].battlefield``,
+// ``players[].graveyard``, ``players[].exile``, ``stack``. Each entry
+// has ``id`` (int permanent / card id) and ``name`` (string).
+//
+// Returns a Map keyed by numeric id. Missing snapshot or malformed
+// shape returns an empty map — callers treat that as "fall back to
+// id-only formatting."
+function _buildCardIdMap(snap) {
+  const out = new Map();
+  if (!snap || typeof snap !== 'object') return out;
+  const collect = (arr) => {
+    if (!Array.isArray(arr)) return;
+    for (const c of arr) {
+      if (c && typeof c === 'object'
+          && typeof c.id === 'number'
+          && typeof c.name === 'string') {
+        out.set(c.id, c.name);
+      }
+    }
+  };
+  if (Array.isArray(snap.players)) {
+    for (const p of snap.players) {
+      if (!p || typeof p !== 'object') continue;
+      collect(p.hand);
+      collect(p.battlefield);
+      collect(p.graveyard);
+      collect(p.exile);
+    }
+  }
+  collect(snap.stack);
+  return out;
+}
+
+// Render the human-readable label for a captured Decision JSON.
+//
+// Known kinds get a "Kind — Name [extra]" form so replay scrubbing
+// reads at a glance:
+//   PlayLand(card_id=71)              -> "PlayLand — Swamp"
+//   CastSpell(card_id=78, ...)        -> "CastSpell — Hylderblade"
+//   ActivateAbility(source_id=12,
+//                   ability_index=0)  -> "ActivateAbility — Sol Ring [0]"
+//   AttackerDecision(attacker_id=44,
+//                    attack=true)     -> "Attack — Comet Crawler"
+//   AttackerDecision(... attack=false)-> "AttackerDecision — Comet Crawler (no attack)"
+//   BlockerDecision(blocker_id=1,
+//                   attacker_id=62)   -> "Block — Dauntless Scrapbot blocks Nova Hellkite"
+//   PassPriority                      -> "PassPriority"
+//
+// Unknown kinds OR unresolvable ids fall back to the legacy
+// ``Kind(field=value, ...)`` shape so the panel never goes blank.
+//
+// ``idToName`` is optional — when undefined / empty the formatter
+// degrades gracefully to id-only labels. Pure: returns a string,
+// never touches the DOM.
+function formatAction(actionJson, idToName) {
   if (!actionJson || typeof actionJson !== 'object') return String(actionJson);
+  const map = (idToName instanceof Map) ? idToName : new Map();
   const kind = actionJson.kind || '?';
+  const lookup = (id) => {
+    if (typeof id !== 'number') return null;
+    return map.get(id) || null;
+  };
+
+  if (kind === 'PlayLand') {
+    const name = lookup(actionJson.card_id);
+    if (name) return `PlayLand — ${name}`;
+  } else if (kind === 'CastSpell') {
+    const name = lookup(actionJson.card_id);
+    if (name) {
+      const tags = [];
+      if (actionJson.use_warp)      tags.push('warp');
+      if (actionJson.kicked)        tags.push('kicked');
+      if (actionJson.cast_for_free) tags.push('free');
+      if (actionJson.use_impending) tags.push('impending');
+      if (actionJson.cast_room_half) tags.push(`half=${actionJson.cast_room_half}`);
+      const suffix = tags.length > 0 ? ` (${tags.join(', ')})` : '';
+      return `CastSpell — ${name}${suffix}`;
+    }
+  } else if (kind === 'UnlockRoomHalf') {
+    const name = lookup(actionJson.card_id);
+    if (name) {
+      const half = actionJson.half_name ? ` [${actionJson.half_name}]` : '';
+      return `UnlockRoomHalf — ${name}${half}`;
+    }
+  } else if (kind === 'ActivateAbility') {
+    const name = lookup(actionJson.source_id);
+    if (name) {
+      const idx = actionJson.ability_index;
+      const suffix = (typeof idx === 'number') ? ` [${idx}]` : '';
+      return `ActivateAbility — ${name}${suffix}`;
+    }
+  } else if (kind === 'ActivateStation') {
+    const ship = lookup(actionJson.spacecraft_id);
+    const crew = lookup(actionJson.crew_id);
+    if (ship && crew) return `ActivateStation — ${crew} → ${ship}`;
+  } else if (kind === 'TurnFaceUp') {
+    const name = lookup(actionJson.card_id);
+    if (name) return `TurnFaceUp — ${name}`;
+  } else if (kind === 'AttackerDecision') {
+    const name = lookup(actionJson.attacker_id);
+    if (name) {
+      return actionJson.attack
+        ? `Attack — ${name}`
+        : `AttackerDecision — ${name} (no attack)`;
+    }
+  } else if (kind === 'BlockerDecision') {
+    const blocker = lookup(actionJson.blocker_id);
+    const attacker = lookup(actionJson.attacker_id);
+    if (blocker && attacker) {
+      return `Block — ${blocker} blocks ${attacker}`;
+    }
+  } else if (kind === 'ResolutionDiscardDecision') {
+    const name = lookup(actionJson.card_id);
+    if (name) return `Discard — ${name}`;
+  } else if (kind === 'ResolutionSacrificeDecision') {
+    const name = lookup(actionJson.object_id);
+    if (name) return `Sacrifice — ${name}`;
+  } else if (kind === 'ResolutionCardFromLibraryDecision') {
+    const name = lookup(actionJson.card_id);
+    if (name) return `ChooseFromLibrary — ${name}`;
+  } else if (kind === 'ResolutionCardFromOpponentHandDecision') {
+    const name = lookup(actionJson.card_id);
+    if (name) return `ChooseFromOpponentHand — ${name}`;
+  } else if (kind === 'ResolutionTargetDecision') {
+    const target = actionJson.target;
+    if (Array.isArray(target) && target.length === 2) {
+      const tName = lookup(target[1]);
+      if (tName) return `Target — ${tName}`;
+    }
+  }
+
+  // Fallback: legacy ``kind(field=value, ...)`` shape. Unknown kinds
+  // and shapes whose id couldn't be resolved both land here.
   const fields = Object.entries(actionJson).filter(([k]) => k !== 'kind');
   if (fields.length === 0) return kind;
   const parts = fields.map(([k, v]) => {
