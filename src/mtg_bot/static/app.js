@@ -489,39 +489,149 @@ function _renderSearchAnnotation(search) {
   );
   els.searchRows.replaceChildren();
   for (const c of rows) {
-    const tr = document.createElement('tr');
-    tr.className = 'search-row';
-    const isChosen = chosenJson && actionsEqual(c.action, chosenJson);
-    if (isChosen) tr.classList.add('chosen');
-
-    const tdAction = document.createElement('td');
-    tdAction.className = 'action';
-    tdAction.textContent = formatAction(c.action, idToName);
-    tr.appendChild(tdAction);
-
-    const tdVisits = document.createElement('td');
-    tdVisits.className = 'num';
-    tdVisits.textContent = String(c.visits | 0);
-    tr.appendChild(tdVisits);
-
-    const tdQ = document.createElement('td');
-    tdQ.className = 'num';
-    tdQ.textContent = c.q == null ? '—' : Number(c.q).toFixed(3);
-    tr.appendChild(tdQ);
-
-    const tdPrior = document.createElement('td');
-    tdPrior.className = 'num';
-    tdPrior.textContent = c.prior == null ? '—' : Number(c.prior).toFixed(3);
-    tr.appendChild(tdPrior);
-
-    const tdLeaf = document.createElement('td');
-    tdLeaf.className = 'num';
-    tdLeaf.textContent = c.leaf_value == null
-      ? '—' : Number(c.leaf_value).toFixed(3);
-    tr.appendChild(tdLeaf);
-
+    const tr = _buildSearchRow(c, chosenJson, /*depth=*/0, idToName);
     els.searchRows.appendChild(tr);
   }
+}
+
+// Builds a single search-table row plus (lazily) any child rows when
+// the user clicks the chevron. Returns the parent <tr>; child rows
+// are appended to the same tbody just below the parent on toggle.
+//
+// Diagnostic deep capture: the v3 search annotation now optionally
+// carries a recursive ``children`` array per candidate. Production
+// captures leave it null/empty (no chevron, identical to today's
+// rendering); replays from ``capture_annotated_replays.py
+// --capture-tree-depth N`` carry up to N levels of nested children.
+// Click the chevron to reveal one level; click on a deeper row's
+// chevron to reveal another. Recursive expand. The chosen-row tint
+// stays on the root chosen action only — there's no notion of
+// "chosen" deeper in the tree. ``depth`` controls left padding on
+// the action cell so each level visually nests.
+function _buildSearchRow(c, chosenJson, depth, idToName) {
+  const tr = document.createElement('tr');
+  tr.className = depth === 0 ? 'search-row' : 'search-row search-row-child';
+  if (depth === 0) {
+    const isChosen = chosenJson && actionsEqual(c.action, chosenJson);
+    if (isChosen) tr.classList.add('chosen');
+  }
+
+  const tdAction = document.createElement('td');
+  tdAction.className = 'action';
+  // Indent deeper rows. Each depth step adds ~12px of padding so the
+  // tree shape is visually clear without bloating the column.
+  if (depth > 0) {
+    tdAction.style.paddingLeft = `${12 * depth + 4}px`;
+  }
+  // Chevron span (visible only when this row has expandable children).
+  const chev = document.createElement('span');
+  chev.className = 'search-chevron';
+  const hasChildren = Array.isArray(c.children) && c.children.length > 0;
+  if (hasChildren) {
+    chev.textContent = '▸';  // ▸ collapsed by default
+    chev.classList.add('expandable');
+  } else {
+    // Hidden but reserves no horizontal width when not expandable so
+    // root-only captures look identical to pre-feature rendering.
+    chev.textContent = '';
+  }
+  tdAction.appendChild(chev);
+  tdAction.appendChild(document.createTextNode(formatAction(c.action, idToName)));
+  tr.appendChild(tdAction);
+
+  const tdVisits = document.createElement('td');
+  tdVisits.className = 'num';
+  tdVisits.textContent = String(c.visits | 0);
+  tr.appendChild(tdVisits);
+
+  const tdQ = document.createElement('td');
+  tdQ.className = 'num';
+  tdQ.textContent = c.q == null ? '—' : Number(c.q).toFixed(3);
+  tr.appendChild(tdQ);
+
+  const tdPrior = document.createElement('td');
+  tdPrior.className = 'num';
+  tdPrior.textContent = c.prior == null ? '—' : Number(c.prior).toFixed(3);
+  tr.appendChild(tdPrior);
+
+  const tdLeaf = document.createElement('td');
+  tdLeaf.className = 'num';
+  tdLeaf.textContent = c.leaf_value == null
+    ? '—' : Number(c.leaf_value).toFixed(3);
+  tr.appendChild(tdLeaf);
+
+  if (hasChildren) {
+    let expanded = false;
+    let childRows = [];
+    const toggle = () => {
+      if (!expanded) {
+        // Sort children by visits desc (defensive — writer already
+        // does this) and append immediately after the parent row.
+        const sorted = [...c.children].sort(
+          (a, b) => (b.visits | 0) - (a.visits | 0),
+        );
+        let anchor = tr;
+        for (const child of sorted) {
+          const childTr = _buildSearchRow(child, chosenJson, depth + 1, idToName);
+          anchor.after(childTr);
+          anchor = childTr;
+          childRows.push(childTr);
+        }
+        chev.textContent = '▾';  // ▾ expanded
+        expanded = true;
+      } else {
+        // Collapse: remove our direct child rows. Each removed child
+        // recursively cleans up its own descendants because expanding
+        // a child appends to the tbody (not nested inside a parent
+        // <tr>), so to fully collapse we'd track descendant rows too.
+        // Simpler approach: collapse calls remove() on each direct
+        // child row, and any descendants below were appended right
+        // after — they're orphans now, also need removing. We track
+        // this by walking siblings until we hit a row at the same
+        // or shallower depth.
+        for (const r of childRows) {
+          // Remove descendant rows that were inserted immediately
+          // after this child while it was expanded.
+          let next = r.nextSibling;
+          while (
+            next &&
+            next.classList &&
+            next.classList.contains('search-row-child')
+          ) {
+            // Only remove rows whose depth is greater than this
+            // child row's depth — siblings at the same depth belong
+            // to a different parent's expansion.
+            const nextDepth = parseInt(
+              next.dataset.searchRowDepth || '0', 10,
+            );
+            const myDepth = parseInt(
+              r.dataset.searchRowDepth || '0', 10,
+            );
+            if (nextDepth > myDepth) {
+              const toRemove = next;
+              next = next.nextSibling;
+              toRemove.remove();
+            } else {
+              break;
+            }
+          }
+          r.remove();
+        }
+        childRows = [];
+        chev.textContent = '▸';  // ▸ collapsed
+        expanded = false;
+      }
+    };
+    chev.addEventListener('click', (ev) => {
+      ev.stopPropagation();
+      toggle();
+    });
+  }
+
+  // Track depth on the row's dataset so collapse can clean up
+  // descendant rows that were appended as flat siblings.
+  tr.dataset.searchRowDepth = String(depth);
+  return tr;
 }
 
 // Helper: render a /api/recommend response (engine=pimc) into the
