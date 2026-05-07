@@ -105,6 +105,7 @@ Tailscale enrollment), see
 - Card pool target: **Edge of Eternities** (Scryfall set code `eoe`). Raw data is cached at `data/edge_of_eternities.json`; regenerate via `scripts/fetch_eoe.py`.
 - Self-play / eval data-gen and the iterate-AlphaZero loop run on the real 17lands deck pool at `data/17lands/eoe_decks.json.gz` (5000 EoE archetypes). `iterate_alphazero.py` requires `--deck-pool` and `data_gen` / `self_play` raise on missing pool — there is no synthetic mono-color fallback any more.
 - Architectural decisions that are locked in: full stack-and-priority simulation (not resolve-immediately); Scryfall JSON as the card data source.
+- **Eval depth must match self-play depth.** The metric we care about is "did v_{N+1} beat v_N at the deployment configuration", and the deployment configuration is whatever depth self-play used. Eval at a different depth measures something else — a network trained at depth=200 may not generalize linearly to depth=400, so a deeper eval doesn't extrapolate cleanly. `iterate_alphazero.py` already uses `args.nodes` for both self-play and eval (one knob). Standalone eval scripts in `scripts/eval_*` should hard-code `nodes` to whatever the most recent iteration's self-play used, and have a comment pointing here. A pre-iter_005-era script that says `nodes = 400` was templated when iter_004 ran self-play at 400; do NOT propagate that without checking.
 
 ## Documenting deliberate divergences
 
