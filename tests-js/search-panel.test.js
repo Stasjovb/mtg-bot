@@ -213,6 +213,181 @@ describe('formatAction helper', () => {
     });
     expect(out).toBe('DeclareAttackers(attacker_ids=[3])');
   });
+
+  // ----- name resolution -------------------------------------------------
+
+  it('resolves PlayLand card_id to the card name', () => {
+    const map = new Map([[71, 'Swamp']]);
+    expect(globalThis.formatAction({ kind: 'PlayLand', card_id: 71 }, map))
+      .toBe('PlayLand — Swamp');
+  });
+
+  it('resolves CastSpell card_id to the card name', () => {
+    const map = new Map([[51, 'Hylderblade']]);
+    expect(globalThis.formatAction(
+      { kind: 'CastSpell', card_id: 51, use_warp: false, kicked: false,
+        cast_for_free: false, use_impending: false, cast_room_half: null },
+      map,
+    )).toBe('CastSpell — Hylderblade');
+  });
+
+  it('appends modifier tags for CastSpell when set', () => {
+    const map = new Map([[22, 'Rayblade Trooper']]);
+    expect(globalThis.formatAction(
+      { kind: 'CastSpell', card_id: 22, use_warp: true, kicked: false,
+        cast_for_free: false, use_impending: false, cast_room_half: null },
+      map,
+    )).toBe('CastSpell — Rayblade Trooper (warp)');
+  });
+
+  it('resolves ActivateAbility source_id and keeps the ability index', () => {
+    const map = new Map([[12, 'Sol Ring']]);
+    expect(globalThis.formatAction(
+      { kind: 'ActivateAbility', source_id: 12, ability_index: 0 },
+      map,
+    )).toBe('ActivateAbility — Sol Ring [0]');
+  });
+
+  it('renders AttackerDecision(attack=true) as "Attack — <name>"', () => {
+    const map = new Map([[44, 'Comet Crawler']]);
+    expect(globalThis.formatAction(
+      { kind: 'AttackerDecision', attacker_id: 44, attack: true },
+      map,
+    )).toBe('Attack — Comet Crawler');
+  });
+
+  it('renders AttackerDecision(attack=false) with a "no attack" suffix', () => {
+    const map = new Map([[44, 'Comet Crawler']]);
+    expect(globalThis.formatAction(
+      { kind: 'AttackerDecision', attacker_id: 44, attack: false },
+      map,
+    )).toBe('AttackerDecision — Comet Crawler (no attack)');
+  });
+
+  it('renders BlockerDecision as "Block — <blocker> blocks <attacker>"', () => {
+    const map = new Map([
+      [1, 'Dauntless Scrapbot'],
+      [62, 'Nova Hellkite'],
+    ]);
+    expect(globalThis.formatAction(
+      { kind: 'BlockerDecision', blocker_id: 1, attacker_id: 62 },
+      map,
+    )).toBe('Block — Dauntless Scrapbot blocks Nova Hellkite');
+  });
+
+  it('falls back to legacy form when an id is unresolvable', () => {
+    // Empty map: no name found, legacy id-only string returned.
+    expect(globalThis.formatAction(
+      { kind: 'PlayLand', card_id: 71 }, new Map(),
+    )).toBe('PlayLand(card_id=71)');
+  });
+
+  it('falls back to legacy form when only one of two ids resolves', () => {
+    const map = new Map([[1, 'Dauntless Scrapbot']]);
+    // attacker_id missing → legacy.
+    const out = globalThis.formatAction(
+      { kind: 'BlockerDecision', blocker_id: 1, attacker_id: 62 },
+      map,
+    );
+    expect(out).toBe('BlockerDecision(blocker_id=1, attacker_id=62)');
+  });
+
+  it('treats undefined idToName as an empty map', () => {
+    // No second arg — should not crash and should fall back.
+    expect(globalThis.formatAction({ kind: 'PlayLand', card_id: 71 }))
+      .toBe('PlayLand(card_id=71)');
+  });
+
+  it('leaves unknown kinds in the legacy stringified form', () => {
+    expect(globalThis.formatAction(
+      { kind: 'MysteryNewDecision', some_id: 99, flag: true },
+      new Map([[99, 'Unrelated Card']]),
+    )).toBe('MysteryNewDecision(some_id=99, flag=true)');
+  });
+
+  it('PassPriority is unaffected by an idToName map', () => {
+    expect(globalThis.formatAction({ kind: 'PassPriority' }, new Map([[1, 'X']])))
+      .toBe('PassPriority');
+  });
+});
+
+describe('search panel renders names from snapshot zones', () => {
+  it('uses card names from the current snapshot for candidate labels', () => {
+    // Install a game whose current snapshot has a hand card with id 71.
+    globalThis.game = {
+      gameId: 'g1', currentIdx: 0, snapshotCount: 1,
+      snapCache: new Map(), index: [], fullLog: [],
+      playing: false, playTimer: null,
+    };
+    const snap = _baseSnap();
+    snap.players[1].hand = [
+      { id: 71, name: 'Swamp' },
+      { id: 51, name: 'Hylderblade' },
+    ];
+    snap.search = {
+      chosen: { kind: 'PassPriority' },
+      candidates: [
+        { action: { kind: 'PassPriority' }, visits: 100,
+          q: 0.1, prior: 0.5, leaf_value: 0.0 },
+        { action: { kind: 'PlayLand', card_id: 71 }, visits: 30,
+          q: 0.2, prior: 0.3, leaf_value: 0.0 },
+        { action: { kind: 'CastSpell', card_id: 51, use_warp: false,
+                    kicked: false, cast_for_free: false,
+                    use_impending: false, cast_room_half: null },
+          visits: 10, q: 0.0, prior: 0.2, leaf_value: 0.0 },
+      ],
+      samples: 1, inner_nodes: 100, elapsed_ms: 1,
+    };
+    globalThis.game.snapCache.set(0, snap);
+    globalThis.renderSearchPanel(snap);
+    const rows = Array.from(document.querySelectorAll('#search-rows tr'));
+    const labels = rows.map(r => r.children[0].textContent);
+    expect(labels).toEqual([
+      'PassPriority',
+      'PlayLand — Swamp',
+      'CastSpell — Hylderblade',
+    ]);
+  });
+
+  it('renders the chosen-row header label by name', () => {
+    globalThis.game = {
+      gameId: 'g1', currentIdx: 0, snapshotCount: 1,
+      snapCache: new Map(), index: [], fullLog: [],
+      playing: false, playTimer: null,
+    };
+    const snap = _baseSnap();
+    snap.players[0].battlefield = [{ id: 44, name: 'Comet Crawler' }];
+    snap.search = {
+      chosen: { kind: 'AttackerDecision', attacker_id: 44, attack: true },
+      candidates: [
+        { action: { kind: 'AttackerDecision', attacker_id: 44, attack: true },
+          visits: 5, q: 0, prior: 0.5, leaf_value: 0 },
+      ],
+      samples: 1, inner_nodes: 50, elapsed_ms: 2,
+    };
+    globalThis.game.snapCache.set(0, snap);
+    globalThis.renderSearchPanel(snap);
+    const chosen = document.getElementById('search-chosen').textContent;
+    expect(chosen).toBe('Chose: Attack — Comet Crawler');
+  });
+
+  it('falls back to id-only labels when no game/snapshot is loaded', () => {
+    // No globalThis.game — render the annotation directly. The
+    // formatter should still produce a string (id-only fallback).
+    const snap = _baseSnap();
+    snap.search = {
+      chosen: { kind: 'PlayLand', card_id: 71 },
+      candidates: [
+        { action: { kind: 'PlayLand', card_id: 71 }, visits: 1,
+          q: 0, prior: 0.5, leaf_value: 0 },
+      ],
+      samples: 1, inner_nodes: 1, elapsed_ms: 1,
+    };
+    globalThis.game = null;
+    globalThis.renderSearchPanel(snap);
+    const rows = document.querySelectorAll('#search-rows tr');
+    expect(rows[0].children[0].textContent).toBe('PlayLand(card_id=71)');
+  });
 });
 
 // -------------------------------------------------------------------
