@@ -173,6 +173,38 @@ def test_continuous_effects_list_order_is_irrelevant():
     assert key_a == key_b
 
 
+def test_continuous_effects_with_mixed_none_optional_fields_sort_cleanly():
+    """Regression: prior bug where a registry holding two effects with
+    different None/int patterns on optional fields (target_id,
+    expires_at, expires_at_player_id) crashed canonical_state_key with
+    ``TypeError: '<' not supported between NoneType and int`` during
+    the per-effect ``tuple(sorted(...))``. Reproduced live during the
+    100-game distributed self-play bench on 2026-05-07. Fix: replace
+    None with -1 sentinel inside _canonical_continuous_effect so the
+    per-effect tuples stay homogeneous and sortable."""
+    a = _adapter(seed=11)
+    state = a.engine_state
+    # One effect targets a permanent (target_id=int); the other is
+    # global (target_id=None). Same layer so the sort has to compare
+    # past layer into the target_id slot and trigger the bug.
+    targeted = ContinuousEffect(
+        source_id=42, layer=6, timestamp=1, kind="grant_keyword",
+        params=("flying",), target_id=999,
+    )
+    untargeted = ContinuousEffect(
+        source_id=42, layer=6, timestamp=2, kind="grant_keyword",
+        params=("haste",), target_id=None,
+    )
+    state.continuous_effects = [targeted, untargeted]
+    # Must not raise. Was: TypeError: '<' not supported between
+    # instances of 'NoneType' and 'int'.
+    key_a = canonical_state_key(a)
+    # And reordering the registry must still hash equal.
+    state.continuous_effects = [untargeted, targeted]
+    key_b = canonical_state_key(a)
+    assert key_a == key_b
+
+
 def test_hand_list_order_is_irrelevant():
     """Hand canonicalization sorts by card-key tuple, so reordering
     the hand list must NOT change the key."""
