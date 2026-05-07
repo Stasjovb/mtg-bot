@@ -162,7 +162,11 @@ class _Node:
         # Memory cost: one extra slot per node (~8 bytes) holding a
         # 32-byte digest when populated, dropped with the search tree
         # at the end of ``choose_with_visits``.
-        self._canonical_key: Optional[bytes] = None
+        # Type is the same as ``MCTS._cache_key``'s return value:
+        # ``Optional[tuple[bytes, tuple]]`` post-drift-fix
+        # (canonical-state hash + viewer slot fingerprint). Was
+        # ``Optional[bytes]`` pre-drift-fix.
+        self._canonical_key: Optional[Any] = None
 
     def is_leaf(self) -> bool:
         return self.state.is_terminal()
@@ -294,7 +298,15 @@ class MCTS(SearchStrategy):
         # because the NN forward pass dominates leaf-evaluation cost
         # at PUCT batch_size=1 (the production AlphaZero-training
         # configuration).
-        self._eval_cache: dict[bytes, _CachedEval] = {}
+        self._eval_cache: dict[Any, _CachedEval] = {}
+        # Viewer (root player) for the in-flight search. Set at the
+        # top of ``choose_with_*`` and consumed by ``_cache_key`` to
+        # build the slot-mapping fingerprint that pins the cache to
+        # entries whose action-encoding slots match — see ``_cache_key``
+        # docstring for the rationale. ``None`` outside an active
+        # search call; ``_cache_key`` defensively returns ``None`` in
+        # that case rather than risk a wrong-slot cache hit.
+        self._cache_root_player: Optional[PlayerID] = None
         if puct:
             # Construction-time validation: PUCT needs a policy head.
             # ``NNEvaluator(with_policy=True)`` is the canonical
@@ -398,6 +410,9 @@ class MCTS(SearchStrategy):
         # call and cross-call sharing would risk stale entries when the
         # caller mutates ``state`` between calls.
         self._eval_cache = {}
+        # Pin the viewer for the slot-mapping fingerprint used by
+        # ``_cache_key``. Cleared in the ``finally``.
+        self._cache_root_player = player_id
         try:
             root = _Node(
                 state=state.clone(),
@@ -433,6 +448,7 @@ class MCTS(SearchStrategy):
             return (chosen, candidates)
         finally:
             self._eval_cache = {}
+            self._cache_root_player = None
 
     def choose_with_subtree(
         self,
@@ -590,6 +606,9 @@ class MCTS(SearchStrategy):
         # Per-search NN-eval cache lifetime: allocated fresh here, dropped
         # in the ``finally`` clause below. See ``__init__`` for design.
         self._eval_cache = {}
+        # Pin the viewer for the slot-mapping fingerprint used by
+        # ``_cache_key``. Cleared in the ``finally``.
+        self._cache_root_player = player_id
         try:
             root = _Node(
                 state=state.clone(),
@@ -610,6 +629,7 @@ class MCTS(SearchStrategy):
             return {c.decision: c.visits for c in root.children}
         finally:
             self._eval_cache = {}
+            self._cache_root_player = None
 
     def _search_serial(
         self, root: _Node, player_id: PlayerID, budget,
@@ -996,7 +1016,7 @@ class MCTS(SearchStrategy):
         # they're sampled by weight.
         return self._make_child(node, decision, root_player)
 
-    def _cache_key(self, state: GameState) -> Optional[bytes]:
+    def _cache_key(self, state: GameState) -> Optional[Any]:
         """Return a content-addressed hash of ``state`` suitable for
         the per-search NN-eval cache, or ``None`` when the state isn't
         an MTG adapter (toy/test games).
@@ -1007,18 +1027,68 @@ class MCTS(SearchStrategy):
         caching is pointless and the canonical-state hash is
         MTG-specific anyway.
 
+        The key combines two pieces:
+
+        1. ``canonical_state_key(state)`` — the forward-play-equivalent
+           hash that drops raw ``GameObject.id`` ordering inside the
+           hand / graveyard / exile so two states with permuted card
+           ids hash identically.
+        2. A **slot-mapping fingerprint** of the viewer's hand /
+           graveyard / exile / library-top raw ``card.id`` ordering.
+
+        Why both: the cached ``policy_logits`` from
+        ``evaluate_with_policy`` are positional — slot
+        ``LAND_FROM_HAND_BASE + i`` is the prior for "play the card
+        at hand position ``i``". Two canonically-equivalent states
+        with permuted card.ids in hand have IDENTICAL value AND
+        IDENTICAL post-softmax-by-canonical-position policy, but
+        different ``card.id`` -> position -> slot mappings. Reusing
+        the cached logits at slot indices computed from the new
+        state's positional encoding reads the WRONG prior for each
+        decision (smoking-gun observed 2026-05-06: cache-on flipped
+        the chosen action at T3-main when hand had two Mountains).
+
+        Including the slot fingerprint scopes hits to states where
+        the slot mapping is identical — same value AND same policy
+        slots, so the cached pair is safe to reuse byte-for-byte.
+        Slot-mismatched transpositions miss the cache and recompute
+        (preserving correctness; the perf cost is the lost transposition
+        hits when card.ids permute, but those hits would have been
+        wrong-slot reads anyway).
+
+        ``self._cache_root_player`` is the viewer (set at the top of
+        ``choose_with_visits`` / ``choose_with_full_stats``) — slot
+        encoding is positional in the viewer's zones, and the viewer
+        is fixed for the entire search.
+
         Note: most internal call sites prefer
-        :meth:`_cache_key_for_node`, which memoizes the digest on the
+        :meth:`_cache_key_for_node`, which memoizes the
+        ``canonical_state_key`` portion of the digest on the
         :class:`_Node` so repeated calls during the same search (e.g.
         ``_search_batched``'s cache-lookup-then-store pattern) only
-        pay the hash cost once per node. This raw method stays as the
-        public hook for tests that monkey-patch it (e.g. the bench
-        script's ``cache_disabled=True`` mode) and for the rare paths
-        that hash a state without a node attached.
+        pay the hash cost once per node. This raw method stays as
+        the public hook for tests that monkey-patch it (e.g. the
+        bench script's ``cache_disabled=True`` mode) and for the
+        rare paths that hash a state without a node attached.
         """
         if not hasattr(state, "engine_state"):
             return None
-        return canonical_state_key(state)
+        eng = state.engine_state
+        viewer = self._cache_root_player
+        # Defensive: if the cache is consulted before
+        # ``choose_with_*`` set the viewer (shouldn't happen via the
+        # production paths), bypass the cache rather than risk a
+        # wrong-slot hit.
+        if viewer is None:
+            return None
+        p = eng.player_by_id(viewer)
+        slot_fp = (
+            tuple(c.id for c in p.hand),
+            tuple(c.id for c in p.graveyard),
+            tuple(c.id for c in p.exile),
+            p.library[0].id if p.library else -1,
+        )
+        return (canonical_state_key(state), slot_fp)
 
     def _cache_key_for_node(self, node: _Node) -> Optional[bytes]:
         """Like :meth:`_cache_key` but memoized on ``node``.
