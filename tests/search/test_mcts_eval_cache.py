@@ -580,6 +580,10 @@ def test_cache_key_for_node_memoizes():
     a = _adapter_at_real_decision(seed=12)
     ev = _CountingValueEvaluator()
     mcts = _make_mcts_ucb1(ev)
+    # Drift-fix: _cache_key needs the viewer to compute the slot
+    # fingerprint. choose_with_* sets this; for a unit test that
+    # calls _cache_key_for_node directly we set it explicitly.
+    mcts._cache_root_player = 0
     node = _Node(state=a)
     assert node._canonical_key is None
 
@@ -605,7 +609,10 @@ def test_cache_key_for_node_memoizes():
 
     assert k1 == k2 == k3
     assert k1 is not None
-    assert isinstance(k1, bytes) and len(k1) == 32
+    # Drift-fix: _cache_key returns a 2-tuple of (canonical-state hash,
+    # slot fingerprint). The hash itself is still 32 bytes.
+    assert isinstance(k1, tuple) and len(k1) == 2
+    assert isinstance(k1[0], bytes) and len(k1[0]) == 32
     assert n_calls[0] == 1, (
         f"expected canonical_state_key called exactly once across "
         f"three _cache_key_for_node calls, got {n_calls[0]}"
@@ -661,6 +668,8 @@ def test_cache_key_for_node_respects_monkey_patched_cache_key():
     a = _adapter_at_real_decision(seed=13)
     ev = _CountingValueEvaluator()
     mcts = _make_mcts_ucb1(ev)
+    # Drift-fix: _cache_key needs the viewer set. See sibling test.
+    mcts._cache_root_player = 0
     node = _Node(state=a)
 
     # First call with a working _cache_key populates the slot.
