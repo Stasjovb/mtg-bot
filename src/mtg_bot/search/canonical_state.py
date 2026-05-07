@@ -115,14 +115,19 @@ Output format
 =============
 
 The implementation builds a nested tuple of pure-Python primitives
-and hashes the ``repr`` via blake2b to produce a 32-byte digest.
-``repr`` is a defensible serializer here: tuple/int/str/None/bool/
-frozenset all repr deterministically, and the repr of a frozen
-dataclass like :class:`ContinuousEffect` is deterministic given
-the slot order (which is fixed at class-definition time). The
-hash is content-addressed in the cryptographic sense — a 32-byte
-random-distributed key — so collisions are negligible (birthday
-bound at 2^128 entries).
+and hashes its ``marshal.dumps`` serialization via blake2b to
+produce a 32-byte digest. ``marshal`` is a defensible serializer
+here: it's C-implemented (~5x faster than ``repr``), is
+deterministic for a fixed Python version, supports every primitive
+the canonical state tuple emits (None, bool, int, float, str,
+bytes, tuple, frozenset, set, list, dict), and refuses anything
+else with a TypeError — which protects against accidental
+inclusion of non-primitives that would silently hash by
+``id()``. The cache lifetime is one search call, so the
+"format may change between Python versions" warning attached to
+``marshal`` doesn't affect us. The hash is content-addressed
+in the cryptographic sense — a 32-byte random-distributed key
+— so collisions are negligible (birthday bound at 2^128 entries).
 
 If you're unsure whether a field is forward-relevant, INCLUDE IT.
 False-negatives (states that are equivalent but hash differently)
@@ -133,6 +138,7 @@ aren't equivalent but hash equal) corrupt search.
 from __future__ import annotations
 
 import hashlib
+import marshal
 from collections import Counter
 from typing import Any
 
@@ -148,47 +154,39 @@ def _canonical_perm_key(
 
     ``attached_idx`` is the canonical battlefield index of
     ``obj.attached_to``, or -1 when the object is not attached.
+
+    Performance: the field list overlaps heavily with ``_shape_key``;
+    callers that have already computed a shape key for this object
+    should use ``_canonical_perm_key_from_shape`` instead to avoid the
+    re-walk. This function exists for tests / direct callers that
+    don't have a precomputed shape key handy.
     """
-    return (
-        obj.printing.name,
-        obj.controller_id,
-        obj.tapped,
-        obj.summoning_sick,
-        obj.attacking,
-        obj.blocking is not None,
+    return _canonical_perm_key_from_shape(obj, _shape_key(obj), attached_idx)
+
+
+def _canonical_perm_key_from_shape(
+    obj: GameObject, shape: tuple, attached_idx: int,
+) -> tuple:
+    """Like :func:`_canonical_perm_key`, but reuses an already-computed
+    ``shape`` key (the output of :func:`_shape_key` for ``obj``).
+
+    The full permanent key is the shape key plus a small trailing set
+    of fields that the shape key deliberately omits (they're either
+    raw-id-bearing — ``blocked_by``, ``attached_to``,
+    ``exiled_by_source`` — or per-castable-from-exile flags that the
+    index-build doesn't need to disambiguate on, since same-printing
+    same-shape permanents that differ only in those flags are still
+    structurally equivalent for the index's "first occurrence wins"
+    rule). Bundling the cached shape key into the prefix lets us avoid
+    re-touching ~30 attributes per battlefield permanent during hash
+    construction (the index build already paid for the shape walk).
+    """
+    return shape + (
         tuple(obj.blocked_by),
-        obj.damage,
-        obj.damaged_this_turn,
-        obj.marked_lethal,
-        obj.plus_one_counters,
-        obj.minus_one_counters,
-        obj.charge_counters,
-        obj.loyalty_counters,
-        obj.stun_counters,
-        obj.time_counters,
-        obj.lore_counters,
-        obj.warped,
-        obj.cast_via_warp,
-        obj.cast_via_impending,
-        obj.impending_active,
-        obj.cast_via_hand,
-        obj.face_down,
-        obj.phased_out,
-        obj.regeneration_shield,
-        obj.permanent_is_creature,
-        obj.enduring_returned_as_enchantment,
-        obj.has_activated_once_only_ability,
-        obj.painter_chosen_color,
-        tuple(sorted(obj.unlocked_halves)),
-        obj.temp_power_bonus,
-        obj.temp_toughness_bonus,
+        attached_idx,
         obj.playable_from_exile_this_turn,
         obj.play_from_exile_requires_kavu,
         obj.cast_from_exile_with_lightstall_surcharge,
-        obj.controller_id_before_any_aura_swap,
-        obj.original_printing.name
-        if obj.original_printing is not None else None,
-        attached_idx,
         # exiled_by_source is a raw id pointing at a battlefield (or
         # formerly-battlefield) source; for the canonicalization we
         # collapse it to a presence flag because the source id itself
@@ -358,11 +356,15 @@ def _shape_key(obj: GameObject) -> tuple:
 
 def _build_canonical_battlefield_index(
     state: GameState,
-) -> tuple[list[int], dict[int, int]]:
+) -> tuple[list[int], dict[int, int], list[tuple]]:
     """Build the canonical-battlefield index used for ``attached_to``
     and stack-target remapping.
 
-    Returns ``(sorted_indices_into_battlefield, raw_id_to_canonical_idx)``.
+    Returns ``(sorted_indices_into_battlefield, raw_id_to_canonical_idx,
+    shapes_in_sorted_order)``. The third element lets the caller reuse
+    the per-object shape keys (the bulk of each permanent's
+    canonical-key fields) without re-walking ~30 attributes per
+    permanent during hash construction.
 
     Critically: structurally-equivalent permanents (same ``_shape_key``)
     receive the SAME canonical index — specifically, the canonical
@@ -380,20 +382,26 @@ def _build_canonical_battlefield_index(
     canonical index for hash equivalence to hold.
     """
     bf = state.battlefield
-    indices = sorted(
-        range(len(bf)),
-        key=lambda i: _shape_key(bf[i]),
-    )
+    if not bf:
+        return [], {}, []
+    # Compute every shape key exactly once. The previous implementation
+    # called ``_shape_key`` twice per permanent (once as the sort key
+    # and once during the dedup walk); a 14-permanent battlefield made
+    # this ~28 walks per hash, which compounded into 20%+ of total
+    # canonical-state-key time on big-board states like declare_atk.
+    shapes = [_shape_key(o) for o in bf]
+    indices = sorted(range(len(bf)), key=shapes.__getitem__)
+    sorted_shapes = [shapes[i] for i in indices]
     raw_id_to_canon: dict[int, int] = {}
     last_shape: tuple | None = None
     last_canon_idx = -1
     for pos, i in enumerate(indices):
-        shape = _shape_key(bf[i])
+        shape = sorted_shapes[pos]
         if shape != last_shape:
             last_canon_idx = pos
             last_shape = shape
         raw_id_to_canon[bf[i].id] = last_canon_idx
-    return indices, raw_id_to_canon
+    return indices, raw_id_to_canon, sorted_shapes
 
 
 def _canonical_player(
@@ -436,7 +444,9 @@ def _canonical_state_tuple(adapter: Any) -> tuple:
     """
     state: GameState = getattr(adapter, "engine_state", adapter)
 
-    indices, raw_id_to_canon = _build_canonical_battlefield_index(state)
+    indices, raw_id_to_canon, sorted_shapes = (
+        _build_canonical_battlefield_index(state)
+    )
 
     bf_keys = []
     for pos, i in enumerate(indices):
@@ -445,7 +455,9 @@ def _canonical_state_tuple(adapter: Any) -> tuple:
             raw_id_to_canon.get(obj.attached_to, -1)
             if obj.attached_to is not None else -1
         )
-        bf_keys.append(_canonical_perm_key(obj, attached_idx))
+        bf_keys.append(_canonical_perm_key_from_shape(
+            obj, sorted_shapes[pos], attached_idx,
+        ))
 
     stack_keys = tuple(
         _canonical_stack_item(it, raw_id_to_canon) for it in state.stack
@@ -470,9 +482,14 @@ def _canonical_state_tuple(adapter: Any) -> tuple:
     adapter_block: tuple
     if hasattr(adapter, "_pass_count"):
         # Resolution-pause options often contain raw ids; the natural
-        # remap uses the canonical index. We repr() the options tuple
-        # for simplicity — its structure varies by ``_resolution_kind``
-        # and isn't always remappable.
+        # remap uses the canonical index. We ``repr`` the options
+        # tuple for simplicity — its structure varies by
+        # ``_resolution_kind`` and isn't always remappable. Fast-path
+        # the (very common) empty-tuple case to skip the ``repr`` call
+        # entirely when nothing's pending.
+        res_opts = adapter._resolution_options
+        res_opts_key = "" if not res_opts else repr(res_opts)
+        pending_replay = adapter._pending_replay_decision
         adapter_block = (
             adapter._pass_count,
             adapter._combat_phase,
@@ -484,11 +501,8 @@ def _canonical_state_tuple(adapter: Any) -> tuple:
             adapter._resolution_paused,
             adapter._resolution_kind,
             adapter._resolution_player,
-            repr(adapter._resolution_options),
-            (
-                repr(adapter._pending_replay_decision)
-                if adapter._pending_replay_decision is not None else None
-            ),
+            res_opts_key,
+            repr(pending_replay) if pending_replay is not None else None,
         )
     else:
         adapter_block = ()
@@ -497,14 +511,22 @@ def _canonical_state_tuple(adapter: Any) -> tuple:
     # pending-end-of-combat-sacrifices: each is a small structure of
     # ids. Where the id lives on the battlefield, remap through
     # canonical index; where the id is a player id (delayed-trigger
-    # controller, token-creator), leave as-is.
+    # controller, token-creator), leave as-is. Delayed-trigger values
+    # can be arbitrary engine objects (e.g. effect-class instances
+    # like ``WarpExileSelf``) that ``marshal.dumps`` rejects with
+    # ``ValueError``; we ``repr`` non-id values so the canonical key
+    # remains a marshallable primitive tree. ``repr`` is deterministic
+    # for the engine's frozen-dataclass / tuple effect types.
     delayed_canon = tuple(
         tuple(sorted(
             (
                 k,
                 (
                     raw_id_to_canon.get(v, v)
-                    if k in ("target_id", "source_id") else v
+                    if k in ("target_id", "source_id") else (
+                        v if isinstance(v, (int, float, str, bool, type(None)))
+                        else repr(v)
+                    )
                 ),
             )
             for k, v in dt.items()
@@ -568,4 +590,23 @@ def canonical_state_key(adapter: Any) -> bytes:
     to a raw engine state where ``_pass_count`` is implicitly zero).
     """
     tup = _canonical_state_tuple(adapter)
-    return hashlib.blake2b(repr(tup).encode("utf-8"), digest_size=32).digest()
+    # ``marshal.dumps`` is ~5x faster than ``repr(tup).encode()`` for
+    # the deeply-nested primitive tuple we build here, and produces
+    # deterministic bytes for a fixed Python version. Per-search cache
+    # lifetime makes cross-version stability irrelevant.
+    #
+    # If a non-primitive slips into the tuple (engine evolution adds a
+    # new field whose values aren't already coerced via ``repr``),
+    # ``marshal.dumps`` raises ``ValueError: unmarshallable object``.
+    # We fall back to ``repr(tup).encode("utf-8")`` rather than crashing
+    # the search — the digest still satisfies the equivalence rules
+    # (repr is deterministic for the engine's frozen-dataclass / tuple
+    # types), it's just slower. In practice the production code paths
+    # exercised in tests stay on the marshal fast path; the fallback is
+    # a defensive guard, not a routine path.
+    try:
+        return hashlib.blake2b(marshal.dumps(tup), digest_size=32).digest()
+    except ValueError:
+        return hashlib.blake2b(
+            repr(tup).encode("utf-8"), digest_size=32,
+        ).digest()

@@ -537,3 +537,121 @@ def test_cached_eval_dataclass_shape():
     e2 = _CachedEval(value=-0.25, policy_logits=arr)
     assert e2.value == -0.25
     assert e2.policy_logits is arr
+
+
+# ---------------------------------------------------------------------------
+# Per-node canonical-key memoization
+# ---------------------------------------------------------------------------
+
+
+def test_cache_key_for_node_memoizes():
+    """``MCTS._cache_key_for_node`` should compute the canonical-state
+    digest exactly once per ``_Node`` and stash it in the slot.
+    Subsequent calls hit the slot in O(1) and return the same bytes.
+
+    This is the optimization that fixes the (previously) duplicated
+    hash recomputation in ``_search_batched`` (cache lookup at
+    queueing time + cache store at batch-result time were each
+    independently calling ``canonical_state_key``).
+    """
+    from mtg_bot.search.mcts import _Node
+
+    a = _adapter_at_real_decision(seed=12)
+    ev = _CountingValueEvaluator()
+    mcts = _make_mcts_ucb1(ev)
+    node = _Node(state=a)
+    assert node._canonical_key is None
+
+    # Count canonical-state-key invocations. Wrap the module-level
+    # function the MCTS instance pulls in (we did import it at module
+    # load — patch through the bound name on the canonical_state
+    # module so the mcts module's local re-import sees the patch).
+    import mtg_bot.search.mcts as mcts_mod
+    real = mcts_mod.canonical_state_key
+    n_calls = [0]
+
+    def counting(state):
+        n_calls[0] += 1
+        return real(state)
+
+    mcts_mod.canonical_state_key = counting
+    try:
+        k1 = mcts._cache_key_for_node(node)
+        k2 = mcts._cache_key_for_node(node)
+        k3 = mcts._cache_key_for_node(node)
+    finally:
+        mcts_mod.canonical_state_key = real
+
+    assert k1 == k2 == k3
+    assert k1 is not None
+    assert isinstance(k1, bytes) and len(k1) == 32
+    assert n_calls[0] == 1, (
+        f"expected canonical_state_key called exactly once across "
+        f"three _cache_key_for_node calls, got {n_calls[0]}"
+    )
+    # The slot was populated.
+    assert node._canonical_key == k1
+
+
+def test_cache_key_for_node_returns_none_for_toy_state():
+    """Toy/test states (no ``engine_state`` attr) bypass the canonical
+    hash. ``_cache_key_for_node`` returns ``None`` and never stores
+    anything in the slot — repeated calls cheaply re-detect the toy
+    state without ever touching ``canonical_state_key``."""
+    from mtg_bot.search.mcts import _Node
+
+    class _ToyState:
+        def is_terminal(self):
+            return False
+
+        def active_player(self):
+            return 0
+
+        def chance_outcomes(self):
+            return []
+
+        def chance_state(self):
+            return False
+
+        def legal_decisions(self):
+            return iter(())
+
+        def clone(self):
+            return _ToyState()
+
+    ev = _CountingValueEvaluator()
+    mcts = _make_mcts_ucb1(ev)
+    node = _Node(state=_ToyState())
+
+    assert mcts._cache_key_for_node(node) is None
+    assert mcts._cache_key_for_node(node) is None
+    assert node._canonical_key is None
+
+
+def test_cache_key_for_node_respects_monkey_patched_cache_key():
+    """Tests / benches sometimes monkey-patch ``MCTS._cache_key`` to
+    return ``None`` (forces the cache to miss every leaf). The
+    node-memoizing helper must respect that override — otherwise the
+    bench's ``cache_disabled=True`` mode would cache stale digests
+    and the disabled-cache path would silently still hit the
+    per-node slot."""
+    from mtg_bot.search.mcts import _Node
+
+    a = _adapter_at_real_decision(seed=13)
+    ev = _CountingValueEvaluator()
+    mcts = _make_mcts_ucb1(ev)
+    node = _Node(state=a)
+
+    # First call with a working _cache_key populates the slot.
+    k = mcts._cache_key_for_node(node)
+    assert k is not None and node._canonical_key == k
+
+    # New node, monkey-patched cache_key — slot must stay None.
+    node2 = _Node(state=a)
+    mcts._cache_key = lambda state: None  # type: ignore[method-assign]
+    assert mcts._cache_key_for_node(node2) is None
+    assert node2._canonical_key is None
+    # And the slot stays None across repeated calls (no spurious
+    # caching of a stale value).
+    assert mcts._cache_key_for_node(node2) is None
+    assert node2._canonical_key is None

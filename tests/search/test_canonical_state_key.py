@@ -472,15 +472,47 @@ def test_accepts_raw_engine_state():
     assert key_adapter != key_raw
 
 
+def test_marshal_path_handles_engine_objects_in_delayed_triggers():
+    """``state.delayed_triggers`` can hold dicts whose values are
+    arbitrary engine effect objects (e.g. ``WarpExileSelf``). These
+    are not directly marshallable, so the hash function must coerce
+    them — a regression test for the bug where switching the
+    serializer from ``repr`` to ``marshal`` initially crashed the
+    ``test_batched_puct_cache_hits_skip_batch`` integration test
+    with ``ValueError: unmarshallable object`` because the
+    delayed-trigger walk left the effect instance as-is in the
+    canonical tuple."""
+    from mtg_bot.effects.generic.exile import WarpExileSelf
+
+    a = _adapter(seed=99)
+    # Inject a delayed trigger holding a non-primitive effect value.
+    a.engine_state.delayed_triggers.append({
+        "kind": "leaves_battlefield_then",
+        "source_id": 12345,
+        "effect": WarpExileSelf(),
+    })
+    # The hash must not raise.
+    k = canonical_state_key(a)
+    assert isinstance(k, bytes) and len(k) == 32
+    # And it must be stable (deterministic across repeated calls
+    # despite the non-primitive value).
+    assert canonical_state_key(a) == k
+
+
 def test_canonical_state_tuple_is_inspectable():
     """The internal tuple is exposed for tests that want to peer at
     structural equivalence rather than just the digest."""
     a = _adapter(seed=27)
     tup = _canonical_state_tuple(a)
     assert isinstance(tup, tuple)
-    # Match the digest's deterministic shape.
+    # Match the digest's deterministic shape: feed the inspectable
+    # tuple through ``marshal.dumps`` (the production serializer) and
+    # blake2b, mirroring ``canonical_state_key``. Marshal replaced an
+    # earlier ``repr(tup).encode()`` round-trip; the public API
+    # contract documented in the module docstring is "build the tuple,
+    # serialize it, hash it" — this test asserts the chosen
+    # serializer is what the module exposes.
     import hashlib
-    expected = hashlib.blake2b(
-        repr(tup).encode("utf-8"), digest_size=32,
-    ).digest()
+    import marshal
+    expected = hashlib.blake2b(marshal.dumps(tup), digest_size=32).digest()
     assert canonical_state_key(a) == expected
