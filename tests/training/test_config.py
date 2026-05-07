@@ -506,3 +506,81 @@ def test_nn_server_pimc_config_build_with_puct_and_policy(
         )
         strategy = cfg.build(seed=0)
         assert isinstance(strategy, PIMC)
+
+
+def test_nn_server_pimc_config_use_ismcts_returns_ismcts(
+    tmp_path: Path,
+) -> None:
+    """Production parity with :class:`NNPimcConfig`: setting
+    ``use_ismcts=True`` makes ``build`` return an
+    :class:`ISMCTS` strategy at the matched-budget total iteration
+    count (samples × inner_nodes), not a PIMC.
+
+    ``puct=False`` here because the ISMCTS PUCT path requires the
+    evaluator to expose ``evaluate_logits`` for union-mask priors
+    (raw logits, not the masked+softmaxed policy ``NNEvalClient``
+    returns). Adding raw-logits IPC support is out of scope for the
+    nn-eval-server wire-in; that's a follow-up if anyone configures
+    ``use_ismcts=True`` + ``puct=True`` on the server-backed path.
+    """
+    from mtg_bot.search import ISMCTS
+
+    weights = _save_value_weights(tmp_path)
+    server = NNEvalServer(
+        weights_path=weights, device="cpu", with_policy=False,
+        batch_size=1, batch_wait_ms=0.0,
+    )
+    with server:
+        handle = server.handle()
+        cfg = NNServerPimcConfig(
+            server_handle=handle,
+            samples=2, inner_nodes=8, batch_size=1,
+            with_policy=False, puct=False,
+            use_ismcts=True,
+        )
+        strategy = cfg.build(seed=0)
+        assert isinstance(strategy, ISMCTS)
+
+
+def test_nn_server_pimc_config_belief_requires_ismcts() -> None:
+    """``use_belief_weighted=True`` without ``use_ismcts=True`` is
+    rejected at __post_init__, mirroring the same rule on
+    :class:`NNPimcConfig` — belief-weighted determinization only
+    fits ISMCTS's per-iteration determinize_fn callback."""
+    from mtg_bot.search.nn_eval_server import NNServerHandle
+
+    handle = NNServerHandle(
+        address=("127.0.0.1", 0), authkey=b"x" * 32, with_policy=True,
+    )
+    with pytest.raises(ValueError, match="requires use_ismcts=True"):
+        NNServerPimcConfig(
+            server_handle=handle,
+            samples=1, inner_nodes=1,
+            use_belief_weighted=True, use_ismcts=False,
+        )
+
+
+def test_nn_server_pimc_config_belief_path_not_yet_wired(
+    tmp_path: Path,
+) -> None:
+    """``BeliefWeightedDeterminizer`` requires raw policy logits
+    via ``evaluate_logits``; the IPC client only ships the masked+
+    softmaxed policy. Until raw-logits IPC support lands, opting
+    into belief weighting on the server-backed path raises a
+    ``NotImplementedError`` at build time so a misconfigured spec
+    doesn't silently fall back to local evaluators."""
+    weights = _save_policy_weights(tmp_path)
+    server = NNEvalServer(
+        weights_path=weights, device="cpu", with_policy=True,
+        batch_size=1, batch_wait_ms=0.0,
+    )
+    with server:
+        handle = server.handle()
+        cfg = NNServerPimcConfig(
+            server_handle=handle,
+            samples=1, inner_nodes=2, batch_size=1,
+            with_policy=True, puct=False,
+            use_ismcts=True, use_belief_weighted=True,
+        )
+        with pytest.raises(NotImplementedError, match="evaluate_logits"):
+            cfg.build(seed=0)

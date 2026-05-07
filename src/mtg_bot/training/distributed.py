@@ -625,6 +625,91 @@ class EvalJobSpec:
         )
 
 
+def _start_local_eval_server(
+    weights_path: str,
+    *,
+    hidden_sizes: Optional[tuple[int, ...]],
+    architecture: Optional[str],
+    policy_hidden_sizes: Optional[tuple[int, ...]],
+    with_policy: bool,
+    device: str,
+    batch_size: int = 32,
+    batch_wait_ms: float = 5.0,
+):
+    """Construct an :class:`NNEvalServer` that owns the GPU + the
+    loaded NN, and start it serving.
+
+    Per-shard runners (``run_shard_local``, ``run_shard_pull``,
+    ``run_shard_eval_pull``) call this on the host they're running on
+    so each shard host gets ONE server (not N independent CUDA contexts
+    fighting for the GPU). The worker pool inside the shard then talks
+    to this server via :class:`NNEvalClient` instead of each worker
+    constructing its own :class:`NNEvaluator`.
+
+    The model is built locally (matching ``architecture`` /
+    ``hidden_sizes`` / ``policy_hidden_sizes``) and weights are loaded
+    into it before the server starts serving. We pass it in via
+    :class:`NNEvalServer`'s ``model_factory`` injection point so the
+    server's default load path (which only knows the registry-baseline
+    architecture) doesn't need to know about per-version metadata —
+    the helper here is the per-version translator.
+
+    Returns the started :class:`NNEvalServer`. Callers must call
+    ``server.stop()`` (or use it as a context manager) on tear-down.
+    """
+    # Local imports keep the module's import cost low for callers
+    # (test harnesses, orchestration paths) that don't actually need
+    # to start a server.
+    import torch as _torch
+
+    from mtg_bot.search.nn_eval_server import NNEvalServer
+    from mtg_bot.search.nn_evaluator import (
+        ARCHITECTURE_SHARED,
+        HIDDEN_SIZES,
+        _build_dual_head_model,
+        _ValueMLP,
+    )
+
+    resolved_hidden_sizes = (
+        hidden_sizes if hidden_sizes is not None else HIDDEN_SIZES
+    )
+    resolved_architecture = (
+        architecture if architecture is not None else ARCHITECTURE_SHARED
+    )
+
+    def _model_factory():
+        if with_policy:
+            model = _build_dual_head_model(
+                resolved_architecture,
+                hidden_sizes=resolved_hidden_sizes,
+                policy_hidden_sizes=policy_hidden_sizes,
+            )
+        else:
+            model = _ValueMLP(hidden_sizes=resolved_hidden_sizes)
+        # Load weights from disk into the freshly built model. The
+        # server's __init__ only auto-loads when ``model_factory is
+        # None``; with the factory in place, it's our job to deliver
+        # a fully loaded model. ``map_location=device`` matches the
+        # device the server's __init__ will then ``.to()`` the model
+        # onto, avoiding a needless host→host copy first.
+        state_dict = _torch.load(
+            weights_path, map_location=device, weights_only=True,
+        )
+        model.load_state_dict(state_dict)
+        return model
+
+    server = NNEvalServer(
+        weights_path=None,
+        device=device,
+        with_policy=with_policy,
+        batch_size=batch_size,
+        batch_wait_ms=batch_wait_ms,
+        model_factory=_model_factory,
+    )
+    server.start()
+    return server
+
+
 def run_shard_local(
     shard: ShardConfig,
     spec: SelfPlayJobSpec,
@@ -654,122 +739,138 @@ def run_shard_local(
     from mtg_bot.decks import decks_from_json
     from mtg_bot.training import (
         DataGenProgress,
-        NNPimcConfig,
         generate_training_data_parallel,
         save_dataset,
     )
+    from mtg_bot.training.config import NNServerPimcConfig
     from mtg_bot.training.data_gen import ReplayCaptureConfig
     from mtg_bot.training.trainer import auto_device
 
-    cfg = NNPimcConfig(
-        weights_path=spec.weights_path,
-        samples=spec.samples,
-        inner_nodes=spec.inner_nodes,
-        batch_size=32,
-        with_policy=spec.with_policy,
-        puct=True,
+    # Self-play uses ``puct=True``, which requires a policy head;
+    # build a dual-head server for self-play even if the spec's
+    # ``with_policy`` happens to be False (legacy data_gen-without-
+    # policy isn't a configuration we ship).
+    server_with_policy = bool(spec.with_policy) or True
+    server = _start_local_eval_server(
+        spec.weights_path,
         hidden_sizes=spec.hidden_sizes,
         architecture=spec.architecture,
         policy_hidden_sizes=spec.policy_hidden_sizes,
-        use_ismcts=spec.use_ismcts,
-        use_belief_weighted=spec.use_belief_weighted,
+        with_policy=server_with_policy,
         # Resolve locally on this shard's host: master picks "cuda",
         # Mac picks "mps", Win10 picks "cuda" (or "cpu" if no GPU).
-        # Tests construct NNPimcConfig() directly without ``device=``
-        # and stay on the CPU default — production goes through this
-        # spec-decoding path which always opts in.
         device=auto_device(),
     )
-
-    deck_pool = None
-    if spec.deck_pool_path is not None:
-        deck_pool = decks_from_json(Path(spec.deck_pool_path))
-
-    output_dir.mkdir(parents=True, exist_ok=True)
-    progress_dir.mkdir(parents=True, exist_ok=True)
-    output_path = _shard_npz_path(
-        output_dir, run_id_prefix, shard, stamp,
-    )
-    progress_path = _shard_progress_path(
-        progress_dir, run_id_prefix, shard,
-    )
-
-    # Replay capture — opt-in via spec.capture_every. Each shard
-    # writes to its own subdir under the master's replays-root so
-    # the training UI's per-card 'View N games' link finds them.
-    replay_config: Optional[ReplayCaptureConfig] = None
-    replays_subdir: Optional[str] = None
-    if spec.capture_every > 0 and spec.replays_root is not None:
-        run_id = (
-            f"{run_id_prefix}_shard_{shard.display_label}"
-        )
-        replays_subdir = str(
-            Path(spec.replays_root) / run_id
-        )
-        Path(replays_subdir).mkdir(parents=True, exist_ok=True)
-        replay_config = ReplayCaptureConfig(
-            save_dir=replays_subdir,
-            capture_every=spec.capture_every,
-            nn_weights_path=spec.weights_path,
-            nn_version_label=spec.nn_version_label,
-            nn_hidden_sizes=spec.hidden_sizes,
-            nn_with_policy=spec.with_policy,
-        )
-
-    hang_dump_dir: Optional[str] = None
-    if spec.hang_dump_root is not None:
-        hang_dump_dir = str(
-            Path(spec.hang_dump_root)
-            / f"{run_id_prefix}_shard_{shard.display_label}"
-        )
-
-    progress = DataGenProgress(
-        progress_path=progress_path,
-        run_id=f"{run_id_prefix}_shard_{shard.display_label}",
-        n_games_total=n_games,
-        n_workers=(
-            shard.n_workers if shard.n_workers is not None
-            else max(1, 0)  # generate_training_data_parallel will
-                            # default-fill from cpu_count
-        ),
-        command="distributed_self_play (local shard)",
-        notes=(
-            f"distributed shard {shard.display_label} "
-            f"({n_games} games)"
-        ),
-        replays_dir=replays_subdir,
-    )
-
     try:
-        features, outcomes, policy_targets, action_masks = (
-            generate_training_data_parallel(
-                p0_factory=cfg.build,
-                p1_factory=cfg.build,
-                n_games=n_games,
-                base_seed=spec.base_seed + shard.seed_offset,
-                n_workers=shard.n_workers,
-                with_policy=True,
-                decision_cap=spec.decision_cap,
-                sample_every=spec.sample_every,
-                enable_mulligans=spec.enable_mulligans,
-                per_game_timeout_sec=spec.per_game_timeout_sec,
-                progress=progress,
-                deck_pool=deck_pool,
-                replay_config=replay_config,
-                hang_dump_dir=hang_dump_dir,
-                heuristics=spec.heuristics,
-            )
+        cfg = NNServerPimcConfig(
+            server_handle=server.handle(),
+            samples=spec.samples,
+            inner_nodes=spec.inner_nodes,
+            batch_size=32,
+            with_policy=server_with_policy,
+            puct=True,
+            use_ismcts=spec.use_ismcts,
+            use_belief_weighted=spec.use_belief_weighted,
         )
-    except BaseException:
-        progress.finalize(status="failed")
-        raise
-    progress.finalize(status="completed")
 
-    save_dataset(
-        features, outcomes, output_path,
-        policy_targets=policy_targets, action_masks=action_masks,
-    )
-    return output_path
+        deck_pool = None
+        if spec.deck_pool_path is not None:
+            deck_pool = decks_from_json(Path(spec.deck_pool_path))
+
+        output_dir.mkdir(parents=True, exist_ok=True)
+        progress_dir.mkdir(parents=True, exist_ok=True)
+        output_path = _shard_npz_path(
+            output_dir, run_id_prefix, shard, stamp,
+        )
+        progress_path = _shard_progress_path(
+            progress_dir, run_id_prefix, shard,
+        )
+
+        # Replay capture — opt-in via spec.capture_every. Each shard
+        # writes to its own subdir under the master's replays-root so
+        # the training UI's per-card 'View N games' link finds them.
+        replay_config: Optional[ReplayCaptureConfig] = None
+        replays_subdir: Optional[str] = None
+        if spec.capture_every > 0 and spec.replays_root is not None:
+            run_id = (
+                f"{run_id_prefix}_shard_{shard.display_label}"
+            )
+            replays_subdir = str(
+                Path(spec.replays_root) / run_id
+            )
+            Path(replays_subdir).mkdir(parents=True, exist_ok=True)
+            replay_config = ReplayCaptureConfig(
+                save_dir=replays_subdir,
+                capture_every=spec.capture_every,
+                nn_weights_path=spec.weights_path,
+                nn_version_label=spec.nn_version_label,
+                nn_hidden_sizes=spec.hidden_sizes,
+                nn_with_policy=spec.with_policy,
+            )
+
+        hang_dump_dir: Optional[str] = None
+        if spec.hang_dump_root is not None:
+            hang_dump_dir = str(
+                Path(spec.hang_dump_root)
+                / f"{run_id_prefix}_shard_{shard.display_label}"
+            )
+
+        progress = DataGenProgress(
+            progress_path=progress_path,
+            run_id=f"{run_id_prefix}_shard_{shard.display_label}",
+            n_games_total=n_games,
+            n_workers=(
+                shard.n_workers if shard.n_workers is not None
+                else max(1, 0)  # generate_training_data_parallel will
+                                # default-fill from cpu_count
+            ),
+            command="distributed_self_play (local shard)",
+            notes=(
+                f"distributed shard {shard.display_label} "
+                f"({n_games} games)"
+            ),
+            replays_dir=replays_subdir,
+        )
+
+        try:
+            features, outcomes, policy_targets, action_masks = (
+                generate_training_data_parallel(
+                    p0_factory=cfg.build,
+                    p1_factory=cfg.build,
+                    n_games=n_games,
+                    base_seed=spec.base_seed + shard.seed_offset,
+                    n_workers=shard.n_workers,
+                    with_policy=True,
+                    decision_cap=spec.decision_cap,
+                    sample_every=spec.sample_every,
+                    enable_mulligans=spec.enable_mulligans,
+                    per_game_timeout_sec=spec.per_game_timeout_sec,
+                    progress=progress,
+                    deck_pool=deck_pool,
+                    replay_config=replay_config,
+                    hang_dump_dir=hang_dump_dir,
+                    heuristics=spec.heuristics,
+                )
+            )
+        except BaseException:
+            progress.finalize(status="failed")
+            raise
+        progress.finalize(status="completed")
+
+        save_dataset(
+            features, outcomes, output_path,
+            policy_targets=policy_targets, action_masks=action_masks,
+        )
+        return output_path
+    finally:
+        # Bulletproof teardown: even on a worker-pool failure,
+        # spec-decode failure (missing deck pool, etc), or
+        # KeyboardInterrupt, the server's accept thread, dispatcher
+        # thread, and listener socket all close cleanly.
+        try:
+            server.stop()
+        except Exception:  # pragma: no cover - best-effort cleanup
+            pass
 
 
 class _AggregateProgressPoller:
@@ -1844,9 +1945,8 @@ def run_shard_pull(
     import urllib.request
 
     from mtg_bot.decks import decks_from_json
-    from mtg_bot.training import (
-        NNPimcConfig, save_dataset,
-    )
+    from mtg_bot.training import save_dataset
+    from mtg_bot.training.config import NNServerPimcConfig
     from mtg_bot.training.data_gen import (
         ReplayCaptureConfig, _concat_chunks,
         _winner_to_p0_outcome,
@@ -1854,17 +1954,23 @@ def run_shard_pull(
     from mtg_bot.training.progress import DataGenProgress
     from mtg_bot.training.trainer import auto_device
 
-    cfg = NNPimcConfig(
-        weights_path=spec.weights_path,
-        samples=spec.samples,
-        inner_nodes=spec.inner_nodes,
-        device=auto_device(),
-        batch_size=32,
-        with_policy=spec.with_policy,
-        puct=True,
+    # Self-play uses ``puct=True``, which requires a policy head.
+    server_with_policy = bool(spec.with_policy) or True
+    server = _start_local_eval_server(
+        spec.weights_path,
         hidden_sizes=spec.hidden_sizes,
         architecture=spec.architecture,
         policy_hidden_sizes=spec.policy_hidden_sizes,
+        with_policy=server_with_policy,
+        device=auto_device(),
+    )
+    cfg = NNServerPimcConfig(
+        server_handle=server.handle(),
+        samples=spec.samples,
+        inner_nodes=spec.inner_nodes,
+        batch_size=32,
+        with_policy=server_with_policy,
+        puct=True,
         use_ismcts=spec.use_ismcts,
         use_belief_weighted=spec.use_belief_weighted,
     )
@@ -2155,6 +2261,14 @@ def run_shard_pull(
         raise
     finally:
         exe.shutdown(wait=False)
+        # Bulletproof teardown: tear the local eval server down on
+        # every exit path (clean drain, worker-pool exception, or
+        # KeyboardInterrupt). Without this the listener socket +
+        # accept thread + dispatcher thread leak across iters.
+        try:
+            server.stop()
+        except Exception:  # pragma: no cover - best-effort cleanup
+            pass
     if progress is not None:
         progress.finalize(status="completed")
     if events is not None:
@@ -2192,43 +2306,71 @@ def run_shard_eval_pull(
     import urllib.request
 
     from mtg_bot.decks import decks_from_json
-    from mtg_bot.training import NNPimcConfig
-    from mtg_bot.training.config import HeuristicConfig, PimcConfig
+    from mtg_bot.training.config import (
+        HeuristicConfig, NNServerPimcConfig, PimcConfig,
+    )
     from mtg_bot.training.data_gen import ReplayCaptureConfig
     from mtg_bot.training.progress import EvalProgress
     from mtg_bot.training.trainer import auto_device
 
     _device = auto_device()
-    new_cfg = NNPimcConfig(
-        weights_path=spec.new_weights_path,
-        samples=spec.samples, inner_nodes=spec.inner_nodes,
-        batch_size=32, with_policy=True, puct=True,
-        hidden_sizes=spec.hidden_sizes,
-        architecture=spec.new_architecture,
-        policy_hidden_sizes=spec.policy_hidden_sizes,
-        use_ismcts=spec.use_ismcts,
-        use_belief_weighted=spec.use_belief_weighted,
-        device=_device,
-    )
-    if spec.old_weights_path is not None:
-        old_cfg = NNPimcConfig(
-            weights_path=spec.old_weights_path,
-            samples=spec.samples, inner_nodes=spec.inner_nodes,
-            batch_size=32, with_policy=True, puct=True,
+    # Eval pits two NN versions head-to-head, so each side gets its
+    # OWN server-process: simpler than teaching the server to host
+    # multiple models or to swap mid-batch, and the per-context cost
+    # (~1.5 GB CUDA + ~70 MB per model) easily fits even on the
+    # 11 GB Win10 box. Pool workers receive both handles inside their
+    # respective configs and build one client per side per worker.
+    servers: list[Any] = []
+    try:
+        new_server = _start_local_eval_server(
+            spec.new_weights_path,
             hidden_sizes=spec.hidden_sizes,
-            architecture=spec.old_architecture,
+            architecture=spec.new_architecture,
             policy_hidden_sizes=spec.policy_hidden_sizes,
-            use_ismcts=spec.use_ismcts,
-            use_belief_weighted=spec.use_belief_weighted,
+            with_policy=True,
             device=_device,
         )
-        p1_factory = old_cfg.build
-    else:
-        p1_factory = PimcConfig(
+        servers.append(new_server)
+        new_cfg = NNServerPimcConfig(
+            server_handle=new_server.handle(),
             samples=spec.samples, inner_nodes=spec.inner_nodes,
-            heuristic=HeuristicConfig(), batch_size=1,
-        ).build
-    p0_factory = new_cfg.build
+            batch_size=32, with_policy=True, puct=True,
+            use_ismcts=spec.use_ismcts,
+            use_belief_weighted=spec.use_belief_weighted,
+        )
+        if spec.old_weights_path is not None:
+            old_server = _start_local_eval_server(
+                spec.old_weights_path,
+                hidden_sizes=spec.hidden_sizes,
+                architecture=spec.old_architecture,
+                policy_hidden_sizes=spec.policy_hidden_sizes,
+                with_policy=True,
+                device=_device,
+            )
+            servers.append(old_server)
+            old_cfg = NNServerPimcConfig(
+                server_handle=old_server.handle(),
+                samples=spec.samples, inner_nodes=spec.inner_nodes,
+                batch_size=32, with_policy=True, puct=True,
+                use_ismcts=spec.use_ismcts,
+                use_belief_weighted=spec.use_belief_weighted,
+            )
+            p1_factory = old_cfg.build
+        else:
+            p1_factory = PimcConfig(
+                samples=spec.samples, inner_nodes=spec.inner_nodes,
+                heuristic=HeuristicConfig(), batch_size=1,
+            ).build
+        p0_factory = new_cfg.build
+    except BaseException:
+        # If old_server startup fails after new_server is up, stop
+        # new_server so it doesn't leak its listener + threads.
+        for srv in servers:
+            try:
+                srv.stop()
+            except Exception:  # pragma: no cover - best-effort cleanup
+                pass
+        raise
 
     deck_pool = None
     if spec.deck_pool_path is not None:
@@ -2460,6 +2602,15 @@ def run_shard_eval_pull(
         raise
     finally:
         exe.shutdown(wait=False)
+        # Bulletproof teardown: stop both eval servers on every exit
+        # path (clean drain, worker-pool exception, KeyboardInterrupt).
+        # Either server may already be stopped if a sibling startup
+        # failed mid-init; ``stop`` is idempotent.
+        for srv in servers:
+            try:
+                srv.stop()
+            except Exception:  # pragma: no cover - best-effort cleanup
+                pass
     if progress is not None:
         progress.finalize(status="completed")
     if events is not None:

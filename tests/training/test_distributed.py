@@ -5615,10 +5615,15 @@ def test_run_shard_pull_abandons_inflight_on_queue_close(
         dist, "_play_one_parallel_game_timed", _selective_play,
     )
 
+    # Real weights on disk: ``run_shard_pull`` now starts a local
+    # NN eval server in the launcher process before the worker pool
+    # spins up, so ``weights_path`` must point at a real .pt file
+    # even when the worker stub never actually evaluates anything.
+    weights_path, hidden_sizes = _tiny_dual_head_weights(tmp_path)
     spec = SelfPlayJobSpec(
-        weights_path="ignored.pt",
+        weights_path=str(weights_path),
         samples=1, inner_nodes=10,
-        hidden_sizes=None,
+        hidden_sizes=hidden_sizes,
         base_seed=0,
         enable_mulligans=False,
         per_game_timeout_sec=None,
@@ -5730,10 +5735,12 @@ def test_run_shard_pull_natural_drain_abandons_inflight(
         dist, "_play_one_parallel_game_timed", _worker,
     )
 
+    # See sibling test for why real weights are required.
+    weights_path, hidden_sizes = _tiny_dual_head_weights(tmp_path)
     spec = SelfPlayJobSpec(
-        weights_path="ignored.pt",
+        weights_path=str(weights_path),
         samples=1, inner_nodes=10,
-        hidden_sizes=None,
+        hidden_sizes=hidden_sizes,
         base_seed=0,
         enable_mulligans=False,
         per_game_timeout_sec=None,
@@ -5831,10 +5838,12 @@ def test_run_shard_pull_preserves_data_already_completed_pre_close(
         dist, "_play_one_parallel_game_timed", _worker,
     )
 
+    # See sibling test for why real weights are required.
+    weights_path, hidden_sizes = _tiny_dual_head_weights(tmp_path)
     spec = SelfPlayJobSpec(
-        weights_path="ignored.pt",
+        weights_path=str(weights_path),
         samples=1, inner_nodes=10,
-        hidden_sizes=None,
+        hidden_sizes=hidden_sizes,
         base_seed=0,
         enable_mulligans=False,
         per_game_timeout_sec=None,
@@ -5906,11 +5915,15 @@ def test_run_shard_eval_pull_abandons_inflight_on_queue_close(
         dist, "_play_one_match_game_timed", _selective_eval,
     )
 
+    # ``run_shard_eval_pull`` now starts a local NN eval server in
+    # the launcher process before the worker pool spins up; needs
+    # real weights even when the worker stub never evaluates.
+    weights_path, hidden_sizes = _tiny_dual_head_weights(tmp_path)
     spec = EvalJobSpec(
-        new_weights_path="ignored.pt",
+        new_weights_path=str(weights_path),
         old_weights_path=None,
         samples=1, inner_nodes=10,
-        hidden_sizes=None,
+        hidden_sizes=hidden_sizes,
         base_seed=0,
         enable_mulligans=False,
         per_game_timeout_sec=None,
@@ -6005,11 +6018,13 @@ def test_run_shard_eval_pull_natural_drain_abandons_inflight(
         dist, "_play_one_match_game_timed", _eval_worker,
     )
 
+    # See sibling test for why real weights are required.
+    weights_path, hidden_sizes = _tiny_dual_head_weights(tmp_path)
     spec = EvalJobSpec(
-        new_weights_path="ignored.pt",
+        new_weights_path=str(weights_path),
         old_weights_path=None,
         samples=1, inner_nodes=10,
-        hidden_sizes=None,
+        hidden_sizes=hidden_sizes,
         base_seed=0,
         enable_mulligans=False,
         per_game_timeout_sec=None,
