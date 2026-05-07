@@ -572,6 +572,119 @@ def test_end_to_end_pimc_replay_capture_attaches_search_annotations(
     assert sample["inner_nodes"] == 4
 
 
+def test_search_annotation_lands_on_pre_apply_snapshot(tmp_path: Path):
+    """Unit-level pin of the data_gen call-site fix: with PIMC enabled
+    and capture_every=1, the FIRST search annotation produced by the
+    very first priority-action iteration must land on
+    ``snapshots[0]`` (the recorded initial state), NOT
+    ``snapshots[1]`` (the post-apply state of that first decision).
+
+    Pre-fix bug: the call site passed ``len(snapshots) - 1`` so the
+    annotation always landed on the snap that was just recorded
+    (post-apply). Post-fix: it passes ``len(snapshots) - 2`` so the
+    annotation lands on the snap whose state was the search root
+    (the one recorded BEFORE the apply that just happened).
+    """
+    from mtg_bot.training import PimcConfig
+    config = PimcConfig(samples=1, inner_nodes=4)
+    factory = lambda seed, _c=config: _c.build(seed)
+    save_dir = tmp_path / "replays"
+    cfg = ReplayCaptureConfig(save_dir=str(save_dir), capture_every=1)
+    generate_training_data(
+        p0_factory=factory, p1_factory=factory,
+        n_games=1, base_seed=0, replay_config=cfg,
+        deck_pool=simple_test_deck_pool(),
+    )
+    files = sorted(save_dir.glob("*.json.gz"))
+    replay = load_replay(files[0])
+    # Initial snapshot must carry an annotation now (the first
+    # priority-action search ran on its state).
+    assert replay.snapshots[0].get("search") is not None, (
+        "expected snap[0] (initial pre-game state) to carry the "
+        "annotation from the first priority-action search; with the "
+        "fix, every priority-action search annotation lands on its "
+        "pre-apply snapshot"
+    )
+
+
+def test_search_annotation_aligns_with_pre_apply_snapshot_state(
+    tmp_path: Path,
+):
+    """Regression: the search annotation at ``snapshots[i]`` describes
+    the search that ran with ``snapshots[i].state`` as the root.
+    Equivalently, ``snapshots[i].search.chosen`` must equal
+    ``snapshots[i+1].decision`` for every annotated snap.
+
+    This was bug #LDF: data_gen / self_play attached the annotation to
+    the POST-apply snapshot (``len(snapshots) - 1``), one snapshot too
+    late. The viewer renders the annotation alongside the snapshot's
+    state, so candidates appeared to be illegal in the displayed state
+    (e.g. a sorcery-window search with PlayLand candidates would land
+    on the next snap whose state had already advanced to opp's instant-
+    timing window with only PassPriority castable). The fix attaches
+    to ``len(snapshots) - 2`` instead so every snap.search aligns with
+    snap.state.
+
+    Equivalent invariants (any one breaking → bug):
+    * snap[i].search.chosen == snap[i+1].decision (the chosen action
+      WAS what got applied on the way to the next snapshot).
+    * snap[i].search exists only when snap[i+1] exists (a search must
+      have produced a real follow-up snapshot).
+    """
+    from mtg_bot.training import PimcConfig
+    config = PimcConfig(samples=1, inner_nodes=4)
+    factory = lambda seed, _c=config: _c.build(seed)
+    save_dir = tmp_path / "replays"
+    cfg = ReplayCaptureConfig(save_dir=str(save_dir), capture_every=1)
+    generate_training_data(
+        p0_factory=factory, p1_factory=factory,
+        n_games=1, base_seed=0, replay_config=cfg,
+        deck_pool=simple_test_deck_pool(),
+    )
+    files = sorted(save_dir.glob("*.json.gz"))
+    assert len(files) == 1
+    replay = load_replay(files[0])
+
+    # Find every annotated snap and verify the alignment invariant.
+    n_aligned_checks = 0
+    for i, snap in enumerate(replay.snapshots):
+        s = snap.get("search")
+        if s is None:
+            continue
+        # An annotated snap must have a successor (the apply happened
+        # to produce it).
+        assert i + 1 < len(replay.snapshots), (
+            f"snap[{i}] has search annotation but no follow-up snapshot "
+            f"(would mean an apply was recorded with no resulting "
+            f"post-apply state)"
+        )
+        chosen = s.get("chosen")
+        applied = replay.snapshots[i + 1].get("decision")
+        assert chosen == applied, (
+            f"snap[{i}].search.chosen={chosen!r} but "
+            f"snap[{i+1}].decision={applied!r} — annotation/state "
+            f"misalignment (the search ran on a different root than "
+            f"what this snap shows)"
+        )
+        n_aligned_checks += 1
+    # Sanity: at least a handful of priority-action snaps should have
+    # been annotated; otherwise the test would silently pass with
+    # zero checks.
+    assert n_aligned_checks >= 5, (
+        f"only {n_aligned_checks} annotated snaps found; expected "
+        f"at least 5 for a single game"
+    )
+
+    # Also: the LAST snapshot (terminal or budget-cap) should NOT carry
+    # a search annotation — there's no follow-up apply to align it
+    # with. (Initial snap[0] CAN now carry one — the fix moves the
+    # first decision's annotation onto it.)
+    assert replay.snapshots[-1].get("search") is None, (
+        "last snapshot carries a search annotation — there's no "
+        "follow-up snapshot to align it with"
+    )
+
+
 def test_end_to_end_replay_capture_writes_v3_with_search_field(
     tmp_path: Path,
 ):

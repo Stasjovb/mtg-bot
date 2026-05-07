@@ -950,13 +950,27 @@ def _play_one_game_recording(
         if replay_recorder is not None:
             replay_recorder.record(adapter.engine_state, decision=decision)
             if search_annotation is not None:
-                # Attach the search annotation to the snapshot we just
-                # recorded — the post-apply state is the one that
-                # corresponds to ``decision``, and the viewer's
-                # decision-detail panel renders the annotation while
-                # showing the post-apply snapshot.
+                # Attach the search annotation to the PRE-apply snapshot —
+                # i.e. the snapshot whose state was the search root. The
+                # viewer's decision-detail panel renders the annotation
+                # alongside the snapshot's state, so candidates must be
+                # legal in THAT state. Attaching to the post-apply snap
+                # (the one we just recorded) used to mismatch state vs.
+                # candidates: e.g. a sorcery-window search at
+                # PRECOMBAT_MAIN with active=priority showing 4
+                # land-play candidates would land on the next snap whose
+                # state has already advanced to the opp's instant-timing
+                # priority window (1 candidate), making the displayed
+                # annotation look like a no-op.
+                #
+                # Pre-apply snap index = ``len(snapshots) - 2`` (the snap
+                # recorded BEFORE the just-appended post-apply one).
+                # ``record`` always appends at least the initial snap
+                # before this loop fires, so ``len - 2 >= 0`` for every
+                # priority-action iteration that produces a search
+                # annotation.
                 replay_recorder.record_search_annotation(
-                    len(replay_recorder.snapshots) - 1,
+                    len(replay_recorder.snapshots) - 2,
                     search_annotation,
                 )
         decision_idx += 1
