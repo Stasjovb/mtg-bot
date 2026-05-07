@@ -659,6 +659,7 @@ def run_shard_local(
         save_dataset,
     )
     from mtg_bot.training.data_gen import ReplayCaptureConfig
+    from mtg_bot.training.trainer import auto_device
 
     cfg = NNPimcConfig(
         weights_path=spec.weights_path,
@@ -672,6 +673,12 @@ def run_shard_local(
         policy_hidden_sizes=spec.policy_hidden_sizes,
         use_ismcts=spec.use_ismcts,
         use_belief_weighted=spec.use_belief_weighted,
+        # Resolve locally on this shard's host: master picks "cuda",
+        # Mac picks "mps", Win10 picks "cuda" (or "cpu" if no GPU).
+        # Tests construct NNPimcConfig() directly without ``device=``
+        # and stay on the CPU default — production goes through this
+        # spec-decoding path which always opts in.
+        device=auto_device(),
     )
 
     deck_pool = None
@@ -1845,11 +1852,13 @@ def run_shard_pull(
         _winner_to_p0_outcome,
     )
     from mtg_bot.training.progress import DataGenProgress
+    from mtg_bot.training.trainer import auto_device
 
     cfg = NNPimcConfig(
         weights_path=spec.weights_path,
         samples=spec.samples,
         inner_nodes=spec.inner_nodes,
+        device=auto_device(),
         batch_size=32,
         with_policy=spec.with_policy,
         puct=True,
@@ -2187,7 +2196,9 @@ def run_shard_eval_pull(
     from mtg_bot.training.config import HeuristicConfig, PimcConfig
     from mtg_bot.training.data_gen import ReplayCaptureConfig
     from mtg_bot.training.progress import EvalProgress
+    from mtg_bot.training.trainer import auto_device
 
+    _device = auto_device()
     new_cfg = NNPimcConfig(
         weights_path=spec.new_weights_path,
         samples=spec.samples, inner_nodes=spec.inner_nodes,
@@ -2197,6 +2208,7 @@ def run_shard_eval_pull(
         policy_hidden_sizes=spec.policy_hidden_sizes,
         use_ismcts=spec.use_ismcts,
         use_belief_weighted=spec.use_belief_weighted,
+        device=_device,
     )
     if spec.old_weights_path is not None:
         old_cfg = NNPimcConfig(
@@ -2208,6 +2220,7 @@ def run_shard_eval_pull(
             policy_hidden_sizes=spec.policy_hidden_sizes,
             use_ismcts=spec.use_ismcts,
             use_belief_weighted=spec.use_belief_weighted,
+            device=_device,
         )
         p1_factory = old_cfg.build
     else:
