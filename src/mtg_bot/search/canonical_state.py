@@ -288,6 +288,15 @@ def _canonical_continuous_effect(
     rank but different absolute timestamps don't otherwise differ in
     forward play.
     """
+    # Optional[int] fields use ``-1`` as the absent-sentinel rather
+    # than ``None`` so the per-effect tuples stay sortable: the caller
+    # does ``tuple(sorted(...))`` over the registry, Python tuple
+    # comparison walks elements positionally, and one effect with
+    # ``target_id=None`` against another with ``target_id=42`` raises
+    # ``TypeError: '<' not supported between instances of NoneType
+    # and int``. -1 is safe — object ids, turn numbers, and player
+    # ids are all >= 0 in this engine, so a real value can never
+    # collide with the sentinel.
     return (
         ce.layer,
         ce.sublayer,
@@ -297,11 +306,11 @@ def _canonical_continuous_effect(
         ce.target_filter,
         (
             raw_id_to_canon.get(ce.target_id, ce.target_id)
-            if ce.target_id is not None else None
+            if ce.target_id is not None else -1
         ),
         repr(ce.params),
-        ce.expires_at,
-        ce.expires_at_player_id,
+        ce.expires_at if ce.expires_at is not None else -1,
+        ce.expires_at_player_id if ce.expires_at_player_id is not None else -1,
     )
 
 
