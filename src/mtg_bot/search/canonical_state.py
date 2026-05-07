@@ -217,9 +217,27 @@ def _canonical_zone_card(obj: GameObject) -> tuple:
 
 def _canonical_mana_pool(pool: list[ManaCoin]) -> tuple:
     """Mana pool: count by ``(color, spend_restriction)``. Order in
-    the pool list doesn't affect downstream play."""
+    the pool list doesn't affect downstream play.
+
+    ``c.spend_restriction`` is ``Optional[str]`` — None for unrestricted
+    coins, a non-empty tag string ("artifact_spell",
+    "colorless_eldrazi", etc., see :class:`ManaCoin` docstring) for
+    restricted coins. We coerce None to the empty string ``""`` BEFORE
+    counting so the outer ``tuple(sorted(...))`` over
+    ``Counter.items()`` doesn't crash when one coin has
+    ``spend_restriction=None`` and another has ``"artifact_spell"``:
+    Python tuple comparison would otherwise hit ``TypeError: '<' not
+    supported between instances of 'NoneType' and 'str'`` when
+    comparing two ``((color, restriction), count)`` pairs whose
+    ``(color, restriction)`` keys disagree only on the second slot.
+    Empty string is a safe sentinel: real restriction tags are always
+    non-empty strings, so ``""`` cannot collide with a real value.
+    Surfaced live in iter_005 self-play (1 crash / 1000 games)."""
     return tuple(sorted(
-        Counter((c.color, c.spend_restriction) for c in pool).items()
+        Counter(
+            (c.color, c.spend_restriction if c.spend_restriction is not None else "")
+            for c in pool
+        ).items()
     ))
 
 
@@ -324,6 +342,23 @@ def _shape_key(obj: GameObject) -> tuple:
     that distinguishes "the same printing on the battlefield" from
     "a structurally distinct copy". Excludes ``attached_to`` and
     ``blocked_by`` (lists of raw ids; remap target).
+
+    Optional fields use sentinel coercion (None -> -1 for Optional[int],
+    None -> "" for Optional[str]) so the shape tuple stays sortable.
+    The shape is the sort key used by
+    :func:`_build_canonical_battlefield_index` — Python tuple
+    comparison walks elements positionally and would raise
+    ``TypeError: '<' not supported between 'NoneType' and 'str'/'int'``
+    when two battlefield permanents differ at a slot where one carries
+    None and the other carries a real value (e.g. one Painter's Servant
+    that picked a color vs one that hasn't, or a permanent whose
+    controller has been aura-swapped vs one that hasn't, or a "becomes
+    a copy" target vs an unmodified peer). The sentinels (-1 for ids /
+    counters / turn numbers — real values are always >= 0; "" for
+    string tags — real values like printing names and color codes are
+    always non-empty strings) cannot collide with real values, so the
+    canonical-index identity rule ("structurally equivalent permanents
+    receive the same canonical index") is preserved.
     """
     return (
         obj.printing.name,
@@ -353,13 +388,23 @@ def _shape_key(obj: GameObject) -> tuple:
         obj.permanent_is_creature,
         obj.enduring_returned_as_enchantment,
         obj.has_activated_once_only_ability,
-        obj.painter_chosen_color,
+        # Optional[str] — None for non-Painter sources, "W"/"U"/... for
+        # a Painter that resolved its color choice. "" sentinel.
+        obj.painter_chosen_color if obj.painter_chosen_color is not None else "",
         tuple(sorted(obj.unlocked_halves)),
         obj.temp_power_bonus,
         obj.temp_toughness_bonus,
-        obj.controller_id_before_any_aura_swap,
+        # Optional[int] — None until a layer-2 control-change captures
+        # the baseline; -1 sentinel (player ids are always >= 0).
+        (
+            obj.controller_id_before_any_aura_swap
+            if obj.controller_id_before_any_aura_swap is not None else -1
+        ),
+        # Optional[CardPrinting] -> str-or-"" — None until a "becomes a
+        # copy" effect mutates ``printing``. "" sentinel (real
+        # ``CardPrinting.name`` values are always non-empty strings).
         obj.original_printing.name
-        if obj.original_printing is not None else None,
+        if obj.original_printing is not None else "",
     )
 
 
