@@ -379,6 +379,133 @@ class MCTS(SearchStrategy):
         ).decision
         return (chosen, candidates)
 
+    def choose_with_subtree(
+        self,
+        state: GameState,
+        player_id: PlayerID,
+        tree_depth: int = 1,
+        tree_top_k: Optional[int] = None,
+    ) -> tuple[Optional[Decision], list[dict[str, Any]]]:
+        """Run a search and return per-root-child stats *plus* the
+        nested top-K sub-tree under each candidate, up to
+        ``tree_depth`` levels deep.
+
+        Returns ``(chosen_decision_or_None, candidates)``. Each
+        candidate dict carries the same fields as
+        ``choose_with_full_stats`` plus an extra ``"subtree"`` key:
+        a list of grandchild dicts (same shape, recursive). The list
+        is empty when ``tree_depth <= 1`` or when the corresponding
+        ``_Node`` has no expanded children. At depth ≥ 1 we sort by
+        visits desc and slice to ``tree_top_k`` (None = keep all).
+        At depth 0 (the root) we keep ALL candidates — that matches
+        today's ``choose_with_full_stats`` shape and the data-gen
+        loop's "encode every visited slot" expectation.
+        ``tree_depth=1`` reproduces ``choose_with_full_stats``
+        exactly with ``subtree=[]`` on every candidate.
+
+        ``"subtree"`` is the in-memory key used by callers walking
+        the search tree directly. ``build_search_annotation``
+        translates this to the on-disk ``children`` field (with
+        ``None`` meaning "no deep capture"). Keeping a different
+        in-memory name avoids accidentally setting ``children=[]``
+        on root-only captures, which would change the on-disk
+        shape and break the v3-back-compat invariant.
+
+        Forced moves: same single-element shape as
+        ``choose_with_full_stats``, with ``subtree=[]``.
+        """
+        if tree_depth < 1:
+            raise ValueError(
+                f"tree_depth must be >= 1, got {tree_depth!r}"
+            )
+        legal = list(state.legal_decisions())
+        if len(legal) == 1:
+            decision = legal[0]
+            return (
+                decision,
+                [
+                    {
+                        "decision": decision,
+                        "visits": 1,
+                        "q": None,
+                        "prior": None,
+                        "leaf_value": None,
+                        "subtree": [],
+                    }
+                ],
+            )
+
+        root = _Node(
+            state=state.clone(),
+            pending_decisions=self.expansion_policy.make_decision_iterator(
+                state
+            ),
+        )
+
+        budget = self.budget_factory()
+        budget.start()
+        if self.batch_size == 1:
+            self._search_serial(root, player_id, budget)
+        else:
+            self._search_batched(
+                root, player_id, budget, self.batch_size,
+            )
+
+        candidates = self._walk_subtree(
+            root,
+            depth_remaining=tree_depth,
+            top_k=tree_top_k,
+            is_root=True,
+        )
+        if not candidates:
+            return (None, [])
+        chosen = max(
+            root.children, key=lambda c: c.visits,
+        ).decision
+        return (chosen, candidates)
+
+    def _walk_subtree(
+        self,
+        node: "_Node",
+        depth_remaining: int,
+        top_k: Optional[int],
+        is_root: bool,
+    ) -> list[dict[str, Any]]:
+        """Recursively translate a ``_Node``'s expanded children into
+        the candidate-dict shape used by the search-annotation hook.
+
+        ``depth_remaining`` is the number of additional levels to
+        emit beneath ``node``. At ``depth_remaining == 0`` we return
+        an empty list (terminate). At each level we sort children
+        by visits desc; at non-root levels we slice to ``top_k``
+        (keep all when ``top_k is None``). At the root, we keep
+        every child regardless of ``top_k`` so the data-gen policy
+        encoder still sees the full visit distribution.
+        """
+        if depth_remaining <= 0:
+            return []
+        children = list(node.children)
+        children.sort(key=lambda c: c.visits, reverse=True)
+        if not is_root and top_k is not None:
+            children = children[:top_k]
+        out: list[dict[str, Any]] = []
+        for child in children:
+            sub = self._walk_subtree(
+                child,
+                depth_remaining=depth_remaining - 1,
+                top_k=top_k,
+                is_root=False,
+            )
+            out.append({
+                "decision": child.decision,
+                "visits": child.visits,
+                "q": child.mean_value() if child.visits > 0 else None,
+                "prior": child.prior if self.puct else None,
+                "leaf_value": child.leaf_nn_value,
+                "subtree": sub,
+            })
+        return out
+
     def choose_with_visits(
         self, state: GameState, player_id: PlayerID
     ) -> dict[Decision, int]:
