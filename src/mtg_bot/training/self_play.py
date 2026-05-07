@@ -749,8 +749,12 @@ def _play_capped_game(
         if replay_recorder is not None:
             replay_recorder.record(adapter.engine_state, decision=decision)
             if search_annotation is not None:
+                # Attach to the PRE-apply snapshot (state the search
+                # ran against), not the just-recorded post-apply snap.
+                # See the matching block in ``data_gen`` for the full
+                # rationale.
                 replay_recorder.record_search_annotation(
-                    len(replay_recorder.snapshots) - 1,
+                    len(replay_recorder.snapshots) - 2,
                     search_annotation,
                 )
         # Update the optional shared progress sentinel — see

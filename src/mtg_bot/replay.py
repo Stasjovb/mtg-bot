@@ -34,9 +34,23 @@ Optional snapshot annotations (added by ``ReplayRecorder``):
   "visits": int, "q": float|None, "prior": float|None,
   "leaf_value": float|None}, ...], "samples": int, "inner_nodes":
   int, "elapsed_ms": int|None}``. Loaded as ``None`` on snapshots
-  that were never annotated (initial pre-game state, terminal
-  snapshots, forced-move shortcuts that never spun a tree, and
-  every snapshot in a v1/v2 replay).
+  that were never annotated (terminal snapshot, forced-move
+  shortcuts that never spun a tree, and every snapshot in a v1/v2
+  replay).
+
+  IMPORTANT: the search annotation describes the search that ran
+  with THIS snapshot's state as the root. The ``chosen`` action is
+  the decision that will be applied to advance from this state to
+  the NEXT snapshot's state — i.e. ``snapshots[i+1].decision``
+  matches ``snapshots[i].search.chosen``. Equivalently: candidates
+  here are legal in THIS snapshot's state. The viewer's decision-
+  detail panel relies on this alignment so it can show "what the
+  bot was thinking from this position." The ``decision`` field by
+  contrast describes what was just done to PRODUCE this state
+  (i.e. the result of the previous snapshot's search). The two
+  semantics differ by exactly one snapshot offset, which is why
+  decision lives on the post-apply snapshot and search on the
+  pre-apply snapshot.
 
 Format-version field is stamped into the file so future format
 changes can detect old replays and either migrate or refuse.
