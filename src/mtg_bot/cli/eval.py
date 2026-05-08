@@ -28,6 +28,7 @@ from mtg_bot.cli._common import (
     load_shards_config,
     runtime_parser,
 )
+from mtg_bot.cli.runs import lifecycle as _lifecycle
 from mtg_bot.search.heuristics_config import HeuristicsConfig
 from mtg_bot.training.distributed import (
     EvalJobSpec, run_distributed_eval,
@@ -41,10 +42,13 @@ from mtg_bot.training.distributed import (
 _DEFAULT_HIDDEN_SIZES = (1024, 1024, 512)
 
 
-def main(argv=None) -> None:  # pragma: no cover
+def main(argv=None) -> None:
     # Argparse + run_distributed_eval dispatch; the heavy logic lives
     # in ``mtg_bot.training.distributed.run_distributed_eval`` which
-    # has its own coverage. The body here is straight-line plumbing.
+    # has its own coverage. The body here is mostly straight-line
+    # plumbing — pinned by ``tests/cli/test_subcommand_run_lifecycle.py``
+    # which mock-stubs ``run_distributed_eval`` and verifies the
+    # ``runs.lifecycle`` start/finish trio fires correctly.
     parser = argparse.ArgumentParser(
         description=__doc__,
         parents=[depth_parser(), cluster_parser(), runtime_parser()],
@@ -138,16 +142,41 @@ def main(argv=None) -> None:  # pragma: no cover
         f"queue_slack_extra={slack_extra}"
     )
 
+    # Phase 1 dual-write: alongside the existing JSON-progress writes,
+    # register the run in the SQLite DB. Lifecycle is a no-op when
+    # neither MTG_BOT_RUN_DB_PATH nor MTG_BOT_RUN_DB_URL is set.
+    run_id = f"eval_{label}"
+    progress_json_path = args.progress_dir / f"{run_id}.json"
+    eval_config = {
+        "kind": "eval",
+        "new": args.new,
+        "old": args.old,
+        "games": args.games,
+        "nodes": args.nodes,
+        "samples": args.samples,
+        "seed": args.seed,
+        "label": label,
+        "deck_pool": args.deck_pool,
+        "queue_url": args.queue_url,
+        "per_game_timeout_sec": args.per_game_timeout_sec,
+        "enable_mulligans": args.enable_mulligans,
+    }
     t0 = time.perf_counter()
-    counts = run_distributed_eval(
-        shards_cfg, spec,
-        progress_dir=args.progress_dir,
-        run_id_prefix=f"eval_{label}",
-        total_games=args.games,
-        queue_url=args.queue_url,
-        bundle_url=args.bundle_url,
-        slack_extra=slack_extra,
-    )
+    with _lifecycle.run_lifecycle(
+        run_id=run_id, kind="eval",
+        config=eval_config,
+        progress_json_path=progress_json_path,
+        label=label,
+    ):
+        counts = run_distributed_eval(
+            shards_cfg, spec,
+            progress_dir=args.progress_dir,
+            run_id_prefix=run_id,
+            total_games=args.games,
+            queue_url=args.queue_url,
+            bundle_url=args.bundle_url,
+            slack_extra=slack_extra,
+        )
     elapsed = time.perf_counter() - t0
 
     wins_new = counts.get("wins_new", 0)
@@ -156,6 +185,12 @@ def main(argv=None) -> None:  # pragma: no cover
     crashed = counts.get("crashed", 0)
     n_decided = wins_new + wins_old
     wr = wins_new / n_decided if n_decided else 0.0
+    _lifecycle.push_eval_summary(
+        run_id,
+        wins_new=wins_new, wins_old=wins_old, draws=draws,
+        crashed=crashed, elapsed_seconds=elapsed,
+        extra={"win_rate": wr, "label": label},
+    )
     print(
         f"[eval] {args.new} vs {args.old} complete in {elapsed/60:.1f}min: "
         f"wins_new={wins_new}, wins_old={wins_old}, draws={draws}, "

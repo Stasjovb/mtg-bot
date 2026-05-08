@@ -93,7 +93,6 @@ omit = [
     "src/mtg_bot/cli/bench.py",
     "src/mtg_bot/cli/bench_kinds/*.py",
     "src/mtg_bot/cli/capture.py",
-    "src/mtg_bot/cli/eval.py",
 ]
 
 [tool.coverage.report]

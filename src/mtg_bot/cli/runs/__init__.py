@@ -22,6 +22,6 @@ The same client API works in-process (writes directly via
 client is a no-op (caller's existing JSON writes still run unchanged).
 """
 
-from mtg_bot.cli.runs import client, db, models
+from mtg_bot.cli.runs import client, db, lifecycle, models
 
-__all__ = ["client", "db", "models"]
+__all__ = ["client", "db", "lifecycle", "models"]
