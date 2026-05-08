@@ -143,6 +143,68 @@ For one-time per-machine bootstrap (Python, repo clone, SSH keys,
 Tailscale enrollment), see
 [`docs/SETUP_DISTRIBUTED.md`](docs/SETUP_DISTRIBUTED.md).
 
+## Run database
+
+Every `mtg_bot` subcommand records its run into a SQLite DB at
+`training_progress/runs.db` alongside its existing progress JSON.
+**Phase 1 invariant: dual-write only.** The training UI under
+`src/mtg_bot/training_ui/` keeps reading the JSON files — do not
+remove or rename those writes. Phase 2 swaps the UI; until then
+the DB is a shadow store.
+
+**Schema** (defined in `src/mtg_bot/cli/runs/db.py`):
+
+- `runs` — one row per invocation: `run_id`, `kind`
+  (iterate / self_play / eval / bench / capture / training), `status`
+  (running / completed / failed / killed), `started_at`, `ended_at`,
+  `git_commit`, `config_json` (full argparse config), `parent_run_id`,
+  `label`, `notes`.
+- `run_progress` — upsert keyed on `(run_id, shard_label)`. Aggregate
+  row uses `shard_label IS NULL`; per-shard rows carry the shard's
+  display label. Counters: `n_games_done`, `n_games_total`,
+  `wins_new`, `wins_old`, `draws`, `crashed`, `timed_out`,
+  `elapsed_seconds`, `extra_json` (free-form).
+- `run_events` — append-only event log (started, stage_change,
+  promoted, ...).
+- `run_artifacts` — registers on-disk byproducts (the existing
+  progress JSON, weights.pt, npzs, replay files).
+
+**Env vars** (read fresh on each `client.*` call, so test fixtures
+and late `configure(...)` writes propagate):
+
+- `MTG_BOT_RUN_DB_PATH=training_progress/runs.db` — direct-SQLite
+  transport. Used by master subcommands (the master has direct
+  filesystem access).
+- `MTG_BOT_RUN_DB_URL=http://desktop-j05412i:5099` — REST transport.
+  Used by SSH-launched remote shards (no shared filesystem).
+- Neither set → every `client.*` call is a no-op. Phase 1 invariant:
+  callers' existing JSON writes still run unchanged.
+
+**Backup** (online — no need to stop the master):
+
+```bash
+PYTHONPATH=src .venv-py313/Scripts/python.exe -m mtg_bot.cli db backup
+# default destination: training_progress/backups/runs.db.<UTC-stamp>.bak
+```
+
+`mtg_bot db backup --out PATH` overrides the default destination.
+Other `mtg_bot db` actions:
+
+- `mtg_bot db dump --run-id X` — pretty-print one run's full record.
+- `mtg_bot db query "SELECT ..."` — read-only SELECT escape hatch
+  (rejects writes via regex + sqlite read-only URI).
+
+REST endpoints on the existing port-5099 `mtg_bot serve`:
+
+- `POST /run/start`, `POST /run/<id>/progress`, `POST /run/<id>/event`,
+  `POST /run/<id>/finish`, `POST /run/<id>/artifact`,
+  `GET /run/<id>`, `GET /runs?status=&kind=&since=&limit=`.
+
+All write endpoints serialize through `runs.db.WRITE_LOCK` so
+concurrent POSTs from many remotes don't race the SQLite writer.
+Pass `--runs-db-path ''` to `mtg_bot serve` to disable the run-DB
+endpoints (default: `training_progress/runs.db`).
+
 ## Scope reminders
 
 - Card pool target: **Edge of Eternities** (Scryfall set code `eoe`). Raw data is cached at `data/edge_of_eternities.json`; regenerate via `scripts/fetch_eoe.py`.
