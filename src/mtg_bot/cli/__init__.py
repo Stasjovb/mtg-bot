@@ -29,6 +29,7 @@ _SUBCOMMANDS = {
     "capture": "mtg_bot.cli.capture",
     "eval": "mtg_bot.cli.eval",
     "bench": "mtg_bot.cli.bench",
+    "db": "mtg_bot.cli.db",
 }
 
 _DESCRIPTIONS = {
@@ -39,6 +40,7 @@ _DESCRIPTIONS = {
     "capture": "Capture annotated NN-driven self-play replays for replay-viewer review.",
     "eval": "Run a head-to-head eval between two registered NN versions.",
     "bench": "Run one of the perf benchmarks (clone, per-game wall, NN-eval-server, ...).",
+    "db": "Run database admin tooling (backup, dump, query).",
 }
 
 

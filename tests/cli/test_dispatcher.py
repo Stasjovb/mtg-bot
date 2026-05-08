@@ -26,7 +26,7 @@ def test_help_lists_all_subcommands(capsys):
     cli_pkg.main([])
     captured = capsys.readouterr().out
     for name in ("iterate", "train", "shard", "serve",
-                 "capture", "eval", "bench"):
+                 "capture", "eval", "bench", "db"):
         assert name in captured
 
 
@@ -64,7 +64,7 @@ def test_dispatch_routes_each_subcommand():
     pins the table contents — adding a new key without an entry in
     ``_SUBCOMMANDS`` would surface here."""
     for subname in ("iterate", "train", "shard", "serve",
-                    "capture", "eval", "bench"):
+                    "capture", "eval", "bench", "db"):
         called = {"with_argv": None}
 
         def make_fake(target=called):
