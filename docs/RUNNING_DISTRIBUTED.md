@@ -58,13 +58,15 @@ Run these once when you sit down at the desktop:
 
 ## Running a self-play iteration
 
-The `scripts/iterate_alphazero.py` driver runs the
-**self-play → train → eval-gate → bump-version** loop.
+The `mtg_bot iterate` subcommand runs the
+**self-play → train → eval-gate → bump-version** loop. (The
+``scripts/iterate_alphazero.py`` thin shim still works for legacy
+SSH / cmd-line habits and dispatches to the same code.)
 
 ### Local-only (single-machine)
 
 ```bash
-.venv-py313/Scripts/python.exe scripts/iterate_alphazero.py \
+PYTHONPATH=src .venv-py313/Scripts/python.exe -m mtg_bot.cli iterate \
     --bootstrap-version v6 \
     --n-iterations 5 \
     --games-per-iteration 500 \
@@ -86,7 +88,7 @@ machine's CPU pool.
 Add `--shards-config` pointing at a JSON file describing the cluster:
 
 ```bash
-.venv-py313/Scripts/python.exe scripts/iterate_alphazero.py \
+PYTHONPATH=src .venv-py313/Scripts/python.exe -m mtg_bot.cli iterate \
     --bootstrap-version v6 \
     --n-iterations 5 \
     --games-per-iteration 1000 \
@@ -113,7 +115,8 @@ What happens during a distributed iteration:
 1. **Master spawns the pull-queue HTTP server** for this iteration
    (default port chosen at startup; logged to stdout).
 2. **Master SSHes each remote** in parallel and starts
-   `scripts/run_self_play_shard.py` with the spec base64-encoded as
+   `scripts/run_self_play_shard.py` (a 5-line shim that dispatches into
+   ``mtg_bot.cli.shard``) with the spec base64-encoded as
    `--spec-json`. Each remote shells the script as a background process
    and returns; the master polls the queue for completion.
 3. **Each shard worker** pulls game-index batches from the master's
@@ -139,7 +142,7 @@ that streams to the master's training UI. Two pieces:
 
 ```bash
 ssh greggs-macbook-pro "cd ~/projects/mtg-bot && \
-    nohup .venv-py313/bin/python -u scripts/bench_per_game_wall.py \
+    PYTHONPATH=src nohup .venv-py313/bin/python -u -m mtg_bot.cli bench per-game-wall \
         --n-games 50 \
         --workers 8 \
         --bootstrap-version v6 \
@@ -147,6 +150,8 @@ ssh greggs-macbook-pro "cd ~/projects/mtg-bot && \
         --label mac-bench-post-combat-prunes \
     > /tmp/mac_bench.log 2>&1 &"
 ```
+
+(``scripts/bench_per_game_wall.py`` still works as a legacy shim.)
 
 Key flags:
 - `--progress-dir` — opt in to `BenchProgress` JSON emission. When

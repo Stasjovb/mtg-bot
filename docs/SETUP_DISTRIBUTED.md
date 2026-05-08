@@ -22,11 +22,12 @@ manual scp / env vars / pubkey paste.
 **On the master**, once:
 
 ```bash
-PYTHONPATH=src .venv-py313/Scripts/python.exe scripts/serve_setup_scripts.py
+PYTHONPATH=src .venv-py313/Scripts/python.exe -m mtg_bot.cli serve
 ```
 
 (Default port 5099. Auto-detects the master's tailnet name, the
-repo's git remote, and the user's `~/.ssh/id_ed25519.pub`.)
+repo's git remote, and the user's `~/.ssh/id_ed25519.pub`.
+``scripts/serve_setup_scripts.py`` still works as a legacy shim.)
 
 **On each remote** (one-time):
 
@@ -291,7 +292,7 @@ shards drain it from the shared queue:
 
 ```bash
 PYTHONPATH=src .venv-py313/Scripts/python.exe \
-  scripts/iterate_alphazero.py \
+  -m mtg_bot.cli iterate \
   --bootstrap-version v6 --n-iterations 1 \
   --games-per-iteration 6 \
   --epochs 5 --batch-size 256 --learning-rate 1e-3 \
@@ -317,7 +318,7 @@ Once the smoke is clean, kick off the real iteration:
 
 ```bash
 PYTHONPATH=src .venv-py313/Scripts/python.exe \
-  scripts/iterate_alphazero.py \
+  -m mtg_bot.cli iterate \
   --bootstrap-version v6 --n-iterations 5 \
   --games-per-iteration 500 \
   --epochs 100 --batch-size 256 --learning-rate 1e-3 \

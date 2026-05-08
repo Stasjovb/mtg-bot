@@ -89,6 +89,49 @@
 - Ad-hoc screenshot the live UI:
   `.venv/Scripts/python.exe scripts/screenshot_ui.py --url http://127.0.0.1:5002 --out ui.png`
 
+## CLI: `mtg_bot <subcommand>`
+
+The project has a single CLI dispatcher at `mtg_bot.cli`:
+
+```bash
+PYTHONPATH=src .venv-py313/Scripts/python.exe -m mtg_bot.cli <subcommand> [args]
+```
+
+After `pip install -e .` rebuilds, plain `mtg_bot <subcommand>` works
+on PATH. Subcommands:
+
+- `iterate`  — AlphaZero training loop (formerly `scripts/iterate_alphazero.py`)
+- `train`    — train the value+policy network from saved data
+- `shard`    — run one self-play / eval shard (SSH-invoked from master)
+- `serve`    — bundle/queue HTTP server (port 5099)
+- `eval`     — head-to-head eval between two registered NN versions, e.g.
+  `mtg_bot eval --new v16 --old v13 --games 3000`
+- `capture`  — capture annotated NN-driven self-play replays for the UI
+- `bench <kind>` — perf benchmarks: `clone`, `clone-zones`, `nn-eval-server`,
+  `per-game-wall`
+
+The shared search-depth + queue-URL + deck-pool defaults live in
+`mtg_bot.cli._common` so eval/capture/bench all pick up the current
+self-play depth automatically — there is exactly **one** place to
+update the default `--nodes` (currently 200, the iter_005 self-play
+depth). See the "Eval depth" scope reminder below.
+
+The four production scripts (`scripts/iterate_alphazero.py`,
+`scripts/train_nn.py`, `scripts/run_self_play_shard.py`,
+`scripts/serve_setup_scripts.py`) and the four bench scripts
+(`scripts/bench_clone.py`, `scripts/bench_clone_zones.py`,
+`scripts/bench_nn_eval_server.py`, `scripts/bench_per_game_wall.py`)
+remain as **5-line shims** that dispatch into the cli module — every
+existing SSH invocation, the bundle/queue server, and
+`hooks/post-commit` keep working without modification. New code
+should prefer the `mtg_bot <subcommand>` form.
+
+Throwaway investigation scripts (`scripts/scout_*.py`,
+`scripts/profile_*.py`, ad-hoc `scripts/trace_*.py`) intentionally
+**stay** under `scripts/` — they're agent-generated diagnostic tools,
+not production entrypoints, and porting them would add CLI noise
+without value. Don't migrate them.
+
 ## Distributed flow (master + remotes)
 
 The cluster is one master (Win11 desktop) + N remotes (Mac, Win10).
@@ -105,7 +148,7 @@ Tailscale enrollment), see
 - Card pool target: **Edge of Eternities** (Scryfall set code `eoe`). Raw data is cached at `data/edge_of_eternities.json`; regenerate via `scripts/fetch_eoe.py`.
 - Self-play / eval data-gen and the iterate-AlphaZero loop run on the real 17lands deck pool at `data/17lands/eoe_decks.json.gz` (5000 EoE archetypes). `iterate_alphazero.py` requires `--deck-pool` and `data_gen` / `self_play` raise on missing pool — there is no synthetic mono-color fallback any more.
 - Architectural decisions that are locked in: full stack-and-priority simulation (not resolve-immediately); Scryfall JSON as the card data source.
-- **Eval depth must match self-play depth.** The metric we care about is "did v_{N+1} beat v_N at the deployment configuration", and the deployment configuration is whatever depth self-play used. Eval at a different depth measures something else — a network trained at depth=200 may not generalize linearly to depth=400, so a deeper eval doesn't extrapolate cleanly. `iterate_alphazero.py` already uses `args.nodes` for both self-play and eval (one knob). Standalone eval scripts in `scripts/eval_*` should hard-code `nodes` to whatever the most recent iteration's self-play used, and have a comment pointing here. A pre-iter_005-era script that says `nodes = 400` was templated when iter_004 ran self-play at 400; do NOT propagate that without checking.
+- **Eval depth must match self-play depth.** The metric we care about is "did v_{N+1} beat v_N at the deployment configuration", and the deployment configuration is whatever depth self-play used. Eval at a different depth measures something else — a network trained at depth=200 may not generalize linearly to depth=400, so a deeper eval doesn't extrapolate cleanly. `mtg_bot.cli.iterate` (formerly `iterate_alphazero.py`) already uses `args.nodes` for both self-play and eval (one knob). Standalone eval invocations should use `mtg_bot eval` (which inherits `--nodes` from `mtg_bot.cli._common`'s defaults) so the depth tracks the current iter's self-play config automatically. There is now exactly one place to update the default — `mtg_bot/cli/_common.py:DEFAULT_NODES`. The pre-iter_005 cleanup found a one-off eval script that had been templated when iter_004 ran at 400 nodes and never re-templated when iter_005 dropped to 200; the consolidated `mtg_bot eval` makes that class of bug structurally impossible.
 
 ## Documenting deliberate divergences
 
