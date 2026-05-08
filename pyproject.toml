@@ -66,6 +66,15 @@ source = ["mtg_bot"]
 # docs/segfault-fix.md for the full diagnosis.
 branch = false
 core = "sysmon"
+# The ``mtg_bot.cli`` subcommand modules are operator-facing CLI
+# entrypoints (iterate, train, shard, serve, eval, bench, capture).
+# Their ``main()`` argparse bodies were previously script-level code
+# under ``scripts/`` and never participated in coverage — the
+# coverage source filter was already package-only. The argparse-
+# body lines stay exempted via ``# pragma: no cover`` annotations
+# inside the modules. Helpers (``_downsample_one_legal_rows``,
+# ``_render_template``, ``_install_kill_handlers``, etc.) ARE
+# measured because they're exercised by ``tests/scripts/test_*.py``.
 
 [tool.coverage.report]
 show_missing = true
