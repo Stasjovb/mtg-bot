@@ -56,6 +56,19 @@ Run these once when you sit down at the desktop:
    ```
    Tailscale SSH should auth without prompting.
 
+4. **Snapshot the run database** (online, no service interruption):
+   ```bash
+   PYTHONPATH=src .venv-py313/Scripts/python.exe -m mtg_bot.cli db backup
+   ```
+   Lands at `training_progress/backups/runs.db.<UTC-stamp>.bak`.
+   `runs.db` is the single source of truth for cluster-wide run
+   history (kind / status / config / progress / events / artifacts),
+   so a daily snapshot is cheap insurance against a corruption or
+   accidental schema-mutating edit. The DB lives only on master
+   (Phase 1 — never on remotes); the snapshot does too. See the
+   "Run database" section in `CLAUDE.md` for schema details and
+   the `mtg_bot db dump` / `query` introspection commands.
+
 ## Running a self-play iteration
 
 The `mtg_bot iterate` subcommand runs the

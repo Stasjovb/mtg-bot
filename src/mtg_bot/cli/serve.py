@@ -34,6 +34,7 @@ from __future__ import annotations
 
 import argparse
 import socket
+import sqlite3
 import subprocess
 import sys
 import threading
@@ -192,6 +193,7 @@ def create_app(
     template_dir: Path = _SCRIPTS_DIR,
     repo_root: Optional[Path] = None,
     progress_dir: Optional[Path] = None,
+    runs_db_path: Optional[Path] = None,
 ) -> Flask:
     """Build the master HTTP server. ``progress_dir`` (when set)
     enables Stop-button propagation to remotes: each ``/queue/take``
@@ -199,11 +201,22 @@ def create_app(
     hit returns 410 Gone with a ``"stopped"`` body so remotes drain
     cleanly without playing extra games. Default ``None`` falls back
     to the old behavior (no stop check) for callers that haven't
-    plumbed a progress_dir through yet."""
+    plumbed a progress_dir through yet.
+
+    ``runs_db_path`` (when set) enables the run-database REST
+    endpoints (``/run/start``, ``/run/<id>/progress``, ...). All
+    write endpoints serialize through ``mtg_bot.cli.runs.db.WRITE_LOCK``
+    so concurrent POSTs from many remotes don't race the SQLite
+    writer. Default ``None`` disables these endpoints (returns 404).
+    """
     # Local import to avoid scripts/ depending on the package at module
     # import time during early bootstrap.
     from mtg_bot.training.stop_signal import (  # noqa: WPS433
         stop_requested as _stop_requested,
+    )
+    from mtg_bot.cli.runs import db as _runs_db  # noqa: WPS433
+    from mtg_bot.cli.runs.models import (  # noqa: WPS433
+        Artifact, Event, ProgressUpdate, Run,
     )
 
     app = Flask(__name__)
@@ -363,6 +376,180 @@ def create_app(
                 },
             })
 
+    # ---- run database endpoints ----------------------------------
+    # Enabled iff ``runs_db_path`` is set. All writes serialize
+    # through the module-level WRITE_LOCK so concurrent POSTs from
+    # many remotes can't race the single SQLite writer. Each handler
+    # opens a fresh connection (cheap; pragmas are per-conn for
+    # foreign_keys but journal_mode=WAL is DB-global so the cost is
+    # one syscall) — keeping connections short-lived avoids the
+    # check_same_thread / Flask-threading hazards a long-lived shared
+    # conn would invite.
+
+    def _runs_db_disabled():
+        return jsonify({
+            "error": "run database not configured on this server",
+        }), 404
+
+    @app.route("/run/start", methods=["POST"])
+    def run_start():
+        if runs_db_path is None:
+            return _runs_db_disabled()
+        data = request.get_json(silent=True) or {}
+        try:
+            run = Run(
+                run_id=data["run_id"],
+                kind=data["kind"],
+                status="running",
+                started_at=data.get("started_at") or _runs_db.now_iso(),
+                git_commit=data["git_commit"],
+                config_json=data["config_json"],
+                parent_run_id=data.get("parent_run_id"),
+                label=data.get("label"),
+            )
+        except KeyError as exc:
+            return jsonify({"error": f"missing field: {exc}"}), 400
+        try:
+            with _runs_db.WRITE_LOCK:
+                conn = _runs_db.connect(runs_db_path)
+                try:
+                    _runs_db.insert_run(conn, run)
+                finally:
+                    conn.close()
+        except (ValueError, sqlite3.IntegrityError) as exc:
+            return jsonify({"error": str(exc)}), 400
+        return jsonify({"ok": True, "run_id": run.run_id})
+
+    @app.route("/run/<run_id>/progress", methods=["POST"])
+    def run_progress(run_id: str):
+        if runs_db_path is None:
+            return _runs_db_disabled()
+        data = request.get_json(silent=True) or {}
+        update = ProgressUpdate(
+            run_id=run_id,
+            shard_label=data.get("shard_label"),
+            n_games_done=data.get("n_games_done"),
+            n_games_total=data.get("n_games_total"),
+            elapsed_seconds=data.get("elapsed_seconds"),
+            crashed=data.get("crashed"),
+            timed_out=data.get("timed_out"),
+            wins_new=data.get("wins_new"),
+            wins_old=data.get("wins_old"),
+            draws=data.get("draws"),
+            extra_json=data.get("extra_json"),
+        )
+        with _runs_db.WRITE_LOCK:
+            conn = _runs_db.connect(runs_db_path)
+            try:
+                _runs_db.upsert_progress(conn, update)
+            finally:
+                conn.close()
+        return jsonify({"ok": True, "run_id": run_id})
+
+    @app.route("/run/<run_id>/event", methods=["POST"])
+    def run_event(run_id: str):
+        if runs_db_path is None:
+            return _runs_db_disabled()
+        data = request.get_json(silent=True) or {}
+        event_type = data.get("event_type")
+        if not event_type:
+            return jsonify({"error": "event_type required"}), 400
+        event = Event(
+            run_id=run_id,
+            event_type=event_type,
+            shard_label=data.get("shard_label"),
+            payload_json=data.get("payload_json"),
+        )
+        with _runs_db.WRITE_LOCK:
+            conn = _runs_db.connect(runs_db_path)
+            try:
+                _runs_db.insert_event(conn, event)
+            finally:
+                conn.close()
+        return jsonify({"ok": True, "run_id": run_id})
+
+    @app.route("/run/<run_id>/finish", methods=["POST"])
+    def run_finish(run_id: str):
+        if runs_db_path is None:
+            return _runs_db_disabled()
+        data = request.get_json(silent=True) or {}
+        status = data.get("status")
+        if status not in ("completed", "failed", "killed"):
+            return jsonify({
+                "error": "status must be completed/failed/killed",
+            }), 400
+        try:
+            with _runs_db.WRITE_LOCK:
+                conn = _runs_db.connect(runs_db_path)
+                try:
+                    _runs_db.finish_run(
+                        conn, run_id, status, notes=data.get("notes"),
+                    )
+                finally:
+                    conn.close()
+        except ValueError as exc:
+            return jsonify({"error": str(exc)}), 400
+        return jsonify({"ok": True, "run_id": run_id, "status": status})
+
+    @app.route("/run/<run_id>/artifact", methods=["POST"])
+    def run_artifact(run_id: str):
+        if runs_db_path is None:
+            return _runs_db_disabled()
+        data = request.get_json(silent=True) or {}
+        artifact_type = data.get("artifact_type")
+        path = data.get("path")
+        if not artifact_type or not path:
+            return jsonify({
+                "error": "artifact_type and path required",
+            }), 400
+        artifact = Artifact(
+            run_id=run_id,
+            artifact_type=artifact_type,
+            path=path,
+            bytes=data.get("bytes"),
+        )
+        with _runs_db.WRITE_LOCK:
+            conn = _runs_db.connect(runs_db_path)
+            try:
+                _runs_db.upsert_artifact(conn, artifact)
+            finally:
+                conn.close()
+        return jsonify({"ok": True, "run_id": run_id})
+
+    @app.route("/run/<run_id>", methods=["GET"])
+    def run_get(run_id: str):
+        if runs_db_path is None:
+            return _runs_db_disabled()
+        # Reads don't need WRITE_LOCK (WAL gives concurrent readers).
+        conn = _runs_db.connect(runs_db_path)
+        try:
+            record = _runs_db.get_run(conn, run_id)
+        finally:
+            conn.close()
+        if record is None:
+            return jsonify({"error": "run not found"}), 404
+        return jsonify(record)
+
+    @app.route("/runs", methods=["GET"])
+    def run_list():
+        if runs_db_path is None:
+            return _runs_db_disabled()
+        status = request.args.get("status")
+        kind = request.args.get("kind")
+        since = request.args.get("since")
+        try:
+            limit = int(request.args.get("limit", 100))
+        except ValueError:
+            return jsonify({"error": "limit must be an int"}), 400
+        conn = _runs_db.connect(runs_db_path)
+        try:
+            rows = _runs_db.list_runs(
+                conn, status=status, kind=kind, since=since, limit=limit,
+            )
+        finally:
+            conn.close()
+        return jsonify({"runs": rows})
+
     @app.route("/repo.bundle")
     def repo_bundle():
         """Stream the master's repo as a git bundle — every ref,
@@ -446,6 +633,18 @@ def main(argv=None) -> None:  # pragma: no cover
             "remotes."
         ),
     )
+    parser.add_argument(
+        "--runs-db-path", type=Path,
+        default=Path("training_progress") / "runs.db",
+        help=(
+            "Path to the master's run database (SQLite). When set, "
+            "the server exposes /run/start, /run/<id>/progress, "
+            "/run/<id>/event, /run/<id>/finish, /run/<id>/artifact, "
+            "GET /run/<id>, and GET /runs. Default "
+            "training_progress/runs.db. Pass an empty string to "
+            "disable the run-DB endpoints entirely."
+        ),
+    )
     args = parser.parse_args(argv)
 
     repo_url = args.repo_url or _detect_repo_url(args.repo_root)
@@ -464,6 +663,11 @@ def main(argv=None) -> None:  # pragma: no cover
         )
     master_tailnet_name = _detect_master_tailnet_name()
 
+    runs_db_path: Optional[Path] = args.runs_db_path
+    if runs_db_path is not None and str(runs_db_path) == ".":
+        # ``--runs-db-path ''`` collapses to ``Path('.')``; treat as
+        # explicit-disable.
+        runs_db_path = None
     app = create_app(
         repo_url=repo_url,
         master_pubkey=pubkey,
@@ -471,6 +675,7 @@ def main(argv=None) -> None:  # pragma: no cover
         port=args.port,
         repo_root=args.repo_root,
         progress_dir=args.progress_dir,
+        runs_db_path=runs_db_path,
     )
     print(
         f"[serve_setup] master={master_tailnet_name} repo={repo_url} "
