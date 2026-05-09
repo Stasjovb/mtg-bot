@@ -50,9 +50,11 @@ def test_default_paths_are_relative_to_repo_root():
 
 def test_default_per_game_timeout_is_finite_positive():
     """Sanity — a 0 or negative default would mean every game times
-    out instantly. 450s matches the production iter timeout."""
+    out instantly. 600s matches the production iter timeout post the
+    2026-05-08 bump (was 450; observed completed-game p99=390s and
+    master-slowdown right-tail clipped the old cap)."""
     assert _common.DEFAULT_PER_GAME_TIMEOUT_SEC > 0.0
-    assert _common.DEFAULT_PER_GAME_TIMEOUT_SEC == 450.0
+    assert _common.DEFAULT_PER_GAME_TIMEOUT_SEC == 600.0
 
 
 def test_depth_parser_yields_defaults_when_no_flags():
