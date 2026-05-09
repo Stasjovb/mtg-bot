@@ -109,6 +109,18 @@ def main(argv=None) -> None:
             "no replay capture."
         ),
     )
+    parser.add_argument(
+        "--hang-dump-dir", type=Path, default=Path("debug_hangs"),
+        help=(
+            "Parent directory for per-game hang diagnostics. When an "
+            "eval game hits the per-game timeout, the worker writes "
+            "meta.json + traceback.txt under "
+            "<hang-dump-dir>/<run_id>_shard_<label>/ before returning "
+            "the sentinel. Reproducible inputs (seed + config) plus a "
+            "faulthandler.dump_traceback of all threads. Default "
+            "'debug_hangs' (gitignored). Pass empty string to disable."
+        ),
+    )
     args = parser.parse_args(argv)
 
     label = args.label or f"{args.new}_vs_{args.old}_{args.games}g"
@@ -117,6 +129,11 @@ def main(argv=None) -> None:
     shards_cfg = load_shards_config(args.shards_config)
     args.progress_dir.mkdir(parents=True, exist_ok=True)
 
+    # Empty string disables hang dumping; mirrors ``mtg_bot iterate``'s
+    # flag semantics so a user can opt out with ``--hang-dump-dir ''``.
+    hang_dump_root = (
+        str(args.hang_dump_dir) if str(args.hang_dump_dir) else None
+    )
     spec = EvalJobSpec(
         new_weights_path=weights_path(args.new),
         old_weights_path=weights_path(args.old),
@@ -130,6 +147,7 @@ def main(argv=None) -> None:
         capture_every=args.capture_every,
         nn_new_version_label=args.new,
         nn_old_version_label=args.old,
+        hang_dump_root=hang_dump_root,
         opponent_label=label,
         heuristics=HeuristicsConfig.disabled(),
     )
@@ -160,6 +178,7 @@ def main(argv=None) -> None:
         "queue_url": args.queue_url,
         "per_game_timeout_sec": args.per_game_timeout_sec,
         "enable_mulligans": args.enable_mulligans,
+        "hang_dump_dir": str(args.hang_dump_dir) or None,
     }
     t0 = time.perf_counter()
     with _lifecycle.run_lifecycle(
