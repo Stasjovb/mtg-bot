@@ -407,6 +407,7 @@ def _self_play(  # pragma: no cover
     heuristics: HeuristicsConfig | None = None,
     cycle_id: str | None = None,
     stop_check: "callable | None" = None,
+    action_encoding_version: str = "positional_v1",
 ) -> tuple[int, int, float]:
     """Run one self-play data-gen pass. Returns (n_samples,
     n_policy_rows, elapsed_seconds). Both seats use the same
@@ -435,6 +436,7 @@ def _self_play(  # pragma: no cover
         hidden_sizes=hidden_sizes,
         architecture=architecture,
         policy_hidden_sizes=policy_hidden_sizes,
+        action_encoding_version=action_encoding_version,
     )
     progress: DataGenProgress | None = None
     if progress_path is not None:
@@ -474,6 +476,7 @@ def _self_play(  # pragma: no cover
                 hang_dump_dir=hang_dump_dir,
                 heuristics=heuristics,
                 stop_check=stop_check,
+                action_encoding_version=action_encoding_version,
             )
         )
     except BaseException:
@@ -696,6 +699,7 @@ def _train_next(
     architecture: str = "shared",
     policy_hidden_sizes: tuple[int, ...] | None = None,
     early_stop_patience: int | None = None,
+    action_encoding_version: str = "positional_v1",
 ) -> str:
     """Run train_nn.py via subprocess so its progress JSON / hub
     UI / registry plumbing all behave the same as a manual train.
@@ -746,6 +750,12 @@ def _train_next(
         "--policy-loss-weight", str(policy_loss_weight),
         "--one-legal-keep-frac", str(one_legal_keep_frac),
         "--architecture", architecture,
+        # Inherit the bootstrap version's action-encoding convention so
+        # the new model is trained against the same slot mapping its
+        # self-play data was generated under. Without this, a v17 trained
+        # via iterate from a v2 bootstrap would silently regress to v1
+        # encoding because train_nn defaults to positional_v1.
+        "--action-encoding-version", action_encoding_version,
     ]
     if hidden_sizes is not None:
         cmd.extend(["--hidden-sizes", ",".join(str(s) for s in hidden_sizes)])
@@ -817,6 +827,7 @@ def _eval_match(  # pragma: no cover
     hang_dump_dir: str | None = None,
     cycle_id: str | None = None,
     stop_check: "callable | None" = None,
+    action_encoding_version: str = "positional_v1",
 ) -> tuple[int, int, int, float]:
     """Head-to-head match: new (seat 0) vs old (seat 1). Returns
     (new_wins, old_wins, draws, elapsed_seconds).
@@ -846,6 +857,7 @@ def _eval_match(  # pragma: no cover
         hidden_sizes=hidden_sizes,
         architecture=new_architecture,
         policy_hidden_sizes=policy_hidden_sizes,
+        action_encoding_version=action_encoding_version,
     )
     if old_weights is not None:
         old_cfg = NNPimcConfig(
@@ -858,6 +870,7 @@ def _eval_match(  # pragma: no cover
             hidden_sizes=hidden_sizes,
             architecture=old_architecture,
             policy_hidden_sizes=policy_hidden_sizes,
+            action_encoding_version=action_encoding_version,
         )
         p1_build = old_cfg.build
     else:
@@ -1399,6 +1412,22 @@ def main(argv=None) -> None:  # pragma: no cover
             f"[iterate] hidden_sizes inherited from "
             f"{args.bootstrap_version}: {iter_hidden_sizes}"
         )
+    # Action-encoding version: inherit from the bootstrap version's
+    # metadata so self-play / data-gen / training all run under the
+    # bootstrap's slot-mapping convention. Without this thread-through
+    # a v17 trained via iterate from a canonical_v2 bootstrap would
+    # silently regress to v1 encoding (NNPimcConfig defaults to None →
+    # NNEvaluator's positional_v1 default; data_gen defaults to v1;
+    # train_nn defaults to v1). Back-compat: v13/v15/v16 metadata
+    # predates the field; ``ModelMetadata.from_dict`` defaults missing
+    # entries to "positional_v1".
+    iter_action_encoding_version = getattr(
+        bootstrap_meta, "action_encoding_version", "positional_v1",
+    ) or "positional_v1"
+    print(
+        f"[iterate] action_encoding_version inherited from "
+        f"{args.bootstrap_version}: {iter_action_encoding_version}"
+    )
     # Architecture: prefer the explicit CLI flag when given; else
     # inherit from the bootstrap version's metadata so an iterate run
     # picks up wherever the v-chain was trained. v1-v15 metadata has
@@ -1648,6 +1677,7 @@ def main(argv=None) -> None:  # pragma: no cover
                 ),
                 cycle_id=cycle_id,
                 stop_check=_cycle_stop_check,
+                action_encoding_version=iter_action_encoding_version,
             )
         else:
             # Distributed: each shard writes its own npz to args.data_dir
@@ -1745,6 +1775,7 @@ def main(argv=None) -> None:  # pragma: no cover
             architecture=iter_architecture,
             policy_hidden_sizes=iter_policy_hidden_sizes,
             early_stop_patience=args.early_stop_patience,
+            action_encoding_version=iter_action_encoding_version,
         )
         new_weights = registry.weights_path(new_version)
         print(f"[iterate]   trained: {new_version}")
@@ -1833,6 +1864,7 @@ def main(argv=None) -> None:  # pragma: no cover
                     hang_dump_dir=eval_hang_dir,
                     cycle_id=cycle_id,
                     stop_check=_cycle_stop_check,
+                    action_encoding_version=iter_action_encoding_version,
                 )
             else:
                 wins_new, wins_old, draws, eval_elapsed = (
