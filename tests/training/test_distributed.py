@@ -867,6 +867,81 @@ def test_eval_spec_architecture_round_trips():
     assert rt.policy_hidden_sizes == (48, 24)
 
 
+def test_self_play_spec_action_encoding_version_round_trips():
+    """``action_encoding_version`` round-trips through to_dict /
+    from_dict so remote shards encode policy targets under the same
+    slot-mapping convention the bootstrap weights were trained at.
+    Without this round-trip, the cluster silently mixes v1 remote
+    data with v2 master data on a v17 training run."""
+    from mtg_bot.training.distributed import SelfPlayJobSpec
+
+    original = SelfPlayJobSpec(
+        weights_path="w.pt", samples=4, inner_nodes=200,
+        hidden_sizes=(1024, 1024, 512),
+        base_seed=0, enable_mulligans=False,
+        per_game_timeout_sec=None,
+        action_encoding_version="canonical_v2",
+    )
+    rt = SelfPlayJobSpec.from_dict(original.to_dict())
+    assert rt.action_encoding_version == "canonical_v2"
+
+
+def test_self_play_spec_action_encoding_version_default_is_none():
+    """Older payloads without the field decode cleanly with
+    ``action_encoding_version=None`` so v13/v15/v16-era specs already
+    in flight don't crash. None resolves to NNEvaluator's
+    "positional_v1" downstream — the existing back-compat path."""
+    from mtg_bot.training.distributed import SelfPlayJobSpec
+
+    rebuilt = SelfPlayJobSpec.from_dict({
+        "weights_path": "w.pt",
+        "samples": 1, "inner_nodes": 1,
+        "hidden_sizes": None,
+        "base_seed": 0,
+        "enable_mulligans": False,
+        "per_game_timeout_sec": None,
+    })
+    assert rebuilt.action_encoding_version is None
+
+
+def test_eval_spec_action_encoding_version_round_trips_per_side():
+    """Each side carries its own ``action_encoding_version`` so a
+    cross-version eval (v17[canonical_v2] vs v13[positional_v1]) can
+    encode each NN's PUCT priors against its trained slot mapping.
+    Mixing them up scrambles either side's priors silently."""
+    from mtg_bot.training.distributed import EvalJobSpec
+
+    original = EvalJobSpec(
+        new_weights_path="new.pt", old_weights_path="old.pt",
+        samples=4, inner_nodes=200, hidden_sizes=(64, 64),
+        base_seed=42, enable_mulligans=False,
+        per_game_timeout_sec=300.0,
+        new_action_encoding_version="canonical_v2",
+        old_action_encoding_version="positional_v1",
+    )
+    rt = EvalJobSpec.from_dict(original.to_dict())
+    assert rt.new_action_encoding_version == "canonical_v2"
+    assert rt.old_action_encoding_version == "positional_v1"
+
+
+def test_eval_spec_action_encoding_version_default_is_none():
+    """Older eval payloads without the per-side fields decode with
+    None on both sides — back-compat for v13/v15/v16-era evals."""
+    from mtg_bot.training.distributed import EvalJobSpec
+
+    rebuilt = EvalJobSpec.from_dict({
+        "new_weights_path": "new.pt",
+        "old_weights_path": None,
+        "samples": 1, "inner_nodes": 1,
+        "hidden_sizes": None,
+        "base_seed": 0,
+        "enable_mulligans": False,
+        "per_game_timeout_sec": None,
+    })
+    assert rebuilt.new_action_encoding_version is None
+    assert rebuilt.old_action_encoding_version is None
+
+
 def test_shard_config_round_trips_through_to_dict_from_dict():
     s = ShardConfig(
         host="win-1080ti", label="win",
