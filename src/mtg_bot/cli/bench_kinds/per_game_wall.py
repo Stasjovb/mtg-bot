@@ -274,7 +274,7 @@ def main(argv=None) -> None:  # pragma: no cover
     print(f"\n# Game count over candidate timeouts:")
     for budget in (60, 120, 180, 240, 300, 450, 600, 900, 1200):
         n_over = sum(1 for w in walls if w > budget)
-        print(f"#   timeout={budget:>4}s  → {n_over:>3}/{n} ({n_over/n*100:.1f}%) lost")
+        print(f"#   timeout={budget:>4}s  -> {n_over:>3}/{n} ({n_over/n*100:.1f}%) lost")
 
     if progress is not None:
         progress.finalize(status="completed")
