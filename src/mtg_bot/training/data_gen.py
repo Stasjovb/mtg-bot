@@ -293,6 +293,7 @@ def generate_training_data_parallel(
     hang_dump_dir: Optional[str] = None,
     heuristics: Optional[HeuristicsConfig] = None,
     stop_check: Optional[Callable[[], bool]] = None,
+    action_encoding_version: str = "positional_v1",
 ) -> tuple[np.ndarray, ...]:
     """Same contract as ``generate_training_data`` but distributes
     games across a ``multiprocessing.Pool``. Same ``with_policy``
@@ -347,7 +348,7 @@ def generate_training_data_parallel(
             i, p0_factory, p1_factory, base_seed,
             decision_cap, sample_every, replay_config, deck_pool,
             enable_mulligans, per_game_timeout_sec, hang_dump_dir,
-            heuristics,
+            heuristics, action_encoding_version,
         )
         for i in range(n_games)
     ]
@@ -478,12 +479,27 @@ def _play_one_parallel_game(
     the trailing ``outcome_kind`` element of the chunk tuple is
     what the driver reads to tell them apart.
     """
-    (
-        game_idx, p0_factory, p1_factory, base_seed,
-        decision_cap, sample_every, replay_config, deck_pool,
-        enable_mulligans, per_game_timeout_sec, hang_dump_dir,
-        heuristics,
-    ) = args
+    # ``action_encoding_version`` was appended to the args tuple in
+    # ``generate_training_data_parallel`` (feature/iterate-v2-wiring) so
+    # iterate's bootstrap-metadata read flows all the way through to the
+    # per-game policy-target encoder. Older callers that pre-date the
+    # field (none in tree, but for forward-compat with hand-built tuples
+    # in tests) fall through to the v1 default.
+    if len(args) == 13:
+        (
+            game_idx, p0_factory, p1_factory, base_seed,
+            decision_cap, sample_every, replay_config, deck_pool,
+            enable_mulligans, per_game_timeout_sec, hang_dump_dir,
+            heuristics, action_encoding_version,
+        ) = args
+    else:
+        (
+            game_idx, p0_factory, p1_factory, base_seed,
+            decision_cap, sample_every, replay_config, deck_pool,
+            enable_mulligans, per_game_timeout_sec, hang_dump_dir,
+            heuristics,
+        ) = args
+        action_encoding_version = "positional_v1"
     try:
         chunk = _generate_one_game_data(
             game_idx=game_idx,
@@ -496,6 +512,7 @@ def _play_one_parallel_game(
             deck_pool=deck_pool,
             hang_dump_dir=hang_dump_dir,
             heuristics=heuristics,
+            action_encoding_version=action_encoding_version,
         )
     except TimeoutError as exc:
         import sys
@@ -545,6 +562,7 @@ def _generate_one_game_data(
     per_game_timeout_sec: Optional[float] = None,
     hang_dump_dir: Optional[str] = None,
     heuristics: Optional[HeuristicsConfig] = None,
+    action_encoding_version: str = "positional_v1",
 ) -> _GameChunk:
     """Play one game and return its 4-tuple training arrays.
 
@@ -643,7 +661,8 @@ def _generate_one_game_data(
             winner, samples = run_with_timeout(
                 _play_one_game_recording,
                 (adapter, strategies, rng, decision_cap, sample_every,
-                 recorder, progress, tree_depth, tree_top_k),
+                 recorder, progress, tree_depth, tree_top_k,
+                 action_encoding_version),
                 per_game_timeout_sec,
             )
         except TimeoutError as exc:
@@ -677,6 +696,7 @@ def _generate_one_game_data(
             adapter, strategies, rng, decision_cap, sample_every,
             replay_recorder=recorder,
             tree_depth=tree_depth, tree_top_k=tree_top_k,
+            action_encoding_version=action_encoding_version,
         )
 
     if recorder is not None and replay_config is not None:
