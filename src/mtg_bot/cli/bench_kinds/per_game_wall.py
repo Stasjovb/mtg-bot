@@ -32,19 +32,24 @@ from mtg_bot.training.data_gen import (
     _generate_one_game_data,
     _sample_decks_for_game,
 )
+from mtg_bot.training.trainer import auto_device
 
 
 # Shared via initializer/global so each worker only loads decks once.
 _DECK_POOL = None
 _WEIGHTS_PATH = None
 _HIDDEN_SIZES = None
+_DEVICE = None
 
 
-def _init_worker(deck_pool_path: str, weights_path: str, hidden_sizes_tuple):
-    global _DECK_POOL, _WEIGHTS_PATH, _HIDDEN_SIZES
+def _init_worker(
+    deck_pool_path: str, weights_path: str, hidden_sizes_tuple, device: str,
+):
+    global _DECK_POOL, _WEIGHTS_PATH, _HIDDEN_SIZES, _DEVICE
     _DECK_POOL = decks_from_json(Path(deck_pool_path))
     _WEIGHTS_PATH = weights_path
     _HIDDEN_SIZES = hidden_sizes_tuple
+    _DEVICE = device
 
 
 def _run_one(args):
@@ -58,6 +63,7 @@ def _run_one(args):
         with_policy=True,
         puct=True,
         hidden_sizes=_HIDDEN_SIZES,
+        device=_DEVICE,
     )
     start = time.perf_counter()
     try:
@@ -128,6 +134,7 @@ def main(argv=None) -> None:  # pragma: no cover
         tuple(meta.hidden_sizes)
         if getattr(meta, "hidden_sizes", None) else None
     )
+    device = auto_device()
 
     # Stage the BenchProgress tracker if --progress-dir was set. This
     # is purely additive — stdout output below is unchanged.
@@ -148,7 +155,7 @@ def main(argv=None) -> None:  # pragma: no cover
             budgets=(),  # single-pairing self-play, no AB budget grid
             include_belief=False,
             belief_m_candidates=None,
-            nn_device="cpu",
+            nn_device=device,
             command=" ".join(sys.argv),
             notes=args.label,
         )
@@ -183,7 +190,7 @@ def main(argv=None) -> None:  # pragma: no cover
             processes=args.workers,
             initializer=_init_worker,
             initargs=(
-                str(args.deck_pool), weights_path, hidden_sizes,
+                str(args.deck_pool), weights_path, hidden_sizes, device,
             ),
         ) as pool:
             results = []
