@@ -461,13 +461,19 @@ def legal_actions(state: GameState, player_id: int) -> list[Action]:
             and p.life > card.printing.warp_additional_life_cost
         ):
             actions.append(CastSpell(card.id, use_warp=True))
-        # Weftwalking free-cast variant for sorcery-speed spells.
-        if (
-            free_first_cast_active
-            and _targets_are_satisfiable(state, player_id, card)
-            and _additional_costs_payable(state, player_id, card)
-        ):
-            actions.append(CastSpell(card.id, cast_for_free=True))
+        # NOTE: no Weftwalking free-cast variant from graveyard. The
+        # warp-from-graveyard permission (Timeline Culler) is itself an
+        # alternative cost (the warp cost), and CR 117.9b allows only
+        # one alternative cost per cast. ``_cast_spell``'s graveyard
+        # branch is gated on ``use_warp=True`` for that reason; emitting
+        # a ``cast_for_free=True`` variant here would route through the
+        # apply path's defensive raise (no graveyard route accepts
+        # ``cast_for_free`` without ``use_warp``). Confirmed by a
+        # 0.03%-rate ValueError surfaced in v16-vs-v13 eval (1/3263
+        # games) when Weftwalking was on the battlefield + Timeline
+        # Culler in the graveyard. See test_weftwalking_and_
+        # possibility.py::test_legal_actions_does_not_offer_cast_for_
+        # free_for_warp_castable_card_in_graveyard.
 
     # Warp-exile recasts at sorcery speed (for creatures / sorceries).
     # Instants in warp-exile could be recast at instant speed, but we don't
