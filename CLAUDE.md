@@ -212,6 +212,69 @@ endpoints (default: `training_progress/runs.db`).
 - Architectural decisions that are locked in: full stack-and-priority simulation (not resolve-immediately); Scryfall JSON as the card data source.
 - **Eval depth must match self-play depth.** The metric we care about is "did v_{N+1} beat v_N at the deployment configuration", and the deployment configuration is whatever depth self-play used. Eval at a different depth measures something else — a network trained at depth=200 may not generalize linearly to depth=400, so a deeper eval doesn't extrapolate cleanly. `mtg_bot.cli.iterate` (formerly `iterate_alphazero.py`) already uses `args.nodes` for both self-play and eval (one knob). Standalone eval invocations should use `mtg_bot eval` (which inherits `--nodes` from `mtg_bot.cli._common`'s defaults) so the depth tracks the current iter's self-play config automatically. There is now exactly one place to update the default — `mtg_bot/cli/_common.py:DEFAULT_NODES`. The pre-iter_005 cleanup found a one-off eval script that had been templated when iter_004 ran at 400 nodes and never re-templated when iter_005 dropped to 200; the consolidated `mtg_bot eval` makes that class of bug structurally impossible.
 
+## Action encoding versions
+
+The action-encoding codec at `src/mtg_bot/training/action_encoding.py`
+maps engine `Decision` objects to fixed slot indices for the policy
+head. It carries a `version` parameter so the slot semantics can
+evolve without breaking trained weights.
+
+**Versions:**
+
+- `"positional_v1"` (default, back-compat with v13/v15/v16):
+  positions in hand / graveyard / exile come from the engine's raw
+  zone list. Two states differing only in the ordering of `card.id`s
+  produce DIFFERENT slot mappings even though their forward play is
+  identical. The MCTS NN-eval cache (`mcts._cache_key`) defends
+  against the resulting drift via a slot_fingerprint cache-key
+  extension (commit 2f50fca on main).
+
+- `"canonical_v2"`: hand / graveyard / exile are sorted by
+  `(printing.name, modifier_tuple..., card.id)` (the same forward-
+  relevant tuple `canonical_state._canonical_zone_card` builds, with
+  `card.id` as the final tiebreaker for determinism) before slot
+  assignment. Two canonically-equivalent states share their slot
+  mappings, making the slot_fingerprint workaround a no-op.
+
+**Metadata flag:**
+
+Each registered model's `metadata.json` carries
+`action_encoding_version` (defaults to `"positional_v1"` when absent
+— v13/v15/v16's metadata predates the field and back-compat-defaults
+correctly). `Registry.load_metadata` reads it; loaders thread it into
+`NNEvaluator(action_encoding_version=...)`, which in turn threads it
+through every `legal_action_mask` call. `MCTS` and `ISMCTS` pull it
+off `evaluator.action_encoding_version` at construction time so PUCT
+prior lookups use the matching slot mapping.
+
+**Migration:**
+
+1. v13/v15/v16 stay on v1 — their metadata's missing field defaults
+   to v1, behavior is bit-identical to before this feature landed.
+2. v17+ training opts into v2 by passing
+   `--action-encoding-version canonical_v2` to `mtg_bot train`. The
+   flag writes through to `ModelMetadata.action_encoding_version`,
+   which loaders read back at inference.
+3. Switching versions is a v-chain break — old weights cannot be
+   reused (the trained policy head memorized the v1 slot mapping;
+   loading it under v2 would scramble priors).
+4. v2 weights make the slot_fingerprint workaround a no-op (canonical
+   states have canonical slot mappings — there's no cross-state-to-
+   different-slots case left to defend against). The workaround
+   stays in place for v1 weights.
+
+**Out of scope of v2 today:**
+
+- Self-play / data_gen don't yet auto-thread the version end-to-end
+  from `mtg_bot iterate` to the per-game policy-target encoding.
+  `_play_one_game_recording` accepts an `action_encoding_version`
+  parameter (default v1) but the iterate / shard launcher hasn't
+  been wired to pull it from the bootstrap version's metadata. A
+  full v2 training run would need that wiring.
+- v2 has only been verified at the codec level; no v17 weights
+  trained against it exist yet. The first v2 training run will
+  surface any inference-side wiring gap.
+
 ## Documenting deliberate divergences
 
 Any shortcut, heuristic, search optimization, or incorrect / outdated implementation of real MTG comprehensive rules **must be documented in `docs/SEARCH_LIMITATIONS.md`** at the time it lands.

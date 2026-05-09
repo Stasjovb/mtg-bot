@@ -346,6 +346,14 @@ class MCTS(SearchStrategy):
         )
         self.batch_size = batch_size
         self.puct = puct
+        # Pull the action-encoding version off the evaluator if it
+        # advertises one (NNEvaluator does), else default to v1.
+        # Threaded into the single ``ae.encode`` call in
+        # ``_stamp_child_prior`` below so PUCT prior lookups use the
+        # same slot mapping the policy head was trained against.
+        self._action_encoding_version = getattr(
+            evaluator, "action_encoding_version", "positional_v1",
+        )
 
     def choose(
         self, state: GameState, player_id: PlayerID
@@ -990,7 +998,10 @@ class MCTS(SearchStrategy):
         from mtg_bot.training import action_encoding as ae
         eng = getattr(parent.state, "engine_state", parent.state)
         try:
-            slot = ae.encode(decision, eng, root_player)
+            slot = ae.encode(
+                decision, eng, root_player,
+                version=self._action_encoding_version,
+            )
         except ae.EncodingOverflowError:
             # Decision didn't fit in the fixed vocab. Leave prior 0;
             # PUCT will explore by visit-count alone for this child.

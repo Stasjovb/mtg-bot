@@ -291,6 +291,22 @@ def main(argv=None) -> None:  # pragma: no cover
             "from --seed for reproducibility. Must be in (0.0, 1.0]."
         ),
     )
+    parser.add_argument(
+        "--action-encoding-version",
+        choices=["positional_v1", "canonical_v2"],
+        default="positional_v1",
+        help=(
+            "Action-encoding slot mapping convention. "
+            "'positional_v1' (default, back-compat with v13/v15/v16) "
+            "uses raw card.id-positional slots. 'canonical_v2' sorts "
+            "hand/graveyard/exile by (printing.name, modifier_tuple, "
+            "card.id) before slot assignment so two canonically-"
+            "equivalent states share their slot mappings. The choice "
+            "is recorded in metadata.json so loaders thread it through "
+            "to NNEvaluator at inference. Switching versions is a "
+            "v-chain break — old weights cannot be reused."
+        ),
+    )
     args = parser.parse_args(argv)
     if not (0.0 < args.one_legal_keep_frac <= 1.0):
         parser.error(
@@ -486,6 +502,7 @@ def main(argv=None) -> None:  # pragma: no cover
                 args.architecture if has_any_policy
                 else ARCHITECTURE_SHARED
             ),
+            action_encoding_version=args.action_encoding_version,
             training={
                 "data_dir": str(args.data_dir),
                 "data_files": data_files,

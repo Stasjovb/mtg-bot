@@ -757,6 +757,7 @@ def _play_one_game_recording(
     progress: Optional["object"] = None,
     tree_depth: int = 1,
     tree_top_k: Optional[int] = None,
+    action_encoding_version: str = "positional_v1",
 ) -> tuple[
     PlayerID | None,
     list[tuple[np.ndarray, PlayerID, np.ndarray, np.ndarray]],
@@ -929,7 +930,10 @@ def _play_one_game_recording(
                         if d not in legal_now:
                             continue
                         try:
-                            slot = encode(d, engine, active)
+                            slot = encode(
+                                d, engine, active,
+                                version=action_encoding_version,
+                            )
                         except EncodingOverflowError:
                             continue
                         active_policy[slot] += count
@@ -950,7 +954,10 @@ def _play_one_game_recording(
                         # masked CE explode (~1e9 per affected row);
                         # gen0's v4 final policy_loss=613,242 was
                         # entirely this — see commit message.
-                        active_mask = legal_action_mask(adapter, active)
+                        active_mask = legal_action_mask(
+                            adapter, active,
+                            version=action_encoding_version,
+                        )
                     else:
                         active_policy = zero_policy
                         active_mask = zero_mask
