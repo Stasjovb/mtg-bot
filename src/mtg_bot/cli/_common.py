@@ -34,7 +34,16 @@ DEFAULT_SAMPLES = 4
 DEFAULT_DECK_POOL = Path("data/17lands/eoe_decks.json.gz")
 DEFAULT_PROGRESS_DIR = Path("training_progress")
 DEFAULT_SHARDS_CONFIG = Path("shards_config.json")
-DEFAULT_PER_GAME_TIMEOUT_SEC = 450.0
+# 450s was the original budget; 2026-05-08 v16-vs-v13 eval analysis
+# showed completed-game p99 wall = 390s and max = 449s. With the
+# observed master shard slowdown over long runs (+14% sec/decision
+# +30% wall/game by hour 8, separate todo), the right tail of slow
+# games regularly clipped the 450 cap. Bumping to 600 leaves margin
+# for the right tail without throughput cost (theoretical only — most
+# games finish well under 400s). Bias-check from the same investigation:
+# v_X win rate is flat across decision-count bins, so longer games are
+# not systematically biased toward either side, making this safe.
+DEFAULT_PER_GAME_TIMEOUT_SEC = 600.0
 
 
 def depth_parser() -> argparse.ArgumentParser:
