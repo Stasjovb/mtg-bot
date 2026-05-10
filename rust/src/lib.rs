@@ -8,10 +8,13 @@ mod state;
 // `multiple-pymethods` feature flag in Cargo.toml. Empty stubs
 // land in this commit; each subsequent feature branch fills in
 // its own file without touching the others.
+mod state_ops_cast;
 mod state_ops_counters;
 mod state_ops_damage;
+mod state_ops_library;
 mod state_ops_life;
 mod state_ops_mana;
+mod state_ops_priority;
 mod state_ops_steps;
 mod state_ops_tap;
 mod state_ops_winloss;
