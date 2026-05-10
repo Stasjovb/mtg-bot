@@ -1935,3 +1935,438 @@ def test_skulk_plus_flying_combined(synthetic_state):
     )
     # Only the flying 1/1 made it onto the blockers list.
     assert synthetic_state.get_blockers() == [(attacker_id, flying_small_blocker_id)]
+
+
+# ----------------------------- cross-keyword interactions -------------------
+#
+# Multi-keyword composition tests. The per-keyword slices (rounds 9-15) each
+# verified their own keyword in isolation; these tests pin the behavior when
+# two or more keywords meet in the same combat. They share the existing
+# ``_keyword_creature_dict`` fixture and the ``register_and_inject_object``
+# injection path — no Rust changes are required, only test coverage on top
+# of the implemented arms.
+#
+# Where the actual engine behavior is more subtle than CR alone would
+# suggest, the test docstring notes the round/slice that owns the simplification.
+
+
+def test_trample_plus_first_strike_overkill_tramples_through(synthetic_state):
+    """Trample + first-strike (round-9 + r10-style composition).
+    A 4/1 with both keywords vs a vanilla 1/1 blocker.
+    First-strike substep: attacker deals 4 — only 1 needed to kill the
+    1/1, so 3 tramples through to the defender (life 20 -> 17). Blocker
+    dies in the first-strike substep, so its regular-substep back-damage
+    never fires; the attacker is left at 0 marked damage."""
+    attacker_id = synthetic_state.register_and_inject_object(
+        _keyword_creature_dict(4, 1, ["trample", "first_strike"]),
+        0,
+        ZONE_BATTLEFIELD,
+    )
+    blocker_id = synthetic_state.register_and_inject_object(
+        _keyword_creature_dict(1, 1, []), 1, ZONE_BATTLEFIELD
+    )
+    assert synthetic_state.get_life(1) == 20
+    assert synthetic_state.declare_attacker(attacker_id) is True
+    assert synthetic_state.declare_blocker(blocker_id, attacker_id) is True
+    synthetic_state.deal_combat_damage()
+    # Blocker took its toughness (1) and dies; trample carried the 3
+    # excess to the defender in the first-strike substep.
+    assert synthetic_state.get_damage(blocker_id) == 1, (
+        "trample+first_strike: blocker takes attacker.power capped at "
+        "blocker.toughness (= 1) in the first-strike substep"
+    )
+    assert synthetic_state.get_life(1) == 17, (
+        "trample+first_strike: trample excess (power - toughness = 4 - 1 "
+        "= 3) carries through to the defender even when applied in the "
+        "first-strike substep"
+    )
+    # Blocker died in step 1; no back-damage in the regular substep.
+    assert synthetic_state.get_damage(attacker_id) == 0, (
+        "trample+first_strike: blocker dies in step 1, no back-damage "
+        "in step 2 — attacker stays clean"
+    )
+
+
+def test_lifelink_plus_double_strike_gains_life_twice(synthetic_state):
+    """Lifelink + double-strike: a 1/1 with both keywords, unblocked,
+    deals 1 in the first-strike substep AND 1 in the regular substep,
+    so the defender takes 2 total (20 -> 18) and lifelink fires on
+    BOTH hits — the controller gains 2 life total (20 -> 22). Pins the
+    double-strike-multiplies-lifelink behavior."""
+    attacker_id = synthetic_state.register_and_inject_object(
+        _keyword_creature_dict(1, 1, ["lifelink", "double_strike"]),
+        0,
+        ZONE_BATTLEFIELD,
+    )
+    assert synthetic_state.get_life(0) == 20
+    assert synthetic_state.get_life(1) == 20
+    assert synthetic_state.declare_attacker(attacker_id) is True
+    synthetic_state.deal_combat_damage()
+    # Defender took 1 + 1 = 2.
+    assert synthetic_state.get_life(1) == 18, (
+        "lifelink+double_strike unblocked: defender takes power in BOTH "
+        "substeps = 2 total"
+    )
+    # Lifelink fired on each hit; controller gained 1 + 1 = 2.
+    assert synthetic_state.get_life(0) == 22, (
+        "lifelink+double_strike: lifelink fires on EACH substep's damage, "
+        "so controller gains power twice (= 2)"
+    )
+
+
+def test_lifelink_deathtouch_trample_caps_blocker_damage_at_one(synthetic_state):
+    """Lifelink + deathtouch + trample on a 1/1 attacker vs a 5/5
+    blocker. Per CR 702.19c, deathtouch lets trample treat the
+    'lethal-to-blocker' floor as 1 — so the cap drops to 1. With the
+    attacker dealing only 1 power, ``power - cap = 0`` so nothing
+    tramples through (defender life unchanged at 20). Deathtouch
+    upgrades the blocker's marked damage to its toughness (5), and
+    lifelink fires on the literal damage dealt (1) so the controller
+    gains 1 life. The 5/5 blocker still strikes back for 5 — the
+    attacker takes 5 marked damage."""
+    attacker_id = synthetic_state.register_and_inject_object(
+        _keyword_creature_dict(1, 1, ["lifelink", "deathtouch", "trample"]),
+        0,
+        ZONE_BATTLEFIELD,
+    )
+    blocker_id = synthetic_state.register_and_inject_object(
+        _keyword_creature_dict(5, 5, []), 1, ZONE_BATTLEFIELD
+    )
+    assert synthetic_state.get_life(0) == 20
+    assert synthetic_state.get_life(1) == 20
+    assert synthetic_state.declare_attacker(attacker_id) is True
+    assert synthetic_state.declare_blocker(blocker_id, attacker_id) is True
+    synthetic_state.deal_combat_damage()
+    # Deathtouch upgrades blocker mark to lethal (>= 5).
+    assert synthetic_state.get_damage(blocker_id) >= 5, (
+        "deathtouch+trample+lifelink: deathtouch still upgrades blocker "
+        "mark to its toughness even with the trample cap dropped to 1"
+    )
+    # power - cap = 1 - 1 = 0; no trample excess.
+    assert synthetic_state.get_life(1) == 20, (
+        "deathtouch+trample 1/1: cap drops to 1, no excess — defender "
+        "life unchanged (CR 702.19c)"
+    )
+    # Lifelink fires on the literal 1 damage dealt — controller +1.
+    assert synthetic_state.get_life(0) == 21, (
+        "deathtouch+lifelink: lifelink fires on the actual damage dealt "
+        "(1), not on deathtouch's upgraded mark"
+    )
+    # 5/5 blocker back-damages the 1/1 attacker for 5.
+    assert synthetic_state.get_damage(attacker_id) == 5
+
+
+def test_first_strike_plus_indestructible_attacker_survives_back_damage(
+    synthetic_state,
+):
+    """First-strike + indestructible 1/1 attacker vs a vanilla 5/5
+    blocker. First-strike substep: attacker deals 1 to blocker (not
+    lethal, 1 < 5). Regular substep: blocker (alive, vanilla) deals 5
+    to the attacker. Without indestructible the attacker would die at
+    SBA time, but indestructible spares it (CR 702.12). After
+    ``apply_sbas`` both creatures remain on the battlefield. The
+    attacker still carries 5 marked damage."""
+    attacker_id = synthetic_state.register_and_inject_object(
+        _keyword_creature_dict(1, 1, ["first_strike", "indestructible"]),
+        0,
+        ZONE_BATTLEFIELD,
+    )
+    blocker_id = synthetic_state.register_and_inject_object(
+        _keyword_creature_dict(5, 5, []), 1, ZONE_BATTLEFIELD
+    )
+    assert synthetic_state.declare_attacker(attacker_id) is True
+    assert synthetic_state.declare_blocker(blocker_id, attacker_id) is True
+    synthetic_state.deal_combat_damage()
+    # Blocker took 1 in the first-strike step — not lethal.
+    assert synthetic_state.get_damage(blocker_id) == 1
+    # Attacker took the full 5 in the regular step (blocker survived
+    # step 1).
+    assert synthetic_state.get_damage(attacker_id) == 5
+    # SBAs: blocker survives (1 < 5 toughness), attacker survives
+    # because indestructible (5 marked damage >= 1 toughness, but
+    # 702.12 exempts it from 704.5g).
+    assert synthetic_state.apply_sbas() == 0, (
+        "first_strike+indestructible vs vanilla 5/5: neither dies — "
+        "blocker (1 dmg < 5 toughness) nor indestructible attacker"
+    )
+    assert synthetic_state.find_object_zone(attacker_id) == ZONE_BATTLEFIELD, (
+        "first_strike+indestructible attacker takes 5 damage but stays "
+        "on the battlefield (CR 702.12)"
+    )
+    assert synthetic_state.find_object_zone(blocker_id) == ZONE_BATTLEFIELD
+
+
+def test_vigilance_plus_haste_freshly_cast_attacks_untapped(synthetic_state):
+    """Composition cross-check: a freshly-cast vigilance+haste creature
+    (summoning_sick=True via the cast-flow) can attack on its first
+    turn (haste) AND stays untapped after attacking (vigilance). Two
+    keywords from different round slices (r9 vigilance, r10 haste)
+    composing on the same creature."""
+    ZONE_HAND = 0
+    obj_id = synthetic_state.register_and_inject_object(
+        _keyword_creature_dict(2, 2, ["vigilance", "haste"]),
+        0,
+        ZONE_HAND,
+    )
+    synthetic_state.add_mana(0, "G", 1)
+    synthetic_state.add_mana(0, "C", 1)  # cover the {1} generic
+    assert synthetic_state.cast_creature(obj_id, 0) is True
+    assert synthetic_state.is_summoning_sick(obj_id) is True
+    # Haste bypasses the summoning-sickness rejection.
+    assert synthetic_state.declare_attacker(obj_id) is True, (
+        "vigilance+haste freshly cast: haste must bypass summoning sickness"
+    )
+    # Vigilance suppresses the tap.
+    assert synthetic_state.is_tapped(obj_id) is False, (
+        "vigilance+haste: vigilance must skip the tap-on-attack step"
+    )
+    assert obj_id in synthetic_state.get_attackers()
+
+
+def test_flying_plus_menace_needs_two_flying_or_reach_blockers(synthetic_state):
+    """Flying + menace composition. A 3/3 with both keywords requires
+    blockers that pass BOTH the flying gate (flying or reach) AND the
+    menace count (2+). A single flying blocker fails
+    ``is_legal_block_assignment``; adding a second flying blocker
+    satisfies menace. A non-flying blocker is rejected outright at
+    declare-time by the flying gate, regardless of menace."""
+    attacker_id = synthetic_state.register_and_inject_object(
+        _keyword_creature_dict(3, 3, ["flying", "menace"]),
+        0,
+        ZONE_BATTLEFIELD,
+    )
+    flying1 = synthetic_state.register_and_inject_object(
+        _keyword_creature_dict(1, 1, ["flying"]), 1, ZONE_BATTLEFIELD
+    )
+    flying2 = synthetic_state.register_and_inject_object(
+        _keyword_creature_dict(1, 1, ["flying"]), 1, ZONE_BATTLEFIELD
+    )
+    ground = synthetic_state.register_and_inject_object(
+        _keyword_creature_dict(1, 1, []), 1, ZONE_BATTLEFIELD
+    )
+    assert synthetic_state.declare_attacker(attacker_id) is True
+    # First flying blocker lands on the Vec, but is illegal in isolation
+    # (menace requires 2+).
+    assert synthetic_state.declare_blocker(flying1, attacker_id) is True
+    assert synthetic_state.is_legal_block_assignment(attacker_id) is False, (
+        "flying+menace with one flying blocker: flying gate passes but "
+        "menace fails (single blocker)"
+    )
+    # Ground blocker fails the flying gate outright.
+    assert synthetic_state.declare_blocker(ground, attacker_id) is False, (
+        "flying+menace: non-flying/non-reach blocker is rejected at "
+        "declare-time by the flying gate (CR 702.9)"
+    )
+    # Second flying blocker satisfies menace.
+    assert synthetic_state.declare_blocker(flying2, attacker_id) is True
+    assert synthetic_state.is_legal_block_assignment(attacker_id) is True, (
+        "flying+menace with two flying blockers: both gates satisfied"
+    )
+
+
+def test_menace_attacker_with_only_one_blocker_fails_legality(synthetic_state):
+    """Composition probe: a single menace attacker faces a defender with
+    only one creature available to block. The defender's one creature
+    is declared and lands on the blockers Vec, but the menace legality
+    predicate refuses the assignment — the caller must unwind the block
+    (a real game would either rebuild with two blockers or leave the
+    attacker unblocked)."""
+    attacker_id = synthetic_state.register_and_inject_object(
+        _keyword_creature_dict(3, 3, ["menace"]), 0, ZONE_BATTLEFIELD
+    )
+    sole_blocker = synthetic_state.register_and_inject_object(
+        _keyword_creature_dict(2, 2, []), 1, ZONE_BATTLEFIELD
+    )
+    assert synthetic_state.declare_attacker(attacker_id) is True
+    assert synthetic_state.declare_blocker(sole_blocker, attacker_id) is True
+    # Predicate refuses — caller is expected to drop the block.
+    assert synthetic_state.is_legal_block_assignment(attacker_id) is False, (
+        "menace + only-one-available-blocker: legality predicate must "
+        "refuse the assignment (CR 702.110)"
+    )
+
+
+def test_defender_plus_haste_still_refused(synthetic_state):
+    """A defender+haste creature, freshly injected onto battlefield
+    (summoning_sick=False), still cannot attack — defender (CR 702.3)
+    is an unconditional attack prohibition that haste does not lift.
+    Pairs with ``test_defender_plus_haste_still_cannot_attack`` above
+    but at a different P/T to confirm the rejection is keyword-driven,
+    not stat-driven."""
+    attacker_id = synthetic_state.register_and_inject_object(
+        _keyword_creature_dict(3, 5, ["defender", "haste"]),
+        0,
+        ZONE_BATTLEFIELD,
+    )
+    assert synthetic_state.is_summoning_sick(attacker_id) is False
+    assert synthetic_state.declare_attacker(attacker_id) is False, (
+        "defender+haste: defender prohibition wins even when haste would "
+        "otherwise allow attacking"
+    )
+    assert synthetic_state.get_attackers() == []
+
+
+def test_defender_plus_vigilance_still_refused(synthetic_state):
+    """Defender composes with vigilance the same way it composes with
+    haste: defender wins. A defender+vigilance creature still can't
+    attack."""
+    attacker_id = synthetic_state.register_and_inject_object(
+        _keyword_creature_dict(0, 6, ["defender", "vigilance"]),
+        0,
+        ZONE_BATTLEFIELD,
+    )
+    assert synthetic_state.declare_attacker(attacker_id) is False, (
+        "defender+vigilance: defender prohibition wins"
+    )
+    assert synthetic_state.get_attackers() == []
+
+
+def test_skulk_plus_first_strike_blocker_passes_both_gates(synthetic_state):
+    """Skulk + first-strike on the attacker: the skulk power gate
+    governs blocking (small blockers only), and first-strike sequences
+    combat damage. A 2/2 skulk+FS attacker vs a 1/1 vanilla blocker
+    passes the skulk gate (1 not > 2) and the FS substep deals 2 —
+    lethal at toughness 1. Blocker dies before the regular substep, so
+    the attacker takes no back-damage."""
+    attacker_id = synthetic_state.register_and_inject_object(
+        _keyword_creature_dict(2, 2, ["skulk", "first_strike"]),
+        0,
+        ZONE_BATTLEFIELD,
+    )
+    blocker_id = synthetic_state.register_and_inject_object(
+        _keyword_creature_dict(1, 1, []), 1, ZONE_BATTLEFIELD
+    )
+    assert synthetic_state.declare_attacker(attacker_id) is True
+    # Skulk gate: 1 not > 2 — block legal.
+    assert synthetic_state.declare_blocker(blocker_id, attacker_id) is True
+    synthetic_state.deal_combat_damage()
+    # Blocker takes 2 in FS substep (overkill at toughness 1).
+    assert synthetic_state.get_damage(blocker_id) == 2
+    # Attacker took no back-damage; blocker died in step 1.
+    assert synthetic_state.get_damage(attacker_id) == 0
+
+
+def test_skulk_one_one_attacker_blocked_by_equal_power_one_one(synthetic_state):
+    """Skulk 1/1 attacker vs 1/1 blocker: equal power passes the skulk
+    gate (CR 702.118 says GREATER power, not equal). Companion to the
+    skulk-vs-higher-power test — pins behavior at the boundary."""
+    attacker_id = synthetic_state.register_and_inject_object(
+        _keyword_creature_dict(1, 1, ["skulk"]), 0, ZONE_BATTLEFIELD
+    )
+    blocker_id = synthetic_state.register_and_inject_object(
+        _keyword_creature_dict(1, 1, []), 1, ZONE_BATTLEFIELD
+    )
+    assert synthetic_state.declare_attacker(attacker_id) is True
+    assert synthetic_state.declare_blocker(blocker_id, attacker_id) is True, (
+        "skulk 1/1: equal-power blocker passes (CR 702.118 — greater, "
+        "not equal-or-greater)"
+    )
+
+
+def test_skulk_one_one_attacker_refuses_two_two_blocker(synthetic_state):
+    """Companion to the previous test at the other side of the boundary:
+    a 1/1 skulk attacker refuses a 2/2 blocker (2 > 1)."""
+    attacker_id = synthetic_state.register_and_inject_object(
+        _keyword_creature_dict(1, 1, ["skulk"]), 0, ZONE_BATTLEFIELD
+    )
+    blocker_id = synthetic_state.register_and_inject_object(
+        _keyword_creature_dict(2, 2, []), 1, ZONE_BATTLEFIELD
+    )
+    assert synthetic_state.declare_attacker(attacker_id) is True
+    assert synthetic_state.declare_blocker(blocker_id, attacker_id) is False, (
+        "skulk 1/1: 2/2 blocker (power 2 > 1) rejected"
+    )
+    assert synthetic_state.get_blockers() == []
+
+
+def test_indestructible_5_5_survives_ten_damage_via_sba(synthetic_state):
+    """Round-13 indestructible interaction cross-check inside the combat
+    test file: a 5/5 indestructible takes 10 damage (overkill by 2x);
+    ``apply_sbas`` returns 0, the creature remains on the battlefield
+    with its 10 marked damage intact (CR 702.12, CR 704.5g)."""
+    obj_id = synthetic_state.register_and_inject_object(
+        _keyword_creature_dict(5, 5, ["indestructible"]),
+        0,
+        ZONE_BATTLEFIELD,
+    )
+    synthetic_state.deal_damage(obj_id, 10)
+    assert synthetic_state.apply_sbas() == 0, (
+        "indestructible 5/5 with 10 damage: SBA destruction skipped "
+        "(CR 702.12 / CR 704.5g)"
+    )
+    assert synthetic_state.find_object_zone(obj_id) == ZONE_BATTLEFIELD
+    # Damage marker preserved — indestructible doesn't prevent damage,
+    # only the destruction SBA.
+    assert synthetic_state.get_damage(obj_id) == 10
+
+
+def test_indestructible_5_5_survives_zero_toughness_via_negative_counters(
+    synthetic_state,
+):
+    """Round-13 indestructible + 0-toughness SBA. A 5/5 indestructible
+    creature loaded with five -1/-1 counters has effective toughness 0,
+    which would normally trigger CR 704.5f (creatures with toughness 0
+    or less are put into the graveyard). Indestructible's CR 702.12b
+    text exempts it — the creature stays on the battlefield."""
+    obj_id = synthetic_state.register_and_inject_object(
+        _keyword_creature_dict(5, 5, ["indestructible"]),
+        0,
+        ZONE_BATTLEFIELD,
+    )
+    synthetic_state.set_counters(obj_id, -5)  # effective toughness 0
+    assert synthetic_state.apply_sbas() == 0, (
+        "indestructible with effective toughness 0: 704.5f is a "
+        "destruction SBA, exempted by 702.12b"
+    )
+    assert synthetic_state.find_object_zone(obj_id) == ZONE_BATTLEFIELD
+
+
+def test_multi_attacker_first_strike_only_one_blocker(synthetic_state):
+    """Two attackers — one with first-strike, one vanilla — and a single
+    blocker assigned to the first-strike attacker.
+
+    First-strike substep: FS attacker deals 2 to blocker (not lethal at
+    toughness 3). Blocker has no first-strike, so it deals 0 in step 1.
+    Regular substep: vanilla attacker is unblocked and hits the
+    defender for 2 (life 20 -> 18). Blocker (alive, has no FS) deals 3
+    back to the FS attacker. The FS attacker already struck in step 1
+    and does NOT strike again here (only double-strike fires twice).
+
+    Net pinned behavior: blocker 2 dmg, FS attacker 3 dmg, vanilla
+    attacker 0 dmg, defender life 18."""
+    fs_attacker_id = synthetic_state.register_and_inject_object(
+        _keyword_creature_dict(2, 2, ["first_strike"]),
+        0,
+        ZONE_BATTLEFIELD,
+    )
+    vanilla_attacker_id = synthetic_state.register_and_inject_object(
+        _keyword_creature_dict(2, 2, []),
+        0,
+        ZONE_BATTLEFIELD,
+    )
+    blocker_id = synthetic_state.register_and_inject_object(
+        _keyword_creature_dict(3, 3, []), 1, ZONE_BATTLEFIELD
+    )
+    assert synthetic_state.declare_attacker(fs_attacker_id) is True
+    assert synthetic_state.declare_attacker(vanilla_attacker_id) is True
+    # Only the FS attacker gets blocked.
+    assert synthetic_state.declare_blocker(blocker_id, fs_attacker_id) is True
+    assert synthetic_state.get_life(1) == 20
+    synthetic_state.deal_combat_damage()
+    # Blocker took 2 in step 1 (FS attacker's hit) — survived.
+    assert synthetic_state.get_damage(blocker_id) == 2, (
+        "multi-attacker: blocker takes FS attacker's 2 damage in step 1"
+    )
+    # FS attacker took 3 in step 2 (blocker still alive, hit back).
+    assert synthetic_state.get_damage(fs_attacker_id) == 3, (
+        "multi-attacker: FS attacker survived step 1, blocker (vanilla) "
+        "back-damages it for 3 in step 2"
+    )
+    # Vanilla attacker was unblocked and took no damage.
+    assert synthetic_state.get_damage(vanilla_attacker_id) == 0
+    # Defender lost only the vanilla attacker's 2.
+    assert synthetic_state.get_life(1) == 18, (
+        "multi-attacker: only the unblocked vanilla attacker reaches the "
+        "defender — 2 damage. The FS attacker was blocked; its damage "
+        "stayed on the blocker."
+    )
