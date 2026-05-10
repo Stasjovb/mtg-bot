@@ -147,6 +147,7 @@ the test lands in a commit.
 | rust(effect-add-mana-to-pool): Effect::AddManaToPool dispatch | tests_rust/test_resolve.py extend | green  | feature/rust-effect-add-mana-to-pool |
 | rust(action-declare-attackers): Action::DeclareAttackers variant | tests_rust/test_actions.py extend | green  | feature/rust-action-declare-attackers |
 | rust(effect-search-library-for-basic-land-tapped): basic land search + tapped enter | tests_rust/test_resolve.py extend | green  | feature/rust-effect-search-library-for-basic-land-tapped |
+| rust(effect-put-plus-one-counter-on-self): self-target counter (CR 122.6) | tests_rust/test_resolve.py extend | green  | feature/rust-effect-put-plus-one-counter-on-self |
 
 ## Build invocation reminder
 

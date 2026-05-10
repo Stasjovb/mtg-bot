@@ -3758,3 +3758,193 @@ def test_resolve_search_library_for_basic_land_tapped_count_zero_no_op(
     assert synthetic_state.library_sizes[0] == lib_before
     # Source (Sorcery) was in hand → graveyard, no battlefield change.
     assert synthetic_state.battlefield_sizes[0] == bf_before
+
+
+# --- round-23 PutPlusOneCounterOnSelf dispatch ----------------------
+#
+# **PutPlusOneCounterOnSelf scope** (mirrored in the Rust module
+# docstring on ``state_ops_resolve.rs`` + ``cards.rs``):
+#
+# - **"Self" = the resolving stack item's source GameObject.** The
+#   source_obj_id is threaded from ``resolve_top_of_stack`` through
+#   ``apply_effect``; the arm walks both players' battlefield Vecs
+#   looking for an obj with that id. Distinct from AddCounters which
+#   picks the defender's first creature deterministically.
+# - **amount=0 / amount<0** mirror GainLife / DrawCards / Mill /
+#   ScryN / CreateToken / SearchLibrary conventions (no-op / raise
+#   respectively).
+# - **Source not on battlefield = silent no-op.** Real MTG fizzle
+#   shape: the counter "lands on nothing" if the source has left
+#   the battlefield. Mirrors Python's ``state.resolving_source is
+#   None`` short-circuit.
+
+
+def _self_counter_dict(amount=1):
+    """A creature printing carrying a PutPlusOneCounterOnSelf effect.
+    Blade-of-the-Swarm-shaped: creature with an "on-attack" or
+    self-buff dispatch. Card_types=["Creature"] so the post-resolve
+    mover sends it to the battlefield, where the counter add lands."""
+    return {
+        "name": f"Test Self-Counter (x{amount})",
+        "card_types": ["Creature"],
+        "power": 1,
+        "toughness": 1,
+        "effects": [
+            {
+                "kind": "put_plus_one_counter_on_self",
+                "amount": amount,
+            }
+        ],
+    }
+
+
+def test_resolve_put_plus_one_counter_on_self_increments_source_counters(
+    synthetic_state,
+):
+    """A creature spell resolving with PutPlusOneCounterOnSelf
+    deposits its amount of counters onto its own GameObject after the
+    post-resolve move lands it on the battlefield. Default amount=1
+    case."""
+    # Inject the creature source onto p0's BATTLEFIELD directly (so
+    # the source-finder picks it up at resolve time). Real MTG: the
+    # source moves to the battlefield via post-resolve; for this test
+    # we pre-place it there to avoid the source-discovery-order
+    # complication (the post-resolve mover and the self-counter arm
+    # both walk the battlefield).
+    spell_obj_id = synthetic_state.register_and_inject_object(
+        _self_counter_dict(amount=1), 0, ZONE_BATTLEFIELD
+    )
+    assert synthetic_state.get_counters(spell_obj_id) == 0
+
+    synthetic_state.push_to_stack(spell_obj_id, 0)
+    synthetic_state.resolve_top_of_stack()
+
+    assert synthetic_state.is_stack_empty() is True
+    # +1 counter landed on the source itself.
+    assert synthetic_state.get_counters(spell_obj_id) == 1
+
+
+def test_resolve_put_plus_one_counter_on_self_amount_two(synthetic_state):
+    """amount=2 — for cards that drop two counters on themselves per
+    activation — lands +2 on the source."""
+    spell_obj_id = synthetic_state.register_and_inject_object(
+        _self_counter_dict(amount=2), 0, ZONE_BATTLEFIELD
+    )
+    assert synthetic_state.get_counters(spell_obj_id) == 0
+
+    synthetic_state.push_to_stack(spell_obj_id, 0)
+    synthetic_state.resolve_top_of_stack()
+
+    assert synthetic_state.get_counters(spell_obj_id) == 2
+
+
+def test_resolve_put_plus_one_counter_on_self_amount_zero_no_op(
+    synthetic_state,
+):
+    """amount=0 is a legal no-op (mirrors GainLife / DrawCards / Mill /
+    SearchLibrary / CreateToken zero-amount conventions). Source
+    counters untouched."""
+    spell_obj_id = synthetic_state.register_and_inject_object(
+        _self_counter_dict(amount=0), 0, ZONE_BATTLEFIELD
+    )
+    assert synthetic_state.get_counters(spell_obj_id) == 0
+
+    synthetic_state.push_to_stack(spell_obj_id, 0)
+    synthetic_state.resolve_top_of_stack()
+
+    assert synthetic_state.is_stack_empty() is True
+    assert synthetic_state.get_counters(spell_obj_id) == 0
+
+
+def test_resolve_put_plus_one_counter_on_self_stacks_with_existing(
+    synthetic_state,
+):
+    """Multiple consecutive resolutions stack additively on the i32 net
+    counter — same shape as AddCounters' running-net behavior."""
+    spell_obj_id = synthetic_state.register_and_inject_object(
+        _self_counter_dict(amount=1), 0, ZONE_BATTLEFIELD
+    )
+    # Pre-load 2 counters via the round-2 add_counters API so the
+    # PutPlusOneCounterOnSelf dispatch sees a non-zero starting state.
+    synthetic_state.add_counters(spell_obj_id, 2)
+    assert synthetic_state.get_counters(spell_obj_id) == 2
+
+    synthetic_state.push_to_stack(spell_obj_id, 0)
+    synthetic_state.resolve_top_of_stack()
+
+    # 2 (pre-loaded) + 1 (self-counter resolution) = 3.
+    assert synthetic_state.get_counters(spell_obj_id) == 3
+
+
+def test_resolve_put_plus_one_counter_on_self_source_not_on_battlefield_fizzles(
+    synthetic_state,
+):
+    """If the source GameObject is NOT on a battlefield zone, the
+    counter add fizzles silently (the source-finder walks both players'
+    battlefields). Place the source on HAND, resolve, assert no error
+    and no counter mutation anywhere."""
+    spell_obj_id = synthetic_state.register_and_inject_object(
+        _self_counter_dict(amount=1), 0, ZONE_HAND
+    )
+    # Source sits in hand — battlefield-finder will not see it.
+    assert synthetic_state.find_object_zone(spell_obj_id) == ZONE_HAND
+
+    synthetic_state.push_to_stack(spell_obj_id, 0)
+    # No raise — silent fizzle.
+    synthetic_state.resolve_top_of_stack()
+
+    assert synthetic_state.is_stack_empty() is True
+    # The source ends up on the battlefield via the post-resolve
+    # mover (Creature card_type), but the counter dispatch ran BEFORE
+    # that move (per resolve_top_of_stack ordering: effects first,
+    # then post-resolve mover), so it saw the source in hand and
+    # fizzled. The source is now on the battlefield with 0 counters.
+    assert synthetic_state.find_object_zone(spell_obj_id) == ZONE_BATTLEFIELD
+    assert synthetic_state.get_counters(spell_obj_id) == 0
+
+
+def test_resolve_put_plus_one_counter_on_self_multiple_stack_items_resolve_cleanly(
+    synthetic_state,
+):
+    """Two separate sources each carrying a PutPlusOneCounterOnSelf
+    effect resolve independently — each gains a counter on its own
+    object, neither bleeds onto the other."""
+    src_a = synthetic_state.register_and_inject_object(
+        _self_counter_dict(amount=1), 0, ZONE_BATTLEFIELD
+    )
+    src_b = synthetic_state.register_and_inject_object(
+        _self_counter_dict(amount=1), 0, ZONE_BATTLEFIELD
+    )
+    assert synthetic_state.get_counters(src_a) == 0
+    assert synthetic_state.get_counters(src_b) == 0
+
+    # Push both onto the stack, resolve top-down (LIFO).
+    synthetic_state.push_to_stack(src_a, 0)
+    synthetic_state.push_to_stack(src_b, 0)
+    synthetic_state.resolve_top_of_stack()  # resolves src_b
+    synthetic_state.resolve_top_of_stack()  # resolves src_a
+
+    # Each source picked up its own +1 counter; no cross-contamination.
+    assert synthetic_state.get_counters(src_a) == 1
+    assert synthetic_state.get_counters(src_b) == 1
+
+
+def test_resolve_put_plus_one_counter_on_self_finds_source_on_opponent_battlefield(
+    synthetic_state,
+):
+    """The source-finder walks BOTH players' battlefields. A source
+    on p1's battlefield (controller=1) resolves with the counter
+    landing on p1's object — the arm picks the source by obj_id, not
+    by controller."""
+    spell_obj_id = synthetic_state.register_and_inject_object(
+        _self_counter_dict(amount=1), 1, ZONE_BATTLEFIELD
+    )
+    assert synthetic_state.get_counters(spell_obj_id) == 0
+
+    # Active player (p0) resolves a stack item whose source lives on
+    # p1's battlefield. The counter lands on p1's source object —
+    # this is "self", not "the active player's permanent".
+    synthetic_state.push_to_stack(spell_obj_id, 1)
+    synthetic_state.resolve_top_of_stack()
+
+    assert synthetic_state.get_counters(spell_obj_id) == 1

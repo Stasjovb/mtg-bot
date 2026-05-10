@@ -303,7 +303,21 @@ fn move_source_post_resolve(state: &mut GameState, source_obj_id: u32) -> Option
 /// new variant in the bridge will turn this into a build-time
 /// error (exhaustiveness) until handled here — the desired "fail
 /// loud" property for free.
-fn apply_effect(state: &mut GameState, effect: &Effect) -> PyResult<()> {
+///
+/// `source_obj_id` is the resolving stack item's source GameObject
+/// id. Most arms ignore it (they target the defending player /
+/// active_player / a Vec-index pick); the round-23
+/// `PutPlusOneCounterOnSelf` arm needs it to locate the "self" /
+/// "this creature" recipient — the source object on the
+/// battlefield. Threaded through here rather than re-finding from
+/// the stack so the existing borrow-then-drop pattern in
+/// `resolve_top_of_stack` (snapshot effects, drop registry borrow,
+/// iterate) stays intact.
+fn apply_effect(
+    state: &mut GameState,
+    effect: &Effect,
+    source_obj_id: u32,
+) -> PyResult<()> {
     match effect {
         Effect::DealDamage { amount, target } => {
             let defender: u8 = 1 - state.active_player;
@@ -1285,6 +1299,84 @@ fn apply_effect(state: &mut GameState, effect: &Effect) -> PyResult<()> {
             // + SEARCH_LIMITATIONS entry for the deferred RNG-
             // externalization work.
         }
+        // Round-23: PutPlusOneCounterOnSelf. CR 122.6 + 701.13 — put
+        // `amount` +1/+1 counters on the resolving spell's source
+        // permanent ("this creature" / "self" target). Powers Blade
+        // of the Swarm, Atomic Microsizer — 16 cards in the EoE pool
+        // per round-20 measurement.
+        //
+        // **"Self" vs AddCounters' "defender's first creature".**
+        // AddCounters deterministically picks the defending player's
+        // battlefield[0] (an opponent-target shape). This arm
+        // recipient = the source GameObject of the resolving stack
+        // item, located via `source_obj_id` threaded through
+        // `apply_effect`. Mirrors Python's `state.resolving_source`
+        // lookup in `PutPlusOneCounterOnSelf.resolve`.
+        //
+        // **Source-not-on-battlefield = silent no-op.** Real MTG: if
+        // the source has left the battlefield by the time the
+        // counter resolves (e.g. it was destroyed in response to
+        // the trigger), the counter "lands on nothing" / fizzles.
+        // First slice honors that — we walk both players' battlefield
+        // Vecs looking for an object with the matching id; if not
+        // found, return Ok(()) silently. Mirrors Python's
+        // `source is None` short-circuit. NOTE: this means a
+        // schema-allowed Instant/Sorcery printing carrying this
+        // effect (the source still sits on the stack at resolve
+        // time, NOT on the battlefield) fizzles — semantically
+        // nonsense ("the instant's source isn't a creature"), but
+        // doesn't error.
+        //
+        // **amount<0 raises** loudly (defense-in-depth; parse_effect
+        // catches at register time). **amount=0 is a legal no-op**
+        // (mirrors GainLife / DrawCards / Mill / SearchLibrary /
+        // CreateToken zero-amount conventions).
+        //
+        // **Round-2 net-counter model.** The positive `amount` lands
+        // as a positive delta on the i32 `counters` field via
+        // `saturating_add` — same shape as AddCounters' positive
+        // branch.
+        //
+        // **Inlining note (cross-file friction).** Per per-slice
+        // file-isolation we inline the battlefield scan +
+        // `Arc::make_mut` + `saturating_add` here, mirroring how
+        // AddCounters / DealDamage AnyCreature / TapTarget /
+        // UntapTarget inline their counter-mutations.
+        Effect::PutPlusOneCounterOnSelf { amount } => {
+            if *amount < 0 {
+                return Err(PyValueError::new_err(format!(
+                    "PutPlusOneCounterOnSelf amount must be non-negative, got {amount}"
+                )));
+            }
+            if *amount == 0 {
+                return Ok(());
+            }
+            let delta = *amount;
+            // Locate the source on a battlefield zone. If it lives
+            // somewhere else (hand / library / graveyard / stack /
+            // exile) the counter add fizzles silently per the docstring
+            // — schema-allowed but semantically a no-op for the spell
+            // / ETB / trigger that referenced "self".
+            let mut found_player: Option<usize> = None;
+            for (pidx, player) in state.players.iter().enumerate() {
+                if player.battlefield.iter().any(|o| o.id == source_obj_id) {
+                    found_player = Some(pidx);
+                    break;
+                }
+            }
+            let pidx = match found_player {
+                Some(p) => p,
+                None => return Ok(()), // fizzle silently
+            };
+            let bf_mut: &mut Vec<GameObject> =
+                Arc::make_mut(&mut state.players[pidx].battlefield);
+            for obj in bf_mut.iter_mut() {
+                if obj.id == source_obj_id {
+                    obj.counters = obj.counters.saturating_add(delta);
+                    break;
+                }
+            }
+        }
     }
     Ok(())
 }
@@ -1335,7 +1427,7 @@ impl GameState {
         };
 
         for effect in &effects {
-            apply_effect(self, effect)?;
+            apply_effect(self, effect, top.source_obj_id)?;
         }
 
         // CR 608.2m: post-resolve, move the spell source. Instants /
@@ -1365,7 +1457,7 @@ impl GameState {
                     None => Vec::new(),
                 };
             for effect in &etb_effects {
-                apply_effect(self, effect)?;
+                apply_effect(self, effect, top.source_obj_id)?;
             }
         }
 

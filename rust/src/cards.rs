@@ -201,6 +201,49 @@ pub enum Effect {
     ///   silently — partial fill is allowed (Python's
     ///   `next(... None)` short-circuit on miss).
     SearchLibraryForBasicLandTapped { count: i32 },
+    /// Put `amount` +1/+1 counters on the resolving spell's source
+    /// permanent — the "this creature" / "self" target (CR 122.6 +
+    /// 701.13). Powers Blade of the Swarm, Atomic Microsizer — 16
+    /// cards in the EoE pool per round-20 measurement.
+    ///
+    /// **"Self" semantics.** The recipient is the source GameObject
+    /// at the top of the stack (i.e. the resolving spell's source).
+    /// This is distinct from `AddCounters`, which deterministically
+    /// picks the DEFENDING player's first creature. Mirrors Python's
+    /// `PutPlusOneCounterOnSelf` which reads
+    /// `state.resolving_source` during ability resolution.
+    ///
+    /// **Counter shape.** `amount` is the number of +1/+1 counters
+    /// to add; it lands as a positive delta on the round-2 signed
+    /// net-counter i32 field via `saturating_add`. Default is 1
+    /// (mirrors Python's `amount: int = 1` dataclass default).
+    /// Negative `amount` raises at register / resolve time —
+    /// "put -N +1/+1 counters on self" isn't a sensible printing.
+    ///
+    /// **Source-finder dispatch.** Round-23's earlier arms (AddMana
+    /// to Pool, SearchLibraryForBasicLandTapped, AddCounters,
+    /// DamageEachCreature, etc.) get their target from
+    /// `state.active_player` or from the defending player's
+    /// battlefield Vec; "self" needs the actual source object. The
+    /// resolve loop owns `top.source_obj_id` and threads it into
+    /// `apply_effect` so this arm can locate the source across
+    /// zones. The other arms ignore it (the param is opaque to
+    /// them).
+    ///
+    /// **Source-not-on-battlefield handling.** Real MTG: if the
+    /// source has left the battlefield by the time the counter is
+    /// added (e.g. the creature was destroyed in response), the
+    /// effect "puts the counter on nothing" / fizzles. First slice
+    /// honors that: if the source is not on a battlefield zone, the
+    /// counter add is a silent no-op (the source-finder walks both
+    /// players' battlefields; sources sitting in hand / library /
+    /// graveyard / stack are NOT counter targets). Mirrors Python's
+    /// `source is None` short-circuit in the dataclass's `resolve`.
+    ///
+    /// **amount=0 is a legal no-op** (mirrors GainLife / DrawCards /
+    /// Mill / SearchLibraryForBasicLandTapped / CreateToken
+    /// zero-amount conventions).
+    PutPlusOneCounterOnSelf { amount: i32 },
 }
 
 #[derive(Clone, Debug)]
@@ -456,8 +499,29 @@ fn parse_effect(dict: &Bound<'_, PyDict>) -> PyResult<Effect> {
             }
             Ok(Effect::SearchLibraryForBasicLandTapped { count })
         }
+        "put_plus_one_counter_on_self" => {
+            // Python's `PutPlusOneCounterOnSelf(amount: int = 1)` has
+            // an `amount` field defaulting to 1. Mirror that here:
+            // missing `amount` defaults to 1, present `amount`
+            // extracts as i32. Negative `amount` surfaces at register
+            // time (defense-in-depth; `apply_effect` re-checks).
+            let amount: i32 = match dict.get_item("amount")? {
+                Some(a) => a.extract().map_err(|e| {
+                    PyValueError::new_err(format!(
+                        "put_plus_one_counter_on_self.amount must be an integer (got: {e})"
+                    ))
+                })?,
+                None => 1,
+            };
+            if amount < 0 {
+                return Err(PyValueError::new_err(format!(
+                    "put_plus_one_counter_on_self: amount must be non-negative, got {amount}"
+                )));
+            }
+            Ok(Effect::PutPlusOneCounterOnSelf { amount })
+        }
         other => Err(PyValueError::new_err(format!(
-            "unknown effect kind {other:?}; valid: deal_damage, draw_cards, gain_life, return_to_hand, mill, exile_target, tap_target, untap_target, sacrifice, add_counters, discard_card, scry_n, destroy_target, damage_each_opponent, damage_each_creature, create_token, add_mana_to_pool, search_library_for_basic_land_tapped"
+            "unknown effect kind {other:?}; valid: deal_damage, draw_cards, gain_life, return_to_hand, mill, exile_target, tap_target, untap_target, sacrifice, add_counters, discard_card, scry_n, destroy_target, damage_each_opponent, damage_each_creature, create_token, add_mana_to_pool, search_library_for_basic_land_tapped, put_plus_one_counter_on_self"
         ))),
     }
 }
@@ -715,6 +779,10 @@ fn effect_to_pydict<'py>(
         Effect::SearchLibraryForBasicLandTapped { count } => {
             d.set_item("kind", "search_library_for_basic_land_tapped")?;
             d.set_item("count", *count)?;
+        }
+        Effect::PutPlusOneCounterOnSelf { amount } => {
+            d.set_item("kind", "put_plus_one_counter_on_self")?;
+            d.set_item("amount", *amount)?;
         }
     }
     Ok(d)
