@@ -210,6 +210,7 @@ endpoints (default: `training_progress/runs.db`).
 - Card pool target: **Edge of Eternities** (Scryfall set code `eoe`). Raw data is cached at `data/edge_of_eternities.json`; regenerate via `scripts/fetch_eoe.py`.
 - Self-play / eval data-gen and the iterate-AlphaZero loop run on the real 17lands deck pool at `data/17lands/eoe_decks.json.gz` (5000 EoE archetypes). `iterate_alphazero.py` requires `--deck-pool` and `data_gen` / `self_play` raise on missing pool — there is no synthetic mono-color fallback any more.
 - Architectural decisions that are locked in: full stack-and-priority simulation (not resolve-immediately); Scryfall JSON as the card data source.
+- **Eval-gate uses a 2000-game default + early-stop watcher.** `mtg_bot iterate`'s `--eval-games` defaults to 2000, sized to give close-call evals real statistical headroom (~+/- 2.2 pts at p=50%). Lopsided evals (random-init bootstrap, post-promotion improvements) finish in ~50-100 games once the early-stop watcher (`scripts/eval_early_stop_watcher.py`) writes a stop sentinel — the watcher polls eval progress JSONs, computes Wilson 95% CI on win-rate after `--min-decisive` games, and stops when the CI lower bound clears the acceptance threshold (PASS) or the upper bound falls below it (FAIL). Run the watcher alongside iterate: `python scripts/eval_early_stop_watcher.py --threshold 0.52 --alpha 0.025 --min-decisive 30`. Without the watcher, eval phases run to completion — pass `--eval-games 500` explicitly if you don't need the extended headroom.
 - **Eval depth must match self-play depth.** The metric we care about is "did v_{N+1} beat v_N at the deployment configuration", and the deployment configuration is whatever depth self-play used. Eval at a different depth measures something else — a network trained at depth=200 may not generalize linearly to depth=400, so a deeper eval doesn't extrapolate cleanly. `mtg_bot.cli.iterate` (formerly `iterate_alphazero.py`) already uses `args.nodes` for both self-play and eval (one knob). Standalone eval invocations should use `mtg_bot eval` (which inherits `--nodes` from `mtg_bot.cli._common`'s defaults) so the depth tracks the current iter's self-play config automatically. There is now exactly one place to update the default — `mtg_bot/cli/_common.py:DEFAULT_NODES`. The pre-iter_005 cleanup found a one-off eval script that had been templated when iter_004 ran at 400 nodes and never re-templated when iter_005 dropped to 200; the consolidated `mtg_bot eval` makes that class of bug structurally impossible.
 
 ## Action encoding versions
@@ -263,17 +264,29 @@ prior lookups use the matching slot mapping.
    different-slots case left to defend against). The workaround
    stays in place for v1 weights.
 
+**End-to-end wiring (closed by `feature/v17-distributed-encoding`):**
+
+- `iterate` reads `bootstrap_meta.action_encoding_version` and
+  threads it through both the self-play spec (single
+  `action_encoding_version` field on `SelfPlayJobSpec` — both seats
+  share a version in self-play) and the eval spec (separate
+  `new_action_encoding_version` + `old_action_encoding_version`
+  on `EvalJobSpec` so cross-version evals like v17[v2] vs v13[v1]
+  work). `train_nn.py`'s `--action-encoding-version` flag flows
+  through to `ModelMetadata.action_encoding_version` as before.
+- All three distributed runners (`run_shard_local`,
+  `run_shard_pull`, `run_shard_eval_pull`) thread the version into
+  `NNPimcConfig`. `run_shard_pull`'s worker-args tuple is the
+  13-element form `data_gen._play_one_parallel_game` already
+  supports.
+
 **Out of scope of v2 today:**
 
-- Self-play / data_gen don't yet auto-thread the version end-to-end
-  from `mtg_bot iterate` to the per-game policy-target encoding.
-  `_play_one_game_recording` accepts an `action_encoding_version`
-  parameter (default v1) but the iterate / shard launcher hasn't
-  been wired to pull it from the bootstrap version's metadata. A
-  full v2 training run would need that wiring.
-- v2 has only been verified at the codec level; no v17 weights
-  trained against it exist yet. The first v2 training run will
-  surface any inference-side wiring gap.
+- v2 has only been verified at the codec level + a local-only
+  smoke (50 self-play / 1 epoch / 50 eval against a tiny
+  random-init bootstrap); no production-scale v17 weights trained
+  against it exist yet. The first real v2 training run will
+  surface any inference-side wiring gap that the smoke missed.
 
 ## Documenting deliberate divergences
 
