@@ -1377,6 +1377,69 @@ fn apply_effect(
                 }
             }
         }
+        // Round-23: Surveil. CR 701.42 — controller looks at the top
+        // `count` cards of their library and may put any number of
+        // them into their graveyard; the rest stay on top in any
+        // order. Powers Appendage Amalgam, etc. — 16 cards in the EoE
+        // pool per round-20 measurement.
+        //
+        // **Sibling of ScryN (round 16).** Same look-at-top-N shape,
+        // different destination zone: Scry routes the chosen cards to
+        // the bottom of the library; Surveil routes them to the
+        // graveyard.
+        //
+        // **First-slice deterministic shortcut: keep all on top.**
+        // Mirrors round-16 ScryN's "keep all on top" first-slice
+        // choice — satisfies the "surveil happened" semantics without
+        // requiring a decision callback to choose which cards go to
+        // the graveyard (deferred to a future slice that plumbs a real
+        // "which to graveyard" decision surface, parallel to the
+        // deferred ScryN "which to bottom" plumbing). Keep-on-top is
+        // mechanically a no-op on both the library and the graveyard
+        // — no zone moves, no order change — so there is literally
+        // nothing to mutate here.
+        //
+        // **Controller convention: ``state.active_player``** — same
+        // first-slice shape as ScryN / DrawCards / GainLife (all
+        // implicit-controller). Real MTG plumbs the spell controller
+        // through ``StackItem.controller``; deferred. `source_obj_id`
+        // (round-23 refactor parameter) is ignored here — Surveil is
+        // controller-targeted, not source-targeted.
+        //
+        // **Negative ``count`` raises** loudly (CR 701.42 doesn't
+        // define Surveil -1; surface it as a schema error). Mirrors
+        // ScryN's negative-count rejection. Defense-in-depth: the
+        // parser already rejects negatives at register time.
+        //
+        // **count > library size** is silently a no-op under the
+        // keep-all-on-top first slice (CR 701.42 would clamp to
+        // "look at all cards in the library", same as Scry; with
+        // keep-on-top no cards move regardless).
+        //
+        // **Inlining note (cross-file friction).** Round-16 ScryN
+        // already collapses to a sign-check + a no-op under keep-on-
+        // top; Surveil is the same shape, so the dispatch reduces to
+        // the same sign check. A future slice that plumbs the real
+        // "which to graveyard" decision can grow the inline path here
+        // (popping N cards from library top, presenting them through
+        // a Python-side `choose_surveil` callback, routing chosen
+        // cards to `Arc::make_mut(&mut player.graveyard).push(obj)`
+        // and the rest back to library top in original order).
+        Effect::Surveil { count } => {
+            if *count < 0 {
+                return Err(PyValueError::new_err(format!(
+                    "Surveil count must be non-negative, got {count}"
+                )));
+            }
+            // First-slice deterministic keep-all-on-top: no library /
+            // graveyard mutation needed. Empty / clamped library is
+            // a silent no-op (nothing to look at, nothing to move).
+            // Bind the controller to make the convention explicit for
+            // future readers (the real "which to graveyard" decision
+            // will resolve against this player), mirroring ScryN.
+            let _controller = state.active_player as usize;
+            let _ = source_obj_id; // controller-targeted, not source-targeted
+        }
     }
     Ok(())
 }

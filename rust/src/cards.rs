@@ -244,6 +244,20 @@ pub enum Effect {
     /// Mill / SearchLibraryForBasicLandTapped / CreateToken
     /// zero-amount conventions).
     PutPlusOneCounterOnSelf { amount: i32 },
+    /// Surveil N (CR 701.42 / equivalent): controller looks at the top
+    /// `count` cards of their library, then chooses any number to put
+    /// into their graveyard. The rest stay on top of the library in
+    /// any order. Powers Appendage Amalgam, etc. — 16 cards in the EoE
+    /// pool per round-20 measurement. Sibling of ScryN (round 16) —
+    /// same shape, different destination zone (graveyard not bottom).
+    ///
+    /// First-slice deterministic choice: put NONE into the graveyard;
+    /// keep all `count` cards on top in their current order. This is
+    /// the safest deterministic default (mirrors ScryN's "keep all on
+    /// top" first-slice choice from round 16). Future slice plumbs a
+    /// real "which to graveyard" decision callback through. Negative
+    /// count raises.
+    Surveil { count: i32 },
 }
 
 #[derive(Clone, Debug)]
@@ -520,8 +534,26 @@ fn parse_effect(dict: &Bound<'_, PyDict>) -> PyResult<Effect> {
             }
             Ok(Effect::PutPlusOneCounterOnSelf { amount })
         }
+        "surveil" => {
+            // Python's `Surveil(amount: int = 1)` dataclass has an
+            // `amount` field defaulting to 1. The Rust bridge mirrors
+            // ScryN's shape (sibling effect: same look-at-top-N pattern,
+            // different destination zone) and uses `count` here to stay
+            // consistent with ScryN's parser arm. Missing `count` is a
+            // KeyError at register time — there's no first-slice
+            // default since Surveil's printed value is always present
+            // on real cards. Negative `count` surfaces at register time
+            // (defense-in-depth; `apply_effect` re-checks).
+            let count: i32 = require(dict, "count")?.extract()?;
+            if count < 0 {
+                return Err(PyValueError::new_err(format!(
+                    "surveil: count must be non-negative, got {count}"
+                )));
+            }
+            Ok(Effect::Surveil { count })
+        }
         other => Err(PyValueError::new_err(format!(
-            "unknown effect kind {other:?}; valid: deal_damage, draw_cards, gain_life, return_to_hand, mill, exile_target, tap_target, untap_target, sacrifice, add_counters, discard_card, scry_n, destroy_target, damage_each_opponent, damage_each_creature, create_token, add_mana_to_pool, search_library_for_basic_land_tapped, put_plus_one_counter_on_self"
+            "unknown effect kind {other:?}; valid: deal_damage, draw_cards, gain_life, return_to_hand, mill, exile_target, tap_target, untap_target, sacrifice, add_counters, discard_card, scry_n, destroy_target, damage_each_opponent, damage_each_creature, create_token, add_mana_to_pool, search_library_for_basic_land_tapped, put_plus_one_counter_on_self, surveil"
         ))),
     }
 }
@@ -783,6 +815,10 @@ fn effect_to_pydict<'py>(
         Effect::PutPlusOneCounterOnSelf { amount } => {
             d.set_item("kind", "put_plus_one_counter_on_self")?;
             d.set_item("amount", *amount)?;
+        }
+        Effect::Surveil { count } => {
+            d.set_item("kind", "surveil")?;
+            d.set_item("count", *count)?;
         }
     }
     Ok(d)
