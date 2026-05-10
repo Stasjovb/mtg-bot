@@ -977,6 +977,76 @@ def test_counter_target_spell_in_unknown_kind_error_string():
         )
 
 
+def test_round_trip_return_creature_from_your_graveyard_to_battlefield():
+    """CR 400.7 + 302.1 — reanimation. Powers Emerge from the Cocoon
+    pattern (8 EoE cards). Unit variant, no fields. Round-trip the
+    happy-path effect dict through the bridge."""
+    reg = mtg_bot_engine.Registry()
+    pid = reg.register_printing(
+        {
+            "name": "Test Reanimate",
+            "card_types": ["Sorcery"],
+            "mana_cost": {"B": 1},
+            "effects": [
+                {"kind": "return_creature_from_your_graveyard_to_battlefield"}
+            ],
+        }
+    )
+    effects = [dict(e) for e in reg.get_printing_effects(pid)]
+    assert effects[0] == {
+        "kind": "return_creature_from_your_graveyard_to_battlefield"
+    }
+
+
+def test_round_trip_return_creature_from_graveyard_ignores_extra_keys():
+    """Python's `ReturnCreatureFromYourGraveyardToBattlefield` inherits
+    optional widening / capping fields (`or_enchantment`, `max_mv`,
+    etc.) from `ReturnFromGraveyard`. These are intentionally NOT
+    mirrored in the Rust first slice — extra keys on the dict are
+    silently ignored, matching the silent-drop convention elsewhere
+    in the parser. Confirms the unit-variant shape doesn't accidentally
+    require fields."""
+    reg = mtg_bot_engine.Registry()
+    pid = reg.register_printing(
+        {
+            "name": "Test Reanimate With Filter",
+            "card_types": ["Sorcery"],
+            "mana_cost": {"B": 1},
+            "effects": [
+                {
+                    "kind": "return_creature_from_your_graveyard_to_battlefield",
+                    "max_mv": 3,
+                    "or_enchantment": True,
+                }
+            ],
+        }
+    )
+    effects = [dict(e) for e in reg.get_printing_effects(pid)]
+    # Round-trip drops the unrecognized fields — first slice doesn't
+    # model the widening / capping shape, the round-trip is the
+    # unit-variant shape.
+    assert effects[0] == {
+        "kind": "return_creature_from_your_graveyard_to_battlefield"
+    }
+
+
+def test_return_creature_from_graveyard_in_unknown_kind_error_string():
+    """Defense-in-depth: the unknown-kind error message lists
+    `return_creature_from_your_graveyard_to_battlefield` in its
+    valid-kinds enumeration so a future mis-typed kind helpfully
+    surfaces the right name."""
+    reg = mtg_bot_engine.Registry()
+    with pytest.raises(
+        ValueError, match="return_creature_from_your_graveyard_to_battlefield"
+    ):
+        reg.register_printing(
+            {
+                "name": "Broken",
+                "effects": [{"kind": "return_unicorn_from_graveyard"}],
+            }
+        )
+
+
 def test_vanilla_card_with_no_mana_cost_or_effects():
     reg = mtg_bot_engine.Registry()
     pid = reg.register_printing(VANILLA_BLANK)

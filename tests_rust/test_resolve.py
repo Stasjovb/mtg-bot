@@ -4342,3 +4342,258 @@ def test_resolve_counter_target_spell_clone_isolation(synthetic_state):
     assert synthetic_state.stack_size() == 2
     assert synthetic_state.find_object_zone(bombard_obj_id) == ZONE_HAND
     assert synthetic_state.find_object_zone(counter_obj_id) == ZONE_HAND
+
+
+# --- round-24: ReturnCreatureFromYourGraveyardToBattlefield dispatch ---
+#
+# CR 400.7 (zone-change reset) + CR 302.1 (new permanent has summoning
+# sickness) — reanimate a creature card from the controller's graveyard
+# onto their battlefield. Powers Emerge from the Cocoon, Reanimate-style
+# sugar — 8 cards in the EoE pool per round-20 measurement. Composes
+# round-17's `move_object_from_graveyard_to_battlefield` primitive
+# (inlined here per the per-slice file-isolation pattern — see the
+# variant's docstring on cards.rs).
+#
+# **Deterministic first-creature pick.** Scan the controller's
+# (`state.active_player`'s, first-slice convention) graveyard in Vec
+# iteration order (front = smallest index = oldest); pick the first
+# object whose printing's `card_types` contains "Creature". No
+# filtering past that (no mana-value cap, no widening) — see the
+# variant's docstring for the deferred Python schema.
+#
+# **Empty / no-creature graveyard: silent fizzle.** Mirrors Python's
+# `if not targets: return` short-circuit + the round-17 primitive's
+# `Ok(false)` return shape. The Effect doesn't error; the post-resolve
+# mover still routes the resolved reanimate source to the graveyard.
+
+
+def _reanimate_dict():
+    """A reanimate-style printing dict. Sorcery-typed so the
+    post-resolve mover routes the resolved source to its own
+    controller's graveyard (CR 608.2m)."""
+    return {
+        "name": "Test Reanimate",
+        "card_types": ["Sorcery"],
+        "mana_cost": {"B": 1, "generic": 1},
+        "effects": [
+            {"kind": "return_creature_from_your_graveyard_to_battlefield"}
+        ],
+    }
+
+
+def _vanilla_creature_dict(name="Test Creature"):
+    """A 2/2 creature printing dict — the "target" the reanimate effect
+    will pick up from the graveyard."""
+    return {
+        "name": name,
+        "card_types": ["Creature"],
+        "mana_cost": {"generic": 2},
+        "power": 2,
+        "toughness": 2,
+    }
+
+
+def _vanilla_land_dict(name="Test Land"):
+    """A non-creature card to drop in the graveyard alongside creature
+    targets — confirms the first-creature filter skips it."""
+    return {
+        "name": name,
+        "card_types": ["Land"],
+    }
+
+
+def test_resolve_reanimate_moves_creature_from_graveyard_to_battlefield(
+    synthetic_state,
+):
+    """Happy path: a creature in p0's graveyard + a reanimate spell on
+    the stack -> creature lands on p0's battlefield, removed from p0's
+    graveyard. The reanimate source itself post-resolves to p0's
+    graveyard (Sorcery -> controller's graveyard via CR 608.2m)."""
+    # Drop a creature into p0's graveyard.
+    creature_id = synthetic_state.register_and_inject_object(
+        _vanilla_creature_dict(), 0, ZONE_GRAVEYARD
+    )
+    # Cast the reanimate spell (p0 is active).
+    reanimate_id = synthetic_state.register_and_inject_object(
+        _reanimate_dict(), 0, ZONE_HAND
+    )
+    synthetic_state.push_to_stack(reanimate_id, 0)
+    bf_before = synthetic_state.battlefield_sizes
+    gy_before = synthetic_state.graveyard_sizes
+
+    synthetic_state.resolve_top_of_stack()
+
+    # Creature moved from graveyard -> battlefield.
+    assert synthetic_state.find_object_zone(creature_id) == ZONE_BATTLEFIELD
+    assert synthetic_state.battlefield_sizes[0] == bf_before[0] + 1
+    # Graveyard count: -1 (creature left) +1 (reanimate sorcery landed
+    # via post-resolve) = bf_before[0] graveyard count.
+    assert synthetic_state.graveyard_sizes[0] == gy_before[0]
+    # Opponent untouched.
+    assert synthetic_state.battlefield_sizes[1] == bf_before[1]
+    assert synthetic_state.graveyard_sizes[1] == gy_before[1]
+
+
+def test_resolve_reanimate_empty_graveyard_silent_fizzle(synthetic_state):
+    """No cards in p0's graveyard: the reanimate effect silently
+    fizzles. The reanimate source still post-resolves to p0's graveyard
+    via CR 608.2m. Battlefield untouched."""
+    reanimate_id = synthetic_state.register_and_inject_object(
+        _reanimate_dict(), 0, ZONE_HAND
+    )
+    synthetic_state.push_to_stack(reanimate_id, 0)
+    bf_before = synthetic_state.battlefield_sizes
+    gy_before = synthetic_state.graveyard_sizes
+
+    # No exception.
+    resolved = synthetic_state.resolve_top_of_stack()
+    assert resolved == {"source_obj_id": reanimate_id, "controller": 0}
+
+    # Battlefield untouched.
+    assert synthetic_state.battlefield_sizes == bf_before
+    # p0 graveyard: +1 from the reanimate sorcery's own post-resolve.
+    assert synthetic_state.graveyard_sizes[0] == gy_before[0] + 1
+
+
+def test_resolve_reanimate_graveyard_with_only_noncreatures_fizzles(
+    synthetic_state,
+):
+    """p0's graveyard has only non-creature cards (a Land). The
+    first-creature filter finds nothing -> silent fizzle. The land
+    stays in the graveyard."""
+    land_id = synthetic_state.register_and_inject_object(
+        _vanilla_land_dict(), 0, ZONE_GRAVEYARD
+    )
+    reanimate_id = synthetic_state.register_and_inject_object(
+        _reanimate_dict(), 0, ZONE_HAND
+    )
+    synthetic_state.push_to_stack(reanimate_id, 0)
+    bf_before = synthetic_state.battlefield_sizes
+
+    synthetic_state.resolve_top_of_stack()
+
+    # Land stays put.
+    assert synthetic_state.find_object_zone(land_id) == ZONE_GRAVEYARD
+    # Battlefield count untouched (no reanimation happened).
+    assert synthetic_state.battlefield_sizes == bf_before
+
+
+def test_resolve_reanimate_picks_first_creature_in_zone_order(synthetic_state):
+    """p0's graveyard has multiple creatures (and a land between them).
+    The dispatch picks the FIRST creature in zone-iteration order
+    (front = smallest Vec index = oldest by push order). The other
+    creature stays in the graveyard."""
+    # Push order: creature_a (first), land (skipped), creature_b (later).
+    creature_a = synthetic_state.register_and_inject_object(
+        _vanilla_creature_dict("First Creature"), 0, ZONE_GRAVEYARD
+    )
+    _land_id = synthetic_state.register_and_inject_object(
+        _vanilla_land_dict(), 0, ZONE_GRAVEYARD
+    )
+    creature_b = synthetic_state.register_and_inject_object(
+        _vanilla_creature_dict("Second Creature"), 0, ZONE_GRAVEYARD
+    )
+    reanimate_id = synthetic_state.register_and_inject_object(
+        _reanimate_dict(), 0, ZONE_HAND
+    )
+    synthetic_state.push_to_stack(reanimate_id, 0)
+
+    synthetic_state.resolve_top_of_stack()
+
+    # creature_a (first creature in zone order) reanimated.
+    assert synthetic_state.find_object_zone(creature_a) == ZONE_BATTLEFIELD
+    # creature_b still in the graveyard.
+    assert synthetic_state.find_object_zone(creature_b) == ZONE_GRAVEYARD
+
+
+def test_resolve_reanimate_stamps_summoning_sick(synthetic_state):
+    """CR 302.1 — a reanimated creature enters with summoning sickness;
+    it can't attack on the turn it enters. Mirrors the round-17
+    primitive's summoning_sick=true stamp."""
+    creature_id = synthetic_state.register_and_inject_object(
+        _vanilla_creature_dict(), 0, ZONE_GRAVEYARD
+    )
+    reanimate_id = synthetic_state.register_and_inject_object(
+        _reanimate_dict(), 0, ZONE_HAND
+    )
+    synthetic_state.push_to_stack(reanimate_id, 0)
+
+    synthetic_state.resolve_top_of_stack()
+
+    assert synthetic_state.is_summoning_sick(creature_id) is True
+
+
+def test_resolve_reanimate_resets_per_object_state(synthetic_state):
+    """CR 400.7 — per-object state (damage / counters) resets on the
+    zone change. A graveyard creature with stamped damage / counters
+    arrives on the battlefield with damage=0 / counters=0. Defensive
+    reset even though CR 614.12 zeros damage on zone change already,
+    same shape as the round-17 primitive's defensive reset."""
+    creature_id = synthetic_state.register_and_inject_object(
+        _vanilla_creature_dict(), 0, ZONE_GRAVEYARD
+    )
+    # Stamp damage / counters onto the graveyard object directly.
+    assert synthetic_state.deal_damage(creature_id, 5) is True
+    assert synthetic_state.set_counters(creature_id, 3) is True
+    assert synthetic_state.get_damage(creature_id) == 5
+    assert synthetic_state.get_counters(creature_id) == 3
+
+    reanimate_id = synthetic_state.register_and_inject_object(
+        _reanimate_dict(), 0, ZONE_HAND
+    )
+    synthetic_state.push_to_stack(reanimate_id, 0)
+
+    synthetic_state.resolve_top_of_stack()
+
+    # Creature on battlefield with damage=0 / counters=0.
+    assert synthetic_state.find_object_zone(creature_id) == ZONE_BATTLEFIELD
+    assert synthetic_state.get_damage(creature_id) == 0
+    assert synthetic_state.get_counters(creature_id) == 0
+
+
+def test_resolve_reanimate_only_searches_controller_graveyard(synthetic_state):
+    """The "your graveyard" filter is controller-scoped: a creature in
+    the OPPONENT's graveyard is NOT a legal target. p0 casts reanimate
+    while p1's graveyard has a creature -> p0's reanimate silently
+    fizzles (p0's graveyard has no creature)."""
+    # Drop a creature only into p1's graveyard.
+    opp_creature_id = synthetic_state.register_and_inject_object(
+        _vanilla_creature_dict(), 1, ZONE_GRAVEYARD
+    )
+    reanimate_id = synthetic_state.register_and_inject_object(
+        _reanimate_dict(), 0, ZONE_HAND
+    )
+    synthetic_state.push_to_stack(reanimate_id, 0)
+    bf_before = synthetic_state.battlefield_sizes
+
+    synthetic_state.resolve_top_of_stack()
+
+    # Opponent's creature is untouched.
+    assert synthetic_state.find_object_zone(opp_creature_id) == ZONE_GRAVEYARD
+    # No battlefield change (the active player's reanimate fizzled).
+    assert synthetic_state.battlefield_sizes == bf_before
+
+
+def test_resolve_reanimate_clone_isolation(synthetic_state):
+    """CoW canary: running the reanimate dispatch on a clone leaves the
+    original GameState's zones untouched. Load-bearing because the
+    inline reanimate logic uses Arc::make_mut on two zones (graveyard
+    + battlefield)."""
+    creature_id = synthetic_state.register_and_inject_object(
+        _vanilla_creature_dict(), 0, ZONE_GRAVEYARD
+    )
+    reanimate_id = synthetic_state.register_and_inject_object(
+        _reanimate_dict(), 0, ZONE_HAND
+    )
+    synthetic_state.push_to_stack(reanimate_id, 0)
+    cloned = synthetic_state.clone_once()
+
+    cloned.resolve_top_of_stack()
+
+    # Clone diverged: creature reanimated, stack drained.
+    assert cloned.find_object_zone(creature_id) == ZONE_BATTLEFIELD
+    assert cloned.is_stack_empty() is True
+
+    # Original untouched: creature still in graveyard, stack still 1.
+    assert synthetic_state.find_object_zone(creature_id) == ZONE_GRAVEYARD
+    assert synthetic_state.stack_size() == 1
