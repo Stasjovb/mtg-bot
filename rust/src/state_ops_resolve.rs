@@ -96,7 +96,16 @@
 //!     schema, different timing. Future slice.
 //! - **Empty stack returns None gracefully** (no exception). Same
 //!   convention as `pop_top_of_stack`.
-//! - **Round-11 ExileTarget** (this slice). When a permanent is
+//! - **Round-13 UntapTarget** (this slice). Symmetric counterpart
+//!   to round-12's TapTarget — same target selection convention,
+//!   opposite tap state mutation. AnyCreature target -> first object
+//!   on the defender's battlefield gets ``tapped = false``. Empty
+//!   defender battlefield fizzles silently. AnyPlayer raises
+//!   ValueError per the bounce/exile/tap convention. Already-
+//!   untapped target is a silent no-op (idempotent). Inlines
+//!   ``Arc::make_mut`` + ``tapped = false`` per the recurring
+//!   private-helper-cross-file pattern.
+//! - **Round-11 ExileTarget**. When a permanent is
 //!   exiled, the dispatch pops it from its current zone (battlefield
 //!   under the AnyCreature targeting convention) and pushes onto its
 //!   owner's exile zone (CR 406). Per-object state — `tapped`,
@@ -534,6 +543,57 @@ fn apply_effect(state: &mut GameState, effect: &Effect) -> PyResult<()> {
                 for obj in bf_mut.iter_mut() {
                     if obj.id == target_id {
                         obj.tapped = true;
+                        break;
+                    }
+                }
+            }
+        },
+        // Round-13: UntapTarget. Symmetric counterpart to
+        // round-12's TapTarget — same target selection convention,
+        // opposite tap state mutation.
+        //
+        // Targeting (mirrors DealDamage / ReturnToHand / ExileTarget /
+        // TapTarget):
+        //   - AnyCreature -> first object on the DEFENDING player's
+        //     battlefield (smallest index). No creature-type filter.
+        //     If the defender's battlefield is empty, the spell
+        //     fizzles silently.
+        //   - AnyPlayer -> semantically nonsense for untap (you can't
+        //     untap a player). Raise ValueError loudly, matching the
+        //     bounce/exile/tap AnyPlayer convention.
+        //
+        // **Idempotent on already-untapped target.** Untapping a
+        // creature that's already untapped is a silent no-op (no
+        // error, no other state change). Mirrors the round-12
+        // TapTarget already-tapped idempotency shape.
+        //
+        // **Inlining note (cross-file friction).** ``untap_object`` is
+        // a private ``#[pymethods]`` method in ``state_ops_tap.rs``;
+        // per per-slice file-isolation we inline the minimal
+        // ``Arc::make_mut`` + ``tapped = false`` here, mirroring how
+        // round-12 TapTarget inlined its primitive for the same E0624
+        // cross-file friction.
+        Effect::UntapTarget { target } => match target {
+            TargetFilter::AnyPlayer => {
+                return Err(PyValueError::new_err(
+                    "UntapTarget with AnyPlayer target is semantically nonsense (cannot untap a player)",
+                ));
+            }
+            TargetFilter::AnyCreature => {
+                let defender = (1 - state.active_player) as usize;
+                let bf = &state.players[defender].battlefield;
+                if bf.is_empty() {
+                    return Ok(()); // fizzle silently
+                }
+                let target_id = bf[0].id;
+                // Flip ``tapped = false`` on the target. Idempotent:
+                // already-untapped targets are silently re-stamped
+                // False (no-op). Use Arc::make_mut for CoW safety.
+                let bf_mut: &mut Vec<GameObject> =
+                    Arc::make_mut(&mut state.players[defender].battlefield);
+                for obj in bf_mut.iter_mut() {
+                    if obj.id == target_id {
+                        obj.tapped = false;
                         break;
                     }
                 }

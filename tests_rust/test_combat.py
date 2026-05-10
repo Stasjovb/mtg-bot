@@ -1383,3 +1383,190 @@ def test_non_menace_attacker_with_one_blocker_legal(synthetic_state):
     assert synthetic_state.is_legal_block_assignment(attacker_id) is True, (
         "non-menace attacker with one blocker is legal"
     )
+
+
+# ----------------------------- double-strike -------------------------------
+#
+# Double-strike (CR 702.4): a creature with double strike deals combat damage
+# in BOTH the first-strike damage step AND the regular damage step. Layered
+# on top of the round-9 first-strike two-substep machinery in
+# `state_ops_combat.rs:deal_combat_damage`:
+#
+# - **First-strike substep:** includes sources whose printing carries
+#   `"first_strike"` OR `"double_strike"`.
+# - **Regular substep:** includes sources whose printing carries NEITHER
+#   first-strike NOR double-strike (the keyword-less / unkeyworded baseline)
+#   AND sources whose printing carries `"double_strike"` IF they survived
+#   the first-strike step (their marked `damage` is still < their printed
+#   `toughness`).
+#
+# Scope notes for this slice:
+#
+# - **No double-strike + trample interaction.** A double-strike + trample
+#   creature would deal trample-excess to the defender twice in real MTG;
+#   today the simplified model just routes whichever path the attacker is
+#   on (blocked vs unblocked) per substep. If the blocker dies during the
+#   first-strike substep, the second-strike has no creature target and —
+#   without trample wired in for the unblocked-substep-after-block path —
+#   the second strike fizzles. This matches the `single-blocker model with
+#   no trample-on-blocker-died spillover` simplification.
+# - **No SBAs between substeps.** Same as the round-9 first-strike slice:
+#   the within-function `damage < toughness` predicate gates the second
+#   strike from a creature that took lethal damage in step 1. The SBA
+#   sibling slice still owns lethal-damage-destroys-creature.
+# - **Damage marks are not cleared between substeps.** A double-strike
+#   creature that dealt 2 in step 1 and 2 more in step 2 to the same
+#   blocker leaves 4 marked damage on that blocker.
+
+
+def test_double_strike_attacker_strikes_twice_unblocked(synthetic_state):
+    """A 2/2 double-strike attacker, unblocked, deals damage in BOTH
+    substeps — the defender takes 2 in the first-strike step and 2 more
+    in the regular step, for 4 total. With life=20 starting, defender
+    ends at 16."""
+    attacker_id = synthetic_state.register_and_inject_object(
+        _keyword_creature_dict(2, 2, ["double_strike"]), 0, ZONE_BATTLEFIELD
+    )
+    assert synthetic_state.get_life(1) == 20
+    assert synthetic_state.declare_attacker(attacker_id) is True
+    synthetic_state.deal_combat_damage()
+    # Defender took 2 in each substep = 4 total.
+    assert synthetic_state.get_life(1) == 16, (
+        "double-strike attacker, unblocked, must deal damage in BOTH the "
+        "first-strike substep AND the regular substep — defender takes "
+        "2 + 2 = 4 (life: 20 - 4 = 16)"
+    )
+
+
+def test_double_strike_attacker_kills_blocker_in_first_strike_step(synthetic_state):
+    """A 2/2 double-strike attacker vs a 2/2 vanilla blocker. The
+    first-strike substep deals 2 to the blocker (lethal mark). The
+    regular substep: the attacker's second strike has no remaining
+    blocker target (single-blocker model, blocker died during step 1)
+    — the second strike fizzles since this slice does NOT wire
+    double-strike + trample. The blocker did NOT first-strike, so in
+    the regular substep the dead blocker contributes no back-damage
+    (its damage>=toughness gates it out). Net: blocker has 2 damage,
+    attacker has 0."""
+    attacker_id = synthetic_state.register_and_inject_object(
+        _keyword_creature_dict(2, 2, ["double_strike"]), 0, ZONE_BATTLEFIELD
+    )
+    blocker_id = synthetic_state.register_and_inject_object(
+        _keyword_creature_dict(2, 2, []), 1, ZONE_BATTLEFIELD
+    )
+    assert synthetic_state.declare_attacker(attacker_id) is True
+    assert synthetic_state.declare_blocker(blocker_id, attacker_id) is True
+    synthetic_state.deal_combat_damage()
+    # Blocker took 2 in step 1 (lethal), no second hit (attacker's
+    # second strike fizzles — no trample, single-blocker model).
+    assert synthetic_state.get_damage(blocker_id) == 2, (
+        "double-strike vs vanilla 2/2: blocker takes lethal in first-strike "
+        "step; second-strike has no creature target and does not pile on"
+    )
+    # Attacker took 0 — blocker died before the regular substep, so
+    # its non-first-strike back-damage doesn't fire.
+    assert synthetic_state.get_damage(attacker_id) == 0, (
+        "double-strike vs vanilla 2/2: blocker died in step 1, can't "
+        "back-damage the attacker in step 2"
+    )
+
+
+def test_double_strike_blocker_kills_attacker_then_strikes_again_useless(synthetic_state):
+    """Symmetric: vanilla 2/2 attacker vs double-strike 2/2 blocker.
+    Step 1: blocker deals 2 to attacker (lethal). Step 2: attacker
+    can't strike (took lethal in step 1), and the blocker's second
+    strike has no remaining attacker target (single-attacker model
+    in this slice) — it fizzles. Net: attacker has 2 damage,
+    blocker has 0."""
+    attacker_id = synthetic_state.register_and_inject_object(
+        _keyword_creature_dict(2, 2, []), 0, ZONE_BATTLEFIELD
+    )
+    blocker_id = synthetic_state.register_and_inject_object(
+        _keyword_creature_dict(2, 2, ["double_strike"]), 1, ZONE_BATTLEFIELD
+    )
+    assert synthetic_state.declare_attacker(attacker_id) is True
+    assert synthetic_state.declare_blocker(blocker_id, attacker_id) is True
+    synthetic_state.deal_combat_damage()
+    # Attacker took 2 (lethal) in step 1.
+    assert synthetic_state.get_damage(attacker_id) == 2
+    # Blocker took 0 — attacker died in step 1, can't strike back.
+    assert synthetic_state.get_damage(blocker_id) == 0, (
+        "vanilla attacker vs double-strike blocker: attacker died in step "
+        "1, the regular-step back-damage from a non-FS source must NOT "
+        "fire from a dead source"
+    )
+
+
+def test_double_strike_vs_first_strike_both_strike_in_first_step(synthetic_state):
+    """A 3/3 double-strike attacker vs a 2/2 first-strike blocker.
+    Step 1 (first-strike substep): both deal damage. The DS attacker
+    deals 3 to the blocker (lethal — damage>=toughness); the FS
+    blocker deals 2 to the attacker (NOT lethal — 2 < 3). Step 2
+    (regular substep): the attacker is alive and has double-strike,
+    so it strikes again — but the blocker is already dead (single-
+    blocker model, no trample). Second strike fizzles. The blocker
+    is FS, not DS — its second-step damage is gated out (FS sources
+    only fire in step 1).
+
+    Net: blocker has 3 damage, attacker has 2 damage (alive)."""
+    attacker_id = synthetic_state.register_and_inject_object(
+        _keyword_creature_dict(3, 3, ["double_strike"]), 0, ZONE_BATTLEFIELD
+    )
+    blocker_id = synthetic_state.register_and_inject_object(
+        _keyword_creature_dict(2, 2, ["first_strike"]), 1, ZONE_BATTLEFIELD
+    )
+    assert synthetic_state.declare_attacker(attacker_id) is True
+    assert synthetic_state.declare_blocker(blocker_id, attacker_id) is True
+    synthetic_state.deal_combat_damage()
+    # Both struck simultaneously in step 1.
+    assert synthetic_state.get_damage(blocker_id) == 3, (
+        "DS vs FS step 1: both strike together — DS attacker deals 3 to "
+        "blocker"
+    )
+    assert synthetic_state.get_damage(attacker_id) == 2, (
+        "DS vs FS step 1: both strike together — FS blocker deals 2 to "
+        "attacker; the attacker survived (2 < 3) and the FS blocker did "
+        "NOT strike again in step 2 (FS only fires once)"
+    )
+
+
+def test_non_double_strike_attacker_strikes_only_once(synthetic_state):
+    """Sanity / regression: a vanilla 2/2 attacker, unblocked, deals
+    only its power once (defender drops by 2). The double-strike
+    branch must not have leaked into the default path."""
+    attacker_id = synthetic_state.register_and_inject_object(
+        _keyword_creature_dict(2, 2, []), 0, ZONE_BATTLEFIELD
+    )
+    assert synthetic_state.get_life(1) == 20
+    assert synthetic_state.declare_attacker(attacker_id) is True
+    synthetic_state.deal_combat_damage()
+    assert synthetic_state.get_life(1) == 18, (
+        "vanilla attacker unblocked deals power once — defender drops by "
+        "2, not 4"
+    )
+
+
+def test_clone_then_double_strike_combat_does_not_affect_original(synthetic_state):
+    """**CoW canary.** Run a full DS combat exchange on a clone — declare
+    attacker, deal damage twice via the DS path — and the original sees
+    none of it: no attackers, no life change, no damage on the
+    attacker."""
+    attacker_id = synthetic_state.register_and_inject_object(
+        _keyword_creature_dict(2, 2, ["double_strike"]), 0, ZONE_BATTLEFIELD
+    )
+    other = synthetic_state.clone_once()
+    # Run DS combat on the clone only.
+    assert other.declare_attacker(attacker_id) is True
+    other.deal_combat_damage()
+    # Clone sees the full DS effect on the defender (4 total).
+    assert other.get_life(1) == 16
+    # Original sees no fallout.
+    assert synthetic_state.get_attackers() == []
+    assert synthetic_state.get_life(1) == 20, (
+        "CoW broken: DS combat on clone leaked into original life total"
+    )
+    assert synthetic_state.get_damage(attacker_id) == 0
+    assert synthetic_state.is_tapped(attacker_id) is False, (
+        "CoW broken: declaring DS attacker on clone leaked into original "
+        "battlefield"
+    )

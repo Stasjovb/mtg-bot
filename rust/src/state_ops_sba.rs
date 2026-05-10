@@ -46,6 +46,28 @@
 //!   pyclass method to keep the destructive collect-then-mutate loop
 //!   self-contained and avoid a `&mut self` re-entrancy round-trip.
 //!
+//! ## Indestructible (CR 702.12)
+//!
+//! Creatures whose printing carries the `"indestructible"` keyword
+//! are exempt from BOTH destruction paths above:
+//!
+//! - 704.5g (lethal damage): per CR 702.12a, indestructible permanents
+//!   aren't destroyed by damage. Damage still marks (the damage field
+//!   updates and clears at end of turn via cleanup), it just doesn't
+//!   trigger destruction.
+//! - 704.5f (0-or-negative toughness): per CR 702.12b, the SBA wording
+//!   "is destroyed" carves out indestructible creatures here too.
+//!
+//! Implementation: `collect_sba_victims` looks up
+//! `printing.keywords.iter().any(|k| k == "indestructible")` and skips
+//! the entire creature when true (before either rule fires). Counter
+//! / damage tracking is unaffected — only the destruction step is
+//! gated.
+//!
+//! Indestructible only protects from "destroy". Exile (round-11's
+//! ExileTarget effect) still removes indestructible creatures; that
+//! path doesn't go through this slice.
+//!
 //! ## Out of scope (deferred to future slices)
 //!
 //! - **SBA loop driver / quiescence.** Real MTG (CR 704.3) checks
@@ -57,10 +79,9 @@
 //!   514.2), NOT on every SBA pass. apply_sbas does NOT zero damage
 //!   on surviving creatures; `clear_all_damage` from the damage
 //!   slice covers the cleanup-step path.
-//! - **Indestructibility / regeneration / planeswalker loyalty /
-//!   legend rule / +1/+1 vs -1/-1 cancellation / saga age / aura on
-//!   illegal target / etc.** All other CR 704.5 SBAs are subsequent
-//!   slices.
+//! - **Regeneration / planeswalker loyalty / legend rule / +1/+1 vs
+//!   -1/-1 cancellation / saga age / aura on illegal target / etc.**
+//!   Other CR 704.5 SBAs are subsequent slices.
 //!
 //! ## Implementation notes
 //!
@@ -116,6 +137,14 @@ impl GameState {
                     // Non-creature — neither 704.5f nor 704.5g apply.
                     continue;
                 };
+                // CR 702.12 — indestructible permanents are exempt
+                // from both destruction-by-damage (704.5g) and
+                // destruction-by-zero-toughness (704.5f). Damage and
+                // counters still track; only the destruction step is
+                // skipped.
+                if printing.keywords.iter().any(|k| k == "indestructible") {
+                    continue;
+                }
                 let effective_toughness = toughness as i32 + obj.counters;
                 // 704.5f first per CR ordering.
                 if effective_toughness <= 0 {

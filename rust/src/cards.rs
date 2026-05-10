@@ -76,6 +76,9 @@ pub enum Effect {
     /// tapped targets. AnyPlayer target raises (you can't tap a
     /// player).
     TapTarget { target: TargetFilter },
+    /// Untap target permanent (CR 701.20b). Idempotent on already-
+    /// untapped targets. AnyPlayer target raises.
+    UntapTarget { target: TargetFilter },
 }
 
 #[derive(Clone, Debug)]
@@ -238,8 +241,16 @@ fn parse_effect(dict: &Bound<'_, PyDict>) -> PyResult<Effect> {
             let target = parse_target_filter(target_dict)?;
             Ok(Effect::TapTarget { target })
         }
+        "untap_target" => {
+            let target_any = require(dict, "target")?;
+            let target_dict = target_any.downcast::<PyDict>().map_err(|_| {
+                PyValueError::new_err("untap_target.target must be a dict")
+            })?;
+            let target = parse_target_filter(target_dict)?;
+            Ok(Effect::UntapTarget { target })
+        }
         other => Err(PyValueError::new_err(format!(
-            "unknown effect kind {other:?}; valid: deal_damage, draw_cards, gain_life, return_to_hand, mill, exile_target, tap_target"
+            "unknown effect kind {other:?}; valid: deal_damage, draw_cards, gain_life, return_to_hand, mill, exile_target, tap_target, untap_target"
         ))),
     }
 }
@@ -449,6 +460,10 @@ fn effect_to_pydict<'py>(
         }
         Effect::TapTarget { target } => {
             d.set_item("kind", "tap_target")?;
+            d.set_item("target", target_filter_to_pydict(py, target)?)?;
+        }
+        Effect::UntapTarget { target } => {
+            d.set_item("kind", "untap_target")?;
             d.set_item("target", target_filter_to_pydict(py, target)?)?;
         }
     }
