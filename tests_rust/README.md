@@ -80,6 +80,7 @@ the test lands in a commit.
 | tests_rust/test_combat.py         | tests/test_combat.py + combat.py            | green  | feature/rust-tdd-combat    |
 | tests_rust/test_stack.py          | tests/test_game.py + game.py                | green  | feature/rust-tdd-stack     |
 | tests_rust/test_sba.py            | tests/test_state_based_actions.py + game.py | green  | feature/rust-tdd-sba       |
+| rust(cast-rewire): card_types-based detector | tests_rust/test_cast.py rewire | green | feature/rust-tdd-cast-rewire |
 
 ## Build invocation reminder
 
