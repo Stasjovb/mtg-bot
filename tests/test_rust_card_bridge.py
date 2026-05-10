@@ -849,6 +849,77 @@ def test_put_plus_one_counter_on_self_negative_amount_raises():
         )
 
 
+def test_round_trip_surveil_effect():
+    """CR 701.42 — Appendage Amalgam-style surveil N. Round-trip the
+    happy-path effect through the bridge with count=2."""
+    reg = mtg_bot_engine.Registry()
+    pid = reg.register_printing(
+        {
+            "name": "Test Surveil",
+            "card_types": ["Sorcery"],
+            "mana_cost": {"U": 1},
+            "effects": [{"kind": "surveil", "count": 2}],
+        }
+    )
+    effects = [dict(e) for e in reg.get_printing_effects(pid)]
+    assert effects[0] == {"kind": "surveil", "count": 2}
+
+
+def test_round_trip_surveil_count_zero():
+    """Surveil 0 is a degenerate but legal value — should round-trip."""
+    reg = mtg_bot_engine.Registry()
+    pid = reg.register_printing(
+        {
+            "name": "Surveil Zero",
+            "effects": [{"kind": "surveil", "count": 0}],
+        }
+    )
+    effects = [dict(e) for e in reg.get_printing_effects(pid)]
+    assert effects[0]["kind"] == "surveil"
+    assert effects[0]["count"] == 0
+
+
+def test_round_trip_surveil_count_four():
+    """A larger Surveil 4 (cycling-tier surveil) round-trips with its
+    count preserved."""
+    reg = mtg_bot_engine.Registry()
+    pid = reg.register_printing(
+        {
+            "name": "Big Surveil",
+            "card_types": ["Sorcery"],
+            "effects": [{"kind": "surveil", "count": 4}],
+        }
+    )
+    effects = [dict(e) for e in reg.get_printing_effects(pid)]
+    assert effects[0]["kind"] == "surveil"
+    assert effects[0]["count"] == 4
+
+
+def test_surveil_missing_count_raises():
+    """count is required at register time (no first-slice default —
+    every printed Surveil has an explicit N). Mirrors ScryN's
+    missing-count KeyError shape."""
+    reg = mtg_bot_engine.Registry()
+    with pytest.raises(KeyError, match="count"):
+        reg.register_printing(
+            {"name": "Broken", "effects": [{"kind": "surveil"}]}
+        )
+
+
+def test_surveil_negative_count_raises():
+    """Register-time guard on negative count (defense-in-depth; the
+    apply_effect guard re-checks). Mirrors ScryN /
+    SearchLibraryForBasicLandTapped's register-time negative check."""
+    reg = mtg_bot_engine.Registry()
+    with pytest.raises(ValueError, match="non-negative"):
+        reg.register_printing(
+            {
+                "name": "Broken Surveil",
+                "effects": [{"kind": "surveil", "count": -1}],
+            }
+        )
+
+
 def test_vanilla_card_with_no_mana_cost_or_effects():
     reg = mtg_bot_engine.Registry()
     pid = reg.register_printing(VANILLA_BLANK)

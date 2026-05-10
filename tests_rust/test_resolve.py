@@ -3948,3 +3948,142 @@ def test_resolve_put_plus_one_counter_on_self_finds_source_on_opponent_battlefie
     synthetic_state.resolve_top_of_stack()
 
     assert synthetic_state.get_counters(spell_obj_id) == 1
+
+
+# --- round-23: Surveil dispatch ------------------------------------
+#
+# CR 701.42: Surveil N — the controller looks at the top N cards of
+# their library, then chooses any number to put into their graveyard.
+# The rest stay on top in any order. Powers Appendage Amalgam, etc.
+# Sibling of ScryN (round 16): same look-at-top-N shape, different
+# destination zone (graveyard not bottom-of-library).
+#
+# **First-slice deterministic choice: keep all on top.** Mirrors
+# round-16 ScryN's first-slice choice — mechanically a no-op on both
+# library and graveyard (no zone moves, no order change). Future
+# slice plumbs a real "which to graveyard" decision callback.
+#
+# **Negative count raises** loudly (CR 701.42 doesn't define
+# Surveil -1; surface it as a schema error). Mirrors ScryN's
+# negative-count rejection.
+#
+# **count = 0** is a legitimate no-op (mirrors ScryN count=0 / the
+# round-2 amount=0 conventions).
+#
+# **count > library size** is also a no-op under keep-all-on-top
+# (CR 701.42 would clamp to "look at all cards"; with keep-on-top no
+# cards move regardless of the clamp).
+#
+# **Controller convention: state.active_player** — same first-slice
+# shape as ScryN / DrawCards / GainLife. Real MTG plumbs the spell
+# controller through StackItem.controller; deferred. `source_obj_id`
+# is ignored (controller-targeted, not source-targeted).
+
+
+def _surveil_dict(count=2):
+    """A surveil-N printing dict shaped like the round-3 bridge parser
+    expects. ``count`` is the printed Surveil number (positive or
+    zero; negative variants exercise the register-time / apply-time
+    raise paths)."""
+    return {
+        "name": "Test Surveil",
+        "card_types": ["Sorcery"],
+        "mana_cost": {"U": 1},
+        "effects": [
+            {
+                "kind": "surveil",
+                "count": count,
+            }
+        ],
+    }
+
+
+def test_resolve_surveil_keeps_library_and_graveyard_unchanged(synthetic_state):
+    """Surveil N with a populated library: first-slice deterministic-
+    keep-on-top means the library is mechanically unchanged (no zone
+    moves from the Surveil dispatch itself), and the graveyard
+    receives only the resolved Sorcery source via the CR 608.2m post-
+    resolve mover (NOT any of the surveil's "looked at" cards, since
+    keep-all-on-top routes zero cards to the graveyard). Stack pops."""
+    library_before = synthetic_state.library_sizes[0]
+    graveyard_before = synthetic_state.graveyard_sizes[0]
+    assert library_before == 50  # synthetic seed default
+    spell_obj_id = synthetic_state.register_and_inject_object(
+        _surveil_dict(count=2), 0, ZONE_HAND
+    )
+    synthetic_state.push_to_stack(spell_obj_id, 0)
+    synthetic_state.resolve_top_of_stack()
+
+    assert synthetic_state.is_stack_empty() is True
+    # Library is unchanged by the Surveil dispatch (keep-on-top is a
+    # no-op on the library).
+    assert synthetic_state.library_sizes[0] == library_before
+    # Graveyard grew by exactly 1 — the resolved Sorcery source via
+    # CR 608.2m. No "looked at" cards were routed to the graveyard
+    # (first-slice keep-all-on-top is a no-op on the graveyard from
+    # the Surveil dispatch's perspective).
+    assert synthetic_state.graveyard_sizes[0] == graveyard_before + 1
+
+
+def test_resolve_surveil_zero_no_op(synthetic_state):
+    """Surveil 0 is a legitimate no-op for the dispatch (mirrors ScryN
+    count=0). Library unchanged; the graveyard grows by 1 only from
+    the CR 608.2m post-resolve mover for the Sorcery source itself."""
+    library_before = synthetic_state.library_sizes[0]
+    graveyard_before = synthetic_state.graveyard_sizes[0]
+    spell_obj_id = synthetic_state.register_and_inject_object(
+        _surveil_dict(count=0), 0, ZONE_HAND
+    )
+    synthetic_state.push_to_stack(spell_obj_id, 0)
+    synthetic_state.resolve_top_of_stack()
+
+    assert synthetic_state.is_stack_empty() is True
+    assert synthetic_state.library_sizes[0] == library_before
+    # +1 from post-resolve mover; +0 from the Surveil dispatch itself.
+    assert synthetic_state.graveyard_sizes[0] == graveyard_before + 1
+
+
+def test_resolve_surveil_count_exceeds_library_size_is_ok(engine):
+    """CR 701.42 clamps to library length when the library has fewer
+    cards than `count`. Under the first-slice keep-all-on-top, this is
+    silently a no-op on the library regardless of the clamp — library
+    size 1, Surveil 3 resolves cleanly without error, library still
+    has 1 card. Source on the battlefield (not a Sorcery this time),
+    so it stays on the battlefield post-resolve via CR 608.2m — the
+    graveyard count is therefore unchanged by either the dispatch or
+    the post-resolve mover (empty card_types after seeing only the
+    Sorcery card_type would leave it on battlefield; here we use the
+    standard sorcery dict so the source moves to graveyard like the
+    other tests, and we account for the +1)."""
+    state = engine.make_synthetic_state(
+        num_battlefield=0, num_hand=0, num_library=1
+    )
+    library_before = state.library_sizes[0]
+    graveyard_before = state.graveyard_sizes[0]
+    assert library_before == 1
+    spell_obj_id = state.register_and_inject_object(
+        _surveil_dict(count=3), 0, ZONE_BATTLEFIELD
+    )
+    state.push_to_stack(spell_obj_id, 0)
+    state.resolve_top_of_stack()
+
+    assert state.is_stack_empty() is True
+    assert state.library_sizes[0] == library_before
+    # +1 from post-resolve mover (Sorcery to graveyard); +0 from the
+    # Surveil dispatch itself (no cards routed under keep-all-on-top).
+    assert state.graveyard_sizes[0] == graveyard_before + 1
+
+
+def test_resolve_surveil_negative_count_raises(synthetic_state):
+    """Negative surveil count is a schema error (CR 701.42 doesn't
+    define Surveil -1). The register-time validation already rejects
+    this, but apply_effect re-checks for defense-in-depth — same shape
+    as ScryN's negative-count rejection. We bypass the register-time
+    check by injecting a synthetic effect through the same parser path
+    that surfaces both layers' guards: a Surveil with count=-1 raises
+    ValueError at register_printing time. (We assert on the register
+    layer here since that's the first place the guard fires.)"""
+    with pytest.raises(ValueError):
+        synthetic_state.register_and_inject_object(
+            _surveil_dict(count=-1), 0, ZONE_HAND
+        )
