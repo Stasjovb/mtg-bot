@@ -70,6 +70,16 @@ pub struct Player {
     pub graveyard: Zone,
 }
 
+/// One pending entry on the stack. First-slice shape: just an obj_id
+/// (the source spell or activated-ability source) + controller. Real
+/// stack items will need more (target list, choices, modal mode);
+/// future slices extend.
+#[derive(Clone, Debug)]
+pub struct StackItem {
+    pub source_obj_id: u32,
+    pub controller: u8,
+}
+
 /// `GameState` carries an `Arc<RegistryData>` so every clone shares
 /// the printings catalogue at refcount-bump cost. Per-instance
 /// state — players, zones, turn counter — clones via the `Player`
@@ -83,6 +93,14 @@ pub struct GameState {
     pub priority_player: u8,
     pub turn_number: u32,
     pub phase: u8,
+    /// Combat: ids of creatures currently declared as attackers.
+    pub attackers: Vec<u32>,
+    /// Combat: (attacker_id, blocker_id) pairs declared this combat.
+    /// One attacker can be blocked by multiple blockers (multi-block);
+    /// represented as multiple entries with the same attacker_id.
+    pub blockers: Vec<(u32, u32)>,
+    /// The stack — top is the LAST element of the Vec for O(1) pop.
+    pub stack: Vec<StackItem>,
 }
 
 #[pymethods]
@@ -320,5 +338,8 @@ pub fn make_synthetic_state(
         priority_player: 0,
         turn_number: 5,
         phase: 0,
+        attackers: Vec::new(),
+        blockers: Vec::new(),
+        stack: Vec::new(),
     }
 }
