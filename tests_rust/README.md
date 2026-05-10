@@ -158,6 +158,7 @@ the test lands in a commit.
 | rust(effect-counter-target-spell): CounterTargetSpell dispatch (CR 701.5) | tests_rust/test_resolve.py extend | green  | feature/rust-effect-counter-target-spell |
 | rust(effect-return-creature-from-graveyard): reanimate dispatch (CR 400.7) | tests_rust/test_resolve.py extend | green  | feature/rust-effect-return-creature-from-graveyard |
 | rust(legal-decisions-declare-attackers): emit DeclareAttackers during combat | tests_rust/test_legal.py extend | green  | feature/rust-legal-decisions-declare-attackers |
+| rust(legal-decisions-activate-ability): emit ActivateAbility for mana producers | tests_rust/test_legal.py extend | green  | feature/rust-legal-decisions-activate-ability |
 
 ## Build invocation reminder
 

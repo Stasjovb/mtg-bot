@@ -977,6 +977,64 @@ cost; no strength change.
 
 ---
 
+## Rust port — `legal_decisions` ActivateAbility approximated to mana producers
+
+**Location**: `rust/src/state_ops_legal.rs:legal_decisions`
+ActivateAbility emission loop.
+
+**What we do today**: emit one `ActivateAbility(source_id,
+ability_index=0)` per untapped permanent on the priority player's
+battlefield whose printing has `mana_produced.is_some()`. No real
+ability iteration — `ability_index` is hardcoded to 0.
+
+**Why this diverges from Python**: Python's
+`src/mtg_bot/legal.py:612-829` walks
+`effective_activated_abilities(state, obj)` per battlefield permanent
+and emits one `ActivateAbility(source_id, idx)` per legal-to-pay
+ability. The full activated-ability tree (mana abilities, planeswalker
+loyalty abilities, equip-style activations, all the cost-gated
+variants the Python source filters between lines 631-826) is missing
+because Rust's `CardPrinting` (`rust/src/cards.rs:361-396`) has no
+`activated_abilities` field — only `mana_produced`, `card_types`,
+`power`/`toughness`, `keywords`. Porting the full
+`ActivatedAbility` + `ActivationCost` + per-effect dataclass tree
+through PyO3 is a much bigger bridge slice.
+
+**Failure mode**: every non-mana activated ability (planeswalker
+loyalty, equip / unearth / cycling / channel / activate-X-tap-mana
+abilities on non-land sources, etc.) is silently absent from the
+emission. Search never visits decision branches that would activate
+those abilities. The mana ones DO emit but the dispatch arm at
+`state_ops_actions.rs:271-276` is also a stub (raises ValueError) —
+so the wire shape ships but the actual ability resolution is the
+parity-smoke retry loop's problem.
+
+**When it matters**: the bigger the activated-ability count in a
+state, the more search depth Rust skips. EoE has planeswalkers,
+loyalty activations, several creature mana producers (Llanowar Elves
+in the synthetic seed has `mana_produced=Some(["G"])` and currently
+ALWAYS emits — even when summoning-sick — because the creature-tap
+sickness filter isn't ported either).
+
+**Fix scope when prioritized**: medium-large. (1) Port `ActivatedAbility`
++ `ActivationCost` + per-effect dataclass tree through PyO3 into
+`cards.rs`. (2) Build `effective_activated_abilities` primitive in
+Rust (mirrors `src/mtg_bot/game.py`). (3) Replace the
+`mana_produced.is_some()` filter in `state_ops_legal.rs` with a real
+ability iteration. (4) Land the `activate_ability` primitive in
+`state_ops_*.rs` so dispatch flips from "ValueError stub" to a real
+state mutation. Each can ship independently.
+
+**Impact estimate**: at the slice's first commit, the enumerator
+covers ~1.9% of Round-20 decisions (per the round-23 ActivateAbility
+agent's commit note); without the dispatch primitive, the
+parity-smoke retry loop catches and skips. Strength impact is
+proportional to "activated-ability-bearing decisions in the trace"
+× "average gain from playing them optimally" — non-trivial once
+planeswalkers + creature mana sources mature.
+
+---
+
 ## Tracked but not in this doc
 
 Things tracked elsewhere that you might also want to know about:
