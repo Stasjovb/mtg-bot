@@ -191,6 +191,76 @@
 //! exists so a 10-creature board doesn't produce 1024 dicts per
 //! `legal_decisions` call; a future factored-search slice replaces
 //! this with `n` separate `AttackerDecision`-style dicts.
+//!
+//! ## ActivateAbility extension (rust(legal-decisions-activate-ability))
+//!
+//! Mirrors Python's ActivateAbility emission block at
+//! `src/mtg_bot/legal.py:612-829` (the loop opening
+//! `# Activated abilities on permanents this player controls.`).
+//! Python's `ActivateAbility(source_id, ability_index)` constructor
+//! call is at lines 827-829.
+//!
+//! **Emission order vs Python.** Python's ActivateAbility loop lives
+//! AFTER the sorcery-timing early-return at lines 303-304. Although
+//! activated abilities are nominally instant-speed (per the CR),
+//! Python's `legal_actions` only emits them when sorcery timing
+//! holds. The individual `ability.sorcery_speed` check at line 620 is
+//! then a no-op (function already returned before this point if it
+//! wasn't sorcery timing). First-slice mirrors that: ActivateAbility
+//! lives INSIDE the sorcery-timing block, after PlayLand + CastSpell
+//! emission, before any post-block work. The instant-speed window for
+//! mana abilities is a Python-side limitation we inherit unchanged
+//! for trajectory parity.
+//!
+//! **First-slice scope: mana-producer permanents only.** Python's
+//! `CardPrinting` has an `activated_abilities: tuple[ActivatedAbility,
+//! ...]` field (see `src/mtg_bot/cards/base.py:490`) listing every
+//! activated ability the printing grants. Rust's `CardPrinting` (see
+//! `cards.rs:361-396`) does NOT have an `activated_abilities` field —
+//! bridge slices through round-23 added `mana_produced`, `keywords`,
+//! `card_types`, `power`/`toughness`, but `activated_abilities` is a
+//! deferred bridge extension because it requires porting the
+//! `ActivatedAbility` + `ActivationCost` + per-effect dataclass tree.
+//!
+//! Without `activated_abilities`, we can't iterate abilities directly.
+//! **First-slice approximation**: treat every untapped permanent on
+//! the priority player's battlefield whose printing has
+//! `mana_produced.is_some()` as having a single implicit "tap for
+//! mana" ability at `ability_index=0`. This covers Forests + every
+//! other basic-land equivalent in the Rust card pool today; once the
+//! `activated_abilities` bridge ports over (a bigger slice that wires
+//! the full ability/cost/effect dataclass tree through PyO3), this
+//! shortcut goes away and the enumerator iterates
+//! `effective_activated_abilities(state, obj)` per Python's line
+//! 617-618. Documented in `docs/SEARCH_LIMITATIONS.md`.
+//!
+//! **Gating** (mirror Python):
+//! - Source on the priority player's battlefield (Python's outer loop
+//!   filters `obj.controller_id != player_id` at line 614 — we walk
+//!   `self.players[idx].battlefield` directly, which has the same
+//!   semantic in the per-player-zone Rust model).
+//! - Source untapped: tap-for-mana abilities pay `{T}` as cost (CR
+//!   605.1a — mana abilities tap the source). Python's line 658-660
+//!   gates `if ability.cost.tap_self and obj.tapped: continue`.
+//! - First-slice **does not** filter by summoning sickness for
+//!   non-creature mana sources (lands aren't creatures, so the
+//!   sickness gate at lines 662-664 doesn't apply). Once
+//!   creature-tap mana abilities (Llanowar Elves, Birds of Paradise)
+//!   land in the bridge, the slice gains the same is_creature +
+//!   summoning_sick + haste check.
+//!
+//! **Dispatch is a known stub.** The Rust `Action::ActivateAbility`
+//! variant's `apply_action` arm at `state_ops_actions.rs:248-277`
+//! raises `ValueError("ActivateAbility dispatch not implemented
+//! yet ...")` because no Rust `activate_ability` primitive exists.
+//! The trajectory-mode `parity-smoke` harness's retry loop catches
+//! the ValueError and skips. This slice ships emission only; dispatch
+//! is the next slice's scope.
+//!
+//! **Dict shape**: `{"kind": "activate_ability", "source_id": <id>,
+//! "ability_index": 0}`. Round-trips through `parse_action` (round-23
+//! `Action::ActivateAbility` variant) and `action_to_pydict`
+//! unchanged.
 
 use crate::state::GameState;
 use crate::state_ops_steps::{PHASE_DECLARE_ATTACKERS, PHASE_MAIN1, PHASE_MAIN2};
@@ -259,6 +329,26 @@ fn cast_spell_dict(py: Python<'_>, card_id: u32) -> PyResult<Bound<'_, PyDict>> 
     d.set_item("use_impending", false)?;
     // None as cast_room_half — Python None at the dict layer.
     d.set_item("cast_room_half", py.None())?;
+    Ok(d)
+}
+
+/// Build a `{"kind": "activate_ability", "source_id": <id>,
+/// "ability_index": <u32>}` dict. Mirrors
+/// `actions.rs:action_to_pydict`'s `Action::ActivateAbility` arm so a
+/// dict produced here round-trips through `parse_action` and back
+/// without key drift. First-slice always uses `ability_index = 0`
+/// because Rust's `CardPrinting` doesn't carry an
+/// `activated_abilities` list yet — see module docstring's
+/// "ActivateAbility extension" section.
+fn activate_ability_dict(
+    py: Python<'_>,
+    source_id: u32,
+    ability_index: u32,
+) -> PyResult<Bound<'_, PyDict>> {
+    let d = PyDict::new(py);
+    d.set_item("kind", "activate_ability")?;
+    d.set_item("source_id", source_id)?;
+    d.set_item("ability_index", ability_index)?;
     Ok(d)
 }
 
@@ -497,9 +587,53 @@ impl GameState {
             actions.push(cast_spell_dict(py, obj.id)?);
         }
 
-        // Final emission order: [PassPriority, PlayLand..., CastSpell...].
-        // Matches Python's `legal.py` natural append order under the
-        // sorcery-timing gate.
+        // Python lines 612-829: ActivateAbility emission for activated
+        // abilities on permanents the priority player controls. We
+        // are INSIDE the sorcery-timing block at this point (Python's
+        // line 303-304 early return guarantees the same gating); the
+        // per-ability `ability.sorcery_speed` filter at line 620
+        // would be a no-op in this position.
+        //
+        // **First-slice approximation**: Rust's `CardPrinting` has no
+        // `activated_abilities` field yet (see `cards.rs:361-396` and
+        // the module docstring's "ActivateAbility extension"
+        // section). We approximate by emitting one ActivateAbility
+        // (ability_index=0) per untapped mana-producer permanent —
+        // i.e. every untapped object on the priority player's
+        // battlefield whose printing has `mana_produced.is_some()`.
+        // This covers Forest's tap-for-{G} ability and every
+        // basic-land equivalent. Creature mana sources (Llanowar
+        // Elves, Birds of Paradise) aren't covered yet — they'd
+        // emit incorrectly until the `is_creature` + `summoning_sick`
+        // + `haste` filter ports in, which lands with the full
+        // `activated_abilities` bridge.
+        //
+        // **No dedup by printing name.** Unlike PlayLand / CastSpell,
+        // each ActivateAbility carries a per-object source_id and
+        // refers to a battlefield slot whose state (tapped /
+        // counters / attached_to) is unique to that object. Two
+        // Forests on the battlefield are NOT interchangeable —
+        // activating Forest A taps Forest A, not Forest B. Python's
+        // ActivateAbility loop at lines 612-829 has no dedup HashSet
+        // for the same reason.
+        for obj in self.players[idx].battlefield.iter() {
+            if obj.tapped {
+                continue;
+            }
+            let Some(printing) = self.registry.lookup(obj.printing_id) else {
+                continue;
+            };
+            if printing.mana_produced.is_none() {
+                continue;
+            }
+            actions.push(activate_ability_dict(py, obj.id, 0)?);
+        }
+
+        // Final emission order: [PassPriority, (DeclareAttackers...),
+        // PlayLand..., CastSpell..., ActivateAbility...]. Matches
+        // Python's `legal.py` natural append order under the
+        // sorcery-timing gate (DeclareAttackers is the Rust-only
+        // exception, see its module-docstring section).
 
         Ok(actions)
     }

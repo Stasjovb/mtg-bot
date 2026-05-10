@@ -99,15 +99,22 @@ def _kinds(actions):
 def test_legal_decisions_empty_hand_in_main_phase_emits_only_pass_priority(
     synthetic_state,
 ):
-    """Empty hand in PRECOMBAT_MAIN: only PassPriority emits.
-    Mirrors Python's `legal.py:178` (PassPriority always there) +
-    `:319-329` (PlayLand loop iterates an empty hand to zero actions)."""
+    """Empty hand in PRECOMBAT_MAIN: only PassPriority emits + the 5
+    Forests' tap-for-mana ActivateAbility (synthetic seed has 5
+    Forests + 5 Grizzly Bears on p0 battlefield). PlayLand loop
+    iterates an empty hand to zero actions (Python `legal.py:319-329`).
+    Mirrors Python's `legal.py:178` (PassPriority always there)."""
     _empty_hand(synthetic_state, 0)
     synthetic_state.set_phase(PHASE_MAIN1)
 
     actions = synthetic_state.legal_decisions(0)
 
-    assert _kinds(actions) == ["pass_priority"]
+    # PassPriority + 5 ActivateAbility (one per untapped Forest).
+    kinds = _kinds(actions)
+    assert kinds[0] == "pass_priority"
+    assert kinds.count("activate_ability") == 5
+    assert "play_land" not in kinds
+    assert "cast_spell" not in kinds
 
 
 # --- 2. One Land in hand --------------------------------------------
@@ -127,7 +134,13 @@ def test_legal_decisions_one_land_in_hand_emits_pass_priority_then_play_land(
 
     actions = synthetic_state.legal_decisions(0)
 
-    assert _kinds(actions) == ["pass_priority", "play_land"]
+    # PassPriority + 1 PlayLand + 5 ActivateAbility (one per
+    # untapped Forest already on p0's battlefield).
+    kinds = _kinds(actions)
+    assert kinds[0] == "pass_priority"
+    assert kinds[1] == "play_land"
+    assert kinds.count("play_land") == 1
+    assert kinds.count("activate_ability") == 5
     # PlayLand carries the Forest's GameObject id.
     assert actions[1]["card_id"] == forest_id
 
@@ -159,8 +172,15 @@ def test_legal_decisions_two_distinct_lands_in_hand_emit_two_play_lands(
     actions = synthetic_state.legal_decisions(0)
 
     # Dedup by printing name: two Forests collapse to one PlayLand.
-    assert _kinds(actions) == ["pass_priority", "play_land"]
-    # The action carries the FIRST hand-order Forest's id.
+    # Plus 5 ActivateAbility (per untapped Forest on p0 bf — these
+    # are battlefield permanents, not deduped because each carries
+    # its own per-object source_id).
+    kinds = _kinds(actions)
+    assert kinds[0] == "pass_priority"
+    assert kinds.count("play_land") == 1
+    assert kinds.count("activate_ability") == 5
+    # The PlayLand carries the FIRST hand-order Forest's id.
+    assert actions[1]["kind"] == "play_land"
     assert actions[1]["card_id"] == forest_a
 
 
@@ -185,10 +205,12 @@ def test_legal_decisions_creature_plus_land_emits_play_land_and_cast_spell(
 
     kinds = _kinds(actions)
     # PassPriority then PlayLand then CastSpell — Python's natural
-    # append order under sorcery timing.
+    # append order under sorcery timing. Plus 5 ActivateAbility (one
+    # per untapped Forest on p0 battlefield).
     assert kinds[0] == "pass_priority"
     assert kinds.count("play_land") == 1
     assert kinds.count("cast_spell") == 1
+    assert kinds.count("activate_ability") == 5
     # PlayLand carries the Forest's id (not any Llanowar Elves id).
     play_land = [a for a in actions if a["kind"] == "play_land"][0]
     assert play_land["card_id"] == forest_id
@@ -413,8 +435,14 @@ def test_legal_decisions_works_for_player_1_on_their_turn(synthetic_state):
 
     actions = synthetic_state.legal_decisions(1)
 
-    assert _kinds(actions) == ["pass_priority", "play_land"]
-    assert actions[1]["card_id"] == forest_id
+    # PassPriority + 1 PlayLand + 5 ActivateAbility (one per P1
+    # untapped Forest on P1's battlefield, mirroring the P0 case).
+    kinds = _kinds(actions)
+    assert kinds[0] == "pass_priority"
+    assert kinds.count("play_land") == 1
+    assert kinds.count("activate_ability") == 5
+    play_land = [a for a in actions if a["kind"] == "play_land"][0]
+    assert play_land["card_id"] == forest_id
 
 
 # --- 13. CastSpell: one Creature in main phase ----------------------
@@ -468,8 +496,14 @@ def test_legal_decisions_one_creature_in_hand_emits_cast_spell(
 
     actions = state.legal_decisions(0)
 
-    assert _kinds(actions) == ["pass_priority", "cast_spell"]
-    assert actions[1]["card_id"] == elves_id
+    # PassPriority + 1 CastSpell + 5 ActivateAbility (untapped Forests
+    # on p0 battlefield each emit a tap-for-mana ActivateAbility).
+    kinds = _kinds(actions)
+    assert kinds[0] == "pass_priority"
+    assert kinds.count("cast_spell") == 1
+    assert kinds.count("activate_ability") == 5
+    cs = [a for a in actions if a["kind"] == "cast_spell"][0]
+    assert cs["card_id"] == elves_id
 
 
 # --- 14. CastSpell: PlayLand + CastSpell emission order -------------
@@ -490,13 +524,16 @@ def test_legal_decisions_land_plus_creature_emit_in_python_order(
     actions = synthetic_state.legal_decisions(0)
 
     kinds = _kinds(actions)
-    # 7 Llanowar Elves dedup to 1 CastSpell; 1 Forest -> 1 PlayLand.
-    assert kinds == ["pass_priority", "play_land", "cast_spell"]
-    # PlayLand carries the Forest's id; CastSpell carries the first
-    # hand-order Elves' id (id 10, P0_FIRST_HAND_ID).
-    assert actions[1]["kind"] == "play_land"
+    # 7 Llanowar Elves dedup to 1 CastSpell; 1 Forest -> 1 PlayLand;
+    # 5 Forests on the battlefield -> 5 ActivateAbility. The 3 hand
+    # zone actions come in PlayLand-then-CastSpell order; the 5
+    # ActivateAbility come after (matching the emission-order
+    # contract documented at the end of the slice).
+    assert kinds[0] == "pass_priority"
+    assert kinds[1] == "play_land"
+    assert kinds[2] == "cast_spell"
+    assert kinds.count("activate_ability") == 5
     assert actions[1]["card_id"] == forest_id
-    assert actions[2]["kind"] == "cast_spell"
     assert actions[2]["card_id"] == P0_FIRST_HAND_ID
 
 
@@ -526,9 +563,15 @@ def test_legal_decisions_two_same_printing_creatures_dedup_to_one_cast(
 
     actions = synthetic_state.legal_decisions(0)
 
-    # Dedup: two Elves -> ONE CastSpell.
-    assert _kinds(actions) == ["pass_priority", "cast_spell"]
-    # The action carries the FIRST hand-order Elves' id.
+    # Dedup: two Elves -> ONE CastSpell. Plus 5 ActivateAbility
+    # (untapped Forests on the p0 battlefield — these are
+    # battlefield permanents, not deduped by name).
+    kinds = _kinds(actions)
+    assert kinds[0] == "pass_priority"
+    assert kinds[1] == "cast_spell"
+    assert kinds.count("cast_spell") == 1
+    assert kinds.count("activate_ability") == 5
+    # The CastSpell carries the FIRST hand-order Elves' id.
     assert actions[1]["card_id"] == elves_first_id
 
 
@@ -697,8 +740,20 @@ def test_legal_decisions_cast_spell_after_play_land_after_pass_priority(
     play_idx = kinds.index("play_land")
     cast_idx = kinds.index("cast_spell")
     assert pass_idx < play_idx < cast_idx
-    # And there are exactly 3 actions: one of each.
-    assert len(actions) == 3
+    # And there is exactly one of each Action kind among the
+    # hand-zone emissions. (Plus 5 ActivateAbility for the 5
+    # untapped Forests on p0's battlefield — locked in below to
+    # confirm ActivateAbility sits AFTER CastSpell in emission
+    # order.)
+    assert kinds.count("pass_priority") == 1
+    assert kinds.count("play_land") == 1
+    assert kinds.count("cast_spell") == 1
+    assert kinds.count("activate_ability") == 5
+    # ActivateAbility comes AFTER CastSpell in Python's natural
+    # append order (legal.py:612 is downstream of the CastSpell
+    # block at 335-445).
+    aa_idx = kinds.index("activate_ability")
+    assert cast_idx < aa_idx
     assert actions[play_idx]["card_id"] == forest_id
 
 
@@ -1288,3 +1343,287 @@ def test_legal_decisions_declare_attackers_non_empty_stack_emits_no_declare_atta
 
     kinds = _kinds(actions)
     assert "declare_attackers" not in kinds
+
+
+# --- ActivateAbility emission ---------------------------------------
+#
+# rust(legal-decisions-activate-ability) — extends `legal_decisions`
+# to emit `ActivateAbility` dicts for tap-for-mana abilities on
+# untapped mana-producer permanents the priority player controls.
+# Mirrors Python's `legal.py:612-829` (the activated-ability emission
+# block) with a first-slice approximation: Rust's `CardPrinting` has
+# no `activated_abilities` field (see `rust/src/cards.rs:361-396` and
+# the docstring's "ActivateAbility extension" section), so we treat
+# every untapped permanent whose printing has `mana_produced.is_some()`
+# as having a single implicit ability at `ability_index=0`. The full
+# `activated_abilities` bridge is a deferred slice.
+#
+# **Gating** (mirror Python):
+# - Source on the priority player's battlefield (Python line 614
+#   `obj.controller_id != player_id: continue`).
+# - Source untapped (Python line 658-660 `if ability.cost.tap_self
+#   and obj.tapped: continue`).
+# - Sorcery timing — Python's early return at line 303-304 gates
+#   the entire ActivateAbility block. Per-ability `sorcery_speed`
+#   check at line 620 is a no-op once we're past 304.
+#
+# **Dispatch is a stub.** `apply_action` on an ActivateAbility dict
+# raises ValueError ("ActivateAbility dispatch not implemented yet")
+# at `rust/src/state_ops_actions.rs:271-276`. This slice ships
+# emission only; the dispatch arm flips to a real
+# `call_method1("activate_ability", ...)` once the Rust primitive
+# lands in a future slice.
+
+
+def test_legal_decisions_activate_ability_emits_for_untapped_forest(
+    synthetic_state,
+):
+    """Default synthetic state has 5 Forests + 5 Grizzly Bears on
+    P0's battlefield. At sorcery timing, each untapped Forest emits
+    one ActivateAbility (ability_index=0); Grizzly Bears (no
+    mana_produced) do not emit. Locks in the basic emission and the
+    ability_index=0 first-slice constant."""
+    _empty_hand(synthetic_state, 0)
+    synthetic_state.set_phase(PHASE_MAIN1)
+
+    actions = synthetic_state.legal_decisions(0)
+
+    aas = [a for a in actions if a["kind"] == "activate_ability"]
+    # 5 Forests on P0's battlefield, all untapped.
+    assert len(aas) == 5
+    # source_ids are the 5 Forest object ids (P0_FIRST_BATTLEFIELD_ID
+    # through P0_FIRST_BATTLEFIELD_ID + 4).
+    source_ids = {a["source_id"] for a in aas}
+    assert source_ids == {
+        P0_FIRST_BATTLEFIELD_ID + i for i in range(5)
+    }
+    # First-slice: ability_index always 0 (no activated_abilities
+    # field yet — see module docstring).
+    assert all(a["ability_index"] == 0 for a in aas)
+
+
+def test_legal_decisions_activate_ability_excludes_tapped_forest(
+    synthetic_state,
+):
+    """A tapped Forest can't pay its {T} cost (CR 605.1a — mana
+    abilities tap the source). Tapping one of the 5 Forests drops
+    the ActivateAbility count to 4; the tapped Forest's id is NOT
+    in the emission set. Mirrors Python's line 658-660 cost-payability
+    check (`if ability.cost.tap_self and obj.tapped: continue`)."""
+    _empty_hand(synthetic_state, 0)
+    # Tap the first Forest (id 0).
+    synthetic_state.tap_object(P0_FIRST_BATTLEFIELD_ID)
+    synthetic_state.set_phase(PHASE_MAIN1)
+
+    actions = synthetic_state.legal_decisions(0)
+
+    aas = [a for a in actions if a["kind"] == "activate_ability"]
+    # 5 Forests, 1 tapped -> 4 ActivateAbility emit.
+    assert len(aas) == 4
+    source_ids = {a["source_id"] for a in aas}
+    # The tapped Forest's id is excluded.
+    assert P0_FIRST_BATTLEFIELD_ID not in source_ids
+    assert source_ids == {
+        P0_FIRST_BATTLEFIELD_ID + i for i in range(1, 5)
+    }
+
+
+def test_legal_decisions_activate_ability_excludes_non_mana_producer(
+    synthetic_state,
+):
+    """Grizzly Bears (Creature, no mana_produced) does NOT emit
+    ActivateAbility — the first-slice's mana-only filter excludes
+    permanents whose `printing.mana_produced.is_none()`. Locks in
+    that the 5 Bears on P0's battlefield (ids 5-9) emit zero
+    ActivateAbility actions; only the 5 Forests do."""
+    _empty_hand(synthetic_state, 0)
+    synthetic_state.set_phase(PHASE_MAIN1)
+
+    actions = synthetic_state.legal_decisions(0)
+
+    aas = [a for a in actions if a["kind"] == "activate_ability"]
+    source_ids = {a["source_id"] for a in aas}
+    # Bears (ids P0_FIRST_BEARS_ID through P0_FIRST_BEARS_ID + 4)
+    # are NOT in the emission set.
+    for i in range(5):
+        assert (P0_FIRST_BEARS_ID + i) not in source_ids
+    # Only the 5 Forests.
+    assert len(aas) == 5
+
+
+def test_legal_decisions_activate_ability_emits_one_per_mana_producer(
+    synthetic_state,
+):
+    """Multiple untapped mana producers each get their own
+    ActivateAbility (no dedup by printing name — unlike PlayLand /
+    CastSpell, each battlefield permanent has independent
+    per-object state, so the ids are distinct). Locks in the
+    `len == count_of_untapped_mana_producers` invariant."""
+    _empty_hand(synthetic_state, 0)
+    # Tap 3 of the 5 Forests; 2 remain untapped.
+    for i in range(3):
+        synthetic_state.tap_object(P0_FIRST_BATTLEFIELD_ID + i)
+    synthetic_state.set_phase(PHASE_MAIN1)
+
+    actions = synthetic_state.legal_decisions(0)
+
+    aas = [a for a in actions if a["kind"] == "activate_ability"]
+    assert len(aas) == 2
+    source_ids = {a["source_id"] for a in aas}
+    assert source_ids == {
+        P0_FIRST_BATTLEFIELD_ID + 3,
+        P0_FIRST_BATTLEFIELD_ID + 4,
+    }
+
+
+def test_legal_decisions_activate_ability_excludes_opponent_permanent(
+    synthetic_state,
+):
+    """An untapped mana producer on the OPPONENT's battlefield does
+    NOT emit an ActivateAbility for the priority player (you can
+    only activate your own permanents' abilities — CR 605.1).
+    Locks in the per-player-zone iteration: the enumerator walks
+    `self.players[priority_idx].battlefield`, not the global
+    battlefield. P1 has 5 Forests too (synthetic seed mirrors P0);
+    none of them should appear in P0's ActivateAbility set."""
+    _empty_hand(synthetic_state, 0)
+    synthetic_state.set_phase(PHASE_MAIN1)
+
+    actions = synthetic_state.legal_decisions(0)
+
+    aas = [a for a in actions if a["kind"] == "activate_ability"]
+    # P0 Forests are at ids 0-4. P1's battlefield ids start at the
+    # synthetic seed's id_offset (67); P0 emissions must NOT include
+    # any id >= 67.
+    source_ids = {a["source_id"] for a in aas}
+    assert all(sid < 67 for sid in source_ids)
+    assert len(aas) == 5
+
+
+@pytest.mark.parametrize(
+    "phase",
+    [PHASE_UNTAP, PHASE_COMBAT_DAMAGE, PHASE_CLEANUP],
+    ids=["UNTAP", "COMBAT_DAMAGE", "CLEANUP"],
+)
+def test_legal_decisions_activate_ability_not_emitted_off_sorcery_timing(
+    synthetic_state, phase,
+):
+    """First-slice parity with Python: ActivateAbility is gated by
+    the sorcery-timing early-return at Python `legal.py:303-304`.
+    In non-main phases (UNTAP / COMBAT_DAMAGE / CLEANUP) the function
+    returns before reaching the activated-ability block at line 612,
+    so no `activate_ability` dicts emit. This is a known parity
+    artifact — see the module docstring's "ActivateAbility
+    extension" section. Once Rust grows an instant-speed window for
+    mana abilities, this test flips to "emit regardless of phase"."""
+    _empty_hand(synthetic_state, 0)
+    synthetic_state.set_phase(phase)
+
+    actions = synthetic_state.legal_decisions(0)
+
+    kinds = _kinds(actions)
+    assert "activate_ability" not in kinds
+
+
+def test_legal_decisions_activate_ability_not_emitted_with_nonempty_stack(
+    synthetic_state,
+):
+    """Non-empty stack: sorcery-timing's `stack.is_empty()` conjunct
+    fails (Python `legal.py:30`), so the activated-ability block at
+    line 612 is unreachable. First-slice parity — no ActivateAbility
+    emits. Mirrors the same gate that already excludes PlayLand /
+    CastSpell at non-empty stack."""
+    _empty_hand(synthetic_state, 0)
+    synthetic_state.set_phase(PHASE_MAIN1)
+    synthetic_state.push_to_stack(P0_FIRST_BEARS_ID, 0)
+
+    actions = synthetic_state.legal_decisions(0)
+
+    kinds = _kinds(actions)
+    assert "activate_ability" not in kinds
+
+
+def test_legal_decisions_activate_ability_emission_order_after_cast_spell(
+    synthetic_state,
+):
+    """ActivateAbility emits AFTER PassPriority + PlayLand +
+    CastSpell. Mirrors Python's natural append order: PlayLand at
+    line 319-329, CastSpell at 335-445, ActivateAbility at 612 —
+    each block runs in source order, so the wire shape is
+    [pass_priority, play_land..., cast_spell..., activate_ability...].
+    Catches a regression where a future slice reorders the loops."""
+    # Synthetic seed has 7 Elves in hand + 5 Forests + 5 Bears bf.
+    # Add one Forest to hand so we get all four Action kinds.
+    _put_forest_in_hand(synthetic_state, 0)
+    synthetic_state.set_phase(PHASE_MAIN1)
+
+    actions = synthetic_state.legal_decisions(0)
+
+    kinds = _kinds(actions)
+    pass_idx = kinds.index("pass_priority")
+    play_idx = kinds.index("play_land")
+    cast_idx = kinds.index("cast_spell")
+    aa_idx = kinds.index("activate_ability")
+    assert pass_idx < play_idx < cast_idx < aa_idx
+
+
+def test_legal_decisions_activate_ability_dict_shape_is_minimal(
+    synthetic_state,
+):
+    """Every ActivateAbility dict carries exactly three keys: kind,
+    source_id, ability_index. Mirrors `actions.rs:action_to_pydict`'s
+    `Action::ActivateAbility` arm so a future-slice regression that
+    adds a wire key here but forgets the parse_action side trips
+    loudly."""
+    _empty_hand(synthetic_state, 0)
+    synthetic_state.set_phase(PHASE_MAIN1)
+
+    actions = synthetic_state.legal_decisions(0)
+    aas = [a for a in actions if a["kind"] == "activate_ability"]
+    assert len(aas) >= 1
+    for a in aas:
+        assert set(a.keys()) == {"kind", "source_id", "ability_index"}
+
+
+def test_legal_decisions_activate_ability_apply_action_raises_value_error(
+    synthetic_state,
+):
+    """The Rust `Action::ActivateAbility` dispatch arm at
+    `state_ops_actions.rs:271-276` is a known stub — it raises
+    ValueError("ActivateAbility dispatch not implemented yet ...")
+    because no Rust `activate_ability` primitive exists yet. The
+    parity-smoke harness's retry loop catches this and skips the
+    decision. This test pins the stub's error shape so a future
+    slice that lands the primitive (and flips this arm to a real
+    dispatch) trips the test — at which point the test gets
+    updated to assert the actual mutation semantics."""
+    _empty_hand(synthetic_state, 0)
+    synthetic_state.set_phase(PHASE_MAIN1)
+
+    actions = synthetic_state.legal_decisions(0)
+    aa = [a for a in actions if a["kind"] == "activate_ability"][0]
+
+    with pytest.raises(ValueError, match=r"not implemented yet"):
+        synthetic_state.apply_action(aa)
+
+
+def test_legal_decisions_activate_ability_works_for_player_1(
+    synthetic_state,
+):
+    """P1's main phase: P1's 5 Forests on their battlefield each
+    emit an ActivateAbility for P1. Locks in player-indexing —
+    `self.players[idx].battlefield` walks the right player's
+    permanents, mirroring the existing P1-PlayLand / P1-CastSpell
+    parity tests."""
+    while synthetic_state.active_player == 0:
+        synthetic_state.advance_phase()
+    synthetic_state.set_phase(PHASE_MAIN1)
+    synthetic_state.give_priority_to(1)
+
+    actions = synthetic_state.legal_decisions(1)
+
+    aas = [a for a in actions if a["kind"] == "activate_ability"]
+    assert len(aas) == 5
+    # All source_ids are P1 ids (offset 67); none are P0 ids.
+    source_ids = {a["source_id"] for a in aas}
+    assert all(sid >= 67 for sid in source_ids)
