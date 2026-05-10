@@ -245,3 +245,64 @@ def test_clone_then_complete_priority_round_does_not_affect_original(synthetic_s
     # Original: untouched.
     assert synthetic_state.stack_size() == 1
     assert synthetic_state.get_priority_player() == 1
+
+
+# ---------------------------------------------------------------------------
+# Bridge slice: ``active_player_idx`` + ``priority_player_idx`` Python-property
+# getters.
+#
+# Mirrors Python's ``GameState.active_player_idx`` and
+# ``GameState.priority_player_idx`` dataclass fields (see
+# ``src/mtg_bot/game.py:2587-2588``). These are read as PLAIN
+# ATTRIBUTES (no parens) on the Python side, so the Rust bridge must
+# expose them via ``#[getter]`` rather than as method calls. The
+# ``scripts/parity_smoke.py:hash_state`` consumer reads both this way.
+# ---------------------------------------------------------------------------
+
+
+def test_active_player_idx_initial_is_zero(synthetic_state):
+    """Fresh synthetic state has active_player == 0; the property
+    alias reflects that."""
+    assert synthetic_state.active_player_idx == 0
+
+
+def test_priority_player_idx_matches_get_priority_player(synthetic_state):
+    """``priority_player_idx`` is a property alias for the existing
+    ``get_priority_player()`` pymethod; they must always agree."""
+    assert synthetic_state.priority_player_idx == synthetic_state.get_priority_player()
+    synthetic_state.give_priority_to(1)
+    assert synthetic_state.priority_player_idx == synthetic_state.get_priority_player()
+
+
+def test_property_aliases_are_not_callable(synthetic_state):
+    """Both aliases are ``#[getter]`` properties — reading is plain
+    attribute access. Calling them as methods raises ``TypeError``
+    because an ``int`` (the property's value) isn't callable."""
+    with pytest.raises(TypeError):
+        synthetic_state.active_player_idx()
+    with pytest.raises(TypeError):
+        synthetic_state.priority_player_idx()
+
+
+def test_active_player_idx_reflects_cleanup_wraparound(synthetic_state):
+    """``advance_phase`` swaps the active player on CLEANUP -> UNTAP.
+    The property alias must see the new active player after the wrap."""
+    # Walk advance_phase forward until the active player flips. The
+    # synthetic state starts on UNTAP; the cleanup-wrap swap happens
+    # when advance_phase ticks past CLEANUP.
+    starting_active = synthetic_state.active_player_idx
+    for _ in range(20):  # bounded loop; cleanup is hit well before 20 steps.
+        synthetic_state.advance_phase()
+        if synthetic_state.active_player_idx != starting_active:
+            break
+    assert synthetic_state.active_player_idx == 1 - starting_active
+
+
+def test_priority_player_idx_toggles_with_pass_priority(synthetic_state):
+    """``priority_player_idx`` reflects ``pass_priority`` toggles —
+    mirrors the existing ``get_priority_player()`` flip test."""
+    assert synthetic_state.priority_player_idx == 0
+    synthetic_state.pass_priority()
+    assert synthetic_state.priority_player_idx == 1
+    synthetic_state.pass_priority()
+    assert synthetic_state.priority_player_idx == 0

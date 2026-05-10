@@ -138,6 +138,7 @@ the test lands in a commit.
 | rust(bridge-outcome): is_over / is_draw / winner_id getters | tests_rust/test_winloss.py extend | green  | feature/rust-bridge-outcome |
 | rust(bridge-zone-snapshots): hand/library/graveyard/exile/battlefield/mana_pool getters | tests_rust/test_snapshot.py | green  | feature/rust-bridge-zone-snapshots |
 | rust(bridge-step-getter): step getter returns Python Step.name | tests_rust/test_steps.py extend | green  | feature/rust-bridge-step-getter |
+| rust(bridge-priority-active-aliases): active_player_idx + priority_player_idx Python-property getters | tests_rust/test_priority.py extend | green  | feature/rust-bridge-priority-active-aliases |
 
 ## Build invocation reminder
 
