@@ -468,3 +468,227 @@ def test_vigilance_summoning_sick_still_returns_false(synthetic_state):
     assert synthetic_state.get_attackers() == []
     # And the rejection didn't tap it as a side effect.
     assert synthetic_state.is_tapped(obj_id) is False
+
+
+# ----------------------------- deathtouch + lifelink ------------------------
+#
+# Deathtouch (CR 702.2): any nonzero amount of combat damage from a
+# creature with deathtouch is enough to mark lethal damage on a creature.
+# Implementation: after the regular `damage += power` add, upgrade the
+# recipient's `damage` to at least its toughness so the round-5 SBA pass
+# (`apply_sbas`) destroys it.
+#
+# Lifelink (CR 702.15): damage dealt by a creature with lifelink also
+# causes its controller to gain that much life. This first slice fires
+# only on combat damage (the only damage source visible inside
+# `deal_combat_damage`); other damage sources will gain the same hook
+# when they grow up.
+#
+# Scope simplifications mirrored from the module docstring on
+# `state_ops_combat.rs`:
+#
+# - Deathtouch requires NONZERO damage (CR 702.2b "any nonzero amount").
+#   A 0-power deathtouch creature does not mark lethal.
+# - First-strike / double-strike are still out of scope; combat damage
+#   is one symmetric step.
+# - "Damage isn't dealt" replacement effects (protection, prevention)
+#   are out of scope, so deathtouch / lifelink fire whenever the
+#   regular path would have dealt damage.
+# - These tests use the same `register_and_inject_object` injection
+#   path the vigilance tests above already exercise.
+
+
+def _keyword_creature_dict(power, toughness, keywords):
+    """A creature printing with the given P/T and keyword list. The
+    name varies by keyword so multiple injections can coexist; the
+    cost shape ({G}+{1}) is identical to ``_vigilance_bear_dict`` so
+    the cast-creature path keeps working when a test wants to cast
+    one of these (none of the deathtouch/lifelink tests below need
+    to cast — they all inject directly to battlefield)."""
+    return {
+        "name": "Test " + "+".join(keywords) + f" {power}/{toughness}",
+        "card_types": ["Creature"],
+        "mana_cost": {"G": 1, "generic": 1},
+        "power": power,
+        "toughness": toughness,
+        "keywords": list(keywords),
+        "effects": [],
+    }
+
+
+def test_deathtouch_attacker_marks_lethal_on_blocker_with_more_toughness(synthetic_state):
+    """A 1/1 deathtouch attacker fights a 3/3 blocker. The regular
+    add gives the blocker 1 damage; deathtouch upgrades that to its
+    full toughness (3) so the round-5 SBA pass would destroy it."""
+    attacker_id = synthetic_state.register_and_inject_object(
+        _keyword_creature_dict(1, 1, ["deathtouch"]), 0, ZONE_BATTLEFIELD
+    )
+    # Use a Grizzly Bears slot from p1's battlefield as the blocker —
+    # but the synthetic Bears are 2/2. Inject a 3/3 vanilla blocker
+    # for an unambiguous toughness mismatch.
+    blocker_id = synthetic_state.register_and_inject_object(
+        _keyword_creature_dict(3, 3, []), 1, ZONE_BATTLEFIELD
+    )
+    assert synthetic_state.declare_attacker(attacker_id) is True
+    assert synthetic_state.declare_blocker(blocker_id, attacker_id) is True
+    synthetic_state.deal_combat_damage()
+    # Deathtouch upgraded the 1 damage to >= 3 (the blocker's toughness).
+    assert synthetic_state.get_damage(blocker_id) >= 3, (
+        "deathtouch must mark damage to AT LEAST the recipient's toughness "
+        "(CR 702.2b)"
+    )
+
+
+def test_deathtouch_blocker_marks_lethal_on_attacker_with_more_toughness(synthetic_state):
+    """Symmetric: a 1/1 deathtouch blocker upgrades its hit on a 3/3
+    attacker to lethal."""
+    attacker_id = synthetic_state.register_and_inject_object(
+        _keyword_creature_dict(3, 3, []), 0, ZONE_BATTLEFIELD
+    )
+    blocker_id = synthetic_state.register_and_inject_object(
+        _keyword_creature_dict(1, 1, ["deathtouch"]), 1, ZONE_BATTLEFIELD
+    )
+    assert synthetic_state.declare_attacker(attacker_id) is True
+    assert synthetic_state.declare_blocker(blocker_id, attacker_id) is True
+    synthetic_state.deal_combat_damage()
+    assert synthetic_state.get_damage(attacker_id) >= 3, (
+        "deathtouch on the blocker must upgrade attacker damage to lethal"
+    )
+
+
+def test_deathtouch_with_zero_power_does_not_mark_lethal(synthetic_state):
+    """CR 702.2b — deathtouch fires on any NONZERO amount of damage.
+    A 0/1 deathtouch creature deals 0 damage, so deathtouch does not
+    fire and the recipient's damage stays at 0."""
+    attacker_id = synthetic_state.register_and_inject_object(
+        _keyword_creature_dict(0, 1, ["deathtouch"]), 0, ZONE_BATTLEFIELD
+    )
+    blocker_id = synthetic_state.register_and_inject_object(
+        _keyword_creature_dict(3, 3, []), 1, ZONE_BATTLEFIELD
+    )
+    assert synthetic_state.declare_attacker(attacker_id) is True
+    assert synthetic_state.declare_blocker(blocker_id, attacker_id) is True
+    synthetic_state.deal_combat_damage()
+    # No damage dealt at all (attacker is 0 power); deathtouch must
+    # NOT fire because it requires nonzero damage to be dealt.
+    assert synthetic_state.get_damage(blocker_id) == 0, (
+        "deathtouch must NOT mark lethal when the source dealt 0 damage "
+        "(CR 702.2b — requires nonzero damage)"
+    )
+
+
+def test_lifelink_attacker_unblocked_gains_life_for_controller(synthetic_state):
+    """A 3/3 lifelink attacker, no blocker. The defending player
+    takes 3 damage (the existing unblocked path) AND the attacker's
+    controller gains 3 life."""
+    attacker_id = synthetic_state.register_and_inject_object(
+        _keyword_creature_dict(3, 3, ["lifelink"]), 0, ZONE_BATTLEFIELD
+    )
+    assert synthetic_state.get_life(0) == 20
+    assert synthetic_state.get_life(1) == 20
+    assert synthetic_state.declare_attacker(attacker_id) is True
+    synthetic_state.deal_combat_damage()
+    # Defending player took 3.
+    assert synthetic_state.get_life(1) == 17
+    # Attacker's controller gained 3 from lifelink.
+    assert synthetic_state.get_life(0) == 23, (
+        "lifelink must gain life on the controller equal to combat damage dealt"
+    )
+
+
+def test_lifelink_attacker_blocked_gains_life_for_damage_dealt_to_blocker(synthetic_state):
+    """A 2/2 lifelink attacker is blocked by a 3/3. The blocker
+    takes 2 damage; the attacker's controller gains 2 life."""
+    attacker_id = synthetic_state.register_and_inject_object(
+        _keyword_creature_dict(2, 2, ["lifelink"]), 0, ZONE_BATTLEFIELD
+    )
+    blocker_id = synthetic_state.register_and_inject_object(
+        _keyword_creature_dict(3, 3, []), 1, ZONE_BATTLEFIELD
+    )
+    assert synthetic_state.get_life(0) == 20
+    assert synthetic_state.declare_attacker(attacker_id) is True
+    assert synthetic_state.declare_blocker(blocker_id, attacker_id) is True
+    synthetic_state.deal_combat_damage()
+    # Defending player untouched (attacker was blocked).
+    assert synthetic_state.get_life(1) == 20
+    # Blocker took 2 damage.
+    assert synthetic_state.get_damage(blocker_id) == 2
+    # Lifelink fired — attacker controller gained 2.
+    assert synthetic_state.get_life(0) == 22, (
+        "lifelink must gain life equal to damage dealt to the blocker"
+    )
+
+
+def test_lifelink_blocker_gains_life_for_damage_dealt_to_attacker(synthetic_state):
+    """A 2/2 attacker meets a 3/3 lifelink blocker. The blocker
+    deals 3 damage to the attacker; the blocker's controller gains
+    3 life."""
+    attacker_id = synthetic_state.register_and_inject_object(
+        _keyword_creature_dict(2, 2, []), 0, ZONE_BATTLEFIELD
+    )
+    blocker_id = synthetic_state.register_and_inject_object(
+        _keyword_creature_dict(3, 3, ["lifelink"]), 1, ZONE_BATTLEFIELD
+    )
+    assert synthetic_state.get_life(1) == 20
+    assert synthetic_state.declare_attacker(attacker_id) is True
+    assert synthetic_state.declare_blocker(blocker_id, attacker_id) is True
+    synthetic_state.deal_combat_damage()
+    # Attacker took 3 damage.
+    assert synthetic_state.get_damage(attacker_id) == 3
+    # Lifelink on the blocker — blocker's controller (player 1) gained 3.
+    assert synthetic_state.get_life(1) == 23, (
+        "lifelink on the blocker must gain life on the blocker's controller"
+    )
+
+
+def test_attacker_without_keywords_does_not_gain_life_or_mark_lethal(synthetic_state):
+    """Sanity / regression: a vanilla 2/2 attacker vs vanilla 3/3
+    blocker leaves the existing path untouched. No life gain on
+    either side, blocker damage stays at the literal added power
+    (2), no lethal upgrade."""
+    attacker_id = synthetic_state.register_and_inject_object(
+        _keyword_creature_dict(2, 2, []), 0, ZONE_BATTLEFIELD
+    )
+    blocker_id = synthetic_state.register_and_inject_object(
+        _keyword_creature_dict(3, 3, []), 1, ZONE_BATTLEFIELD
+    )
+    assert synthetic_state.declare_attacker(attacker_id) is True
+    assert synthetic_state.declare_blocker(blocker_id, attacker_id) is True
+    synthetic_state.deal_combat_damage()
+    # Blocker took attacker's literal power (2), not its toughness (3) —
+    # no deathtouch upgrade.
+    assert synthetic_state.get_damage(blocker_id) == 2
+    # No life change on either side — no lifelink in play.
+    assert synthetic_state.get_life(0) == 20
+    assert synthetic_state.get_life(1) == 20
+
+
+def test_deathtouch_and_lifelink_compose(synthetic_state):
+    """A 1/1 with BOTH deathtouch and lifelink against a 3/3 blocker.
+    Deathtouch upgrades the 1-damage hit to lethal (>= 3); lifelink
+    fires on the literal damage dealt (1) so the attacker's
+    controller gains 1 life. Lifelink fires on the actual amount,
+    not the upgraded mark — see CR 702.2c (deathtouch only changes
+    how damage is treated for lethality, not the dealt amount that
+    other rules read)."""
+    attacker_id = synthetic_state.register_and_inject_object(
+        _keyword_creature_dict(1, 1, ["deathtouch", "lifelink"]),
+        0,
+        ZONE_BATTLEFIELD,
+    )
+    blocker_id = synthetic_state.register_and_inject_object(
+        _keyword_creature_dict(3, 3, []), 1, ZONE_BATTLEFIELD
+    )
+    assert synthetic_state.get_life(0) == 20
+    assert synthetic_state.declare_attacker(attacker_id) is True
+    assert synthetic_state.declare_blocker(blocker_id, attacker_id) is True
+    synthetic_state.deal_combat_damage()
+    # Deathtouch upgraded the blocker's marked damage to lethal.
+    assert synthetic_state.get_damage(blocker_id) >= 3, (
+        "composed: deathtouch must still mark lethal even with lifelink in play"
+    )
+    # Lifelink fired on the actual damage (1).
+    assert synthetic_state.get_life(0) == 21, (
+        "composed: lifelink fires on the literal damage dealt (1), not on "
+        "deathtouch's upgraded mark"
+    )
