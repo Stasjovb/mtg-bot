@@ -86,12 +86,31 @@
 //!   activating tap-cost abilities); this slice only models the
 //!   attacking half because `declare_attacker` is the only summoning-
 //!   sick gate today.
-//! - **No legality checks beyond "creature on attacker's battlefield,
-//!   untapped, not summoning-sick (modulo haste)".** Tapped creatures
-//!   and non-haste summoning-sick creatures are rejected as
-//!   attackers; that's the full attack-eligibility vocabulary today.
-//!   Defender keyword, "can't attack" effects, attacked-alone
-//!   restrictions are deferred.
+//! - **Defender (CR 702.3) IS modeled.** A creature whose printing
+//!   carries the `"defender"` keyword is rejected at `declare_attacker`.
+//!   Defender wins over haste — a creature with both keywords still
+//!   cannot attack (haste only bypasses the summoning-sickness gate;
+//!   it does not grant the ability to attack a creature otherwise
+//!   prohibited from attacking). Defender does NOT affect blocking,
+//!   damage, or any other phase. Other "can't attack" effects (Propaganda,
+//!   summoning-sick-without-haste was already covered) and attacked-alone
+//!   restrictions are still deferred.
+//! - **Menace (CR 702.110) IS modeled — predicate, not declare-time gate.**
+//!   A creature with `"menace"` can't be blocked except by two or more
+//!   creatures. Enforcement uses an `is_legal_block_assignment(attacker_id)`
+//!   predicate rather than rejecting at `declare_blocker`: the first
+//!   blocker assigned to a menace attacker is illegal in isolation but
+//!   legal once a second is added — declare-time rejection would force
+//!   callers into an artificial "all-at-once" submission API. The
+//!   predicate counts entries in `self.blockers` matching `attacker_id`
+//!   and returns false iff the attacker has menace AND that count is
+//!   exactly 1. Zero blockers (unblocked) and 2+ blockers are legal;
+//!   non-menace attackers always pass. Other multi-blocker constraints
+//!   (e.g. "can't be blocked by more than two") stay deferred.
+//! - **No other attack-eligibility legality checks** beyond
+//!   "creature on attacker's battlefield, untapped, not summoning-sick
+//!   (modulo haste), not defender". "Can't attack" continuous effects
+//!   beyond defender, attacked-alone restrictions, etc. remain deferred.
 //! - **Flying (CR 702.9) + reach (CR 702.17) IS modeled.** A flying
 //!   attacker (printing carries `"flying"`) can only be blocked by
 //!   creatures whose printing carries `"flying"` or `"reach"`; other
@@ -349,9 +368,15 @@ impl GameState {
     /// it attacks. Haste + vigilance composes (attack on the same turn
     /// it entered AND skip the tap).
     ///
-    /// **No legality checks beyond the four above.** Defender, "can't
-    /// attack", attacked-alone restrictions, and "doesn't untap during
-    /// untap step" interactions are deferred — see module docstring.
+    /// Defender (CR 702.3) is the fifth gate, added in this slice: a
+    /// creature with `"defender"` in its printing keywords is rejected
+    /// regardless of taps / summoning sickness / haste. Defender wins
+    /// over haste — a creature with both keywords still cannot attack.
+    ///
+    /// **No legality checks beyond the five above.** "Can't attack"
+    /// continuous effects beyond defender, attacked-alone restrictions,
+    /// and "doesn't untap during untap step" interactions are deferred —
+    /// see module docstring.
     fn declare_attacker(&mut self, obj_id: u32) -> bool {
         // Read-only validation pass — bail before any mutation if the
         // creature isn't eligible.
@@ -359,6 +384,13 @@ impl GameState {
             return false;
         };
         if tapped {
+            return false;
+        }
+        // Defender (CR 702.3): a creature with defender can't attack.
+        // This is independent of haste / summoning sickness — defender
+        // wins over haste even when haste would otherwise bypass the
+        // summoning-sickness gate.
+        if battlefield_has_keyword(self, obj_id, "defender") {
             return false;
         }
         // Haste (CR 702.10) bypasses summoning sickness ONLY. Read the
@@ -454,6 +486,44 @@ impl GameState {
     /// blocker_id)` tuples in declaration order.
     fn get_blockers(&self) -> Vec<(u32, u32)> {
         self.blockers.clone()
+    }
+
+    /// Validation predicate: is the current set of blockers against
+    /// `attacker_id` a legal assignment under the keyword constraints
+    /// this slice models?
+    ///
+    /// Today's only check: **menace (CR 702.110)** — a creature with
+    /// `"menace"` can't be blocked except by two or more creatures.
+    /// The predicate returns `false` iff the attacker has menace AND
+    /// has exactly one blocker assigned in `self.blockers`. Returns
+    /// `true` for:
+    /// - non-menace attackers (any block count is legal)
+    /// - menace attackers with zero blockers (unblocked is legal —
+    ///   menace constrains HOW the attacker is blocked, not whether
+    ///   it must be)
+    /// - menace attackers with two or more blockers (multi-block
+    ///   requirement satisfied)
+    ///
+    /// Used as a post-declare validator: callers run this after all
+    /// blocks have been declared and unwind / reject the assignment
+    /// when it returns false. We don't enforce at `declare_blocker`
+    /// because the first blocker assigned to a menace attacker is
+    /// illegal in isolation but legal once a second is added —
+    /// declare-time rejection would force an "all-at-once"
+    /// submission API.
+    ///
+    /// Read-only: never mutates state. Returns `true` for unknown
+    /// `attacker_id` (no blockers can match → 0 blockers → legal).
+    fn is_legal_block_assignment(&self, attacker_id: u32) -> bool {
+        let blocker_count = self
+            .blockers
+            .iter()
+            .filter(|(a, _)| *a == attacker_id)
+            .count();
+        if battlefield_has_keyword(self, attacker_id, "menace") && blocker_count == 1 {
+            return false;
+        }
+        true
     }
 
     /// Resolve one round of combat damage.

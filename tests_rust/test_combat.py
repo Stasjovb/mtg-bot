@@ -1220,3 +1220,166 @@ def test_flying_plus_reach_attacker_can_be_blocked_by_anything(synthetic_state):
         "flying+reach attacker can be blocked by a flying blocker"
     )
     assert (attacker_id, flying_blocker_id) in synthetic_state.get_blockers()
+
+
+# ----------------------------- defender ------------------------------------
+#
+# Defender (CR 702.3): a creature with defender can't attack. The keyword has
+# no impact on blocking, on combat damage, or on any other phase — only on
+# eligibility for `declare_attacker`.
+#
+# Implementation hook in `state_ops_combat.rs:declare_attacker`: today the
+# eligibility gates are { battlefield creature, untapped, not summoning-sick
+# (modulo haste) }. This slice adds: if the printing carries the
+# `"defender"` keyword, refuse the declaration.
+#
+# Defender wins over haste — a creature with both keywords still can't
+# attack (haste only bypasses summoning-sickness; it doesn't grant the
+# ability to attack a creature otherwise prohibited from attacking).
+
+
+def test_defender_creature_cannot_attack(synthetic_state):
+    """A 0/4 defender creature cannot be declared as attacker
+    (CR 702.3). ``declare_attacker`` returns False; nothing pushed onto
+    ``state.attackers``; the would-be attacker is NOT tapped as a
+    side-effect of the rejection."""
+    attacker_id = synthetic_state.register_and_inject_object(
+        _keyword_creature_dict(0, 4, ["defender"]), 0, ZONE_BATTLEFIELD
+    )
+    assert synthetic_state.is_tapped(attacker_id) is False
+    assert synthetic_state.is_summoning_sick(attacker_id) is False
+    assert synthetic_state.declare_attacker(attacker_id) is False, (
+        "defender creature must not be declarable as attacker (CR 702.3)"
+    )
+    assert synthetic_state.get_attackers() == []
+    # And the rejection didn't tap it as a side effect.
+    assert synthetic_state.is_tapped(attacker_id) is False
+
+
+def test_non_defender_creature_attacks_normally(synthetic_state):
+    """Sanity / regression: a vanilla 2/2 attacker with no keywords still
+    attacks fine. The defender branch must not have leaked into the
+    default path."""
+    attacker_id = synthetic_state.register_and_inject_object(
+        _keyword_creature_dict(2, 2, []), 0, ZONE_BATTLEFIELD
+    )
+    assert synthetic_state.declare_attacker(attacker_id) is True
+    assert attacker_id in synthetic_state.get_attackers()
+    assert synthetic_state.is_tapped(attacker_id) is True
+
+
+def test_defender_plus_haste_still_cannot_attack(synthetic_state):
+    """Composition: a creature with BOTH defender and haste still can't
+    attack. Haste only bypasses summoning sickness; it does NOT grant
+    the ability to attack a creature whose printing forbids attacking
+    (defender wins)."""
+    attacker_id = synthetic_state.register_and_inject_object(
+        _keyword_creature_dict(0, 4, ["defender", "haste"]), 0, ZONE_BATTLEFIELD
+    )
+    assert synthetic_state.declare_attacker(attacker_id) is False, (
+        "defender+haste: defender wins. Haste does not override defender."
+    )
+    assert synthetic_state.get_attackers() == []
+
+
+# ----------------------------- menace --------------------------------------
+#
+# Menace (CR 702.110): a creature with menace can't be blocked except by two
+# or more creatures.
+#
+# **Enforcement model: validation predicate, not declare-time rejection.**
+# `declare_blocker` for a menace attacker is chicken-and-egg with the
+# multi-block requirement — the first blocker assigned to a menace
+# attacker is illegal in isolation but legal once a second blocker is
+# added. Rejecting at declare time would force callers to declare the
+# blockers in some artificial "all at once" form.
+#
+# Instead, this slice exposes a `is_legal_block_assignment(attacker_id)`
+# predicate on `GameState` that returns False if the attacker has menace
+# AND exactly one blocker assigned, True otherwise (zero blockers, 2+
+# blockers, or no menace). Callers run the predicate after all blocks
+# have been declared and unwind / reject the assignment if it returns
+# False.
+#
+# Scope simplifications:
+#
+# - The predicate only checks the menace constraint. Other multi-blocker
+#   constraints (e.g. "can't be blocked by more than two creatures") are
+#   deferred.
+# - The predicate only counts entries in `self.blockers` matching the
+#   attacker. Blockers not actually present in the Vec are ignored.
+# - The predicate is read-only; calling it does not mutate state.
+
+
+def test_menace_attacker_cannot_be_blocked_by_one_blocker_alone(synthetic_state):
+    """A 3/3 menace attacker is "blocked" by a single non-menace
+    blocker. ``is_legal_block_assignment(attacker_id)`` returns False —
+    menace requires two or more blockers (CR 702.110)."""
+    attacker_id = synthetic_state.register_and_inject_object(
+        _keyword_creature_dict(3, 3, ["menace"]), 0, ZONE_BATTLEFIELD
+    )
+    blocker_id = synthetic_state.register_and_inject_object(
+        _keyword_creature_dict(2, 2, []), 1, ZONE_BATTLEFIELD
+    )
+    assert synthetic_state.declare_attacker(attacker_id) is True
+    assert synthetic_state.declare_blocker(blocker_id, attacker_id) is True
+    # The block landed on the Vec (declare-time accepts), but the
+    # validation predicate refuses the assignment because it's a single
+    # blocker against a menace attacker.
+    assert synthetic_state.is_legal_block_assignment(attacker_id) is False, (
+        "menace attacker with exactly 1 blocker must fail the legality "
+        "predicate (CR 702.110)"
+    )
+
+
+def test_menace_attacker_blocked_by_two_creatures_legal(synthetic_state):
+    """Same setup, but two blockers. ``is_legal_block_assignment``
+    returns True — menace's "two or more" requirement is satisfied."""
+    attacker_id = synthetic_state.register_and_inject_object(
+        _keyword_creature_dict(3, 3, ["menace"]), 0, ZONE_BATTLEFIELD
+    )
+    blocker_a = synthetic_state.register_and_inject_object(
+        _keyword_creature_dict(2, 2, []), 1, ZONE_BATTLEFIELD
+    )
+    blocker_b = synthetic_state.register_and_inject_object(
+        _keyword_creature_dict(2, 2, []), 1, ZONE_BATTLEFIELD
+    )
+    assert synthetic_state.declare_attacker(attacker_id) is True
+    assert synthetic_state.declare_blocker(blocker_a, attacker_id) is True
+    assert synthetic_state.declare_blocker(blocker_b, attacker_id) is True
+    assert synthetic_state.is_legal_block_assignment(attacker_id) is True, (
+        "menace attacker with 2+ blockers satisfies the multi-block "
+        "requirement (CR 702.110)"
+    )
+
+
+def test_menace_attacker_unblocked_legal(synthetic_state):
+    """Zero blockers against a menace attacker is legal — menace only
+    constrains how the attacker CAN be blocked (must be 2+), not whether
+    it must be blocked at all. An unblocked menace attacker passes the
+    predicate."""
+    attacker_id = synthetic_state.register_and_inject_object(
+        _keyword_creature_dict(3, 3, ["menace"]), 0, ZONE_BATTLEFIELD
+    )
+    assert synthetic_state.declare_attacker(attacker_id) is True
+    # No blockers declared.
+    assert synthetic_state.is_legal_block_assignment(attacker_id) is True, (
+        "unblocked menace attacker is legal — menace doesn't require blocking"
+    )
+
+
+def test_non_menace_attacker_with_one_blocker_legal(synthetic_state):
+    """Sanity / regression: a vanilla attacker with a single blocker
+    passes the predicate. The menace branch must not have leaked into
+    the default path."""
+    attacker_id = synthetic_state.register_and_inject_object(
+        _keyword_creature_dict(2, 2, []), 0, ZONE_BATTLEFIELD
+    )
+    blocker_id = synthetic_state.register_and_inject_object(
+        _keyword_creature_dict(2, 2, []), 1, ZONE_BATTLEFIELD
+    )
+    assert synthetic_state.declare_attacker(attacker_id) is True
+    assert synthetic_state.declare_blocker(blocker_id, attacker_id) is True
+    assert synthetic_state.is_legal_block_assignment(attacker_id) is True, (
+        "non-menace attacker with one blocker is legal"
+    )
