@@ -245,6 +245,36 @@ impl GameState {
                 let player_id = slf.borrow().priority_player;
                 slf.call_method1("cast_creature", (card_id, player_id))?;
             }
+            Action::TurnFaceUp { card_id: _ } => {
+                // First-slice scope (mirrors round-23's ActivateAbility
+                // pattern): ship the Action variant + bridge round-trip
+                // scaffold; the dispatch arm is a stub because no Rust
+                // face-down GameObject state exists yet. The
+                // `GameObject` struct has no `face_down` flag today, and
+                // there's no Spacecraft charge-counter resolution
+                // primitive — there's nothing for a `turn_face_up`
+                // dispatch to flip. A future slice adds the per-object
+                // face-down state field + flip primitive (analogous to
+                // how `tap` / `untap` toggle the `tapped` flag) and then
+                // flips this arm to a real `call_method1(
+                // "turn_face_up", (card_id, priority_player))` dispatch
+                // — at which point the variant + bridge already shipped
+                // here keep working unchanged. The variant ships now so
+                // callers building Action dicts can already use the
+                // `turn_face_up` shape and hit a clear "not implemented
+                // yet" error path instead of `unknown action kind`,
+                // and the parity harness surfaces the gap loudly when
+                // Python emits a TurnFaceUp decision (CR 701.34 /
+                // 707.4 — EoE Spacecraft station+launch is the
+                // production driver).
+                return Err(pyo3::exceptions::PyValueError::new_err(
+                    "TurnFaceUp dispatch not implemented yet (Rust face-down \
+                     GameObject state + Spacecraft primitive missing; future \
+                     slice flips the dispatch). This slice ships only the \
+                     Action variant + bridge round-trip — apply_action raises \
+                     to surface the gap loudly to the parity harness."
+                ));
+            }
             Action::ActivateAbility {
                 source_id: _,
                 ability_index: _,

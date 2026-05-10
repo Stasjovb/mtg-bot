@@ -181,6 +181,27 @@ pub enum Action {
         use_impending: bool,
         cast_room_half: Option<String>,
     },
+    /// Turn a face-down permanent face up by paying its underlying
+    /// card's mana cost (CR 701.34 / 707.4 — Morph / Manifest Dread
+    /// flip + Edge of Eternities Spacecraft station / launch). `card_id`
+    /// is the GameObject on the priority player's battlefield to flip.
+    /// Mirrors Python's `TurnFaceUp(card_id: int)` dataclass — a
+    /// single-int shape, identical to `PlayLand`. CR 701.34 / 707.4 is
+    /// a special action — does not use the stack; costs are paid
+    /// immediately and the flip resolves at once.
+    ///
+    /// **Dispatch is currently a stub.** No Rust face-down GameObject
+    /// state exists yet (the `GameObject` struct has no `face_down`
+    /// flag, and there's no Spacecraft charge-counter resolution), so
+    /// there's nothing for a `turn_face_up` primitive to flip. Until a
+    /// future slice adds the per-object face-down state + the flip
+    /// primitive (analogous to how `tap` / `untap` toggle the existing
+    /// `tapped` flag), `apply_action` raises `ValueError` for this
+    /// variant; the variant + bridge round-trip ship now, so a
+    /// follow-up slice only needs to flip the dispatch arm. Mirrors the
+    /// round-23 ActivateAbility "scaffold the variant, defer the
+    /// dispatch semantics" pattern.
+    TurnFaceUp { card_id: u32 },
 }
 
 // --- dict -> Rust ------------------------------------------------
@@ -327,8 +348,17 @@ pub fn parse_action(dict: &Bound<'_, PyDict>) -> PyResult<Action> {
                 cast_room_half,
             })
         }
+        "turn_face_up" => {
+            // Single-int shape mirroring `play_land` — `card_id` is the
+            // GameObject id of the face-down permanent on the priority
+            // player's battlefield to flip face up. Missing key →
+            // `KeyError` via `require`; wrong type → `TypeError` /
+            // `ValueError` from PyO3's `extract::<u32>` machinery.
+            let card_id: u32 = require(dict, "card_id")?.extract()?;
+            Ok(Action::TurnFaceUp { card_id })
+        }
         other => Err(PyValueError::new_err(format!(
-            "unknown action kind {other:?}; valid: pass_priority, play_land, declare_attackers, declare_blockers, activate_ability, cast_spell"
+            "unknown action kind {other:?}; valid: pass_priority, play_land, declare_attackers, declare_blockers, activate_ability, cast_spell, turn_face_up"
         ))),
     }
 }
@@ -407,6 +437,10 @@ pub fn action_to_pydict<'py>(
             // `Some(s)` -> Python str. PyO3's `set_item` handles both
             // via the `IntoPy` impl on `Option<T>`.
             d.set_item("cast_room_half", cast_room_half.clone())?;
+        }
+        Action::TurnFaceUp { card_id } => {
+            d.set_item("kind", "turn_face_up")?;
+            d.set_item("card_id", *card_id)?;
         }
     }
     Ok(d)
