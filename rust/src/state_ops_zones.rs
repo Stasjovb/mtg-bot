@@ -29,6 +29,7 @@
 //! convention rather than a bug.
 
 use crate::state::{GameObject, GameState, Zone};
+use pyo3::exceptions::PyIndexError;
 use pyo3::prelude::*;
 use std::sync::Arc;
 
@@ -195,5 +196,66 @@ impl GameState {
         let drawn_id = obj.id;
         Arc::make_mut(&mut player.hand).push(obj);
         Some(drawn_id)
+    }
+
+    /// Reanimation primitive — move the object with id `obj_id` out of
+    /// `player_id`'s graveyard and onto that player's battlefield with
+    /// `summoning_sick = true`.
+    ///
+    /// Specific variant of `move_object` that is hard-coded to
+    /// graveyard -> battlefield: the search is restricted to the named
+    /// player's graveyard (no cross-player or cross-zone fallback) so
+    /// callers can't accidentally yank an opponent's graveyard card or
+    /// reanimate something that's still on the battlefield.
+    ///
+    /// **Per-object state reset on zone change** (CR 400.7) — `tapped`,
+    /// `damage`, `counters` are zeroed on the way onto the battlefield.
+    /// `summoning_sick` is the deliberate exception: stamped `true`
+    /// per CR 302.1 (the new permanent has summoning sickness; the
+    /// reanimated creature can't attack on the turn it enters), so a
+    /// reanimated creature behaves like a freshly-cast one. Defensive
+    /// reset on damage even though a graveyard object shouldn't carry
+    /// damage in practice (CR 614.12 — damage clears on zone change
+    /// already), but the test suite stamps damage onto the graveyard
+    /// object directly to validate the reset arm.
+    ///
+    /// Returns `Ok(true)` on a successful move, `Ok(false)` if no
+    /// object with `obj_id` lives in the named player's graveyard
+    /// (whether the id is unknown, on the battlefield, in the hand,
+    /// in the library, or in someone else's graveyard). Raises
+    /// `IndexError` on out-of-range `player_id` per the loud-fail
+    /// convention of every other player-indexed primitive
+    /// (`gain_life`, `pay_mana_cost`, `deal_damage_to_player`,
+    /// `search_library_for_first_of_type`).
+    ///
+    /// CoW-safe: each zone Vec mutation routes through `Arc::make_mut`.
+    fn move_object_from_graveyard_to_battlefield(
+        &mut self,
+        player_id: u8,
+        obj_id: u32,
+    ) -> PyResult<bool> {
+        let idx = player_id as usize;
+        if idx >= 2 {
+            return Err(PyIndexError::new_err(format!(
+                "player_id {player_id} out of range (must be 0 or 1)"
+            )));
+        }
+        let player = &mut self.players[idx];
+        let pos = match player.graveyard.iter().position(|o| o.id == obj_id) {
+            Some(p) => p,
+            None => return Ok(false),
+        };
+        let gy = Arc::make_mut(&mut player.graveyard);
+        let mut obj = gy.remove(pos);
+        // Per-object state reset (CR 400.7) + the summoning-sickness
+        // stamp (CR 302.1). controller stays the same — reanimating
+        // onto the player's own battlefield.
+        obj.zone = ZONE_BATTLEFIELD;
+        obj.tapped = false;
+        obj.damage = 0;
+        obj.counters = 0;
+        obj.summoning_sick = true;
+        Arc::make_mut(&mut player.battlefield).push(obj);
+        Ok(true)
     }
 }

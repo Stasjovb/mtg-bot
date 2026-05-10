@@ -122,6 +122,7 @@ the test lands in a commit.
 | rust(library-search-and-shuffle): tutor-style search + always shuffle (CR 701.19) | tests_rust/test_library.py extend | green | feature/rust-tdd-search-and-shuffle |
 | rust(mulligan-london): mulligan_to_n parameterized hand size (CR 103.4) | tests_rust/test_mulligan.py extend | green | feature/rust-tdd-mulligan-london |
 | rust(cleanup-end-turn-wrap): end_turn_and_start_next composition primitive | tests_rust/test_cleanup.py extend | green | feature/rust-tdd-end-of-turn-wrap |
+| rust(zones-reanimate): move_object_from_graveyard_to_battlefield primitive (CR 302.1 / 400.7) | tests_rust/test_zones.py extend | green | feature/rust-tdd-graveyard-reanimation |
 
 ## Build invocation reminder
 
