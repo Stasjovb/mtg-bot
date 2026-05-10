@@ -663,6 +663,93 @@ def test_add_mana_to_pool_negative_amount_raises_at_register_time():
         )
 
 
+# --- SearchLibraryForBasicLandTapped (round-23 effect-coverage slice) -
+
+
+def test_round_trip_search_library_for_basic_land_tapped_effect():
+    """CR 701.19 search + 701.22 shuffle — Rampant Growth /
+    Beamsaw Prospector / Kavaron Harrier pattern. Round-trip the
+    default-count effect through the bridge."""
+    reg = mtg_bot_engine.Registry()
+    pid = reg.register_printing(
+        {
+            "name": "Rampant Growth-ish",
+            "card_types": ["Sorcery"],
+            "effects": [
+                {
+                    "kind": "search_library_for_basic_land_tapped",
+                    "count": 1,
+                }
+            ],
+        }
+    )
+    effects = [dict(e) for e in reg.get_printing_effects(pid)]
+    assert effects[0] == {
+        "kind": "search_library_for_basic_land_tapped",
+        "count": 1,
+    }
+
+
+def test_round_trip_search_library_for_basic_land_tapped_count_two():
+    """A Larval Scoutlander-shaped count=2 entry — bicycle/skyshroud
+    pattern — round-trips with its count preserved."""
+    reg = mtg_bot_engine.Registry()
+    pid = reg.register_printing(
+        {
+            "name": "Larval-ish",
+            "effects": [
+                {
+                    "kind": "search_library_for_basic_land_tapped",
+                    "count": 2,
+                }
+            ],
+        }
+    )
+    effects = [dict(e) for e in reg.get_printing_effects(pid)]
+    assert effects[0]["kind"] == "search_library_for_basic_land_tapped"
+    assert effects[0]["count"] == 2
+
+
+def test_search_library_for_basic_land_tapped_default_count_is_one():
+    """Python's `SearchLibraryForBasicLandTapped(count: int = 1)`
+    dataclass has count default to 1. The Rust parser mirrors that:
+    an entry with no `count` key registers as count=1 and round-trips
+    that way."""
+    reg = mtg_bot_engine.Registry()
+    pid = reg.register_printing(
+        {
+            "name": "Default Count",
+            "effects": [
+                {"kind": "search_library_for_basic_land_tapped"}
+            ],
+        }
+    )
+    effects = [dict(e) for e in reg.get_printing_effects(pid)]
+    assert effects[0] == {
+        "kind": "search_library_for_basic_land_tapped",
+        "count": 1,
+    }
+
+
+def test_search_library_for_basic_land_tapped_negative_count_raises():
+    """Register-time guard on negative count (matches the
+    apply_effect guard, surfaced earlier in the pipeline). Mirrors
+    AddManaToPool's negative-amount register-time check."""
+    reg = mtg_bot_engine.Registry()
+    with pytest.raises(ValueError, match="non-negative"):
+        reg.register_printing(
+            {
+                "name": "Broken",
+                "effects": [
+                    {
+                        "kind": "search_library_for_basic_land_tapped",
+                        "count": -1,
+                    }
+                ],
+            }
+        )
+
+
 def test_vanilla_card_with_no_mana_cost_or_effects():
     reg = mtg_bot_engine.Registry()
     pid = reg.register_printing(VANILLA_BLANK)

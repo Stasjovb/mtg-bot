@@ -159,6 +159,48 @@ pub enum Effect {
     /// schema needs it (no EoE card today combines mana production
     /// with the restriction tagging through this dispatch path).
     AddManaToPool { color: String, amount: i32 },
+    /// Search controller's library for up to ``count`` basic lands,
+    /// put each onto the battlefield tapped, then shuffle the
+    /// library (CR 701.19 search + 701.22 shuffle). Powers Rampant
+    /// Growth, Beamsaw Prospector, Kavaron Harrier — 15 cards in
+    /// the EoE pool per round-20 measurement. The "basic land"
+    /// filter and "tapped" arrival flag are part of the variant's
+    /// spec (no field). The single `count` field mirrors Python's
+    /// `SearchLibraryForBasicLandTapped(count: int = 1)` dataclass
+    /// shape — a count > 1 finds up to `count` basic lands one at
+    /// a time (Larval Scoutlander / cycling-land bodies).
+    ///
+    /// **First-slice scope:**
+    /// - **Deterministic first-match pick.** Scans the library
+    ///   top-to-bottom (Vec iter().rev()) and grabs the topmost
+    ///   matching object. Real MTG lets the player choose any
+    ///   matching card; that's a future plumbing decision once
+    ///   decision callbacks exist.
+    /// - **Basic land filter = card_types contains "Land".** The
+    ///   Rust bridge has no `supertypes` field today, so the
+    ///   "basic" half of "basic land" is approximated by the
+    ///   `card_types` Land check. In the EoE pool every basic land
+    ///   is exactly card_types=["Land"] with no compound non-basic
+    ///   land carrying this dispatch, so the proxy is faithful for
+    ///   the current set. See SEARCH_LIMITATIONS entry for the
+    ///   deferred supertypes work.
+    /// - **No shuffle.** CR 701.19 says searches always shuffle the
+    ///   library regardless of search outcome. This slice
+    ///   deliberately does NOT shuffle — the deterministic first-
+    ///   match pick makes the dispatch reproducible without
+    ///   threading an RNG seed through `apply_effect`. The
+    ///   `search_library_for_first_of_type_and_shuffle` primitive
+    ///   in `state_ops_library.rs` is the right composition for a
+    ///   future slice once RNG-externalization lands; see
+    ///   SEARCH_LIMITATIONS entry.
+    /// - **count<0 raises** loudly (mirrors ScryN / DealDamage /
+    ///   DamageEach* / CreateToken raise-on-negative shape).
+    /// - **count=0 is a legal no-op** (mirrors GainLife / DrawCards
+    ///   / Mill / CreateToken zero-count conventions).
+    /// - **Empty library / count > matching lands** stops early
+    ///   silently — partial fill is allowed (Python's
+    ///   `next(... None)` short-circuit on miss).
+    SearchLibraryForBasicLandTapped { count: i32 },
 }
 
 #[derive(Clone, Debug)]
@@ -393,8 +435,29 @@ fn parse_effect(dict: &Bound<'_, PyDict>) -> PyResult<Effect> {
             }
             Ok(Effect::AddManaToPool { color, amount })
         }
+        "search_library_for_basic_land_tapped" => {
+            // Python's `SearchLibraryForBasicLandTapped(count: int = 1)`
+            // has a count field with default 1. Mirror that here:
+            // missing `count` defaults to 1, present `count` extracts
+            // as i32. Negative counts surface at register time
+            // (defense-in-depth; `apply_effect` re-checks).
+            let count: i32 = match dict.get_item("count")? {
+                Some(c) => c.extract().map_err(|e| {
+                    PyValueError::new_err(format!(
+                        "search_library_for_basic_land_tapped.count must be an integer (got: {e})"
+                    ))
+                })?,
+                None => 1,
+            };
+            if count < 0 {
+                return Err(PyValueError::new_err(format!(
+                    "search_library_for_basic_land_tapped: count must be non-negative, got {count}"
+                )));
+            }
+            Ok(Effect::SearchLibraryForBasicLandTapped { count })
+        }
         other => Err(PyValueError::new_err(format!(
-            "unknown effect kind {other:?}; valid: deal_damage, draw_cards, gain_life, return_to_hand, mill, exile_target, tap_target, untap_target, sacrifice, add_counters, discard_card, scry_n, destroy_target, damage_each_opponent, damage_each_creature, create_token, add_mana_to_pool"
+            "unknown effect kind {other:?}; valid: deal_damage, draw_cards, gain_life, return_to_hand, mill, exile_target, tap_target, untap_target, sacrifice, add_counters, discard_card, scry_n, destroy_target, damage_each_opponent, damage_each_creature, create_token, add_mana_to_pool, search_library_for_basic_land_tapped"
         ))),
     }
 }
@@ -648,6 +711,10 @@ fn effect_to_pydict<'py>(
             d.set_item("kind", "add_mana_to_pool")?;
             d.set_item("color", color)?;
             d.set_item("amount", *amount)?;
+        }
+        Effect::SearchLibraryForBasicLandTapped { count } => {
+            d.set_item("kind", "search_library_for_basic_land_tapped")?;
+            d.set_item("count", *count)?;
         }
     }
     Ok(d)
