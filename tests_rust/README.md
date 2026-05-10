@@ -168,6 +168,7 @@ the test lands in a commit.
 | rust(effect-destroy-all-creatures): Wrath of God (CR 701.7 AOE) | tests_rust/test_resolve.py extend | green  | feature/rust-effect-destroy-all-creatures |
 | rust(effect-destroy-target-non-land-permanent): non-land destroy (CR 701.7) | tests_rust/test_resolve.py extend | green  | feature/rust-effect-destroy-target-non-land-permanent |
 | rust(activate-ability-mana-primitive): flip ActivateAbility stub to real (mana abilities) | tests_rust/test_actions.py extend | green  | feature/rust-activate-ability-mana-primitive |
+| rust(effect-deal-damage-any-target): Lightning Bolt-style any-target damage (CR 701.4) | tests_rust/test_resolve.py extend | green  | feature/rust-effect-deal-damage-any-target |
 
 ## Build invocation reminder
 

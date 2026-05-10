@@ -481,6 +481,21 @@ pub enum Effect {
     /// with a Land-skip + indestructible-skip filter. Unit variant —
     /// the "non-land permanent" target shape is intrinsic.
     DestroyTargetNonlandPermanent,
+    /// Deal `amount` damage to any target — creature OR player
+    /// (Lightning Bolt pattern, CR 701.4). 7 cards in EoE pool per
+    /// round-20 measurement (Debris Field Crusher etc.). Mirrors
+    /// Python's `DealDamageAnyTarget(DealDamage)` constructor sugar —
+    /// the "any target" filter is intrinsic to the variant, distinct
+    /// from `DealDamage { target: AnyPlayer/AnyCreature }` which
+    /// requires a target dict.
+    ///
+    /// First-slice deterministic choice: prefer the defender's first
+    /// creature on their battlefield (mirrors the `AnyCreature` arm
+    /// in `DealDamage`); fall back to defender-as-player life
+    /// subtraction (mirrors the `AnyPlayer` arm) when no creature is
+    /// available. Future slice plumbs an explicit choice callback.
+    /// Negative `amount` raises at register and at resolve time.
+    DealDamageAnyTarget { amount: i32 },
 }
 
 #[derive(Clone, Debug)]
@@ -846,8 +861,24 @@ fn parse_effect(dict: &Bound<'_, PyDict>) -> PyResult<Effect> {
             // ("non-Land, non-indestructible"). Extra keys ignored.
             Ok(Effect::DestroyTargetNonlandPermanent)
         }
+        "deal_damage_any_target" => {
+            // Python's `DealDamageAnyTarget(DealDamage)` carries only
+            // the inherited `amount` field; the "any target" filter is
+            // intrinsic to the variant (no `target` dict to parse —
+            // distinct from `deal_damage`'s required `target` field).
+            // Missing `amount` is a KeyError at register time;
+            // negative amount surfaces at register time (defense-in-
+            // depth; `apply_effect` re-checks).
+            let amount: i32 = require(dict, "amount")?.extract()?;
+            if amount < 0 {
+                return Err(PyValueError::new_err(format!(
+                    "deal_damage_any_target: amount must be non-negative, got {amount}"
+                )));
+            }
+            Ok(Effect::DealDamageAnyTarget { amount })
+        }
         other => Err(PyValueError::new_err(format!(
-            "unknown effect kind {other:?}; valid: deal_damage, draw_cards, gain_life, return_to_hand, mill, exile_target, tap_target, untap_target, sacrifice, add_counters, discard_card, scry_n, destroy_target, damage_each_opponent, damage_each_creature, create_token, add_mana_to_pool, search_library_for_basic_land_tapped, put_plus_one_counter_on_self, surveil, counter_target_spell, return_creature_from_your_graveyard_to_battlefield, discard_self, each_opponent_loses_life, destroy_all_creatures, destroy_target_nonland_permanent"
+            "unknown effect kind {other:?}; valid: deal_damage, draw_cards, gain_life, return_to_hand, mill, exile_target, tap_target, untap_target, sacrifice, add_counters, discard_card, scry_n, destroy_target, damage_each_opponent, damage_each_creature, create_token, add_mana_to_pool, search_library_for_basic_land_tapped, put_plus_one_counter_on_self, surveil, counter_target_spell, return_creature_from_your_graveyard_to_battlefield, discard_self, each_opponent_loses_life, destroy_all_creatures, destroy_target_nonland_permanent, deal_damage_any_target"
         ))),
     }
 }
@@ -1133,6 +1164,10 @@ fn effect_to_pydict<'py>(
         }
         Effect::DestroyTargetNonlandPermanent => {
             d.set_item("kind", "destroy_target_nonland_permanent")?;
+        }
+        Effect::DealDamageAnyTarget { amount } => {
+            d.set_item("kind", "deal_damage_any_target")?;
+            d.set_item("amount", *amount)?;
         }
     }
     Ok(d)

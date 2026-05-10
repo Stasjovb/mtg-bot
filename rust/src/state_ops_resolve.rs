@@ -1942,6 +1942,65 @@ fn apply_effect(
                 Arc::make_mut(&mut state.players[defender_idx].graveyard).push(obj);
             }
         }
+        // DealDamageAnyTarget — Lightning Bolt's "any target" shape
+        // (CR 701.4). The "any target" filter is intrinsic to the
+        // variant; distinct from the existing DealDamage variant
+        // which dispatches on TargetFilter::{AnyPlayer, AnyCreature}.
+        //
+        // **First-slice deterministic choice**: scan the defender's
+        // battlefield top-to-bottom and pick the FIRST object whose
+        // printing's `card_types` contains "Creature". If none, fall
+        // back to the defender-as-player life-subtraction shape. This
+        // composes the AnyCreature arm's damage-write shape with the
+        // AnyPlayer arm's life-subtraction shape from the existing
+        // DealDamage match. Future slice plumbs an explicit choice
+        // callback.
+        //
+        // **Negative amount raises** at register time AND here as
+        // defense-in-depth (mirrors the round-3 raise-on-negative
+        // shape for DealDamage's amount; registered effects already
+        // validated `amount >= 0`, but synthetic / injected printings
+        // could bypass the parser).
+        Effect::DealDamageAnyTarget { amount } => {
+            if *amount < 0 {
+                return Err(PyValueError::new_err(format!(
+                    "DealDamageAnyTarget amount must be non-negative, got {amount}"
+                )));
+            }
+            let defender_idx = (1 - state.active_player) as usize;
+            let amount_i16 = (*amount).min(i16::MAX as i32) as i16;
+            // First-slice deterministic choice: prefer defender's
+            // first creature (mirrors the AnyCreature arm's
+            // type-filtered scan); fall back to defender-as-player.
+            let creature_target: Option<u32> = {
+                let bf = &state.players[defender_idx].battlefield;
+                let registry = &state.registry;
+                bf.iter().find_map(|obj| {
+                    let printing = registry.lookup(obj.printing_id)?;
+                    if printing.card_types.iter().any(|t| t == "Creature") {
+                        Some(obj.id)
+                    } else {
+                        None
+                    }
+                })
+            };
+            if let Some(target_id) = creature_target {
+                let bf_mut: &mut Vec<GameObject> =
+                    Arc::make_mut(&mut state.players[defender_idx].battlefield);
+                for obj in bf_mut.iter_mut() {
+                    if obj.id == target_id {
+                        obj.damage = obj.damage.saturating_add(amount_i16);
+                        break;
+                    }
+                }
+            } else {
+                // No creature on defender's battlefield — damage the
+                // player directly. Mirror the AnyPlayer arm's
+                // life-subtraction shape (raw `-=`, no saturation —
+                // life is i32 and amounts are bounded by deck pool).
+                state.players[defender_idx].life -= *amount;
+            }
+        }
     }
     Ok(())
 }
