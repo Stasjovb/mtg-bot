@@ -275,3 +275,188 @@ def test_apply_action_unknown_kind_message_mentions_play_land(synthetic_state):
     future variant addition forces the message to grow."""
     with pytest.raises(ValueError, match=r"play_land"):
         synthetic_state.apply_action({"kind": "frobnicate"})
+
+
+# --- DeclareAttackers ------------------------------------------------
+#
+# Round-23 slice (Phase 3, batch 2): extend the Action enum +
+# apply_action dispatcher with ``Action::DeclareAttackers {
+# attacker_ids }``. The Python dataclass ``DeclareAttackers(
+# attacker_ids: frozenset[int])`` carries a frozenset; the bridge
+# serializes it to a list at the FFI boundary. Rust stores it as
+# ``Vec<u32>`` to preserve iteration order (the dispatch loop calls
+# ``declare_attacker(obj_id)`` per id, and tests want deterministic
+# application order).
+#
+# Synthetic-state reminder (cf. ``tests_rust/test_combat.py``):
+# - Player 0 battlefield: ids 0..4 Forest (non-creature, P=None),
+#   5..9 Grizzly Bears (2/2 creature, not summoning-sick — seeded
+#   onto the battlefield, not cast).
+# - Player 0 hand: ids 10..16, all Llanowar Elves (1/1).
+# - Player 1 battlefield: ids 67..71 Forest, 72..76 Grizzly Bears.
+
+P0_FIRST_BEAR_ID = 5  # 5..9 are 2/2 Grizzly Bears, not summoning-sick
+
+
+def test_apply_action_declare_attackers_empty_set_no_op(synthetic_state):
+    """Empty ``attacker_ids`` set: the loop body never runs and
+    ``state.attackers`` stays empty. No error raised. Locks in that
+    the dispatcher tolerates the zero-attackers case (Python's
+    ``DeclareAttackers()`` default is ``frozenset()``)."""
+    assert synthetic_state.get_attackers() == []
+    synthetic_state.apply_action(
+        {"kind": "declare_attackers", "attacker_ids": []}
+    )
+    assert synthetic_state.get_attackers() == []
+
+
+def test_apply_action_declare_attackers_single_attacker(synthetic_state):
+    """Single attacker id: one creature declares; ``state.attackers``
+    contains that id; the creature is tapped (per the round-5
+    primitive's tap-on-declare semantics)."""
+    bear_id = P0_FIRST_BEAR_ID
+    assert synthetic_state.is_tapped(bear_id) is False
+
+    synthetic_state.apply_action(
+        {"kind": "declare_attackers", "attacker_ids": [bear_id]}
+    )
+
+    assert synthetic_state.get_attackers() == [bear_id]
+    assert synthetic_state.is_tapped(bear_id) is True
+
+
+def test_apply_action_declare_attackers_multiple(synthetic_state):
+    """Multiple attacker ids: every eligible id is declared and the
+    final ``state.attackers`` reflects all of them in dispatch order."""
+    ids = [P0_FIRST_BEAR_ID, P0_FIRST_BEAR_ID + 1, P0_FIRST_BEAR_ID + 2]
+
+    synthetic_state.apply_action(
+        {"kind": "declare_attackers", "attacker_ids": ids}
+    )
+
+    assert synthetic_state.get_attackers() == ids
+    for bear_id in ids:
+        assert synthetic_state.is_tapped(bear_id) is True
+
+
+def test_apply_action_declare_attackers_iteration_order_preserved(synthetic_state):
+    """Passing the ids in a non-sorted order — [bear+2, bear, bear+1]
+    — must produce a ``state.attackers`` list in the SAME order
+    (Vec iteration is stable, not sorted). Locks in the deterministic
+    application order — callers that want sorted dispatch sort
+    BEFORE passing; the dispatcher doesn't impose an order."""
+    a = P0_FIRST_BEAR_ID + 2
+    b = P0_FIRST_BEAR_ID
+    c = P0_FIRST_BEAR_ID + 1
+
+    synthetic_state.apply_action(
+        {"kind": "declare_attackers", "attacker_ids": [a, b, c]}
+    )
+
+    # NOT sorted — exactly the input order.
+    assert synthetic_state.get_attackers() == [a, b, c]
+
+
+def test_apply_action_declare_attackers_missing_key_raises_key_error(synthetic_state):
+    """Missing the ``attacker_ids`` key raises ``KeyError`` —
+    ``parse_action`` rejects before dispatch (single point of
+    validation, mirrors the ``card_id``-missing error shape on
+    ``play_land``)."""
+    with pytest.raises(KeyError, match="attacker_ids"):
+        synthetic_state.apply_action({"kind": "declare_attackers"})
+    # No mutation.
+    assert synthetic_state.get_attackers() == []
+
+
+def test_apply_action_declare_attackers_accepts_python_list(synthetic_state):
+    """``attacker_ids`` extracts as ``Vec<u32>`` from any Python
+    iterable. A plain ``list`` works (this is the bridge's canonical
+    on-the-wire shape — the dict serialization at the bridge
+    boundary converts the dataclass's frozenset to a list)."""
+    bear_id = P0_FIRST_BEAR_ID
+    # list literal — the standard shape.
+    synthetic_state.apply_action(
+        {"kind": "declare_attackers", "attacker_ids": [bear_id]}
+    )
+    assert synthetic_state.get_attackers() == [bear_id]
+
+
+def test_apply_action_declare_attackers_accepts_frozenset(synthetic_state):
+    """``attacker_ids`` also works when passed as a Python
+    ``frozenset`` — same shape as Python's dataclass field. PyO3's
+    ``extract::<Vec<u32>>()`` accepts any iterable, so the bridge
+    doesn't have to be the only on-the-wire shape. Order is not
+    asserted because frozenset has no defined iteration order;
+    membership is enough."""
+    bear_id = P0_FIRST_BEAR_ID
+    synthetic_state.apply_action(
+        {"kind": "declare_attackers", "attacker_ids": frozenset([bear_id])}
+    )
+    assert synthetic_state.get_attackers() == [bear_id]
+
+
+def test_apply_action_declare_attackers_non_creature_silently_skipped(synthetic_state):
+    """Non-creature ids (e.g. a Forest at id 0) are silently rejected
+    by the underlying ``declare_attacker`` primitive (returns False).
+    The dispatch discards the bool — no exception escapes, no entry
+    added to ``state.attackers``. Eligible ids in the same call still
+    get through."""
+    forest_id = 0  # P0 Forest — not a creature
+    bear_id = P0_FIRST_BEAR_ID
+    assert synthetic_state.printing_name_of(forest_id) == "Forest"
+
+    synthetic_state.apply_action(
+        {"kind": "declare_attackers", "attacker_ids": [forest_id, bear_id]}
+    )
+
+    # Only the eligible id landed on the attackers list.
+    assert synthetic_state.get_attackers() == [bear_id]
+    # Forest stayed untapped — no side effect from the rejected call.
+    assert synthetic_state.is_tapped(forest_id) is False
+
+
+def test_apply_action_declare_attackers_already_tapped_silently_skipped(
+    synthetic_state,
+):
+    """An already-tapped creature in the set is silently rejected
+    (the round-5 primitive's "must be untapped to attack" gate). The
+    dispatch propagates the False return as a silent skip; remaining
+    untapped creatures in the set still get declared."""
+    tapped_bear = P0_FIRST_BEAR_ID
+    fresh_bear = P0_FIRST_BEAR_ID + 1
+    # Tap the first bear before the dispatch.
+    assert synthetic_state.tap_object(tapped_bear) is True
+
+    synthetic_state.apply_action(
+        {
+            "kind": "declare_attackers",
+            "attacker_ids": [tapped_bear, fresh_bear],
+        }
+    )
+
+    # Tapped bear skipped; fresh bear declared.
+    assert synthetic_state.get_attackers() == [fresh_bear]
+    assert synthetic_state.is_tapped(fresh_bear) is True
+
+
+def test_apply_action_declare_attackers_wrong_inner_type_raises(synthetic_state):
+    """A non-integer in the ``attacker_ids`` iterable fails PyO3's
+    ``extract::<u32>`` machinery — ``TypeError`` propagates. The
+    dispatch never runs; ``state.attackers`` stays empty."""
+    with pytest.raises((TypeError, ValueError)):
+        synthetic_state.apply_action(
+            {
+                "kind": "declare_attackers",
+                "attacker_ids": ["not-an-int"],
+            }
+        )
+    # No mutation.
+    assert synthetic_state.get_attackers() == []
+
+
+def test_apply_action_unknown_kind_message_mentions_declare_attackers(synthetic_state):
+    """The unknown-kind error message includes ``declare_attackers``
+    after this slice extends the variant list. Pin the substring so
+    a future variant addition forces the message to grow."""
+    with pytest.raises(ValueError, match=r"declare_attackers"):
+        synthetic_state.apply_action({"kind": "frobnicate"})
