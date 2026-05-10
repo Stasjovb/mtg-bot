@@ -331,14 +331,84 @@ fn apply_effect(state: &mut GameState, effect: &Effect) -> PyResult<()> {
             let controller = state.active_player as usize;
             state.players[controller].life += *amount;
         }
-        // Round-10 stub: ReturnToHand / Mill variants exist in the
-        // bridge but haven't been wired to resolution yet. Foundation
-        // commit gets the build green; the round-10 resolve agent
-        // replaces these arms with real dispatch.
-        Effect::ReturnToHand { .. } | Effect::Mill { .. } => {
-            return Err(pyo3::exceptions::PyValueError::new_err(
-                "Effect variant not yet wired to resolve_top_of_stack — round-10 resolve agent fills this in",
-            ));
+        // Round-10: ReturnToHand. Bounce a target permanent back to
+        // its current controller's hand (= owner's hand in the
+        // first-slice convention where controller == owner).
+        //
+        // Targeting (mirrors DealDamage):
+        //   - AnyCreature -> first object on the DEFENDING player's
+        //     battlefield (smallest index). No creature-type filter.
+        //     If the defender's battlefield is empty, the spell
+        //     fizzles silently.
+        //   - AnyPlayer -> semantically nonsense for a bounce. Raise
+        //     ValueError loudly, matching the unknown-effect-kind
+        //     shape — schema-allowed but doesn't make sense.
+        //
+        // **Inlining note (cross-file friction).** `move_object` is a
+        // private helper on `state_ops_zones.rs`; per per-slice
+        // file-isolation, we inline the minimal Arc::make_mut
+        // pop-from-current-zone + push-to-target-hand here, mirroring
+        // how DrawCards inlines the pop-library + push-hand logic.
+        Effect::ReturnToHand { target } => match target {
+            TargetFilter::AnyPlayer => {
+                return Err(PyValueError::new_err(
+                    "ReturnToHand with AnyPlayer target is semantically nonsense (cannot bounce a player)",
+                ));
+            }
+            TargetFilter::AnyCreature => {
+                let defender = (1 - state.active_player) as usize;
+                let bf = &state.players[defender].battlefield;
+                if bf.is_empty() {
+                    return Ok(()); // fizzle silently
+                }
+                let target_id = bf[0].id;
+                // Pop from defender's battlefield (target's current
+                // zone). Use Arc::make_mut for CoW safety.
+                let bf_mut: &mut Vec<GameObject> =
+                    Arc::make_mut(&mut state.players[defender].battlefield);
+                let pos = bf_mut
+                    .iter()
+                    .position(|o| o.id == target_id)
+                    .expect("target_id was bf[0] but not found on re-scan");
+                let mut obj = bf_mut.remove(pos);
+                // First-slice: target's controller == owner. The
+                // bounce sends to the target's controller's (= owner's)
+                // hand — which is `defender` here, since that's
+                // where the target lives.
+                obj.zone = ZONE_HAND;
+                obj.tapped = false;
+                obj.summoning_sick = false;
+                obj.damage = 0;
+                obj.counters = 0;
+                Arc::make_mut(&mut state.players[defender].hand).push(obj);
+            }
+        },
+        // Round-10: Mill. Caller's controller (= active_player, first-
+        // slice convention) puts the top `count` cards of their
+        // library into their graveyard. "Top" is the LAST element of
+        // the library Vec (mirrors round-1 zones convention used by
+        // DrawCards above).
+        //
+        // Empty library mid-mill: stop silently. Real MTG: mill on
+        // empty library is NOT a deck-out by itself (unlike a draw
+        // attempt — CR 704.5b applies to drawing, not milling). So a
+        // silent stop is closer to real rules than the DrawCards
+        // short-circuit.
+        //
+        // Negative `count` is silently clamped to 0 (same shape as
+        // DrawCards), which is also the count-0 no-op path.
+        Effect::Mill { count } => {
+            let controller = state.active_player as usize;
+            let n = (*count).max(0) as usize;
+            for _ in 0..n {
+                let player = &mut state.players[controller];
+                let lib = Arc::make_mut(&mut player.library);
+                let Some(mut obj) = lib.pop() else {
+                    break; // empty library — silent stop
+                };
+                obj.zone = ZONE_GRAVEYARD;
+                Arc::make_mut(&mut player.graveyard).push(obj);
+            }
         }
     }
     Ok(())
