@@ -115,6 +115,7 @@ the test lands in a commit.
 | rust(library-search-by-type): search_library_for_first_of_type | tests_rust/test_library.py extend | green | feature/rust-tdd-search-by-type |
 | rust(resolve-effects-r15): AddCounters+DiscardCard dispatch | tests_rust/test_resolve.py extend | green | feature/rust-tdd-resolve-counters-discard |
 | rust(sba-loop): apply_sbas_until_quiescent (CR 704.3) | tests_rust/test_sba.py extend | green | feature/rust-tdd-sba-loop |
+| rust(library-search-and-shuffle): tutor-style search + always shuffle (CR 701.19) | tests_rust/test_library.py extend | green | feature/rust-tdd-search-and-shuffle |
 
 ## Build invocation reminder
 

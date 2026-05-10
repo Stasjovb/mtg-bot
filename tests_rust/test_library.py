@@ -489,3 +489,141 @@ def test_search_and_move_to_hand_no_match_returns_none_no_mutation(synthetic_sta
     assert synthetic_state.library_sizes == lib_size_before
     lib_after = _library_obj_ids(synthetic_state, 0, P0_LIBRARY_SIZE)
     assert lib_after == lib_before
+
+
+# --- Search library by type + ALWAYS shuffle (round-16, CR 701.19) --------
+
+# Per CR 701.19, a tutor-style "search library, then shuffle" effect
+# ALWAYS shuffles afterward — whether or not a card was found. This is
+# distinct from round-15's `search_library_for_first_of_type_and_move_to_hand`
+# (no shuffle) and from round-14's printing-id variant
+# `search_library_and_move_to_hand` (shuffles unconditionally too).
+
+
+def test_search_and_shuffle_finds_creature_and_shuffles(synthetic_state):
+    """Library with a creature: search + always-shuffle returns the
+    moved card's obj_id, library size shrinks by 1, and the library
+    order is changed by the post-search shuffle. Default synthetic
+    library is 50 Forests; we load a mixed deck so there's a creature
+    to find AND enough cards to make the shuffle observable."""
+    # 50 cards: 49 Forests + 1 Bears so after removal there are still
+    # 49 cards (>= 2) for Fisher-Yates to do something meaningful.
+    deck = [FOREST_PID] * 49 + [BEARS_PID]
+    synthetic_state.load_deck(0, deck)
+    lib_before = _library_obj_ids(synthetic_state, 0, len(deck))
+    hand_before = synthetic_state.hand_sizes
+    lib_size_before = synthetic_state.library_sizes
+
+    found = synthetic_state.search_library_for_first_of_type_and_shuffle(
+        0, "Creature", 42
+    )
+
+    assert found is not None
+    assert synthetic_state.printing_name_of(found) == "Grizzly Bears"
+    # Library shrank by 1, hand grew by 1.
+    assert synthetic_state.library_sizes[0] == lib_size_before[0] - 1
+    assert synthetic_state.hand_sizes[0] == hand_before[0] + 1
+    # The library was shuffled — its top-first order is no longer the
+    # original lib_before minus the moved card. (With 49 cards left
+    # after removal, the chance of a non-trivial Fisher-Yates landing
+    # on the identity permutation is ~1/49!.)
+    lib_after = _library_obj_ids(synthetic_state, 0, len(deck) - 1)
+    # The set of remaining ids is (lib_before's ids) - {found}.
+    expected_remaining = [i for i in lib_before if i != found]
+    assert sorted(lib_after) == sorted(expected_remaining)
+    assert lib_after != expected_remaining
+
+
+def test_search_and_shuffle_no_match_still_shuffles(synthetic_state):
+    """No match: returns None, library size UNCHANGED, but the library
+    is STILL shuffled (CR 701.19). Default synthetic library is 50
+    Forests, so "Planeswalker" finds nothing."""
+    lib_before = _library_obj_ids(synthetic_state, 0, P0_LIBRARY_SIZE)
+    hand_before = synthetic_state.hand_sizes
+    lib_size_before = synthetic_state.library_sizes
+
+    found = synthetic_state.search_library_for_first_of_type_and_shuffle(
+        0, "Planeswalker", 42
+    )
+
+    assert found is None
+    # Hand and library SIZES unchanged.
+    assert synthetic_state.hand_sizes == hand_before
+    assert synthetic_state.library_sizes == lib_size_before
+    # But library ORDER changed — the shuffle ran even on a miss.
+    lib_after = _library_obj_ids(synthetic_state, 0, P0_LIBRARY_SIZE)
+    assert sorted(lib_after) == sorted(lib_before)
+    assert lib_after != lib_before
+
+
+def test_search_and_shuffle_empty_library_returns_none(synthetic_state):
+    """Empty library: returns None, no error, no mutation. Shuffle on
+    a size-0 library is a no-op."""
+    synthetic_state.load_deck(0, [])
+    assert synthetic_state.library_sizes[0] == 0
+
+    found = synthetic_state.search_library_for_first_of_type_and_shuffle(
+        0, "Creature", 42
+    )
+
+    assert found is None
+    assert synthetic_state.library_sizes[0] == 0
+
+
+def test_search_and_shuffle_unknown_player_raises(synthetic_state):
+    """Out-of-range player_id raises (matches the search-only
+    sibling's loud-failure convention)."""
+    with pytest.raises((ValueError, IndexError, OverflowError)):
+        synthetic_state.search_library_for_first_of_type_and_shuffle(
+            7, "Creature", 42
+        )
+
+
+def test_search_and_shuffle_deterministic_with_same_seed(synthetic_state):
+    """Same source state cloned twice + same seed produces identical
+    results: same moved card AND identical resulting library order."""
+    a = synthetic_state.clone_once()
+    b = synthetic_state.clone_once()
+
+    found_a = a.search_library_for_first_of_type_and_shuffle(0, "Land", 42)
+    found_b = b.search_library_for_first_of_type_and_shuffle(0, "Land", 42)
+
+    assert found_a == found_b
+    a_order = _library_obj_ids(a, 0, P0_LIBRARY_SIZE - 1)
+    b_order = _library_obj_ids(b, 0, P0_LIBRARY_SIZE - 1)
+    assert a_order == b_order
+
+
+def test_search_and_shuffle_different_seed_different_order(synthetic_state):
+    """Different seeds applied to identical clones produce different
+    library orders. With a 50-card library, false equality is ~1/50!,
+    effectively never."""
+    a = synthetic_state.clone_once()
+    b = synthetic_state.clone_once()
+
+    a.search_library_for_first_of_type_and_shuffle(0, "Land", 1)
+    b.search_library_for_first_of_type_and_shuffle(0, "Land", 99)
+
+    a_order = _library_obj_ids(a, 0, P0_LIBRARY_SIZE - 1)
+    b_order = _library_obj_ids(b, 0, P0_LIBRARY_SIZE - 1)
+    assert a_order != b_order
+
+
+def test_search_and_shuffle_clone_isolation(synthetic_state):
+    """CoW canary: search+shuffle on a clone must not leak back into
+    the source. Both library order AND hand membership are checked."""
+    cloned = synthetic_state.clone_once()
+    source_lib_before = _library_obj_ids(synthetic_state, 0, P0_LIBRARY_SIZE)
+    source_hand_before = synthetic_state.hand_sizes
+    source_lib_size_before = synthetic_state.library_sizes
+
+    found = cloned.search_library_for_first_of_type_and_shuffle(
+        0, "Land", 42
+    )
+    assert found is not None
+
+    # Source untouched.
+    assert synthetic_state.hand_sizes == source_hand_before
+    assert synthetic_state.library_sizes == source_lib_size_before
+    source_lib_after = _library_obj_ids(synthetic_state, 0, P0_LIBRARY_SIZE)
+    assert source_lib_after == source_lib_before

@@ -376,6 +376,91 @@ impl GameState {
         Ok(Some(id))
     }
 
+    /// Tutor-style: find the first GameObject in `player_id`'s library
+    /// whose printing's `card_types` contains `card_type` (top-to-bottom
+    /// iteration), move it to that player's hand if found, and ALWAYS
+    /// shuffle the library afterward (CR 701.19) — whether or not a
+    /// matching card was found. Returns the moved object's `obj_id`,
+    /// or `None` if no match was in the library (the library is still
+    /// shuffled in the no-match case).
+    ///
+    /// This is round-15's `search_library_for_first_of_type_and_move_to_hand`
+    /// composed with an unconditional post-search shuffle. The shuffle
+    /// uses an inline xorshift64 + Fisher-Yates seeded with `seed` —
+    /// same RNG as `shuffle_library_with_seed`. Same `(library, found
+    /// or not, seed)` produces the same resulting library order.
+    ///
+    /// Why per-CR 701.19 we shuffle even on a miss: in real MTG, a
+    /// failed tutor search still publicly reveals to the opponent that
+    /// the card-type isn't in the library. Mechanically the rule
+    /// collapses success and failure into a single "shuffle library"
+    /// step, so the engine primitive does the same thing.
+    ///
+    /// CoW-safe: each zone Vec mutation routes through `Arc::make_mut`,
+    /// so cloning a `GameState` and calling this on the clone leaves
+    /// the source's library and hand untouched.
+    ///
+    /// Raises `ValueError` on out-of-range `player_id`, mirroring the
+    /// search-only sibling.
+    fn search_library_for_first_of_type_and_shuffle(
+        &mut self,
+        player_id: u8,
+        card_type: &str,
+        seed: u64,
+    ) -> PyResult<Option<u32>> {
+        let idx = player_id as usize;
+        if idx >= 2 {
+            return Err(PyValueError::new_err(format!(
+                "player_id {player_id} out of range (must be 0 or 1)"
+            )));
+        }
+        // Locate top-to-bottom: scan from the end of the Vec back to
+        // index 0; first index whose printing has `card_type` in its
+        // `card_types` is our match. Inlined here (vs. delegating to
+        // the no-shuffle sibling) because we need the Vec INDEX for
+        // removal and we still want the shuffle to run on a miss.
+        let pos: Option<usize> = {
+            let lib = &self.players[idx].library;
+            let mut found: Option<usize> = None;
+            for i in (0..lib.len()).rev() {
+                let obj = &lib[i];
+                let printing = match self.registry.lookup(obj.printing_id) {
+                    Some(p) => p,
+                    None => continue,
+                };
+                if printing.card_types.iter().any(|t| t == card_type) {
+                    found = Some(i);
+                    break;
+                }
+            }
+            found
+        };
+        let player = &mut self.players[idx];
+        let moved_id: Option<u32> = if let Some(p) = pos {
+            let lib = Arc::make_mut(&mut player.library);
+            let mut obj = lib.remove(p);
+            obj.zone = crate::state_ops_zones::ZONE_HAND;
+            let id = obj.id;
+            Arc::make_mut(&mut player.hand).push(obj);
+            Some(id)
+        } else {
+            None
+        };
+        // ALWAYS shuffle (CR 701.19) — operates on the post-removal
+        // library when a card was found, on the unchanged library on
+        // a miss.
+        let lib = Arc::make_mut(&mut player.library);
+        let n = lib.len();
+        if n >= 2 {
+            let mut rng = XorShift64::new(seed);
+            for i in (1..n).rev() {
+                let j = rng.next_usize_below(i + 1);
+                lib.swap(i, j);
+            }
+        }
+        Ok(moved_id)
+    }
+
     /// Apply a scry decision: the top `top_ids.len() + bottom_ids.len()`
     /// cards of `player_id`'s library are reordered so that:
     ///
