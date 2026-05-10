@@ -106,6 +106,7 @@ the test lands in a commit.
 | rust(sba-indestructible): CR 702.12 | tests_rust/test_sba.py extend           | green  | feature/rust-tdd-indestructible |
 | rust(combat-keyword): skulk | tests_rust/test_combat.py extend | green | feature/rust-tdd-skulk |
 | rust(resolve-effects-r14): Sacrifice dispatch | tests_rust/test_resolve.py extend           | green  | feature/rust-tdd-sacrifice |
+| rust(zones-exile-aware): exile in find/move | tests_rust/test_zones.py extend | green | feature/rust-tdd-exile-aware-zones |
 
 ## Build invocation reminder
 
