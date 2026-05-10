@@ -107,6 +107,7 @@ the test lands in a commit.
 | rust(combat-keyword): skulk | tests_rust/test_combat.py extend | green | feature/rust-tdd-skulk |
 | rust(resolve-effects-r14): Sacrifice dispatch | tests_rust/test_resolve.py extend           | green  | feature/rust-tdd-sacrifice |
 | rust(zones-exile-aware): exile in find/move | tests_rust/test_zones.py extend | green | feature/rust-tdd-exile-aware-zones |
+| rust(library-search): search_library_for_card | tests_rust/test_library.py extend | green | feature/rust-tdd-search-library |
 
 ## Build invocation reminder
 

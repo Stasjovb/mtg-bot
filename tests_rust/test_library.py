@@ -255,3 +255,121 @@ def test_apply_scry_validation_failure_returns_false(synthetic_state):
     assert ok is False
     after = _library_obj_ids(synthetic_state, 0, P0_LIBRARY_SIZE)
     assert after == before
+
+
+# --- Search library --------------------------------------------------------
+
+# In synthetic_state, the library is built entirely of Forests (pid 0)
+# at ids 17..66 for player 0. So a search for FOREST_PID must hit, and
+# a search for an unknown printing_id must miss.
+FOREST_PID = 0
+ZONE_HAND = 0
+
+
+def test_search_library_for_first_with_printing_returns_match(synthetic_state):
+    """Synthetic state seeds Forest in library; search returns the
+    obj_id of the FIRST GameObject in the library Vec matching the
+    printing_id. The library Vec was filled push-order (ids 17..66),
+    so lib[0] = id 17 = the first match."""
+    found = synthetic_state.search_library_for_first_with_printing(0, FOREST_PID)
+    assert found == P0_FIRST_LIBRARY_ID  # 17
+
+
+def test_search_library_for_first_with_printing_returns_none_when_not_found(
+    synthetic_state,
+):
+    """Search for a printing_id that isn't in the library returns
+    None (no exception, no mutation)."""
+    found = synthetic_state.search_library_for_first_with_printing(0, 99)
+    assert found is None
+
+
+def test_search_library_for_first_does_not_move_or_reorder(synthetic_state):
+    """Search is a pure read — library order and size unchanged after
+    the call."""
+    before = _library_obj_ids(synthetic_state, 0, P0_LIBRARY_SIZE)
+    size_before = synthetic_state.library_sizes
+    hand_before = synthetic_state.hand_sizes
+
+    _ = synthetic_state.search_library_for_first_with_printing(0, FOREST_PID)
+
+    after = _library_obj_ids(synthetic_state, 0, P0_LIBRARY_SIZE)
+    assert after == before
+    assert synthetic_state.library_sizes == size_before
+    assert synthetic_state.hand_sizes == hand_before
+
+
+def test_search_library_and_move_to_hand_moves_card(synthetic_state):
+    """Search + move: hand grows by 1, library shrinks by 1."""
+    hand_before = synthetic_state.hand_sizes
+    lib_before = synthetic_state.library_sizes
+
+    found = synthetic_state.search_library_and_move_to_hand(0, FOREST_PID, 42)
+
+    assert found is not None
+    assert synthetic_state.hand_sizes[0] == hand_before[0] + 1
+    assert synthetic_state.library_sizes[0] == lib_before[0] - 1
+    # Other player untouched.
+    assert synthetic_state.hand_sizes[1] == hand_before[1]
+    assert synthetic_state.library_sizes[1] == lib_before[1]
+
+
+def test_search_library_and_move_to_hand_zone_field_updated(synthetic_state):
+    """Moved card's zone field is set to ZONE_HAND, and the card lives
+    in hand now (find_object_zone reports ZONE_HAND)."""
+    found = synthetic_state.search_library_and_move_to_hand(0, FOREST_PID, 42)
+    assert found is not None
+    assert synthetic_state.find_object_zone(found) == ZONE_HAND
+
+
+def test_search_library_and_move_to_hand_failed_search_still_shuffles(
+    synthetic_state,
+):
+    """Real MTG: even a failed search reveals to opponents and shuffles
+    the library. Two clones, search for missing pid with different
+    seeds, libraries should differ."""
+    a = synthetic_state.clone_once()
+    b = synthetic_state.clone_once()
+    hand_before = synthetic_state.hand_sizes
+
+    found_a = a.search_library_and_move_to_hand(0, 99, 1)
+    found_b = b.search_library_and_move_to_hand(0, 99, 99)
+
+    assert found_a is None
+    assert found_b is None
+    # Hand sizes unchanged on both — nothing moved.
+    assert a.hand_sizes == hand_before
+    assert b.hand_sizes == hand_before
+    # Library sizes unchanged on both — nothing moved.
+    assert a.library_sizes == synthetic_state.library_sizes
+    assert b.library_sizes == synthetic_state.library_sizes
+    # But the libraries WERE shuffled — different seeds produce
+    # different orders.
+    a_order = _library_obj_ids(a, 0, P0_LIBRARY_SIZE)
+    b_order = _library_obj_ids(b, 0, P0_LIBRARY_SIZE)
+    assert a_order != b_order
+
+
+def test_search_library_and_move_to_hand_returns_none_on_miss(synthetic_state):
+    """Missing printing_id returns None (and shuffles, per the rule
+    above — but the return value is None)."""
+    found = synthetic_state.search_library_and_move_to_hand(0, 99, 7)
+    assert found is None
+
+
+def test_clone_then_search_does_not_affect_original(synthetic_state):
+    """CoW canary: search+move on a clone must not leak back into the
+    source. Both library order AND hand membership are checked."""
+    cloned = synthetic_state.clone_once()
+    source_lib_before = _library_obj_ids(synthetic_state, 0, P0_LIBRARY_SIZE)
+    source_hand_before = synthetic_state.hand_sizes
+    source_lib_size_before = synthetic_state.library_sizes
+
+    found = cloned.search_library_and_move_to_hand(0, FOREST_PID, 42)
+    assert found is not None
+
+    # Source untouched.
+    assert synthetic_state.hand_sizes == source_hand_before
+    assert synthetic_state.library_sizes == source_lib_size_before
+    source_lib_after = _library_obj_ids(synthetic_state, 0, P0_LIBRARY_SIZE)
+    assert source_lib_after == source_lib_before

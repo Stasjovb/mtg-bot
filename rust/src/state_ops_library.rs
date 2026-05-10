@@ -180,6 +180,94 @@ impl GameState {
         Ok(out)
     }
 
+    /// Find the first GameObject in `player_id`'s library matching
+    /// `printing_id` and return its `obj_id`, without moving or
+    /// reordering the library. Returns `None` if no card with that
+    /// printing_id is in the library.
+    ///
+    /// Pure read — no library mutation, no `Arc::make_mut` clone.
+    /// "First" = first by Vec position (lib[0] = bottom of library);
+    /// for tutor-style effects callers usually only care that *some*
+    /// matching card was found, not which one.
+    fn search_library_for_first_with_printing(
+        &self,
+        player_id: u8,
+        printing_id: u32,
+    ) -> PyResult<Option<u32>> {
+        let idx = player_id as usize;
+        if idx >= 2 {
+            return Ok(None);
+        }
+        let lib = &self.players[idx].library;
+        for obj in lib.iter() {
+            if obj.printing_id == printing_id {
+                return Ok(Some(obj.id));
+            }
+        }
+        Ok(None)
+    }
+
+    /// Find the first GameObject in `player_id`'s library matching
+    /// `printing_id`, move it to that player's hand (zone field
+    /// updated to `ZONE_HAND`), and shuffle the library afterward
+    /// using the supplied `shuffle_seed` (inline xorshift64 +
+    /// Fisher-Yates, same RNG as `shuffle_library_with_seed`).
+    /// Returns the moved object's `obj_id` on success, or `None` if
+    /// no card with that printing_id is in the library.
+    ///
+    /// Real MTG: per CR 701.18, even a *failed* search shuffles the
+    /// library — the search itself is the trigger for the shuffle,
+    /// not the move. This primitive honors that: on a miss, the
+    /// library still gets shuffled with the supplied seed; only the
+    /// hand-move is skipped.
+    ///
+    /// CoW-safe: each zone Vec mutation routes through `Arc::make_mut`,
+    /// so cloning a `GameState` and calling this on the clone leaves
+    /// the source's library and hand untouched.
+    fn search_library_and_move_to_hand(
+        &mut self,
+        player_id: u8,
+        printing_id: u32,
+        shuffle_seed: u64,
+    ) -> PyResult<Option<u32>> {
+        let idx = player_id as usize;
+        if idx >= 2 {
+            return Ok(None);
+        }
+        let player = &mut self.players[idx];
+        // Locate the first match in the library; if found, remove it
+        // and move to hand BEFORE the shuffle (so the shuffle operates
+        // on the post-removal library, matching the rule that the
+        // searched card is no longer in the library when it's
+        // reshuffled).
+        let pos = player
+            .library
+            .iter()
+            .position(|o| o.printing_id == printing_id);
+        let moved_id = if let Some(p) = pos {
+            let lib = Arc::make_mut(&mut player.library);
+            let mut obj = lib.remove(p);
+            obj.zone = crate::state_ops_zones::ZONE_HAND;
+            let id = obj.id;
+            Arc::make_mut(&mut player.hand).push(obj);
+            Some(id)
+        } else {
+            None
+        };
+        // Shuffle the library regardless of search outcome — failed
+        // search still shuffles per CR 701.18.
+        let lib = Arc::make_mut(&mut player.library);
+        let n = lib.len();
+        if n >= 2 {
+            let mut rng = XorShift64::new(shuffle_seed);
+            for i in (1..n).rev() {
+                let j = rng.next_usize_below(i + 1);
+                lib.swap(i, j);
+            }
+        }
+        Ok(moved_id)
+    }
+
     /// Apply a scry decision: the top `top_ids.len() + bottom_ids.len()`
     /// cards of `player_id`'s library are reordered so that:
     ///
