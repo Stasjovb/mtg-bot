@@ -45,7 +45,7 @@ build-backend = "setuptools.build_meta"
 where = ["src"]
 
 [tool.pytest.ini_options]
-testpaths = ["tests"]
+testpaths = ["tests", "tests_rust"]
 # Skip tests marked ``isolated`` by default — they're sensitive to
 # accumulated interpreter state from preceding tests (deepcopy stack
 # pressure, MCTS C-frame depth) and only run reliably in their own

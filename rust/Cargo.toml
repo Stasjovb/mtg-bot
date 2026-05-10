@@ -8,7 +8,12 @@ name = "mtg_bot_engine"
 crate-type = ["cdylib"]
 
 [dependencies]
-pyo3 = { version = "0.23", features = ["extension-module"] }
+# `multiple-pymethods` lets us split #[pymethods] impl GameState
+# blocks across separate files (rust/src/state_ops_*.rs) so
+# parallel TDD slices can grow methods on the same type without
+# merge conflicts on a single block. Tiny runtime cost (one
+# inventory registration per block).
+pyo3 = { version = "0.23", features = ["extension-module", "multiple-pymethods"] }
 
 [profile.release]
 lto = "fat"

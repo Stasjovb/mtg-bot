@@ -1,0 +1,88 @@
+# `tests_rust/` — TDD harness for the Rust engine port
+
+Purpose: drive the Rust engine port (`mtg_bot_engine` PyO3 extension)
+test-first. Every Rust feature lands as a red→green→commit cycle:
+
+1. Pick a behavior currently exercised by some test in `tests/` (or a
+   small primitive needed for one).
+2. Port the test into `tests_rust/`, target the Rust API instead of
+   `mtg_bot.*` Python API. Watch it fail (RED).
+3. Implement the underlying Rust functionality in `rust/src/state.rs`
+   (or wherever it belongs). Re-run. Watch it pass (GREEN).
+4. Commit on a feature branch. Move to the next test.
+
+This directory is skipped wholesale if `mtg_bot_engine` isn't built
+(see `conftest.py`). Run `maturin develop --release -m rust/Cargo.toml`
+once and these tests run as part of the default `pytest` invocation.
+
+## Layout
+
+`tests_rust/` mirrors `tests/`. When porting a test from
+`tests/test_clone.py`, the new file goes at `tests_rust/test_clone.py`
+with the same test names where reasonable. Side-by-side filenames
+make `git diff tests/test_X.py tests_rust/test_X.py` a useful
+parity check.
+
+## Conventions
+
+- **Use the `engine` / `synthetic_state` / `empty_registry` fixtures**
+  from `conftest.py` rather than re-importing in every test.
+- **Don't re-test what `tests/test_rust_card_bridge.py` and
+  `tests/test_rust_engine_smoke.py` already cover.** Those live in
+  `tests/` because they predate the TDD harness; new feature tests
+  go in `tests_rust/`.
+- **One behavior per test.** TDD discipline — small enough that a
+  failing test points at exactly one missing piece of Rust.
+- **Document the port in the file's module docstring.** Reference
+  the Python test it's based on (e.g. "Ported from `tests/test_clone.py`,
+  shrunk to the engine-level subset").
+
+## Out of scope
+
+The Python test suite has 391 files (~7860 tests). Many are not
+relevant to the Rust engine port and won't be ported:
+
+- **NN / training / data-gen** (`tests/training/*`, `tests/test_nn_*`,
+  most of `tests/search/*`) — Rust crate explicitly excludes these.
+- **UI / Flask / vitest** (`tests/training_ui/*`, `tests/test_app*`,
+  `tests-js/*`) — pure web layer.
+- **CLI / runs DB / orchestration** (`tests/cli/*`,
+  `tests/test_*_orchestration*`) — operator-facing, runs in Python.
+- **Distributed / SSH / shard plumbing** — same.
+
+The ports target engine-only files: `tests/test_clone.py`,
+`tests/test_combat.py`, `tests/test_actions.py`, `tests/test_legal.py`,
+`tests/test_counters.py`, the per-card behavior tests
+(`tests/test_<card_name>.py`), etc. A precise inventory is built
+incrementally as ports happen — don't try to predict the whole
+boundary up front.
+
+## Porting status
+
+Tracked in this README so a glance at the file shows where the
+port is. Append a row when you start a port; flip to `green` when
+the test lands in a commit.
+
+| ported test                       | source                  | status | branch / commit            |
+|-----------------------------------|-------------------------|--------|----------------------------|
+| _(none yet — first cycles spawn next)_ |                  |        |                            |
+
+## Build invocation reminder
+
+```
+VIRTUAL_ENV="C:/Users/Gregg Keithley/Documents/Claude/Projects/mtg-bot/.venv-py313" \
+  "C:/Users/Gregg Keithley/Documents/Claude/Projects/mtg-bot/.venv-py313/Scripts/maturin.exe" \
+  develop --release -m rust/Cargo.toml
+```
+
+Run only the Rust harness:
+```
+PYTHONPATH=src "C:/Users/Gregg Keithley/Documents/Claude/Projects/mtg-bot/.venv-py313/Scripts/python.exe" \
+  -m pytest tests_rust/ -v --no-cov
+```
+
+Full gate (must stay green before commit):
+```
+PYTHONPATH=src "C:/Users/Gregg Keithley/Documents/Claude/Projects/mtg-bot/.venv-py313/Scripts/python.exe" \
+  -m pytest -n 8 --no-cov
+```
