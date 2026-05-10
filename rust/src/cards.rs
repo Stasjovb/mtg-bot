@@ -72,6 +72,10 @@ pub enum Effect {
     /// zone to its owner's exile zone. First-slice owner =
     /// controller.
     ExileTarget { target: TargetFilter },
+    /// Tap target permanent (CR 701.20a). Idempotent on already-
+    /// tapped targets. AnyPlayer target raises (you can't tap a
+    /// player).
+    TapTarget { target: TargetFilter },
 }
 
 #[derive(Clone, Debug)]
@@ -226,8 +230,16 @@ fn parse_effect(dict: &Bound<'_, PyDict>) -> PyResult<Effect> {
             let target = parse_target_filter(target_dict)?;
             Ok(Effect::ExileTarget { target })
         }
+        "tap_target" => {
+            let target_any = require(dict, "target")?;
+            let target_dict = target_any.downcast::<PyDict>().map_err(|_| {
+                PyValueError::new_err("tap_target.target must be a dict")
+            })?;
+            let target = parse_target_filter(target_dict)?;
+            Ok(Effect::TapTarget { target })
+        }
         other => Err(PyValueError::new_err(format!(
-            "unknown effect kind {other:?}; valid: deal_damage, draw_cards, gain_life, return_to_hand, mill, exile_target"
+            "unknown effect kind {other:?}; valid: deal_damage, draw_cards, gain_life, return_to_hand, mill, exile_target, tap_target"
         ))),
     }
 }
@@ -433,6 +445,10 @@ fn effect_to_pydict<'py>(
         }
         Effect::ExileTarget { target } => {
             d.set_item("kind", "exile_target")?;
+            d.set_item("target", target_filter_to_pydict(py, target)?)?;
+        }
+        Effect::TapTarget { target } => {
+            d.set_item("kind", "tap_target")?;
             d.set_item("target", target_filter_to_pydict(py, target)?)?;
         }
     }

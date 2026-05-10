@@ -3,19 +3,26 @@
 Ported from ``src/mtg_bot/turn.py::state_based_actions`` /
 ``_state_based_actions_pass`` and ``CR 704.5`` audit numbering.
 
-**First-slice scope: lethal-damage SBA only (CR 704.5g).** A creature
-whose marked damage is greater than or equal to its toughness is
-destroyed (moved from battlefield to its controller's graveyard).
+**Slice scope: lethal-damage (CR 704.5g) AND 0-toughness (CR 704.5f) SBAs.**
+
+- CR 704.5g — a creature whose marked damage is >= its toughness is
+  destroyed (moved to its controller's graveyard).
+- CR 704.5f — a creature with toughness 0 (or less) is put into its
+  owner's graveyard, regardless of marked damage.
+
 This slice exposes ``apply_sbas() -> int`` (count of destructions
 this pass) plus the underlying ``is_lethal(obj_id) -> Option<bool>``
-helper.
+helper. ``apply_sbas`` applies 704.5f BEFORE 704.5g per CR rule order;
+in practice the same set of victims gets destroyed but the ordering
+is preserved for niche edge cases.
+
+Effective toughness for the 0-toughness check is computed as
+``printing.toughness + obj.counters`` (round-3's net-i32 +1/+1 vs
+-1/-1 model). A creature with base toughness 1 and a -1/-1 counter
+(counters = -1) has effective toughness 0 and dies.
 
 **Out of scope, deferred to future slices:**
 
-- **0-toughness SBA (CR 704.5f).** "A creature with toughness 0 dies"
-  is conceptually similar but reads from current toughness rather
-  than from damage >= toughness. Test stays as a ``@pytest.mark.skip``
-  to lock the API surface.
 - **SBA loop driver / quiescence.** Real MTG checks SBAs simultaneously
   and re-checks until stable. This slice does ONE pass; iteration to
   fixed point is a future slice that integrates apply_sbas into the
@@ -263,23 +270,119 @@ def test_clone_preserves_sba_pending(synthetic_state):
     assert synthetic_state.get_damage(obj_id) == 0
 
 
-@pytest.mark.skip(
-    reason=(
-        "0-toughness SBA (CR 704.5f) deferred to future slice. The "
-        "existing damage primitive does not subtract from a creature's "
-        "effective toughness, and there's no -1/-1 counter / "
-        "anthem-debuff path in the engine yet. When this lands, the "
-        "test should pass: a creature whose effective toughness has "
-        "dropped to 0 (e.g. via a -X/-X effect) gets destroyed by "
-        "apply_sbas independent of marked damage. The API stays the "
-        "same — apply_sbas() returns the destruction count, including "
-        "0-toughness victims."
-    )
-)
+# ----------------------------- 0-toughness SBA (CR 704.5f) -----------------
+#
+# A creature with toughness 0 (or less) is destroyed regardless of marked
+# damage. Effective toughness = printed toughness + counters (net-i32
+# +1/+1 vs -1/-1 model). A 1/1 with a -1/-1 counter (counters=-1) has
+# effective toughness 0 and dies. A 0/0 creature dies on entering a state
+# where SBAs are checked.
+#
+# These tests use ``register_and_inject_object`` from
+# ``state_ops_resolve.rs`` to put printings with explicit power/toughness
+# onto the battlefield; combined with the ``set_counters`` primitive from
+# round-3 that's enough to construct every shape we want to exercise.
+
+ZONE_BATTLEFIELD = 2  # mirrors rust/src/state_ops_zones.rs
+ZONE_GRAVEYARD = 3
+
+
+def _zero_zero_creature_dict():
+    """A printing for a 0/0 creature — dies the moment SBAs check it."""
+    return {
+        "name": "Test 0/0",
+        "card_types": ["Creature"],
+        "mana_cost": {"generic": 1},
+        "power": 0,
+        "toughness": 0,
+        "keywords": [],
+        "effects": [],
+    }
+
+
 def test_zero_toughness_creature_dies(synthetic_state):
-    """Locked-in API surface for the future 0-toughness SBA slice."""
-    obj_id = P0_FIRST_BEAR_ID
-    # Hypothetical future API: shrink toughness past 0 somehow.
-    # synthetic_state.set_toughness(obj_id, 0)
+    """A 1/1 creature with a -1/-1 counter (effective toughness 0) is
+    destroyed by ``apply_sbas`` — that's CR 704.5f. The damage marker
+    is irrelevant; what matters is effective toughness <= 0."""
+    obj_id = P0_FIRST_BEAR_ID  # Grizzly Bears, 2/2
+    # Drop net counters to -2 so effective toughness = 2 + (-2) = 0.
+    synthetic_state.set_counters(obj_id, -2)
     assert synthetic_state.apply_sbas() == 1
-    assert synthetic_state.find_object_zone(obj_id) == 3
+    assert synthetic_state.find_object_zone(obj_id) == ZONE_GRAVEYARD
+
+
+def test_negative_toughness_via_counters_dies(synthetic_state):
+    """Effective toughness can go strictly negative (more -1/-1 than
+    base toughness). 704.5f says toughness 0 OR LESS triggers destruction;
+    a 2/2 with -3 net counters (effective toughness -1) is destroyed."""
+    obj_id = P0_FIRST_BEAR_ID  # 2/2
+    synthetic_state.set_counters(obj_id, -3)  # effective toughness -1
+    assert synthetic_state.apply_sbas() == 1
+    assert synthetic_state.find_object_zone(obj_id) == ZONE_GRAVEYARD
+
+
+def test_creature_with_zero_base_toughness_immediately_dies(synthetic_state):
+    """Register a 0/0 creature directly to battlefield (no counters,
+    no damage). apply_sbas destroys it via 704.5f — base toughness 0 is
+    enough on its own."""
+    obj_id = synthetic_state.register_and_inject_object(
+        _zero_zero_creature_dict(), 0, ZONE_BATTLEFIELD
+    )
+    assert synthetic_state.apply_sbas() == 1
+    assert synthetic_state.find_object_zone(obj_id) == ZONE_GRAVEYARD
+
+
+def test_apply_sbas_handles_zero_toughness_alongside_lethal_damage(synthetic_state):
+    """One creature dies via 704.5f (0-toughness via counters), another
+    via 704.5g (lethal damage). Both go to graveyard in the same
+    apply_sbas pass; the count is 2."""
+    bf_before = synthetic_state.battlefield_sizes
+    gy_before = synthetic_state.graveyard_sizes
+
+    # First bear: lethal damage (704.5g).
+    synthetic_state.deal_damage(P0_FIRST_BEAR_ID, 2)
+    # Second bear: 0 effective toughness via counters (704.5f).
+    synthetic_state.set_counters(P0_SECOND_BEAR_ID, -2)
+
+    assert synthetic_state.apply_sbas() == 2
+
+    assert synthetic_state.find_object_zone(P0_FIRST_BEAR_ID) == ZONE_GRAVEYARD
+    assert synthetic_state.find_object_zone(P0_SECOND_BEAR_ID) == ZONE_GRAVEYARD
+    # Both moved off p0's battlefield, both into p0's graveyard.
+    assert synthetic_state.battlefield_sizes[0] == bf_before[0] - 2
+    assert synthetic_state.graveyard_sizes[0] == gy_before[0] + 2
+
+
+def test_apply_sbas_returns_correct_count_with_zero_toughness_destructions(
+    synthetic_state,
+):
+    """A pass that destroys only via 704.5f still returns the destruction
+    count — the count tallies 0-toughness victims the same as lethal-damage
+    victims. Three creatures, all driven to effective toughness 0 by
+    counters → return value 3."""
+    for obj_id in (P0_FIRST_BEAR_ID, P0_SECOND_BEAR_ID, P1_FIRST_BEAR_ID):
+        synthetic_state.set_counters(obj_id, -2)  # 2/2 -> effective 0
+    assert synthetic_state.apply_sbas() == 3
+    for obj_id in (P0_FIRST_BEAR_ID, P0_SECOND_BEAR_ID, P1_FIRST_BEAR_ID):
+        assert synthetic_state.find_object_zone(obj_id) == ZONE_GRAVEYARD
+
+
+def test_apply_sbas_positive_counters_save_creature_from_lethal(synthetic_state):
+    """Anti-canary: the 0-toughness check must NOT fire on creatures
+    with positive net effective toughness. A 2/2 with +1 counters has
+    effective toughness 3 — undamaged, survives apply_sbas."""
+    obj_id = P0_FIRST_BEAR_ID
+    synthetic_state.set_counters(obj_id, 1)
+    assert synthetic_state.apply_sbas() == 0
+    # Still on battlefield.
+    assert synthetic_state.find_object_zone(obj_id) == ZONE_BATTLEFIELD
+
+
+def test_apply_sbas_zero_toughness_does_not_destroy_non_creatures(synthetic_state):
+    """A Forest (no toughness) cannot satisfy the 0-toughness check —
+    the predicate is gated on ``printing.toughness.is_some()``. Even
+    setting a -10 counter on a Forest does not destroy it."""
+    forest_id = P0_FIRST_FOREST_ID
+    synthetic_state.set_counters(forest_id, -10)
+    assert synthetic_state.apply_sbas() == 0
+    assert synthetic_state.find_object_zone(forest_id) == ZONE_BATTLEFIELD
