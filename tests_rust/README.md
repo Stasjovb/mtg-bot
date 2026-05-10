@@ -65,8 +65,9 @@ the test lands in a commit.
 
 | ported test                       | source                  | status | branch / commit            |
 |-----------------------------------|-------------------------|--------|----------------------------|
-| tests_rust/test_tap.py            | tests/test_combat.py + game.py | green  | feature/rust-tdd-tap       |
-| tests_rust/test_zones.py          | tests/test_actions.py + game.py | green | feature/rust-tdd-zones    |
+| tests_rust/test_tap.py            | tests/test_combat.py + game.py  | green  | feature/rust-tdd-tap       |
+| tests_rust/test_zones.py          | tests/test_actions.py + game.py | green  | feature/rust-tdd-zones     |
+| tests_rust/test_life.py           | tests/test_combat.py + game.py  | green  | feature/rust-tdd-life      |
 
 ## Build invocation reminder
 
