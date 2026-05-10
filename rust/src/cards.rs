@@ -258,6 +258,53 @@ pub enum Effect {
     /// real "which to graveyard" decision callback through. Negative
     /// count raises.
     Surveil { count: i32 },
+    /// Counter target spell on the stack (CR 701.5). Powers Annul,
+    /// Cancel, etc. — 7 cards in the EoE pool per round-20 measurement.
+    ///
+    /// **Python schema simplification.** Python's `CounterTargetSpell`
+    /// dataclass carries a `filter_types: frozenset[str] = frozenset()`
+    /// field — an empty set means "any spell", non-empty restricts what
+    /// card types are legal targets (e.g. `frozenset({"Artifact",
+    /// "Enchantment"})` for Annul). The Rust first slice does NOT
+    /// carry that field — assumes target is "any spell". Refined-target
+    /// variants (counter creature spell only, counter non-creature,
+    /// etc.) wait for richer target plumbing on the Rust side, the
+    /// same deferral shape as TargetFilter for the rest of the variant
+    /// family.
+    ///
+    /// **First-slice deterministic choice: pick the TOP stack item
+    /// that isn't this Effect's own source.** Mirrors the "first-
+    /// eligible" convention from existing Effect arms (DealDamage
+    /// picks defender's battlefield[0], AddCounters likewise). The
+    /// self-exclusion guard uses the round-23 `source_obj_id`
+    /// parameter threaded through `apply_effect`: a counter-spell
+    /// resolving on the stack shouldn't counter itself before it
+    /// resolves. If the stack is empty (or only contains self), the
+    /// effect fizzles silently — Python parity with the
+    /// `if not targets: return` short-circuit in
+    /// `CounterTargetSpell.resolve`.
+    ///
+    /// **Composition with round-7 counter_spell primitive.** The
+    /// round-7 `state_ops_counterspell.rs::counter_spell(target_obj_id)`
+    /// primitive removes the target from the stack and moves its
+    /// source to the controller's graveyard (CR 701.6). Per the
+    /// per-slice file-isolation pattern + the E0624 cross-file
+    /// `#[pymethods]` friction, this arm inlines the equivalent
+    /// logic rather than calling through to the primitive: find the
+    /// stack item by source_obj_id, remove it, find the source
+    /// GameObject in any tracked zone, move it to the stack item
+    /// controller's graveyard. A follow-up consolidation slice can
+    /// collapse onto the shared primitive once cross-file private-fn
+    /// calls re-open.
+    ///
+    /// **No "can't be countered" enforcement.** Python's
+    /// `_is_uncounterable` checks `spell_is_uncounterable` on the
+    /// printing and `grants_creature_spells_uncounterable` on
+    /// battlefield static abilities. The Rust bridge has neither
+    /// flag today — deferred along with the rest of the
+    /// `cant_be_countered` shape (mirrors the round-7 counter_spell
+    /// primitive's same deferral).
+    CounterTargetSpell,
 }
 
 #[derive(Clone, Debug)]
@@ -552,8 +599,17 @@ fn parse_effect(dict: &Bound<'_, PyDict>) -> PyResult<Effect> {
             }
             Ok(Effect::Surveil { count })
         }
+        "counter_target_spell" => {
+            // Unit variant — no required fields. Python's
+            // `CounterTargetSpell.filter_types` is intentionally
+            // dropped from the Rust first slice (see the variant's
+            // docstring). Any extra keys on the dict are ignored,
+            // matching the silent-drop convention for unrecognized
+            // keys elsewhere in the parser.
+            Ok(Effect::CounterTargetSpell)
+        }
         other => Err(PyValueError::new_err(format!(
-            "unknown effect kind {other:?}; valid: deal_damage, draw_cards, gain_life, return_to_hand, mill, exile_target, tap_target, untap_target, sacrifice, add_counters, discard_card, scry_n, destroy_target, damage_each_opponent, damage_each_creature, create_token, add_mana_to_pool, search_library_for_basic_land_tapped, put_plus_one_counter_on_self, surveil"
+            "unknown effect kind {other:?}; valid: deal_damage, draw_cards, gain_life, return_to_hand, mill, exile_target, tap_target, untap_target, sacrifice, add_counters, discard_card, scry_n, destroy_target, damage_each_opponent, damage_each_creature, create_token, add_mana_to_pool, search_library_for_basic_land_tapped, put_plus_one_counter_on_self, surveil, counter_target_spell"
         ))),
     }
 }
@@ -819,6 +875,9 @@ fn effect_to_pydict<'py>(
         Effect::Surveil { count } => {
             d.set_item("kind", "surveil")?;
             d.set_item("count", *count)?;
+        }
+        Effect::CounterTargetSpell => {
+            d.set_item("kind", "counter_target_spell")?;
         }
     }
     Ok(d)

@@ -4087,3 +4087,258 @@ def test_resolve_surveil_negative_count_raises(synthetic_state):
         synthetic_state.register_and_inject_object(
             _surveil_dict(count=-1), 0, ZONE_HAND
         )
+
+
+# --- round-23: CounterTargetSpell dispatch -------------------------
+#
+# CR 701.5: Counter target spell on the stack. Powers Annul, Cancel,
+# etc. — 7 cards in the EoE pool per round-20 measurement. Composes
+# round-7's counter_spell primitive (inlined here per the per-slice
+# file-isolation pattern — see the variant's docstring on cards.rs).
+#
+# **Deterministic target choice: topmost-non-self stack item.** The
+# Effect dispatch scans the stack top-to-bottom (Vec iter().rev())
+# and picks the first source_obj_id that isn't this resolving
+# effect's own source (via the round-23 source_obj_id parameter on
+# apply_effect). A counterspell sitting on the stack shouldn't
+# counter itself before it resolves.
+#
+# **Empty stack / only-self stack: silent fizzle.** Mirrors Python's
+# `CounterTargetSpell.resolve` short-circuit on `if not targets`.
+# The Effect doesn't error; the post-resolve mover still routes the
+# counterspell source to the graveyard at the outer
+# `resolve_top_of_stack`.
+#
+# **Source goes to its controller's graveyard.** CR 701.6 — a
+# countered spell is put into its owner's graveyard. First slice:
+# owner = controller. Mirrors the round-7 counter_spell primitive's
+# routing.
+
+
+def _annul_dict():
+    """An Annul-style counter-target-spell printing dict. Instant-typed
+    so the post-resolve mover routes the resolved counterspell source
+    to its own controller's graveyard (CR 608.2m)."""
+    return {
+        "name": "Test Annul",
+        "card_types": ["Instant"],
+        "mana_cost": {"U": 1},
+        "effects": [{"kind": "counter_target_spell"}],
+    }
+
+
+def _bombard_for_counter_dict():
+    """A second spell that the Annul-style counter can target. A
+    DealDamage Sorcery — when countered before resolution, its
+    DealDamage effect must NOT fire. Used as the 'other spell' on the
+    stack."""
+    return {
+        "name": "Bombard Target",
+        "card_types": ["Sorcery"],
+        "mana_cost": {"R": 1, "generic": 2},
+        "effects": [
+            {
+                "kind": "deal_damage",
+                "amount": 3,
+                "target": {"kind": "any_player"},
+            }
+        ],
+    }
+
+
+def test_resolve_counter_target_spell_counters_top_other_spell(synthetic_state):
+    """Stack has [other_spell, counter_spell] (counter is top). Resolve
+    the top — the counter targets the other_spell, removes its stack
+    item, and moves the other_spell's source to its controller's
+    graveyard. The counterspell source itself then post-resolves to
+    its own controller's graveyard via CR 608.2m. Stack ends empty."""
+    other_obj_id = synthetic_state.register_and_inject_object(
+        _bombard_for_counter_dict(), 1, ZONE_HAND
+    )
+    counter_obj_id = synthetic_state.register_and_inject_object(
+        _annul_dict(), 0, ZONE_HAND
+    )
+    # Stack: bottom = other (controller=1), top = counter (controller=0).
+    synthetic_state.push_to_stack(other_obj_id, 1)
+    synthetic_state.push_to_stack(counter_obj_id, 0)
+    assert synthetic_state.stack_size() == 2
+
+    p0_graveyard_before = synthetic_state.graveyard_sizes[0]
+    p1_graveyard_before = synthetic_state.graveyard_sizes[1]
+
+    synthetic_state.resolve_top_of_stack()
+
+    # Stack drained (counter resolved, its target was removed from
+    # the stack before pop).
+    assert synthetic_state.is_stack_empty() is True
+    # Countered spell (other_obj_id) is in player 1's graveyard.
+    assert synthetic_state.find_object_zone(other_obj_id) == ZONE_GRAVEYARD
+    assert synthetic_state.graveyard_sizes[1] == p1_graveyard_before + 1
+    # Counterspell source (counter_obj_id) is in player 0's graveyard
+    # via the CR 608.2m post-resolve mover (Instant -> controller's
+    # graveyard).
+    assert synthetic_state.find_object_zone(counter_obj_id) == ZONE_GRAVEYARD
+    assert synthetic_state.graveyard_sizes[0] == p0_graveyard_before + 1
+
+
+def test_resolve_counter_target_spell_empty_stack_except_self_fizzles(
+    synthetic_state,
+):
+    """Stack has only [counter_spell] — no other targets. Per Python
+    parity (`if not targets: return`), the Effect dispatch fizzles
+    silently. The counterspell's own stack item still pops at the outer
+    `resolve_top_of_stack`, and its source still post-resolves to the
+    controller's graveyard via CR 608.2m. No error."""
+    counter_obj_id = synthetic_state.register_and_inject_object(
+        _annul_dict(), 0, ZONE_HAND
+    )
+    synthetic_state.push_to_stack(counter_obj_id, 0)
+    assert synthetic_state.stack_size() == 1
+
+    p0_graveyard_before = synthetic_state.graveyard_sizes[0]
+
+    # No exception, returns the resolved-item dict.
+    resolved = synthetic_state.resolve_top_of_stack()
+    assert resolved == {"source_obj_id": counter_obj_id, "controller": 0}
+
+    assert synthetic_state.is_stack_empty() is True
+    # Counterspell source landed in its own controller's graveyard
+    # via the post-resolve mover; no other state changed.
+    assert synthetic_state.find_object_zone(counter_obj_id) == ZONE_GRAVEYARD
+    assert synthetic_state.graveyard_sizes[0] == p0_graveyard_before + 1
+
+
+def test_resolve_counter_target_spell_picks_topmost_non_self(synthetic_state):
+    """Stack has [A, B, counter_spell] from bottom to top. The counter
+    must pick B (the topmost-non-self stack item), leaving A alone.
+    After resolution: A still on stack, B in its controller's
+    graveyard, counter in its own controller's graveyard."""
+    a_obj_id = synthetic_state.register_and_inject_object(
+        _bombard_for_counter_dict(), 1, ZONE_HAND
+    )
+    b_obj_id = synthetic_state.register_and_inject_object(
+        _bombard_for_counter_dict(), 1, ZONE_HAND
+    )
+    counter_obj_id = synthetic_state.register_and_inject_object(
+        _annul_dict(), 0, ZONE_HAND
+    )
+    # Stack from bottom: A (controller=1), B (controller=1),
+    # counter (controller=0).
+    synthetic_state.push_to_stack(a_obj_id, 1)
+    synthetic_state.push_to_stack(b_obj_id, 1)
+    synthetic_state.push_to_stack(counter_obj_id, 0)
+    assert synthetic_state.stack_size() == 3
+
+    synthetic_state.resolve_top_of_stack()
+
+    # A remains on stack (counter resolved + popped; B was countered
+    # and removed mid-resolve). One stack item left.
+    assert synthetic_state.stack_size() == 1
+    top = synthetic_state.peek_top_of_stack()
+    assert top == {"source_obj_id": a_obj_id, "controller": 1}
+    # B is in player 1's graveyard (its controller).
+    assert synthetic_state.find_object_zone(b_obj_id) == ZONE_GRAVEYARD
+    # A is NOT in the graveyard — it's still pending on the stack.
+    assert synthetic_state.find_object_zone(a_obj_id) == ZONE_HAND
+
+
+def test_resolve_counter_target_spell_routes_to_target_controller_graveyard(
+    synthetic_state,
+):
+    """The countered spell goes to ITS controller's graveyard, NOT the
+    counter-caster's. Annul (p0) counters a Bombard (p1) — Bombard
+    lands in p1's graveyard, not p0's. Mirrors CR 701.6 + the round-7
+    counter_spell primitive's controller-routing convention."""
+    bombard_obj_id = synthetic_state.register_and_inject_object(
+        _bombard_for_counter_dict(), 1, ZONE_HAND
+    )
+    counter_obj_id = synthetic_state.register_and_inject_object(
+        _annul_dict(), 0, ZONE_HAND
+    )
+    # bombard is controller=1 on the stack item.
+    synthetic_state.push_to_stack(bombard_obj_id, 1)
+    synthetic_state.push_to_stack(counter_obj_id, 0)
+
+    p0_graveyard_before = synthetic_state.graveyard_sizes[0]
+    p1_graveyard_before = synthetic_state.graveyard_sizes[1]
+
+    synthetic_state.resolve_top_of_stack()
+
+    # p1's graveyard gained the countered Bombard.
+    assert synthetic_state.graveyard_sizes[1] == p1_graveyard_before + 1
+    # p0's graveyard gained the resolved Annul (post-resolve mover),
+    # but NOT the Bombard.
+    assert synthetic_state.graveyard_sizes[0] == p0_graveyard_before + 1
+
+
+def test_resolve_counter_target_spell_target_effects_do_not_fire(
+    synthetic_state,
+):
+    """A countered spell's effects must NOT resolve. The Bombard's
+    DealDamage(3, any_player) would normally hit p0 (defender from
+    p1's perspective) for 3, but since the Annul counters it before
+    Bombard's resolution, no damage is dealt. The dispatch sequence
+    here is: resolve_top pops the Annul (top), which counters the
+    Bombard (removes its stack item before Bombard ever resolves).
+    Bombard's DealDamage never fires."""
+    bombard_obj_id = synthetic_state.register_and_inject_object(
+        _bombard_for_counter_dict(), 1, ZONE_HAND
+    )
+    counter_obj_id = synthetic_state.register_and_inject_object(
+        _annul_dict(), 0, ZONE_HAND
+    )
+    synthetic_state.push_to_stack(bombard_obj_id, 1)
+    synthetic_state.push_to_stack(counter_obj_id, 0)
+    life_before = list(synthetic_state.life_totals)
+
+    synthetic_state.resolve_top_of_stack()
+
+    # No life totals changed — Bombard's DealDamage never resolved.
+    assert synthetic_state.life_totals[0] == life_before[0]
+    assert synthetic_state.life_totals[1] == life_before[1]
+
+
+def test_resolve_counter_target_spell_empty_stack_only_self_does_not_error_with_pop(
+    synthetic_state,
+):
+    """Variant of the fizzle test: confirm `stack.pop()` at the outer
+    `resolve_top_of_stack` still succeeds when the inner dispatch
+    saw only-self. Specifically guards against an off-by-one where
+    'fizzle' accidentally removed the counter's own stack item, then
+    the outer pop would crash on an empty stack."""
+    counter_obj_id = synthetic_state.register_and_inject_object(
+        _annul_dict(), 0, ZONE_HAND
+    )
+    synthetic_state.push_to_stack(counter_obj_id, 0)
+    # No exception means the outer pop didn't run on an empty stack.
+    resolved = synthetic_state.resolve_top_of_stack()
+    assert resolved is not None
+    assert synthetic_state.is_stack_empty() is True
+
+
+def test_resolve_counter_target_spell_clone_isolation(synthetic_state):
+    """CoW canary: counter on a clone must not bleed into the original.
+    Load-bearing because the inline counter logic uses Arc::make_mut on
+    multiple zones (stack pop is direct Vec mutation on the per-state
+    stack Vec; zone moves use Arc::make_mut). The original state's
+    stack + zones must be untouched after the clone resolves."""
+    bombard_obj_id = synthetic_state.register_and_inject_object(
+        _bombard_for_counter_dict(), 1, ZONE_HAND
+    )
+    counter_obj_id = synthetic_state.register_and_inject_object(
+        _annul_dict(), 0, ZONE_HAND
+    )
+    synthetic_state.push_to_stack(bombard_obj_id, 1)
+    synthetic_state.push_to_stack(counter_obj_id, 0)
+    cloned = synthetic_state.clone_once()
+
+    cloned.resolve_top_of_stack()
+
+    # Clone: counter resolved, stack drained, Bombard in p1's graveyard.
+    assert cloned.is_stack_empty() is True
+    assert cloned.find_object_zone(bombard_obj_id) == ZONE_GRAVEYARD
+
+    # Original: stack still has 2 items, both sources still in hand.
+    assert synthetic_state.stack_size() == 2
+    assert synthetic_state.find_object_zone(bombard_obj_id) == ZONE_HAND
+    assert synthetic_state.find_object_zone(counter_obj_id) == ZONE_HAND

@@ -1440,6 +1440,117 @@ fn apply_effect(
             let _controller = state.active_player as usize;
             let _ = source_obj_id; // controller-targeted, not source-targeted
         }
+        // Round-23: CounterTargetSpell. CR 701.5 — counter target
+        // spell on the stack; the countered spell moves to its
+        // controller's graveyard (CR 701.6 — first slice routes to
+        // controller's graveyard since owner-vs-controller tracking
+        // isn't yet split out). Powers Annul, Cancel, etc. — 7 cards
+        // in the EoE pool per round-20 measurement.
+        //
+        // **Deterministic target choice: topmost-non-self stack item.**
+        // Scan the stack from top (Vec last) down, pick the first
+        // `source_obj_id` that isn't this resolving effect's own
+        // source — a counterspell sitting on the stack shouldn't
+        // counter itself before it resolves. The `source_obj_id`
+        // parameter (round-23 refactor on `apply_effect`) carries the
+        // resolving stack item's source id; we exclude it here. Real
+        // MTG plumbs target choice through the cast surface; first
+        // slice deterministic-top-non-self mirrors the
+        // "DealDamage picks defender's battlefield[0]" convention.
+        //
+        // **Empty stack / only-self stack: silent fizzle.** Mirrors
+        // Python's `CounterTargetSpell.resolve` short-circuit on
+        // `if not targets`. The Effect doesn't error; the
+        // post-resolve mover still routes the spell source to the
+        // graveyard, the stack still pops at the outer
+        // `resolve_top_of_stack`.
+        //
+        // **No filter_types / no `cant_be_countered` enforcement.**
+        // Python's `filter_types` (Annul's Artifact/Enchantment-only
+        // restriction) and `_is_uncounterable` checks
+        // (`spell_is_uncounterable`, `grants_creature_spells_uncounterable`)
+        // are deferred — the Rust bridge has neither field today.
+        // First slice trusts the caller picked a legal target shape,
+        // same convention as the round-7 counter_spell primitive.
+        //
+        // **Inlining note (cross-file friction).** Round-7's
+        // `counter_spell(target_obj_id) -> bool` primitive on
+        // `state_ops_counterspell.rs` does exactly what we need
+        // (locate stack item, remove, move source to controller's
+        // graveyard). Routing through it would require
+        // `Bound::call_method1` cross-`#[pymethods]` plumbing inside
+        // `apply_effect` where we already hold `state: &mut GameState`
+        // — the same E0624 friction every other Effect arm hit. Per
+        // the recurring per-slice file-isolation pattern (every other
+        // arm — DealDamage / ReturnToHand / Mill / DrawCards /
+        // ExileTarget / Sacrifice / DestroyTarget / TapTarget /
+        // UntapTarget / AddCounters / DiscardCard / CreateToken /
+        // AddManaToPool / SearchLibraryForBasicLandTapped /
+        // PutPlusOneCounterOnSelf — inlines its primitive for the
+        // same reason), we inline the equivalent logic here. A
+        // follow-up consolidation slice can collapse onto the shared
+        // `counter_spell` primitive once cross-file private-fn calls
+        // re-open.
+        Effect::CounterTargetSpell => {
+            // Find the topmost stack item whose source isn't this
+            // effect's own source. iter().rev() walks top-to-bottom;
+            // capture both the Vec index (for stack removal) and the
+            // controller (for graveyard routing).
+            let target: Option<(usize, u32, u8)> = state
+                .stack
+                .iter()
+                .enumerate()
+                .rev()
+                .find(|(_, item)| item.source_obj_id != source_obj_id)
+                .map(|(i, item)| (i, item.source_obj_id, item.controller));
+            let (stack_pos, target_obj_id, target_controller) = match target {
+                Some(t) => t,
+                None => return Ok(()), // empty / only-self: silent fizzle
+            };
+            // Remove the matched stack item (inlines round-7's
+            // `counter_spell` stack-removal step).
+            state.stack.remove(stack_pos);
+            // Best-effort: move the source GameObject to its
+            // controller's graveyard (inlines round-7's
+            // `move_to_graveyard` step). Sweep both players' four
+            // tracked zones to find the source — mirrors how
+            // `state_ops_counterspell::move_to_graveyard` itself walks
+            // hand/library/battlefield/graveyard. CR 400.7 zone-change
+            // reset (tapped / summoning_sick / damage / counters) is
+            // applied on the way out, mirroring every other zone-move
+            // arm in this file (ReturnToHand / ExileTarget / Sacrifice
+            // / DestroyTarget / DiscardCard). If the source is missing
+            // (lost-track-of-source failure mode), the counter still
+            // "lands" — stack item removed — but the graveyard step
+            // is a no-op, same tolerance the round-7 primitive shows.
+            let mut taken: Option<GameObject> = None;
+            'outer: for player in state.players.iter_mut() {
+                for zone in [
+                    &mut player.hand,
+                    &mut player.library,
+                    &mut player.battlefield,
+                    &mut player.graveyard,
+                ] {
+                    if let Some(pos) = zone.iter().position(|o| o.id == target_obj_id) {
+                        let v = Arc::make_mut(zone);
+                        taken = Some(v.remove(pos));
+                        break 'outer;
+                    }
+                }
+            }
+            if let Some(mut obj) = taken {
+                obj.zone = ZONE_GRAVEYARD;
+                obj.tapped = false;
+                obj.summoning_sick = false;
+                obj.damage = 0;
+                obj.counters = 0;
+                obj.controller = target_controller;
+                Arc::make_mut(
+                    &mut state.players[target_controller as usize].graveyard,
+                )
+                .push(obj);
+            }
+        }
     }
     Ok(())
 }
