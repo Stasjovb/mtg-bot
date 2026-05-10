@@ -204,4 +204,73 @@ impl GameState {
         self.phase = phase;
         Ok(())
     }
+
+    /// Python-Step-name string for the current phase. Round 22 Phase
+    /// 2b bridge expansion — `scripts/parity_smoke.py:hash_state`
+    /// reads `state.step.name` (or falls back to `state.step` if
+    /// that's already a string), folding the active step into its
+    /// parity fingerprint. By returning the uppercase
+    /// `mtg_bot.turn.Step.<NAME>` string directly, the Rust side
+    /// satisfies the `getattr(..., "name", state.step)` fallback
+    /// — the harness sees a plain `str` and uses it verbatim.
+    ///
+    /// Mapping (kept in lockstep with `src/mtg_bot/turn.py:Step` —
+    /// the enum `.name` attribute, not the lowercase `.value`):
+    ///
+    /// - 0 `PHASE_UNTAP`              -> `"UNTAP"`
+    /// - 1 `PHASE_UPKEEP`             -> `"UPKEEP"`
+    /// - 2 `PHASE_DRAW`               -> `"DRAW"`
+    /// - 3 `PHASE_MAIN1`              -> `"PRECOMBAT_MAIN"`
+    /// - 4 `PHASE_BEGIN_COMBAT`       -> `"BEGINNING_OF_COMBAT"`
+    /// - 5 `PHASE_DECLARE_ATTACKERS`  -> `"DECLARE_ATTACKERS"`
+    /// - 6 `PHASE_DECLARE_BLOCKERS`   -> `"DECLARE_BLOCKERS"`
+    /// - 7 `PHASE_COMBAT_DAMAGE`      -> `"COMBAT_DAMAGE"`
+    /// - 8 `PHASE_END_COMBAT`         -> `"END_OF_COMBAT"`
+    /// - 9 `PHASE_MAIN2`              -> `"POSTCOMBAT_MAIN"`
+    /// - 10 `PHASE_END_STEP`          -> `"END"`
+    /// - 11 `PHASE_CLEANUP`           -> `"CLEANUP"`
+    ///
+    /// Two deviations from the round-22 brief's best-guess mapping
+    /// — both pinned to Python's actual `Step` enum names:
+    ///
+    /// 1. Python has **no** `FIRST_STRIKE_DAMAGE` step. `STEP_ORDER`
+    ///    in `turn.py` goes `DECLARE_BLOCKERS -> COMBAT_DAMAGE`
+    ///    directly (first-strike resolves inside the single combat-
+    ///    damage step in this engine's simplification). Rust's
+    ///    `PHASE_COMBAT_DAMAGE=7` therefore maps to `"COMBAT_DAMAGE"`,
+    ///    not `"FIRST_STRIKE_DAMAGE"`.
+    /// 2. Python phase 10 is `Step.END` (`.name == "END"`), not
+    ///    `"POSTCOMBAT_MAIN"`. The brief's mapping skipped the
+    ///    end-step entirely; we restore it so the Rust↔Python
+    ///    parity hash sees the same name at index 10.
+    ///
+    /// Exposed as a `#[getter]` so Python-side reads use property
+    /// access (`state.step`), matching how `hash_state` consumes it.
+    /// Calling it as a function (`state.step()`) raises `TypeError`
+    /// — pinned by the test side so the property shape doesn't
+    /// silently regress to a method.
+    #[getter]
+    fn step(&self) -> &'static str {
+        match self.phase {
+            PHASE_UNTAP => "UNTAP",
+            PHASE_UPKEEP => "UPKEEP",
+            PHASE_DRAW => "DRAW",
+            PHASE_MAIN1 => "PRECOMBAT_MAIN",
+            PHASE_BEGIN_COMBAT => "BEGINNING_OF_COMBAT",
+            PHASE_DECLARE_ATTACKERS => "DECLARE_ATTACKERS",
+            PHASE_DECLARE_BLOCKERS => "DECLARE_BLOCKERS",
+            PHASE_COMBAT_DAMAGE => "COMBAT_DAMAGE",
+            PHASE_END_COMBAT => "END_OF_COMBAT",
+            PHASE_MAIN2 => "POSTCOMBAT_MAIN",
+            PHASE_END_STEP => "END",
+            PHASE_CLEANUP => "CLEANUP",
+            // `set_phase` clamps to [0, PHASE_CLEANUP] and
+            // `advance_phase` cycles through the same range, so this
+            // arm is unreachable in well-formed use. Return a
+            // sentinel rather than panic so a future raw setter on
+            // the `phase` field can't take down a parity fingerprint
+            // mid-roll.
+            _ => "UNKNOWN",
+        }
+    }
 }

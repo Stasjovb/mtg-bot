@@ -87,6 +87,26 @@ impl GameState {
         self.priority_player
     }
 
+    /// Python-property alias for `active_player`. Mirrors Python's
+    /// `GameState.active_player_idx` dataclass field — read as a plain
+    /// attribute (no parens). Used by `scripts/parity_smoke.py:hash_state`
+    /// and other bridge consumers that read the Python surface
+    /// uniformly.
+    #[getter]
+    fn active_player_idx(&self) -> u8 {
+        self.active_player
+    }
+
+    /// Python-property alias for `get_priority_player()`. Mirrors
+    /// Python's `GameState.priority_player_idx` dataclass field —
+    /// read as a plain attribute (no parens). Same semantics as the
+    /// existing `get_priority_player()` pymethod; this is the
+    /// property-style alias.
+    #[getter]
+    fn priority_player_idx(&self) -> u8 {
+        self.priority_player
+    }
+
     /// Pass priority to the other player. In the 2-player model
     /// this is a simple toggle (`1 - priority_player`). Returns the
     /// new priority-holder's id so callers can chain off the result

@@ -137,6 +137,11 @@ the test lands in a commit.
 | rust(choices-extend): graveyard / keyword / tapped selectors | tests_rust/test_choices.py extend | green  | feature/rust-tdd-choices-extend |
 | rust(bridge-outcome): is_over / is_draw / winner_id getters | tests_rust/test_winloss.py extend | green  | feature/rust-bridge-outcome |
 | rust(bridge-zone-snapshots): hand/library/graveyard/exile/battlefield/mana_pool getters | tests_rust/test_snapshot.py | green  | feature/rust-bridge-zone-snapshots |
+| rust(bridge-step-getter): step getter returns Python Step.name | tests_rust/test_steps.py extend | green  | feature/rust-bridge-step-getter |
+| rust(bridge-priority-active-aliases): active_player_idx + priority_player_idx Python-property getters | tests_rust/test_priority.py extend | green  | feature/rust-bridge-priority-active-aliases |
+| rust(bridge-stack-snapshot): stack_snapshot getter | tests_rust/test_stack.py extend | green  | feature/rust-bridge-stack-snapshot |
+| rust(action-foundation): Action enum + apply_action(PassPriority) | tests_rust/test_actions.py | green  | feature/rust-action-foundation |
+| rust(bridge-fingerprint): fingerprint() matching parity_smoke.py:hash_state | tests_rust/test_fingerprint.py | green  | feature/rust-bridge-fingerprint |
 
 ## Build invocation reminder
 

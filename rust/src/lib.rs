@@ -1,5 +1,7 @@
 use pyo3::prelude::*;
 
+#[allow(dead_code)]
+mod actions;
 mod cards;
 mod state;
 
@@ -8,6 +10,7 @@ mod state;
 // `multiple-pymethods` feature flag in Cargo.toml. Empty stubs
 // land in this commit; each subsequent feature branch fills in
 // its own file without touching the others.
+mod state_ops_actions;
 mod state_ops_cast;
 mod state_ops_choices;
 mod state_ops_cleanup;
@@ -16,6 +19,7 @@ mod state_ops_counters;
 mod state_ops_counterspell;
 mod state_ops_damage;
 mod state_ops_deck;
+mod state_ops_fingerprint;
 mod state_ops_library;
 mod state_ops_life;
 mod state_ops_mana;
