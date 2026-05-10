@@ -53,6 +53,29 @@ pub enum Action {
     /// game — the highest-impact PlayLand-style variant to add after
     /// `PassPriority`.
     PlayLand { card_id: u32 },
+    /// Declare the set of attacking creatures for this combat (CR 508.1).
+    /// `attacker_ids` mirrors Python's `frozenset[int]` — an unordered
+    /// set of GameObject ids on the active player's battlefield that
+    /// will become attackers. The round-5 `declare_attacker` primitive
+    /// validates each id (creature predicate, untapped, not summoning
+    /// sick modulo haste, not defender); ineligible ids are silently
+    /// rejected by the primitive's `bool` return, mirroring Python's
+    /// `_declare_attackers` filtering behavior. Pass an empty set to
+    /// attack with nothing.
+    ///
+    /// **Shape note: `Vec<u32>`, not `HashSet`/`BTreeSet`.** The Python
+    /// `DeclareAttackers(attacker_ids: frozenset[int])` dataclass is a
+    /// set, but the dict serialization at the bridge boundary is a
+    /// list — order is preserved across the FFI. `apply_action`'s
+    /// dispatch loop calls `declare_attacker` once per id in iteration
+    /// order, so the Vec shape gives the caller deterministic
+    /// application order. The parity harness sorts before passing if
+    /// it wants a canonical order; this slice does not impose one.
+    ///
+    /// Round-20 frequency: 16 of 420 decisions (~3.8%) in the sample
+    /// game — the 3rd-most-frequent variant after `PassPriority` and
+    /// `PlayLand`.
+    DeclareAttackers { attacker_ids: Vec<u32> },
 }
 
 // --- dict -> Rust ------------------------------------------------
@@ -76,8 +99,31 @@ pub fn parse_action(dict: &Bound<'_, PyDict>) -> PyResult<Action> {
             let card_id: u32 = require(dict, "card_id")?.extract()?;
             Ok(Action::PlayLand { card_id })
         }
+        "declare_attackers" => {
+            // Accept any Python iterable — list, tuple, frozenset, set
+            // — by `iter()`-ing the object and extracting each
+            // element as a u32. PyO3's `extract::<Vec<u32>>()` is
+            // restricted to `Sequence` (list/tuple) and would reject
+            // a frozenset / set with a `TypeError: 'frozenset' object
+            // cannot be converted to 'Sequence'`, but the Python
+            // `DeclareAttackers(attacker_ids: frozenset[int])`
+            // dataclass field IS a frozenset — callers who pass the
+            // dataclass field directly (without going through the
+            // bridge's list-serialization step) would hit that
+            // failure. Iterating with `try_iter` covers both shapes.
+            // Wrong inner type (e.g. a string in the set) bubbles up
+            // as a `TypeError` from PyO3's extract machinery —
+            // matches the `card_id`-wrong-type behavior on
+            // `play_land`.
+            let raw = require(dict, "attacker_ids")?;
+            let mut attacker_ids: Vec<u32> = Vec::new();
+            for item in raw.try_iter()? {
+                attacker_ids.push(item?.extract::<u32>()?);
+            }
+            Ok(Action::DeclareAttackers { attacker_ids })
+        }
         other => Err(PyValueError::new_err(format!(
-            "unknown action kind {other:?}; valid: pass_priority, play_land"
+            "unknown action kind {other:?}; valid: pass_priority, play_land, declare_attackers"
         ))),
     }
 }
@@ -102,6 +148,15 @@ pub fn action_to_pydict<'py>(
         Action::PlayLand { card_id } => {
             d.set_item("kind", "play_land")?;
             d.set_item("card_id", *card_id)?;
+        }
+        Action::DeclareAttackers { attacker_ids } => {
+            d.set_item("kind", "declare_attackers")?;
+            // `Vec<u32>` round-trips through PyO3 as a Python list,
+            // preserving Vec iteration order. The round-trip
+            // property (parse_action → action_to_pydict → parse_action
+            // yields the same Action) is preserved because `extract::<
+            // Vec<u32>>()` on a list reads back the same order.
+            d.set_item("attacker_ids", attacker_ids.clone())?;
         }
     }
     Ok(d)

@@ -8,12 +8,13 @@
 //!
 //! ## Slice scope
 //!
-//! Round 22 wired `PassPriority`; round 23 adds `PlayLand` (10 of 420
+//! Round 22 wired `PassPriority`; round 23 added `PlayLand` (10 of 420
 //! decisions / ~2.4% in round-20's sample game — the 4th-most-frequent
-//! variant). Future slices grow the match arm (CastSpell, Activate,
-//! ...) plus a `legal_decisions` enumerator and a
-//! `state.consecutive_passes` field for the "both passed -> resolve /
-//! advance" composition.
+//! variant) and `DeclareAttackers` (16 of 420 / ~3.8% — the
+//! 3rd-most-frequent variant). Future slices grow the match arm
+//! (CastSpell, Activate, ...) plus a `legal_decisions` enumerator and
+//! a `state.consecutive_passes` field for the "both passed -> resolve
+//! / advance" composition.
 //!
 //! ## Actor convention for hand-targeting actions
 //!
@@ -25,6 +26,20 @@
 //! `(obj_id, player_id)` and only succeeds if `obj_id` is in that
 //! player's hand, so misrouted dispatch fails cleanly rather than
 //! silently mutating the wrong side.
+//!
+//! ## Actor convention for combat actions
+//!
+//! `DeclareAttackers` is a combat-step action — it fires on the
+//! active player's turn, not at an arbitrary priority moment. The
+//! `declare_attacker` primitive (round 5) is `(&mut self, obj_id: u32)`:
+//! it only takes the creature id and reads the owning player from the
+//! battlefield index, so the dispatcher doesn't need to pass a
+//! player_id parameter. The active-vs-priority distinction is moot
+//! here for declaring attackers (only the active player can declare
+//! attackers; priority is at the start of the declare-attackers step
+//! when this fires), but the dispatch loop still iterates with the
+//! Vec's stable order so callers can pin a deterministic application
+//! order via sorting the set before passing.
 //!
 //! ## Cross-file dispatch pattern (round-16)
 //!
@@ -62,10 +77,17 @@ impl GameState {
     ///   (round 22).
     /// - `{"kind": "play_land", "card_id": <u32>}` → calls
     ///   `play_land(card_id, priority_player)` (round 23).
+    /// - `{"kind": "declare_attackers", "attacker_ids": [<u32>, ...]}`
+    ///   → iterates the Vec and calls
+    ///   `declare_attacker(attacker_id)` once per id (round 23).
+    ///   Ineligible ids are silently rejected by the primitive's
+    ///   `bool` return — mirrors Python's `_declare_attackers`
+    ///   filtering behavior.
     ///
     /// Unknown `kind` raises `ValueError`; missing `kind` or other
-    /// required keys (e.g. `card_id` for `play_land`) raise
-    /// `KeyError`. Both bubble up from `actions::parse_action`.
+    /// required keys (e.g. `card_id` for `play_land`,
+    /// `attacker_ids` for `declare_attackers`) raise `KeyError`.
+    /// Both bubble up from `actions::parse_action`.
     fn apply_action(slf: Bound<'_, Self>, action_dict: &Bound<'_, PyDict>) -> PyResult<()> {
         let action = parse_action(action_dict)?;
         match action {
@@ -88,6 +110,29 @@ impl GameState {
                 // would re-borrow under the hood).
                 let player_id = slf.borrow().priority_player;
                 slf.call_method1("play_land", (card_id, player_id))?;
+            }
+            Action::DeclareAttackers { attacker_ids } => {
+                // Same cross-file pattern as `play_land`: iterate the
+                // Vec and dispatch one `declare_attacker(obj_id)` call
+                // per id. The primitive takes only the creature id
+                // (not a player_id) — it reads the owning player from
+                // the battlefield index, so the dispatcher doesn't
+                // need to pre-resolve an actor here. Ineligible ids
+                // (tapped, non-creature, summoning-sick without haste,
+                // defender, etc.) are silently rejected by the
+                // primitive's `bool` return; we discard the bool to
+                // match Python's `_declare_attackers` filtering
+                // behavior (the eligible-set filter on the Python side
+                // is implicit here via the primitive's per-id gate).
+                //
+                // Iteration order is the Vec's order — stable from
+                // parse_action's `extract::<Vec<u32>>()`, which
+                // preserves the Python iterable's iteration order.
+                // Callers that want a canonical order sort the set
+                // before passing (the parity harness does this).
+                for attacker_id in attacker_ids {
+                    slf.call_method1("declare_attacker", (attacker_id,))?;
+                }
             }
         }
         Ok(())
