@@ -294,3 +294,106 @@ def test_clone_then_advance_to_untap_does_not_affect_original(synthetic_state):
     assert cloned.is_summoning_sick(elf_id) is False
     # Original is untouched: still on phase 0 (UNTAP), sickness intact.
     assert synthetic_state.is_summoning_sick(elf_id) is True
+
+
+# --- `step` getter — Python-Step.name parity (round 22 Phase 2b) -------
+#
+# `scripts/parity_smoke.py:hash_state` reads `state.step.name` (with a
+# fallback to `state.step` when it's already a string). Returning the
+# `mtg_bot.turn.Step` enum's `.name` strings directly from Rust makes
+# both engines hash-equivalent at the active-step axis.
+#
+# Mirror of the Rust-side mapping in
+# `rust/src/state_ops_steps.rs:GameState::step`. Two deviations from
+# the round-22 brief's best-guess mapping pinned here:
+#
+# 1. Python has NO ``FIRST_STRIKE_DAMAGE`` step — ``STEP_ORDER`` goes
+#    ``DECLARE_BLOCKERS -> COMBAT_DAMAGE`` directly. PHASE_COMBAT_DAMAGE
+#    maps to ``"COMBAT_DAMAGE"``, not the brief's
+#    ``"FIRST_STRIKE_DAMAGE"``.
+# 2. Python phase 10 is ``Step.END`` (``.name == "END"``), not
+#    ``"POSTCOMBAT_MAIN"``. The brief skipped the ``END`` step entirely.
+#
+# Names below are the verified ``Step.name`` strings from
+# ``src/mtg_bot/turn.py:Step``.
+
+PHASE_NAME_BY_INDEX = {
+    0: "UNTAP",
+    1: "UPKEEP",
+    2: "DRAW",
+    3: "PRECOMBAT_MAIN",
+    4: "BEGINNING_OF_COMBAT",
+    5: "DECLARE_ATTACKERS",
+    6: "DECLARE_BLOCKERS",
+    7: "COMBAT_DAMAGE",
+    8: "END_OF_COMBAT",
+    9: "POSTCOMBAT_MAIN",
+    10: "END",
+    11: "CLEANUP",
+}
+
+
+def test_step_returns_untap_string_for_initial_synthetic_state(synthetic_state):
+    """Fresh synthetic state lands at PHASE_UNTAP, so ``state.step``
+    returns the Python ``Step.UNTAP.name`` string."""
+    assert synthetic_state.current_phase() == PHASE_UNTAP
+    assert synthetic_state.step == "UNTAP"
+
+
+def test_step_tracks_set_phase_for_each_index(synthetic_state):
+    """Walking every phase index via ``set_phase`` produces the
+    matching ``Step.name`` string. Pins the full 12-entry mapping
+    in one test."""
+    for phase_index, expected_name in PHASE_NAME_BY_INDEX.items():
+        synthetic_state.set_phase(phase_index)
+        assert synthetic_state.step == expected_name, (
+            f"phase {phase_index}: expected step name "
+            f"{expected_name!r}, got {synthetic_state.step!r}"
+        )
+
+
+def test_step_reflects_advance_phase_progression(synthetic_state):
+    """After ``advance_phase``, ``state.step`` reflects the new
+    phase name. One lap through all 12 phases must produce the
+    expected sequence of ``Step.name`` strings — same shape as
+    ``test_advance_phase_rotates_through_all_twelve`` but on the
+    string-name surface that ``hash_state`` consumes."""
+    expected = [PHASE_NAME_BY_INDEX[i] for i in range(1, 12)]
+    expected.append(PHASE_NAME_BY_INDEX[0])  # wrap CLEANUP -> UNTAP
+    observed = []
+    for _ in range(12):
+        synthetic_state.advance_phase()
+        observed.append(synthetic_state.step)
+    assert observed == expected
+    assert synthetic_state.step == "UNTAP"
+
+
+def test_step_is_a_property_not_a_method(synthetic_state):
+    """``state.step`` must be a property (no parens), matching the
+    Python ``GameState.step`` attribute shape. Calling it as a
+    method (``state.step()``) raises ``TypeError`` because the
+    return value (a ``str``) isn't callable. Pins the property
+    shape so the bridge doesn't silently regress to a method form
+    that would break ``hash_state``'s ``getattr(state, "step",
+    None)`` lookup chain."""
+    # Property access returns the string directly.
+    assert isinstance(synthetic_state.step, str)
+    # Calling the string raises TypeError.
+    with pytest.raises(TypeError):
+        synthetic_state.step()
+
+
+def test_step_string_does_not_carry_dot_name_attribute(synthetic_state):
+    """``hash_state`` in ``scripts/parity_smoke.py`` does
+    ``getattr(state.step, "name", state.step)`` — so the Rust-side
+    string MUST NOT carry a ``.name`` attribute that would shadow
+    the fallback. Plain Python ``str`` doesn't carry ``.name``;
+    this test pins the shape so a future refactor can't slip in a
+    wrapper object whose ``.name`` returns something other than the
+    value itself."""
+    step = synthetic_state.step
+    assert not hasattr(step, "name"), (
+        "Rust-side `step` must be a plain str (no `.name` attr) so "
+        "hash_state's getattr fallback collapses to the str-already "
+        "branch."
+    )
