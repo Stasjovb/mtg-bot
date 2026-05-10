@@ -676,6 +676,20 @@ fn apply_effect(state: &mut GameState, effect: &Effect) -> PyResult<()> {
                 Arc::make_mut(&mut state.players[active].graveyard).push(obj);
             }
         },
+        // Foundation stub: round-15 resolve-counters-discard slice
+        // replaces both arms with real dispatch. Build-time E0004
+        // exhaustiveness would otherwise reject the build the moment
+        // the variants land in cards.rs.
+        Effect::AddCounters { .. } => {
+            return Err(PyValueError::new_err(
+                "Effect::AddCounters dispatch not yet implemented (round-15 foundation stub)",
+            ));
+        }
+        Effect::DiscardCard { .. } => {
+            return Err(PyValueError::new_err(
+                "Effect::DiscardCard dispatch not yet implemented (round-15 foundation stub)",
+            ));
+        }
     }
     Ok(())
 }
