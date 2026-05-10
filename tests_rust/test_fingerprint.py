@@ -181,3 +181,126 @@ def test_fingerprint_clone_isolation_zone_mutation(synthetic_state, engine):
     assert clone_fp_before == clone_fp_after
     # And the source's fingerprint did change.
     assert synthetic_state.fingerprint() != clone_fp_before
+
+
+# ---------------------------------------------------------------------------
+# Additional pinned baselines — broader regression surface.
+#
+# Round-22 (commit 2ee5597) pinned two synthetic-state fingerprints (default
+# args and `(2, 3, 5)`). This block extends that coverage across a wider
+# range of zone-size shapes so any accidental drift in the fingerprint
+# format — SHA1 truncation length, JSON serialization, zone iteration
+# order, per-object 8-tuple shape — surfaces on the first failed assertion
+# rather than as a downstream parity-smoke mystery.
+#
+# Each baseline was computed once by running ``fingerprint()`` on a freshly
+# built synthetic state at the noted commit and recording the 12-char hex.
+# These are pure regression guards: if any of them flip, the fingerprint
+# format moved on the Rust side and the offline Python recipe in this
+# module's docstring (plus ``scripts/parity_smoke.py:hash_state``) must
+# be updated in lockstep.
+# ---------------------------------------------------------------------------
+
+
+def test_fingerprint_pinned_for_zero_zones(engine):
+    """``make_synthetic_state(0, 0, 0)`` — empty battlefield / hand / library
+    per side — has pinned fingerprint ``3b17024676c6``. Guards the empty-
+    zone code path."""
+    s = engine.make_synthetic_state(0, 0, 0)
+    assert s.fingerprint() == "3b17024676c6"
+
+
+def test_fingerprint_pinned_for_one_each(engine):
+    """``make_synthetic_state(1, 1, 1)`` — minimal non-empty state — has
+    pinned fingerprint ``56d2910a6ac4``."""
+    s = engine.make_synthetic_state(1, 1, 1)
+    assert s.fingerprint() == "56d2910a6ac4"
+
+
+def test_fingerprint_pinned_for_three_each(engine):
+    """``make_synthetic_state(3, 3, 3)`` — mid-size symmetric state — has
+    pinned fingerprint ``e32afdb188c1``."""
+    s = engine.make_synthetic_state(3, 3, 3)
+    assert s.fingerprint() == "e32afdb188c1"
+
+
+def test_fingerprint_pinned_for_ten_each(engine):
+    """``make_synthetic_state(10, 10, 10)`` — bigger symmetric state — has
+    pinned fingerprint ``6ff3d1babb85``. Exercises the digest at scale,
+    so any iteration-order regression that only manifests past N>=N0
+    surfaces here."""
+    s = engine.make_synthetic_state(10, 10, 10)
+    assert s.fingerprint() == "6ff3d1babb85"
+
+
+def test_fingerprint_pinned_for_hand_only(engine):
+    """``make_synthetic_state(0, 5, 0)`` — only hands, no battlefield or
+    library — has pinned fingerprint ``5c67f92a0cb4``. Isolates the
+    hand-zone contribution."""
+    s = engine.make_synthetic_state(0, 5, 0)
+    assert s.fingerprint() == "5c67f92a0cb4"
+
+
+def test_fingerprint_pinned_for_battlefield_only(engine):
+    """``make_synthetic_state(5, 0, 0)`` — only battlefield, no hand or
+    library — has pinned fingerprint ``f9848ca12e57``. Isolates the
+    battlefield-zone contribution."""
+    s = engine.make_synthetic_state(5, 0, 0)
+    assert s.fingerprint() == "f9848ca12e57"
+
+
+def test_fingerprint_pinned_for_library_only(engine):
+    """``make_synthetic_state(0, 0, 5)`` — only library, no battlefield or
+    hand — has pinned fingerprint ``f251f42f8647``. Isolates the library-
+    zone contribution."""
+    s = engine.make_synthetic_state(0, 0, 5)
+    assert s.fingerprint() == "f251f42f8647"
+
+
+def test_fingerprint_pinned_for_asymmetric(engine):
+    """``make_synthetic_state(5, 0, 10)`` — asymmetric across zones (5 bf,
+    0 hand, 10 lib) — has pinned fingerprint ``6f067c3988bc``. Catches
+    regressions where one zone's contribution accidentally bleeds into
+    another's slot."""
+    s = engine.make_synthetic_state(5, 0, 10)
+    assert s.fingerprint() == "6f067c3988bc"
+
+
+# ---------------------------------------------------------------------------
+# Pinned cross-checks: clone preserves, mutation changes.
+# ---------------------------------------------------------------------------
+
+
+def test_fingerprint_pinned_for_clone_matches_source(engine):
+    """A ``clone_once()`` of a ``(3, 3, 3)`` synthetic state produces a
+    state whose fingerprint exactly equals the source's pinned value
+    ``e32afdb188c1``. Pinning the post-clone hash (not just asserting
+    source==clone) guards against a regression where BOTH source and
+    clone drift in lockstep — which would silently pass the
+    ``test_fingerprint_clone_preserves`` style check above."""
+    s = engine.make_synthetic_state(3, 3, 3)
+    clone = s.clone_once()
+    assert clone.fingerprint() == "e32afdb188c1"
+    assert s.fingerprint() == clone.fingerprint()
+
+
+def test_fingerprint_pinned_after_tap_mutation(engine):
+    """Tapping the first battlefield permanent on a ``(3, 3, 3)``
+    synthetic state shifts the fingerprint from ``e32afdb188c1`` to
+    ``e35e82c9b588``. Pinning the post-mutation hash locks in the
+    tapped-state contribution to the per-object 8-tuple."""
+    s = engine.make_synthetic_state(3, 3, 3)
+    assert s.fingerprint() == "e32afdb188c1"
+    s.tap_object(0)
+    assert s.fingerprint() == "e35e82c9b588"
+
+
+def test_fingerprint_pinned_after_life_mutation(engine):
+    """Lowering player 0's life from the default to 5 on a ``(1, 1, 1)``
+    synthetic state shifts the fingerprint from ``56d2910a6ac4`` to
+    ``d2435eea284f``. Pinning the post-mutation hash locks in the
+    life-field contribution to the per-player digest tuple."""
+    s = engine.make_synthetic_state(1, 1, 1)
+    assert s.fingerprint() == "56d2910a6ac4"
+    s.set_life(0, 5)
+    assert s.fingerprint() == "d2435eea284f"
