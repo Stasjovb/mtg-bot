@@ -998,3 +998,317 @@ def test_clone_then_resolve_etb_does_not_affect_original(synthetic_state):
     assert list(synthetic_state.life_totals) == [20, 20]
     assert synthetic_state.find_object_zone(obj_id) == ZONE_HAND
     assert synthetic_state.stack_size() == 1
+
+
+# --- round-10 ReturnToHand + Mill dispatch --------------------------
+#
+# Round-10 foundation (`feature/rust-tdd-base-r10`) extended the closed
+# `Effect` enum with two new variants:
+#
+#   - ReturnToHand { target: TargetFilter } — bounce: target permanent
+#     goes back to its owner's (= controller, first-slice) hand.
+#   - Mill { count: i32 } — caller's controller mills `count` cards
+#     from the top of their library to graveyard.
+#
+# The foundation left a stub arm in ``apply_effect`` returning
+# ValueError for both variants; this slice replaces it with real
+# dispatch.
+#
+# **Scope simplifications for this slice (mirrored in the Rust module
+# docstring on ``state_ops_resolve.rs``):**
+#
+# - **ReturnToHand target's controller = its current controller.**
+#   First slice: controller == owner, so "owner's hand" is just
+#   "current controller's hand". Real MTG distinguishes owner from
+#   controller (CR 109.3); deferred along with the rest of the
+#   ownership/control plumbing.
+# - **AnyCreature target → first object on the DEFENDING player's
+#   battlefield (smallest index).** Mirrors the existing DealDamage
+#   convention; no creature-type filter, no per-spell target choice.
+#   Empty defender battlefield → fizzle (silent no-op, stack still
+#   pops).
+# - **AnyPlayer target on ReturnToHand makes no sense** (you can't
+#   bounce a player). The dispatch raises ValueError loudly rather
+#   than silently fizzling — schema-allowed but semantically nonsense
+#   should fail loud, same shape as the unknown-effect-kind raise.
+# - **Mill controller = ``state.active_player``.** Same first-slice
+#   convention as DrawCards / GainLife.
+# - **Mill top of library = LAST element of the library Vec.**
+#   Mirrors the round-1 zones convention (drawing pops the back).
+# - **Mill on empty library is a silent stop.** Real MTG: drawing from
+#   an empty library is a deck-out loss on the next SBA check (CR
+#   704.5b). Mill on an empty library is NOT a deck-out trigger by
+#   itself in real MTG (the loss happens on the next *draw* attempt,
+#   not the mill that empties the library), so a silent stop is
+#   actually closer to real rules than the DrawCards short-circuit
+#   already in place.
+# - **Mill 0 is a no-op.** Negative counts treated as 0 (silent
+#   clamp), same shape as DrawCards.
+#
+# **Cross-file friction note:** Both effects need zone movement.
+# ``move_object`` is private to ``state_ops_zones.rs``; per per-slice
+# file-isolation, this slice inlines the minimal Arc::make_mut
+# logic, mirroring how DrawCards inlines pop+push.
+
+
+def _bounce_creature_dict():
+    """An instant 'return target creature to its owner's hand' —
+    Unsummon-shaped. Sorcery would also work but instant matches the
+    real card."""
+    return {
+        "name": "Test Unsummon",
+        "card_types": ["Instant"],
+        "mana_cost": {"U": 1},
+        "effects": [
+            {
+                "kind": "return_to_hand",
+                "target": {"kind": "any_creature"},
+            }
+        ],
+    }
+
+
+def _bounce_player_dict():
+    """A schema-allowed but semantically nonsense bounce: target
+    'any_player'. Should raise on resolve."""
+    return {
+        "name": "Test Bounce-Player (nonsense)",
+        "card_types": ["Instant"],
+        "mana_cost": {"U": 1},
+        "effects": [
+            {
+                "kind": "return_to_hand",
+                "target": {"kind": "any_player"},
+            }
+        ],
+    }
+
+
+def _mill_three_dict():
+    """A mill-3 sorcery — a chunk of e.g. Tome Scour."""
+    return {
+        "name": "Test Mill 3",
+        "card_types": ["Sorcery"],
+        "mana_cost": {"U": 1},
+        "effects": [{"kind": "mill", "count": 3}],
+    }
+
+
+def _mill_five_dict():
+    """A mill-5 sorcery — for the empty-library stop test."""
+    return {
+        "name": "Test Mill 5",
+        "card_types": ["Sorcery"],
+        "mana_cost": {"U": 1, "generic": 1},
+        "effects": [{"kind": "mill", "count": 5}],
+    }
+
+
+def _mill_zero_dict():
+    """A mill-0 sorcery — degenerate no-op."""
+    return {
+        "name": "Test Mill 0",
+        "card_types": ["Sorcery"],
+        "mana_cost": {"U": 1},
+        "effects": [{"kind": "mill", "count": 0}],
+    }
+
+
+def test_resolve_return_to_hand_creature_moves_target_to_owner_hand(
+    synthetic_state,
+):
+    """End-to-end composition test (the load-bearing one for
+    ReturnToHand).
+
+    Synthetic state: p1's battlefield[0] is a Forest at obj_id 67
+    (controller=1). Cast a Bounce-creature instant from active player
+    p0 (controller=0). On resolve, the Bounce should pick the FIRST
+    creature on the defender's battlefield (mirrors DealDamage convention),
+    move it from p1's battlefield to p1's hand, and the source
+    instant lands in p0's graveyard."""
+    # First p1 battlefield object (Forest at smallest index).
+    target_obj_id = 67
+    assert synthetic_state.find_object_zone(target_obj_id) == ZONE_BATTLEFIELD
+    p1_bf_before = synthetic_state.battlefield_sizes[1]
+    p1_hand_before = synthetic_state.hand_sizes[1]
+    p0_grave_before = synthetic_state.graveyard_sizes[0]
+
+    bounce_obj_id = synthetic_state.register_and_inject_object(
+        _bounce_creature_dict(), 0, ZONE_HAND
+    )
+    p0_hand_before = synthetic_state.hand_sizes[0]
+
+    synthetic_state.push_to_stack(bounce_obj_id, 0)
+    synthetic_state.resolve_top_of_stack()
+
+    # Target moved p1 battlefield -> p1 hand.
+    assert synthetic_state.find_object_zone(target_obj_id) == ZONE_HAND
+    assert synthetic_state.battlefield_sizes[1] == p1_bf_before - 1
+    assert synthetic_state.hand_sizes[1] == p1_hand_before + 1
+    # Source: instant -> p0 graveyard.
+    assert synthetic_state.find_object_zone(bounce_obj_id) == ZONE_GRAVEYARD
+    assert synthetic_state.graveyard_sizes[0] == p0_grave_before + 1
+    # p0 hand: source left (-1) — no other deltas on p0 hand.
+    assert synthetic_state.hand_sizes[0] == p0_hand_before - 1
+
+
+def test_resolve_return_to_hand_no_target_fizzles(engine):
+    """If the defender has no creature on battlefield, ReturnToHand
+    fizzles silently — stack item still pops, source still goes to
+    graveyard (instant), nothing else changes. Mirrors the
+    DealDamage-no-creature-target fizzle convention."""
+    state = engine.make_synthetic_state(
+        num_battlefield=0, num_hand=1, num_library=1
+    )
+    bounce_obj_id = state.register_and_inject_object(
+        _bounce_creature_dict(), 0, ZONE_HAND
+    )
+
+    p0_hand_before = state.hand_sizes[0]
+    p1_hand_before = state.hand_sizes[1]
+    p1_bf_before = state.battlefield_sizes[1]
+    p0_grave_before = state.graveyard_sizes[0]
+    p1_grave_before = state.graveyard_sizes[1]
+
+    state.push_to_stack(bounce_obj_id, 0)
+    state.resolve_top_of_stack()
+
+    # Stack drained, source moved to graveyard, nothing else changed.
+    assert state.is_stack_empty() is True
+    assert state.find_object_zone(bounce_obj_id) == ZONE_GRAVEYARD
+    assert state.graveyard_sizes[0] == p0_grave_before + 1
+    assert state.graveyard_sizes[1] == p1_grave_before
+    assert state.battlefield_sizes[1] == p1_bf_before
+    assert state.hand_sizes[1] == p1_hand_before
+    # Source left p0's hand (-1); the bogus AnyCreature with no target
+    # didn't move anything else.
+    assert state.hand_sizes[0] == p0_hand_before - 1
+
+
+def test_resolve_return_to_hand_with_any_player_target_raises(
+    synthetic_state,
+):
+    """ReturnToHand with an AnyPlayer target is semantically nonsense
+    (you can't bounce a player). The dispatch raises ValueError
+    loudly, matching the unknown-effect-kind shape."""
+    bounce_obj_id = synthetic_state.register_and_inject_object(
+        _bounce_player_dict(), 0, ZONE_HAND
+    )
+    synthetic_state.push_to_stack(bounce_obj_id, 0)
+
+    with pytest.raises(ValueError):
+        synthetic_state.resolve_top_of_stack()
+
+
+def test_resolve_mill_moves_top_n_to_graveyard(synthetic_state):
+    """Mill 3 from active player p0: library 50 -> 47, graveyard
+    0 -> 3. Defender's library and graveyard untouched."""
+    p0_lib_before = synthetic_state.library_sizes[0]
+    p0_grave_before = synthetic_state.graveyard_sizes[0]
+    p1_lib_before = synthetic_state.library_sizes[1]
+    p1_grave_before = synthetic_state.graveyard_sizes[1]
+    assert p0_lib_before == 50
+    assert p0_grave_before == 0
+
+    mill_obj_id = synthetic_state.register_and_inject_object(
+        _mill_three_dict(), 0, ZONE_HAND
+    )
+
+    synthetic_state.push_to_stack(mill_obj_id, 0)
+    synthetic_state.resolve_top_of_stack()
+
+    # Active player p0: 3 cards milled.
+    assert synthetic_state.library_sizes[0] == p0_lib_before - 3
+    # p0 graveyard: 3 milled cards + the source sorcery itself (post-resolve).
+    assert synthetic_state.graveyard_sizes[0] == p0_grave_before + 3 + 1
+    # Defender p1: untouched.
+    assert synthetic_state.library_sizes[1] == p1_lib_before
+    assert synthetic_state.graveyard_sizes[1] == p1_grave_before
+
+
+def test_resolve_mill_handles_empty_library_silent(engine):
+    """Mill 5 from a 2-card library: library ends empty, graveyard
+    has 2 milled cards (+ source), no error."""
+    state = engine.make_synthetic_state(
+        num_battlefield=0, num_hand=1, num_library=2
+    )
+    mill_obj_id = state.register_and_inject_object(
+        _mill_five_dict(), 0, ZONE_BATTLEFIELD
+    )
+    p0_lib_before = state.library_sizes[0]
+    p0_grave_before = state.graveyard_sizes[0]
+    assert p0_lib_before == 2
+
+    state.push_to_stack(mill_obj_id, 0)
+    state.resolve_top_of_stack()
+
+    # Library drained, graveyard gained the 2 cards available (no
+    # source-to-graveyard delta: source was on battlefield, sorcery
+    # post-resolve sends it to graveyard, so +1 from that too).
+    assert state.library_sizes[0] == 0
+    assert state.graveyard_sizes[0] == p0_grave_before + 2 + 1
+
+
+def test_resolve_mill_zero_count_no_op(synthetic_state):
+    """Mill 0: no library/graveyard delta from the mill effect itself.
+    Source still moves to graveyard (sorcery post-resolve), so
+    graveyard +1 from that alone."""
+    p0_lib_before = synthetic_state.library_sizes[0]
+    p0_grave_before = synthetic_state.graveyard_sizes[0]
+
+    mill_obj_id = synthetic_state.register_and_inject_object(
+        _mill_zero_dict(), 0, ZONE_HAND
+    )
+
+    synthetic_state.push_to_stack(mill_obj_id, 0)
+    synthetic_state.resolve_top_of_stack()
+
+    # Library unchanged.
+    assert synthetic_state.library_sizes[0] == p0_lib_before
+    # Graveyard: only the source sorcery itself.
+    assert synthetic_state.graveyard_sizes[0] == p0_grave_before + 1
+
+
+def test_resolve_return_to_hand_clone_canary(synthetic_state):
+    """CoW canary for ReturnToHand. Resolving on the clone must not
+    bleed the bounce back into the original."""
+    target_obj_id = 67  # First p1 battlefield obj
+    bounce_obj_id = synthetic_state.register_and_inject_object(
+        _bounce_creature_dict(), 0, ZONE_HAND
+    )
+    synthetic_state.push_to_stack(bounce_obj_id, 0)
+    cloned = synthetic_state.clone_once()
+
+    cloned.resolve_top_of_stack()
+
+    # Clone: target bounced to p1 hand, source in graveyard.
+    assert cloned.find_object_zone(target_obj_id) == ZONE_HAND
+    assert cloned.find_object_zone(bounce_obj_id) == ZONE_GRAVEYARD
+    # Original: target still on p1 battlefield, source still in hand,
+    # stack still has the item.
+    assert synthetic_state.find_object_zone(target_obj_id) == ZONE_BATTLEFIELD
+    assert synthetic_state.find_object_zone(bounce_obj_id) == ZONE_HAND
+    assert synthetic_state.stack_size() == 1
+
+
+def test_resolve_mill_clone_canary(synthetic_state):
+    """CoW canary for Mill. Resolving on the clone must not drain the
+    original's library or grow its graveyard."""
+    p0_lib_before = synthetic_state.library_sizes[0]
+    p0_grave_before = synthetic_state.graveyard_sizes[0]
+
+    mill_obj_id = synthetic_state.register_and_inject_object(
+        _mill_three_dict(), 0, ZONE_HAND
+    )
+    synthetic_state.push_to_stack(mill_obj_id, 0)
+    cloned = synthetic_state.clone_once()
+
+    cloned.resolve_top_of_stack()
+
+    # Original: untouched on every front.
+    assert synthetic_state.library_sizes[0] == p0_lib_before
+    assert synthetic_state.graveyard_sizes[0] == p0_grave_before
+    assert synthetic_state.stack_size() == 1
+    # Clone: 3 milled + source -> graveyard.
+    assert cloned.library_sizes[0] == p0_lib_before - 3
+    assert cloned.graveyard_sizes[0] == p0_grave_before + 3 + 1
