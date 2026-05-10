@@ -120,6 +120,11 @@ the test lands in a commit.
 | rust(stack-resolve-loop): process_stack_until_empty | tests_rust/test_stack.py extend | green | feature/rust-tdd-stack-resolve-loop |
 | rust(sba-counter-toughness): SBA uses counter-modified effective toughness (CR 704.5f/g) | tests_rust/test_sba.py extend | green | feature/rust-tdd-counters-cancel |
 | rust(library-search-and-shuffle): tutor-style search + always shuffle (CR 701.19) | tests_rust/test_library.py extend | green | feature/rust-tdd-search-and-shuffle |
+| rust(mulligan-london): mulligan_to_n parameterized hand size (CR 103.4) | tests_rust/test_mulligan.py extend | green | feature/rust-tdd-mulligan-london |
+| rust(cleanup-end-turn-wrap): end_turn_and_start_next composition primitive | tests_rust/test_cleanup.py extend | green | feature/rust-tdd-end-of-turn-wrap |
+| rust(zones-reanimate): move_object_from_graveyard_to_battlefield primitive (CR 302.1 / 400.7) | tests_rust/test_zones.py extend | green | feature/rust-tdd-graveyard-reanimation |
+| rust(counters-double): double_counters_for_player primitive (Doubling Season-style) | tests_rust/test_counters.py extend | green | feature/rust-tdd-counter-doubles |
+| rust(resolve-effects-r17): DestroyTarget + DamageEachOpponent dispatch | tests_rust/test_resolve.py extend | green | feature/rust-tdd-resolve-destroy-aoe |
 
 ## Build invocation reminder
 

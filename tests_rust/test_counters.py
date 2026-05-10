@@ -31,6 +31,8 @@ correctly on the per-zone Vec.
 
 from __future__ import annotations
 
+import pytest
+
 
 # `make_synthetic_state(num_battlefield=10, num_hand=7, num_library=50)`
 # lays player 0 out as:
@@ -201,3 +203,97 @@ def test_counter_change_on_clone_does_not_affect_original(synthetic_state):
     assert synthetic_state.add_counters(obj_id, 2) is True
     assert synthetic_state.get_counters(obj_id) == 2
     assert other.get_counters(obj_id) == 5
+
+
+# --- double_counters_for_player (Doubling Season-style) -----------------------
+#
+# Real Doubling Season is a static replacement effect that intercepts
+# counter-placement events. This primitive is the simpler "snap to
+# doubled state" mutator — for every creature on the given player's
+# battlefield with non-zero net counters, multiply its counter value
+# by 2. Useful as a building block for the future replacement-effects
+# framework and as a one-shot test tool for counter-stacking scenarios.
+
+
+def test_double_counters_for_player_doubles_positive(synthetic_state):
+    """A creature with +3 net counters becomes +6 after doubling."""
+    obj_id = P0_FIRST_BATTLEFIELD_ID
+    synthetic_state.set_counters(obj_id, 3)
+    synthetic_state.double_counters_for_player(0)
+    assert synthetic_state.get_counters(obj_id) == 6
+
+
+def test_double_counters_for_player_doubles_negative(synthetic_state):
+    """A creature with -2 net counters becomes -4 after doubling.
+    Doubling Season's "double the counter" interpretation applies
+    symmetrically to negative counters in this primitive."""
+    obj_id = P0_FIRST_BATTLEFIELD_ID
+    synthetic_state.set_counters(obj_id, -2)
+    synthetic_state.double_counters_for_player(0)
+    assert synthetic_state.get_counters(obj_id) == -4
+
+
+def test_double_counters_for_player_skips_zero(synthetic_state):
+    """A creature at 0 net counters stays at 0 (2 * 0 == 0). The
+    no-op skip is harmless — the test pins the obvious case so no
+    future refactor accidentally writes a sentinel."""
+    obj_id = P0_FIRST_BATTLEFIELD_ID
+    assert synthetic_state.get_counters(obj_id) == 0
+    synthetic_state.double_counters_for_player(0)
+    assert synthetic_state.get_counters(obj_id) == 0
+
+
+def test_double_counters_for_player_doubles_all_creatures(synthetic_state):
+    """Every creature on the player's battlefield gets doubled in a
+    single call — not just one. Sets distinct counter values across
+    multiple ids and asserts each one doubled."""
+    # ids 0..9 are on p0's battlefield by the synthetic-state convention.
+    synthetic_state.set_counters(0, 1)
+    synthetic_state.set_counters(1, 2)
+    synthetic_state.set_counters(2, -3)
+    synthetic_state.set_counters(3, 0)
+    synthetic_state.set_counters(4, 5)
+    synthetic_state.double_counters_for_player(0)
+    assert synthetic_state.get_counters(0) == 2
+    assert synthetic_state.get_counters(1) == 4
+    assert synthetic_state.get_counters(2) == -6
+    assert synthetic_state.get_counters(3) == 0
+    assert synthetic_state.get_counters(4) == 10
+
+
+def test_double_counters_for_player_only_affects_target_player(synthetic_state):
+    """Doubling for p0 does not touch any creature on p1's
+    battlefield. p1 ids start at P1_FIRST_BATTLEFIELD_ID (67)."""
+    p0_obj = P0_FIRST_BATTLEFIELD_ID
+    p1_obj = P1_FIRST_BATTLEFIELD_ID
+    synthetic_state.set_counters(p0_obj, 4)
+    synthetic_state.set_counters(p1_obj, 4)
+    synthetic_state.double_counters_for_player(0)
+    assert synthetic_state.get_counters(p0_obj) == 8
+    # p1's creature was not affected.
+    assert synthetic_state.get_counters(p1_obj) == 4
+
+
+def test_double_counters_for_player_unknown_player_raises(synthetic_state):
+    """Out-of-range player_id raises rather than silently no-op'ing —
+    mirrors the loud-failure convention of `clear_damage_for_player`
+    and the rest of the per-player primitives."""
+    with pytest.raises((ValueError, IndexError, OverflowError)):
+        synthetic_state.double_counters_for_player(99)
+
+
+def test_double_counters_for_player_clone_isolation(synthetic_state):
+    """**CoW canary for the doubling primitive.** Doubling on a clone
+    must not retroactively mutate the original's battlefield Vec.
+    Same load-bearing invariant as `test_counter_change_on_clone_does_not_affect_original`,
+    but for the bulk-doubling primitive specifically."""
+    obj_id = P0_FIRST_BATTLEFIELD_ID
+    synthetic_state.set_counters(obj_id, 3)
+    snapshot = synthetic_state.clone_once()
+    # Mutate ONLY the clone.
+    snapshot.double_counters_for_player(0)
+    assert snapshot.get_counters(obj_id) == 6
+    # Original must NOT see the change.
+    assert synthetic_state.get_counters(obj_id) == 3, (
+        "CoW broken: double_counters_for_player on clone leaked into original"
+    )

@@ -402,6 +402,71 @@ def test_scry_n_zero_count_round_trips():
     assert effects[0]["count"] == 0
 
 
+def test_round_trip_destroy_target_effect():
+    reg = mtg_bot_engine.Registry()
+    pid = reg.register_printing(
+        {
+            "name": "Doom-Blade-ish",
+            "mana_cost": {"B": 1, "generic": 1},
+            "card_types": ["Instant"],
+            "effects": [
+                {"kind": "destroy_target", "target": {"kind": "any_creature"}}
+            ],
+        }
+    )
+    effects = [dict(e) for e in reg.get_printing_effects(pid)]
+    assert effects[0]["kind"] == "destroy_target"
+    assert dict(effects[0]["target"]) == {"kind": "any_creature"}
+
+
+def test_destroy_target_missing_target_raises():
+    reg = mtg_bot_engine.Registry()
+    with pytest.raises(KeyError, match="target"):
+        reg.register_printing(
+            {"name": "Broken", "effects": [{"kind": "destroy_target"}]}
+        )
+
+
+def test_round_trip_damage_each_opponent_effect():
+    reg = mtg_bot_engine.Registry()
+    pid = reg.register_printing(
+        {
+            "name": "Pyroclasm-vs-Players-ish",
+            "mana_cost": {"R": 1, "generic": 2},
+            "card_types": ["Sorcery"],
+            "effects": [{"kind": "damage_each_opponent", "amount": 2}],
+        }
+    )
+    effects = [dict(e) for e in reg.get_printing_effects(pid)]
+    assert effects[0]["kind"] == "damage_each_opponent"
+    assert effects[0]["amount"] == 2
+
+
+def test_damage_each_opponent_missing_amount_raises():
+    reg = mtg_bot_engine.Registry()
+    with pytest.raises(KeyError, match="amount"):
+        reg.register_printing(
+            {"name": "Broken", "effects": [{"kind": "damage_each_opponent"}]}
+        )
+
+
+def test_destroy_target_anyplayer_round_trips_for_validation_at_dispatch():
+    """Bridge accepts AnyPlayer for destroy_target — the runtime
+    semantic rejection (you can't destroy a player) lives in
+    apply_effect, not the parser."""
+    reg = mtg_bot_engine.Registry()
+    pid = reg.register_printing(
+        {
+            "name": "InvalidTargetPersists",
+            "effects": [
+                {"kind": "destroy_target", "target": {"kind": "any_player"}}
+            ],
+        }
+    )
+    effects = [dict(e) for e in reg.get_printing_effects(pid)]
+    assert dict(effects[0]["target"]) == {"kind": "any_player"}
+
+
 def test_vanilla_card_with_no_mana_cost_or_effects():
     reg = mtg_bot_engine.Registry()
     pid = reg.register_printing(VANILLA_BLANK)

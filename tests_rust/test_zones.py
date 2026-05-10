@@ -314,3 +314,147 @@ def test_clone_then_move_to_exile_does_not_affect_original(synthetic_state):
     assert synthetic_state.battlefield_sizes == bf_source_before
     assert synthetic_state.exile_sizes == exile_source_before
     assert synthetic_state.exile_contains(obj_id) is False
+
+
+# --- round-17 graveyard reanimation ----------------------------------
+#
+# ``move_object_from_graveyard_to_battlefield(player_id, obj_id)`` is
+# the engine primitive a future "reanimate" card (Animate Dead,
+# Reanimate, Zombify, ...) sits on top of. Specific variant of
+# ``move_object`` that ALWAYS goes graveyard -> battlefield and ALWAYS
+# stamps ``summoning_sick = true`` (CR 302.1 — a creature returning
+# from the graveyard via reanimation enters the battlefield with
+# summoning sickness; it can't attack on the turn it enters).
+#
+# Per CR 400.7 / round-1 zone-change convention, per-object state
+# (tapped / summoning_sick / damage / counters) resets on the way
+# into the new zone. ``summoning_sick = true`` is the only stamp
+# that intentionally diverges from the "reset to default" rule —
+# the new permanent has summoning sickness by design.
+
+
+def _put_creature_into_p0_graveyard(state):
+    """Helper: take p0's first battlefield creature (id 0 = a forest
+    in the synthetic state, but bears at the tail half of the BF
+    range are creatures) and route it into p0's graveyard so the
+    reanimation tests have a graveyard creature to revive.
+
+    In the default synthetic state, p0's battlefield is ids 0..9 with
+    ids 5..9 as Grizzly Bears (creatures). Pick id 5 for a true
+    creature target.
+    """
+    creature_id = 5
+    assert state.find_object_zone(creature_id) == ZONE_BATTLEFIELD
+    assert state.move_object(creature_id, ZONE_GRAVEYARD, 0) is True
+    assert state.find_object_zone(creature_id) == ZONE_GRAVEYARD
+    return creature_id
+
+
+def test_reanimate_moves_card_to_battlefield(synthetic_state):
+    """Graveyard has a creature; reanimate -> battlefield +1,
+    graveyard -1."""
+    obj_id = _put_creature_into_p0_graveyard(synthetic_state)
+    bf_before = synthetic_state.battlefield_sizes
+    gy_before = synthetic_state.graveyard_sizes
+
+    moved = synthetic_state.move_object_from_graveyard_to_battlefield(0, obj_id)
+    assert moved is True
+
+    assert synthetic_state.find_object_zone(obj_id) == ZONE_BATTLEFIELD
+    assert synthetic_state.battlefield_sizes[0] == bf_before[0] + 1
+    assert synthetic_state.graveyard_sizes[0] == gy_before[0] - 1
+    # Other player untouched.
+    assert synthetic_state.battlefield_sizes[1] == bf_before[1]
+    assert synthetic_state.graveyard_sizes[1] == gy_before[1]
+
+
+def test_reanimate_sets_summoning_sick(synthetic_state):
+    """Reanimated creature has summoning_sick=true (CR 302.1 — the
+    new permanent has summoning sickness; can't attack on the turn
+    it enters)."""
+    obj_id = _put_creature_into_p0_graveyard(synthetic_state)
+
+    assert synthetic_state.move_object_from_graveyard_to_battlefield(0, obj_id) is True
+
+    assert synthetic_state.is_summoning_sick(obj_id) is True
+
+
+def test_reanimate_resets_damage_and_counters(synthetic_state):
+    """Damage and counters reset on the zone change (CR 400.7). A
+    graveyard creature shouldn't normally have damage (CR 614.12 —
+    damage clears on zone change), but a defensive reset here means
+    that any stale state on the graveyard object is wiped on the way
+    onto the battlefield."""
+    obj_id = _put_creature_into_p0_graveyard(synthetic_state)
+    # Stamp damage and counters onto the graveyard object directly.
+    assert synthetic_state.deal_damage(obj_id, 5) is True
+    assert synthetic_state.set_counters(obj_id, 3) is True
+    assert synthetic_state.get_damage(obj_id) == 5
+    assert synthetic_state.get_counters(obj_id) == 3
+
+    assert synthetic_state.move_object_from_graveyard_to_battlefield(0, obj_id) is True
+
+    assert synthetic_state.get_damage(obj_id) == 0
+    assert synthetic_state.get_counters(obj_id) == 0
+
+
+def test_reanimate_returns_true_on_success(synthetic_state):
+    """The primitive returns True on a successful graveyard ->
+    battlefield move."""
+    obj_id = _put_creature_into_p0_graveyard(synthetic_state)
+    assert synthetic_state.move_object_from_graveyard_to_battlefield(0, obj_id) is True
+
+
+def test_reanimate_returns_false_when_id_not_in_graveyard(synthetic_state):
+    """The id exists but lives on the battlefield, not in the
+    graveyard. Returns False, no movement."""
+    obj_id = P0_FIRST_BATTLEFIELD_ID  # on the battlefield
+    assert synthetic_state.find_object_zone(obj_id) == ZONE_BATTLEFIELD
+    bf_before = synthetic_state.battlefield_sizes
+    gy_before = synthetic_state.graveyard_sizes
+
+    moved = synthetic_state.move_object_from_graveyard_to_battlefield(0, obj_id)
+    assert moved is False
+
+    # Object stays where it was; no zone sizes shifted.
+    assert synthetic_state.find_object_zone(obj_id) == ZONE_BATTLEFIELD
+    assert synthetic_state.battlefield_sizes == bf_before
+    assert synthetic_state.graveyard_sizes == gy_before
+
+
+def test_reanimate_returns_false_when_id_does_not_exist(synthetic_state):
+    """Far-out-of-range id returns False (no exception, no movement)."""
+    bf_before = synthetic_state.battlefield_sizes
+    gy_before = synthetic_state.graveyard_sizes
+    moved = synthetic_state.move_object_from_graveyard_to_battlefield(0, 999)
+    assert moved is False
+    assert synthetic_state.battlefield_sizes == bf_before
+    assert synthetic_state.graveyard_sizes == gy_before
+
+
+def test_reanimate_unknown_player_raises(synthetic_state):
+    """An out-of-range player_id raises rather than silently no-op'ing
+    — mirrors the loud-fail convention of every other player-indexed
+    primitive (life / mana / damage_to_player / search_library)."""
+    with pytest.raises((ValueError, IndexError, OverflowError)):
+        synthetic_state.move_object_from_graveyard_to_battlefield(7, 0)
+
+
+def test_reanimate_clone_isolation(synthetic_state):
+    """CoW canary: running the reanimation primitive on a clone leaves
+    the original GameState's zones untouched. Mirrors
+    ``test_clone_then_move_does_not_affect_original``."""
+    obj_id = _put_creature_into_p0_graveyard(synthetic_state)
+    cloned = synthetic_state.clone_once()
+    bf_source_before = synthetic_state.battlefield_sizes
+    gy_source_before = synthetic_state.graveyard_sizes
+
+    assert cloned.move_object_from_graveyard_to_battlefield(0, obj_id) is True
+
+    # Clone diverged.
+    assert cloned.find_object_zone(obj_id) == ZONE_BATTLEFIELD
+    assert cloned.is_summoning_sick(obj_id) is True
+    # Source untouched: object still in graveyard with the same totals.
+    assert synthetic_state.find_object_zone(obj_id) == ZONE_GRAVEYARD
+    assert synthetic_state.battlefield_sizes == bf_source_before
+    assert synthetic_state.graveyard_sizes == gy_source_before

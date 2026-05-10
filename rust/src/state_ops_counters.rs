@@ -38,8 +38,19 @@
 //! because only battlefield permanents have a defined "tapped" state.
 
 use crate::state::{GameObject, GameState};
+use pyo3::exceptions::PyIndexError;
 use pyo3::prelude::*;
 use std::sync::Arc;
+
+fn check_player_id(player_id: u8) -> PyResult<usize> {
+    let idx = player_id as usize;
+    if idx >= 2 {
+        return Err(PyIndexError::new_err(format!(
+            "player_id {player_id} out of range (must be 0 or 1)"
+        )));
+    }
+    Ok(idx)
+}
 
 /// Walk every player's four tracked zones (hand, library, battlefield,
 /// graveyard) and apply `f` to the matching object via `Arc::make_mut`
@@ -180,5 +191,42 @@ impl GameState {
     /// clean upgrade path.
     fn toughness_bonus_from_counters(&self, obj_id: u32) -> Option<i32> {
         read_counters(self, obj_id)
+    }
+
+    /// Doubling Season-style "snap to doubled state" mutator. For
+    /// every creature on `player_id`'s battlefield, multiply its
+    /// counter value by 2. Zero stays zero, positive doubles
+    /// (+3 → +6), negative doubles symmetrically (-2 → -4) — the
+    /// "double the counter" interpretation applies to whichever
+    /// kind is present.
+    ///
+    /// Real Doubling Season is a static replacement effect that
+    /// intercepts counter-placement events; this primitive is the
+    /// simpler one-shot mutator and a building block for the future
+    /// replacement-effects framework. Useful today as a test tool
+    /// for counter-stacking scenarios.
+    ///
+    /// Raises `IndexError` if `player_id` is not 0 or 1.
+    ///
+    /// Routes through `Arc::make_mut` on the battlefield Vec so
+    /// the CoW invariant holds for clones observing the original.
+    /// Optimization: skip the make_mut clone if no creature on
+    /// this battlefield has non-zero counters — keeps the no-op
+    /// call free of per-zone CoW costs.
+    ///
+    /// Uses `saturating_mul` so an extreme i32 value (close to
+    /// i32::MAX/MIN) clamps rather than overflowing.
+    fn double_counters_for_player(&mut self, player_id: u8) -> PyResult<()> {
+        let idx = check_player_id(player_id)?;
+        let player = &mut self.players[idx];
+        // No-op fast path: nothing to double.
+        if !player.battlefield.iter().any(|o| o.counters != 0) {
+            return Ok(());
+        }
+        let zone: &mut Vec<GameObject> = Arc::make_mut(&mut player.battlefield);
+        for obj in zone.iter_mut() {
+            obj.counters = obj.counters.saturating_mul(2);
+        }
+        Ok(())
     }
 }
