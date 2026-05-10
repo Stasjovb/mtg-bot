@@ -119,6 +119,7 @@ the test lands in a commit.
 | rust(resolve-effects-r16): ScryN dispatch (CR 701.18) | tests_rust/test_resolve.py extend | green | feature/rust-tdd-resolve-scry |
 | rust(stack-resolve-loop): process_stack_until_empty | tests_rust/test_stack.py extend | green | feature/rust-tdd-stack-resolve-loop |
 | rust(sba-counter-toughness): SBA uses counter-modified effective toughness (CR 704.5f/g) | tests_rust/test_sba.py extend | green | feature/rust-tdd-counters-cancel |
+| rust(library-search-and-shuffle): tutor-style search + always shuffle (CR 701.19) | tests_rust/test_library.py extend | green | feature/rust-tdd-search-and-shuffle |
 
 ## Build invocation reminder
 
