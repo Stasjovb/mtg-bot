@@ -909,7 +909,6 @@ def run_shard_local(
         save_dataset,
     )
     from mtg_bot.training.data_gen import ReplayCaptureConfig
-    from mtg_bot.training.trainer import auto_device
 
     cfg = NNPimcConfig(
         weights_path=spec.weights_path,
@@ -928,8 +927,11 @@ def run_shard_local(
         # Mac picks "mps", Win10 picks "cuda" (or "cpu" if no GPU).
         # Tests construct NNPimcConfig() directly without ``device=``
         # and stay on the CPU default — production goes through this
-        # spec-decoding path which always opts in.
-        device=auto_device(),
+        # spec-decoding path which always opts in. ``"auto"`` defers
+        # the auto_device() call into the worker (NNPimcConfig.build);
+        # a parent-side resolution would prime CUDA here and break
+        # Linux fork() in the mp.Pool below.
+        device="auto",
     )
 
     deck_pool = None
@@ -2512,13 +2514,16 @@ def run_shard_pull(
         _winner_to_p0_outcome,
     )
     from mtg_bot.training.progress import DataGenProgress
-    from mtg_bot.training.trainer import auto_device
 
     cfg = NNPimcConfig(
         weights_path=spec.weights_path,
         samples=spec.samples,
         inner_nodes=spec.inner_nodes,
-        device=auto_device(),
+        # ``"auto"`` defers the auto_device() call into NNPimcConfig.build,
+        # which runs in the mp.Pool worker. Calling auto_device() here
+        # in run_shard_pull's parent thread would prime CUDA and break
+        # Linux fork() in the worker pool below.
+        device="auto",
         batch_size=32,
         with_policy=spec.with_policy,
         puct=True,
@@ -2974,9 +2979,11 @@ def run_shard_eval_pull(
     from mtg_bot.training.config import HeuristicConfig, PimcConfig
     from mtg_bot.training.data_gen import ReplayCaptureConfig
     from mtg_bot.training.progress import EvalProgress
-    from mtg_bot.training.trainer import auto_device
 
-    _device = auto_device()
+    # ``"auto"`` defers auto_device() resolution into NNPimcConfig.build,
+    # which runs in the mp.Pool worker. Calling auto_device() here in
+    # run_shard_eval_pull's parent thread would prime CUDA and break
+    # Linux fork() in the worker pool below.
     new_cfg = NNPimcConfig(
         weights_path=spec.new_weights_path,
         samples=spec.samples, inner_nodes=spec.inner_nodes,
@@ -2987,7 +2994,7 @@ def run_shard_eval_pull(
         action_encoding_version=spec.new_action_encoding_version,
         use_ismcts=spec.use_ismcts,
         use_belief_weighted=spec.use_belief_weighted,
-        device=_device,
+        device="auto",
     )
     if spec.old_weights_path is not None:
         old_cfg = NNPimcConfig(
@@ -3000,7 +3007,7 @@ def run_shard_eval_pull(
             action_encoding_version=spec.old_action_encoding_version,
             use_ismcts=spec.use_ismcts,
             use_belief_weighted=spec.use_belief_weighted,
-            device=_device,
+            device="auto",
         )
         p1_factory = old_cfg.build
     else:
