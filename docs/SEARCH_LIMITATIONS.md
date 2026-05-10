@@ -934,6 +934,113 @@ visible regression once self-play games push deeper.
 
 ---
 
+## Rust port — `legal_decisions` DeclareBlockers product-space emission
+
+**Location**: `rust/src/state_ops_legal.rs:legal_decisions` — the
+DeclareBlockers emission block (search for "DeclareBlockers
+extension" in the module docstring + the gated block under
+`if self.phase == PHASE_DECLARE_BLOCKERS`).
+
+**What we do today**: during the `DECLARE_BLOCKERS` phase (priority
+on the defender, stack empty), the Rust `legal_decisions` enumerator
+emits one Python dict per legal blocker-to-attacker assignment. With
+`n_blockers <= DECLARE_BLOCKERS_PRODUCT_CAP` (3) AND `m_attackers <=
+DECLARE_BLOCKERS_MAX_ATTACKERS` (3), all `(M+1)^N` assignments emit
+— each blocker independently picks one of M attackers OR "don't
+block." With either dimension over its cap, only the canonical "no
+blocks" assignment (an empty Vec) emits.
+
+**Why this diverges from Python**: same factored-search story as
+DeclareAttackers above — Python's `legal_actions` does NOT emit
+DeclareBlockers (engine.py:10-19 is explicit) and instead uses
+`BlockerDecision`s (one per eligible blocker, one branch per
+attacker plus a "don't block" branch) in
+`src/mtg_bot/search/combat_decisions.py`. The adapter accumulates
+per-blocker decisions into a single engine-level
+`DeclareBlockers(assignments=...)` at apply time.
+
+**Failure mode**:
+- Wide boards (N > 3 blockers OR M > 3 attackers) lose all middle
+  assignments — the only emitted choice is "no blocks." All
+  partial-blocking strategy (chump-blocking the big attacker,
+  multi-block to kill a 3/3, leaving small attackers through to save
+  the wall) is unreachable from `legal_decisions`.
+- The parity-smoke harness must skip emission-set comparison during
+  the DECLARE_BLOCKERS phase (Python's side emits no
+  DeclareBlockers; Rust's side emits up to `(M+1)^N`).
+
+**When it matters**: any DECLARE_BLOCKERS phase with > 3 blockers
+or > 3 attackers. Most early-game scenarios stay under both caps;
+mid-to-late game with built-out boards trips the cap regularly.
+Pre-trained NN search will plateau on defensive play until the
+factored shape lands.
+
+**Fix scope when prioritized**:
+- Port `search/combat_decisions.py`'s `BlockerDecision` shape to
+  Rust as a new `Action::BlockerDecision { blocker_id, target:
+  Option<u32> }` variant.
+- Replace the product emission with one `BlockerDecision` per
+  eligible blocker (with branches over attackers + None). The
+  adapter / search-side accumulator collects all N decisions and
+  dispatches a single `DeclareBlockers(assignments=...)` at apply
+  time.
+- The `declare_blocker` primitive stays unchanged.
+- Both `DECLARE_BLOCKERS_PRODUCT_CAP` and
+  `DECLARE_BLOCKERS_MAX_ATTACKERS` constants go away.
+
+**Impact estimate**: moderate-to-large strength cost in any state
+with non-trivial combat. Combinatorial growth `(M+1)^N` is harder
+than DeclareAttackers's `2^N`, so the caps fire sooner and the
+information loss is bigger per affected decision.
+
+---
+
+## Rust port — `legal_decisions` block-legality keywords not filtered at enumeration
+
+**Location**: `rust/src/state_ops_legal.rs:legal_decisions`
+DeclareBlockers eligibility loop.
+
+**What we do today**: the eligibility filter checks
+`!tapped && is_creature`. It does NOT filter by flying/reach
+interaction (CR 702.9 — a creature with flying can only be blocked
+by a creature with flying or reach), color protection (CR 702.16),
+"can't be blocked" (CR 509.1b), skulk (CR 702.118), or
+`can_only_block_creatures_with_flying`. All eligible-by-status
+blockers appear in every assignment regardless of whether the
+attacker-blocker pair is actually legal; the `declare_blocker`
+primitive's per-pair `bool` return silently filters illegal pairs at
+apply time.
+
+**Why this diverges from Python**: Python's
+`src/mtg_bot/combat.py:can_block` runs the full keyword filter at
+enumeration time. The Rust enumerator defers the filter to the
+primitive instead — bigger emission count + same final state after
+apply, mirroring the same trade-off as the DeclareAttackers
+defender-deferral above.
+
+**Failure mode**: search wastes visits on assignments containing
+illegal pairs (the apply silently drops them, so the post-apply
+state matches what an equivalent "illegal-pair-excluded" assignment
+would produce). Visit count is inflated but win-rate impact is
+proportional to "fraction of emitted assignments containing illegal
+pairs" — which can be substantial on a flying-heavy board.
+
+**When it matters**: any DECLARE_BLOCKERS state where the attacker
+has flying / "can't be blocked" effects / color protection and the
+defender has non-flying / non-reach / wrong-color blockers. EoE has
+plenty of flyers; the impact rises with the pool.
+
+**Fix scope when prioritized**: medium. Add `effective_keywords`
+bridge to Rust (or a thinner version of `can_block` keyed only on
+the flying / cant-be-blocked / skulk keywords first-slice cares
+about), then filter at enumeration. The primitive's apply-time gate
+stays as defense-in-depth.
+
+**Impact estimate**: at slice landing, low (synthetic seed has no
+flyers); rises with EoE pool coverage.
+
+---
+
 ## Rust port — `legal_decisions` defender keyword not filtered at enumeration
 
 **Location**: `rust/src/state_ops_legal.rs:legal_decisions`
