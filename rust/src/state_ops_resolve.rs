@@ -833,6 +833,20 @@ fn apply_effect(state: &mut GameState, effect: &Effect) -> PyResult<()> {
             // dispatch on it today.
             let _controller = state.active_player as usize;
         }
+        // Foundation stubs: round-17 resolve-destroy-aoe slice replaces
+        // both arms with real dispatch. E0004 exhaustiveness would
+        // otherwise reject the build the moment the variants land in
+        // cards.rs.
+        Effect::DestroyTarget { .. } => {
+            return Err(PyValueError::new_err(
+                "Effect::DestroyTarget dispatch not yet implemented (round-17 foundation stub)",
+            ));
+        }
+        Effect::DamageEachOpponent { .. } => {
+            return Err(PyValueError::new_err(
+                "Effect::DamageEachOpponent dispatch not yet implemented (round-17 foundation stub)",
+            ));
+        }
     }
     Ok(())
 }

@@ -107,6 +107,22 @@ pub enum Effect {
     /// (no-op-shaped-as-scry; future slice will plumb a decision
     /// callback for "which to bottom"). Negative `count` raises.
     ScryN { count: i32 },
+    /// Destroy target permanent (CR 701.7). Diverges from Sacrifice
+    /// in two ways: (a) the target is on the DEFENDING player's
+    /// battlefield (not the active player's), and (b) it bypasses
+    /// "you sacrifice your own permanent" semantics. First slice
+    /// picks the AnyCreature target as the defender's first creature,
+    /// mirroring DealDamage / TapTarget convention. AnyPlayer raises
+    /// (you can't destroy a player). Empty defender battlefield =
+    /// fizzle silently. Indestructible (round-13) is honored — the
+    /// destroy is suppressed exactly like in the SBA path.
+    DestroyTarget { target: TargetFilter },
+    /// Deal `amount` damage to each opponent of the controller
+    /// (CR 701.4 + AOE pattern). Two-player engine first slice:
+    /// damages defender (= the one opponent). No target — implicit.
+    /// Negative `amount` raises. Composes with round-14's
+    /// deal_damage_to_player primitive.
+    DamageEachOpponent { amount: i32 },
 }
 
 #[derive(Clone, Debug)]
@@ -306,8 +322,20 @@ fn parse_effect(dict: &Bound<'_, PyDict>) -> PyResult<Effect> {
             let count: i32 = require(dict, "count")?.extract()?;
             Ok(Effect::ScryN { count })
         }
+        "destroy_target" => {
+            let target_any = require(dict, "target")?;
+            let target_dict = target_any.downcast::<PyDict>().map_err(|_| {
+                PyValueError::new_err("destroy_target.target must be a dict")
+            })?;
+            let target = parse_target_filter(target_dict)?;
+            Ok(Effect::DestroyTarget { target })
+        }
+        "damage_each_opponent" => {
+            let amount: i32 = require(dict, "amount")?.extract()?;
+            Ok(Effect::DamageEachOpponent { amount })
+        }
         other => Err(PyValueError::new_err(format!(
-            "unknown effect kind {other:?}; valid: deal_damage, draw_cards, gain_life, return_to_hand, mill, exile_target, tap_target, untap_target, sacrifice, add_counters, discard_card, scry_n"
+            "unknown effect kind {other:?}; valid: deal_damage, draw_cards, gain_life, return_to_hand, mill, exile_target, tap_target, untap_target, sacrifice, add_counters, discard_card, scry_n, destroy_target, damage_each_opponent"
         ))),
     }
 }
@@ -539,6 +567,14 @@ fn effect_to_pydict<'py>(
         Effect::ScryN { count } => {
             d.set_item("kind", "scry_n")?;
             d.set_item("count", *count)?;
+        }
+        Effect::DestroyTarget { target } => {
+            d.set_item("kind", "destroy_target")?;
+            d.set_item("target", target_filter_to_pydict(py, target)?)?;
+        }
+        Effect::DamageEachOpponent { amount } => {
+            d.set_item("kind", "damage_each_opponent")?;
+            d.set_item("amount", *amount)?;
         }
     }
     Ok(d)
