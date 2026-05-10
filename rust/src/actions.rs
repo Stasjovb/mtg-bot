@@ -110,6 +110,28 @@ pub enum Action {
     /// game — the 4th-most-frequent variant after `PassPriority`,
     /// `PlayLand`, and `DeclareAttackers`.
     DeclareBlockers { assignments: Vec<(u32, u32)> },
+    /// Activate an ability on a permanent (CR 113.3 + 602). `source_id`
+    /// is the GameObject whose ability fires; `ability_index` is the
+    /// 0-based index into the source's printing.activated_abilities
+    /// list (CR 602.2 — printings can have multiple activated
+    /// abilities, indexed by position). Mirrors Python's
+    /// `ActivateAbility(source_id: int, ability_index: int)`
+    /// dataclass — two ints, no implicit actor (the source object's
+    /// controller is the actor, resolved by the underlying primitive
+    /// from the battlefield index when it lands).
+    ///
+    /// Round-20 frequency: 8 of 420 decisions (~1.9%) in the sample
+    /// game — the 5th-most-frequent variant after `PassPriority`,
+    /// `DeclareAttackers`, `PlayLand`, and `DeclareBlockers`.
+    ///
+    /// **Dispatch is currently a stub.** No Rust `activate_ability`
+    /// primitive exists yet (rounds 1-22 didn't build one). Until a
+    /// future slice adds the primitive (mana-cost pay + ability
+    /// resolution flow, mirroring how `play_land` / `cast_creature`
+    /// pay mana costs), `apply_action` raises `ValueError` for this
+    /// variant; the variant + bridge round-trip ship now, so a
+    /// follow-up slice only needs to flip the dispatch arm.
+    ActivateAbility { source_id: u32, ability_index: u32 },
 }
 
 // --- dict -> Rust ------------------------------------------------
@@ -194,8 +216,22 @@ pub fn parse_action(dict: &Bound<'_, PyDict>) -> PyResult<Action> {
             }
             Ok(Action::DeclareBlockers { assignments })
         }
+        "activate_ability" => {
+            // Two-int shape: `source_id` (the GameObject whose ability
+            // fires) + `ability_index` (0-based index into the source's
+            // printing.activated_abilities list). Same shape as
+            // `play_land`'s `card_id` extraction — missing either key
+            // → `KeyError` via `require`; wrong type → `TypeError` /
+            // `ValueError` from PyO3's `extract::<u32>` machinery.
+            let source_id: u32 = require(dict, "source_id")?.extract()?;
+            let ability_index: u32 = require(dict, "ability_index")?.extract()?;
+            Ok(Action::ActivateAbility {
+                source_id,
+                ability_index,
+            })
+        }
         other => Err(PyValueError::new_err(format!(
-            "unknown action kind {other:?}; valid: pass_priority, play_land, declare_attackers, declare_blockers"
+            "unknown action kind {other:?}; valid: pass_priority, play_land, declare_attackers, declare_blockers, activate_ability"
         ))),
     }
 }
@@ -240,6 +276,14 @@ pub fn action_to_pydict<'py>(
             // shape), and `parse_action(action_to_pydict(action))`
             // returns the same `Action::DeclareBlockers`.
             d.set_item("assignments", assignments.clone())?;
+        }
+        Action::ActivateAbility {
+            source_id,
+            ability_index,
+        } => {
+            d.set_item("kind", "activate_ability")?;
+            d.set_item("source_id", *source_id)?;
+            d.set_item("ability_index", *ability_index)?;
         }
     }
     Ok(d)
