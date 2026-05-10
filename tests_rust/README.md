@@ -146,6 +146,7 @@ the test lands in a commit.
 | rust(action-play-land): Action::PlayLand variant | tests_rust/test_actions.py extend | green  | feature/rust-action-play-land |
 | rust(effect-add-mana-to-pool): Effect::AddManaToPool dispatch | tests_rust/test_resolve.py extend | green  | feature/rust-effect-add-mana-to-pool |
 | rust(action-declare-attackers): Action::DeclareAttackers variant | tests_rust/test_actions.py extend | green  | feature/rust-action-declare-attackers |
+| rust(effect-search-library-for-basic-land-tapped): basic land search + tapped enter | tests_rust/test_resolve.py extend | green  | feature/rust-effect-search-library-for-basic-land-tapped |
 
 ## Build invocation reminder
 

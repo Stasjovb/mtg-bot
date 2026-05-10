@@ -801,6 +801,81 @@ by the rarity of "proliferating my opponent makes me lose".
 
 ---
 
+## 15. SearchLibraryForBasicLandTapped: no shuffle + supertypes-proxy filter
+
+**Location**: `rust/src/state_ops_resolve.rs::apply_effect` —
+search for the `Effect::SearchLibraryForBasicLandTapped` arm (round-23
+effect-coverage slice). Variant declared in `rust/src/cards.rs`.
+
+**What we do today**: when an
+`Effect::SearchLibraryForBasicLandTapped { count }` resolves, the
+active player's library is scanned top-to-bottom (Vec iter rev), the
+topmost object whose printing's `card_types` contains "Land" is
+removed and placed onto the controller's battlefield with
+`tapped = true`, `summoning_sick = false`. Repeats up to `count`
+times; partial fill is allowed if fewer matches exist. The library is
+NOT shuffled afterward.
+
+**Why this diverges from CR 701.19 / 701.22**: two shortcuts.
+
+1. *No shuffle.* CR 701.19 says searching a library always shuffles
+   the library, regardless of search outcome. The deterministic
+   first-match pick means the Rust dispatch is reproducible without
+   threading an RNG seed through `apply_effect`, but the missing
+   shuffle creates an observable divergence from Python (which always
+   shuffles after `SearchLibraryForBasicLandTapped`).
+2. *"Basic land" filter is a `card_types` Land check, not a true
+   supertypes check.* Python's `is_basic_land` is
+   `is_land and "Basic" in supertypes`. The Rust bridge has no
+   `supertypes` field today (it ships `card_types` + `keywords` +
+   P/T/mana_produced and not much else), so "basic" half of "basic
+   land" is approximated by the card_types Land check.
+
+**Failure mode**:
+
+1. *Shuffle gap.* Python's `Player.library` will have a different
+   order after the search than the Rust state — every subsequent
+   draw / scry / mill from that library will diverge. The parity
+   smoke harness will surface this on any deck that runs through a
+   basic-land tutor.
+2. *Supertypes-proxy false positive.* If a card with
+   `card_types=["Land"]` but supertypes excluding "Basic" enters the
+   library (e.g. a non-basic dual land, fetch land, shock land), the
+   Rust dispatch will pick it up; Python's `is_basic_land` will
+   reject it. In the current EoE pool no non-basic land coexists
+   with `SearchLibraryForBasicLandTapped` on the same engine state
+   (the printing carries one card_type only), so the proxy is
+   faithful for the present pool — but it WILL diverge once
+   non-basic lands enter scope.
+
+**When it matters**:
+- Shuffle gap: every parity-smoke run that exercises any of the 15
+  EoE cards driving this effect (Beamsaw Prospector, Kavaron Harrier,
+  Larval Scoutlander, the Lander token, Moldering Gym, etc.). Local
+  test-only runs that don't touch parity smoke are unaffected.
+- Supertypes gap: zero in the EoE pool; non-zero the moment a
+  non-basic land joins the bridge.
+
+**Fix scope when prioritized**:
+- *Shuffle*: small — compose with
+  `state_ops_library.rs::search_library_for_first_of_type_and_shuffle`
+  once the per-slice file-isolation constraint relaxes (or once an
+  `RngSeed` is threaded through `apply_effect`). The xorshift64
+  generator is already in `state_ops_library.rs`.
+- *Supertypes*: medium — grow `CardPrinting` with a
+  `supertypes: Vec<String>` field, extend the parser to require/parse
+  it, swap the filter to check `supertypes.iter().any(|s| s ==
+  "Basic")`. Touches the bridge schema, parsing, and every test that
+  builds a printing dict.
+
+**Impact estimate**:
+- Shuffle: zero gameplay strength impact in tests (deterministic
+  first-match is fine for engine-level tests); 100% of parity-smoke
+  divergence after any basic-land tutor.
+- Supertypes: zero today (EoE pool only); rises with cards.
+
+---
+
 ## Tracked but not in this doc
 
 Things tracked elsewhere that you might also want to know about:

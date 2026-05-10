@@ -3540,3 +3540,221 @@ def test_resolve_add_mana_to_pool_cow_clone_unaffected(synthetic_state):
     assert clone_pool_before["B"] == 0
     # Live state's B slot is now 3.
     assert dict(synthetic_state.get_mana_pool(0))["B"] == 3
+
+
+# --- round-23 SearchLibraryForBasicLandTapped dispatch --------------
+#
+# **SearchLibraryForBasicLandTapped scope** (mirrored in the Rust
+# module docstring on ``state_ops_resolve.rs``). CR 701.19 search +
+# 701.22 shuffle — Rampant Growth / Beamsaw Prospector / Kavaron
+# Harrier pattern, 15 cards in the EoE pool per the round-20
+# measurement.
+#
+# - **Deterministic first-match pick (top-to-bottom).** Library is
+#   bottom-first in the Vec (lib[len-1] = top); scan via iter().rev()
+#   to grab the topmost matching object. Real MTG lets the player
+#   choose any matching card; deferred until decision callbacks exist.
+# - **Basic-land filter: card_types contains "Land".** Bridge has no
+#   supertypes today; proxy is faithful for the EoE pool. See
+#   SEARCH_LIMITATIONS entry for deferred supertypes work.
+# - **No shuffle** in this first slice — deterministic first-match is
+#   reproducible without an RNG seed. SEARCH_LIMITATIONS entry tracks
+#   the deferred RNG-externalization work.
+# - **count=0 / count<0** mirror GainLife / DrawCards / Mill / ScryN
+#   / CreateToken conventions (no-op / raise respectively).
+# - **Partial fill on early-exhaust:** stop silently when no more
+#   matches remain. Matches Python's `next(..., None)` short-circuit.
+
+
+def _rampant_growth_dict(count=1):
+    """A Rampant-Growth-shaped printing — Sorcery card_type so the
+    post-resolve mover sends it to the graveyard, with a single
+    SearchLibraryForBasicLandTapped effect."""
+    return {
+        "name": f"Test Rampant Growth (x{count})",
+        "card_types": ["Sorcery"],
+        "effects": [
+            {
+                "kind": "search_library_for_basic_land_tapped",
+                "count": count,
+            }
+        ],
+    }
+
+
+def test_resolve_search_library_for_basic_land_tapped_moves_forest_to_battlefield(
+    synthetic_state,
+):
+    """The synthetic seed pre-fills both players' libraries with 50
+    Forest objects (card_types=["Land"]). Resolving a count=1 search
+    moves the topmost Forest from the active player's library onto
+    their battlefield, tapped."""
+    bf_before = synthetic_state.battlefield_sizes[0]
+    lib_before = synthetic_state.library_sizes[0]
+
+    spell_obj_id = synthetic_state.register_and_inject_object(
+        _rampant_growth_dict(count=1), 0, ZONE_HAND
+    )
+    synthetic_state.push_to_stack(spell_obj_id, 0)
+    synthetic_state.resolve_top_of_stack()
+
+    # Library shrank by 1, battlefield grew by 1 (the searched land).
+    # Source is a Sorcery on the hand → graveyard via CR 608.2m post-
+    # resolve move, so it does NOT contribute to the battlefield delta.
+    assert synthetic_state.is_stack_empty() is True
+    assert synthetic_state.library_sizes[0] == lib_before - 1
+    assert synthetic_state.battlefield_sizes[0] == bf_before + 1
+    # Opponent's zones untouched.
+    assert synthetic_state.library_sizes[1] == lib_before
+    assert synthetic_state.battlefield_sizes[1] == bf_before
+
+
+def test_resolve_search_library_for_basic_land_tapped_lands_tapped(
+    synthetic_state,
+):
+    """The searched land enters TAPPED — the "tapped" half of the
+    effect's spec. Top-of-library Forest in the synthetic seed is the
+    LAST Vec element on the active player's library; capture its
+    obj_id, dispatch the effect, assert is_tapped(obj_id) returns
+    Some(True)."""
+    # Library Vec layout: p0 base id = num_battlefield + num_hand
+    # = 10 + 7 = 17, then 50 library Forests at ids 17..67. The Vec
+    # is built sequentially, so the TOP of library (last element) is
+    # the highest id: 17 + 50 - 1 = 66.
+    top_of_library_obj_id = 17 + 50 - 1  # 66
+    spell_obj_id = synthetic_state.register_and_inject_object(
+        _rampant_growth_dict(count=1), 0, ZONE_HAND
+    )
+    synthetic_state.push_to_stack(spell_obj_id, 0)
+    synthetic_state.resolve_top_of_stack()
+
+    # The top-of-library Forest now lives on p0's battlefield, tapped.
+    assert synthetic_state.find_object_zone(top_of_library_obj_id) == ZONE_BATTLEFIELD
+    assert synthetic_state.is_tapped(top_of_library_obj_id) is True
+    # NOT summoning-sick (CR 302.1 applies to creatures; a land
+    # bypassing creature-spell resolution via search has no sickness).
+    assert synthetic_state.is_summoning_sick(top_of_library_obj_id) is False
+
+
+def test_resolve_search_library_for_basic_land_tapped_picks_topmost(
+    synthetic_state,
+):
+    """When the library has multiple basic lands, the topmost is
+    picked (Vec iter rev = top-to-bottom). The synthetic seed's
+    library is 100% Forest, so the deterministic first match is the
+    last Vec element (highest obj_id in the library zone)."""
+    top_id_p0 = 17 + 50 - 1  # 66 — top of p0's library
+    second_top_id_p0 = 17 + 50 - 2  # 65 — second-from-top
+    spell_obj_id = synthetic_state.register_and_inject_object(
+        _rampant_growth_dict(count=1), 0, ZONE_HAND
+    )
+    synthetic_state.push_to_stack(spell_obj_id, 0)
+    synthetic_state.resolve_top_of_stack()
+
+    # The TOPMOST Forest (id 66) moved; the second-from-top (id 65)
+    # is still in the library.
+    assert synthetic_state.find_object_zone(top_id_p0) == ZONE_BATTLEFIELD
+    assert synthetic_state.find_object_zone(second_top_id_p0) == ZONE_LIBRARY
+
+
+def test_resolve_search_library_for_basic_land_tapped_no_land_no_op(engine):
+    """If the active player's library has no basic land, the effect
+    silently no-ops — the spell still pops the stack, source moves
+    per CR 608.2m, but no library / battlefield mutation occurs on
+    the search side. Build a state with an empty library on p0 by
+    setting num_library=0."""
+    state = engine.make_synthetic_state(
+        num_battlefield=2, num_hand=1, num_library=0
+    )
+    bf_before = state.battlefield_sizes[0]
+    lib_before = state.library_sizes[0]
+    assert lib_before == 0
+
+    # Inject the spell source on p0's HAND so the Sorcery-to-graveyard
+    # post-resolve move doesn't touch the battlefield count we're
+    # asserting on.
+    spell_obj_id = state.register_and_inject_object(
+        _rampant_growth_dict(count=1), 0, ZONE_HAND
+    )
+    state.push_to_stack(spell_obj_id, 0)
+    state.resolve_top_of_stack()
+
+    # Stack popped, no library/battlefield mutation on the search side.
+    assert state.is_stack_empty() is True
+    assert state.library_sizes[0] == 0
+    # Source was in hand (not battlefield), so the post-resolve move
+    # to graveyard does not change battlefield count.
+    assert state.battlefield_sizes[0] == bf_before
+
+
+def test_resolve_search_library_for_basic_land_tapped_count_two_fetches_two(
+    synthetic_state,
+):
+    """Larval Scoutlander / count=2 pattern — two basic lands enter
+    tapped on the same resolution. Library shrinks by 2, battlefield
+    grows by 2 (plus the source's post-resolve move)."""
+    bf_before = synthetic_state.battlefield_sizes[0]
+    lib_before = synthetic_state.library_sizes[0]
+
+    spell_obj_id = synthetic_state.register_and_inject_object(
+        _rampant_growth_dict(count=2), 0, ZONE_HAND
+    )
+    synthetic_state.push_to_stack(spell_obj_id, 0)
+    synthetic_state.resolve_top_of_stack()
+
+    assert synthetic_state.library_sizes[0] == lib_before - 2
+    # +2 lands enter the battlefield. The Sorcery source came from
+    # hand (not battlefield) so the post-resolve move to graveyard
+    # does not affect the battlefield count.
+    assert synthetic_state.battlefield_sizes[0] == bf_before + 2
+
+
+def test_resolve_search_library_for_basic_land_tapped_preserves_controller(
+    synthetic_state,
+):
+    """The searched land enters under the active player's control —
+    `obj.controller` is stamped to `state.active_player` (the
+    searcher). Confirm by reading the controller off the moved
+    object via find_object_zone (battlefield placement implies the
+    `players[controller].battlefield` Vec held it).
+
+    First-slice convention: controller == owner here, so the land
+    ends up on the active player's battlefield."""
+    bf_before_p0 = synthetic_state.battlefield_sizes[0]
+    bf_before_p1 = synthetic_state.battlefield_sizes[1]
+    top_of_library_obj_id = 17 + 50 - 1  # p0's top Forest
+
+    spell_obj_id = synthetic_state.register_and_inject_object(
+        _rampant_growth_dict(count=1), 0, ZONE_HAND
+    )
+    synthetic_state.push_to_stack(spell_obj_id, 0)
+    synthetic_state.resolve_top_of_stack()
+
+    # The Forest landed on p0's battlefield (active player), not p1's.
+    assert synthetic_state.find_object_zone(top_of_library_obj_id) == ZONE_BATTLEFIELD
+    # Net battlefield delta: +1 on p0 (searched land), 0 on p1.
+    # Source (Sorcery) came from hand → graveyard, so it does not
+    # affect the battlefield count.
+    assert synthetic_state.battlefield_sizes[0] == bf_before_p0 + 1
+    assert synthetic_state.battlefield_sizes[1] == bf_before_p1
+
+
+def test_resolve_search_library_for_basic_land_tapped_count_zero_no_op(
+    synthetic_state,
+):
+    """count=0 is a legal no-op (mirrors GainLife / DrawCards / Mill /
+    DamageEach* / CreateToken zero-count conventions). Library and
+    battlefield untouched on the search side."""
+    bf_before = synthetic_state.battlefield_sizes[0]
+    lib_before = synthetic_state.library_sizes[0]
+
+    spell_obj_id = synthetic_state.register_and_inject_object(
+        _rampant_growth_dict(count=0), 0, ZONE_HAND
+    )
+    synthetic_state.push_to_stack(spell_obj_id, 0)
+    synthetic_state.resolve_top_of_stack()
+
+    assert synthetic_state.is_stack_empty() is True
+    assert synthetic_state.library_sizes[0] == lib_before
+    # Source (Sorcery) was in hand → graveyard, no battlefield change.
+    assert synthetic_state.battlefield_sizes[0] == bf_before

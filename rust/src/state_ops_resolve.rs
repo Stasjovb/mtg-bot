@@ -1169,6 +1169,122 @@ fn apply_effect(state: &mut GameState, effect: &Effect) -> PyResult<()> {
                 }
             }
         }
+        // Round-23: SearchLibraryForBasicLandTapped. CR 701.19 search +
+        // 701.22 shuffle. The active player (= controller of resolving
+        // stack item, first-slice convention mirrored from every other
+        // implicit-controller arm) searches their library for up to
+        // `count` basic land cards, puts each onto the battlefield
+        // tapped. Powers Rampant Growth / Beamsaw Prospector / Kavaron
+        // Harrier — 15 cards in the EoE pool per round-20 measurement.
+        //
+        // **Deterministic first-match pick (top-to-bottom).** Library
+        // is bottom-first in the Vec (lib[len-1] = top of library); scan
+        // via iter().rev() to grab the topmost matching object. Real
+        // MTG lets the player choose any matching card; deferred until
+        // decision callbacks exist.
+        //
+        // **Basic-land filter: `card_types contains "Land"`.** The Rust
+        // bridge has no `supertypes` field today (Python's
+        // `is_basic_land` is `is_land and "Basic" in supertypes`), so
+        // the basic half is approximated by the card_types Land check.
+        // For the EoE pool every basic land has card_types=["Land"]
+        // with no compound non-basic land carrying this dispatch path
+        // (non-basic-fetch dispatches go through SearchLibraryForCard /
+        // other variants), so the proxy is faithful for the current
+        // set. See SEARCH_LIMITATIONS entry for the deferred supertypes
+        // work.
+        //
+        // **No shuffle.** CR 701.19's "always shuffle after search"
+        // invariant is deliberately not honored in this first slice —
+        // shuffling would require threading an RNG seed through
+        // `apply_effect`, and the deterministic first-match pick is
+        // reproducible without one. The
+        // `search_library_for_first_of_type_and_shuffle` primitive in
+        // `state_ops_library.rs` is the right composition once
+        // RNG-externalization lands. Documented in SEARCH_LIMITATIONS.
+        //
+        // **count<0 raises** loudly (defense-in-depth; parse_effect
+        // catches this at register time). **count=0 is a legal no-op**
+        // (mirrors GainLife / DrawCards / Mill / CreateToken zero-count
+        // conventions).
+        //
+        // **Partial fill on early-exhaust.** If fewer than `count`
+        // basic lands exist in the library, stop early silently —
+        // matches Python's `next(..., None)` short-circuit on miss.
+        //
+        // **Per-object state on battlefield entry.** Lands enter
+        // tapped (`tapped = true`) and NOT summoning-sick
+        // (`summoning_sick = false` — CR 302.1 only applies to
+        // creatures; a land bypassing creature-spell resolution via
+        // a search effect has no summoning sickness regardless). The
+        // `controller` field is stamped to the active player —
+        // searching for someone else's basic land into their own
+        // battlefield isn't a thing in real MTG, so first-slice the
+        // searched land enters under the searcher's control.
+        //
+        // **Inlining note (cross-file friction).** Per per-slice file-
+        // isolation we inline the search + move logic here rather
+        // than calling `search_library_for_first_of_type_and_shuffle`
+        // (which is a `#[pymethods]` method in
+        // `state_ops_library.rs` requiring a `Bound::call_method1`
+        // awkward shape inside `apply_effect`). A future
+        // consolidation slice can collapse onto the shared primitive.
+        Effect::SearchLibraryForBasicLandTapped { count } => {
+            if *count < 0 {
+                return Err(PyValueError::new_err(format!(
+                    "SearchLibraryForBasicLandTapped count must be non-negative, got {count}"
+                )));
+            }
+            let n = *count as usize;
+            if n == 0 {
+                return Ok(());
+            }
+            let controller_idx = state.active_player as usize;
+            for _ in 0..n {
+                // Locate the topmost basic-land match (Vec iter rev =
+                // top-to-bottom). Inlined here (vs. delegating to the
+                // search-only sibling) so we have the Vec INDEX for
+                // removal, not just the obj_id.
+                let pos: Option<usize> = {
+                    let lib = &state.players[controller_idx].library;
+                    let mut found: Option<usize> = None;
+                    for i in (0..lib.len()).rev() {
+                        let obj = &lib[i];
+                        let printing = match state.registry.lookup(obj.printing_id) {
+                            Some(p) => p,
+                            None => continue,
+                        };
+                        if printing.card_types.iter().any(|t| t == "Land") {
+                            found = Some(i);
+                            break;
+                        }
+                    }
+                    found
+                };
+                let p = match pos {
+                    Some(p) => p,
+                    None => break, // no more basic lands — stop early silently
+                };
+                let player = &mut state.players[controller_idx];
+                let lib = Arc::make_mut(&mut player.library);
+                let mut obj = lib.remove(p);
+                // Stamp battlefield entry: tapped, not summoning-sick
+                // (CR 302.1 applies to creatures; lands don't have
+                // summoning sickness regardless). Controller =
+                // active_player (the searcher).
+                obj.zone = ZONE_BATTLEFIELD;
+                obj.tapped = true;
+                obj.summoning_sick = false;
+                obj.controller = state.active_player;
+                obj.damage = 0;
+                obj.counters = 0;
+                Arc::make_mut(&mut player.battlefield).push(obj);
+            }
+            // CR 701.19 "always shuffle after search" deliberately
+            // NOT honored in this first slice — see module docstring
+            // + SEARCH_LIMITATIONS entry for the deferred RNG-
+            // externalization work.
+        }
     }
     Ok(())
 }
