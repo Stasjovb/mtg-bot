@@ -491,14 +491,54 @@ fn apply_effect(state: &mut GameState, effect: &Effect) -> PyResult<()> {
                 Arc::make_mut(&mut state.players[defender].exile).push(obj);
             }
         },
-        // Round-12 stub: TapTarget exists in the bridge but isn't
-        // wired to resolution yet. Round-12 resolve agent fills this
-        // in.
-        Effect::TapTarget { .. } => {
-            return Err(PyValueError::new_err(
-                "TapTarget not yet wired to resolve_top_of_stack — round-12 resolve agent fills this in",
-            ));
-        }
+        // Round-12: TapTarget. Twiddle-shaped: tap a target permanent.
+        //
+        // Targeting (mirrors DealDamage / ReturnToHand / ExileTarget):
+        //   - AnyCreature -> first object on the DEFENDING player's
+        //     battlefield (smallest index). No creature-type filter.
+        //     If the defender's battlefield is empty, the spell
+        //     fizzles silently.
+        //   - AnyPlayer -> semantically nonsense for tap (you can't
+        //     tap a player). Raise ValueError loudly, matching the
+        //     ReturnToHand / ExileTarget AnyPlayer shape.
+        //
+        // **Idempotent on already-tapped target.** Tapping a creature
+        // that's already tapped is a silent no-op (no error, no other
+        // state change). Mirrors the round-1 ``tap_object`` shape
+        // (which returns ``False`` rather than raising).
+        //
+        // **Inlining note (cross-file friction).** ``tap_object`` is a
+        // private ``#[pymethods]`` method in ``state_ops_tap.rs``;
+        // per per-slice file-isolation we inline the minimal
+        // ``Arc::make_mut`` + ``tapped = true`` here, mirroring how
+        // DrawCards / Mill / ReturnToHand / ExileTarget all inline
+        // their primitives for the same reason.
+        Effect::TapTarget { target } => match target {
+            TargetFilter::AnyPlayer => {
+                return Err(PyValueError::new_err(
+                    "TapTarget with AnyPlayer target is semantically nonsense (cannot tap a player)",
+                ));
+            }
+            TargetFilter::AnyCreature => {
+                let defender = (1 - state.active_player) as usize;
+                let bf = &state.players[defender].battlefield;
+                if bf.is_empty() {
+                    return Ok(()); // fizzle silently
+                }
+                let target_id = bf[0].id;
+                // Flip ``tapped = true`` on the target. Idempotent:
+                // already-tapped targets are silently re-stamped
+                // True (no-op). Use Arc::make_mut for CoW safety.
+                let bf_mut: &mut Vec<GameObject> =
+                    Arc::make_mut(&mut state.players[defender].battlefield);
+                for obj in bf_mut.iter_mut() {
+                    if obj.id == target_id {
+                        obj.tapped = true;
+                        break;
+                    }
+                }
+            }
+        },
     }
     Ok(())
 }

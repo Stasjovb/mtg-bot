@@ -1564,3 +1564,182 @@ def test_exile_target_object_zone_field_updated(synthetic_state):
 
     # Zone field on the now-exiled object is the exile constant.
     assert synthetic_state.exile_object_zone_field(target_obj_id) == ZONE_EXILE
+
+
+# --- round-12 TapTarget dispatch ------------------------------------
+#
+# Round-12 foundation (`feature/rust-tdd-base-r12`) added a new
+# ``Effect`` variant ``TapTarget { target: TargetFilter }`` and a
+# temporary stub arm in ``apply_effect`` returning ``ValueError``.
+# This slice replaces the stub with real dispatch — Twiddle-shaped:
+# tap a target permanent.
+#
+# **Scope simplifications for this slice (mirrored in the Rust module
+# docstring on ``state_ops_resolve.rs``):**
+#
+# - **AnyCreature target → first object on the DEFENDING player's
+#   battlefield (smallest index).** Mirrors the existing DealDamage /
+#   ReturnToHand / ExileTarget convention. No creature-type filter,
+#   no per-spell target choice. Empty defender battlefield → fizzle
+#   (silent no-op, stack still pops).
+# - **AnyPlayer target on TapTarget makes no sense** (you can't tap
+#   a player). The dispatch raises ValueError loudly, matching the
+#   ReturnToHand / ExileTarget convention for the same situation.
+# - **Idempotent.** Tapping an already-tapped creature is a silent
+#   no-op — no error, the ``tapped`` flag stays true, no other state
+#   changes. Matches the round-1 ``tap_object`` shape (which returns
+#   ``False`` rather than raising).
+# - **Cross-file friction:** ``tap.rs::tap_object`` is private (the
+#   ~10th cross-file E0624 instance in this TDD line). The slice
+#   inlines the minimal Arc::make_mut + ``tapped = true`` per the
+#   recurring pattern (DrawCards / Mill / ReturnToHand / ExileTarget
+#   all inline their primitives for the same reason).
+
+
+def _twiddle_dict():
+    """A Twiddle-ish 'tap target permanent' instant. Schema-allowed
+    target ``any_creature`` (the slice's only meaningful TapTarget
+    target shape — AnyPlayer raises)."""
+    return {
+        "name": "Test Twiddle",
+        "card_types": ["Instant"],
+        "mana_cost": {"U": 1},
+        "effects": [
+            {
+                "kind": "tap_target",
+                "target": {"kind": "any_creature"},
+            }
+        ],
+    }
+
+
+def _twiddle_player_dict():
+    """A schema-allowed but semantically nonsense tap: target
+    'any_player'. Should raise on resolve (cannot tap a player)."""
+    return {
+        "name": "Test Twiddle-Player (nonsense)",
+        "card_types": ["Instant"],
+        "mana_cost": {"U": 1},
+        "effects": [
+            {
+                "kind": "tap_target",
+                "target": {"kind": "any_player"},
+            }
+        ],
+    }
+
+
+def test_resolve_tap_target_taps_creature(synthetic_state):
+    """End-to-end composition test (the load-bearing one for
+    TapTarget).
+
+    Synthetic state: p1's battlefield[0] is a Forest at obj_id 67
+    (controller=1). Cast a tap-target instant from active player p0
+    (controller=0). On resolve, the dispatch picks the FIRST object
+    on the defender's battlefield (mirrors DealDamage convention)
+    and flips its ``tapped`` flag to True. The source instant lands
+    in p0's graveyard."""
+    target_obj_id = 67  # First p1 battlefield object.
+    assert synthetic_state.is_tapped(target_obj_id) is False
+
+    twiddle_obj_id = synthetic_state.register_and_inject_object(
+        _twiddle_dict(), 0, ZONE_HAND
+    )
+    p0_grave_before = synthetic_state.graveyard_sizes[0]
+    synthetic_state.push_to_stack(twiddle_obj_id, 0)
+    synthetic_state.resolve_top_of_stack()
+
+    # Target is now tapped on p1's battlefield.
+    assert synthetic_state.is_tapped(target_obj_id) is True
+    # Stack drained; source instant in p0's graveyard.
+    assert synthetic_state.is_stack_empty() is True
+    assert synthetic_state.find_object_zone(twiddle_obj_id) == ZONE_GRAVEYARD
+    assert synthetic_state.graveyard_sizes[0] == p0_grave_before + 1
+    # Target stayed on p1's battlefield (this is tap, not bounce/exile).
+    assert synthetic_state.find_object_zone(target_obj_id) == ZONE_BATTLEFIELD
+
+
+def test_resolve_tap_target_no_creature_fizzles(engine):
+    """If the defender has no creature on battlefield, TapTarget
+    fizzles silently — stack item still pops, source still goes to
+    graveyard (instant), nothing else changes. Mirrors the
+    DealDamage / ReturnToHand / ExileTarget no-target fizzle
+    convention."""
+    state = engine.make_synthetic_state(
+        num_battlefield=0, num_hand=1, num_library=1
+    )
+    twiddle_obj_id = state.register_and_inject_object(
+        _twiddle_dict(), 0, ZONE_HAND
+    )
+
+    p0_grave_before = state.graveyard_sizes[0]
+    p1_bf_before = state.battlefield_sizes[1]
+
+    state.push_to_stack(twiddle_obj_id, 0)
+    state.resolve_top_of_stack()
+
+    # Stack drained, source moved to graveyard, no battlefield delta.
+    assert state.is_stack_empty() is True
+    assert state.find_object_zone(twiddle_obj_id) == ZONE_GRAVEYARD
+    assert state.graveyard_sizes[0] == p0_grave_before + 1
+    assert state.battlefield_sizes[1] == p1_bf_before
+
+
+def test_resolve_tap_target_already_tapped_idempotent(synthetic_state):
+    """Tapping an already-tapped creature is a silent no-op — no
+    error, ``tapped`` stays True, stack still drains and the source
+    still moves to graveyard. Mirrors the round-1 ``tap_object``
+    "returns False rather than raising" shape."""
+    target_obj_id = 67  # First p1 battlefield object.
+
+    # Pre-tap the target.
+    assert synthetic_state.tap_object(target_obj_id) is True
+    assert synthetic_state.is_tapped(target_obj_id) is True
+
+    twiddle_obj_id = synthetic_state.register_and_inject_object(
+        _twiddle_dict(), 0, ZONE_HAND
+    )
+    p0_grave_before = synthetic_state.graveyard_sizes[0]
+    synthetic_state.push_to_stack(twiddle_obj_id, 0)
+    synthetic_state.resolve_top_of_stack()  # must NOT raise
+
+    # Target stays tapped, no other state changes.
+    assert synthetic_state.is_tapped(target_obj_id) is True
+    assert synthetic_state.is_stack_empty() is True
+    assert synthetic_state.find_object_zone(twiddle_obj_id) == ZONE_GRAVEYARD
+    assert synthetic_state.graveyard_sizes[0] == p0_grave_before + 1
+
+
+def test_resolve_tap_target_with_any_player_raises(synthetic_state):
+    """TapTarget with an AnyPlayer target is semantically nonsense
+    (you can't tap a player). The dispatch raises ValueError loudly,
+    matching the ReturnToHand / ExileTarget AnyPlayer shape."""
+    twiddle_obj_id = synthetic_state.register_and_inject_object(
+        _twiddle_player_dict(), 0, ZONE_HAND
+    )
+    synthetic_state.push_to_stack(twiddle_obj_id, 0)
+
+    with pytest.raises(ValueError):
+        synthetic_state.resolve_top_of_stack()
+
+
+def test_clone_then_tap_does_not_affect_original(synthetic_state):
+    """CoW canary for TapTarget. Cloning the state and resolving the
+    tap on the clone must not bleed back into the original — the
+    original's target stays untapped, the clone's becomes tapped."""
+    target_obj_id = 67  # First p1 battlefield object.
+    twiddle_obj_id = synthetic_state.register_and_inject_object(
+        _twiddle_dict(), 0, ZONE_HAND
+    )
+    synthetic_state.push_to_stack(twiddle_obj_id, 0)
+    cloned = synthetic_state.clone_once()
+
+    cloned.resolve_top_of_stack()
+
+    # Clone: target tapped, source in graveyard.
+    assert cloned.is_tapped(target_obj_id) is True
+    assert cloned.find_object_zone(twiddle_obj_id) == ZONE_GRAVEYARD
+    # Original: untouched on every front.
+    assert synthetic_state.is_tapped(target_obj_id) is False
+    assert synthetic_state.find_object_zone(twiddle_obj_id) == ZONE_HAND
+    assert synthetic_state.stack_size() == 1
