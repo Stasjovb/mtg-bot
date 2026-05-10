@@ -599,6 +599,13 @@ fn apply_effect(state: &mut GameState, effect: &Effect) -> PyResult<()> {
                 }
             }
         },
+        // Round-14 stub: Sacrifice exists in the bridge but isn't
+        // wired to resolution yet. Round-14 resolve agent fills in.
+        Effect::Sacrifice { .. } => {
+            return Err(PyValueError::new_err(
+                "Sacrifice not yet wired to resolve_top_of_stack — round-14 resolve agent fills this in",
+            ));
+        }
     }
     Ok(())
 }
