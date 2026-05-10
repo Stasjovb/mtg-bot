@@ -2969,3 +2969,149 @@ def test_resolve_damage_each_opponent_does_not_touch_active_player(
     # p0 (active / controller) untouched; p1 (the one opponent) -5.
     assert synthetic_state.life_totals[0] == p0_life_before
     assert synthetic_state.life_totals[1] == p1_life_before - 5
+
+
+# --- round-18 DamageEachCreature dispatch ---------------------------
+#
+# **DamageEachCreature scope** (mirrored in the Rust module docstring
+# on ``state_ops_resolve.rs``). CR 701.4 — Pyroclasm pattern:
+#
+# - **Marks ``damage += amount`` on every creature on every player's
+#   battlefield.** Symmetric AOE: applies to BOTH players (not just
+#   the defender) — Pyroclasm hits creatures controller cares about
+#   AND their own.
+# - **Only creatures.** Non-creature permanents (lands, artifacts,
+#   enchantments) on the battlefield are not touched. Synthetic-state
+#   half-Forest-half-Bears layout means we can directly verify lands
+#   stay damage=0.
+# - **Indestructible is honored at SBA time, NOT here** — this slice
+#   only marks damage; SBAs decide who dies. So the dispatch does NOT
+#   filter on indestructible (mirrors the round-3 DealDamage shape
+#   where lethal damage is also written, then SBAs reap).
+# - **amount=0** is a legitimate no-op success (mirrors GainLife /
+#   DrawCards / Mill / DamageEachOpponent zero-count conventions).
+# - **amount<0 raises** loudly (mirrors round-3 DealDamage and round-17
+#   DamageEachOpponent raise-on-negative shape).
+# - **Player life is untouched** — DamageEachCreature damages
+#   creatures only, not players. (Earthquake-style "deal N to each
+#   creature AND each player" is a separate effect kind.)
+
+
+def _pyroclasm_dict(amount=2):
+    """A damage-each-creature spell — Pyroclasm-shaped (sorcery, deals
+    N damage to each creature). CR 701.4."""
+    return {
+        "name": "Test Pyroclasm",
+        "card_types": ["Sorcery"],
+        "mana_cost": {"R": 1, "generic": 1},
+        "effects": [
+            {
+                "kind": "damage_each_creature",
+                "amount": amount,
+            }
+        ],
+    }
+
+
+def test_resolve_damage_each_creature_marks_damage_on_both_players(
+    synthetic_state,
+):
+    """Resolving Pyroclasm-2 marks damage=2 on every creature on
+    BOTH players' battlefields. Synthetic state seeds 5 Bears on each
+    player's battlefield (ids 5-9 on p0, 72-76 on p1)."""
+    spell_obj_id = synthetic_state.register_and_inject_object(
+        _pyroclasm_dict(amount=2), 0, ZONE_HAND
+    )
+    synthetic_state.push_to_stack(spell_obj_id, 0)
+
+    # Pre-resolve: all creatures have damage=0.
+    for cid in (5, 6, 7, 8, 9, 72, 73, 74, 75, 76):
+        assert synthetic_state.get_damage(cid) == 0
+
+    synthetic_state.resolve_top_of_stack()
+
+    # All 5+5 creatures have damage=2 — symmetric AOE.
+    for cid in (5, 6, 7, 8, 9, 72, 73, 74, 75, 76):
+        assert synthetic_state.get_damage(cid) == 2
+
+
+def test_resolve_damage_each_creature_skips_non_creatures(synthetic_state):
+    """Lands / non-creature permanents are not touched — only objects
+    whose printing has "Creature" in card_types take the damage mark.
+    Synthetic state's first 5 bf objects per player are Forests
+    (Land); ids 0-4 (p0) and 67-71 (p1)."""
+    spell_obj_id = synthetic_state.register_and_inject_object(
+        _pyroclasm_dict(amount=3), 0, ZONE_HAND
+    )
+    synthetic_state.push_to_stack(spell_obj_id, 0)
+    synthetic_state.resolve_top_of_stack()
+
+    # All 5+5 Forests on the battlefields stay at damage=0.
+    for land_id in (0, 1, 2, 3, 4, 67, 68, 69, 70, 71):
+        assert synthetic_state.get_damage(land_id) == 0
+    # And the creatures took the hit.
+    for cid in (5, 6, 7, 8, 9, 72, 73, 74, 75, 76):
+        assert synthetic_state.get_damage(cid) == 3
+
+
+def test_resolve_damage_each_creature_zero_no_op(synthetic_state):
+    """amount=0 is a legitimate no-op — all damage values unchanged,
+    no error, stack still pops."""
+    spell_obj_id = synthetic_state.register_and_inject_object(
+        _pyroclasm_dict(amount=0), 0, ZONE_HAND
+    )
+    synthetic_state.push_to_stack(spell_obj_id, 0)
+    synthetic_state.resolve_top_of_stack()
+
+    assert synthetic_state.is_stack_empty() is True
+    for cid in (5, 6, 7, 8, 9, 72, 73, 74, 75, 76):
+        assert synthetic_state.get_damage(cid) == 0
+
+
+def test_resolve_damage_each_creature_negative_raises(synthetic_state):
+    """Negative amount is a schema error — mirrors DealDamage and
+    DamageEachOpponent raise-on-negative shape."""
+    spell_obj_id = synthetic_state.register_and_inject_object(
+        _pyroclasm_dict(amount=-2), 0, ZONE_HAND
+    )
+    synthetic_state.push_to_stack(spell_obj_id, 0)
+
+    with pytest.raises(ValueError):
+        synthetic_state.resolve_top_of_stack()
+
+
+def test_resolve_damage_each_creature_does_not_touch_player_life(
+    synthetic_state,
+):
+    """Player life totals are not touched — Pyroclasm damages
+    creatures only, not players."""
+    life_before = list(synthetic_state.life_totals)
+    spell_obj_id = synthetic_state.register_and_inject_object(
+        _pyroclasm_dict(amount=4), 0, ZONE_HAND
+    )
+    synthetic_state.push_to_stack(spell_obj_id, 0)
+    synthetic_state.resolve_top_of_stack()
+
+    assert list(synthetic_state.life_totals) == life_before
+
+
+def test_resolve_damage_each_creature_stacks_with_existing_damage(
+    synthetic_state,
+):
+    """Damage stacks: a creature pre-marked with damage=1, then hit
+    by Pyroclasm-2, ends at damage=3. Mirrors round-3 DealDamage's
+    saturating_add semantics."""
+    creature_id = 5  # First Bears on p0's battlefield.
+    assert synthetic_state.deal_damage(creature_id, 1) is True
+    assert synthetic_state.get_damage(creature_id) == 1
+
+    spell_obj_id = synthetic_state.register_and_inject_object(
+        _pyroclasm_dict(amount=2), 0, ZONE_HAND
+    )
+    synthetic_state.push_to_stack(spell_obj_id, 0)
+    synthetic_state.resolve_top_of_stack()
+
+    assert synthetic_state.get_damage(creature_id) == 3
+    # Other creatures took just 2 (started at 0).
+    for cid in (6, 7, 8, 9, 72, 73, 74, 75, 76):
+        assert synthetic_state.get_damage(cid) == 2

@@ -9,6 +9,7 @@ mod state;
 // land in this commit; each subsequent feature branch fills in
 // its own file without touching the others.
 mod state_ops_cast;
+mod state_ops_choices;
 mod state_ops_cleanup;
 mod state_ops_combat;
 mod state_ops_counters;

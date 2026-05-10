@@ -223,4 +223,90 @@ impl GameState {
         }
         Ok(())
     }
+
+    /// Take the FIRST `n` cards in `player_id`'s hand (insertion
+    /// order, hand[0..n]) and put them on the BOTTOM of that player's
+    /// library. The card at `hand[0]` lands at the very bottom
+    /// (`library[0]`); `hand[1]` lands just above it (`library[1]`);
+    /// and so on. The remaining hand entries (`hand[n..]`) shift down
+    /// to occupy `hand[0..hand_size-n]`.
+    ///
+    /// "Library bottom" = INDEX 0 of the library Vec; "library top" =
+    /// LAST element (matches the round-1 zone convention and `scry`).
+    /// The library top is therefore unaffected by bottoming — only
+    /// indices 0..n are inserted.
+    ///
+    /// This is the second half of the London mulligan (CR 103.4):
+    /// round-11's `mulligan(player, seed)` draws 7 cards, and this
+    /// primitive bottoms `n_mulligans_taken` of them. The choice of
+    /// WHICH `n` cards to bottom is deterministic-by-position for now
+    /// (always the first `n`); a future decision-callback slice will
+    /// model real player choice.
+    ///
+    /// Errors:
+    ///
+    /// - `ValueError` if `player_id` is not 0 or 1.
+    /// - `ValueError` if `n` is negative.
+    /// - `ValueError` if `n` exceeds the current hand size.
+    ///
+    /// CoW-safe: hand + library mutations both route through
+    /// `Arc::make_mut`, so cloning a `GameState` and bottoming on the
+    /// clone leaves the source's hand and library untouched (verified
+    /// by `test_bottom_cards_clone_isolation`).
+    fn bottom_cards_from_hand(&mut self, player_id: u8, n: i32) -> PyResult<()> {
+        let idx = player_id as usize;
+        if idx >= 2 {
+            return Err(PyValueError::new_err(format!(
+                "player_id {player_id} out of range (must be 0 or 1)"
+            )));
+        }
+        if n < 0 {
+            return Err(PyValueError::new_err(format!(
+                "n {n} must be non-negative"
+            )));
+        }
+        let n = n as usize;
+        let player = &mut self.players[idx];
+        if n > player.hand.len() {
+            return Err(PyValueError::new_err(format!(
+                "can't bottom more cards than in hand: requested {n} \
+                 but player {player_id}'s hand only has {hand_size}",
+                hand_size = player.hand.len(),
+            )));
+        }
+        if n == 0 {
+            return Ok(());
+        }
+
+        let hand = Arc::make_mut(&mut player.hand);
+        // Drain the first `n` cards from the hand (insertion order).
+        // `drain(..n)` returns them in hand[0]..hand[n-1] order.
+        let bottoming: Vec<_> = hand.drain(..n).collect();
+
+        let lib = Arc::make_mut(&mut player.library);
+        // Insert each card at index 0 IN ORDER. After the loop:
+        //   - hand[0] inserted first → ends up at lib[n-1] of the
+        //     bottomed batch (each later insert pushes it down).
+        //   - hand[n-1] inserted last → sits at lib[0].
+        // That's the OPPOSITE of what we want. We want hand[0] at
+        // lib[0] (very bottom). So insert in REVERSE order: insert
+        // hand[n-1] first (ends up at lib[n-1]), then hand[n-2]
+        // (becomes the new lib[0], pushing hand[n-1] to lib[1]),
+        // ..., finally hand[0] (becomes lib[0], pushing the rest up).
+        for mut obj in bottoming.into_iter().rev() {
+            // Reset per-instance state on the way out of hand. The
+            // card is leaving any battlefield-only context (it can't
+            // legally have been on the battlefield anyway, but be
+            // defensive — future slices may reuse this primitive on
+            // wider zones, and a stale `tapped` / `summoning_sick`
+            // bit on a now-library object would be a latent bug).
+            obj.zone = ZONE_LIBRARY;
+            obj.tapped = false;
+            obj.summoning_sick = false;
+            obj.damage = 0;
+            obj.counters = 0;
+            lib.insert(0, obj);
+        }
+        Ok(())
+    }
 }

@@ -258,4 +258,64 @@ impl GameState {
         Arc::make_mut(&mut player.battlefield).push(obj);
         Ok(true)
     }
+
+    /// Regrowth-style primitive — move the object with id `obj_id` out
+    /// of `player_id`'s graveyard and into that player's hand.
+    ///
+    /// Specific variant of `move_object` that is hard-coded to
+    /// graveyard -> hand: the search is restricted to the named
+    /// player's graveyard (no cross-player or cross-zone fallback).
+    /// The complement of `move_object_from_graveyard_to_battlefield`
+    /// (round-17): same shape, but lands in the hand and does NOT
+    /// stamp `summoning_sick = true` — cards in hand have no
+    /// summoning sickness; that stamp is specific to entering the
+    /// battlefield.
+    ///
+    /// **Per-object state reset on zone change** (CR 400.7) — `tapped`,
+    /// `damage`, `counters`, and `summoning_sick` are all zeroed on
+    /// the way into the hand. Defensive reset on damage even though
+    /// a graveyard object shouldn't carry damage in practice (CR
+    /// 614.12 — damage clears on zone change already), but the test
+    /// suite stamps damage onto the graveyard object directly to
+    /// validate the reset arm.
+    ///
+    /// Returns `Ok(true)` on a successful move, `Ok(false)` if no
+    /// object with `obj_id` lives in the named player's graveyard
+    /// (whether the id is unknown, on the battlefield, in the hand,
+    /// in the library, or in someone else's graveyard). Raises
+    /// `IndexError` on out-of-range `player_id` per the loud-fail
+    /// convention of every other player-indexed primitive.
+    ///
+    /// CoW-safe: each zone Vec mutation routes through `Arc::make_mut`.
+    fn move_object_from_graveyard_to_hand(
+        &mut self,
+        player_id: u8,
+        obj_id: u32,
+    ) -> PyResult<bool> {
+        let idx = player_id as usize;
+        if idx >= 2 {
+            return Err(PyIndexError::new_err(format!(
+                "player_id {player_id} out of range (must be 0 or 1)"
+            )));
+        }
+        let player = &mut self.players[idx];
+        let pos = match player.graveyard.iter().position(|o| o.id == obj_id) {
+            Some(p) => p,
+            None => return Ok(false),
+        };
+        let gy = Arc::make_mut(&mut player.graveyard);
+        let mut obj = gy.remove(pos);
+        // Per-object state reset (CR 400.7). controller stays the same
+        // — returning to the player's own hand. summoning_sick resets
+        // to false (cards in hand have no summoning sickness; the
+        // round-17 reanimate variant is the only place that stamps
+        // summoning_sick = true).
+        obj.zone = ZONE_HAND;
+        obj.tapped = false;
+        obj.damage = 0;
+        obj.counters = 0;
+        obj.summoning_sick = false;
+        Arc::make_mut(&mut player.hand).push(obj);
+        Ok(true)
+    }
 }

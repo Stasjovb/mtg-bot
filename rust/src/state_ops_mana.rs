@@ -160,6 +160,17 @@ impl GameState {
         Ok(())
     }
 
+    /// Zero BOTH players' mana pools. Implements CR 106.4: "When a
+    /// phase or step ends, each player's mana pool empties." This is
+    /// the multi-player wrapper around `empty_mana_pool` that the
+    /// phase/step-end machinery calls. `ManaPool` is `Copy + Default`,
+    /// so each assignment is a cheap by-value reset.
+    fn empty_all_mana_pools(&mut self) -> PyResult<()> {
+        self.players[0].mana_pool = crate::state::ManaPool::default();
+        self.players[1].mana_pool = crate::state::ManaPool::default();
+        Ok(())
+    }
+
     /// Attempt to pay `cost` from `player_id`'s mana pool (CR 202.2).
     /// Returns `true` and deducts the mana on success; returns
     /// `false` and leaves the pool unchanged if the cost can't be
