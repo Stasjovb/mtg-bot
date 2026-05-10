@@ -40,28 +40,58 @@ If `maturin` isn't on PATH, run via the venv's python:
     --release -m rust/pyproject.toml
 ```
 
-## What's here today (skeleton only)
+## What's here today
+
+**Game state (skeleton, no game logic yet — `src/state.rs`)**
 
 - `make_synthetic_state(num_battlefield, num_hand, num_library) -> GameState`
 - `GameState.clone_once() -> GameState`
 - `GameState.clone_n_times_micros(n) -> float` — micro-bench helper
-- A handful of read-only getters (`turn_number`, `battlefield_sizes`,
-  `hand_sizes`, `library_sizes`, `life_totals`)
+- Read-only getters: `turn_number`, `battlefield_sizes`,
+  `hand_sizes`, `library_sizes`, `life_totals`
+- Zones are `Arc<Vec<GameObject>>` for CoW clone, matching Python's
+  `_CowList` semantics — clone is an atomic refcount bump per zone.
 
-There is no game logic yet. The first slice exists to:
+**Card-data bridge (`src/cards.rs`)**
 
-1. Prove the maturin / PyO3 / MSVC toolchain works on Win11 + 3.13.
-2. Get a head-to-head clone perf number against `GameState.clone()`
-   in `src/mtg_bot/game.py` so future card-vocabulary growth has a
-   baseline.
+Closed-vocabulary Rust types + a Python-dict parser that's the
+single point of validation. Python builds plain dicts describing
+each card; the Rust dict parser converts to typed enums or fails
+loudly (unknown `kind`, missing keys, type mismatches all raise at
+`register_printing` time, not at game-resolution time).
 
-The Python smoke test at `tests/test_rust_engine_smoke.py` skips
-gracefully when the extension isn't installed, so the existing
-test suite still runs cleanly on a fresh checkout.
+- `Registry` (PyClass) — Python holds it explicitly. No global state.
+  - `Registry().register_printing(dict) -> u32` — returns the
+    stable printing id. Validates everything; raises `KeyError` for
+    missing required keys, `ValueError` for unknown kinds /
+    malformed values.
+  - `Registry.get_printing_name(id) -> str`
+  - `Registry.get_printing_mana_cost(id) -> dict` — round-trip
+  - `Registry.get_printing_effects(id) -> list[dict]` — round-trip
+  - `Registry.register_n_times_micros(dict, n) -> float` — bench helper
+- Closed Rust enums:
+  - `Effect::DealDamage { amount: i32, target: TargetFilter }`
+  - `TargetFilter::AnyPlayer | AnyCreature`
+- `ManaCost { generic, white, blue, black, red, green: u8 }` —
+  hybrid / X / snow deferred until a card actually needs them.
 
-The bench at `scripts/bench_rust_clone.py` runs the Python
-`bench_clone.py` shape alongside the Rust `clone_n_times_micros`
-on a state with matching dimensions and prints the speedup.
+The vocabulary will grow one variant per follow-up commit, each
+with a parity test against the Python equivalent on a real EoE
+card. **No fallback-to-opaque-blob path** — every variant the
+Python parser emits has a Rust counterpart, and the parser fails
+loudly on unknown `kind` so missing variants surface immediately.
+
+The Python smoke + bridge tests at `tests/test_rust_engine_smoke.py`
+and `tests/test_rust_card_bridge.py` skip gracefully when the
+extension isn't installed.
+
+Benches:
+
+- `scripts/bench_rust_clone.py` — head-to-head clone perf vs
+  Python's `GameState.clone()` and `copy.deepcopy`.
+- `scripts/bench_rust_register_printings.py` — bridge parse cost.
+  Headline: ~0.6us per Python `register_printing` call;
+  5000 cards bulk-register in ~3.8ms.
 
 ## Why a separate `pyproject.toml`?
 
