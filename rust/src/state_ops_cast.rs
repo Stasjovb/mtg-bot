@@ -24,20 +24,27 @@
 //!   sibling slices need to keep clean this round).
 //! - **No sorcery-speed restrictions.** Same rationale.
 //!
-//! ## Land detector: ``mana_produced.is_some()``
+//! ## Type-based detectors: card_types from foundation r6 (cf1fc6c)
 //!
-//! The registry doesn't model a card-type system yet, so the slice
-//! uses the "produces mana when tapped" predicate as a stepping-
-//! stone for "this is a land". In the synthetic seed, Forest
-//! qualifies and Grizzly Bears does not — the test
-//! ``test_play_land_non_land_returns_false`` covers the negative
-//! case. Llanowar Elves (which has ``mana_produced`` set in the
-//! synthetic seed for the mana-slice's tap-for-mana coverage) would
-//! also qualify under this predicate; we don't test the elf-as-land
-//! case because the stepping-stone is acknowledged here and a proper
-//! card-type system supersedes it. (See
-//! ``docs/SEARCH_LIMITATIONS.md`` follow-up entry once a
-//! card-type system lands.)
+//! Foundation r6 added `CardPrinting.card_types: Vec<String>` and
+//! seeded the synthetic registry with proper types — Forest carries
+//! `["Land"]`, Grizzly Bears and Llanowar Elves both carry
+//! `["Creature"]`. This slice rewires both detectors to consult
+//! `card_types` directly:
+//!
+//! - `play_land` accepts iff `card_types` contains `"Land"`.
+//! - `cast_creature` accepts iff `card_types` contains `"Creature"`.
+//!
+//! The round-4 stepping stone — `mana_produced.is_some()` for
+//! "this is a land" — has been retired. That predicate produced a
+//! documented false-positive on Llanowar Elves (which has
+//! `mana_produced = Some(["G"])` in the synthetic seed for the
+//! mana-slice's tap-for-mana coverage); the new card_types-based
+//! detector correctly rejects elves-as-lands. Symmetrically,
+//! `cast_creature` no longer relies on `mana_cost` / `power`
+//! heuristics — a Land printing with a mana cost (none exist in
+//! the synthetic seed, but the field is structurally allowed)
+//! would not slip through.
 //!
 //! ## Mana payment
 //!
@@ -208,9 +215,10 @@ impl GameState {
 
     /// Play a land from `player_id`'s hand onto their battlefield.
     /// Returns `true` on success, `false` on every precondition
-    /// failure: no object with `obj_id` in that player's hand, or
-    /// the printing's `mana_produced` is `None` (stepping-stone
-    /// land detector — see module docstring).
+    /// failure: no object with `obj_id` in that player's hand, no
+    /// such printing in the registry, or the printing's `card_types`
+    /// does not contain `"Land"` (clean type-based detector — see
+    /// module docstring).
     ///
     /// **Does not enforce one-land-per-turn** — the Python side
     /// gates that in `legal_actions`. **Does not consult sorcery
@@ -232,7 +240,7 @@ impl GameState {
             Some(p) => p,
             None => return Ok(false),
         };
-        if printing.mana_produced.is_none() {
+        if !printing.card_types.iter().any(|t| t == "Land") {
             return Ok(false);
         }
         // Commit the move. The hand search re-runs inside
@@ -249,7 +257,8 @@ impl GameState {
     /// the card to the battlefield, and stamps the new permanent
     /// with `summoning_sick = true`. Returns `true` on success,
     /// `false` on any precondition failure: object not in hand, no
-    /// such printing, or insufficient mana.
+    /// such printing, the printing's `card_types` does not contain
+    /// `"Creature"`, or insufficient mana.
     ///
     /// **No-stack semantics.** The Python pipeline pushes a
     /// `StackItem`, settles priority, then resolves; this primitive
@@ -259,8 +268,10 @@ impl GameState {
     fn cast_creature(&mut self, obj_id: u32, player_id: u8) -> PyResult<bool> {
         let idx = check_player_id(player_id)?;
         // Phase 1: read-only lookup. Find the object in hand, fetch
-        // the printing's cost. Bail before any mutation if either
-        // step fails.
+        // the printing's cost + types. Bail before any mutation if
+        // any step fails. The type check happens here (pre-mutation)
+        // so a non-creature spell never has its mana speculatively
+        // debited.
         let printing_id = match self.players[idx]
             .hand
             .iter()
@@ -271,7 +282,12 @@ impl GameState {
             None => return Ok(false),
         };
         let cost = match self.registry.lookup(printing_id) {
-            Some(p) => p.mana_cost.clone(),
+            Some(p) => {
+                if !p.card_types.iter().any(|t| t == "Creature") {
+                    return Ok(false);
+                }
+                p.mana_cost.clone()
+            }
             None => return Ok(false),
         };
         // Phase 2: try the mana spend on a copy of the pool. If it

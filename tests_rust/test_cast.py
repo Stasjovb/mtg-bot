@@ -23,16 +23,19 @@ card from hand, pay its mana, deposit it on the battlefield.
   on ``GameState``.
 - **No sorcery-speed restrictions.** Same rationale: caller's
   responsibility.
-- **Land detector: ``printing.mana_produced.is_some()``.** The
-  registry doesn't model a card-type system yet, so the slice uses
-  the "produces mana when tapped" predicate as a stepping-stone for
-  "this is a land". In the synthetic seed, Forest qualifies and
-  Grizzly Bears does not — covered by the tests below. Llanowar
-  Elves (which has ``mana_produced`` set in the synthetic seed for
-  the mana-slice's tap-for-mana coverage) would also qualify under
-  this predicate; we don't test the elf-as-land case because the
-  stepping-stone is acknowledged in the module docstring and a
-  proper card-type system supersedes it.
+- **Land detector: ``printing.card_types`` contains ``"Land"``.**
+  Foundation r6 (cf1fc6c) added ``card_types: Vec<String>`` to
+  ``CardPrinting``; the cast slice now uses a clean type-based
+  detector. In the synthetic seed Forest carries ``["Land"]``,
+  Grizzly Bears carries ``["Creature"]``, and Llanowar Elves
+  carries ``["Creature"]`` — so ``play_land(llanowar)`` correctly
+  rejects (the round-4 ``mana_produced.is_some()`` stepping stone
+  produced a documented false-positive on the elf; this slice
+  retires it).
+- **Creature-spell detector: ``printing.card_types`` contains
+  ``"Creature"``.** ``cast_creature`` now refuses to cast a
+  printing whose types don't include ``"Creature"`` — Forest
+  (a ``["Land"]``) is correctly rejected.
 - **Mana payment: best-effort spend with generic-fills-from-anywhere.**
   ``cast_creature`` reads the printing's ``mana_cost``, deducts
   colored pips from the matching pool slot, then fills generic from
@@ -115,11 +118,9 @@ def test_play_land_unknown_id_returns_false(synthetic_state):
 
 
 def test_play_land_non_land_returns_false(synthetic_state):
-    """Llanowar Elves in hand has ``mana_produced`` set on the
-    synthetic seed, but Grizzly Bears (a creature with no mana
-    production) does NOT qualify under the stepping-stone
-    land-detector. Move a Bears into hand and verify ``play_land``
-    declines."""
+    """Grizzly Bears (card_types = ["Creature"]) does NOT qualify
+    under the card_types-based land detector. Move a Bears into
+    hand and verify ``play_land`` declines."""
     bears_id = P0_FIRST_BEARS_ID  # currently on the battlefield
     assert synthetic_state.printing_name_of(bears_id) == "Grizzly Bears"
     # Yank the Bears off the battlefield and into hand so the precondition
@@ -135,6 +136,40 @@ def test_play_land_non_land_returns_false(synthetic_state):
     assert synthetic_state.find_object_zone(bears_id) == ZONE_HAND
     assert synthetic_state.hand_sizes[0] == hand_before
     assert synthetic_state.battlefield_sizes[0] == bf_before
+
+
+def test_play_land_on_creature_returns_false(synthetic_state):
+    """Llanowar Elves seeds with ``card_types = ["Creature"]`` and
+    ``mana_produced = Some(["G"])``. Round-4 used the
+    ``mana_produced.is_some()`` stepping-stone, which falsely
+    accepted the elf as a land. Foundation r6 added card_types and
+    this slice rewired ``play_land`` to check it; the elf must now
+    be rejected. The synthetic seed already has Llanowar Elves in
+    hand at ``P0_FIRST_HAND_ID``."""
+    elf_id = P0_FIRST_HAND_ID
+    assert synthetic_state.printing_name_of(elf_id) == "Llanowar Elves"
+    assert synthetic_state.find_object_zone(elf_id) == ZONE_HAND
+    hand_before = synthetic_state.hand_sizes[0]
+    bf_before = synthetic_state.battlefield_sizes[0]
+
+    assert synthetic_state.play_land(elf_id, 0) is False
+
+    # No mutation: elf stays in hand, never reaches the battlefield.
+    assert synthetic_state.find_object_zone(elf_id) == ZONE_HAND
+    assert synthetic_state.hand_sizes[0] == hand_before
+    assert synthetic_state.battlefield_sizes[0] == bf_before
+
+
+def test_play_land_correctly_accepts_forest(synthetic_state):
+    """Belt-and-braces confirmation that Forest still plays as a
+    land under the new card_types-based detector. Forest carries
+    ``card_types = ["Land"]`` in the synthetic seed."""
+    forest_id = _move_forest_into_hand(synthetic_state, 0)
+    assert synthetic_state.printing_name_of(forest_id) == "Forest"
+
+    assert synthetic_state.play_land(forest_id, 0) is True
+
+    assert synthetic_state.find_object_zone(forest_id) == ZONE_BATTLEFIELD
 
 
 def test_play_land_not_in_hand_returns_false(synthetic_state):
@@ -253,6 +288,42 @@ def test_cast_creature_with_generic_cost_uses_any_color(synthetic_state):
     assert pool["G"] == 0  # green pip went to the colored requirement
     assert pool["C"] == 0  # colorless filled the generic
     assert pool["R"] == 1  # untouched
+    assert synthetic_state.find_object_zone(bears_id) == ZONE_BATTLEFIELD
+    assert synthetic_state.battlefield_sizes[0] == bf_before + 1
+
+
+def test_cast_creature_on_land_returns_false(synthetic_state):
+    """A Forest (``card_types = ["Land"]``) is not a Creature spell.
+    The card_types-based detector in ``cast_creature`` must reject
+    it. Move a Forest into hand, give the player a green pip, and
+    verify the cast declines and the pip stays in the pool."""
+    forest_id = _move_forest_into_hand(synthetic_state, 0)
+    assert synthetic_state.printing_name_of(forest_id) == "Forest"
+    synthetic_state.add_mana(0, "G", 1)
+    pool_before = synthetic_state.get_mana_pool(0)
+    hand_before = synthetic_state.hand_sizes[0]
+    bf_before = synthetic_state.battlefield_sizes[0]
+
+    assert synthetic_state.cast_creature(forest_id, 0) is False
+
+    # No mutation: Forest stays in hand, mana pool untouched.
+    assert synthetic_state.find_object_zone(forest_id) == ZONE_HAND
+    assert synthetic_state.get_mana_pool(0) == pool_before
+    assert synthetic_state.hand_sizes[0] == hand_before
+    assert synthetic_state.battlefield_sizes[0] == bf_before
+
+
+def test_cast_creature_correctly_accepts_grizzly_bears(synthetic_state):
+    """Belt-and-braces confirmation that a Creature-typed printing
+    still casts under the new card_types-based detector. Grizzly
+    Bears carries ``card_types = ["Creature"]``."""
+    bears_id = P0_FIRST_BEARS_ID
+    assert synthetic_state.move_object(bears_id, ZONE_HAND, 0) is True
+    synthetic_state.add_mana(0, "G", 2)
+    bf_before = synthetic_state.battlefield_sizes[0]
+
+    assert synthetic_state.cast_creature(bears_id, 0) is True
+
     assert synthetic_state.find_object_zone(bears_id) == ZONE_BATTLEFIELD
     assert synthetic_state.battlefield_sizes[0] == bf_before + 1
 
