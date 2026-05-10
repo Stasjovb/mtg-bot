@@ -1775,6 +1775,104 @@ fn apply_effect(
             obj.counters = 0;
             Arc::make_mut(&mut state.players[controller_idx].battlefield).push(obj);
         }
+        // Round-24: DestroyAllCreatures. CR 701.7 + 701.4 AOE — Wrath
+        // of God pattern. Destroys every creature on the battlefield
+        // (both players), honoring indestructible (CR 702.12) inline.
+        // 3 cards in the EoE pool per round-20 measurement (Restricted
+        // Office // Lecture Hall and friends).
+        //
+        // **Symmetric AOE: walks BOTH players' battlefields.** Like
+        // DamageEachCreature, this is implicit-target and hits every
+        // creature regardless of controller. No target filter — the
+        // variant doesn't carry a TargetFilter for that reason.
+        //
+        // **Creature-only filter via printing's card_types.** Lands /
+        // artifacts / enchantments / planeswalkers on the battlefield
+        // stay where they are; only objects whose printing has
+        // "Creature" in card_types are destroyed. Same convention as
+        // DamageEachCreature.
+        //
+        // **Indestructible is honored INLINE** (CR 702.12) — unlike
+        // DamageEachCreature (which writes damage and lets the SBA
+        // reap so indestructible kicks in at SBA time), this arm
+        // moves creatures directly to graveyard. So the indestructible
+        // keyword check happens here, inline, mirroring the
+        // DestroyTarget arm.
+        //
+        // **Per-object state reset on graveyard move** (CR 400.7) —
+        // tapped / summoning_sick / damage / counters all reset on the
+        // way to graveyard, mirroring DestroyTarget / Sacrifice /
+        // ExileTarget reset convention.
+        //
+        // **Source-on-stack not affected.** The resolving spell's
+        // source lives on the stack (zone != battlefield) at apply-
+        // effect time, so it's not in either player's `battlefield`
+        // Vec and the scan naturally skips it.
+        //
+        // **Empty battlefield = silent no-op** per-player — mirrors
+        // the DamageEachCreature `if creature_ids.is_empty()` short-
+        // circuit. `source_obj_id` is unused (implicit-target AOE,
+        // same shape as DamageEachCreature / DamageEachOpponent).
+        //
+        // **Inlining note (cross-file friction).** Per per-slice file-
+        // isolation we inline the minimal `Arc::make_mut` battlefield
+        // retain + graveyard push here, mirroring how DestroyTarget /
+        // Sacrifice / ExileTarget inline their primitives for the
+        // same E0624 cross-file reason.
+        Effect::DestroyAllCreatures => {
+            let _ = source_obj_id; // implicit-target AOE; source not relevant
+            for pidx in 0..state.players.len() {
+                // Snapshot which obj_ids on this player's battlefield
+                // are destroyable (Creature card_type AND NOT
+                // indestructible) BEFORE mutating, so we drop the
+                // registry borrow before reaching for `Arc::make_mut`
+                // on the zone Vecs.
+                let destroyable_ids: Vec<u32> = state.players[pidx]
+                    .battlefield
+                    .iter()
+                    .filter_map(|obj| {
+                        let printing = state.registry.lookup(obj.printing_id)?;
+                        if !printing.card_types.iter().any(|t| t == "Creature") {
+                            return None;
+                        }
+                        if printing.keywords.iter().any(|k| k == "indestructible") {
+                            return None;
+                        }
+                        Some(obj.id)
+                    })
+                    .collect();
+                if destroyable_ids.is_empty() {
+                    continue;
+                }
+                // Pop the destroyed creatures off this player's
+                // battlefield via retain. First-slice convention:
+                // controller == owner, so the destroyed creature goes
+                // to THIS player's graveyard (CR 400.6 says owner; pre-
+                // Threaten, owner == controller).
+                let bf_mut: &mut Vec<GameObject> =
+                    Arc::make_mut(&mut state.players[pidx].battlefield);
+                let mut destroyed: Vec<GameObject> =
+                    Vec::with_capacity(destroyable_ids.len());
+                bf_mut.retain(|obj| {
+                    if destroyable_ids.contains(&obj.id) {
+                        destroyed.push(obj.clone());
+                        false
+                    } else {
+                        true
+                    }
+                });
+                let gy_mut: &mut Vec<GameObject> =
+                    Arc::make_mut(&mut state.players[pidx].graveyard);
+                for mut obj in destroyed {
+                    obj.zone = ZONE_GRAVEYARD;
+                    obj.tapped = false;
+                    obj.summoning_sick = false;
+                    obj.damage = 0;
+                    obj.counters = 0;
+                    gy_mut.push(obj);
+                }
+            }
+        }
     }
     Ok(())
 }

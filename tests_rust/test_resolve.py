@@ -4916,3 +4916,303 @@ def test_resolve_discard_self_clone_isolation(synthetic_state):
     assert synthetic_state.hand_sizes[0] == p0_hand_before
     assert synthetic_state.graveyard_sizes[0] == p0_grave_before
     assert synthetic_state.stack_size() == 1
+
+
+# --- round-24 DestroyAllCreatures dispatch -------------------------
+#
+# **DestroyAllCreatures scope** (mirrored in the Rust module docstring
+# on ``state_ops_resolve.rs``):
+#
+# - **Symmetric AOE: walks BOTH players' battlefields.** Unlike
+#   DestroyTarget (defender only), DestroyAllCreatures hits every
+#   creature regardless of controller — Wrath of God pattern.
+# - **Only creatures.** Non-creature permanents (lands, artifacts,
+#   enchantments) on the battlefield are not touched.
+# - **Indestructible is honored INLINE** (CR 702.12): creatures with
+#   the ``indestructible`` keyword stay on the battlefield. Mirrors
+#   the DestroyTarget arm's inline check rather than the
+#   DamageEachCreature "let SBAs handle it" shape (because this arm
+#   moves objects to graveyard directly, not via damage marking).
+# - **Per-object state reset on graveyard move** (CR 400.7): tapped /
+#   summoning_sick / damage / counters all reset.
+# - **Empty battlefield / no creatures = silent no-op** — per-player.
+# - **Source on stack not affected** — the resolving sorcery's source
+#   lives on the stack, not the battlefield, so the scan naturally
+#   skips it.
+
+
+def _wrath_dict():
+    """A destroy-all-creatures sorcery — Wrath-of-God-shaped (2WW,
+    sorcery, destroys every creature). CR 701.7 + 701.4 AOE."""
+    return {
+        "name": "Test Wrath of God",
+        "card_types": ["Sorcery"],
+        "mana_cost": {"W": 2, "generic": 2},
+        "effects": [{"kind": "destroy_all_creatures"}],
+    }
+
+
+def _wrath_indestructible_dict():
+    """A vanilla creature printing with the indestructible keyword.
+    Used to verify DestroyAllCreatures honors indestructible (mirrors
+    the DestroyTarget / SBA indestructible logic)."""
+    return {
+        "name": "Test Stone Idol",
+        "card_types": ["Creature"],
+        "mana_cost": {"generic": 4},
+        "effects": [],
+        "power": 3,
+        "toughness": 3,
+        "keywords": ["indestructible"],
+    }
+
+
+def _wrath_vanilla_creature_dict():
+    """A vanilla creature with no keywords. Used to seed a
+    deterministically-destructible target."""
+    return {
+        "name": "Test Mortal Bear",
+        "card_types": ["Creature"],
+        "mana_cost": {"generic": 2},
+        "effects": [],
+        "power": 2,
+        "toughness": 2,
+    }
+
+
+def test_resolve_destroy_all_creatures_clears_both_battlefields(
+    synthetic_state,
+):
+    """Resolving Wrath destroys every creature on BOTH players'
+    battlefields. Synthetic seed: 5 Bears on each player's bf (ids
+    5-9 on p0, 72-76 on p1) plus 5 Forests each. Post-resolve: bears
+    in graveyards, Forests still on battlefields."""
+    bear_ids_p0 = (5, 6, 7, 8, 9)
+    bear_ids_p1 = (72, 73, 74, 75, 76)
+    forest_ids_p0 = (0, 1, 2, 3, 4)
+    forest_ids_p1 = (67, 68, 69, 70, 71)
+
+    for cid in bear_ids_p0 + bear_ids_p1:
+        assert synthetic_state.find_object_zone(cid) == ZONE_BATTLEFIELD
+    for lid in forest_ids_p0 + forest_ids_p1:
+        assert synthetic_state.find_object_zone(lid) == ZONE_BATTLEFIELD
+
+    p0_grave_before = synthetic_state.graveyard_sizes[0]
+    p1_grave_before = synthetic_state.graveyard_sizes[1]
+
+    spell_obj_id = synthetic_state.register_and_inject_object(
+        _wrath_dict(), 0, ZONE_HAND
+    )
+    synthetic_state.push_to_stack(spell_obj_id, 0)
+    synthetic_state.resolve_top_of_stack()
+
+    # All bears moved to their controller's graveyards.
+    for cid in bear_ids_p0:
+        assert synthetic_state.find_object_zone(cid) == ZONE_GRAVEYARD
+    for cid in bear_ids_p1:
+        assert synthetic_state.find_object_zone(cid) == ZONE_GRAVEYARD
+    # Forests untouched.
+    for lid in forest_ids_p0 + forest_ids_p1:
+        assert synthetic_state.find_object_zone(lid) == ZONE_BATTLEFIELD
+    # Graveyards grew by 5 each (5 bears per side); p0 also got
+    # the sorcery itself (post-resolve instant/sorcery -> graveyard).
+    assert synthetic_state.graveyard_sizes[0] == p0_grave_before + 5 + 1
+    assert synthetic_state.graveyard_sizes[1] == p1_grave_before + 5
+    # Stack drained.
+    assert synthetic_state.is_stack_empty() is True
+
+
+def test_resolve_destroy_all_creatures_indestructible_survives(engine):
+    """Indestructible creatures (CR 702.12) survive the Wrath. Seed:
+    one indestructible creature on each player's battlefield; resolve
+    Wrath; both should still be on battlefield, neither in graveyard."""
+    state = engine.make_synthetic_state(
+        num_battlefield=0, num_hand=1, num_library=1
+    )
+    indestr_p0 = state.register_and_inject_object(
+        _wrath_indestructible_dict(), 0, ZONE_BATTLEFIELD
+    )
+    indestr_p1 = state.register_and_inject_object(
+        _wrath_indestructible_dict(), 1, ZONE_BATTLEFIELD
+    )
+    spell_obj_id = state.register_and_inject_object(
+        _wrath_dict(), 0, ZONE_HAND
+    )
+    state.push_to_stack(spell_obj_id, 0)
+    state.resolve_top_of_stack()
+
+    # Indestructible creatures stay put — CR 702.12 honored.
+    assert state.find_object_zone(indestr_p0) == ZONE_BATTLEFIELD
+    assert state.find_object_zone(indestr_p1) == ZONE_BATTLEFIELD
+    # Stack drained, source instant in p0's graveyard.
+    assert state.is_stack_empty() is True
+    assert state.find_object_zone(spell_obj_id) == ZONE_GRAVEYARD
+
+
+def test_resolve_destroy_all_creatures_mix_only_normal_destroyed(engine):
+    """Mix of normal + indestructible creatures: only the normal
+    creatures get destroyed; indestructible ones stay on the
+    battlefield."""
+    state = engine.make_synthetic_state(
+        num_battlefield=0, num_hand=1, num_library=1
+    )
+    mortal_id = state.register_and_inject_object(
+        _wrath_vanilla_creature_dict(), 0, ZONE_BATTLEFIELD
+    )
+    indestr_id = state.register_and_inject_object(
+        _wrath_indestructible_dict(), 0, ZONE_BATTLEFIELD
+    )
+    spell_obj_id = state.register_and_inject_object(
+        _wrath_dict(), 0, ZONE_HAND
+    )
+    state.push_to_stack(spell_obj_id, 0)
+    state.resolve_top_of_stack()
+
+    # Mortal -> graveyard; indestructible stays on battlefield.
+    assert state.find_object_zone(mortal_id) == ZONE_GRAVEYARD
+    assert state.find_object_zone(indestr_id) == ZONE_BATTLEFIELD
+
+
+def test_resolve_destroy_all_creatures_empty_battlefield_no_error(engine):
+    """Empty battlefield = silent no-op. Stack still drains, source
+    still moves to graveyard."""
+    state = engine.make_synthetic_state(
+        num_battlefield=0, num_hand=1, num_library=1
+    )
+    spell_obj_id = state.register_and_inject_object(
+        _wrath_dict(), 0, ZONE_HAND
+    )
+    p0_grave_before = state.graveyard_sizes[0]
+    p1_grave_before = state.graveyard_sizes[1]
+
+    state.push_to_stack(spell_obj_id, 0)
+    state.resolve_top_of_stack()
+
+    # Stack drained, source in p0's graveyard, p1 untouched.
+    assert state.is_stack_empty() is True
+    assert state.find_object_zone(spell_obj_id) == ZONE_GRAVEYARD
+    assert state.graveyard_sizes[0] == p0_grave_before + 1
+    assert state.graveyard_sizes[1] == p1_grave_before
+
+
+def test_resolve_destroy_all_creatures_only_lands_unaffected(engine):
+    """If the only battlefield objects are non-creatures (lands /
+    artifacts / etc.), nothing is destroyed. Seeds only a Forest
+    on each player's battlefield."""
+    state = engine.make_synthetic_state(
+        num_battlefield=0, num_hand=1, num_library=1
+    )
+    forest_dict = {
+        "name": "Test Forest",
+        "card_types": ["Land"],
+        "mana_produced": ["G"],
+        "effects": [],
+    }
+    forest_p0 = state.register_and_inject_object(
+        forest_dict, 0, ZONE_BATTLEFIELD
+    )
+    forest_p1 = state.register_and_inject_object(
+        forest_dict, 1, ZONE_BATTLEFIELD
+    )
+    spell_obj_id = state.register_and_inject_object(
+        _wrath_dict(), 0, ZONE_HAND
+    )
+    state.push_to_stack(spell_obj_id, 0)
+    state.resolve_top_of_stack()
+
+    # Lands stay put — only Creature card_types are destroyed.
+    assert state.find_object_zone(forest_p0) == ZONE_BATTLEFIELD
+    assert state.find_object_zone(forest_p1) == ZONE_BATTLEFIELD
+
+
+def test_resolve_destroy_all_creatures_resets_per_object_state(
+    synthetic_state,
+):
+    """Per-object state reset on zone change (CR 400.7): tapped /
+    damage / counters all reset on the way to graveyard. Pre-load a
+    creature with non-default state and verify after the Wrath the
+    underlying object reads back as reset."""
+    target_id = 5  # First Bears on p0's battlefield.
+    synthetic_state.tap_object(target_id)
+    synthetic_state.add_counters(target_id, 2)
+    synthetic_state.deal_damage(target_id, 1)
+    assert synthetic_state.is_tapped(target_id) is True
+    assert synthetic_state.get_counters(target_id) == 2
+    assert synthetic_state.get_damage(target_id) == 1
+
+    spell_obj_id = synthetic_state.register_and_inject_object(
+        _wrath_dict(), 0, ZONE_HAND
+    )
+    synthetic_state.push_to_stack(spell_obj_id, 0)
+    synthetic_state.resolve_top_of_stack()
+
+    # Target moved to graveyard with reset state — the counters/damage
+    # readers walk all four tracked zones (including graveyard) and read
+    # the underlying GameObject fields. (is_tapped is battlefield-only
+    # per its definition, so we can't observe `tapped=false` directly
+    # for an object that left the battlefield — the round-17
+    # DestroyTarget reset test follows the same convention of asserting
+    # only counters/damage post-move.)
+    assert synthetic_state.find_object_zone(target_id) == ZONE_GRAVEYARD
+    assert synthetic_state.get_counters(target_id) == 0
+    assert synthetic_state.get_damage(target_id) == 0
+
+
+def test_resolve_destroy_all_creatures_source_on_stack_unaffected(engine):
+    """The resolving sorcery's source lives on the stack at apply-
+    effect time (not on either player's battlefield), so the scan
+    naturally skips it. Verify the source still lands in graveyard
+    via the normal post-resolve instant/sorcery movement (not because
+    Wrath destroyed it)."""
+    state = engine.make_synthetic_state(
+        num_battlefield=0, num_hand=1, num_library=1
+    )
+    # Inject one creature on p0's bf to give Wrath a real target —
+    # otherwise the no-op path doesn't exercise the "source on stack"
+    # angle.
+    target_id = state.register_and_inject_object(
+        _wrath_vanilla_creature_dict(), 0, ZONE_BATTLEFIELD
+    )
+    spell_obj_id = state.register_and_inject_object(
+        _wrath_dict(), 0, ZONE_HAND
+    )
+    state.push_to_stack(spell_obj_id, 0)
+    state.resolve_top_of_stack()
+
+    # Target destroyed; source landed in graveyard via post-resolve
+    # (not via Wrath's destroy loop — sorceries aren't creatures).
+    assert state.find_object_zone(target_id) == ZONE_GRAVEYARD
+    assert state.find_object_zone(spell_obj_id) == ZONE_GRAVEYARD
+    assert state.is_stack_empty() is True
+
+
+def test_resolve_destroy_all_creatures_clone_isolation(synthetic_state):
+    """CoW canary: running DestroyAllCreatures on a clone leaves the
+    original state's battlefields untouched. Load-bearing because the
+    inline Wrath logic uses Arc::make_mut on two zones (battlefield +
+    graveyard) per player."""
+    spell_obj_id = synthetic_state.register_and_inject_object(
+        _wrath_dict(), 0, ZONE_HAND
+    )
+    synthetic_state.push_to_stack(spell_obj_id, 0)
+    p0_bf_before = synthetic_state.battlefield_sizes[0]
+    p1_bf_before = synthetic_state.battlefield_sizes[1]
+    p0_grave_before = synthetic_state.graveyard_sizes[0]
+    p1_grave_before = synthetic_state.graveyard_sizes[1]
+
+    cloned = synthetic_state.clone_once()
+    cloned.resolve_top_of_stack()
+
+    # Clone diverged: 5 bears destroyed per player's bf.
+    assert cloned.battlefield_sizes[0] == p0_bf_before - 5
+    assert cloned.battlefield_sizes[1] == p1_bf_before - 5
+    # Graveyards grew (5 bears + 1 sorcery for p0; 5 bears for p1).
+    assert cloned.graveyard_sizes[0] == p0_grave_before + 5 + 1
+    assert cloned.graveyard_sizes[1] == p1_grave_before + 5
+
+    # Original untouched.
+    assert synthetic_state.battlefield_sizes[0] == p0_bf_before
+    assert synthetic_state.battlefield_sizes[1] == p1_bf_before
+    assert synthetic_state.graveyard_sizes[0] == p0_grave_before
+    assert synthetic_state.graveyard_sizes[1] == p1_grave_before
+    assert synthetic_state.stack_size() == 1

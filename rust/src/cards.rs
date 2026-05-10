@@ -396,6 +396,44 @@ pub enum Effect {
     /// range(self.amount): if not p.hand: break` shape). Negative
     /// `amount` raises at register / resolve time.
     DiscardSelf { amount: i32 },
+    /// Destroy every creature on the battlefield (Wrath of God pattern,
+    /// CR 701.7 + 701.4 AOE). Indestructible creatures (CR 702.12)
+    /// are NOT destroyed — round-13 keyword check is honored.
+    /// Destroyed creatures go to their owner's graveyard (CR 400.6).
+    /// 3 cards in the EoE pool per round-20 measurement (Restricted
+    /// Office // Lecture Hall and friends).
+    ///
+    /// **Symmetric AOE: applies to BOTH players' battlefields** — like
+    /// DamageEachCreature, this is implicit-target and hits every
+    /// creature regardless of controller. No target filter — the
+    /// variant doesn't carry a TargetFilter for that reason.
+    ///
+    /// **Creature-only filter via printing's card_types.** Lands /
+    /// artifacts / enchantments / planeswalkers on the battlefield
+    /// stay where they are; only objects whose printing has "Creature"
+    /// in card_types are destroyed.
+    ///
+    /// **Indestructible is honored INLINE** (CR 702.12) — unlike
+    /// DamageEachCreature (which writes damage and lets the SBA reap),
+    /// DestroyAllCreatures moves creatures directly to graveyard. So
+    /// the indestructible keyword check happens here, inline, mirroring
+    /// the DestroyTarget arm.
+    ///
+    /// **Per-object state reset on graveyard move** (CR 400.7) —
+    /// tapped / summoning_sick / damage / counters all reset on the
+    /// way to graveyard, mirroring the DestroyTarget / Sacrifice /
+    /// ExileTarget reset convention.
+    ///
+    /// **Python schema simplification.** Python's
+    /// `DestroyAllCreatures` carries optional narrowing fields:
+    /// `tapped_only` / `untapped_only` (Split Up modal Wrath) and
+    /// `min_power` (Restricted Office "destroy all creatures with
+    /// power 3+"). The Rust first slice carries NONE of these — it's
+    /// a unit shape ("destroy all creatures, unconditional"). The
+    /// narrowed variants wait for richer dispatch plumbing and are
+    /// deferred along with the rest of the TargetFilter widening
+    /// shape elsewhere in the bridge.
+    DestroyAllCreatures,
 }
 
 #[derive(Clone, Debug)]
@@ -732,8 +770,18 @@ fn parse_effect(dict: &Bound<'_, PyDict>) -> PyResult<Effect> {
             }
             Ok(Effect::DiscardSelf { amount })
         }
+        "destroy_all_creatures" => {
+            // Unit variant — no required fields. Python's
+            // `DestroyAllCreatures` carries optional narrowing fields
+            // (`tapped_only`, `untapped_only`, `min_power`) that the
+            // Rust first slice intentionally drops (see the variant's
+            // docstring). Any extra keys on the dict are ignored,
+            // matching the silent-drop convention for unrecognized
+            // keys elsewhere in the parser.
+            Ok(Effect::DestroyAllCreatures)
+        }
         other => Err(PyValueError::new_err(format!(
-            "unknown effect kind {other:?}; valid: deal_damage, draw_cards, gain_life, return_to_hand, mill, exile_target, tap_target, untap_target, sacrifice, add_counters, discard_card, scry_n, destroy_target, damage_each_opponent, damage_each_creature, create_token, add_mana_to_pool, search_library_for_basic_land_tapped, put_plus_one_counter_on_self, surveil, counter_target_spell, return_creature_from_your_graveyard_to_battlefield, discard_self"
+            "unknown effect kind {other:?}; valid: deal_damage, draw_cards, gain_life, return_to_hand, mill, exile_target, tap_target, untap_target, sacrifice, add_counters, discard_card, scry_n, destroy_target, damage_each_opponent, damage_each_creature, create_token, add_mana_to_pool, search_library_for_basic_land_tapped, put_plus_one_counter_on_self, surveil, counter_target_spell, return_creature_from_your_graveyard_to_battlefield, discard_self, destroy_all_creatures"
         ))),
     }
 }
@@ -1009,6 +1057,9 @@ fn effect_to_pydict<'py>(
         Effect::DiscardSelf { amount } => {
             d.set_item("kind", "discard_self")?;
             d.set_item("amount", *amount)?;
+        }
+        Effect::DestroyAllCreatures => {
+            d.set_item("kind", "destroy_all_creatures")?;
         }
     }
     Ok(d)

@@ -1337,6 +1337,87 @@ def test_non_integer_toughness_raises():
         reg.register_printing({"name": "Broken", "toughness": "small"})
 
 
+# --- round-24: DestroyAllCreatures round-trip ---------------------
+#
+# Unit variant — no fields. Python's `DestroyAllCreatures` carries
+# optional narrowing fields (tapped_only / untapped_only / min_power)
+# that the Rust first slice intentionally drops. Any extra dict keys
+# are silently dropped, mirroring CounterTargetSpell /
+# ReturnCreatureFromYourGraveyardToBattlefield.
+
+
+def test_round_trip_destroy_all_creatures_effect():
+    """Wrath-of-God-shaped sorcery: unit variant, round-trips through
+    the dict bridge with just `kind`."""
+    reg = mtg_bot_engine.Registry()
+    pid = reg.register_printing(
+        {
+            "name": "Test Wrath of God",
+            "card_types": ["Sorcery"],
+            "mana_cost": {"W": 2, "generic": 2},
+            "effects": [{"kind": "destroy_all_creatures"}],
+        }
+    )
+    effects = [dict(e) for e in reg.get_printing_effects(pid)]
+    assert len(effects) == 1
+    assert effects[0]["kind"] == "destroy_all_creatures"
+    # Unit variant has no other keys.
+    assert set(effects[0].keys()) == {"kind"}
+
+
+def test_destroy_all_creatures_extra_keys_silently_dropped():
+    """Python's `DestroyAllCreatures` carries optional narrowing
+    fields (tapped_only / untapped_only / min_power). The Rust first
+    slice drops them — extra keys on the dict are silently ignored,
+    matching the silent-drop convention for unrecognized keys
+    elsewhere in the parser (e.g. CounterTargetSpell.filter_types,
+    ReturnCreatureFromYourGraveyardToBattlefield.or_enchantment).
+    """
+    reg = mtg_bot_engine.Registry()
+    pid = reg.register_printing(
+        {
+            "name": "Test Split Up (narrowed shape ignored)",
+            "card_types": ["Sorcery"],
+            "effects": [
+                {
+                    "kind": "destroy_all_creatures",
+                    "tapped_only": True,
+                    "min_power": 3,
+                }
+            ],
+        }
+    )
+    effects = [dict(e) for e in reg.get_printing_effects(pid)]
+    assert effects[0]["kind"] == "destroy_all_creatures"
+    # Bridge emits only the unit-variant shape on the way back out —
+    # narrowed fields were dropped at parse time.
+    assert "tapped_only" not in effects[0]
+    assert "min_power" not in effects[0]
+
+
+def test_destroy_all_creatures_in_effects_vec_alongside_other_effects():
+    """Mixed effect Vec: Wrath + DrawCards round-trips both. Verifies
+    the dispatcher inside `parse_printing` correctly threads the unit
+    variant through alongside more-complex variants."""
+    reg = mtg_bot_engine.Registry()
+    pid = reg.register_printing(
+        {
+            "name": "Test Sweep-and-Draw",
+            "card_types": ["Sorcery"],
+            "mana_cost": {"W": 2, "U": 1, "generic": 3},
+            "effects": [
+                {"kind": "destroy_all_creatures"},
+                {"kind": "draw_cards", "count": 2},
+            ],
+        }
+    )
+    effects = [dict(e) for e in reg.get_printing_effects(pid)]
+    assert len(effects) == 2
+    assert effects[0]["kind"] == "destroy_all_creatures"
+    assert effects[1]["kind"] == "draw_cards"
+    assert effects[1]["count"] == 2
+
+
 def test_lookup_oob_for_new_getters_raises():
     reg = mtg_bot_engine.Registry()
     reg.register_printing(GRIZZLY_BEARS)
