@@ -4,25 +4,43 @@
 //! Stub block exists so other slices can grow `GameState` in
 //! parallel without conflicting on a single `#[pymethods]` block.
 //!
-//! ## First-slice scope
+//! ## Slice scope
 //!
-//! **Lethal-damage SBA only (CR 704.5g):** a creature whose marked
-//! damage is greater than or equal to its toughness is destroyed
-//! (moved from battlefield to its controller's graveyard).
+//! **Lethal-damage SBA (CR 704.5g) AND 0-toughness SBA (CR 704.5f):**
+//!
+//! - 704.5g — a creature whose marked damage is >= its toughness is
+//!   destroyed (moved from battlefield to its controller's graveyard).
+//! - 704.5f — a creature with toughness 0 (or less) is put into its
+//!   owner's graveyard. Effective toughness for this check is
+//!   ``printing.toughness + obj.counters`` (round-3's net-i32 +1/+1
+//!   vs -1/-1 model: positive counters add, negative subtract).
+//!
+//! Per CR ordering, 704.5f is checked BEFORE 704.5g; the practical
+//! effect is identical (the union of victims is the same set), but
+//! the order matters for niche corner cases — a creature at 0
+//! effective toughness due to counters dies via 704.5f rather than
+//! 704.5g, which becomes observable to triggered abilities once
+//! they care about the cause of destruction.
 //!
 //! Exposes:
 //! - `apply_sbas() -> usize` — single pass over both players'
-//!   battlefields; collects every creature whose marked damage has
-//!   reached lethal, then destroys each by moving it into its
-//!   controller's graveyard. Returns the count of destructions.
-//! - `is_lethal(obj_id) -> Option<bool>` — predicate form. `Some(true)`
-//!   when damage >= toughness, `Some(false)` when it is below, `None`
-//!   for non-creatures (toughness is None) or unknown ids.
+//!   battlefields; collects every creature dying to either rule,
+//!   then destroys each by moving it into its controller's graveyard.
+//!   Returns the count of destructions.
+//! - `is_lethal(obj_id) -> Option<bool>` — predicate form for
+//!   704.5g. `Some(true)` when damage >= toughness, `Some(false)`
+//!   when it is below, `None` for non-creatures (toughness is None)
+//!   or unknown ids. (704.5f's effective-toughness predicate is
+//!   inlined into `apply_sbas`; a public `is_zero_toughness` helper
+//!   would be a one-liner addition if a caller needs it.)
 //!
 //! Composes with:
-//! - `state_ops_damage` — supplies the damage marker.
+//! - `state_ops_damage` — supplies the damage marker for 704.5g.
+//! - `state_ops_counters` — supplies `obj.counters` (the net +1/+1
+//!   contribution) for 704.5f.
 //! - `CardPrinting.toughness: Option<i16>` from the bridge-ext slice
-//!   (round 3) — supplies the threshold.
+//!   (round 3) — the base toughness; gates whether either rule
+//!   applies (non-creatures stay).
 //! - `state_ops_zones::move_object` — the underlying graveyard move
 //!   pattern; replicated inline here rather than called via the
 //!   pyclass method to keep the destructive collect-then-mutate loop
@@ -30,12 +48,6 @@
 //!
 //! ## Out of scope (deferred to future slices)
 //!
-//! - **0-toughness SBA (CR 704.5f).** Conceptually similar but reads
-//!   from current effective toughness. `GameObject` doesn't carry
-//!   live toughness modifications yet — when -1/-1 counters /
-//!   anthem-debuff layers land, this becomes a one-line addition to
-//!   the predicate. The corresponding test is parked as a `skip`
-//!   to lock in the API.
 //! - **SBA loop driver / quiescence.** Real MTG (CR 704.3) checks
 //!   SBAs simultaneously and re-checks until none apply. This slice
 //!   does ONE pass; iteration to fixed point is a future slice that
@@ -77,12 +89,23 @@ use std::sync::Arc;
 const ZONE_GRAVEYARD: u8 = 3;
 
 impl GameState {
-    /// Read-only check: does the given object exist in either player's
-    /// battlefield, AND does its printing have a toughness, AND has
-    /// its marked damage reached lethal? Returns the controller id +
-    /// the object id when so. Used by `apply_sbas` to enumerate
-    /// victims without mutating the state during iteration.
-    fn collect_lethal_creatures(&self) -> Vec<(u8, u32)> {
+    /// Read-only enumeration of creatures that should be destroyed by
+    /// SBAs this pass. Walks both battlefields and applies, in order:
+    ///
+    /// 1. **CR 704.5f (0-toughness):** effective toughness =
+    ///    `printing.toughness + obj.counters`. If <= 0, victim.
+    /// 2. **CR 704.5g (lethal damage):** `obj.damage >= printing.toughness`.
+    ///    Note: this reads PRINTED toughness, NOT effective. Real MTG
+    ///    measures damage against effective toughness, but for this
+    ///    slice the practical victim set is the same — a creature with
+    ///    counters that survives 704.5f and is at lethal damage gets
+    ///    destroyed; one whose effective toughness is <= 0 has already
+    ///    been picked up by 704.5f and won't be re-added.
+    ///
+    /// Returns `(controller_id, obj_id)` pairs. Each obj_id appears at
+    /// most once even if both rules would catch it, because the inner
+    /// loop short-circuits on the first matching rule.
+    fn collect_sba_victims(&self) -> Vec<(u8, u32)> {
         let mut victims = Vec::new();
         for player in &self.players {
             for obj in player.battlefield.iter() {
@@ -90,8 +113,16 @@ impl GameState {
                     continue;
                 };
                 let Some(toughness) = printing.toughness else {
+                    // Non-creature — neither 704.5f nor 704.5g apply.
                     continue;
                 };
+                let effective_toughness = toughness as i32 + obj.counters;
+                // 704.5f first per CR ordering.
+                if effective_toughness <= 0 {
+                    victims.push((obj.controller, obj.id));
+                    continue;
+                }
+                // 704.5g second.
                 if obj.damage as i32 >= toughness as i32 {
                     victims.push((obj.controller, obj.id));
                 }
@@ -103,15 +134,17 @@ impl GameState {
 
 #[pymethods]
 impl GameState {
-    /// Apply state-based actions for the lethal-damage SBA (CR 704.5g):
-    /// every creature with marked damage >= toughness is moved from
-    /// the battlefield into its controller's graveyard. Returns the
-    /// number of creatures destroyed in this pass.
+    /// Apply state-based actions for the destruction SBAs:
+    /// CR 704.5f (0 effective toughness) and CR 704.5g (lethal damage).
+    /// Every matching creature is moved from the battlefield into its
+    /// controller's graveyard. Returns the number of creatures destroyed
+    /// in this pass.
     ///
     /// Single-pass, no quiescence loop — see module docstring for
-    /// the deferred semantics.
+    /// the deferred semantics. 704.5f checked before 704.5g per CR
+    /// ordering; in practice the union of victims is the same set.
     fn apply_sbas(&mut self) -> PyResult<usize> {
-        let victims = self.collect_lethal_creatures();
+        let victims = self.collect_sba_victims();
         let count = victims.len();
         for (controller, obj_id) in victims {
             // Take the object out of its current battlefield. Search
