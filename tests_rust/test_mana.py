@@ -269,3 +269,112 @@ def test_clone_then_tap_for_mana_does_not_affect_original(synthetic_state):
     # Original observed neither.
     assert synthetic_state.is_tapped(forest_id) is False
     assert synthetic_state.get_mana_pool(0)["G"] == 0
+
+
+# --- pay_mana_cost (CR 202.2) ----------------------------------------
+
+
+def test_pay_mana_cost_simple_colored(synthetic_state):
+    """pool={G:1}, cost={G:1} → True; pool ends empty."""
+    synthetic_state.add_mana(0, "G", 1)
+    assert synthetic_state.pay_mana_cost(0, {"G": 1}) is True
+    assert synthetic_state.get_mana_pool(0) == {
+        "W": 0, "U": 0, "B": 0, "R": 0, "G": 0, "C": 0
+    }
+
+
+def test_pay_mana_cost_insufficient_color_returns_false(synthetic_state):
+    """pool={W:1}, cost={G:1} → False; pool unchanged.
+
+    A colored pip can only be paid with the matching color — the
+    one white in the pool can't satisfy the green requirement.
+    No mutation on the rejection path."""
+    synthetic_state.add_mana(0, "W", 1)
+    assert synthetic_state.pay_mana_cost(0, {"G": 1}) is False
+    assert synthetic_state.get_mana_pool(0) == {
+        "W": 1, "U": 0, "B": 0, "R": 0, "G": 0, "C": 0
+    }
+
+
+def test_pay_mana_cost_generic_drawn_from_any_color(synthetic_state):
+    """pool={G:2}, cost={generic:1, G:1} → True; pool ends empty.
+
+    Generic mana is paid with any color (CR 107.4). After the green
+    pip is reserved, the second green satisfies the generic 1."""
+    synthetic_state.add_mana(0, "G", 2)
+    assert synthetic_state.pay_mana_cost(0, {"generic": 1, "G": 1}) is True
+    assert synthetic_state.get_mana_pool(0) == {
+        "W": 0, "U": 0, "B": 0, "R": 0, "G": 0, "C": 0
+    }
+
+
+def test_pay_mana_cost_insufficient_total_for_generic_returns_false(synthetic_state):
+    """pool={G:1}, cost={generic:2} → False; pool unchanged."""
+    synthetic_state.add_mana(0, "G", 1)
+    assert synthetic_state.pay_mana_cost(0, {"generic": 2}) is False
+    assert synthetic_state.get_mana_pool(0) == {
+        "W": 0, "U": 0, "B": 0, "R": 0, "G": 1, "C": 0
+    }
+
+
+def test_pay_mana_cost_zero_cost_returns_true(synthetic_state):
+    """pool={G:1}, cost={} → True; pool unchanged.
+
+    A zero-mana cost is trivially payable from any pool, including
+    an empty one. Mirrors pay_life_cost(0) → True."""
+    synthetic_state.add_mana(0, "G", 1)
+    assert synthetic_state.pay_mana_cost(0, {}) is True
+    assert synthetic_state.get_mana_pool(0) == {
+        "W": 0, "U": 0, "B": 0, "R": 0, "G": 1, "C": 0
+    }
+
+
+def test_pay_mana_cost_unknown_player_raises(synthetic_state):
+    with pytest.raises((ValueError, IndexError, OverflowError)):
+        synthetic_state.pay_mana_cost(99, {"G": 1})
+
+
+def test_pay_mana_cost_clone_isolation(synthetic_state):
+    """CoW canary — paying on a clone leaves the original pool
+    untouched. ManaPool is by-value-Copy in Player, so this should
+    "just work" the same way the add_mana clone canary does."""
+    synthetic_state.add_mana(0, "G", 2)
+    cloned = synthetic_state.clone_once()
+    assert cloned.pay_mana_cost(0, {"G": 1}) is True
+    assert cloned.get_mana_pool(0)["G"] == 1
+    # Original untouched.
+    assert synthetic_state.get_mana_pool(0)["G"] == 2
+
+
+def test_pay_mana_cost_drains_colorless_first_for_generic(synthetic_state):
+    """pool={C:1, G:2}, cost={generic:1} → True; pool ends {G:2}.
+
+    Deterministic generic-deduction order is colorless first, then
+    WUBRG. Colorless is the most-restricted source (it can ONLY pay
+    generic), so draining it first preserves the most flexibility
+    for any later cost-payment from the same pool."""
+    synthetic_state.add_mana(0, "C", 1)
+    synthetic_state.add_mana(0, "G", 2)
+    assert synthetic_state.pay_mana_cost(0, {"generic": 1}) is True
+    assert synthetic_state.get_mana_pool(0) == {
+        "W": 0, "U": 0, "B": 0, "R": 0, "G": 2, "C": 0
+    }
+
+
+def test_pay_mana_cost_complex_multi_color(synthetic_state):
+    """pool={W:1, U:1, B:1, R:1, G:1, C:1}, cost={generic:3, W:1, R:1}
+    → True; pool ends {U:0, B:0, G:1} (rest zero).
+
+    Step-by-step:
+    1. Reserve colored pips: W:1 → W=0, R:1 → R=0.
+       Intermediate pool: {W:0, U:1, B:1, R:0, G:1, C:1}.
+    2. Pay generic=3 from order C, W, U, B, R, G (W and R already 0):
+       drain C (1) → drain U (1) → drain B (1) → 3 paid.
+    3. Final: {W:0, U:0, B:0, R:0, G:1, C:0}."""
+    for color in ("W", "U", "B", "R", "G", "C"):
+        synthetic_state.add_mana(0, color, 1)
+    cost = {"generic": 3, "W": 1, "R": 1}
+    assert synthetic_state.pay_mana_cost(0, cost) is True
+    assert synthetic_state.get_mana_pool(0) == {
+        "W": 0, "U": 0, "B": 0, "R": 0, "G": 1, "C": 0
+    }

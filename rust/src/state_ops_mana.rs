@@ -160,6 +160,134 @@ impl GameState {
         Ok(())
     }
 
+    /// Attempt to pay `cost` from `player_id`'s mana pool (CR 202.2).
+    /// Returns `true` and deducts the mana on success; returns
+    /// `false` and leaves the pool unchanged if the cost can't be
+    /// paid. Mirrors the `pay_life_cost` shape (round-15) — a
+    /// pure cost-payment primitive that higher-level cast/activation
+    /// code calls before committing to the action.
+    ///
+    /// `cost` is a Python dict shaped like the `mana_cost` field on
+    /// card printings: keys are `"generic"` / `"W"` / `"U"` / `"B"`
+    /// / `"R"` / `"G"`, values are non-negative integers. `"C"` is
+    /// accepted as an alias for `"generic"` (matches `parse_mana_cost`
+    /// in cards.rs — colorless costs are paid identically to generic
+    /// costs from the pool side; the distinction would only matter
+    /// for "can't be paid with colored mana" costs, which aren't in
+    /// the closed vocabulary yet). Unknown keys raise `ValueError`.
+    /// An empty dict is a zero cost — trivially payable, returns
+    /// `true` with no mutation.
+    ///
+    /// **Algorithm:**
+    /// 1. For each colored requirement (W/U/B/R/G), check
+    ///    `pool[color] >= cost[color]`. If any colored pip can't be
+    ///    matched by same-color mana → return `false`, no mutation.
+    /// 2. Compute the post-colored remaining pool. If
+    ///    `remaining_total < cost.generic` → return `false`, no
+    ///    mutation.
+    /// 3. Commit: deduct colored requirements, then deduct generic
+    ///    from a deterministic order — **colorless first, then
+    ///    W/U/B/R/G**. Rationale: colorless is the most-restricted
+    ///    mana source (it can ONLY pay generic), so draining it
+    ///    first preserves the most flexibility for any later cost
+    ///    payment from the same pool. The WUBRG tail order is
+    ///    deterministic for reproducibility but otherwise arbitrary —
+    ///    a future slice that adds "can't be paid with X" will
+    ///    revisit the order.
+    ///
+    /// Raises `ValueError` on a malformed cost dict (unknown key,
+    /// non-integer value, negative value) and `IndexError` on an
+    /// out-of-range `player_id`.
+    fn pay_mana_cost(
+        &mut self,
+        player_id: u8,
+        cost: &Bound<'_, PyDict>,
+    ) -> PyResult<bool> {
+        let idx = check_player_id(player_id)?;
+        // Local parse — `cards::parse_mana_cost` is private and we
+        // can't widen its visibility in this slice (sibling agents
+        // are also editing cards.rs is off-limits this round).
+        // Same key vocabulary, same "C is generic alias" convention.
+        let mut req_generic: u32 = 0;
+        let mut req_white: u32 = 0;
+        let mut req_blue: u32 = 0;
+        let mut req_black: u32 = 0;
+        let mut req_red: u32 = 0;
+        let mut req_green: u32 = 0;
+        for (key_obj, value_obj) in cost.iter() {
+            let key: String = key_obj.extract()?;
+            let value: u32 = value_obj.extract().map_err(|e| {
+                PyValueError::new_err(format!(
+                    "pay_mana_cost: cost[{key:?}] must be a non-negative integer (got: {e})"
+                ))
+            })?;
+            match key.as_str() {
+                "generic" | "C" => req_generic = req_generic.saturating_add(value),
+                "W" => req_white = value,
+                "U" => req_blue = value,
+                "B" => req_black = value,
+                "R" => req_red = value,
+                "G" => req_green = value,
+                other => {
+                    return Err(PyValueError::new_err(format!(
+                        "pay_mana_cost: unknown cost key {other:?}; valid: generic, W, U, B, R, G, C"
+                    )))
+                }
+            }
+        }
+        let pool = &self.players[idx].mana_pool;
+        // Step 1: each colored requirement must be matchable by
+        // same-color mana already in the pool.
+        if (pool.white as u32) < req_white
+            || (pool.blue as u32) < req_blue
+            || (pool.black as u32) < req_black
+            || (pool.red as u32) < req_red
+            || (pool.green as u32) < req_green
+        {
+            return Ok(false);
+        }
+        // Step 2: post-colored remaining pool must cover generic.
+        let rem_white = pool.white as u32 - req_white;
+        let rem_blue = pool.blue as u32 - req_blue;
+        let rem_black = pool.black as u32 - req_black;
+        let rem_red = pool.red as u32 - req_red;
+        let rem_green = pool.green as u32 - req_green;
+        let rem_colorless = pool.colorless as u32;
+        let rem_total = rem_white + rem_blue + rem_black + rem_red + rem_green + rem_colorless;
+        if rem_total < req_generic {
+            return Ok(false);
+        }
+        // Step 3: commit. Deduct colored, then drain generic from a
+        // deterministic order: C → W → U → B → R → G.
+        let pool = &mut self.players[idx].mana_pool;
+        pool.white -= req_white as u8;
+        pool.blue -= req_blue as u8;
+        pool.black -= req_black as u8;
+        pool.red -= req_red as u8;
+        pool.green -= req_green as u8;
+        let mut remaining_generic = req_generic;
+        for slot in [
+            &mut pool.colorless,
+            &mut pool.white,
+            &mut pool.blue,
+            &mut pool.black,
+            &mut pool.red,
+            &mut pool.green,
+        ] {
+            if remaining_generic == 0 {
+                break;
+            }
+            let avail = *slot as u32;
+            let take = avail.min(remaining_generic);
+            *slot -= take as u8;
+            remaining_generic -= take;
+        }
+        // Sanity: step-2's `rem_total >= req_generic` check guarantees
+        // we always drain to zero. Belt-and-suspenders only.
+        debug_assert_eq!(remaining_generic, 0);
+        Ok(true)
+    }
+
     /// Tap a permanent for mana. Reads the printing's
     /// `mana_produced: Option<Vec<String>>` (round-3 retired the
     /// previous name-keyed lookup). Returns `Some(color)` for a
