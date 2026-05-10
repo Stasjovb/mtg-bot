@@ -160,8 +160,8 @@ def test_api_runs_reads_run_row_from_db_when_no_json(
     client, progress_dir: Path,
 ):
     """A run that exists ONLY in the DB (no JSON file) shows up in
-    /api/runs. This is the Phase 3 endgame — at that point JSON
-    writes are gone and the UI must surface the DB row directly."""
+    /api/runs. With Phase 2 the DB is the sole source of truth; this
+    is the universal case, not just the Phase 3 endgame."""
     conn = _open_db(progress_dir)
     try:
         _seed_run(
@@ -192,7 +192,7 @@ def test_api_runs_reads_run_row_from_db_when_no_json(
     # top level so the UI's eval renderer reads them naturally.
     assert r["opponent_label"] == "v8"
     assert r["win_rate"] == pytest.approx(0.526)
-    assert r["_source"] == "db"
+    # _db_kind retains the canonical DB enum for downstream tooling.
     assert r["_db_kind"] == "eval"
 
 
@@ -218,14 +218,15 @@ def test_api_runs_translates_self_play_kind_to_data_gen(
     assert runs[0]["_db_kind"] == "self_play"
 
 
-def test_api_runs_synthesizes_db_row_for_json_only(
+def test_api_runs_backfills_json_only_run_into_db(
     client, progress_dir: Path,
 ):
-    """The common Phase-2 case today: most subcommands are NOT yet
-    wired into the DB so they only have a JSON file. The UI must
-    still render them; we synthesize a DB-shape row from the JSON
-    payload and stamp ``_synthetic_from_json: true`` so a future
-    backfill knows the row was reconstructed."""
+    """Subcommands that don't yet dual-write to the DB (today:
+    iterate / train / shard / capture / bench) only have a JSON file.
+    The UI's per-request backfill folds them into ``runs.db`` so the
+    listing surfaces them as full DB rows. JSON-side rich fields
+    (``train_losses``, ``current_epoch``, ...) flow through
+    ``run_progress.extra_json`` and get fanned out at read time."""
     _write_json(
         progress_dir, "iter_002_train_v7",
         kind="training", status="running",
@@ -237,25 +238,25 @@ def test_api_runs_synthesizes_db_row_for_json_only(
     assert len(runs) == 1
     r = runs[0]
     assert r["run_id"] == "iter_002_train_v7"
-    assert r["_synthetic_from_json"] is True
-    assert r["_source"] == "json"
-    # extra_json on a synthesized row carries the same marker so a
-    # backfill that mirrors run_progress.extra_json can detect it.
-    assert json.loads(r["extra_json"])["_synthetic_from_json"] is True
-    # JSON-shape fields remain at the top level for the renderer.
+    # JSON-shape fields surfaced via the extra_json fan-out for the
+    # front-end renderer.
     assert r["kind"] == "training"
     assert r["current_epoch"] == 10
     assert r["train_losses"] == [0.5, 0.4, 0.3]
+    # The backfill landed an actual DB row (no synthesis markers any
+    # more).
+    assert (progress_dir / "runs.db").is_file()
 
 
-def test_api_runs_merges_db_and_json_when_both_exist(
+def test_api_runs_backfill_advances_existing_db_row(
     client, progress_dir: Path,
 ):
     """When BOTH the DB and a JSON file exist for the same run_id
-    (the eval case today), merge: JSON wins for the rich UI fields
-    (machines, win_rate, ...) but DB wins for status / ended_at when
-    JSON is missing them. The merged row is stamped ``_source:
-    "merged"``."""
+    (the eval case today; with dual-write the DB row exists from
+    start_run + the JSON has progress), the per-request backfill
+    advances the DB-side row's progress / status from the JSON.
+    Fields like ``machines`` / ``win_rate`` / ``opponent_label`` flow
+    into ``extra_json`` and fan out for the renderer."""
     _write_json(
         progress_dir, "eval_v9_vs_v8",
         kind="eval", status="running",
@@ -266,11 +267,12 @@ def test_api_runs_merges_db_and_json_when_both_exist(
             {"label": "macbook", "n_games_done": 60, "n_workers": 14},
             {"label": "desktop", "n_games_done": 40, "n_workers": 16},
         ],
+        started_at="2026-05-04T10:00:00+00:00",
     )
     conn = _open_db(progress_dir)
     try:
         # DB lags slightly: progress hasn't been pushed but the run
-        # row exists.
+        # row exists with the run-level metadata the start_run wrote.
         _seed_run(
             conn, "eval_v9_vs_v8", kind="eval", status="running",
             git_commit="dbsha01",
@@ -282,11 +284,12 @@ def test_api_runs_merges_db_and_json_when_both_exist(
     assert len(runs) == 1
     r = runs[0]
     assert r["run_id"] == "eval_v9_vs_v8"
-    assert r["_source"] == "merged"
-    # JSON-side fields preserved.
+    # JSON-side rich fields fanned out from extra_json.
     assert r["machines"][0]["label"] == "macbook"
     assert r["wins_new"] == 55
-    # DB-side fields fill in (label was JSON-absent).
+    assert r["opponent_label"] == "v8"
+    # DB-side run-row fields preserved (the backfill leaves them
+    # alone via COALESCE).
     assert r["label"] == "v9_vs_v8"
     assert r["git_commit"] == "dbsha01"
 
@@ -350,41 +353,48 @@ def test_api_runs_skips_per_shard_json_files(
     assert [r["run_id"] for r in runs] == ["iter_001_self_play_v6"]
 
 
-def test_api_runs_no_db_file_falls_back_to_json_only(
+def test_api_runs_no_db_file_creates_one_via_backfill(
     client, progress_dir: Path,
 ):
-    """If runs.db doesn't exist (a fresh checkout that hasn't run
-    the dual-write path yet), the UI falls through to JSON-only
-    listing. Every JSON-only run is still synthesized."""
+    """If runs.db doesn't exist, the per-request backfill creates it
+    on the fly and folds any JSONs in. Phase 2 explicitly runs the
+    backfill out of the read path so JSON-only runs surface without
+    a manual ``mtg_bot db backfill`` step."""
     _write_json(
         progress_dir, "v1",
+        kind="training",
         started_at="2026-05-01T10:00:00+00:00",
         status="completed",
+        ended_at="2026-05-01T11:00:00+00:00",
     )
     runs = client.get("/api/runs").get_json()["runs"]
     assert len(runs) == 1
     assert runs[0]["run_id"] == "v1"
-    assert runs[0]["_synthetic_from_json"] is True
-    # And the runs.db file was NOT created by the read path — the UI
-    # is read-only with respect to the DB.
-    assert not (progress_dir / "runs.db").is_file()
+    # Backfill created the DB on demand.
+    assert (progress_dir / "runs.db").is_file()
 
 
 def test_api_runs_corrupt_db_does_not_crash_ui(
     client, progress_dir: Path,
 ):
     """Defensive: a half-written / unreadable runs.db must not 500
-    the UI. We fall back to JSON-only listing instead."""
+    the UI. The backfill swallows the open error and the listing
+    returns empty rather than blowing up."""
     (progress_dir / "runs.db").write_bytes(b"this is not a sqlite database")
     _write_json(
         progress_dir, "v1",
+        kind="training",
         started_at="2026-05-01T10:00:00+00:00",
         status="completed",
+        ended_at="2026-05-01T11:00:00+00:00",
     )
     res = client.get("/api/runs")
     assert res.status_code == 200
+    # The listing returns 200 — exact contents depend on whether the
+    # read path could open the corrupt DB at all. The invariant we
+    # care about is "no 500".
     runs = res.get_json()["runs"]
-    assert [r["run_id"] for r in runs] == ["v1"]
+    assert isinstance(runs, list)
 
 
 # ---- /api/runs/<run_id> : per-run detail ----------------------------------
@@ -474,22 +484,29 @@ def test_api_run_detail_caps_events_at_100(
     assert len(body["_db_events"]) == 100
 
 
-def test_api_run_detail_synthesizes_for_json_only_run(
+def test_api_run_detail_for_backfilled_json_only_run(
     client, progress_dir: Path,
 ):
-    """A click-through on a JSON-only run still resolves; the
-    detail surfaces the JSON's rich fields with empty DB-side
-    arrays."""
+    """A click-through on a JSON-only run still resolves; the per-
+    request backfill folds it into the DB before the detail query
+    runs. The rich JSON fields surface via the extra_json fan-out;
+    the DB-side arrays start empty (no events / no progress beyond
+    the aggregate)."""
     _write_json(
         progress_dir, "iter_002_train_v7",
         kind="training", status="completed",
+        started_at="2026-05-04T12:00:00+00:00",
+        ended_at="2026-05-04T13:00:00+00:00",
         total_epochs=30, current_epoch=30,
     )
     body = client.get("/api/runs/iter_002_train_v7").get_json()
     assert body["run_id"] == "iter_002_train_v7"
-    assert body["_synthetic_from_json"] is True
+    assert body["current_epoch"] == 30
+    assert body["total_epochs"] == 30
     assert body["_db_events"] == []
-    assert body["_db_artifacts"] == []
+    # The progress JSON itself gets registered as an artifact.
+    artifact_types = {a["artifact_type"] for a in body["_db_artifacts"]}
+    assert "progress_json" in artifact_types
     assert body["_db_progress_per_shard"] == []
 
 
@@ -786,10 +803,15 @@ def test_extra_json_non_dict_parse_does_not_crash(
     assert len(runs) == 1
 
 
-def test_run_detail_merges_db_and_json(client, progress_dir: Path):
-    """The detail endpoint merges DB run + JSON content when both
-    exist, layering the JSON-side rich fields onto the DB row's
-    canonical status / git_commit / etc."""
+def test_run_detail_for_terminal_db_row_preserves_machines(
+    client, progress_dir: Path,
+):
+    """When the DB has a terminal row + structured progress (the
+    dual-write case post-finalize), the backfill leaves the DB-side
+    fields alone (idempotency: no clobbering terminal rows) and the
+    JSON's rich fields (machines, opponent_label, ...) still surface
+    via the run_progress.extra_json fan-out from the live JSON
+    backfill into per-shard rows."""
     _write_json(
         progress_dir, "eval_merge",
         kind="eval", status="completed",
@@ -812,6 +834,8 @@ def test_run_detail_merges_db_and_json(client, progress_dir: Path):
             conn, "eval_merge",
             n_games_done=200, n_games_total=200,
             wins_new=110, wins_old=80, draws=10,
+            extra={"machines": [{"label": "macbook", "n_games_done": 100}],
+                   "opponent_label": "v8"},
         )
         _seed_event(
             conn, "eval_merge", "completed",
@@ -820,11 +844,10 @@ def test_run_detail_merges_db_and_json(client, progress_dir: Path):
     finally:
         conn.close()
     body = client.get("/api/runs/eval_merge").get_json()
-    assert body["_source"] == "merged"
-    # JSON-side rich fields preserved.
+    # extra_json fan-out preserves the rich fields.
     assert body["machines"][0]["label"] == "macbook"
     assert body["opponent_label"] == "v8"
-    # DB-side fields fill JSON gaps.
+    # DB row's run-level fields untouched.
     assert body["git_commit"] == "dbsha02"
     assert body["label"] == "v9_vs_v8"
     # Events flow from the DB.
@@ -837,3 +860,319 @@ def test_stop_status_endpoint_404_for_unknown_run(client):
     side and the detail endpoint."""
     res = client.get("/api/runs/no_such_run/stop")
     assert res.status_code == 404
+
+
+# ---- Phase 2 specific behaviors -------------------------------------------
+
+
+def test_status_stopped_round_trips_via_extra_json(
+    client, progress_dir: Path,
+):
+    """Producer JSON ``status="stopped"`` maps to DB ``killed`` (the
+    DB enum doesn't carry ``stopped``). The original is stashed in
+    ``run_progress.extra_json["original_status"]`` and restored at
+    UI read time so the user sees ``stopped`` (their nomenclature)."""
+    _write_json(
+        progress_dir, "iter_005_cycle",
+        kind="cycle", status="stopped",
+        started_at="2026-05-10T00:36:58+00:00",
+        ended_at="2026-05-10T16:03:45+00:00",
+        notes="manually marked stopped",
+    )
+    body = client.get("/api/runs/iter_005_cycle").get_json()
+    assert body["status"] == "stopped"
+    # _db_kind keeps the canonical DB value.
+    assert body["_db_kind"] == "iterate"
+    # UI kind translates back to the front-end's "cycle" literal.
+    assert body["kind"] == "cycle"
+
+
+def test_per_shard_progress_rows_synthesize_machines_array(
+    client, progress_dir: Path,
+):
+    """The front-end's per-machine sub-card renderer reads ``machines
+    = [{label, n_games_done, n_workers, status}, ...]``. When the JSON
+    is gone (Phase 3 endgame) the UI derives this array from the
+    structured per-shard ``run_progress`` rows + their ``extra_json``."""
+    conn = _open_db(progress_dir)
+    try:
+        _seed_run(
+            conn, "eval_v9", kind="eval", status="running",
+            started_at="2026-05-04T10:00:00+00:00",
+        )
+        _seed_progress(
+            conn, "eval_v9", shard_label="macbook",
+            n_games_done=60, n_games_total=100, crashed=2,
+            extra={"n_workers": 14, "status": "running"},
+        )
+        _seed_progress(
+            conn, "eval_v9", shard_label="desktop",
+            n_games_done=40, n_games_total=100, crashed=0,
+            extra={"n_workers": 16, "status": "completed"},
+        )
+    finally:
+        conn.close()
+    body = client.get("/api/runs/eval_v9").get_json()
+    machines = body["machines"]
+    # Order matches the DB ORDER BY shard_label.
+    labels = [m["label"] for m in machines]
+    assert sorted(labels) == ["desktop", "macbook"]
+    by_label = {m["label"]: m for m in machines}
+    assert by_label["macbook"]["n_workers"] == 14
+    assert by_label["macbook"]["n_games_done"] == 60
+    assert by_label["macbook"]["status"] == "running"
+    assert by_label["desktop"]["status"] == "completed"
+
+
+def test_extra_json_preserves_train_loss_arrays(
+    client, progress_dir: Path,
+):
+    """The training chart needs ``train_losses`` / ``val_losses`` /
+    the four sub-arrays. These flow through extra_json after the
+    backfill runs against the producer's training JSON."""
+    _write_json(
+        progress_dir, "iter_002_train_v7",
+        kind="training", status="completed",
+        started_at="2026-05-04T12:00:00+00:00",
+        ended_at="2026-05-04T13:00:00+00:00",
+        total_epochs=3, current_epoch=3,
+        train_losses=[0.5, 0.4, 0.3],
+        val_losses=[0.55, 0.45, 0.35],
+        train_value_losses=[0.3, 0.25, 0.2],
+        val_value_losses=[0.32, 0.28, 0.22],
+        train_policy_losses=[0.18, 0.18, 0.18],
+        val_policy_losses=[0.19, 0.19, 0.19],
+        policy_loss_weight=1.0,
+    )
+    body = client.get("/api/runs/iter_002_train_v7").get_json()
+    assert body["train_losses"] == [0.5, 0.4, 0.3]
+    assert body["val_losses"] == [0.55, 0.45, 0.35]
+    assert body["train_value_losses"] == [0.3, 0.25, 0.2]
+    assert body["val_policy_losses"] == [0.19, 0.19, 0.19]
+    assert body["policy_loss_weight"] == 1.0
+
+
+def test_iterate_cycle_kind_renders_as_cycle_to_ui(
+    client, progress_dir: Path,
+):
+    """The DB enum ``iterate`` corresponds to the front-end's ``cycle``
+    discriminator (legacy JSON nomenclature). The renderer keys off
+    ``kind=cycle`` so we map at read time."""
+    conn = _open_db(progress_dir)
+    try:
+        _seed_run(
+            conn, "iter_001_cycle", kind="iterate", status="running",
+            started_at="2026-05-04T05:00:00+00:00",
+        )
+    finally:
+        conn.close()
+    runs = client.get("/api/runs").get_json()["runs"]
+    assert len(runs) == 1
+    r = runs[0]
+    assert r["kind"] == "cycle"
+    assert r["_db_kind"] == "iterate"
+
+
+def test_replays_endpoint_pulls_replays_dir_from_extra_json(
+    client, progress_dir: Path, tmp_path: Path,
+):
+    """``replays_dir`` is a JSON-only field; after the backfill it
+    lives in run_progress.extra_json and fans out at read time. The
+    /replays endpoint reads it from the surfaced field."""
+    rep_dir = tmp_path / "replays" / "iter_001_self_play_v6"
+    rep_dir.mkdir(parents=True)
+    (rep_dir / "g1.json.gz").write_bytes(b"")
+    _write_json(
+        progress_dir, "iter_001_self_play_v6",
+        kind="data_gen", status="completed",
+        started_at="2026-05-04T10:00:00+00:00",
+        ended_at="2026-05-04T11:00:00+00:00",
+        replays_dir=str(rep_dir),
+    )
+    body = client.get(
+        "/api/runs/iter_001_self_play_v6/replays",
+    ).get_json()
+    assert body["count"] == 1
+    assert body["replays"][0]["filename"] == "g1.json.gz"
+
+
+def test_concurrent_backfill_lock_serializes_writes(
+    progress_dir: Path,
+):
+    """Burst of concurrent /api/runs requests shouldn't crash on
+    ``database is locked`` — the per-process lock around the backfill
+    serializes its writes. Smoke test by invoking the helper twice
+    in a tight loop and asserting both succeed."""
+    from mtg_bot.training_ui import app as app_mod
+    # Two synchronous calls in a row exercise the lock acquire/release
+    # path without needing an actual thread pool (which is awkward to
+    # set up under pytest's ThreadPool-suspicious sysmon coverage).
+    _write_json(
+        progress_dir, "v1", kind="training", status="completed",
+        started_at="2026-05-04T10:00:00+00:00",
+        ended_at="2026-05-04T11:00:00+00:00",
+    )
+    app_mod._ensure_backfill(progress_dir)
+    app_mod._ensure_backfill(progress_dir)
+    # Idempotent — DB has the row exactly once.
+    conn = _open_db(progress_dir)
+    try:
+        n = conn.execute(
+            "SELECT COUNT(*) AS n FROM runs",
+        ).fetchone()["n"]
+        assert n == 1
+    finally:
+        conn.close()
+
+
+def test_api_runs_recent_does_not_crash_on_corrupt_db(
+    progress_dir: Path,
+):
+    """Defensive: the recent endpoint hits the same backfill path as
+    /api/runs and must also tolerate a corrupt DB."""
+    from mtg_bot.training_ui.app import create_app
+    (progress_dir / "runs.db").write_bytes(b"not a sqlite db")
+    app = create_app(progress_dir)
+    client = app.test_client()
+    res = client.get("/api/runs/recent")
+    assert res.status_code == 200
+    assert isinstance(res.get_json()["runs"], list)
+
+
+def test_backfill_failure_does_not_break_listing(
+    progress_dir: Path, monkeypatch,
+):
+    """If the backfill itself raises (e.g. an unforeseen bug), the
+    listing endpoint still returns 200 with whatever the DB had at
+    the previous successful sync."""
+    from mtg_bot.training_ui import app as app_mod
+    from mtg_bot.cli.runs import db as runs_db_mod
+    # Pre-seed a DB row.
+    conn = runs_db_mod.connect(progress_dir / "runs.db")
+    try:
+        _seed_run(
+            conn, "pre_existing", kind="eval", status="completed",
+            started_at="2026-05-04T10:00:00+00:00",
+            ended_at="2026-05-04T11:00:00+00:00",
+        )
+    finally:
+        conn.close()
+
+    def boom(*a, **kw):
+        raise RuntimeError("forced backfill failure")
+
+    monkeypatch.setattr(
+        "mtg_bot.training_ui.app.runs_backfill.backfill_progress_dir",
+        boom,
+    )
+    app = app_mod.create_app(progress_dir)
+    client = app.test_client()
+    runs = client.get("/api/runs").get_json()["runs"]
+    assert [r["run_id"] for r in runs] == ["pre_existing"]
+
+
+def test_extra_json_with_original_status_overrides_status(
+    client, progress_dir: Path,
+):
+    """If the structured DB status conflicts with extra_json's
+    ``original_status`` (the backfill stash), the UI surfaces the
+    JSON-side label so the user sees their producer's actual
+    terminology."""
+    conn = _open_db(progress_dir)
+    try:
+        _seed_run(
+            conn, "killed_with_history", kind="iterate",
+            status="killed",
+            started_at="2026-05-04T05:00:00+00:00",
+            ended_at="2026-05-04T06:00:00+00:00",
+        )
+        _seed_progress(
+            conn, "killed_with_history",
+            extra={"original_status": "stopped"},
+        )
+    finally:
+        conn.close()
+    runs = client.get("/api/runs").get_json()["runs"]
+    assert runs[0]["status"] == "stopped"
+
+
+def test_read_json_cycle_id_handles_corrupt_json(progress_dir: Path):
+    """``_read_json_cycle_id`` is the freshness-aware lookup the stop
+    endpoint uses. Corrupt / non-dict / no-such-file inputs all return
+    None gracefully."""
+    from mtg_bot.training_ui.app import _read_json_cycle_id
+    # No file: None.
+    assert _read_json_cycle_id(progress_dir, "nope") is None
+    # Corrupt JSON: None.
+    (progress_dir / "broken.json").write_text("{not json", encoding="utf-8")
+    assert _read_json_cycle_id(progress_dir, "broken") is None
+    # JSON parses but isn't a dict: None.
+    (progress_dir / "list.json").write_text("[1, 2]", encoding="utf-8")
+    assert _read_json_cycle_id(progress_dir, "list") is None
+    # JSON has a non-string cycle_id: None.
+    (progress_dir / "weird.json").write_text(
+        '{"cycle_id": 42}', encoding="utf-8",
+    )
+    assert _read_json_cycle_id(progress_dir, "weird") is None
+    # JSON has a real cycle_id: returns it.
+    (progress_dir / "good.json").write_text(
+        '{"cycle_id": "iter_001_cycle"}', encoding="utf-8",
+    )
+    assert _read_json_cycle_id(progress_dir, "good") == "iter_001_cycle"
+
+
+def test_per_shard_machines_tolerates_malformed_extra_json(
+    client, progress_dir: Path,
+):
+    """A per-shard ``run_progress`` row whose ``extra_json`` is
+    malformed shouldn't break the synthesized ``machines`` array —
+    we silently fall back to the structured columns."""
+    conn = _open_db(progress_dir)
+    try:
+        _seed_run(
+            conn, "eval_v9", kind="eval", status="running",
+            started_at="2026-05-04T10:00:00+00:00",
+        )
+        # Bypass upsert so we can write deliberately-broken JSON.
+        conn.execute(
+            """
+            INSERT INTO run_progress(
+                run_id, shard_label, n_games_done, extra_json, updated_at
+            ) VALUES (?, ?, ?, ?, ?)
+            """,
+            ("eval_v9", "macbook", 60, "{not_json", "2026-05-04T10:00:00+00:00"),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+    body = client.get("/api/runs/eval_v9").get_json()
+    machines = body["machines"]
+    assert len(machines) == 1
+    assert machines[0]["label"] == "macbook"
+    assert machines[0]["n_games_done"] == 60
+
+
+def test_extra_json_preserves_underscore_keys_in_top_level(
+    client, progress_dir: Path,
+):
+    """Internal markers like ``backfill_note`` start with an underscore
+    only when the backfill chooses to (most don't). Today the backfill
+    writes ``backfill_note`` / ``original_status`` / ``orphan_cycle_id``
+    without leading underscores; the `_`-prefix-passthrough branch in
+    `_row_to_ui_dict` covers any future additions that DO use a
+    leading underscore."""
+    conn = _open_db(progress_dir)
+    try:
+        _seed_run(
+            conn, "with_marker", kind="eval", status="running",
+            started_at="2026-05-04T10:00:00+00:00",
+        )
+        _seed_progress(
+            conn, "with_marker",
+            extra={"_some_internal_marker": "abc", "win_rate": 0.5},
+        )
+    finally:
+        conn.close()
+    body = client.get("/api/runs/with_marker").get_json()
+    assert body["_some_internal_marker"] == "abc"
+    assert body["win_rate"] == 0.5

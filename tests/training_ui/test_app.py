@@ -18,9 +18,19 @@ from mtg_bot.training_ui.app import create_app
 
 def _write_run(progress_dir: Path, run_id: str, **fields) -> Path:
     """Drop a synthetic run file in ``progress_dir`` with sensible
-    defaults; ``fields`` overrides individual keys."""
+    defaults; ``fields`` overrides individual keys.
+
+    Phase 2 invariant: the UI is DB-first and runs the JSON-to-DB
+    backfill at the top of every request. The backfill requires a
+    ``kind`` field to map to the DB's ``runs.kind`` enum, so the
+    default fixture payload now carries ``kind="training"``. Tests
+    that explicitly want a JSON without a ``kind`` (e.g. the
+    "skip unknown payloads" path) override via ``kind=None`` and
+    pop the field below.
+    """
     payload = {
         "run_id": run_id,
+        "kind": "training",
         "started_at": "2026-05-02T12:00:00+00:00",
         "total_epochs": 30,
         "current_epoch": 30,
@@ -34,6 +44,8 @@ def _write_run(progress_dir: Path, run_id: str, **fields) -> Path:
         "notes": "",
     }
     payload.update(fields)
+    if payload.get("kind") is None:
+        payload.pop("kind", None)
     path = progress_dir / f"{run_id}.json"
     path.write_text(json.dumps(payload), encoding="utf-8")
     return path
@@ -221,9 +233,15 @@ def test_api_run_replays_unknown_run(client):
 def test_run_id_falls_back_to_filename_stem(client):
     """A progress file missing the run_id key should still appear
     in /api/runs, identified by its filename stem. Defensive — we
-    don't want a malformed write to make a run vanish from the UI."""
+    don't want a malformed write to make a run vanish from the UI.
+
+    Phase 2: the backfill defaults run_id to the filename stem when
+    the JSON omits it, so the row lands in the DB under that id and
+    surfaces here under the same name.
+    """
     c, progress_dir = client
     payload = {
+        "kind": "training",
         "started_at": "2026-05-02T00:00:00+00:00",
         "total_epochs": 10, "current_epoch": 1,
         "elapsed_seconds": 1.0, "per_epoch_seconds_avg": 1.0,

@@ -1,67 +1,68 @@
 """Flask app showing live progress of NN training runs.
 
-Phase 2 of the runs-db rollout: this UI now reads run records from
-the SQLite ``runs.db`` (Phase 1 dual-write store). The legacy
-JSON-walking path is retained as a fallback so runs that haven't
-been wired into the DB yet (Phase 1 only wired ``mtg_bot eval`` —
-``iterate``, ``train``, ``shard``, ``capture``, ``bench`` still
-write JSON only) still render. Mixed mode is the steady state until
-Phase 3 drops the JSON writes entirely.
+Phase 2 of the runs-DB rollout: this UI now reads run records from
+the SQLite ``runs.db`` as the single source of truth. Producer-side
+JSON writes are still authoritative on disk (``Phase 1 dual-write``
+invariant — see ``CLAUDE.md`` "Run database"); we honor that by
+running an idempotent backfill from ``progress_dir/*.json`` into the
+DB at the top of each ``/api/runs`` request. Subcommands that don't
+yet dual-write (``iterate`` / ``train`` / ``shard`` / ``capture`` /
+``bench``) thus still surface in the UI without manual ops steps —
+their JSONs are folded into the DB on the next request.
 
-DB query shape per request:
+DB query shape per endpoint:
 
 - ``/api/runs``: ``SELECT * FROM runs ORDER BY started_at DESC``,
-  joined with the aggregate (``shard_label IS NULL``) row from
-  ``run_progress`` and the artifact rows from ``run_artifacts``.
-  Then unioned with the JSON-only runs scanned from ``progress_dir``
-  (any file whose ``run_id`` doesn't already appear in the DB result),
-  whose payload is treated as the synthesized run row.
+  LEFT JOIN with the aggregate (``shard_label IS NULL``) row from
+  ``run_progress``. The aggregate row's ``extra_json`` is fanned out
+  to the top level so the front-end's JSON-shape renderer (machines /
+  win_rate / opponent_label / train_losses / ...) reads naturally.
 - ``/api/runs/<run_id>``: the full DB record (run row + all progress
-  rows + last 100 events + artifacts) merged with the JSON file's
-  contents. JSON wins for UI-render fields it provides; DB wins for
-  ``events`` / ``artifacts`` / ``progress`` (rich) / ``_db_*`` meta.
-- ``/api/runs/recent``: last 20 completed runs across all kinds with
-  summary stats from ``run_progress``.
+  rows + last 100 events + artifacts), with the aggregate progress
+  row's columns + extra_json fanned to the top level. Per-shard
+  progress rows surface under ``_db_progress_per_shard``.
+- ``/api/runs/recent``: last 20 (configurable) completed runs across
+  all kinds with summary stats from the aggregate ``run_progress``
+  row.
 
-JSON fallback / backfill mechanism:
+extra_json fan-out:
 
-When ``progress_dir`` contains ``<run_id>.json`` but the DB has no
-matching ``runs`` row, the JSON content is treated as the source of
-truth and a synthetic in-memory row is stamped with
-``extra_json={"_synthetic_from_json": true}`` so callers (and tests)
-can tell the row was reconstructed. When the DB has a ``runs`` row
-but the matching JSON is missing, we serve the DB row directly with
-the UI-render keys filled in best-effort (``kind`` translated from
-db enum to UI enum; counters surfaced from the aggregate progress
-row).
+The DB schema only carries the structured counters (``n_games_done``,
+``wins_new``, ``elapsed_seconds``, ...). Everything else the UI
+front-end needs — training loss arrays, per-machine summaries, eval
+metadata, replay paths — flows through ``run_progress.extra_json``
+(JSON-encoded blob). On the read path we ``json.loads`` the column
+and ``setdefault`` each top-level key onto the run dict so the
+existing front-end JS keeps working untouched.
 
 Connection lifecycle: each request opens its own short-lived
-``sqlite3.Connection`` via :func:`mtg_bot.cli.runs.db.connect` and
-closes it before returning. WAL mode (set on connect) lets these
-reads run concurrently with the writer (the cli subcommand pushing
-progress) without lock contention. SQLite connections are also
-cheap (~hundreds of microseconds) so we don't bother with pooling.
+``sqlite3.Connection`` via :func:`mtg_bot.cli.runs.db.connect`. WAL
+mode (set on connect) lets these reads run concurrently with the
+producer's writes (and with the per-request backfill's writes,
+which serialize through SQLite's own per-file lock). Connections
+are cheap (~hundreds of microseconds) so we don't pool them.
 
-Write surface: ``POST /api/runs/<run_id>/stop``, which drops a
+Write surface: ``POST /api/runs/<run_id>/stop`` drops a
 ``.STOP_<run_id>`` sentinel file in the progress directory — long-
 running producers (iterate cycle, self-play pool, eval pool, queue
-server) check for the sentinel at stage boundaries and exit
-cleanly when they see it. Stop semantics still flow through the
-JSON since cycle_id back-pointers are written there; we read the
-JSON for the stop endpoint when present, and fall back to the DB
-row's ``parent_run_id`` if not.
+server) check for the sentinel at stage boundaries and exit cleanly
+when they see it. Cycle-vs-single-run targeting comes from
+``runs.parent_run_id`` (DB) when set, else from a fresh-read of
+the JSON ``cycle_id`` field as a fallback for runs not yet
+backfilled.
 """
 
 from __future__ import annotations
 
 import json
 import sqlite3
+import threading
 from pathlib import Path
 from typing import Any, Optional
 
 from flask import Flask, abort, jsonify, render_template, request
 
-from mtg_bot.cli.runs import db as runs_db
+from mtg_bot.cli.runs import backfill as runs_backfill, db as runs_db
 from mtg_bot.training.stop_signal import (
     sentinel_path, stop_requested, write_stop,
 )
@@ -78,52 +79,49 @@ from mtg_bot.training.stop_signal import (
 # about the DB enum.
 _DB_TO_UI_KIND = {"self_play": "data_gen"}
 
+# We also re-export ``cycle`` as the iterate-card discriminator so
+# the rendered cycle row keeps the JSON-era ``kind=cycle`` literal.
+_DB_KIND_TO_UI = {
+    "self_play": "data_gen",
+    "iterate": "cycle",
+}
+
 
 def _ui_kind_from_db(db_kind: Optional[str]) -> Optional[str]:
+    """Translate the canonical DB enum to the UI's JSON-shape kind.
+    Unknown / None passthrough; ``self_play`` -> ``data_gen``;
+    ``iterate`` -> ``cycle``."""
     if db_kind is None:
         return None
-    return _DB_TO_UI_KIND.get(db_kind, db_kind)
+    return _DB_KIND_TO_UI.get(db_kind, db_kind)
 
 
-# ---- JSON read helpers (legacy fallback) ----------------------------------
+# ---- Backfill orchestration ----------------------------------------------
+
+# The backfill runs at the top of each /api/runs request. We guard it
+# with a per-process lock so a burst of polls doesn't spawn N concurrent
+# backfills that all fight over SQLite's writer slot. The lock is
+# briefly held; the backfill itself is bounded by the JSON dir size
+# (currently <300 files, ~50ms wall time on the master).
+_BACKFILL_LOCK = threading.Lock()
 
 
-def _read_run_file(path: Path) -> Optional[dict[str, Any]]:
-    """Read one progress JSON file. Returns ``None`` if the file is
-    missing or unparseable — the trainer's atomic write should
-    prevent half-files in normal operation, but the file COULD be
-    deleted out from under us between listdir and read, and a future
-    trainer-side bug shouldn't take down the whole UI."""
-    try:
-        with path.open("r", encoding="utf-8") as f:
-            data = json.load(f)
-    except (FileNotFoundError, json.JSONDecodeError, OSError):
-        return None
-    if not isinstance(data, dict):
-        return None
-    # Stamp the source filename so the UI has a stable handle even
-    # when run_id is missing or duplicated.
-    data.setdefault("run_id", path.stem)
-    data["_filename"] = path.name
-    return data
+def _ensure_backfill(progress_dir: Path) -> None:
+    """Run a fresh backfill from ``progress_dir`` into ``runs.db``.
 
-
-def _scan_json_dir(progress_dir: Path) -> dict[str, dict[str, Any]]:
-    """Return ``{run_id: payload}`` for every parseable ``*.json``
-    file in ``progress_dir`` that is NOT a per-shard file. Per-shard
-    files (``*_shard_*.json``) are skipped — see the original
-    ``_list_runs`` doc for why."""
-    if not progress_dir.is_dir():
-        return {}
-    out: dict[str, dict[str, Any]] = {}
-    for path in progress_dir.glob("*.json"):
-        if "_shard_" in path.name:
-            continue
-        run = _read_run_file(path)
-        if run is None:
-            continue
-        out[run["run_id"]] = run
-    return out
+    Idempotent (see ``runs_backfill.backfill_progress_dir``). Catches
+    every exception so a backfill failure can never 500 the listing
+    endpoint — the worst case is the UI shows whatever the DB had at
+    the previous backfill.
+    """
+    db_path = progress_dir / "runs.db"
+    with _BACKFILL_LOCK:
+        try:
+            runs_backfill.backfill_progress_dir(progress_dir, db_path)
+        except Exception:  # noqa: BLE001
+            # Logging is intentionally best-effort; this path runs on
+            # every request and a chatty stderr would spam logs.
+            pass
 
 
 # ---- DB read helpers ------------------------------------------------------
@@ -132,8 +130,8 @@ def _scan_json_dir(progress_dir: Path) -> dict[str, dict[str, Any]]:
 def _open_conn(progress_dir: Path) -> Optional[sqlite3.Connection]:
     """Open a fresh read connection to the runs DB colocated with
     ``progress_dir``. Returns ``None`` if the DB file doesn't exist
-    yet (Phase 1 invariant: an unwired master with no DB still has
-    a working UI via JSON fallback)."""
+    yet (a fresh checkout that hasn't been backfilled and has no
+    JSONs to backfill from)."""
     db_path = progress_dir / "runs.db"
     if not db_path.is_file():
         return None
@@ -143,44 +141,24 @@ def _open_conn(progress_dir: Path) -> Optional[sqlite3.Connection]:
         return None
 
 
-def _aggregate_progress_row(
-    conn: sqlite3.Connection, run_id: str,
-) -> Optional[dict[str, Any]]:
-    """The ``shard_label IS NULL`` aggregate row for ``run_id``, or
-    ``None`` if no progress has been pushed yet."""
-    row = conn.execute(
-        """
-        SELECT * FROM run_progress
-        WHERE run_id = ? AND shard_label IS NULL
-        """,
-        (run_id,),
-    ).fetchone()
-    return dict(row) if row is not None else None
-
-
-def _scan_db(conn: sqlite3.Connection) -> dict[str, dict[str, Any]]:
-    """Return ``{run_id: ui_run_dict}`` for every row in ``runs``,
-    each enriched with the aggregate progress row. Newest first by
-    ``started_at`` (the dict insertion order is preserved)."""
-    rows = conn.execute(
-        "SELECT * FROM runs ORDER BY started_at DESC"
-    ).fetchall()
-    out: dict[str, dict[str, Any]] = {}
-    for row in rows:
-        run_dict = dict(row)
-        agg = _aggregate_progress_row(conn, run_dict["run_id"])
-        out[run_dict["run_id"]] = _db_row_to_ui_dict(run_dict, agg)
-    return out
-
-
-def _db_row_to_ui_dict(
+def _row_to_ui_dict(
     run_row: dict[str, Any],
     progress_row: Optional[dict[str, Any]],
 ) -> dict[str, Any]:
     """Project a ``runs`` + aggregate ``run_progress`` pair into the
-    JSON-shape dict the UI front-end expects. Missing fields are left
-    absent (the JS uses ``|| 0`` / ``|| '—'`` everywhere) rather than
-    stamped with placeholders."""
+    JSON-shape dict the front-end expects.
+
+    Strategy: copy the row fields verbatim (renaming kind -> UI kind),
+    surface the aggregate counter columns, then ``json.loads`` the
+    aggregate's ``extra_json`` and ``setdefault`` each key onto the
+    output. ``setdefault`` (not overwrite) means a column-side value
+    always wins over an extra_json value of the same key — the
+    structured counters are authoritative when they're set.
+
+    Edge case: if ``extra_json`` is malformed, the listing must still
+    surface the run with its core fields. We swallow ``JSONDecodeError``
+    silently — a future producer bug shouldn't break the UI.
+    """
     ui: dict[str, Any] = {
         "run_id": run_row["run_id"],
         "kind": _ui_kind_from_db(run_row.get("kind")),
@@ -192,7 +170,6 @@ def _db_row_to_ui_dict(
         "notes": run_row.get("notes"),
         "parent_run_id": run_row.get("parent_run_id"),
         "_db_kind": run_row.get("kind"),
-        "_source": "db",
     }
     if progress_row is not None:
         for key in (
@@ -202,172 +179,179 @@ def _db_row_to_ui_dict(
             val = progress_row.get(key)
             if val is not None:
                 ui[key] = val
-        # Aggregate-row extra_json may carry win_rate, opponent_label,
-        # etc. — fan it out so the UI doesn't have to dig through
-        # extra_json in a separate pass.
+        # Fan out extra_json keys onto the top-level dict. Setdefault
+        # so the structured counters above always win.
         extra_raw = progress_row.get("extra_json")
         if extra_raw:
             try:
                 extra = json.loads(extra_raw)
                 if isinstance(extra, dict):
                     for k, v in extra.items():
-                        ui.setdefault(k, v)
+                        if k.startswith("_"):
+                            # Internal markers (e.g. ``original_status``,
+                            # ``backfill_note``) flow through under their
+                            # own key so the UI can surface them when it
+                            # wants without overwriting structured fields.
+                            ui[k] = v
+                        else:
+                            ui.setdefault(k, v)
             except (json.JSONDecodeError, TypeError):
                 pass
+    # If the backfill mapped a JSON ``stopped`` to DB ``killed`` and
+    # stashed ``original_status`` in extra_json, prefer the original
+    # for UI display so the user sees ``stopped`` (their nomenclature)
+    # rather than ``killed`` (DB's).
+    if isinstance(progress_row, dict) and progress_row.get("extra_json"):
+        try:
+            extra = json.loads(progress_row["extra_json"])
+            if (
+                isinstance(extra, dict)
+                and "original_status" in extra
+            ):
+                ui["status"] = extra["original_status"]
+        except (json.JSONDecodeError, TypeError):
+            pass
     return ui
-
-
-def _synthesize_db_row_from_json(
-    json_payload: dict[str, Any],
-) -> dict[str, Any]:
-    """Stamp a JSON-only run with the marker the brief calls for so
-    callers / tests can tell apart a real DB-backed row from a
-    JSON-fallback row, AND so a future Phase-3 backfill knows which
-    rows it can safely DELETE-then-INSERT once the DB catches up.
-
-    The returned dict is the JSON payload itself (mutated in place),
-    not a separate object — the front-end expects the JSON-shape
-    fields, and we don't want to fan them out twice. The marker
-    lives under ``_synthetic_from_json``.
-    """
-    json_payload.setdefault("_source", "json")
-    json_payload["_synthetic_from_json"] = True
-    # Preserve a parsed-shape ``extra_json`` so consumers who DO want
-    # the structured marker (e.g., backfill tooling) get the same
-    # shape they'd find on a real DB-backed row.
-    extra = {"_synthetic_from_json": True}
-    json_payload.setdefault("extra_json", json.dumps(extra, sort_keys=True))
-    return json_payload
-
-
-def _merge_db_and_json(
-    db_dict: dict[str, Any], json_dict: dict[str, Any],
-) -> dict[str, Any]:
-    """Both sources have a row for the same ``run_id``. JSON has
-    the rich UI-render fields (``machines``, ``pairings``, replay
-    hints, per-epoch losses, ...); the DB has authoritative
-    started_at / status / kind. Strategy: start from JSON, layer the
-    DB row's status + ended_at + git_commit + label + notes on top
-    when they're set in the DB but absent in JSON, and stamp
-    ``_source: "merged"`` so the test fixtures can pin behavior.
-    """
-    merged = dict(json_dict)
-    # DB-side authoritative fields fill JSON gaps but don't overwrite
-    # JSON when JSON has a value. Today that's almost everything since
-    # JSON is the legacy source; this matters as Phase 3 approaches
-    # when JSON keys go absent.
-    for key in (
-        "status", "ended_at", "started_at", "git_commit",
-        "kind", "label", "notes",
-    ):
-        if merged.get(key) in (None, "") and db_dict.get(key) is not None:
-            merged[key] = db_dict[key]
-    merged["_db_kind"] = db_dict.get("_db_kind")
-    merged["_source"] = "merged"
-    return merged
-
-
-# ---- Top-level "list runs" entry point ------------------------------------
 
 
 def _list_runs(progress_dir: Path) -> list[dict[str, Any]]:
     """All runs visible to the UI, newest-first by ``started_at``.
 
-    Combines the DB's ``runs`` rows with any standalone JSON files
-    that the DB doesn't yet know about. JSON files for which a DB
-    row exists merge into the DB row (DB authoritative for status /
-    ended_at; JSON authoritative for the rich render fields).
+    DB-first: every run surfaces here lives in ``runs.db``. The
+    backfill at the top of the request folds new JSONs into the DB
+    so JSON-only producers (today: iterate / train / shard / capture /
+    bench) still appear without delay.
 
-    Per-shard JSON files (``*_shard_*.json``) are skipped — the
-    aggregator writes a rolled-up ``<run_id>.json`` alongside them
-    and the UI shows the aggregate, not N per-shard cards.
+    Per-shard runs (``shard_label`` populated) are NOT listed here —
+    the aggregate (``shard_label IS NULL``) row is the card; per-shard
+    rows surface inside the detail endpoint as sub-cards.
     """
-    json_runs = _scan_json_dir(progress_dir)
-    db_runs: dict[str, dict[str, Any]] = {}
+    _ensure_backfill(progress_dir)
     conn = _open_conn(progress_dir)
+    if conn is None:
+        return []
     try:
-        if conn is not None:
-            db_runs = _scan_db(conn)
+        rows = conn.execute(
+            """
+            SELECT r.*, p.n_games_done, p.n_games_total,
+                   p.elapsed_seconds, p.crashed, p.timed_out,
+                   p.wins_new, p.wins_old, p.draws, p.extra_json
+            FROM runs r
+            LEFT JOIN run_progress p
+              ON p.run_id = r.run_id AND p.shard_label IS NULL
+            ORDER BY r.started_at DESC
+            """,
+        ).fetchall()
     finally:
-        if conn is not None:
-            conn.close()
+        conn.close()
 
-    merged: dict[str, dict[str, Any]] = {}
-    # Start with DB-known runs; fold JSON into them when the JSON
-    # exists alongside.
-    for run_id, db_row in db_runs.items():
-        if run_id in json_runs:
-            merged[run_id] = _merge_db_and_json(
-                db_row, json_runs[run_id],
-            )
-        else:
-            merged[run_id] = db_row
-    # Add JSON-only runs as synthesized rows.
-    for run_id, json_row in json_runs.items():
-        if run_id in merged:
-            continue
-        merged[run_id] = _synthesize_db_row_from_json(json_row)
-
-    runs = list(merged.values())
-    runs.sort(key=lambda r: r.get("started_at") or "", reverse=True)
-    return runs
+    out: list[dict[str, Any]] = []
+    for row in rows:
+        run_dict = {k: row[k] for k in row.keys() if not k.startswith(
+            ("n_games_", "elapsed_seconds", "crashed", "timed_out",
+             "wins_", "draws", "extra_json"),
+        )}
+        progress_dict = {
+            "n_games_done": row["n_games_done"],
+            "n_games_total": row["n_games_total"],
+            "elapsed_seconds": row["elapsed_seconds"],
+            "crashed": row["crashed"],
+            "timed_out": row["timed_out"],
+            "wins_new": row["wins_new"],
+            "wins_old": row["wins_old"],
+            "draws": row["draws"],
+            "extra_json": row["extra_json"],
+        }
+        out.append(_row_to_ui_dict(run_dict, progress_dict))
+    return out
 
 
 def _get_run_detail(
     progress_dir: Path, run_id: str,
 ) -> Optional[dict[str, Any]]:
-    """Per-run detail: merged DB + JSON view PLUS the events list,
-    artifacts list, and per-shard progress rows from the DB. Returns
-    ``None`` when the run is unknown to both stores."""
-    json_runs = _scan_json_dir(progress_dir)
-    json_row = json_runs.get(run_id)
-
+    """Per-run detail: DB row + aggregate progress + per-shard rows
+    + last 100 events + artifacts. Returns ``None`` if the run is
+    unknown to the DB. The backfill runs first so a JSON-only run
+    that just landed surfaces immediately."""
+    _ensure_backfill(progress_dir)
     conn = _open_conn(progress_dir)
-    db_record: Optional[dict[str, Any]] = None
+    if conn is None:
+        return None
     try:
-        if conn is not None:
-            db_record = runs_db.get_run(conn, run_id)
+        record = runs_db.get_run(conn, run_id)
     finally:
-        if conn is not None:
-            conn.close()
-
-    if db_record is None and json_row is None:
+        conn.close()
+    if record is None:
         return None
 
-    if db_record is not None:
-        run_row = db_record["run"]
-        agg = None
-        per_shard = []
-        for p in db_record.get("progress", []):
-            if p.get("shard_label") is None:
-                agg = p
-            else:
-                per_shard.append(p)
-        ui = _db_row_to_ui_dict(run_row, agg)
-        if json_row is not None:
-            ui = _merge_db_and_json(ui, json_row)
-        ui["_db_progress_per_shard"] = per_shard
-        ui["_db_events"] = db_record.get("events", [])
-        ui["_db_artifacts"] = db_record.get("artifacts", [])
-        return ui
+    run_row = record["run"]
+    agg = None
+    per_shard: list[dict[str, Any]] = []
+    for p in record.get("progress", []):
+        if p.get("shard_label") is None:
+            agg = p
+        else:
+            per_shard.append(p)
+    ui = _row_to_ui_dict(run_row, agg)
+    ui["_db_progress_per_shard"] = per_shard
+    ui["_db_events"] = record.get("events", [])
+    ui["_db_artifacts"] = record.get("artifacts", [])
 
-    # DB has no row but JSON does — synthesize.
-    assert json_row is not None
-    ui = _synthesize_db_row_from_json(dict(json_row))
-    ui["_db_progress_per_shard"] = []
-    ui["_db_events"] = []
-    ui["_db_artifacts"] = []
+    # Synthesize a "machines" array from per_shard rows for the front-
+    # end's per-machine sub-card renderer. Eval / data_gen JSONs used
+    # to carry this directly; with the DB-first path we derive it from
+    # the structured per_shard records.
+    if per_shard and "machines" not in ui:
+        ui["machines"] = _per_shard_to_machines(per_shard)
     return ui
+
+
+def _per_shard_to_machines(
+    per_shard: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Convert ``run_progress`` per-shard rows into the
+    ``machines = [{label, n_games_done, n_workers, status, crashed}, ...]``
+    array the front-end expects.
+
+    ``status``, ``n_workers``, ``per_game_seconds_avg``, etc. live in
+    the per-shard row's ``extra_json`` (the structured columns only
+    cover counters). We fan those out so the renderer's
+    ``machines[i].n_workers`` lookup keeps working.
+    """
+    machines: list[dict[str, Any]] = []
+    for row in per_shard:
+        m: dict[str, Any] = {
+            "label": row.get("shard_label"),
+            "n_games_done": row.get("n_games_done"),
+            "crashed": row.get("crashed"),
+        }
+        extra_raw = row.get("extra_json")
+        if extra_raw:
+            try:
+                extra = json.loads(extra_raw)
+                if isinstance(extra, dict):
+                    for k, v in extra.items():
+                        if k.startswith("_"):
+                            continue
+                        m.setdefault(k, v)
+            except (json.JSONDecodeError, TypeError):
+                pass
+        machines.append(m)
+    return machines
 
 
 def _list_recent_runs(
     progress_dir: Path, limit: int = 20,
 ) -> list[dict[str, Any]]:
-    """Last N completed runs across all kinds, with summary stats.
-    Source is the DB (JSON-only completed runs surface via the
-    ``/api/runs`` listing; this endpoint is explicitly DB-driven so
-    the cross-run aggregations stay cheap).
+    """Last N completed runs across all kinds with summary stats. The
+    ``status='completed'`` filter mirrors the brief's "older pane"
+    semantics — we surface the user's terminal history and exclude
+    in-flight rows.
+
+    Uses a single LEFT JOIN against the aggregate progress row so the
+    response shape carries the headline counters without an N+1 trip.
     """
+    _ensure_backfill(progress_dir)
     conn = _open_conn(progress_dir)
     if conn is None:
         return []
@@ -382,7 +366,8 @@ def _list_recent_runs(
                    p.wins_old       AS p_wins_old,
                    p.draws          AS p_draws,
                    p.crashed        AS p_crashed,
-                   p.timed_out      AS p_timed_out
+                   p.timed_out      AS p_timed_out,
+                   p.extra_json     AS p_extra_json
             FROM runs r
             LEFT JOIN run_progress p
               ON p.run_id = r.run_id AND p.shard_label IS NULL
@@ -417,22 +402,45 @@ def _list_recent_runs(
     return out
 
 
+# ---- Stop-signal helpers -------------------------------------------------
+
+
+def _read_json_cycle_id(progress_dir: Path, run_id: str) -> Optional[str]:
+    """Best-effort lookup of the legacy ``cycle_id`` JSON field.
+
+    The DB row's ``parent_run_id`` is the canonical pointer post-backfill,
+    but for a producer that's running RIGHT NOW (and hasn't been re-
+    backfilled), the JSON is the freshest source. We try the JSON
+    first when stopping a child stage so cycle-stop semantics fire
+    immediately, even before the next request-side backfill pass.
+    """
+    json_path = progress_dir / f"{run_id}.json"
+    if not json_path.is_file():
+        return None
+    try:
+        with json_path.open("r", encoding="utf-8-sig") as f:
+            data = json.load(f)
+    except (json.JSONDecodeError, OSError, UnicodeDecodeError):
+        return None
+    if not isinstance(data, dict):
+        return None
+    cid = data.get("cycle_id")
+    return cid if isinstance(cid, str) else None
+
+
 # ---- Flask app factory ----------------------------------------------------
 
 
 def create_app(progress_dir: Path) -> Flask:
     """Build the Flask app. ``progress_dir`` is the directory that
-    holds both the per-run progress JSON files (legacy + fallback)
-    AND the ``runs.db`` SQLite file (Phase 2 primary). The directory
-    does NOT have to exist at app-creation time — it's read lazily
-    on every request, so a UI started before the first training run
-    still works."""
+    holds both the per-run progress JSON files (legacy + producer
+    dual-write source) AND the ``runs.db`` SQLite file (Phase 2 sole
+    source of truth read by the UI). The directory does NOT have to
+    exist at app-creation time — every endpoint reads it lazily on
+    each request, so a UI started before the first training run still
+    works."""
     progress_dir = Path(progress_dir).resolve()
 
-    # Templates live next to this file (mirroring how mtg_bot.ui.py
-    # uses src/mtg_bot/templates). Static assets — favicon, etc. —
-    # live in the sibling ``static/`` and are served at ``/static/``
-    # by Flask's default static_url_path.
     template_dir = Path(__file__).parent / "templates"
     static_dir = Path(__file__).parent / "static"
     app = Flask(
@@ -453,8 +461,8 @@ def create_app(progress_dir: Path) -> Flask:
 
     @app.route("/api/runs/recent")
     def api_runs_recent():
-        """Last 20 completed runs across all kinds. Light-weight
-        cross-run summary panel."""
+        """Last N completed runs across all kinds. Light-weight cross-
+        run summary panel."""
         limit_raw = request.args.get("limit", "20")
         try:
             limit = max(1, min(int(limit_raw), 200))
@@ -474,17 +482,9 @@ def create_app(progress_dir: Path) -> Flask:
     def api_run_replays(run_id: str):
         """List captured replay files for a given run.
 
-        The producer (iterate_alphazero) writes ``replays_dir`` into
-        the run's progress JSON pointing at the directory it captured
-        into. This endpoint reads that hint and returns the
-        ``.json.gz`` files alongside the subpath the main mtg_bot UI
-        needs to load them via ``/api/load_replay/<subpath>``. Subpath
-        = ``<replays_dir.name>/<filename>``, since the main UI's
-        ``--replays-root`` is meant to point at the parent directory.
-
-        ``replays_dir`` is currently a JSON-only field — Phase 1's
-        run-DB schema doesn't store it. We resolve via JSON when
-        present, and fall through to a "no replays" response otherwise.
+        ``replays_dir`` lives in the producer's progress JSON (and
+        flows through ``run_progress.extra_json`` after the backfill).
+        We read it from whichever the run-detail dict surfaces.
         """
         run = _get_run_detail(app.config["PROGRESS_DIR"], run_id)
         if run is None:
@@ -520,19 +520,17 @@ def create_app(progress_dir: Path) -> Flask:
     def api_run_stop(run_id: str):
         """Request a stop for ``run_id``.
 
-        Writes a sentinel file ``.STOP_<target_id>`` in the progress
-        directory. The producer (iterate cycle / self-play /
-        eval pool / queue server) polls for that sentinel at stage
-        boundaries and exits cleanly, finalizing its progress JSON
-        with ``status="stopped"``.
+        Drops a sentinel file ``.STOP_<target_id>`` in the progress
+        directory. Producers (iterate cycle / self-play / eval / queue
+        server) poll for that sentinel at stage boundaries and exit
+        cleanly, finalizing their progress JSON with ``status="stopped"``
+        (which the next backfill maps to DB ``killed``).
 
-        Cycle-vs-single-run targeting: when the run's progress JSON
-        has a ``cycle_id`` field (set by ``iterate_alphazero`` for
-        all child stages — self-play, train, eval), the sentinel is
-        written for the cycle, which propagates to the in-flight
-        child via the dual-id check in
-        ``stop_signal.stop_requested``. Otherwise the sentinel is
-        written for the single run.
+        Cycle-vs-single-run targeting: read in priority order
+          1. Live JSON ``cycle_id`` (freshest if a producer just
+             updated its status file but the DB hasn't re-synced yet)
+          2. DB ``runs.parent_run_id`` (canonical post-backfill)
+        Otherwise the sentinel targets ``run_id`` itself.
 
         Idempotent — calling twice does NOT error; the second call
         refreshes the sentinel's timestamp + reason. Body is an
@@ -544,10 +542,10 @@ def create_app(progress_dir: Path) -> Flask:
             abort(404)
         body = request.get_json(silent=True) or {}
         reason = body.get("reason") if isinstance(body, dict) else None
-        # Cycle-aware targeting: a child stage's progress JSON carries
-        # a ``cycle_id`` back-pointer when iterate_alphazero owns it.
-        # Fall back to the DB ``parent_run_id`` if JSON's missing.
-        cycle_id = run.get("cycle_id") or run.get("parent_run_id")
+        cycle_id = (
+            _read_json_cycle_id(progress_dir, run_id)
+            or run.get("parent_run_id")
+        )
         target_id = cycle_id if cycle_id else run_id
         path = write_stop(progress_dir, target_id, reason=reason)
         return jsonify({
@@ -561,14 +559,15 @@ def create_app(progress_dir: Path) -> Flask:
     @app.route("/api/runs/<run_id>/stop", methods=["GET"])
     def api_run_stop_status(run_id: str):
         """Diagnostic: report whether a stop has been requested for
-        ``run_id`` (or its parent cycle, if any). Useful for the UI
-        to show "stop pending" between the click and the next
-        producer-side stage boundary, and for tests."""
+        ``run_id`` (or its parent cycle, if any)."""
         progress_dir: Path = app.config["PROGRESS_DIR"]
         run = _get_run_detail(progress_dir, run_id)
         if run is None:
             abort(404)
-        cycle_id = run.get("cycle_id") or run.get("parent_run_id")
+        cycle_id = (
+            _read_json_cycle_id(progress_dir, run_id)
+            or run.get("parent_run_id")
+        )
         own = sentinel_path(progress_dir, run_id).is_file()
         cycle = bool(cycle_id) and sentinel_path(
             progress_dir, cycle_id,
