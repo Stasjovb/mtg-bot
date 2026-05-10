@@ -197,3 +197,106 @@ def test_clone_then_mulligan_does_not_affect_original(synthetic_state):
     # Clone's library was actually shuffled (clone diverged).
     cloned_lib_order = cloned.scry(0, P0_LIBRARY_SIZE)
     assert cloned_lib_order != source_lib_order_before
+
+
+# --- mulligan_to_n: parameterized hand size --------------------------------
+#
+# Round-17 slice. Generalizes ``mulligan(player, seed)`` (always-7) into
+# ``mulligan_to_n(player, n_cards, seed)`` so a caller implementing the
+# London mulligan can request hand sizes 7, 6, 5, ... directly. This
+# slice does NOT model the "put N cards on the bottom" step — that's
+# deferred. The hand is simply shuffled back into the library and
+# ``n_cards`` are drawn off the top.
+
+
+def test_mulligan_to_n_draws_n_cards(synthetic_state):
+    """``mulligan_to_n(0, 4, 42)`` ends with exactly 4 cards in hand."""
+    synthetic_state.mulligan_to_n(0, 4, 42)
+    assert synthetic_state.hand_sizes[0] == 4
+    # 7 returned + 4 drawn = library net -3 from original.
+    assert synthetic_state.library_sizes[0] == P0_LIBRARY_SIZE - (4 - P0_HAND_SIZE)
+
+
+def test_mulligan_to_n_zero_cards_returns_empty_hand(synthetic_state):
+    """``mulligan_to_n(player, 0, seed)`` empties the hand and returns
+    every card to the library — total card count preserved."""
+    total_before = (
+        synthetic_state.hand_sizes[0] + synthetic_state.library_sizes[0]
+    )
+
+    synthetic_state.mulligan_to_n(0, 0, 42)
+
+    assert synthetic_state.hand_sizes[0] == 0
+    # All hand returned, none drawn back: library size = total before.
+    assert synthetic_state.library_sizes[0] == total_before
+
+
+def test_mulligan_to_n_more_than_library_raises(engine):
+    """If ``n_cards`` exceeds the post-return library size, raise
+    ValueError. Defensive guard — real London never asks for more
+    cards than the library can provide."""
+    # 3 hand + 2 library = 5 total; asking for 6 must raise.
+    state = engine.make_synthetic_state(
+        num_battlefield=0, num_hand=3, num_library=2
+    )
+    with pytest.raises(ValueError):
+        state.mulligan_to_n(0, 6, 42)
+
+
+def test_mulligan_to_n_negative_n_raises(synthetic_state):
+    """Negative ``n_cards`` is nonsensical — raise ValueError."""
+    with pytest.raises(ValueError):
+        synthetic_state.mulligan_to_n(0, -1, 42)
+
+
+def test_mulligan_to_n_unknown_player_raises(synthetic_state):
+    """Out-of-range player_id raises ValueError."""
+    with pytest.raises(ValueError):
+        synthetic_state.mulligan_to_n(99, 4, 42)
+
+
+def test_mulligan_to_n_deterministic_with_same_seed(synthetic_state):
+    """Same seed → same resulting hand AND library order across two
+    independent clones."""
+    a = synthetic_state.clone_once()
+    b = synthetic_state.clone_once()
+
+    a.mulligan_to_n(0, 5, 1234)
+    b.mulligan_to_n(0, 5, 1234)
+
+    assert a.hand_sizes == b.hand_sizes
+    assert a.library_sizes == b.library_sizes
+    # Library order (post-shuffle, post-draw) must match.
+    assert a.scry(0, a.library_sizes[0]) == b.scry(0, b.library_sizes[0])
+
+
+def test_mulligan_to_n_different_seeds_different_hands(synthetic_state):
+    """Different seeds produce different library orderings (and
+    therefore different drawn hands). 50-card library makes a
+    collision negligible."""
+    a = synthetic_state.clone_once()
+    b = synthetic_state.clone_once()
+
+    a.mulligan_to_n(0, 5, 1)
+    b.mulligan_to_n(0, 5, 9999)
+
+    a_lib = a.scry(0, a.library_sizes[0])
+    b_lib = b.scry(0, b.library_sizes[0])
+    assert a_lib != b_lib
+
+
+def test_mulligan_to_n_clone_isolation(synthetic_state):
+    """Running ``mulligan_to_n`` on a clone leaves the source state's
+    hand and library untouched. CoW canary."""
+    cloned = synthetic_state.clone_once()
+    source_hand_before = synthetic_state.hand_sizes[0]
+    source_lib_before = synthetic_state.library_sizes[0]
+    source_lib_order_before = synthetic_state.scry(0, P0_LIBRARY_SIZE)
+
+    cloned.mulligan_to_n(0, 3, 777)
+
+    assert synthetic_state.hand_sizes[0] == source_hand_before
+    assert synthetic_state.library_sizes[0] == source_lib_before
+    assert synthetic_state.scry(0, P0_LIBRARY_SIZE) == source_lib_order_before
+    # Clone diverged: hand size matches the requested n.
+    assert cloned.hand_sizes[0] == 3
