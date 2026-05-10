@@ -96,7 +96,23 @@
 //!     schema, different timing. Future slice.
 //! - **Empty stack returns None gracefully** (no exception). Same
 //!   convention as `pop_top_of_stack`.
-//! - **Round-13 UntapTarget** (this slice). Symmetric counterpart
+//! - **Round-14 Sacrifice** (this slice). CR 701.16 — sacrifice a
+//!   target permanent (it goes to its owner's graveyard).
+//!   - **AnyCreature target -> first object on the ACTIVE player's
+//!     battlefield (smallest index).** Asymmetric vs the bounce/exile/
+//!     tap convention: in real MTG you sacrifice your OWN permanents,
+//!     not the defender's. First-slice simplification picks
+//!     ``state.active_player``'s battlefield[0] (mirroring the source-
+//!     spell controller convention). No creature-type filter. Empty
+//!     active-battlefield fizzles silently.
+//!   - **AnyPlayer target** -> raises ValueError (cannot sacrifice a
+//!     player), matching the bounce/exile/tap/untap AnyPlayer shape.
+//!   - **Per-object state reset on zone change** (CR 400.7) — tapped
+//!     / summoning_sick / damage / counters reset on the way out, same
+//!     as ReturnToHand / ExileTarget.
+//!   - Inlines ``Arc::make_mut`` pop-from-battlefield + push-to-
+//!     graveyard per the recurring private-helper-cross-file pattern.
+//! - **Round-13 UntapTarget**. Symmetric counterpart
 //!   to round-12's TapTarget — same target selection convention,
 //!   opposite tap state mutation. AnyCreature target -> first object
 //!   on the defender's battlefield gets ``tapped = false``. Empty
@@ -599,13 +615,67 @@ fn apply_effect(state: &mut GameState, effect: &Effect) -> PyResult<()> {
                 }
             }
         },
-        // Round-14 stub: Sacrifice exists in the bridge but isn't
-        // wired to resolution yet. Round-14 resolve agent fills in.
-        Effect::Sacrifice { .. } => {
-            return Err(PyValueError::new_err(
-                "Sacrifice not yet wired to resolve_top_of_stack — round-14 resolve agent fills this in",
-            ));
-        }
+        // Round-14: Sacrifice. CR 701.16 — a sacrificed permanent is
+        // put into its owner's graveyard.
+        //
+        // **Asymmetric vs the bounce/exile/tap convention.** Real MTG:
+        // you sacrifice your OWN permanents (not the defender's). The
+        // first-slice simplification picks ``state.active_player``'s
+        // battlefield[0] (mirroring the source-spell controller
+        // convention: a Sacrifice cast by the active player sacrifices
+        // one of the active player's own permanents). No creature-type
+        // filter, no per-spell target choice. Empty active-battlefield
+        // -> fizzle silently (stack still pops).
+        //
+        // **AnyPlayer target raises** (semantically nonsense — you
+        // can't sacrifice a player). Matches the
+        // ReturnToHand/ExileTarget/TapTarget/UntapTarget AnyPlayer shape.
+        //
+        // **Object-state reset on zone change.** CR 400.7: a card that
+        // changes zones is treated as a brand new object — its tapped
+        // / summoning_sick / damage / counters fields all reset on the
+        // way to graveyard. Mirrors the ReturnToHand / ExileTarget
+        // reset convention.
+        //
+        // **Inlining note (cross-file friction).** Per per-slice file-
+        // isolation, we inline the minimal Arc::make_mut pop-from-
+        // battlefield + push-to-graveyard here, mirroring how
+        // ReturnToHand / ExileTarget / Mill / DrawCards inline their
+        // primitives for the same E0624 cross-file reason.
+        Effect::Sacrifice { target } => match target {
+            TargetFilter::AnyPlayer => {
+                return Err(PyValueError::new_err(
+                    "Sacrifice with AnyPlayer target is semantically nonsense (cannot sacrifice a player)",
+                ));
+            }
+            TargetFilter::AnyCreature => {
+                let active = state.active_player as usize;
+                let bf = &state.players[active].battlefield;
+                if bf.is_empty() {
+                    return Ok(()); // fizzle silently
+                }
+                let target_id = bf[0].id;
+                // Pop from active player's battlefield. Use
+                // Arc::make_mut for CoW safety.
+                let bf_mut: &mut Vec<GameObject> =
+                    Arc::make_mut(&mut state.players[active].battlefield);
+                let pos = bf_mut
+                    .iter()
+                    .position(|o| o.id == target_id)
+                    .expect("target_id was bf[0] but not found on re-scan");
+                let mut obj = bf_mut.remove(pos);
+                // Stamp graveyard zone + reset per-object state. First-
+                // slice: target's controller == owner, so push onto
+                // active player's graveyard (where the sacrificed
+                // permanent's owner lives).
+                obj.zone = ZONE_GRAVEYARD;
+                obj.tapped = false;
+                obj.summoning_sick = false;
+                obj.damage = 0;
+                obj.counters = 0;
+                Arc::make_mut(&mut state.players[active].graveyard).push(obj);
+            }
+        },
     }
     Ok(())
 }
