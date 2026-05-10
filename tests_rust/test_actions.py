@@ -1120,3 +1120,89 @@ def test_apply_action_unknown_kind_message_mentions_cast_spell(synthetic_state):
     future variant addition forces the message to grow."""
     with pytest.raises(ValueError, match=r"cast_spell"):
         synthetic_state.apply_action({"kind": "frobnicate"})
+
+
+# --- TurnFaceUp ------------------------------------------------------
+#
+# Rolling-integration slice (post-round-23): extend the Action enum +
+# apply_action dispatcher with ``Action::TurnFaceUp { card_id }``. The
+# Python dataclass ``TurnFaceUp(card_id: int)`` carries a single int —
+# the GameObject id of the face-down permanent on the priority
+# player's battlefield to flip face up. Mirrors ``PlayLand``'s
+# single-int shape exactly.
+#
+# CR 701.34 / 707.4 — Morph / Manifest Dread flip + Edge of Eternities
+# Spacecraft station / launch. The EoE Spacecraft cycle is the
+# production driver: Spacecraft enter face-down (as artifacts with no
+# creature types) and accumulate charge counters via station-attaching;
+# they turn face up (become creatures with their printed stats) when
+# launched by paying a face-up cost. CR 701.34 is a special action —
+# does not use the stack; costs are paid immediately and the flip
+# resolves at once.
+#
+# **Dispatch is stubbed.** No Rust face-down GameObject state exists
+# yet (the ``GameObject`` struct has no ``face_down`` flag today, and
+# there's no Spacecraft charge-counter resolution primitive), so the
+# variant + bridge round-trip ship now but the dispatch arm raises
+# ``ValueError`` with a "not implemented yet" message. A future slice
+# adds the per-object face-down state field + flip primitive
+# (analogous to how ``tap`` / ``untap`` toggle the ``tapped`` flag)
+# and flips this arm to a real ``call_method1("turn_face_up", ...)``
+# dispatch. Until then, happy-path dispatch raises ``ValueError`` —
+# these tests assert on the stubbed error path, NOT on a successful
+# flip outcome. Mirrors the round-23 ActivateAbility "scaffold the
+# variant, defer the dispatch semantics" pattern.
+
+
+def test_apply_action_turn_face_up_stub_raises_value_error(synthetic_state):
+    """Happy-path stub: a well-formed TurnFaceUp dict parses cleanly
+    but the dispatch arm raises ``ValueError`` because no Rust face-
+    down GameObject state / flip primitive exists yet. The error
+    message names the variant + flags it as future work so a follow-
+    up slice grepping for the string finds the dispatch site to
+    flip."""
+    with pytest.raises(ValueError, match=r"TurnFaceUp dispatch not implemented yet"):
+        synthetic_state.apply_action({"kind": "turn_face_up", "card_id": 42})
+
+
+def test_apply_action_turn_face_up_stub_error_mentions_spacecraft(synthetic_state):
+    """The stub message names the missing Rust primitives (face-down
+    GameObject state + Spacecraft) so a future slice grepping for
+    "Spacecraft" finds the dispatch site to flip. Pin the substring
+    so the message stays informative — a future slice that flips the
+    dispatch to a real call must also delete this test (it documents
+    the stub-state, not the eventual real behavior)."""
+    with pytest.raises(ValueError, match=r"Spacecraft"):
+        synthetic_state.apply_action({"kind": "turn_face_up", "card_id": 7})
+
+
+def test_apply_action_turn_face_up_missing_card_id_raises_key_error(
+    synthetic_state,
+):
+    """Missing the ``card_id`` key raises ``KeyError`` —
+    ``parse_action`` rejects before dispatch (single point of
+    validation, mirrors the ``card_id``-missing shape on
+    ``play_land``). The KeyError fires BEFORE the dispatch-stub
+    ValueError, so this test pins the parse-time gate."""
+    with pytest.raises(KeyError, match="card_id"):
+        synthetic_state.apply_action({"kind": "turn_face_up"})
+
+
+def test_apply_action_turn_face_up_wrong_type_for_card_id_raises(
+    synthetic_state,
+):
+    """``card_id`` must be a u32-extractable integer. A string fails
+    PyO3's ``extract::<u32>`` machinery → ``TypeError`` / ``ValueError``.
+    The dispatch-stub never runs; the parse-time gate fires first."""
+    with pytest.raises((TypeError, ValueError)):
+        synthetic_state.apply_action(
+            {"kind": "turn_face_up", "card_id": "not-an-int"}
+        )
+
+
+def test_apply_action_unknown_kind_message_mentions_turn_face_up(synthetic_state):
+    """The unknown-kind error message includes ``turn_face_up`` after
+    this slice extends the variant list. Pin the substring so a future
+    variant addition forces the message to grow."""
+    with pytest.raises(ValueError, match=r"turn_face_up"):
+        synthetic_state.apply_action({"kind": "frobnicate"})
