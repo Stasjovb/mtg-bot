@@ -32,7 +32,6 @@ from mtg_bot.training.data_gen import (
     _generate_one_game_data,
     _sample_decks_for_game,
 )
-from mtg_bot.training.trainer import auto_device
 
 
 # Shared via initializer/global so each worker only loads decks once.
@@ -134,7 +133,12 @@ def main(argv=None) -> None:  # pragma: no cover
         tuple(meta.hidden_sizes)
         if getattr(meta, "hidden_sizes", None) else None
     )
-    device = auto_device()
+    # ``"auto"`` is the NNPimcConfig sentinel resolved per-worker in
+    # build() — keeps the parent thread CUDA-clean so Linux fork()
+    # doesn't crash the mp.Pool below with "Cannot re-initialize CUDA
+    # in forked subprocess". Calling auto_device() here would prime
+    # the parent's CUDA context before pool.fork(). See PR #36 / #37.
+    device = "auto"
 
     # Stage the BenchProgress tracker if --progress-dir was set. This
     # is purely additive — stdout output below is unchanged.
