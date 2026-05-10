@@ -167,6 +167,7 @@ the test lands in a commit.
 | rust(legal-decisions-declare-blockers): emit DeclareBlockers during defender's combat | tests_rust/test_legal.py extend | green  | feature/rust-legal-decisions-declare-blockers |
 | rust(effect-destroy-all-creatures): Wrath of God (CR 701.7 AOE) | tests_rust/test_resolve.py extend | green  | feature/rust-effect-destroy-all-creatures |
 | rust(effect-destroy-target-non-land-permanent): non-land destroy (CR 701.7) | tests_rust/test_resolve.py extend | green  | feature/rust-effect-destroy-target-non-land-permanent |
+| rust(activate-ability-mana-primitive): flip ActivateAbility stub to real (mana abilities) | tests_rust/test_actions.py extend | green  | feature/rust-activate-ability-mana-primitive |
 
 ## Build invocation reminder
 

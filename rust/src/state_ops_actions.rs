@@ -74,6 +74,7 @@ use crate::state::GameState;
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 use pyo3::types::PyDict;
+use std::sync::Arc;
 
 #[pymethods]
 impl GameState {
@@ -101,13 +102,19 @@ impl GameState {
     ///   input order (round 23). Ineligible pairs are silently
     ///   rejected by the primitive's `bool` return.
     /// - `{"kind": "activate_ability", "source_id": <u32>,
-    ///   "ability_index": <u32>}` → STUB. The variant + bridge round-
-    ///   trip ship in round 23, but no Rust `activate_ability`
-    ///   primitive exists yet (rounds 1-22 didn't build one), so the
-    ///   dispatch arm raises `ValueError` with a "not implemented
-    ///   yet" message. A future slice adds the primitive and flips
-    ///   the arm to a real `call_method1("activate_ability",
-    ///   (source_id, ability_index))` dispatch.
+    ///   "ability_index": <u32>}` → mana-ability dispatch (round 25).
+    ///   For `ability_index = 0` on an untapped battlefield permanent
+    ///   whose printing has `mana_produced.is_some()`, taps the
+    ///   source and credits the controller's mana pool with the
+    ///   pips listed in `mana_produced` (one per element, saturating
+    ///   at u8::MAX per color). Mirrors the legal_decisions emission
+    ///   gate (round 24, `state_ops_legal.rs`) which only emits this
+    ///   shape for the same predicate. Raises `ValueError` if
+    ///   `ability_index != 0`, the source isn't on any battlefield,
+    ///   the source is already tapped, or the printing has no
+    ///   `mana_produced` (non-mana activated abilities are a
+    ///   future-slice scope — they need richer cost-pay + effect-
+    ///   resolution primitives).
     /// - `{"kind": "cast_spell", "card_id": <u32>, "use_warp":
     ///   <bool>?, "kicked": <bool>?, "cast_for_free": <bool>?,
     ///   "use_impending": <bool>?, "cast_room_half": <str|None>?}`
@@ -351,34 +358,148 @@ impl GameState {
                 ));
             }
             Action::ActivateAbility {
-                source_id: _,
-                ability_index: _,
+                source_id,
+                ability_index,
             } => {
-                // Round-23 slice ships the Action variant + bridge
-                // (parse_action + action_to_pydict) round-trip
-                // scaffold; the dispatch arm is a stub because no
-                // Rust `activate_ability` primitive exists yet.
-                // Grep across `rust/src/` confirms rounds 1-22 didn't
-                // build one — the mana-cost-pay + ability-resolution
-                // flow (analogous to how `play_land` and
-                // `cast_creature` already handle their costs) is the
-                // missing primitive. A future slice adds that
-                // primitive then flips this arm to a real
-                // `call_method1("activate_ability", (source_id,
-                // ability_index))` dispatch — at which point the
-                // variant + bridge already shipped here keep working
-                // unchanged. Round-20 frequency: 8 of 420 decisions
-                // (~1.9%) — worth a real implementation in a future
-                // slice, but worth shipping the scaffold now so
-                // callers building Action dicts can already build the
-                // `activate_ability` shape and hit a clear error path
-                // instead of `unknown action kind`.
-                return Err(PyValueError::new_err(
-                    "ActivateAbility dispatch not implemented yet \
-                     (round 24+ — Rust primitive missing; this slice \
-                     ships the Action variant scaffold + bridge \
-                     round-trip only)",
-                ));
+                // Round-25 slice: flip the round-23 stub to a real
+                // dispatch for **mana abilities only**. The matching
+                // emission in `legal_decisions` (round-24,
+                // `state_ops_legal.rs`) only emits ActivateAbility
+                // for untapped permanents whose printing's
+                // `mana_produced.is_some()`, with `ability_index = 0`.
+                // We mirror that filter exactly: only `ability_index
+                // = 0` + `mana_produced.is_some()` is supported in
+                // this slice; anything else raises (loud failure on
+                // out-of-scope ActivateAbility caller input —
+                // honors the "silent no-op pipeline runs are
+                // pipeline bugs" guidance: a caller that built an
+                // ActivateAbility dict for a non-mana ability should
+                // know immediately that the dispatcher can't honor
+                // it yet rather than getting a misleading-success
+                // no-mutation return).
+                //
+                // **Why inline rather than `call_method1` cross-file
+                // dispatch.** The mana-ability flow is small —
+                // locate the source on a battlefield, validate the
+                // printing has `mana_produced`, validate the source
+                // is untapped, then tap it + credit the controller's
+                // mana pool. There's no existing
+                // `activate_ability(source_id, ability_index)`
+                // primitive on `state_ops_mana.rs` to call (the
+                // existing `tap_for_mana(obj_id)` doesn't take an
+                // ability_index, doesn't validate the input source
+                // belongs to the priority player vs the opponent —
+                // legal_decisions' emission gate handles that
+                // upstream — and returns `Option<String>` silently
+                // on every failure mode, which would mask the
+                // ability_index!=0 / not-on-battlefield / tapped /
+                // non-mana-source error paths this dispatch needs
+                // to surface). Inlining the logic here keeps every
+                // error path's message specific and the slice
+                // self-contained — no sibling-file edits required.
+                //
+                // **Future slice.** Non-mana activated abilities
+                // (e.g. tap a creature for an effect, mana-cost-pay
+                // for a pump ability, loyalty abilities on
+                // planeswalkers) need richer primitives — cost-pay
+                // composition + effect-resolution composition. That
+                // belongs in a follow-up slice when the production
+                // workload (parity_smoke trajectory mode emitting
+                // legal non-mana ActivateAbility decisions) demands
+                // it; until then the `ability_index != 0` raise
+                // here surfaces the gap loudly to the harness.
+                let mut binding = slf.borrow_mut();
+                let state: &mut GameState = &mut *binding;
+                if ability_index != 0 {
+                    return Err(PyValueError::new_err(format!(
+                        "ActivateAbility dispatch: only ability_index=0 \
+                         (mana ability) is supported in this slice; got \
+                         {ability_index}. Non-mana activated abilities \
+                         require richer primitives (future slice)."
+                    )));
+                }
+                // Phase 1: locate the source on a battlefield (either
+                // player's — legal_decisions only emits for the
+                // priority player, but the dispatcher is permissive
+                // here so a direct caller building the dict by hand
+                // gets the same error message regardless of which
+                // side controls the source; the unique invariant we
+                // enforce is "on SOME battlefield, untapped,
+                // mana_produced"). Read the printing's
+                // `mana_produced` Vec up-front so the mutation phase
+                // doesn't need to re-borrow the registry.
+                let mut found: Option<(usize, usize, Vec<String>)> = None;
+                // (controller_idx, bf_pos, mana_symbols)
+                for pidx in 0..state.players.len() {
+                    if let Some(pos) = state.players[pidx]
+                        .battlefield
+                        .iter()
+                        .position(|o| o.id == source_id)
+                    {
+                        let obj = &state.players[pidx].battlefield[pos];
+                        let printing =
+                            state.registry.lookup(obj.printing_id).ok_or_else(|| {
+                                PyValueError::new_err(format!(
+                                    "ActivateAbility: source {source_id} \
+                                     printing not in registry"
+                                ))
+                            })?;
+                        let mana = printing.mana_produced.clone().ok_or_else(|| {
+                            PyValueError::new_err(format!(
+                                "ActivateAbility: source {source_id} has no \
+                                 mana_produced (only mana abilities supported \
+                                 in first slice)"
+                            ))
+                        })?;
+                        if obj.tapped {
+                            return Err(PyValueError::new_err(format!(
+                                "ActivateAbility: source {source_id} is \
+                                 already tapped"
+                            )));
+                        }
+                        found = Some((pidx, pos, mana));
+                        break;
+                    }
+                }
+                let (controller_idx, bf_pos, mana_symbols) = match found {
+                    Some(t) => t,
+                    None => {
+                        return Err(PyValueError::new_err(format!(
+                            "ActivateAbility: source {source_id} not on any \
+                             battlefield"
+                        )))
+                    }
+                };
+                // Phase 2: commit. Tap the source via Arc::make_mut on
+                // the controller's battlefield zone (preserves the
+                // per-zone CoW invariant — clones of the state that
+                // observed the zone before the tap remain
+                // untouched), then credit the controller's mana pool.
+                // Saturating u8 add per the existing AddManaToPool /
+                // tap_for_mana convention in state_ops_mana.rs (255
+                // pips of any one color is more than any real game
+                // produces; silent wrap would be a worse failure
+                // mode than capping).
+                let bf_mut = Arc::make_mut(&mut state.players[controller_idx].battlefield);
+                bf_mut[bf_pos].tapped = true;
+                let pool = &mut state.players[controller_idx].mana_pool;
+                for sym in &mana_symbols {
+                    match sym.as_str() {
+                        "W" => pool.white = pool.white.saturating_add(1),
+                        "U" => pool.blue = pool.blue.saturating_add(1),
+                        "B" => pool.black = pool.black.saturating_add(1),
+                        "R" => pool.red = pool.red.saturating_add(1),
+                        "G" => pool.green = pool.green.saturating_add(1),
+                        "C" => pool.colorless = pool.colorless.saturating_add(1),
+                        other => {
+                            return Err(PyValueError::new_err(format!(
+                                "ActivateAbility: unknown mana symbol \
+                                 {other:?} in mana_produced (valid: W, U, B, \
+                                 R, G, C)"
+                            )))
+                        }
+                    }
+                }
             }
         }
         Ok(())

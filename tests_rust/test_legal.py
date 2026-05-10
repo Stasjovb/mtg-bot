@@ -1585,26 +1585,35 @@ def test_legal_decisions_activate_ability_dict_shape_is_minimal(
         assert set(a.keys()) == {"kind", "source_id", "ability_index"}
 
 
-def test_legal_decisions_activate_ability_apply_action_raises_value_error(
+def test_legal_decisions_activate_ability_apply_action_taps_and_credits_pool(
     synthetic_state,
 ):
-    """The Rust `Action::ActivateAbility` dispatch arm at
-    `state_ops_actions.rs:271-276` is a known stub — it raises
-    ValueError("ActivateAbility dispatch not implemented yet ...")
-    because no Rust `activate_ability` primitive exists yet. The
-    parity-smoke harness's retry loop catches this and skips the
-    decision. This test pins the stub's error shape so a future
-    slice that lands the primitive (and flips this arm to a real
-    dispatch) trips the test — at which point the test gets
-    updated to assert the actual mutation semantics."""
+    """End-to-end bridge round-trip: legal_decisions emits an
+    ``ActivateAbility`` dict (round 24 emission gate) → apply_action
+    consumes it (round 25 — this slice flips the round-23 stub to a
+    real dispatch). Locks in the emission-to-application contract so a
+    future slice that drifts either side's dict shape trips the test.
+
+    Pre-flip (round 23 / round 24) this test asserted the stub raised
+    "ActivateAbility dispatch not implemented yet"; round 25 flips the
+    dispatch arm to a real mana-ability call, so we now assert the
+    successful mutation outcome — the source becomes tapped and the
+    controller's mana pool gains one pip of the listed color."""
     _empty_hand(synthetic_state, 0)
     synthetic_state.set_phase(PHASE_MAIN1)
 
     actions = synthetic_state.legal_decisions(0)
     aa = [a for a in actions if a["kind"] == "activate_ability"][0]
+    source_id = aa["source_id"]
+    assert aa["ability_index"] == 0
+    assert synthetic_state.is_tapped(source_id) is False
+    assert synthetic_state.get_mana_pool(0)["G"] == 0
 
-    with pytest.raises(ValueError, match=r"not implemented yet"):
-        synthetic_state.apply_action(aa)
+    synthetic_state.apply_action(aa)
+
+    # Forest tapped, controller's G pool +1.
+    assert synthetic_state.is_tapped(source_id) is True
+    assert synthetic_state.get_mana_pool(0)["G"] == 1
 
 
 def test_legal_decisions_activate_ability_works_for_player_1(
