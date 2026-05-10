@@ -122,13 +122,13 @@ impl GameState {
     ///
     /// 1. **CR 704.5f (0-toughness):** effective toughness =
     ///    `printing.toughness + obj.counters`. If <= 0, victim.
-    /// 2. **CR 704.5g (lethal damage):** `obj.damage >= printing.toughness`.
-    ///    Note: this reads PRINTED toughness, NOT effective. Real MTG
-    ///    measures damage against effective toughness, but for this
-    ///    slice the practical victim set is the same — a creature with
-    ///    counters that survives 704.5f and is at lethal damage gets
-    ///    destroyed; one whose effective toughness is <= 0 has already
-    ///    been picked up by 704.5f and won't be re-added.
+    /// 2. **CR 704.5g (lethal damage):** `obj.damage >= effective_toughness`.
+    ///    Effective toughness folds in the +1/+1 vs -1/-1 counter
+    ///    contribution: a 2/2 with two +1/+1 counters takes 3 damage
+    ///    and survives (effective 4 > 3); a 4/4 with two -1/-1 counters
+    ///    takes 3 damage and dies (effective 2 <= 3). When `obj.counters
+    ///    == 0` effective and printed toughness coincide, so the
+    ///    no-counter cases reduce to the printed-toughness predicate.
     ///
     /// Returns `(controller_id, obj_id)` pairs. Each obj_id appears at
     /// most once even if both rules would catch it, because the inner
@@ -158,8 +158,8 @@ impl GameState {
                     victims.push((obj.controller, obj.id));
                     continue;
                 }
-                // 704.5g second.
-                if obj.damage as i32 >= toughness as i32 {
+                // 704.5g second — also keyed on effective toughness.
+                if obj.damage as i32 >= effective_toughness {
                     victims.push((obj.controller, obj.id));
                 }
             }
@@ -264,22 +264,28 @@ impl GameState {
     /// Predicate form of the lethal-damage check.
     ///
     /// Returns `Some(true)` when the creature's marked damage is
-    /// greater than or equal to its printed toughness, `Some(false)`
-    /// when it is below, and `None` when the object is not found OR
-    /// when the printing has no toughness (i.e. it's not a creature
-    /// — lands, instants, sorceries, etc.).
+    /// greater than or equal to its EFFECTIVE toughness (printed +
+    /// `obj.counters`), `Some(false)` when it is below, and `None`
+    /// when the object is not found OR when the printing has no
+    /// toughness (i.e. it's not a creature — lands, instants,
+    /// sorceries, etc.).
     ///
-    /// This is the post-bridge upgrade of the threshold-form
-    /// `is_damage_at_least(obj_id, threshold)` from the damage slice;
-    /// `is_lethal(obj_id) == is_damage_at_least(obj_id, toughness)`
-    /// for any creature.
+    /// This stays in lockstep with `apply_sbas`'s 704.5g predicate so
+    /// `is_lethal(id) == true` iff the creature would be destroyed by
+    /// the next pass via the lethal-damage rule (modulo
+    /// indestructibility, which the predicate intentionally ignores —
+    /// 704.5g asks "is this lethal damage", indestructibility asks
+    /// "does the destruction take effect"). For no-counter creatures
+    /// effective and printed toughness coincide and the predicate
+    /// reduces to the original `damage >= printing.toughness` form.
     fn is_lethal(&self, obj_id: u32) -> Option<bool> {
         for player in &self.players {
             for obj in player.battlefield.iter() {
                 if obj.id == obj_id {
                     let printing = self.registry.lookup(obj.printing_id)?;
                     let toughness = printing.toughness?;
-                    return Some(obj.damage as i32 >= toughness as i32);
+                    let effective_toughness = toughness as i32 + obj.counters;
+                    return Some(obj.damage as i32 >= effective_toughness);
                 }
             }
         }
