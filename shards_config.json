@@ -2,7 +2,7 @@
   "shards": [
     {
       "host": "local",
-      "n_workers": 16
+      "n_workers": 10
     },
     {
       "host": "greggs-macbook-pro",
