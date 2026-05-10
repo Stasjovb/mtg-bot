@@ -149,6 +149,7 @@ the test lands in a commit.
 | rust(effect-search-library-for-basic-land-tapped): basic land search + tapped enter | tests_rust/test_resolve.py extend | green  | feature/rust-effect-search-library-for-basic-land-tapped |
 | rust(action-declare-blockers): Action::DeclareBlockers variant | tests_rust/test_actions.py extend | green  | feature/rust-action-declare-blockers |
 | rust(action-activate-ability): Action::ActivateAbility variant | tests_rust/test_actions.py extend | green  | feature/rust-action-activate-ability |
+| rust(effect-put-plus-one-counter-on-self): self-target counter (CR 122.6) | tests_rust/test_resolve.py extend | green  | feature/rust-effect-put-plus-one-counter-on-self |
 
 ## Build invocation reminder
 

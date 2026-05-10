@@ -750,6 +750,105 @@ def test_search_library_for_basic_land_tapped_negative_count_raises():
         )
 
 
+# --- PutPlusOneCounterOnSelf (round-23 effect-coverage slice) --------
+
+
+def test_round_trip_put_plus_one_counter_on_self_effect():
+    """CR 122.6 + 701.13 — Blade of the Swarm / Atomic Microsizer
+    pattern. Round-trip the default-amount effect through the bridge."""
+    reg = mtg_bot_engine.Registry()
+    pid = reg.register_printing(
+        {
+            "name": "Test Self-Counter",
+            "card_types": ["Creature"],
+            "power": 1,
+            "toughness": 1,
+            "effects": [
+                {
+                    "kind": "put_plus_one_counter_on_self",
+                    "amount": 1,
+                }
+            ],
+        }
+    )
+    effects = [dict(e) for e in reg.get_printing_effects(pid)]
+    assert effects[0] == {
+        "kind": "put_plus_one_counter_on_self",
+        "amount": 1,
+    }
+
+
+def test_round_trip_put_plus_one_counter_on_self_amount_two():
+    """An explicit amount=2 entry — for cards that drop two counters
+    on themselves per activation — round-trips with its amount
+    preserved."""
+    reg = mtg_bot_engine.Registry()
+    pid = reg.register_printing(
+        {
+            "name": "Test Double Self-Counter",
+            "card_types": ["Creature"],
+            "power": 1,
+            "toughness": 1,
+            "effects": [
+                {
+                    "kind": "put_plus_one_counter_on_self",
+                    "amount": 2,
+                }
+            ],
+        }
+    )
+    effects = [dict(e) for e in reg.get_printing_effects(pid)]
+    assert effects[0]["kind"] == "put_plus_one_counter_on_self"
+    assert effects[0]["amount"] == 2
+
+
+def test_put_plus_one_counter_on_self_default_amount_is_one():
+    """Python's `PutPlusOneCounterOnSelf(amount: int = 1)` dataclass
+    has amount default to 1. The Rust parser mirrors that: an entry
+    with no `amount` key registers as amount=1 and round-trips that
+    way."""
+    reg = mtg_bot_engine.Registry()
+    pid = reg.register_printing(
+        {
+            "name": "Default Amount",
+            "card_types": ["Creature"],
+            "power": 1,
+            "toughness": 1,
+            "effects": [
+                {"kind": "put_plus_one_counter_on_self"}
+            ],
+        }
+    )
+    effects = [dict(e) for e in reg.get_printing_effects(pid)]
+    assert effects[0] == {
+        "kind": "put_plus_one_counter_on_self",
+        "amount": 1,
+    }
+
+
+def test_put_plus_one_counter_on_self_negative_amount_raises():
+    """Register-time guard on negative amount (matches the
+    apply_effect guard, surfaced earlier in the pipeline). Mirrors
+    SearchLibraryForBasicLandTapped's / AddManaToPool's negative
+    register-time check."""
+    reg = mtg_bot_engine.Registry()
+    with pytest.raises(ValueError, match="non-negative"):
+        reg.register_printing(
+            {
+                "name": "Broken",
+                "card_types": ["Creature"],
+                "power": 1,
+                "toughness": 1,
+                "effects": [
+                    {
+                        "kind": "put_plus_one_counter_on_self",
+                        "amount": -1,
+                    }
+                ],
+            }
+        )
+
+
 def test_vanilla_card_with_no_mana_cost_or_effects():
     reg = mtg_bot_engine.Registry()
     pid = reg.register_printing(VANILLA_BLANK)
