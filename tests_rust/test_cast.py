@@ -526,3 +526,374 @@ def test_cast_creature_flash_still_respects_mana_cost(synthetic_state):
     assert synthetic_state.get_mana_pool(0) == pool_before
     assert synthetic_state.battlefield_sizes[0] == bf_before
     assert synthetic_state.hand_sizes[0] == hand_before
+
+
+# --- cross-feature edge cases --------------------------------------
+#
+# These tests exercise interactions between ``cast_creature`` /
+# ``play_land`` and other Rust primitives (mana pool, stack,
+# resolve, counter_spell, fingerprint, legal_decisions). The
+# primitives themselves have dedicated coverage in their respective
+# test files (`test_mana.py`, `test_stack.py`, `test_resolve.py`,
+# `test_counterspell.py`, `test_fingerprint.py`, `test_legal.py`);
+# this section pins their composition with the cast pathway.
+#
+# **Important Rust-side asymmetry vs Python.** Rust's
+# ``cast_creature`` is a no-stack short-circuit: it pays mana then
+# moves the card hand -> battlefield in one step (see module
+# docstring on ``state_ops_cast.rs``). To exercise the
+# "cast -> stack -> resolve" flow for an instant/sorcery, the
+# tests below drive ``push_to_stack`` + ``resolve_top_of_stack``
+# directly with a printing whose ``card_types`` routes the
+# post-resolve mover to the graveyard. Counter-spell coverage uses
+# the same pattern: a creature short-circuited via
+# ``cast_creature`` is already on the battlefield and can no
+# longer be countered; the cross-feature counter test pushes a
+# spell on the stack manually and dispatches an Annul-style
+# counter via ``Effect::CounterTargetSpell``.
+
+
+def _instant_dict():
+    """A vanilla instant printing with no effects. Used to exercise
+    ``push_to_stack`` + ``resolve_top_of_stack`` for cast-of-non-
+    permanent shape — the post-resolve mover (CR 608.2m) routes
+    Instants to controller's graveyard, not the battlefield."""
+    return {
+        "name": "Test Vanilla Instant",
+        "card_types": ["Instant"],
+        "mana_cost": {"U": 1},
+        "effects": [],
+    }
+
+
+def _annul_dict():
+    """An Annul-style counter-target-spell printing. Mirrors the
+    helper used in ``test_counterspell.py`` so the cross-feature
+    counter test here speaks the same shape."""
+    return {
+        "name": "Test Annul",
+        "card_types": ["Instant"],
+        "mana_cost": {"U": 1},
+        "effects": [{"kind": "counter_target_spell"}],
+    }
+
+
+def test_cast_creature_consumes_mana_from_correct_player(synthetic_state):
+    """Cross-feature with the mana-pool slice: ``cast_creature`` debits
+    the CASTING player's pool, not the opponent's. Give both players
+    a green pip and an extra colorless; cast for player 1 and verify
+    player 0's pool is untouched."""
+    elf_id_p1 = P0_FIRST_HAND_ID + 67  # p1 hand starts after p0's 67 ids
+    assert synthetic_state.printing_name_of(elf_id_p1) == "Llanowar Elves"
+    assert synthetic_state.find_object_zone(elf_id_p1) == ZONE_HAND
+    # Seed both pools with the same colors so a "wrong player" debit
+    # would still observe-as-success on totals — only per-player
+    # comparison catches the bug.
+    synthetic_state.add_mana(0, "G", 1)
+    synthetic_state.add_mana(0, "C", 1)
+    synthetic_state.add_mana(1, "G", 1)
+    synthetic_state.add_mana(1, "C", 1)
+    p0_pool_before = synthetic_state.get_mana_pool(0)
+
+    assert synthetic_state.cast_creature(elf_id_p1, 1) is True
+
+    # p1's green pip got spent.
+    assert synthetic_state.get_mana_pool(1)["G"] == 0
+    assert synthetic_state.get_mana_pool(1)["C"] == 1
+    # p0's pool entirely untouched.
+    assert synthetic_state.get_mana_pool(0) == p0_pool_before
+
+
+def test_cast_creature_from_battlefield_is_rejected(synthetic_state):
+    """Cross-feature with zones: a Grizzly Bears already on the
+    battlefield is NOT a legal cast target (the precondition is
+    "card is in player's hand"). Even with enough mana to pay,
+    cast_creature returns False and leaves all state untouched."""
+    bears_id = P0_FIRST_BEARS_ID
+    assert synthetic_state.find_object_zone(bears_id) == ZONE_BATTLEFIELD
+    synthetic_state.add_mana(0, "G", 1)
+    synthetic_state.add_mana(0, "C", 1)
+    pool_before = synthetic_state.get_mana_pool(0)
+    bf_before = synthetic_state.battlefield_sizes
+    hand_before = synthetic_state.hand_sizes
+
+    assert synthetic_state.cast_creature(bears_id, 0) is False
+
+    # Mana pool untouched — the precondition check fires BEFORE the
+    # mana spend in `cast_creature` (state_ops_cast.rs phase 1).
+    assert synthetic_state.get_mana_pool(0) == pool_before
+    assert synthetic_state.battlefield_sizes == bf_before
+    assert synthetic_state.hand_sizes == hand_before
+    assert synthetic_state.find_object_zone(bears_id) == ZONE_BATTLEFIELD
+
+
+def test_cast_creature_rejects_instant_printing(synthetic_state):
+    """Cross-feature with card_types: an Instant printing is NOT a
+    creature spell. ``cast_creature``'s card_types-based detector
+    must reject it. The Rust cast slice is creature-only today (see
+    module docstring); when a real ``cast_spell`` primitive lands
+    for instants/sorceries, this test stays valid — the
+    creature-only entrypoint still won't accept Instants."""
+    obj_id = synthetic_state.register_and_inject_object(
+        _instant_dict(), 0, ZONE_HAND
+    )
+    synthetic_state.add_mana(0, "U", 5)
+    pool_before = synthetic_state.get_mana_pool(0)
+    hand_before = synthetic_state.hand_sizes[0]
+    bf_before = synthetic_state.battlefield_sizes[0]
+
+    assert synthetic_state.cast_creature(obj_id, 0) is False
+
+    # No mutation anywhere: instant stays in hand, mana untouched.
+    assert synthetic_state.find_object_zone(obj_id) == ZONE_HAND
+    assert synthetic_state.get_mana_pool(0) == pool_before
+    assert synthetic_state.hand_sizes[0] == hand_before
+    assert synthetic_state.battlefield_sizes[0] == bf_before
+
+
+def test_cast_creature_round_trip_battlefield_via_stack_dispatch(synthetic_state):
+    """Cross-feature with stack + resolve: simulate the full
+    cast -> stack -> resolve -> battlefield round-trip by manually
+    pushing a creature's GameObject onto the stack and resolving.
+    The Rust ``cast_creature`` primitive short-circuits the stack
+    (see module docstring), but the post-resolve mover on
+    ``state_ops_resolve.rs`` is the canonical "land a permanent on
+    the battlefield from the stack" path — used by every
+    spell that goes through Effect dispatch. This test pins the
+    "Creature card_types lands on battlefield" branch."""
+    # Register-and-inject a fresh creature object (so we control the
+    # zone — putting it in HAND means resolve's "find source" works
+    # cleanly).
+    obj_id = synthetic_state.register_and_inject_object(
+        {
+            "name": "Test RT Bear",
+            "card_types": ["Creature"],
+            "mana_cost": {"generic": 1, "G": 1},
+            "power": 2,
+            "toughness": 2,
+            "keywords": [],
+            "effects": [],
+        },
+        0,
+        ZONE_HAND,
+    )
+    synthetic_state.push_to_stack(obj_id, 0)
+    bf_before = synthetic_state.battlefield_sizes[0]
+
+    resolved = synthetic_state.resolve_top_of_stack()
+    assert resolved == {"source_obj_id": obj_id, "controller": 0}
+
+    # Creature landed on the battlefield via the post-resolve mover.
+    assert synthetic_state.find_object_zone(obj_id) == ZONE_BATTLEFIELD
+    assert synthetic_state.battlefield_sizes[0] == bf_before + 1
+    # Summoning sickness stamped on the way in (CR 302.1).
+    assert synthetic_state.is_summoning_sick(obj_id) is True
+    # Stack drained.
+    assert synthetic_state.is_stack_empty() is True
+
+
+def test_cast_creature_round_trip_instant_routes_to_graveyard(synthetic_state):
+    """Cross-feature with stack + resolve: the same round-trip for an
+    Instant. Post-resolve mover routes Instant card_types to the
+    controller's graveyard (CR 608.2m), NOT the battlefield —
+    asymmetric with the creature case above."""
+    obj_id = synthetic_state.register_and_inject_object(
+        _instant_dict(), 0, ZONE_HAND
+    )
+    synthetic_state.push_to_stack(obj_id, 0)
+    gy_before = synthetic_state.graveyard_sizes[0]
+    bf_before = synthetic_state.battlefield_sizes[0]
+
+    synthetic_state.resolve_top_of_stack()
+
+    # Instant lands in p0's graveyard, NOT the battlefield.
+    assert synthetic_state.find_object_zone(obj_id) == ZONE_GRAVEYARD
+    assert synthetic_state.graveyard_sizes[0] == gy_before + 1
+    assert synthetic_state.battlefield_sizes[0] == bf_before
+
+
+def test_legal_decisions_emits_cast_spell_at_sorcery_timing(synthetic_state):
+    """Cross-feature with legal_decisions: when sorcery timing holds
+    (active == priority, phase == MAIN1, stack empty), the
+    enumerator emits a CastSpell action for the (creature) cards in
+    hand. Mirrors the sorcery-timing gate at line 727 of
+    state_ops_legal.rs."""
+    synthetic_state.set_phase(PHASE_MAIN1)
+    # Synthetic state's seed has active_player = priority_player = 0
+    # and stack is empty, so we're in sorcery timing.
+    actions = synthetic_state.legal_decisions(0)
+    cast_actions = [a for a in actions if a["kind"] == "cast_spell"]
+    # The hand seed is 7 Llanowar Elves which dedup to a single
+    # CastSpell action (printing-name dedup, see state_ops_legal.rs
+    # docstring "Dedup key shape").
+    assert len(cast_actions) == 1
+    assert cast_actions[0]["card_id"] == P0_FIRST_HAND_ID
+    # All deferred alt-cost flags False/None per first-slice shape.
+    assert cast_actions[0]["use_warp"] is False
+    assert cast_actions[0]["kicked"] is False
+    assert cast_actions[0]["cast_for_free"] is False
+    assert cast_actions[0]["use_impending"] is False
+    assert cast_actions[0]["cast_room_half"] is None
+
+
+def test_legal_decisions_no_cast_spell_outside_sorcery_timing(synthetic_state):
+    """Cross-feature with legal_decisions: outside sorcery timing
+    (here: UNTAP), the enumerator's sorcery-timing early-return at
+    line 727 of state_ops_legal.rs short-circuits before CastSpell
+    emission. Mirrors the "no instant-speed CastSpell yet"
+    first-slice scope. NOTE: ``cast_creature`` itself does NOT
+    consult phase — this test pins the legal_decisions / cast
+    surface contract, not the primitive's behavior."""
+    synthetic_state.set_phase(PHASE_UNTAP)
+    actions = synthetic_state.legal_decisions(0)
+    cast_actions = [a for a in actions if a["kind"] == "cast_spell"]
+    assert cast_actions == []
+
+
+def test_clone_isolation_after_cast_is_per_zone(synthetic_state):
+    """CoW canary across multiple zones in one call: cast_creature
+    mutates hand AND battlefield AND mana_pool in a single op. The
+    clone-isolation invariant must hold for every one of them, not
+    just the first. Belt-and-braces vs the existing
+    test_clone_then_cast_does_not_affect_original which checks hand
+    + pool — here we also pin battlefield-side isolation explicitly
+    via the Llanowar Elves' presence in each side's battlefield list,
+    plus check that summoning_sick on the clone doesn't bleed back."""
+    elf_id = P0_FIRST_HAND_ID
+    synthetic_state.add_mana(0, "G", 1)
+    bf_size_p0_before = synthetic_state.battlefield_sizes[0]
+    hand_size_p0_before = synthetic_state.hand_sizes[0]
+
+    cloned = synthetic_state.clone_once()
+    assert cloned.cast_creature(elf_id, 0) is True
+
+    # Clone diverged: elf on bf, sick, hand shrunk, pool drained.
+    assert cloned.find_object_zone(elf_id) == ZONE_BATTLEFIELD
+    assert cloned.is_summoning_sick(elf_id) is True
+    assert cloned.battlefield_sizes[0] == bf_size_p0_before + 1
+    assert cloned.hand_sizes[0] == hand_size_p0_before - 1
+    assert cloned.get_mana_pool(0)["G"] == 0
+
+    # Source untouched on every axis the clone moved.
+    assert synthetic_state.find_object_zone(elf_id) == ZONE_HAND
+    # On the source the elf is still in hand — `is_summoning_sick`
+    # only looks on the battlefield (returns None for non-bf objects).
+    assert synthetic_state.is_summoning_sick(elf_id) is None
+    assert synthetic_state.battlefield_sizes[0] == bf_size_p0_before
+    assert synthetic_state.hand_sizes[0] == hand_size_p0_before
+    assert synthetic_state.get_mana_pool(0)["G"] == 1
+
+
+def test_fingerprint_changes_after_cast(synthetic_state):
+    """Cross-feature with fingerprint: casting a creature mutates the
+    hand zone signature, the battlefield zone signature, AND the
+    mana_pool signature — all three feed into the SHA1 digest (see
+    state_ops_fingerprint.rs docstring). The fingerprint must
+    therefore change after a successful cast.
+
+    Pinning: same starting fingerprint twice (determinism), then a
+    different fingerprint post-cast (sensitivity)."""
+    elf_id = P0_FIRST_HAND_ID
+    synthetic_state.add_mana(0, "G", 1)
+
+    fp_pre = synthetic_state.fingerprint()
+    # Sanity: determinism — same state, same hash.
+    assert synthetic_state.fingerprint() == fp_pre
+
+    assert synthetic_state.cast_creature(elf_id, 0) is True
+
+    fp_post = synthetic_state.fingerprint()
+    assert fp_post != fp_pre
+
+
+def test_two_casts_in_succession_drain_mana_independently(synthetic_state):
+    """Cross-feature: casting two creature spells in succession from
+    the same hand requires the mana pool to track both spends
+    cumulatively. Two Llanowar Elves @ {G} each = 2 green needed.
+    Both elves land, hand drops by 2, pool ends empty. Second cast
+    has no special interaction with the first (the Rust
+    ``cast_creature`` short-circuits the stack — the first cast is
+    already on the battlefield by the time the second runs).
+
+    Captures the "second-cast sees the first's state" composition
+    in the no-stack Rust model: post-first-cast, hand is shorter and
+    the pool has one fewer pip, and the second cast reads from that
+    updated state."""
+    elf_a = P0_FIRST_HAND_ID
+    elf_b = P0_FIRST_HAND_ID + 1  # hand[1] is also a Llanowar Elves
+    assert synthetic_state.printing_name_of(elf_b) == "Llanowar Elves"
+    synthetic_state.add_mana(0, "G", 2)
+    bf_before = synthetic_state.battlefield_sizes[0]
+    hand_before = synthetic_state.hand_sizes[0]
+
+    assert synthetic_state.cast_creature(elf_a, 0) is True
+    # After the first cast, pool has 1 G left and hand shrunk by 1.
+    assert synthetic_state.get_mana_pool(0)["G"] == 1
+    assert synthetic_state.hand_sizes[0] == hand_before - 1
+    assert synthetic_state.battlefield_sizes[0] == bf_before + 1
+    assert synthetic_state.find_object_zone(elf_a) == ZONE_BATTLEFIELD
+
+    assert synthetic_state.cast_creature(elf_b, 0) is True
+    # Pool empty, hand shrunk by 2, both elves on battlefield.
+    assert synthetic_state.get_mana_pool(0)["G"] == 0
+    assert synthetic_state.hand_sizes[0] == hand_before - 2
+    assert synthetic_state.battlefield_sizes[0] == bf_before + 2
+    assert synthetic_state.find_object_zone(elf_b) == ZONE_BATTLEFIELD
+
+
+def test_cast_then_counter_via_effect_dispatch_lands_in_graveyard(synthetic_state):
+    """Cross-feature with counterspell + Effect dispatch: simulate
+    a "cast then counter" sequence end-to-end. Because
+    ``cast_creature`` short-circuits the stack, we drive the
+    creature's cast through the stack manually (register + push)
+    so a counter can actually catch it. The Annul-style
+    ``Effect::CounterTargetSpell`` removes the targeted creature
+    from the stack and routes it to the target's controller's
+    graveyard; the counter's own post-resolve goes to its
+    controller's graveyard.
+
+    Net result: BOTH spells in graveyards, NEITHER on the
+    battlefield. Mirrors ``test_effect_counters_creature_beneath_routes_correct_graveyards``
+    in test_counterspell.py but framed as a "cast then counter"
+    interaction from the cast slice's perspective."""
+    creature_id = synthetic_state.register_and_inject_object(
+        {
+            "name": "Test Castable Bear",
+            "card_types": ["Creature"],
+            "mana_cost": {"generic": 1, "G": 1},
+            "power": 2,
+            "toughness": 2,
+            "keywords": [],
+            "effects": [],
+        },
+        1,
+        ZONE_HAND,
+    )
+    counter_id = synthetic_state.register_and_inject_object(
+        _annul_dict(), 0, ZONE_HAND
+    )
+    # p1 cast-equivalent: push the creature on the stack.
+    synthetic_state.push_to_stack(creature_id, 1)
+    # p0 counter-equivalent: push the counterspell on top.
+    synthetic_state.push_to_stack(counter_id, 0)
+
+    p0_gy_before = synthetic_state.graveyard_sizes[0]
+    p1_gy_before = synthetic_state.graveyard_sizes[1]
+    p0_bf_before = synthetic_state.battlefield_sizes[0]
+    p1_bf_before = synthetic_state.battlefield_sizes[1]
+
+    # Resolve the top (counter). Counter dispatch removes the creature
+    # stack item AND moves it to p1's graveyard. The outer resolver
+    # then post-resolves the counter to p0's graveyard.
+    synthetic_state.resolve_top_of_stack()
+
+    # Stack drained.
+    assert synthetic_state.is_stack_empty() is True
+    # Creature countered -> p1's graveyard (NOT battlefield).
+    assert synthetic_state.find_object_zone(creature_id) == ZONE_GRAVEYARD
+    assert synthetic_state.graveyard_sizes[1] == p1_gy_before + 1
+    assert synthetic_state.battlefield_sizes[1] == p1_bf_before
+    # Counter resolved -> p0's graveyard (NOT battlefield).
+    assert synthetic_state.find_object_zone(counter_id) == ZONE_GRAVEYARD
+    assert synthetic_state.graveyard_sizes[0] == p0_gy_before + 1
+    assert synthetic_state.battlefield_sizes[0] == p0_bf_before
