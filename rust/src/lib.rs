@@ -14,6 +14,7 @@ mod state_ops_combat;
 mod state_ops_counters;
 mod state_ops_counterspell;
 mod state_ops_damage;
+mod state_ops_deck;
 mod state_ops_library;
 mod state_ops_life;
 mod state_ops_mana;

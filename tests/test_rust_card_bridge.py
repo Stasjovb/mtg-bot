@@ -140,6 +140,53 @@ def test_gain_life_missing_amount_raises():
         )
 
 
+def test_round_trip_return_to_hand_effect():
+    reg = mtg_bot_engine.Registry()
+    pid = reg.register_printing(
+        {
+            "name": "Unsummon-ish",
+            "mana_cost": {"U": 1},
+            "card_types": ["Instant"],
+            "effects": [
+                {"kind": "return_to_hand", "target": {"kind": "any_creature"}}
+            ],
+        }
+    )
+    effects = [dict(e) for e in reg.get_printing_effects(pid)]
+    assert effects[0]["kind"] == "return_to_hand"
+    assert dict(effects[0]["target"]) == {"kind": "any_creature"}
+
+
+def test_round_trip_mill_effect():
+    reg = mtg_bot_engine.Registry()
+    pid = reg.register_printing(
+        {
+            "name": "Tome Scour-ish",
+            "mana_cost": {"U": 1},
+            "card_types": ["Sorcery"],
+            "effects": [{"kind": "mill", "count": 5}],
+        }
+    )
+    effects = [dict(e) for e in reg.get_printing_effects(pid)]
+    assert effects[0] == {"kind": "mill", "count": 5}
+
+
+def test_return_to_hand_missing_target_raises():
+    reg = mtg_bot_engine.Registry()
+    with pytest.raises(KeyError, match="target"):
+        reg.register_printing(
+            {"name": "Broken", "effects": [{"kind": "return_to_hand"}]}
+        )
+
+
+def test_mill_missing_count_raises():
+    reg = mtg_bot_engine.Registry()
+    with pytest.raises(KeyError, match="count"):
+        reg.register_printing(
+            {"name": "Broken", "effects": [{"kind": "mill"}]}
+        )
+
+
 def test_vanilla_card_with_no_mana_cost_or_effects():
     reg = mtg_bot_engine.Registry()
     pid = reg.register_printing(VANILLA_BLANK)

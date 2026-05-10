@@ -331,6 +331,15 @@ fn apply_effect(state: &mut GameState, effect: &Effect) -> PyResult<()> {
             let controller = state.active_player as usize;
             state.players[controller].life += *amount;
         }
+        // Round-10 stub: ReturnToHand / Mill variants exist in the
+        // bridge but haven't been wired to resolution yet. Foundation
+        // commit gets the build green; the round-10 resolve agent
+        // replaces these arms with real dispatch.
+        Effect::ReturnToHand { .. } | Effect::Mill { .. } => {
+            return Err(pyo3::exceptions::PyValueError::new_err(
+                "Effect variant not yet wired to resolve_top_of_stack — round-10 resolve agent fills this in",
+            ));
+        }
     }
     Ok(())
 }

@@ -62,6 +62,12 @@ pub enum Effect {
     /// controller is implicit. Real "target player gains N life"
     /// effects need a player-target variant.
     GainLife { amount: i32 },
+    /// Bounce: target permanent's owner (= controller in first slice)
+    /// puts it back into their hand. Composes round-1 zones move.
+    ReturnToHand { target: TargetFilter },
+    /// Mill: caller's controller puts the top `count` cards of their
+    /// library into their graveyard. No target — controller implicit.
+    Mill { count: i32 },
 }
 
 #[derive(Clone, Debug)]
@@ -196,8 +202,20 @@ fn parse_effect(dict: &Bound<'_, PyDict>) -> PyResult<Effect> {
             let amount: i32 = require(dict, "amount")?.extract()?;
             Ok(Effect::GainLife { amount })
         }
+        "return_to_hand" => {
+            let target_any = require(dict, "target")?;
+            let target_dict = target_any.downcast::<PyDict>().map_err(|_| {
+                PyValueError::new_err("return_to_hand.target must be a dict")
+            })?;
+            let target = parse_target_filter(target_dict)?;
+            Ok(Effect::ReturnToHand { target })
+        }
+        "mill" => {
+            let count: i32 = require(dict, "count")?.extract()?;
+            Ok(Effect::Mill { count })
+        }
         other => Err(PyValueError::new_err(format!(
-            "unknown effect kind {other:?}; valid: deal_damage, draw_cards, gain_life"
+            "unknown effect kind {other:?}; valid: deal_damage, draw_cards, gain_life, return_to_hand, mill"
         ))),
     }
 }
@@ -392,6 +410,14 @@ fn effect_to_pydict<'py>(
         Effect::GainLife { amount } => {
             d.set_item("kind", "gain_life")?;
             d.set_item("amount", *amount)?;
+        }
+        Effect::ReturnToHand { target } => {
+            d.set_item("kind", "return_to_hand")?;
+            d.set_item("target", target_filter_to_pydict(py, target)?)?;
+        }
+        Effect::Mill { count } => {
+            d.set_item("kind", "mill")?;
+            d.set_item("count", *count)?;
         }
     }
     Ok(d)
