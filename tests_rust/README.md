@@ -169,6 +169,7 @@ the test lands in a commit.
 | rust(effect-destroy-target-non-land-permanent): non-land destroy (CR 701.7) | tests_rust/test_resolve.py extend | green  | feature/rust-effect-destroy-target-non-land-permanent |
 | rust(activate-ability-mana-primitive): flip ActivateAbility stub to real (mana abilities) | tests_rust/test_actions.py extend | green  | feature/rust-activate-ability-mana-primitive |
 | rust(effect-deal-damage-any-target): Lightning Bolt-style any-target damage (CR 701.4) | tests_rust/test_resolve.py extend | green  | feature/rust-effect-deal-damage-any-target |
+| rust(effect-lose-life): controller loses life (CR 118.4) | tests_rust/test_resolve.py extend | green  | feature/rust-effect-lose-life |
 
 ## Build invocation reminder
 

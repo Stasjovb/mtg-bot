@@ -1193,6 +1193,84 @@ def test_each_opponent_loses_life_negative_amount_raises():
         )
 
 
+# --- LoseLife round-trip + error paths -----------------------------
+#
+# CR 118.4 — life loss (not damage). Powers the Decode Transmissions
+# pattern (7 EoE cards) — the SOURCE's controller pays a life cost on
+# resolution. Distinct from `each_opponent_loses_life` (round 26): the
+# round-trip shape is identical (required `amount` field), but the
+# DISPATCH subtracts from the source's CONTROLLER's life, not the
+# opponent's. Mirrors Python's `LoseLife(amount: int)` dataclass shape.
+
+
+def test_round_trip_lose_life_amount_two():
+    """Happy path: amount=2 round-trips faithfully. Mirrors Python's
+    `LoseLife(amount: int)` dataclass shape — required `amount` field
+    with no default."""
+    reg = mtg_bot_engine.Registry()
+    pid = reg.register_printing(
+        {
+            "name": "Test Decode Transmissions",
+            "card_types": ["Sorcery"],
+            "mana_cost": {"U": 1, "generic": 2},
+            "effects": [{"kind": "lose_life", "amount": 2}],
+        }
+    )
+    effects = [dict(e) for e in reg.get_printing_effects(pid)]
+    assert effects[0] == {"kind": "lose_life", "amount": 2}
+
+
+def test_round_trip_lose_life_amount_zero():
+    """amount=0 is a legal no-op shape (mirrors GainLife / DrawCards /
+    Mill / EachOpponentLosesLife / DiscardSelf zero-amount round-trip
+    conventions). Registers and round-trips without error."""
+    reg = mtg_bot_engine.Registry()
+    pid = reg.register_printing(
+        {
+            "name": "Test Zero Drawback",
+            "card_types": ["Sorcery"],
+            "effects": [{"kind": "lose_life", "amount": 0}],
+        }
+    )
+    effects = [dict(e) for e in reg.get_printing_effects(pid)]
+    assert effects[0] == {"kind": "lose_life", "amount": 0}
+
+
+def test_lose_life_missing_amount_raises():
+    """Python's `LoseLife(amount: int)` has no default — the Rust
+    parser mirrors that: omitting `amount` raises KeyError at register
+    time (defense-in-depth, surfaced earlier than the resolve guard).
+    Mirrors EachOpponentLosesLife / DamageEachOpponent shape — distinct
+    from DiscardSelf / PutPlusOneCounterOnSelf which default to
+    amount=1."""
+    reg = mtg_bot_engine.Registry()
+    with pytest.raises(KeyError, match="amount"):
+        reg.register_printing(
+            {
+                "name": "Broken",
+                "card_types": ["Sorcery"],
+                "effects": [{"kind": "lose_life"}],
+            }
+        )
+
+
+def test_lose_life_negative_amount_raises():
+    """Register-time guard on negative amount (matches the apply_effect
+    guard, surfaced earlier in the pipeline). Mirrors
+    EachOpponentLosesLife / DamageEachOpponent / DiscardSelf negative
+    register-time check shape — 'lose -2 life' is schema nonsense
+    (use GainLife for raising life totals)."""
+    reg = mtg_bot_engine.Registry()
+    with pytest.raises(ValueError, match="non-negative"):
+        reg.register_printing(
+            {
+                "name": "Broken",
+                "card_types": ["Sorcery"],
+                "effects": [{"kind": "lose_life", "amount": -1}],
+            }
+        )
+
+
 # --- DestroyTargetNonlandPermanent round-trip ---------------------
 #
 # Round-25 bridge ext: closed-vocabulary unit variant mirroring

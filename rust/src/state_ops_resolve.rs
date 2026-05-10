@@ -1858,6 +1858,79 @@ fn apply_effect(
             state.players[opponent_idx].life =
                 state.players[opponent_idx].life.saturating_sub(*amount);
         }
+        // LoseLife: CR 118.4 — "life loss" (not damage). The SOURCE's
+        // controller loses `amount` life. Punisher / drawback pattern
+        // (Decode Transmissions shape) — 7 cards in the EoE pool per
+        // round-20 measurement.
+        //
+        // **Distinct from round-26 EachOpponentLosesLife.** Same source-
+        // finder pattern (5-zone walk + stack scan), but the recipient
+        // is the source's CONTROLLER (typically the caster paying a
+        // self-inflicted life cost) — NOT the controller's opponent.
+        // Inverted target on an otherwise identical dispatch shape.
+        //
+        // **Source-finder dispatch (round-24 pattern).** Walks both
+        // players' five tracked zones (hand / library / battlefield /
+        // graveyard / exile) plus the stack to recover the source's
+        // `controller`. Mirrors EachOpponentLosesLife / DiscardSelf —
+        // punisher effects fire on whoever controls the source
+        // regardless of where the source currently sits, since the
+        // `controller` field doesn't change on zone moves.
+        //
+        // **Direct life subtraction.** Negative life is handled by the
+        // SBA loop (round-5+); no clamp here beyond the saturating_sub
+        // that prevents underflow on the i32.
+        //
+        // **amount<0 raises** loudly (defense-in-depth; parse_effect
+        // catches at register time). **amount=0 is a legal no-op**
+        // (mirrors GainLife / DrawCards / Mill / EachOpponentLosesLife
+        // / DiscardSelf zero-amount conventions). **Source not found
+        // anywhere = silent fizzle** (lost-track-of-source tolerance,
+        // mirrors EachOpponentLosesLife / DiscardSelf shape).
+        Effect::LoseLife { amount } => {
+            if *amount < 0 {
+                return Err(PyValueError::new_err(format!(
+                    "LoseLife amount must be non-negative, got {amount}"
+                )));
+            }
+            // Source-controller resolution mirrors round-24
+            // EachOpponentLosesLife / DiscardSelf 5-zone walk + stack
+            // scan.
+            let mut source_controller: Option<u8> = None;
+            'outer: for player in state.players.iter() {
+                for zone in [
+                    &player.hand,
+                    &player.library,
+                    &player.battlefield,
+                    &player.graveyard,
+                    &player.exile,
+                ] {
+                    for obj in zone.iter() {
+                        if obj.id == source_obj_id {
+                            source_controller = Some(obj.controller);
+                            break 'outer;
+                        }
+                    }
+                }
+            }
+            if source_controller.is_none() {
+                if let Some(item) = state
+                    .stack
+                    .iter()
+                    .find(|i| i.source_obj_id == source_obj_id)
+                {
+                    source_controller = Some(item.controller);
+                }
+            }
+            let Some(controller) = source_controller else {
+                return Ok(()); // source not found: silent fizzle
+            };
+            let controller_idx = controller as usize;
+            // CONTROLLER (not opponent) loses life — distinguishes from
+            // round-26 EachOpponentLosesLife.
+            state.players[controller_idx].life =
+                state.players[controller_idx].life.saturating_sub(*amount);
+        }
         // Round-24: DestroyAllCreatures. CR 701.7 + 701.4 AOE — Wrath
         // of God pattern. Destroys every creature on the battlefield
         // (both players), honoring indestructible (CR 702.12) inline.
