@@ -175,6 +175,52 @@ def test_empty_mana_pool_unknown_player_raises(synthetic_state):
         synthetic_state.empty_mana_pool(99)
 
 
+# --- empty_all_mana_pools (CR 106.4) --------------------------------
+
+
+def test_empty_all_mana_pools_drains_both(synthetic_state):
+    """``empty_all_mana_pools`` zeroes BOTH players' pools in one call.
+
+    CR 106.4: "When a phase or step ends, each player's mana pool
+    empties." Round-2 added the per-player ``empty_mana_pool``;
+    this is the multi-player wrapper that the phase/step-end machinery
+    will call."""
+    synthetic_state.add_mana(0, "G", 3)
+    synthetic_state.add_mana(1, "W", 2)
+    synthetic_state.empty_all_mana_pools()
+    expected_zero = {"W": 0, "U": 0, "B": 0, "R": 0, "G": 0, "C": 0}
+    assert synthetic_state.get_mana_pool(0) == expected_zero
+    assert synthetic_state.get_mana_pool(1) == expected_zero
+
+
+def test_empty_all_mana_pools_no_op_on_empty(synthetic_state):
+    """Calling on already-empty pools is a quiet no-op (no error,
+    pools stay empty). This is the common case at end-of-step when
+    no player produced mana that step."""
+    expected_zero = {"W": 0, "U": 0, "B": 0, "R": 0, "G": 0, "C": 0}
+    assert synthetic_state.get_mana_pool(0) == expected_zero
+    assert synthetic_state.get_mana_pool(1) == expected_zero
+    synthetic_state.empty_all_mana_pools()
+    assert synthetic_state.get_mana_pool(0) == expected_zero
+    assert synthetic_state.get_mana_pool(1) == expected_zero
+
+
+def test_empty_all_mana_pools_clone_isolation(synthetic_state):
+    """CoW canary — emptying on a clone leaves the original pools
+    untouched. ManaPool is by-value-Copy in Player, so this should
+    "just work" the same way the per-player empty does."""
+    synthetic_state.add_mana(0, "G", 4)
+    synthetic_state.add_mana(1, "U", 2)
+    cloned = synthetic_state.clone_once()
+    cloned.empty_all_mana_pools()
+    expected_zero = {"W": 0, "U": 0, "B": 0, "R": 0, "G": 0, "C": 0}
+    assert cloned.get_mana_pool(0) == expected_zero
+    assert cloned.get_mana_pool(1) == expected_zero
+    # Original untouched.
+    assert synthetic_state.get_mana_pool(0)["G"] == 4
+    assert synthetic_state.get_mana_pool(1)["U"] == 2
+
+
 # --- tap_for_mana ---------------------------------------------------
 
 
