@@ -154,6 +154,32 @@ impl GameState {
         }
     }
 
+    /// Read-only snapshot of the entire stack as a list of dicts, one
+    /// per `StackItem`, in bottom-to-top order (Vec iteration order =
+    /// stack[0] is bottom, stack[-1] is top — matches how
+    /// `peek_top_of_stack` returns `stack.last()`).
+    ///
+    /// Each dict carries the same two keys as `peek_top_of_stack` /
+    /// `pop_top_of_stack` — `source_obj_id` and `controller`. The
+    /// returned dicts are freshly allocated; mutating them does NOT
+    /// affect the underlying Rust `StackItem` storage (this is the
+    /// round-21 bridge pattern: `state.stack_snapshot()` parallels
+    /// `state.hand_snapshot()` et al., and the parity harness's
+    /// `_zone_signature` walks the returned list dict-by-dict).
+    ///
+    /// Not a `#[getter]` — pymethods returning `Vec<Bound<PyDict>>`
+    /// compose cleanly here and `state.stack_snapshot()` matches the
+    /// established round-21 bridge naming.
+    fn stack_snapshot<'py>(
+        &self,
+        py: Python<'py>,
+    ) -> PyResult<Vec<Bound<'py, PyDict>>> {
+        self.stack
+            .iter()
+            .map(|item| stack_item_to_dict(py, item))
+            .collect()
+    }
+
     /// Remove the FIRST stack item with the given `source_obj_id`.
     /// Returns `true` if an item was removed, `false` otherwise (no
     /// matching item -> no mutation).
