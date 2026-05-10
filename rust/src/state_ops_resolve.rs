@@ -539,6 +539,14 @@ fn apply_effect(state: &mut GameState, effect: &Effect) -> PyResult<()> {
                 }
             }
         },
+        // Round-13 stub: UntapTarget exists in the bridge but isn't
+        // wired to resolution yet. Round-13 resolve agent fills this
+        // in.
+        Effect::UntapTarget { .. } => {
+            return Err(PyValueError::new_err(
+                "UntapTarget not yet wired to resolve_top_of_stack — round-13 resolve agent fills this in",
+            ));
+        }
     }
     Ok(())
 }
