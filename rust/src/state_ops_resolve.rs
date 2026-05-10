@@ -833,19 +833,114 @@ fn apply_effect(state: &mut GameState, effect: &Effect) -> PyResult<()> {
             // dispatch on it today.
             let _controller = state.active_player as usize;
         }
-        // Foundation stubs: round-17 resolve-destroy-aoe slice replaces
-        // both arms with real dispatch. E0004 exhaustiveness would
-        // otherwise reject the build the moment the variants land in
-        // cards.rs.
-        Effect::DestroyTarget { .. } => {
-            return Err(PyValueError::new_err(
-                "Effect::DestroyTarget dispatch not yet implemented (round-17 foundation stub)",
-            ));
-        }
-        Effect::DamageEachOpponent { .. } => {
-            return Err(PyValueError::new_err(
-                "Effect::DamageEachOpponent dispatch not yet implemented (round-17 foundation stub)",
-            ));
+        // Round-17: DestroyTarget. CR 701.7 — a destroyed permanent is
+        // put into its owner's graveyard.
+        //
+        // Targeting (mirrors DealDamage / ReturnToHand / ExileTarget /
+        // TapTarget):
+        //   - AnyCreature -> first object on the DEFENDING player's
+        //     battlefield (smallest index). No creature-type filter.
+        //     If the defender's battlefield is empty, the spell
+        //     fizzles silently.
+        //   - AnyPlayer -> semantically nonsense for destroy (you can't
+        //     destroy a player). Raise ValueError loudly, matching the
+        //     ReturnToHand / ExileTarget / TapTarget / UntapTarget /
+        //     Sacrifice / AddCounters AnyPlayer shape.
+        //
+        // **Asymmetric vs Sacrifice.** Sacrifice picks the ACTIVE
+        // player's own battlefield; DestroyTarget picks the DEFENDING
+        // player's battlefield. Diverges from the "you sacrifice your
+        // own permanent" semantics — destroy is the standard removal
+        // shape (Murder / Doom Blade / Naturalize) targeting an
+        // opponent's permanent.
+        //
+        // **Indestructible is honored** (CR 702.12): if the target's
+        // printing has the ``indestructible`` keyword, the destroy is
+        // suppressed silently — Ok(()) with no permanent movement.
+        // Mirrors the round-13 SBA indestructible logic. Effect still
+        // ran (no error); the stack still pops, the source still
+        // moves post-resolve.
+        //
+        // **Object-state reset on zone change** (CR 400.7) — tapped /
+        // summoning_sick / damage / counters reset on the way to
+        // graveyard, mirroring the ReturnToHand / ExileTarget /
+        // Sacrifice reset convention.
+        //
+        // **Inlining note (cross-file friction).** Per per-slice file-
+        // isolation, we inline the minimal Arc::make_mut pop-from-
+        // battlefield + push-to-graveyard here, mirroring how
+        // Sacrifice / ExileTarget / ReturnToHand inline their
+        // primitives for the same E0624 cross-file reason.
+        Effect::DestroyTarget { target } => match target {
+            TargetFilter::AnyPlayer => {
+                return Err(PyValueError::new_err(
+                    "DestroyTarget with AnyPlayer target is semantically nonsense (cannot destroy a player)",
+                ));
+            }
+            TargetFilter::AnyCreature => {
+                let defender = (1 - state.active_player) as usize;
+                let bf = &state.players[defender].battlefield;
+                if bf.is_empty() {
+                    return Ok(()); // fizzle silently
+                }
+                let target_id = bf[0].id;
+                // Indestructible check: peek the target's printing's
+                // keywords before mutating anything. Suppress the
+                // destroy silently if "indestructible" is present.
+                let target_printing_id = bf[0].printing_id;
+                let is_indestructible = match state.registry.lookup(target_printing_id) {
+                    Some(printing) => printing
+                        .keywords
+                        .iter()
+                        .any(|k| k == "indestructible"),
+                    None => false,
+                };
+                if is_indestructible {
+                    return Ok(()); // CR 702.12 — suppress silently
+                }
+                // Pop from defender's battlefield. Use Arc::make_mut
+                // for CoW safety.
+                let bf_mut: &mut Vec<GameObject> =
+                    Arc::make_mut(&mut state.players[defender].battlefield);
+                let pos = bf_mut
+                    .iter()
+                    .position(|o| o.id == target_id)
+                    .expect("target_id was bf[0] but not found on re-scan");
+                let mut obj = bf_mut.remove(pos);
+                // Stamp graveyard zone + reset per-object state
+                // (CR 400.7). First-slice: target's controller ==
+                // owner, so push onto defender's graveyard (where
+                // the destroyed permanent's owner lives).
+                obj.zone = ZONE_GRAVEYARD;
+                obj.tapped = false;
+                obj.summoning_sick = false;
+                obj.damage = 0;
+                obj.counters = 0;
+                Arc::make_mut(&mut state.players[defender].graveyard).push(obj);
+            }
+        },
+        // Round-17: DamageEachOpponent. CR 701.4 + AOE pattern — the
+        // controller deals ``amount`` damage to each of their
+        // opponents.
+        //
+        // **Two-player engine first slice: damages the defender.** No
+        // explicit target — the controller is implicit
+        // (state.active_player) and the one opponent is the defender
+        // (1 - active_player). Mirrors the DealDamage AnyPlayer arm
+        // with implicit-defender targeting.
+        //
+        // **Negative ``amount`` raises** loudly (mirrors round-3
+        // DealDamage's raise-on-negative shape; "deal -2 damage" is
+        // schema nonsense). amount=0 is a legitimate no-op success
+        // (mirrors GainLife/DrawCards/Mill zero-count conventions).
+        Effect::DamageEachOpponent { amount } => {
+            if *amount < 0 {
+                return Err(PyValueError::new_err(format!(
+                    "DamageEachOpponent amount must be non-negative, got {amount}"
+                )));
+            }
+            let defender = (1 - state.active_player) as usize;
+            state.players[defender].life -= *amount;
         }
     }
     Ok(())

@@ -2636,3 +2636,336 @@ def test_resolve_scry_uses_active_player_library(synthetic_state):
     # Both libraries unchanged (first-slice keep-on-top is a no-op).
     assert synthetic_state.library_sizes[0] == p0_lib_before
     assert synthetic_state.library_sizes[1] == p1_lib_before
+
+
+# --- round-17 DestroyTarget dispatch --------------------------------
+#
+# **DestroyTarget scope** (mirrored in the Rust module docstring on
+# ``state_ops_resolve.rs``):
+#
+# - **AnyCreature target -> first object on the DEFENDING player's
+#   battlefield (smallest index).** No creature-type filter. Mirrors
+#   the DealDamage / TapTarget targeting convention; specifically
+#   ASYMMETRIC vs Sacrifice (which targets the active player's own
+#   battlefield).
+# - **AnyPlayer target raises** (semantically nonsense — you can't
+#   destroy a player). Matches the bounce/exile/tap/untap shape.
+# - **Indestructible is honored** — if the target's printing has
+#   "indestructible" in its keywords, the destroy is suppressed
+#   silently (mirrors the round-13 SBA indestructible logic). The
+#   stack still pops, the source still moves post-resolve, but no
+#   permanent moves out of the battlefield.
+# - **Empty defender battlefield fizzles silently** (stack still
+#   pops, source still moves post-resolve).
+# - **Per-object state reset on zone change** (CR 400.7) — tapped /
+#   summoning_sick / damage / counters all reset on the way to
+#   graveyard, mirroring the ReturnToHand / ExileTarget / Sacrifice
+#   reset convention.
+
+
+def _murder_dict():
+    """A destroy-target spell — Murder-shaped (instant, target creature
+    is destroyed)."""
+    return {
+        "name": "Test Murder",
+        "card_types": ["Instant"],
+        "mana_cost": {"B": 1, "generic": 2},
+        "effects": [
+            {
+                "kind": "destroy_target",
+                "target": {"kind": "any_creature"},
+            }
+        ],
+    }
+
+
+def _destroy_player_dict():
+    """Schema-allowed but semantically nonsense: DestroyTarget with
+    AnyPlayer target. Should raise on resolve (cannot destroy a
+    player)."""
+    return {
+        "name": "Test Destroy-Player (nonsense)",
+        "card_types": ["Sorcery"],
+        "mana_cost": {"B": 1},
+        "effects": [
+            {
+                "kind": "destroy_target",
+                "target": {"kind": "any_player"},
+            }
+        ],
+    }
+
+
+def _indestructible_creature_dict():
+    """A vanilla creature printing with the indestructible keyword.
+    Used to verify DestroyTarget honors indestructible (mirrors the
+    round-13 SBA logic)."""
+    return {
+        "name": "Test Stone Idol",
+        "card_types": ["Creature"],
+        "mana_cost": {"generic": 4},
+        "effects": [],
+        "power": 3,
+        "toughness": 3,
+        "keywords": ["indestructible"],
+    }
+
+
+def test_resolve_destroy_target_moves_to_graveyard(synthetic_state):
+    """End-to-end: resolving a DestroyTarget spell shrinks the
+    defender's battlefield by 1 and grows the defender's graveyard by
+    1. Source instant lands in p0's graveyard via post-resolve."""
+    # p1's bf[0] is obj_id 67 (Forest in synthetic seed).
+    target_obj_id = 67
+    assert synthetic_state.find_object_zone(target_obj_id) == ZONE_BATTLEFIELD
+
+    spell_obj_id = synthetic_state.register_and_inject_object(
+        _murder_dict(), 0, ZONE_HAND
+    )
+    p1_bf_before = synthetic_state.battlefield_sizes[1]
+    p1_grave_before = synthetic_state.graveyard_sizes[1]
+    p0_grave_before = synthetic_state.graveyard_sizes[0]
+
+    synthetic_state.push_to_stack(spell_obj_id, 0)
+    synthetic_state.resolve_top_of_stack()
+
+    # Target moved from p1's battlefield to p1's graveyard.
+    assert synthetic_state.find_object_zone(target_obj_id) == ZONE_GRAVEYARD
+    assert synthetic_state.battlefield_sizes[1] == p1_bf_before - 1
+    assert synthetic_state.graveyard_sizes[1] == p1_grave_before + 1
+    # Stack drained; source instant in p0's graveyard.
+    assert synthetic_state.is_stack_empty() is True
+    assert synthetic_state.find_object_zone(spell_obj_id) == ZONE_GRAVEYARD
+    assert synthetic_state.graveyard_sizes[0] == p0_grave_before + 1
+
+
+def test_resolve_destroy_target_resets_state(synthetic_state):
+    """Per-object state reset on zone change (CR 400.7): tapped /
+    damage / counters all reset on the way to graveyard. Pre-load the
+    target with non-default state, resolve a Murder, and verify after
+    moving to graveyard the find_object_zone reports graveyard and the
+    counters/damage on the underlying object reset."""
+    target_obj_id = 67
+    # Pre-load the target with non-default state so the reset is
+    # observable via the zone-changed read path.
+    synthetic_state.tap_object(target_obj_id)
+    synthetic_state.add_counters(target_obj_id, 3)
+    synthetic_state.deal_damage(target_obj_id, 2)
+    assert synthetic_state.get_counters(target_obj_id) == 3
+    assert synthetic_state.get_damage(target_obj_id) == 2
+
+    spell_obj_id = synthetic_state.register_and_inject_object(
+        _murder_dict(), 0, ZONE_HAND
+    )
+    synthetic_state.push_to_stack(spell_obj_id, 0)
+    synthetic_state.resolve_top_of_stack()
+
+    # Target moved to graveyard with reset state. The pre-r11 readers
+    # walk all four tracked zones (including graveyard) and read the
+    # underlying GameObject fields — so a successful reset on the way
+    # out means the readers all return zero/false.
+    assert synthetic_state.find_object_zone(target_obj_id) == ZONE_GRAVEYARD
+    assert synthetic_state.get_counters(target_obj_id) == 0
+    assert synthetic_state.get_damage(target_obj_id) == 0
+
+
+def test_resolve_destroy_target_indestructible_skipped(engine):
+    """If the defender's first battlefield object has the
+    ``indestructible`` keyword, DestroyTarget is suppressed silently.
+    The stack still pops, the source still moves post-resolve, but
+    the indestructible permanent stays on its current zone."""
+    state = engine.make_synthetic_state(
+        num_battlefield=0, num_hand=1, num_library=1
+    )
+    # Inject an indestructible creature onto p1's battlefield as bf[0].
+    indestructible_id = state.register_and_inject_object(
+        _indestructible_creature_dict(), 1, ZONE_BATTLEFIELD
+    )
+    spell_obj_id = state.register_and_inject_object(
+        _murder_dict(), 0, ZONE_HAND
+    )
+
+    p1_bf_before = state.battlefield_sizes[1]
+    p1_grave_before = state.graveyard_sizes[1]
+
+    state.push_to_stack(spell_obj_id, 0)
+    state.resolve_top_of_stack()
+
+    # Indestructible target stays put — destroy was suppressed.
+    assert state.find_object_zone(indestructible_id) == ZONE_BATTLEFIELD
+    assert state.battlefield_sizes[1] == p1_bf_before
+    assert state.graveyard_sizes[1] == p1_grave_before
+    # Stack still drained; source moved per CR 608.2m.
+    assert state.is_stack_empty() is True
+    assert state.find_object_zone(spell_obj_id) == ZONE_GRAVEYARD
+
+
+def test_resolve_destroy_target_anyplayer_raises(synthetic_state):
+    """DestroyTarget with an AnyPlayer target is semantically nonsense
+    (you can't destroy a player). The dispatch raises ValueError
+    loudly, matching the bounce/exile/tap/untap/sacrifice AnyPlayer
+    convention."""
+    spell_obj_id = synthetic_state.register_and_inject_object(
+        _destroy_player_dict(), 0, ZONE_HAND
+    )
+    synthetic_state.push_to_stack(spell_obj_id, 0)
+
+    with pytest.raises(ValueError):
+        synthetic_state.resolve_top_of_stack()
+
+
+def test_resolve_destroy_target_empty_battlefield_fizzles(engine):
+    """If the defender has no battlefield objects, DestroyTarget
+    fizzles silently — stack item still pops, source still moves
+    post-resolve, no zone deltas."""
+    state = engine.make_synthetic_state(
+        num_battlefield=0, num_hand=1, num_library=1
+    )
+    spell_obj_id = state.register_and_inject_object(
+        _murder_dict(), 0, ZONE_HAND
+    )
+    p1_bf_before = state.battlefield_sizes[1]
+    p1_grave_before = state.graveyard_sizes[1]
+    p0_grave_before = state.graveyard_sizes[0]
+
+    state.push_to_stack(spell_obj_id, 0)
+    state.resolve_top_of_stack()
+
+    # Stack drained, source moved (instant -> p0's graveyard), no
+    # battlefield/graveyard delta on p1.
+    assert state.is_stack_empty() is True
+    assert state.find_object_zone(spell_obj_id) == ZONE_GRAVEYARD
+    assert state.battlefield_sizes[1] == p1_bf_before
+    assert state.graveyard_sizes[1] == p1_grave_before
+    assert state.graveyard_sizes[0] == p0_grave_before + 1
+
+
+def test_resolve_destroy_target_targets_defender_not_active(synthetic_state):
+    """Asymmetric vs Sacrifice: DestroyTarget picks the DEFENDING
+    player's battlefield. Flip active_player to 1 via CLEANUP ->
+    UNTAP wrap. Now the defender is player 0; resolving Murder must
+    destroy the FIRST creature on player 0's battlefield (obj_id 0
+    in the synthetic seed), NOT one of player 1's permanents."""
+    # Flip active_player to 1.
+    synthetic_state.set_phase(PHASE_CLEANUP)
+    synthetic_state.advance_phase()
+    assert synthetic_state.active_player == 1
+
+    # p0's bf[0] is obj_id 0 in the synthetic seed.
+    target_obj_id = 0
+    assert synthetic_state.find_object_zone(target_obj_id) == ZONE_BATTLEFIELD
+
+    p0_bf_before = synthetic_state.battlefield_sizes[0]
+    p0_grave_before = synthetic_state.graveyard_sizes[0]
+    p1_bf_before = synthetic_state.battlefield_sizes[1]
+
+    spell_obj_id = synthetic_state.register_and_inject_object(
+        _murder_dict(), 1, ZONE_HAND
+    )
+    synthetic_state.push_to_stack(spell_obj_id, 1)
+    synthetic_state.resolve_top_of_stack()
+
+    # p0's bf[0] moved to p0's graveyard; p1's battlefield untouched.
+    assert synthetic_state.find_object_zone(target_obj_id) == ZONE_GRAVEYARD
+    assert synthetic_state.battlefield_sizes[0] == p0_bf_before - 1
+    assert synthetic_state.graveyard_sizes[0] == p0_grave_before + 1
+    assert synthetic_state.battlefield_sizes[1] == p1_bf_before
+
+
+# --- round-17 DamageEachOpponent dispatch ---------------------------
+#
+# **DamageEachOpponent scope** (mirrored in the Rust module docstring
+# on ``state_ops_resolve.rs``):
+#
+# - **Two-player engine: damages the defender by ``amount``.** No
+#   target — the controller is implicit (active_player) and the one
+#   opponent is the defender (1 - active_player). Mirrors the
+#   DealDamage AnyPlayer-with-implicit-controller shape but applies
+#   to "each opponent" — for two players that's just the defender.
+# - **amount=0 is a no-op success** (mirrors GainLife/DrawCards/Mill
+#   zero-count conventions).
+# - **amount<0 raises** loudly (mirrors round-3 DealDamage's raise-
+#   on-negative shape; "deal -2 damage" is schema nonsense).
+# - **Active player's life is untouched** — DamageEachOpponent does
+#   not damage the controller.
+
+
+def _earthquake_dict(amount=2):
+    """A damage-each-opponent spell — Earthquake-shaped (sorcery, deals
+    N damage to each opponent). First-slice two-player engine: damages
+    the defender by ``amount``."""
+    return {
+        "name": "Test Earthquake",
+        "card_types": ["Sorcery"],
+        "mana_cost": {"R": 1, "generic": 1},
+        "effects": [
+            {
+                "kind": "damage_each_opponent",
+                "amount": amount,
+            }
+        ],
+    }
+
+
+def test_resolve_damage_each_opponent_decrements_life(synthetic_state):
+    """End-to-end: resolving a 2-damage Earthquake reduces the
+    defender's life by 2; controller's life is untouched."""
+    spell_obj_id = synthetic_state.register_and_inject_object(
+        _earthquake_dict(amount=2), 0, ZONE_HAND
+    )
+    life_before = list(synthetic_state.life_totals)
+    synthetic_state.push_to_stack(spell_obj_id, 0)
+    synthetic_state.resolve_top_of_stack()
+
+    assert synthetic_state.is_stack_empty() is True
+    # Controller (p0) untouched; defender (p1) -2.
+    assert synthetic_state.life_totals[0] == life_before[0]
+    assert synthetic_state.life_totals[1] == life_before[1] - 2
+
+
+def test_resolve_damage_each_opponent_zero_no_op(synthetic_state):
+    """amount=0 is a legitimate no-op (mirrors DrawCards count=0
+    and GainLife amount=0). No life change, no error, stack pops."""
+    spell_obj_id = synthetic_state.register_and_inject_object(
+        _earthquake_dict(amount=0), 0, ZONE_HAND
+    )
+    life_before = list(synthetic_state.life_totals)
+    synthetic_state.push_to_stack(spell_obj_id, 0)
+    synthetic_state.resolve_top_of_stack()
+
+    assert synthetic_state.is_stack_empty() is True
+    assert list(synthetic_state.life_totals) == life_before
+
+
+def test_resolve_damage_each_opponent_negative_raises(synthetic_state):
+    """Negative amount is a schema error (mirrors round-3
+    DealDamage's raise-on-negative shape; "deal -2 damage" is
+    schema nonsense)."""
+    spell_obj_id = synthetic_state.register_and_inject_object(
+        _earthquake_dict(amount=-2), 0, ZONE_HAND
+    )
+    synthetic_state.push_to_stack(spell_obj_id, 0)
+
+    with pytest.raises(ValueError):
+        synthetic_state.resolve_top_of_stack()
+
+
+def test_resolve_damage_each_opponent_does_not_touch_active_player(
+    synthetic_state,
+):
+    """Asymmetric: DamageEachOpponent damages opponents only — the
+    active player (controller) is NOT damaged. Verify by recording
+    p0's life before and asserting it's unchanged after."""
+    p0_life_before = synthetic_state.life_totals[0]
+    p1_life_before = synthetic_state.life_totals[1]
+    assert synthetic_state.active_player == 0
+
+    spell_obj_id = synthetic_state.register_and_inject_object(
+        _earthquake_dict(amount=5), 0, ZONE_HAND
+    )
+    synthetic_state.push_to_stack(spell_obj_id, 0)
+    synthetic_state.resolve_top_of_stack()
+
+    # p0 (active / controller) untouched; p1 (the one opponent) -5.
+    assert synthetic_state.life_totals[0] == p0_life_before
+    assert synthetic_state.life_totals[1] == p1_life_before - 5
