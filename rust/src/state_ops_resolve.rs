@@ -1014,6 +1014,15 @@ fn apply_effect(state: &mut GameState, effect: &Effect) -> PyResult<()> {
                 }
             }
         }
+        Effect::CreateToken { .. } => {
+            // Round-19 foundation stub: real dispatch lands in
+            // feature/rust-tdd-resolve-create-token. Keeping the arm
+            // exhaustive (vs `_`) preserves the build-time E0004
+            // fail-loud property when future Effect variants land.
+            return Err(PyValueError::new_err(
+                "CreateToken dispatch not implemented yet (round 19 slice)",
+            ));
+        }
     }
     Ok(())
 }
