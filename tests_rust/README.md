@@ -121,6 +121,7 @@ the test lands in a commit.
 | rust(sba-counter-toughness): SBA uses counter-modified effective toughness (CR 704.5f/g) | tests_rust/test_sba.py extend | green | feature/rust-tdd-counters-cancel |
 | rust(library-search-and-shuffle): tutor-style search + always shuffle (CR 701.19) | tests_rust/test_library.py extend | green | feature/rust-tdd-search-and-shuffle |
 | rust(mulligan-london): mulligan_to_n parameterized hand size (CR 103.4) | tests_rust/test_mulligan.py extend | green | feature/rust-tdd-mulligan-london |
+| rust(cleanup-end-turn-wrap): end_turn_and_start_next composition primitive | tests_rust/test_cleanup.py extend | green | feature/rust-tdd-end-of-turn-wrap |
 
 ## Build invocation reminder
 
