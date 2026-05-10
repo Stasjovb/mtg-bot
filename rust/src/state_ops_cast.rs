@@ -22,7 +22,19 @@
 //!   flag lives on ``GameState`` (today's ``GameState`` has no such
 //!   field — adding one would force an edit on ``state.rs`` that
 //!   sibling slices need to keep clean this round).
-//! - **No sorcery-speed restrictions.** Same rationale.
+//! - **No sorcery-speed restriction (CR 307.1) yet — so flash
+//!   (CR 702.8) is currently a no-op.** ``cast_creature`` does not
+//!   gate on ``state.phase`` at all today: a creature spell can be
+//!   cast in any phase, including UNTAP, the opponent's combat,
+//!   etc. The Python side gates sorcery-speed in ``legal_actions``,
+//!   not in the play primitive. When a future slice adds the phase
+//!   gate (rejecting non-main casts), the same slice will read
+//!   ``printing.keywords`` for ``"flash"`` and skip the gate when
+//!   the keyword is present. Until that gate lands, flash creatures
+//!   already cast at any phase — vacuously satisfying the rule —
+//!   and the ``test_cast.py`` flash tests pin that behavior so the
+//!   future slice can extend the guard without regressing flash.
+//!   One-land-per-turn is still caller-side, same rationale.
 //!
 //! ## Type-based detectors: card_types from foundation r6 (cf1fc6c)
 //!

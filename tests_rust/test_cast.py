@@ -374,3 +374,155 @@ def test_play_land_clone_then_play_does_not_affect_original(synthetic_state):
     assert cloned.find_object_zone(forest_id) == ZONE_BATTLEFIELD
     # Source untouched: Forest still in hand.
     assert synthetic_state.find_object_zone(forest_id) == ZONE_HAND
+
+
+# --- flash (CR 702.8) -----------------------------------------------
+#
+# Flash makes a creature castable at instant speed: a flash creature can
+# be cast any time the player has priority — outside main phase, on the
+# opponent's turn, in response to a triggered ability, etc.
+#
+# **Documentation-only slice.** The current Rust ``cast_creature`` does
+# not gate on ``state.phase`` at all (sorcery-speed enforcement lives
+# in the Python ``legal_actions`` layer; this primitive is "move the
+# card and tag the state"). With no phase gate to bypass, "flash works"
+# is vacuously true: any creature, flash or not, casts in any phase.
+# These tests pin that behavior so the slice that adds the
+# sorcery-speed guard can NOT regress flash without going red here.
+# The mana-cost test exercises the orthogonal "all other gates stay
+# in place" guarantee called out in the round-19 task description.
+#
+# Phase constants — must match ``rust/src/state_ops_steps.rs``.
+PHASE_UNTAP = 0
+PHASE_BEGIN_COMBAT = 4
+PHASE_MAIN1 = 3
+
+
+def _flash_bear_dict():
+    """A 2/2 creature printing carrying just the ``flash`` keyword.
+    Cost {1}{G} matches Grizzly Bears so the existing mana-payment
+    coverage carries over. Shape mirrors ``_vigilance_bear_dict`` in
+    ``test_combat.py`` — register-and-inject is the standard test
+    harness for slice-local printings."""
+    return {
+        "name": "Test Flash Bear",
+        "card_types": ["Creature"],
+        "mana_cost": {"G": 1, "generic": 1},
+        "power": 2,
+        "toughness": 2,
+        "keywords": ["flash"],
+        "effects": [],
+    }
+
+
+def _vanilla_bear_dict():
+    """A 2/2 creature printing with NO keywords. Companion to
+    ``_flash_bear_dict`` — used by the regression test that proves
+    casting in non-main phases is unchanged for vanilla creatures
+    (i.e. the slice didn't accidentally add a phase guard)."""
+    return {
+        "name": "Test Vanilla Bear",
+        "card_types": ["Creature"],
+        "mana_cost": {"G": 1, "generic": 1},
+        "power": 2,
+        "toughness": 2,
+        "keywords": [],
+        "effects": [],
+    }
+
+
+def test_cast_creature_flash_in_untap_phase(synthetic_state):
+    """A flash creature can be cast in UNTAP — the most aggressively
+    non-main phase. Synthetic state's default phase IS UNTAP, but pin
+    the read explicitly so a future fixture change can't silently
+    move us off the test's intended phase."""
+    synthetic_state.set_phase(PHASE_UNTAP)
+    obj_id = synthetic_state.register_and_inject_object(
+        _flash_bear_dict(), 0, ZONE_HAND
+    )
+    synthetic_state.add_mana(0, "G", 1)
+    synthetic_state.add_mana(0, "C", 1)
+    bf_before = synthetic_state.battlefield_sizes[0]
+
+    assert synthetic_state.cast_creature(obj_id, 0) is True
+
+    assert synthetic_state.find_object_zone(obj_id) == ZONE_BATTLEFIELD
+    assert synthetic_state.battlefield_sizes[0] == bf_before + 1
+
+
+def test_cast_creature_flash_in_combat_phase(synthetic_state):
+    """A flash creature can be cast during combat (BEGIN_COMBAT here),
+    which is the most common real-game flash window — flashing in a
+    blocker after attackers are declared, or a flash creature in
+    response to a combat trigger."""
+    synthetic_state.set_phase(PHASE_BEGIN_COMBAT)
+    obj_id = synthetic_state.register_and_inject_object(
+        _flash_bear_dict(), 0, ZONE_HAND
+    )
+    synthetic_state.add_mana(0, "G", 1)
+    synthetic_state.add_mana(0, "C", 1)
+
+    assert synthetic_state.cast_creature(obj_id, 0) is True
+    assert synthetic_state.find_object_zone(obj_id) == ZONE_BATTLEFIELD
+
+
+def test_cast_creature_vanilla_in_non_main_phase_still_succeeds(synthetic_state):
+    """Regression / today's-reality canary: the slice does NOT add a
+    phase guard for vanilla creatures (sorcery-speed enforcement is
+    Python-side / a future Rust slice). This test pins that fact —
+    when the future slice tightens the gate, this test should be
+    updated alongside the gate so the change is visible."""
+    synthetic_state.set_phase(PHASE_BEGIN_COMBAT)
+    obj_id = synthetic_state.register_and_inject_object(
+        _vanilla_bear_dict(), 0, ZONE_HAND
+    )
+    synthetic_state.add_mana(0, "G", 1)
+    synthetic_state.add_mana(0, "C", 1)
+
+    # Today: succeeds (no phase guard exists). When the phase guard
+    # lands, this assertion flips to False and the test is renamed
+    # ``..._still_rejected`` per the round-19 task description.
+    assert synthetic_state.cast_creature(obj_id, 0) is True
+    assert synthetic_state.find_object_zone(obj_id) == ZONE_BATTLEFIELD
+
+
+def test_cast_creature_flash_on_opponents_turn(synthetic_state):
+    """Flash creature controlled by player 1 can be cast while player
+    0 is the active player (i.e. it's player 0's turn). Synthetic
+    state seeds ``active_player = 0``; we set the phase to a
+    non-main phase to be explicit, then cast as player 1."""
+    synthetic_state.set_phase(PHASE_BEGIN_COMBAT)
+    assert synthetic_state.active_player == 0
+    obj_id = synthetic_state.register_and_inject_object(
+        _flash_bear_dict(), 1, ZONE_HAND
+    )
+    synthetic_state.add_mana(1, "G", 1)
+    synthetic_state.add_mana(1, "C", 1)
+
+    assert synthetic_state.cast_creature(obj_id, 1) is True
+    assert synthetic_state.find_object_zone(obj_id) == ZONE_BATTLEFIELD
+
+
+def test_cast_creature_flash_still_respects_mana_cost(synthetic_state):
+    """Flash lifts the timing restriction, NOT the mana cost. A flash
+    creature still has to pay its full mana cost; insufficient mana
+    rejects the cast just like a vanilla creature would. Pins the
+    "all other gates stay in place" invariant from the round-19
+    task description."""
+    synthetic_state.set_phase(PHASE_BEGIN_COMBAT)
+    obj_id = synthetic_state.register_and_inject_object(
+        _flash_bear_dict(), 0, ZONE_HAND
+    )
+    # Only one G — short by one generic pip.
+    synthetic_state.add_mana(0, "G", 1)
+    pool_before = synthetic_state.get_mana_pool(0)
+    bf_before = synthetic_state.battlefield_sizes[0]
+    hand_before = synthetic_state.hand_sizes[0]
+
+    assert synthetic_state.cast_creature(obj_id, 0) is False
+
+    # No mutation: the flash creature stays in hand, pool untouched.
+    assert synthetic_state.find_object_zone(obj_id) == ZONE_HAND
+    assert synthetic_state.get_mana_pool(0) == pool_before
+    assert synthetic_state.battlefield_sizes[0] == bf_before
+    assert synthetic_state.hand_sizes[0] == hand_before
