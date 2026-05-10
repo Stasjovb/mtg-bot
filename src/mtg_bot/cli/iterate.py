@@ -87,6 +87,7 @@ from mtg_bot.training._iterate_helpers import (
     find_foreign_npzs,
 )
 from mtg_bot.training.data_gen import ReplayCaptureConfig
+from mtg_bot.training.gate import EVAL_GATE_THRESHOLD
 from mtg_bot.training.distributed import (
     EvalJobSpec,
     SelfPlayJobSpec,
@@ -1067,14 +1068,19 @@ def main(argv=None) -> None:  # pragma: no cover
         ),
     )
     parser.add_argument(
-        "--acceptance-threshold", type=float, default=0.0,
+        "--acceptance-threshold", type=float,
+        default=EVAL_GATE_THRESHOLD,
         help=(
             "Win-rate threshold the new NN must beat (vs the "
             "current best, in head-to-head eval) to be promoted "
-            "to 'best'. 0.0 (default) means always promote -- "
-            "simplest mode. 0.55 is the AlphaGo Zero gate. The "
-            "first iteration always promotes regardless (no "
-            "previous NN to compare against)."
+            "to 'best'. Default tracks "
+            "``mtg_bot.training.gate.EVAL_GATE_THRESHOLD`` (the "
+            "single source of truth for the gate everywhere in "
+            "the project). 0.0 means always promote — pass it "
+            "explicitly when bootstrapping or running smokes "
+            "where any-improvement isn't the goal. The first "
+            "iteration always promotes regardless (no previous "
+            "NN to compare against)."
         ),
     )
     parser.add_argument(
