@@ -1931,6 +1931,82 @@ fn apply_effect(
             state.players[controller_idx].life =
                 state.players[controller_idx].life.saturating_sub(*amount);
         }
+        // TargetOpponentLosesLife: CR 118.4 — "life loss" (not damage).
+        // Target opponent loses `amount` life. 2 cards in EoE pool per
+        // round-20 measurement (Dubious Delicacy etc.).
+        //
+        // **Distinct from EachOpponentLosesLife.** That arm hits ALL
+        // opponents (in 2-player land = the one opponent).
+        // TargetOpponentLosesLife is targeted — the caster CHOOSES which
+        // opponent loses life. In a 2-player engine these collapse to
+        // the same runtime effect, but the variants stay distinct to
+        // mirror Python's closed Effect vocabulary (targeted vs
+        // each-opponent semantics — round-15 pattern).
+        //
+        // **First-slice deterministic choice**: pick the one opponent
+        // (= 1 - controller). Multiplayer / archenemy work needs an
+        // explicit choice callback; deferred.
+        //
+        // **Source-finder dispatch (round-24 pattern).** Walks both
+        // players' five tracked zones (hand / library / battlefield /
+        // graveyard / exile) plus the stack to recover the source's
+        // `controller`. Mirrors EachOpponentLosesLife / LoseLife /
+        // DiscardSelf — punisher / targeted effects fire on whoever
+        // controls the source regardless of where the source currently
+        // sits, since the `controller` field doesn't change on zone
+        // moves.
+        //
+        // **amount<0 raises** loudly (defense-in-depth; parse_effect
+        // catches at register time). **amount=0 is a legal no-op**
+        // (mirrors GainLife / DrawCards / Mill / EachOpponentLosesLife
+        // / LoseLife zero-amount conventions). **Source not found
+        // anywhere = silent fizzle** (lost-track-of-source tolerance,
+        // mirrors EachOpponentLosesLife / LoseLife shape).
+        Effect::TargetOpponentLosesLife { amount } => {
+            if *amount < 0 {
+                return Err(PyValueError::new_err(format!(
+                    "TargetOpponentLosesLife amount must be non-negative, got {amount}"
+                )));
+            }
+            // Source-controller resolution (mirrors round-24 /
+            // round-25): 5-zone walk + stack scan.
+            let mut source_controller: Option<u8> = None;
+            'outer: for player in state.players.iter() {
+                for zone in [
+                    &player.hand,
+                    &player.library,
+                    &player.battlefield,
+                    &player.graveyard,
+                    &player.exile,
+                ] {
+                    for obj in zone.iter() {
+                        if obj.id == source_obj_id {
+                            source_controller = Some(obj.controller);
+                            break 'outer;
+                        }
+                    }
+                }
+            }
+            if source_controller.is_none() {
+                if let Some(item) = state
+                    .stack
+                    .iter()
+                    .find(|i| i.source_obj_id == source_obj_id)
+                {
+                    source_controller = Some(item.controller);
+                }
+            }
+            let Some(controller) = source_controller else {
+                return Ok(()); // source not found: silent fizzle
+            };
+            // 2-player: "target opponent" = the one opponent of the
+            // controller. Identical runtime behavior to
+            // EachOpponentLosesLife in 2-player land.
+            let opponent_id = 1 - controller;
+            let opponent_idx = opponent_id as usize;
+            state.players[opponent_idx].life =
+                state.players[opponent_idx].life.saturating_sub(*amount);
+        }
         // Round-24: DestroyAllCreatures. CR 701.7 + 701.4 AOE — Wrath
         // of God pattern. Destroys every creature on the battlefield
         // (both players), honoring indestructible (CR 702.12) inline.

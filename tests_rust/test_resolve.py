@@ -6259,3 +6259,187 @@ def test_resolve_lose_life_clone_isolation(synthetic_state):
     # Original untouched.
     assert synthetic_state.life_totals[0] == p0_life_before
     assert synthetic_state.stack_size() == 1
+
+
+# --- TargetOpponentLosesLife dispatch ------------------------------
+#
+# CR 118.4 — "life loss" (not damage). Target opponent loses `amount`
+# life. Dubious Delicacy pattern — 2 cards in the EoE pool per round-20
+# measurement.
+#
+# **Distinct from EachOpponentLosesLife (round 26).** That arm hits ALL
+# opponents (in 2-player land = the one opponent). TargetOpponentLosesLife
+# is targeted — the caster CHOOSES which opponent loses life. In a
+# 2-player engine these collapse to the same runtime effect; the
+# variants stay distinct to mirror Python's closed Effect vocabulary
+# (targeted vs each-opponent semantics — round-15 pattern). Future
+# multiplayer / archenemy work needs an explicit choice callback.
+#
+# **Source-finder dispatch (round-24 pattern).** Walks both players'
+# five tracked zones (hand / library / battlefield / graveyard /
+# exile) plus the stack to recover the source's `controller`. Mirrors
+# EachOpponentLosesLife / LoseLife / DiscardSelf.
+#
+# Direct life subtraction on the one opponent. amount=0 is a legal
+# no-op; amount<0 raises at register time. Source not found = silent
+# fizzle.
+
+
+def _dubious_delicacy_dict(amount=3, card_types=None):
+    """A Dubious-Delicacy-shaped printing: an artifact / instant /
+    sorcery whose effect makes target opponent lose `amount` life.
+
+    Default card_types=["Sorcery"] so the post-resolve mover sends the
+    source to its owner's graveyard. Tests that need a different
+    source-zone behavior override card_types.
+    """
+    if card_types is None:
+        card_types = ["Sorcery"]
+    p = {
+        "name": f"Test Dubious Delicacy (x{amount})",
+        "card_types": card_types,
+        "mana_cost": {"generic": 2},
+        "effects": [{"kind": "target_opponent_loses_life", "amount": amount}],
+    }
+    if "Creature" in card_types:
+        p["power"] = 1
+        p["toughness"] = 1
+    return p
+
+
+def test_resolve_target_opponent_loses_life_decrements_opponent_life(
+    synthetic_state,
+):
+    """Happy path: source on active player's (p0) battlefield with
+    amount=3 — p1 (the one opponent) loses 3 life; p0 untouched.
+    Dubious Delicacy's targeted variant collapses to the same end-state
+    as EachOpponentLosesLife in 2-player land."""
+    src_id = synthetic_state.register_and_inject_object(
+        _dubious_delicacy_dict(amount=3, card_types=["Creature"]),
+        0,
+        ZONE_BATTLEFIELD,
+    )
+    p0_life_before = synthetic_state.life_totals[0]
+    p1_life_before = synthetic_state.life_totals[1]
+
+    synthetic_state.push_to_stack(src_id, 0)
+    synthetic_state.resolve_top_of_stack()
+
+    assert synthetic_state.is_stack_empty() is True
+    # p0 (source's controller) untouched; p1 (the one opponent) -3.
+    assert synthetic_state.life_totals[0] == p0_life_before
+    assert synthetic_state.life_totals[1] == p1_life_before - 3
+
+
+def test_resolve_target_opponent_loses_life_amount_zero_no_op(
+    synthetic_state,
+):
+    """amount=0 is a legitimate no-op (mirrors GainLife / DrawCards /
+    Mill / EachOpponentLosesLife / LoseLife zero-amount conventions).
+    No life change, no error, stack pops."""
+    src_id = synthetic_state.register_and_inject_object(
+        _dubious_delicacy_dict(amount=0, card_types=["Creature"]),
+        0,
+        ZONE_BATTLEFIELD,
+    )
+    life_before = list(synthetic_state.life_totals)
+    synthetic_state.push_to_stack(src_id, 0)
+    synthetic_state.resolve_top_of_stack()
+
+    assert synthetic_state.is_stack_empty() is True
+    assert list(synthetic_state.life_totals) == life_before
+
+
+def test_resolve_target_opponent_loses_life_opponent_source_targets_active_player(
+    synthetic_state,
+):
+    """Target-opponent is OPPONENT-OF-CONTROLLER, NOT defender-of-
+    active-player. Source on p1's battlefield (controller=1) while
+    active_player stays p0 — resolving TargetOpponentLosesLife reduces
+    p0's life (the one opponent of p1), NOT p1's. Cross-controller-
+    active-player distinction matches EachOpponentLosesLife's
+    behavior."""
+    src_id = synthetic_state.register_and_inject_object(
+        _dubious_delicacy_dict(amount=4, card_types=["Creature"]),
+        1,
+        ZONE_BATTLEFIELD,
+    )
+    p0_life_before = synthetic_state.life_totals[0]
+    p1_life_before = synthetic_state.life_totals[1]
+    assert synthetic_state.active_player == 0
+
+    # Push with controller=1 (p1's source resolving on the stack).
+    synthetic_state.push_to_stack(src_id, 1)
+    synthetic_state.resolve_top_of_stack()
+
+    assert synthetic_state.is_stack_empty() is True
+    # p0 (the one opponent of p1) -4; p1 (controller) untouched.
+    assert synthetic_state.life_totals[0] == p0_life_before - 4
+    assert synthetic_state.life_totals[1] == p1_life_before
+
+
+def test_resolve_target_opponent_loses_life_negative_amount_raises_at_register(
+    synthetic_state,
+):
+    """Negative amount is a schema error (mirrors EachOpponentLosesLife
+    / LoseLife / DamageEachOpponent / DiscardSelf raise-on-negative
+    shape). The parse_effect bridge guard surfaces this at register
+    time — before resolution ever runs."""
+    with pytest.raises(ValueError):
+        synthetic_state.register_and_inject_object(
+            _dubious_delicacy_dict(amount=-2, card_types=["Creature"]),
+            0,
+            ZONE_BATTLEFIELD,
+        )
+
+
+def test_resolve_target_opponent_loses_life_source_in_graveyard_uses_controller(
+    synthetic_state,
+):
+    """The source-finder walks five zones — wider than the battlefield-
+    only scan PutPlusOneCounterOnSelf uses. Inject a source-shaped
+    object into p0's graveyard: the zone-scan picks up p0 as the
+    controller and resolves the life-loss on p1 (the one opponent of
+    the source's controller). Documents the 'source has left the
+    battlefield by resolve time' tolerance — the source's `controller`
+    field doesn't change on zone moves."""
+    src_id = synthetic_state.register_and_inject_object(
+        _dubious_delicacy_dict(amount=2, card_types=["Creature"]),
+        0,
+        ZONE_GRAVEYARD,
+    )
+    p0_life_before = synthetic_state.life_totals[0]
+    p1_life_before = synthetic_state.life_totals[1]
+
+    synthetic_state.push_to_stack(src_id, 0)
+    synthetic_state.resolve_top_of_stack()
+
+    # p1 (the one opponent of p0, recorded on the GameObject regardless
+    # of which zone it's in) -2; p0 untouched.
+    assert synthetic_state.life_totals[0] == p0_life_before
+    assert synthetic_state.life_totals[1] == p1_life_before - 2
+
+
+def test_resolve_target_opponent_loses_life_clone_isolation(synthetic_state):
+    """CoW canary: running TargetOpponentLosesLife on a clone leaves
+    the original state's life totals untouched. The arm writes
+    `players[idx].life` directly — confirm the GameState clone
+    semantics decouple the player Vec across clones."""
+    src_id = synthetic_state.register_and_inject_object(
+        _dubious_delicacy_dict(amount=2, card_types=["Creature"]),
+        0,
+        ZONE_BATTLEFIELD,
+    )
+    synthetic_state.push_to_stack(src_id, 0)
+    p1_life_before = synthetic_state.life_totals[1]
+
+    cloned = synthetic_state.clone_once()
+    cloned.resolve_top_of_stack()
+
+    # Clone diverged: p1 lost 2 life.
+    assert cloned.life_totals[1] == p1_life_before - 2
+    assert cloned.is_stack_empty() is True
+
+    # Original untouched.
+    assert synthetic_state.life_totals[1] == p1_life_before
+    assert synthetic_state.stack_size() == 1
