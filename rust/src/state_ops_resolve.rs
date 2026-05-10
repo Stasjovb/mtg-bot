@@ -1118,6 +1118,57 @@ fn apply_effect(state: &mut GameState, effect: &Effect) -> PyResult<()> {
                 next_id += 1;
             }
         }
+        // Round-23: AddManaToPool. CR 106.1 — the resolution of a mana
+        // ability. The active player (= controller of the resolving
+        // mana ability or stack item, first-slice convention mirrored
+        // from DealDamage / DrawCards / GainLife / CreateToken) gets
+        // ``amount`` mana of ``color`` credited to their pool.
+        //
+        // **Controller convention: ``state.active_player``** — same
+        // first-slice shape as every other implicit-controller arm.
+        // Real MTG plumbs the spell/ability controller through
+        // ``StackItem.controller``; deferred to a future slice along
+        // with the rest of the controller plumbing.
+        //
+        // **Negative ``amount`` raises** loudly (mirrors ScryN /
+        // DealDamage / DamageEach* / CreateToken raise-on-negative
+        // shape). amount=0 is a legitimate no-op success.
+        //
+        // **Inlining note (cross-file friction).** The Rust `add_mana`
+        // primitive on `GameState` lives in `state_ops_mana.rs`
+        // (round 2) — it does exactly what we need (validate
+        // non-negative, slot-mut by color, saturating_add). Routing
+        // through it would require a cross-`#[pymethods]` call which
+        // PyO3 lets us model only via `Bound::call_method1`, an awkward
+        // shape inside `apply_effect` where we already hold
+        // `state: &mut GameState`. Inlining the slot match here is
+        // simpler and keeps `apply_effect` as a pure-Rust dispatch.
+        // A follow-up consolidation slice can collapse this onto the
+        // shared primitive once cross-file private-fn calls are
+        // re-enabled.
+        Effect::AddManaToPool { color, amount } => {
+            if *amount < 0 {
+                return Err(PyValueError::new_err(format!(
+                    "AddManaToPool amount must be non-negative, got {amount}"
+                )));
+            }
+            let controller_idx = state.active_player as usize;
+            let pool = &mut state.players[controller_idx].mana_pool;
+            let amount_u8 = (*amount).min(u8::MAX as i32) as u8;
+            match color.as_str() {
+                "W" => pool.white = pool.white.saturating_add(amount_u8),
+                "U" => pool.blue = pool.blue.saturating_add(amount_u8),
+                "B" => pool.black = pool.black.saturating_add(amount_u8),
+                "R" => pool.red = pool.red.saturating_add(amount_u8),
+                "G" => pool.green = pool.green.saturating_add(amount_u8),
+                "C" => pool.colorless = pool.colorless.saturating_add(amount_u8),
+                other => {
+                    return Err(PyValueError::new_err(format!(
+                        "AddManaToPool: unknown color {other:?}; valid: W, U, B, R, G, C"
+                    )))
+                }
+            }
+        }
     }
     Ok(())
 }

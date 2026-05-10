@@ -144,6 +144,7 @@ the test lands in a commit.
 | rust(bridge-fingerprint): fingerprint() matching parity_smoke.py:hash_state | tests_rust/test_fingerprint.py | green  | feature/rust-bridge-fingerprint |
 | rust(state-from-decklists): make_state pyfunction | tests_rust/test_setup.py | green  | feature/rust-state-from-decklists |
 | rust(action-play-land): Action::PlayLand variant | tests_rust/test_actions.py extend | green  | feature/rust-action-play-land |
+| rust(effect-add-mana-to-pool): Effect::AddManaToPool dispatch | tests_rust/test_resolve.py extend | green  | feature/rust-effect-add-mana-to-pool |
 
 ## Build invocation reminder
 
