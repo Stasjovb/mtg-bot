@@ -703,3 +703,298 @@ def test_clone_then_resolve_gainlife_does_not_affect_original(synthetic_state):
     assert synthetic_state.stack_size() == 1
     # Clone: active player gained 3.
     assert cloned.life_totals[0] == 23
+
+
+# --- round-9 ETB-triggered effects ----------------------------------
+#
+# Round-9 foundation (`feature/rust-tdd-base-r9`) added a new
+# ``etb_effects: Vec<Effect>`` field to ``CardPrinting`` plus a bridge
+# parser/getter, but did NOT wire dispatch — that's this slice. When a
+# permanent spell finishes resolving and post-resolve movement places
+# the source on the controller's battlefield (round-7 slice), the
+# permanent's ``etb_effects`` fire one-by-one via the same
+# ``apply_effect`` dispatcher the spell-effects path uses.
+#
+# **Scope simplifications for this slice (mirrored in the Rust
+# module docstring on ``state_ops_resolve.rs``):**
+#
+# - **ETB fires AFTER post-resolve movement.** Real MTG: the trigger
+#   condition is "this permanent enters the battlefield" — the
+#   creature must already be on the battlefield when the trigger
+#   resolves. So our slice runs etb_effects *after*
+#   ``move_source_post_resolve`` lands the permanent.
+# - **No real stack triggering.** Real MTG: ETB triggers go onto the
+#   stack and resolve in priority order, can be responded to with
+#   instant-speed effects, and (for "deal damage" ETBs) carry their
+#   own targets chosen on-trigger. First slice applies them
+#   immediately at resolution time, same convention as the spell-
+#   effects path. The stack-triggered model is a future slice.
+# - **No ETB replacement effects** ("enters tapped", "enters with N
+#   counters") — those are a different schema (CR 614.1c
+#   replacement effects, not 603 triggers). Not in scope.
+# - **Controller of ETB effects = ``state.active_player``.** Same
+#   first-slice convention as DealDamage / DrawCards / GainLife.
+#   Real MTG plumbs the trigger's controller through the trigger
+#   ability; deferred to a future slice along with the rest of the
+#   StackItem.controller plumbing.
+# - **No "leaves the battlefield" triggers (LtB).** Different schema,
+#   different timing. Future slice.
+# - **Instants/Sorceries do NOT fire etb_effects** — they go to
+#   graveyard, never enter the battlefield, so by definition no ETB
+#   trigger condition is met. The dispatch gates on "did
+#   post-resolve route this source to the battlefield?".
+
+
+def _hill_giant_etb_burn_dict():
+    """A creature with an ETB-burn trigger: 'When this creature ETBs,
+    it deals 2 damage to any player.' Hill Giant flavored — body 3/3,
+    cost 3R."""
+    return {
+        "name": "Test Hill Giant ETB Burn",
+        "card_types": ["Creature"],
+        "mana_cost": {"R": 1, "generic": 3},
+        "effects": [],
+        "power": 3,
+        "toughness": 3,
+        "etb_effects": [
+            {
+                "kind": "deal_damage",
+                "amount": 2,
+                "target": {"kind": "any_player"},
+            }
+        ],
+    }
+
+
+def _etb_draw_two_dict():
+    """A creature with 'When this enters, draw two cards.'"""
+    return {
+        "name": "Test ETB Draw 2",
+        "card_types": ["Creature"],
+        "mana_cost": {"U": 1, "generic": 2},
+        "effects": [],
+        "power": 2,
+        "toughness": 2,
+        "etb_effects": [{"kind": "draw_cards", "count": 2}],
+    }
+
+
+def _etb_gain_three_life_dict():
+    """A creature with 'When this enters, you gain 3 life.'"""
+    return {
+        "name": "Test ETB Healer",
+        "card_types": ["Creature"],
+        "mana_cost": {"W": 1, "generic": 1},
+        "effects": [],
+        "power": 1,
+        "toughness": 3,
+        "etb_effects": [{"kind": "gain_life", "amount": 3}],
+    }
+
+
+def _etb_two_effects_dict():
+    """A creature with two ETB effects: deal 1 to any player AND
+    draw 1 card. Order matters — both must fire."""
+    return {
+        "name": "Test ETB Multi",
+        "card_types": ["Creature"],
+        "mana_cost": {"R": 1, "U": 1, "generic": 1},
+        "effects": [],
+        "power": 2,
+        "toughness": 2,
+        "etb_effects": [
+            {
+                "kind": "deal_damage",
+                "amount": 1,
+                "target": {"kind": "any_player"},
+            },
+            {"kind": "draw_cards", "count": 1},
+        ],
+    }
+
+
+def _instant_with_etb_dict():
+    """An instant with an etb_effects entry. Schema-allowed but
+    semantically nonsense — instants go to graveyard, never trigger
+    ETB. The dispatch should NOT fire the etb_effects on this card."""
+    return {
+        "name": "Test Instant with bogus ETB",
+        "card_types": ["Instant"],
+        "mana_cost": {"R": 1},
+        "effects": [
+            {
+                "kind": "deal_damage",
+                "amount": 3,
+                "target": {"kind": "any_player"},
+            }
+        ],
+        # This MUST NOT fire because instants don't enter the battlefield.
+        "etb_effects": [{"kind": "draw_cards", "count": 5}],
+    }
+
+
+def test_etb_triggers_apply_on_creature_resolve(synthetic_state):
+    """Cross-slice composition test (the load-bearing one).
+
+    Inject a creature with an ETB-burn trigger onto active player's
+    hand, push it on the stack, resolve. Verify (a) the creature
+    landed on active player's battlefield (post-resolve worked) AND
+    (b) defending player took 2 damage from the ETB trigger."""
+    obj_id = synthetic_state.register_and_inject_object(
+        _hill_giant_etb_burn_dict(), 0, ZONE_HAND
+    )
+    life_before = list(synthetic_state.life_totals)
+    bf_before = synthetic_state.battlefield_sizes[0]
+
+    synthetic_state.push_to_stack(obj_id, 0)
+    synthetic_state.resolve_top_of_stack()
+
+    # Post-resolve: creature on active player's battlefield (with
+    # summoning sickness from the round-7 stamp).
+    assert synthetic_state.find_object_zone(obj_id) == ZONE_BATTLEFIELD
+    assert synthetic_state.battlefield_sizes[0] == bf_before + 1
+    assert synthetic_state.is_summoning_sick(obj_id) is True
+    # ETB fired: defender took 2 damage. Active player untouched.
+    assert synthetic_state.life_totals[0] == life_before[0]
+    assert synthetic_state.life_totals[1] == life_before[1] - 2
+
+
+def test_etb_with_draw_cards_effect(synthetic_state):
+    """An ETB ``draw_cards`` effect grows the controller's hand by
+    ``count`` (minus 1 for the source leaving hand to battlefield)
+    and shrinks their library by ``count``."""
+    obj_id = synthetic_state.register_and_inject_object(
+        _etb_draw_two_dict(), 0, ZONE_HAND
+    )
+    hand_before = synthetic_state.hand_sizes[0]
+    library_before = synthetic_state.library_sizes[0]
+
+    synthetic_state.push_to_stack(obj_id, 0)
+    synthetic_state.resolve_top_of_stack()
+
+    # Source moved out of hand to battlefield (-1), drew 2 (+2) = +1.
+    assert synthetic_state.hand_sizes[0] == hand_before - 1 + 2
+    assert synthetic_state.library_sizes[0] == library_before - 2
+    assert synthetic_state.find_object_zone(obj_id) == ZONE_BATTLEFIELD
+
+
+def test_etb_with_gain_life_effect(synthetic_state):
+    """An ETB ``gain_life`` effect raises the controller's life total
+    on resolve. Active player's life +3, defender untouched."""
+    obj_id = synthetic_state.register_and_inject_object(
+        _etb_gain_three_life_dict(), 0, ZONE_HAND
+    )
+    life_before = list(synthetic_state.life_totals)
+
+    synthetic_state.push_to_stack(obj_id, 0)
+    synthetic_state.resolve_top_of_stack()
+
+    assert synthetic_state.life_totals[0] == life_before[0] + 3
+    assert synthetic_state.life_totals[1] == life_before[1]
+    assert synthetic_state.find_object_zone(obj_id) == ZONE_BATTLEFIELD
+
+
+def test_etb_with_multiple_effects_applies_each_in_order(synthetic_state):
+    """An ETB with two effects (deal 1 + draw 1) fires both in list
+    order. After resolve: defender lost 1 life AND active player drew
+    1 card."""
+    obj_id = synthetic_state.register_and_inject_object(
+        _etb_two_effects_dict(), 0, ZONE_HAND
+    )
+    life_before = list(synthetic_state.life_totals)
+    hand_before = synthetic_state.hand_sizes[0]
+    library_before = synthetic_state.library_sizes[0]
+
+    synthetic_state.push_to_stack(obj_id, 0)
+    synthetic_state.resolve_top_of_stack()
+
+    # First ETB effect: 1 damage to defender.
+    assert synthetic_state.life_totals[1] == life_before[1] - 1
+    assert synthetic_state.life_totals[0] == life_before[0]
+    # Second ETB effect: draw 1. Source left hand (-1), drew 1 (+1)
+    # = net 0.
+    assert synthetic_state.hand_sizes[0] == hand_before - 1 + 1
+    assert synthetic_state.library_sizes[0] == library_before - 1
+    assert synthetic_state.find_object_zone(obj_id) == ZONE_BATTLEFIELD
+
+
+def test_etb_does_not_fire_for_instant(synthetic_state):
+    """Instants go to graveyard on resolve, not the battlefield —
+    even if the printing's etb_effects list is non-empty (allowed by
+    schema), nothing in it fires. The instant's own ``effects`` (the
+    deal_damage 3) DO fire because that's the spell's effect, not an
+    ETB trigger.
+
+    Setup uses a small library so the bogus ``draw_cards: 5`` ETB
+    would be observable if it incorrectly fired — drawing 5 against
+    a 2-card library would empty it."""
+    state = synthetic_state
+    life_before = list(state.life_totals)
+
+    obj_id = state.register_and_inject_object(
+        _instant_with_etb_dict(), 0, ZONE_HAND
+    )
+    # Capture sizes AFTER inject so the deltas measure the resolve
+    # step alone.
+    library_before = state.library_sizes[0]
+    hand_before = state.hand_sizes[0]
+
+    state.push_to_stack(obj_id, 0)
+    state.resolve_top_of_stack()
+
+    # Source went to graveyard (instant), NOT battlefield.
+    assert state.find_object_zone(obj_id) == ZONE_GRAVEYARD
+    # Spell's own effect (deal 3) fired against defender.
+    assert state.life_totals[1] == life_before[1] - 3
+    # ETB did NOT fire: library unchanged from the bogus
+    # etb_effects [draw_cards:5]. Hand shrank by 1 from the source
+    # leaving hand for graveyard — and ONLY by 1, not by 1 + the
+    # 5-card-draw the bogus ETB would have triggered.
+    assert state.library_sizes[0] == library_before
+    assert state.hand_sizes[0] == hand_before - 1
+
+
+def test_creature_with_no_etb_effects_resolves_normally(synthetic_state):
+    """Sanity: a vanilla creature (etb_effects empty) resolves the
+    same way the round-7 post-resolve test verifies. No life / hand
+    deltas from the ETB step — just the round-7 movement."""
+    obj_id = synthetic_state.register_and_inject_object(
+        _creature_dict(), 0, ZONE_HAND
+    )
+    life_before = list(synthetic_state.life_totals)
+    library_before = synthetic_state.library_sizes[0]
+    hand_before = synthetic_state.hand_sizes[0]
+
+    synthetic_state.push_to_stack(obj_id, 0)
+    synthetic_state.resolve_top_of_stack()
+
+    # No ETB effects, so no life / library deltas. Hand shrank by 1
+    # (source moved hand -> battlefield).
+    assert list(synthetic_state.life_totals) == life_before
+    assert synthetic_state.library_sizes[0] == library_before
+    assert synthetic_state.hand_sizes[0] == hand_before - 1
+    assert synthetic_state.find_object_zone(obj_id) == ZONE_BATTLEFIELD
+    assert synthetic_state.is_summoning_sick(obj_id) is True
+
+
+def test_clone_then_resolve_etb_does_not_affect_original(synthetic_state):
+    """CoW canary for the ETB dispatch path. Cloning the state and
+    resolving an ETB-burn creature on the clone must not bleed the
+    damage-from-ETB back into the original — original's defender
+    life stays at 20, source stays in hand."""
+    obj_id = synthetic_state.register_and_inject_object(
+        _hill_giant_etb_burn_dict(), 0, ZONE_HAND
+    )
+    synthetic_state.push_to_stack(obj_id, 0)
+    cloned = synthetic_state.clone_once()
+
+    cloned.resolve_top_of_stack()
+
+    # Clone: defender took 2 ETB damage, creature on battlefield.
+    assert cloned.life_totals[1] == 20 - 2
+    assert cloned.find_object_zone(obj_id) == ZONE_BATTLEFIELD
+    # Original: defender life unchanged, source still in hand,
+    # stack still has the item.
+    assert list(synthetic_state.life_totals) == [20, 20]
+    assert synthetic_state.find_object_zone(obj_id) == ZONE_HAND
+    assert synthetic_state.stack_size() == 1
