@@ -27,6 +27,14 @@
 //!   battlefields; collects every creature dying to either rule,
 //!   then destroys each by moving it into its controller's graveyard.
 //!   Returns the count of destructions.
+//! - `apply_sbas_until_quiescent() -> usize` — CR 704.3 fixed-point
+//!   loop. Repeatedly calls `apply_sbas` until a pass returns 0;
+//!   returns the number of passes that fired. With only destruction
+//!   SBAs in scope today, every realistic scenario completes in 0 or
+//!   1 pass; the primitive exists so cascading-effect slices (sagas,
+//!   death triggers) plug into the same loop without reshaping
+//!   callers. A `MAX_PASSES = 100` safety raises `PyValueError` if
+//!   exceeded.
 //! - `is_lethal(obj_id) -> Option<bool>` — predicate form for
 //!   704.5g. `Some(true)` when damage >= toughness, `Some(false)`
 //!   when it is below, `None` for non-creatures (toughness is None)
@@ -70,11 +78,10 @@
 //!
 //! ## Out of scope (deferred to future slices)
 //!
-//! - **SBA loop driver / quiescence.** Real MTG (CR 704.3) checks
-//!   SBAs simultaneously and re-checks until none apply. This slice
-//!   does ONE pass; iteration to fixed point is a future slice that
-//!   integrates apply_sbas into combat and spell-resolution call
-//!   sites.
+//! - **Integration with combat and spell-resolution call sites.**
+//!   The loop primitive `apply_sbas_until_quiescent` exists, but
+//!   wiring it into the priority-pass / spell-resolution drivers is
+//!   a separate slice. Today callers explicitly invoke it.
 //! - **Marked damage clearing.** Damage clears at end of turn (CR
 //!   514.2), NOT on every SBA pass. apply_sbas does NOT zero damage
 //!   on surviving creatures; `clear_all_damage` from the damage
@@ -206,6 +213,52 @@ impl GameState {
             Arc::make_mut(&mut target.graveyard).push(obj);
         }
         Ok(count)
+    }
+
+    /// Loop driver for state-based actions — CR 704.3 quiescence.
+    ///
+    /// Repeatedly calls `apply_sbas` until a pass produces zero
+    /// destructions, returning the number of passes that fired
+    /// (i.e. the number of `apply_sbas` invocations whose return
+    /// value was > 0). A clean state returns 0.
+    ///
+    /// CR 704.3: "Whenever a player would get priority [...] the
+    /// game first performs all applicable state-based actions as a
+    /// single event. [...] After SBAs are performed, [...] if any
+    /// SBAs were performed as a result of the check, all applicable
+    /// SBAs are checked again." This method is the iteration-to-
+    /// fixed-point that the round-5 single-pass `apply_sbas`
+    /// deferred.
+    ///
+    /// With only the destruction SBAs available today (no cascading
+    /// effects like death triggers or +1/+1-on-death yet), the loop
+    /// completes in either 0 or 1 pass for every realistic scenario.
+    /// Pinning the API now means later slices that add cascading
+    /// effects (sagas, death triggers, ETB chains) plug into the
+    /// same loop primitive without re-shaping callers.
+    ///
+    /// **Safety limit.** A `MAX_PASSES` guard (100) prevents any
+    /// future infinite-loop bug from hanging the engine; exceeding
+    /// it raises `PyValueError`. Real MTG SBA chains terminate quickly
+    /// (the game state monotonically loses creatures / counters), so
+    /// a triple-digit ceiling is far above any legitimate scenario.
+    fn apply_sbas_until_quiescent(&mut self) -> PyResult<usize> {
+        const MAX_PASSES: usize = 100;
+        let mut passes = 0usize;
+        loop {
+            let destroyed = self.apply_sbas()?;
+            if destroyed == 0 {
+                return Ok(passes);
+            }
+            passes += 1;
+            if passes > MAX_PASSES {
+                return Err(pyo3::exceptions::PyValueError::new_err(format!(
+                    "apply_sbas_until_quiescent exceeded {} passes — \
+                     suspected infinite SBA loop",
+                    MAX_PASSES
+                )));
+            }
+        }
     }
 
     /// Predicate form of the lethal-damage check.
