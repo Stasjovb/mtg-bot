@@ -563,6 +563,106 @@ def test_create_token_missing_printing_id_raises():
         )
 
 
+# --- AddManaToPool (round-23 effect-coverage slice) -----------------
+
+
+def test_round_trip_add_mana_to_pool_effect():
+    """CR 106.1 — mana ability resolution. Mana-rocks and basic-land
+    mana abilities all flow through this Effect. Round-trip a single
+    `{"kind": "add_mana_to_pool", "color": "G", "amount": 1}` entry
+    on an EoE-shaped Forest-like printing."""
+    reg = mtg_bot_engine.Registry()
+    pid = reg.register_printing(
+        {
+            "name": "Forest Mana Ability",
+            "effects": [
+                {"kind": "add_mana_to_pool", "color": "G", "amount": 1}
+            ],
+        }
+    )
+    effects = [dict(e) for e in reg.get_printing_effects(pid)]
+    assert effects[0]["kind"] == "add_mana_to_pool"
+    assert effects[0]["color"] == "G"
+    assert effects[0]["amount"] == 1
+
+
+def test_round_trip_add_mana_to_pool_colorless():
+    """A Mind-Stone-shaped mana-rock minting a single colorless coin —
+    "C" is in the closed mana vocab and round-trips end-to-end."""
+    reg = mtg_bot_engine.Registry()
+    pid = reg.register_printing(
+        {
+            "name": "Mind Stone Mana Ability",
+            "effects": [
+                {"kind": "add_mana_to_pool", "color": "C", "amount": 1}
+            ],
+        }
+    )
+    effects = [dict(e) for e in reg.get_printing_effects(pid)]
+    assert effects[0] == {
+        "kind": "add_mana_to_pool",
+        "color": "C",
+        "amount": 1,
+    }
+
+
+def test_add_mana_to_pool_missing_color_raises():
+    """Schema validation: `color` is required, missing it raises
+    KeyError loudly (no silent default-to-colorless fallback)."""
+    reg = mtg_bot_engine.Registry()
+    with pytest.raises(KeyError, match="color"):
+        reg.register_printing(
+            {
+                "name": "Broken",
+                "effects": [{"kind": "add_mana_to_pool", "amount": 1}],
+            }
+        )
+
+
+def test_add_mana_to_pool_missing_amount_raises():
+    """Schema validation: `amount` is required, missing it raises
+    KeyError loudly."""
+    reg = mtg_bot_engine.Registry()
+    with pytest.raises(KeyError, match="amount"):
+        reg.register_printing(
+            {
+                "name": "Broken",
+                "effects": [{"kind": "add_mana_to_pool", "color": "G"}],
+            }
+        )
+
+
+def test_add_mana_to_pool_invalid_color_raises():
+    """Schema validation: `color` must be in W/U/B/R/G/C closed vocab.
+    "X" is the protection-from-X target color, not a mana color —
+    surface as ValueError at register time."""
+    reg = mtg_bot_engine.Registry()
+    with pytest.raises(ValueError, match="unknown mana symbol"):
+        reg.register_printing(
+            {
+                "name": "Broken",
+                "effects": [
+                    {"kind": "add_mana_to_pool", "color": "X", "amount": 1}
+                ],
+            }
+        )
+
+
+def test_add_mana_to_pool_negative_amount_raises_at_register_time():
+    """Register-time guard on negative amounts (matches the
+    apply_effect guard, surfaced earlier in the pipeline)."""
+    reg = mtg_bot_engine.Registry()
+    with pytest.raises(ValueError, match="non-negative"):
+        reg.register_printing(
+            {
+                "name": "Broken",
+                "effects": [
+                    {"kind": "add_mana_to_pool", "color": "G", "amount": -1}
+                ],
+            }
+        )
+
+
 def test_vanilla_card_with_no_mana_cost_or_effects():
     reg = mtg_bot_engine.Registry()
     pid = reg.register_printing(VANILLA_BLANK)

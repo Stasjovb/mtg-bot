@@ -138,6 +138,27 @@ pub enum Effect {
     /// exist when they leave the battlefield" CR 110.5g handling is
     /// deferred. Negative `count` raises.
     CreateToken { count: i32, token_printing_id: u32 },
+    /// Controller adds `amount` mana of `color` to their mana pool.
+    /// CR 106.1 — the resolution of a mana ability. Color is one of
+    /// W/U/B/R/G/C; amount is non-negative. AddManaToPool is the
+    /// second-most-frequent Effect across the EoE pool (33 cards per
+    /// round-20 measurement), powering land mana abilities and
+    /// mana-rocks like Mind Stone.
+    ///
+    /// **Schema simplification vs Python.** Python's `AddManaToPool`
+    /// dataclass carries a `produces: tuple[tuple[str, int], ...]`
+    /// and a `spend_restriction: str | None` — a single Python
+    /// dataclass can mint multiple colors per resolution and tag
+    /// each coin with a payment-filtering restriction (e.g.
+    /// "spend only on artifact spells"). The Rust closed-vocabulary
+    /// bridge models the same behavior with a flatter shape: one
+    /// `AddManaToPool` per (color, amount) pair, no spend
+    /// restriction. A printing that produces multi-color mana
+    /// stacks multiple `AddManaToPool` entries in its `effects`
+    /// Vec; spend-restriction tagging is deferred until the bridge
+    /// schema needs it (no EoE card today combines mana production
+    /// with the restriction tagging through this dispatch path).
+    AddManaToPool { color: String, amount: i32 },
 }
 
 #[derive(Clone, Debug)]
@@ -358,8 +379,22 @@ fn parse_effect(dict: &Bound<'_, PyDict>) -> PyResult<Effect> {
             let token_printing_id: u32 = require(dict, "token_printing_id")?.extract()?;
             Ok(Effect::CreateToken { count, token_printing_id })
         }
+        "add_mana_to_pool" => {
+            let color: String = require(dict, "color")?.extract()?;
+            // Validate against the closed mana-color vocab. Shared
+            // helper with `parse_mana_produced` — reject "X", "g"
+            // (lowercase), "WG" (compound), etc. at register time.
+            validate_mana_symbol(&color)?;
+            let amount: i32 = require(dict, "amount")?.extract()?;
+            if amount < 0 {
+                return Err(PyValueError::new_err(format!(
+                    "add_mana_to_pool: amount must be non-negative, got {amount}"
+                )));
+            }
+            Ok(Effect::AddManaToPool { color, amount })
+        }
         other => Err(PyValueError::new_err(format!(
-            "unknown effect kind {other:?}; valid: deal_damage, draw_cards, gain_life, return_to_hand, mill, exile_target, tap_target, untap_target, sacrifice, add_counters, discard_card, scry_n, destroy_target, damage_each_opponent, damage_each_creature, create_token"
+            "unknown effect kind {other:?}; valid: deal_damage, draw_cards, gain_life, return_to_hand, mill, exile_target, tap_target, untap_target, sacrifice, add_counters, discard_card, scry_n, destroy_target, damage_each_opponent, damage_each_creature, create_token, add_mana_to_pool"
         ))),
     }
 }
@@ -608,6 +643,11 @@ fn effect_to_pydict<'py>(
             d.set_item("kind", "create_token")?;
             d.set_item("count", *count)?;
             d.set_item("token_printing_id", *token_printing_id)?;
+        }
+        Effect::AddManaToPool { color, amount } => {
+            d.set_item("kind", "add_mana_to_pool")?;
+            d.set_item("color", color)?;
+            d.set_item("amount", *amount)?;
         }
     }
     Ok(d)

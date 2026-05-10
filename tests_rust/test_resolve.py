@@ -3341,3 +3341,202 @@ def test_resolve_create_token_cow_clone_unaffected(synthetic_state):
         synthetic_state.battlefield_sizes[0]
         == clone_bf_before[0] + 4
     )
+
+
+# --- round-23 AddManaToPool dispatch --------------------------------
+#
+# **AddManaToPool scope** (mirrored in the Rust module docstring on
+# ``state_ops_resolve.rs``). CR 106.1 — mana ability resolution. The
+# second-most-frequent Effect across the EoE pool (33 cards per the
+# round-20 measurement), powering basic-land mana abilities and
+# mana-rocks like Mind Stone.
+#
+# - **Active player (= controller of resolving stack item) gets
+#   ``amount`` mana of ``color`` credited to their pool.** Mirrors the
+#   DealDamage/DrawCards/GainLife/CreateToken first-slice
+#   "controller = state.active_player" convention. Real MTG plumbs
+#   ``StackItem.controller`` through — deferred to a future slice.
+# - **amount=0 is a legal no-op** (mirrors GainLife / DrawCards / Mill
+#   / DamageEach* / CreateToken zero-count conventions).
+# - **amount<0 raises** loudly (mirrors ScryN / DealDamage /
+#   DamageEach* / CreateToken raise-on-negative shape; "add -2 green"
+#   is schema nonsense — and the bridge parser catches this at
+#   register time, but `apply_effect` re-checks for defense-in-depth).
+# - **Saturating at u8::MAX** mirrors the `add_mana` primitive in
+#   `state_ops_mana.rs` — 255 of any color is more than any real game
+#   produces, and silently wrapping would be a worse failure mode
+#   than capping.
+
+
+def _mana_ability_dict(color, amount):
+    """A mana-ability source — Forest-shaped (Land card_type, tapped
+    for one mana). Uses an `effects` list (not the static
+    `mana_produced` field) so the AddManaToPool dispatch path
+    actually fires when the stack item resolves. CR 106.1."""
+    return {
+        "name": f"Test Mana Source ({color}x{amount})",
+        "card_types": ["Land"],
+        "effects": [
+            {"kind": "add_mana_to_pool", "color": color, "amount": amount}
+        ],
+    }
+
+
+def test_resolve_add_mana_to_pool_credits_active_player_pool(synthetic_state):
+    """Resolving an AddManaToPool effect credits the active player's
+    mana pool by the requested (color, amount). Synthetic seed starts
+    with empty pools on both players; after the resolution, the
+    active player's G slot should be exactly the amount."""
+    pool_before = dict(synthetic_state.get_mana_pool(0))
+    assert pool_before["G"] == 0
+
+    spell_obj_id = synthetic_state.register_and_inject_object(
+        _mana_ability_dict(color="G", amount=1), 0, ZONE_BATTLEFIELD
+    )
+    synthetic_state.push_to_stack(spell_obj_id, 0)
+    synthetic_state.resolve_top_of_stack()
+
+    assert synthetic_state.is_stack_empty() is True
+    pool_after = dict(synthetic_state.get_mana_pool(0))
+    assert pool_after["G"] == 1
+    # Opponent's pool untouched.
+    assert dict(synthetic_state.get_mana_pool(1))["G"] == 0
+
+
+def test_resolve_add_mana_to_pool_amount_zero_is_no_op(synthetic_state):
+    """amount=0 is a legitimate no-op success — mirrors GainLife /
+    DrawCards / Mill / DamageEach* / CreateToken zero-count
+    convention. Pool unchanged; stack still pops."""
+    pool_before = dict(synthetic_state.get_mana_pool(0))
+
+    spell_obj_id = synthetic_state.register_and_inject_object(
+        _mana_ability_dict(color="R", amount=0), 0, ZONE_BATTLEFIELD
+    )
+    synthetic_state.push_to_stack(spell_obj_id, 0)
+    synthetic_state.resolve_top_of_stack()
+
+    assert synthetic_state.is_stack_empty() is True
+    assert dict(synthetic_state.get_mana_pool(0)) == pool_before
+
+
+def test_resolve_add_mana_to_pool_multiple_effects_accumulate(synthetic_state):
+    """A printing carrying multiple AddManaToPool effects (e.g. a
+    hypothetical bicycle land minting two pips of different colors)
+    accumulates each entry independently. Mirrors how the bridge
+    flattens Python's `produces: tuple[(color, count), ...]` into a
+    Vec of `AddManaToPool { color, amount }` entries."""
+    multi_color_source = {
+        "name": "Test Bi-Land",
+        "card_types": ["Land"],
+        "effects": [
+            {"kind": "add_mana_to_pool", "color": "G", "amount": 1},
+            {"kind": "add_mana_to_pool", "color": "U", "amount": 1},
+        ],
+    }
+    spell_obj_id = synthetic_state.register_and_inject_object(
+        multi_color_source, 0, ZONE_BATTLEFIELD
+    )
+    synthetic_state.push_to_stack(spell_obj_id, 0)
+    synthetic_state.resolve_top_of_stack()
+
+    pool = dict(synthetic_state.get_mana_pool(0))
+    assert pool["G"] == 1
+    assert pool["U"] == 1
+    # Other colors stay at 0.
+    assert pool["W"] == 0
+    assert pool["B"] == 0
+    assert pool["R"] == 0
+    assert pool["C"] == 0
+
+
+def test_resolve_add_mana_to_pool_all_six_colors(synthetic_state):
+    """W/U/B/R/G/C — every closed-vocab color routes to its matching
+    ManaPool slot. One spell with six AddManaToPool effects exercises
+    every arm of the slot match."""
+    rainbow_source = {
+        "name": "Test Rainbow Source",
+        "card_types": ["Land"],
+        "effects": [
+            {"kind": "add_mana_to_pool", "color": c, "amount": 1}
+            for c in ("W", "U", "B", "R", "G", "C")
+        ],
+    }
+    spell_obj_id = synthetic_state.register_and_inject_object(
+        rainbow_source, 0, ZONE_BATTLEFIELD
+    )
+    synthetic_state.push_to_stack(spell_obj_id, 0)
+    synthetic_state.resolve_top_of_stack()
+
+    pool = dict(synthetic_state.get_mana_pool(0))
+    for color in ("W", "U", "B", "R", "G", "C"):
+        assert pool[color] == 1, f"{color} slot should be 1, got {pool}"
+
+
+def test_resolve_add_mana_to_pool_saturates_at_u8_max(synthetic_state):
+    """u8::MAX saturation: pre-seed the pool to 250G via add_mana,
+    then resolve an AddManaToPool-10 — final value must clamp at 255
+    (not wrap to 4). Mirrors the `add_mana` primitive's
+    saturating_add convention."""
+    # Pre-seed via the round-2 primitive — 250 green coins.
+    synthetic_state.add_mana(0, "G", 250)
+    assert dict(synthetic_state.get_mana_pool(0))["G"] == 250
+
+    spell_obj_id = synthetic_state.register_and_inject_object(
+        _mana_ability_dict(color="G", amount=10), 0, ZONE_BATTLEFIELD
+    )
+    synthetic_state.push_to_stack(spell_obj_id, 0)
+    synthetic_state.resolve_top_of_stack()
+
+    # 250 + 10 = 260, saturates to 255 not wraps to 4.
+    assert dict(synthetic_state.get_mana_pool(0))["G"] == 255
+
+
+def test_resolve_add_mana_to_pool_targets_active_player_not_defender(
+    synthetic_state,
+):
+    """Active player (= mana-ability controller, first-slice
+    convention) gets the mana — not the defender. Flip active to
+    player 1 via CLEANUP -> UNTAP wrap and confirm the credit lands
+    on p1's pool, not p0's."""
+    # Confirm the synthetic seed starts with p0 active.
+    assert synthetic_state.active_player == 0
+    # Flip active_player to 1 by walking through CLEANUP -> UNTAP.
+    synthetic_state.set_phase(PHASE_CLEANUP)
+    synthetic_state.advance_phase()
+    assert synthetic_state.active_player == 1
+
+    # Inject the mana source on player 1's battlefield.
+    spell_obj_id = synthetic_state.register_and_inject_object(
+        _mana_ability_dict(color="U", amount=2), 1, ZONE_BATTLEFIELD
+    )
+    synthetic_state.push_to_stack(spell_obj_id, 1)
+    synthetic_state.resolve_top_of_stack()
+
+    # p1 (the now-active player) got the mana; p0's pool is untouched.
+    assert dict(synthetic_state.get_mana_pool(1))["U"] == 2
+    assert dict(synthetic_state.get_mana_pool(0))["U"] == 0
+
+
+def test_resolve_add_mana_to_pool_cow_clone_unaffected(synthetic_state):
+    """Cloning the state before resolving leaves the original clone's
+    mana pool untouched after resolution — ManaPool is `Copy` on the
+    Player struct and Player itself is cloned by-value when the
+    GameState is cloned, so the snapshot keeps its pre-resolve pool
+    state. The mana-mutation path here doesn't reach for
+    `Arc::make_mut`; the by-value Player clone is what isolates."""
+    spell_obj_id = synthetic_state.register_and_inject_object(
+        _mana_ability_dict(color="B", amount=3), 0, ZONE_BATTLEFIELD
+    )
+    synthetic_state.push_to_stack(spell_obj_id, 0)
+
+    # CoW canary: take a clone BEFORE resolving.
+    clone = synthetic_state.clone_once()
+    clone_pool_before = dict(clone.get_mana_pool(0))
+
+    synthetic_state.resolve_top_of_stack()
+
+    # Original clone's pool is untouched.
+    assert dict(clone.get_mana_pool(0)) == clone_pool_before
+    assert clone_pool_before["B"] == 0
+    # Live state's B slot is now 3.
+    assert dict(synthetic_state.get_mana_pool(0))["B"] == 3
