@@ -123,6 +123,12 @@ pub enum Effect {
     /// Negative `amount` raises. Composes with round-14's
     /// deal_damage_to_player primitive.
     DamageEachOpponent { amount: i32 },
+    /// Deal `amount` damage to each creature on the battlefield
+    /// (CR 701.4 — Pyroclasm/Anger of the Gods pattern). Damages all
+    /// creatures regardless of controller; round-13 indestructible
+    /// honored at SBA time. No target — implicit. Negative `amount`
+    /// raises.
+    DamageEachCreature { amount: i32 },
 }
 
 #[derive(Clone, Debug)]
@@ -334,8 +340,12 @@ fn parse_effect(dict: &Bound<'_, PyDict>) -> PyResult<Effect> {
             let amount: i32 = require(dict, "amount")?.extract()?;
             Ok(Effect::DamageEachOpponent { amount })
         }
+        "damage_each_creature" => {
+            let amount: i32 = require(dict, "amount")?.extract()?;
+            Ok(Effect::DamageEachCreature { amount })
+        }
         other => Err(PyValueError::new_err(format!(
-            "unknown effect kind {other:?}; valid: deal_damage, draw_cards, gain_life, return_to_hand, mill, exile_target, tap_target, untap_target, sacrifice, add_counters, discard_card, scry_n, destroy_target, damage_each_opponent"
+            "unknown effect kind {other:?}; valid: deal_damage, draw_cards, gain_life, return_to_hand, mill, exile_target, tap_target, untap_target, sacrifice, add_counters, discard_card, scry_n, destroy_target, damage_each_opponent, damage_each_creature"
         ))),
     }
 }
@@ -574,6 +584,10 @@ fn effect_to_pydict<'py>(
         }
         Effect::DamageEachOpponent { amount } => {
             d.set_item("kind", "damage_each_opponent")?;
+            d.set_item("amount", *amount)?;
+        }
+        Effect::DamageEachCreature { amount } => {
+            d.set_item("kind", "damage_each_creature")?;
             d.set_item("amount", *amount)?;
         }
     }

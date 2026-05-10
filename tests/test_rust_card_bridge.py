@@ -467,6 +467,42 @@ def test_destroy_target_anyplayer_round_trips_for_validation_at_dispatch():
     assert dict(effects[0]["target"]) == {"kind": "any_player"}
 
 
+def test_round_trip_damage_each_creature_effect():
+    reg = mtg_bot_engine.Registry()
+    pid = reg.register_printing(
+        {
+            "name": "Pyroclasm-ish",
+            "mana_cost": {"R": 1, "generic": 1},
+            "card_types": ["Sorcery"],
+            "effects": [{"kind": "damage_each_creature", "amount": 2}],
+        }
+    )
+    effects = [dict(e) for e in reg.get_printing_effects(pid)]
+    assert effects[0]["kind"] == "damage_each_creature"
+    assert effects[0]["amount"] == 2
+
+
+def test_damage_each_creature_missing_amount_raises():
+    reg = mtg_bot_engine.Registry()
+    with pytest.raises(KeyError, match="amount"):
+        reg.register_printing(
+            {"name": "Broken", "effects": [{"kind": "damage_each_creature"}]}
+        )
+
+
+def test_damage_each_creature_zero_amount_round_trips():
+    """Damage 0 to each creature is a degenerate but legal value."""
+    reg = mtg_bot_engine.Registry()
+    pid = reg.register_printing(
+        {
+            "name": "ZeroPyro",
+            "effects": [{"kind": "damage_each_creature", "amount": 0}],
+        }
+    )
+    effects = [dict(e) for e in reg.get_printing_effects(pid)]
+    assert effects[0]["amount"] == 0
+
+
 def test_vanilla_card_with_no_mana_cost_or_effects():
     reg = mtg_bot_engine.Registry()
     pid = reg.register_printing(VANILLA_BLANK)

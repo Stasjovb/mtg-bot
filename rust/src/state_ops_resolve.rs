@@ -942,6 +942,15 @@ fn apply_effect(state: &mut GameState, effect: &Effect) -> PyResult<()> {
             let defender = (1 - state.active_player) as usize;
             state.players[defender].life -= *amount;
         }
+        // Foundation stub: round-18 resolve-damage-each-creature slice
+        // replaces with real dispatch. E0004 exhaustiveness would
+        // otherwise reject the build the moment the variant lands in
+        // cards.rs.
+        Effect::DamageEachCreature { .. } => {
+            return Err(PyValueError::new_err(
+                "Effect::DamageEachCreature dispatch not yet implemented (round-18 foundation stub)",
+            ));
+        }
     }
     Ok(())
 }
