@@ -71,6 +71,7 @@ the test lands in a commit.
 | tests_rust/test_mana.py           | tests/test_mana.py + game.py                | green  | feature/rust-tdd-mana      |
 | tests_rust/test_counters.py       | tests/test_counters.py + game.py            | green  | feature/rust-tdd-counters  |
 | tests_rust/test_steps.py          | tests/test_beginning_of_upkeep.py + turn.py | green  | feature/rust-tdd-steps     |
+| tests_rust/test_damage.py         | tests/test_combat.py + game.py              | green  | feature/rust-tdd-damage    |
 
 ## Build invocation reminder
 
