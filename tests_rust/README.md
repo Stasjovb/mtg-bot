@@ -98,6 +98,7 @@ the test lands in a commit.
 | rust(combat-keywords): flying+reach | tests_rust/test_combat.py extend           | green  | feature/rust-tdd-flying-reach |
 | rust(resolve-effects-r11): ExileTarget dispatch | tests_rust/test_resolve.py extend           | green  | feature/rust-tdd-exile |
 | tests_rust/test_mulligan.py       | tests/test_actions.py + game.py             | green  | feature/rust-tdd-mulligan |
+| rust(sba-zero-toughness): CR 704.5f | tests_rust/test_sba.py extend | green | feature/rust-tdd-sba-zero-toughness |
 
 ## Build invocation reminder
 
