@@ -108,6 +108,7 @@ the test lands in a commit.
 | rust(resolve-effects-r14): Sacrifice dispatch | tests_rust/test_resolve.py extend           | green  | feature/rust-tdd-sacrifice |
 | rust(zones-exile-aware): exile in find/move | tests_rust/test_zones.py extend | green | feature/rust-tdd-exile-aware-zones |
 | rust(library-search): search_library_for_card | tests_rust/test_library.py extend | green | feature/rust-tdd-search-library |
+| rust(steps-untap-summoning): clear sickness at untap | tests_rust/test_steps.py extend | green | feature/rust-tdd-untap-summoning |
 
 ## Build invocation reminder
 

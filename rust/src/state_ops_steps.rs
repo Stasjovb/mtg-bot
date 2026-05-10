@@ -92,6 +92,29 @@ fn untap_all_for_player_inline(state: &mut GameState, player_id: u8) {
     }
 }
 
+/// Clear `summoning_sick` on every permanent the given player
+/// controls (CR 302.1 — summoning sickness wears off when the
+/// creature has been continuously controlled by its controller
+/// since the start of that player's most recent turn). Fires from
+/// `advance_phase` whenever the new phase is UNTAP, on the new
+/// active player. Same CoW shape as `untap_all_for_player_inline`:
+/// short-circuit when nothing is sick so the synthetic-state's
+/// "no sick permanents on battlefield" warm path doesn't pay an
+/// `Arc::make_mut` clone, otherwise one make_mut covers the sweep.
+fn clear_summoning_sick_for_player_inline(state: &mut GameState, player_id: u8) {
+    let player = match state.players.iter_mut().find(|p| p.id == player_id) {
+        Some(p) => p,
+        None => return,
+    };
+    if player.battlefield.iter().all(|o| !o.summoning_sick) {
+        return;
+    }
+    let zone: &mut Vec<GameObject> = Arc::make_mut(&mut player.battlefield);
+    for obj in zone.iter_mut() {
+        obj.summoning_sick = false;
+    }
+}
+
 #[pymethods]
 impl GameState {
     /// Expose `active_player` to Python. The field already exists on
@@ -137,6 +160,17 @@ impl GameState {
             // `Arc::make_mut` clone when nothing is tapped, then do
             // a single CoW clone covering every in-place flip.
             untap_all_for_player_inline(self, self.active_player);
+            // CR 302.1 — at the start of the active player's untap
+            // step, every permanent that player has controlled
+            // continuously since the start of their previous turn
+            // loses summoning sickness. The synthetic-state seed
+            // doesn't track "continuous control" yet (every newly
+            // ETB'd permanent gets sickness via the cast slice and
+            // resolve slice's `summoning_sick = true` stamps); the
+            // operational rule reduces to "clear sickness on the
+            // new active player's permanents at their UNTAP entry".
+            // Same CoW shape as the untap sweep — see the helper.
+            clear_summoning_sick_for_player_inline(self, self.active_player);
         }
         self.phase
     }

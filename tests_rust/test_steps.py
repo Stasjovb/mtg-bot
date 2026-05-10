@@ -191,3 +191,106 @@ def test_set_phase_validates_range(synthetic_state):
         synthetic_state.set_phase(255)
     # State unchanged after the rejected calls.
     assert synthetic_state.current_phase() == PHASE_UNTAP
+
+
+# --- summoning sickness clear at untap step (CR 302.1) ----------------
+#
+# CR 302.1: a creature is "summoning sick" until its controller has
+# controlled it continuously since the start of that controller's
+# most recent turn. Equivalent operational rule: at the moment of
+# the UNTAP step for the new active player, that player's permanents
+# lose summoning sickness. Permanents on the OTHER player's side are
+# not affected by this player's untap step (they'll lose sickness
+# during their own controller's next untap step, if applicable).
+#
+# To produce a summoning-sick permanent without a setter primitive,
+# we lean on the cast slice's ``cast_creature`` — which lands a
+# creature on its caster's battlefield and stamps
+# ``summoning_sick = true`` (matches Python's ``put_into_battlefield``
+# default). Player 1's first hand object (id 77 with the synthetic
+# state's default 10/7/50 layout) is a Llanowar Elves at cost {G};
+# we top up player 1's pool with ``add_mana(1, "G", 1)`` and cast
+# from player 1's hand to seat the test creature.
+
+P1_FIRST_HAND_ID = 67 + 10  # 10 bf + 7 hand + 50 lib per side; p1 base = 67
+P0_FIRST_HAND_ID = 10  # p0 hand starts after the 10 battlefield ids
+
+
+def test_summoning_sick_cleared_at_untap_step_for_active_player(synthetic_state):
+    """Cast a creature from player 1's hand — it lands on player 1's
+    battlefield with summoning_sick=true. Set phase=CLEANUP with
+    active=0; advance_phase wraps to UNTAP and flips active to 1; the
+    untap step for player 1 should clear summoning sickness on every
+    permanent player 1 controls (CR 302.1 equivalent operational rule)."""
+    elf_id = P1_FIRST_HAND_ID
+    synthetic_state.add_mana(1, "G", 1)
+    assert synthetic_state.cast_creature(elf_id, 1) is True
+    assert synthetic_state.is_summoning_sick(elf_id) is True
+    synthetic_state.set_phase(PHASE_CLEANUP)
+    assert synthetic_state.active_player == 0
+    new_phase = synthetic_state.advance_phase()
+    assert new_phase == PHASE_UNTAP
+    assert synthetic_state.active_player == 1
+    assert synthetic_state.is_summoning_sick(elf_id) is False, (
+        "untap step for the new active player should have cleared "
+        "summoning sickness on that player's permanents"
+    )
+
+
+def test_summoning_sick_not_cleared_for_other_player(synthetic_state):
+    """Sickness clears only for the controller whose UNTAP step is
+    firing — the inactive side's sick permanents stay sick. Cast
+    from player 0 (active), set phase=CLEANUP, advance: active flips
+    to player 1, player 1's untap fires, but player 0's sick creature
+    is untouched."""
+    elf_id = P0_FIRST_HAND_ID
+    synthetic_state.add_mana(0, "G", 1)
+    assert synthetic_state.cast_creature(elf_id, 0) is True
+    assert synthetic_state.is_summoning_sick(elf_id) is True
+    synthetic_state.set_phase(PHASE_CLEANUP)
+    assert synthetic_state.active_player == 0
+    synthetic_state.advance_phase()
+    assert synthetic_state.active_player == 1
+    # Player 0's creature is NOT the new active player's permanent;
+    # the untap step that just fired only touched player 1's side.
+    assert synthetic_state.is_summoning_sick(elf_id) is True, (
+        "summoning sickness must only clear for the new active "
+        "player; the off-side's sick permanent stays sick"
+    )
+
+
+def test_summoning_sick_cleared_only_at_untap_step_not_other_phases(
+    synthetic_state,
+):
+    """The sickness clear happens at UNTAP entry, not on every phase
+    advance. Cast a creature for player 0 (active), set phase=MAIN1,
+    advance to BEGIN_COMBAT (which doesn't touch UNTAP, doesn't flip
+    the active player) — sickness must remain."""
+    elf_id = P0_FIRST_HAND_ID
+    synthetic_state.add_mana(0, "G", 1)
+    assert synthetic_state.cast_creature(elf_id, 0) is True
+    assert synthetic_state.is_summoning_sick(elf_id) is True
+    synthetic_state.set_phase(PHASE_MAIN1)
+    new_phase = synthetic_state.advance_phase()
+    assert new_phase == PHASE_BEGIN_COMBAT
+    assert synthetic_state.active_player == 0
+    # Phase didn't pass through UNTAP; sickness is unchanged.
+    assert synthetic_state.is_summoning_sick(elf_id) is True
+
+
+def test_clone_then_advance_to_untap_does_not_affect_original(synthetic_state):
+    """CoW canary: a sick creature on the original survives the
+    clone's CLEANUP -> UNTAP wrap. Mutating the clone (which clears
+    sickness on player 1's permanents) must not bleed into the
+    original's battlefield zone."""
+    elf_id = P1_FIRST_HAND_ID
+    synthetic_state.add_mana(1, "G", 1)
+    assert synthetic_state.cast_creature(elf_id, 1) is True
+    assert synthetic_state.is_summoning_sick(elf_id) is True
+    cloned = synthetic_state.clone_once()
+    cloned.set_phase(PHASE_CLEANUP)
+    cloned.advance_phase()
+    assert cloned.active_player == 1
+    assert cloned.is_summoning_sick(elf_id) is False
+    # Original is untouched: still on phase 0 (UNTAP), sickness intact.
+    assert synthetic_state.is_summoning_sick(elf_id) is True
