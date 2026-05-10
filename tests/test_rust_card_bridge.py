@@ -71,6 +71,75 @@ def test_round_trip_any_player_target():
     assert dict(effects[0]["target"]) == {"kind": "any_player"}
 
 
+def test_round_trip_draw_cards_effect():
+    """Round-8 bridge extension: DrawCards { count } effect."""
+    reg = mtg_bot_engine.Registry()
+    pid = reg.register_printing(
+        {
+            "name": "Concentrate-ish",
+            "mana_cost": {"U": 2, "generic": 2},
+            "card_types": ["Sorcery"],
+            "effects": [{"kind": "draw_cards", "count": 3}],
+        }
+    )
+    effects = [dict(e) for e in reg.get_printing_effects(pid)]
+    assert len(effects) == 1
+    e = effects[0]
+    assert e["kind"] == "draw_cards"
+    assert e["count"] == 3
+
+
+def test_round_trip_gain_life_effect():
+    """Round-8 bridge extension: GainLife { amount } effect."""
+    reg = mtg_bot_engine.Registry()
+    pid = reg.register_printing(
+        {
+            "name": "Healing Salve-ish",
+            "mana_cost": {"W": 1},
+            "card_types": ["Instant"],
+            "effects": [{"kind": "gain_life", "amount": 3}],
+        }
+    )
+    effects = [dict(e) for e in reg.get_printing_effects(pid)]
+    assert len(effects) == 1
+    e = effects[0]
+    assert e["kind"] == "gain_life"
+    assert e["amount"] == 3
+
+
+def test_round_trip_multiple_effect_kinds_preserve_order():
+    """Round-8 sanity: multiple variants of Effect can land on one card."""
+    reg = mtg_bot_engine.Registry()
+    pid = reg.register_printing(
+        {
+            "name": "Mixed Spell",
+            "effects": [
+                {"kind": "draw_cards", "count": 1},
+                {"kind": "gain_life", "amount": 2},
+                {"kind": "deal_damage", "amount": 1, "target": {"kind": "any_player"}},
+            ],
+        }
+    )
+    effects = [dict(e) for e in reg.get_printing_effects(pid)]
+    assert [e["kind"] for e in effects] == ["draw_cards", "gain_life", "deal_damage"]
+
+
+def test_draw_cards_missing_count_raises():
+    reg = mtg_bot_engine.Registry()
+    with pytest.raises(KeyError, match="count"):
+        reg.register_printing(
+            {"name": "Broken", "effects": [{"kind": "draw_cards"}]}
+        )
+
+
+def test_gain_life_missing_amount_raises():
+    reg = mtg_bot_engine.Registry()
+    with pytest.raises(KeyError, match="amount"):
+        reg.register_printing(
+            {"name": "Broken", "effects": [{"kind": "gain_life"}]}
+        )
+
+
 def test_vanilla_card_with_no_mana_cost_or_effects():
     reg = mtg_bot_engine.Registry()
     pid = reg.register_printing(VANILLA_BLANK)

@@ -54,6 +54,14 @@ pub enum TargetFilter {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Effect {
     DealDamage { amount: i32, target: TargetFilter },
+    /// Controller draws `count` cards. No target — caller's
+    /// controller is implicit. Real "target player draws N" effects
+    /// (e.g. Wheel of Fortune) need a player-target variant.
+    DrawCards { count: i32 },
+    /// Controller gains `amount` life. No target — caller's
+    /// controller is implicit. Real "target player gains N life"
+    /// effects need a player-target variant.
+    GainLife { amount: i32 },
 }
 
 #[derive(Clone, Debug)]
@@ -173,8 +181,16 @@ fn parse_effect(dict: &Bound<'_, PyDict>) -> PyResult<Effect> {
             let target = parse_target_filter(target_dict)?;
             Ok(Effect::DealDamage { amount, target })
         }
+        "draw_cards" => {
+            let count: i32 = require(dict, "count")?.extract()?;
+            Ok(Effect::DrawCards { count })
+        }
+        "gain_life" => {
+            let amount: i32 = require(dict, "amount")?.extract()?;
+            Ok(Effect::GainLife { amount })
+        }
         other => Err(PyValueError::new_err(format!(
-            "unknown effect kind {other:?}; valid: deal_damage"
+            "unknown effect kind {other:?}; valid: deal_damage, draw_cards, gain_life"
         ))),
     }
 }
@@ -346,6 +362,14 @@ fn effect_to_pydict<'py>(
             d.set_item("kind", "deal_damage")?;
             d.set_item("amount", *amount)?;
             d.set_item("target", target_filter_to_pydict(py, target)?)?;
+        }
+        Effect::DrawCards { count } => {
+            d.set_item("kind", "draw_cards")?;
+            d.set_item("count", *count)?;
+        }
+        Effect::GainLife { amount } => {
+            d.set_item("kind", "gain_life")?;
+            d.set_item("amount", *amount)?;
         }
     }
     Ok(d)

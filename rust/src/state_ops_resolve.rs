@@ -253,6 +253,15 @@ fn apply_effect(state: &mut GameState, effect: &Effect) -> PyResult<()> {
                 }
             }
         }
+        // Round-8 stub: DrawCards / GainLife variants exist in the
+        // bridge but haven't been wired to resolution yet. Foundation
+        // commit gets the build green; the round-8 resolve agent
+        // replaces these arms with real dispatch.
+        Effect::DrawCards { .. } | Effect::GainLife { .. } => {
+            return Err(pyo3::exceptions::PyValueError::new_err(
+                "Effect variant not yet wired to resolve_top_of_stack — round-8 resolve agent fills this in",
+            ));
+        }
     }
     Ok(())
 }
