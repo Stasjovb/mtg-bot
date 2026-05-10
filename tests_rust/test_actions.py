@@ -702,3 +702,123 @@ def test_apply_action_unknown_kind_message_mentions_declare_blockers(synthetic_s
     a future variant addition forces the message to grow."""
     with pytest.raises(ValueError, match=r"declare_blockers"):
         synthetic_state.apply_action({"kind": "frobnicate"})
+
+
+# --- ActivateAbility -------------------------------------------------
+#
+# Round-23 slice (Phase 3, batch 4): extend the Action enum +
+# apply_action dispatcher with ``Action::ActivateAbility { source_id,
+# ability_index }``. The Python dataclass
+# ``ActivateAbility(source_id: int, ability_index: int)`` carries two
+# ints — the GameObject id of the permanent whose ability fires and
+# the 0-based index into the source's printing.activated_abilities
+# list (CR 602.2 — printings can have multiple activated abilities).
+#
+# Round-20 frequency: 8 of 420 decisions (~1.9%) — 5th-most-frequent
+# variant after ``PassPriority``, ``DeclareAttackers``, ``PlayLand``,
+# and ``DeclareBlockers``.
+#
+# **Dispatch is stubbed.** A grep across ``rust/src/`` confirms no
+# Rust ``activate_ability`` primitive exists yet (rounds 1-22 didn't
+# build one). The variant + bridge round-trip ship now, so callers
+# building Action dicts can already use the ``activate_ability`` shape
+# and hit a clear "not implemented yet" error path rather than the
+# generic ``unknown action kind`` rejection. A future slice adds the
+# primitive (mana-cost pay + ability resolution, analogous to
+# ``play_land`` / ``cast_creature``) then flips the dispatch arm to a
+# real ``call_method1("activate_ability", ...)`` call. Until then,
+# happy-path dispatch raises ``ValueError`` with the documented
+# message — these tests assert on the stubbed error path, NOT on a
+# successful activation outcome.
+
+
+def test_apply_action_activate_ability_stub_raises_value_error(synthetic_state):
+    """Happy-path stub: a well-formed ActivateAbility dict parses
+    cleanly but the dispatch arm raises ``ValueError`` because no
+    Rust primitive exists yet. The error message names the variant
+    + flags it as future work so a follow-up slice grepping for the
+    string finds the dispatch site to flip."""
+    with pytest.raises(ValueError, match=r"ActivateAbility dispatch not implemented yet"):
+        synthetic_state.apply_action(
+            {"kind": "activate_ability", "source_id": 5, "ability_index": 0}
+        )
+
+
+def test_apply_action_activate_ability_stub_error_mentions_round_24(synthetic_state):
+    """The stub message points at round 24+ as the follow-up window.
+    Pin the substring so the message stays informative — a future
+    slice that flips the dispatch to a real call must also delete
+    this test (it documents the stub-state, not the eventual real
+    behavior)."""
+    with pytest.raises(ValueError, match=r"round 24"):
+        synthetic_state.apply_action(
+            {"kind": "activate_ability", "source_id": 5, "ability_index": 2}
+        )
+
+
+def test_apply_action_activate_ability_missing_source_id_raises_key_error(
+    synthetic_state,
+):
+    """Missing the ``source_id`` key raises ``KeyError`` —
+    ``parse_action`` rejects before dispatch (single point of
+    validation, mirrors the ``card_id``-missing shape on
+    ``play_land``). The KeyError fires BEFORE the dispatch-stub
+    ValueError, so this test pins the parse-time gate."""
+    with pytest.raises(KeyError, match="source_id"):
+        synthetic_state.apply_action(
+            {"kind": "activate_ability", "ability_index": 0}
+        )
+
+
+def test_apply_action_activate_ability_missing_ability_index_raises_key_error(
+    synthetic_state,
+):
+    """Missing the ``ability_index`` key raises ``KeyError`` — same
+    parse-time gate as ``source_id``. Both keys are required; the
+    parser reads them in order, so this test specifically exercises
+    the second key's check (source_id present, ability_index
+    missing)."""
+    with pytest.raises(KeyError, match="ability_index"):
+        synthetic_state.apply_action(
+            {"kind": "activate_ability", "source_id": 5}
+        )
+
+
+def test_apply_action_activate_ability_wrong_type_for_source_id_raises(
+    synthetic_state,
+):
+    """``source_id`` must be a u32-extractable integer. A string fails
+    PyO3's ``extract::<u32>`` machinery → ``TypeError`` / ``ValueError``.
+    The dispatch-stub never runs; the parse-time gate fires first."""
+    with pytest.raises((TypeError, ValueError)):
+        synthetic_state.apply_action(
+            {
+                "kind": "activate_ability",
+                "source_id": "not-an-int",
+                "ability_index": 0,
+            }
+        )
+
+
+def test_apply_action_activate_ability_wrong_type_for_ability_index_raises(
+    synthetic_state,
+):
+    """``ability_index`` must be a u32-extractable integer. A string
+    fails the parse-time extract — ``TypeError`` / ``ValueError``
+    before any dispatch happens."""
+    with pytest.raises((TypeError, ValueError)):
+        synthetic_state.apply_action(
+            {
+                "kind": "activate_ability",
+                "source_id": 5,
+                "ability_index": "not-an-int",
+            }
+        )
+
+
+def test_apply_action_unknown_kind_message_mentions_activate_ability(synthetic_state):
+    """The unknown-kind error message includes ``activate_ability``
+    after this slice extends the variant list. Pin the substring so
+    a future variant addition forces the message to grow."""
+    with pytest.raises(ValueError, match=r"activate_ability"):
+        synthetic_state.apply_action({"kind": "frobnicate"})

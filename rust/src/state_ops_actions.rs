@@ -71,6 +71,7 @@
 
 use crate::actions::{parse_action, Action};
 use crate::state::GameState;
+use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 use pyo3::types::PyDict;
 
@@ -99,11 +100,20 @@ impl GameState {
     ///   `declare_blocker(blocker_id, attacker_id)` once per pair in
     ///   input order (round 23). Ineligible pairs are silently
     ///   rejected by the primitive's `bool` return.
+    /// - `{"kind": "activate_ability", "source_id": <u32>,
+    ///   "ability_index": <u32>}` → STUB. The variant + bridge round-
+    ///   trip ship in round 23, but no Rust `activate_ability`
+    ///   primitive exists yet (rounds 1-22 didn't build one), so the
+    ///   dispatch arm raises `ValueError` with a "not implemented
+    ///   yet" message. A future slice adds the primitive and flips
+    ///   the arm to a real `call_method1("activate_ability",
+    ///   (source_id, ability_index))` dispatch.
     ///
     /// Unknown `kind` raises `ValueError`; missing `kind` or other
     /// required keys (e.g. `card_id` for `play_land`,
     /// `attacker_ids` for `declare_attackers`, `assignments` for
-    /// `declare_blockers`) raise `KeyError`. Both bubble up from
+    /// `declare_blockers`, `source_id` / `ability_index` for
+    /// `activate_ability`) raise `KeyError`. Both bubble up from
     /// `actions::parse_action`.
     fn apply_action(slf: Bound<'_, Self>, action_dict: &Bound<'_, PyDict>) -> PyResult<()> {
         let action = parse_action(action_dict)?;
@@ -175,6 +185,36 @@ impl GameState {
                 for (blocker_id, attacker_id) in assignments {
                     slf.call_method1("declare_blocker", (blocker_id, attacker_id))?;
                 }
+            }
+            Action::ActivateAbility {
+                source_id: _,
+                ability_index: _,
+            } => {
+                // Round-23 slice ships the Action variant + bridge
+                // (parse_action + action_to_pydict) round-trip
+                // scaffold; the dispatch arm is a stub because no
+                // Rust `activate_ability` primitive exists yet.
+                // Grep across `rust/src/` confirms rounds 1-22 didn't
+                // build one — the mana-cost-pay + ability-resolution
+                // flow (analogous to how `play_land` and
+                // `cast_creature` already handle their costs) is the
+                // missing primitive. A future slice adds that
+                // primitive then flips this arm to a real
+                // `call_method1("activate_ability", (source_id,
+                // ability_index))` dispatch — at which point the
+                // variant + bridge already shipped here keep working
+                // unchanged. Round-20 frequency: 8 of 420 decisions
+                // (~1.9%) — worth a real implementation in a future
+                // slice, but worth shipping the scaffold now so
+                // callers building Action dicts can already build the
+                // `activate_ability` shape and hit a clear error path
+                // instead of `unknown action kind`.
+                return Err(PyValueError::new_err(
+                    "ActivateAbility dispatch not implemented yet \
+                     (round 24+ — Rust primitive missing; this slice \
+                     ships the Action variant scaffold + bridge \
+                     round-trip only)",
+                ));
             }
         }
         Ok(())
