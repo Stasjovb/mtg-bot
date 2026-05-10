@@ -528,6 +528,7 @@ def _self_play_distributed(  # pragma: no cover
     use_ismcts: bool = False,
     use_belief_weighted: bool = False,
     heuristics: HeuristicsConfig | None = None,
+    action_encoding_version: str = "positional_v1",
 ) -> tuple[int, int, float]:
     """Distributed self-play: dispatch the iter's games across the
     shards in ``shards_config``, gather all per-shard npzs into the
@@ -566,6 +567,7 @@ def _self_play_distributed(  # pragma: no cover
         heuristics=heuristics if heuristics is not None else HeuristicsConfig(),
         architecture=architecture,
         policy_hidden_sizes=policy_hidden_sizes,
+        action_encoding_version=action_encoding_version,
     )
     started = time.perf_counter()
     extra_kwargs: dict = {}
@@ -630,10 +632,18 @@ def _eval_match_distributed(  # pragma: no cover
     shard_ssh_timeout_s: float | None = None,
     use_ismcts: bool = False,
     use_belief_weighted: bool = False,
+    new_action_encoding_version: str = "positional_v1",
+    old_action_encoding_version: str = "positional_v1",
 ) -> tuple[int, int, int, float]:
     """Distributed eval-gate match. Mirrors ``_eval_match``'s return
     contract ``(new_wins, old_wins, draws, elapsed_seconds)`` so
-    iterate's caller doesn't change shape."""
+    iterate's caller doesn't change shape.
+
+    Each side's ``action_encoding_version`` is threaded separately
+    because cross-version evals (e.g. v17[canonical_v2] vs
+    v13[positional_v1]) genuinely need each NN to encode under its
+    own slot mapping for the PUCT priors to make sense.
+    """
     spec = EvalJobSpec(
         new_weights_path=str(new_weights),
         old_weights_path=str(old_weights) if old_weights else None,
@@ -657,6 +667,8 @@ def _eval_match_distributed(  # pragma: no cover
         new_architecture=new_architecture,
         old_architecture=old_architecture,
         policy_hidden_sizes=policy_hidden_sizes,
+        new_action_encoding_version=new_action_encoding_version,
+        old_action_encoding_version=old_action_encoding_version,
     )
     started = time.perf_counter()
     extra_kwargs: dict = {}
@@ -1573,6 +1585,9 @@ def main(argv=None) -> None:  # pragma: no cover
                 best_meta.training.get("policy_hidden_sizes") or ()
             ) or None
         )
+        best_action_encoding_version = getattr(
+            best_meta, "action_encoding_version", "positional_v1",
+        )
 
         print(
             f"\n[iterate] === Iteration {n_done + 1}/"
@@ -1717,6 +1732,7 @@ def main(argv=None) -> None:  # pragma: no cover
                 heuristics=HeuristicsConfig(
                     phase_prune_enabled=not args.no_phase_priority_prune,
                 ),
+                action_encoding_version=iter_action_encoding_version,
             )
         print(
             f"[iterate]   gen done in {gen_elapsed/60:.1f}m: "
@@ -1902,6 +1918,12 @@ def main(argv=None) -> None:  # pragma: no cover
                         shard_ssh_timeout_s=args.shard_ssh_timeout_min * 60,
                         use_ismcts=args.use_ismcts,
                         use_belief_weighted=args.use_belief_weighted,
+                        new_action_encoding_version=(
+                            iter_action_encoding_version
+                        ),
+                        old_action_encoding_version=(
+                            best_action_encoding_version
+                        ),
                     )
                 )
             n_decided = wins_new + wins_old

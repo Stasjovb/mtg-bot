@@ -415,6 +415,16 @@ class SelfPlayJobSpec:
     # right ``_ValuePolicyMLP*`` class.
     architecture: Optional[str] = None
     policy_hidden_sizes: Optional[tuple[int, ...]] = None
+    # Slot-mapping convention the bootstrap weights were trained
+    # against — threaded into the shard's NNPimcConfig so PUCT prior
+    # lookups and policy-target encoding agree on which decision goes
+    # to which slot. ``None`` defaults to NNEvaluator's
+    # ``"positional_v1"`` (v13/v15/v16 metadata predates the field and
+    # back-compat-defaults correctly). v17+ training under
+    # ``canonical_v2`` requires this to round-trip across the SSH
+    # spec boundary or remote shards silently fall back to v1 and
+    # mix v1-encoded data into v2-trained weights.
+    action_encoding_version: Optional[str] = None
     # Bundle of priority short-circuit / filter heuristics applied by
     # ``MtgGameStateAdapter`` during search. Self-play default = every
     # flag ON (see ``HeuristicsConfig`` defaults). Per-heuristic
@@ -465,6 +475,7 @@ class SelfPlayJobSpec:
                 list(self.policy_hidden_sizes)
                 if self.policy_hidden_sizes is not None else None
             ),
+            "action_encoding_version": self.action_encoding_version,
         }
 
     @classmethod
@@ -502,6 +513,7 @@ class SelfPlayJobSpec:
                 tuple(d["policy_hidden_sizes"])
                 if d.get("policy_hidden_sizes") is not None else None
             ),
+            action_encoding_version=d.get("action_encoding_version"),
         )
 
 
@@ -542,6 +554,15 @@ class EvalJobSpec:
     new_architecture: Optional[str] = None
     old_architecture: Optional[str] = None
     policy_hidden_sizes: Optional[tuple[int, ...]] = None
+    # Per-side slot-mapping convention the new / old weights were
+    # trained against. Separate fields because cross-version evals
+    # (e.g. v17[canonical_v2] vs v13[positional_v1]) genuinely need
+    # each side to encode under its own version — using the wrong
+    # version on either side scrambles that side's PUCT priors. ``None``
+    # defaults to NNEvaluator's positional_v1, matching the v13/v15/v16
+    # metadata-missing back-compat path.
+    new_action_encoding_version: Optional[str] = None
+    old_action_encoding_version: Optional[str] = None
     # Bundle of priority short-circuit / filter heuristics. Eval
     # default = every flag OFF (``HeuristicsConfig.disabled()``):
     # match outcomes determine acceptance, so the strength-vs-
@@ -584,6 +605,12 @@ class EvalJobSpec:
                 list(self.policy_hidden_sizes)
                 if self.policy_hidden_sizes is not None else None
             ),
+            "new_action_encoding_version": (
+                self.new_action_encoding_version
+            ),
+            "old_action_encoding_version": (
+                self.old_action_encoding_version
+            ),
         }
 
     @classmethod
@@ -621,6 +648,12 @@ class EvalJobSpec:
             policy_hidden_sizes=(
                 tuple(d["policy_hidden_sizes"])
                 if d.get("policy_hidden_sizes") is not None else None
+            ),
+            new_action_encoding_version=d.get(
+                "new_action_encoding_version"
+            ),
+            old_action_encoding_version=d.get(
+                "old_action_encoding_version"
             ),
         )
 
@@ -671,6 +704,7 @@ def run_shard_local(
         hidden_sizes=spec.hidden_sizes,
         architecture=spec.architecture,
         policy_hidden_sizes=spec.policy_hidden_sizes,
+        action_encoding_version=spec.action_encoding_version,
         use_ismcts=spec.use_ismcts,
         use_belief_weighted=spec.use_belief_weighted,
         # Resolve locally on this shard's host: master picks "cuda",
@@ -758,6 +792,9 @@ def run_shard_local(
                 replay_config=replay_config,
                 hang_dump_dir=hang_dump_dir,
                 heuristics=spec.heuristics,
+                action_encoding_version=(
+                    spec.action_encoding_version or "positional_v1"
+                ),
             )
         )
     except BaseException:
@@ -1865,6 +1902,7 @@ def run_shard_pull(
         hidden_sizes=spec.hidden_sizes,
         architecture=spec.architecture,
         policy_hidden_sizes=spec.policy_hidden_sizes,
+        action_encoding_version=spec.action_encoding_version,
         use_ismcts=spec.use_ismcts,
         use_belief_weighted=spec.use_belief_weighted,
     )
@@ -1967,12 +2005,17 @@ def run_shard_pull(
         )
 
     def _build_args(game_idx: int) -> tuple:
+        # 13-element form so the worker's ``_play_one_parallel_game``
+        # picks up the spec's slot-mapping convention rather than
+        # silently defaulting to v1. ``None`` flows through as v1
+        # there too — keeps the existing v13/v15/v16 behavior intact.
         return (
             game_idx, factory, factory, spec.base_seed,
             spec.decision_cap, spec.sample_every,
             replay_config, deck_pool,
             spec.enable_mulligans, spec.per_game_timeout_sec,
             hang_dump_dir, spec.heuristics,
+            spec.action_encoding_version or "positional_v1",
         )
 
     def _flush() -> None:
@@ -2206,6 +2249,7 @@ def run_shard_eval_pull(
         hidden_sizes=spec.hidden_sizes,
         architecture=spec.new_architecture,
         policy_hidden_sizes=spec.policy_hidden_sizes,
+        action_encoding_version=spec.new_action_encoding_version,
         use_ismcts=spec.use_ismcts,
         use_belief_weighted=spec.use_belief_weighted,
         device=_device,
@@ -2218,6 +2262,7 @@ def run_shard_eval_pull(
             hidden_sizes=spec.hidden_sizes,
             architecture=spec.old_architecture,
             policy_hidden_sizes=spec.policy_hidden_sizes,
+            action_encoding_version=spec.old_action_encoding_version,
             use_ismcts=spec.use_ismcts,
             use_belief_weighted=spec.use_belief_weighted,
             device=_device,
