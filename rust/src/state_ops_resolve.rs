@@ -303,7 +303,21 @@ fn move_source_post_resolve(state: &mut GameState, source_obj_id: u32) -> Option
 /// new variant in the bridge will turn this into a build-time
 /// error (exhaustiveness) until handled here — the desired "fail
 /// loud" property for free.
-fn apply_effect(state: &mut GameState, effect: &Effect) -> PyResult<()> {
+///
+/// `source_obj_id` is the resolving stack item's source GameObject
+/// id. Most arms ignore it (they target the defending player /
+/// active_player / a Vec-index pick); the round-23
+/// `PutPlusOneCounterOnSelf` arm needs it to locate the "self" /
+/// "this creature" recipient — the source object on the
+/// battlefield. Threaded through here rather than re-finding from
+/// the stack so the existing borrow-then-drop pattern in
+/// `resolve_top_of_stack` (snapshot effects, drop registry borrow,
+/// iterate) stays intact.
+fn apply_effect(
+    state: &mut GameState,
+    effect: &Effect,
+    source_obj_id: u32,
+) -> PyResult<()> {
     match effect {
         Effect::DealDamage { amount, target } => {
             let defender: u8 = 1 - state.active_player;
@@ -1118,6 +1132,314 @@ fn apply_effect(state: &mut GameState, effect: &Effect) -> PyResult<()> {
                 next_id += 1;
             }
         }
+        // Round-23: AddManaToPool. CR 106.1 — the resolution of a mana
+        // ability. The active player (= controller of the resolving
+        // mana ability or stack item, first-slice convention mirrored
+        // from DealDamage / DrawCards / GainLife / CreateToken) gets
+        // ``amount`` mana of ``color`` credited to their pool.
+        //
+        // **Controller convention: ``state.active_player``** — same
+        // first-slice shape as every other implicit-controller arm.
+        // Real MTG plumbs the spell/ability controller through
+        // ``StackItem.controller``; deferred to a future slice along
+        // with the rest of the controller plumbing.
+        //
+        // **Negative ``amount`` raises** loudly (mirrors ScryN /
+        // DealDamage / DamageEach* / CreateToken raise-on-negative
+        // shape). amount=0 is a legitimate no-op success.
+        //
+        // **Inlining note (cross-file friction).** The Rust `add_mana`
+        // primitive on `GameState` lives in `state_ops_mana.rs`
+        // (round 2) — it does exactly what we need (validate
+        // non-negative, slot-mut by color, saturating_add). Routing
+        // through it would require a cross-`#[pymethods]` call which
+        // PyO3 lets us model only via `Bound::call_method1`, an awkward
+        // shape inside `apply_effect` where we already hold
+        // `state: &mut GameState`. Inlining the slot match here is
+        // simpler and keeps `apply_effect` as a pure-Rust dispatch.
+        // A follow-up consolidation slice can collapse this onto the
+        // shared primitive once cross-file private-fn calls are
+        // re-enabled.
+        Effect::AddManaToPool { color, amount } => {
+            if *amount < 0 {
+                return Err(PyValueError::new_err(format!(
+                    "AddManaToPool amount must be non-negative, got {amount}"
+                )));
+            }
+            let controller_idx = state.active_player as usize;
+            let pool = &mut state.players[controller_idx].mana_pool;
+            let amount_u8 = (*amount).min(u8::MAX as i32) as u8;
+            match color.as_str() {
+                "W" => pool.white = pool.white.saturating_add(amount_u8),
+                "U" => pool.blue = pool.blue.saturating_add(amount_u8),
+                "B" => pool.black = pool.black.saturating_add(amount_u8),
+                "R" => pool.red = pool.red.saturating_add(amount_u8),
+                "G" => pool.green = pool.green.saturating_add(amount_u8),
+                "C" => pool.colorless = pool.colorless.saturating_add(amount_u8),
+                other => {
+                    return Err(PyValueError::new_err(format!(
+                        "AddManaToPool: unknown color {other:?}; valid: W, U, B, R, G, C"
+                    )))
+                }
+            }
+        }
+        // Round-23: SearchLibraryForBasicLandTapped. CR 701.19 search +
+        // 701.22 shuffle. The active player (= controller of resolving
+        // stack item, first-slice convention mirrored from every other
+        // implicit-controller arm) searches their library for up to
+        // `count` basic land cards, puts each onto the battlefield
+        // tapped. Powers Rampant Growth / Beamsaw Prospector / Kavaron
+        // Harrier — 15 cards in the EoE pool per round-20 measurement.
+        //
+        // **Deterministic first-match pick (top-to-bottom).** Library
+        // is bottom-first in the Vec (lib[len-1] = top of library); scan
+        // via iter().rev() to grab the topmost matching object. Real
+        // MTG lets the player choose any matching card; deferred until
+        // decision callbacks exist.
+        //
+        // **Basic-land filter: `card_types contains "Land"`.** The Rust
+        // bridge has no `supertypes` field today (Python's
+        // `is_basic_land` is `is_land and "Basic" in supertypes`), so
+        // the basic half is approximated by the card_types Land check.
+        // For the EoE pool every basic land has card_types=["Land"]
+        // with no compound non-basic land carrying this dispatch path
+        // (non-basic-fetch dispatches go through SearchLibraryForCard /
+        // other variants), so the proxy is faithful for the current
+        // set. See SEARCH_LIMITATIONS entry for the deferred supertypes
+        // work.
+        //
+        // **No shuffle.** CR 701.19's "always shuffle after search"
+        // invariant is deliberately not honored in this first slice —
+        // shuffling would require threading an RNG seed through
+        // `apply_effect`, and the deterministic first-match pick is
+        // reproducible without one. The
+        // `search_library_for_first_of_type_and_shuffle` primitive in
+        // `state_ops_library.rs` is the right composition once
+        // RNG-externalization lands. Documented in SEARCH_LIMITATIONS.
+        //
+        // **count<0 raises** loudly (defense-in-depth; parse_effect
+        // catches this at register time). **count=0 is a legal no-op**
+        // (mirrors GainLife / DrawCards / Mill / CreateToken zero-count
+        // conventions).
+        //
+        // **Partial fill on early-exhaust.** If fewer than `count`
+        // basic lands exist in the library, stop early silently —
+        // matches Python's `next(..., None)` short-circuit on miss.
+        //
+        // **Per-object state on battlefield entry.** Lands enter
+        // tapped (`tapped = true`) and NOT summoning-sick
+        // (`summoning_sick = false` — CR 302.1 only applies to
+        // creatures; a land bypassing creature-spell resolution via
+        // a search effect has no summoning sickness regardless). The
+        // `controller` field is stamped to the active player —
+        // searching for someone else's basic land into their own
+        // battlefield isn't a thing in real MTG, so first-slice the
+        // searched land enters under the searcher's control.
+        //
+        // **Inlining note (cross-file friction).** Per per-slice file-
+        // isolation we inline the search + move logic here rather
+        // than calling `search_library_for_first_of_type_and_shuffle`
+        // (which is a `#[pymethods]` method in
+        // `state_ops_library.rs` requiring a `Bound::call_method1`
+        // awkward shape inside `apply_effect`). A future
+        // consolidation slice can collapse onto the shared primitive.
+        Effect::SearchLibraryForBasicLandTapped { count } => {
+            if *count < 0 {
+                return Err(PyValueError::new_err(format!(
+                    "SearchLibraryForBasicLandTapped count must be non-negative, got {count}"
+                )));
+            }
+            let n = *count as usize;
+            if n == 0 {
+                return Ok(());
+            }
+            let controller_idx = state.active_player as usize;
+            for _ in 0..n {
+                // Locate the topmost basic-land match (Vec iter rev =
+                // top-to-bottom). Inlined here (vs. delegating to the
+                // search-only sibling) so we have the Vec INDEX for
+                // removal, not just the obj_id.
+                let pos: Option<usize> = {
+                    let lib = &state.players[controller_idx].library;
+                    let mut found: Option<usize> = None;
+                    for i in (0..lib.len()).rev() {
+                        let obj = &lib[i];
+                        let printing = match state.registry.lookup(obj.printing_id) {
+                            Some(p) => p,
+                            None => continue,
+                        };
+                        if printing.card_types.iter().any(|t| t == "Land") {
+                            found = Some(i);
+                            break;
+                        }
+                    }
+                    found
+                };
+                let p = match pos {
+                    Some(p) => p,
+                    None => break, // no more basic lands — stop early silently
+                };
+                let player = &mut state.players[controller_idx];
+                let lib = Arc::make_mut(&mut player.library);
+                let mut obj = lib.remove(p);
+                // Stamp battlefield entry: tapped, not summoning-sick
+                // (CR 302.1 applies to creatures; lands don't have
+                // summoning sickness regardless). Controller =
+                // active_player (the searcher).
+                obj.zone = ZONE_BATTLEFIELD;
+                obj.tapped = true;
+                obj.summoning_sick = false;
+                obj.controller = state.active_player;
+                obj.damage = 0;
+                obj.counters = 0;
+                Arc::make_mut(&mut player.battlefield).push(obj);
+            }
+            // CR 701.19 "always shuffle after search" deliberately
+            // NOT honored in this first slice — see module docstring
+            // + SEARCH_LIMITATIONS entry for the deferred RNG-
+            // externalization work.
+        }
+        // Round-23: PutPlusOneCounterOnSelf. CR 122.6 + 701.13 — put
+        // `amount` +1/+1 counters on the resolving spell's source
+        // permanent ("this creature" / "self" target). Powers Blade
+        // of the Swarm, Atomic Microsizer — 16 cards in the EoE pool
+        // per round-20 measurement.
+        //
+        // **"Self" vs AddCounters' "defender's first creature".**
+        // AddCounters deterministically picks the defending player's
+        // battlefield[0] (an opponent-target shape). This arm
+        // recipient = the source GameObject of the resolving stack
+        // item, located via `source_obj_id` threaded through
+        // `apply_effect`. Mirrors Python's `state.resolving_source`
+        // lookup in `PutPlusOneCounterOnSelf.resolve`.
+        //
+        // **Source-not-on-battlefield = silent no-op.** Real MTG: if
+        // the source has left the battlefield by the time the
+        // counter resolves (e.g. it was destroyed in response to
+        // the trigger), the counter "lands on nothing" / fizzles.
+        // First slice honors that — we walk both players' battlefield
+        // Vecs looking for an object with the matching id; if not
+        // found, return Ok(()) silently. Mirrors Python's
+        // `source is None` short-circuit. NOTE: this means a
+        // schema-allowed Instant/Sorcery printing carrying this
+        // effect (the source still sits on the stack at resolve
+        // time, NOT on the battlefield) fizzles — semantically
+        // nonsense ("the instant's source isn't a creature"), but
+        // doesn't error.
+        //
+        // **amount<0 raises** loudly (defense-in-depth; parse_effect
+        // catches at register time). **amount=0 is a legal no-op**
+        // (mirrors GainLife / DrawCards / Mill / SearchLibrary /
+        // CreateToken zero-amount conventions).
+        //
+        // **Round-2 net-counter model.** The positive `amount` lands
+        // as a positive delta on the i32 `counters` field via
+        // `saturating_add` — same shape as AddCounters' positive
+        // branch.
+        //
+        // **Inlining note (cross-file friction).** Per per-slice
+        // file-isolation we inline the battlefield scan +
+        // `Arc::make_mut` + `saturating_add` here, mirroring how
+        // AddCounters / DealDamage AnyCreature / TapTarget /
+        // UntapTarget inline their counter-mutations.
+        Effect::PutPlusOneCounterOnSelf { amount } => {
+            if *amount < 0 {
+                return Err(PyValueError::new_err(format!(
+                    "PutPlusOneCounterOnSelf amount must be non-negative, got {amount}"
+                )));
+            }
+            if *amount == 0 {
+                return Ok(());
+            }
+            let delta = *amount;
+            // Locate the source on a battlefield zone. If it lives
+            // somewhere else (hand / library / graveyard / stack /
+            // exile) the counter add fizzles silently per the docstring
+            // — schema-allowed but semantically a no-op for the spell
+            // / ETB / trigger that referenced "self".
+            let mut found_player: Option<usize> = None;
+            for (pidx, player) in state.players.iter().enumerate() {
+                if player.battlefield.iter().any(|o| o.id == source_obj_id) {
+                    found_player = Some(pidx);
+                    break;
+                }
+            }
+            let pidx = match found_player {
+                Some(p) => p,
+                None => return Ok(()), // fizzle silently
+            };
+            let bf_mut: &mut Vec<GameObject> =
+                Arc::make_mut(&mut state.players[pidx].battlefield);
+            for obj in bf_mut.iter_mut() {
+                if obj.id == source_obj_id {
+                    obj.counters = obj.counters.saturating_add(delta);
+                    break;
+                }
+            }
+        }
+        // Round-23: Surveil. CR 701.42 — controller looks at the top
+        // `count` cards of their library and may put any number of
+        // them into their graveyard; the rest stay on top in any
+        // order. Powers Appendage Amalgam, etc. — 16 cards in the EoE
+        // pool per round-20 measurement.
+        //
+        // **Sibling of ScryN (round 16).** Same look-at-top-N shape,
+        // different destination zone: Scry routes the chosen cards to
+        // the bottom of the library; Surveil routes them to the
+        // graveyard.
+        //
+        // **First-slice deterministic shortcut: keep all on top.**
+        // Mirrors round-16 ScryN's "keep all on top" first-slice
+        // choice — satisfies the "surveil happened" semantics without
+        // requiring a decision callback to choose which cards go to
+        // the graveyard (deferred to a future slice that plumbs a real
+        // "which to graveyard" decision surface, parallel to the
+        // deferred ScryN "which to bottom" plumbing). Keep-on-top is
+        // mechanically a no-op on both the library and the graveyard
+        // — no zone moves, no order change — so there is literally
+        // nothing to mutate here.
+        //
+        // **Controller convention: ``state.active_player``** — same
+        // first-slice shape as ScryN / DrawCards / GainLife (all
+        // implicit-controller). Real MTG plumbs the spell controller
+        // through ``StackItem.controller``; deferred. `source_obj_id`
+        // (round-23 refactor parameter) is ignored here — Surveil is
+        // controller-targeted, not source-targeted.
+        //
+        // **Negative ``count`` raises** loudly (CR 701.42 doesn't
+        // define Surveil -1; surface it as a schema error). Mirrors
+        // ScryN's negative-count rejection. Defense-in-depth: the
+        // parser already rejects negatives at register time.
+        //
+        // **count > library size** is silently a no-op under the
+        // keep-all-on-top first slice (CR 701.42 would clamp to
+        // "look at all cards in the library", same as Scry; with
+        // keep-on-top no cards move regardless).
+        //
+        // **Inlining note (cross-file friction).** Round-16 ScryN
+        // already collapses to a sign-check + a no-op under keep-on-
+        // top; Surveil is the same shape, so the dispatch reduces to
+        // the same sign check. A future slice that plumbs the real
+        // "which to graveyard" decision can grow the inline path here
+        // (popping N cards from library top, presenting them through
+        // a Python-side `choose_surveil` callback, routing chosen
+        // cards to `Arc::make_mut(&mut player.graveyard).push(obj)`
+        // and the rest back to library top in original order).
+        Effect::Surveil { count } => {
+            if *count < 0 {
+                return Err(PyValueError::new_err(format!(
+                    "Surveil count must be non-negative, got {count}"
+                )));
+            }
+            // First-slice deterministic keep-all-on-top: no library /
+            // graveyard mutation needed. Empty / clamped library is
+            // a silent no-op (nothing to look at, nothing to move).
+            // Bind the controller to make the convention explicit for
+            // future readers (the real "which to graveyard" decision
+            // will resolve against this player), mirroring ScryN.
+            let _controller = state.active_player as usize;
+            let _ = source_obj_id; // controller-targeted, not source-targeted
+        }
     }
     Ok(())
 }
@@ -1168,7 +1490,7 @@ impl GameState {
         };
 
         for effect in &effects {
-            apply_effect(self, effect)?;
+            apply_effect(self, effect, top.source_obj_id)?;
         }
 
         // CR 608.2m: post-resolve, move the spell source. Instants /
@@ -1198,7 +1520,7 @@ impl GameState {
                     None => Vec::new(),
                 };
             for effect in &etb_effects {
-                apply_effect(self, effect)?;
+                apply_effect(self, effect, top.source_obj_id)?;
             }
         }
 

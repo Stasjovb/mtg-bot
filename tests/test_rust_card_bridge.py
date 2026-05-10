@@ -563,6 +563,363 @@ def test_create_token_missing_printing_id_raises():
         )
 
 
+# --- AddManaToPool (round-23 effect-coverage slice) -----------------
+
+
+def test_round_trip_add_mana_to_pool_effect():
+    """CR 106.1 — mana ability resolution. Mana-rocks and basic-land
+    mana abilities all flow through this Effect. Round-trip a single
+    `{"kind": "add_mana_to_pool", "color": "G", "amount": 1}` entry
+    on an EoE-shaped Forest-like printing."""
+    reg = mtg_bot_engine.Registry()
+    pid = reg.register_printing(
+        {
+            "name": "Forest Mana Ability",
+            "effects": [
+                {"kind": "add_mana_to_pool", "color": "G", "amount": 1}
+            ],
+        }
+    )
+    effects = [dict(e) for e in reg.get_printing_effects(pid)]
+    assert effects[0]["kind"] == "add_mana_to_pool"
+    assert effects[0]["color"] == "G"
+    assert effects[0]["amount"] == 1
+
+
+def test_round_trip_add_mana_to_pool_colorless():
+    """A Mind-Stone-shaped mana-rock minting a single colorless coin —
+    "C" is in the closed mana vocab and round-trips end-to-end."""
+    reg = mtg_bot_engine.Registry()
+    pid = reg.register_printing(
+        {
+            "name": "Mind Stone Mana Ability",
+            "effects": [
+                {"kind": "add_mana_to_pool", "color": "C", "amount": 1}
+            ],
+        }
+    )
+    effects = [dict(e) for e in reg.get_printing_effects(pid)]
+    assert effects[0] == {
+        "kind": "add_mana_to_pool",
+        "color": "C",
+        "amount": 1,
+    }
+
+
+def test_add_mana_to_pool_missing_color_raises():
+    """Schema validation: `color` is required, missing it raises
+    KeyError loudly (no silent default-to-colorless fallback)."""
+    reg = mtg_bot_engine.Registry()
+    with pytest.raises(KeyError, match="color"):
+        reg.register_printing(
+            {
+                "name": "Broken",
+                "effects": [{"kind": "add_mana_to_pool", "amount": 1}],
+            }
+        )
+
+
+def test_add_mana_to_pool_missing_amount_raises():
+    """Schema validation: `amount` is required, missing it raises
+    KeyError loudly."""
+    reg = mtg_bot_engine.Registry()
+    with pytest.raises(KeyError, match="amount"):
+        reg.register_printing(
+            {
+                "name": "Broken",
+                "effects": [{"kind": "add_mana_to_pool", "color": "G"}],
+            }
+        )
+
+
+def test_add_mana_to_pool_invalid_color_raises():
+    """Schema validation: `color` must be in W/U/B/R/G/C closed vocab.
+    "X" is the protection-from-X target color, not a mana color —
+    surface as ValueError at register time."""
+    reg = mtg_bot_engine.Registry()
+    with pytest.raises(ValueError, match="unknown mana symbol"):
+        reg.register_printing(
+            {
+                "name": "Broken",
+                "effects": [
+                    {"kind": "add_mana_to_pool", "color": "X", "amount": 1}
+                ],
+            }
+        )
+
+
+def test_add_mana_to_pool_negative_amount_raises_at_register_time():
+    """Register-time guard on negative amounts (matches the
+    apply_effect guard, surfaced earlier in the pipeline)."""
+    reg = mtg_bot_engine.Registry()
+    with pytest.raises(ValueError, match="non-negative"):
+        reg.register_printing(
+            {
+                "name": "Broken",
+                "effects": [
+                    {"kind": "add_mana_to_pool", "color": "G", "amount": -1}
+                ],
+            }
+        )
+
+
+# --- SearchLibraryForBasicLandTapped (round-23 effect-coverage slice) -
+
+
+def test_round_trip_search_library_for_basic_land_tapped_effect():
+    """CR 701.19 search + 701.22 shuffle — Rampant Growth /
+    Beamsaw Prospector / Kavaron Harrier pattern. Round-trip the
+    default-count effect through the bridge."""
+    reg = mtg_bot_engine.Registry()
+    pid = reg.register_printing(
+        {
+            "name": "Rampant Growth-ish",
+            "card_types": ["Sorcery"],
+            "effects": [
+                {
+                    "kind": "search_library_for_basic_land_tapped",
+                    "count": 1,
+                }
+            ],
+        }
+    )
+    effects = [dict(e) for e in reg.get_printing_effects(pid)]
+    assert effects[0] == {
+        "kind": "search_library_for_basic_land_tapped",
+        "count": 1,
+    }
+
+
+def test_round_trip_search_library_for_basic_land_tapped_count_two():
+    """A Larval Scoutlander-shaped count=2 entry — bicycle/skyshroud
+    pattern — round-trips with its count preserved."""
+    reg = mtg_bot_engine.Registry()
+    pid = reg.register_printing(
+        {
+            "name": "Larval-ish",
+            "effects": [
+                {
+                    "kind": "search_library_for_basic_land_tapped",
+                    "count": 2,
+                }
+            ],
+        }
+    )
+    effects = [dict(e) for e in reg.get_printing_effects(pid)]
+    assert effects[0]["kind"] == "search_library_for_basic_land_tapped"
+    assert effects[0]["count"] == 2
+
+
+def test_search_library_for_basic_land_tapped_default_count_is_one():
+    """Python's `SearchLibraryForBasicLandTapped(count: int = 1)`
+    dataclass has count default to 1. The Rust parser mirrors that:
+    an entry with no `count` key registers as count=1 and round-trips
+    that way."""
+    reg = mtg_bot_engine.Registry()
+    pid = reg.register_printing(
+        {
+            "name": "Default Count",
+            "effects": [
+                {"kind": "search_library_for_basic_land_tapped"}
+            ],
+        }
+    )
+    effects = [dict(e) for e in reg.get_printing_effects(pid)]
+    assert effects[0] == {
+        "kind": "search_library_for_basic_land_tapped",
+        "count": 1,
+    }
+
+
+def test_search_library_for_basic_land_tapped_negative_count_raises():
+    """Register-time guard on negative count (matches the
+    apply_effect guard, surfaced earlier in the pipeline). Mirrors
+    AddManaToPool's negative-amount register-time check."""
+    reg = mtg_bot_engine.Registry()
+    with pytest.raises(ValueError, match="non-negative"):
+        reg.register_printing(
+            {
+                "name": "Broken",
+                "effects": [
+                    {
+                        "kind": "search_library_for_basic_land_tapped",
+                        "count": -1,
+                    }
+                ],
+            }
+        )
+
+
+# --- PutPlusOneCounterOnSelf (round-23 effect-coverage slice) --------
+
+
+def test_round_trip_put_plus_one_counter_on_self_effect():
+    """CR 122.6 + 701.13 — Blade of the Swarm / Atomic Microsizer
+    pattern. Round-trip the default-amount effect through the bridge."""
+    reg = mtg_bot_engine.Registry()
+    pid = reg.register_printing(
+        {
+            "name": "Test Self-Counter",
+            "card_types": ["Creature"],
+            "power": 1,
+            "toughness": 1,
+            "effects": [
+                {
+                    "kind": "put_plus_one_counter_on_self",
+                    "amount": 1,
+                }
+            ],
+        }
+    )
+    effects = [dict(e) for e in reg.get_printing_effects(pid)]
+    assert effects[0] == {
+        "kind": "put_plus_one_counter_on_self",
+        "amount": 1,
+    }
+
+
+def test_round_trip_put_plus_one_counter_on_self_amount_two():
+    """An explicit amount=2 entry — for cards that drop two counters
+    on themselves per activation — round-trips with its amount
+    preserved."""
+    reg = mtg_bot_engine.Registry()
+    pid = reg.register_printing(
+        {
+            "name": "Test Double Self-Counter",
+            "card_types": ["Creature"],
+            "power": 1,
+            "toughness": 1,
+            "effects": [
+                {
+                    "kind": "put_plus_one_counter_on_self",
+                    "amount": 2,
+                }
+            ],
+        }
+    )
+    effects = [dict(e) for e in reg.get_printing_effects(pid)]
+    assert effects[0]["kind"] == "put_plus_one_counter_on_self"
+    assert effects[0]["amount"] == 2
+
+
+def test_put_plus_one_counter_on_self_default_amount_is_one():
+    """Python's `PutPlusOneCounterOnSelf(amount: int = 1)` dataclass
+    has amount default to 1. The Rust parser mirrors that: an entry
+    with no `amount` key registers as amount=1 and round-trips that
+    way."""
+    reg = mtg_bot_engine.Registry()
+    pid = reg.register_printing(
+        {
+            "name": "Default Amount",
+            "card_types": ["Creature"],
+            "power": 1,
+            "toughness": 1,
+            "effects": [
+                {"kind": "put_plus_one_counter_on_self"}
+            ],
+        }
+    )
+    effects = [dict(e) for e in reg.get_printing_effects(pid)]
+    assert effects[0] == {
+        "kind": "put_plus_one_counter_on_self",
+        "amount": 1,
+    }
+
+
+def test_put_plus_one_counter_on_self_negative_amount_raises():
+    """Register-time guard on negative amount (matches the
+    apply_effect guard, surfaced earlier in the pipeline). Mirrors
+    SearchLibraryForBasicLandTapped's / AddManaToPool's negative
+    register-time check."""
+    reg = mtg_bot_engine.Registry()
+    with pytest.raises(ValueError, match="non-negative"):
+        reg.register_printing(
+            {
+                "name": "Broken",
+                "card_types": ["Creature"],
+                "power": 1,
+                "toughness": 1,
+                "effects": [
+                    {
+                        "kind": "put_plus_one_counter_on_self",
+                        "amount": -1,
+                    }
+                ],
+            }
+        )
+
+
+def test_round_trip_surveil_effect():
+    """CR 701.42 — Appendage Amalgam-style surveil N. Round-trip the
+    happy-path effect through the bridge with count=2."""
+    reg = mtg_bot_engine.Registry()
+    pid = reg.register_printing(
+        {
+            "name": "Test Surveil",
+            "card_types": ["Sorcery"],
+            "mana_cost": {"U": 1},
+            "effects": [{"kind": "surveil", "count": 2}],
+        }
+    )
+    effects = [dict(e) for e in reg.get_printing_effects(pid)]
+    assert effects[0] == {"kind": "surveil", "count": 2}
+
+
+def test_round_trip_surveil_count_zero():
+    """Surveil 0 is a degenerate but legal value — should round-trip."""
+    reg = mtg_bot_engine.Registry()
+    pid = reg.register_printing(
+        {
+            "name": "Surveil Zero",
+            "effects": [{"kind": "surveil", "count": 0}],
+        }
+    )
+    effects = [dict(e) for e in reg.get_printing_effects(pid)]
+    assert effects[0]["kind"] == "surveil"
+    assert effects[0]["count"] == 0
+
+
+def test_round_trip_surveil_count_four():
+    """A larger Surveil 4 (cycling-tier surveil) round-trips with its
+    count preserved."""
+    reg = mtg_bot_engine.Registry()
+    pid = reg.register_printing(
+        {
+            "name": "Big Surveil",
+            "card_types": ["Sorcery"],
+            "effects": [{"kind": "surveil", "count": 4}],
+        }
+    )
+    effects = [dict(e) for e in reg.get_printing_effects(pid)]
+    assert effects[0]["kind"] == "surveil"
+    assert effects[0]["count"] == 4
+
+
+def test_surveil_missing_count_raises():
+    """count is required at register time (no first-slice default —
+    every printed Surveil has an explicit N). Mirrors ScryN's
+    missing-count KeyError shape."""
+    reg = mtg_bot_engine.Registry()
+    with pytest.raises(KeyError, match="count"):
+        reg.register_printing(
+            {"name": "Broken", "effects": [{"kind": "surveil"}]}
+        )
+
+
+def test_surveil_negative_count_raises():
+    """Register-time guard on negative count (defense-in-depth; the
+    apply_effect guard re-checks). Mirrors ScryN /
+    SearchLibraryForBasicLandTapped's register-time negative check."""
+    reg = mtg_bot_engine.Registry()
+    with pytest.raises(ValueError, match="non-negative"):
+        reg.register_printing(
+            {
+                "name": "Broken Surveil",
+                "effects": [{"kind": "surveil", "count": -1}],
+            }
+        )
+
+
 def test_vanilla_card_with_no_mana_cost_or_effects():
     reg = mtg_bot_engine.Registry()
     pid = reg.register_printing(VANILLA_BLANK)

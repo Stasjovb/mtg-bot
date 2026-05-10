@@ -138,6 +138,126 @@ pub enum Effect {
     /// exist when they leave the battlefield" CR 110.5g handling is
     /// deferred. Negative `count` raises.
     CreateToken { count: i32, token_printing_id: u32 },
+    /// Controller adds `amount` mana of `color` to their mana pool.
+    /// CR 106.1 — the resolution of a mana ability. Color is one of
+    /// W/U/B/R/G/C; amount is non-negative. AddManaToPool is the
+    /// second-most-frequent Effect across the EoE pool (33 cards per
+    /// round-20 measurement), powering land mana abilities and
+    /// mana-rocks like Mind Stone.
+    ///
+    /// **Schema simplification vs Python.** Python's `AddManaToPool`
+    /// dataclass carries a `produces: tuple[tuple[str, int], ...]`
+    /// and a `spend_restriction: str | None` — a single Python
+    /// dataclass can mint multiple colors per resolution and tag
+    /// each coin with a payment-filtering restriction (e.g.
+    /// "spend only on artifact spells"). The Rust closed-vocabulary
+    /// bridge models the same behavior with a flatter shape: one
+    /// `AddManaToPool` per (color, amount) pair, no spend
+    /// restriction. A printing that produces multi-color mana
+    /// stacks multiple `AddManaToPool` entries in its `effects`
+    /// Vec; spend-restriction tagging is deferred until the bridge
+    /// schema needs it (no EoE card today combines mana production
+    /// with the restriction tagging through this dispatch path).
+    AddManaToPool { color: String, amount: i32 },
+    /// Search controller's library for up to ``count`` basic lands,
+    /// put each onto the battlefield tapped, then shuffle the
+    /// library (CR 701.19 search + 701.22 shuffle). Powers Rampant
+    /// Growth, Beamsaw Prospector, Kavaron Harrier — 15 cards in
+    /// the EoE pool per round-20 measurement. The "basic land"
+    /// filter and "tapped" arrival flag are part of the variant's
+    /// spec (no field). The single `count` field mirrors Python's
+    /// `SearchLibraryForBasicLandTapped(count: int = 1)` dataclass
+    /// shape — a count > 1 finds up to `count` basic lands one at
+    /// a time (Larval Scoutlander / cycling-land bodies).
+    ///
+    /// **First-slice scope:**
+    /// - **Deterministic first-match pick.** Scans the library
+    ///   top-to-bottom (Vec iter().rev()) and grabs the topmost
+    ///   matching object. Real MTG lets the player choose any
+    ///   matching card; that's a future plumbing decision once
+    ///   decision callbacks exist.
+    /// - **Basic land filter = card_types contains "Land".** The
+    ///   Rust bridge has no `supertypes` field today, so the
+    ///   "basic" half of "basic land" is approximated by the
+    ///   `card_types` Land check. In the EoE pool every basic land
+    ///   is exactly card_types=["Land"] with no compound non-basic
+    ///   land carrying this dispatch, so the proxy is faithful for
+    ///   the current set. See SEARCH_LIMITATIONS entry for the
+    ///   deferred supertypes work.
+    /// - **No shuffle.** CR 701.19 says searches always shuffle the
+    ///   library regardless of search outcome. This slice
+    ///   deliberately does NOT shuffle — the deterministic first-
+    ///   match pick makes the dispatch reproducible without
+    ///   threading an RNG seed through `apply_effect`. The
+    ///   `search_library_for_first_of_type_and_shuffle` primitive
+    ///   in `state_ops_library.rs` is the right composition for a
+    ///   future slice once RNG-externalization lands; see
+    ///   SEARCH_LIMITATIONS entry.
+    /// - **count<0 raises** loudly (mirrors ScryN / DealDamage /
+    ///   DamageEach* / CreateToken raise-on-negative shape).
+    /// - **count=0 is a legal no-op** (mirrors GainLife / DrawCards
+    ///   / Mill / CreateToken zero-count conventions).
+    /// - **Empty library / count > matching lands** stops early
+    ///   silently — partial fill is allowed (Python's
+    ///   `next(... None)` short-circuit on miss).
+    SearchLibraryForBasicLandTapped { count: i32 },
+    /// Put `amount` +1/+1 counters on the resolving spell's source
+    /// permanent — the "this creature" / "self" target (CR 122.6 +
+    /// 701.13). Powers Blade of the Swarm, Atomic Microsizer — 16
+    /// cards in the EoE pool per round-20 measurement.
+    ///
+    /// **"Self" semantics.** The recipient is the source GameObject
+    /// at the top of the stack (i.e. the resolving spell's source).
+    /// This is distinct from `AddCounters`, which deterministically
+    /// picks the DEFENDING player's first creature. Mirrors Python's
+    /// `PutPlusOneCounterOnSelf` which reads
+    /// `state.resolving_source` during ability resolution.
+    ///
+    /// **Counter shape.** `amount` is the number of +1/+1 counters
+    /// to add; it lands as a positive delta on the round-2 signed
+    /// net-counter i32 field via `saturating_add`. Default is 1
+    /// (mirrors Python's `amount: int = 1` dataclass default).
+    /// Negative `amount` raises at register / resolve time —
+    /// "put -N +1/+1 counters on self" isn't a sensible printing.
+    ///
+    /// **Source-finder dispatch.** Round-23's earlier arms (AddMana
+    /// to Pool, SearchLibraryForBasicLandTapped, AddCounters,
+    /// DamageEachCreature, etc.) get their target from
+    /// `state.active_player` or from the defending player's
+    /// battlefield Vec; "self" needs the actual source object. The
+    /// resolve loop owns `top.source_obj_id` and threads it into
+    /// `apply_effect` so this arm can locate the source across
+    /// zones. The other arms ignore it (the param is opaque to
+    /// them).
+    ///
+    /// **Source-not-on-battlefield handling.** Real MTG: if the
+    /// source has left the battlefield by the time the counter is
+    /// added (e.g. the creature was destroyed in response), the
+    /// effect "puts the counter on nothing" / fizzles. First slice
+    /// honors that: if the source is not on a battlefield zone, the
+    /// counter add is a silent no-op (the source-finder walks both
+    /// players' battlefields; sources sitting in hand / library /
+    /// graveyard / stack are NOT counter targets). Mirrors Python's
+    /// `source is None` short-circuit in the dataclass's `resolve`.
+    ///
+    /// **amount=0 is a legal no-op** (mirrors GainLife / DrawCards /
+    /// Mill / SearchLibraryForBasicLandTapped / CreateToken
+    /// zero-amount conventions).
+    PutPlusOneCounterOnSelf { amount: i32 },
+    /// Surveil N (CR 701.42 / equivalent): controller looks at the top
+    /// `count` cards of their library, then chooses any number to put
+    /// into their graveyard. The rest stay on top of the library in
+    /// any order. Powers Appendage Amalgam, etc. — 16 cards in the EoE
+    /// pool per round-20 measurement. Sibling of ScryN (round 16) —
+    /// same shape, different destination zone (graveyard not bottom).
+    ///
+    /// First-slice deterministic choice: put NONE into the graveyard;
+    /// keep all `count` cards on top in their current order. This is
+    /// the safest deterministic default (mirrors ScryN's "keep all on
+    /// top" first-slice choice from round 16). Future slice plumbs a
+    /// real "which to graveyard" decision callback through. Negative
+    /// count raises.
+    Surveil { count: i32 },
 }
 
 #[derive(Clone, Debug)]
@@ -358,8 +478,82 @@ fn parse_effect(dict: &Bound<'_, PyDict>) -> PyResult<Effect> {
             let token_printing_id: u32 = require(dict, "token_printing_id")?.extract()?;
             Ok(Effect::CreateToken { count, token_printing_id })
         }
+        "add_mana_to_pool" => {
+            let color: String = require(dict, "color")?.extract()?;
+            // Validate against the closed mana-color vocab. Shared
+            // helper with `parse_mana_produced` — reject "X", "g"
+            // (lowercase), "WG" (compound), etc. at register time.
+            validate_mana_symbol(&color)?;
+            let amount: i32 = require(dict, "amount")?.extract()?;
+            if amount < 0 {
+                return Err(PyValueError::new_err(format!(
+                    "add_mana_to_pool: amount must be non-negative, got {amount}"
+                )));
+            }
+            Ok(Effect::AddManaToPool { color, amount })
+        }
+        "search_library_for_basic_land_tapped" => {
+            // Python's `SearchLibraryForBasicLandTapped(count: int = 1)`
+            // has a count field with default 1. Mirror that here:
+            // missing `count` defaults to 1, present `count` extracts
+            // as i32. Negative counts surface at register time
+            // (defense-in-depth; `apply_effect` re-checks).
+            let count: i32 = match dict.get_item("count")? {
+                Some(c) => c.extract().map_err(|e| {
+                    PyValueError::new_err(format!(
+                        "search_library_for_basic_land_tapped.count must be an integer (got: {e})"
+                    ))
+                })?,
+                None => 1,
+            };
+            if count < 0 {
+                return Err(PyValueError::new_err(format!(
+                    "search_library_for_basic_land_tapped: count must be non-negative, got {count}"
+                )));
+            }
+            Ok(Effect::SearchLibraryForBasicLandTapped { count })
+        }
+        "put_plus_one_counter_on_self" => {
+            // Python's `PutPlusOneCounterOnSelf(amount: int = 1)` has
+            // an `amount` field defaulting to 1. Mirror that here:
+            // missing `amount` defaults to 1, present `amount`
+            // extracts as i32. Negative `amount` surfaces at register
+            // time (defense-in-depth; `apply_effect` re-checks).
+            let amount: i32 = match dict.get_item("amount")? {
+                Some(a) => a.extract().map_err(|e| {
+                    PyValueError::new_err(format!(
+                        "put_plus_one_counter_on_self.amount must be an integer (got: {e})"
+                    ))
+                })?,
+                None => 1,
+            };
+            if amount < 0 {
+                return Err(PyValueError::new_err(format!(
+                    "put_plus_one_counter_on_self: amount must be non-negative, got {amount}"
+                )));
+            }
+            Ok(Effect::PutPlusOneCounterOnSelf { amount })
+        }
+        "surveil" => {
+            // Python's `Surveil(amount: int = 1)` dataclass has an
+            // `amount` field defaulting to 1. The Rust bridge mirrors
+            // ScryN's shape (sibling effect: same look-at-top-N pattern,
+            // different destination zone) and uses `count` here to stay
+            // consistent with ScryN's parser arm. Missing `count` is a
+            // KeyError at register time — there's no first-slice
+            // default since Surveil's printed value is always present
+            // on real cards. Negative `count` surfaces at register time
+            // (defense-in-depth; `apply_effect` re-checks).
+            let count: i32 = require(dict, "count")?.extract()?;
+            if count < 0 {
+                return Err(PyValueError::new_err(format!(
+                    "surveil: count must be non-negative, got {count}"
+                )));
+            }
+            Ok(Effect::Surveil { count })
+        }
         other => Err(PyValueError::new_err(format!(
-            "unknown effect kind {other:?}; valid: deal_damage, draw_cards, gain_life, return_to_hand, mill, exile_target, tap_target, untap_target, sacrifice, add_counters, discard_card, scry_n, destroy_target, damage_each_opponent, damage_each_creature, create_token"
+            "unknown effect kind {other:?}; valid: deal_damage, draw_cards, gain_life, return_to_hand, mill, exile_target, tap_target, untap_target, sacrifice, add_counters, discard_card, scry_n, destroy_target, damage_each_opponent, damage_each_creature, create_token, add_mana_to_pool, search_library_for_basic_land_tapped, put_plus_one_counter_on_self, surveil"
         ))),
     }
 }
@@ -608,6 +802,23 @@ fn effect_to_pydict<'py>(
             d.set_item("kind", "create_token")?;
             d.set_item("count", *count)?;
             d.set_item("token_printing_id", *token_printing_id)?;
+        }
+        Effect::AddManaToPool { color, amount } => {
+            d.set_item("kind", "add_mana_to_pool")?;
+            d.set_item("color", color)?;
+            d.set_item("amount", *amount)?;
+        }
+        Effect::SearchLibraryForBasicLandTapped { count } => {
+            d.set_item("kind", "search_library_for_basic_land_tapped")?;
+            d.set_item("count", *count)?;
+        }
+        Effect::PutPlusOneCounterOnSelf { amount } => {
+            d.set_item("kind", "put_plus_one_counter_on_self")?;
+            d.set_item("amount", *amount)?;
+        }
+        Effect::Surveil { count } => {
+            d.set_item("kind", "surveil")?;
+            d.set_item("count", *count)?;
         }
     }
     Ok(d)

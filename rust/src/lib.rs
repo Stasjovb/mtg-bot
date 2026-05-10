@@ -27,6 +27,7 @@ mod state_ops_mulligan;
 mod state_ops_priority;
 mod state_ops_resolve;
 mod state_ops_sba;
+mod state_ops_setup;
 mod state_ops_snapshot;
 mod state_ops_stack;
 mod state_ops_steps;
@@ -49,6 +50,7 @@ fn mtg_bot_engine(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<state::GameState>()?;
     m.add_class::<cards::Registry>()?;
     m.add_function(wrap_pyfunction!(state::make_synthetic_state, m)?)?;
+    m.add_function(wrap_pyfunction!(state_ops_setup::make_state, m)?)?;
     m.add_function(wrap_pyfunction!(gameobject_byte_size, m)?)?;
     m.add("__version__", env!("CARGO_PKG_VERSION"))?;
     Ok(())

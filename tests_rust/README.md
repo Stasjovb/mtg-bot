@@ -142,6 +142,16 @@ the test lands in a commit.
 | rust(bridge-stack-snapshot): stack_snapshot getter | tests_rust/test_stack.py extend | green  | feature/rust-bridge-stack-snapshot |
 | rust(action-foundation): Action enum + apply_action(PassPriority) | tests_rust/test_actions.py | green  | feature/rust-action-foundation |
 | rust(bridge-fingerprint): fingerprint() matching parity_smoke.py:hash_state | tests_rust/test_fingerprint.py | green  | feature/rust-bridge-fingerprint |
+| rust(state-from-decklists): make_state pyfunction | tests_rust/test_setup.py | green  | feature/rust-state-from-decklists |
+| rust(action-play-land): Action::PlayLand variant | tests_rust/test_actions.py extend | green  | feature/rust-action-play-land |
+| rust(effect-add-mana-to-pool): Effect::AddManaToPool dispatch | tests_rust/test_resolve.py extend | green  | feature/rust-effect-add-mana-to-pool |
+| rust(action-declare-attackers): Action::DeclareAttackers variant | tests_rust/test_actions.py extend | green  | feature/rust-action-declare-attackers |
+| rust(effect-search-library-for-basic-land-tapped): basic land search + tapped enter | tests_rust/test_resolve.py extend | green  | feature/rust-effect-search-library-for-basic-land-tapped |
+| rust(action-declare-blockers): Action::DeclareBlockers variant | tests_rust/test_actions.py extend | green  | feature/rust-action-declare-blockers |
+| rust(action-activate-ability): Action::ActivateAbility variant | tests_rust/test_actions.py extend | green  | feature/rust-action-activate-ability |
+| rust(effect-put-plus-one-counter-on-self): self-target counter (CR 122.6) | tests_rust/test_resolve.py extend | green  | feature/rust-effect-put-plus-one-counter-on-self |
+| rust(setup-with-shuffle): optional seeded library shuffle in make_state | tests_rust/test_setup.py extend | green  | feature/rust-setup-with-shuffle |
+| rust(effect-surveil): Surveil N dispatch (CR 701.42) | tests_rust/test_resolve.py extend | green  | feature/rust-effect-surveil |
 
 ## Build invocation reminder
 

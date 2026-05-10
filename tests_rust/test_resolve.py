@@ -3341,3 +3341,749 @@ def test_resolve_create_token_cow_clone_unaffected(synthetic_state):
         synthetic_state.battlefield_sizes[0]
         == clone_bf_before[0] + 4
     )
+
+
+# --- round-23 AddManaToPool dispatch --------------------------------
+#
+# **AddManaToPool scope** (mirrored in the Rust module docstring on
+# ``state_ops_resolve.rs``). CR 106.1 — mana ability resolution. The
+# second-most-frequent Effect across the EoE pool (33 cards per the
+# round-20 measurement), powering basic-land mana abilities and
+# mana-rocks like Mind Stone.
+#
+# - **Active player (= controller of resolving stack item) gets
+#   ``amount`` mana of ``color`` credited to their pool.** Mirrors the
+#   DealDamage/DrawCards/GainLife/CreateToken first-slice
+#   "controller = state.active_player" convention. Real MTG plumbs
+#   ``StackItem.controller`` through — deferred to a future slice.
+# - **amount=0 is a legal no-op** (mirrors GainLife / DrawCards / Mill
+#   / DamageEach* / CreateToken zero-count conventions).
+# - **amount<0 raises** loudly (mirrors ScryN / DealDamage /
+#   DamageEach* / CreateToken raise-on-negative shape; "add -2 green"
+#   is schema nonsense — and the bridge parser catches this at
+#   register time, but `apply_effect` re-checks for defense-in-depth).
+# - **Saturating at u8::MAX** mirrors the `add_mana` primitive in
+#   `state_ops_mana.rs` — 255 of any color is more than any real game
+#   produces, and silently wrapping would be a worse failure mode
+#   than capping.
+
+
+def _mana_ability_dict(color, amount):
+    """A mana-ability source — Forest-shaped (Land card_type, tapped
+    for one mana). Uses an `effects` list (not the static
+    `mana_produced` field) so the AddManaToPool dispatch path
+    actually fires when the stack item resolves. CR 106.1."""
+    return {
+        "name": f"Test Mana Source ({color}x{amount})",
+        "card_types": ["Land"],
+        "effects": [
+            {"kind": "add_mana_to_pool", "color": color, "amount": amount}
+        ],
+    }
+
+
+def test_resolve_add_mana_to_pool_credits_active_player_pool(synthetic_state):
+    """Resolving an AddManaToPool effect credits the active player's
+    mana pool by the requested (color, amount). Synthetic seed starts
+    with empty pools on both players; after the resolution, the
+    active player's G slot should be exactly the amount."""
+    pool_before = dict(synthetic_state.get_mana_pool(0))
+    assert pool_before["G"] == 0
+
+    spell_obj_id = synthetic_state.register_and_inject_object(
+        _mana_ability_dict(color="G", amount=1), 0, ZONE_BATTLEFIELD
+    )
+    synthetic_state.push_to_stack(spell_obj_id, 0)
+    synthetic_state.resolve_top_of_stack()
+
+    assert synthetic_state.is_stack_empty() is True
+    pool_after = dict(synthetic_state.get_mana_pool(0))
+    assert pool_after["G"] == 1
+    # Opponent's pool untouched.
+    assert dict(synthetic_state.get_mana_pool(1))["G"] == 0
+
+
+def test_resolve_add_mana_to_pool_amount_zero_is_no_op(synthetic_state):
+    """amount=0 is a legitimate no-op success — mirrors GainLife /
+    DrawCards / Mill / DamageEach* / CreateToken zero-count
+    convention. Pool unchanged; stack still pops."""
+    pool_before = dict(synthetic_state.get_mana_pool(0))
+
+    spell_obj_id = synthetic_state.register_and_inject_object(
+        _mana_ability_dict(color="R", amount=0), 0, ZONE_BATTLEFIELD
+    )
+    synthetic_state.push_to_stack(spell_obj_id, 0)
+    synthetic_state.resolve_top_of_stack()
+
+    assert synthetic_state.is_stack_empty() is True
+    assert dict(synthetic_state.get_mana_pool(0)) == pool_before
+
+
+def test_resolve_add_mana_to_pool_multiple_effects_accumulate(synthetic_state):
+    """A printing carrying multiple AddManaToPool effects (e.g. a
+    hypothetical bicycle land minting two pips of different colors)
+    accumulates each entry independently. Mirrors how the bridge
+    flattens Python's `produces: tuple[(color, count), ...]` into a
+    Vec of `AddManaToPool { color, amount }` entries."""
+    multi_color_source = {
+        "name": "Test Bi-Land",
+        "card_types": ["Land"],
+        "effects": [
+            {"kind": "add_mana_to_pool", "color": "G", "amount": 1},
+            {"kind": "add_mana_to_pool", "color": "U", "amount": 1},
+        ],
+    }
+    spell_obj_id = synthetic_state.register_and_inject_object(
+        multi_color_source, 0, ZONE_BATTLEFIELD
+    )
+    synthetic_state.push_to_stack(spell_obj_id, 0)
+    synthetic_state.resolve_top_of_stack()
+
+    pool = dict(synthetic_state.get_mana_pool(0))
+    assert pool["G"] == 1
+    assert pool["U"] == 1
+    # Other colors stay at 0.
+    assert pool["W"] == 0
+    assert pool["B"] == 0
+    assert pool["R"] == 0
+    assert pool["C"] == 0
+
+
+def test_resolve_add_mana_to_pool_all_six_colors(synthetic_state):
+    """W/U/B/R/G/C — every closed-vocab color routes to its matching
+    ManaPool slot. One spell with six AddManaToPool effects exercises
+    every arm of the slot match."""
+    rainbow_source = {
+        "name": "Test Rainbow Source",
+        "card_types": ["Land"],
+        "effects": [
+            {"kind": "add_mana_to_pool", "color": c, "amount": 1}
+            for c in ("W", "U", "B", "R", "G", "C")
+        ],
+    }
+    spell_obj_id = synthetic_state.register_and_inject_object(
+        rainbow_source, 0, ZONE_BATTLEFIELD
+    )
+    synthetic_state.push_to_stack(spell_obj_id, 0)
+    synthetic_state.resolve_top_of_stack()
+
+    pool = dict(synthetic_state.get_mana_pool(0))
+    for color in ("W", "U", "B", "R", "G", "C"):
+        assert pool[color] == 1, f"{color} slot should be 1, got {pool}"
+
+
+def test_resolve_add_mana_to_pool_saturates_at_u8_max(synthetic_state):
+    """u8::MAX saturation: pre-seed the pool to 250G via add_mana,
+    then resolve an AddManaToPool-10 — final value must clamp at 255
+    (not wrap to 4). Mirrors the `add_mana` primitive's
+    saturating_add convention."""
+    # Pre-seed via the round-2 primitive — 250 green coins.
+    synthetic_state.add_mana(0, "G", 250)
+    assert dict(synthetic_state.get_mana_pool(0))["G"] == 250
+
+    spell_obj_id = synthetic_state.register_and_inject_object(
+        _mana_ability_dict(color="G", amount=10), 0, ZONE_BATTLEFIELD
+    )
+    synthetic_state.push_to_stack(spell_obj_id, 0)
+    synthetic_state.resolve_top_of_stack()
+
+    # 250 + 10 = 260, saturates to 255 not wraps to 4.
+    assert dict(synthetic_state.get_mana_pool(0))["G"] == 255
+
+
+def test_resolve_add_mana_to_pool_targets_active_player_not_defender(
+    synthetic_state,
+):
+    """Active player (= mana-ability controller, first-slice
+    convention) gets the mana — not the defender. Flip active to
+    player 1 via CLEANUP -> UNTAP wrap and confirm the credit lands
+    on p1's pool, not p0's."""
+    # Confirm the synthetic seed starts with p0 active.
+    assert synthetic_state.active_player == 0
+    # Flip active_player to 1 by walking through CLEANUP -> UNTAP.
+    synthetic_state.set_phase(PHASE_CLEANUP)
+    synthetic_state.advance_phase()
+    assert synthetic_state.active_player == 1
+
+    # Inject the mana source on player 1's battlefield.
+    spell_obj_id = synthetic_state.register_and_inject_object(
+        _mana_ability_dict(color="U", amount=2), 1, ZONE_BATTLEFIELD
+    )
+    synthetic_state.push_to_stack(spell_obj_id, 1)
+    synthetic_state.resolve_top_of_stack()
+
+    # p1 (the now-active player) got the mana; p0's pool is untouched.
+    assert dict(synthetic_state.get_mana_pool(1))["U"] == 2
+    assert dict(synthetic_state.get_mana_pool(0))["U"] == 0
+
+
+def test_resolve_add_mana_to_pool_cow_clone_unaffected(synthetic_state):
+    """Cloning the state before resolving leaves the original clone's
+    mana pool untouched after resolution — ManaPool is `Copy` on the
+    Player struct and Player itself is cloned by-value when the
+    GameState is cloned, so the snapshot keeps its pre-resolve pool
+    state. The mana-mutation path here doesn't reach for
+    `Arc::make_mut`; the by-value Player clone is what isolates."""
+    spell_obj_id = synthetic_state.register_and_inject_object(
+        _mana_ability_dict(color="B", amount=3), 0, ZONE_BATTLEFIELD
+    )
+    synthetic_state.push_to_stack(spell_obj_id, 0)
+
+    # CoW canary: take a clone BEFORE resolving.
+    clone = synthetic_state.clone_once()
+    clone_pool_before = dict(clone.get_mana_pool(0))
+
+    synthetic_state.resolve_top_of_stack()
+
+    # Original clone's pool is untouched.
+    assert dict(clone.get_mana_pool(0)) == clone_pool_before
+    assert clone_pool_before["B"] == 0
+    # Live state's B slot is now 3.
+    assert dict(synthetic_state.get_mana_pool(0))["B"] == 3
+
+
+# --- round-23 SearchLibraryForBasicLandTapped dispatch --------------
+#
+# **SearchLibraryForBasicLandTapped scope** (mirrored in the Rust
+# module docstring on ``state_ops_resolve.rs``). CR 701.19 search +
+# 701.22 shuffle — Rampant Growth / Beamsaw Prospector / Kavaron
+# Harrier pattern, 15 cards in the EoE pool per the round-20
+# measurement.
+#
+# - **Deterministic first-match pick (top-to-bottom).** Library is
+#   bottom-first in the Vec (lib[len-1] = top); scan via iter().rev()
+#   to grab the topmost matching object. Real MTG lets the player
+#   choose any matching card; deferred until decision callbacks exist.
+# - **Basic-land filter: card_types contains "Land".** Bridge has no
+#   supertypes today; proxy is faithful for the EoE pool. See
+#   SEARCH_LIMITATIONS entry for deferred supertypes work.
+# - **No shuffle** in this first slice — deterministic first-match is
+#   reproducible without an RNG seed. SEARCH_LIMITATIONS entry tracks
+#   the deferred RNG-externalization work.
+# - **count=0 / count<0** mirror GainLife / DrawCards / Mill / ScryN
+#   / CreateToken conventions (no-op / raise respectively).
+# - **Partial fill on early-exhaust:** stop silently when no more
+#   matches remain. Matches Python's `next(..., None)` short-circuit.
+
+
+def _rampant_growth_dict(count=1):
+    """A Rampant-Growth-shaped printing — Sorcery card_type so the
+    post-resolve mover sends it to the graveyard, with a single
+    SearchLibraryForBasicLandTapped effect."""
+    return {
+        "name": f"Test Rampant Growth (x{count})",
+        "card_types": ["Sorcery"],
+        "effects": [
+            {
+                "kind": "search_library_for_basic_land_tapped",
+                "count": count,
+            }
+        ],
+    }
+
+
+def test_resolve_search_library_for_basic_land_tapped_moves_forest_to_battlefield(
+    synthetic_state,
+):
+    """The synthetic seed pre-fills both players' libraries with 50
+    Forest objects (card_types=["Land"]). Resolving a count=1 search
+    moves the topmost Forest from the active player's library onto
+    their battlefield, tapped."""
+    bf_before = synthetic_state.battlefield_sizes[0]
+    lib_before = synthetic_state.library_sizes[0]
+
+    spell_obj_id = synthetic_state.register_and_inject_object(
+        _rampant_growth_dict(count=1), 0, ZONE_HAND
+    )
+    synthetic_state.push_to_stack(spell_obj_id, 0)
+    synthetic_state.resolve_top_of_stack()
+
+    # Library shrank by 1, battlefield grew by 1 (the searched land).
+    # Source is a Sorcery on the hand → graveyard via CR 608.2m post-
+    # resolve move, so it does NOT contribute to the battlefield delta.
+    assert synthetic_state.is_stack_empty() is True
+    assert synthetic_state.library_sizes[0] == lib_before - 1
+    assert synthetic_state.battlefield_sizes[0] == bf_before + 1
+    # Opponent's zones untouched.
+    assert synthetic_state.library_sizes[1] == lib_before
+    assert synthetic_state.battlefield_sizes[1] == bf_before
+
+
+def test_resolve_search_library_for_basic_land_tapped_lands_tapped(
+    synthetic_state,
+):
+    """The searched land enters TAPPED — the "tapped" half of the
+    effect's spec. Top-of-library Forest in the synthetic seed is the
+    LAST Vec element on the active player's library; capture its
+    obj_id, dispatch the effect, assert is_tapped(obj_id) returns
+    Some(True)."""
+    # Library Vec layout: p0 base id = num_battlefield + num_hand
+    # = 10 + 7 = 17, then 50 library Forests at ids 17..67. The Vec
+    # is built sequentially, so the TOP of library (last element) is
+    # the highest id: 17 + 50 - 1 = 66.
+    top_of_library_obj_id = 17 + 50 - 1  # 66
+    spell_obj_id = synthetic_state.register_and_inject_object(
+        _rampant_growth_dict(count=1), 0, ZONE_HAND
+    )
+    synthetic_state.push_to_stack(spell_obj_id, 0)
+    synthetic_state.resolve_top_of_stack()
+
+    # The top-of-library Forest now lives on p0's battlefield, tapped.
+    assert synthetic_state.find_object_zone(top_of_library_obj_id) == ZONE_BATTLEFIELD
+    assert synthetic_state.is_tapped(top_of_library_obj_id) is True
+    # NOT summoning-sick (CR 302.1 applies to creatures; a land
+    # bypassing creature-spell resolution via search has no sickness).
+    assert synthetic_state.is_summoning_sick(top_of_library_obj_id) is False
+
+
+def test_resolve_search_library_for_basic_land_tapped_picks_topmost(
+    synthetic_state,
+):
+    """When the library has multiple basic lands, the topmost is
+    picked (Vec iter rev = top-to-bottom). The synthetic seed's
+    library is 100% Forest, so the deterministic first match is the
+    last Vec element (highest obj_id in the library zone)."""
+    top_id_p0 = 17 + 50 - 1  # 66 — top of p0's library
+    second_top_id_p0 = 17 + 50 - 2  # 65 — second-from-top
+    spell_obj_id = synthetic_state.register_and_inject_object(
+        _rampant_growth_dict(count=1), 0, ZONE_HAND
+    )
+    synthetic_state.push_to_stack(spell_obj_id, 0)
+    synthetic_state.resolve_top_of_stack()
+
+    # The TOPMOST Forest (id 66) moved; the second-from-top (id 65)
+    # is still in the library.
+    assert synthetic_state.find_object_zone(top_id_p0) == ZONE_BATTLEFIELD
+    assert synthetic_state.find_object_zone(second_top_id_p0) == ZONE_LIBRARY
+
+
+def test_resolve_search_library_for_basic_land_tapped_no_land_no_op(engine):
+    """If the active player's library has no basic land, the effect
+    silently no-ops — the spell still pops the stack, source moves
+    per CR 608.2m, but no library / battlefield mutation occurs on
+    the search side. Build a state with an empty library on p0 by
+    setting num_library=0."""
+    state = engine.make_synthetic_state(
+        num_battlefield=2, num_hand=1, num_library=0
+    )
+    bf_before = state.battlefield_sizes[0]
+    lib_before = state.library_sizes[0]
+    assert lib_before == 0
+
+    # Inject the spell source on p0's HAND so the Sorcery-to-graveyard
+    # post-resolve move doesn't touch the battlefield count we're
+    # asserting on.
+    spell_obj_id = state.register_and_inject_object(
+        _rampant_growth_dict(count=1), 0, ZONE_HAND
+    )
+    state.push_to_stack(spell_obj_id, 0)
+    state.resolve_top_of_stack()
+
+    # Stack popped, no library/battlefield mutation on the search side.
+    assert state.is_stack_empty() is True
+    assert state.library_sizes[0] == 0
+    # Source was in hand (not battlefield), so the post-resolve move
+    # to graveyard does not change battlefield count.
+    assert state.battlefield_sizes[0] == bf_before
+
+
+def test_resolve_search_library_for_basic_land_tapped_count_two_fetches_two(
+    synthetic_state,
+):
+    """Larval Scoutlander / count=2 pattern — two basic lands enter
+    tapped on the same resolution. Library shrinks by 2, battlefield
+    grows by 2 (plus the source's post-resolve move)."""
+    bf_before = synthetic_state.battlefield_sizes[0]
+    lib_before = synthetic_state.library_sizes[0]
+
+    spell_obj_id = synthetic_state.register_and_inject_object(
+        _rampant_growth_dict(count=2), 0, ZONE_HAND
+    )
+    synthetic_state.push_to_stack(spell_obj_id, 0)
+    synthetic_state.resolve_top_of_stack()
+
+    assert synthetic_state.library_sizes[0] == lib_before - 2
+    # +2 lands enter the battlefield. The Sorcery source came from
+    # hand (not battlefield) so the post-resolve move to graveyard
+    # does not affect the battlefield count.
+    assert synthetic_state.battlefield_sizes[0] == bf_before + 2
+
+
+def test_resolve_search_library_for_basic_land_tapped_preserves_controller(
+    synthetic_state,
+):
+    """The searched land enters under the active player's control —
+    `obj.controller` is stamped to `state.active_player` (the
+    searcher). Confirm by reading the controller off the moved
+    object via find_object_zone (battlefield placement implies the
+    `players[controller].battlefield` Vec held it).
+
+    First-slice convention: controller == owner here, so the land
+    ends up on the active player's battlefield."""
+    bf_before_p0 = synthetic_state.battlefield_sizes[0]
+    bf_before_p1 = synthetic_state.battlefield_sizes[1]
+    top_of_library_obj_id = 17 + 50 - 1  # p0's top Forest
+
+    spell_obj_id = synthetic_state.register_and_inject_object(
+        _rampant_growth_dict(count=1), 0, ZONE_HAND
+    )
+    synthetic_state.push_to_stack(spell_obj_id, 0)
+    synthetic_state.resolve_top_of_stack()
+
+    # The Forest landed on p0's battlefield (active player), not p1's.
+    assert synthetic_state.find_object_zone(top_of_library_obj_id) == ZONE_BATTLEFIELD
+    # Net battlefield delta: +1 on p0 (searched land), 0 on p1.
+    # Source (Sorcery) came from hand → graveyard, so it does not
+    # affect the battlefield count.
+    assert synthetic_state.battlefield_sizes[0] == bf_before_p0 + 1
+    assert synthetic_state.battlefield_sizes[1] == bf_before_p1
+
+
+def test_resolve_search_library_for_basic_land_tapped_count_zero_no_op(
+    synthetic_state,
+):
+    """count=0 is a legal no-op (mirrors GainLife / DrawCards / Mill /
+    DamageEach* / CreateToken zero-count conventions). Library and
+    battlefield untouched on the search side."""
+    bf_before = synthetic_state.battlefield_sizes[0]
+    lib_before = synthetic_state.library_sizes[0]
+
+    spell_obj_id = synthetic_state.register_and_inject_object(
+        _rampant_growth_dict(count=0), 0, ZONE_HAND
+    )
+    synthetic_state.push_to_stack(spell_obj_id, 0)
+    synthetic_state.resolve_top_of_stack()
+
+    assert synthetic_state.is_stack_empty() is True
+    assert synthetic_state.library_sizes[0] == lib_before
+    # Source (Sorcery) was in hand → graveyard, no battlefield change.
+    assert synthetic_state.battlefield_sizes[0] == bf_before
+
+
+# --- round-23 PutPlusOneCounterOnSelf dispatch ----------------------
+#
+# **PutPlusOneCounterOnSelf scope** (mirrored in the Rust module
+# docstring on ``state_ops_resolve.rs`` + ``cards.rs``):
+#
+# - **"Self" = the resolving stack item's source GameObject.** The
+#   source_obj_id is threaded from ``resolve_top_of_stack`` through
+#   ``apply_effect``; the arm walks both players' battlefield Vecs
+#   looking for an obj with that id. Distinct from AddCounters which
+#   picks the defender's first creature deterministically.
+# - **amount=0 / amount<0** mirror GainLife / DrawCards / Mill /
+#   ScryN / CreateToken / SearchLibrary conventions (no-op / raise
+#   respectively).
+# - **Source not on battlefield = silent no-op.** Real MTG fizzle
+#   shape: the counter "lands on nothing" if the source has left
+#   the battlefield. Mirrors Python's ``state.resolving_source is
+#   None`` short-circuit.
+
+
+def _self_counter_dict(amount=1):
+    """A creature printing carrying a PutPlusOneCounterOnSelf effect.
+    Blade-of-the-Swarm-shaped: creature with an "on-attack" or
+    self-buff dispatch. Card_types=["Creature"] so the post-resolve
+    mover sends it to the battlefield, where the counter add lands."""
+    return {
+        "name": f"Test Self-Counter (x{amount})",
+        "card_types": ["Creature"],
+        "power": 1,
+        "toughness": 1,
+        "effects": [
+            {
+                "kind": "put_plus_one_counter_on_self",
+                "amount": amount,
+            }
+        ],
+    }
+
+
+def test_resolve_put_plus_one_counter_on_self_increments_source_counters(
+    synthetic_state,
+):
+    """A creature spell resolving with PutPlusOneCounterOnSelf
+    deposits its amount of counters onto its own GameObject after the
+    post-resolve move lands it on the battlefield. Default amount=1
+    case."""
+    # Inject the creature source onto p0's BATTLEFIELD directly (so
+    # the source-finder picks it up at resolve time). Real MTG: the
+    # source moves to the battlefield via post-resolve; for this test
+    # we pre-place it there to avoid the source-discovery-order
+    # complication (the post-resolve mover and the self-counter arm
+    # both walk the battlefield).
+    spell_obj_id = synthetic_state.register_and_inject_object(
+        _self_counter_dict(amount=1), 0, ZONE_BATTLEFIELD
+    )
+    assert synthetic_state.get_counters(spell_obj_id) == 0
+
+    synthetic_state.push_to_stack(spell_obj_id, 0)
+    synthetic_state.resolve_top_of_stack()
+
+    assert synthetic_state.is_stack_empty() is True
+    # +1 counter landed on the source itself.
+    assert synthetic_state.get_counters(spell_obj_id) == 1
+
+
+def test_resolve_put_plus_one_counter_on_self_amount_two(synthetic_state):
+    """amount=2 — for cards that drop two counters on themselves per
+    activation — lands +2 on the source."""
+    spell_obj_id = synthetic_state.register_and_inject_object(
+        _self_counter_dict(amount=2), 0, ZONE_BATTLEFIELD
+    )
+    assert synthetic_state.get_counters(spell_obj_id) == 0
+
+    synthetic_state.push_to_stack(spell_obj_id, 0)
+    synthetic_state.resolve_top_of_stack()
+
+    assert synthetic_state.get_counters(spell_obj_id) == 2
+
+
+def test_resolve_put_plus_one_counter_on_self_amount_zero_no_op(
+    synthetic_state,
+):
+    """amount=0 is a legal no-op (mirrors GainLife / DrawCards / Mill /
+    SearchLibrary / CreateToken zero-amount conventions). Source
+    counters untouched."""
+    spell_obj_id = synthetic_state.register_and_inject_object(
+        _self_counter_dict(amount=0), 0, ZONE_BATTLEFIELD
+    )
+    assert synthetic_state.get_counters(spell_obj_id) == 0
+
+    synthetic_state.push_to_stack(spell_obj_id, 0)
+    synthetic_state.resolve_top_of_stack()
+
+    assert synthetic_state.is_stack_empty() is True
+    assert synthetic_state.get_counters(spell_obj_id) == 0
+
+
+def test_resolve_put_plus_one_counter_on_self_stacks_with_existing(
+    synthetic_state,
+):
+    """Multiple consecutive resolutions stack additively on the i32 net
+    counter — same shape as AddCounters' running-net behavior."""
+    spell_obj_id = synthetic_state.register_and_inject_object(
+        _self_counter_dict(amount=1), 0, ZONE_BATTLEFIELD
+    )
+    # Pre-load 2 counters via the round-2 add_counters API so the
+    # PutPlusOneCounterOnSelf dispatch sees a non-zero starting state.
+    synthetic_state.add_counters(spell_obj_id, 2)
+    assert synthetic_state.get_counters(spell_obj_id) == 2
+
+    synthetic_state.push_to_stack(spell_obj_id, 0)
+    synthetic_state.resolve_top_of_stack()
+
+    # 2 (pre-loaded) + 1 (self-counter resolution) = 3.
+    assert synthetic_state.get_counters(spell_obj_id) == 3
+
+
+def test_resolve_put_plus_one_counter_on_self_source_not_on_battlefield_fizzles(
+    synthetic_state,
+):
+    """If the source GameObject is NOT on a battlefield zone, the
+    counter add fizzles silently (the source-finder walks both players'
+    battlefields). Place the source on HAND, resolve, assert no error
+    and no counter mutation anywhere."""
+    spell_obj_id = synthetic_state.register_and_inject_object(
+        _self_counter_dict(amount=1), 0, ZONE_HAND
+    )
+    # Source sits in hand — battlefield-finder will not see it.
+    assert synthetic_state.find_object_zone(spell_obj_id) == ZONE_HAND
+
+    synthetic_state.push_to_stack(spell_obj_id, 0)
+    # No raise — silent fizzle.
+    synthetic_state.resolve_top_of_stack()
+
+    assert synthetic_state.is_stack_empty() is True
+    # The source ends up on the battlefield via the post-resolve
+    # mover (Creature card_type), but the counter dispatch ran BEFORE
+    # that move (per resolve_top_of_stack ordering: effects first,
+    # then post-resolve mover), so it saw the source in hand and
+    # fizzled. The source is now on the battlefield with 0 counters.
+    assert synthetic_state.find_object_zone(spell_obj_id) == ZONE_BATTLEFIELD
+    assert synthetic_state.get_counters(spell_obj_id) == 0
+
+
+def test_resolve_put_plus_one_counter_on_self_multiple_stack_items_resolve_cleanly(
+    synthetic_state,
+):
+    """Two separate sources each carrying a PutPlusOneCounterOnSelf
+    effect resolve independently — each gains a counter on its own
+    object, neither bleeds onto the other."""
+    src_a = synthetic_state.register_and_inject_object(
+        _self_counter_dict(amount=1), 0, ZONE_BATTLEFIELD
+    )
+    src_b = synthetic_state.register_and_inject_object(
+        _self_counter_dict(amount=1), 0, ZONE_BATTLEFIELD
+    )
+    assert synthetic_state.get_counters(src_a) == 0
+    assert synthetic_state.get_counters(src_b) == 0
+
+    # Push both onto the stack, resolve top-down (LIFO).
+    synthetic_state.push_to_stack(src_a, 0)
+    synthetic_state.push_to_stack(src_b, 0)
+    synthetic_state.resolve_top_of_stack()  # resolves src_b
+    synthetic_state.resolve_top_of_stack()  # resolves src_a
+
+    # Each source picked up its own +1 counter; no cross-contamination.
+    assert synthetic_state.get_counters(src_a) == 1
+    assert synthetic_state.get_counters(src_b) == 1
+
+
+def test_resolve_put_plus_one_counter_on_self_finds_source_on_opponent_battlefield(
+    synthetic_state,
+):
+    """The source-finder walks BOTH players' battlefields. A source
+    on p1's battlefield (controller=1) resolves with the counter
+    landing on p1's object — the arm picks the source by obj_id, not
+    by controller."""
+    spell_obj_id = synthetic_state.register_and_inject_object(
+        _self_counter_dict(amount=1), 1, ZONE_BATTLEFIELD
+    )
+    assert synthetic_state.get_counters(spell_obj_id) == 0
+
+    # Active player (p0) resolves a stack item whose source lives on
+    # p1's battlefield. The counter lands on p1's source object —
+    # this is "self", not "the active player's permanent".
+    synthetic_state.push_to_stack(spell_obj_id, 1)
+    synthetic_state.resolve_top_of_stack()
+
+    assert synthetic_state.get_counters(spell_obj_id) == 1
+
+
+# --- round-23: Surveil dispatch ------------------------------------
+#
+# CR 701.42: Surveil N — the controller looks at the top N cards of
+# their library, then chooses any number to put into their graveyard.
+# The rest stay on top in any order. Powers Appendage Amalgam, etc.
+# Sibling of ScryN (round 16): same look-at-top-N shape, different
+# destination zone (graveyard not bottom-of-library).
+#
+# **First-slice deterministic choice: keep all on top.** Mirrors
+# round-16 ScryN's first-slice choice — mechanically a no-op on both
+# library and graveyard (no zone moves, no order change). Future
+# slice plumbs a real "which to graveyard" decision callback.
+#
+# **Negative count raises** loudly (CR 701.42 doesn't define
+# Surveil -1; surface it as a schema error). Mirrors ScryN's
+# negative-count rejection.
+#
+# **count = 0** is a legitimate no-op (mirrors ScryN count=0 / the
+# round-2 amount=0 conventions).
+#
+# **count > library size** is also a no-op under keep-all-on-top
+# (CR 701.42 would clamp to "look at all cards"; with keep-on-top no
+# cards move regardless of the clamp).
+#
+# **Controller convention: state.active_player** — same first-slice
+# shape as ScryN / DrawCards / GainLife. Real MTG plumbs the spell
+# controller through StackItem.controller; deferred. `source_obj_id`
+# is ignored (controller-targeted, not source-targeted).
+
+
+def _surveil_dict(count=2):
+    """A surveil-N printing dict shaped like the round-3 bridge parser
+    expects. ``count`` is the printed Surveil number (positive or
+    zero; negative variants exercise the register-time / apply-time
+    raise paths)."""
+    return {
+        "name": "Test Surveil",
+        "card_types": ["Sorcery"],
+        "mana_cost": {"U": 1},
+        "effects": [
+            {
+                "kind": "surveil",
+                "count": count,
+            }
+        ],
+    }
+
+
+def test_resolve_surveil_keeps_library_and_graveyard_unchanged(synthetic_state):
+    """Surveil N with a populated library: first-slice deterministic-
+    keep-on-top means the library is mechanically unchanged (no zone
+    moves from the Surveil dispatch itself), and the graveyard
+    receives only the resolved Sorcery source via the CR 608.2m post-
+    resolve mover (NOT any of the surveil's "looked at" cards, since
+    keep-all-on-top routes zero cards to the graveyard). Stack pops."""
+    library_before = synthetic_state.library_sizes[0]
+    graveyard_before = synthetic_state.graveyard_sizes[0]
+    assert library_before == 50  # synthetic seed default
+    spell_obj_id = synthetic_state.register_and_inject_object(
+        _surveil_dict(count=2), 0, ZONE_HAND
+    )
+    synthetic_state.push_to_stack(spell_obj_id, 0)
+    synthetic_state.resolve_top_of_stack()
+
+    assert synthetic_state.is_stack_empty() is True
+    # Library is unchanged by the Surveil dispatch (keep-on-top is a
+    # no-op on the library).
+    assert synthetic_state.library_sizes[0] == library_before
+    # Graveyard grew by exactly 1 — the resolved Sorcery source via
+    # CR 608.2m. No "looked at" cards were routed to the graveyard
+    # (first-slice keep-all-on-top is a no-op on the graveyard from
+    # the Surveil dispatch's perspective).
+    assert synthetic_state.graveyard_sizes[0] == graveyard_before + 1
+
+
+def test_resolve_surveil_zero_no_op(synthetic_state):
+    """Surveil 0 is a legitimate no-op for the dispatch (mirrors ScryN
+    count=0). Library unchanged; the graveyard grows by 1 only from
+    the CR 608.2m post-resolve mover for the Sorcery source itself."""
+    library_before = synthetic_state.library_sizes[0]
+    graveyard_before = synthetic_state.graveyard_sizes[0]
+    spell_obj_id = synthetic_state.register_and_inject_object(
+        _surveil_dict(count=0), 0, ZONE_HAND
+    )
+    synthetic_state.push_to_stack(spell_obj_id, 0)
+    synthetic_state.resolve_top_of_stack()
+
+    assert synthetic_state.is_stack_empty() is True
+    assert synthetic_state.library_sizes[0] == library_before
+    # +1 from post-resolve mover; +0 from the Surveil dispatch itself.
+    assert synthetic_state.graveyard_sizes[0] == graveyard_before + 1
+
+
+def test_resolve_surveil_count_exceeds_library_size_is_ok(engine):
+    """CR 701.42 clamps to library length when the library has fewer
+    cards than `count`. Under the first-slice keep-all-on-top, this is
+    silently a no-op on the library regardless of the clamp — library
+    size 1, Surveil 3 resolves cleanly without error, library still
+    has 1 card. Source on the battlefield (not a Sorcery this time),
+    so it stays on the battlefield post-resolve via CR 608.2m — the
+    graveyard count is therefore unchanged by either the dispatch or
+    the post-resolve mover (empty card_types after seeing only the
+    Sorcery card_type would leave it on battlefield; here we use the
+    standard sorcery dict so the source moves to graveyard like the
+    other tests, and we account for the +1)."""
+    state = engine.make_synthetic_state(
+        num_battlefield=0, num_hand=0, num_library=1
+    )
+    library_before = state.library_sizes[0]
+    graveyard_before = state.graveyard_sizes[0]
+    assert library_before == 1
+    spell_obj_id = state.register_and_inject_object(
+        _surveil_dict(count=3), 0, ZONE_BATTLEFIELD
+    )
+    state.push_to_stack(spell_obj_id, 0)
+    state.resolve_top_of_stack()
+
+    assert state.is_stack_empty() is True
+    assert state.library_sizes[0] == library_before
+    # +1 from post-resolve mover (Sorcery to graveyard); +0 from the
+    # Surveil dispatch itself (no cards routed under keep-all-on-top).
+    assert state.graveyard_sizes[0] == graveyard_before + 1
+
+
+def test_resolve_surveil_negative_count_raises(synthetic_state):
+    """Negative surveil count is a schema error (CR 701.42 doesn't
+    define Surveil -1). The register-time validation already rejects
+    this, but apply_effect re-checks for defense-in-depth — same shape
+    as ScryN's negative-count rejection. We bypass the register-time
+    check by injecting a synthetic effect through the same parser path
+    that surfaces both layers' guards: a Surveil with count=-1 raises
+    ValueError at register_printing time. (We assert on the register
+    layer here since that's the first place the guard fires.)"""
+    with pytest.raises(ValueError):
+        synthetic_state.register_and_inject_object(
+            _surveil_dict(count=-1), 0, ZONE_HAND
+        )
