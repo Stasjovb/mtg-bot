@@ -142,11 +142,12 @@
   .pairing-status.completed { color: #4ade80; }
   .pairing-status.failed { color: #fca5a5; }
   /* Wilson 95% CI badge on the eval card. PASS (CI lower bound clears
-     the 0.52 acceptance threshold) renders green like the verdict
-     "stronger" badge; FAIL (CI upper bound below threshold) renders red
-     like "weaker"; UNDECIDED (threshold straddles the CI) renders amber
-     so a glance at the eval card surfaces gate-direction confidence
-     without doing the math by eye. */
+     the acceptance threshold rendered from
+     ``mtg_bot.training.gate.EVAL_GATE_THRESHOLD``) renders green like
+     the verdict "stronger" badge; FAIL (CI upper bound below threshold)
+     renders red like "weaker"; UNDECIDED (threshold straddles the CI)
+     renders amber so a glance at the eval card surfaces gate-direction
+     confidence without doing the math by eye. */
   .stat-value.ci-pass { color: #4ade80; }
   .stat-value.ci-fail { color: #fca5a5; }
   .stat-value.ci-undecided { color: #fcd34d; }
@@ -324,11 +325,11 @@ function statusClass(s) {
 // Wilson 95% score interval on the wins_new proportion of decisive
 // games. Mirrors what scripts/eval_early_stop_watcher.py computes
 // server-side, so the UI badge tracks the watcher's PASS / FAIL /
-// undecided decision visually. The 0.52 acceptance threshold is what
-// iterate uses for promote/keep — it's hardcoded here because every
-// active iterate run uses it; if iterate ever emits a per-run
-// threshold, read it from the progress JSON instead.
-const EVAL_GATE_THRESHOLD = 0.52;
+// undecided decision visually. The acceptance threshold is rendered
+// from the Python-side single source of truth
+// (``mtg_bot.training.gate.EVAL_GATE_THRESHOLD``) via Jinja so the
+// UI, the iterate default, and the watcher default can never drift.
+const EVAL_GATE_THRESHOLD = {{ eval_gate_threshold }};
 // Minimum decisive games before showing a verdict — below this the
 // CI is too wide to be informative and the watcher wouldn't fire
 // either (see --min-decisive in eval_early_stop_watcher.py). Render
@@ -521,7 +522,7 @@ function ensureCard(run) {
       <div class="stats">
         <div class="stat"><div class="stat-label">Games</div><div class="stat-value" data-field="games">—</div></div>
         <div class="stat"><div class="stat-label">Win rate</div><div class="stat-value" data-field="winrate">—</div></div>
-        <div class="stat"><div class="stat-label">Wilson 95% CI · gate 52%</div><div class="stat-value" data-field="ci">—</div></div>
+        <div class="stat"><div class="stat-label">Wilson 95% CI · gate {{ (eval_gate_threshold * 100) | int }}%</div><div class="stat-value" data-field="ci">—</div></div>
         <div class="stat"><div class="stat-label">New / opp / draws</div><div class="stat-value" data-field="record">—</div></div>
         <div class="stat"><div class="stat-label">Opponent</div><div class="stat-value" data-field="opp">—</div></div>
         <div class="stat"><div class="stat-label">Workers</div><div class="stat-value" data-field="workers">—</div></div>

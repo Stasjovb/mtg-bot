@@ -13,10 +13,12 @@ Statistical method: Wilson score interval at confidence
 95% CI overall). Conclusive when the threshold sits outside the CI.
 
 Caveat: naive sequential testing inflates Type I error vs a fixed-N
-test. For an acceptance gate already at 55% (well above the 50% null),
-naive Wilson is good enough — the threshold gives most of the alpha
-protection. Tightening to SPRT or O'Brien-Fleming boundaries would be
-the principled next step if the false-promote rate ever matters more.
+test. For a gate that promotes on any statistically-significant edge
+above 50%, the controlling protection is the Wilson 95% CI lower bound
+clearing the threshold (rather than the threshold itself sitting far
+above the null). Tightening to SPRT or O'Brien-Fleming boundaries
+would be the principled next step if the false-promote rate ever
+matters more.
 
 A minimum decisive-game count (default 30) prevents stopping on a
 3-0 lucky start. Stops only target eval runs (``status == 'running'``,
@@ -32,6 +34,7 @@ from math import sqrt
 from pathlib import Path
 from typing import Optional
 
+from mtg_bot.training.gate import EVAL_GATE_THRESHOLD
 from mtg_bot.training.stop_signal import sentinel_path, write_stop
 
 
@@ -185,8 +188,12 @@ def main(argv=None) -> None:
         help="Where iterate writes eval progress JSONs.",
     )
     parser.add_argument(
-        "--threshold", type=float, default=0.55,
-        help="Acceptance threshold the gate compares win_rate against.",
+        "--threshold", type=float, default=EVAL_GATE_THRESHOLD,
+        help=(
+            "Acceptance threshold the gate compares win_rate against. "
+            "Defaults to ``mtg_bot.training.gate.EVAL_GATE_THRESHOLD`` "
+            "(the single source of truth for the gate)."
+        ),
     )
     parser.add_argument(
         "--alpha", type=float, default=0.025,
