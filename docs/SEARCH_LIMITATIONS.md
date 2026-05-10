@@ -876,6 +876,107 @@ NOT shuffled afterward.
 
 ---
 
+## Rust port — `legal_decisions` DeclareAttackers powerset emission
+
+**Location**: `rust/src/state_ops_legal.rs:legal_decisions` — the
+DeclareAttackers emission block (search for "DeclareAttackers
+extension" in the module docstring + the gated block under
+`if self.phase == PHASE_DECLARE_ATTACKERS`).
+
+**What we do today**: during the `DECLARE_ATTACKERS` phase, the Rust
+`legal_decisions` enumerator emits one Python dict per subset of
+eligible attackers (the powerset). With N eligible attackers and
+N ≤ 4, all 2^N subsets emit. With N > 4, only the empty + full
+subsets emit (a hard cap, `DECLARE_ATTACKERS_POWERSET_CAP = 4`).
+
+**Why this diverges from Python**: Python's `legal_actions` (in
+`src/mtg_bot/legal.py`) does NOT emit DeclareAttackers at all — the
+engine.py docstring (lines 10-19) is explicit that combat-declaration
+actions "aren't enumerable as legal moves because their decision
+space is combinatorial," and Python uses a factored search-side
+approach in `src/mtg_bot/search/combat_decisions.py`
+(`AttackerDecision` — one per eligible attacker, 2 branches each)
+that feeds MCTS at search time. The adapter accumulates per-attacker
+decisions into a single engine-level
+`DeclareAttackers(frozenset[int])` once all per-creature choices are
+collected.
+
+**Failure mode**:
+- Wide boards (N > 4 eligible attackers) lose the middle subsets —
+  the only emitted choices are "attack with nothing" or "attack with
+  everyone." Strategically valuable partial attacks (e.g. "attack
+  with the 5/5 and the 2/1 hasty but keep the wall back") aren't in
+  the enumeration.
+- The parity-smoke harness must skip emission-set comparison during
+  the DECLARE_ATTACKERS phase (Python's side emits no
+  DeclareAttackers; Rust's side emits up to 2^N).
+
+**When it matters**: any DECLARE_ATTACKERS phase with more than 4
+eligible attackers where a partial attack is the right play. Common
+late-game scenario; rarer early-game. Pre-trained NN search will
+plateau early until the factored shape lands.
+
+**Fix scope when prioritized**:
+- Port `search/combat_decisions.py`'s `AttackerDecision` shape to
+  Rust as a new `Action::AttackerDecision { attacker_id, attack }`
+  variant.
+- Replace the powerset emission with one `AttackerDecision` per
+  eligible attacker. The adapter (or a search-side accumulator)
+  collects all N decisions and dispatches a single
+  `DeclareAttackers(frozenset[int])` at apply time.
+- The `declare_attacker` primitive stays unchanged.
+- The `DECLARE_ATTACKERS_POWERSET_CAP` constant goes away.
+
+**Impact estimate**: ~moderate strength cost on wide-board late-game
+scenarios. Negligible during early training where most games end
+before either side has 5+ untapped creatures. Will likely be a
+visible regression once self-play games push deeper.
+
+---
+
+## Rust port — `legal_decisions` defender keyword not filtered at enumeration
+
+**Location**: `rust/src/state_ops_legal.rs:legal_decisions`
+DeclareAttackers eligibility loop.
+
+**What we do today**: the eligibility filter checks
+`!tapped && is_creature && (!summoning_sick || has_haste)`. It does
+NOT filter out creatures with the `defender` keyword (CR 702.3).
+A defender creature appears in every emitted subset; the
+`declare_attacker` primitive's per-id apply-time gate rejects it
+silently (returns `false` for that id, the rest of the subset
+still gets declared).
+
+**Why this diverges from Python**: Python's
+`src/mtg_bot/combat.py:eligible_attackers` (lines 15-23) filters
+defender out at enumeration time. The Rust enumerator defers the
+filter to the primitive instead — bigger emission count + same
+final state after apply.
+
+**Failure mode**: search wastes visits on subsets that include
+defender-keyword creatures (the apply silently drops them, so the
+post-apply state matches what an equivalent "defender-excluded"
+subset would produce). Visit count is inflated but win-rate impact
+is minimal.
+
+**When it matters**: rarely. Most untapped creatures aren't
+defenders; defender printings are usually walls that stay tapped.
+Pre-token-creation training data has zero defender printings in the
+EoE pool.
+
+**Fix scope when prioritized**: add a one-line keyword check to the
+eligibility loop:
+```rust
+if printing.keywords.iter().any(|k| k == "defender") {
+    continue;
+}
+```
+
+**Impact estimate**: negligible. Strictly a small redundant-visit
+cost; no strength change.
+
+---
+
 ## Tracked but not in this doc
 
 Things tracked elsewhere that you might also want to know about:
