@@ -77,6 +77,7 @@
 //! function) and wire this primitive through it.
 
 use crate::state::{GameObject, GameState};
+use crate::state_ops_steps::PHASE_CLEANUP;
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 use pyo3::types::PyDict;
@@ -199,5 +200,80 @@ impl GameState {
         d.set_item("discarded", discarded)?;
         d.set_item("damage_cleared", damage_cleared)?;
         Ok(d)
+    }
+
+    /// **Round-17: end-of-turn wrap composition primitive.** Run the
+    /// cleanup step for the current active player, then advance phase
+    /// to the NEXT turn's UNTAP step. After this returns:
+    ///
+    /// - `turn_number` is incremented by 1
+    /// - `phase` is `PHASE_UNTAP` (0)
+    /// - `active_player` is swapped (CR 500.7 — turn rolls to the
+    ///   non-active player at the cleanup -> untap wrap)
+    /// - every permanent on the battlefield has its marked damage
+    ///   zeroed (CR 514.2)
+    /// - the previously-active player's hand is at most 7 cards (CR 514.1)
+    /// - the new active player's permanents have lost summoning
+    ///   sickness (CR 302.1, fired automatically by `advance_phase`'s
+    ///   round-14 untap-step hook)
+    ///
+    /// Composes:
+    /// 1. `cleanup_step_for_active_player()` (same file — handles
+    ///    CR 514.1 hand-size + CR 514.2 damage clear)
+    /// 2. `set_phase(PHASE_CLEANUP)` to land on cleanup
+    /// 3. `advance_phase()` to wrap CLEANUP -> UNTAP, which fires:
+    ///    - turn-counter bump
+    ///    - active-player swap
+    ///    - the round-2 untap sweep on the new active player
+    ///    - the round-14 summoning-sick clear on the new active player
+    ///
+    /// Order matters: `cleanup_step_for_active_player` is keyed on
+    /// `self.active_player` which is the OLD active player (the one
+    /// whose turn is ending), so the cleanup must run BEFORE the
+    /// CLEANUP -> UNTAP wrap flips active. Setting phase to CLEANUP
+    /// first ensures `advance_phase`'s `phase == PHASE_CLEANUP` branch
+    /// fires the wrap regardless of the engine's prior phase — callers
+    /// can invoke `end_turn_and_start_next` from any phase to skip
+    /// straight to the next turn's UNTAP.
+    ///
+    /// **Cross-file dispatch (round-16 `Bound<'_, Self>` pattern).**
+    /// `advance_phase` is defined in `state_ops_steps.rs` and is
+    /// Rust-private to that module under `multiple-pymethods` (E0624
+    /// if called as `self.advance_phase()` from this file). The fix is
+    /// to take `Bound<'_, Self>` rather than `&mut self` and dispatch
+    /// through the Python attribute layer with `call_method0`. PyO3's
+    /// `Bound<T>` is a borrow-checked handle to the Python object;
+    /// `borrow_mut()`'s cost is identical to the borrow the
+    /// `#[pymethods]` macro would have generated. See
+    /// `state_ops_stack.rs::process_stack_until_empty` for the
+    /// reference implementation.
+    ///
+    /// `cleanup_step_for_active_player` lives in this same file so a
+    /// direct `borrow_mut().cleanup_step_for_active_player(py)?` call
+    /// is allowed; routing it through `call_method0` keeps the dispatch
+    /// shape uniform with the cross-file `advance_phase` call. We use
+    /// `call_method0` for both for consistency.
+    fn end_turn_and_start_next(slf: Bound<'_, Self>) -> PyResult<()> {
+        // (1) Run cleanup step for the OLD active player. This must
+        // happen before the active-player swap; CR 514 fires during
+        // the cleanup step of the player whose turn is ending.
+        slf.call_method0("cleanup_step_for_active_player")?;
+
+        // (2) Land on the CLEANUP phase so the next advance_phase tick
+        // wraps CLEANUP -> UNTAP. Going through set_phase rather than
+        // walking advance_phase forward is intentional: a single
+        // CLEANUP -> UNTAP wrap is the semantically right "end of turn"
+        // step, regardless of how many phases the engine has already
+        // advanced through this turn.
+        slf.borrow_mut().phase = PHASE_CLEANUP;
+
+        // (3) Advance once to wrap CLEANUP -> UNTAP. This fires:
+        //     - turn_number += 1
+        //     - active_player swap
+        //     - round-2 untap sweep on the new active player
+        //     - round-14 summoning-sick clear on the new active player
+        slf.call_method0("advance_phase")?;
+
+        Ok(())
     }
 }

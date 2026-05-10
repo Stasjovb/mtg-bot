@@ -305,3 +305,132 @@ def test_clone_then_cleanup_does_not_affect_original(synthetic_state):
     assert synthetic_state.graveyard_sizes == gy_source_before
     assert synthetic_state.get_damage(P0_BATTLEFIELD_FIRST) == 1
     assert synthetic_state.get_damage(P1_BATTLEFIELD_FIRST) == 2
+
+
+# --------------------------------------------------------------------------
+# Round-17 end-of-turn wrap composition primitive
+# --------------------------------------------------------------------------
+#
+# `end_turn_and_start_next()` is the higher-level composition that bundles:
+#   1. round-8's `cleanup_step_for_active_player()`  (this same file)
+#   2. round-2's `advance_phase()` from CLEANUP -> next turn's UNTAP
+#      (which fires round-14's untap-step summoning-sick clear automatically)
+#
+# Implementation strategy — set phase to CLEANUP, run cleanup_step_for_active_player,
+# then advance_phase ONCE so the wrap CLEANUP -> UNTAP fires turn_number bump,
+# active_player swap, and the round-14 sickness-clear hook on the new active player.
+#
+# Cross-file note: `advance_phase` lives in `state_ops_steps.rs`. The round-16
+# pattern routes the cross-file call through PyO3's `Bound<'_, Self>::call_method0`
+# rather than copy-pasting the advance logic inline.
+#
+# `cleanup_step_for_active_player` sits in this same file (`state_ops_cleanup.rs`)
+# so a direct `&mut self` call is allowed; using `call_method0` for it is also fine
+# and keeps the dispatch shape uniform.
+
+PHASE_UNTAP_CONST = 0
+
+
+def test_end_turn_and_start_next_advances_to_next_turn(synthetic_state):
+    """From a fresh synthetic state at PHASE_UNTAP, end_turn_and_start_next
+    bumps the turn counter by 1, sets phase to UNTAP of the next turn, and
+    leaves the engine in a state where the new active player can take their
+    untap step. Independent of the starting phase."""
+    starting_turn = synthetic_state.turn_number
+    starting_active = synthetic_state.active_player
+    synthetic_state.end_turn_and_start_next()
+    assert synthetic_state.turn_number == starting_turn + 1
+    assert synthetic_state.current_phase() == PHASE_UNTAP_CONST
+    assert synthetic_state.active_player == 1 - starting_active
+
+
+def test_end_turn_and_start_next_clears_hand_to_max(synthetic_state):
+    """Cleanup step half: hand at 10 -> hand at 7 after end_turn, three
+    cards land in the active player's graveyard."""
+    for _ in range(3):
+        synthetic_state.draw_card(0)
+    assert synthetic_state.hand_sizes[0] == 10
+    gy_before_p0 = synthetic_state.graveyard_sizes[0]
+    synthetic_state.end_turn_and_start_next()
+    # Active player at end_turn entry was 0, so cleanup discarded p0's hand.
+    assert synthetic_state.hand_sizes[0] == 7
+    assert synthetic_state.graveyard_sizes[0] == gy_before_p0 + 3
+
+
+def test_end_turn_and_start_next_clears_damage(synthetic_state):
+    """Cleanup-step damage half: marked damage on a permanent is zero
+    after end_turn fires CR 514.2."""
+    obj = P0_BATTLEFIELD_FIRST
+    synthetic_state.deal_damage(obj, 2)
+    assert synthetic_state.get_damage(obj) == 2
+    synthetic_state.end_turn_and_start_next()
+    assert synthetic_state.get_damage(obj) == 0
+
+
+def test_end_turn_and_start_next_clears_summoning_sickness_for_new_active(
+    synthetic_state,
+):
+    """The CLEANUP -> UNTAP wrap fires advance_phase's round-14 hook:
+    summoning sickness clears on the NEW active player's permanents.
+    Cast a creature for player 1 (who will become active after end_turn);
+    after end_turn that creature is no longer summoning-sick."""
+    # P1's first hand object id with the synthetic 10/7/50 layout.
+    elf_id = 67 + 10
+    synthetic_state.add_mana(1, "G", 1)
+    assert synthetic_state.cast_creature(elf_id, 1) is True
+    assert synthetic_state.is_summoning_sick(elf_id) is True
+    assert synthetic_state.active_player == 0
+    synthetic_state.end_turn_and_start_next()
+    assert synthetic_state.active_player == 1
+    assert synthetic_state.is_summoning_sick(elf_id) is False, (
+        "the CLEANUP -> UNTAP wrap inside end_turn_and_start_next should "
+        "have fired the round-14 summoning-sick clear on the new active "
+        "player's permanents"
+    )
+
+
+def test_end_turn_and_start_next_swaps_active_player(synthetic_state):
+    """Active player flips from 0 to 1 after one end_turn."""
+    assert synthetic_state.active_player == 0
+    synthetic_state.end_turn_and_start_next()
+    assert synthetic_state.active_player == 1
+
+
+def test_end_turn_and_start_next_clone_isolation(synthetic_state):
+    """**CoW canary for the composition primitive.** end_turn mutates
+    phase, turn_number, active_player AND every CoW-tracked zone touched
+    by cleanup_step_for_active_player (hand, graveyard, battlefield damage)
+    AND any permanent untapped/desickened by the round-14 hook. Running
+    end_turn on a clone must not bleed into the source."""
+    for _ in range(3):
+        synthetic_state.draw_card(0)
+    synthetic_state.deal_damage(P0_BATTLEFIELD_FIRST, 1)
+    synthetic_state.deal_damage(P1_BATTLEFIELD_FIRST, 2)
+
+    cloned = synthetic_state.clone_once()
+    src_turn = synthetic_state.turn_number
+    src_phase = synthetic_state.current_phase()
+    src_active = synthetic_state.active_player
+    src_hand = synthetic_state.hand_sizes
+    src_gy = synthetic_state.graveyard_sizes
+    src_damage_p0 = synthetic_state.get_damage(P0_BATTLEFIELD_FIRST)
+    src_damage_p1 = synthetic_state.get_damage(P1_BATTLEFIELD_FIRST)
+
+    cloned.end_turn_and_start_next()
+
+    # Clone diverged.
+    assert cloned.turn_number == src_turn + 1
+    assert cloned.current_phase() == PHASE_UNTAP_CONST
+    assert cloned.active_player == 1 - src_active
+    assert cloned.hand_sizes[0] == 7
+    assert cloned.get_damage(P0_BATTLEFIELD_FIRST) == 0
+    assert cloned.get_damage(P1_BATTLEFIELD_FIRST) == 0
+
+    # Source untouched.
+    assert synthetic_state.turn_number == src_turn
+    assert synthetic_state.current_phase() == src_phase
+    assert synthetic_state.active_player == src_active
+    assert synthetic_state.hand_sizes == src_hand
+    assert synthetic_state.graveyard_sizes == src_gy
+    assert synthetic_state.get_damage(P0_BATTLEFIELD_FIRST) == src_damage_p0
+    assert synthetic_state.get_damage(P1_BATTLEFIELD_FIRST) == src_damage_p1
