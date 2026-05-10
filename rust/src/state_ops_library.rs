@@ -39,7 +39,7 @@
 //! the load-bearing canaries.
 
 use crate::state::{GameObject, GameState};
-use pyo3::exceptions::PyValueError;
+use pyo3::exceptions::{PyIndexError, PyValueError};
 use pyo3::prelude::*;
 use std::sync::Arc;
 
@@ -459,6 +459,100 @@ impl GameState {
             }
         }
         Ok(moved_id)
+    }
+
+    /// Mill `count` cards from the top of `player_id`'s library into
+    /// that player's graveyard. Returns the actual number of cards
+    /// milled (`usize`) — may be less than `count` if the library
+    /// runs out before `count` is reached.
+    ///
+    /// Complement to round-1's `Effect::Mill`, which always mills the
+    /// resolving spell's controller (= `active_player`). This primitive
+    /// is the "specify which player gets milled" form — needed for
+    /// effects whose target is "target player puts the top N cards of
+    /// their library into their graveyard" (Glimpse the Unthinkable,
+    /// Mind Funeral, Tasha's Hideous Laughter — anything that names a
+    /// non-controller target).
+    ///
+    /// **"Top of library" convention** (inherited from
+    /// `state_ops_zones.rs`): the LAST element of the library `Vec` is
+    /// the top of the library, so each mill `pop()`s the tail.
+    ///
+    /// **Per-object state reset on zone change** (CR 400.7): each
+    /// milled card lands in the graveyard with `tapped`,
+    /// `summoning_sick`, `damage`, and `counters` all zeroed plus
+    /// `zone` stamped to `ZONE_GRAVEYARD`. Mirrors the reset pattern
+    /// in `move_object` and `draw_card` (`state_ops_zones.rs`) and the
+    /// other graveyard-bound effect handlers in `state_ops_resolve.rs`
+    /// (ReturnToHand / Sacrifice / etc.).
+    ///
+    /// **Empty library / count = 0 short-circuit:** no `Arc::make_mut`
+    /// clone fires on the no-op paths — mirrors round-3's
+    /// `clear_damage_for_player` skip-CoW-on-empty optimization. Real
+    /// MTG: milling an empty library is NOT a deck-out by itself
+    /// (CR 704.5b applies to drawing, not milling), so the silent
+    /// "stop early when library runs dry" matches round-1 `Effect::Mill`
+    /// semantics.
+    ///
+    /// **Validation:**
+    /// - `count < 0` raises `ValueError` (loud-fail per the project
+    ///   convention; `gain_life` / `lose_life` / `pay_life_cost` use
+    ///   the same shape). `count = 0` is a legal no-op and returns 0.
+    /// - `player_id` not in `{0, 1}` raises `IndexError`, mirroring
+    ///   how `move_object_from_graveyard_to_battlefield` and the other
+    ///   round-1 player-indexed primitives validate.
+    ///
+    /// CoW-safe: each zone Vec mutation routes through `Arc::make_mut`,
+    /// so cloning a `GameState` and milling on the clone leaves the
+    /// source's library and graveyard untouched.
+    fn mill_target_player(
+        &mut self,
+        player_id: u8,
+        count: i32,
+    ) -> PyResult<usize> {
+        if count < 0 {
+            return Err(PyValueError::new_err(format!(
+                "count {count} must be >= 0"
+            )));
+        }
+        let idx = player_id as usize;
+        if idx >= 2 {
+            return Err(PyIndexError::new_err(format!(
+                "player_id {player_id} out of range (must be 0 or 1)"
+            )));
+        }
+        // Short-circuit: count = 0 OR empty library = no-op, no
+        // Arc::make_mut clone. Mirrors round-3's `clear_damage_for_player`.
+        let n = count as usize;
+        if n == 0 {
+            return Ok(0);
+        }
+        if self.players[idx].library.is_empty() {
+            return Ok(0);
+        }
+        // Cap milled count at library size (silent stop on early
+        // deck-out, matches round-1 Effect::Mill).
+        let player = &mut self.players[idx];
+        let to_mill = n.min(player.library.len());
+        let lib = Arc::make_mut(&mut player.library);
+        // Pop top-of-library cards (= tail of Vec), pushing each onto
+        // graveyard with the per-object state reset. Collect first to
+        // release the &mut borrow on `lib` before we touch graveyard.
+        let mut milled: Vec<GameObject> = Vec::with_capacity(to_mill);
+        for _ in 0..to_mill {
+            let mut obj = lib
+                .pop()
+                .expect("library size verified >= to_mill above");
+            obj.zone = crate::state_ops_zones::ZONE_GRAVEYARD;
+            obj.tapped = false;
+            obj.summoning_sick = false;
+            obj.damage = 0;
+            obj.counters = 0;
+            milled.push(obj);
+        }
+        let gy = Arc::make_mut(&mut player.graveyard);
+        gy.extend(milled);
+        Ok(to_mill)
     }
 
     /// Apply a scry decision: the top `top_ids.len() + bottom_ids.len()`

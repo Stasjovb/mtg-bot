@@ -130,6 +130,7 @@ the test lands in a commit.
 | rust(zones-regrowth): move_object_from_graveyard_to_hand primitive (CR 400.7) | tests_rust/test_zones.py extend | green | feature/rust-tdd-graveyard-to-hand |
 | rust(mulligan-bottoming): bottom_cards_from_hand primitive (CR 103.4) | tests_rust/test_mulligan.py extend | green | feature/rust-tdd-mulligan-bottoming |
 | tests_rust/test_choices.py        | apply_effect duplication in cards.rs        | green  | feature/rust-tdd-choices |
+| rust(library-mill-target-player): mill_target_player primitive | tests_rust/test_library.py extend | green  | feature/rust-tdd-library-mill-target-player |
 
 ## Build invocation reminder
 
