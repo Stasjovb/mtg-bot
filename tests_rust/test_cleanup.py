@@ -149,3 +149,159 @@ def test_clone_then_discard_does_not_affect_original(synthetic_state):
     # Source untouched.
     assert synthetic_state.hand_sizes == hand_source_before
     assert synthetic_state.graveyard_sizes == gy_source_before
+
+
+# --------------------------------------------------------------------------
+# Round-8 cleanup-step composition primitive
+# --------------------------------------------------------------------------
+#
+# `cleanup_step_for_active_player()` runs the two halves of CR 514 we model:
+#
+#   1. CR 514.1 — hand-size discard (max=7 hard-coded for active player)
+#   2. CR 514.2 — clear all marked damage on the battlefield (BOTH players)
+#
+# Ordering: hand-size discard FIRST, then damage clearance. CR 514's
+# numbered sub-rules execute in order — 514.1 runs before 514.2. This
+# matches the source-of-truth `run_cleanup_step` in
+# `src/mtg_bot/turn.py` (hand-size while-loop precedes the damage-clear
+# loop) and matters for any future "discard triggers"-aware ordering.
+#
+# CR 514.3 ("until end of turn" effects expire) and CR 514.4 (no-trigger
+# repeat cleanup step) are deferred — those compose with continuous-
+# effect machinery / triggered-ability machinery the Rust engine does
+# not yet have.
+#
+# Return shape: a Python dict ``{"discarded": N, "damage_cleared": M}``
+# where M is the count of permanents whose damage marker was non-zero
+# before the call (so a no-op cleanup returns zeros and a caller can
+# log meaningful telemetry without re-walking battlefields).
+#
+# Same-file P0_FIRST_BATTLEFIELD_ID etc. are not in scope here, but the
+# damage tests' synthetic-state id layout applies — first 10 ids on
+# each player's battlefield (0..9 / 67..76).
+
+P0_BATTLEFIELD_FIRST = 0
+P1_BATTLEFIELD_FIRST = 67
+
+
+def test_cleanup_step_no_op_at_initial_state(synthetic_state):
+    """Fresh synthetic state has 7 cards in each hand and zero damage on
+    every permanent. ``cleanup_step_for_active_player`` is a true no-op:
+    returns ``{"discarded": 0, "damage_cleared": 0}`` and leaves hand /
+    graveyard / damage alone."""
+    assert synthetic_state.hand_sizes[0] == 7
+    summary = synthetic_state.cleanup_step_for_active_player()
+    assert summary == {"discarded": 0, "damage_cleared": 0}
+    assert synthetic_state.hand_sizes[0] == 7
+    assert synthetic_state.graveyard_sizes[0] == 0
+
+
+def test_cleanup_step_discards_to_seven(synthetic_state):
+    """Three extra draws bring the active player's hand to 10. Cleanup
+    discards 3 down to the 7-card limit; those 3 land in the active
+    player's graveyard."""
+    for _ in range(3):
+        synthetic_state.draw_card(0)
+    assert synthetic_state.hand_sizes[0] == 10
+    gy_before = synthetic_state.graveyard_sizes
+
+    summary = synthetic_state.cleanup_step_for_active_player()
+    assert summary["discarded"] == 3
+    assert summary["damage_cleared"] == 0
+    assert synthetic_state.hand_sizes[0] == 7
+    assert synthetic_state.graveyard_sizes[0] == gy_before[0] + 3
+
+
+def test_cleanup_step_clears_marked_damage(synthetic_state):
+    """One point of damage on a battlefield permanent. Cleanup zeros
+    the marker and reports it in the summary."""
+    obj = P0_BATTLEFIELD_FIRST
+    synthetic_state.deal_damage(obj, 1)
+    assert synthetic_state.get_damage(obj) == 1
+
+    summary = synthetic_state.cleanup_step_for_active_player()
+    assert summary["damage_cleared"] == 1
+    assert synthetic_state.get_damage(obj) == 0
+
+
+def test_cleanup_step_only_for_active_player(synthetic_state):
+    """``cleanup_step_for_active_player`` only enforces the hand-size
+    limit on the ACTIVE player. Stuff player 1's hand to 10, leave
+    player 0 at 7, and confirm the call (active=0) does NOT touch
+    player 1's hand or graveyard."""
+    assert synthetic_state.active_player == 0
+    for _ in range(3):
+        synthetic_state.draw_card(1)
+    assert synthetic_state.hand_sizes[1] == 10
+    p1_gy_before = synthetic_state.graveyard_sizes[1]
+
+    summary = synthetic_state.cleanup_step_for_active_player()
+    assert summary["discarded"] == 0
+    # Player 1's hand and graveyard untouched even though oversized.
+    assert synthetic_state.hand_sizes[1] == 10
+    assert synthetic_state.graveyard_sizes[1] == p1_gy_before
+
+
+def test_cleanup_step_clears_damage_on_both_players_objects(synthetic_state):
+    """CR 514.2 is wholesale: ALL marked damage clears at cleanup, not
+    just the active player's. Damage on a player-1 permanent zeroes
+    even when active_player is 0."""
+    p0_obj = P0_BATTLEFIELD_FIRST
+    p1_obj = P1_BATTLEFIELD_FIRST
+    synthetic_state.deal_damage(p0_obj, 2)
+    synthetic_state.deal_damage(p1_obj, 3)
+    assert synthetic_state.get_damage(p0_obj) == 2
+    assert synthetic_state.get_damage(p1_obj) == 3
+
+    summary = synthetic_state.cleanup_step_for_active_player()
+    assert summary["damage_cleared"] == 2
+    assert synthetic_state.get_damage(p0_obj) == 0
+    assert synthetic_state.get_damage(p1_obj) == 0
+
+
+def test_cleanup_step_returns_summary(synthetic_state):
+    """Combined: 3 discards + damage on 2 permanents -> summary reports
+    both counts in the same call."""
+    for _ in range(3):
+        synthetic_state.draw_card(0)
+    synthetic_state.deal_damage(P0_BATTLEFIELD_FIRST, 1)
+    synthetic_state.deal_damage(P1_BATTLEFIELD_FIRST, 1)
+
+    summary = synthetic_state.cleanup_step_for_active_player()
+    assert isinstance(summary, dict)
+    assert summary == {"discarded": 3, "damage_cleared": 2}
+    assert synthetic_state.hand_sizes[0] == 7
+    assert synthetic_state.get_damage(P0_BATTLEFIELD_FIRST) == 0
+    assert synthetic_state.get_damage(P1_BATTLEFIELD_FIRST) == 0
+
+
+def test_clone_then_cleanup_does_not_affect_original(synthetic_state):
+    """**CoW canary for the composition primitive.** Both halves mutate
+    state (hand/graveyard via Arc::make_mut on a player's zones, damage
+    via Arc::make_mut on each battlefield Vec). Running cleanup on a
+    clone must not leak into the source — same load-bearing assertion
+    as the round-6 single-half canary, extended to the composition."""
+    for _ in range(3):
+        synthetic_state.draw_card(0)
+    synthetic_state.deal_damage(P0_BATTLEFIELD_FIRST, 1)
+    synthetic_state.deal_damage(P1_BATTLEFIELD_FIRST, 2)
+
+    cloned = synthetic_state.clone_once()
+    hand_source_before = synthetic_state.hand_sizes
+    gy_source_before = synthetic_state.graveyard_sizes
+
+    summary = cloned.cleanup_step_for_active_player()
+    assert summary == {"discarded": 3, "damage_cleared": 2}
+
+    # Clone diverged.
+    assert cloned.hand_sizes[0] == 7
+    assert cloned.graveyard_sizes[0] == gy_source_before[0] + 3
+    assert cloned.get_damage(P0_BATTLEFIELD_FIRST) == 0
+    assert cloned.get_damage(P1_BATTLEFIELD_FIRST) == 0
+
+    # Source untouched — hand still 10, graveyard unchanged, damage
+    # still on its permanents.
+    assert synthetic_state.hand_sizes == hand_source_before
+    assert synthetic_state.graveyard_sizes == gy_source_before
+    assert synthetic_state.get_damage(P0_BATTLEFIELD_FIRST) == 1
+    assert synthetic_state.get_damage(P1_BATTLEFIELD_FIRST) == 2
