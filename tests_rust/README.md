@@ -92,6 +92,7 @@ the test lands in a commit.
 | rust(combat-keywords): trample+first-strike | tests_rust/test_combat.py extend            | green  | feature/rust-tdd-trample-firststrike |
 | rust(etb-triggers): on-resolve dispatch | tests_rust/test_resolve.py extend           | green  | feature/rust-tdd-etb |
 | rust(priority-round-complete): pop+priority-reset | tests_rust/test_priority.py extend          | green  | feature/rust-tdd-priority-pass-resolve |
+| tests_rust/test_deck.py | tests/_test_decks.py + game.py | green | feature/rust-tdd-deck |
 
 ## Build invocation reminder
 
