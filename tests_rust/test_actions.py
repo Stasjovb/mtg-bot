@@ -822,3 +822,654 @@ def test_apply_action_unknown_kind_message_mentions_activate_ability(synthetic_s
     a future variant addition forces the message to grow."""
     with pytest.raises(ValueError, match=r"activate_ability"):
         synthetic_state.apply_action({"kind": "frobnicate"})
+
+
+# --- CastSpell -------------------------------------------------------
+#
+# Round-23+ slice (Phase 3, batch 5): extend the Action enum +
+# apply_action dispatcher with ``Action::CastSpell { card_id, use_warp,
+# kicked, cast_for_free, use_impending, cast_room_half }``. The Python
+# dataclass ``CastSpell(card_id: int, use_warp: bool = False, kicked:
+# bool = False, cast_for_free: bool = False, use_impending: bool =
+# False, cast_room_half: str | None = None)`` mirrors the Rust variant
+# bit-for-bit so production CastSpell payloads round-trip losslessly
+# through the bridge.
+#
+# Round-20 frequency: 17 of 420 decisions (~4.0%) — the
+# second-most-frequent non-``PassPriority`` variant after
+# ``DeclareAttackers``.
+#
+# **First-slice scope: flags are data-only.** The dispatch arm calls
+# the existing round-4 ``cast_creature(card_id, player_id)`` primitive
+# and IGNORES every flag value. Mirrors the round-23 ActivateAbility
+# "scaffold the variant, defer the dispatch semantics" pattern.
+# Future slices wire warp / kicker / impending / cast_for_free /
+# cast_room_half through to richer primitives.
+#
+# Synthetic-state mana reminder: ``cast_creature`` pays the printing's
+# mana_cost — Llanowar Elves costs ``{G}``, so the priority player
+# needs at least 1 green pip in their mana pool to land a happy-path
+# cast. Use ``synthetic_state.add_mana(player, "G", n)`` to prep.
+
+
+def test_apply_action_cast_spell_minimal_dispatches_to_cast_creature(synthetic_state):
+    """Happy path with a minimal dict (only ``card_id``, no flag
+    keys): the Llanowar Elf in the priority player's hand pays its
+    {G} cost and lands on the battlefield. Pins the
+    ``apply_action({"kind": "cast_spell", "card_id": N})`` shape as
+    the canonical minimal payload — equivalent to Python's
+    ``CastSpell(card_id=N)`` call with all flags defaulted."""
+    elf_id = P0_FIRST_HAND_ID
+    assert synthetic_state.printing_name_of(elf_id) == "Llanowar Elves"
+    synthetic_state.add_mana(0, "G", 1)
+    hand_before = synthetic_state.hand_sizes[0]
+    bf_before = synthetic_state.battlefield_sizes[0]
+
+    synthetic_state.apply_action({"kind": "cast_spell", "card_id": elf_id})
+
+    # Elf landed; one G pip spent.
+    assert synthetic_state.find_object_zone(elf_id) == ZONE_BATTLEFIELD
+    assert synthetic_state.hand_sizes[0] == hand_before - 1
+    assert synthetic_state.battlefield_sizes[0] == bf_before + 1
+    assert synthetic_state.get_mana_pool(0)["G"] == 0
+
+
+def test_apply_action_cast_spell_uses_priority_player_as_actor(synthetic_state):
+    """The actor is implicit (priority player). Flip priority to
+    player 1 and cast from player 1's hand — Locks in that the
+    dispatcher reads ``priority_player`` rather than a hardcoded 0
+    (mirrors the ``play_land`` actor-resolution convention)."""
+    synthetic_state.apply_action({"kind": "pass_priority"})
+    assert synthetic_state.get_priority_player() == 1
+    # Player 1 also has Llanowar Elves in hand at ids 77..83 in the
+    # synthetic seed (10..16 are P0's elves; P1's hand starts at 77
+    # = id_offset 67 + 10). Pull the first hand object's id from the
+    # snapshot (each snapshot entry is a dict with an "id" key).
+    p1_hand = synthetic_state.hand_snapshot(1)
+    elf_id = p1_hand[0]["id"]
+    assert synthetic_state.printing_name_of(elf_id) == "Llanowar Elves"
+    synthetic_state.add_mana(1, "G", 1)
+    p1_bf_before = synthetic_state.battlefield_sizes[1]
+
+    synthetic_state.apply_action({"kind": "cast_spell", "card_id": elf_id})
+
+    # Elf landed on player 1's battlefield, not player 0's.
+    assert synthetic_state.find_object_zone(elf_id) == ZONE_BATTLEFIELD
+    assert synthetic_state.battlefield_sizes[1] == p1_bf_before + 1
+
+
+def test_apply_action_cast_spell_with_all_flags_false_explicit(synthetic_state):
+    """Explicit-defaults shape — every flag spelled out with its
+    default value. Behavior must be bit-identical to the minimal
+    shape (the flags are silently ignored by first-slice dispatch).
+    Locks in the "round-trip" property: a dict that ``action_to_pydict``
+    would emit (always all 6 keys) parses cleanly back through
+    ``parse_action``."""
+    elf_id = P0_FIRST_HAND_ID
+    synthetic_state.add_mana(0, "G", 1)
+
+    synthetic_state.apply_action(
+        {
+            "kind": "cast_spell",
+            "card_id": elf_id,
+            "use_warp": False,
+            "kicked": False,
+            "cast_for_free": False,
+            "use_impending": False,
+            "cast_room_half": None,
+        }
+    )
+
+    # Same outcome as the minimal-shape test.
+    assert synthetic_state.find_object_zone(elf_id) == ZONE_BATTLEFIELD
+    assert synthetic_state.get_mana_pool(0)["G"] == 0
+
+
+def test_apply_action_cast_spell_use_warp_true_dispatches_unchanged(synthetic_state):
+    """First-slice contract: ``use_warp=True`` is parsed as data but
+    has NO observable effect on the dispatch. The cast still routes
+    to ``cast_creature(card_id, priority_player)`` and pays the
+    base mana cost (no exile-zone alt-cost, no end-of-turn exile).
+    Pins the flag-ignored convention so a future warp-plumbing slice
+    has a clear baseline to diff against."""
+    elf_id = P0_FIRST_HAND_ID
+    synthetic_state.add_mana(0, "G", 1)
+
+    synthetic_state.apply_action(
+        {"kind": "cast_spell", "card_id": elf_id, "use_warp": True}
+    )
+
+    # Same battlefield landing as the unflagged case — flag was ignored.
+    assert synthetic_state.find_object_zone(elf_id) == ZONE_BATTLEFIELD
+    assert synthetic_state.get_mana_pool(0)["G"] == 0
+
+
+def test_apply_action_cast_spell_kicked_true_dispatches_unchanged(synthetic_state):
+    """First-slice contract: ``kicked=True`` is parsed as data but
+    has NO observable effect — the base mana cost is paid, no
+    additional kicker cost is debited. A future cost-stacking slice
+    will wire the kicker pip through."""
+    elf_id = P0_FIRST_HAND_ID
+    synthetic_state.add_mana(0, "G", 1)
+    # Pin: only ONE G pip — if the kicker were paid, the cast would
+    # fail for insufficient mana. The flag-ignored contract makes
+    # the cast succeed.
+    synthetic_state.apply_action(
+        {"kind": "cast_spell", "card_id": elf_id, "kicked": True}
+    )
+    assert synthetic_state.find_object_zone(elf_id) == ZONE_BATTLEFIELD
+    assert synthetic_state.get_mana_pool(0)["G"] == 0
+
+
+def test_apply_action_cast_spell_cast_for_free_true_still_pays_mana(synthetic_state):
+    """First-slice contract: ``cast_for_free=True`` is parsed as data
+    but has NO observable effect — the base mana cost is STILL paid
+    (the flag would normally bypass the mana payment, but the
+    primitive can't honor that yet). A cast with the flag set but
+    NO mana in pool still fails the same way an unflagged cast
+    would. A future slice plumbing the flag will flip this test."""
+    elf_id = P0_FIRST_HAND_ID
+    # Pool is empty; flag would normally bypass payment.
+    assert synthetic_state.get_mana_pool(0)["G"] == 0
+
+    # No exception — cast_creature returns False silently when mana
+    # is insufficient; apply_action discards the bool.
+    synthetic_state.apply_action(
+        {"kind": "cast_spell", "card_id": elf_id, "cast_for_free": True}
+    )
+
+    # Cast did not happen — elf still in hand. Pins that
+    # cast_for_free was ignored (flag's purpose would be to make
+    # this succeed with empty pool).
+    assert synthetic_state.find_object_zone(elf_id) == ZONE_HAND
+
+
+def test_apply_action_cast_spell_use_impending_true_dispatches_unchanged(synthetic_state):
+    """First-slice contract: ``use_impending=True`` is parsed as data
+    but has NO observable effect — the creature lands as a normal
+    creature (no impending counters, no creature-ness suppression).
+    A future Effect dispatch slice will wire the impending mode."""
+    elf_id = P0_FIRST_HAND_ID
+    synthetic_state.add_mana(0, "G", 1)
+
+    synthetic_state.apply_action(
+        {"kind": "cast_spell", "card_id": elf_id, "use_impending": True}
+    )
+
+    # Lands as a normal creature (the elf would otherwise enter with
+    # time counters under real impending semantics — but the flag is
+    # ignored, so it's just a regular ETB).
+    assert synthetic_state.find_object_zone(elf_id) == ZONE_BATTLEFIELD
+
+
+def test_apply_action_cast_spell_cast_room_half_string_preserved(synthetic_state):
+    """``cast_room_half`` is ``Option<String>`` on the Rust side —
+    a string value parses cleanly (no TypeError) and has no
+    observable effect on dispatch (the flag is data-only). Pins
+    that the Option<String> extract path handles a non-None string
+    correctly (different code path from the bool flag extracts)."""
+    elf_id = P0_FIRST_HAND_ID
+    synthetic_state.add_mana(0, "G", 1)
+
+    synthetic_state.apply_action(
+        {
+            "kind": "cast_spell",
+            "card_id": elf_id,
+            "cast_room_half": "left",
+        }
+    )
+
+    assert synthetic_state.find_object_zone(elf_id) == ZONE_BATTLEFIELD
+
+
+def test_apply_action_cast_spell_cast_room_half_none_parses(synthetic_state):
+    """Explicit ``cast_room_half=None`` parses cleanly — same effect
+    as omitting the key (the parser maps both to the Rust
+    ``Option<String>::None``)."""
+    elf_id = P0_FIRST_HAND_ID
+    synthetic_state.add_mana(0, "G", 1)
+
+    synthetic_state.apply_action(
+        {
+            "kind": "cast_spell",
+            "card_id": elf_id,
+            "cast_room_half": None,
+        }
+    )
+
+    assert synthetic_state.find_object_zone(elf_id) == ZONE_BATTLEFIELD
+
+
+def test_apply_action_cast_spell_missing_card_id_raises_key_error(synthetic_state):
+    """Missing the required ``card_id`` key raises ``KeyError`` —
+    ``parse_action`` rejects before dispatch (single point of
+    validation, mirrors the ``card_id``-missing shape on
+    ``play_land``)."""
+    with pytest.raises(KeyError, match="card_id"):
+        synthetic_state.apply_action({"kind": "cast_spell"})
+
+
+def test_apply_action_cast_spell_missing_flags_default_silently(synthetic_state):
+    """Every flag is OPTIONAL — missing flag keys default to the
+    Python dataclass defaults (False / None) silently, no KeyError.
+    The minimal `{kind, card_id}` payload is the most common
+    on-the-wire shape from the search loop, and it MUST work
+    without spelling every flag out."""
+    elf_id = P0_FIRST_HAND_ID
+    synthetic_state.add_mana(0, "G", 1)
+
+    # No flag keys at all. Must not raise.
+    synthetic_state.apply_action({"kind": "cast_spell", "card_id": elf_id})
+
+    assert synthetic_state.find_object_zone(elf_id) == ZONE_BATTLEFIELD
+
+
+def test_apply_action_cast_spell_wrong_type_for_card_id_raises(synthetic_state):
+    """``card_id`` must be a u32-extractable integer. A string fails
+    PyO3's ``extract::<u32>`` machinery → ``TypeError`` / ``ValueError``
+    before any dispatch happens (matches the ``play_land`` shape)."""
+    with pytest.raises((TypeError, ValueError)):
+        synthetic_state.apply_action(
+            {"kind": "cast_spell", "card_id": "not-an-int"}
+        )
+
+
+def test_apply_action_cast_spell_wrong_type_for_use_warp_raises(synthetic_state):
+    """``use_warp`` must extract as a bool. A non-bool, non-int value
+    like a list fails PyO3's ``extract::<bool>`` machinery →
+    ``TypeError`` / ``ValueError``. Pins the type gate for one of the
+    flag fields so future-slice flag wiring has a baseline to keep."""
+    elf_id = P0_FIRST_HAND_ID
+    with pytest.raises((TypeError, ValueError)):
+        synthetic_state.apply_action(
+            {"kind": "cast_spell", "card_id": elf_id, "use_warp": [1, 2]}
+        )
+
+
+def test_apply_action_cast_spell_non_creature_in_hand_is_silent_no_op(
+    synthetic_state,
+):
+    """The ``cast_creature`` primitive returns ``False`` silently
+    when the target's printing isn't a Creature (the primitive's
+    type-gate). ``apply_action`` discards the bool — no exception
+    escapes; the test pins that flags-set-true on a non-Creature
+    still does nothing (the gate fires before the flags would
+    matter anyway)."""
+    bears_id = P0_FIRST_BEARS_ID
+    # Move bears to hand so the in-hand precondition passes; the
+    # printing IS a creature though, so to test a non-creature we'd
+    # need a non-creature in hand — the synthetic seed doesn't
+    # have one. Instead, pin the wrong-zone failure path: bears
+    # ON the battlefield can't be cast (not in hand).
+    assert synthetic_state.find_object_zone(bears_id) == ZONE_BATTLEFIELD
+    bf_before = synthetic_state.battlefield_sizes[0]
+
+    # No raise — primitive returns False silently.
+    synthetic_state.apply_action(
+        {"kind": "cast_spell", "card_id": bears_id, "use_warp": True}
+    )
+
+    # No mutation.
+    assert synthetic_state.find_object_zone(bears_id) == ZONE_BATTLEFIELD
+    assert synthetic_state.battlefield_sizes[0] == bf_before
+
+
+def test_apply_action_unknown_kind_message_mentions_cast_spell(synthetic_state):
+    """The unknown-kind error message includes ``cast_spell`` after
+    this slice extends the variant list. Pin the substring so a
+    future variant addition forces the message to grow."""
+    with pytest.raises(ValueError, match=r"cast_spell"):
+        synthetic_state.apply_action({"kind": "frobnicate"})
+
+
+# --- TurnFaceUp ------------------------------------------------------
+#
+# Rolling-integration slice (post-round-23): extend the Action enum +
+# apply_action dispatcher with ``Action::TurnFaceUp { card_id }``. The
+# Python dataclass ``TurnFaceUp(card_id: int)`` carries a single int —
+# the GameObject id of the face-down permanent on the priority
+# player's battlefield to flip face up. Mirrors ``PlayLand``'s
+# single-int shape exactly.
+#
+# CR 701.34 / 707.4 — Morph / Manifest Dread flip + Edge of Eternities
+# Spacecraft station / launch. The EoE Spacecraft cycle is the
+# production driver: Spacecraft enter face-down (as artifacts with no
+# creature types) and accumulate charge counters via station-attaching;
+# they turn face up (become creatures with their printed stats) when
+# launched by paying a face-up cost. CR 701.34 is a special action —
+# does not use the stack; costs are paid immediately and the flip
+# resolves at once.
+#
+# **Dispatch is stubbed.** No Rust face-down GameObject state exists
+# yet (the ``GameObject`` struct has no ``face_down`` flag today, and
+# there's no Spacecraft charge-counter resolution primitive), so the
+# variant + bridge round-trip ship now but the dispatch arm raises
+# ``ValueError`` with a "not implemented yet" message. A future slice
+# adds the per-object face-down state field + flip primitive
+# (analogous to how ``tap`` / ``untap`` toggle the ``tapped`` flag)
+# and flips this arm to a real ``call_method1("turn_face_up", ...)``
+# dispatch. Until then, happy-path dispatch raises ``ValueError`` —
+# these tests assert on the stubbed error path, NOT on a successful
+# flip outcome. Mirrors the round-23 ActivateAbility "scaffold the
+# variant, defer the dispatch semantics" pattern.
+
+
+def test_apply_action_turn_face_up_stub_raises_value_error(synthetic_state):
+    """Happy-path stub: a well-formed TurnFaceUp dict parses cleanly
+    but the dispatch arm raises ``ValueError`` because no Rust face-
+    down GameObject state / flip primitive exists yet. The error
+    message names the variant + flags it as future work so a follow-
+    up slice grepping for the string finds the dispatch site to
+    flip."""
+    with pytest.raises(ValueError, match=r"TurnFaceUp dispatch not implemented yet"):
+        synthetic_state.apply_action({"kind": "turn_face_up", "card_id": 42})
+
+
+def test_apply_action_turn_face_up_stub_error_mentions_spacecraft(synthetic_state):
+    """The stub message names the missing Rust primitives (face-down
+    GameObject state + Spacecraft) so a future slice grepping for
+    "Spacecraft" finds the dispatch site to flip. Pin the substring
+    so the message stays informative — a future slice that flips the
+    dispatch to a real call must also delete this test (it documents
+    the stub-state, not the eventual real behavior)."""
+    with pytest.raises(ValueError, match=r"Spacecraft"):
+        synthetic_state.apply_action({"kind": "turn_face_up", "card_id": 7})
+
+
+def test_apply_action_turn_face_up_missing_card_id_raises_key_error(
+    synthetic_state,
+):
+    """Missing the ``card_id`` key raises ``KeyError`` —
+    ``parse_action`` rejects before dispatch (single point of
+    validation, mirrors the ``card_id``-missing shape on
+    ``play_land``). The KeyError fires BEFORE the dispatch-stub
+    ValueError, so this test pins the parse-time gate."""
+    with pytest.raises(KeyError, match="card_id"):
+        synthetic_state.apply_action({"kind": "turn_face_up"})
+
+
+def test_apply_action_turn_face_up_wrong_type_for_card_id_raises(
+    synthetic_state,
+):
+    """``card_id`` must be a u32-extractable integer. A string fails
+    PyO3's ``extract::<u32>`` machinery → ``TypeError`` / ``ValueError``.
+    The dispatch-stub never runs; the parse-time gate fires first."""
+    with pytest.raises((TypeError, ValueError)):
+        synthetic_state.apply_action(
+            {"kind": "turn_face_up", "card_id": "not-an-int"}
+        )
+
+
+def test_apply_action_unknown_kind_message_mentions_turn_face_up(synthetic_state):
+    """The unknown-kind error message includes ``turn_face_up`` after
+    this slice extends the variant list. Pin the substring so a future
+    variant addition forces the message to grow."""
+    with pytest.raises(ValueError, match=r"turn_face_up"):
+        synthetic_state.apply_action({"kind": "frobnicate"})
+
+
+# --- UnlockRoomHalf --------------------------------------------------
+#
+# Rolling-integration slice (post-round-24): extend the Action enum +
+# apply_action dispatcher with ``Action::UnlockRoomHalf { card_id,
+# half_name }``. The Python dataclass ``UnlockRoomHalf(card_id: int,
+# half_name: str)`` carries two fields — the GameObject id of the Room
+# enchantment on the active player's battlefield, plus a string naming
+# which of the two halves to unlock (per the Room printing).
+#
+# CR 715.3-4 (DSK Rooms): as a sorcery, the controller of an unlocked
+# Room on the battlefield with at least one locked door may unlock a
+# locked door of that Room by paying its mana cost as though casting an
+# enchantment spell. The unlock action is NOT a spell — it doesn't go
+# on the stack; the named half is added to ``unlocked_halves`` on the
+# Room permanent on apply, and any newly-active triggered abilities on
+# the entering half fire.
+#
+# **Dispatch is stubbed.** Rust has no Room-half state today — the
+# per-object ``unlocked_halves: set[str]`` field that Python's
+# ``GameObject`` carries is missing on the Rust side, and there's no
+# half-specific effect activation primitive. The variant + bridge
+# round-trip ship now, so callers building Action dicts can already
+# use the ``unlock_room_half`` shape and hit a clear "not implemented
+# yet" error path rather than the generic ``unknown action kind``
+# rejection. A future slice adds the per-object Room state + the
+# unlock primitive then flips the dispatch arm to a real
+# ``call_method1("unlock_room_half", ...)`` call. Until then, happy-
+# path dispatch raises ``ValueError`` — these tests assert on the
+# stubbed error path, NOT on a successful unlock outcome. Mirrors the
+# round-23 ActivateAbility and round-24 TurnFaceUp "scaffold the
+# variant, defer the dispatch semantics" pattern.
+
+
+def test_apply_action_unlock_room_half_stub_raises_value_error(synthetic_state):
+    """Happy-path stub: a well-formed UnlockRoomHalf dict parses
+    cleanly but the dispatch arm raises ``ValueError`` because no
+    Rust Room-half state / unlock primitive exists yet. The error
+    message names the variant + flags it as future work so a follow-
+    up slice grepping for the string finds the dispatch site to
+    flip."""
+    with pytest.raises(
+        ValueError, match=r"UnlockRoomHalf dispatch not implemented yet"
+    ):
+        synthetic_state.apply_action(
+            {"kind": "unlock_room_half", "card_id": 42, "half_name": "left"}
+        )
+
+
+def test_apply_action_unlock_room_half_stub_error_mentions_room(synthetic_state):
+    """The stub message names the missing Rust state (Room enchantment
+    + half-name resolution) so a future slice grepping for "Room" finds
+    the dispatch site to flip. Pin the substring so the message stays
+    informative — a future slice that flips the dispatch to a real
+    call must also delete this test (it documents the stub-state, not
+    the eventual real behavior)."""
+    with pytest.raises(ValueError, match=r"Room"):
+        synthetic_state.apply_action(
+            {"kind": "unlock_room_half", "card_id": 7, "half_name": "right"}
+        )
+
+
+def test_apply_action_unlock_room_half_missing_card_id_raises_key_error(
+    synthetic_state,
+):
+    """Missing the ``card_id`` key raises ``KeyError`` —
+    ``parse_action`` rejects before dispatch (single point of
+    validation, mirrors the ``card_id``-missing shape on
+    ``play_land``). The KeyError fires BEFORE the dispatch-stub
+    ValueError, so this test pins the parse-time gate."""
+    with pytest.raises(KeyError, match="card_id"):
+        synthetic_state.apply_action(
+            {"kind": "unlock_room_half", "half_name": "left"}
+        )
+
+
+def test_apply_action_unlock_room_half_missing_half_name_raises_key_error(
+    synthetic_state,
+):
+    """Missing the ``half_name`` key raises ``KeyError`` — same parse-
+    time gate as ``card_id``. Both fields are required; the parser
+    reads them in order, so this test specifically exercises the
+    second key's check (card_id present, half_name missing)."""
+    with pytest.raises(KeyError, match="half_name"):
+        synthetic_state.apply_action(
+            {"kind": "unlock_room_half", "card_id": 7}
+        )
+
+
+def test_apply_action_unlock_room_half_wrong_type_for_card_id_raises(
+    synthetic_state,
+):
+    """``card_id`` must be a u32-extractable integer. A string fails
+    PyO3's ``extract::<u32>`` machinery → ``TypeError`` / ``ValueError``.
+    The dispatch-stub never runs; the parse-time gate fires first."""
+    with pytest.raises((TypeError, ValueError)):
+        synthetic_state.apply_action(
+            {
+                "kind": "unlock_room_half",
+                "card_id": "not-an-int",
+                "half_name": "left",
+            }
+        )
+
+
+def test_apply_action_unlock_room_half_wrong_type_for_half_name_raises(
+    synthetic_state,
+):
+    """``half_name`` must be a Python string. A non-string value (e.g.
+    an int) fails PyO3's ``extract::<String>`` machinery → ``TypeError``
+    / ``ValueError``. The dispatch-stub never runs; the parse-time gate
+    fires first."""
+    with pytest.raises((TypeError, ValueError)):
+        synthetic_state.apply_action(
+            {
+                "kind": "unlock_room_half",
+                "card_id": 7,
+                "half_name": 123,
+            }
+        )
+
+
+def test_apply_action_unknown_kind_message_mentions_unlock_room_half(
+    synthetic_state,
+):
+    """The unknown-kind error message includes ``unlock_room_half``
+    after this slice extends the variant list. Pin the substring so a
+    future variant addition forces the message to grow."""
+    with pytest.raises(ValueError, match=r"unlock_room_half"):
+        synthetic_state.apply_action({"kind": "frobnicate"})
+
+
+# --- ActivateStation -------------------------------------------------
+#
+# Rolling-integration slice (post-UnlockRoomHalf): extend the Action
+# enum + apply_action dispatcher with ``Action::ActivateStation {
+# spacecraft_id, crew_id }``. The Python dataclass
+# ``ActivateStation(spacecraft_id: int, crew_id: int)`` carries two
+# ints — the GameObject id of the Spacecraft permanent and the
+# GameObject id of the creature being tapped as cost. **This slice
+# completes the Action enum scaffold: all 8 Python Action subclasses
+# now have Rust variants.**
+#
+# EoE Spacecraft cycle: Spacecraft enter as artifacts with no creature
+# types and accumulate charge counters via station-attaching (tap a
+# creature, add charge counters equal to its power); they turn face
+# up (become creatures with printed stats) via ``TurnFaceUp`` once
+# enough charge counters have been added. Sorcery-speed only
+# (enforced by the future ``legal_decisions`` enumerator, not by this
+# dispatch arm).
+#
+# **Dispatch is stubbed.** Rust has no Spacecraft charge-counter state
+# today, and there's no crew-tap-resolution primitive that ties the
+# tap-as-cost to the counter-add-as-effect. The variant + bridge round-
+# trip ship now, so callers building Action dicts can already use the
+# ``activate_station`` shape and hit a clear "not implemented yet"
+# error path rather than the generic ``unknown action kind`` rejection.
+# A future slice adds the per-object Spacecraft charge state + the
+# activate-station primitive then flips the dispatch arm to a real
+# ``call_method1("activate_station", ...)`` call. Until then, happy-
+# path dispatch raises ``ValueError`` — these tests assert on the
+# stubbed error path, NOT on a successful station outcome. Mirrors the
+# round-23 ActivateAbility and round-24 TurnFaceUp / UnlockRoomHalf
+# "scaffold the variant, defer the dispatch semantics" pattern.
+
+
+def test_apply_action_activate_station_stub_raises_value_error(synthetic_state):
+    """Happy-path stub: a well-formed ActivateStation dict parses
+    cleanly but the dispatch arm raises ``ValueError`` because no Rust
+    Spacecraft charge-counter state / activate-station primitive
+    exists yet. The error message names the variant + flags it as
+    future work so a follow-up slice grepping for the string finds
+    the dispatch site to flip."""
+    with pytest.raises(
+        ValueError, match=r"ActivateStation dispatch not implemented yet"
+    ):
+        synthetic_state.apply_action(
+            {"kind": "activate_station", "spacecraft_id": 42, "crew_id": 5}
+        )
+
+
+def test_apply_action_activate_station_stub_error_mentions_spacecraft(
+    synthetic_state,
+):
+    """The stub message names the missing Rust state (Spacecraft
+    charge-counter + crew-tap resolution) so a future slice grepping
+    for "Spacecraft" finds the dispatch site to flip. Pin the substring
+    so the message stays informative — a future slice that flips the
+    dispatch to a real call must also delete this test (it documents
+    the stub-state, not the eventual real behavior)."""
+    with pytest.raises(ValueError, match=r"Spacecraft"):
+        synthetic_state.apply_action(
+            {"kind": "activate_station", "spacecraft_id": 7, "crew_id": 8}
+        )
+
+
+def test_apply_action_activate_station_missing_spacecraft_id_raises_key_error(
+    synthetic_state,
+):
+    """Missing the ``spacecraft_id`` key raises ``KeyError`` —
+    ``parse_action`` rejects before dispatch (single point of
+    validation, mirrors the ``source_id``-missing shape on
+    ``activate_ability``). The KeyError fires BEFORE the dispatch-stub
+    ValueError, so this test pins the parse-time gate."""
+    with pytest.raises(KeyError, match="spacecraft_id"):
+        synthetic_state.apply_action(
+            {"kind": "activate_station", "crew_id": 5}
+        )
+
+
+def test_apply_action_activate_station_missing_crew_id_raises_key_error(
+    synthetic_state,
+):
+    """Missing the ``crew_id`` key raises ``KeyError`` — same parse-
+    time gate as ``spacecraft_id``. Both fields are required; the
+    parser reads them in order, so this test specifically exercises
+    the second key's check (spacecraft_id present, crew_id missing)."""
+    with pytest.raises(KeyError, match="crew_id"):
+        synthetic_state.apply_action(
+            {"kind": "activate_station", "spacecraft_id": 7}
+        )
+
+
+def test_apply_action_activate_station_wrong_type_for_spacecraft_id_raises(
+    synthetic_state,
+):
+    """``spacecraft_id`` must be a u32-extractable integer. A string
+    fails PyO3's ``extract::<u32>`` machinery → ``TypeError`` /
+    ``ValueError``. The dispatch-stub never runs; the parse-time gate
+    fires first."""
+    with pytest.raises((TypeError, ValueError)):
+        synthetic_state.apply_action(
+            {
+                "kind": "activate_station",
+                "spacecraft_id": "not-an-int",
+                "crew_id": 5,
+            }
+        )
+
+
+def test_apply_action_activate_station_wrong_type_for_crew_id_raises(
+    synthetic_state,
+):
+    """``crew_id`` must be a u32-extractable integer. A string fails
+    PyO3's ``extract::<u32>`` machinery → ``TypeError`` / ``ValueError``.
+    The dispatch-stub never runs; the parse-time gate fires first."""
+    with pytest.raises((TypeError, ValueError)):
+        synthetic_state.apply_action(
+            {
+                "kind": "activate_station",
+                "spacecraft_id": 7,
+                "crew_id": "not-an-int",
+            }
+        )
+
+
+def test_apply_action_unknown_kind_message_mentions_activate_station(
+    synthetic_state,
+):
+    """The unknown-kind error message includes ``activate_station``
+    after this slice extends the variant list. Pin the substring so a
+    future variant addition forces the message to grow. **This
+    completes the Action enum scaffold — all 8 Python Action
+    subclasses now have Rust variants.**"""
+    with pytest.raises(ValueError, match=r"activate_station"):
+        synthetic_state.apply_action({"kind": "frobnicate"})

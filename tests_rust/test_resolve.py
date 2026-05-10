@@ -4087,3 +4087,1718 @@ def test_resolve_surveil_negative_count_raises(synthetic_state):
         synthetic_state.register_and_inject_object(
             _surveil_dict(count=-1), 0, ZONE_HAND
         )
+
+
+# --- round-23: CounterTargetSpell dispatch -------------------------
+#
+# CR 701.5: Counter target spell on the stack. Powers Annul, Cancel,
+# etc. — 7 cards in the EoE pool per round-20 measurement. Composes
+# round-7's counter_spell primitive (inlined here per the per-slice
+# file-isolation pattern — see the variant's docstring on cards.rs).
+#
+# **Deterministic target choice: topmost-non-self stack item.** The
+# Effect dispatch scans the stack top-to-bottom (Vec iter().rev())
+# and picks the first source_obj_id that isn't this resolving
+# effect's own source (via the round-23 source_obj_id parameter on
+# apply_effect). A counterspell sitting on the stack shouldn't
+# counter itself before it resolves.
+#
+# **Empty stack / only-self stack: silent fizzle.** Mirrors Python's
+# `CounterTargetSpell.resolve` short-circuit on `if not targets`.
+# The Effect doesn't error; the post-resolve mover still routes the
+# counterspell source to the graveyard at the outer
+# `resolve_top_of_stack`.
+#
+# **Source goes to its controller's graveyard.** CR 701.6 — a
+# countered spell is put into its owner's graveyard. First slice:
+# owner = controller. Mirrors the round-7 counter_spell primitive's
+# routing.
+
+
+def _annul_dict():
+    """An Annul-style counter-target-spell printing dict. Instant-typed
+    so the post-resolve mover routes the resolved counterspell source
+    to its own controller's graveyard (CR 608.2m)."""
+    return {
+        "name": "Test Annul",
+        "card_types": ["Instant"],
+        "mana_cost": {"U": 1},
+        "effects": [{"kind": "counter_target_spell"}],
+    }
+
+
+def _bombard_for_counter_dict():
+    """A second spell that the Annul-style counter can target. A
+    DealDamage Sorcery — when countered before resolution, its
+    DealDamage effect must NOT fire. Used as the 'other spell' on the
+    stack."""
+    return {
+        "name": "Bombard Target",
+        "card_types": ["Sorcery"],
+        "mana_cost": {"R": 1, "generic": 2},
+        "effects": [
+            {
+                "kind": "deal_damage",
+                "amount": 3,
+                "target": {"kind": "any_player"},
+            }
+        ],
+    }
+
+
+def test_resolve_counter_target_spell_counters_top_other_spell(synthetic_state):
+    """Stack has [other_spell, counter_spell] (counter is top). Resolve
+    the top — the counter targets the other_spell, removes its stack
+    item, and moves the other_spell's source to its controller's
+    graveyard. The counterspell source itself then post-resolves to
+    its own controller's graveyard via CR 608.2m. Stack ends empty."""
+    other_obj_id = synthetic_state.register_and_inject_object(
+        _bombard_for_counter_dict(), 1, ZONE_HAND
+    )
+    counter_obj_id = synthetic_state.register_and_inject_object(
+        _annul_dict(), 0, ZONE_HAND
+    )
+    # Stack: bottom = other (controller=1), top = counter (controller=0).
+    synthetic_state.push_to_stack(other_obj_id, 1)
+    synthetic_state.push_to_stack(counter_obj_id, 0)
+    assert synthetic_state.stack_size() == 2
+
+    p0_graveyard_before = synthetic_state.graveyard_sizes[0]
+    p1_graveyard_before = synthetic_state.graveyard_sizes[1]
+
+    synthetic_state.resolve_top_of_stack()
+
+    # Stack drained (counter resolved, its target was removed from
+    # the stack before pop).
+    assert synthetic_state.is_stack_empty() is True
+    # Countered spell (other_obj_id) is in player 1's graveyard.
+    assert synthetic_state.find_object_zone(other_obj_id) == ZONE_GRAVEYARD
+    assert synthetic_state.graveyard_sizes[1] == p1_graveyard_before + 1
+    # Counterspell source (counter_obj_id) is in player 0's graveyard
+    # via the CR 608.2m post-resolve mover (Instant -> controller's
+    # graveyard).
+    assert synthetic_state.find_object_zone(counter_obj_id) == ZONE_GRAVEYARD
+    assert synthetic_state.graveyard_sizes[0] == p0_graveyard_before + 1
+
+
+def test_resolve_counter_target_spell_empty_stack_except_self_fizzles(
+    synthetic_state,
+):
+    """Stack has only [counter_spell] — no other targets. Per Python
+    parity (`if not targets: return`), the Effect dispatch fizzles
+    silently. The counterspell's own stack item still pops at the outer
+    `resolve_top_of_stack`, and its source still post-resolves to the
+    controller's graveyard via CR 608.2m. No error."""
+    counter_obj_id = synthetic_state.register_and_inject_object(
+        _annul_dict(), 0, ZONE_HAND
+    )
+    synthetic_state.push_to_stack(counter_obj_id, 0)
+    assert synthetic_state.stack_size() == 1
+
+    p0_graveyard_before = synthetic_state.graveyard_sizes[0]
+
+    # No exception, returns the resolved-item dict.
+    resolved = synthetic_state.resolve_top_of_stack()
+    assert resolved == {"source_obj_id": counter_obj_id, "controller": 0}
+
+    assert synthetic_state.is_stack_empty() is True
+    # Counterspell source landed in its own controller's graveyard
+    # via the post-resolve mover; no other state changed.
+    assert synthetic_state.find_object_zone(counter_obj_id) == ZONE_GRAVEYARD
+    assert synthetic_state.graveyard_sizes[0] == p0_graveyard_before + 1
+
+
+def test_resolve_counter_target_spell_picks_topmost_non_self(synthetic_state):
+    """Stack has [A, B, counter_spell] from bottom to top. The counter
+    must pick B (the topmost-non-self stack item), leaving A alone.
+    After resolution: A still on stack, B in its controller's
+    graveyard, counter in its own controller's graveyard."""
+    a_obj_id = synthetic_state.register_and_inject_object(
+        _bombard_for_counter_dict(), 1, ZONE_HAND
+    )
+    b_obj_id = synthetic_state.register_and_inject_object(
+        _bombard_for_counter_dict(), 1, ZONE_HAND
+    )
+    counter_obj_id = synthetic_state.register_and_inject_object(
+        _annul_dict(), 0, ZONE_HAND
+    )
+    # Stack from bottom: A (controller=1), B (controller=1),
+    # counter (controller=0).
+    synthetic_state.push_to_stack(a_obj_id, 1)
+    synthetic_state.push_to_stack(b_obj_id, 1)
+    synthetic_state.push_to_stack(counter_obj_id, 0)
+    assert synthetic_state.stack_size() == 3
+
+    synthetic_state.resolve_top_of_stack()
+
+    # A remains on stack (counter resolved + popped; B was countered
+    # and removed mid-resolve). One stack item left.
+    assert synthetic_state.stack_size() == 1
+    top = synthetic_state.peek_top_of_stack()
+    assert top == {"source_obj_id": a_obj_id, "controller": 1}
+    # B is in player 1's graveyard (its controller).
+    assert synthetic_state.find_object_zone(b_obj_id) == ZONE_GRAVEYARD
+    # A is NOT in the graveyard — it's still pending on the stack.
+    assert synthetic_state.find_object_zone(a_obj_id) == ZONE_HAND
+
+
+def test_resolve_counter_target_spell_routes_to_target_controller_graveyard(
+    synthetic_state,
+):
+    """The countered spell goes to ITS controller's graveyard, NOT the
+    counter-caster's. Annul (p0) counters a Bombard (p1) — Bombard
+    lands in p1's graveyard, not p0's. Mirrors CR 701.6 + the round-7
+    counter_spell primitive's controller-routing convention."""
+    bombard_obj_id = synthetic_state.register_and_inject_object(
+        _bombard_for_counter_dict(), 1, ZONE_HAND
+    )
+    counter_obj_id = synthetic_state.register_and_inject_object(
+        _annul_dict(), 0, ZONE_HAND
+    )
+    # bombard is controller=1 on the stack item.
+    synthetic_state.push_to_stack(bombard_obj_id, 1)
+    synthetic_state.push_to_stack(counter_obj_id, 0)
+
+    p0_graveyard_before = synthetic_state.graveyard_sizes[0]
+    p1_graveyard_before = synthetic_state.graveyard_sizes[1]
+
+    synthetic_state.resolve_top_of_stack()
+
+    # p1's graveyard gained the countered Bombard.
+    assert synthetic_state.graveyard_sizes[1] == p1_graveyard_before + 1
+    # p0's graveyard gained the resolved Annul (post-resolve mover),
+    # but NOT the Bombard.
+    assert synthetic_state.graveyard_sizes[0] == p0_graveyard_before + 1
+
+
+def test_resolve_counter_target_spell_target_effects_do_not_fire(
+    synthetic_state,
+):
+    """A countered spell's effects must NOT resolve. The Bombard's
+    DealDamage(3, any_player) would normally hit p0 (defender from
+    p1's perspective) for 3, but since the Annul counters it before
+    Bombard's resolution, no damage is dealt. The dispatch sequence
+    here is: resolve_top pops the Annul (top), which counters the
+    Bombard (removes its stack item before Bombard ever resolves).
+    Bombard's DealDamage never fires."""
+    bombard_obj_id = synthetic_state.register_and_inject_object(
+        _bombard_for_counter_dict(), 1, ZONE_HAND
+    )
+    counter_obj_id = synthetic_state.register_and_inject_object(
+        _annul_dict(), 0, ZONE_HAND
+    )
+    synthetic_state.push_to_stack(bombard_obj_id, 1)
+    synthetic_state.push_to_stack(counter_obj_id, 0)
+    life_before = list(synthetic_state.life_totals)
+
+    synthetic_state.resolve_top_of_stack()
+
+    # No life totals changed — Bombard's DealDamage never resolved.
+    assert synthetic_state.life_totals[0] == life_before[0]
+    assert synthetic_state.life_totals[1] == life_before[1]
+
+
+def test_resolve_counter_target_spell_empty_stack_only_self_does_not_error_with_pop(
+    synthetic_state,
+):
+    """Variant of the fizzle test: confirm `stack.pop()` at the outer
+    `resolve_top_of_stack` still succeeds when the inner dispatch
+    saw only-self. Specifically guards against an off-by-one where
+    'fizzle' accidentally removed the counter's own stack item, then
+    the outer pop would crash on an empty stack."""
+    counter_obj_id = synthetic_state.register_and_inject_object(
+        _annul_dict(), 0, ZONE_HAND
+    )
+    synthetic_state.push_to_stack(counter_obj_id, 0)
+    # No exception means the outer pop didn't run on an empty stack.
+    resolved = synthetic_state.resolve_top_of_stack()
+    assert resolved is not None
+    assert synthetic_state.is_stack_empty() is True
+
+
+def test_resolve_counter_target_spell_clone_isolation(synthetic_state):
+    """CoW canary: counter on a clone must not bleed into the original.
+    Load-bearing because the inline counter logic uses Arc::make_mut on
+    multiple zones (stack pop is direct Vec mutation on the per-state
+    stack Vec; zone moves use Arc::make_mut). The original state's
+    stack + zones must be untouched after the clone resolves."""
+    bombard_obj_id = synthetic_state.register_and_inject_object(
+        _bombard_for_counter_dict(), 1, ZONE_HAND
+    )
+    counter_obj_id = synthetic_state.register_and_inject_object(
+        _annul_dict(), 0, ZONE_HAND
+    )
+    synthetic_state.push_to_stack(bombard_obj_id, 1)
+    synthetic_state.push_to_stack(counter_obj_id, 0)
+    cloned = synthetic_state.clone_once()
+
+    cloned.resolve_top_of_stack()
+
+    # Clone: counter resolved, stack drained, Bombard in p1's graveyard.
+    assert cloned.is_stack_empty() is True
+    assert cloned.find_object_zone(bombard_obj_id) == ZONE_GRAVEYARD
+
+    # Original: stack still has 2 items, both sources still in hand.
+    assert synthetic_state.stack_size() == 2
+    assert synthetic_state.find_object_zone(bombard_obj_id) == ZONE_HAND
+    assert synthetic_state.find_object_zone(counter_obj_id) == ZONE_HAND
+
+
+# --- round-24: ReturnCreatureFromYourGraveyardToBattlefield dispatch ---
+#
+# CR 400.7 (zone-change reset) + CR 302.1 (new permanent has summoning
+# sickness) — reanimate a creature card from the controller's graveyard
+# onto their battlefield. Powers Emerge from the Cocoon, Reanimate-style
+# sugar — 8 cards in the EoE pool per round-20 measurement. Composes
+# round-17's `move_object_from_graveyard_to_battlefield` primitive
+# (inlined here per the per-slice file-isolation pattern — see the
+# variant's docstring on cards.rs).
+#
+# **Deterministic first-creature pick.** Scan the controller's
+# (`state.active_player`'s, first-slice convention) graveyard in Vec
+# iteration order (front = smallest index = oldest); pick the first
+# object whose printing's `card_types` contains "Creature". No
+# filtering past that (no mana-value cap, no widening) — see the
+# variant's docstring for the deferred Python schema.
+#
+# **Empty / no-creature graveyard: silent fizzle.** Mirrors Python's
+# `if not targets: return` short-circuit + the round-17 primitive's
+# `Ok(false)` return shape. The Effect doesn't error; the post-resolve
+# mover still routes the resolved reanimate source to the graveyard.
+
+
+def _reanimate_dict():
+    """A reanimate-style printing dict. Sorcery-typed so the
+    post-resolve mover routes the resolved source to its own
+    controller's graveyard (CR 608.2m)."""
+    return {
+        "name": "Test Reanimate",
+        "card_types": ["Sorcery"],
+        "mana_cost": {"B": 1, "generic": 1},
+        "effects": [
+            {"kind": "return_creature_from_your_graveyard_to_battlefield"}
+        ],
+    }
+
+
+def _vanilla_creature_dict(name="Test Creature"):
+    """A 2/2 creature printing dict — the "target" the reanimate effect
+    will pick up from the graveyard."""
+    return {
+        "name": name,
+        "card_types": ["Creature"],
+        "mana_cost": {"generic": 2},
+        "power": 2,
+        "toughness": 2,
+    }
+
+
+def _vanilla_land_dict(name="Test Land"):
+    """A non-creature card to drop in the graveyard alongside creature
+    targets — confirms the first-creature filter skips it."""
+    return {
+        "name": name,
+        "card_types": ["Land"],
+    }
+
+
+def test_resolve_reanimate_moves_creature_from_graveyard_to_battlefield(
+    synthetic_state,
+):
+    """Happy path: a creature in p0's graveyard + a reanimate spell on
+    the stack -> creature lands on p0's battlefield, removed from p0's
+    graveyard. The reanimate source itself post-resolves to p0's
+    graveyard (Sorcery -> controller's graveyard via CR 608.2m)."""
+    # Drop a creature into p0's graveyard.
+    creature_id = synthetic_state.register_and_inject_object(
+        _vanilla_creature_dict(), 0, ZONE_GRAVEYARD
+    )
+    # Cast the reanimate spell (p0 is active).
+    reanimate_id = synthetic_state.register_and_inject_object(
+        _reanimate_dict(), 0, ZONE_HAND
+    )
+    synthetic_state.push_to_stack(reanimate_id, 0)
+    bf_before = synthetic_state.battlefield_sizes
+    gy_before = synthetic_state.graveyard_sizes
+
+    synthetic_state.resolve_top_of_stack()
+
+    # Creature moved from graveyard -> battlefield.
+    assert synthetic_state.find_object_zone(creature_id) == ZONE_BATTLEFIELD
+    assert synthetic_state.battlefield_sizes[0] == bf_before[0] + 1
+    # Graveyard count: -1 (creature left) +1 (reanimate sorcery landed
+    # via post-resolve) = bf_before[0] graveyard count.
+    assert synthetic_state.graveyard_sizes[0] == gy_before[0]
+    # Opponent untouched.
+    assert synthetic_state.battlefield_sizes[1] == bf_before[1]
+    assert synthetic_state.graveyard_sizes[1] == gy_before[1]
+
+
+def test_resolve_reanimate_empty_graveyard_silent_fizzle(synthetic_state):
+    """No cards in p0's graveyard: the reanimate effect silently
+    fizzles. The reanimate source still post-resolves to p0's graveyard
+    via CR 608.2m. Battlefield untouched."""
+    reanimate_id = synthetic_state.register_and_inject_object(
+        _reanimate_dict(), 0, ZONE_HAND
+    )
+    synthetic_state.push_to_stack(reanimate_id, 0)
+    bf_before = synthetic_state.battlefield_sizes
+    gy_before = synthetic_state.graveyard_sizes
+
+    # No exception.
+    resolved = synthetic_state.resolve_top_of_stack()
+    assert resolved == {"source_obj_id": reanimate_id, "controller": 0}
+
+    # Battlefield untouched.
+    assert synthetic_state.battlefield_sizes == bf_before
+    # p0 graveyard: +1 from the reanimate sorcery's own post-resolve.
+    assert synthetic_state.graveyard_sizes[0] == gy_before[0] + 1
+
+
+def test_resolve_reanimate_graveyard_with_only_noncreatures_fizzles(
+    synthetic_state,
+):
+    """p0's graveyard has only non-creature cards (a Land). The
+    first-creature filter finds nothing -> silent fizzle. The land
+    stays in the graveyard."""
+    land_id = synthetic_state.register_and_inject_object(
+        _vanilla_land_dict(), 0, ZONE_GRAVEYARD
+    )
+    reanimate_id = synthetic_state.register_and_inject_object(
+        _reanimate_dict(), 0, ZONE_HAND
+    )
+    synthetic_state.push_to_stack(reanimate_id, 0)
+    bf_before = synthetic_state.battlefield_sizes
+
+    synthetic_state.resolve_top_of_stack()
+
+    # Land stays put.
+    assert synthetic_state.find_object_zone(land_id) == ZONE_GRAVEYARD
+    # Battlefield count untouched (no reanimation happened).
+    assert synthetic_state.battlefield_sizes == bf_before
+
+
+def test_resolve_reanimate_picks_first_creature_in_zone_order(synthetic_state):
+    """p0's graveyard has multiple creatures (and a land between them).
+    The dispatch picks the FIRST creature in zone-iteration order
+    (front = smallest Vec index = oldest by push order). The other
+    creature stays in the graveyard."""
+    # Push order: creature_a (first), land (skipped), creature_b (later).
+    creature_a = synthetic_state.register_and_inject_object(
+        _vanilla_creature_dict("First Creature"), 0, ZONE_GRAVEYARD
+    )
+    _land_id = synthetic_state.register_and_inject_object(
+        _vanilla_land_dict(), 0, ZONE_GRAVEYARD
+    )
+    creature_b = synthetic_state.register_and_inject_object(
+        _vanilla_creature_dict("Second Creature"), 0, ZONE_GRAVEYARD
+    )
+    reanimate_id = synthetic_state.register_and_inject_object(
+        _reanimate_dict(), 0, ZONE_HAND
+    )
+    synthetic_state.push_to_stack(reanimate_id, 0)
+
+    synthetic_state.resolve_top_of_stack()
+
+    # creature_a (first creature in zone order) reanimated.
+    assert synthetic_state.find_object_zone(creature_a) == ZONE_BATTLEFIELD
+    # creature_b still in the graveyard.
+    assert synthetic_state.find_object_zone(creature_b) == ZONE_GRAVEYARD
+
+
+def test_resolve_reanimate_stamps_summoning_sick(synthetic_state):
+    """CR 302.1 — a reanimated creature enters with summoning sickness;
+    it can't attack on the turn it enters. Mirrors the round-17
+    primitive's summoning_sick=true stamp."""
+    creature_id = synthetic_state.register_and_inject_object(
+        _vanilla_creature_dict(), 0, ZONE_GRAVEYARD
+    )
+    reanimate_id = synthetic_state.register_and_inject_object(
+        _reanimate_dict(), 0, ZONE_HAND
+    )
+    synthetic_state.push_to_stack(reanimate_id, 0)
+
+    synthetic_state.resolve_top_of_stack()
+
+    assert synthetic_state.is_summoning_sick(creature_id) is True
+
+
+def test_resolve_reanimate_resets_per_object_state(synthetic_state):
+    """CR 400.7 — per-object state (damage / counters) resets on the
+    zone change. A graveyard creature with stamped damage / counters
+    arrives on the battlefield with damage=0 / counters=0. Defensive
+    reset even though CR 614.12 zeros damage on zone change already,
+    same shape as the round-17 primitive's defensive reset."""
+    creature_id = synthetic_state.register_and_inject_object(
+        _vanilla_creature_dict(), 0, ZONE_GRAVEYARD
+    )
+    # Stamp damage / counters onto the graveyard object directly.
+    assert synthetic_state.deal_damage(creature_id, 5) is True
+    assert synthetic_state.set_counters(creature_id, 3) is True
+    assert synthetic_state.get_damage(creature_id) == 5
+    assert synthetic_state.get_counters(creature_id) == 3
+
+    reanimate_id = synthetic_state.register_and_inject_object(
+        _reanimate_dict(), 0, ZONE_HAND
+    )
+    synthetic_state.push_to_stack(reanimate_id, 0)
+
+    synthetic_state.resolve_top_of_stack()
+
+    # Creature on battlefield with damage=0 / counters=0.
+    assert synthetic_state.find_object_zone(creature_id) == ZONE_BATTLEFIELD
+    assert synthetic_state.get_damage(creature_id) == 0
+    assert synthetic_state.get_counters(creature_id) == 0
+
+
+def test_resolve_reanimate_only_searches_controller_graveyard(synthetic_state):
+    """The "your graveyard" filter is controller-scoped: a creature in
+    the OPPONENT's graveyard is NOT a legal target. p0 casts reanimate
+    while p1's graveyard has a creature -> p0's reanimate silently
+    fizzles (p0's graveyard has no creature)."""
+    # Drop a creature only into p1's graveyard.
+    opp_creature_id = synthetic_state.register_and_inject_object(
+        _vanilla_creature_dict(), 1, ZONE_GRAVEYARD
+    )
+    reanimate_id = synthetic_state.register_and_inject_object(
+        _reanimate_dict(), 0, ZONE_HAND
+    )
+    synthetic_state.push_to_stack(reanimate_id, 0)
+    bf_before = synthetic_state.battlefield_sizes
+
+    synthetic_state.resolve_top_of_stack()
+
+    # Opponent's creature is untouched.
+    assert synthetic_state.find_object_zone(opp_creature_id) == ZONE_GRAVEYARD
+    # No battlefield change (the active player's reanimate fizzled).
+    assert synthetic_state.battlefield_sizes == bf_before
+
+
+def test_resolve_reanimate_clone_isolation(synthetic_state):
+    """CoW canary: running the reanimate dispatch on a clone leaves the
+    original GameState's zones untouched. Load-bearing because the
+    inline reanimate logic uses Arc::make_mut on two zones (graveyard
+    + battlefield)."""
+    creature_id = synthetic_state.register_and_inject_object(
+        _vanilla_creature_dict(), 0, ZONE_GRAVEYARD
+    )
+    reanimate_id = synthetic_state.register_and_inject_object(
+        _reanimate_dict(), 0, ZONE_HAND
+    )
+    synthetic_state.push_to_stack(reanimate_id, 0)
+    cloned = synthetic_state.clone_once()
+
+    cloned.resolve_top_of_stack()
+
+    # Clone diverged: creature reanimated, stack drained.
+    assert cloned.find_object_zone(creature_id) == ZONE_BATTLEFIELD
+    assert cloned.is_stack_empty() is True
+
+    # Original untouched: creature still in graveyard, stack still 1.
+    assert synthetic_state.find_object_zone(creature_id) == ZONE_GRAVEYARD
+    assert synthetic_state.stack_size() == 1
+
+
+# --- round-25: DiscardSelf dispatch ---------------------------------
+#
+# CR 701.8 — "you discard a card." The SOURCE's controller discards
+# `amount` cards from their hand. Punisher / drawback pattern
+# (Irreverent Gremlin shape) — 8 cards in the EoE pool per round-20
+# measurement.
+#
+# **Distinct from round-15's DiscardCard.** DiscardCard's AnyPlayer
+# branch targets the DEFENDING player (Mind Rot — active player forces
+# opponent to discard). DiscardSelf targets the SOURCE's controller
+# regardless of active_player. The cross-controller-active-player
+# tests below confirm the distinction.
+#
+# **Source-finder dispatch (round-23 pattern).** Walks both players'
+# five tracked zones to recover the source's `controller`. Also scans
+# the stack — the source may still be resolving when the effect fires.
+#
+# **First-slice deterministic choice: hand[0]** of the source's
+# controller (mirrors round-15 DiscardCard). Up to `amount` discards
+# in a row; empty hand stops early (Python parity with
+# `for _ in range(self.amount): if not p.hand: break`).
+#
+# **Empty hand / source-not-found = silent no-op** (Python parity +
+# round-23 lost-track-of-source tolerance).
+
+
+def _discard_self_dict(amount=1, card_types=None):
+    """An Irreverent-Gremlin-shaped printing: a permanent (or
+    instant/sorcery via card_types override) whose effect makes the
+    SOURCE's controller discard `amount` cards.
+
+    Default card_types=["Creature"] so the post-resolve mover sends
+    the source to the battlefield (a creature ETB pattern). Tests
+    that need a different source-zone behavior override card_types
+    (e.g. ["Sorcery"] to route the source to its controller's
+    graveyard post-resolve).
+    """
+    if card_types is None:
+        card_types = ["Creature"]
+    p = {
+        "name": f"Test Irreverent Gremlin (x{amount})",
+        "card_types": card_types,
+        "mana_cost": {"R": 1},
+        "effects": [{"kind": "discard_self", "amount": amount}],
+    }
+    if "Creature" in card_types:
+        p["power"] = 1
+        p["toughness"] = 1
+    return p
+
+
+def test_resolve_discard_self_source_on_battlefield_discards_controller_hand(
+    synthetic_state,
+):
+    """Happy path: source sits on p0's battlefield, p0 has cards in
+    hand. Resolving DiscardSelf shrinks p0's hand by 1 and grows p0's
+    graveyard by 1. Opponent untouched."""
+    src_id = synthetic_state.register_and_inject_object(
+        _discard_self_dict(amount=1), 0, ZONE_BATTLEFIELD
+    )
+    p0_hand_before = synthetic_state.hand_sizes[0]
+    p0_grave_before = synthetic_state.graveyard_sizes[0]
+    p1_hand_before = synthetic_state.hand_sizes[1]
+    p1_grave_before = synthetic_state.graveyard_sizes[1]
+
+    synthetic_state.push_to_stack(src_id, 0)
+    synthetic_state.resolve_top_of_stack()
+
+    assert synthetic_state.is_stack_empty() is True
+    # p0 (the source's controller) discarded one card.
+    assert synthetic_state.hand_sizes[0] == p0_hand_before - 1
+    assert synthetic_state.graveyard_sizes[0] == p0_grave_before + 1
+    # p1 untouched.
+    assert synthetic_state.hand_sizes[1] == p1_hand_before
+    assert synthetic_state.graveyard_sizes[1] == p1_grave_before
+
+
+def test_resolve_discard_self_empty_hand_silent_no_op(engine):
+    """If the source's controller has an empty hand, the effect
+    fizzles silently — stack item still pops, no graveyard delta on
+    the controller's side. Mirrors Python's
+    `if not p.hand: break` short-circuit."""
+    # Synthetic state with 0 hand on both players. Need at least 1
+    # library card per the synthetic helper (default 50).
+    state = engine.make_synthetic_state(
+        num_battlefield=0, num_hand=0, num_library=1
+    )
+    src_id = state.register_and_inject_object(
+        _discard_self_dict(amount=1), 0, ZONE_BATTLEFIELD
+    )
+    p0_grave_before = state.graveyard_sizes[0]
+
+    state.push_to_stack(src_id, 0)
+    state.resolve_top_of_stack()  # no raise
+
+    assert state.is_stack_empty() is True
+    # No discard happened — p0 graveyard unchanged.
+    assert state.graveyard_sizes[0] == p0_grave_before
+
+
+def test_resolve_discard_self_source_in_graveyard_uses_controller(
+    synthetic_state,
+):
+    """The source-finder walks five zones (hand / library /
+    battlefield / graveyard / exile) — wider than
+    PutPlusOneCounterOnSelf's battlefield-only scan. Inject a
+    source-shaped object into p0's graveyard (which would normally
+    be unreachable as a stack source, but tests the source-finder's
+    multi-zone scope): the zone-scan picks up p0 as the controller
+    and resolves the discard on p0's hand.
+
+    This documents the "source has left the battlefield by resolve
+    time" tolerance — a permanent's punisher effect still knows the
+    controller via the source object's `controller` field, which
+    doesn't change on zone moves. Real MTG: most "you discard"
+    punishers fire from triggers / ETBs and the source is on the
+    battlefield at resolve time; this test covers the defensive
+    path."""
+    src_id = synthetic_state.register_and_inject_object(
+        _discard_self_dict(amount=1, card_types=["Creature"]),
+        0,
+        ZONE_GRAVEYARD,
+    )
+    p0_hand_before = synthetic_state.hand_sizes[0]
+
+    synthetic_state.push_to_stack(src_id, 0)
+    synthetic_state.resolve_top_of_stack()
+
+    # p0 (the source's controller, as recorded on the GameObject
+    # regardless of which zone it's in) discarded.
+    assert synthetic_state.hand_sizes[0] == p0_hand_before - 1
+
+
+def test_resolve_discard_self_instant_source_resolves_from_hand(
+    synthetic_state,
+):
+    """An instant source: the source GameObject is in its
+    controller's hand (where it was cast from) at resolve time,
+    not on the battlefield. The zone-scan finds the source in hand
+    on its controller's side, identifies p0 as the controller, and
+    the discard fires on p0's hand[0].
+
+    This is the realistic spell-cast pattern — the source's
+    `controller` field carries the authoritative controller
+    regardless of where the source currently sits, and the
+    five-zone scan widens the finder to catch hand-resident
+    sources too."""
+    src_id = synthetic_state.register_and_inject_object(
+        _discard_self_dict(amount=1, card_types=["Instant"]),
+        0,
+        ZONE_HAND,
+    )
+    # Capture hand[1]'s id BEFORE — hand[0] is the source itself,
+    # so the discard will pop the *first non-source* card off the
+    # front... actually, hand[0] IS the most recent
+    # register_and_inject_object push (it appended to the Vec). The
+    # synthetic hand had 7 elves at indices 0..6; the source is now
+    # at index 7. Discard pops hand[0] (Elves), source stays at
+    # index 6 after the pop. Verify by hand_size delta only — the
+    # post-resolve mover then moves the Instant source out of hand
+    # to graveyard.
+    p0_hand_before = synthetic_state.hand_sizes[0]
+    p0_grave_before = synthetic_state.graveyard_sizes[0]
+
+    synthetic_state.push_to_stack(src_id, 0)
+    synthetic_state.resolve_top_of_stack()
+
+    assert synthetic_state.is_stack_empty() is True
+    # Hand shrank by 2: -1 from the discard, -1 from the
+    # post-resolve mover routing the Instant to graveyard. The
+    # discard fired on hand[0] (the elf), not on the source itself.
+    assert synthetic_state.hand_sizes[0] == p0_hand_before - 2
+    # Graveyard grew by 2 (the discarded elf + the resolved
+    # instant source).
+    assert synthetic_state.graveyard_sizes[0] == p0_grave_before + 2
+
+
+def test_resolve_discard_self_discards_first_card_in_hand(synthetic_state):
+    """The discarded card is specifically hand[0] of the source's
+    controller (first-slice deterministic choice). Verify by looking
+    at the obj_id of p0's first hand card before, then asserting it
+    lands in p0's graveyard after resolution."""
+    p0_hand_before = synthetic_state.hand_snapshot(0)
+    p0_first_hand_id = p0_hand_before[0]["id"]
+    assert (
+        synthetic_state.find_object_zone(p0_first_hand_id) == ZONE_HAND
+    )
+
+    src_id = synthetic_state.register_and_inject_object(
+        _discard_self_dict(amount=1), 0, ZONE_BATTLEFIELD
+    )
+    synthetic_state.push_to_stack(src_id, 0)
+    synthetic_state.resolve_top_of_stack()
+
+    # hand[0] (Llanowar Elves synthetic seed) was discarded ->
+    # landed in p0's graveyard.
+    assert (
+        synthetic_state.find_object_zone(p0_first_hand_id) == ZONE_GRAVEYARD
+    )
+
+
+def test_resolve_discard_self_resets_per_object_state_on_discard(
+    synthetic_state,
+):
+    """CR 400.7 — per-object state (tapped / damage / counters)
+    resets on the zone change to graveyard. Stamp damage / counters
+    onto p0's hand[0], resolve DiscardSelf, assert the discarded
+    object lands in graveyard with state cleared. Mirrors the
+    defensive reset every other zone-move arm applies."""
+    p0_first_hand_id = synthetic_state.hand_snapshot(0)[0]["id"]
+    # Stamp damage / counters onto the hand object directly.
+    assert synthetic_state.deal_damage(p0_first_hand_id, 5) is True
+    assert synthetic_state.set_counters(p0_first_hand_id, 3) is True
+    assert synthetic_state.get_damage(p0_first_hand_id) == 5
+    assert synthetic_state.get_counters(p0_first_hand_id) == 3
+
+    src_id = synthetic_state.register_and_inject_object(
+        _discard_self_dict(amount=1), 0, ZONE_BATTLEFIELD
+    )
+    synthetic_state.push_to_stack(src_id, 0)
+    synthetic_state.resolve_top_of_stack()
+
+    # Discarded into p0's graveyard with damage=0, counters=0.
+    assert synthetic_state.find_object_zone(p0_first_hand_id) == ZONE_GRAVEYARD
+    assert synthetic_state.get_damage(p0_first_hand_id) == 0
+    assert synthetic_state.get_counters(p0_first_hand_id) == 0
+
+
+def test_resolve_discard_self_opponent_source_discards_opponent_hand(
+    synthetic_state,
+):
+    """The 'self' is the SOURCE's controller, NOT the active player.
+    Source on p1's battlefield (controller=1) while active_player
+    stays p0 — resolving DiscardSelf discards from p1's hand, not
+    p0's. This is the key distinction from round-15's DiscardCard
+    (which targets the DEFENDING player, not the source's
+    controller)."""
+    # Inject source on p1's battlefield. active_player stays at the
+    # synthetic-state default (0).
+    src_id = synthetic_state.register_and_inject_object(
+        _discard_self_dict(amount=1), 1, ZONE_BATTLEFIELD
+    )
+    p0_hand_before = synthetic_state.hand_sizes[0]
+    p0_grave_before = synthetic_state.graveyard_sizes[0]
+    p1_hand_before = synthetic_state.hand_sizes[1]
+    p1_grave_before = synthetic_state.graveyard_sizes[1]
+
+    # Push with controller=1 (p1's source resolving on the stack).
+    synthetic_state.push_to_stack(src_id, 1)
+    synthetic_state.resolve_top_of_stack()
+
+    assert synthetic_state.is_stack_empty() is True
+    # p1 (the source's controller) discarded — NOT p0.
+    assert synthetic_state.hand_sizes[1] == p1_hand_before - 1
+    assert synthetic_state.graveyard_sizes[1] == p1_grave_before + 1
+    # p0 (active player but NOT the source's controller) untouched.
+    assert synthetic_state.hand_sizes[0] == p0_hand_before
+    assert synthetic_state.graveyard_sizes[0] == p0_grave_before
+
+
+def test_resolve_discard_self_amount_two_discards_twice(synthetic_state):
+    """amount=2 — the controller discards two cards in a row. Two
+    hand cards leave hand, two land in graveyard."""
+    src_id = synthetic_state.register_and_inject_object(
+        _discard_self_dict(amount=2), 0, ZONE_BATTLEFIELD
+    )
+    p0_hand_before = synthetic_state.hand_sizes[0]
+    p0_grave_before = synthetic_state.graveyard_sizes[0]
+
+    synthetic_state.push_to_stack(src_id, 0)
+    synthetic_state.resolve_top_of_stack()
+
+    assert synthetic_state.hand_sizes[0] == p0_hand_before - 2
+    assert synthetic_state.graveyard_sizes[0] == p0_grave_before + 2
+
+
+def test_resolve_discard_self_amount_zero_no_op(synthetic_state):
+    """amount=0 is a legal no-op (mirrors GainLife / DrawCards /
+    Mill / ScryN / CreateToken / PutPlusOneCounterOnSelf zero-amount
+    conventions). Hand / graveyard untouched."""
+    src_id = synthetic_state.register_and_inject_object(
+        _discard_self_dict(amount=0), 0, ZONE_BATTLEFIELD
+    )
+    p0_hand_before = synthetic_state.hand_sizes[0]
+    p0_grave_before = synthetic_state.graveyard_sizes[0]
+
+    synthetic_state.push_to_stack(src_id, 0)
+    synthetic_state.resolve_top_of_stack()
+
+    assert synthetic_state.is_stack_empty() is True
+    assert synthetic_state.hand_sizes[0] == p0_hand_before
+    assert synthetic_state.graveyard_sizes[0] == p0_grave_before
+
+
+def test_resolve_discard_self_clone_isolation(synthetic_state):
+    """CoW canary: running DiscardSelf on a clone leaves the original
+    state's zones untouched. Load-bearing because the inline discard
+    logic uses Arc::make_mut on two zones (hand + graveyard)."""
+    src_id = synthetic_state.register_and_inject_object(
+        _discard_self_dict(amount=1), 0, ZONE_BATTLEFIELD
+    )
+    synthetic_state.push_to_stack(src_id, 0)
+    p0_hand_before = synthetic_state.hand_sizes[0]
+    p0_grave_before = synthetic_state.graveyard_sizes[0]
+
+    cloned = synthetic_state.clone_once()
+    cloned.resolve_top_of_stack()
+
+    # Clone diverged: p0's hand shrank, graveyard grew.
+    assert cloned.hand_sizes[0] == p0_hand_before - 1
+    assert cloned.graveyard_sizes[0] == p0_grave_before + 1
+    assert cloned.is_stack_empty() is True
+
+    # Original untouched.
+    assert synthetic_state.hand_sizes[0] == p0_hand_before
+    assert synthetic_state.graveyard_sizes[0] == p0_grave_before
+    assert synthetic_state.stack_size() == 1
+
+
+# --- round-26: EachOpponentLosesLife dispatch ------------------------
+#
+# CR 118.4 — "life loss" (not damage). Each opponent of the SOURCE's
+# controller loses `amount` life. Punisher / drawback pattern
+# (Balemurk Leech shape) — 6 cards in the EoE pool per round-20
+# measurement.
+#
+# **Distinct from round-17 DamageEachOpponent.** DamageEachOpponent
+# deals DAMAGE (CR 701.4) — routes through damage-prevention /
+# Worship-style replacement (CR 614) when those land. Each-
+# OpponentLosesLife is direct life subtraction and is NOT reducible.
+# Two-player engine first slice: both variants land identical
+# defender-life deltas because neither variant routes through
+# damage-prevention yet, but they stay distinct to mirror Python's
+# closed `Effect` vocabulary.
+#
+# **Source-finder dispatch (round-24 pattern).** Walks both players'
+# five tracked zones (hand / library / battlefield / graveyard /
+# exile) plus the stack to recover the source's `controller`.
+# Mirrors DiscardSelf — punisher effects fire on whoever controls the
+# source regardless of where the source currently sits, since the
+# controller field doesn't change on zone moves.
+#
+# **Two-player "each opponent" reduces to "the one opponent".**
+# opponent_id = 1 - controller. Direct life subtraction. amount=0 is
+# a legal no-op; amount<0 raises. Source not found = silent fizzle.
+
+
+def _balemurk_leech_dict(amount=2, card_types=None):
+    """A Balemurk-Leech-shaped printing: a permanent (or instant /
+    sorcery via card_types override) whose effect makes each opponent
+    of the SOURCE's controller lose `amount` life.
+
+    Default card_types=["Creature"] so the post-resolve mover sends
+    the source to the battlefield (the printed Balemurk Leech is a
+    creature with an ETB-style punisher trigger). Tests that need a
+    different source-zone behavior override card_types.
+    """
+    if card_types is None:
+        card_types = ["Creature"]
+    p = {
+        "name": f"Test Balemurk Leech (x{amount})",
+        "card_types": card_types,
+        "mana_cost": {"B": 1, "generic": 1},
+        "effects": [{"kind": "each_opponent_loses_life", "amount": amount}],
+    }
+    if "Creature" in card_types:
+        p["power"] = 2
+        p["toughness"] = 2
+    return p
+
+
+def test_resolve_each_opponent_loses_life_decrements_opponent_life(
+    synthetic_state,
+):
+    """Happy path: source on active player's (p0) battlefield with
+    amount=3 — p1 (the one opponent) loses 3 life; p0 untouched."""
+    src_id = synthetic_state.register_and_inject_object(
+        _balemurk_leech_dict(amount=3), 0, ZONE_BATTLEFIELD
+    )
+    p0_life_before = synthetic_state.life_totals[0]
+    p1_life_before = synthetic_state.life_totals[1]
+
+    synthetic_state.push_to_stack(src_id, 0)
+    synthetic_state.resolve_top_of_stack()
+
+    assert synthetic_state.is_stack_empty() is True
+    # p0 (source's controller) untouched; p1 (the one opponent) -3.
+    assert synthetic_state.life_totals[0] == p0_life_before
+    assert synthetic_state.life_totals[1] == p1_life_before - 3
+
+
+def test_resolve_each_opponent_loses_life_amount_zero_no_op(synthetic_state):
+    """amount=0 is a legitimate no-op (mirrors GainLife / DrawCards /
+    Mill / DamageEachOpponent / DiscardSelf zero-amount conventions).
+    No life change, no error, stack pops."""
+    src_id = synthetic_state.register_and_inject_object(
+        _balemurk_leech_dict(amount=0), 0, ZONE_BATTLEFIELD
+    )
+    life_before = list(synthetic_state.life_totals)
+    synthetic_state.push_to_stack(src_id, 0)
+    synthetic_state.resolve_top_of_stack()
+
+    assert synthetic_state.is_stack_empty() is True
+    assert list(synthetic_state.life_totals) == life_before
+
+
+def test_resolve_each_opponent_loses_life_negative_amount_raises_at_register(
+    synthetic_state,
+):
+    """Negative amount is a schema error (mirrors DamageEachOpponent /
+    DiscardSelf raise-on-negative shape; 'lose -2 life' is schema
+    nonsense). The parse_effect bridge guard surfaces this at
+    register time — before resolution ever runs."""
+    with pytest.raises(ValueError):
+        synthetic_state.register_and_inject_object(
+            _balemurk_leech_dict(amount=-2), 0, ZONE_BATTLEFIELD
+        )
+
+
+def test_resolve_each_opponent_loses_life_opponent_source_targets_active_player(
+    synthetic_state,
+):
+    """The 'each opponent' is OPPONENTS-OF-CONTROLLER, NOT defender-
+    of-active-player. Source on p1's battlefield (controller=1) while
+    active_player stays p0 — resolving EachOpponentLosesLife reduces
+    p0's life (the one opponent of p1), NOT p1's. Cross-controller-
+    active-player distinction matches DiscardSelf's behavior."""
+    src_id = synthetic_state.register_and_inject_object(
+        _balemurk_leech_dict(amount=4), 1, ZONE_BATTLEFIELD
+    )
+    p0_life_before = synthetic_state.life_totals[0]
+    p1_life_before = synthetic_state.life_totals[1]
+    assert synthetic_state.active_player == 0
+
+    # Push with controller=1 (p1's source resolving on the stack).
+    synthetic_state.push_to_stack(src_id, 1)
+    synthetic_state.resolve_top_of_stack()
+
+    assert synthetic_state.is_stack_empty() is True
+    # p0 (the one opponent of p1) -4; p1 (controller) untouched.
+    assert synthetic_state.life_totals[0] == p0_life_before - 4
+    assert synthetic_state.life_totals[1] == p1_life_before
+
+
+def test_resolve_each_opponent_loses_life_active_player_unchanged(
+    synthetic_state,
+):
+    """Asymmetric: EachOpponentLosesLife reduces opponents only —
+    the SOURCE's controller (here = active player p0) is NOT
+    affected. Verify by recording p0's life before and asserting
+    it's unchanged after a 5-life-loss resolution."""
+    p0_life_before = synthetic_state.life_totals[0]
+    p1_life_before = synthetic_state.life_totals[1]
+    assert synthetic_state.active_player == 0
+
+    src_id = synthetic_state.register_and_inject_object(
+        _balemurk_leech_dict(amount=5), 0, ZONE_BATTLEFIELD
+    )
+    synthetic_state.push_to_stack(src_id, 0)
+    synthetic_state.resolve_top_of_stack()
+
+    # p0 (controller) untouched; p1 -5.
+    assert synthetic_state.life_totals[0] == p0_life_before
+    assert synthetic_state.life_totals[1] == p1_life_before - 5
+
+
+def test_resolve_each_opponent_loses_life_multiple_resolutions_stack(
+    synthetic_state,
+):
+    """Two resolutions in a row (3 + 2 = 5 life loss). Confirms the
+    arm is idempotent across repeat invocations and that life-loss
+    accumulates additively. Each resolution is its own stack push +
+    resolve — register_and_inject_object seeds a Creature source each
+    time."""
+    p1_life_before = synthetic_state.life_totals[1]
+
+    # First resolution: amount=3.
+    src_a = synthetic_state.register_and_inject_object(
+        _balemurk_leech_dict(amount=3), 0, ZONE_BATTLEFIELD
+    )
+    synthetic_state.push_to_stack(src_a, 0)
+    synthetic_state.resolve_top_of_stack()
+
+    # Second resolution: amount=2.
+    src_b = synthetic_state.register_and_inject_object(
+        _balemurk_leech_dict(amount=2), 0, ZONE_BATTLEFIELD
+    )
+    synthetic_state.push_to_stack(src_b, 0)
+    synthetic_state.resolve_top_of_stack()
+
+    assert synthetic_state.is_stack_empty() is True
+    # p1 lost 3 + 2 = 5 life.
+    assert synthetic_state.life_totals[1] == p1_life_before - 5
+
+
+def test_resolve_each_opponent_loses_life_source_in_graveyard_uses_controller(
+    synthetic_state,
+):
+    """The source-finder walks five zones — wider than the
+    battlefield-only scan PutPlusOneCounterOnSelf uses. Inject a
+    source-shaped object into p0's graveyard: the zone-scan picks up
+    p0 as the controller and resolves the life-loss on p1. Documents
+    the "source has left the battlefield by resolve time" tolerance
+    — the source's `controller` field doesn't change on zone moves."""
+    src_id = synthetic_state.register_and_inject_object(
+        _balemurk_leech_dict(amount=2, card_types=["Creature"]),
+        0,
+        ZONE_GRAVEYARD,
+    )
+    p0_life_before = synthetic_state.life_totals[0]
+    p1_life_before = synthetic_state.life_totals[1]
+
+    synthetic_state.push_to_stack(src_id, 0)
+    synthetic_state.resolve_top_of_stack()
+
+    # p1 (the one opponent of p0, recorded on the GameObject
+    # regardless of which zone it's in) -2; p0 untouched.
+    assert synthetic_state.life_totals[0] == p0_life_before
+    assert synthetic_state.life_totals[1] == p1_life_before - 2
+
+
+def test_resolve_each_opponent_loses_life_clone_isolation(synthetic_state):
+    """CoW canary: running EachOpponentLosesLife on a clone leaves
+    the original state's life totals untouched. The arm writes
+    `players[idx].life` directly — confirm the GameState clone
+    semantics decouple the player Vec across clones."""
+    src_id = synthetic_state.register_and_inject_object(
+        _balemurk_leech_dict(amount=2), 0, ZONE_BATTLEFIELD
+    )
+    synthetic_state.push_to_stack(src_id, 0)
+    p1_life_before = synthetic_state.life_totals[1]
+
+    cloned = synthetic_state.clone_once()
+    cloned.resolve_top_of_stack()
+
+    # Clone diverged: p1 lost 2 life.
+    assert cloned.life_totals[1] == p1_life_before - 2
+    assert cloned.is_stack_empty() is True
+
+    # Original untouched.
+    assert synthetic_state.life_totals[1] == p1_life_before
+    assert synthetic_state.stack_size() == 1
+
+
+# --- round-24 DestroyAllCreatures dispatch -------------------------
+#
+# **DestroyAllCreatures scope** (mirrored in the Rust module docstring
+# on ``state_ops_resolve.rs``):
+#
+# - **Symmetric AOE: walks BOTH players' battlefields.** Unlike
+#   DestroyTarget (defender only), DestroyAllCreatures hits every
+#   creature regardless of controller — Wrath of God pattern.
+# - **Only creatures.** Non-creature permanents (lands, artifacts,
+#   enchantments) on the battlefield are not touched.
+# - **Indestructible is honored INLINE** (CR 702.12): creatures with
+#   the ``indestructible`` keyword stay on the battlefield. Mirrors
+#   the DestroyTarget arm's inline check rather than the
+#   DamageEachCreature "let SBAs handle it" shape (because this arm
+#   moves objects to graveyard directly, not via damage marking).
+# - **Per-object state reset on graveyard move** (CR 400.7): tapped /
+#   summoning_sick / damage / counters all reset.
+# - **Empty battlefield / no creatures = silent no-op** — per-player.
+# - **Source on stack not affected** — the resolving sorcery's source
+#   lives on the stack, not the battlefield, so the scan naturally
+#   skips it.
+
+
+def _wrath_dict():
+    """A destroy-all-creatures sorcery — Wrath-of-God-shaped (2WW,
+    sorcery, destroys every creature). CR 701.7 + 701.4 AOE."""
+    return {
+        "name": "Test Wrath of God",
+        "card_types": ["Sorcery"],
+        "mana_cost": {"W": 2, "generic": 2},
+        "effects": [{"kind": "destroy_all_creatures"}],
+    }
+
+
+def _wrath_indestructible_dict():
+    """A vanilla creature printing with the indestructible keyword.
+    Used to verify DestroyAllCreatures honors indestructible (mirrors
+    the DestroyTarget / SBA indestructible logic)."""
+    return {
+        "name": "Test Stone Idol",
+        "card_types": ["Creature"],
+        "mana_cost": {"generic": 4},
+        "effects": [],
+        "power": 3,
+        "toughness": 3,
+        "keywords": ["indestructible"],
+    }
+
+
+def _wrath_vanilla_creature_dict():
+    """A vanilla creature with no keywords. Used to seed a
+    deterministically-destructible target."""
+    return {
+        "name": "Test Mortal Bear",
+        "card_types": ["Creature"],
+        "mana_cost": {"generic": 2},
+        "effects": [],
+        "power": 2,
+        "toughness": 2,
+    }
+
+
+def test_resolve_destroy_all_creatures_clears_both_battlefields(
+    synthetic_state,
+):
+    """Resolving Wrath destroys every creature on BOTH players'
+    battlefields. Synthetic seed: 5 Bears on each player's bf (ids
+    5-9 on p0, 72-76 on p1) plus 5 Forests each. Post-resolve: bears
+    in graveyards, Forests still on battlefields."""
+    bear_ids_p0 = (5, 6, 7, 8, 9)
+    bear_ids_p1 = (72, 73, 74, 75, 76)
+    forest_ids_p0 = (0, 1, 2, 3, 4)
+    forest_ids_p1 = (67, 68, 69, 70, 71)
+
+    for cid in bear_ids_p0 + bear_ids_p1:
+        assert synthetic_state.find_object_zone(cid) == ZONE_BATTLEFIELD
+    for lid in forest_ids_p0 + forest_ids_p1:
+        assert synthetic_state.find_object_zone(lid) == ZONE_BATTLEFIELD
+
+    p0_grave_before = synthetic_state.graveyard_sizes[0]
+    p1_grave_before = synthetic_state.graveyard_sizes[1]
+
+    spell_obj_id = synthetic_state.register_and_inject_object(
+        _wrath_dict(), 0, ZONE_HAND
+    )
+    synthetic_state.push_to_stack(spell_obj_id, 0)
+    synthetic_state.resolve_top_of_stack()
+
+    # All bears moved to their controller's graveyards.
+    for cid in bear_ids_p0:
+        assert synthetic_state.find_object_zone(cid) == ZONE_GRAVEYARD
+    for cid in bear_ids_p1:
+        assert synthetic_state.find_object_zone(cid) == ZONE_GRAVEYARD
+    # Forests untouched.
+    for lid in forest_ids_p0 + forest_ids_p1:
+        assert synthetic_state.find_object_zone(lid) == ZONE_BATTLEFIELD
+    # Graveyards grew by 5 each (5 bears per side); p0 also got
+    # the sorcery itself (post-resolve instant/sorcery -> graveyard).
+    assert synthetic_state.graveyard_sizes[0] == p0_grave_before + 5 + 1
+    assert synthetic_state.graveyard_sizes[1] == p1_grave_before + 5
+    # Stack drained.
+    assert synthetic_state.is_stack_empty() is True
+
+
+def test_resolve_destroy_all_creatures_indestructible_survives(engine):
+    """Indestructible creatures (CR 702.12) survive the Wrath. Seed:
+    one indestructible creature on each player's battlefield; resolve
+    Wrath; both should still be on battlefield, neither in graveyard."""
+    state = engine.make_synthetic_state(
+        num_battlefield=0, num_hand=1, num_library=1
+    )
+    indestr_p0 = state.register_and_inject_object(
+        _wrath_indestructible_dict(), 0, ZONE_BATTLEFIELD
+    )
+    indestr_p1 = state.register_and_inject_object(
+        _wrath_indestructible_dict(), 1, ZONE_BATTLEFIELD
+    )
+    spell_obj_id = state.register_and_inject_object(
+        _wrath_dict(), 0, ZONE_HAND
+    )
+    state.push_to_stack(spell_obj_id, 0)
+    state.resolve_top_of_stack()
+
+    # Indestructible creatures stay put — CR 702.12 honored.
+    assert state.find_object_zone(indestr_p0) == ZONE_BATTLEFIELD
+    assert state.find_object_zone(indestr_p1) == ZONE_BATTLEFIELD
+    # Stack drained, source instant in p0's graveyard.
+    assert state.is_stack_empty() is True
+    assert state.find_object_zone(spell_obj_id) == ZONE_GRAVEYARD
+
+
+def test_resolve_destroy_all_creatures_mix_only_normal_destroyed(engine):
+    """Mix of normal + indestructible creatures: only the normal
+    creatures get destroyed; indestructible ones stay on the
+    battlefield."""
+    state = engine.make_synthetic_state(
+        num_battlefield=0, num_hand=1, num_library=1
+    )
+    mortal_id = state.register_and_inject_object(
+        _wrath_vanilla_creature_dict(), 0, ZONE_BATTLEFIELD
+    )
+    indestr_id = state.register_and_inject_object(
+        _wrath_indestructible_dict(), 0, ZONE_BATTLEFIELD
+    )
+    spell_obj_id = state.register_and_inject_object(
+        _wrath_dict(), 0, ZONE_HAND
+    )
+    state.push_to_stack(spell_obj_id, 0)
+    state.resolve_top_of_stack()
+
+    # Mortal -> graveyard; indestructible stays on battlefield.
+    assert state.find_object_zone(mortal_id) == ZONE_GRAVEYARD
+    assert state.find_object_zone(indestr_id) == ZONE_BATTLEFIELD
+
+
+def test_resolve_destroy_all_creatures_empty_battlefield_no_error(engine):
+    """Empty battlefield = silent no-op. Stack still drains, source
+    still moves to graveyard."""
+    state = engine.make_synthetic_state(
+        num_battlefield=0, num_hand=1, num_library=1
+    )
+    spell_obj_id = state.register_and_inject_object(
+        _wrath_dict(), 0, ZONE_HAND
+    )
+    p0_grave_before = state.graveyard_sizes[0]
+    p1_grave_before = state.graveyard_sizes[1]
+
+    state.push_to_stack(spell_obj_id, 0)
+    state.resolve_top_of_stack()
+
+    # Stack drained, source in p0's graveyard, p1 untouched.
+    assert state.is_stack_empty() is True
+    assert state.find_object_zone(spell_obj_id) == ZONE_GRAVEYARD
+    assert state.graveyard_sizes[0] == p0_grave_before + 1
+    assert state.graveyard_sizes[1] == p1_grave_before
+
+
+def test_resolve_destroy_all_creatures_only_lands_unaffected(engine):
+    """If the only battlefield objects are non-creatures (lands /
+    artifacts / etc.), nothing is destroyed. Seeds only a Forest
+    on each player's battlefield."""
+    state = engine.make_synthetic_state(
+        num_battlefield=0, num_hand=1, num_library=1
+    )
+    forest_dict = {
+        "name": "Test Forest",
+        "card_types": ["Land"],
+        "mana_produced": ["G"],
+        "effects": [],
+    }
+    forest_p0 = state.register_and_inject_object(
+        forest_dict, 0, ZONE_BATTLEFIELD
+    )
+    forest_p1 = state.register_and_inject_object(
+        forest_dict, 1, ZONE_BATTLEFIELD
+    )
+    spell_obj_id = state.register_and_inject_object(
+        _wrath_dict(), 0, ZONE_HAND
+    )
+    state.push_to_stack(spell_obj_id, 0)
+    state.resolve_top_of_stack()
+
+    # Lands stay put — only Creature card_types are destroyed.
+    assert state.find_object_zone(forest_p0) == ZONE_BATTLEFIELD
+    assert state.find_object_zone(forest_p1) == ZONE_BATTLEFIELD
+
+
+def test_resolve_destroy_all_creatures_resets_per_object_state(
+    synthetic_state,
+):
+    """Per-object state reset on zone change (CR 400.7): tapped /
+    damage / counters all reset on the way to graveyard. Pre-load a
+    creature with non-default state and verify after the Wrath the
+    underlying object reads back as reset."""
+    target_id = 5  # First Bears on p0's battlefield.
+    synthetic_state.tap_object(target_id)
+    synthetic_state.add_counters(target_id, 2)
+    synthetic_state.deal_damage(target_id, 1)
+    assert synthetic_state.is_tapped(target_id) is True
+    assert synthetic_state.get_counters(target_id) == 2
+    assert synthetic_state.get_damage(target_id) == 1
+
+    spell_obj_id = synthetic_state.register_and_inject_object(
+        _wrath_dict(), 0, ZONE_HAND
+    )
+    synthetic_state.push_to_stack(spell_obj_id, 0)
+    synthetic_state.resolve_top_of_stack()
+
+    # Target moved to graveyard with reset state — the counters/damage
+    # readers walk all four tracked zones (including graveyard) and read
+    # the underlying GameObject fields. (is_tapped is battlefield-only
+    # per its definition, so we can't observe `tapped=false` directly
+    # for an object that left the battlefield — the round-17
+    # DestroyTarget reset test follows the same convention of asserting
+    # only counters/damage post-move.)
+    assert synthetic_state.find_object_zone(target_id) == ZONE_GRAVEYARD
+    assert synthetic_state.get_counters(target_id) == 0
+    assert synthetic_state.get_damage(target_id) == 0
+
+
+def test_resolve_destroy_all_creatures_source_on_stack_unaffected(engine):
+    """The resolving sorcery's source lives on the stack at apply-
+    effect time (not on either player's battlefield), so the scan
+    naturally skips it. Verify the source still lands in graveyard
+    via the normal post-resolve instant/sorcery movement (not because
+    Wrath destroyed it)."""
+    state = engine.make_synthetic_state(
+        num_battlefield=0, num_hand=1, num_library=1
+    )
+    # Inject one creature on p0's bf to give Wrath a real target —
+    # otherwise the no-op path doesn't exercise the "source on stack"
+    # angle.
+    target_id = state.register_and_inject_object(
+        _wrath_vanilla_creature_dict(), 0, ZONE_BATTLEFIELD
+    )
+    spell_obj_id = state.register_and_inject_object(
+        _wrath_dict(), 0, ZONE_HAND
+    )
+    state.push_to_stack(spell_obj_id, 0)
+    state.resolve_top_of_stack()
+
+    # Target destroyed; source landed in graveyard via post-resolve
+    # (not via Wrath's destroy loop — sorceries aren't creatures).
+    assert state.find_object_zone(target_id) == ZONE_GRAVEYARD
+    assert state.find_object_zone(spell_obj_id) == ZONE_GRAVEYARD
+    assert state.is_stack_empty() is True
+
+
+def test_resolve_destroy_all_creatures_clone_isolation(synthetic_state):
+    """CoW canary: running DestroyAllCreatures on a clone leaves the
+    original state's battlefields untouched. Load-bearing because the
+    inline Wrath logic uses Arc::make_mut on two zones (battlefield +
+    graveyard) per player."""
+    spell_obj_id = synthetic_state.register_and_inject_object(
+        _wrath_dict(), 0, ZONE_HAND
+    )
+    synthetic_state.push_to_stack(spell_obj_id, 0)
+    p0_bf_before = synthetic_state.battlefield_sizes[0]
+    p1_bf_before = synthetic_state.battlefield_sizes[1]
+    p0_grave_before = synthetic_state.graveyard_sizes[0]
+    p1_grave_before = synthetic_state.graveyard_sizes[1]
+
+    cloned = synthetic_state.clone_once()
+    cloned.resolve_top_of_stack()
+
+    # Clone diverged: 5 bears destroyed per player's bf.
+    assert cloned.battlefield_sizes[0] == p0_bf_before - 5
+    assert cloned.battlefield_sizes[1] == p1_bf_before - 5
+    # Graveyards grew (5 bears + 1 sorcery for p0; 5 bears for p1).
+    assert cloned.graveyard_sizes[0] == p0_grave_before + 5 + 1
+    assert cloned.graveyard_sizes[1] == p1_grave_before + 5
+
+    # Original untouched.
+    assert synthetic_state.battlefield_sizes[0] == p0_bf_before
+    assert synthetic_state.battlefield_sizes[1] == p1_bf_before
+    assert synthetic_state.graveyard_sizes[0] == p0_grave_before
+    assert synthetic_state.graveyard_sizes[1] == p1_grave_before
+    assert synthetic_state.stack_size() == 1
+
+
+# --- DestroyTargetNonlandPermanent dispatch -------------------------
+#
+# **DestroyTargetNonlandPermanent scope** (mirrored in the Rust module
+# docstring on ``cards.rs``):
+#
+# - **Unit variant** — Python's `DestroyTargetNonlandPermanent` bakes
+#   the filter `~IsLand() & ~IsPlayer()` into the class shape; the
+#   Rust bridge variant carries no fields and the Land-skip is
+#   intrinsic to the dispatch.
+# - **First-slice deterministic choice**: scan the DEFENDING player's
+#   battlefield top-to-bottom; pick the FIRST object whose printing's
+#   `card_types` does NOT contain "Land" AND whose printing's
+#   `keywords` does NOT contain "indestructible". Includes creatures,
+#   artifacts, enchantments, planeswalkers — anything non-land.
+# - **Distinct from round-17 DestroyTarget** which has no filter and
+#   happily lands on the defender's first Forest. This variant skips
+#   past Lands.
+# - **Indestructible is honored** (CR 702.12) — the scan skips
+#   indestructible objects in addition to Lands.
+# - **Empty / only-Lands / only-indestructible-non-Lands defender bf
+#   fizzles silently** — stack item still pops, source still moves
+#   post-resolve, no zone deltas.
+# - **Per-object state reset on zone change** (CR 400.7) — tapped /
+#   summoning_sick / damage / counters reset on the way to graveyard.
+# - **Active player's own permanents are NOT affected** — scan only
+#   walks the defender's battlefield, mirroring DestroyTarget's
+#   asymmetric defender-side targeting.
+
+
+def _drag_to_the_roots_dict():
+    """A destroy-target-nonland-permanent spell — Drag to the Roots-
+    shaped (sorcery, destroys target nonland permanent)."""
+    return {
+        "name": "Test Drag to the Roots",
+        "card_types": ["Sorcery"],
+        "mana_cost": {"G": 1, "generic": 2},
+        "effects": [{"kind": "destroy_target_nonland_permanent"}],
+    }
+
+
+def _nonland_indestructible_creature_dict():
+    """A vanilla creature printing with the indestructible keyword —
+    used to verify DestroyTargetNonlandPermanent's scan skips
+    indestructible non-Land objects too (CR 702.12)."""
+    return {
+        "name": "Test Stone Idol",
+        "card_types": ["Creature"],
+        "mana_cost": {"generic": 4},
+        "effects": [],
+        "power": 3,
+        "toughness": 3,
+        "keywords": ["indestructible"],
+    }
+
+
+def _vanilla_artifact_dict():
+    """A vanilla artifact printing — non-land non-creature non-
+    indestructible. Used to confirm artifacts (and other non-land
+    types) are also legal targets, distinguishing this from a
+    creature-only variant."""
+    return {
+        "name": "Test Junk Artifact",
+        "card_types": ["Artifact"],
+        "mana_cost": {"generic": 2},
+        "effects": [],
+    }
+
+
+def test_resolve_destroy_target_nonland_permanent_destroys_first_creature(
+    synthetic_state,
+):
+    """End-to-end happy path. The synthetic seed places p1's bf as
+    [Forest, Forest, Forest, Forest, Forest, Bears, Bears, ...] —
+    the first Bears object (obj_id 72 = base 67 + 5 forests) is the
+    first NON-Land permanent. Resolving Drag must skip the 5 Forests
+    and destroy that Bears."""
+    target_obj_id = 72  # p1's bf[5], the first Bears
+    assert synthetic_state.find_object_zone(target_obj_id) == ZONE_BATTLEFIELD
+
+    spell_obj_id = synthetic_state.register_and_inject_object(
+        _drag_to_the_roots_dict(), 0, ZONE_HAND
+    )
+    p1_bf_before = synthetic_state.battlefield_sizes[1]
+    p1_grave_before = synthetic_state.graveyard_sizes[1]
+    p0_grave_before = synthetic_state.graveyard_sizes[0]
+
+    synthetic_state.push_to_stack(spell_obj_id, 0)
+    synthetic_state.resolve_top_of_stack()
+
+    # The first non-Land (Bears at obj_id 72) moved to p1's graveyard.
+    assert synthetic_state.find_object_zone(target_obj_id) == ZONE_GRAVEYARD
+    assert synthetic_state.battlefield_sizes[1] == p1_bf_before - 1
+    assert synthetic_state.graveyard_sizes[1] == p1_grave_before + 1
+    # p1's bf[0] Forest stays put (Lands skipped).
+    assert synthetic_state.find_object_zone(67) == ZONE_BATTLEFIELD
+    # Stack drained; source sorcery in p0's graveyard.
+    assert synthetic_state.is_stack_empty() is True
+    assert synthetic_state.find_object_zone(spell_obj_id) == ZONE_GRAVEYARD
+    assert synthetic_state.graveyard_sizes[0] == p0_grave_before + 1
+
+
+def test_resolve_destroy_target_nonland_permanent_only_land_fizzles(engine):
+    """If the defender's battlefield is all Lands, the scan finds no
+    eligible target and fizzles silently. The Land is NOT destroyed
+    (distinct from round-17 DestroyTarget which would destroy bf[0]
+    unconditionally)."""
+    state = engine.make_synthetic_state(
+        num_battlefield=0, num_hand=1, num_library=1
+    )
+    # Inject a Land onto p1's battlefield as bf[0].
+    land_id = state.register_and_inject_object(
+        {
+            "name": "Test Plains",
+            "card_types": ["Land"],
+            "mana_produced": ["W"],
+        },
+        1,
+        ZONE_BATTLEFIELD,
+    )
+    spell_obj_id = state.register_and_inject_object(
+        _drag_to_the_roots_dict(), 0, ZONE_HAND
+    )
+
+    p1_bf_before = state.battlefield_sizes[1]
+    p1_grave_before = state.graveyard_sizes[1]
+    p0_grave_before = state.graveyard_sizes[0]
+
+    state.push_to_stack(spell_obj_id, 0)
+    state.resolve_top_of_stack()
+
+    # Land stays put — scan skipped it, no eligible target.
+    assert state.find_object_zone(land_id) == ZONE_BATTLEFIELD
+    assert state.battlefield_sizes[1] == p1_bf_before
+    assert state.graveyard_sizes[1] == p1_grave_before
+    # Stack still drained, source sorcery moved to p0's graveyard.
+    assert state.is_stack_empty() is True
+    assert state.find_object_zone(spell_obj_id) == ZONE_GRAVEYARD
+    assert state.graveyard_sizes[0] == p0_grave_before + 1
+
+
+def test_resolve_destroy_target_nonland_permanent_skips_land_picks_creature(
+    engine,
+):
+    """Defender has a Land in bf[0] and a Creature in bf[1]. The scan
+    skips the Land and destroys the Creature. The Land stays put.
+    Directly verifies the Land-skip filter does what its name says."""
+    state = engine.make_synthetic_state(
+        num_battlefield=0, num_hand=1, num_library=1
+    )
+    land_id = state.register_and_inject_object(
+        {
+            "name": "Test Plains",
+            "card_types": ["Land"],
+            "mana_produced": ["W"],
+        },
+        1,
+        ZONE_BATTLEFIELD,
+    )
+    creature_id = state.register_and_inject_object(
+        {
+            "name": "Test Vanilla Bear",
+            "card_types": ["Creature"],
+            "power": 2,
+            "toughness": 2,
+        },
+        1,
+        ZONE_BATTLEFIELD,
+    )
+    spell_obj_id = state.register_and_inject_object(
+        _drag_to_the_roots_dict(), 0, ZONE_HAND
+    )
+
+    p1_bf_before = state.battlefield_sizes[1]
+    p1_grave_before = state.graveyard_sizes[1]
+
+    state.push_to_stack(spell_obj_id, 0)
+    state.resolve_top_of_stack()
+
+    # Land stays, creature moved to p1's graveyard.
+    assert state.find_object_zone(land_id) == ZONE_BATTLEFIELD
+    assert state.find_object_zone(creature_id) == ZONE_GRAVEYARD
+    assert state.battlefield_sizes[1] == p1_bf_before - 1
+    assert state.graveyard_sizes[1] == p1_grave_before + 1
+
+
+def test_resolve_destroy_target_nonland_permanent_artifact_target(engine):
+    """The non-Land filter is type-agnostic past the Land check — an
+    Artifact in bf[0] (no Land in front of it) is a legal target.
+    Confirms the variant isn't a creature-only synonym."""
+    state = engine.make_synthetic_state(
+        num_battlefield=0, num_hand=1, num_library=1
+    )
+    artifact_id = state.register_and_inject_object(
+        _vanilla_artifact_dict(), 1, ZONE_BATTLEFIELD
+    )
+    spell_obj_id = state.register_and_inject_object(
+        _drag_to_the_roots_dict(), 0, ZONE_HAND
+    )
+
+    state.push_to_stack(spell_obj_id, 0)
+    state.resolve_top_of_stack()
+
+    # Artifact destroyed.
+    assert state.find_object_zone(artifact_id) == ZONE_GRAVEYARD
+
+
+def test_resolve_destroy_target_nonland_permanent_indestructible_skipped(
+    engine,
+):
+    """If the defender's first non-Land permanent has the
+    `indestructible` keyword, the scan skips it (matching round-17
+    DestroyTarget's indestructible suppression). With only an
+    indestructible non-Land on the defender's bf, the spell fizzles
+    silently — no destruction, no error."""
+    state = engine.make_synthetic_state(
+        num_battlefield=0, num_hand=1, num_library=1
+    )
+    indestructible_id = state.register_and_inject_object(
+        _nonland_indestructible_creature_dict(), 1, ZONE_BATTLEFIELD
+    )
+    spell_obj_id = state.register_and_inject_object(
+        _drag_to_the_roots_dict(), 0, ZONE_HAND
+    )
+
+    p1_bf_before = state.battlefield_sizes[1]
+    p1_grave_before = state.graveyard_sizes[1]
+
+    state.push_to_stack(spell_obj_id, 0)
+    state.resolve_top_of_stack()
+
+    # Indestructible target stays put — scan skipped it.
+    assert state.find_object_zone(indestructible_id) == ZONE_BATTLEFIELD
+    assert state.battlefield_sizes[1] == p1_bf_before
+    assert state.graveyard_sizes[1] == p1_grave_before
+    # Stack drained, source moved.
+    assert state.is_stack_empty() is True
+    assert state.find_object_zone(spell_obj_id) == ZONE_GRAVEYARD
+
+
+def test_resolve_destroy_target_nonland_permanent_skips_land_and_indestructible(
+    engine,
+):
+    """Stacked filter: defender has Land in bf[0] AND indestructible
+    non-Land creature in bf[1]. Both are skipped; no eligible target;
+    fizzle. Confirms the Land-skip and indestructible-skip compose."""
+    state = engine.make_synthetic_state(
+        num_battlefield=0, num_hand=1, num_library=1
+    )
+    land_id = state.register_and_inject_object(
+        {
+            "name": "Test Plains",
+            "card_types": ["Land"],
+            "mana_produced": ["W"],
+        },
+        1,
+        ZONE_BATTLEFIELD,
+    )
+    indestructible_id = state.register_and_inject_object(
+        _nonland_indestructible_creature_dict(), 1, ZONE_BATTLEFIELD
+    )
+    spell_obj_id = state.register_and_inject_object(
+        _drag_to_the_roots_dict(), 0, ZONE_HAND
+    )
+
+    p1_bf_before = state.battlefield_sizes[1]
+
+    state.push_to_stack(spell_obj_id, 0)
+    state.resolve_top_of_stack()
+
+    assert state.find_object_zone(land_id) == ZONE_BATTLEFIELD
+    assert state.find_object_zone(indestructible_id) == ZONE_BATTLEFIELD
+    assert state.battlefield_sizes[1] == p1_bf_before
+
+
+def test_resolve_destroy_target_nonland_permanent_empty_battlefield_fizzles(
+    engine,
+):
+    """If the defender has no battlefield objects at all, the spell
+    fizzles silently — stack drained, source moved post-resolve."""
+    state = engine.make_synthetic_state(
+        num_battlefield=0, num_hand=1, num_library=1
+    )
+    spell_obj_id = state.register_and_inject_object(
+        _drag_to_the_roots_dict(), 0, ZONE_HAND
+    )
+    p1_bf_before = state.battlefield_sizes[1]
+    p1_grave_before = state.graveyard_sizes[1]
+    p0_grave_before = state.graveyard_sizes[0]
+
+    state.push_to_stack(spell_obj_id, 0)
+    state.resolve_top_of_stack()
+
+    assert state.is_stack_empty() is True
+    assert state.find_object_zone(spell_obj_id) == ZONE_GRAVEYARD
+    assert state.battlefield_sizes[1] == p1_bf_before
+    assert state.graveyard_sizes[1] == p1_grave_before
+    assert state.graveyard_sizes[0] == p0_grave_before + 1
+
+
+def test_resolve_destroy_target_nonland_permanent_skips_active_players_own(
+    engine,
+):
+    """The scan walks the DEFENDING player's battlefield only. The
+    active player's own non-Land permanents are NOT viable targets.
+    Setup: p1's bf is empty, p0's bf has a Creature. Resolving Drag
+    (cast by p0, defender = p1) must FIZZLE — not destroy p0's own
+    creature."""
+    state = engine.make_synthetic_state(
+        num_battlefield=0, num_hand=1, num_library=1
+    )
+    own_creature_id = state.register_and_inject_object(
+        {
+            "name": "Test Vanilla Bear",
+            "card_types": ["Creature"],
+            "power": 2,
+            "toughness": 2,
+        },
+        0,  # owned by p0 (active player)
+        ZONE_BATTLEFIELD,
+    )
+    spell_obj_id = state.register_and_inject_object(
+        _drag_to_the_roots_dict(), 0, ZONE_HAND
+    )
+    p0_bf_before = state.battlefield_sizes[0]
+    p1_bf_before = state.battlefield_sizes[1]
+
+    state.push_to_stack(spell_obj_id, 0)
+    state.resolve_top_of_stack()
+
+    # p0's own creature stays put — scan was defender-side only.
+    assert state.find_object_zone(own_creature_id) == ZONE_BATTLEFIELD
+    assert state.battlefield_sizes[0] == p0_bf_before
+    assert state.battlefield_sizes[1] == p1_bf_before
+
+
+def test_resolve_destroy_target_nonland_permanent_resets_state(
+    synthetic_state,
+):
+    """Per-object state reset on zone change (CR 400.7): tapped /
+    damage / counters all reset on the way to graveyard. Pre-load
+    the target with non-default state, resolve Drag, and verify the
+    destroyed object's counters/damage reset to zero."""
+    target_obj_id = 72  # p1's bf[5], the first Bears (first non-Land)
+    synthetic_state.tap_object(target_obj_id)
+    synthetic_state.add_counters(target_obj_id, 3)
+    synthetic_state.deal_damage(target_obj_id, 2)
+    assert synthetic_state.get_counters(target_obj_id) == 3
+    assert synthetic_state.get_damage(target_obj_id) == 2
+
+    spell_obj_id = synthetic_state.register_and_inject_object(
+        _drag_to_the_roots_dict(), 0, ZONE_HAND
+    )
+    synthetic_state.push_to_stack(spell_obj_id, 0)
+    synthetic_state.resolve_top_of_stack()
+
+    # Target moved to graveyard with reset state.
+    assert synthetic_state.find_object_zone(target_obj_id) == ZONE_GRAVEYARD
+    assert synthetic_state.get_counters(target_obj_id) == 0
+    assert synthetic_state.get_damage(target_obj_id) == 0

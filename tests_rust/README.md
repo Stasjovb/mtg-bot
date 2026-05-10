@@ -152,6 +152,21 @@ the test lands in a commit.
 | rust(effect-put-plus-one-counter-on-self): self-target counter (CR 122.6) | tests_rust/test_resolve.py extend | green  | feature/rust-effect-put-plus-one-counter-on-self |
 | rust(setup-with-shuffle): optional seeded library shuffle in make_state | tests_rust/test_setup.py extend | green  | feature/rust-setup-with-shuffle |
 | rust(effect-surveil): Surveil N dispatch (CR 701.42) | tests_rust/test_resolve.py extend | green  | feature/rust-effect-surveil |
+| rust(legal-decisions-skeleton): legal_decisions(player_id) — PassPriority + PlayLand | tests_rust/test_legal.py | green  | feature/rust-legal-decisions-skeleton |
+| rust(action-cast-spell): Action::CastSpell + 5 flags (semantics deferred) | tests_rust/test_actions.py extend | green  | feature/rust-action-cast-spell |
+| rust(legal-decisions-cast-spell): legal_decisions emits CastSpell | tests_rust/test_legal.py extend | green  | feature/rust-legal-decisions-cast-spell |
+| rust(effect-counter-target-spell): CounterTargetSpell dispatch (CR 701.5) | tests_rust/test_resolve.py extend | green  | feature/rust-effect-counter-target-spell |
+| rust(effect-return-creature-from-graveyard): reanimate dispatch (CR 400.7) | tests_rust/test_resolve.py extend | green  | feature/rust-effect-return-creature-from-graveyard |
+| rust(legal-decisions-declare-attackers): emit DeclareAttackers during combat | tests_rust/test_legal.py extend | green  | feature/rust-legal-decisions-declare-attackers |
+| rust(action-turn-face-up): Action::TurnFaceUp variant (dispatch stubbed) | tests_rust/test_actions.py extend | green  | feature/rust-action-turn-face-up |
+| rust(effect-discard-self): "you discard" dispatch (CR 701.8) | tests_rust/test_resolve.py extend | green  | feature/rust-effect-discard-self |
+| rust(action-unlock-room-half): Action::UnlockRoomHalf variant (dispatch stubbed) | tests_rust/test_actions.py extend | green  | feature/rust-action-unlock-room-half |
+| rust(legal-decisions-activate-ability): emit ActivateAbility for mana producers | tests_rust/test_legal.py extend | green  | feature/rust-legal-decisions-activate-ability |
+| rust(action-activate-station): Action::ActivateStation variant (dispatch stubbed) | tests_rust/test_actions.py extend | green  | feature/rust-action-activate-station |
+| rust(effect-each-opponent-loses-life): life-loss (CR 118.4) | tests_rust/test_resolve.py extend | green  | feature/rust-effect-each-opponent-loses-life |
+| rust(legal-decisions-declare-blockers): emit DeclareBlockers during defender's combat | tests_rust/test_legal.py extend | green  | feature/rust-legal-decisions-declare-blockers |
+| rust(effect-destroy-all-creatures): Wrath of God (CR 701.7 AOE) | tests_rust/test_resolve.py extend | green  | feature/rust-effect-destroy-all-creatures |
+| rust(effect-destroy-target-non-land-permanent): non-land destroy (CR 701.7) | tests_rust/test_resolve.py extend | green  | feature/rust-effect-destroy-target-non-land-permanent |
 
 ## Build invocation reminder
 

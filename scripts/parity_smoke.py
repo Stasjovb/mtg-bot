@@ -8,6 +8,7 @@ same seed and same decks should produce byte-identical trajectories.
 Usage:
     PYTHONPATH=src python scripts/parity_smoke.py --seed 42
     PYTHONPATH=src python scripts/parity_smoke.py --mode initial-state --seed 42
+    PYTHONPATH=src python scripts/parity_smoke.py --mode trajectory --seed 42 --num-decisions 20
 
 Modes:
     game           — Run a full game with RandomAgent on each engine.
@@ -20,6 +21,16 @@ Modes:
                      Fast regression gate on the parity primitive: if
                      either engine ever drifts on the hash recipe,
                      this trips immediately.
+    trajectory     — Rust-only. Build a synthetic state, walk N
+                     decisions picked deterministically from
+                     ``legal_decisions``, then clone the original
+                     state and replay the same decision sequence —
+                     assert the fingerprint trajectory is
+                     byte-identical. Catches non-deterministic
+                     mutation and clone-divergence bugs. Cross-engine
+                     trajectory compare is deferred until Python's
+                     ``legal.py:legal_actions`` and Rust's
+                     ``legal_decisions`` have full coverage parity.
 
 Exit codes:
     0 — both engines agree (or only one engine ran successfully and
@@ -436,6 +447,211 @@ def run_initial_state_compare(
     return 1
 
 
+# ---------- trajectory mode -----------------------------------------------
+
+
+def _decision_summary(action: dict) -> str:
+    """Render an Action dict as a short human-readable label.
+
+    Used in failure diagnostics — the diff between the original and
+    clone-replay paths cites the decision kind + card_id (when present)
+    so a reader can tell at a glance whether the divergence is on a
+    play_land, cast_spell, or pass_priority.
+    """
+    kind = action.get("kind", "?")
+    if "card_id" in action:
+        return f"{kind}(card_id={action['card_id']})"
+    return kind
+
+
+def _walk_trajectory(state, seed: int, num_decisions: int) -> tuple[list[dict], list[str]]:
+    """Walk a Rust state through ``num_decisions`` deterministic decisions.
+
+    Returns ``(decisions_taken, fingerprint_trajectory)`` where:
+
+    - ``decisions_taken[i]`` is the action dict applied at step i.
+    - ``fingerprint_trajectory`` is the list of fingerprints in
+      ``[fp_initial, fp_after_step_0, fp_after_step_1, ...]`` order.
+      Length is ``num_decisions + 1``.
+
+    Decision selection: a single ``random.Random(seed)`` instance is
+    seeded once and ``rng.choice(legal)`` is called per step. This is
+    bit-identical across runs with the same seed.
+
+    Stubbed-dispatch handling: ``ActivateAbility`` currently raises
+    ``ValueError("ActivateAbility dispatch not implemented yet ...")``
+    when applied (round 24 ships the variant + bridge but not the
+    primitive). Such failures are caught and the offending action is
+    re-picked — the rng state advances on each re-pick so the choice
+    is still deterministic. After 16 consecutive re-pick attempts at
+    one step we abort with RuntimeError (defensive: every legal action
+    being a stubbed dispatch is a real bug, not a transient skip).
+
+    Empty ``legal_decisions`` is a contract violation — PassPriority
+    is always supposed to be at index 0 — and aborts immediately.
+    """
+    rng = random.Random(seed)
+    decisions_taken: list[dict] = []
+    trajectory: list[str] = [state.fingerprint()]
+
+    for step in range(num_decisions):
+        # Inner pick-loop: re-roll on a stubbed dispatch failure.
+        max_retries = 16
+        applied = False
+        last_error: Exception | None = None
+        for _ in range(max_retries):
+            legal = state.legal_decisions(state.get_priority_player())
+            if not legal:
+                raise RuntimeError(
+                    f"step {step}: legal_decisions returned an empty list "
+                    f"(contract violation — PassPriority should always emit)"
+                )
+            choice = rng.choice(legal)
+            try:
+                state.apply_action(choice)
+                decisions_taken.append(choice)
+                trajectory.append(state.fingerprint())
+                applied = True
+                break
+            except ValueError as e:
+                # Stubbed dispatch (ActivateAbility today) — re-pick.
+                # rng has already advanced from the rng.choice call, so
+                # the retry picks a different element from the same
+                # legal list (or, on the same element, the loop tries
+                # again with a fresh choice).
+                last_error = e
+                continue
+        if not applied:
+            raise RuntimeError(
+                f"step {step}: gave up after {max_retries} re-pick attempts "
+                f"(every legal action raised; last error: {last_error!r})"
+            )
+
+    return decisions_taken, trajectory
+
+
+def _replay_trajectory(state, decisions: list[dict]) -> list[str]:
+    """Replay a recorded decision sequence on a fresh state and return
+    the resulting fingerprint trajectory.
+
+    Used for the clone-replay determinism check: walk the original
+    state, clone it, then apply the SAME decision sequence to the
+    clone and verify the fingerprint trajectory matches byte-for-byte.
+    """
+    trajectory = [state.fingerprint()]
+    for action in decisions:
+        state.apply_action(action)
+        trajectory.append(state.fingerprint())
+    return trajectory
+
+
+def run_trajectory_mode(
+    seed: int,
+    num_decisions: int,
+    num_battlefield: int = 2,
+    num_hand: int = 3,
+    num_library: int = 5,
+) -> int:
+    """Run a Rust-only trajectory walk + clone-replay determinism check.
+
+    Steps:
+      1. Build a synthetic Rust state.
+      2. Clone it BEFORE walking so the clone is byte-identical to
+         the pre-walk state.
+      3. Walk ``num_decisions`` decisions deterministically on the
+         original state, recording each decision + fingerprint.
+      4. Replay the same decision sequence on the clone.
+      5. Assert the two fingerprint trajectories match step-by-step.
+         Report the first divergence on failure.
+
+    Returns 0 on PASS, 1 on FAIL, 2 on import / contract error.
+    """
+    try:
+        import mtg_bot_engine
+    except ImportError as e:
+        print(f"[trajectory] ERROR: mtg_bot_engine not built ({e})")
+        print("  -> run `maturin develop --release -m rust/Cargo.toml`")
+        return 2
+
+    state = mtg_bot_engine.make_synthetic_state(
+        num_battlefield, num_hand, num_library
+    )
+    # Clone BEFORE any mutation so the clone is byte-identical to the
+    # starting state. If we cloned after walking, we'd be cloning the
+    # post-walk state — meaningless for replay.
+    clone = state.clone_once()
+
+    print("[python] (skipped — trajectory mode runs Rust-only for now)")
+
+    try:
+        decisions, orig_trajectory = _walk_trajectory(state, seed, num_decisions)
+    except RuntimeError as e:
+        print(f"[  rust] ERROR during trajectory walk: {e}")
+        return 2
+
+    final_hash = orig_trajectory[-1]
+
+    # Replay on the clone.
+    try:
+        clone_trajectory = _replay_trajectory(clone, decisions)
+    except Exception as e:
+        # Any exception on the clone-replay (when the original walk
+        # succeeded) is itself a divergence — record + report.
+        print(
+            f"[  rust] trajectory of {num_decisions} decisions, "
+            f"final_hash={final_hash}, clone-replay-matches=False"
+        )
+        print(
+            f"PARITY: FAIL — clone-replay raised "
+            f"{type(e).__name__} ({e}) where original did not"
+        )
+        return 1
+
+    matches = orig_trajectory == clone_trajectory
+    print(
+        f"[  rust] trajectory of {num_decisions} decisions, "
+        f"final_hash={final_hash}, clone-replay-matches={matches}"
+    )
+
+    if matches:
+        print(f"PARITY: PASS — Rust trajectory deterministic across seed={seed}")
+        return 0
+
+    # Find the first divergence step.
+    div_step = next(
+        (
+            i
+            for i, (a, b) in enumerate(zip(orig_trajectory, clone_trajectory))
+            if a != b
+        ),
+        min(len(orig_trajectory), len(clone_trajectory)),
+    )
+    print(f"PARITY: FAIL — clone-replay diverged at step {div_step}")
+    # Decision at index `div_step - 1` is the one that caused the
+    # divergence (it's the apply between trajectory[div_step - 1] and
+    # trajectory[div_step]). At step 0 (initial fingerprint mismatch
+    # before any decision) there's no triggering decision.
+    if div_step == 0:
+        print(
+            f"  step 0 original: fp={orig_trajectory[0]} (pre-decision)"
+        )
+        print(
+            f"  step 0 clone:    fp={clone_trajectory[0]} (pre-decision)"
+        )
+    else:
+        decision_idx = div_step - 1
+        decision_repr = _decision_summary(decisions[decision_idx])
+        print(
+            f"  step {div_step} original: fp={orig_trajectory[div_step]}, "
+            f"decision={decision_repr}"
+        )
+        print(
+            f"  step {div_step} clone:    fp={clone_trajectory[div_step]}, "
+            f"decision={decision_repr}"
+        )
+    return 1
+
+
 def main() -> int:
     p = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     p.add_argument("--seed", type=int, default=42)
@@ -449,38 +665,60 @@ def main() -> int:
     )
     p.add_argument(
         "--mode",
-        choices=("game", "initial-state"),
+        choices=("game", "initial-state", "trajectory"),
         default="game",
         help=(
             "Which parity check to run. 'game' (default) plays a full game on "
             "each engine and compares trajectories. 'initial-state' builds a "
             "Rust synthetic state and asserts its native fingerprint() matches "
-            "a Python reimplementation of the hash recipe."
+            "a Python reimplementation of the hash recipe. 'trajectory' walks "
+            "a Rust state through N decisions and asserts clone-replay "
+            "determinism (Rust-only — cross-engine compare deferred)."
         ),
+    )
+    p.add_argument(
+        "--num-decisions",
+        type=int,
+        default=20,
+        help="(trajectory) number of decisions to apply during the walk.",
     )
     p.add_argument(
         "--num-battlefield",
         type=int,
         default=10,
-        help="(initial-state) per-player battlefield size for make_synthetic_state.",
+        help=(
+            "(initial-state / trajectory) per-player battlefield size for "
+            "make_synthetic_state. Trajectory mode's default differs from "
+            "initial-state (smaller state -> faster walk); pass explicitly "
+            "when you want a specific size."
+        ),
     )
     p.add_argument(
         "--num-hand",
         type=int,
         default=7,
-        help="(initial-state) per-player hand size for make_synthetic_state.",
+        help="(initial-state / trajectory) per-player hand size for make_synthetic_state.",
     )
     p.add_argument(
         "--num-library",
         type=int,
         default=50,
-        help="(initial-state) per-player library size for make_synthetic_state.",
+        help="(initial-state / trajectory) per-player library size for make_synthetic_state.",
     )
     args = p.parse_args()
 
     if args.mode == "initial-state":
         return run_initial_state_compare(
             seed=args.seed,
+            num_battlefield=args.num_battlefield,
+            num_hand=args.num_hand,
+            num_library=args.num_library,
+        )
+
+    if args.mode == "trajectory":
+        return run_trajectory_mode(
+            seed=args.seed,
+            num_decisions=args.num_decisions,
             num_battlefield=args.num_battlefield,
             num_hand=args.num_hand,
             num_library=args.num_library,

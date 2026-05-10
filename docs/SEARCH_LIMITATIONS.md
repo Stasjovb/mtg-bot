@@ -876,6 +876,272 @@ NOT shuffled afterward.
 
 ---
 
+## Rust port — `legal_decisions` DeclareAttackers powerset emission
+
+**Location**: `rust/src/state_ops_legal.rs:legal_decisions` — the
+DeclareAttackers emission block (search for "DeclareAttackers
+extension" in the module docstring + the gated block under
+`if self.phase == PHASE_DECLARE_ATTACKERS`).
+
+**What we do today**: during the `DECLARE_ATTACKERS` phase, the Rust
+`legal_decisions` enumerator emits one Python dict per subset of
+eligible attackers (the powerset). With N eligible attackers and
+N ≤ 4, all 2^N subsets emit. With N > 4, only the empty + full
+subsets emit (a hard cap, `DECLARE_ATTACKERS_POWERSET_CAP = 4`).
+
+**Why this diverges from Python**: Python's `legal_actions` (in
+`src/mtg_bot/legal.py`) does NOT emit DeclareAttackers at all — the
+engine.py docstring (lines 10-19) is explicit that combat-declaration
+actions "aren't enumerable as legal moves because their decision
+space is combinatorial," and Python uses a factored search-side
+approach in `src/mtg_bot/search/combat_decisions.py`
+(`AttackerDecision` — one per eligible attacker, 2 branches each)
+that feeds MCTS at search time. The adapter accumulates per-attacker
+decisions into a single engine-level
+`DeclareAttackers(frozenset[int])` once all per-creature choices are
+collected.
+
+**Failure mode**:
+- Wide boards (N > 4 eligible attackers) lose the middle subsets —
+  the only emitted choices are "attack with nothing" or "attack with
+  everyone." Strategically valuable partial attacks (e.g. "attack
+  with the 5/5 and the 2/1 hasty but keep the wall back") aren't in
+  the enumeration.
+- The parity-smoke harness must skip emission-set comparison during
+  the DECLARE_ATTACKERS phase (Python's side emits no
+  DeclareAttackers; Rust's side emits up to 2^N).
+
+**When it matters**: any DECLARE_ATTACKERS phase with more than 4
+eligible attackers where a partial attack is the right play. Common
+late-game scenario; rarer early-game. Pre-trained NN search will
+plateau early until the factored shape lands.
+
+**Fix scope when prioritized**:
+- Port `search/combat_decisions.py`'s `AttackerDecision` shape to
+  Rust as a new `Action::AttackerDecision { attacker_id, attack }`
+  variant.
+- Replace the powerset emission with one `AttackerDecision` per
+  eligible attacker. The adapter (or a search-side accumulator)
+  collects all N decisions and dispatches a single
+  `DeclareAttackers(frozenset[int])` at apply time.
+- The `declare_attacker` primitive stays unchanged.
+- The `DECLARE_ATTACKERS_POWERSET_CAP` constant goes away.
+
+**Impact estimate**: ~moderate strength cost on wide-board late-game
+scenarios. Negligible during early training where most games end
+before either side has 5+ untapped creatures. Will likely be a
+visible regression once self-play games push deeper.
+
+---
+
+## Rust port — `legal_decisions` DeclareBlockers product-space emission
+
+**Location**: `rust/src/state_ops_legal.rs:legal_decisions` — the
+DeclareBlockers emission block (search for "DeclareBlockers
+extension" in the module docstring + the gated block under
+`if self.phase == PHASE_DECLARE_BLOCKERS`).
+
+**What we do today**: during the `DECLARE_BLOCKERS` phase (priority
+on the defender, stack empty), the Rust `legal_decisions` enumerator
+emits one Python dict per legal blocker-to-attacker assignment. With
+`n_blockers <= DECLARE_BLOCKERS_PRODUCT_CAP` (3) AND `m_attackers <=
+DECLARE_BLOCKERS_MAX_ATTACKERS` (3), all `(M+1)^N` assignments emit
+— each blocker independently picks one of M attackers OR "don't
+block." With either dimension over its cap, only the canonical "no
+blocks" assignment (an empty Vec) emits.
+
+**Why this diverges from Python**: same factored-search story as
+DeclareAttackers above — Python's `legal_actions` does NOT emit
+DeclareBlockers (engine.py:10-19 is explicit) and instead uses
+`BlockerDecision`s (one per eligible blocker, one branch per
+attacker plus a "don't block" branch) in
+`src/mtg_bot/search/combat_decisions.py`. The adapter accumulates
+per-blocker decisions into a single engine-level
+`DeclareBlockers(assignments=...)` at apply time.
+
+**Failure mode**:
+- Wide boards (N > 3 blockers OR M > 3 attackers) lose all middle
+  assignments — the only emitted choice is "no blocks." All
+  partial-blocking strategy (chump-blocking the big attacker,
+  multi-block to kill a 3/3, leaving small attackers through to save
+  the wall) is unreachable from `legal_decisions`.
+- The parity-smoke harness must skip emission-set comparison during
+  the DECLARE_BLOCKERS phase (Python's side emits no
+  DeclareBlockers; Rust's side emits up to `(M+1)^N`).
+
+**When it matters**: any DECLARE_BLOCKERS phase with > 3 blockers
+or > 3 attackers. Most early-game scenarios stay under both caps;
+mid-to-late game with built-out boards trips the cap regularly.
+Pre-trained NN search will plateau on defensive play until the
+factored shape lands.
+
+**Fix scope when prioritized**:
+- Port `search/combat_decisions.py`'s `BlockerDecision` shape to
+  Rust as a new `Action::BlockerDecision { blocker_id, target:
+  Option<u32> }` variant.
+- Replace the product emission with one `BlockerDecision` per
+  eligible blocker (with branches over attackers + None). The
+  adapter / search-side accumulator collects all N decisions and
+  dispatches a single `DeclareBlockers(assignments=...)` at apply
+  time.
+- The `declare_blocker` primitive stays unchanged.
+- Both `DECLARE_BLOCKERS_PRODUCT_CAP` and
+  `DECLARE_BLOCKERS_MAX_ATTACKERS` constants go away.
+
+**Impact estimate**: moderate-to-large strength cost in any state
+with non-trivial combat. Combinatorial growth `(M+1)^N` is harder
+than DeclareAttackers's `2^N`, so the caps fire sooner and the
+information loss is bigger per affected decision.
+
+---
+
+## Rust port — `legal_decisions` block-legality keywords not filtered at enumeration
+
+**Location**: `rust/src/state_ops_legal.rs:legal_decisions`
+DeclareBlockers eligibility loop.
+
+**What we do today**: the eligibility filter checks
+`!tapped && is_creature`. It does NOT filter by flying/reach
+interaction (CR 702.9 — a creature with flying can only be blocked
+by a creature with flying or reach), color protection (CR 702.16),
+"can't be blocked" (CR 509.1b), skulk (CR 702.118), or
+`can_only_block_creatures_with_flying`. All eligible-by-status
+blockers appear in every assignment regardless of whether the
+attacker-blocker pair is actually legal; the `declare_blocker`
+primitive's per-pair `bool` return silently filters illegal pairs at
+apply time.
+
+**Why this diverges from Python**: Python's
+`src/mtg_bot/combat.py:can_block` runs the full keyword filter at
+enumeration time. The Rust enumerator defers the filter to the
+primitive instead — bigger emission count + same final state after
+apply, mirroring the same trade-off as the DeclareAttackers
+defender-deferral above.
+
+**Failure mode**: search wastes visits on assignments containing
+illegal pairs (the apply silently drops them, so the post-apply
+state matches what an equivalent "illegal-pair-excluded" assignment
+would produce). Visit count is inflated but win-rate impact is
+proportional to "fraction of emitted assignments containing illegal
+pairs" — which can be substantial on a flying-heavy board.
+
+**When it matters**: any DECLARE_BLOCKERS state where the attacker
+has flying / "can't be blocked" effects / color protection and the
+defender has non-flying / non-reach / wrong-color blockers. EoE has
+plenty of flyers; the impact rises with the pool.
+
+**Fix scope when prioritized**: medium. Add `effective_keywords`
+bridge to Rust (or a thinner version of `can_block` keyed only on
+the flying / cant-be-blocked / skulk keywords first-slice cares
+about), then filter at enumeration. The primitive's apply-time gate
+stays as defense-in-depth.
+
+**Impact estimate**: at slice landing, low (synthetic seed has no
+flyers); rises with EoE pool coverage.
+
+---
+
+## Rust port — `legal_decisions` defender keyword not filtered at enumeration
+
+**Location**: `rust/src/state_ops_legal.rs:legal_decisions`
+DeclareAttackers eligibility loop.
+
+**What we do today**: the eligibility filter checks
+`!tapped && is_creature && (!summoning_sick || has_haste)`. It does
+NOT filter out creatures with the `defender` keyword (CR 702.3).
+A defender creature appears in every emitted subset; the
+`declare_attacker` primitive's per-id apply-time gate rejects it
+silently (returns `false` for that id, the rest of the subset
+still gets declared).
+
+**Why this diverges from Python**: Python's
+`src/mtg_bot/combat.py:eligible_attackers` (lines 15-23) filters
+defender out at enumeration time. The Rust enumerator defers the
+filter to the primitive instead — bigger emission count + same
+final state after apply.
+
+**Failure mode**: search wastes visits on subsets that include
+defender-keyword creatures (the apply silently drops them, so the
+post-apply state matches what an equivalent "defender-excluded"
+subset would produce). Visit count is inflated but win-rate impact
+is minimal.
+
+**When it matters**: rarely. Most untapped creatures aren't
+defenders; defender printings are usually walls that stay tapped.
+Pre-token-creation training data has zero defender printings in the
+EoE pool.
+
+**Fix scope when prioritized**: add a one-line keyword check to the
+eligibility loop:
+```rust
+if printing.keywords.iter().any(|k| k == "defender") {
+    continue;
+}
+```
+
+**Impact estimate**: negligible. Strictly a small redundant-visit
+cost; no strength change.
+
+---
+
+## Rust port — `legal_decisions` ActivateAbility approximated to mana producers
+
+**Location**: `rust/src/state_ops_legal.rs:legal_decisions`
+ActivateAbility emission loop.
+
+**What we do today**: emit one `ActivateAbility(source_id,
+ability_index=0)` per untapped permanent on the priority player's
+battlefield whose printing has `mana_produced.is_some()`. No real
+ability iteration — `ability_index` is hardcoded to 0.
+
+**Why this diverges from Python**: Python's
+`src/mtg_bot/legal.py:612-829` walks
+`effective_activated_abilities(state, obj)` per battlefield permanent
+and emits one `ActivateAbility(source_id, idx)` per legal-to-pay
+ability. The full activated-ability tree (mana abilities, planeswalker
+loyalty abilities, equip-style activations, all the cost-gated
+variants the Python source filters between lines 631-826) is missing
+because Rust's `CardPrinting` (`rust/src/cards.rs:361-396`) has no
+`activated_abilities` field — only `mana_produced`, `card_types`,
+`power`/`toughness`, `keywords`. Porting the full
+`ActivatedAbility` + `ActivationCost` + per-effect dataclass tree
+through PyO3 is a much bigger bridge slice.
+
+**Failure mode**: every non-mana activated ability (planeswalker
+loyalty, equip / unearth / cycling / channel / activate-X-tap-mana
+abilities on non-land sources, etc.) is silently absent from the
+emission. Search never visits decision branches that would activate
+those abilities. The mana ones DO emit but the dispatch arm at
+`state_ops_actions.rs:271-276` is also a stub (raises ValueError) —
+so the wire shape ships but the actual ability resolution is the
+parity-smoke retry loop's problem.
+
+**When it matters**: the bigger the activated-ability count in a
+state, the more search depth Rust skips. EoE has planeswalkers,
+loyalty activations, several creature mana producers (Llanowar Elves
+in the synthetic seed has `mana_produced=Some(["G"])` and currently
+ALWAYS emits — even when summoning-sick — because the creature-tap
+sickness filter isn't ported either).
+
+**Fix scope when prioritized**: medium-large. (1) Port `ActivatedAbility`
++ `ActivationCost` + per-effect dataclass tree through PyO3 into
+`cards.rs`. (2) Build `effective_activated_abilities` primitive in
+Rust (mirrors `src/mtg_bot/game.py`). (3) Replace the
+`mana_produced.is_some()` filter in `state_ops_legal.rs` with a real
+ability iteration. (4) Land the `activate_ability` primitive in
+`state_ops_*.rs` so dispatch flips from "ValueError stub" to a real
+state mutation. Each can ship independently.
+
+**Impact estimate**: at the slice's first commit, the enumerator
+covers ~1.9% of Round-20 decisions (per the round-23 ActivateAbility
+agent's commit note); without the dispatch primitive, the
+parity-smoke retry loop catches and skips. Strength impact is
+proportional to "activated-ability-bearing decisions in the trace"
+× "average gain from playing them optimally" — non-trivial once
+planeswalkers + creature mana sources mature.
+
+---
+
 ## Tracked but not in this doc
 
 Things tracked elsewhere that you might also want to know about:

@@ -258,6 +258,229 @@ pub enum Effect {
     /// real "which to graveyard" decision callback through. Negative
     /// count raises.
     Surveil { count: i32 },
+    /// Counter target spell on the stack (CR 701.5). Powers Annul,
+    /// Cancel, etc. — 7 cards in the EoE pool per round-20 measurement.
+    ///
+    /// **Python schema simplification.** Python's `CounterTargetSpell`
+    /// dataclass carries a `filter_types: frozenset[str] = frozenset()`
+    /// field — an empty set means "any spell", non-empty restricts what
+    /// card types are legal targets (e.g. `frozenset({"Artifact",
+    /// "Enchantment"})` for Annul). The Rust first slice does NOT
+    /// carry that field — assumes target is "any spell". Refined-target
+    /// variants (counter creature spell only, counter non-creature,
+    /// etc.) wait for richer target plumbing on the Rust side, the
+    /// same deferral shape as TargetFilter for the rest of the variant
+    /// family.
+    ///
+    /// **First-slice deterministic choice: pick the TOP stack item
+    /// that isn't this Effect's own source.** Mirrors the "first-
+    /// eligible" convention from existing Effect arms (DealDamage
+    /// picks defender's battlefield[0], AddCounters likewise). The
+    /// self-exclusion guard uses the round-23 `source_obj_id`
+    /// parameter threaded through `apply_effect`: a counter-spell
+    /// resolving on the stack shouldn't counter itself before it
+    /// resolves. If the stack is empty (or only contains self), the
+    /// effect fizzles silently — Python parity with the
+    /// `if not targets: return` short-circuit in
+    /// `CounterTargetSpell.resolve`.
+    ///
+    /// **Composition with round-7 counter_spell primitive.** The
+    /// round-7 `state_ops_counterspell.rs::counter_spell(target_obj_id)`
+    /// primitive removes the target from the stack and moves its
+    /// source to the controller's graveyard (CR 701.6). Per the
+    /// per-slice file-isolation pattern + the E0624 cross-file
+    /// `#[pymethods]` friction, this arm inlines the equivalent
+    /// logic rather than calling through to the primitive: find the
+    /// stack item by source_obj_id, remove it, find the source
+    /// GameObject in any tracked zone, move it to the stack item
+    /// controller's graveyard. A follow-up consolidation slice can
+    /// collapse onto the shared primitive once cross-file private-fn
+    /// calls re-open.
+    ///
+    /// **No "can't be countered" enforcement.** Python's
+    /// `_is_uncounterable` checks `spell_is_uncounterable` on the
+    /// printing and `grants_creature_spells_uncounterable` on
+    /// battlefield static abilities. The Rust bridge has neither
+    /// flag today — deferred along with the rest of the
+    /// `cant_be_countered` shape (mirrors the round-7 counter_spell
+    /// primitive's same deferral).
+    CounterTargetSpell,
+    /// Return a creature card from your graveyard to the battlefield
+    /// (CR 400.7 + 302.1 — reanimation). Powers Emerge from the Cocoon,
+    /// Reanimate-style sugar, etc. — 8 cards in the EoE pool per
+    /// round-20 measurement.
+    ///
+    /// **First-slice deterministic target choice.** The recipient is
+    /// the FIRST creature card encountered scanning the controller's
+    /// (= `state.active_player`'s, by first-slice convention) graveyard
+    /// in zone-iteration order (front = oldest, smallest Vec index).
+    /// "Creature card" = the printing's `card_types` contains
+    /// "Creature". Real MTG lets the player choose any creature card
+    /// in the graveyard as the target; richer target plumbing is a
+    /// future slice once decision callbacks exist.
+    ///
+    /// **Python schema simplification.** Python's
+    /// `ReturnCreatureFromYourGraveyardToBattlefield` extends the
+    /// unified `ReturnFromGraveyard` dataclass which carries a number
+    /// of optional widening / capping fields (`or_enchantment`,
+    /// `or_spacecraft`, `or_artifact`, `max_mv`, `max_n`, etc.). The
+    /// Rust first slice carries NONE of these — the variant is a unit
+    /// shape ("first creature card in your graveyard"). Refined-target
+    /// variants ("creature with mana value <= N", "creature or
+    /// enchantment", multi-pick) wait for richer target plumbing on
+    /// the Rust side, same deferral shape as TargetFilter / filter_types.
+    ///
+    /// **Empty / no-creature graveyard: silent fizzle.** Mirrors the
+    /// `if not targets: return` short-circuit shape every other
+    /// graveyard-walk arm uses (and the round-17
+    /// `move_object_from_graveyard_to_battlefield` primitive's
+    /// `Ok(false)` return on absent obj_id).
+    ///
+    /// **Composition with round-17 primitive.** The round-17
+    /// `state_ops_zones.rs::move_object_from_graveyard_to_battlefield(
+    /// player_id, obj_id)` primitive does exactly the recipient-side
+    /// work this Effect needs (remove from graveyard, push onto
+    /// battlefield with summoning_sick=true + per-object state reset
+    /// per CR 400.7). Routing through it would require
+    /// cross-`#[pymethods]` plumbing inside `apply_effect` where we
+    /// already hold `state: &mut GameState` — the same E0624 friction
+    /// every other Effect arm hit. Per the recurring per-slice
+    /// file-isolation pattern (DealDamage / ReturnToHand / Mill /
+    /// DrawCards / ExileTarget / Sacrifice / DestroyTarget / TapTarget
+    /// / UntapTarget / AddCounters / DiscardCard / CreateToken /
+    /// AddManaToPool / SearchLibraryForBasicLandTapped /
+    /// PutPlusOneCounterOnSelf / CounterTargetSpell all inline their
+    /// primitives for the same reason), this arm inlines the
+    /// equivalent logic. A follow-up consolidation slice can collapse
+    /// onto the shared primitive once cross-file private-fn calls
+    /// re-open.
+    ReturnCreatureFromYourGraveyardToBattlefield,
+    /// "You discard a card" (CR 701.8). The SOURCE's controller
+    /// discards `amount` cards from their hand. Punisher / drawback
+    /// shape (Irreverent Gremlin pattern) — 8 cards in the EoE pool
+    /// per round-20 measurement.
+    ///
+    /// **Distinct from `DiscardCard { target: AnyPlayer }`.**
+    /// `DiscardCard` deterministically targets the DEFENDING player
+    /// (Mind Rot / Wrench Mind shape — the active player forces the
+    /// opponent to discard). `DiscardSelf` is the SOURCE's own
+    /// controller — the punisher fires on whoever cast / controls
+    /// the source, regardless of active_player.
+    ///
+    /// **Source-finder dispatch (round-23 pattern).** Locates the
+    /// source by `source_obj_id` threaded through `apply_effect`.
+    /// The scan walks both players' hand / library / battlefield /
+    /// graveyard / exile zones to find the source's `controller`
+    /// (this is how DiscardSelf differs from
+    /// `PutPlusOneCounterOnSelf`, which restricts the source to the
+    /// battlefield — the punisher pattern fires regardless of where
+    /// the source has moved to, since the controller doesn't change
+    /// when a permanent leaves the battlefield). Additionally checks
+    /// the stack — the source may still be resolving (e.g. an
+    /// instant / sorcery / triggered ability that just fired with
+    /// `you discard a card` as its effect).
+    ///
+    /// **First-slice deterministic choice: discard hand[0]** of the
+    /// source's controller (zone-iteration order, mirrors the round-15
+    /// `DiscardCard` arm's hand[0] convention). Empty hand = silent
+    /// no-op (Python parity with `if not p.hand: break` in
+    /// `DiscardSelf.resolve`). Source not found anywhere = silent
+    /// no-op (lost-track-of-source tolerance, mirrors
+    /// `PutPlusOneCounterOnSelf`'s `source is None` short-circuit).
+    ///
+    /// **`amount` shape mirrors Python.** Python's
+    /// `DiscardSelf(amount: int = 1)` carries an `amount: int = 1`
+    /// default; this Rust variant mirrors that exactly. The
+    /// dispatch resolves up to `amount` discards in a row (stop
+    /// early on empty hand, matching the Python `for _ in
+    /// range(self.amount): if not p.hand: break` shape). Negative
+    /// `amount` raises at register / resolve time.
+    DiscardSelf { amount: i32 },
+    /// Each opponent of the source's controller loses `amount` life
+    /// (CR 118.4 — life loss, not damage). Punisher / drawback shape
+    /// (Balemurk Leech pattern) — 6 cards in the EoE pool per
+    /// round-20 measurement.
+    ///
+    /// **Distinct from `DamageEachOpponent` (round 17).** Damage
+    /// routes through damage-prevention / Worship-style replacement
+    /// effects (CR 614 — damage replacement); life-loss directly
+    /// subtracts from `players[idx].life` and is NOT reducible by
+    /// damage-prevention. Two-player engine first slice: both arms
+    /// look identical in their net effect on the defender's life
+    /// total, but the variants stay distinct to mirror Python's
+    /// closed `Effect` vocabulary (round-15 pattern). Future slices
+    /// that wire damage-prevention through DealDamage /
+    /// DamageEachOpponent will keep this arm a direct subtraction.
+    ///
+    /// **Source-finder dispatch (round-23 pattern).** Threads
+    /// `source_obj_id` through `apply_effect` and walks both
+    /// players' five tracked zones (hand / library / battlefield /
+    /// graveyard / exile) plus the stack to recover the source's
+    /// `controller`. Mirrors `DiscardSelf` (round-24) — punisher
+    /// effects fire on whoever controls the source regardless of
+    /// where the source currently sits, since the `controller` field
+    /// doesn't change on zone moves. Source not found anywhere =
+    /// silent fizzle (lost-track-of-source tolerance).
+    ///
+    /// **Two-player "each opponent" reduces to "the one opponent".**
+    /// The opponent of player N is `1 - N`. The single opponent's
+    /// `life` field is decremented by `amount`. Negative life is
+    /// handled by the SBA loop (round-5+); no clamp here.
+    ///
+    /// **amount=0 is a legal no-op** (mirrors GainLife / DrawCards /
+    /// Mill / DamageEachOpponent / DiscardSelf zero-amount
+    /// conventions). **amount<0 raises** loudly (mirrors round-3
+    /// DealDamage / round-17 DamageEachOpponent / round-24
+    /// DiscardSelf raise-on-negative shape; "lose -2 life" is
+    /// schema nonsense).
+    EachOpponentLosesLife { amount: i32 },
+    /// Destroy every creature on the battlefield (Wrath of God pattern,
+    /// CR 701.7 + 701.4 AOE). Indestructible creatures (CR 702.12)
+    /// are NOT destroyed — round-13 keyword check is honored.
+    /// Destroyed creatures go to their owner's graveyard (CR 400.6).
+    /// 3 cards in the EoE pool per round-20 measurement (Restricted
+    /// Office // Lecture Hall and friends).
+    ///
+    /// **Symmetric AOE: applies to BOTH players' battlefields** — like
+    /// DamageEachCreature, this is implicit-target and hits every
+    /// creature regardless of controller. No target filter — the
+    /// variant doesn't carry a TargetFilter for that reason.
+    ///
+    /// **Creature-only filter via printing's card_types.** Lands /
+    /// artifacts / enchantments / planeswalkers on the battlefield
+    /// stay where they are; only objects whose printing has "Creature"
+    /// in card_types are destroyed.
+    ///
+    /// **Indestructible is honored INLINE** (CR 702.12) — unlike
+    /// DamageEachCreature (which writes damage and lets the SBA reap),
+    /// DestroyAllCreatures moves creatures directly to graveyard. So
+    /// the indestructible keyword check happens here, inline, mirroring
+    /// the DestroyTarget arm.
+    ///
+    /// **Per-object state reset on graveyard move** (CR 400.7) —
+    /// tapped / summoning_sick / damage / counters all reset on the
+    /// way to graveyard, mirroring the DestroyTarget / Sacrifice /
+    /// ExileTarget reset convention.
+    ///
+    /// **Python schema simplification.** Python's
+    /// `DestroyAllCreatures` carries optional narrowing fields:
+    /// `tapped_only` / `untapped_only` (Split Up modal Wrath) and
+    /// `min_power` (Restricted Office "destroy all creatures with
+    /// power 3+"). The Rust first slice carries NONE of these — it's
+    /// a unit shape ("destroy all creatures, unconditional"). The
+    /// narrowed variants wait for richer dispatch plumbing and are
+    /// deferred along with the rest of the TargetFilter widening
+    /// shape elsewhere in the bridge.
+    DestroyAllCreatures,
+    /// Destroy target non-land permanent on the defending player's
+    /// battlefield (CR 701.7 + scoped target filter — Drag to the
+    /// Roots / Drill Too Deep pattern). 2 cards in the EoE pool per
+    /// round-20 measurement. Scans defender's battlefield top-to-
+    /// bottom and picks the first non-Land, non-indestructible
+    /// object. Mirrors round-17 DestroyTarget's pick-bf[0] shape
+    /// with a Land-skip + indestructible-skip filter. Unit variant —
+    /// the "non-land permanent" target shape is intrinsic.
+    DestroyTargetNonlandPermanent,
 }
 
 #[derive(Clone, Debug)]
@@ -552,8 +775,79 @@ fn parse_effect(dict: &Bound<'_, PyDict>) -> PyResult<Effect> {
             }
             Ok(Effect::Surveil { count })
         }
+        "counter_target_spell" => {
+            // Unit variant — no required fields. Python's
+            // `CounterTargetSpell.filter_types` is intentionally
+            // dropped from the Rust first slice (see the variant's
+            // docstring). Any extra keys on the dict are ignored,
+            // matching the silent-drop convention for unrecognized
+            // keys elsewhere in the parser.
+            Ok(Effect::CounterTargetSpell)
+        }
+        "return_creature_from_your_graveyard_to_battlefield" => {
+            // Unit variant — no required fields. Python's unified
+            // `ReturnFromGraveyard` carries optional widening / capping
+            // fields (`or_enchantment`, `or_spacecraft`, `or_artifact`,
+            // `max_mv`, `max_n`, ...) that the Rust first slice
+            // intentionally drops (see the variant's docstring). Any
+            // extra keys on the dict are ignored, matching the silent-
+            // drop convention elsewhere in the parser.
+            Ok(Effect::ReturnCreatureFromYourGraveyardToBattlefield)
+        }
+        "discard_self" => {
+            // Python's `DiscardSelf(amount: int = 1)` dataclass has
+            // an `amount` field defaulting to 1. Mirror that here:
+            // missing `amount` defaults to 1, present `amount`
+            // extracts as i32. Negative `amount` surfaces at register
+            // time (defense-in-depth; `apply_effect` re-checks).
+            // Mirrors PutPlusOneCounterOnSelf's default-handling
+            // shape.
+            let amount: i32 = match dict.get_item("amount")? {
+                Some(a) => a.extract().map_err(|e| {
+                    PyValueError::new_err(format!(
+                        "discard_self.amount must be an integer (got: {e})"
+                    ))
+                })?,
+                None => 1,
+            };
+            if amount < 0 {
+                return Err(PyValueError::new_err(format!(
+                    "discard_self: amount must be non-negative, got {amount}"
+                )));
+            }
+            Ok(Effect::DiscardSelf { amount })
+        }
+        "each_opponent_loses_life" => {
+            // Python's `EachOpponentLosesLife(amount: int)` carries
+            // a required `amount` field with no default. Mirror that
+            // here: missing `amount` is a KeyError at register time;
+            // negative amount surfaces at register time (defense-in-
+            // depth; `apply_effect` re-checks).
+            let amount: i32 = require(dict, "amount")?.extract()?;
+            if amount < 0 {
+                return Err(PyValueError::new_err(format!(
+                    "each_opponent_loses_life: amount must be non-negative, got {amount}"
+                )));
+            }
+            Ok(Effect::EachOpponentLosesLife { amount })
+        }
+        "destroy_all_creatures" => {
+            // Unit variant — no required fields. Python's
+            // `DestroyAllCreatures` carries optional narrowing fields
+            // (`tapped_only`, `untapped_only`, `min_power`) that the
+            // Rust first slice intentionally drops (see the variant's
+            // docstring). Any extra keys on the dict are ignored,
+            // matching the silent-drop convention for unrecognized
+            // keys elsewhere in the parser.
+            Ok(Effect::DestroyAllCreatures)
+        }
+        "destroy_target_nonland_permanent" => {
+            // Unit variant — no required fields. Filter is intrinsic
+            // ("non-Land, non-indestructible"). Extra keys ignored.
+            Ok(Effect::DestroyTargetNonlandPermanent)
+        }
         other => Err(PyValueError::new_err(format!(
-            "unknown effect kind {other:?}; valid: deal_damage, draw_cards, gain_life, return_to_hand, mill, exile_target, tap_target, untap_target, sacrifice, add_counters, discard_card, scry_n, destroy_target, damage_each_opponent, damage_each_creature, create_token, add_mana_to_pool, search_library_for_basic_land_tapped, put_plus_one_counter_on_self, surveil"
+            "unknown effect kind {other:?}; valid: deal_damage, draw_cards, gain_life, return_to_hand, mill, exile_target, tap_target, untap_target, sacrifice, add_counters, discard_card, scry_n, destroy_target, damage_each_opponent, damage_each_creature, create_token, add_mana_to_pool, search_library_for_basic_land_tapped, put_plus_one_counter_on_self, surveil, counter_target_spell, return_creature_from_your_graveyard_to_battlefield, discard_self, each_opponent_loses_life, destroy_all_creatures, destroy_target_nonland_permanent"
         ))),
     }
 }
@@ -819,6 +1113,26 @@ fn effect_to_pydict<'py>(
         Effect::Surveil { count } => {
             d.set_item("kind", "surveil")?;
             d.set_item("count", *count)?;
+        }
+        Effect::CounterTargetSpell => {
+            d.set_item("kind", "counter_target_spell")?;
+        }
+        Effect::ReturnCreatureFromYourGraveyardToBattlefield => {
+            d.set_item("kind", "return_creature_from_your_graveyard_to_battlefield")?;
+        }
+        Effect::DiscardSelf { amount } => {
+            d.set_item("kind", "discard_self")?;
+            d.set_item("amount", *amount)?;
+        }
+        Effect::EachOpponentLosesLife { amount } => {
+            d.set_item("kind", "each_opponent_loses_life")?;
+            d.set_item("amount", *amount)?;
+        }
+        Effect::DestroyAllCreatures => {
+            d.set_item("kind", "destroy_all_creatures")?;
+        }
+        Effect::DestroyTargetNonlandPermanent => {
+            d.set_item("kind", "destroy_target_nonland_permanent")?;
         }
     }
     Ok(d)

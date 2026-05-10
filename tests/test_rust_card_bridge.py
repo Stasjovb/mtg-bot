@@ -920,6 +920,352 @@ def test_surveil_negative_count_raises():
         )
 
 
+def test_round_trip_counter_target_spell_effect():
+    """CR 701.5 — Annul/Cancel-style counter-target-spell. Unit variant,
+    no fields. Round-trip the happy-path effect dict through the
+    bridge."""
+    reg = mtg_bot_engine.Registry()
+    pid = reg.register_printing(
+        {
+            "name": "Test Annul",
+            "card_types": ["Instant"],
+            "mana_cost": {"U": 1},
+            "effects": [{"kind": "counter_target_spell"}],
+        }
+    )
+    effects = [dict(e) for e in reg.get_printing_effects(pid)]
+    assert effects[0] == {"kind": "counter_target_spell"}
+
+
+def test_round_trip_counter_target_spell_ignores_extra_keys():
+    """Python's `CounterTargetSpell.filter_types` is intentionally NOT
+    mirrored in the Rust first slice — extra keys on the dict are
+    silently ignored, matching the silent-drop convention elsewhere in
+    the parser. Confirms the unit-variant shape doesn't accidentally
+    require fields."""
+    reg = mtg_bot_engine.Registry()
+    pid = reg.register_printing(
+        {
+            "name": "Test Counter With Filter",
+            "card_types": ["Instant"],
+            "mana_cost": {"U": 1},
+            "effects": [
+                {
+                    "kind": "counter_target_spell",
+                    "filter_types": ["Artifact", "Enchantment"],
+                }
+            ],
+        }
+    )
+    effects = [dict(e) for e in reg.get_printing_effects(pid)]
+    # Round-trip drops the unrecognized field — first slice doesn't
+    # model filter_types, the round-trip is the unit-variant shape.
+    assert effects[0] == {"kind": "counter_target_spell"}
+
+
+def test_counter_target_spell_in_unknown_kind_error_string():
+    """Defense-in-depth: the unknown-kind error message lists
+    `counter_target_spell` in its valid-kinds enumeration so a future
+    mis-typed kind helpfully surfaces the right name."""
+    reg = mtg_bot_engine.Registry()
+    with pytest.raises(ValueError, match="counter_target_spell"):
+        reg.register_printing(
+            {
+                "name": "Broken",
+                "effects": [{"kind": "counter_unicorn_spell"}],
+            }
+        )
+
+
+def test_round_trip_return_creature_from_your_graveyard_to_battlefield():
+    """CR 400.7 + 302.1 — reanimation. Powers Emerge from the Cocoon
+    pattern (8 EoE cards). Unit variant, no fields. Round-trip the
+    happy-path effect dict through the bridge."""
+    reg = mtg_bot_engine.Registry()
+    pid = reg.register_printing(
+        {
+            "name": "Test Reanimate",
+            "card_types": ["Sorcery"],
+            "mana_cost": {"B": 1},
+            "effects": [
+                {"kind": "return_creature_from_your_graveyard_to_battlefield"}
+            ],
+        }
+    )
+    effects = [dict(e) for e in reg.get_printing_effects(pid)]
+    assert effects[0] == {
+        "kind": "return_creature_from_your_graveyard_to_battlefield"
+    }
+
+
+def test_round_trip_return_creature_from_graveyard_ignores_extra_keys():
+    """Python's `ReturnCreatureFromYourGraveyardToBattlefield` inherits
+    optional widening / capping fields (`or_enchantment`, `max_mv`,
+    etc.) from `ReturnFromGraveyard`. These are intentionally NOT
+    mirrored in the Rust first slice — extra keys on the dict are
+    silently ignored, matching the silent-drop convention elsewhere
+    in the parser. Confirms the unit-variant shape doesn't accidentally
+    require fields."""
+    reg = mtg_bot_engine.Registry()
+    pid = reg.register_printing(
+        {
+            "name": "Test Reanimate With Filter",
+            "card_types": ["Sorcery"],
+            "mana_cost": {"B": 1},
+            "effects": [
+                {
+                    "kind": "return_creature_from_your_graveyard_to_battlefield",
+                    "max_mv": 3,
+                    "or_enchantment": True,
+                }
+            ],
+        }
+    )
+    effects = [dict(e) for e in reg.get_printing_effects(pid)]
+    # Round-trip drops the unrecognized fields — first slice doesn't
+    # model the widening / capping shape, the round-trip is the
+    # unit-variant shape.
+    assert effects[0] == {
+        "kind": "return_creature_from_your_graveyard_to_battlefield"
+    }
+
+
+def test_return_creature_from_graveyard_in_unknown_kind_error_string():
+    """Defense-in-depth: the unknown-kind error message lists
+    `return_creature_from_your_graveyard_to_battlefield` in its
+    valid-kinds enumeration so a future mis-typed kind helpfully
+    surfaces the right name."""
+    reg = mtg_bot_engine.Registry()
+    with pytest.raises(
+        ValueError, match="return_creature_from_your_graveyard_to_battlefield"
+    ):
+        reg.register_printing(
+            {
+                "name": "Broken",
+                "effects": [{"kind": "return_unicorn_from_graveyard"}],
+            }
+        )
+
+
+def test_round_trip_discard_self_default_amount_is_one():
+    """CR 701.8 — "you discard a card." Powers Irreverent Gremlin
+    pattern (8 EoE cards). Python's
+    `DiscardSelf(amount: int = 1)` dataclass has amount default to 1;
+    the Rust parser mirrors that: an entry with no `amount` key
+    registers as amount=1 and round-trips that way. Mirrors
+    PutPlusOneCounterOnSelf's default-handling round-trip shape."""
+    reg = mtg_bot_engine.Registry()
+    pid = reg.register_printing(
+        {
+            "name": "Test Irreverent Gremlin",
+            "card_types": ["Creature"],
+            "power": 1,
+            "toughness": 1,
+            "effects": [{"kind": "discard_self"}],
+        }
+    )
+    effects = [dict(e) for e in reg.get_printing_effects(pid)]
+    assert effects[0] == {"kind": "discard_self", "amount": 1}
+
+
+def test_round_trip_discard_self_amount_two():
+    """An explicit amount=2 entry — for cards that force two discards
+    on resolution — round-trips with its amount preserved."""
+    reg = mtg_bot_engine.Registry()
+    pid = reg.register_printing(
+        {
+            "name": "Test Double Discard",
+            "card_types": ["Sorcery"],
+            "mana_cost": {"B": 1},
+            "effects": [{"kind": "discard_self", "amount": 2}],
+        }
+    )
+    effects = [dict(e) for e in reg.get_printing_effects(pid)]
+    assert effects[0] == {"kind": "discard_self", "amount": 2}
+
+
+def test_discard_self_negative_amount_raises():
+    """Register-time guard on negative amount (matches the
+    apply_effect guard, surfaced earlier in the pipeline). Mirrors
+    PutPlusOneCounterOnSelf / SearchLibraryForBasicLandTapped /
+    AddManaToPool negative register-time check."""
+    reg = mtg_bot_engine.Registry()
+    with pytest.raises(ValueError, match="non-negative"):
+        reg.register_printing(
+            {
+                "name": "Broken",
+                "card_types": ["Sorcery"],
+                "effects": [{"kind": "discard_self", "amount": -1}],
+            }
+        )
+
+
+def test_discard_self_in_unknown_kind_error_string():
+    """Defense-in-depth: the unknown-kind error message lists
+    `discard_self` in its valid-kinds enumeration so a future
+    mis-typed kind helpfully surfaces the right name."""
+    reg = mtg_bot_engine.Registry()
+    with pytest.raises(ValueError, match="discard_self"):
+        reg.register_printing(
+            {
+                "name": "Broken",
+                "effects": [{"kind": "discard_themself"}],
+            }
+        )
+
+
+# --- round-26: EachOpponentLosesLife round-trip + error paths --------
+#
+# CR 118.4 — life loss (not damage). Powers Balemurk Leech pattern
+# (6 EoE cards). Distinct from DamageEachOpponent — life-loss isn't
+# reducible by damage-prevention effects; two-player engine first
+# slice end-state matches DamageEachOpponent on the defender's life,
+# but the variants stay separate to mirror Python's
+# `EachOpponentLosesLife(amount: int)` dataclass shape.
+
+
+def test_round_trip_each_opponent_loses_life_amount_two():
+    """Happy path: amount=2 round-trips faithfully. Mirrors Python's
+    `EachOpponentLosesLife(amount: int)` dataclass shape — required
+    `amount` field with no default."""
+    reg = mtg_bot_engine.Registry()
+    pid = reg.register_printing(
+        {
+            "name": "Test Balemurk Leech",
+            "card_types": ["Creature"],
+            "power": 2,
+            "toughness": 2,
+            "mana_cost": {"B": 1, "generic": 1},
+            "effects": [{"kind": "each_opponent_loses_life", "amount": 2}],
+        }
+    )
+    effects = [dict(e) for e in reg.get_printing_effects(pid)]
+    assert effects[0] == {"kind": "each_opponent_loses_life", "amount": 2}
+
+
+def test_round_trip_each_opponent_loses_life_amount_zero():
+    """amount=0 is a legal no-op shape (mirrors GainLife / DrawCards /
+    Mill / DamageEachOpponent / DiscardSelf zero-amount round-trip
+    conventions). Registers and round-trips without error."""
+    reg = mtg_bot_engine.Registry()
+    pid = reg.register_printing(
+        {
+            "name": "Test Zero Drain",
+            "card_types": ["Sorcery"],
+            "effects": [{"kind": "each_opponent_loses_life", "amount": 0}],
+        }
+    )
+    effects = [dict(e) for e in reg.get_printing_effects(pid)]
+    assert effects[0] == {"kind": "each_opponent_loses_life", "amount": 0}
+
+
+def test_each_opponent_loses_life_missing_amount_raises():
+    """Python's `EachOpponentLosesLife(amount: int)` has no default —
+    the Rust parser mirrors that: omitting `amount` raises KeyError
+    at register time (defense-in-depth, surfaced earlier in the
+    pipeline than the resolve guard). Distinct from DiscardSelf /
+    PutPlusOneCounterOnSelf which default to amount=1."""
+    reg = mtg_bot_engine.Registry()
+    with pytest.raises(KeyError, match="amount"):
+        reg.register_printing(
+            {
+                "name": "Broken",
+                "card_types": ["Sorcery"],
+                "effects": [{"kind": "each_opponent_loses_life"}],
+            }
+        )
+
+
+def test_each_opponent_loses_life_negative_amount_raises():
+    """Register-time guard on negative amount (matches the
+    apply_effect guard, surfaced earlier in the pipeline). Mirrors
+    DamageEachOpponent / DiscardSelf / PutPlusOneCounterOnSelf
+    negative register-time check shape — 'lose -2 life' is schema
+    nonsense."""
+    reg = mtg_bot_engine.Registry()
+    with pytest.raises(ValueError, match="non-negative"):
+        reg.register_printing(
+            {
+                "name": "Broken",
+                "card_types": ["Sorcery"],
+                "effects": [{"kind": "each_opponent_loses_life", "amount": -1}],
+            }
+        )
+
+
+# --- DestroyTargetNonlandPermanent round-trip ---------------------
+#
+# Round-25 bridge ext: closed-vocabulary unit variant mirroring
+# Python's `DestroyTargetNonlandPermanent` (a `Destroy` subclass with
+# the filter `~IsLand() & ~IsPlayer()` baked in). 2 cards in the EoE
+# pool per round-20 measurement (Drag to the Roots / Drill Too Deep
+# pattern). Distinct from round-17 `destroy_target` by applying a
+# Land-skip filter at scan time on the dispatch side.
+
+
+def test_round_trip_destroy_target_nonland_permanent_unit_variant():
+    """Happy path: unit-variant round-trips as a single `kind` key
+    with no extra fields. Mirrors `counter_target_spell` /
+    `return_creature_from_your_graveyard_to_battlefield` unit-variant
+    round-trip shape."""
+    reg = mtg_bot_engine.Registry()
+    pid = reg.register_printing(
+        {
+            "name": "Test Drag to the Roots",
+            "card_types": ["Sorcery"],
+            "mana_cost": {"G": 1, "generic": 2},
+            "effects": [{"kind": "destroy_target_nonland_permanent"}],
+        }
+    )
+    effects = [dict(e) for e in reg.get_printing_effects(pid)]
+    assert effects[0] == {"kind": "destroy_target_nonland_permanent"}
+
+
+def test_round_trip_destroy_target_nonland_permanent_extra_keys_ignored():
+    """Silent-drop convention for unrecognized keys on a unit variant
+    (matches `counter_target_spell` /
+    `return_creature_from_your_graveyard_to_battlefield`'s parser
+    shape). An accidental `target` key on the registered dict does NOT
+    raise — the parser ignores it and round-trips a bare unit dict."""
+    reg = mtg_bot_engine.Registry()
+    pid = reg.register_printing(
+        {
+            "name": "Test Drill Too Deep",
+            "card_types": ["Instant"],
+            "mana_cost": {"B": 1, "generic": 2},
+            "effects": [
+                {
+                    "kind": "destroy_target_nonland_permanent",
+                    "target": {"kind": "any_creature"},  # ignored
+                }
+            ],
+        }
+    )
+    effects = [dict(e) for e in reg.get_printing_effects(pid)]
+    assert effects[0] == {"kind": "destroy_target_nonland_permanent"}
+
+
+def test_destroy_target_nonland_permanent_in_multi_effect_list():
+    """Multiple effects in the printing's effect list preserve order —
+    the unit variant slots cleanly alongside a sibling parameterized
+    effect. Mirrors `test_multiple_effects_preserve_order` for the new
+    variant."""
+    reg = mtg_bot_engine.Registry()
+    pid = reg.register_printing(
+        {
+            "name": "Test Compound",
+            "card_types": ["Sorcery"],
+            "effects": [
+                {"kind": "draw_cards", "count": 1},
+                {"kind": "destroy_target_nonland_permanent"},
+            ],
+        }
+    )
+    effects = [dict(e) for e in reg.get_printing_effects(pid)]
+    assert effects[0] == {"kind": "draw_cards", "count": 1}
+    assert effects[1] == {"kind": "destroy_target_nonland_permanent"}
+
+
 def test_vanilla_card_with_no_mana_cost_or_effects():
     reg = mtg_bot_engine.Registry()
     pid = reg.register_printing(VANILLA_BLANK)
@@ -1141,6 +1487,87 @@ def test_non_integer_toughness_raises():
     reg = mtg_bot_engine.Registry()
     with pytest.raises(ValueError, match="toughness must be an integer"):
         reg.register_printing({"name": "Broken", "toughness": "small"})
+
+
+# --- round-24: DestroyAllCreatures round-trip ---------------------
+#
+# Unit variant — no fields. Python's `DestroyAllCreatures` carries
+# optional narrowing fields (tapped_only / untapped_only / min_power)
+# that the Rust first slice intentionally drops. Any extra dict keys
+# are silently dropped, mirroring CounterTargetSpell /
+# ReturnCreatureFromYourGraveyardToBattlefield.
+
+
+def test_round_trip_destroy_all_creatures_effect():
+    """Wrath-of-God-shaped sorcery: unit variant, round-trips through
+    the dict bridge with just `kind`."""
+    reg = mtg_bot_engine.Registry()
+    pid = reg.register_printing(
+        {
+            "name": "Test Wrath of God",
+            "card_types": ["Sorcery"],
+            "mana_cost": {"W": 2, "generic": 2},
+            "effects": [{"kind": "destroy_all_creatures"}],
+        }
+    )
+    effects = [dict(e) for e in reg.get_printing_effects(pid)]
+    assert len(effects) == 1
+    assert effects[0]["kind"] == "destroy_all_creatures"
+    # Unit variant has no other keys.
+    assert set(effects[0].keys()) == {"kind"}
+
+
+def test_destroy_all_creatures_extra_keys_silently_dropped():
+    """Python's `DestroyAllCreatures` carries optional narrowing
+    fields (tapped_only / untapped_only / min_power). The Rust first
+    slice drops them — extra keys on the dict are silently ignored,
+    matching the silent-drop convention for unrecognized keys
+    elsewhere in the parser (e.g. CounterTargetSpell.filter_types,
+    ReturnCreatureFromYourGraveyardToBattlefield.or_enchantment).
+    """
+    reg = mtg_bot_engine.Registry()
+    pid = reg.register_printing(
+        {
+            "name": "Test Split Up (narrowed shape ignored)",
+            "card_types": ["Sorcery"],
+            "effects": [
+                {
+                    "kind": "destroy_all_creatures",
+                    "tapped_only": True,
+                    "min_power": 3,
+                }
+            ],
+        }
+    )
+    effects = [dict(e) for e in reg.get_printing_effects(pid)]
+    assert effects[0]["kind"] == "destroy_all_creatures"
+    # Bridge emits only the unit-variant shape on the way back out —
+    # narrowed fields were dropped at parse time.
+    assert "tapped_only" not in effects[0]
+    assert "min_power" not in effects[0]
+
+
+def test_destroy_all_creatures_in_effects_vec_alongside_other_effects():
+    """Mixed effect Vec: Wrath + DrawCards round-trips both. Verifies
+    the dispatcher inside `parse_printing` correctly threads the unit
+    variant through alongside more-complex variants."""
+    reg = mtg_bot_engine.Registry()
+    pid = reg.register_printing(
+        {
+            "name": "Test Sweep-and-Draw",
+            "card_types": ["Sorcery"],
+            "mana_cost": {"W": 2, "U": 1, "generic": 3},
+            "effects": [
+                {"kind": "destroy_all_creatures"},
+                {"kind": "draw_cards", "count": 2},
+            ],
+        }
+    )
+    effects = [dict(e) for e in reg.get_printing_effects(pid)]
+    assert len(effects) == 2
+    assert effects[0]["kind"] == "destroy_all_creatures"
+    assert effects[1]["kind"] == "draw_cards"
+    assert effects[1]["count"] == 2
 
 
 def test_lookup_oob_for_new_getters_raises():

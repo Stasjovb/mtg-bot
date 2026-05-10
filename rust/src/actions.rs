@@ -132,6 +132,141 @@ pub enum Action {
     /// variant; the variant + bridge round-trip ship now, so a
     /// follow-up slice only needs to flip the dispatch arm.
     ActivateAbility { source_id: u32, ability_index: u32 },
+    /// Cast a spell from hand (CR 601). `card_id` is the GameObject
+    /// id in the priority player's hand. The 5 optional fields carry
+    /// alt-cost / mode metadata mirrored bit-for-bit from Python's
+    /// `CastSpell(card_id, use_warp=False, kicked=False,
+    /// cast_for_free=False, use_impending=False, cast_room_half=None)`
+    /// dataclass so a Python-emitted dict round-trips losslessly
+    /// through `parse_action` → `action_to_pydict`:
+    ///
+    ///   - `use_warp`: warp alt-cost (EoE — impulse-cast from
+    ///     exile zone or warp-from-hand with end-of-turn exile).
+    ///   - `kicked`: kicker additional cost paid on top of the base
+    ///     mana cost (only legal when the printing has a kicker_cost).
+    ///   - `cast_for_free`: free-cast windows (e.g. Weftwalking's
+    ///     "first spell each player casts may be cast without paying
+    ///     its mana cost"). Mutually exclusive with use_warp / kicked.
+    ///   - `use_impending`: impending deferred-creature mode (DSK /
+    ///     EoE Overlord cycle — enters with `impending_count` time
+    ///     counters, creature-ness suppressed until the last counter
+    ///     comes off at the controller's end step).
+    ///   - `cast_room_half`: which half of a Room enchantment (DSK)
+    ///     — `None` for non-Room cards, `Some(name)` for Rooms (the
+    ///     half-name string is the Room's locked-door label that the
+    ///     unlock-cost is sourced from).
+    ///
+    /// Round-20 frequency: 17 of 420 decisions (~4.0%) — the
+    /// second-most-frequent non-`PassPriority` variant after
+    /// `DeclareAttackers`.
+    ///
+    /// **First-slice scope: variant + bridge ship; dispatch IGNORES
+    /// the flags.** The existing round-4 `cast_creature(obj_id,
+    /// player_id)` primitive doesn't yet accept alt-cost / mode
+    /// flags; wiring each flag through is a future-slice followup
+    /// (the warp / kicker / impending plumbing depends on Effect
+    /// dispatch for those mechanics + cost-stacking infrastructure
+    /// that doesn't exist in Rust yet). The variant landing now
+    /// unblocks the Python → Rust bridge round-trip for production
+    /// `CastSpell` payloads — search-loop dispatch can drive Rust
+    /// state through the same dict shape Python already emits, and a
+    /// future slice flips the dispatch arm without changing the
+    /// variant's shape. Mirrors the round-23 ActivateAbility
+    /// "scaffold the variant, defer the dispatch semantics" pattern.
+    CastSpell {
+        card_id: u32,
+        use_warp: bool,
+        kicked: bool,
+        cast_for_free: bool,
+        use_impending: bool,
+        cast_room_half: Option<String>,
+    },
+    /// Turn a face-down permanent face up by paying its underlying
+    /// card's mana cost (CR 701.34 / 707.4 — Morph / Manifest Dread
+    /// flip + Edge of Eternities Spacecraft station / launch). `card_id`
+    /// is the GameObject on the priority player's battlefield to flip.
+    /// Mirrors Python's `TurnFaceUp(card_id: int)` dataclass — a
+    /// single-int shape, identical to `PlayLand`. CR 701.34 / 707.4 is
+    /// a special action — does not use the stack; costs are paid
+    /// immediately and the flip resolves at once.
+    ///
+    /// **Dispatch is currently a stub.** No Rust face-down GameObject
+    /// state exists yet (the `GameObject` struct has no `face_down`
+    /// flag, and there's no Spacecraft charge-counter resolution), so
+    /// there's nothing for a `turn_face_up` primitive to flip. Until a
+    /// future slice adds the per-object face-down state + the flip
+    /// primitive (analogous to how `tap` / `untap` toggle the existing
+    /// `tapped` flag), `apply_action` raises `ValueError` for this
+    /// variant; the variant + bridge round-trip ship now, so a
+    /// follow-up slice only needs to flip the dispatch arm. Mirrors the
+    /// round-23 ActivateAbility "scaffold the variant, defer the
+    /// dispatch semantics" pattern.
+    TurnFaceUp { card_id: u32 },
+    /// Tap a creature to add charge counters to a Spacecraft (Edge of
+    /// Eternities "station" activation). `spacecraft_id` is the
+    /// GameObject id of the Spacecraft permanent on the active player's
+    /// battlefield; `crew_id` is the creature being tapped (cost) to
+    /// add a charge counter to the Spacecraft (effect). Mirrors
+    /// Python's `ActivateStation(spacecraft_id: int, crew_id: int)`
+    /// dataclass — two ints, no implicit actor (the Spacecraft's
+    /// controller is the actor, resolved by the underlying primitive
+    /// from the battlefield index when it lands). Sorcery-speed only
+    /// (enforced by the future `legal_decisions` enumerator, not by
+    /// this dispatch arm).
+    ///
+    /// Per the EoE Spacecraft cycle: Spacecraft enter as artifacts with
+    /// no creature types and accumulate charge counters via station-
+    /// attaching; they turn face up (become creatures with printed
+    /// stats) when launched via `TurnFaceUp` once enough charge counters
+    /// have been added. The station action adds a number of charge
+    /// counters equal to the tapped creature's power.
+    ///
+    /// **Dispatch is currently a stub.** Rust has no Spacecraft
+    /// charge-counter state today, and there's no crew-tap-resolution
+    /// primitive that ties the tap-as-cost to the counter-add-as-effect.
+    /// Until a future slice adds the Spacecraft charge-counter state +
+    /// the activate-station primitive (analogous to how Python's
+    /// `_activate_station` taps the crew creature, reads its power, and
+    /// adds that many charge counters to the Spacecraft), `apply_action`
+    /// raises `ValueError` for this variant; the variant + bridge
+    /// round-trip ship now, so a follow-up slice only needs to flip the
+    /// dispatch arm. Mirrors the round-23 ActivateAbility and round-24
+    /// TurnFaceUp / UnlockRoomHalf "scaffold the variant, defer the
+    /// dispatch semantics" pattern.
+    ActivateStation { spacecraft_id: u32, crew_id: u32 },
+    /// Pay a Room enchantment half's mana cost to unlock it (DSK Rooms
+    /// mechanic, CR 715.3-4). `card_id` is the GameObject id of the
+    /// Room enchantment on the active player's battlefield;
+    /// `half_name` is which of the two halves to unlock (the half's
+    /// name string per the printing — Rooms have two named halves and
+    /// the controller picks which to unlock). Mirrors Python's
+    /// `UnlockRoomHalf(card_id: int, half_name: str)` dataclass —
+    /// two fields, one int + one string, no implicit actor (the
+    /// Room's controller is the actor, resolved from the battlefield
+    /// index when the primitive lands).
+    ///
+    /// Per CR 715.3-4: as a sorcery, the controller of an unlocked
+    /// Room on the battlefield with at least one locked door may
+    /// unlock a locked door of that Room by paying its mana cost as
+    /// though they were casting an enchantment spell. The unlock
+    /// action is NOT a spell — it doesn't go on the stack. On apply,
+    /// the named half is added to the Room's `unlocked_halves` set
+    /// and any newly-active triggered abilities on the entering half
+    /// (e.g. "When you unlock this door, ...") fire.
+    ///
+    /// **Dispatch is currently a stub.** Rust has no Room-half state
+    /// today — the per-object `unlocked_halves: set[str]` field that
+    /// Python's `GameObject` carries is missing on the Rust side, and
+    /// there's no half-specific effect activation. Until a future
+    /// slice adds the per-object Room state + the unlock primitive
+    /// (analogous to how Python's `_unlock_room_half` mutates the set
+    /// and fires the half-specific ENTERS triggers), `apply_action`
+    /// raises `ValueError` for this variant; the variant + bridge
+    /// round-trip ship now, so a follow-up slice only needs to flip
+    /// the dispatch arm. Mirrors the round-23 ActivateAbility and
+    /// round-24 TurnFaceUp "scaffold the variant, defer the dispatch
+    /// semantics" pattern.
+    UnlockRoomHalf { card_id: u32, half_name: String },
 }
 
 // --- dict -> Rust ------------------------------------------------
@@ -230,8 +365,95 @@ pub fn parse_action(dict: &Bound<'_, PyDict>) -> PyResult<Action> {
                 ability_index,
             })
         }
+        "cast_spell" => {
+            // `card_id` is required (the only positional field on
+            // Python's `CastSpell` dataclass — every other field has
+            // a keyword default). The 5 flag fields are all optional;
+            // missing keys default to the Python dataclass defaults
+            // (False for bools, None for cast_room_half). This means
+            // a "minimal" `{"kind": "cast_spell", "card_id": N}` dict
+            // is the equivalent of Python's `CastSpell(card_id=N)`
+            // call — the most common shape the search loop emits.
+            //
+            // Wrong types bubble up as `TypeError` / `ValueError`
+            // from `extract::<bool>` / `extract::<String>` — same
+            // shape as the `card_id`-wrong-type behavior on
+            // `play_land` / `activate_ability`.
+            let card_id: u32 = require(dict, "card_id")?.extract()?;
+            let use_warp: bool = match dict.get_item("use_warp")? {
+                Some(v) => v.extract()?,
+                None => false,
+            };
+            let kicked: bool = match dict.get_item("kicked")? {
+                Some(v) => v.extract()?,
+                None => false,
+            };
+            let cast_for_free: bool = match dict.get_item("cast_for_free")? {
+                Some(v) => v.extract()?,
+                None => false,
+            };
+            let use_impending: bool = match dict.get_item("use_impending")? {
+                Some(v) => v.extract()?,
+                None => false,
+            };
+            // `cast_room_half` is `Option<String>`: missing key OR
+            // explicit `None` both map to `None`. A non-None,
+            // non-string value raises `TypeError` from
+            // `extract::<String>`.
+            let cast_room_half: Option<String> = match dict.get_item("cast_room_half")? {
+                Some(v) if !v.is_none() => Some(v.extract()?),
+                _ => None,
+            };
+            Ok(Action::CastSpell {
+                card_id,
+                use_warp,
+                kicked,
+                cast_for_free,
+                use_impending,
+                cast_room_half,
+            })
+        }
+        "turn_face_up" => {
+            // Single-int shape mirroring `play_land` — `card_id` is the
+            // GameObject id of the face-down permanent on the priority
+            // player's battlefield to flip face up. Missing key →
+            // `KeyError` via `require`; wrong type → `TypeError` /
+            // `ValueError` from PyO3's `extract::<u32>` machinery.
+            let card_id: u32 = require(dict, "card_id")?.extract()?;
+            Ok(Action::TurnFaceUp { card_id })
+        }
+        "unlock_room_half" => {
+            // Two-field shape — `card_id` (u32) names the Room
+            // enchantment on the active player's battlefield;
+            // `half_name` (string) selects which of the two halves to
+            // unlock. Mirrors Python's `UnlockRoomHalf(card_id: int,
+            // half_name: str)` dataclass — both fields required, no
+            // optional flags. Missing either key → `KeyError` via
+            // `require`; wrong type → `TypeError` / `ValueError` from
+            // PyO3's `extract::<u32>` / `extract::<String>` machinery.
+            let card_id: u32 = require(dict, "card_id")?.extract()?;
+            let half_name: String = require(dict, "half_name")?.extract()?;
+            Ok(Action::UnlockRoomHalf { card_id, half_name })
+        }
+        "activate_station" => {
+            // Two-int shape mirroring `activate_ability` — `spacecraft_id`
+            // names the Spacecraft permanent on the active player's
+            // battlefield; `crew_id` names the creature being tapped as
+            // cost to add a charge counter to the Spacecraft. Mirrors
+            // Python's `ActivateStation(spacecraft_id: int, crew_id: int)`
+            // dataclass — both fields required, no optional flags.
+            // Missing either key → `KeyError` via `require`; wrong type
+            // → `TypeError` / `ValueError` from PyO3's `extract::<u32>`
+            // machinery.
+            let spacecraft_id: u32 = require(dict, "spacecraft_id")?.extract()?;
+            let crew_id: u32 = require(dict, "crew_id")?.extract()?;
+            Ok(Action::ActivateStation {
+                spacecraft_id,
+                crew_id,
+            })
+        }
         other => Err(PyValueError::new_err(format!(
-            "unknown action kind {other:?}; valid: pass_priority, play_land, declare_attackers, declare_blockers, activate_ability"
+            "unknown action kind {other:?}; valid: pass_priority, play_land, declare_attackers, declare_blockers, activate_ability, cast_spell, turn_face_up, unlock_room_half, activate_station"
         ))),
     }
 }
@@ -284,6 +506,52 @@ pub fn action_to_pydict<'py>(
             d.set_item("kind", "activate_ability")?;
             d.set_item("source_id", *source_id)?;
             d.set_item("ability_index", *ability_index)?;
+        }
+        Action::CastSpell {
+            card_id,
+            use_warp,
+            kicked,
+            cast_for_free,
+            use_impending,
+            cast_room_half,
+        } => {
+            d.set_item("kind", "cast_spell")?;
+            d.set_item("card_id", *card_id)?;
+            // Always emit all 5 flag fields so round-trip is fully
+            // symmetric — a parse-then-serialize pair lands on a dict
+            // that exactly equals the canonical "all-fields-present"
+            // shape. Callers that emit the minimal `{kind, card_id}`
+            // shape get a slightly-richer dict back, but the
+            // re-parsed Action is bit-identical (all-False / None
+            // defaults).
+            d.set_item("use_warp", *use_warp)?;
+            d.set_item("kicked", *kicked)?;
+            d.set_item("cast_for_free", *cast_for_free)?;
+            d.set_item("use_impending", *use_impending)?;
+            // `Option<String>` round-trips as `None` -> Python None /
+            // `Some(s)` -> Python str. PyO3's `set_item` handles both
+            // via the `IntoPy` impl on `Option<T>`.
+            d.set_item("cast_room_half", cast_room_half.clone())?;
+        }
+        Action::TurnFaceUp { card_id } => {
+            d.set_item("kind", "turn_face_up")?;
+            d.set_item("card_id", *card_id)?;
+        }
+        Action::UnlockRoomHalf {
+            card_id,
+            half_name,
+        } => {
+            d.set_item("kind", "unlock_room_half")?;
+            d.set_item("card_id", *card_id)?;
+            d.set_item("half_name", half_name.clone())?;
+        }
+        Action::ActivateStation {
+            spacecraft_id,
+            crew_id,
+        } => {
+            d.set_item("kind", "activate_station")?;
+            d.set_item("spacecraft_id", *spacecraft_id)?;
+            d.set_item("crew_id", *crew_id)?;
         }
     }
     Ok(d)

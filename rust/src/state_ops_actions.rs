@@ -108,6 +108,17 @@ impl GameState {
     ///   yet" message. A future slice adds the primitive and flips
     ///   the arm to a real `call_method1("activate_ability",
     ///   (source_id, ability_index))` dispatch.
+    /// - `{"kind": "cast_spell", "card_id": <u32>, "use_warp":
+    ///   <bool>?, "kicked": <bool>?, "cast_for_free": <bool>?,
+    ///   "use_impending": <bool>?, "cast_room_half": <str|None>?}`
+    ///   → calls `cast_creature(card_id, priority_player)`. The 5
+    ///   alt-cost / mode flags are parsed as data and ROUND-TRIP
+    ///   through the bridge but are IGNORED by this dispatch arm
+    ///   (first-slice scope, mirrors the ActivateAbility "scaffold
+    ///   the variant, defer the dispatch semantics" pattern — see
+    ///   the `Action::CastSpell` arm's inline comment for the
+    ///   future-slice plumbing of warp / kicker / impending /
+    ///   cast_for_free / cast_room_half).
     ///
     /// Unknown `kind` raises `ValueError`; missing `kind` or other
     /// required keys (e.g. `card_id` for `play_land`,
@@ -185,6 +196,159 @@ impl GameState {
                 for (blocker_id, attacker_id) in assignments {
                     slf.call_method1("declare_blocker", (blocker_id, attacker_id))?;
                 }
+            }
+            Action::CastSpell {
+                card_id,
+                use_warp: _,
+                kicked: _,
+                cast_for_free: _,
+                use_impending: _,
+                cast_room_half: _,
+            } => {
+                // Round-23(+) slice: ship the `CastSpell` variant +
+                // bridge with all 5 alt-cost / mode flags as data;
+                // dispatch IGNORES the flags and routes to the
+                // existing round-4 `cast_creature(obj_id, player_id)`
+                // primitive. Same pattern as `play_land` for the
+                // actor resolution (the Python `CastSpell` dataclass
+                // carries only `card_id`; the implicit actor is the
+                // priority player). Borrow `slf` for the u8 read,
+                // then drop the borrow before re-entering Python via
+                // `call_method1` (which would re-borrow under the
+                // hood).
+                //
+                // **Flags are silently ignored for first-slice.**
+                // Mirrors the round-23 ActivateAbility "scaffold the
+                // variant, defer the dispatch semantics" pattern —
+                // search-loop dispatch can already drive Rust state
+                // through the production `CastSpell` dict shape
+                // (warp / kicker / impending / Room-half / free-cast
+                // payloads round-trip losslessly through the
+                // bridge), and a future slice wires each flag
+                // through to a richer primitive:
+                //   - use_warp -> alt-cost from exile (needs
+                //     Effect::Warp + the cost-from-zone primitive).
+                //   - kicked -> additional mana cost stacked on the
+                //     base (needs cost-stacking infrastructure).
+                //   - cast_for_free -> bypass the mana payment in
+                //     `cast_creature`'s phase 2.
+                //   - use_impending -> defer creature-ness via time
+                //     counters + the new face-down-ish state field.
+                //   - cast_room_half -> route to the picked Room
+                //     half's mana cost + unlock effect.
+                // No runtime warning when a non-default flag is set
+                // — the test suite covers the "flags pass through
+                // silently" contract (search-loop callers shouldn't
+                // see ergonomic noise from the deferred-semantics
+                // gap; the gap is documented here + in the variant
+                // docstring + in the porting-status table).
+                let player_id = slf.borrow().priority_player;
+                slf.call_method1("cast_creature", (card_id, player_id))?;
+            }
+            Action::TurnFaceUp { card_id: _ } => {
+                // First-slice scope (mirrors round-23's ActivateAbility
+                // pattern): ship the Action variant + bridge round-trip
+                // scaffold; the dispatch arm is a stub because no Rust
+                // face-down GameObject state exists yet. The
+                // `GameObject` struct has no `face_down` flag today, and
+                // there's no Spacecraft charge-counter resolution
+                // primitive — there's nothing for a `turn_face_up`
+                // dispatch to flip. A future slice adds the per-object
+                // face-down state field + flip primitive (analogous to
+                // how `tap` / `untap` toggle the `tapped` flag) and then
+                // flips this arm to a real `call_method1(
+                // "turn_face_up", (card_id, priority_player))` dispatch
+                // — at which point the variant + bridge already shipped
+                // here keep working unchanged. The variant ships now so
+                // callers building Action dicts can already use the
+                // `turn_face_up` shape and hit a clear "not implemented
+                // yet" error path instead of `unknown action kind`,
+                // and the parity harness surfaces the gap loudly when
+                // Python emits a TurnFaceUp decision (CR 701.34 /
+                // 707.4 — EoE Spacecraft station+launch is the
+                // production driver).
+                return Err(pyo3::exceptions::PyValueError::new_err(
+                    "TurnFaceUp dispatch not implemented yet (Rust face-down \
+                     GameObject state + Spacecraft primitive missing; future \
+                     slice flips the dispatch). This slice ships only the \
+                     Action variant + bridge round-trip — apply_action raises \
+                     to surface the gap loudly to the parity harness."
+                ));
+            }
+            Action::UnlockRoomHalf {
+                card_id: _,
+                half_name: _,
+            } => {
+                // First-slice scope (mirrors round-23's ActivateAbility
+                // and round-24's TurnFaceUp pattern): ship the Action
+                // variant + bridge round-trip scaffold; the dispatch arm
+                // is a stub because no Rust Room-half state exists yet.
+                // Python's `GameObject` carries a per-Room
+                // `unlocked_halves: set[str]` field that tracks which
+                // halves of a Room enchantment have been unlocked — the
+                // Rust `GameObject` struct has no such field today, and
+                // there's no half-specific effect activation primitive.
+                // A future slice adds the per-object Room state +
+                // `unlock_room_half(card_id, half_name)` primitive
+                // (analogous to how Python's `_unlock_room_half`
+                // mutates the set, pays the half's mana cost, and fires
+                // the half-specific ENTERS triggers) and then flips
+                // this arm to a real `call_method1("unlock_room_half",
+                // (card_id, half_name, priority_player))` dispatch —
+                // at which point the variant + bridge already shipped
+                // here keep working unchanged. The variant ships now so
+                // callers building Action dicts can already use the
+                // `unlock_room_half` shape and hit a clear "not
+                // implemented yet" error path instead of `unknown
+                // action kind`, and the parity harness surfaces the
+                // gap loudly when Python emits an UnlockRoomHalf
+                // decision (CR 715.3-4 — DSK Rooms mechanic is the
+                // production driver).
+                return Err(pyo3::exceptions::PyValueError::new_err(
+                    "UnlockRoomHalf dispatch not implemented yet (Rust Room \
+                     enchantment state + half-name resolution missing; future \
+                     slice flips the dispatch). This slice ships only the \
+                     Action variant + bridge round-trip."
+                ));
+            }
+            Action::ActivateStation {
+                spacecraft_id: _,
+                crew_id: _,
+            } => {
+                // First-slice scope (mirrors round-23's ActivateAbility
+                // and round-24's TurnFaceUp / UnlockRoomHalf pattern):
+                // ship the Action variant + bridge round-trip scaffold;
+                // the dispatch arm is a stub because no Rust Spacecraft
+                // charge-counter state / crew-tap resolution primitive
+                // exists yet. Python's `_activate_station` taps the crew
+                // creature (cost), reads its power, and adds that many
+                // charge counters to the Spacecraft (effect) — Rust has
+                // neither the Spacecraft state field for charge counters
+                // nor a primitive that links tap-as-cost to counter-add-
+                // as-effect. A future slice adds the per-object
+                // Spacecraft charge state + the activate-station
+                // primitive (analogous to how Python's
+                // `_activate_station` mutates both sides atomically) and
+                // then flips this arm to a real `call_method1(
+                // "activate_station", (spacecraft_id, crew_id,
+                // priority_player))` dispatch — at which point the
+                // variant + bridge already shipped here keep working
+                // unchanged. The variant ships now so callers building
+                // Action dicts can already use the `activate_station`
+                // shape and hit a clear "not implemented yet" error
+                // path instead of `unknown action kind`, and the parity
+                // harness surfaces the gap loudly when Python emits an
+                // ActivateStation decision (EoE Spacecraft station
+                // mechanic — the EoE Spacecraft cycle is the production
+                // driver). **This completes the Action enum scaffold:
+                // all 8 Python Action subclasses now have Rust
+                // variants.**
+                return Err(pyo3::exceptions::PyValueError::new_err(
+                    "ActivateStation dispatch not implemented yet (Rust \
+                     Spacecraft charge-counter state + crew-tap resolution \
+                     missing; future slice flips the dispatch). This slice \
+                     ships only the Action variant + bridge round-trip."
+                ));
             }
             Action::ActivateAbility {
                 source_id: _,

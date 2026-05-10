@@ -1440,6 +1440,508 @@ fn apply_effect(
             let _controller = state.active_player as usize;
             let _ = source_obj_id; // controller-targeted, not source-targeted
         }
+        // Round-23: CounterTargetSpell. CR 701.5 — counter target
+        // spell on the stack; the countered spell moves to its
+        // controller's graveyard (CR 701.6 — first slice routes to
+        // controller's graveyard since owner-vs-controller tracking
+        // isn't yet split out). Powers Annul, Cancel, etc. — 7 cards
+        // in the EoE pool per round-20 measurement.
+        //
+        // **Deterministic target choice: topmost-non-self stack item.**
+        // Scan the stack from top (Vec last) down, pick the first
+        // `source_obj_id` that isn't this resolving effect's own
+        // source — a counterspell sitting on the stack shouldn't
+        // counter itself before it resolves. The `source_obj_id`
+        // parameter (round-23 refactor on `apply_effect`) carries the
+        // resolving stack item's source id; we exclude it here. Real
+        // MTG plumbs target choice through the cast surface; first
+        // slice deterministic-top-non-self mirrors the
+        // "DealDamage picks defender's battlefield[0]" convention.
+        //
+        // **Empty stack / only-self stack: silent fizzle.** Mirrors
+        // Python's `CounterTargetSpell.resolve` short-circuit on
+        // `if not targets`. The Effect doesn't error; the
+        // post-resolve mover still routes the spell source to the
+        // graveyard, the stack still pops at the outer
+        // `resolve_top_of_stack`.
+        //
+        // **No filter_types / no `cant_be_countered` enforcement.**
+        // Python's `filter_types` (Annul's Artifact/Enchantment-only
+        // restriction) and `_is_uncounterable` checks
+        // (`spell_is_uncounterable`, `grants_creature_spells_uncounterable`)
+        // are deferred — the Rust bridge has neither field today.
+        // First slice trusts the caller picked a legal target shape,
+        // same convention as the round-7 counter_spell primitive.
+        //
+        // **Inlining note (cross-file friction).** Round-7's
+        // `counter_spell(target_obj_id) -> bool` primitive on
+        // `state_ops_counterspell.rs` does exactly what we need
+        // (locate stack item, remove, move source to controller's
+        // graveyard). Routing through it would require
+        // `Bound::call_method1` cross-`#[pymethods]` plumbing inside
+        // `apply_effect` where we already hold `state: &mut GameState`
+        // — the same E0624 friction every other Effect arm hit. Per
+        // the recurring per-slice file-isolation pattern (every other
+        // arm — DealDamage / ReturnToHand / Mill / DrawCards /
+        // ExileTarget / Sacrifice / DestroyTarget / TapTarget /
+        // UntapTarget / AddCounters / DiscardCard / CreateToken /
+        // AddManaToPool / SearchLibraryForBasicLandTapped /
+        // PutPlusOneCounterOnSelf — inlines its primitive for the
+        // same reason), we inline the equivalent logic here. A
+        // follow-up consolidation slice can collapse onto the shared
+        // `counter_spell` primitive once cross-file private-fn calls
+        // re-open.
+        Effect::CounterTargetSpell => {
+            // Find the topmost stack item whose source isn't this
+            // effect's own source. iter().rev() walks top-to-bottom;
+            // capture both the Vec index (for stack removal) and the
+            // controller (for graveyard routing).
+            let target: Option<(usize, u32, u8)> = state
+                .stack
+                .iter()
+                .enumerate()
+                .rev()
+                .find(|(_, item)| item.source_obj_id != source_obj_id)
+                .map(|(i, item)| (i, item.source_obj_id, item.controller));
+            let (stack_pos, target_obj_id, target_controller) = match target {
+                Some(t) => t,
+                None => return Ok(()), // empty / only-self: silent fizzle
+            };
+            // Remove the matched stack item (inlines round-7's
+            // `counter_spell` stack-removal step).
+            state.stack.remove(stack_pos);
+            // Best-effort: move the source GameObject to its
+            // controller's graveyard (inlines round-7's
+            // `move_to_graveyard` step). Sweep both players' four
+            // tracked zones to find the source — mirrors how
+            // `state_ops_counterspell::move_to_graveyard` itself walks
+            // hand/library/battlefield/graveyard. CR 400.7 zone-change
+            // reset (tapped / summoning_sick / damage / counters) is
+            // applied on the way out, mirroring every other zone-move
+            // arm in this file (ReturnToHand / ExileTarget / Sacrifice
+            // / DestroyTarget / DiscardCard). If the source is missing
+            // (lost-track-of-source failure mode), the counter still
+            // "lands" — stack item removed — but the graveyard step
+            // is a no-op, same tolerance the round-7 primitive shows.
+            let mut taken: Option<GameObject> = None;
+            'outer: for player in state.players.iter_mut() {
+                for zone in [
+                    &mut player.hand,
+                    &mut player.library,
+                    &mut player.battlefield,
+                    &mut player.graveyard,
+                ] {
+                    if let Some(pos) = zone.iter().position(|o| o.id == target_obj_id) {
+                        let v = Arc::make_mut(zone);
+                        taken = Some(v.remove(pos));
+                        break 'outer;
+                    }
+                }
+            }
+            if let Some(mut obj) = taken {
+                obj.zone = ZONE_GRAVEYARD;
+                obj.tapped = false;
+                obj.summoning_sick = false;
+                obj.damage = 0;
+                obj.counters = 0;
+                obj.controller = target_controller;
+                Arc::make_mut(
+                    &mut state.players[target_controller as usize].graveyard,
+                )
+                .push(obj);
+            }
+        }
+        // Round-24: ReturnCreatureFromYourGraveyardToBattlefield.
+        // CR 400.7 (zone-change reset) + CR 302.1 (new permanent has
+        // summoning sickness) — reanimate a creature card from the
+        // controller's graveyard onto their battlefield. Powers Emerge
+        // from the Cocoon, Reanimate-style sugar — 8 cards in the EoE
+        // pool per round-20 measurement.
+        //
+        // **Controller = `state.active_player`** (first-slice
+        // convention, same as DrawCards / GainLife / Mill /
+        // SearchLibraryForBasicLandTapped / CounterTargetSpell).
+        // `source_obj_id` is unused here — the target zone is "your"
+        // graveyard (= controller's), not source-relative.
+        //
+        // **Deterministic first-creature pick.** Scan the controller's
+        // graveyard in Vec iteration order (front = smallest index =
+        // oldest by `move_object`-time push order); pick the first
+        // object whose printing's `card_types` contains "Creature".
+        // No filtering past that (no mana-value cap, no
+        // creature-or-enchantment widening — see the variant's
+        // docstring for the deferred Python schema). Empty graveyard
+        // or no-creature-found: silent fizzle (Python parity with
+        // `ReturnFromGraveyard.resolve`'s `if not targets: return`
+        // short-circuit, and matches the round-17 primitive's
+        // `Ok(false)` return on absent obj_id).
+        //
+        // **Inlining note (cross-file friction).** The round-17
+        // `move_object_from_graveyard_to_battlefield(player_id,
+        // obj_id)` primitive on `state_ops_zones.rs` does exactly the
+        // recipient-side work we need (remove from graveyard, push
+        // onto battlefield, stamp `summoning_sick = true`, zero
+        // tapped / damage / counters). Per the recurring per-slice
+        // file-isolation pattern (CounterTargetSpell / Sacrifice /
+        // ExileTarget / ReturnToHand / DrawCards / Mill / ... all
+        // inline their primitives), this arm inlines the equivalent
+        // logic. A follow-up consolidation slice can collapse onto
+        // the shared primitive once cross-file private-fn calls
+        // re-open.
+        //
+        // **Registry lookup pattern.** We hold `state: &mut GameState`,
+        // and `state.registry.lookup(printing_id)` returns a borrow on
+        // the registry. The `find_map` closure releases each borrow on
+        // each iteration; once the loop completes we hold an
+        // `Option<u32>` and the registry borrow is dropped, leaving
+        // the mutable state borrow free for the subsequent
+        // `Arc::make_mut` calls. Mirrors the borrow-then-drop snapshot
+        // pattern `resolve_top_of_stack` uses for `printing.effects`.
+        // Round-25: DiscardSelf. CR 701.8 — "you discard a card."
+        // The SOURCE's controller discards `amount` cards from their
+        // hand. Punisher / drawback pattern (Irreverent Gremlin
+        // shape) — 8 cards in the EoE pool per round-20 measurement.
+        //
+        // **Distinct from round-15's DiscardCard.** DiscardCard's
+        // AnyPlayer branch targets the DEFENDING player (active
+        // player's spell forces the opponent to discard, Mind Rot
+        // shape). DiscardSelf targets the SOURCE's controller —
+        // the punisher fires on whoever cast or controls the
+        // source, regardless of active_player. Cross-controller-
+        // active-player tests below verify the distinction.
+        //
+        // **Source-finder dispatch (round-23 pattern).** Threads
+        // `source_obj_id` through `apply_effect` and walks both
+        // players' five tracked zones (hand / library /
+        // battlefield / graveyard / exile) to recover the source's
+        // `controller`. Differs from
+        // `PutPlusOneCounterOnSelf`'s battlefield-only scan because
+        // the punisher pattern fires on whoever controls the source
+        // regardless of where the source currently sits — the
+        // controller field doesn't change when a permanent leaves
+        // the battlefield. Additionally scans the stack: the source
+        // may still be resolving (e.g. an instant/sorcery still on
+        // the stack at its own resolution time), in which case the
+        // `StackItem.controller` is the authoritative controller.
+        //
+        // **First-slice deterministic choice: discard hand[0].**
+        // Mirrors round-15's `DiscardCard` arm — pop the front of
+        // the controller's hand Vec by index, no per-spell discard
+        // choice yet. Up to `amount` discards in a row (stop early
+        // on empty hand, matching Python's `for _ in
+        // range(self.amount): if not p.hand: break` shape).
+        //
+        // **Empty hand = silent no-op** (Python parity:
+        // `DiscardSelf.resolve` short-circuits when `p.hand` is
+        // empty). **Source not found anywhere = silent no-op**
+        // (lost-track-of-source tolerance, mirrors
+        // `PutPlusOneCounterOnSelf` / `CounterTargetSpell` fizzle
+        // shape).
+        //
+        // **Per-object state reset on zone change** (CR 400.7) —
+        // tapped / summoning_sick / damage / counters reset on the
+        // way to graveyard. In practice a card in hand already has
+        // defaults; the reset is kept for schema-uniformity with
+        // every other zone-move arm in this file (ReturnToHand /
+        // ExileTarget / Sacrifice / DiscardCard / CounterTargetSpell
+        // / DestroyTarget all apply the same reset).
+        //
+        // **amount<0 raises** loudly (defense-in-depth;
+        // parse_effect catches at register time). **amount=0 is a
+        // legal no-op** (mirrors GainLife / DrawCards / Mill /
+        // ScryN / CreateToken / SearchLibrary / PutPlusOneCounterOnSelf
+        // zero-amount conventions).
+        //
+        // **Inlining note (cross-file friction).** Per the recurring
+        // per-slice file-isolation pattern (DealDamage / ReturnToHand
+        // / Mill / DrawCards / ExileTarget / Sacrifice / DestroyTarget
+        // / TapTarget / UntapTarget / AddCounters / DiscardCard /
+        // CreateToken / AddManaToPool /
+        // SearchLibraryForBasicLandTapped / PutPlusOneCounterOnSelf
+        // / CounterTargetSpell /
+        // ReturnCreatureFromYourGraveyardToBattlefield all inline
+        // their primitives), this arm inlines the minimal
+        // `Arc::make_mut` + `Vec::remove(0)` + push-to-graveyard
+        // here.
+        Effect::DiscardSelf { amount } => {
+            if *amount < 0 {
+                return Err(PyValueError::new_err(format!(
+                    "DiscardSelf amount must be non-negative, got {amount}"
+                )));
+            }
+            if *amount == 0 {
+                return Ok(());
+            }
+            // Locate the source's controller. Walk both players'
+            // five tracked zones (hand / library / battlefield /
+            // graveyard / exile). The source may have already moved
+            // away from where it was when the effect was queued —
+            // the controller is constant across zone changes so any
+            // matching obj.id resolves the question.
+            let mut source_controller: Option<u8> = None;
+            'outer: for player in state.players.iter() {
+                for zone in [
+                    &player.hand,
+                    &player.library,
+                    &player.battlefield,
+                    &player.graveyard,
+                    &player.exile,
+                ] {
+                    for obj in zone.iter() {
+                        if obj.id == source_obj_id {
+                            source_controller = Some(obj.controller);
+                            break 'outer;
+                        }
+                    }
+                }
+            }
+            // Stack scan: the source may still be resolving (its
+            // own stack item triggered this effect). `StackItem`
+            // carries an authoritative `controller` field — use
+            // it when the zone scan didn't find the source.
+            if source_controller.is_none() {
+                if let Some(item) = state
+                    .stack
+                    .iter()
+                    .find(|i| i.source_obj_id == source_obj_id)
+                {
+                    source_controller = Some(item.controller);
+                }
+            }
+            let Some(controller) = source_controller else {
+                return Ok(()); // source not found anywhere: silent fizzle
+            };
+            let controller_idx = controller as usize;
+            // Up to `amount` discards in a row. Stop early if the
+            // hand goes empty mid-loop (Python parity with the
+            // `if not p.hand: break` short-circuit inside the
+            // amount-range loop in `DiscardSelf.resolve`).
+            let target_amount = *amount as usize;
+            for _ in 0..target_amount {
+                if state.players[controller_idx].hand.is_empty() {
+                    break;
+                }
+                // Pop hand[0] (deterministic first-slice choice).
+                let hand_mut: &mut Vec<GameObject> =
+                    Arc::make_mut(&mut state.players[controller_idx].hand);
+                let mut obj = hand_mut.remove(0);
+                // CR 400.7 zone-change reset.
+                obj.zone = ZONE_GRAVEYARD;
+                obj.tapped = false;
+                obj.summoning_sick = false;
+                obj.damage = 0;
+                obj.counters = 0;
+                Arc::make_mut(&mut state.players[controller_idx].graveyard)
+                    .push(obj);
+            }
+        }
+        Effect::ReturnCreatureFromYourGraveyardToBattlefield => {
+            let _ = source_obj_id; // controller-targeted, not source-relative
+            let controller_idx = state.active_player as usize;
+            // Find first creature in controller's graveyard (front =
+            // smallest Vec index = top of the iteration order). Drop
+            // registry borrow before mutating.
+            let target_obj_id: Option<u32> = state.players[controller_idx]
+                .graveyard
+                .iter()
+                .find_map(|obj| match state.registry.lookup(obj.printing_id) {
+                    Some(printing)
+                        if printing.card_types.iter().any(|t| t == "Creature") =>
+                    {
+                        Some(obj.id)
+                    }
+                    _ => None,
+                });
+            let Some(target_id) = target_obj_id else {
+                return Ok(()); // empty / no-creature: silent fizzle
+            };
+            // Inline the move (mirrors CounterTargetSpell / Sacrifice /
+            // ExileTarget inlining — apply_effect's free-fn signature
+            // makes cross-file primitive call awkward). Move from
+            // graveyard to battlefield; per round-17 conv:
+            // summoning_sick=true, tapped=false, damage=0, counters=0,
+            // zone=ZONE_BATTLEFIELD.
+            let graveyard_mut: &mut Vec<GameObject> =
+                Arc::make_mut(&mut state.players[controller_idx].graveyard);
+            let pos = graveyard_mut
+                .iter()
+                .position(|o| o.id == target_id)
+                .expect("target_id was just found in graveyard but not on re-scan");
+            let mut obj = graveyard_mut.remove(pos);
+            obj.zone = ZONE_BATTLEFIELD;
+            obj.tapped = false;
+            obj.summoning_sick = true;
+            obj.damage = 0;
+            obj.counters = 0;
+            Arc::make_mut(&mut state.players[controller_idx].battlefield).push(obj);
+        }
+        // Round-26: EachOpponentLosesLife. CR 118.4 — "life loss"
+        // (not damage). Each opponent of the SOURCE's controller
+        // loses `amount` life. Punisher / drawback pattern
+        // (Balemurk Leech shape) — 6 cards in the EoE pool per
+        // round-20 measurement.
+        //
+        // **Distinct from round-17 DamageEachOpponent.** DamageEach-
+        // Opponent deals DAMAGE (CR 701.4) — routes through damage-
+        // prevention / Worship-style replacement effects (CR 614)
+        // when those land. EachOpponentLosesLife is direct life
+        // subtraction (CR 118.4) and is NOT reducible. Two-player
+        // engine first slice: both arms have identical end-state for
+        // the defender's life total because neither variant routes
+        // through damage-prevention yet, but the variants stay
+        // distinct to mirror Python's closed `Effect` vocabulary
+        // (round-15 pattern). Future slices that wire damage-
+        // prevention through DealDamage / DamageEachOpponent keep
+        // this arm a direct subtraction.
+        //
+        // **Source-finder dispatch (round-24 pattern).** Walks both
+        // players' five tracked zones (hand / library / battlefield
+        // / graveyard / exile) plus the stack to recover the
+        // source's `controller`. Mirrors DiscardSelf — punisher
+        // effects fire on whoever controls the source regardless of
+        // where the source currently sits, since the controller
+        // field doesn't change on zone moves.
+        //
+        // **Two-player "each opponent" reduces to "the one opponent".**
+        // opponent_id = 1 - controller. Direct life subtraction on
+        // `players[opponent_idx].life`; negative life handled by
+        // the SBA loop (round-5+), no clamp here.
+        //
+        // **amount<0 raises** loudly (defense-in-depth; parse_effect
+        // catches at register time). **amount=0 is a legal no-op**
+        // (mirrors GainLife / DrawCards / Mill / DamageEachOpponent /
+        // DiscardSelf zero-amount conventions). **Source not found
+        // anywhere = silent fizzle** (lost-track-of-source tolerance,
+        // mirrors DiscardSelf shape).
+        Effect::EachOpponentLosesLife { amount } => {
+            if *amount < 0 {
+                return Err(PyValueError::new_err(format!(
+                    "EachOpponentLosesLife amount must be non-negative, got {amount}"
+                )));
+            }
+            // Source-controller resolution mirrors round-24
+            // DiscardSelf's 5-zone walk + stack scan.
+            let mut source_controller: Option<u8> = None;
+            'outer: for player in state.players.iter() {
+                for zone in [
+                    &player.hand,
+                    &player.library,
+                    &player.battlefield,
+                    &player.graveyard,
+                    &player.exile,
+                ] {
+                    for obj in zone.iter() {
+                        if obj.id == source_obj_id {
+                            source_controller = Some(obj.controller);
+                            break 'outer;
+                        }
+                    }
+                }
+            }
+            if source_controller.is_none() {
+                if let Some(item) = state
+                    .stack
+                    .iter()
+                    .find(|i| i.source_obj_id == source_obj_id)
+                {
+                    source_controller = Some(item.controller);
+                }
+            }
+            let Some(controller) = source_controller else {
+                return Ok(()); // source not found: silent fizzle
+            };
+            // Each opponent: the OTHER player in 2-player land.
+            let opponent_id = 1 - controller;
+            let opponent_idx = opponent_id as usize;
+            // Direct life subtraction — not damage. Negative life is
+            // handled by SBA loop.
+            state.players[opponent_idx].life =
+                state.players[opponent_idx].life.saturating_sub(*amount);
+        }
+        // Round-24: DestroyAllCreatures. CR 701.7 + 701.4 AOE — Wrath
+        // of God pattern. Destroys every creature on the battlefield
+        // (both players), honoring indestructible (CR 702.12) inline.
+        Effect::DestroyAllCreatures => {
+            let _ = source_obj_id; // implicit-target AOE; source not relevant
+            for pidx in 0..state.players.len() {
+                let destroyable_ids: Vec<u32> = state.players[pidx]
+                    .battlefield
+                    .iter()
+                    .filter_map(|obj| {
+                        let printing = state.registry.lookup(obj.printing_id)?;
+                        if !printing.card_types.iter().any(|t| t == "Creature") {
+                            return None;
+                        }
+                        if printing.keywords.iter().any(|k| k == "indestructible") {
+                            return None;
+                        }
+                        Some(obj.id)
+                    })
+                    .collect();
+                if destroyable_ids.is_empty() {
+                    continue;
+                }
+                let bf_mut: &mut Vec<GameObject> =
+                    Arc::make_mut(&mut state.players[pidx].battlefield);
+                let mut destroyed: Vec<GameObject> =
+                    Vec::with_capacity(destroyable_ids.len());
+                bf_mut.retain(|obj| {
+                    if destroyable_ids.contains(&obj.id) {
+                        destroyed.push(obj.clone());
+                        false
+                    } else {
+                        true
+                    }
+                });
+                let gy_mut: &mut Vec<GameObject> =
+                    Arc::make_mut(&mut state.players[pidx].graveyard);
+                for mut obj in destroyed {
+                    obj.zone = ZONE_GRAVEYARD;
+                    obj.tapped = false;
+                    obj.summoning_sick = false;
+                    obj.damage = 0;
+                    obj.counters = 0;
+                    gy_mut.push(obj);
+                }
+            }
+        }
+        // DestroyTargetNonlandPermanent. CR 701.7 with non-land filter
+        // — Drag to the Roots / Drill Too Deep pattern. Scans defender's
+        // battlefield top-to-bottom; picks first non-Land, non-
+        // indestructible object. Empty / only-Lands / only-indestructible
+        // defender bf = silent fizzle.
+        Effect::DestroyTargetNonlandPermanent => {
+            let defender_idx = (1 - state.active_player) as usize;
+            let target_id: Option<u32> = {
+                let bf = &state.players[defender_idx].battlefield;
+                let registry = &state.registry;
+                bf.iter().find_map(|obj| {
+                    let printing = registry.lookup(obj.printing_id)?;
+                    if printing.card_types.iter().any(|t| t == "Land") {
+                        return None;
+                    }
+                    if printing.keywords.iter().any(|k| k == "indestructible") {
+                        return None;
+                    }
+                    Some(obj.id)
+                })
+            };
+            if let Some(target_id) = target_id {
+                let bf_mut: &mut Vec<GameObject> =
+                    Arc::make_mut(&mut state.players[defender_idx].battlefield);
+                let pos = bf_mut
+                    .iter()
+                    .position(|o| o.id == target_id)
+                    .expect("target_id from scan but not found on re-scan");
+                let mut obj = bf_mut.remove(pos);
+                obj.zone = ZONE_GRAVEYARD;
+                obj.tapped = false;
+                obj.summoning_sick = false;
+                obj.damage = 0;
+                obj.counters = 0;
+                Arc::make_mut(&mut state.players[defender_idx].graveyard).push(obj);
+            }
+        }
     }
     Ok(())
 }
