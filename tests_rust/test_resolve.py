@@ -6443,3 +6443,254 @@ def test_resolve_target_opponent_loses_life_clone_isolation(synthetic_state):
     # Original untouched.
     assert synthetic_state.life_totals[1] == p1_life_before
     assert synthetic_state.stack_size() == 1
+
+
+# --- MillTargetPlayer dispatch -------------------------------------
+#
+# CR 701.13b — "mill" (a player puts the top N cards of their library
+# into their graveyard). Scrabbling Skullcrab pattern (2 cards in the
+# EoE pool per round-20 measurement).
+#
+# **Distinct from Effect::Mill (round 10).** That arm mills the
+# CONTROLLER's library; MillTargetPlayer mills a TARGET player's
+# library. First-slice deterministic target choice: the one defender
+# (= 1 - active_player), mirroring the DealDamage / TapTarget /
+# TargetOpponentLosesLife "the one opponent" convention. Future
+# multiplayer / archenemy work needs an explicit choice callback.
+#
+# Negative count raises at register time; count=0 is a legal no-op.
+# Fewer cards in library than `count` mills all remaining (Python
+# parity). Per-object state reset on graveyard move (CR 400.7).
+
+
+def _scrabbling_skullcrab_dict(count=2, card_types=None):
+    """A mill-N-target-player card. Default count=2 (Scrabbling
+    Skullcrab's actual mill amount); default card_types=["Sorcery"]
+    so post-resolve sends the source to its controller's graveyard.
+    """
+    if card_types is None:
+        card_types = ["Sorcery"]
+    p = {
+        "name": f"Test Scrabbling Skullcrab (mill {count})",
+        "card_types": card_types,
+        "mana_cost": {"generic": 1, "U": 1},
+        "effects": [{"kind": "mill_target_player", "count": count}],
+    }
+    if "Creature" in card_types:
+        p["power"] = 2
+        p["toughness"] = 2
+    return p
+
+
+def test_resolve_mill_target_player_mills_defender(synthetic_state):
+    """Happy path: source on active player's (p0) battlefield with
+    count=3 — defender (p1) library 50 -> 47, p1 graveyard 0 -> 3.
+    p0's library and graveyard are untouched (this is the load-bearing
+    distinction from Effect::Mill, which would have hit p0)."""
+    p0_lib_before = synthetic_state.library_sizes[0]
+    p0_grave_before = synthetic_state.graveyard_sizes[0]
+    p1_lib_before = synthetic_state.library_sizes[1]
+    p1_grave_before = synthetic_state.graveyard_sizes[1]
+    assert p1_lib_before == 50
+
+    src_id = synthetic_state.register_and_inject_object(
+        _scrabbling_skullcrab_dict(count=3, card_types=["Creature"]),
+        0,  # controller p0
+        ZONE_BATTLEFIELD,
+    )
+    synthetic_state.push_to_stack(src_id, 0)
+    synthetic_state.resolve_top_of_stack()
+
+    assert synthetic_state.is_stack_empty() is True
+    # Defender (p1): library -3, graveyard +3.
+    assert synthetic_state.library_sizes[1] == p1_lib_before - 3
+    assert synthetic_state.graveyard_sizes[1] == p1_grave_before + 3
+    # Controller (p0): library + graveyard untouched. Source was a
+    # Creature on battlefield — post-resolve leaves it on p0's
+    # battlefield, NOT p0's graveyard, so no graveyard delta on p0.
+    assert synthetic_state.library_sizes[0] == p0_lib_before
+    assert synthetic_state.graveyard_sizes[0] == p0_grave_before
+
+
+def test_resolve_mill_target_player_fewer_cards_than_count_mills_all(
+    engine,
+):
+    """Defender's library has fewer cards than `count`: mill all
+    remaining (Python parity with the `if not target.library: break`
+    short-circuit). No crash, no fizzle — partial fill is allowed."""
+    state = engine.make_synthetic_state(
+        num_battlefield=0, num_hand=1, num_library=2
+    )
+    p1_lib_before = state.library_sizes[1]
+    p1_grave_before = state.graveyard_sizes[1]
+    assert p1_lib_before == 2
+
+    src_id = state.register_and_inject_object(
+        # card_types=["Sorcery"] so post-resolve moves source to p0's
+        # graveyard (not p1's) — keeps the p1 graveyard delta clean.
+        _scrabbling_skullcrab_dict(count=5, card_types=["Sorcery"]),
+        0,
+        ZONE_HAND,
+    )
+    state.push_to_stack(src_id, 0)
+    state.resolve_top_of_stack()
+
+    # Defender library drained, graveyard gained the 2 cards available.
+    assert state.library_sizes[1] == 0
+    assert state.graveyard_sizes[1] == p1_grave_before + 2
+
+
+def test_resolve_mill_target_player_empty_library_no_op(engine):
+    """Defender's library starts empty: silent no-op. No crash, no
+    error, stack still pops."""
+    state = engine.make_synthetic_state(
+        num_battlefield=0, num_hand=1, num_library=0
+    )
+    p1_lib_before = state.library_sizes[1]
+    p1_grave_before = state.graveyard_sizes[1]
+    assert p1_lib_before == 0
+
+    src_id = state.register_and_inject_object(
+        _scrabbling_skullcrab_dict(count=3, card_types=["Sorcery"]),
+        0,
+        ZONE_HAND,
+    )
+    state.push_to_stack(src_id, 0)
+    state.resolve_top_of_stack()
+
+    assert state.is_stack_empty() is True
+    assert state.library_sizes[1] == p1_lib_before  # still 0
+    assert state.graveyard_sizes[1] == p1_grave_before  # still 0
+
+
+def test_resolve_mill_target_player_count_zero_no_op(synthetic_state):
+    """count=0 is a legitimate no-op (mirrors GainLife / DrawCards /
+    Mill / EachOpponentLosesLife zero-count conventions). No library
+    drain, no graveyard delta, no error."""
+    p1_lib_before = synthetic_state.library_sizes[1]
+    p1_grave_before = synthetic_state.graveyard_sizes[1]
+
+    src_id = synthetic_state.register_and_inject_object(
+        _scrabbling_skullcrab_dict(count=0, card_types=["Sorcery"]),
+        0,
+        ZONE_HAND,
+    )
+    synthetic_state.push_to_stack(src_id, 0)
+    synthetic_state.resolve_top_of_stack()
+
+    assert synthetic_state.is_stack_empty() is True
+    assert synthetic_state.library_sizes[1] == p1_lib_before
+    assert synthetic_state.graveyard_sizes[1] == p1_grave_before
+
+
+def test_resolve_mill_target_player_does_not_mill_active_player(
+    synthetic_state,
+):
+    """Regression for the Mill vs MillTargetPlayer split. The
+    active-player (controller of the resolving source) is the CASTER —
+    Effect::Mill would hit them; Effect::MillTargetPlayer must NOT.
+    Source is a Sorcery in p0's hand; on resolve, p0's library stays
+    the same size (only the source moves to p0's graveyard, which is a
+    post-resolve move, not a mill)."""
+    p0_lib_before = synthetic_state.library_sizes[0]
+    p0_grave_before = synthetic_state.graveyard_sizes[0]
+
+    src_id = synthetic_state.register_and_inject_object(
+        _scrabbling_skullcrab_dict(count=4, card_types=["Sorcery"]),
+        0,
+        ZONE_HAND,
+    )
+    synthetic_state.push_to_stack(src_id, 0)
+    synthetic_state.resolve_top_of_stack()
+
+    # p0 library UNCHANGED — no mill happened on the active player.
+    assert synthetic_state.library_sizes[0] == p0_lib_before
+    # p0 graveyard gained the source itself (Sorcery -> owner's
+    # graveyard per CR 608.2m post-resolve). +1, NOT +1+count — the
+    # count cards milled landed in p1's graveyard.
+    assert synthetic_state.graveyard_sizes[0] == p0_grave_before + 1
+
+
+def test_resolve_mill_target_player_negative_count_raises_at_register(
+    synthetic_state,
+):
+    """Negative count is a schema error (mirrors Surveil /
+    SearchLibraryForBasicLandTapped / TargetOpponentLosesLife
+    raise-on-negative shape). The parse_effect bridge guard surfaces
+    this at register time — before resolution ever runs."""
+    with pytest.raises(ValueError):
+        synthetic_state.register_and_inject_object(
+            _scrabbling_skullcrab_dict(count=-1, card_types=["Sorcery"]),
+            0,
+            ZONE_HAND,
+        )
+
+
+def test_resolve_mill_target_player_resets_per_object_state(
+    synthetic_state,
+):
+    """Per-object state reset on graveyard move (CR 400.7).
+
+    Inject a counter-bearing GameObject into the defender's (p1)
+    library, then mill 1 card. The most recently injected card sits at
+    the TOP of the library (round-1 convention: top = last element of
+    Vec), so it's milled first. On landing in graveyard, its counters
+    should be reset to 0."""
+    # Inject a creature into p1's library, then stamp counters on it.
+    counter_obj_id = synthetic_state.register_and_inject_object(
+        {
+            "name": "Counter-bearing milled card",
+            "card_types": ["Creature"],
+            "power": 1,
+            "toughness": 1,
+        },
+        1,  # controller p1
+        ZONE_LIBRARY,
+    )
+    # Stamp +2/+2 onto the card. `add_counters` walks library too.
+    assert synthetic_state.add_counters(counter_obj_id, 2) is True
+    assert synthetic_state.power_bonus_from_counters(counter_obj_id) == 2
+
+    # Mill 1 — the counter-bearing card was injected last, so it's at
+    # the TOP of p1's library (pop() target).
+    src_id = synthetic_state.register_and_inject_object(
+        _scrabbling_skullcrab_dict(count=1, card_types=["Sorcery"]),
+        0,
+        ZONE_HAND,
+    )
+    synthetic_state.push_to_stack(src_id, 0)
+    synthetic_state.resolve_top_of_stack()
+
+    # Card landed in p1's graveyard.
+    assert synthetic_state.find_object_zone(counter_obj_id) == ZONE_GRAVEYARD
+    # Counters reset to 0 on zone change (CR 400.7).
+    assert synthetic_state.power_bonus_from_counters(counter_obj_id) == 0
+
+
+def test_resolve_mill_target_player_clone_isolation(synthetic_state):
+    """CoW canary: running MillTargetPlayer on a clone leaves the
+    original state's library + graveyard untouched. The arm pops from
+    the defender's library Vec via `Arc::make_mut` — confirm the
+    clone's library Arc decouples from the original."""
+    p1_lib_before = synthetic_state.library_sizes[1]
+    p1_grave_before = synthetic_state.graveyard_sizes[1]
+
+    src_id = synthetic_state.register_and_inject_object(
+        _scrabbling_skullcrab_dict(count=3, card_types=["Sorcery"]),
+        0,
+        ZONE_HAND,
+    )
+    synthetic_state.push_to_stack(src_id, 0)
+    cloned = synthetic_state.clone_once()
+
+    cloned.resolve_top_of_stack()
+
+    # Clone diverged: 3 cards milled from defender.
+    assert cloned.library_sizes[1] == p1_lib_before - 3
+    assert cloned.graveyard_sizes[1] == p1_grave_before + 3
+    assert cloned.is_stack_empty() is True
+
+    # Original untouched on every front.
+    assert synthetic_state.library_sizes[1] == p1_lib_before
+    assert synthetic_state.graveyard_sizes[1] == p1_grave_before
+    assert synthetic_state.stack_size() == 1
