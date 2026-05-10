@@ -1743,3 +1743,188 @@ def test_clone_then_tap_does_not_affect_original(synthetic_state):
     assert synthetic_state.is_tapped(target_obj_id) is False
     assert synthetic_state.find_object_zone(twiddle_obj_id) == ZONE_HAND
     assert synthetic_state.stack_size() == 1
+
+
+# --- round-13 UntapTarget dispatch ----------------------------------
+#
+# Round-13 foundation (`feature/rust-tdd-base-r13`) added a new
+# ``Effect`` variant ``UntapTarget { target: TargetFilter }`` and a
+# temporary stub arm in ``apply_effect`` returning ``ValueError``.
+# This slice replaces the stub with real dispatch — symmetric
+# counterpart to round-12's TapTarget: untap a target permanent.
+#
+# **Scope simplifications for this slice (mirrored in the Rust module
+# docstring on ``state_ops_resolve.rs``):**
+#
+# - **AnyCreature target → first object on the DEFENDING player's
+#   battlefield (smallest index).** Mirrors TapTarget exactly — same
+#   target selection, opposite tap state mutation. No creature-type
+#   filter, no per-spell target choice. Empty defender battlefield →
+#   fizzle (silent no-op, stack still pops).
+# - **AnyPlayer target on UntapTarget makes no sense** (you can't
+#   untap a player). Raises ValueError loudly, matching the
+#   bounce/exile/tap convention.
+# - **Idempotent.** Untapping an already-untapped creature is a
+#   silent no-op — no error, the ``tapped`` flag stays False, no
+#   other state changes. Mirrors TapTarget's already-tapped
+#   idempotency.
+# - **Cross-file friction:** ``tap.rs::untap_object`` is private (the
+#   same E0624 pattern that drove TapTarget's inlining). The slice
+#   inlines the minimal ``Arc::make_mut`` + ``tapped = false`` per
+#   the recurring pattern.
+
+
+def _untwiddle_dict():
+    """An untwiddle-ish 'untap target permanent' instant. Schema-allowed
+    target ``any_creature`` (the slice's only meaningful UntapTarget
+    target shape — AnyPlayer raises)."""
+    return {
+        "name": "Test Untwiddle",
+        "card_types": ["Instant"],
+        "mana_cost": {"U": 1},
+        "effects": [
+            {
+                "kind": "untap_target",
+                "target": {"kind": "any_creature"},
+            }
+        ],
+    }
+
+
+def _untwiddle_player_dict():
+    """A schema-allowed but semantically nonsense untap: target
+    'any_player'. Should raise on resolve (cannot untap a player)."""
+    return {
+        "name": "Test Untwiddle-Player (nonsense)",
+        "card_types": ["Instant"],
+        "mana_cost": {"U": 1},
+        "effects": [
+            {
+                "kind": "untap_target",
+                "target": {"kind": "any_player"},
+            }
+        ],
+    }
+
+
+def test_resolve_untap_target_untaps_creature(synthetic_state):
+    """End-to-end composition test (the load-bearing one for
+    UntapTarget).
+
+    Synthetic state: p1's battlefield[0] is a Forest at obj_id 67
+    (controller=1). Pre-tap it, then cast an untap-target instant
+    from active player p0 (controller=0). On resolve, the dispatch
+    picks the FIRST object on the defender's battlefield (mirrors
+    TapTarget convention) and flips its ``tapped`` flag to False.
+    The source instant lands in p0's graveyard."""
+    target_obj_id = 67  # First p1 battlefield object.
+    # Pre-tap so untap has something to do.
+    assert synthetic_state.tap_object(target_obj_id) is True
+    assert synthetic_state.is_tapped(target_obj_id) is True
+
+    untwiddle_obj_id = synthetic_state.register_and_inject_object(
+        _untwiddle_dict(), 0, ZONE_HAND
+    )
+    p0_grave_before = synthetic_state.graveyard_sizes[0]
+    synthetic_state.push_to_stack(untwiddle_obj_id, 0)
+    synthetic_state.resolve_top_of_stack()
+
+    # Target is now untapped on p1's battlefield.
+    assert synthetic_state.is_tapped(target_obj_id) is False
+    # Stack drained; source instant in p0's graveyard.
+    assert synthetic_state.is_stack_empty() is True
+    assert synthetic_state.find_object_zone(untwiddle_obj_id) == ZONE_GRAVEYARD
+    assert synthetic_state.graveyard_sizes[0] == p0_grave_before + 1
+    # Target stayed on p1's battlefield (this is untap, not bounce/exile).
+    assert synthetic_state.find_object_zone(target_obj_id) == ZONE_BATTLEFIELD
+
+
+def test_resolve_untap_target_no_creature_fizzles(engine):
+    """If the defender has no creature on battlefield, UntapTarget
+    fizzles silently — stack item still pops, source still goes to
+    graveyard (instant), nothing else changes. Mirrors the
+    DealDamage / ReturnToHand / ExileTarget / TapTarget no-target
+    fizzle convention."""
+    state = engine.make_synthetic_state(
+        num_battlefield=0, num_hand=1, num_library=1
+    )
+    untwiddle_obj_id = state.register_and_inject_object(
+        _untwiddle_dict(), 0, ZONE_HAND
+    )
+
+    p0_grave_before = state.graveyard_sizes[0]
+    p1_bf_before = state.battlefield_sizes[1]
+
+    state.push_to_stack(untwiddle_obj_id, 0)
+    state.resolve_top_of_stack()
+
+    # Stack drained, source moved to graveyard, no battlefield delta.
+    assert state.is_stack_empty() is True
+    assert state.find_object_zone(untwiddle_obj_id) == ZONE_GRAVEYARD
+    assert state.graveyard_sizes[0] == p0_grave_before + 1
+    assert state.battlefield_sizes[1] == p1_bf_before
+
+
+def test_resolve_untap_target_already_untapped_idempotent(synthetic_state):
+    """Untapping an already-untapped creature is a silent no-op — no
+    error, ``tapped`` stays False, stack still drains and the source
+    still moves to graveyard. Mirrors the TapTarget already-tapped
+    idempotency shape."""
+    target_obj_id = 67  # First p1 battlefield object.
+
+    # Synthetic state's targets start untapped — assert the precondition.
+    assert synthetic_state.is_tapped(target_obj_id) is False
+
+    untwiddle_obj_id = synthetic_state.register_and_inject_object(
+        _untwiddle_dict(), 0, ZONE_HAND
+    )
+    p0_grave_before = synthetic_state.graveyard_sizes[0]
+    synthetic_state.push_to_stack(untwiddle_obj_id, 0)
+    synthetic_state.resolve_top_of_stack()  # must NOT raise
+
+    # Target stays untapped, no other state changes.
+    assert synthetic_state.is_tapped(target_obj_id) is False
+    assert synthetic_state.is_stack_empty() is True
+    assert synthetic_state.find_object_zone(untwiddle_obj_id) == ZONE_GRAVEYARD
+    assert synthetic_state.graveyard_sizes[0] == p0_grave_before + 1
+
+
+def test_resolve_untap_target_with_any_player_raises(synthetic_state):
+    """UntapTarget with an AnyPlayer target is semantically nonsense
+    (you can't untap a player). The dispatch raises ValueError loudly,
+    matching the ReturnToHand / ExileTarget / TapTarget AnyPlayer
+    shape."""
+    untwiddle_obj_id = synthetic_state.register_and_inject_object(
+        _untwiddle_player_dict(), 0, ZONE_HAND
+    )
+    synthetic_state.push_to_stack(untwiddle_obj_id, 0)
+
+    with pytest.raises(ValueError):
+        synthetic_state.resolve_top_of_stack()
+
+
+def test_clone_then_untap_does_not_affect_original(synthetic_state):
+    """CoW canary for UntapTarget. Pre-tap the target on the original,
+    clone the state, then resolve the untap on the clone. The clone's
+    target becomes untapped; the original's target stays tapped."""
+    target_obj_id = 67  # First p1 battlefield object.
+
+    # Pre-tap on the original so we can observe the difference.
+    assert synthetic_state.tap_object(target_obj_id) is True
+    assert synthetic_state.is_tapped(target_obj_id) is True
+
+    untwiddle_obj_id = synthetic_state.register_and_inject_object(
+        _untwiddle_dict(), 0, ZONE_HAND
+    )
+    synthetic_state.push_to_stack(untwiddle_obj_id, 0)
+    cloned = synthetic_state.clone_once()
+
+    cloned.resolve_top_of_stack()
+
+    # Clone: target untapped, source in graveyard.
+    assert cloned.is_tapped(target_obj_id) is False
+    assert cloned.find_object_zone(untwiddle_obj_id) == ZONE_GRAVEYARD
+    # Original: untouched on every front (still tapped, source still in hand).
+    assert synthetic_state.is_tapped(target_obj_id) is True
+    assert synthetic_state.find_object_zone(untwiddle_obj_id) == ZONE_HAND
+    assert synthetic_state.stack_size() == 1
