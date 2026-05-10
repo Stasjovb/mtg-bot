@@ -1399,6 +1399,84 @@ class _EarlyStopPoller:
             )
 
 
+def wait_for_queue_completion(
+    queue_url: str,
+    run_id: str,
+    *,
+    interval_s: float = 5.0,
+    max_wait_s: float = 30 * 60.0,
+    sleep=time.sleep,
+    urlopen=None,
+) -> dict:
+    """Block until the master's queue for ``run_id`` finishes — the
+    queue-side companion to ``_AggregateProgressPoller`` (which
+    aggregates per-shard JSONs).
+
+    This is Sub-task B's master-side completion check. The master used
+    to wait on SSH futures for every shard; with leases + heartbeats
+    on the worker side, an SSH drop no longer loses the slice — the
+    lease expires and surviving workers reclaim. But the master still
+    needs to know when the queue is *actually* done, independent of
+    SSH state, otherwise it would either give up too early (last SSH
+    future raised) or block forever (last SSH future hung).
+
+    Done is defined as either:
+
+    * Queue is fully drained: ``next == total`` AND no in-flight
+      jobs remain AND no reclaimed-but-not-yet-handed-out indices
+      remain. Either every game played or every game's max_attempts
+      were exhausted (and counted into ``failed``).
+    * Queue is closed (orchestrator early-stop): ``closed=True`` AND
+      no in-flight remains.
+
+    Returns the final ``/queue/status`` payload for the queue. Raises
+    ``RuntimeError`` on ``max_wait_s`` overflow (callers can treat
+    this as "give up; aggregate from per-shard JSONs whatever we have").
+
+    ``sleep`` and ``urlopen`` are injected for tests so the watcher
+    can be driven without real wallclock or HTTP server.
+    """
+    import json as _json
+    import urllib.request as _urllib_request
+
+    status_url = f"{queue_url.rstrip('/')}/queue/status"
+    deadline = time.monotonic() + max_wait_s
+    while True:
+        req = _urllib_request.Request(status_url)
+        if urlopen is not None:
+            resp = urlopen(req)
+            body = (
+                resp.body if hasattr(resp, "body")
+                else resp.read()  # http.client compat
+            )
+        else:
+            resp = _urlopen_with_retry(req)
+            body = resp.body
+        payload = _json.loads(body.decode("utf-8"))
+        q = (payload.get("queues") or {}).get(run_id)
+        if q is None:
+            # Master never registered this run_id (race during init,
+            # or wrong run_id). Surface the empty status; caller can
+            # decide what to do.
+            return payload
+        inflight = int(q.get("inflight", 0))
+        reclaimed = int(q.get("ready_reclaimed", 0))
+        next_idx = int(q.get("next", 0))
+        total = int(q.get("total", 0))
+        closed = bool(q.get("closed", False))
+        all_handed_out = next_idx >= total
+        if inflight == 0 and reclaimed == 0 and (
+            all_handed_out or closed
+        ):
+            return payload
+        if time.monotonic() >= deadline:
+            raise RuntimeError(
+                f"queue {run_id!r} did not complete within "
+                f"{max_wait_s}s (last status: {q!r})"
+            )
+        sleep(interval_s)
+
+
 @dataclass(frozen=True)
 class ShardSelfPlayReport:
     """Outcome of a single self-play shard from the orchestrator's

@@ -7039,6 +7039,241 @@ def _serve_app_in_process(app) -> str:
     return f"http://127.0.0.1:{port}"
 
 
+# ---- Sub-task B: queue completion watcher ----------------------
+
+
+def test_wait_for_queue_completion_returns_when_drained():
+    """Queue with next==total AND inflight==0 AND ready_reclaimed==0
+    is done — the watcher returns its last status payload."""
+    from mtg_bot.training.distributed import wait_for_queue_completion
+
+    class _Resp:
+        def __init__(self, body):
+            self.body = body
+
+    def _fake_urlopen(req):
+        import json as _json
+        return _Resp(_json.dumps({
+            "queues": {"r1": {
+                "next": 100, "total": 100,
+                "inflight": 0, "ready_reclaimed": 0,
+                "failed": 0, "closed": False,
+                "remaining": 0,
+            }},
+        }).encode("utf-8"))
+
+    payload = wait_for_queue_completion(
+        "http://stub", "r1",
+        sleep=lambda _s: None,
+        urlopen=_fake_urlopen,
+    )
+    assert payload["queues"]["r1"]["next"] == 100
+
+
+def test_wait_for_queue_completion_returns_when_closed_no_inflight():
+    """Queue closed by the orchestrator early-stop with no in-flight
+    is also a terminal state — the watcher returns even though
+    ``next < total``."""
+    from mtg_bot.training.distributed import wait_for_queue_completion
+
+    class _Resp:
+        def __init__(self, body):
+            self.body = body
+
+    def _fake_urlopen(req):
+        import json as _json
+        return _Resp(_json.dumps({
+            "queues": {"r1": {
+                "next": 50, "total": 100,
+                "inflight": 0, "ready_reclaimed": 0,
+                "failed": 0, "closed": True,
+                "remaining": 50,
+            }},
+        }).encode("utf-8"))
+
+    payload = wait_for_queue_completion(
+        "http://stub", "r1",
+        sleep=lambda _s: None,
+        urlopen=_fake_urlopen,
+    )
+    assert payload["queues"]["r1"]["closed"] is True
+
+
+def test_wait_for_queue_completion_polls_until_drain():
+    """Watcher polls repeatedly until the queue actually drains.
+    Each poll consumes one entry from the response sequence."""
+    from mtg_bot.training.distributed import wait_for_queue_completion
+    import json as _json
+
+    statuses = [
+        # First tick: still in-flight.
+        {"queues": {"r1": {
+            "next": 100, "total": 100,
+            "inflight": 5, "ready_reclaimed": 0,
+            "failed": 0, "closed": False, "remaining": 0,
+        }}},
+        # Second tick: down to 1.
+        {"queues": {"r1": {
+            "next": 100, "total": 100,
+            "inflight": 1, "ready_reclaimed": 0,
+            "failed": 0, "closed": False, "remaining": 0,
+        }}},
+        # Third tick: done.
+        {"queues": {"r1": {
+            "next": 100, "total": 100,
+            "inflight": 0, "ready_reclaimed": 0,
+            "failed": 0, "closed": False, "remaining": 0,
+        }}},
+    ]
+    sleeps: list = []
+    idx = {"i": 0}
+
+    class _Resp:
+        def __init__(self, body):
+            self.body = body
+
+    def _fake_urlopen(req):
+        s = statuses[min(idx["i"], len(statuses) - 1)]
+        idx["i"] += 1
+        return _Resp(_json.dumps(s).encode("utf-8"))
+
+    payload = wait_for_queue_completion(
+        "http://stub", "r1",
+        sleep=sleeps.append,
+        urlopen=_fake_urlopen,
+    )
+    # Three status reads, two sleeps in between.
+    assert idx["i"] == 3
+    assert len(sleeps) == 2
+    assert payload["queues"]["r1"]["inflight"] == 0
+
+
+def test_wait_for_queue_completion_raises_on_timeout():
+    """If the queue stays busy past ``max_wait_s`` the watcher gives
+    up with a RuntimeError so the caller can fall back to whatever
+    data the per-shard JSONs already captured."""
+    import time
+    from mtg_bot.training.distributed import wait_for_queue_completion
+
+    class _Resp:
+        def __init__(self, body):
+            self.body = body
+
+    def _fake_urlopen(req):
+        import json as _json
+        return _Resp(_json.dumps({
+            "queues": {"r1": {
+                "next": 100, "total": 100,
+                "inflight": 5, "ready_reclaimed": 0,
+                "failed": 0, "closed": False, "remaining": 0,
+            }},
+        }).encode("utf-8"))
+
+    sleeps: list = []
+    # Fake monotonic that advances past max_wait_s after the first tick
+    # so the watcher gives up on the second poll.
+    real_monotonic = time.monotonic
+    time_offset = {"v": 0.0}
+    time.monotonic = lambda: real_monotonic() + time_offset["v"]
+    try:
+        # Bump offset on first sleep so the next status check sees
+        # itself past deadline.
+        def _sleep(s):
+            time_offset["v"] += 100.0
+            sleeps.append(s)
+
+        with pytest.raises(RuntimeError, match="did not complete"):
+            wait_for_queue_completion(
+                "http://stub", "r1",
+                sleep=_sleep,
+                urlopen=_fake_urlopen,
+                max_wait_s=10.0,
+                interval_s=1.0,
+            )
+    finally:
+        time.monotonic = real_monotonic
+
+
+def test_wait_for_queue_completion_returns_empty_for_unknown_run_id():
+    """If the queue server hasn't seen the run_id (e.g. master died
+    + restarted), the watcher returns the empty status payload —
+    callers decide what to do (probably bail loudly)."""
+    from mtg_bot.training.distributed import wait_for_queue_completion
+
+    class _Resp:
+        def __init__(self, body):
+            self.body = body
+
+    def _fake_urlopen(req):
+        import json as _json
+        return _Resp(_json.dumps({"queues": {}}).encode("utf-8"))
+
+    payload = wait_for_queue_completion(
+        "http://stub", "missing",
+        sleep=lambda _s: None,
+        urlopen=_fake_urlopen,
+    )
+    assert payload == {"queues": {}}
+
+
+def test_wait_for_queue_completion_against_live_serve_app(tmp_path):
+    """End-to-end: a real serve.py app behind ``wait_for_queue_completion``.
+    We init a queue, take + finish all its jobs over the wire, then
+    confirm the watcher observes the drained state and returns. Pins
+    Sub-task B's master-side completion signal against the real
+    Phase 1 server (no stubs / mocks of the queue endpoints — only
+    the worker engine is bypassed)."""
+    from mtg_bot.training.distributed import (
+        wait_for_queue_completion,
+    )
+
+    serve = _load_serve_module()
+    app = serve.create_app(
+        repo_url="(unused)", master_pubkey="",
+        master_tailnet_name="m", port=5099,
+        template_dir=Path(__file__).resolve().parents[2] / "scripts",
+        repo_root=None,
+        lease_ttl_sec=60,
+        max_attempts=3,
+    )
+    base_url = _serve_app_in_process(app)
+    try:
+        import urllib.request
+        import json as _json
+
+        def _post(path, body):
+            req = urllib.request.Request(
+                f"{base_url}{path}",
+                data=_json.dumps(body).encode("utf-8"),
+                headers={"Content-Type": "application/json"},
+            )
+            return _json.loads(urllib.request.urlopen(req).read())
+
+        _post("/queue/init", {"run_id": "iter_e2e", "total_games": 4})
+        # alice takes all 4 idxes under a lease, then finishes them.
+        for _ in range(4):
+            _post("/queue/take", {
+                "run_id": "iter_e2e", "batch_size": 1,
+                "worker_id": "alice",
+            })
+        _post("/queue/finish", {
+            "run_id": "iter_e2e", "worker_id": "alice",
+            "job_ids": [0, 1, 2, 3],
+        })
+
+        # Watcher returns promptly (queue is drained).
+        payload = wait_for_queue_completion(
+            base_url, "iter_e2e",
+            interval_s=0.05, max_wait_s=5.0,
+        )
+        q = payload["queues"]["iter_e2e"]
+        assert q["next"] == 4
+        assert q["inflight"] == 0
+        assert q["ready_reclaimed"] == 0
+    finally:
+        _stop_serve_app()
+
+
 def _stop_serve_app() -> None:
     server = _serve_thread_state.get("server")
     thread = _serve_thread_state.get("thread")
