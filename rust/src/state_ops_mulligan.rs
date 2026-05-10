@@ -148,4 +148,79 @@ impl GameState {
         }
         Ok(())
     }
+
+    /// Parameterized variant of [`mulligan`]: returns the player's
+    /// hand to the library, shuffles with `seed`, and draws exactly
+    /// `n_cards` cards back into hand. Powers London-mulligan callers
+    /// that take progressively smaller hands (7, 6, 5, ...) on each
+    /// successive mulligan; the "put N to the bottom" step that real
+    /// London also requires is a separate primitive (deferred slice).
+    ///
+    /// Errors:
+    ///
+    /// - `ValueError` if `player_id` is not 0 or 1.
+    /// - `ValueError` if `n_cards` is negative.
+    /// - `ValueError` if `n_cards` exceeds the post-return library
+    ///   size. Defensive guard — real London never asks for more
+    ///   cards than the library can provide.
+    ///
+    /// CoW-safe (same `Arc::make_mut` discipline as `mulligan`).
+    fn mulligan_to_n(&mut self, player_id: u8, n_cards: i32, seed: u64) -> PyResult<()> {
+        let idx = player_id as usize;
+        if idx >= 2 {
+            return Err(PyValueError::new_err(format!(
+                "player_id {player_id} out of range (must be 0 or 1)"
+            )));
+        }
+        if n_cards < 0 {
+            return Err(PyValueError::new_err(format!(
+                "n_cards {n_cards} must be non-negative"
+            )));
+        }
+        let n_cards = n_cards as usize;
+        let player = &mut self.players[idx];
+
+        // Step 1 + 2: drain the hand into the library, then shuffle.
+        // Same as mulligan(); the only divergence is the draw count.
+        {
+            let hand = Arc::make_mut(&mut player.hand);
+            let returning: Vec<_> = hand.drain(..).collect();
+            let lib = Arc::make_mut(&mut player.library);
+            for mut obj in returning {
+                obj.zone = ZONE_LIBRARY;
+                lib.push(obj);
+            }
+
+            // Defensive guard: post-return library must have at least
+            // n_cards cards to satisfy the request.
+            if n_cards > lib.len() {
+                return Err(PyValueError::new_err(format!(
+                    "mulligan_to_n: requested {n_cards} cards but only \
+                     {avail} are available in player {player_id}'s library",
+                    avail = lib.len(),
+                )));
+            }
+
+            let n = lib.len();
+            if n >= 2 {
+                let mut rng = XorShift64::new(seed);
+                for i in (1..n).rev() {
+                    let j = rng.next_usize_below(i + 1);
+                    lib.swap(i, j);
+                }
+            }
+        }
+
+        // Step 3: draw exactly n_cards (guarded above to be ≤ lib.len()).
+        let hand = Arc::make_mut(&mut player.hand);
+        let lib = Arc::make_mut(&mut player.library);
+        for _ in 0..n_cards {
+            let Some(mut obj) = lib.pop() else {
+                break;
+            };
+            obj.zone = ZONE_HAND;
+            hand.push(obj);
+        }
+        Ok(())
+    }
 }
