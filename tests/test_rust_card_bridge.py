@@ -1193,6 +1193,79 @@ def test_each_opponent_loses_life_negative_amount_raises():
         )
 
 
+# --- DestroyTargetNonlandPermanent round-trip ---------------------
+#
+# Round-25 bridge ext: closed-vocabulary unit variant mirroring
+# Python's `DestroyTargetNonlandPermanent` (a `Destroy` subclass with
+# the filter `~IsLand() & ~IsPlayer()` baked in). 2 cards in the EoE
+# pool per round-20 measurement (Drag to the Roots / Drill Too Deep
+# pattern). Distinct from round-17 `destroy_target` by applying a
+# Land-skip filter at scan time on the dispatch side.
+
+
+def test_round_trip_destroy_target_nonland_permanent_unit_variant():
+    """Happy path: unit-variant round-trips as a single `kind` key
+    with no extra fields. Mirrors `counter_target_spell` /
+    `return_creature_from_your_graveyard_to_battlefield` unit-variant
+    round-trip shape."""
+    reg = mtg_bot_engine.Registry()
+    pid = reg.register_printing(
+        {
+            "name": "Test Drag to the Roots",
+            "card_types": ["Sorcery"],
+            "mana_cost": {"G": 1, "generic": 2},
+            "effects": [{"kind": "destroy_target_nonland_permanent"}],
+        }
+    )
+    effects = [dict(e) for e in reg.get_printing_effects(pid)]
+    assert effects[0] == {"kind": "destroy_target_nonland_permanent"}
+
+
+def test_round_trip_destroy_target_nonland_permanent_extra_keys_ignored():
+    """Silent-drop convention for unrecognized keys on a unit variant
+    (matches `counter_target_spell` /
+    `return_creature_from_your_graveyard_to_battlefield`'s parser
+    shape). An accidental `target` key on the registered dict does NOT
+    raise — the parser ignores it and round-trips a bare unit dict."""
+    reg = mtg_bot_engine.Registry()
+    pid = reg.register_printing(
+        {
+            "name": "Test Drill Too Deep",
+            "card_types": ["Instant"],
+            "mana_cost": {"B": 1, "generic": 2},
+            "effects": [
+                {
+                    "kind": "destroy_target_nonland_permanent",
+                    "target": {"kind": "any_creature"},  # ignored
+                }
+            ],
+        }
+    )
+    effects = [dict(e) for e in reg.get_printing_effects(pid)]
+    assert effects[0] == {"kind": "destroy_target_nonland_permanent"}
+
+
+def test_destroy_target_nonland_permanent_in_multi_effect_list():
+    """Multiple effects in the printing's effect list preserve order —
+    the unit variant slots cleanly alongside a sibling parameterized
+    effect. Mirrors `test_multiple_effects_preserve_order` for the new
+    variant."""
+    reg = mtg_bot_engine.Registry()
+    pid = reg.register_printing(
+        {
+            "name": "Test Compound",
+            "card_types": ["Sorcery"],
+            "effects": [
+                {"kind": "draw_cards", "count": 1},
+                {"kind": "destroy_target_nonland_permanent"},
+            ],
+        }
+    )
+    effects = [dict(e) for e in reg.get_printing_effects(pid)]
+    assert effects[0] == {"kind": "draw_cards", "count": 1}
+    assert effects[1] == {"kind": "destroy_target_nonland_permanent"}
+
+
 def test_vanilla_card_with_no_mana_cost_or_effects():
     reg = mtg_bot_engine.Registry()
     pid = reg.register_printing(VANILLA_BLANK)

@@ -1905,6 +1905,43 @@ fn apply_effect(
                 }
             }
         }
+        // DestroyTargetNonlandPermanent. CR 701.7 with non-land filter
+        // — Drag to the Roots / Drill Too Deep pattern. Scans defender's
+        // battlefield top-to-bottom; picks first non-Land, non-
+        // indestructible object. Empty / only-Lands / only-indestructible
+        // defender bf = silent fizzle.
+        Effect::DestroyTargetNonlandPermanent => {
+            let defender_idx = (1 - state.active_player) as usize;
+            let target_id: Option<u32> = {
+                let bf = &state.players[defender_idx].battlefield;
+                let registry = &state.registry;
+                bf.iter().find_map(|obj| {
+                    let printing = registry.lookup(obj.printing_id)?;
+                    if printing.card_types.iter().any(|t| t == "Land") {
+                        return None;
+                    }
+                    if printing.keywords.iter().any(|k| k == "indestructible") {
+                        return None;
+                    }
+                    Some(obj.id)
+                })
+            };
+            if let Some(target_id) = target_id {
+                let bf_mut: &mut Vec<GameObject> =
+                    Arc::make_mut(&mut state.players[defender_idx].battlefield);
+                let pos = bf_mut
+                    .iter()
+                    .position(|o| o.id == target_id)
+                    .expect("target_id from scan but not found on re-scan");
+                let mut obj = bf_mut.remove(pos);
+                obj.zone = ZONE_GRAVEYARD;
+                obj.tapped = false;
+                obj.summoning_sick = false;
+                obj.damage = 0;
+                obj.counters = 0;
+                Arc::make_mut(&mut state.players[defender_idx].graveyard).push(obj);
+            }
+        }
     }
     Ok(())
 }

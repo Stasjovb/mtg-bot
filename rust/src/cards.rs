@@ -472,6 +472,15 @@ pub enum Effect {
     /// deferred along with the rest of the TargetFilter widening
     /// shape elsewhere in the bridge.
     DestroyAllCreatures,
+    /// Destroy target non-land permanent on the defending player's
+    /// battlefield (CR 701.7 + scoped target filter — Drag to the
+    /// Roots / Drill Too Deep pattern). 2 cards in the EoE pool per
+    /// round-20 measurement. Scans defender's battlefield top-to-
+    /// bottom and picks the first non-Land, non-indestructible
+    /// object. Mirrors round-17 DestroyTarget's pick-bf[0] shape
+    /// with a Land-skip + indestructible-skip filter. Unit variant —
+    /// the "non-land permanent" target shape is intrinsic.
+    DestroyTargetNonlandPermanent,
 }
 
 #[derive(Clone, Debug)]
@@ -832,8 +841,13 @@ fn parse_effect(dict: &Bound<'_, PyDict>) -> PyResult<Effect> {
             // keys elsewhere in the parser.
             Ok(Effect::DestroyAllCreatures)
         }
+        "destroy_target_nonland_permanent" => {
+            // Unit variant — no required fields. Filter is intrinsic
+            // ("non-Land, non-indestructible"). Extra keys ignored.
+            Ok(Effect::DestroyTargetNonlandPermanent)
+        }
         other => Err(PyValueError::new_err(format!(
-            "unknown effect kind {other:?}; valid: deal_damage, draw_cards, gain_life, return_to_hand, mill, exile_target, tap_target, untap_target, sacrifice, add_counters, discard_card, scry_n, destroy_target, damage_each_opponent, damage_each_creature, create_token, add_mana_to_pool, search_library_for_basic_land_tapped, put_plus_one_counter_on_self, surveil, counter_target_spell, return_creature_from_your_graveyard_to_battlefield, discard_self, each_opponent_loses_life, destroy_all_creatures"
+            "unknown effect kind {other:?}; valid: deal_damage, draw_cards, gain_life, return_to_hand, mill, exile_target, tap_target, untap_target, sacrifice, add_counters, discard_card, scry_n, destroy_target, damage_each_opponent, damage_each_creature, create_token, add_mana_to_pool, search_library_for_basic_land_tapped, put_plus_one_counter_on_self, surveil, counter_target_spell, return_creature_from_your_graveyard_to_battlefield, discard_self, each_opponent_loses_life, destroy_all_creatures, destroy_target_nonland_permanent"
         ))),
     }
 }
@@ -1116,6 +1130,9 @@ fn effect_to_pydict<'py>(
         }
         Effect::DestroyAllCreatures => {
             d.set_item("kind", "destroy_all_creatures")?;
+        }
+        Effect::DestroyTargetNonlandPermanent => {
+            d.set_item("kind", "destroy_target_nonland_permanent")?;
         }
     }
     Ok(d)
