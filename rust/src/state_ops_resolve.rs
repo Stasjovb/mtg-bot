@@ -471,6 +471,71 @@ fn apply_effect(
                 Arc::make_mut(&mut player.graveyard).push(obj);
             }
         }
+        // MillTargetPlayer — Scrabbling Skullcrab pattern (CR 701.13b).
+        // 2 cards in the EoE pool per round-20 measurement.
+        //
+        // **Distinct from Effect::Mill.** Mill (above) mills the
+        // CONTROLLER's library — no target. MillTargetPlayer mills a
+        // chosen target PLAYER's library. First-slice deterministic
+        // choice: defender (= 1 - active_player), mirroring the
+        // DealDamage / TapTarget / TargetOpponentLosesLife "the one
+        // opponent" convention. Future multiplayer / archenemy work
+        // needs an explicit choice callback.
+        //
+        // **Negative count raises** loudly (defense-in-depth; the
+        // parse_effect bridge already checks at register time, but
+        // synthetic / injected printings could bypass the parser).
+        // **count=0 is a legal no-op** (mirrors GainLife / DrawCards /
+        // Mill / EachOpponentLosesLife / LoseLife zero-count
+        // conventions). **Fewer cards in library than `count`**: mill
+        // all remaining cards (Python parity with
+        // `if not target.library: break`).
+        //
+        // **Top-of-library = LAST element of the Vec** (round-1 zones
+        // convention, mirrored by the existing Mill arm and library
+        // primitives in `state_ops_library.rs`). Per-object state reset
+        // on graveyard move (CR 400.7), mirroring DestroyAllCreatures /
+        // DestroyTarget / ExileTarget reset shape.
+        //
+        // **Inlining note.** A `mill_target_player` primitive exists in
+        // `state_ops_library.rs` (round-19); per the recurring per-slice
+        // file-isolation pattern (E0624 cross-file `#[pymethods]`
+        // friction) this arm inlines the equivalent pop-N + push-to-
+        // graveyard logic. A follow-up consolidation slice can collapse
+        // onto the shared primitive once cross-file private-fn calls
+        // re-open.
+        Effect::MillTargetPlayer { count } => {
+            if *count < 0 {
+                return Err(PyValueError::new_err(format!(
+                    "MillTargetPlayer count must be non-negative, got {count}"
+                )));
+            }
+            // First-slice: defender = 1 - active_player. (Targeted-
+            // player choice plumbing deferred — mirrors existing
+            // single-target first-slice conventions.)
+            let target_idx = (1 - state.active_player) as usize;
+            let library_mut = Arc::make_mut(&mut state.players[target_idx].library);
+            let n_to_mill = (*count as usize).min(library_mut.len());
+            if n_to_mill == 0 {
+                // count=0 OR empty target library — silent no-op.
+            } else {
+                let mut milled: Vec<GameObject> = Vec::with_capacity(n_to_mill);
+                for _ in 0..n_to_mill {
+                    if let Some(obj) = library_mut.pop() {
+                        milled.push(obj);
+                    }
+                }
+                let gy_mut = Arc::make_mut(&mut state.players[target_idx].graveyard);
+                for mut obj in milled {
+                    obj.zone = ZONE_GRAVEYARD;
+                    obj.tapped = false;
+                    obj.summoning_sick = false;
+                    obj.damage = 0;
+                    obj.counters = 0;
+                    gy_mut.push(obj);
+                }
+            }
+        }
         // Round-11: ExileTarget. Move a target permanent from its
         // current zone to its owner's exile zone (CR 406). First-
         // slice convention: owner == controller, so "owner's exile"

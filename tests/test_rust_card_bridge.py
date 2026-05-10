@@ -1827,3 +1827,82 @@ def test_target_opponent_loses_life_negative_amount_raises():
                 ],
             }
         )
+
+
+# --- MillTargetPlayer round-trip + error paths ------------------------
+#
+# CR 701.13b — "mill" (a player puts the top N cards of their library
+# into their graveyard). Powers the Scrabbling Skullcrab pattern (2 EoE
+# cards per round-20 measurement). Distinct from `mill` (round-10): that
+# arm mills the CONTROLLER's library; `mill_target_player` mills a
+# TARGET player (= defender in 2-player land).
+
+
+def test_round_trip_mill_target_player_count_three():
+    """Happy path: count=3 round-trips faithfully. Mirrors the existing
+    `mill` arm's `count` field shape — Scrabbling Skullcrab is mill-2,
+    larger variants exist in the broader format pool."""
+    reg = mtg_bot_engine.Registry()
+    pid = reg.register_printing(
+        {
+            "name": "Test Scrabbling Skullcrab",
+            "card_types": ["Creature"],
+            "power": 2,
+            "toughness": 2,
+            "mana_cost": {"generic": 1, "U": 1},
+            "effects": [{"kind": "mill_target_player", "count": 3}],
+        }
+    )
+    effects = [dict(e) for e in reg.get_printing_effects(pid)]
+    assert effects[0] == {"kind": "mill_target_player", "count": 3}
+
+
+def test_round_trip_mill_target_player_count_zero():
+    """count=0 is a legal no-op shape (mirrors GainLife / DrawCards /
+    Mill / EachOpponentLosesLife / LoseLife zero-count round-trip
+    conventions). Registers and round-trips without error."""
+    reg = mtg_bot_engine.Registry()
+    pid = reg.register_printing(
+        {
+            "name": "Test Zero Targeted Mill",
+            "card_types": ["Sorcery"],
+            "effects": [{"kind": "mill_target_player", "count": 0}],
+        }
+    )
+    effects = [dict(e) for e in reg.get_printing_effects(pid)]
+    assert effects[0] == {"kind": "mill_target_player", "count": 0}
+
+
+def test_mill_target_player_missing_count_raises():
+    """`count` has no first-slice default — mirrors the `mill` arm's
+    required-field shape (Surveil / EachOpponentLosesLife / LoseLife
+    convention rather than the PutPlusOneCounterOnSelf / DiscardSelf /
+    SearchLibraryForBasicLandTapped default-1 convention). Missing
+    `count` surfaces as a KeyError at register time."""
+    reg = mtg_bot_engine.Registry()
+    with pytest.raises(KeyError):
+        reg.register_printing(
+            {
+                "name": "Broken",
+                "card_types": ["Sorcery"],
+                "effects": [{"kind": "mill_target_player"}],
+            }
+        )
+
+
+def test_mill_target_player_negative_count_raises():
+    """Register-time guard on negative count (matches the apply_effect
+    guard, surfaced earlier in the pipeline). Mirrors Surveil /
+    SearchLibraryForBasicLandTapped / TargetOpponentLosesLife negative
+    register-time check shape — 'mill target player -2 cards' is
+    schema nonsense (use the reverse mill direction with a future
+    library-restore effect if that ever lands)."""
+    reg = mtg_bot_engine.Registry()
+    with pytest.raises(ValueError, match="non-negative"):
+        reg.register_printing(
+            {
+                "name": "Broken",
+                "card_types": ["Sorcery"],
+                "effects": [{"kind": "mill_target_player", "count": -1}],
+            }
+        )

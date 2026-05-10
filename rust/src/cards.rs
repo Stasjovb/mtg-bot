@@ -68,6 +68,20 @@ pub enum Effect {
     /// Mill: caller's controller puts the top `count` cards of their
     /// library into their graveyard. No target — controller implicit.
     Mill { count: i32 },
+    /// Target player puts the top `count` cards of their library into
+    /// their graveyard (CR 701.13b "mill"). 2 cards in EoE pool per
+    /// round-20 measurement (Scrabbling Skullcrab etc.).
+    ///
+    /// **Distinct from `Effect::Mill`** — that arm mills the
+    /// CONTROLLER's library. `MillTargetPlayer` mills a chosen target
+    /// player (in 2-player engine = defender). First-slice
+    /// deterministic choice: defender (= 1 - controller). Future
+    /// multiplayer / archenemy work needs an explicit choice callback.
+    ///
+    /// Negative `count` raises. count=0 is a legal no-op. If the
+    /// library has fewer than `count` cards, all remaining cards mill
+    /// (Python parity).
+    MillTargetPlayer { count: i32 },
     /// Exile target permanent (CR 406). Removes from its current
     /// zone to its owner's exile zone. First-slice owner =
     /// controller.
@@ -674,6 +688,22 @@ fn parse_effect(dict: &Bound<'_, PyDict>) -> PyResult<Effect> {
             let count: i32 = require(dict, "count")?.extract()?;
             Ok(Effect::Mill { count })
         }
+        "mill_target_player" => {
+            // Python's `MillTargetPlayer(amount: int = 1)` carries a
+            // default amount. The Rust bridge uses `count` (mirrors the
+            // `mill` arm's field name + the Mill / ScryN / Surveil /
+            // DrawCards / DamageEachOpponent count-field convention)
+            // and requires the field — missing `count` is a KeyError
+            // at register time. Negative `count` surfaces at register
+            // time (defense-in-depth; `apply_effect` re-checks).
+            let count: i32 = require(dict, "count")?.extract()?;
+            if count < 0 {
+                return Err(PyValueError::new_err(format!(
+                    "mill_target_player: count must be non-negative, got {count}"
+                )));
+            }
+            Ok(Effect::MillTargetPlayer { count })
+        }
         "exile_target" => {
             let target_any = require(dict, "target")?;
             let target_dict = target_any.downcast::<PyDict>().map_err(|_| {
@@ -952,7 +982,7 @@ fn parse_effect(dict: &Bound<'_, PyDict>) -> PyResult<Effect> {
             Ok(Effect::DealDamageAnyTarget { amount })
         }
         other => Err(PyValueError::new_err(format!(
-            "unknown effect kind {other:?}; valid: deal_damage, draw_cards, gain_life, return_to_hand, mill, exile_target, tap_target, untap_target, sacrifice, add_counters, discard_card, scry_n, destroy_target, damage_each_opponent, damage_each_creature, create_token, add_mana_to_pool, search_library_for_basic_land_tapped, put_plus_one_counter_on_self, surveil, counter_target_spell, return_creature_from_your_graveyard_to_battlefield, discard_self, each_opponent_loses_life, lose_life, target_opponent_loses_life, destroy_all_creatures, destroy_target_nonland_permanent, deal_damage_any_target"
+            "unknown effect kind {other:?}; valid: deal_damage, draw_cards, gain_life, return_to_hand, mill, mill_target_player, exile_target, tap_target, untap_target, sacrifice, add_counters, discard_card, scry_n, destroy_target, damage_each_opponent, damage_each_creature, create_token, add_mana_to_pool, search_library_for_basic_land_tapped, put_plus_one_counter_on_self, surveil, counter_target_spell, return_creature_from_your_graveyard_to_battlefield, discard_self, each_opponent_loses_life, lose_life, target_opponent_loses_life, destroy_all_creatures, destroy_target_nonland_permanent, deal_damage_any_target"
         ))),
     }
 }
@@ -1154,6 +1184,10 @@ fn effect_to_pydict<'py>(
         }
         Effect::Mill { count } => {
             d.set_item("kind", "mill")?;
+            d.set_item("count", *count)?;
+        }
+        Effect::MillTargetPlayer { count } => {
+            d.set_item("kind", "mill_target_player")?;
             d.set_item("count", *count)?;
         }
         Effect::ExileTarget { target } => {
