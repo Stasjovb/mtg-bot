@@ -224,6 +224,17 @@ class NNPimcConfig:
     # to avoid creating one CUDA context per worker process). The
     # bench may opt into ``"cuda"`` for matched-budget runs where the
     # batched-leaf NN forward dominates the per-chunk wall-clock.
+    #
+    # ``"auto"`` is a sentinel resolved by ``build()`` (which runs in
+    # the worker process, not the parent that pickles this spec into
+    # the mp.Pool): a deferred ``auto_device()`` call picks
+    # ``"cuda"`` / ``"mps"`` / ``"cpu"`` per-host. Distributed shard
+    # runners pass ``"auto"`` so each host's workers resolve locally.
+    # Eagerly calling ``auto_device()`` in the parent and storing
+    # ``"cuda"`` here breaks Linux fork() — PyTorch raises "Cannot
+    # re-initialize CUDA in forked subprocess" because the parent's
+    # ``torch.cuda.is_available()`` already primed the CUDA context
+    # before the pool fork()ed.
     device: Optional[str] = None
 
     def __post_init__(self) -> None:
@@ -249,7 +260,17 @@ class NNPimcConfig:
         if self.policy_hidden_sizes is not None:
             eval_kwargs["policy_hidden_sizes"] = self.policy_hidden_sizes
         if self.device is not None:
-            eval_kwargs["device"] = self.device
+            if self.device == "auto":
+                # Deferred resolution: import + call auto_device() inside
+                # build(), which runs in the mp.Pool worker process. The
+                # parent that pickles this spec must NOT have initialized
+                # CUDA, otherwise Linux fork() crashes with "Cannot
+                # re-initialize CUDA in forked subprocess". See the
+                # ``device`` field comment above.
+                from mtg_bot.training.trainer import auto_device
+                eval_kwargs["device"] = auto_device()
+            else:
+                eval_kwargs["device"] = self.device
         if self.action_encoding_version is not None:
             eval_kwargs["action_encoding_version"] = (
                 self.action_encoding_version

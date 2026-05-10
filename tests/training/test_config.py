@@ -387,6 +387,66 @@ def test_nn_pimc_config_device_threaded_into_evaluator(
     assert str(mcts.evaluator.device) == "cpu"
 
 
+def test_nn_pimc_config_device_auto_does_not_resolve_at_construction() -> None:
+    """``device="auto"`` is a sentinel — the literal string "auto" is
+    stored on the spec until ``build()`` is called. This is the
+    Linux-fork-safety contract: distributed shard parents pass "auto"
+    so auto_device() (which calls torch.cuda.is_available() and primes
+    the CUDA context) doesn't fire until the worker process picks it
+    up via ``cfg.build()``. Parent-side resolution would crash
+    fork()'d workers with "Cannot re-initialize CUDA in forked
+    subprocess"."""
+    cfg = NNPimcConfig(
+        weights_path="x.pt", samples=4, inner_nodes=200, device="auto",
+    )
+    assert cfg.device == "auto"
+
+
+def test_nn_pimc_config_device_auto_round_trips_through_dict() -> None:
+    """The "auto" sentinel survives JSON serialization so distributed
+    specs can ship it across the SSH boundary unchanged."""
+    cfg = NNPimcConfig(
+        weights_path="x.pt", samples=4, inner_nodes=200, device="auto",
+    )
+    rebuilt = NNPimcConfig.from_dict(cfg.to_dict())
+    assert rebuilt.device == "auto"
+    assert rebuilt == cfg
+
+
+def test_nn_pimc_config_device_auto_resolves_via_auto_device_in_build(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """``build()`` calls ``auto_device()`` exactly once and threads
+    its return value into the underlying ``NNEvaluator`` — verifying
+    the deferred-resolution wiring. Patches ``auto_device`` to "cpu"
+    so the test doesn't init real CUDA (which would defeat the
+    fork-safety the feature exists to protect)."""
+    weights = _save_value_weights(tmp_path)
+    call_count = {"n": 0}
+
+    def fake_auto_device() -> str:
+        call_count["n"] += 1
+        return "cpu"
+
+    monkeypatch.setattr(
+        "mtg_bot.training.trainer.auto_device", fake_auto_device,
+    )
+
+    cfg = NNPimcConfig(
+        weights_path=str(weights), samples=2, inner_nodes=4,
+        batch_size=1, device="auto",
+    )
+    # Constructing the spec must NOT have called auto_device — that's
+    # the entire point of the sentinel.
+    assert call_count["n"] == 0
+
+    strategy = cfg.build(seed=0)
+    assert call_count["n"] == 1
+    mcts = strategy.inner_factory()
+    assert str(mcts.evaluator.device) == "cpu"
+
+
 # ---------- NNPimcConfig.architecture (separate-trunks dispatch) -----------
 
 
