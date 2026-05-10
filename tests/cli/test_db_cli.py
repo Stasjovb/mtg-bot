@@ -223,3 +223,74 @@ def test_top_level_dispatcher_includes_db():
     assert "db" in cli_pkg._SUBCOMMANDS
     assert cli_pkg._SUBCOMMANDS["db"] == "mtg_bot.cli.db"
     assert "db" in cli_pkg._DESCRIPTIONS
+
+
+# ---- backfill action -------------------------------------------------------
+
+
+def test_main_backfill_runs_against_progress_dir(
+    tmp_path: Path, capsys,
+):
+    """``mtg_bot db backfill`` walks the source dir and upserts every
+    JSON record into the destination DB."""
+    progress_dir = tmp_path / "training_progress"
+    progress_dir.mkdir()
+    (progress_dir / "v1.json").write_text(
+        json.dumps({
+            "run_id": "v1", "kind": "training", "status": "completed",
+            "started_at": "2026-05-04T10:00:00+00:00",
+            "ended_at": "2026-05-04T11:00:00+00:00",
+        }),
+        encoding="utf-8",
+    )
+    db_path = tmp_path / "runs.db"
+    cli_db.main([
+        "backfill", "--db", str(db_path), "--source", str(progress_dir),
+    ])
+    out = capsys.readouterr().out
+    assert "runs inserted" in out
+    assert "1" in out
+    # Verify the row landed.
+    conn = runs_db.connect(db_path)
+    try:
+        rows = conn.execute(
+            "SELECT run_id FROM runs",
+        ).fetchall()
+        assert [r["run_id"] for r in rows] == ["v1"]
+    finally:
+        conn.close()
+
+
+def test_main_backfill_respects_stale_after_hours_flag(
+    tmp_path: Path, capsys,
+):
+    """``--stale-after-hours`` flows through to the backfill helper.
+    Pass an absurdly high cutoff so a fresh-mtime running JSON doesn't
+    get marked stale."""
+    progress_dir = tmp_path / "training_progress"
+    progress_dir.mkdir()
+    (progress_dir / "still_running.json").write_text(
+        json.dumps({
+            "run_id": "still_running", "kind": "eval",
+            "status": "running",
+            "started_at": "2026-05-09T15:00:00+00:00",
+        }),
+        encoding="utf-8",
+    )
+    db_path = tmp_path / "runs.db"
+    cli_db.main([
+        "backfill", "--db", str(db_path),
+        "--source", str(progress_dir),
+        "--stale-after-hours", "1000",
+    ])
+    conn = runs_db.connect(db_path)
+    try:
+        run = conn.execute(
+            "SELECT status FROM runs WHERE run_id = ?",
+            ("still_running",),
+        ).fetchone()
+        # Cutoff is so high the heuristic doesn't trigger; row stays
+        # ``running``.
+        assert run["status"] == "running"
+    finally:
+        conn.close()
