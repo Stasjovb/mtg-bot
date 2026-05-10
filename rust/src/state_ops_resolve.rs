@@ -20,12 +20,22 @@
 //!
 //! ## Slice scope
 //!
-//! - **Supported effects: just `DealDamage`.** It's the only
-//!   `Effect` variant in the bridge today (round-3 only landed
-//!   that one). The dispatcher is a `match` on the closed enum so
-//!   adding a new variant in the bridge is a build-time error
-//!   here until this file dispatches it — the desired "fail loud
-//!   on unknown" property comes for free from Rust exhaustiveness.
+//! - **Supported effects: `DealDamage`, `DrawCards`, `GainLife`.**
+//!   Round-3 landed `DealDamage`; round-8 foundation extended the
+//!   closed enum with `DrawCards { count }` and `GainLife { amount }`,
+//!   and this slice wires both to dispatch. The dispatcher is a
+//!   `match` on the closed enum so adding a new variant in the
+//!   bridge is a build-time error here until this file dispatches
+//!   it — the desired "fail loud on unknown" property comes for
+//!   free from Rust exhaustiveness.
+//!   - **DrawCards: controller = active_player.** Same first-slice
+//!     convention as DealDamage. The `StackItem.controller` field
+//!     exists already but isn't read here — future slice plumbs it
+//!     through. Empty library short-circuits silently (deck-out
+//!     integration via SBA is deferred).
+//!   - **GainLife: controller = active_player.** Direct field write
+//!     so a negative compile-time amount silently subtracts rather
+//!     than firing the round-1 `gain_life` raise-on-negative guard.
 //! - **Targeting is deterministic + simplified.**
 //!   - `TargetFilter::AnyPlayer` -> the defending player
 //!     (`1 - active_player`). No "choose a target" surface yet.
@@ -253,14 +263,48 @@ fn apply_effect(state: &mut GameState, effect: &Effect) -> PyResult<()> {
                 }
             }
         }
-        // Round-8 stub: DrawCards / GainLife variants exist in the
-        // bridge but haven't been wired to resolution yet. Foundation
-        // commit gets the build green; the round-8 resolve agent
-        // replaces these arms with real dispatch.
-        Effect::DrawCards { .. } | Effect::GainLife { .. } => {
-            return Err(pyo3::exceptions::PyValueError::new_err(
-                "Effect variant not yet wired to resolve_top_of_stack — round-8 resolve agent fills this in",
-            ));
+        // Round-8: DrawCards. Caller's controller draws ``count``
+        // cards. Convention (mirrors the DealDamage path above): the
+        // controller for a resolving spell is `state.active_player`
+        // for first slice. Real MTG plumbs the controller through
+        // `StackItem.controller`; deferred to a future slice.
+        //
+        // **Inlining note (cross-file friction).** `draw_card` is a
+        // `#[pymethods]` method on `GameState` defined in
+        // `state_ops_zones.rs`. Per-slice file-isolation rule
+        // forbids touching that file from this slice, so we inline
+        // the pop-from-library + push-to-hand logic here, mirroring
+        // how round-7's counterspell agent inlined `move_object`. A
+        // follow-up consolidation slice can collapse the two
+        // implementations once that constraint relaxes.
+        //
+        // Empty-library handling: if the library is exhausted before
+        // we've drawn `count` cards, we stop silently. Real MTG: the
+        // player loses on the next state-based-action check (CR
+        // 704.5b). Deck-out integration is deferred — for first slice
+        // this is a silent short-circuit.
+        Effect::DrawCards { count } => {
+            let controller = state.active_player as usize;
+            let n = (*count).max(0) as usize;
+            for _ in 0..n {
+                let player = &mut state.players[controller];
+                let lib = Arc::make_mut(&mut player.library);
+                let Some(mut obj) = lib.pop() else {
+                    break; // empty library — silent short-circuit
+                };
+                obj.zone = ZONE_HAND;
+                Arc::make_mut(&mut player.hand).push(obj);
+            }
+        }
+        // Round-8: GainLife. Caller's controller gains `amount` life.
+        // Direct field write (no `gain_life` call) so a negative
+        // compile-time amount silently subtracts rather than
+        // tripping the round-1 raise-on-negative guard. No real MTG
+        // card today wants this, but the lowest-friction shape for
+        // first slice is "don't validate, just write".
+        Effect::GainLife { amount } => {
+            let controller = state.active_player as usize;
+            state.players[controller].life += *amount;
         }
     }
     Ok(())
