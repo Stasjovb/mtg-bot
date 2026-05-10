@@ -1570,3 +1570,175 @@ def test_clone_then_double_strike_combat_does_not_affect_original(synthetic_stat
         "CoW broken: declaring DS attacker on clone leaked into original "
         "battlefield"
     )
+
+
+# ----------------------------- skulk ---------------------------------------
+
+# Skulk (CR 702.118): a creature with skulk can't be blocked by creatures
+# with greater power. The check is at ``declare_blocker``-time (mirrors
+# the flying+reach gate): if the attacker has ``"skulk"`` in its
+# printing.keywords AND the candidate blocker's power is strictly greater
+# than the attacker's power, the block is refused. Equal-power blockers
+# pass (CR 702.118 says "greater power", not "equal or greater").
+
+
+def test_skulk_attacker_blocked_by_lower_power_creature(synthetic_state):
+    """A 3/3 skulk attacker; a 2/2 blocker (power 2 < attacker power 3).
+    ``declare_blocker`` returns True — blocker's power is not greater
+    than the attacker's."""
+    attacker_id = synthetic_state.register_and_inject_object(
+        _keyword_creature_dict(3, 3, ["skulk"]), 0, ZONE_BATTLEFIELD
+    )
+    blocker_id = synthetic_state.register_and_inject_object(
+        _keyword_creature_dict(2, 2, []), 1, ZONE_BATTLEFIELD
+    )
+    assert synthetic_state.declare_attacker(attacker_id) is True
+    assert synthetic_state.declare_blocker(blocker_id, attacker_id) is True, (
+        "skulk attacker (power 3) must be blockable by a 2/2 blocker — "
+        "skulk forbids GREATER power, not equal-or-greater"
+    )
+    assert (attacker_id, blocker_id) in synthetic_state.get_blockers()
+
+
+def test_skulk_attacker_blocked_by_equal_power_creature(synthetic_state):
+    """A 3/3 skulk attacker; a 3/3 blocker (power equal to the
+    attacker's). ``declare_blocker`` returns True — CR 702.118 says
+    GREATER power, and 3 is not greater than 3."""
+    attacker_id = synthetic_state.register_and_inject_object(
+        _keyword_creature_dict(3, 3, ["skulk"]), 0, ZONE_BATTLEFIELD
+    )
+    blocker_id = synthetic_state.register_and_inject_object(
+        _keyword_creature_dict(3, 3, []), 1, ZONE_BATTLEFIELD
+    )
+    assert synthetic_state.declare_attacker(attacker_id) is True
+    assert synthetic_state.declare_blocker(blocker_id, attacker_id) is True, (
+        "skulk: equal-power blocker is legal (CR 702.118 — 'greater "
+        "power', not 'equal or greater')"
+    )
+    assert (attacker_id, blocker_id) in synthetic_state.get_blockers()
+
+
+def test_skulk_attacker_cannot_be_blocked_by_higher_power_creature(synthetic_state):
+    """A 2/2 skulk attacker; a 3/3 blocker (power 3 > attacker power 2).
+    ``declare_blocker`` returns False (CR 702.118)."""
+    attacker_id = synthetic_state.register_and_inject_object(
+        _keyword_creature_dict(2, 2, ["skulk"]), 0, ZONE_BATTLEFIELD
+    )
+    blocker_id = synthetic_state.register_and_inject_object(
+        _keyword_creature_dict(3, 3, []), 1, ZONE_BATTLEFIELD
+    )
+    assert synthetic_state.declare_attacker(attacker_id) is True
+    assert synthetic_state.declare_blocker(blocker_id, attacker_id) is False, (
+        "skulk: blocker (power 3) > attacker (power 2) must be refused"
+    )
+    assert synthetic_state.get_blockers() == []
+
+
+def test_skulk_attacker_cannot_be_blocked_by_much_higher_power_creature(synthetic_state):
+    """A 3/3 skulk attacker; a 4/4 blocker. ``declare_blocker``
+    returns False — 4 > 3 trips the skulk gate."""
+    attacker_id = synthetic_state.register_and_inject_object(
+        _keyword_creature_dict(3, 3, ["skulk"]), 0, ZONE_BATTLEFIELD
+    )
+    blocker_id = synthetic_state.register_and_inject_object(
+        _keyword_creature_dict(4, 4, []), 1, ZONE_BATTLEFIELD
+    )
+    assert synthetic_state.declare_attacker(attacker_id) is True
+    assert synthetic_state.declare_blocker(blocker_id, attacker_id) is False, (
+        "skulk 3/3 attacker must not be blockable by a 4/4 (4 > 3)"
+    )
+    assert synthetic_state.get_blockers() == []
+
+
+def test_non_skulk_attacker_blocked_normally(synthetic_state):
+    """Sanity / regression: a non-skulk 2/2 attacker can be blocked by
+    a higher-power blocker. The skulk gate must not have leaked into
+    the default blocking path."""
+    attacker_id = synthetic_state.register_and_inject_object(
+        _keyword_creature_dict(2, 2, []), 0, ZONE_BATTLEFIELD
+    )
+    blocker_id = synthetic_state.register_and_inject_object(
+        _keyword_creature_dict(5, 5, []), 1, ZONE_BATTLEFIELD
+    )
+    assert synthetic_state.declare_attacker(attacker_id) is True
+    assert synthetic_state.declare_blocker(blocker_id, attacker_id) is True, (
+        "non-skulk attacker must be blockable by anything (no power "
+        "constraint)"
+    )
+    assert (attacker_id, blocker_id) in synthetic_state.get_blockers()
+
+
+def test_skulk_with_zero_power_blocked_by_zero_power_creature(synthetic_state):
+    """A 0/3 skulk attacker; a 0/3 blocker (power 0 == attacker's
+    power 0). 0 is not GREATER than 0, so the block is legal."""
+    attacker_id = synthetic_state.register_and_inject_object(
+        _keyword_creature_dict(0, 3, ["skulk"]), 0, ZONE_BATTLEFIELD
+    )
+    blocker_id = synthetic_state.register_and_inject_object(
+        _keyword_creature_dict(0, 3, []), 1, ZONE_BATTLEFIELD
+    )
+    assert synthetic_state.declare_attacker(attacker_id) is True
+    assert synthetic_state.declare_blocker(blocker_id, attacker_id) is True, (
+        "skulk 0-power attacker: 0-power blocker is equal, not greater — "
+        "block is legal"
+    )
+    assert (attacker_id, blocker_id) in synthetic_state.get_blockers()
+
+
+def test_skulk_with_zero_power_cannot_be_blocked_by_one_power_creature(synthetic_state):
+    """A 0/3 skulk attacker; a 1/1 blocker (power 1 > attacker's 0).
+    The block is refused — anything with positive power is greater than
+    0."""
+    attacker_id = synthetic_state.register_and_inject_object(
+        _keyword_creature_dict(0, 3, ["skulk"]), 0, ZONE_BATTLEFIELD
+    )
+    blocker_id = synthetic_state.register_and_inject_object(
+        _keyword_creature_dict(1, 1, []), 1, ZONE_BATTLEFIELD
+    )
+    assert synthetic_state.declare_attacker(attacker_id) is True
+    assert synthetic_state.declare_blocker(blocker_id, attacker_id) is False, (
+        "skulk 0-power attacker: any positive-power blocker is greater — "
+        "block refused"
+    )
+    assert synthetic_state.get_blockers() == []
+
+
+def test_skulk_plus_flying_combined(synthetic_state):
+    """An attacker with BOTH skulk AND flying composes: a candidate
+    blocker must pass the flying gate (have flying or reach) AND the
+    skulk gate (power not greater than attacker's).
+
+    - Non-flying 1/1 blocker: fails the flying gate → refused.
+    - Flying 1/1 blocker: passes flying, passes skulk (1 not > 2) →
+      legal.
+    - Flying 3/3 blocker: passes flying, FAILS skulk (3 > 2) →
+      refused."""
+    attacker_id = synthetic_state.register_and_inject_object(
+        _keyword_creature_dict(2, 2, ["skulk", "flying"]), 0, ZONE_BATTLEFIELD
+    )
+    ground_blocker_id = synthetic_state.register_and_inject_object(
+        _keyword_creature_dict(1, 1, []), 1, ZONE_BATTLEFIELD
+    )
+    flying_small_blocker_id = synthetic_state.register_and_inject_object(
+        _keyword_creature_dict(1, 1, ["flying"]), 1, ZONE_BATTLEFIELD
+    )
+    flying_big_blocker_id = synthetic_state.register_and_inject_object(
+        _keyword_creature_dict(3, 3, ["flying"]), 1, ZONE_BATTLEFIELD
+    )
+    assert synthetic_state.declare_attacker(attacker_id) is True
+    # Ground 1/1: fails flying gate.
+    assert synthetic_state.declare_blocker(ground_blocker_id, attacker_id) is False, (
+        "skulk+flying attacker: non-flying blocker fails flying gate"
+    )
+    # Flying 1/1: passes both gates.
+    assert synthetic_state.declare_blocker(flying_small_blocker_id, attacker_id) is True, (
+        "skulk+flying attacker: flying 1/1 passes flying gate AND skulk "
+        "gate (1 not > 2)"
+    )
+    # Flying 3/3: passes flying but fails skulk.
+    assert synthetic_state.declare_blocker(flying_big_blocker_id, attacker_id) is False, (
+        "skulk+flying attacker: flying 3/3 passes flying gate but FAILS "
+        "skulk gate (3 > 2)"
+    )
+    # Only the flying 1/1 made it onto the blockers list.
+    assert synthetic_state.get_blockers() == [(attacker_id, flying_small_blocker_id)]

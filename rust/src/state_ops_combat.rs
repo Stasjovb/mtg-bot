@@ -132,6 +132,13 @@
 //!   purposes (a reach attacker is treated as a ground creature —
 //!   blockable by anything). Defender-only, color protection,
 //!   "can't be blocked by ..." gates are still deferred.
+//! - **Skulk (CR 702.118) IS modeled.** A creature with `"skulk"` in
+//!   its printing keywords can't be blocked by creatures with greater
+//!   power — STRICTLY greater (equal-power blockers are still legal).
+//!   Enforced at `declare_blocker`, after the flying gate; composes
+//!   with flying so a skulk+flying attacker requires the blocker to
+//!   pass BOTH gates (flying-or-reach AND `blocker.power <=
+//!   attacker.power`).
 //! - **Single-blocker damage assignment.** When multiple blockers are
 //!   declared on the same attacker, the attacker assigns its full
 //!   power to the FIRST declared blocker. All declared blockers
@@ -497,8 +504,12 @@ impl GameState {
     /// - if the attacker has the `"flying"` keyword (CR 702.9), the
     ///   blocker must have either `"flying"` or `"reach"` (CR 702.17)
     ///   — otherwise the block is refused.
+    /// - if the attacker has the `"skulk"` keyword (CR 702.118), the
+    ///   blocker's power must NOT be greater than the attacker's
+    ///   power — equal-power blockers pass; strictly-greater-power
+    ///   blockers are refused.
     ///
-    /// **No blocking restrictions beyond the four above.** Defender-only,
+    /// **No blocking restrictions beyond the five above.** Defender-only,
     /// color protection, "can't be blocked by ..." gates are deferred —
     /// see module docstring.
     ///
@@ -522,6 +533,18 @@ impl GameState {
             let blocker_has_flying = battlefield_has_keyword(self, blocker_id, "flying");
             let blocker_has_reach = battlefield_has_keyword(self, blocker_id, "reach");
             if !blocker_has_flying && !blocker_has_reach {
+                return false;
+            }
+        }
+        // Skulk gate (CR 702.118): a creature with skulk can't be
+        // blocked by creatures with greater power. Strictly greater —
+        // equal-power blockers are still legal. Composes with flying:
+        // a skulk+flying attacker requires the blocker to pass BOTH
+        // gates (flying-or-reach AND power <= attacker.power).
+        if battlefield_has_keyword(self, attacker_id, "skulk") {
+            let attacker_power = battlefield_creature_power(self, attacker_id);
+            let blocker_power = battlefield_creature_power(self, blocker_id);
+            if blocker_power > attacker_power {
                 return false;
             }
         }
