@@ -94,6 +94,7 @@ the test lands in a commit.
 | rust(priority-round-complete): pop+priority-reset | tests_rust/test_priority.py extend          | green  | feature/rust-tdd-priority-pass-resolve |
 | rust(combat-keyword): haste | tests_rust/test_combat.py extend           | green  | feature/rust-tdd-haste |
 | rust(resolve-effects-r10): ReturnToHand+Mill dispatch | tests_rust/test_resolve.py extend           | green  | feature/rust-tdd-resolve-bounce-mill |
+| tests_rust/test_deck.py           | tests/_test_decks.py + game.py              | green  | feature/rust-tdd-deck |
 
 ## Build invocation reminder
 
