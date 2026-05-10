@@ -283,7 +283,8 @@ def test_clone_preserves_sba_pending(synthetic_state):
 # onto the battlefield; combined with the ``set_counters`` primitive from
 # round-3 that's enough to construct every shape we want to exercise.
 
-ZONE_BATTLEFIELD = 2  # mirrors rust/src/state_ops_zones.rs
+ZONE_HAND = 0  # mirrors rust/src/state_ops_zones.rs
+ZONE_BATTLEFIELD = 2
 ZONE_GRAVEYARD = 3
 
 
@@ -791,3 +792,457 @@ def test_sba_clone_isolation_with_counters(synthetic_state):
     assert synthetic_state.graveyard_sizes[0] == gy_before_p0
     assert synthetic_state.get_damage(obj_id) == 0
     assert synthetic_state.get_counters(obj_id) == 0
+
+
+# ----------------------------- Cross-feature: SBA + Effect interactions -----
+#
+# Composes the SBA primitives (round-5 lethal, round-12 0-toughness,
+# round-13 indestructible exemption, round-15 apply_sbas_until_quiescent,
+# round-16 counter-aware effective toughness) with the post-round-3
+# Effect arms — DealDamage, DealDamageAnyTarget, DamageEachCreature,
+# AddCounters, Sacrifice. The Effect arms write the damage / counter /
+# zone state that SBAs then react to; the integration boundary is the
+# caller's responsibility (Effects don't auto-invoke SBAs — the test
+# resolves the spell, then calls apply_sbas / apply_sbas_until_quiescent
+# explicitly). This mirrors how the spell-resolution call site will run
+# the SBA loop after each top-of-stack resolve once those pieces wire
+# together in a later slice.
+#
+# All printing dicts here follow the round-3 bridge parser schema
+# established in test_resolve.py (kind / amount / count / target).
+
+
+def _bombard_any_creature_dict(amount):
+    """A DealDamage{any_creature, amount} sorcery — Bombard-shaped."""
+    return {
+        "name": "Test Bombard AnyCreature",
+        "card_types": ["Sorcery"],
+        "mana_cost": {"R": 1, "generic": 2},
+        "effects": [
+            {
+                "kind": "deal_damage",
+                "amount": amount,
+                "target": {"kind": "any_creature"},
+            }
+        ],
+    }
+
+
+def _deal_damage_any_target_dict(amount):
+    """A DealDamageAnyTarget{amount} sorcery — Debris Field Crusher-shaped.
+    Hits the FIRST creature on defender's bf (skipping lands)."""
+    return {
+        "name": "Test AnyTarget Bolt",
+        "card_types": ["Sorcery"],
+        "mana_cost": {"R": 1, "generic": 2},
+        "effects": [{"kind": "deal_damage_any_target", "amount": amount}],
+    }
+
+
+def _pyroclasm_dict(amount):
+    """A DamageEachCreature{amount} sorcery — Pyroclasm-shaped. Hits
+    every creature on every player's bf symmetrically."""
+    return {
+        "name": "Test Pyroclasm SBA",
+        "card_types": ["Sorcery"],
+        "mana_cost": {"R": 1, "generic": 1},
+        "effects": [{"kind": "damage_each_creature", "amount": amount}],
+    }
+
+
+def _wither_dict(amount):
+    """An AddCounters{any_creature, amount} instant — wither/infect-shaped.
+    Negative ``amount`` rides the same net-i32 counter field."""
+    return {
+        "name": "Test Wither SBA",
+        "card_types": ["Instant"],
+        "mana_cost": {"B": 1},
+        "effects": [
+            {
+                "kind": "add_counters",
+                "count": amount,
+                "target": {"kind": "any_creature"},
+            }
+        ],
+    }
+
+
+def _altar_sacrifice_dict():
+    """A Sacrifice{any_creature} sorcery — Altar's Reap-shaped. Sacrifices
+    the FIRST creature on the ACTIVE player's bf (asymmetric vs the
+    damage / counter arms which target the defender)."""
+    return {
+        "name": "Test Altar Sacrifice SBA",
+        "card_types": ["Sorcery"],
+        "mana_cost": {"B": 1},
+        "effects": [
+            {
+                "kind": "sacrifice",
+                "target": {"kind": "any_creature"},
+            }
+        ],
+    }
+
+
+def _indestructible_2_2_dict():
+    """A 2/2 indestructible vanilla creature printing — round-13 SBA
+    exemption canary."""
+    return {
+        "name": "Test Indestructible 2/2 cross",
+        "card_types": ["Creature"],
+        "mana_cost": {"generic": 2},
+        "power": 2,
+        "toughness": 2,
+        "keywords": ["indestructible"],
+        "effects": [],
+    }
+
+
+def test_sba_after_deal_damage_any_creature_destroys_target(engine):
+    """DealDamage{any_creature, 10} resolves onto the smallest-index
+    object on the defender's battlefield. To make the smallest-index
+    pick a creature (so the damage lands somewhere SBA cares about),
+    build a fresh empty-battlefield state and inject a vanilla 2/2 on
+    p1 as bf[0]. Resolve the spell -> 10 damage marked. Then
+    apply_sbas_until_quiescent destroys it via the round-5 lethal-
+    damage path (10 >= toughness 2)."""
+    state = engine.make_synthetic_state(
+        num_battlefield=0, num_hand=1, num_library=1
+    )
+    creature_id = state.register_and_inject_object(
+        _two_two_creature_dict(), 1, ZONE_BATTLEFIELD
+    )
+    spell_id = state.register_and_inject_object(
+        _bombard_any_creature_dict(amount=10), 0, ZONE_HAND
+    )
+    state.push_to_stack(spell_id, 0)
+    state.resolve_top_of_stack()
+
+    # Pre-SBA: creature has 10 damage, still on battlefield.
+    assert state.get_damage(creature_id) == 10
+    assert state.find_object_zone(creature_id) == ZONE_BATTLEFIELD
+
+    # SBA loop drains it (round-5 lethal-damage path).
+    passes = state.apply_sbas_until_quiescent()
+    assert passes == 1
+    assert state.find_object_zone(creature_id) == ZONE_GRAVEYARD
+
+
+def test_sba_after_deal_damage_any_target_destroys_first_creature(
+    synthetic_state,
+):
+    """DealDamageAnyTarget{3} on the seeded state picks the FIRST
+    CREATURE (not just bf[0]) on p1's battlefield — that's obj_id 72
+    (Bears, 2/2). 3 damage > 2 toughness -> lethal. SBA destroys it."""
+    target_id = P1_FIRST_BEAR_ID  # 72, first Bears on p1
+    spell_id = synthetic_state.register_and_inject_object(
+        _deal_damage_any_target_dict(amount=3), 0, ZONE_HAND
+    )
+    synthetic_state.push_to_stack(spell_id, 0)
+    synthetic_state.resolve_top_of_stack()
+
+    assert synthetic_state.get_damage(target_id) == 3
+    assert synthetic_state.find_object_zone(target_id) == ZONE_BATTLEFIELD
+
+    assert synthetic_state.apply_sbas_until_quiescent() == 1
+    assert synthetic_state.find_object_zone(target_id) == ZONE_GRAVEYARD
+
+
+def test_sba_after_damage_each_creature_kills_all_non_indestructible(
+    synthetic_state,
+):
+    """DamageEachCreature{2} marks 2 damage on every creature on both
+    bfs (10 Bears total: 5 on p0 + 5 on p1, ids 5-9 and 72-76). All
+    are 2/2 vanilla -> all 10 lethal. SBA loop destroys all 10 in one
+    pass. Forests (lands) untouched by both Effect and SBA."""
+    spell_id = synthetic_state.register_and_inject_object(
+        _pyroclasm_dict(amount=2), 0, ZONE_HAND
+    )
+    synthetic_state.push_to_stack(spell_id, 0)
+    synthetic_state.resolve_top_of_stack()
+
+    # Pre-SBA: all 10 Bears at damage=2, still on battlefield.
+    bear_ids = (5, 6, 7, 8, 9, 72, 73, 74, 75, 76)
+    for bid in bear_ids:
+        assert synthetic_state.get_damage(bid) == 2
+        assert synthetic_state.find_object_zone(bid) == ZONE_BATTLEFIELD
+
+    assert synthetic_state.apply_sbas_until_quiescent() == 1
+    for bid in bear_ids:
+        assert synthetic_state.find_object_zone(bid) == ZONE_GRAVEYARD
+    # Forests untouched.
+    for land_id in (0, 1, 2, 3, 4, 67, 68, 69, 70, 71):
+        assert synthetic_state.find_object_zone(land_id) == ZONE_BATTLEFIELD
+
+
+def test_sba_after_damage_each_creature_spares_indestructibles(engine):
+    """DamageEachCreature{2} damages every creature on every bf
+    (including indestructibles — the Effect arm doesn't filter; round-13
+    indestructible is honored at SBA time). After the AOE: vanilla 2/2
+    dies, indestructible 2/2 survives with damage=2 marker preserved."""
+    state = engine.make_synthetic_state(
+        num_battlefield=0, num_hand=1, num_library=1
+    )
+    vanilla_id = state.register_and_inject_object(
+        _two_two_creature_dict(), 1, ZONE_BATTLEFIELD
+    )
+    indest_id = state.register_and_inject_object(
+        _indestructible_2_2_dict(), 1, ZONE_BATTLEFIELD
+    )
+    spell_id = state.register_and_inject_object(
+        _pyroclasm_dict(amount=2), 0, ZONE_HAND
+    )
+    state.push_to_stack(spell_id, 0)
+    state.resolve_top_of_stack()
+
+    # Both creatures took 2 damage.
+    assert state.get_damage(vanilla_id) == 2
+    assert state.get_damage(indest_id) == 2
+
+    # SBA: vanilla dies, indestructible survives.
+    assert state.apply_sbas_until_quiescent() == 1
+    assert state.find_object_zone(vanilla_id) == ZONE_GRAVEYARD
+    assert state.find_object_zone(indest_id) == ZONE_BATTLEFIELD
+    # Damage marker on the indestructible is preserved (clears at
+    # cleanup-step, not on SBA).
+    assert state.get_damage(indest_id) == 2
+
+
+def test_sba_after_negative_counters_destroys_via_zero_toughness(engine):
+    """AddCounters{any_creature, -2} on a fresh-state board where bf[0]
+    is a 2/2 Creature -> -2 net counters -> effective toughness 2 + (-2)
+    = 0. Round-12 0-toughness SBA (704.5f) destroys it. The default
+    synthetic state's defender bf[0] is a Forest (no toughness) so we
+    build a custom state to make the smallest-index pick a creature."""
+    state = engine.make_synthetic_state(
+        num_battlefield=0, num_hand=1, num_library=1
+    )
+    creature_id = state.register_and_inject_object(
+        _two_two_creature_dict(), 1, ZONE_BATTLEFIELD
+    )
+    spell_id = state.register_and_inject_object(
+        _wither_dict(amount=-2), 0, ZONE_HAND
+    )
+    state.push_to_stack(spell_id, 0)
+    state.resolve_top_of_stack()
+
+    # Counter applied: net = -2, effective toughness = 2 - 2 = 0.
+    assert state.get_counters(creature_id) == -2
+    assert state.find_object_zone(creature_id) == ZONE_BATTLEFIELD
+
+    # Round-12 0-toughness SBA fires.
+    assert state.apply_sbas_until_quiescent() == 1
+    assert state.find_object_zone(creature_id) == ZONE_GRAVEYARD
+
+
+def test_sba_indestructible_survives_negative_counters_zero_toughness(engine):
+    """An indestructible 2/2 hit with AddCounters{-2} has effective
+    toughness 0 -> 704.5f WOULD destroy a normal creature, but round-13
+    exempts indestructible from BOTH 704.5g (damage) AND 704.5f
+    (0-toughness). The creature survives with counters=-2 intact."""
+    state = engine.make_synthetic_state(
+        num_battlefield=0, num_hand=1, num_library=1
+    )
+    indest_id = state.register_and_inject_object(
+        _indestructible_2_2_dict(), 1, ZONE_BATTLEFIELD
+    )
+    spell_id = state.register_and_inject_object(
+        _wither_dict(amount=-2), 0, ZONE_HAND
+    )
+    state.push_to_stack(spell_id, 0)
+    state.resolve_top_of_stack()
+
+    # Counter applied to indestructible: effective toughness 0.
+    assert state.get_counters(indest_id) == -2
+
+    # SBA does nothing (round-13 exemption covers 704.5f too).
+    assert state.apply_sbas_until_quiescent() == 0
+    assert state.find_object_zone(indest_id) == ZONE_BATTLEFIELD
+    assert state.get_counters(indest_id) == -2
+
+
+def test_sba_indestructible_survives_deal_damage_lethal(engine):
+    """DealDamage{any_creature, 10} resolves on an indestructible 2/2 ->
+    damage=10 marker, lethal under 704.5g for a vanilla creature.
+    Round-13 indestructible exempts it; SBA doesn't fire, creature
+    stays on the battlefield, damage marker preserved."""
+    state = engine.make_synthetic_state(
+        num_battlefield=0, num_hand=1, num_library=1
+    )
+    indest_id = state.register_and_inject_object(
+        _indestructible_2_2_dict(), 1, ZONE_BATTLEFIELD
+    )
+    spell_id = state.register_and_inject_object(
+        _bombard_any_creature_dict(amount=10), 0, ZONE_HAND
+    )
+    state.push_to_stack(spell_id, 0)
+    state.resolve_top_of_stack()
+
+    assert state.get_damage(indest_id) == 10
+    assert state.apply_sbas_until_quiescent() == 0
+    assert state.find_object_zone(indest_id) == ZONE_BATTLEFIELD
+    assert state.get_damage(indest_id) == 10
+
+
+def test_sba_loop_converges_after_stacked_damage_effects(engine):
+    """Stack multiple DealDamageAnyTarget{2} spells onto two creatures
+    (resolve them sequentially), then run apply_sbas_until_quiescent
+    once. Verifies (a) the loop reaches quiescence in ONE pass when
+    Effects pre-populate damage but don't cascade through SBAs (no
+    death-triggered new damage in scope), and (b) all destroyed
+    creatures end up in graveyards. No infinite loop."""
+    state = engine.make_synthetic_state(
+        num_battlefield=0, num_hand=1, num_library=1
+    )
+    a = state.register_and_inject_object(
+        _two_two_creature_dict(), 1, ZONE_BATTLEFIELD
+    )
+    b = state.register_and_inject_object(
+        _two_two_creature_dict(), 1, ZONE_BATTLEFIELD
+    )
+    # First Bolt: hits a (smallest-index creature).
+    spell1 = state.register_and_inject_object(
+        _deal_damage_any_target_dict(amount=2), 0, ZONE_HAND
+    )
+    state.push_to_stack(spell1, 0)
+    state.resolve_top_of_stack()
+    # Damage a directly via deal_damage so both end up lethal pre-SBA
+    # (DealDamageAnyTarget picks the smallest-index creature, so two
+    # casts would both hit a).
+    state.deal_damage(b, 2)
+
+    assert state.get_damage(a) == 2
+    assert state.get_damage(b) == 2
+    assert state.find_object_zone(a) == ZONE_BATTLEFIELD
+    assert state.find_object_zone(b) == ZONE_BATTLEFIELD
+
+    # Single pass kills both (collect-then-mutate semantics from round-5).
+    assert state.apply_sbas_until_quiescent() == 1
+    assert state.find_object_zone(a) == ZONE_GRAVEYARD
+    assert state.find_object_zone(b) == ZONE_GRAVEYARD
+
+
+def test_sacrifice_effect_moves_to_graveyard_without_sba(synthetic_state):
+    """Sacrifice moves a creature to graveyard directly via the Effect
+    arm (round-14) — no SBA-mediated lethal damage involved. The
+    creature ends up in graveyard regardless of its damage / counters
+    state. SBA after the sacrifice is a no-op (the target is no longer
+    on the battlefield, so no SBA predicate applies to it)."""
+    target_obj_id = 0  # p0's bf[0]
+    spell_id = synthetic_state.register_and_inject_object(
+        _altar_sacrifice_dict(), 0, ZONE_HAND
+    )
+    synthetic_state.push_to_stack(spell_id, 0)
+    synthetic_state.resolve_top_of_stack()
+
+    # Target sacrificed by Effect arm.
+    assert synthetic_state.find_object_zone(target_obj_id) == ZONE_GRAVEYARD
+    # SBA finds nothing to do (target already off bf).
+    assert synthetic_state.apply_sbas_until_quiescent() == 0
+    assert synthetic_state.find_object_zone(target_obj_id) == ZONE_GRAVEYARD
+
+
+def test_sba_lethal_damage_plus_negative_counters_single_destruction(engine):
+    """A creature has BOTH lethal damage (704.5g would fire) AND -1/-1
+    net counters bringing effective toughness <= 0 (704.5f would fire).
+    apply_sbas_until_quiescent must NOT double-destroy or hang on a
+    dispatch loop — the creature lands in graveyard exactly once, in
+    a single pass. Counter-aware toughness (round-16) makes 704.5g
+    fire even harder (damage 1 >= effective toughness 1) but the
+    collect-then-mutate pattern from round-5 deduplicates."""
+    state = engine.make_synthetic_state(
+        num_battlefield=0, num_hand=1, num_library=1
+    )
+    creature_id = state.register_and_inject_object(
+        _two_two_creature_dict(), 1, ZONE_BATTLEFIELD
+    )
+    # Apply both predicates: -1 net counter (effective toughness 1)
+    # AND 1 damage (>= effective toughness 1 -> lethal under 704.5g).
+    state.set_counters(creature_id, -1)
+    state.deal_damage(creature_id, 1)
+
+    p1_gy_before = state.graveyard_sizes[1]
+
+    # Single pass; both predicates point at the same creature; one
+    # destruction recorded.
+    passes = state.apply_sbas_until_quiescent()
+    assert passes == 1
+    assert state.find_object_zone(creature_id) == ZONE_GRAVEYARD
+    # Graveyard grew by exactly 1 — no double-move.
+    assert state.graveyard_sizes[1] == p1_gy_before + 1
+
+
+def test_damage_clears_at_cleanup_so_sba_does_not_re_destroy(synthetic_state):
+    """A DealDamageAnyTarget{1} survives on a 2/2 (1 < 2 effective
+    toughness). Run apply_sbas — no destruction. Run cleanup step —
+    damage zeroes (CR 514.2). Run apply_sbas again — still no
+    destruction. The damage clearing happens BEFORE the next round's
+    SBA pass so the creature doesn't get re-destroyed by stale damage.
+
+    Documents the cleanup-step / SBA interaction: cleanup clears
+    damage globally; subsequent SBA passes see a clean board."""
+    target_id = P1_FIRST_BEAR_ID  # 2/2 Bears
+    spell_id = synthetic_state.register_and_inject_object(
+        _deal_damage_any_target_dict(amount=1), 0, ZONE_HAND
+    )
+    synthetic_state.push_to_stack(spell_id, 0)
+    synthetic_state.resolve_top_of_stack()
+
+    # Non-lethal damage applied.
+    assert synthetic_state.get_damage(target_id) == 1
+
+    # SBA: no destruction (1 < 2).
+    assert synthetic_state.apply_sbas_until_quiescent() == 0
+    assert synthetic_state.find_object_zone(target_id) == ZONE_BATTLEFIELD
+    # Damage marker preserved (CR 514.2 — clears at end-of-turn cleanup).
+    assert synthetic_state.get_damage(target_id) == 1
+
+    # Cleanup step (CR 514.2): clears all marked damage on both bfs.
+    summary = synthetic_state.cleanup_step_for_active_player()
+    assert summary["damage_cleared"] >= 1
+    assert synthetic_state.get_damage(target_id) == 0
+
+    # Second SBA pass: nothing to destroy, no re-destroy.
+    assert synthetic_state.apply_sbas_until_quiescent() == 0
+    assert synthetic_state.find_object_zone(target_id) == ZONE_BATTLEFIELD
+
+
+def test_sba_after_pyroclasm_mixed_indestructible_partial_kill(engine):
+    """Composition stress: Pyroclasm-3 on a mixed board of vanilla 2/2s
+    (lethal -> die) and indestructible 2/2s (lethal but indestructible
+    -> survive). Verifies the round-13 carve-out propagates correctly
+    through the round-18 DamageEachCreature symmetric AOE. The pass
+    count is 1; only the vanilla dies; the indestructible keeps its
+    damage marker."""
+    state = engine.make_synthetic_state(
+        num_battlefield=0, num_hand=1, num_library=1
+    )
+    vanilla_a = state.register_and_inject_object(
+        _two_two_creature_dict(), 0, ZONE_BATTLEFIELD
+    )
+    indest_a = state.register_and_inject_object(
+        _indestructible_2_2_dict(), 0, ZONE_BATTLEFIELD
+    )
+    vanilla_b = state.register_and_inject_object(
+        _two_two_creature_dict(), 1, ZONE_BATTLEFIELD
+    )
+    indest_b = state.register_and_inject_object(
+        _indestructible_2_2_dict(), 1, ZONE_BATTLEFIELD
+    )
+    spell_id = state.register_and_inject_object(
+        _pyroclasm_dict(amount=3), 0, ZONE_HAND
+    )
+    state.push_to_stack(spell_id, 0)
+    state.resolve_top_of_stack()
+
+    # Pyroclasm hit every creature on every bf (Effect arm does NOT
+    # filter on indestructible — round-13 lives at SBA time).
+    for cid in (vanilla_a, indest_a, vanilla_b, indest_b):
+        assert state.get_damage(cid) == 3
+
+    # SBA pass: vanillas die, indestructibles survive.
+    assert state.apply_sbas_until_quiescent() == 1
+    assert state.find_object_zone(vanilla_a) == ZONE_GRAVEYARD
+    assert state.find_object_zone(vanilla_b) == ZONE_GRAVEYARD
+    assert state.find_object_zone(indest_a) == ZONE_BATTLEFIELD
+    assert state.find_object_zone(indest_b) == ZONE_BATTLEFIELD
