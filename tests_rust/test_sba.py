@@ -538,3 +538,103 @@ def test_non_indestructible_creature_with_lethal_still_dies(synthetic_state):
     assert synthetic_state.find_object_zone(P0_FIRST_BEAR_ID) == ZONE_GRAVEYARD
     # Indestructible was untouched and remains.
     assert synthetic_state.find_object_zone(indestructible_id) == ZONE_BATTLEFIELD
+
+
+# ----------------------------- SBA loop driver (CR 704.3) ------------------
+#
+# CR 704.3 — "Whenever a player would get priority [...] the game first
+# performs all applicable state-based actions as a single event. [...]
+# After SBAs are performed, [...] if any SBAs were performed as a result
+# of the check, all applicable SBAs are checked again."
+#
+# Round-5's apply_sbas is a SINGLE pass. apply_sbas_until_quiescent loops
+# until no SBA fires, returning the number of passes that fired. With
+# only the destruction SBAs available today (no cascading effects like
+# +1/+1 counter on death yet), every realistic scenario completes in
+# exactly one pass — but pinning the API now means later slices that
+# add cascading effects (sagas advancing on resolve, death triggers,
+# etc.) plug into the loop without re-shaping callers.
+
+
+def test_apply_sbas_until_quiescent_zero_passes_on_clean_state(synthetic_state):
+    """No SBAs fire on a clean state -> returns 0 passes. Battlefields
+    and graveyards unchanged."""
+    bf_before = synthetic_state.battlefield_sizes
+    gy_before = synthetic_state.graveyard_sizes
+    assert synthetic_state.apply_sbas_until_quiescent() == 0
+    assert synthetic_state.battlefield_sizes == bf_before
+    assert synthetic_state.graveyard_sizes == gy_before
+
+
+def test_apply_sbas_until_quiescent_one_pass_kills_lethal(synthetic_state):
+    """One lethal-damage creature -> first pass destroys it, second pass
+    is a no-op so loop exits. Returns 1 (one pass fired SBAs)."""
+    obj_id = P0_FIRST_BEAR_ID
+    synthetic_state.deal_damage(obj_id, 2)
+    assert synthetic_state.apply_sbas_until_quiescent() == 1
+    assert synthetic_state.find_object_zone(obj_id) == ZONE_GRAVEYARD
+
+
+def test_apply_sbas_until_quiescent_one_pass_kills_multiple(synthetic_state):
+    """Three lethal-damage creatures -> all die in pass 1 (CR 704.3
+    says SBAs check simultaneously). Returns 1 (one pass, three
+    deaths)."""
+    for obj_id in (P0_FIRST_BEAR_ID, P0_SECOND_BEAR_ID, P1_FIRST_BEAR_ID):
+        synthetic_state.deal_damage(obj_id, 2)
+    assert synthetic_state.apply_sbas_until_quiescent() == 1
+    for obj_id in (P0_FIRST_BEAR_ID, P0_SECOND_BEAR_ID, P1_FIRST_BEAR_ID):
+        assert synthetic_state.find_object_zone(obj_id) == ZONE_GRAVEYARD
+
+
+def test_apply_sbas_until_quiescent_handles_zero_toughness(synthetic_state):
+    """A 0-toughness creature (round-12 SBA) is destroyed in one pass.
+    Returns 1."""
+    obj_id = P0_FIRST_BEAR_ID  # 2/2
+    synthetic_state.set_counters(obj_id, -2)  # effective toughness 0
+    assert synthetic_state.apply_sbas_until_quiescent() == 1
+    assert synthetic_state.find_object_zone(obj_id) == ZONE_GRAVEYARD
+
+
+def test_apply_sbas_until_quiescent_combined_lethal_and_zero_toughness(
+    synthetic_state,
+):
+    """One lethal-damage creature AND one 0-toughness creature -> both
+    die in pass 1 (single apply_sbas pass kills both). Returns 1."""
+    synthetic_state.deal_damage(P0_FIRST_BEAR_ID, 2)
+    synthetic_state.set_counters(P0_SECOND_BEAR_ID, -2)
+    assert synthetic_state.apply_sbas_until_quiescent() == 1
+    assert synthetic_state.find_object_zone(P0_FIRST_BEAR_ID) == ZONE_GRAVEYARD
+    assert synthetic_state.find_object_zone(P0_SECOND_BEAR_ID) == ZONE_GRAVEYARD
+
+
+def test_apply_sbas_until_quiescent_clone_isolation(synthetic_state):
+    """CoW canary for the loop primitive — running it on a clone does
+    not affect the original."""
+    obj_id = P0_FIRST_BEAR_ID
+    bf_before_p0 = synthetic_state.battlefield_sizes[0]
+    gy_before_p0 = synthetic_state.graveyard_sizes[0]
+
+    other = synthetic_state.clone_once()
+    other.deal_damage(obj_id, 2)
+    assert other.apply_sbas_until_quiescent() == 1
+
+    # Clone reflects destruction.
+    assert other.find_object_zone(obj_id) == ZONE_GRAVEYARD
+    assert other.battlefield_sizes[0] == bf_before_p0 - 1
+    assert other.graveyard_sizes[0] == gy_before_p0 + 1
+
+    # Original is untouched.
+    assert synthetic_state.find_object_zone(obj_id) == ZONE_BATTLEFIELD
+    assert synthetic_state.battlefield_sizes[0] == bf_before_p0
+    assert synthetic_state.graveyard_sizes[0] == gy_before_p0
+
+
+def test_apply_sbas_until_quiescent_indestructible_skipped(synthetic_state):
+    """A round-13 indestructible 2/2 with lethal damage stays alive;
+    no SBA fires so the loop returns 0."""
+    obj_id = synthetic_state.register_and_inject_object(
+        _indestructible_2_2_creature_dict(), 0, ZONE_BATTLEFIELD
+    )
+    synthetic_state.deal_damage(obj_id, 5)  # overkill on a 2/2 indestructible
+    assert synthetic_state.apply_sbas_until_quiescent() == 0
+    assert synthetic_state.find_object_zone(obj_id) == ZONE_BATTLEFIELD

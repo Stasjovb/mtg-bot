@@ -110,6 +110,7 @@ the test lands in a commit.
 | rust(library-search): search_library_for_card | tests_rust/test_library.py extend | green | feature/rust-tdd-search-library |
 | rust(steps-untap-summoning): clear sickness at untap | tests_rust/test_steps.py extend | green | feature/rust-tdd-untap-summoning |
 | rust(damage-to-player): direct life mutation | tests_rust/test_damage.py extend | green | feature/rust-tdd-damage-to-player |
+| rust(sba-loop): apply_sbas_until_quiescent (CR 704.3) | tests_rust/test_sba.py extend | green | feature/rust-tdd-sba-loop |
 
 ## Build invocation reminder
 
