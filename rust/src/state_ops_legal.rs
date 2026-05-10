@@ -261,9 +261,87 @@
 //! "ability_index": 0}`. Round-trips through `parse_action` (round-23
 //! `Action::ActivateAbility` variant) and `action_to_pydict`
 //! unchanged.
+//!
+//! ## DeclareBlockers extension (rust(legal-decisions-declare-blockers))
+//!
+//! **Deliberate divergence from Python** — same shape as the
+//! DeclareAttackers extension above. Python's `legal_actions` does
+//! NOT emit DeclareBlockers (see `src/mtg_bot/engine.py:10-19` for
+//! the explicit "combat-declaration actions ... aren't enumerable as
+//! legal moves because their decision space is combinatorial"
+//! statement). Python uses factored `BlockerDecision`s in
+//! `src/mtg_bot/search/combat_decisions.py` — one decision per
+//! eligible blocker, with one branch per attacker plus a "don't
+//! block" branch — fed to MCTS at search time. The adapter
+//! accumulates per-blocker decisions into a single engine-level
+//! `DeclareBlockers(assignments=tuple[tuple[int,int], ...])` at
+//! apply time.
+//!
+//! For the Rust port we emit a direct enumeration of assignments so
+//! `legal_decisions` covers the DECLARE_BLOCKERS phase uniformly.
+//! Combinatorial complexity is HARDER than DeclareAttackers: with N
+//! eligible blockers and M attackers, each blocker independently
+//! picks one of `M + 1` options (block attacker_j, or don't block),
+//! yielding `(M + 1)^N` total assignments. This explodes faster
+//! than DeclareAttackers's `2^N` — a 4-blocker / 4-attacker board
+//! has `5^4 = 625` assignments. The cap is critical.
+//!
+//! **Gating**: emit DeclareBlockers ONLY when:
+//! - `phase == PHASE_DECLARE_BLOCKERS` (see `state_ops_steps.rs:65`).
+//! - `priority_player == player_id` (already verified by the
+//!   priority gate above).
+//! - `priority_player != active_player` — defender declares blockers,
+//!   not the active player (CR 509.1). This is the OPPOSITE of
+//!   DeclareAttackers's `active == player_id` check.
+//! - `stack.is_empty()` (declare-blockers happens before any spells
+//!   resolve in the combat step).
+//!
+//! **Eligibility** (mirrors `src/mtg_bot/combat.py:eligible_blockers`
+//! at lines 26-32):
+//! - On the defender's battlefield.
+//! - `card_types` contains "Creature".
+//! - `!tapped` (CR 509.1a — a tapped creature can't block).
+//! - **Summoning sickness does NOT exclude** (CR 302.1 only restricts
+//!   attacking and tap-cost activated abilities; freshly-summoned
+//!   creatures CAN block). This is the key sickness-vs-attacking
+//!   asymmetry.
+//!
+//! **Deferred**: keyword-driven block-legality filters (flying / reach
+//! / can_only_block_creatures_with_flying, color protection,
+//! is_cant_be_blocked, skulk) are NOT applied at enumeration. The
+//! `declare_blocker` primitive's per-pair bool-return filters these
+//! at apply time — same silent-skip pattern as DeclareAttackers's
+//! defender-keyword deferral. Wide-emission + apply-time filter is
+//! the first-slice cost; future slices can add the keyword filter at
+//! enumeration once `effective_keywords` ports through PyO3.
+//!
+//! **Emission shape**: one Python dict per assignment, matching
+//! `actions.rs:action_to_pydict` for `Action::DeclareBlockers`:
+//! `{"kind": "declare_blockers", "assignments": [[blocker_id,
+//! attacker_id], ...]}`. The `assignments` list contains only the
+//! blockers that ARE blocking — "doesn't block" is encoded by
+//! omission, not by a `(blocker_id, None)` pair. This matches
+//! Python's `DeclareBlockers(assignments=tuple[tuple[int, int],
+//! ...])` dataclass shape.
+//!
+//! **Combinatorial product cap.** With `n_blockers <=
+//! DECLARE_BLOCKERS_PRODUCT_CAP` (3) AND `m_attackers <=
+//! DECLARE_BLOCKERS_MAX_ATTACKERS` (3), emit all `(M+1)^N`
+//! assignments — each blocker independently chooses among M
+//! attackers + "don't block." With either dimension over its cap,
+//! emit ONLY the "no blocks" assignment (an empty Vec). The dropped
+//! middle assignments are still reachable at apply time via direct
+//! `Action::DeclareBlockers` construction; they're just not
+//! enumerated by `legal_decisions`. Same tunable-knob story as
+//! DeclareAttackers's `POWERSET_CAP`: the factored-search shape from
+//! `search/combat_decisions.py:120-178` is the eventual replacement.
+//! See "DeclareBlockers Rust-only enumeration" in
+//! `docs/SEARCH_LIMITATIONS.md`.
 
 use crate::state::GameState;
-use crate::state_ops_steps::{PHASE_DECLARE_ATTACKERS, PHASE_MAIN1, PHASE_MAIN2};
+use crate::state_ops_steps::{
+    PHASE_DECLARE_ATTACKERS, PHASE_DECLARE_BLOCKERS, PHASE_MAIN1, PHASE_MAIN2,
+};
 use pyo3::exceptions::PyIndexError;
 use pyo3::prelude::*;
 use pyo3::types::PyDict;
@@ -282,6 +360,30 @@ use std::collections::HashSet;
 /// the powerset emission. See "DeclareAttackers Rust-only enumeration"
 /// in `docs/SEARCH_LIMITATIONS.md`.
 const DECLARE_ATTACKERS_POWERSET_CAP: usize = 4;
+
+/// First-slice cap on the product enumeration in `DeclareBlockers`
+/// emission. With `n_blockers <= DECLARE_BLOCKERS_PRODUCT_CAP` (3)
+/// AND `m_attackers <= DECLARE_BLOCKERS_MAX_ATTACKERS` (3), the
+/// enumerator emits the full `(M+1)^N` assignments — every blocker
+/// independently picks one of `M` attackers OR "don't block." Worst
+/// case at the cap: `(3+1)^3 = 64` dicts. Above either threshold the
+/// enumerator emits only the canonical "no blocks" assignment (an
+/// empty Vec) so the dict-count stays bounded at 1 instead of
+/// exploding to thousands. Combinatorial growth is harder than
+/// DeclareAttackers's `2^N` — a 4×4 board would be `5^4 = 625`, a
+/// 5×5 board `6^5 = 7776`. Tunable knob: future slices can lift
+/// either cap once the factored-search shape (one BlockerDecision
+/// per eligible blocker, per `search/combat_decisions.py:120-178`)
+/// lands and replaces the product emission. See "DeclareBlockers
+/// Rust-only enumeration" in `docs/SEARCH_LIMITATIONS.md`.
+const DECLARE_BLOCKERS_PRODUCT_CAP: usize = 3;
+
+/// Companion cap on the attacker dimension of the `DeclareBlockers`
+/// product. See `DECLARE_BLOCKERS_PRODUCT_CAP` for the rationale —
+/// both dimensions must be at-or-below their cap for the full
+/// enumeration to emit; either dimension over its cap falls through
+/// to the bounded "no-blocks-only" branch.
+const DECLARE_BLOCKERS_MAX_ATTACKERS: usize = 3;
 
 fn check_player_id(player_id: u8) -> PyResult<usize> {
     let idx = player_id as usize;
@@ -369,6 +471,26 @@ fn declare_attackers_dict<'py>(
     Ok(d)
 }
 
+/// Build a `{"kind": "declare_blockers", "assignments":
+/// [[blocker_id, attacker_id], ...]}` dict. Mirrors
+/// `actions.rs:action_to_pydict`'s `Action::DeclareBlockers` arm so
+/// a dict produced here round-trips through `parse_action` and back
+/// without key drift. The `assignments` Vec is cloned into a fresh
+/// Python list of 2-tuples — PyO3's `Vec<(u32, u32)>` -> Python list
+/// conversion preserves Vec iteration order. Blockers that don't
+/// block are omitted from the list (not encoded as a sentinel pair),
+/// matching Python's `DeclareBlockers(assignments=tuple[tuple[int,
+/// int], ...])` dataclass shape.
+fn declare_blockers_dict<'py>(
+    py: Python<'py>,
+    assignments: &[(u32, u32)],
+) -> PyResult<Bound<'py, PyDict>> {
+    let d = PyDict::new(py);
+    d.set_item("kind", "declare_blockers")?;
+    d.set_item("assignments", assignments.to_vec())?;
+    Ok(d)
+}
+
 #[pymethods]
 impl GameState {
     /// Return the list of legal Actions for `player_id` at this
@@ -385,9 +507,10 @@ impl GameState {
     ///   under sorcery-timing gates (Python's `legal.py:319-329`),
     ///   deduped by printing name.
     ///
-    /// `CastSpell`, `ActivateAbility`, `DeclareAttackers`,
-    /// `DeclareBlockers` grow in follow-up slices as the Action enum
-    /// + primitives mature.
+    /// `CastSpell`, `ActivateAbility`, `DeclareAttackers`, and
+    /// `DeclareBlockers` are now also emitted in their respective
+    /// phases (the latter two as Rust-only divergences vs Python; see
+    /// module docstring).
     ///
     /// Returns a list of Action dicts (round-trip-able with
     /// `apply_action`). Raises `IndexError` on an out-of-range
@@ -475,6 +598,113 @@ impl GameState {
                 // they're just not enumerated by `legal_decisions`.
                 actions.push(declare_attackers_dict(py, &[])?);
                 actions.push(declare_attackers_dict(py, &eligible)?);
+            }
+        }
+
+        // DeclareBlockers emission (Rust-only — Python's
+        // `legal_actions` does NOT emit this variant either; see the
+        // module docstring's "DeclareBlockers extension" section for
+        // the divergence rationale + the `search/combat_decisions.py`
+        // factored-search alternative Python uses).
+        //
+        // Gate: `phase == PHASE_DECLARE_BLOCKERS` AND
+        // `priority_player != active_player` (defender declares, NOT
+        // the attacker — CR 509.1) AND `stack.is_empty()`. Priority
+        // is already confirmed above. The
+        // `priority_player != active_player` check is the inversion
+        // of the DeclareAttackers gate — only the defender (off-turn
+        // player) declares blockers, so we want to emit for the
+        // OFF-active priority holder.
+        //
+        // Eligibility per `src/mtg_bot/combat.py:eligible_blockers`
+        // (lines 26-32): on the defender's battlefield, is a
+        // Creature, not tapped. Summoning sickness does NOT exclude
+        // (CR 302.1 only restricts attacking + tap-cost activated
+        // abilities, not blocking). Flying / reach / protection /
+        // skulk / can_only_block-with-flying filters are deferred to
+        // the `declare_blocker` primitive's per-pair gate at apply
+        // time.
+        if self.phase == PHASE_DECLARE_BLOCKERS
+            && self.priority_player != self.active_player
+            && self.stack.is_empty()
+        {
+            // Collect eligible blockers in battlefield iteration
+            // order (stable across calls). Per CR 302.1, summoning-
+            // sick creatures CAN block, so we do NOT filter by
+            // `summoning_sick` — the sickness-vs-attacking asymmetry
+            // is the headline rule difference vs the DeclareAttackers
+            // loop above.
+            let mut eligible_blockers: Vec<u32> = Vec::new();
+            for obj in self.players[idx].battlefield.iter() {
+                if obj.tapped {
+                    continue;
+                }
+                let Some(printing) = self.registry.lookup(obj.printing_id) else {
+                    continue;
+                };
+                if !printing.card_types.iter().any(|t| t == "Creature") {
+                    continue;
+                }
+                eligible_blockers.push(obj.id);
+            }
+
+            // Attackers come from `self.attackers` — the set the
+            // active player committed to during the DECLARE_ATTACKERS
+            // phase (see `state_ops_combat.rs:declare_attacker`,
+            // which pushes onto this Vec). We mirror its iteration
+            // order so emission ordering is deterministic.
+            let attackers: &[u32] = &self.attackers;
+            let n_blockers = eligible_blockers.len();
+            let m_attackers = attackers.len();
+
+            if n_blockers <= DECLARE_BLOCKERS_PRODUCT_CAP
+                && m_attackers <= DECLARE_BLOCKERS_MAX_ATTACKERS
+            {
+                // Full product space: each blocker independently
+                // picks one of (M+1) choices — block attacker_j for
+                // j in 0..M, or "don't block" (the M-th choice, by
+                // convention). With N blockers and M attackers,
+                // total assignments = (M+1)^N. Iterate combo from
+                // 0..(M+1)^N; for each, decompose into per-blocker
+                // choices via repeated `combo % (M+1)` / `combo /=
+                // (M+1)`. Choice index `< M` -> block attackers[j];
+                // choice index `== M` -> blocker omitted from the
+                // assignment list (the "don't block" sentinel).
+                //
+                // Edge cases this handles naturally:
+                // - N=0 (no blockers): (M+1)^0 = 1 iteration emits a
+                //   single empty assignment list. Matches Python's
+                //   "must emit something" + "empty assignments means
+                //   no blocks" semantics.
+                // - M=0 (no attackers in `state.attackers`):
+                //   (0+1)^N = 1 iteration; each blocker's choice
+                //   index is 0, which is `== M` (the "don't block"
+                //   sentinel), so the assignment list is empty.
+                //   Matches "no attackers means no blocks possible."
+                let m_plus_1 = (m_attackers + 1) as u32;
+                let total = (m_plus_1 as u64).pow(n_blockers as u32);
+                for combo_raw in 0..total {
+                    let mut combo = combo_raw;
+                    let mut assignments: Vec<(u32, u32)> =
+                        Vec::with_capacity(n_blockers);
+                    for &blocker_id in eligible_blockers.iter() {
+                        let choice = (combo % (m_plus_1 as u64)) as usize;
+                        combo /= m_plus_1 as u64;
+                        if choice < m_attackers {
+                            assignments.push((blocker_id, attackers[choice]));
+                        }
+                        // else: blocker doesn't block — omitted.
+                    }
+                    actions.push(declare_blockers_dict(py, &assignments)?);
+                }
+            } else {
+                // Past the cap: emit only the canonical "no blocks"
+                // assignment (an empty Vec). The dropped middle
+                // assignments are still reachable at apply time via
+                // direct `Action::DeclareBlockers` construction —
+                // they're just not enumerated by `legal_decisions`.
+                // Bounded at 1 dict regardless of N or M.
+                actions.push(declare_blockers_dict(py, &[])?);
             }
         }
 

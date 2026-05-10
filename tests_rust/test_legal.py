@@ -1627,3 +1627,510 @@ def test_legal_decisions_activate_ability_works_for_player_1(
     # All source_ids are P1 ids (offset 67); none are P0 ids.
     source_ids = {a["source_id"] for a in aas}
     assert all(sid >= 67 for sid in source_ids)
+
+
+# --- DeclareBlockers emission --------------------------------------
+#
+# rust(legal-decisions-declare-blockers) — extends `legal_decisions`
+# to emit `DeclareBlockers` action dicts during the
+# DECLARE_BLOCKERS phase. **Deliberate divergence from Python**:
+# Python's `legal_actions` (in `src/mtg_bot/legal.py`) does NOT emit
+# DeclareBlockers — same factored-search story as DeclareAttackers
+# (`src/mtg_bot/engine.py:10-19` is explicit). Python uses
+# `BlockerDecision` (one per eligible blocker, one branch per
+# attacker plus a "don't block" branch) in
+# `src/mtg_bot/search/combat_decisions.py` and accumulates them into
+# a single engine-level `DeclareBlockers(assignments=...)` at apply
+# time.
+#
+# For the Rust port we emit a direct enumeration of assignments. With
+# `n_blockers <= 3` AND `m_attackers <= 3` we emit all `(M+1)^N`
+# possibilities — each blocker picks one of M attackers OR "don't
+# block." With either dimension over its cap we emit only the
+# canonical "no blocks" assignment (an empty Vec). Combinatorial
+# growth is harder than DeclareAttackers's `2^N`: a 4×4 board is
+# `5^4 = 625`. Future slices replace this with the factored-search
+# shape.
+#
+# Eligibility mirrors `src/mtg_bot/combat.py:eligible_blockers`
+# (lines 26-32): on the defender's battlefield, is a Creature, not
+# tapped. Summoning sickness does NOT exclude (CR 302.1 only
+# restricts attacking + tap-cost activated abilities, not blocking).
+# Flying / reach / protection / skulk filters are deferred to the
+# `declare_blocker` primitive's per-pair gate at apply time.
+
+
+def _put_into_declare_blockers(state, attacker_ids, defender_id=1):
+    """Set up the state so `defender_id` (the OFF-active player) has
+    priority during the DECLARE_BLOCKERS phase with `attacker_ids`
+    already declared as attackers. The synthetic state defaults to
+    active_player=0; we declare attackers via the
+    `declare_attacker` primitive (which gates on the creature being
+    on some battlefield + untapped + non-sick or hasted), then walk
+    to the DECLARE_BLOCKERS phase and flip priority to the defender.
+
+    `attacker_ids` may be empty (no attackers declared — defender
+    still has the chance to declare zero blocks).
+    """
+    # `declare_attacker` doesn't care about the current phase — it
+    # gates on creature status alone. Declare each attacker; the
+    # primitive pushes onto `state.attackers` and taps the creature
+    # (unless vigilance). We don't care about the bool return — the
+    # caller pre-validated eligibility before passing the ids.
+    for aid in attacker_ids:
+        state.declare_attacker(aid)
+    state.set_phase(PHASE_DECLARE_BLOCKERS)
+    state.give_priority_to(defender_id)
+
+
+# --- 36. DECLARE_BLOCKERS + 0 eligible blockers, 1 attacker ---------
+
+
+def test_legal_decisions_declare_blockers_phase_zero_blockers_emits_no_blocks(
+    engine,
+):
+    """DECLARE_BLOCKERS phase with NO eligible blockers but 1
+    attacker: emit ONE DeclareBlockers (empty assignments) +
+    PassPriority = 2 actions total. `(M+1)^N = (1+1)^0 = 1`
+    iteration of the product loop produces a single empty
+    assignment list."""
+    state, _, p0_bf_ids, _ = _custom_registry_state(
+        engine,
+        p0_battlefield_printings=["Vanilla Bear"],
+        # P1 (defender) has NO creatures.
+        p1_battlefield_printings=[],
+    )
+    _put_into_declare_blockers(state, attacker_ids=p0_bf_ids, defender_id=1)
+
+    actions = state.legal_decisions(1)
+
+    kinds = _kinds(actions)
+    assert kinds == ["pass_priority", "declare_blockers"]
+    db = [a for a in actions if a["kind"] == "declare_blockers"][0]
+    assert db["assignments"] == []
+
+
+# --- 37. DECLARE_BLOCKERS + 1 blocker, 1 attacker -------------------
+
+
+def test_legal_decisions_declare_blockers_one_one_emits_two_assignments(
+    engine,
+):
+    """1 blocker, 1 attacker: `(M+1)^N = (1+1)^1 = 2` assignments —
+    {} (don't block) and {(b, a)} (block). Plus PassPriority = 3
+    total. Locks in the product-shape with the smallest non-trivial
+    N×M."""
+    state, _, p0_bf_ids, p1_bf_ids = _custom_registry_state(
+        engine,
+        p0_battlefield_printings=["Vanilla Bear"],
+        p1_battlefield_printings=["Vanilla Bear"],
+    )
+    _put_into_declare_blockers(state, attacker_ids=p0_bf_ids, defender_id=1)
+
+    actions = state.legal_decisions(1)
+
+    kinds = _kinds(actions)
+    assert kinds[0] == "pass_priority"
+    # 2 DeclareBlockers + 1 PassPriority = 3 total.
+    assert kinds.count("declare_blockers") == 2
+    dbs = [a for a in actions if a["kind"] == "declare_blockers"]
+    # Set of (assignments-as-frozenset) — {} (no block) + {(b, a)}.
+    assignments_sets = {
+        frozenset(tuple(p) for p in d["assignments"]) for d in dbs
+    }
+    assert assignments_sets == {
+        frozenset(),
+        frozenset({(p1_bf_ids[0], p0_bf_ids[0])}),
+    }
+
+
+# --- 38. DECLARE_BLOCKERS + 2 blockers, 1 attacker ------------------
+
+
+def test_legal_decisions_declare_blockers_two_blockers_one_attacker_emits_four(
+    engine,
+):
+    """2 blockers, 1 attacker: `(M+1)^N = (1+1)^2 = 4` assignments:
+    {}, {(b0,a)}, {(b1,a)}, {(b0,a),(b1,a)}. Locks in product growth
+    in the N dimension."""
+    state, _, p0_bf_ids, p1_bf_ids = _custom_registry_state(
+        engine,
+        p0_battlefield_printings=["Vanilla Bear"],
+        p1_battlefield_printings=["Vanilla Bear", "Vanilla Bear"],
+    )
+    _put_into_declare_blockers(state, attacker_ids=p0_bf_ids, defender_id=1)
+
+    actions = state.legal_decisions(1)
+
+    kinds = _kinds(actions)
+    assert kinds[0] == "pass_priority"
+    assert kinds.count("declare_blockers") == 4
+    dbs = [a for a in actions if a["kind"] == "declare_blockers"]
+    assignments_sets = {
+        frozenset(tuple(p) for p in d["assignments"]) for d in dbs
+    }
+    a = p0_bf_ids[0]
+    b0, b1 = p1_bf_ids[0], p1_bf_ids[1]
+    assert assignments_sets == {
+        frozenset(),
+        frozenset({(b0, a)}),
+        frozenset({(b1, a)}),
+        frozenset({(b0, a), (b1, a)}),
+    }
+
+
+# --- 39. DECLARE_BLOCKERS + 1 blocker, 2 attackers ------------------
+
+
+def test_legal_decisions_declare_blockers_one_blocker_two_attackers_emits_three(
+    engine,
+):
+    """1 blocker, 2 attackers: `(M+1)^N = (2+1)^1 = 3` assignments:
+    {} (don't block), {(b,a0)}, {(b,a1)}. Locks in product growth
+    in the M dimension — each blocker picks among M+1 choices."""
+    state, _, p0_bf_ids, p1_bf_ids = _custom_registry_state(
+        engine,
+        p0_battlefield_printings=["Vanilla Bear", "Vanilla Bear"],
+        p1_battlefield_printings=["Vanilla Bear"],
+    )
+    _put_into_declare_blockers(state, attacker_ids=p0_bf_ids, defender_id=1)
+
+    actions = state.legal_decisions(1)
+
+    kinds = _kinds(actions)
+    assert kinds[0] == "pass_priority"
+    assert kinds.count("declare_blockers") == 3
+    dbs = [a for a in actions if a["kind"] == "declare_blockers"]
+    assignments_sets = {
+        frozenset(tuple(p) for p in d["assignments"]) for d in dbs
+    }
+    a0, a1 = p0_bf_ids[0], p0_bf_ids[1]
+    b = p1_bf_ids[0]
+    assert assignments_sets == {
+        frozenset(),
+        frozenset({(b, a0)}),
+        frozenset({(b, a1)}),
+    }
+
+
+# --- 40. Tapped blocker is excluded ---------------------------------
+
+
+def test_legal_decisions_declare_blockers_tapped_blocker_excluded(
+    engine,
+):
+    """A tapped creature can't block (CR 509.1a). With P1's only
+    creature tapped, eligible_blockers is empty → only the empty
+    assignments emit. Mirrors the DeclareAttackers tapped-creature
+    exclusion test."""
+    state, _, p0_bf_ids, p1_bf_ids = _custom_registry_state(
+        engine,
+        p0_battlefield_printings=["Vanilla Bear"],
+        p1_battlefield_printings=["Vanilla Bear"],
+    )
+    state.tap_object(p1_bf_ids[0])
+    _put_into_declare_blockers(state, attacker_ids=p0_bf_ids, defender_id=1)
+
+    actions = state.legal_decisions(1)
+
+    kinds = _kinds(actions)
+    # Tapped blocker -> no eligible -> just the empty assignment.
+    assert kinds == ["pass_priority", "declare_blockers"]
+    db = [a for a in actions if a["kind"] == "declare_blockers"][0]
+    assert db["assignments"] == []
+
+
+# --- 41. Non-creature is excluded -----------------------------------
+
+
+def test_legal_decisions_declare_blockers_non_creature_excluded(
+    engine,
+):
+    """Only creatures can block (CR 509.1). A Forest (Land) on the
+    defender's battlefield does NOT count toward the eligible-
+    blockers set. With only a Forest + no creature, eligible is
+    empty → just the empty assignment."""
+    state, _, p0_bf_ids, _ = _custom_registry_state(
+        engine,
+        p0_battlefield_printings=["Vanilla Bear"],
+        p1_battlefield_printings=["Forest"],  # land, not creature
+    )
+    _put_into_declare_blockers(state, attacker_ids=p0_bf_ids, defender_id=1)
+
+    actions = state.legal_decisions(1)
+
+    kinds = _kinds(actions)
+    assert kinds == ["pass_priority", "declare_blockers"]
+    db = [a for a in actions if a["kind"] == "declare_blockers"][0]
+    assert db["assignments"] == []
+
+
+# --- 42. Summoning-sick creature IS included ------------------------
+
+
+def test_legal_decisions_declare_blockers_summoning_sick_creature_included(
+    engine,
+):
+    """A summoning-sick creature CAN block — CR 302.1 only restricts
+    attacking and activated abilities with tap costs, not blocking.
+    We use `_custom_registry_state` to put a Vanilla Bear (P0
+    attacker) + a Hasty Bear (P0 alt) + a sick Vanilla Bear (P1
+    defender) on the boards. P1's sick bear is created by
+    `cast_creature` — which stamps `summoning_sick=true` on the
+    battlefield slot — and then we verify it appears as an eligible
+    blocker. This is the headline rule difference vs the
+    DeclareAttackers test 27 (which excludes sick attackers)."""
+    import mtg_bot_engine as _engine
+    registry = _engine.Registry()
+    forest_pid = registry.register_printing({
+        "name": "Forest",
+        "card_types": ["Land"],
+        "mana_produced": ["G"],
+    })
+    hasty_pid = registry.register_printing({
+        "name": "Hasty Bear",
+        "card_types": ["Creature"],
+        "power": 2,
+        "toughness": 2,
+        "keywords": ["haste"],
+    })
+    bear_pid = registry.register_printing({
+        "name": "Vanilla Bear",
+        "card_types": ["Creature"],
+        "power": 2,
+        "toughness": 2,
+        "mana_cost": {"G": 1, "generic": 1},
+    })
+    state = _engine.make_state(
+        registry,
+        p0_library_printing_ids=[forest_pid],
+        p1_library_printing_ids=[forest_pid],
+        # P0 hand: Hasty Bear — we move it to bf (bypasses sickness
+        # stamping because move_object doesn't apply summoning
+        # sickness; that's the `cast_creature` path). Even if it
+        # WERE marked sick, haste bypasses the gate.
+        p0_hand_printing_ids=[hasty_pid],
+        # P1 hand: Vanilla Bear — we'll cast it so the resulting bf
+        # slot carries `summoning_sick = true`.
+        p1_hand_printing_ids=[bear_pid],
+    )
+    # Put P0's Hasty Bear on the battlefield via move_object — fast
+    # path, no mana, no sickness stamping (move_object preserves the
+    # default `summoning_sick=false` on the new bf slot).
+    p0_hand = state.hand_snapshot(0)
+    p0_hasty_id = p0_hand[0]["id"]
+    assert state.move_object(p0_hasty_id, ZONE_BATTLEFIELD, 0) is True
+    # Cast P1's Vanilla Bear — stamps summoning_sick=true.
+    p1_hand = state.hand_snapshot(1)
+    p1_bear_id = p1_hand[0]["id"]
+    state.add_mana(1, "G", 1)
+    state.add_mana(1, "C", 1)
+    assert state.cast_creature(p1_bear_id, 1) is True
+    bf = state.battlefield_snapshot()
+    p1_bear_bf = next(o for o in bf if o["id"] == p1_bear_id)
+    assert p1_bear_bf["summoning_sick"] is True
+    # P0 declares the Hasty Bear as an attacker.
+    assert state.declare_attacker(p0_hasty_id) is True
+    # Set up DECLARE_BLOCKERS phase with priority on defender (P1).
+    state.set_phase(PHASE_DECLARE_BLOCKERS)
+    state.give_priority_to(1)
+    assert p0_hasty_id in state.get_attackers()
+
+    actions = state.legal_decisions(1)
+
+    kinds = _kinds(actions)
+    # Sick bear IS eligible → full (1+1)^1 = 2 assignments emit.
+    assert kinds.count("declare_blockers") == 2
+    dbs = [a for a in actions if a["kind"] == "declare_blockers"]
+    assignments_sets = {
+        frozenset(tuple(p) for p in d["assignments"]) for d in dbs
+    }
+    assert frozenset() in assignments_sets
+    assert frozenset({(p1_bear_id, p0_hasty_id)}) in assignments_sets
+
+
+# --- 43. Cap kicks in: N > 3 OR M > 3 emits only no-blocks ---------
+
+
+def test_legal_decisions_declare_blockers_n_over_cap_emits_only_no_blocks(
+    engine,
+):
+    """`n_blockers > DECLARE_BLOCKERS_PRODUCT_CAP` (= 3): emit only
+    the "no blocks" empty assignment. Builds a 4-blocker / 1-
+    attacker board — full product would be `(1+1)^4 = 16` dicts,
+    capped to 1."""
+    state, _, p0_bf_ids, _ = _custom_registry_state(
+        engine,
+        p0_battlefield_printings=["Vanilla Bear"],
+        p1_battlefield_printings=["Vanilla Bear"] * 4,  # N=4 > cap=3
+    )
+    _put_into_declare_blockers(state, attacker_ids=p0_bf_ids, defender_id=1)
+
+    actions = state.legal_decisions(1)
+
+    kinds = _kinds(actions)
+    # Capped: just 1 DeclareBlockers (the empty "no blocks" choice).
+    assert kinds == ["pass_priority", "declare_blockers"]
+    db = [a for a in actions if a["kind"] == "declare_blockers"][0]
+    assert db["assignments"] == []
+
+
+def test_legal_decisions_declare_blockers_m_over_cap_emits_only_no_blocks(
+    engine,
+):
+    """`m_attackers > DECLARE_BLOCKERS_MAX_ATTACKERS` (= 3): emit
+    only the empty assignment. Builds a 1-blocker / 4-attacker
+    board — full product would be `(4+1)^1 = 5` dicts, capped to 1.
+    The M-dimension cap fires independently of the N-dimension cap."""
+    state, _, p0_bf_ids, _ = _custom_registry_state(
+        engine,
+        p0_battlefield_printings=["Vanilla Bear"] * 4,  # M=4 > cap=3
+        p1_battlefield_printings=["Vanilla Bear"],
+    )
+    _put_into_declare_blockers(state, attacker_ids=p0_bf_ids, defender_id=1)
+
+    actions = state.legal_decisions(1)
+
+    kinds = _kinds(actions)
+    assert kinds == ["pass_priority", "declare_blockers"]
+    db = [a for a in actions if a["kind"] == "declare_blockers"][0]
+    assert db["assignments"] == []
+
+
+# --- 44. Wrong phase: no DeclareBlockers ---------------------------
+
+
+@pytest.mark.parametrize(
+    "phase",
+    [PHASE_UNTAP, PHASE_MAIN1, PHASE_DECLARE_ATTACKERS, PHASE_MAIN2,
+     PHASE_CLEANUP],
+    ids=["UNTAP", "MAIN1", "DECLARE_ATTACKERS", "MAIN2", "CLEANUP"],
+)
+def test_legal_decisions_declare_blockers_wrong_phase_emits_no_declare_blockers(
+    engine, phase,
+):
+    """DeclareBlockers only emits during the DECLARE_BLOCKERS phase.
+    In any other phase (including the main phases and the
+    DECLARE_ATTACKERS phase) no `declare_blockers` dict emits, even
+    if the priority/active gates would otherwise be satisfied."""
+    state, _, _, _ = _custom_registry_state(
+        engine,
+        p0_battlefield_printings=["Vanilla Bear"],
+        p1_battlefield_printings=["Vanilla Bear"],
+    )
+    state.set_phase(phase)
+    # Priority on the defender (P1) so the priority gate passes.
+    state.give_priority_to(1)
+
+    actions = state.legal_decisions(1)
+
+    kinds = _kinds(actions)
+    assert "declare_blockers" not in kinds
+
+
+# --- 45. Priority on active player: no DeclareBlockers -------------
+
+
+def test_legal_decisions_declare_blockers_priority_on_active_emits_no_declare_blockers(
+    engine,
+):
+    """You can't declare blockers on your own attackers. Even
+    during the DECLARE_BLOCKERS phase, if `priority_player ==
+    active_player`, no `declare_blockers` dict emits for the active
+    player. Mirrors CR 509.1 — the defending player declares
+    blockers, NOT the attacking player."""
+    state, _, p0_bf_ids, _ = _custom_registry_state(
+        engine,
+        p0_battlefield_printings=["Vanilla Bear"],
+        p1_battlefield_printings=["Vanilla Bear"],
+    )
+    _put_into_declare_blockers(state, attacker_ids=p0_bf_ids, defender_id=1)
+    # Now flip priority back to the active player (P0) and query
+    # legal_decisions for them.
+    state.give_priority_to(0)
+    assert state.active_player == 0
+    assert state.get_priority_player() == 0
+
+    actions = state.legal_decisions(0)
+
+    kinds = _kinds(actions)
+    # No DeclareBlockers — active player can't declare them.
+    assert "declare_blockers" not in kinds
+
+
+# --- 46. Non-empty stack: no DeclareBlockers ----------------------
+
+
+def test_legal_decisions_declare_blockers_non_empty_stack_emits_no_declare_blockers(
+    engine,
+):
+    """Non-empty stack during DECLARE_BLOCKERS: the
+    `stack.is_empty()` gate fails, so DeclareBlockers does NOT
+    emit (declaration happens while the stack is empty)."""
+    state, _, p0_bf_ids, p1_bf_ids = _custom_registry_state(
+        engine,
+        p0_battlefield_printings=["Vanilla Bear"],
+        p1_battlefield_printings=["Vanilla Bear"],
+    )
+    _put_into_declare_blockers(state, attacker_ids=p0_bf_ids, defender_id=1)
+    state.push_to_stack(p1_bf_ids[0], 1)
+
+    actions = state.legal_decisions(1)
+
+    kinds = _kinds(actions)
+    assert "declare_blockers" not in kinds
+
+
+# --- 47. Round-trip emitted DeclareBlockers via apply_action -------
+
+
+def test_legal_decisions_declare_blockers_dicts_round_trip_via_apply_action(
+    engine,
+):
+    """Every DeclareBlockers dict from `legal_decisions` must be a
+    valid input to `apply_action` (regression for the round-23
+    declare-blockers bridge). The "block everything" dict in
+    particular should apply without raising — the primitive accepts
+    `[[blocker_id, attacker_id], ...]` and dispatches one
+    `declare_blocker` per pair."""
+    state, _, p0_bf_ids, p1_bf_ids = _custom_registry_state(
+        engine,
+        p0_battlefield_printings=["Vanilla Bear"],
+        p1_battlefield_printings=["Vanilla Bear"],
+    )
+    _put_into_declare_blockers(state, attacker_ids=p0_bf_ids, defender_id=1)
+
+    actions = state.legal_decisions(1)
+    dbs = [a for a in actions if a["kind"] == "declare_blockers"]
+    # Find the non-empty-assignments dict.
+    full_db = max(dbs, key=lambda d: len(d["assignments"]))
+    assert len(full_db["assignments"]) == 1
+    # Apply it; the primitive must accept the dict shape without
+    # raising. Combat-state diagnostics live in test_combat.py — the
+    # round-trip itself is the regression target here.
+    state.apply_action(full_db)
+
+
+# --- 48. DeclareBlockers dict carries the right wire shape ---------
+
+
+def test_legal_decisions_declare_blockers_dict_shape_is_minimal(
+    engine,
+):
+    """Every DeclareBlockers dict carries exactly two keys: `kind`
+    + `assignments`. Mirrors `actions.rs:action_to_pydict`'s
+    DeclareBlockers arm so a future-slice regression that adds an
+    extra wire key (e.g. `blocker_order`) to the emitter but
+    forgets to update the round-trip parser trips loudly."""
+    state, _, p0_bf_ids, _ = _custom_registry_state(
+        engine,
+        p0_battlefield_printings=["Vanilla Bear"],
+        p1_battlefield_printings=["Vanilla Bear"],
+    )
+    _put_into_declare_blockers(state, attacker_ids=p0_bf_ids, defender_id=1)
+
+    actions = state.legal_decisions(1)
+    dbs = [a for a in actions if a["kind"] == "declare_blockers"]
+    assert len(dbs) >= 1
+    for d in dbs:
+        assert set(d.keys()) == {"kind", "assignments"}
