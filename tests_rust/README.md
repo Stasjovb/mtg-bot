@@ -125,6 +125,7 @@ the test lands in a commit.
 | rust(zones-reanimate): move_object_from_graveyard_to_battlefield primitive (CR 302.1 / 400.7) | tests_rust/test_zones.py extend | green | feature/rust-tdd-graveyard-reanimation |
 | rust(counters-double): double_counters_for_player primitive (Doubling Season-style) | tests_rust/test_counters.py extend | green | feature/rust-tdd-counter-doubles |
 | rust(resolve-effects-r17): DestroyTarget + DamageEachOpponent dispatch | tests_rust/test_resolve.py extend | green | feature/rust-tdd-resolve-destroy-aoe |
+| tests_rust/test_choices.py        | apply_effect duplication in cards.rs        | green  | feature/rust-tdd-choices |
 
 ## Build invocation reminder
 
