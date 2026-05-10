@@ -85,6 +85,14 @@ pub struct CardPrinting {
     /// for first-slice synthetic test cards but real cards always
     /// have at least one.
     pub card_types: Vec<String>,
+    /// Static keyword abilities printed on the card. Stored as
+    /// lowercase strings ("flying", "vigilance", "trample",
+    /// "first strike", "double strike", "deathtouch", "lifelink",
+    /// "haste", "reach", "menace", "defender"). Keywords with
+    /// associated values (protection from X, ward N, hexproof
+    /// from X) need a richer schema and are deferred. Empty Vec
+    /// when the card has no static keywords.
+    pub keywords: Vec<String>,
 }
 
 /// Plain Rust container for the printings table. Held behind an
@@ -260,6 +268,22 @@ pub fn parse_printing(dict: &Bound<'_, PyDict>) -> PyResult<CardPrinting> {
         }
         None => Vec::new(),
     };
+    let keywords = match dict.get_item("keywords")? {
+        Some(kw_any) => {
+            let iter = kw_any.try_iter().map_err(|_| {
+                PyValueError::new_err("keywords must be an iterable of keyword strings")
+            })?;
+            let mut out = Vec::new();
+            for item in iter {
+                let s: String = item?.extract().map_err(|_| {
+                    PyValueError::new_err("keywords entries must be strings")
+                })?;
+                out.push(s.to_lowercase());
+            }
+            out
+        }
+        None => Vec::new(),
+    };
     Ok(CardPrinting {
         name: Arc::from(name),
         mana_cost,
@@ -268,6 +292,7 @@ pub fn parse_printing(dict: &Bound<'_, PyDict>) -> PyResult<CardPrinting> {
         toughness,
         mana_produced,
         card_types,
+        keywords,
     })
 }
 
@@ -408,6 +433,12 @@ impl Registry {
     /// MTG card types: "Creature", "Land", "Instant", etc.
     fn get_printing_card_types(&self, id: u32) -> PyResult<Vec<String>> {
         Ok(self.lookup(id)?.card_types.clone())
+    }
+
+    /// Static printed keywords (lowercase): "flying", "vigilance",
+    /// "trample", etc.
+    fn get_printing_keywords(&self, id: u32) -> PyResult<Vec<String>> {
+        Ok(self.lookup(id)?.keywords.clone())
     }
 
     /// Microbench helper: round-trip ``n`` copies of the same dict

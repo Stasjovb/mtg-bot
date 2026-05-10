@@ -281,6 +281,7 @@ pub fn make_synthetic_state(
         toughness: None,
         mana_produced: Some(vec!["G".to_string()]),
         card_types: vec!["Land".to_string()],
+        keywords: Vec::new(),
     });
     let bears_pid = builder.push_printing(CardPrinting {
         name: Arc::from("Grizzly Bears"),
@@ -294,6 +295,7 @@ pub fn make_synthetic_state(
         toughness: Some(2),
         mana_produced: None,
         card_types: vec!["Creature".to_string()],
+        keywords: Vec::new(),
     });
     let elves_pid = builder.push_printing(CardPrinting {
         name: Arc::from("Llanowar Elves"),
@@ -313,6 +315,7 @@ pub fn make_synthetic_state(
         // check produced a documented false-positive.
         mana_produced: Some(vec!["G".to_string()]),
         card_types: vec!["Creature".to_string()],
+        keywords: Vec::new(),
     });
     let registry = builder.snapshot();
 
