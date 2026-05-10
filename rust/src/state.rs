@@ -280,6 +280,7 @@ pub fn make_synthetic_state(
         power: None,
         toughness: None,
         mana_produced: Some(vec!["G".to_string()]),
+        card_types: vec!["Land".to_string()],
     });
     let bears_pid = builder.push_printing(CardPrinting {
         name: Arc::from("Grizzly Bears"),
@@ -292,6 +293,7 @@ pub fn make_synthetic_state(
         power: Some(2),
         toughness: Some(2),
         mana_produced: None,
+        card_types: vec!["Creature".to_string()],
     });
     let elves_pid = builder.push_printing(CardPrinting {
         name: Arc::from("Llanowar Elves"),
@@ -306,7 +308,11 @@ pub fn make_synthetic_state(
         // ability "{T}: Add {G}". Until the ability schema lands
         // we treat `mana_produced` on a creature the same way we
         // treat it on a land — `tap_for_mana` succeeds for either.
+        // The cast slice will use card_types to correctly reject
+        // play_land(llanowar) — the previous mana_produced.is_some()
+        // check produced a documented false-positive.
         mana_produced: Some(vec!["G".to_string()]),
+        card_types: vec!["Creature".to_string()],
     });
     let registry = builder.snapshot();
 

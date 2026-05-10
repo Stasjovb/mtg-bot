@@ -78,6 +78,13 @@ pub struct CardPrinting {
     /// "Tap for one of any color" / hybrid producers will need a
     /// richer schema and are deferred.
     pub mana_produced: Option<Vec<String>>,
+    /// MTG card types: "Creature", "Land", "Instant", "Sorcery",
+    /// "Artifact", "Enchantment", "Planeswalker", "Battle". Most
+    /// cards have one type; multi-typed cards (artifact creatures,
+    /// enchantment creatures) carry multiple. Empty Vec is allowed
+    /// for first-slice synthetic test cards but real cards always
+    /// have at least one.
+    pub card_types: Vec<String>,
 }
 
 /// Plain Rust container for the printings table. Held behind an
@@ -237,6 +244,22 @@ pub fn parse_printing(dict: &Bound<'_, PyDict>) -> PyResult<CardPrinting> {
         Some(mp_any) => Some(parse_mana_produced(mp_any)?),
         None => None,
     };
+    let card_types = match dict.get_item("card_types")? {
+        Some(ct_any) => {
+            let iter = ct_any.try_iter().map_err(|_| {
+                PyValueError::new_err("card_types must be an iterable of type strings")
+            })?;
+            let mut out = Vec::new();
+            for item in iter {
+                let s: String = item?.extract().map_err(|_| {
+                    PyValueError::new_err("card_types entries must be strings")
+                })?;
+                out.push(s);
+            }
+            out
+        }
+        None => Vec::new(),
+    };
     Ok(CardPrinting {
         name: Arc::from(name),
         mana_cost,
@@ -244,6 +267,7 @@ pub fn parse_printing(dict: &Bound<'_, PyDict>) -> PyResult<CardPrinting> {
         power,
         toughness,
         mana_produced,
+        card_types,
     })
 }
 
@@ -379,6 +403,11 @@ impl Registry {
     /// single-color land like Forest returns `Some(["G"])`.
     fn get_printing_mana_produced(&self, id: u32) -> PyResult<Option<Vec<String>>> {
         Ok(self.lookup(id)?.mana_produced.clone())
+    }
+
+    /// MTG card types: "Creature", "Land", "Instant", etc.
+    fn get_printing_card_types(&self, id: u32) -> PyResult<Vec<String>> {
+        Ok(self.lookup(id)?.card_types.clone())
     }
 
     /// Microbench helper: round-trip ``n`` copies of the same dict
