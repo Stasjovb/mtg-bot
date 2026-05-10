@@ -131,6 +131,7 @@ the test lands in a commit.
 | rust(mulligan-bottoming): bottom_cards_from_hand primitive (CR 103.4) | tests_rust/test_mulligan.py extend | green | feature/rust-tdd-mulligan-bottoming |
 | tests_rust/test_choices.py        | apply_effect duplication in cards.rs        | green  | feature/rust-tdd-choices |
 | rust(resolve-effects-r19): CreateToken dispatch (CR 701.6) | tests_rust/test_resolve.py extend | green  | feature/rust-tdd-resolve-create-token |
+| rust(combat-keyword): flash (CR 702.8) | tests_rust/test_cast.py extend | green  | feature/rust-tdd-flash |
 
 ## Build invocation reminder
 
