@@ -1206,3 +1206,134 @@ def test_apply_action_unknown_kind_message_mentions_turn_face_up(synthetic_state
     variant addition forces the message to grow."""
     with pytest.raises(ValueError, match=r"turn_face_up"):
         synthetic_state.apply_action({"kind": "frobnicate"})
+
+
+# --- UnlockRoomHalf --------------------------------------------------
+#
+# Rolling-integration slice (post-round-24): extend the Action enum +
+# apply_action dispatcher with ``Action::UnlockRoomHalf { card_id,
+# half_name }``. The Python dataclass ``UnlockRoomHalf(card_id: int,
+# half_name: str)`` carries two fields — the GameObject id of the Room
+# enchantment on the active player's battlefield, plus a string naming
+# which of the two halves to unlock (per the Room printing).
+#
+# CR 715.3-4 (DSK Rooms): as a sorcery, the controller of an unlocked
+# Room on the battlefield with at least one locked door may unlock a
+# locked door of that Room by paying its mana cost as though casting an
+# enchantment spell. The unlock action is NOT a spell — it doesn't go
+# on the stack; the named half is added to ``unlocked_halves`` on the
+# Room permanent on apply, and any newly-active triggered abilities on
+# the entering half fire.
+#
+# **Dispatch is stubbed.** Rust has no Room-half state today — the
+# per-object ``unlocked_halves: set[str]`` field that Python's
+# ``GameObject`` carries is missing on the Rust side, and there's no
+# half-specific effect activation primitive. The variant + bridge
+# round-trip ship now, so callers building Action dicts can already
+# use the ``unlock_room_half`` shape and hit a clear "not implemented
+# yet" error path rather than the generic ``unknown action kind``
+# rejection. A future slice adds the per-object Room state + the
+# unlock primitive then flips the dispatch arm to a real
+# ``call_method1("unlock_room_half", ...)`` call. Until then, happy-
+# path dispatch raises ``ValueError`` — these tests assert on the
+# stubbed error path, NOT on a successful unlock outcome. Mirrors the
+# round-23 ActivateAbility and round-24 TurnFaceUp "scaffold the
+# variant, defer the dispatch semantics" pattern.
+
+
+def test_apply_action_unlock_room_half_stub_raises_value_error(synthetic_state):
+    """Happy-path stub: a well-formed UnlockRoomHalf dict parses
+    cleanly but the dispatch arm raises ``ValueError`` because no
+    Rust Room-half state / unlock primitive exists yet. The error
+    message names the variant + flags it as future work so a follow-
+    up slice grepping for the string finds the dispatch site to
+    flip."""
+    with pytest.raises(
+        ValueError, match=r"UnlockRoomHalf dispatch not implemented yet"
+    ):
+        synthetic_state.apply_action(
+            {"kind": "unlock_room_half", "card_id": 42, "half_name": "left"}
+        )
+
+
+def test_apply_action_unlock_room_half_stub_error_mentions_room(synthetic_state):
+    """The stub message names the missing Rust state (Room enchantment
+    + half-name resolution) so a future slice grepping for "Room" finds
+    the dispatch site to flip. Pin the substring so the message stays
+    informative — a future slice that flips the dispatch to a real
+    call must also delete this test (it documents the stub-state, not
+    the eventual real behavior)."""
+    with pytest.raises(ValueError, match=r"Room"):
+        synthetic_state.apply_action(
+            {"kind": "unlock_room_half", "card_id": 7, "half_name": "right"}
+        )
+
+
+def test_apply_action_unlock_room_half_missing_card_id_raises_key_error(
+    synthetic_state,
+):
+    """Missing the ``card_id`` key raises ``KeyError`` —
+    ``parse_action`` rejects before dispatch (single point of
+    validation, mirrors the ``card_id``-missing shape on
+    ``play_land``). The KeyError fires BEFORE the dispatch-stub
+    ValueError, so this test pins the parse-time gate."""
+    with pytest.raises(KeyError, match="card_id"):
+        synthetic_state.apply_action(
+            {"kind": "unlock_room_half", "half_name": "left"}
+        )
+
+
+def test_apply_action_unlock_room_half_missing_half_name_raises_key_error(
+    synthetic_state,
+):
+    """Missing the ``half_name`` key raises ``KeyError`` — same parse-
+    time gate as ``card_id``. Both fields are required; the parser
+    reads them in order, so this test specifically exercises the
+    second key's check (card_id present, half_name missing)."""
+    with pytest.raises(KeyError, match="half_name"):
+        synthetic_state.apply_action(
+            {"kind": "unlock_room_half", "card_id": 7}
+        )
+
+
+def test_apply_action_unlock_room_half_wrong_type_for_card_id_raises(
+    synthetic_state,
+):
+    """``card_id`` must be a u32-extractable integer. A string fails
+    PyO3's ``extract::<u32>`` machinery → ``TypeError`` / ``ValueError``.
+    The dispatch-stub never runs; the parse-time gate fires first."""
+    with pytest.raises((TypeError, ValueError)):
+        synthetic_state.apply_action(
+            {
+                "kind": "unlock_room_half",
+                "card_id": "not-an-int",
+                "half_name": "left",
+            }
+        )
+
+
+def test_apply_action_unlock_room_half_wrong_type_for_half_name_raises(
+    synthetic_state,
+):
+    """``half_name`` must be a Python string. A non-string value (e.g.
+    an int) fails PyO3's ``extract::<String>`` machinery → ``TypeError``
+    / ``ValueError``. The dispatch-stub never runs; the parse-time gate
+    fires first."""
+    with pytest.raises((TypeError, ValueError)):
+        synthetic_state.apply_action(
+            {
+                "kind": "unlock_room_half",
+                "card_id": 7,
+                "half_name": 123,
+            }
+        )
+
+
+def test_apply_action_unknown_kind_message_mentions_unlock_room_half(
+    synthetic_state,
+):
+    """The unknown-kind error message includes ``unlock_room_half``
+    after this slice extends the variant list. Pin the substring so a
+    future variant addition forces the message to grow."""
+    with pytest.raises(ValueError, match=r"unlock_room_half"):
+        synthetic_state.apply_action({"kind": "frobnicate"})
