@@ -38,6 +38,7 @@ import sqlite3
 import subprocess
 import sys
 import threading
+import time
 from pathlib import Path
 from typing import Optional
 
@@ -51,6 +52,18 @@ from flask import (
 # them relative to the repo root via this module's path.
 _REPO_ROOT_FROM_HERE = Path(__file__).resolve().parents[3]
 _SCRIPTS_DIR = _REPO_ROOT_FROM_HERE / "scripts"
+
+
+# ---- queue lease + heartbeat defaults ---------------------------
+# Phase 1 of distributed-run robustness: a claimed job carries a
+# lease (claimed_at + ttl + worker_id). Workers heartbeat at ~TTL/3
+# to extend their lease. If a worker disappears (SSH drop, crash,
+# 90-min wall-clock kill mid-eval), its lease expires and the next
+# `/queue/take` call lazily reclaims the job and hands it to a fresh
+# worker. After ``DEFAULT_MAX_ATTEMPTS`` reclaims, the job is marked
+# permanently failed instead of looping forever.
+DEFAULT_LEASE_TTL_SEC = 120
+DEFAULT_MAX_ATTEMPTS = 3
 
 
 _LANDING_HTML = """<!doctype html>
@@ -194,6 +207,9 @@ def create_app(
     repo_root: Optional[Path] = None,
     progress_dir: Optional[Path] = None,
     runs_db_path: Optional[Path] = None,
+    lease_ttl_sec: int = DEFAULT_LEASE_TTL_SEC,
+    max_attempts: int = DEFAULT_MAX_ATTEMPTS,
+    monotonic: callable = time.monotonic,
 ) -> Flask:
     """Build the master HTTP server. ``progress_dir`` (when set)
     enables Stop-button propagation to remotes: each ``/queue/take``
@@ -208,6 +224,20 @@ def create_app(
     write endpoints serialize through ``mtg_bot.cli.runs.db.WRITE_LOCK``
     so concurrent POSTs from many remotes don't race the SQLite
     writer. Default ``None`` disables these endpoints (returns 404).
+
+    ``lease_ttl_sec`` is the per-job lease length granted on
+    ``/queue/take`` and extended by ``/queue/heartbeat``. Workers
+    that include a ``worker_id`` in their take request are tracked
+    in-flight; if their lease expires before ``/queue/finish`` (e.g.
+    SSH drop), the next ``/queue/take`` lazily reclaims the job and
+    re-hands it. ``max_attempts`` caps reclaim retries — after that
+    many attempts the job is moved to the queue's ``failed`` set
+    rather than retried indefinitely. ``monotonic`` is the clock
+    source for lease accounting; tests inject a fake clock here.
+
+    Backward compat: ``/queue/take`` requests without a
+    ``worker_id`` are served with the legacy take-and-forget
+    semantics — no lease tracking, same as before this PR.
     """
     # Local import to avoid scripts/ depending on the package at module
     # import time during early bootstrap.
@@ -262,8 +292,64 @@ def create_app(
     # there's no persistence — if the master restarts mid-iter,
     # workers will see "queue not initialized" and bail. That's
     # the right outcome (iter is dead anyway).
+    #
+    # Per-queue keys (set up by /queue/init):
+    #   next: int                — next un-handed-out idx in the
+    #                              0..total range
+    #   total: int               — fixed at init time
+    #   closed: bool             — early-stop flag (orchestrator)
+    #   ready: list[int]         — reclaimed indices (FIFO; popped
+    #                              before ``next`` advances)
+    #   inflight: dict[int, dict]
+    #                            — game_idx -> {worker_id, claimed_at,
+    #                              lease_expires_at}
+    #   attempts: dict[int, int] — game_idx -> claim count so far. The
+    #                              counter survives reclaim cycles —
+    #                              we look it up on each fresh take to
+    #                              decide whether to retry or fail.
+    #   failed: dict[int, int]   — game_idx -> attempts that failed.
+    #                              Once a job's attempts hit
+    #                              ``max_attempts`` and the lease
+    #                              expires (or is voluntarily failed),
+    #                              it lands here and is never re-
+    #                              handed-out.
     _queues: dict[str, dict] = {}
     _queues_lock = threading.Lock()
+
+    def _new_queue(total: int) -> dict:
+        return {
+            "next": 0,
+            "total": total,
+            "closed": False,
+            "ready": [],
+            "inflight": {},
+            "attempts": {},
+            "failed": {},
+        }
+
+    def _reclaim_expired(q: dict, now: float) -> list[int]:
+        """Sweep ``q['inflight']`` for leases whose
+        ``lease_expires_at`` has passed. Reclaimed indices either
+        re-enter ``q['ready']`` (if attempts < max_attempts) or
+        land in ``q['failed']``. Returns the list of newly-failed
+        indices (so callers can event-log them).
+
+        Caller MUST hold ``_queues_lock``.
+        """
+        expired = [
+            idx for idx, lease in q["inflight"].items()
+            if lease["lease_expires_at"] <= now
+        ]
+        newly_failed: list[int] = []
+        for idx in expired:
+            q["inflight"].pop(idx)
+            attempts = q["attempts"].get(idx, 0)
+            if attempts >= max_attempts:
+                q["failed"][idx] = attempts
+                newly_failed.append(idx)
+            else:
+                q["ready"].append(idx)
+        return newly_failed
 
     @app.route("/queue/init", methods=["POST"])
     def queue_init():
@@ -278,7 +364,7 @@ def create_app(
         if not run_id or not isinstance(total, int) or total <= 0:
             return jsonify({"error": "run_id + total_games required"}), 400
         with _queues_lock:
-            _queues[run_id] = {"next": 0, "total": total, "closed": False}
+            _queues[run_id] = _new_queue(total)
         return jsonify({"ok": True, "run_id": run_id, "total_games": total})
 
     @app.route("/queue/close/<run_id>", methods=["POST"])
@@ -308,12 +394,26 @@ def create_app(
     @app.route("/queue/take", methods=["POST"])
     def queue_take():
         """Hand out the next batch of game indices for ``run_id``.
-        Body: ``{"run_id": str, "batch_size": int}``. Returns
-        ``{"games": [int, ...]}`` — empty list means queue is
-        drained (worker should exit its loop).
+        Body: ``{"run_id": str, "batch_size": int,
+        "worker_id": str?}``. Returns
+        ``{"games": [int, ...], "lease_ttl_sec": int}`` — empty list
+        means queue is drained (worker should exit its loop).
 
         Atomic: the lock-protected slice + advance ensures two
         workers calling concurrently can't get overlapping ranges.
+
+        Lease + reclaim: when ``worker_id`` is supplied, each handed-
+        out idx is recorded in ``inflight`` with a lease expiring in
+        ``lease_ttl_sec`` from now. Before handing out new indices,
+        any expired leases are swept; reclaimed jobs re-enter the
+        ``ready`` list (priority over fresh ``next`` indices) until
+        they exceed ``max_attempts``, at which point they're moved
+        to ``failed`` and never retried.
+
+        When ``worker_id`` is missing the response shape is
+        unchanged from the legacy take-and-forget path — no in-
+        flight tracking, no reclaim eligibility. Existing pull
+        workers that haven't been ported yet continue to work.
 
         Stop-button propagation: when ``progress_dir`` is configured
         and a ``.STOP_<run_id>`` sentinel exists, returns 410 Gone
@@ -325,6 +425,7 @@ def create_app(
         data = request.get_json(silent=True) or {}
         run_id = data.get("run_id")
         batch_size = int(data.get("batch_size", 25))
+        worker_id = data.get("worker_id")
         if batch_size < 1:
             return jsonify({"error": "batch_size must be >= 1"}), 400
         if progress_dir is not None and run_id and _stop_requested(
@@ -340,6 +441,8 @@ def create_app(
             q = _queues.get(run_id)
             if q is None:
                 return jsonify({"error": f"unknown run_id {run_id!r}"}), 404
+            now = monotonic()
+            _reclaim_expired(q, now)
             # Early-stop signal from the orchestrator: refuse to
             # hand out new games even though indices remain. The
             # in-flight games are still in flight; the abandoned
@@ -350,27 +453,200 @@ def create_app(
                     "remaining": 0,
                     "closed": True,
                 })
-            start = q["next"]
-            end = min(start + batch_size, q["total"])
-            q["next"] = end
+            handed_out: list[int] = []
+            # Reclaimed indices first — they've been waiting longer
+            # than fresh ones and we want them off the failed-or-
+            # retried path ASAP.
+            while q["ready"] and len(handed_out) < batch_size:
+                handed_out.append(q["ready"].pop(0))
+            # Fresh indices second.
+            need = batch_size - len(handed_out)
+            if need > 0:
+                start = q["next"]
+                end = min(start + need, q["total"])
+                handed_out.extend(range(start, end))
+                q["next"] = end
+            if worker_id:
+                expires = now + lease_ttl_sec
+                for idx in handed_out:
+                    q["attempts"][idx] = q["attempts"].get(idx, 0) + 1
+                    q["inflight"][idx] = {
+                        "worker_id": worker_id,
+                        "claimed_at": now,
+                        "lease_expires_at": expires,
+                    }
+            remaining = (
+                (q["total"] - q["next"]) + len(q["ready"])
+            )
         return jsonify({
-            "games": list(range(start, end)),
-            "remaining": q["total"] - end,
+            "games": handed_out,
+            "remaining": remaining,
+            "lease_ttl_sec": lease_ttl_sec,
+        })
+
+    @app.route("/queue/heartbeat", methods=["POST"])
+    def queue_heartbeat():
+        """Extend the lease on one or more in-flight jobs. Body:
+        ``{"run_id": str, "worker_id": str, "job_ids": [int, ...]}``.
+
+        Workers should heartbeat at ~``lease_ttl_sec / 3`` so a
+        single missed heartbeat (transient network glitch) doesn't
+        cause their job to get reclaimed. Returns
+        ``{"extended": [int, ...], "rejected": [int, ...]}`` —
+        ``rejected`` lists jobs that weren't held by this
+        ``worker_id`` (someone else now owns the lease, e.g. because
+        this worker's SSH connection silently dropped and the lease
+        expired and was reclaimed) so the worker can drop the job
+        from its tracking.
+
+        ``worker_id`` and ``job_ids`` are required. Unknown run_id
+        returns 404."""
+        data = request.get_json(silent=True) or {}
+        run_id = data.get("run_id")
+        worker_id = data.get("worker_id")
+        job_ids = data.get("job_ids")
+        if not worker_id or not isinstance(job_ids, list):
+            return jsonify({
+                "error": "worker_id + job_ids list required",
+            }), 400
+        with _queues_lock:
+            q = _queues.get(run_id)
+            if q is None:
+                return jsonify({"error": f"unknown run_id {run_id!r}"}), 404
+            now = monotonic()
+            extended: list[int] = []
+            rejected: list[int] = []
+            for idx in job_ids:
+                lease = q["inflight"].get(idx)
+                if lease is None or lease["worker_id"] != worker_id:
+                    rejected.append(idx)
+                    continue
+                lease["lease_expires_at"] = now + lease_ttl_sec
+                extended.append(idx)
+        return jsonify({
+            "extended": extended,
+            "rejected": rejected,
+            "lease_ttl_sec": lease_ttl_sec,
+        })
+
+    @app.route("/queue/finish", methods=["POST"])
+    def queue_finish():
+        """Mark in-flight jobs as cleanly completed. Body:
+        ``{"run_id": str, "worker_id": str, "job_ids": [int, ...]}``.
+
+        Removes the matching ``inflight`` entries so the lease
+        bookkeeping doesn't grow unbounded. ``rejected`` lists job
+        ids that weren't held by this worker (probably already
+        reclaimed); the caller should treat them as "someone else
+        will handle this" rather than retry.
+
+        This is distinct from ``/queue/close/<run_id>`` (which marks
+        the whole queue closed). ``finish`` is per-job; ``close`` is
+        per-queue.
+        """
+        data = request.get_json(silent=True) or {}
+        run_id = data.get("run_id")
+        worker_id = data.get("worker_id")
+        job_ids = data.get("job_ids")
+        if not worker_id or not isinstance(job_ids, list):
+            return jsonify({
+                "error": "worker_id + job_ids list required",
+            }), 400
+        with _queues_lock:
+            q = _queues.get(run_id)
+            if q is None:
+                return jsonify({"error": f"unknown run_id {run_id!r}"}), 404
+            finished: list[int] = []
+            rejected: list[int] = []
+            for idx in job_ids:
+                lease = q["inflight"].get(idx)
+                if lease is None or lease["worker_id"] != worker_id:
+                    rejected.append(idx)
+                    continue
+                q["inflight"].pop(idx)
+                # Drop the attempts counter on clean finish — the
+                # job is done, no more bookkeeping needed.
+                q["attempts"].pop(idx, None)
+                finished.append(idx)
+        return jsonify({
+            "finished": finished,
+            "rejected": rejected,
+        })
+
+    @app.route("/queue/fail", methods=["POST"])
+    def queue_fail():
+        """Voluntarily release in-flight jobs back to the queue. Body:
+        ``{"run_id": str, "worker_id": str, "job_ids": [int, ...]}``.
+
+        Used when a worker knows it can't finish a job (e.g. clean
+        shutdown, deck-pool mismatch detected mid-game) and wants
+        to return the job *before* its lease expires. Each job's
+        attempts counter is preserved; if it's already at
+        ``max_attempts`` the job is moved to ``failed`` instead of
+        re-queued. Returns lists of ``requeued`` and ``failed`` ids
+        (and ``rejected`` for ids not held by this worker).
+        """
+        data = request.get_json(silent=True) or {}
+        run_id = data.get("run_id")
+        worker_id = data.get("worker_id")
+        job_ids = data.get("job_ids")
+        if not worker_id or not isinstance(job_ids, list):
+            return jsonify({
+                "error": "worker_id + job_ids list required",
+            }), 400
+        with _queues_lock:
+            q = _queues.get(run_id)
+            if q is None:
+                return jsonify({"error": f"unknown run_id {run_id!r}"}), 404
+            requeued: list[int] = []
+            failed: list[int] = []
+            rejected: list[int] = []
+            for idx in job_ids:
+                lease = q["inflight"].get(idx)
+                if lease is None or lease["worker_id"] != worker_id:
+                    rejected.append(idx)
+                    continue
+                attempts = q["attempts"].get(idx, 0)
+                q["inflight"].pop(idx)
+                if attempts >= max_attempts:
+                    q["failed"][idx] = attempts
+                    failed.append(idx)
+                else:
+                    q["ready"].append(idx)
+                    requeued.append(idx)
+        return jsonify({
+            "requeued": requeued,
+            "failed": failed,
+            "rejected": rejected,
         })
 
     @app.route("/queue/status", methods=["GET"])
     def queue_status():
         """Diagnostic: report current state of all queues. Useful to
         eyeball "is the master making progress" without polling each
-        shard's progress JSON."""
+        shard's progress JSON.
+
+        Per-queue keys:
+          next, total, remaining, closed: as before
+          inflight: count of jobs currently leased to a worker
+          ready_reclaimed: count of expired-and-reclaimed jobs
+              waiting to be re-handed-out
+          failed: count of jobs that exceeded max_attempts
+        """
         with _queues_lock:
             return jsonify({
                 "queues": {
                     rid: {
                         "next": q["next"],
                         "total": q["total"],
-                        "remaining": q["total"] - q["next"],
+                        "remaining": (
+                            (q["total"] - q["next"])
+                            + len(q["ready"])
+                        ),
                         "closed": bool(q.get("closed")),
+                        "inflight": len(q["inflight"]),
+                        "ready_reclaimed": len(q["ready"]),
+                        "failed": len(q["failed"]),
                     }
                     for rid, q in _queues.items()
                 },
