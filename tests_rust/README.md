@@ -88,6 +88,7 @@ the test lands in a commit.
 | rust(resolve-postmove): card_types-driven destination | tests_rust/test_resolve.py extend            | green  | feature/rust-tdd-postresolve |
 | rust(combat-keywords): deathtouch+lifelink | tests_rust/test_combat.py extend            | green  | feature/rust-tdd-deathtouch-lifelink |
 | rust(resolve-effects): DrawCards+GainLife dispatch | tests_rust/test_resolve.py extend           | green  | feature/rust-tdd-resolve-effects |
+| rust(cleanup-compose): hand-size+damage-clear | tests_rust/test_cleanup.py extend           | green  | feature/rust-tdd-cleanup-compose |
 
 ## Build invocation reminder
 
