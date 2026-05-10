@@ -780,13 +780,58 @@ fn apply_effect(state: &mut GameState, effect: &Effect) -> PyResult<()> {
                 Arc::make_mut(&mut state.players[defender].graveyard).push(obj);
             }
         },
-        // Foundation stub: round-16 resolve-scry slice replaces with
-        // real dispatch. E0004 exhaustiveness would otherwise reject
-        // the build the moment ScryN lands in cards.rs.
-        Effect::ScryN { .. } => {
-            return Err(PyValueError::new_err(
-                "Effect::ScryN dispatch not yet implemented (round-16 foundation stub)",
-            ));
+        // Round-16: ScryN. CR 701.18 — controller looks at the top
+        // ``count`` cards of their library, may put any number on the
+        // bottom, the rest stay on top in any order.
+        //
+        // **First-slice deterministic shortcut: keep all on top.**
+        // This satisfies the "scry happened" semantics without
+        // requiring a decision callback to choose which cards go to
+        // the bottom (deferred to a future slice that plumbs a real
+        // "which to bottom" decision surface, mirroring how
+        // ``StackItem.controller`` is plumbed deferred-style). Keep-
+        // on-top is mechanically a no-op on the library — no zone
+        // moves, no order change — so there is literally nothing to
+        // mutate here.
+        //
+        // **Controller convention: ``state.active_player``** — same
+        // first-slice shape as DrawCards / GainLife (both also
+        // implicit-controller). Real MTG plumbs the spell controller
+        // through ``StackItem.controller``; deferred.
+        //
+        // **Negative ``count`` raises** loudly (CR 701.18 doesn't
+        // define Scry -1; surface it as a schema error). This differs
+        // from DrawCards / Mill which silently clamp negatives to 0.
+        //
+        // **count > library size** clamps to library length per
+        // CR 701.18d ("if there aren't enough cards in your library,
+        // look at all the cards"). With keep-on-top, the clamp is also
+        // a no-op — we just don't error.
+        //
+        // **Inlining note (cross-file friction).** Round-4 landed
+        // ``apply_scry`` as a private ``#[pymethods]`` method on
+        // ``state_ops_library.rs``; per per-slice file-isolation +
+        // E0624 cross-file friction we'd have to inline anyway, and
+        // the keep-on-top first-slice has no library mutation, so the
+        // dispatch reduces to a sign check. A future slice that
+        // plumbs the real "which to bottom" decision can either
+        // collapse onto ``apply_scry`` (after a consolidation slice)
+        // or grow the inline path here.
+        Effect::ScryN { count } => {
+            if *count < 0 {
+                return Err(PyValueError::new_err(format!(
+                    "ScryN count must be non-negative, got {count}"
+                )));
+            }
+            // First-slice deterministic keep-on-top: no library
+            // mutation needed. Empty / clamped library is a silent
+            // no-op (nothing to look at, nothing to move). The
+            // ``state.active_player`` reference here is the controller
+            // we'd resolve against once a real decision callback
+            // lands; binding a local makes the controller convention
+            // explicit for future readers even though we don't
+            // dispatch on it today.
+            let _controller = state.active_player as usize;
         }
     }
     Ok(())

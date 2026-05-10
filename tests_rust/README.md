@@ -116,6 +116,7 @@ the test lands in a commit.
 | rust(resolve-effects-r15): AddCounters+DiscardCard dispatch | tests_rust/test_resolve.py extend | green | feature/rust-tdd-resolve-counters-discard |
 | rust(sba-loop): apply_sbas_until_quiescent (CR 704.3) | tests_rust/test_sba.py extend | green | feature/rust-tdd-sba-loop |
 | rust(mana-pay-cost): pay_mana_cost (CR 202.2) | tests_rust/test_mana.py extend | green | feature/rust-tdd-mana-pay-cost |
+| rust(resolve-effects-r16): ScryN dispatch (CR 701.18) | tests_rust/test_resolve.py extend | green | feature/rust-tdd-resolve-scry |
 
 ## Build invocation reminder
 
