@@ -229,4 +229,73 @@ impl GameState {
         }
         Ok(())
     }
+
+    /// Proliferate primitive (CR 701.25). For every permanent on
+    /// either player's battlefield that already has `counters != 0`,
+    /// add one counter of the kind that's already there: positive
+    /// stays positive and ticks up by 1, negative stays negative and
+    /// ticks down by 1 (i.e. one more -1/-1 counter). Permanents at
+    /// zero net counters are NOT touched — proliferate only adds to
+    /// counter kinds that are already present.
+    ///
+    /// **Simplified model — divergence from real MTG.** Real
+    /// proliferate (CR 701.25a) is a player choice: the controller
+    /// picks any number of permanents and players that already have
+    /// counters and chooses, for each, whether to add another counter
+    /// of a kind it already has. This primitive instead deterministically
+    /// proliferates every eligible permanent. That matches the most
+    /// common board-state outcome for proliferate effects (Contagion
+    /// Clasp, Inkmoth Nexus's first ability, Karn's Bastion) where
+    /// the controller wants to grow their +1/+1 board and shrink the
+    /// opponent's creatures with -1/-1 counters anyway, but it skips
+    /// the "decline to proliferate" branch and the "proliferate enemy
+    /// +1/+1 counters" suicide branch. See `docs/SEARCH_LIMITATIONS.md`
+    /// for the full divergence note.
+    ///
+    /// Players (and their poison counters) are not modeled — the
+    /// engine has no poison-counter field today, so the player-side
+    /// half of proliferate is a no-op by absence.
+    ///
+    /// Saturating arithmetic — a counter at i32::MAX or i32::MIN
+    /// stays clamped instead of wrapping.
+    ///
+    /// No-op fast path: if no permanent on either battlefield has
+    /// non-zero counters, skip the per-zone `Arc::make_mut` clone
+    /// entirely. Mirrors `double_counters_for_player`'s pattern;
+    /// matters because proliferate-on-an-empty-board (e.g. cast
+    /// Contagion Clasp turn 1 with no targets yet on the battlefield)
+    /// is the dominant case during early-game search exploration.
+    ///
+    /// Returns `Ok(())` always; proliferate is an always-legal action
+    /// at the engine level (the "no eligible targets" case is just a
+    /// no-op, not an error).
+    fn proliferate(&mut self) -> PyResult<()> {
+        // No-op fast path: if neither battlefield has any non-zero
+        // counters, skip both make_mut clones and return immediately.
+        let any_targets = self
+            .players
+            .iter()
+            .any(|p| p.battlefield.iter().any(|o| o.counters != 0));
+        if !any_targets {
+            return Ok(());
+        }
+        for player in self.players.iter_mut() {
+            // Per-side fast path: if THIS battlefield has nothing to
+            // proliferate, skip make_mut on it so a CoW clone of just
+            // this side stays shared.
+            if !player.battlefield.iter().any(|o| o.counters != 0) {
+                continue;
+            }
+            let zone: &mut Vec<GameObject> = Arc::make_mut(&mut player.battlefield);
+            for obj in zone.iter_mut() {
+                if obj.counters > 0 {
+                    obj.counters = obj.counters.saturating_add(1);
+                } else if obj.counters < 0 {
+                    obj.counters = obj.counters.saturating_sub(1);
+                }
+                // counters == 0 → leave alone per CR 701.25a.
+            }
+        }
+        Ok(())
+    }
 }
