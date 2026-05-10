@@ -98,7 +98,8 @@ the test lands in a commit.
 | rust(combat-keywords): flying+reach | tests_rust/test_combat.py extend           | green  | feature/rust-tdd-flying-reach |
 | rust(resolve-effects-r11): ExileTarget dispatch | tests_rust/test_resolve.py extend           | green  | feature/rust-tdd-exile |
 | tests_rust/test_mulligan.py       | tests/test_actions.py + game.py             | green  | feature/rust-tdd-mulligan |
-| rust(combat-keywords): menace+defender | tests_rust/test_combat.py extend | green | feature/rust-tdd-menace-defender |
+| rust(combat-keywords): menace+defender | tests_rust/test_combat.py extend           | green  | feature/rust-tdd-menace-defender |
+| rust(resolve-effects-r12): TapTarget dispatch | tests_rust/test_resolve.py extend           | green  | feature/rust-tdd-tap-target |
 
 ## Build invocation reminder
 
