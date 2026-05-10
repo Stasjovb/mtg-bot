@@ -157,6 +157,7 @@ the test lands in a commit.
 | rust(legal-decisions-cast-spell): legal_decisions emits CastSpell | tests_rust/test_legal.py extend | green  | feature/rust-legal-decisions-cast-spell |
 | rust(effect-counter-target-spell): CounterTargetSpell dispatch (CR 701.5) | tests_rust/test_resolve.py extend | green  | feature/rust-effect-counter-target-spell |
 | rust(effect-return-creature-from-graveyard): reanimate dispatch (CR 400.7) | tests_rust/test_resolve.py extend | green  | feature/rust-effect-return-creature-from-graveyard |
+| rust(effect-discard-self): "you discard" dispatch (CR 701.8) | tests_rust/test_resolve.py extend | green  | feature/rust-effect-discard-self |
 
 ## Build invocation reminder
 

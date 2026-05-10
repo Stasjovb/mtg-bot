@@ -1047,6 +1047,73 @@ def test_return_creature_from_graveyard_in_unknown_kind_error_string():
         )
 
 
+def test_round_trip_discard_self_default_amount_is_one():
+    """CR 701.8 — "you discard a card." Powers Irreverent Gremlin
+    pattern (8 EoE cards). Python's
+    `DiscardSelf(amount: int = 1)` dataclass has amount default to 1;
+    the Rust parser mirrors that: an entry with no `amount` key
+    registers as amount=1 and round-trips that way. Mirrors
+    PutPlusOneCounterOnSelf's default-handling round-trip shape."""
+    reg = mtg_bot_engine.Registry()
+    pid = reg.register_printing(
+        {
+            "name": "Test Irreverent Gremlin",
+            "card_types": ["Creature"],
+            "power": 1,
+            "toughness": 1,
+            "effects": [{"kind": "discard_self"}],
+        }
+    )
+    effects = [dict(e) for e in reg.get_printing_effects(pid)]
+    assert effects[0] == {"kind": "discard_self", "amount": 1}
+
+
+def test_round_trip_discard_self_amount_two():
+    """An explicit amount=2 entry — for cards that force two discards
+    on resolution — round-trips with its amount preserved."""
+    reg = mtg_bot_engine.Registry()
+    pid = reg.register_printing(
+        {
+            "name": "Test Double Discard",
+            "card_types": ["Sorcery"],
+            "mana_cost": {"B": 1},
+            "effects": [{"kind": "discard_self", "amount": 2}],
+        }
+    )
+    effects = [dict(e) for e in reg.get_printing_effects(pid)]
+    assert effects[0] == {"kind": "discard_self", "amount": 2}
+
+
+def test_discard_self_negative_amount_raises():
+    """Register-time guard on negative amount (matches the
+    apply_effect guard, surfaced earlier in the pipeline). Mirrors
+    PutPlusOneCounterOnSelf / SearchLibraryForBasicLandTapped /
+    AddManaToPool negative register-time check."""
+    reg = mtg_bot_engine.Registry()
+    with pytest.raises(ValueError, match="non-negative"):
+        reg.register_printing(
+            {
+                "name": "Broken",
+                "card_types": ["Sorcery"],
+                "effects": [{"kind": "discard_self", "amount": -1}],
+            }
+        )
+
+
+def test_discard_self_in_unknown_kind_error_string():
+    """Defense-in-depth: the unknown-kind error message lists
+    `discard_self` in its valid-kinds enumeration so a future
+    mis-typed kind helpfully surfaces the right name."""
+    reg = mtg_bot_engine.Registry()
+    with pytest.raises(ValueError, match="discard_self"):
+        reg.register_printing(
+            {
+                "name": "Broken",
+                "effects": [{"kind": "discard_themself"}],
+            }
+        )
+
+
 def test_vanilla_card_with_no_mana_cost_or_effects():
     reg = mtg_bot_engine.Registry()
     pid = reg.register_printing(VANILLA_BLANK)

@@ -355,6 +355,47 @@ pub enum Effect {
     /// onto the shared primitive once cross-file private-fn calls
     /// re-open.
     ReturnCreatureFromYourGraveyardToBattlefield,
+    /// "You discard a card" (CR 701.8). The SOURCE's controller
+    /// discards `amount` cards from their hand. Punisher / drawback
+    /// shape (Irreverent Gremlin pattern) — 8 cards in the EoE pool
+    /// per round-20 measurement.
+    ///
+    /// **Distinct from `DiscardCard { target: AnyPlayer }`.**
+    /// `DiscardCard` deterministically targets the DEFENDING player
+    /// (Mind Rot / Wrench Mind shape — the active player forces the
+    /// opponent to discard). `DiscardSelf` is the SOURCE's own
+    /// controller — the punisher fires on whoever cast / controls
+    /// the source, regardless of active_player.
+    ///
+    /// **Source-finder dispatch (round-23 pattern).** Locates the
+    /// source by `source_obj_id` threaded through `apply_effect`.
+    /// The scan walks both players' hand / library / battlefield /
+    /// graveyard / exile zones to find the source's `controller`
+    /// (this is how DiscardSelf differs from
+    /// `PutPlusOneCounterOnSelf`, which restricts the source to the
+    /// battlefield — the punisher pattern fires regardless of where
+    /// the source has moved to, since the controller doesn't change
+    /// when a permanent leaves the battlefield). Additionally checks
+    /// the stack — the source may still be resolving (e.g. an
+    /// instant / sorcery / triggered ability that just fired with
+    /// `you discard a card` as its effect).
+    ///
+    /// **First-slice deterministic choice: discard hand[0]** of the
+    /// source's controller (zone-iteration order, mirrors the round-15
+    /// `DiscardCard` arm's hand[0] convention). Empty hand = silent
+    /// no-op (Python parity with `if not p.hand: break` in
+    /// `DiscardSelf.resolve`). Source not found anywhere = silent
+    /// no-op (lost-track-of-source tolerance, mirrors
+    /// `PutPlusOneCounterOnSelf`'s `source is None` short-circuit).
+    ///
+    /// **`amount` shape mirrors Python.** Python's
+    /// `DiscardSelf(amount: int = 1)` carries an `amount: int = 1`
+    /// default; this Rust variant mirrors that exactly. The
+    /// dispatch resolves up to `amount` discards in a row (stop
+    /// early on empty hand, matching the Python `for _ in
+    /// range(self.amount): if not p.hand: break` shape). Negative
+    /// `amount` raises at register / resolve time.
+    DiscardSelf { amount: i32 },
 }
 
 #[derive(Clone, Debug)]
@@ -668,8 +709,31 @@ fn parse_effect(dict: &Bound<'_, PyDict>) -> PyResult<Effect> {
             // drop convention elsewhere in the parser.
             Ok(Effect::ReturnCreatureFromYourGraveyardToBattlefield)
         }
+        "discard_self" => {
+            // Python's `DiscardSelf(amount: int = 1)` dataclass has
+            // an `amount` field defaulting to 1. Mirror that here:
+            // missing `amount` defaults to 1, present `amount`
+            // extracts as i32. Negative `amount` surfaces at register
+            // time (defense-in-depth; `apply_effect` re-checks).
+            // Mirrors PutPlusOneCounterOnSelf's default-handling
+            // shape.
+            let amount: i32 = match dict.get_item("amount")? {
+                Some(a) => a.extract().map_err(|e| {
+                    PyValueError::new_err(format!(
+                        "discard_self.amount must be an integer (got: {e})"
+                    ))
+                })?,
+                None => 1,
+            };
+            if amount < 0 {
+                return Err(PyValueError::new_err(format!(
+                    "discard_self: amount must be non-negative, got {amount}"
+                )));
+            }
+            Ok(Effect::DiscardSelf { amount })
+        }
         other => Err(PyValueError::new_err(format!(
-            "unknown effect kind {other:?}; valid: deal_damage, draw_cards, gain_life, return_to_hand, mill, exile_target, tap_target, untap_target, sacrifice, add_counters, discard_card, scry_n, destroy_target, damage_each_opponent, damage_each_creature, create_token, add_mana_to_pool, search_library_for_basic_land_tapped, put_plus_one_counter_on_self, surveil, counter_target_spell, return_creature_from_your_graveyard_to_battlefield"
+            "unknown effect kind {other:?}; valid: deal_damage, draw_cards, gain_life, return_to_hand, mill, exile_target, tap_target, untap_target, sacrifice, add_counters, discard_card, scry_n, destroy_target, damage_each_opponent, damage_each_creature, create_token, add_mana_to_pool, search_library_for_basic_land_tapped, put_plus_one_counter_on_self, surveil, counter_target_spell, return_creature_from_your_graveyard_to_battlefield, discard_self"
         ))),
     }
 }
@@ -941,6 +1005,10 @@ fn effect_to_pydict<'py>(
         }
         Effect::ReturnCreatureFromYourGraveyardToBattlefield => {
             d.set_item("kind", "return_creature_from_your_graveyard_to_battlefield")?;
+        }
+        Effect::DiscardSelf { amount } => {
+            d.set_item("kind", "discard_self")?;
+            d.set_item("amount", *amount)?;
         }
     }
     Ok(d)
