@@ -692,3 +692,244 @@ def test_deathtouch_and_lifelink_compose(synthetic_state):
         "composed: lifelink fires on the literal damage dealt (1), not on "
         "deathtouch's upgraded mark"
     )
+
+
+# ----------------------------- trample -------------------------------------
+#
+# Trample (CR 702.19): an attacking creature with trample can assign damage
+# in excess of what's needed to deal lethal damage to all of its blockers
+# to the defending player (or planeswalker). The first slice models this
+# only for the single-blocker case the round-5 combat slice already
+# supports: with one blocker, trample assigns
+# `max(attacker.power - blocker.toughness, 0)` to the defending player.
+#
+# Multi-blocker assignment ordering / damage distribution remains deferred
+# (the round-5 combat slice itself only ever applies attacker.power to
+# the FIRST declared blocker; a "spread across blockers" damage model is
+# the SBA-and-trample slice's job).
+#
+# Trample does NOT affect the unblocked path — an unblocked attacker
+# already deals all of its power to the defending player; the trample
+# branch must not double-count.
+
+
+def test_trample_unblocked_no_excess_to_defender(synthetic_state):
+    """A trample 3/3 attacker, no blocker. The defender takes 3 (the
+    existing unblocked path) and the trample branch does NOT
+    double-count: defender life lost is exactly 3, not 6."""
+    attacker_id = synthetic_state.register_and_inject_object(
+        _keyword_creature_dict(3, 3, ["trample"]), 0, ZONE_BATTLEFIELD
+    )
+    assert synthetic_state.get_life(1) == 20
+    assert synthetic_state.declare_attacker(attacker_id) is True
+    synthetic_state.deal_combat_damage()
+    # Defender lost exactly 3 — trample doesn't add a second helping
+    # of damage when the attacker is unblocked.
+    assert synthetic_state.get_life(1) == 17, (
+        "trample on an unblocked attacker must not double-count: defender "
+        "loses attacker.power (3), not 6"
+    )
+
+
+def test_trample_blocked_excess_goes_to_defender(synthetic_state):
+    """Trample 5/5 attacker vs 2/2 blocker. The blocker takes 2
+    (lethal); the 3-point excess (5 - 2) goes through to the defending
+    player."""
+    attacker_id = synthetic_state.register_and_inject_object(
+        _keyword_creature_dict(5, 5, ["trample"]), 0, ZONE_BATTLEFIELD
+    )
+    blocker_id = synthetic_state.register_and_inject_object(
+        _keyword_creature_dict(2, 2, []), 1, ZONE_BATTLEFIELD
+    )
+    assert synthetic_state.get_life(1) == 20
+    assert synthetic_state.declare_attacker(attacker_id) is True
+    assert synthetic_state.declare_blocker(blocker_id, attacker_id) is True
+    synthetic_state.deal_combat_damage()
+    # Blocker took at least its toughness (2) — the regular hit.
+    assert synthetic_state.get_damage(blocker_id) == 2
+    # Defender took the trample excess: 5 - 2 = 3.
+    assert synthetic_state.get_life(1) == 17, (
+        "trample excess (attacker.power - blocker.toughness = 5 - 2 = 3) "
+        "must go to the defending player"
+    )
+
+
+def test_trample_blocked_no_excess_when_attacker_smaller_than_blocker_toughness(synthetic_state):
+    """Trample 2/2 attacker vs 4/4 blocker. The blocker takes 2 (the
+    full damage), no excess goes through (since attacker.power
+    < blocker.toughness)."""
+    attacker_id = synthetic_state.register_and_inject_object(
+        _keyword_creature_dict(2, 2, ["trample"]), 0, ZONE_BATTLEFIELD
+    )
+    blocker_id = synthetic_state.register_and_inject_object(
+        _keyword_creature_dict(4, 4, []), 1, ZONE_BATTLEFIELD
+    )
+    assert synthetic_state.declare_attacker(attacker_id) is True
+    assert synthetic_state.declare_blocker(blocker_id, attacker_id) is True
+    synthetic_state.deal_combat_damage()
+    assert synthetic_state.get_damage(blocker_id) == 2
+    # No trample excess — defender life unchanged.
+    assert synthetic_state.get_life(1) == 20, (
+        "no trample excess when attacker.power <= blocker.toughness: "
+        "defender life must stay at 20"
+    )
+
+
+def test_trample_blocked_exact_lethal_no_excess(synthetic_state):
+    """Trample 3/3 attacker vs 3/3 blocker. Exact lethal — no excess.
+    The blocker takes 3, defender takes 0."""
+    attacker_id = synthetic_state.register_and_inject_object(
+        _keyword_creature_dict(3, 3, ["trample"]), 0, ZONE_BATTLEFIELD
+    )
+    blocker_id = synthetic_state.register_and_inject_object(
+        _keyword_creature_dict(3, 3, []), 1, ZONE_BATTLEFIELD
+    )
+    assert synthetic_state.declare_attacker(attacker_id) is True
+    assert synthetic_state.declare_blocker(blocker_id, attacker_id) is True
+    synthetic_state.deal_combat_damage()
+    assert synthetic_state.get_damage(blocker_id) == 3
+    assert synthetic_state.get_life(1) == 20, (
+        "exact-lethal trample (attacker.power == blocker.toughness) leaves "
+        "no excess for the defender"
+    )
+
+
+# ----------------------------- first-strike --------------------------------
+#
+# First-strike (CR 702.7): a creature with first strike deals combat damage
+# in a separate, earlier sub-step (the first-strike damage step). For this
+# slice, `deal_combat_damage` runs in two passes when ANY participant has
+# first-strike:
+#
+# 1. **First-strike damage step.** Only first-strike creatures deal damage.
+#    After applying their damage, anyone whose marked `damage` >=
+#    `printed toughness` is considered "dead" for the regular damage step
+#    (we don't have an SBA-fire here yet — it's a within-function check).
+# 2. **Regular damage step.** Only NON-first-strike creatures still alive
+#    AND first-strike creatures still alive (the latter wouldn't have hit
+#    anything new in the regular step in real MTG either, but they don't
+#    deal damage in this step because they already did it; we partition
+#    into "first-strike sources" vs "rest" and run the rest now).
+#
+# Trample fires inside whichever pass applies the damage.
+#
+# **No double-strike** in this slice (a double-strike creature deals
+# damage in BOTH steps). Deferred.
+
+
+def test_first_strike_attacker_kills_blocker_before_blocker_strikes_back(synthetic_state):
+    """A first-strike 2/2 attacker vs vanilla 2/2 blocker. The blocker
+    takes 2 in the first-strike step, dies before regular damage, so
+    the attacker takes 0 damage."""
+    attacker_id = synthetic_state.register_and_inject_object(
+        _keyword_creature_dict(2, 2, ["first_strike"]), 0, ZONE_BATTLEFIELD
+    )
+    blocker_id = synthetic_state.register_and_inject_object(
+        _keyword_creature_dict(2, 2, []), 1, ZONE_BATTLEFIELD
+    )
+    assert synthetic_state.declare_attacker(attacker_id) is True
+    assert synthetic_state.declare_blocker(blocker_id, attacker_id) is True
+    synthetic_state.deal_combat_damage()
+    # Blocker took 2 (lethal) in the first-strike step.
+    assert synthetic_state.get_damage(blocker_id) == 2
+    # Attacker took 0 — blocker died before regular damage.
+    assert synthetic_state.get_damage(attacker_id) == 0, (
+        "first-strike attacker must kill blocker before blocker can strike "
+        "back; attacker damage should be 0"
+    )
+
+
+def test_first_strike_blocker_kills_attacker_before_attacker_strikes_back(synthetic_state):
+    """Symmetric: vanilla 2/2 attacker vs first-strike 2/2 blocker.
+    Attacker takes 2 in first-strike step, dies before regular damage,
+    so the blocker takes 0."""
+    attacker_id = synthetic_state.register_and_inject_object(
+        _keyword_creature_dict(2, 2, []), 0, ZONE_BATTLEFIELD
+    )
+    blocker_id = synthetic_state.register_and_inject_object(
+        _keyword_creature_dict(2, 2, ["first_strike"]), 1, ZONE_BATTLEFIELD
+    )
+    assert synthetic_state.declare_attacker(attacker_id) is True
+    assert synthetic_state.declare_blocker(blocker_id, attacker_id) is True
+    synthetic_state.deal_combat_damage()
+    # Attacker took 2 (lethal) in the first-strike step.
+    assert synthetic_state.get_damage(attacker_id) == 2
+    # Blocker took 0 — attacker died before regular damage.
+    assert synthetic_state.get_damage(blocker_id) == 0, (
+        "first-strike blocker must kill attacker before attacker can strike "
+        "back; blocker damage should be 0"
+    )
+
+
+def test_both_first_strike_simultaneous_first_strike_step(synthetic_state):
+    """Both attacker and blocker have first-strike. They deal damage
+    simultaneously in the first-strike step; neither deals damage in
+    the regular step. Both 2/2s end up with 2 damage."""
+    attacker_id = synthetic_state.register_and_inject_object(
+        _keyword_creature_dict(2, 2, ["first_strike"]), 0, ZONE_BATTLEFIELD
+    )
+    blocker_id = synthetic_state.register_and_inject_object(
+        _keyword_creature_dict(2, 2, ["first_strike"]), 1, ZONE_BATTLEFIELD
+    )
+    assert synthetic_state.declare_attacker(attacker_id) is True
+    assert synthetic_state.declare_blocker(blocker_id, attacker_id) is True
+    synthetic_state.deal_combat_damage()
+    # Both took 2 in the first-strike step (simultaneous).
+    assert synthetic_state.get_damage(attacker_id) == 2, (
+        "both-first-strike: both creatures deal damage in the first-strike "
+        "step simultaneously"
+    )
+    assert synthetic_state.get_damage(blocker_id) == 2, (
+        "both-first-strike: both creatures deal damage in the first-strike "
+        "step simultaneously"
+    )
+
+
+def test_neither_first_strike_uses_single_step(synthetic_state):
+    """Sanity / regression: keyword-less 2/2 vs keyword-less 2/2 still
+    produces the round-5 mutual-damage exchange. The first-strike
+    branch must not have leaked into the default path."""
+    attacker_id = synthetic_state.register_and_inject_object(
+        _keyword_creature_dict(2, 2, []), 0, ZONE_BATTLEFIELD
+    )
+    blocker_id = synthetic_state.register_and_inject_object(
+        _keyword_creature_dict(2, 2, []), 1, ZONE_BATTLEFIELD
+    )
+    assert synthetic_state.declare_attacker(attacker_id) is True
+    assert synthetic_state.declare_blocker(blocker_id, attacker_id) is True
+    synthetic_state.deal_combat_damage()
+    # Mutual damage — both take 2.
+    assert synthetic_state.get_damage(attacker_id) == 2
+    assert synthetic_state.get_damage(blocker_id) == 2
+
+
+def test_first_strike_does_not_skip_lifelink(synthetic_state):
+    """A 3/3 attacker with BOTH first-strike and lifelink vs a vanilla
+    2/2 blocker. The attacker deals 3 to the blocker in the
+    first-strike step (overkill), the blocker dies, the attacker takes
+    0 in the regular step. Lifelink fires on the 3 damage dealt — the
+    attacker's controller gains 3 life."""
+    attacker_id = synthetic_state.register_and_inject_object(
+        _keyword_creature_dict(3, 3, ["first_strike", "lifelink"]),
+        0,
+        ZONE_BATTLEFIELD,
+    )
+    blocker_id = synthetic_state.register_and_inject_object(
+        _keyword_creature_dict(2, 2, []), 1, ZONE_BATTLEFIELD
+    )
+    assert synthetic_state.get_life(0) == 20
+    assert synthetic_state.declare_attacker(attacker_id) is True
+    assert synthetic_state.declare_blocker(blocker_id, attacker_id) is True
+    synthetic_state.deal_combat_damage()
+    # Blocker took 3 in first-strike step.
+    assert synthetic_state.get_damage(blocker_id) == 3
+    # Attacker took 0 — blocker died before regular damage.
+    assert synthetic_state.get_damage(attacker_id) == 0, (
+        "first-strike + lifelink composition: blocker died before regular "
+        "damage; attacker takes 0"
+    )
+    # Lifelink fired on the 3 damage dealt — controller gained 3.
+    assert synthetic_state.get_life(0) == 23, (
+        "first-strike + lifelink composition: lifelink must still gain life "
+        "for the damage dealt in the first-strike step"
+    )

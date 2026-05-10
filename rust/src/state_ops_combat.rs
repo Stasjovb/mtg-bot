@@ -17,12 +17,9 @@
 //!
 //! ## Scope simplifications (mirrored on `tests_rust/test_combat.py`)
 //!
-//! - **No first-strike / double-strike / trample / infect / protection
-//!   / unblockable.**
-//!   Damage in this slice is one symmetric round: each attacker
-//!   assigns `power` damage to its first blocker (or to the defending
-//!   player if unblocked), and each blocker assigns `power` damage
-//!   back to the attacker. Future combat slices peel off one keyword
+//! - **No double-strike / infect / protection / unblockable.**
+//!   First-strike + trample land in this slice; the remaining
+//!   keywords are deferred. Future combat slices peel off one keyword
 //!   at a time.
 //! - **Vigilance (CR 702.20) IS modeled.** A creature with
 //!   `"vigilance"` in `printing.keywords` skips the tap step on
@@ -50,6 +47,31 @@
 //!   covers combat damage because `deal_combat_damage` is the only
 //!   damage source today; non-combat damage sources will gain the
 //!   same lifelink hook when they grow up.
+//! - **Trample (CR 702.19) IS modeled — single-blocker case only.**
+//!   When an attacker with `"trample"` in `printing.keywords` is
+//!   blocked, any excess of `attacker.power` over the (single)
+//!   blocker's printed `toughness` is dealt to the defending player.
+//!   `excess = max(attacker.power - blocker.toughness, 0)`. Trample
+//!   does NOT add a second helping on the unblocked path — an
+//!   unblocked attacker already deals all its power to the defender
+//!   through the existing path; trample only widens the blocked path.
+//!   Multi-blocker damage distribution (CR 510.1c) stays deferred —
+//!   the round-5 combat slice itself only applies attacker.power to
+//!   the FIRST declared blocker.
+//! - **First-strike (CR 702.7) IS modeled.** When ANY participant in
+//!   combat has `"first_strike"` in `printing.keywords`,
+//!   `deal_combat_damage` runs in two passes: a "first-strike damage
+//!   step" applying only first-strike sources' damage, then a
+//!   "regular damage step" applying only non-first-strike sources'
+//!   damage AND only from sources still alive (i.e. their marked
+//!   `damage` is < their printed `toughness` after the first step).
+//!   Trample / deathtouch / lifelink fire inside whichever pass
+//!   actually applies the damage. **No double-strike** in this slice
+//!   (a double-strike creature would deal damage in BOTH passes);
+//!   deferred. SBAs are still NOT fired between the two passes —
+//!   the within-function "alive" check uses `damage < toughness`
+//!   rather than running `apply_sbas`, mirroring the round-5
+//!   simplification that the SBA slice owns lethal-damage cleanup.
 //! - **No legality checks beyond "creature on attacker's battlefield,
 //!   untapped, not summoning-sick".** Tapped and summoning-sick
 //!   creatures are rejected as attackers; that's the full attack-
@@ -228,6 +250,57 @@ fn battlefield_creature_controller(state: &GameState, obj_id: u32) -> Option<u8>
     None
 }
 
+/// Read currently-marked `damage` on a battlefield creature, or 0 if
+/// not present. Used by the first-strike "is the source still alive
+/// for the regular damage step?" check in `deal_combat_damage`.
+fn battlefield_creature_damage(state: &GameState, obj_id: u32) -> i16 {
+    for player in state.players.iter() {
+        for obj in player.battlefield.iter() {
+            if obj.id == obj_id {
+                return obj.damage;
+            }
+        }
+    }
+    0
+}
+
+/// Plan target for one entry in `deal_combat_damage`'s damage plan.
+/// Hoisted out of the function body so the per-pass apply helper
+/// (`apply_damage_pass`) can take the entry list as a parameter.
+enum DamageTarget {
+    Creature(u32),
+    Player(u8),
+}
+
+/// One entry in `deal_combat_damage`'s damage plan: a source dealing
+/// `amount` damage to `target`, plus whether the source carries
+/// first-strike (so the two-pass partition can route entries without
+/// re-reading the keyword).
+struct PlanEntry {
+    source_id: u32,
+    target: DamageTarget,
+    amount: i16,
+    source_has_first_strike: bool,
+}
+
+/// "Is this creature still alive after the first-strike damage step?"
+/// Returns true unless the creature's current marked `damage` is
+/// >= its printed `toughness` (CR 704.5g lethal-damage condition,
+/// inlined here without firing SBAs — the SBA slice owns the
+/// destroy-creature mutation; we only need the predicate to gate
+/// pass-2 damage from a creature that took lethal in pass 1).
+/// Returns true for creatures with toughness <= 0 (treated as
+/// already-dead via the > check) — but that's a degenerate seed and
+/// the test surface doesn't exercise it.
+fn battlefield_creature_alive(state: &GameState, obj_id: u32) -> bool {
+    let toughness = battlefield_creature_toughness(state, obj_id);
+    if toughness <= 0 {
+        return false;
+    }
+    let damage = battlefield_creature_damage(state, obj_id);
+    (damage as i32) < (toughness as i32)
+}
+
 #[pymethods]
 impl GameState {
     /// Declare the battlefield creature with `obj_id` as an attacker.
@@ -336,23 +409,34 @@ impl GameState {
     /// For each declared attacker:
     /// - If the attacker has at least one blocker (the FIRST entry
     ///   in `self.blockers` matching `attacker_id`): assign attacker
-    ///   power as damage to that blocker. (Multi-blocker assignment
-    ///   ordering / trample lives in a future slice.)
+    ///   power as damage to that blocker. If the attacker has
+    ///   `"trample"`, any excess of `attacker.power` over the
+    ///   blocker's printed toughness is also dealt to the defending
+    ///   player (CR 702.19).
     /// - If the attacker has no blocker: subtract attacker power from
     ///   the defending player's life. Defender = `1 - active_player`
-    ///   in the two-player model.
+    ///   in the two-player model. Trample does NOT add a second
+    ///   helping on the unblocked path.
     ///
-    /// For each declared blocker (regardless of whether it's the
-    /// "first" blocker on its attacker): assign blocker power as
-    /// damage to the attacker. This is the symmetric back-damage
-    /// half of the exchange.
+    /// For each declared blocker: assign blocker power as damage to
+    /// the attacker. This is the symmetric back-damage half of the
+    /// exchange.
     ///
-    /// **No first-strike / double-strike timing.** Damage is one
-    /// monolithic step today; the two-step ordering lands in a
-    /// future slice when first-strike comes online.
+    /// **First-strike (CR 702.7) IS modeled.** When ANY participant
+    /// has `"first_strike"`, damage runs in two passes: pass 1 applies
+    /// only first-strike sources' damage; pass 2 applies the rest,
+    /// excluding sources whose marked `damage` >= printed `toughness`
+    /// after pass 1 (i.e. sources that took lethal in pass 1 don't
+    /// strike back). When NO participant has first-strike, the path
+    /// degenerates to one pass, bit-identical to the pre-first-strike
+    /// behavior.
     ///
-    /// **No SBA enforcement.** Damage marks stay; lethal-damage-
-    /// destroys-creature is the SBA slice's job.
+    /// **No double-strike** in this slice — see module docstring.
+    ///
+    /// **No SBA enforcement between passes.** The "alive" check in
+    /// pass 2 is a within-function `damage < toughness` predicate;
+    /// dead creatures are NOT moved to the graveyard. Damage marks
+    /// stay; lethal-damage-destroys-creature is the SBA slice's job.
     fn deal_combat_damage(&mut self) -> PyResult<()> {
         // Snapshot attacker/blocker plans first. Mutating the
         // battlefield (damage marks, life) is held off until after the
@@ -362,25 +446,19 @@ impl GameState {
         // - the source's id (so we can re-read deathtouch / lifelink
         //   keywords without re-walking the per-attacker logic)
         // - the target (creature / player)
-        // - the literal `amount` of damage (the source's power; this
-        //   is what lifelink gains AND what the regular `damage +=`
-        //   add uses — deathtouch upgrades only the recipient's mark,
-        //   not the dealt amount, per CR 702.2c).
-        enum DamageTarget {
-            Creature(u32),
-            Player(u8),
-        }
-        struct PlanEntry {
-            source_id: u32,
-            target: DamageTarget,
-            amount: i16,
-        }
+        // - the literal `amount` of damage
+        // - whether the source has first-strike (so we can partition
+        //   the plan into pass-1 vs pass-2 entries without re-reading
+        //   the keyword on every dispatch).
         let mut plan: Vec<PlanEntry> = Vec::new();
 
         let defending_player: u8 = 1 - self.active_player;
 
         for &attacker_id in &self.attackers {
             let attacker_power = battlefield_creature_power(self, attacker_id);
+            let attacker_has_first_strike =
+                battlefield_has_keyword(self, attacker_id, "first_strike");
+            let attacker_has_trample = battlefield_has_keyword(self, attacker_id, "trample");
             // Find the FIRST blocker matching this attacker (single-
             // blocker damage simplification — see module docstring).
             let first_blocker: Option<u32> = self
@@ -389,37 +467,143 @@ impl GameState {
                 .find_map(|(a, b)| if *a == attacker_id { Some(*b) } else { None });
             if let Some(blocker_id) = first_blocker {
                 if attacker_power > 0 {
-                    plan.push(PlanEntry {
-                        source_id: attacker_id,
-                        target: DamageTarget::Creature(blocker_id),
-                        amount: attacker_power,
-                    });
+                    // Trample (CR 702.19): the attacker is required
+                    // to assign at least lethal (= blocker.toughness)
+                    // to the blocker, but may assign at most that
+                    // amount to the blocker, sending the excess to
+                    // the defender. We use the strict "lethal to
+                    // blocker, excess to defender" assignment so
+                    // tests can see the blocker's marked damage equal
+                    // its toughness (not the attacker's full power).
+                    //
+                    // Without trample, the attacker assigns its full
+                    // power to the blocker — same as the round-5
+                    // single-blocker simplification.
+                    if attacker_has_trample {
+                        let blocker_toughness =
+                            battlefield_creature_toughness(self, blocker_id);
+                        // Damage to blocker: min(attacker_power,
+                        // blocker_toughness). When attacker_power <=
+                        // blocker_toughness the blocker absorbs all
+                        // of it (no excess); when attacker_power >
+                        // blocker_toughness the blocker takes its
+                        // toughness's worth and the rest goes to the
+                        // defender.
+                        let to_blocker = std::cmp::min(attacker_power, blocker_toughness);
+                        if to_blocker > 0 {
+                            plan.push(PlanEntry {
+                                source_id: attacker_id,
+                                target: DamageTarget::Creature(blocker_id),
+                                amount: to_blocker,
+                                source_has_first_strike: attacker_has_first_strike,
+                            });
+                        }
+                        let excess = (attacker_power as i32) - (blocker_toughness as i32);
+                        if excess > 0 {
+                            plan.push(PlanEntry {
+                                source_id: attacker_id,
+                                target: DamageTarget::Player(defending_player),
+                                amount: excess as i16,
+                                source_has_first_strike: attacker_has_first_strike,
+                            });
+                        }
+                    } else {
+                        plan.push(PlanEntry {
+                            source_id: attacker_id,
+                            target: DamageTarget::Creature(blocker_id),
+                            amount: attacker_power,
+                            source_has_first_strike: attacker_has_first_strike,
+                        });
+                    }
                 }
             } else if attacker_power > 0 {
+                // Unblocked: the full attacker power goes to the
+                // defender. Trample does NOT double-count here.
                 plan.push(PlanEntry {
                     source_id: attacker_id,
                     target: DamageTarget::Player(defending_player),
                     amount: attacker_power,
+                    source_has_first_strike: attacker_has_first_strike,
                 });
             }
         }
         // Back-damage from EVERY declared blocker, regardless of
         // assignment order. (Real MTG: each blocker also deals damage
-        // simultaneously; trample / multi-blocker complexity is
-        // deferred but the back-damage lane is symmetric.)
+        // simultaneously; multi-blocker complexity is deferred but
+        // the back-damage lane is symmetric.)
         for &(attacker_id, blocker_id) in &self.blockers {
             let blocker_power = battlefield_creature_power(self, blocker_id);
+            let blocker_has_first_strike =
+                battlefield_has_keyword(self, blocker_id, "first_strike");
             if blocker_power > 0 {
                 plan.push(PlanEntry {
                     source_id: blocker_id,
                     target: DamageTarget::Creature(attacker_id),
                     amount: blocker_power,
+                    source_has_first_strike: blocker_has_first_strike,
                 });
             }
         }
 
-        // Apply the plan.
-        for entry in plan {
+        // First-strike timing (CR 702.7): if ANY plan entry's source
+        // has first-strike, run two passes. Pass 1 applies only the
+        // first-strike entries; then pass 2 applies the non-first-
+        // strike entries — but only from sources still alive after
+        // pass 1 (so a creature that took lethal first-strike damage
+        // doesn't strike back).
+        //
+        // When no plan entry has first-strike, the partition is empty
+        // / full and the two-pass code degenerates to one pass over
+        // the original list — bit-identical to the pre-first-strike
+        // behavior.
+        let any_first_strike = plan.iter().any(|e| e.source_has_first_strike);
+
+        if any_first_strike {
+            // Partition into (first-strike pass, regular pass).
+            let (pass_1, pass_2_all): (Vec<PlanEntry>, Vec<PlanEntry>) =
+                plan.into_iter().partition(|e| e.source_has_first_strike);
+            // Apply pass 1.
+            self.apply_damage_pass(pass_1);
+            // Filter pass 2 to only sources still alive after pass 1.
+            // A source is alive iff its marked damage < printed
+            // toughness — see `battlefield_creature_alive`.
+            let pass_2: Vec<PlanEntry> = pass_2_all
+                .into_iter()
+                .filter(|e| battlefield_creature_alive(self, e.source_id))
+                .collect();
+            self.apply_damage_pass(pass_2);
+        } else {
+            self.apply_damage_pass(plan);
+        }
+        Ok(())
+    }
+
+    /// End-of-combat scaffolding cleanup: empty `self.attackers` and
+    /// `self.blockers`.
+    ///
+    /// Does NOT untap declared attackers — that's the untap-step's
+    /// job (CR 502.1). Does NOT clear marked damage on creatures —
+    /// damage wears off in the cleanup step (CR 514.2), which lives
+    /// in `state_ops_damage.rs:clear_all_damage`.
+    fn clear_combat(&mut self) {
+        self.attackers.clear();
+        self.blockers.clear();
+    }
+}
+
+// Private (non-pymethods) impl for damage-pass application. Lives in
+// a sibling `impl` so `#[pymethods]` doesn't try to expose it to Python
+// (taking a `Vec<PlanEntry>` of a Rust-only struct, it can't be
+// marshalled anyway).
+impl GameState {
+    /// Apply one damage pass: iterate the entries, mutate damage
+    /// marks / player life, fire deathtouch upgrades and lifelink
+    /// gains. Shared between the single-pass (no first-strike) and
+    /// two-pass (first-strike present) branches of
+    /// `deal_combat_damage` so the deathtouch / lifelink composition
+    /// stays in one place.
+    fn apply_damage_pass(&mut self, entries: Vec<PlanEntry>) {
+        for entry in entries {
             // Read the source's keywords + controller BEFORE applying
             // mutations. Deathtouch upgrades the recipient's mark to
             // at least its toughness (CR 702.2b — only fires on
@@ -462,7 +646,8 @@ impl GameState {
             // the literal damage amount. Fires once per damage entry
             // (so a lifelink attacker hitting a player gains its
             // power; a lifelink blocker hitting an attacker gains
-            // its power).
+            // its power; trample-excess entries also fire lifelink
+            // for their excess amount).
             if source_has_lifelink {
                 if let Some(controller) = source_controller {
                     let cidx = controller as usize;
@@ -472,18 +657,5 @@ impl GameState {
                 }
             }
         }
-        Ok(())
-    }
-
-    /// End-of-combat scaffolding cleanup: empty `self.attackers` and
-    /// `self.blockers`.
-    ///
-    /// Does NOT untap declared attackers — that's the untap-step's
-    /// job (CR 502.1). Does NOT clear marked damage on creatures —
-    /// damage wears off in the cleanup step (CR 514.2), which lives
-    /// in `state_ops_damage.rs:clear_all_damage`.
-    fn clear_combat(&mut self) {
-        self.attackers.clear();
-        self.blockers.clear();
     }
 }
