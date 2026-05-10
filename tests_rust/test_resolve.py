@@ -4916,3 +4916,228 @@ def test_resolve_discard_self_clone_isolation(synthetic_state):
     assert synthetic_state.hand_sizes[0] == p0_hand_before
     assert synthetic_state.graveyard_sizes[0] == p0_grave_before
     assert synthetic_state.stack_size() == 1
+
+
+# --- round-26: EachOpponentLosesLife dispatch ------------------------
+#
+# CR 118.4 — "life loss" (not damage). Each opponent of the SOURCE's
+# controller loses `amount` life. Punisher / drawback pattern
+# (Balemurk Leech shape) — 6 cards in the EoE pool per round-20
+# measurement.
+#
+# **Distinct from round-17 DamageEachOpponent.** DamageEachOpponent
+# deals DAMAGE (CR 701.4) — routes through damage-prevention /
+# Worship-style replacement (CR 614) when those land. Each-
+# OpponentLosesLife is direct life subtraction and is NOT reducible.
+# Two-player engine first slice: both variants land identical
+# defender-life deltas because neither variant routes through
+# damage-prevention yet, but they stay distinct to mirror Python's
+# closed `Effect` vocabulary.
+#
+# **Source-finder dispatch (round-24 pattern).** Walks both players'
+# five tracked zones (hand / library / battlefield / graveyard /
+# exile) plus the stack to recover the source's `controller`.
+# Mirrors DiscardSelf — punisher effects fire on whoever controls the
+# source regardless of where the source currently sits, since the
+# controller field doesn't change on zone moves.
+#
+# **Two-player "each opponent" reduces to "the one opponent".**
+# opponent_id = 1 - controller. Direct life subtraction. amount=0 is
+# a legal no-op; amount<0 raises. Source not found = silent fizzle.
+
+
+def _balemurk_leech_dict(amount=2, card_types=None):
+    """A Balemurk-Leech-shaped printing: a permanent (or instant /
+    sorcery via card_types override) whose effect makes each opponent
+    of the SOURCE's controller lose `amount` life.
+
+    Default card_types=["Creature"] so the post-resolve mover sends
+    the source to the battlefield (the printed Balemurk Leech is a
+    creature with an ETB-style punisher trigger). Tests that need a
+    different source-zone behavior override card_types.
+    """
+    if card_types is None:
+        card_types = ["Creature"]
+    p = {
+        "name": f"Test Balemurk Leech (x{amount})",
+        "card_types": card_types,
+        "mana_cost": {"B": 1, "generic": 1},
+        "effects": [{"kind": "each_opponent_loses_life", "amount": amount}],
+    }
+    if "Creature" in card_types:
+        p["power"] = 2
+        p["toughness"] = 2
+    return p
+
+
+def test_resolve_each_opponent_loses_life_decrements_opponent_life(
+    synthetic_state,
+):
+    """Happy path: source on active player's (p0) battlefield with
+    amount=3 — p1 (the one opponent) loses 3 life; p0 untouched."""
+    src_id = synthetic_state.register_and_inject_object(
+        _balemurk_leech_dict(amount=3), 0, ZONE_BATTLEFIELD
+    )
+    p0_life_before = synthetic_state.life_totals[0]
+    p1_life_before = synthetic_state.life_totals[1]
+
+    synthetic_state.push_to_stack(src_id, 0)
+    synthetic_state.resolve_top_of_stack()
+
+    assert synthetic_state.is_stack_empty() is True
+    # p0 (source's controller) untouched; p1 (the one opponent) -3.
+    assert synthetic_state.life_totals[0] == p0_life_before
+    assert synthetic_state.life_totals[1] == p1_life_before - 3
+
+
+def test_resolve_each_opponent_loses_life_amount_zero_no_op(synthetic_state):
+    """amount=0 is a legitimate no-op (mirrors GainLife / DrawCards /
+    Mill / DamageEachOpponent / DiscardSelf zero-amount conventions).
+    No life change, no error, stack pops."""
+    src_id = synthetic_state.register_and_inject_object(
+        _balemurk_leech_dict(amount=0), 0, ZONE_BATTLEFIELD
+    )
+    life_before = list(synthetic_state.life_totals)
+    synthetic_state.push_to_stack(src_id, 0)
+    synthetic_state.resolve_top_of_stack()
+
+    assert synthetic_state.is_stack_empty() is True
+    assert list(synthetic_state.life_totals) == life_before
+
+
+def test_resolve_each_opponent_loses_life_negative_amount_raises_at_register(
+    synthetic_state,
+):
+    """Negative amount is a schema error (mirrors DamageEachOpponent /
+    DiscardSelf raise-on-negative shape; 'lose -2 life' is schema
+    nonsense). The parse_effect bridge guard surfaces this at
+    register time — before resolution ever runs."""
+    with pytest.raises(ValueError):
+        synthetic_state.register_and_inject_object(
+            _balemurk_leech_dict(amount=-2), 0, ZONE_BATTLEFIELD
+        )
+
+
+def test_resolve_each_opponent_loses_life_opponent_source_targets_active_player(
+    synthetic_state,
+):
+    """The 'each opponent' is OPPONENTS-OF-CONTROLLER, NOT defender-
+    of-active-player. Source on p1's battlefield (controller=1) while
+    active_player stays p0 — resolving EachOpponentLosesLife reduces
+    p0's life (the one opponent of p1), NOT p1's. Cross-controller-
+    active-player distinction matches DiscardSelf's behavior."""
+    src_id = synthetic_state.register_and_inject_object(
+        _balemurk_leech_dict(amount=4), 1, ZONE_BATTLEFIELD
+    )
+    p0_life_before = synthetic_state.life_totals[0]
+    p1_life_before = synthetic_state.life_totals[1]
+    assert synthetic_state.active_player == 0
+
+    # Push with controller=1 (p1's source resolving on the stack).
+    synthetic_state.push_to_stack(src_id, 1)
+    synthetic_state.resolve_top_of_stack()
+
+    assert synthetic_state.is_stack_empty() is True
+    # p0 (the one opponent of p1) -4; p1 (controller) untouched.
+    assert synthetic_state.life_totals[0] == p0_life_before - 4
+    assert synthetic_state.life_totals[1] == p1_life_before
+
+
+def test_resolve_each_opponent_loses_life_active_player_unchanged(
+    synthetic_state,
+):
+    """Asymmetric: EachOpponentLosesLife reduces opponents only —
+    the SOURCE's controller (here = active player p0) is NOT
+    affected. Verify by recording p0's life before and asserting
+    it's unchanged after a 5-life-loss resolution."""
+    p0_life_before = synthetic_state.life_totals[0]
+    p1_life_before = synthetic_state.life_totals[1]
+    assert synthetic_state.active_player == 0
+
+    src_id = synthetic_state.register_and_inject_object(
+        _balemurk_leech_dict(amount=5), 0, ZONE_BATTLEFIELD
+    )
+    synthetic_state.push_to_stack(src_id, 0)
+    synthetic_state.resolve_top_of_stack()
+
+    # p0 (controller) untouched; p1 -5.
+    assert synthetic_state.life_totals[0] == p0_life_before
+    assert synthetic_state.life_totals[1] == p1_life_before - 5
+
+
+def test_resolve_each_opponent_loses_life_multiple_resolutions_stack(
+    synthetic_state,
+):
+    """Two resolutions in a row (3 + 2 = 5 life loss). Confirms the
+    arm is idempotent across repeat invocations and that life-loss
+    accumulates additively. Each resolution is its own stack push +
+    resolve — register_and_inject_object seeds a Creature source each
+    time."""
+    p1_life_before = synthetic_state.life_totals[1]
+
+    # First resolution: amount=3.
+    src_a = synthetic_state.register_and_inject_object(
+        _balemurk_leech_dict(amount=3), 0, ZONE_BATTLEFIELD
+    )
+    synthetic_state.push_to_stack(src_a, 0)
+    synthetic_state.resolve_top_of_stack()
+
+    # Second resolution: amount=2.
+    src_b = synthetic_state.register_and_inject_object(
+        _balemurk_leech_dict(amount=2), 0, ZONE_BATTLEFIELD
+    )
+    synthetic_state.push_to_stack(src_b, 0)
+    synthetic_state.resolve_top_of_stack()
+
+    assert synthetic_state.is_stack_empty() is True
+    # p1 lost 3 + 2 = 5 life.
+    assert synthetic_state.life_totals[1] == p1_life_before - 5
+
+
+def test_resolve_each_opponent_loses_life_source_in_graveyard_uses_controller(
+    synthetic_state,
+):
+    """The source-finder walks five zones — wider than the
+    battlefield-only scan PutPlusOneCounterOnSelf uses. Inject a
+    source-shaped object into p0's graveyard: the zone-scan picks up
+    p0 as the controller and resolves the life-loss on p1. Documents
+    the "source has left the battlefield by resolve time" tolerance
+    — the source's `controller` field doesn't change on zone moves."""
+    src_id = synthetic_state.register_and_inject_object(
+        _balemurk_leech_dict(amount=2, card_types=["Creature"]),
+        0,
+        ZONE_GRAVEYARD,
+    )
+    p0_life_before = synthetic_state.life_totals[0]
+    p1_life_before = synthetic_state.life_totals[1]
+
+    synthetic_state.push_to_stack(src_id, 0)
+    synthetic_state.resolve_top_of_stack()
+
+    # p1 (the one opponent of p0, recorded on the GameObject
+    # regardless of which zone it's in) -2; p0 untouched.
+    assert synthetic_state.life_totals[0] == p0_life_before
+    assert synthetic_state.life_totals[1] == p1_life_before - 2
+
+
+def test_resolve_each_opponent_loses_life_clone_isolation(synthetic_state):
+    """CoW canary: running EachOpponentLosesLife on a clone leaves
+    the original state's life totals untouched. The arm writes
+    `players[idx].life` directly — confirm the GameState clone
+    semantics decouple the player Vec across clones."""
+    src_id = synthetic_state.register_and_inject_object(
+        _balemurk_leech_dict(amount=2), 0, ZONE_BATTLEFIELD
+    )
+    synthetic_state.push_to_stack(src_id, 0)
+    p1_life_before = synthetic_state.life_totals[1]
+
+    cloned = synthetic_state.clone_once()
+    cloned.resolve_top_of_stack()
+
+    # Clone diverged: p1 lost 2 life.
+    assert cloned.life_totals[1] == p1_life_before - 2
+    assert cloned.is_stack_empty() is True
+
+    # Original untouched.
+    assert synthetic_state.life_totals[1] == p1_life_before
+    assert synthetic_state.stack_size() == 1

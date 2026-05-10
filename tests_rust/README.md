@@ -163,6 +163,7 @@ the test lands in a commit.
 | rust(action-unlock-room-half): Action::UnlockRoomHalf variant (dispatch stubbed) | tests_rust/test_actions.py extend | green  | feature/rust-action-unlock-room-half |
 | rust(legal-decisions-activate-ability): emit ActivateAbility for mana producers | tests_rust/test_legal.py extend | green  | feature/rust-legal-decisions-activate-ability |
 | rust(action-activate-station): Action::ActivateStation variant (dispatch stubbed) | tests_rust/test_actions.py extend | green  | feature/rust-action-activate-station |
+| rust(effect-each-opponent-loses-life): life-loss (CR 118.4) | tests_rust/test_resolve.py extend | green  | feature/rust-effect-each-opponent-loses-life |
 
 ## Build invocation reminder
 

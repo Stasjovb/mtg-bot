@@ -1114,6 +1114,85 @@ def test_discard_self_in_unknown_kind_error_string():
         )
 
 
+# --- round-26: EachOpponentLosesLife round-trip + error paths --------
+#
+# CR 118.4 — life loss (not damage). Powers Balemurk Leech pattern
+# (6 EoE cards). Distinct from DamageEachOpponent — life-loss isn't
+# reducible by damage-prevention effects; two-player engine first
+# slice end-state matches DamageEachOpponent on the defender's life,
+# but the variants stay separate to mirror Python's
+# `EachOpponentLosesLife(amount: int)` dataclass shape.
+
+
+def test_round_trip_each_opponent_loses_life_amount_two():
+    """Happy path: amount=2 round-trips faithfully. Mirrors Python's
+    `EachOpponentLosesLife(amount: int)` dataclass shape — required
+    `amount` field with no default."""
+    reg = mtg_bot_engine.Registry()
+    pid = reg.register_printing(
+        {
+            "name": "Test Balemurk Leech",
+            "card_types": ["Creature"],
+            "power": 2,
+            "toughness": 2,
+            "mana_cost": {"B": 1, "generic": 1},
+            "effects": [{"kind": "each_opponent_loses_life", "amount": 2}],
+        }
+    )
+    effects = [dict(e) for e in reg.get_printing_effects(pid)]
+    assert effects[0] == {"kind": "each_opponent_loses_life", "amount": 2}
+
+
+def test_round_trip_each_opponent_loses_life_amount_zero():
+    """amount=0 is a legal no-op shape (mirrors GainLife / DrawCards /
+    Mill / DamageEachOpponent / DiscardSelf zero-amount round-trip
+    conventions). Registers and round-trips without error."""
+    reg = mtg_bot_engine.Registry()
+    pid = reg.register_printing(
+        {
+            "name": "Test Zero Drain",
+            "card_types": ["Sorcery"],
+            "effects": [{"kind": "each_opponent_loses_life", "amount": 0}],
+        }
+    )
+    effects = [dict(e) for e in reg.get_printing_effects(pid)]
+    assert effects[0] == {"kind": "each_opponent_loses_life", "amount": 0}
+
+
+def test_each_opponent_loses_life_missing_amount_raises():
+    """Python's `EachOpponentLosesLife(amount: int)` has no default —
+    the Rust parser mirrors that: omitting `amount` raises KeyError
+    at register time (defense-in-depth, surfaced earlier in the
+    pipeline than the resolve guard). Distinct from DiscardSelf /
+    PutPlusOneCounterOnSelf which default to amount=1."""
+    reg = mtg_bot_engine.Registry()
+    with pytest.raises(KeyError, match="amount"):
+        reg.register_printing(
+            {
+                "name": "Broken",
+                "card_types": ["Sorcery"],
+                "effects": [{"kind": "each_opponent_loses_life"}],
+            }
+        )
+
+
+def test_each_opponent_loses_life_negative_amount_raises():
+    """Register-time guard on negative amount (matches the
+    apply_effect guard, surfaced earlier in the pipeline). Mirrors
+    DamageEachOpponent / DiscardSelf / PutPlusOneCounterOnSelf
+    negative register-time check shape — 'lose -2 life' is schema
+    nonsense."""
+    reg = mtg_bot_engine.Registry()
+    with pytest.raises(ValueError, match="non-negative"):
+        reg.register_printing(
+            {
+                "name": "Broken",
+                "card_types": ["Sorcery"],
+                "effects": [{"kind": "each_opponent_loses_life", "amount": -1}],
+            }
+        )
+
+
 def test_vanilla_card_with_no_mana_cost_or_effects():
     reg = mtg_bot_engine.Registry()
     pid = reg.register_printing(VANILLA_BLANK)
