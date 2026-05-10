@@ -62,6 +62,11 @@ ZONE_HAND = 0
 ZONE_LIBRARY = 1
 ZONE_BATTLEFIELD = 2
 ZONE_GRAVEYARD = 3
+# Round-11 exile slice: matches `ZONE_EXILE` in `state_ops_zones.rs`,
+# which was already defined as 5 (alongside `ZONE_STACK = 4`) before
+# this slice landed. We use the existing constant rather than picking
+# a new integer.
+ZONE_EXILE = 5
 
 
 def _bombard_dict(amount=3, target_kind="any_player"):
@@ -1312,3 +1317,250 @@ def test_resolve_mill_clone_canary(synthetic_state):
     # Clone: 3 milled + source -> graveyard.
     assert cloned.library_sizes[0] == p0_lib_before - 3
     assert cloned.graveyard_sizes[0] == p0_grave_before + 3 + 1
+
+
+# --- round-11 ExileTarget dispatch ----------------------------------
+#
+# Round-11 foundation (`feature/rust-tdd-base-r11`) added a new
+# ``Effect`` variant ``ExileTarget { target: TargetFilter }`` plus the
+# ``Player.exile`` zone (CR 406) and a temporary stub arm in
+# ``apply_effect`` returning ``ValueError``. This slice replaces the
+# stub with real dispatch.
+#
+# **Scope simplifications for this slice (mirrored in the Rust module
+# docstring on ``state_ops_resolve.rs``):**
+#
+# - **AnyCreature target → first object on the DEFENDING player's
+#   battlefield (smallest index).** Mirrors the existing DealDamage /
+#   ReturnToHand convention. No creature-type filter, no per-spell
+#   target choice. Empty defender battlefield → fizzle (silent no-op,
+#   stack still pops).
+# - **AnyPlayer target on ExileTarget makes no sense** (you can't
+#   exile a player). The dispatch raises ValueError loudly, matching
+#   the ReturnToHand convention for the same situation.
+# - **Target's owner = its current controller, first-slice convention.**
+#   The exiled card lands in its current controller's exile zone —
+#   which equals "owner's exile" under the controller==owner
+#   simplification still in place across all the resolve effects.
+# - **Object state reset on exile.** The exiled card has its
+#   ``tapped``, ``summoning_sick``, ``damage``, and ``counters``
+#   fields reset to their defaults — same shape as ReturnToHand.
+#   Real MTG: an object that changes zones is treated as a brand new
+#   object (CR 400.7) so per-object state from the previous zone
+#   doesn't follow. Round-11 mirrors that for exile.
+# - **Zone field on the GameObject = ``ZONE_EXILE`` (= 5).**
+#   ``ZONE_EXILE`` was already declared in ``state_ops_zones.rs``
+#   alongside ``ZONE_STACK = 4`` before this slice landed. We use the
+#   existing constant (5) rather than picking a new integer.
+# - **Cross-file friction:** zone movement is internal; the slice
+#   inlines the minimal Arc::make_mut pop-from-current-zone +
+#   push-to-target-exile per the recurring pattern (DrawCards / Mill /
+#   ReturnToHand all do this).
+#
+# **Test-readability note on inspection:** ``find_object_zone`` in
+# ``state_ops_zones.rs`` only iterates the four pre-r11 zones (hand /
+# library / battlefield / graveyard) — it does NOT search exile.
+# Likewise ``get_damage`` / ``get_counters`` / ``is_summoning_sick``
+# all walk pre-r11 zones only. So once a card lands in exile,
+# ``find_object_zone`` returns ``None``, which is itself a
+# verification signal: "no longer in any of the four tracked zones".
+# This slice adds two small read helpers in ``state_ops_resolve.rs``
+# (``exile_sizes`` getter and ``exile_contains(obj_id)``) so tests can
+# positively assert exile presence; both live in this slice's file
+# per per-slice file-isolation. A future-slice consolidation can
+# extend ``find_object_zone`` once exile has more readers.
+
+
+def _exile_creature_dict():
+    """An instant 'exile target creature' — Path-to-Exile-shaped (the
+    'land' rider isn't modeled — first slice only handles the exile
+    half). Sorcery would also work but instant matches the real card."""
+    return {
+        "name": "Test Path",
+        "card_types": ["Instant"],
+        "mana_cost": {"W": 1},
+        "effects": [
+            {
+                "kind": "exile_target",
+                "target": {"kind": "any_creature"},
+            }
+        ],
+    }
+
+
+def _exile_player_dict():
+    """A schema-allowed but semantically nonsense exile: target
+    'any_player'. Should raise on resolve (cannot exile a player)."""
+    return {
+        "name": "Test Exile-Player (nonsense)",
+        "card_types": ["Instant"],
+        "mana_cost": {"W": 1},
+        "effects": [
+            {
+                "kind": "exile_target",
+                "target": {"kind": "any_player"},
+            }
+        ],
+    }
+
+
+def test_resolve_exile_target_moves_creature_to_owner_exile(synthetic_state):
+    """End-to-end composition test (the load-bearing one for
+    ExileTarget).
+
+    Synthetic state: p1's battlefield[0] is a Forest at obj_id 67
+    (controller=1). Cast an exile-creature instant from active player
+    p0 (controller=0). On resolve, the exile should pick the FIRST
+    creature on the defender's battlefield (mirrors DealDamage
+    convention), move it from p1's battlefield to p1's exile, and
+    the source instant lands in p0's graveyard.
+
+    Verifies it is NOT in graveyard or battlefield (specifically
+    distinguishing exile from the bounce / destroy paths)."""
+    target_obj_id = 67  # First p1 battlefield object.
+    assert synthetic_state.find_object_zone(target_obj_id) == ZONE_BATTLEFIELD
+    p1_bf_before = synthetic_state.battlefield_sizes[1]
+    p1_grave_before = synthetic_state.graveyard_sizes[1]
+    p1_exile_before = synthetic_state.exile_sizes[1]
+
+    exile_obj_id = synthetic_state.register_and_inject_object(
+        _exile_creature_dict(), 0, ZONE_HAND
+    )
+    p0_grave_before = synthetic_state.graveyard_sizes[0]
+
+    synthetic_state.push_to_stack(exile_obj_id, 0)
+    synthetic_state.resolve_top_of_stack()
+
+    # Target moved p1 battlefield -> p1 exile.
+    assert synthetic_state.battlefield_sizes[1] == p1_bf_before - 1
+    assert synthetic_state.exile_sizes[1] == p1_exile_before + 1
+    # Specifically NOT in graveyard (this is exile, not destroy).
+    assert synthetic_state.graveyard_sizes[1] == p1_grave_before
+    # Target no longer in any of the four pre-r11 tracked zones.
+    assert synthetic_state.find_object_zone(target_obj_id) is None
+    # And it IS in p1's exile.
+    assert synthetic_state.exile_contains(target_obj_id) is True
+    # Source instant: p0 graveyard.
+    assert synthetic_state.find_object_zone(exile_obj_id) == ZONE_GRAVEYARD
+    assert synthetic_state.graveyard_sizes[0] == p0_grave_before + 1
+
+
+def test_resolve_exile_target_no_creature_fizzles(engine):
+    """If the defender has no creature on battlefield, ExileTarget
+    fizzles silently — stack item still pops, source still goes to
+    graveyard (instant), nothing else changes. Mirrors the
+    DealDamage / ReturnToHand no-target fizzle convention."""
+    state = engine.make_synthetic_state(
+        num_battlefield=0, num_hand=1, num_library=1
+    )
+    exile_obj_id = state.register_and_inject_object(
+        _exile_creature_dict(), 0, ZONE_HAND
+    )
+
+    p0_hand_before = state.hand_sizes[0]
+    p1_bf_before = state.battlefield_sizes[1]
+    p0_grave_before = state.graveyard_sizes[0]
+    p0_exile_before = state.exile_sizes[0]
+    p1_exile_before = state.exile_sizes[1]
+
+    state.push_to_stack(exile_obj_id, 0)
+    state.resolve_top_of_stack()
+
+    # Stack drained, source moved to graveyard, no exile delta.
+    assert state.is_stack_empty() is True
+    assert state.find_object_zone(exile_obj_id) == ZONE_GRAVEYARD
+    assert state.graveyard_sizes[0] == p0_grave_before + 1
+    assert state.battlefield_sizes[1] == p1_bf_before
+    assert state.exile_sizes[0] == p0_exile_before
+    assert state.exile_sizes[1] == p1_exile_before
+    # Source left p0's hand (-1).
+    assert state.hand_sizes[0] == p0_hand_before - 1
+
+
+def test_resolve_exile_target_with_any_player_raises(synthetic_state):
+    """ExileTarget with an AnyPlayer target is semantically nonsense
+    (you can't exile a player). The dispatch raises ValueError
+    loudly, matching the ReturnToHand-with-AnyPlayer shape."""
+    exile_obj_id = synthetic_state.register_and_inject_object(
+        _exile_player_dict(), 0, ZONE_HAND
+    )
+    synthetic_state.push_to_stack(exile_obj_id, 0)
+
+    with pytest.raises(ValueError):
+        synthetic_state.resolve_top_of_stack()
+
+
+def test_resolve_exile_target_object_state_resets(synthetic_state):
+    """An exiled creature has its ``tapped`` / ``summoning_sick`` /
+    ``damage`` / ``counters`` fields reset to defaults on the way to
+    exile — CR 400.7 (a card that changes zones becomes a new object).
+    Mirrors the ReturnToHand reset convention."""
+    target_obj_id = 67  # First p1 battlefield object.
+
+    # Stamp non-default state on the target before exile.
+    assert synthetic_state.tap_object(target_obj_id) is True
+    assert synthetic_state.deal_damage(target_obj_id, 1) is True
+    assert synthetic_state.add_counters(target_obj_id, 2) is True
+
+    # Pre-resolve sanity: state is non-default.
+    assert synthetic_state.is_tapped(target_obj_id) is True
+    assert synthetic_state.get_damage(target_obj_id) == 1
+    assert synthetic_state.get_counters(target_obj_id) == 2
+
+    exile_obj_id = synthetic_state.register_and_inject_object(
+        _exile_creature_dict(), 0, ZONE_HAND
+    )
+    synthetic_state.push_to_stack(exile_obj_id, 0)
+    synthetic_state.resolve_top_of_stack()
+
+    # Target now in p1's exile, defaults restored.
+    assert synthetic_state.exile_contains(target_obj_id) is True
+    assert synthetic_state.exile_object_tapped(target_obj_id) is False
+    assert synthetic_state.exile_object_summoning_sick(target_obj_id) is False
+    assert synthetic_state.exile_object_damage(target_obj_id) == 0
+    assert synthetic_state.exile_object_counters(target_obj_id) == 0
+
+
+def test_clone_then_exile_does_not_affect_original(synthetic_state):
+    """CoW canary for ExileTarget. Cloning the state and resolving
+    the exile on the clone must not bleed back into the original —
+    the original's target stays on p1's battlefield, the clone's
+    moves to p1's exile."""
+    target_obj_id = 67
+    exile_obj_id = synthetic_state.register_and_inject_object(
+        _exile_creature_dict(), 0, ZONE_HAND
+    )
+    synthetic_state.push_to_stack(exile_obj_id, 0)
+    p1_bf_before = synthetic_state.battlefield_sizes[1]
+    p1_exile_before = synthetic_state.exile_sizes[1]
+    cloned = synthetic_state.clone_once()
+
+    cloned.resolve_top_of_stack()
+
+    # Clone: target in p1 exile, source in p0 graveyard.
+    assert cloned.exile_contains(target_obj_id) is True
+    assert cloned.find_object_zone(exile_obj_id) == ZONE_GRAVEYARD
+    assert cloned.exile_sizes[1] == p1_exile_before + 1
+    assert cloned.battlefield_sizes[1] == p1_bf_before - 1
+    # Original: target still on p1 battlefield, source still in hand,
+    # stack still has the item, exile still empty.
+    assert synthetic_state.find_object_zone(target_obj_id) == ZONE_BATTLEFIELD
+    assert synthetic_state.find_object_zone(exile_obj_id) == ZONE_HAND
+    assert synthetic_state.stack_size() == 1
+    assert synthetic_state.exile_sizes[1] == p1_exile_before
+    assert synthetic_state.battlefield_sizes[1] == p1_bf_before
+
+
+def test_exile_target_object_zone_field_updated(synthetic_state):
+    """The exiled GameObject's ``zone`` field is stamped with
+    ``ZONE_EXILE`` (= 5) after resolution — matches the constant
+    declared in ``state_ops_zones.rs``."""
+    target_obj_id = 67  # First p1 battlefield obj.
+    exile_obj_id = synthetic_state.register_and_inject_object(
+        _exile_creature_dict(), 0, ZONE_HAND
+    )
+    synthetic_state.push_to_stack(exile_obj_id, 0)
+    synthetic_state.resolve_top_of_stack()
+
+    # Zone field on the now-exiled object is the exile constant.
+    assert synthetic_state.exile_object_zone_field(target_obj_id) == ZONE_EXILE

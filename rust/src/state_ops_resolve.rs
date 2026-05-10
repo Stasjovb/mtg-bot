@@ -96,6 +96,28 @@
 //!     schema, different timing. Future slice.
 //! - **Empty stack returns None gracefully** (no exception). Same
 //!   convention as `pop_top_of_stack`.
+//! - **Round-11 ExileTarget** (this slice). When a permanent is
+//!   exiled, the dispatch pops it from its current zone (battlefield
+//!   under the AnyCreature targeting convention) and pushes onto its
+//!   owner's exile zone (CR 406). Per-object state — `tapped`,
+//!   `summoning_sick`, `damage`, `counters` — resets on the way out
+//!   per CR 400.7 (a card that changes zones is treated as a brand-
+//!   new object). Mirrors the ReturnToHand reset convention.
+//!   - **AnyCreature target** -> first object on the defender's
+//!     battlefield (smallest index). Empty defender battlefield
+//!     fizzles silently.
+//!   - **AnyPlayer target** -> raises ValueError loudly (cannot
+//!     exile a player), same shape as ReturnToHand-with-AnyPlayer.
+//!   - **ZONE_EXILE = 5**: the constant was already declared in
+//!     `state_ops_zones.rs` (alongside `ZONE_STACK = 4`) before this
+//!     slice landed; we use it rather than picking a new integer.
+//!   - **Read helpers in this slice** (`exile_sizes`,
+//!     `exile_contains`, `exile_object_*`): pre-r11 read methods
+//!     (`find_object_zone`, `get_damage`, etc.) only walk the four
+//!     tracked zones, so the slice adds an exile-only read surface
+//!     locally to make the dispatch positively testable. A future
+//!     consolidation slice can extend the four-zone walkers once
+//!     exile has more readers.
 //!
 //! ## Test-fixture surface
 //!
@@ -113,7 +135,7 @@
 use crate::cards::{parse_printing, Effect, RegistryData, TargetFilter};
 use crate::state::{GameObject, GameState, StackItem};
 use crate::state_ops_zones::{
-    ZONE_BATTLEFIELD, ZONE_GRAVEYARD, ZONE_HAND, ZONE_LIBRARY,
+    ZONE_BATTLEFIELD, ZONE_EXILE, ZONE_GRAVEYARD, ZONE_HAND, ZONE_LIBRARY,
 };
 use pyo3::exceptions::{PyIndexError, PyValueError};
 use pyo3::prelude::*;
@@ -410,6 +432,65 @@ fn apply_effect(state: &mut GameState, effect: &Effect) -> PyResult<()> {
                 Arc::make_mut(&mut player.graveyard).push(obj);
             }
         }
+        // Round-11: ExileTarget. Move a target permanent from its
+        // current zone to its owner's exile zone (CR 406). First-
+        // slice convention: owner == controller, so "owner's exile"
+        // is the target's current controller's exile.
+        //
+        // Targeting (mirrors DealDamage / ReturnToHand):
+        //   - AnyCreature -> first object on the DEFENDING player's
+        //     battlefield (smallest index). No creature-type filter.
+        //     If the defender's battlefield is empty, the spell
+        //     fizzles silently.
+        //   - AnyPlayer -> semantically nonsense for exile (you can't
+        //     exile a player). Raise ValueError loudly, matching the
+        //     ReturnToHand-with-AnyPlayer shape.
+        //
+        // **Inlining note (cross-file friction).** Zone movement is
+        // internal here, same as the ReturnToHand / Mill / DrawCards
+        // paths above — `move_object` is a private helper on
+        // `state_ops_zones.rs` and per per-slice file-isolation we
+        // inline the minimal Arc::make_mut pop-from-current-zone +
+        // push-to-target-exile here.
+        //
+        // **Object-state reset on zone change.** CR 400.7: a card
+        // that changes zones is treated as a brand new object — its
+        // tapped / summoning_sick / damage / counters fields all
+        // reset on the way to exile. Mirrors the ReturnToHand reset
+        // convention.
+        Effect::ExileTarget { target } => match target {
+            TargetFilter::AnyPlayer => {
+                return Err(PyValueError::new_err(
+                    "ExileTarget with AnyPlayer target is semantically nonsense (cannot exile a player)",
+                ));
+            }
+            TargetFilter::AnyCreature => {
+                let defender = (1 - state.active_player) as usize;
+                let bf = &state.players[defender].battlefield;
+                if bf.is_empty() {
+                    return Ok(()); // fizzle silently
+                }
+                let target_id = bf[0].id;
+                // Pop from defender's battlefield. Use Arc::make_mut
+                // for CoW safety.
+                let bf_mut: &mut Vec<GameObject> =
+                    Arc::make_mut(&mut state.players[defender].battlefield);
+                let pos = bf_mut
+                    .iter()
+                    .position(|o| o.id == target_id)
+                    .expect("target_id was bf[0] but not found on re-scan");
+                let mut obj = bf_mut.remove(pos);
+                // Stamp exile zone + reset per-object state. First-
+                // slice: target's controller == owner, so push onto
+                // `defender`'s exile (where the target lives).
+                obj.zone = ZONE_EXILE;
+                obj.tapped = false;
+                obj.summoning_sick = false;
+                obj.damage = 0;
+                obj.counters = 0;
+                Arc::make_mut(&mut state.players[defender].exile).push(obj);
+            }
+        },
     }
     Ok(())
 }
@@ -581,5 +662,101 @@ impl GameState {
         };
         Arc::make_mut(dest).push(obj);
         Ok(next_id)
+    }
+
+    // -------------------------------------------------------------
+    // Round-11 exile read helpers.
+    //
+    // ``find_object_zone`` / ``get_damage`` / ``get_counters`` /
+    // ``is_summoning_sick`` only iterate the four pre-r11 zones (hand
+    // / library / battlefield / graveyard) — they don't search exile.
+    // The exile-dispatch tests need a way to positively assert on an
+    // exiled object's location and reset state, so we add the minimal
+    // read surface here. Lives in this slice's file per per-slice
+    // file-isolation; a follow-up consolidation slice can extend
+    // ``find_object_zone`` (and friends) once exile has more readers.
+    // -------------------------------------------------------------
+
+    /// Per-player exile zone size, mirror of ``graveyard_sizes`` /
+    /// ``battlefield_sizes``.
+    #[getter]
+    fn exile_sizes(&self) -> [usize; 2] {
+        [self.players[0].exile.len(), self.players[1].exile.len()]
+    }
+
+    /// True iff some object with id `obj_id` is in either player's
+    /// exile zone.
+    fn exile_contains(&self, obj_id: u32) -> bool {
+        for player in &self.players {
+            if player.exile.iter().any(|o| o.id == obj_id) {
+                return true;
+            }
+        }
+        false
+    }
+
+    /// Read the `tapped` flag for an object in either player's exile.
+    /// Returns `None` if no exile object with that id exists.
+    fn exile_object_tapped(&self, obj_id: u32) -> Option<bool> {
+        for player in &self.players {
+            for obj in player.exile.iter() {
+                if obj.id == obj_id {
+                    return Some(obj.tapped);
+                }
+            }
+        }
+        None
+    }
+
+    /// Read the `summoning_sick` flag for an object in either
+    /// player's exile.
+    fn exile_object_summoning_sick(&self, obj_id: u32) -> Option<bool> {
+        for player in &self.players {
+            for obj in player.exile.iter() {
+                if obj.id == obj_id {
+                    return Some(obj.summoning_sick);
+                }
+            }
+        }
+        None
+    }
+
+    /// Read the `damage` marker for an object in either player's
+    /// exile.
+    fn exile_object_damage(&self, obj_id: u32) -> Option<i16> {
+        for player in &self.players {
+            for obj in player.exile.iter() {
+                if obj.id == obj_id {
+                    return Some(obj.damage);
+                }
+            }
+        }
+        None
+    }
+
+    /// Read the `counters` net value for an object in either player's
+    /// exile.
+    fn exile_object_counters(&self, obj_id: u32) -> Option<i32> {
+        for player in &self.players {
+            for obj in player.exile.iter() {
+                if obj.id == obj_id {
+                    return Some(obj.counters);
+                }
+            }
+        }
+        None
+    }
+
+    /// Read the `zone` field stamped on an exiled object (should be
+    /// `ZONE_EXILE` after a successful ExileTarget dispatch).
+    fn exile_object_zone_field(&self, obj_id: u32) -> Option<u8> {
+        for player in &self.players {
+            for obj in player.exile.iter() {
+                if obj.id == obj_id {
+                    return Some(obj.zone);
+                }
+            }
+        }
+        None
     }
 }

@@ -92,10 +92,14 @@
 //!   attackers; that's the full attack-eligibility vocabulary today.
 //!   Defender keyword, "can't attack" effects, attacked-alone
 //!   restrictions are deferred.
-//! - **No blocking restrictions beyond "blocker is a creature, on
-//!   the battlefield, not tapped, and the named attacker is in
-//!   `state.attackers`".** Flying / reach, defender-only, color
-//!   protection, "can't be blocked by ..." gates are deferred.
+//! - **Flying (CR 702.9) + reach (CR 702.17) IS modeled.** A flying
+//!   attacker (printing carries `"flying"`) can only be blocked by
+//!   creatures whose printing carries `"flying"` or `"reach"`; other
+//!   blockers are refused at `declare_blocker`. Reach on the BLOCKER
+//!   is the gate-opener; reach on the ATTACKER is a no-op for blocking
+//!   purposes (a reach attacker is treated as a ground creature —
+//!   blockable by anything). Defender-only, color protection,
+//!   "can't be blocked by ..." gates are still deferred.
 //! - **Single-blocker damage assignment.** When multiple blockers are
 //!   declared on the same attacker, the attacker assigns its full
 //!   power to the FIRST declared blocker. All declared blockers
@@ -400,10 +404,13 @@ impl GameState {
     /// - `attacker_id` is in `self.attackers`
     /// - `blocker_id` resolves to a battlefield creature
     /// - blocker is NOT tapped
+    /// - if the attacker has the `"flying"` keyword (CR 702.9), the
+    ///   blocker must have either `"flying"` or `"reach"` (CR 702.17)
+    ///   — otherwise the block is refused.
     ///
-    /// **No blocking restrictions beyond the three above.** Flying /
-    /// reach, defender-only, "can't be blocked by ..." gates are
-    /// deferred — see module docstring.
+    /// **No blocking restrictions beyond the four above.** Defender-only,
+    /// color protection, "can't be blocked by ..." gates are deferred —
+    /// see module docstring.
     ///
     /// Blocking does NOT tap the blocker (CR 509.1).
     fn declare_blocker(&mut self, blocker_id: u32, attacker_id: u32) -> bool {
@@ -416,6 +423,17 @@ impl GameState {
         };
         if tapped {
             return false;
+        }
+        // Flying gate (CR 702.9): a flying attacker can only be blocked
+        // by creatures with flying or reach (CR 702.17). Reach on the
+        // attacker is irrelevant for the blocking direction — only
+        // flying on the attacker triggers this restriction.
+        if battlefield_has_keyword(self, attacker_id, "flying") {
+            let blocker_has_flying = battlefield_has_keyword(self, blocker_id, "flying");
+            let blocker_has_reach = battlefield_has_keyword(self, blocker_id, "reach");
+            if !blocker_has_flying && !blocker_has_reach {
+                return false;
+            }
         }
         // Note: we do NOT check the blocker's summoning_sick flag.
         // Summoning sickness restricts attacking and tap-abilities,
