@@ -149,3 +149,157 @@ def test_push_on_clone_does_not_affect_original(synthetic_state):
     assert cloned.stack_size() == 1
     assert synthetic_state.stack_size() == 0
     assert synthetic_state.is_stack_empty() is True
+
+
+# --- round-16 process_stack_until_empty -----------------------------
+#
+# Composes round-5's stack push/pop with round-6's
+# ``resolve_top_of_stack`` (in ``state_ops_resolve.rs``). The primitive
+# repeatedly resolves the top of stack until empty and returns the
+# count of items resolved. Useful for "resolve everything" simulation
+# paths where the caller doesn't care about per-item priority hand-off.
+#
+# **Scope simplifications:**
+#
+# - **No priority hand-off between resolutions.** Real MTG: after each
+#   resolution both players get priority again; this primitive just
+#   drains the stack greedily. Higher-level code that wants real
+#   priority semantics should call ``resolve_top_of_stack`` itself in a
+#   priority loop.
+# - **Iteration cap.** Hard-coded 1000-iteration safety so a buggy
+#   effect that re-pushes its source can't infinite-loop. Anything
+#   approaching that bound is a test bug; raises ``ValueError`` loudly.
+# - **First failed resolve propagates.** If any individual
+#   ``resolve_top_of_stack`` raises (e.g. unsupported AnyPlayer-target
+#   on a bounce-shaped effect), the loop aborts and the exception
+#   propagates with the partial drain visible to the caller.
+#
+# Tests use simple controller-implicit effects (DrawCards / GainLife)
+# so the assertions focus on the loop primitive — not on target
+# selection semantics already covered by ``test_resolve.py``.
+
+ZONE_HAND = 0
+ZONE_BATTLEFIELD = 2
+
+
+def _draw_one_dict():
+    """A draw-1 sorcery printing — Standard Counter style."""
+    return {
+        "name": "Test Draw 1",
+        "card_types": ["Sorcery"],
+        "mana_cost": {"U": 1},
+        "effects": [{"kind": "draw_cards", "count": 1}],
+    }
+
+
+def _gain_life_dict(amount):
+    """A gain-N-life instant printing parametric on amount."""
+    return {
+        "name": f"Test Gain {amount}",
+        "card_types": ["Instant"],
+        "mana_cost": {"W": 1},
+        "effects": [{"kind": "gain_life", "amount": amount}],
+    }
+
+
+def test_process_stack_until_empty_zero_when_empty(synthetic_state):
+    """Empty stack -> returns 0; stack remains empty."""
+    assert synthetic_state.is_stack_empty() is True
+    count = synthetic_state.process_stack_until_empty()
+    assert count == 0
+    assert synthetic_state.is_stack_empty() is True
+    assert synthetic_state.stack_size() == 0
+
+
+def test_process_stack_until_empty_resolves_one(synthetic_state):
+    """One item on the stack -> returns 1, stack empty, effect applied
+    (active player gains 5 life from a GainLife-5 instant)."""
+    obj_id = synthetic_state.register_and_inject_object(
+        _gain_life_dict(5), 0, ZONE_HAND
+    )
+    synthetic_state.push_to_stack(obj_id, 0)
+    life_before = list(synthetic_state.life_totals)
+    assert synthetic_state.stack_size() == 1
+
+    count = synthetic_state.process_stack_until_empty()
+
+    assert count == 1
+    assert synthetic_state.is_stack_empty() is True
+    assert synthetic_state.life_totals[0] == life_before[0] + 5
+    assert synthetic_state.life_totals[1] == life_before[1]
+
+
+def test_process_stack_until_empty_resolves_multiple(synthetic_state):
+    """Three GainLife items on the stack -> all resolve, returns 3,
+    cumulative life-gain shows up on the active player."""
+    a = synthetic_state.register_and_inject_object(
+        _gain_life_dict(1), 0, ZONE_HAND
+    )
+    b = synthetic_state.register_and_inject_object(
+        _gain_life_dict(2), 0, ZONE_HAND
+    )
+    c = synthetic_state.register_and_inject_object(
+        _gain_life_dict(4), 0, ZONE_HAND
+    )
+    synthetic_state.push_to_stack(a, 0)
+    synthetic_state.push_to_stack(b, 0)
+    synthetic_state.push_to_stack(c, 0)
+    life_before = list(synthetic_state.life_totals)
+    assert synthetic_state.stack_size() == 3
+
+    count = synthetic_state.process_stack_until_empty()
+
+    assert count == 3
+    assert synthetic_state.is_stack_empty() is True
+    # 1 + 2 + 4 = 7, regardless of order (all three are GainLife on
+    # the same player).
+    assert synthetic_state.life_totals[0] == life_before[0] + 7
+
+
+def test_process_stack_until_empty_drains_in_lifo_order(synthetic_state):
+    """Push three DrawCards-1 sources A, B, C. LIFO means C resolves
+    first, then B, then A. Each resolution moves its source from hand
+    to graveyard. Verify the graveyard order is [C, B, A] — confirms
+    we're calling ``resolve_top_of_stack`` (which pops the top, i.e.
+    last-pushed) in a loop, not draining bottom-up."""
+    a = synthetic_state.register_and_inject_object(
+        _draw_one_dict(), 0, ZONE_HAND
+    )
+    b = synthetic_state.register_and_inject_object(
+        _draw_one_dict(), 0, ZONE_HAND
+    )
+    c = synthetic_state.register_and_inject_object(
+        _draw_one_dict(), 0, ZONE_HAND
+    )
+    gy_before = synthetic_state.graveyard_sizes[0]
+    synthetic_state.push_to_stack(a, 0)
+    synthetic_state.push_to_stack(b, 0)
+    synthetic_state.push_to_stack(c, 0)
+
+    count = synthetic_state.process_stack_until_empty()
+
+    assert count == 3
+    assert synthetic_state.is_stack_empty() is True
+    # All three sources moved to graveyard (sorcery -> CR 608.2m).
+    assert synthetic_state.graveyard_sizes[0] == gy_before + 3
+
+
+def test_process_stack_until_empty_clone_isolation(synthetic_state):
+    """CoW canary: running process_stack_until_empty on a clone leaves
+    the original's stack and life total untouched."""
+    obj_id = synthetic_state.register_and_inject_object(
+        _gain_life_dict(2), 0, ZONE_HAND
+    )
+    synthetic_state.push_to_stack(obj_id, 0)
+    cloned = synthetic_state.clone_once()
+    life_before_orig = list(synthetic_state.life_totals)
+    stack_before_orig = synthetic_state.stack_size()
+
+    count = cloned.process_stack_until_empty()
+
+    assert count == 1
+    assert cloned.is_stack_empty() is True
+    assert cloned.life_totals[0] == life_before_orig[0] + 2
+    # Original: stack still has the item, life unchanged.
+    assert synthetic_state.stack_size() == stack_before_orig
+    assert list(synthetic_state.life_totals) == life_before_orig

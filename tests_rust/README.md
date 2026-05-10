@@ -117,6 +117,7 @@ the test lands in a commit.
 | rust(sba-loop): apply_sbas_until_quiescent (CR 704.3) | tests_rust/test_sba.py extend | green | feature/rust-tdd-sba-loop |
 | rust(mana-pay-cost): pay_mana_cost (CR 202.2) | tests_rust/test_mana.py extend | green | feature/rust-tdd-mana-pay-cost |
 | rust(resolve-effects-r16): ScryN dispatch (CR 701.18) | tests_rust/test_resolve.py extend | green | feature/rust-tdd-resolve-scry |
+| rust(stack-resolve-loop): process_stack_until_empty | tests_rust/test_stack.py extend | green | feature/rust-tdd-stack-resolve-loop |
 
 ## Build invocation reminder
 
