@@ -7,10 +7,12 @@ order exactly (Action types in the same sequence with the same
 per-type tie-breaking) for trajectory parity in
 ``scripts/parity_smoke.py``.
 
-**Slice scope (rust(legal-decisions-skeleton), first slice).**
-``PassPriority`` + ``PlayLand`` only. ``CastSpell``,
-``ActivateAbility``, ``DeclareAttackers``, ``DeclareBlockers`` grow in
-follow-up slices.
+**Slice scope (rust(legal-decisions-skeleton + cast-spell)).**
+``PassPriority`` + ``PlayLand`` + base ``CastSpell`` (no alt-cost
+flags — all six defaulted: ``use_warp=False, kicked=False,
+cast_for_free=False, use_impending=False, cast_room_half=None``).
+``ActivateAbility``, ``DeclareAttackers``, ``DeclareBlockers``,
+alt-cost CastSpell variants grow in follow-up slices.
 
 **Emission-order audit vs Python.**  Mirrors
 ``src/mtg_bot/legal.py:legal_actions``:
@@ -162,14 +164,16 @@ def test_legal_decisions_two_distinct_lands_in_hand_emit_two_play_lands(
 # --- 4. Mixed hand: one Creature + one Land -------------------------
 
 
-def test_legal_decisions_creature_plus_land_emits_only_play_land_for_land(
+def test_legal_decisions_creature_plus_land_emits_play_land_and_cast_spell(
     synthetic_state,
 ):
-    """Mixed hand (Llanowar Elves + Forest): only the Forest gets a
-    PlayLand action; the Elves (Creature) does NOT emit a CastSpell
-    in this first slice. Locks in that the slice scope is
-    PassPriority + PlayLand only — when CastSpell lands the
-    follow-up slice must explicitly add the Elves emission."""
+    """Mixed hand (Llanowar Elves + Forest): the Forest emits a
+    PlayLand, and the Elves (Creature) emits a CastSpell (post
+    rust(legal-decisions-cast-spell) slice). The 7 Llanowar Elves in
+    the synthetic seed all dedup to a single CastSpell by Python's
+    `(printing.name,)` first-slice dedup key (Python `legal.py:352`).
+    Locks in the mixed PlayLand + CastSpell coexistence and the
+    PlayLand-comes-first emission order."""
     # Keep the existing Llanowar Elves in hand (don't empty it).
     forest_id = _put_forest_in_hand(synthetic_state, 0)
     synthetic_state.set_phase(PHASE_MAIN1)
@@ -177,10 +181,11 @@ def test_legal_decisions_creature_plus_land_emits_only_play_land_for_land(
     actions = synthetic_state.legal_decisions(0)
 
     kinds = _kinds(actions)
-    # Exactly one PlayLand emits — for the Forest. No CastSpell yet.
+    # PassPriority then PlayLand then CastSpell — Python's natural
+    # append order under sorcery timing.
     assert kinds[0] == "pass_priority"
     assert kinds.count("play_land") == 1
-    assert "cast_spell" not in kinds
+    assert kinds.count("cast_spell") == 1
     # PlayLand carries the Forest's id (not any Llanowar Elves id).
     play_land = [a for a in actions if a["kind"] == "play_land"][0]
     assert play_land["card_id"] == forest_id
@@ -407,3 +412,315 @@ def test_legal_decisions_works_for_player_1_on_their_turn(synthetic_state):
 
     assert _kinds(actions) == ["pass_priority", "play_land"]
     assert actions[1]["card_id"] == forest_id
+
+
+# --- 13. CastSpell: one Creature in main phase ----------------------
+#
+# rust(legal-decisions-cast-spell) — extends `legal_decisions` to emit
+# CastSpell actions for non-Land cards in hand at sorcery timing.
+# Mirrors Python's `legal.py:335-445` (the sorcery-speed CastSpell
+# loop, `_is_sorcery_speed_spell` body). First-slice scope: base
+# CastSpell with all alt-cost flags defaulted (use_warp=False,
+# kicked=False, cast_for_free=False, use_impending=False,
+# cast_room_half=None). Mana-affordability check is deferred — every
+# non-Land in hand emits regardless of can_pay_cost.
+
+
+def test_legal_decisions_one_creature_in_hand_emits_cast_spell(
+    synthetic_state,
+):
+    """Single Llanowar Elves in hand at sorcery timing -> 2 actions:
+    PassPriority FIRST (Python `legal.py:178`), then CastSpell
+    (`legal.py:386` — `actions.append(CastSpell(card.id))` inside
+    the sorcery-speed loop). No PlayLand because the Elves isn't a
+    Land. Locks in CastSpell's emission position AFTER PlayLand /
+    after PassPriority and the all-defaults flag shape."""
+    _empty_hand(synthetic_state, 0)
+    # Pull a single Elves out of the library back into hand. The
+    # library is Forest-only; instead use the existing 7-elf hand
+    # but clear all but one.
+    library = synthetic_state.library_snapshot(0)
+    # No Elves in library — populate hand directly via P0's stock
+    # Llanowar Elves at id P0_FIRST_HAND_ID=10. Move 6 of them out
+    # to library, leaving one in hand.
+    hand = synthetic_state.hand_snapshot(0)
+    assert hand == []  # _empty_hand cleared it
+    # Move 1 Llanowar Elves from library (library starts with the
+    # original 7 elves at the top? No — the seed puts elves in hand,
+    # not library). Instead: undo the empty. We'll re-fill via
+    # _empty_hand's reverse — just reset by getting a fresh state
+    # is cleaner. Use the synthetic state straight without empty.
+    # Re-make:
+    import mtg_bot_engine
+    state = mtg_bot_engine.make_synthetic_state()
+    # Clear hand down to exactly 1 Llanowar Elves.
+    hand = state.hand_snapshot(0)
+    assert len(hand) == 7
+    assert all(o["printing_name"] == "Llanowar Elves" for o in hand)
+    # Move 6 out (to library).
+    for obj in hand[1:]:
+        assert state.move_object(obj["id"], 1, 0) is True
+    elves_id = hand[0]["id"]
+    state.set_phase(PHASE_MAIN1)
+
+    actions = state.legal_decisions(0)
+
+    assert _kinds(actions) == ["pass_priority", "cast_spell"]
+    assert actions[1]["card_id"] == elves_id
+
+
+# --- 14. CastSpell: PlayLand + CastSpell emission order -------------
+
+
+def test_legal_decisions_land_plus_creature_emit_in_python_order(
+    synthetic_state,
+):
+    """Mixed hand at sorcery timing: PlayLand emits BEFORE CastSpell.
+    Mirrors Python's natural append order — PlayLand loop at
+    `legal.py:319-329` runs FIRST (lower line number), then the
+    sorcery-speed CastSpell loop at `legal.py:365-445`. Final list
+    is `[pass_priority, play_land, cast_spell_1, cast_spell_2, ...]`."""
+    # Keep the 7 Llanowar Elves in hand and add a Forest.
+    forest_id = _put_forest_in_hand(synthetic_state, 0)
+    synthetic_state.set_phase(PHASE_MAIN1)
+
+    actions = synthetic_state.legal_decisions(0)
+
+    kinds = _kinds(actions)
+    # 7 Llanowar Elves dedup to 1 CastSpell; 1 Forest -> 1 PlayLand.
+    assert kinds == ["pass_priority", "play_land", "cast_spell"]
+    # PlayLand carries the Forest's id; CastSpell carries the first
+    # hand-order Elves' id (id 10, P0_FIRST_HAND_ID).
+    assert actions[1]["kind"] == "play_land"
+    assert actions[1]["card_id"] == forest_id
+    assert actions[2]["kind"] == "cast_spell"
+    assert actions[2]["card_id"] == P0_FIRST_HAND_ID
+
+
+# --- 15. CastSpell: dedup on same printing --------------------------
+
+
+def test_legal_decisions_two_same_printing_creatures_dedup_to_one_cast(
+    synthetic_state,
+):
+    """Two Llanowar Elves (same printing) -> ONE CastSpell. Mirrors
+    Python's dedup key at `legal.py:352-359`: `(printing.name, flag1,
+    flag2, ..., flag5)`. With first-slice all-default flags, the key
+    collapses to `(printing.name,)` and two-same-printing collapse
+    to a single CastSpell — same shape as the PlayLand two-Forests
+    dedup test above. The CastSpell carries the FIRST hand-order
+    copy's id."""
+    # Synthetic state already has 7 Llanowar Elves in hand. Trim
+    # to exactly 2 so the assertion is sharp.
+    hand = synthetic_state.hand_snapshot(0)
+    assert len(hand) == 7
+    for obj in hand[2:]:
+        assert synthetic_state.move_object(obj["id"], 1, 0) is True
+    elves_first_id = hand[0]["id"]
+    elves_second_id = hand[1]["id"]
+    assert elves_first_id != elves_second_id
+    synthetic_state.set_phase(PHASE_MAIN1)
+
+    actions = synthetic_state.legal_decisions(0)
+
+    # Dedup: two Elves -> ONE CastSpell.
+    assert _kinds(actions) == ["pass_priority", "cast_spell"]
+    # The action carries the FIRST hand-order Elves' id.
+    assert actions[1]["card_id"] == elves_first_id
+
+
+# --- 16. CastSpell: dict shape carries all 6 flag fields ------------
+
+
+def test_legal_decisions_cast_spell_dict_has_all_six_flag_fields(
+    synthetic_state,
+):
+    """The CastSpell dict carries all 7 keys: kind + card_id + 5
+    alt-cost flag fields. Mirrors `actions.rs:action_to_pydict`'s
+    "always emit all 5 flag fields so round-trip is fully symmetric"
+    contract — every CastSpell dict from `legal_decisions` must
+    survive a `parse_action -> action_to_pydict` cycle without
+    key drift."""
+    synthetic_state.set_phase(PHASE_MAIN1)
+
+    actions = synthetic_state.legal_decisions(0)
+    cast_spells = [a for a in actions if a["kind"] == "cast_spell"]
+    assert len(cast_spells) == 1
+
+    cs = cast_spells[0]
+    # Every key present, defaults match Python's dataclass.
+    assert set(cs.keys()) == {
+        "kind",
+        "card_id",
+        "use_warp",
+        "kicked",
+        "cast_for_free",
+        "use_impending",
+        "cast_room_half",
+    }
+    assert cs["use_warp"] is False
+    assert cs["kicked"] is False
+    assert cs["cast_for_free"] is False
+    assert cs["use_impending"] is False
+    assert cs["cast_room_half"] is None
+
+
+# --- 17. CastSpell: not emitted off sorcery timing ------------------
+
+
+@pytest.mark.parametrize(
+    "phase",
+    [PHASE_UNTAP, PHASE_COMBAT_DAMAGE, PHASE_CLEANUP],
+    ids=["UNTAP", "COMBAT_DAMAGE", "CLEANUP"],
+)
+def test_legal_decisions_non_main_phase_omits_cast_spell(
+    synthetic_state, phase
+):
+    """Non-main phase: even with Creatures in hand, no CastSpell
+    emits — sorcery-timing gate (Python `legal.py:303-304`) fails.
+    First-slice ignores Python's instant-speed CastSpell block at
+    lines 246-301 (instants / flash); when that block ports over, a
+    flash creature in hand at non-main phase will emit, but this
+    test still holds for the synthetic-state Llanowar Elves
+    (no flash)."""
+    synthetic_state.set_phase(phase)
+
+    actions = synthetic_state.legal_decisions(0)
+
+    assert _kinds(actions) == ["pass_priority"]
+    assert "cast_spell" not in _kinds(actions)
+
+
+# --- 18. CastSpell: not emitted with non-empty stack ----------------
+
+
+def test_legal_decisions_non_empty_stack_omits_cast_spell(
+    synthetic_state,
+):
+    """Non-empty stack: sorcery-timing gate's empty-stack conjunct
+    (Python `legal.py:30`) fails, so no CastSpell emits at sorcery
+    speed. First-slice has no instant-speed CastSpell block, so the
+    list collapses to `[pass_priority]`."""
+    synthetic_state.set_phase(PHASE_MAIN1)
+    synthetic_state.push_to_stack(P0_FIRST_BEARS_ID, 0)
+
+    actions = synthetic_state.legal_decisions(0)
+
+    assert _kinds(actions) == ["pass_priority"]
+
+
+# --- 19. CastSpell: not emitted off-turn ----------------------------
+
+
+def test_legal_decisions_off_active_player_omits_cast_spell(
+    synthetic_state,
+):
+    """Priority on opponent's turn (P0 has priority during P1's
+    main phase). Sorcery-timing fails (`active_player != player_id`,
+    Python `legal.py:28`). No CastSpell emits, mirroring the same
+    PlayLand-off-turn behavior in test 7."""
+    synthetic_state.set_phase(PHASE_MAIN1)
+    synthetic_state.advance_phase()
+    while synthetic_state.active_player == 0:
+        synthetic_state.advance_phase()
+    synthetic_state.set_phase(PHASE_MAIN1)
+    synthetic_state.give_priority_to(0)
+    assert synthetic_state.active_player == 1
+    assert synthetic_state.get_priority_player() == 0
+
+    actions = synthetic_state.legal_decisions(0)
+
+    # P0 has priority but it's P1's turn — sorcery timing fails.
+    assert _kinds(actions) == ["pass_priority"]
+
+
+# --- 20. CastSpell: dict round-trips through parse_action -----------
+
+
+def test_legal_decisions_cast_spell_action_parses_via_apply_action(
+    synthetic_state,
+):
+    """Every CastSpell dict from `legal_decisions` is accepted by
+    `apply_action`'s dict parser. The bridge's `parse_action` arm
+    for "cast_spell" (round-22 CastSpell agent) must accept the
+    shape this slice emits without raising. The first-slice scope
+    for `apply_action` on CastSpell may still mutate state (calling
+    the existing `cast_creature` primitive) — we don't assert on
+    the result, only that the parse + dispatch round-trip doesn't
+    raise on the dict shape.
+
+    This is the regression for a future slice that adds a new
+    flag to the CastSpell variant but forgets to extend the
+    emitter — the new key would mismatch parse_action."""
+    synthetic_state.set_phase(PHASE_MAIN1)
+
+    actions = synthetic_state.legal_decisions(0)
+    cast_spell = [a for a in actions if a["kind"] == "cast_spell"][0]
+
+    # apply_action may either succeed (cast goes to stack /
+    # battlefield) or raise on a downstream gate (mana cost not
+    # paid — first-slice doesn't gate on affordability so the
+    # primitive itself may refuse). Both outcomes are acceptable
+    # here; what matters is that `parse_action` doesn't raise on
+    # the dict shape. We catch ValueError as the "downstream
+    # rejected the apply, not a parse failure" signal — anything
+    # else (KeyError, TypeError) IS a regression.
+    try:
+        synthetic_state.apply_action(cast_spell)
+    except ValueError:
+        pass
+
+
+# --- 21. CastSpell: emission order between PlayLand and PassPriority
+
+
+def test_legal_decisions_cast_spell_after_play_land_after_pass_priority(
+    synthetic_state,
+):
+    """Locks in the full Python emission order: PassPriority is at
+    index 0 (Python's `legal.py:178` prepend), PlayLand actions
+    come next (Python lines 319-329), then CastSpell actions
+    (Python lines 365-445). Catches a regression where a future
+    slice swaps the loop order and breaks parity with Python's
+    `legal_actions`."""
+    forest_id = _put_forest_in_hand(synthetic_state, 0)
+    synthetic_state.set_phase(PHASE_MAIN1)
+
+    actions = synthetic_state.legal_decisions(0)
+
+    kinds = _kinds(actions)
+    # Find the indices of each kind.
+    pass_idx = kinds.index("pass_priority")
+    play_idx = kinds.index("play_land")
+    cast_idx = kinds.index("cast_spell")
+    assert pass_idx < play_idx < cast_idx
+    # And there are exactly 3 actions: one of each.
+    assert len(actions) == 3
+    assert actions[play_idx]["card_id"] == forest_id
+
+
+# --- 22. CastSpell: P1 parity on P1's turn --------------------------
+
+
+def test_legal_decisions_cast_spell_works_for_player_1(synthetic_state):
+    """P1's turn, main phase: P1's hand of Llanowar Elves emits a
+    CastSpell action for P1. Locks in the enumerator's
+    player-indexing — `self.players[idx].hand` walks the correct
+    player's hand, mirroring the existing P1-PlayLand parity test."""
+    # P1 starts with 7 Llanowar Elves in their hand (synthetic seed).
+    while synthetic_state.active_player == 0:
+        synthetic_state.advance_phase()
+    synthetic_state.set_phase(PHASE_MAIN1)
+    synthetic_state.give_priority_to(1)
+
+    actions = synthetic_state.legal_decisions(1)
+
+    kinds = _kinds(actions)
+    assert kinds[0] == "pass_priority"
+    # P1's Elves dedup to 1 CastSpell.
+    assert kinds.count("cast_spell") == 1
+    cast_spell = [a for a in actions if a["kind"] == "cast_spell"][0]
+    # The CastSpell carries one of P1's hand-card ids (id_offset = 67).
+    p1_hand = synthetic_state.hand_snapshot(1)
+    p1_hand_ids = {o["id"] for o in p1_hand}
+    assert cast_spell["card_id"] in p1_hand_ids
