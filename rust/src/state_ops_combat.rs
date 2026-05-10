@@ -17,8 +17,8 @@
 //!
 //! ## Scope simplifications (mirrored on `tests_rust/test_combat.py`)
 //!
-//! - **No first-strike / double-strike / deathtouch / trample /
-//!   lifelink / infect / protection / unblockable.**
+//! - **No first-strike / double-strike / trample / infect / protection
+//!   / unblockable.**
 //!   Damage in this slice is one symmetric round: each attacker
 //!   assigns `power` damage to its first blocker (or to the defending
 //!   player if unblocked), and each blocker assigns `power` damage
@@ -31,6 +31,25 @@
 //!   "must be untapped to attack" precondition (a pre-tapped
 //!   vigilance creature is still rejected) and does NOT grant haste
 //!   (a summoning-sick vigilance creature is still rejected).
+//! - **Deathtouch (CR 702.2) IS modeled.** When a creature with
+//!   `"deathtouch"` in `printing.keywords` deals NONZERO combat
+//!   damage to another creature, the recipient's marked `damage` is
+//!   upgraded to AT LEAST its printed `toughness` so the round-5
+//!   lethal-damage SBA pass (`apply_sbas`) destroys it. The literal
+//!   damage dealt is still the source's power — deathtouch only
+//!   changes the lethality treatment, not the amount any other rule
+//!   reads (CR 702.2c). Zero-power deathtouch creatures do NOT
+//!   trigger the upgrade because deathtouch requires nonzero damage
+//!   (CR 702.2b).
+//! - **Lifelink (CR 702.15) IS modeled.** When a creature with
+//!   `"lifelink"` in `printing.keywords` deals combat damage, its
+//!   controller gains that much life — composed with the round-1
+//!   life slice's mutation (`players[controller].life += amount`).
+//!   Fires on damage dealt to creatures (blockers / attackers) AND
+//!   on damage dealt to the defending player. This first slice only
+//!   covers combat damage because `deal_combat_damage` is the only
+//!   damage source today; non-combat damage sources will gain the
+//!   same lifelink hook when they grow up.
 //! - **No legality checks beyond "creature on attacker's battlefield,
 //!   untapped, not summoning-sick".** Tapped and summoning-sick
 //!   creatures are rejected as attackers; that's the full attack-
@@ -163,13 +182,50 @@ fn battlefield_creature_power(state: &GameState, obj_id: u32) -> i16 {
 /// `"vigilance"` string. Used by `declare_attacker` to skip the
 /// tap-on-attack step (CR 702.20).
 fn battlefield_has_vigilance(state: &GameState, obj_id: u32) -> bool {
+    battlefield_has_keyword(state, obj_id, "vigilance")
+}
+
+/// Generic "does this battlefield permanent carry `keyword`?" check.
+/// Returns false for unknown ids, non-battlefield objects, and
+/// printings whose `keywords` Vec doesn't contain the lowercase
+/// keyword string. Shared by the vigilance / deathtouch / lifelink
+/// branches.
+fn battlefield_has_keyword(state: &GameState, obj_id: u32, keyword: &str) -> bool {
     let Some((_, printing_id)) = locate_battlefield_obj(state, obj_id) else {
         return false;
     };
     let Some(printing) = state.registry.lookup(printing_id) else {
         return false;
     };
-    printing.keywords.iter().any(|k| k == "vigilance")
+    printing.keywords.iter().any(|k| k == keyword)
+}
+
+/// Read printing.toughness for a battlefield creature, returning 0
+/// for non-creatures or unknown ids. Used by `deal_combat_damage` to
+/// size the deathtouch upgrade (the recipient's damage is bumped to
+/// at least this value).
+fn battlefield_creature_toughness(state: &GameState, obj_id: u32) -> i16 {
+    let Some((_, printing_id)) = locate_battlefield_obj(state, obj_id) else {
+        return 0;
+    };
+    let Some(printing) = state.registry.lookup(printing_id) else {
+        return 0;
+    };
+    printing.toughness.unwrap_or(0)
+}
+
+/// Read controller (player index) of a battlefield creature, or
+/// `None` if not present. Used by `deal_combat_damage` to credit
+/// lifelink life-gain to the right player.
+fn battlefield_creature_controller(state: &GameState, obj_id: u32) -> Option<u8> {
+    for player in state.players.iter() {
+        for obj in player.battlefield.iter() {
+            if obj.id == obj_id {
+                return Some(obj.controller);
+            }
+        }
+    }
+    None
 }
 
 #[pymethods]
@@ -302,14 +358,24 @@ impl GameState {
         // battlefield (damage marks, life) is held off until after the
         // plan is built so simultaneous-damage semantics aren't
         // sequence-corrupted (e.g. attacker dies mid-loop and stops
-        // dealing). The plan is a Vec of (target_kind, target_id,
-        // amount) triples. target_kind is "creature" or "player";
-        // target_id is the obj id (creature) or player id (player).
+        // dealing). Each plan entry carries:
+        // - the source's id (so we can re-read deathtouch / lifelink
+        //   keywords without re-walking the per-attacker logic)
+        // - the target (creature / player)
+        // - the literal `amount` of damage (the source's power; this
+        //   is what lifelink gains AND what the regular `damage +=`
+        //   add uses — deathtouch upgrades only the recipient's mark,
+        //   not the dealt amount, per CR 702.2c).
         enum DamageTarget {
             Creature(u32),
             Player(u8),
         }
-        let mut plan: Vec<(DamageTarget, i16)> = Vec::new();
+        struct PlanEntry {
+            source_id: u32,
+            target: DamageTarget,
+            amount: i16,
+        }
+        let mut plan: Vec<PlanEntry> = Vec::new();
 
         let defending_player: u8 = 1 - self.active_player;
 
@@ -323,10 +389,18 @@ impl GameState {
                 .find_map(|(a, b)| if *a == attacker_id { Some(*b) } else { None });
             if let Some(blocker_id) = first_blocker {
                 if attacker_power > 0 {
-                    plan.push((DamageTarget::Creature(blocker_id), attacker_power));
+                    plan.push(PlanEntry {
+                        source_id: attacker_id,
+                        target: DamageTarget::Creature(blocker_id),
+                        amount: attacker_power,
+                    });
                 }
             } else if attacker_power > 0 {
-                plan.push((DamageTarget::Player(defending_player), attacker_power));
+                plan.push(PlanEntry {
+                    source_id: attacker_id,
+                    target: DamageTarget::Player(defending_player),
+                    amount: attacker_power,
+                });
             }
         }
         // Back-damage from EVERY declared blocker, regardless of
@@ -336,22 +410,64 @@ impl GameState {
         for &(attacker_id, blocker_id) in &self.blockers {
             let blocker_power = battlefield_creature_power(self, blocker_id);
             if blocker_power > 0 {
-                plan.push((DamageTarget::Creature(attacker_id), blocker_power));
+                plan.push(PlanEntry {
+                    source_id: blocker_id,
+                    target: DamageTarget::Creature(attacker_id),
+                    amount: blocker_power,
+                });
             }
         }
 
         // Apply the plan.
-        for (target, amount) in plan {
-            match target {
+        for entry in plan {
+            // Read the source's keywords + controller BEFORE applying
+            // mutations. Deathtouch upgrades the recipient's mark to
+            // at least its toughness (CR 702.2b — only fires on
+            // nonzero damage, which the plan already filters via
+            // `> 0` guards). Lifelink credits the source's controller
+            // with `amount` life regardless of target kind.
+            let source_has_deathtouch =
+                battlefield_has_keyword(self, entry.source_id, "deathtouch");
+            let source_has_lifelink =
+                battlefield_has_keyword(self, entry.source_id, "lifelink");
+            let source_controller = battlefield_creature_controller(self, entry.source_id);
+
+            match entry.target {
                 DamageTarget::Creature(obj_id) => {
+                    let recipient_toughness = battlefield_creature_toughness(self, obj_id);
+                    let amount = entry.amount;
                     mutate_battlefield_obj(self, obj_id, |obj| {
                         obj.damage = obj.damage.saturating_add(amount);
+                        // Deathtouch: upgrade the recipient's marked
+                        // damage to at least its toughness so the SBA
+                        // slice destroys it. The plan only contains
+                        // entries with `amount > 0`, satisfying CR
+                        // 702.2b's "nonzero damage" precondition.
+                        if source_has_deathtouch && recipient_toughness > 0 {
+                            if (obj.damage as i32) < (recipient_toughness as i32) {
+                                obj.damage = recipient_toughness;
+                            }
+                        }
                     });
                 }
                 DamageTarget::Player(player_id) => {
                     let idx = player_id as usize;
                     if idx < self.players.len() {
-                        self.players[idx].life -= amount as i32;
+                        self.players[idx].life -= entry.amount as i32;
+                    }
+                }
+            }
+
+            // Lifelink: gain life on the source's controller equal to
+            // the literal damage amount. Fires once per damage entry
+            // (so a lifelink attacker hitting a player gains its
+            // power; a lifelink blocker hitting an attacker gains
+            // its power).
+            if source_has_lifelink {
+                if let Some(controller) = source_controller {
+                    let cidx = controller as usize;
+                    if cidx < self.players.len() {
+                        self.players[cidx].life += entry.amount as i32;
                     }
                 }
             }
