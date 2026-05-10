@@ -9,6 +9,7 @@ Usage:
     PYTHONPATH=src python scripts/parity_smoke.py --seed 42
     PYTHONPATH=src python scripts/parity_smoke.py --mode initial-state --seed 42
     PYTHONPATH=src python scripts/parity_smoke.py --mode trajectory --seed 42 --num-decisions 20
+    PYTHONPATH=src python scripts/parity_smoke.py --mode multi-seed --num-seeds 10 --num-decisions 20
 
 Modes:
     game           — Run a full game with RandomAgent on each engine.
@@ -31,6 +32,12 @@ Modes:
                      trajectory compare is deferred until Python's
                      ``legal.py:legal_actions`` and Rust's
                      ``legal_decisions`` have full coverage parity.
+    multi-seed     — Run trajectory mode across K seeds and print an
+                     aggregate summary table. Catches non-determinism
+                     bugs that only surface at certain seeds — the
+                     single-seed trajectory mode is necessary but not
+                     sufficient since a fixed seed only exercises one
+                     path through the legal space.
 
 Exit codes:
     0 — both engines agree (or only one engine ran successfully and
@@ -545,6 +552,103 @@ def _replay_trajectory(state, decisions: list[dict]) -> list[str]:
     return trajectory
 
 
+@dataclass
+class TrajectorySeedResult:
+    """One seed's outcome from the trajectory walk + clone-replay check.
+
+    Used by both ``run_trajectory_mode`` (single-seed) and
+    ``run_multi_seed_mode`` (K seeds). The single-seed runner prints
+    one of these and translates to an exit code; the multi-seed
+    runner collects a list of them and prints an aggregate table.
+
+    Fields:
+      seed              — the seed the walk was driven with.
+      n_decisions       — number of decisions actually applied. Equals
+                          ``num_decisions`` on success; on a walk-time
+                          ``RuntimeError`` it's the count completed
+                          before the abort.
+      final_fingerprint — last fingerprint in the original trajectory,
+                          or ``None`` if the walk failed before any
+                          state was produced.
+      clone_match       — True iff the clone-replay trajectory is
+                          byte-equal to the original. False on either
+                          trajectory mismatch OR a clone-side
+                          exception that the original walk didn't hit.
+      error             — short error string if anything went wrong
+                          (walk RuntimeError, clone-replay exception),
+                          else None. Used for the "errors" column in
+                          the multi-seed table.
+      orig_trajectory   — full original trajectory (initial + after
+                          each step). Populated when the walk
+                          succeeded; left as an empty list on walk
+                          failure. Carried so the single-seed runner
+                          can print the divergence-step diagnostic
+                          without recomputing.
+      clone_trajectory  — full clone-replay trajectory. Empty list if
+                          the clone-replay raised.
+      decisions         — the decisions actually applied (so the
+                          divergence-step diagnostic can render the
+                          triggering action).
+    """
+
+    seed: int
+    n_decisions: int = 0
+    final_fingerprint: str | None = None
+    clone_match: bool = False
+    error: str | None = None
+    orig_trajectory: list[str] = field(default_factory=list)
+    clone_trajectory: list[str] = field(default_factory=list)
+    decisions: list[dict] = field(default_factory=list)
+
+
+def _run_single_seed_trajectory(
+    seed: int,
+    num_decisions: int,
+    num_battlefield: int,
+    num_hand: int,
+    num_library: int,
+) -> TrajectorySeedResult:
+    """Run the trajectory walk + clone-replay check for one seed and
+    return a result struct (no printing — the caller decides whether
+    to print a single-seed line or aggregate into a multi-seed table).
+
+    Assumes ``mtg_bot_engine`` is importable; the caller is responsible
+    for the up-front import-error handling.
+    """
+    import mtg_bot_engine
+
+    res = TrajectorySeedResult(seed=seed)
+    state = mtg_bot_engine.make_synthetic_state(
+        num_battlefield, num_hand, num_library
+    )
+    # Clone BEFORE any mutation so the clone is byte-identical to the
+    # starting state. If we cloned after walking, we'd be cloning the
+    # post-walk state — meaningless for replay.
+    clone = state.clone_once()
+
+    try:
+        decisions, orig_trajectory = _walk_trajectory(state, seed, num_decisions)
+    except RuntimeError as e:
+        res.error = f"walk: {type(e).__name__}: {e}"
+        return res
+
+    res.decisions = decisions
+    res.orig_trajectory = orig_trajectory
+    res.n_decisions = len(decisions)
+    res.final_fingerprint = orig_trajectory[-1]
+
+    try:
+        clone_trajectory = _replay_trajectory(clone, decisions)
+    except Exception as e:
+        res.error = f"clone-replay: {type(e).__name__}: {e}"
+        res.clone_match = False
+        return res
+
+    res.clone_trajectory = clone_trajectory
+    res.clone_match = orig_trajectory == clone_trajectory
+    return res
+
+
 def run_trajectory_mode(
     seed: int,
     num_decisions: int,
@@ -565,59 +669,65 @@ def run_trajectory_mode(
          Report the first divergence on failure.
 
     Returns 0 on PASS, 1 on FAIL, 2 on import / contract error.
+
+    Thin wrapper around :func:`_run_single_seed_trajectory` — the
+    helper does the actual walk + replay and returns a result struct;
+    this function prints the single-seed status line and translates to
+    an exit code. ``run_multi_seed_mode`` calls the helper directly
+    so it can aggregate K results without printing per-seed full
+    diagnostics.
     """
     try:
-        import mtg_bot_engine
+        import mtg_bot_engine  # noqa: F401  (used by helper)
     except ImportError as e:
         print(f"[trajectory] ERROR: mtg_bot_engine not built ({e})")
         print("  -> run `maturin develop --release -m rust/Cargo.toml`")
         return 2
 
-    state = mtg_bot_engine.make_synthetic_state(
-        num_battlefield, num_hand, num_library
-    )
-    # Clone BEFORE any mutation so the clone is byte-identical to the
-    # starting state. If we cloned after walking, we'd be cloning the
-    # post-walk state — meaningless for replay.
-    clone = state.clone_once()
-
     print("[python] (skipped — trajectory mode runs Rust-only for now)")
 
-    try:
-        decisions, orig_trajectory = _walk_trajectory(state, seed, num_decisions)
-    except RuntimeError as e:
-        print(f"[  rust] ERROR during trajectory walk: {e}")
+    result = _run_single_seed_trajectory(
+        seed=seed,
+        num_decisions=num_decisions,
+        num_battlefield=num_battlefield,
+        num_hand=num_hand,
+        num_library=num_library,
+    )
+
+    # Walk-time failure (RuntimeError from _walk_trajectory) — abort
+    # with scaffold-error exit code, since this signals a contract
+    # violation (e.g. empty legal_decisions) rather than a parity bug.
+    if result.error is not None and not result.orig_trajectory:
+        print(f"[  rust] ERROR during trajectory walk: {result.error}")
         return 2
 
-    final_hash = orig_trajectory[-1]
-
-    # Replay on the clone.
-    try:
-        clone_trajectory = _replay_trajectory(clone, decisions)
-    except Exception as e:
-        # Any exception on the clone-replay (when the original walk
-        # succeeded) is itself a divergence — record + report.
+    # Clone-replay exception (original walk succeeded but clone raised):
+    # itself a divergence — report + return 1.
+    if result.error is not None and not result.clone_trajectory:
         print(
             f"[  rust] trajectory of {num_decisions} decisions, "
-            f"final_hash={final_hash}, clone-replay-matches=False"
+            f"final_hash={result.final_fingerprint}, clone-replay-matches=False"
         )
         print(
             f"PARITY: FAIL — clone-replay raised "
-            f"{type(e).__name__} ({e}) where original did not"
+            f"{result.error} where original did not"
         )
         return 1
 
-    matches = orig_trajectory == clone_trajectory
     print(
         f"[  rust] trajectory of {num_decisions} decisions, "
-        f"final_hash={final_hash}, clone-replay-matches={matches}"
+        f"final_hash={result.final_fingerprint}, "
+        f"clone-replay-matches={result.clone_match}"
     )
 
-    if matches:
+    if result.clone_match:
         print(f"PARITY: PASS — Rust trajectory deterministic across seed={seed}")
         return 0
 
     # Find the first divergence step.
+    orig_trajectory = result.orig_trajectory
+    clone_trajectory = result.clone_trajectory
+    decisions = result.decisions
     div_step = next(
         (
             i
@@ -652,6 +762,126 @@ def run_trajectory_mode(
     return 1
 
 
+# ---------- multi-seed mode -----------------------------------------------
+
+
+def run_multi_seed_mode(
+    num_seeds: int,
+    seed_start: int,
+    num_decisions: int,
+    num_battlefield: int = 2,
+    num_hand: int = 3,
+    num_library: int = 5,
+) -> int:
+    """Run trajectory mode across K seeds and print an aggregate summary.
+
+    For each seed in ``[seed_start, seed_start + num_seeds)``:
+      1. Build a fresh synthetic Rust state.
+      2. Walk ``num_decisions`` deterministic decisions.
+      3. Clone-replay them on a pre-walk clone.
+      4. Record (seed, n_decisions, final_fp, clone_match, error).
+
+    Prints a per-seed table + aggregate stats, then a final PASS/FAIL
+    summary line. Returns 0 if every seed clone-replay-matched with
+    no errors; 1 if any seed had a divergence or error; 2 on import
+    failure.
+
+    Catches non-determinism bugs that only manifest at specific
+    seeds — the single-seed mode is necessary but not sufficient
+    because a fixed seed only exercises one path through the legal
+    space. By sweeping K seeds we tile that space and the chance
+    that a real nondeterminism bug stays hidden drops sharply with K.
+    """
+    try:
+        import mtg_bot_engine  # noqa: F401  (used by helper)
+    except ImportError as e:
+        print(f"[multi-seed] ERROR: mtg_bot_engine not built ({e})")
+        print("  -> run `maturin develop --release -m rust/Cargo.toml`")
+        return 2
+
+    seed_end = seed_start + num_seeds
+    print(
+        f"[multi-seed] running {num_seeds} seeds ({seed_start}..{seed_end - 1}), "
+        f"{num_decisions} decisions each, "
+        f"board=({num_battlefield},{num_hand},{num_library})"
+    )
+    print()
+    # Header: keep column widths in sync with the data rows below so
+    # the table reads cleanly in a terminal.
+    print("seed |   decisions | fingerprint  | clone-match | errors")
+    print("-----|-------------|--------------|-------------|-------")
+
+    results: list[TrajectorySeedResult] = []
+    for seed in range(seed_start, seed_end):
+        result = _run_single_seed_trajectory(
+            seed=seed,
+            num_decisions=num_decisions,
+            num_battlefield=num_battlefield,
+            num_hand=num_hand,
+            num_library=num_library,
+        )
+        results.append(result)
+        fp_display = result.final_fingerprint if result.final_fingerprint else "-"
+        err_display = result.error if result.error else "-"
+        print(
+            f"{seed:>4} | {result.n_decisions:>11} | {fp_display:<12} | "
+            f"{str(result.clone_match):<11} | {err_display}"
+        )
+
+    # Aggregate stats.
+    all_match = all(r.clone_match for r in results)
+    n_errors = sum(1 for r in results if r.error is not None)
+    fingerprints = [r.final_fingerprint for r in results if r.final_fingerprint]
+    unique_fingerprints = len(set(fingerprints))
+    failing_seeds = [r for r in results if not r.clone_match or r.error is not None]
+
+    uniq_note = ""
+    if fingerprints:
+        if unique_fingerprints == len(fingerprints):
+            uniq_note = "  (every seed produced a unique trajectory)"
+        else:
+            uniq_note = (
+                f"  ({len(fingerprints) - unique_fingerprints} collisions across "
+                f"{len(fingerprints)} runs)"
+            )
+
+    print()
+    print("aggregate:")
+    print(f"  total seeds:       {num_seeds}")
+    print(f"  all clone-match:   {all_match}")
+    print(f"  unique fingerprints: {unique_fingerprints}{uniq_note}")
+    print(f"  total errors:      {n_errors}")
+    print()
+
+    if all_match and n_errors == 0:
+        print(
+            f"PARITY: PASS — all {num_seeds} seeds clone-replay-matched"
+        )
+        return 0
+
+    n_failed = len(failing_seeds)
+    print(f"PARITY: FAIL — {n_failed} of {num_seeds} seeds failed")
+    for r in failing_seeds:
+        if r.error is not None:
+            print(f"  seed {r.seed}: {r.error}")
+        else:
+            # No exception but clone_match is False — a fingerprint
+            # mismatch between original and clone-replay. Cite the
+            # first-divergence step the way single-seed mode does.
+            div_step = next(
+                (
+                    i
+                    for i, (a, b) in enumerate(
+                        zip(r.orig_trajectory, r.clone_trajectory)
+                    )
+                    if a != b
+                ),
+                min(len(r.orig_trajectory), len(r.clone_trajectory)),
+            )
+            print(f"  seed {r.seed}: clone-replay diverged at step {div_step}")
+    return 1
+
+
 def main() -> int:
     p = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     p.add_argument("--seed", type=int, default=42)
@@ -665,7 +895,7 @@ def main() -> int:
     )
     p.add_argument(
         "--mode",
-        choices=("game", "initial-state", "trajectory"),
+        choices=("game", "initial-state", "trajectory", "multi-seed"),
         default="game",
         help=(
             "Which parity check to run. 'game' (default) plays a full game on "
@@ -673,14 +903,31 @@ def main() -> int:
             "Rust synthetic state and asserts its native fingerprint() matches "
             "a Python reimplementation of the hash recipe. 'trajectory' walks "
             "a Rust state through N decisions and asserts clone-replay "
-            "determinism (Rust-only — cross-engine compare deferred)."
+            "determinism (Rust-only — cross-engine compare deferred). "
+            "'multi-seed' runs 'trajectory' across K seeds and prints an "
+            "aggregate summary."
         ),
     )
     p.add_argument(
         "--num-decisions",
         type=int,
         default=20,
-        help="(trajectory) number of decisions to apply during the walk.",
+        help="(trajectory / multi-seed) number of decisions to apply per walk.",
+    )
+    p.add_argument(
+        "--num-seeds",
+        type=int,
+        default=10,
+        help="(multi-seed) number of seeds to run the trajectory walk on.",
+    )
+    p.add_argument(
+        "--seed-start",
+        type=int,
+        default=0,
+        help=(
+            "(multi-seed) starting seed; sweep iterates "
+            "[seed_start, seed_start + num_seeds)."
+        ),
     )
     p.add_argument(
         "--num-battlefield",
@@ -718,6 +965,16 @@ def main() -> int:
     if args.mode == "trajectory":
         return run_trajectory_mode(
             seed=args.seed,
+            num_decisions=args.num_decisions,
+            num_battlefield=args.num_battlefield,
+            num_hand=args.num_hand,
+            num_library=args.num_library,
+        )
+
+    if args.mode == "multi-seed":
+        return run_multi_seed_mode(
+            num_seeds=args.num_seeds,
+            seed_start=args.seed_start,
             num_decisions=args.num_decisions,
             num_battlefield=args.num_battlefield,
             num_hand=args.num_hand,
