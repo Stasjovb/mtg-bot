@@ -25,11 +25,17 @@ look up the source's printing's effects, dispatch each one.
   (smallest index in their ``battlefield`` Vec). If there is no
   creature on the defender's side, the spell fizzles — stack item
   still pops, but no damage is applied.
-- **No spell-source movement after resolve.** Real MTG: an
-  instant/sorcery on the stack goes to graveyard after resolution;
-  a permanent spell goes to battlefield. For first slice, just pop
-  the stack item — caller is responsible for movement. Documented
-  as a stepping-stone.
+- **Post-resolve spell-source movement (round-7 slice).** Real MTG
+  CR 608.2m: when a spell finishes resolving, an instant or sorcery
+  goes to its owner's graveyard; a permanent spell becomes a
+  permanent on the battlefield. The round-7 ``post-resolve``
+  slice closes round-6's deferred case: ``resolve_top_of_stack``
+  now dispatches on the source printing's ``card_types`` and moves
+  the source accordingly. Creatures landing on the battlefield get
+  ``summoning_sick = true``. ETB triggers are still deferred
+  (future slice). Empty ``card_types`` (synthetic-test escape
+  hatch) leaves the source where it is — see
+  ``test_resolution_with_empty_card_types_leaves_source_in_place``.
 - **No stack-empty error.** ``resolve_top_of_stack()`` on an empty
   stack returns None gracefully.
 
@@ -254,3 +260,210 @@ def test_clone_then_resolve_does_not_affect_original(synthetic_state):
     # Original: untouched on both fronts.
     assert synthetic_state.stack_size() == 1
     assert list(synthetic_state.life_totals) == [20, 20]
+
+
+# --- round-7 post-resolve spell-source movement ---------------------
+#
+# Real MTG CR 608.2m: when a spell finishes resolving, the spell-as-
+# game-object moves out of the stack zone — an instant or sorcery
+# goes to its owner's graveyard, a permanent spell becomes a
+# permanent on the battlefield. Round-6's ``resolve_top_of_stack``
+# popped the stack ``StackItem`` but didn't move the source
+# GameObject. This slice closes that gap.
+#
+# Dispatch key: the source printing's ``card_types`` Vec.
+#   - "Instant" or "Sorcery" -> controller's graveyard
+#   - "Creature" / "Artifact" / "Enchantment" / "Planeswalker" /
+#     "Battle" -> controller's battlefield
+#   - empty card_types -> leave the source where it is (synthetic-
+#     test escape hatch — these are first-slice test cards without
+#     real types)
+#
+# Creatures specifically: when entering the battlefield via this
+# path, the slice sets ``summoning_sick = true``. ETB triggers are
+# NOT in scope (a future slice).
+
+
+def _instant_zap_dict():
+    """An instant deal-damage printing — Lightning Bolt-shaped."""
+    return {
+        "name": "Test Zap",
+        "card_types": ["Instant"],
+        "mana_cost": {"R": 1},
+        "effects": [
+            {
+                "kind": "deal_damage",
+                "amount": 3,
+                "target": {"kind": "any_player"},
+            }
+        ],
+    }
+
+
+def _sorcery_strike_dict():
+    """A sorcery deal-damage printing — same shape as ``_bombard_dict``
+    but defined separately so it's clear this test is the sorcery-
+    typed companion to the instant test."""
+    return {
+        "name": "Test Strike",
+        "card_types": ["Sorcery"],
+        "mana_cost": {"R": 1, "generic": 2},
+        "effects": [
+            {
+                "kind": "deal_damage",
+                "amount": 4,
+                "target": {"kind": "any_player"},
+            }
+        ],
+    }
+
+
+def _creature_dict():
+    """A vanilla creature printing — no effects, just card_types."""
+    return {
+        "name": "Test Bear",
+        "card_types": ["Creature"],
+        "mana_cost": {"G": 1, "generic": 1},
+        "effects": [],
+        "power": 2,
+        "toughness": 2,
+    }
+
+
+def _artifact_dict():
+    """A vanilla artifact printing — no effects, just card_types."""
+    return {
+        "name": "Test Trinket",
+        "card_types": ["Artifact"],
+        "mana_cost": {"generic": 2},
+        "effects": [],
+    }
+
+
+def _typeless_synthetic_dict():
+    """A synthetic-test card with no card_types (empty Vec). The
+    dispatch's documented escape hatch — leave the source in place."""
+    return {
+        "name": "Test Typeless",
+        "mana_cost": {"generic": 1},
+        "effects": [],
+    }
+
+
+def test_instant_resolves_to_graveyard(synthetic_state):
+    """Resolving an instant spell moves the source to the
+    controller's graveyard (CR 608.2m)."""
+    obj_id = synthetic_state.register_and_inject_object(
+        _instant_zap_dict(), 0, ZONE_HAND
+    )
+    assert synthetic_state.find_object_zone(obj_id) == ZONE_HAND
+    grave_before = synthetic_state.graveyard_sizes[0]
+
+    synthetic_state.push_to_stack(obj_id, 0)
+    synthetic_state.resolve_top_of_stack()
+
+    assert synthetic_state.find_object_zone(obj_id) == ZONE_GRAVEYARD
+    assert synthetic_state.graveyard_sizes[0] == grave_before + 1
+    # The instant's effect still fires (defender takes 3).
+    assert synthetic_state.life_totals[1] == 20 - 3
+
+
+def test_sorcery_resolves_to_graveyard(synthetic_state):
+    """Resolving a sorcery moves the source to controller's graveyard."""
+    obj_id = synthetic_state.register_and_inject_object(
+        _sorcery_strike_dict(), 0, ZONE_HAND
+    )
+    assert synthetic_state.find_object_zone(obj_id) == ZONE_HAND
+    grave_before = synthetic_state.graveyard_sizes[0]
+
+    synthetic_state.push_to_stack(obj_id, 0)
+    synthetic_state.resolve_top_of_stack()
+
+    assert synthetic_state.find_object_zone(obj_id) == ZONE_GRAVEYARD
+    assert synthetic_state.graveyard_sizes[0] == grave_before + 1
+    assert synthetic_state.life_totals[1] == 20 - 4
+
+
+def test_creature_spell_resolves_to_battlefield_with_summoning_sick(
+    synthetic_state,
+):
+    """Resolving a creature spell moves the source onto the
+    controller's battlefield with ``summoning_sick = true`` — it
+    just entered, can't attack this turn."""
+    obj_id = synthetic_state.register_and_inject_object(
+        _creature_dict(), 0, ZONE_HAND
+    )
+    assert synthetic_state.find_object_zone(obj_id) == ZONE_HAND
+    bf_before = synthetic_state.battlefield_sizes[0]
+
+    synthetic_state.push_to_stack(obj_id, 0)
+    synthetic_state.resolve_top_of_stack()
+
+    assert synthetic_state.find_object_zone(obj_id) == ZONE_BATTLEFIELD
+    assert synthetic_state.battlefield_sizes[0] == bf_before + 1
+    # New permanent has summoning sickness.
+    assert synthetic_state.is_summoning_sick(obj_id) is True
+
+
+def test_artifact_resolves_to_battlefield(synthetic_state):
+    """Resolving an artifact spell moves the source onto the
+    controller's battlefield. (No summoning-sick assertion: the
+    flag is irrelevant for non-creatures, but for first slice we
+    don't bother gating on card type — value is uninteresting.)"""
+    obj_id = synthetic_state.register_and_inject_object(
+        _artifact_dict(), 0, ZONE_HAND
+    )
+    assert synthetic_state.find_object_zone(obj_id) == ZONE_HAND
+    bf_before = synthetic_state.battlefield_sizes[0]
+
+    synthetic_state.push_to_stack(obj_id, 0)
+    synthetic_state.resolve_top_of_stack()
+
+    assert synthetic_state.find_object_zone(obj_id) == ZONE_BATTLEFIELD
+    assert synthetic_state.battlefield_sizes[0] == bf_before + 1
+
+
+def test_resolution_with_empty_card_types_leaves_source_in_place(
+    synthetic_state,
+):
+    """Documented escape hatch: a printing with empty ``card_types``
+    (the synthetic-test shape several round-6 tests use) is left
+    where it is by the post-resolve dispatch. Real MTG cards always
+    have at least one card type — this branch only fires for
+    first-slice synthetic cards."""
+    obj_id = synthetic_state.register_and_inject_object(
+        _typeless_synthetic_dict(), 0, ZONE_HAND
+    )
+    assert synthetic_state.find_object_zone(obj_id) == ZONE_HAND
+    hand_before = synthetic_state.hand_sizes[0]
+    grave_before = synthetic_state.graveyard_sizes[0]
+    bf_before = synthetic_state.battlefield_sizes[0]
+
+    synthetic_state.push_to_stack(obj_id, 0)
+    synthetic_state.resolve_top_of_stack()
+
+    # Source unchanged: still in hand, no zone deltas.
+    assert synthetic_state.find_object_zone(obj_id) == ZONE_HAND
+    assert synthetic_state.hand_sizes[0] == hand_before
+    assert synthetic_state.graveyard_sizes[0] == grave_before
+    assert synthetic_state.battlefield_sizes[0] == bf_before
+
+
+def test_resolve_then_move_does_not_affect_original_via_clone(synthetic_state):
+    """CoW canary for the post-resolve movement path. Cloning the
+    state and resolving an instant on the clone must not bleed the
+    source-zone change back into the original — the original's
+    source object stays in hand, the clone's lands in graveyard."""
+    obj_id = synthetic_state.register_and_inject_object(
+        _instant_zap_dict(), 0, ZONE_HAND
+    )
+    synthetic_state.push_to_stack(obj_id, 0)
+    cloned = synthetic_state.clone_once()
+
+    cloned.resolve_top_of_stack()
+
+    # Clone: source landed in graveyard, hand shrank.
+    assert cloned.find_object_zone(obj_id) == ZONE_GRAVEYARD
+    # Original: source still in hand, stack still has the item.
+    assert synthetic_state.find_object_zone(obj_id) == ZONE_HAND
+    assert synthetic_state.stack_size() == 1
