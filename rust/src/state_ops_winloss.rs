@@ -93,4 +93,52 @@ impl GameState {
         let idx = check_player_id(player_id)?;
         Ok(self.players[idx].life > 0)
     }
+
+    /// Python-compatible alias for ``is_game_over``.
+    ///
+    /// The parity smoke harness (``scripts/parity_smoke.py``) hashes
+    /// game state via Python's ``state.is_over()`` API; the Rust
+    /// ``GameState`` must expose the same name so the same hashing
+    /// code works against either engine. Semantics are identical to
+    /// ``is_game_over``: True iff at least one player has life <= 0
+    /// (which under pure-derivation includes the simultaneous
+    /// double-loss / draw case — a draw is still a finished game).
+    ///
+    /// Implemented as a thin wrapper rather than a rename so the
+    /// existing 19 ``is_game_over``-using winloss tests still pass.
+    fn is_over(&self) -> bool {
+        self.is_game_over()
+    }
+
+    /// Python-property-style accessor: ``state.is_draw`` (NOT
+    /// ``state.is_draw()``). Returns True iff BOTH players have
+    /// life <= 0 simultaneously — the "mutual lethal damage" case
+    /// where neither player can be declared the winner. False
+    /// otherwise (game still ongoing OR exactly one player has lost,
+    /// in which case ``winner_id`` reports the survivor).
+    ///
+    /// Pure-derivation caveat (per the module docstring): a 0-life
+    /// player can be revived by ``gain_life`` because there is no
+    /// SBA loop locking in the loss; so calling
+    /// ``set_life(0, 0); set_life(1, 0); gain_life(0, 5)`` flips
+    /// ``is_draw`` back to False. The SBA-driven "loss is permanent"
+    /// model lands with the explicit-loss field in a future slice.
+    #[getter]
+    fn is_draw(&self) -> bool {
+        self.players[0].life <= 0 && self.players[1].life <= 0
+    }
+
+    /// Python-property-style accessor: ``state.winner_id`` (NOT
+    /// ``state.winner_id()``). Returns ``Some(player_id)`` of the
+    /// unique winner, or ``None`` when the game is ongoing OR a draw.
+    /// Identical semantics to existing ``winner()`` — the rename
+    /// matches the Python ``GameState.winner_id`` field, which the
+    /// parity smoke harness hashes.
+    ///
+    /// Implemented as a thin wrapper rather than a rename so the
+    /// existing winner-using winloss tests still pass.
+    #[getter]
+    fn winner_id(&self) -> Option<u8> {
+        self.winner()
+    }
 }
