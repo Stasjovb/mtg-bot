@@ -39,6 +39,7 @@
 //! the load-bearing canaries.
 
 use crate::state::{GameObject, GameState};
+use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 use std::sync::Arc;
 
@@ -266,6 +267,113 @@ impl GameState {
             }
         }
         Ok(moved_id)
+    }
+
+    /// Find the first GameObject in `player_id`'s library whose
+    /// printing's `card_types` contains `card_type` (e.g. "Creature",
+    /// "Land", "Instant"), iterating top-to-bottom, and return its
+    /// `obj_id`. Returns `None` if no card with that type is in the
+    /// library.
+    ///
+    /// "Top-to-bottom" honors the round-1 zone convention that the
+    /// LAST element of the library Vec is the top of the library —
+    /// this primitive iterates the Vec in reverse so the very top
+    /// card is checked first. Tutor effects that fetch by type
+    /// (Worldly Tutor, Crop Rotation, Demonic Tutor's "any card"
+    /// generalization) usually take the topmost qualifying card so
+    /// the search is deterministic; "first by Vec position" wouldn't
+    /// match player intent on a stacked library.
+    ///
+    /// Pure read — no library mutation, no `Arc::make_mut` clone.
+    ///
+    /// Raises `ValueError` on out-of-range `player_id`. (The
+    /// printing-id sibling returns `None` on a bad player; this
+    /// method is loud per the round-15 spec — silent no-op on
+    /// caller bug obscures real bugs at the bridge layer.)
+    fn search_library_for_first_of_type(
+        &self,
+        player_id: u8,
+        card_type: &str,
+    ) -> PyResult<Option<u32>> {
+        let idx = player_id as usize;
+        if idx >= 2 {
+            return Err(PyValueError::new_err(format!(
+                "player_id {player_id} out of range (must be 0 or 1)"
+            )));
+        }
+        let lib = &self.players[idx].library;
+        // Iterate top-to-bottom: top of library = last element of Vec.
+        for obj in lib.iter().rev() {
+            let printing = match self.registry.lookup(obj.printing_id) {
+                Some(p) => p,
+                None => continue,
+            };
+            if printing.card_types.iter().any(|t| t == card_type) {
+                return Ok(Some(obj.id));
+            }
+        }
+        Ok(None)
+    }
+
+    /// Find the first GameObject in `player_id`'s library whose
+    /// printing's `card_types` contains `card_type` (top-to-bottom
+    /// iteration), move it to that player's hand (zone field updated
+    /// to `ZONE_HAND`), and return the moved object's `obj_id`.
+    /// Returns `None` if no card with that type is in the library —
+    /// in which case **neither** the library nor the hand are mutated
+    /// (no shuffle on miss; this method is the bit-for-bit no-op
+    /// composition of search + move, not the round-14 "failed search
+    /// still shuffles" variant).
+    ///
+    /// CoW-safe: each zone Vec mutation routes through `Arc::make_mut`,
+    /// so cloning a `GameState` and calling this on the clone leaves
+    /// the source's library and hand untouched.
+    ///
+    /// Raises `ValueError` on out-of-range `player_id`, mirroring the
+    /// search-only sibling.
+    fn search_library_for_first_of_type_and_move_to_hand(
+        &mut self,
+        player_id: u8,
+        card_type: &str,
+    ) -> PyResult<Option<u32>> {
+        let idx = player_id as usize;
+        if idx >= 2 {
+            return Err(PyValueError::new_err(format!(
+                "player_id {player_id} out of range (must be 0 or 1)"
+            )));
+        }
+        // Locate top-to-bottom: scan from the end of the Vec back to
+        // index 0; the first index whose printing has `card_type` in
+        // its `card_types` is our match. Inlined here rather than
+        // calling the search-only method because we need the Vec
+        // INDEX (to remove), not just the obj_id.
+        let pos: Option<usize> = {
+            let lib = &self.players[idx].library;
+            let mut found: Option<usize> = None;
+            for i in (0..lib.len()).rev() {
+                let obj = &lib[i];
+                let printing = match self.registry.lookup(obj.printing_id) {
+                    Some(p) => p,
+                    None => continue,
+                };
+                if printing.card_types.iter().any(|t| t == card_type) {
+                    found = Some(i);
+                    break;
+                }
+            }
+            found
+        };
+        let p = match pos {
+            Some(p) => p,
+            None => return Ok(None),
+        };
+        let player = &mut self.players[idx];
+        let lib = Arc::make_mut(&mut player.library);
+        let mut obj = lib.remove(p);
+        obj.zone = crate::state_ops_zones::ZONE_HAND;
+        let id = obj.id;
+        Arc::make_mut(&mut player.hand).push(obj);
+        Ok(Some(id))
     }
 
     /// Apply a scry decision: the top `top_ids.len() + bottom_ids.len()`
