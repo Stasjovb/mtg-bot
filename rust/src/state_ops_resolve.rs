@@ -2310,6 +2310,46 @@ fn apply_effect(
                 Arc::make_mut(&mut state.players[defender_idx].graveyard).push(obj);
             }
         }
+        // DestroyTargetLand. CR 701.7 with Land filter — Dust Bowl /
+        // Petrified Field pattern. 2 cards in EoE pool per round-20
+        // measurement. Mirrors round-25 DestroyTargetArtifact
+        // line-for-line but with an `card_types.contains("Land")`
+        // filter in place of the `card_types.contains("Artifact")`
+        // filter. Scans defender's battlefield top-to-bottom; picks
+        // the first Land that is not indestructible. Empty / no-lands
+        // / only-indestructible-lands defender bf = silent fizzle.
+        Effect::DestroyTargetLand => {
+            let defender_idx = (1 - state.active_player) as usize;
+            let target_id: Option<u32> = {
+                let bf = &state.players[defender_idx].battlefield;
+                let registry = &state.registry;
+                bf.iter().find_map(|obj| {
+                    let printing = registry.lookup(obj.printing_id)?;
+                    if !printing.card_types.iter().any(|t| t == "Land") {
+                        return None; // not a land
+                    }
+                    if printing.keywords.iter().any(|k| k == "indestructible") {
+                        return None;
+                    }
+                    Some(obj.id)
+                })
+            };
+            if let Some(target_id) = target_id {
+                let bf_mut: &mut Vec<GameObject> =
+                    Arc::make_mut(&mut state.players[defender_idx].battlefield);
+                let pos = bf_mut
+                    .iter()
+                    .position(|o| o.id == target_id)
+                    .expect("target_id from scan but not found on re-scan");
+                let mut obj = bf_mut.remove(pos);
+                obj.zone = ZONE_GRAVEYARD;
+                obj.tapped = false;
+                obj.summoning_sick = false;
+                obj.damage = 0;
+                obj.counters = 0;
+                Arc::make_mut(&mut state.players[defender_idx].graveyard).push(obj);
+            }
+        }
         // DealDamageAnyTarget — Lightning Bolt's "any target" shape
         // (CR 701.4). The "any target" filter is intrinsic to the
         // variant; distinct from the existing DealDamage variant

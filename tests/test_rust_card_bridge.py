@@ -2056,3 +2056,68 @@ def test_destroy_target_artifact_in_unknown_kind_error_string():
                 "effects": [{"kind": "obviously_not_a_real_kind"}],
             }
         )
+
+
+# --- DestroyTargetLand round-trip -----------------------------------
+#
+# Bridge ext: Dust Bowl / Petrified Field shape — "destroy target
+# land" (CR 701.7, land filter). 2 cards in the EoE pool per round-20
+# measurement. Mirrors Python's `DestroyTargetLand(Destroy)` constructor
+# sugar with `targets=(TargetSpec(IsLand()),)`. Unit variant — no fields;
+# the land filter is intrinsic to the variant. Round-trip is a bare
+# `{"kind": "destroy_target_land"}` dict. Mirrors round-25
+# `destroy_target_artifact` round-trip shape with the kind string
+# swapped.
+
+
+def test_round_trip_destroy_target_land_unit_variant():
+    """Happy path: unit-variant round-trips as a single `kind` key
+    with no extra fields. Mirrors `destroy_target_artifact`
+    unit-variant round-trip shape."""
+    reg = mtg_bot_engine.Registry()
+    pid = reg.register_printing(
+        {
+            "name": "Test Dust Bowl",
+            "card_types": ["Land"],
+            "effects": [{"kind": "destroy_target_land"}],
+        }
+    )
+    effects = [dict(e) for e in reg.get_printing_effects(pid)]
+    assert effects[0] == {"kind": "destroy_target_land"}
+
+
+def test_round_trip_destroy_target_land_extra_keys_ignored():
+    """Silent-drop convention for unrecognized keys on a unit variant
+    (matches `destroy_target_artifact` parser shape). An accidental
+    `target` key on the registered dict does NOT raise — the parser
+    ignores it and round-trips a bare unit dict."""
+    reg = mtg_bot_engine.Registry()
+    pid = reg.register_printing(
+        {
+            "name": "Test Petrified Field",
+            "card_types": ["Land"],
+            "effects": [
+                {
+                    "kind": "destroy_target_land",
+                    "target": {"kind": "any_creature"},  # ignored
+                }
+            ],
+        }
+    )
+    effects = [dict(e) for e in reg.get_printing_effects(pid)]
+    assert effects[0] == {"kind": "destroy_target_land"}
+
+
+def test_destroy_target_land_in_unknown_kind_error_string():
+    """The unknown-kind error string enumerates the valid kinds —
+    `destroy_target_land` must appear so a future regression that
+    accidentally drops the parser arm surfaces with a helpful error."""
+    reg = mtg_bot_engine.Registry()
+    with pytest.raises(ValueError, match="destroy_target_land"):
+        reg.register_printing(
+            {
+                "name": "Broken",
+                "card_types": ["Sorcery"],
+                "effects": [{"kind": "obviously_not_a_real_kind"}],
+            }
+        )

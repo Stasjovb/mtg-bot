@@ -174,6 +174,7 @@ the test lands in a commit.
 | rust(effect-mill-target-player): targeted mill (CR 701.13b) | tests_rust/test_resolve.py extend | green  | feature/rust-effect-mill-target-player |
 | rust(effect-each-opponent-discards): each-opponent discard (CR 701.8) | tests_rust/test_resolve.py extend | green  | feature/rust-effect-each-opponent-discards |
 | rust(effect-destroy-target-artifact): artifact-filter destroy (CR 701.7) | tests_rust/test_resolve.py extend | green  | feature/rust-effect-destroy-target-artifact |
+| rust(effect-destroy-target-land): land-filter destroy (CR 701.7) | tests_rust/test_resolve.py extend | green  | feature/rust-effect-destroy-target-land |
 
 ## Build invocation reminder
 
