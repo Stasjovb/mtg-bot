@@ -2072,6 +2072,119 @@ fn apply_effect(
             state.players[opponent_idx].life =
                 state.players[opponent_idx].life.saturating_sub(*amount);
         }
+        // EachOpponentDiscards: CR 701.8 — "discard a card." Each
+        // opponent of the SOURCE's controller discards `count` cards.
+        // Let's Play a Game pattern — 2 cards in the EoE pool per
+        // round-20 measurement. Mirrors Python's
+        // `EachOpponentDiscards(count: int = 1)` dataclass.
+        //
+        // **Distinct from round-15 DiscardCard { target: AnyPlayer }.**
+        // DiscardCard's AnyPlayer arm targets the DEFENDING player
+        // (active player's spell forces the opponent to discard, Mind
+        // Rot / caller-targeted shape). EachOpponentDiscards fires on
+        // the SOURCE's controller's opponents — source-relative,
+        // independent of active_player at apply-effect time. In a
+        // 2-player engine both collapse to "the one opponent discards
+        // hand[0]" but the variants stay distinct to mirror Python's
+        // closed Effect vocabulary (round-15 pattern).
+        //
+        // **Distinct from round-24 DiscardSelf.** Same source-finder +
+        // hand[0]-pop primitive, but DiscardSelf fires on the
+        // CONTROLLER while this arm fires on the OPPONENT of the
+        // controller (= 1 - controller in 2-player land). Inverted
+        // target on otherwise identical dispatch shape — composes
+        // round-24 EachOpponentLosesLife's opponent-resolution with
+        // round-24 DiscardSelf's discard primitive.
+        //
+        // **Source-finder dispatch (round-24 pattern).** Walks both
+        // players' five tracked zones (hand / library / battlefield /
+        // graveyard / exile) plus the stack to recover the source's
+        // `controller`. Mirrors DiscardSelf / EachOpponentLosesLife —
+        // punisher / source-relative effects fire on whoever controls
+        // the source regardless of where the source currently sits,
+        // since the `controller` field doesn't change on zone moves.
+        //
+        // **First-slice deterministic choice**: opponent discards
+        // hand[0]. Mirrors round-15 DiscardCard + round-24 DiscardSelf
+        // hand[0] convention. Up to `count` discards in a row; stop
+        // early on empty hand (Python parity with `for _ in
+        // range(self.count): if not p.hand: break` inside
+        // `EachOpponentDiscards.resolve`).
+        //
+        // **Per-object state reset on zone change** (CR 400.7) —
+        // tapped / summoning_sick / damage / counters reset on the way
+        // to graveyard. Schema-uniform with every other zone-move arm.
+        //
+        // **count<0 raises** loudly (defense-in-depth; parse_effect
+        // catches at register time). **count=0 is a legal no-op**
+        // (mirrors DiscardSelf / GainLife / DrawCards / Mill zero-
+        // count conventions). **Empty opponent hand = silent no-op**
+        // (Python parity with `if not p.hand: break`). **Source not
+        // found anywhere = silent fizzle** (lost-track-of-source
+        // tolerance, mirrors round-24 / round-25 / round-26 shape).
+        Effect::EachOpponentDiscards { count } => {
+            if *count < 0 {
+                return Err(PyValueError::new_err(format!(
+                    "EachOpponentDiscards count must be non-negative, got {count}"
+                )));
+            }
+            if *count == 0 {
+                return Ok(());
+            }
+            // Source-controller resolution (mirrors round-24 /
+            // round-25 / round-26 shape): 5-zone walk + stack scan.
+            let mut source_controller: Option<u8> = None;
+            'outer: for player in state.players.iter() {
+                for zone in [
+                    &player.hand,
+                    &player.library,
+                    &player.battlefield,
+                    &player.graveyard,
+                    &player.exile,
+                ] {
+                    for obj in zone.iter() {
+                        if obj.id == source_obj_id {
+                            source_controller = Some(obj.controller);
+                            break 'outer;
+                        }
+                    }
+                }
+            }
+            if source_controller.is_none() {
+                if let Some(item) = state
+                    .stack
+                    .iter()
+                    .find(|i| i.source_obj_id == source_obj_id)
+                {
+                    source_controller = Some(item.controller);
+                }
+            }
+            let Some(controller) = source_controller else {
+                return Ok(()); // source not found: silent fizzle
+            };
+            // 2-player "each opponent" reduces to "the one opponent".
+            let opponent_idx = (1 - controller) as usize;
+            let target_count = *count as usize;
+            for _ in 0..target_count {
+                if state.players[opponent_idx].hand.is_empty() {
+                    break; // empty hand: silent no-op (Python parity)
+                }
+                // Pop hand[0] of the opponent (deterministic first-
+                // slice choice; mirrors round-15 DiscardCard +
+                // round-24 DiscardSelf hand[0] convention).
+                let hand_mut: &mut Vec<GameObject> =
+                    Arc::make_mut(&mut state.players[opponent_idx].hand);
+                let mut obj = hand_mut.remove(0);
+                // CR 400.7 zone-change reset (mirrors DiscardSelf).
+                obj.zone = ZONE_GRAVEYARD;
+                obj.tapped = false;
+                obj.summoning_sick = false;
+                obj.damage = 0;
+                obj.counters = 0;
+                Arc::make_mut(&mut state.players[opponent_idx].graveyard)
+                    .push(obj);
+            }
+        }
         // Round-24: DestroyAllCreatures. CR 701.7 + 701.4 AOE — Wrath
         // of God pattern. Destroys every creature on the battlefield
         // (both players), honoring indestructible (CR 702.12) inline.

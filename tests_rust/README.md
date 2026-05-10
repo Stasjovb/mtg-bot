@@ -172,6 +172,7 @@ the test lands in a commit.
 | rust(effect-lose-life): controller loses life (CR 118.4) | tests_rust/test_resolve.py extend | green  | feature/rust-effect-lose-life |
 | rust(effect-target-opponent-loses-life): targeted opponent life-loss (CR 118.4) | tests_rust/test_resolve.py extend | green  | feature/rust-effect-target-opponent-loses-life |
 | rust(effect-mill-target-player): targeted mill (CR 701.13b) | tests_rust/test_resolve.py extend | green  | feature/rust-effect-mill-target-player |
+| rust(effect-each-opponent-discards): each-opponent discard (CR 701.8) | tests_rust/test_resolve.py extend | green  | feature/rust-effect-each-opponent-discards |
 
 ## Build invocation reminder
 

@@ -1906,3 +1906,87 @@ def test_mill_target_player_negative_count_raises():
                 "effects": [{"kind": "mill_target_player", "count": -1}],
             }
         )
+
+
+# --- EachOpponentDiscards round-trip + error paths -------------------
+#
+# CR 701.8 — discard. Powers the "Let's Play a Game" pattern (2 EoE
+# cards). Distinct from `discard_card` (round 15): DiscardCard targets
+# the DEFENDING player (caller-targeted, Mind Rot shape); this variant
+# fires on the SOURCE's controller's opponents (source-relative). In a
+# 2-player engine both collapse to "the one opponent discards hand[0]"
+# but the variants stay separate to mirror Python's
+# `EachOpponentDiscards(count: int = 1)` dataclass shape. Default-
+# handling mirrors DiscardSelf / TargetOpponentDiscards (count
+# defaults to 1) rather than EachOpponentLosesLife's required-amount
+# shape.
+
+
+def test_round_trip_each_opponent_discards_default_count_is_one():
+    """Omitting `count` defaults to 1 (Python parity:
+    `EachOpponentDiscards(count: int = 1)` dataclass has count
+    default to 1; mirrors DiscardSelf / TargetOpponentDiscards
+    default-handling shape rather than EachOpponentLosesLife's
+    required-amount shape)."""
+    reg = mtg_bot_engine.Registry()
+    pid = reg.register_printing(
+        {
+            "name": "Test Lets Play a Game",
+            "card_types": ["Sorcery"],
+            "mana_cost": {"B": 1, "generic": 2},
+            "effects": [{"kind": "each_opponent_discards"}],
+        }
+    )
+    effects = [dict(e) for e in reg.get_printing_effects(pid)]
+    assert effects[0] == {"kind": "each_opponent_discards", "count": 1}
+
+
+def test_round_trip_each_opponent_discards_count_two():
+    """Happy path: count=2 round-trips faithfully. Mirrors Python's
+    `EachOpponentDiscards(count: int = 1)` dataclass shape — `count`
+    field with default 1, can be overridden."""
+    reg = mtg_bot_engine.Registry()
+    pid = reg.register_printing(
+        {
+            "name": "Test Heavy Discard",
+            "card_types": ["Sorcery"],
+            "mana_cost": {"B": 1, "generic": 3},
+            "effects": [{"kind": "each_opponent_discards", "count": 2}],
+        }
+    )
+    effects = [dict(e) for e in reg.get_printing_effects(pid)]
+    assert effects[0] == {"kind": "each_opponent_discards", "count": 2}
+
+
+def test_each_opponent_discards_negative_count_raises():
+    """Register-time guard on negative count (matches the apply_effect
+    guard, surfaced earlier in the pipeline). Mirrors DiscardSelf /
+    EachOpponentLosesLife / TargetOpponentLosesLife negative
+    register-time check shape — 'each opponent discards -1 cards' is
+    schema nonsense."""
+    reg = mtg_bot_engine.Registry()
+    with pytest.raises(ValueError, match="non-negative"):
+        reg.register_printing(
+            {
+                "name": "Broken",
+                "card_types": ["Sorcery"],
+                "effects": [
+                    {"kind": "each_opponent_discards", "count": -1}
+                ],
+            }
+        )
+
+
+def test_each_opponent_discards_in_unknown_kind_error_string():
+    """The unknown-kind error string enumerates the valid kinds —
+    `each_opponent_discards` must appear so a future regression that
+    accidentally drops the parser arm surfaces with a helpful error."""
+    reg = mtg_bot_engine.Registry()
+    with pytest.raises(ValueError, match="each_opponent_discards"):
+        reg.register_printing(
+            {
+                "name": "Broken",
+                "card_types": ["Sorcery"],
+                "effects": [{"kind": "obviously_not_a_real_kind"}],
+            }
+        )
