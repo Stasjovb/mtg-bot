@@ -230,7 +230,10 @@ def test_run_shard_eval_pull_threads_hang_dump_dir_into_worker_args(
     monkeypatch.setattr(_cf, "wait", _fake_wait)
 
     # Queue HTTP: first take returns one game (game_idx=0, remaining=0,
-    # not closed), second take returns no games + closed=True.
+    # not closed), second take returns no games + closed=True. The
+    # heartbeat-aware shard also calls /queue/finish + /queue/heartbeat
+    # — those get a benign empty-success response so they don't
+    # consume the take iterator.
     take_responses = iter([
         (json.dumps({
             "games": [0], "remaining": 0, "closed": False,
@@ -246,7 +249,13 @@ def test_run_shard_eval_pull_threads_hang_dump_dir_into_worker_args(
             self.status = 200
 
     def _fake_urlopen(req, **kw):
-        return _FakeResp(next(take_responses))
+        url = getattr(req, "full_url", str(req))
+        if "/queue/take" in url:
+            return _FakeResp(next(take_responses))
+        return _FakeResp(json.dumps({
+            "extended": [], "rejected": [],
+            "finished": [], "requeued": [], "failed": [],
+        }).encode("utf-8"))
 
     monkeypatch.setattr(dist, "_urlopen_with_retry", _fake_urlopen)
 
@@ -344,10 +353,16 @@ def test_run_shard_eval_pull_passes_none_when_root_unset(
             self.body = body
             self.status = 200
 
-    monkeypatch.setattr(
-        dist, "_urlopen_with_retry",
-        lambda req, **kw: _FakeResp(next(take_responses)),
-    )
+    def _fake_urlopen(req, **kw):
+        url = getattr(req, "full_url", str(req))
+        if "/queue/take" in url:
+            return _FakeResp(next(take_responses))
+        return _FakeResp(json.dumps({
+            "extended": [], "rejected": [],
+            "finished": [], "requeued": [], "failed": [],
+        }).encode("utf-8"))
+
+    monkeypatch.setattr(dist, "_urlopen_with_retry", _fake_urlopen)
 
     dist.run_shard_eval_pull(
         spec,
