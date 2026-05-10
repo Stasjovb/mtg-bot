@@ -167,10 +167,40 @@ def main(argv=None) -> None:  # pragma: no cover
         help="cpu or cuda. Default: auto.",
     )
     parser.add_argument(
+        "--server-address", default=None,
+        help=(
+            "Server bind address. Default: ('127.0.0.1', 0) (TCP loopback). "
+            "Pass a filesystem path (e.g. /tmp/mtgbot_nn_eval.sock) to use "
+            "a Unix domain socket on Linux — much lower IPC latency than "
+            "TCP loopback (~50us vs ~2ms p50 with batch_wait=0.5ms). "
+            "Ignored on Windows where multiprocessing.Listener interprets "
+            "a string as an AF_PIPE name instead. To pin a TCP port, "
+            "pass host:port (e.g. 127.0.0.1:39620)."
+        ),
+    )
+    parser.add_argument(
         "--out", type=Path, default=None,
         help="If given, append a JSON line summary to this file.",
     )
     args = parser.parse_args(argv)
+
+    server_address: Any
+    if args.server_address is None:
+        server_address = ("127.0.0.1", 0)
+    elif ":" in args.server_address and not args.server_address.startswith("/"):
+        host, _, port = args.server_address.rpartition(":")
+        server_address = (host, int(port))
+    else:
+        # Filesystem path → AF_UNIX on Linux, AF_PIPE on Windows. Clean
+        # up any stale socket from a previous crashed bench so the
+        # Listener can bind.
+        import os
+        if os.path.exists(args.server_address):
+            try:
+                os.unlink(args.server_address)
+            except OSError:
+                pass
+        server_address = args.server_address
 
     requests_total = args.workers * args.requests_per
     print(
@@ -195,6 +225,7 @@ def main(argv=None) -> None:  # pragma: no cover
             with_policy=args.with_policy,
             batch_size=args.server_batch_size,
             batch_wait_ms=args.server_batch_wait_ms,
+            address=server_address,
         )
         h = proxy.handle()
         print(
