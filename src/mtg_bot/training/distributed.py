@@ -2394,7 +2394,17 @@ def _machine_metadata() -> dict[str, Any]:
     try:  # noqa: SIM105
         import torch  # type: ignore
         info["torch_version"] = torch.__version__
-        info["cuda_available"] = bool(torch.cuda.is_available())
+        # ``is_built()`` checks the static "torch was compiled with CUDA"
+        # build flag — does NOT probe the runtime device list, so it does
+        # NOT prime the parent's CUDA context. ``torch.cuda.is_available()``
+        # would also work, but it primes CUDA at the C level (sets the bad-
+        # fork flag), and this metadata is captured on the parent thread
+        # of run_shard_pull / run_shard_eval_pull *before* mp.Pool fork()
+        # — on Linux that crashes every worker with "Cannot re-initialize
+        # CUDA in forked subprocess". The lossier diagnostic (build flag
+        # vs runtime probe) is acceptable since workers re-resolve via
+        # auto_device() at NN-build time anyway.
+        info["cuda_available"] = bool(torch.backends.cuda.is_built())
     except Exception:  # noqa: BLE001
         pass
     return info
