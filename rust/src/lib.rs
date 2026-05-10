@@ -50,6 +50,7 @@ fn mtg_bot_engine(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<state::GameState>()?;
     m.add_class::<cards::Registry>()?;
     m.add_function(wrap_pyfunction!(state::make_synthetic_state, m)?)?;
+    m.add_function(wrap_pyfunction!(state_ops_setup::make_state, m)?)?;
     m.add_function(wrap_pyfunction!(gameobject_byte_size, m)?)?;
     m.add("__version__", env!("CARGO_PKG_VERSION"))?;
     Ok(())
