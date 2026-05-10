@@ -1,4 +1,5 @@
 use pyo3::prelude::*;
+use std::sync::Arc;
 use std::time::Instant;
 
 #[derive(Clone, Debug)]
@@ -14,14 +15,21 @@ pub struct GameObject {
     pub summoning_sick: bool,
 }
 
+// Zones are `Arc<Vec<GameObject>>` so cloning a `Player` (and therefore
+// a `GameState`) is an atomic refcount bump per zone instead of a full
+// copy. Mutating a zone goes through `Arc::make_mut`, which clones the
+// inner Vec only if any other clone is observing it — same shape as
+// the Python side's `_CowList`.
+type Zone = Arc<Vec<GameObject>>;
+
 #[derive(Clone, Debug)]
 pub struct Player {
     pub id: u8,
     pub life: i32,
-    pub hand: Vec<GameObject>,
-    pub library: Vec<GameObject>,
-    pub battlefield: Vec<GameObject>,
-    pub graveyard: Vec<GameObject>,
+    pub hand: Zone,
+    pub library: Zone,
+    pub battlefield: Zone,
+    pub graveyard: Zone,
 }
 
 #[derive(Clone, Debug)]
@@ -129,10 +137,10 @@ fn make_player(id: u8, num_battlefield: usize, num_hand: usize, num_library: usi
     Player {
         id,
         life: 20,
-        hand,
-        library,
-        battlefield,
-        graveyard: Vec::new(),
+        hand: Arc::new(hand),
+        library: Arc::new(library),
+        battlefield: Arc::new(battlefield),
+        graveyard: Arc::new(Vec::new()),
     }
 }
 
