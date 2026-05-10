@@ -121,13 +121,97 @@
 //! the printing name string slice; when the alt-cost flags land, the
 //! future slice extends the key to a 6-tuple (string + 4 bools +
 //! `Option<String>`).
+//!
+//! ## DeclareAttackers extension (rust(legal-decisions-declare-attackers))
+//!
+//! **Deliberate divergence from Python.** Python's `legal_actions`
+//! does NOT emit DeclareAttackers. The Python engine docstring
+//! (`src/mtg_bot/engine.py:10-19`) is explicit: "the combat-declaration
+//! actions (`DeclareAttackers`, `DeclareBlockers`) that aren't
+//! enumerable as legal moves because their decision space is
+//! combinatorial." Python instead uses a factored search-side approach
+//! in `src/mtg_bot/search/combat_decisions.py` — `AttackerDecision`
+//! (one per eligible attacker, 2 branches each) feeds MCTS at search
+//! time, and the adapter accumulates them into a single engine-level
+//! `DeclareAttackers(frozenset[int])` once all per-creature decisions
+//! are collected.
+//!
+//! For the Rust port's first-slice we emit a powerset enumeration
+//! directly from `legal_decisions` so a uniform "one Python dict per
+//! legal Action" iterator covers the DECLARE_ATTACKERS phase too.
+//! This is a Rust-only emission (no Python counterpart) — the
+//! parity-smoke harness skips comparing emission sets during the
+//! DECLARE_ATTACKERS phase. When the factored-search shape lands in
+//! Rust (one `AttackerDecision` action per eligible attacker, mirroring
+//! `search/combat_decisions.py:44-55`), this powerset block goes away
+//! and the per-attacker enumeration replaces it.
+//!
+//! **Gating.** Emit DeclareAttackers ONLY when:
+//! - `phase == PHASE_DECLARE_ATTACKERS` (round-2 step constant; see
+//!   `state_ops_steps.rs:63`).
+//! - `active_player == player_id` (only the active player declares
+//!   attackers — CR 508.1).
+//! - `priority_player == player_id` (already verified by the early
+//!   priority gate at line 217).
+//! - `stack.is_empty()` (declare-attackers happens before any spells
+//!   resolve in the combat step).
+//!
+//! **Eligibility** (mirrors `src/mtg_bot/combat.py:eligible_attackers`
+//! at lines 15-23):
+//! - On the active player's battlefield.
+//! - `card_types` contains "Creature" (mirrors Python's
+//!   `is_creature_now`).
+//! - `!tapped` (CR 508.1a — a tapped creature can't attack).
+//! - `!summoning_sick || has_haste` keyword (CR 302.1 + 702.10).
+//!
+//! **Deferred** (silently included as candidates; the
+//! `declare_attacker` primitive's bool-return filters them at apply
+//! time):
+//! - `"defender"` keyword (CR 702.3) — Python's
+//!   `eligible_attackers` filters this out at enumeration time;
+//!   first slice defers to the primitive's per-id gate at apply.
+//! - Continuous "can't attack" restrictions (Propaganda, Ghostly
+//!   Prison, etc.) — no continuous-effects layer in the Rust engine
+//!   yet.
+//! - Defending player's "must block" / intimidate / fear and other
+//!   defender-side keywords that change the *blocker* legality
+//!   (these don't change attacker eligibility but interact in the
+//!   declare-blockers step which is out of this slice's scope).
+//!
+//! **Emission shape**: one Python dict per subset, matching
+//! `actions.rs:action_to_pydict` for `Action::DeclareAttackers`:
+//! `{"kind": "declare_attackers", "attacker_ids": [id1, id2, ...]}`.
+//! The `attacker_ids` list is in battlefield iteration order (stable,
+//! matches `Vec` ordering); the empty set emits `attacker_ids = []`.
+//!
+//! **Powerset cap.** With `n` eligible attackers and
+//! `n <= DECLARE_ATTACKERS_POWERSET_CAP` (4), emit all `2^n` subsets.
+//! With `n > 4`, emit only two dicts: the empty subset ("don't
+//! attack") and the full subset ("attack with everyone"). The cap
+//! exists so a 10-creature board doesn't produce 1024 dicts per
+//! `legal_decisions` call; a future factored-search slice replaces
+//! this with `n` separate `AttackerDecision`-style dicts.
 
 use crate::state::GameState;
-use crate::state_ops_steps::{PHASE_MAIN1, PHASE_MAIN2};
+use crate::state_ops_steps::{PHASE_DECLARE_ATTACKERS, PHASE_MAIN1, PHASE_MAIN2};
 use pyo3::exceptions::PyIndexError;
 use pyo3::prelude::*;
 use pyo3::types::PyDict;
 use std::collections::HashSet;
+
+/// First-slice cap on the powerset enumeration in
+/// `DeclareAttackers` emission. With `n <= 4` eligible attackers the
+/// enumerator emits the full `2^n` subsets (so a small board produces
+/// exhaustive choices, mirroring the search-side combinatorial pattern
+/// in Python's `search/combat_decisions.py`). With `n > 4`, the
+/// enumerator emits only the canonical "attack with nothing" + "attack
+/// with everyone" pair so the dict-count stays bounded at 2 instead
+/// of exploding to 32+. Tunable knob: future slices can lift this once
+/// the factored-search shape (one AttackerDecision per eligible
+/// attacker, per `search/combat_decisions.py:44-55`) lands and replaces
+/// the powerset emission. See "DeclareAttackers Rust-only enumeration"
+/// in `docs/SEARCH_LIMITATIONS.md`.
+const DECLARE_ATTACKERS_POWERSET_CAP: usize = 4;
 
 fn check_player_id(player_id: u8) -> PyResult<usize> {
     let idx = player_id as usize;
@@ -178,6 +262,23 @@ fn cast_spell_dict(py: Python<'_>, card_id: u32) -> PyResult<Bound<'_, PyDict>> 
     Ok(d)
 }
 
+/// Build a `{"kind": "declare_attackers", "attacker_ids": [...]}` dict.
+/// Mirrors `actions.rs:action_to_pydict`'s `Action::DeclareAttackers`
+/// arm so a dict produced here round-trips through `parse_action` and
+/// back without key drift. The `attacker_ids` Vec is cloned into a
+/// fresh Python list — PyO3's `Vec<u32>` -> Python list conversion
+/// preserves Vec iteration order, so the subset's order on the wire
+/// equals the order the enumerator pushed ids in.
+fn declare_attackers_dict<'py>(
+    py: Python<'py>,
+    attacker_ids: &[u32],
+) -> PyResult<Bound<'py, PyDict>> {
+    let d = PyDict::new(py);
+    d.set_item("kind", "declare_attackers")?;
+    d.set_item("attacker_ids", attacker_ids.to_vec())?;
+    Ok(d)
+}
+
 #[pymethods]
 impl GameState {
     /// Return the list of legal Actions for `player_id` at this
@@ -216,6 +317,75 @@ impl GameState {
         // bail with just the PassPriority action.
         if self.priority_player != player_id {
             return Ok(actions);
+        }
+
+        // DeclareAttackers emission (Rust-only — Python's
+        // `legal_actions` does NOT emit this variant; see the module
+        // docstring's "DeclareAttackers extension" section for the
+        // divergence rationale + the `search/combat_decisions.py`
+        // factored-search alternative Python uses).
+        //
+        // Gate: `phase == PHASE_DECLARE_ATTACKERS` AND
+        // `active_player == player_id` AND `stack.is_empty()`.
+        // (Priority is already confirmed above.)
+        //
+        // Eligibility per `src/mtg_bot/combat.py:eligible_attackers`
+        // (lines 15-23): on the active player's battlefield, is a
+        // Creature, not tapped, not summoning-sick OR has haste.
+        // Defender + continuous-restriction filters are deferred —
+        // see module docstring.
+        if self.phase == PHASE_DECLARE_ATTACKERS
+            && self.active_player == player_id
+            && self.stack.is_empty()
+        {
+            // Collect eligible attackers in battlefield iteration
+            // order (stable across calls; first-slice doesn't
+            // canonicalize ids in any other way).
+            let mut eligible: Vec<u32> = Vec::new();
+            for obj in self.players[idx].battlefield.iter() {
+                if obj.tapped {
+                    continue;
+                }
+                let Some(printing) = self.registry.lookup(obj.printing_id) else {
+                    continue;
+                };
+                if !printing.card_types.iter().any(|t| t == "Creature") {
+                    continue;
+                }
+                let has_haste = printing.keywords.iter().any(|k| k == "haste");
+                if obj.summoning_sick && !has_haste {
+                    continue;
+                }
+                eligible.push(obj.id);
+            }
+
+            let n = eligible.len();
+            if n <= DECLARE_ATTACKERS_POWERSET_CAP {
+                // Full powerset: bitmask 0 (= empty set, "attack with
+                // nothing") through 2^n - 1 (= full set, "attack with
+                // everyone"). Each subset's ids are pushed in
+                // `eligible`-iteration order (smallest bit index
+                // first) so the wire shape is deterministic.
+                let total = 1u32 << n;
+                for bitmask in 0..total {
+                    let mut subset: Vec<u32> = Vec::with_capacity(n);
+                    for i in 0..n {
+                        if (bitmask >> i) & 1 == 1 {
+                            subset.push(eligible[i]);
+                        }
+                    }
+                    actions.push(declare_attackers_dict(py, &subset)?);
+                }
+            } else {
+                // Past the cap: emit only the two canonical extremes
+                // ("don't attack" + "attack with everyone") so the
+                // dict-count stays bounded. The dropped middle
+                // subsets are still reachable at apply time via
+                // direct `Action::DeclareAttackers` construction —
+                // they're just not enumerated by `legal_decisions`.
+                actions.push(declare_attackers_dict(py, &[])?);
+                actions.push(declare_attackers_dict(py, &eligible)?);
+            }
         }
 
         // Python's `_is_sorcery_timing` (lines 25-32):

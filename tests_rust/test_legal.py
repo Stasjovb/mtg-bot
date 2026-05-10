@@ -46,11 +46,14 @@ import pytest
 
 PHASE_UNTAP = 0
 PHASE_MAIN1 = 3
+PHASE_DECLARE_ATTACKERS = 5
+PHASE_DECLARE_BLOCKERS = 6
 PHASE_COMBAT_DAMAGE = 7
 PHASE_MAIN2 = 9
 PHASE_CLEANUP = 11
 
 ZONE_HAND = 0
+ZONE_LIBRARY = 1
 ZONE_BATTLEFIELD = 2
 
 P0_FIRST_BATTLEFIELD_ID = 0
@@ -724,3 +727,564 @@ def test_legal_decisions_cast_spell_works_for_player_1(synthetic_state):
     p1_hand = synthetic_state.hand_snapshot(1)
     p1_hand_ids = {o["id"] for o in p1_hand}
     assert cast_spell["card_id"] in p1_hand_ids
+
+
+# --- DeclareAttackers emission --------------------------------------
+#
+# rust(legal-decisions-declare-attackers) — extends `legal_decisions`
+# to emit `DeclareAttackers` action dicts during the
+# DECLARE_ATTACKERS phase. **Deliberate divergence from Python**:
+# Python's `legal_actions` (in `src/mtg_bot/legal.py`) does NOT emit
+# DeclareAttackers — the engine.py docstring (lines 10-19) explicitly
+# says the combat-declaration actions "aren't enumerable as legal
+# moves because their decision space is combinatorial," and Python
+# uses a factored search-side approach in
+# `src/mtg_bot/search/combat_decisions.py` (`AttackerDecision` —
+# one per eligible attacker, 2 branches each — feeds MCTS at search
+# time and the adapter accumulates them into a single engine-level
+# `DeclareAttackers(frozenset[int])`).
+#
+# For the Rust port's first-slice we emit a powerset enumeration so
+# `legal_decisions` covers the DECLARE_ATTACKERS phase uniformly.
+# With N eligible attackers and N <= 4, all 2^N subsets emit. With
+# N > 4, only the two canonical extremes (empty + full) emit so the
+# dict count stays bounded. Future slices replace this with the
+# factored-search shape (one AttackerDecision-style action per
+# eligible attacker).
+#
+# Eligibility mirrors `src/mtg_bot/combat.py:eligible_attackers`
+# (lines 15-23): on active player's battlefield, is a Creature, not
+# tapped, not summoning-sick OR has haste. Defender (CR 702.3) and
+# continuous "can't attack" restrictions are deferred to the
+# `declare_attacker` primitive's per-id apply-time gate.
+
+
+def _custom_registry_state(
+    engine, *, p0_battlefield_printings, p0_hand_printings=None,
+    p1_battlefield_printings=None,
+):
+    """Build a minimal GameState with a small custom registry that
+    we control end-to-end (haste, defender, vanilla creature,
+    Forest land). Returns (state, name_to_pid) so tests can refer
+    to printings by name.
+
+    Battlefield is seeded by hand-moving cards from library->bf via
+    `move_object`; we put the printings in p0_hand initially and
+    then move them to the battlefield.
+    """
+    import mtg_bot_engine as _engine
+    registry = _engine.Registry()
+    name_to_pid = {}
+    name_to_pid["Forest"] = registry.register_printing({
+        "name": "Forest",
+        "card_types": ["Land"],
+        "mana_produced": ["G"],
+    })
+    name_to_pid["Vanilla Bear"] = registry.register_printing({
+        "name": "Vanilla Bear",
+        "card_types": ["Creature"],
+        "power": 2,
+        "toughness": 2,
+    })
+    name_to_pid["Hasty Bear"] = registry.register_printing({
+        "name": "Hasty Bear",
+        "card_types": ["Creature"],
+        "power": 2,
+        "toughness": 2,
+        "keywords": ["haste"],
+    })
+    name_to_pid["Defender Wall"] = registry.register_printing({
+        "name": "Defender Wall",
+        "card_types": ["Creature"],
+        "power": 0,
+        "toughness": 4,
+        "keywords": ["defender"],
+    })
+
+    # Build state with hand-cards seeded; then we move them onto the
+    # battlefield to control object ids precisely. Library can be a
+    # single Forest so the player has SOMETHING in their library
+    # (move_object uses zone constants and works for non-empty
+    # libraries too).
+    p1_bf = p1_battlefield_printings or []
+    p0_bf = p0_battlefield_printings
+    p0_hand = p0_hand_printings or []
+    state = _engine.make_state(
+        registry,
+        # Libraries: one Forest each, so the player exists with a
+        # well-formed state. The id assignment is:
+        #   p0_library ids 0..len-1, then p0_hand ids next, then p1.
+        p0_library_printing_ids=[name_to_pid["Forest"]],
+        p1_library_printing_ids=[name_to_pid["Forest"]],
+        p0_hand_printing_ids=(
+            [name_to_pid[name] for name in p0_bf]
+            + [name_to_pid[name] for name in p0_hand]
+        ),
+        p1_hand_printing_ids=(
+            [name_to_pid[name] for name in p1_bf]
+        ),
+    )
+
+    # The cards we want on the battlefield were placed in hand;
+    # move them to the battlefield. The hand_snapshot order matches
+    # the order we passed them in; the first len(p0_bf) entries are
+    # the battlefield targets.
+    p0_hand_snap = state.hand_snapshot(0)
+    bf_ids = []
+    for obj in p0_hand_snap[: len(p0_bf)]:
+        ok = state.move_object(obj["id"], ZONE_BATTLEFIELD, 0)
+        assert ok is True
+        bf_ids.append(obj["id"])
+
+    # Move p1's "battlefield" cards too if any.
+    p1_hand_snap = state.hand_snapshot(1)
+    p1_bf_ids = []
+    for obj in p1_hand_snap[: len(p1_bf)]:
+        ok = state.move_object(obj["id"], ZONE_BATTLEFIELD, 1)
+        assert ok is True
+        p1_bf_ids.append(obj["id"])
+
+    return state, name_to_pid, bf_ids, p1_bf_ids
+
+
+def _put_bf_into_declare_attackers(state, player_id=0):
+    """Set the state up so `player_id` is the active player with
+    priority during the DECLARE_ATTACKERS phase and the stack is
+    empty. The synthetic state defaults to active_player=0,
+    priority=0 — we just flip phase. For player 1 we walk the phase
+    cycle until active_player flips.
+    """
+    if player_id == 1:
+        while state.active_player == 0:
+            state.advance_phase()
+    state.set_phase(PHASE_DECLARE_ATTACKERS)
+    state.give_priority_to(player_id)
+
+
+# --- 23. DECLARE_ATTACKERS + 0 eligible attackers -------------------
+
+
+def test_legal_decisions_declare_attackers_phase_zero_creatures_emits_empty_subset(
+    engine,
+):
+    """DECLARE_ATTACKERS phase with NO eligible attackers (empty
+    battlefield): emit ONE DeclareAttackers (empty set) + PassPriority
+    = 2 actions total. The powerset of the empty set is {{}}, a
+    one-element set containing only the empty subset — bit-for-bit
+    what `for bitmask in 0..1` yields."""
+    state, _, _, _ = _custom_registry_state(
+        engine,
+        p0_battlefield_printings=[],  # empty battlefield
+    )
+    _put_bf_into_declare_attackers(state, 0)
+
+    actions = state.legal_decisions(0)
+
+    kinds = _kinds(actions)
+    assert kinds == ["pass_priority", "declare_attackers"]
+    da = [a for a in actions if a["kind"] == "declare_attackers"][0]
+    assert da["attacker_ids"] == []
+
+
+# --- 24. DECLARE_ATTACKERS + 1 untapped creature --------------------
+
+
+def test_legal_decisions_declare_attackers_phase_one_eligible_emits_two_subsets(
+    engine,
+):
+    """DECLARE_ATTACKERS phase with 1 untapped non-sick creature:
+    emit 2 DeclareAttackers dicts (empty + full = 2^1) +
+    PassPriority = 3 total. Locks in: (a) emission count = 2^N
+    when N <= 4, (b) PassPriority is still at index 0, (c) the full
+    subset carries exactly the eligible creature's id."""
+    state, _, bf_ids, _ = _custom_registry_state(
+        engine,
+        p0_battlefield_printings=["Vanilla Bear"],
+    )
+    _put_bf_into_declare_attackers(state, 0)
+
+    actions = state.legal_decisions(0)
+
+    kinds = _kinds(actions)
+    assert kinds[0] == "pass_priority"
+    assert kinds.count("declare_attackers") == 2
+    das = [a for a in actions if a["kind"] == "declare_attackers"]
+    subsets = {tuple(sorted(d["attacker_ids"])) for d in das}
+    # 2^1 powerset: empty + {bear}.
+    assert subsets == {(), (bf_ids[0],)}
+
+
+# --- 25. DECLARE_ATTACKERS + 2 untapped creatures -------------------
+
+
+def test_legal_decisions_declare_attackers_phase_two_eligible_emits_four_subsets(
+    engine,
+):
+    """DECLARE_ATTACKERS phase with 2 untapped non-sick creatures:
+    emit 4 DeclareAttackers dicts (powerset of 2^2 = 4) +
+    PassPriority. Subsets: {}, {A}, {B}, {A,B}. Locks in the cap-
+    just-below-threshold behavior."""
+    state, _, bf_ids, _ = _custom_registry_state(
+        engine,
+        p0_battlefield_printings=["Vanilla Bear", "Vanilla Bear"],
+    )
+    _put_bf_into_declare_attackers(state, 0)
+
+    actions = state.legal_decisions(0)
+
+    kinds = _kinds(actions)
+    assert kinds[0] == "pass_priority"
+    assert kinds.count("declare_attackers") == 4
+    das = [a for a in actions if a["kind"] == "declare_attackers"]
+    subsets = {tuple(sorted(d["attacker_ids"])) for d in das}
+    a, b = bf_ids[0], bf_ids[1]
+    assert subsets == {(), (a,), (b,), (a, b)}
+
+
+# --- 26. DECLARE_ATTACKERS + tapped creature excluded ---------------
+
+
+def test_legal_decisions_declare_attackers_tapped_creature_is_excluded(
+    engine,
+):
+    """A tapped creature can't attack (CR 508.1a). With only one
+    creature on the battlefield and it tapped, the eligible set is
+    empty → emit only the empty subset, mirroring the zero-eligible
+    case in test 23."""
+    state, _, bf_ids, _ = _custom_registry_state(
+        engine,
+        p0_battlefield_printings=["Vanilla Bear"],
+    )
+    # Tap the bear.
+    state.tap_object(bf_ids[0])
+    _put_bf_into_declare_attackers(state, 0)
+
+    actions = state.legal_decisions(0)
+
+    kinds = _kinds(actions)
+    # Tapped creature -> no eligible -> just the empty subset.
+    assert kinds == ["pass_priority", "declare_attackers"]
+    da = [a for a in actions if a["kind"] == "declare_attackers"][0]
+    assert da["attacker_ids"] == []
+
+
+# --- 27. Summoning-sick creature WITHOUT haste excluded -------------
+
+
+def test_legal_decisions_declare_attackers_summoning_sick_without_haste_excluded(
+    engine,
+):
+    """A summoning-sick creature without haste can't attack (CR
+    302.1). We exercise the exclusion by `cast_creature`-ing a
+    Vanilla Bear (no haste) onto the battlefield, which stamps
+    `summoning_sick = true` on the resulting permanent (see
+    `state_ops_cast.rs:319-320`). The sick bear must NOT appear in
+    the eligible set → only the empty subset emits."""
+    # Build a registry with our custom printings + put a Vanilla
+    # Bear in p0's hand. Then fund p0's mana pool and cast the bear
+    # so the resulting battlefield slot carries summoning_sick=true.
+    import mtg_bot_engine as _engine
+    registry = _engine.Registry()
+    forest_pid = registry.register_printing({
+        "name": "Forest",
+        "card_types": ["Land"],
+        "mana_produced": ["G"],
+    })
+    bear_pid = registry.register_printing({
+        "name": "Vanilla Bear",
+        "card_types": ["Creature"],
+        "power": 2,
+        "toughness": 2,
+        "mana_cost": {"G": 1, "generic": 1},
+    })
+    state = _engine.make_state(
+        registry,
+        p0_library_printing_ids=[forest_pid],
+        p1_library_printing_ids=[forest_pid],
+        p0_hand_printing_ids=[bear_pid],
+        p1_hand_printing_ids=[],
+    )
+    # Find the bear in p0's hand.
+    hand_snap = state.hand_snapshot(0)
+    bear_obj = next(o for o in hand_snap if o["printing_name"] == "Vanilla Bear")
+    bear_id = bear_obj["id"]
+    # Fund the mana pool: 1G + 1 generic. We feed G + C.
+    state.add_mana(0, "G", 1)
+    state.add_mana(0, "C", 1)
+    # Cast it — stamps summoning_sick = true on the battlefield slot.
+    ok = state.cast_creature(bear_id, 0)
+    assert ok is True
+    # Confirm the bear is on the battlefield with summoning_sick =
+    # true. We read via the snapshot (no player_id arg — emits both
+    # players' bf).
+    bf = state.battlefield_snapshot()
+    bear_bf = next(o for o in bf if o["id"] == bear_id)
+    assert bear_bf["summoning_sick"] is True
+
+    _put_bf_into_declare_attackers(state, 0)
+
+    actions = state.legal_decisions(0)
+
+    # Sick bear without haste is excluded → only the empty subset
+    # emits (n=0 eligible).
+    kinds = _kinds(actions)
+    assert kinds == ["pass_priority", "declare_attackers"]
+    da = [a for a in actions if a["kind"] == "declare_attackers"][0]
+    assert da["attacker_ids"] == []
+
+
+# --- 28. Summoning-sick creature WITH haste included ----------------
+
+
+def test_legal_decisions_declare_attackers_haste_creature_included(
+    engine,
+):
+    """A creature with haste attacks the turn it enters (CR 702.10
+    bypasses the CR 302.1 summoning-sickness restriction). We
+    `cast_creature` a Hasty Bear so it lands on the battlefield
+    with `summoning_sick = true`; the haste keyword on its printing
+    must override the sickness exclusion → the bear emits in the
+    eligible set, yielding 2 DeclareAttackers (empty + full)."""
+    import mtg_bot_engine as _engine
+    registry = _engine.Registry()
+    forest_pid = registry.register_printing({
+        "name": "Forest",
+        "card_types": ["Land"],
+        "mana_produced": ["G"],
+    })
+    hasty_pid = registry.register_printing({
+        "name": "Hasty Bear",
+        "card_types": ["Creature"],
+        "power": 2,
+        "toughness": 2,
+        "mana_cost": {"G": 1, "generic": 1},
+        "keywords": ["haste"],
+    })
+    state = _engine.make_state(
+        registry,
+        p0_library_printing_ids=[forest_pid],
+        p1_library_printing_ids=[forest_pid],
+        p0_hand_printing_ids=[hasty_pid],
+        p1_hand_printing_ids=[],
+    )
+    hand_snap = state.hand_snapshot(0)
+    hasty_obj = hand_snap[0]
+    hasty_id = hasty_obj["id"]
+    state.add_mana(0, "G", 1)
+    state.add_mana(0, "C", 1)
+    ok = state.cast_creature(hasty_id, 0)
+    assert ok is True
+    bf = state.battlefield_snapshot()
+    hasty_bf = next(o for o in bf if o["id"] == hasty_id)
+    # Stamped sick — but haste on the printing overrides.
+    assert hasty_bf["summoning_sick"] is True
+
+    _put_bf_into_declare_attackers(state, 0)
+
+    actions = state.legal_decisions(0)
+
+    kinds = _kinds(actions)
+    # Haste creature is eligible despite sick → full 2^1 powerset.
+    assert kinds.count("declare_attackers") == 2
+    das = [a for a in actions if a["kind"] == "declare_attackers"]
+    subsets = {tuple(sorted(d["attacker_ids"])) for d in das}
+    assert subsets == {(), (hasty_id,)}
+
+
+# --- 29. Non-DECLARE_ATTACKERS phase: no DeclareAttackers -----------
+
+
+@pytest.mark.parametrize(
+    "phase",
+    [PHASE_UNTAP, PHASE_MAIN1, PHASE_MAIN2, PHASE_CLEANUP],
+    ids=["UNTAP", "MAIN1", "MAIN2", "CLEANUP"],
+)
+def test_legal_decisions_non_declare_attackers_phase_emits_no_declare_attackers(
+    engine, phase,
+):
+    """DeclareAttackers only emits during the DECLARE_ATTACKERS
+    phase. In any other phase (including the main phases where
+    PlayLand / CastSpell DO emit), no `declare_attackers` dict
+    appears in the emission set."""
+    state, _, _, _ = _custom_registry_state(
+        engine,
+        p0_battlefield_printings=["Vanilla Bear"],
+    )
+    state.set_phase(phase)
+    state.give_priority_to(0)
+
+    actions = state.legal_decisions(0)
+
+    kinds = _kinds(actions)
+    assert "declare_attackers" not in kinds
+
+
+# --- 30. Off-turn DECLARE_ATTACKERS: no DeclareAttackers ------------
+
+
+def test_legal_decisions_declare_attackers_off_turn_emits_no_declare_attackers(
+    engine,
+):
+    """You can't attack on the opponent's turn. Even during the
+    DECLARE_ATTACKERS phase, if `active_player != player_id`, the
+    enumerator must NOT emit DeclareAttackers for player_id.
+    Mirrors CR 506.2 — only the active player declares attackers."""
+    # Build state with bears on both battlefields; advance to P1's
+    # DECLARE_ATTACKERS phase but query for P0.
+    state, _, _, p1_bf_ids = _custom_registry_state(
+        engine,
+        p0_battlefield_printings=["Vanilla Bear"],
+        p1_battlefield_printings=["Vanilla Bear"],
+    )
+    # Walk to P1's turn.
+    while state.active_player == 0:
+        state.advance_phase()
+    state.set_phase(PHASE_DECLARE_ATTACKERS)
+    # Priority on P0 (off-turn). P1 is active, P0 is off-active.
+    state.give_priority_to(0)
+    assert state.active_player == 1
+    assert state.get_priority_player() == 0
+
+    actions = state.legal_decisions(0)
+
+    # P0 is off-active during P1's DECLARE_ATTACKERS — no
+    # DeclareAttackers emitted for P0.
+    kinds = _kinds(actions)
+    assert "declare_attackers" not in kinds
+
+
+# --- 31. N > cap: only empty + full subset emit ---------------------
+
+
+def test_legal_decisions_declare_attackers_cap_above_threshold_emits_two_subsets(
+    engine,
+):
+    """With N > DECLARE_ATTACKERS_POWERSET_CAP (= 4) eligible
+    attackers, only the empty + full subsets emit. Confirms the cap
+    keeps `legal_decisions` bounded at 2 dicts even on a wide
+    board, instead of exploding to 2^N. Builds a 5-creature board
+    (N = 5 > cap = 4)."""
+    state, _, bf_ids, _ = _custom_registry_state(
+        engine,
+        p0_battlefield_printings=["Vanilla Bear"] * 5,
+    )
+    _put_bf_into_declare_attackers(state, 0)
+
+    actions = state.legal_decisions(0)
+
+    kinds = _kinds(actions)
+    assert kinds[0] == "pass_priority"
+    # Capped: just 2 DeclareAttackers dicts (empty + everyone).
+    assert kinds.count("declare_attackers") == 2
+    das = [a for a in actions if a["kind"] == "declare_attackers"]
+    subsets = [tuple(sorted(d["attacker_ids"])) for d in das]
+    assert () in subsets
+    assert tuple(sorted(bf_ids)) in subsets
+
+
+# --- 32. Round-trip every emitted DeclareAttackers via apply_action -
+
+
+def test_legal_decisions_declare_attackers_dicts_round_trip_via_apply_action(
+    engine,
+):
+    """Every DeclareAttackers dict from `legal_decisions` must be a
+    valid input to `apply_action` (regression for the round-23
+    declare-attackers bridge). For the FULL-subset dict in particular,
+    applying it should mark the attackers in `state.attackers`."""
+    state, _, bf_ids, _ = _custom_registry_state(
+        engine,
+        p0_battlefield_printings=["Vanilla Bear", "Vanilla Bear"],
+    )
+    _put_bf_into_declare_attackers(state, 0)
+
+    actions = state.legal_decisions(0)
+    das = [a for a in actions if a["kind"] == "declare_attackers"]
+    # Find the full-set DeclareAttackers (2 ids).
+    full_da = max(das, key=lambda d: len(d["attacker_ids"]))
+    assert sorted(full_da["attacker_ids"]) == sorted(bf_ids)
+
+    # Apply it; the primitive must accept the dict shape without
+    # raising. We don't assert on the precise battlefield mutation
+    # (combat-state diagnostics live in test_combat.py); the
+    # round-trip itself is the regression target.
+    state.apply_action(full_da)
+
+
+# --- 33. DeclareAttackers carries the right wire shape --------------
+
+
+def test_legal_decisions_declare_attackers_dict_shape_is_minimal(
+    engine,
+):
+    """Every DeclareAttackers dict carries exactly two keys: `kind`
+    + `attacker_ids`. Mirrors `actions.rs:action_to_pydict`'s
+    DeclareAttackers arm. Catches a future-slice regression that
+    adds an extra wire key (e.g. `controller_id`) to the emitter
+    but forgets to update the round-trip parser."""
+    state, _, _, _ = _custom_registry_state(
+        engine,
+        p0_battlefield_printings=["Vanilla Bear"],
+    )
+    _put_bf_into_declare_attackers(state, 0)
+
+    actions = state.legal_decisions(0)
+    das = [a for a in actions if a["kind"] == "declare_attackers"]
+    assert len(das) >= 1
+    for d in das:
+        assert set(d.keys()) == {"kind", "attacker_ids"}
+
+
+# --- 34. P1 parity during their DECLARE_ATTACKERS ------------------
+
+
+def test_legal_decisions_declare_attackers_works_for_player_1(engine):
+    """P1's DECLARE_ATTACKERS phase: DeclareAttackers emits for P1's
+    eligible battlefield creatures (not P0's). Locks in the
+    enumerator's player-indexing — `self.players[idx].battlefield`
+    walks the correct player's creatures."""
+    state, _, _, p1_bf_ids = _custom_registry_state(
+        engine,
+        p0_battlefield_printings=["Vanilla Bear"],
+        p1_battlefield_printings=["Vanilla Bear"],
+    )
+    # Walk to P1's turn + DECLARE_ATTACKERS phase.
+    _put_bf_into_declare_attackers(state, 1)
+    assert state.active_player == 1
+    assert state.get_priority_player() == 1
+
+    actions = state.legal_decisions(1)
+
+    kinds = _kinds(actions)
+    assert kinds[0] == "pass_priority"
+    # 2^1 = 2 DeclareAttackers (empty + P1's bear).
+    assert kinds.count("declare_attackers") == 2
+    das = [a for a in actions if a["kind"] == "declare_attackers"]
+    full = [d for d in das if len(d["attacker_ids"]) == 1][0]
+    # The single eligible attacker is P1's bear, not P0's.
+    assert full["attacker_ids"] == [p1_bf_ids[0]]
+
+
+# --- 35. DECLARE_ATTACKERS + non-empty stack: no DeclareAttackers --
+
+
+def test_legal_decisions_declare_attackers_non_empty_stack_emits_no_declare_attackers(
+    engine,
+):
+    """Non-empty stack during DECLARE_ATTACKERS: the
+    `stack.is_empty()` gate fails, so DeclareAttackers does NOT
+    emit (the active player must wait for the stack to resolve
+    before declaring attackers). Mirrors CR 116.5 — declaration
+    happens when the stack is empty."""
+    state, _, bf_ids, _ = _custom_registry_state(
+        engine,
+        p0_battlefield_printings=["Vanilla Bear"],
+    )
+    _put_bf_into_declare_attackers(state, 0)
+    # Push something onto the stack.
+    state.push_to_stack(bf_ids[0], 0)
+
+    actions = state.legal_decisions(0)
+
+    kinds = _kinds(actions)
+    assert "declare_attackers" not in kinds
