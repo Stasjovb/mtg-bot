@@ -3115,3 +3115,229 @@ def test_resolve_damage_each_creature_stacks_with_existing_damage(
     # Other creatures took just 2 (started at 0).
     for cid in (6, 7, 8, 9, 72, 73, 74, 75, 76):
         assert synthetic_state.get_damage(cid) == 2
+
+
+# --- round-19 CreateToken dispatch ----------------------------------
+#
+# **CreateToken scope** (mirrored in the Rust module docstring on
+# ``state_ops_resolve.rs``). CR 701.6 — Servo/Soldier maker pattern:
+#
+# - **Active player (= controller of resolving spell) gets ``count``
+#   fresh GameObjects on their battlefield**, all referencing
+#   ``token_printing_id``. Mirrors the DealDamage/DrawCards/GainLife
+#   first-slice "controller = state.active_player" convention.
+# - **Tokens enter summoning-sick, untapped, no damage, no counters,
+#   ``zone = ZONE_BATTLEFIELD``.** CR 302.1 — fresh permanents enter
+#   the battlefield with summoning sickness.
+# - **count=0 is a legal no-op** (mirrors GainLife / DrawCards / Mill
+#   / DamageEach* zero-count conventions).
+# - **count<0 raises** loudly (mirrors ScryN / DealDamage /
+#   DamageEach* raise-on-negative shape; "create -2 tokens" is schema
+#   nonsense).
+# - **Unknown ``token_printing_id`` raises** (registry lookup is the
+#   schema-validation seam — printing must exist before you can make
+#   tokens of it).
+# - **Fresh ids never collide** with any existing GameObject across
+#   either player or any zone — same allocator shape as
+#   ``state_ops_deck.rs::load_deck`` and
+#   ``register_and_inject_object`` (max-id + 1, sequential).
+
+
+def _conscript_dict(count, token_printing_id):
+    """A create-token spell — Conscript-shaped (sorcery, makes N
+    tokens of the named printing). CR 701.6."""
+    return {
+        "name": "Test Conscript",
+        "card_types": ["Sorcery"],
+        "mana_cost": {"W": 1, "generic": 1},
+        "effects": [
+            {
+                "kind": "create_token",
+                "count": count,
+                "token_printing_id": token_printing_id,
+            }
+        ],
+    }
+
+
+def _soldier_token_dict():
+    """A 1/1 white Soldier token printing."""
+    return {
+        "name": "Soldier Token",
+        "card_types": ["Creature"],
+        "power": 1,
+        "toughness": 1,
+    }
+
+
+def _register_soldier_token(synthetic_state):
+    """Register the Soldier token printing into the synthetic state's
+    registry. ``register_and_inject_object`` is the only test surface
+    for adding a printing (no standalone register-printing-only
+    method); we inject the token dummy onto p1's library briefly to
+    learn its printing_id, then rely on ``registry_size`` being its
+    pre-injection value. Returns ``(token_printing_id, dummy_obj_id)``;
+    callers can leave the dummy in the library (it's just a synthetic
+    library object with no semantics) or move it elsewhere.
+    """
+    token_pid = synthetic_state.registry_size  # next free printing_id
+    dummy_obj_id = synthetic_state.register_and_inject_object(
+        _soldier_token_dict(), 1, ZONE_LIBRARY
+    )
+    return token_pid, dummy_obj_id
+
+
+def test_resolve_create_token_spawns_tokens_on_active_player_battlefield(
+    synthetic_state,
+):
+    """count=2 spawns 2 tokens on active player's battlefield, each
+    referencing the token printing_id. Pre-resolve: p0 has 10 bf
+    objects (synthetic seed). Post-resolve: 2 new tokens land on p0,
+    p1's bf is unchanged."""
+    token_pid, _ = _register_soldier_token(synthetic_state)
+    spell_obj_id = synthetic_state.register_and_inject_object(
+        _conscript_dict(count=2, token_printing_id=token_pid), 0, ZONE_HAND
+    )
+    synthetic_state.push_to_stack(spell_obj_id, 0)
+
+    bf_before = list(synthetic_state.battlefield_sizes)
+    synthetic_state.resolve_top_of_stack()
+    bf_after = list(synthetic_state.battlefield_sizes)
+
+    # The Conscript sorcery resolved -> goes to active's graveyard
+    # (post-resolve movement, not on bf), so the +2 we observe on
+    # active's battlefield is exactly the 2 created tokens (no spell-
+    # source contribution).
+    assert bf_after[0] == bf_before[0] + 2
+    assert bf_after[1] == bf_before[1]
+
+
+def test_resolve_create_token_zero_count_no_op(synthetic_state):
+    """count=0 is a legitimate no-op — battlefield size unchanged on
+    both players, no error, stack still pops."""
+    token_pid, _ = _register_soldier_token(synthetic_state)
+    spell_obj_id = synthetic_state.register_and_inject_object(
+        _conscript_dict(count=0, token_printing_id=token_pid), 0, ZONE_HAND
+    )
+    synthetic_state.push_to_stack(spell_obj_id, 0)
+
+    bf_before = list(synthetic_state.battlefield_sizes)
+    synthetic_state.resolve_top_of_stack()
+
+    assert synthetic_state.is_stack_empty() is True
+    assert list(synthetic_state.battlefield_sizes) == bf_before
+
+
+def test_resolve_create_token_tokens_enter_summoning_sick_untapped(
+    synthetic_state,
+):
+    """Created tokens have ``summoning_sick = True``, ``tapped = False``,
+    ``damage = 0``, ``counters = 0`` — CR 302.1 fresh-permanent stamp
+    + CR 400.7 zero state. The newly-spawned token ids are exactly
+    the highest two on the active player's battlefield by the
+    max-id+1 allocator contract."""
+    token_pid, dummy_id = _register_soldier_token(synthetic_state)
+    spell_obj_id = synthetic_state.register_and_inject_object(
+        _conscript_dict(count=3, token_printing_id=token_pid), 0, ZONE_HAND
+    )
+    # Snapshot the max known id pre-resolve so we can compute the
+    # tokens' allocated ids by the load_deck / inject convention
+    # (max + 1, sequential).
+    pre_max = max(spell_obj_id, dummy_id)
+    synthetic_state.push_to_stack(spell_obj_id, 0)
+    synthetic_state.resolve_top_of_stack()
+
+    # Fresh ids = pre_max + 1, +2, +3. Each one is on a battlefield
+    # (the active player's) with the expected initial state.
+    for token_id in (pre_max + 1, pre_max + 2, pre_max + 3):
+        assert synthetic_state.find_object_zone(token_id) == ZONE_BATTLEFIELD
+        assert synthetic_state.is_summoning_sick(token_id) is True
+        assert synthetic_state.is_tapped(token_id) is False
+        assert synthetic_state.get_damage(token_id) == 0
+        assert synthetic_state.get_counters(token_id) == 0
+
+
+def test_resolve_create_token_unknown_printing_id_raises(synthetic_state):
+    """A token_printing_id not present in the registry surfaces as
+    ValueError. Schema validation seam — printings must exist before
+    you can make tokens of them."""
+    bogus_pid = synthetic_state.registry_size + 999
+    # We have to register the spell printing FIRST (which appends to
+    # the registry), so capture an unambiguously out-of-range token
+    # pid by snapshotting the current size + a buffer.
+    spell_obj_id = synthetic_state.register_and_inject_object(
+        _conscript_dict(count=1, token_printing_id=bogus_pid), 0, ZONE_HAND
+    )
+    synthetic_state.push_to_stack(spell_obj_id, 0)
+
+    with pytest.raises(ValueError, match="token_printing_id"):
+        synthetic_state.resolve_top_of_stack()
+
+
+def test_resolve_create_token_negative_count_raises(synthetic_state):
+    """Negative count is a schema error — mirrors ScryN /
+    DealDamage / DamageEach* raise-on-negative shape."""
+    token_pid, _ = _register_soldier_token(synthetic_state)
+    spell_obj_id = synthetic_state.register_and_inject_object(
+        _conscript_dict(count=-2, token_printing_id=token_pid), 0, ZONE_HAND
+    )
+    synthetic_state.push_to_stack(spell_obj_id, 0)
+
+    with pytest.raises(ValueError):
+        synthetic_state.resolve_top_of_stack()
+
+
+def test_resolve_create_token_fresh_ids_dont_collide(synthetic_state):
+    """Token ids must not collide with any existing GameObject in any
+    zone (library, battlefield, hand, graveyard) on either player.
+    The allocator scans every zone for the current max id and starts
+    at max + 1. The synthetic seed already has dense ids 0..133
+    spread across libraries+hands+battlefields; we add the
+    register_and_inject_object dummies on top, then verify token ids
+    strictly exceed every pre-existing id."""
+    token_pid, dummy_id = _register_soldier_token(synthetic_state)
+    spell_obj_id = synthetic_state.register_and_inject_object(
+        _conscript_dict(count=2, token_printing_id=token_pid), 0, ZONE_HAND
+    )
+    # Collect every existing id across all zones via find_object_zone
+    # — the synthetic seed packs ids contiguously starting at 0, plus
+    # the two register_and_inject_object dummies above. The new tokens
+    # will be allocated starting at max + 1.
+    pre_max = max(spell_obj_id, dummy_id)
+    synthetic_state.push_to_stack(spell_obj_id, 0)
+    synthetic_state.resolve_top_of_stack()
+
+    # Each freshly-created token id must strictly exceed pre_max,
+    # i.e. land in the contiguous (pre_max+1)..(pre_max+2) slot.
+    for token_id in (pre_max + 1, pre_max + 2):
+        assert synthetic_state.find_object_zone(token_id) == ZONE_BATTLEFIELD
+    # And the (pre_max + 0) id is still findable (the spell source
+    # OR the dummy, both pre-resolve denizens) — i.e. we didn't
+    # overwrite anything.
+    assert synthetic_state.find_object_zone(pre_max) is not None
+
+
+def test_resolve_create_token_cow_clone_unaffected(synthetic_state):
+    """Cloning the state before resolving leaves the original clone's
+    battlefield untouched after resolution — Arc::make_mut clones the
+    inner Vec only on the post-clone mutation path, so the snapshot
+    keeps its pre-resolve battlefield sizes."""
+    token_pid, _ = _register_soldier_token(synthetic_state)
+    spell_obj_id = synthetic_state.register_and_inject_object(
+        _conscript_dict(count=4, token_printing_id=token_pid), 0, ZONE_HAND
+    )
+    synthetic_state.push_to_stack(spell_obj_id, 0)
+
+    # CoW canary: take a clone BEFORE resolving.
+    clone = synthetic_state.clone_once()
+    clone_bf_before = list(clone.battlefield_sizes)
+
+    synthetic_state.resolve_top_of_stack()
+
+    # Original clone's battlefield is untouched.
+    assert list(clone.battlefield_sizes) == clone_bf_before
+    # Live state grew by 4 tokens on active player's battlefield.
+    assert (
+        synthetic_state.battlefield_sizes[0]
+        == clone_bf_before[0] + 4
+    )
