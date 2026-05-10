@@ -738,6 +738,69 @@ implications, no perf cost on the happy path.
 
 ---
 
+## 14. Proliferate primitive proliferates every eligible permanent (no controller choice)
+
+**Location**: `rust/src/state_ops_counters.rs::proliferate` (the
+`#[pymethods]` block — search for `fn proliferate`).
+
+**What we do today**: `proliferate()` walks both players'
+battlefields and, for every permanent with `counters != 0`, ticks
+the counter by 1 in the direction it already has (positive →
++1, negative → −1, zero → unchanged). Saturating arithmetic at the
+i32 extremes.
+
+**Why this is wrong under CR 701.25a**: real proliferate is a
+*controller choice*. The player resolving the effect picks any
+number of permanents and players that already have counters and
+chooses, for each, whether to put one more counter of an existing
+kind on it. Concretely, three behaviors the primitive does not
+expose:
+
+1. *Decline to proliferate at all.* Sometimes the controller has no
+   beneficial targets (their own creatures are at zero, opp's
+   creatures only have +1/+1 counters they don't want to grow) and
+   would prefer the effect resolves as a no-op.
+2. *Proliferate only some eligible permanents.* The controller can
+   skip their opponent's +1/+1 creatures while proliferating their
+   own −1/−1-shrunk opp creatures. Today's primitive does both.
+3. *Proliferate poison counters on players.* The Rust engine has no
+   poison-counter field at all today, so the player-side half of
+   proliferate is a silent no-op by absence — a separate divergence
+   tracked here for completeness.
+
+**Failure mode**: in any board state where proliferating an
+opponent's +1/+1-counter creature is bad for the player resolving
+proliferate (e.g. opp has a Hardened Scales creature with +3/+3
+counters; auto-proliferating gives them +4/+4 instead of leaving
+them at +3/+3), the primitive picks the worse outcome. Symmetric
+case: proliferating own −1/−1-counter creatures (Persist'd creature
+that will die at zero toughness next SBA) accelerates the
+controller's own loss.
+
+**When it matters**: rarely under the engine's current card pool
+(Edge of Eternities focus). Proliferate cards in EoE: none in the
+spoiled set as of 2026-05-10. The primitive lands as a building
+block for Modern Horizons / War of the Spark-style sets if they
+ever enter scope; until a card actually wires into this primitive,
+the always-add behavior is unobservable.
+
+**Fix scope when prioritized**: medium — the primitive grows a
+`targets: Vec<u32>` parameter (or two — permanents + players) and
+the resolution-side wiring in `apply_effect` exposes a per-eligible
+target choice through `ChoicePoint`. Search-side: factored
+per-target binary choice (proliferate-this-or-not), parallel to how
+declare-blockers is factored today (see entry #2). For player
+poison counters, the `Player` struct grows a `poison_counters: u8`
+field and the primitive's poison-side half lights up.
+
+**Impact estimate**: 0% strength cost today (no card uses
+proliferate in EoE). Cards-side cost when proliferate cards enter
+scope: ~1-3% strength cost in lopsided board states where the
+controller would benefit from skipping the auto-target — bounded
+by the rarity of "proliferating my opponent makes me lose".
+
+---
+
 ## Tracked but not in this doc
 
 Things tracked elsewhere that you might also want to know about:
