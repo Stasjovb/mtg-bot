@@ -161,6 +161,7 @@ the test lands in a commit.
 | rust(action-turn-face-up): Action::TurnFaceUp variant (dispatch stubbed) | tests_rust/test_actions.py extend | green  | feature/rust-action-turn-face-up |
 | rust(effect-discard-self): "you discard" dispatch (CR 701.8) | tests_rust/test_resolve.py extend | green  | feature/rust-effect-discard-self |
 | rust(action-unlock-room-half): Action::UnlockRoomHalf variant (dispatch stubbed) | tests_rust/test_actions.py extend | green  | feature/rust-action-unlock-room-half |
+| rust(action-activate-station): Action::ActivateStation variant (dispatch stubbed) | tests_rust/test_actions.py extend | green  | feature/rust-action-activate-station |
 
 ## Build invocation reminder
 

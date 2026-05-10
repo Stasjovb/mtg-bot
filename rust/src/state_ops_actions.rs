@@ -311,6 +311,45 @@ impl GameState {
                      Action variant + bridge round-trip."
                 ));
             }
+            Action::ActivateStation {
+                spacecraft_id: _,
+                crew_id: _,
+            } => {
+                // First-slice scope (mirrors round-23's ActivateAbility
+                // and round-24's TurnFaceUp / UnlockRoomHalf pattern):
+                // ship the Action variant + bridge round-trip scaffold;
+                // the dispatch arm is a stub because no Rust Spacecraft
+                // charge-counter state / crew-tap resolution primitive
+                // exists yet. Python's `_activate_station` taps the crew
+                // creature (cost), reads its power, and adds that many
+                // charge counters to the Spacecraft (effect) — Rust has
+                // neither the Spacecraft state field for charge counters
+                // nor a primitive that links tap-as-cost to counter-add-
+                // as-effect. A future slice adds the per-object
+                // Spacecraft charge state + the activate-station
+                // primitive (analogous to how Python's
+                // `_activate_station` mutates both sides atomically) and
+                // then flips this arm to a real `call_method1(
+                // "activate_station", (spacecraft_id, crew_id,
+                // priority_player))` dispatch — at which point the
+                // variant + bridge already shipped here keep working
+                // unchanged. The variant ships now so callers building
+                // Action dicts can already use the `activate_station`
+                // shape and hit a clear "not implemented yet" error
+                // path instead of `unknown action kind`, and the parity
+                // harness surfaces the gap loudly when Python emits an
+                // ActivateStation decision (EoE Spacecraft station
+                // mechanic — the EoE Spacecraft cycle is the production
+                // driver). **This completes the Action enum scaffold:
+                // all 8 Python Action subclasses now have Rust
+                // variants.**
+                return Err(pyo3::exceptions::PyValueError::new_err(
+                    "ActivateStation dispatch not implemented yet (Rust \
+                     Spacecraft charge-counter state + crew-tap resolution \
+                     missing; future slice flips the dispatch). This slice \
+                     ships only the Action variant + bridge round-trip."
+                ));
+            }
             Action::ActivateAbility {
                 source_id: _,
                 ability_index: _,

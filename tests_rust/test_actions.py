@@ -1337,3 +1337,139 @@ def test_apply_action_unknown_kind_message_mentions_unlock_room_half(
     future variant addition forces the message to grow."""
     with pytest.raises(ValueError, match=r"unlock_room_half"):
         synthetic_state.apply_action({"kind": "frobnicate"})
+
+
+# --- ActivateStation -------------------------------------------------
+#
+# Rolling-integration slice (post-UnlockRoomHalf): extend the Action
+# enum + apply_action dispatcher with ``Action::ActivateStation {
+# spacecraft_id, crew_id }``. The Python dataclass
+# ``ActivateStation(spacecraft_id: int, crew_id: int)`` carries two
+# ints — the GameObject id of the Spacecraft permanent and the
+# GameObject id of the creature being tapped as cost. **This slice
+# completes the Action enum scaffold: all 8 Python Action subclasses
+# now have Rust variants.**
+#
+# EoE Spacecraft cycle: Spacecraft enter as artifacts with no creature
+# types and accumulate charge counters via station-attaching (tap a
+# creature, add charge counters equal to its power); they turn face
+# up (become creatures with printed stats) via ``TurnFaceUp`` once
+# enough charge counters have been added. Sorcery-speed only
+# (enforced by the future ``legal_decisions`` enumerator, not by this
+# dispatch arm).
+#
+# **Dispatch is stubbed.** Rust has no Spacecraft charge-counter state
+# today, and there's no crew-tap-resolution primitive that ties the
+# tap-as-cost to the counter-add-as-effect. The variant + bridge round-
+# trip ship now, so callers building Action dicts can already use the
+# ``activate_station`` shape and hit a clear "not implemented yet"
+# error path rather than the generic ``unknown action kind`` rejection.
+# A future slice adds the per-object Spacecraft charge state + the
+# activate-station primitive then flips the dispatch arm to a real
+# ``call_method1("activate_station", ...)`` call. Until then, happy-
+# path dispatch raises ``ValueError`` — these tests assert on the
+# stubbed error path, NOT on a successful station outcome. Mirrors the
+# round-23 ActivateAbility and round-24 TurnFaceUp / UnlockRoomHalf
+# "scaffold the variant, defer the dispatch semantics" pattern.
+
+
+def test_apply_action_activate_station_stub_raises_value_error(synthetic_state):
+    """Happy-path stub: a well-formed ActivateStation dict parses
+    cleanly but the dispatch arm raises ``ValueError`` because no Rust
+    Spacecraft charge-counter state / activate-station primitive
+    exists yet. The error message names the variant + flags it as
+    future work so a follow-up slice grepping for the string finds
+    the dispatch site to flip."""
+    with pytest.raises(
+        ValueError, match=r"ActivateStation dispatch not implemented yet"
+    ):
+        synthetic_state.apply_action(
+            {"kind": "activate_station", "spacecraft_id": 42, "crew_id": 5}
+        )
+
+
+def test_apply_action_activate_station_stub_error_mentions_spacecraft(
+    synthetic_state,
+):
+    """The stub message names the missing Rust state (Spacecraft
+    charge-counter + crew-tap resolution) so a future slice grepping
+    for "Spacecraft" finds the dispatch site to flip. Pin the substring
+    so the message stays informative — a future slice that flips the
+    dispatch to a real call must also delete this test (it documents
+    the stub-state, not the eventual real behavior)."""
+    with pytest.raises(ValueError, match=r"Spacecraft"):
+        synthetic_state.apply_action(
+            {"kind": "activate_station", "spacecraft_id": 7, "crew_id": 8}
+        )
+
+
+def test_apply_action_activate_station_missing_spacecraft_id_raises_key_error(
+    synthetic_state,
+):
+    """Missing the ``spacecraft_id`` key raises ``KeyError`` —
+    ``parse_action`` rejects before dispatch (single point of
+    validation, mirrors the ``source_id``-missing shape on
+    ``activate_ability``). The KeyError fires BEFORE the dispatch-stub
+    ValueError, so this test pins the parse-time gate."""
+    with pytest.raises(KeyError, match="spacecraft_id"):
+        synthetic_state.apply_action(
+            {"kind": "activate_station", "crew_id": 5}
+        )
+
+
+def test_apply_action_activate_station_missing_crew_id_raises_key_error(
+    synthetic_state,
+):
+    """Missing the ``crew_id`` key raises ``KeyError`` — same parse-
+    time gate as ``spacecraft_id``. Both fields are required; the
+    parser reads them in order, so this test specifically exercises
+    the second key's check (spacecraft_id present, crew_id missing)."""
+    with pytest.raises(KeyError, match="crew_id"):
+        synthetic_state.apply_action(
+            {"kind": "activate_station", "spacecraft_id": 7}
+        )
+
+
+def test_apply_action_activate_station_wrong_type_for_spacecraft_id_raises(
+    synthetic_state,
+):
+    """``spacecraft_id`` must be a u32-extractable integer. A string
+    fails PyO3's ``extract::<u32>`` machinery → ``TypeError`` /
+    ``ValueError``. The dispatch-stub never runs; the parse-time gate
+    fires first."""
+    with pytest.raises((TypeError, ValueError)):
+        synthetic_state.apply_action(
+            {
+                "kind": "activate_station",
+                "spacecraft_id": "not-an-int",
+                "crew_id": 5,
+            }
+        )
+
+
+def test_apply_action_activate_station_wrong_type_for_crew_id_raises(
+    synthetic_state,
+):
+    """``crew_id`` must be a u32-extractable integer. A string fails
+    PyO3's ``extract::<u32>`` machinery → ``TypeError`` / ``ValueError``.
+    The dispatch-stub never runs; the parse-time gate fires first."""
+    with pytest.raises((TypeError, ValueError)):
+        synthetic_state.apply_action(
+            {
+                "kind": "activate_station",
+                "spacecraft_id": 7,
+                "crew_id": "not-an-int",
+            }
+        )
+
+
+def test_apply_action_unknown_kind_message_mentions_activate_station(
+    synthetic_state,
+):
+    """The unknown-kind error message includes ``activate_station``
+    after this slice extends the variant list. Pin the substring so a
+    future variant addition forces the message to grow. **This
+    completes the Action enum scaffold — all 8 Python Action
+    subclasses now have Rust variants.**"""
+    with pytest.raises(ValueError, match=r"activate_station"):
+        synthetic_state.apply_action({"kind": "frobnicate"})
