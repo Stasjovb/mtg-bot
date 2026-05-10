@@ -99,6 +99,14 @@ pub enum Effect {
     /// raises (you can't discard a creature). Empty hand = silent
     /// no-op (Python parity).
     DiscardCard { target: TargetFilter },
+    /// Scry N (CR 701.18): controller looks at the top `count` cards
+    /// of their library and chooses any number to put on the bottom;
+    /// the rest stay on top in any order. No target — controller
+    /// implicit. Routes through round-4's apply_scry primitive.
+    /// First-slice deterministic choice: keep all cards on top
+    /// (no-op-shaped-as-scry; future slice will plumb a decision
+    /// callback for "which to bottom"). Negative `count` raises.
+    ScryN { count: i32 },
 }
 
 #[derive(Clone, Debug)]
@@ -294,8 +302,12 @@ fn parse_effect(dict: &Bound<'_, PyDict>) -> PyResult<Effect> {
             let target = parse_target_filter(target_dict)?;
             Ok(Effect::DiscardCard { target })
         }
+        "scry_n" => {
+            let count: i32 = require(dict, "count")?.extract()?;
+            Ok(Effect::ScryN { count })
+        }
         other => Err(PyValueError::new_err(format!(
-            "unknown effect kind {other:?}; valid: deal_damage, draw_cards, gain_life, return_to_hand, mill, exile_target, tap_target, untap_target, sacrifice, add_counters, discard_card"
+            "unknown effect kind {other:?}; valid: deal_damage, draw_cards, gain_life, return_to_hand, mill, exile_target, tap_target, untap_target, sacrifice, add_counters, discard_card, scry_n"
         ))),
     }
 }
@@ -523,6 +535,10 @@ fn effect_to_pydict<'py>(
         Effect::DiscardCard { target } => {
             d.set_item("kind", "discard_card")?;
             d.set_item("target", target_filter_to_pydict(py, target)?)?;
+        }
+        Effect::ScryN { count } => {
+            d.set_item("kind", "scry_n")?;
+            d.set_item("count", *count)?;
         }
     }
     Ok(d)

@@ -780,6 +780,14 @@ fn apply_effect(state: &mut GameState, effect: &Effect) -> PyResult<()> {
                 Arc::make_mut(&mut state.players[defender].graveyard).push(obj);
             }
         },
+        // Foundation stub: round-16 resolve-scry slice replaces with
+        // real dispatch. E0004 exhaustiveness would otherwise reject
+        // the build the moment ScryN lands in cards.rs.
+        Effect::ScryN { .. } => {
+            return Err(PyValueError::new_err(
+                "Effect::ScryN dispatch not yet implemented (round-16 foundation stub)",
+            ));
+        }
     }
     Ok(())
 }
