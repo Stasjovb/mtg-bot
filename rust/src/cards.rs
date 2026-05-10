@@ -14,12 +14,20 @@
 //   time.
 // - `Registry` is a `#[pyclass]` Python holds explicitly. No global
 //   mutable state. CardPrintings are immutable once registered;
-//   GameObjects (next branch) will reference printings by id.
+//   GameObjects reference printings by id (see state.rs).
 //
 // First-slice scope: one effect (`DealDamage`), two target filters
 // (`AnyPlayer`, `AnyCreature`), 5-color mana cost. Future commits
 // add variants one at a time, each with parity tests against the
 // Python equivalent on a real EoE card.
+//
+// **Storage shape:** `RegistryData` is the plain-Rust struct that
+// owns the printings. `Registry` is the pyclass wrapper that holds
+// a builder Vec; `snapshot()` freezes a clone of that Vec into an
+// `Arc<RegistryData>` that `GameState` shares at refcount-bump
+// cost. The first-slice register-then-snapshot workflow (build the
+// registry up front, then snapshot once) means we don't yet need
+// interior mutability — append-then-freeze is enough.
 
 use pyo3::exceptions::{PyKeyError, PyValueError};
 use pyo3::prelude::*;
@@ -53,6 +61,25 @@ pub struct CardPrinting {
     pub name: Arc<str>,
     pub mana_cost: ManaCost,
     pub effects: Vec<Effect>,
+}
+
+/// Plain Rust container for the printings table. Held behind an
+/// `Arc` once a `GameState` snapshots the registry — at that point
+/// it's immutable and clonable at refcount-bump cost from any
+/// number of game-state copies.
+#[derive(Clone, Debug, Default)]
+pub struct RegistryData {
+    pub printings: Vec<CardPrinting>,
+}
+
+impl RegistryData {
+    pub fn lookup(&self, id: u32) -> Option<&CardPrinting> {
+        self.printings.get(id as usize)
+    }
+
+    pub fn len(&self) -> usize {
+        self.printings.len()
+    }
 }
 
 // --- dict -> Rust ------------------------------------------------
@@ -212,6 +239,13 @@ fn effect_to_pydict<'py>(
 #[pyclass(name = "Registry")]
 #[derive(Debug, Default)]
 pub struct Registry {
+    /// Builder-side Vec. `register_printing` appends here. A
+    /// `snapshot()` call freezes a clone of this Vec into an
+    /// `Arc<RegistryData>` that GameStates share. Keeping the
+    /// builder separate from the snapshot avoids interior
+    /// mutability (Mutex/RwLock) on the snapshot path —
+    /// first-slice workflow is "build, snapshot once, never
+    /// mutate again", which is what synthetic states do today.
     printings: Vec<CardPrinting>,
 }
 
@@ -287,5 +321,24 @@ impl Registry {
                 self.printings.len()
             ))
         })
+    }
+
+    /// Freeze the current builder Vec into an `Arc<RegistryData>`
+    /// suitable for sharing into a `GameState`. Used by
+    /// `make_synthetic_state` and (later) by Python code that
+    /// builds a game state from a finalized registry.
+    pub fn snapshot(&self) -> Arc<RegistryData> {
+        Arc::new(RegistryData {
+            printings: self.printings.clone(),
+        })
+    }
+
+    /// Push a `CardPrinting` directly (used by `make_synthetic_state`
+    /// to seed an in-process registry without the dict round-trip).
+    /// Returns the new printing's id.
+    pub fn push_printing(&mut self, printing: CardPrinting) -> u32 {
+        let id = self.printings.len() as u32;
+        self.printings.push(printing);
+        id
     }
 }

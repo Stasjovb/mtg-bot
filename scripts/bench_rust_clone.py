@@ -101,6 +101,10 @@ def main() -> None:
         f"hand={list(rust_state.hand_sizes)}, "
         f"library={list(rust_state.library_sizes)}"
     )
+    if hasattr(rust_state, "registry_size"):
+        print(f"rust registry size: {rust_state.registry_size} printings")
+    if hasattr(mtg_bot_engine, "gameobject_byte_size"):
+        print(f"rust GameObject size: {mtg_bot_engine.gameobject_byte_size()} bytes")
     rust_state.clone_n_times_micros(100)
     rust_us = rust_state.clone_n_times_micros(n)
     print(f"rust clone():       {rust_us:7.2f}us (total {rust_us * n / 1000:.1f}ms / {n})")
@@ -110,6 +114,19 @@ def main() -> None:
         print(f"speedup vs py clone:    {py_us / rust_us:.2f}x")
     if rust_us > 0:
         print(f"speedup vs deepcopy:    {(t_deep * 1_000_000 / n) / rust_us:.2f}x")
+
+    # Reference: 8e20f6b (Arc<Vec<GameObject>> CoW, name+p/t inline on
+    # GameObject) reported 0.07us per clone / 269x vs Python clone in
+    # its commit message. The current branch shrinks GameObject to
+    # POD (printing_id + per-instance state — no inline String/p/t).
+    # The bench measures pure refcount-bump CoW cost; with smaller
+    # GameObjects the inner Vec contents are smaller bytes, but only
+    # the Arc refcount is touched per clone, so the bench isn't
+    # expected to swing dramatically. The win lands later, when
+    # search workloads first-touch a zone and Arc::make_mut clones
+    # the inner Vec — that clone now copies fixed-size POD bytes
+    # instead of `String`-bearing structs.
+    print("\nReference (pre-registry, commit 8e20f6b): 0.07us / 269x vs py clone")
 
 
 if __name__ == "__main__":

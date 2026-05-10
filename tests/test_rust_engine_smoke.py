@@ -54,3 +54,77 @@ def test_clone_n_times_returns_positive_micros():
 def test_module_can_be_reimported():
     importlib.reload(mtg_bot_engine)
     assert hasattr(mtg_bot_engine, "make_synthetic_state")
+
+
+def test_synthetic_state_carries_registry():
+    """The synthetic state ships a 3-printing registry — Forest,
+    Grizzly Bears, Llanowar Elves — shared by both players."""
+    state = mtg_bot_engine.make_synthetic_state()
+    assert state.registry_size == 3
+
+
+def test_first_hand_object_resolves_to_llanowar_elves():
+    """End-to-end Registry wiring check.
+
+    `make_player`'s placement loop puts elves in hand first, so the
+    first hand object on player 0 should resolve to "Llanowar Elves"
+    via printing_id -> registry lookup. A failure anywhere in the
+    chain (object id, printing_id, registry threading, lookup) shows
+    up as a wrong-or-missing name here.
+
+    Player 0's id range starts at 0 and runs:
+      battlefield: 0..num_battlefield   (forests + bears)
+      hand:        num_battlefield..num_battlefield+num_hand  (elves)
+      library:     ...                                         (forests)
+    """
+    state = mtg_bot_engine.make_synthetic_state(
+        num_battlefield=10, num_hand=7, num_library=50
+    )
+    first_hand_id = 10  # ids 0..9 are battlefield; 10 is the first elf
+    assert state.printing_name_of(first_hand_id) == "Llanowar Elves"
+
+
+def test_first_battlefield_object_resolves_to_forest():
+    """Mirrors the elves test on the battlefield half — the first
+    battlefield object is a forest by `make_player`'s placement."""
+    state = mtg_bot_engine.make_synthetic_state(
+        num_battlefield=10, num_hand=7, num_library=50
+    )
+    assert state.printing_name_of(0) == "Forest"
+
+
+def test_printing_name_of_unknown_id_returns_none():
+    state = mtg_bot_engine.make_synthetic_state(
+        num_battlefield=4, num_hand=2, num_library=10
+    )
+    # ids 0..(4+2+10-1) = 0..15 belong to player 0;
+    # 16..31 to player 1; 999 is far outside both.
+    assert state.printing_name_of(999) is None
+
+
+def test_require_printing_name_of_unknown_raises():
+    state = mtg_bot_engine.make_synthetic_state(
+        num_battlefield=4, num_hand=2, num_library=10
+    )
+    with pytest.raises(KeyError, match="no game object with id 999"):
+        state.require_printing_name_of(999)
+
+
+def test_clone_preserves_registry_lookups():
+    """Cloning a state shares the Arc<RegistryData> — the cloned
+    state's printing-name lookups must return the same names."""
+    state = mtg_bot_engine.make_synthetic_state()
+    cloned = state.clone_once()
+    assert cloned.printing_name_of(10) == state.printing_name_of(10)
+    assert cloned.printing_name_of(0) == "Forest"
+
+
+def test_gameobject_byte_size_is_compact():
+    """Regression backstop: the POD GameObject (id, printing_id,
+    controller, zone, tapped, summoning_sick, damage, counters)
+    fits in a small fixed-size struct. If a field is added that
+    blows past 32 bytes (e.g. a String, a Vec, an Arc-of-anything),
+    catch it here — the search-side win depends on the per-object
+    block staying memcpy-shaped."""
+    sz = mtg_bot_engine.gameobject_byte_size()
+    assert 16 <= sz <= 32, f"GameObject size unexpected: {sz} bytes"
