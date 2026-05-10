@@ -2143,3 +2143,363 @@ def test_legal_decisions_declare_blockers_dict_shape_is_minimal(
     assert len(dbs) >= 1
     for d in dbs:
         assert set(d.keys()) == {"kind", "assignments"}
+
+
+# --- Edge-case coverage spanning multiple emission types ------------
+#
+# The tests below extend the per-emission-type coverage above with
+# cross-cutting scenarios: mixed emissions in one state, sorcery-timing
+# gates that suppress multiple emission types simultaneously,
+# determinism / mutation-invalidation behavior, and other
+# regression-flavored edge cases. Each test references the
+# Round-24 emission slice it pins (skeleton / cast-spell /
+# activate-ability / declare-attackers / declare-blockers) and the
+# Python `legal.py` line range its behavior mirrors.
+
+
+# --- 49. Full integration: Land + Creature in hand + bf mana producers
+#
+# Extends tests 4 (`...creature_plus_land...`), 14 (PlayLand +
+# CastSpell order), 21 (CastSpell vs PassPriority order), and the
+# ActivateAbility-emission-order test (line 1546). All four emission
+# kinds in one state at once, with exact ordering enforced. The
+# expected ordering — PassPriority, PlayLand, CastSpell,
+# ActivateAbility — pins Python's natural source-order append at
+# `legal.py:178` (PassPriority prepend), `:319-329` (PlayLand loop),
+# `:335-445` (CastSpell loop), `:612` (ActivateAbility loop).
+
+
+def test_legal_decisions_all_four_emission_kinds_present_in_priority_order(
+    synthetic_state,
+):
+    """Synthetic state at MAIN1 with a Forest added to P0's hand
+    exercises all four currently-emitted Action kinds in a single
+    `legal_decisions` call. Pins the full emission order and the
+    invariant that each kind's count matches the per-loop expectations
+    (1 PassPriority + 1 PlayLand + 1 CastSpell (Elves dedup) + 5
+    ActivateAbility (one per untapped Forest on P0's battlefield))."""
+    forest_id = _put_forest_in_hand(synthetic_state, 0)
+    synthetic_state.set_phase(PHASE_MAIN1)
+
+    actions = synthetic_state.legal_decisions(0)
+
+    kinds = _kinds(actions)
+    # Counts.
+    assert kinds.count("pass_priority") == 1
+    assert kinds.count("play_land") == 1
+    assert kinds.count("cast_spell") == 1
+    assert kinds.count("activate_ability") == 5
+    # Total = 1 + 1 + 1 + 5 = 8.
+    assert len(actions) == 8
+    # Ordering: pass_priority at 0, play_land at 1, cast_spell at 2,
+    # then 5 activate_ability dicts.
+    assert kinds[0] == "pass_priority"
+    assert kinds[1] == "play_land"
+    assert kinds[2] == "cast_spell"
+    assert kinds[3:] == ["activate_ability"] * 5
+    # PlayLand carries the Forest's id.
+    assert actions[1]["card_id"] == forest_id
+
+
+# --- 50. Mixed emission shape on opponent's turn collapses to pass --
+
+
+def test_legal_decisions_off_active_player_collapses_full_mix_to_pass_priority(
+    synthetic_state,
+):
+    """Same shape as the all-four-kinds test, but query P0 during P1's
+    main phase. Sorcery-timing fails (`active_player != player_id`,
+    Python `legal.py:28`), so the early-return at `:303-304` short-
+    circuits BEFORE the PlayLand / CastSpell / ActivateAbility blocks.
+    Only PassPriority emits — even though the state has a Land in
+    hand, Creatures in hand, AND untapped mana producers on P0's
+    battlefield. Pins the sorcery-timing gate's reach across all
+    three emission types simultaneously."""
+    _put_forest_in_hand(synthetic_state, 0)
+    synthetic_state.set_phase(PHASE_MAIN1)
+    # Walk to P1's turn, then back to MAIN1 with priority on P0.
+    while synthetic_state.active_player == 0:
+        synthetic_state.advance_phase()
+    synthetic_state.set_phase(PHASE_MAIN1)
+    synthetic_state.give_priority_to(0)
+    assert synthetic_state.active_player == 1
+    assert synthetic_state.get_priority_player() == 0
+
+    actions = synthetic_state.legal_decisions(0)
+
+    # All three sorcery-timing-gated emissions are suppressed.
+    assert _kinds(actions) == ["pass_priority"]
+
+
+# --- 51. Non-empty stack suppresses PlayLand + CastSpell + ActAbility
+
+
+def test_legal_decisions_non_empty_stack_suppresses_all_sorcery_gated_emissions(
+    synthetic_state,
+):
+    """Round 24's `legal-decisions-activate-ability` slice cites that
+    Python's `legal.py:303-304` early-return on sorcery-timing failure
+    short-circuits the entire ActivateAbility block at `:612`. With a
+    non-empty stack the sorcery-timing gate's `stack.is_empty()`
+    conjunct (`:30`) fails, so PlayLand, CastSpell, AND ActivateAbility
+    all suppress at once — only PassPriority emits. Pins that
+    instant-speed ActivateAbility for mana abilities is NOT a first-
+    slice feature (deferred per the module docstring's
+    "ActivateAbility extension" section)."""
+    _put_forest_in_hand(synthetic_state, 0)
+    synthetic_state.set_phase(PHASE_MAIN1)
+    synthetic_state.push_to_stack(P0_FIRST_BEARS_ID, 0)
+
+    actions = synthetic_state.legal_decisions(0)
+
+    # PlayLand + CastSpell + ActivateAbility all suppressed.
+    assert _kinds(actions) == ["pass_priority"]
+
+
+# --- 52. UNTAP-phase suppresses every sorcery-gated emission --------
+
+
+def test_legal_decisions_untap_phase_suppresses_all_sorcery_gated_emissions(
+    synthetic_state,
+):
+    """Phase=PHASE_UNTAP (0): sorcery-timing fails on the main-phase
+    conjunct (Python `_is_sorcery_timing` at `legal.py:25-32`), so
+    PlayLand / CastSpell / ActivateAbility all suppress. Extends the
+    parametrized non-main-phase tests above (5 / 17 / the
+    `...not_emitted_off_sorcery_timing` parametrize for AA) to
+    confirm the simultaneous-suppression invariant on a mixed-hand
+    state with mana producers on bf."""
+    _put_forest_in_hand(synthetic_state, 0)
+    synthetic_state.set_phase(PHASE_UNTAP)
+
+    actions = synthetic_state.legal_decisions(0)
+
+    assert _kinds(actions) == ["pass_priority"]
+
+
+# --- 53. Determinism: same state twice yields equal output ---------
+
+
+def test_legal_decisions_is_deterministic_on_same_state(synthetic_state):
+    """Two back-to-back calls on the same state produce identical
+    dict lists — order-stable, value-stable. Pins that `legal_decisions`
+    has no hidden iteration-order randomness (e.g., HashSet iteration)
+    that would defeat MCTS-trajectory replay parity."""
+    synthetic_state.set_phase(PHASE_MAIN1)
+
+    a1 = synthetic_state.legal_decisions(0)
+    a2 = synthetic_state.legal_decisions(0)
+
+    assert a1 == a2
+
+
+# --- 54. Determinism: cloned state yields equal output -------------
+
+
+def test_legal_decisions_is_deterministic_across_clone_once(synthetic_state):
+    """A cloned state produces an identical `legal_decisions` output
+    to the original. Pins that `clone_once` preserves every
+    enumeration-relevant field (zones, phases, priority, attackers)
+    and that the emission code is a pure function of state."""
+    synthetic_state.set_phase(PHASE_MAIN1)
+
+    original = synthetic_state.legal_decisions(0)
+    cloned = synthetic_state.clone_once().legal_decisions(0)
+
+    assert original == cloned
+
+
+# --- 55. Mutation invalidates a previously-emitted ActivateAbility -
+
+
+def test_legal_decisions_activate_ability_count_drops_after_apply(
+    synthetic_state,
+):
+    """Applying an emitted ActivateAbility (which taps the source)
+    drops the per-source count by exactly one. Pins the
+    emission-vs-apply correspondence — emit reads `tapped`, apply
+    flips `tapped`, re-emit sees one fewer producer. Mirrors the
+    rebroadcast invariant that downstream MCTS expansion relies on."""
+    _empty_hand(synthetic_state, 0)
+    synthetic_state.set_phase(PHASE_MAIN1)
+
+    before = synthetic_state.legal_decisions(0)
+    aa_before = [a for a in before if a["kind"] == "activate_ability"]
+    assert len(aa_before) == 5
+
+    # Apply one ActivateAbility — first untapped Forest taps.
+    synthetic_state.apply_action(aa_before[0])
+
+    after = synthetic_state.legal_decisions(0)
+    aa_after = [a for a in after if a["kind"] == "activate_ability"]
+    assert len(aa_after) == 4
+    # The tapped source's id is not in the new emission.
+    tapped_source_id = aa_before[0]["source_id"]
+    after_sources = {a["source_id"] for a in aa_after}
+    assert tapped_source_id not in after_sources
+
+
+# --- 56. Out-of-range player_id: large positive raises IndexError -
+
+
+def test_legal_decisions_large_out_of_range_player_id_raises_index_error(
+    synthetic_state,
+):
+    """Regression on the existing player_id validation: a far-out-of-
+    range id (100) raises the same IndexError shape that id=2 raises,
+    locking in the message format ("player_id N out of range...")
+    rather than swallowing into a generic Rust panic. Extends the
+    test_legal_decisions_out_of_range_player_id_raises_index_error
+    test above to confirm the validation isn't a special-case at id=2."""
+    with pytest.raises(IndexError, match=r"player_id 100 out of range"):
+        synthetic_state.legal_decisions(100)
+
+
+# --- 57. Empty-state edge: nothing in any zone emits only PassPriority
+
+
+def test_legal_decisions_minimal_state_emits_only_pass_priority(engine):
+    """A minimal hand-rolled state with one Forest each in both
+    players' libraries, empty hands, empty battlefields, MAIN1 phase
+    → ONLY PassPriority. Confirms the enumerator doesn't have a
+    hidden floor (e.g., always-emit-one-DeclareAttackers) that would
+    leak when every per-kind loop iterates zero items."""
+    import mtg_bot_engine as _engine
+    registry = _engine.Registry()
+    forest_pid = registry.register_printing({
+        "name": "Forest",
+        "card_types": ["Land"],
+        "mana_produced": ["G"],
+    })
+    state = _engine.make_state(
+        registry,
+        p0_library_printing_ids=[forest_pid],
+        p1_library_printing_ids=[forest_pid],
+        p0_hand_printing_ids=[],
+        p1_hand_printing_ids=[],
+    )
+    state.set_phase(PHASE_MAIN1)
+
+    actions = state.legal_decisions(0)
+
+    assert _kinds(actions) == ["pass_priority"]
+
+
+# --- 58. DECLARE_ATTACKERS with no eligible attackers (empty bf) ---
+
+
+def test_legal_decisions_declare_attackers_with_empty_bf_emits_pass_then_empty_subset(
+    engine,
+):
+    """Synthetic-like edge case: DECLARE_ATTACKERS phase with NO
+    creatures on the active player's battlefield → exactly
+    `[PassPriority, DeclareAttackers([])]`. Extends test 23
+    (`...declare_attackers_phase_zero_creatures_emits_empty_subset`)
+    by also asserting the precise emission count = 2 and that no
+    other Action kind sneaks in (the powerset-of-empty edge case is
+    structurally identical to the cap-fires case, so this test
+    also doubles as a regression on the cap-vs-empty divergence)."""
+    import mtg_bot_engine as _engine
+    registry = _engine.Registry()
+    forest_pid = registry.register_printing({
+        "name": "Forest",
+        "card_types": ["Land"],
+        "mana_produced": ["G"],
+    })
+    state = _engine.make_state(
+        registry,
+        p0_library_printing_ids=[forest_pid],
+        p1_library_printing_ids=[forest_pid],
+        p0_hand_printing_ids=[],
+        p1_hand_printing_ids=[],
+    )
+    state.set_phase(PHASE_DECLARE_ATTACKERS)
+    state.give_priority_to(0)
+
+    actions = state.legal_decisions(0)
+
+    assert _kinds(actions) == ["pass_priority", "declare_attackers"]
+    da = [a for a in actions if a["kind"] == "declare_attackers"][0]
+    assert da["attacker_ids"] == []
+    assert len(actions) == 2
+
+
+# --- 59. PassPriority is ALWAYS emitted, exactly once, at index 0 --
+
+
+@pytest.mark.parametrize(
+    "phase,prio_player",
+    [
+        (PHASE_UNTAP, 0),
+        (PHASE_MAIN1, 0),
+        (PHASE_DECLARE_ATTACKERS, 0),
+        (PHASE_DECLARE_BLOCKERS, 0),
+        (PHASE_COMBAT_DAMAGE, 0),
+        (PHASE_MAIN2, 0),
+        (PHASE_CLEANUP, 0),
+    ],
+    ids=[
+        "UNTAP", "MAIN1", "DECLARE_ATTACKERS", "DECLARE_BLOCKERS",
+        "COMBAT_DAMAGE", "MAIN2", "CLEANUP",
+    ],
+)
+def test_legal_decisions_pass_priority_always_emitted_once_at_index_zero(
+    synthetic_state, phase, prio_player,
+):
+    """Strong regression: across every phase, PassPriority is
+    present exactly once and is at index 0. Pins Python's `legal.py:178`
+    semantic (PassPriority is the universal prepend) across the
+    full phase cycle, not just the main-phase + sorcery-timing
+    happy paths. Catches a future-slice regression where a per-
+    phase branch forgets to seed `actions = [PassPriority()]`
+    before the per-kind loops."""
+    synthetic_state.set_phase(phase)
+    synthetic_state.give_priority_to(prio_player)
+
+    actions = synthetic_state.legal_decisions(prio_player)
+
+    kinds = _kinds(actions)
+    assert kinds[0] == "pass_priority"
+    assert kinds.count("pass_priority") == 1
+
+
+# --- 60. Round-trip every Action kind via clone_once + apply_action
+
+
+def test_legal_decisions_every_emitted_action_round_trips_via_apply_action(
+    synthetic_state,
+):
+    """For each Action dict emitted by `legal_decisions`, applying it
+    on a fresh `clone_once()` of the state must succeed without
+    raising. Pins the round-23/24/25 emission-vs-dispatch contract
+    across the full emission set (PassPriority, PlayLand, CastSpell,
+    ActivateAbility — DeclareAttackers / DeclareBlockers are tested
+    in their per-kind round-trip tests above, which use a custom-
+    registry state with declared attackers). With the round-25
+    ActivateAbility primitive flip, every dispatch arm now backs a
+    real primitive — a future regression that adds a new Action kind
+    to the enumerator but forgets the `apply_action` arm trips here."""
+    _put_forest_in_hand(synthetic_state, 0)
+    synthetic_state.set_phase(PHASE_MAIN1)
+
+    actions = synthetic_state.legal_decisions(0)
+    # Sanity: we expect all four currently-emitted kinds present.
+    kinds = set(_kinds(actions))
+    assert kinds == {
+        "pass_priority", "play_land", "cast_spell", "activate_ability",
+    }
+
+    for action in actions:
+        # Each Action applies to a fresh clone — the dispatcher must
+        # accept the dict shape without raising. Downstream rejection
+        # (e.g., mana cost not paid for the CastSpell) is acceptable
+        # — we catch ValueError to allow that. KeyError / TypeError
+        # / NotImplementedError would all signal a wire-shape or
+        # missing-dispatch-arm regression.
+        clone = synthetic_state.clone_once()
+        try:
+            clone.apply_action(action)
+        except ValueError:
+            # Downstream gate rejected the action — fine for the
+            # round-trip check; the dict shape was accepted.
+            pass
