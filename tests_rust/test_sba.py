@@ -386,3 +386,155 @@ def test_apply_sbas_zero_toughness_does_not_destroy_non_creatures(synthetic_stat
     synthetic_state.set_counters(forest_id, -10)
     assert synthetic_state.apply_sbas() == 0
     assert synthetic_state.find_object_zone(forest_id) == ZONE_BATTLEFIELD
+
+
+# ----------------------------- Indestructible (CR 702.12) ------------------
+#
+# Indestructible creatures don't die from either of the destruction SBAs
+# this slice owns:
+# - 704.5g (lethal damage): "destroy" effects (and thus the lethal-damage
+#   SBA, which destroys) skip indestructible permanents.
+# - 704.5f (0-or-negative toughness): a creature whose toughness is 0 or
+#   less is put into its owner's graveyard — but per CR 702.12b, that
+#   wording reads "is destroyed", so indestructible creatures are
+#   exempt here too.
+#
+# Indestructible creatures CAN still take damage (the damage marker
+# updates), they just don't die from it. Damage clears at end of turn
+# via the cleanup-step path. They CAN still be exiled (exile is not
+# "destroy"); this slice doesn't change ExileTarget behavior.
+#
+# Effective-toughness tracking still applies — counters update, the
+# damage field updates — only the destruction step is skipped.
+
+
+def _indestructible_2_2_creature_dict():
+    """A 2/2 creature printing with the indestructible keyword."""
+    return {
+        "name": "Test Indestructible 2/2",
+        "card_types": ["Creature"],
+        "mana_cost": {"generic": 2},
+        "power": 2,
+        "toughness": 2,
+        "keywords": ["indestructible"],
+        "effects": [],
+    }
+
+
+def _indestructible_1_1_creature_dict():
+    """A 1/1 creature printing with the indestructible keyword."""
+    return {
+        "name": "Test Indestructible 1/1",
+        "card_types": ["Creature"],
+        "mana_cost": {"generic": 1},
+        "power": 1,
+        "toughness": 1,
+        "keywords": ["indestructible"],
+        "effects": [],
+    }
+
+
+def test_indestructible_creature_with_lethal_damage_survives(synthetic_state):
+    """A 2/2 indestructible creature dealt 5 damage is NOT destroyed by
+    apply_sbas (CR 702.12 exempts it from 704.5g). The creature stays on
+    the battlefield and the damage marker is preserved (damage clears at
+    end of turn, not on SBA pass)."""
+    obj_id = synthetic_state.register_and_inject_object(
+        _indestructible_2_2_creature_dict(), 0, ZONE_BATTLEFIELD
+    )
+    synthetic_state.deal_damage(obj_id, 5)  # overkill on a 2/2
+
+    assert synthetic_state.apply_sbas() == 0
+    # Still on battlefield.
+    assert synthetic_state.find_object_zone(obj_id) == ZONE_BATTLEFIELD
+    # Damage marker preserved.
+    assert synthetic_state.get_damage(obj_id) == 5
+
+
+def test_indestructible_creature_with_zero_toughness_survives(synthetic_state):
+    """A 1/1 indestructible creature with a -1/-1 counter (effective
+    toughness 0) is NOT destroyed by apply_sbas — CR 702.12b exempts
+    indestructible creatures from 704.5f. The creature stays on the
+    battlefield with the counter intact."""
+    obj_id = synthetic_state.register_and_inject_object(
+        _indestructible_1_1_creature_dict(), 0, ZONE_BATTLEFIELD
+    )
+    synthetic_state.set_counters(obj_id, -1)  # effective toughness 0
+
+    assert synthetic_state.apply_sbas() == 0
+    # Still on battlefield.
+    assert synthetic_state.find_object_zone(obj_id) == ZONE_BATTLEFIELD
+
+
+def test_indestructible_creature_with_negative_toughness_survives(synthetic_state):
+    """An indestructible 2/2 with -3 net counters (effective toughness
+    -1) still survives. 702.12b exempts indestructible creatures even
+    from strictly negative effective toughness."""
+    obj_id = synthetic_state.register_and_inject_object(
+        _indestructible_2_2_creature_dict(), 0, ZONE_BATTLEFIELD
+    )
+    synthetic_state.set_counters(obj_id, -3)  # effective toughness -1
+
+    assert synthetic_state.apply_sbas() == 0
+    assert synthetic_state.find_object_zone(obj_id) == ZONE_BATTLEFIELD
+
+
+def test_indestructible_count_returns_zero_for_indestructible_creatures(
+    synthetic_state,
+):
+    """apply_sbas returns 0 destructions when only indestructible
+    creatures would otherwise die. Set up two indestructibles past
+    lethal, both via different rules; count should still be 0."""
+    a = synthetic_state.register_and_inject_object(
+        _indestructible_2_2_creature_dict(), 0, ZONE_BATTLEFIELD
+    )
+    b = synthetic_state.register_and_inject_object(
+        _indestructible_1_1_creature_dict(), 1, ZONE_BATTLEFIELD
+    )
+    # a: lethal damage path
+    synthetic_state.deal_damage(a, 9)
+    # b: 0-toughness path
+    synthetic_state.set_counters(b, -1)
+
+    assert synthetic_state.apply_sbas() == 0
+    assert synthetic_state.find_object_zone(a) == ZONE_BATTLEFIELD
+    assert synthetic_state.find_object_zone(b) == ZONE_BATTLEFIELD
+
+
+def test_indestructible_does_not_protect_non_indestructible_neighbor(
+    synthetic_state,
+):
+    """Sanity / mixed-pass: an indestructible creature past lethal AND a
+    non-indestructible creature past lethal in the same apply_sbas pass.
+    Only the non-indestructible one dies; count is 1."""
+    indestructible_id = synthetic_state.register_and_inject_object(
+        _indestructible_2_2_creature_dict(), 0, ZONE_BATTLEFIELD
+    )
+    synthetic_state.deal_damage(indestructible_id, 5)
+    # Vanilla Grizzly Bears (2/2, no keywords) on the synthetic
+    # state — kill via lethal damage.
+    synthetic_state.deal_damage(P0_FIRST_BEAR_ID, 2)
+
+    assert synthetic_state.apply_sbas() == 1
+    # Indestructible survives.
+    assert synthetic_state.find_object_zone(indestructible_id) == ZONE_BATTLEFIELD
+    # Non-indestructible Grizzly Bear is destroyed.
+    assert synthetic_state.find_object_zone(P0_FIRST_BEAR_ID) == ZONE_GRAVEYARD
+
+
+def test_non_indestructible_creature_with_lethal_still_dies(synthetic_state):
+    """Anti-canary: the indestructible carve-out must NOT mistakenly
+    spare creatures that happen to share the battlefield with an
+    indestructible. A vanilla 2/2 still dies from lethal damage when an
+    indestructible 2/2 also exists on the board."""
+    # Add an indestructible to the board (no damage, healthy).
+    indestructible_id = synthetic_state.register_and_inject_object(
+        _indestructible_2_2_creature_dict(), 0, ZONE_BATTLEFIELD
+    )
+    # Damage a vanilla Grizzly Bear lethally.
+    synthetic_state.deal_damage(P0_FIRST_BEAR_ID, 2)
+
+    assert synthetic_state.apply_sbas() == 1
+    assert synthetic_state.find_object_zone(P0_FIRST_BEAR_ID) == ZONE_GRAVEYARD
+    # Indestructible was untouched and remains.
+    assert synthetic_state.find_object_zone(indestructible_id) == ZONE_BATTLEFIELD
