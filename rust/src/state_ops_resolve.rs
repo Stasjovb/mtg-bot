@@ -64,7 +64,36 @@
 //!   Creatures specifically: when entering the battlefield via
 //!   this path, `summoning_sick` is stamped `true` (CR 302.1 —
 //!   the new permanent has summoning sickness).
-//!   ETB triggers are NOT in scope (a future slice).
+//! - **ETB-triggered effects** (round-9 slice). After post-resolve
+//!   movement places a permanent on the controller's battlefield,
+//!   the source printing's `etb_effects: Vec<Effect>` are dispatched
+//!   one-by-one through the same `apply_effect` path the spell-
+//!   effects use. First-slice simplifications (mirrored in
+//!   `tests_rust/test_resolve.py`):
+//!   - **Apply immediately, no real stack triggering.** Real MTG:
+//!     ETB triggers go onto the stack and resolve in priority
+//!     order, can be responded to with instant-speed effects, and
+//!     (for "deal damage" ETBs) carry their own targets chosen
+//!     on-trigger. First slice applies them inline at resolution
+//!     time, same convention as the spell-effects path.
+//!   - **Gating: only fire when the source landed on battlefield.**
+//!     If post-resolve sent the source to graveyard (instant /
+//!     sorcery) or left it in place (empty card_types escape
+//!     hatch), `etb_effects` are skipped — by definition the
+//!     trigger condition "this enters the battlefield" wasn't met.
+//!     A schema-allowed but semantically-nonsense Instant carrying
+//!     an etb_effects entry will NOT fire it; only its `effects`
+//!     do (the spell's effect).
+//!   - **Controller of ETB effects = `state.active_player`.** Same
+//!     first-slice convention as DealDamage / DrawCards / GainLife.
+//!     Real MTG plumbs the trigger's controller through the trigger
+//!     ability; deferred along with the rest of the
+//!     `StackItem.controller` plumbing.
+//!   - **No replacement effects** ("ETB tapped", "ETB with N
+//!     counters") — those are CR 614.1c replacement effects, a
+//!     different schema. Not in scope.
+//!   - **No "leaves the battlefield" triggers (LtB)** — different
+//!     schema, different timing. Future slice.
 //! - **Empty stack returns None gracefully** (no exception). Same
 //!   convention as `pop_top_of_stack`.
 //!
@@ -185,30 +214,25 @@ fn is_creature(card_types: &[String]) -> bool {
 /// printing's `card_types`, dispatches to graveyard / battlefield
 /// per the rules above, no-op for empty card_types. Stamps
 /// `summoning_sick = true` for creatures landing on the
-/// battlefield.
-fn move_source_post_resolve(state: &mut GameState, source_obj_id: u32) {
+/// battlefield. Returns the destination zone constant (so the
+/// caller can tell whether to fire ETB triggers — round-9 slice
+/// gates ETB on `Some(ZONE_BATTLEFIELD)`), or `None` if the source
+/// was left in place (empty card_types) or no movement happened.
+fn move_source_post_resolve(state: &mut GameState, source_obj_id: u32) -> Option<u8> {
     // Pull the printing's card_types into an owned Vec so we drop
     // the registry borrow before mutating zones.
-    let printing_id = match find_source_printing_id(state, source_obj_id) {
-        Some(pid) => pid,
-        None => return, // lost track of source — silent no-op
-    };
+    let printing_id = find_source_printing_id(state, source_obj_id)?;
     let (destination, creature) = match state.registry.lookup(printing_id) {
         Some(printing) => (
             post_resolve_destination(&printing.card_types),
             is_creature(&printing.card_types),
         ),
-        None => return,
+        None => return None,
     };
-    let Some(dest_zone) = destination else {
-        return; // empty card_types — leave source in place
-    };
+    let dest_zone = destination?; // empty card_types — leave source in place
 
     // Take from current zone; if not found, treat as silent no-op.
-    let Some((mut obj, controller, _src_zone)) = take_source(state, source_obj_id)
-    else {
-        return;
-    };
+    let (mut obj, controller, _src_zone) = take_source(state, source_obj_id)?;
     obj.zone = dest_zone;
     if dest_zone == ZONE_BATTLEFIELD && creature {
         obj.summoning_sick = true;
@@ -225,6 +249,7 @@ fn move_source_post_resolve(state: &mut GameState, source_obj_id: u32) {
         _ => &mut player.graveyard,
     };
     Arc::make_mut(dest).push(obj);
+    Some(dest_zone)
 }
 
 /// Apply a single Effect to `state`. Closed-enum match: adding a
@@ -367,7 +392,28 @@ impl GameState {
         // hatch — leave source in place. Done BEFORE the stack pop
         // so a panic in movement doesn't leave the stack drained
         // with no movement applied (transactional shape).
-        move_source_post_resolve(self, top.source_obj_id);
+        let post_resolve_zone = move_source_post_resolve(self, top.source_obj_id);
+
+        // Round-9: fire ETB-triggered effects when (and only when)
+        // the source landed on the battlefield. Real MTG: ETB
+        // triggers go onto the stack and resolve in priority order.
+        // First slice applies them inline, same convention as the
+        // spell-effects path. Snapshot etb_effects via the same
+        // borrow-then-drop pattern we use for spell effects so we
+        // can mutate state while iterating.
+        if post_resolve_zone == Some(ZONE_BATTLEFIELD) {
+            let etb_effects: Vec<Effect> =
+                match find_source_printing_id(self, top.source_obj_id) {
+                    Some(printing_id) => match self.registry.lookup(printing_id) {
+                        Some(printing) => printing.etb_effects.clone(),
+                        None => Vec::new(),
+                    },
+                    None => Vec::new(),
+                };
+            for effect in &etb_effects {
+                apply_effect(self, effect)?;
+            }
+        }
 
         // Now drain the popped item and return its dict.
         let popped = self
