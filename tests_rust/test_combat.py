@@ -1068,3 +1068,155 @@ def test_haste_plus_vigilance_does_not_tap(synthetic_state):
     assert synthetic_state.is_tapped(obj_id) is False, (
         "haste+vigilance: vigilance must still skip the tap-on-attack step"
     )
+
+
+# ----------------------------- flying + reach ------------------------------
+#
+# Flying (CR 702.9): a creature with flying can be blocked only by creatures
+# with flying or reach. Other creatures can't block it.
+#
+# Reach (CR 702.17): a creature with reach can block creatures with flying.
+# Reach has no effect on the creature's own attacking — a reach creature
+# attacks like any ground creature, blockable by anything.
+#
+# Implementation hook in `state_ops_combat.rs:declare_blocker`: today the
+# rejection set is `{ attacker not declared, blocker missing/non-creature,
+# blocker tapped }`. This slice adds: if the attacker has the `"flying"`
+# keyword AND the blocker has neither `"flying"` nor `"reach"` in its
+# printing keywords, refuse the block.
+#
+# Scope simplifications (mirrored from the module docstring):
+#
+# - Reach only affects the BLOCKING direction. A reach attacker is treated
+#   like a ground creature — any blocker can stop it (see
+#   `test_reach_alone_does_not_grant_flying`).
+# - Flying + reach on the same attacker still cannot be blocked by anything
+#   that lacks both — except it CAN be blocked by anything because flying
+#   is the restriction and reach doesn't add a new blocking restriction.
+#   Wait, re-read CR 702.9: flying restricts blocking. Reach on the
+#   attacker doesn't change what can block the attacker. The flying
+#   restriction stays — so `flying+reach` attacker is still only
+#   blockable by flying/reach. We don't have a test asserting the OPEN
+#   interpretation; we DO have a sanity test confirming that a flying
+#   attacker is still blockable by either flying OR reach, regardless
+#   of whether the attacker also has reach (which on attack is a no-op).
+
+
+def test_flying_attacker_cannot_be_blocked_by_grounded_creature(synthetic_state):
+    """A flying 2/2 attacker; a non-flying / non-reach 3/3 blocker tries
+    to block. ``declare_blocker`` returns False; nothing pushed onto
+    ``state.blockers``."""
+    attacker_id = synthetic_state.register_and_inject_object(
+        _keyword_creature_dict(2, 2, ["flying"]), 0, ZONE_BATTLEFIELD
+    )
+    blocker_id = synthetic_state.register_and_inject_object(
+        _keyword_creature_dict(3, 3, []), 1, ZONE_BATTLEFIELD
+    )
+    assert synthetic_state.declare_attacker(attacker_id) is True
+    # Grounded creature can't block a flyer (CR 702.9).
+    assert synthetic_state.declare_blocker(blocker_id, attacker_id) is False, (
+        "non-flying/non-reach blocker must not be able to block a flying "
+        "attacker (CR 702.9)"
+    )
+    assert synthetic_state.get_blockers() == []
+
+
+def test_flying_attacker_can_be_blocked_by_flying_creature(synthetic_state):
+    """Flying 2/2 attacker; flying 2/2 blocker. ``declare_blocker``
+    returns True; the pair lands on ``state.blockers``."""
+    attacker_id = synthetic_state.register_and_inject_object(
+        _keyword_creature_dict(2, 2, ["flying"]), 0, ZONE_BATTLEFIELD
+    )
+    blocker_id = synthetic_state.register_and_inject_object(
+        _keyword_creature_dict(2, 2, ["flying"]), 1, ZONE_BATTLEFIELD
+    )
+    assert synthetic_state.declare_attacker(attacker_id) is True
+    assert synthetic_state.declare_blocker(blocker_id, attacker_id) is True
+    assert (attacker_id, blocker_id) in synthetic_state.get_blockers()
+
+
+def test_flying_attacker_can_be_blocked_by_reach_creature(synthetic_state):
+    """Flying 2/2 attacker; reach 2/2 blocker. ``declare_blocker``
+    returns True (CR 702.17 — reach lets a creature block flyers)."""
+    attacker_id = synthetic_state.register_and_inject_object(
+        _keyword_creature_dict(2, 2, ["flying"]), 0, ZONE_BATTLEFIELD
+    )
+    blocker_id = synthetic_state.register_and_inject_object(
+        _keyword_creature_dict(2, 2, ["reach"]), 1, ZONE_BATTLEFIELD
+    )
+    assert synthetic_state.declare_attacker(attacker_id) is True
+    assert synthetic_state.declare_blocker(blocker_id, attacker_id) is True, (
+        "reach blocker must be able to block a flying attacker (CR 702.17)"
+    )
+    assert (attacker_id, blocker_id) in synthetic_state.get_blockers()
+
+
+def test_non_flying_attacker_can_be_blocked_by_anything(synthetic_state):
+    """Sanity / regression: a non-flying 2/2 attacker can still be
+    blocked by a non-flying / non-reach 2/2 blocker. The flying-rule
+    branch must not have leaked into the default path."""
+    attacker_id = synthetic_state.register_and_inject_object(
+        _keyword_creature_dict(2, 2, []), 0, ZONE_BATTLEFIELD
+    )
+    blocker_id = synthetic_state.register_and_inject_object(
+        _keyword_creature_dict(2, 2, []), 1, ZONE_BATTLEFIELD
+    )
+    assert synthetic_state.declare_attacker(attacker_id) is True
+    assert synthetic_state.declare_blocker(blocker_id, attacker_id) is True
+    assert (attacker_id, blocker_id) in synthetic_state.get_blockers()
+
+
+def test_reach_alone_does_not_grant_flying(synthetic_state):
+    """Reach affects blocking, NOT attacking. A reach creature attacking
+    is essentially a ground creature for blocking purposes — any
+    blocker can stop it (flying or not). And a reach attacker doesn't
+    pick up flying's "only blockable by flying/reach" restriction."""
+    attacker_id = synthetic_state.register_and_inject_object(
+        _keyword_creature_dict(2, 2, ["reach"]), 0, ZONE_BATTLEFIELD
+    )
+    # Non-flying / non-reach blocker can stop a reach attacker (which
+    # has no flying so no blocking restriction applies).
+    grounded_blocker_id = synthetic_state.register_and_inject_object(
+        _keyword_creature_dict(2, 2, []), 1, ZONE_BATTLEFIELD
+    )
+    assert synthetic_state.declare_attacker(attacker_id) is True
+    assert synthetic_state.declare_blocker(grounded_blocker_id, attacker_id) is True, (
+        "reach attacker (no flying) is treated as a ground creature for "
+        "blocking purposes — any blocker can stop it"
+    )
+    assert (attacker_id, grounded_blocker_id) in synthetic_state.get_blockers()
+
+
+def test_reach_attacker_can_also_be_blocked_by_flyer(synthetic_state):
+    """Companion to the reach-attacker-blockable test: an opposing flying
+    creature can also block a reach (= ground) attacker. Flying on the
+    blocker doesn't restrict its blocking choices in any direction."""
+    attacker_id = synthetic_state.register_and_inject_object(
+        _keyword_creature_dict(2, 2, ["reach"]), 0, ZONE_BATTLEFIELD
+    )
+    flying_blocker_id = synthetic_state.register_and_inject_object(
+        _keyword_creature_dict(2, 2, ["flying"]), 1, ZONE_BATTLEFIELD
+    )
+    assert synthetic_state.declare_attacker(attacker_id) is True
+    assert synthetic_state.declare_blocker(flying_blocker_id, attacker_id) is True
+    assert (attacker_id, flying_blocker_id) in synthetic_state.get_blockers()
+
+
+def test_flying_plus_reach_attacker_can_be_blocked_by_anything(synthetic_state):
+    """Defensive sanity: an attacker with BOTH flying AND reach is
+    still bound by the flying restriction (reach on the attacker is a
+    no-op for blocking purposes; reach only enables a creature to
+    block flyers when it's on the BLOCKER, not on the attacker).
+    Blockers that would already pass the flying gate (flying or reach
+    on the blocker) keep working — verified here with a flying blocker."""
+    attacker_id = synthetic_state.register_and_inject_object(
+        _keyword_creature_dict(3, 3, ["flying", "reach"]), 0, ZONE_BATTLEFIELD
+    )
+    flying_blocker_id = synthetic_state.register_and_inject_object(
+        _keyword_creature_dict(2, 2, ["flying"]), 1, ZONE_BATTLEFIELD
+    )
+    assert synthetic_state.declare_attacker(attacker_id) is True
+    assert synthetic_state.declare_blocker(flying_blocker_id, attacker_id) is True, (
+        "flying+reach attacker can be blocked by a flying blocker"
+    )
+    assert (attacker_id, flying_blocker_id) in synthetic_state.get_blockers()
