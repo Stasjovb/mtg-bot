@@ -359,3 +359,153 @@ def test_make_state_registry_snapshot_is_frozen(engine):
     # The state's registry_size reflects what was frozen at make_state
     # time, not the post-mutation builder.
     assert state.registry_size == 2
+
+
+# --- 11. optional seeded library shuffle ----------------------------
+#
+# `shuffle_seed=None` (default) preserves caller order; `shuffle_seed=s`
+# runs an in-Rust xorshift64 Fisher-Yates over each player's library,
+# with p1's seed derived from s via golden-ratio xor so p0/p1 get
+# independent permutations. Hands are NEVER shuffled (caller-controlled
+# order, matches the Python "draw after shuffle" semantics).
+
+
+def _big_registry(engine, n=32):
+    """Fresh registry with `n` distinct Forest-shaped printings — each
+    given a unique name so per-printing-id positions are individually
+    distinguishable in the library order."""
+    reg = engine.Registry()
+    for i in range(n):
+        pid = reg.register_printing({
+            "name": f"Forest_{i}",
+            "card_types": ["Land"],
+            "mana_cost": {},
+            "effects": [],
+            "mana_produced": ["G"],
+        })
+        assert pid == i
+    return reg
+
+
+def test_make_state_no_shuffle_seed_preserves_order(engine):
+    """Backward compat: shuffle_seed omitted (None) -> library order
+    matches the caller's input list exactly."""
+    reg = _big_registry(engine, n=16)
+    deck = list(range(16))
+    state = engine.make_state(reg, deck, deck)
+    lib_p0 = [d["printing_id"] for d in state.library_snapshot(0)]
+    lib_p1 = [d["printing_id"] for d in state.library_snapshot(1)]
+    assert lib_p0 == deck
+    assert lib_p1 == deck
+
+
+def test_make_state_shuffle_seed_changes_order(engine):
+    """A non-trivial library + a real seed produces an order different
+    from the input. (With 16! permutations, an identity shuffle is
+    astronomically unlikely.)"""
+    reg = _big_registry(engine, n=16)
+    deck = list(range(16))
+    state = engine.make_state(reg, deck, deck, shuffle_seed=42)
+    lib_p0 = [d["printing_id"] for d in state.library_snapshot(0)]
+    lib_p1 = [d["printing_id"] for d in state.library_snapshot(1)]
+    assert lib_p0 != deck
+    assert lib_p1 != deck
+    # Permutation invariant — no duplication / loss.
+    assert sorted(lib_p0) == deck
+    assert sorted(lib_p1) == deck
+
+
+def test_make_state_shuffle_seed_is_deterministic(engine):
+    """Same seed twice -> identical shuffled order."""
+    reg = _big_registry(engine, n=20)
+    deck = list(range(20))
+    state_a = engine.make_state(reg, deck, deck, shuffle_seed=12345)
+    state_b = engine.make_state(reg, deck, deck, shuffle_seed=12345)
+    lib_a0 = [d["printing_id"] for d in state_a.library_snapshot(0)]
+    lib_b0 = [d["printing_id"] for d in state_b.library_snapshot(0)]
+    lib_a1 = [d["printing_id"] for d in state_a.library_snapshot(1)]
+    lib_b1 = [d["printing_id"] for d in state_b.library_snapshot(1)]
+    assert lib_a0 == lib_b0
+    assert lib_a1 == lib_b1
+    # Fingerprint also matches end-to-end.
+    assert state_a.fingerprint() == state_b.fingerprint()
+
+
+def test_make_state_different_shuffle_seeds_differ(engine):
+    """Different seeds -> different shuffled orders (high probability)."""
+    reg = _big_registry(engine, n=20)
+    deck = list(range(20))
+    state_a = engine.make_state(reg, deck, deck, shuffle_seed=1)
+    state_b = engine.make_state(reg, deck, deck, shuffle_seed=2)
+    lib_a0 = [d["printing_id"] for d in state_a.library_snapshot(0)]
+    lib_b0 = [d["printing_id"] for d in state_b.library_snapshot(0)]
+    assert lib_a0 != lib_b0
+
+
+def test_make_state_shuffle_p0_p1_independent(engine):
+    """Same starting library on both sides + same seed -> p0 and p1
+    libraries land in DIFFERENT orders because the implementation
+    derives a separate p1 seed via golden-ratio xor."""
+    reg = _big_registry(engine, n=24)
+    deck = list(range(24))
+    state = engine.make_state(reg, deck, deck, shuffle_seed=42)
+    lib_p0 = [d["printing_id"] for d in state.library_snapshot(0)]
+    lib_p1 = [d["printing_id"] for d in state.library_snapshot(1)]
+    assert lib_p0 != lib_p1
+    # Both must still be permutations of the original deck.
+    assert sorted(lib_p0) == deck
+    assert sorted(lib_p1) == deck
+
+
+def test_make_state_shuffle_does_not_touch_hand(engine):
+    """Hand order survives the shuffle unchanged — even with a seed
+    set, the hand is the caller's exact input order."""
+    reg = _big_registry(engine, n=16)
+    deck = list(range(16))
+    hand = [3, 7, 1, 9]
+    state = engine.make_state(
+        reg, deck, deck,
+        p0_hand_printing_ids=hand,
+        p1_hand_printing_ids=hand,
+        shuffle_seed=99,
+    )
+    hand_p0 = [d["printing_id"] for d in state.hand_snapshot(0)]
+    hand_p1 = [d["printing_id"] for d in state.hand_snapshot(1)]
+    assert hand_p0 == hand
+    assert hand_p1 == hand
+
+
+def test_make_state_shuffle_preserves_library_size(engine):
+    """Library size is unchanged after shuffle — no duplication, no
+    loss, no off-by-one."""
+    reg = _big_registry(engine, n=30)
+    deck = list(range(30))
+    state = engine.make_state(reg, deck, deck, shuffle_seed=7)
+    assert state.library_sizes == [30, 30]
+    lib_p0 = [d["printing_id"] for d in state.library_snapshot(0)]
+    lib_p1 = [d["printing_id"] for d in state.library_snapshot(1)]
+    assert len(lib_p0) == 30
+    assert len(lib_p1) == 30
+    # Multiset invariant.
+    assert sorted(lib_p0) == deck
+    assert sorted(lib_p1) == deck
+
+
+def test_make_state_shuffle_empty_library_noop(engine):
+    """Empty library + shuffle_seed -> no error, still empty."""
+    reg = _big_registry(engine, n=4)
+    state = engine.make_state(reg, [], [], shuffle_seed=42)
+    assert state.library_sizes == [0, 0]
+    assert state.library_snapshot(0) == []
+    assert state.library_snapshot(1) == []
+
+
+def test_make_state_shuffle_single_card_library_noop(engine):
+    """One-card library + shuffle_seed -> Fisher-Yates degenerates to
+    a no-op, the card stays put."""
+    reg = _big_registry(engine, n=4)
+    state = engine.make_state(reg, [2], [3], shuffle_seed=99)
+    lib_p0 = [d["printing_id"] for d in state.library_snapshot(0)]
+    lib_p1 = [d["printing_id"] for d in state.library_snapshot(1)]
+    assert lib_p0 == [2]
+    assert lib_p1 == [3]

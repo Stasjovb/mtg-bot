@@ -150,6 +150,7 @@ the test lands in a commit.
 | rust(action-declare-blockers): Action::DeclareBlockers variant | tests_rust/test_actions.py extend | green  | feature/rust-action-declare-blockers |
 | rust(action-activate-ability): Action::ActivateAbility variant | tests_rust/test_actions.py extend | green  | feature/rust-action-activate-ability |
 | rust(effect-put-plus-one-counter-on-self): self-target counter (CR 122.6) | tests_rust/test_resolve.py extend | green  | feature/rust-effect-put-plus-one-counter-on-self |
+| rust(setup-with-shuffle): optional seeded library shuffle in make_state | tests_rust/test_setup.py extend | green  | feature/rust-setup-with-shuffle |
 
 ## Build invocation reminder
 
