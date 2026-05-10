@@ -101,6 +101,13 @@ pub struct CardPrinting {
     /// from X) need a richer schema and are deferred. Empty Vec
     /// when the card has no static keywords.
     pub keywords: Vec<String>,
+    /// "When ~ enters the battlefield" effects. Fire on any
+    /// permanent landing on the battlefield (creature, artifact,
+    /// enchantment, planeswalker). Empty Vec = no ETB. First-slice
+    /// scope: the effects fire IMMEDIATELY on entry, no separate
+    /// stack item — real MTG triggers them onto the stack and
+    /// resolves in priority order; that timing nuance is deferred.
+    pub etb_effects: Vec<Effect>,
 }
 
 /// Plain Rust container for the printings table. Held behind an
@@ -300,6 +307,20 @@ pub fn parse_printing(dict: &Bound<'_, PyDict>) -> PyResult<CardPrinting> {
         }
         None => Vec::new(),
     };
+    let etb_effects = match dict.get_item("etb_effects")? {
+        Some(eff_any) => {
+            let mut out = Vec::new();
+            for item in eff_any.try_iter()? {
+                let item = item?;
+                let eff_dict = item.downcast::<PyDict>().map_err(|_| {
+                    PyValueError::new_err("each etb_effect must be a dict")
+                })?;
+                out.push(parse_effect(eff_dict)?);
+            }
+            out
+        }
+        None => Vec::new(),
+    };
     Ok(CardPrinting {
         name: Arc::from(name),
         mana_cost,
@@ -309,6 +330,7 @@ pub fn parse_printing(dict: &Bound<'_, PyDict>) -> PyResult<CardPrinting> {
         mana_produced,
         card_types,
         keywords,
+        etb_effects,
     })
 }
 
@@ -463,6 +485,16 @@ impl Registry {
     /// "trample", etc.
     fn get_printing_keywords(&self, id: u32) -> PyResult<Vec<String>> {
         Ok(self.lookup(id)?.keywords.clone())
+    }
+
+    /// "When ~ enters the battlefield" effects (round-9 bridge ext).
+    fn get_printing_etb_effects<'py>(
+        &self,
+        py: Python<'py>,
+        id: u32,
+    ) -> PyResult<Vec<Bound<'py, PyDict>>> {
+        let p = self.lookup(id)?;
+        p.etb_effects.iter().map(|e| effect_to_pydict(py, e)).collect()
     }
 
     /// Microbench helper: round-trip ``n`` copies of the same dict

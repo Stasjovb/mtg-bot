@@ -282,6 +282,7 @@ pub fn make_synthetic_state(
         mana_produced: Some(vec!["G".to_string()]),
         card_types: vec!["Land".to_string()],
         keywords: Vec::new(),
+        etb_effects: Vec::new(),
     });
     let bears_pid = builder.push_printing(CardPrinting {
         name: Arc::from("Grizzly Bears"),
@@ -296,6 +297,7 @@ pub fn make_synthetic_state(
         mana_produced: None,
         card_types: vec!["Creature".to_string()],
         keywords: Vec::new(),
+        etb_effects: Vec::new(),
     });
     let elves_pid = builder.push_printing(CardPrinting {
         name: Arc::from("Llanowar Elves"),
@@ -316,6 +318,7 @@ pub fn make_synthetic_state(
         mana_produced: Some(vec!["G".to_string()]),
         card_types: vec!["Creature".to_string()],
         keywords: Vec::new(),
+        etb_effects: Vec::new(),
     });
     let registry = builder.snapshot();
 
