@@ -460,3 +460,245 @@ def test_apply_action_unknown_kind_message_mentions_declare_attackers(synthetic_
     a future variant addition forces the message to grow."""
     with pytest.raises(ValueError, match=r"declare_attackers"):
         synthetic_state.apply_action({"kind": "frobnicate"})
+
+
+# --- DeclareBlockers -------------------------------------------------
+#
+# Round-23 slice (Phase 3, batch 3): extend the Action enum +
+# apply_action dispatcher with ``Action::DeclareBlockers {
+# assignments }``. The Python dataclass ``DeclareBlockers(
+# assignments: tuple[tuple[int, int], ...])`` carries a tuple of
+# ``(blocker_id, attacker_id)`` pairs; Rust stores it as
+# ``Vec<(u32, u32)>`` to preserve iteration order (the dispatch loop
+# calls ``declare_blocker(blocker_id, attacker_id)`` per pair, and
+# damage assignment when multiple blockers block one attacker
+# depends on input order — the first declared blocker eats the
+# attacker's power under the round-5 single-blocker damage model).
+#
+# Pair-shape note: the action's pair is ``(blocker_id, attacker_id)``
+# (matches the underlying ``declare_blocker(blocker_id, attacker_id)``
+# primitive signature). ``state.blockers`` STORES pairs in the
+# opposite order — ``(attacker_id, blocker_id)`` — for fast
+# attacker-keyed lookups during damage assignment. The primitive
+# handles the storage reorder; ``apply_action`` passes the pair
+# straight through to the primitive.
+#
+# Synthetic-state reminder (cf. ``tests_rust/test_combat.py``):
+# - Player 0 battlefield: ids 0..4 Forest, 5..9 Grizzly Bears.
+# - Player 1 battlefield: ids 67..71 Forest, 72..76 Grizzly Bears.
+# A declare-blockers test needs a declared attacker first — call
+# ``declare_attacker`` on a P0 bear, then declare a P1 bear as the
+# blocker.
+
+P1_FIRST_FOREST_ID = 67  # p1 battlefield 67..71 are Forest (non-creature)
+P1_FIRST_BLOCKER_ID = 72  # p1 battlefield 72..76 are 2/2 Grizzly Bears
+
+
+def _seed_one_attacker(state, attacker_id=P0_FIRST_BEAR_ID):
+    """Declare one P0 bear as an attacker so blocker tests have a
+    legal attacker to reference. Returns the attacker id."""
+    assert state.declare_attacker(attacker_id) is True
+    return attacker_id
+
+
+def test_apply_action_declare_blockers_empty_no_op(synthetic_state):
+    """Empty ``assignments`` list: the loop body never runs and
+    ``state.blockers`` stays empty. No error raised. Locks in that
+    the dispatcher tolerates the zero-blockers case (Python's
+    ``DeclareBlockers()`` default is the empty tuple)."""
+    _seed_one_attacker(synthetic_state)
+    assert synthetic_state.get_blockers() == []
+
+    synthetic_state.apply_action(
+        {"kind": "declare_blockers", "assignments": []}
+    )
+
+    assert synthetic_state.get_blockers() == []
+
+
+def test_apply_action_declare_blockers_single_pair(synthetic_state):
+    """A single ``(blocker_id, attacker_id)`` pair: one block lands
+    on ``state.blockers`` as ``(attacker_id, blocker_id)`` (storage
+    order is the opposite of the action's input order — the
+    primitive handles the reorder)."""
+    attacker = _seed_one_attacker(synthetic_state)
+    blocker = P1_FIRST_BLOCKER_ID
+
+    synthetic_state.apply_action(
+        {
+            "kind": "declare_blockers",
+            "assignments": [(blocker, attacker)],
+        }
+    )
+
+    assert synthetic_state.get_blockers() == [(attacker, blocker)]
+
+
+def test_apply_action_declare_blockers_multiple_pairs_single_blocker_each(
+    synthetic_state,
+):
+    """Multiple pairs, each a distinct blocker on a distinct
+    attacker: all recorded. Two P0 bears attack, two P1 bears block
+    one each — ``state.blockers`` has both pairs in input order."""
+    a0 = P0_FIRST_BEAR_ID
+    a1 = P0_FIRST_BEAR_ID + 1
+    assert synthetic_state.declare_attacker(a0) is True
+    assert synthetic_state.declare_attacker(a1) is True
+    b0 = P1_FIRST_BLOCKER_ID
+    b1 = P1_FIRST_BLOCKER_ID + 1
+
+    synthetic_state.apply_action(
+        {
+            "kind": "declare_blockers",
+            "assignments": [(b0, a0), (b1, a1)],
+        }
+    )
+
+    # storage shape is (attacker, blocker)
+    assert synthetic_state.get_blockers() == [(a0, b0), (a1, b1)]
+
+
+def test_apply_action_declare_blockers_multiple_blockers_on_one_attacker(
+    synthetic_state,
+):
+    """Multi-block: one attacker blocked by three blockers. All
+    pairs land with the same ``attacker_id``; blocker order matches
+    the input order — load-bearing for damage assignment when the
+    round-5 model gives the attacker's power to the first declared
+    blocker."""
+    attacker = _seed_one_attacker(synthetic_state)
+    b0 = P1_FIRST_BLOCKER_ID
+    b1 = P1_FIRST_BLOCKER_ID + 1
+    b2 = P1_FIRST_BLOCKER_ID + 2
+
+    synthetic_state.apply_action(
+        {
+            "kind": "declare_blockers",
+            "assignments": [(b0, attacker), (b1, attacker), (b2, attacker)],
+        }
+    )
+
+    assert synthetic_state.get_blockers() == [
+        (attacker, b0),
+        (attacker, b1),
+        (attacker, b2),
+    ]
+
+
+def test_apply_action_declare_blockers_iteration_order_preserved(synthetic_state):
+    """Passing pairs in a non-sorted order — [(b2, A), (b0, A),
+    (b1, A)] — must produce ``state.blockers`` in the SAME input
+    order. The Vec-based iteration is stable, not sorted; callers
+    that want a canonical order sort BEFORE passing."""
+    attacker = _seed_one_attacker(synthetic_state)
+    b0 = P1_FIRST_BLOCKER_ID
+    b1 = P1_FIRST_BLOCKER_ID + 1
+    b2 = P1_FIRST_BLOCKER_ID + 2
+
+    synthetic_state.apply_action(
+        {
+            "kind": "declare_blockers",
+            "assignments": [(b2, attacker), (b0, attacker), (b1, attacker)],
+        }
+    )
+
+    # NOT sorted by blocker id — exactly the input order.
+    assert synthetic_state.get_blockers() == [
+        (attacker, b2),
+        (attacker, b0),
+        (attacker, b1),
+    ]
+
+
+def test_apply_action_declare_blockers_missing_key_raises_key_error(synthetic_state):
+    """Missing the ``assignments`` key raises ``KeyError`` —
+    ``parse_action`` rejects before dispatch (single point of
+    validation, mirrors the ``attacker_ids``-missing shape on
+    ``declare_attackers``)."""
+    _seed_one_attacker(synthetic_state)
+    with pytest.raises(KeyError, match="assignments"):
+        synthetic_state.apply_action({"kind": "declare_blockers"})
+    # No mutation.
+    assert synthetic_state.get_blockers() == []
+
+
+def test_apply_action_declare_blockers_accepts_list_of_lists(synthetic_state):
+    """``assignments`` extracts as ``Vec<(u32, u32)>`` from any
+    iterable-of-iterables. A plain ``list`` of 2-element ``list``s
+    works — PyO3's tuple-extract accepts both Python tuples and
+    fixed-length lists. The Python dataclass field is a tuple of
+    tuples, but the JSON-like wire shape often uses lists; this
+    test pins the relaxed acceptance."""
+    attacker = _seed_one_attacker(synthetic_state)
+    blocker = P1_FIRST_BLOCKER_ID
+
+    synthetic_state.apply_action(
+        {
+            "kind": "declare_blockers",
+            # list of lists, not list of tuples
+            "assignments": [[blocker, attacker]],
+        }
+    )
+
+    assert synthetic_state.get_blockers() == [(attacker, blocker)]
+
+
+def test_apply_action_declare_blockers_non_creature_blocker_silently_skipped(
+    synthetic_state,
+):
+    """A non-creature blocker (e.g. a Forest at id 67) is silently
+    rejected by the underlying ``declare_blocker`` primitive
+    (returns False). The dispatch discards the bool — no exception
+    escapes, no entry added to ``state.blockers``. Eligible pairs
+    in the same call still get through."""
+    attacker = _seed_one_attacker(synthetic_state)
+    forest_blocker = P1_FIRST_FOREST_ID
+    bear_blocker = P1_FIRST_BLOCKER_ID
+    assert synthetic_state.printing_name_of(forest_blocker) == "Forest"
+
+    synthetic_state.apply_action(
+        {
+            "kind": "declare_blockers",
+            "assignments": [
+                (forest_blocker, attacker),
+                (bear_blocker, attacker),
+            ],
+        }
+    )
+
+    # Only the eligible pair landed.
+    assert synthetic_state.get_blockers() == [(attacker, bear_blocker)]
+
+
+def test_apply_action_declare_blockers_tapped_blocker_silently_skipped(
+    synthetic_state,
+):
+    """A tapped blocker is silently rejected (the round-5
+    primitive's "blocker must be untapped" gate). Remaining
+    untapped blockers in the same call still go through."""
+    attacker = _seed_one_attacker(synthetic_state)
+    tapped_blocker = P1_FIRST_BLOCKER_ID
+    fresh_blocker = P1_FIRST_BLOCKER_ID + 1
+    # Tap the first blocker before the dispatch.
+    assert synthetic_state.tap_object(tapped_blocker) is True
+
+    synthetic_state.apply_action(
+        {
+            "kind": "declare_blockers",
+            "assignments": [
+                (tapped_blocker, attacker),
+                (fresh_blocker, attacker),
+            ],
+        }
+    )
+
+    # Tapped blocker skipped; fresh blocker landed.
+    assert synthetic_state.get_blockers() == [(attacker, fresh_blocker)]
+
+
+def test_apply_action_unknown_kind_message_mentions_declare_blockers(synthetic_state):
+    """The unknown-kind error message includes ``declare_blockers``
+    after this slice extends the variant list. Pin the substring so
+    a future variant addition forces the message to grow."""
+    with pytest.raises(ValueError, match=r"declare_blockers"):
+        synthetic_state.apply_action({"kind": "frobnicate"})
