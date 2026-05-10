@@ -18,12 +18,19 @@
 //! ## Scope simplifications (mirrored on `tests_rust/test_combat.py`)
 //!
 //! - **No first-strike / double-strike / deathtouch / trample /
-//!   lifelink / vigilance / infect / protection / unblockable.**
+//!   lifelink / infect / protection / unblockable.**
 //!   Damage in this slice is one symmetric round: each attacker
 //!   assigns `power` damage to its first blocker (or to the defending
 //!   player if unblocked), and each blocker assigns `power` damage
 //!   back to the attacker. Future combat slices peel off one keyword
 //!   at a time.
+//! - **Vigilance (CR 702.20) IS modeled.** A creature with
+//!   `"vigilance"` in `printing.keywords` skips the tap step on
+//!   declare-attacker — it gets pushed onto `self.attackers` but
+//!   `obj.tapped` stays False. Vigilance does NOT bypass the
+//!   "must be untapped to attack" precondition (a pre-tapped
+//!   vigilance creature is still rejected) and does NOT grant haste
+//!   (a summoning-sick vigilance creature is still rejected).
 //! - **No legality checks beyond "creature on attacker's battlefield,
 //!   untapped, not summoning-sick".** Tapped and summoning-sick
 //!   creatures are rejected as attackers; that's the full attack-
@@ -150,19 +157,40 @@ fn battlefield_creature_power(state: &GameState, obj_id: u32) -> i16 {
     printing.power.unwrap_or(0)
 }
 
+/// Does this battlefield permanent's printing carry the
+/// `"vigilance"` keyword? Returns false for unknown ids and for
+/// printings whose `keywords` Vec doesn't contain the lowercase
+/// `"vigilance"` string. Used by `declare_attacker` to skip the
+/// tap-on-attack step (CR 702.20).
+fn battlefield_has_vigilance(state: &GameState, obj_id: u32) -> bool {
+    let Some((_, printing_id)) = locate_battlefield_obj(state, obj_id) else {
+        return false;
+    };
+    let Some(printing) = state.registry.lookup(printing_id) else {
+        return false;
+    };
+    printing.keywords.iter().any(|k| k == "vigilance")
+}
+
 #[pymethods]
 impl GameState {
     /// Declare the battlefield creature with `obj_id` as an attacker.
     ///
     /// On success: pushes `obj_id` onto `self.attackers`, taps the
-    /// creature, returns `true`. On any precondition failure:
-    /// returns `false` with no mutation.
+    /// creature (UNLESS the printing carries the `"vigilance"`
+    /// keyword — CR 702.20), returns `true`. On any precondition
+    /// failure: returns `false` with no mutation.
     ///
     /// Preconditions:
     /// - object exists on some battlefield
     /// - object's printing has `power.is_some()` (creature predicate)
     /// - object is NOT tapped
     /// - object is NOT summoning-sick
+    ///
+    /// Vigilance only suppresses the tap-on-attack step; it does NOT
+    /// bypass the "must be untapped to attack" precondition (a
+    /// pre-tapped vigilance creature still fails) and does NOT grant
+    /// haste (a summoning-sick vigilance creature still fails).
     ///
     /// **No legality checks beyond the four above.** Defender, "can't
     /// attack", attacked-alone restrictions, and "doesn't untap during
@@ -176,18 +204,23 @@ impl GameState {
         if tapped || summoning_sick {
             return false;
         }
+        // Vigilance check: read before mutating so we don't pay the
+        // Arc::make_mut clone cost when we're going to skip the tap.
+        let has_vigilance = battlefield_has_vigilance(self, obj_id);
         // Eligible. Tap the creature (CR 508.1c — attacking taps the
-        // attacker, modulo vigilance which is deferred) and record it
-        // on the attackers Vec. The tap goes through Arc::make_mut so
-        // the CoW invariant survives.
-        let tapped_ok = mutate_battlefield_obj(self, obj_id, |obj| {
-            obj.tapped = true;
-        });
-        if !tapped_ok {
-            // Should be unreachable — read_creature_status already
-            // located it. Defensive: if a clone race or other
-            // instability removed it, undo nothing.
-            return false;
+        // attacker, modulo vigilance) and record it on the attackers
+        // Vec. The tap goes through Arc::make_mut so the CoW invariant
+        // survives. Vigilance creatures skip the tap step entirely.
+        if !has_vigilance {
+            let tapped_ok = mutate_battlefield_obj(self, obj_id, |obj| {
+                obj.tapped = true;
+            });
+            if !tapped_ok {
+                // Should be unreachable — read_creature_status already
+                // located it. Defensive: if a clone race or other
+                // instability removed it, undo nothing.
+                return false;
+            }
         }
         self.attackers.push(obj_id);
         true

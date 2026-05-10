@@ -83,6 +83,7 @@ the test lands in a commit.
 | rust(cast-rewire): card_types-based detector | tests_rust/test_cast.py rewire              | green  | feature/rust-tdd-cast-rewire |
 | tests_rust/test_cleanup.py        | tests/test_actions.py + turn.py             | green  | feature/rust-tdd-cleanup   |
 | tests_rust/test_resolve.py        | tests/test_combat.py + game.py              | green  | feature/rust-tdd-resolve   |
+| rust(combat-vigilance): keyword skip-tap | tests_rust/test_combat.py extend | green | feature/rust-tdd-vigilance |
 
 ## Build invocation reminder
 
