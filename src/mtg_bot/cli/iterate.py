@@ -1049,14 +1049,21 @@ def main(argv=None) -> None:  # pragma: no cover
         ),
     )
     parser.add_argument(
-        "--eval-games", type=int, default=500,
+        "--eval-games", type=int, default=2000,
         help=(
-            "Games per acceptance-gate eval (default 500). With the "
-            "distributed eval path (``--shards-config``), 500 games "
-            "fit in roughly the same wall as 100 single-machine "
-            "games. At threshold 0.55, 500 games has ~+/- 4.4 pts "
-            "of noise vs ~+/- 15 pts at 40 games — tightens the gate "
-            "decision substantially."
+            "Games per acceptance-gate eval (default 2000). The "
+            "default is sized for the early-stop watcher "
+            "(``scripts/eval_early_stop_watcher.py``) — when run "
+            "alongside iterate, the watcher writes a stop sentinel "
+            "as soon as the Wilson 95%% CI on win-rate clears the "
+            "acceptance threshold in either direction, so lopsided "
+            "results cost only ~50-100 games while close calls get "
+            "the full statistical headroom of a 2000-game run "
+            "(~+/- 2.2 pts of noise at p=50%%). Without the watcher "
+            "the eval-gate phase runs to completion at 2000 games, "
+            "which is ~4x the wall of the prior 500-game default — "
+            "drop to 500 explicitly if you're running iterate "
+            "without the watcher."
         ),
     )
     parser.add_argument(
