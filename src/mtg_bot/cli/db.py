@@ -2,18 +2,26 @@
 
 Sub-actions:
 
-- ``backup``  — online ``VACUUM INTO`` snapshot of ``runs.db``
-- ``dump``    — pretty-print one run's full record (run +
+- ``backup``   — online ``VACUUM INTO`` snapshot of ``runs.db``
+- ``dump``     — pretty-print one run's full record (run +
   progress + last 100 events + artifacts), the same shape that
   ``GET /run/<id>`` returns.
-- ``query``   — read-only ad-hoc SQL escape hatch. Refuses
+- ``query``    — read-only ad-hoc SQL escape hatch. Refuses
   statements that aren't a single ``SELECT``.
+- ``backfill`` — walk a ``training_progress`` directory and
+  idempotently upsert every legacy ``*.json`` run record into the
+  DB. Used once during the Phase 2 UI cutover so historical runs
+  (which pre-date the dual-write loop) don't disappear from the
+  dashboard. Safe to re-run. See
+  :mod:`mtg_bot.cli.runs.backfill` for the heuristic + idempotency
+  contract.
 
 The ``backup`` and ``dump`` actions delegate to
 :mod:`mtg_bot.cli.runs.backup` (where the heavy lifting lives, plus
 the existing tests that pin its behavior). ``query`` is implemented
 here because it doesn't fit alongside the backup helpers — it's an
-operator escape hatch, not a structured tool.
+operator escape hatch, not a structured tool. ``backfill`` delegates
+to :mod:`mtg_bot.cli.runs.backfill`.
 """
 
 from __future__ import annotations
@@ -27,11 +35,16 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Sequence
 
-from mtg_bot.cli.runs import backup as _backup_mod, db as _runs_db
+from mtg_bot.cli.runs import (
+    backfill as _backfill_mod,
+    backup as _backup_mod,
+    db as _runs_db,
+)
 
 
 _DEFAULT_DB_PATH = Path("training_progress") / "runs.db"
 _DEFAULT_BACKUP_DIR = Path("training_progress") / "backups"
+_DEFAULT_PROGRESS_DIR = Path("training_progress")
 
 
 def _timestamp() -> str:
@@ -144,6 +157,36 @@ def main(argv: Sequence[str] | None = None) -> None:
         help="Output format (default json).",
     )
 
+    p_backfill = sub.add_parser(
+        "backfill",
+        help=(
+            "Walk a training_progress directory and upsert every "
+            "legacy *.json into runs.db (idempotent)."
+        ),
+    )
+    p_backfill.add_argument(
+        "--db", type=Path, default=_DEFAULT_DB_PATH,
+        help=f"Destination DB (default {_DEFAULT_DB_PATH}).",
+    )
+    p_backfill.add_argument(
+        "--source", type=Path, default=_DEFAULT_PROGRESS_DIR,
+        help=(
+            f"Source directory holding *.json files "
+            f"(default {_DEFAULT_PROGRESS_DIR})."
+        ),
+    )
+    p_backfill.add_argument(
+        "--stale-after-hours", type=float,
+        default=_backfill_mod.DEFAULT_STALE_AFTER_HOURS,
+        help=(
+            "Cutoff for the stale-running heuristic: a JSON whose "
+            "status is still 'running' AND whose mtime is older "
+            "than this many hours gets stamped status='killed' on "
+            "import. Default "
+            f"{_backfill_mod.DEFAULT_STALE_AFTER_HOURS}h."
+        ),
+    )
+
     args = parser.parse_args(argv)
 
     if args.action == "backup":
@@ -172,6 +215,16 @@ def main(argv: Sequence[str] | None = None) -> None:
             for row in rows:
                 print("\t".join("" if row[c] is None else str(row[c])
                                 for c in cols))
+        return
+
+    if args.action == "backfill":
+        summary = _backfill_mod.backfill_progress_dir(
+            args.source, args.db,
+            stale_after_hours=args.stale_after_hours,
+        )
+        print(f"backfill source: {args.source}")
+        print(f"backfill dest  : {args.db}")
+        print(summary.render())
         return
 
 

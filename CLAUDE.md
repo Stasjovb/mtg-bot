@@ -147,10 +147,22 @@ Tailscale enrollment), see
 
 Every `mtg_bot` subcommand records its run into a SQLite DB at
 `training_progress/runs.db` alongside its existing progress JSON.
-**Phase 1 invariant: dual-write only.** The training UI under
-`src/mtg_bot/training_ui/` keeps reading the JSON files — do not
-remove or rename those writes. Phase 2 swaps the UI; until then
-the DB is a shadow store.
+
+**Phase 2 invariant (current):** the training UI under
+`src/mtg_bot/training_ui/` reads `runs.db` as the single source of
+truth. To keep JSON-only producers (today: `iterate`, `train`,
+`shard`, `capture`, `bench` — Phase 1 only wired `mtg_bot eval`)
+visible in the dashboard without a manual ops step, the UI runs an
+**idempotent backfill from `progress_dir/*.json` into the DB at the
+top of each `/api/runs` request**. JSON-side richer fields the DB
+schema doesn't carry (machines arrays, training-loss arrays, replay
+hints, ...) flow through `run_progress.extra_json` and fan out at
+read time.
+
+**Producer dual-write stays.** Do not remove the JSON writes from
+producers in this PR; if a UI bug surfaces, a one-line revert of
+`mtg_bot.training_ui.app` restores the previous behavior, and the
+JSONs on disk remain authoritative.
 
 **Schema** (defined in `src/mtg_bot/cli/runs/db.py`):
 
@@ -193,6 +205,12 @@ Other `mtg_bot db` actions:
 - `mtg_bot db dump --run-id X` — pretty-print one run's full record.
 - `mtg_bot db query "SELECT ..."` — read-only SELECT escape hatch
   (rejects writes via regex + sqlite read-only URI).
+- `mtg_bot db backfill --source training_progress` — idempotently
+  upsert every `*.json` run record under the source dir into the
+  DB. Invoked automatically by the UI at the top of each
+  `/api/runs` request, but exposed here for one-shot batch use
+  (e.g. after a fresh checkout, or to clear a stale-running flag
+  with `--stale-after-hours 0`).
 
 REST endpoints on the existing port-5099 `mtg_bot serve`:
 
