@@ -79,6 +79,11 @@ pub enum Effect {
     /// Untap target permanent (CR 701.20b). Idempotent on already-
     /// untapped targets. AnyPlayer target raises.
     UntapTarget { target: TargetFilter },
+    /// Sacrifice target permanent (CR 701.16). First-slice: target
+    /// is the active player's first creature on their own
+    /// battlefield (you sacrifice your own permanents). AnyPlayer
+    /// raises.
+    Sacrifice { target: TargetFilter },
 }
 
 #[derive(Clone, Debug)]
@@ -249,8 +254,16 @@ fn parse_effect(dict: &Bound<'_, PyDict>) -> PyResult<Effect> {
             let target = parse_target_filter(target_dict)?;
             Ok(Effect::UntapTarget { target })
         }
+        "sacrifice" => {
+            let target_any = require(dict, "target")?;
+            let target_dict = target_any.downcast::<PyDict>().map_err(|_| {
+                PyValueError::new_err("sacrifice.target must be a dict")
+            })?;
+            let target = parse_target_filter(target_dict)?;
+            Ok(Effect::Sacrifice { target })
+        }
         other => Err(PyValueError::new_err(format!(
-            "unknown effect kind {other:?}; valid: deal_damage, draw_cards, gain_life, return_to_hand, mill, exile_target, tap_target, untap_target"
+            "unknown effect kind {other:?}; valid: deal_damage, draw_cards, gain_life, return_to_hand, mill, exile_target, tap_target, untap_target, sacrifice"
         ))),
     }
 }
@@ -464,6 +477,10 @@ fn effect_to_pydict<'py>(
         }
         Effect::UntapTarget { target } => {
             d.set_item("kind", "untap_target")?;
+            d.set_item("target", target_filter_to_pydict(py, target)?)?;
+        }
+        Effect::Sacrifice { target } => {
+            d.set_item("kind", "sacrifice")?;
             d.set_item("target", target_filter_to_pydict(py, target)?)?;
         }
     }

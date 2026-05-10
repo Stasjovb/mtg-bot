@@ -68,9 +68,16 @@ impl GameState {
 
     /// Resolve an object id to the zone constant naming the zone it
     /// currently lives in. Returns `None` if no object with that id
-    /// is in any of the four tracked zones (hand / library /
-    /// battlefield / graveyard) on either player. Stack and exile
-    /// aren't modeled yet — once they are, the search extends here.
+    /// is in any of the five tracked zones (hand / library /
+    /// battlefield / graveyard / exile) on either player. The stack
+    /// is still not searched (a stack item is keyed by source id,
+    /// not by full GameObject membership) — once it is, the search
+    /// extends here.
+    ///
+    /// **Round-14 update:** exile is now searched. Round-1 ignored
+    /// exile because nothing read FROM exile yet; round-11 added
+    /// `Effect::ExileTarget` (write into exile) and this slice is
+    /// the matching "exile is now a first-class read source" half.
     ///
     /// The lookup is membership-based, NOT a read of the object's
     /// `zone` field. That field carries placeholder data on
@@ -93,6 +100,9 @@ impl GameState {
             if player.graveyard.iter().any(|o| o.id == obj_id) {
                 return Some(ZONE_GRAVEYARD);
             }
+            if player.exile.iter().any(|o| o.id == obj_id) {
+                return Some(ZONE_EXILE);
+            }
         }
         None
     }
@@ -108,19 +118,24 @@ impl GameState {
     /// cloning a `GameState` and then calling `move_object` on the
     /// clone leaves the source state's zone Vecs untouched.
     ///
-    /// Stack / exile are not modeled yet; passing those zone
-    /// constants as `target_zone` panics at debug-assert time and
-    /// silently lands the object in graveyard at release time. The
-    /// next slice that adds those zones to `Player` lifts the
-    /// restriction.
+    /// **Round-14 update:** the source-zone search now also iterates
+    /// exile, and `ZONE_EXILE` is a valid destination — so callers
+    /// can move an object INTO exile (sidestepping the round-11
+    /// ExileTarget effect dispatch when the bare primitive is what's
+    /// needed) and OUT of exile back to a tracked zone. Pre-r14 the
+    /// dispatch silently routed unknown destinations (incl. exile)
+    /// into the graveyard; that fallback remains for any other
+    /// non-modeled value (including the stack, which still has no
+    /// per-object zone Vec). The module docstring covers the
+    /// stack limitation.
     fn move_object(
         &mut self,
         obj_id: u32,
         target_zone: u8,
         target_player: u8,
     ) -> bool {
-        // Find + remove from source zone (search both players, all four
-        // tracked zones).
+        // Find + remove from source zone (search both players, all five
+        // tracked zones — round-14 added exile to the iteration).
         let mut taken: Option<GameObject> = None;
         for player in self.players.iter_mut() {
             if let Some(obj) = take_from_zone(&mut player.hand, obj_id) {
@@ -139,6 +154,10 @@ impl GameState {
                 taken = Some(obj);
                 break;
             }
+            if let Some(obj) = take_from_zone(&mut player.exile, obj_id) {
+                taken = Some(obj);
+                break;
+            }
         }
         let Some(mut obj) = taken else {
             return false;
@@ -151,8 +170,9 @@ impl GameState {
             ZONE_HAND => &mut target.hand,
             ZONE_LIBRARY => &mut target.library,
             ZONE_BATTLEFIELD => &mut target.battlefield,
-            // ZONE_GRAVEYARD and any unknown value (incl. stack/exile
-            // until those land) fall into the graveyard for now. The
+            ZONE_EXILE => &mut target.exile,
+            // ZONE_GRAVEYARD and any unknown value (incl. stack
+            // until that lands) fall into the graveyard for now. The
             // module docstring covers the limitation.
             _ => &mut target.graveyard,
         };

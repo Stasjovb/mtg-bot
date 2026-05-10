@@ -262,6 +262,31 @@ def test_untap_target_missing_target_raises():
         )
 
 
+def test_round_trip_sacrifice_effect():
+    reg = mtg_bot_engine.Registry()
+    pid = reg.register_printing(
+        {
+            "name": "Sacrifice-ish",
+            "mana_cost": {"B": 1},
+            "card_types": ["Instant"],
+            "effects": [
+                {"kind": "sacrifice", "target": {"kind": "any_creature"}}
+            ],
+        }
+    )
+    effects = [dict(e) for e in reg.get_printing_effects(pid)]
+    assert effects[0]["kind"] == "sacrifice"
+    assert dict(effects[0]["target"]) == {"kind": "any_creature"}
+
+
+def test_sacrifice_missing_target_raises():
+    reg = mtg_bot_engine.Registry()
+    with pytest.raises(KeyError, match="target"):
+        reg.register_printing(
+            {"name": "Broken", "effects": [{"kind": "sacrifice"}]}
+        )
+
+
 def test_vanilla_card_with_no_mana_cost_or_effects():
     reg = mtg_bot_engine.Registry()
     pid = reg.register_printing(VANILLA_BLANK)

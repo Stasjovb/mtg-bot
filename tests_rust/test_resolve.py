@@ -1436,8 +1436,10 @@ def test_resolve_exile_target_moves_creature_to_owner_exile(synthetic_state):
     assert synthetic_state.exile_sizes[1] == p1_exile_before + 1
     # Specifically NOT in graveyard (this is exile, not destroy).
     assert synthetic_state.graveyard_sizes[1] == p1_grave_before
-    # Target no longer in any of the four pre-r11 tracked zones.
-    assert synthetic_state.find_object_zone(target_obj_id) is None
+    # Target now in p1's exile. Round-14 extended ``find_object_zone``
+    # to iterate exile, so it resolves to ``ZONE_EXILE`` here (pre-r14
+    # this returned None because exile wasn't searched).
+    assert synthetic_state.find_object_zone(target_obj_id) == ZONE_EXILE
     # And it IS in p1's exile.
     assert synthetic_state.exile_contains(target_obj_id) is True
     # Source instant: p0 graveyard.
@@ -1927,4 +1929,219 @@ def test_clone_then_untap_does_not_affect_original(synthetic_state):
     # Original: untouched on every front (still tapped, source still in hand).
     assert synthetic_state.is_tapped(target_obj_id) is True
     assert synthetic_state.find_object_zone(untwiddle_obj_id) == ZONE_HAND
+    assert synthetic_state.stack_size() == 1
+
+
+# --- round-14 Sacrifice dispatch ------------------------------------
+#
+# Round-14 foundation (`feature/rust-tdd-base-r14`) added a new
+# ``Effect`` variant ``Sacrifice { target: TargetFilter }`` and a
+# temporary stub arm in ``apply_effect`` returning ``ValueError``.
+# This slice replaces the stub with real dispatch.
+#
+# **Scope simplifications for this slice (mirrored in the Rust module
+# docstring on ``state_ops_resolve.rs``):**
+#
+# - **AnyCreature target -> first object on the ACTIVE player's
+#   battlefield (smallest index).** Asymmetric vs the bounce/exile/tap
+#   convention: in real MTG you sacrifice your OWN permanents (CR
+#   701.16), not the defender's. The first-slice simplification picks
+#   ``state.active_player``'s battlefield[0] (mirroring the source-
+#   spell controller convention: a Sacrifice cast by the active player
+#   sacrifices one of the active player's own permanents). No
+#   creature-type filter, no per-spell target choice. Empty active-
+#   battlefield -> fizzle (silent no-op, stack still pops).
+# - **AnyPlayer target on Sacrifice makes no sense** (you can't
+#   sacrifice a player). Raises ValueError loudly, matching the
+#   bounce/exile/tap/untap AnyPlayer convention.
+# - **Target moves to controller's graveyard.** Per CR 701.16, a
+#   sacrificed permanent is put into its owner's graveyard.
+#   First-slice: owner == controller, so it lands in
+#   ``state.active_player``'s graveyard.
+# - **Cross-file friction:** the per-zone movement primitive is
+#   private in ``state_ops_zones.rs`` (the same E0624 pattern that
+#   drove TapTarget / UntapTarget / ReturnToHand inlining). The slice
+#   inlines the minimal ``Arc::make_mut`` pop-from-battlefield +
+#   push-to-graveyard per the recurring pattern.
+
+
+def _altar_dict():
+    """A sacrifice-target sorcery. Schema-allowed target ``any_creature``
+    (the slice's only meaningful Sacrifice target shape — AnyPlayer
+    raises). Real cards with this effect (e.g. Altar's Reap, Costly
+    Plunder) come bundled with secondary effects (draw cards / mill);
+    this fixture is the minimal isolated form."""
+    return {
+        "name": "Test Altar Sacrifice",
+        "card_types": ["Sorcery"],
+        "mana_cost": {"B": 1},
+        "effects": [
+            {
+                "kind": "sacrifice",
+                "target": {"kind": "any_creature"},
+            }
+        ],
+    }
+
+
+def _altar_player_dict():
+    """A schema-allowed but semantically nonsense sacrifice: target
+    'any_player'. Should raise on resolve (cannot sacrifice a player)."""
+    return {
+        "name": "Test Altar-Player (nonsense)",
+        "card_types": ["Sorcery"],
+        "mana_cost": {"B": 1},
+        "effects": [
+            {
+                "kind": "sacrifice",
+                "target": {"kind": "any_player"},
+            }
+        ],
+    }
+
+
+def test_resolve_sacrifice_moves_active_creature_to_graveyard(synthetic_state):
+    """End-to-end composition test (the load-bearing one for
+    Sacrifice).
+
+    Synthetic state: p0's battlefield[0] is at obj_id 0 (controller=0,
+    active_player=0). Cast a sacrifice-target sorcery from active
+    player p0. On resolve, the dispatch picks the FIRST object on the
+    ACTIVE player's own battlefield (p0's bf[0] == obj_id 0) and
+    moves it to p0's graveyard. The source sorcery itself also lands
+    in p0's graveyard (CR 608.2m post-resolve)."""
+    target_obj_id = 0  # First p0 battlefield object.
+    assert synthetic_state.find_object_zone(target_obj_id) == ZONE_BATTLEFIELD
+
+    altar_obj_id = synthetic_state.register_and_inject_object(
+        _altar_dict(), 0, ZONE_HAND
+    )
+    p0_grave_before = synthetic_state.graveyard_sizes[0]
+    p0_bf_before = synthetic_state.battlefield_sizes[0]
+    p1_bf_before = synthetic_state.battlefield_sizes[1]
+    p1_grave_before = synthetic_state.graveyard_sizes[1]
+
+    synthetic_state.push_to_stack(altar_obj_id, 0)
+    synthetic_state.resolve_top_of_stack()
+
+    # Sacrificed target moved to p0's graveyard.
+    assert synthetic_state.find_object_zone(target_obj_id) == ZONE_GRAVEYARD
+    # p0's battlefield shrank by 1; p1's untouched.
+    assert synthetic_state.battlefield_sizes[0] == p0_bf_before - 1
+    assert synthetic_state.battlefield_sizes[1] == p1_bf_before
+    assert synthetic_state.graveyard_sizes[1] == p1_grave_before
+    # Stack drained; source sorcery + sacrificed target both in p0's
+    # graveyard (so +2 vs before).
+    assert synthetic_state.is_stack_empty() is True
+    assert synthetic_state.find_object_zone(altar_obj_id) == ZONE_GRAVEYARD
+    assert synthetic_state.graveyard_sizes[0] == p0_grave_before + 2
+
+
+def test_resolve_sacrifice_no_creature_fizzles(engine):
+    """If the active player has no creature on battlefield, Sacrifice
+    fizzles silently — stack item still pops, source still goes to
+    graveyard (sorcery), nothing else changes. Mirrors the
+    DealDamage / ReturnToHand / ExileTarget / TapTarget / UntapTarget
+    no-target fizzle convention."""
+    state = engine.make_synthetic_state(
+        num_battlefield=0, num_hand=1, num_library=1
+    )
+    altar_obj_id = state.register_and_inject_object(
+        _altar_dict(), 0, ZONE_HAND
+    )
+
+    p0_grave_before = state.graveyard_sizes[0]
+    p0_bf_before = state.battlefield_sizes[0]
+
+    state.push_to_stack(altar_obj_id, 0)
+    state.resolve_top_of_stack()
+
+    # Stack drained, source moved to graveyard, no battlefield delta.
+    assert state.is_stack_empty() is True
+    assert state.find_object_zone(altar_obj_id) == ZONE_GRAVEYARD
+    assert state.graveyard_sizes[0] == p0_grave_before + 1
+    assert state.battlefield_sizes[0] == p0_bf_before
+
+
+def test_resolve_sacrifice_with_any_player_raises(synthetic_state):
+    """Sacrifice with an AnyPlayer target is semantically nonsense (you
+    can't sacrifice a player). The dispatch raises ValueError loudly,
+    matching the ReturnToHand / ExileTarget / TapTarget / UntapTarget
+    AnyPlayer shape."""
+    altar_obj_id = synthetic_state.register_and_inject_object(
+        _altar_player_dict(), 0, ZONE_HAND
+    )
+    synthetic_state.push_to_stack(altar_obj_id, 0)
+
+    with pytest.raises(ValueError):
+        synthetic_state.resolve_top_of_stack()
+
+
+def test_resolve_sacrifice_does_not_target_opponent(engine):
+    """Asymmetric vs bounce/exile/tap: Sacrifice picks the ACTIVE
+    player's battlefield, NOT the defender's. If the active player's
+    battlefield is empty but the opponent has creatures, the spell
+    fizzles — the opponent's creatures are NOT sacrificed. This is
+    the load-bearing ``you sacrifice your own permanents`` test that
+    distinguishes Sacrifice from the other targeted dispatches."""
+    # Build a state where only p1 (the defender) has battlefield
+    # objects. Active player = 0 has zero battlefield. The sacrifice
+    # must NOT touch p1's battlefield.
+    state = engine.make_synthetic_state(
+        num_battlefield=0, num_hand=1, num_library=1
+    )
+    # Inject a creature-shaped object onto p1's battlefield via the
+    # test fixture so the asymmetric "don't sacrifice opponent's"
+    # property is positively observable.
+    creature_dict = {
+        "name": "Test Bear",
+        "card_types": ["Creature"],
+        "mana_cost": {"G": 1, "generic": 1},
+        "effects": [],
+    }
+    p1_creature_id = state.register_and_inject_object(
+        creature_dict, 1, ZONE_BATTLEFIELD
+    )
+    altar_obj_id = state.register_and_inject_object(
+        _altar_dict(), 0, ZONE_HAND
+    )
+
+    p1_bf_before = state.battlefield_sizes[1]
+    p1_grave_before = state.graveyard_sizes[1]
+    p0_grave_before = state.graveyard_sizes[0]
+
+    state.push_to_stack(altar_obj_id, 0)
+    state.resolve_top_of_stack()
+
+    # p1's creature is UNTOUCHED — Sacrifice doesn't reach across.
+    assert state.find_object_zone(p1_creature_id) == ZONE_BATTLEFIELD
+    assert state.battlefield_sizes[1] == p1_bf_before
+    assert state.graveyard_sizes[1] == p1_grave_before
+    # Stack drained; source sorcery in p0's graveyard (post-resolve).
+    assert state.is_stack_empty() is True
+    assert state.find_object_zone(altar_obj_id) == ZONE_GRAVEYARD
+    assert state.graveyard_sizes[0] == p0_grave_before + 1
+
+
+def test_clone_then_sacrifice_does_not_affect_original(synthetic_state):
+    """CoW canary for Sacrifice. Clone the state, then resolve the
+    sacrifice on the clone. The clone's first p0 battlefield object
+    moves to graveyard; the original's stays put."""
+    target_obj_id = 0  # First p0 battlefield object.
+
+    altar_obj_id = synthetic_state.register_and_inject_object(
+        _altar_dict(), 0, ZONE_HAND
+    )
+    synthetic_state.push_to_stack(altar_obj_id, 0)
+    cloned = synthetic_state.clone_once()
+
+    cloned.resolve_top_of_stack()
+
+    # Clone: target sacrificed (in graveyard), source also in graveyard.
+    assert cloned.find_object_zone(target_obj_id) == ZONE_GRAVEYARD
+    assert cloned.find_object_zone(altar_obj_id) == ZONE_GRAVEYARD
+    # Original: untouched on every front (target still on battlefield,
+    # source still in hand, stack still has the altar item).
+    assert synthetic_state.find_object_zone(target_obj_id) == ZONE_BATTLEFIELD
+    assert synthetic_state.find_object_zone(altar_obj_id) == ZONE_HAND
     assert synthetic_state.stack_size() == 1
