@@ -8,6 +8,7 @@ real remotes. These tests pin the static config layer.
 from __future__ import annotations
 
 import json
+import threading
 import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -7283,3 +7284,870 @@ def _stop_serve_app() -> None:
         thread.join(timeout=5)
     _serve_thread_state["server"] = None
     _serve_thread_state["thread"] = None
+
+
+# ---- Phase 2.5: orchestrator wires wait_for_queue_completion -----
+#
+# The bug behind the 2026-05-09 v21 mis-gate: master's eval orchestrator
+# used SSH lifetime as the eval-completion signal. When Mac/Win10 SSH
+# wrappers timed out at 90 min, the surviving in-flight game results
+# (already flushed to per-shard progress JSONs by the remote workers)
+# were dropped because the orchestrator marked those shards ``failed``.
+# Fix: master polls ``/queue/status`` until the queue itself drains
+# (per-job leases + heartbeats let surviving workers reclaim a dead
+# shard's jobs); aggregation reads per-shard progress JSONs so an
+# SSH-killed shard still contributes its flushed counts.
+
+
+def test_aggregate_eval_counts_from_progress_prefers_result_json(tmp_path):
+    """The aggregator helper reads per-shard ``_result.json`` first
+    (cleanly-finished shards' authoritative counts) and only falls
+    back to the live progress JSON when no result file exists. Two
+    shards: A wrote a result.json (clean SSH exit), B only wrote a
+    progress JSON (SSH-killed mid-run). Counts sum across both."""
+    from mtg_bot.training.distributed import (
+        _aggregate_eval_counts_from_progress,
+    )
+
+    # Shard A: cleanly finished. result.json is the authoritative source.
+    (tmp_path / "iter1_shard_A_result.json").write_text(json.dumps({
+        "wins_new": 5, "wins_old": 3, "draws": 1, "crashed": 0,
+        "timed_out": 0,
+    }), encoding="utf-8")
+    # A's progress JSON has stale counts (e.g. last poll before the
+    # final flush); the aggregator must ignore it because the result
+    # file takes precedence.
+    (tmp_path / "iter1_shard_A.json").write_text(json.dumps({
+        "wins_new": 4, "wins_old": 2, "draws": 1, "crashed": 0,
+        "timed_out": 0, "started_at": _now_iso(),
+    }), encoding="utf-8")
+
+    # Shard B: SSH-killed before a result file could be scp'd back.
+    # Progress JSON is the only source.
+    (tmp_path / "iter1_shard_B.json").write_text(json.dumps({
+        "wins_new": 7, "wins_old": 4, "draws": 0, "crashed": 1,
+        "timed_out": 0, "started_at": _now_iso(),
+    }), encoding="utf-8")
+
+    totals = _aggregate_eval_counts_from_progress(tmp_path, "iter1")
+    assert totals["wins_new"] == 5 + 7
+    assert totals["wins_old"] == 3 + 4
+    assert totals["draws"] == 1 + 0
+    assert totals["crashed"] == 0 + 1
+    assert totals["timed_out"] == 0 + 0
+    assert totals["n_games"] == (5 + 3 + 1) + (7 + 4 + 1)
+
+
+def test_aggregate_eval_counts_from_progress_skips_stale_progress_json(
+    tmp_path,
+):
+    """Stale-JSON filter: a shard's progress JSON whose
+    ``started_at`` predates the orchestrator's wall-clock at queue
+    init is dropped (leftover from a prior run with the same
+    run_id). Mirrors :class:`_EarlyStopPoller`'s filter."""
+    from mtg_bot.training.distributed import (
+        _aggregate_eval_counts_from_progress,
+    )
+
+    # Stale shard: wrote 100 wins last run.
+    (tmp_path / "iter1_shard_old.json").write_text(json.dumps({
+        "wins_new": 100, "wins_old": 50,
+        "draws": 0, "crashed": 0, "timed_out": 0,
+        "started_at": _iso_offset_seconds(-3600),
+    }), encoding="utf-8")
+    # Fresh shard.
+    (tmp_path / "iter1_shard_new.json").write_text(json.dumps({
+        "wins_new": 2, "wins_old": 1,
+        "draws": 0, "crashed": 0, "timed_out": 0,
+        "started_at": _iso_offset_seconds(60),
+    }), encoding="utf-8")
+
+    totals = _aggregate_eval_counts_from_progress(
+        tmp_path, "iter1", started_iso=_now_iso(),
+    )
+    assert totals["wins_new"] == 2
+    assert totals["wins_old"] == 1
+    assert totals["n_games"] == 3
+
+
+def test_aggregate_eval_counts_from_progress_no_jsons_returns_zero(
+    tmp_path,
+):
+    """No per-shard JSONs at all → returns the all-zeros dict so the
+    orchestrator's ``totals == 0`` check fires the all-shards-failed
+    path."""
+    from mtg_bot.training.distributed import (
+        _aggregate_eval_counts_from_progress,
+    )
+    totals = _aggregate_eval_counts_from_progress(tmp_path, "missing")
+    assert totals == {
+        "n_games": 0, "wins_new": 0, "wins_old": 0,
+        "draws": 0, "crashed": 0, "timed_out": 0,
+    }
+
+
+def test_aggregate_eval_counts_from_progress_skips_unreadable_files(
+    tmp_path,
+):
+    """Corrupted JSON / partial writes during a poll cycle don't
+    crash the aggregator — they're skipped, the next pass picks up
+    the cleanly-written file."""
+    from mtg_bot.training.distributed import (
+        _aggregate_eval_counts_from_progress,
+    )
+    (tmp_path / "iter1_shard_corrupt.json").write_text(
+        "{not valid json", encoding="utf-8",
+    )
+    (tmp_path / "iter1_shard_ok.json").write_text(json.dumps({
+        "wins_new": 1, "wins_old": 0, "draws": 0,
+        "crashed": 0, "timed_out": 0,
+        "started_at": _now_iso(),
+    }), encoding="utf-8")
+
+    totals = _aggregate_eval_counts_from_progress(tmp_path, "iter1")
+    assert totals["n_games"] == 1
+
+
+def test_aggregate_eval_counts_from_progress_corrupt_result_file_skipped(
+    tmp_path,
+):
+    """A corrupt result.json is skipped, but its progress JSON is
+    NOT used as a fallback for that label — once we've seen the
+    result file's existence we treat that shard as "tried for clean
+    counts and got nothing." Other shards still aggregate."""
+    from mtg_bot.training.distributed import (
+        _aggregate_eval_counts_from_progress,
+    )
+    # Shard A's result file is corrupt — pass 1 skips it.
+    (tmp_path / "iter1_shard_A_result.json").write_text(
+        "}}}}", encoding="utf-8",
+    )
+    # Shard A's progress JSON is fine — pass 2 picks it up since
+    # pass 1 didn't add A to seen_labels (the corrupt result wasn't
+    # successfully read).
+    (tmp_path / "iter1_shard_A.json").write_text(json.dumps({
+        "wins_new": 3, "wins_old": 2, "draws": 0,
+        "crashed": 0, "timed_out": 0,
+        "started_at": _now_iso(),
+    }), encoding="utf-8")
+    totals = _aggregate_eval_counts_from_progress(tmp_path, "iter1")
+    # A's progress JSON salvages the count.
+    assert totals["wins_new"] == 3
+    assert totals["wins_old"] == 2
+
+
+def test_run_distributed_eval_aggregates_after_remote_ssh_wedge(
+    monkeypatch, tmp_path,
+):
+    """The headline Phase 2.5 test: a remote shard whose SSH wrapper
+    hangs past the queue-drain point. The local shard finishes the
+    work; the orchestrator polls /queue/status, sees the queue
+    drained, and aggregates from per-shard progress JSONs WITHOUT
+    waiting for the wedged remote's future to return.
+
+    Without the Phase 2.5 wiring, master would have waited on
+    ``as_completed`` futures forever (or until the SSH 90-min
+    timeout fired) and dropped the wedged shard's flushed counts."""
+    from mtg_bot.training import distributed as dist
+    from mtg_bot.training.distributed import (
+        EvalJobSpec, ShardConfig, ShardsConfig,
+        run_distributed_eval,
+    )
+
+    weights_path, hidden_sizes = _tiny_dual_head_weights(tmp_path)
+    progress_dir = tmp_path / "training_progress"
+    spec = EvalJobSpec(
+        new_weights_path=str(weights_path),
+        old_weights_path=str(weights_path),
+        samples=1, inner_nodes=10, hidden_sizes=hidden_sizes,
+        base_seed=0, enable_mulligans=False,
+        per_game_timeout_sec=None,
+        opponent_label="self",
+    )
+    cfg = ShardsConfig(shards=(
+        ShardConfig(host="local", label="local_master", n_workers=1),
+        ShardConfig(
+            host="wedged-mac", user="g", repo_path="/r",
+            venv_python=".venv/bin/python", label="wedged_mac",
+        ),
+    ))
+
+    wedge_release = threading.Event()
+
+    def _wedged_remote_runner(shard, *args, **kwargs):
+        """Simulates a remote shard that already wrote some progress
+        JSON contents (the master-side ProgressPoller pulled them
+        back) BEFORE the SSH wrapper hung. The runner blocks until
+        the orchestrator finishes — exactly the failure mode SSH
+        timeout produces in production."""
+        from mtg_bot.training.distributed import ShardEvalReport
+        # Simulate the master-side ProgressPoller having scp'd a
+        # partial progress JSON from the remote at the moment SSH
+        # hung. Counts: 2 wins_new, 1 wins_old (3 games done).
+        progress_path = (
+            progress_dir
+            / f"iter_wedge_test_shard_{shard.display_label}.json"
+        )
+        progress_path.parent.mkdir(parents=True, exist_ok=True)
+        progress_path.write_text(json.dumps({
+            "run_id": (
+                f"iter_wedge_test_shard_{shard.display_label}"
+            ),
+            "kind": "eval",
+            "status": "running",
+            "started_at": _now_iso(),
+            "n_games_total": 4,
+            "n_games_done": 3,
+            "wins_new": 2, "wins_old": 1, "draws": 0,
+            "crashed": 0, "timed_out": 0,
+        }), encoding="utf-8")
+        # Block until the orchestrator stops waiting on us. Without
+        # Phase 2.5 wiring this would deadlock the test (orchestrator
+        # waits for SSH future; future waits for the orchestrator).
+        wedge_release.wait(timeout=30)
+        return ShardEvalReport(
+            shard_label=shard.display_label, success=False,
+            counts={
+                "n_games": 0, "wins_new": 0, "wins_old": 0,
+                "draws": 0, "crashed": 0,
+            },
+            error="simulated SSH wedge",
+            error_stage="eval",
+        )
+
+    monkeypatch.setattr(
+        dist, "run_shard_eval_remote", _wedged_remote_runner,
+    )
+
+    queue_url, server = _start_queue_server()
+    # Live serve.py app is needed for /queue/status.
+    serve = _load_serve_module()
+    app = serve.create_app(
+        repo_url="(unused)", master_pubkey="",
+        master_tailnet_name="m", port=5099,
+        template_dir=Path(__file__).resolve().parents[2] / "scripts",
+        repo_root=None, lease_ttl_sec=60, max_attempts=3,
+    )
+    base_url = _serve_app_in_process(app)
+    server.shutdown()  # close the bare stub; serve.py is the queue
+    try:
+        counts = run_distributed_eval(
+            cfg, spec,
+            progress_dir=progress_dir,
+            run_id_prefix="iter_wedge_test",
+            total_games=4,
+            queue_url=base_url,
+            queue_drain_grace_s=0.5,
+        )
+    finally:
+        wedge_release.set()
+        _stop_serve_app()
+
+    # Local shard's games + the wedged remote's pre-wedge flushed
+    # counts are both reflected in the totals.
+    assert counts["n_games"] >= 3, (
+        f"expected at least the wedged shard's 3 flushed games "
+        f"plus local's contribution, got {counts}"
+    )
+    # The wedged shard's counts (2 wins_new, 1 wins_old) made it.
+    assert counts["wins_new"] >= 2
+    assert counts["wins_old"] >= 1
+
+
+def test_run_distributed_eval_uses_queue_completion_signal_not_ssh_futures(
+    monkeypatch, tmp_path,
+):
+    """Pin the orchestrator's loop: when /queue/status reports
+    ``inflight==0 && next==total`` the orchestrator returns even
+    though a shard runner is still in-progress. Verifies the
+    completion signal is the queue, not the futures."""
+    from mtg_bot.training import distributed as dist
+    from mtg_bot.training.distributed import (
+        EvalJobSpec, ShardConfig, ShardsConfig,
+        run_distributed_eval,
+    )
+
+    weights_path, hidden_sizes = _tiny_dual_head_weights(tmp_path)
+    progress_dir = tmp_path / "training_progress"
+    spec = EvalJobSpec(
+        new_weights_path=str(weights_path),
+        old_weights_path=str(weights_path),
+        samples=1, inner_nodes=10, hidden_sizes=hidden_sizes,
+        base_seed=0, enable_mulligans=False,
+        per_game_timeout_sec=None,
+        opponent_label="self",
+    )
+    cfg = ShardsConfig(shards=(
+        ShardConfig(host="local", label="A", n_workers=1),
+        ShardConfig(
+            host="slow-remote", user="g", repo_path="/r",
+            venv_python=".venv/bin/python", label="slow_remote",
+        ),
+    ))
+
+    slow_release = threading.Event()
+    runner_returned_t: list[float] = []
+
+    def _slow_remote_runner(shard, *args, **kwargs):
+        from mtg_bot.training.distributed import ShardEvalReport
+        # No work — just block. The local shard drains the queue.
+        slow_release.wait(timeout=30)
+        runner_returned_t.append(time.monotonic())
+        return ShardEvalReport(
+            shard_label=shard.display_label, success=False,
+            counts={
+                "n_games": 0, "wins_new": 0, "wins_old": 0,
+                "draws": 0, "crashed": 0,
+            },
+            error="never finished",
+            error_stage="eval",
+        )
+
+    monkeypatch.setattr(
+        dist, "run_shard_eval_remote", _slow_remote_runner,
+    )
+
+    serve = _load_serve_module()
+    app = serve.create_app(
+        repo_url="(unused)", master_pubkey="",
+        master_tailnet_name="m", port=5099,
+        template_dir=Path(__file__).resolve().parents[2] / "scripts",
+        repo_root=None, lease_ttl_sec=60, max_attempts=3,
+    )
+    base_url = _serve_app_in_process(app)
+    orchestrator_t0 = time.monotonic()
+    try:
+        counts = run_distributed_eval(
+            cfg, spec,
+            progress_dir=progress_dir,
+            run_id_prefix="iter_completion_signal",
+            total_games=4,
+            queue_url=base_url,
+            queue_drain_grace_s=0.2,
+        )
+        orchestrator_t1 = time.monotonic()
+    finally:
+        slow_release.set()
+        _stop_serve_app()
+
+    # Orchestrator returned BEFORE the slow remote's runner did.
+    # Without Phase 2.5 wiring the orchestrator would have blocked
+    # on ``as_completed`` and only returned after slow_release fired
+    # (i.e. AFTER the test's ``finally``).
+    assert orchestrator_t1 < orchestrator_t0 + 25, (
+        "orchestrator hung longer than the bounded test patience — "
+        "indicates it's still waiting on SSH futures rather than "
+        "the queue completion signal"
+    )
+    # Local shard's counts came through.
+    assert counts["n_games"] >= 1
+
+
+def test_run_distributed_eval_all_shards_die_returns_partial_or_raises(
+    monkeypatch, tmp_path,
+):
+    """All-shards-die scenario: every shard's runner raises
+    immediately. The queue can't drain (no workers taking jobs).
+    Master must NOT hang waiting for queue completion — its
+    dual-signal loop notices ``done_count == len(futures)`` and
+    falls through to aggregation, which surfaces the all-failed
+    case as a RuntimeError because no per-shard progress JSON has
+    counts."""
+    from mtg_bot.training import distributed as dist
+    from mtg_bot.training.distributed import (
+        EvalJobSpec, ShardConfig, ShardsConfig,
+        run_distributed_eval,
+    )
+
+    weights_path, hidden_sizes = _tiny_dual_head_weights(tmp_path)
+    progress_dir = tmp_path / "training_progress"
+    spec = EvalJobSpec(
+        new_weights_path=str(weights_path),
+        old_weights_path=str(weights_path),
+        samples=1, inner_nodes=10, hidden_sizes=hidden_sizes,
+        base_seed=0, enable_mulligans=False,
+        per_game_timeout_sec=None,
+        opponent_label="self",
+    )
+    cfg = ShardsConfig(shards=(
+        ShardConfig(host="local", label="A", n_workers=1),
+        ShardConfig(host="local", label="B", n_workers=1),
+    ))
+
+    def _always_boom(*args, **kwargs):
+        raise RuntimeError("eval boom")
+    monkeypatch.setattr(dist, "run_shard_eval_pull", _always_boom)
+
+    serve = _load_serve_module()
+    app = serve.create_app(
+        repo_url="(unused)", master_pubkey="",
+        master_tailnet_name="m", port=5099,
+        template_dir=Path(__file__).resolve().parents[2] / "scripts",
+        repo_root=None, lease_ttl_sec=60, max_attempts=3,
+    )
+    base_url = _serve_app_in_process(app)
+    t0 = time.monotonic()
+    try:
+        # The orchestrator's queue_max_wait_s is far larger than 5s,
+        # but the dual-signal loop should bail out as soon as both
+        # futures are done — well under the wait cap.
+        with pytest.raises(RuntimeError, match="all distributed eval"):
+            run_distributed_eval(
+                cfg, spec,
+                progress_dir=progress_dir,
+                run_id_prefix="iter_all_die",
+                total_games=4,
+                queue_url=base_url,
+                queue_drain_grace_s=0.2,
+            )
+        t1 = time.monotonic()
+    finally:
+        _stop_serve_app()
+    assert (t1 - t0) < 30, (
+        "orchestrator took too long to give up despite all shards "
+        "having returned — dual-signal loop is broken"
+    )
+
+
+def test_run_distributed_eval_max_attempts_failures_become_crashed(
+    tmp_path,
+):
+    """Sub-design point from the task spec: when max_attempts is
+    exhausted on some queue jobs (true persistent failures), the
+    eval still completes — those games are reported as ``crashed``
+    rather than holding the eval open forever.
+
+    Set up a queue with 4 jobs, max_attempts=1. One shard finishes
+    one job cleanly, then fails another via /queue/fail (driving it
+    over max_attempts → ``failed``). The orchestrator sees
+    ``inflight==0 && next==total && failed > 0``, treats the queue
+    as drained, and surfaces ``failed`` as ``crashed`` in totals."""
+    from mtg_bot.training.distributed import (
+        _aggregate_eval_counts_from_progress,
+        wait_for_queue_completion,
+    )
+
+    serve = _load_serve_module()
+    app = serve.create_app(
+        repo_url="(unused)", master_pubkey="",
+        master_tailnet_name="m", port=5099,
+        template_dir=Path(__file__).resolve().parents[2] / "scripts",
+        repo_root=None, lease_ttl_sec=60, max_attempts=1,
+    )
+    base_url = _serve_app_in_process(app)
+    try:
+        import urllib.request
+        import json as _json
+
+        def _post(path, body):
+            req = urllib.request.Request(
+                f"{base_url}{path}",
+                data=_json.dumps(body).encode("utf-8"),
+                headers={"Content-Type": "application/json"},
+            )
+            return _json.loads(urllib.request.urlopen(req).read())
+
+        _post("/queue/init", {
+            "run_id": "iter_maxattempts", "total_games": 4,
+        })
+        # Worker takes idx 0..3, finishes 0, fails 1..3 (each fail
+        # exhausts max_attempts=1).
+        for _ in range(4):
+            _post("/queue/take", {
+                "run_id": "iter_maxattempts", "batch_size": 1,
+                "worker_id": "alice",
+            })
+        _post("/queue/finish", {
+            "run_id": "iter_maxattempts", "worker_id": "alice",
+            "job_ids": [0],
+        })
+        _post("/queue/fail", {
+            "run_id": "iter_maxattempts", "worker_id": "alice",
+            "job_ids": [1, 2, 3],
+        })
+
+        # Shard A wrote a progress JSON for the one game it
+        # finished cleanly.
+        (tmp_path / "iter_maxattempts_shard_A.json").write_text(
+            json.dumps({
+                "wins_new": 1, "wins_old": 0, "draws": 0,
+                "crashed": 0, "timed_out": 0,
+                "started_at": _now_iso(),
+            }), encoding="utf-8",
+        )
+
+        payload = wait_for_queue_completion(
+            base_url, "iter_maxattempts",
+            interval_s=0.05, max_wait_s=5.0,
+        )
+        q = payload["queues"]["iter_maxattempts"]
+        # Queue is "done" by Phase 2.5's definition:
+        # inflight==0 && next==total && ready_reclaimed==0.
+        assert q["inflight"] == 0
+        assert q["ready_reclaimed"] == 0
+        assert q["next"] == 4
+        assert q["failed"] == 3
+
+        # Mirror the orchestrator's surface logic:
+        totals = _aggregate_eval_counts_from_progress(
+            tmp_path, "iter_maxattempts",
+        )
+        # Add queue-level failures as crashed (orchestrator's
+        # convention).
+        totals["crashed"] += int(q.get("failed", 0))
+        totals["n_games"] += int(q.get("failed", 0))
+
+        # 1 win_new from the cleanly-finished game, 3 crashed from
+        # max_attempts-exhausted failures.
+        assert totals["wins_new"] == 1
+        assert totals["crashed"] == 3
+        assert totals["n_games"] == 4
+    finally:
+        _stop_serve_app()
+
+
+def test_run_distributed_eval_sentinel_stop_aggregates_partial_counts(
+    monkeypatch, tmp_path,
+):
+    """Sentinel-stop scenario: ``_EarlyStopPoller`` posts
+    /queue/close once enough progress accumulates. Master's
+    queue-completion check accepts ``closed=True && inflight==0``
+    as a terminal state (per ``wait_for_queue_completion`` design),
+    so a sentinel-driven stop doesn't hang the orchestrator —
+    partial results aggregate cleanly."""
+    from mtg_bot.training import distributed as dist
+    from mtg_bot.training.distributed import (
+        EvalJobSpec, ShardConfig, ShardsConfig,
+        run_distributed_eval,
+    )
+
+    weights_path, hidden_sizes = _tiny_dual_head_weights(tmp_path)
+    progress_dir = tmp_path / "training_progress"
+    spec = EvalJobSpec(
+        new_weights_path=str(weights_path),
+        old_weights_path=str(weights_path),
+        samples=1, inner_nodes=10, hidden_sizes=hidden_sizes,
+        base_seed=0, enable_mulligans=False,
+        per_game_timeout_sec=None,
+        opponent_label="self",
+    )
+    cfg = ShardsConfig(shards=(
+        ShardConfig(host="local", label="A", n_workers=1),
+        ShardConfig(host="local", label="B", n_workers=1),
+    ))
+
+    serve = _load_serve_module()
+    app = serve.create_app(
+        repo_url="(unused)", master_pubkey="",
+        master_tailnet_name="m", port=5099,
+        template_dir=Path(__file__).resolve().parents[2] / "scripts",
+        repo_root=None, lease_ttl_sec=60, max_attempts=3,
+    )
+    base_url = _serve_app_in_process(app)
+    try:
+        # slack_extra=2 → queue size 6, target 4. Once 4 successful
+        # games are recorded the early-stop poller closes the
+        # queue. The orchestrator's queue-completion check then
+        # sees ``closed=True && inflight==0`` and returns.
+        counts = run_distributed_eval(
+            cfg, spec,
+            progress_dir=progress_dir,
+            run_id_prefix="iter_sentinel_stop",
+            total_games=4,
+            queue_url=base_url,
+            slack_extra=2,
+            queue_drain_grace_s=0.5,
+        )
+    finally:
+        _stop_serve_app()
+
+    # At least the target games landed; slack may or may not have
+    # contributed.
+    assert counts["n_games"] >= 4
+    assert counts["n_games"] <= 6
+
+
+def test_run_distributed_eval_queue_max_wait_timeout_aggregates_anyway(
+    monkeypatch, tmp_path,
+):
+    """``queue_max_wait_s`` timeout fallback: a queue that never
+    drains AND has shards still running (not done) eventually
+    forces the orchestrator to bail with whatever per-shard JSONs
+    were written. This covers the deadline-elapsed branch of the
+    dual-signal loop."""
+    from mtg_bot.training import distributed as dist
+    from mtg_bot.training.distributed import (
+        EvalJobSpec, ShardConfig, ShardsConfig,
+        run_distributed_eval,
+    )
+
+    weights_path, hidden_sizes = _tiny_dual_head_weights(tmp_path)
+    progress_dir = tmp_path / "training_progress"
+    spec = EvalJobSpec(
+        new_weights_path=str(weights_path),
+        old_weights_path=str(weights_path),
+        samples=1, inner_nodes=10, hidden_sizes=hidden_sizes,
+        base_seed=0, enable_mulligans=False,
+        per_game_timeout_sec=None,
+        opponent_label="self",
+    )
+    cfg = ShardsConfig(shards=(
+        ShardConfig(host="local", label="A", n_workers=1),
+        ShardConfig(
+            host="dead-mac", user="g", repo_path="/r",
+            venv_python=".venv/bin/python", label="dead_mac",
+        ),
+    ))
+
+    block_until_test_done = threading.Event()
+
+    def _hung_local(*args, **kwargs):
+        # Local shard simulates a worker that takes a job from the
+        # queue but never finishes it (queue inflight stays > 0).
+        # Write a partial progress JSON so the orchestrator has
+        # SOMETHING to aggregate when its max_wait_s fires.
+        label = kwargs.get("label", "A")
+        progress_path = (
+            progress_dir
+            / f"iter_max_wait_test_shard_{label}.json"
+        )
+        progress_path.parent.mkdir(parents=True, exist_ok=True)
+        progress_path.write_text(json.dumps({
+            "kind": "eval", "status": "running",
+            "started_at": _now_iso(),
+            "wins_new": 1, "wins_old": 0, "draws": 0,
+            "crashed": 0, "timed_out": 0,
+        }), encoding="utf-8")
+        block_until_test_done.wait(timeout=30)
+        return {
+            "n_games": 1, "wins_new": 1, "wins_old": 0,
+            "draws": 0, "crashed": 0, "timed_out": 0,
+        }
+
+    def _hung_remote(shard, *args, **kwargs):
+        from mtg_bot.training.distributed import ShardEvalReport
+        block_until_test_done.wait(timeout=30)
+        return ShardEvalReport(
+            shard_label=shard.display_label, success=False,
+            counts={
+                "n_games": 0, "wins_new": 0, "wins_old": 0,
+                "draws": 0, "crashed": 0,
+            },
+            error="never finished",
+            error_stage="eval",
+        )
+
+    monkeypatch.setattr(dist, "run_shard_eval_pull", _hung_local)
+    monkeypatch.setattr(dist, "run_shard_eval_remote", _hung_remote)
+
+    serve = _load_serve_module()
+    app = serve.create_app(
+        repo_url="(unused)", master_pubkey="",
+        master_tailnet_name="m", port=5099,
+        template_dir=Path(__file__).resolve().parents[2] / "scripts",
+        repo_root=None, lease_ttl_sec=60, max_attempts=3,
+    )
+    base_url = _serve_app_in_process(app)
+    try:
+        # ``queue_max_wait_s=0.5`` forces the deadline branch.
+        # Local shard's progress JSON has 1 win_new, so totals
+        # land non-zero and the orchestrator returns rather than
+        # raising.
+        counts = run_distributed_eval(
+            cfg, spec,
+            progress_dir=progress_dir,
+            run_id_prefix="iter_max_wait_test",
+            total_games=4,
+            queue_url=base_url,
+            queue_max_wait_s=0.5,
+            queue_drain_grace_s=0.1,
+        )
+    finally:
+        block_until_test_done.set()
+        _stop_serve_app()
+
+    # The local shard's pre-stall progress JSON survives the
+    # max_wait deadline. Wedged remote contributes zeros (no JSON).
+    assert counts["wins_new"] == 1
+    assert counts["n_games"] == 1
+
+
+def test_run_distributed_eval_surfaces_queue_failed_as_crashed(
+    monkeypatch, tmp_path,
+):
+    """When workers fail jobs past max_attempts the queue's
+    ``failed`` counter increments. The orchestrator surfaces those
+    as ``crashed`` in totals so the eval gate sees an honest
+    sample size — full-orchestrator coverage for the
+    queue_failed-fold-into-crashed branch."""
+    from mtg_bot.training import distributed as dist
+    from mtg_bot.training.distributed import (
+        EvalJobSpec, ShardConfig, ShardsConfig,
+        run_distributed_eval,
+    )
+
+    weights_path, hidden_sizes = _tiny_dual_head_weights(tmp_path)
+    progress_dir = tmp_path / "training_progress"
+    spec = EvalJobSpec(
+        new_weights_path=str(weights_path),
+        old_weights_path=str(weights_path),
+        samples=1, inner_nodes=10, hidden_sizes=hidden_sizes,
+        base_seed=0, enable_mulligans=False,
+        per_game_timeout_sec=None,
+        opponent_label="self",
+    )
+    cfg = ShardsConfig(shards=(
+        ShardConfig(host="local", label="A", n_workers=1),
+    ))
+
+    captured_queue_url: list[str] = []
+
+    def _failer_local(*args, **kwargs):
+        """Local shard takes every job from the queue and
+        immediately /queue/fail's it — driving the queue's
+        max_attempts to surface a non-zero ``failed`` count."""
+        import json as _json
+        import urllib.request
+        url = kwargs["queue_url"]
+        run_id = kwargs["run_id"]
+        captured_queue_url.append(url)
+
+        def _post(path, body):
+            req = urllib.request.Request(
+                f"{url.rstrip('/')}{path}",
+                data=_json.dumps(body).encode("utf-8"),
+                headers={"Content-Type": "application/json"},
+            )
+            return _json.loads(urllib.request.urlopen(req).read())
+
+        # Drain the queue by failing every index repeatedly until
+        # every one is over max_attempts.
+        for _ in range(20):
+            r = _post("/queue/take", {
+                "run_id": run_id, "batch_size": 1,
+                "worker_id": "alice",
+            })
+            games = r.get("games") or []
+            if not games:
+                break
+            _post("/queue/fail", {
+                "run_id": run_id, "worker_id": "alice",
+                "job_ids": games,
+            })
+        return {
+            "n_games": 0, "wins_new": 0, "wins_old": 0,
+            "draws": 0, "crashed": 0, "timed_out": 0,
+        }
+
+    monkeypatch.setattr(dist, "run_shard_eval_pull", _failer_local)
+
+    serve = _load_serve_module()
+    app = serve.create_app(
+        repo_url="(unused)", master_pubkey="",
+        master_tailnet_name="m", port=5099,
+        template_dir=Path(__file__).resolve().parents[2] / "scripts",
+        repo_root=None, lease_ttl_sec=60, max_attempts=1,
+    )
+    base_url = _serve_app_in_process(app)
+    try:
+        counts = run_distributed_eval(
+            cfg, spec,
+            progress_dir=progress_dir,
+            run_id_prefix="iter_max_attempts_eval",
+            total_games=3,
+            queue_url=base_url,
+            queue_drain_grace_s=0.1,
+        )
+    finally:
+        _stop_serve_app()
+    # All 3 jobs hit max_attempts → 3 queue-level failures →
+    # surfaced as crashed in totals.
+    assert counts["crashed"] == 3
+    assert counts["n_games"] == 3
+
+
+def test_run_distributed_eval_orchestrator_returns_before_ssh_unblocks(
+    monkeypatch, tmp_path,
+):
+    """Tighter pin on the future-cancel path: a remote shard's
+    runner is still blocked when the orchestrator returns. This is
+    the production case (SSH hung past 90 min) reproduced
+    deterministically. Must complete WITHOUT waiting on the
+    blocked future."""
+    from mtg_bot.training import distributed as dist
+    from mtg_bot.training.distributed import (
+        EvalJobSpec, ShardConfig, ShardsConfig,
+        run_distributed_eval,
+    )
+
+    weights_path, hidden_sizes = _tiny_dual_head_weights(tmp_path)
+    progress_dir = tmp_path / "training_progress"
+    spec = EvalJobSpec(
+        new_weights_path=str(weights_path),
+        old_weights_path=str(weights_path),
+        samples=1, inner_nodes=10, hidden_sizes=hidden_sizes,
+        base_seed=0, enable_mulligans=False,
+        per_game_timeout_sec=None,
+        opponent_label="self",
+    )
+    cfg = ShardsConfig(shards=(
+        ShardConfig(host="local", label="local_master", n_workers=1),
+        ShardConfig(
+            host="hung-mac", user="g", repo_path="/r",
+            venv_python=".venv/bin/python", label="hung_mac",
+        ),
+    ))
+
+    hung_runner_t0 = []
+    hung_runner_returned = threading.Event()
+
+    def _hung_remote(shard, *args, **kwargs):
+        from mtg_bot.training.distributed import ShardEvalReport
+        hung_runner_t0.append(time.monotonic())
+        # Block long enough that the orchestrator's grace period
+        # MUST elapse before this runner can return its report.
+        time.sleep(10)
+        hung_runner_returned.set()
+        return ShardEvalReport(
+            shard_label=shard.display_label, success=False,
+            counts={
+                "n_games": 0, "wins_new": 0, "wins_old": 0,
+                "draws": 0, "crashed": 0,
+            },
+            error="simulated hung SSH",
+            error_stage="eval",
+        )
+
+    monkeypatch.setattr(dist, "run_shard_eval_remote", _hung_remote)
+
+    serve = _load_serve_module()
+    app = serve.create_app(
+        repo_url="(unused)", master_pubkey="",
+        master_tailnet_name="m", port=5099,
+        template_dir=Path(__file__).resolve().parents[2] / "scripts",
+        repo_root=None, lease_ttl_sec=60, max_attempts=3,
+    )
+    base_url = _serve_app_in_process(app)
+    try:
+        counts = run_distributed_eval(
+            cfg, spec,
+            progress_dir=progress_dir,
+            run_id_prefix="iter_hung_ssh",
+            total_games=2,
+            queue_url=base_url,
+            queue_drain_grace_s=0.3,
+        )
+    finally:
+        _stop_serve_app()
+
+    # Orchestrator returned despite the hung runner still sleeping.
+    assert not hung_runner_returned.is_set(), (
+        "orchestrator waited on the hung future instead of "
+        "returning when the queue drained"
+    )
+    # Local shard's games came through.
+    assert counts["n_games"] >= 1
+    # The hung remote shows up in the orchestrator's stderr
+    # summary as ``ssh_timeout_recovered`` — pinned indirectly via
+    # the totals path: hung remote contributes zero counts (no
+    # progress JSON written), local provides everything.

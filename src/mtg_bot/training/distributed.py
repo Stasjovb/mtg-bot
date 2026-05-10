@@ -1823,6 +1823,130 @@ def run_distributed_self_play(
     return output_paths
 
 
+# ---- distributed-eval result aggregation -----------------------------
+#
+# Phase 2.5 of the recoverable-eval track wires ``run_distributed_eval``
+# to ``wait_for_queue_completion``: master no longer treats SSH lifetime
+# as the eval-completion signal. The queue itself owns "did this job
+# complete." When a remote's SSH wrapper times out at the 90-min hard
+# floor, master previously marked that shard ``failed`` and dropped its
+# counts entirely — that's the bug behind the 2026-05-09 regression
+# (master-only sample said v21 lost 47.9%, but combined master+Mac+Win10
+# said v21 won 52.07%).
+#
+# Aggregation source: per-shard progress JSONs (already updated live by
+# ``_ProgressPoller`` for remote shards and directly by the local shard
+# process). The result.json files remain the preferred source for shards
+# whose SSH completed cleanly (those counts are final). For SSH-killed
+# shards the progress JSON's last-polled snapshot is the best we have —
+# and crucially, every game that hit ``/queue/finish`` over the wire is
+# already reflected there because the worker writes EvalProgress on each
+# ``record_game`` call (see EvalProgress.record_game which flushes the
+# JSON immediately).
+
+# Fields summed across shards by ``_aggregate_eval_counts_from_progress``.
+# Names match :class:`progress.EvalProgress`'s on-disk JSON keys.
+_EVAL_PROGRESS_SUM_FIELDS = (
+    "wins_new", "wins_old", "draws", "crashed", "timed_out",
+)
+
+
+def _aggregate_eval_counts_from_progress(
+    progress_dir: Path,
+    run_id_prefix: str,
+    *,
+    started_iso: Optional[str] = None,
+) -> dict[str, int]:
+    """Sum eval counts across every per-shard progress JSON, preferring
+    the cleanly-finished ``..._result.json`` for any shard that wrote
+    one.
+
+    For each shard label found in ``progress_dir``:
+
+    * If a sibling ``..._shard_<label>_result.json`` exists, use those
+      final counts (that means the shard's SSH connection completed
+      cleanly and the orchestrator scp'd the final result file back).
+    * Otherwise, fall back to the live ``..._shard_<label>.json``
+      progress snapshot — its ``wins_new / wins_old / draws /
+      crashed / timed_out`` counters are written every ``record_game``
+      call, so even a hard SSH-kill leaves the most recent N-1 games'
+      results on disk via the master's ``_ProgressPoller``.
+
+    ``started_iso`` mirrors :class:`_EarlyStopPoller`'s stale-JSON
+    filter: shard JSONs with ``started_at`` predating this value are
+    dropped as leftovers from a prior run with the same ``run_id``.
+    Pass the orchestrator's wall-clock at queue-init time. ``None``
+    disables the filter (used by tests that pre-populate JSONs).
+
+    Returns the standard 6-key dict ``run_distributed_eval`` returns,
+    with ``n_games = sum of the five outcome counters``.
+    """
+    sums = {f: 0 for f in _EVAL_PROGRESS_SUM_FIELDS}
+    pattern = f"{run_id_prefix}_shard_*.json"
+    seen_labels: set[str] = set()
+    # Pass 1: prefer ``_result.json`` for cleanly-finished shards. Result
+    # files are the shard's authoritative final counts (written by
+    # ``mtg_bot shard eval`` after ``run_shard_eval_pull`` returns).
+    for path in sorted(progress_dir.glob(pattern)):
+        if not path.stem.endswith("_result"):
+            continue
+        # Strip the trailing ``_result`` and the ``<run_id>_shard_``
+        # prefix to recover the bare label.
+        label = path.stem[: -len("_result")].split("_shard_", 1)[-1]
+        try:
+            counts = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            continue
+        for f in _EVAL_PROGRESS_SUM_FIELDS:
+            v = counts.get(f, 0)
+            if isinstance(v, (int, float)):
+                sums[f] += int(v)
+        seen_labels.add(label)
+    # Pass 2: fall back to live progress JSON for shards without a
+    # result file (SSH-killed mid-run) — their per-game counters are
+    # the best snapshot available.
+    for path in sorted(progress_dir.glob(pattern)):
+        if path.stem.endswith("_result"):
+            continue
+        label = path.stem.split("_shard_", 1)[-1]
+        if label in seen_labels:
+            continue
+        try:
+            shard = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            continue
+        if started_iso is not None:
+            shard_started = shard.get("started_at")
+            if (
+                not isinstance(shard_started, str)
+                or shard_started < started_iso
+            ):
+                continue
+        for f in _EVAL_PROGRESS_SUM_FIELDS:
+            v = shard.get(f, 0)
+            if isinstance(v, (int, float)):
+                sums[f] += int(v)
+        seen_labels.add(label)
+    n_games = sum(sums.values())
+    return {
+        "n_games": n_games,
+        "wins_new": sums["wins_new"],
+        "wins_old": sums["wins_old"],
+        "draws": sums["draws"],
+        "crashed": sums["crashed"],
+        "timed_out": sums["timed_out"],
+    }
+
+
+# Grace period between "queue says done" and "we give up on SSH futures
+# for cleaner final-result delivery." The remote's worker writes the
+# final ``_result.json`` AFTER the queue's last finish call, then the
+# orchestrator's per-shard runner scps it back. Add a small buffer so
+# fast SSH paths still deliver the authoritative result file rather
+# than us aggregating from the slightly-staler progress JSON snapshot.
+_DEFAULT_QUEUE_DRAIN_GRACE_S = 30.0
+
+
 def run_distributed_eval(
     shards_config: ShardsConfig,
     spec: EvalJobSpec,
@@ -1834,6 +1958,8 @@ def run_distributed_eval(
     bundle_url: Optional[str] = None,
     slack_extra: int = 0,
     shard_ssh_timeout_s: float = _DEFAULT_SHARD_SSH_TIMEOUT_S,
+    queue_drain_grace_s: float = _DEFAULT_QUEUE_DRAIN_GRACE_S,
+    queue_max_wait_s: float = 6 * 60 * 60.0,
 ) -> dict[str, int]:
     """Eval counterpart to ``run_distributed_self_play``. Initializes
     a queue of ``total_games + slack_extra``, dispatches every shard
@@ -1849,6 +1975,28 @@ def run_distributed_eval(
     ``slack_extra`` enables the same straggler-tolerance early-stop
     used by self-play: queue ``total + slack``, close once ``total``
     successful games are in.
+
+    Recoverable-eval semantics (Phase 2.5): the master no longer treats
+    SSH lifetime as the eval-completion signal. Once every shard has
+    been launched it polls ``/queue/status`` (via
+    :func:`wait_for_queue_completion`) and waits for the queue itself
+    to drain — i.e. ``inflight + ready_reclaimed == 0`` AND
+    ``next == total`` (or ``closed=True`` for the early-stop case).
+    With per-worker leases + heartbeats, an SSH timeout on one shard
+    no longer drops in-flight jobs: the lease expires and surviving
+    workers reclaim them. Once the queue is drained the orchestrator
+    aggregates from per-shard progress / result JSONs (see
+    :func:`_aggregate_eval_counts_from_progress`) — so a shard whose
+    SSH wrapper got killed at the 90-min hard floor still contributes
+    its in-flight counts (every ``record_game`` flushes the JSON; the
+    ``_ProgressPoller`` rsyncs that snapshot back every 5s).
+
+    ``queue_max_wait_s`` caps the queue-drain wait so a permanently-
+    stuck queue doesn't hang the whole orchestrator. Default is 6h —
+    longer than any normal eval, much shorter than "forever". On
+    timeout the orchestrator aggregates from whatever shards have
+    written so far rather than raising, since some counts are better
+    than no counts.
     """
     import threading as _threading
     import urllib.request
@@ -1858,6 +2006,12 @@ def run_distributed_eval(
     progress_dir.mkdir(parents=True, exist_ok=True)
 
     queued_games = int(total_games) + max(0, int(slack_extra))
+
+    # Capture the orchestrator's wall-clock BEFORE launching any shard —
+    # mirrors :class:`_EarlyStopPoller`'s stale-JSON filter so a rerun
+    # of the same iter doesn't pick up the prior run's per-shard JSONs
+    # while aggregating.
+    started_iso = datetime.now(timezone.utc).isoformat(timespec="seconds")
 
     init_url = f"{queue_url.rstrip('/')}/queue/init"
     init_body = _json.dumps({
@@ -1876,11 +2030,6 @@ def run_distributed_eval(
             f"queue init failed at {init_url}: HTTP {init_resp.status}"
         )
 
-    totals = {
-        "n_games": 0, "wins_new": 0, "wins_old": 0,
-        "draws": 0, "crashed": 0,
-    }
-    totals_lock = _threading.Lock()
     reports: list[ShardEvalReport] = []
     reports_lock = _threading.Lock()
     zero_counts = {
@@ -1955,7 +2104,9 @@ def run_distributed_eval(
 
     # Same straggler-tolerance scheme as self-play: close the queue
     # once `total_games` successful completions are in, abandoning
-    # the slack indices.
+    # the slack indices. ``wait_for_queue_completion`` honors
+    # ``closed=True && inflight==0`` as a terminal state, so a
+    # sentinel-driven close drains cleanly.
     early_stop: Optional[_EarlyStopPoller] = None
     if slack_extra > 0:
         early_stop = _EarlyStopPoller(
@@ -1978,24 +2129,161 @@ def run_distributed_eval(
     finally:
         executor.shutdown(wait=False)
 
+    queue_status_payload: Optional[dict] = None
+    queue_wait_error: Optional[str] = None
     interrupted = False
+
+    def _queue_status() -> Optional[dict]:
+        """Read ``/queue/status`` once. Returns the per-run-id queue
+        sub-dict or ``None`` if the queue server is unreachable. Used
+        by the dual-signal wait loop below."""
+        try:
+            req = urllib.request.Request(
+                f"{queue_url.rstrip('/')}/queue/status",
+            )
+            resp = _urlopen_with_retry(req)
+            payload = _json.loads(resp.body.decode("utf-8"))
+        except Exception:  # noqa: BLE001
+            return None
+        return (payload.get("queues") or {}).get(run_id_prefix)
+
+    def _queue_done(q: Optional[dict]) -> bool:
+        """Mirror ``wait_for_queue_completion``'s done predicate so
+        the dual-signal loop and the helper agree on terminal state."""
+        if q is None:
+            return False
+        inflight = int(q.get("inflight", 0))
+        reclaimed = int(q.get("ready_reclaimed", 0))
+        next_idx = int(q.get("next", 0))
+        total = int(q.get("total", 0))
+        closed = bool(q.get("closed", False))
+        all_handed_out = next_idx >= total
+        return inflight == 0 and reclaimed == 0 and (
+            all_handed_out or closed
+        )
+
     try:
-        for fut in concurrent.futures.as_completed(futures):
-            try:
-                report = fut.result()
-            except BaseException:
-                interrupted = True
-                raise
-            with reports_lock:
-                reports.append(report)
-            with totals_lock:
-                for k in totals:
-                    totals[k] += int(report.counts.get(k, 0))
+        # Phase 2.5 dual-signal wait: master polls BOTH the queue
+        # and the SSH futures, terminating on whichever happens
+        # first.
+        #
+        # 1. Queue drained (the headline win): every game has been
+        #    ``/queue/finish``'d (or hit max_attempts via
+        #    ``/queue/fail``). With per-job leases + heartbeats, an
+        #    SSH timeout on one shard doesn't drop its in-flight
+        #    games — the lease expires and surviving workers
+        #    reclaim them. We aggregate counts from per-shard
+        #    progress / result JSONs.
+        # 2. All futures done (the all-shards-failed fallback):
+        #    every shard runner returned (with success or failure).
+        #    If the queue ALSO hasn't drained, no future work is
+        #    coming and continuing to wait would hang the
+        #    orchestrator. We fall through to aggregation, which
+        #    will surface the all-failed case via the totals==0
+        #    check below.
+        wait_deadline = time.monotonic() + queue_max_wait_s
+        poll_interval = 0.5
+        while True:
+            q = _queue_status()
+            if _queue_done(q):
+                queue_status_payload = {"queues": {run_id_prefix: q}}
+                break
+            done_count = sum(1 for f in futures if f.done())
+            if done_count == len(futures):
+                # Every shard runner has returned. If the queue
+                # also drained we'd have hit the branch above; if
+                # not, no further work is coming — bail out and
+                # aggregate whatever's on disk.
+                if q is not None:
+                    queue_status_payload = {
+                        "queues": {run_id_prefix: q}
+                    }
+                break
+            if time.monotonic() >= wait_deadline:
+                queue_wait_error = (
+                    f"queue {run_id_prefix!r} did not drain within "
+                    f"{queue_max_wait_s:.0f}s"
+                )
+                print(
+                    f"[orchestrator] {queue_wait_error}; aggregating "
+                    f"from per-shard JSONs anyway.",
+                    file=sys.stderr,
+                )
+                if q is not None:
+                    queue_status_payload = {
+                        "queues": {run_id_prefix: q}
+                    }
+                break
+            time.sleep(poll_interval)
+        # Brief grace period: any shard whose SSH was about to
+        # deliver its authoritative ``_result.json`` gets a window
+        # to do so before we aggregate. Long-overdue futures are
+        # cancelled below; their progress JSONs are the fallback.
+        deadline = time.monotonic() + max(0.0, queue_drain_grace_s)
+        try:
+            for fut in concurrent.futures.as_completed(
+                list(futures.keys()),
+                timeout=max(0.0, deadline - time.monotonic()),
+            ) if futures else []:
+                try:
+                    report = fut.result()
+                except BaseException:
+                    interrupted = True
+                    raise
+                with reports_lock:
+                    reports.append(report)
+        except concurrent.futures.TimeoutError:
+            # Grace period elapsed before all SSH futures finished.
+            # That's expected when a remote's SSH wedged past the
+            # 90-min hard floor — the queue itself is already drained,
+            # so we don't need to wait any longer for the SSH wrapper.
+            pass
     finally:
+        # Whatever futures haven't completed yet get cancelled. They
+        # may still be holding SSH subprocesses; those will be torn
+        # down when the executor's threads exit naturally (which
+        # happens when the watchdog inside ``run_shard_eval_remote``
+        # fires). Either way, master no longer blocks on them.
+        for fut in futures:
+            if not fut.done():
+                fut.cancel()
         if early_stop is not None:
             early_stop.stop()
-        any_failed = any(not r.success for r in reports) or interrupted
+        # Aggregator status uses the future-reports we DID collect,
+        # plus the queue-wait outcome.
+        any_failed = (
+            any(not r.success for r in reports)
+            or interrupted
+            or queue_wait_error is not None
+        )
         aggregator.stop("failed" if any_failed else "completed")
+
+    # Aggregation: per-shard JSONs are the source of truth, NOT the
+    # set of futures that got back to us in time. ``_result.json``
+    # for cleanly-finished shards, live progress JSON for SSH-killed
+    # ones — every flushed game counts.
+    totals = _aggregate_eval_counts_from_progress(
+        progress_dir, run_id_prefix, started_iso=started_iso,
+    )
+
+    # Pad ``reports`` for any shards whose future hadn't completed
+    # within the grace period — surfaces the SSH-timeout shards in
+    # the orchestrator's stderr summary even though we DID
+    # aggregate their counts.
+    seen_labels = {r.shard_label for r in reports}
+    for shard in shards_config.shards:
+        if shard.display_label not in seen_labels:
+            reports.append(ShardEvalReport(
+                shard_label=shard.display_label,
+                success=False,
+                counts=dict(zero_counts),
+                error=(
+                    "SSH future did not complete within "
+                    f"{queue_drain_grace_s:.0f}s of queue drain; "
+                    "counts recovered from per-shard progress JSON"
+                ),
+                error_stage="ssh_timeout_recovered",
+            ))
 
     failed_reports = [r for r in reports if not r.success]
     if failed_reports:
@@ -2009,7 +2297,13 @@ def run_distributed_eval(
             file=sys.stderr,
         )
 
-    if reports and all(not r.success for r in reports):
+    # All-shards-fail case: only raise if NO usable counts landed in
+    # ``progress_dir`` either. With per-job leases, max_attempts can
+    # fire and surface as crashed games on the queue side; those
+    # don't show up in the per-shard progress JSONs (no shard ever
+    # finished them), so totals can legitimately be zero.
+    no_counts = totals["n_games"] == 0
+    if reports and all(not r.success for r in reports) and no_counts:
         # No shard produced usable counts. The eval gate would
         # otherwise treat 0-of-0 as a draw and either gate or
         # un-gate based on tiebreaker rules — both are wrong when
@@ -2022,6 +2316,20 @@ def run_distributed_eval(
                 for r in failed_reports
             ),
         )
+    # If the queue completed but reported failed indices (max_attempts
+    # exhausted), surface those as ``crashed`` so the eval gate sees
+    # an honest sample size. ``failed`` counts indices the queue
+    # itself gave up on — distinct from per-game crashes that
+    # workers wrote into progress JSONs (those are already in
+    # ``totals["crashed"]``). We add the queue-level failures so the
+    # n_games + crashed sum reflects every queued index.
+    if queue_status_payload is not None:
+        q = (queue_status_payload.get("queues") or {}).get(run_id_prefix)
+        if q is not None:
+            queue_failed = int(q.get("failed", 0))
+            if queue_failed > 0:
+                totals["crashed"] += queue_failed
+                totals["n_games"] += queue_failed
     return totals
 
 
