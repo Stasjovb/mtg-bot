@@ -491,6 +491,14 @@ fn apply_effect(state: &mut GameState, effect: &Effect) -> PyResult<()> {
                 Arc::make_mut(&mut state.players[defender].exile).push(obj);
             }
         },
+        // Round-12 stub: TapTarget exists in the bridge but isn't
+        // wired to resolution yet. Round-12 resolve agent fills this
+        // in.
+        Effect::TapTarget { .. } => {
+            return Err(PyValueError::new_err(
+                "TapTarget not yet wired to resolve_top_of_stack — round-12 resolve agent fills this in",
+            ));
+        }
     }
     Ok(())
 }
