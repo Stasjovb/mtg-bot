@@ -6,13 +6,14 @@
 //! corresponding Rust variant — no fallback path, per round 5's
 //! no-opaque-blob design.
 //!
-//! ## First-slice scope
+//! ## Slice scope
 //!
-//! Only `PassPriority` is implemented — round-20 measurements showed
-//! `PassPriority` was 364 of 420 decisions (~87%) in a sample game, so
-//! it's the highest-impact variant to land first. Future slices add
-//! the other 5 most-common Actions (CastSpell, PlayLand, Activate, etc.)
-//! and the `legal_decisions` enumerator.
+//! Round 22 landed `PassPriority` (364 of 420 decisions / ~87% in
+//! round-20's sample game). Round 23 adds `PlayLand` (10 of 420 / ~2.4%
+//! — the 4th-most-frequent variant after `PassPriority`,
+//! `MainPhaseLand`-style decisions, and `CastSpell`). Future slices add
+//! the remaining common Actions (CastSpell, Activate, ...) and the
+//! `legal_decisions` enumerator.
 //!
 //! ## Bridge surface
 //!
@@ -40,6 +41,18 @@ pub enum Action {
     /// tracking are deferred). The current `pass_priority()` primitive
     /// only toggles priority to the other player.
     PassPriority,
+    /// Play a land from hand (CR 305.2). `card_id` is the GameObject
+    /// id in the active / priority player's hand. Restrictions (one
+    /// per turn, only on your turn, only at sorcery speed) are the
+    /// caller's responsibility to enforce — a future
+    /// `legal_decisions()` enumerator will filter; `apply_action`
+    /// delegates to the existing `play_land` primitive which only
+    /// validates the card is in hand and is a land. The Python
+    /// `PlayLand(card_id: int)` dataclass mirrors the same shape.
+    /// Round-20 frequency: 10 of 420 decisions (~2.4%) in the sample
+    /// game — the highest-impact PlayLand-style variant to add after
+    /// `PassPriority`.
+    PlayLand { card_id: u32 },
 }
 
 // --- dict -> Rust ------------------------------------------------
@@ -59,8 +72,12 @@ pub fn parse_action(dict: &Bound<'_, PyDict>) -> PyResult<Action> {
     let kind: String = require(dict, "kind")?.extract()?;
     match kind.as_str() {
         "pass_priority" => Ok(Action::PassPriority),
+        "play_land" => {
+            let card_id: u32 = require(dict, "card_id")?.extract()?;
+            Ok(Action::PlayLand { card_id })
+        }
         other => Err(PyValueError::new_err(format!(
-            "unknown action kind {other:?}; valid: pass_priority"
+            "unknown action kind {other:?}; valid: pass_priority, play_land"
         ))),
     }
 }
@@ -81,6 +98,10 @@ pub fn action_to_pydict<'py>(
     match action {
         Action::PassPriority => {
             d.set_item("kind", "pass_priority")?;
+        }
+        Action::PlayLand { card_id } => {
+            d.set_item("kind", "play_land")?;
+            d.set_item("card_id", *card_id)?;
         }
     }
     Ok(d)

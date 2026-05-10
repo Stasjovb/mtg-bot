@@ -142,6 +142,7 @@ the test lands in a commit.
 | rust(bridge-stack-snapshot): stack_snapshot getter | tests_rust/test_stack.py extend | green  | feature/rust-bridge-stack-snapshot |
 | rust(action-foundation): Action enum + apply_action(PassPriority) | tests_rust/test_actions.py | green  | feature/rust-action-foundation |
 | rust(bridge-fingerprint): fingerprint() matching parity_smoke.py:hash_state | tests_rust/test_fingerprint.py | green  | feature/rust-bridge-fingerprint |
+| rust(action-play-land): Action::PlayLand variant | tests_rust/test_actions.py extend | green  | feature/rust-action-play-land |
 
 ## Build invocation reminder
 
