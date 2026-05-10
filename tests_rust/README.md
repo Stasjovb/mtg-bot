@@ -65,7 +65,7 @@ the test lands in a commit.
 
 | ported test                       | source                  | status | branch / commit            |
 |-----------------------------------|-------------------------|--------|----------------------------|
-| _(none yet — first cycles spawn next)_ |                  |        |                            |
+| tests_rust/test_life.py           | tests/test_combat.py + game.py | green | feature/rust-tdd-life |
 
 ## Build invocation reminder
 
