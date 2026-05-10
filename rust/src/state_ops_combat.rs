@@ -72,11 +72,26 @@
 //!   the within-function "alive" check uses `damage < toughness`
 //!   rather than running `apply_sbas`, mirroring the round-5
 //!   simplification that the SBA slice owns lethal-damage cleanup.
+//! - **Haste (CR 702.10) IS modeled.** A creature with `"haste"` in
+//!   `printing.keywords` bypasses the summoning-sickness rejection
+//!   in `declare_attacker` — a freshly-cast haste creature can
+//!   attack the turn it enters. Haste does NOT bypass the "must be
+//!   untapped to attack" precondition (a pre-tapped haste creature
+//!   is still rejected) and does NOT skip the tap-on-attack step
+//!   (haste != vigilance — a haste creature without vigilance still
+//!   taps when declared as attacker). Haste + vigilance composes:
+//!   the haste branch handles the summoning-sick gate, the vigilance
+//!   branch handles the tap step. Haste also affects activated
+//!   tap-abilities in real MTG (CR 302.1 covers both attacking and
+//!   activating tap-cost abilities); this slice only models the
+//!   attacking half because `declare_attacker` is the only summoning-
+//!   sick gate today.
 //! - **No legality checks beyond "creature on attacker's battlefield,
-//!   untapped, not summoning-sick".** Tapped and summoning-sick
-//!   creatures are rejected as attackers; that's the full attack-
-//!   eligibility vocabulary today. Defender keyword, "can't attack"
-//!   effects, attacked-alone restrictions are deferred.
+//!   untapped, not summoning-sick (modulo haste)".** Tapped creatures
+//!   and non-haste summoning-sick creatures are rejected as
+//!   attackers; that's the full attack-eligibility vocabulary today.
+//!   Defender keyword, "can't attack" effects, attacked-alone
+//!   restrictions are deferred.
 //! - **No blocking restrictions beyond "blocker is a creature, on
 //!   the battlefield, not tapped, and the named attacker is in
 //!   `state.attackers`".** Flying / reach, defender-only, color
@@ -314,12 +329,21 @@ impl GameState {
     /// - object exists on some battlefield
     /// - object's printing has `power.is_some()` (creature predicate)
     /// - object is NOT tapped
-    /// - object is NOT summoning-sick
+    /// - object is NOT summoning-sick — UNLESS the printing carries
+    ///   the `"haste"` keyword (CR 702.10), in which case the
+    ///   summoning-sickness restriction is bypassed.
     ///
     /// Vigilance only suppresses the tap-on-attack step; it does NOT
     /// bypass the "must be untapped to attack" precondition (a
     /// pre-tapped vigilance creature still fails) and does NOT grant
-    /// haste (a summoning-sick vigilance creature still fails).
+    /// haste.
+    ///
+    /// Haste only suppresses the summoning-sickness rejection; it
+    /// does NOT bypass the "must be untapped to attack" precondition
+    /// (a pre-tapped haste creature still fails) and does NOT grant
+    /// vigilance — a haste creature without vigilance still taps when
+    /// it attacks. Haste + vigilance composes (attack on the same turn
+    /// it entered AND skip the tap).
     ///
     /// **No legality checks beyond the four above.** Defender, "can't
     /// attack", attacked-alone restrictions, and "doesn't untap during
@@ -330,7 +354,17 @@ impl GameState {
         let Some((tapped, summoning_sick)) = read_creature_status(self, obj_id) else {
             return false;
         };
-        if tapped || summoning_sick {
+        if tapped {
+            return false;
+        }
+        // Haste (CR 702.10) bypasses summoning sickness ONLY. Read the
+        // keyword once here so the eligibility gate and the (later)
+        // tap step can both see it — though only the eligibility gate
+        // currently consults it; haste does NOT skip the tap step.
+        // Pre-read so we don't pay the Arc::make_mut clone cost when
+        // the creature is going to be rejected for some other reason.
+        let has_haste = battlefield_has_keyword(self, obj_id, "haste");
+        if summoning_sick && !has_haste {
             return false;
         }
         // Vigilance check: read before mutating so we don't pay the

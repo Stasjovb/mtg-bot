@@ -933,3 +933,138 @@ def test_first_strike_does_not_skip_lifelink(synthetic_state):
         "first-strike + lifelink composition: lifelink must still gain life "
         "for the damage dealt in the first-strike step"
     )
+
+
+# ----------------------------- haste ---------------------------------------
+#
+# Haste (CR 702.10): a creature with haste ignores the summoning-sickness
+# restriction. Specifically, the "creature has been continuously controlled
+# by you since your most recent turn began" precondition for attacking
+# (CR 302.1) and for activating tap- / untap-cost abilities is bypassed.
+# A haste creature CAN attack the turn it enters the battlefield.
+#
+# Implementation hook in `state_ops_combat.rs:declare_attacker`: today the
+# rejection is `if tapped || summoning_sick { return false; }`. This slice
+# changes that to `if tapped || (summoning_sick && !has_haste)`, where
+# `has_haste = battlefield_has_keyword(state, obj_id, "haste")`.
+#
+# Scope simplifications (mirrored from the module docstring on
+# `state_ops_combat.rs`):
+#
+# - Haste does NOT change the "must be untapped to attack" precondition
+#   (CR 508.1a — a tapped creature can't attack regardless). Pre-tapped
+#   haste creatures are still rejected.
+# - Haste does NOT skip the tap-on-attack step. A haste creature without
+#   vigilance still taps when declared as attacker. Composition with
+#   vigilance (haste + vigilance: attack on first turn AND don't tap)
+#   is exercised by `test_haste_plus_vigilance_does_not_tap`.
+# - Haste also affects activated tap-abilities (CR 302.1 covers both
+#   attacking and tapping for an ability). This slice only models the
+#   attacking half because `declare_attacker` is the only summoning-sick
+#   gate today; an activated-abilities slice will pick up the second half.
+
+
+def test_haste_creature_can_attack_when_summoning_sick(synthetic_state):
+    """A freshly-cast haste creature (summoning_sick=True) can be
+    declared as attacker — CR 702.10 bypasses the summoning-sickness
+    rejection in `declare_attacker`."""
+    # Cast the haste creature from hand so the cast-flow stamps
+    # summoning_sick=True (mirrors the vigilance summoning-sick test
+    # pattern). Mana cost {G}+{1} — same shape as the other keyword
+    # printings.
+    ZONE_HAND = 0
+    obj_id = synthetic_state.register_and_inject_object(
+        _keyword_creature_dict(2, 2, ["haste"]), 0, ZONE_HAND
+    )
+    synthetic_state.add_mana(0, "G", 1)
+    synthetic_state.add_mana(0, "C", 1)  # cover the {1} generic
+    assert synthetic_state.cast_creature(obj_id, 0) is True
+    # Just-cast: summoning sick.
+    assert synthetic_state.is_summoning_sick(obj_id) is True
+    # Haste lets it attack despite summoning sickness.
+    assert synthetic_state.declare_attacker(obj_id) is True, (
+        "haste must let a summoning-sick creature attack (CR 702.10)"
+    )
+    assert obj_id in synthetic_state.get_attackers()
+    # Haste is NOT vigilance — declaring as attacker still taps it.
+    assert synthetic_state.is_tapped(obj_id) is True
+
+
+def test_non_haste_creature_summoning_sick_still_rejects(synthetic_state):
+    """Sanity / regression: a freshly-cast NON-haste creature (the
+    Llanowar Elves baked into the synthetic seed's hand) still gets
+    refused as an attacker. The haste branch must not have leaked into
+    the default summoning-sickness-rejection path."""
+    synthetic_state.add_mana(0, "G", 1)
+    elf_id = P0_FIRST_HAND_ID  # Llanowar Elves, no haste
+    assert synthetic_state.cast_creature(elf_id, 0) is True
+    assert synthetic_state.is_summoning_sick(elf_id) is True
+    # No haste: still rejected.
+    assert synthetic_state.declare_attacker(elf_id) is False
+    assert synthetic_state.get_attackers() == []
+    # And the rejection must NOT have tapped it as a side effect.
+    assert synthetic_state.is_tapped(elf_id) is False
+
+
+def test_haste_does_not_skip_already_tapped(synthetic_state):
+    """Haste bypasses summoning sickness, NOT the "must be untapped to
+    attack" precondition (CR 508.1a). A pre-tapped haste creature is
+    still refused. Doesn't grant untap."""
+    obj_id = synthetic_state.register_and_inject_object(
+        _keyword_creature_dict(2, 2, ["haste"]), 0, ZONE_BATTLEFIELD
+    )
+    # Inject sets summoning_sick=False, so the only rejection cause
+    # left is the tap. Tap it manually.
+    assert synthetic_state.tap_object(obj_id) is True
+    assert synthetic_state.is_tapped(obj_id) is True
+    # Even with haste, tapped creatures can't attack.
+    assert synthetic_state.declare_attacker(obj_id) is False, (
+        "haste does not bypass the must-be-untapped precondition (CR 508.1a)"
+    )
+    assert synthetic_state.get_attackers() == []
+
+
+def test_haste_creature_taps_when_attacking_unless_vigilance(synthetic_state):
+    """Haste alone still taps the creature on attack — haste != vigilance.
+    A summoning-sick haste creature attacks AND taps."""
+    ZONE_HAND = 0
+    obj_id = synthetic_state.register_and_inject_object(
+        _keyword_creature_dict(2, 2, ["haste"]), 0, ZONE_HAND
+    )
+    synthetic_state.add_mana(0, "G", 1)
+    synthetic_state.add_mana(0, "C", 1)
+    assert synthetic_state.cast_creature(obj_id, 0) is True
+    assert synthetic_state.is_summoning_sick(obj_id) is True
+    assert synthetic_state.is_tapped(obj_id) is False
+    # Attack with the haste creature.
+    assert synthetic_state.declare_attacker(obj_id) is True
+    # Haste alone DOES tap — only vigilance skips the tap step.
+    assert synthetic_state.is_tapped(obj_id) is True, (
+        "haste does NOT skip the tap-on-attack step; only vigilance does that"
+    )
+
+
+def test_haste_plus_vigilance_does_not_tap(synthetic_state):
+    """Keyword composition: a creature with BOTH haste and vigilance,
+    freshly cast (summoning_sick=True), can attack AND skip the tap.
+    Haste lets it attack on its first turn; vigilance suppresses the
+    tap-on-attack."""
+    ZONE_HAND = 0
+    obj_id = synthetic_state.register_and_inject_object(
+        _keyword_creature_dict(2, 2, ["haste", "vigilance"]),
+        0,
+        ZONE_HAND,
+    )
+    synthetic_state.add_mana(0, "G", 1)
+    synthetic_state.add_mana(0, "C", 1)
+    assert synthetic_state.cast_creature(obj_id, 0) is True
+    assert synthetic_state.is_summoning_sick(obj_id) is True
+    # Haste lets it attack despite summoning sickness.
+    assert synthetic_state.declare_attacker(obj_id) is True, (
+        "haste+vigilance: haste must still bypass summoning sickness"
+    )
+    assert obj_id in synthetic_state.get_attackers()
+    # Vigilance suppresses the tap.
+    assert synthetic_state.is_tapped(obj_id) is False, (
+        "haste+vigilance: vigilance must still skip the tap-on-attack step"
+    )
