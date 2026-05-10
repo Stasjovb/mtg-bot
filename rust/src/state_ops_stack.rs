@@ -28,6 +28,7 @@
 //! dict, no API break.
 
 use crate::state::{GameState, StackItem};
+use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 use pyo3::types::PyDict;
 
@@ -88,6 +89,68 @@ impl GameState {
         match self.stack.pop() {
             None => Ok(None),
             Some(item) => Ok(Some(stack_item_to_dict(py, &item)?)),
+        }
+    }
+
+    /// **Round-16: process the stack greedily until empty.** Repeatedly
+    /// calls `resolve_top_of_stack()` (round-6 slice) until
+    /// `self.stack` is empty, returning the number of items resolved.
+    ///
+    /// Returns:
+    /// - `0` if the stack is already empty on entry (no-op).
+    /// - `>= 1` if at least one item was drained.
+    ///
+    /// **Composition note**: this composes round-5 push/pop with
+    /// round-6 resolve. It does NOT model real MTG priority hand-off
+    /// (real MTG: after every resolution both players re-receive
+    /// priority); this primitive just drains the stack greedily.
+    /// Higher-level code that wants real priority semantics should
+    /// call `resolve_top_of_stack` itself in a priority loop.
+    ///
+    /// **Iteration cap**: 1000-iteration safety bound so a buggy
+    /// effect that re-pushes its source can't infinite-loop the
+    /// caller. Hitting the bound raises `ValueError` loudly.
+    ///
+    /// **Cross-file friction (E0624 workaround).**
+    /// `resolve_top_of_stack` is a `#[pymethods]` method defined in
+    /// `state_ops_resolve.rs`. PyO3's `multiple-pymethods` feature
+    /// lets the methods coexist on the same class, but the underlying
+    /// Rust fns stay module-private — we can't call
+    /// `self.resolve_top_of_stack(py)?` directly from this slice
+    /// without touching `state_ops_resolve.rs` (forbidden by the
+    /// per-slice file-isolation rule). The fix is to take
+    /// `Bound<'_, Self>` rather than `&mut self` and dispatch through
+    /// the Python attribute layer with `call_method0`. PyO3's
+    /// `Bound<T>` is a borrow-checked handle to a Python object; the
+    /// `.borrow()` / `.borrow_mut()` cost is identical to the borrow
+    /// the `#[pymethods]` macro would have generated for `&mut self`,
+    /// so the pattern adds at most one extra Python-attr-lookup per
+    /// loop iteration vs an inlined call. Trade-off: avoid copy-
+    /// pasting ~500 lines of `apply_effect` + post-resolve movement +
+    /// ETB dispatch into this file.
+    fn process_stack_until_empty(slf: Bound<'_, Self>) -> PyResult<usize> {
+        let mut count: usize = 0;
+        let max_iterations: usize = 1000;
+        loop {
+            // Read stack length without holding a long-lived borrow:
+            // `borrow()` returns a `PyRef` that drops at the end of
+            // the statement.
+            let is_empty = slf.borrow().stack.is_empty();
+            if is_empty {
+                return Ok(count);
+            }
+            if count >= max_iterations {
+                return Err(PyValueError::new_err(format!(
+                    "process_stack_until_empty exceeded {max_iterations} iterations \
+                     (likely a buggy effect re-pushing its source)"
+                )));
+            }
+            // Dispatch through the Python attribute layer — equivalent
+            // to `self.resolve_top_of_stack()` but crosses the file
+            // boundary cleanly (no E0624). Discards the returned dict;
+            // we only care about the side-effects on `self.stack`.
+            slf.call_method0("resolve_top_of_stack")?;
+            count += 1;
         }
     }
 
