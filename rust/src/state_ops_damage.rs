@@ -271,4 +271,36 @@ impl GameState {
         let damage = read_damage(self, obj_id)?;
         Some(damage as i32 >= threshold)
     }
+
+    /// Deal `amount` damage directly to `player_id`'s life total.
+    ///
+    /// Distinct from `deal_damage`, which marks an object's per-instance
+    /// damage marker. This variant is the building block for combat
+    /// damage to a defending player, burn-spell damage to a player,
+    /// "deals damage to each opponent" effects, etc. — anywhere a
+    /// damage source resolves directly against a player rather than
+    /// a creature/planeswalker.
+    ///
+    /// Raises `ValueError` on negative `amount` per the project's
+    /// "fail loud" convention (mirrors `gain_life` / `lose_life` /
+    /// `deal_damage`); `amount = 0` is allowed and is a true no-op.
+    /// Raises `IndexError` if `player_id` is not 0 or 1.
+    ///
+    /// **No clamping at zero.** Result life can go negative — "loss
+    /// at <=0 is a game-loss" is a state-based action handled at a
+    /// higher layer (CR 704.5a). Same rule as `lose_life` in the
+    /// life slice.
+    ///
+    /// **Today this collapses damage→life-loss into a single field
+    /// write.** Real MTG rules-text fidelity (replacement effects on
+    /// damage, lifelink-style routing, "damage to player can't be
+    /// prevented") arrives in a later slice once those layers land
+    /// on the Rust side. The named entry point exists today so
+    /// callers don't have to know about the simplification.
+    fn deal_damage_to_player(&mut self, player_id: u8, amount: i32) -> PyResult<()> {
+        let idx = check_player_id(player_id)?;
+        check_non_negative("deal_damage_to_player", amount)?;
+        self.players[idx].life -= amount;
+        Ok(())
+    }
 }

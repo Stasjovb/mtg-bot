@@ -222,3 +222,108 @@ def test_deal_damage_on_clone_does_not_affect_original(synthetic_state):
     assert other.clear_damage(obj_id) is True
     assert other.get_damage(obj_id) == 0
     assert synthetic_state.get_damage(obj_id) == 2
+
+
+# -----------------------------------------------------------------
+# `deal_damage_to_player` — direct life mutation primitive.
+#
+# Distinct from `deal_damage` (above), which targets a `GameObject`
+# and accumulates onto its per-instance damage marker. This variant
+# subtracts directly from `Player.life` and is the building block
+# for: combat damage to a defending player, burn-spell damage to a
+# player, "deals damage to each opponent" effects, etc.
+#
+# Lives in the damage slice (rather than life slice) because it's a
+# damage-source primitive — the call site is "this thing deals N
+# damage to player P", not "player P loses N life arbitrarily".
+# The current implementation collapses the two operations (Rust
+# rules-text fidelity for damage→life-loss arrives in a later slice
+# once replacement effects + lifelink-like routing land), but the
+# named entry point for "damage to player" exists today so callers
+# don't have to know the simplification.
+# -----------------------------------------------------------------
+
+
+def test_deal_damage_to_player_subtracts_life(synthetic_state):
+    """`deal_damage_to_player(player_id, amount)` subtracts `amount`
+    from that player's life total. Fresh synthetic state starts both
+    players at life=20; dealing 5 to player 0 leaves them at 15."""
+    assert synthetic_state.get_life(0) == 20
+    synthetic_state.deal_damage_to_player(0, 5)
+    assert synthetic_state.get_life(0) == 15
+
+
+def test_deal_damage_to_player_zero_amount_no_op(synthetic_state):
+    """`amount = 0` is a true no-op (life unchanged). Symmetric with
+    the `deal_damage` zero-amount semantics on the GameObject form
+    and the `gain_life` / `lose_life` zero-amount semantics in the
+    life slice."""
+    assert synthetic_state.get_life(0) == 20
+    synthetic_state.deal_damage_to_player(0, 0)
+    assert synthetic_state.get_life(0) == 20
+
+
+def test_deal_damage_to_player_negative_raises(synthetic_state):
+    """A negative `amount` is a caller bug — raises ValueError per
+    the project's "fail loud" convention (mirrors `gain_life`,
+    `lose_life`, and `deal_damage`)."""
+    with pytest.raises(ValueError):
+        synthetic_state.deal_damage_to_player(0, -1)
+    # Life is unchanged after the failed call.
+    assert synthetic_state.get_life(0) == 20
+
+
+def test_deal_damage_to_player_unknown_player_raises(synthetic_state):
+    """`player_id` outside [0, 1] raises — matches the life-slice
+    `check_player_id` contract."""
+    with pytest.raises((ValueError, IndexError)):
+        synthetic_state.deal_damage_to_player(99, 1)
+
+
+def test_deal_damage_to_player_can_take_life_below_zero(synthetic_state):
+    """No clamping at zero — the engine reports raw life totals;
+    "loss at <=0 is a game-loss" is a state-based action handled at
+    a higher layer (CR 704.5a). Same rule as `lose_life` in the life
+    slice."""
+    assert synthetic_state.get_life(0) == 20
+    synthetic_state.deal_damage_to_player(0, 25)
+    assert synthetic_state.get_life(0) == -5
+
+
+def test_deal_damage_to_player_does_not_affect_other_player(synthetic_state):
+    """Dealing damage to player 0 must not touch player 1's life
+    total, and vice versa."""
+    assert synthetic_state.get_life(0) == 20
+    assert synthetic_state.get_life(1) == 20
+    synthetic_state.deal_damage_to_player(0, 7)
+    assert synthetic_state.get_life(0) == 13
+    assert synthetic_state.get_life(1) == 20
+    synthetic_state.deal_damage_to_player(1, 3)
+    assert synthetic_state.get_life(0) == 13
+    assert synthetic_state.get_life(1) == 17
+
+
+def test_clone_then_deal_damage_to_player_does_not_affect_original(
+    synthetic_state,
+):
+    """CoW canary for the player-life path. `Player` lives by-value
+    inside `GameState.players: [Player; 2]` (not behind an Arc), so
+    a `GameState.clone()` deep-copies each Player struct and `life`
+    is a Copy field — mutating life on one clone must not bleed into
+    the other. Symmetric with the analogous canary in
+    `test_life.py::test_modify_one_clone_does_not_affect_other`."""
+    assert synthetic_state.get_life(0) == 20
+    other = synthetic_state.clone_once()
+    assert other.get_life(0) == 20
+    # Mutate ONLY the clone.
+    other.deal_damage_to_player(0, 4)
+    assert other.get_life(0) == 16
+    # Original must NOT see the change.
+    assert synthetic_state.get_life(0) == 20, (
+        "CoW broken: deal_damage_to_player on clone leaked into original"
+    )
+    # Symmetric direction: mutating original after divergence does
+    # not retroactively touch the clone.
+    synthetic_state.deal_damage_to_player(0, 2)
+    assert synthetic_state.get_life(0) == 18
+    assert other.get_life(0) == 16
