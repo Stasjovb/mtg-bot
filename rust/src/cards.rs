@@ -576,6 +576,26 @@ pub enum Effect {
     /// with a Land-skip + indestructible-skip filter. Unit variant —
     /// the "non-land permanent" target shape is intrinsic.
     DestroyTargetNonlandPermanent,
+    /// Destroy target artifact on the defending player's battlefield
+    /// (CR 701.7, artifact-filter). 2 cards in EoE pool per round-20
+    /// measurement (Drill Too Deep, Scour for Scrap). Unit variant.
+    ///
+    /// **First-slice deterministic choice**: defender's FIRST artifact
+    /// (top-to-bottom scan), skipping indestructible (CR 702.12) per
+    /// the round-24 DestroyTargetNonlandPermanent convention.
+    /// Empty / no-artifacts / only-indestructible-artifacts = silent
+    /// fizzle.
+    ///
+    /// **Distinct from `DestroyTargetNonlandPermanent` (round 24)** —
+    /// that arm filters `!card_types.contains("Land")` (picks creatures,
+    /// artifacts, enchantments, planeswalkers — anything non-land).
+    /// This arm filters `card_types.contains("Artifact")` (artifacts
+    /// only). Identical dispatch shape otherwise (defender-side scan,
+    /// indestructible-skip, first-match, silent fizzle on empty /
+    /// only-indestructible-artifacts). Mirrors Python's
+    /// `DestroyTargetArtifact(Destroy)` constructor sugar with
+    /// `targets=(TargetSpec(IsArtifact()),)`.
+    DestroyTargetArtifact,
     /// Deal `amount` damage to any target — creature OR player
     /// (Lightning Bolt pattern, CR 701.4). 7 cards in EoE pool per
     /// round-20 measurement (Debris Field Crusher etc.). Mirrors
@@ -1037,6 +1057,13 @@ fn parse_effect(dict: &Bound<'_, PyDict>) -> PyResult<Effect> {
             // ("non-Land, non-indestructible"). Extra keys ignored.
             Ok(Effect::DestroyTargetNonlandPermanent)
         }
+        "destroy_target_artifact" => {
+            // Unit variant — no required fields. Filter is intrinsic
+            // ("Artifact, non-indestructible"). Extra keys ignored.
+            // Mirrors `destroy_target_nonland_permanent` parser arm
+            // shape (silent-drop convention for unrecognized keys).
+            Ok(Effect::DestroyTargetArtifact)
+        }
         "deal_damage_any_target" => {
             // Python's `DealDamageAnyTarget(DealDamage)` carries only
             // the inherited `amount` field; the "any target" filter is
@@ -1054,7 +1081,7 @@ fn parse_effect(dict: &Bound<'_, PyDict>) -> PyResult<Effect> {
             Ok(Effect::DealDamageAnyTarget { amount })
         }
         other => Err(PyValueError::new_err(format!(
-            "unknown effect kind {other:?}; valid: deal_damage, draw_cards, gain_life, return_to_hand, mill, mill_target_player, exile_target, tap_target, untap_target, sacrifice, add_counters, discard_card, scry_n, destroy_target, damage_each_opponent, damage_each_creature, create_token, add_mana_to_pool, search_library_for_basic_land_tapped, put_plus_one_counter_on_self, surveil, counter_target_spell, return_creature_from_your_graveyard_to_battlefield, discard_self, each_opponent_loses_life, lose_life, target_opponent_loses_life, each_opponent_discards, destroy_all_creatures, destroy_target_nonland_permanent, deal_damage_any_target"
+            "unknown effect kind {other:?}; valid: deal_damage, draw_cards, gain_life, return_to_hand, mill, mill_target_player, exile_target, tap_target, untap_target, sacrifice, add_counters, discard_card, scry_n, destroy_target, damage_each_opponent, damage_each_creature, create_token, add_mana_to_pool, search_library_for_basic_land_tapped, put_plus_one_counter_on_self, surveil, counter_target_spell, return_creature_from_your_graveyard_to_battlefield, discard_self, each_opponent_loses_life, lose_life, target_opponent_loses_life, each_opponent_discards, destroy_all_creatures, destroy_target_nonland_permanent, destroy_target_artifact, deal_damage_any_target"
         ))),
     }
 }
@@ -1356,6 +1383,9 @@ fn effect_to_pydict<'py>(
         }
         Effect::DestroyTargetNonlandPermanent => {
             d.set_item("kind", "destroy_target_nonland_permanent")?;
+        }
+        Effect::DestroyTargetArtifact => {
+            d.set_item("kind", "destroy_target_artifact")?;
         }
         Effect::DealDamageAnyTarget { amount } => {
             d.set_item("kind", "deal_damage_any_target")?;

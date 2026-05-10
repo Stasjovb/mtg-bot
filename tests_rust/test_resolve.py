@@ -6961,3 +6961,290 @@ def test_resolve_each_opponent_discards_count_zero_no_op(synthetic_state):
 
     assert synthetic_state.hand_sizes[1] == p1_hand_before
     assert synthetic_state.graveyard_sizes[1] == p1_grave_before
+
+
+# --- DestroyTargetArtifact dispatch ---------------------------------
+#
+# **DestroyTargetArtifact scope** (mirrored in the Rust module docstring
+# on ``cards.rs``):
+#
+# - **Unit variant** — Python's `DestroyTargetArtifact(Destroy)` bakes
+#   the filter `IsArtifact()` into the class shape; the Rust bridge
+#   variant carries no fields and the Artifact-filter is intrinsic to
+#   the dispatch.
+# - **Drill Too Deep / Scour for Scrap pattern** — 2 cards in the EoE
+#   pool per round-20 measurement.
+# - **First-slice deterministic choice**: scan the DEFENDING player's
+#   battlefield top-to-bottom; pick the FIRST object whose printing's
+#   `card_types` contains "Artifact" AND whose `keywords` does NOT
+#   contain "indestructible".
+# - **Distinct from round-24 DestroyTargetNonlandPermanent** — that arm
+#   filters `!card_types.contains("Land")` (creatures, artifacts,
+#   enchantments, planeswalkers); this arm filters
+#   `card_types.contains("Artifact")` (artifacts only). Identical
+#   dispatch shape otherwise.
+# - **Indestructible is honored** (CR 702.12) — the scan skips
+#   indestructible artifacts.
+# - **Empty / no-artifacts / only-indestructible-artifacts defender bf
+#   fizzles silently** — stack item still pops, source still moves
+#   post-resolve, no zone deltas.
+# - **Active player's own artifacts are NOT affected** — scan only
+#   walks the defender's battlefield (mirrors round-24 / round-17
+#   asymmetric defender-side targeting).
+
+
+def _drill_too_deep_dict():
+    """A destroy-target-artifact spell — Drill Too Deep-shaped
+    (instant, destroys target artifact)."""
+    return {
+        "name": "Test Drill Too Deep",
+        "card_types": ["Instant"],
+        "mana_cost": {"B": 1, "generic": 2},
+        "effects": [{"kind": "destroy_target_artifact"}],
+    }
+
+
+def _vanilla_artifact_for_dta_dict():
+    """A vanilla artifact printing — non-indestructible. Used as the
+    target for DestroyTargetArtifact happy paths."""
+    return {
+        "name": "Test Junk Artifact",
+        "card_types": ["Artifact"],
+        "mana_cost": {"generic": 2},
+        "effects": [],
+    }
+
+
+def _indestructible_artifact_dict():
+    """A vanilla artifact printing carrying the `indestructible`
+    keyword — used to verify DestroyTargetArtifact's scan skips
+    indestructible artifacts (CR 702.12)."""
+    return {
+        "name": "Test Darksteel Pendant",
+        "card_types": ["Artifact"],
+        "mana_cost": {"generic": 2},
+        "effects": [],
+        "keywords": ["indestructible"],
+    }
+
+
+def test_resolve_destroy_target_artifact_destroys_defender_artifact(engine):
+    """Happy path: defender has a vanilla artifact in bf[0]; resolving
+    Drill Too Deep destroys it. Distinct from
+    DestroyTargetNonlandPermanent only in the filter — this arm picks
+    the artifact by type, not by 'non-land'."""
+    state = engine.make_synthetic_state(
+        num_battlefield=0, num_hand=1, num_library=1
+    )
+    artifact_id = state.register_and_inject_object(
+        _vanilla_artifact_for_dta_dict(), 1, ZONE_BATTLEFIELD
+    )
+    spell_obj_id = state.register_and_inject_object(
+        _drill_too_deep_dict(), 0, ZONE_HAND
+    )
+    p1_bf_before = state.battlefield_sizes[1]
+    p1_grave_before = state.graveyard_sizes[1]
+    p0_grave_before = state.graveyard_sizes[0]
+
+    state.push_to_stack(spell_obj_id, 0)
+    state.resolve_top_of_stack()
+
+    # Artifact moved to p1's graveyard.
+    assert state.find_object_zone(artifact_id) == ZONE_GRAVEYARD
+    assert state.battlefield_sizes[1] == p1_bf_before - 1
+    assert state.graveyard_sizes[1] == p1_grave_before + 1
+    # Source instant in p0's graveyard.
+    assert state.is_stack_empty() is True
+    assert state.find_object_zone(spell_obj_id) == ZONE_GRAVEYARD
+    assert state.graveyard_sizes[0] == p0_grave_before + 1
+
+
+def test_resolve_destroy_target_artifact_only_creatures_fizzles(engine):
+    """If the defender's battlefield has only Creatures (no Artifacts),
+    the scan finds no eligible target and fizzles silently. The
+    Creature is NOT destroyed (distinct from
+    DestroyTargetNonlandPermanent, which would happily destroy a
+    creature)."""
+    state = engine.make_synthetic_state(
+        num_battlefield=0, num_hand=1, num_library=1
+    )
+    creature_id = state.register_and_inject_object(
+        {
+            "name": "Test Vanilla Bear",
+            "card_types": ["Creature"],
+            "power": 2,
+            "toughness": 2,
+        },
+        1,
+        ZONE_BATTLEFIELD,
+    )
+    spell_obj_id = state.register_and_inject_object(
+        _drill_too_deep_dict(), 0, ZONE_HAND
+    )
+    p1_bf_before = state.battlefield_sizes[1]
+    p1_grave_before = state.graveyard_sizes[1]
+    p0_grave_before = state.graveyard_sizes[0]
+
+    state.push_to_stack(spell_obj_id, 0)
+    state.resolve_top_of_stack()
+
+    # Creature untouched — Artifact filter didn't match.
+    assert state.find_object_zone(creature_id) == ZONE_BATTLEFIELD
+    assert state.battlefield_sizes[1] == p1_bf_before
+    assert state.graveyard_sizes[1] == p1_grave_before
+    # Stack drained; source instant moved to p0's graveyard.
+    assert state.is_stack_empty() is True
+    assert state.find_object_zone(spell_obj_id) == ZONE_GRAVEYARD
+    assert state.graveyard_sizes[0] == p0_grave_before + 1
+
+
+def test_resolve_destroy_target_artifact_only_land_fizzles(engine):
+    """Defender's battlefield is all Lands — no Artifact match, fizzle.
+    The Land stays put. (Mirrors the regression that
+    DestroyTargetNonlandPermanent already guards against, applied to
+    the Artifact filter shape.)"""
+    state = engine.make_synthetic_state(
+        num_battlefield=0, num_hand=1, num_library=1
+    )
+    land_id = state.register_and_inject_object(
+        {
+            "name": "Test Plains",
+            "card_types": ["Land"],
+            "mana_produced": ["W"],
+        },
+        1,
+        ZONE_BATTLEFIELD,
+    )
+    spell_obj_id = state.register_and_inject_object(
+        _drill_too_deep_dict(), 0, ZONE_HAND
+    )
+    p1_bf_before = state.battlefield_sizes[1]
+
+    state.push_to_stack(spell_obj_id, 0)
+    state.resolve_top_of_stack()
+
+    assert state.find_object_zone(land_id) == ZONE_BATTLEFIELD
+    assert state.battlefield_sizes[1] == p1_bf_before
+    assert state.is_stack_empty() is True
+
+
+def test_resolve_destroy_target_artifact_picks_artifact_over_creature(engine):
+    """Defender has Artifact in bf[0] and Creature in bf[1]. The scan
+    picks the Artifact (the first match for the filter); the Creature
+    stays. This is the load-bearing distinction from round-17
+    DestroyTarget (which would pick bf[0] unconditionally) and from
+    round-24 DestroyTargetNonlandPermanent (which would also pick
+    bf[0] but accept either). Here the Artifact filter happens to
+    match bf[0] — and the creature in bf[1] is NOT eligible at all."""
+    state = engine.make_synthetic_state(
+        num_battlefield=0, num_hand=1, num_library=1
+    )
+    artifact_id = state.register_and_inject_object(
+        _vanilla_artifact_for_dta_dict(), 1, ZONE_BATTLEFIELD
+    )
+    creature_id = state.register_and_inject_object(
+        {
+            "name": "Test Vanilla Bear",
+            "card_types": ["Creature"],
+            "power": 2,
+            "toughness": 2,
+        },
+        1,
+        ZONE_BATTLEFIELD,
+    )
+    spell_obj_id = state.register_and_inject_object(
+        _drill_too_deep_dict(), 0, ZONE_HAND
+    )
+    p1_bf_before = state.battlefield_sizes[1]
+    p1_grave_before = state.graveyard_sizes[1]
+
+    state.push_to_stack(spell_obj_id, 0)
+    state.resolve_top_of_stack()
+
+    # Only the artifact moved; creature stays put.
+    assert state.find_object_zone(artifact_id) == ZONE_GRAVEYARD
+    assert state.find_object_zone(creature_id) == ZONE_BATTLEFIELD
+    assert state.battlefield_sizes[1] == p1_bf_before - 1
+    assert state.graveyard_sizes[1] == p1_grave_before + 1
+
+
+def test_resolve_destroy_target_artifact_indestructible_fizzles(engine):
+    """If the defender's only artifact carries the `indestructible`
+    keyword, the scan skips it (CR 702.12) and the spell fizzles —
+    no destruction, no error. Mirrors the round-24
+    DestroyTargetNonlandPermanent indestructible-skip shape."""
+    state = engine.make_synthetic_state(
+        num_battlefield=0, num_hand=1, num_library=1
+    )
+    indestructible_id = state.register_and_inject_object(
+        _indestructible_artifact_dict(), 1, ZONE_BATTLEFIELD
+    )
+    spell_obj_id = state.register_and_inject_object(
+        _drill_too_deep_dict(), 0, ZONE_HAND
+    )
+    p1_bf_before = state.battlefield_sizes[1]
+    p1_grave_before = state.graveyard_sizes[1]
+
+    state.push_to_stack(spell_obj_id, 0)
+    state.resolve_top_of_stack()
+
+    # Indestructible artifact stays put — scan skipped it.
+    assert state.find_object_zone(indestructible_id) == ZONE_BATTLEFIELD
+    assert state.battlefield_sizes[1] == p1_bf_before
+    assert state.graveyard_sizes[1] == p1_grave_before
+    assert state.is_stack_empty() is True
+    assert state.find_object_zone(spell_obj_id) == ZONE_GRAVEYARD
+
+
+def test_resolve_destroy_target_artifact_empty_battlefield_fizzles(engine):
+    """If the defender has no battlefield objects at all, the spell
+    fizzles silently — stack drained, source moved post-resolve."""
+    state = engine.make_synthetic_state(
+        num_battlefield=0, num_hand=1, num_library=1
+    )
+    spell_obj_id = state.register_and_inject_object(
+        _drill_too_deep_dict(), 0, ZONE_HAND
+    )
+    p1_bf_before = state.battlefield_sizes[1]
+    p1_grave_before = state.graveyard_sizes[1]
+    p0_grave_before = state.graveyard_sizes[0]
+
+    state.push_to_stack(spell_obj_id, 0)
+    state.resolve_top_of_stack()
+
+    assert state.is_stack_empty() is True
+    assert state.find_object_zone(spell_obj_id) == ZONE_GRAVEYARD
+    assert state.battlefield_sizes[1] == p1_bf_before
+    assert state.graveyard_sizes[1] == p1_grave_before
+    assert state.graveyard_sizes[0] == p0_grave_before + 1
+
+
+def test_resolve_destroy_target_artifact_skips_active_players_own(engine):
+    """The scan walks the DEFENDING player's battlefield only. The
+    active player's own artifact is NOT a viable target (regression
+    guard — this matches round-17 DestroyTarget / round-24
+    DestroyTargetNonlandPermanent's asymmetric defender-side
+    targeting). Setup: p1's bf is empty, p0's bf has an Artifact.
+    Resolving Drill Too Deep (cast by p0, defender = p1) must
+    FIZZLE — not destroy p0's own artifact."""
+    state = engine.make_synthetic_state(
+        num_battlefield=0, num_hand=1, num_library=1
+    )
+    own_artifact_id = state.register_and_inject_object(
+        _vanilla_artifact_for_dta_dict(),
+        0,  # owned by p0 (active player)
+        ZONE_BATTLEFIELD,
+    )
+    spell_obj_id = state.register_and_inject_object(
+        _drill_too_deep_dict(), 0, ZONE_HAND
+    )
+    p0_bf_before = state.battlefield_sizes[0]
+    p1_bf_before = state.battlefield_sizes[1]
+
+    state.push_to_stack(spell_obj_id, 0)
+    state.resolve_top_of_stack()
+
+    # p0's own artifact stays put — scan was defender-side only.
+    assert state.find_object_zone(own_artifact_id) == ZONE_BATTLEFIELD
+    assert state.battlefield_sizes[0] == p0_bf_before
+    assert state.battlefield_sizes[1] == p1_bf_before
