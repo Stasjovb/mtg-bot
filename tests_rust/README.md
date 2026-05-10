@@ -156,6 +156,7 @@ the test lands in a commit.
 | rust(action-cast-spell): Action::CastSpell + 5 flags (semantics deferred) | tests_rust/test_actions.py extend | green  | feature/rust-action-cast-spell |
 | rust(legal-decisions-cast-spell): legal_decisions emits CastSpell | tests_rust/test_legal.py extend | green  | feature/rust-legal-decisions-cast-spell |
 | rust(effect-counter-target-spell): CounterTargetSpell dispatch (CR 701.5) | tests_rust/test_resolve.py extend | green  | feature/rust-effect-counter-target-spell |
+| rust(effect-return-creature-from-graveyard): reanimate dispatch (CR 400.7) | tests_rust/test_resolve.py extend | green  | feature/rust-effect-return-creature-from-graveyard |
 
 ## Build invocation reminder
 

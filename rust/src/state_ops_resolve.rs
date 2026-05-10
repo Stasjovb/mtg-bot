@@ -1551,6 +1551,92 @@ fn apply_effect(
                 .push(obj);
             }
         }
+        // Round-24: ReturnCreatureFromYourGraveyardToBattlefield.
+        // CR 400.7 (zone-change reset) + CR 302.1 (new permanent has
+        // summoning sickness) — reanimate a creature card from the
+        // controller's graveyard onto their battlefield. Powers Emerge
+        // from the Cocoon, Reanimate-style sugar — 8 cards in the EoE
+        // pool per round-20 measurement.
+        //
+        // **Controller = `state.active_player`** (first-slice
+        // convention, same as DrawCards / GainLife / Mill /
+        // SearchLibraryForBasicLandTapped / CounterTargetSpell).
+        // `source_obj_id` is unused here — the target zone is "your"
+        // graveyard (= controller's), not source-relative.
+        //
+        // **Deterministic first-creature pick.** Scan the controller's
+        // graveyard in Vec iteration order (front = smallest index =
+        // oldest by `move_object`-time push order); pick the first
+        // object whose printing's `card_types` contains "Creature".
+        // No filtering past that (no mana-value cap, no
+        // creature-or-enchantment widening — see the variant's
+        // docstring for the deferred Python schema). Empty graveyard
+        // or no-creature-found: silent fizzle (Python parity with
+        // `ReturnFromGraveyard.resolve`'s `if not targets: return`
+        // short-circuit, and matches the round-17 primitive's
+        // `Ok(false)` return on absent obj_id).
+        //
+        // **Inlining note (cross-file friction).** The round-17
+        // `move_object_from_graveyard_to_battlefield(player_id,
+        // obj_id)` primitive on `state_ops_zones.rs` does exactly the
+        // recipient-side work we need (remove from graveyard, push
+        // onto battlefield, stamp `summoning_sick = true`, zero
+        // tapped / damage / counters). Per the recurring per-slice
+        // file-isolation pattern (CounterTargetSpell / Sacrifice /
+        // ExileTarget / ReturnToHand / DrawCards / Mill / ... all
+        // inline their primitives), this arm inlines the equivalent
+        // logic. A follow-up consolidation slice can collapse onto
+        // the shared primitive once cross-file private-fn calls
+        // re-open.
+        //
+        // **Registry lookup pattern.** We hold `state: &mut GameState`,
+        // and `state.registry.lookup(printing_id)` returns a borrow on
+        // the registry. The `find_map` closure releases each borrow on
+        // each iteration; once the loop completes we hold an
+        // `Option<u32>` and the registry borrow is dropped, leaving
+        // the mutable state borrow free for the subsequent
+        // `Arc::make_mut` calls. Mirrors the borrow-then-drop snapshot
+        // pattern `resolve_top_of_stack` uses for `printing.effects`.
+        Effect::ReturnCreatureFromYourGraveyardToBattlefield => {
+            let _ = source_obj_id; // controller-targeted, not source-relative
+            let controller_idx = state.active_player as usize;
+            // Find first creature in controller's graveyard (front =
+            // smallest Vec index = top of the iteration order). Drop
+            // registry borrow before mutating.
+            let target_obj_id: Option<u32> = state.players[controller_idx]
+                .graveyard
+                .iter()
+                .find_map(|obj| match state.registry.lookup(obj.printing_id) {
+                    Some(printing)
+                        if printing.card_types.iter().any(|t| t == "Creature") =>
+                    {
+                        Some(obj.id)
+                    }
+                    _ => None,
+                });
+            let Some(target_id) = target_obj_id else {
+                return Ok(()); // empty / no-creature: silent fizzle
+            };
+            // Inline the move (mirrors CounterTargetSpell / Sacrifice /
+            // ExileTarget inlining — apply_effect's free-fn signature
+            // makes cross-file primitive call awkward). Move from
+            // graveyard to battlefield; per round-17 conv:
+            // summoning_sick=true, tapped=false, damage=0, counters=0,
+            // zone=ZONE_BATTLEFIELD.
+            let graveyard_mut: &mut Vec<GameObject> =
+                Arc::make_mut(&mut state.players[controller_idx].graveyard);
+            let pos = graveyard_mut
+                .iter()
+                .position(|o| o.id == target_id)
+                .expect("target_id was just found in graveyard but not on re-scan");
+            let mut obj = graveyard_mut.remove(pos);
+            obj.zone = ZONE_BATTLEFIELD;
+            obj.tapped = false;
+            obj.summoning_sick = true;
+            obj.damage = 0;
+            obj.counters = 0;
+            Arc::make_mut(&mut state.players[controller_idx].battlefield).push(obj);
+        }
     }
     Ok(())
 }

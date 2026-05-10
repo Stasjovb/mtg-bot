@@ -305,6 +305,56 @@ pub enum Effect {
     /// `cant_be_countered` shape (mirrors the round-7 counter_spell
     /// primitive's same deferral).
     CounterTargetSpell,
+    /// Return a creature card from your graveyard to the battlefield
+    /// (CR 400.7 + 302.1 — reanimation). Powers Emerge from the Cocoon,
+    /// Reanimate-style sugar, etc. — 8 cards in the EoE pool per
+    /// round-20 measurement.
+    ///
+    /// **First-slice deterministic target choice.** The recipient is
+    /// the FIRST creature card encountered scanning the controller's
+    /// (= `state.active_player`'s, by first-slice convention) graveyard
+    /// in zone-iteration order (front = oldest, smallest Vec index).
+    /// "Creature card" = the printing's `card_types` contains
+    /// "Creature". Real MTG lets the player choose any creature card
+    /// in the graveyard as the target; richer target plumbing is a
+    /// future slice once decision callbacks exist.
+    ///
+    /// **Python schema simplification.** Python's
+    /// `ReturnCreatureFromYourGraveyardToBattlefield` extends the
+    /// unified `ReturnFromGraveyard` dataclass which carries a number
+    /// of optional widening / capping fields (`or_enchantment`,
+    /// `or_spacecraft`, `or_artifact`, `max_mv`, `max_n`, etc.). The
+    /// Rust first slice carries NONE of these — the variant is a unit
+    /// shape ("first creature card in your graveyard"). Refined-target
+    /// variants ("creature with mana value <= N", "creature or
+    /// enchantment", multi-pick) wait for richer target plumbing on
+    /// the Rust side, same deferral shape as TargetFilter / filter_types.
+    ///
+    /// **Empty / no-creature graveyard: silent fizzle.** Mirrors the
+    /// `if not targets: return` short-circuit shape every other
+    /// graveyard-walk arm uses (and the round-17
+    /// `move_object_from_graveyard_to_battlefield` primitive's
+    /// `Ok(false)` return on absent obj_id).
+    ///
+    /// **Composition with round-17 primitive.** The round-17
+    /// `state_ops_zones.rs::move_object_from_graveyard_to_battlefield(
+    /// player_id, obj_id)` primitive does exactly the recipient-side
+    /// work this Effect needs (remove from graveyard, push onto
+    /// battlefield with summoning_sick=true + per-object state reset
+    /// per CR 400.7). Routing through it would require
+    /// cross-`#[pymethods]` plumbing inside `apply_effect` where we
+    /// already hold `state: &mut GameState` — the same E0624 friction
+    /// every other Effect arm hit. Per the recurring per-slice
+    /// file-isolation pattern (DealDamage / ReturnToHand / Mill /
+    /// DrawCards / ExileTarget / Sacrifice / DestroyTarget / TapTarget
+    /// / UntapTarget / AddCounters / DiscardCard / CreateToken /
+    /// AddManaToPool / SearchLibraryForBasicLandTapped /
+    /// PutPlusOneCounterOnSelf / CounterTargetSpell all inline their
+    /// primitives for the same reason), this arm inlines the
+    /// equivalent logic. A follow-up consolidation slice can collapse
+    /// onto the shared primitive once cross-file private-fn calls
+    /// re-open.
+    ReturnCreatureFromYourGraveyardToBattlefield,
 }
 
 #[derive(Clone, Debug)]
@@ -608,8 +658,18 @@ fn parse_effect(dict: &Bound<'_, PyDict>) -> PyResult<Effect> {
             // keys elsewhere in the parser.
             Ok(Effect::CounterTargetSpell)
         }
+        "return_creature_from_your_graveyard_to_battlefield" => {
+            // Unit variant — no required fields. Python's unified
+            // `ReturnFromGraveyard` carries optional widening / capping
+            // fields (`or_enchantment`, `or_spacecraft`, `or_artifact`,
+            // `max_mv`, `max_n`, ...) that the Rust first slice
+            // intentionally drops (see the variant's docstring). Any
+            // extra keys on the dict are ignored, matching the silent-
+            // drop convention elsewhere in the parser.
+            Ok(Effect::ReturnCreatureFromYourGraveyardToBattlefield)
+        }
         other => Err(PyValueError::new_err(format!(
-            "unknown effect kind {other:?}; valid: deal_damage, draw_cards, gain_life, return_to_hand, mill, exile_target, tap_target, untap_target, sacrifice, add_counters, discard_card, scry_n, destroy_target, damage_each_opponent, damage_each_creature, create_token, add_mana_to_pool, search_library_for_basic_land_tapped, put_plus_one_counter_on_self, surveil, counter_target_spell"
+            "unknown effect kind {other:?}; valid: deal_damage, draw_cards, gain_life, return_to_hand, mill, exile_target, tap_target, untap_target, sacrifice, add_counters, discard_card, scry_n, destroy_target, damage_each_opponent, damage_each_creature, create_token, add_mana_to_pool, search_library_for_basic_land_tapped, put_plus_one_counter_on_self, surveil, counter_target_spell, return_creature_from_your_graveyard_to_battlefield"
         ))),
     }
 }
@@ -878,6 +938,9 @@ fn effect_to_pydict<'py>(
         }
         Effect::CounterTargetSpell => {
             d.set_item("kind", "counter_target_spell")?;
+        }
+        Effect::ReturnCreatureFromYourGraveyardToBattlefield => {
+            d.set_item("kind", "return_creature_from_your_graveyard_to_battlefield")?;
         }
     }
     Ok(d)
