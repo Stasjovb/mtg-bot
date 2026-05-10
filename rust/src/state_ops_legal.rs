@@ -56,6 +56,71 @@
 //! at lines 220-229). The dedup key in Python is `(printing.name,)`;
 //! mirroring that here makes the emission list collapse "two Forests"
 //! to a single PlayLand action with the first hand-order Forest's id.
+//!
+//! ## CastSpell extension (rust(legal-decisions-cast-spell))
+//!
+//! Mirrors Python's sorcery-speed CastSpell emission at
+//! `src/mtg_bot/legal.py:335-445` (the `_is_sorcery_speed_spell` loop
+//! that comes AFTER PlayLand). The Python source also has an
+//! instant-speed CastSpell block at lines 230-301 — that block runs
+//! BEFORE the sorcery-timing gate (line 303), so on a state that fails
+//! sorcery timing Python may still emit instant-speed casts. **First
+//! slice ignores the instant-speed block**: every cast is gated by the
+//! same sorcery-timing short-circuit at line 148 of this file. Future
+//! slices add the instant-speed window by moving the CastSpell loop
+//! ABOVE the sorcery-timing return and threading the
+//! `card.printing.is_instant || "flash" in keywords` predicate; the
+//! per-card emission code stays the same.
+//!
+//! **Deferred mana-affordability check.** Python's `_can_cast` (lines
+//! 252-254 / 383-385) calls `state.can_pay_cost(...)` to refuse spells
+//! whose mana cost the player can't pay. Rust's `state_ops_mana.rs`
+//! has only the destructive `pay_mana_cost(player_id, cost_dict)`
+//! primitive — no non-destructive `can_pay_cost` predicate exists
+//! yet. First-slice CastSpell emits for EVERY non-Land in hand
+//! regardless of mana availability; a future slice adds the
+//! affordability check (either by extracting a `can_pay_cost` /
+//! `try_pay_mana_cost`-with-rollback predicate or by snapshotting
+//! the mana pool before each `pay_mana_cost` attempt). Documented
+//! in `docs/SEARCH_LIMITATIONS.md` alongside the one-land-per-turn
+//! gate.
+//!
+//! **Deferred alt-cost flags.** Python's CastSpell loop emits up to
+//! four extra dicts per card for `kicked=True`, `use_warp=True`,
+//! `use_impending=True`, and `cast_for_free=True` (the kicker /
+//! warp / impending / Weftwalking variants, each gated by a
+//! per-printing predicate on `kicker_cost` / `warp_cost` /
+//! `impending_cost` / Weftwalking grant). First-slice emits ONLY the
+//! base "no-flags" CastSpell with `use_warp=False, kicked=False,
+//! cast_for_free=False, use_impending=False, cast_room_half=None` —
+//! the same six-key shape `action_to_pydict` produces and
+//! `parse_action` accepts. The alt-cost / Room-half emissions land
+//! in follow-up slices once the alt-cost detector primitive ports
+//! over.
+//!
+//! **Sorcery-speed-spell filter.** Python's `_is_sorcery_speed_spell`
+//! (lines 339-345) accepts a card if it is a Creature, a Sorcery, or
+//! a non-Land non-Instant Permanent (artifact, enchantment,
+//! battle, ...). First-slice approximates this with the inverse: any
+//! non-Land card in hand is a CastSpell candidate. The synthetic-
+//! state registry only has Forest (Land) and Llanowar Elves /
+//! Grizzly Bears (Creature) — no Instants exist to mis-classify, so
+//! the approximation is correct for the entire test surface. When
+//! the registry grows Instants, the filter must add the
+//! `is_instant` exclusion to match Python (Instants get cast in the
+//! instant-speed block, not the sorcery-speed one, so they would
+//! emit twice).
+//!
+//! ## Dedup key shape
+//!
+//! Python's CastSpell dedup key at lines 233-240 / 352-359 is the
+//! 6-tuple `(printing.name, use_warp, kicked, cast_for_free,
+//! use_impending, cast_room_half)`. With all flags False/None in the
+//! first slice, the tuple collapses to effectively `(printing.name,)`
+//! — same dedup behavior as PlayLand. The Rust HashSet is keyed on
+//! the printing name string slice; when the alt-cost flags land, the
+//! future slice extends the key to a 6-tuple (string + 4 bools +
+//! `Option<String>`).
 
 use crate::state::GameState;
 use crate::state_ops_steps::{PHASE_MAIN1, PHASE_MAIN2};
@@ -86,6 +151,30 @@ fn play_land_dict(py: Python<'_>, card_id: u32) -> PyResult<Bound<'_, PyDict>> {
     let d = PyDict::new(py);
     d.set_item("kind", "play_land")?;
     d.set_item("card_id", card_id)?;
+    Ok(d)
+}
+
+/// Build a `{"kind": "cast_spell", "card_id": <id>, ...}` dict with all
+/// six fields populated. Mirrors `action_to_pydict`'s symmetric-emit
+/// shape (`actions.rs:385-410`): every CastSpell dict — emitted from
+/// `legal_decisions` or from `action_to_pydict` round-trip — carries
+/// the full 7 keys (kind + card_id + 5 flag fields) so consumers can
+/// rely on key-presence without `dict.get(...)`-with-default.
+///
+/// First-slice defaults: `use_warp=False, kicked=False,
+/// cast_for_free=False, use_impending=False, cast_room_half=None`.
+/// Future alt-cost slices add new constructor calls that flip individual
+/// flags; the helper's signature grows to take them as parameters.
+fn cast_spell_dict(py: Python<'_>, card_id: u32) -> PyResult<Bound<'_, PyDict>> {
+    let d = PyDict::new(py);
+    d.set_item("kind", "cast_spell")?;
+    d.set_item("card_id", card_id)?;
+    d.set_item("use_warp", false)?;
+    d.set_item("kicked", false)?;
+    d.set_item("cast_for_free", false)?;
+    d.set_item("use_impending", false)?;
+    // None as cast_room_half — Python None at the dict layer.
+    d.set_item("cast_room_half", py.None())?;
     Ok(d)
 }
 
@@ -189,6 +278,58 @@ impl GameState {
         // 178, so Python's final list shape is
         // `[PassPriority, PlayLand_1, PlayLand_2, ...]`. We match
         // that by pushing PassPriority first then PlayLands after.
+
+        // Python lines 335-445: sorcery-speed CastSpell emission.
+        //
+        // Walks hand for non-Land cards and emits a base CastSpell
+        // (no alt-cost flags). The Python source has additional
+        // alt-cost emissions (kicker / warp / impending /
+        // cast_for_free / Room-half) interleaved inside the same
+        // loop body; first-slice ships the no-flags emission only —
+        // see the "Deferred alt-cost flags" section of the module
+        // docstring.
+        //
+        // **Filter** (Python lines 366-345, narrowed): non-Land
+        // cards. Python additionally excludes Instants (they get
+        // cast in the instant-speed block above, lines 246-301)
+        // and gates `_is_sorcery_speed_spell` on
+        // is_creature || is_sorcery || (is_permanent && !is_instant
+        // && !is_land). First-slice approximation: "not Land"
+        // captures every printing in the synthetic-state registry
+        // (Forest = Land filtered out; Creatures emit; no other
+        // types registered yet).
+        //
+        // **Dedup** (Python lines 349-363): keyed on
+        // `(printing.name, ...flags)` 6-tuple. With all flags
+        // defaulted, this collapses to `(printing.name,)` — same
+        // shape as the PlayLand dedup above. Two Llanowar Elves
+        // in hand emit a single CastSpell carrying the first
+        // hand-order Elves' id.
+        let mut seen_castspell: HashSet<&str> = HashSet::new();
+        for obj in self.players[idx].hand.iter() {
+            let Some(printing) = self.registry.lookup(obj.printing_id) else {
+                continue;
+            };
+            // Skip Lands — they emit PlayLand actions, not
+            // CastSpell. Lands play via the special action, not
+            // cast via the stack (CR 305.1).
+            let is_land = printing.card_types.iter().any(|t| t == "Land");
+            if is_land {
+                continue;
+            }
+            // Dedup by printing name (first-slice key — see
+            // module docstring for the future 6-tuple shape).
+            let name: &str = printing.name.as_ref();
+            if seen_castspell.contains(name) {
+                continue;
+            }
+            seen_castspell.insert(name);
+            actions.push(cast_spell_dict(py, obj.id)?);
+        }
+
+        // Final emission order: [PassPriority, PlayLand..., CastSpell...].
+        // Matches Python's `legal.py` natural append order under the
+        // sorcery-timing gate.
 
         Ok(actions)
     }
