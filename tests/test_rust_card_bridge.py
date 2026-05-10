@@ -192,6 +192,119 @@ def test_mana_cost_value_must_be_non_negative_integer():
         reg.register_printing({"name": "Broken", "mana_cost": {"R": "hot"}})
 
 
+# --- power / toughness / mana_produced (round-3 extension) ------
+
+
+GRIZZLY_BEARS = {
+    "name": "Grizzly Bears",
+    "mana_cost": {"generic": 1, "G": 1},
+    "power": 2,
+    "toughness": 2,
+}
+
+FOREST_PRINTING = {
+    "name": "Forest",
+    "mana_produced": ["G"],
+}
+
+
+def test_round_trip_creature_power_toughness():
+    reg = mtg_bot_engine.Registry()
+    pid = reg.register_printing(GRIZZLY_BEARS)
+    assert reg.get_printing_power(pid) == 2
+    assert reg.get_printing_toughness(pid) == 2
+    # Non-creature default for the same call surface returns None.
+    sid = reg.register_printing(SHOCK)
+    assert reg.get_printing_power(sid) is None
+    assert reg.get_printing_toughness(sid) is None
+
+
+def test_round_trip_mana_produced_forest():
+    reg = mtg_bot_engine.Registry()
+    pid = reg.register_printing(FOREST_PRINTING)
+    assert reg.get_printing_mana_produced(pid) == ["G"]
+
+
+def test_mana_produced_default_is_none():
+    """Spells (and creatures without mana production) round-trip as None."""
+    reg = mtg_bot_engine.Registry()
+    pid = reg.register_printing(SHOCK)
+    assert reg.get_printing_mana_produced(pid) is None
+
+
+def test_negative_power_round_trips():
+    """`power: i16` permits negatives (no real card has them by
+    print, but anthem-like effects produce them on objects; the
+    field bound is intentionally i16 so the bridge doesn't need
+    to grow another type later)."""
+    reg = mtg_bot_engine.Registry()
+    pid = reg.register_printing(
+        {"name": "Pseudo", "power": -1, "toughness": 0}
+    )
+    assert reg.get_printing_power(pid) == -1
+    assert reg.get_printing_toughness(pid) == 0
+
+
+def test_mana_produced_multi_pip_round_trip():
+    """Vec<String> tolerates >1-pip producers at the bridge level
+    even though `tap_for_mana` declines to commit on them this slice."""
+    reg = mtg_bot_engine.Registry()
+    pid = reg.register_printing(
+        {"name": "Hypothetical Bicycle Land", "mana_produced": ["G", "G"]}
+    )
+    assert reg.get_printing_mana_produced(pid) == ["G", "G"]
+
+
+# --- error paths for the new fields ------------------------------
+
+
+def test_invalid_mana_symbol_in_mana_produced_raises():
+    reg = mtg_bot_engine.Registry()
+    with pytest.raises(ValueError, match="unknown mana symbol"):
+        reg.register_printing({"name": "Broken", "mana_produced": ["Q"]})
+
+
+def test_lowercase_mana_symbol_in_mana_produced_raises():
+    reg = mtg_bot_engine.Registry()
+    with pytest.raises(ValueError, match="unknown mana symbol"):
+        reg.register_printing({"name": "Broken", "mana_produced": ["g"]})
+
+
+def test_non_iterable_mana_produced_raises():
+    reg = mtg_bot_engine.Registry()
+    with pytest.raises(ValueError):
+        reg.register_printing({"name": "Broken", "mana_produced": 7})
+
+
+def test_non_string_mana_produced_entry_raises():
+    reg = mtg_bot_engine.Registry()
+    with pytest.raises(ValueError, match="must be strings"):
+        reg.register_printing({"name": "Broken", "mana_produced": [1]})
+
+
+def test_non_integer_power_raises():
+    reg = mtg_bot_engine.Registry()
+    with pytest.raises(ValueError, match="power must be an integer"):
+        reg.register_printing({"name": "Broken", "power": "huge"})
+
+
+def test_non_integer_toughness_raises():
+    reg = mtg_bot_engine.Registry()
+    with pytest.raises(ValueError, match="toughness must be an integer"):
+        reg.register_printing({"name": "Broken", "toughness": "small"})
+
+
+def test_lookup_oob_for_new_getters_raises():
+    reg = mtg_bot_engine.Registry()
+    reg.register_printing(GRIZZLY_BEARS)
+    with pytest.raises(KeyError):
+        reg.get_printing_power(99)
+    with pytest.raises(KeyError):
+        reg.get_printing_toughness(99)
+    with pytest.raises(KeyError):
+        reg.get_printing_mana_produced(99)
+
+
 # --- bench helper ------------------------------------------------
 
 

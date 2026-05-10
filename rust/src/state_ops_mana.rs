@@ -18,17 +18,18 @@
 //! rather than clamping at zero — silent underflow would mask
 //! paid-but-not-collected bugs in cost-payment code.
 //!
-//! **Mana-production lookup is provisional.** `tap_for_mana`
-//! recognizes Forests by string-matching the printing's `name`
-//! against `"Forest"`. This works for the synthetic 3-printing
-//! registry today and keeps the slice scoped to this single file.
-//! The proper fix — a typed `mana_produced` field on
-//! `CardPrinting` — requires touching `cards.rs`, which a sibling
-//! agent is editing this round, so it lands in a future bridge
-//! slice. The provisional path is a deliberate "fewer files, fewer
-//! conflicts" trade for the round-2 parallel TDD batch; the test
-//! `test_tap_for_mana_on_forest_produces_green` is the trip-wire
-//! that will fail once we replace it with the real mapping.
+//! **Mana-production lookup reads `CardPrinting.mana_produced`.**
+//! Round-3 retired the round-2 placeholder (string-match on
+//! `"Forest"`); `tap_for_mana` now reads the printing's typed
+//! `mana_produced: Option<Vec<String>>` field. First-slice scope
+//! only handles single-color, single-pip producers (Vec length 1):
+//! a `Some(vec!["G"])` Forest produces one G into the controller's
+//! pool. Multi-pip producers (a future "tap for {G}{G}" bicycling
+//! land) and multi-color producers ("tap for one of any color")
+//! return `None` for now — the trip-wire is `produced.len() != 1`
+//! in `tap_for_mana`, which will fail loudly on a registry seed
+//! that produces more than one pip. Add a richer schema (and a
+//! follow-up slice) before adding such a printing.
 //!
 //! **CoW for the mana pool.** `Player` lives by-value in
 //! `GameState.players: [Player; 2]`, and `ManaPool` is itself
@@ -159,35 +160,44 @@ impl GameState {
         Ok(())
     }
 
-    /// Tap a permanent for mana. Provisional implementation:
-    /// recognizes Forests by string-matching the printing's `name`
-    /// against `"Forest"` and producing `{G}` for the controller.
-    /// Returns `Some("G")` on success, `None` on every failure mode
-    /// (not on a battlefield, already tapped, not a recognized
-    /// mana-producer). Crucially, the failure cases are silent —
-    /// no error is raised, no mana is added, no tap is performed.
-    /// This matches the Python convention where a mana ability
-    /// that can't activate is just a no-op at the action layer.
-    ///
-    /// See the module docstring for why this is name-keyed rather
-    /// than reading a typed `mana_produced` field on `CardPrinting`.
+    /// Tap a permanent for mana. Reads the printing's
+    /// `mana_produced: Option<Vec<String>>` (round-3 retired the
+    /// previous name-keyed lookup). Returns `Some(color)` for a
+    /// single-pip single-color producer, `None` on every failure
+    /// mode (not on a battlefield, already tapped, printing has no
+    /// `mana_produced`, or `mana_produced` has length != 1 —
+    /// stepping-stone, see module docstring). The failure paths
+    /// are silent (no error raised) to match the Python convention
+    /// where a mana ability that can't activate is a no-op at the
+    /// action layer.
     fn tap_for_mana(&mut self, obj_id: u32) -> PyResult<Option<String>> {
-        // Phase 1: locate the object + look up its printing name +
-        // its controller. Done as an immutable scan so we can decide
-        // whether to produce mana before we open up `Arc::make_mut`
-        // on a zone.
-        let mut found: Option<(usize, &str)> = None; // (controller_idx, name)
+        // Phase 1: locate the object, peek at its printing's
+        // `mana_produced`, and decide whether the tap will produce.
+        // Done as an immutable scan so we don't open `Arc::make_mut`
+        // unless we know the tap is going to commit.
+        let mut found: Option<(usize, String)> = None; // (controller_idx, color)
         for (player_idx, player) in self.players.iter().enumerate() {
             for obj in player.battlefield.iter() {
                 if obj.id == obj_id {
                     if obj.tapped {
                         return Ok(None);
                     }
-                    let name = match self.registry.lookup(obj.printing_id) {
-                        Some(p) => p.name.as_ref(),
+                    let printing = match self.registry.lookup(obj.printing_id) {
+                        Some(p) => p,
                         None => return Ok(None),
                     };
-                    found = Some((player_idx, name));
+                    let produced = match &printing.mana_produced {
+                        Some(v) => v,
+                        None => return Ok(None),
+                    };
+                    // Stepping-stone: only single-color, single-pip
+                    // producers handled this slice. A future slice
+                    // adds multi-pip / multi-color support and may
+                    // change the return type.
+                    if produced.len() != 1 {
+                        return Ok(None);
+                    }
+                    found = Some((player_idx, produced[0].clone()));
                     break;
                 }
             }
@@ -195,20 +205,18 @@ impl GameState {
                 break;
             }
         }
-        let (controller_idx, name) = match found {
+        let (controller_idx, produced_color) = match found {
             Some(t) => t,
             None => return Ok(None),
         };
-        // Provisional name-keyed mana production. Future slice
-        // replaces this with a typed `mana_produced` field on
-        // `CardPrinting`.
-        let produced_color = match name {
-            "Forest" => "G",
-            _ => return Ok(None),
-        };
-        // Phase 2: commit the mutation. Tap the permanent (going
-        // through `Arc::make_mut` on the zone) and credit the
-        // controller's pool.
+        // Phase 2: commit the mutation. Tap the permanent (via
+        // `Arc::make_mut` on the zone) and credit the controller's
+        // pool. `slot_mut` validates `produced_color` against the
+        // closed vocabulary; an invalid symbol made it into the
+        // registry only if `parse_printing`'s validator was
+        // bypassed, which would be a registry-construction bug, not
+        // a runtime tap-for-mana bug — so we surface it loudly
+        // rather than silently dropping the production.
         let player = &mut self.players[controller_idx];
         let zone: &mut Vec<GameObject> = Arc::make_mut(&mut player.battlefield);
         for obj in zone.iter_mut() {
@@ -217,9 +225,8 @@ impl GameState {
                 break;
             }
         }
-        let slot = slot_mut(&mut player.mana_pool, produced_color)
-            .expect("produced_color is hard-coded to a valid slot");
+        let slot = slot_mut(&mut player.mana_pool, &produced_color)?;
         *slot = slot.saturating_add(1);
-        Ok(Some(produced_color.to_string()))
+        Ok(Some(produced_color))
     }
 }
