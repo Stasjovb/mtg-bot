@@ -136,6 +136,7 @@ the test lands in a commit.
 | rust(library-mill-target-player): mill_target_player primitive | tests_rust/test_library.py extend | green  | feature/rust-tdd-library-mill-target-player |
 | rust(choices-extend): graveyard / keyword / tapped selectors | tests_rust/test_choices.py extend | green  | feature/rust-tdd-choices-extend |
 | rust(bridge-outcome): is_over / is_draw / winner_id getters | tests_rust/test_winloss.py extend | green  | feature/rust-bridge-outcome |
+| rust(bridge-zone-snapshots): hand/library/graveyard/exile/battlefield/mana_pool getters | tests_rust/test_snapshot.py | green  | feature/rust-bridge-zone-snapshots |
 
 ## Build invocation reminder
 
