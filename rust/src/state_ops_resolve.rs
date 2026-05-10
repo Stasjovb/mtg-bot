@@ -37,11 +37,24 @@
 //!     stack item still pops, but no damage is applied.
 //!   Real targeting is a future slice once the cast-time target-
 //!   choice surface lands.
-//! - **No spell-source movement after resolve.** Real MTG: an
-//!   instant/sorcery on the stack goes to graveyard after
-//!   resolution; a permanent spell goes to battlefield. For first
-//!   slice, just pop the stack item — caller is responsible for
-//!   movement. Documented as a stepping-stone.
+//! - **Post-resolve spell-source movement** (round-7 slice).
+//!   Real MTG CR 608.2m: when a spell finishes resolving, the
+//!   spell-as-game-object moves out of the stack zone. An instant
+//!   or sorcery goes to its owner's graveyard; a permanent spell
+//!   becomes a permanent on the battlefield. After applying
+//!   effects, `resolve_top_of_stack` looks up the source's
+//!   `card_types` and dispatches:
+//!   - "Instant" / "Sorcery" -> controller's graveyard
+//!   - "Creature" / "Artifact" / "Enchantment" / "Planeswalker" /
+//!     "Battle" -> controller's battlefield
+//!   - empty `card_types` (synthetic-test escape hatch) -> leave
+//!     the source where it is. Real MTG cards always have at
+//!     least one card type; this branch only fires for
+//!     first-slice synthetic cards.
+//!   Creatures specifically: when entering the battlefield via
+//!   this path, `summoning_sick` is stamped `true` (CR 302.1 —
+//!   the new permanent has summoning sickness).
+//!   ETB triggers are NOT in scope (a future slice).
 //! - **Empty stack returns None gracefully** (no exception). Same
 //!   convention as `pop_top_of_stack`.
 //!
@@ -104,6 +117,106 @@ fn find_source_printing_id(state: &GameState, obj_id: u32) -> Option<u32> {
     None
 }
 
+/// Take the GameObject with id `obj_id` out of whichever of the
+/// four tracked zones currently holds it. Returns the owned
+/// `GameObject` (and the player_idx + source_zone constant for
+/// observability) so the caller can update its `zone` field and
+/// push it elsewhere. CoW-safe via `Arc::make_mut`. Returns `None`
+/// if no object with that id exists in any tracked zone (the
+/// "lost track of source" case).
+fn take_source(state: &mut GameState, obj_id: u32) -> Option<(GameObject, u8, u8)> {
+    for (pidx, player) in state.players.iter_mut().enumerate() {
+        for (zone_const, zone) in [
+            (ZONE_HAND, &mut player.hand),
+            (ZONE_LIBRARY, &mut player.library),
+            (ZONE_BATTLEFIELD, &mut player.battlefield),
+            (ZONE_GRAVEYARD, &mut player.graveyard),
+        ] {
+            if let Some(pos) = zone.iter().position(|o| o.id == obj_id) {
+                let v = Arc::make_mut(zone);
+                let obj = v.remove(pos);
+                return Some((obj, pidx as u8, zone_const));
+            }
+        }
+    }
+    None
+}
+
+/// Decision returned by the post-resolve dispatch: what zone (if
+/// any) does this card_types tuple route to? `None` = leave source
+/// in place (empty card_types = synthetic-test escape hatch).
+fn post_resolve_destination(card_types: &[String]) -> Option<u8> {
+    let is_spell = card_types
+        .iter()
+        .any(|t| t == "Instant" || t == "Sorcery");
+    if is_spell {
+        return Some(ZONE_GRAVEYARD);
+    }
+    let is_permanent = card_types.iter().any(|t| {
+        t == "Creature"
+            || t == "Artifact"
+            || t == "Enchantment"
+            || t == "Planeswalker"
+            || t == "Battle"
+    });
+    if is_permanent {
+        return Some(ZONE_BATTLEFIELD);
+    }
+    None
+}
+
+/// True iff `card_types` includes "Creature" — gates the
+/// summoning-sick stamp on battlefield entry.
+fn is_creature(card_types: &[String]) -> bool {
+    card_types.iter().any(|t| t == "Creature")
+}
+
+/// Apply post-resolve movement (CR 608.2m). Looks up the source
+/// printing's `card_types`, dispatches to graveyard / battlefield
+/// per the rules above, no-op for empty card_types. Stamps
+/// `summoning_sick = true` for creatures landing on the
+/// battlefield.
+fn move_source_post_resolve(state: &mut GameState, source_obj_id: u32) {
+    // Pull the printing's card_types into an owned Vec so we drop
+    // the registry borrow before mutating zones.
+    let printing_id = match find_source_printing_id(state, source_obj_id) {
+        Some(pid) => pid,
+        None => return, // lost track of source — silent no-op
+    };
+    let (destination, creature) = match state.registry.lookup(printing_id) {
+        Some(printing) => (
+            post_resolve_destination(&printing.card_types),
+            is_creature(&printing.card_types),
+        ),
+        None => return,
+    };
+    let Some(dest_zone) = destination else {
+        return; // empty card_types — leave source in place
+    };
+
+    // Take from current zone; if not found, treat as silent no-op.
+    let Some((mut obj, controller, _src_zone)) = take_source(state, source_obj_id)
+    else {
+        return;
+    };
+    obj.zone = dest_zone;
+    if dest_zone == ZONE_BATTLEFIELD && creature {
+        obj.summoning_sick = true;
+    }
+    let player = &mut state.players[controller as usize];
+    let dest = match dest_zone {
+        ZONE_HAND => &mut player.hand,
+        ZONE_LIBRARY => &mut player.library,
+        ZONE_BATTLEFIELD => &mut player.battlefield,
+        ZONE_GRAVEYARD => &mut player.graveyard,
+        // Unreachable per `post_resolve_destination`'s closed
+        // returns (BATTLEFIELD or GRAVEYARD only); fall back to
+        // graveyard rather than panic.
+        _ => &mut player.graveyard,
+    };
+    Arc::make_mut(dest).push(obj);
+}
+
 /// Apply a single Effect to `state`. Closed-enum match: adding a
 /// new variant in the bridge will turn this into a build-time
 /// error (exhaustiveness) until handled here — the desired "fail
@@ -156,7 +269,11 @@ impl GameState {
     ///    zones on both players.
     /// 3. Read the source printing's effects from the registry.
     /// 4. Dispatch each effect (currently only `DealDamage`).
-    /// 5. Pop the stack item and return its dict.
+    /// 5. Move the source per CR 608.2m: instant/sorcery to
+    ///    controller's graveyard, permanents to controller's
+    ///    battlefield (summoning-sick if creature). Empty
+    ///    card_types leaves source in place.
+    /// 6. Pop the stack item and return its dict.
     ///
     /// If the source GameObject can't be found in any zone, the
     /// item still pops — no effects fire (treated like a fizzle).
@@ -188,6 +305,16 @@ impl GameState {
         for effect in &effects {
             apply_effect(self, effect)?;
         }
+
+        // CR 608.2m: post-resolve, move the spell source. Instants /
+        // sorceries -> controller's graveyard; permanents (creature,
+        // artifact, enchantment, planeswalker, battle) ->
+        // controller's battlefield with summoning sickness for
+        // creatures. Empty card_types is the synthetic-test escape
+        // hatch — leave source in place. Done BEFORE the stack pop
+        // so a panic in movement doesn't leave the stack drained
+        // with no movement applied (transactional shape).
+        move_source_post_resolve(self, top.source_obj_id);
 
         // Now drain the popped item and return its dict.
         let popped = self

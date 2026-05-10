@@ -85,6 +85,7 @@ the test lands in a commit.
 | tests_rust/test_resolve.py        | tests/test_combat.py + game.py              | green  | feature/rust-tdd-resolve   |
 | rust(combat-vigilance): keyword skip-tap | tests_rust/test_combat.py extend             | green  | feature/rust-tdd-vigilance |
 | tests_rust/test_counterspell.py   | tests/test_counter_cancellation.py + game.py | green  | feature/rust-tdd-counterspell |
+| rust(resolve-postmove): card_types-driven destination | tests_rust/test_resolve.py extend            | green  | feature/rust-tdd-postresolve |
 
 ## Build invocation reminder
 
