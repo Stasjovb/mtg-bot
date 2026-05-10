@@ -7248,3 +7248,257 @@ def test_resolve_destroy_target_artifact_skips_active_players_own(engine):
     assert state.find_object_zone(own_artifact_id) == ZONE_BATTLEFIELD
     assert state.battlefield_sizes[0] == p0_bf_before
     assert state.battlefield_sizes[1] == p1_bf_before
+
+
+# --- DestroyTargetLand dispatch -------------------------------------
+#
+# **DestroyTargetLand scope** (mirrored in the Rust module docstring
+# on ``cards.rs``):
+#
+# - **Unit variant** — Python's `DestroyTargetLand(Destroy)` bakes
+#   the filter `IsLand()` into the class shape; the Rust bridge
+#   variant carries no fields and the Land-filter is intrinsic to
+#   the dispatch.
+# - **Dust Bowl / Petrified Field pattern** — 2 cards in the EoE
+#   pool per round-20 measurement.
+# - **First-slice deterministic choice**: scan the DEFENDING player's
+#   battlefield top-to-bottom; pick the FIRST object whose printing's
+#   `card_types` contains "Land" AND whose `keywords` does NOT contain
+#   "indestructible".
+# - **Distinct from round-25 DestroyTargetArtifact** — that arm filters
+#   `card_types.contains("Artifact")`; this arm filters
+#   `card_types.contains("Land")`. Identical dispatch shape otherwise.
+# - **Indestructible is honored** (CR 702.12) — the scan skips
+#   indestructible lands.
+# - **Empty / no-lands / only-indestructible-lands defender bf fizzles
+#   silently** — stack item still pops, source still moves post-resolve,
+#   no zone deltas.
+# - **Active player's own lands are NOT affected** — scan only walks
+#   the defender's battlefield (mirrors round-25 / round-24 / round-17
+#   asymmetric defender-side targeting).
+
+
+def _dust_bowl_dict():
+    """A destroy-target-land spell — Dust Bowl-shaped (sorcery,
+    destroys target land). We register as Sorcery here rather than
+    the real activated-ability-on-a-land shape because the test scope
+    is the resolve-time dispatch, not the cast-side machinery."""
+    return {
+        "name": "Test Dust Bowl",
+        "card_types": ["Sorcery"],
+        "mana_cost": {"generic": 2},
+        "effects": [{"kind": "destroy_target_land"}],
+    }
+
+
+def _vanilla_land_for_dtl_dict():
+    """A vanilla land printing — non-indestructible. Used as the
+    target for DestroyTargetLand happy paths."""
+    return {
+        "name": "Test Forest",
+        "card_types": ["Land"],
+        "mana_produced": ["G"],
+        "effects": [],
+    }
+
+
+def _indestructible_land_dict():
+    """A vanilla land printing carrying the `indestructible` keyword —
+    used to verify DestroyTargetLand's scan skips indestructible lands
+    (CR 702.12)."""
+    return {
+        "name": "Test Indestructible Land",
+        "card_types": ["Land"],
+        "mana_produced": ["W"],
+        "effects": [],
+        "keywords": ["indestructible"],
+    }
+
+
+def test_resolve_destroy_target_land_destroys_defender_land(engine):
+    """Happy path: defender has a vanilla land in bf[0]; resolving
+    Dust Bowl destroys it. Mirrors round-25 DestroyTargetArtifact
+    happy path with the filter swapped."""
+    state = engine.make_synthetic_state(
+        num_battlefield=0, num_hand=1, num_library=1
+    )
+    land_id = state.register_and_inject_object(
+        _vanilla_land_for_dtl_dict(), 1, ZONE_BATTLEFIELD
+    )
+    spell_obj_id = state.register_and_inject_object(
+        _dust_bowl_dict(), 0, ZONE_HAND
+    )
+    p1_bf_before = state.battlefield_sizes[1]
+    p1_grave_before = state.graveyard_sizes[1]
+    p0_grave_before = state.graveyard_sizes[0]
+
+    state.push_to_stack(spell_obj_id, 0)
+    state.resolve_top_of_stack()
+
+    # Land moved to p1's graveyard.
+    assert state.find_object_zone(land_id) == ZONE_GRAVEYARD
+    assert state.battlefield_sizes[1] == p1_bf_before - 1
+    assert state.graveyard_sizes[1] == p1_grave_before + 1
+    # Source sorcery in p0's graveyard.
+    assert state.is_stack_empty() is True
+    assert state.find_object_zone(spell_obj_id) == ZONE_GRAVEYARD
+    assert state.graveyard_sizes[0] == p0_grave_before + 1
+
+
+def test_resolve_destroy_target_land_only_creatures_fizzles(engine):
+    """If the defender's battlefield has only Creatures (no Lands),
+    the scan finds no eligible target and fizzles silently. The
+    Creature is NOT destroyed (the Land filter does not match
+    Creatures)."""
+    state = engine.make_synthetic_state(
+        num_battlefield=0, num_hand=1, num_library=1
+    )
+    creature_id = state.register_and_inject_object(
+        {
+            "name": "Test Vanilla Bear",
+            "card_types": ["Creature"],
+            "power": 2,
+            "toughness": 2,
+        },
+        1,
+        ZONE_BATTLEFIELD,
+    )
+    spell_obj_id = state.register_and_inject_object(
+        _dust_bowl_dict(), 0, ZONE_HAND
+    )
+    p1_bf_before = state.battlefield_sizes[1]
+    p1_grave_before = state.graveyard_sizes[1]
+    p0_grave_before = state.graveyard_sizes[0]
+
+    state.push_to_stack(spell_obj_id, 0)
+    state.resolve_top_of_stack()
+
+    # Creature untouched — Land filter didn't match.
+    assert state.find_object_zone(creature_id) == ZONE_BATTLEFIELD
+    assert state.battlefield_sizes[1] == p1_bf_before
+    assert state.graveyard_sizes[1] == p1_grave_before
+    # Stack drained; source sorcery moved to p0's graveyard.
+    assert state.is_stack_empty() is True
+    assert state.find_object_zone(spell_obj_id) == ZONE_GRAVEYARD
+    assert state.graveyard_sizes[0] == p0_grave_before + 1
+
+
+def test_resolve_destroy_target_land_picks_land_over_creature(engine):
+    """Defender has Land in bf[0] and Creature in bf[1]. The scan
+    picks the Land (the first match for the filter); the Creature
+    stays. This is the load-bearing distinction from round-17
+    DestroyTarget (which would pick bf[0] unconditionally) — here the
+    Land filter matches bf[0], and the creature in bf[1] is NOT
+    eligible at all."""
+    state = engine.make_synthetic_state(
+        num_battlefield=0, num_hand=1, num_library=1
+    )
+    land_id = state.register_and_inject_object(
+        _vanilla_land_for_dtl_dict(), 1, ZONE_BATTLEFIELD
+    )
+    creature_id = state.register_and_inject_object(
+        {
+            "name": "Test Vanilla Bear",
+            "card_types": ["Creature"],
+            "power": 2,
+            "toughness": 2,
+        },
+        1,
+        ZONE_BATTLEFIELD,
+    )
+    spell_obj_id = state.register_and_inject_object(
+        _dust_bowl_dict(), 0, ZONE_HAND
+    )
+    p1_bf_before = state.battlefield_sizes[1]
+    p1_grave_before = state.graveyard_sizes[1]
+
+    state.push_to_stack(spell_obj_id, 0)
+    state.resolve_top_of_stack()
+
+    # Only the land moved; creature stays put.
+    assert state.find_object_zone(land_id) == ZONE_GRAVEYARD
+    assert state.find_object_zone(creature_id) == ZONE_BATTLEFIELD
+    assert state.battlefield_sizes[1] == p1_bf_before - 1
+    assert state.graveyard_sizes[1] == p1_grave_before + 1
+
+
+def test_resolve_destroy_target_land_indestructible_fizzles(engine):
+    """If the defender's only land carries the `indestructible`
+    keyword, the scan skips it (CR 702.12) and the spell fizzles —
+    no destruction, no error. Mirrors round-25 DestroyTargetArtifact
+    indestructible-skip shape."""
+    state = engine.make_synthetic_state(
+        num_battlefield=0, num_hand=1, num_library=1
+    )
+    indestructible_id = state.register_and_inject_object(
+        _indestructible_land_dict(), 1, ZONE_BATTLEFIELD
+    )
+    spell_obj_id = state.register_and_inject_object(
+        _dust_bowl_dict(), 0, ZONE_HAND
+    )
+    p1_bf_before = state.battlefield_sizes[1]
+    p1_grave_before = state.graveyard_sizes[1]
+
+    state.push_to_stack(spell_obj_id, 0)
+    state.resolve_top_of_stack()
+
+    # Indestructible land stays put — scan skipped it.
+    assert state.find_object_zone(indestructible_id) == ZONE_BATTLEFIELD
+    assert state.battlefield_sizes[1] == p1_bf_before
+    assert state.graveyard_sizes[1] == p1_grave_before
+    assert state.is_stack_empty() is True
+    assert state.find_object_zone(spell_obj_id) == ZONE_GRAVEYARD
+
+
+def test_resolve_destroy_target_land_empty_battlefield_fizzles(engine):
+    """If the defender has no battlefield objects at all, the spell
+    fizzles silently — stack drained, source moved post-resolve."""
+    state = engine.make_synthetic_state(
+        num_battlefield=0, num_hand=1, num_library=1
+    )
+    spell_obj_id = state.register_and_inject_object(
+        _dust_bowl_dict(), 0, ZONE_HAND
+    )
+    p1_bf_before = state.battlefield_sizes[1]
+    p1_grave_before = state.graveyard_sizes[1]
+    p0_grave_before = state.graveyard_sizes[0]
+
+    state.push_to_stack(spell_obj_id, 0)
+    state.resolve_top_of_stack()
+
+    assert state.is_stack_empty() is True
+    assert state.find_object_zone(spell_obj_id) == ZONE_GRAVEYARD
+    assert state.battlefield_sizes[1] == p1_bf_before
+    assert state.graveyard_sizes[1] == p1_grave_before
+    assert state.graveyard_sizes[0] == p0_grave_before + 1
+
+
+def test_resolve_destroy_target_land_skips_active_players_own(engine):
+    """The scan walks the DEFENDING player's battlefield only. The
+    active player's own land is NOT a viable target (regression guard
+    — this matches round-25 DestroyTargetArtifact / round-24
+    DestroyTargetNonlandPermanent / round-17 DestroyTarget's
+    asymmetric defender-side targeting). Setup: p1's bf is empty,
+    p0's bf has a Land. Resolving Dust Bowl (cast by p0, defender = p1)
+    must FIZZLE — not destroy p0's own land."""
+    state = engine.make_synthetic_state(
+        num_battlefield=0, num_hand=1, num_library=1
+    )
+    own_land_id = state.register_and_inject_object(
+        _vanilla_land_for_dtl_dict(),
+        0,  # owned by p0 (active player)
+        ZONE_BATTLEFIELD,
+    )
+    spell_obj_id = state.register_and_inject_object(
+        _dust_bowl_dict(), 0, ZONE_HAND
+    )
+    p0_bf_before = state.battlefield_sizes[0]
+    p1_bf_before = state.battlefield_sizes[1]
+
+    state.push_to_stack(spell_obj_id, 0)
+    state.resolve_top_of_stack()
+
+    # p0's own land stays put — scan was defender-side only.
+    assert state.find_object_zone(own_land_id) == ZONE_BATTLEFIELD
+    assert state.battlefield_sizes[0] == p0_bf_before
+    assert state.battlefield_sizes[1] == p1_bf_before
