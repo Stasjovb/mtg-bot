@@ -135,6 +135,7 @@ the test lands in a commit.
 | rust(counters-proliferate): proliferate primitive (CR 701.25) | tests_rust/test_counters.py extend | green  | feature/rust-tdd-counters-proliferate |
 | rust(library-mill-target-player): mill_target_player primitive | tests_rust/test_library.py extend | green  | feature/rust-tdd-library-mill-target-player |
 | rust(choices-extend): graveyard / keyword / tapped selectors | tests_rust/test_choices.py extend | green  | feature/rust-tdd-choices-extend |
+| rust(bridge-zone-snapshots): hand/library/graveyard/exile/battlefield/mana_pool getters | tests_rust/test_snapshot.py | green  | feature/rust-bridge-zone-snapshots |
 
 ## Build invocation reminder
 
