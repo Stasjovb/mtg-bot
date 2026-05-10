@@ -1775,6 +1775,89 @@ fn apply_effect(
             obj.counters = 0;
             Arc::make_mut(&mut state.players[controller_idx].battlefield).push(obj);
         }
+        // Round-26: EachOpponentLosesLife. CR 118.4 — "life loss"
+        // (not damage). Each opponent of the SOURCE's controller
+        // loses `amount` life. Punisher / drawback pattern
+        // (Balemurk Leech shape) — 6 cards in the EoE pool per
+        // round-20 measurement.
+        //
+        // **Distinct from round-17 DamageEachOpponent.** DamageEach-
+        // Opponent deals DAMAGE (CR 701.4) — routes through damage-
+        // prevention / Worship-style replacement effects (CR 614)
+        // when those land. EachOpponentLosesLife is direct life
+        // subtraction (CR 118.4) and is NOT reducible. Two-player
+        // engine first slice: both arms have identical end-state for
+        // the defender's life total because neither variant routes
+        // through damage-prevention yet, but the variants stay
+        // distinct to mirror Python's closed `Effect` vocabulary
+        // (round-15 pattern). Future slices that wire damage-
+        // prevention through DealDamage / DamageEachOpponent keep
+        // this arm a direct subtraction.
+        //
+        // **Source-finder dispatch (round-24 pattern).** Walks both
+        // players' five tracked zones (hand / library / battlefield
+        // / graveyard / exile) plus the stack to recover the
+        // source's `controller`. Mirrors DiscardSelf — punisher
+        // effects fire on whoever controls the source regardless of
+        // where the source currently sits, since the controller
+        // field doesn't change on zone moves.
+        //
+        // **Two-player "each opponent" reduces to "the one opponent".**
+        // opponent_id = 1 - controller. Direct life subtraction on
+        // `players[opponent_idx].life`; negative life handled by
+        // the SBA loop (round-5+), no clamp here.
+        //
+        // **amount<0 raises** loudly (defense-in-depth; parse_effect
+        // catches at register time). **amount=0 is a legal no-op**
+        // (mirrors GainLife / DrawCards / Mill / DamageEachOpponent /
+        // DiscardSelf zero-amount conventions). **Source not found
+        // anywhere = silent fizzle** (lost-track-of-source tolerance,
+        // mirrors DiscardSelf shape).
+        Effect::EachOpponentLosesLife { amount } => {
+            if *amount < 0 {
+                return Err(PyValueError::new_err(format!(
+                    "EachOpponentLosesLife amount must be non-negative, got {amount}"
+                )));
+            }
+            // Source-controller resolution mirrors round-24
+            // DiscardSelf's 5-zone walk + stack scan.
+            let mut source_controller: Option<u8> = None;
+            'outer: for player in state.players.iter() {
+                for zone in [
+                    &player.hand,
+                    &player.library,
+                    &player.battlefield,
+                    &player.graveyard,
+                    &player.exile,
+                ] {
+                    for obj in zone.iter() {
+                        if obj.id == source_obj_id {
+                            source_controller = Some(obj.controller);
+                            break 'outer;
+                        }
+                    }
+                }
+            }
+            if source_controller.is_none() {
+                if let Some(item) = state
+                    .stack
+                    .iter()
+                    .find(|i| i.source_obj_id == source_obj_id)
+                {
+                    source_controller = Some(item.controller);
+                }
+            }
+            let Some(controller) = source_controller else {
+                return Ok(()); // source not found: silent fizzle
+            };
+            // Each opponent: the OTHER player in 2-player land.
+            let opponent_id = 1 - controller;
+            let opponent_idx = opponent_id as usize;
+            // Direct life subtraction — not damage. Negative life is
+            // handled by SBA loop.
+            state.players[opponent_idx].life =
+                state.players[opponent_idx].life.saturating_sub(*amount);
+        }
     }
     Ok(())
 }

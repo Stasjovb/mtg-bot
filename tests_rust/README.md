@@ -160,6 +160,7 @@ the test lands in a commit.
 | rust(legal-decisions-declare-attackers): emit DeclareAttackers during combat | tests_rust/test_legal.py extend | green  | feature/rust-legal-decisions-declare-attackers |
 | rust(action-turn-face-up): Action::TurnFaceUp variant (dispatch stubbed) | tests_rust/test_actions.py extend | green  | feature/rust-action-turn-face-up |
 | rust(effect-discard-self): "you discard" dispatch (CR 701.8) | tests_rust/test_resolve.py extend | green  | feature/rust-effect-discard-self |
+| rust(effect-each-opponent-loses-life): life-loss (CR 118.4) | tests_rust/test_resolve.py extend | green  | feature/rust-effect-each-opponent-loses-life |
 
 ## Build invocation reminder
 

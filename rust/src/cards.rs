@@ -396,6 +396,44 @@ pub enum Effect {
     /// range(self.amount): if not p.hand: break` shape). Negative
     /// `amount` raises at register / resolve time.
     DiscardSelf { amount: i32 },
+    /// Each opponent of the source's controller loses `amount` life
+    /// (CR 118.4 — life loss, not damage). Punisher / drawback shape
+    /// (Balemurk Leech pattern) — 6 cards in the EoE pool per
+    /// round-20 measurement.
+    ///
+    /// **Distinct from `DamageEachOpponent` (round 17).** Damage
+    /// routes through damage-prevention / Worship-style replacement
+    /// effects (CR 614 — damage replacement); life-loss directly
+    /// subtracts from `players[idx].life` and is NOT reducible by
+    /// damage-prevention. Two-player engine first slice: both arms
+    /// look identical in their net effect on the defender's life
+    /// total, but the variants stay distinct to mirror Python's
+    /// closed `Effect` vocabulary (round-15 pattern). Future slices
+    /// that wire damage-prevention through DealDamage /
+    /// DamageEachOpponent will keep this arm a direct subtraction.
+    ///
+    /// **Source-finder dispatch (round-23 pattern).** Threads
+    /// `source_obj_id` through `apply_effect` and walks both
+    /// players' five tracked zones (hand / library / battlefield /
+    /// graveyard / exile) plus the stack to recover the source's
+    /// `controller`. Mirrors `DiscardSelf` (round-24) — punisher
+    /// effects fire on whoever controls the source regardless of
+    /// where the source currently sits, since the `controller` field
+    /// doesn't change on zone moves. Source not found anywhere =
+    /// silent fizzle (lost-track-of-source tolerance).
+    ///
+    /// **Two-player "each opponent" reduces to "the one opponent".**
+    /// The opponent of player N is `1 - N`. The single opponent's
+    /// `life` field is decremented by `amount`. Negative life is
+    /// handled by the SBA loop (round-5+); no clamp here.
+    ///
+    /// **amount=0 is a legal no-op** (mirrors GainLife / DrawCards /
+    /// Mill / DamageEachOpponent / DiscardSelf zero-amount
+    /// conventions). **amount<0 raises** loudly (mirrors round-3
+    /// DealDamage / round-17 DamageEachOpponent / round-24
+    /// DiscardSelf raise-on-negative shape; "lose -2 life" is
+    /// schema nonsense).
+    EachOpponentLosesLife { amount: i32 },
 }
 
 #[derive(Clone, Debug)]
@@ -732,8 +770,22 @@ fn parse_effect(dict: &Bound<'_, PyDict>) -> PyResult<Effect> {
             }
             Ok(Effect::DiscardSelf { amount })
         }
+        "each_opponent_loses_life" => {
+            // Python's `EachOpponentLosesLife(amount: int)` carries
+            // a required `amount` field with no default. Mirror that
+            // here: missing `amount` is a KeyError at register time;
+            // negative amount surfaces at register time (defense-in-
+            // depth; `apply_effect` re-checks).
+            let amount: i32 = require(dict, "amount")?.extract()?;
+            if amount < 0 {
+                return Err(PyValueError::new_err(format!(
+                    "each_opponent_loses_life: amount must be non-negative, got {amount}"
+                )));
+            }
+            Ok(Effect::EachOpponentLosesLife { amount })
+        }
         other => Err(PyValueError::new_err(format!(
-            "unknown effect kind {other:?}; valid: deal_damage, draw_cards, gain_life, return_to_hand, mill, exile_target, tap_target, untap_target, sacrifice, add_counters, discard_card, scry_n, destroy_target, damage_each_opponent, damage_each_creature, create_token, add_mana_to_pool, search_library_for_basic_land_tapped, put_plus_one_counter_on_self, surveil, counter_target_spell, return_creature_from_your_graveyard_to_battlefield, discard_self"
+            "unknown effect kind {other:?}; valid: deal_damage, draw_cards, gain_life, return_to_hand, mill, exile_target, tap_target, untap_target, sacrifice, add_counters, discard_card, scry_n, destroy_target, damage_each_opponent, damage_each_creature, create_token, add_mana_to_pool, search_library_for_basic_land_tapped, put_plus_one_counter_on_self, surveil, counter_target_spell, return_creature_from_your_graveyard_to_battlefield, discard_self, each_opponent_loses_life"
         ))),
     }
 }
@@ -1008,6 +1060,10 @@ fn effect_to_pydict<'py>(
         }
         Effect::DiscardSelf { amount } => {
             d.set_item("kind", "discard_self")?;
+            d.set_item("amount", *amount)?;
+        }
+        Effect::EachOpponentLosesLife { amount } => {
+            d.set_item("kind", "each_opponent_loses_life")?;
             d.set_item("amount", *amount)?;
         }
     }
