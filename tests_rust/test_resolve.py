@@ -467,3 +467,239 @@ def test_resolve_then_move_does_not_affect_original_via_clone(synthetic_state):
     # Original: source still in hand, stack still has the item.
     assert synthetic_state.find_object_zone(obj_id) == ZONE_HAND
     assert synthetic_state.stack_size() == 1
+
+
+# --- round-8 DrawCards + GainLife dispatch --------------------------
+#
+# Round-8 foundation (`feature/rust-tdd-base-r8`) extended the closed
+# `Effect` enum with two new variants:
+#
+#   - DrawCards { count: i32 } — caller's controller draws N cards.
+#   - GainLife  { amount: i32 } — caller's controller gains N life.
+#
+# The foundation left a stub arm in ``apply_effect`` that returned
+# ValueError for both variants; this slice replaces it with real
+# dispatch.
+#
+# **Scope simplifications for this slice (mirrored in the Rust module
+# docstring on ``state_ops_resolve.rs``):**
+#
+# - **Controller = ``state.active_player``.** Real MTG: a spell's
+#   controller is whoever cast it, plumbed through the StackItem.
+#   ``StackItem`` already carries a ``controller: u8`` field, but this
+#   apply-effect dispatch reads ``state.active_player`` instead — the
+#   first-slice convention the existing DealDamage path uses too.
+#   First-slice MTG always has the active player as the spell caster,
+#   so this matches in practice. Future slice plumbs
+#   ``StackItem.controller`` through.
+# - **DrawCards on an empty library is a silent no-op.** Real MTG:
+#   the player who tries to draw from an empty library loses on the
+#   next state-based-action check (CR 704.5b). Deck-out integration
+#   is deferred — for this slice, an empty library short-circuits the
+#   draw and the spell otherwise resolves cleanly.
+# - **GainLife with negative amount is a silent subtract.** The
+#   round-1 ``gain_life`` Python-exposed method raises on negative
+#   inputs as a guard against caller bugs; here the dispatch goes
+#   straight to ``players[c].life += amount`` to avoid that guard
+#   firing on legitimate (if unusual) compile-time-negative effects
+#   like a future "lose 1 life" expressed as ``GainLife{ -1 }``. No
+#   real MTG card today wants this, but it's the lowest-friction
+#   shape for the slice.
+#
+# **Cross-file friction note:** ``apply_effect`` lives in this slice's
+# file (``state_ops_resolve.rs``), but ``draw_card`` is a
+# ``#[pymethods]`` method on ``GameState`` defined in
+# ``state_ops_zones.rs``. The per-slice file-isolation rule prevents
+# touching that file, so DrawCards inlines its draw logic here
+# (pop-from-library + push-to-hand via ``Arc::make_mut``), mirroring
+# the round-7 counterspell agent's inlining of ``move_object``. A
+# follow-up consolidation slice can collapse the two implementations
+# once that constraint relaxes.
+
+
+def _draw_three_dict():
+    """A draw-three printing — Concentrate-shaped. Sorcery-typed so
+    the post-resolve dispatch routes the source to the graveyard."""
+    return {
+        "name": "Test Concentrate",
+        "card_types": ["Sorcery"],
+        "mana_cost": {"U": 2, "generic": 2},
+        "effects": [{"kind": "draw_cards", "count": 3}],
+    }
+
+
+def _draw_five_dict():
+    """A draw-five printing — for the empty-library test."""
+    return {
+        "name": "Test Wheel",
+        "card_types": ["Sorcery"],
+        "mana_cost": {"U": 2, "generic": 2},
+        "effects": [{"kind": "draw_cards", "count": 5}],
+    }
+
+
+def _heal_three_dict():
+    """A gain-3-life printing — Healing Salve-shaped (one mode of)."""
+    return {
+        "name": "Test Heal",
+        "card_types": ["Instant"],
+        "mana_cost": {"W": 1},
+        "effects": [{"kind": "gain_life", "amount": 3}],
+    }
+
+
+def _zap_and_draw_dict():
+    """A multi-effect printing: deal 2 damage to any player AND draw
+    one card. Order matters — we want both effects to fire in the
+    order they appear in the list, so the test asserts both end-states
+    independently."""
+    return {
+        "name": "Test ZapAndDraw",
+        "card_types": ["Sorcery"],
+        "mana_cost": {"R": 1, "U": 1, "generic": 1},
+        "effects": [
+            {
+                "kind": "deal_damage",
+                "amount": 2,
+                "target": {"kind": "any_player"},
+            },
+            {"kind": "draw_cards", "count": 1},
+        ],
+    }
+
+
+def test_resolve_drawcards_increases_hand_size(synthetic_state):
+    """Resolving a DrawCards-3 spell grows the active player's hand
+    by 3 and shrinks their library by 3."""
+    obj_id = synthetic_state.register_and_inject_object(
+        _draw_three_dict(), 0, ZONE_HAND
+    )
+    hand_before = synthetic_state.hand_sizes[0]
+    library_before = synthetic_state.library_sizes[0]
+
+    synthetic_state.push_to_stack(obj_id, 0)
+    synthetic_state.resolve_top_of_stack()
+
+    # Source moved to graveyard (sorcery), so hand shrank by 1 from
+    # the source leaving hand AND grew by 3 from the draws — net +2.
+    assert synthetic_state.hand_sizes[0] == hand_before - 1 + 3
+    assert synthetic_state.library_sizes[0] == library_before - 3
+
+
+def test_resolve_drawcards_handles_empty_library(engine):
+    """If the library has fewer cards than the count, the draw stops
+    at the first empty pop. No crash, no error, library ends empty."""
+    # Build a state with a tiny library (2 cards) so DrawCards-5
+    # exhausts it.
+    state = engine.make_synthetic_state(
+        num_battlefield=0, num_hand=1, num_library=2
+    )
+    obj_id = state.register_and_inject_object(
+        _draw_five_dict(), 0, ZONE_BATTLEFIELD
+    )
+    hand_before = state.hand_sizes[0]
+    library_before = state.library_sizes[0]
+    assert library_before == 2
+
+    state.push_to_stack(obj_id, 0)
+    state.resolve_top_of_stack()
+
+    # Library drained, hand grew by however many cards were available.
+    assert state.library_sizes[0] == 0
+    assert state.hand_sizes[0] == hand_before + 2
+
+
+def test_resolve_gainlife_increases_active_player_life(synthetic_state):
+    """Resolving a GainLife-3 instant takes the active player from
+    20 to 23. Defender (passive player) is untouched."""
+    obj_id = synthetic_state.register_and_inject_object(
+        _heal_three_dict(), 0, ZONE_HAND
+    )
+    life_before = list(synthetic_state.life_totals)
+    assert life_before == [20, 20]
+
+    synthetic_state.push_to_stack(obj_id, 0)
+    synthetic_state.resolve_top_of_stack()
+
+    # Active player (p0, the controller) gained 3.
+    assert synthetic_state.life_totals[0] == life_before[0] + 3
+    # Defender untouched.
+    assert synthetic_state.life_totals[1] == life_before[1]
+
+
+def test_resolve_drawcards_does_not_affect_opponent(synthetic_state):
+    """DrawCards has the controller draw — opponent's hand and
+    library are untouched."""
+    p1_hand_before = synthetic_state.hand_sizes[1]
+    p1_library_before = synthetic_state.library_sizes[1]
+
+    obj_id = synthetic_state.register_and_inject_object(
+        _draw_three_dict(), 0, ZONE_HAND
+    )
+    synthetic_state.push_to_stack(obj_id, 0)
+    synthetic_state.resolve_top_of_stack()
+
+    assert synthetic_state.hand_sizes[1] == p1_hand_before
+    assert synthetic_state.library_sizes[1] == p1_library_before
+
+
+def test_resolve_multi_effect_card_applies_each(synthetic_state):
+    """A printing with two effects (DealDamage + DrawCards) fires
+    both in order. After resolve, defender lost 2 life AND active
+    player drew 1 card."""
+    obj_id = synthetic_state.register_and_inject_object(
+        _zap_and_draw_dict(), 0, ZONE_HAND
+    )
+    life_before = list(synthetic_state.life_totals)
+    hand_before = synthetic_state.hand_sizes[0]
+    library_before = synthetic_state.library_sizes[0]
+
+    synthetic_state.push_to_stack(obj_id, 0)
+    synthetic_state.resolve_top_of_stack()
+
+    # DealDamage fired: defender lost 2 life.
+    assert synthetic_state.life_totals[1] == life_before[1] - 2
+    assert synthetic_state.life_totals[0] == life_before[0]
+    # DrawCards fired: source left hand to graveyard (sorcery) AND
+    # active player drew 1 -> hand net unchanged (-1 + 1 = 0).
+    assert synthetic_state.hand_sizes[0] == hand_before - 1 + 1
+    assert synthetic_state.library_sizes[0] == library_before - 1
+
+
+def test_clone_then_resolve_drawcards_does_not_affect_original(synthetic_state):
+    """CoW canary for DrawCards. Resolving on the clone must not
+    drain the original's library or grow its hand."""
+    obj_id = synthetic_state.register_and_inject_object(
+        _draw_three_dict(), 0, ZONE_HAND
+    )
+    synthetic_state.push_to_stack(obj_id, 0)
+    hand_before = synthetic_state.hand_sizes[0]
+    library_before = synthetic_state.library_sizes[0]
+    cloned = synthetic_state.clone_once()
+
+    cloned.resolve_top_of_stack()
+
+    # Original: untouched on every front.
+    assert synthetic_state.hand_sizes[0] == hand_before
+    assert synthetic_state.library_sizes[0] == library_before
+    assert synthetic_state.stack_size() == 1
+    # Clone: drew 3 (and source moved to graveyard).
+    assert cloned.library_sizes[0] == library_before - 3
+
+
+def test_clone_then_resolve_gainlife_does_not_affect_original(synthetic_state):
+    """CoW canary for GainLife. Resolving on the clone must not
+    raise the original's life total."""
+    obj_id = synthetic_state.register_and_inject_object(
+        _heal_three_dict(), 0, ZONE_HAND
+    )
+    synthetic_state.push_to_stack(obj_id, 0)
+    cloned = synthetic_state.clone_once()
+
+    cloned.resolve_top_of_stack()
+
+    # Original: life unchanged, stack still has the item.
+    assert list(synthetic_state.life_totals) == [20, 20]
+    assert synthetic_state.stack_size() == 1
+    # Clone: active player gained 3.
+    assert cloned.life_totals[0] == 23
