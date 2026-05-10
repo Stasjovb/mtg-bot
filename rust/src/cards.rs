@@ -434,6 +434,23 @@ pub enum Effect {
     /// DiscardSelf raise-on-negative shape; "lose -2 life" is
     /// schema nonsense).
     EachOpponentLosesLife { amount: i32 },
+    /// The SOURCE's controller loses `amount` life (CR 118.4 — life
+    /// loss, not damage). 7 cards in EoE pool per round-20 measurement
+    /// (Decode Transmissions etc.). Punisher / drawback pattern — the
+    /// caster pays a life cost on resolution.
+    ///
+    /// **Distinct from `EachOpponentLosesLife` (round 24)** — that arm
+    /// subtracts from the OPPONENT's life. This arm subtracts from the
+    /// SOURCE's CONTROLLER's life (typically the caster). Both use the
+    /// same source-finder pattern (round-24 5-zone walk + stack scan).
+    ///
+    /// **Distinct from `GainLife` with negative `amount`** — that
+    /// pattern raises ("gain -2 life" is schema nonsense). `LoseLife`
+    /// is the closed-vocab variant for losing life; negative `amount`
+    /// here also raises (defense-in-depth).
+    ///
+    /// amount=0 is a legal no-op. Negative amount raises.
+    LoseLife { amount: i32 },
     /// Destroy every creature on the battlefield (Wrath of God pattern,
     /// CR 701.7 + 701.4 AOE). Indestructible creatures (CR 702.12)
     /// are NOT destroyed — round-13 keyword check is honored.
@@ -846,6 +863,23 @@ fn parse_effect(dict: &Bound<'_, PyDict>) -> PyResult<Effect> {
             }
             Ok(Effect::EachOpponentLosesLife { amount })
         }
+        "lose_life" => {
+            // Python's `LoseLife(amount: int)` carries a required
+            // `amount` field with no default. Mirror that here: missing
+            // `amount` is a KeyError at register time; negative amount
+            // surfaces at register time (defense-in-depth;
+            // `apply_effect` re-checks). Distinct from
+            // `each_opponent_loses_life` — same shape but the
+            // dispatch subtracts from the source's CONTROLLER's life
+            // (not the opponent's).
+            let amount: i32 = require(dict, "amount")?.extract()?;
+            if amount < 0 {
+                return Err(PyValueError::new_err(format!(
+                    "lose_life: amount must be non-negative, got {amount}"
+                )));
+            }
+            Ok(Effect::LoseLife { amount })
+        }
         "destroy_all_creatures" => {
             // Unit variant — no required fields. Python's
             // `DestroyAllCreatures` carries optional narrowing fields
@@ -878,7 +912,7 @@ fn parse_effect(dict: &Bound<'_, PyDict>) -> PyResult<Effect> {
             Ok(Effect::DealDamageAnyTarget { amount })
         }
         other => Err(PyValueError::new_err(format!(
-            "unknown effect kind {other:?}; valid: deal_damage, draw_cards, gain_life, return_to_hand, mill, exile_target, tap_target, untap_target, sacrifice, add_counters, discard_card, scry_n, destroy_target, damage_each_opponent, damage_each_creature, create_token, add_mana_to_pool, search_library_for_basic_land_tapped, put_plus_one_counter_on_self, surveil, counter_target_spell, return_creature_from_your_graveyard_to_battlefield, discard_self, each_opponent_loses_life, destroy_all_creatures, destroy_target_nonland_permanent, deal_damage_any_target"
+            "unknown effect kind {other:?}; valid: deal_damage, draw_cards, gain_life, return_to_hand, mill, exile_target, tap_target, untap_target, sacrifice, add_counters, discard_card, scry_n, destroy_target, damage_each_opponent, damage_each_creature, create_token, add_mana_to_pool, search_library_for_basic_land_tapped, put_plus_one_counter_on_self, surveil, counter_target_spell, return_creature_from_your_graveyard_to_battlefield, discard_self, each_opponent_loses_life, lose_life, destroy_all_creatures, destroy_target_nonland_permanent, deal_damage_any_target"
         ))),
     }
 }
@@ -1157,6 +1191,10 @@ fn effect_to_pydict<'py>(
         }
         Effect::EachOpponentLosesLife { amount } => {
             d.set_item("kind", "each_opponent_loses_life")?;
+            d.set_item("amount", *amount)?;
+        }
+        Effect::LoseLife { amount } => {
+            d.set_item("kind", "lose_life")?;
             d.set_item("amount", *amount)?;
         }
         Effect::DestroyAllCreatures => {

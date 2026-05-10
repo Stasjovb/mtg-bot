@@ -6039,3 +6039,223 @@ def test_resolve_deal_damage_any_target_clone_isolation(synthetic_state):
     assert synthetic_state.stack_size() == 1
     assert synthetic_state.get_damage(target_obj_id) == 0
     assert list(synthetic_state.life_totals) == [20, 20]
+
+
+# --- LoseLife dispatch ---------------------------------------------
+#
+# CR 118.4 — "life loss" (not damage). The SOURCE's controller loses
+# `amount` life. Punisher / drawback pattern (Decode Transmissions
+# shape) — 7 cards in the EoE pool per round-20 measurement.
+#
+# **Distinct from round-26 EachOpponentLosesLife.** Same source-finder
+# pattern (5-zone walk + stack scan); the dispatch arm subtracts from
+# the source's CONTROLLER's life rather than the controller's
+# opponent's. Inverted target on an otherwise identical shape.
+#
+# **Source-finder dispatch (round-24 pattern).** Walks both players'
+# five tracked zones (hand / library / battlefield / graveyard /
+# exile) plus the stack to recover the source's `controller`. Mirrors
+# EachOpponentLosesLife / DiscardSelf — punisher effects fire on
+# whoever controls the source regardless of where the source currently
+# sits, since the controller field doesn't change on zone moves.
+#
+# Direct life subtraction. amount=0 is a legal no-op; amount<0 raises
+# at register time. Source not found = silent fizzle.
+
+
+def _decode_transmissions_dict(amount=2, card_types=None):
+    """A Decode-Transmissions-shaped printing: an instant / sorcery
+    whose effect makes the SOURCE's controller lose `amount` life.
+
+    Default card_types=["Sorcery"] so the post-resolve mover sends the
+    source to its owner's graveyard (Decode Transmissions is a printed
+    sorcery with a self-life-loss drawback). Tests that need a
+    different source-zone behavior override card_types.
+    """
+    if card_types is None:
+        card_types = ["Sorcery"]
+    p = {
+        "name": f"Test Decode Transmissions (x{amount})",
+        "card_types": card_types,
+        "mana_cost": {"U": 1, "generic": 2},
+        "effects": [{"kind": "lose_life", "amount": amount}],
+    }
+    if "Creature" in card_types:
+        p["power"] = 1
+        p["toughness"] = 1
+    return p
+
+
+def test_resolve_lose_life_decrements_controller_life(synthetic_state):
+    """Happy path: source on active player's (p0) battlefield with
+    amount=3 — p0 (the CONTROLLER, not the opponent) loses 3 life;
+    p1 untouched. This is the inversion-of-EachOpponentLosesLife
+    cardinal test: the same dispatch shape but the SOURCE's
+    controller is the recipient."""
+    src_id = synthetic_state.register_and_inject_object(
+        _decode_transmissions_dict(amount=3, card_types=["Creature"]),
+        0,
+        ZONE_BATTLEFIELD,
+    )
+    p0_life_before = synthetic_state.life_totals[0]
+    p1_life_before = synthetic_state.life_totals[1]
+
+    synthetic_state.push_to_stack(src_id, 0)
+    synthetic_state.resolve_top_of_stack()
+
+    assert synthetic_state.is_stack_empty() is True
+    # p0 (source's controller) -3; p1 (the one opponent) untouched.
+    assert synthetic_state.life_totals[0] == p0_life_before - 3
+    assert synthetic_state.life_totals[1] == p1_life_before
+
+
+def test_resolve_lose_life_amount_zero_no_op(synthetic_state):
+    """amount=0 is a legitimate no-op (mirrors GainLife / DrawCards /
+    Mill / EachOpponentLosesLife / DiscardSelf zero-amount
+    conventions). No life change, no error, stack pops."""
+    src_id = synthetic_state.register_and_inject_object(
+        _decode_transmissions_dict(amount=0, card_types=["Creature"]),
+        0,
+        ZONE_BATTLEFIELD,
+    )
+    life_before = list(synthetic_state.life_totals)
+    synthetic_state.push_to_stack(src_id, 0)
+    synthetic_state.resolve_top_of_stack()
+
+    assert synthetic_state.is_stack_empty() is True
+    assert list(synthetic_state.life_totals) == life_before
+
+
+def test_resolve_lose_life_opponent_source_targets_opponent(synthetic_state):
+    """When p1 controls the source (controller=1) while active_player
+    stays p0, resolving LoseLife reduces p1's life (the CONTROLLER —
+    NOT defender-of-active-player). Documents that LoseLife pivots
+    on `obj.controller`, not on active_player, which is exactly the
+    regression-on-the-inversion of EachOpponentLosesLife's behavior."""
+    src_id = synthetic_state.register_and_inject_object(
+        _decode_transmissions_dict(amount=4, card_types=["Creature"]),
+        1,
+        ZONE_BATTLEFIELD,
+    )
+    p0_life_before = synthetic_state.life_totals[0]
+    p1_life_before = synthetic_state.life_totals[1]
+    assert synthetic_state.active_player == 0
+
+    # Push with controller=1 (p1's source resolving on the stack).
+    synthetic_state.push_to_stack(src_id, 1)
+    synthetic_state.resolve_top_of_stack()
+
+    assert synthetic_state.is_stack_empty() is True
+    # p1 (source's controller) -4; p0 untouched.
+    assert synthetic_state.life_totals[0] == p0_life_before
+    assert synthetic_state.life_totals[1] == p1_life_before - 4
+
+
+def test_resolve_lose_life_opponent_unchanged_when_active_controls_source(
+    synthetic_state,
+):
+    """Regression on the EachOpponentLosesLife inversion: when the
+    ACTIVE player controls the source, the OPPONENT's life is
+    UNCHANGED. Verifies that LoseLife does NOT accidentally route
+    through the EachOpponentLosesLife arm (which would hit p1 when
+    p0 controls the source). This is the single most important
+    correctness check distinguishing the two arms."""
+    p0_life_before = synthetic_state.life_totals[0]
+    p1_life_before = synthetic_state.life_totals[1]
+    assert synthetic_state.active_player == 0
+
+    src_id = synthetic_state.register_and_inject_object(
+        _decode_transmissions_dict(amount=5, card_types=["Creature"]),
+        0,
+        ZONE_BATTLEFIELD,
+    )
+    synthetic_state.push_to_stack(src_id, 0)
+    synthetic_state.resolve_top_of_stack()
+
+    # p0 (controller) -5; p1 (opponent of controller) UNCHANGED —
+    # this is the cardinal asymmetry vs EachOpponentLosesLife.
+    assert synthetic_state.life_totals[0] == p0_life_before - 5
+    assert synthetic_state.life_totals[1] == p1_life_before
+
+
+def test_resolve_lose_life_source_in_graveyard_uses_controller(
+    synthetic_state,
+):
+    """The source-finder walks five zones — wider than the
+    battlefield-only scan PutPlusOneCounterOnSelf uses. Inject a
+    source-shaped object into p0's graveyard: the zone-scan picks up
+    p0 as the controller and resolves the life-loss on p0 (the
+    SOURCE's CONTROLLER). Documents the 'source has left the
+    battlefield by resolve time' tolerance — the source's
+    `controller` field doesn't change on zone moves. Mirrors round-26
+    EachOpponentLosesLife's graveyard-source test, inverted to hit
+    the controller's life rather than the opponent's."""
+    src_id = synthetic_state.register_and_inject_object(
+        _decode_transmissions_dict(amount=2, card_types=["Creature"]),
+        0,
+        ZONE_GRAVEYARD,
+    )
+    p0_life_before = synthetic_state.life_totals[0]
+    p1_life_before = synthetic_state.life_totals[1]
+
+    synthetic_state.push_to_stack(src_id, 0)
+    synthetic_state.resolve_top_of_stack()
+
+    # p0 (the source's controller, regardless of which zone holds it)
+    # -2; p1 untouched.
+    assert synthetic_state.life_totals[0] == p0_life_before - 2
+    assert synthetic_state.life_totals[1] == p1_life_before
+
+
+def test_resolve_lose_life_multiple_resolutions_stack(synthetic_state):
+    """Two resolutions in a row (3 + 2 = 5 life loss). Confirms the
+    arm is idempotent across repeat invocations and that life-loss
+    accumulates additively on the controller's side."""
+    p0_life_before = synthetic_state.life_totals[0]
+
+    # First resolution: amount=3.
+    src_a = synthetic_state.register_and_inject_object(
+        _decode_transmissions_dict(amount=3, card_types=["Creature"]),
+        0,
+        ZONE_BATTLEFIELD,
+    )
+    synthetic_state.push_to_stack(src_a, 0)
+    synthetic_state.resolve_top_of_stack()
+
+    # Second resolution: amount=2.
+    src_b = synthetic_state.register_and_inject_object(
+        _decode_transmissions_dict(amount=2, card_types=["Creature"]),
+        0,
+        ZONE_BATTLEFIELD,
+    )
+    synthetic_state.push_to_stack(src_b, 0)
+    synthetic_state.resolve_top_of_stack()
+
+    assert synthetic_state.is_stack_empty() is True
+    # p0 lost 3 + 2 = 5 life.
+    assert synthetic_state.life_totals[0] == p0_life_before - 5
+
+
+def test_resolve_lose_life_clone_isolation(synthetic_state):
+    """CoW canary: running LoseLife on a clone leaves the original
+    state's life totals untouched. The arm writes
+    `players[idx].life` directly — confirm the GameState clone
+    semantics decouple the player Vec across clones."""
+    src_id = synthetic_state.register_and_inject_object(
+        _decode_transmissions_dict(amount=2, card_types=["Creature"]),
+        0,
+        ZONE_BATTLEFIELD,
+    )
+    synthetic_state.push_to_stack(src_id, 0)
+    p0_life_before = synthetic_state.life_totals[0]
+
+    cloned = synthetic_state.clone_once()
+    cloned.resolve_top_of_stack()
+
+    # Clone diverged: p0 lost 2 life.
+    assert cloned.life_totals[0] == p0_life_before - 2
+    assert cloned.is_stack_empty() is True
+
+    # Original untouched.
+    assert synthetic_state.life_totals[0] == p0_life_before
+    assert synthetic_state.stack_size() == 1
