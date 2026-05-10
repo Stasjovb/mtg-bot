@@ -366,6 +366,42 @@ def test_negative_add_counters_round_trips():
     assert effects[0]["count"] == -1
 
 
+def test_round_trip_scry_n_effect():
+    reg = mtg_bot_engine.Registry()
+    pid = reg.register_printing(
+        {
+            "name": "Preordain-ish",
+            "mana_cost": {"U": 1},
+            "card_types": ["Sorcery"],
+            "effects": [{"kind": "scry_n", "count": 2}],
+        }
+    )
+    effects = [dict(e) for e in reg.get_printing_effects(pid)]
+    assert effects[0]["kind"] == "scry_n"
+    assert effects[0]["count"] == 2
+
+
+def test_scry_n_missing_count_raises():
+    reg = mtg_bot_engine.Registry()
+    with pytest.raises(KeyError, match="count"):
+        reg.register_printing(
+            {"name": "Broken", "effects": [{"kind": "scry_n"}]}
+        )
+
+
+def test_scry_n_zero_count_round_trips():
+    """Scry 0 is a degenerate but legal value — should round-trip."""
+    reg = mtg_bot_engine.Registry()
+    pid = reg.register_printing(
+        {
+            "name": "ScryZero",
+            "effects": [{"kind": "scry_n", "count": 0}],
+        }
+    )
+    effects = [dict(e) for e in reg.get_printing_effects(pid)]
+    assert effects[0]["count"] == 0
+
+
 def test_vanilla_card_with_no_mana_cost_or_effects():
     reg = mtg_bot_engine.Registry()
     pid = reg.register_printing(VANILLA_BLANK)
