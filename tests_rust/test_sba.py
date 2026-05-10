@@ -638,3 +638,156 @@ def test_apply_sbas_until_quiescent_indestructible_skipped(synthetic_state):
     synthetic_state.deal_damage(obj_id, 5)  # overkill on a 2/2 indestructible
     assert synthetic_state.apply_sbas_until_quiescent() == 0
     assert synthetic_state.find_object_zone(obj_id) == ZONE_BATTLEFIELD
+
+
+# ----------------------------- Counter-modified toughness for 704.5g --------
+#
+# The lethal-damage SBA (CR 704.5g) compares marked damage against EFFECTIVE
+# toughness, not printed toughness. Effective toughness folds in the +1/+1
+# vs -1/-1 counter contribution: ``printing.toughness + obj.counters`` for
+# the round-2 net-i32 model.
+#
+# Round-5's apply_sbas originally used the raw printed value, which drifts
+# from real MTG once counters land on the creature: a 2/2 with two +1/+1
+# counters takes 3 damage and survives (effective toughness 4); a 4/4 with
+# two -1/-1 counters takes 3 damage and dies (effective toughness 2). The
+# round-12 0-toughness SBA (704.5f) has always used effective toughness
+# since it landed; this group of tests pins the same semantics into 704.5g.
+#
+# Pre-existing tests (no-counter cases) still pass under the upgraded
+# predicate — when ``obj.counters == 0`` effective and printed toughness
+# coincide.
+
+
+def _two_two_creature_dict():
+    """Vanilla 2/2 creature printing — no keywords, no special effects."""
+    return {
+        "name": "Test 2/2",
+        "card_types": ["Creature"],
+        "mana_cost": {"generic": 2},
+        "power": 2,
+        "toughness": 2,
+        "keywords": [],
+        "effects": [],
+    }
+
+
+def _four_four_creature_dict():
+    """Vanilla 4/4 creature printing — no keywords, no special effects."""
+    return {
+        "name": "Test 4/4",
+        "card_types": ["Creature"],
+        "mana_cost": {"generic": 4},
+        "power": 4,
+        "toughness": 4,
+        "keywords": [],
+        "effects": [],
+    }
+
+
+def _six_six_creature_dict():
+    """Vanilla 6/6 creature printing — no keywords, no special effects."""
+    return {
+        "name": "Test 6/6",
+        "card_types": ["Creature"],
+        "mana_cost": {"generic": 6},
+        "power": 6,
+        "toughness": 6,
+        "keywords": [],
+        "effects": [],
+    }
+
+
+def test_sba_lethal_damage_uses_counter_modified_toughness_increased(
+    synthetic_state,
+):
+    """A 2/2 with +2 net counters (effective toughness 4) takes 3 damage —
+    NOT lethal under counter-modified semantics. Creature survives. Pins
+    the upgraded 704.5g predicate against the raw-printed-toughness
+    regression."""
+    obj_id = P0_FIRST_BEAR_ID  # Grizzly Bears, 2/2
+    synthetic_state.set_counters(obj_id, 2)  # effective toughness 2 + 2 = 4
+    synthetic_state.deal_damage(obj_id, 3)
+    assert synthetic_state.apply_sbas() == 0
+    assert synthetic_state.find_object_zone(obj_id) == ZONE_BATTLEFIELD
+
+
+def test_sba_lethal_damage_uses_counter_modified_toughness_decreased(
+    synthetic_state,
+):
+    """A 4/4 with -2 net counters (effective toughness 2) takes 3 damage —
+    IS lethal under counter-modified semantics. Without the upgrade,
+    raw toughness 4 would mean 3 < 4 and the creature would survive
+    (the raw-toughness regression). Effective toughness 2 means 3 >= 2,
+    and the creature dies."""
+    obj_id = synthetic_state.register_and_inject_object(
+        _four_four_creature_dict(), 0, ZONE_BATTLEFIELD
+    )
+    synthetic_state.set_counters(obj_id, -2)  # effective toughness 4 - 2 = 2
+    synthetic_state.deal_damage(obj_id, 3)
+    assert synthetic_state.apply_sbas() == 1
+    assert synthetic_state.find_object_zone(obj_id) == ZONE_GRAVEYARD
+
+
+def test_sba_lethal_damage_pre_existing_passes(synthetic_state):
+    """Pin the no-counter case: a 2/2 with 0 counters and 2 damage still
+    dies. The upgraded predicate must reduce to the printed-toughness
+    behavior when counters == 0."""
+    obj_id = P0_FIRST_BEAR_ID
+    synthetic_state.deal_damage(obj_id, 2)
+    assert synthetic_state.apply_sbas() == 1
+    assert synthetic_state.find_object_zone(obj_id) == ZONE_GRAVEYARD
+
+
+def test_sba_zero_toughness_pre_existing_passes(synthetic_state):
+    """Pin the printed-zero-toughness case: a 0/0 creature dies on the
+    first SBA pass via 704.5f, even with no counters and no damage.
+    Independent of the 704.5g upgrade (the slice doesn't touch this
+    path) but documented here as a baseline canary."""
+    obj_id = synthetic_state.register_and_inject_object(
+        _zero_zero_creature_dict(), 0, ZONE_BATTLEFIELD
+    )
+    assert synthetic_state.apply_sbas() == 1
+    assert synthetic_state.find_object_zone(obj_id) == ZONE_GRAVEYARD
+
+
+def test_sba_negative_counters_dont_kill_high_toughness(synthetic_state):
+    """Anti-canary: a 6/6 with -2 net counters (effective toughness 4) and
+    no damage doesn't trigger ANY destruction SBA. The 704.5f check sees
+    effective 4 > 0; the 704.5g check sees damage 0 < 4; both pass.
+    Apply_sbas returns 0."""
+    obj_id = synthetic_state.register_and_inject_object(
+        _six_six_creature_dict(), 0, ZONE_BATTLEFIELD
+    )
+    synthetic_state.set_counters(obj_id, -2)  # effective toughness 4
+    assert synthetic_state.apply_sbas() == 0
+    assert synthetic_state.find_object_zone(obj_id) == ZONE_BATTLEFIELD
+
+
+def test_sba_clone_isolation_with_counters(synthetic_state):
+    """CoW canary for the counter-modified 704.5g path. Damage and
+    counter-set on a CLONE drives the clone's creature past effective
+    toughness; apply_sbas on the clone destroys it; the original is
+    untouched (battlefield, graveyard, damage, counters all unchanged)."""
+    obj_id = P0_FIRST_BEAR_ID  # Grizzly Bears, 2/2
+    bf_before_p0 = synthetic_state.battlefield_sizes[0]
+    gy_before_p0 = synthetic_state.graveyard_sizes[0]
+
+    other = synthetic_state.clone_once()
+    # On the clone: drop to effective toughness 1 with -1 net counter,
+    # deal 1 damage. Lethal under counter-modified 704.5g (1 >= 1).
+    other.set_counters(obj_id, -1)
+    other.deal_damage(obj_id, 1)
+    assert other.apply_sbas() == 1
+
+    # Clone reflects destruction.
+    assert other.find_object_zone(obj_id) == ZONE_GRAVEYARD
+    assert other.battlefield_sizes[0] == bf_before_p0 - 1
+    assert other.graveyard_sizes[0] == gy_before_p0 + 1
+
+    # Original is untouched: still on battlefield, no damage, no counters.
+    assert synthetic_state.find_object_zone(obj_id) == ZONE_BATTLEFIELD
+    assert synthetic_state.battlefield_sizes[0] == bf_before_p0
+    assert synthetic_state.graveyard_sizes[0] == gy_before_p0
+    assert synthetic_state.get_damage(obj_id) == 0
+    assert synthetic_state.get_counters(obj_id) == 0
