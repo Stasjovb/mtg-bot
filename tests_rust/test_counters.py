@@ -297,3 +297,121 @@ def test_double_counters_for_player_clone_isolation(synthetic_state):
     assert synthetic_state.get_counters(obj_id) == 3, (
         "CoW broken: double_counters_for_player on clone leaked into original"
     )
+
+
+# --- proliferate (CR 701.25) -------------------------------------------------
+#
+# Real proliferate lets the controller pick any number of permanents
+# and players with counters and add one of an existing kind; this
+# primitive deterministically proliferates every eligible permanent
+# on both battlefields. See `docs/SEARCH_LIMITATIONS.md` for the
+# divergence note. The semantics tested here are the simplified
+# always-add variant: positives tick up by 1, negatives tick down by 1
+# (one more -1/-1), zero stays put.
+
+
+def test_proliferate_empty_battlefields_is_noop(engine):
+    """Proliferate on a state with no objects on either battlefield
+    must not panic. Build a state with `num_battlefield=0` so both
+    sides' battlefields are empty Vecs."""
+    state = engine.make_synthetic_state(num_battlefield=0, num_hand=0, num_library=10)
+    # No assertion beyond "doesn't raise" — exercises the fast path.
+    state.proliferate()
+
+
+def test_proliferate_no_counters_anywhere_is_noop(synthetic_state):
+    """Default synthetic state has 10 + 10 battlefield permanents but
+    every one is at counters=0. Proliferate must touch nothing."""
+    # Snapshot every battlefield id's counter value (all 0 by default).
+    p0_ids = list(range(P0_FIRST_BATTLEFIELD_ID, P0_FIRST_BATTLEFIELD_ID + 10))
+    p1_ids = list(range(P1_FIRST_BATTLEFIELD_ID, P1_FIRST_BATTLEFIELD_ID + 10))
+    synthetic_state.proliferate()
+    for obj_id in p0_ids + p1_ids:
+        assert synthetic_state.get_counters(obj_id) == 0
+
+
+def test_proliferate_positive_counter_adds_one(synthetic_state):
+    """A creature at +2 counters becomes +3 after a single proliferate."""
+    obj_id = P0_FIRST_BATTLEFIELD_ID
+    synthetic_state.set_counters(obj_id, 2)
+    synthetic_state.proliferate()
+    assert synthetic_state.get_counters(obj_id) == 3
+
+
+def test_proliferate_negative_counter_decrements(synthetic_state):
+    """A creature at -2 counters (net -1/-1) becomes -3 after
+    proliferate — one more -1/-1 counter, magnitude grows in the
+    negative direction."""
+    obj_id = P0_FIRST_BATTLEFIELD_ID
+    synthetic_state.set_counters(obj_id, -2)
+    synthetic_state.proliferate()
+    assert synthetic_state.get_counters(obj_id) == -3
+
+
+def test_proliferate_mixed_board_each_kind_grows(synthetic_state):
+    """A board with one creature at +1, one at -1, and one at 0:
+    after proliferate they're +2, -2, 0 respectively. Pins both the
+    sign-preservation behavior and the "skip zero" rule in one test."""
+    plus_id = 0
+    minus_id = 1
+    zero_id = 2
+    synthetic_state.set_counters(plus_id, 1)
+    synthetic_state.set_counters(minus_id, -1)
+    # zero_id stays at 0 by default.
+    synthetic_state.proliferate()
+    assert synthetic_state.get_counters(plus_id) == 2
+    assert synthetic_state.get_counters(minus_id) == -2
+    assert synthetic_state.get_counters(zero_id) == 0
+
+
+def test_proliferate_affects_both_battlefields(synthetic_state):
+    """Proliferate is symmetric across players — one creature each
+    side, both with counters → both updated. (Real MTG proliferate
+    is controller-choice; this primitive is "every eligible permanent".)"""
+    p0_obj = P0_FIRST_BATTLEFIELD_ID
+    p1_obj = P1_FIRST_BATTLEFIELD_ID
+    synthetic_state.set_counters(p0_obj, 3)
+    synthetic_state.set_counters(p1_obj, -1)
+    synthetic_state.proliferate()
+    assert synthetic_state.get_counters(p0_obj) == 4
+    assert synthetic_state.get_counters(p1_obj) == -2
+
+
+def test_proliferate_saturates_at_i32_max(synthetic_state):
+    """A creature at i32::MAX counters stays at i32::MAX after
+    proliferate — saturating_add prevents wrap. Symmetric to the
+    saturating-mul invariant on `double_counters_for_player`."""
+    obj_id = P0_FIRST_BATTLEFIELD_ID
+    i32_max = 2**31 - 1
+    synthetic_state.set_counters(obj_id, i32_max)
+    synthetic_state.proliferate()
+    assert synthetic_state.get_counters(obj_id) == i32_max
+
+
+def test_proliferate_saturates_at_i32_min(synthetic_state):
+    """Symmetric to the i32::MAX case for the negative side: a
+    counter at i32::MIN stays at i32::MIN after proliferate (which
+    would otherwise try to subtract one and wrap)."""
+    obj_id = P0_FIRST_BATTLEFIELD_ID
+    i32_min = -(2**31)
+    synthetic_state.set_counters(obj_id, i32_min)
+    synthetic_state.proliferate()
+    assert synthetic_state.get_counters(obj_id) == i32_min
+
+
+def test_proliferate_clone_isolation(synthetic_state):
+    """**CoW canary for proliferate.** Proliferating on a clone must
+    not retroactively mutate the original's battlefield Vec. Same
+    load-bearing invariant as the doubling-primitive canary above —
+    if this fails, every CoW assumption downstream of proliferate
+    is broken."""
+    obj_id = P0_FIRST_BATTLEFIELD_ID
+    synthetic_state.set_counters(obj_id, 3)
+    snapshot = synthetic_state.clone_once()
+    # Mutate ONLY the clone.
+    snapshot.proliferate()
+    assert snapshot.get_counters(obj_id) == 4
+    # Original must NOT see the change.
+    assert synthetic_state.get_counters(obj_id) == 3, (
+        "CoW broken: proliferate on clone leaked into original"
+    )

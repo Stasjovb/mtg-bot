@@ -129,6 +129,15 @@ pub enum Effect {
     /// honored at SBA time. No target — implicit. Negative `amount`
     /// raises.
     DamageEachCreature { amount: i32 },
+    /// Create `count` token creatures on the controller's battlefield
+    /// (CR 701.6). The token's stats come from a pre-registered
+    /// printing referenced by `token_printing_id` — caller registers
+    /// the token-printing once (e.g. "1/1 white Soldier creature
+    /// token") and references its id in the effect. Tokens enter
+    /// summoning-sick like other creatures; future "tokens cease to
+    /// exist when they leave the battlefield" CR 110.5g handling is
+    /// deferred. Negative `count` raises.
+    CreateToken { count: i32, token_printing_id: u32 },
 }
 
 #[derive(Clone, Debug)]
@@ -344,8 +353,13 @@ fn parse_effect(dict: &Bound<'_, PyDict>) -> PyResult<Effect> {
             let amount: i32 = require(dict, "amount")?.extract()?;
             Ok(Effect::DamageEachCreature { amount })
         }
+        "create_token" => {
+            let count: i32 = require(dict, "count")?.extract()?;
+            let token_printing_id: u32 = require(dict, "token_printing_id")?.extract()?;
+            Ok(Effect::CreateToken { count, token_printing_id })
+        }
         other => Err(PyValueError::new_err(format!(
-            "unknown effect kind {other:?}; valid: deal_damage, draw_cards, gain_life, return_to_hand, mill, exile_target, tap_target, untap_target, sacrifice, add_counters, discard_card, scry_n, destroy_target, damage_each_opponent, damage_each_creature"
+            "unknown effect kind {other:?}; valid: deal_damage, draw_cards, gain_life, return_to_hand, mill, exile_target, tap_target, untap_target, sacrifice, add_counters, discard_card, scry_n, destroy_target, damage_each_opponent, damage_each_creature, create_token"
         ))),
     }
 }
@@ -589,6 +603,11 @@ fn effect_to_pydict<'py>(
         Effect::DamageEachCreature { amount } => {
             d.set_item("kind", "damage_each_creature")?;
             d.set_item("amount", *amount)?;
+        }
+        Effect::CreateToken { count, token_printing_id } => {
+            d.set_item("kind", "create_token")?;
+            d.set_item("count", *count)?;
+            d.set_item("token_printing_id", *token_printing_id)?;
         }
     }
     Ok(d)

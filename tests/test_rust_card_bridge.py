@@ -503,6 +503,66 @@ def test_damage_each_creature_zero_amount_round_trips():
     assert effects[0]["amount"] == 0
 
 
+def test_round_trip_create_token_effect():
+    """CR 701.6 — Servo/Soldier maker pattern.
+
+    The token's stats live on a pre-registered token-printing; the
+    effect just references it by id. Mirrors how creatures and
+    instants reference their printings.
+    """
+    reg = mtg_bot_engine.Registry()
+    # Pre-register the token printing (1/1 white Soldier, no cost).
+    token_pid = reg.register_printing(
+        {
+            "name": "Soldier Token",
+            "card_types": ["Creature"],
+            "power": 1,
+            "toughness": 1,
+        }
+    )
+    # Register a sorcery that makes 2 Soldier tokens.
+    sorcery_pid = reg.register_printing(
+        {
+            "name": "Conscript",
+            "mana_cost": {"W": 1, "generic": 1},
+            "card_types": ["Sorcery"],
+            "effects": [
+                {
+                    "kind": "create_token",
+                    "count": 2,
+                    "token_printing_id": token_pid,
+                }
+            ],
+        }
+    )
+    effects = [dict(e) for e in reg.get_printing_effects(sorcery_pid)]
+    assert effects[0]["kind"] == "create_token"
+    assert effects[0]["count"] == 2
+    assert effects[0]["token_printing_id"] == token_pid
+
+
+def test_create_token_missing_count_raises():
+    reg = mtg_bot_engine.Registry()
+    with pytest.raises(KeyError, match="count"):
+        reg.register_printing(
+            {
+                "name": "Broken",
+                "effects": [{"kind": "create_token", "token_printing_id": 0}],
+            }
+        )
+
+
+def test_create_token_missing_printing_id_raises():
+    reg = mtg_bot_engine.Registry()
+    with pytest.raises(KeyError, match="token_printing_id"):
+        reg.register_printing(
+            {
+                "name": "Broken",
+                "effects": [{"kind": "create_token", "count": 1}],
+            }
+        )
+
+
 def test_vanilla_card_with_no_mana_cost_or_effects():
     reg = mtg_bot_engine.Registry()
     pid = reg.register_printing(VANILLA_BLANK)

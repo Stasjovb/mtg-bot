@@ -130,6 +130,11 @@ the test lands in a commit.
 | rust(zones-regrowth): move_object_from_graveyard_to_hand primitive (CR 400.7) | tests_rust/test_zones.py extend | green | feature/rust-tdd-graveyard-to-hand |
 | rust(mulligan-bottoming): bottom_cards_from_hand primitive (CR 103.4) | tests_rust/test_mulligan.py extend | green | feature/rust-tdd-mulligan-bottoming |
 | tests_rust/test_choices.py        | apply_effect duplication in cards.rs        | green  | feature/rust-tdd-choices |
+| rust(resolve-effects-r19): CreateToken dispatch (CR 701.6) | tests_rust/test_resolve.py extend | green  | feature/rust-tdd-resolve-create-token |
+| rust(combat-keyword): flash (CR 702.8) | tests_rust/test_cast.py extend | green  | feature/rust-tdd-flash |
+| rust(counters-proliferate): proliferate primitive (CR 701.25) | tests_rust/test_counters.py extend | green  | feature/rust-tdd-counters-proliferate |
+| rust(library-mill-target-player): mill_target_player primitive | tests_rust/test_library.py extend | green  | feature/rust-tdd-library-mill-target-player |
+| rust(choices-extend): graveyard / keyword / tapped selectors | tests_rust/test_choices.py extend | green  | feature/rust-tdd-choices-extend |
 
 ## Build invocation reminder
 

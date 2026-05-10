@@ -627,3 +627,152 @@ def test_search_and_shuffle_clone_isolation(synthetic_state):
     assert synthetic_state.library_sizes == source_lib_size_before
     source_lib_after = _library_obj_ids(synthetic_state, 0, P0_LIBRARY_SIZE)
     assert source_lib_after == source_lib_before
+
+
+# --- Mill target player (round-19, complement to Effect::Mill) -------------
+
+# Round-1's `Effect::Mill` always mills the resolving spell's controller
+# (= active_player). This primitive is the "specify which player gets
+# milled" form for effects like Glimpse the Unthinkable / Mind Funeral
+# whose target is "target player puts the top N of their library into
+# their graveyard". Top-of-library = LAST element of the Vec, so milling
+# moves cards from the tail.
+ZONE_GRAVEYARD = 3
+
+
+def test_mill_target_player_basic_returns_actual_milled(synthetic_state):
+    """Player has 5 cards in library, mill 3: returns 3, library shrinks
+    to 2, graveyard grows by 3."""
+    synthetic_state.load_deck(0, [FOREST_PID] * 5)
+    assert synthetic_state.library_sizes[0] == 5
+    gy_before = synthetic_state.graveyard_sizes[0]
+
+    milled = synthetic_state.mill_target_player(0, 3)
+
+    assert milled == 3
+    assert synthetic_state.library_sizes[0] == 2
+    assert synthetic_state.graveyard_sizes[0] == gy_before + 3
+
+
+def test_mill_target_player_zero_count_is_noop(synthetic_state):
+    """count = 0 is a legal no-op: returns 0, no library / graveyard
+    mutation."""
+    lib_before = synthetic_state.library_sizes
+    gy_before = synthetic_state.graveyard_sizes
+
+    milled = synthetic_state.mill_target_player(0, 0)
+
+    assert milled == 0
+    assert synthetic_state.library_sizes == lib_before
+    assert synthetic_state.graveyard_sizes == gy_before
+
+
+def test_mill_target_player_count_exceeds_library_size(synthetic_state):
+    """Mill more than the library has: returns library size, library
+    empties, graveyard receives all the cards. Real MTG: milling an
+    empty library is NOT a loss — the loss state-based action only
+    fires on a *draw* attempt against an empty library."""
+    synthetic_state.load_deck(0, [FOREST_PID] * 4)
+    gy_before = synthetic_state.graveyard_sizes[0]
+
+    milled = synthetic_state.mill_target_player(0, 100)
+
+    assert milled == 4
+    assert synthetic_state.library_sizes[0] == 0
+    assert synthetic_state.graveyard_sizes[0] == gy_before + 4
+
+
+def test_mill_target_player_empty_library_returns_zero(synthetic_state):
+    """Empty library: returns 0, no mutation. (Same path as count=0
+    short-circuit.)"""
+    synthetic_state.load_deck(0, [])
+    assert synthetic_state.library_sizes[0] == 0
+    gy_before = synthetic_state.graveyard_sizes[0]
+
+    milled = synthetic_state.mill_target_player(0, 5)
+
+    assert milled == 0
+    assert synthetic_state.library_sizes[0] == 0
+    assert synthetic_state.graveyard_sizes[0] == gy_before
+
+
+def test_mill_target_player_targets_opponent(synthetic_state):
+    """Active player is 0 by default; milling player_id=1 mills the
+    opponent, not the controller. Opponent's library shrinks; active
+    player's library is untouched."""
+    p0_lib_before = synthetic_state.library_sizes[0]
+    p1_lib_before = synthetic_state.library_sizes[1]
+    p1_gy_before = synthetic_state.graveyard_sizes[1]
+
+    milled = synthetic_state.mill_target_player(1, 4)
+
+    assert milled == 4
+    # Opponent (p1) milled.
+    assert synthetic_state.library_sizes[1] == p1_lib_before - 4
+    assert synthetic_state.graveyard_sizes[1] == p1_gy_before + 4
+    # Active player (p0) untouched.
+    assert synthetic_state.library_sizes[0] == p0_lib_before
+    assert synthetic_state.graveyard_sizes[0] == 0
+
+
+def test_mill_target_player_negative_count_raises(synthetic_state):
+    """Negative count is invalid input — raises ValueError per the
+    project's loud-fail convention. (Library/graveyard untouched.)"""
+    lib_before = synthetic_state.library_sizes
+    gy_before = synthetic_state.graveyard_sizes
+
+    with pytest.raises(ValueError):
+        synthetic_state.mill_target_player(0, -1)
+
+    assert synthetic_state.library_sizes == lib_before
+    assert synthetic_state.graveyard_sizes == gy_before
+
+
+def test_mill_target_player_unknown_player_raises(synthetic_state):
+    """Out-of-range player_id raises IndexError, mirroring how
+    `move_object_from_graveyard_to_battlefield` and the other round-1
+    player-indexed primitives validate."""
+    with pytest.raises((IndexError, OverflowError)):
+        synthetic_state.mill_target_player(7, 1)
+
+
+def test_mill_target_player_resets_state_on_milled_cards(synthetic_state):
+    """A milled card lands in the graveyard with its per-object state
+    reset (CR 400.7): tapped, summoning_sick, damage, counters all
+    zeroed. The synthetic library cards default to clean state, so
+    we stamp counters onto the top-of-library card via `set_counters`
+    (which works cross-zone) and assert the milled card has counters
+    == 0 on arrival in the graveyard. Also asserts the milled card's
+    `find_object_zone` reports ZONE_GRAVEYARD."""
+    # Top of library is the LAST element of the Vec (= highest id).
+    # Default synthetic_state.library has ids 17..66 for player 0.
+    top_id = 66
+    # Stamp counters on the top library card.
+    assert synthetic_state.set_counters(top_id, 5) is True
+    assert synthetic_state.get_counters(top_id) == 5
+
+    milled = synthetic_state.mill_target_player(0, 1)
+
+    assert milled == 1
+    # Card is now in graveyard.
+    assert synthetic_state.find_object_zone(top_id) == ZONE_GRAVEYARD
+    # Counters reset to zero.
+    assert synthetic_state.get_counters(top_id) == 0
+
+
+def test_mill_target_player_clone_does_not_affect_original(synthetic_state):
+    """CoW canary: milling on a clone must not leak back into the source.
+    Both library size AND graveyard size are checked on the source."""
+    cloned = synthetic_state.clone_once()
+    source_lib_before = synthetic_state.library_sizes
+    source_gy_before = synthetic_state.graveyard_sizes
+
+    milled = cloned.mill_target_player(0, 3)
+    assert milled == 3
+
+    # Clone diverged.
+    assert cloned.library_sizes[0] == source_lib_before[0] - 3
+    assert cloned.graveyard_sizes[0] == source_gy_before[0] + 3
+    # Source untouched.
+    assert synthetic_state.library_sizes == source_lib_before
+    assert synthetic_state.graveyard_sizes == source_gy_before

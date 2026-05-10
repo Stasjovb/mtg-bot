@@ -104,4 +104,76 @@ impl GameState {
         let defender = 1 - self.active_player;
         self.choose_first_creature_for_player(defender)
     }
+
+    /// Return the obj_id of the first card in `player_id`'s graveyard
+    /// (`graveyard[0]`). Returns `None` on empty graveyard. Raises
+    /// `ValueError` on an out-of-range `player_id`. For composing
+    /// with bring-back-from-graveyard effects (Regrowth, Reanimate)
+    /// in `apply_effect`'s ReturnFromGraveyard / Reanimate arms.
+    fn choose_first_card_in_graveyard_for_player(
+        &self,
+        player_id: u8,
+    ) -> PyResult<Option<u32>> {
+        let idx = check_player_id(player_id)?;
+        Ok(self.players[idx].graveyard.first().map(|obj| obj.id))
+    }
+
+    /// Return the obj_id of the first object on `player_id`'s
+    /// battlefield whose printing's `keywords` contains the
+    /// lowercased form of `keyword` AND whose printing's
+    /// `card_types` contains "Creature". Returns `None` if no such
+    /// creature exists. The `keyword` argument is lowercased before
+    /// comparison so callers don't have to pre-lowercase. An empty
+    /// `keyword` is allowed and matches creatures with an empty
+    /// keyword list (degenerate but defined). Raises `ValueError` on
+    /// an out-of-range `player_id`. For composing with keyword-aware
+    /// effects ("destroy target creature with flying", etc.).
+    fn choose_first_creature_with_keyword_for_player(
+        &self,
+        player_id: u8,
+        keyword: &str,
+    ) -> PyResult<Option<u32>> {
+        let idx = check_player_id(player_id)?;
+        let needle = keyword.to_lowercase();
+        for obj in self.players[idx].battlefield.iter() {
+            if let Some(p) = self.registry.lookup(obj.printing_id) {
+                let is_creature = p.card_types.iter().any(|t| t == "Creature");
+                if !is_creature {
+                    continue;
+                }
+                let has_keyword = if needle.is_empty() {
+                    p.keywords.is_empty()
+                } else {
+                    p.keywords.iter().any(|k| k == &needle)
+                };
+                if has_keyword {
+                    return Ok(Some(obj.id));
+                }
+            }
+        }
+        Ok(None)
+    }
+
+    /// Return the obj_id of the first creature on `player_id`'s
+    /// battlefield whose `tapped == true`. Returns `None` if no
+    /// tapped creature exists. Raises `ValueError` on an out-of-range
+    /// `player_id`. For composing with untap-target-creature effects
+    /// that prefer tapped victims.
+    fn choose_first_tapped_creature_for_player(
+        &self,
+        player_id: u8,
+    ) -> PyResult<Option<u32>> {
+        let idx = check_player_id(player_id)?;
+        for obj in self.players[idx].battlefield.iter() {
+            if !obj.tapped {
+                continue;
+            }
+            if let Some(p) = self.registry.lookup(obj.printing_id) {
+                if p.card_types.iter().any(|t| t == "Creature") {
+                    return Ok(Some(obj.id));
+                }
+            }
+        }
+        Ok(None)
+    }
 }

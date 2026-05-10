@@ -177,3 +177,227 @@ def test_choose_clone_isolation(synthetic_state):
     )
     assert synthetic_state.hand_sizes == cloned.hand_sizes == [7, 7]
     assert synthetic_state.library_sizes == cloned.library_sizes == [50, 50]
+
+
+# --- choose_first_card_in_graveyard_for_player -----------------------
+#
+# Round-19 extend slice: graveyard / keyword / tapped selectors.
+#
+# The synthetic-state seed has empty graveyards on both sides
+# (``make_player`` initializes ``graveyard: Arc::new(Vec::new())``).
+# These tests use ``register_and_inject_object`` with
+# ``ZONE_GRAVEYARD = 3`` to seed graveyard contents, and use
+# ``tap_object`` to dirty creatures for the tapped selector.
+
+
+# Scryfall-style printing dicts shared across the new selectors.
+_FOREST = {
+    "name": "Forest",
+    "card_types": ["Land"],
+    "mana_cost": {},
+    "effects": [],
+    "mana_produced": ["G"],
+}
+_BEARS = {
+    "name": "Grizzly Bears",
+    "card_types": ["Creature"],
+    "mana_cost": {"G": 1, "generic": 1},
+    "effects": [],
+}
+_FLYER = {
+    "name": "Wind Drake",
+    "card_types": ["Creature"],
+    "mana_cost": {"U": 1, "generic": 2},
+    "effects": [],
+    "keywords": ["flying"],
+}
+_TRAMPLER = {
+    "name": "Rumbling Baloth",
+    "card_types": ["Creature"],
+    "mana_cost": {"G": 1, "generic": 3},
+    "effects": [],
+    "keywords": ["trample"],
+}
+
+ZONE_BATTLEFIELD = 2
+ZONE_GRAVEYARD = 3
+
+
+def test_choose_first_card_in_graveyard_returns_first_id(engine):
+    # Seed two cards into p0's graveyard. The selector should pick
+    # the first one (zone[0]) — i.e. the one inserted first.
+    state = engine.make_synthetic_state(
+        num_battlefield=0, num_hand=0, num_library=0
+    )
+    first_id = state.register_and_inject_object(_FOREST, 0, ZONE_GRAVEYARD)
+    second_id = state.register_and_inject_object(_BEARS, 0, ZONE_GRAVEYARD)
+    assert first_id != second_id
+    assert state.choose_first_card_in_graveyard_for_player(0) == first_id
+    # p1's graveyard is still empty.
+    assert state.choose_first_card_in_graveyard_for_player(1) is None
+
+
+def test_choose_first_card_in_graveyard_empty_returns_none(synthetic_state):
+    # The default synthetic state has empty graveyards on both sides.
+    assert synthetic_state.choose_first_card_in_graveyard_for_player(0) is None
+    assert synthetic_state.choose_first_card_in_graveyard_for_player(1) is None
+
+
+def test_choose_first_card_in_graveyard_out_of_range_raises(synthetic_state):
+    with pytest.raises((ValueError, IndexError, OverflowError)):
+        synthetic_state.choose_first_card_in_graveyard_for_player(99)
+
+
+# --- choose_first_creature_with_keyword_for_player -------------------
+
+
+def test_choose_first_creature_with_keyword_finds_match(engine):
+    # Layout: [Forest, Bears (no keywords), Wind Drake (flying)].
+    # Asking for "flying" returns the Wind Drake.
+    state = engine.make_synthetic_state(
+        num_battlefield=0, num_hand=0, num_library=0
+    )
+    state.register_and_inject_object(_FOREST, 0, ZONE_BATTLEFIELD)
+    state.register_and_inject_object(_BEARS, 0, ZONE_BATTLEFIELD)
+    flyer_id = state.register_and_inject_object(_FLYER, 0, ZONE_BATTLEFIELD)
+    assert (
+        state.choose_first_creature_with_keyword_for_player(0, "flying")
+        == flyer_id
+    )
+
+
+def test_choose_first_creature_with_keyword_no_match_returns_none(engine):
+    # Bears + Forest only. Nothing has "flying" → None.
+    state = engine.make_synthetic_state(
+        num_battlefield=0, num_hand=0, num_library=0
+    )
+    state.register_and_inject_object(_FOREST, 0, ZONE_BATTLEFIELD)
+    state.register_and_inject_object(_BEARS, 0, ZONE_BATTLEFIELD)
+    assert (
+        state.choose_first_creature_with_keyword_for_player(0, "flying")
+        is None
+    )
+
+
+def test_choose_first_creature_with_keyword_zone_order_first_match(engine):
+    # Two flyers and a trampler interleaved; the FIRST flyer in
+    # zone-order wins, not the trampler (different keyword) and not
+    # the second flyer.
+    state = engine.make_synthetic_state(
+        num_battlefield=0, num_hand=0, num_library=0
+    )
+    state.register_and_inject_object(_TRAMPLER, 0, ZONE_BATTLEFIELD)
+    first_flyer = state.register_and_inject_object(
+        _FLYER, 0, ZONE_BATTLEFIELD
+    )
+    state.register_and_inject_object(_TRAMPLER, 0, ZONE_BATTLEFIELD)
+    state.register_and_inject_object(_FLYER, 0, ZONE_BATTLEFIELD)
+    assert (
+        state.choose_first_creature_with_keyword_for_player(0, "flying")
+        == first_flyer
+    )
+
+
+def test_choose_first_creature_with_keyword_lowercases_arg(engine):
+    # Caller passes "Flying" (capitalized); the printing's keyword
+    # list stores "flying" (lowercase). Helper folds the arg to
+    # lowercase before comparison.
+    state = engine.make_synthetic_state(
+        num_battlefield=0, num_hand=0, num_library=0
+    )
+    flyer_id = state.register_and_inject_object(_FLYER, 0, ZONE_BATTLEFIELD)
+    assert (
+        state.choose_first_creature_with_keyword_for_player(0, "Flying")
+        == flyer_id
+    )
+    assert (
+        state.choose_first_creature_with_keyword_for_player(0, "FLYING")
+        == flyer_id
+    )
+
+
+def test_choose_first_creature_with_keyword_skips_non_creatures(engine):
+    # Even if a non-creature printing carried the keyword (it
+    # doesn't here — Forest has no keywords), the helper requires
+    # card_types to contain "Creature". The Bears (Creature, no
+    # keywords) does not match "flying", so the Forest-then-Bears
+    # battlefield returns None for "flying".
+    state = engine.make_synthetic_state(
+        num_battlefield=0, num_hand=0, num_library=0
+    )
+    state.register_and_inject_object(_FOREST, 0, ZONE_BATTLEFIELD)
+    state.register_and_inject_object(_BEARS, 0, ZONE_BATTLEFIELD)
+    assert (
+        state.choose_first_creature_with_keyword_for_player(0, "flying")
+        is None
+    )
+
+
+def test_choose_first_creature_with_keyword_empty_keyword_matches_no_keywords(engine):
+    # Empty keyword arg matches a Creature with an empty keyword
+    # list (degenerate but defined). Bears has no keywords, so it
+    # matches. Wind Drake has ["flying"], so it does NOT match.
+    state = engine.make_synthetic_state(
+        num_battlefield=0, num_hand=0, num_library=0
+    )
+    state.register_and_inject_object(_FLYER, 0, ZONE_BATTLEFIELD)
+    bears_id = state.register_and_inject_object(_BEARS, 0, ZONE_BATTLEFIELD)
+    assert (
+        state.choose_first_creature_with_keyword_for_player(0, "")
+        == bears_id
+    )
+
+
+def test_choose_first_creature_with_keyword_out_of_range_raises(synthetic_state):
+    with pytest.raises((ValueError, IndexError, OverflowError)):
+        synthetic_state.choose_first_creature_with_keyword_for_player(
+            99, "flying"
+        )
+
+
+# --- choose_first_tapped_creature_for_player -------------------------
+
+
+def test_choose_first_tapped_creature_finds_tapped(synthetic_state):
+    # Default synthetic state: p0 bf is [Forest x5, Bears x5] with
+    # all tapped == False. Tap the first Bears (id 5) and assert
+    # the helper picks it.
+    assert synthetic_state.tap_object(5) is True
+    assert synthetic_state.choose_first_tapped_creature_for_player(0) == 5
+
+
+def test_choose_first_tapped_creature_all_untapped_returns_none(synthetic_state):
+    # Fresh state, nothing tapped → None.
+    assert synthetic_state.choose_first_tapped_creature_for_player(0) is None
+    assert synthetic_state.choose_first_tapped_creature_for_player(1) is None
+
+
+def test_choose_first_tapped_creature_zone_order_first_tapped(synthetic_state):
+    # p0 bf creatures are at indices 5..9 (ids 5..9). Tap ids 7
+    # and 9; the helper should return the first tapped one in zone
+    # order — id 7, not the lower-id-but-later-in-zone case.
+    assert synthetic_state.tap_object(9) is True
+    assert synthetic_state.tap_object(7) is True
+    assert synthetic_state.choose_first_tapped_creature_for_player(0) == 7
+
+
+def test_choose_first_tapped_creature_skips_tapped_non_creatures(engine):
+    # Tap a Forest (Land) AND a Bears (Creature). The helper must
+    # skip the tapped Land and pick the tapped Creature.
+    state = engine.make_synthetic_state(
+        num_battlefield=0, num_hand=0, num_library=0
+    )
+    forest_id = state.register_and_inject_object(
+        _FOREST, 0, ZONE_BATTLEFIELD
+    )
+    bears_id = state.register_and_inject_object(_BEARS, 0, ZONE_BATTLEFIELD)
+    assert state.tap_object(forest_id) is True
+    assert state.tap_object(bears_id) is True
+    assert (
+        state.choose_first_tapped_creature_for_player(0) == bears_id
+    )
+
+
+def test_choose_first_tapped_creature_out_of_range_raises(synthetic_state):
+    with pytest.raises((ValueError, IndexError, OverflowError)):
+        synthetic_state.choose_first_tapped_creature_for_player(99)
