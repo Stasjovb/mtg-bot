@@ -1436,8 +1436,10 @@ def test_resolve_exile_target_moves_creature_to_owner_exile(synthetic_state):
     assert synthetic_state.exile_sizes[1] == p1_exile_before + 1
     # Specifically NOT in graveyard (this is exile, not destroy).
     assert synthetic_state.graveyard_sizes[1] == p1_grave_before
-    # Target no longer in any of the four pre-r11 tracked zones.
-    assert synthetic_state.find_object_zone(target_obj_id) is None
+    # Target now in p1's exile. Round-14 extended ``find_object_zone``
+    # to iterate exile, so it resolves to ``ZONE_EXILE`` here (pre-r14
+    # this returned None because exile wasn't searched).
+    assert synthetic_state.find_object_zone(target_obj_id) == ZONE_EXILE
     # And it IS in p1's exile.
     assert synthetic_state.exile_contains(target_obj_id) is True
     # Source instant: p0 graveyard.
