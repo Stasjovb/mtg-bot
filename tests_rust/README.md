@@ -111,6 +111,7 @@ the test lands in a commit.
 | rust(steps-untap-summoning): clear sickness at untap | tests_rust/test_steps.py extend | green | feature/rust-tdd-untap-summoning |
 | rust(damage-to-player): direct life mutation | tests_rust/test_damage.py extend | green | feature/rust-tdd-damage-to-player |
 | rust(life-cost): pay_life_cost (CR 118.4) | tests_rust/test_life.py extend | green | feature/rust-tdd-life-cost |
+| rust(combat-keywords-r15): trample+deathtouch (CR 702.19c) | tests_rust/test_combat.py extend | green | feature/rust-tdd-trample-deathtouch |
 
 ## Build invocation reminder
 

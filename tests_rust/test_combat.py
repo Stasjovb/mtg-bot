@@ -794,6 +794,199 @@ def test_trample_blocked_exact_lethal_no_excess(synthetic_state):
     )
 
 
+# ----------------------------- trample + deathtouch ------------------------
+#
+# CR 702.19c: a creature with both trample and deathtouch only has to
+# assign 1 damage to each blocker before assigning the rest as trample.
+# The composition: deathtouch (CR 702.2) treats any nonzero damage as
+# lethal, so trample's "must assign at least lethal to blockers" rule
+# (CR 702.19b) is satisfied at 1 damage per blocker. The remainder
+# tramples through to the defender.
+#
+# Pinned behavior:
+# - trample+deathtouch: blocker absorbs min(power, 1), the rest goes to
+#   the defending player.
+# - trample only (no deathtouch): blocker absorbs min(power, toughness)
+#   — pins the existing round-9 behavior.
+# - deathtouch only (no trample): no trample-through to the defender;
+#   damage is the symmetric mutual exchange with deathtouch lethal-mark
+#   upgrade — pins the existing round-8 behavior.
+
+
+def test_trample_deathtouch_4_4_vs_3_3_blocker_one_to_blocker_three_to_defender(
+    synthetic_state,
+):
+    """A 4/4 with trample+deathtouch attacks a 3/3 blocker. Deathtouch
+    makes 1 damage lethal, so trample's "lethal to blockers" floor is
+    1. The blocker takes 1 (deathtouch upgrades the mark to its
+    toughness for SBA cleanup), and the remaining 3 tramples through
+    to the defending player (life 20 → 17). CR 702.19c."""
+    attacker_id = synthetic_state.register_and_inject_object(
+        _keyword_creature_dict(4, 4, ["trample", "deathtouch"]),
+        0,
+        ZONE_BATTLEFIELD,
+    )
+    blocker_id = synthetic_state.register_and_inject_object(
+        _keyword_creature_dict(3, 3, []), 1, ZONE_BATTLEFIELD
+    )
+    assert synthetic_state.get_life(1) == 20
+    assert synthetic_state.declare_attacker(attacker_id) is True
+    assert synthetic_state.declare_blocker(blocker_id, attacker_id) is True
+    synthetic_state.deal_combat_damage()
+    # Deathtouch upgrades the blocker's marked damage to lethal (>= 3).
+    assert synthetic_state.get_damage(blocker_id) >= 3, (
+        "trample+deathtouch: blocker still takes lethal (deathtouch "
+        "upgrades the 1-damage mark to its toughness)"
+    )
+    # Remaining 3 (= 4 - 1) tramples through to the defender.
+    assert synthetic_state.get_life(1) == 17, (
+        "trample+deathtouch (CR 702.19c): only 1 damage required to "
+        "satisfy the trample 'lethal to blocker' floor; the rest "
+        "(power - 1 = 3) goes to the defending player"
+    )
+
+
+def test_trample_deathtouch_4_4_vs_5_5_blocker_one_to_blocker_three_to_defender(
+    synthetic_state,
+):
+    """A 4/4 with trample+deathtouch attacks a 5/5 blocker. Without
+    deathtouch, trample would cap blocker damage at 4 (= attacker.power
+    < blocker.toughness, no excess). With deathtouch, the cap drops to
+    1 — the blocker takes 1 (deathtouch upgrades to lethal=5), and
+    3 tramples to the defender (life 20 → 17)."""
+    attacker_id = synthetic_state.register_and_inject_object(
+        _keyword_creature_dict(4, 4, ["trample", "deathtouch"]),
+        0,
+        ZONE_BATTLEFIELD,
+    )
+    blocker_id = synthetic_state.register_and_inject_object(
+        _keyword_creature_dict(5, 5, []), 1, ZONE_BATTLEFIELD
+    )
+    assert synthetic_state.get_life(1) == 20
+    assert synthetic_state.declare_attacker(attacker_id) is True
+    assert synthetic_state.declare_blocker(blocker_id, attacker_id) is True
+    synthetic_state.deal_combat_damage()
+    # Deathtouch upgrades the blocker's marked damage to lethal (>= 5).
+    assert synthetic_state.get_damage(blocker_id) >= 5, (
+        "trample+deathtouch vs higher-toughness blocker: deathtouch "
+        "still upgrades to lethal"
+    )
+    # Remaining 3 (= 4 - 1) tramples through.
+    assert synthetic_state.get_life(1) == 17, (
+        "trample+deathtouch vs higher-toughness blocker: cap drops to 1, "
+        "so power - 1 = 3 tramples through"
+    )
+
+
+def test_trample_only_4_4_vs_3_3_blocker_pins_existing_round9_behavior(
+    synthetic_state,
+):
+    """Pin the existing round-9 trample-only behavior: a 4/4 trample
+    attacker (no deathtouch) vs 3/3 blocker assigns 3 to the blocker
+    (lethal at toughness=3) and 1 trample-through to the defender."""
+    attacker_id = synthetic_state.register_and_inject_object(
+        _keyword_creature_dict(4, 4, ["trample"]), 0, ZONE_BATTLEFIELD
+    )
+    blocker_id = synthetic_state.register_and_inject_object(
+        _keyword_creature_dict(3, 3, []), 1, ZONE_BATTLEFIELD
+    )
+    assert synthetic_state.get_life(1) == 20
+    assert synthetic_state.declare_attacker(attacker_id) is True
+    assert synthetic_state.declare_blocker(blocker_id, attacker_id) is True
+    synthetic_state.deal_combat_damage()
+    # Round-9 cap = blocker.toughness, so 3 to blocker.
+    assert synthetic_state.get_damage(blocker_id) == 3, (
+        "trample-only (no deathtouch): cap stays at blocker.toughness=3"
+    )
+    # Excess = 4 - 3 = 1.
+    assert synthetic_state.get_life(1) == 19, (
+        "trample-only (no deathtouch): excess = power - toughness = 1"
+    )
+
+
+def test_deathtouch_only_4_4_vs_5_5_blocker_pins_existing_round8_behavior(
+    synthetic_state,
+):
+    """Pin the existing round-8 deathtouch-only behavior: a 4/4
+    deathtouch attacker (no trample) vs 5/5 blocker. Mutual damage:
+    blocker takes 4, deathtouch upgrades to lethal=5 (dies); attacker
+    takes 5 (also dies). Defender life unchanged — no trample-through
+    without trample."""
+    attacker_id = synthetic_state.register_and_inject_object(
+        _keyword_creature_dict(4, 4, ["deathtouch"]), 0, ZONE_BATTLEFIELD
+    )
+    blocker_id = synthetic_state.register_and_inject_object(
+        _keyword_creature_dict(5, 5, []), 1, ZONE_BATTLEFIELD
+    )
+    assert synthetic_state.get_life(1) == 20
+    assert synthetic_state.declare_attacker(attacker_id) is True
+    assert synthetic_state.declare_blocker(blocker_id, attacker_id) is True
+    synthetic_state.deal_combat_damage()
+    # Deathtouch upgraded the blocker's mark to lethal.
+    assert synthetic_state.get_damage(blocker_id) >= 5, (
+        "deathtouch-only: blocker mark is upgraded to lethal"
+    )
+    # Attacker took the symmetric 5-damage hit.
+    assert synthetic_state.get_damage(attacker_id) == 5
+    # No trample without the trample keyword — defender life unchanged.
+    assert synthetic_state.get_life(1) == 20, (
+        "deathtouch-only (no trample): no trample-through to defender"
+    )
+
+
+def test_trample_deathtouch_1_1_vs_3_3_blocker_no_trample_excess(
+    synthetic_state,
+):
+    """Edge case: a 1/1 with trample+deathtouch vs 3/3 blocker.
+    Cap drops to 1 (deathtouch); blocker takes 1 (upgraded to lethal);
+    no trample excess (1 - 1 = 0). Defender life unchanged."""
+    attacker_id = synthetic_state.register_and_inject_object(
+        _keyword_creature_dict(1, 1, ["trample", "deathtouch"]),
+        0,
+        ZONE_BATTLEFIELD,
+    )
+    blocker_id = synthetic_state.register_and_inject_object(
+        _keyword_creature_dict(3, 3, []), 1, ZONE_BATTLEFIELD
+    )
+    assert synthetic_state.get_life(1) == 20
+    assert synthetic_state.declare_attacker(attacker_id) is True
+    assert synthetic_state.declare_blocker(blocker_id, attacker_id) is True
+    synthetic_state.deal_combat_damage()
+    # Blocker mark upgraded to lethal.
+    assert synthetic_state.get_damage(blocker_id) >= 3, (
+        "trample+deathtouch 1/1: blocker takes 1 damage, deathtouch "
+        "upgrades to lethal"
+    )
+    # power - cap = 1 - 1 = 0; no trample excess.
+    assert synthetic_state.get_life(1) == 20, (
+        "trample+deathtouch 1/1: no trample excess (power == cap == 1)"
+    )
+
+
+def test_trample_deathtouch_exact_one_power_no_excess(synthetic_state):
+    """A 1/1 with trample+deathtouch vs a 1/1 blocker. Cap = 1;
+    blocker takes 1 (deathtouch lethal); excess = 1 - 1 = 0.
+    Mutual destruction with no trample-through."""
+    attacker_id = synthetic_state.register_and_inject_object(
+        _keyword_creature_dict(1, 1, ["trample", "deathtouch"]),
+        0,
+        ZONE_BATTLEFIELD,
+    )
+    blocker_id = synthetic_state.register_and_inject_object(
+        _keyword_creature_dict(1, 1, []), 1, ZONE_BATTLEFIELD
+    )
+    assert synthetic_state.get_life(1) == 20
+    assert synthetic_state.declare_attacker(attacker_id) is True
+    assert synthetic_state.declare_blocker(blocker_id, attacker_id) is True
+    synthetic_state.deal_combat_damage()
+    # Blocker took 1 (already lethal at toughness=1).
+    assert synthetic_state.get_damage(blocker_id) >= 1
+    # No trample excess.
+    assert synthetic_state.get_life(1) == 20, (
+        "trample+deathtouch 1/1 vs 1/1: cap == power, no trample-through"
+    )
+
+
 # ----------------------------- first-strike --------------------------------
 #
 # First-strike (CR 702.7): a creature with first strike deals combat damage
