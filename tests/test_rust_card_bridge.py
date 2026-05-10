@@ -1745,3 +1745,85 @@ def test_register_n_times_micros_returns_positive():
     # ~50us even on a slow box; release-mode CPython is usually
     # under 5us.
     assert micros < 200.0, f"register too slow: {micros:.2f}us"
+
+
+# --- TargetOpponentLosesLife round-trip + error paths -----------------
+#
+# CR 118.4 — life loss (not damage). Powers the Dubious Delicacy pattern
+# (2 EoE cards). Distinct from `each_opponent_loses_life` (round 26):
+# the round-trip shape is identical in 2-player land (same `amount`
+# field) and the runtime behavior collapses to the same opponent life
+# subtraction, but the variants stay separate to mirror Python's
+# `TargetOpponentLosesLife(amount: int = 1)` dataclass shape (targeted
+# vs each-opponent semantics).
+
+
+def test_round_trip_target_opponent_loses_life_amount_two():
+    """Happy path: amount=2 round-trips faithfully. Mirrors Python's
+    `TargetOpponentLosesLife(amount: int = 1)` dataclass shape — `amount`
+    field with default 1, so explicit values round-trip cleanly."""
+    reg = mtg_bot_engine.Registry()
+    pid = reg.register_printing(
+        {
+            "name": "Test Dubious Delicacy",
+            "card_types": ["Artifact"],
+            "mana_cost": {"generic": 2},
+            "effects": [{"kind": "target_opponent_loses_life", "amount": 3}],
+        }
+    )
+    effects = [dict(e) for e in reg.get_printing_effects(pid)]
+    assert effects[0] == {"kind": "target_opponent_loses_life", "amount": 3}
+
+
+def test_round_trip_target_opponent_loses_life_amount_zero():
+    """amount=0 is a legal no-op shape (mirrors GainLife / DrawCards /
+    Mill / EachOpponentLosesLife / LoseLife zero-amount round-trip
+    conventions). Registers and round-trips without error."""
+    reg = mtg_bot_engine.Registry()
+    pid = reg.register_printing(
+        {
+            "name": "Test Zero Targeted Drain",
+            "card_types": ["Sorcery"],
+            "effects": [{"kind": "target_opponent_loses_life", "amount": 0}],
+        }
+    )
+    effects = [dict(e) for e in reg.get_printing_effects(pid)]
+    assert effects[0] == {"kind": "target_opponent_loses_life", "amount": 0}
+
+
+def test_round_trip_target_opponent_loses_life_default_amount_one():
+    """Python's `TargetOpponentLosesLife(amount: int = 1)` carries a
+    default of 1. Mirror the default-handling shape from
+    PutPlusOneCounterOnSelf / DiscardSelf: omitting `amount` registers
+    as amount=1 (NOT a KeyError, unlike EachOpponentLosesLife / LoseLife
+    which have no default and require the field)."""
+    reg = mtg_bot_engine.Registry()
+    pid = reg.register_printing(
+        {
+            "name": "Test Default Drain",
+            "card_types": ["Sorcery"],
+            "effects": [{"kind": "target_opponent_loses_life"}],
+        }
+    )
+    effects = [dict(e) for e in reg.get_printing_effects(pid)]
+    assert effects[0] == {"kind": "target_opponent_loses_life", "amount": 1}
+
+
+def test_target_opponent_loses_life_negative_amount_raises():
+    """Register-time guard on negative amount (matches the apply_effect
+    guard, surfaced earlier in the pipeline). Mirrors
+    EachOpponentLosesLife / LoseLife / DamageEachOpponent /
+    DiscardSelf negative register-time check shape — 'target opponent
+    loses -2 life' is schema nonsense (use GainLife on the opponent
+    for raising life totals, if that ever becomes a thing)."""
+    reg = mtg_bot_engine.Registry()
+    with pytest.raises(ValueError, match="non-negative"):
+        reg.register_printing(
+            {
+                "name": "Broken",
+                "card_types": ["Sorcery"],
+                "effects": [
+                    {"kind": "target_opponent_loses_life", "amount": -1}
+                ],
+            }
+        )
