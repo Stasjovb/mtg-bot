@@ -132,6 +132,55 @@ pub enum Action {
     /// variant; the variant + bridge round-trip ship now, so a
     /// follow-up slice only needs to flip the dispatch arm.
     ActivateAbility { source_id: u32, ability_index: u32 },
+    /// Cast a spell from hand (CR 601). `card_id` is the GameObject
+    /// id in the priority player's hand. The 5 optional fields carry
+    /// alt-cost / mode metadata mirrored bit-for-bit from Python's
+    /// `CastSpell(card_id, use_warp=False, kicked=False,
+    /// cast_for_free=False, use_impending=False, cast_room_half=None)`
+    /// dataclass so a Python-emitted dict round-trips losslessly
+    /// through `parse_action` → `action_to_pydict`:
+    ///
+    ///   - `use_warp`: warp alt-cost (EoE — impulse-cast from
+    ///     exile zone or warp-from-hand with end-of-turn exile).
+    ///   - `kicked`: kicker additional cost paid on top of the base
+    ///     mana cost (only legal when the printing has a kicker_cost).
+    ///   - `cast_for_free`: free-cast windows (e.g. Weftwalking's
+    ///     "first spell each player casts may be cast without paying
+    ///     its mana cost"). Mutually exclusive with use_warp / kicked.
+    ///   - `use_impending`: impending deferred-creature mode (DSK /
+    ///     EoE Overlord cycle — enters with `impending_count` time
+    ///     counters, creature-ness suppressed until the last counter
+    ///     comes off at the controller's end step).
+    ///   - `cast_room_half`: which half of a Room enchantment (DSK)
+    ///     — `None` for non-Room cards, `Some(name)` for Rooms (the
+    ///     half-name string is the Room's locked-door label that the
+    ///     unlock-cost is sourced from).
+    ///
+    /// Round-20 frequency: 17 of 420 decisions (~4.0%) — the
+    /// second-most-frequent non-`PassPriority` variant after
+    /// `DeclareAttackers`.
+    ///
+    /// **First-slice scope: variant + bridge ship; dispatch IGNORES
+    /// the flags.** The existing round-4 `cast_creature(obj_id,
+    /// player_id)` primitive doesn't yet accept alt-cost / mode
+    /// flags; wiring each flag through is a future-slice followup
+    /// (the warp / kicker / impending plumbing depends on Effect
+    /// dispatch for those mechanics + cost-stacking infrastructure
+    /// that doesn't exist in Rust yet). The variant landing now
+    /// unblocks the Python → Rust bridge round-trip for production
+    /// `CastSpell` payloads — search-loop dispatch can drive Rust
+    /// state through the same dict shape Python already emits, and a
+    /// future slice flips the dispatch arm without changing the
+    /// variant's shape. Mirrors the round-23 ActivateAbility
+    /// "scaffold the variant, defer the dispatch semantics" pattern.
+    CastSpell {
+        card_id: u32,
+        use_warp: bool,
+        kicked: bool,
+        cast_for_free: bool,
+        use_impending: bool,
+        cast_room_half: Option<String>,
+    },
 }
 
 // --- dict -> Rust ------------------------------------------------
@@ -230,8 +279,56 @@ pub fn parse_action(dict: &Bound<'_, PyDict>) -> PyResult<Action> {
                 ability_index,
             })
         }
+        "cast_spell" => {
+            // `card_id` is required (the only positional field on
+            // Python's `CastSpell` dataclass — every other field has
+            // a keyword default). The 5 flag fields are all optional;
+            // missing keys default to the Python dataclass defaults
+            // (False for bools, None for cast_room_half). This means
+            // a "minimal" `{"kind": "cast_spell", "card_id": N}` dict
+            // is the equivalent of Python's `CastSpell(card_id=N)`
+            // call — the most common shape the search loop emits.
+            //
+            // Wrong types bubble up as `TypeError` / `ValueError`
+            // from `extract::<bool>` / `extract::<String>` — same
+            // shape as the `card_id`-wrong-type behavior on
+            // `play_land` / `activate_ability`.
+            let card_id: u32 = require(dict, "card_id")?.extract()?;
+            let use_warp: bool = match dict.get_item("use_warp")? {
+                Some(v) => v.extract()?,
+                None => false,
+            };
+            let kicked: bool = match dict.get_item("kicked")? {
+                Some(v) => v.extract()?,
+                None => false,
+            };
+            let cast_for_free: bool = match dict.get_item("cast_for_free")? {
+                Some(v) => v.extract()?,
+                None => false,
+            };
+            let use_impending: bool = match dict.get_item("use_impending")? {
+                Some(v) => v.extract()?,
+                None => false,
+            };
+            // `cast_room_half` is `Option<String>`: missing key OR
+            // explicit `None` both map to `None`. A non-None,
+            // non-string value raises `TypeError` from
+            // `extract::<String>`.
+            let cast_room_half: Option<String> = match dict.get_item("cast_room_half")? {
+                Some(v) if !v.is_none() => Some(v.extract()?),
+                _ => None,
+            };
+            Ok(Action::CastSpell {
+                card_id,
+                use_warp,
+                kicked,
+                cast_for_free,
+                use_impending,
+                cast_room_half,
+            })
+        }
         other => Err(PyValueError::new_err(format!(
-            "unknown action kind {other:?}; valid: pass_priority, play_land, declare_attackers, declare_blockers, activate_ability"
+            "unknown action kind {other:?}; valid: pass_priority, play_land, declare_attackers, declare_blockers, activate_ability, cast_spell"
         ))),
     }
 }
@@ -284,6 +381,32 @@ pub fn action_to_pydict<'py>(
             d.set_item("kind", "activate_ability")?;
             d.set_item("source_id", *source_id)?;
             d.set_item("ability_index", *ability_index)?;
+        }
+        Action::CastSpell {
+            card_id,
+            use_warp,
+            kicked,
+            cast_for_free,
+            use_impending,
+            cast_room_half,
+        } => {
+            d.set_item("kind", "cast_spell")?;
+            d.set_item("card_id", *card_id)?;
+            // Always emit all 5 flag fields so round-trip is fully
+            // symmetric — a parse-then-serialize pair lands on a dict
+            // that exactly equals the canonical "all-fields-present"
+            // shape. Callers that emit the minimal `{kind, card_id}`
+            // shape get a slightly-richer dict back, but the
+            // re-parsed Action is bit-identical (all-False / None
+            // defaults).
+            d.set_item("use_warp", *use_warp)?;
+            d.set_item("kicked", *kicked)?;
+            d.set_item("cast_for_free", *cast_for_free)?;
+            d.set_item("use_impending", *use_impending)?;
+            // `Option<String>` round-trips as `None` -> Python None /
+            // `Some(s)` -> Python str. PyO3's `set_item` handles both
+            // via the `IntoPy` impl on `Option<T>`.
+            d.set_item("cast_room_half", cast_room_half.clone())?;
         }
     }
     Ok(d)

@@ -108,6 +108,17 @@ impl GameState {
     ///   yet" message. A future slice adds the primitive and flips
     ///   the arm to a real `call_method1("activate_ability",
     ///   (source_id, ability_index))` dispatch.
+    /// - `{"kind": "cast_spell", "card_id": <u32>, "use_warp":
+    ///   <bool>?, "kicked": <bool>?, "cast_for_free": <bool>?,
+    ///   "use_impending": <bool>?, "cast_room_half": <str|None>?}`
+    ///   → calls `cast_creature(card_id, priority_player)`. The 5
+    ///   alt-cost / mode flags are parsed as data and ROUND-TRIP
+    ///   through the bridge but are IGNORED by this dispatch arm
+    ///   (first-slice scope, mirrors the ActivateAbility "scaffold
+    ///   the variant, defer the dispatch semantics" pattern — see
+    ///   the `Action::CastSpell` arm's inline comment for the
+    ///   future-slice plumbing of warp / kicker / impending /
+    ///   cast_for_free / cast_room_half).
     ///
     /// Unknown `kind` raises `ValueError`; missing `kind` or other
     /// required keys (e.g. `card_id` for `play_land`,
@@ -185,6 +196,54 @@ impl GameState {
                 for (blocker_id, attacker_id) in assignments {
                     slf.call_method1("declare_blocker", (blocker_id, attacker_id))?;
                 }
+            }
+            Action::CastSpell {
+                card_id,
+                use_warp: _,
+                kicked: _,
+                cast_for_free: _,
+                use_impending: _,
+                cast_room_half: _,
+            } => {
+                // Round-23(+) slice: ship the `CastSpell` variant +
+                // bridge with all 5 alt-cost / mode flags as data;
+                // dispatch IGNORES the flags and routes to the
+                // existing round-4 `cast_creature(obj_id, player_id)`
+                // primitive. Same pattern as `play_land` for the
+                // actor resolution (the Python `CastSpell` dataclass
+                // carries only `card_id`; the implicit actor is the
+                // priority player). Borrow `slf` for the u8 read,
+                // then drop the borrow before re-entering Python via
+                // `call_method1` (which would re-borrow under the
+                // hood).
+                //
+                // **Flags are silently ignored for first-slice.**
+                // Mirrors the round-23 ActivateAbility "scaffold the
+                // variant, defer the dispatch semantics" pattern —
+                // search-loop dispatch can already drive Rust state
+                // through the production `CastSpell` dict shape
+                // (warp / kicker / impending / Room-half / free-cast
+                // payloads round-trip losslessly through the
+                // bridge), and a future slice wires each flag
+                // through to a richer primitive:
+                //   - use_warp -> alt-cost from exile (needs
+                //     Effect::Warp + the cost-from-zone primitive).
+                //   - kicked -> additional mana cost stacked on the
+                //     base (needs cost-stacking infrastructure).
+                //   - cast_for_free -> bypass the mana payment in
+                //     `cast_creature`'s phase 2.
+                //   - use_impending -> defer creature-ness via time
+                //     counters + the new face-down-ish state field.
+                //   - cast_room_half -> route to the picked Room
+                //     half's mana cost + unlock effect.
+                // No runtime warning when a non-default flag is set
+                // — the test suite covers the "flags pass through
+                // silently" contract (search-loop callers shouldn't
+                // see ergonomic noise from the deferred-semantics
+                // gap; the gap is documented here + in the variant
+                // docstring + in the porting-status table).
+                let player_id = slf.borrow().priority_player;
+                slf.call_method1("cast_creature", (card_id, player_id))?;
             }
             Action::ActivateAbility {
                 source_id: _,
