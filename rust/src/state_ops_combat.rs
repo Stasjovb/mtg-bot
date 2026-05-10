@@ -17,10 +17,9 @@
 //!
 //! ## Scope simplifications (mirrored on `tests_rust/test_combat.py`)
 //!
-//! - **No double-strike / infect / protection / unblockable.**
-//!   First-strike + trample land in this slice; the remaining
-//!   keywords are deferred. Future combat slices peel off one keyword
-//!   at a time.
+//! - **No infect / protection / unblockable.** Double-strike +
+//!   first-strike + trample land here; the remaining keywords are
+//!   deferred. Future combat slices peel off one keyword at a time.
 //! - **Vigilance (CR 702.20) IS modeled.** A creature with
 //!   `"vigilance"` in `printing.keywords` skips the tap step on
 //!   declare-attacker — it gets pushed onto `self.attackers` but
@@ -59,19 +58,33 @@
 //!   the round-5 combat slice itself only applies attacker.power to
 //!   the FIRST declared blocker.
 //! - **First-strike (CR 702.7) IS modeled.** When ANY participant in
-//!   combat has `"first_strike"` in `printing.keywords`,
-//!   `deal_combat_damage` runs in two passes: a "first-strike damage
-//!   step" applying only first-strike sources' damage, then a
-//!   "regular damage step" applying only non-first-strike sources'
-//!   damage AND only from sources still alive (i.e. their marked
-//!   `damage` is < their printed `toughness` after the first step).
-//!   Trample / deathtouch / lifelink fire inside whichever pass
-//!   actually applies the damage. **No double-strike** in this slice
-//!   (a double-strike creature would deal damage in BOTH passes);
-//!   deferred. SBAs are still NOT fired between the two passes —
-//!   the within-function "alive" check uses `damage < toughness`
-//!   rather than running `apply_sbas`, mirroring the round-5
-//!   simplification that the SBA slice owns lethal-damage cleanup.
+//!   combat has `"first_strike"` OR `"double_strike"` in
+//!   `printing.keywords`, `deal_combat_damage` runs in two passes: a
+//!   "first-strike damage step" applying first-strike-tagged entries,
+//!   then a "regular damage step" applying regular-tagged entries —
+//!   only from sources still alive (i.e. their marked `damage` is <
+//!   their printed `toughness` after the first step). Trample /
+//!   deathtouch / lifelink fire inside whichever pass actually
+//!   applies the damage. SBAs are still NOT fired between the two
+//!   passes — the within-function "alive" check uses
+//!   `damage < toughness` rather than running `apply_sbas`,
+//!   mirroring the round-5 simplification that the SBA slice owns
+//!   lethal-damage cleanup.
+//! - **Double-strike (CR 702.4) IS modeled.** A creature with
+//!   `"double_strike"` in its printing's keywords participates in
+//!   BOTH the first-strike substep AND the regular substep — it
+//!   emits a damage entry per substep at plan-construction time
+//!   (`passes_for` returns `[FirstStrike, Regular]` for DS sources).
+//!   The regular-substep entry is gated by the same alive-after-step-1
+//!   predicate that gates non-first-strike sources, so a DS creature
+//!   that took lethal damage in step 1 doesn't strike a second time.
+//!   First-strike + double-strike compose to "double-strike" for
+//!   damage timing (FS + DS both emit in step 1; DS additionally
+//!   emits in step 2). **No DS + trample interaction** in this slice
+//!   — when a single blocker dies in step 1, a DS attacker's
+//!   step-2 strike has no creature target and (since trample on the
+//!   blocked-side-of-step-2 isn't wired) fizzles. Real MTG would
+//!   trample-spill the second strike to the defender; deferred.
 //! - **Haste (CR 702.10) IS modeled.** A creature with `"haste"` in
 //!   `printing.keywords` bypasses the summoning-sickness rejection
 //!   in `declare_attacker` — a freshly-cast haste creature can
@@ -310,15 +323,60 @@ enum DamageTarget {
     Player(u8),
 }
 
+/// Which substep of `deal_combat_damage`'s two-substep timing this
+/// entry fires in. CR 702.7 (first-strike) introduces two damage
+/// substeps when ANY participant has first-strike; CR 702.4
+/// (double-strike) lets a creature deal damage in BOTH substeps.
+///
+/// Per-source rules:
+/// - first-strike only → emits entries with `Pass::FirstStrike`
+/// - double-strike only → emits TWO copies of each entry, one per pass
+/// - first-strike + double-strike → same as double-strike (both passes;
+///   real MTG treats these as identical for damage timing)
+/// - neither (vanilla) → emits entries with `Pass::Regular`
+///
+/// `Pass` replaces the round-9 `source_has_first_strike: bool` flag —
+/// the partition into pass-1 vs pass-2 reads `Pass::FirstStrike` vs
+/// `Pass::Regular` and the keyword check is folded into plan
+/// construction (which now also handles entry duplication for
+/// double-strike).
+#[derive(Copy, Clone, PartialEq, Eq)]
+enum Pass {
+    FirstStrike,
+    Regular,
+}
+
 /// One entry in `deal_combat_damage`'s damage plan: a source dealing
-/// `amount` damage to `target`, plus whether the source carries
-/// first-strike (so the two-pass partition can route entries without
-/// re-reading the keyword).
+/// `amount` damage to `target` in a specific substep `pass` (CR 702.7
+/// first-strike timing). A double-strike source contributes TWO
+/// entries per damage assignment (one per pass) — see `Pass`.
 struct PlanEntry {
     source_id: u32,
     target: DamageTarget,
     amount: i16,
-    source_has_first_strike: bool,
+    pass: Pass,
+}
+
+/// Which substeps does a source with these keywords fire in?
+/// - Vanilla (neither FS nor DS): `[Regular]` — strikes once in step 2.
+/// - First-strike only: `[FirstStrike]` — strikes once in step 1.
+/// - Double-strike (with or without first-strike — they coincide for
+///   damage timing): `[FirstStrike, Regular]` — strikes once per step.
+///
+/// Returns a fixed-size array slice via `&[Pass]` so the caller can
+/// iterate without allocating. We return a small `Vec<Pass>` instead
+/// because the two-element variant has size 2 and the one-element
+/// variants have size 1 — a stack-allocated `Vec` of capacity 2 is
+/// cheap and avoids the lifetime gymnastics of returning a slice into
+/// a `static` array.
+fn passes_for(has_first_strike: bool, has_double_strike: bool) -> Vec<Pass> {
+    if has_double_strike {
+        vec![Pass::FirstStrike, Pass::Regular]
+    } else if has_first_strike {
+        vec![Pass::FirstStrike]
+    } else {
+        vec![Pass::Regular]
+    }
 }
 
 /// "Is this creature still alive after the first-strike damage step?"
@@ -544,16 +602,21 @@ impl GameState {
     /// the attacker. This is the symmetric back-damage half of the
     /// exchange.
     ///
-    /// **First-strike (CR 702.7) IS modeled.** When ANY participant
-    /// has `"first_strike"`, damage runs in two passes: pass 1 applies
-    /// only first-strike sources' damage; pass 2 applies the rest,
-    /// excluding sources whose marked `damage` >= printed `toughness`
-    /// after pass 1 (i.e. sources that took lethal in pass 1 don't
-    /// strike back). When NO participant has first-strike, the path
-    /// degenerates to one pass, bit-identical to the pre-first-strike
-    /// behavior.
-    ///
-    /// **No double-strike** in this slice — see module docstring.
+    /// **First-strike (CR 702.7) and double-strike (CR 702.4) ARE
+    /// modeled.** When ANY plan entry fires in the first-strike
+    /// substep (i.e. any participant has first-strike or
+    /// double-strike), damage runs in two passes: pass 1 applies
+    /// the first-strike-tagged entries; pass 2 applies the
+    /// regular-tagged entries, excluding sources whose marked
+    /// `damage` >= printed `toughness` after pass 1 (i.e. sources
+    /// that took lethal in pass 1 don't strike back, and DS sources
+    /// that took lethal in pass 1 don't strike a second time). A DS
+    /// source contributes one entry to each pass per damage
+    /// assignment; vanilla sources contribute one entry to pass 2;
+    /// FS-only sources contribute one entry to pass 1. When NO
+    /// participant has first-strike or double-strike, every entry is
+    /// regular-tagged and the path degenerates to one pass —
+    /// bit-identical to the pre-first-strike behavior.
     ///
     /// **No SBA enforcement between passes.** The "alive" check in
     /// pass 2 is a within-function `damage < toughness` predicate;
@@ -569,9 +632,12 @@ impl GameState {
         //   keywords without re-walking the per-attacker logic)
         // - the target (creature / player)
         // - the literal `amount` of damage
-        // - whether the source has first-strike (so we can partition
-        //   the plan into pass-1 vs pass-2 entries without re-reading
-        //   the keyword on every dispatch).
+        // - which substep (`Pass::FirstStrike` or `Pass::Regular`) the
+        //   entry fires in. First-strike (CR 702.7) sources emit
+        //   `FirstStrike`-tagged entries; double-strike (CR 702.4)
+        //   sources emit BOTH a `FirstStrike`-tagged and a
+        //   `Regular`-tagged entry per damage assignment; vanilla
+        //   sources emit `Regular`-tagged entries.
         let mut plan: Vec<PlanEntry> = Vec::new();
 
         let defending_player: u8 = 1 - self.active_player;
@@ -580,7 +646,16 @@ impl GameState {
             let attacker_power = battlefield_creature_power(self, attacker_id);
             let attacker_has_first_strike =
                 battlefield_has_keyword(self, attacker_id, "first_strike");
+            let attacker_has_double_strike =
+                battlefield_has_keyword(self, attacker_id, "double_strike");
             let attacker_has_trample = battlefield_has_keyword(self, attacker_id, "trample");
+            // Per-pass emission for this source. DS sources emit in
+            // both substeps; FS-only sources emit only in step 1;
+            // vanilla sources emit only in step 2.
+            let passes_for_source = passes_for(
+                attacker_has_first_strike,
+                attacker_has_double_strike,
+            );
             // Find the FIRST blocker matching this attacker (single-
             // blocker damage simplification — see module docstring).
             let first_blocker: Option<u32> = self
@@ -613,40 +688,48 @@ impl GameState {
                         // defender.
                         let to_blocker = std::cmp::min(attacker_power, blocker_toughness);
                         if to_blocker > 0 {
-                            plan.push(PlanEntry {
-                                source_id: attacker_id,
-                                target: DamageTarget::Creature(blocker_id),
-                                amount: to_blocker,
-                                source_has_first_strike: attacker_has_first_strike,
-                            });
+                            for &p in &passes_for_source {
+                                plan.push(PlanEntry {
+                                    source_id: attacker_id,
+                                    target: DamageTarget::Creature(blocker_id),
+                                    amount: to_blocker,
+                                    pass: p,
+                                });
+                            }
                         }
                         let excess = (attacker_power as i32) - (blocker_toughness as i32);
                         if excess > 0 {
-                            plan.push(PlanEntry {
-                                source_id: attacker_id,
-                                target: DamageTarget::Player(defending_player),
-                                amount: excess as i16,
-                                source_has_first_strike: attacker_has_first_strike,
-                            });
+                            for &p in &passes_for_source {
+                                plan.push(PlanEntry {
+                                    source_id: attacker_id,
+                                    target: DamageTarget::Player(defending_player),
+                                    amount: excess as i16,
+                                    pass: p,
+                                });
+                            }
                         }
                     } else {
-                        plan.push(PlanEntry {
-                            source_id: attacker_id,
-                            target: DamageTarget::Creature(blocker_id),
-                            amount: attacker_power,
-                            source_has_first_strike: attacker_has_first_strike,
-                        });
+                        for &p in &passes_for_source {
+                            plan.push(PlanEntry {
+                                source_id: attacker_id,
+                                target: DamageTarget::Creature(blocker_id),
+                                amount: attacker_power,
+                                pass: p,
+                            });
+                        }
                     }
                 }
             } else if attacker_power > 0 {
                 // Unblocked: the full attacker power goes to the
                 // defender. Trample does NOT double-count here.
-                plan.push(PlanEntry {
-                    source_id: attacker_id,
-                    target: DamageTarget::Player(defending_player),
-                    amount: attacker_power,
-                    source_has_first_strike: attacker_has_first_strike,
-                });
+                for &p in &passes_for_source {
+                    plan.push(PlanEntry {
+                        source_id: attacker_id,
+                        target: DamageTarget::Player(defending_player),
+                        amount: attacker_power,
+                        pass: p,
+                    });
+                }
             }
         }
         // Back-damage from EVERY declared blocker, regardless of
@@ -657,41 +740,72 @@ impl GameState {
             let blocker_power = battlefield_creature_power(self, blocker_id);
             let blocker_has_first_strike =
                 battlefield_has_keyword(self, blocker_id, "first_strike");
+            let blocker_has_double_strike =
+                battlefield_has_keyword(self, blocker_id, "double_strike");
+            let passes_for_blocker = passes_for(
+                blocker_has_first_strike,
+                blocker_has_double_strike,
+            );
             if blocker_power > 0 {
-                plan.push(PlanEntry {
-                    source_id: blocker_id,
-                    target: DamageTarget::Creature(attacker_id),
-                    amount: blocker_power,
-                    source_has_first_strike: blocker_has_first_strike,
-                });
+                for &p in &passes_for_blocker {
+                    plan.push(PlanEntry {
+                        source_id: blocker_id,
+                        target: DamageTarget::Creature(attacker_id),
+                        amount: blocker_power,
+                        pass: p,
+                    });
+                }
             }
         }
 
-        // First-strike timing (CR 702.7): if ANY plan entry's source
-        // has first-strike, run two passes. Pass 1 applies only the
-        // first-strike entries; then pass 2 applies the non-first-
-        // strike entries — but only from sources still alive after
-        // pass 1 (so a creature that took lethal first-strike damage
-        // doesn't strike back).
+        // First-strike / double-strike timing (CR 702.7 / 702.4): if
+        // ANY plan entry fires in the first-strike substep, run two
+        // passes. Pass 1 applies only the `Pass::FirstStrike` entries;
+        // then pass 2 applies the `Pass::Regular` entries — but only
+        // from sources still alive after pass 1 (a creature that took
+        // lethal first-strike damage doesn't strike back, AND a
+        // double-strike creature that took lethal first-strike damage
+        // doesn't strike a second time).
         //
-        // When no plan entry has first-strike, the partition is empty
-        // / full and the two-pass code degenerates to one pass over
-        // the original list — bit-identical to the pre-first-strike
+        // When no plan entry has first-strike OR double-strike, every
+        // entry is `Pass::Regular`, the partition's pass_1 is empty,
+        // and the two-pass code degenerates to one pass over the
+        // original list — bit-identical to the pre-first-strike
         // behavior.
-        let any_first_strike = plan.iter().any(|e| e.source_has_first_strike);
+        let any_first_strike = plan.iter().any(|e| e.pass == Pass::FirstStrike);
 
         if any_first_strike {
             // Partition into (first-strike pass, regular pass).
             let (pass_1, pass_2_all): (Vec<PlanEntry>, Vec<PlanEntry>) =
-                plan.into_iter().partition(|e| e.source_has_first_strike);
+                plan.into_iter().partition(|e| e.pass == Pass::FirstStrike);
             // Apply pass 1.
             self.apply_damage_pass(pass_1);
-            // Filter pass 2 to only sources still alive after pass 1.
-            // A source is alive iff its marked damage < printed
-            // toughness — see `battlefield_creature_alive`.
+            // Filter pass 2:
+            // (a) Source must be still alive after pass 1 — a creature
+            //     that took lethal damage in step 1 doesn't strike
+            //     back (gates out non-FS sources hit by a FS source,
+            //     and gates out DS sources that took lethal in step
+            //     1 from striking a second time).
+            // (b) Creature targets must also be still alive after
+            //     pass 1 — a DS source whose only blocker died in
+            //     step 1 has no creature target in step 2 (real MTG
+            //     would let trample spill the second strike to the
+            //     defender, but this slice does not wire DS+trample;
+            //     deferred). Player targets always pass — `Player`
+            //     entries are never filtered here.
+            //
+            // SBAs are NOT fired between passes — the alive check is
+            // a within-function `damage < toughness` predicate, same
+            // shape as the round-9 first-strike slice.
             let pass_2: Vec<PlanEntry> = pass_2_all
                 .into_iter()
                 .filter(|e| battlefield_creature_alive(self, e.source_id))
+                .filter(|e| match e.target {
+                    DamageTarget::Creature(target_id) => {
+                        battlefield_creature_alive(self, target_id)
+                    }
+                    DamageTarget::Player(_) => true,
+                })
                 .collect();
             self.apply_damage_pass(pass_2);
         } else {
