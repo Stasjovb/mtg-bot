@@ -300,3 +300,120 @@ def test_mulligan_to_n_clone_isolation(synthetic_state):
     assert synthetic_state.scry(0, P0_LIBRARY_SIZE) == source_lib_order_before
     # Clone diverged: hand size matches the requested n.
     assert cloned.hand_sizes[0] == 3
+
+
+# --- bottom_cards_from_hand: London-mulligan bottoming ---------------------
+#
+# Round-18 slice. Completes the London mulligan rule (CR 103.4): after
+# `mulligan_to_n(player, 7, seed)` the player has a fresh 7-card hand;
+# `bottom_cards_from_hand(player, n_mulligans)` then puts the FIRST
+# `n_mulligans` cards of that hand on the BOTTOM of the library
+# (deterministic order — a future decision-callback slice models real
+# player choice). "Library bottom" = INDEX 0 of the Vec; "library top"
+# = LAST element of the Vec (matches the round-1 zone convention and
+# `scry`).
+#
+# Default fixture layout (player 0):
+#   - hand obj_ids: 10, 11, 12, 13, 14, 15, 16  (insertion order)
+#   - library obj_ids: 17, 18, ..., 66  (lib[0]=17 bottom, lib[49]=66 top)
+# `scry(0, lib_size)` returns top-first: [66, 65, ..., 17].
+
+
+def test_bottom_cards_moves_first_n_to_library_bottom(synthetic_state):
+    """`bottom_cards_from_hand(0, 2)` removes hand[0..2] (ids 10, 11)
+    and puts them on the bottom of the library so that lib[0] = 10
+    (bottom-most) and lib[1] = 11 — i.e. hand[0] ends up at the very
+    bottom of the library, hand[1] just above it."""
+    synthetic_state.bottom_cards_from_hand(0, 2)
+
+    assert synthetic_state.hand_sizes[0] == P0_HAND_SIZE - 2
+    assert synthetic_state.library_sizes[0] == P0_LIBRARY_SIZE + 2
+
+    # Read the full library top-first via scry. Last two entries are
+    # the new bottom of the library: scry result is [top, ..., bottom],
+    # so the very last is lib[0] = id 10, second-to-last is lib[1] = 11.
+    full = synthetic_state.scry(0, synthetic_state.library_sizes[0])
+    assert full[-1] == 10  # hand[0] now at library bottom
+    assert full[-2] == 11  # hand[1] just above it
+    # Library top unchanged: lib's last element was id 66 before, still 66.
+    assert full[0] == 66
+
+
+def test_bottom_cards_zero_no_op(synthetic_state):
+    """`bottom_cards_from_hand(player, 0)` is a no-op — hand and
+    library are unchanged."""
+    hand_before = synthetic_state.hand_sizes[0]
+    lib_before = synthetic_state.library_sizes[0]
+    lib_order_before = synthetic_state.scry(0, P0_LIBRARY_SIZE)
+
+    synthetic_state.bottom_cards_from_hand(0, 0)
+
+    assert synthetic_state.hand_sizes[0] == hand_before
+    assert synthetic_state.library_sizes[0] == lib_before
+    assert synthetic_state.scry(0, P0_LIBRARY_SIZE) == lib_order_before
+
+
+def test_bottom_cards_more_than_hand_raises(synthetic_state):
+    """`n` greater than the current hand size raises ValueError."""
+    with pytest.raises(ValueError):
+        synthetic_state.bottom_cards_from_hand(0, P0_HAND_SIZE + 1)
+
+
+def test_bottom_cards_negative_raises(synthetic_state):
+    """Negative `n` is nonsensical — raise ValueError."""
+    with pytest.raises(ValueError):
+        synthetic_state.bottom_cards_from_hand(0, -1)
+
+
+def test_bottom_cards_unknown_player_raises(synthetic_state):
+    """Out-of-range `player_id` raises ValueError."""
+    with pytest.raises(ValueError):
+        synthetic_state.bottom_cards_from_hand(99, 1)
+
+
+def test_bottom_cards_preserves_library_top(synthetic_state):
+    """The card on top of the library (last element of the Vec, id 66
+    in the default fixture) is unaffected by bottoming — bottoming
+    inserts at index 0 only."""
+    top_before = synthetic_state.scry(0, 1)
+    assert top_before == [66]
+
+    synthetic_state.bottom_cards_from_hand(0, 3)
+
+    top_after = synthetic_state.scry(0, 1)
+    assert top_after == [66]
+
+
+def test_bottom_cards_clone_isolation(synthetic_state):
+    """Bottoming on a clone must not leak back into the source state's
+    hand or library. CoW canary."""
+    cloned = synthetic_state.clone_once()
+    source_hand_before = synthetic_state.hand_sizes[0]
+    source_lib_before = synthetic_state.library_sizes[0]
+    source_lib_order_before = synthetic_state.scry(0, P0_LIBRARY_SIZE)
+
+    cloned.bottom_cards_from_hand(0, 2)
+
+    # Source untouched.
+    assert synthetic_state.hand_sizes[0] == source_hand_before
+    assert synthetic_state.library_sizes[0] == source_lib_before
+    assert synthetic_state.scry(0, P0_LIBRARY_SIZE) == source_lib_order_before
+    # Clone diverged.
+    assert cloned.hand_sizes[0] == source_hand_before - 2
+    assert cloned.library_sizes[0] == source_lib_before + 2
+
+
+def test_bottom_cards_full_hand_empties_hand(synthetic_state):
+    """Bottoming all 7 cards of a 7-card hand leaves the hand empty
+    and grows the library by 7."""
+    synthetic_state.bottom_cards_from_hand(0, P0_HAND_SIZE)
+
+    assert synthetic_state.hand_sizes[0] == 0
+    assert synthetic_state.library_sizes[0] == P0_LIBRARY_SIZE + P0_HAND_SIZE
+    # The seven bottomed cards (ids 10..16, in hand insertion order)
+    # are now at lib[0..7], with hand[0]=10 at the very bottom.
+    full = synthetic_state.scry(0, synthetic_state.library_sizes[0])
+    # Reverse the tail of `full` — full is top-first, so the last 7
+    # entries (in reverse) reconstruct lib[0..7] in order.
+    bottom_seven_in_order = list(reversed(full[-P0_HAND_SIZE:]))
+    assert bottom_seven_in_order == [10, 11, 12, 13, 14, 15, 16]
