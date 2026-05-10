@@ -351,3 +351,120 @@ def test_clone_then_combat_damage_does_not_affect_original(synthetic_state):
     assert synthetic_state.get_life(1) == 20
     # And the attacker on the original is untapped.
     assert synthetic_state.is_tapped(attacker) is False
+
+
+# ----------------------------- vigilance ------------------------------------
+#
+# Vigilance (CR 702.20): an attacking creature with vigilance doesn't tap
+# when it attacks. It must still be untapped to attack, and vigilance does
+# not grant haste — summoning-sick vigilance creatures still can't attack.
+#
+# These tests use the cross-slice fixture
+# ``register_and_inject_object(printing_dict, controller, zone)`` from
+# ``state_ops_resolve.rs`` to inject a printing with
+# ``keywords=["vigilance"]`` onto player 0's battlefield, then exercise
+# the four combinations: vigilant + ok, non-vigilant + ok (sanity),
+# vigilant + tapped (still rejected), vigilant + summoning-sick (still
+# rejected).
+
+ZONE_BATTLEFIELD = 2  # mirrors rust/src/state_ops_zones.rs
+
+
+def _vigilance_bear_dict():
+    """A 2/2 creature printing carrying just the ``vigilance`` keyword.
+    Shaped to land on the battlefield as an already-resolved permanent
+    (the test harness uses ``register_and_inject_object`` with
+    ZONE_BATTLEFIELD)."""
+    return {
+        "name": "Test Vigilance Bear",
+        "card_types": ["Creature"],
+        "mana_cost": {"G": 1, "generic": 1},
+        "power": 2,
+        "toughness": 2,
+        "keywords": ["vigilance"],
+        "effects": [],
+    }
+
+
+def test_vigilance_creature_does_not_tap_when_attacking(synthetic_state):
+    """A vigilance creature declared as attacker is recorded on
+    ``state.attackers`` (so combat damage and triggers see it) but its
+    ``tapped`` flag stays False — the load-bearing distinction from the
+    no-keyword path."""
+    obj_id = synthetic_state.register_and_inject_object(
+        _vigilance_bear_dict(), 0, ZONE_BATTLEFIELD
+    )
+    # Synthetic state defaults summoning_sick=False on injected objects;
+    # confirm starting conditions before we declare.
+    assert synthetic_state.is_tapped(obj_id) is False
+    assert synthetic_state.is_summoning_sick(obj_id) is False
+    assert synthetic_state.declare_attacker(obj_id) is True
+    # Recorded as attacker.
+    assert obj_id in synthetic_state.get_attackers()
+    # Did NOT tap — that's vigilance.
+    assert synthetic_state.is_tapped(obj_id) is False
+
+
+def test_non_vigilance_creature_taps_when_attacking(synthetic_state):
+    """Sanity / regression: keyword-less Grizzly Bears still taps when
+    attacking. The vigilance branch must not have leaked into the
+    default path."""
+    bear_id = P0_FIRST_BEAR_ID  # Grizzly Bears, no keywords
+    assert synthetic_state.declare_attacker(bear_id) is True
+    assert bear_id in synthetic_state.get_attackers()
+    # Non-vigilance: tapped on attack.
+    assert synthetic_state.is_tapped(bear_id) is True
+
+
+def test_vigilance_creature_already_tapped_still_returns_false(synthetic_state):
+    """Vigilance prevents the tap-on-attack but does NOT bypass the
+    "must be untapped to attack" precondition (CR 508.1a). Pre-tapping
+    the vigilance creature and then trying to declare it as attacker
+    should still be refused."""
+    obj_id = synthetic_state.register_and_inject_object(
+        _vigilance_bear_dict(), 0, ZONE_BATTLEFIELD
+    )
+    assert synthetic_state.tap_object(obj_id) is True
+    assert synthetic_state.is_tapped(obj_id) is True
+    # Declaration refused — already tapped.
+    assert synthetic_state.declare_attacker(obj_id) is False
+    assert synthetic_state.get_attackers() == []
+
+
+def test_vigilance_summoning_sick_still_returns_false(synthetic_state):
+    """Vigilance does not grant haste. A summoning-sick vigilance
+    creature still can't attack (CR 302.1).
+
+    Build a vigilance creature on player 0's battlefield as
+    summoning-sick (the synthetic-injection fixture defaults
+    summoning_sick=False, so we cast a fresh creature instead — but
+    cast_creature targets the registered Llanowar Elves, not vigilance.
+    Instead, we register the printing in HAND, then cast it: the
+    cast-flow stamps summoning_sick=True. Since cast_creature only
+    works on creatures with mana_cost the seed knows how to pay, we
+    manually inject onto battlefield and then flip summoning_sick via
+    end_turn / new turn — but that's heavy. Pragmatic: inject onto
+    battlefield, verify summoning_sick=False (synthetic injects with
+    summoning_sick=False), THEN exercise the cast path with a
+    vigilance printing.
+
+    Simpler still: cast a vigilance creature from hand (the cast slice
+    stamps summoning_sick=True) and try to attack with it.
+    """
+    # Inject the vigilance printing into player 0's HAND, give them
+    # the mana to cast it, cast it, then try to attack with the
+    # freshly-cast (summoning-sick) creature.
+    ZONE_HAND = 0
+    obj_id = synthetic_state.register_and_inject_object(
+        _vigilance_bear_dict(), 0, ZONE_HAND
+    )
+    synthetic_state.add_mana(0, "G", 1)
+    synthetic_state.add_mana(0, "C", 1)  # cover the {1} generic
+    assert synthetic_state.cast_creature(obj_id, 0) is True
+    # Just-cast: summoning sick.
+    assert synthetic_state.is_summoning_sick(obj_id) is True
+    # Vigilance does not grant haste.
+    assert synthetic_state.declare_attacker(obj_id) is False
+    assert synthetic_state.get_attackers() == []
+    # And the rejection didn't tap it as a side effect.
+    assert synthetic_state.is_tapped(obj_id) is False
