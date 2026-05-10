@@ -279,6 +279,34 @@ def test_zero_wait_window_dispatches_immediately(server_factory):
 # ---------- error path ------------------------------------------------------
 
 
+def test_unix_domain_socket_transport(server_factory, adapter, tmp_path):
+    """Passing a string filesystem path as ``address`` makes the
+    server listen on a Unix domain socket instead of TCP loopback.
+    Round-trip behavior is identical to TCP; the difference is a
+    lower-overhead transport on Linux. Skipped on Windows where
+    a string address means AF_PIPE (different semantics)."""
+    import sys
+    if sys.platform == "win32":
+        pytest.skip("UDS transport is Linux-only; Windows uses AF_PIPE for string addresses")
+
+    sock_path = str(tmp_path / "nn_eval_uds_test.sock")
+    server, _, _ = server_factory(
+        batch_size=1, batch_wait_ms=0.0, address=sock_path,
+    )
+    # Listener.address echoes whatever was passed in — sanity check.
+    assert server.address == sock_path
+    import os
+    assert os.path.exists(sock_path), "Listener should have bound the socket file"
+
+    with server:
+        client = NNEvalClient(server.handle())
+        try:
+            v = client.evaluate(adapter, player_id=0)
+        finally:
+            client.close()
+    assert isinstance(v, float)
+
+
 def test_client_raises_on_server_already_stopped(server_factory):
     server, _, _ = server_factory(batch_size=1, batch_wait_ms=0.0)
     server.start()
