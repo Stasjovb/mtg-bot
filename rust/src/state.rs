@@ -68,6 +68,13 @@ pub struct Player {
     pub library: Zone,
     pub battlefield: Zone,
     pub graveyard: Zone,
+    /// Exile zone (CR 406). Cards exiled by effects land here.
+    /// Round-11 foundation addition — round-1 zone primitives
+    /// (find_object_zone / move_object) iterate the four pre-r11
+    /// zones and don't yet search exile; that's a future-slice
+    /// upgrade once anything is read FROM exile (today exile is
+    /// write-only via Effect::ExileTarget).
+    pub exile: Zone,
 }
 
 /// One pending entry on the stack. First-slice shape: just an obj_id
@@ -241,6 +248,7 @@ fn make_player(
         library: Arc::new(library),
         battlefield: Arc::new(battlefield),
         graveyard: Arc::new(Vec::new()),
+        exile: Arc::new(Vec::new()),
     }
 }
 

@@ -68,6 +68,10 @@ pub enum Effect {
     /// Mill: caller's controller puts the top `count` cards of their
     /// library into their graveyard. No target — controller implicit.
     Mill { count: i32 },
+    /// Exile target permanent (CR 406). Removes from its current
+    /// zone to its owner's exile zone. First-slice owner =
+    /// controller.
+    ExileTarget { target: TargetFilter },
 }
 
 #[derive(Clone, Debug)]
@@ -214,8 +218,16 @@ fn parse_effect(dict: &Bound<'_, PyDict>) -> PyResult<Effect> {
             let count: i32 = require(dict, "count")?.extract()?;
             Ok(Effect::Mill { count })
         }
+        "exile_target" => {
+            let target_any = require(dict, "target")?;
+            let target_dict = target_any.downcast::<PyDict>().map_err(|_| {
+                PyValueError::new_err("exile_target.target must be a dict")
+            })?;
+            let target = parse_target_filter(target_dict)?;
+            Ok(Effect::ExileTarget { target })
+        }
         other => Err(PyValueError::new_err(format!(
-            "unknown effect kind {other:?}; valid: deal_damage, draw_cards, gain_life, return_to_hand, mill"
+            "unknown effect kind {other:?}; valid: deal_damage, draw_cards, gain_life, return_to_hand, mill, exile_target"
         ))),
     }
 }
@@ -418,6 +430,10 @@ fn effect_to_pydict<'py>(
         Effect::Mill { count } => {
             d.set_item("kind", "mill")?;
             d.set_item("count", *count)?;
+        }
+        Effect::ExileTarget { target } => {
+            d.set_item("kind", "exile_target")?;
+            d.set_item("target", target_filter_to_pydict(py, target)?)?;
         }
     }
     Ok(d)

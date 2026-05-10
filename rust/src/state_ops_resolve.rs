@@ -410,6 +410,14 @@ fn apply_effect(state: &mut GameState, effect: &Effect) -> PyResult<()> {
                 Arc::make_mut(&mut player.graveyard).push(obj);
             }
         }
+        // Round-11 stub: ExileTarget exists in the bridge but
+        // hasn't been wired to resolution yet. Foundation gets
+        // the build green; round-11 resolve agent fills this in.
+        Effect::ExileTarget { .. } => {
+            return Err(pyo3::exceptions::PyValueError::new_err(
+                "ExileTarget not yet wired to resolve_top_of_stack — round-11 resolve agent fills this in",
+            ));
+        }
     }
     Ok(())
 }

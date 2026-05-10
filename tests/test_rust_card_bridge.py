@@ -187,6 +187,31 @@ def test_mill_missing_count_raises():
         )
 
 
+def test_round_trip_exile_target_effect():
+    reg = mtg_bot_engine.Registry()
+    pid = reg.register_printing(
+        {
+            "name": "Path-ish",
+            "mana_cost": {"W": 1},
+            "card_types": ["Instant"],
+            "effects": [
+                {"kind": "exile_target", "target": {"kind": "any_creature"}}
+            ],
+        }
+    )
+    effects = [dict(e) for e in reg.get_printing_effects(pid)]
+    assert effects[0]["kind"] == "exile_target"
+    assert dict(effects[0]["target"]) == {"kind": "any_creature"}
+
+
+def test_exile_target_missing_target_raises():
+    reg = mtg_bot_engine.Registry()
+    with pytest.raises(KeyError, match="target"):
+        reg.register_printing(
+            {"name": "Broken", "effects": [{"kind": "exile_target"}]}
+        )
+
+
 def test_vanilla_card_with_no_mana_cost_or_effects():
     reg = mtg_bot_engine.Registry()
     pid = reg.register_printing(VANILLA_BLANK)

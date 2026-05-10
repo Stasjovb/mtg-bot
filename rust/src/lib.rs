@@ -18,6 +18,7 @@ mod state_ops_deck;
 mod state_ops_library;
 mod state_ops_life;
 mod state_ops_mana;
+mod state_ops_mulligan;
 mod state_ops_priority;
 mod state_ops_resolve;
 mod state_ops_sba;
