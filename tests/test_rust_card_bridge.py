@@ -920,6 +920,63 @@ def test_surveil_negative_count_raises():
         )
 
 
+def test_round_trip_counter_target_spell_effect():
+    """CR 701.5 — Annul/Cancel-style counter-target-spell. Unit variant,
+    no fields. Round-trip the happy-path effect dict through the
+    bridge."""
+    reg = mtg_bot_engine.Registry()
+    pid = reg.register_printing(
+        {
+            "name": "Test Annul",
+            "card_types": ["Instant"],
+            "mana_cost": {"U": 1},
+            "effects": [{"kind": "counter_target_spell"}],
+        }
+    )
+    effects = [dict(e) for e in reg.get_printing_effects(pid)]
+    assert effects[0] == {"kind": "counter_target_spell"}
+
+
+def test_round_trip_counter_target_spell_ignores_extra_keys():
+    """Python's `CounterTargetSpell.filter_types` is intentionally NOT
+    mirrored in the Rust first slice — extra keys on the dict are
+    silently ignored, matching the silent-drop convention elsewhere in
+    the parser. Confirms the unit-variant shape doesn't accidentally
+    require fields."""
+    reg = mtg_bot_engine.Registry()
+    pid = reg.register_printing(
+        {
+            "name": "Test Counter With Filter",
+            "card_types": ["Instant"],
+            "mana_cost": {"U": 1},
+            "effects": [
+                {
+                    "kind": "counter_target_spell",
+                    "filter_types": ["Artifact", "Enchantment"],
+                }
+            ],
+        }
+    )
+    effects = [dict(e) for e in reg.get_printing_effects(pid)]
+    # Round-trip drops the unrecognized field — first slice doesn't
+    # model filter_types, the round-trip is the unit-variant shape.
+    assert effects[0] == {"kind": "counter_target_spell"}
+
+
+def test_counter_target_spell_in_unknown_kind_error_string():
+    """Defense-in-depth: the unknown-kind error message lists
+    `counter_target_spell` in its valid-kinds enumeration so a future
+    mis-typed kind helpfully surfaces the right name."""
+    reg = mtg_bot_engine.Registry()
+    with pytest.raises(ValueError, match="counter_target_spell"):
+        reg.register_printing(
+            {
+                "name": "Broken",
+                "effects": [{"kind": "counter_unicorn_spell"}],
+            }
+        )
+
+
 def test_vanilla_card_with_no_mana_cost_or_effects():
     reg = mtg_bot_engine.Registry()
     pid = reg.register_printing(VANILLA_BLANK)

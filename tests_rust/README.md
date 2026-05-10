@@ -154,6 +154,7 @@ the test lands in a commit.
 | rust(effect-surveil): Surveil N dispatch (CR 701.42) | tests_rust/test_resolve.py extend | green  | feature/rust-effect-surveil |
 | rust(legal-decisions-skeleton): legal_decisions(player_id) — PassPriority + PlayLand | tests_rust/test_legal.py | green  | feature/rust-legal-decisions-skeleton |
 | rust(action-cast-spell): Action::CastSpell + 5 flags (semantics deferred) | tests_rust/test_actions.py extend | green  | feature/rust-action-cast-spell |
+| rust(effect-counter-target-spell): CounterTargetSpell dispatch (CR 701.5) | tests_rust/test_resolve.py extend | green  | feature/rust-effect-counter-target-spell |
 
 ## Build invocation reminder
 
