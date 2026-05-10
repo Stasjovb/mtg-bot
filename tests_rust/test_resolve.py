@@ -2471,3 +2471,168 @@ def test_resolve_discard_card_to_correct_graveyard(synthetic_state):
     # from the source sorcery itself moving post-resolve.
     assert synthetic_state.graveyard_sizes[1] == p1_grave_before + 1
     assert synthetic_state.graveyard_sizes[0] == p0_grave_before + 1
+
+
+# --- round-16: ScryN dispatch -------------------------------------
+#
+# CR 701.18: Scry N — the controller looks at the top N cards of
+# their library and may put any number on the bottom in any order;
+# the rest stay on top in any order.
+#
+# **First-slice deterministic choice: keep all top cards on top.**
+# This satisfies the "scry happened" semantics without requiring a
+# decision callback (deferred to a future slice). Mechanically a
+# no-op on the library — no objects move zones, library size and
+# order both remain unchanged.
+#
+# **Negative count raises** (consistent with the round-3 raise-on-
+# negative shape for DealDamage's amount; differs slightly from
+# DrawCards/Mill which silently clamp to 0). CR 701.18 doesn't define
+# Scry -1, so we surface it as a loud schema error.
+#
+# **count = 0** is a legitimate no-op (mirrors DrawCards count=0 and
+# the round-2 amount=0 conventions).
+#
+# **count > library size** clamps to library length (CR 701.18d —
+# "if there aren't enough cards in your library to look at the
+# specified number, look at all the cards"). Since first-slice keeps
+# all on top, this is also a no-op on the library.
+#
+# **Controller convention: state.active_player** — same first-slice
+# shape as DrawCards / GainLife (both also implicit-controller).
+# Real MTG plumbs the spell controller through StackItem.controller;
+# deferred to a future slice.
+
+
+# Phase constants — mirror ``rust/src/state_ops_steps.rs``. Used by
+# the active-player swap test below (set CLEANUP, advance, lands on
+# UNTAP with active_player flipped to 1).
+PHASE_CLEANUP = 11
+
+
+def _scry_dict(count=2):
+    """A scry-N printing dict shaped like the round-3 bridge parser
+    expects. ``count`` is the printed Scry number (positive, zero, or
+    negative depending on the test)."""
+    return {
+        "name": "Test Scry",
+        "card_types": ["Sorcery"],
+        "mana_cost": {"U": 1},
+        "effects": [
+            {
+                "kind": "scry_n",
+                "count": count,
+            }
+        ],
+    }
+
+
+def test_resolve_scry_zero_no_op(synthetic_state):
+    """Scry 0 is a legitimate no-op (mirrors DrawCards count=0 and
+    the round-2 amount=0 conventions). Library size and order are
+    unchanged; stack item still pops."""
+    library_before = synthetic_state.library_sizes[0]
+    spell_obj_id = synthetic_state.register_and_inject_object(
+        _scry_dict(count=0), 0, ZONE_HAND
+    )
+    synthetic_state.push_to_stack(spell_obj_id, 0)
+    synthetic_state.resolve_top_of_stack()
+
+    assert synthetic_state.is_stack_empty() is True
+    assert synthetic_state.library_sizes[0] == library_before
+
+
+def test_resolve_scry_n_positive_keeps_library_unchanged(synthetic_state):
+    """Scry 2 with a 50-card library: first-slice deterministic-keep-
+    on-top means the library is mechanically unchanged (no zone
+    moves, library size still 50). The stack still pops."""
+    library_before = synthetic_state.library_sizes[0]
+    assert library_before == 50  # synthetic seed default
+    spell_obj_id = synthetic_state.register_and_inject_object(
+        _scry_dict(count=2), 0, ZONE_HAND
+    )
+    synthetic_state.push_to_stack(spell_obj_id, 0)
+    synthetic_state.resolve_top_of_stack()
+
+    assert synthetic_state.is_stack_empty() is True
+    assert synthetic_state.library_sizes[0] == library_before
+
+
+def test_resolve_scry_n_clamped_to_library_size(engine):
+    """CR 701.18d: if the library has fewer cards than `count`, scry
+    looks at all of them (clamp). Library size 1, Scry 3 — resolve
+    succeeds, library still has 1 card (deterministic-keep-on-top)."""
+    state = engine.make_synthetic_state(
+        num_battlefield=0, num_hand=0, num_library=1
+    )
+    library_before = state.library_sizes[0]
+    assert library_before == 1
+    spell_obj_id = state.register_and_inject_object(
+        _scry_dict(count=3), 0, ZONE_BATTLEFIELD
+    )
+    state.push_to_stack(spell_obj_id, 0)
+    state.resolve_top_of_stack()
+
+    assert state.is_stack_empty() is True
+    assert state.library_sizes[0] == library_before
+
+
+def test_resolve_scry_n_negative_count_raises(synthetic_state):
+    """Negative scry count is a schema error (CR 701.18 doesn't
+    define Scry -1). Resolve raises ValueError loudly, matching the
+    round-3 raise-on-negative shape for DealDamage's amount."""
+    spell_obj_id = synthetic_state.register_and_inject_object(
+        _scry_dict(count=-1), 0, ZONE_HAND
+    )
+    synthetic_state.push_to_stack(spell_obj_id, 0)
+
+    with pytest.raises(ValueError):
+        synthetic_state.resolve_top_of_stack()
+
+
+def test_resolve_scry_n_empty_library_returns_ok(engine):
+    """Scry on an empty library is a no-op (clamp to library length =
+    0). Resolve succeeds, library still empty, stack still pops."""
+    state = engine.make_synthetic_state(
+        num_battlefield=0, num_hand=0, num_library=0
+    )
+    assert state.library_sizes[0] == 0
+    spell_obj_id = state.register_and_inject_object(
+        _scry_dict(count=5), 0, ZONE_BATTLEFIELD
+    )
+    state.push_to_stack(spell_obj_id, 0)
+    state.resolve_top_of_stack()
+
+    assert state.is_stack_empty() is True
+    assert state.library_sizes[0] == 0
+
+
+def test_resolve_scry_uses_active_player_library(synthetic_state):
+    """ScryN's controller is ``state.active_player`` (first-slice
+    convention, mirroring DrawCards / GainLife). Flip active to
+    player 1 via CLEANUP -> UNTAP wrap, resolve a Scry — both
+    libraries should be unchanged (deterministic-keep-on-top is a
+    no-op on whichever library is read), but the dispatch must pick
+    the active player's library, not p0's. We assert the no-op
+    invariant on both libraries to confirm the dispatch ran without
+    error and didn't accidentally mutate either side."""
+    p0_lib_before = synthetic_state.library_sizes[0]
+    p1_lib_before = synthetic_state.library_sizes[1]
+
+    # Flip active_player to 1 by walking through CLEANUP -> UNTAP.
+    synthetic_state.set_phase(PHASE_CLEANUP)
+    synthetic_state.advance_phase()
+    assert synthetic_state.active_player == 1
+
+    # Inject the scry source on player 1's hand (now the active
+    # player). Resolve.
+    spell_obj_id = synthetic_state.register_and_inject_object(
+        _scry_dict(count=2), 1, ZONE_HAND
+    )
+    synthetic_state.push_to_stack(spell_obj_id, 1)
+    synthetic_state.resolve_top_of_stack()
+
+    assert synthetic_state.is_stack_empty() is True
+    # Both libraries unchanged (first-slice keep-on-top is a no-op).
+    assert synthetic_state.library_sizes[0] == p0_lib_before
+    assert synthetic_state.library_sizes[1] == p1_lib_before
