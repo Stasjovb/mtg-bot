@@ -73,6 +73,7 @@ the test lands in a commit.
 | tests_rust/test_steps.py          | tests/test_beginning_of_upkeep.py + turn.py | green  | feature/rust-tdd-steps     |
 | rust(bridge-ext): P/T + mana_produced | tests/test_rust_card_bridge.py + tests/test_rust_bridge_parity.py | green  | feature/rust-bridge-pt-mana |
 | tests_rust/test_damage.py         | tests/test_combat.py + game.py              | green  | feature/rust-tdd-damage    |
+| tests_rust/test_winloss.py        | tests/test_game.py + game.py                | green  | feature/rust-tdd-winloss   |
 
 ## Build invocation reminder
 
