@@ -275,6 +275,42 @@ impl GameState {
                      to surface the gap loudly to the parity harness."
                 ));
             }
+            Action::UnlockRoomHalf {
+                card_id: _,
+                half_name: _,
+            } => {
+                // First-slice scope (mirrors round-23's ActivateAbility
+                // and round-24's TurnFaceUp pattern): ship the Action
+                // variant + bridge round-trip scaffold; the dispatch arm
+                // is a stub because no Rust Room-half state exists yet.
+                // Python's `GameObject` carries a per-Room
+                // `unlocked_halves: set[str]` field that tracks which
+                // halves of a Room enchantment have been unlocked — the
+                // Rust `GameObject` struct has no such field today, and
+                // there's no half-specific effect activation primitive.
+                // A future slice adds the per-object Room state +
+                // `unlock_room_half(card_id, half_name)` primitive
+                // (analogous to how Python's `_unlock_room_half`
+                // mutates the set, pays the half's mana cost, and fires
+                // the half-specific ENTERS triggers) and then flips
+                // this arm to a real `call_method1("unlock_room_half",
+                // (card_id, half_name, priority_player))` dispatch —
+                // at which point the variant + bridge already shipped
+                // here keep working unchanged. The variant ships now so
+                // callers building Action dicts can already use the
+                // `unlock_room_half` shape and hit a clear "not
+                // implemented yet" error path instead of `unknown
+                // action kind`, and the parity harness surfaces the
+                // gap loudly when Python emits an UnlockRoomHalf
+                // decision (CR 715.3-4 — DSK Rooms mechanic is the
+                // production driver).
+                return Err(pyo3::exceptions::PyValueError::new_err(
+                    "UnlockRoomHalf dispatch not implemented yet (Rust Room \
+                     enchantment state + half-name resolution missing; future \
+                     slice flips the dispatch). This slice ships only the \
+                     Action variant + bridge round-trip."
+                ));
+            }
             Action::ActivateAbility {
                 source_id: _,
                 ability_index: _,

@@ -202,6 +202,39 @@ pub enum Action {
     /// round-23 ActivateAbility "scaffold the variant, defer the
     /// dispatch semantics" pattern.
     TurnFaceUp { card_id: u32 },
+    /// Pay a Room enchantment half's mana cost to unlock it (DSK Rooms
+    /// mechanic, CR 715.3-4). `card_id` is the GameObject id of the
+    /// Room enchantment on the active player's battlefield;
+    /// `half_name` is which of the two halves to unlock (the half's
+    /// name string per the printing — Rooms have two named halves and
+    /// the controller picks which to unlock). Mirrors Python's
+    /// `UnlockRoomHalf(card_id: int, half_name: str)` dataclass —
+    /// two fields, one int + one string, no implicit actor (the
+    /// Room's controller is the actor, resolved from the battlefield
+    /// index when the primitive lands).
+    ///
+    /// Per CR 715.3-4: as a sorcery, the controller of an unlocked
+    /// Room on the battlefield with at least one locked door may
+    /// unlock a locked door of that Room by paying its mana cost as
+    /// though they were casting an enchantment spell. The unlock
+    /// action is NOT a spell — it doesn't go on the stack. On apply,
+    /// the named half is added to the Room's `unlocked_halves` set
+    /// and any newly-active triggered abilities on the entering half
+    /// (e.g. "When you unlock this door, ...") fire.
+    ///
+    /// **Dispatch is currently a stub.** Rust has no Room-half state
+    /// today — the per-object `unlocked_halves: set[str]` field that
+    /// Python's `GameObject` carries is missing on the Rust side, and
+    /// there's no half-specific effect activation. Until a future
+    /// slice adds the per-object Room state + the unlock primitive
+    /// (analogous to how Python's `_unlock_room_half` mutates the set
+    /// and fires the half-specific ENTERS triggers), `apply_action`
+    /// raises `ValueError` for this variant; the variant + bridge
+    /// round-trip ship now, so a follow-up slice only needs to flip
+    /// the dispatch arm. Mirrors the round-23 ActivateAbility and
+    /// round-24 TurnFaceUp "scaffold the variant, defer the dispatch
+    /// semantics" pattern.
+    UnlockRoomHalf { card_id: u32, half_name: String },
 }
 
 // --- dict -> Rust ------------------------------------------------
@@ -357,8 +390,21 @@ pub fn parse_action(dict: &Bound<'_, PyDict>) -> PyResult<Action> {
             let card_id: u32 = require(dict, "card_id")?.extract()?;
             Ok(Action::TurnFaceUp { card_id })
         }
+        "unlock_room_half" => {
+            // Two-field shape — `card_id` (u32) names the Room
+            // enchantment on the active player's battlefield;
+            // `half_name` (string) selects which of the two halves to
+            // unlock. Mirrors Python's `UnlockRoomHalf(card_id: int,
+            // half_name: str)` dataclass — both fields required, no
+            // optional flags. Missing either key → `KeyError` via
+            // `require`; wrong type → `TypeError` / `ValueError` from
+            // PyO3's `extract::<u32>` / `extract::<String>` machinery.
+            let card_id: u32 = require(dict, "card_id")?.extract()?;
+            let half_name: String = require(dict, "half_name")?.extract()?;
+            Ok(Action::UnlockRoomHalf { card_id, half_name })
+        }
         other => Err(PyValueError::new_err(format!(
-            "unknown action kind {other:?}; valid: pass_priority, play_land, declare_attackers, declare_blockers, activate_ability, cast_spell, turn_face_up"
+            "unknown action kind {other:?}; valid: pass_priority, play_land, declare_attackers, declare_blockers, activate_ability, cast_spell, turn_face_up, unlock_room_half"
         ))),
     }
 }
@@ -441,6 +487,14 @@ pub fn action_to_pydict<'py>(
         Action::TurnFaceUp { card_id } => {
             d.set_item("kind", "turn_face_up")?;
             d.set_item("card_id", *card_id)?;
+        }
+        Action::UnlockRoomHalf {
+            card_id,
+            half_name,
+        } => {
+            d.set_item("kind", "unlock_room_half")?;
+            d.set_item("card_id", *card_id)?;
+            d.set_item("half_name", half_name.clone())?;
         }
     }
     Ok(d)
