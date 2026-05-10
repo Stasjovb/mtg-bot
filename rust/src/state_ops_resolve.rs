@@ -1858,6 +1858,53 @@ fn apply_effect(
             state.players[opponent_idx].life =
                 state.players[opponent_idx].life.saturating_sub(*amount);
         }
+        // Round-24: DestroyAllCreatures. CR 701.7 + 701.4 AOE — Wrath
+        // of God pattern. Destroys every creature on the battlefield
+        // (both players), honoring indestructible (CR 702.12) inline.
+        Effect::DestroyAllCreatures => {
+            let _ = source_obj_id; // implicit-target AOE; source not relevant
+            for pidx in 0..state.players.len() {
+                let destroyable_ids: Vec<u32> = state.players[pidx]
+                    .battlefield
+                    .iter()
+                    .filter_map(|obj| {
+                        let printing = state.registry.lookup(obj.printing_id)?;
+                        if !printing.card_types.iter().any(|t| t == "Creature") {
+                            return None;
+                        }
+                        if printing.keywords.iter().any(|k| k == "indestructible") {
+                            return None;
+                        }
+                        Some(obj.id)
+                    })
+                    .collect();
+                if destroyable_ids.is_empty() {
+                    continue;
+                }
+                let bf_mut: &mut Vec<GameObject> =
+                    Arc::make_mut(&mut state.players[pidx].battlefield);
+                let mut destroyed: Vec<GameObject> =
+                    Vec::with_capacity(destroyable_ids.len());
+                bf_mut.retain(|obj| {
+                    if destroyable_ids.contains(&obj.id) {
+                        destroyed.push(obj.clone());
+                        false
+                    } else {
+                        true
+                    }
+                });
+                let gy_mut: &mut Vec<GameObject> =
+                    Arc::make_mut(&mut state.players[pidx].graveyard);
+                for mut obj in destroyed {
+                    obj.zone = ZONE_GRAVEYARD;
+                    obj.tapped = false;
+                    obj.summoning_sick = false;
+                    obj.damage = 0;
+                    obj.counters = 0;
+                    gy_mut.push(obj);
+                }
+            }
+        }
     }
     Ok(())
 }
