@@ -1858,6 +1858,74 @@ fn apply_effect(
             state.players[opponent_idx].life =
                 state.players[opponent_idx].life.saturating_sub(*amount);
         }
+        // DestroyTargetNonlandPermanent. CR 701.7 with a non-land
+        // target filter — Drag to the Roots / Drill Too Deep pattern
+        // (2 cards in the EoE pool per round-20 measurement).
+        //
+        // **Target scan.** Walk the DEFENDING player's battlefield
+        // top-to-bottom; pick the first object whose printing's
+        // `card_types` does NOT contain "Land". Indestructible
+        // permanents are also skipped during the scan (a non-land
+        // indestructible isn't a viable destroy target — mirrors the
+        // Python `destroy` helper which fizzles on indestructible).
+        // If the scan finds no eligible target (empty bf, only Lands,
+        // only indestructible non-lands, or any combination thereof),
+        // the spell fizzles silently — stack item still pops, source
+        // still moves post-resolve.
+        //
+        // **Inlining note (cross-file friction).** Per per-slice file-
+        // isolation, we inline the minimal Arc::make_mut pop-from-
+        // battlefield + push-to-graveyard here, mirroring how
+        // `DestroyTarget` / `Sacrifice` / `ExileTarget` / `ReturnToHand`
+        // inline their primitives for the same E0624 cross-file reason.
+        //
+        // **Object-state reset on zone change** (CR 400.7) — tapped /
+        // summoning_sick / damage / counters reset on the way to
+        // graveyard, mirroring the `DestroyTarget` reset convention.
+        Effect::DestroyTargetNonlandPermanent => {
+            let defender_idx = (1 - state.active_player) as usize;
+            // Two-phase scan to keep the borrow scope tight: find the
+            // target id by walking the immutable battlefield Vec +
+            // registry lookups, then take an `Arc::make_mut` on the
+            // battlefield once we know which object to remove.
+            let target_id: Option<u32> = {
+                let bf = &state.players[defender_idx].battlefield;
+                let registry = &state.registry;
+                bf.iter().find_map(|obj| {
+                    let printing = registry.lookup(obj.printing_id)?;
+                    if printing.card_types.iter().any(|t| t == "Land") {
+                        return None; // skip Lands
+                    }
+                    if printing
+                        .keywords
+                        .iter()
+                        .any(|k| k == "indestructible")
+                    {
+                        return None; // CR 702.12 — skip indestructible
+                    }
+                    Some(obj.id)
+                })
+            };
+            if let Some(target_id) = target_id {
+                let bf_mut: &mut Vec<GameObject> = Arc::make_mut(
+                    &mut state.players[defender_idx].battlefield,
+                );
+                let pos = bf_mut
+                    .iter()
+                    .position(|o| o.id == target_id)
+                    .expect("target_id from scan but not found on re-scan");
+                let mut obj = bf_mut.remove(pos);
+                obj.zone = ZONE_GRAVEYARD;
+                obj.tapped = false;
+                obj.summoning_sick = false;
+                obj.damage = 0;
+                obj.counters = 0;
+                Arc::make_mut(&mut state.players[defender_idx].graveyard)
+                    .push(obj);
+            }
+            // Else: silent fizzle (empty bf / only Lands / only
+            // indestructible non-Lands).
+        }
     }
     Ok(())
 }

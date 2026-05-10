@@ -5141,3 +5141,364 @@ def test_resolve_each_opponent_loses_life_clone_isolation(synthetic_state):
     # Original untouched.
     assert synthetic_state.life_totals[1] == p1_life_before
     assert synthetic_state.stack_size() == 1
+
+
+# --- DestroyTargetNonlandPermanent dispatch -------------------------
+#
+# **DestroyTargetNonlandPermanent scope** (mirrored in the Rust module
+# docstring on ``cards.rs``):
+#
+# - **Unit variant** — Python's `DestroyTargetNonlandPermanent` bakes
+#   the filter `~IsLand() & ~IsPlayer()` into the class shape; the
+#   Rust bridge variant carries no fields and the Land-skip is
+#   intrinsic to the dispatch.
+# - **First-slice deterministic choice**: scan the DEFENDING player's
+#   battlefield top-to-bottom; pick the FIRST object whose printing's
+#   `card_types` does NOT contain "Land" AND whose printing's
+#   `keywords` does NOT contain "indestructible". Includes creatures,
+#   artifacts, enchantments, planeswalkers — anything non-land.
+# - **Distinct from round-17 DestroyTarget** which has no filter and
+#   happily lands on the defender's first Forest. This variant skips
+#   past Lands.
+# - **Indestructible is honored** (CR 702.12) — the scan skips
+#   indestructible objects in addition to Lands.
+# - **Empty / only-Lands / only-indestructible-non-Lands defender bf
+#   fizzles silently** — stack item still pops, source still moves
+#   post-resolve, no zone deltas.
+# - **Per-object state reset on zone change** (CR 400.7) — tapped /
+#   summoning_sick / damage / counters reset on the way to graveyard.
+# - **Active player's own permanents are NOT affected** — scan only
+#   walks the defender's battlefield, mirroring DestroyTarget's
+#   asymmetric defender-side targeting.
+
+
+def _drag_to_the_roots_dict():
+    """A destroy-target-nonland-permanent spell — Drag to the Roots-
+    shaped (sorcery, destroys target nonland permanent)."""
+    return {
+        "name": "Test Drag to the Roots",
+        "card_types": ["Sorcery"],
+        "mana_cost": {"G": 1, "generic": 2},
+        "effects": [{"kind": "destroy_target_nonland_permanent"}],
+    }
+
+
+def _nonland_indestructible_creature_dict():
+    """A vanilla creature printing with the indestructible keyword —
+    used to verify DestroyTargetNonlandPermanent's scan skips
+    indestructible non-Land objects too (CR 702.12)."""
+    return {
+        "name": "Test Stone Idol",
+        "card_types": ["Creature"],
+        "mana_cost": {"generic": 4},
+        "effects": [],
+        "power": 3,
+        "toughness": 3,
+        "keywords": ["indestructible"],
+    }
+
+
+def _vanilla_artifact_dict():
+    """A vanilla artifact printing — non-land non-creature non-
+    indestructible. Used to confirm artifacts (and other non-land
+    types) are also legal targets, distinguishing this from a
+    creature-only variant."""
+    return {
+        "name": "Test Junk Artifact",
+        "card_types": ["Artifact"],
+        "mana_cost": {"generic": 2},
+        "effects": [],
+    }
+
+
+def test_resolve_destroy_target_nonland_permanent_destroys_first_creature(
+    synthetic_state,
+):
+    """End-to-end happy path. The synthetic seed places p1's bf as
+    [Forest, Forest, Forest, Forest, Forest, Bears, Bears, ...] —
+    the first Bears object (obj_id 72 = base 67 + 5 forests) is the
+    first NON-Land permanent. Resolving Drag must skip the 5 Forests
+    and destroy that Bears."""
+    target_obj_id = 72  # p1's bf[5], the first Bears
+    assert synthetic_state.find_object_zone(target_obj_id) == ZONE_BATTLEFIELD
+
+    spell_obj_id = synthetic_state.register_and_inject_object(
+        _drag_to_the_roots_dict(), 0, ZONE_HAND
+    )
+    p1_bf_before = synthetic_state.battlefield_sizes[1]
+    p1_grave_before = synthetic_state.graveyard_sizes[1]
+    p0_grave_before = synthetic_state.graveyard_sizes[0]
+
+    synthetic_state.push_to_stack(spell_obj_id, 0)
+    synthetic_state.resolve_top_of_stack()
+
+    # The first non-Land (Bears at obj_id 72) moved to p1's graveyard.
+    assert synthetic_state.find_object_zone(target_obj_id) == ZONE_GRAVEYARD
+    assert synthetic_state.battlefield_sizes[1] == p1_bf_before - 1
+    assert synthetic_state.graveyard_sizes[1] == p1_grave_before + 1
+    # p1's bf[0] Forest stays put (Lands skipped).
+    assert synthetic_state.find_object_zone(67) == ZONE_BATTLEFIELD
+    # Stack drained; source sorcery in p0's graveyard.
+    assert synthetic_state.is_stack_empty() is True
+    assert synthetic_state.find_object_zone(spell_obj_id) == ZONE_GRAVEYARD
+    assert synthetic_state.graveyard_sizes[0] == p0_grave_before + 1
+
+
+def test_resolve_destroy_target_nonland_permanent_only_land_fizzles(engine):
+    """If the defender's battlefield is all Lands, the scan finds no
+    eligible target and fizzles silently. The Land is NOT destroyed
+    (distinct from round-17 DestroyTarget which would destroy bf[0]
+    unconditionally)."""
+    state = engine.make_synthetic_state(
+        num_battlefield=0, num_hand=1, num_library=1
+    )
+    # Inject a Land onto p1's battlefield as bf[0].
+    land_id = state.register_and_inject_object(
+        {
+            "name": "Test Plains",
+            "card_types": ["Land"],
+            "mana_produced": ["W"],
+        },
+        1,
+        ZONE_BATTLEFIELD,
+    )
+    spell_obj_id = state.register_and_inject_object(
+        _drag_to_the_roots_dict(), 0, ZONE_HAND
+    )
+
+    p1_bf_before = state.battlefield_sizes[1]
+    p1_grave_before = state.graveyard_sizes[1]
+    p0_grave_before = state.graveyard_sizes[0]
+
+    state.push_to_stack(spell_obj_id, 0)
+    state.resolve_top_of_stack()
+
+    # Land stays put — scan skipped it, no eligible target.
+    assert state.find_object_zone(land_id) == ZONE_BATTLEFIELD
+    assert state.battlefield_sizes[1] == p1_bf_before
+    assert state.graveyard_sizes[1] == p1_grave_before
+    # Stack still drained, source sorcery moved to p0's graveyard.
+    assert state.is_stack_empty() is True
+    assert state.find_object_zone(spell_obj_id) == ZONE_GRAVEYARD
+    assert state.graveyard_sizes[0] == p0_grave_before + 1
+
+
+def test_resolve_destroy_target_nonland_permanent_skips_land_picks_creature(
+    engine,
+):
+    """Defender has a Land in bf[0] and a Creature in bf[1]. The scan
+    skips the Land and destroys the Creature. The Land stays put.
+    Directly verifies the Land-skip filter does what its name says."""
+    state = engine.make_synthetic_state(
+        num_battlefield=0, num_hand=1, num_library=1
+    )
+    land_id = state.register_and_inject_object(
+        {
+            "name": "Test Plains",
+            "card_types": ["Land"],
+            "mana_produced": ["W"],
+        },
+        1,
+        ZONE_BATTLEFIELD,
+    )
+    creature_id = state.register_and_inject_object(
+        {
+            "name": "Test Vanilla Bear",
+            "card_types": ["Creature"],
+            "power": 2,
+            "toughness": 2,
+        },
+        1,
+        ZONE_BATTLEFIELD,
+    )
+    spell_obj_id = state.register_and_inject_object(
+        _drag_to_the_roots_dict(), 0, ZONE_HAND
+    )
+
+    p1_bf_before = state.battlefield_sizes[1]
+    p1_grave_before = state.graveyard_sizes[1]
+
+    state.push_to_stack(spell_obj_id, 0)
+    state.resolve_top_of_stack()
+
+    # Land stays, creature moved to p1's graveyard.
+    assert state.find_object_zone(land_id) == ZONE_BATTLEFIELD
+    assert state.find_object_zone(creature_id) == ZONE_GRAVEYARD
+    assert state.battlefield_sizes[1] == p1_bf_before - 1
+    assert state.graveyard_sizes[1] == p1_grave_before + 1
+
+
+def test_resolve_destroy_target_nonland_permanent_artifact_target(engine):
+    """The non-Land filter is type-agnostic past the Land check — an
+    Artifact in bf[0] (no Land in front of it) is a legal target.
+    Confirms the variant isn't a creature-only synonym."""
+    state = engine.make_synthetic_state(
+        num_battlefield=0, num_hand=1, num_library=1
+    )
+    artifact_id = state.register_and_inject_object(
+        _vanilla_artifact_dict(), 1, ZONE_BATTLEFIELD
+    )
+    spell_obj_id = state.register_and_inject_object(
+        _drag_to_the_roots_dict(), 0, ZONE_HAND
+    )
+
+    state.push_to_stack(spell_obj_id, 0)
+    state.resolve_top_of_stack()
+
+    # Artifact destroyed.
+    assert state.find_object_zone(artifact_id) == ZONE_GRAVEYARD
+
+
+def test_resolve_destroy_target_nonland_permanent_indestructible_skipped(
+    engine,
+):
+    """If the defender's first non-Land permanent has the
+    `indestructible` keyword, the scan skips it (matching round-17
+    DestroyTarget's indestructible suppression). With only an
+    indestructible non-Land on the defender's bf, the spell fizzles
+    silently — no destruction, no error."""
+    state = engine.make_synthetic_state(
+        num_battlefield=0, num_hand=1, num_library=1
+    )
+    indestructible_id = state.register_and_inject_object(
+        _nonland_indestructible_creature_dict(), 1, ZONE_BATTLEFIELD
+    )
+    spell_obj_id = state.register_and_inject_object(
+        _drag_to_the_roots_dict(), 0, ZONE_HAND
+    )
+
+    p1_bf_before = state.battlefield_sizes[1]
+    p1_grave_before = state.graveyard_sizes[1]
+
+    state.push_to_stack(spell_obj_id, 0)
+    state.resolve_top_of_stack()
+
+    # Indestructible target stays put — scan skipped it.
+    assert state.find_object_zone(indestructible_id) == ZONE_BATTLEFIELD
+    assert state.battlefield_sizes[1] == p1_bf_before
+    assert state.graveyard_sizes[1] == p1_grave_before
+    # Stack drained, source moved.
+    assert state.is_stack_empty() is True
+    assert state.find_object_zone(spell_obj_id) == ZONE_GRAVEYARD
+
+
+def test_resolve_destroy_target_nonland_permanent_skips_land_and_indestructible(
+    engine,
+):
+    """Stacked filter: defender has Land in bf[0] AND indestructible
+    non-Land creature in bf[1]. Both are skipped; no eligible target;
+    fizzle. Confirms the Land-skip and indestructible-skip compose."""
+    state = engine.make_synthetic_state(
+        num_battlefield=0, num_hand=1, num_library=1
+    )
+    land_id = state.register_and_inject_object(
+        {
+            "name": "Test Plains",
+            "card_types": ["Land"],
+            "mana_produced": ["W"],
+        },
+        1,
+        ZONE_BATTLEFIELD,
+    )
+    indestructible_id = state.register_and_inject_object(
+        _nonland_indestructible_creature_dict(), 1, ZONE_BATTLEFIELD
+    )
+    spell_obj_id = state.register_and_inject_object(
+        _drag_to_the_roots_dict(), 0, ZONE_HAND
+    )
+
+    p1_bf_before = state.battlefield_sizes[1]
+
+    state.push_to_stack(spell_obj_id, 0)
+    state.resolve_top_of_stack()
+
+    assert state.find_object_zone(land_id) == ZONE_BATTLEFIELD
+    assert state.find_object_zone(indestructible_id) == ZONE_BATTLEFIELD
+    assert state.battlefield_sizes[1] == p1_bf_before
+
+
+def test_resolve_destroy_target_nonland_permanent_empty_battlefield_fizzles(
+    engine,
+):
+    """If the defender has no battlefield objects at all, the spell
+    fizzles silently — stack drained, source moved post-resolve."""
+    state = engine.make_synthetic_state(
+        num_battlefield=0, num_hand=1, num_library=1
+    )
+    spell_obj_id = state.register_and_inject_object(
+        _drag_to_the_roots_dict(), 0, ZONE_HAND
+    )
+    p1_bf_before = state.battlefield_sizes[1]
+    p1_grave_before = state.graveyard_sizes[1]
+    p0_grave_before = state.graveyard_sizes[0]
+
+    state.push_to_stack(spell_obj_id, 0)
+    state.resolve_top_of_stack()
+
+    assert state.is_stack_empty() is True
+    assert state.find_object_zone(spell_obj_id) == ZONE_GRAVEYARD
+    assert state.battlefield_sizes[1] == p1_bf_before
+    assert state.graveyard_sizes[1] == p1_grave_before
+    assert state.graveyard_sizes[0] == p0_grave_before + 1
+
+
+def test_resolve_destroy_target_nonland_permanent_skips_active_players_own(
+    engine,
+):
+    """The scan walks the DEFENDING player's battlefield only. The
+    active player's own non-Land permanents are NOT viable targets.
+    Setup: p1's bf is empty, p0's bf has a Creature. Resolving Drag
+    (cast by p0, defender = p1) must FIZZLE — not destroy p0's own
+    creature."""
+    state = engine.make_synthetic_state(
+        num_battlefield=0, num_hand=1, num_library=1
+    )
+    own_creature_id = state.register_and_inject_object(
+        {
+            "name": "Test Vanilla Bear",
+            "card_types": ["Creature"],
+            "power": 2,
+            "toughness": 2,
+        },
+        0,  # owned by p0 (active player)
+        ZONE_BATTLEFIELD,
+    )
+    spell_obj_id = state.register_and_inject_object(
+        _drag_to_the_roots_dict(), 0, ZONE_HAND
+    )
+    p0_bf_before = state.battlefield_sizes[0]
+    p1_bf_before = state.battlefield_sizes[1]
+
+    state.push_to_stack(spell_obj_id, 0)
+    state.resolve_top_of_stack()
+
+    # p0's own creature stays put — scan was defender-side only.
+    assert state.find_object_zone(own_creature_id) == ZONE_BATTLEFIELD
+    assert state.battlefield_sizes[0] == p0_bf_before
+    assert state.battlefield_sizes[1] == p1_bf_before
+
+
+def test_resolve_destroy_target_nonland_permanent_resets_state(
+    synthetic_state,
+):
+    """Per-object state reset on zone change (CR 400.7): tapped /
+    damage / counters all reset on the way to graveyard. Pre-load
+    the target with non-default state, resolve Drag, and verify the
+    destroyed object's counters/damage reset to zero."""
+    target_obj_id = 72  # p1's bf[5], the first Bears (first non-Land)
+    synthetic_state.tap_object(target_obj_id)
+    synthetic_state.add_counters(target_obj_id, 3)
+    synthetic_state.deal_damage(target_obj_id, 2)
+    assert synthetic_state.get_counters(target_obj_id) == 3
+    assert synthetic_state.get_damage(target_obj_id) == 2
+
+    spell_obj_id = synthetic_state.register_and_inject_object(
+        _drag_to_the_roots_dict(), 0, ZONE_HAND
+    )
+    synthetic_state.push_to_stack(spell_obj_id, 0)
+    synthetic_state.resolve_top_of_stack()
+
+    # Target moved to graveyard with reset state.
+    assert synthetic_state.find_object_zone(target_obj_id) == ZONE_GRAVEYARD
+    assert synthetic_state.get_counters(target_obj_id) == 0
+    assert synthetic_state.get_damage(target_obj_id) == 0

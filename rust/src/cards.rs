@@ -434,6 +434,60 @@ pub enum Effect {
     /// DiscardSelf raise-on-negative shape; "lose -2 life" is
     /// schema nonsense).
     EachOpponentLosesLife { amount: i32 },
+    /// Destroy target non-land permanent on the defending player's
+    /// battlefield (CR 701.7 + scoped target filter — Drag to the
+    /// Roots / Drill Too Deep pattern). 2 cards in the EoE pool per
+    /// round-20 measurement.
+    ///
+    /// **First-slice deterministic choice.** Scans the defender's
+    /// battlefield top-to-bottom (smallest index first) and picks the
+    /// first object whose printing's `card_types` does NOT contain
+    /// "Land". Includes creatures, artifacts, enchantments, planes-
+    /// walkers — anything non-land. Mirrors the round-17
+    /// `DestroyTarget` arm's pick-bf[0] convention but with the Land-
+    /// skip filter applied.
+    ///
+    /// **Distinct from round-17 `DestroyTarget`.** `DestroyTarget`
+    /// picks `bf[0]` unconditionally (no filter — round-17's
+    /// AnyCreature target on the synthetic-state seed happily lands on
+    /// the defender's first Forest). `DestroyTargetNonlandPermanent`
+    /// applies a non-land filter at scan time so a Land in slot 0 is
+    /// skipped, the next non-Land object is the target.
+    ///
+    /// **Indestructible is honored** (CR 702.12): if the chosen
+    /// target's printing has the `indestructible` keyword, the destroy
+    /// is suppressed silently — Ok(()) with no permanent movement.
+    /// Mirrors round-17 `DestroyTarget`'s suppression shape. The
+    /// indestructible object is SKIPPED during the target scan
+    /// (matches Python's `destroy` helper which returns early on
+    /// indestructible — the printed text means "destroy something
+    /// that can actually die"; an indestructible permanent isn't a
+    /// legal first-slice target either, so we skip past it and look
+    /// for the next non-land non-indestructible.
+    ///
+    /// **Unit variant.** Python's `DestroyTargetNonlandPermanent`
+    /// constructs a `Destroy` with `targets=(TargetSpec(~IsLand() &
+    /// ~IsPlayer()),)` — the filter shape is baked into the variant.
+    /// The Rust bridge mirrors that as a unit variant (no fields):
+    /// the "non-land permanent" target shape is intrinsic to the
+    /// variant, no per-printing parameterization needed.
+    ///
+    /// **Empty / only-Lands defender battlefield: silent fizzle.**
+    /// Mirrors round-17 `DestroyTarget`'s empty-bf fizzle shape and
+    /// every other target-walk arm's `if not targets: return` short-
+    /// circuit (Python parity).
+    ///
+    /// **Active player's own permanents are NOT affected.** The scan
+    /// runs against the DEFENDING player's battlefield only (mirrors
+    /// `DestroyTarget`'s asymmetric defender-side targeting — destroy
+    /// is the standard removal shape targeting an opponent's
+    /// permanent).
+    ///
+    /// **Object-state reset on zone change** (CR 400.7) — tapped /
+    /// summoning_sick / damage / counters reset on the way to
+    /// graveyard, mirroring the `DestroyTarget` / `ReturnToHand` /
+    /// `ExileTarget` / `Sacrifice` reset convention.
+    DestroyTargetNonlandPermanent,
 }
 
 #[derive(Clone, Debug)]
@@ -784,8 +838,18 @@ fn parse_effect(dict: &Bound<'_, PyDict>) -> PyResult<Effect> {
             }
             Ok(Effect::EachOpponentLosesLife { amount })
         }
+        "destroy_target_nonland_permanent" => {
+            // Unit variant — no required fields. Python's
+            // `DestroyTargetNonlandPermanent` constructs a `Destroy`
+            // with its filter baked in (`~IsLand() & ~IsPlayer()`); the
+            // Rust closed-vocabulary mirror has no per-printing fields.
+            // Any extra keys on the dict are ignored, matching the
+            // silent-drop convention elsewhere in the parser
+            // (counter_target_spell / return_creature_from_your_graveyard_to_battlefield).
+            Ok(Effect::DestroyTargetNonlandPermanent)
+        }
         other => Err(PyValueError::new_err(format!(
-            "unknown effect kind {other:?}; valid: deal_damage, draw_cards, gain_life, return_to_hand, mill, exile_target, tap_target, untap_target, sacrifice, add_counters, discard_card, scry_n, destroy_target, damage_each_opponent, damage_each_creature, create_token, add_mana_to_pool, search_library_for_basic_land_tapped, put_plus_one_counter_on_self, surveil, counter_target_spell, return_creature_from_your_graveyard_to_battlefield, discard_self, each_opponent_loses_life"
+            "unknown effect kind {other:?}; valid: deal_damage, draw_cards, gain_life, return_to_hand, mill, exile_target, tap_target, untap_target, sacrifice, add_counters, discard_card, scry_n, destroy_target, damage_each_opponent, damage_each_creature, create_token, add_mana_to_pool, search_library_for_basic_land_tapped, put_plus_one_counter_on_self, surveil, counter_target_spell, return_creature_from_your_graveyard_to_battlefield, discard_self, each_opponent_loses_life, destroy_target_nonland_permanent"
         ))),
     }
 }
@@ -1065,6 +1129,9 @@ fn effect_to_pydict<'py>(
         Effect::EachOpponentLosesLife { amount } => {
             d.set_item("kind", "each_opponent_loses_life")?;
             d.set_item("amount", *amount)?;
+        }
+        Effect::DestroyTargetNonlandPermanent => {
+            d.set_item("kind", "destroy_target_nonland_permanent")?;
         }
     }
     Ok(d)
