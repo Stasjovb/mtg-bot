@@ -10,6 +10,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { renderInlineScript } from './fixtures/render-template.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const TPL_PATH = path.join(
@@ -27,7 +28,9 @@ function extractInlineScript(html) {
 }
 
 const TEMPLATE_HTML = fs.readFileSync(TPL_PATH, 'utf8');
-const INLINE_JS = extractInlineScript(TEMPLATE_HTML);
+// Substitute Jinja ``{{ eval_gate_threshold }}`` (and any future
+// template vars) so the inline script is valid JS in the eval below.
+const INLINE_JS = renderInlineScript(extractInlineScript(TEMPLATE_HTML));
 
 beforeEach(() => {
   // Mirror the production template's modal markup so the inline

@@ -1,21 +1,28 @@
-// Tests for the training UI eval-card "Wilson 95% CI · gate 52%"
+// Tests for the training UI eval-card "Wilson 95% CI · gate XX%"
 // stat. Mirrors what scripts/eval_early_stop_watcher.py decides
 // server-side, so the user sees the same PASS / FAIL / undecided
 // verdict in the browser that the watcher uses to write the early-
-// stop sentinel. Verdicts:
+// stop sentinel. Verdicts (against EVAL_GATE_THRESHOLD = 0.51, the
+// JS-side mirror of the Python single source of truth — see
+// tests-js/fixtures/gate.js):
 //
-//  - PASS (green): CI lower bound > 0.52
-//  - FAIL (red):   CI upper bound < 0.52
-//  - UNDECIDED (amber): 0.52 lies inside the CI
+//  - PASS (green): CI lower bound > threshold
+//  - FAIL (red):   CI upper bound < threshold
+//  - UNDECIDED (amber): threshold lies inside the CI
 //  - PENDING (grey): n_decisive < EVAL_CI_MIN_DECISIVE (=30)
 //
 // Loads the inline <script> from the training UI template the same
-// way the other training-ui-* tests do.
+// way the other training-ui-* tests do, with the Jinja
+// ``{{ eval_gate_threshold }}`` placeholder pre-rendered to the
+// fixture value (the live Flask renderer would do this in production;
+// these tests bypass Flask, so we substitute manually).
 
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { EVAL_GATE_THRESHOLD } from './fixtures/gate.js';
+import { renderInlineScript } from './fixtures/render-template.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const TPL_PATH = path.join(
@@ -33,7 +40,11 @@ function extractInlineScript(html) {
 }
 
 const TEMPLATE_HTML = fs.readFileSync(TPL_PATH, 'utf8');
-const INLINE_JS = extractInlineScript(TEMPLATE_HTML);
+// ``renderInlineScript`` substitutes the Jinja placeholder Flask
+// would normally render. The fixture import above documents what
+// the Python-side single source of truth looks like; the helper
+// is what the tests below execute against.
+const INLINE_JS = renderInlineScript(extractInlineScript(TEMPLATE_HTML));
 
 beforeEach(() => {
   document.documentElement.innerHTML =
@@ -114,8 +125,9 @@ describe('training UI eval-card Wilson CI verdict', () => {
     expect(ci.className).toBe('stat-value ci-pending');
   });
 
-  it('shows PASS (green) when CI lower bound > 52%', () => {
+  it('shows PASS (green) when CI lower bound > threshold', () => {
     // 90-10 over 100 decisive: p=0.90, Wilson 95% CI ≈ [0.825, 0.946].
+    // CI lower bound (0.825) > 0.51 threshold → PASS.
     const run = evalPayload({ wins_new: 90, wins_old: 10, draws: 0 });
     const card = buildCard(run);
     const ci = card.querySelector('[data-field="ci"]');
@@ -123,8 +135,9 @@ describe('training UI eval-card Wilson CI verdict', () => {
     expect(ci.className).toBe('stat-value ci-pass');
   });
 
-  it('shows FAIL (red) when CI upper bound < 52%', () => {
+  it('shows FAIL (red) when CI upper bound < threshold', () => {
     // 10-90 over 100 decisive: p=0.10, Wilson 95% CI ≈ [0.054, 0.175].
+    // CI upper bound (0.175) < 0.51 threshold → FAIL.
     const run = evalPayload({ wins_new: 10, wins_old: 90, draws: 0 });
     const card = buildCard(run);
     const ci = card.querySelector('[data-field="ci"]');
@@ -133,8 +146,8 @@ describe('training UI eval-card Wilson CI verdict', () => {
   });
 
   it('shows undecided (amber) when threshold straddles the CI', () => {
-    // 60-40 over 100 decisive: p=0.60, Wilson 95% CI ≈ [0.501, 0.690].
-    // 52% threshold sits inside; verdict is undecided.
+    // 60-40 over 100 decisive: p=0.60, Wilson 95% CI ≈ [0.502, 0.691].
+    // 0.51 threshold sits inside [0.502, 0.691]; verdict is undecided.
     const run = evalPayload({ wins_new: 60, wins_old: 40, draws: 0 });
     const card = buildCard(run);
     const ci = card.querySelector('[data-field="ci"]');
@@ -143,11 +156,13 @@ describe('training UI eval-card Wilson CI verdict', () => {
   });
 
   it('threshold-on-boundary cases lean undecided (lower == threshold)', () => {
-    // Hand-picked: at n=400 with 232-168 (58% point), Wilson lower
-    // bound is just under 0.52 → still undecided per the strict
-    // wilson_lo > threshold check.
+    // Hand-picked: at n=200 with 115-85 (57.5% point), Wilson lower
+    // bound is just under 0.51 (~0.506) → still undecided per the
+    // strict wilson_lo > threshold check. Bumping to 116-84 just
+    // clears it to PASS, which the regex below also tolerates so
+    // this test won't false-fail on minor numerical differences.
     const run = evalPayload({
-      wins_new: 232, wins_old: 168, draws: 0,
+      wins_new: 115, wins_old: 85, draws: 0,
     });
     const card = buildCard(run);
     const ci = card.querySelector('[data-field="ci"]');
