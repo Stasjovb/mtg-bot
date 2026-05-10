@@ -207,3 +207,121 @@ def test_explicit_lose_game_marks_player(synthetic_state):
     assert list(synthetic_state.losers()) == [0]
     assert synthetic_state.winner() == 1
     assert synthetic_state.is_game_over() is True
+
+
+# -----------------------------------------------------------------
+# Python-compatible outcome getters: is_over / is_draw / winner_id
+#
+# Added by feature/rust-bridge-outcome (round 21, Phase 2) so the
+# parity smoke harness in ``scripts/parity_smoke.py`` can hash a Rust
+# ``GameState`` using the same accessor names it uses on Python's
+# ``GameState`` (``is_over()``, ``is_draw`` property, ``winner_id``
+# property). The pre-existing ``losers()`` / ``winner()`` /
+# ``is_game_over()`` API is preserved unchanged so the tests above
+# still pass.
+# -----------------------------------------------------------------
+
+
+def test_is_over_mirrors_is_game_over_alive_alive(synthetic_state):
+    """Both alive: is_over() and is_game_over() both False."""
+    assert synthetic_state.is_over() is False
+    assert synthetic_state.is_over() == synthetic_state.is_game_over()
+
+
+def test_is_over_mirrors_is_game_over_one_dead(synthetic_state):
+    """One dead: is_over() and is_game_over() both True."""
+    synthetic_state.set_life(0, 0)
+    assert synthetic_state.is_over() is True
+    assert synthetic_state.is_over() == synthetic_state.is_game_over()
+    # Symmetric: kill p1 instead.
+    synthetic_state.set_life(0, 20)
+    synthetic_state.set_life(1, -3)
+    assert synthetic_state.is_over() is True
+    assert synthetic_state.is_over() == synthetic_state.is_game_over()
+
+
+def test_is_over_mirrors_is_game_over_both_dead(synthetic_state):
+    """Both dead: is_over() and is_game_over() both True."""
+    synthetic_state.set_life(0, 0)
+    synthetic_state.set_life(1, 0)
+    assert synthetic_state.is_over() is True
+    assert synthetic_state.is_over() == synthetic_state.is_game_over()
+
+
+def test_is_draw_is_property_not_method(synthetic_state):
+    """is_draw is exposed as a #[getter] — accessed without parens.
+    Calling it like a method must fail (bool is not callable)."""
+    # Property access works.
+    val = synthetic_state.is_draw
+    assert val is False
+    # Method-style call must NOT work — bool is not callable.
+    with pytest.raises(TypeError):
+        synthetic_state.is_draw()  # type: ignore[operator]
+
+
+def test_is_draw_all_four_shapes(synthetic_state):
+    """is_draw is True ONLY in the (dead, dead) shape."""
+    # (alive, alive) — game ongoing.
+    assert synthetic_state.is_draw is False
+    # (dead, alive) — p1 wins, NOT a draw.
+    synthetic_state.set_life(0, 0)
+    assert synthetic_state.is_draw is False
+    # (alive, dead) — p0 wins, NOT a draw.
+    synthetic_state.set_life(0, 20)
+    synthetic_state.set_life(1, 0)
+    assert synthetic_state.is_draw is False
+    # (dead, dead) — draw.
+    synthetic_state.set_life(0, 0)
+    assert synthetic_state.is_draw is True
+
+
+def test_winner_id_is_property_not_method(synthetic_state):
+    """winner_id is exposed as a #[getter] — accessed without parens.
+    Calling it like a method must fail (None / int is not callable)."""
+    synthetic_state.set_life(0, 0)
+    val = synthetic_state.winner_id
+    assert val == 1
+    # Method-style call on the resolved int must fail.
+    with pytest.raises(TypeError):
+        synthetic_state.winner_id()  # type: ignore[operator]
+
+
+def test_winner_id_all_four_shapes(synthetic_state):
+    """winner_id reports Some(int) only on a lopsided loss; None on
+    ongoing AND on draw."""
+    # (alive, alive) — game ongoing -> None.
+    assert synthetic_state.winner_id is None
+    # (dead, alive) — p1 wins.
+    synthetic_state.set_life(0, 0)
+    assert synthetic_state.winner_id == 1
+    # (alive, dead) — p0 wins.
+    synthetic_state.set_life(0, 20)
+    synthetic_state.set_life(1, 0)
+    assert synthetic_state.winner_id == 0
+    # (dead, dead) — draw, no winner.
+    synthetic_state.set_life(0, 0)
+    assert synthetic_state.winner_id is None
+
+
+def test_revive_via_gain_life_clears_draw_and_winner_id(synthetic_state):
+    """Pure-derivation caveat: gain_life from 0 takes the player out
+    of the loser pool, so is_draw flips False and winner_id flips to
+    the still-dead opponent's killer (i.e. the revived player wins).
+    Mirrors test_gain_life_from_zero_revives_player for the new
+    Python-named getters. The SBA-driven 'loss is permanent' model
+    lands in a future slice."""
+    synthetic_state.set_life(0, 0)
+    synthetic_state.set_life(1, 0)
+    assert synthetic_state.is_draw is True
+    assert synthetic_state.winner_id is None
+    assert synthetic_state.is_over() is True
+    # Revive p0: now (alive, dead) -> p0 wins, no draw.
+    synthetic_state.gain_life(0, 5)
+    assert synthetic_state.is_draw is False
+    assert synthetic_state.winner_id == 0
+    assert synthetic_state.is_over() is True
+    # Revive p1 too: now (alive, alive) -> game ongoing.
+    synthetic_state.gain_life(1, 5)
+    assert synthetic_state.is_draw is False
+    assert synthetic_state.winner_id is None
+    assert synthetic_state.is_over() is False

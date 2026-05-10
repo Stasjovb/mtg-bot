@@ -23,6 +23,7 @@ mod state_ops_mulligan;
 mod state_ops_priority;
 mod state_ops_resolve;
 mod state_ops_sba;
+mod state_ops_snapshot;
 mod state_ops_stack;
 mod state_ops_steps;
 mod state_ops_tap;
