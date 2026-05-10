@@ -45,10 +45,25 @@ pub struct GameObject {
 // the Python side's `_CowList`.
 pub type Zone = Arc<Vec<GameObject>>;
 
+/// Mana pool for one player. Five colors + colorless; capped at u8
+/// per color (255 of any color is more than any real game produces).
+/// Hybrid / X / snow mana are not yet modeled; future slices add
+/// them when a card needs them.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct ManaPool {
+    pub white: u8,
+    pub blue: u8,
+    pub black: u8,
+    pub red: u8,
+    pub green: u8,
+    pub colorless: u8,
+}
+
 #[derive(Clone, Debug)]
 pub struct Player {
     pub id: u8,
     pub life: i32,
+    pub mana_pool: ManaPool,
     pub hand: Zone,
     pub library: Zone,
     pub battlefield: Zone,
@@ -203,6 +218,7 @@ fn make_player(
     Player {
         id,
         life: 20,
+        mana_pool: ManaPool::default(),
         hand: Arc::new(hand),
         library: Arc::new(library),
         battlefield: Arc::new(battlefield),
