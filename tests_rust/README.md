@@ -76,6 +76,7 @@ the test lands in a commit.
 | tests_rust/test_winloss.py        | tests/test_game.py + game.py                | green  | feature/rust-tdd-winloss   |
 | tests_rust/test_cast.py           | tests/test_actions.py + game.py             | green  | feature/rust-tdd-cast      |
 | tests_rust/test_library.py        | tests/test_actions.py + game.py             | green  | feature/rust-tdd-library   |
+| tests_rust/test_priority.py       | tests/test_game.py + turn.py                | green  | feature/rust-tdd-priority  |
 
 ## Build invocation reminder
 
