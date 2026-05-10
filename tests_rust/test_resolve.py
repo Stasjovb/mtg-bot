@@ -5802,3 +5802,240 @@ def test_resolve_destroy_target_nonland_permanent_resets_state(
     assert synthetic_state.find_object_zone(target_obj_id) == ZONE_GRAVEYARD
     assert synthetic_state.get_counters(target_obj_id) == 0
     assert synthetic_state.get_damage(target_obj_id) == 0
+
+
+# --- DealDamageAnyTarget dispatch -----------------------------------
+#
+# **DealDamageAnyTarget scope** (mirrored in the Rust module docstring
+# on ``cards.rs``):
+#
+# - **Lightning Bolt pattern (CR 701.4)** — 7 cards in the EoE pool
+#   per round-20 measurement (Debris Field Crusher etc.). The "any
+#   target" filter is intrinsic to the variant, distinct from
+#   `DealDamage { target: AnyPlayer/AnyCreature }` which carries a
+#   `target` dict.
+# - **First-slice deterministic choice**: scan the DEFENDING player's
+#   battlefield top-to-bottom; pick the FIRST object whose printing's
+#   `card_types` contains "Creature". If no creature is found, fall
+#   back to defender-as-player life subtraction. Future slice plumbs
+#   an explicit choice callback.
+# - **Composes existing DealDamage arms** — creature path mirrors
+#   AnyCreature's `obj.damage += amount` shape with `Arc::make_mut`
+#   on the battlefield; player path mirrors AnyPlayer's
+#   `players[idx].life -= amount` shape.
+# - **Negative amount raises** at register time AND at resolve time
+#   (defense-in-depth — synthetic / injected printings could bypass
+#   the parser).
+
+
+def _debris_field_crusher_dict(amount=3):
+    """A deal-damage-any-target printing — Debris Field Crusher-shaped
+    (sorcery, deals N to any target)."""
+    return {
+        "name": "Test Debris Field Crusher",
+        "card_types": ["Sorcery"],
+        "mana_cost": {"R": 1, "generic": 2},
+        "effects": [{"kind": "deal_damage_any_target", "amount": amount}],
+    }
+
+
+def test_resolve_deal_damage_any_target_picks_defender_first_creature(
+    synthetic_state,
+):
+    """End-to-end happy path. The synthetic seed places p1's bf as
+    [Forest, Forest, Forest, Forest, Forest, Bears, Bears, ...] —
+    the first creature (skipping the 5 Forests) is obj_id 72.
+    Resolving Debris Field Crusher must skip the Lands and damage
+    that Bears. Distinct from DealDamage{AnyCreature} which would
+    hit bf[0] (a Forest) unconditionally — this variant filters by
+    Creature type intrinsically."""
+    target_obj_id = 72  # p1's bf[5], the first Bears
+    assert synthetic_state.get_damage(target_obj_id) == 0
+
+    spell_obj_id = synthetic_state.register_and_inject_object(
+        _debris_field_crusher_dict(amount=2), 0, ZONE_HAND
+    )
+    synthetic_state.push_to_stack(spell_obj_id, 0)
+    life_before = list(synthetic_state.life_totals)
+    resolved = synthetic_state.resolve_top_of_stack()
+
+    assert resolved is not None
+    # First creature (Bears at 72) took the damage; Forest at bf[0]
+    # untouched (Land filter).
+    assert synthetic_state.get_damage(target_obj_id) == 2
+    assert synthetic_state.get_damage(67) == 0  # p1 bf[0] Forest
+    # Life totals untouched (creature took the damage, not the player).
+    assert list(synthetic_state.life_totals) == life_before
+    assert synthetic_state.is_stack_empty() is True
+
+
+def test_resolve_deal_damage_any_target_no_creature_falls_back_to_player(
+    engine,
+):
+    """If defender has no creature on battlefield (only Lands), the
+    fallback to defender-as-player kicks in — life subtracts. Mirrors
+    the AnyPlayer arm's life-write shape. Distinguishes this variant
+    from DealDamage{AnyCreature} which would FIZZLE silently in the
+    same setup."""
+    state = engine.make_synthetic_state(
+        num_battlefield=0, num_hand=1, num_library=1
+    )
+    # Inject a Land onto p1's battlefield as bf[0] — no creature.
+    state.register_and_inject_object(
+        {
+            "name": "Test Plains",
+            "card_types": ["Land"],
+            "mana_produced": ["W"],
+        },
+        1,
+        ZONE_BATTLEFIELD,
+    )
+    spell_obj_id = state.register_and_inject_object(
+        _debris_field_crusher_dict(amount=4), 0, ZONE_HAND
+    )
+    state.push_to_stack(spell_obj_id, 0)
+    life_before = list(state.life_totals)
+
+    state.resolve_top_of_stack()
+
+    # Fallback to defender-as-player: p1 takes 4 damage.
+    assert state.life_totals[1] == life_before[1] - 4
+    assert state.life_totals[0] == life_before[0]  # active player untouched
+    assert state.is_stack_empty() is True
+
+
+def test_resolve_deal_damage_any_target_empty_battlefield_damages_player(
+    engine,
+):
+    """Defender has empty battlefield — no creature OR land. Fallback
+    still applies: defender-as-player takes the damage. Mirrors the
+    AnyPlayer arm rather than the AnyCreature fizzle path."""
+    state = engine.make_synthetic_state(
+        num_battlefield=0, num_hand=1, num_library=1
+    )
+    spell_obj_id = state.register_and_inject_object(
+        _debris_field_crusher_dict(amount=3), 0, ZONE_HAND
+    )
+    state.push_to_stack(spell_obj_id, 0)
+    life_before = list(state.life_totals)
+
+    state.resolve_top_of_stack()
+
+    assert state.life_totals[1] == life_before[1] - 3
+    assert state.life_totals[0] == life_before[0]
+    assert state.is_stack_empty() is True
+
+
+def test_resolve_deal_damage_any_target_multiple_creatures_hits_first(
+    engine,
+):
+    """Defender has multiple Creatures on bf; first one (zone[0]
+    iteration order) takes the damage. Mirrors the AnyCreature arm's
+    smallest-index pick."""
+    state = engine.make_synthetic_state(
+        num_battlefield=0, num_hand=1, num_library=1
+    )
+    first_creature_id = state.register_and_inject_object(
+        {
+            "name": "Test First Bear",
+            "card_types": ["Creature"],
+            "power": 2,
+            "toughness": 2,
+        },
+        1,
+        ZONE_BATTLEFIELD,
+    )
+    second_creature_id = state.register_and_inject_object(
+        {
+            "name": "Test Second Bear",
+            "card_types": ["Creature"],
+            "power": 3,
+            "toughness": 3,
+        },
+        1,
+        ZONE_BATTLEFIELD,
+    )
+    spell_obj_id = state.register_and_inject_object(
+        _debris_field_crusher_dict(amount=2), 0, ZONE_HAND
+    )
+    state.push_to_stack(spell_obj_id, 0)
+
+    state.resolve_top_of_stack()
+
+    # First creature took the damage; second untouched.
+    assert state.get_damage(first_creature_id) == 2
+    assert state.get_damage(second_creature_id) == 0
+
+
+def test_resolve_deal_damage_any_target_amount_zero_no_op(synthetic_state):
+    """amount=0 is a legal no-op (mirrors GainLife / DrawCards /
+    Mill zero-amount conventions). No damage applied, no life change,
+    no error. The stack still pops and the source still moves."""
+    target_obj_id = 72  # p1's first Bears
+    spell_obj_id = synthetic_state.register_and_inject_object(
+        _debris_field_crusher_dict(amount=0), 0, ZONE_HAND
+    )
+    synthetic_state.push_to_stack(spell_obj_id, 0)
+    life_before = list(synthetic_state.life_totals)
+
+    synthetic_state.resolve_top_of_stack()
+
+    # No damage applied to creature; life totals unchanged.
+    assert synthetic_state.get_damage(target_obj_id) == 0
+    assert list(synthetic_state.life_totals) == life_before
+    assert synthetic_state.is_stack_empty() is True
+
+
+def test_resolve_deal_damage_any_target_negative_amount_raises_at_register():
+    """Register-time guard on negative amount (defense-in-depth, the
+    apply_effect guard is the secondary check). Mirrors
+    EachOpponentLosesLife / DiscardSelf / PutPlusOneCounterOnSelf
+    negative-amount register-time check shape."""
+    import mtg_bot_engine
+
+    reg = mtg_bot_engine.Registry()
+    with pytest.raises(ValueError, match="non-negative"):
+        reg.register_printing(_debris_field_crusher_dict(amount=-1))
+
+
+def test_resolve_deal_damage_any_target_stacks_with_prior_damage(
+    synthetic_state,
+):
+    """Damage stacks: prior damage on the target creature is preserved
+    and the new damage adds on top. Mirrors the AnyCreature arm's
+    `obj.damage = obj.damage.saturating_add(amount)` shape."""
+    target_obj_id = 72  # p1's first Bears
+    # Pre-load with 1 damage.
+    synthetic_state.deal_damage(target_obj_id, 1)
+    assert synthetic_state.get_damage(target_obj_id) == 1
+
+    spell_obj_id = synthetic_state.register_and_inject_object(
+        _debris_field_crusher_dict(amount=2), 0, ZONE_HAND
+    )
+    synthetic_state.push_to_stack(spell_obj_id, 0)
+    synthetic_state.resolve_top_of_stack()
+
+    # Damage stacks: 1 + 2 = 3.
+    assert synthetic_state.get_damage(target_obj_id) == 3
+
+
+def test_resolve_deal_damage_any_target_clone_isolation(synthetic_state):
+    """CoW canary: cloning the state and resolving a deal-damage-any-
+    target on the clone must not bleed back into the original — stack,
+    life totals, and creature damage on the original side all stay put."""
+    target_obj_id = 72  # p1's first Bears
+    spell_obj_id = synthetic_state.register_and_inject_object(
+        _debris_field_crusher_dict(amount=3), 0, ZONE_HAND
+    )
+    synthetic_state.push_to_stack(spell_obj_id, 0)
+    cloned = synthetic_state.clone_once()
+
+    cloned.resolve_top_of_stack()
+
+    # Clone: stack drained, target creature damaged.
+    assert cloned.is_stack_empty() is True
+    assert cloned.get_damage(target_obj_id) == 3
+    # Original: stack still has the spell, no damage applied.
+    assert synthetic_state.stack_size() == 1
+    assert synthetic_state.get_damage(target_obj_id) == 0
+    assert list(synthetic_state.life_totals) == [20, 20]

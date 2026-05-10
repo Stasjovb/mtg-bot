@@ -1266,6 +1266,81 @@ def test_destroy_target_nonland_permanent_in_multi_effect_list():
     assert effects[1] == {"kind": "destroy_target_nonland_permanent"}
 
 
+# --- DealDamageAnyTarget round-trip --------------------------------
+#
+# Bridge ext: Lightning Bolt-style "any target" damage (CR 701.4).
+# 7 cards in the EoE pool per round-20 measurement (Debris Field
+# Crusher etc.). Mirrors Python's `DealDamageAnyTarget(DealDamage)`
+# constructor sugar — the "any target" filter is intrinsic to the
+# variant. Distinct from `deal_damage` which requires a `target`
+# dict; this variant's parser arm takes only `amount`.
+
+
+def test_round_trip_deal_damage_any_target_amount_three():
+    """Happy path: amount=3 round-trips faithfully. Mirrors Python's
+    `DealDamageAnyTarget(amount=N)` constructor sugar — the "any
+    target" filter is intrinsic (no `target` dict to round-trip)."""
+    reg = mtg_bot_engine.Registry()
+    pid = reg.register_printing(
+        {
+            "name": "Test Debris Field Crusher",
+            "card_types": ["Sorcery"],
+            "mana_cost": {"R": 1, "generic": 2},
+            "effects": [{"kind": "deal_damage_any_target", "amount": 3}],
+        }
+    )
+    effects = [dict(e) for e in reg.get_printing_effects(pid)]
+    assert effects[0] == {"kind": "deal_damage_any_target", "amount": 3}
+
+
+def test_round_trip_deal_damage_any_target_amount_zero():
+    """amount=0 is a legal no-op shape (mirrors GainLife / DrawCards /
+    Mill / DamageEachOpponent zero-amount round-trip conventions).
+    Registers and round-trips without error."""
+    reg = mtg_bot_engine.Registry()
+    pid = reg.register_printing(
+        {
+            "name": "Test Fizzle Bolt",
+            "card_types": ["Instant"],
+            "effects": [{"kind": "deal_damage_any_target", "amount": 0}],
+        }
+    )
+    effects = [dict(e) for e in reg.get_printing_effects(pid)]
+    assert effects[0] == {"kind": "deal_damage_any_target", "amount": 0}
+
+
+def test_deal_damage_any_target_missing_amount_raises():
+    """Python's `DealDamageAnyTarget` inherits `amount` from `DealDamage`
+    with no default — the Rust parser mirrors that: omitting `amount`
+    raises KeyError at register time (defense-in-depth, surfaced
+    earlier than the resolve guard)."""
+    reg = mtg_bot_engine.Registry()
+    with pytest.raises(KeyError, match="amount"):
+        reg.register_printing(
+            {
+                "name": "Broken",
+                "card_types": ["Instant"],
+                "effects": [{"kind": "deal_damage_any_target"}],
+            }
+        )
+
+
+def test_deal_damage_any_target_negative_amount_raises():
+    """Register-time guard on negative amount (matches the apply_effect
+    guard, surfaced earlier in the pipeline). Mirrors EachOpponentLosesLife
+    / DamageEachOpponent / DiscardSelf negative register-time check
+    shape — 'deal -1 damage to any target' is schema nonsense."""
+    reg = mtg_bot_engine.Registry()
+    with pytest.raises(ValueError, match="non-negative"):
+        reg.register_printing(
+            {
+                "name": "Broken",
+                "card_types": ["Instant"],
+                "effects": [{"kind": "deal_damage_any_target", "amount": -1}],
+            }
+        )
+
+
 def test_vanilla_card_with_no_mana_cost_or_effects():
     reg = mtg_bot_engine.Registry()
     pid = reg.register_printing(VANILLA_BLANK)
