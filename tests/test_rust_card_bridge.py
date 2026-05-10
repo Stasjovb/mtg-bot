@@ -287,6 +287,85 @@ def test_sacrifice_missing_target_raises():
         )
 
 
+def test_round_trip_add_counters_effect():
+    reg = mtg_bot_engine.Registry()
+    pid = reg.register_printing(
+        {
+            "name": "Counterspell-ish-buff",
+            "mana_cost": {"G": 1},
+            "card_types": ["Instant"],
+            "effects": [
+                {"kind": "add_counters", "count": 2, "target": {"kind": "any_creature"}}
+            ],
+        }
+    )
+    effects = [dict(e) for e in reg.get_printing_effects(pid)]
+    assert effects[0]["kind"] == "add_counters"
+    assert effects[0]["count"] == 2
+    assert dict(effects[0]["target"]) == {"kind": "any_creature"}
+
+
+def test_add_counters_missing_count_raises():
+    reg = mtg_bot_engine.Registry()
+    with pytest.raises(KeyError, match="count"):
+        reg.register_printing(
+            {
+                "name": "Broken",
+                "effects": [
+                    {"kind": "add_counters", "target": {"kind": "any_creature"}}
+                ],
+            }
+        )
+
+
+def test_add_counters_missing_target_raises():
+    reg = mtg_bot_engine.Registry()
+    with pytest.raises(KeyError, match="target"):
+        reg.register_printing(
+            {"name": "Broken", "effects": [{"kind": "add_counters", "count": 1}]}
+        )
+
+
+def test_round_trip_discard_card_effect():
+    reg = mtg_bot_engine.Registry()
+    pid = reg.register_printing(
+        {
+            "name": "Distress-ish",
+            "mana_cost": {"B": 1},
+            "card_types": ["Sorcery"],
+            "effects": [
+                {"kind": "discard_card", "target": {"kind": "any_player"}}
+            ],
+        }
+    )
+    effects = [dict(e) for e in reg.get_printing_effects(pid)]
+    assert effects[0]["kind"] == "discard_card"
+    assert dict(effects[0]["target"]) == {"kind": "any_player"}
+
+
+def test_discard_card_missing_target_raises():
+    reg = mtg_bot_engine.Registry()
+    with pytest.raises(KeyError, match="target"):
+        reg.register_printing(
+            {"name": "Broken", "effects": [{"kind": "discard_card"}]}
+        )
+
+
+def test_negative_add_counters_round_trips():
+    """-1/-1 counters via negative count — same Effect, same dispatch."""
+    reg = mtg_bot_engine.Registry()
+    pid = reg.register_printing(
+        {
+            "name": "Wither-ish",
+            "effects": [
+                {"kind": "add_counters", "count": -1, "target": {"kind": "any_creature"}}
+            ],
+        }
+    )
+    effects = [dict(e) for e in reg.get_printing_effects(pid)]
+    assert effects[0]["count"] == -1
+
+
 def test_vanilla_card_with_no_mana_cost_or_effects():
     reg = mtg_bot_engine.Registry()
     pid = reg.register_printing(VANILLA_BLANK)

@@ -2145,3 +2145,329 @@ def test_clone_then_sacrifice_does_not_affect_original(synthetic_state):
     assert synthetic_state.find_object_zone(target_obj_id) == ZONE_BATTLEFIELD
     assert synthetic_state.find_object_zone(altar_obj_id) == ZONE_HAND
     assert synthetic_state.stack_size() == 1
+
+
+# --- round-15 AddCounters dispatch ----------------------------------
+#
+# Round-15 foundation (`feature/rust-tdd-base-r15`) added two new
+# ``Effect`` variants — ``AddCounters { target, count }`` and
+# ``DiscardCard { target }`` — with stub arms in ``apply_effect`` that
+# return ``ValueError``. This slice replaces both stubs with real
+# dispatch.
+#
+# **AddCounters scope** (mirrored in the Rust module docstring on
+# ``state_ops_resolve.rs``):
+#
+# - **AnyCreature target -> first object on the DEFENDING player's
+#   battlefield (smallest index).** Mirrors the DealDamage / TapTarget
+#   / UntapTarget / ReturnToHand / ExileTarget convention. No creature-
+#   type filter, no per-spell target choice. Empty defender-battlefield
+#   -> fizzle silently (stack still pops, source still moves
+#   post-resolve).
+# - **AnyPlayer target raises** (semantically nonsense — you can't put
+#   counters on a player). Matches the bounce/exile/tap/untap AnyPlayer
+#   shape.
+# - **Net-i32 counter model.** Routes through round-2's signed-net
+#   counter model — positive ``count`` adds +1/+1 counters, negative
+#   ``count`` adds -1/-1 counters; both deltas land on the same i32
+#   field via ``saturating_add``. Net values can freely cross zero.
+# - **Cross-file friction:** the counter mutator lives on
+#   ``state_ops_counters.rs`` (``add_counters``); per per-slice file-
+#   isolation we inline the minimal ``Arc::make_mut`` + saturating-add
+#   here, mirroring how TapTarget / UntapTarget / Sacrifice inlined
+#   their primitives for the same reason.
+
+
+def _giant_growth_dict(amount=2):
+    """A +N/+N counter spell — Giant Growth-shaped (instant, +2/+2 to
+    target creature for ``amount=2``). Uses ``any_creature`` target."""
+    return {
+        "name": "Test Giant Growth",
+        "card_types": ["Instant"],
+        "mana_cost": {"G": 1},
+        "effects": [
+            {
+                "kind": "add_counters",
+                "count": amount,
+                "target": {"kind": "any_creature"},
+            }
+        ],
+    }
+
+
+def _wither_dict(amount=-1):
+    """A -N/-N counter spell — wither/infect-shaped. Negative ``amount``
+    rides the same i32 net-counter field; round-2's model handles
+    cross-zero just fine."""
+    return {
+        "name": "Test Wither",
+        "card_types": ["Instant"],
+        "mana_cost": {"B": 1},
+        "effects": [
+            {
+                "kind": "add_counters",
+                "count": amount,
+                "target": {"kind": "any_creature"},
+            }
+        ],
+    }
+
+
+def _add_counters_player_dict():
+    """Schema-allowed but semantically nonsense: AddCounters with
+    AnyPlayer target. Should raise on resolve (cannot put counters on
+    a player)."""
+    return {
+        "name": "Test AddCounters-Player (nonsense)",
+        "card_types": ["Instant"],
+        "mana_cost": {"G": 1},
+        "effects": [
+            {
+                "kind": "add_counters",
+                "count": 1,
+                "target": {"kind": "any_player"},
+            }
+        ],
+    }
+
+
+def test_resolve_add_counters_increments_creature_counters(synthetic_state):
+    """Resolving a +2/+2 AddCounters spell deposits 2 counters on the
+    first object of the defender's battlefield."""
+    # p1's bf[0] is obj_id 67 (Forest in synthetic seed). counters
+    # start at 0.
+    target_obj_id = 67
+    assert synthetic_state.get_counters(target_obj_id) == 0
+
+    spell_obj_id = synthetic_state.register_and_inject_object(
+        _giant_growth_dict(amount=2), 0, ZONE_HAND
+    )
+    synthetic_state.push_to_stack(spell_obj_id, 0)
+    synthetic_state.resolve_top_of_stack()
+
+    assert synthetic_state.is_stack_empty() is True
+    assert synthetic_state.get_counters(target_obj_id) == 2
+
+
+def test_resolve_add_counters_negative_decrements(synthetic_state):
+    """Negative count adds -1/-1-flavored counters; the net-i32 field
+    crosses zero freely."""
+    target_obj_id = 67
+    assert synthetic_state.get_counters(target_obj_id) == 0
+
+    spell_obj_id = synthetic_state.register_and_inject_object(
+        _wither_dict(amount=-1), 0, ZONE_HAND
+    )
+    synthetic_state.push_to_stack(spell_obj_id, 0)
+    synthetic_state.resolve_top_of_stack()
+
+    assert synthetic_state.get_counters(target_obj_id) == -1
+
+
+def test_resolve_add_counters_anyplayer_raises(synthetic_state):
+    """AddCounters with AnyPlayer target is semantically nonsense (you
+    can't put counters on a player). The dispatch raises ValueError
+    loudly, matching the bounce/exile/tap/untap AnyPlayer shape."""
+    spell_obj_id = synthetic_state.register_and_inject_object(
+        _add_counters_player_dict(), 0, ZONE_HAND
+    )
+    synthetic_state.push_to_stack(spell_obj_id, 0)
+
+    with pytest.raises(ValueError):
+        synthetic_state.resolve_top_of_stack()
+
+
+def test_resolve_add_counters_empty_battlefield_fizzles(engine):
+    """If the defender has no battlefield objects, AddCounters fizzles
+    silently — stack item still pops, source still moves post-resolve,
+    no per-object counter writes happen."""
+    state = engine.make_synthetic_state(
+        num_battlefield=0, num_hand=1, num_library=1
+    )
+    spell_obj_id = state.register_and_inject_object(
+        _giant_growth_dict(amount=2), 0, ZONE_HAND
+    )
+    state.push_to_stack(spell_obj_id, 0)
+    state.resolve_top_of_stack()
+
+    # Stack drained, source moved (instant -> graveyard), no error.
+    assert state.is_stack_empty() is True
+    assert state.find_object_zone(spell_obj_id) == ZONE_GRAVEYARD
+
+
+def test_resolve_add_counters_stacks_with_existing(synthetic_state):
+    """A second AddCounters resolution stacks additively on the i32
+    net counter — the field tracks the running net, not a per-spell
+    snapshot."""
+    target_obj_id = 67
+    # Pre-load 1 counter directly via the round-2 add_counters API so
+    # the AddCounters dispatch sees a non-zero starting state.
+    synthetic_state.add_counters(target_obj_id, 1)
+    assert synthetic_state.get_counters(target_obj_id) == 1
+
+    spell_obj_id = synthetic_state.register_and_inject_object(
+        _giant_growth_dict(amount=2), 0, ZONE_HAND
+    )
+    synthetic_state.push_to_stack(spell_obj_id, 0)
+    synthetic_state.resolve_top_of_stack()
+
+    assert synthetic_state.get_counters(target_obj_id) == 3
+
+
+# --- round-15 DiscardCard dispatch ----------------------------------
+#
+# **DiscardCard scope** (mirrored in the Rust module docstring on
+# ``state_ops_resolve.rs``):
+#
+# - **AnyPlayer target -> the DEFENDING player.** First-slice: the
+#   active player's spell forces the opponent to discard (CR 701.8 +
+#   the Mind Rot / Wrench Mind shape). Real MTG plumbs target-player
+#   choice through the cast surface; deferred.
+# - **AnyCreature target raises** (semantically nonsense — you can't
+#   discard a creature). Matches the bounce/exile/tap/untap shape's
+#   AnyPlayer-equivalent path, mirrored for the symmetric
+#   AnyCreature-on-DiscardCard error.
+# - **Deterministic choice = hand[0].** First slice picks the first
+#   card in the target's hand by index (no per-spell discard choice
+#   yet). The discarded card moves to the SAME player's graveyard
+#   (CR 701.8: a discarded card is put into its owner's graveyard).
+# - **Empty hand fizzles silently** (stack still pops, source still
+#   moves post-resolve, no zone deltas).
+# - **Cross-file friction:** the per-zone movement primitive is
+#   private in ``state_ops_zones.rs``; per per-slice file-isolation we
+#   inline the minimal ``Arc::make_mut`` Vec::remove(0) +
+#   push-to-graveyard here.
+
+
+def _mind_rot_dict():
+    """A discard-target spell — Mind Rot-shaped (sorcery, target player
+    discards). Round-15 first slice supports a single-card discard;
+    this dict represents that single discard."""
+    return {
+        "name": "Test Mind Rot",
+        "card_types": ["Sorcery"],
+        "mana_cost": {"B": 1, "generic": 1},
+        "effects": [
+            {
+                "kind": "discard_card",
+                "target": {"kind": "any_player"},
+            }
+        ],
+    }
+
+
+def _discard_creature_dict():
+    """Schema-allowed but semantically nonsense: DiscardCard with
+    AnyCreature target. Should raise on resolve (cannot discard a
+    creature)."""
+    return {
+        "name": "Test Discard-Creature (nonsense)",
+        "card_types": ["Sorcery"],
+        "mana_cost": {"B": 1},
+        "effects": [
+            {
+                "kind": "discard_card",
+                "target": {"kind": "any_creature"},
+            }
+        ],
+    }
+
+
+def test_resolve_discard_card_removes_from_hand(synthetic_state):
+    """End-to-end: resolving a DiscardCard spell shrinks the defender's
+    hand by 1 and grows their graveyard by 1."""
+    p1_hand_before = synthetic_state.hand_sizes[1]
+    p1_grave_before = synthetic_state.graveyard_sizes[1]
+
+    spell_obj_id = synthetic_state.register_and_inject_object(
+        _mind_rot_dict(), 0, ZONE_HAND
+    )
+    synthetic_state.push_to_stack(spell_obj_id, 0)
+    synthetic_state.resolve_top_of_stack()
+
+    assert synthetic_state.is_stack_empty() is True
+    assert synthetic_state.hand_sizes[1] == p1_hand_before - 1
+    assert synthetic_state.graveyard_sizes[1] == p1_grave_before + 1
+
+
+def test_resolve_discard_card_moves_first_card_in_hand(synthetic_state):
+    """The discarded card is specifically hand[0] of the defender (the
+    first-slice deterministic choice). Verify by looking at the obj_id
+    of p1's first hand card and asserting it lands in graveyard."""
+    # p1's hand[0] is at obj_id 77 (10 bf + 7 hand starts at 77 since
+    # p1 base = 67 in the synthetic seed).
+    p1_first_hand_id = 77
+    assert (
+        synthetic_state.find_object_zone(p1_first_hand_id) == ZONE_HAND
+    )
+
+    spell_obj_id = synthetic_state.register_and_inject_object(
+        _mind_rot_dict(), 0, ZONE_HAND
+    )
+    synthetic_state.push_to_stack(spell_obj_id, 0)
+    synthetic_state.resolve_top_of_stack()
+
+    assert (
+        synthetic_state.find_object_zone(p1_first_hand_id) == ZONE_GRAVEYARD
+    )
+
+
+def test_resolve_discard_card_anycreature_raises(synthetic_state):
+    """DiscardCard with an AnyCreature target is semantically nonsense
+    (you can't discard a creature). The dispatch raises ValueError
+    loudly, matching the AddCounters / Sacrifice / TapTarget AnyPlayer
+    shape (mirrored here for the symmetric AnyCreature-on-DiscardCard
+    error)."""
+    spell_obj_id = synthetic_state.register_and_inject_object(
+        _discard_creature_dict(), 0, ZONE_HAND
+    )
+    synthetic_state.push_to_stack(spell_obj_id, 0)
+
+    with pytest.raises(ValueError):
+        synthetic_state.resolve_top_of_stack()
+
+
+def test_resolve_discard_card_empty_hand_fizzles(engine):
+    """If the defender has an empty hand, DiscardCard fizzles silently
+    — stack item still pops, source still moves post-resolve, no
+    hand/graveyard deltas on the defender's side."""
+    # Build a state with empty defender hand. Build with hand=0 then
+    # the source spell needs a non-hand source-zone — battlefield is
+    # fine (source-zone doesn't constrain the discard target's zone).
+    state = engine.make_synthetic_state(
+        num_battlefield=0, num_hand=0, num_library=1
+    )
+    spell_obj_id = state.register_and_inject_object(
+        _mind_rot_dict(), 0, ZONE_BATTLEFIELD
+    )
+
+    p1_hand_before = state.hand_sizes[1]
+    p1_grave_before = state.graveyard_sizes[1]
+
+    state.push_to_stack(spell_obj_id, 0)
+    state.resolve_top_of_stack()
+
+    assert state.is_stack_empty() is True
+    assert state.hand_sizes[1] == p1_hand_before
+    assert state.graveyard_sizes[1] == p1_grave_before
+
+
+def test_resolve_discard_card_to_correct_graveyard(synthetic_state):
+    """The discarded card lands in the DEFENDER's graveyard, not the
+    active player's. Real MTG: a discarded card goes to its owner's
+    graveyard (CR 701.8). First slice: owner == controller, and the
+    target is the defender, so the discard lands on the defender's
+    side."""
+    p0_grave_before = synthetic_state.graveyard_sizes[0]
+    p1_grave_before = synthetic_state.graveyard_sizes[1]
+
+    spell_obj_id = synthetic_state.register_and_inject_object(
+        _mind_rot_dict(), 0, ZONE_HAND
+    )
+    synthetic_state.push_to_stack(spell_obj_id, 0)
+    synthetic_state.resolve_top_of_stack()
+
+    # Defender (p1) gained 1 in graveyard; active (p0) gained 1 only
+    # from the source sorcery itself moving post-resolve.
+    assert synthetic_state.graveyard_sizes[1] == p1_grave_before + 1
+    assert synthetic_state.graveyard_sizes[0] == p0_grave_before + 1

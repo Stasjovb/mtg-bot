@@ -57,6 +57,18 @@
 //!   Multi-blocker damage distribution (CR 510.1c) stays deferred —
 //!   the round-5 combat slice itself only applies attacker.power to
 //!   the FIRST declared blocker.
+//! - **Trample + deathtouch (CR 702.19c) IS modeled.** When an
+//!   attacker has BOTH `"trample"` and `"deathtouch"`, only 1 damage
+//!   needs to be assigned to each blocker before trampling the rest
+//!   through — because deathtouch makes 1 damage count as lethal
+//!   (CR 702.2b). The per-blocker trample cap becomes 1 instead of
+//!   `blocker.toughness`, so `excess = max(attacker.power - 1, 0)`.
+//!   Deathtouch's lethal-mark upgrade still fires on the recipient
+//!   (the blocker's marked damage gets bumped to its toughness for
+//!   the SBA pass). Trample-only (no deathtouch) keeps the cap at
+//!   `blocker.toughness`; deathtouch-only (no trample) keeps the
+//!   round-5 mutual exchange with deathtouch's lethal upgrade and no
+//!   trample-through.
 //! - **First-strike (CR 702.7) IS modeled.** When ANY participant in
 //!   combat has `"first_strike"` OR `"double_strike"` in
 //!   `printing.keywords`, `deal_combat_damage` runs in two passes: a
@@ -702,14 +714,33 @@ impl GameState {
                     if attacker_has_trample {
                         let blocker_toughness =
                             battlefield_creature_toughness(self, blocker_id);
+                        // Trample's "lethal to blocker" floor (CR
+                        // 702.19b) is normally `blocker.toughness` —
+                        // the attacker must assign at least that much
+                        // before tramping any over to the defender.
+                        // CR 702.19c carves out the deathtouch case:
+                        // an attacker with BOTH trample and deathtouch
+                        // only has to assign 1 damage to each blocker
+                        // before assigning the rest as trample, because
+                        // 1 damage from deathtouch already counts as
+                        // lethal (CR 702.2b). So the per-blocker cap
+                        // becomes 1 when the attacker also has
+                        // deathtouch, freeing up `power - 1` to spill
+                        // through to the defender.
+                        let attacker_has_deathtouch =
+                            battlefield_has_keyword(self, attacker_id, "deathtouch");
+                        let blocker_cap = if attacker_has_deathtouch {
+                            1
+                        } else {
+                            blocker_toughness
+                        };
                         // Damage to blocker: min(attacker_power,
-                        // blocker_toughness). When attacker_power <=
-                        // blocker_toughness the blocker absorbs all
-                        // of it (no excess); when attacker_power >
-                        // blocker_toughness the blocker takes its
-                        // toughness's worth and the rest goes to the
-                        // defender.
-                        let to_blocker = std::cmp::min(attacker_power, blocker_toughness);
+                        // blocker_cap). When attacker_power <=
+                        // blocker_cap the blocker absorbs all of it
+                        // (no excess); when attacker_power >
+                        // blocker_cap the blocker takes the cap's
+                        // worth and the rest goes to the defender.
+                        let to_blocker = std::cmp::min(attacker_power, blocker_cap);
                         if to_blocker > 0 {
                             for &p in &passes_for_source {
                                 plan.push(PlanEntry {
@@ -720,7 +751,7 @@ impl GameState {
                                 });
                             }
                         }
-                        let excess = (attacker_power as i32) - (blocker_toughness as i32);
+                        let excess = (attacker_power as i32) - (blocker_cap as i32);
                         if excess > 0 {
                             for &p in &passes_for_source {
                                 plan.push(PlanEntry {

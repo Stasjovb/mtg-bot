@@ -373,3 +373,119 @@ def test_clone_then_search_does_not_affect_original(synthetic_state):
     assert synthetic_state.library_sizes == source_lib_size_before
     source_lib_after = _library_obj_ids(synthetic_state, 0, P0_LIBRARY_SIZE)
     assert source_lib_after == source_lib_before
+
+
+# --- Search library by type (round-15) -------------------------------------
+
+# Synthetic registry pids:
+#   pid 0 = Forest         (card_types = ["Land"])
+#   pid 1 = Grizzly Bears  (card_types = ["Creature"])
+#   pid 2 = Llanowar Elves (card_types = ["Creature"])
+BEARS_PID = 1
+ELVES_PID = 2
+
+
+def test_search_library_by_type_finds_creature(synthetic_state):
+    """Library laid out (bottom -> top) as [Forest, Forest, Bears, Forest]:
+    top-to-bottom search for "Creature" returns the Bears' obj_id (the
+    Forest at the top is skipped, Bears is the next card down)."""
+    synthetic_state.load_deck(0, [FOREST_PID, FOREST_PID, BEARS_PID, FOREST_PID])
+    # After load_deck, top-of-library = the LAST input = Forest. Below
+    # that = Bears. Top-to-bottom iteration skips the Forest at the very
+    # top and returns Bears' obj_id.
+    top_first_ids = synthetic_state.scry(0, 4)
+    bears_id = top_first_ids[1]  # second from top
+    assert synthetic_state.printing_name_of(bears_id) == "Grizzly Bears"
+
+    found = synthetic_state.search_library_for_first_of_type(0, "Creature")
+    assert found == bears_id
+
+
+def test_search_library_by_type_finds_land(synthetic_state):
+    """Default synthetic state has 50 Forests in the library. A
+    top-to-bottom search for "Land" returns the obj_id of the TOP of
+    the library (id 66 — the last element of the Vec)."""
+    found = synthetic_state.search_library_for_first_of_type(0, "Land")
+    # Top of library = last element of Vec; synthetic seeded ids 17..66
+    # so id 66 is the top.
+    assert found == 66
+
+
+def test_search_library_by_type_unknown_type_returns_none(synthetic_state):
+    """Searching for a type string with no matching card in the library
+    returns None (no exception, no mutation). Default library is all
+    Forests, so "Planeswalker" finds nothing."""
+    found = synthetic_state.search_library_for_first_of_type(0, "Planeswalker")
+    assert found is None
+
+
+def test_search_library_by_type_empty_library_returns_none(synthetic_state):
+    """Empty library + any search type returns None."""
+    synthetic_state.load_deck(0, [])
+    assert synthetic_state.library_sizes[0] == 0
+    found = synthetic_state.search_library_for_first_of_type(0, "Land")
+    assert found is None
+
+
+def test_search_library_by_type_unknown_player_raises(synthetic_state):
+    """An out-of-range player_id raises ValueError rather than silently
+    returning None."""
+    with pytest.raises((ValueError, IndexError, OverflowError)):
+        synthetic_state.search_library_for_first_of_type(7, "Creature")
+
+
+def test_search_library_by_type_does_not_mutate_library(synthetic_state):
+    """Search alone is a pure read — library order and size unchanged
+    after the call."""
+    before = _library_obj_ids(synthetic_state, 0, P0_LIBRARY_SIZE)
+    size_before = synthetic_state.library_sizes
+    hand_before = synthetic_state.hand_sizes
+
+    _ = synthetic_state.search_library_for_first_of_type(0, "Land")
+
+    after = _library_obj_ids(synthetic_state, 0, P0_LIBRARY_SIZE)
+    assert after == before
+    assert synthetic_state.library_sizes == size_before
+    assert synthetic_state.hand_sizes == hand_before
+
+
+def test_search_and_move_to_hand_moves_card(synthetic_state):
+    """Composition: search creature + move to hand. Library shrinks by
+    1, hand grows by 1, moved card has zone = ZONE_HAND."""
+    synthetic_state.load_deck(0, [FOREST_PID, FOREST_PID, BEARS_PID, FOREST_PID])
+    hand_before = synthetic_state.hand_sizes
+    lib_before = synthetic_state.library_sizes
+
+    found = synthetic_state.search_library_for_first_of_type_and_move_to_hand(
+        0, "Creature"
+    )
+
+    assert found is not None
+    assert synthetic_state.printing_name_of(found) == "Grizzly Bears"
+    assert synthetic_state.hand_sizes[0] == hand_before[0] + 1
+    assert synthetic_state.library_sizes[0] == lib_before[0] - 1
+    # Moved card now lives in hand.
+    assert synthetic_state.find_object_zone(found) == ZONE_HAND
+    # Other player untouched.
+    assert synthetic_state.hand_sizes[1] == hand_before[1]
+    assert synthetic_state.library_sizes[1] == lib_before[1]
+
+
+def test_search_and_move_to_hand_no_match_returns_none_no_mutation(synthetic_state):
+    """No match: returns None, library unchanged, hand unchanged.
+    Unlike round-14's printing-search variant (which shuffles on miss),
+    this composition is a pure no-op when nothing matches — the
+    library/hand sizes and ordering are bit-for-bit identical."""
+    lib_before = _library_obj_ids(synthetic_state, 0, P0_LIBRARY_SIZE)
+    hand_before = synthetic_state.hand_sizes
+    lib_size_before = synthetic_state.library_sizes
+
+    found = synthetic_state.search_library_for_first_of_type_and_move_to_hand(
+        0, "Planeswalker"
+    )
+
+    assert found is None
+    assert synthetic_state.hand_sizes == hand_before
+    assert synthetic_state.library_sizes == lib_size_before
+    lib_after = _library_obj_ids(synthetic_state, 0, P0_LIBRARY_SIZE)
+    assert lib_after == lib_before

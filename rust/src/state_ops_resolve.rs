@@ -676,6 +676,110 @@ fn apply_effect(state: &mut GameState, effect: &Effect) -> PyResult<()> {
                 Arc::make_mut(&mut state.players[active].graveyard).push(obj);
             }
         },
+        // Round-15: AddCounters. Routes through round-2's signed net-
+        // i32 counter model — positive `count` adds +1/+1 counters,
+        // negative `count` adds -1/-1 counters; both deltas land on
+        // the same i32 field via `saturating_add`. Net values can
+        // freely cross zero in either direction.
+        //
+        // Targeting (mirrors DealDamage / TapTarget / UntapTarget /
+        // ReturnToHand / ExileTarget):
+        //   - AnyCreature -> first object on the DEFENDING player's
+        //     battlefield (smallest index). No creature-type filter.
+        //     If the defender's battlefield is empty, the spell
+        //     fizzles silently.
+        //   - AnyPlayer -> semantically nonsense for counters (you
+        //     can't put counters on a player). Raise ValueError
+        //     loudly, matching the bounce/exile/tap/untap AnyPlayer
+        //     shape.
+        //
+        // **Inlining note (cross-file friction).** `add_counters` is a
+        // private `#[pymethods]` method on `state_ops_counters.rs`; per
+        // per-slice file-isolation we inline the minimal
+        // `Arc::make_mut` + `saturating_add` here, mirroring how
+        // TapTarget / UntapTarget / Sacrifice inlined their primitives
+        // for the same E0624 cross-file reason.
+        Effect::AddCounters { target, count } => match target {
+            TargetFilter::AnyPlayer => {
+                return Err(PyValueError::new_err(
+                    "AddCounters with AnyPlayer target is semantically nonsense (cannot put counters on a player)",
+                ));
+            }
+            TargetFilter::AnyCreature => {
+                let defender = (1 - state.active_player) as usize;
+                let bf = &state.players[defender].battlefield;
+                if bf.is_empty() {
+                    return Ok(()); // fizzle silently
+                }
+                let target_id = bf[0].id;
+                let delta = *count;
+                let bf_mut: &mut Vec<GameObject> =
+                    Arc::make_mut(&mut state.players[defender].battlefield);
+                for obj in bf_mut.iter_mut() {
+                    if obj.id == target_id {
+                        obj.counters = obj.counters.saturating_add(delta);
+                        break;
+                    }
+                }
+            }
+        },
+        // Round-15: DiscardCard. CR 701.8 — a discarded card is put
+        // into its owner's graveyard. First-slice: owner == controller,
+        // so the discard lands on the target player's own graveyard.
+        //
+        // Targeting:
+        //   - AnyPlayer -> the DEFENDING player. First-slice: the
+        //     active player's spell forces the opponent to discard
+        //     (Mind Rot / Wrench Mind shape). Real MTG plumbs target-
+        //     player choice through the cast surface; deferred.
+        //   - AnyCreature -> semantically nonsense for discard (you
+        //     can't discard a creature). Raise ValueError loudly,
+        //     mirrored from the bounce/exile/tap/untap AnyPlayer shape
+        //     for the symmetric AnyCreature-on-DiscardCard error.
+        //
+        // **Deterministic choice = hand[0].** First slice picks the
+        // first card in the target's hand by index (no per-spell
+        // discard choice yet). Empty hand fizzles silently (stack
+        // still pops, source still moves post-resolve).
+        //
+        // **Per-object state reset on zone change** (CR 400.7) —
+        // tapped / summoning_sick / damage / counters reset on the way
+        // to graveyard, mirroring the ReturnToHand / ExileTarget /
+        // Sacrifice reset convention. (In practice a card in hand has
+        // those fields at default already, but keep the reset for
+        // schema-uniformity with the other zone-change paths.)
+        //
+        // **Inlining note (cross-file friction).** Per per-slice file-
+        // isolation we inline the minimal `Arc::make_mut`
+        // `Vec::remove(0)` + push-to-graveyard here, mirroring
+        // ReturnToHand / ExileTarget / Sacrifice / Mill / DrawCards.
+        Effect::DiscardCard { target } => match target {
+            TargetFilter::AnyCreature => {
+                return Err(PyValueError::new_err(
+                    "DiscardCard with AnyCreature target is semantically nonsense (cannot discard a creature)",
+                ));
+            }
+            TargetFilter::AnyPlayer => {
+                let defender = (1 - state.active_player) as usize;
+                let hand = &state.players[defender].hand;
+                if hand.is_empty() {
+                    return Ok(()); // fizzle silently
+                }
+                // Pop hand[0] (deterministic first-slice choice). Use
+                // Arc::make_mut for CoW safety.
+                let hand_mut: &mut Vec<GameObject> =
+                    Arc::make_mut(&mut state.players[defender].hand);
+                let mut obj = hand_mut.remove(0);
+                // Stamp graveyard zone + reset per-object state
+                // (CR 400.7).
+                obj.zone = ZONE_GRAVEYARD;
+                obj.tapped = false;
+                obj.summoning_sick = false;
+                obj.damage = 0;
+                obj.counters = 0;
+                Arc::make_mut(&mut state.players[defender].graveyard).push(obj);
+            }
+        },
     }
     Ok(())
 }

@@ -84,6 +84,21 @@ pub enum Effect {
     /// battlefield (you sacrifice your own permanents). AnyPlayer
     /// raises.
     Sacrifice { target: TargetFilter },
+    /// Add `count` +1/+1 (positive) or -1/-1 (negative) counters to
+    /// target creature on the defending player's battlefield. Routes
+    /// through round-2's net-counter model — `add_counters` adds the
+    /// signed amount to a single i32 net counter on the GameObject.
+    /// AnyPlayer raises (you can't counter a player). Round-15 first
+    /// slice picks the AnyCreature target deterministically as the
+    /// first creature on the defending player's battlefield, mirroring
+    /// the DealDamage / TapTarget / UntapTarget convention.
+    AddCounters { target: TargetFilter, count: i32 },
+    /// Target player discards one card from hand (CR 701.8). First
+    /// slice: deterministic choice = first card in target's hand
+    /// (defending player for opponent-targeted discards). AnyCreature
+    /// raises (you can't discard a creature). Empty hand = silent
+    /// no-op (Python parity).
+    DiscardCard { target: TargetFilter },
 }
 
 #[derive(Clone, Debug)]
@@ -262,8 +277,25 @@ fn parse_effect(dict: &Bound<'_, PyDict>) -> PyResult<Effect> {
             let target = parse_target_filter(target_dict)?;
             Ok(Effect::Sacrifice { target })
         }
+        "add_counters" => {
+            let count: i32 = require(dict, "count")?.extract()?;
+            let target_any = require(dict, "target")?;
+            let target_dict = target_any.downcast::<PyDict>().map_err(|_| {
+                PyValueError::new_err("add_counters.target must be a dict")
+            })?;
+            let target = parse_target_filter(target_dict)?;
+            Ok(Effect::AddCounters { target, count })
+        }
+        "discard_card" => {
+            let target_any = require(dict, "target")?;
+            let target_dict = target_any.downcast::<PyDict>().map_err(|_| {
+                PyValueError::new_err("discard_card.target must be a dict")
+            })?;
+            let target = parse_target_filter(target_dict)?;
+            Ok(Effect::DiscardCard { target })
+        }
         other => Err(PyValueError::new_err(format!(
-            "unknown effect kind {other:?}; valid: deal_damage, draw_cards, gain_life, return_to_hand, mill, exile_target, tap_target, untap_target, sacrifice"
+            "unknown effect kind {other:?}; valid: deal_damage, draw_cards, gain_life, return_to_hand, mill, exile_target, tap_target, untap_target, sacrifice, add_counters, discard_card"
         ))),
     }
 }
@@ -481,6 +513,15 @@ fn effect_to_pydict<'py>(
         }
         Effect::Sacrifice { target } => {
             d.set_item("kind", "sacrifice")?;
+            d.set_item("target", target_filter_to_pydict(py, target)?)?;
+        }
+        Effect::AddCounters { target, count } => {
+            d.set_item("kind", "add_counters")?;
+            d.set_item("count", *count)?;
+            d.set_item("target", target_filter_to_pydict(py, target)?)?;
+        }
+        Effect::DiscardCard { target } => {
+            d.set_item("kind", "discard_card")?;
             d.set_item("target", target_filter_to_pydict(py, target)?)?;
         }
     }

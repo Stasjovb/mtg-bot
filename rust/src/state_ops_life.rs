@@ -86,4 +86,36 @@ impl GameState {
         self.players[idx].life -= amount;
         Ok(())
     }
+
+    /// Attempt to pay `amount` life as a cost (CR 118.4). Returns
+    /// `true` and decrements `player_id`'s life if the player can
+    /// pay; returns `false` and leaves life unchanged if they
+    /// cannot.
+    ///
+    /// A player can pay X life as a cost only if their current life
+    /// is strictly greater than X — paying X drops them to
+    /// `current - X`, which must be >= 1. Voluntary cost-payment
+    /// can't take a player to 0 or below; that's the no-pay-to-die
+    /// boundary distinguishing costs from effects (effects driving
+    /// life below 0 use `lose_life`, which has no such guard).
+    ///
+    /// `amount = 0` is a legal no-op and returns `true` — paying
+    /// zero life is always possible.
+    ///
+    /// Raises `ValueError` on negative `amount` (no negative-cost
+    /// shenanigans) and `IndexError` on an out-of-range
+    /// `player_id`, mirroring the other life primitives.
+    fn pay_life_cost(&mut self, player_id: u8, amount: i32) -> PyResult<bool> {
+        let idx = check_player_id(player_id)?;
+        check_non_negative("pay_life_cost", amount)?;
+        if amount == 0 {
+            return Ok(true);
+        }
+        if self.players[idx].life > amount {
+            self.players[idx].life -= amount;
+            Ok(true)
+        } else {
+            Ok(false)
+        }
+    }
 }
