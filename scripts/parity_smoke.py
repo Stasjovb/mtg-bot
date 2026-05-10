@@ -7,6 +7,19 @@ same seed and same decks should produce byte-identical trajectories.
 
 Usage:
     PYTHONPATH=src python scripts/parity_smoke.py --seed 42
+    PYTHONPATH=src python scripts/parity_smoke.py --mode initial-state --seed 42
+
+Modes:
+    game           — Run a full game with RandomAgent on each engine.
+                     Rust side stubs out until ``legal_decisions`` /
+                     full ``apply_action`` coverage land. Default.
+    initial-state  — Build a Rust synthetic state and compare its
+                     native ``fingerprint()`` against a Python-side
+                     re-implementation of ``hash_state`` that reads
+                     the state via the round-21/22 snapshot getters.
+                     Fast regression gate on the parity primitive: if
+                     either engine ever drifts on the hash recipe,
+                     this trips immediately.
 
 Exit codes:
     0 — both engines agree (or only one engine ran successfully and
@@ -15,10 +28,9 @@ Exit codes:
         printed.
     2 — scaffold error (e.g., import failure).
 
-Phase 1 status: Rust side is a stub that raises NotImplementedError.
-The harness still runs the Python side and prints its trajectory hash
-+ decision count, so the scaffold itself can be smoke-tested before
-the Rust bridge exists.
+Phase 1 status: Rust side is a stub that raises NotImplementedError
+in ``--mode game``. The ``--mode initial-state`` path is fully wired
+end-to-end as of round 23 (make_state + fingerprint).
 """
 
 from __future__ import annotations
@@ -61,8 +73,30 @@ def _zone_signature(zone: list[Any]) -> tuple:
     return tuple(sig)
 
 
+def _hash_parts(parts: list) -> str:
+    """SHA1 of a JSON-serialized ``parts`` list, truncated to 12 hex chars.
+
+    Factored out so the dict-shim variant for the Rust state and the
+    classic attribute-walking variant for the Python state hit the same
+    serializer + truncation. The Rust ``fingerprint()`` mirrors the
+    Python ``json.dumps(parts, default=repr, sort_keys=False)`` exactly;
+    keeping the JSON kwargs in one place protects against accidental
+    drift (e.g. someone flipping `sort_keys=True` in a refactor would
+    invalidate every pinned baseline).
+    """
+    blob = json.dumps(parts, default=repr, sort_keys=False).encode("utf-8")
+    return hashlib.sha1(blob).hexdigest()[:12]
+
+
 def hash_state(state) -> str:
-    """SHA1 of the gameplay-relevant invariants of a GameState."""
+    """SHA1 of the gameplay-relevant invariants of a Python GameState.
+
+    Attribute-walking variant — reads ``state.players[i].life`` /
+    ``.hand`` / ... directly. The Rust mirror is :func:`_hash_rust_state`
+    which reads the same shape through the round-21 / round-22 snapshot
+    getters (``hand_snapshot`` / ``battlefield_snapshot`` / ...) instead
+    of Python attributes.
+    """
     parts: list = [
         state.turn_number,
         getattr(state, "step", None) and state.step.name if hasattr(getattr(state, "step", None), "name") else getattr(state, "step", None),
@@ -87,8 +121,104 @@ def hash_state(state) -> str:
     # controller_id so per-player ownership is captured in _zone_signature.
     parts.append(_zone_signature(getattr(state, "battlefield", [])))
     parts.append(_zone_signature(getattr(state, "stack", [])))
-    blob = json.dumps(parts, default=repr, sort_keys=False).encode("utf-8")
-    return hashlib.sha1(blob).hexdigest()[:12]
+    return _hash_parts(parts)
+
+
+# ---------- Rust-state mirror of hash_state -------------------------------
+
+def _rust_zone_obj_sig(d: dict) -> tuple:
+    """Mirror ``_zone_signature``'s per-object 8-tuple from a snapshot dict.
+
+    Rust ``hand_snapshot`` / ``library_snapshot`` / ``graveyard_snapshot``
+    / ``exile_snapshot`` / ``battlefield_snapshot`` all return lists of
+    dicts with the same key set:
+
+        {id, printing_id, printing_name, tapped, summoning_sick,
+         damage, counters, controller_id, zone}
+
+    The Python ``_zone_signature`` produces an 8-tuple
+    ``(printing_name | None, int(tapped), int(summoning_sick), damage,
+       counters, attached_to, controller_id, id)``.
+
+    Rust doesn't track ``attached_to`` yet (auras are out of scope for
+    round 22/23), so we emit ``None`` for that slot — matching the
+    ``Value::Null`` the Rust ``fingerprint()`` emits in the same position.
+    """
+    return (
+        d["printing_name"],
+        int(d["tapped"]),
+        int(d["summoning_sick"]),
+        d["damage"],
+        d["counters"],
+        None,  # attached_to — not modeled on the Rust side
+        d["controller_id"],
+        d["id"],
+    )
+
+
+def _rust_stack_obj_sig(d: dict) -> tuple:
+    """Stack items have a different snapshot shape than zone permanents.
+
+    The Rust ``stack_snapshot`` returns dicts of shape
+    ``{source_obj_id, controller}`` (a stack item carries only an obj
+    reference + its controller; per-permanent fields like tapped/damage
+    are nonsensical for a card-on-the-stack).
+
+    The Rust ``fingerprint()`` still emits stack items as the same
+    8-tuple shape as zone objects — with the per-permanent slots zeroed
+    or nulled — so the hash recipe stays uniform. We mirror that exactly:
+
+        (None, 0, 0, 0, 0, None, controller, source_obj_id)
+    """
+    return (None, 0, 0, 0, 0, None, d["controller"], d["source_obj_id"])
+
+
+def _hash_rust_state(state) -> str:
+    """SHA1-12 fingerprint of a Rust GameState, reading via snapshot getters.
+
+    Two ways to fingerprint a Rust state exist in this codebase:
+
+    * ``state.fingerprint()`` — the native pymethod, builds the hash
+      blob in Rust (see ``rust/src/state_ops_fingerprint.rs``).
+    * ``_hash_rust_state(state)`` — this function, builds the hash
+      blob in Python by walking the dict-form snapshots.
+
+    They MUST produce byte-equal output. ``--mode initial-state``
+    asserts that on a freshly built synthetic state — if either side
+    ever drifts on the hash recipe, the harness trips immediately.
+    """
+    # Top-level scalars.
+    step = state.step  # Rust pymethod already returns the Step.<NAME> string.
+    parts: list = [
+        state.turn_number,
+        step,
+        state.active_player_idx,
+        state.priority_player_idx,
+        state.is_over(),
+        state.is_draw,
+        state.winner_id,
+    ]
+    # Per-player tuples — life via get_life, has_lost derived from life<=0,
+    # zone signatures via snapshot getters, mana pool as sorted dict items.
+    for player_id in (0, 1):
+        life = state.get_life(player_id)
+        mana = state.mana_pool_snapshot(player_id)
+        parts.append((
+            player_id,
+            life,
+            life <= 0,
+            tuple(_rust_zone_obj_sig(d) for d in state.hand_snapshot(player_id)),
+            tuple(_rust_zone_obj_sig(d) for d in state.library_snapshot(player_id)),
+            tuple(_rust_zone_obj_sig(d) for d in state.graveyard_snapshot(player_id)),
+            tuple(_rust_zone_obj_sig(d) for d in state.exile_snapshot(player_id)),
+            tuple(sorted(mana.items())),
+        ))
+    # Battlefield is split across players in Rust but `battlefield_snapshot`
+    # already concatenates p0's then p1's in that order, which is what the
+    # Rust fingerprint emits.
+    parts.append(tuple(_rust_zone_obj_sig(d) for d in state.battlefield_snapshot()))
+    parts.append(tuple(_rust_stack_obj_sig(d) for d in state.stack_snapshot()))
+    return _hash_parts(parts)
 
 
 # ---------- recording agent -----------------------------------------------
@@ -257,6 +387,55 @@ def print_result(res: TrajectoryResult) -> None:
         )
 
 
+# ---------- initial-state mode --------------------------------------------
+
+def run_initial_state_compare(
+    seed: int,
+    num_battlefield: int = 10,
+    num_hand: int = 7,
+    num_library: int = 50,
+) -> int:
+    """Build a Rust synthetic state and compare its native fingerprint to
+    a Python-side reimplementation of the same hash recipe.
+
+    The ``seed`` argument is currently informational — ``make_synthetic_state``
+    is deterministic (no shuffling), so the seed doesn't shape the state.
+    It's accepted so the CLI surface matches the game mode and to leave
+    room for a future variant that calls ``shuffle_library_with_seed``
+    or otherwise threads randomness into the test state.
+
+    Returns 0 on PASS, 1 on FAIL, 2 on import error.
+    """
+    try:
+        import mtg_bot_engine
+    except ImportError as e:
+        print(f"[initial-state] ERROR: mtg_bot_engine not built ({e})")
+        print("  -> run `maturin develop --release -m rust/Cargo.toml`")
+        return 2
+
+    state = mtg_bot_engine.make_synthetic_state(num_battlefield, num_hand, num_library)
+    rust_fp = state.fingerprint()
+    shim_fp = _hash_rust_state(state)
+
+    if rust_fp == shim_fp:
+        print(
+            f"PARITY: PASS — fingerprint match ({rust_fp}) "
+            f"[bf={num_battlefield}, hand={num_hand}, lib={num_library}, seed={seed}]"
+        )
+        return 0
+
+    print(
+        f"PARITY: FAIL — fingerprint mismatch on synthetic state "
+        f"[bf={num_battlefield}, hand={num_hand}, lib={num_library}, seed={seed}]"
+    )
+    print(f"  rust.fingerprint()       = {rust_fp}")
+    print(f"  _hash_rust_state(state)  = {shim_fp}")
+    print("  -> the Rust fingerprint() recipe and the Python shim have drifted.")
+    print("     Inspect rust/src/state_ops_fingerprint.rs against")
+    print("     scripts/parity_smoke.py:_hash_rust_state and reconcile.")
+    return 1
+
+
 def main() -> int:
     p = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     p.add_argument("--seed", type=int, default=42)
@@ -266,9 +445,47 @@ def main() -> int:
         "--engine",
         choices=("python", "rust", "both"),
         default="both",
-        help="Which engine(s) to run. 'both' runs both and compares.",
+        help="Which engine(s) to run (game mode only). 'both' runs both and compares.",
+    )
+    p.add_argument(
+        "--mode",
+        choices=("game", "initial-state"),
+        default="game",
+        help=(
+            "Which parity check to run. 'game' (default) plays a full game on "
+            "each engine and compares trajectories. 'initial-state' builds a "
+            "Rust synthetic state and asserts its native fingerprint() matches "
+            "a Python reimplementation of the hash recipe."
+        ),
+    )
+    p.add_argument(
+        "--num-battlefield",
+        type=int,
+        default=10,
+        help="(initial-state) per-player battlefield size for make_synthetic_state.",
+    )
+    p.add_argument(
+        "--num-hand",
+        type=int,
+        default=7,
+        help="(initial-state) per-player hand size for make_synthetic_state.",
+    )
+    p.add_argument(
+        "--num-library",
+        type=int,
+        default=50,
+        help="(initial-state) per-player library size for make_synthetic_state.",
     )
     args = p.parse_args()
+
+    if args.mode == "initial-state":
+        return run_initial_state_compare(
+            seed=args.seed,
+            num_battlefield=args.num_battlefield,
+            num_hand=args.num_hand,
+            num_library=args.num_library,
+        )
+
     colors = args.colors.split(",")
 
     py_res = None
@@ -294,7 +511,7 @@ def main() -> int:
         hi = min(min(len(py_res.log), len(rs_res.log)), div + 3)
         print(f"  context [{lo}:{hi}]:")
         for i in range(lo, hi):
-            marker = " ← " if i == div else "   "
+            marker = " <- " if i == div else "   "
             py = py_res.log[i] if i < len(py_res.log) else None
             rs = rs_res.log[i] if i < len(rs_res.log) else None
             print(f"  {marker}#{i}")
