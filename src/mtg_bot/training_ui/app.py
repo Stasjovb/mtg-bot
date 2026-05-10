@@ -62,6 +62,7 @@ from typing import Any, Optional
 from flask import Flask, abort, jsonify, render_template, request
 
 from mtg_bot.cli.runs import db as runs_db
+from mtg_bot.training.gate import EVAL_GATE_THRESHOLD
 from mtg_bot.training.stop_signal import (
     sentinel_path, stop_requested, write_stop,
 )
@@ -444,7 +445,15 @@ def create_app(progress_dir: Path) -> Flask:
 
     @app.route("/")
     def index():  # noqa: D401 - Flask view
-        return render_template("index.html")
+        # ``eval_gate_threshold`` is rendered into the inline JS as
+        # the single source of truth for the gate-band overlay; see
+        # ``mtg_bot.training.gate``. Updating that constant
+        # automatically updates both the Python defaults (iterate,
+        # watcher) AND the UI label and overlay.
+        return render_template(
+            "index.html",
+            eval_gate_threshold=EVAL_GATE_THRESHOLD,
+        )
 
     @app.route("/api/runs")
     def api_runs():
