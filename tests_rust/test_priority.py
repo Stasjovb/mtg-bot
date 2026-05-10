@@ -135,3 +135,113 @@ def test_priority_unaffected_by_phase_advance_in_this_slice(synthetic_state):
     # Priority did NOT reset to the active player (0). This proves the
     # composition is NOT wired up yet.
     assert synthetic_state.get_priority_player() == 1
+
+
+# ---------------------------------------------------------------------------
+# Round-9 composition slice: priority + stack.
+#
+# When BOTH players consecutively pass priority while the stack is
+# non-empty, the top stack item resolves (CR 117.4 / 117.5). This
+# slice exposes ``complete_priority_round()`` as the priority-round-
+# completion primitive: caller decides both players have passed, then
+# invokes this method.
+#
+# **Scope (pop-only stepping-stone).** This method does NOT dispatch
+# the resolved item's effects. It pops the top stack item, returns
+# its dict, and resets priority to ``active_player`` (CR 117.1c — the
+# AP gets priority after a spell or ability resolves). Real effect
+# dispatch is the job of ``resolve_top_of_stack`` in
+# ``state_ops_resolve.rs`` — a future composition slice can chain
+# them together once the cross-file file-isolation rule relaxes.
+#
+# **Cross-file private-method friction.** This slice WANTS to call
+# ``resolve_top_of_stack`` from ``state_ops_resolve.rs``, but that
+# method is private to its module's pyclass impl block and the slice
+# rules forbid touching that file. Per the recurring inlining
+# pattern (5+ instances across slices: round-7 counterspell inlined
+# move_object, round-8 resolve-effects inlined draw_card, etc.), the
+# pragmatic call here is to inline a *minimal* version: pop + reset
+# priority, no effect dispatch. This keeps the slice surface small
+# and lets the real-effect path stay solely in ``state_ops_resolve``.
+# ---------------------------------------------------------------------------
+
+
+def test_complete_priority_round_with_empty_stack_returns_none(synthetic_state):
+    """Empty stack -> ``complete_priority_round()`` returns ``None``
+    and is a no-op on stack/priority. Mirrors the empty-stack
+    convention of ``pop_top_of_stack`` / ``resolve_top_of_stack``."""
+    assert synthetic_state.is_stack_empty() is True
+    result = synthetic_state.complete_priority_round()
+    assert result is None
+    assert synthetic_state.is_stack_empty() is True
+
+
+def test_complete_priority_round_with_nonempty_stack_returns_popped_item_dict(
+    synthetic_state,
+):
+    """Stack has one item -> ``complete_priority_round()`` returns the
+    popped item as a dict ({source_obj_id, controller}) and the stack
+    shrinks by 1."""
+    synthetic_state.push_to_stack(42, 0)
+    assert synthetic_state.stack_size() == 1
+    result = synthetic_state.complete_priority_round()
+    assert isinstance(result, dict)
+    assert result == {"source_obj_id": 42, "controller": 0}
+    assert synthetic_state.stack_size() == 0
+    assert synthetic_state.is_stack_empty() is True
+
+
+def test_complete_priority_round_passes_priority_to_active_player(synthetic_state):
+    """After a stack item resolves (or in this slice's stepping-stone
+    shape, after the top is popped), priority returns to the active
+    player (CR 117.1c). Even if priority was the non-active player at
+    the time of the round-completion, it resets to AP."""
+    synthetic_state.push_to_stack(9, 1)
+    # Hand priority to the non-active player (player 1) before
+    # completing the round, so we can detect the post-resolution reset.
+    synthetic_state.give_priority_to(1)
+    assert synthetic_state.get_priority_player() == 1
+    synthetic_state.complete_priority_round()
+    assert synthetic_state.get_priority_player() == synthetic_state.active_player
+    assert synthetic_state.get_priority_player() == 0  # active_player == 0 in synth.
+
+
+def test_complete_priority_round_does_not_advance_phase(synthetic_state):
+    """Resolving a stack item does NOT advance the phase. Phase /
+    step is the job of ``advance_phase`` from
+    ``state_ops_steps.rs``; the priority-round-completion primitive
+    just unwinds one stack item."""
+    starting_phase = synthetic_state.current_phase()
+    synthetic_state.push_to_stack(11, 0)
+    synthetic_state.complete_priority_round()
+    assert synthetic_state.current_phase() == starting_phase
+
+
+def test_complete_priority_round_with_multi_item_stack_pops_only_top(synthetic_state):
+    """Push A then B (B on top). ``complete_priority_round()`` pops
+    only the TOP (B); A is still on the stack. Returns B's dict."""
+    synthetic_state.push_to_stack(100, 0)  # A (bottom)
+    synthetic_state.push_to_stack(200, 1)  # B (top)
+    assert synthetic_state.stack_size() == 2
+    result = synthetic_state.complete_priority_round()
+    assert result == {"source_obj_id": 200, "controller": 1}
+    assert synthetic_state.stack_size() == 1
+    # A is still on top.
+    top = synthetic_state.peek_top_of_stack()
+    assert top == {"source_obj_id": 100, "controller": 0}
+
+
+def test_clone_then_complete_priority_round_does_not_affect_original(synthetic_state):
+    """CoW canary: completing a priority round on a clone unwinds the
+    clone's stack and resets the clone's priority. The original's
+    stack and priority must be untouched."""
+    synthetic_state.push_to_stack(55, 0)
+    synthetic_state.give_priority_to(1)
+    cloned = synthetic_state.clone_once()
+    cloned.complete_priority_round()
+    # Clone: stack drained, priority reset to active player (0).
+    assert cloned.stack_size() == 0
+    assert cloned.get_priority_player() == 0
+    # Original: untouched.
+    assert synthetic_state.stack_size() == 1
+    assert synthetic_state.get_priority_player() == 1
