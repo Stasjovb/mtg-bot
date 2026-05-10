@@ -4597,3 +4597,322 @@ def test_resolve_reanimate_clone_isolation(synthetic_state):
     # Original untouched: creature still in graveyard, stack still 1.
     assert synthetic_state.find_object_zone(creature_id) == ZONE_GRAVEYARD
     assert synthetic_state.stack_size() == 1
+
+
+# --- round-25: DiscardSelf dispatch ---------------------------------
+#
+# CR 701.8 — "you discard a card." The SOURCE's controller discards
+# `amount` cards from their hand. Punisher / drawback pattern
+# (Irreverent Gremlin shape) — 8 cards in the EoE pool per round-20
+# measurement.
+#
+# **Distinct from round-15's DiscardCard.** DiscardCard's AnyPlayer
+# branch targets the DEFENDING player (Mind Rot — active player forces
+# opponent to discard). DiscardSelf targets the SOURCE's controller
+# regardless of active_player. The cross-controller-active-player
+# tests below confirm the distinction.
+#
+# **Source-finder dispatch (round-23 pattern).** Walks both players'
+# five tracked zones to recover the source's `controller`. Also scans
+# the stack — the source may still be resolving when the effect fires.
+#
+# **First-slice deterministic choice: hand[0]** of the source's
+# controller (mirrors round-15 DiscardCard). Up to `amount` discards
+# in a row; empty hand stops early (Python parity with
+# `for _ in range(self.amount): if not p.hand: break`).
+#
+# **Empty hand / source-not-found = silent no-op** (Python parity +
+# round-23 lost-track-of-source tolerance).
+
+
+def _discard_self_dict(amount=1, card_types=None):
+    """An Irreverent-Gremlin-shaped printing: a permanent (or
+    instant/sorcery via card_types override) whose effect makes the
+    SOURCE's controller discard `amount` cards.
+
+    Default card_types=["Creature"] so the post-resolve mover sends
+    the source to the battlefield (a creature ETB pattern). Tests
+    that need a different source-zone behavior override card_types
+    (e.g. ["Sorcery"] to route the source to its controller's
+    graveyard post-resolve).
+    """
+    if card_types is None:
+        card_types = ["Creature"]
+    p = {
+        "name": f"Test Irreverent Gremlin (x{amount})",
+        "card_types": card_types,
+        "mana_cost": {"R": 1},
+        "effects": [{"kind": "discard_self", "amount": amount}],
+    }
+    if "Creature" in card_types:
+        p["power"] = 1
+        p["toughness"] = 1
+    return p
+
+
+def test_resolve_discard_self_source_on_battlefield_discards_controller_hand(
+    synthetic_state,
+):
+    """Happy path: source sits on p0's battlefield, p0 has cards in
+    hand. Resolving DiscardSelf shrinks p0's hand by 1 and grows p0's
+    graveyard by 1. Opponent untouched."""
+    src_id = synthetic_state.register_and_inject_object(
+        _discard_self_dict(amount=1), 0, ZONE_BATTLEFIELD
+    )
+    p0_hand_before = synthetic_state.hand_sizes[0]
+    p0_grave_before = synthetic_state.graveyard_sizes[0]
+    p1_hand_before = synthetic_state.hand_sizes[1]
+    p1_grave_before = synthetic_state.graveyard_sizes[1]
+
+    synthetic_state.push_to_stack(src_id, 0)
+    synthetic_state.resolve_top_of_stack()
+
+    assert synthetic_state.is_stack_empty() is True
+    # p0 (the source's controller) discarded one card.
+    assert synthetic_state.hand_sizes[0] == p0_hand_before - 1
+    assert synthetic_state.graveyard_sizes[0] == p0_grave_before + 1
+    # p1 untouched.
+    assert synthetic_state.hand_sizes[1] == p1_hand_before
+    assert synthetic_state.graveyard_sizes[1] == p1_grave_before
+
+
+def test_resolve_discard_self_empty_hand_silent_no_op(engine):
+    """If the source's controller has an empty hand, the effect
+    fizzles silently — stack item still pops, no graveyard delta on
+    the controller's side. Mirrors Python's
+    `if not p.hand: break` short-circuit."""
+    # Synthetic state with 0 hand on both players. Need at least 1
+    # library card per the synthetic helper (default 50).
+    state = engine.make_synthetic_state(
+        num_battlefield=0, num_hand=0, num_library=1
+    )
+    src_id = state.register_and_inject_object(
+        _discard_self_dict(amount=1), 0, ZONE_BATTLEFIELD
+    )
+    p0_grave_before = state.graveyard_sizes[0]
+
+    state.push_to_stack(src_id, 0)
+    state.resolve_top_of_stack()  # no raise
+
+    assert state.is_stack_empty() is True
+    # No discard happened — p0 graveyard unchanged.
+    assert state.graveyard_sizes[0] == p0_grave_before
+
+
+def test_resolve_discard_self_source_in_graveyard_uses_controller(
+    synthetic_state,
+):
+    """The source-finder walks five zones (hand / library /
+    battlefield / graveyard / exile) — wider than
+    PutPlusOneCounterOnSelf's battlefield-only scan. Inject a
+    source-shaped object into p0's graveyard (which would normally
+    be unreachable as a stack source, but tests the source-finder's
+    multi-zone scope): the zone-scan picks up p0 as the controller
+    and resolves the discard on p0's hand.
+
+    This documents the "source has left the battlefield by resolve
+    time" tolerance — a permanent's punisher effect still knows the
+    controller via the source object's `controller` field, which
+    doesn't change on zone moves. Real MTG: most "you discard"
+    punishers fire from triggers / ETBs and the source is on the
+    battlefield at resolve time; this test covers the defensive
+    path."""
+    src_id = synthetic_state.register_and_inject_object(
+        _discard_self_dict(amount=1, card_types=["Creature"]),
+        0,
+        ZONE_GRAVEYARD,
+    )
+    p0_hand_before = synthetic_state.hand_sizes[0]
+
+    synthetic_state.push_to_stack(src_id, 0)
+    synthetic_state.resolve_top_of_stack()
+
+    # p0 (the source's controller, as recorded on the GameObject
+    # regardless of which zone it's in) discarded.
+    assert synthetic_state.hand_sizes[0] == p0_hand_before - 1
+
+
+def test_resolve_discard_self_instant_source_resolves_from_hand(
+    synthetic_state,
+):
+    """An instant source: the source GameObject is in its
+    controller's hand (where it was cast from) at resolve time,
+    not on the battlefield. The zone-scan finds the source in hand
+    on its controller's side, identifies p0 as the controller, and
+    the discard fires on p0's hand[0].
+
+    This is the realistic spell-cast pattern — the source's
+    `controller` field carries the authoritative controller
+    regardless of where the source currently sits, and the
+    five-zone scan widens the finder to catch hand-resident
+    sources too."""
+    src_id = synthetic_state.register_and_inject_object(
+        _discard_self_dict(amount=1, card_types=["Instant"]),
+        0,
+        ZONE_HAND,
+    )
+    # Capture hand[1]'s id BEFORE — hand[0] is the source itself,
+    # so the discard will pop the *first non-source* card off the
+    # front... actually, hand[0] IS the most recent
+    # register_and_inject_object push (it appended to the Vec). The
+    # synthetic hand had 7 elves at indices 0..6; the source is now
+    # at index 7. Discard pops hand[0] (Elves), source stays at
+    # index 6 after the pop. Verify by hand_size delta only — the
+    # post-resolve mover then moves the Instant source out of hand
+    # to graveyard.
+    p0_hand_before = synthetic_state.hand_sizes[0]
+    p0_grave_before = synthetic_state.graveyard_sizes[0]
+
+    synthetic_state.push_to_stack(src_id, 0)
+    synthetic_state.resolve_top_of_stack()
+
+    assert synthetic_state.is_stack_empty() is True
+    # Hand shrank by 2: -1 from the discard, -1 from the
+    # post-resolve mover routing the Instant to graveyard. The
+    # discard fired on hand[0] (the elf), not on the source itself.
+    assert synthetic_state.hand_sizes[0] == p0_hand_before - 2
+    # Graveyard grew by 2 (the discarded elf + the resolved
+    # instant source).
+    assert synthetic_state.graveyard_sizes[0] == p0_grave_before + 2
+
+
+def test_resolve_discard_self_discards_first_card_in_hand(synthetic_state):
+    """The discarded card is specifically hand[0] of the source's
+    controller (first-slice deterministic choice). Verify by looking
+    at the obj_id of p0's first hand card before, then asserting it
+    lands in p0's graveyard after resolution."""
+    p0_hand_before = synthetic_state.hand_snapshot(0)
+    p0_first_hand_id = p0_hand_before[0]["id"]
+    assert (
+        synthetic_state.find_object_zone(p0_first_hand_id) == ZONE_HAND
+    )
+
+    src_id = synthetic_state.register_and_inject_object(
+        _discard_self_dict(amount=1), 0, ZONE_BATTLEFIELD
+    )
+    synthetic_state.push_to_stack(src_id, 0)
+    synthetic_state.resolve_top_of_stack()
+
+    # hand[0] (Llanowar Elves synthetic seed) was discarded ->
+    # landed in p0's graveyard.
+    assert (
+        synthetic_state.find_object_zone(p0_first_hand_id) == ZONE_GRAVEYARD
+    )
+
+
+def test_resolve_discard_self_resets_per_object_state_on_discard(
+    synthetic_state,
+):
+    """CR 400.7 — per-object state (tapped / damage / counters)
+    resets on the zone change to graveyard. Stamp damage / counters
+    onto p0's hand[0], resolve DiscardSelf, assert the discarded
+    object lands in graveyard with state cleared. Mirrors the
+    defensive reset every other zone-move arm applies."""
+    p0_first_hand_id = synthetic_state.hand_snapshot(0)[0]["id"]
+    # Stamp damage / counters onto the hand object directly.
+    assert synthetic_state.deal_damage(p0_first_hand_id, 5) is True
+    assert synthetic_state.set_counters(p0_first_hand_id, 3) is True
+    assert synthetic_state.get_damage(p0_first_hand_id) == 5
+    assert synthetic_state.get_counters(p0_first_hand_id) == 3
+
+    src_id = synthetic_state.register_and_inject_object(
+        _discard_self_dict(amount=1), 0, ZONE_BATTLEFIELD
+    )
+    synthetic_state.push_to_stack(src_id, 0)
+    synthetic_state.resolve_top_of_stack()
+
+    # Discarded into p0's graveyard with damage=0, counters=0.
+    assert synthetic_state.find_object_zone(p0_first_hand_id) == ZONE_GRAVEYARD
+    assert synthetic_state.get_damage(p0_first_hand_id) == 0
+    assert synthetic_state.get_counters(p0_first_hand_id) == 0
+
+
+def test_resolve_discard_self_opponent_source_discards_opponent_hand(
+    synthetic_state,
+):
+    """The 'self' is the SOURCE's controller, NOT the active player.
+    Source on p1's battlefield (controller=1) while active_player
+    stays p0 — resolving DiscardSelf discards from p1's hand, not
+    p0's. This is the key distinction from round-15's DiscardCard
+    (which targets the DEFENDING player, not the source's
+    controller)."""
+    # Inject source on p1's battlefield. active_player stays at the
+    # synthetic-state default (0).
+    src_id = synthetic_state.register_and_inject_object(
+        _discard_self_dict(amount=1), 1, ZONE_BATTLEFIELD
+    )
+    p0_hand_before = synthetic_state.hand_sizes[0]
+    p0_grave_before = synthetic_state.graveyard_sizes[0]
+    p1_hand_before = synthetic_state.hand_sizes[1]
+    p1_grave_before = synthetic_state.graveyard_sizes[1]
+
+    # Push with controller=1 (p1's source resolving on the stack).
+    synthetic_state.push_to_stack(src_id, 1)
+    synthetic_state.resolve_top_of_stack()
+
+    assert synthetic_state.is_stack_empty() is True
+    # p1 (the source's controller) discarded — NOT p0.
+    assert synthetic_state.hand_sizes[1] == p1_hand_before - 1
+    assert synthetic_state.graveyard_sizes[1] == p1_grave_before + 1
+    # p0 (active player but NOT the source's controller) untouched.
+    assert synthetic_state.hand_sizes[0] == p0_hand_before
+    assert synthetic_state.graveyard_sizes[0] == p0_grave_before
+
+
+def test_resolve_discard_self_amount_two_discards_twice(synthetic_state):
+    """amount=2 — the controller discards two cards in a row. Two
+    hand cards leave hand, two land in graveyard."""
+    src_id = synthetic_state.register_and_inject_object(
+        _discard_self_dict(amount=2), 0, ZONE_BATTLEFIELD
+    )
+    p0_hand_before = synthetic_state.hand_sizes[0]
+    p0_grave_before = synthetic_state.graveyard_sizes[0]
+
+    synthetic_state.push_to_stack(src_id, 0)
+    synthetic_state.resolve_top_of_stack()
+
+    assert synthetic_state.hand_sizes[0] == p0_hand_before - 2
+    assert synthetic_state.graveyard_sizes[0] == p0_grave_before + 2
+
+
+def test_resolve_discard_self_amount_zero_no_op(synthetic_state):
+    """amount=0 is a legal no-op (mirrors GainLife / DrawCards /
+    Mill / ScryN / CreateToken / PutPlusOneCounterOnSelf zero-amount
+    conventions). Hand / graveyard untouched."""
+    src_id = synthetic_state.register_and_inject_object(
+        _discard_self_dict(amount=0), 0, ZONE_BATTLEFIELD
+    )
+    p0_hand_before = synthetic_state.hand_sizes[0]
+    p0_grave_before = synthetic_state.graveyard_sizes[0]
+
+    synthetic_state.push_to_stack(src_id, 0)
+    synthetic_state.resolve_top_of_stack()
+
+    assert synthetic_state.is_stack_empty() is True
+    assert synthetic_state.hand_sizes[0] == p0_hand_before
+    assert synthetic_state.graveyard_sizes[0] == p0_grave_before
+
+
+def test_resolve_discard_self_clone_isolation(synthetic_state):
+    """CoW canary: running DiscardSelf on a clone leaves the original
+    state's zones untouched. Load-bearing because the inline discard
+    logic uses Arc::make_mut on two zones (hand + graveyard)."""
+    src_id = synthetic_state.register_and_inject_object(
+        _discard_self_dict(amount=1), 0, ZONE_BATTLEFIELD
+    )
+    synthetic_state.push_to_stack(src_id, 0)
+    p0_hand_before = synthetic_state.hand_sizes[0]
+    p0_grave_before = synthetic_state.graveyard_sizes[0]
+
+    cloned = synthetic_state.clone_once()
+    cloned.resolve_top_of_stack()
+
+    # Clone diverged: p0's hand shrank, graveyard grew.
+    assert cloned.hand_sizes[0] == p0_hand_before - 1
+    assert cloned.graveyard_sizes[0] == p0_grave_before + 1
+    assert cloned.is_stack_empty() is True
+
+    # Original untouched.
+    assert synthetic_state.hand_sizes[0] == p0_hand_before
+    assert synthetic_state.graveyard_sizes[0] == p0_grave_before
+    assert synthetic_state.stack_size() == 1

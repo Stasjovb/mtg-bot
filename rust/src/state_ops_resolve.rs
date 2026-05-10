@@ -1597,6 +1597,144 @@ fn apply_effect(
         // the mutable state borrow free for the subsequent
         // `Arc::make_mut` calls. Mirrors the borrow-then-drop snapshot
         // pattern `resolve_top_of_stack` uses for `printing.effects`.
+        // Round-25: DiscardSelf. CR 701.8 — "you discard a card."
+        // The SOURCE's controller discards `amount` cards from their
+        // hand. Punisher / drawback pattern (Irreverent Gremlin
+        // shape) — 8 cards in the EoE pool per round-20 measurement.
+        //
+        // **Distinct from round-15's DiscardCard.** DiscardCard's
+        // AnyPlayer branch targets the DEFENDING player (active
+        // player's spell forces the opponent to discard, Mind Rot
+        // shape). DiscardSelf targets the SOURCE's controller —
+        // the punisher fires on whoever cast or controls the
+        // source, regardless of active_player. Cross-controller-
+        // active-player tests below verify the distinction.
+        //
+        // **Source-finder dispatch (round-23 pattern).** Threads
+        // `source_obj_id` through `apply_effect` and walks both
+        // players' five tracked zones (hand / library /
+        // battlefield / graveyard / exile) to recover the source's
+        // `controller`. Differs from
+        // `PutPlusOneCounterOnSelf`'s battlefield-only scan because
+        // the punisher pattern fires on whoever controls the source
+        // regardless of where the source currently sits — the
+        // controller field doesn't change when a permanent leaves
+        // the battlefield. Additionally scans the stack: the source
+        // may still be resolving (e.g. an instant/sorcery still on
+        // the stack at its own resolution time), in which case the
+        // `StackItem.controller` is the authoritative controller.
+        //
+        // **First-slice deterministic choice: discard hand[0].**
+        // Mirrors round-15's `DiscardCard` arm — pop the front of
+        // the controller's hand Vec by index, no per-spell discard
+        // choice yet. Up to `amount` discards in a row (stop early
+        // on empty hand, matching Python's `for _ in
+        // range(self.amount): if not p.hand: break` shape).
+        //
+        // **Empty hand = silent no-op** (Python parity:
+        // `DiscardSelf.resolve` short-circuits when `p.hand` is
+        // empty). **Source not found anywhere = silent no-op**
+        // (lost-track-of-source tolerance, mirrors
+        // `PutPlusOneCounterOnSelf` / `CounterTargetSpell` fizzle
+        // shape).
+        //
+        // **Per-object state reset on zone change** (CR 400.7) —
+        // tapped / summoning_sick / damage / counters reset on the
+        // way to graveyard. In practice a card in hand already has
+        // defaults; the reset is kept for schema-uniformity with
+        // every other zone-move arm in this file (ReturnToHand /
+        // ExileTarget / Sacrifice / DiscardCard / CounterTargetSpell
+        // / DestroyTarget all apply the same reset).
+        //
+        // **amount<0 raises** loudly (defense-in-depth;
+        // parse_effect catches at register time). **amount=0 is a
+        // legal no-op** (mirrors GainLife / DrawCards / Mill /
+        // ScryN / CreateToken / SearchLibrary / PutPlusOneCounterOnSelf
+        // zero-amount conventions).
+        //
+        // **Inlining note (cross-file friction).** Per the recurring
+        // per-slice file-isolation pattern (DealDamage / ReturnToHand
+        // / Mill / DrawCards / ExileTarget / Sacrifice / DestroyTarget
+        // / TapTarget / UntapTarget / AddCounters / DiscardCard /
+        // CreateToken / AddManaToPool /
+        // SearchLibraryForBasicLandTapped / PutPlusOneCounterOnSelf
+        // / CounterTargetSpell /
+        // ReturnCreatureFromYourGraveyardToBattlefield all inline
+        // their primitives), this arm inlines the minimal
+        // `Arc::make_mut` + `Vec::remove(0)` + push-to-graveyard
+        // here.
+        Effect::DiscardSelf { amount } => {
+            if *amount < 0 {
+                return Err(PyValueError::new_err(format!(
+                    "DiscardSelf amount must be non-negative, got {amount}"
+                )));
+            }
+            if *amount == 0 {
+                return Ok(());
+            }
+            // Locate the source's controller. Walk both players'
+            // five tracked zones (hand / library / battlefield /
+            // graveyard / exile). The source may have already moved
+            // away from where it was when the effect was queued —
+            // the controller is constant across zone changes so any
+            // matching obj.id resolves the question.
+            let mut source_controller: Option<u8> = None;
+            'outer: for player in state.players.iter() {
+                for zone in [
+                    &player.hand,
+                    &player.library,
+                    &player.battlefield,
+                    &player.graveyard,
+                    &player.exile,
+                ] {
+                    for obj in zone.iter() {
+                        if obj.id == source_obj_id {
+                            source_controller = Some(obj.controller);
+                            break 'outer;
+                        }
+                    }
+                }
+            }
+            // Stack scan: the source may still be resolving (its
+            // own stack item triggered this effect). `StackItem`
+            // carries an authoritative `controller` field — use
+            // it when the zone scan didn't find the source.
+            if source_controller.is_none() {
+                if let Some(item) = state
+                    .stack
+                    .iter()
+                    .find(|i| i.source_obj_id == source_obj_id)
+                {
+                    source_controller = Some(item.controller);
+                }
+            }
+            let Some(controller) = source_controller else {
+                return Ok(()); // source not found anywhere: silent fizzle
+            };
+            let controller_idx = controller as usize;
+            // Up to `amount` discards in a row. Stop early if the
+            // hand goes empty mid-loop (Python parity with the
+            // `if not p.hand: break` short-circuit inside the
+            // amount-range loop in `DiscardSelf.resolve`).
+            let target_amount = *amount as usize;
+            for _ in 0..target_amount {
+                if state.players[controller_idx].hand.is_empty() {
+                    break;
+                }
+                // Pop hand[0] (deterministic first-slice choice).
+                let hand_mut: &mut Vec<GameObject> =
+                    Arc::make_mut(&mut state.players[controller_idx].hand);
+                let mut obj = hand_mut.remove(0);
+                // CR 400.7 zone-change reset.
+                obj.zone = ZONE_GRAVEYARD;
+                obj.tapped = false;
+                obj.summoning_sick = false;
+                obj.damage = 0;
+                obj.counters = 0;
+                Arc::make_mut(&mut state.players[controller_idx].graveyard)
+                    .push(obj);
+            }
+        }
         Effect::ReturnCreatureFromYourGraveyardToBattlefield => {
             let _ = source_obj_id; // controller-targeted, not source-relative
             let controller_idx = state.active_player as usize;
