@@ -1014,14 +1014,109 @@ fn apply_effect(state: &mut GameState, effect: &Effect) -> PyResult<()> {
                 }
             }
         }
-        Effect::CreateToken { .. } => {
-            // Round-19 foundation stub: real dispatch lands in
-            // feature/rust-tdd-resolve-create-token. Keeping the arm
-            // exhaustive (vs `_`) preserves the build-time E0004
-            // fail-loud property when future Effect variants land.
-            return Err(PyValueError::new_err(
-                "CreateToken dispatch not implemented yet (round 19 slice)",
-            ));
+        // Round-19: CreateToken. CR 701.6 — Servo/Soldier maker
+        // pattern. The active player (= controller of the resolving
+        // spell, first-slice convention mirrored from DealDamage /
+        // DrawCards / GainLife) gets ``count`` fresh GameObjects on
+        // their battlefield, all referencing ``token_printing_id``.
+        //
+        // **Each token enters with summoning sickness** (CR 302.1 —
+        // fresh permanents have summoning sickness), untapped, no
+        // damage, no counters, ``zone = ZONE_BATTLEFIELD``. Mirrors
+        // the round-7 post-resolve creature-on-bf stamp shape (also
+        // ``summoning_sick = true`` there) and the round-15
+        // ``move_object_from_graveyard_to_battlefield`` reanimation
+        // primitive.
+        //
+        // **count=0 is a legal no-op** — mirrors GainLife / DrawCards
+        // / Mill / DamageEach* zero-count conventions. **count<0
+        // raises** loudly, mirrors ScryN / DealDamage /
+        // DamageEachOpponent / DamageEachCreature raise-on-negative.
+        //
+        // **Unknown ``token_printing_id``** (not present in the
+        // registry) raises loudly — schema validation seam, the
+        // printing must exist before you can make tokens of it.
+        // Mirrors the registry-bounds check in ``load_deck``.
+        //
+        // **Fresh-id allocation** mirrors ``state_ops_deck.rs::
+        // load_deck`` and ``register_and_inject_object``: scan every
+        // zone (hand / library / battlefield / graveyard / exile) on
+        // both players for the current max id, allocate sequentially
+        // from ``max + 1``. Linear scan over all objects is fine
+        // here — token creation is not in the hot loop and the
+        // synthetic+production pools are bounded.
+        //
+        // **Inlining note (cross-file friction).** Per per-slice file-
+        // isolation we build the GameObjects + push to the active
+        // player's battlefield via ``Arc::make_mut`` directly, same
+        // shape as ``load_deck`` (which lives in a sibling file we
+        // can't touch from this slice).
+        Effect::CreateToken {
+            count,
+            token_printing_id,
+        } => {
+            if *count < 0 {
+                return Err(PyValueError::new_err(format!(
+                    "CreateToken count must be non-negative, got {count}"
+                )));
+            }
+            // Registry-bounds check up front so an unknown printing_id
+            // surfaces before any state mutation (mirrors load_deck's
+            // whole-or-nothing validation contract).
+            let token_pid = *token_printing_id;
+            if state.registry.lookup(token_pid).is_none() {
+                return Err(PyValueError::new_err(format!(
+                    "token_printing_id {token_pid} not in registry"
+                )));
+            }
+            let n = *count as usize;
+            if n == 0 {
+                return Ok(()); // legal no-op
+            }
+            let active = state.active_player;
+
+            // Allocate fresh ids: scan every zone on both players for
+            // the current max id, allocate starting at max + 1.
+            // Mirrors load_deck's allocator. Includes exile so r11+
+            // exiled objects don't collide.
+            let mut max_id: u32 = 0;
+            let mut found_any = false;
+            for player in &state.players {
+                for zone in [
+                    &player.hand,
+                    &player.library,
+                    &player.battlefield,
+                    &player.graveyard,
+                    &player.exile,
+                ] {
+                    for obj in zone.iter() {
+                        if !found_any || obj.id > max_id {
+                            max_id = obj.id;
+                            found_any = true;
+                        }
+                    }
+                }
+            }
+            let mut next_id: u32 = if found_any { max_id + 1 } else { 0 };
+
+            // Push n tokens onto the active player's battlefield via
+            // Arc::make_mut so a clone of the state pre-resolve keeps
+            // its old battlefield Vec untouched.
+            let bf: &mut Vec<GameObject> =
+                Arc::make_mut(&mut state.players[active as usize].battlefield);
+            for _ in 0..n {
+                bf.push(GameObject {
+                    id: next_id,
+                    printing_id: token_pid,
+                    controller: active,
+                    zone: ZONE_BATTLEFIELD,
+                    tapped: false,
+                    summoning_sick: true,
+                    damage: 0,
+                    counters: 0,
+                });
+                next_id += 1;
+            }
         }
     }
     Ok(())
