@@ -127,6 +127,7 @@ the test lands in a commit.
 | rust(resolve-effects-r17): DestroyTarget + DamageEachOpponent dispatch | tests_rust/test_resolve.py extend | green | feature/rust-tdd-resolve-destroy-aoe |
 | rust(mana-empty-all): empty_all_mana_pools (CR 106.4) | tests_rust/test_mana.py extend | green | feature/rust-tdd-mana-empty-phase |
 | rust(resolve-effects-r18): DamageEachCreature dispatch (CR 701.4) | tests_rust/test_resolve.py extend | green | feature/rust-tdd-resolve-damage-creatures |
+| rust(zones-regrowth): move_object_from_graveyard_to_hand primitive (CR 400.7) | tests_rust/test_zones.py extend | green | feature/rust-tdd-graveyard-to-hand |
 
 ## Build invocation reminder
 

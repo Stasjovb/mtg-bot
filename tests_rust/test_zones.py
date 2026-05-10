@@ -458,3 +458,129 @@ def test_reanimate_clone_isolation(synthetic_state):
     assert synthetic_state.find_object_zone(obj_id) == ZONE_GRAVEYARD
     assert synthetic_state.battlefield_sizes == bf_source_before
     assert synthetic_state.graveyard_sizes == gy_source_before
+
+
+# --- round-18 graveyard -> hand (Regrowth-style) ---------------------
+#
+# ``move_object_from_graveyard_to_hand(player_id, obj_id)`` is the
+# engine primitive a future "return target card from your graveyard
+# to your hand" card (Regrowth, Eternal Witness, ...) sits on top of.
+# Specific variant of ``move_object`` that ALWAYS goes graveyard ->
+# hand. Per CR 400.7, per-object state (tapped / summoning_sick /
+# damage / counters) resets on the way into the new zone.
+# ``summoning_sick`` resets to ``false`` here (not ``true`` like the
+# round-17 reanimate variant) — cards in hand have no summoning
+# sickness; that stamp is specific to entering the battlefield.
+
+
+def test_regrowth_moves_card_to_hand(synthetic_state):
+    """Graveyard has a card; regrowth -> hand +1, graveyard -1."""
+    obj_id = _put_creature_into_p0_graveyard(synthetic_state)
+    hand_before = synthetic_state.hand_sizes
+    gy_before = synthetic_state.graveyard_sizes
+
+    moved = synthetic_state.move_object_from_graveyard_to_hand(0, obj_id)
+    assert moved is True
+
+    assert synthetic_state.find_object_zone(obj_id) == ZONE_HAND
+    assert synthetic_state.hand_sizes[0] == hand_before[0] + 1
+    assert synthetic_state.graveyard_sizes[0] == gy_before[0] - 1
+    # Other player untouched.
+    assert synthetic_state.hand_sizes[1] == hand_before[1]
+    assert synthetic_state.graveyard_sizes[1] == gy_before[1]
+
+
+def test_regrowth_resets_state(synthetic_state):
+    """Per-object state (damage / counters) is reset on the zone
+    change (CR 400.7). Tapped and summoning_sick reset under the
+    hood as well, but ``is_tapped`` / ``is_summoning_sick`` only
+    read the battlefield (they return None for hand objects), so
+    the next zone-change-back-to-battlefield won't observe stale
+    flags. We round-trip the object: hand -> battlefield via the
+    round-17 reanimate primitive, then assert tapped=false and
+    summoning_sick observed after that round trip — combined with
+    the reanimate variant stamping summoning_sick=true, a tapped or
+    !summoning_sick assertion at this point would only succeed if
+    the round-18 hand path had cleared the flags first."""
+    obj_id = _put_creature_into_p0_graveyard(synthetic_state)
+    # Stamp damage / counters on the graveyard object directly.
+    assert synthetic_state.deal_damage(obj_id, 5) is True
+    assert synthetic_state.set_counters(obj_id, 3) is True
+    assert synthetic_state.get_damage(obj_id) == 5
+    assert synthetic_state.get_counters(obj_id) == 3
+
+    assert synthetic_state.move_object_from_graveyard_to_hand(0, obj_id) is True
+
+    # damage / counters observable cross-zone — reset.
+    assert synthetic_state.get_damage(obj_id) == 0
+    assert synthetic_state.get_counters(obj_id) == 0
+    # is_tapped / is_summoning_sick only read the battlefield; for a
+    # hand object they return None. Asserting None confirms the
+    # object is not on the battlefield (nothing leaked) and is
+    # cleanly readable.
+    assert synthetic_state.is_tapped(obj_id) is None
+    assert synthetic_state.is_summoning_sick(obj_id) is None
+
+
+def test_regrowth_returns_true_on_success(synthetic_state):
+    """The primitive returns True on a successful graveyard -> hand
+    move."""
+    obj_id = _put_creature_into_p0_graveyard(synthetic_state)
+    assert synthetic_state.move_object_from_graveyard_to_hand(0, obj_id) is True
+
+
+def test_regrowth_returns_false_when_id_not_in_graveyard(synthetic_state):
+    """The id exists but lives on the battlefield, not in the
+    graveyard. Returns False, no movement."""
+    obj_id = P0_FIRST_BATTLEFIELD_ID  # on the battlefield
+    assert synthetic_state.find_object_zone(obj_id) == ZONE_BATTLEFIELD
+    bf_before = synthetic_state.battlefield_sizes
+    hand_before = synthetic_state.hand_sizes
+    gy_before = synthetic_state.graveyard_sizes
+
+    moved = synthetic_state.move_object_from_graveyard_to_hand(0, obj_id)
+    assert moved is False
+
+    # Object stays where it was; no zone sizes shifted.
+    assert synthetic_state.find_object_zone(obj_id) == ZONE_BATTLEFIELD
+    assert synthetic_state.battlefield_sizes == bf_before
+    assert synthetic_state.hand_sizes == hand_before
+    assert synthetic_state.graveyard_sizes == gy_before
+
+
+def test_regrowth_returns_false_when_id_does_not_exist(synthetic_state):
+    """Far-out-of-range id returns False (no exception, no movement)."""
+    hand_before = synthetic_state.hand_sizes
+    gy_before = synthetic_state.graveyard_sizes
+    moved = synthetic_state.move_object_from_graveyard_to_hand(0, 999)
+    assert moved is False
+    assert synthetic_state.hand_sizes == hand_before
+    assert synthetic_state.graveyard_sizes == gy_before
+
+
+def test_regrowth_unknown_player_raises(synthetic_state):
+    """An out-of-range player_id raises rather than silently no-op'ing
+    — mirrors the loud-fail convention of every other player-indexed
+    primitive (life / mana / damage_to_player / search_library /
+    reanimate)."""
+    with pytest.raises((ValueError, IndexError, OverflowError)):
+        synthetic_state.move_object_from_graveyard_to_hand(7, 0)
+
+
+def test_regrowth_clone_isolation(synthetic_state):
+    """CoW canary: running the regrowth primitive on a clone leaves
+    the original GameState's zones untouched. Mirrors
+    ``test_reanimate_clone_isolation``."""
+    obj_id = _put_creature_into_p0_graveyard(synthetic_state)
+    cloned = synthetic_state.clone_once()
+    hand_source_before = synthetic_state.hand_sizes
+    gy_source_before = synthetic_state.graveyard_sizes
+
+    assert cloned.move_object_from_graveyard_to_hand(0, obj_id) is True
+
+    # Clone diverged.
+    assert cloned.find_object_zone(obj_id) == ZONE_HAND
+    # Source untouched: object still in graveyard with the same totals.
+    assert synthetic_state.find_object_zone(obj_id) == ZONE_GRAVEYARD
+    assert synthetic_state.hand_sizes == hand_source_before
+    assert synthetic_state.graveyard_sizes == gy_source_before
