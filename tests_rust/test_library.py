@@ -1,0 +1,257 @@
+"""Library / discard / scry primitives on ``GameState``.
+
+Ported from the library-mutation patterns in ``src/mtg_bot/game.py``
+(``shuffle_library``) and the discard pattern in
+``src/mtg_bot/actions.py`` (ward-discard: ``p.hand.remove(card);
+card.zone = Zone.GRAVEYARD; p.graveyard.append(card)``). On the Python
+side these are open-coded at each call site; the Rust port collapses
+them into single primitives that own membership + zone-tag semantics.
+
+**RNG choice (inline xorshift64):** to avoid a Cargo.toml race with
+sibling slices, the shuffle uses a tiny inline xorshift64 generator
+rather than pulling in the ``rand`` crate. Determinism guarantee:
+``shuffle_library_with_seed(player_id, seed)`` is a pure function of
+``(library, seed)`` — same library + same seed produces the same
+permutation, byte for byte.
+
+**"Top of library" convention** (inherited from
+``state_ops_zones.rs``): the LAST element of the library ``Vec`` is
+the top of the library. ``scry`` therefore reads the tail and returns
+ids in top-first order (last element first).
+"""
+
+from __future__ import annotations
+
+import pytest
+
+
+# `make_synthetic_state(num_battlefield=10, num_hand=7, num_library=50)`
+# lays player 0 out as:
+#   battlefield: ids 0..9
+#   hand:        ids 10..16
+#   library:     ids 17..66
+# Player 1's range starts at 67.
+P0_FIRST_BATTLEFIELD_ID = 0
+P0_FIRST_HAND_ID = 10
+P0_FIRST_LIBRARY_ID = 17
+P0_LIBRARY_SIZE = 50
+
+
+# --- Discard ----------------------------------------------------------------
+
+
+def test_discard_moves_card_to_graveyard(synthetic_state):
+    """Discarding a card from hand removes it from hand and pushes it
+    onto the graveyard. The object's identity is preserved (registry
+    name still resolves)."""
+    obj_id = P0_FIRST_HAND_ID  # an elf
+    hand_before = synthetic_state.hand_sizes
+    gy_before = synthetic_state.graveyard_sizes
+    name_before = synthetic_state.printing_name_of(obj_id)
+    assert name_before == "Llanowar Elves"
+
+    discarded = synthetic_state.discard(obj_id, 0)
+
+    assert discarded is True
+    assert synthetic_state.hand_sizes[0] == hand_before[0] - 1
+    assert synthetic_state.graveyard_sizes[0] == gy_before[0] + 1
+    # Other player untouched.
+    assert synthetic_state.hand_sizes[1] == hand_before[1]
+    assert synthetic_state.graveyard_sizes[1] == gy_before[1]
+    # Same id, same printing — found in the graveyard now.
+    assert synthetic_state.printing_name_of(obj_id) == "Llanowar Elves"
+
+
+def test_discard_unknown_id_returns_false(synthetic_state):
+    """Far-out-of-range id returns False (no exception, no zone
+    mutation)."""
+    hand_before = synthetic_state.hand_sizes
+    gy_before = synthetic_state.graveyard_sizes
+    assert synthetic_state.discard(999_999, 0) is False
+    assert synthetic_state.hand_sizes == hand_before
+    assert synthetic_state.graveyard_sizes == gy_before
+
+
+def test_discard_card_not_in_hand_returns_false(synthetic_state):
+    """Trying to discard a battlefield object: precondition fails,
+    return False, no zone mutation."""
+    obj_id = P0_FIRST_BATTLEFIELD_ID
+    bf_before = synthetic_state.battlefield_sizes
+    hand_before = synthetic_state.hand_sizes
+    gy_before = synthetic_state.graveyard_sizes
+
+    assert synthetic_state.discard(obj_id, 0) is False
+
+    # Object stayed on the battlefield.
+    assert synthetic_state.battlefield_sizes == bf_before
+    assert synthetic_state.hand_sizes == hand_before
+    assert synthetic_state.graveyard_sizes == gy_before
+
+
+def test_discard_clone_does_not_affect_original(synthetic_state):
+    """Load-bearing CoW canary: discarding on a clone must not leak
+    back into the source state."""
+    obj_id = P0_FIRST_HAND_ID
+    cloned = synthetic_state.clone_once()
+    hand_source_before = synthetic_state.hand_sizes
+    gy_source_before = synthetic_state.graveyard_sizes
+
+    assert cloned.discard(obj_id, 0) is True
+
+    # Clone diverged.
+    assert cloned.hand_sizes[0] == hand_source_before[0] - 1
+    assert cloned.graveyard_sizes[0] == gy_source_before[0] + 1
+    # Source untouched.
+    assert synthetic_state.hand_sizes == hand_source_before
+    assert synthetic_state.graveyard_sizes == gy_source_before
+
+
+# --- Shuffle ---------------------------------------------------------------
+
+
+def _library_obj_ids(state, player_id, scry_n):
+    """Snapshot the player's library obj_ids by scrying the whole
+    thing (top-first). The library size is at most P0_LIBRARY_SIZE
+    here, so scry(player, P0_LIBRARY_SIZE) returns the entire library
+    in top-first order without mutating it."""
+    return state.scry(player_id, scry_n)
+
+
+def test_shuffle_with_seed_is_deterministic(synthetic_state):
+    """Same source state cloned twice + shuffled with the same seed
+    produces identical library orders. Pure function of (library,
+    seed)."""
+    a = synthetic_state.clone_once()
+    b = synthetic_state.clone_once()
+
+    a.shuffle_library_with_seed(0, 42)
+    b.shuffle_library_with_seed(0, 42)
+
+    a_order = _library_obj_ids(a, 0, P0_LIBRARY_SIZE)
+    b_order = _library_obj_ids(b, 0, P0_LIBRARY_SIZE)
+
+    assert a_order == b_order
+    assert len(a_order) == P0_LIBRARY_SIZE
+
+
+def test_shuffle_with_different_seeds_likely_different(synthetic_state):
+    """Different seeds produce different orders. Probabilistic, but
+    for a 50-card library two random shuffles colliding is ~1/50!,
+    i.e. effectively never."""
+    a = synthetic_state.clone_once()
+    b = synthetic_state.clone_once()
+
+    a.shuffle_library_with_seed(0, 42)
+    b.shuffle_library_with_seed(0, 99)
+
+    a_order = _library_obj_ids(a, 0, P0_LIBRARY_SIZE)
+    b_order = _library_obj_ids(b, 0, P0_LIBRARY_SIZE)
+
+    assert a_order != b_order
+
+
+def test_shuffle_preserves_card_set(synthetic_state):
+    """Shuffle is a permutation: same set of obj_ids before and after,
+    no duplicates, no losses."""
+    before = sorted(_library_obj_ids(synthetic_state, 0, P0_LIBRARY_SIZE))
+    synthetic_state.shuffle_library_with_seed(0, 12345)
+    after = sorted(_library_obj_ids(synthetic_state, 0, P0_LIBRARY_SIZE))
+    assert before == after
+    assert len(set(after)) == P0_LIBRARY_SIZE
+
+
+def test_shuffle_clone_does_not_affect_original(synthetic_state):
+    """Shuffling a clone's library must not leak back into the
+    source. CoW canary."""
+    cloned = synthetic_state.clone_once()
+    source_before = _library_obj_ids(synthetic_state, 0, P0_LIBRARY_SIZE)
+
+    cloned.shuffle_library_with_seed(0, 7)
+    cloned_after = _library_obj_ids(cloned, 0, P0_LIBRARY_SIZE)
+
+    # Source still in original order.
+    source_after = _library_obj_ids(synthetic_state, 0, P0_LIBRARY_SIZE)
+    assert source_after == source_before
+    # Clone actually got shuffled (it shouldn't match the source for
+    # a 50-card library with any non-degenerate seed).
+    assert cloned_after != source_before
+
+
+# --- Scry ------------------------------------------------------------------
+
+
+def test_scry_top_n_returns_n_obj_ids_in_top_order(synthetic_state):
+    """``scry(0, 3)`` returns the top 3 obj_ids of player 0's library
+    in top-first order. Top of library = LAST element of the Vec, so
+    the returned list reads the tail in reverse."""
+    top3 = synthetic_state.scry(0, 3)
+    assert len(top3) == 3
+    # Library was built as ids 17..66 in push order, so the LAST 3
+    # pushed are 64, 65, 66; top-first iteration yields 66, 65, 64.
+    assert top3 == [66, 65, 64]
+
+
+def test_scry_more_than_library_size_returns_what_exists(synthetic_state):
+    """Scry N where N > library size: clamp to library size, return
+    everything that exists (top-first)."""
+    all_ids = synthetic_state.scry(0, 100)
+    assert len(all_ids) == P0_LIBRARY_SIZE
+
+
+def test_scry_zero_returns_empty(synthetic_state):
+    assert synthetic_state.scry(0, 0) == []
+
+
+def test_scry_does_not_mutate_library(synthetic_state):
+    """Scry is a peek — library size is unchanged after the call."""
+    lib_before = synthetic_state.library_sizes
+    _ = synthetic_state.scry(0, 5)
+    assert synthetic_state.library_sizes == lib_before
+
+
+def test_apply_scry_keep_on_top_preserves_order(synthetic_state):
+    """Scry the top 3, put all 3 back on top in the same order:
+    library is unchanged."""
+    before = _library_obj_ids(synthetic_state, 0, P0_LIBRARY_SIZE)
+    top3 = synthetic_state.scry(0, 3)
+
+    ok = synthetic_state.apply_scry(0, top3, [])
+    assert ok is True
+
+    after = _library_obj_ids(synthetic_state, 0, P0_LIBRARY_SIZE)
+    assert after == before
+    assert synthetic_state.library_sizes[0] == P0_LIBRARY_SIZE
+
+
+def test_apply_scry_send_some_to_bottom_reorders_library(synthetic_state):
+    """Scry top 3 (ids 66, 65, 64), keep 66 + 65 on top, send 64 to
+    the bottom. Library size unchanged; new top-first reads 66, 65,
+    then-the-old-fourth-card (id 63); the bottom card (formerly id
+    17) is now id 64."""
+    top3 = synthetic_state.scry(0, 3)
+    assert top3 == [66, 65, 64]
+
+    ok = synthetic_state.apply_scry(0, [66, 65], [64])
+    assert ok is True
+
+    assert synthetic_state.library_sizes[0] == P0_LIBRARY_SIZE
+    new_top3 = synthetic_state.scry(0, 3)
+    assert new_top3 == [66, 65, 63]
+
+    # Old bottom card (id 17) is now second-from-bottom; new bottom
+    # is id 64. Read whole library and check the very bottom (= first
+    # element of the Vec, = LAST element of a top-first scry).
+    all_ids = synthetic_state.scry(0, P0_LIBRARY_SIZE)
+    assert all_ids[-1] == 64
+    assert all_ids[-2] == 17
+
+
+def test_apply_scry_validation_failure_returns_false(synthetic_state):
+    """If the union of top_ids + bottom_ids does not match the top N
+    we peeked at, validation fails and the library is unchanged."""
+    before = _library_obj_ids(synthetic_state, 0, P0_LIBRARY_SIZE)
+    # Pretend we scryed 2, but pass an id that isn't in the top 2.
+    ok = synthetic_state.apply_scry(0, [66, 999_999], [])
+    assert ok is False
+    after = _library_obj_ids(synthetic_state, 0, P0_LIBRARY_SIZE)
+    assert after == before
