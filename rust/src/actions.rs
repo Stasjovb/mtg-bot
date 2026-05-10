@@ -76,6 +76,40 @@ pub enum Action {
     /// game — the 3rd-most-frequent variant after `PassPriority` and
     /// `PlayLand`.
     DeclareAttackers { attacker_ids: Vec<u32> },
+    /// Declare blocker assignments for combat (CR 509.1).
+    /// `assignments` is a list of `(blocker_id, attacker_id)` pairs
+    /// where each blocker is on the defending player's battlefield
+    /// and each attacker is on the attacking player's battlefield +
+    /// currently in `state.attackers`. The round-5 `declare_blocker`
+    /// primitive validates each pair (creature predicate, untapped
+    /// blocker, attacker-in-attackers, flying/skulk gates); ineligible
+    /// pairs are silently rejected by the primitive's `bool` return,
+    /// mirroring the Python side's filtering behavior. Pass an empty
+    /// list to block with nothing.
+    ///
+    /// **Pair shape: `(blocker_id, attacker_id)`** — the same order as
+    /// the underlying `declare_blocker(blocker_id, attacker_id)`
+    /// primitive's argument list. Note this is the OPPOSITE order from
+    /// `state.blockers` (which stores `(attacker_id, blocker_id)` pairs
+    /// for fast attacker-keyed lookups during damage assignment).
+    /// `apply_action` translates by passing `(blocker, attacker)`
+    /// straight through to the primitive, which handles the storage-side
+    /// reorder.
+    ///
+    /// **Iteration order is preserved.** `apply_action` calls
+    /// `declare_blocker` once per pair in input order. The order matters
+    /// for damage assignment when multiple blockers block the same
+    /// attacker — the round-5 combat-damage assignment gives the
+    /// attacker's power to the FIRST declared blocker for that
+    /// attacker. Same blocker can't be in multiple pairs (one block per
+    /// blocker, per CR 509.1c — but this slice doesn't enforce that
+    /// gate; the caller / future `legal_decisions` enumerator owns it).
+    /// Same attacker CAN appear in multiple pairs (multi-block).
+    ///
+    /// Round-20 frequency: 5 of 420 decisions (~1.2%) in the sample
+    /// game — the 4th-most-frequent variant after `PassPriority`,
+    /// `PlayLand`, and `DeclareAttackers`.
+    DeclareBlockers { assignments: Vec<(u32, u32)> },
 }
 
 // --- dict -> Rust ------------------------------------------------
@@ -122,8 +156,46 @@ pub fn parse_action(dict: &Bound<'_, PyDict>) -> PyResult<Action> {
             }
             Ok(Action::DeclareAttackers { attacker_ids })
         }
+        "declare_blockers" => {
+            // Same `try_iter` shape as `declare_attackers` at the outer
+            // level — accept any iterable (list, tuple, set, frozenset,
+            // generator) of pair-shaped inner items. For the INNER
+            // pair, we iterate again rather than `extract::<(u32, u32)>()`
+            // because PyO3's tuple-extract is strict: it accepts only
+            // Python `tuple`, rejecting `list` with
+            // `TypeError: 'list' object cannot be converted to 'PyTuple'`.
+            // Python's `DeclareBlockers(assignments: tuple[tuple[int,
+            // int], ...])` dataclass field is a tuple of tuples, but
+            // the on-the-wire JSON-style shape often uses lists of
+            // lists — the bridge accepts both. We pre-collect the
+            // inner iteration to validate the exact-2 shape before
+            // unpacking; wrong arity (`3-tuple, 1-list`) raises
+            // `ValueError` here. Wrong inner element type (string,
+            // None) bubbles up as `TypeError` from `extract::<u32>`.
+            let raw = require(dict, "assignments")?;
+            let mut assignments: Vec<(u32, u32)> = Vec::new();
+            for item in raw.try_iter()? {
+                let item = item?;
+                let mut parts = Vec::with_capacity(2);
+                for elem in item.try_iter()? {
+                    parts.push(elem?.extract::<u32>()?);
+                    if parts.len() > 2 {
+                        return Err(PyValueError::new_err(
+                            "declare_blockers assignment must be a 2-element (blocker_id, attacker_id) pair",
+                        ));
+                    }
+                }
+                if parts.len() != 2 {
+                    return Err(PyValueError::new_err(
+                        "declare_blockers assignment must be a 2-element (blocker_id, attacker_id) pair",
+                    ));
+                }
+                assignments.push((parts[0], parts[1]));
+            }
+            Ok(Action::DeclareBlockers { assignments })
+        }
         other => Err(PyValueError::new_err(format!(
-            "unknown action kind {other:?}; valid: pass_priority, play_land, declare_attackers"
+            "unknown action kind {other:?}; valid: pass_priority, play_land, declare_attackers, declare_blockers"
         ))),
     }
 }
@@ -157,6 +229,17 @@ pub fn action_to_pydict<'py>(
             // yields the same Action) is preserved because `extract::<
             // Vec<u32>>()` on a list reads back the same order.
             d.set_item("attacker_ids", attacker_ids.clone())?;
+        }
+        Action::DeclareBlockers { assignments } => {
+            d.set_item("kind", "declare_blockers")?;
+            // `Vec<(u32, u32)>` round-trips through PyO3 as a Python
+            // list of 2-tuples. Iteration order is preserved by the
+            // PyO3 conversion. The inbound parser accepts any iterable
+            // of 2-tuples / 2-element lists, so this list-of-tuples
+            // shape is one valid input shape (the canonical wire
+            // shape), and `parse_action(action_to_pydict(action))`
+            // returns the same `Action::DeclareBlockers`.
+            d.set_item("assignments", assignments.clone())?;
         }
     }
     Ok(d)

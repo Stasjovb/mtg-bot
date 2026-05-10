@@ -10,11 +10,12 @@
 //!
 //! Round 22 wired `PassPriority`; round 23 added `PlayLand` (10 of 420
 //! decisions / ~2.4% in round-20's sample game — the 4th-most-frequent
-//! variant) and `DeclareAttackers` (16 of 420 / ~3.8% — the
-//! 3rd-most-frequent variant). Future slices grow the match arm
-//! (CastSpell, Activate, ...) plus a `legal_decisions` enumerator and
-//! a `state.consecutive_passes` field for the "both passed -> resolve
-//! / advance" composition.
+//! variant), `DeclareAttackers` (16 of 420 / ~3.8% — the
+//! 3rd-most-frequent variant), and `DeclareBlockers` (5 of 420 /
+//! ~1.2% — the 4th-most-frequent non-pass variant). Future slices
+//! grow the match arm (CastSpell, Activate, ...) plus a
+//! `legal_decisions` enumerator and a `state.consecutive_passes`
+//! field for the "both passed -> resolve / advance" composition.
 //!
 //! ## Actor convention for hand-targeting actions
 //!
@@ -40,6 +41,16 @@
 //! when this fires), but the dispatch loop still iterates with the
 //! Vec's stable order so callers can pin a deterministic application
 //! order via sorting the set before passing.
+//!
+//! `DeclareBlockers` is symmetric: the round-5
+//! `declare_blocker(blocker_id, attacker_id)` primitive takes only the
+//! two object ids and reads the owning player from the battlefield
+//! index, so the dispatcher doesn't pass a player_id either. The
+//! dispatch loop iterates the `Vec<(u32, u32)>` of pairs in input
+//! order — matters for damage assignment when multiple blockers
+//! block the same attacker (the first declared blocker eats the
+//! attacker's full damage under the round-5 single-blocker damage
+//! model).
 //!
 //! ## Cross-file dispatch pattern (round-16)
 //!
@@ -83,11 +94,17 @@ impl GameState {
     ///   Ineligible ids are silently rejected by the primitive's
     ///   `bool` return — mirrors Python's `_declare_attackers`
     ///   filtering behavior.
+    /// - `{"kind": "declare_blockers", "assignments":
+    ///   [(<u32>, <u32>), ...]}` → iterates the Vec of pairs and calls
+    ///   `declare_blocker(blocker_id, attacker_id)` once per pair in
+    ///   input order (round 23). Ineligible pairs are silently
+    ///   rejected by the primitive's `bool` return.
     ///
     /// Unknown `kind` raises `ValueError`; missing `kind` or other
     /// required keys (e.g. `card_id` for `play_land`,
-    /// `attacker_ids` for `declare_attackers`) raise `KeyError`.
-    /// Both bubble up from `actions::parse_action`.
+    /// `attacker_ids` for `declare_attackers`, `assignments` for
+    /// `declare_blockers`) raise `KeyError`. Both bubble up from
+    /// `actions::parse_action`.
     fn apply_action(slf: Bound<'_, Self>, action_dict: &Bound<'_, PyDict>) -> PyResult<()> {
         let action = parse_action(action_dict)?;
         match action {
@@ -132,6 +149,31 @@ impl GameState {
                 // before passing (the parity harness does this).
                 for attacker_id in attacker_ids {
                     slf.call_method1("declare_attacker", (attacker_id,))?;
+                }
+            }
+            Action::DeclareBlockers { assignments } => {
+                // Same cross-file pattern: iterate the `Vec<(u32, u32)>`
+                // of `(blocker_id, attacker_id)` pairs and dispatch one
+                // `declare_blocker(blocker_id, attacker_id)` per pair.
+                // The primitive takes both ids (not a player_id) — it
+                // reads the owning player from the battlefield index,
+                // so the dispatcher doesn't pre-resolve an actor here.
+                // Ineligible pairs (tapped blocker, non-creature
+                // blocker, attacker not in `state.attackers`, flying/
+                // skulk gate failure, unknown ids) are silently
+                // rejected by the primitive's `bool` return; we
+                // discard the bool to match the silent-skip behavior
+                // of the `DeclareAttackers` arm above.
+                //
+                // Iteration order is the Vec's order — stable from
+                // `parse_action`'s `try_iter` + per-element extract,
+                // which preserves the Python iterable's iteration
+                // order. Order matters: when multiple blockers block
+                // the same attacker, the round-5 combat-damage model
+                // assigns the attacker's power to the first declared
+                // blocker for that attacker.
+                for (blocker_id, attacker_id) in assignments {
+                    slf.call_method1("declare_blocker", (blocker_id, attacker_id))?;
                 }
             }
         }
