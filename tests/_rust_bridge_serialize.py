@@ -135,6 +135,14 @@ def serialize_printing(printing: CardPrinting) -> dict[str, Any]:
     side has no slot for them. This is correct for the first-slice
     vocabulary (one ``DealDamage`` variant); a richer Rust schema
     will need this serializer to grow per added field.
+
+    Round-3 extension: when ``printing.power`` / ``printing.toughness``
+    are set (creature printings), pass them through as integers.
+    The Python ``CardPrinting`` doesn't carry a ``mana_produced``
+    field — mana production is encoded as activated abilities and
+    is out of vocabulary for this slice — so the bridge field is
+    omitted when serializing real cards. Synthetic registry seeds
+    in ``state.rs`` set it directly.
     """
     out: dict[str, Any] = {
         "name": printing.name,
@@ -142,4 +150,8 @@ def serialize_printing(printing: CardPrinting) -> dict[str, Any]:
     }
     if printing.spell_effect is not None:
         out["effects"] = [serialize_effect(printing.spell_effect)]
+    if printing.power is not None:
+        out["power"] = int(printing.power)
+    if printing.toughness is not None:
+        out["toughness"] = int(printing.toughness)
     return out

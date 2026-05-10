@@ -61,6 +61,23 @@ pub struct CardPrinting {
     pub name: Arc<str>,
     pub mana_cost: ManaCost,
     pub effects: Vec<Effect>,
+    /// Printed power. `None` for non-creatures (instants, sorceries,
+    /// non-creature lands, etc.). Stored as `i16` to leave headroom
+    /// for negatives produced by anthem-like effects (the printed
+    /// value itself is always non-negative).
+    pub power: Option<i16>,
+    /// Printed toughness. `None` for non-creatures. Same rationale
+    /// as `power` for the `i16` choice.
+    pub toughness: Option<i16>,
+    /// Mana the printing produces when tapped, expressed as a list
+    /// of single-letter color symbols (W/U/B/R/G/C). `None` for
+    /// printings that don't produce mana on tap. A single-color
+    /// land like Forest stores `Some(vec!["G"])`. Vec-of-strings
+    /// (rather than a single String) leaves room for "tap for {G}{G}"
+    /// or future multi-pip producers without re-shaping the field.
+    /// "Tap for one of any color" / hybrid producers will need a
+    /// richer schema and are deferred.
+    pub mana_produced: Option<Vec<String>>,
 }
 
 /// Plain Rust container for the printings table. Held behind an
@@ -147,6 +164,34 @@ fn parse_effect(dict: &Bound<'_, PyDict>) -> PyResult<Effect> {
     }
 }
 
+/// Validate that a string is one of the closed mana-color vocab
+/// (W/U/B/R/G/C). Returns the input on success; raises ValueError
+/// otherwise. Shared by `parse_mana_produced` and is callable from
+/// the `mana_produced` field validator.
+fn validate_mana_symbol(sym: &str) -> PyResult<()> {
+    match sym {
+        "W" | "U" | "B" | "R" | "G" | "C" => Ok(()),
+        other => Err(PyValueError::new_err(format!(
+            "unknown mana symbol {other:?} in mana_produced; valid: W, U, B, R, G, C"
+        ))),
+    }
+}
+
+fn parse_mana_produced(any: Bound<'_, PyAny>) -> PyResult<Vec<String>> {
+    let mut out: Vec<String> = Vec::new();
+    for item in any.try_iter().map_err(|_| {
+        PyValueError::new_err("mana_produced must be an iterable of color strings")
+    })? {
+        let item = item?;
+        let s: String = item.extract().map_err(|_| {
+            PyValueError::new_err("mana_produced entries must be strings")
+        })?;
+        validate_mana_symbol(&s)?;
+        out.push(s);
+    }
+    Ok(out)
+}
+
 pub fn parse_printing(dict: &Bound<'_, PyDict>) -> PyResult<CardPrinting> {
     let name: String = require(dict, "name")?.extract()?;
     let mana_cost = match dict.get_item("mana_cost")? {
@@ -172,10 +217,33 @@ pub fn parse_printing(dict: &Bound<'_, PyDict>) -> PyResult<CardPrinting> {
         }
         None => Vec::new(),
     };
+    let power = match dict.get_item("power")? {
+        Some(p) => Some(p.extract::<i16>().map_err(|e| {
+            PyValueError::new_err(format!(
+                "power must be an integer (got: {e})"
+            ))
+        })?),
+        None => None,
+    };
+    let toughness = match dict.get_item("toughness")? {
+        Some(t) => Some(t.extract::<i16>().map_err(|e| {
+            PyValueError::new_err(format!(
+                "toughness must be an integer (got: {e})"
+            ))
+        })?),
+        None => None,
+    };
+    let mana_produced = match dict.get_item("mana_produced")? {
+        Some(mp_any) => Some(parse_mana_produced(mp_any)?),
+        None => None,
+    };
     Ok(CardPrinting {
         name: Arc::from(name),
         mana_cost,
         effects,
+        power,
+        toughness,
+        mana_produced,
     })
 }
 
@@ -294,6 +362,23 @@ impl Registry {
             .iter()
             .map(|e| effect_to_pydict(py, e))
             .collect()
+    }
+
+    /// Printed power for a creature printing; `None` for non-creatures.
+    fn get_printing_power(&self, id: u32) -> PyResult<Option<i16>> {
+        Ok(self.lookup(id)?.power)
+    }
+
+    /// Printed toughness for a creature printing; `None` for non-creatures.
+    fn get_printing_toughness(&self, id: u32) -> PyResult<Option<i16>> {
+        Ok(self.lookup(id)?.toughness)
+    }
+
+    /// Mana symbols this printing produces when tapped, or `None`
+    /// when the printing has no mana-production behavior. A
+    /// single-color land like Forest returns `Some(["G"])`.
+    fn get_printing_mana_produced(&self, id: u32) -> PyResult<Option<Vec<String>>> {
+        Ok(self.lookup(id)?.mana_produced.clone())
     }
 
     /// Microbench helper: round-trip ``n`` copies of the same dict

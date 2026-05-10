@@ -192,6 +192,71 @@ def test_target_filter_round_trip_creature_and_player():
 # ---------------------------------------------------------------------------
 
 
+def test_monoist_sentry_creature_pt_round_trips():
+    """Round-trip a real EoE creature's printed name + mana cost +
+    P/T through the bridge. Picked **Monoist Sentry** because it has
+    the shortest oracle text among EoE creatures (single keyword
+    ``Defender``); EoE has no truly-vanilla creatures, but Defender
+    is purely a state-based-action / combat marker and the bridge
+    has no slot for it yet — the round-trip therefore deliberately
+    drops the ability and asserts only the bridge-vocabulary fields
+    survive. The Rust side stores `spell_effect=None` for permanent
+    spells, which matches what the parser emits. When the abilities
+    schema lands (a future slice), the rejection-path test will
+    guide the move to a richer vocabulary.
+
+    Bombard's parity test (above) already locks in the spell-effect
+    path; this one extends coverage to the creature-shaped path
+    that the round-3 P/T extension introduced.
+    """
+    prints = get_active_source().get_printings()
+    sentry = prints["Monoist Sentry"]
+    # Sanity-check the parser's output matches what the bridge ingests.
+    assert sentry.spell_effect is None
+    assert sentry.power == 4
+    assert sentry.toughness == 1
+
+    payload = serialize_printing(sentry)
+    assert payload == {
+        "name": "Monoist Sentry",
+        "mana_cost": {"B": 1},
+        "power": 4,
+        "toughness": 1,
+    }
+
+    reg = mtg_bot_engine.Registry()
+    pid = reg.register_printing(payload)
+    assert reg.get_printing_name(pid) == "Monoist Sentry"
+    assert dict(reg.get_printing_mana_cost(pid)) == {"B": 1}
+    assert reg.get_printing_power(pid) == 4
+    assert reg.get_printing_toughness(pid) == 1
+    # No mana_produced on a creature parsed from oracle text — the
+    # Python parser doesn't emit one, the serializer omits it, and
+    # the bridge defaults to None.
+    assert reg.get_printing_mana_produced(pid) is None
+    # Permanent spells carry no `effects` row in this vocabulary.
+    assert reg.get_printing_effects(pid) == []
+
+
+def test_bombard_pt_fields_omitted_after_extension():
+    """Locks in: the round-3 bridge extension does NOT regress
+    Bombard (an instant). Its serialized payload still has no
+    ``power`` / ``toughness`` / ``mana_produced`` keys, and the
+    registry returns None for all three lookups."""
+    prints = get_active_source().get_printings()
+    bombard = prints["Bombard"]
+    payload = serialize_printing(bombard)
+    assert "power" not in payload
+    assert "toughness" not in payload
+    assert "mana_produced" not in payload
+
+    reg = mtg_bot_engine.Registry()
+    pid = reg.register_printing(payload)
+    assert reg.get_printing_power(pid) is None
+    assert reg.get_printing_toughness(pid) is None
+    assert reg.get_printing_mana_produced(pid) is None
+
+
 def test_synthetic_dealdamage_to_target_creature_round_trips():
     """Construct a ``CardPrinting`` directly via the production
     classes (no oracle-text parsing) carrying a

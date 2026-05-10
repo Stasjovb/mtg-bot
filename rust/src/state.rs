@@ -244,11 +244,24 @@ pub fn make_synthetic_state(
     num_library: usize,
 ) -> GameState {
     // Build the registry up-front, snapshot it, share the Arc.
+    //
+    // Round-3 bridge extension: each printing now carries optional
+    // `power` / `toughness` / `mana_produced`. Forest is non-creature
+    // (no P/T) but produces {G}; Grizzly Bears is a 2/2 with no
+    // mana production; Llanowar Elves is a 1/1 that for first-slice
+    // we model as if `mana_produced` were intrinsic (the real card's
+    // "{T}: Add {G}" is an activated ability, but the abilities
+    // schema doesn't exist yet — see the docstring on `tap_for_mana`
+    // in state_ops_mana.rs and the `SEARCH_LIMITATIONS.md` entry
+    // referenced from this slice's commit).
     let mut builder = Registry::default();
     let forest_pid = builder.push_printing(CardPrinting {
         name: Arc::from("Forest"),
         mana_cost: ManaCost::default(),
         effects: Vec::new(),
+        power: None,
+        toughness: None,
+        mana_produced: Some(vec!["G".to_string()]),
     });
     let bears_pid = builder.push_printing(CardPrinting {
         name: Arc::from("Grizzly Bears"),
@@ -258,6 +271,9 @@ pub fn make_synthetic_state(
             ..ManaCost::default()
         },
         effects: Vec::new(),
+        power: Some(2),
+        toughness: Some(2),
+        mana_produced: None,
     });
     let elves_pid = builder.push_printing(CardPrinting {
         name: Arc::from("Llanowar Elves"),
@@ -266,6 +282,13 @@ pub fn make_synthetic_state(
             ..ManaCost::default()
         },
         effects: Vec::new(),
+        power: Some(1),
+        toughness: Some(1),
+        // Oversimplification: real Llanowar Elves has the activated
+        // ability "{T}: Add {G}". Until the ability schema lands
+        // we treat `mana_produced` on a creature the same way we
+        // treat it on a land — `tap_for_mana` succeeds for either.
+        mana_produced: Some(vec!["G".to_string()]),
     });
     let registry = builder.snapshot();
 
