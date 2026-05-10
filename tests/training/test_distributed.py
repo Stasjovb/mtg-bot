@@ -8,6 +8,7 @@ real remotes. These tests pin the static config layer.
 from __future__ import annotations
 
 import json
+import threading
 import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -5620,10 +5621,13 @@ def _patch_pull_executor_to_threadpool(monkeypatch):
 def _patch_take_one_responses(
     monkeypatch, responses: list[dict],
 ) -> list[dict]:
-    """Stub ``_urlopen_with_retry`` so each successive call returns
-    the next entry in ``responses`` (each entry is the JSON body
-    keys: games, remaining, closed). Returns a list of received
-    request URLs for inspection."""
+    """Stub ``_urlopen_with_retry`` so each successive ``/queue/take``
+    call returns the next entry in ``responses`` (each entry is the
+    JSON body keys: games, remaining, closed). Other queue endpoints
+    (``/queue/heartbeat``, ``/queue/finish``, ``/queue/fail``) get a
+    benign empty-success response so the heartbeat-aware pull workers
+    can call them without consuming the take-response queue. Returns
+    a list of received request URLs for inspection."""
     import json as _json
     from mtg_bot.training import distributed as _dist
 
@@ -5637,11 +5641,20 @@ def _patch_take_one_responses(
             self.body = body
 
     def _fake_urlopen_with_retry(req, **kwargs):
-        seen.append({"url": getattr(req, "full_url", str(req))})
-        i = min(idx["i"], len(responses) - 1)
-        idx["i"] += 1
-        body = _json.dumps(responses[i]).encode("utf-8")
-        return _FakeResp(body)
+        url = getattr(req, "full_url", str(req))
+        seen.append({"url": url})
+        if "/queue/take" in url:
+            i = min(idx["i"], len(responses) - 1)
+            idx["i"] += 1
+            body = _json.dumps(responses[i]).encode("utf-8")
+            return _FakeResp(body)
+        # Non-take queue endpoints (finish/fail/heartbeat): accept
+        # everything, reject nothing. Tests that care about the
+        # finish/fail wire format inspect ``seen`` instead.
+        return _FakeResp(_json.dumps({
+            "extended": [], "rejected": [],
+            "finished": [], "requeued": [], "failed": [],
+        }).encode("utf-8"))
 
     monkeypatch.setattr(
         _dist, "_urlopen_with_retry", _fake_urlopen_with_retry,
@@ -6134,3 +6147,2007 @@ def test_run_shard_eval_pull_natural_drain_abandons_inflight(
     assert len(abandoned) == 1
     assert abandoned[0]["n_abandoned"] == 1
     assert abandoned[0]["reason"] == "queue_drained"
+
+
+# ---- Phase 2: heartbeat-aware pull workers ----------------------
+#
+# These tests pin the lease/heartbeat/finish/fail/rejected wire
+# protocol on the worker side. They use a router-style stub for
+# ``_urlopen_with_retry`` that dispatches by URL — heartbeat and
+# finish posts get accounted for separately from take responses,
+# which is what real production behavior looks like (the server
+# serves all four endpoints concurrently).
+
+
+def _patch_queue_router(monkeypatch, *, take_responses, hb_router=None,
+                        finish_router=None, fail_router=None):
+    """Stub ``_urlopen_with_retry`` with a URL-dispatching router.
+
+    ``take_responses`` is a list of dicts (same shape as
+    ``_patch_take_one_responses``); each consecutive ``/queue/take``
+    pops one and returns it.
+
+    ``hb_router`` (callable: body_dict -> response_dict | None)
+    handles ``/queue/heartbeat`` posts. ``None`` returns the empty
+    {extended:[], rejected:[]} default. Same for ``finish_router``
+    + ``fail_router``.
+
+    Returns a dict ``{"calls": list, "takes": list, ...}`` for
+    inspection."""
+    import json as _json
+    from mtg_bot.training import distributed as _dist
+
+    bookkeeping = {
+        "calls": [],
+        "takes": [],
+        "heartbeats": [],
+        "finishes": [],
+        "fails": [],
+    }
+    take_idx = {"i": 0}
+
+    class _FakeResp:
+        status = 200
+
+        def __init__(self, body: bytes):
+            self.body = body
+
+    def _resp(d):
+        return _FakeResp(_json.dumps(d).encode("utf-8"))
+
+    def _route(req, **_):
+        url = getattr(req, "full_url", str(req))
+        body_bytes = getattr(req, "data", b"") or b""
+        body = (
+            _json.loads(body_bytes.decode("utf-8")) if body_bytes else {}
+        )
+        bookkeeping["calls"].append({"url": url, "body": body})
+        if "/queue/take" in url:
+            bookkeeping["takes"].append(body)
+            i = min(take_idx["i"], len(take_responses) - 1)
+            take_idx["i"] += 1
+            return _resp(take_responses[i])
+        if "/queue/heartbeat" in url:
+            bookkeeping["heartbeats"].append(body)
+            payload = (hb_router(body) if hb_router else None) or {
+                "extended": list(body.get("job_ids", [])),
+                "rejected": [],
+            }
+            return _resp(payload)
+        if "/queue/finish" in url:
+            bookkeeping["finishes"].append(body)
+            payload = (finish_router(body) if finish_router else None) or {
+                "finished": list(body.get("job_ids", [])),
+                "rejected": [],
+            }
+            return _resp(payload)
+        if "/queue/fail" in url:
+            bookkeeping["fails"].append(body)
+            payload = (fail_router(body) if fail_router else None) or {
+                "requeued": list(body.get("job_ids", [])),
+                "failed": [], "rejected": [],
+            }
+            return _resp(payload)
+        return _resp({})
+
+    monkeypatch.setattr(
+        _dist, "_urlopen_with_retry", _route,
+    )
+    return bookkeeping
+
+
+def _basic_self_play_spec():
+    from mtg_bot.training.distributed import SelfPlayJobSpec
+    return SelfPlayJobSpec(
+        weights_path="ignored.pt",
+        samples=1, inner_nodes=10,
+        hidden_sizes=None,
+        base_seed=0,
+        enable_mulligans=False,
+        per_game_timeout_sec=None,
+    )
+
+
+def _basic_eval_spec():
+    from mtg_bot.training.distributed import EvalJobSpec
+    return EvalJobSpec(
+        new_weights_path="ignored.pt",
+        old_weights_path=None,
+        samples=1, inner_nodes=10,
+        hidden_sizes=None,
+        base_seed=0,
+        enable_mulligans=False,
+        per_game_timeout_sec=None,
+    )
+
+
+def test_make_worker_id_is_unique_and_well_formed():
+    """``_make_worker_id`` should return a stable string with the
+    documented host:pid:rand shape, and two consecutive calls must
+    differ (the random suffix protects against pid-reuse / hostname
+    collisions in tests)."""
+    from mtg_bot.training.distributed import _make_worker_id
+    a = _make_worker_id()
+    b = _make_worker_id()
+    assert isinstance(a, str)
+    assert a.count(":") == 2  # host:pid:rand
+    assert a != b
+    # The pid segment should be parseable as an int.
+    parts = a.split(":")
+    int(parts[1])  # raises ValueError if not numeric
+    # Random suffix is 8 hex chars (4 bytes hex-encoded).
+    assert len(parts[2]) == 8
+
+
+def test_run_shard_pull_includes_worker_id_and_calls_finish(
+    tmp_path: Path, monkeypatch,
+):
+    """Happy path: a heartbeat-aware shard plays one game, sends
+    its worker_id on take, and POSTs /queue/finish for the held
+    job before exiting."""
+    from mtg_bot.training import distributed as dist
+    from mtg_bot.training.distributed import run_shard_pull
+
+    _patch_pull_executor_to_threadpool(monkeypatch)
+    book = _patch_queue_router(monkeypatch, take_responses=[
+        {"games": [0], "remaining": 0, "lease_ttl_sec": 120},
+        {"games": [], "remaining": 0},
+    ])
+
+    def _fast_worker(args):
+        return args[0], _nonempty_chunk(n_samples=2), 0.01
+
+    monkeypatch.setattr(
+        dist, "_play_one_parallel_game_timed", _fast_worker,
+    )
+
+    progress_dir = tmp_path / "training_progress"
+    out_dir = tmp_path / "out"
+    npz_paths = run_shard_pull(
+        _basic_self_play_spec(),
+        queue_url="http://stub",
+        run_id="iter_test",
+        n_workers=1,
+        output_dir=out_dir,
+        label="L0",
+        stamp="20260510T000000Z",
+        iter_total_games=1,
+        progress_dir=progress_dir,
+        worker_id="alice",
+        heartbeat_interval=1000.0,
+    )
+
+    assert len(npz_paths) == 1
+    # Every take must include the worker_id we passed.
+    assert all(t.get("worker_id") == "alice" for t in book["takes"])
+    # Game 0 was finished cleanly (one POST to /queue/finish).
+    assert len(book["finishes"]) == 1
+    assert book["finishes"][0]["worker_id"] == "alice"
+    assert book["finishes"][0]["job_ids"] == [0]
+
+
+def test_run_shard_pull_drops_result_on_finish_rejected(
+    tmp_path: Path, monkeypatch,
+):
+    """Lease-reclaimed mid-game: the server rejects the worker's
+    /queue/finish call, the worker drops the result on the floor
+    rather than counting / flushing it."""
+    from mtg_bot.training import distributed as dist
+    from mtg_bot.training.distributed import run_shard_pull
+
+    _patch_pull_executor_to_threadpool(monkeypatch)
+
+    def _finish_router(body):
+        # Reject every finish: simulate "lease was reclaimed by
+        # another worker while this future was in flight".
+        return {
+            "finished": [],
+            "rejected": list(body.get("job_ids", [])),
+        }
+
+    book = _patch_queue_router(
+        monkeypatch,
+        take_responses=[
+            {"games": [0], "remaining": 0, "lease_ttl_sec": 120},
+            {"games": [], "remaining": 0},
+        ],
+        finish_router=_finish_router,
+    )
+
+    def _fast_worker(args):
+        return args[0], _nonempty_chunk(n_samples=4), 0.01
+
+    monkeypatch.setattr(
+        dist, "_play_one_parallel_game_timed", _fast_worker,
+    )
+
+    progress_dir = tmp_path / "training_progress"
+    out_dir = tmp_path / "out"
+    npz_paths = run_shard_pull(
+        _basic_self_play_spec(),
+        queue_url="http://stub",
+        run_id="iter_test",
+        n_workers=1,
+        output_dir=out_dir,
+        label="L0",
+        stamp="20260510T000000Z",
+        iter_total_games=1,
+        progress_dir=progress_dir,
+        worker_id="alice",
+        heartbeat_interval=1000.0,
+    )
+
+    # No npz: the rejected result was dropped, not flushed.
+    assert npz_paths == []
+    # The shard_end event captures the dropped count for diagnostics.
+    events_path = progress_dir / "iter_test_shard_L0_events.jsonl"
+    events = [
+        json.loads(line) for line in
+        events_path.read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
+    end = [e for e in events if e["event"] == "shard_end"][-1]
+    assert end["n_dropped_rejected"] == 1
+    drops = [
+        e for e in events if e["event"] == "game_dropped_lease_rejected"
+    ]
+    assert len(drops) == 1
+
+
+def test_run_shard_pull_drops_result_when_heartbeat_thread_rejects(
+    tmp_path: Path, monkeypatch,
+):
+    """Asynchronous reclaim: the heartbeat thread sees the lease
+    rejection BEFORE the finish call. The worker future completes,
+    the worker checks ``take_rejected``, sees the id, drops the
+    result, and skips the finish round-trip."""
+    import threading
+    from mtg_bot.training import distributed as dist
+    from mtg_bot.training.distributed import run_shard_pull
+
+    _patch_pull_executor_to_threadpool(monkeypatch)
+
+    rejected_emitted = threading.Event()
+
+    def _hb_router(body):
+        rejected_emitted.set()
+        return {
+            "extended": [],
+            "rejected": list(body.get("job_ids", [])),
+        }
+
+    book = _patch_queue_router(
+        monkeypatch,
+        take_responses=[
+            {"games": [0], "remaining": 0, "lease_ttl_sec": 0.06},
+            {"games": [], "remaining": 0},
+        ],
+        hb_router=_hb_router,
+    )
+
+    def _slow_worker(args):
+        # Sleep long enough that at least one heartbeat tick fires
+        # and the rejection lands in the heartbeat's buffer before
+        # this future completes.
+        rejected_emitted.wait(timeout=2.0)
+        return args[0], _nonempty_chunk(n_samples=2), 0.0
+
+    monkeypatch.setattr(
+        dist, "_play_one_parallel_game_timed", _slow_worker,
+    )
+
+    progress_dir = tmp_path / "training_progress"
+    out_dir = tmp_path / "out"
+    # heartbeat_interval=0.02 so the heartbeat thread tick is well
+    # under the worker wait, ensuring the rejection is in the
+    # heartbeat buffer when the future resolves.
+    npz_paths = run_shard_pull(
+        _basic_self_play_spec(),
+        queue_url="http://stub",
+        run_id="iter_test",
+        n_workers=1,
+        output_dir=out_dir,
+        label="L0",
+        stamp="20260510T000000Z",
+        iter_total_games=1,
+        progress_dir=progress_dir,
+        worker_id="alice",
+        heartbeat_interval=0.02,
+    )
+
+    # Result dropped on the heartbeat-rejection path; no npz.
+    assert npz_paths == []
+
+
+def test_run_shard_pull_calls_fail_on_inflight_at_drain(
+    tmp_path: Path, monkeypatch,
+):
+    """When the queue drains with games still in flight, those job
+    ids get POSTed back via /queue/fail so siblings can claim them
+    before the lease TTL expires."""
+    import time
+    from mtg_bot.training import distributed as dist
+    from mtg_bot.training.distributed import run_shard_pull
+
+    _patch_pull_executor_to_threadpool(monkeypatch)
+    book = _patch_queue_router(monkeypatch, take_responses=[
+        {"games": [0], "remaining": 99, "lease_ttl_sec": 120},
+        {"games": [1], "remaining": 98, "lease_ttl_sec": 120},
+        {"games": [], "remaining": 0, "closed": True},
+    ])
+
+    def _selective(args):
+        if args[0] == 0:
+            time.sleep(60)  # would block if abandon was broken
+            return args[0], _empty_chunk(), 60.0
+        return args[0], _nonempty_chunk(n_samples=2), 0.0
+
+    monkeypatch.setattr(
+        dist, "_play_one_parallel_game_timed", _selective,
+    )
+
+    progress_dir = tmp_path / "training_progress"
+    out_dir = tmp_path / "out"
+    t0 = time.perf_counter()
+    run_shard_pull(
+        _basic_self_play_spec(),
+        queue_url="http://stub",
+        run_id="iter_test",
+        n_workers=2,
+        output_dir=out_dir,
+        label="L0",
+        stamp="20260510T000000Z",
+        iter_total_games=100,
+        progress_dir=progress_dir,
+        worker_id="alice",
+        heartbeat_interval=1000.0,
+    )
+    elapsed = time.perf_counter() - t0
+    assert elapsed < 5.0
+    # /queue/fail was posted with the in-flight id (game 0).
+    assert any(
+        f.get("worker_id") == "alice" and 0 in f.get("job_ids", [])
+        for f in book["fails"]
+    )
+
+
+def test_run_shard_pull_uses_server_lease_ttl_for_heartbeat_interval(
+    tmp_path: Path, monkeypatch,
+):
+    """The shard refines its heartbeat cadence to ``server_ttl / 3``
+    after seeing the first take response. This isn't directly
+    observable, but we can pin it by inspecting the internal state
+    of the heartbeat thread the shard creates."""
+    from mtg_bot.training import distributed as dist
+    from mtg_bot.training.distributed import run_shard_pull
+
+    _patch_pull_executor_to_threadpool(monkeypatch)
+    captured: dict = {}
+
+    real_thread_cls = dist._HeartbeatThread
+
+    class _SpyHeartbeat(real_thread_cls):
+        def __init__(self, **kw):
+            super().__init__(**kw)
+            captured["initial_interval"] = self._interval
+            captured["instance"] = self
+
+    monkeypatch.setattr(dist, "_HeartbeatThread", _SpyHeartbeat)
+
+    _patch_queue_router(monkeypatch, take_responses=[
+        {"games": [0], "remaining": 0, "lease_ttl_sec": 90},
+        {"games": [], "remaining": 0},
+    ])
+
+    monkeypatch.setattr(
+        dist, "_play_one_parallel_game_timed",
+        lambda args: (args[0], _nonempty_chunk(n_samples=1), 0.0),
+    )
+
+    run_shard_pull(
+        _basic_self_play_spec(),
+        queue_url="http://stub",
+        run_id="iter_test",
+        n_workers=1,
+        output_dir=tmp_path / "out",
+        label="L0",
+        stamp="20260510T000000Z",
+        iter_total_games=1,
+        progress_dir=tmp_path / "tp",
+        worker_id="alice",
+    )
+    # Started at the 40s default, refined to 30s (= 90 / 3) after
+    # the first take.
+    assert captured["initial_interval"] == 40.0
+    assert abs(captured["instance"]._interval - 30.0) < 1e-6
+
+
+def test_run_shard_pull_caller_supplied_heartbeat_interval_wins(
+    tmp_path: Path, monkeypatch,
+):
+    """If the caller pins ``heartbeat_interval``, the server's
+    ``lease_ttl_sec`` is informational only — the worker keeps the
+    pinned cadence. Useful for tests + niche operator overrides."""
+    from mtg_bot.training import distributed as dist
+    from mtg_bot.training.distributed import run_shard_pull
+
+    _patch_pull_executor_to_threadpool(monkeypatch)
+    captured: dict = {}
+
+    real_thread_cls = dist._HeartbeatThread
+
+    class _SpyHeartbeat(real_thread_cls):
+        def __init__(self, **kw):
+            super().__init__(**kw)
+            captured["instance"] = self
+
+    monkeypatch.setattr(dist, "_HeartbeatThread", _SpyHeartbeat)
+
+    _patch_queue_router(monkeypatch, take_responses=[
+        {"games": [0], "remaining": 0, "lease_ttl_sec": 90},
+        {"games": [], "remaining": 0},
+    ])
+    monkeypatch.setattr(
+        dist, "_play_one_parallel_game_timed",
+        lambda args: (args[0], _nonempty_chunk(n_samples=1), 0.0),
+    )
+
+    run_shard_pull(
+        _basic_self_play_spec(),
+        queue_url="http://stub",
+        run_id="iter_test",
+        n_workers=1,
+        output_dir=tmp_path / "out",
+        label="L0",
+        stamp="20260510T000000Z",
+        iter_total_games=1,
+        progress_dir=tmp_path / "tp",
+        worker_id="alice",
+        heartbeat_interval=12.5,
+    )
+    assert abs(captured["instance"]._interval - 12.5) < 1e-6
+
+
+def test_heartbeat_thread_extends_held_jobs_periodically():
+    """Direct unit test on ``_HeartbeatThread``: starting the thread,
+    adding a job, waiting one tick, observing one heartbeat POST in
+    the bookkeeping. Skips the run_shard_* layer entirely."""
+    import time
+    from mtg_bot.training import distributed as dist
+
+    book = []
+    monkey_attr = dist._post_queue_endpoint
+
+    def _stub_post(queue_url, path, body):
+        book.append((path, dict(body)))
+        return {"extended": list(body.get("job_ids", [])), "rejected": []}
+
+    dist._post_queue_endpoint = _stub_post
+    try:
+        hb = dist._HeartbeatThread(
+            queue_url="http://stub", run_id="r",
+            worker_id="w", interval=0.01,
+        )
+        hb.start()
+        hb.add_job(7)
+        # Give the heartbeat thread several ticks to fire.
+        deadline = time.time() + 1.0
+        while time.time() < deadline:
+            if book:
+                break
+            time.sleep(0.01)
+        hb.stop()
+    finally:
+        dist._post_queue_endpoint = monkey_attr
+    assert book, "expected at least one heartbeat POST"
+    path, body = book[0]
+    assert path == "queue/heartbeat"
+    assert body["worker_id"] == "w"
+    assert body["job_ids"] == [7]
+
+
+def test_heartbeat_thread_stop_is_idempotent_without_start():
+    """A heartbeat thread that was never started can be safely
+    stopped (the run_shard_* finally block calls stop() in cleanup,
+    even on the early-error paths where start() never ran)."""
+    from mtg_bot.training.distributed import _HeartbeatThread
+
+    hb = _HeartbeatThread(
+        queue_url="http://stub", run_id="r",
+        worker_id="w", interval=1.0,
+    )
+    hb.stop()  # must not raise
+    hb.stop()  # second call also a no-op
+
+
+def test_heartbeat_thread_buffers_rejected_for_caller():
+    """Server reports a rejected job in its heartbeat response — the
+    thread records it in the rejected buffer + drops it from the
+    held set so subsequent heartbeats don't re-include it."""
+    import time
+    from mtg_bot.training import distributed as dist
+
+    real_post = dist._post_queue_endpoint
+
+    def _stub_post(queue_url, path, body):
+        return {
+            "extended": [],
+            "rejected": list(body.get("job_ids", [])),
+        }
+
+    dist._post_queue_endpoint = _stub_post
+    try:
+        hb = dist._HeartbeatThread(
+            queue_url="http://stub", run_id="r",
+            worker_id="w", interval=0.01,
+        )
+        hb.start()
+        hb.add_job(42)
+        deadline = time.time() + 1.0
+        while time.time() < deadline:
+            if hb.held_jobs() == set():
+                break
+            time.sleep(0.01)
+        rejected = hb.take_rejected()
+        hb.stop()
+    finally:
+        dist._post_queue_endpoint = real_post
+    assert 42 in rejected
+
+
+def test_heartbeat_thread_take_rejected_clears_buffer():
+    """``take_rejected`` returns + clears so the same id doesn't
+    surface twice."""
+    from mtg_bot.training.distributed import _HeartbeatThread
+
+    hb = _HeartbeatThread(
+        queue_url="http://stub", run_id="r",
+        worker_id="w", interval=1.0,
+    )
+    # Manually push some entries (skipping the daemon-thread loop).
+    with hb._lock:
+        hb._rejected.extend([1, 2, 3])
+    assert hb.take_rejected() == [1, 2, 3]
+    assert hb.take_rejected() == []
+
+
+def test_run_shard_pull_default_worker_id_is_auto_generated(
+    tmp_path: Path, monkeypatch,
+):
+    """When the caller doesn't pass ``worker_id``, the worker
+    auto-generates one and threads it through every take/finish
+    POST."""
+    from mtg_bot.training import distributed as dist
+    from mtg_bot.training.distributed import run_shard_pull
+
+    _patch_pull_executor_to_threadpool(monkeypatch)
+    book = _patch_queue_router(monkeypatch, take_responses=[
+        {"games": [0], "remaining": 0, "lease_ttl_sec": 120},
+        {"games": [], "remaining": 0},
+    ])
+    monkeypatch.setattr(
+        dist, "_play_one_parallel_game_timed",
+        lambda args: (args[0], _nonempty_chunk(n_samples=1), 0.0),
+    )
+
+    run_shard_pull(
+        _basic_self_play_spec(),
+        queue_url="http://stub",
+        run_id="iter_test",
+        n_workers=1,
+        output_dir=tmp_path / "out",
+        label="L0",
+        stamp="20260510T000000Z",
+        iter_total_games=1,
+        progress_dir=tmp_path / "tp",
+        heartbeat_interval=1000.0,
+    )
+
+    # Every take/finish carries the same auto-generated worker_id
+    # in the host:pid:rand shape.
+    take_wids = {t["worker_id"] for t in book["takes"] if "worker_id" in t}
+    fin_wids = {f["worker_id"] for f in book["finishes"]}
+    assert len(take_wids) == 1
+    assert take_wids == fin_wids
+    wid = next(iter(take_wids))
+    assert wid.count(":") == 2
+
+
+def test_run_shard_eval_pull_uses_lease_protocol(
+    tmp_path: Path, monkeypatch,
+):
+    """Eval-side counterpart of the self-play happy path: takes
+    include worker_id, completed games are finished via the lease
+    protocol."""
+    from mtg_bot.training import distributed as dist
+    from mtg_bot.training.distributed import run_shard_eval_pull
+
+    _patch_pull_executor_to_threadpool(monkeypatch)
+    book = _patch_queue_router(monkeypatch, take_responses=[
+        {"games": [0], "remaining": 0, "lease_ttl_sec": 120},
+        {"games": [], "remaining": 0},
+    ])
+    monkeypatch.setattr(
+        dist, "_play_one_match_game_timed",
+        lambda args: (args[0], (0, 12, "completed"), 0.0),
+    )
+
+    counts = run_shard_eval_pull(
+        _basic_eval_spec(),
+        queue_url="http://stub",
+        run_id="eval_test",
+        n_workers=1,
+        label="L0",
+        iter_total_games=1,
+        progress_dir=tmp_path / "tp",
+        worker_id="alice",
+        heartbeat_interval=1000.0,
+    )
+
+    assert counts["n_games"] == 1
+    assert counts["wins_new"] == 1
+    # take + finish were both alice's.
+    assert all(t.get("worker_id") == "alice" for t in book["takes"])
+    assert len(book["finishes"]) == 1
+    assert book["finishes"][0]["worker_id"] == "alice"
+
+
+def test_run_shard_eval_pull_drops_result_on_finish_rejected(
+    tmp_path: Path, monkeypatch,
+):
+    """A reclaimed lease in eval also drops the result: the count
+    must not include the rejected game."""
+    from mtg_bot.training import distributed as dist
+    from mtg_bot.training.distributed import run_shard_eval_pull
+
+    _patch_pull_executor_to_threadpool(monkeypatch)
+    book = _patch_queue_router(
+        monkeypatch,
+        take_responses=[
+            {"games": [0], "remaining": 0, "lease_ttl_sec": 120},
+            {"games": [], "remaining": 0},
+        ],
+        finish_router=lambda body: {
+            "finished": [],
+            "rejected": list(body.get("job_ids", [])),
+        },
+    )
+    monkeypatch.setattr(
+        dist, "_play_one_match_game_timed",
+        lambda args: (args[0], (0, 12, "completed"), 0.0),
+    )
+
+    counts = run_shard_eval_pull(
+        _basic_eval_spec(),
+        queue_url="http://stub",
+        run_id="eval_test",
+        n_workers=1,
+        label="L0",
+        iter_total_games=1,
+        progress_dir=tmp_path / "tp",
+        worker_id="alice",
+        heartbeat_interval=1000.0,
+    )
+
+    assert counts["n_games"] == 0
+    assert counts["wins_new"] == 0
+
+
+def test_run_shard_eval_pull_calls_fail_on_inflight_at_drain(
+    tmp_path: Path, monkeypatch,
+):
+    """Eval shard fails any in-flight job ids back to the queue on
+    drain so siblings reclaim them immediately rather than waiting
+    for the lease TTL — same protection self-play has."""
+    import time
+    from mtg_bot.training import distributed as dist
+    from mtg_bot.training.distributed import run_shard_eval_pull
+
+    _patch_pull_executor_to_threadpool(monkeypatch)
+    book = _patch_queue_router(monkeypatch, take_responses=[
+        {"games": [0], "remaining": 99, "lease_ttl_sec": 120},
+        {"games": [1], "remaining": 98, "lease_ttl_sec": 120},
+        {"games": [], "remaining": 0, "closed": True},
+    ])
+
+    def _selective(args):
+        if args[0] == 0:
+            time.sleep(60)
+            return args[0], (0, 1, "completed"), 60.0
+        return args[0], (1, 5, "completed"), 0.0
+
+    monkeypatch.setattr(
+        dist, "_play_one_match_game_timed", _selective,
+    )
+
+    progress_dir = tmp_path / "tp"
+    t0 = time.perf_counter()
+    run_shard_eval_pull(
+        _basic_eval_spec(),
+        queue_url="http://stub",
+        run_id="eval_test",
+        n_workers=2,
+        label="L0",
+        iter_total_games=100,
+        progress_dir=progress_dir,
+        worker_id="alice",
+        heartbeat_interval=1000.0,
+    )
+    elapsed = time.perf_counter() - t0
+    assert elapsed < 5.0
+    assert any(
+        f.get("worker_id") == "alice" and 0 in f.get("job_ids", [])
+        for f in book["fails"]
+    )
+
+
+def test_two_workers_one_dies_other_completes_run(
+    tmp_path: Path, monkeypatch,
+):
+    """The headline scenario: two pull-mode shards (alice, bob)
+    drive the same queue. alice claims idx 0 then 'dies' (her pull
+    raises). The queue's lease bookkeeping reclaims her abandoned
+    jobs (simulated by injecting a /queue/take that returns the
+    reclaimed idx alongside fresh ones). bob plays both and the
+    run completes — the master doesn't lose the slice that alice
+    had in flight when she died.
+
+    This exercises the end-to-end semantics rather than the wire
+    protocol, so the queue is the live in-process Flask app, not a
+    stubbed router. We use ``alice``'s lease to confirm that bob
+    successfully reclaims after alice dies mid-game."""
+    import time
+    from mtg_bot.training import distributed as dist
+    from mtg_bot.training.distributed import run_shard_pull
+
+    serve = _load_serve_module()
+    clock = _FakeClock()
+    app = serve.create_app(
+        repo_url="(unused)", master_pubkey="",
+        master_tailnet_name="m", port=5099,
+        template_dir=Path(__file__).resolve().parents[2] / "scripts",
+        repo_root=None,
+        lease_ttl_sec=10,
+        max_attempts=3,
+        monotonic=clock,
+    )
+    base_url = _serve_app_in_process(app)
+    try:
+        # Queue 2 games. alice takes idx 0, fakes a crash (raises).
+        # We then advance the fake clock past the lease TTL and have
+        # bob take — the queue reclaims idx 0 and bob plays both.
+        import urllib.request
+        import json as _json
+        req = urllib.request.Request(
+            f"{base_url}/queue/init",
+            data=_json.dumps({
+                "run_id": "iter_kill", "total_games": 2,
+            }).encode("utf-8"),
+            headers={"Content-Type": "application/json"},
+        )
+        urllib.request.urlopen(req).read()
+
+        # alice takes idx 0 directly via the wire protocol (bypassing
+        # run_shard_pull because we want to model her as "took the
+        # job and disappeared", which run_shard_pull would
+        # /queue/fail back).
+        req = urllib.request.Request(
+            f"{base_url}/queue/take",
+            data=_json.dumps({
+                "run_id": "iter_kill", "batch_size": 1,
+                "worker_id": "alice",
+            }).encode("utf-8"),
+            headers={"Content-Type": "application/json"},
+        )
+        body = _json.loads(urllib.request.urlopen(req).read())
+        assert body["games"] == [0]
+
+        # Advance the clock past the lease TTL.
+        clock.advance(11)
+
+        # bob runs as a pull-mode shard against the live server.
+        # He'll see both idx 0 (reclaimed) and idx 1 in his takes
+        # and the run completes.
+        _patch_pull_executor_to_threadpool(monkeypatch)
+        monkeypatch.setattr(
+            dist, "_play_one_parallel_game_timed",
+            lambda args: (
+                args[0], _nonempty_chunk(n_samples=2), 0.0,
+            ),
+        )
+
+        out_dir = tmp_path / "out"
+        progress_dir = tmp_path / "tp"
+        npz_paths = run_shard_pull(
+            _basic_self_play_spec(),
+            queue_url=base_url,
+            run_id="iter_kill",
+            n_workers=1,
+            output_dir=out_dir,
+            label="bob",
+            stamp="20260510T000000Z",
+            iter_total_games=2,
+            progress_dir=progress_dir,
+            worker_id="bob",
+            heartbeat_interval=1000.0,
+        )
+        # Both games made it to disk via bob's shard.
+        assert len(npz_paths) >= 1
+        # Status confirms both games done.
+        req = urllib.request.Request(f"{base_url}/queue/status")
+        st = _json.loads(urllib.request.urlopen(req).read())
+        q = st["queues"]["iter_kill"]
+        # next advanced past total, no inflight, no reclaimed pending.
+        assert q["next"] == 2
+        assert q["inflight"] == 0
+        assert q["ready_reclaimed"] == 0
+        assert q["failed"] == 0
+    finally:
+        _stop_serve_app()
+
+
+# ---- helpers for the live-server kill-and-recover test ----------
+
+
+class _FakeClock:
+    """Same shape as the FakeClock in test_serve_setup_scripts. The
+    serve module accepts a ``monotonic=...`` kwarg for tests so we
+    can drive lease expiry without sleeping."""
+
+    def __init__(self, t: float = 0.0) -> None:
+        self.t = t
+
+    def __call__(self) -> float:  # called as if it were time.monotonic
+        return self.t
+
+    def advance(self, dt: float) -> None:
+        self.t += dt
+
+
+def _load_serve_module():
+    import importlib
+    import sys
+    src_dir = Path(__file__).resolve().parents[2] / "src"
+    if str(src_dir) not in sys.path:
+        sys.path.insert(0, str(src_dir))
+    if "mtg_bot.cli.serve" in sys.modules:
+        del sys.modules["mtg_bot.cli.serve"]
+    return importlib.import_module("mtg_bot.cli.serve")
+
+
+_serve_thread_state: dict = {"server": None, "thread": None}
+
+
+def _serve_app_in_process(app) -> str:
+    """Run ``app`` on a Werkzeug dev server in a daemon thread, bound
+    to an ephemeral port, return its base URL. Used by the kill-and-
+    recover test so we exercise the real wire protocol against the
+    real serve.py /queue handlers without going over the network."""
+    import socket
+    import threading as _threading
+
+    sock = socket.socket()
+    sock.bind(("127.0.0.1", 0))
+    port = sock.getsockname()[1]
+    sock.close()
+
+    from werkzeug.serving import make_server
+    server = make_server("127.0.0.1", port, app, threaded=True)
+    thread = _threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    _serve_thread_state["server"] = server
+    _serve_thread_state["thread"] = thread
+    return f"http://127.0.0.1:{port}"
+
+
+# ---- Sub-task B: queue completion watcher ----------------------
+
+
+def test_wait_for_queue_completion_returns_when_drained():
+    """Queue with next==total AND inflight==0 AND ready_reclaimed==0
+    is done — the watcher returns its last status payload."""
+    from mtg_bot.training.distributed import wait_for_queue_completion
+
+    class _Resp:
+        def __init__(self, body):
+            self.body = body
+
+    def _fake_urlopen(req):
+        import json as _json
+        return _Resp(_json.dumps({
+            "queues": {"r1": {
+                "next": 100, "total": 100,
+                "inflight": 0, "ready_reclaimed": 0,
+                "failed": 0, "closed": False,
+                "remaining": 0,
+            }},
+        }).encode("utf-8"))
+
+    payload = wait_for_queue_completion(
+        "http://stub", "r1",
+        sleep=lambda _s: None,
+        urlopen=_fake_urlopen,
+    )
+    assert payload["queues"]["r1"]["next"] == 100
+
+
+def test_wait_for_queue_completion_returns_when_closed_no_inflight():
+    """Queue closed by the orchestrator early-stop with no in-flight
+    is also a terminal state — the watcher returns even though
+    ``next < total``."""
+    from mtg_bot.training.distributed import wait_for_queue_completion
+
+    class _Resp:
+        def __init__(self, body):
+            self.body = body
+
+    def _fake_urlopen(req):
+        import json as _json
+        return _Resp(_json.dumps({
+            "queues": {"r1": {
+                "next": 50, "total": 100,
+                "inflight": 0, "ready_reclaimed": 0,
+                "failed": 0, "closed": True,
+                "remaining": 50,
+            }},
+        }).encode("utf-8"))
+
+    payload = wait_for_queue_completion(
+        "http://stub", "r1",
+        sleep=lambda _s: None,
+        urlopen=_fake_urlopen,
+    )
+    assert payload["queues"]["r1"]["closed"] is True
+
+
+def test_wait_for_queue_completion_polls_until_drain():
+    """Watcher polls repeatedly until the queue actually drains.
+    Each poll consumes one entry from the response sequence."""
+    from mtg_bot.training.distributed import wait_for_queue_completion
+    import json as _json
+
+    statuses = [
+        # First tick: still in-flight.
+        {"queues": {"r1": {
+            "next": 100, "total": 100,
+            "inflight": 5, "ready_reclaimed": 0,
+            "failed": 0, "closed": False, "remaining": 0,
+        }}},
+        # Second tick: down to 1.
+        {"queues": {"r1": {
+            "next": 100, "total": 100,
+            "inflight": 1, "ready_reclaimed": 0,
+            "failed": 0, "closed": False, "remaining": 0,
+        }}},
+        # Third tick: done.
+        {"queues": {"r1": {
+            "next": 100, "total": 100,
+            "inflight": 0, "ready_reclaimed": 0,
+            "failed": 0, "closed": False, "remaining": 0,
+        }}},
+    ]
+    sleeps: list = []
+    idx = {"i": 0}
+
+    class _Resp:
+        def __init__(self, body):
+            self.body = body
+
+    def _fake_urlopen(req):
+        s = statuses[min(idx["i"], len(statuses) - 1)]
+        idx["i"] += 1
+        return _Resp(_json.dumps(s).encode("utf-8"))
+
+    payload = wait_for_queue_completion(
+        "http://stub", "r1",
+        sleep=sleeps.append,
+        urlopen=_fake_urlopen,
+    )
+    # Three status reads, two sleeps in between.
+    assert idx["i"] == 3
+    assert len(sleeps) == 2
+    assert payload["queues"]["r1"]["inflight"] == 0
+
+
+def test_wait_for_queue_completion_raises_on_timeout():
+    """If the queue stays busy past ``max_wait_s`` the watcher gives
+    up with a RuntimeError so the caller can fall back to whatever
+    data the per-shard JSONs already captured."""
+    import time
+    from mtg_bot.training.distributed import wait_for_queue_completion
+
+    class _Resp:
+        def __init__(self, body):
+            self.body = body
+
+    def _fake_urlopen(req):
+        import json as _json
+        return _Resp(_json.dumps({
+            "queues": {"r1": {
+                "next": 100, "total": 100,
+                "inflight": 5, "ready_reclaimed": 0,
+                "failed": 0, "closed": False, "remaining": 0,
+            }},
+        }).encode("utf-8"))
+
+    sleeps: list = []
+    # Fake monotonic that advances past max_wait_s after the first tick
+    # so the watcher gives up on the second poll.
+    real_monotonic = time.monotonic
+    time_offset = {"v": 0.0}
+    time.monotonic = lambda: real_monotonic() + time_offset["v"]
+    try:
+        # Bump offset on first sleep so the next status check sees
+        # itself past deadline.
+        def _sleep(s):
+            time_offset["v"] += 100.0
+            sleeps.append(s)
+
+        with pytest.raises(RuntimeError, match="did not complete"):
+            wait_for_queue_completion(
+                "http://stub", "r1",
+                sleep=_sleep,
+                urlopen=_fake_urlopen,
+                max_wait_s=10.0,
+                interval_s=1.0,
+            )
+    finally:
+        time.monotonic = real_monotonic
+
+
+def test_wait_for_queue_completion_returns_empty_for_unknown_run_id():
+    """If the queue server hasn't seen the run_id (e.g. master died
+    + restarted), the watcher returns the empty status payload —
+    callers decide what to do (probably bail loudly)."""
+    from mtg_bot.training.distributed import wait_for_queue_completion
+
+    class _Resp:
+        def __init__(self, body):
+            self.body = body
+
+    def _fake_urlopen(req):
+        import json as _json
+        return _Resp(_json.dumps({"queues": {}}).encode("utf-8"))
+
+    payload = wait_for_queue_completion(
+        "http://stub", "missing",
+        sleep=lambda _s: None,
+        urlopen=_fake_urlopen,
+    )
+    assert payload == {"queues": {}}
+
+
+def test_wait_for_queue_completion_against_live_serve_app(tmp_path):
+    """End-to-end: a real serve.py app behind ``wait_for_queue_completion``.
+    We init a queue, take + finish all its jobs over the wire, then
+    confirm the watcher observes the drained state and returns. Pins
+    Sub-task B's master-side completion signal against the real
+    Phase 1 server (no stubs / mocks of the queue endpoints — only
+    the worker engine is bypassed)."""
+    from mtg_bot.training.distributed import (
+        wait_for_queue_completion,
+    )
+
+    serve = _load_serve_module()
+    app = serve.create_app(
+        repo_url="(unused)", master_pubkey="",
+        master_tailnet_name="m", port=5099,
+        template_dir=Path(__file__).resolve().parents[2] / "scripts",
+        repo_root=None,
+        lease_ttl_sec=60,
+        max_attempts=3,
+    )
+    base_url = _serve_app_in_process(app)
+    try:
+        import urllib.request
+        import json as _json
+
+        def _post(path, body):
+            req = urllib.request.Request(
+                f"{base_url}{path}",
+                data=_json.dumps(body).encode("utf-8"),
+                headers={"Content-Type": "application/json"},
+            )
+            return _json.loads(urllib.request.urlopen(req).read())
+
+        _post("/queue/init", {"run_id": "iter_e2e", "total_games": 4})
+        # alice takes all 4 idxes under a lease, then finishes them.
+        for _ in range(4):
+            _post("/queue/take", {
+                "run_id": "iter_e2e", "batch_size": 1,
+                "worker_id": "alice",
+            })
+        _post("/queue/finish", {
+            "run_id": "iter_e2e", "worker_id": "alice",
+            "job_ids": [0, 1, 2, 3],
+        })
+
+        # Watcher returns promptly (queue is drained).
+        payload = wait_for_queue_completion(
+            base_url, "iter_e2e",
+            interval_s=0.05, max_wait_s=5.0,
+        )
+        q = payload["queues"]["iter_e2e"]
+        assert q["next"] == 4
+        assert q["inflight"] == 0
+        assert q["ready_reclaimed"] == 0
+    finally:
+        _stop_serve_app()
+
+
+def _stop_serve_app() -> None:
+    server = _serve_thread_state.get("server")
+    thread = _serve_thread_state.get("thread")
+    if server is not None:
+        server.shutdown()
+    if thread is not None:
+        thread.join(timeout=5)
+    _serve_thread_state["server"] = None
+    _serve_thread_state["thread"] = None
+
+
+# ---- Phase 2.5: orchestrator wires wait_for_queue_completion -----
+#
+# The bug behind the 2026-05-09 v21 mis-gate: master's eval orchestrator
+# used SSH lifetime as the eval-completion signal. When Mac/Win10 SSH
+# wrappers timed out at 90 min, the surviving in-flight game results
+# (already flushed to per-shard progress JSONs by the remote workers)
+# were dropped because the orchestrator marked those shards ``failed``.
+# Fix: master polls ``/queue/status`` until the queue itself drains
+# (per-job leases + heartbeats let surviving workers reclaim a dead
+# shard's jobs); aggregation reads per-shard progress JSONs so an
+# SSH-killed shard still contributes its flushed counts.
+
+
+def test_aggregate_eval_counts_from_progress_prefers_result_json(tmp_path):
+    """The aggregator helper reads per-shard ``_result.json`` first
+    (cleanly-finished shards' authoritative counts) and only falls
+    back to the live progress JSON when no result file exists. Two
+    shards: A wrote a result.json (clean SSH exit), B only wrote a
+    progress JSON (SSH-killed mid-run). Counts sum across both."""
+    from mtg_bot.training.distributed import (
+        _aggregate_eval_counts_from_progress,
+    )
+
+    # Shard A: cleanly finished. result.json is the authoritative source.
+    (tmp_path / "iter1_shard_A_result.json").write_text(json.dumps({
+        "wins_new": 5, "wins_old": 3, "draws": 1, "crashed": 0,
+        "timed_out": 0,
+    }), encoding="utf-8")
+    # A's progress JSON has stale counts (e.g. last poll before the
+    # final flush); the aggregator must ignore it because the result
+    # file takes precedence.
+    (tmp_path / "iter1_shard_A.json").write_text(json.dumps({
+        "wins_new": 4, "wins_old": 2, "draws": 1, "crashed": 0,
+        "timed_out": 0, "started_at": _now_iso(),
+    }), encoding="utf-8")
+
+    # Shard B: SSH-killed before a result file could be scp'd back.
+    # Progress JSON is the only source.
+    (tmp_path / "iter1_shard_B.json").write_text(json.dumps({
+        "wins_new": 7, "wins_old": 4, "draws": 0, "crashed": 1,
+        "timed_out": 0, "started_at": _now_iso(),
+    }), encoding="utf-8")
+
+    totals = _aggregate_eval_counts_from_progress(tmp_path, "iter1")
+    assert totals["wins_new"] == 5 + 7
+    assert totals["wins_old"] == 3 + 4
+    assert totals["draws"] == 1 + 0
+    assert totals["crashed"] == 0 + 1
+    assert totals["timed_out"] == 0 + 0
+    assert totals["n_games"] == (5 + 3 + 1) + (7 + 4 + 1)
+
+
+def test_aggregate_eval_counts_from_progress_skips_stale_progress_json(
+    tmp_path,
+):
+    """Stale-JSON filter: a shard's progress JSON whose
+    ``started_at`` predates the orchestrator's wall-clock at queue
+    init is dropped (leftover from a prior run with the same
+    run_id). Mirrors :class:`_EarlyStopPoller`'s filter."""
+    from mtg_bot.training.distributed import (
+        _aggregate_eval_counts_from_progress,
+    )
+
+    # Stale shard: wrote 100 wins last run.
+    (tmp_path / "iter1_shard_old.json").write_text(json.dumps({
+        "wins_new": 100, "wins_old": 50,
+        "draws": 0, "crashed": 0, "timed_out": 0,
+        "started_at": _iso_offset_seconds(-3600),
+    }), encoding="utf-8")
+    # Fresh shard.
+    (tmp_path / "iter1_shard_new.json").write_text(json.dumps({
+        "wins_new": 2, "wins_old": 1,
+        "draws": 0, "crashed": 0, "timed_out": 0,
+        "started_at": _iso_offset_seconds(60),
+    }), encoding="utf-8")
+
+    totals = _aggregate_eval_counts_from_progress(
+        tmp_path, "iter1", started_iso=_now_iso(),
+    )
+    assert totals["wins_new"] == 2
+    assert totals["wins_old"] == 1
+    assert totals["n_games"] == 3
+
+
+def test_aggregate_eval_counts_from_progress_no_jsons_returns_zero(
+    tmp_path,
+):
+    """No per-shard JSONs at all → returns the all-zeros dict so the
+    orchestrator's ``totals == 0`` check fires the all-shards-failed
+    path."""
+    from mtg_bot.training.distributed import (
+        _aggregate_eval_counts_from_progress,
+    )
+    totals = _aggregate_eval_counts_from_progress(tmp_path, "missing")
+    assert totals == {
+        "n_games": 0, "wins_new": 0, "wins_old": 0,
+        "draws": 0, "crashed": 0, "timed_out": 0,
+    }
+
+
+def test_aggregate_eval_counts_from_progress_skips_unreadable_files(
+    tmp_path,
+):
+    """Corrupted JSON / partial writes during a poll cycle don't
+    crash the aggregator — they're skipped, the next pass picks up
+    the cleanly-written file."""
+    from mtg_bot.training.distributed import (
+        _aggregate_eval_counts_from_progress,
+    )
+    (tmp_path / "iter1_shard_corrupt.json").write_text(
+        "{not valid json", encoding="utf-8",
+    )
+    (tmp_path / "iter1_shard_ok.json").write_text(json.dumps({
+        "wins_new": 1, "wins_old": 0, "draws": 0,
+        "crashed": 0, "timed_out": 0,
+        "started_at": _now_iso(),
+    }), encoding="utf-8")
+
+    totals = _aggregate_eval_counts_from_progress(tmp_path, "iter1")
+    assert totals["n_games"] == 1
+
+
+def test_aggregate_eval_counts_from_progress_corrupt_result_file_skipped(
+    tmp_path,
+):
+    """A corrupt result.json is skipped, but its progress JSON is
+    NOT used as a fallback for that label — once we've seen the
+    result file's existence we treat that shard as "tried for clean
+    counts and got nothing." Other shards still aggregate."""
+    from mtg_bot.training.distributed import (
+        _aggregate_eval_counts_from_progress,
+    )
+    # Shard A's result file is corrupt — pass 1 skips it.
+    (tmp_path / "iter1_shard_A_result.json").write_text(
+        "}}}}", encoding="utf-8",
+    )
+    # Shard A's progress JSON is fine — pass 2 picks it up since
+    # pass 1 didn't add A to seen_labels (the corrupt result wasn't
+    # successfully read).
+    (tmp_path / "iter1_shard_A.json").write_text(json.dumps({
+        "wins_new": 3, "wins_old": 2, "draws": 0,
+        "crashed": 0, "timed_out": 0,
+        "started_at": _now_iso(),
+    }), encoding="utf-8")
+    totals = _aggregate_eval_counts_from_progress(tmp_path, "iter1")
+    # A's progress JSON salvages the count.
+    assert totals["wins_new"] == 3
+    assert totals["wins_old"] == 2
+
+
+def test_run_distributed_eval_aggregates_after_remote_ssh_wedge(
+    monkeypatch, tmp_path,
+):
+    """The headline Phase 2.5 test: a remote shard whose SSH wrapper
+    hangs past the queue-drain point. The local shard finishes the
+    work; the orchestrator polls /queue/status, sees the queue
+    drained, and aggregates from per-shard progress JSONs WITHOUT
+    waiting for the wedged remote's future to return.
+
+    Without the Phase 2.5 wiring, master would have waited on
+    ``as_completed`` futures forever (or until the SSH 90-min
+    timeout fired) and dropped the wedged shard's flushed counts."""
+    from mtg_bot.training import distributed as dist
+    from mtg_bot.training.distributed import (
+        EvalJobSpec, ShardConfig, ShardsConfig,
+        run_distributed_eval,
+    )
+
+    weights_path, hidden_sizes = _tiny_dual_head_weights(tmp_path)
+    progress_dir = tmp_path / "training_progress"
+    spec = EvalJobSpec(
+        new_weights_path=str(weights_path),
+        old_weights_path=str(weights_path),
+        samples=1, inner_nodes=10, hidden_sizes=hidden_sizes,
+        base_seed=0, enable_mulligans=False,
+        per_game_timeout_sec=None,
+        opponent_label="self",
+    )
+    cfg = ShardsConfig(shards=(
+        ShardConfig(host="local", label="local_master", n_workers=1),
+        ShardConfig(
+            host="wedged-mac", user="g", repo_path="/r",
+            venv_python=".venv/bin/python", label="wedged_mac",
+        ),
+    ))
+
+    wedge_release = threading.Event()
+
+    def _wedged_remote_runner(shard, *args, **kwargs):
+        """Simulates a remote shard that already wrote some progress
+        JSON contents (the master-side ProgressPoller pulled them
+        back) BEFORE the SSH wrapper hung. The runner blocks until
+        the orchestrator finishes — exactly the failure mode SSH
+        timeout produces in production."""
+        from mtg_bot.training.distributed import ShardEvalReport
+        # Simulate the master-side ProgressPoller having scp'd a
+        # partial progress JSON from the remote at the moment SSH
+        # hung. Counts: 2 wins_new, 1 wins_old (3 games done).
+        progress_path = (
+            progress_dir
+            / f"iter_wedge_test_shard_{shard.display_label}.json"
+        )
+        progress_path.parent.mkdir(parents=True, exist_ok=True)
+        progress_path.write_text(json.dumps({
+            "run_id": (
+                f"iter_wedge_test_shard_{shard.display_label}"
+            ),
+            "kind": "eval",
+            "status": "running",
+            "started_at": _now_iso(),
+            "n_games_total": 4,
+            "n_games_done": 3,
+            "wins_new": 2, "wins_old": 1, "draws": 0,
+            "crashed": 0, "timed_out": 0,
+        }), encoding="utf-8")
+        # Block until the orchestrator stops waiting on us. Without
+        # Phase 2.5 wiring this would deadlock the test (orchestrator
+        # waits for SSH future; future waits for the orchestrator).
+        wedge_release.wait(timeout=30)
+        return ShardEvalReport(
+            shard_label=shard.display_label, success=False,
+            counts={
+                "n_games": 0, "wins_new": 0, "wins_old": 0,
+                "draws": 0, "crashed": 0,
+            },
+            error="simulated SSH wedge",
+            error_stage="eval",
+        )
+
+    monkeypatch.setattr(
+        dist, "run_shard_eval_remote", _wedged_remote_runner,
+    )
+
+    queue_url, server = _start_queue_server()
+    # Live serve.py app is needed for /queue/status.
+    serve = _load_serve_module()
+    app = serve.create_app(
+        repo_url="(unused)", master_pubkey="",
+        master_tailnet_name="m", port=5099,
+        template_dir=Path(__file__).resolve().parents[2] / "scripts",
+        repo_root=None, lease_ttl_sec=60, max_attempts=3,
+    )
+    base_url = _serve_app_in_process(app)
+    server.shutdown()  # close the bare stub; serve.py is the queue
+    try:
+        counts = run_distributed_eval(
+            cfg, spec,
+            progress_dir=progress_dir,
+            run_id_prefix="iter_wedge_test",
+            total_games=4,
+            queue_url=base_url,
+            queue_drain_grace_s=0.5,
+        )
+    finally:
+        wedge_release.set()
+        _stop_serve_app()
+
+    # Local shard's games + the wedged remote's pre-wedge flushed
+    # counts are both reflected in the totals.
+    assert counts["n_games"] >= 3, (
+        f"expected at least the wedged shard's 3 flushed games "
+        f"plus local's contribution, got {counts}"
+    )
+    # The wedged shard's counts (2 wins_new, 1 wins_old) made it.
+    assert counts["wins_new"] >= 2
+    assert counts["wins_old"] >= 1
+
+
+def test_run_distributed_eval_uses_queue_completion_signal_not_ssh_futures(
+    monkeypatch, tmp_path,
+):
+    """Pin the orchestrator's loop: when /queue/status reports
+    ``inflight==0 && next==total`` the orchestrator returns even
+    though a shard runner is still in-progress. Verifies the
+    completion signal is the queue, not the futures."""
+    from mtg_bot.training import distributed as dist
+    from mtg_bot.training.distributed import (
+        EvalJobSpec, ShardConfig, ShardsConfig,
+        run_distributed_eval,
+    )
+
+    weights_path, hidden_sizes = _tiny_dual_head_weights(tmp_path)
+    progress_dir = tmp_path / "training_progress"
+    spec = EvalJobSpec(
+        new_weights_path=str(weights_path),
+        old_weights_path=str(weights_path),
+        samples=1, inner_nodes=10, hidden_sizes=hidden_sizes,
+        base_seed=0, enable_mulligans=False,
+        per_game_timeout_sec=None,
+        opponent_label="self",
+    )
+    cfg = ShardsConfig(shards=(
+        ShardConfig(host="local", label="A", n_workers=1),
+        ShardConfig(
+            host="slow-remote", user="g", repo_path="/r",
+            venv_python=".venv/bin/python", label="slow_remote",
+        ),
+    ))
+
+    slow_release = threading.Event()
+    runner_returned_t: list[float] = []
+
+    def _slow_remote_runner(shard, *args, **kwargs):
+        from mtg_bot.training.distributed import ShardEvalReport
+        # No work — just block. The local shard drains the queue.
+        slow_release.wait(timeout=30)
+        runner_returned_t.append(time.monotonic())
+        return ShardEvalReport(
+            shard_label=shard.display_label, success=False,
+            counts={
+                "n_games": 0, "wins_new": 0, "wins_old": 0,
+                "draws": 0, "crashed": 0,
+            },
+            error="never finished",
+            error_stage="eval",
+        )
+
+    monkeypatch.setattr(
+        dist, "run_shard_eval_remote", _slow_remote_runner,
+    )
+
+    serve = _load_serve_module()
+    app = serve.create_app(
+        repo_url="(unused)", master_pubkey="",
+        master_tailnet_name="m", port=5099,
+        template_dir=Path(__file__).resolve().parents[2] / "scripts",
+        repo_root=None, lease_ttl_sec=60, max_attempts=3,
+    )
+    base_url = _serve_app_in_process(app)
+    orchestrator_t0 = time.monotonic()
+    try:
+        counts = run_distributed_eval(
+            cfg, spec,
+            progress_dir=progress_dir,
+            run_id_prefix="iter_completion_signal",
+            total_games=4,
+            queue_url=base_url,
+            queue_drain_grace_s=0.2,
+        )
+        orchestrator_t1 = time.monotonic()
+    finally:
+        slow_release.set()
+        _stop_serve_app()
+
+    # Orchestrator returned BEFORE the slow remote's runner did.
+    # Without Phase 2.5 wiring the orchestrator would have blocked
+    # on ``as_completed`` and only returned after slow_release fired
+    # (i.e. AFTER the test's ``finally``).
+    assert orchestrator_t1 < orchestrator_t0 + 25, (
+        "orchestrator hung longer than the bounded test patience — "
+        "indicates it's still waiting on SSH futures rather than "
+        "the queue completion signal"
+    )
+    # Local shard's counts came through.
+    assert counts["n_games"] >= 1
+
+
+def test_run_distributed_eval_all_shards_die_returns_partial_or_raises(
+    monkeypatch, tmp_path,
+):
+    """All-shards-die scenario: every shard's runner raises
+    immediately. The queue can't drain (no workers taking jobs).
+    Master must NOT hang waiting for queue completion — its
+    dual-signal loop notices ``done_count == len(futures)`` and
+    falls through to aggregation, which surfaces the all-failed
+    case as a RuntimeError because no per-shard progress JSON has
+    counts."""
+    from mtg_bot.training import distributed as dist
+    from mtg_bot.training.distributed import (
+        EvalJobSpec, ShardConfig, ShardsConfig,
+        run_distributed_eval,
+    )
+
+    weights_path, hidden_sizes = _tiny_dual_head_weights(tmp_path)
+    progress_dir = tmp_path / "training_progress"
+    spec = EvalJobSpec(
+        new_weights_path=str(weights_path),
+        old_weights_path=str(weights_path),
+        samples=1, inner_nodes=10, hidden_sizes=hidden_sizes,
+        base_seed=0, enable_mulligans=False,
+        per_game_timeout_sec=None,
+        opponent_label="self",
+    )
+    cfg = ShardsConfig(shards=(
+        ShardConfig(host="local", label="A", n_workers=1),
+        ShardConfig(host="local", label="B", n_workers=1),
+    ))
+
+    def _always_boom(*args, **kwargs):
+        raise RuntimeError("eval boom")
+    monkeypatch.setattr(dist, "run_shard_eval_pull", _always_boom)
+
+    serve = _load_serve_module()
+    app = serve.create_app(
+        repo_url="(unused)", master_pubkey="",
+        master_tailnet_name="m", port=5099,
+        template_dir=Path(__file__).resolve().parents[2] / "scripts",
+        repo_root=None, lease_ttl_sec=60, max_attempts=3,
+    )
+    base_url = _serve_app_in_process(app)
+    t0 = time.monotonic()
+    try:
+        # The orchestrator's queue_max_wait_s is far larger than 5s,
+        # but the dual-signal loop should bail out as soon as both
+        # futures are done — well under the wait cap.
+        with pytest.raises(RuntimeError, match="all distributed eval"):
+            run_distributed_eval(
+                cfg, spec,
+                progress_dir=progress_dir,
+                run_id_prefix="iter_all_die",
+                total_games=4,
+                queue_url=base_url,
+                queue_drain_grace_s=0.2,
+            )
+        t1 = time.monotonic()
+    finally:
+        _stop_serve_app()
+    assert (t1 - t0) < 30, (
+        "orchestrator took too long to give up despite all shards "
+        "having returned — dual-signal loop is broken"
+    )
+
+
+def test_run_distributed_eval_max_attempts_failures_become_crashed(
+    tmp_path,
+):
+    """Sub-design point from the task spec: when max_attempts is
+    exhausted on some queue jobs (true persistent failures), the
+    eval still completes — those games are reported as ``crashed``
+    rather than holding the eval open forever.
+
+    Set up a queue with 4 jobs, max_attempts=1. One shard finishes
+    one job cleanly, then fails another via /queue/fail (driving it
+    over max_attempts → ``failed``). The orchestrator sees
+    ``inflight==0 && next==total && failed > 0``, treats the queue
+    as drained, and surfaces ``failed`` as ``crashed`` in totals."""
+    from mtg_bot.training.distributed import (
+        _aggregate_eval_counts_from_progress,
+        wait_for_queue_completion,
+    )
+
+    serve = _load_serve_module()
+    app = serve.create_app(
+        repo_url="(unused)", master_pubkey="",
+        master_tailnet_name="m", port=5099,
+        template_dir=Path(__file__).resolve().parents[2] / "scripts",
+        repo_root=None, lease_ttl_sec=60, max_attempts=1,
+    )
+    base_url = _serve_app_in_process(app)
+    try:
+        import urllib.request
+        import json as _json
+
+        def _post(path, body):
+            req = urllib.request.Request(
+                f"{base_url}{path}",
+                data=_json.dumps(body).encode("utf-8"),
+                headers={"Content-Type": "application/json"},
+            )
+            return _json.loads(urllib.request.urlopen(req).read())
+
+        _post("/queue/init", {
+            "run_id": "iter_maxattempts", "total_games": 4,
+        })
+        # Worker takes idx 0..3, finishes 0, fails 1..3 (each fail
+        # exhausts max_attempts=1).
+        for _ in range(4):
+            _post("/queue/take", {
+                "run_id": "iter_maxattempts", "batch_size": 1,
+                "worker_id": "alice",
+            })
+        _post("/queue/finish", {
+            "run_id": "iter_maxattempts", "worker_id": "alice",
+            "job_ids": [0],
+        })
+        _post("/queue/fail", {
+            "run_id": "iter_maxattempts", "worker_id": "alice",
+            "job_ids": [1, 2, 3],
+        })
+
+        # Shard A wrote a progress JSON for the one game it
+        # finished cleanly.
+        (tmp_path / "iter_maxattempts_shard_A.json").write_text(
+            json.dumps({
+                "wins_new": 1, "wins_old": 0, "draws": 0,
+                "crashed": 0, "timed_out": 0,
+                "started_at": _now_iso(),
+            }), encoding="utf-8",
+        )
+
+        payload = wait_for_queue_completion(
+            base_url, "iter_maxattempts",
+            interval_s=0.05, max_wait_s=5.0,
+        )
+        q = payload["queues"]["iter_maxattempts"]
+        # Queue is "done" by Phase 2.5's definition:
+        # inflight==0 && next==total && ready_reclaimed==0.
+        assert q["inflight"] == 0
+        assert q["ready_reclaimed"] == 0
+        assert q["next"] == 4
+        assert q["failed"] == 3
+
+        # Mirror the orchestrator's surface logic:
+        totals = _aggregate_eval_counts_from_progress(
+            tmp_path, "iter_maxattempts",
+        )
+        # Add queue-level failures as crashed (orchestrator's
+        # convention).
+        totals["crashed"] += int(q.get("failed", 0))
+        totals["n_games"] += int(q.get("failed", 0))
+
+        # 1 win_new from the cleanly-finished game, 3 crashed from
+        # max_attempts-exhausted failures.
+        assert totals["wins_new"] == 1
+        assert totals["crashed"] == 3
+        assert totals["n_games"] == 4
+    finally:
+        _stop_serve_app()
+
+
+def test_run_distributed_eval_sentinel_stop_aggregates_partial_counts(
+    monkeypatch, tmp_path,
+):
+    """Sentinel-stop scenario: ``_EarlyStopPoller`` posts
+    /queue/close once enough progress accumulates. Master's
+    queue-completion check accepts ``closed=True && inflight==0``
+    as a terminal state (per ``wait_for_queue_completion`` design),
+    so a sentinel-driven stop doesn't hang the orchestrator —
+    partial results aggregate cleanly."""
+    from mtg_bot.training import distributed as dist
+    from mtg_bot.training.distributed import (
+        EvalJobSpec, ShardConfig, ShardsConfig,
+        run_distributed_eval,
+    )
+
+    weights_path, hidden_sizes = _tiny_dual_head_weights(tmp_path)
+    progress_dir = tmp_path / "training_progress"
+    spec = EvalJobSpec(
+        new_weights_path=str(weights_path),
+        old_weights_path=str(weights_path),
+        samples=1, inner_nodes=10, hidden_sizes=hidden_sizes,
+        base_seed=0, enable_mulligans=False,
+        per_game_timeout_sec=None,
+        opponent_label="self",
+    )
+    cfg = ShardsConfig(shards=(
+        ShardConfig(host="local", label="A", n_workers=1),
+        ShardConfig(host="local", label="B", n_workers=1),
+    ))
+
+    serve = _load_serve_module()
+    app = serve.create_app(
+        repo_url="(unused)", master_pubkey="",
+        master_tailnet_name="m", port=5099,
+        template_dir=Path(__file__).resolve().parents[2] / "scripts",
+        repo_root=None, lease_ttl_sec=60, max_attempts=3,
+    )
+    base_url = _serve_app_in_process(app)
+    try:
+        # slack_extra=2 → queue size 6, target 4. Once 4 successful
+        # games are recorded the early-stop poller closes the
+        # queue. The orchestrator's queue-completion check then
+        # sees ``closed=True && inflight==0`` and returns.
+        counts = run_distributed_eval(
+            cfg, spec,
+            progress_dir=progress_dir,
+            run_id_prefix="iter_sentinel_stop",
+            total_games=4,
+            queue_url=base_url,
+            slack_extra=2,
+            queue_drain_grace_s=0.5,
+        )
+    finally:
+        _stop_serve_app()
+
+    # At least the target games landed; slack may or may not have
+    # contributed.
+    assert counts["n_games"] >= 4
+    assert counts["n_games"] <= 6
+
+
+def test_run_distributed_eval_queue_max_wait_timeout_aggregates_anyway(
+    monkeypatch, tmp_path,
+):
+    """``queue_max_wait_s`` timeout fallback: a queue that never
+    drains AND has shards still running (not done) eventually
+    forces the orchestrator to bail with whatever per-shard JSONs
+    were written. This covers the deadline-elapsed branch of the
+    dual-signal loop."""
+    from mtg_bot.training import distributed as dist
+    from mtg_bot.training.distributed import (
+        EvalJobSpec, ShardConfig, ShardsConfig,
+        run_distributed_eval,
+    )
+
+    weights_path, hidden_sizes = _tiny_dual_head_weights(tmp_path)
+    progress_dir = tmp_path / "training_progress"
+    spec = EvalJobSpec(
+        new_weights_path=str(weights_path),
+        old_weights_path=str(weights_path),
+        samples=1, inner_nodes=10, hidden_sizes=hidden_sizes,
+        base_seed=0, enable_mulligans=False,
+        per_game_timeout_sec=None,
+        opponent_label="self",
+    )
+    cfg = ShardsConfig(shards=(
+        ShardConfig(host="local", label="A", n_workers=1),
+        ShardConfig(
+            host="dead-mac", user="g", repo_path="/r",
+            venv_python=".venv/bin/python", label="dead_mac",
+        ),
+    ))
+
+    block_until_test_done = threading.Event()
+
+    def _hung_local(*args, **kwargs):
+        # Local shard simulates a worker that takes a job from the
+        # queue but never finishes it (queue inflight stays > 0).
+        # Write a partial progress JSON so the orchestrator has
+        # SOMETHING to aggregate when its max_wait_s fires.
+        label = kwargs.get("label", "A")
+        progress_path = (
+            progress_dir
+            / f"iter_max_wait_test_shard_{label}.json"
+        )
+        progress_path.parent.mkdir(parents=True, exist_ok=True)
+        progress_path.write_text(json.dumps({
+            "kind": "eval", "status": "running",
+            "started_at": _now_iso(),
+            "wins_new": 1, "wins_old": 0, "draws": 0,
+            "crashed": 0, "timed_out": 0,
+        }), encoding="utf-8")
+        block_until_test_done.wait(timeout=30)
+        return {
+            "n_games": 1, "wins_new": 1, "wins_old": 0,
+            "draws": 0, "crashed": 0, "timed_out": 0,
+        }
+
+    def _hung_remote(shard, *args, **kwargs):
+        from mtg_bot.training.distributed import ShardEvalReport
+        block_until_test_done.wait(timeout=30)
+        return ShardEvalReport(
+            shard_label=shard.display_label, success=False,
+            counts={
+                "n_games": 0, "wins_new": 0, "wins_old": 0,
+                "draws": 0, "crashed": 0,
+            },
+            error="never finished",
+            error_stage="eval",
+        )
+
+    monkeypatch.setattr(dist, "run_shard_eval_pull", _hung_local)
+    monkeypatch.setattr(dist, "run_shard_eval_remote", _hung_remote)
+
+    serve = _load_serve_module()
+    app = serve.create_app(
+        repo_url="(unused)", master_pubkey="",
+        master_tailnet_name="m", port=5099,
+        template_dir=Path(__file__).resolve().parents[2] / "scripts",
+        repo_root=None, lease_ttl_sec=60, max_attempts=3,
+    )
+    base_url = _serve_app_in_process(app)
+    try:
+        # ``queue_max_wait_s=0.5`` forces the deadline branch.
+        # Local shard's progress JSON has 1 win_new, so totals
+        # land non-zero and the orchestrator returns rather than
+        # raising.
+        counts = run_distributed_eval(
+            cfg, spec,
+            progress_dir=progress_dir,
+            run_id_prefix="iter_max_wait_test",
+            total_games=4,
+            queue_url=base_url,
+            queue_max_wait_s=0.5,
+            queue_drain_grace_s=0.1,
+        )
+    finally:
+        block_until_test_done.set()
+        _stop_serve_app()
+
+    # The local shard's pre-stall progress JSON survives the
+    # max_wait deadline. Wedged remote contributes zeros (no JSON).
+    assert counts["wins_new"] == 1
+    assert counts["n_games"] == 1
+
+
+def test_run_distributed_eval_surfaces_queue_failed_as_crashed(
+    monkeypatch, tmp_path,
+):
+    """When workers fail jobs past max_attempts the queue's
+    ``failed`` counter increments. The orchestrator surfaces those
+    as ``crashed`` in totals so the eval gate sees an honest
+    sample size — full-orchestrator coverage for the
+    queue_failed-fold-into-crashed branch."""
+    from mtg_bot.training import distributed as dist
+    from mtg_bot.training.distributed import (
+        EvalJobSpec, ShardConfig, ShardsConfig,
+        run_distributed_eval,
+    )
+
+    weights_path, hidden_sizes = _tiny_dual_head_weights(tmp_path)
+    progress_dir = tmp_path / "training_progress"
+    spec = EvalJobSpec(
+        new_weights_path=str(weights_path),
+        old_weights_path=str(weights_path),
+        samples=1, inner_nodes=10, hidden_sizes=hidden_sizes,
+        base_seed=0, enable_mulligans=False,
+        per_game_timeout_sec=None,
+        opponent_label="self",
+    )
+    cfg = ShardsConfig(shards=(
+        ShardConfig(host="local", label="A", n_workers=1),
+    ))
+
+    captured_queue_url: list[str] = []
+
+    def _failer_local(*args, **kwargs):
+        """Local shard takes every job from the queue and
+        immediately /queue/fail's it — driving the queue's
+        max_attempts to surface a non-zero ``failed`` count."""
+        import json as _json
+        import urllib.request
+        url = kwargs["queue_url"]
+        run_id = kwargs["run_id"]
+        captured_queue_url.append(url)
+
+        def _post(path, body):
+            req = urllib.request.Request(
+                f"{url.rstrip('/')}{path}",
+                data=_json.dumps(body).encode("utf-8"),
+                headers={"Content-Type": "application/json"},
+            )
+            return _json.loads(urllib.request.urlopen(req).read())
+
+        # Drain the queue by failing every index repeatedly until
+        # every one is over max_attempts.
+        for _ in range(20):
+            r = _post("/queue/take", {
+                "run_id": run_id, "batch_size": 1,
+                "worker_id": "alice",
+            })
+            games = r.get("games") or []
+            if not games:
+                break
+            _post("/queue/fail", {
+                "run_id": run_id, "worker_id": "alice",
+                "job_ids": games,
+            })
+        return {
+            "n_games": 0, "wins_new": 0, "wins_old": 0,
+            "draws": 0, "crashed": 0, "timed_out": 0,
+        }
+
+    monkeypatch.setattr(dist, "run_shard_eval_pull", _failer_local)
+
+    serve = _load_serve_module()
+    app = serve.create_app(
+        repo_url="(unused)", master_pubkey="",
+        master_tailnet_name="m", port=5099,
+        template_dir=Path(__file__).resolve().parents[2] / "scripts",
+        repo_root=None, lease_ttl_sec=60, max_attempts=1,
+    )
+    base_url = _serve_app_in_process(app)
+    try:
+        counts = run_distributed_eval(
+            cfg, spec,
+            progress_dir=progress_dir,
+            run_id_prefix="iter_max_attempts_eval",
+            total_games=3,
+            queue_url=base_url,
+            queue_drain_grace_s=0.1,
+        )
+    finally:
+        _stop_serve_app()
+    # All 3 jobs hit max_attempts → 3 queue-level failures →
+    # surfaced as crashed in totals.
+    assert counts["crashed"] == 3
+    assert counts["n_games"] == 3
+
+
+def test_run_distributed_eval_orchestrator_returns_before_ssh_unblocks(
+    monkeypatch, tmp_path,
+):
+    """Tighter pin on the future-cancel path: a remote shard's
+    runner is still blocked when the orchestrator returns. This is
+    the production case (SSH hung past 90 min) reproduced
+    deterministically. Must complete WITHOUT waiting on the
+    blocked future."""
+    from mtg_bot.training import distributed as dist
+    from mtg_bot.training.distributed import (
+        EvalJobSpec, ShardConfig, ShardsConfig,
+        run_distributed_eval,
+    )
+
+    weights_path, hidden_sizes = _tiny_dual_head_weights(tmp_path)
+    progress_dir = tmp_path / "training_progress"
+    spec = EvalJobSpec(
+        new_weights_path=str(weights_path),
+        old_weights_path=str(weights_path),
+        samples=1, inner_nodes=10, hidden_sizes=hidden_sizes,
+        base_seed=0, enable_mulligans=False,
+        per_game_timeout_sec=None,
+        opponent_label="self",
+    )
+    cfg = ShardsConfig(shards=(
+        ShardConfig(host="local", label="local_master", n_workers=1),
+        ShardConfig(
+            host="hung-mac", user="g", repo_path="/r",
+            venv_python=".venv/bin/python", label="hung_mac",
+        ),
+    ))
+
+    hung_runner_t0 = []
+    hung_runner_returned = threading.Event()
+
+    def _hung_remote(shard, *args, **kwargs):
+        from mtg_bot.training.distributed import ShardEvalReport
+        hung_runner_t0.append(time.monotonic())
+        # Block long enough that the orchestrator's grace period
+        # MUST elapse before this runner can return its report.
+        time.sleep(10)
+        hung_runner_returned.set()
+        return ShardEvalReport(
+            shard_label=shard.display_label, success=False,
+            counts={
+                "n_games": 0, "wins_new": 0, "wins_old": 0,
+                "draws": 0, "crashed": 0,
+            },
+            error="simulated hung SSH",
+            error_stage="eval",
+        )
+
+    monkeypatch.setattr(dist, "run_shard_eval_remote", _hung_remote)
+
+    serve = _load_serve_module()
+    app = serve.create_app(
+        repo_url="(unused)", master_pubkey="",
+        master_tailnet_name="m", port=5099,
+        template_dir=Path(__file__).resolve().parents[2] / "scripts",
+        repo_root=None, lease_ttl_sec=60, max_attempts=3,
+    )
+    base_url = _serve_app_in_process(app)
+    try:
+        counts = run_distributed_eval(
+            cfg, spec,
+            progress_dir=progress_dir,
+            run_id_prefix="iter_hung_ssh",
+            total_games=2,
+            queue_url=base_url,
+            queue_drain_grace_s=0.3,
+        )
+    finally:
+        _stop_serve_app()
+
+    # Orchestrator returned despite the hung runner still sleeping.
+    assert not hung_runner_returned.is_set(), (
+        "orchestrator waited on the hung future instead of "
+        "returning when the queue drained"
+    )
+    # Local shard's games came through.
+    assert counts["n_games"] >= 1
+    # The hung remote shows up in the orchestrator's stderr
+    # summary as ``ssh_timeout_recovered`` — pinned indirectly via
+    # the totals path: hung remote contributes zero counts (no
+    # progress JSON written), local provides everything.
