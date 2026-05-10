@@ -5620,10 +5620,13 @@ def _patch_pull_executor_to_threadpool(monkeypatch):
 def _patch_take_one_responses(
     monkeypatch, responses: list[dict],
 ) -> list[dict]:
-    """Stub ``_urlopen_with_retry`` so each successive call returns
-    the next entry in ``responses`` (each entry is the JSON body
-    keys: games, remaining, closed). Returns a list of received
-    request URLs for inspection."""
+    """Stub ``_urlopen_with_retry`` so each successive ``/queue/take``
+    call returns the next entry in ``responses`` (each entry is the
+    JSON body keys: games, remaining, closed). Other queue endpoints
+    (``/queue/heartbeat``, ``/queue/finish``, ``/queue/fail``) get a
+    benign empty-success response so the heartbeat-aware pull workers
+    can call them without consuming the take-response queue. Returns
+    a list of received request URLs for inspection."""
     import json as _json
     from mtg_bot.training import distributed as _dist
 
@@ -5637,11 +5640,20 @@ def _patch_take_one_responses(
             self.body = body
 
     def _fake_urlopen_with_retry(req, **kwargs):
-        seen.append({"url": getattr(req, "full_url", str(req))})
-        i = min(idx["i"], len(responses) - 1)
-        idx["i"] += 1
-        body = _json.dumps(responses[i]).encode("utf-8")
-        return _FakeResp(body)
+        url = getattr(req, "full_url", str(req))
+        seen.append({"url": url})
+        if "/queue/take" in url:
+            i = min(idx["i"], len(responses) - 1)
+            idx["i"] += 1
+            body = _json.dumps(responses[i]).encode("utf-8")
+            return _FakeResp(body)
+        # Non-take queue endpoints (finish/fail/heartbeat): accept
+        # everything, reject nothing. Tests that care about the
+        # finish/fail wire format inspect ``seen`` instead.
+        return _FakeResp(_json.dumps({
+            "extended": [], "rejected": [],
+            "finished": [], "requeued": [], "failed": [],
+        }).encode("utf-8"))
 
     monkeypatch.setattr(
         _dist, "_urlopen_with_retry", _fake_urlopen_with_retry,

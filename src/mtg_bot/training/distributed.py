@@ -131,6 +131,223 @@ def _urlopen_with_retry(
     raise last_exc  # pragma: no cover
 
 
+# ---- worker_id + heartbeat plumbing ------------------------------
+# Phase 2 of distributed-run robustness. The Phase 1 server already
+# accepts ``worker_id`` on /queue/take, /queue/heartbeat, /queue/finish,
+# /queue/fail and falls back to the legacy take-and-forget semantics
+# when the field is missing. These helpers make the pull-mode workers
+# (``run_shard_pull`` + ``run_shard_eval_pull``) opt into the lease-
+# tracked path so an SSH drop / 90-min wall-kill mid-eval no longer
+# loses every game the shard had in flight: the lease expires, the
+# next take call reclaims, and the surviving workers finish the run.
+#
+# ``worker_id`` shape: ``"<hostname>:<pid>:<random8>"``. The random
+# suffix protects against pid-reuse + hostname collisions in test /
+# CI fixtures; the hostname + pid prefix makes server-side log lines
+# self-describing at a glance. Callers can override (CLI flag, future)
+# but the default is good enough for production today.
+#
+# Heartbeat interval: ``lease_ttl_sec / 3`` — survives one missed
+# heartbeat without losing the lease and bounds tailnet RTT noise to
+# at most a third of the budget. With the server-side default
+# ``DEFAULT_LEASE_TTL_SEC = 120``, that's ~40s between heartbeats.
+# Each heartbeat is a single tiny POST under the same retry policy
+# as /queue/take, so the cost is negligible.
+def _make_worker_id() -> str:
+    """Generate a stable per-shard-process ``worker_id``.
+
+    Format: ``"<hostname>:<pid>:<random8>"``. Stable for the lifetime
+    of the process (the random suffix is generated once at module-call
+    time, not per heartbeat).
+    """
+    import os
+    import platform
+    import secrets
+    return (
+        f"{platform.node() or 'unknown'}:"
+        f"{os.getpid()}:"
+        f"{secrets.token_hex(4)}"
+    )
+
+
+def _post_queue_endpoint(
+    queue_url: str, path: str, body: dict,
+) -> dict:
+    """Tiny helper: POST a JSON body to ``<queue_url>/<path>`` under
+    the same retry policy as /queue/take and return the parsed JSON
+    response. Used for /queue/heartbeat / /queue/finish / /queue/fail.
+
+    On HTTP errors (URLError after retries, 4xx/5xx body parse
+    failures) the underlying exception propagates — callers decide
+    whether to swallow + log (best-effort heartbeat) or re-raise.
+    """
+    import json as _json
+    import urllib.request as _urllib_request
+    url = f"{queue_url.rstrip('/')}/{path.lstrip('/')}"
+    req_body = _json.dumps(body).encode("utf-8")
+    req = _urllib_request.Request(
+        url, data=req_body,
+        headers={"Content-Type": "application/json"},
+    )
+    resp = _urlopen_with_retry(req)
+    return _json.loads(resp.body.decode("utf-8"))
+
+
+class _HeartbeatThread:
+    """Daemon thread that pings ``/queue/heartbeat`` every
+    ``interval`` seconds for the currently-held set of jobs.
+
+    Concurrency contract:
+    - ``add_job(job_id)`` / ``remove_job(job_id)`` are safe to call
+      from any thread. The heartbeat thread reads the held set under
+      the same lock.
+    - ``rejected_jobs()`` returns (and clears) the list of job ids
+      the server reported as ``rejected`` since the previous call.
+      Callers poll this when a worker future completes so they know
+      whether their result is still authoritative or whether the
+      lease was reclaimed mid-game (drop result, don't /queue/finish).
+    - ``stop()`` joins the heartbeat thread before returning. Safe to
+      call from finally blocks even if start() never ran (no-op).
+    - Heartbeat HTTP failures are caught + logged — a transient blip
+      shouldn't take down a 30-minute shard. The lease will expire
+      and another worker reclaims; that's the recovery path.
+
+    The thread wakes on a Condition rather than a plain sleep so
+    ``stop()`` returns promptly instead of waiting up to ``interval``
+    seconds for the next tick.
+    """
+
+    def __init__(
+        self,
+        *,
+        queue_url: str,
+        run_id: str,
+        worker_id: str,
+        interval: float,
+    ) -> None:
+        self._queue_url = queue_url
+        self._run_id = run_id
+        self._worker_id = worker_id
+        self._interval = max(0.001, float(interval))
+        self._held: set[int] = set()
+        self._rejected: list[int] = []
+        self._lock = threading.Lock()
+        self._cond = threading.Condition(self._lock)
+        self._stopped = False
+        self._thread: Optional[threading.Thread] = None
+
+    @property
+    def worker_id(self) -> str:
+        return self._worker_id
+
+    def start(self) -> None:
+        if self._thread is not None:
+            return
+        self._thread = threading.Thread(
+            target=self._run, name="queue-heartbeat", daemon=True,
+        )
+        self._thread.start()
+
+    def add_job(self, job_id: int) -> None:
+        with self._lock:
+            self._held.add(int(job_id))
+
+    def remove_job(self, job_id: int) -> None:
+        with self._lock:
+            self._held.discard(int(job_id))
+
+    def held_jobs(self) -> set[int]:
+        with self._lock:
+            return set(self._held)
+
+    def take_rejected(self) -> list[int]:
+        """Return + clear the list of rejected job ids reported by the
+        server since the last call. Callers poll this on each future
+        completion to decide whether to drop a result on the floor
+        (lease was reclaimed; another worker may already own the idx)
+        or finish normally.
+        """
+        with self._lock:
+            out, self._rejected = self._rejected, []
+            return out
+
+    def stop(self) -> None:
+        if self._thread is None:
+            return
+        with self._lock:
+            self._stopped = True
+            self._cond.notify_all()
+        self._thread.join(timeout=self._interval * 3 + 1.0)
+        self._thread = None
+
+    def _run(self) -> None:  # pragma: no cover - thread body
+        # Inner loop: wait up to ``interval`` on the condition; on
+        # every wakeup that isn't ``stop()``, snapshot the held set
+        # and POST one heartbeat. Failures are swallowed (logged to
+        # stderr at most once per failure type to avoid log spam) so
+        # a transient blip doesn't take the shard down.
+        last_err: Optional[str] = None
+        while True:
+            with self._lock:
+                self._cond.wait(timeout=self._interval)
+                if self._stopped:
+                    return
+                jobs = sorted(self._held)
+            if not jobs:
+                continue
+            try:
+                resp = _post_queue_endpoint(
+                    self._queue_url,
+                    "queue/heartbeat",
+                    {
+                        "run_id": self._run_id,
+                        "worker_id": self._worker_id,
+                        "job_ids": jobs,
+                    },
+                )
+            except Exception as exc:  # noqa: BLE001
+                err_repr = f"{type(exc).__name__}: {exc}"
+                if err_repr != last_err:
+                    print(
+                        f"[heartbeat {self._worker_id}] WARN: heartbeat "
+                        f"POST failed: {err_repr} (continuing; lease "
+                        f"will expire if this persists)",
+                        file=sys.stderr,
+                    )
+                    last_err = err_repr
+                continue
+            last_err = None
+            rejected = list(resp.get("rejected", []) or [])
+            if rejected:
+                with self._lock:
+                    self._rejected.extend(int(r) for r in rejected)
+                    # Drop rejected ids from the held set — no point
+                    # heartbeating something the server won't honor.
+                    for r in rejected:
+                        self._held.discard(int(r))
+
+
+def _safe_post_queue_endpoint(
+    queue_url: str, path: str, body: dict, *, where: str,
+) -> Optional[dict]:
+    """Best-effort wrapper around ``_post_queue_endpoint`` for the
+    finish / fail paths. Logs + swallows on failure rather than
+    propagating — losing a finish call is recoverable (lease will
+    expire; the queue will reclaim or move on after max_attempts),
+    but raising would mask the real shard outcome from the
+    orchestrator.
+    """
+    try:
+        return _post_queue_endpoint(queue_url, path, body)
+    except Exception as exc:  # noqa: BLE001
+        print(
+            f"[{where}] WARN: POST {path} failed: "
+            f"{type(exc).__name__}: {exc}",
+            file=sys.stderr,
+        )
+        return None
+
+
 @dataclass(frozen=True)
 class ShardConfig:
     """One shard of a distributed self-play run.
@@ -1859,6 +2076,8 @@ def run_shard_pull(
     stamp: str,
     iter_total_games: int,
     progress_dir: Optional[Path] = None,
+    worker_id: Optional[str] = None,
+    heartbeat_interval: Optional[float] = None,
 ) -> list[Path]:
     """Continuously feed ``n_workers`` worker processes from the
     master's pull-queue. Each worker plays one game, returns its
@@ -1874,6 +2093,24 @@ def run_shard_pull(
     Per-shard progress JSON gets ``n_games_total = iter_total_games``
     so the training UI shows "this shard did X of Y" honestly — pull
     mode doesn't know in advance how many games each shard will run.
+
+    Lease + heartbeat (Phase 2 of distributed-run robustness):
+    - ``worker_id`` is sent on every ``/queue/take`` so the server
+      tracks the claim under a lease. Defaults to a freshly-generated
+      ``"<host>:<pid>:<random8>"`` if the caller doesn't pass one.
+    - A daemon heartbeat thread pings ``/queue/heartbeat`` every
+      ``heartbeat_interval`` seconds (defaults to ``lease_ttl_sec / 3``,
+      learned from the first take response, falls back to 40s if the
+      server doesn't include one). Single missed heartbeat survives;
+      sustained outage lets the lease expire so siblings can reclaim.
+    - Each completed game calls ``/queue/finish`` to release the lease
+      cleanly. If the server reports the job as ``rejected`` (lease
+      already reclaimed by another worker), the result is dropped on
+      the floor — pretending to own a job we no longer hold would
+      duplicate-write the same idx's data, biasing the training mix.
+    - On crash / abandon-on-drain / KeyboardInterrupt the in-flight
+      jobs are released via ``/queue/fail`` so the queue can re-issue
+      them immediately rather than waiting for the lease to expire.
     """
     import concurrent.futures as _cf
     import json as _json
@@ -1975,12 +2212,35 @@ def run_shard_pull(
     n_games_completed = 0
     n_games_crashed = 0
     n_games_timed_out = 0
+    n_dropped_rejected = 0
     pending_chunks: list = []
     flush_every = max(1, n_workers)
+
+    # Lease + heartbeat. ``worker_id`` opts us into the server's
+    # lease-tracked path; ``heartbeat`` tracks the held jobs and
+    # pings /queue/heartbeat. Both are owned by this function so the
+    # caller doesn't have to thread them.
+    if worker_id is None:
+        worker_id = _make_worker_id()
+    # Initial heartbeat interval guess — 40s matches the server's
+    # default 120s TTL / 3. We refine to ``server_ttl / 3`` after the
+    # first take response so a non-default-config master picks the
+    # right cadence automatically.
+    initial_hb_interval = (
+        heartbeat_interval if heartbeat_interval is not None else 40.0
+    )
+    heartbeat = _HeartbeatThread(
+        queue_url=queue_url,
+        run_id=run_id,
+        worker_id=worker_id,
+        interval=initial_hb_interval,
+    )
+    heartbeat.start()
 
     def _take_one() -> tuple[Optional[int], int, float, bool]:
         req_body = _json.dumps({
             "run_id": run_id, "batch_size": 1,
+            "worker_id": worker_id,
         }).encode("utf-8")
         req = urllib.request.Request(
             take_url, data=req_body,
@@ -1997,8 +2257,20 @@ def run_shard_pull(
         # closed by /queue/close before its indices ran out. Distinct
         # from a natural drain (next == total, no ``closed`` key set).
         closed = bool(response.get("closed", False))
+        # Refine the heartbeat cadence to match the server's actual
+        # TTL the first time we see one. Caller-supplied
+        # ``heartbeat_interval`` wins (tests / hand-tuned).
+        if heartbeat_interval is None:
+            server_ttl = response.get("lease_ttl_sec")
+            if isinstance(server_ttl, (int, float)) and server_ttl > 0:
+                heartbeat._interval = max(  # noqa: SLF001
+                    1.0, float(server_ttl) / 3.0,
+                )
+        idx = games[0] if games else None
+        if idx is not None:
+            heartbeat.add_job(int(idx))
         return (
-            games[0] if games else None,
+            idx,
             response.get("remaining", 0),
             take_wall,
             closed,
@@ -2110,7 +2382,21 @@ def run_shard_pull(
                 # move on. ``finally: exe.shutdown(wait=False)``
                 # releases them. Already-completed pending_chunks get
                 # flushed below. ``reason`` lets log readers tell the
-                # two paths apart for diagnostics.
+                # two paths apart for diagnostics. Voluntarily fail the
+                # in-flight job ids so the queue requeues them
+                # immediately rather than waiting for the lease TTL.
+                if in_flight:
+                    _safe_post_queue_endpoint(
+                        queue_url, "queue/fail",
+                        {
+                            "run_id": run_id,
+                            "worker_id": worker_id,
+                            "job_ids": list(in_flight.values()),
+                        },
+                        where=f"shard {label}",
+                    )
+                    for idx in list(in_flight.values()):
+                        heartbeat.remove_job(idx)
                 if events is not None:
                     events.record(
                         "shard_abandoned_inflight",
@@ -2129,6 +2415,44 @@ def run_shard_pull(
             for fut in done:
                 in_flight.pop(fut)
                 game_idx, chunk, wall_s = fut.result()
+                # Heartbeat thread may have already pruned this id if
+                # the lease was reclaimed mid-game; check the rejection
+                # buffer + the held set so we don't double-count.
+                rejected_now = set(heartbeat.take_rejected())
+                heartbeat.remove_job(int(game_idx))
+                if int(game_idx) in rejected_now:
+                    n_dropped_rejected += 1
+                    if events is not None:
+                        events.record(
+                            "game_dropped_lease_rejected",
+                            game_idx=int(game_idx),
+                            wall_s=wall_s,
+                        )
+                    continue
+                # Try to clean up the lease on the server side. A
+                # ``rejected`` reply here means another worker took
+                # over while this future was in flight — same drop-on-
+                # the-floor handling as the heartbeat-side rejection.
+                fin = _safe_post_queue_endpoint(
+                    queue_url, "queue/finish",
+                    {
+                        "run_id": run_id,
+                        "worker_id": worker_id,
+                        "job_ids": [int(game_idx)],
+                    },
+                    where=f"shard {label}",
+                )
+                if fin is not None and (
+                    int(game_idx) in (fin.get("rejected") or [])
+                ):
+                    n_dropped_rejected += 1
+                    if events is not None:
+                        events.record(
+                            "game_dropped_lease_rejected",
+                            game_idx=int(game_idx),
+                            wall_s=wall_s,
+                        )
+                    continue
                 n_samples = int(chunk[0].shape[0])
                 # Worker tags each empty chunk with an outcome kind
                 # ("crashed" / "timed_out" / "completed"). Pre-feature
@@ -2182,6 +2506,19 @@ def run_shard_pull(
             _flush()
         except Exception:  # noqa: BLE001
             pass
+        # Best-effort fail any still-held jobs back to the queue so a
+        # surviving worker can pick them up before the lease expires.
+        held = heartbeat.held_jobs()
+        if held:
+            _safe_post_queue_endpoint(
+                queue_url, "queue/fail",
+                {
+                    "run_id": run_id,
+                    "worker_id": worker_id,
+                    "job_ids": sorted(held),
+                },
+                where=f"shard {label}",
+            )
         if progress is not None:
             progress.finalize(status="failed")
         if events is not None:
@@ -2192,11 +2529,13 @@ def run_shard_pull(
                 n_games_completed=n_games_completed,
                 n_games_crashed=n_games_crashed,
                 n_games_timed_out=n_games_timed_out,
+                n_dropped_rejected=n_dropped_rejected,
                 n_batches=chunk_idx,
                 wall_s=_time.perf_counter() - shard_t0,
             )
         raise
     finally:
+        heartbeat.stop()
         exe.shutdown(wait=False)
     if progress is not None:
         progress.finalize(status="completed")
@@ -2207,6 +2546,7 @@ def run_shard_pull(
             n_games_completed=n_games_completed,
             n_games_crashed=n_games_crashed,
             n_games_timed_out=n_games_timed_out,
+            n_dropped_rejected=n_dropped_rejected,
             n_batches=chunk_idx,
             wall_s=_time.perf_counter() - shard_t0,
         )
@@ -2222,12 +2562,21 @@ def run_shard_eval_pull(
     label: str,
     iter_total_games: int,
     progress_dir: Optional[Path] = None,
+    worker_id: Optional[str] = None,
+    heartbeat_interval: Optional[float] = None,
 ) -> dict[str, int]:
     """Eval counterpart to ``run_shard_pull``: continuously feeds
     n_workers worker processes from the master's pull-queue, where
     each game is one match (new-NN seat 0 vs old-NN-or-heuristic
     seat 1). Returns the shard's aggregated counts as a dict so the
     orchestrator can sum across shards into a single ``MatchStats``.
+
+    Lease + heartbeat: same model as ``run_shard_pull`` — see that
+    function's docstring for the worker_id / heartbeat / finish /
+    fail / lease-rejected lifecycle. The eval path is the headline
+    motivator: a 90-min SSH wall-kill on a 2000-game eval previously
+    lost ~half the work, now the lease expires and surviving workers
+    reclaim the abandoned matches automatically.
     """
     import concurrent.futures as _cf
     import json as _json
@@ -2346,10 +2695,25 @@ def run_shard_eval_pull(
     crashed = 0
     timed_out = 0
     n_games = 0
+    n_dropped_rejected = 0
+
+    if worker_id is None:
+        worker_id = _make_worker_id()
+    initial_hb_interval = (
+        heartbeat_interval if heartbeat_interval is not None else 40.0
+    )
+    heartbeat = _HeartbeatThread(
+        queue_url=queue_url,
+        run_id=run_id,
+        worker_id=worker_id,
+        interval=initial_hb_interval,
+    )
+    heartbeat.start()
 
     def _take_one() -> tuple[Optional[int], int, float, bool]:
         req_body = _json.dumps({
             "run_id": run_id, "batch_size": 1,
+            "worker_id": worker_id,
         }).encode("utf-8")
         req = urllib.request.Request(
             take_url, data=req_body,
@@ -2364,8 +2728,17 @@ def run_shard_eval_pull(
         games = response.get("games", [])
         # See run_shard_pull._take_one for the closed/drained split.
         closed = bool(response.get("closed", False))
+        if heartbeat_interval is None:
+            server_ttl = response.get("lease_ttl_sec")
+            if isinstance(server_ttl, (int, float)) and server_ttl > 0:
+                heartbeat._interval = max(  # noqa: SLF001
+                    1.0, float(server_ttl) / 3.0,
+                )
+        idx = games[0] if games else None
+        if idx is not None:
+            heartbeat.add_job(int(idx))
         return (
-            games[0] if games else None,
+            idx,
             response.get("remaining", 0),
             take_wall,
             closed,
@@ -2429,7 +2802,22 @@ def run_shard_eval_pull(
                 # accumulated for finished games are written to the
                 # result JSON in the ``finally`` below, so we don't
                 # lose data — just the abandoned games' would-be
-                # results.
+                # results. Voluntarily fail the in-flight job ids so
+                # the queue requeues them immediately if any retries
+                # remain (otherwise the lease would block reclaim by
+                # other shards for up to ``lease_ttl_sec``).
+                if in_flight:
+                    _safe_post_queue_endpoint(
+                        queue_url, "queue/fail",
+                        {
+                            "run_id": run_id,
+                            "worker_id": worker_id,
+                            "job_ids": list(in_flight.values()),
+                        },
+                        where=f"eval shard {label}",
+                    )
+                    for idx in list(in_flight.values()):
+                        heartbeat.remove_job(idx)
                 if events is not None:
                     events.record(
                         "shard_abandoned_inflight",
@@ -2448,6 +2836,40 @@ def run_shard_eval_pull(
             for fut in done:
                 in_flight.pop(fut)
                 game_idx, result, wall_s = fut.result()
+                # Drop on the floor if the lease was reclaimed mid-game
+                # — counting a result we no longer own would
+                # double-count an idx another worker also played.
+                rejected_now = set(heartbeat.take_rejected())
+                heartbeat.remove_job(int(game_idx))
+                if int(game_idx) in rejected_now:
+                    n_dropped_rejected += 1
+                    if events is not None:
+                        events.record(
+                            "game_dropped_lease_rejected",
+                            game_idx=int(game_idx),
+                            wall_s=wall_s,
+                        )
+                    continue
+                fin = _safe_post_queue_endpoint(
+                    queue_url, "queue/finish",
+                    {
+                        "run_id": run_id,
+                        "worker_id": worker_id,
+                        "job_ids": [int(game_idx)],
+                    },
+                    where=f"eval shard {label}",
+                )
+                if fin is not None and (
+                    int(game_idx) in (fin.get("rejected") or [])
+                ):
+                    n_dropped_rejected += 1
+                    if events is not None:
+                        events.record(
+                            "game_dropped_lease_rejected",
+                            game_idx=int(game_idx),
+                            wall_s=wall_s,
+                        )
+                    continue
                 if len(result) >= 3:
                     winner, decisions, outcome_kind = (
                         result[0], result[1], result[2],
@@ -2490,6 +2912,17 @@ def run_shard_eval_pull(
                         timed_out=is_timeout,
                     )
     except BaseException as exc:
+        held = heartbeat.held_jobs()
+        if held:
+            _safe_post_queue_endpoint(
+                queue_url, "queue/fail",
+                {
+                    "run_id": run_id,
+                    "worker_id": worker_id,
+                    "job_ids": sorted(held),
+                },
+                where=f"eval shard {label}",
+            )
         if progress is not None:
             progress.finalize(status="failed")
         if events is not None:
@@ -2500,10 +2933,12 @@ def run_shard_eval_pull(
                 n_games=n_games, wins_new=wins_new,
                 wins_old=wins_old, draws=draws, crashed=crashed,
                 timed_out=timed_out,
+                n_dropped_rejected=n_dropped_rejected,
                 wall_s=_time.perf_counter() - shard_t0,
             )
         raise
     finally:
+        heartbeat.stop()
         exe.shutdown(wait=False)
     if progress is not None:
         progress.finalize(status="completed")
@@ -2514,6 +2949,7 @@ def run_shard_eval_pull(
             n_games=n_games, wins_new=wins_new,
             wins_old=wins_old, draws=draws, crashed=crashed,
             timed_out=timed_out,
+            n_dropped_rejected=n_dropped_rejected,
             wall_s=_time.perf_counter() - shard_t0,
         )
     return {
