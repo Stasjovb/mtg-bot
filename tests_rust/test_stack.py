@@ -303,3 +303,98 @@ def test_process_stack_until_empty_clone_isolation(synthetic_state):
     # Original: stack still has the item, life unchanged.
     assert synthetic_state.stack_size() == stack_before_orig
     assert list(synthetic_state.life_totals) == life_before_orig
+
+
+# --- round-22 bridge: stack_snapshot() ------------------------------
+#
+# Read-only list-of-dicts view of the entire stack. Round-21 introduced
+# the `*_snapshot()` family (hand_snapshot, library_snapshot, ...) for
+# the parity harness; stack_snapshot extends the pattern to the stack
+# Vec. Each dict carries (source_obj_id, controller) — the same two
+# fields `peek_top_of_stack` / `pop_top_of_stack` already expose. Order
+# is bottom-to-top (Vec iteration order — stack[0] is bottom,
+# stack[-1] is top).
+
+
+def test_stack_snapshot_empty_is_empty_list(synthetic_state):
+    """Fresh state -> stack_snapshot() returns []."""
+    snap = synthetic_state.stack_snapshot()
+    assert snap == []
+
+
+def test_stack_snapshot_three_items_in_push_order(synthetic_state):
+    """Push A, B, C — snapshot is [A, B, C] (bottom-to-top, matching
+    Vec iteration order; stack[-1] is the top)."""
+    synthetic_state.push_to_stack(10, 0)  # A (bottom)
+    synthetic_state.push_to_stack(20, 1)  # B
+    synthetic_state.push_to_stack(30, 0)  # C (top)
+    snap = synthetic_state.stack_snapshot()
+    assert len(snap) == 3
+    assert snap[0] == {"source_obj_id": 10, "controller": 0}
+    assert snap[1] == {"source_obj_id": 20, "controller": 1}
+    assert snap[2] == {"source_obj_id": 30, "controller": 0}
+
+
+def test_stack_snapshot_shrinks_after_pop(synthetic_state):
+    """After pop_top_of_stack(), snapshot is one item shorter and the
+    top entry is gone."""
+    synthetic_state.push_to_stack(1, 0)
+    synthetic_state.push_to_stack(2, 1)
+    synthetic_state.push_to_stack(3, 0)
+    assert len(synthetic_state.stack_snapshot()) == 3
+    synthetic_state.pop_top_of_stack()
+    snap = synthetic_state.stack_snapshot()
+    assert len(snap) == 2
+    # Top of the now-shorter stack is the second-pushed item.
+    assert snap[-1] == {"source_obj_id": 2, "controller": 1}
+
+
+def test_stack_snapshot_dict_has_expected_keys(synthetic_state):
+    """Each snapshot dict carries exactly source_obj_id and controller."""
+    synthetic_state.push_to_stack(42, 1)
+    snap = synthetic_state.stack_snapshot()
+    assert len(snap) == 1
+    keys = set(snap[0].keys())
+    assert {"source_obj_id", "controller"}.issubset(keys)
+
+
+def test_stack_snapshot_is_read_only(synthetic_state):
+    """Mutating a returned snapshot dict does NOT affect Rust state —
+    the dicts are freshly allocated each call."""
+    synthetic_state.push_to_stack(5, 0)
+    snap = synthetic_state.stack_snapshot()
+    snap[0]["source_obj_id"] = 999
+    snap[0]["controller"] = 9
+    # Re-snapshot: original values intact.
+    snap2 = synthetic_state.stack_snapshot()
+    assert snap2[0] == {"source_obj_id": 5, "controller": 0}
+    # peek_top_of_stack also sees the unmutated original.
+    assert synthetic_state.peek_top_of_stack() == {
+        "source_obj_id": 5,
+        "controller": 0,
+    }
+
+
+def test_stack_snapshot_field_types(synthetic_state):
+    """source_obj_id and controller come back as Python ints (PyO3
+    maps u32 / u8 to int)."""
+    synthetic_state.push_to_stack(7, 1)
+    snap = synthetic_state.stack_snapshot()
+    assert isinstance(snap[0]["source_obj_id"], int)
+    assert isinstance(snap[0]["controller"], int)
+    assert snap[0]["source_obj_id"] == 7
+    assert snap[0]["controller"] == 1
+
+
+def test_stack_snapshot_clone_isolation(synthetic_state):
+    """CoW canary: snapshot of clone reflects clone's stack, not the
+    original's, after divergent pushes."""
+    synthetic_state.push_to_stack(100, 0)
+    cloned = synthetic_state.clone_once()
+    cloned.push_to_stack(200, 1)
+    orig_snap = synthetic_state.stack_snapshot()
+    cloned_snap = cloned.stack_snapshot()
+    assert len(orig_snap) == 1
+    assert len(cloned_snap) == 2
+    assert orig_snap[0] == {"source_obj_id": 100, "controller": 0}
+    assert cloned_snap[-1] == {"source_obj_id": 200, "controller": 1}
