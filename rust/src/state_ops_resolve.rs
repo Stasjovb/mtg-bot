@@ -942,14 +942,77 @@ fn apply_effect(state: &mut GameState, effect: &Effect) -> PyResult<()> {
             let defender = (1 - state.active_player) as usize;
             state.players[defender].life -= *amount;
         }
-        // Foundation stub: round-18 resolve-damage-each-creature slice
-        // replaces with real dispatch. E0004 exhaustiveness would
-        // otherwise reject the build the moment the variant lands in
-        // cards.rs.
-        Effect::DamageEachCreature { .. } => {
-            return Err(PyValueError::new_err(
-                "Effect::DamageEachCreature dispatch not yet implemented (round-18 foundation stub)",
-            ));
+        // Round-18: DamageEachCreature. CR 701.4 — Pyroclasm pattern:
+        // mark ``damage += amount`` on every creature on every player's
+        // battlefield.
+        //
+        // **Symmetric AOE: applies to BOTH players' battlefields.**
+        // Unlike DealDamage / DestroyTarget / TapTarget (which target
+        // the defender) and Sacrifice (which targets the active player),
+        // DamageEachCreature is implicit-target and hits every creature
+        // regardless of controller. No target filter — the variant
+        // doesn't carry a TargetFilter for that reason.
+        //
+        // **Creature-only filter via printing's card_types.** Lands /
+        // artifacts / enchantments / planeswalkers on the battlefield
+        // are not touched — only objects whose printing has "Creature"
+        // in card_types take the damage mark. The check goes through
+        // ``state.registry.lookup(obj.printing_id)``; no fallback if
+        // lookup fails (treat as non-creature, skip silently — matches
+        // the "lost track of source" failure mode elsewhere).
+        //
+        // **Indestructible is honored at SBA time, NOT here.** This
+        // slice only marks damage; SBAs decide who dies. So we do NOT
+        // filter on indestructible — write damage to every creature,
+        // round-13 SBA will suppress destruction for indestructible
+        // ones with lethal damage. Mirrors the round-3 DealDamage shape
+        // where lethal damage is also written, then SBAs reap.
+        //
+        // **Negative ``amount`` raises** loudly (mirrors round-3
+        // DealDamage and round-17 DamageEachOpponent raise-on-negative
+        // shapes). amount=0 is a legitimate no-op success (mirrors
+        // GainLife / DrawCards / Mill / DamageEachOpponent zero-count
+        // conventions).
+        //
+        // **Inlining note (cross-file friction).** Per per-slice file-
+        // isolation we inline the minimal ``Arc::make_mut`` +
+        // ``saturating_add`` here on each player's battlefield,
+        // mirroring how round-3 DealDamage / round-15 AddCounters
+        // inline their primitives for the same E0624 cross-file reason.
+        Effect::DamageEachCreature { amount } => {
+            if *amount < 0 {
+                return Err(PyValueError::new_err(format!(
+                    "DamageEachCreature amount must be non-negative, got {amount}"
+                )));
+            }
+            let amount_i16 = (*amount).min(i16::MAX as i32) as i16;
+            // Snapshot which obj_ids on each player's battlefield are
+            // creatures BEFORE mutating, so we drop the registry borrow
+            // before reaching for ``Arc::make_mut`` on the zone Vec.
+            for pidx in 0..state.players.len() {
+                let creature_ids: Vec<u32> = state.players[pidx]
+                    .battlefield
+                    .iter()
+                    .filter_map(|obj| match state.registry.lookup(obj.printing_id) {
+                        Some(printing)
+                            if printing.card_types.iter().any(|t| t == "Creature") =>
+                        {
+                            Some(obj.id)
+                        }
+                        _ => None,
+                    })
+                    .collect();
+                if creature_ids.is_empty() {
+                    continue;
+                }
+                let bf_mut: &mut Vec<GameObject> =
+                    Arc::make_mut(&mut state.players[pidx].battlefield);
+                for obj in bf_mut.iter_mut() {
+                    if creature_ids.contains(&obj.id) {
+                        obj.damage = obj.damage.saturating_add(amount_i16);
+                    }
+                }
+            }
         }
     }
     Ok(())
