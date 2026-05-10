@@ -104,6 +104,7 @@ the test lands in a commit.
 | rust(combat-keyword): double-strike | tests_rust/test_combat.py extend           | green  | feature/rust-tdd-double-strike |
 | rust(resolve-effects-r13): UntapTarget dispatch | tests_rust/test_resolve.py extend           | green  | feature/rust-tdd-untap-target |
 | rust(sba-indestructible): CR 702.12 | tests_rust/test_sba.py extend           | green  | feature/rust-tdd-indestructible |
+| rust(steps-untap-summoning): clear sickness at untap | tests_rust/test_steps.py extend | green | feature/rust-tdd-untap-summoning |
 
 ## Build invocation reminder
 
