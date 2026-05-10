@@ -202,6 +202,38 @@ pub enum Action {
     /// round-23 ActivateAbility "scaffold the variant, defer the
     /// dispatch semantics" pattern.
     TurnFaceUp { card_id: u32 },
+    /// Tap a creature to add charge counters to a Spacecraft (Edge of
+    /// Eternities "station" activation). `spacecraft_id` is the
+    /// GameObject id of the Spacecraft permanent on the active player's
+    /// battlefield; `crew_id` is the creature being tapped (cost) to
+    /// add a charge counter to the Spacecraft (effect). Mirrors
+    /// Python's `ActivateStation(spacecraft_id: int, crew_id: int)`
+    /// dataclass — two ints, no implicit actor (the Spacecraft's
+    /// controller is the actor, resolved by the underlying primitive
+    /// from the battlefield index when it lands). Sorcery-speed only
+    /// (enforced by the future `legal_decisions` enumerator, not by
+    /// this dispatch arm).
+    ///
+    /// Per the EoE Spacecraft cycle: Spacecraft enter as artifacts with
+    /// no creature types and accumulate charge counters via station-
+    /// attaching; they turn face up (become creatures with printed
+    /// stats) when launched via `TurnFaceUp` once enough charge counters
+    /// have been added. The station action adds a number of charge
+    /// counters equal to the tapped creature's power.
+    ///
+    /// **Dispatch is currently a stub.** Rust has no Spacecraft
+    /// charge-counter state today, and there's no crew-tap-resolution
+    /// primitive that ties the tap-as-cost to the counter-add-as-effect.
+    /// Until a future slice adds the Spacecraft charge-counter state +
+    /// the activate-station primitive (analogous to how Python's
+    /// `_activate_station` taps the crew creature, reads its power, and
+    /// adds that many charge counters to the Spacecraft), `apply_action`
+    /// raises `ValueError` for this variant; the variant + bridge
+    /// round-trip ship now, so a follow-up slice only needs to flip the
+    /// dispatch arm. Mirrors the round-23 ActivateAbility and round-24
+    /// TurnFaceUp / UnlockRoomHalf "scaffold the variant, defer the
+    /// dispatch semantics" pattern.
+    ActivateStation { spacecraft_id: u32, crew_id: u32 },
     /// Pay a Room enchantment half's mana cost to unlock it (DSK Rooms
     /// mechanic, CR 715.3-4). `card_id` is the GameObject id of the
     /// Room enchantment on the active player's battlefield;
@@ -403,8 +435,25 @@ pub fn parse_action(dict: &Bound<'_, PyDict>) -> PyResult<Action> {
             let half_name: String = require(dict, "half_name")?.extract()?;
             Ok(Action::UnlockRoomHalf { card_id, half_name })
         }
+        "activate_station" => {
+            // Two-int shape mirroring `activate_ability` — `spacecraft_id`
+            // names the Spacecraft permanent on the active player's
+            // battlefield; `crew_id` names the creature being tapped as
+            // cost to add a charge counter to the Spacecraft. Mirrors
+            // Python's `ActivateStation(spacecraft_id: int, crew_id: int)`
+            // dataclass — both fields required, no optional flags.
+            // Missing either key → `KeyError` via `require`; wrong type
+            // → `TypeError` / `ValueError` from PyO3's `extract::<u32>`
+            // machinery.
+            let spacecraft_id: u32 = require(dict, "spacecraft_id")?.extract()?;
+            let crew_id: u32 = require(dict, "crew_id")?.extract()?;
+            Ok(Action::ActivateStation {
+                spacecraft_id,
+                crew_id,
+            })
+        }
         other => Err(PyValueError::new_err(format!(
-            "unknown action kind {other:?}; valid: pass_priority, play_land, declare_attackers, declare_blockers, activate_ability, cast_spell, turn_face_up, unlock_room_half"
+            "unknown action kind {other:?}; valid: pass_priority, play_land, declare_attackers, declare_blockers, activate_ability, cast_spell, turn_face_up, unlock_room_half, activate_station"
         ))),
     }
 }
@@ -495,6 +544,14 @@ pub fn action_to_pydict<'py>(
             d.set_item("kind", "unlock_room_half")?;
             d.set_item("card_id", *card_id)?;
             d.set_item("half_name", half_name.clone())?;
+        }
+        Action::ActivateStation {
+            spacecraft_id,
+            crew_id,
+        } => {
+            d.set_item("kind", "activate_station")?;
+            d.set_item("spacecraft_id", *spacecraft_id)?;
+            d.set_item("crew_id", *crew_id)?;
         }
     }
     Ok(d)
