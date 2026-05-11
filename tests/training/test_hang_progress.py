@@ -193,6 +193,120 @@ def test_self_play_timeout_dump_contains_progress(
     assert payload["progress"]["last_decision_repr"] == "'D3'"
 
 
+def test_heartbeat_disabled_by_default(tmp_path: Path):
+    """No ``heartbeat_path`` → no file is created, even after many
+    record() calls. Existing callers (sequential ``run_match``, unit
+    tests that don't opt in) pay zero overhead and leave no side-
+    effects on disk."""
+    p = HangProgress()
+    for i in range(200):
+        p.record(active=i % 2, decision=f"D{i}", n_legal=3)
+    # No path → no file written anywhere.
+    assert list(tmp_path.iterdir()) == []
+
+
+def test_heartbeat_respects_both_decisions_and_seconds_throttle(
+    tmp_path: Path,
+):
+    """The user asked for "every 50 decisions or every 5 seconds,
+    whichever is sparser" — sparser = longer gap = the AND of the
+    two thresholds. Drive 150 decisions without any sleep: the
+    decisions threshold is satisfied 3x but the 5-second threshold
+    isn't, so no heartbeat is emitted."""
+    hb_path = tmp_path / "hb.jsonl"
+    p = HangProgress(
+        heartbeat_path=hb_path,
+        heartbeat_every_n_decisions=50,
+        heartbeat_min_seconds=5.0,
+    )
+    for i in range(150):
+        p.record(active=i % 2, decision=f"D{i}", n_legal=3)
+    # Decisions met 50/100/150, but no real time passed → no emit.
+    assert not hb_path.exists() or hb_path.read_text() == ""
+
+
+def test_heartbeat_emits_when_both_thresholds_met(tmp_path: Path):
+    """Tunable thresholds let the test exercise the emit path without
+    actually sleeping for 5 seconds. With min_seconds=0.0, every
+    Nth-decision call should emit."""
+    hb_path = tmp_path / "hb.jsonl"
+    p = HangProgress(
+        heartbeat_path=hb_path,
+        heartbeat_every_n_decisions=10,
+        heartbeat_min_seconds=0.0,
+    )
+    for i in range(35):
+        p.record(active=i % 2, decision=f"D{i}", n_legal=3)
+    # 10, 20, 30 → three heartbeats.
+    lines = hb_path.read_text().strip().splitlines()
+    assert len(lines) == 3
+    payloads = [json.loads(line) for line in lines]
+    assert payloads[0]["decisions_completed"] == 10
+    assert payloads[1]["decisions_completed"] == 20
+    assert payloads[2]["decisions_completed"] == 30
+    for pl in payloads:
+        assert pl["event"] == "game_heartbeat"
+        assert pl["reason"] == "periodic"
+        assert "ts" in pl
+        assert "last_decision_repr" in pl
+
+
+def test_emit_final_heartbeat_writes_irrespective_of_throttle(
+    tmp_path: Path,
+):
+    """The timeout path needs a guaranteed write even if only 7
+    decisions have happened and no periodic emit was due. The
+    final heartbeat marks the moment the timeout fired so post-hoc
+    triage can see exactly how far the game got."""
+    hb_path = tmp_path / "hb.jsonl"
+    p = HangProgress(
+        heartbeat_path=hb_path,
+        heartbeat_every_n_decisions=50,  # way more than 7
+        heartbeat_min_seconds=5.0,
+    )
+    for i in range(7):
+        p.record(active=i % 2, decision=f"D{i}", n_legal=3)
+    assert not hb_path.exists()  # throttle blocked periodic emit
+    p.emit_final_heartbeat(reason="timed_out")
+    payloads = [
+        json.loads(line) for line in hb_path.read_text().splitlines()
+    ]
+    assert len(payloads) == 1
+    assert payloads[0]["reason"] == "timed_out"
+    assert payloads[0]["decisions_completed"] == 7
+
+
+def test_emit_final_heartbeat_no_op_without_path(tmp_path: Path):
+    """Final-flush helper is a safe no-op when the path is unset —
+    callers can invoke unconditionally without an existence check."""
+    p = HangProgress()
+    p.record(active=0, decision="X", n_legal=1)
+    p.emit_final_heartbeat(reason="timed_out")  # must not raise
+    # And nothing on disk.
+    assert list(tmp_path.iterdir()) == []
+
+
+def test_heartbeat_io_errors_dont_break_record(monkeypatch):
+    """Diagnostic side-channel must never propagate I/O errors — if
+    the heartbeat file is on a full disk or its directory has been
+    deleted out from under us, the game loop must continue. We force
+    the failure by pointing at a path whose parent is a regular file
+    (so mkdir() will raise OSError)."""
+    import tempfile
+    with tempfile.NamedTemporaryFile() as fp:
+        # Path under a regular file → mkdir() raises NotADirectoryError.
+        bad_path = Path(fp.name) / "subdir" / "hb.jsonl"
+        p = HangProgress(
+            heartbeat_path=bad_path,
+            heartbeat_every_n_decisions=1,
+            heartbeat_min_seconds=0.0,
+        )
+        # Must not raise.
+        p.record(active=0, decision="X", n_legal=1)
+        # And the regular fields still get updated.
+        assert p.decisions_completed == 1
+
+
 def test_hang_dump_progress_classifies_real_vs_slow():
     """The whole point of the progress sentinel: a triage reader can
     classify a hang dump as

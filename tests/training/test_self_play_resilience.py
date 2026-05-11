@@ -162,6 +162,86 @@ def test_indexed_worker_preserves_game_idx_on_crash(capfd):
     assert "[worker] eval game 7 crashed" in err
 
 
+def test_packed_worker_preserves_partial_decisions_on_timeout(
+    monkeypatch, capfd,
+):
+    """Decisions-zero diagnosis (2026-05-10): when a per-game timeout
+    fires, the packed wrapper must return the partial decisions count
+    attached to the TimeoutError, not the hardcoded 0 it used to.
+    Pre-fix, every timed-out game showed up in the event log as
+    ``decisions: 0`` regardless of how far it actually got — making
+    it impossible to distinguish "first-decision wedge" from "slow
+    but progressing".
+
+    We simulate the inner game completing N decisions by monkey-
+    patching the timeout helper to (a) drive a HangProgress for N
+    iterations and (b) raise TimeoutError with the decisions count
+    attached. The wrapper should surface N in the result tuple.
+    """
+    from mtg_bot.training import _timeout
+    from mtg_bot.training._hang_progress import HangProgress
+    from mtg_bot.training import random_choice_factory
+
+    def fake_run_with_timeout(func, args, timeout_sec):
+        progress = next(a for a in args if isinstance(a, HangProgress))
+        for i in range(173):
+            progress.record(active=i % 2, decision=f"D{i}", n_legal=3)
+        raise TimeoutError("simulated wedge at decision 173")
+
+    monkeypatch.setattr(
+        _timeout, "run_with_timeout", fake_run_with_timeout,
+    )
+
+    args = (
+        4,                          # game_idx
+        random_choice_factory,
+        random_choice_factory,
+        0,                          # base_seed
+        4000,                       # decision_cap
+        False,                      # enable_mulligans
+        300.0,                      # per_game_timeout_sec (triggers wrap)
+        simple_test_deck_pool(),    # deck_pool
+    )
+    result = _play_one_match_game_packed(args)
+    # Critical assertion: decisions slot carries the partial count,
+    # not 0. The diagnosis bench's event log would now show
+    # ``decisions: 173`` instead of ``decisions: 0``.
+    assert result == (None, 173, "timed_out")
+
+    err = capfd.readouterr().err
+    assert "[worker] eval game 4 timed out" in err
+    assert "decisions=173" in err
+
+
+def test_packed_worker_partial_decisions_zero_when_attr_missing(
+    monkeypatch,
+):
+    """Defensive: if a TimeoutError gets raised by a code path that
+    didn't have time to attach ``decisions_completed`` (shutdown
+    race, OR a TimeoutError raised from somewhere other than
+    ``_play_one_match_game``'s catch block), the wrapper must fall
+    back to 0 rather than blowing up with AttributeError. This is the
+    backward-compat seatbelt that lets the new attribute be optional."""
+    from mtg_bot.training import _timeout
+    from mtg_bot.training import random_choice_factory
+
+    def fake_run_with_timeout(func, args, timeout_sec):
+        # Raise without attaching the attribute — simulates the
+        # pre-instrumentation behavior path.
+        raise TimeoutError("bare timeout, no attribute attached")
+
+    monkeypatch.setattr(
+        _timeout, "run_with_timeout", fake_run_with_timeout,
+    )
+
+    args = (
+        0, random_choice_factory, random_choice_factory,
+        0, 4000, False, 300.0, simple_test_deck_pool(),
+    )
+    result = _play_one_match_game_packed(args)
+    assert result == (None, 0, "timed_out")
+
+
 # ---------- run_match_parallel: pool.map (no-progress) path ----------------
 
 
