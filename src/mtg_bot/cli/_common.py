@@ -45,6 +45,27 @@ DEFAULT_SHARDS_CONFIG = Path("shards_config.json")
 # not systematically biased toward either side, making this safe.
 DEFAULT_PER_GAME_TIMEOUT_SEC = 600.0
 
+# Iterate-specific split: ``iterate`` runs both self-play (uncontended
+# data-gen, one worker per shard) and eval (14-worker contended) off
+# the SAME ``--per-game-timeout-...-sec`` knob historically. PR #46
+# (commit 591164b9, 2026-05-09) eval against v21 1024-trunk showed the
+# one completed game (game_idx=12) used 178.8s / 592 decisions while
+# 5 timed-out games had each logged 515-645 decisions when killed
+# (real progress, not wedges). So the previous 300s cap clipped right
+# at the median, not the p99. Split rationale:
+#
+# * Self-play is uncontended — one worker, no GPU/CPU sharing. p99
+#   completed-game wall measured at <400s consistently; 300s covers
+#   the bulk and rare clip is an acceptable throughput-vs-tail tradeoff
+#   (mitigates the rare engine-state hang without burning a whole
+#   eval-game budget on every slow game).
+# * Eval is 14-worker contended — GPU + CPU sharing inflates per-decision
+#   wall ~2x for the same network. Field evidence above shows real
+#   eval games genuinely need 600s+ to complete. 600s covers the right
+#   tail without clipping the median.
+DEFAULT_PER_GAME_TIMEOUT_SELF_PLAY_SEC = 300.0
+DEFAULT_PER_GAME_TIMEOUT_EVAL_SEC = 600.0
+
 
 def depth_parser() -> argparse.ArgumentParser:
     """``--samples`` + ``--nodes`` (the search-depth knobs).
@@ -144,7 +165,9 @@ __all__ = [
     "DEFAULT_DECK_POOL",
     "DEFAULT_MASTER_TAILNET",
     "DEFAULT_NODES",
+    "DEFAULT_PER_GAME_TIMEOUT_EVAL_SEC",
     "DEFAULT_PER_GAME_TIMEOUT_SEC",
+    "DEFAULT_PER_GAME_TIMEOUT_SELF_PLAY_SEC",
     "DEFAULT_PROGRESS_DIR",
     "DEFAULT_QUEUE_URL",
     "DEFAULT_SAMPLES",

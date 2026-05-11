@@ -57,6 +57,27 @@ def test_default_per_game_timeout_is_finite_positive():
     assert _common.DEFAULT_PER_GAME_TIMEOUT_SEC == 600.0
 
 
+def test_default_per_game_timeout_self_play_and_eval_are_split():
+    """``iterate`` runs self-play (uncontended, one worker per shard)
+    and eval (14-worker GPU/CPU-contended) off DIFFERENT budgets per
+    PR #46 (commit 591164b9, 2026-05-09) field evidence: at 14-worker
+    SHM eval against v21 1024-trunk the one completed game took
+    178.8s/592 decisions while 5 timed-out games each logged 515-645
+    decisions when killed — real progress, not wedges — proving the
+    prior single 180s/300s cap clipped at the median, not the p99.
+    Self-play stays at 300s (uncontended; covers the bulk without
+    burning headroom on rare hangs); eval bumps to 600s (matches the
+    standalone ``mtg_bot eval`` subcommand's contended budget)."""
+    assert _common.DEFAULT_PER_GAME_TIMEOUT_SELF_PLAY_SEC == 300.0
+    assert _common.DEFAULT_PER_GAME_TIMEOUT_EVAL_SEC == 600.0
+    # Eval must be >= self-play — contention only ever inflates per-
+    # game wall, never deflates it.
+    assert (
+        _common.DEFAULT_PER_GAME_TIMEOUT_EVAL_SEC
+        >= _common.DEFAULT_PER_GAME_TIMEOUT_SELF_PLAY_SEC
+    )
+
+
 def test_depth_parser_yields_defaults_when_no_flags():
     """``depth_parser`` is consumed via ``parents=[depth_parser()]``
     by other parsers; calling it with no overrides should return
