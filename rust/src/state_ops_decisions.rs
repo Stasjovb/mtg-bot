@@ -247,7 +247,7 @@ impl GameState {
                 let mut obj = cards
                     .iter()
                     .find(|o| o.id == *id)
-                    .copied()
+                    .cloned()
                     .expect("validation guarantees membership");
                 obj.zone = 3; // ZONE_GRAVEYARD
                 gy_mut.push(obj);
@@ -266,7 +266,7 @@ impl GameState {
                 let mut obj = cards
                     .iter()
                     .find(|o| o.id == *id)
-                    .copied()
+                    .cloned()
                     .expect("validation guarantees membership");
                 obj.zone = 1; // ZONE_LIBRARY
                 lib_mut.push(obj);

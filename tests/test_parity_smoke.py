@@ -898,7 +898,7 @@ def test_cross_engine_mode_detects_pass_priority_divergence_at_step_0(parity_smo
         f"expected priority_player divergence at step 0; "
         f"actual divergences: {[d.field for d in step_0.divergences]}"
     )
-    assert priority_div.known_gap == "G3"
+    assert priority_div.known_gap == "I25"
     assert priority_div.py_value == 0
     assert priority_div.rust_value == 1
 
@@ -1025,8 +1025,11 @@ def test_cross_engine_mode_cli_dispatches(parity_smoke, monkeypatch, capsys):
     out = capsys.readouterr().out
     # The CLI prints the cross-engine header.
     assert "[cross-engine]" in out
-    # And the aggregate summary lists priority_player as a known-G3 gap.
-    assert "G3" in out
+    # And the aggregate summary lists priority_player as a known I25
+    # parity invariant (G3 was closed by the r27 priority composition
+    # layer; the cross-engine apply_action surface residual is now
+    # documented under I25).
+    assert "I25" in out
     # The final verdict is PARITY: FAIL (until divergences close).
     assert "PARITY: FAIL" in out
 
@@ -1090,14 +1093,16 @@ def test_cross_engine_mode_first_divergence_step_helper(parity_smoke):
     assert result.first_divergence_step() == -1
 
 
-def test_cross_engine_default_gap_lookup_priority_player_resolves_g3(parity_smoke):
+def test_cross_engine_default_gap_lookup_priority_player_resolves_i25(parity_smoke):
     """The gap-doc lookup walks RUST_PARITY_GAPS.md and maps
-    ``priority_player`` to G3. Locks in the lookup contract — the
+    ``priority_player`` to I25 (the priority composition invariant
+    that documents the cross-engine apply_action-level residual after
+    G3/G4/G15 were closed). Locks in the lookup contract — the
     hard-coded mapping in :func:`_load_gap_doc_index` must resolve
     to a section that ACTUALLY exists in the doc."""
     from mtg_bot.parity.cross_engine import default_gap_lookup
 
-    assert default_gap_lookup("priority_player") == "G3"
+    assert default_gap_lookup("priority_player") == "I25"
 
 
 def test_cross_engine_default_gap_lookup_unknown_field_returns_none(parity_smoke):

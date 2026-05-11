@@ -533,17 +533,25 @@ def _load_gap_doc_index() -> dict[str, str]:
     # Curated lookup table. Each FIELD maps to a list of candidate
     # section ids in order of relevance; the first existing one wins.
     # The reasoning behind each mapping:
-    #   priority_player -> G3 (pure pass_priority toggle), G15 (CLEANUP -> UNTAP reset)
-    #   active_player -> G15 (same advance_phase wrap)
-    #   step / phase -> G7 (cleanup step missing CR 514.3 expiration), G15 / G16
+    #   priority_player -> I25 (priority composition layer; Rust's
+    #     apply_action(PassPriority) toggles priority_player, Python's
+    #     is a no-op — engine-side G3/G4/G15 closed by the composer
+    #     in r27, but the cross-engine apply_action surface remains
+    #     because Python owns priority in simulate.priority_loop, not
+    #     in apply_action). G3 / G15 dropped from "Confirmed gaps" but
+    #     I25 is the parity-invariant entry covering the residual.
+    #   active_player -> I25 (same advance_phase wrap reset)
+    #   step / phase -> G7 was the deferred UEOT cleanup expiration,
+    #     closed in r27 by the UEOT framework (I23 now). G16 is the
+    #     deliberate set_phase asymmetry.
     #   mana_pool -> I20 documents the advance_phase composition; on
     #     the cross-engine smoke a mana_pool divergence is typically
     #     a TYPE mismatch (Python list vs Rust 6-color dict) which is
     #     NOVEL — we route to None there. The :func:`_python_mana_pool_signature`
     #     normalizer should prevent that surfacing.
     field_to_candidates: dict[str, list[str]] = {
-        "priority_player": ["G3", "G15"],
-        "active_player": ["G15"],
+        "priority_player": ["I25"],
+        "active_player": ["I25"],
         # Counter cancellation gap (G8) only fires when counters move
         # around; battlefield-level differences in the synthetic smoke
         # are more likely cosmetic. Map to None until a real counter
