@@ -1083,3 +1083,98 @@ def test_resolve_put_card_from_gy_bottom_uses_p1_when_p0_empty(synthetic_state):
     assert synthetic_state.find_object_zone(p1_card_id) == 1
     p1_lib_snap = synthetic_state.library_snapshot(1)
     assert p1_lib_snap[0]["id"] == p1_card_id
+
+
+# -------------------- Round-28 CreateTokenCopyOfTargetCreatureYouControl --------------------
+
+
+def _mirrorpool_dict():
+    return {
+        "name": "Mirrorpool Mode-2 (synthetic)",
+        "card_types": ["Instant"],
+        "mana_cost": {"generic": 3},
+        "effects": [
+            {"kind": "create_token_copy_of_target_creature_you_control"}
+        ],
+    }
+
+
+def test_register_create_token_copy(engine):
+    reg = engine.Registry()
+    pid = reg.register_printing(_mirrorpool_dict())
+    eff = reg.get_printing_effects(pid)[0]
+    assert eff["kind"] == "create_token_copy_of_target_creature_you_control"
+
+
+def test_resolve_create_token_copy_spawns_new_object_same_printing(synthetic_state):
+    """First creature on p0's bf (Grizzly Bears) is the target; a new
+    object with the same printing_id lands on p0's bf."""
+    snap_before = synthetic_state.battlefield_snapshot()
+    p0_bears = [
+        d for d in snap_before
+        if d["controller_id"] == 0 and d["printing_name"] == "Grizzly Bears"
+    ]
+    first_bear_id = p0_bears[0]["id"]
+    bears_printing_id = p0_bears[0]["printing_id"]
+    bears_count_before = len(p0_bears)
+
+    spell_id = synthetic_state.register_and_inject_object(
+        _mirrorpool_dict(), 0, ZONE_HAND
+    )
+    synthetic_state.push_to_stack(spell_id, 0)
+    synthetic_state.resolve_top_of_stack()
+
+    snap_after = synthetic_state.battlefield_snapshot()
+    p0_bears_after = [
+        d for d in snap_after
+        if d["controller_id"] == 0 and d["printing_name"] == "Grizzly Bears"
+    ]
+    # Bears count grew by 1.
+    assert len(p0_bears_after) == bears_count_before + 1
+    # Original target unchanged; new object has the same printing_id.
+    new_bear = next(d for d in p0_bears_after if d["id"] != first_bear_id and d["id"] not in {b["id"] for b in p0_bears})
+    assert new_bear["printing_id"] == bears_printing_id
+    assert new_bear["summoning_sick"] is True
+    assert new_bear["tapped"] is False
+    assert new_bear["damage"] == 0
+    assert new_bear["counters"] == 0
+
+
+def test_resolve_create_token_copy_no_eligible_fizzles(synthetic_state):
+    """No creature on controller's bf → silent fizzle."""
+    state = synthetic_state.clone_once()
+    snap = state.battlefield_snapshot()
+    p0_creatures = [
+        d["id"] for d in snap
+        if d["controller_id"] == 0 and d["printing_name"] == "Grizzly Bears"
+    ]
+    for cid in p0_creatures:
+        state.move_object(cid, 3, 0)  # graveyard
+    spell_id = state.register_and_inject_object(
+        _mirrorpool_dict(), 0, ZONE_HAND
+    )
+    state.push_to_stack(spell_id, 0)
+    state.resolve_top_of_stack()  # should not raise
+
+
+def test_resolve_create_token_copy_clone_isolation(synthetic_state):
+    spell_id = synthetic_state.register_and_inject_object(
+        _mirrorpool_dict(), 0, ZONE_HAND
+    )
+    synthetic_state.push_to_stack(spell_id, 0)
+    p0_bears_before = sum(
+        1 for d in synthetic_state.battlefield_snapshot()
+        if d["controller_id"] == 0 and d["printing_name"] == "Grizzly Bears"
+    )
+    cloned = synthetic_state.clone_once()
+    cloned.resolve_top_of_stack()
+    p0_bears_clone = sum(
+        1 for d in cloned.battlefield_snapshot()
+        if d["controller_id"] == 0 and d["printing_name"] == "Grizzly Bears"
+    )
+    p0_bears_src = sum(
+        1 for d in synthetic_state.battlefield_snapshot()
+        if d["controller_id"] == 0 and d["printing_name"] == "Grizzly Bears"
+    )
+    assert p0_bears_clone == p0_bears_before + 1
+    assert p0_bears_src == p0_bears_before

@@ -217,6 +217,8 @@ the test lands in a commit.
 
 | rust(effect-put-charge-counters-on-self): Effect::PutChargeCountersOnSelf — Blast-Zone-shape charge counters routed to single counters scalar (G8 multi-kind map future) (2 EoE cards). | tests_rust/test_counters.py extend | green  | feature/rust-effect-put-charge-counters-on-self |
 
+| rust(effect-create-token-copy): Effect::CreateTokenCopyOfTargetCreatureYouControl — Mirrorpool-shape spawn new GameObject with target's printing_id (2 EoE cards; subtype injection deferred). | tests_rust/test_zones.py extend | green  | feature/rust-effect-create-token-copy |
+
 ## Build invocation reminder
 
 ```
