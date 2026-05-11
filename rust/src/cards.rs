@@ -666,6 +666,51 @@ pub enum Effect {
     /// raise-on-negative is NOT enforced. count=0/0 is a legal
     /// no-op for parity-test edge cases.
     PumpSelfUntilEOT { power_bonus: i32, toughness_bonus: i32 },
+    /// **Round 28 UEOT-coverage extension.** Target creature gets
+    /// `+power/+toughness` until end of turn. Mirrors Python's
+    /// `PumpTargetCreatureUntilEOT(power_bonus, toughness_bonus)`
+    /// dataclass (26 cards in the EoE pool — Giant Growth-shape
+    /// instants and sorceries, highest-frequency Effect class not
+    /// yet in Rust per r27 measurement).
+    ///
+    /// **Target semantics — first-slice deterministic.** The
+    /// recipient is the FIRST creature on the SOURCE'S CONTROLLER's
+    /// battlefield (smallest Vec index). This mirrors the
+    /// "you-control target" convention that the vast majority of
+    /// pump spells use (Giant Growth: "target creature gets +3/+3
+    /// UEOT"; typically cast to buff your own creature). If the
+    /// source's controller controls NO creatures on battlefield,
+    /// the spell fizzles silently — mirrors Python's
+    /// `if not legal_targets: return` short-circuit when `optional`
+    /// is set or no creature exists. No
+    /// explicit target choice today; rich target enumeration is the
+    /// future decision-callback follow-up (G20 substrate already
+    /// in place from r27).
+    ///
+    /// **Source-on-battlefield edge.** If `source_obj_id` itself is
+    /// a creature on the source's controller's battlefield (rare for
+    /// instants/sorceries, but possible for activated-ability sources
+    /// or self-resolving permanents), it IS eligible. The Rust
+    /// first-slice does NOT carry Python's `another: bool` field
+    /// (which excludes self-as-target on cards like Perigee Beckoner);
+    /// a future slice can layer it on.
+    ///
+    /// **Schema simplification vs Python.** Python's
+    /// `PumpTargetCreatureUntilEOT` carries `granted_keywords`,
+    /// `you_control_only`, `opponents_only`, `target_subtype`,
+    /// `optional`, `another`, `granted_triggered_ability`, and a
+    /// `draw_if_target_has_plus_one_counter` rider. The Rust first
+    /// slice carries NONE of these — cards with those riders compose
+    /// via separate effect chains or wait for a decision-callback-
+    /// driven richer target plumbing slice. Negative bonuses are
+    /// legal (debuff-shaped pumps); no raise-on-negative guard.
+    /// `(0, 0)` is a legal no-op for parity edge cases.
+    ///
+    /// **Mechanism.** Same UEOT-modifier push as `PumpSelfUntilEOT`,
+    /// just on the chosen target rather than the source. The
+    /// modifier auto-expires at the next cleanup step via the r27
+    /// CR 514.3 UEOT-clear pass.
+    PumpTargetCreatureUntilEOT { power_bonus: i32, toughness_bonus: i32 },
 }
 
 #[derive(Clone, Debug)]
@@ -1177,8 +1222,31 @@ fn parse_effect(dict: &Bound<'_, PyDict>) -> PyResult<Effect> {
             };
             Ok(Effect::PumpSelfUntilEOT { power_bonus, toughness_bonus })
         }
+        "pump_target_creature_until_eot" => {
+            // Round-28 UEOT-coverage extension. Mirrors the
+            // `pump_self_until_eot` schema: `power_bonus` and
+            // `toughness_bonus` default to 0; negatives allowed for
+            // debuff-shaped target effects.
+            let power_bonus: i32 = match dict.get_item("power_bonus")? {
+                Some(p) => p.extract().map_err(|e| {
+                    PyValueError::new_err(format!(
+                        "pump_target_creature_until_eot.power_bonus must be an integer (got: {e})"
+                    ))
+                })?,
+                None => 0,
+            };
+            let toughness_bonus: i32 = match dict.get_item("toughness_bonus")? {
+                Some(t) => t.extract().map_err(|e| {
+                    PyValueError::new_err(format!(
+                        "pump_target_creature_until_eot.toughness_bonus must be an integer (got: {e})"
+                    ))
+                })?,
+                None => 0,
+            };
+            Ok(Effect::PumpTargetCreatureUntilEOT { power_bonus, toughness_bonus })
+        }
         other => Err(PyValueError::new_err(format!(
-            "unknown effect kind {other:?}; valid: deal_damage, draw_cards, gain_life, return_to_hand, mill, mill_target_player, exile_target, tap_target, untap_target, sacrifice, add_counters, discard_card, scry_n, destroy_target, damage_each_opponent, damage_each_creature, create_token, add_mana_to_pool, search_library_for_basic_land_tapped, put_plus_one_counter_on_self, surveil, counter_target_spell, return_creature_from_your_graveyard_to_battlefield, discard_self, each_opponent_loses_life, lose_life, target_opponent_loses_life, each_opponent_discards, destroy_all_creatures, destroy_target_nonland_permanent, destroy_target_artifact, destroy_target_land, deal_damage_any_target, pump_self_until_eot"
+            "unknown effect kind {other:?}; valid: deal_damage, draw_cards, gain_life, return_to_hand, mill, mill_target_player, exile_target, tap_target, untap_target, sacrifice, add_counters, discard_card, scry_n, destroy_target, damage_each_opponent, damage_each_creature, create_token, add_mana_to_pool, search_library_for_basic_land_tapped, put_plus_one_counter_on_self, surveil, counter_target_spell, return_creature_from_your_graveyard_to_battlefield, discard_self, each_opponent_loses_life, lose_life, target_opponent_loses_life, each_opponent_discards, destroy_all_creatures, destroy_target_nonland_permanent, destroy_target_artifact, destroy_target_land, deal_damage_any_target, pump_self_until_eot, pump_target_creature_until_eot"
         ))),
     }
 }
@@ -1493,6 +1561,11 @@ fn effect_to_pydict<'py>(
         }
         Effect::PumpSelfUntilEOT { power_bonus, toughness_bonus } => {
             d.set_item("kind", "pump_self_until_eot")?;
+            d.set_item("power_bonus", *power_bonus)?;
+            d.set_item("toughness_bonus", *toughness_bonus)?;
+        }
+        Effect::PumpTargetCreatureUntilEOT { power_bonus, toughness_bonus } => {
+            d.set_item("kind", "pump_target_creature_until_eot")?;
             d.set_item("power_bonus", *power_bonus)?;
             d.set_item("toughness_bonus", *toughness_bonus)?;
         }
