@@ -318,6 +318,19 @@ fn move_source_post_resolve(state: &mut GameState, source_obj_id: u32) -> Option
 /// the stack so the existing borrow-then-drop pattern in
 /// `resolve_top_of_stack` (snapshot effects, drop registry borrow,
 /// iterate) stays intact.
+/// Cross-module wrapper for `apply_effect`. Round-28
+/// `state_ops_decisions.rs::auto_resolve_pending_decisions` needs to
+/// recursively apply the MayDo inner effect when the strategy resolves
+/// to "yes"; the private `apply_effect` isn't reachable across module
+/// boundaries so we expose this thin pub wrapper.
+pub(crate) fn apply_effect_pub(
+    state: &mut GameState,
+    effect: &Effect,
+    source_obj_id: u32,
+) -> PyResult<()> {
+    apply_effect(state, effect, source_obj_id)
+}
+
 fn apply_effect(
     state: &mut GameState,
     effect: &Effect,
@@ -3938,6 +3951,30 @@ fn apply_effect(
             obj.attached_to = None;
             obj.exiled_with_source = Some(source_obj_id);
             Arc::make_mut(&mut state.players[owner_idx].exile).push(obj);
+        }
+        // Round-28 may-do decision wrapper. "You may [inner_effect]."
+        // Pushes a PendingDecision::MayDoChoice onto the queue and
+        // short-circuits. The controller drains via
+        // `submit_may_do_decision(yes)` (manual) or
+        // `auto_resolve_pending_decisions("default" | "may_do_yes" |
+        // "may_do_no")` (deterministic). On "yes" the inner effect is
+        // applied with the same `source_obj_id` so identity-coupled
+        // riders ("if you do, draw a card") retain the resolving
+        // spell's identity. The `_prompt` field rides along on the
+        // PendingDecision dict snapshot for agent introspection but
+        // isn't used here.
+        //
+        // Controller convention: `state.active_player` — first-slice
+        // shape consistent with Surveil / DrawCards. Real MTG plumbs
+        // the spell controller through `StackItem.controller`;
+        // deferred.
+        Effect::MayDo { inner_effect, prompt: _prompt } => {
+            let controller = state.active_player;
+            state.pending_decisions.push(PendingDecision::MayDoChoice {
+                source_obj_id,
+                controller,
+                inner_effect: inner_effect.clone(),
+            });
         }
     }
     Ok(())

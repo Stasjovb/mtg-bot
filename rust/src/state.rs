@@ -326,6 +326,26 @@ pub enum PendingDecision {
         controller: u8,
         cards: Vec<GameObject>,
     },
+    /// **Round 28 may-do decision substrate.** "You may [inner_effect]"
+    /// — controller chooses yes or no at resolve time. Pushed by
+    /// `Effect::MayDo` (Lithobraking-style "you may sacrifice an
+    /// artifact; if you do, ..." family, EoE pool ≥ 4 cards).
+    ///
+    /// **Payload.** Carries the inner Effect on the heap. On a "yes"
+    /// submit, `submit_may_do_decision(true)` consumes the variant
+    /// and recursively calls `apply_effect(state, &inner, source_obj_id)`.
+    /// On a "no" submit (or auto-resolve with strategy `"may_do_yes"`),
+    /// the variant is dropped without resolving the inner.
+    ///
+    /// **Python parity.** Matches Python's `MayDo(Effect)` — the
+    /// default base-Agent answers "yes," so the auto-resolve strategy
+    /// `"default"` / `"may_do_yes"` also says "yes" (preserves the
+    /// no-agent-seated semantics).
+    MayDoChoice {
+        source_obj_id: u32,
+        controller: u8,
+        inner_effect: Box<crate::cards::Effect>,
+    },
 }
 
 /// `GameState` carries an `Arc<RegistryData>` so every clone shares

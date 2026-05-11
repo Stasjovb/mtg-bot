@@ -1,4 +1,4 @@
-"""Tests for the round-27 G20 decision-callback substrate.
+"""Tests for the round-27 / round-28 decision-callback substrate.
 
 Round-27 closes parity gap G20 (Surveil) by introducing a state-machine
 decision callback: effects that need a controller-provided choice push
@@ -8,10 +8,6 @@ circuit. The caller (MCTS, parity_smoke, test harness) inspects via
 via ``submit_surveil_decision(card_ids_to_top, card_ids_to_graveyard)``,
 or auto-resolves via ``auto_resolve_pending_decisions(strategy)``.
 
-These tests exercise the substrate end-to-end via the Surveil arm —
-the first effect to use it. Future modal / scry-on-keep / London
-bottom-N effects will follow the same shape.
-
 The substrate is decoupled from ``resolve_top_of_stack``:
 
 * ``resolve_top_of_stack`` auto-resolves with ``"keep_all_on_top"`` so
@@ -20,6 +16,15 @@ The substrate is decoupled from ``resolve_top_of_stack``:
 * ``resolve_top_of_stack_pause`` runs the same resolution flow WITHOUT
   the auto-resolve — leaving the pending-decision queue for the
   caller to inspect / submit.
+
+Round-28 extends the substrate with a ``MayDoChoice`` variant
+(`Effect::MayDo` wrapper — "you may [inner effect]"). The dispatcher
+adds ``submit_may_do_decision(yes: bool)``, and auto-resolve gains
+``"may_do_yes"`` / ``"may_do_no"`` / ``"default"`` strategies (the
+"default" answers "yes" to match Python's base-Agent no-seated-agent
+shape). The pattern generalizes — future ``IfYouDo`` / optional-mana-
+cost / look-at-top-N variants slot in by adding (1) a PendingDecision
+arm, (2) a submit_*_decision dispatcher, (3) a parse + resolve arm.
 """
 
 from __future__ import annotations
@@ -443,3 +448,293 @@ def test_clone_carries_pending_decisions(synthetic_state):
     assert clone.has_pending_decision() is False
     assert synthetic_state.has_pending_decision() is True
     assert synthetic_state.pending_decisions()[0]["cards"] == pending_ids
+
+
+# =====================================================================
+# Round-28 MayDo decision substrate
+# =====================================================================
+#
+# Round-28 extends the round-27 substrate with ``PendingDecision::
+# MayDoChoice`` — the "you may [inner effect]" wrapper. On resolve, the
+# Effect pushes a MayDoChoice onto the queue and short-circuits; the
+# controller drains via ``submit_may_do_decision(yes)`` (manual) or
+# ``auto_resolve_pending_decisions("default" | "may_do_yes" |
+# "may_do_no")``. "Yes" applies the inner effect; "no" drops it.
+
+
+def _may_do_draw_dict(count: int = 1, prompt: str = ""):
+    """A may-do sorcery whose inner effect is ``draw_cards`` —
+    verifiable via the controller's hand size."""
+    eff = {
+        "kind": "may_do",
+        "inner_effect": {"kind": "draw_cards", "count": count},
+    }
+    if prompt:
+        eff["prompt"] = prompt
+    return {
+        "name": f"Test MayDo Draw {count}",
+        "card_types": ["Sorcery"],
+        "mana_cost": {"U": 1},
+        "effects": [eff],
+    }
+
+
+# --- register / parse round-trip -------------------------------------
+
+
+def test_may_do_registers_as_effect_with_inner(engine):
+    """A may_do sorcery registers cleanly and surfaces its inner
+    effect through the printing readback (the dict round-trip)."""
+    reg = engine.Registry()
+    pid = reg.register_printing(_may_do_draw_dict(count=2, prompt="Draw two?"))
+    effects = reg.get_printing_effects(pid)
+    assert len(effects) == 1
+    eff = effects[0]
+    assert eff["kind"] == "may_do"
+    assert eff["prompt"] == "Draw two?"
+    assert eff["inner_effect"]["kind"] == "draw_cards"
+    assert eff["inner_effect"]["count"] == 2
+
+
+def test_may_do_missing_inner_effect_raises(engine):
+    """``may_do`` without ``inner_effect`` is a hard ValueError."""
+    reg = engine.Registry()
+    bad = {
+        "name": "Bad MayDo",
+        "card_types": ["Sorcery"],
+        "mana_cost": {"U": 1},
+        "effects": [{"kind": "may_do"}],
+    }
+    with pytest.raises(ValueError):
+        reg.register_printing(bad)
+
+
+# --- resolve pushes MayDoChoice --------------------------------------
+
+
+def test_may_do_resolve_pushes_pending_choice(synthetic_state):
+    """Resolving a MayDo sorcery pushes one MayDoChoice onto the
+    queue. The inner draw has NOT yet fired (hand size unchanged
+    by the inner effect). The source still moves to graveyard via
+    CR 608.2m."""
+    hand_before = synthetic_state.hand_sizes[0]
+    graveyard_before = synthetic_state.graveyard_sizes[0]
+    spell_obj_id = synthetic_state.register_and_inject_object(
+        _may_do_draw_dict(count=2), 0, ZONE_HAND
+    )
+    synthetic_state.push_to_stack(spell_obj_id, 0)
+    synthetic_state.resolve_top_of_stack_pause()
+
+    # Source moved to graveyard, but inner draw is pending.
+    assert synthetic_state.graveyard_sizes[0] == graveyard_before + 1
+    # Hand grew by 1 from registering+injecting the sorcery, then
+    # shrank by 1 (cast moves hand → stack → graveyard). Net: same.
+    assert synthetic_state.hand_sizes[0] == hand_before
+
+    # Exactly one MayDoChoice in the queue.
+    assert synthetic_state.has_pending_decision() is True
+    pds = synthetic_state.pending_decisions()
+    assert len(pds) == 1
+    pd = pds[0]
+    assert pd["kind"] == "MayDoChoice"
+    assert pd["controller"] == 0
+    assert pd["source_obj_id"] == spell_obj_id
+    assert pd["inner_effect"]["kind"] == "draw_cards"
+    assert pd["inner_effect"]["count"] == 2
+
+
+# --- submit: yes / no ------------------------------------------------
+
+
+def test_submit_may_do_yes_applies_inner_effect(synthetic_state):
+    """``submit_may_do_decision(True)`` applies the inner draw,
+    growing the controller's hand by the inner count and consuming
+    the pending decision."""
+    hand_before = synthetic_state.hand_sizes[0]
+    spell_obj_id = synthetic_state.register_and_inject_object(
+        _may_do_draw_dict(count=3), 0, ZONE_HAND
+    )
+    synthetic_state.push_to_stack(spell_obj_id, 0)
+    synthetic_state.resolve_top_of_stack_pause()
+    assert synthetic_state.has_pending_decision() is True
+
+    synthetic_state.submit_may_do_decision(True)
+
+    assert synthetic_state.has_pending_decision() is False
+    # The cast itself was a net zero on hand (inject +1, cast -1).
+    # The inner draw added 3 to the hand.
+    assert synthetic_state.hand_sizes[0] == hand_before + 3
+
+
+def test_submit_may_do_no_drops_inner_effect(synthetic_state):
+    """``submit_may_do_decision(False)`` drops the inner effect
+    without applying it. Hand size unchanged by the may-do path."""
+    hand_before = synthetic_state.hand_sizes[0]
+    spell_obj_id = synthetic_state.register_and_inject_object(
+        _may_do_draw_dict(count=3), 0, ZONE_HAND
+    )
+    synthetic_state.push_to_stack(spell_obj_id, 0)
+    synthetic_state.resolve_top_of_stack_pause()
+
+    synthetic_state.submit_may_do_decision(False)
+
+    assert synthetic_state.has_pending_decision() is False
+    # No inner-effect application — hand is back to its pre-cast
+    # value (inject +1, cast -1, no inner draw).
+    assert synthetic_state.hand_sizes[0] == hand_before
+
+
+# --- submit dispatcher mismatches ------------------------------------
+
+
+def test_submit_may_do_decision_with_empty_queue_raises(synthetic_state):
+    """``submit_may_do_decision`` on an empty queue raises ValueError."""
+    assert synthetic_state.has_pending_decision() is False
+    with pytest.raises(ValueError):
+        synthetic_state.submit_may_do_decision(True)
+
+
+def test_submit_may_do_on_surveil_head_raises(synthetic_state):
+    """``submit_may_do_decision`` when the head is a SurveilChoice
+    (not a MayDoChoice) raises ValueError. The queue is left intact
+    so the caller can recover by calling the right dispatcher."""
+    spell_obj_id = synthetic_state.register_and_inject_object(
+        _surveil_dict(count=1), 0, ZONE_HAND
+    )
+    synthetic_state.push_to_stack(spell_obj_id, 0)
+    synthetic_state.resolve_top_of_stack_pause()
+    assert synthetic_state.pending_decisions()[0]["kind"] == "SurveilChoice"
+
+    with pytest.raises(ValueError):
+        synthetic_state.submit_may_do_decision(True)
+    # Transactional: queue intact, kind still SurveilChoice.
+    assert synthetic_state.has_pending_decision() is True
+    assert synthetic_state.pending_decisions()[0]["kind"] == "SurveilChoice"
+
+
+def test_submit_surveil_on_may_do_head_raises(synthetic_state):
+    """``submit_surveil_decision`` when the head is a MayDoChoice
+    raises ValueError. Symmetric to the test above."""
+    spell_obj_id = synthetic_state.register_and_inject_object(
+        _may_do_draw_dict(count=1), 0, ZONE_HAND
+    )
+    synthetic_state.push_to_stack(spell_obj_id, 0)
+    synthetic_state.resolve_top_of_stack_pause()
+    assert synthetic_state.pending_decisions()[0]["kind"] == "MayDoChoice"
+
+    with pytest.raises(ValueError):
+        synthetic_state.submit_surveil_decision([], [])
+    # Transactional: queue intact, kind still MayDoChoice.
+    assert synthetic_state.has_pending_decision() is True
+    assert synthetic_state.pending_decisions()[0]["kind"] == "MayDoChoice"
+
+
+# --- auto-resolve strategies -----------------------------------------
+
+
+def test_auto_resolve_default_says_yes_to_may_do(synthetic_state):
+    """``auto_resolve_pending_decisions("default")`` answers "yes" to
+    a MayDoChoice — mirrors Python's no-agent-seated default. The
+    inner draw fires."""
+    hand_before = synthetic_state.hand_sizes[0]
+    spell_obj_id = synthetic_state.register_and_inject_object(
+        _may_do_draw_dict(count=2), 0, ZONE_HAND
+    )
+    synthetic_state.push_to_stack(spell_obj_id, 0)
+    synthetic_state.resolve_top_of_stack_pause()
+
+    synthetic_state.auto_resolve_pending_decisions("default")
+
+    assert synthetic_state.has_pending_decision() is False
+    assert synthetic_state.hand_sizes[0] == hand_before + 2
+
+
+def test_auto_resolve_may_do_yes_applies_inner(synthetic_state):
+    """``auto_resolve_pending_decisions("may_do_yes")`` applies the
+    inner draw — same observable effect as ``"default"``."""
+    hand_before = synthetic_state.hand_sizes[0]
+    spell_obj_id = synthetic_state.register_and_inject_object(
+        _may_do_draw_dict(count=1), 0, ZONE_HAND
+    )
+    synthetic_state.push_to_stack(spell_obj_id, 0)
+    synthetic_state.resolve_top_of_stack_pause()
+
+    synthetic_state.auto_resolve_pending_decisions("may_do_yes")
+
+    assert synthetic_state.has_pending_decision() is False
+    assert synthetic_state.hand_sizes[0] == hand_before + 1
+
+
+def test_auto_resolve_may_do_no_drops_inner(synthetic_state):
+    """``auto_resolve_pending_decisions("may_do_no")`` drops the
+    inner effect — hand unchanged by the MayDo arm."""
+    hand_before = synthetic_state.hand_sizes[0]
+    spell_obj_id = synthetic_state.register_and_inject_object(
+        _may_do_draw_dict(count=2), 0, ZONE_HAND
+    )
+    synthetic_state.push_to_stack(spell_obj_id, 0)
+    synthetic_state.resolve_top_of_stack_pause()
+
+    synthetic_state.auto_resolve_pending_decisions("may_do_no")
+
+    assert synthetic_state.has_pending_decision() is False
+    assert synthetic_state.hand_sizes[0] == hand_before
+
+
+def test_resolve_top_of_stack_auto_resolves_may_do_yes(synthetic_state):
+    """The non-pause ``resolve_top_of_stack`` auto-resolves the
+    MayDo with the "yes" default (matches Python's base-Agent
+    no-seated-agent shape). The inner draw fires automatically."""
+    hand_before = synthetic_state.hand_sizes[0]
+    spell_obj_id = synthetic_state.register_and_inject_object(
+        _may_do_draw_dict(count=2), 0, ZONE_HAND
+    )
+    synthetic_state.push_to_stack(spell_obj_id, 0)
+    synthetic_state.resolve_top_of_stack()
+
+    assert synthetic_state.has_pending_decision() is False
+    assert synthetic_state.hand_sizes[0] == hand_before + 2
+
+
+# --- fingerprint & clone --------------------------------------------
+
+
+def test_fingerprint_may_do_pending_differs_from_empty(synthetic_state):
+    """A state with a pending MayDoChoice fingerprints differently
+    from the same state with no pending decisions. Confirms the
+    serializer participates."""
+    fp_clean = synthetic_state.fingerprint()
+    spell_obj_id = synthetic_state.register_and_inject_object(
+        _may_do_draw_dict(count=1), 0, ZONE_HAND
+    )
+    synthetic_state.push_to_stack(spell_obj_id, 0)
+    synthetic_state.resolve_top_of_stack_pause()
+    assert synthetic_state.has_pending_decision() is True
+    fp_pending = synthetic_state.fingerprint()
+    assert fp_pending != fp_clean
+
+
+def test_clone_isolates_may_do_pending_decisions(synthetic_state):
+    """``clone_once()`` deep-clones a pending MayDoChoice. Resolving
+    the clone leaves the source's queue intact (CoW canary for the
+    new variant)."""
+    hand_before = synthetic_state.hand_sizes[0]
+    spell_obj_id = synthetic_state.register_and_inject_object(
+        _may_do_draw_dict(count=2), 0, ZONE_HAND
+    )
+    synthetic_state.push_to_stack(spell_obj_id, 0)
+    synthetic_state.resolve_top_of_stack_pause()
+    assert synthetic_state.has_pending_decision() is True
+
+    clone = synthetic_state.clone_once()
+    assert clone.has_pending_decision() is True
+    assert clone.pending_decisions()[0]["kind"] == "MayDoChoice"
+
+    # Drain the clone with "yes" — source must remain pending.
+    clone.submit_may_do_decision(True)
+    assert clone.has_pending_decision() is False
+    assert clone.hand_sizes[0] == hand_before + 2
+
+    assert synthetic_state.has_pending_decision() is True
+    # The source's hand is still pre-inner-draw.
+    assert synthetic_state.hand_sizes[0] == hand_before

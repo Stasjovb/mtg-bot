@@ -229,6 +229,8 @@ the test lands in a commit.
 
 | rust(effect-exile-opps-nonland-until-leaves): Effect::ExileOpponentsNonlandPermanentUntilLeaves — Hardlight-Containment-shape; broader filter on the r28 until-leaves foundation (4 EoE cards). | tests_rust/test_zones.py extend | green  | feature/rust-effect-exile-opps-nonland-until-leaves |
 
+| rust(decision-callback-may-do): PendingDecision::MayDoChoice variant + submit_may_do_decision pymethod + auto-resolve strategies (default / may_do_yes / may_do_no) + Effect::MayDo wrapper — "you may [inner]" pattern, generalizes the r27 Surveil substrate to a second variant. | tests_rust/test_pending_decisions.py extend | green  | feature/rust-decision-callback-may-do |
+
 ## Build invocation reminder
 
 ```

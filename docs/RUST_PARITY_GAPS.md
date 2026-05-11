@@ -617,6 +617,28 @@ refactor on either side that breaks the parity surfaces immediately.
     `src/mtg_bot/search/resolution_channel.py`
     (`ResolutionSurveilDecision`, the `ResolutionChannelAgent` pause
     / rollback / replay harness).
+  - **Round-28 extension — `MayDoChoice` variant.** Decision-callback
+    substrate now carries a second variant:
+    `PendingDecision::MayDoChoice { source_obj_id, controller,
+    inner_effect: Box<Effect> }`, pushed by `Effect::MayDo {
+    inner_effect, prompt }` — Python's "you may [inner]" wrapper from
+    `effects/generic/may_do.py`. Resolve short-circuits exactly as
+    Surveil does; `state.submit_may_do_decision(yes: bool)` consumes
+    the head, recursively applying the inner effect on "yes" (with the
+    same `source_obj_id` so identity-coupled "if you do" riders retain
+    the resolving spell's identity) and dropping it on "no". The auto-
+    resolve strategy set grew to include `"may_do_yes"` / `"may_do_no"`
+    / `"default"`; `"default"` answers "yes" (mirrors Python's base-
+    Agent no-seated-agent default), Surveil falls through to
+    `"keep_all_on_top"`. `resolve_top_of_stack` (non-pause) auto-
+    resolves with `"keep_all_on_top"` which now also routes MayDo to
+    "yes" (fallthrough rule). The fingerprint serializer adds a
+    MayDoChoice arm (variant-tag + source/controller + inner-effect
+    Debug format) so a pending MayDo participates in canonicalization
+    just like Surveil. Pinned by the round-28 MayDo block in
+    `tests_rust/test_pending_decisions.py` (13 tests covering parse,
+    push-pending, submit yes/no, auto-resolve strategies, dispatcher
+    cross-variant rejection, fingerprint divergence, clone isolation).
 
 ### I23. UEOT-modifier framework: per-object expiring continuous effects with CR 514.3 cleanup-step expiration
 
