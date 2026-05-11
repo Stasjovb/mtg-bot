@@ -761,6 +761,25 @@ pub enum Effect {
     /// composition. Negative bonuses are legal (controller-side
     /// debuff pumps); `(0, 0)` is a legal no-op for parity edge cases.
     PumpCreaturesYouControlUntilEOT { power_bonus: i32, toughness_bonus: i32 },
+    /// **Round 28 coverage extension.** Return the first creature card
+    /// from the source-controller's graveyard to that player's hand.
+    /// Mirrors Python's `ReturnCreatureFromYourGraveyardToHand`
+    /// (`bounce.py:356` — 3 EoE cards).
+    ///
+    /// **First-slice deterministic target choice.** Same shape as the
+    /// existing `ReturnCreatureFromYourGraveyardToBattlefield` arm —
+    /// scans the active-player's graveyard front-to-back, picks the
+    /// first creature card. Empty / no-creature graveyard fizzles
+    /// silently.
+    ///
+    /// **Schema simplification.** Drops `max_mv` / `or_spacecraft` /
+    /// `or_artifact` Python riders.
+    ///
+    /// **Zone-change reset (CR 400.7).** `tapped`, `summoning_sick`,
+    /// `damage`, `counters` reset on move to hand. summoning_sick
+    /// matches the round-28 CE1 universal-true default for hand-zone
+    /// objects.
+    ReturnCreatureFromYourGraveyardToHand,
 }
 
 #[derive(Clone, Debug)]
@@ -1295,6 +1314,10 @@ fn parse_effect(dict: &Bound<'_, PyDict>) -> PyResult<Effect> {
             };
             Ok(Effect::PumpTargetCreatureUntilEOT { power_bonus, toughness_bonus })
         }
+        "return_creature_from_your_graveyard_to_hand" => {
+            // Unit variant; no fields beyond `kind`.
+            Ok(Effect::ReturnCreatureFromYourGraveyardToHand)
+        }
         "pump_creatures_you_control_until_eot" => {
             // Round-28 anthem-shape UEOT effect. Mirrors the
             // PumpSelfUntilEOT / PumpTargetCreatureUntilEOT schema:
@@ -1349,7 +1372,7 @@ fn parse_effect(dict: &Bound<'_, PyDict>) -> PyResult<Effect> {
             Ok(Effect::Sequence { effects: children })
         }
         other => Err(PyValueError::new_err(format!(
-            "unknown effect kind {other:?}; valid: deal_damage, draw_cards, gain_life, return_to_hand, mill, mill_target_player, exile_target, tap_target, untap_target, sacrifice, add_counters, discard_card, scry_n, destroy_target, damage_each_opponent, damage_each_creature, create_token, add_mana_to_pool, search_library_for_basic_land_tapped, put_plus_one_counter_on_self, surveil, counter_target_spell, return_creature_from_your_graveyard_to_battlefield, discard_self, each_opponent_loses_life, lose_life, target_opponent_loses_life, each_opponent_discards, destroy_all_creatures, destroy_target_nonland_permanent, destroy_target_artifact, destroy_target_land, deal_damage_any_target, pump_self_until_eot, pump_target_creature_until_eot, sequence, pump_creatures_you_control_until_eot"
+            "unknown effect kind {other:?}; valid: deal_damage, draw_cards, gain_life, return_to_hand, mill, mill_target_player, exile_target, tap_target, untap_target, sacrifice, add_counters, discard_card, scry_n, destroy_target, damage_each_opponent, damage_each_creature, create_token, add_mana_to_pool, search_library_for_basic_land_tapped, put_plus_one_counter_on_self, surveil, counter_target_spell, return_creature_from_your_graveyard_to_battlefield, discard_self, each_opponent_loses_life, lose_life, target_opponent_loses_life, each_opponent_discards, destroy_all_creatures, destroy_target_nonland_permanent, destroy_target_artifact, destroy_target_land, deal_damage_any_target, pump_self_until_eot, pump_target_creature_until_eot, sequence, pump_creatures_you_control_until_eot, return_creature_from_your_graveyard_to_hand"
         ))),
     }
 }
@@ -1676,6 +1699,9 @@ fn effect_to_pydict<'py>(
             d.set_item("kind", "pump_creatures_you_control_until_eot")?;
             d.set_item("power_bonus", *power_bonus)?;
             d.set_item("toughness_bonus", *toughness_bonus)?;
+        }
+        Effect::ReturnCreatureFromYourGraveyardToHand => {
+            d.set_item("kind", "return_creature_from_your_graveyard_to_hand")?;
         }
         Effect::Sequence { effects } => {
             d.set_item("kind", "sequence")?;
