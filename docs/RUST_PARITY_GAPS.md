@@ -183,19 +183,6 @@ behavior per CR / Python, parity impact, and closeable / accepted.
 - **Closeable**: yes — pending RNG externalization work to seed the
   shuffle deterministically inside `apply_effect`.
 
-### G20. Surveil first-slice keeps everything on top (no decision callback)
-
-- **Pinned by**: `tests_rust/test_library.py::test_effect_surveil_first_slice_keeps_library_and_top_id_unchanged`
-  (docstring note); also tracked in `docs/SEARCH_LIMITATIONS.md`.
-- **Rust today**: `Effect::Surveil` deterministically keeps all
-  observed cards on top. No "which to graveyard" decision callback.
-- **CR / Python expected**: Real surveil lets the controller route
-  each observed card to top-of-library or graveyard.
-- **Impact**: low — visible whenever a surveil effect resolves;
-  Rust never sends to graveyard.
-- **Closeable**: yes — pending decision-callback plumbing for surveil
-  and scry.
-
 ### G24. No scry-on-keep step after mulligan-to-7 (Paris rule)
 
 - **Pinned by**: `tests_rust/test_mulligan.py` module docstring (gap 4).
@@ -593,6 +580,56 @@ refactor on either side that breaks the parity surfaces immediately.
     per-call safety counter, not part of the gameplay-relevant state
     digest. Pinned fingerprint baselines below are unchanged. Closes
     parity gap G23 (entry removed from "Confirmed gaps" above).
+
+### I22. Decision-callback substrate via `pending_decisions` (CR 701.43 Surveil; G20 closure)
+
+- **Pinned by**: every test in
+  `tests_rust/test_pending_decisions.py`; the round-23 baselines in
+  `tests_rust/test_resolve.py::test_resolve_surveil_*` and
+  `tests_rust/test_library.py::test_effect_surveil_first_slice_keeps_library_and_top_id_unchanged`
+  still hold via the auto-resolve path.
+- **Invariant** (round-27 G20 closure):
+  - `GameState.pending_decisions: Vec<PendingDecision>` — a FIFO
+    queue of choices the engine is waiting on. The first variant is
+    `PendingDecision::SurveilChoice { source_obj_id, controller,
+    cards }`. Future variants (G22 `LondonBottomN`, G24
+    `ScryOnKeep`, future `ModalChooseOne` / `ManifestDread`) follow
+    the same shape.
+  - `Effect::Surveil` pops `min(count, library_len)` cards off
+    library top and packages them into a `SurveilChoice` — the cards
+    live in NEITHER library nor graveyard while the decision is
+    pending. The arm short-circuits; nothing else mutates.
+  - `state.has_pending_decision()` / `state.pending_decisions()` —
+    introspection. `state.submit_surveil_decision(top_ids,
+    graveyard_ids)` — the dispatcher: every pending id must appear
+    in exactly one list; mismatches raise `ValueError`
+    transactionally (no mutation on failure). The dispatcher routes
+    `top_ids` back to library top in the submitted order (`top_ids[0]`
+    is the topmost card after submission) and `graveyard_ids` into
+    the controller's graveyard in the submitted order.
+  - `state.auto_resolve_pending_decisions(strategy)` — deterministic
+    drain for callers that don't model the choice dimension.
+    Strategies: `"keep_all_on_top"` (the round-23 baseline, bit-equal
+    to the pre-r27 path) and `"send_all_to_graveyard"` (mirror, for
+    surveil-for-graveyard-fill effects). An unknown strategy raises
+    `ValueError` transactionally.
+  - `resolve_top_of_stack` opts INTO `"keep_all_on_top"` auto-resolve
+    at the end so existing baseline tests (round-23 Surveil etc.) are
+    bit-equal to the pre-r27 path. The new
+    `resolve_top_of_stack_pause` pymethod runs the same flow WITHOUT
+    auto-resolving — for callers (tests, MCTS, parity_smoke) that
+    want to inspect / submit decisions.
+  - The queue participates in `Clone` (cloned with the state) and in
+    fingerprint serialization: a state with a pending decision
+    hashes differently from one without. The fingerprint serializer
+    appends the pending-decisions slot ONLY when non-empty, so
+    pre-r27 pinned baselines (every state in `test_fingerprint.py`
+    has empty `pending_decisions`) remain bit-equal — no baseline
+    shifts in this slice.
+  - Mirrors Python's pause-and-resume decision shape in
+    `src/mtg_bot/search/resolution_channel.py`
+    (`ResolutionSurveilDecision`, the `ResolutionChannelAgent` pause
+    / rollback / replay harness).
 
 ---
 

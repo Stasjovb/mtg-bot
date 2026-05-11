@@ -310,5 +310,6 @@ pub fn make_state(
         blockers: Vec::new(),
         stack: Vec::new(),
         consecutive_passes: 0,
+        pending_decisions: Vec::new(),
     })
 }

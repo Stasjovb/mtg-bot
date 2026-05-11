@@ -182,6 +182,7 @@ the test lands in a commit.
 | rust(gap-g23-mulligan-cap): per-player `mulligan_count` field; `mulligan` / `mulligan_to_n` raise after 7 calls (CR 103.4 / Python `max_mulligans=7`) | tests_rust/test_mulligan.py extend | green  | feature/rust-gap-g23-mulligan-cap |
 | rust(gap-g21g22-london-mulligan): atomic `mulligan_atomic(p, seed, bottom_card_ids)` folds shuffle + redraw-7 + bottom-N into one transaction (CR 103.4 London) | tests_rust/test_mulligan.py extend | green  | feature/rust-gap-g21g22-london-mulligan |
 | rust(gap-g3+g4+g15-priority-composition-layer): `consecutive_passes` counter + `complete_step_via_priority_round` composer + CR 117.1a/1c/4 priority resets in advance_phase/cast_creature/apply_action | tests_rust/test_priority.py invert + extend, tests_rust/test_stack.py + test_steps.py extend | green  | feature/rust-priority-composition-layer |
+| rust(decision-callback-surveil): G20 closure — `pending_decisions` queue + `submit_surveil_decision` dispatcher + `auto_resolve_pending_decisions` + `resolve_top_of_stack_pause`; Surveil arm short-circuits to a `PendingDecision::SurveilChoice` (CR 701.43) | tests_rust/test_pending_decisions.py | green  | feature/rust-decision-callback-surveil |
 
 ## Build invocation reminder
 

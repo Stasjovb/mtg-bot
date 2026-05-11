@@ -91,7 +91,7 @@
 //! locking the format in a regression-safe way. A future round can
 //! add the Python shim and assert byte-equality across the engines.
 
-use crate::state::{GameObject, GameState};
+use crate::state::{GameObject, GameState, PendingDecision};
 use pyo3::prelude::*;
 use serde_json::{json, Value};
 use sha1::{Digest, Sha1};
@@ -263,7 +263,7 @@ impl GameState {
         let step: Value = phase_to_step_name(self.phase)
             .map(|s| Value::String(s.to_string()))
             .unwrap_or(Value::Null);
-        let parts = Value::Array(vec![
+        let mut parts_vec: Vec<Value> = vec![
             json!(self.turn_number),
             step,
             json!(self.active_player),
@@ -319,7 +319,44 @@ impl GameState {
                     })
                     .collect::<Vec<_>>(),
             ),
-        ]);
+        ];
+        // Round-27 G20 closure: pending_decisions slot. Appended
+        // ONLY when non-empty so the pre-r27 pinned fingerprint
+        // baselines (every state in test_fingerprint.py has empty
+        // pending_decisions) remain bit-equal. A state mid-Surveil
+        // — pending SurveilChoice waiting on the controller's pick
+        // — produces a digest that differs from the pre-decision
+        // baseline by the appended JSON array. Cross-engine parity:
+        // Python's hash_state has no equivalent slot today; the
+        // r27 invariant is "Rust emits this iff a decision is
+        // pending", and Python states (which never carry pending
+        // decisions through the parity_smoke harness) match the
+        // empty-pending Rust path.
+        if !self.pending_decisions.is_empty() {
+            let pds: Vec<Value> = self
+                .pending_decisions
+                .iter()
+                .map(|pd| match pd {
+                    PendingDecision::SurveilChoice {
+                        source_obj_id,
+                        controller,
+                        cards,
+                    } => Value::Array(vec![
+                        Value::String("SurveilChoice".to_string()),
+                        json!(*source_obj_id),
+                        json!(*controller),
+                        Value::Array(
+                            cards
+                                .iter()
+                                .map(|o| object_signature(self, o))
+                                .collect(),
+                        ),
+                    ]),
+                })
+                .collect();
+            parts_vec.push(Value::Array(pds));
+        }
+        let parts = Value::Array(parts_vec);
 
         let mut blob = String::new();
         serialize_python_compatible(&parts, &mut blob);

@@ -126,6 +126,48 @@ pub struct StackItem {
     pub controller: u8,
 }
 
+/// A choice the engine is waiting on. Pushed onto
+/// `GameState.pending_decisions` by an effect whose resolution
+/// requires a controller-provided choice (e.g. Surveil — which of
+/// the observed cards to send to graveyard, which to keep on top).
+///
+/// Round-27 G20 closure introduces the substrate. First variant:
+/// `SurveilChoice` — the cards looked at, the controller, and the
+/// source obj id (for log-correlation). The dispatcher
+/// `submit_surveil_decision` consumes this variant; future variants
+/// (`LondonBottomN` for G22, `ScryOnKeep` for G24, `ModalChooseOne`,
+/// `ManifestDread`, ...) follow the same `apply_effect` → push →
+/// pause / caller pops → submit shape.
+///
+/// **State-affecting**: a pending decision IS part of the gameplay-
+/// relevant digest. A state with a pending decision differs from
+/// one without (the observed cards are off-library-top but not yet
+/// in graveyard; the next decision shapes the library + graveyard
+/// final shape). `Clone` clones the Vec, so a cloned state carries
+/// its pending decisions; CoW is not needed (the Vec is owned per
+/// `GameState`, not shared across clones).
+#[derive(Clone, Debug)]
+pub enum PendingDecision {
+    /// Surveil N (CR 701.43). The controller has just looked at
+    /// `cards` (popped off library top, top-most first). For each
+    /// one they choose either "top of library" (preserving the
+    /// caller's submitted order) or "graveyard". Until the caller
+    /// submits a decision the cards live in this variant — NOT in
+    /// the library, NOT in the graveyard.
+    ///
+    /// `cards` carries the full `GameObject` payload (POD `Copy`),
+    /// not just the id — the submit dispatcher needs the printing_id
+    /// + controller + counters when re-pushing into library or
+    /// graveyard. Order matches the order popped off library top:
+    /// `cards[0]` was the topmost card, `cards[1]` was second-from-
+    /// top, etc.
+    SurveilChoice {
+        source_obj_id: u32,
+        controller: u8,
+        cards: Vec<GameObject>,
+    },
+}
+
 /// `GameState` carries an `Arc<RegistryData>` so every clone shares
 /// the printings catalogue at refcount-bump cost. Per-instance
 /// state — players, zones, turn counter — clones via the `Player`
@@ -163,6 +205,24 @@ pub struct GameState {
     /// pre- and post-pass must produce the same fingerprint regardless
     /// of how many consecutive passes happened to get there.
     pub consecutive_passes: u8,
+    /// Decisions the engine is waiting on. Round-27 G20 closure —
+    /// effects whose resolution needs a controller-provided choice
+    /// (Surveil, future London bottom-N, future scry-on-keep,
+    /// future modal-choose) push a `PendingDecision` here and
+    /// short-circuit their `apply_effect` arm. The caller (MCTS,
+    /// parity_smoke, test harness) inspects via
+    /// `pending_decisions()` / `has_pending_decision()`, resolves
+    /// via the variant-specific `submit_*_decision` dispatcher
+    /// (e.g. `submit_surveil_decision`).
+    ///
+    /// **State-affecting** (mirrors Python's pause-and-resume
+    /// decision shape — see `mtg_bot.search.resolution_channel` /
+    /// `ResolutionSurveilDecision`): a pending decision is part of
+    /// the gameplay-relevant digest. The fingerprint serializes
+    /// this slot ONLY WHEN non-empty (so existing baselines with
+    /// empty queues stay bit-identical). FIFO: the dispatcher
+    /// consumes index 0 first.
+    pub pending_decisions: Vec<PendingDecision>,
 }
 
 #[pymethods]
@@ -420,5 +480,6 @@ pub fn make_synthetic_state(
         blockers: Vec::new(),
         stack: Vec::new(),
         consecutive_passes: 0,
+        pending_decisions: Vec::new(),
     }
 }
