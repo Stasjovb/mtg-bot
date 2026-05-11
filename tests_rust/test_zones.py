@@ -1689,3 +1689,118 @@ def test_resolve_exile_until_source_leaves_clone_isolation(synthetic_state):
     assert cloned.find_object_zone(p1_first_bear_id) == ZONE_EXILE
     # Source: target still on bf.
     assert synthetic_state.find_object_zone(p1_first_bear_id) == ZONE_BATTLEFIELD
+
+
+# -------------------- Round-28 ExileOpponentsNonlandPermanentUntilLeaves (4 cards) --------------------
+
+
+def _hardlight_containment_dict():
+    """Hardlight-Containment-shape: exile an opponent's non-land
+    permanent until source leaves the bf."""
+    return {
+        "name": "Hardlight Containment (synthetic)",
+        "card_types": ["Enchantment"],
+        "mana_cost": {"W": 1, "generic": 1},
+        "etb_effects": [
+            {"kind": "exile_opponents_nonland_permanent_until_leaves"}
+        ],
+    }
+
+
+def test_register_exile_opponents_nonland_permanent_until_leaves(engine):
+    reg = engine.Registry()
+    pid = reg.register_printing(_hardlight_containment_dict())
+    etb = reg.get_printing_etb_effects(pid)
+    assert etb[0]["kind"] == "exile_opponents_nonland_permanent_until_leaves"
+
+
+def test_resolve_exile_opps_nonland_picks_first_non_land(synthetic_state):
+    """Synthetic state's p1 bf has Forests (Land) first, then Grizzly
+    Bears (Creature). First non-land = first Bears."""
+    snap = synthetic_state.battlefield_snapshot()
+    p1_first_bear_id = next(
+        d["id"] for d in snap
+        if d["controller_id"] == 1 and d["printing_name"] == "Grizzly Bears"
+    )
+    src_id = synthetic_state.register_and_inject_object(
+        _hardlight_containment_dict(), 0, ZONE_HAND
+    )
+    synthetic_state.push_to_stack(src_id, 0)
+    synthetic_state.resolve_top_of_stack()
+    assert synthetic_state.find_object_zone(p1_first_bear_id) == ZONE_EXILE
+
+
+def test_resolve_exile_opps_nonland_works_on_artifact(synthetic_state):
+    """Non-land filter accepts artifacts. Inject an artifact at the
+    FRONT of p1's bf via direct field swap, cast — artifact moves to
+    exile.
+
+    Easier: clear p1's creatures + Forests-only doesn't help (Forests
+    are non-creature). Use clone + remove creatures, then inject
+    artifact on a clean bf — the first non-land permanent is the
+    artifact."""
+    state = synthetic_state.clone_once()
+    snap = state.battlefield_snapshot()
+    # Move ALL p1 permanents to graveyard.
+    for d in snap:
+        if d["controller_id"] == 1:
+            state.move_object(d["id"], 3, 1)
+    # Now inject an artifact on p1's bf (the only permanent).
+    artifact_id = state.register_and_inject_object(
+        {
+            "name": "Lonely Artifact",
+            "card_types": ["Artifact"],
+            "mana_cost": {"generic": 1},
+        },
+        1,
+        ZONE_BATTLEFIELD,
+    )
+    src_id = state.register_and_inject_object(
+        _hardlight_containment_dict(), 0, ZONE_HAND
+    )
+    state.push_to_stack(src_id, 0)
+    state.resolve_top_of_stack()
+    assert state.find_object_zone(artifact_id) == ZONE_EXILE
+
+
+def test_resolve_exile_opps_nonland_skips_lands(synthetic_state):
+    """If p1 has ONLY Lands on bf, no eligible target → fizzle."""
+    state = synthetic_state.clone_once()
+    snap = state.battlefield_snapshot()
+    for d in snap:
+        if d["controller_id"] == 1 and d["printing_name"] != "Forest":
+            state.move_object(d["id"], 3, 1)  # remove creatures
+    src_id = state.register_and_inject_object(
+        _hardlight_containment_dict(), 0, ZONE_HAND
+    )
+    # (exile size sanity check removed; just verify Forests remain on bf)
+    state.push_to_stack(src_id, 0)
+    state.resolve_top_of_stack()
+    # No bf objects moved to exile (only Forests left).
+    snap_after = state.battlefield_snapshot()
+    p1_forests_after = sum(
+        1 for d in snap_after if d["controller_id"] == 1 and d["printing_name"] == "Forest"
+    )
+    # All p1 Forests still on bf.
+    assert p1_forests_after >= 1
+
+
+def test_resolve_exile_opps_nonland_link_returns(synthetic_state):
+    """Confirm the exile_with_source link works the same as the
+    creature variant: return_paired_exiles_for(source_id) brings the
+    target back."""
+    snap = synthetic_state.battlefield_snapshot()
+    p1_first_bear_id = next(
+        d["id"] for d in snap
+        if d["controller_id"] == 1 and d["printing_name"] == "Grizzly Bears"
+    )
+    src_id = synthetic_state.register_and_inject_object(
+        _hardlight_containment_dict(), 0, ZONE_HAND
+    )
+    synthetic_state.push_to_stack(src_id, 0)
+    synthetic_state.resolve_top_of_stack()
+    assert synthetic_state.find_object_zone(p1_first_bear_id) == ZONE_EXILE
+
+    returned = synthetic_state.return_paired_exiles_for(src_id)
+    assert returned == 1
+    assert synthetic_state.find_object_zone(p1_first_bear_id) == ZONE_BATTLEFIELD

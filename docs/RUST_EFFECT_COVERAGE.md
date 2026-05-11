@@ -6,9 +6,9 @@ This page is the rolling-progress snapshot for the Rust engine port's `Effect` e
 
 ## Headline numbers
 
-- **55 of 228 Python Effect classes covered (24.1%)** — by distinct-class count.
-- **450 of 690 per-card emissions covered (65.2%)** — weighted by how many cards each class appears on. This is the more load-bearing metric: high-frequency classes pull the bulk of cards into Rust even at low class-count coverage.
-- **57 Rust `Effect` variants** in `rust/src/cards.rs` today; 475 parser-claimed printings across the loaded pools.
+- **56 of 228 Python Effect classes covered (24.6%)** — by distinct-class count.
+- **454 of 690 per-card emissions covered (65.8%)** — weighted by how many cards each class appears on. This is the more load-bearing metric: high-frequency classes pull the bulk of cards into Rust even at low class-count coverage.
+- **58 Rust `Effect` variants** in `rust/src/cards.rs` today; 475 parser-claimed printings across the loaded pools.
 - **0 Rust variants without a Python counterpart** — the bridge is in sync with the Python vocabulary.
 - **1 Rust variant(s) built ahead of the pool** (allowlisted in `RUST_AHEAD_OF_POOL`): `ScryN`. These have no pool card exercising them today and are NOT counted as orphans.
 
@@ -39,7 +39,7 @@ Python Effect classes are split by how many cards they appear on. The Rust port 
 
 ### Frequency 2-9 (53 classes)
 
-- Covered by Rust: **42 / 53** (79.2%)
+- Covered by Rust: **43 / 53** (81.1%)
 
 ### Frequency 1 (161 singletons)
 
@@ -107,6 +107,7 @@ Python Effect classes are split by how many cards they appear on. The Rust port 
 | 55 | `Effect::DestroyEnchantedPermanent` | `DestroyEnchantedPermanent` | 4 |
 | 56 | `Effect::TapEnchantedPermanent` | `TapEnchantedPermanent` | 2 |
 | 57 | `Effect::ExileTargetCreatureUntilSourceLeaves` | `ExileTargetCreatureUntilSourceLeaves` | 3 |
+| 58 | `Effect::ExileOpponentsNonlandPermanentUntilLeaves` | `ExileOpponentsNonlandPermanentUntilLeaves` | 4 |
 
 ## High-frequency Python classes NOT yet in Rust
 
