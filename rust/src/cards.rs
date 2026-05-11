@@ -629,6 +629,43 @@ pub enum Effect {
     /// available. Future slice plumbs an explicit choice callback.
     /// Negative `amount` raises at register and at resolve time.
     DealDamageAnyTarget { amount: i32 },
+    /// **Round 27 UEOT-framework proof.** Source gets
+    /// `+power/+toughness` until end of turn. Mirrors Python's
+    /// `PumpSelfUntilEOT(power_bonus, toughness_bonus)` dataclass
+    /// (12 cards in the EoE pool — Attack-in-the-Box, etc.).
+    ///
+    /// **"Self" semantics.** The recipient is the source GameObject
+    /// at the top of the stack (i.e. the resolving spell or
+    /// activated-ability source). Same `state.resolving_source`
+    /// shape Python reads — and the same `source_obj_id`
+    /// `apply_effect` parameter the round-23 `PutPlusOneCounterOnSelf`
+    /// arm already threads through. If the source has left the
+    /// battlefield between cast and resolve, the effect is a silent
+    /// no-op (mirrors Python's `if source is None: return`).
+    ///
+    /// **Mechanism.** Pushes a
+    /// `UeotModifier::PowerToughnessBonus { power, toughness }` entry
+    /// onto the source object's `ueot_modifiers` Vec on the
+    /// battlefield. Effective power/toughness queries
+    /// (`battlefield_creature_power`/`_toughness` in
+    /// `state_ops_combat.rs`, `effective_toughness` in
+    /// `state_ops_sba.rs`) walk the Vec on top of printed P/T at
+    /// read time. The bonus auto-expires at the next
+    /// `cleanup_step_for_active_player` /
+    /// `advance_phase`-through-PHASE_CLEANUP via the round-27
+    /// CR 514.3 UEOT-clear pass.
+    ///
+    /// **Schema simplification vs Python.** Python's
+    /// `PumpSelfUntilEOT` also accepts an optional
+    /// `granted_keywords: frozenset[str]` to grant keywords UEOT in
+    /// the same effect. The Rust first slice does NOT carry that
+    /// field — the cards in the EoE pool with keyword riders compose
+    /// via separate effect chains (the bridge dispatch can layer a
+    /// `GrantKeyword` UEOT modifier in a future PumpSelf variant).
+    /// Negative bonuses are legal (Cryptolith Rite-shape debuffs);
+    /// raise-on-negative is NOT enforced. count=0/0 is a legal
+    /// no-op for parity-test edge cases.
+    PumpSelfUntilEOT { power_bonus: i32, toughness_bonus: i32 },
 }
 
 #[derive(Clone, Debug)]
@@ -1106,8 +1143,42 @@ fn parse_effect(dict: &Bound<'_, PyDict>) -> PyResult<Effect> {
             }
             Ok(Effect::DealDamageAnyTarget { amount })
         }
+        "pump_self_until_eot" => {
+            // Round-27 UEOT-framework proof. Python's
+            // `PumpSelfUntilEOT(power_bonus: int = 0,
+            // toughness_bonus: int = 0)` defaults each field to 0;
+            // the Rust bridge mirrors the default-handling shape used
+            // by `DiscardSelf` / `PutPlusOneCounterOnSelf` /
+            // `EachOpponentDiscards` (`dict.get_item` with explicit
+            // default rather than `require`). Either field absent =
+            // 0; both absent registers a 0/0 no-op (legal for parity
+            // edge cases). NEGATIVES are deliberately allowed —
+            // Python's PumpSelfUntilEOT accepts negative bonuses for
+            // debuff-shaped self-pumps (e.g. cards that shrink
+            // themselves for a beneficial side-effect). Mirrors the
+            // schema's `int` annotation (no non-negative guard) so a
+            // future pool card with a negative self-pump doesn't fail
+            // registration here.
+            let power_bonus: i32 = match dict.get_item("power_bonus")? {
+                Some(p) => p.extract().map_err(|e| {
+                    PyValueError::new_err(format!(
+                        "pump_self_until_eot.power_bonus must be an integer (got: {e})"
+                    ))
+                })?,
+                None => 0,
+            };
+            let toughness_bonus: i32 = match dict.get_item("toughness_bonus")? {
+                Some(t) => t.extract().map_err(|e| {
+                    PyValueError::new_err(format!(
+                        "pump_self_until_eot.toughness_bonus must be an integer (got: {e})"
+                    ))
+                })?,
+                None => 0,
+            };
+            Ok(Effect::PumpSelfUntilEOT { power_bonus, toughness_bonus })
+        }
         other => Err(PyValueError::new_err(format!(
-            "unknown effect kind {other:?}; valid: deal_damage, draw_cards, gain_life, return_to_hand, mill, mill_target_player, exile_target, tap_target, untap_target, sacrifice, add_counters, discard_card, scry_n, destroy_target, damage_each_opponent, damage_each_creature, create_token, add_mana_to_pool, search_library_for_basic_land_tapped, put_plus_one_counter_on_self, surveil, counter_target_spell, return_creature_from_your_graveyard_to_battlefield, discard_self, each_opponent_loses_life, lose_life, target_opponent_loses_life, each_opponent_discards, destroy_all_creatures, destroy_target_nonland_permanent, destroy_target_artifact, destroy_target_land, deal_damage_any_target"
+            "unknown effect kind {other:?}; valid: deal_damage, draw_cards, gain_life, return_to_hand, mill, mill_target_player, exile_target, tap_target, untap_target, sacrifice, add_counters, discard_card, scry_n, destroy_target, damage_each_opponent, damage_each_creature, create_token, add_mana_to_pool, search_library_for_basic_land_tapped, put_plus_one_counter_on_self, surveil, counter_target_spell, return_creature_from_your_graveyard_to_battlefield, discard_self, each_opponent_loses_life, lose_life, target_opponent_loses_life, each_opponent_discards, destroy_all_creatures, destroy_target_nonland_permanent, destroy_target_artifact, destroy_target_land, deal_damage_any_target, pump_self_until_eot"
         ))),
     }
 }
@@ -1419,6 +1490,11 @@ fn effect_to_pydict<'py>(
         Effect::DealDamageAnyTarget { amount } => {
             d.set_item("kind", "deal_damage_any_target")?;
             d.set_item("amount", *amount)?;
+        }
+        Effect::PumpSelfUntilEOT { power_bonus, toughness_bonus } => {
+            d.set_item("kind", "pump_self_until_eot")?;
+            d.set_item("power_bonus", *power_bonus)?;
+            d.set_item("toughness_bonus", *toughness_bonus)?;
         }
     }
     Ok(d)

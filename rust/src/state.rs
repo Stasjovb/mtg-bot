@@ -5,7 +5,7 @@ use std::time::Instant;
 
 use crate::cards::{CardPrinting, ManaCost, Registry, RegistryData};
 
-/// **POD-shaped** game object referencing card data by `printing_id`.
+/// Game object referencing card data by `printing_id`.
 ///
 /// Pre-registry: the object inlined `name: String`, `power: i16`,
 /// `toughness: i16` per copy — so each per-zone Vec carried a
@@ -18,15 +18,19 @@ use crate::cards::{CardPrinting, ManaCost, Registry, RegistryData};
 /// summoning sick, damage, counters) plus a `printing_id: u32`
 /// pointer into the registry.
 ///
-/// The struct is now POD (Plain Old Data) — every field is `Copy`,
-/// so a Vec of GameObjects is a single contiguous block of `memcpy`-
-/// able bytes. With `repr(C)` the layout is 16 bytes per object on
-/// 64-bit (4+4+1+1+1+1+2+4 = 18 bytes payload, padded to 20 then
-/// rounded for alignment — actual `size_of::<GameObject>()` is
-/// 20 bytes; if we want it tighter we'd reorder + pack, but 20 vs
-/// the prior ~40 (header + ptr + len + cap + bools + ints) is
-/// already a 2x shrink).
-#[derive(Clone, Copy, Debug)]
+/// **Round-27 (UEOT framework):** GameObject grows a
+/// `ueot_modifiers: Vec<UeotModifier>` — the per-object expiring-
+/// modifier stack that powers "until end of turn" effects (CR 514.3).
+/// This costs the struct its `Copy` derive: a `Vec<T>` is heap-owned
+/// and can't be `memcpy`'d. The empty-Vec common case still keeps
+/// the per-object footprint small (a Vec is 24 bytes — pointer +
+/// len + cap — so the pre-r27 ~20-byte object becomes ~48 bytes
+/// when the Vec is empty, with the Vec's heap allocation deferred
+/// until the first push). Code that previously relied on Copy
+/// (e.g. `*drained.iter().find()`) now uses `.cloned()`; the
+/// `Clone` impl is still cheap for the common empty-modifiers case
+/// (a single null heap-ptr + zero len/cap is copied, no allocation).
+#[derive(Clone, Debug)]
 pub struct GameObject {
     pub id: u32,
     pub printing_id: u32,
@@ -36,6 +40,123 @@ pub struct GameObject {
     pub summoning_sick: bool,
     pub damage: i16,
     pub counters: i32,
+    /// Round-27 UEOT framework — per-object expiring-modifier stack.
+    /// Each entry is a CR-613-layer continuous modifier with implicit
+    /// `expires_at = "cleanup"`. Cleared in bulk on entry to
+    /// PHASE_CLEANUP (CR 514.3) by `clear_ueot_modifiers_all` /
+    /// `cleanup_step_for_active_player`. Readers that compute
+    /// effective P/T or effective keywords walk this stack on top of
+    /// the printing's printed values.
+    ///
+    /// Common case (no UEOT effect active on this creature) is an
+    /// empty Vec — heap allocation deferred until the first push.
+    /// The empty-Vec footprint adds 24 bytes to the per-object
+    /// size; that's the cost of losing Copy. Mirrors Python's
+    /// `GameObject.temp_power_bonus` / `temp_toughness_bonus` +
+    /// the layer-6 keyword-grant / layer-2 control-change /
+    /// layer-7b set-base-PT registries on `GameState` (see
+    /// `src/mtg_bot/effects/modifiers.py` for the Python shape).
+    /// First-slice variants: PowerToughnessBonus (Pump / Anthem
+    /// shape, layer 7c) and GrantKeyword (haste / flying /
+    /// lifelink shape, layer 6). Future-slice variants per the
+    /// brief: BecomesLandCreature (Blinkmoth Nexus shape, layer
+    /// 4+6+7b combined).
+    pub ueot_modifiers: Vec<UeotModifier>,
+}
+
+/// A single CR 613 / CR 514.3 "until end of turn" modifier on a
+/// GameObject. Mirrors the Python `LayerPayload` family in
+/// `src/mtg_bot/effects/modifiers.py` (`PowerToughnessBonus`,
+/// `GrantKeyword`, etc.) — but flattened into a closed enum the
+/// way the Rust `Effect` enum flattens the Python `Effect` class
+/// hierarchy. Adding a new payload kind is a build-time error in
+/// every effective-P/T / effective-keyword reader until it's
+/// handled (exhaustiveness gives us "fail loud" for free).
+///
+/// All variants implicitly carry `expires_at = "cleanup"` — the
+/// cleanup-step UEOT clear drains the entire Vec, so no per-entry
+/// lifetime tag is needed. Future "until your next turn" entries
+/// (Mouth-of-the-Storm shape, see Python's
+/// `grant_pt_pump_until_player_next_turn`) need a separate field
+/// or a tagged-lifetime variant; not in r27 scope.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum UeotModifier {
+    /// CR 613.7c — additive power/toughness bonus. Models pump
+    /// effects (PumpSelfUntilEOT, PumpTargetCreatureUntilEOT,
+    /// PumpCreaturesYouControlUntilEOT). Multiple entries stack
+    /// additively. Negative values model debuffs ("-3/-0").
+    PowerToughnessBonus { power: i32, toughness: i32 },
+    /// CR 613.6 — grant a keyword ability. Models the "and gains
+    /// haste/flying/lifelink/trample/double-strike UEOT" rider
+    /// common on pump spells and equipment ETBs. Lowercased
+    /// keyword string matches the printing-side keyword vocab
+    /// (see `parse_printing`'s `to_lowercase()` pass).
+    GrantKeyword { keyword: String },
+    /// CR 613.4 + 613.6 + 613.7b — "becomes a P/T color/subtype
+    /// land creature UEOT" composite. Models Blinkmoth Nexus /
+    /// Wandering Fumarole / Lavaclaw Reaches manland-animate
+    /// activated abilities (BecomeLandCreatureUEOT, 13 cards).
+    /// Sets base P/T to `power`/`toughness` (layer 7b) and adds
+    /// the subtype string to the effective subtype set (layer 4);
+    /// the "color" / creature-type combination is encoded in
+    /// `color_or_subtype` for first-slice. Future expansion can
+    /// split into separate layer-4 / layer-7b variants once the
+    /// effective-subtype consumer surface lands.
+    BecomesLandCreature {
+        power: i32,
+        toughness: i32,
+        color_or_subtype: String,
+    },
+}
+
+impl GameObject {
+    /// Sum of UEOT `PowerToughnessBonus` power deltas on this
+    /// object. Used by combat-damage / SBA / parity readers to
+    /// compose `printed_power + counters_delta +
+    /// ueot_power_bonus` into the effective power for "what does
+    /// this creature look like RIGHT NOW" queries.
+    pub fn ueot_power_bonus(&self) -> i32 {
+        let mut sum = 0i32;
+        for m in &self.ueot_modifiers {
+            match m {
+                UeotModifier::PowerToughnessBonus { power, .. } => sum += *power,
+                UeotModifier::BecomesLandCreature { .. } => {}
+                UeotModifier::GrantKeyword { .. } => {}
+            }
+        }
+        sum
+    }
+
+    /// Sum of UEOT `PowerToughnessBonus` toughness deltas. Same
+    /// shape as `ueot_power_bonus`.
+    pub fn ueot_toughness_bonus(&self) -> i32 {
+        let mut sum = 0i32;
+        for m in &self.ueot_modifiers {
+            match m {
+                UeotModifier::PowerToughnessBonus { toughness, .. } => sum += *toughness,
+                UeotModifier::BecomesLandCreature { .. } => {}
+                UeotModifier::GrantKeyword { .. } => {}
+            }
+        }
+        sum
+    }
+
+    /// True iff some `UeotModifier::GrantKeyword` on this object
+    /// carries `keyword` (case-sensitive lowercase match — the
+    /// printing-side keyword vocab is already lowercased in
+    /// `parse_printing`). Used by combat readers as a "does this
+    /// creature have haste/flying/... RIGHT NOW" gate that folds
+    /// printed keywords with UEOT-granted keywords.
+    pub fn ueot_has_keyword(&self, keyword: &str) -> bool {
+        for m in &self.ueot_modifiers {
+            if let UeotModifier::GrantKeyword { keyword: k } = m {
+                if k == keyword {
+                    return true;
+                }
+            }
+        }
+        false
+    }
 }
 
 // Zones are `Arc<Vec<GameObject>>` so cloning a `Player` (and therefore
@@ -321,6 +442,7 @@ fn make_object(id: u32, controller: u8, printing_id: u32) -> GameObject {
         summoning_sick: false,
         damage: 0,
         counters: 0,
+        ueot_modifiers: Vec::new(),
     }
 }
 

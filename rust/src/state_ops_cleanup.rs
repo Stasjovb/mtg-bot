@@ -26,9 +26,18 @@
 //! creature, and that ping's damage is then cleared by 514.2 in
 //! the same cleanup step.
 //!
-//! Out of scope (CR 514.3 / 514.4):
-//!  - 514.3 "until end of turn" effects expiration — composes with
-//!    continuous-effect machinery the engine doesn't have yet.
+//! Round-27 extension (UEOT framework): CR 514.3 "until end of turn"
+//! effects expiration now fires inside `cleanup_step_for_active_player`
+//! AFTER CR 514.1 (hand-size discard) and CR 514.2 (damage clear). The
+//! shape:
+//!  - walk both players' battlefield zones
+//!  - for each object whose `ueot_modifiers` is non-empty, route through
+//!    `Arc::make_mut` (skipping the clone when every object on the
+//!    battlefield is UEOT-clean) and drain its modifiers Vec.
+//! See `clear_ueot_modifiers_all` for the primitive and the round-27
+//! brief for the full architectural framing. This closes parity gap G7.
+//!
+//! Out of scope (CR 514.4):
 //!  - 514.4 "no abilities triggered? skip the second cleanup step"
 //!    — composes with triggered-ability machinery.
 //!
@@ -140,21 +149,62 @@ impl GameState {
         Ok(to_discard)
     }
 
+    /// Round-27 UEOT framework primitive — clear every UEOT modifier
+    /// on every battlefield permanent (CR 514.3). Returns the number
+    /// of objects whose `ueot_modifiers` Vec was non-empty before
+    /// draining. Skips the `Arc::make_mut` clone on a battlefield
+    /// where no permanent has any UEOT modifier — the warm path
+    /// (no UEOT effect active at end-of-turn) pays zero allocation.
+    ///
+    /// Callable independently for tests that want to assert the
+    /// UEOT-clear in isolation from the hand-size + damage-clear
+    /// passes; `cleanup_step_for_active_player` also fires this
+    /// AFTER CR 514.1 + CR 514.2 (the CR 514 numbered-rule order).
+    ///
+    /// **Closeable parity gap**: this is the round-27 closure of G7.
+    fn clear_ueot_modifiers_all(&mut self) -> usize {
+        let mut cleared: usize = 0;
+        for player in self.players.iter_mut() {
+            // Warm-path skip: nothing to clear on this battlefield.
+            if player
+                .battlefield
+                .iter()
+                .all(|o| o.ueot_modifiers.is_empty())
+            {
+                continue;
+            }
+            let zone: &mut Vec<GameObject> = Arc::make_mut(&mut player.battlefield);
+            for obj in zone.iter_mut() {
+                if !obj.ueot_modifiers.is_empty() {
+                    cleared += 1;
+                    obj.ueot_modifiers.clear();
+                }
+            }
+        }
+        cleared
+    }
+
     /// Run the cleanup step for the current `active_player` —
-    /// composition of CR 514.1 (hand-size discard, max=7 hard-coded)
-    /// and CR 514.2 (clear all marked damage on both battlefields).
+    /// composition of CR 514.1 (hand-size discard, max=7 hard-coded),
+    /// CR 514.2 (clear all marked damage on both battlefields), and
+    /// CR 514.3 (until-end-of-turn modifier expiration).
     ///
-    /// Order: hand-size discard FIRST, damage clearance second
-    /// (matches CR 514's numbered sub-rules and the source-of-truth
-    /// loop in `src/mtg_bot/turn.py:run_cleanup_step`). See module
-    /// docstring on why ordering matters.
+    /// Order: hand-size discard FIRST, damage clearance second,
+    /// UEOT-modifier expiration third (matches CR 514's numbered
+    /// sub-rules and the source-of-truth loop in
+    /// `src/mtg_bot/turn.py:run_cleanup_step`). See module docstring
+    /// on why ordering matters.
     ///
-    /// Returns a Python dict `{"discarded": N, "damage_cleared": M}`:
+    /// Returns a Python dict `{"discarded": N, "damage_cleared": M,
+    /// "ueot_cleared": K}`:
     /// - `discarded`: number of cards moved from active player's
     ///   hand to graveyard (0 if hand was already <= 7).
     /// - `damage_cleared`: count of permanents (across both
     ///   battlefields) whose marked damage was non-zero before the
     ///   call. A no-op cleanup (no damage anywhere) reports 0.
+    /// - `ueot_cleared`: count of permanents (across both
+    ///   battlefields) whose `ueot_modifiers` Vec was non-empty
+    ///   before draining. Round-27 addition.
     ///
     /// Hard-codes max-hand-size = 7 because every active-player
     /// cleanup in canonical MTG uses 7. The lower-level
@@ -196,9 +246,32 @@ impl GameState {
             }
         }
 
+        // (3) CR 514.3 — drain every UEOT modifier on every
+        // battlefield permanent (round-27 closure of parity gap G7).
+        // Same CoW shape as the damage-clear pass — skip the
+        // `Arc::make_mut` clone when no object has any UEOT modifier.
+        let mut ueot_cleared: usize = 0;
+        for player in self.players.iter_mut() {
+            if player
+                .battlefield
+                .iter()
+                .all(|o| o.ueot_modifiers.is_empty())
+            {
+                continue;
+            }
+            let zone: &mut Vec<GameObject> = Arc::make_mut(&mut player.battlefield);
+            for obj in zone.iter_mut() {
+                if !obj.ueot_modifiers.is_empty() {
+                    ueot_cleared += 1;
+                    obj.ueot_modifiers.clear();
+                }
+            }
+        }
+
         let d = PyDict::new(py);
         d.set_item("discarded", discarded)?;
         d.set_item("damage_cleared", damage_cleared)?;
+        d.set_item("ueot_cleared", ueot_cleared)?;
         Ok(d)
     }
 
