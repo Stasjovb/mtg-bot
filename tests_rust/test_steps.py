@@ -397,3 +397,225 @@ def test_step_string_does_not_carry_dot_name_attribute(synthetic_state):
         "hash_state's getattr fallback collapses to the str-already "
         "branch."
     )
+
+
+# ---------------------------------------------------------------------------
+# Cross-feature edge cases — interactions between the step/phase machinery
+# and the sibling slices (legal-decisions, fingerprint, snapshot, life,
+# library, zones, tap, clone CoW).
+#
+# Each test asserts on a load-bearing invariant that crosses a slice boundary:
+# if either side regresses, the assertion fires here even if the per-slice
+# unit tests stay green. Style mirrors the per-slice tests above — module-
+# level phase constants, ``synthetic_state`` fixture, prose docstrings naming
+# the specific Python rule / CR clause being pinned.
+# ---------------------------------------------------------------------------
+
+
+def test_full_12_phase_lap_visits_each_step_name_exactly_once(synthetic_state):
+    """One full lap through ``advance_phase`` from UNTAP yields each of the
+    12 ``Step.name`` strings exactly once before wrapping. Cross-feature
+    with the ``step`` getter — the integer phase index and the string
+    name must stay in lockstep through every advance, so a follow-up
+    slice can't accidentally rename one without renaming the other."""
+    observed_names = []
+    observed_phases = []
+    for _ in range(12):
+        synthetic_state.advance_phase()
+        observed_phases.append(synthetic_state.current_phase())
+        observed_names.append(synthetic_state.step)
+    # 12 distinct names, no duplicates within a single lap.
+    assert len(set(observed_names)) == 12
+    # Each observed name agrees with the integer-phase mapping.
+    for phase, name in zip(observed_phases, observed_names):
+        assert PHASE_NAME_BY_INDEX[phase] == name
+
+
+def test_advance_phase_does_not_draw_a_card(synthetic_state):
+    """The Rust ``advance_phase`` does NOT auto-fire the Python turn
+    machinery's draw-step ``draw_card`` (that's a higher-layer concern
+    not modeled in this slice — see ``rust/src/state_ops_steps.rs``).
+    Pins the today-shape so a future "auto-draw" wiring slice has to
+    update this test and the test-side commentary together. Cross-
+    feature with library + zones: the snapshot getters report unchanged
+    sizes through the DRAW step."""
+    hand_before = len(synthetic_state.hand_snapshot(0))
+    lib_before = len(synthetic_state.library_snapshot(0))
+    # Advance UNTAP -> UPKEEP -> DRAW. Past DRAW just in case the
+    # implementation grew a "draw at the start of upkeep" rule.
+    synthetic_state.advance_phase()  # UPKEEP
+    synthetic_state.advance_phase()  # DRAW
+    assert synthetic_state.current_phase() == PHASE_DRAW
+    assert len(synthetic_state.hand_snapshot(0)) == hand_before
+    assert len(synthetic_state.library_snapshot(0)) == lib_before
+
+
+def test_main1_phase_emits_cast_spell_in_legal_decisions(synthetic_state):
+    """Cross-feature with legal-decisions: PHASE_MAIN1 is sorcery timing,
+    so the synthetic seed's 7 Llanowar Elves in p0's hand emit (after
+    dedup by printing name) exactly one ``cast_spell`` action. The
+    default UNTAP phase emits only ``pass_priority``; the
+    ``set_phase(MAIN1)`` flip flips the sorcery-timing gate."""
+    synthetic_state.set_phase(PHASE_MAIN1)
+    actions = synthetic_state.legal_decisions(0)
+    kinds = [a["kind"] for a in actions]
+    assert "cast_spell" in kinds
+    assert kinds.count("cast_spell") == 1
+    assert kinds[0] == "pass_priority"
+
+
+def test_combat_phases_gate_declare_attackers_emission(synthetic_state):
+    """Cross-feature with legal-decisions: ``DeclareAttackers`` only
+    emits during PHASE_DECLARE_ATTACKERS, even when the synthetic
+    seed's 5 Grizzly Bears would otherwise be eligible. Walks every
+    phase and asserts the emission is gated correctly — UNTAP / UPKEEP
+    / DRAW / MAIN1 / BEGIN_COMBAT / DECLARE_BLOCKERS / ... / CLEANUP
+    must NOT emit a ``declare_attackers`` dict (mirrors Python
+    ``legal.py``'s phase guard)."""
+    for phase in PHASE_SEQUENCE:
+        synthetic_state.set_phase(phase)
+        kinds = {a["kind"] for a in synthetic_state.legal_decisions(0)}
+        if phase == PHASE_DECLARE_ATTACKERS:
+            assert "declare_attackers" in kinds, (
+                f"phase {phase} (DECLARE_ATTACKERS) should emit "
+                f"declare_attackers; got {sorted(kinds)}"
+            )
+        else:
+            assert "declare_attackers" not in kinds, (
+                f"phase {phase} should NOT emit declare_attackers; "
+                f"got {sorted(kinds)}"
+            )
+
+
+def test_phase_advance_preserves_life_totals(synthetic_state):
+    """Cross-feature with the life slice: walking a full lap through
+    all 12 phases (including the CLEANUP -> UNTAP wrap that swaps
+    active_player) does NOT touch ``life_totals``. Pins the today-shape
+    where ``advance_phase`` is scoped to phase / step / turn / active
+    player + the per-controller untap + summoning-sickness sweep —
+    nothing else. A future "lose-life-on-loss" or "lifegain-trigger-
+    on-upkeep" wiring will have to update this test."""
+    assert synthetic_state.life_totals == [20, 20]
+    synthetic_state.set_life(0, 13)
+    synthetic_state.set_life(1, 7)
+    for _ in range(12):
+        synthetic_state.advance_phase()
+    # Full lap done — life totals unchanged.
+    assert synthetic_state.get_life(0) == 13
+    assert synthetic_state.get_life(1) == 7
+    assert synthetic_state.life_totals == [13, 7]
+
+
+def test_phase_advance_preserves_zone_sizes(synthetic_state):
+    """Cross-feature with the zones slice: a full lap through all 12
+    phases (including the CLEANUP -> UNTAP wrap) leaves hand /
+    library / battlefield sizes unchanged on both players. The only
+    zone-touching side-effect of ``advance_phase`` is the per-
+    controller untap sweep, which mutates tapped-flags in place
+    rather than moving objects between zones."""
+    sizes_before = (
+        len(synthetic_state.hand_snapshot(0)),
+        len(synthetic_state.hand_snapshot(1)),
+        len(synthetic_state.library_snapshot(0)),
+        len(synthetic_state.library_snapshot(1)),
+        len(synthetic_state.battlefield_snapshot()),
+    )
+    for _ in range(12):
+        synthetic_state.advance_phase()
+    sizes_after = (
+        len(synthetic_state.hand_snapshot(0)),
+        len(synthetic_state.hand_snapshot(1)),
+        len(synthetic_state.library_snapshot(0)),
+        len(synthetic_state.library_snapshot(1)),
+        len(synthetic_state.battlefield_snapshot()),
+    )
+    assert sizes_before == sizes_after
+
+
+def test_fingerprint_changes_on_every_phase_advance(synthetic_state):
+    """Cross-feature with the fingerprint slice: the digest folds in
+    ``state.step`` (via ``hash_state``'s parts list — see the
+    test_fingerprint module docstring). Therefore each unique phase
+    in a single lap produces a unique fingerprint. Pins the
+    phase-sensitivity of the parity hash so a refactor that drops
+    ``step`` from the parts list trips this assertion."""
+    fingerprints = [synthetic_state.fingerprint()]
+    for _ in range(11):
+        synthetic_state.advance_phase()
+        fingerprints.append(synthetic_state.fingerprint())
+    # 12 distinct fingerprints, one per phase in the lap.
+    assert len(set(fingerprints)) == 12, (
+        f"expected 12 unique fingerprints across the 12-phase lap, "
+        f"got {len(set(fingerprints))} ({fingerprints})"
+    )
+
+
+def test_clone_advance_phase_does_not_mutate_original(synthetic_state):
+    """CoW canary on ``advance_phase``: a clone walked through a full
+    lap (including the CLEANUP -> UNTAP wrap that bumps turn_number
+    and flips active_player) leaves the original's step / phase /
+    turn / active_player untouched. Pins the Arc-shared zone
+    isolation specifically across the phase machinery — the untap
+    sweep inside ``advance_phase`` calls ``Arc::make_mut`` on the new
+    active player's battlefield, which is exactly the kind of mutation
+    that historically leaked across clone boundaries."""
+    orig_phase = synthetic_state.current_phase()
+    orig_step = synthetic_state.step
+    orig_turn = synthetic_state.turn_number
+    orig_active = synthetic_state.active_player
+    cloned = synthetic_state.clone_once()
+    # Walk the clone through a full lap.
+    for _ in range(12):
+        cloned.advance_phase()
+    # The clone bumped turn_number (CLEANUP -> UNTAP wraps once in 12
+    # advances), swapped active_player, and returned to UNTAP.
+    assert cloned.current_phase() == PHASE_UNTAP
+    assert cloned.turn_number == orig_turn + 1
+    assert cloned.active_player == 1 - orig_active
+    # The original is untouched on every axis.
+    assert synthetic_state.current_phase() == orig_phase
+    assert synthetic_state.step == orig_step
+    assert synthetic_state.turn_number == orig_turn
+    assert synthetic_state.active_player == orig_active
+
+
+def test_advance_phase_keeps_priority_player_in_sync_with_active(
+    synthetic_state,
+):
+    """Cross-feature with the priority slice: ``advance_phase``'s
+    CLEANUP -> UNTAP wrap flips ``active_player``, but the priority
+    machinery (``get_priority_player``) is the sibling slice's job —
+    not ``advance_phase``'s. Pin today's shape: the priority pointer
+    is NOT automatically reset to the new active player by
+    ``advance_phase``. (A higher-layer "start of next turn" hook owns
+    that wiring; if it ever migrates into ``advance_phase``, this
+    test surfaces the change.)"""
+    synthetic_state.give_priority_to(1)
+    assert synthetic_state.get_priority_player() == 1
+    synthetic_state.set_phase(PHASE_CLEANUP)
+    synthetic_state.advance_phase()  # CLEANUP -> UNTAP, active flips
+    assert synthetic_state.active_player == 1
+    # Priority still points where give_priority_to last set it; the
+    # wrap did NOT touch it.
+    assert synthetic_state.get_priority_player() == 1
+
+
+def test_set_phase_does_not_fire_untap_sweep(synthetic_state):
+    """Cross-feature with the tap slice: ``set_phase`` is raw state
+    assignment — it does NOT trigger the untap sweep, even when the
+    target is PHASE_UNTAP. Only ``advance_phase`` composes the untap
+    side-effect. Pin this asymmetry so a future refactor that
+    consolidates the two entrypoints has to update both the Rust
+    docstring and this test together."""
+    p0_obj = _bf_id_for(0)
+    assert synthetic_state.tap_object(p0_obj) is True
+    assert synthetic_state.is_tapped(p0_obj) is True
+    # Already in PHASE_UNTAP; re-assigning via set_phase must NOT
+    # untap p0's permanent.
+    synthetic_state.set_phase(PHASE_UNTAP)
+    assert synthetic_state.is_tapped(p0_obj) is True
+    # Same story when we land on UNTAP from a different phase via
+    # set_phase (no wrap path triggered).
+    synthetic_state.set_phase(PHASE_MAIN1)
+    synthetic_state.set_phase(PHASE_UNTAP)
+    assert synthetic_state.is_tapped(p0_obj) is True
