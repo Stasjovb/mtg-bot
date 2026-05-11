@@ -6,9 +6,9 @@ This page is the rolling-progress snapshot for the Rust engine port's `Effect` e
 
 ## Headline numbers
 
-- **53 of 228 Python Effect classes covered (23.2%)** — by distinct-class count.
-- **445 of 690 per-card emissions covered (64.5%)** — weighted by how many cards each class appears on. This is the more load-bearing metric: high-frequency classes pull the bulk of cards into Rust even at low class-count coverage.
-- **55 Rust `Effect` variants** in `rust/src/cards.rs` today; 475 parser-claimed printings across the loaded pools.
+- **54 of 228 Python Effect classes covered (23.7%)** — by distinct-class count.
+- **447 of 690 per-card emissions covered (64.8%)** — weighted by how many cards each class appears on. This is the more load-bearing metric: high-frequency classes pull the bulk of cards into Rust even at low class-count coverage.
+- **56 Rust `Effect` variants** in `rust/src/cards.rs` today; 475 parser-claimed printings across the loaded pools.
 - **0 Rust variants without a Python counterpart** — the bridge is in sync with the Python vocabulary.
 - **1 Rust variant(s) built ahead of the pool** (allowlisted in `RUST_AHEAD_OF_POOL`): `ScryN`. These have no pool card exercising them today and are NOT counted as orphans.
 
@@ -39,7 +39,7 @@ Python Effect classes are split by how many cards they appear on. The Rust port 
 
 ### Frequency 2-9 (53 classes)
 
-- Covered by Rust: **40 / 53** (75.5%)
+- Covered by Rust: **41 / 53** (77.4%)
 
 ### Frequency 1 (161 singletons)
 
@@ -105,6 +105,7 @@ Python Effect classes are split by how many cards they appear on. The Rust port 
 | 53 | `Effect::OwnerPutsTargetArtifactOrCreatureOnTopOrBottomOfLibrary` | `OwnerPutsTargetArtifactOrCreatureOnTopOrBottomOfLibrary` | 2 |
 | 54 | `Effect::AttachToTargetCreatureYouControl` | `AttachToTargetCreatureYouControl` | 5 |
 | 55 | `Effect::DestroyEnchantedPermanent` | `DestroyEnchantedPermanent` | 4 |
+| 56 | `Effect::TapEnchantedPermanent` | `TapEnchantedPermanent` | 2 |
 
 ## High-frequency Python classes NOT yet in Rust
 
