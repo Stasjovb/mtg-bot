@@ -2821,9 +2821,15 @@ def run_shard_pull(
                 with_policy=spec.with_policy,
                 batch_size=32,
                 batch_wait_ms=0.5,
-                # Slot pool sized comfortably above n_workers so
-                # concurrent requests never block on free_slots.get().
-                n_slots=max(64, n_workers + 16),
+                # Slot pool sized for the batched-client path (PR #47):
+                # each worker's batch_evaluate_with_policy reserves up
+                # to ``batch_size`` slots up-front, so peak concurrent
+                # demand is ``n_workers * batch_size``. 64 (pre-PR #47)
+                # caused severe starvation at 14 workers: only ~2 could
+                # have a full batch in flight, the rest blocked on
+                # free_slots.get() — observed as 8/9 games stalling at
+                # 0.4 dec/sec vs the 1 that ran clean at 8.85 dec/sec.
+                n_slots=max(64, n_workers * 32 + 16),
                 hidden_sizes=spec.hidden_sizes,
                 architecture=spec.architecture,
                 policy_hidden_sizes=spec.policy_hidden_sizes,
@@ -3334,13 +3340,19 @@ def run_shard_eval_pull(
             set_worker_handle,
         )
         try:
+            # n_slots: see the self-play shard above for why the
+            # formula is ``n_workers * 32 + 16`` rather than
+            # ``n_workers + 16``. Eval has two servers (new/old) but
+            # each worker only talks to one at a time via the
+            # weights_path routing, so each server only needs the
+            # peak-demand-from-one-batched-call sizing.
             shm_new_server = SharedTensorNNEvalServer(
                 weights_path=Path(spec.new_weights_path),
                 device=None,
                 with_policy=True,
                 batch_size=32,
                 batch_wait_ms=0.5,
-                n_slots=max(64, n_workers + 16),
+                n_slots=max(64, n_workers * 32 + 16),
                 hidden_sizes=spec.hidden_sizes,
                 architecture=spec.new_architecture,
                 policy_hidden_sizes=spec.policy_hidden_sizes,
@@ -3353,7 +3365,7 @@ def run_shard_eval_pull(
                     with_policy=True,
                     batch_size=32,
                     batch_wait_ms=0.5,
-                    n_slots=max(64, n_workers + 16),
+                    n_slots=max(64, n_workers * 32 + 16),
                     hidden_sizes=spec.hidden_sizes,
                     architecture=spec.old_architecture,
                     policy_hidden_sizes=spec.policy_hidden_sizes,
