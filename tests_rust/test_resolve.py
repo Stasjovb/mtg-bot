@@ -6972,6 +6972,161 @@ def test_resolve_each_opponent_discards_count_zero_no_op(synthetic_state):
     assert synthetic_state.graveyard_sizes[1] == p1_grave_before
 
 
+# --- EachOpponentMillsCards dispatch --------------------------------
+#
+# **EachOpponentMillsCards scope** (round-28). Mirrors
+# `EachOpponentDiscards` exactly but mills the opponent's library
+# instead of discarding from their hand. Same source-finder; same
+# 2-player "each opponent → the one opponent" simplification.
+
+
+def _each_opponent_mills_dict(count: int = 1, card_types=None):
+    """A test source for the EachOpponentMillsCards arm."""
+    if card_types is None:
+        card_types = ["Creature"]
+    p = {
+        "name": f"Test EachOpponentMills (x{count})",
+        "card_types": card_types,
+        "mana_cost": {"U": 1, "B": 1},
+        "effects": [{"kind": "each_opponent_mills_cards", "count": count}],
+    }
+    if "Creature" in card_types:
+        p["power"] = 2
+        p["toughness"] = 2
+    return p
+
+
+def test_resolve_each_opponent_mills_active_player_source_opponent_mills(
+    synthetic_state,
+):
+    """Happy path: source on p0's battlefield, p1 has cards in library.
+    Resolving EachOpponentMillsCards shrinks p1's library by 1 and
+    grows p1's graveyard by 1. p0 (the controller) untouched."""
+    src_id = synthetic_state.register_and_inject_object(
+        _each_opponent_mills_dict(count=1), 0, ZONE_BATTLEFIELD
+    )
+    p0_lib_before = synthetic_state.library_sizes[0]
+    p0_grave_before = synthetic_state.graveyard_sizes[0]
+    p1_lib_before = synthetic_state.library_sizes[1]
+    p1_grave_before = synthetic_state.graveyard_sizes[1]
+
+    synthetic_state.push_to_stack(src_id, 0)
+    synthetic_state.resolve_top_of_stack()
+
+    assert synthetic_state.is_stack_empty() is True
+    # p1 (opponent) milled one card.
+    assert synthetic_state.library_sizes[1] == p1_lib_before - 1
+    assert synthetic_state.graveyard_sizes[1] == p1_grave_before + 1
+    # p0 (controller) library/graveyard untouched.
+    assert synthetic_state.library_sizes[0] == p0_lib_before
+    assert synthetic_state.graveyard_sizes[0] == p0_grave_before
+
+
+def test_resolve_each_opponent_mills_count_three_mills_three(synthetic_state):
+    """count=3 mills 3 cards off the opponent's library top in one
+    resolution."""
+    src_id = synthetic_state.register_and_inject_object(
+        _each_opponent_mills_dict(count=3), 0, ZONE_BATTLEFIELD
+    )
+    p1_lib_before = synthetic_state.library_sizes[1]
+    p1_grave_before = synthetic_state.graveyard_sizes[1]
+
+    synthetic_state.push_to_stack(src_id, 0)
+    synthetic_state.resolve_top_of_stack()
+
+    assert synthetic_state.library_sizes[1] == p1_lib_before - 3
+    assert synthetic_state.graveyard_sizes[1] == p1_grave_before + 3
+
+
+def test_resolve_each_opponent_mills_count_zero_no_op(synthetic_state):
+    """count=0 is a legal no-op."""
+    src_id = synthetic_state.register_and_inject_object(
+        _each_opponent_mills_dict(count=0), 0, ZONE_BATTLEFIELD
+    )
+    p1_lib_before = synthetic_state.library_sizes[1]
+    p1_grave_before = synthetic_state.graveyard_sizes[1]
+
+    synthetic_state.push_to_stack(src_id, 0)
+    synthetic_state.resolve_top_of_stack()
+
+    assert synthetic_state.library_sizes[1] == p1_lib_before
+    assert synthetic_state.graveyard_sizes[1] == p1_grave_before
+
+
+def test_resolve_each_opponent_mills_empty_library_silent_stop(engine):
+    """If the source's controller's opponent has an empty library, the
+    inner mill loop stops silently. Mirrors Effect::Mill empty-library
+    short-circuit (CR 704.5b is a draw rule, not a mill rule)."""
+    state = engine.make_synthetic_state(
+        num_battlefield=0, num_hand=0, num_library=0
+    )
+    src_id = state.register_and_inject_object(
+        _each_opponent_mills_dict(count=3), 0, ZONE_BATTLEFIELD
+    )
+    p0_grave_before = state.graveyard_sizes[0]
+    p1_grave_before = state.graveyard_sizes[1]
+
+    state.push_to_stack(src_id, 0)
+    state.resolve_top_of_stack()  # no raise
+
+    assert state.is_stack_empty() is True
+    assert state.graveyard_sizes[0] == p0_grave_before
+    assert state.graveyard_sizes[1] == p1_grave_before
+
+
+def test_resolve_each_opponent_mills_opponent_source_active_player_mills(
+    synthetic_state,
+):
+    """Source on p1's bf (controller=1) while active_player=0 — the
+    opponent of p1 is p0, so p0's library gets milled. Confirms
+    source-relative resolution (not active-player-relative)."""
+    src_id = synthetic_state.register_and_inject_object(
+        _each_opponent_mills_dict(count=2), 1, ZONE_BATTLEFIELD
+    )
+    p0_lib_before = synthetic_state.library_sizes[0]
+    p0_grave_before = synthetic_state.graveyard_sizes[0]
+    p1_lib_before = synthetic_state.library_sizes[1]
+    p1_grave_before = synthetic_state.graveyard_sizes[1]
+    assert synthetic_state.active_player == 0
+
+    synthetic_state.push_to_stack(src_id, 1)
+    synthetic_state.resolve_top_of_stack()
+
+    # p0 (opponent of p1) milled 2.
+    assert synthetic_state.library_sizes[0] == p0_lib_before - 2
+    assert synthetic_state.graveyard_sizes[0] == p0_grave_before + 2
+    # p1 (controller) untouched.
+    assert synthetic_state.library_sizes[1] == p1_lib_before
+    assert synthetic_state.graveyard_sizes[1] == p1_grave_before
+
+
+def test_resolve_each_opponent_mills_negative_count_at_register_raises(engine):
+    """Negative count rejected at register time (parity with
+    EachOpponentDiscards / DiscardSelf / Mill)."""
+    reg = engine.Registry()
+    with pytest.raises(ValueError):
+        reg.register_printing(_each_opponent_mills_dict(count=-1))
+
+
+def test_resolve_each_opponent_mills_missing_count_defaults_to_one(engine):
+    """Missing `count` defaults to 1 (Python parity with
+    `EachOpponentMillsCards(count: int = 1)`)."""
+    reg = engine.Registry()
+    pid = reg.register_printing(
+        {
+            "name": "Test default mill",
+            "card_types": ["Creature"],
+            "mana_cost": {"U": 1},
+            "power": 1,
+            "toughness": 1,
+            "effects": [{"kind": "each_opponent_mills_cards"}],  # no count
+        }
+    )
+    effects = reg.get_printing_effects(pid)
+    assert effects[0]["kind"] == "each_opponent_mills_cards"
+    assert effects[0]["count"] == 1
+
+
 # --- DestroyTargetArtifact dispatch ---------------------------------
 #
 # **DestroyTargetArtifact scope** (mirrored in the Rust module docstring
