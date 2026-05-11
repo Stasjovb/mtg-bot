@@ -6,9 +6,9 @@ This page is the rolling-progress snapshot for the Rust engine port's `Effect` e
 
 ## Headline numbers
 
-- **43 of 228 Python Effect classes covered (18.9%)** — by distinct-class count.
-- **416 of 690 per-card emissions covered (60.3%)** — weighted by how many cards each class appears on. This is the more load-bearing metric: high-frequency classes pull the bulk of cards into Rust even at low class-count coverage.
-- **44 Rust `Effect` variants** in `rust/src/cards.rs` today; 475 parser-claimed printings across the loaded pools.
+- **44 of 228 Python Effect classes covered (19.3%)** — by distinct-class count.
+- **418 of 690 per-card emissions covered (60.6%)** — weighted by how many cards each class appears on. This is the more load-bearing metric: high-frequency classes pull the bulk of cards into Rust even at low class-count coverage.
+- **45 Rust `Effect` variants** in `rust/src/cards.rs` today; 475 parser-claimed printings across the loaded pools.
 - **0 Rust variants without a Python counterpart** — the bridge is in sync with the Python vocabulary.
 - **1 Rust variant(s) built ahead of the pool** (allowlisted in `RUST_AHEAD_OF_POOL`): `ScryN`. These have no pool card exercising them today and are NOT counted as orphans.
 
@@ -39,7 +39,7 @@ Python Effect classes are split by how many cards they appear on. The Rust port 
 
 ### Frequency 2-9 (53 classes)
 
-- Covered by Rust: **30 / 53** (56.6%)
+- Covered by Rust: **31 / 53** (58.5%)
 
 ### Frequency 1 (161 singletons)
 
@@ -94,6 +94,7 @@ Python Effect classes are split by how many cards they appear on. The Rust port 
 | 42 | `Effect::SearchLibraryForCard` | `SearchLibraryForCard` | 9 |
 | 43 | `Effect::PumpCreaturesOpponentsControlUntilEOT` | `PumpCreaturesOpponentsControlUntilEOT` | 2 |
 | 44 | `Effect::PutCardFromGraveyardOnBottomOfLibrary` | `PutCardFromGraveyardOnBottomOfLibrary` | 2 |
+| 45 | `Effect::MoveSelfCountersToTargetCreatureYouControl` | `MoveSelfCountersToTargetCreatureYouControl` | 2 |
 
 ## High-frequency Python classes NOT yet in Rust
 

@@ -3107,6 +3107,89 @@ fn apply_effect(
                 Arc::make_mut(&mut state.players[pidx].library);
             lib_mut.insert(0, obj); // bottom of library
         }
+        // Round-28 Dockworker-Drone-shape counter move. Transfer the
+        // source's counters scalar to the first creature on the
+        // source-controller's battlefield; clear source's counters
+        // on transfer (true "move" semantics, see variant docstring).
+        // No-op if source has 0 counters, isn't found, has no
+        // controller, or no creature exists on controller's bf.
+        Effect::MoveSelfCountersToTargetCreatureYouControl => {
+            // Find source: pull counter count + controller. Search all
+            // zones (typical use is dies-trigger so source may be in
+            // graveyard).
+            let mut src_info: Option<(u8, usize, i32)> = None; // (controller, player_idx, count)
+            'outer: for (pidx, player) in state.players.iter().enumerate() {
+                for zone in [
+                    &player.hand,
+                    &player.library,
+                    &player.battlefield,
+                    &player.graveyard,
+                    &player.exile,
+                ] {
+                    if let Some(obj) = zone.iter().find(|o| o.id == source_obj_id) {
+                        src_info = Some((obj.controller, pidx, obj.counters));
+                        break 'outer;
+                    }
+                }
+            }
+            let (controller, _src_player_idx, src_counters) = match src_info {
+                Some(info) => info,
+                None => return Ok(()), // source not found → fizzle
+            };
+            if src_counters <= 0 {
+                return Ok(()); // nothing to move
+            }
+            let cidx = controller as usize;
+            let target_id: Option<u32> = {
+                let bf = &state.players[cidx].battlefield;
+                let registry = &state.registry;
+                bf.iter().find_map(|obj| {
+                    let printing = registry.printings.get(obj.printing_id as usize)?;
+                    if printing.card_types.iter().any(|t| t == "Creature") {
+                        Some(obj.id)
+                    } else {
+                        None
+                    }
+                })
+            };
+            let Some(target_id) = target_id else {
+                return Ok(()); // no eligible target → fizzle
+            };
+            // Clear source's counters (true move). Source may be on
+            // battlefield, graveyard, or anywhere — walk every zone
+            // to flip it. Skip if source IS the target (same obj id),
+            // which is a degenerate self-target case.
+            if source_obj_id != target_id {
+                for player in state.players.iter_mut() {
+                    for zone in [
+                        &mut player.hand,
+                        &mut player.library,
+                        &mut player.battlefield,
+                        &mut player.graveyard,
+                        &mut player.exile,
+                    ] {
+                        if zone.iter().any(|o| o.id == source_obj_id) {
+                            let z = Arc::make_mut(zone);
+                            for obj in z.iter_mut() {
+                                if obj.id == source_obj_id {
+                                    obj.counters = 0;
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            // Add to target on controller's battlefield.
+            let bf_mut: &mut Vec<GameObject> =
+                Arc::make_mut(&mut state.players[cidx].battlefield);
+            for obj in bf_mut.iter_mut() {
+                if obj.id == target_id {
+                    obj.counters = obj.counters.saturating_add(src_counters);
+                    break;
+                }
+            }
+        }
     }
     Ok(())
 }
