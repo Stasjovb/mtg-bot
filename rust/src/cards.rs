@@ -1042,6 +1042,22 @@ pub enum Effect {
     /// **Python field drop.** Python's `additional_subtype` field is
     /// deferred (Rust has no subtypes on registry yet).
     CreateTokenCopyOfTargetCreatureYouControl,
+    /// **Round 28 coverage extension.** "You may sacrifice an
+    /// artifact. If you do, [inner_effect]." Mirrors Python's
+    /// `OptionalSacArtifactForEffect` (`combinators.py:299` —
+    /// Lithobraking-shape, 2 EoE cards).
+    ///
+    /// **First-slice deterministic-yes.** Python's default
+    /// base-Agent behavior is "yes" (always sac if able). Rust
+    /// mirrors that: if source's controller controls at least one
+    /// artifact on the battlefield, sacrifice the FIRST one (move
+    /// to controller's graveyard with CR 400.7 zone-change reset)
+    /// AND apply the inner effect with the same source_obj_id.
+    /// If no artifact is available, no-op (no inner effect either —
+    /// matches Python's "if not options: return").
+    ///
+    /// **Recursion.** Box<Effect> for inner; recursive apply_effect.
+    OptionalSacArtifactForEffect { inner_effect: Box<Effect> },
 }
 
 #[derive(Clone, Debug)]
@@ -1614,6 +1630,22 @@ fn parse_effect(dict: &Bound<'_, PyDict>) -> PyResult<Effect> {
         "create_token_copy_of_target_creature_you_control" => {
             Ok(Effect::CreateTokenCopyOfTargetCreatureYouControl)
         }
+        "optional_sac_artifact_for_effect" => {
+            let nested = dict.get_item("inner_effect")?.ok_or_else(|| {
+                PyValueError::new_err(
+                    "optional_sac_artifact_for_effect: missing required 'inner_effect' field",
+                )
+            })?;
+            let nested_dict = nested.downcast::<PyDict>().map_err(|_| {
+                PyValueError::new_err(
+                    "optional_sac_artifact_for_effect.inner_effect must be a dict",
+                )
+            })?;
+            let inner = parse_effect(nested_dict)?;
+            Ok(Effect::OptionalSacArtifactForEffect {
+                inner_effect: Box::new(inner),
+            })
+        }
         "put_charge_counters_on_self" => {
             let amount: i32 = match dict.get_item("amount")? {
                 Some(a) => a.extract().map_err(|e| {
@@ -1860,7 +1892,7 @@ fn parse_effect(dict: &Bound<'_, PyDict>) -> PyResult<Effect> {
             Ok(Effect::Sequence { effects: children })
         }
         other => Err(PyValueError::new_err(format!(
-            "unknown effect kind {other:?}; valid: deal_damage, draw_cards, gain_life, return_to_hand, mill, mill_target_player, exile_target, tap_target, untap_target, sacrifice, add_counters, discard_card, scry_n, destroy_target, damage_each_opponent, damage_each_creature, create_token, add_mana_to_pool, search_library_for_basic_land_tapped, put_plus_one_counter_on_self, surveil, counter_target_spell, return_creature_from_your_graveyard_to_battlefield, discard_self, each_opponent_loses_life, lose_life, target_opponent_loses_life, each_opponent_discards, destroy_all_creatures, destroy_target_nonland_permanent, destroy_target_artifact, destroy_target_land, deal_damage_any_target, pump_self_until_eot, pump_target_creature_until_eot, sequence, pump_creatures_you_control_until_eot, return_creature_from_your_graveyard_to_hand, put_plus_one_counter_on_each_creature_you_control, put_plus_one_counter_on_creature_you_control, add_n_mana_of_chosen_color, search_library_for_card, pump_creatures_opponents_control_until_eot, put_card_from_graveyard_on_bottom_of_library, move_self_counters_to_target_creature_you_control, deal_damage_equal_to_source_power_any_target, tap_target_artifact_or_creature, conditional_on_tapped_creatures, put_plus_one_counter_on_each_of_up_to_n_target_creatures, put_charge_counters_on_self, create_token_copy_of_target_creature_you_control"
+            "unknown effect kind {other:?}; valid: deal_damage, draw_cards, gain_life, return_to_hand, mill, mill_target_player, exile_target, tap_target, untap_target, sacrifice, add_counters, discard_card, scry_n, destroy_target, damage_each_opponent, damage_each_creature, create_token, add_mana_to_pool, search_library_for_basic_land_tapped, put_plus_one_counter_on_self, surveil, counter_target_spell, return_creature_from_your_graveyard_to_battlefield, discard_self, each_opponent_loses_life, lose_life, target_opponent_loses_life, each_opponent_discards, destroy_all_creatures, destroy_target_nonland_permanent, destroy_target_artifact, destroy_target_land, deal_damage_any_target, pump_self_until_eot, pump_target_creature_until_eot, sequence, pump_creatures_you_control_until_eot, return_creature_from_your_graveyard_to_hand, put_plus_one_counter_on_each_creature_you_control, put_plus_one_counter_on_creature_you_control, add_n_mana_of_chosen_color, search_library_for_card, pump_creatures_opponents_control_until_eot, put_card_from_graveyard_on_bottom_of_library, move_self_counters_to_target_creature_you_control, deal_damage_equal_to_source_power_any_target, tap_target_artifact_or_creature, conditional_on_tapped_creatures, put_plus_one_counter_on_each_of_up_to_n_target_creatures, put_charge_counters_on_self, create_token_copy_of_target_creature_you_control, optional_sac_artifact_for_effect"
         ))),
     }
 }
@@ -2247,6 +2279,10 @@ fn effect_to_pydict<'py>(
         }
         Effect::CreateTokenCopyOfTargetCreatureYouControl => {
             d.set_item("kind", "create_token_copy_of_target_creature_you_control")?;
+        }
+        Effect::OptionalSacArtifactForEffect { inner_effect } => {
+            d.set_item("kind", "optional_sac_artifact_for_effect")?;
+            d.set_item("inner_effect", effect_to_pydict(py, inner_effect)?)?;
         }
         Effect::Sequence { effects } => {
             d.set_item("kind", "sequence")?;

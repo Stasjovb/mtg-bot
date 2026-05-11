@@ -219,6 +219,8 @@ the test lands in a commit.
 
 | rust(effect-create-token-copy): Effect::CreateTokenCopyOfTargetCreatureYouControl — Mirrorpool-shape spawn new GameObject with target's printing_id (2 EoE cards; subtype injection deferred). | tests_rust/test_zones.py extend | green  | feature/rust-effect-create-token-copy |
 
+| rust(effect-optional-sac-artifact): Effect::OptionalSacArtifactForEffect — Lithobraking-shape 'may sac for effect' with first-slice deterministic-yes (2 EoE cards). | tests_rust/test_resolve.py extend | green  | feature/rust-effect-optional-sac-artifact |
+
 ## Build invocation reminder
 
 ```
