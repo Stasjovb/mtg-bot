@@ -401,3 +401,211 @@ def test_choose_first_tapped_creature_skips_tapped_non_creatures(engine):
 def test_choose_first_tapped_creature_out_of_range_raises(synthetic_state):
     with pytest.raises((ValueError, IndexError, OverflowError)):
         synthetic_state.choose_first_tapped_creature_for_player(99)
+
+
+# --- cross-feature edge cases ----------------------------------------
+#
+# These cover interactions between the choose_* selectors and the rest
+# of the engine's primitives — zone moves, tap/untap, clone CoW,
+# fingerprint, and combat-decl bookkeeping. They pin the contract that
+# the read-only selectors observe the CURRENT zone state (not a cached
+# snapshot) and that CoW-cloned states diverge cleanly once mutated.
+
+
+def test_choose_after_move_object_battlefield_creature_to_graveyard(synthetic_state):
+    # The first creature on p0's battlefield is id 5 (default seed).
+    # Move it to the graveyard via move_object — the next selector
+    # call should advance to the next creature in zone order (id 6).
+    assert synthetic_state.choose_first_creature_for_player(0) == 5
+    assert synthetic_state.move_object(5, 3, 0) is True  # ZONE_GRAVEYARD = 3
+    assert synthetic_state.choose_first_creature_for_player(0) == 6
+    # The moved creature is now the first graveyard card.
+    assert synthetic_state.choose_first_card_in_graveyard_for_player(0) == 5
+
+
+def test_choose_top_of_library_after_draw_card(synthetic_state):
+    # Top-of-library convention = last element. p0's library top is
+    # id 66 by default. draw_card pops the last element, so the new
+    # top should be id 65.
+    assert synthetic_state.choose_top_of_library_for_player(0) == 66
+    drawn = synthetic_state.draw_card(0)
+    assert drawn == 66
+    assert synthetic_state.choose_top_of_library_for_player(0) == 65
+
+
+def test_choose_first_card_in_hand_after_draw(synthetic_state):
+    # Default p0 hand[0] = id 10 (Llanowar Elves). draw_card appends
+    # the drawn object to the END of the hand, so hand[0] is unchanged.
+    assert synthetic_state.choose_first_card_in_hand_for_player(0) == 10
+    synthetic_state.draw_card(0)
+    # Still id 10 — draw appends, doesn't prepend.
+    assert synthetic_state.choose_first_card_in_hand_for_player(0) == 10
+
+
+def test_choose_first_tapped_creature_after_untap_all(synthetic_state):
+    # Tap one creature, then call untap_all_for_player — the selector
+    # must return None afterwards because the only tapped creature got
+    # untapped. Cross-feature: tap_object + untap_all_for_player +
+    # choose_first_tapped_creature.
+    assert synthetic_state.tap_object(5) is True
+    assert synthetic_state.choose_first_tapped_creature_for_player(0) == 5
+    synthetic_state.untap_all_for_player(0)
+    assert synthetic_state.choose_first_tapped_creature_for_player(0) is None
+
+
+def test_choose_clone_isolation_after_mutation(synthetic_state):
+    # Clone-replay / CoW canary: cloning then mutating the clone
+    # MUST leave the source's selector outputs unchanged. This pins
+    # the read-only contract on choose_* against Arc::make_mut
+    # behavior on the underlying Vec.
+    cloned = synthetic_state.clone_once()
+    assert cloned.choose_first_creature_for_player(0) == 5
+    # Mutate the clone — move id 5 to the graveyard.
+    assert cloned.move_object(5, 3, 0) is True
+    # Source still sees id 5; clone advances to id 6.
+    assert synthetic_state.choose_first_creature_for_player(0) == 5
+    assert cloned.choose_first_creature_for_player(0) == 6
+
+
+def test_choose_first_creature_with_keyword_unaffected_by_tap(engine):
+    # Tapping a creature does not change keyword membership — the
+    # selector filters by printing keyword AND card_types, not by
+    # tapped state. Cross-feature: tap_object + keyword selector.
+    state = engine.make_synthetic_state(
+        num_battlefield=0, num_hand=0, num_library=0
+    )
+    flyer_id = state.register_and_inject_object(_FLYER, 0, ZONE_BATTLEFIELD)
+    assert state.tap_object(flyer_id) is True
+    # Still returns the (now tapped) flyer — the selector does not
+    # filter by tapped.
+    assert (
+        state.choose_first_creature_with_keyword_for_player(0, "flying")
+        == flyer_id
+    )
+
+
+def test_choose_first_creature_after_reanimate(engine):
+    # Inject a creature into the graveyard, then reanimate it onto
+    # the battlefield. The "first creature" selector picks it up
+    # immediately; the graveyard selector stops seeing it. Cross-
+    # feature: register_and_inject_object + reanimate primitive +
+    # choose selectors.
+    state = engine.make_synthetic_state(
+        num_battlefield=0, num_hand=0, num_library=0
+    )
+    bears_id = state.register_and_inject_object(_BEARS, 0, ZONE_GRAVEYARD)
+    assert state.choose_first_creature_for_player(0) is None
+    assert state.choose_first_card_in_graveyard_for_player(0) == bears_id
+    moved = state.move_object_from_graveyard_to_battlefield(0, bears_id)
+    assert moved is True
+    assert state.choose_first_creature_for_player(0) == bears_id
+    assert state.choose_first_card_in_graveyard_for_player(0) is None
+
+
+def test_choose_first_permanent_skipped_by_creature_selector(engine):
+    # Cross-feature: choose_first_permanent picks bf[0] regardless
+    # of type; choose_first_creature SKIPS lands and picks the first
+    # Creature deeper in the zone. Seed: [Forest, Forest, Bears]
+    # — permanent selector returns the Forest at index 0; creature
+    # selector returns the Bears at index 2.
+    state = engine.make_synthetic_state(
+        num_battlefield=0, num_hand=0, num_library=0
+    )
+    forest_id = state.register_and_inject_object(
+        _FOREST, 0, ZONE_BATTLEFIELD
+    )
+    state.register_and_inject_object(_FOREST, 0, ZONE_BATTLEFIELD)
+    bears_id = state.register_and_inject_object(
+        _BEARS, 0, ZONE_BATTLEFIELD
+    )
+    assert state.choose_first_permanent_for_player(0) == forest_id
+    assert state.choose_first_creature_for_player(0) == bears_id
+
+
+def test_choose_determinism_across_repeated_calls(synthetic_state):
+    # Determinism canary: repeated read-only selector calls on an
+    # unmutated state produce identical outputs. Pins that the
+    # selectors are pure functions of state (no internal counters,
+    # no first-call caching that could drift).
+    snap = (
+        synthetic_state.choose_first_creature_for_player(0),
+        synthetic_state.choose_first_card_in_hand_for_player(0),
+        synthetic_state.choose_top_of_library_for_player(0),
+        synthetic_state.choose_first_permanent_for_player(0),
+        synthetic_state.choose_first_creature_for_defender(),
+    )
+    for _ in range(5):
+        repeat = (
+            synthetic_state.choose_first_creature_for_player(0),
+            synthetic_state.choose_first_card_in_hand_for_player(0),
+            synthetic_state.choose_top_of_library_for_player(0),
+            synthetic_state.choose_first_permanent_for_player(0),
+            synthetic_state.choose_first_creature_for_defender(),
+        )
+        assert repeat == snap
+
+
+def test_choose_fingerprint_unchanged_by_read_only_selectors(synthetic_state):
+    # The choose_* helpers are documented as read-only — calling
+    # them must not perturb the gameplay-relevant state, which means
+    # the fingerprint stays bit-equal across a call. Cross-feature:
+    # fingerprint + every choose selector.
+    before = synthetic_state.fingerprint()
+    synthetic_state.choose_first_creature_for_player(0)
+    synthetic_state.choose_first_card_in_hand_for_player(0)
+    synthetic_state.choose_top_of_library_for_player(0)
+    synthetic_state.choose_first_permanent_for_player(0)
+    synthetic_state.choose_first_creature_for_defender()
+    synthetic_state.choose_first_card_in_graveyard_for_player(0)
+    synthetic_state.choose_first_creature_with_keyword_for_player(0, "flying")
+    synthetic_state.choose_first_tapped_creature_for_player(0)
+    after = synthetic_state.fingerprint()
+    assert before == after
+
+
+def test_choose_fingerprint_differs_after_tap_shifts_tapped_selector(synthetic_state):
+    # Cross-feature fingerprint canary: tapping a creature shifts
+    # both choose_first_tapped_creature's output AND the fingerprint
+    # (because tapped is part of the per-object zone signature). Pins
+    # that the selector's observable change matches a real state
+    # transition, not a no-op.
+    before_fp = synthetic_state.fingerprint()
+    assert synthetic_state.choose_first_tapped_creature_for_player(0) is None
+    assert synthetic_state.tap_object(5) is True
+    after_fp = synthetic_state.fingerprint()
+    assert after_fp != before_fp
+    assert synthetic_state.choose_first_tapped_creature_for_player(0) == 5
+
+
+def test_choose_first_creature_for_defender_after_active_player_flip(synthetic_state):
+    # Cross-feature: choose_first_creature_for_defender is defined
+    # as `1 - active_player`. Flipping active_player (via wrap-past-
+    # cleanup) MUST flip the selector's output. The default seed
+    # produces id 72 (first creature on p1's bf, since active = 0
+    # ⇒ defender = 1); after the flip, defender = 0 ⇒ id 5.
+    assert synthetic_state.choose_first_creature_for_defender() == 72
+    synthetic_state.set_phase(11)  # PHASE_CLEANUP
+    synthetic_state.advance_phase()  # wraps, swaps active
+    assert synthetic_state.active_player == 1
+    assert synthetic_state.choose_first_creature_for_defender() == 5
+
+
+def test_choose_first_creature_with_keyword_after_inject_into_opponent_bf(engine):
+    # Cross-feature controller scoping: a flyer on p1's battlefield
+    # must NOT be visible to p0's keyword selector — the selector is
+    # per-player. Seeds two separate flyers (one per controller) and
+    # checks each side sees only its own.
+    state = engine.make_synthetic_state(
+        num_battlefield=0, num_hand=0, num_library=0
+    )
+    p0_flyer = state.register_and_inject_object(_FLYER, 0, ZONE_BATTLEFIELD)
+    p1_flyer = state.register_and_inject_object(_FLYER, 1, ZONE_BATTLEFIELD)
+    assert p0_flyer != p1_flyer
+    assert (
+        state.choose_first_creature_with_keyword_for_player(0, "flying")
+        == p0_flyer
+    )
+    assert (
+        state.choose_first_creature_with_keyword_for_player(1, "flying")
+        == p1_flyer
+    )
