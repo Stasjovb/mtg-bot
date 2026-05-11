@@ -199,6 +199,8 @@ the test lands in a commit.
 
 | rust(effect-add-n-mana-chosen-color): Effect::AddNManaOfChosenColor — Lotus-Field-shape mint-N-of-one-color with first-slice deterministic options[0] pick (4 EoE cards). | tests_rust/test_mana.py extend | green  | feature/rust-effect-add-n-mana-chosen-color |
 
+| rust(effect-search-library-for-card): Effect::SearchLibraryForCard — generalized tutor with filter_name dispatch (basic_land, basic_X, creature_small, artifact). Deferred: Legendary/subtype filters (no Rust supertypes/subtypes). 9 EoE cards. | tests_rust/test_library.py extend | green  | feature/rust-effect-search-library-for-card |
+
 ## Build invocation reminder
 
 ```

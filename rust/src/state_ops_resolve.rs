@@ -2908,6 +2908,106 @@ fn apply_effect(
                 }
             }
         }
+        // Round-28 generalized library tutor. Scans the source-
+        // controller's library top-to-bottom for the FIRST card
+        // matching filter_name; moves match to controller's hand
+        // (revealing implicit). Unknown filter_name silently fizzles
+        // (matches Python's _matches default-False). Deferred: shuffle
+        // (G19), Legendary/subtype filters (no supertypes/subtypes in
+        // Rust registry), may_fail interactive choice (no decision
+        // callback yet for "decline fetch").
+        Effect::SearchLibraryForCard {
+            filter_name,
+            max_mv,
+            may_fail: _,
+        } => {
+            // Locate source controller.
+            let mut src_controller: Option<u8> = None;
+            'outer: for player in &state.players {
+                for zone in [
+                    &player.hand,
+                    &player.library,
+                    &player.battlefield,
+                    &player.graveyard,
+                    &player.exile,
+                ] {
+                    if let Some(obj) = zone.iter().find(|o| o.id == source_obj_id) {
+                        src_controller = Some(obj.controller);
+                        break 'outer;
+                    }
+                }
+            }
+            if src_controller.is_none() {
+                if let Some(item) = state
+                    .stack
+                    .iter()
+                    .find(|i| i.source_obj_id == source_obj_id)
+                {
+                    src_controller = Some(item.controller);
+                }
+            }
+            let cidx = match src_controller {
+                Some(c) => c as usize,
+                None => state.active_player as usize,
+            };
+            // Top-to-bottom scan via iter().rev() (lib[len-1] is top).
+            let max_mv_local = *max_mv;
+            let pos: Option<usize> = {
+                let lib = &state.players[cidx].library;
+                let registry = &state.registry;
+                let mut found: Option<usize> = None;
+                for i in (0..lib.len()).rev() {
+                    let obj = &lib[i];
+                    let printing = match registry.lookup(obj.printing_id) {
+                        Some(p) => p,
+                        None => continue,
+                    };
+                    let matches = match filter_name.as_str() {
+                        "basic_land" => printing.card_types.iter().any(|t| t == "Land"),
+                        "basic_plains" => &*printing.name == "Plains",
+                        "basic_island" => &*printing.name == "Island",
+                        "basic_swamp" => &*printing.name == "Swamp",
+                        "basic_mountain" => &*printing.name == "Mountain",
+                        "basic_forest" => &*printing.name == "Forest",
+                        "creature_small" => {
+                            if !printing.card_types.iter().any(|t| t == "Creature") {
+                                false
+                            } else {
+                                let mc = &printing.mana_cost;
+                                let total = mc.generic as i32
+                                    + mc.white as i32
+                                    + mc.blue as i32
+                                    + mc.black as i32
+                                    + mc.red as i32
+                                    + mc.green as i32;
+                                total <= max_mv_local
+                            }
+                        }
+                        "artifact" => printing.card_types.iter().any(|t| t == "Artifact"),
+                        _ => false, // unknown filter → fizzle
+                    };
+                    if matches {
+                        found = Some(i);
+                        break;
+                    }
+                }
+                found
+            };
+            let Some(p) = pos else {
+                return Ok(()); // no match → silent fizzle
+            };
+            let player = &mut state.players[cidx];
+            let lib = Arc::make_mut(&mut player.library);
+            let mut obj = lib.remove(p);
+            obj.zone = ZONE_HAND;
+            obj.tapped = false;
+            obj.summoning_sick = true; // r28 CE1 universal-true default
+            obj.controller = cidx as u8;
+            obj.damage = 0;
+            obj.counters = 0;
+            Arc::make_mut(&mut player.hand).push(obj);
+            // No shuffle (G19 deferral).
+        }
     }
     Ok(())
 }
