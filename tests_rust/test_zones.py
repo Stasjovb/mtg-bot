@@ -1804,3 +1804,135 @@ def test_resolve_exile_opps_nonland_link_returns(synthetic_state):
     returned = synthetic_state.return_paired_exiles_for(src_id)
     assert returned == 1
     assert synthetic_state.find_object_zone(p1_first_bear_id) == ZONE_BATTLEFIELD
+
+
+# --- ReturnAllCreaturesFromYourGraveyardToBattlefield (r28) ---------
+#
+# Mass reanimation (Awakening-Hall-style). Iterate source-controller's
+# graveyard in stored order; move every creature to bf with the
+# standard ETB reset. Non-creature graveyard objects stay put.
+
+
+def _return_all_creatures_dict():
+    """Awakening-Hall-shape sorcery: return ALL creatures from your
+    graveyard to the battlefield."""
+    return {
+        "name": "Test Awakening Hall",
+        "card_types": ["Sorcery"],
+        "mana_cost": {"W": 1, "B": 1, "generic": 3},
+        "effects": [
+            {"kind": "return_all_creatures_from_your_graveyard_to_battlefield"}
+        ],
+    }
+
+
+def test_return_all_creatures_returns_every_creature_from_graveyard(synthetic_state):
+    """Pre-seed two Grizzly Bears in p0's graveyard, cast the spell,
+    and confirm both are back on p0's battlefield. Non-creature
+    detritus stays in graveyard."""
+    state = synthetic_state.clone_once()
+    # Stash a vanilla bear printing id, then create two graveyard
+    # bears for p0 by moving two from p0's battlefield to graveyard.
+    snap = state.battlefield_snapshot()
+    p0_bears = [
+        d["id"] for d in snap
+        if d["controller_id"] == 0 and d["printing_name"] == "Grizzly Bears"
+    ][:2]
+    assert len(p0_bears) == 2, "synthetic seed should have >=2 p0 Grizzly Bears"
+    for cid in p0_bears:
+        state.move_object(cid, ZONE_GRAVEYARD, 0)
+    # Verify they're in graveyard.
+    for cid in p0_bears:
+        assert state.find_object_zone(cid) == ZONE_GRAVEYARD
+    p0_bf_before = state.battlefield_sizes[0]
+
+    src_id = state.register_and_inject_object(
+        _return_all_creatures_dict(), 0, ZONE_HAND
+    )
+    state.push_to_stack(src_id, 0)
+    state.resolve_top_of_stack()
+
+    # Both bears are back on p0's bf.
+    for cid in p0_bears:
+        assert state.find_object_zone(cid) == ZONE_BATTLEFIELD
+    assert state.battlefield_sizes[0] == p0_bf_before + 2
+
+
+def test_return_all_creatures_leaves_non_creatures_in_graveyard(synthetic_state):
+    """Non-creature objects in graveyard stay put. The dispatcher filters
+    on Creature card_type only."""
+    state = synthetic_state.clone_once()
+    snap = state.battlefield_snapshot()
+    # Move a p0 Forest (Land, non-creature) to graveyard.
+    p0_forest = next(
+        d["id"] for d in snap
+        if d["controller_id"] == 0 and d["printing_name"] == "Forest"
+    )
+    state.move_object(p0_forest, ZONE_GRAVEYARD, 0)
+    assert state.find_object_zone(p0_forest) == ZONE_GRAVEYARD
+
+    # Also move a creature for the all-arm to find.
+    p0_bear = next(
+        d["id"] for d in snap
+        if d["controller_id"] == 0 and d["printing_name"] == "Grizzly Bears"
+    )
+    state.move_object(p0_bear, ZONE_GRAVEYARD, 0)
+    assert state.find_object_zone(p0_bear) == ZONE_GRAVEYARD
+
+    src_id = state.register_and_inject_object(
+        _return_all_creatures_dict(), 0, ZONE_HAND
+    )
+    state.push_to_stack(src_id, 0)
+    state.resolve_top_of_stack()
+
+    # Bear came back; Forest stayed in graveyard.
+    assert state.find_object_zone(p0_bear) == ZONE_BATTLEFIELD
+    assert state.find_object_zone(p0_forest) == ZONE_GRAVEYARD
+
+
+def test_return_all_creatures_empty_graveyard_no_op(synthetic_state):
+    """Empty graveyard → silent no-op. Stack still pops; nothing moves."""
+    p0_bf_before = synthetic_state.battlefield_sizes[0]
+    assert synthetic_state.graveyard_sizes[0] == 0  # synthetic seed is empty
+    src_id = synthetic_state.register_and_inject_object(
+        _return_all_creatures_dict(), 0, ZONE_HAND
+    )
+    synthetic_state.push_to_stack(src_id, 0)
+    synthetic_state.resolve_top_of_stack()  # no raise
+
+    # Source went to graveyard (CR 608.2m sorcery), but p0's bf
+    # is unchanged otherwise — no creatures came back.
+    assert synthetic_state.battlefield_sizes[0] == p0_bf_before
+    assert synthetic_state.graveyard_sizes[0] == 1  # source only
+
+
+def test_return_all_creatures_etb_state_reset(synthetic_state):
+    """Returned creatures have ETB state reset: summoning_sick=true,
+    tapped=false, damage/counters cleared."""
+    state = synthetic_state.clone_once()
+    snap = state.battlefield_snapshot()
+    p0_bear = next(
+        d["id"] for d in snap
+        if d["controller_id"] == 0 and d["printing_name"] == "Grizzly Bears"
+    )
+    # Tap the bear before moving it. (Damage / counters are cleared
+    # by CR 400.7 on the way to graveyard already; here we mainly
+    # verify the reanimation arm also sets summoning_sick=True and
+    # tapped=False on the way back to bf.)
+    state.tap_object(p0_bear)
+    state.move_object(p0_bear, ZONE_GRAVEYARD, 0)
+
+    src_id = state.register_and_inject_object(
+        _return_all_creatures_dict(), 0, ZONE_HAND
+    )
+    state.push_to_stack(src_id, 0)
+    state.resolve_top_of_stack()
+
+    # The returned creature: untapped, summoning_sick. Read via
+    # battlefield_snapshot.
+    bf = state.battlefield_snapshot()
+    returned = next(d for d in bf if d["id"] == p0_bear)
+    assert returned["tapped"] is False
+    assert returned["summoning_sick"] is True
+    assert returned["damage"] == 0
+    assert returned["counters"] == 0

@@ -4142,6 +4142,58 @@ fn apply_effect(
         //
         // No eligible permanent (everything untapped, or only the
         // source itself is tapped) → silent fizzle.
+        // Round-28 mass reanimation. Mirrors Python's
+        // ReturnAllCreaturesFromYourGraveyardToBattlefield (Awakening-
+        // Hall family, 2+ EoE cards). Iterate source-controller's
+        // graveyard in stored order (oldest first — Vec front); move
+        // every creature to the controller's bf with the standard ETB
+        // reset (summoning_sick=true, tapped=false, etc.).
+        Effect::ReturnAllCreaturesFromYourGraveyardToBattlefield => {
+            let _ = source_obj_id; // controller-targeted, not source-relative
+            let controller_idx = state.active_player as usize;
+            // Collect creature ids first to avoid registry-vs-graveyard
+            // borrow conflicts.
+            let creature_ids: Vec<u32> = state.players[controller_idx]
+                .graveyard
+                .iter()
+                .filter_map(|obj| {
+                    let printing = state.registry.lookup(obj.printing_id)?;
+                    if printing.card_types.iter().any(|t| t == "Creature") {
+                        Some(obj.id)
+                    } else {
+                        None
+                    }
+                })
+                .collect();
+            if creature_ids.is_empty() {
+                return Ok(()); // empty / no-creature graveyard: silent no-op
+            }
+            // Drain matching creatures from graveyard; collect for bf.
+            let graveyard_mut: &mut Vec<GameObject> =
+                Arc::make_mut(&mut state.players[controller_idx].graveyard);
+            let mut moved: Vec<GameObject> = Vec::with_capacity(creature_ids.len());
+            graveyard_mut.retain(|o| {
+                if creature_ids.contains(&o.id) {
+                    let mut obj = o.clone();
+                    obj.zone = ZONE_BATTLEFIELD;
+                    obj.tapped = false;
+                    obj.summoning_sick = true;
+                    obj.damage = 0;
+                    obj.counters = 0;
+                    obj.attached_to = None;
+                    obj.exiled_with_source = None;
+                    moved.push(obj);
+                    false
+                } else {
+                    true
+                }
+            });
+            let bf_mut: &mut Vec<GameObject> =
+                Arc::make_mut(&mut state.players[controller_idx].battlefield);
+            for obj in moved {
+                bf_mut.push(obj);
+            }
+        }
         // Round-28 TapAnotherTargetCreature (Starport-Security family,
         // 2+ EoE cards). Same scan shape as UntapTargetOtherPermanent
         // but filters on Creature and taps. Already-tapped target is
