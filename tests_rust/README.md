@@ -237,6 +237,8 @@ the test lands in a commit.
 
 | rust(effect-if-you-do): PendingDecision::IfYouDoChoice (5th variant) + submit_if_you_do_decision pymethod + auto-resolve 'if_you_do_yes' / 'if_you_do_no' + Effect::IfYouDo { do_action, then_action } — Python's IfYouDo combinator first-slice ("looter"-style IfYouDo(MayDo(X), Y); 7+ EoE cards target family). | tests_rust/test_pending_decisions.py extend | green  | feature/rust-effect-if-you-do |
 
+| rust(effect-each-opponent-mills): Effect::EachOpponentMillsCards { count } — each opponent mills `count` cards (3+ EoE cards); mirrors EachOpponentDiscards source-finder shape but routes the opponent's library top → graveyard. | tests_rust/test_resolve.py extend | green  | feature/rust-effect-each-opponent-mills |
+
 ## Build invocation reminder
 
 ```

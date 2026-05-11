@@ -4059,6 +4059,66 @@ fn apply_effect(
                 then_action: then_action.clone(),
             });
         }
+        // Round-28 EachOpponentMillsCards (3+ EoE cards). Mirrors the
+        // round-24 EachOpponentDiscards / EachOpponentLosesLife
+        // source-finder shape: 5-zone walk + stack scan to recover
+        // source's controller, then mill the (single 2-player)
+        // opponent's library `count` cards. Empty library stops the
+        // inner loop silently — CR 704.5b applies to drawing, not
+        // milling.
+        Effect::EachOpponentMillsCards { count } => {
+            if *count < 0 {
+                return Err(PyValueError::new_err(format!(
+                    "EachOpponentMillsCards count must be non-negative, got {count}"
+                )));
+            }
+            if *count == 0 {
+                return Ok(());
+            }
+            // Source-controller resolution (mirrors EachOpponentDiscards).
+            let mut source_controller: Option<u8> = None;
+            'outer: for player in state.players.iter() {
+                for zone in [
+                    &player.hand,
+                    &player.library,
+                    &player.battlefield,
+                    &player.graveyard,
+                    &player.exile,
+                ] {
+                    for obj in zone.iter() {
+                        if obj.id == source_obj_id {
+                            source_controller = Some(obj.controller);
+                            break 'outer;
+                        }
+                    }
+                }
+            }
+            if source_controller.is_none() {
+                if let Some(item) = state
+                    .stack
+                    .iter()
+                    .find(|i| i.source_obj_id == source_obj_id)
+                {
+                    source_controller = Some(item.controller);
+                }
+            }
+            let Some(controller) = source_controller else {
+                return Ok(()); // source not found: silent fizzle
+            };
+            // 2-player "each opponent" → "the one opponent". Mill
+            // `count` cards off the opponent's library top.
+            let opponent_idx = (1 - controller) as usize;
+            let n = *count as usize;
+            for _ in 0..n {
+                let lib_mut: &mut Vec<GameObject> =
+                    Arc::make_mut(&mut state.players[opponent_idx].library);
+                let Some(mut obj) = lib_mut.pop() else {
+                    break; // empty library: silent stop (CR parity with Effect::Mill)
+                };
+                obj.zone = ZONE_GRAVEYARD;
+                Arc::make_mut(&mut state.players[opponent_idx].graveyard).push(obj);
+            }
+        }
     }
     Ok(())
 }
