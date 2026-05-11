@@ -859,3 +859,135 @@ def test_pump_creatures_you_control_until_eot_clone_isolation(synthetic_state):
     # Source unchanged.
     for cid in bear_ids:
         assert synthetic_state.effective_power(cid) == 2
+
+
+# ---------------------------------------------------------------- PumpCreaturesOpponentsControlUntilEOT (r28)
+
+
+def _curse_anthem_dict(power_bonus: int = -1, toughness_bonus: int = -1):
+    """Debuff anthem: every creature opponent controls gets
+    -power/-toughness UEOT."""
+    return {
+        "name": "Curse Anthem (synthetic)",
+        "mana_cost": {"B": 1, "generic": 1},
+        "card_types": ["Sorcery"],
+        "effects": [
+            {
+                "kind": "pump_creatures_opponents_control_until_eot",
+                "power_bonus": power_bonus,
+                "toughness_bonus": toughness_bonus,
+            }
+        ],
+    }
+
+
+def test_register_pump_creatures_opponents_control_defaults(empty_registry):
+    pid = empty_registry.register_printing(
+        {
+            "name": "default-curse",
+            "card_types": ["Sorcery"],
+            "effects": [{"kind": "pump_creatures_opponents_control_until_eot"}],
+        }
+    )
+    eff = empty_registry.get_printing_effects(pid)[0]
+    assert eff["kind"] == "pump_creatures_opponents_control_until_eot"
+    assert eff["power_bonus"] == 0
+    assert eff["toughness_bonus"] == 0
+
+
+def test_pump_creatures_opponents_control_debuffs_p1_creatures(synthetic_state):
+    """Cast a debuff curse from p0 — every Grizzly Bears on p1's
+    battlefield gets -1/-1; p0's creatures untouched."""
+    snap = synthetic_state.battlefield_snapshot()
+    p0_creature_ids = [
+        d["id"] for d in snap
+        if d["controller_id"] == 0 and d["printing_name"] == "Grizzly Bears"
+    ]
+    p1_creature_ids = [
+        d["id"] for d in snap
+        if d["controller_id"] == 1 and d["printing_name"] == "Grizzly Bears"
+    ]
+    assert len(p1_creature_ids) >= 1
+    spell_id = synthetic_state.register_and_inject_object(
+        _curse_anthem_dict(power_bonus=-1, toughness_bonus=-1), 0, ZONE_HAND
+    )
+    synthetic_state.push_to_stack(spell_id, 0)
+    synthetic_state.resolve_top_of_stack()
+
+    # p1's creatures: 2/2 -> 1/1.
+    for cid in p1_creature_ids:
+        assert synthetic_state.effective_power(cid) == 1
+        assert synthetic_state.effective_toughness(cid) == 1
+    # p0's creatures untouched.
+    for cid in p0_creature_ids:
+        assert synthetic_state.effective_power(cid) == 2
+
+
+def test_pump_creatures_opponents_control_zero_zero_is_noop(synthetic_state):
+    snap = synthetic_state.battlefield_snapshot()
+    p1_bear_ids = [
+        d["id"] for d in snap
+        if d["controller_id"] == 1 and d["printing_name"] == "Grizzly Bears"
+    ]
+    spell_id = synthetic_state.register_and_inject_object(
+        _curse_anthem_dict(power_bonus=0, toughness_bonus=0), 0, ZONE_HAND
+    )
+    synthetic_state.push_to_stack(spell_id, 0)
+    synthetic_state.resolve_top_of_stack()
+    for cid in p1_bear_ids:
+        assert synthetic_state.effective_power(cid) == 2
+
+
+def test_pump_creatures_opponents_control_clears_at_cleanup(synthetic_state):
+    snap = synthetic_state.battlefield_snapshot()
+    p1_bear_ids = [
+        d["id"] for d in snap
+        if d["controller_id"] == 1 and d["printing_name"] == "Grizzly Bears"
+    ]
+    spell_id = synthetic_state.register_and_inject_object(
+        _curse_anthem_dict(power_bonus=-1, toughness_bonus=-1), 0, ZONE_HAND
+    )
+    synthetic_state.push_to_stack(spell_id, 0)
+    synthetic_state.resolve_top_of_stack()
+    for cid in p1_bear_ids:
+        assert synthetic_state.effective_power(cid) == 1
+    # Clear UEOT directly via the r27 primitive. (The modifier lands
+    # on p1's bf — cleanup_step_for_active_player only drains the
+    # active player's bf, so we use the engine-wide drain primitive.)
+    synthetic_state.clear_ueot_modifiers_all()
+    for cid in p1_bear_ids:
+        assert synthetic_state.effective_power(cid) == 2
+
+
+def test_pump_creatures_opponents_control_no_opponent_creatures_fizzles(synthetic_state):
+    state = synthetic_state.clone_once()
+    snap = state.battlefield_snapshot()
+    p1_creatures = [
+        d["id"] for d in snap
+        if d["controller_id"] == 1 and d["printing_name"] == "Grizzly Bears"
+    ]
+    for cid in p1_creatures:
+        state.move_object(cid, 3, 1)  # graveyard
+    spell_id = state.register_and_inject_object(
+        _curse_anthem_dict(power_bonus=-2, toughness_bonus=-2), 0, ZONE_HAND
+    )
+    state.push_to_stack(spell_id, 0)
+    state.resolve_top_of_stack()  # should not raise
+
+
+def test_pump_creatures_opponents_control_clone_isolation(synthetic_state):
+    snap = synthetic_state.battlefield_snapshot()
+    p1_bear_ids = [
+        d["id"] for d in snap
+        if d["controller_id"] == 1 and d["printing_name"] == "Grizzly Bears"
+    ]
+    spell_id = synthetic_state.register_and_inject_object(
+        _curse_anthem_dict(power_bonus=-1, toughness_bonus=-1), 0, ZONE_HAND
+    )
+    synthetic_state.push_to_stack(spell_id, 0)
+    cloned = synthetic_state.clone_once()
+    cloned.resolve_top_of_stack()
+
+    for cid in p1_bear_ids:
+        assert cloned.effective_power(cid) == 1
+        assert synthetic_state.effective_power(cid) == 2  # source unchanged

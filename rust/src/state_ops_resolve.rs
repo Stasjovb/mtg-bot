@@ -3008,6 +3008,76 @@ fn apply_effect(
             Arc::make_mut(&mut player.hand).push(obj);
             // No shuffle (G19 deferral).
         }
+        // Round-28 debuff anthem. Mirror of
+        // PumpCreaturesYouControlUntilEOT but on the source-
+        // controller's OPPONENTS' battlefields. Two-player engine
+        // simplification: opponents = the one player whose id is
+        // 1 - controller. (0, 0) short-circuits; empty opponent bf or
+        // no creatures fizzles silently.
+        Effect::PumpCreaturesOpponentsControlUntilEOT {
+            power_bonus,
+            toughness_bonus,
+        } => {
+            if *power_bonus == 0 && *toughness_bonus == 0 {
+                return Ok(());
+            }
+            // Source controller lookup.
+            let mut src_controller: Option<u8> = None;
+            'outer: for player in &state.players {
+                for zone in [
+                    &player.hand,
+                    &player.library,
+                    &player.battlefield,
+                    &player.graveyard,
+                    &player.exile,
+                ] {
+                    if let Some(obj) = zone.iter().find(|o| o.id == source_obj_id) {
+                        src_controller = Some(obj.controller);
+                        break 'outer;
+                    }
+                }
+            }
+            if src_controller.is_none() {
+                if let Some(item) = state
+                    .stack
+                    .iter()
+                    .find(|i| i.source_obj_id == source_obj_id)
+                {
+                    src_controller = Some(item.controller);
+                }
+            }
+            let Some(controller) = src_controller else {
+                return Ok(());
+            };
+            let opponent_idx = (1 - controller) as usize;
+            let creature_ids: Vec<u32> = {
+                let bf = &state.players[opponent_idx].battlefield;
+                let registry = &state.registry;
+                bf.iter()
+                    .filter_map(|obj| {
+                        let printing = registry.printings.get(obj.printing_id as usize)?;
+                        if printing.card_types.iter().any(|t| t == "Creature") {
+                            Some(obj.id)
+                        } else {
+                            None
+                        }
+                    })
+                    .collect()
+            };
+            if creature_ids.is_empty() {
+                return Ok(());
+            }
+            let zone: &mut Vec<GameObject> =
+                Arc::make_mut(&mut state.players[opponent_idx].battlefield);
+            for obj in zone.iter_mut() {
+                if creature_ids.contains(&obj.id) {
+                    obj.ueot_modifiers.push(UeotModifier::PowerToughnessBonus {
+                        power: *power_bonus,
+                        toughness: *toughness_bonus,
+                    });
+                }
+            }
+        }
     }
     Ok(())
 }

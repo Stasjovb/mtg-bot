@@ -201,6 +201,8 @@ the test lands in a commit.
 
 | rust(effect-search-library-for-card): Effect::SearchLibraryForCard — generalized tutor with filter_name dispatch (basic_land, basic_X, creature_small, artifact). Deferred: Legendary/subtype filters (no Rust supertypes/subtypes). 9 EoE cards. | tests_rust/test_library.py extend | green  | feature/rust-effect-search-library-for-card |
 
+| rust(effect-pump-creatures-opponents-control-ueot): Effect::PumpCreaturesOpponentsControlUntilEOT — debuff-anthem mirror of PumpCreaturesYouControlUntilEOT, hits opponent's bf creatures (2 EoE cards). | tests_rust/test_ueot.py extend | green  | feature/rust-effect-pump-creatures-opponents-control-ueot |
+
 ## Build invocation reminder
 
 ```
