@@ -780,6 +780,23 @@ pub enum Effect {
     /// matches the round-28 CE1 universal-true default for hand-zone
     /// objects.
     ReturnCreatureFromYourGraveyardToHand,
+    /// **Round 28 coverage extension.** Put `amount` +1/+1 counter(s)
+    /// on each creature the source's controller controls. Mirrors
+    /// Python's `PutPlusOneCounterOnEachCreatureYouControl(amount: int = 1)`
+    /// (counters.py:737 — Atmospheric Greenhouse-shape, 3 EoE cards).
+    ///
+    /// **Mechanism.** Locate source controller; iterate that player's
+    /// battlefield; for every creature, add `amount` to the per-object
+    /// `counters` scalar (the same single-scalar counter the existing
+    /// PutPlusOneCounterOnSelf / AddCounters arms use — G8 multi-kind
+    /// counter map is still future work). Non-creature permanents are
+    /// skipped. (0) is a legal no-op; negative `amount` raises.
+    ///
+    /// **Schema simplification vs Python.** Drops the `exclude_source`
+    /// rider ("each OTHER creature you control" — skips the triggering
+    /// permanent). Cards with that rider compose via separate effect
+    /// chains for now.
+    PutPlusOneCounterOnEachCreatureYouControl { amount: i32 },
 }
 
 #[derive(Clone, Debug)]
@@ -1318,6 +1335,24 @@ fn parse_effect(dict: &Bound<'_, PyDict>) -> PyResult<Effect> {
             // Unit variant; no fields beyond `kind`.
             Ok(Effect::ReturnCreatureFromYourGraveyardToHand)
         }
+        "put_plus_one_counter_on_each_creature_you_control" => {
+            // Python's PutPlusOneCounterOnEachCreatureYouControl
+            // dataclass has amount: int = 1. Mirror that.
+            let amount: i32 = match dict.get_item("amount")? {
+                Some(a) => a.extract().map_err(|e| {
+                    PyValueError::new_err(format!(
+                        "put_plus_one_counter_on_each_creature_you_control.amount must be an integer (got: {e})"
+                    ))
+                })?,
+                None => 1,
+            };
+            if amount < 0 {
+                return Err(PyValueError::new_err(format!(
+                    "put_plus_one_counter_on_each_creature_you_control: amount must be non-negative, got {amount}"
+                )));
+            }
+            Ok(Effect::PutPlusOneCounterOnEachCreatureYouControl { amount })
+        }
         "pump_creatures_you_control_until_eot" => {
             // Round-28 anthem-shape UEOT effect. Mirrors the
             // PumpSelfUntilEOT / PumpTargetCreatureUntilEOT schema:
@@ -1702,6 +1737,10 @@ fn effect_to_pydict<'py>(
         }
         Effect::ReturnCreatureFromYourGraveyardToHand => {
             d.set_item("kind", "return_creature_from_your_graveyard_to_hand")?;
+        }
+        Effect::PutPlusOneCounterOnEachCreatureYouControl { amount } => {
+            d.set_item("kind", "put_plus_one_counter_on_each_creature_you_control")?;
+            d.set_item("amount", *amount)?;
         }
         Effect::Sequence { effects } => {
             d.set_item("kind", "sequence")?;

@@ -876,3 +876,154 @@ def test_counters_surface_through_battlefield_snapshot_round_trip(
     matching_clone = [d for d in snap_clone if d["id"] == obj_id]
     assert len(matching_clone) == 1
     assert matching_clone[0]["counters"] == 4
+
+
+# -------------------- Round-28 PutPlusOneCounterOnEachCreatureYouControl --------------------
+
+
+def _atmospheric_greenhouse_dict(amount: int = 1):
+    """Atmospheric-Greenhouse-shape ETB: put +amount/+amount counter(s)
+    on each creature you control."""
+    return {
+        "name": "Atmospheric Greenhouse (synthetic)",
+        "mana_cost": {"G": 1, "generic": 2},
+        "card_types": ["Enchantment"],
+        "effects": [
+            {
+                "kind": "put_plus_one_counter_on_each_creature_you_control",
+                "amount": amount,
+            }
+        ],
+    }
+
+
+def test_register_plus1_on_each_creature_default_amount(empty_registry):
+    pid = empty_registry.register_printing(
+        {
+            "name": "default-counter",
+            "card_types": ["Enchantment"],
+            "effects": [
+                {"kind": "put_plus_one_counter_on_each_creature_you_control"}
+            ],
+        }
+    )
+    effects = empty_registry.get_printing_effects(pid)
+    assert effects[0]["kind"] == "put_plus_one_counter_on_each_creature_you_control"
+    assert effects[0]["amount"] == 1
+
+
+def test_register_plus1_on_each_creature_negative_amount_raises(empty_registry):
+    import pytest
+    with pytest.raises(ValueError, match="non-negative"):
+        empty_registry.register_printing(
+            {
+                "name": "bad-counter",
+                "card_types": ["Enchantment"],
+                "effects": [
+                    {
+                        "kind": "put_plus_one_counter_on_each_creature_you_control",
+                        "amount": -1,
+                    }
+                ],
+            }
+        )
+
+
+def test_plus1_on_each_creature_pumps_all_p0_creatures(synthetic_state):
+    """Each Grizzly Bears on p0's battlefield gains +1 counter; Forests
+    skipped (non-creature); p1's creatures untouched."""
+    snap = synthetic_state.battlefield_snapshot()
+    p0_creature_ids = [
+        d["id"] for d in snap
+        if d["controller_id"] == 0 and d["printing_name"] == "Grizzly Bears"
+    ]
+    p0_forest_ids = [
+        d["id"] for d in snap
+        if d["controller_id"] == 0 and d["printing_name"] == "Forest"
+    ]
+    p1_creature_ids = [
+        d["id"] for d in snap
+        if d["controller_id"] == 1 and d["printing_name"] == "Grizzly Bears"
+    ]
+    spell_id = synthetic_state.register_and_inject_object(
+        _atmospheric_greenhouse_dict(amount=1), 0, ZONE_HAND
+    )
+    synthetic_state.push_to_stack(spell_id, 0)
+    synthetic_state.resolve_top_of_stack()
+
+    # All p0 bears: counters = 1.
+    new_snap = synthetic_state.battlefield_snapshot()
+    by_id = {d["id"]: d for d in new_snap}
+    for cid in p0_creature_ids:
+        assert by_id[cid]["counters"] == 1
+    # Forests untouched: counters = 0.
+    for fid in p0_forest_ids:
+        assert by_id[fid]["counters"] == 0
+    # p1's creatures untouched.
+    for cid in p1_creature_ids:
+        assert by_id[cid]["counters"] == 0
+
+
+def test_plus1_on_each_creature_amount_zero_is_noop(synthetic_state):
+    snap = synthetic_state.battlefield_snapshot()
+    bear_ids = [
+        d["id"] for d in snap
+        if d["controller_id"] == 0 and d["printing_name"] == "Grizzly Bears"
+    ]
+    spell_id = synthetic_state.register_and_inject_object(
+        _atmospheric_greenhouse_dict(amount=0), 0, ZONE_HAND
+    )
+    synthetic_state.push_to_stack(spell_id, 0)
+    synthetic_state.resolve_top_of_stack()
+
+    new_snap = synthetic_state.battlefield_snapshot()
+    by_id = {d["id"]: d for d in new_snap}
+    for cid in bear_ids:
+        assert by_id[cid]["counters"] == 0
+
+
+def test_plus1_on_each_creature_stacks_on_existing_counters(synthetic_state):
+    """Repeated casts accumulate: 2x +1 stacks to 2 counters per creature."""
+    spell_id = synthetic_state.register_and_inject_object(
+        _atmospheric_greenhouse_dict(amount=1), 0, ZONE_HAND
+    )
+    synthetic_state.push_to_stack(spell_id, 0)
+    synthetic_state.resolve_top_of_stack()
+    spell_id2 = synthetic_state.register_and_inject_object(
+        _atmospheric_greenhouse_dict(amount=1), 0, ZONE_HAND
+    )
+    synthetic_state.push_to_stack(spell_id2, 0)
+    synthetic_state.resolve_top_of_stack()
+
+    snap = synthetic_state.battlefield_snapshot()
+    bear_counters = [
+        d["counters"] for d in snap
+        if d["controller_id"] == 0 and d["printing_name"] == "Grizzly Bears"
+    ]
+    for c in bear_counters:
+        assert c == 2
+
+
+def test_plus1_on_each_creature_clone_isolation(synthetic_state):
+    snap = synthetic_state.battlefield_snapshot()
+    bear_ids = [
+        d["id"] for d in snap
+        if d["controller_id"] == 0 and d["printing_name"] == "Grizzly Bears"
+    ]
+    spell_id = synthetic_state.register_and_inject_object(
+        _atmospheric_greenhouse_dict(amount=2), 0, ZONE_HAND
+    )
+    synthetic_state.push_to_stack(spell_id, 0)
+    cloned = synthetic_state.clone_once()
+    cloned.resolve_top_of_stack()
+
+    # Clone: bears have +2 counters.
+    clone_snap = cloned.battlefield_snapshot()
+    clone_by_id = {d["id"]: d for d in clone_snap}
+    for cid in bear_ids:
+        assert clone_by_id[cid]["counters"] == 2
+    # Original: bears still at 0 counters.
+    src_snap = synthetic_state.battlefield_snapshot()
+    src_by_id = {d["id"]: d for d in src_snap}
+    for cid in bear_ids:
+        assert src_by_id[cid]["counters"] == 0

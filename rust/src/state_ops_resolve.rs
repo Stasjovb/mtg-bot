@@ -2704,6 +2704,75 @@ fn apply_effect(
                 }
             }
         }
+        // Round-28 coverage extension. Atmospheric-Greenhouse-shape:
+        // put `amount` +1/+1 counter(s) on each creature the source's
+        // controller controls. Per-object scalar mutation; non-creature
+        // permanents skipped. amount=0 short-circuits; negative raises
+        // (defense-in-depth — parse_effect catches at register time).
+        Effect::PutPlusOneCounterOnEachCreatureYouControl { amount } => {
+            if *amount < 0 {
+                return Err(PyValueError::new_err(format!(
+                    "PutPlusOneCounterOnEachCreatureYouControl amount must be non-negative, got {amount}"
+                )));
+            }
+            if *amount == 0 {
+                return Ok(());
+            }
+            // Locate source controller (mirrors PumpCreaturesYouControl).
+            let mut src_controller: Option<u8> = None;
+            'outer: for player in &state.players {
+                for zone in [
+                    &player.hand,
+                    &player.library,
+                    &player.battlefield,
+                    &player.graveyard,
+                    &player.exile,
+                ] {
+                    if let Some(obj) = zone.iter().find(|o| o.id == source_obj_id) {
+                        src_controller = Some(obj.controller);
+                        break 'outer;
+                    }
+                }
+            }
+            if src_controller.is_none() {
+                if let Some(item) = state
+                    .stack
+                    .iter()
+                    .find(|i| i.source_obj_id == source_obj_id)
+                {
+                    src_controller = Some(item.controller);
+                }
+            }
+            let Some(controller) = src_controller else {
+                return Ok(());
+            };
+            let cidx = controller as usize;
+            let creature_ids: Vec<u32> = {
+                let bf = &state.players[cidx].battlefield;
+                let registry = &state.registry;
+                bf.iter()
+                    .filter_map(|obj| {
+                        let printing = registry.printings.get(obj.printing_id as usize)?;
+                        if printing.card_types.iter().any(|t| t == "Creature") {
+                            Some(obj.id)
+                        } else {
+                            None
+                        }
+                    })
+                    .collect()
+            };
+            if creature_ids.is_empty() {
+                return Ok(());
+            }
+            let delta = *amount;
+            let zone: &mut Vec<GameObject> =
+                Arc::make_mut(&mut state.players[cidx].battlefield);
+            for obj in zone.iter_mut() {
+                if creature_ids.contains(&obj.id) {
+                    obj.counters = obj.counters.saturating_add(delta);
+                }
+            }
+        }
     }
     Ok(())
 }
