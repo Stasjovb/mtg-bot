@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import concurrent.futures
 import json
+import multiprocessing as mp
 import shlex
 import subprocess
 import sys
@@ -648,6 +649,18 @@ class SelfPlayJobSpec:
     # rationale + acceptable-failure cases at SEARCH_LIMITATIONS
     # entries #6, #7, #9, #10, #11.
     heuristics: HeuristicsConfig = field(default_factory=HeuristicsConfig)
+    # Opt into the shared-memory NN server architecture (PR #40) for
+    # the LOCAL shard only. When True, ``run_shard_pull`` constructs
+    # a :class:`SharedTensorNNEvalServer` once on the master, then
+    # installs the fork-inherited handle on each mp.Pool worker via
+    # the Pool initializer; workers' ``NNPimcConfig.build`` picks up
+    # the handle and uses :class:`SharedTensorNNEvalClient` instead
+    # of the per-worker NNEvaluator. Linux-only (the SHM server
+    # raises NotImplementedError on Windows). Remote shards
+    # (Mac/Win10) ignore this flag — they keep the per-worker
+    # NNEvaluator path. Bench numbers from PR #40 suggest a 3-10x
+    # NN-throughput gain over per-worker on the master.
+    use_shm_server: bool = False
 
     def to_dict(self) -> dict[str, Any]:
         """JSON-serializable dict. Used by ``run_self_play_shard.py``
@@ -693,6 +706,7 @@ class SelfPlayJobSpec:
                 if self.policy_hidden_sizes is not None else None
             ),
             "action_encoding_version": self.action_encoding_version,
+            "use_shm_server": self.use_shm_server,
         }
 
     @classmethod
@@ -731,6 +745,7 @@ class SelfPlayJobSpec:
                 if d.get("policy_hidden_sizes") is not None else None
             ),
             action_encoding_version=d.get("action_encoding_version"),
+            use_shm_server=bool(d.get("use_shm_server", False)),
         )
 
 
@@ -2719,6 +2734,55 @@ def run_shard_pull(
         pending_chunks.clear()
 
     shard_t0 = _time.perf_counter()
+    # Optional: install a SharedTensorNNEvalServer (PR #40) for this
+    # shard's workers. Linux-only; remote shards (Mac/Win10) ignore the
+    # spec flag silently. The server is constructed BEFORE the executor
+    # so workers fork-inherit the shared-tensor mmap + mp.Event fds.
+    # Workers' ``NNPimcConfig.build`` picks up the handle via
+    # :func:`mtg_bot.search.shm_nn_eval_server.maybe_get_worker_handle`
+    # set by the initializer below.
+    shm_server = None
+    shm_initializer = None
+    shm_initargs: tuple = ()
+    shm_mp_context = None
+    if spec.use_shm_server and sys.platform != "win32":
+        from mtg_bot.search.shm_nn_eval_server import (
+            SharedTensorNNEvalServer,
+            set_worker_handle,
+        )
+        try:
+            shm_server = SharedTensorNNEvalServer(
+                weights_path=Path(spec.weights_path),
+                device=None,  # auto-resolve in master (CUDA on WSL2 5090)
+                with_policy=spec.with_policy,
+                batch_size=32,
+                batch_wait_ms=0.5,
+                # Slot pool sized comfortably above n_workers so
+                # concurrent requests never block on free_slots.get().
+                n_slots=max(64, n_workers + 16),
+                hidden_sizes=spec.hidden_sizes,
+                architecture=spec.architecture,
+                policy_hidden_sizes=spec.policy_hidden_sizes,
+            )
+            shm_server.start()
+            shm_initializer = set_worker_handle
+            shm_initargs = (shm_server.handle(),)
+            shm_mp_context = mp.get_context("fork")
+            print(
+                f"[shard {label}] using SharedTensorNNEvalServer "
+                f"(device={shm_server._device}, n_slots="
+                f"{max(64, n_workers + 16)})"
+            )
+        except NotImplementedError as e:
+            # On a host where the SHM server is unsupported (Windows),
+            # fall through to the legacy per-worker NNEvaluator path.
+            # The cfg's device="auto" path runs as before.
+            print(
+                f"[shard {label}] SHM server unavailable ({e}); "
+                f"falling back to per-worker NNEvaluator path"
+            )
+            shm_server = None
+
     # Don't use ``with ProcessPoolExecutor(...) as exe:`` here. The
     # context-manager exit calls ``shutdown(wait=True)``, which blocks
     # until every still-running future completes. Per-game timeouts
@@ -2730,7 +2794,12 @@ def run_shard_pull(
     # though all completed games are already flushed to disk. Manual
     # ``shutdown(wait=False)`` returns as soon as no new tasks can be
     # submitted; the OS reaps the orphan workers when the parent exits.
-    exe = _cf.ProcessPoolExecutor(max_workers=n_workers)
+    exe_kwargs: dict[str, Any] = {"max_workers": n_workers}
+    if shm_initializer is not None:
+        exe_kwargs["initializer"] = shm_initializer
+        exe_kwargs["initargs"] = shm_initargs
+        exe_kwargs["mp_context"] = shm_mp_context
+    exe = _cf.ProcessPoolExecutor(**exe_kwargs)
     try:
         in_flight: dict[_cf.Future, int] = {}
         queue_drained = False
@@ -2938,6 +3007,10 @@ def run_shard_pull(
     finally:
         heartbeat.stop()
         exe.shutdown(wait=False)
+        if shm_server is not None:
+            # Stop the dispatcher thread; pool workers have already
+            # exited so no in-flight shared-tensor traffic.
+            shm_server.stop(timeout=5.0)
     if progress is not None:
         progress.finalize(status="completed")
     if events is not None:

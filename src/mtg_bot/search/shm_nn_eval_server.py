@@ -74,9 +74,11 @@ if TYPE_CHECKING:  # pragma: no cover
 from mtg_bot.features import FEATURE_DIM, extract_features
 from mtg_bot.search.evaluator import Evaluator
 from mtg_bot.search.nn_evaluator import (
+    HIDDEN_SIZES,
     NNEvaluator,
     _ValueMLP,
     _ValuePolicyMLP,
+    _build_dual_head_model,
 )
 
 
@@ -85,6 +87,31 @@ def _action_encoding():
     mtg_bot.training.action_encoding (a heavy chain via training.config)."""
     from mtg_bot.training import action_encoding as _ae
     return _ae
+
+
+# Worker-process global. ``run_shard_pull``'s Pool initializer calls
+# :func:`set_worker_handle` with the fork-inherited SHM server handle;
+# :class:`NNPimcConfig.build` calls :func:`maybe_get_worker_handle` to
+# decide between the SHM client and the legacy per-worker NNEvaluator.
+# Unset in the master parent and in non-SHM workers — both return
+# ``None``, which preserves the existing build() behavior.
+_WORKER_SHM_HANDLE: Optional["SharedTensorServerHandle"] = None
+
+
+def set_worker_handle(handle: "SharedTensorServerHandle") -> None:
+    """Install a fork-inherited SHM server handle on the calling
+    worker process. Intended for use as an mp.Pool initializer when
+    the master has spun up a :class:`SharedTensorNNEvalServer`."""
+    global _WORKER_SHM_HANDLE
+    _WORKER_SHM_HANDLE = handle
+
+
+def maybe_get_worker_handle() -> Optional["SharedTensorServerHandle"]:
+    """Return the worker's SHM handle if one was installed via
+    :func:`set_worker_handle`, else ``None``. Lets the existing
+    :class:`NNPimcConfig.build` swap to the SHM client transparently
+    while keeping the per-worker NNEvaluator path as the default."""
+    return _WORKER_SHM_HANDLE
 
 
 @dataclasses.dataclass
@@ -134,6 +161,9 @@ class SharedTensorNNEvalServer:
         batch_size: int = 32,
         batch_wait_ms: float = 0.5,
         n_slots: int = 64,
+        hidden_sizes: Optional[tuple[int, ...]] = None,
+        architecture: Optional[str] = None,
+        policy_hidden_sizes: Optional[tuple[int, ...]] = None,
         model_factory: Optional[Any] = None,
         logger: Optional[logging.Logger] = None,
     ) -> None:
@@ -159,13 +189,25 @@ class SharedTensorNNEvalServer:
             "mtg_bot.search.shm_nn_eval_server"
         )
 
-        # Build the model. Same shape as NNEvalServer's path.
+        # Build the model. Dispatch by ``with_policy`` + ``architecture``
+        # the same way NNEvaluator does so the SHM server can host any
+        # production-shape weights (1024-trunk dual-head, separate-trunks,
+        # value-only). ``hidden_sizes=None`` falls through to the
+        # underlying class default (HIDDEN_SIZES) — matches NNEvaluator.
+        effective_hidden = (
+            tuple(hidden_sizes) if hidden_sizes is not None else HIDDEN_SIZES
+        )
         if model_factory is not None:
             self._model = model_factory()
         elif with_policy:
-            self._model = _ValuePolicyMLP()
+            arch = architecture if architecture is not None else "shared"
+            self._model = _build_dual_head_model(
+                arch,
+                hidden_sizes=effective_hidden,
+                policy_hidden_sizes=policy_hidden_sizes,
+            )
         else:
-            self._model = _ValueMLP()
+            self._model = _ValueMLP(hidden_sizes=effective_hidden)
         if weights_path is not None and model_factory is None:
             state_dict = torch.load(
                 weights_path,

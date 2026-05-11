@@ -249,33 +249,52 @@ class NNPimcConfig:
             )
 
     def build(self, seed: int = 0) -> SearchStrategy:
-        eval_kwargs: dict[str, Any] = {
-            "weights_path": Path(self.weights_path),
-            "with_policy": self.with_policy,
-        }
-        if self.hidden_sizes is not None:
-            eval_kwargs["hidden_sizes"] = self.hidden_sizes
-        if self.architecture is not None:
-            eval_kwargs["architecture"] = self.architecture
-        if self.policy_hidden_sizes is not None:
-            eval_kwargs["policy_hidden_sizes"] = self.policy_hidden_sizes
-        if self.device is not None:
-            if self.device == "auto":
-                # Deferred resolution: import + call auto_device() inside
-                # build(), which runs in the mp.Pool worker process. The
-                # parent that pickles this spec must NOT have initialized
-                # CUDA, otherwise Linux fork() crashes with "Cannot
-                # re-initialize CUDA in forked subprocess". See the
-                # ``device`` field comment above.
-                from mtg_bot.training.trainer import auto_device
-                eval_kwargs["device"] = auto_device()
-            else:
-                eval_kwargs["device"] = self.device
-        if self.action_encoding_version is not None:
-            eval_kwargs["action_encoding_version"] = (
-                self.action_encoding_version
+        # Fork-inherited SHM server handle takes precedence over the
+        # per-worker NNEvaluator path. ``run_shard_pull`` (and any
+        # other Pool initializer that's installed one via
+        # :func:`mtg_bot.search.shm_nn_eval_server.set_worker_handle`)
+        # makes the handle visible here; absent that, the legacy
+        # NNEvaluator construction runs unchanged. Lets the iter chain
+        # opt into the SHM server via a spec flag without duplicating
+        # the build()-side construction logic.
+        from mtg_bot.search.shm_nn_eval_server import (
+            maybe_get_worker_handle,
+        )
+        shm_handle = maybe_get_worker_handle()
+        if shm_handle is not None:
+            from mtg_bot.search.shm_nn_eval_server import (
+                SharedTensorNNEvalClient,
             )
-        evaluator = NNEvaluator(**eval_kwargs)
+            evaluator = SharedTensorNNEvalClient(shm_handle)
+        else:
+            eval_kwargs: dict[str, Any] = {
+                "weights_path": Path(self.weights_path),
+                "with_policy": self.with_policy,
+            }
+            if self.hidden_sizes is not None:
+                eval_kwargs["hidden_sizes"] = self.hidden_sizes
+            if self.architecture is not None:
+                eval_kwargs["architecture"] = self.architecture
+            if self.policy_hidden_sizes is not None:
+                eval_kwargs["policy_hidden_sizes"] = self.policy_hidden_sizes
+            if self.device is not None:
+                if self.device == "auto":
+                    # Deferred resolution: import + call auto_device()
+                    # inside build(), which runs in the mp.Pool worker
+                    # process. The parent that pickles this spec must
+                    # NOT have initialized CUDA, otherwise Linux fork()
+                    # crashes with "Cannot re-initialize CUDA in forked
+                    # subprocess". See the ``device`` field comment
+                    # above.
+                    from mtg_bot.training.trainer import auto_device
+                    eval_kwargs["device"] = auto_device()
+                else:
+                    eval_kwargs["device"] = self.device
+            if self.action_encoding_version is not None:
+                eval_kwargs["action_encoding_version"] = (
+                    self.action_encoding_version
+                )
+            evaluator = NNEvaluator(**eval_kwargs)
         if self.use_ismcts:
             total_iters = max(1, self.samples * self.inner_nodes)
             ismcts_kwargs: dict[str, Any] = {
