@@ -845,19 +845,12 @@ def test_cross_engine_mode_returns_walk_result_with_steps(parity_smoke):
         assert step.action_dict == {"kind": "pass_priority"}
 
 
-def test_cross_engine_mode_initial_state_has_known_field_divergences(parity_smoke):
-    """The initial state of a tiny-synthetic Python state vs the matched
-    Rust state DOES have field-level divergences — both library_p0 and
-    library_p1 will differ on the per-object ``summoning_sick`` slot
-    (Python defaults True, Rust defaults False on library cards).
-
-    Pinned as a load-bearing fact: the FIRST cross-engine compare
-    surfaces this divergence at step 0. If a future slice fixes
-    either side's default, this test flips. Treated as an xfail-pin
-    because the divergence is the headline finding of the first
-    slice; it's a NEW parity bug that needs a gap entry in
-    RUST_PARITY_GAPS.md (see ``docs/RUST_PARITY_GAPS.md`` cross-engine
-    section)."""
+def test_cross_engine_mode_initial_state_libraries_match_after_ce1_closure(parity_smoke):
+    """CE1 closure pin: after the make_state path defaults
+    ``summoning_sick=true`` to match Python's universal default,
+    Python and Rust library_pN field views must agree byte-for-byte
+    on the initial state. Inverts the inaugural CE1 pin from r27
+    (which asserted these DIVERGED on summoning_sick)."""
     from mtg_bot.parity.cross_engine import (
         tiny_synthetic_deckspec,
         walk_both,
@@ -865,10 +858,9 @@ def test_cross_engine_mode_initial_state_has_known_field_divergences(parity_smok
 
     result = walk_both(tiny_synthetic_deckspec(), n_decisions=0)
     field_names = {d.field for d in result.initial_divergences}
-    # Both library zones diverge on the summoning_sick slot in the
-    # per-object signature.
-    assert "library_p0" in field_names
-    assert "library_p1" in field_names
+    # Closed by the round-28 CE1 fix in state_ops_setup.rs.
+    assert "library_p0" not in field_names
+    assert "library_p1" not in field_names
 
 
 def test_cross_engine_mode_detects_pass_priority_divergence_at_step_0(parity_smoke):
@@ -903,19 +895,15 @@ def test_cross_engine_mode_detects_pass_priority_divergence_at_step_0(parity_smo
     assert priority_div.rust_value == 1
 
 
-@pytest.mark.xfail(
-    reason="Known parity divergence: summoning_sick=True on Python library "
-    "GameObjects vs False on Rust library objects (see "
-    "docs/RUST_PARITY_GAPS.md cross-engine section). xfail-pinned as "
-    "the inaugural cross-engine NOVEL divergence — the count of "
-    "xfailed cross-engine tests is the 'open parity items' tally.",
-    strict=True,
-)
 def test_cross_engine_mode_initial_libraries_byte_equal_after_make_state():
     """The library_pN field views from Python and Rust MUST match
     byte-for-byte on the initial state. This is the canonical parity
     contract — both engines built from the same DeckSpec should
-    produce byte-identical zone signatures."""
+    produce byte-identical zone signatures.
+
+    Round-28 CE1 closure: state_ops_setup.rs now defaults
+    summoning_sick=true to match Python's universal default; this
+    test flipped from xfail to xpass and the marker was removed."""
     from mtg_bot.parity.cross_engine import (
         tiny_synthetic_deckspec,
         build_matched_states,
@@ -1088,9 +1076,13 @@ def test_cross_engine_mode_first_divergence_step_helper(parity_smoke):
     )
 
     result = walk_both(tiny_synthetic_deckspec(), n_decisions=5)
-    # Today: the initial state diverges on library_pN, so the helper
-    # returns -1 (sentinel "before any decision").
-    assert result.first_divergence_step() == -1
+    # Round-28 CE1 closed: initial state no longer diverges on
+    # library_pN. First divergence now fires at step 0 on
+    # priority_player (CE2 / I25 — Rust's apply_action(pass_priority)
+    # toggles, Python's is a no-op). The -1 "before any decision"
+    # sentinel is no longer the right pin; the helper returns 0
+    # because the FIRST decision's post-step view diverges.
+    assert result.first_divergence_step() == 0
 
 
 def test_cross_engine_default_gap_lookup_priority_player_resolves_i25(parity_smoke):

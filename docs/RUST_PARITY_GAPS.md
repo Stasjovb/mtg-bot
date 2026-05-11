@@ -756,36 +756,29 @@ The inaugural cross-engine NOVEL divergences (NOT yet entered as
 proper G-numbered gaps because the closure path may be cosmetic
 rather than architectural — TBD by the follow-up slice):
 
-### CE1. `summoning_sick` default differs between Python and Rust on library objects
+### ~~CE1.~~ CLOSED in round 28: `summoning_sick` default aligned to Python's universal `True`
 
-- **Pinned by**:
-  `tests/test_parity_smoke.py::test_cross_engine_mode_initial_libraries_byte_equal_after_make_state`
-  (xfail-pinned).
-- **Today**: Python's `GameObject.summoning_sick` defaults to `True`
-  for every newly-allocated GameObject regardless of zone — including
-  library cards (where the field is gameplay-irrelevant). Rust's
-  `make_state` builds library `GameObject`s with `summoning_sick =
-  false`. Both engines hash this field into their fingerprint via
-  the per-object 8-tuple `(printing_name, tapped, summoning_sick,
-  damage, counters, attached_to, controller_id, id)`. The mismatched
-  default propagates straight into a cross-engine fingerprint
-  divergence on the initial state.
-- **Expected**: align the defaults. Either Python stops setting
-  `summoning_sick=True` on library objects (the field is only
-  meaningful for permanents on the battlefield), or Rust starts
-  setting it `true` on library objects (matching Python). Closing
-  the gap either way is a one-field-default change on the affected
-  side, no architectural lift.
-- **Impact**: high for the cross-engine fingerprint contract — every
-  cross-engine comparison from now until close hits this on the
-  zone signatures. Low for actual gameplay (the field's only effect
-  is on `can_attack`, which gates on battlefield zone before
-  consulting the field).
-- **Closeable**: yes — Phase 5 follow-up slice picks a side and
-  flips the default. Once closed, this entry moves to "Confirmed
-  gaps" with a real G-number (or gets folded into a parity
-  invariant if the closure makes the two engines byte-equal on
-  this field).
+Closed by the round-28 CE1 slice. Rust's `make_state` (and
+`state_ops_deck.rs::set_library_for_player`) now default
+`summoning_sick = true` on every freshly-allocated library / hand
+GameObject, matching Python's universal default. The field is
+gameplay-irrelevant in non-battlefield zones; the cleared-on-untap
+semantics still apply on the battlefield. New pymethod
+`clear_summoning_sick_for_player(player_id)` exposes the untap-step
+sweep so test fixtures that move creatures from hand to battlefield
+via `move_object` can mark them as "ready to act" without driving
+a full turn loop. Pinned fingerprint baselines shifted: the
+`make_state` canonical default digest is now `411d5b757c22` (was
+`a1193453edec` in r23). Pin in
+`tests_rust/test_setup.py::EXPECTED_MAKE_STATE_CANONICAL_DEFAULT_FP`.
+The `make_synthetic_state` test fixture in `state.rs` STAYS at
+`summoning_sick=false` for battlefield creatures (test convenience —
+synthetic battlefield is "creatures that have been on the
+battlefield long enough"). The `register_and_inject_object` test-
+injection primitive in `state_ops_resolve.rs` also stays at
+`summoning_sick=false` for the same reason. Both are Rust-only test
+divergences from Python's default; not load-bearing on the cross-
+engine smoke harness which uses `make_state` exclusively.
 
 ### CE2. `pass_priority` apply_action behavior differs
 

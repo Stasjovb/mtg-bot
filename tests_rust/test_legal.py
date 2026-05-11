@@ -899,6 +899,14 @@ def _custom_registry_state(
         assert ok is True
         p1_bf_ids.append(obj["id"])
 
+    # CE1 (r28) — make_state now defaults summoning_sick=true to match
+    # Python's universal default. Test fixture intent is "creatures
+    # have been on the battlefield long enough to act"; clear sickness
+    # explicitly on both sides (the test harness shortcut for the
+    # untap-step sweep).
+    state.clear_summoning_sick_for_player(0)
+    state.clear_summoning_sick_for_player(1)
+
     return state, name_to_pid, bf_ids, p1_bf_ids
 
 

@@ -158,7 +158,13 @@ fn push_object(
         controller,
         zone,
         tapped: false,
-        summoning_sick: false,
+        // CR 302.1 + parity with Python: every freshly-allocated
+        // GameObject defaults to summoning_sick=true. The field is
+        // gameplay-relevant only on the battlefield (cleared at the
+        // controller's untap step); for library / hand / graveyard
+        // / exile objects the value is benign. Closes CE1 (round-27
+        // cross-engine divergence — see RUST_PARITY_GAPS.md).
+        summoning_sick: true,
         damage: 0,
         counters: 0,
         ueot_modifiers: Vec::new(),

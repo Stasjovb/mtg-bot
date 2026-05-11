@@ -109,7 +109,9 @@ impl GameState {
                 controller: player_id,
                 zone: ZONE_LIBRARY,
                 tapped: false,
-                summoning_sick: false,
+                // Parity with Python's universal default — see CE1
+                // closure in state_ops_setup.rs.
+                summoning_sick: true,
                 damage: 0,
                 counters: 0,
                 ueot_modifiers: Vec::new(),
