@@ -67,12 +67,15 @@ pub(crate) fn auto_resolve_pending(
         | "may_do_no"
         | "pick_top"
         | "choose_mode_0"
+        | "if_you_do_yes"
+        | "if_you_do_no"
         | "default" => {}
         other => {
             return Err(PyValueError::new_err(format!(
                 "auto_resolve_pending_decisions: unknown strategy {other:?}; \
                  valid strategies: keep_all_on_top, send_all_to_graveyard, \
-                 may_do_yes, may_do_no, pick_top, choose_mode_0, default"
+                 may_do_yes, may_do_no, pick_top, choose_mode_0, \
+                 if_you_do_yes, if_you_do_no, default"
             )))
         }
     }
@@ -142,6 +145,34 @@ pub(crate) fn auto_resolve_pending(
                     crate::state_ops_resolve::apply_effect_pub(
                         state,
                         &modes[0],
+                        source_obj_id,
+                    )?;
+                }
+            }
+            PendingDecision::IfYouDoChoice {
+                source_obj_id,
+                do_action,
+                then_action,
+                ..
+            } => {
+                // "default" / "if_you_do_yes" → apply both do_action
+                // and then_action in order. "if_you_do_no" → drop
+                // both. Other strategies fall through to "yes"
+                // (matches Python's no-agent-seated default in
+                // IfYouDo.resolve — MayDo says yes, both fire).
+                let say_yes = match strategy {
+                    "if_you_do_no" | "may_do_no" => false,
+                    _ => true,
+                };
+                if say_yes {
+                    crate::state_ops_resolve::apply_effect_pub(
+                        state,
+                        &do_action,
+                        source_obj_id,
+                    )?;
+                    crate::state_ops_resolve::apply_effect_pub(
+                        state,
+                        &then_action,
                         source_obj_id,
                     )?;
                 }
@@ -320,6 +351,20 @@ impl GameState {
                         .map(|m| crate::cards::effect_to_pydict(py, m))
                         .collect::<PyResult<Vec<_>>>()?;
                     d.set_item("modes", mode_dicts)?;
+                }
+                PendingDecision::IfYouDoChoice {
+                    source_obj_id,
+                    controller,
+                    do_action,
+                    then_action,
+                } => {
+                    d.set_item("kind", "IfYouDoChoice")?;
+                    d.set_item("source_obj_id", *source_obj_id)?;
+                    d.set_item("controller", *controller)?;
+                    let do_dict = crate::cards::effect_to_pydict(py, do_action.as_ref())?;
+                    let then_dict = crate::cards::effect_to_pydict(py, then_action.as_ref())?;
+                    d.set_item("do_action", do_dict)?;
+                    d.set_item("then_action", then_dict)?;
                 }
             }
             out.append(d)?;
@@ -610,6 +655,62 @@ impl GameState {
         )
     }
 
+    /// Consume the head `IfYouDoChoice` on the pending-decisions
+    /// queue with a `yes`/`no` answer. On `yes`, both `do_action` and
+    /// `then_action` are applied (in order) via the standard
+    /// `apply_effect` dispatcher with the original `source_obj_id`.
+    /// On `no`, neither is applied.
+    ///
+    /// Powers the round-28 `Effect::IfYouDo` wrapper. First-slice
+    /// shape: the do_action is assumed to be implicitly success-on-
+    /// yes (i.e. IfYouDo(MayDo(X), Y) form). General "did do_action
+    /// signal failure" plumbing is deferred to a future slice.
+    ///
+    /// Raises `ValueError` if the queue is empty or its head is not
+    /// an `IfYouDoChoice`. Transactional shape — validation runs
+    /// before any mutation.
+    fn submit_if_you_do_decision(&mut self, yes: bool) -> PyResult<()> {
+        if self.pending_decisions.is_empty() {
+            return Err(PyValueError::new_err(
+                "submit_if_you_do_decision: no pending decision",
+            ));
+        }
+        match &self.pending_decisions[0] {
+            PendingDecision::IfYouDoChoice { .. } => {}
+            other => {
+                return Err(PyValueError::new_err(format!(
+                    "submit_if_you_do_decision: head of pending-decisions queue is \
+                     not an IfYouDoChoice (got {:?}); call the variant-specific \
+                     submit_* dispatcher",
+                    std::mem::discriminant(other)
+                )));
+            }
+        }
+        let decision = self.pending_decisions.remove(0);
+        let (source_obj_id, do_action, then_action) = match decision {
+            PendingDecision::IfYouDoChoice {
+                source_obj_id,
+                do_action,
+                then_action,
+                ..
+            } => (source_obj_id, do_action, then_action),
+            _ => unreachable!("validated above"),
+        };
+        if yes {
+            crate::state_ops_resolve::apply_effect_pub(
+                self,
+                &do_action,
+                source_obj_id,
+            )?;
+            crate::state_ops_resolve::apply_effect_pub(
+                self,
+                &then_action,
+                source_obj_id,
+            )?;
+        }
+        Ok(())
+    }
+
     /// Drain the pending-decisions queue using a deterministic
     /// strategy. Useful for callers that don't model the choice
     /// dimension (training harnesses, parity tests, deterministic
@@ -633,10 +734,15 @@ impl GameState {
     /// * `"choose_mode_0"` — ChooseModeChoice picks `modes[0]`.
     ///   Other variants fall through to their own per-variant
     ///   defaults.
-    /// * `"default"` — Surveil keeps all on top; MayDo answers "yes";
-    ///   PickCardFromExamined picks the topmost examined card;
-    ///   ChooseModeChoice picks `modes[0]` (mirrors the base-Agent
-    ///   default in Python).
+    /// * `"if_you_do_yes"` — IfYouDoChoice applies both do_action
+    ///   and then_action. Other variants fall through to their own
+    ///   per-variant defaults.
+    /// * `"if_you_do_no"` — IfYouDoChoice drops both. MayDo also
+    ///   answers "no" (shared yes/no semantics).
+    /// * `"default"` — Surveil keeps all on top; MayDo + IfYouDo
+    ///   answer "yes"; PickCardFromExamined picks the topmost
+    ///   examined card; ChooseModeChoice picks `modes[0]` (mirrors
+    ///   the base-Agent default in Python).
     ///
     /// Raises `ValueError` on an unknown strategy.
     fn auto_resolve_pending_decisions(&mut self, strategy: &str) -> PyResult<()> {

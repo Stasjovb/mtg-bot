@@ -1311,3 +1311,279 @@ def test_clone_isolates_choose_mode_pending_decisions(synthetic_state):
     assert synthetic_state.has_pending_decision() is True
     # Source hand still pre-draw.
     assert synthetic_state.hand_sizes[0] == hand_before
+
+
+# =====================================================================
+# Round-28 IfYouDo (fifth PendingDecision variant)
+# =====================================================================
+#
+# Fifth variant on the multi-variant decision-callback substrate:
+# ``PendingDecision::IfYouDoChoice`` — "[do_action]; if you do,
+# [then_action]." Pushed by ``Effect::IfYouDo``. First-slice scope:
+# do_action assumed implicitly success-on-yes (IfYouDo(MayDo(X), Y)
+# "looter" form). Dispatcher: ``submit_if_you_do_decision(yes)``.
+# Auto-resolve: ``"default"`` / ``"if_you_do_yes"`` apply both; ``"if_you_do_no"`` skips both.
+
+
+def _if_you_do_gain_draw_dict():
+    """An IfYouDo sorcery: do_action = gain_life 2, then_action = draw 1.
+    Both verifiable through standard accessors. Note: in real cards
+    the do_action would typically be MayDo(...) — but for the first
+    slice the IfYouDoChoice doesn't care about the do_action's
+    internal shape, so we use simple primitives for test verifiability."""
+    return {
+        "name": "Test IfYouDo gain-then-draw",
+        "card_types": ["Sorcery"],
+        "mana_cost": {"W": 1},
+        "effects": [
+            {
+                "kind": "if_you_do",
+                "do_action": {"kind": "gain_life", "amount": 2},
+                "then_action": {"kind": "draw_cards", "count": 1},
+            }
+        ],
+    }
+
+
+def test_if_you_do_registers_with_both_actions(engine):
+    """IfYouDo registers cleanly and round-trips both nested effects."""
+    reg = engine.Registry()
+    pid = reg.register_printing(_if_you_do_gain_draw_dict())
+    effects = reg.get_printing_effects(pid)
+    assert len(effects) == 1
+    eff = effects[0]
+    assert eff["kind"] == "if_you_do"
+    assert eff["do_action"]["kind"] == "gain_life"
+    assert eff["do_action"]["amount"] == 2
+    assert eff["then_action"]["kind"] == "draw_cards"
+    assert eff["then_action"]["count"] == 1
+
+
+def test_if_you_do_missing_do_action_raises(engine):
+    """if_you_do without do_action is a hard ValueError."""
+    reg = engine.Registry()
+    with pytest.raises(ValueError):
+        reg.register_printing(
+            {
+                "name": "Bad IfYouDo",
+                "card_types": ["Sorcery"],
+                "mana_cost": {"W": 1},
+                "effects": [
+                    {
+                        "kind": "if_you_do",
+                        "then_action": {"kind": "draw_cards", "count": 1},
+                    }
+                ],
+            }
+        )
+
+
+def test_if_you_do_missing_then_action_raises(engine):
+    """if_you_do without then_action is a hard ValueError."""
+    reg = engine.Registry()
+    with pytest.raises(ValueError):
+        reg.register_printing(
+            {
+                "name": "Bad IfYouDo",
+                "card_types": ["Sorcery"],
+                "mana_cost": {"W": 1},
+                "effects": [
+                    {
+                        "kind": "if_you_do",
+                        "do_action": {"kind": "gain_life", "amount": 2},
+                    }
+                ],
+            }
+        )
+
+
+def test_if_you_do_resolve_pushes_pending_choice(synthetic_state):
+    """Resolving an IfYouDo sorcery pushes one IfYouDoChoice carrying
+    both Effects; neither has fired yet."""
+    hand_before = synthetic_state.hand_sizes[0]
+    life_before = synthetic_state.get_life(0)
+    spell_obj_id = synthetic_state.register_and_inject_object(
+        _if_you_do_gain_draw_dict(), 0, ZONE_HAND
+    )
+    synthetic_state.push_to_stack(spell_obj_id, 0)
+    synthetic_state.resolve_top_of_stack_pause()
+
+    # Neither nested effect has fired yet.
+    assert synthetic_state.hand_sizes[0] == hand_before
+    assert synthetic_state.get_life(0) == life_before
+
+    pds = synthetic_state.pending_decisions()
+    assert len(pds) == 1
+    pd = pds[0]
+    assert pd["kind"] == "IfYouDoChoice"
+    assert pd["source_obj_id"] == spell_obj_id
+    assert pd["controller"] == 0
+    assert pd["do_action"]["kind"] == "gain_life"
+    assert pd["then_action"]["kind"] == "draw_cards"
+
+
+def test_submit_if_you_do_yes_applies_both(synthetic_state):
+    """submit_if_you_do_decision(True) applies both do_action and
+    then_action in order."""
+    hand_before = synthetic_state.hand_sizes[0]
+    life_before = synthetic_state.get_life(0)
+    spell_obj_id = synthetic_state.register_and_inject_object(
+        _if_you_do_gain_draw_dict(), 0, ZONE_HAND
+    )
+    synthetic_state.push_to_stack(spell_obj_id, 0)
+    synthetic_state.resolve_top_of_stack_pause()
+
+    synthetic_state.submit_if_you_do_decision(True)
+
+    assert synthetic_state.has_pending_decision() is False
+    # do_action: +2 life. then_action: +1 hand.
+    assert synthetic_state.get_life(0) == life_before + 2
+    assert synthetic_state.hand_sizes[0] == hand_before + 1
+
+
+def test_submit_if_you_do_no_skips_both(synthetic_state):
+    """submit_if_you_do_decision(False) skips both actions."""
+    hand_before = synthetic_state.hand_sizes[0]
+    life_before = synthetic_state.get_life(0)
+    spell_obj_id = synthetic_state.register_and_inject_object(
+        _if_you_do_gain_draw_dict(), 0, ZONE_HAND
+    )
+    synthetic_state.push_to_stack(spell_obj_id, 0)
+    synthetic_state.resolve_top_of_stack_pause()
+
+    synthetic_state.submit_if_you_do_decision(False)
+
+    assert synthetic_state.has_pending_decision() is False
+    assert synthetic_state.get_life(0) == life_before
+    assert synthetic_state.hand_sizes[0] == hand_before
+
+
+def test_submit_if_you_do_with_empty_queue_raises(synthetic_state):
+    """submit_if_you_do_decision on empty queue raises ValueError."""
+    assert synthetic_state.has_pending_decision() is False
+    with pytest.raises(ValueError):
+        synthetic_state.submit_if_you_do_decision(True)
+
+
+def test_submit_if_you_do_on_surveil_head_raises(synthetic_state):
+    """submit_if_you_do_decision on a SurveilChoice head raises
+    ValueError. Queue intact."""
+    spell_obj_id = synthetic_state.register_and_inject_object(
+        _surveil_dict(count=1), 0, ZONE_HAND
+    )
+    synthetic_state.push_to_stack(spell_obj_id, 0)
+    synthetic_state.resolve_top_of_stack_pause()
+    assert synthetic_state.pending_decisions()[0]["kind"] == "SurveilChoice"
+
+    with pytest.raises(ValueError):
+        synthetic_state.submit_if_you_do_decision(True)
+    assert synthetic_state.has_pending_decision() is True
+    assert synthetic_state.pending_decisions()[0]["kind"] == "SurveilChoice"
+
+
+def test_auto_resolve_if_you_do_yes_applies_both(synthetic_state):
+    """auto_resolve_pending_decisions('if_you_do_yes') applies both
+    nested actions."""
+    hand_before = synthetic_state.hand_sizes[0]
+    life_before = synthetic_state.get_life(0)
+    spell_obj_id = synthetic_state.register_and_inject_object(
+        _if_you_do_gain_draw_dict(), 0, ZONE_HAND
+    )
+    synthetic_state.push_to_stack(spell_obj_id, 0)
+    synthetic_state.resolve_top_of_stack_pause()
+
+    synthetic_state.auto_resolve_pending_decisions("if_you_do_yes")
+
+    assert synthetic_state.has_pending_decision() is False
+    assert synthetic_state.get_life(0) == life_before + 2
+    assert synthetic_state.hand_sizes[0] == hand_before + 1
+
+
+def test_auto_resolve_if_you_do_no_skips_both(synthetic_state):
+    """auto_resolve_pending_decisions('if_you_do_no') drops both."""
+    hand_before = synthetic_state.hand_sizes[0]
+    life_before = synthetic_state.get_life(0)
+    spell_obj_id = synthetic_state.register_and_inject_object(
+        _if_you_do_gain_draw_dict(), 0, ZONE_HAND
+    )
+    synthetic_state.push_to_stack(spell_obj_id, 0)
+    synthetic_state.resolve_top_of_stack_pause()
+
+    synthetic_state.auto_resolve_pending_decisions("if_you_do_no")
+
+    assert synthetic_state.has_pending_decision() is False
+    assert synthetic_state.get_life(0) == life_before
+    assert synthetic_state.hand_sizes[0] == hand_before
+
+
+def test_auto_resolve_default_says_yes_to_if_you_do(synthetic_state):
+    """auto_resolve_pending_decisions('default') applies both — mirrors
+    Python's no-agent-seated default ('MayDo says yes, both fire')."""
+    hand_before = synthetic_state.hand_sizes[0]
+    life_before = synthetic_state.get_life(0)
+    spell_obj_id = synthetic_state.register_and_inject_object(
+        _if_you_do_gain_draw_dict(), 0, ZONE_HAND
+    )
+    synthetic_state.push_to_stack(spell_obj_id, 0)
+    synthetic_state.resolve_top_of_stack_pause()
+
+    synthetic_state.auto_resolve_pending_decisions("default")
+
+    assert synthetic_state.has_pending_decision() is False
+    assert synthetic_state.get_life(0) == life_before + 2
+    assert synthetic_state.hand_sizes[0] == hand_before + 1
+
+
+def test_resolve_top_of_stack_auto_resolves_if_you_do(synthetic_state):
+    """Non-pause resolve_top_of_stack auto-resolves the IfYouDo with
+    its per-variant default ('yes'). Both actions fire automatically."""
+    hand_before = synthetic_state.hand_sizes[0]
+    life_before = synthetic_state.get_life(0)
+    spell_obj_id = synthetic_state.register_and_inject_object(
+        _if_you_do_gain_draw_dict(), 0, ZONE_HAND
+    )
+    synthetic_state.push_to_stack(spell_obj_id, 0)
+    synthetic_state.resolve_top_of_stack()
+
+    assert synthetic_state.has_pending_decision() is False
+    assert synthetic_state.get_life(0) == life_before + 2
+    assert synthetic_state.hand_sizes[0] == hand_before + 1
+
+
+def test_fingerprint_if_you_do_pending_differs_from_empty(synthetic_state):
+    """A state with a pending IfYouDoChoice fingerprints differently
+    from a state with no pending decision."""
+    fp_clean = synthetic_state.fingerprint()
+    spell_obj_id = synthetic_state.register_and_inject_object(
+        _if_you_do_gain_draw_dict(), 0, ZONE_HAND
+    )
+    synthetic_state.push_to_stack(spell_obj_id, 0)
+    synthetic_state.resolve_top_of_stack_pause()
+    fp_pending = synthetic_state.fingerprint()
+    assert fp_pending != fp_clean
+
+
+def test_clone_isolates_if_you_do_pending_decisions(synthetic_state):
+    """clone_once() deep-clones the IfYouDoChoice. Resolving the
+    clone leaves the source's queue intact (CoW canary)."""
+    hand_before = synthetic_state.hand_sizes[0]
+    life_before = synthetic_state.get_life(0)
+    spell_obj_id = synthetic_state.register_and_inject_object(
+        _if_you_do_gain_draw_dict(), 0, ZONE_HAND
+    )
+    synthetic_state.push_to_stack(spell_obj_id, 0)
+    synthetic_state.resolve_top_of_stack_pause()
+
+    clone = synthetic_state.clone_once()
+    assert clone.has_pending_decision() is True
+    assert clone.pending_decisions()[0]["kind"] == "IfYouDoChoice"
+
+    clone.submit_if_you_do_decision(True)
+    assert clone.has_pending_decision() is False
+    assert clone.get_life(0) == life_before + 2
+    assert clone.hand_sizes[0] == hand_before + 1
+
+    # Source still pending, source state unchanged.
+    assert synthetic_state.has_pending_decision() is True
+    assert synthetic_state.get_life(0) == life_before
+    assert synthetic_state.hand_sizes[0] == hand_before

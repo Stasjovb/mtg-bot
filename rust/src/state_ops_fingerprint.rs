@@ -427,6 +427,22 @@ impl GameState {
                                 .collect(),
                         ),
                     ]),
+                    // Round-28 if-you-do decision: variant-tag +
+                    // source/controller + each Effect's Debug format.
+                    // Same Debug-over-Serialize choice as MayDoChoice
+                    // and ChooseModeChoice.
+                    PendingDecision::IfYouDoChoice {
+                        source_obj_id,
+                        controller,
+                        do_action,
+                        then_action,
+                    } => Value::Array(vec![
+                        Value::String("IfYouDoChoice".to_string()),
+                        json!(*source_obj_id),
+                        json!(*controller),
+                        Value::String(format!("{:?}", do_action)),
+                        Value::String(format!("{:?}", then_action)),
+                    ]),
                 })
                 .collect();
             parts_vec.push(Value::Array(pds));

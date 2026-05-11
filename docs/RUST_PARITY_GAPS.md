@@ -685,6 +685,31 @@ refactor on either side that breaks the parity surfaces immediately.
     range + empty-queue + cross-variant; auto-resolve
     `choose_mode_0` / `default`; non-pause `resolve_top_of_stack`
     auto-resolve; fingerprint divergence; clone isolation.
+  - **Round-28 extension — `IfYouDoChoice` variant (5th).** Fifth
+    variant on the multi-variant substrate, pushed by
+    `Effect::IfYouDo { do_action, then_action }` — Python's
+    `IfYouDo` (combinators.py:560, 7+ EoE cards) in its first-slice
+    "looter" shape: do_action assumed implicitly success-on-yes
+    (i.e. `IfYouDo(MayDo(X), Y)` form). Payload: `{ source_obj_id,
+    controller, do_action: Box<Effect>, then_action: Box<Effect> }`.
+    Dispatcher `submit_if_you_do_decision(yes)` applies both nested
+    actions in order on "yes", drops both on "no" — with the same
+    `source_obj_id` propagated so identity-coupled riders retain
+    identity. Auto-resolve gains `"if_you_do_yes"` / `"if_you_do_no"`;
+    `"default"` answers "yes" (mirrors Python's no-agent-seated
+    `IfYouDo.resolve` — base-Agent says yes to the wrapped MayDo,
+    so both fire). The `if_you_do_no` strategy also routes a
+    MayDoChoice head to "no" (shared yes/no semantics — keeps a
+    multi-variant queue draining predictably). General IfYouDo with
+    do_actions that can signal failure (e.g. SacrificeACreature
+    returning False on empty bf) is deferred — would require
+    `apply_effect` to return `Result<bool>`. Pinned by 14 new tests
+    in `tests_rust/test_pending_decisions.py`: parse + missing-
+    fields rejection (both directions); resolve-pushes-pending;
+    submit yes/no; empty-queue + cross-variant dispatcher rejection;
+    auto-resolve `if_you_do_yes` / `if_you_do_no` / `default`; non-
+    pause `resolve_top_of_stack` auto-resolve; fingerprint
+    divergence; clone isolation.
 
 ### I23. UEOT-modifier framework: per-object expiring continuous effects with CR 514.3 cleanup-step expiration
 
