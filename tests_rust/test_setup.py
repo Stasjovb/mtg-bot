@@ -322,6 +322,9 @@ def test_make_state_hand_snapshot_returns_correct_dicts(engine):
         "counters",
         "controller_id",
         "zone",
+        # Round-28 attach foundation: snapshot dicts include
+        # ``attached_to`` (None default; target id when attached).
+        "attached_to",
     }
     for d in hand:
         assert set(d.keys()) == expected_keys

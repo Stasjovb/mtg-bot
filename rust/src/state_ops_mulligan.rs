@@ -364,6 +364,7 @@ impl GameState {
             obj.summoning_sick = false;
             obj.damage = 0;
             obj.counters = 0;
+            obj.attached_to = None;
             lib.insert(0, obj);
         }
         Ok(())
@@ -570,6 +571,7 @@ impl GameState {
             obj.summoning_sick = false;
             obj.damage = 0;
             obj.counters = 0;
+            obj.attached_to = None;
             lib.insert(0, obj);
         }
         Ok(())

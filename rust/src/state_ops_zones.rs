@@ -207,6 +207,10 @@ impl GameState {
             return None;
         };
         obj.zone = ZONE_HAND;
+        // Round-28 attach foundation: CR 400.7 clears attach state
+        // on zone change. A library card can't legally be attached
+        // today, but reset defensively to mirror move_object family.
+        obj.attached_to = None;
         let drawn_id = obj.id;
         Arc::make_mut(&mut player.hand).push(obj);
         Some(drawn_id)
@@ -269,6 +273,10 @@ impl GameState {
         obj.damage = 0;
         obj.counters = 0;
         obj.summoning_sick = true;
+        // Round-28 attach foundation: CR 400.7 clears the attach
+        // relationship on zone change. A reanimated Equipment / Aura
+        // enters unattached.
+        obj.attached_to = None;
         Arc::make_mut(&mut player.battlefield).push(obj);
         Ok(true)
     }
@@ -329,7 +337,47 @@ impl GameState {
         obj.damage = 0;
         obj.counters = 0;
         obj.summoning_sick = false;
+        // Round-28 attach foundation: CR 400.7 clears the attach
+        // relationship on zone change.
+        obj.attached_to = None;
         Arc::make_mut(&mut player.hand).push(obj);
         Ok(true)
+    }
+
+    /// Round-28 attach foundation — set `aura_id`'s `attached_to`
+    /// slot to `Some(target_id)`. Returns `true` on a successful
+    /// stamp, `false` when no GameObject with id `aura_id` exists
+    /// in any zone (the `target_id` is NOT validated — callers may
+    /// stamp a not-on-bf id; the fingerprint serializer + Python's
+    /// equivalent `obj.attached_to = target.id` make the same
+    /// "trust the caller" assumption).
+    ///
+    /// Scans every zone on both players to find the aura; on hit,
+    /// goes through `Arc::make_mut` on that zone's Vec to preserve
+    /// CoW. Used by tests + future activated-Equip primitives. Not
+    /// called by the resolve pipeline (the
+    /// `Effect::AttachToTargetCreatureYouControl` arm stamps the
+    /// field inline since it already has the source on a bf).
+    fn attach(&mut self, aura_id: u32, target_id: u32) -> bool {
+        for player in self.players.iter_mut() {
+            for zone in [
+                &mut player.hand,
+                &mut player.library,
+                &mut player.battlefield,
+                &mut player.graveyard,
+                &mut player.exile,
+            ] {
+                if zone.iter().any(|o| o.id == aura_id) {
+                    let z = Arc::make_mut(zone);
+                    for obj in z.iter_mut() {
+                        if obj.id == aura_id {
+                            obj.attached_to = Some(target_id);
+                            return true;
+                        }
+                    }
+                }
+            }
+        }
+        false
     }
 }

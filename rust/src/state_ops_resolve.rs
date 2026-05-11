@@ -451,6 +451,7 @@ fn apply_effect(
                 obj.summoning_sick = false;
                 obj.damage = 0;
                 obj.counters = 0;
+                obj.attached_to = None;
                 Arc::make_mut(&mut state.players[defender].hand).push(obj);
             }
         },
@@ -542,6 +543,7 @@ fn apply_effect(
                     obj.summoning_sick = false;
                     obj.damage = 0;
                     obj.counters = 0;
+                    obj.attached_to = None;
                     gy_mut.push(obj);
                 }
             }
@@ -602,6 +604,7 @@ fn apply_effect(
                 obj.summoning_sick = false;
                 obj.damage = 0;
                 obj.counters = 0;
+                obj.attached_to = None;
                 Arc::make_mut(&mut state.players[defender].exile).push(obj);
             }
         },
@@ -762,6 +765,7 @@ fn apply_effect(
                 obj.summoning_sick = false;
                 obj.damage = 0;
                 obj.counters = 0;
+                obj.attached_to = None;
                 Arc::make_mut(&mut state.players[active].graveyard).push(obj);
             }
         },
@@ -866,6 +870,7 @@ fn apply_effect(
                 obj.summoning_sick = false;
                 obj.damage = 0;
                 obj.counters = 0;
+                obj.attached_to = None;
                 Arc::make_mut(&mut state.players[defender].graveyard).push(obj);
             }
         },
@@ -1005,6 +1010,7 @@ fn apply_effect(
                 obj.summoning_sick = false;
                 obj.damage = 0;
                 obj.counters = 0;
+                obj.attached_to = None;
                 Arc::make_mut(&mut state.players[defender].graveyard).push(obj);
             }
         },
@@ -1203,6 +1209,7 @@ fn apply_effect(
                     summoning_sick: true,
                     damage: 0,
                     counters: 0,
+                    attached_to: None,
                     ueot_modifiers: Vec::new(),
                 });
                 next_id += 1;
@@ -1368,6 +1375,7 @@ fn apply_effect(
                 obj.controller = state.active_player;
                 obj.damage = 0;
                 obj.counters = 0;
+                obj.attached_to = None;
                 Arc::make_mut(&mut player.battlefield).push(obj);
             }
             // CR 701.19 "always shuffle after search" deliberately
@@ -1646,6 +1654,7 @@ fn apply_effect(
                 obj.summoning_sick = false;
                 obj.damage = 0;
                 obj.counters = 0;
+                obj.attached_to = None;
                 obj.controller = target_controller;
                 Arc::make_mut(
                     &mut state.players[target_controller as usize].graveyard,
@@ -1833,6 +1842,7 @@ fn apply_effect(
                 obj.summoning_sick = false;
                 obj.damage = 0;
                 obj.counters = 0;
+                obj.attached_to = None;
                 Arc::make_mut(&mut state.players[controller_idx].graveyard)
                     .push(obj);
             }
@@ -1872,6 +1882,7 @@ fn apply_effect(
             obj.summoning_sick = true;
             obj.damage = 0;
             obj.counters = 0;
+            obj.attached_to = None;
             Arc::make_mut(&mut state.players[controller_idx].hand).push(obj);
         }
         Effect::ReturnCreatureFromYourGraveyardToBattlefield => {
@@ -1912,6 +1923,7 @@ fn apply_effect(
             obj.summoning_sick = true;
             obj.damage = 0;
             obj.counters = 0;
+            obj.attached_to = None;
             Arc::make_mut(&mut state.players[controller_idx].battlefield).push(obj);
         }
         // Round-26: EachOpponentLosesLife. CR 118.4 — "life loss"
@@ -2255,6 +2267,7 @@ fn apply_effect(
                 obj.summoning_sick = false;
                 obj.damage = 0;
                 obj.counters = 0;
+                obj.attached_to = None;
                 Arc::make_mut(&mut state.players[opponent_idx].graveyard)
                     .push(obj);
             }
@@ -2302,6 +2315,7 @@ fn apply_effect(
                     obj.summoning_sick = false;
                     obj.damage = 0;
                     obj.counters = 0;
+                    obj.attached_to = None;
                     gy_mut.push(obj);
                 }
             }
@@ -2340,6 +2354,7 @@ fn apply_effect(
                 obj.summoning_sick = false;
                 obj.damage = 0;
                 obj.counters = 0;
+                obj.attached_to = None;
                 Arc::make_mut(&mut state.players[defender_idx].graveyard).push(obj);
             }
         }
@@ -2381,6 +2396,7 @@ fn apply_effect(
                 obj.summoning_sick = false;
                 obj.damage = 0;
                 obj.counters = 0;
+                obj.attached_to = None;
                 Arc::make_mut(&mut state.players[defender_idx].graveyard).push(obj);
             }
         }
@@ -2421,6 +2437,7 @@ fn apply_effect(
                 obj.summoning_sick = false;
                 obj.damage = 0;
                 obj.counters = 0;
+                obj.attached_to = None;
                 Arc::make_mut(&mut state.players[defender_idx].graveyard).push(obj);
             }
         }
@@ -3005,6 +3022,7 @@ fn apply_effect(
             obj.controller = cidx as u8;
             obj.damage = 0;
             obj.counters = 0;
+            obj.attached_to = None;
             Arc::make_mut(&mut player.hand).push(obj);
             // No shuffle (G19 deferral).
         }
@@ -3103,6 +3121,7 @@ fn apply_effect(
             obj.summoning_sick = true; // r28 CE1 universal-true default
             obj.damage = 0;
             obj.counters = 0;
+            obj.attached_to = None;
             let lib_mut: &mut Vec<GameObject> =
                 Arc::make_mut(&mut state.players[pidx].library);
             lib_mut.insert(0, obj); // bottom of library
@@ -3524,6 +3543,7 @@ fn apply_effect(
                 summoning_sick: true,
                 damage: 0,
                 counters: 0,
+                attached_to: None,
                 ueot_modifiers: Vec::new(),
             };
             Arc::make_mut(&mut state.players[cidx].battlefield).push(new_obj);
@@ -3591,9 +3611,67 @@ fn apply_effect(
             obj.summoning_sick = true; // r28 CE1 universal default
             obj.damage = 0;
             obj.counters = 0;
+            obj.attached_to = None;
             Arc::make_mut(&mut state.players[cidx].graveyard).push(obj);
             // Apply inner effect.
             apply_effect(state, inner_effect.as_ref(), source_obj_id)?;
+        }
+        // Round-28 EoE Equipment-ETB attach. Locate the source on
+        // its controller's battlefield (Equipment ETB resolution
+        // happens after the Equipment has entered the bf — CR
+        // 603.6a), pick the first OTHER creature on the same bf
+        // (mirrors PumpTargetCreatureUntilEOT's deterministic
+        // first-slice target), and stamp
+        // `source.attached_to = Some(target_id)`. Silent fizzle when
+        // the source isn't on a bf (e.g. dispatched through a wrong
+        // resolution path) or no eligible target exists.
+        Effect::AttachToTargetCreatureYouControl => {
+            // Locate source on a battlefield + capture its
+            // controller. The source must be on a battlefield for
+            // attach to make sense — CR 303.4 / 301.5: attach
+            // relationship is a battlefield-only property.
+            let mut src_loc: Option<(usize, u32)> = None; // (player_idx, source_id)
+            for (pidx, player) in state.players.iter().enumerate() {
+                if player.battlefield.iter().any(|o| o.id == source_obj_id) {
+                    src_loc = Some((pidx, source_obj_id));
+                    break;
+                }
+            }
+            let Some((cidx, src_id)) = src_loc else {
+                return Ok(()); // source not on bf → silent fizzle
+            };
+            // Pick the first creature on source-controller's bf
+            // that ISN'T the source itself (an Equipment can't
+            // attach to itself). Creature-ness gates on
+            // `card_types contains "Creature"` — the canonical
+            // creature-detection pattern mirroring
+            // PumpTargetCreatureUntilEOT / OptionalSacArtifactForEffect.
+            let target_id: Option<u32> = {
+                let bf = &state.players[cidx].battlefield;
+                let registry = &state.registry;
+                bf.iter().find_map(|obj| {
+                    if obj.id == src_id {
+                        return None; // can't attach to self
+                    }
+                    let printing = registry.printings.get(obj.printing_id as usize)?;
+                    if printing.card_types.iter().any(|t| t == "Creature") {
+                        Some(obj.id)
+                    } else {
+                        None
+                    }
+                })
+            };
+            let Some(target_id) = target_id else {
+                return Ok(()); // no eligible creature → silent fizzle
+            };
+            let bf_mut: &mut Vec<GameObject> =
+                Arc::make_mut(&mut state.players[cidx].battlefield);
+            for obj in bf_mut.iter_mut() {
+                if obj.id == src_id {
+                    obj.attached_to = Some(target_id);
+                    break;
+                }
+            }
         }
     }
     Ok(())
@@ -3812,6 +3890,7 @@ impl GameState {
             summoning_sick: false,
             damage: 0,
             counters: 0,
+            attached_to: None,
             ueot_modifiers: Vec::new(),
         };
 
