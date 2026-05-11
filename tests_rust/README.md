@@ -207,6 +207,8 @@ the test lands in a commit.
 
 | rust(effect-move-self-counters): Effect::MoveSelfCountersToTargetCreatureYouControl — Dockworker-Drone-shape counter transfer (2 EoE cards). | tests_rust/test_counters.py extend | green  | feature/rust-effect-move-self-counters |
 
+| rust(effect-deal-damage-eq-source-power): Effect::DealDamageEqualToSourcePowerAnyTarget — Mishra's-Bauble-shape power-scaling damage (2 EoE cards). | tests_rust/test_resolve.py extend | green  | feature/rust-effect-deal-damage-eq-source-power |
+
 ## Build invocation reminder
 
 ```
