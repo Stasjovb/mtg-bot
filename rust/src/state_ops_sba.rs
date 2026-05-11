@@ -162,10 +162,15 @@ impl GameState {
                 // of the pre-r27 (printed + counters) calculation, so
                 // an "until end of turn" +N/+M pump shrinks the
                 // lethal-damage and zero-toughness victims correctly.
-                // PumpTargetCreatureUntilEOT-tier riders need this
-                // path to fire.
+                // Round-28: a `UeotModifier::SetBasePT` (CR 613.4
+                // layer 7b) overrides the printed base entirely;
+                // counters + layer-7c bonuses still stack on top.
+                let base_toughness = obj
+                    .ueot_base_pt_override()
+                    .map(|(_, t)| t)
+                    .unwrap_or(toughness as i32);
                 let effective_toughness =
-                    toughness as i32 + obj.counters + obj.ueot_toughness_bonus();
+                    base_toughness + obj.counters + obj.ueot_toughness_bonus();
                 // 704.5f first per CR ordering.
                 if effective_toughness <= 0 {
                     victims.push((obj.controller, obj.id));
@@ -321,9 +326,14 @@ impl GameState {
                     // toughness recipe — fold counters AND
                     // `ueot_toughness_bonus` so a UEOT-pumped creature
                     // surfaces the right is_lethal answer at the
-                    // mid-turn parity boundary.
+                    // mid-turn parity boundary. Round-28: SetBasePT
+                    // overrides the printed base (last-applied wins).
+                    let base_toughness = obj
+                        .ueot_base_pt_override()
+                        .map(|(_, t)| t)
+                        .unwrap_or(toughness as i32);
                     let effective_toughness =
-                        toughness as i32 + obj.counters + obj.ueot_toughness_bonus();
+                        base_toughness + obj.counters + obj.ueot_toughness_bonus();
                     return Some(obj.damage as i32 >= effective_toughness);
                 }
             }

@@ -271,13 +271,19 @@ fn battlefield_creature_power(state: &GameState, obj_id: u32) -> i16 {
     let Some(printing) = state.registry.lookup(printing_id) else {
         return 0;
     };
-    let base = printing.power.unwrap_or(0) as i32;
-    let bonus = state.players[player_idx]
+    let printed_base = printing.power.unwrap_or(0) as i32;
+    let obj = state.players[player_idx]
         .battlefield
         .iter()
-        .find(|o| o.id == obj_id)
-        .map(|o| o.ueot_power_bonus())
-        .unwrap_or(0);
+        .find(|o| o.id == obj_id);
+    // Round-28 CR 613.4 layer 7b: a UEOT SetBasePT override replaces
+    // the printed base. Last-applied wins. Layer 7c additive bonuses
+    // (PowerToughnessBonus) still stack on top.
+    let base = obj
+        .and_then(|o| o.ueot_base_pt_override())
+        .map(|(p, _)| p)
+        .unwrap_or(printed_base);
+    let bonus = obj.map(|o| o.ueot_power_bonus()).unwrap_or(0);
     let effective = base + bonus;
     // Saturate into i16 to match the existing return-shape contract;
     // a 32k+ effective power is unreachable on any real card.
@@ -351,13 +357,19 @@ fn battlefield_creature_toughness(state: &GameState, obj_id: u32) -> i16 {
     let Some(printing) = state.registry.lookup(printing_id) else {
         return 0;
     };
-    let base = printing.toughness.unwrap_or(0) as i32;
-    let ueot_bonus = state.players[player_idx]
+    let printed_base = printing.toughness.unwrap_or(0) as i32;
+    let obj = state.players[player_idx]
         .battlefield
         .iter()
-        .find(|o| o.id == obj_id)
-        .map(|o| o.ueot_toughness_bonus())
-        .unwrap_or(0);
+        .find(|o| o.id == obj_id);
+    // Round-28 CR 613.4 layer 7b: SetBasePT overrides the printed
+    // base. Last-applied wins. Layer 7c additive bonuses stack on
+    // top.
+    let base = obj
+        .and_then(|o| o.ueot_base_pt_override())
+        .map(|(_, t)| t)
+        .unwrap_or(printed_base);
+    let ueot_bonus = obj.map(|o| o.ueot_toughness_bonus()).unwrap_or(0);
     let effective = base + ueot_bonus;
     effective.clamp(i16::MIN as i32, i16::MAX as i32) as i16
 }

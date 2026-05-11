@@ -146,6 +146,16 @@ pub enum UeotModifier {
         toughness: i32,
         color_or_subtype: String,
     },
+    /// CR 613.4 layer 7b — set base P/T (override). Models Python's
+    /// `SetBasePTUntilEOT(power, toughness)` (Genemorph-Imago-shape
+    /// "target creature has base power and toughness N/N until end of
+    /// turn", 2+ EoE cards). The composer reads the LAST `SetBasePT`
+    /// entry (most-recently-pushed wins, mirroring CR layer-7 last-
+    /// applied semantics) and uses its `power`/`toughness` as the
+    /// base instead of the printing's printed values. Layer-7c
+    /// additive bonuses (`PowerToughnessBonus`) stack ON TOP of the
+    /// set base, matching CR 613.7c.
+    SetBasePT { power: i32, toughness: i32 },
 }
 
 impl GameObject {
@@ -161,6 +171,7 @@ impl GameObject {
                 UeotModifier::PowerToughnessBonus { power, .. } => sum += *power,
                 UeotModifier::BecomesLandCreature { .. } => {}
                 UeotModifier::GrantKeyword { .. } => {}
+                UeotModifier::SetBasePT { .. } => {}
             }
         }
         sum
@@ -175,9 +186,26 @@ impl GameObject {
                 UeotModifier::PowerToughnessBonus { toughness, .. } => sum += *toughness,
                 UeotModifier::BecomesLandCreature { .. } => {}
                 UeotModifier::GrantKeyword { .. } => {}
+                UeotModifier::SetBasePT { .. } => {}
             }
         }
         sum
+    }
+
+    /// **Round-28 base-P/T override (CR 613.4 layer 7b).** If any
+    /// `UeotModifier::SetBasePT` is on this object, return the
+    /// `(power, toughness)` of the LAST one in the Vec (most-recent
+    /// push wins, mirroring CR layer-7 last-applied semantics).
+    /// Otherwise return `None` and the composer falls back to the
+    /// printing's printed P/T.
+    pub fn ueot_base_pt_override(&self) -> Option<(i32, i32)> {
+        let mut last: Option<(i32, i32)> = None;
+        for m in &self.ueot_modifiers {
+            if let UeotModifier::SetBasePT { power, toughness } = m {
+                last = Some((*power, *toughness));
+            }
+        }
+        last
     }
 
     /// True iff some `UeotModifier::GrantKeyword` on this object

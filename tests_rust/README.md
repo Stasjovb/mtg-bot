@@ -251,6 +251,8 @@ the test lands in a commit.
 
 | rust(effect-return-all-creatures-grave-to-bf): Effect::ReturnAllCreaturesFromYourGraveyardToBattlefield — Awakening-Hall mass-reanimation (2+ EoE cards); iterate controller's graveyard, move every creature to bf with ETB reset. | tests_rust/test_zones.py extend | green  | feature/rust-effect-return-all-creatures-grave-to-bf |
 
+| rust(effect-set-base-pt-ueot): UeotModifier::SetBasePT + Effect::SetBasePTUntilEOT — CR 613.4 layer 7b base override (Genemorph-Imago family, 2+ EoE cards). Composers (effective_power/toughness, SBA toughness) read the LAST SetBasePT if present, else printed base. Layer 7c additive bonuses still stack on top. | tests_rust/test_ueot.py extend | green  | feature/rust-effect-set-base-pt-ueot |
+
 ## Build invocation reminder
 
 ```

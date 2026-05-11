@@ -1388,6 +1388,27 @@ pub enum Effect {
     /// **Empty graveyard / no creatures** → silent no-op (no state
     /// mutation).
     ReturnAllCreaturesFromYourGraveyardToBattlefield,
+    /// **Round 28 base-P/T UEOT override (CR 613.4 layer 7b).** Target
+    /// creature has base power and toughness `power/toughness` until
+    /// end of turn. Mirrors Python's `SetBasePTUntilEOT(power,
+    /// toughness)` (Genemorph-Imago-shape "has base P/T N/N this
+    /// turn", 2+ EoE cards).
+    ///
+    /// **Mechanism.** Push a `UeotModifier::SetBasePT` onto the
+    /// target's `ueot_modifiers` Vec. The composer
+    /// (`battlefield_creature_power` / `_toughness`) reads the LAST
+    /// `SetBasePT` and uses its values as the base instead of the
+    /// printing's printed P/T. Counters + layer-7c additive bonuses
+    /// (`PowerToughnessBonus`) still stack on top (CR 613.7c).
+    ///
+    /// **Target semantics.** Same first-slice deterministic pattern
+    /// as `PumpTargetCreatureUntilEOT`: pick the FIRST creature on
+    /// source-controller's battlefield. No eligible creature → silent
+    /// fizzle.
+    ///
+    /// **Negative values are legal.** "Has base 0/0" is meaningful
+    /// (the creature dies to SBA toughness <= 0). No guard.
+    SetBasePTUntilEOT { power: i32, toughness: i32 },
 }
 
 #[derive(Clone, Debug)]
@@ -2071,6 +2092,37 @@ fn parse_effect(dict: &Bound<'_, PyDict>) -> PyResult<Effect> {
         "return_all_creatures_from_your_graveyard_to_battlefield" => {
             Ok(Effect::ReturnAllCreaturesFromYourGraveyardToBattlefield)
         }
+        "set_base_pt_until_eot" => {
+            // Required `power` and `toughness` integer fields. No
+            // defaults — every Python card emission spells both out.
+            let power: i32 = dict
+                .get_item("power")?
+                .ok_or_else(|| {
+                    PyValueError::new_err(
+                        "set_base_pt_until_eot: missing required 'power' field",
+                    )
+                })?
+                .extract()
+                .map_err(|e| {
+                    PyValueError::new_err(format!(
+                        "set_base_pt_until_eot.power must be an integer (got: {e})"
+                    ))
+                })?;
+            let toughness: i32 = dict
+                .get_item("toughness")?
+                .ok_or_else(|| {
+                    PyValueError::new_err(
+                        "set_base_pt_until_eot: missing required 'toughness' field",
+                    )
+                })?
+                .extract()
+                .map_err(|e| {
+                    PyValueError::new_err(format!(
+                        "set_base_pt_until_eot.toughness must be an integer (got: {e})"
+                    ))
+                })?;
+            Ok(Effect::SetBasePTUntilEOT { power, toughness })
+        }
         "grant_keyword_to_target_creature_until_eot" => {
             // Required `keyword` field: non-empty lowercase string.
             let keyword_raw = dict.get_item("keyword")?.ok_or_else(|| {
@@ -2420,7 +2472,7 @@ fn parse_effect(dict: &Bound<'_, PyDict>) -> PyResult<Effect> {
             Ok(Effect::Sequence { effects: children })
         }
         other => Err(PyValueError::new_err(format!(
-            "unknown effect kind {other:?}; valid: deal_damage, draw_cards, gain_life, return_to_hand, mill, mill_target_player, exile_target, tap_target, untap_target, sacrifice, add_counters, discard_card, scry_n, destroy_target, damage_each_opponent, damage_each_creature, create_token, add_mana_to_pool, search_library_for_basic_land_tapped, put_plus_one_counter_on_self, surveil, counter_target_spell, return_creature_from_your_graveyard_to_battlefield, discard_self, each_opponent_loses_life, lose_life, target_opponent_loses_life, each_opponent_discards, destroy_all_creatures, destroy_target_nonland_permanent, destroy_target_artifact, destroy_target_land, deal_damage_any_target, pump_self_until_eot, pump_target_creature_until_eot, sequence, pump_creatures_you_control_until_eot, return_creature_from_your_graveyard_to_hand, put_plus_one_counter_on_each_creature_you_control, put_plus_one_counter_on_creature_you_control, add_n_mana_of_chosen_color, search_library_for_card, pump_creatures_opponents_control_until_eot, put_card_from_graveyard_on_bottom_of_library, move_self_counters_to_target_creature_you_control, deal_damage_equal_to_source_power_any_target, tap_target_artifact_or_creature, conditional_on_tapped_creatures, put_plus_one_counter_on_each_of_up_to_n_target_creatures, put_charge_counters_on_self, create_token_copy_of_target_creature_you_control, optional_sac_artifact_for_effect, owner_puts_target_artifact_or_creature_on_top_or_bottom_of_library, attach_to_target_creature_you_control, destroy_enchanted_permanent, tap_enchanted_permanent, exile_target_creature_until_source_leaves, exile_opponents_nonland_permanent_until_leaves, may_do, look_top_n_put_one_in_hand_rest_to_graveyard, choose_one_mode, if_you_do, each_opponent_mills_cards, pump_target_artifact_or_creature_until_eot, each_opponent_sacrifices_creature, grant_keyword_to_target_creature_until_eot, untap_target_other_permanent, tap_another_target_creature, return_all_creatures_from_your_graveyard_to_battlefield"
+            "unknown effect kind {other:?}; valid: deal_damage, draw_cards, gain_life, return_to_hand, mill, mill_target_player, exile_target, tap_target, untap_target, sacrifice, add_counters, discard_card, scry_n, destroy_target, damage_each_opponent, damage_each_creature, create_token, add_mana_to_pool, search_library_for_basic_land_tapped, put_plus_one_counter_on_self, surveil, counter_target_spell, return_creature_from_your_graveyard_to_battlefield, discard_self, each_opponent_loses_life, lose_life, target_opponent_loses_life, each_opponent_discards, destroy_all_creatures, destroy_target_nonland_permanent, destroy_target_artifact, destroy_target_land, deal_damage_any_target, pump_self_until_eot, pump_target_creature_until_eot, sequence, pump_creatures_you_control_until_eot, return_creature_from_your_graveyard_to_hand, put_plus_one_counter_on_each_creature_you_control, put_plus_one_counter_on_creature_you_control, add_n_mana_of_chosen_color, search_library_for_card, pump_creatures_opponents_control_until_eot, put_card_from_graveyard_on_bottom_of_library, move_self_counters_to_target_creature_you_control, deal_damage_equal_to_source_power_any_target, tap_target_artifact_or_creature, conditional_on_tapped_creatures, put_plus_one_counter_on_each_of_up_to_n_target_creatures, put_charge_counters_on_self, create_token_copy_of_target_creature_you_control, optional_sac_artifact_for_effect, owner_puts_target_artifact_or_creature_on_top_or_bottom_of_library, attach_to_target_creature_you_control, destroy_enchanted_permanent, tap_enchanted_permanent, exile_target_creature_until_source_leaves, exile_opponents_nonland_permanent_until_leaves, may_do, look_top_n_put_one_in_hand_rest_to_graveyard, choose_one_mode, if_you_do, each_opponent_mills_cards, pump_target_artifact_or_creature_until_eot, each_opponent_sacrifices_creature, grant_keyword_to_target_creature_until_eot, untap_target_other_permanent, tap_another_target_creature, return_all_creatures_from_your_graveyard_to_battlefield, set_base_pt_until_eot"
         ))),
     }
 }
@@ -2876,6 +2928,11 @@ pub(crate) fn effect_to_pydict<'py>(
         }
         Effect::ReturnAllCreaturesFromYourGraveyardToBattlefield => {
             d.set_item("kind", "return_all_creatures_from_your_graveyard_to_battlefield")?;
+        }
+        Effect::SetBasePTUntilEOT { power, toughness } => {
+            d.set_item("kind", "set_base_pt_until_eot")?;
+            d.set_item("power", *power)?;
+            d.set_item("toughness", *toughness)?;
         }
         Effect::Sequence { effects } => {
             d.set_item("kind", "sequence")?;

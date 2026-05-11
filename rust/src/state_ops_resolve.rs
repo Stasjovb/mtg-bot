@@ -4142,6 +4142,61 @@ fn apply_effect(
         //
         // No eligible permanent (everything untapped, or only the
         // source itself is tapped) → silent fizzle.
+        // Round-28 SetBasePTUntilEOT (Genemorph-Imago family, 2+ EoE
+        // cards). CR 613.4 layer 7b base-P/T override. Same target-
+        // pick shape as PumpTargetCreatureUntilEOT but pushes
+        // UeotModifier::SetBasePT instead of ::PowerToughnessBonus.
+        // Composer reads the LAST SetBasePT modifier (last-applied
+        // wins). Layer-7c additive bonuses stack on top.
+        Effect::SetBasePTUntilEOT { power, toughness } => {
+            // Source-controller resolution (5-zone walk).
+            let mut src_controller: Option<u8> = None;
+            'outer_sbp: for player in &state.players {
+                for zone in [
+                    &player.hand,
+                    &player.library,
+                    &player.battlefield,
+                    &player.graveyard,
+                    &player.exile,
+                ] {
+                    if let Some(obj) = zone.iter().find(|o| o.id == source_obj_id) {
+                        src_controller = Some(obj.controller);
+                        break 'outer_sbp;
+                    }
+                }
+            }
+            let Some(controller) = src_controller else {
+                return Ok(()); // source untrackable → silent fizzle
+            };
+            let cidx = controller as usize;
+            // Pick first creature on controller's bf.
+            let target_id: Option<u32> = {
+                let bf = &state.players[cidx].battlefield;
+                let registry = &state.registry;
+                bf.iter().find_map(|obj| {
+                    let printing = registry.printings.get(obj.printing_id as usize)?;
+                    if printing.card_types.iter().any(|t| t == "Creature") {
+                        Some(obj.id)
+                    } else {
+                        None
+                    }
+                })
+            };
+            let Some(target_id) = target_id else {
+                return Ok(()); // no eligible creature → silent fizzle
+            };
+            let zone: &mut Vec<GameObject> =
+                Arc::make_mut(&mut state.players[cidx].battlefield);
+            for obj in zone.iter_mut() {
+                if obj.id == target_id {
+                    obj.ueot_modifiers.push(UeotModifier::SetBasePT {
+                        power: *power,
+                        toughness: *toughness,
+                    });
+                    break;
+                }
+            }
+        }
         // Round-28 mass reanimation. Mirrors Python's
         // ReturnAllCreaturesFromYourGraveyardToBattlefield (Awakening-
         // Hall family, 2+ EoE cards). Iterate source-controller's

@@ -1280,3 +1280,168 @@ def test_grant_keyword_target_no_creature_fizzles(synthetic_state):
     state.push_to_stack(spell_id, 0)
     # Resolves without raising; no modifier written.
     state.resolve_top_of_stack()
+
+
+# ---------------------------------------------------------------- SetBasePTUntilEOT (r28)
+
+
+def _set_base_pt_dict(power: int = 3, toughness: int = 3):
+    """Genemorph-Imago-shape instant: set target creature's base P/T."""
+    return {
+        "name": f"Test SetBasePT {power}/{toughness}",
+        "mana_cost": {"G": 1},
+        "card_types": ["Instant"],
+        "effects": [
+            {
+                "kind": "set_base_pt_until_eot",
+                "power": power,
+                "toughness": toughness,
+            }
+        ],
+    }
+
+
+def test_register_set_base_pt_round_trip(empty_registry):
+    """SetBasePT register-and-readback round-trip preserves power/toughness."""
+    pid = empty_registry.register_printing(_set_base_pt_dict(power=6, toughness=6))
+    effects = empty_registry.get_printing_effects(pid)
+    assert effects[0]["kind"] == "set_base_pt_until_eot"
+    assert effects[0]["power"] == 6
+    assert effects[0]["toughness"] == 6
+
+
+def test_register_set_base_pt_missing_power_raises(empty_registry):
+    with pytest.raises(ValueError):
+        empty_registry.register_printing(
+            {
+                "name": "bad",
+                "card_types": ["Instant"],
+                "effects": [
+                    {"kind": "set_base_pt_until_eot", "toughness": 3}
+                ],
+            }
+        )
+
+
+def test_register_set_base_pt_missing_toughness_raises(empty_registry):
+    with pytest.raises(ValueError):
+        empty_registry.register_printing(
+            {
+                "name": "bad",
+                "card_types": ["Instant"],
+                "effects": [
+                    {"kind": "set_base_pt_until_eot", "power": 3}
+                ],
+            }
+        )
+
+
+def test_set_base_pt_overrides_printed_base(synthetic_state):
+    """Resolving SetBasePT 6/6 on a Grizzly Bears (printed 2/2) flips
+    its effective P/T to 6/6."""
+    target_id = _first_creature_id_on_battlefield(synthetic_state, 0)
+    assert synthetic_state.effective_power(target_id) == 2
+    assert synthetic_state.effective_toughness(target_id) == 2
+
+    spell_id = synthetic_state.register_and_inject_object(
+        _set_base_pt_dict(power=6, toughness=6), 0, ZONE_HAND
+    )
+    synthetic_state.push_to_stack(spell_id, 0)
+    synthetic_state.resolve_top_of_stack()
+
+    assert synthetic_state.effective_power(target_id) == 6
+    assert synthetic_state.effective_toughness(target_id) == 6
+
+
+def test_set_base_pt_layer_7c_bonuses_stack_on_top(synthetic_state):
+    """SetBasePT 3/3 followed by PumpTargetCreatureUntilEOT +2/+2 →
+    effective 5/5 (layer 7b base override + layer 7c additive on top)."""
+    target_id = _first_creature_id_on_battlefield(synthetic_state, 0)
+    set_id = synthetic_state.register_and_inject_object(
+        _set_base_pt_dict(power=3, toughness=3), 0, ZONE_HAND
+    )
+    synthetic_state.push_to_stack(set_id, 0)
+    synthetic_state.resolve_top_of_stack()
+    assert synthetic_state.effective_power(target_id) == 3
+
+    pump_id = synthetic_state.register_and_inject_object(
+        _pump_target_instant_dict(power_bonus=2, toughness_bonus=2),
+        0,
+        ZONE_HAND,
+    )
+    synthetic_state.push_to_stack(pump_id, 0)
+    synthetic_state.resolve_top_of_stack()
+
+    # Base 3/3 + additive +2/+2 = effective 5/5.
+    assert synthetic_state.effective_power(target_id) == 5
+    assert synthetic_state.effective_toughness(target_id) == 5
+
+
+def test_set_base_pt_last_applied_wins(synthetic_state):
+    """Two SetBasePT modifiers — the LAST one is the effective base.
+    Mirrors CR layer-7 last-applied semantics."""
+    target_id = _first_creature_id_on_battlefield(synthetic_state, 0)
+    set_2_id = synthetic_state.register_and_inject_object(
+        _set_base_pt_dict(power=2, toughness=2), 0, ZONE_HAND
+    )
+    synthetic_state.push_to_stack(set_2_id, 0)
+    synthetic_state.resolve_top_of_stack()
+    assert synthetic_state.effective_power(target_id) == 2
+
+    set_7_id = synthetic_state.register_and_inject_object(
+        _set_base_pt_dict(power=7, toughness=4), 0, ZONE_HAND
+    )
+    synthetic_state.push_to_stack(set_7_id, 0)
+    synthetic_state.resolve_top_of_stack()
+
+    assert synthetic_state.effective_power(target_id) == 7
+    assert synthetic_state.effective_toughness(target_id) == 4
+
+
+def test_set_base_pt_clears_at_cleanup(synthetic_state):
+    """SetBasePT clears at the next cleanup step — effective P/T
+    returns to the printed base."""
+    target_id = _first_creature_id_on_battlefield(synthetic_state, 0)
+    spell_id = synthetic_state.register_and_inject_object(
+        _set_base_pt_dict(power=5, toughness=5), 0, ZONE_HAND
+    )
+    synthetic_state.push_to_stack(spell_id, 0)
+    synthetic_state.resolve_top_of_stack()
+    assert synthetic_state.effective_power(target_id) == 5
+
+    synthetic_state.cleanup_step_for_active_player()
+
+    assert synthetic_state.effective_power(target_id) == 2
+    assert synthetic_state.effective_toughness(target_id) == 2
+
+
+def test_set_base_pt_zero_zero_makes_creature_die(synthetic_state):
+    """SetBasePT 0/0 → SBA destroys the creature (CR 704.5f, toughness
+    <= 0)."""
+    target_id = _first_creature_id_on_battlefield(synthetic_state, 0)
+    spell_id = synthetic_state.register_and_inject_object(
+        _set_base_pt_dict(power=0, toughness=0), 0, ZONE_HAND
+    )
+    synthetic_state.push_to_stack(spell_id, 0)
+    synthetic_state.resolve_top_of_stack()
+    synthetic_state.apply_sbas_until_quiescent()
+    assert synthetic_state.find_object_zone(target_id) == 3  # ZONE_GRAVEYARD
+
+
+def test_set_base_pt_no_creature_fizzles(synthetic_state):
+    """No creature on controller's bf → silent fizzle."""
+    state = synthetic_state.clone_once()
+    while True:
+        snap = state.battlefield_snapshot()
+        my_creature_ids = [
+            d["id"] for d in snap
+            if d["controller_id"] == 0 and d["printing_name"] == "Grizzly Bears"
+        ]
+        if not my_creature_ids:
+            break
+        state.move_object(my_creature_ids[0], 3, 0)
+    spell_id = state.register_and_inject_object(
+        _set_base_pt_dict(power=5, toughness=5), 0, ZONE_HAND
+    )
+    state.push_to_stack(spell_id, 0)
+    state.resolve_top_of_stack()
