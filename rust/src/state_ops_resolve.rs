@@ -2595,6 +2595,78 @@ fn apply_effect(
                 apply_effect(state, child, source_obj_id)?;
             }
         }
+        // Round-28 anthem-shape UEOT effect. Iterates every creature
+        // on the source's controller's battlefield and pushes a
+        // UeotModifier::PowerToughnessBonus onto each. Creature
+        // eligibility gates on `card_types contains "Creature"`
+        // (mirrors PumpTargetCreatureUntilEOT's predicate).
+        //
+        // `(0, 0)` short-circuits before doing the scan. Empty
+        // battlefield or no eligible creatures is a silent no-op.
+        Effect::PumpCreaturesYouControlUntilEOT { power_bonus, toughness_bonus } => {
+            if *power_bonus == 0 && *toughness_bonus == 0 {
+                return Ok(());
+            }
+            // Locate source controller (mirrors DiscardSelf /
+            // PumpTargetCreatureUntilEOT pattern).
+            let mut src_controller: Option<u8> = None;
+            'outer: for player in &state.players {
+                for zone in [
+                    &player.hand,
+                    &player.library,
+                    &player.battlefield,
+                    &player.graveyard,
+                    &player.exile,
+                ] {
+                    if let Some(obj) = zone.iter().find(|o| o.id == source_obj_id) {
+                        src_controller = Some(obj.controller);
+                        break 'outer;
+                    }
+                }
+            }
+            if src_controller.is_none() {
+                if let Some(item) = state
+                    .stack
+                    .iter()
+                    .find(|i| i.source_obj_id == source_obj_id)
+                {
+                    src_controller = Some(item.controller);
+                }
+            }
+            let Some(controller) = src_controller else {
+                return Ok(());
+            };
+            let cidx = controller as usize;
+            // Collect creature ids first (immutable borrow on
+            // registry + battlefield), then apply mutations.
+            let creature_ids: Vec<u32> = {
+                let bf = &state.players[cidx].battlefield;
+                let registry = &state.registry;
+                bf.iter()
+                    .filter_map(|obj| {
+                        let printing = registry.printings.get(obj.printing_id as usize)?;
+                        if printing.card_types.iter().any(|t| t == "Creature") {
+                            Some(obj.id)
+                        } else {
+                            None
+                        }
+                    })
+                    .collect()
+            };
+            if creature_ids.is_empty() {
+                return Ok(());
+            }
+            let zone: &mut Vec<GameObject> =
+                Arc::make_mut(&mut state.players[cidx].battlefield);
+            for obj in zone.iter_mut() {
+                if creature_ids.contains(&obj.id) {
+                    obj.ueot_modifiers.push(UeotModifier::PowerToughnessBonus {
+                        power: *power_bonus,
+                        toughness: *toughness_bonus,
+                    });
+                }
+            }
+        }
     }
     Ok(())
 }

@@ -741,6 +741,26 @@ pub enum Effect {
     /// legal no-op (matches Python's empty-tuple-initialized
     /// Sequence).
     Sequence { effects: Vec<Effect> },
+    /// **Round 28 UEOT-coverage extension.** Every creature on the
+    /// source's controller's battlefield gets `+power/+toughness`
+    /// until end of turn. Mirrors Python's
+    /// `PumpCreaturesYouControlUntilEOT(power_bonus, toughness_bonus, ...)`
+    /// (6 EoE cards — Stage-3 anthem-shape effects).
+    ///
+    /// **Mechanism.** Locate the source's controller; iterate that
+    /// player's battlefield; for every object whose printing is a
+    /// creature, push a `UeotModifier::PowerToughnessBonus` onto the
+    /// object's `ueot_modifiers` Vec. Effective P/T queries pick up
+    /// the bonus; cleanup-step expiration drains the modifiers at the
+    /// end of the turn (CR 514.3 via the r27 UEOT framework).
+    ///
+    /// **Schema simplification.** Python's class also carries
+    /// `granted_keywords`, `exclude_source`, `attacking_only`, and
+    /// `also_untap_if_not_your_turn`. The Rust first slice carries
+    /// ONLY power/toughness. Cards with riders wait for richer
+    /// composition. Negative bonuses are legal (controller-side
+    /// debuff pumps); `(0, 0)` is a legal no-op for parity edge cases.
+    PumpCreaturesYouControlUntilEOT { power_bonus: i32, toughness_bonus: i32 },
 }
 
 #[derive(Clone, Debug)]
@@ -1275,6 +1295,29 @@ fn parse_effect(dict: &Bound<'_, PyDict>) -> PyResult<Effect> {
             };
             Ok(Effect::PumpTargetCreatureUntilEOT { power_bonus, toughness_bonus })
         }
+        "pump_creatures_you_control_until_eot" => {
+            // Round-28 anthem-shape UEOT effect. Mirrors the
+            // PumpSelfUntilEOT / PumpTargetCreatureUntilEOT schema:
+            // power_bonus + toughness_bonus default to 0, negatives
+            // allowed.
+            let power_bonus: i32 = match dict.get_item("power_bonus")? {
+                Some(p) => p.extract().map_err(|e| {
+                    PyValueError::new_err(format!(
+                        "pump_creatures_you_control_until_eot.power_bonus must be an integer (got: {e})"
+                    ))
+                })?,
+                None => 0,
+            };
+            let toughness_bonus: i32 = match dict.get_item("toughness_bonus")? {
+                Some(t) => t.extract().map_err(|e| {
+                    PyValueError::new_err(format!(
+                        "pump_creatures_you_control_until_eot.toughness_bonus must be an integer (got: {e})"
+                    ))
+                })?,
+                None => 0,
+            };
+            Ok(Effect::PumpCreaturesYouControlUntilEOT { power_bonus, toughness_bonus })
+        }
         "sequence" => {
             // Round-28 highest-frequency-class coverage. Mirrors
             // Python's Sequence(effects: tuple[Effect, ...]).
@@ -1306,7 +1349,7 @@ fn parse_effect(dict: &Bound<'_, PyDict>) -> PyResult<Effect> {
             Ok(Effect::Sequence { effects: children })
         }
         other => Err(PyValueError::new_err(format!(
-            "unknown effect kind {other:?}; valid: deal_damage, draw_cards, gain_life, return_to_hand, mill, mill_target_player, exile_target, tap_target, untap_target, sacrifice, add_counters, discard_card, scry_n, destroy_target, damage_each_opponent, damage_each_creature, create_token, add_mana_to_pool, search_library_for_basic_land_tapped, put_plus_one_counter_on_self, surveil, counter_target_spell, return_creature_from_your_graveyard_to_battlefield, discard_self, each_opponent_loses_life, lose_life, target_opponent_loses_life, each_opponent_discards, destroy_all_creatures, destroy_target_nonland_permanent, destroy_target_artifact, destroy_target_land, deal_damage_any_target, pump_self_until_eot, pump_target_creature_until_eot, sequence"
+            "unknown effect kind {other:?}; valid: deal_damage, draw_cards, gain_life, return_to_hand, mill, mill_target_player, exile_target, tap_target, untap_target, sacrifice, add_counters, discard_card, scry_n, destroy_target, damage_each_opponent, damage_each_creature, create_token, add_mana_to_pool, search_library_for_basic_land_tapped, put_plus_one_counter_on_self, surveil, counter_target_spell, return_creature_from_your_graveyard_to_battlefield, discard_self, each_opponent_loses_life, lose_life, target_opponent_loses_life, each_opponent_discards, destroy_all_creatures, destroy_target_nonland_permanent, destroy_target_artifact, destroy_target_land, deal_damage_any_target, pump_self_until_eot, pump_target_creature_until_eot, sequence, pump_creatures_you_control_until_eot"
         ))),
     }
 }
@@ -1626,6 +1669,11 @@ fn effect_to_pydict<'py>(
         }
         Effect::PumpTargetCreatureUntilEOT { power_bonus, toughness_bonus } => {
             d.set_item("kind", "pump_target_creature_until_eot")?;
+            d.set_item("power_bonus", *power_bonus)?;
+            d.set_item("toughness_bonus", *toughness_bonus)?;
+        }
+        Effect::PumpCreaturesYouControlUntilEOT { power_bonus, toughness_bonus } => {
+            d.set_item("kind", "pump_creatures_you_control_until_eot")?;
             d.set_item("power_bonus", *power_bonus)?;
             d.set_item("toughness_bonus", *toughness_bonus)?;
         }
