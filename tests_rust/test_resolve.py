@@ -1932,6 +1932,137 @@ def test_clone_then_untap_does_not_affect_original(synthetic_state):
     assert synthetic_state.stack_size() == 1
 
 
+# --- UntapTargetOtherPermanent dispatch (round-28) ------------------
+#
+# **UntapTargetOtherPermanent scope** mirrors Python's
+# `UntapTargetOtherPermanent` (Nanoform-Sentinel-trigger family, 3+
+# EoE cards). Scans both players' battlefields in zone-iteration
+# order; picks the FIRST tapped permanent whose id != source_obj_id.
+
+
+def _untap_other_permanent_dict():
+    """A trigger-like effect dict: untap another permanent."""
+    return {
+        "name": "Test Nanoform Trigger",
+        "card_types": ["Creature"],
+        "mana_cost": {"U": 1, "generic": 1},
+        "power": 2,
+        "toughness": 2,
+        "effects": [{"kind": "untap_target_other_permanent"}],
+    }
+
+
+def test_resolve_untap_other_untaps_first_tapped_non_source(synthetic_state):
+    """A tapped permanent on p0's bf gets untapped by a source on p0's
+    bf. The untapped target is the first tapped non-source permanent."""
+    # Pre-tap p0's first creature (or first land) — pick something tapped.
+    snap = synthetic_state.battlefield_snapshot()
+    first_p0_bear = next(
+        d["id"] for d in snap
+        if d["controller_id"] == 0 and d["printing_name"] == "Grizzly Bears"
+    )
+    assert synthetic_state.tap_object(first_p0_bear) is True
+    assert synthetic_state.is_tapped(first_p0_bear) is True
+
+    src_id = synthetic_state.register_and_inject_object(
+        _untap_other_permanent_dict(), 0, ZONE_BATTLEFIELD
+    )
+    synthetic_state.push_to_stack(src_id, 0)
+    synthetic_state.resolve_top_of_stack()
+
+    assert synthetic_state.is_tapped(first_p0_bear) is False
+
+
+def test_resolve_untap_other_skips_source_itself(synthetic_state):
+    """If the source is tapped and there are NO other tapped permanents,
+    the dispatch fizzles silently (doesn't untap source itself)."""
+    state = synthetic_state.clone_once()
+    # Drain every other bf object to graveyard so nothing else is on bf
+    # except the source (after we inject it).
+    while True:
+        snap = state.battlefield_snapshot()
+        ids = [d["id"] for d in snap]
+        if not ids:
+            break
+        state.move_object(ids[0], 3, 0)
+
+    src_id = state.register_and_inject_object(
+        _untap_other_permanent_dict(), 0, ZONE_BATTLEFIELD
+    )
+    # Tap the source itself.
+    state.tap_object(src_id)
+    assert state.is_tapped(src_id) is True
+
+    state.push_to_stack(src_id, 0)
+    state.resolve_top_of_stack()
+
+    # Source still tapped — the arm filtered itself out.
+    assert state.is_tapped(src_id) is True
+
+
+def test_resolve_untap_other_no_tapped_permanent_fizzles(synthetic_state):
+    """All permanents already untapped → silent fizzle."""
+    # synthetic_state default has no creatures tapped on p0 bf.
+    src_id = synthetic_state.register_and_inject_object(
+        _untap_other_permanent_dict(), 0, ZONE_BATTLEFIELD
+    )
+    synthetic_state.push_to_stack(src_id, 0)
+    synthetic_state.resolve_top_of_stack()  # no raise
+
+    assert synthetic_state.is_stack_empty() is True
+
+
+def test_resolve_untap_other_can_untap_opponents_permanent(synthetic_state):
+    """The arm scans BOTH players' battlefields (not just the
+    controller's). A tapped p1 permanent is also eligible."""
+    snap = synthetic_state.battlefield_snapshot()
+    # First tap every p0 creature so the scan moves on to p1.
+    p0_bears = [
+        d["id"] for d in snap
+        if d["controller_id"] == 0 and d["printing_name"] == "Grizzly Bears"
+    ]
+    # Drain p0 creatures to graveyard so they're not eligible.
+    for cid in p0_bears:
+        synthetic_state.move_object(cid, 3, 0)
+
+    # Tap a p1 creature.
+    p1_bear = next(
+        d["id"] for d in snap
+        if d["controller_id"] == 1 and d["printing_name"] == "Grizzly Bears"
+    )
+    assert synthetic_state.tap_object(p1_bear) is True
+
+    src_id = synthetic_state.register_and_inject_object(
+        _untap_other_permanent_dict(), 0, ZONE_BATTLEFIELD
+    )
+    synthetic_state.push_to_stack(src_id, 0)
+    synthetic_state.resolve_top_of_stack()
+
+    # The p1 permanent got untapped.
+    assert synthetic_state.is_tapped(p1_bear) is False
+
+
+def test_resolve_untap_other_clone_isolation(synthetic_state):
+    """CoW canary: cloning before resolve isolates the untap effect to
+    the clone."""
+    snap = synthetic_state.battlefield_snapshot()
+    target_id = next(
+        d["id"] for d in snap
+        if d["controller_id"] == 0 and d["printing_name"] == "Grizzly Bears"
+    )
+    synthetic_state.tap_object(target_id)
+    src_id = synthetic_state.register_and_inject_object(
+        _untap_other_permanent_dict(), 0, ZONE_BATTLEFIELD
+    )
+    synthetic_state.push_to_stack(src_id, 0)
+
+    cloned = synthetic_state.clone_once()
+    cloned.resolve_top_of_stack()
+
+    assert cloned.is_tapped(target_id) is False
+    assert synthetic_state.is_tapped(target_id) is True
+
+
 # --- round-14 Sacrifice dispatch ------------------------------------
 #
 # Round-14 foundation (`feature/rust-tdd-base-r14`) added a new
