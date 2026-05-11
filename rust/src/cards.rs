@@ -830,6 +830,52 @@ pub enum Effect {
     /// raise. amount<0 raises at parse + apply. amount=0 is a legal
     /// no-op (no color minted).
     AddNManaOfChosenColor { amount: i32, options: Vec<String> },
+    /// **Round 28 coverage extension.** Search the source-controller's
+    /// library for a card matching `filter_name`, reveal it, put it
+    /// into that player's hand. Mirrors Python's
+    /// `SearchLibraryForCard(filter_name, max_mv=0, may_fail=True)`
+    /// (`search.py:30` — 9 EoE cards).
+    ///
+    /// **First-slice filter vocabulary.** Rust supports a subset of
+    /// Python's filters constrained by available registry fields
+    /// (Rust has no `supertypes` / `subtypes` registry today):
+    ///   - `"basic_land"` → `card_types` contains `"Land"`
+    ///     (approximation; Rust can't distinguish basic vs non-basic
+    ///     without supertypes).
+    ///   - `"basic_plains"` / `"basic_island"` / `"basic_swamp"` /
+    ///     `"basic_mountain"` / `"basic_forest"` → `printing.name`
+    ///     equals the canonical basic name.
+    ///   - `"creature_small"` (with `max_mv`) → `card_types` contains
+    ///     `"Creature"` AND `mana_cost.total() <= max_mv`. `max_mv=0`
+    ///     means "creatures with cost <= 0" (rarely matches; specify
+    ///     a real `max_mv` value).
+    ///   - `"artifact"` → `card_types` contains `"Artifact"`.
+    ///   - unknown filter → silent fizzle (matches Python's
+    ///     `_matches` returning False for unknown).
+    ///
+    /// **Deferred filters**: `legendary_creature`, `sliver`, `demon`,
+    /// `spacecraft` — these require supertypes / subtypes which
+    /// aren't on the Rust registry yet. Silent fizzle for now.
+    ///
+    /// **Deterministic first-match pick (top-to-bottom).** Library
+    /// Vec is bottom-first (lib[len-1] = top); scan via `iter().rev()`.
+    /// Real MTG lets the player choose any matching card; deferred
+    /// until decision callbacks exist.
+    ///
+    /// **No shuffle.** Same deferral as
+    /// `SearchLibraryForBasicLandTapped` — CR 701.19 mandates shuffle
+    /// but the Rust port hasn't externalized RNG yet (G19).
+    ///
+    /// **`may_fail` flag.** Python's flag controls whether the
+    /// controller may choose to skip the fetch. The Rust first-slice
+    /// always fetches if a match exists (deterministic choice); the
+    /// flag is preserved on the variant for parity round-trip but
+    /// not consulted at apply time.
+    SearchLibraryForCard {
+        filter_name: String,
+        max_mv: i32,
+        may_fail: bool,
+    },
 }
 
 #[derive(Clone, Debug)]
@@ -1386,6 +1432,43 @@ fn parse_effect(dict: &Bound<'_, PyDict>) -> PyResult<Effect> {
             }
             Ok(Effect::PutPlusOneCounterOnEachCreatureYouControl { amount })
         }
+        "search_library_for_card" => {
+            // Python's SearchLibraryForCard(filter_name, max_mv=0,
+            // may_fail=True).
+            let filter_name: String = match dict.get_item("filter_name")? {
+                Some(s) => s.extract().map_err(|e| {
+                    PyValueError::new_err(format!(
+                        "search_library_for_card.filter_name must be a string (got: {e})"
+                    ))
+                })?,
+                None => {
+                    return Err(PyValueError::new_err(
+                        "search_library_for_card: missing required 'filter_name' field",
+                    ));
+                }
+            };
+            let max_mv: i32 = match dict.get_item("max_mv")? {
+                Some(m) => m.extract().map_err(|e| {
+                    PyValueError::new_err(format!(
+                        "search_library_for_card.max_mv must be an integer (got: {e})"
+                    ))
+                })?,
+                None => 0,
+            };
+            let may_fail: bool = match dict.get_item("may_fail")? {
+                Some(m) => m.extract().map_err(|e| {
+                    PyValueError::new_err(format!(
+                        "search_library_for_card.may_fail must be a bool (got: {e})"
+                    ))
+                })?,
+                None => true,
+            };
+            Ok(Effect::SearchLibraryForCard {
+                filter_name,
+                max_mv,
+                may_fail,
+            })
+        }
         "add_n_mana_of_chosen_color" => {
             // Python's AddNManaOfChosenColor(amount: int,
             // options: tuple[str, ...] = ("W","U","B","R","G")).
@@ -1509,7 +1592,7 @@ fn parse_effect(dict: &Bound<'_, PyDict>) -> PyResult<Effect> {
             Ok(Effect::Sequence { effects: children })
         }
         other => Err(PyValueError::new_err(format!(
-            "unknown effect kind {other:?}; valid: deal_damage, draw_cards, gain_life, return_to_hand, mill, mill_target_player, exile_target, tap_target, untap_target, sacrifice, add_counters, discard_card, scry_n, destroy_target, damage_each_opponent, damage_each_creature, create_token, add_mana_to_pool, search_library_for_basic_land_tapped, put_plus_one_counter_on_self, surveil, counter_target_spell, return_creature_from_your_graveyard_to_battlefield, discard_self, each_opponent_loses_life, lose_life, target_opponent_loses_life, each_opponent_discards, destroy_all_creatures, destroy_target_nonland_permanent, destroy_target_artifact, destroy_target_land, deal_damage_any_target, pump_self_until_eot, pump_target_creature_until_eot, sequence, pump_creatures_you_control_until_eot, return_creature_from_your_graveyard_to_hand, put_plus_one_counter_on_each_creature_you_control, put_plus_one_counter_on_creature_you_control, add_n_mana_of_chosen_color"
+            "unknown effect kind {other:?}; valid: deal_damage, draw_cards, gain_life, return_to_hand, mill, mill_target_player, exile_target, tap_target, untap_target, sacrifice, add_counters, discard_card, scry_n, destroy_target, damage_each_opponent, damage_each_creature, create_token, add_mana_to_pool, search_library_for_basic_land_tapped, put_plus_one_counter_on_self, surveil, counter_target_spell, return_creature_from_your_graveyard_to_battlefield, discard_self, each_opponent_loses_life, lose_life, target_opponent_loses_life, each_opponent_discards, destroy_all_creatures, destroy_target_nonland_permanent, destroy_target_artifact, destroy_target_land, deal_damage_any_target, pump_self_until_eot, pump_target_creature_until_eot, sequence, pump_creatures_you_control_until_eot, return_creature_from_your_graveyard_to_hand, put_plus_one_counter_on_each_creature_you_control, put_plus_one_counter_on_creature_you_control, add_n_mana_of_chosen_color, search_library_for_card"
         ))),
     }
 }
@@ -1852,6 +1935,16 @@ fn effect_to_pydict<'py>(
             d.set_item("kind", "add_n_mana_of_chosen_color")?;
             d.set_item("amount", *amount)?;
             d.set_item("options", options.clone())?;
+        }
+        Effect::SearchLibraryForCard {
+            filter_name,
+            max_mv,
+            may_fail,
+        } => {
+            d.set_item("kind", "search_library_for_card")?;
+            d.set_item("filter_name", filter_name.clone())?;
+            d.set_item("max_mv", *max_mv)?;
+            d.set_item("may_fail", *may_fail)?;
         }
         Effect::Sequence { effects } => {
             d.set_item("kind", "sequence")?;

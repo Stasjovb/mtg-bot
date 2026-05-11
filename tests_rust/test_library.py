@@ -1169,3 +1169,179 @@ def test_find_object_zone_post_mill_reports_graveyard(synthetic_state):
     assert milled == 1
 
     assert synthetic_state.find_object_zone(top_id) == ZONE_GRAVEYARD
+
+
+# -------------------- Round-28 SearchLibraryForCard (9 cards) --------------------
+
+
+ZONE_BATTLEFIELD_LOCAL = 2
+ZONE_LIBRARY = 1
+
+
+def _tutor_dict(filter_name: str = "artifact", max_mv: int = 0, may_fail: bool = True):
+    """Spineseeker-Centipede-shape generalized tutor: search library
+    for a card matching filter_name, reveal, put in hand."""
+    return {
+        "name": "Synthetic Tutor",
+        "card_types": ["Sorcery"],
+        "mana_cost": {"generic": 2},
+        "effects": [
+            {
+                "kind": "search_library_for_card",
+                "filter_name": filter_name,
+                "max_mv": max_mv,
+                "may_fail": may_fail,
+            }
+        ],
+    }
+
+
+def _vanilla_artifact_dict(name="Test Artifact"):
+    return {
+        "name": name,
+        "card_types": ["Artifact"],
+        "mana_cost": {"generic": 1},
+    }
+
+
+def _vanilla_creature_dict_local(name="Test Creature", mv=2):
+    return {
+        "name": name,
+        "card_types": ["Creature"],
+        "mana_cost": {"generic": mv},
+        "power": 2,
+        "toughness": 2,
+    }
+
+
+def test_register_search_library_for_card_required_filter_name(engine):
+    """Missing filter_name raises at parse."""
+    import pytest
+    reg = engine.Registry()
+    with pytest.raises(ValueError, match="missing required 'filter_name'"):
+        reg.register_printing(
+            {
+                "name": "Bad Tutor",
+                "card_types": ["Sorcery"],
+                "effects": [{"kind": "search_library_for_card"}],
+            }
+        )
+
+
+def test_register_search_library_for_card_defaults(engine):
+    """max_mv defaults to 0, may_fail defaults to True."""
+    reg = engine.Registry()
+    pid = reg.register_printing(
+        {
+            "name": "Default Tutor",
+            "card_types": ["Sorcery"],
+            "effects": [
+                {"kind": "search_library_for_card", "filter_name": "artifact"}
+            ],
+        }
+    )
+    eff = reg.get_printing_effects(pid)[0]
+    assert eff["kind"] == "search_library_for_card"
+    assert eff["filter_name"] == "artifact"
+    assert eff["max_mv"] == 0
+    assert eff["may_fail"] is True
+
+
+def test_resolve_search_library_for_artifact_moves_first_match_to_hand(synthetic_state):
+    """Inject an artifact into p0's library, cast tutor — artifact
+    moves to p0's hand."""
+    artifact_id = synthetic_state.register_and_inject_object(
+        _vanilla_artifact_dict(), 0, ZONE_LIBRARY
+    )
+    tutor_id = synthetic_state.register_and_inject_object(
+        _tutor_dict(filter_name="artifact"), 0, ZONE_HAND
+    )
+    synthetic_state.push_to_stack(tutor_id, 0)
+    synthetic_state.resolve_top_of_stack()
+
+    assert synthetic_state.find_object_zone(artifact_id) == ZONE_HAND
+
+
+def test_resolve_search_library_for_basic_plains_picks_named_basic(synthetic_state):
+    """basic_plains filter matches printing.name == 'Plains'."""
+    plains_id = synthetic_state.register_and_inject_object(
+        {
+            "name": "Plains",
+            "card_types": ["Land"],
+            "mana_produced": ["W"],
+        },
+        0,
+        ZONE_LIBRARY,
+    )
+    tutor_id = synthetic_state.register_and_inject_object(
+        _tutor_dict(filter_name="basic_plains"), 0, ZONE_HAND
+    )
+    synthetic_state.push_to_stack(tutor_id, 0)
+    synthetic_state.resolve_top_of_stack()
+    assert synthetic_state.find_object_zone(plains_id) == ZONE_HAND
+
+
+def test_resolve_search_library_for_creature_small_obeys_max_mv(synthetic_state):
+    """creature_small filter picks first creature with mana_value <= max_mv."""
+    # Inject a 4-mana creature (too big) then a 1-mana creature (small).
+    # Library Vec: top is last; inject big first so small ends up on top.
+    big_id = synthetic_state.register_and_inject_object(
+        _vanilla_creature_dict_local(name="Big Beast", mv=4), 0, ZONE_LIBRARY
+    )
+    small_id = synthetic_state.register_and_inject_object(
+        _vanilla_creature_dict_local(name="Small Beast", mv=1), 0, ZONE_LIBRARY
+    )
+    tutor_id = synthetic_state.register_and_inject_object(
+        _tutor_dict(filter_name="creature_small", max_mv=2), 0, ZONE_HAND
+    )
+    synthetic_state.push_to_stack(tutor_id, 0)
+    synthetic_state.resolve_top_of_stack()
+
+    # Small went to hand; big stayed in library.
+    assert synthetic_state.find_object_zone(small_id) == ZONE_HAND
+    assert synthetic_state.find_object_zone(big_id) == ZONE_LIBRARY
+
+
+def test_resolve_search_library_for_card_unknown_filter_fizzles(synthetic_state):
+    """Unknown filter_name → silent fizzle, no library mutation."""
+    artifact_id = synthetic_state.register_and_inject_object(
+        _vanilla_artifact_dict(), 0, ZONE_LIBRARY
+    )
+    tutor_id = synthetic_state.register_and_inject_object(
+        _tutor_dict(filter_name="bogus_filter"), 0, ZONE_HAND
+    )
+    synthetic_state.push_to_stack(tutor_id, 0)
+    synthetic_state.resolve_top_of_stack()
+    # Artifact stays in library.
+    assert synthetic_state.find_object_zone(artifact_id) == ZONE_LIBRARY
+
+
+def test_resolve_search_library_for_card_no_match_fizzles(synthetic_state):
+    """No match in library → silent fizzle."""
+    tutor_id = synthetic_state.register_and_inject_object(
+        _tutor_dict(filter_name="artifact"), 0, ZONE_HAND
+    )
+    # Synthetic state's default library has only Forests; no Artifact.
+    p0_hand_before = synthetic_state.hand_sizes[0]
+    synthetic_state.push_to_stack(tutor_id, 0)
+    synthetic_state.resolve_top_of_stack()
+    # No card moved to hand from the search (source itself goes to gy
+    # via post-resolve since it's a Sorcery, so hand_size delta = -1
+    # from the source removal, not the search).
+    assert synthetic_state.hand_sizes[0] == p0_hand_before - 1
+
+
+def test_resolve_search_library_for_card_clone_isolation(synthetic_state):
+    artifact_id = synthetic_state.register_and_inject_object(
+        _vanilla_artifact_dict(), 0, ZONE_LIBRARY
+    )
+    tutor_id = synthetic_state.register_and_inject_object(
+        _tutor_dict(filter_name="artifact"), 0, ZONE_HAND
+    )
+    synthetic_state.push_to_stack(tutor_id, 0)
+    cloned = synthetic_state.clone_once()
+    cloned.resolve_top_of_stack()
+
+    # Clone: artifact in hand. Source: artifact still in library.
+    assert cloned.find_object_zone(artifact_id) == ZONE_HAND
+    assert synthetic_state.find_object_zone(artifact_id) == ZONE_LIBRARY
