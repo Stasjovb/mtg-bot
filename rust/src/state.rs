@@ -40,6 +40,22 @@ pub struct GameObject {
     pub summoning_sick: bool,
     pub damage: i16,
     pub counters: i32,
+    /// Round-28 attach foundation — when this object is an Aura /
+    /// Equipment that is currently attached to another permanent,
+    /// `attached_to` holds the target permanent's GameObject `id`.
+    /// `None` for unattached objects (every freshly-allocated object;
+    /// every Aura/Equipment that hasn't resolved yet). Mirrors
+    /// Python's `GameObject.attached_to: int | None` slot used by
+    /// `AttachToTargetCreatureYouControl` (`effects/generic/attach.py`).
+    ///
+    /// Cleared (reset to `None`) on every zone change (CR 400.7
+    /// per-object state reset) — the attach relationship is a
+    /// battlefield-only concept and shouldn't survive an Equipment /
+    /// Aura leaving the battlefield. New objects default `None`,
+    /// so the fingerprint serializer's previously-hardcoded `Null`
+    /// emit remains byte-identical for every state where no
+    /// `Effect::AttachToTargetCreatureYouControl` has resolved.
+    pub attached_to: Option<u32>,
     /// Round-27 UEOT framework — per-object expiring-modifier stack.
     /// Each entry is a CR-613-layer continuous modifier with implicit
     /// `expires_at = "cleanup"`. Cleared in bulk on entry to
@@ -442,6 +458,7 @@ fn make_object(id: u32, controller: u8, printing_id: u32) -> GameObject {
         summoning_sick: false,
         damage: 0,
         counters: 0,
+        attached_to: None,
         ueot_modifiers: Vec::new(),
     }
 }

@@ -49,6 +49,10 @@ EXPECTED_KEYS = {
     "counters",
     "controller_id",
     "zone",
+    # Round-28 attach foundation: snapshot dicts include
+    # ``attached_to`` (None for the universal default; the target id
+    # once an Aura/Equipment has been attached).
+    "attached_to",
 }
 
 _FOREST = {

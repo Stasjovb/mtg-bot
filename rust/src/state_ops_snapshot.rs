@@ -85,6 +85,13 @@ fn object_to_pydict<'py>(
     d.set_item("counters", obj.counters)?;
     d.set_item("controller_id", obj.controller)?;
     d.set_item("zone", obj.zone)?;
+    // Round-28 attach foundation: mirrors Python's
+    // GameObject.attached_to slot. Emitted as Python None when
+    // unattached (the default), or as the target id when attached.
+    match obj.attached_to {
+        Some(id) => d.set_item("attached_to", id)?,
+        None => d.set_item("attached_to", py.None())?,
+    }
     Ok(d)
 }
 

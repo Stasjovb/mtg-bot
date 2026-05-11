@@ -83,7 +83,9 @@
 //!   we look the same up through the registry. For object id alone
 //!   (no printing), Python emits `None`; we match.
 //! * Python's `attached_to` defaults to `None` (`getattr(..., None)`);
-//!   Rust has no `attached_to` field yet — we emit `null`.
+//!   Rust matches: `obj.attached_to` is `Option<u32>`, emitted as
+//!   `null` when None / the u32 id when Some. Default-None preserves
+//!   byte-equality with every pre-r28 pinned baseline.
 //!
 //! Round-22 doesn't ship a Python-side shim; the cross-engine parity
 //! test in `tests_rust/test_fingerprint.py` asserts equality against
@@ -132,13 +134,22 @@ fn object_signature(state: &GameState, obj: &GameObject) -> Value {
         None => Value::Null,
     };
     // Tapped + summoning_sick get `int(...)` cast on the Python side.
+    // Round-28 attach foundation: emit obj.attached_to as either Null
+    // (None — the universal default for every freshly-allocated /
+    // never-attached object) or the target id (Some(id)). The slot
+    // previously hardcoded Null; default-None preserves byte-equality
+    // with every pre-r28 pinned fingerprint baseline.
+    let attached_to: Value = match obj.attached_to {
+        Some(id) => Value::from(id),
+        None => Value::Null,
+    };
     Value::Array(vec![
         name,
         json!(obj.tapped as i32),
         json!(obj.summoning_sick as i32),
         json!(obj.damage),
         json!(obj.counters),
-        Value::Null, // attached_to — no Rust field yet
+        attached_to,
         json!(obj.controller),
         json!(obj.id),
     ])
