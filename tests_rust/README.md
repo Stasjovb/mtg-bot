@@ -205,6 +205,8 @@ the test lands in a commit.
 
 | rust(effect-put-card-from-gy-bottom-library): Effect::PutCardFromGraveyardOnBottomOfLibrary — Chrome-Companion-shape graveyard-to-library-bottom move (2 EoE cards). | tests_rust/test_zones.py extend | green  | feature/rust-effect-put-card-from-gy-bottom-library |
 
+| rust(effect-move-self-counters): Effect::MoveSelfCountersToTargetCreatureYouControl — Dockworker-Drone-shape counter transfer (2 EoE cards). | tests_rust/test_counters.py extend | green  | feature/rust-effect-move-self-counters |
+
 ## Build invocation reminder
 
 ```

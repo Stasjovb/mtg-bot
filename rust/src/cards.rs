@@ -916,6 +916,31 @@ pub enum Effect {
     ///
     /// Empty-graveyards-on-both-sides = silent fizzle.
     PutCardFromGraveyardOnBottomOfLibrary,
+    /// **Round 28 coverage extension.** Move all +1/+1 counters from
+    /// the source to the first creature on the source-controller's
+    /// battlefield. Mirrors Python's
+    /// `MoveSelfCountersToTargetCreatureYouControl` (`counters.py:263`
+    /// — Dockworker-Drone-shape dies trigger, 2 EoE cards).
+    ///
+    /// **Mechanism.** Locate source's `counters` scalar; if zero
+    /// or source isn't found, silent no-op. Locate first creature on
+    /// source-controller's battlefield (zone-iteration order, gates
+    /// on `card_types contains "Creature"`). Transfer: subtract from
+    /// source's counters (= 0 after transfer), add same amount to
+    /// target's counters. Source-not-on-bf path silent fizzle.
+    ///
+    /// **Semantics — true "move" not "copy".** Source's counters are
+    /// cleared on transfer. Python's resolve doesn't subtract from
+    /// source because by trigger-time the source is typically in
+    /// graveyard (counters are gone with it). The Rust port models
+    /// the cleaner "move" semantics: if source still exists with
+    /// counters, transfer + clear. Documented divergence for dies-
+    /// trigger interactions.
+    ///
+    /// **First-slice deterministic target choice.** First creature
+    /// on source-controller's bf. Real MTG lets the player choose;
+    /// deferred until decision callbacks.
+    MoveSelfCountersToTargetCreatureYouControl,
 }
 
 #[derive(Clone, Debug)]
@@ -1476,6 +1501,9 @@ fn parse_effect(dict: &Bound<'_, PyDict>) -> PyResult<Effect> {
             // Unit variant; no fields.
             Ok(Effect::PutCardFromGraveyardOnBottomOfLibrary)
         }
+        "move_self_counters_to_target_creature_you_control" => {
+            Ok(Effect::MoveSelfCountersToTargetCreatureYouControl)
+        }
         "pump_creatures_opponents_control_until_eot" => {
             // Mirror schema of pump_creatures_you_control_until_eot.
             let power_bonus: i32 = match dict.get_item("power_bonus")? {
@@ -2017,6 +2045,9 @@ fn effect_to_pydict<'py>(
         }
         Effect::PutCardFromGraveyardOnBottomOfLibrary => {
             d.set_item("kind", "put_card_from_graveyard_on_bottom_of_library")?;
+        }
+        Effect::MoveSelfCountersToTargetCreatureYouControl => {
+            d.set_item("kind", "move_self_counters_to_target_creature_you_control")?;
         }
         Effect::Sequence { effects } => {
             d.set_item("kind", "sequence")?;

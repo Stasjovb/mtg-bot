@@ -1158,3 +1158,96 @@ def test_plus1_on_creature_you_control_clone_isolation(synthetic_state):
     src_first = next(d for d in src_snap if d["id"] == first_bear_id)
     assert clone_first["counters"] == 2
     assert src_first["counters"] == 0
+
+
+# -------------------- Round-28 MoveSelfCountersToTargetCreatureYouControl --------------------
+
+
+def _dockworker_dies_dict():
+    """Dockworker-Drone-shape dies trigger: move source's counters to
+    target creature you control."""
+    return {
+        "name": "Dockworker Drone (synthetic)",
+        "card_types": ["Creature"],
+        "mana_cost": {"generic": 2},
+        "power": 1,
+        "toughness": 1,
+        "effects": [
+            {"kind": "move_self_counters_to_target_creature_you_control"}
+        ],
+    }
+
+
+def test_register_move_self_counters_to_target(engine):
+    reg = engine.Registry()
+    pid = reg.register_printing(_dockworker_dies_dict())
+    eff = reg.get_printing_effects(pid)[0]
+    assert eff["kind"] == "move_self_counters_to_target_creature_you_control"
+
+
+def test_resolve_move_self_counters_zero_is_noop(synthetic_state):
+    """Source with 0 counters → no-op."""
+    snap = synthetic_state.battlefield_snapshot()
+    bear_ids = [
+        d["id"] for d in snap
+        if d["controller_id"] == 0 and d["printing_name"] == "Grizzly Bears"
+    ]
+    # Inject the dockworker on p0's bf with 0 counters; resolve.
+    src_id = synthetic_state.register_and_inject_object(
+        _dockworker_dies_dict(), 0, ZONE_BATTLEFIELD
+    )
+    synthetic_state.push_to_stack(src_id, 0)
+    synthetic_state.resolve_top_of_stack()
+    for cid in bear_ids:
+        # Bears stay at 0 counters.
+        assert next(
+            d for d in synthetic_state.battlefield_snapshot() if d["id"] == cid
+        )["counters"] == 0
+
+
+def test_resolve_move_self_counters_transfers_count(synthetic_state):
+    """Source with N counters → first creature on controller's bf
+    gains N counters; source's counters cleared."""
+    # Inject the dockworker on p0's bf, then add counters to it.
+    src_id = synthetic_state.register_and_inject_object(
+        _dockworker_dies_dict(), 0, ZONE_BATTLEFIELD
+    )
+    synthetic_state.add_counters(src_id, 3)
+    # Pick the first creature on p0's bf — should be the first Bears.
+    snap = synthetic_state.battlefield_snapshot()
+    first_bear_id = next(
+        d["id"] for d in snap
+        if d["controller_id"] == 0 and d["printing_name"] == "Grizzly Bears"
+    )
+
+    synthetic_state.push_to_stack(src_id, 0)
+    synthetic_state.resolve_top_of_stack()
+
+    # Source's counters cleared.
+    src_snap = next(
+        d for d in synthetic_state.battlefield_snapshot() if d["id"] == src_id
+    )
+    assert src_snap["counters"] == 0
+    # Target's counters gained 3.
+    target_snap = next(
+        d for d in synthetic_state.battlefield_snapshot() if d["id"] == first_bear_id
+    )
+    assert target_snap["counters"] == 3
+
+
+def test_resolve_move_self_counters_clone_isolation(synthetic_state):
+    src_id = synthetic_state.register_and_inject_object(
+        _dockworker_dies_dict(), 0, ZONE_BATTLEFIELD
+    )
+    synthetic_state.add_counters(src_id, 2)
+    synthetic_state.push_to_stack(src_id, 0)
+    cloned = synthetic_state.clone_once()
+    cloned.resolve_top_of_stack()
+
+    # Clone has the transfer applied; source-state unchanged.
+    clone_src = next(d for d in cloned.battlefield_snapshot() if d["id"] == src_id)
+    assert clone_src["counters"] == 0
+    orig_src = next(
+        d for d in synthetic_state.battlefield_snapshot() if d["id"] == src_id
+    )
+    assert orig_src["counters"] == 2
