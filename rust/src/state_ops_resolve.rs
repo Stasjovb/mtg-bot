@@ -3410,6 +3410,42 @@ fn apply_effect(
                 }
             }
         }
+        // Round-28 charge-counters-on-self (Blast-Zone-shape).
+        // Single-counter-slot Rust: charge counters route to the same
+        // scalar as +1/+1 (G8 multi-kind counter map is future work).
+        // amount_from_x=true defers to a future X-value tracking
+        // slice and currently resolves to 0 (silent no-op).
+        Effect::PutChargeCountersOnSelf { amount, amount_from_x } => {
+            if *amount < 0 {
+                return Err(PyValueError::new_err(format!(
+                    "PutChargeCountersOnSelf amount must be non-negative, got {amount}"
+                )));
+            }
+            let effective_amount = if *amount_from_x { 0 } else { *amount };
+            if effective_amount == 0 {
+                return Ok(());
+            }
+            // Locate source on a battlefield (Python's PutPlus also
+            // restricts to battlefield, same shape).
+            let mut found_player: Option<usize> = None;
+            for (pidx, player) in state.players.iter().enumerate() {
+                if player.battlefield.iter().any(|o| o.id == source_obj_id) {
+                    found_player = Some(pidx);
+                    break;
+                }
+            }
+            let Some(pidx) = found_player else {
+                return Ok(()); // source not on battlefield → silent no-op
+            };
+            let bf_mut: &mut Vec<GameObject> =
+                Arc::make_mut(&mut state.players[pidx].battlefield);
+            for obj in bf_mut.iter_mut() {
+                if obj.id == source_obj_id {
+                    obj.counters = obj.counters.saturating_add(effective_amount);
+                    break;
+                }
+            }
+        }
     }
     Ok(())
 }

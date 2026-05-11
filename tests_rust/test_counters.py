@@ -1354,3 +1354,91 @@ def test_resolve_plus1_up_to_n_overflows_into_opponent(synthetic_state):
         assert by_id[cid]["counters"] == 1
     for cid in p1_creatures:
         assert by_id[cid]["counters"] == 1
+
+
+# -------------------- Round-28 PutChargeCountersOnSelf (2 cards) --------------------
+
+
+def _blast_zone_dict(amount: int = 1, amount_from_x: bool = False):
+    return {
+        "name": "Blast Zone (synthetic)",
+        "card_types": ["Land"],
+        "effects": [
+            {
+                "kind": "put_charge_counters_on_self",
+                "amount": amount,
+                "amount_from_x": amount_from_x,
+            }
+        ],
+    }
+
+
+def test_register_put_charge_counters_default(empty_registry):
+    pid = empty_registry.register_printing(
+        {
+            "name": "default-charge",
+            "card_types": ["Land"],
+            "effects": [{"kind": "put_charge_counters_on_self"}],
+        }
+    )
+    eff = empty_registry.get_printing_effects(pid)[0]
+    assert eff["amount"] == 1
+    assert eff["amount_from_x"] is False
+
+
+def test_register_put_charge_counters_negative_raises(empty_registry):
+    import pytest
+    with pytest.raises(ValueError, match="non-negative"):
+        empty_registry.register_printing(_blast_zone_dict(amount=-3))
+
+
+def test_resolve_put_charge_counters_adds_to_source(synthetic_state):
+    """Inject a Blast-Zone-shape source on bf, activate; source's
+    counters scalar grows by amount."""
+    src_id = synthetic_state.register_and_inject_object(
+        _blast_zone_dict(amount=3), 0, ZONE_BATTLEFIELD
+    )
+    synthetic_state.push_to_stack(src_id, 0)
+    synthetic_state.resolve_top_of_stack()
+    src_snap = next(
+        d for d in synthetic_state.battlefield_snapshot() if d["id"] == src_id
+    )
+    assert src_snap["counters"] == 3
+
+
+def test_resolve_put_charge_counters_amount_from_x_is_noop(synthetic_state):
+    """amount_from_x=True defers to future X-value tracking; for now
+    resolves to 0 (silent no-op)."""
+    src_id = synthetic_state.register_and_inject_object(
+        _blast_zone_dict(amount=3, amount_from_x=True), 0, ZONE_BATTLEFIELD
+    )
+    synthetic_state.push_to_stack(src_id, 0)
+    synthetic_state.resolve_top_of_stack()
+    src_snap = next(
+        d for d in synthetic_state.battlefield_snapshot() if d["id"] == src_id
+    )
+    assert src_snap["counters"] == 0
+
+
+def test_resolve_put_charge_counters_amount_zero_noop(synthetic_state):
+    src_id = synthetic_state.register_and_inject_object(
+        _blast_zone_dict(amount=0), 0, ZONE_BATTLEFIELD
+    )
+    synthetic_state.push_to_stack(src_id, 0)
+    synthetic_state.resolve_top_of_stack()
+    src_snap = next(
+        d for d in synthetic_state.battlefield_snapshot() if d["id"] == src_id
+    )
+    assert src_snap["counters"] == 0
+
+
+def test_resolve_put_charge_counters_source_off_bf_fizzles(synthetic_state):
+    """Source not on battlefield → silent no-op."""
+    src_id = synthetic_state.register_and_inject_object(
+        _blast_zone_dict(amount=2), 0, ZONE_HAND
+    )
+    synthetic_state.push_to_stack(src_id, 0)
+    synthetic_state.resolve_top_of_stack()
+    # Source moved to graveyard via post-resolve dispatch; no counters
+    # were added because at apply time source was on stack/in-hand.
+    # Don't assert counters here — just confirm no crash.
