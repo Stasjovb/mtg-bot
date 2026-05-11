@@ -223,6 +223,8 @@ the test lands in a commit.
 
 | rust(effect-destroy-enchanted-permanent): Effect::DestroyEnchantedPermanent — Cryoshatter-shape; reads source's attached_to, destroys the host (4 EoE cards). | tests_rust/test_resolve.py extend | green  | feature/rust-effect-destroy-enchanted-permanent |
 
+| rust(effect-tap-enchanted-permanent): Effect::TapEnchantedPermanent — taps source's `attached_to` host; idempotent (2 EoE cards). | tests_rust/test_tap.py extend | green  | feature/rust-effect-tap-enchanted-permanent |
+
 ## Build invocation reminder
 
 ```

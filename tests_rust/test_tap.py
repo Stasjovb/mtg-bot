@@ -511,3 +511,76 @@ def test_resolve_tap_aoc_idempotent_on_already_tapped(synthetic_state):
         d for d in synthetic_state.battlefield_snapshot() if d["id"] == p1_first_bear_id
     )
     assert bear_after["tapped"] is True
+
+
+# -------------------- Round-28 TapEnchantedPermanent (2 cards) --------------------
+
+
+def _kismet_aura_dict():
+    """Kismet-shape aura: ETB taps what it's attached to."""
+    return {
+        "name": "Synthetic Aura of Taps",
+        "card_types": ["Enchantment"],
+        "mana_cost": {"U": 1, "generic": 1},
+        "effects": [
+            {"kind": "tap_enchanted_permanent"}
+        ],
+    }
+
+
+def test_register_tap_enchanted_permanent(engine):
+    reg = engine.Registry()
+    pid = reg.register_printing(_kismet_aura_dict())
+    eff = reg.get_printing_effects(pid)[0]
+    assert eff["kind"] == "tap_enchanted_permanent"
+
+
+def test_resolve_tap_enchanted_permanent_taps_host(synthetic_state):
+    """Aura attached to p1's first creature; resolve taps the
+    creature."""
+    snap = synthetic_state.battlefield_snapshot()
+    p1_first_bear_id = next(
+        d["id"] for d in snap
+        if d["controller_id"] == 1 and d["printing_name"] == "Grizzly Bears"
+    )
+    aura_id = synthetic_state.register_and_inject_object(
+        _kismet_aura_dict(), 0, ZONE_BATTLEFIELD
+    )
+    synthetic_state.attach(aura_id, p1_first_bear_id)
+
+    synthetic_state.push_to_stack(aura_id, 0)
+    synthetic_state.resolve_top_of_stack()
+
+    bear_after = next(
+        d for d in synthetic_state.battlefield_snapshot() if d["id"] == p1_first_bear_id
+    )
+    assert bear_after["tapped"] is True
+
+
+def test_resolve_tap_enchanted_permanent_no_attached_fizzles(synthetic_state):
+    aura_id = synthetic_state.register_and_inject_object(
+        _kismet_aura_dict(), 0, ZONE_BATTLEFIELD
+    )
+    # Don't attach; resolve shouldn't raise and nothing should be
+    # tapped.
+    synthetic_state.push_to_stack(aura_id, 0)
+    synthetic_state.resolve_top_of_stack()
+
+
+def test_resolve_tap_enchanted_permanent_idempotent_on_tapped(synthetic_state):
+    snap = synthetic_state.battlefield_snapshot()
+    p1_first_bear_id = next(
+        d["id"] for d in snap
+        if d["controller_id"] == 1 and d["printing_name"] == "Grizzly Bears"
+    )
+    synthetic_state.tap_object(p1_first_bear_id)
+    aura_id = synthetic_state.register_and_inject_object(
+        _kismet_aura_dict(), 0, ZONE_BATTLEFIELD
+    )
+    synthetic_state.attach(aura_id, p1_first_bear_id)
+    synthetic_state.push_to_stack(aura_id, 0)
+    synthetic_state.resolve_top_of_stack()
+    bear_after = next(
+        d for d in synthetic_state.battlefield_snapshot() if d["id"] == p1_first_bear_id
+    )
+    assert bear_after["tapped"] is True

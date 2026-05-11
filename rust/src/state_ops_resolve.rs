@@ -3786,6 +3786,40 @@ fn apply_effect(
             obj.attached_to = None;
             Arc::make_mut(&mut state.players[tidx].graveyard).push(obj);
         }
+        // Round-28 enchanted-permanent tap. Same `attached_to` lookup
+        // as DestroyEnchantedPermanent but mutates the target's
+        // `tapped` flag instead of moving zones. Idempotent on
+        // already-tapped.
+        Effect::TapEnchantedPermanent => {
+            let mut target_id_opt: Option<u32> = None;
+            for player in &state.players {
+                if let Some(src) = player.battlefield.iter().find(|o| o.id == source_obj_id) {
+                    target_id_opt = src.attached_to;
+                    break;
+                }
+            }
+            let Some(target_id) = target_id_opt else {
+                return Ok(());
+            };
+            let mut target_loc: Option<usize> = None;
+            for (pidx, player) in state.players.iter().enumerate() {
+                if player.battlefield.iter().any(|o| o.id == target_id) {
+                    target_loc = Some(pidx);
+                    break;
+                }
+            }
+            let Some(tidx) = target_loc else {
+                return Ok(());
+            };
+            let bf_mut: &mut Vec<GameObject> =
+                Arc::make_mut(&mut state.players[tidx].battlefield);
+            for obj in bf_mut.iter_mut() {
+                if obj.id == target_id {
+                    obj.tapped = true;
+                    break;
+                }
+            }
+        }
     }
     Ok(())
 }
