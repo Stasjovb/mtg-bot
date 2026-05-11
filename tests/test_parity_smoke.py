@@ -642,3 +642,173 @@ def test_multi_seed_mode_seed_start_offset(parity_smoke, capsys):
     # Each seed value appears in a row of the table.
     for seed in (100, 101, 102):
         assert f"{seed:>4} |" in out
+
+
+# ---------------------------------------------------------------------------
+# --mode field-diff — per-field OK/DIFFER diff between two parallel views
+# of a Rust synthetic state. The parity-debug primitive that answers
+# "WHICH field diverged" once a trajectory smoke says digests don't match.
+# ---------------------------------------------------------------------------
+
+
+def test_field_diff_mode_vanilla_state_all_ok(parity_smoke, capsys):
+    """Baseline: no injection, vanilla state — every field matches, the
+    runner returns 0, and the output reports ``PARITY: PASS`` with a
+    field count equal to ``FIELD_DIFF_FIELDS``."""
+    rc = parity_smoke.run_field_diff_mode(seed=42)
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert "PARITY: PASS" in out
+    # Every field is reported with status OK on a vanilla state.
+    for field in parity_smoke.FIELD_DIFF_FIELDS:
+        assert field in out
+    # No DIFFER markers at all on the vanilla path.
+    assert "DIFFER" not in out
+
+
+def test_field_diff_mode_inject_life_reports_mismatch(parity_smoke, capsys):
+    """``--inject-divergence life`` flips life_p0 by -1; the diff table
+    must report a DIFFER on life_p0 and the runner returns 1."""
+    rc = parity_smoke.run_field_diff_mode(seed=42, inject_divergence="life")
+    assert rc == 1
+    out = capsys.readouterr().out
+    assert "PARITY: FAIL" in out
+    # The life_p0 row is the DIFFER one — its two values (20 / 19) must
+    # appear on the same line.
+    life_line = next(
+        line for line in out.splitlines() if line.startswith("life_p0")
+    )
+    assert "DIFFER" in life_line
+    # Vanilla synthetic state has both players at 20 life; the mutation
+    # subtracts 1 from the right-hand side.
+    assert "20" in life_line
+    assert "19" in life_line
+    # Exactly one field differs.
+    assert "1 of 22 fields differ" in out
+
+
+def test_field_diff_mode_inject_hand_reports_mismatch(parity_smoke, capsys):
+    """``--inject-divergence hand`` appends a sentinel object to the
+    hand_p0 zone signature on the right-hand side; the diff must
+    surface the mismatch on hand_p0."""
+    rc = parity_smoke.run_field_diff_mode(seed=42, inject_divergence="hand")
+    assert rc == 1
+    out = capsys.readouterr().out
+    assert "PARITY: FAIL" in out
+    hand_line = next(
+        line for line in out.splitlines() if line.startswith("hand_p0")
+    )
+    assert "DIFFER" in hand_line
+
+
+def test_field_diff_mode_inject_active_player_reports_mismatch(
+    parity_smoke, capsys
+):
+    """``--inject-divergence active_player`` toggles 0<->1 on the
+    right-hand side; the diff must surface the mismatch on the
+    active_player row."""
+    rc = parity_smoke.run_field_diff_mode(
+        seed=42, inject_divergence="active_player"
+    )
+    assert rc == 1
+    out = capsys.readouterr().out
+    assert "PARITY: FAIL" in out
+    ap_line = next(
+        line for line in out.splitlines() if line.startswith("active_player")
+    )
+    assert "DIFFER" in ap_line
+    # Vanilla synthetic state has active_player_idx=0; mutation flips it
+    # to 1.
+    assert " 0 " in ap_line or "| 0" in ap_line
+    assert " 1" in ap_line
+
+
+def test_field_diff_mode_table_covers_every_hash_part_field(
+    parity_smoke, capsys
+):
+    """The printed table must include every field name that ``_hash_parts``
+    folds into the fingerprint — the brief's load-bearing test that the
+    diff machinery doesn't silently skip a field that ends up driving
+    the hash mismatch.
+
+    The list mirrors the per-field contributions of ``_hash_rust_state``
+    (and through it, ``_hash_parts``): scalar state header (turn, step,
+    phase, active_player, priority_player, is_over, is_draw, winner_id),
+    per-player tuples (life, hand, library, graveyard, exile, mana_pool),
+    and the central zones (battlefield, stack).
+    """
+    parity_smoke.run_field_diff_mode(seed=42)
+    out = capsys.readouterr().out
+    # Every field name in the canonical list must appear in the output.
+    for field in parity_smoke.FIELD_DIFF_FIELDS:
+        assert field in out, f"field {field!r} missing from field-diff output"
+    # The header row of the table is also present.
+    assert "field             | status | left" in out
+    # And the brief-specified scalar fields each show up as their own
+    # row prefix.
+    for prefix in (
+        "turn", "step", "phase", "active_player", "priority_player",
+        "is_over", "is_draw", "winner_id", "life_p0", "life_p1",
+        "hand_p0", "hand_p1", "library_p0", "library_p1",
+        "graveyard_p0", "graveyard_p1", "exile_p0", "exile_p1",
+        "mana_pool_p0", "mana_pool_p1", "battlefield", "stack",
+    ):
+        # Each field is the leading token of its own row.
+        row_lines = [
+            line for line in out.splitlines()
+            if line.startswith(prefix) and "|" in line
+        ]
+        assert row_lines, f"no row starts with {prefix!r}"
+
+
+def test_field_diff_mode_main_dispatches(parity_smoke, monkeypatch, capsys):
+    """``main()`` routes ``--mode field-diff`` to the new runner.
+    End-to-end argparse + dispatch smoke."""
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["parity_smoke.py", "--mode", "field-diff", "--seed", "42"],
+    )
+    rc = parity_smoke.main()
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert "PARITY: PASS" in out
+    # Table header present.
+    assert "field             | status | left" in out
+
+
+def test_field_diff_mode_main_dispatches_with_inject(
+    parity_smoke, monkeypatch, capsys
+):
+    """``main() --mode field-diff --inject-divergence life`` returns 1
+    and reports a DIFFER on the life_p0 row. End-to-end inject path."""
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "parity_smoke.py",
+            "--mode",
+            "field-diff",
+            "--inject-divergence",
+            "life",
+        ],
+    )
+    rc = parity_smoke.main()
+    assert rc == 1
+    out = capsys.readouterr().out
+    assert "PARITY: FAIL" in out
+    assert "life_p0" in out
+    assert "DIFFER" in out
+
+
+def test_field_diff_mode_unknown_inject_field_errors(parity_smoke, capsys):
+    """An unknown ``--inject-divergence`` field name returns rc=2 and
+    prints an error citing the valid field list. Locks in the
+    error-path contract."""
+    rc = parity_smoke.run_field_diff_mode(
+        seed=42, inject_divergence="this_is_not_a_field"
+    )
+    assert rc == 2
+    out = capsys.readouterr().out
+    assert "ERROR" in out
+    assert "this_is_not_a_field" in out
