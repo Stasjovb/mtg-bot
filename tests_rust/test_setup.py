@@ -509,3 +509,216 @@ def test_make_state_shuffle_single_card_library_noop(engine):
     lib_p1 = [d["printing_id"] for d in state.library_snapshot(1)]
     assert lib_p0 == [2]
     assert lib_p1 == [3]
+
+
+# --- 12. cross-feature edge cases -----------------------------------
+#
+# Coverage for the parity-load-bearing contract surface exercised by
+# the 1000-game smoke harness: setup-side serialization stability,
+# deterministic shuffle invariants, id-allocation order pinning, and
+# initial-state defaults that the parity diff treats as load-bearing.
+
+
+# Canonical "default args" make_state baseline — a Forest+Bears
+# 2-card registry, a [0,0,1] / [1,1,0] deck, no hand, no shuffle.
+# Locked-in fingerprint string acts as a regression detector for any
+# drift in the setup-side serialization (zone object layout, default
+# turn/phase/life/priority bytes, id allocation order, registry
+# snapshot semantics). If this digest changes, either parity smoke
+# breaks or the parity_smoke.py:hash_state recipe needs the same
+# update on both sides of the bridge.
+EXPECTED_MAKE_STATE_CANONICAL_DEFAULT_FP = "a1193453edec"
+
+
+def test_make_state_canonical_default_fingerprint_pinned(engine):
+    """Default-args make_state (no hands, no shuffle) on the canonical
+    Forest+Bears registry produces the pinned baseline fingerprint.
+
+    Regression-detect for setup-side serialization drift — if this
+    drifts, the parity-smoke ``hash_state`` recipe and the Rust
+    fingerprint serializer have diverged and the 1000-game smoke is
+    no longer comparing like-for-like states.
+    """
+    reg = _two_card_registry(engine)
+    state = engine.make_state(reg, [0, 0, 1], [1, 1, 0])
+    assert state.fingerprint() == EXPECTED_MAKE_STATE_CANONICAL_DEFAULT_FP
+
+
+def test_make_state_same_seed_identical_fingerprints(engine):
+    """Same shuffle_seed + same decks -> byte-identical fingerprints.
+
+    Two completely-independent make_state invocations with the same
+    seed must produce indistinguishable states end-to-end (not just
+    matching library orders — the full serialized fingerprint must
+    line up).
+    """
+    reg = _big_registry(engine, n=24)
+    deck = list(range(24))
+    fp_a = engine.make_state(reg, deck, deck, shuffle_seed=2026).fingerprint()
+    fp_b = engine.make_state(reg, deck, deck, shuffle_seed=2026).fingerprint()
+    assert fp_a == fp_b
+
+
+def test_make_state_different_seeds_different_fingerprints(engine):
+    """Different shuffle_seed values produce different fingerprints —
+    entropy from the seed must mix all the way through to the digest,
+    not just into the library order."""
+    reg = _big_registry(engine, n=24)
+    deck = list(range(24))
+    fp_a = engine.make_state(reg, deck, deck, shuffle_seed=1).fingerprint()
+    fp_b = engine.make_state(reg, deck, deck, shuffle_seed=2).fingerprint()
+    fp_c = engine.make_state(reg, deck, deck, shuffle_seed=999_999).fingerprint()
+    assert fp_a != fp_b
+    assert fp_b != fp_c
+    assert fp_a != fp_c
+
+
+def test_make_state_p0_p1_independent_permutations_round23_contract(engine):
+    """Round-23 golden-ratio-derivation contract: with the SAME deck
+    on both sides and a single user-facing seed, p0 and p1 land in
+    DIFFERENT permutations — the implementation derives p1's seed via
+    ``s.wrapping_mul(0x9E3779B97F4A7C15)`` to decorrelate the two
+    streams. Multiple seeds + multiple deck sizes for robustness."""
+    reg = _big_registry(engine, n=32)
+    deck = list(range(32))
+    for seed in (1, 42, 12345, 0xDEAD_BEEF):
+        state = engine.make_state(reg, deck, deck, shuffle_seed=seed)
+        lib_p0 = [d["printing_id"] for d in state.library_snapshot(0)]
+        lib_p1 = [d["printing_id"] for d in state.library_snapshot(1)]
+        assert lib_p0 != lib_p1, f"p0/p1 collided at seed {seed}"
+        # Both still valid permutations of the input deck.
+        assert sorted(lib_p0) == deck
+        assert sorted(lib_p1) == deck
+
+
+def test_make_state_hand_order_pinned_by_explicit_argument(engine):
+    """Hands are NEVER shuffled — caller-controlled order survives
+    end-to-end even when ``shuffle_seed`` is set. Pin via an explicit
+    hand argument with a distinctive (non-sorted, non-reversed)
+    permutation that no shuffle would happen to land on."""
+    reg = _big_registry(engine, n=16)
+    deck = list(range(16))
+    # A hand permutation that would be vanishingly unlikely to fall
+    # out of any 7-element shuffle by chance.
+    pinned_hand = [11, 3, 7, 0, 14, 1, 9]
+    state = engine.make_state(
+        reg, deck, deck,
+        p0_hand_printing_ids=pinned_hand,
+        p1_hand_printing_ids=pinned_hand,
+        shuffle_seed=42,
+    )
+    hand_p0 = [d["printing_id"] for d in state.hand_snapshot(0)]
+    hand_p1 = [d["printing_id"] for d in state.hand_snapshot(1)]
+    assert hand_p0 == pinned_hand
+    assert hand_p1 == pinned_hand
+
+
+def test_make_state_object_id_allocation_order_round23_contract(engine):
+    """Round-23 id-allocation contract: ids are issued sequentially
+    starting from 0 in the order p0-library, p0-hand, p1-library,
+    p1-hand. Snapshot getters expose those ids verbatim — pin the
+    full sequence so any reordering shows up here, not later as a
+    parity-smoke trajectory-divergence mystery."""
+    reg = _two_card_registry(engine)
+    state = engine.make_state(
+        reg,
+        [0, 0, 1, 0],          # p0 library: ids 0..3
+        [1, 0, 1],             # p1 library: starts after p0 hand
+        p0_hand_printing_ids=[1, 0],  # p0 hand: ids 4..5
+        p1_hand_printing_ids=[0, 1, 0],
+    )
+    # p0 library, p0 hand, p1 library, p1 hand — in that order.
+    assert [d["id"] for d in state.library_snapshot(0)] == [0, 1, 2, 3]
+    assert [d["id"] for d in state.hand_snapshot(0)] == [4, 5]
+    assert [d["id"] for d in state.library_snapshot(1)] == [6, 7, 8]
+    assert [d["id"] for d in state.hand_snapshot(1)] == [9, 10, 11]
+    # And the global id set is contiguous 0..N-1.
+    all_ids = (
+        [d["id"] for d in state.library_snapshot(0)]
+        + [d["id"] for d in state.hand_snapshot(0)]
+        + [d["id"] for d in state.library_snapshot(1)]
+        + [d["id"] for d in state.hand_snapshot(1)]
+    )
+    assert all_ids == list(range(12))
+
+
+def test_make_state_initial_turn_phase_life_active_pinned(engine):
+    """Pin every initial-state default the parity diff treats as
+    load-bearing: life=20 both sides, active_player=0,
+    priority_player=0, phase=PHASE_UNTAP (0), turn=1, not over."""
+    reg = _two_card_registry(engine)
+    state = engine.make_state(reg, [0, 0], [1, 1])
+    assert state.life_totals == [20, 20]
+    assert state.active_player_idx == 0
+    assert state.priority_player_idx == 0
+    assert state.current_phase() == 0  # PHASE_UNTAP
+    assert state.turn_number == 1
+    assert state.is_over() is False
+
+
+def test_make_state_battlefield_graveyard_exile_empty_both_players(engine):
+    """After make_state, every non-library/non-hand zone is empty on
+    both sides — phase-2's parity smoke starts from this exact
+    empty-board / fresh-hand state."""
+    reg = _two_card_registry(engine)
+    state = engine.make_state(
+        reg,
+        [0, 1, 0],
+        [1, 0, 1],
+        p0_hand_printing_ids=[0],
+        p1_hand_printing_ids=[1],
+    )
+    assert state.battlefield_sizes == [0, 0]
+    assert state.graveyard_snapshot(0) == []
+    assert state.graveyard_snapshot(1) == []
+    assert state.exile_snapshot(0) == []
+    assert state.exile_snapshot(1) == []
+
+
+def test_make_state_legal_decisions_emits_initial_choices(engine):
+    """Cross-feature: a freshly-made-state at phase=PHASE_UNTAP has no
+    sorcery-timing or activation choices yet — ``legal_decisions``
+    emits exactly ``[PassPriority]`` for both players. Locks the
+    setup-to-legal handoff (no stray choices accidentally seeded into
+    the initial state)."""
+    reg = _two_card_registry(engine)
+    state = engine.make_state(
+        reg,
+        [0, 0, 1, 0, 1],
+        [1, 0, 1, 1, 0],
+        p0_hand_printing_ids=[0, 1],
+        p1_hand_printing_ids=[1, 0],
+    )
+    # Priority holder sees just PassPriority — no PlayLand yet at
+    # PHASE_UNTAP (sorcery-timing gate is closed).
+    p0_actions = state.legal_decisions(0)
+    assert [a["kind"] for a in p0_actions] == ["pass_priority"]
+    # Off-priority caller also sees just PassPriority.
+    p1_actions = state.legal_decisions(1)
+    assert [a["kind"] for a in p1_actions] == ["pass_priority"]
+
+
+def test_make_state_min_size_one_card_library_each_constructs_valid_state(engine):
+    """Min-size deck (1 card per library) doesn't crash and produces
+    a valid state — bottom edge of the deck-size range. Library
+    sizes, id allocation, defaults, and ``legal_decisions`` all stay
+    well-defined."""
+    reg = _two_card_registry(engine)
+    state = engine.make_state(reg, [0], [1])
+    # Zone sizes.
+    assert state.library_sizes == [1, 1]
+    assert state.hand_sizes == [0, 0]
+    assert state.battlefield_sizes == [0, 0]
+    # Id allocation — only two objects, ids 0 and 1.
+    assert [d["id"] for d in state.library_snapshot(0)] == [0]
+    assert [d["id"] for d in state.library_snapshot(1)] == [1]
+    # Defaults intact.
+    assert state.life_totals == [20, 20]
+    assert state.turn_number == 1
+    assert state.current_phase() == 0
+    assert state.is_over() is False
+    # Fingerprint computes cleanly — 12 lowercase hex.
+    fp = state.fingerprint()
+    assert isinstance(fp, str) and len(fp) == 12
+    # Legal-decisions handoff still works at the size floor.
+    assert [a["kind"] for a in state.legal_decisions(0)] == ["pass_priority"]
