@@ -111,10 +111,11 @@ impl GameState {
     ///   gate (round 24, `state_ops_legal.rs`) which only emits this
     ///   shape for the same predicate. Raises `ValueError` if
     ///   `ability_index != 0`, the source isn't on any battlefield,
-    ///   the source is already tapped, or the printing has no
-    ///   `mana_produced` (non-mana activated abilities are a
-    ///   future-slice scope — they need richer cost-pay + effect-
-    ///   resolution primitives).
+    ///   the source is already tapped, the source is
+    ///   summoning-sick (CR 302.1 — closes parity gap G6), or the
+    ///   printing has no `mana_produced` (non-mana activated
+    ///   abilities are a future-slice scope — they need richer
+    ///   cost-pay + effect-resolution primitives).
     /// - `{"kind": "cast_spell", "card_id": <u32>, "use_warp":
     ///   <bool>?, "kicked": <bool>?, "cast_for_free": <bool>?,
     ///   "use_impending": <bool>?, "cast_room_half": <str|None>?}`
@@ -455,6 +456,39 @@ impl GameState {
                             return Err(PyValueError::new_err(format!(
                                 "ActivateAbility: source {source_id} is \
                                  already tapped"
+                            )));
+                        }
+                        // CR 302.1 summoning-sickness gate (gap G6). A
+                        // creature that hasn't been controlled
+                        // continuously since the start of its
+                        // controller's most recent turn can't pay a
+                        // tap cost (or use itself for an "activate
+                        // only as a sorcery" cost that involves
+                        // tapping). The general rule is
+                        // `summoning_sick && requires_tap_cost`; for
+                        // the only ability currently wired through
+                        // this dispatch arm (mana abilities at
+                        // `ability_index = 0`), every printing's
+                        // tap-for-mana ability has an implicit `{T}`
+                        // cost, so a positive `summoning_sick` flag
+                        // is sufficient to reject. A future slice
+                        // that lands non-mana activated abilities
+                        // will narrow the gate to
+                        // `summoning_sick && ability.cost.tap_self`
+                        // — until then this approximation is exact
+                        // (mana abilities always tap). Mirrors
+                        // Python's `legal.py:661-663` gate
+                        // (`is_creature_now(obj) && obj.summoning_sick`)
+                        // and the matching dispatch precheck in
+                        // `actions.py:_activate_ability` /
+                        // `_can_fire_sac_for_mana`. Pins G6 closure;
+                        // see `docs/RUST_PARITY_GAPS.md`.
+                        if obj.summoning_sick {
+                            return Err(PyValueError::new_err(format!(
+                                "ActivateAbility: source {source_id} is \
+                                 summoning-sick (CR 302.1) — can't tap \
+                                 for mana the turn it entered the \
+                                 battlefield"
                             )));
                         }
                         found = Some((pidx, pos, mana));

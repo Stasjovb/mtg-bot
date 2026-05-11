@@ -175,6 +175,7 @@ the test lands in a commit.
 | rust(effect-each-opponent-discards): each-opponent discard (CR 701.8) | tests_rust/test_resolve.py extend | green  | feature/rust-effect-each-opponent-discards |
 | rust(effect-destroy-target-artifact): artifact-filter destroy (CR 701.7) | tests_rust/test_resolve.py extend | green  | feature/rust-effect-destroy-target-artifact |
 | rust(effect-destroy-target-land): land-filter destroy (CR 701.7) | tests_rust/test_resolve.py extend | green  | feature/rust-effect-destroy-target-land |
+| rust(gap-g6-activate-ability-summoning-sick): CR 302.1 gate in apply_action + legal_decisions | tests_rust/test_tap.py + test_legal.py extend | green  | feature/rust-gap-g6-activate-ability-summoning-sick |
 
 ## Build invocation reminder
 

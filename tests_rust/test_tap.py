@@ -347,19 +347,24 @@ def test_activate_ability_taps_source_via_same_tapped_flag(synthetic_state):
     assert synthetic_state.is_tapped(forest_id) is False
 
 
-def test_activate_ability_on_summoning_sick_creature_succeeds(engine):
-    """**Documented divergence from CR 302.1.** A summoning-sick
-    creature CAN'T tap to activate `{T}`-cost abilities in real MTG
-    — the activate would fail "the rules don't allow this ability
-    to be activated". The Rust `apply_action` dispatcher for
-    ActivateAbility (in `state_ops_actions.rs`) currently checks
-    only `tapped` + `mana_produced`; it does NOT check
-    `summoning_sick`. `legal_decisions` shares the same gap (see
-    the "first-slice approximation" comment around line 836 of
-    `state_ops_legal.rs`). This test pins the current permissive
-    behavior so a future slice that adds the sickness gate flips
-    this test deliberately (and updates `SEARCH_LIMITATIONS.md` to
-    drop the entry)."""
+def test_activate_ability_on_summoning_sick_creature_with_tap_cost_is_rejected(
+    engine,
+):
+    """**Parity gap G6 closure (CR 302.1).** A creature that hasn't
+    been controlled continuously since the start of its controller's
+    most recent turn (the `summoning_sick = true` flag) can't tap to
+    pay an activated ability's `{T}` cost. The Rust dispatch arm in
+    `state_ops_actions.rs` gates on
+    `summoning_sick && requires_tap_cost`; for the only ability
+    currently wired through this dispatch (mana abilities, which all
+    tap per CR 605.1a) `summoning_sick` alone is sufficient. Mirrors
+    Python's `legal.py:661-663` and `actions.py:_activate_ability`
+    precheck. Inverted from the `_succeeds` baseline (round 25) by
+    the slice that closed G6 — see the matching exclusion in
+    `state_ops_legal.rs` (no emit for summoning-sick sources) tested
+    in `test_legal.py`."""
+    import pytest
+
     state = engine.make_synthetic_state()
     # First hand object is a Llanowar Elves (creature with
     # mana_produced=Some(G)). Cast it to put a summoning-sick
@@ -371,12 +376,19 @@ def test_activate_ability_on_summoning_sick_creature_succeeds(engine):
     assert state.is_summoning_sick(elves_id) is True
     assert state.is_tapped(elves_id) is False
     pool_before = state.get_mana_pool(0)["G"]
-    # Real MTG: this should fail with "summoning sick". Rust today:
-    # the activate succeeds, the elves taps, the pool gains 1G.
-    state.apply_action(
-        {"kind": "activate_ability", "source_id": elves_id, "ability_index": 0}
-    )
-    assert state.is_tapped(elves_id) is True
-    assert state.get_mana_pool(0)["G"] == pool_before + 1
-    # And summoning_sick stays True — the activate didn't clear it.
+    # Real MTG / Python: this fails because the source is summoning
+    # sick. Rust now raises a `ValueError` from `apply_action`, with
+    # no state mutation (the source stays untapped, the mana pool
+    # unchanged, summoning_sick still True).
+    with pytest.raises(ValueError, match="summoning-sick"):
+        state.apply_action(
+            {
+                "kind": "activate_ability",
+                "source_id": elves_id,
+                "ability_index": 0,
+            }
+        )
+    # No mutation occurred on the rejected path.
+    assert state.is_tapped(elves_id) is False
+    assert state.get_mana_pool(0)["G"] == pool_before
     assert state.is_summoning_sick(elves_id) is True

@@ -1638,6 +1638,46 @@ def test_legal_decisions_activate_ability_works_for_player_1(
     assert all(sid >= 67 for sid in source_ids)
 
 
+def test_legal_decisions_activate_ability_excludes_summoning_sick_creature(
+    engine,
+):
+    """**Parity gap G6 closure (CR 302.1).** A just-cast creature
+    mana source (Llanowar Elves) is summoning-sick on the turn it
+    enters and cannot pay an activated mana ability's `{T}` cost.
+    The Rust `legal_decisions` emitter mirrors Python's
+    `legal.py:661-663` short-circuit and DOES NOT emit an
+    ActivateAbility for the sick source. Pairs with the matching
+    dispatch-side gate in `state_ops_actions.rs` (covered by
+    `test_tap.py::test_activate_ability_on_summoning_sick_creature_with_tap_cost_is_rejected`).
+
+    Setup: 5 Forests on P0's battlefield (non-creature, never
+    summoning-sick) + 1 newly-cast Llanowar Elves (creature,
+    summoning_sick=true). Expected emission: 5 ActivateAbility for
+    the Forests + 0 for the sick Elves."""
+    state = engine.make_synthetic_state()
+    # Cast Llanowar Elves from hand (id 10) — stamps
+    # summoning_sick=true on the new bf slot.
+    state.add_mana(0, "G", 1)
+    elves_id = 10
+    assert state.printing_name_of(elves_id) == "Llanowar Elves"
+    assert state.cast_creature(elves_id, 0) is True
+    assert state.is_summoning_sick(elves_id) is True
+
+    _empty_hand(state, 0)
+    state.set_phase(PHASE_MAIN1)
+    actions = state.legal_decisions(0)
+
+    aas = [a for a in actions if a["kind"] == "activate_ability"]
+    source_ids = {a["source_id"] for a in aas}
+    # The sick Elves' id is NOT in the emission set.
+    assert elves_id not in source_ids
+    # The 5 (non-sick, non-creature) Forests still emit.
+    assert source_ids == {
+        P0_FIRST_BATTLEFIELD_ID + i for i in range(5)
+    }
+    assert len(aas) == 5
+
+
 # --- DeclareBlockers emission --------------------------------------
 #
 # rust(legal-decisions-declare-blockers) — extends `legal_decisions`
