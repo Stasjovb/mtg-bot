@@ -215,6 +215,8 @@ the test lands in a commit.
 
 | rust(effect-plus1-up-to-n): Effect::PutPlusOneCounterOnEachOfUpToNTargetCreatures — Weftblade-Enhancer-shape multi-target counter add (2 EoE cards). | tests_rust/test_counters.py extend | green  | feature/rust-effect-plus1-up-to-n |
 
+| rust(effect-put-charge-counters-on-self): Effect::PutChargeCountersOnSelf — Blast-Zone-shape charge counters routed to single counters scalar (G8 multi-kind map future) (2 EoE cards). | tests_rust/test_counters.py extend | green  | feature/rust-effect-put-charge-counters-on-self |
+
 ## Build invocation reminder
 
 ```
