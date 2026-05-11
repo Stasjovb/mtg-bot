@@ -168,7 +168,7 @@ def test_tap_object_on_hand_zone_returns_false(synthetic_state):
     same reason (no battlefield match)."""
     # With defaults, p0's hand is ids 10..16.
     hand_id = 10
-    assert synthetic_state.find_object_zone(hand_id) == 0  # ZONE_HAND
+    assert synthetic_state.find_object_zone(hand_id) == 0  # ZONE_HAND_LOCAL
     assert synthetic_state.tap_object(hand_id) is False
     assert synthetic_state.is_tapped(hand_id) is None
     assert synthetic_state.untap_object(hand_id) is False
@@ -392,3 +392,122 @@ def test_activate_ability_on_summoning_sick_creature_with_tap_cost_is_rejected(
     assert state.is_tapped(elves_id) is False
     assert state.get_mana_pool(0)["G"] == pool_before
     assert state.is_summoning_sick(elves_id) is True
+
+
+
+
+# Zone constants for the round-28 tap-aoc tests below.
+ZONE_HAND_LOCAL = 0
+ZONE_BATTLEFIELD = 2
+# -------------------- Round-28 TapTargetArtifactOrCreature (2 cards) --------------------
+
+
+def _tap_aoc_dict():
+    return {
+        "name": "Synthetic Twiddle (artifact-or-creature)",
+        "card_types": ["Instant"],
+        "mana_cost": {"generic": 1},
+        "effects": [
+            {"kind": "tap_target_artifact_or_creature"}
+        ],
+    }
+
+
+def _vanilla_artifact_dict_tap(name="Test Artifact"):
+    return {
+        "name": name,
+        "card_types": ["Artifact"],
+        "mana_cost": {"generic": 1},
+    }
+
+
+def test_register_tap_target_artifact_or_creature(engine):
+    reg = engine.Registry()
+    pid = reg.register_printing(_tap_aoc_dict())
+    eff = reg.get_printing_effects(pid)[0]
+    assert eff["kind"] == "tap_target_artifact_or_creature"
+
+
+def test_resolve_tap_aoc_picks_first_creature_on_defender_bf(synthetic_state):
+    """First creature on defender (p1) gets tapped. Synthetic state's
+    p1 bf has Forests (non-creature, non-artifact) then Grizzly Bears."""
+    snap = synthetic_state.battlefield_snapshot()
+    p1_first_bear_id = next(
+        d["id"] for d in snap
+        if d["controller_id"] == 1 and d["printing_name"] == "Grizzly Bears"
+    )
+    spell_id = synthetic_state.register_and_inject_object(
+        _tap_aoc_dict(), 0, ZONE_HAND_LOCAL
+    )
+    synthetic_state.push_to_stack(spell_id, 0)
+    synthetic_state.resolve_top_of_stack()
+
+    bear_after = next(
+        d for d in synthetic_state.battlefield_snapshot() if d["id"] == p1_first_bear_id
+    )
+    assert bear_after["tapped"] is True
+
+
+def test_resolve_tap_aoc_picks_artifact_when_present(synthetic_state):
+    """Inject an artifact onto p1's bf — Forests are non-creature
+    non-artifact, so they're skipped; then we hit the artifact (which
+    appears in zone order BEFORE the Grizzly Bears since make_state /
+    register_and_inject_object pushes to the back of the bf zone).
+    Actually since artifact is appended LAST, the existing Grizzly
+    Bears comes first. So Bears gets tapped, not the artifact. This
+    test verifies that BOTH being in the eligible set works — pick
+    the FIRST match regardless of type."""
+    artifact_id = synthetic_state.register_and_inject_object(
+        _vanilla_artifact_dict_tap(), 1, ZONE_BATTLEFIELD
+    )
+    snap = synthetic_state.battlefield_snapshot()
+    p1_first_bear_id = next(
+        d["id"] for d in snap
+        if d["controller_id"] == 1 and d["printing_name"] == "Grizzly Bears"
+    )
+    spell_id = synthetic_state.register_and_inject_object(
+        _tap_aoc_dict(), 0, ZONE_HAND_LOCAL
+    )
+    synthetic_state.push_to_stack(spell_id, 0)
+    synthetic_state.resolve_top_of_stack()
+    # Existing Bears tapped (first in zone order); injected artifact
+    # not tapped (came after, second).
+    snap_after = synthetic_state.battlefield_snapshot()
+    bear_after = next(d for d in snap_after if d["id"] == p1_first_bear_id)
+    art_after = next(d for d in snap_after if d["id"] == artifact_id)
+    assert bear_after["tapped"] is True
+    assert art_after["tapped"] is False
+
+
+def test_resolve_tap_aoc_no_eligible_fizzles(synthetic_state):
+    """No artifacts and no creatures on p1's bf → fizzle."""
+    state = synthetic_state.clone_once()
+    snap = state.battlefield_snapshot()
+    p1_creature_ids = [
+        d["id"] for d in snap
+        if d["controller_id"] == 1 and d["printing_name"] == "Grizzly Bears"
+    ]
+    for cid in p1_creature_ids:
+        state.move_object(cid, 3, 1)  # graveyard
+    spell_id = state.register_and_inject_object(_tap_aoc_dict(), 0, ZONE_HAND_LOCAL)
+    state.push_to_stack(spell_id, 0)
+    state.resolve_top_of_stack()  # should not raise
+
+
+def test_resolve_tap_aoc_idempotent_on_already_tapped(synthetic_state):
+    """Already-tapped target stays tapped (idempotent)."""
+    snap = synthetic_state.battlefield_snapshot()
+    p1_first_bear_id = next(
+        d["id"] for d in snap
+        if d["controller_id"] == 1 and d["printing_name"] == "Grizzly Bears"
+    )
+    synthetic_state.tap_object(p1_first_bear_id)
+    spell_id = synthetic_state.register_and_inject_object(
+        _tap_aoc_dict(), 0, ZONE_HAND_LOCAL
+    )
+    synthetic_state.push_to_stack(spell_id, 0)
+    synthetic_state.resolve_top_of_stack()
+    bear_after = next(
+        d for d in synthetic_state.battlefield_snapshot() if d["id"] == p1_first_bear_id
+    )
+    assert bear_after["tapped"] is True

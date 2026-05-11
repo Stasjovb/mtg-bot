@@ -3242,6 +3242,37 @@ fn apply_effect(
                 state.players[defender_idx].life -= amount;
             }
         }
+        // Round-28 broader-filter tap. Pick first defender permanent
+        // whose printing's card_types contains "Artifact" OR
+        // "Creature". Idempotent on already-tapped target. No
+        // eligible target → silent fizzle.
+        Effect::TapTargetArtifactOrCreature => {
+            let defender = (1 - state.active_player) as usize;
+            let target_id: Option<u32> = {
+                let bf = &state.players[defender].battlefield;
+                let registry = &state.registry;
+                bf.iter().find_map(|obj| {
+                    let printing = registry.lookup(obj.printing_id)?;
+                    if printing.card_types.iter().any(|t| t == "Artifact" || t == "Creature")
+                    {
+                        Some(obj.id)
+                    } else {
+                        None
+                    }
+                })
+            };
+            let Some(target_id) = target_id else {
+                return Ok(()); // fizzle
+            };
+            let bf_mut: &mut Vec<GameObject> =
+                Arc::make_mut(&mut state.players[defender].battlefield);
+            for obj in bf_mut.iter_mut() {
+                if obj.id == target_id {
+                    obj.tapped = true;
+                    break;
+                }
+            }
+        }
     }
     Ok(())
 }
