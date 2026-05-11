@@ -211,6 +211,7 @@ impl GameState {
         // on zone change. A library card can't legally be attached
         // today, but reset defensively to mirror move_object family.
         obj.attached_to = None;
+        obj.exiled_with_source = None;
         let drawn_id = obj.id;
         Arc::make_mut(&mut player.hand).push(obj);
         Some(drawn_id)
@@ -277,6 +278,7 @@ impl GameState {
         // relationship on zone change. A reanimated Equipment / Aura
         // enters unattached.
         obj.attached_to = None;
+        obj.exiled_with_source = None;
         Arc::make_mut(&mut player.battlefield).push(obj);
         Ok(true)
     }
@@ -340,6 +342,7 @@ impl GameState {
         // Round-28 attach foundation: CR 400.7 clears the attach
         // relationship on zone change.
         obj.attached_to = None;
+        obj.exiled_with_source = None;
         Arc::make_mut(&mut player.hand).push(obj);
         Ok(true)
     }

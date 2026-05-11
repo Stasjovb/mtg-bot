@@ -1562,3 +1562,130 @@ def test_attach_via_resolve_then_zone_change_clears_attached_to(synthetic_state)
     bf = synthetic_state.battlefield_snapshot()
     eq_d = next(d for d in bf if d["id"] == eq_id)
     assert eq_d["attached_to"] is None
+
+
+# -------------------- Round-28 ExileTargetCreatureUntilSourceLeaves + return primitive (3 cards) --------------------
+
+
+ZONE_EXILE = 5
+
+
+def _all_fates_stalker_dict():
+    """All-Fates-Stalker-shape ETB: exile target creature until this
+    leaves the bf."""
+    return {
+        "name": "All-Fates Stalker (synthetic)",
+        "card_types": ["Creature"],
+        "mana_cost": {"generic": 3},
+        "power": 3,
+        "toughness": 3,
+        "etb_effects": [
+            {"kind": "exile_target_creature_until_source_leaves"}
+        ],
+    }
+
+
+def test_register_exile_target_creature_until_source_leaves(engine):
+    reg = engine.Registry()
+    pid = reg.register_printing(_all_fates_stalker_dict())
+    etb = reg.get_printing_etb_effects(pid)
+    assert len(etb) == 1
+    assert etb[0]["kind"] == "exile_target_creature_until_source_leaves"
+
+
+def test_exiled_with_source_default_is_none(synthetic_state):
+    """Fresh GameObjects default to exiled_with_source=None."""
+    bf = synthetic_state.battlefield_snapshot()
+    for d in bf:
+        assert d.get("exiled_with_source") is None
+
+
+def test_resolve_exile_until_source_leaves_stamps_link_and_exiles(synthetic_state):
+    """Cast All-Fates-Stalker — its ETB exiles the first defender
+    creature (Bears) with the link stamped."""
+    snap_before = synthetic_state.battlefield_snapshot()
+    p1_first_bear_id = next(
+        d["id"] for d in snap_before
+        if d["controller_id"] == 1 and d["printing_name"] == "Grizzly Bears"
+    )
+    src_id = synthetic_state.register_and_inject_object(
+        _all_fates_stalker_dict(), 0, ZONE_HAND
+    )
+    synthetic_state.push_to_stack(src_id, 0)
+    synthetic_state.resolve_top_of_stack()
+
+    # Source on bf.
+    assert synthetic_state.find_object_zone(src_id) == ZONE_BATTLEFIELD
+    # Target in p1's exile zone, with exiled_with_source = src_id.
+    assert synthetic_state.find_object_zone(p1_first_bear_id) == ZONE_EXILE
+
+
+def test_return_paired_exiles_for_brings_back_linked_objects(synthetic_state):
+    """After exiling with link, calling
+    return_paired_exiles_for(source_id) brings the target back to its
+    owner's bf."""
+    snap_before = synthetic_state.battlefield_snapshot()
+    p1_first_bear_id = next(
+        d["id"] for d in snap_before
+        if d["controller_id"] == 1 and d["printing_name"] == "Grizzly Bears"
+    )
+    src_id = synthetic_state.register_and_inject_object(
+        _all_fates_stalker_dict(), 0, ZONE_HAND
+    )
+    synthetic_state.push_to_stack(src_id, 0)
+    synthetic_state.resolve_top_of_stack()
+    assert synthetic_state.find_object_zone(p1_first_bear_id) == ZONE_EXILE
+
+    returned = synthetic_state.return_paired_exiles_for(src_id)
+    assert returned == 1
+    # Target back on its OWNER's (p1's) bf — owner==controller in
+    # first-slice Rust.
+    assert synthetic_state.find_object_zone(p1_first_bear_id) == ZONE_BATTLEFIELD
+
+
+def test_return_paired_exiles_for_no_links_returns_zero(synthetic_state):
+    """No links to source_id → returns 0, no state change."""
+    bf_before = synthetic_state.battlefield_sizes
+    returned = synthetic_state.return_paired_exiles_for(9999)
+    assert returned == 0
+    assert synthetic_state.battlefield_sizes == bf_before
+
+
+def test_resolve_exile_until_source_leaves_no_target_fizzles(synthetic_state):
+    """No defender creature → silent fizzle. Source still ETBs."""
+    state = synthetic_state.clone_once()
+    snap = state.battlefield_snapshot()
+    p1_creature_ids = [
+        d["id"] for d in snap
+        if d["controller_id"] == 1 and d["printing_name"] == "Grizzly Bears"
+    ]
+    for cid in p1_creature_ids:
+        state.move_object(cid, 3, 1)  # to graveyard
+
+    src_id = state.register_and_inject_object(
+        _all_fates_stalker_dict(), 0, ZONE_HAND
+    )
+    state.push_to_stack(src_id, 0)
+    state.resolve_top_of_stack()
+    # Source ETB'd.
+    assert state.find_object_zone(src_id) == ZONE_BATTLEFIELD
+
+
+def test_resolve_exile_until_source_leaves_clone_isolation(synthetic_state):
+    """Resolving on the clone leaves the source state untouched."""
+    snap = synthetic_state.battlefield_snapshot()
+    p1_first_bear_id = next(
+        d["id"] for d in snap
+        if d["controller_id"] == 1 and d["printing_name"] == "Grizzly Bears"
+    )
+    src_id = synthetic_state.register_and_inject_object(
+        _all_fates_stalker_dict(), 0, ZONE_HAND
+    )
+    synthetic_state.push_to_stack(src_id, 0)
+    cloned = synthetic_state.clone_once()
+    cloned.resolve_top_of_stack()
+
+    # Clone: target in exile.
+    assert cloned.find_object_zone(p1_first_bear_id) == ZONE_EXILE
+    # Source: target still on bf.
+    assert synthetic_state.find_object_zone(p1_first_bear_id) == ZONE_BATTLEFIELD

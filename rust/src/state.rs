@@ -56,6 +56,29 @@ pub struct GameObject {
     /// emit remains byte-identical for every state where no
     /// `Effect::AttachToTargetCreatureYouControl` has resolved.
     pub attached_to: Option<u32>,
+    /// Round-28 "until source leaves" exile linkage. When an Effect
+    /// like `Effect::ExileTargetCreatureUntilSourceLeaves` exiles a
+    /// permanent, it stamps `exiled_with_source = Some(source_id)`
+    /// on the exiled object so that `return_paired_exiles_for(src_id)`
+    /// can later move it back to its owner's battlefield. Mirrors
+    /// Python's `GameObject.exiled_by_source: int | None` slot used
+    /// by `ExileTargetCreatureUntilSourceLeaves` /
+    /// `ExileOpponentsNonlandPermanentUntilLeaves` (`effects/generic/exile.py`).
+    ///
+    /// **First-slice manual hook.** Rust currently does NOT
+    /// auto-trigger the return when the source leaves the battlefield;
+    /// callers must explicitly invoke `return_paired_exiles_for(src_id)`
+    /// at the right tick. This is a documented simplification — wiring
+    /// the hook into every bf-leaving primitive (destroy, sacrifice,
+    /// exile, return-to-hand, bounce, ...) is a follow-up slice.
+    ///
+    /// Defaults to `None` for every freshly-allocated object. Cleared
+    /// (reset to `None`) on zone-change resets (CR 400.7) — once the
+    /// exiled permanent returns to a non-exile zone, the link is
+    /// stale. The fingerprint serializer emits this slot as `Null`
+    /// when `None`, so default-state pinned baselines stay
+    /// byte-identical.
+    pub exiled_with_source: Option<u32>,
     /// Round-27 UEOT framework — per-object expiring-modifier stack.
     /// Each entry is a CR-613-layer continuous modifier with implicit
     /// `expires_at = "cleanup"`. Cleared in bulk on entry to
@@ -459,6 +482,7 @@ fn make_object(id: u32, controller: u8, printing_id: u32) -> GameObject {
         damage: 0,
         counters: 0,
         attached_to: None,
+        exiled_with_source: None,
         ueot_modifiers: Vec::new(),
     }
 }
