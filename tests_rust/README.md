@@ -189,6 +189,8 @@ the test lands in a commit.
 
 | rust(effect-sequence): Effect::Sequence { effects: Vec<Effect> } combinator with recursive apply — Python Sequence(effects=...) (54 EoE cards, highest-freq Python class). Nestable. | tests_rust/test_resolve.py extend | green  | feature/rust-effect-sequence |
 
+| rust(effect-pump-creatures-you-control-ueot): Effect::PumpCreaturesYouControlUntilEOT — iterates source-controller's bf, pumps every creature via UeotModifier::PowerToughnessBonus (6 EoE anthem-shape cards). | tests_rust/test_ueot.py extend | green  | feature/rust-effect-pump-creatures-you-control-ueot |
+
 ## Build invocation reminder
 
 ```

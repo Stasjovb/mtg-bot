@@ -698,3 +698,164 @@ def test_pump_target_creature_until_eot_clone_isolation(synthetic_state):
     assert cloned.effective_power(target_id) == 5
     # Original target still at printed P/T (no pump written).
     assert synthetic_state.effective_power(target_id) == 2
+
+
+# ---------------------------------------------------------------- PumpCreaturesYouControlUntilEOT (r28)
+
+
+def _pump_creatures_instant_dict(power_bonus: int = 1, toughness_bonus: int = 1):
+    """Anthem-shape instant: pump every creature on the controller's
+    battlefield +N/+M UEOT."""
+    return {
+        "name": "Anthem Instant (synthetic)",
+        "mana_cost": {"W": 1},
+        "card_types": ["Instant"],
+        "effects": [
+            {
+                "kind": "pump_creatures_you_control_until_eot",
+                "power_bonus": power_bonus,
+                "toughness_bonus": toughness_bonus,
+            }
+        ],
+    }
+
+
+def test_register_pump_creatures_you_control_until_eot_defaults(empty_registry):
+    pid = empty_registry.register_printing(
+        {
+            "name": "default-anthem",
+            "card_types": ["Instant"],
+            "effects": [{"kind": "pump_creatures_you_control_until_eot"}],
+        }
+    )
+    effects = empty_registry.get_printing_effects(pid)
+    assert effects[0]["kind"] == "pump_creatures_you_control_until_eot"
+    assert effects[0]["power_bonus"] == 0
+    assert effects[0]["toughness_bonus"] == 0
+
+
+def test_pump_creatures_you_control_until_eot_pumps_all_controller_creatures(synthetic_state):
+    """Every Grizzly Bears on p0's battlefield gets +1/+1; Forests
+    (non-creature) are untouched."""
+    snap_before = synthetic_state.battlefield_snapshot()
+    p0_creature_ids = [
+        d["id"] for d in snap_before
+        if d["controller_id"] == 0 and d["printing_name"] == "Grizzly Bears"
+    ]
+    p0_forest_ids = [
+        d["id"] for d in snap_before
+        if d["controller_id"] == 0 and d["printing_name"] == "Forest"
+    ]
+    p1_creature_ids = [
+        d["id"] for d in snap_before
+        if d["controller_id"] == 1 and d["printing_name"] == "Grizzly Bears"
+    ]
+    assert len(p0_creature_ids) >= 2
+    assert len(p0_forest_ids) >= 1
+    assert len(p1_creature_ids) >= 1
+
+    pump_id = synthetic_state.register_and_inject_object(
+        _pump_creatures_instant_dict(power_bonus=1, toughness_bonus=1),
+        0,
+        ZONE_HAND,
+    )
+    synthetic_state.push_to_stack(pump_id, 0)
+    synthetic_state.resolve_top_of_stack()
+
+    # All of p0's creatures pumped: 2/2 -> 3/3.
+    for cid in p0_creature_ids:
+        assert synthetic_state.effective_power(cid) == 3
+        assert synthetic_state.effective_toughness(cid) == 3
+    # Forests are non-creature: effective_power returns None.
+    for fid in p0_forest_ids:
+        assert synthetic_state.effective_power(fid) is None
+    # p1's creatures untouched: still 2/2.
+    for cid in p1_creature_ids:
+        assert synthetic_state.effective_power(cid) == 2
+        assert synthetic_state.effective_toughness(cid) == 2
+
+
+def test_pump_creatures_you_control_until_eot_zero_zero_is_noop(synthetic_state):
+    """0/0 short-circuits; no modifier written; effective P/T equals
+    printed."""
+    snap = synthetic_state.battlefield_snapshot()
+    bear_ids = [
+        d["id"] for d in snap
+        if d["controller_id"] == 0 and d["printing_name"] == "Grizzly Bears"
+    ]
+    pump_id = synthetic_state.register_and_inject_object(
+        _pump_creatures_instant_dict(power_bonus=0, toughness_bonus=0),
+        0,
+        ZONE_HAND,
+    )
+    synthetic_state.push_to_stack(pump_id, 0)
+    synthetic_state.resolve_top_of_stack()
+    for cid in bear_ids:
+        assert synthetic_state.effective_power(cid) == 2
+
+
+def test_pump_creatures_you_control_until_eot_clears_at_cleanup(synthetic_state):
+    snap = synthetic_state.battlefield_snapshot()
+    bear_ids = [
+        d["id"] for d in snap
+        if d["controller_id"] == 0 and d["printing_name"] == "Grizzly Bears"
+    ]
+    pump_id = synthetic_state.register_and_inject_object(
+        _pump_creatures_instant_dict(power_bonus=2, toughness_bonus=2),
+        0,
+        ZONE_HAND,
+    )
+    synthetic_state.push_to_stack(pump_id, 0)
+    synthetic_state.resolve_top_of_stack()
+    for cid in bear_ids:
+        assert synthetic_state.effective_power(cid) == 4
+
+    synthetic_state.cleanup_step_for_active_player()
+
+    for cid in bear_ids:
+        assert synthetic_state.effective_power(cid) == 2
+
+
+def test_pump_creatures_you_control_until_eot_no_creatures_fizzles_silently(synthetic_state):
+    """No eligible creatures on the controller's bf -> silent no-op
+    (e.g. a board with only Forests). Source still resolves cleanly."""
+    state = synthetic_state.clone_once()
+    # Drain p0 of creatures (Grizzly Bears), leaving Forests.
+    snap = state.battlefield_snapshot()
+    bear_ids = [
+        d["id"] for d in snap
+        if d["controller_id"] == 0 and d["printing_name"] == "Grizzly Bears"
+    ]
+    for bid in bear_ids:
+        state.move_object(bid, 3, 0)  # ZONE_GRAVEYARD
+
+    pump_id = state.register_and_inject_object(
+        _pump_creatures_instant_dict(power_bonus=3, toughness_bonus=3),
+        0,
+        ZONE_HAND,
+    )
+    state.push_to_stack(pump_id, 0)
+    state.resolve_top_of_stack()  # should not raise
+
+
+def test_pump_creatures_you_control_until_eot_clone_isolation(synthetic_state):
+    snap = synthetic_state.battlefield_snapshot()
+    bear_ids = [
+        d["id"] for d in snap
+        if d["controller_id"] == 0 and d["printing_name"] == "Grizzly Bears"
+    ]
+    pump_id = synthetic_state.register_and_inject_object(
+        _pump_creatures_instant_dict(power_bonus=3, toughness_bonus=3),
+        0,
+        ZONE_HAND,
+    )
+    synthetic_state.push_to_stack(pump_id, 0)
+    cloned = synthetic_state.clone_once()
+    cloned.resolve_top_of_stack()
+
+    # Clone pumped all bears.
+    for cid in bear_ids:
+        assert cloned.effective_power(cid) == 5
+    # Source unchanged.
+    for cid in bear_ids:
+        assert synthetic_state.effective_power(cid) == 2
