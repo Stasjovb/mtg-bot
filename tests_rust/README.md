@@ -233,6 +233,8 @@ the test lands in a commit.
 
 | rust(effect-look-top-n-one-to-hand): PendingDecision::PickCardFromExaminedChoice variant + submit_pick_card_decision pymethod + auto-resolve strategies (pick_top, default) + Effect::LookTopNPutOneInHandRestToGraveyard wrapper — Commune-with-Evil-shape (4 EoE cards); validates the multi-variant substrate generalizes to its third variant. | tests_rust/test_pending_decisions.py extend | green  | feature/rust-effect-look-top-n-one-to-hand |
 
+| rust(effect-choose-one-mode): PendingDecision::ChooseModeChoice (4th variant) + submit_choose_mode_decision pymethod + auto-resolve 'choose_mode_0' + Effect::ChooseOneMode { modes: Vec<Effect> } — Python's ModalChooseOne first-slice (resolve-time pick only; 13 EoE cards target family). | tests_rust/test_pending_decisions.py extend | green  | feature/rust-effect-choose-one-mode |
+
 ## Build invocation reminder
 
 ```

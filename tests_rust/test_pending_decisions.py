@@ -1044,3 +1044,270 @@ def test_clone_isolates_pick_card_pending_decisions(synthetic_state):
 
     assert synthetic_state.has_pending_decision() is True
     assert synthetic_state.pending_decisions()[0]["cards"] == top_two
+
+
+# =====================================================================
+# Round-28 ChooseOneMode (fourth PendingDecision variant)
+# =====================================================================
+#
+# Fourth variant on the multi-variant decision-callback substrate:
+# ``PendingDecision::ChooseModeChoice`` — "Choose one — [mode_0];
+# [mode_1]; ..." Pushed by ``Effect::ChooseOneMode``. First-slice
+# scope: resolve-time pick only (no cast-time mode routing, no
+# or_both). Dispatcher: ``submit_choose_mode_decision(chosen_idx)``.
+# Auto-resolve: ``"default"`` / ``"choose_mode_0"`` pick ``modes[0]``.
+
+
+def _choose_mode_draw_gain_dict():
+    """A modal sorcery with two simple modes:
+    mode 0: draw_cards 1
+    mode 1: gain_life 3
+
+    Both verifiable through standard accessors."""
+    return {
+        "name": "Test ChooseOneMode draw-or-gain",
+        "card_types": ["Sorcery"],
+        "mana_cost": {"U": 1},
+        "effects": [
+            {
+                "kind": "choose_one_mode",
+                "modes": [
+                    {"kind": "draw_cards", "count": 1},
+                    {"kind": "gain_life", "amount": 3},
+                ],
+            }
+        ],
+    }
+
+
+def test_choose_one_mode_registers_with_two_modes(engine):
+    """A ChooseOneMode sorcery registers cleanly and round-trips both
+    modes through the printing readback."""
+    reg = engine.Registry()
+    pid = reg.register_printing(_choose_mode_draw_gain_dict())
+    effects = reg.get_printing_effects(pid)
+    assert len(effects) == 1
+    eff = effects[0]
+    assert eff["kind"] == "choose_one_mode"
+    assert len(eff["modes"]) == 2
+    assert eff["modes"][0]["kind"] == "draw_cards"
+    assert eff["modes"][0]["count"] == 1
+    assert eff["modes"][1]["kind"] == "gain_life"
+    assert eff["modes"][1]["amount"] == 3
+
+
+def test_choose_one_mode_missing_modes_field_raises(engine):
+    """``choose_one_mode`` without ``modes`` is a hard ValueError."""
+    reg = engine.Registry()
+    with pytest.raises(ValueError):
+        reg.register_printing(
+            {
+                "name": "Bad ChooseOneMode",
+                "card_types": ["Sorcery"],
+                "mana_cost": {"U": 1},
+                "effects": [{"kind": "choose_one_mode"}],
+            }
+        )
+
+
+def test_choose_one_mode_empty_modes_raises(engine):
+    """``choose_one_mode`` with an empty ``modes`` list is rejected at
+    parse time so the resolve arm always has at least one mode."""
+    reg = engine.Registry()
+    with pytest.raises(ValueError):
+        reg.register_printing(
+            {
+                "name": "Empty ChooseOneMode",
+                "card_types": ["Sorcery"],
+                "mana_cost": {"U": 1},
+                "effects": [{"kind": "choose_one_mode", "modes": []}],
+            }
+        )
+
+
+def test_choose_one_mode_resolve_pushes_pending_choice(synthetic_state):
+    """Resolving a ChooseOneMode sorcery pushes one ChooseModeChoice
+    onto the queue carrying both modes; neither mode has fired yet."""
+    hand_before = synthetic_state.hand_sizes[0]
+    life_before = synthetic_state.get_life(0)
+    spell_obj_id = synthetic_state.register_and_inject_object(
+        _choose_mode_draw_gain_dict(), 0, ZONE_HAND
+    )
+    synthetic_state.push_to_stack(spell_obj_id, 0)
+    synthetic_state.resolve_top_of_stack_pause()
+
+    # Neither mode has fired.
+    assert synthetic_state.hand_sizes[0] == hand_before
+    assert synthetic_state.get_life(0) == life_before
+
+    pds = synthetic_state.pending_decisions()
+    assert len(pds) == 1
+    pd = pds[0]
+    assert pd["kind"] == "ChooseModeChoice"
+    assert pd["source_obj_id"] == spell_obj_id
+    assert pd["controller"] == 0
+    assert len(pd["modes"]) == 2
+    assert pd["modes"][0]["kind"] == "draw_cards"
+    assert pd["modes"][1]["kind"] == "gain_life"
+
+
+def test_submit_choose_mode_0_fires_draw(synthetic_state):
+    """``submit_choose_mode_decision(0)`` applies the draw mode."""
+    hand_before = synthetic_state.hand_sizes[0]
+    life_before = synthetic_state.get_life(0)
+    spell_obj_id = synthetic_state.register_and_inject_object(
+        _choose_mode_draw_gain_dict(), 0, ZONE_HAND
+    )
+    synthetic_state.push_to_stack(spell_obj_id, 0)
+    synthetic_state.resolve_top_of_stack_pause()
+
+    synthetic_state.submit_choose_mode_decision(0)
+
+    assert synthetic_state.has_pending_decision() is False
+    # Hand: +1 from inner draw (cast +1 inject, -1 cast, +1 inner = +1).
+    assert synthetic_state.hand_sizes[0] == hand_before + 1
+    # Life unchanged.
+    assert synthetic_state.get_life(0) == life_before
+
+
+def test_submit_choose_mode_1_fires_gain_life(synthetic_state):
+    """``submit_choose_mode_decision(1)`` applies the gain-life mode."""
+    hand_before = synthetic_state.hand_sizes[0]
+    life_before = synthetic_state.get_life(0)
+    spell_obj_id = synthetic_state.register_and_inject_object(
+        _choose_mode_draw_gain_dict(), 0, ZONE_HAND
+    )
+    synthetic_state.push_to_stack(spell_obj_id, 0)
+    synthetic_state.resolve_top_of_stack_pause()
+
+    synthetic_state.submit_choose_mode_decision(1)
+
+    assert synthetic_state.has_pending_decision() is False
+    # Hand unchanged by the gain-life mode (cast +1 inject, -1 cast = 0).
+    assert synthetic_state.hand_sizes[0] == hand_before
+    # Life: +3 from inner gain_life.
+    assert synthetic_state.get_life(0) == life_before + 3
+
+
+def test_submit_choose_mode_out_of_range_raises(synthetic_state):
+    """Submitting an out-of-range mode index raises ValueError.
+    Queue intact (transactional)."""
+    spell_obj_id = synthetic_state.register_and_inject_object(
+        _choose_mode_draw_gain_dict(), 0, ZONE_HAND
+    )
+    synthetic_state.push_to_stack(spell_obj_id, 0)
+    synthetic_state.resolve_top_of_stack_pause()
+
+    with pytest.raises(ValueError):
+        synthetic_state.submit_choose_mode_decision(5)
+    assert synthetic_state.has_pending_decision() is True
+    assert synthetic_state.pending_decisions()[0]["kind"] == "ChooseModeChoice"
+
+
+def test_submit_choose_mode_with_empty_queue_raises(synthetic_state):
+    """submit_choose_mode_decision on an empty queue raises ValueError."""
+    assert synthetic_state.has_pending_decision() is False
+    with pytest.raises(ValueError):
+        synthetic_state.submit_choose_mode_decision(0)
+
+
+def test_submit_choose_mode_on_surveil_head_raises(synthetic_state):
+    """submit_choose_mode_decision on a SurveilChoice head raises
+    ValueError. Queue intact."""
+    spell_obj_id = synthetic_state.register_and_inject_object(
+        _surveil_dict(count=1), 0, ZONE_HAND
+    )
+    synthetic_state.push_to_stack(spell_obj_id, 0)
+    synthetic_state.resolve_top_of_stack_pause()
+    assert synthetic_state.pending_decisions()[0]["kind"] == "SurveilChoice"
+
+    with pytest.raises(ValueError):
+        synthetic_state.submit_choose_mode_decision(0)
+    assert synthetic_state.has_pending_decision() is True
+    assert synthetic_state.pending_decisions()[0]["kind"] == "SurveilChoice"
+
+
+def test_auto_resolve_choose_mode_0_picks_first_mode(synthetic_state):
+    """``auto_resolve_pending_decisions("choose_mode_0")`` picks
+    modes[0] — observable as +1 hand size from the inner draw."""
+    hand_before = synthetic_state.hand_sizes[0]
+    life_before = synthetic_state.get_life(0)
+    spell_obj_id = synthetic_state.register_and_inject_object(
+        _choose_mode_draw_gain_dict(), 0, ZONE_HAND
+    )
+    synthetic_state.push_to_stack(spell_obj_id, 0)
+    synthetic_state.resolve_top_of_stack_pause()
+
+    synthetic_state.auto_resolve_pending_decisions("choose_mode_0")
+
+    assert synthetic_state.has_pending_decision() is False
+    assert synthetic_state.hand_sizes[0] == hand_before + 1
+    assert synthetic_state.get_life(0) == life_before
+
+
+def test_auto_resolve_default_picks_first_mode_for_choose_one_mode(synthetic_state):
+    """``auto_resolve_pending_decisions("default")`` picks modes[0]
+    for a ChooseModeChoice — same observable outcome as
+    ``"choose_mode_0"``."""
+    hand_before = synthetic_state.hand_sizes[0]
+    spell_obj_id = synthetic_state.register_and_inject_object(
+        _choose_mode_draw_gain_dict(), 0, ZONE_HAND
+    )
+    synthetic_state.push_to_stack(spell_obj_id, 0)
+    synthetic_state.resolve_top_of_stack_pause()
+
+    synthetic_state.auto_resolve_pending_decisions("default")
+
+    assert synthetic_state.has_pending_decision() is False
+    assert synthetic_state.hand_sizes[0] == hand_before + 1
+
+
+def test_resolve_top_of_stack_auto_resolves_choose_one_mode(synthetic_state):
+    """The non-pause ``resolve_top_of_stack`` auto-resolves the
+    ChooseOneMode with its per-variant default (modes[0])."""
+    hand_before = synthetic_state.hand_sizes[0]
+    spell_obj_id = synthetic_state.register_and_inject_object(
+        _choose_mode_draw_gain_dict(), 0, ZONE_HAND
+    )
+    synthetic_state.push_to_stack(spell_obj_id, 0)
+    synthetic_state.resolve_top_of_stack()
+
+    assert synthetic_state.has_pending_decision() is False
+    # Draw mode fired automatically.
+    assert synthetic_state.hand_sizes[0] == hand_before + 1
+
+
+def test_fingerprint_choose_mode_pending_differs_from_empty(synthetic_state):
+    """A state with a pending ChooseModeChoice fingerprints differently
+    from a state with no pending decision."""
+    fp_clean = synthetic_state.fingerprint()
+    spell_obj_id = synthetic_state.register_and_inject_object(
+        _choose_mode_draw_gain_dict(), 0, ZONE_HAND
+    )
+    synthetic_state.push_to_stack(spell_obj_id, 0)
+    synthetic_state.resolve_top_of_stack_pause()
+    fp_pending = synthetic_state.fingerprint()
+    assert fp_pending != fp_clean
+
+
+def test_clone_isolates_choose_mode_pending_decisions(synthetic_state):
+    """clone_once() deep-clones the ChooseModeChoice. Resolving the
+    clone leaves the source's queue intact (CoW canary)."""
+    hand_before = synthetic_state.hand_sizes[0]
+    spell_obj_id = synthetic_state.register_and_inject_object(
+        _choose_mode_draw_gain_dict(), 0, ZONE_HAND
+    )
+    synthetic_state.push_to_stack(spell_obj_id, 0)
+    synthetic_state.resolve_top_of_stack_pause()
+
+    clone = synthetic_state.clone_once()
+    assert clone.has_pending_decision() is True
+    assert clone.pending_decisions()[0]["kind"] == "ChooseModeChoice"
+
+    clone.submit_choose_mode_decision(0)
+    assert clone.has_pending_decision() is False
+    assert clone.hand_sizes[0] == hand_before + 1
+
+    assert synthetic_state.has_pending_decision() is True
+    # Source hand still pre-draw.
+    assert synthetic_state.hand_sizes[0] == hand_before

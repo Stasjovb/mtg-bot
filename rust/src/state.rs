@@ -373,6 +373,31 @@ pub enum PendingDecision {
         controller: u8,
         cards: Vec<GameObject>,
     },
+    /// **Round 28 choose-one-mode decision substrate.** "Choose one —
+    /// [mode_0]; [mode_1]; ..." Pushed by `Effect::ChooseOneMode`
+    /// (Python's `ModalChooseOne` first-slice shape, 13 EoE cards).
+    ///
+    /// **Payload.** Carries every mode's Effect on the heap, indexed
+    /// from 0. `submit_choose_mode_decision(chosen_idx)` consumes the
+    /// head and applies `modes[chosen_idx]` via the standard
+    /// `apply_effect` dispatcher, with the original `source_obj_id`
+    /// propagated (so identity-coupled riders retain the resolving
+    /// spell's identity).
+    ///
+    /// **First-slice scope.** Resolve-time mode picking only. Python's
+    /// ModalChooseOne supports cast-time mode picks routed through
+    /// `state.resolving_modes`, plus `or_both=True` ("choose one or
+    /// both" oracle text), plus per-mode target picking. All deferred
+    /// — this first slice exposes only the modal-choice substrate.
+    ///
+    /// **Auto-resolve default.** `"default"` / `"choose_mode_0"` pick
+    /// `modes[0]` — matches Python's no-agent-seated fallback. Other
+    /// variants' strategies fall through to the same default.
+    ChooseModeChoice {
+        source_obj_id: u32,
+        controller: u8,
+        modes: Vec<crate::cards::Effect>,
+    },
 }
 
 /// `GameState` carries an `Arc<RegistryData>` so every clone shares

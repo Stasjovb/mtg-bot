@@ -662,6 +662,29 @@ refactor on either side that breaks the parity surfaces immediately.
     rejection; auto-resolve `pick_top` / `default`; non-pause
     `resolve_top_of_stack` auto-resolve; zero-count / library-clamp;
     fingerprint divergence; clone isolation).
+  - **Round-28 extension — `ChooseModeChoice` variant (4th).** Fourth
+    variant on the multi-variant substrate, pushed by
+    `Effect::ChooseOneMode { modes: Vec<Effect> }` — Python's
+    `ModalChooseOne(modes=...)` (combinators.py:1112, 13 EoE cards)
+    in its first-slice shape: resolve-time mode picking only (cast-
+    time mode routing via `state.resolving_modes`, `or_both`, and
+    per-mode target picking deferred). Payload: `{ source_obj_id,
+    controller, modes: Vec<Effect> }`. Dispatcher
+    `submit_choose_mode_decision(chosen_idx)` validates index range
+    transactionally then recursively applies `modes[chosen_idx]` via
+    `apply_effect` with the original `source_obj_id`. Auto-resolve
+    gains `"choose_mode_0"` (picks `modes[0]`); `"default"` fallback
+    also picks `modes[0]` — mirrors Python's no-agent-seated
+    fallback in `ModalChooseOne.resolve`. Empty `modes` list is
+    rejected at register time so the resolve arm always has at least
+    one mode. Fingerprint serializer carries each mode's Debug
+    format (same Debug-over-Serialize choice as MayDoChoice). Pinned
+    by 14 new tests in `tests_rust/test_pending_decisions.py`:
+    parse + missing-modes + empty-modes rejection; resolve-pushes-
+    pending; submit mode-0 (draw) + mode-1 (gain-life) + out-of-
+    range + empty-queue + cross-variant; auto-resolve
+    `choose_mode_0` / `default`; non-pause `resolve_top_of_stack`
+    auto-resolve; fingerprint divergence; clone isolation.
 
 ### I23. UEOT-modifier framework: per-object expiring continuous effects with CR 514.3 cleanup-step expiration
 

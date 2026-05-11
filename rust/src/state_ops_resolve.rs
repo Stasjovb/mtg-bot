@@ -4018,6 +4018,29 @@ fn apply_effect(
                 },
             );
         }
+        // Round-28 ModalChooseOne first-slice. Pushes a
+        // ChooseModeChoice carrying every mode's Effect on the heap
+        // and short-circuits. Controller drains via
+        // submit_choose_mode_decision(chosen_idx) (manual) or
+        // auto-resolve "default" / "choose_mode_0" (picks modes[0]).
+        //
+        // Controller convention: state.active_player (first-slice
+        // shape consistent with Surveil / MayDo / LookTopN). Modes
+        // are cloned so the registry's printing keeps its original
+        // Vec and the PendingDecision owns its copy.
+        //
+        // Empty-modes case is rejected at parse time so the resolve
+        // arm always has at least one mode to fall through to.
+        Effect::ChooseOneMode { modes } => {
+            let controller = state.active_player;
+            state.pending_decisions.push(
+                PendingDecision::ChooseModeChoice {
+                    source_obj_id,
+                    controller,
+                    modes: modes.clone(),
+                },
+            );
+        }
     }
     Ok(())
 }

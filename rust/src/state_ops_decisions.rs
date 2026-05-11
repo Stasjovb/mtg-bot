@@ -66,12 +66,13 @@ pub(crate) fn auto_resolve_pending(
         | "may_do_yes"
         | "may_do_no"
         | "pick_top"
+        | "choose_mode_0"
         | "default" => {}
         other => {
             return Err(PyValueError::new_err(format!(
                 "auto_resolve_pending_decisions: unknown strategy {other:?}; \
                  valid strategies: keep_all_on_top, send_all_to_graveyard, \
-                 may_do_yes, may_do_no, pick_top, default"
+                 may_do_yes, may_do_no, pick_top, choose_mode_0, default"
             )))
         }
     }
@@ -124,6 +125,26 @@ pub(crate) fn auto_resolve_pending(
                 // for robustness (a multi-variant queue should not
                 // panic if drained with an unrelated strategy).
                 resolve_pick_card_to_hand(state, controller, cards, /*chosen_idx*/ 0)?;
+            }
+            PendingDecision::ChooseModeChoice {
+                source_obj_id,
+                modes,
+                ..
+            } => {
+                // "default" / "choose_mode_0" → pick modes[0]. Other
+                // strategies fall through to the same default for
+                // robustness (matches Python's no-agent-seated
+                // fallback in ModalChooseOne.resolve). An empty modes
+                // Vec is a programmer error at the parse layer; if
+                // it ever reaches here we drop the decision silently
+                // rather than panic.
+                if !modes.is_empty() {
+                    crate::state_ops_resolve::apply_effect_pub(
+                        state,
+                        &modes[0],
+                        source_obj_id,
+                    )?;
+                }
             }
         }
     }
@@ -282,6 +303,23 @@ impl GameState {
                     d.set_item("controller", *controller)?;
                     let card_ids: Vec<u32> = cards.iter().map(|o| o.id).collect();
                     d.set_item("cards", card_ids)?;
+                }
+                PendingDecision::ChooseModeChoice {
+                    source_obj_id,
+                    controller,
+                    modes,
+                } => {
+                    d.set_item("kind", "ChooseModeChoice")?;
+                    d.set_item("source_obj_id", *source_obj_id)?;
+                    d.set_item("controller", *controller)?;
+                    // Surface each mode's full Effect dict so agents
+                    // can inspect the choice surface. List position
+                    // == mode index for submit_choose_mode_decision.
+                    let mode_dicts: Vec<Bound<'_, PyDict>> = modes
+                        .iter()
+                        .map(|m| crate::cards::effect_to_pydict(py, m))
+                        .collect::<PyResult<Vec<_>>>()?;
+                    d.set_item("modes", mode_dicts)?;
                 }
             }
             out.append(d)?;
@@ -515,6 +553,63 @@ impl GameState {
         resolve_pick_card_to_hand(self, controller, cards, chosen_idx)
     }
 
+    /// Consume the head `ChooseModeChoice` on the pending-decisions
+    /// queue: apply `modes[chosen_idx]` via the standard
+    /// `apply_effect` dispatcher (with the original `source_obj_id`
+    /// propagated so identity-coupled riders retain identity).
+    /// `chosen_idx` MUST be a valid index into `modes`; out-of-range
+    /// raises `ValueError` transactionally (no mutation on failure).
+    ///
+    /// Powers the round-28 `Effect::ChooseOneMode` wrapper. Mirrors
+    /// Python's `ModalChooseOne.resolve` for the resolve-time-pick
+    /// shape (cast-time mode picking via `state.resolving_modes` is
+    /// deferred).
+    ///
+    /// Raises `ValueError` if the queue is empty, its head is not a
+    /// `ChooseModeChoice`, or `chosen_idx` is out of range.
+    fn submit_choose_mode_decision(&mut self, chosen_idx: usize) -> PyResult<()> {
+        if self.pending_decisions.is_empty() {
+            return Err(PyValueError::new_err(
+                "submit_choose_mode_decision: no pending decision",
+            ));
+        }
+        // Inspect head — fail before any mutation on a discriminant
+        // mismatch or out-of-range index.
+        match &self.pending_decisions[0] {
+            PendingDecision::ChooseModeChoice { modes, .. } => {
+                if chosen_idx >= modes.len() {
+                    return Err(PyValueError::new_err(format!(
+                        "submit_choose_mode_decision: chosen_idx {chosen_idx} \
+                         out of range for {} modes",
+                        modes.len()
+                    )));
+                }
+            }
+            other => {
+                return Err(PyValueError::new_err(format!(
+                    "submit_choose_mode_decision: head of pending-decisions queue is \
+                     not a ChooseModeChoice (got {:?}); call the variant-specific \
+                     submit_* dispatcher (e.g. submit_surveil_decision, \
+                     submit_may_do_decision, submit_pick_card_decision)",
+                    std::mem::discriminant(other)
+                )));
+            }
+        }
+        // Validation passed — consume the head.
+        let decision = self.pending_decisions.remove(0);
+        let (source_obj_id, modes) = match decision {
+            PendingDecision::ChooseModeChoice {
+                source_obj_id, modes, ..
+            } => (source_obj_id, modes),
+            _ => unreachable!("validated above"),
+        };
+        crate::state_ops_resolve::apply_effect_pub(
+            self,
+            &modes[chosen_idx],
+            source_obj_id,
+        )
+    }
+
     /// Drain the pending-decisions queue using a deterministic
     /// strategy. Useful for callers that don't model the choice
     /// dimension (training harnesses, parity tests, deterministic
@@ -535,9 +630,13 @@ impl GameState {
     /// * `"pick_top"` — PickCardFromExamined picks the topmost
     ///   examined card (cards[0]). Other variants fall through to
     ///   their own per-variant defaults.
+    /// * `"choose_mode_0"` — ChooseModeChoice picks `modes[0]`.
+    ///   Other variants fall through to their own per-variant
+    ///   defaults.
     /// * `"default"` — Surveil keeps all on top; MayDo answers "yes";
-    ///   PickCardFromExamined picks the topmost examined card
-    ///   (mirrors the base-Agent default in Python).
+    ///   PickCardFromExamined picks the topmost examined card;
+    ///   ChooseModeChoice picks `modes[0]` (mirrors the base-Agent
+    ///   default in Python).
     ///
     /// Raises `ValueError` on an unknown strategy.
     fn auto_resolve_pending_decisions(&mut self, strategy: &str) -> PyResult<()> {
