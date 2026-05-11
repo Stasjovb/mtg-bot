@@ -4041,6 +4041,24 @@ fn apply_effect(
                 },
             );
         }
+        // Round-28 IfYouDo first-slice: push an IfYouDoChoice
+        // carrying both nested Effects on the heap. Controller drains
+        // via submit_if_you_do_decision(yes) (manual) or auto-resolve
+        // "default" / "if_you_do_yes" (apply both) / "if_you_do_no"
+        // (skip both).
+        //
+        // Controller convention: state.active_player. Both nested
+        // effects cloned so the registry's printing keeps its
+        // originals and the PendingDecision owns its copies.
+        Effect::IfYouDo { do_action, then_action } => {
+            let controller = state.active_player;
+            state.pending_decisions.push(PendingDecision::IfYouDoChoice {
+                source_obj_id,
+                controller,
+                do_action: do_action.clone(),
+                then_action: then_action.clone(),
+            });
+        }
     }
     Ok(())
 }

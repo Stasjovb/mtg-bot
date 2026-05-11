@@ -235,6 +235,8 @@ the test lands in a commit.
 
 | rust(effect-choose-one-mode): PendingDecision::ChooseModeChoice (4th variant) + submit_choose_mode_decision pymethod + auto-resolve 'choose_mode_0' + Effect::ChooseOneMode { modes: Vec<Effect> } — Python's ModalChooseOne first-slice (resolve-time pick only; 13 EoE cards target family). | tests_rust/test_pending_decisions.py extend | green  | feature/rust-effect-choose-one-mode |
 
+| rust(effect-if-you-do): PendingDecision::IfYouDoChoice (5th variant) + submit_if_you_do_decision pymethod + auto-resolve 'if_you_do_yes' / 'if_you_do_no' + Effect::IfYouDo { do_action, then_action } — Python's IfYouDo combinator first-slice ("looter"-style IfYouDo(MayDo(X), Y); 7+ EoE cards target family). | tests_rust/test_pending_decisions.py extend | green  | feature/rust-effect-if-you-do |
+
 ## Build invocation reminder
 
 ```

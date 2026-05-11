@@ -398,6 +398,38 @@ pub enum PendingDecision {
         controller: u8,
         modes: Vec<crate::cards::Effect>,
     },
+    /// **Round 28 if-you-do decision substrate.** "[do_action]; if you
+    /// do, [then_action]." First-slice form for "looter"-style cards:
+    /// `IfYouDo(MayDo(DiscardSelf), DrawCards)` collapses to a single
+    /// yes/no choice — yes applies both actions in order, no skips
+    /// both.
+    ///
+    /// **Payload.** Carries both nested Effects on the heap. On a
+    /// "yes" submit, the dispatcher applies `do_action` then
+    /// `then_action` via `apply_effect_pub` with the same
+    /// `source_obj_id` (so identity-coupled riders retain identity).
+    /// On "no", neither is applied.
+    ///
+    /// **Why a separate variant from MayDoChoice.** A MayDo-with-then
+    /// could be modeled as an extension of `MayDoChoice` carrying an
+    /// optional `then_effect`, but a separate variant keeps the
+    /// dispatcher surface honest: a card emits `Effect::IfYouDo`
+    /// when oracle text says "...; if you do, ...", and emits
+    /// `Effect::MayDo` for "you may ..." (no follow-up). Two
+    /// variants, two dispatchers — matches the Python class split
+    /// (`MayDo` vs `IfYouDo`).
+    ///
+    /// **First-slice scope.** Only IfYouDo where `do_action` is
+    /// implicitly success-on-yes (i.e. IfYouDo(MayDo(X), Y)). General
+    /// IfYouDo with arbitrary success-signaling do_actions (e.g.
+    /// SacrificeACreature returning False on empty bf) is deferred —
+    /// would need apply_effect to return a Result<bool>.
+    IfYouDoChoice {
+        source_obj_id: u32,
+        controller: u8,
+        do_action: Box<crate::cards::Effect>,
+        then_action: Box<crate::cards::Effect>,
+    },
 }
 
 /// `GameState` carries an `Arc<RegistryData>` so every clone shares
