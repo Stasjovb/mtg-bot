@@ -1837,6 +1837,43 @@ fn apply_effect(
                     .push(obj);
             }
         }
+        // Round-28 coverage. Mirror of
+        // ReturnCreatureFromYourGraveyardToBattlefield but destination
+        // is hand. Same first-creature-in-graveyard target selection;
+        // same CR 400.7 zone-change reset (tapped/damage/counters
+        // zeroed). summoning_sick set to true per the r28 CE1
+        // universal-true default (gameplay-irrelevant in hand zone).
+        Effect::ReturnCreatureFromYourGraveyardToHand => {
+            let _ = source_obj_id;
+            let controller_idx = state.active_player as usize;
+            let target_obj_id: Option<u32> = state.players[controller_idx]
+                .graveyard
+                .iter()
+                .find_map(|obj| match state.registry.lookup(obj.printing_id) {
+                    Some(printing)
+                        if printing.card_types.iter().any(|t| t == "Creature") =>
+                    {
+                        Some(obj.id)
+                    }
+                    _ => None,
+                });
+            let Some(target_id) = target_obj_id else {
+                return Ok(());
+            };
+            let graveyard_mut: &mut Vec<GameObject> =
+                Arc::make_mut(&mut state.players[controller_idx].graveyard);
+            let pos = graveyard_mut
+                .iter()
+                .position(|o| o.id == target_id)
+                .expect("target_id was just found in graveyard but not on re-scan");
+            let mut obj = graveyard_mut.remove(pos);
+            obj.zone = ZONE_HAND;
+            obj.tapped = false;
+            obj.summoning_sick = true;
+            obj.damage = 0;
+            obj.counters = 0;
+            Arc::make_mut(&mut state.players[controller_idx].hand).push(obj);
+        }
         Effect::ReturnCreatureFromYourGraveyardToBattlefield => {
             let _ = source_obj_id; // controller-targeted, not source-relative
             let controller_idx = state.active_player as usize;

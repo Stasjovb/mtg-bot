@@ -191,6 +191,8 @@ the test lands in a commit.
 
 | rust(effect-pump-creatures-you-control-ueot): Effect::PumpCreaturesYouControlUntilEOT — iterates source-controller's bf, pumps every creature via UeotModifier::PowerToughnessBonus (6 EoE anthem-shape cards). | tests_rust/test_ueot.py extend | green  | feature/rust-effect-pump-creatures-you-control-ueot |
 
+| rust(effect-return-creature-gy-to-hand): Effect::ReturnCreatureFromYourGraveyardToHand — mirror of the existing graveyard-to-bf arm with destination=ZONE_HAND (3 EoE cards). | tests_rust/test_resolve.py extend | green  | feature/rust-effect-return-creature-graveyard-to-hand |
+
 ## Build invocation reminder
 
 ```

@@ -7709,3 +7709,102 @@ def test_resolve_sequence_nested_executes_inner(synthetic_state):
 
     # Inner DrawCards(2) fired — library shrank by 2.
     assert synthetic_state.library_sizes[0] == p0_lib_before - 2
+
+
+# -------------------- Round-28 ReturnCreatureFromYourGraveyardToHand --------------------
+
+
+def _return_to_hand_dict():
+    """Reanimate-to-hand-shape printing. Sorcery-typed; post-resolve
+    routes source to controller's graveyard (CR 608.2m)."""
+    return {
+        "name": "Test Disentomb",
+        "card_types": ["Sorcery"],
+        "mana_cost": {"B": 1},
+        "effects": [
+            {"kind": "return_creature_from_your_graveyard_to_hand"}
+        ],
+    }
+
+
+def test_resolve_return_creature_from_gy_to_hand_moves_creature(synthetic_state):
+    """Happy path: creature in p0 graveyard + return-to-hand spell ->
+    creature lands in p0 hand, removed from graveyard."""
+    creature_id = synthetic_state.register_and_inject_object(
+        _vanilla_creature_dict(), 0, ZONE_GRAVEYARD
+    )
+    spell_id = synthetic_state.register_and_inject_object(
+        _return_to_hand_dict(), 0, ZONE_HAND
+    )
+    synthetic_state.push_to_stack(spell_id, 0)
+    hand_before = synthetic_state.hand_sizes[0]
+    gy_before = synthetic_state.graveyard_sizes[0]
+
+    synthetic_state.resolve_top_of_stack()
+
+    # Creature moved to hand.
+    assert synthetic_state.find_object_zone(creature_id) == ZONE_HAND
+    # Hand: +1 from creature, -0 (spell was already pushed onto stack so
+    # hand had already lost the spell pre-cast).
+    assert synthetic_state.hand_sizes[0] == hand_before  # +1 creature returned, -1 source resolved to gy
+    # Graveyard: -1 (creature left), +1 (post-resolve source -> gy) = 0
+    # net change relative to before-cast.
+    assert synthetic_state.graveyard_sizes[0] == gy_before
+
+
+def test_resolve_return_creature_from_gy_to_hand_skips_non_creatures(synthetic_state):
+    """Non-creature graveyard cards are skipped; the first creature
+    encountered is the target."""
+    # Put a land THEN a creature in graveyard — the find_map should
+    # skip the land and pick the creature.
+    land_id = synthetic_state.register_and_inject_object(
+        _vanilla_land_dict(), 0, ZONE_GRAVEYARD
+    )
+    creature_id = synthetic_state.register_and_inject_object(
+        _vanilla_creature_dict(), 0, ZONE_GRAVEYARD
+    )
+    spell_id = synthetic_state.register_and_inject_object(
+        _return_to_hand_dict(), 0, ZONE_HAND
+    )
+    synthetic_state.push_to_stack(spell_id, 0)
+    synthetic_state.resolve_top_of_stack()
+
+    assert synthetic_state.find_object_zone(creature_id) == ZONE_HAND
+    # Land stayed in graveyard.
+    assert synthetic_state.find_object_zone(land_id) == ZONE_GRAVEYARD
+
+
+def test_resolve_return_creature_from_gy_to_hand_empty_graveyard_fizzles(synthetic_state):
+    """Empty / no-creature graveyard -> silent fizzle. Source still
+    resolves cleanly (post-resolve routes it to graveyard for sorcery)."""
+    spell_id = synthetic_state.register_and_inject_object(
+        _return_to_hand_dict(), 0, ZONE_HAND
+    )
+    synthetic_state.push_to_stack(spell_id, 0)
+    # Should resolve without raising; no creature was in graveyard,
+    # so no zone changes (other than the source -> graveyard).
+    synthetic_state.resolve_top_of_stack()
+    # Spell ended up in graveyard (CR 608.2m post-resolve).
+    assert synthetic_state.find_object_zone(spell_id) == ZONE_GRAVEYARD
+
+
+def test_resolve_return_creature_from_gy_to_hand_zone_change_resets(synthetic_state):
+    """CR 400.7: tapped / damage / counters reset on zone change.
+    summoning_sick is set to true (r28 CE1 universal default for hand
+    zone)."""
+    creature_id = synthetic_state.register_and_inject_object(
+        _vanilla_creature_dict(), 0, ZONE_GRAVEYARD
+    )
+    spell_id = synthetic_state.register_and_inject_object(
+        _return_to_hand_dict(), 0, ZONE_HAND
+    )
+    synthetic_state.push_to_stack(spell_id, 0)
+    synthetic_state.resolve_top_of_stack()
+
+    # Look up the creature in p0's hand and check state reset.
+    hand_snap = synthetic_state.hand_snapshot(0)
+    creature_obj = next(d for d in hand_snap if d["id"] == creature_id)
+    assert creature_obj["tapped"] is False
+    assert creature_obj["damage"] == 0
+    assert creature_obj["counters"] == 0
+    assert creature_obj["summoning_sick"] is True  # r28 CE1 default
