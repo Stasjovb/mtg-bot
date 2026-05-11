@@ -85,23 +85,10 @@ class TrainingHistory:
 def auto_device() -> str:
     """Return the best available torch device string for this host.
 
-    Order of preference: ``"cuda"`` > ``"mps"`` > ``"cpu"``. CUDA wins
-    on machines with NVIDIA GPUs (master / Win10 remote); MPS picks
-    up Apple Silicon (Mac remote); CPU is the universal fallback.
-
-    The ``hasattr`` check on ``torch.backends.mps`` keeps this safe
-    on older torch builds where the submodule isn't present (current
-    torch 2.x always exposes it, but the check costs nothing and
-    documents the precondition).
-
-    Both ``is_available()`` and ``is_built()`` are guarded for the
-    MPS branch: ``is_built()`` reports whether the torch wheel was
-    compiled with MPS support (False on Linux/Windows wheels) and
-    ``is_available()`` reports whether a usable Apple Silicon GPU
-    is reachable at runtime. In current torch, ``is_available()``
-    already implies ``is_built()``, but pinning the conjunction
-    here makes the Mac-only intent explicit and survives any future
-    upstream loosening of ``is_available()``.
+    Order of preference: ``"cuda"`` > ``"cpu"``. CUDA wins on machines
+    with NVIDIA GPUs (master / Win10 remote); CPU is the universal
+    fallback — including on Apple Silicon, see the MPS measurement
+    below.
 
     NOTE: these probes (``torch.cuda.is_available``,
     ``torch.backends.mps.is_available``, ``torch.backends.mps.is_built``)
@@ -109,19 +96,35 @@ def auto_device() -> str:
     time primes the CUDA driver in the parent and breaks the Linux
     fork+mp.Pool path used by the production master (see PR #36 +
     the deferred ``device='auto'`` sentinel in ``NNPimcConfig.build``).
+
+    **Why MPS does NOT win on Mac (measured 2026-05-11, v18 weights,
+    1024-1024-512 trunk + 1+517 heads, batch_evaluate_with_policy):**
+
+    +---------+--------------+--------------+--------------+
+    | Batch   | MPS ms/state | CPU ms/state | MPS verdict  |
+    +=========+==============+==============+==============+
+    | 1       | 0.94         | 0.07         | 15x slower   |
+    | 8       | 0.106        | 0.041        | 2.6x slower  |
+    | 32      | 0.033        | 0.017        | 1.9x slower  |
+    | 128     | 0.017        | 0.015        | 1.1x slower  |
+    +---------+--------------+--------------+--------------+
+
+    Apple Silicon's CPU (M-series with AMX matrix unit) is genuinely
+    fast at small dense matmul. At our NN size (51 input dim, ~830k
+    params) the MPS GPU-dispatch overhead never amortizes; even at
+    batch=128 MPS still loses. Correctness is fine — values match
+    CPU within 6e-8 and policies are bit-identical — but enabling
+    MPS in production would slow the Mac shard ~2x at the MCTS
+    batch=32 working size.
+
+    If the NN grows substantially (e.g. >2048-trunk) or Apple ships
+    further MPS perf improvements, revisit this measurement. Until
+    then the MPS branch is intentionally absent; we keep the
+    ``mps.is_available`` import-time guards out of this function so
+    nothing primes the MPS driver speculatively either.
     """
     if torch.cuda.is_available():
         return "cuda"
-    # MPS branch — only fires on Apple Silicon Macs. Dead code on the
-    # Linux WSL2 master and the Win10 RTX 4070 Ti remote (both take
-    # the CUDA branch above). Do not delete: removing this strands
-    # the Mac shard on CPU and silently throttles its contribution.
-    if (
-        hasattr(torch.backends, "mps")
-        and torch.backends.mps.is_available()
-        and torch.backends.mps.is_built()
-    ):
-        return "mps"
     return "cpu"
 
 
