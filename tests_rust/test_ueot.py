@@ -1166,3 +1166,117 @@ def test_pump_target_artifact_or_creature_clears_at_cleanup(synthetic_state):
 
     assert synthetic_state.effective_power(target_id) == 2
     assert synthetic_state.effective_toughness(target_id) == 2
+
+
+# ---------------------------------------------------------------- GrantKeywordToTargetCreatureUntilEOT (r28)
+
+
+def _grant_keyword_target_dict(keyword: str = "unblockable"):
+    """Instant that grants `keyword` UEOT to the first creature on the
+    controller's battlefield."""
+    return {
+        "name": f"Test Grant {keyword} UEOT",
+        "mana_cost": {"U": 1},
+        "card_types": ["Instant"],
+        "effects": [
+            {
+                "kind": "grant_keyword_to_target_creature_until_eot",
+                "keyword": keyword,
+            }
+        ],
+    }
+
+
+def test_register_grant_keyword_target_default_unblockable(empty_registry):
+    """A grant-unblockable register-and-readback round-trip."""
+    pid = empty_registry.register_printing(_grant_keyword_target_dict("unblockable"))
+    effects = empty_registry.get_printing_effects(pid)
+    assert len(effects) == 1
+    assert effects[0]["kind"] == "grant_keyword_to_target_creature_until_eot"
+    assert effects[0]["keyword"] == "unblockable"
+
+
+def test_register_grant_keyword_target_missing_keyword_raises(empty_registry):
+    """Missing `keyword` field rejected at register time."""
+    with pytest.raises(ValueError):
+        empty_registry.register_printing(
+            {
+                "name": "bad-grant",
+                "card_types": ["Instant"],
+                "effects": [{"kind": "grant_keyword_to_target_creature_until_eot"}],
+            }
+        )
+
+
+def test_register_grant_keyword_target_empty_string_raises(empty_registry):
+    """Empty-string keyword rejected at register time."""
+    with pytest.raises(ValueError):
+        empty_registry.register_printing(_grant_keyword_target_dict(keyword=""))
+
+
+def test_grant_keyword_target_unblockable_pumps_first_creature(synthetic_state):
+    """Resolving the spell grants 'unblockable' to the first creature on
+    the source's controller's battlefield. has_keyword(target_id,
+    'unblockable') flips to True."""
+    target_id = _first_creature_id_on_battlefield(synthetic_state, 0)
+    assert synthetic_state.has_keyword(target_id, "unblockable") is False
+
+    spell_id = synthetic_state.register_and_inject_object(
+        _grant_keyword_target_dict("unblockable"), 0, ZONE_HAND
+    )
+    synthetic_state.push_to_stack(spell_id, 0)
+    synthetic_state.resolve_top_of_stack()
+
+    assert synthetic_state.has_keyword(target_id, "unblockable") is True
+
+
+def test_grant_keyword_target_haste(synthetic_state):
+    """The dispatcher is keyword-agnostic — passing 'haste' grants
+    haste UEOT to the first creature."""
+    target_id = _first_creature_id_on_battlefield(synthetic_state, 0)
+    assert synthetic_state.has_keyword(target_id, "haste") is False
+
+    spell_id = synthetic_state.register_and_inject_object(
+        _grant_keyword_target_dict("haste"), 0, ZONE_HAND
+    )
+    synthetic_state.push_to_stack(spell_id, 0)
+    synthetic_state.resolve_top_of_stack()
+
+    assert synthetic_state.has_keyword(target_id, "haste") is True
+
+
+def test_grant_keyword_target_clears_at_cleanup(synthetic_state):
+    """UEOT-granted keyword clears at the next cleanup step (CR 514.3
+    via the r27 UEOT-clear pass)."""
+    target_id = _first_creature_id_on_battlefield(synthetic_state, 0)
+    spell_id = synthetic_state.register_and_inject_object(
+        _grant_keyword_target_dict("unblockable"), 0, ZONE_HAND
+    )
+    synthetic_state.push_to_stack(spell_id, 0)
+    synthetic_state.resolve_top_of_stack()
+    assert synthetic_state.has_keyword(target_id, "unblockable") is True
+
+    synthetic_state.cleanup_step_for_active_player()
+
+    assert synthetic_state.has_keyword(target_id, "unblockable") is False
+
+
+def test_grant_keyword_target_no_creature_fizzles(synthetic_state):
+    """No creature on controller's bf → silent fizzle."""
+    state = synthetic_state.clone_once()
+    while True:
+        snap = state.battlefield_snapshot()
+        my_creature_ids = [
+            d["id"] for d in snap
+            if d["controller_id"] == 0 and d["printing_name"] == "Grizzly Bears"
+        ]
+        if not my_creature_ids:
+            break
+        state.move_object(my_creature_ids[0], 3, 0)  # → graveyard
+
+    spell_id = state.register_and_inject_object(
+        _grant_keyword_target_dict("unblockable"), 0, ZONE_HAND
+    )
+    state.push_to_stack(spell_id, 0)
+    # Resolves without raising; no modifier written.
+    state.resolve_top_of_stack()

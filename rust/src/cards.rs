@@ -1312,6 +1312,35 @@ pub enum Effect {
     /// **Source not found anywhere** → silent fizzle (mirrors
     /// EachOpponentDiscards / EachOpponentMillsCards).
     EachOpponentSacrificesCreature,
+    /// **Round 28 grant-keyword-UEOT family.** Target creature gains a
+    /// keyword until end of turn. Mirrors Python's
+    /// `GrantUnblockableUEOT` (3+ EoE cards) and forward-compatibly
+    /// covers any future `GrantHasteUEOT` / `GrantFlyingUEOT` /
+    /// `GrantTrampleUEOT` cards via the same dispatch — just a
+    /// different `keyword` string.
+    ///
+    /// **Mechanism.** Push a `UeotModifier::GrantKeyword { keyword }`
+    /// onto the target's `ueot_modifiers` Vec. The modifier auto-
+    /// expires at the next cleanup step via the r27 CR 514.3 UEOT-
+    /// clear pass. The existing `has_keyword_via_ueot(keyword)`
+    /// accessor on `GameObject` surfaces the granted keyword for
+    /// combat / blocking checks.
+    ///
+    /// **Target semantics — first-slice deterministic.** Pick the
+    /// FIRST creature on source-controller's battlefield (zone-
+    /// iteration order, mirrors PumpTargetCreatureUntilEOT). No
+    /// eligible creature → silent fizzle. Python's
+    /// `GrantUnblockableUEOT` carries `attacking_only` /
+    /// `exclude_self` / `power_at_most` flags; this Rust first slice
+    /// does NOT carry any of them (the no-flag form is by far the
+    /// most common in real cards — "target creature is unblockable
+    /// this turn").
+    ///
+    /// **Keyword convention.** Lowercase, matches
+    /// `has_keyword_via_ueot` lookup. Common values: `"unblockable"`
+    /// (Python's "can't be blocked"), `"haste"`, `"flying"`,
+    /// `"trample"`, etc. Empty string rejected at parse time.
+    GrantKeywordToTargetCreatureUntilEOT { keyword: String },
 }
 
 #[derive(Clone, Debug)]
@@ -1986,6 +2015,25 @@ fn parse_effect(dict: &Bound<'_, PyDict>) -> PyResult<Effect> {
             // Unit variant; no fields.
             Ok(Effect::EachOpponentSacrificesCreature)
         }
+        "grant_keyword_to_target_creature_until_eot" => {
+            // Required `keyword` field: non-empty lowercase string.
+            let keyword_raw = dict.get_item("keyword")?.ok_or_else(|| {
+                PyValueError::new_err(
+                    "grant_keyword_to_target_creature_until_eot: missing required 'keyword' field",
+                )
+            })?;
+            let keyword: String = keyword_raw.extract().map_err(|e| {
+                PyValueError::new_err(format!(
+                    "grant_keyword_to_target_creature_until_eot.keyword must be a string (got: {e})"
+                ))
+            })?;
+            if keyword.is_empty() {
+                return Err(PyValueError::new_err(
+                    "grant_keyword_to_target_creature_until_eot.keyword must be non-empty",
+                ));
+            }
+            Ok(Effect::GrantKeywordToTargetCreatureUntilEOT { keyword })
+        }
         "each_opponent_mills_cards" => {
             // Python's `EachOpponentMillsCards(count: int = 1)` dataclass.
             // Missing `count` defaults to 1; negative count raises.
@@ -2316,7 +2364,7 @@ fn parse_effect(dict: &Bound<'_, PyDict>) -> PyResult<Effect> {
             Ok(Effect::Sequence { effects: children })
         }
         other => Err(PyValueError::new_err(format!(
-            "unknown effect kind {other:?}; valid: deal_damage, draw_cards, gain_life, return_to_hand, mill, mill_target_player, exile_target, tap_target, untap_target, sacrifice, add_counters, discard_card, scry_n, destroy_target, damage_each_opponent, damage_each_creature, create_token, add_mana_to_pool, search_library_for_basic_land_tapped, put_plus_one_counter_on_self, surveil, counter_target_spell, return_creature_from_your_graveyard_to_battlefield, discard_self, each_opponent_loses_life, lose_life, target_opponent_loses_life, each_opponent_discards, destroy_all_creatures, destroy_target_nonland_permanent, destroy_target_artifact, destroy_target_land, deal_damage_any_target, pump_self_until_eot, pump_target_creature_until_eot, sequence, pump_creatures_you_control_until_eot, return_creature_from_your_graveyard_to_hand, put_plus_one_counter_on_each_creature_you_control, put_plus_one_counter_on_creature_you_control, add_n_mana_of_chosen_color, search_library_for_card, pump_creatures_opponents_control_until_eot, put_card_from_graveyard_on_bottom_of_library, move_self_counters_to_target_creature_you_control, deal_damage_equal_to_source_power_any_target, tap_target_artifact_or_creature, conditional_on_tapped_creatures, put_plus_one_counter_on_each_of_up_to_n_target_creatures, put_charge_counters_on_self, create_token_copy_of_target_creature_you_control, optional_sac_artifact_for_effect, owner_puts_target_artifact_or_creature_on_top_or_bottom_of_library, attach_to_target_creature_you_control, destroy_enchanted_permanent, tap_enchanted_permanent, exile_target_creature_until_source_leaves, exile_opponents_nonland_permanent_until_leaves, may_do, look_top_n_put_one_in_hand_rest_to_graveyard, choose_one_mode, if_you_do, each_opponent_mills_cards, pump_target_artifact_or_creature_until_eot, each_opponent_sacrifices_creature"
+            "unknown effect kind {other:?}; valid: deal_damage, draw_cards, gain_life, return_to_hand, mill, mill_target_player, exile_target, tap_target, untap_target, sacrifice, add_counters, discard_card, scry_n, destroy_target, damage_each_opponent, damage_each_creature, create_token, add_mana_to_pool, search_library_for_basic_land_tapped, put_plus_one_counter_on_self, surveil, counter_target_spell, return_creature_from_your_graveyard_to_battlefield, discard_self, each_opponent_loses_life, lose_life, target_opponent_loses_life, each_opponent_discards, destroy_all_creatures, destroy_target_nonland_permanent, destroy_target_artifact, destroy_target_land, deal_damage_any_target, pump_self_until_eot, pump_target_creature_until_eot, sequence, pump_creatures_you_control_until_eot, return_creature_from_your_graveyard_to_hand, put_plus_one_counter_on_each_creature_you_control, put_plus_one_counter_on_creature_you_control, add_n_mana_of_chosen_color, search_library_for_card, pump_creatures_opponents_control_until_eot, put_card_from_graveyard_on_bottom_of_library, move_self_counters_to_target_creature_you_control, deal_damage_equal_to_source_power_any_target, tap_target_artifact_or_creature, conditional_on_tapped_creatures, put_plus_one_counter_on_each_of_up_to_n_target_creatures, put_charge_counters_on_self, create_token_copy_of_target_creature_you_control, optional_sac_artifact_for_effect, owner_puts_target_artifact_or_creature_on_top_or_bottom_of_library, attach_to_target_creature_you_control, destroy_enchanted_permanent, tap_enchanted_permanent, exile_target_creature_until_source_leaves, exile_opponents_nonland_permanent_until_leaves, may_do, look_top_n_put_one_in_hand_rest_to_graveyard, choose_one_mode, if_you_do, each_opponent_mills_cards, pump_target_artifact_or_creature_until_eot, each_opponent_sacrifices_creature, grant_keyword_to_target_creature_until_eot"
         ))),
     }
 }
@@ -2759,6 +2807,10 @@ pub(crate) fn effect_to_pydict<'py>(
         }
         Effect::EachOpponentSacrificesCreature => {
             d.set_item("kind", "each_opponent_sacrifices_creature")?;
+        }
+        Effect::GrantKeywordToTargetCreatureUntilEOT { keyword } => {
+            d.set_item("kind", "grant_keyword_to_target_creature_until_eot")?;
+            d.set_item("keyword", keyword.as_str())?;
         }
         Effect::Sequence { effects } => {
             d.set_item("kind", "sequence")?;
