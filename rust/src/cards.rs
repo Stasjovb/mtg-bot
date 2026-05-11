@@ -956,6 +956,17 @@ pub enum Effect {
     /// Source with negative effective power is treated as 0 damage
     /// (defensive — Python clamps at 0).
     DealDamageEqualToSourcePowerAnyTarget,
+    /// **Round 28 coverage extension.** Tap target artifact or
+    /// creature. Mirrors Python's `TapTargetArtifactOrCreature(Tap)`
+    /// (`tap.py:324` — 2 EoE cards).
+    ///
+    /// **First-slice deterministic target choice.** Same shape as
+    /// the existing `Effect::TapTarget { target: AnyCreature }` arm
+    /// (defender's first eligible permanent), but the filter
+    /// includes Artifact OR Creature instead of just Creature.
+    /// Idempotent on already-tapped target (silent no-op). Empty /
+    /// no-eligible defender bf → silent fizzle.
+    TapTargetArtifactOrCreature,
 }
 
 #[derive(Clone, Debug)]
@@ -1522,6 +1533,9 @@ fn parse_effect(dict: &Bound<'_, PyDict>) -> PyResult<Effect> {
         "deal_damage_equal_to_source_power_any_target" => {
             Ok(Effect::DealDamageEqualToSourcePowerAnyTarget)
         }
+        "tap_target_artifact_or_creature" => {
+            Ok(Effect::TapTargetArtifactOrCreature)
+        }
         "pump_creatures_opponents_control_until_eot" => {
             // Mirror schema of pump_creatures_you_control_until_eot.
             let power_bonus: i32 = match dict.get_item("power_bonus")? {
@@ -1702,7 +1716,7 @@ fn parse_effect(dict: &Bound<'_, PyDict>) -> PyResult<Effect> {
             Ok(Effect::Sequence { effects: children })
         }
         other => Err(PyValueError::new_err(format!(
-            "unknown effect kind {other:?}; valid: deal_damage, draw_cards, gain_life, return_to_hand, mill, mill_target_player, exile_target, tap_target, untap_target, sacrifice, add_counters, discard_card, scry_n, destroy_target, damage_each_opponent, damage_each_creature, create_token, add_mana_to_pool, search_library_for_basic_land_tapped, put_plus_one_counter_on_self, surveil, counter_target_spell, return_creature_from_your_graveyard_to_battlefield, discard_self, each_opponent_loses_life, lose_life, target_opponent_loses_life, each_opponent_discards, destroy_all_creatures, destroy_target_nonland_permanent, destroy_target_artifact, destroy_target_land, deal_damage_any_target, pump_self_until_eot, pump_target_creature_until_eot, sequence, pump_creatures_you_control_until_eot, return_creature_from_your_graveyard_to_hand, put_plus_one_counter_on_each_creature_you_control, put_plus_one_counter_on_creature_you_control, add_n_mana_of_chosen_color, search_library_for_card, pump_creatures_opponents_control_until_eot, put_card_from_graveyard_on_bottom_of_library, move_self_counters_to_target_creature_you_control, deal_damage_equal_to_source_power_any_target"
+            "unknown effect kind {other:?}; valid: deal_damage, draw_cards, gain_life, return_to_hand, mill, mill_target_player, exile_target, tap_target, untap_target, sacrifice, add_counters, discard_card, scry_n, destroy_target, damage_each_opponent, damage_each_creature, create_token, add_mana_to_pool, search_library_for_basic_land_tapped, put_plus_one_counter_on_self, surveil, counter_target_spell, return_creature_from_your_graveyard_to_battlefield, discard_self, each_opponent_loses_life, lose_life, target_opponent_loses_life, each_opponent_discards, destroy_all_creatures, destroy_target_nonland_permanent, destroy_target_artifact, destroy_target_land, deal_damage_any_target, pump_self_until_eot, pump_target_creature_until_eot, sequence, pump_creatures_you_control_until_eot, return_creature_from_your_graveyard_to_hand, put_plus_one_counter_on_each_creature_you_control, put_plus_one_counter_on_creature_you_control, add_n_mana_of_chosen_color, search_library_for_card, pump_creatures_opponents_control_until_eot, put_card_from_graveyard_on_bottom_of_library, move_self_counters_to_target_creature_you_control, deal_damage_equal_to_source_power_any_target, tap_target_artifact_or_creature"
         ))),
     }
 }
@@ -2069,6 +2083,9 @@ fn effect_to_pydict<'py>(
         }
         Effect::DealDamageEqualToSourcePowerAnyTarget => {
             d.set_item("kind", "deal_damage_equal_to_source_power_any_target")?;
+        }
+        Effect::TapTargetArtifactOrCreature => {
+            d.set_item("kind", "tap_target_artifact_or_creature")?;
         }
         Effect::Sequence { effects } => {
             d.set_item("kind", "sequence")?;

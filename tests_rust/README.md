@@ -209,6 +209,8 @@ the test lands in a commit.
 
 | rust(effect-deal-damage-eq-source-power): Effect::DealDamageEqualToSourcePowerAnyTarget — Mishra's-Bauble-shape power-scaling damage (2 EoE cards). | tests_rust/test_resolve.py extend | green  | feature/rust-effect-deal-damage-eq-source-power |
 
+| rust(effect-tap-artifact-or-creature): Effect::TapTargetArtifactOrCreature — broader-filter tap variant (defender's first artifact OR creature; 2 EoE cards). | tests_rust/test_tap.py extend | green  | feature/rust-effect-tap-artifact-or-creature |
+
 ## Build invocation reminder
 
 ```
