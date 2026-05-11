@@ -61,11 +61,16 @@ pub(crate) fn auto_resolve_pending(
     // the head before failing. Transactional shape: a failed
     // strategy leaves the queue untouched.
     match strategy {
-        "keep_all_on_top" | "send_all_to_graveyard" => {}
+        "keep_all_on_top"
+        | "send_all_to_graveyard"
+        | "may_do_yes"
+        | "may_do_no"
+        | "default" => {}
         other => {
             return Err(PyValueError::new_err(format!(
                 "auto_resolve_pending_decisions: unknown strategy {other:?}; \
-                 valid strategies: keep_all_on_top, send_all_to_graveyard"
+                 valid strategies: keep_all_on_top, send_all_to_graveyard, \
+                 may_do_yes, may_do_no, default"
             )))
         }
     }
@@ -75,7 +80,38 @@ pub(crate) fn auto_resolve_pending(
             PendingDecision::SurveilChoice {
                 controller, cards, ..
             } => {
-                resolve_surveil_with_strategy(state, controller, cards, strategy)?;
+                // "default" routes Surveil to keep_all_on_top (round-23
+                // baseline). MayDo-specific strategies don't apply to
+                // Surveil; fall through to keep_all_on_top for
+                // robustness when a multi-variant queue gets drained
+                // with a MayDo-tuned strategy.
+                let effective_strategy = match strategy {
+                    "default" | "may_do_yes" | "may_do_no" => "keep_all_on_top",
+                    s => s,
+                };
+                resolve_surveil_with_strategy(state, controller, cards, effective_strategy)?;
+            }
+            PendingDecision::MayDoChoice {
+                source_obj_id,
+                inner_effect,
+                ..
+            } => {
+                // "default" / "may_do_yes" → apply inner effect.
+                // "may_do_no" → drop the decision (no inner applies).
+                // Surveil-specific strategies don't apply to MayDo;
+                // fall through to "yes" for robustness (matches
+                // Python's no-agent-seated default).
+                let say_yes = match strategy {
+                    "may_do_no" => false,
+                    _ => true, // default, may_do_yes, keep_all_on_top, send_all_to_graveyard
+                };
+                if say_yes {
+                    crate::state_ops_resolve::apply_effect_pub(
+                        state,
+                        &inner_effect,
+                        source_obj_id,
+                    )?;
+                }
             }
         }
     }
@@ -167,6 +203,21 @@ impl GameState {
                     let card_ids: Vec<u32> = cards.iter().map(|o| o.id).collect();
                     d.set_item("cards", card_ids)?;
                 }
+                PendingDecision::MayDoChoice {
+                    source_obj_id,
+                    controller,
+                    inner_effect,
+                } => {
+                    d.set_item("kind", "MayDoChoice")?;
+                    d.set_item("source_obj_id", *source_obj_id)?;
+                    d.set_item("controller", *controller)?;
+                    // Surface the inner effect kind as a string for
+                    // dict consumers (debug / parity introspection).
+                    // The actual inner_effect lives only in the
+                    // pending_decisions Vec; the dict is a snapshot.
+                    let inner_dict = crate::cards::effect_to_pydict(py, inner_effect.as_ref())?;
+                    d.set_item("inner_effect", inner_dict)?;
+                }
             }
             out.append(d)?;
         }
@@ -208,6 +259,14 @@ impl GameState {
                 controller,
                 cards,
             } => (*source_obj_id, *controller, cards.clone()),
+            other => {
+                return Err(PyValueError::new_err(format!(
+                    "submit_surveil_decision: head of pending-decisions queue is \
+                     not a SurveilChoice (got {:?}); call the variant-specific \
+                     submit_* dispatcher (e.g. submit_may_do_decision)",
+                    std::mem::discriminant(other)
+                )));
+            }
         };
         let _ = source_obj_id; // recorded for log-correlation; not used in routing
 
@@ -275,6 +334,62 @@ impl GameState {
         Ok(())
     }
 
+    /// Consume the head `MayDoChoice` on the pending-decisions queue
+    /// with a `yes`/`no` answer. On `yes`, the inner effect carried
+    /// by the variant is applied via the standard `apply_effect`
+    /// dispatcher (with `source_obj_id` propagated so the inner
+    /// retains the resolving spell's identity for "you may" prompts
+    /// like Lithobraking's "if you do, ..." rider). On `no`, the
+    /// variant is dropped without any inner application.
+    ///
+    /// Transactional shape: validation runs before any mutation, so
+    /// a failed submit leaves the queue intact (matching
+    /// `submit_surveil_decision`).
+    ///
+    /// Raises `ValueError` if the queue is empty or its head is not
+    /// a `MayDoChoice`.
+    fn submit_may_do_decision(&mut self, yes: bool) -> PyResult<()> {
+        if self.pending_decisions.is_empty() {
+            return Err(PyValueError::new_err(
+                "submit_may_do_decision: no pending decision",
+            ));
+        }
+        // Inspect head (don't pop yet) so the discriminant check
+        // doesn't disturb the queue on failure.
+        match &self.pending_decisions[0] {
+            PendingDecision::MayDoChoice { .. } => {}
+            other => {
+                return Err(PyValueError::new_err(format!(
+                    "submit_may_do_decision: head of pending-decisions queue is \
+                     not a MayDoChoice (got {:?}); call the variant-specific \
+                     submit_* dispatcher (e.g. submit_surveil_decision)",
+                    std::mem::discriminant(other)
+                )));
+            }
+        }
+        // Validation passed — consume the head.
+        let decision = self.pending_decisions.remove(0);
+        let (source_obj_id, inner_effect) = match decision {
+            PendingDecision::MayDoChoice {
+                source_obj_id,
+                inner_effect,
+                ..
+            } => (source_obj_id, inner_effect),
+            // Unreachable: we just validated head was MayDoChoice
+            // above. The pattern is here for the irrefutable-match
+            // shape only.
+            _ => unreachable!("validated above"),
+        };
+        if yes {
+            crate::state_ops_resolve::apply_effect_pub(
+                self,
+                &inner_effect,
+                source_obj_id,
+            )?;
+        }
+        Ok(())
+    }
+
     /// Drain the pending-decisions queue using a deterministic
     /// strategy. Useful for callers that don't model the choice
     /// dimension (training harnesses, parity tests, deterministic
@@ -284,9 +399,16 @@ impl GameState {
     /// * `"keep_all_on_top"` — Surveil returns every observed card
     ///   to the library top, preserving the order they were popped
     ///   (the r23 deterministic baseline behavior, bit-equal to the
-    ///   pre-r27 path).
+    ///   pre-r27 path). MayDo answers "yes" (compatibility default).
     /// * `"send_all_to_graveyard"` — Surveil sends every observed
-    ///   card to the controller's graveyard, in popped order.
+    ///   card to the controller's graveyard, in popped order. MayDo
+    ///   answers "yes" (compatibility default).
+    /// * `"may_do_yes"` — MayDo answers "yes" (apply inner effect).
+    ///   Surveil falls through to `keep_all_on_top`.
+    /// * `"may_do_no"` — MayDo answers "no" (drop inner effect).
+    ///   Surveil falls through to `keep_all_on_top`.
+    /// * `"default"` — Surveil keeps all on top; MayDo answers "yes"
+    ///   (mirrors the base-Agent default in Python).
     ///
     /// Raises `ValueError` on an unknown strategy.
     fn auto_resolve_pending_decisions(&mut self, strategy: &str) -> PyResult<()> {

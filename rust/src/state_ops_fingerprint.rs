@@ -363,6 +363,27 @@ impl GameState {
                                 .collect(),
                         ),
                     ]),
+                    // Round-28 MayDo decision: stable serialized form
+                    // by variant-tag + source/controller. The inner
+                    // effect is serialized by Debug-format because
+                    // round-tripping serde_json for the Effect enum
+                    // (closed but with Box<Effect> recursion) would
+                    // require derived Serialize/Deserialize on every
+                    // Effect arm — much wider scope than this slice.
+                    // Debug formatting is deterministic across Rust
+                    // releases for our enum shape and gives a stable
+                    // fingerprint for parity-smoke runs that may
+                    // pause mid-MayDo.
+                    PendingDecision::MayDoChoice {
+                        source_obj_id,
+                        controller,
+                        inner_effect,
+                    } => Value::Array(vec![
+                        Value::String("MayDoChoice".to_string()),
+                        json!(*source_obj_id),
+                        json!(*controller),
+                        Value::String(format!("{:?}", inner_effect)),
+                    ]),
                 })
                 .collect();
             parts_vec.push(Value::Array(pds));
