@@ -41,39 +41,6 @@ How the smoke consumes this doc:
 Each entry: short name, pinning test, current Rust behavior, expected
 behavior per CR / Python, parity impact, and closeable / accepted.
 
-### G1. Mana pool not emptied on phase / step boundary
-
-- **Pinned by**: `tests_rust/test_mana.py::test_mana_pool_persists_across_phase_boundary_documented_quirk`;
-  `tests_rust/test_cleanup.py::test_cleanup_does_not_empty_mana_pool_documented_gap`,
-  `test_end_turn_and_start_next_does_not_empty_mana_pool_documented_gap`.
-- **Rust today**: `advance_phase`, `cleanup_step_for_active_player`,
-  and `end_turn_and_start_next` never call `empty_mana_pool` /
-  `empty_all_mana_pools`. Mana left in a pool persists indefinitely
-  across phase and turn transitions.
-- **CR / Python expected**: CR 106.4 — "When a phase or step ends,
-  each player's mana pool empties." Python empties mana pools at every
-  step/phase boundary.
-- **Impact**: medium-to-high. Rust will store mana that Python has
-  thrown away, so Rust can pay for spells Python cannot. Observable
-  in any game where the active player floats mana out of a step.
-- **Closeable**: yes — the `empty_all_mana_pools` primitive exists.
-  Pending slice: wire it into `advance_phase` and the cleanup
-  composition.
-
-### G2. Hand-size enforcement does not auto-fire at end of turn
-
-- **Pinned by**: `tests_rust/test_cleanup.py::test_advance_phase_through_cleanup_does_not_enforce_hand_size_gap`.
-- **Rust today**: `advance_phase` walking through `PHASE_CLEANUP` does
-  NOT invoke `cleanup_step_for_active_player` / hand-size discard.
-  The caller must explicitly call `cleanup_step_for_active_player`
-  or `end_turn_and_start_next` to trigger CR 514.1.
-- **CR / Python expected**: CR 514.1 fires automatically at the start
-  of the cleanup step.
-- **Impact**: medium. Visible whenever a turn ends with > 7 cards in
-  hand and the game machinery isn't explicitly calling
-  `end_turn_and_start_next`.
-- **Closeable**: yes — slice that wires cleanup into `advance_phase`.
-
 ### G3. `pass_priority` is a pure toggle (no step-end / stack-resolution composition)
 
 - **Pinned by**: `tests_rust/test_priority.py::test_both_pass_priority_with_empty_stack_does_not_advance_step`,
@@ -125,25 +92,6 @@ behavior per CR / Python, parity impact, and closeable / accepted.
 - **Closeable**: not a gap — it is the deliberate parity contract.
   See invariant I5 for the matching invariant entry.
 
-### G6. `ActivateAbility` does not check summoning sickness (CR 302.1)
-
-- **Pinned by**: `tests_rust/test_tap.py::test_activate_ability_on_summoning_sick_creature_succeeds`.
-- **Rust today**: `apply_action({"kind": "activate_ability", ...})`
-  on a summoning-sick mana-producer (e.g. just-cast Llanowar Elves)
-  taps the creature and credits the controller's mana pool. Both
-  the action dispatcher in `state_ops_actions.rs` and the
-  `legal_decisions` enumerator in `state_ops_legal.rs` share this
-  gap.
-- **CR / Python expected**: CR 302.1 — a summoning-sick creature
-  cannot tap to pay tap-cost activations. Python rejects the
-  activation.
-- **Impact**: HIGH for normal gameplay. Rust will produce mana from
-  a just-cast Llanowar Elves; Python won't. Easy to hit in any game
-  that casts a mana-producer and then tries to use it the same turn.
-- **Closeable**: yes — add a `summoning_sick && requires_tap` gate
-  to both `apply_action`'s `activate_ability` arm and `legal.py`'s
-  activated-ability emitter. Pending slice.
-
 ### G7. Cleanup step does not run "until end of turn" effect expiration (CR 514.3)
 
 - **Pinned by**: docstring on `test_cleanup.py` ("CR 514.3 ('until end
@@ -188,44 +136,6 @@ behavior per CR / Python, parity impact, and closeable / accepted.
 - **Impact**: zero today, high when G8 is closed.
 - **Closeable**: bundled with G8.
 
-### G10. `DrawCards` from empty library is a silent no-op (no deck-out loss)
-
-- **Pinned by**: `tests_rust/test_library.py::test_drawcards_from_empty_library_is_silent_no_op_no_loser`,
-  `test_drawcards_count_larger_than_library_drains_no_sba_loss`.
-- **Rust today**: `Effect::DrawCards` against an empty library
-  short-circuits silently per draw. `apply_sbas` does NOT mark the
-  player as a loser. There is no `attempted_draw_on_empty` field on
-  the Rust `Player` struct.
-- **CR / Python expected**: CR 704.5b — a player who attempted to
-  draw from an empty library loses on the next SBA pass. Python
-  models this.
-- **Impact**: HIGH for games that mill out or draw heavily. Rust
-  games that would deck-out in Python continue indefinitely.
-- **Closeable**: yes — add `attempted_draw_on_empty: bool` to
-  `Player`, set it in the `DrawCards` empty-pop arm, check it in
-  `losers()` / `apply_sbas`. Pending slice.
-
-### G11. Game-end loss is pure-derivation from `life <= 0`; no `has_lost` field
-
-- **Pinned by**: `tests_rust/test_winloss.py` module docstring;
-  `test_gain_life_from_zero_revives_player`,
-  `test_each_opponent_loses_life_lethal_then_revive_flips_outcome`;
-  `@pytest.mark.skip` on `test_explicit_lose_game_marks_player`.
-- **Rust today**: `losers()` is computed purely from current life
-  totals (`life <= 0`). There is no `Player.has_lost` field. A
-  player at 0 life who gains life is removed from the loser list and
-  the game becomes ongoing again.
-- **CR / Python expected**: CR 104.3a / SBA-driven permanent loss —
-  a player who drops to 0 life loses, and "you lose the game" effects
-  (Phage, Bargain, deck-out) flag the player irrevocably. Python
-  preserves the loss across subsequent life changes.
-- **Impact**: medium. Observable in any game where a player drops
-  to 0 and then gains life (uncommon but legal).
-- **Closeable**: yes — add `has_lost: bool` to `Player` and switch
-  `losers()` to the OR of `has_lost` and `life <= 0`. The skipped
-  `test_explicit_lose_game_marks_player` is the API surface pin for
-  the future `state.lose_game(p)` primitive.
-
 ### G12. Mutual KO model is two sequential `lose_life` calls, not a single Effect
 
 - **Pinned by**: `tests_rust/test_winloss.py::test_mutual_zero_via_sequential_lose_life_is_draw` (docstring note: "the closest cross-feature analog the Rust engine exposes for 'both die in the same event'").
@@ -251,18 +161,6 @@ behavior per CR / Python, parity impact, and closeable / accepted.
 - **Impact**: none — this is the parity-load-bearing post-game-over
   no-op contract. Listed here for clarity. See invariant I7.
 - **Closeable**: not a gap. Parity invariant.
-
-### G14. `advance_phase` does not auto-fire `draw_card` on the DRAW step
-
-- **Pinned by**: `tests_rust/test_steps.py::test_advance_phase_does_not_draw_a_card`.
-- **Rust today**: Walking `UNTAP -> UPKEEP -> DRAW` via `advance_phase`
-  does NOT call `draw_card`. The DRAW step is a phase tag only.
-- **CR / Python expected**: CR 504.1 — the active player draws one
-  card during their draw step. Python's turn machinery models this.
-- **Impact**: HIGH for any multi-turn game. Without explicit
-  `draw_card` calls from the harness, Rust hands stagnate.
-- **Closeable**: yes — slice that wires `draw_card` into
-  `advance_phase` on entry to `PHASE_DRAW`.
 
 ### G15. `advance_phase`'s CLEANUP -> UNTAP wrap does not reset priority
 
@@ -377,18 +275,6 @@ behavior per CR / Python, parity impact, and closeable / accepted.
   primitives; medium if direct `mulligan` calls leak into the smoke
   harness.
 - **Closeable**: yes — bundled with G21 (atomic London transaction).
-
-### G23. No maximum-mulligan cap
-
-- **Pinned by**: `tests_rust/test_mulligan.py` module docstring (gap 3).
-- **Rust today**: `mulligan` can be called indefinitely on the same
-  state with no failure. There is no upper bound.
-- **CR / Python expected**: CR 103.4 — each mulligan draws a smaller
-  hand and eventually you'd mulligan to 0; in practice you stop.
-  Python doesn't enforce a hard cap either, but it ties the cap to
-  the count parameter.
-- **Impact**: zero in normal play; high only for adversarial seeds.
-- **Closeable**: yes — bundled with G21.
 
 ### G24. No scry-on-keep step after mulligan-to-7 (Paris rule)
 
@@ -535,6 +421,130 @@ refactor on either side that breaks the parity surfaces immediately.
 - **Pinned by**: `tests_rust/test_deck.py::test_find_object_zone_after_make_state_agrees_with_setup`.
 - **Invariant**: Every library object reads `ZONE_LIBRARY`; every
   hand object reads `ZONE_HAND` immediately after `make_state`.
+
+### I17. Summoning-sick permanents with tap-cost activated abilities are excluded from both dispatch and emission
+
+- **Pinned by**: `tests_rust/test_tap.py::test_activate_ability_on_summoning_sick_creature_with_tap_cost_is_rejected`;
+  `tests_rust/test_legal.py::test_legal_decisions_activate_ability_excludes_summoning_sick_creature`.
+- **Invariant**: CR 302.1 — a creature with `summoning_sick == true`
+  whose activated ability has a tap cost (e.g. `{T}`) cannot pay
+  that cost. The Rust port enforces this gate on BOTH sides:
+  `apply_action`'s `ActivateAbility` arm in `state_ops_actions.rs`
+  raises `ValueError` (no mutation), and the `legal_decisions`
+  emitter in `state_ops_legal.rs` does NOT emit an
+  `ActivateAbility` dict for the sick source. The general gate is
+  `summoning_sick && requires_tap_cost`; the first-slice
+  mana-only filter (the only wired ActivateAbility dispatch case
+  today, where every printing's mana ability has an implicit
+  `{T}`) gates on `summoning_sick` alone. Mirrors Python's
+  `legal.py:661-663` and `actions.py:_activate_ability`
+  precheck. Closes parity gap G6 (entry removed from "Confirmed
+  gaps" above).
+
+### I18. `advance_phase` auto-fires `draw_card` on entry to PHASE_DRAW, gated by CR 103.7c
+
+- **Pinned by**:
+  `tests_rust/test_steps.py::test_advance_phase_draws_a_card_on_entering_draw_step`,
+  `tests_rust/test_steps.py::test_advance_phase_first_turn_active_player_skips_draw_step`,
+  `tests_rust/test_steps.py::test_advance_phase_p1_first_draw_step_does_draw_card`.
+- **Invariant**: CR 504.1 — the active player draws one card on
+  entering their draw step. `advance_phase` calls `draw_card` for
+  the active player whenever the new phase becomes `PHASE_DRAW`,
+  gated by the CR 103.7c first-turn skip (`turn_number != 1`).
+  Mirrors Python's `simulate.py` gate, which uses the same
+  `state.turn_number != 1` shape (rationale: on turn 1 the active
+  player IS the starting player, so `turn_number` alone fully
+  determines the skip in a two-player game). Closes parity gap G14
+  (entry removed from "Confirmed gaps" above).
+
+### I19. Empty-library draw flags the player; `apply_sbas` locks the loss into the sticky `has_lost`
+
+- **Pinned by**:
+  `tests_rust/test_library.py::test_drawcards_from_empty_library_marks_player_for_loss_on_next_sba`,
+  `test_drawcards_count_larger_than_library_drains_then_loses_on_sba`,
+  `tests_rust/test_zones.py::test_draw_card_from_empty_library_returns_none`
+  (no-crash + cause-signal side-effect),
+  `tests_rust/test_winloss.py::test_explicit_lose_game_marks_player`,
+  `test_each_opponent_loses_life_lethal_then_sba_locks_the_loss`.
+- **Invariant** (CR 704.5b / CR 104.2 — round-26 G10 + G11 closure):
+  - The `draw_card` primitive AND the `Effect::DrawCards`
+    resolution arm flip `Player.attempted_draw_on_empty = true`
+    when the library pop returns `None`.
+  - `losers()` returns a player if **any** of the OR'd-three signals
+    are true: `has_lost`, `attempted_draw_on_empty`, or `life <= 0`.
+    Read directly (no SBA pass required) so the loss is observable
+    eagerly — mirrors Python's `p.has_lost = True` in
+    `turn.draw_card`.
+  - `apply_sbas` transitions the cause-signals (`attempted_draw_on_empty`
+    OR `life <= 0`) into the sticky `Player.has_lost = true`. Once
+    `has_lost` is set, no `gain_life` can revive the player. The
+    return value of `apply_sbas` remains the count of CREATURES
+    destroyed in the pass — the player-loss transition doesn't bump
+    it (separate SBA category in CR ordering).
+  - The pure-derivation revive semantics on `life <= 0` are preserved
+    UNTIL `apply_sbas` runs (so `set_life(0, 0); gain_life(0, 5)`
+    without an SBA pass in between still flips the player back out of
+    `losers()` — see `test_gain_life_from_zero_revives_player`).
+  - The explicit `lose_game(p)` primitive (Phage / Bargain) sets
+    `has_lost` directly without going through SBA — useful for
+    "you lose the game" cards where life is not the trigger.
+
+### I20. `advance_phase` fully composes phase-boundary side effects (CR 106.4 / 514.1 / 514.2)
+
+- **Pinned by**:
+  `tests_rust/test_mana.py::test_mana_pool_empties_on_advance_phase`;
+  `tests_rust/test_cleanup.py::test_end_turn_and_start_next_empties_mana_pool`,
+  `test_advance_phase_through_cleanup_enforces_hand_size`;
+  `tests_rust/test_steps.py::test_advance_phase_empties_both_mana_pools_on_every_tick`,
+  `test_advance_phase_empties_mana_pool_across_every_phase_in_lap`,
+  `test_advance_phase_into_cleanup_fires_hand_size_discard`,
+  `test_advance_phase_into_cleanup_fires_damage_clear`,
+  `test_advance_phase_cleanup_hook_targets_old_active_player`,
+  `test_advance_phase_cleanup_hook_idempotent_when_hand_at_max`,
+  `test_clone_advance_phase_into_cleanup_does_not_affect_original`.
+- **Invariant**: Closing the round-26 G1 + G2 gaps. Every
+  `advance_phase` tick empties both players' mana pools BEFORE the
+  phase counter ticks forward (CR 106.4 — mana pool empties on
+  phase exit). Whenever the new phase is `PHASE_CLEANUP`,
+  `advance_phase` fires the inline mirror of
+  `cleanup_step_for_active_player` on entry: CR 514.1 hand-size
+  discard for the active player (max=7, deterministic-end-of-Vec
+  pop) followed by CR 514.2 marked-damage clear on both
+  battlefields. Combined with the round-2 untap sweep, the
+  round-14 summoning-sick clear, and the round-26 G14 auto-draw,
+  `advance_phase` now models every phase-entry / phase-exit hook
+  the Rust engine carries. The `cleanup_step_for_active_player`
+  primitive itself remains layered below CR 106.4 (calling it
+  directly does NOT empty mana pools — see
+  `test_cleanup.py::test_cleanup_step_does_not_empty_mana_pool_at_primitive_layer`);
+  the mana-empty hook is owned exclusively by `advance_phase`.
+
+### I21. `mulligan` / `mulligan_to_n` raise after 7 calls per player (CR 103.4 cap)
+
+- **Pinned by**:
+  `tests_rust/test_mulligan.py::test_mulligan_seven_calls_succeed_eighth_raises`,
+  `test_mulligan_to_n_seven_calls_succeed_eighth_raises`,
+  `test_mulligan_cap_is_shared_between_mulligan_and_mulligan_to_n`,
+  `test_mulligan_cap_is_per_player`,
+  `test_mulligan_cap_raise_does_not_mutate_state`,
+  `test_mulligan_count_does_not_affect_fingerprint`.
+- **Invariant** (CR 103.4 / round-26 G23 closure):
+  - `Player.mulligan_count: u32` increments at the START of every
+    `mulligan` / `mulligan_to_n` call (shared counter between the
+    two variants).
+  - If the post-increment count exceeds 7, the call raises
+    `PyValueError` BEFORE touching any zone. Pinned baselines after
+    7 successful mulligans are unchanged when an 8th call raises.
+  - Mirrors Python `simulate.setup_game(max_mulligans=7)` — the
+    London-mulligan loop allows up to 7 mulligans per player before
+    forcing a keep. An 8th call would draw a hand of -1 cards, which
+    is nonsensical.
+  - The counter is per-player; capping player 0 does not affect
+    player 1.
+  - `mulligan_count` is NOT serialized into the fingerprint — it's a
+    per-call safety counter, not part of the gameplay-relevant state
+    digest. Pinned fingerprint baselines below are unchanged. Closes
+    parity gap G23 (entry removed from "Confirmed gaps" above).
 
 ---
 

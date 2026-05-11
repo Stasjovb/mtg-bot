@@ -281,6 +281,9 @@ pub fn make_state(
         battlefield: Arc::new(Vec::new()),
         graveyard: Arc::new(Vec::new()),
         exile: Arc::new(Vec::new()),
+        has_lost: false,
+        attempted_draw_on_empty: false,
+        mulligan_count: 0,
     };
     let p1 = Player {
         id: 1,
@@ -291,6 +294,9 @@ pub fn make_state(
         battlefield: Arc::new(Vec::new()),
         graveyard: Arc::new(Vec::new()),
         exile: Arc::new(Vec::new()),
+        has_lost: false,
+        attempted_draw_on_empty: false,
+        mulligan_count: 0,
     };
 
     Ok(GameState {

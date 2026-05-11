@@ -75,6 +75,45 @@ pub struct Player {
     /// upgrade once anything is read FROM exile (today exile is
     /// write-only via Effect::ExileTarget).
     pub exile: Zone,
+    /// Sticky loss flag (CR 104.2). Once `true`, the player has
+    /// lost the game and the loss is permanent — subsequent
+    /// `gain_life` or other mutations cannot revive them. Mirrors
+    /// Python's `Player.has_lost`. Read by `losers()` /
+    /// `winner()` / `is_game_over()` / `apply_sbas()`. Written by
+    /// `apply_sbas()` (transitions `attempted_draw_on_empty` ->
+    /// `has_lost` and the existing `life <= 0` predicate). Round-26
+    /// G11 closure. (No explicit `lose_game(p)` primitive yet — the
+    /// skipped `test_explicit_lose_game_marks_player` un-skip lands when
+    /// the dispatch hook for Phage / Bargain / deck-out effect arms is
+    /// wired; this slice only adds the field + SBA transition.)
+    pub has_lost: bool,
+    /// Cause-signal flag set by the empty-library draw path (CR
+    /// 704.5b — a player who attempted to draw from an empty library
+    /// loses on the next SBA pass). Written by `draw_card` and the
+    /// `Effect::DrawCards` resolution arm when the library pop returns
+    /// None; read by `apply_sbas` which then transitions this flag
+    /// into the sticky `has_lost`. `losers()` ALSO OR's this flag
+    /// in directly so the loss is observable BEFORE the next SBA pass
+    /// runs (mirrors Python's eager `has_lost = True` in
+    /// `turn.draw_card`, where the loss is visible to the very next
+    /// `losers()` read). Round-26 G10 closure.
+    pub attempted_draw_on_empty: bool,
+    /// Per-player count of `mulligan` / `mulligan_to_n` calls taken on
+    /// this state. Incremented at the START of each call; if it
+    /// exceeds the practical London-mulligan cap (7 — mirrors Python
+    /// `simulate.setup_game(max_mulligans=7)`), the call raises
+    /// instead of performing the shuffle. Round-26 G23 closure.
+    /// Per CR 103.4 the 8th mulligan would draw a hand of -1 cards,
+    /// which is nonsensical; Python guards it by capping the loop at
+    /// 7 mulligans before forcing keep. The Rust primitive raises so
+    /// callers can't silently exceed the cap.
+    ///
+    /// NOT serialized into the fingerprint — this is a per-call
+    /// safety counter, not part of the gameplay-relevant state digest.
+    /// Same `(state, seed)` pre- and post-mulligan must produce the
+    /// same fingerprint regardless of how many mulligans were taken
+    /// to get there.
+    pub mulligan_count: u32,
 }
 
 /// One pending entry on the stack. First-slice shape: just an obj_id
@@ -249,6 +288,9 @@ fn make_player(
         battlefield: Arc::new(battlefield),
         graveyard: Arc::new(Vec::new()),
         exile: Arc::new(Vec::new()),
+        has_lost: false,
+        attempted_draw_on_empty: false,
+        mulligan_count: 0,
     }
 }
 

@@ -175,6 +175,11 @@ the test lands in a commit.
 | rust(effect-each-opponent-discards): each-opponent discard (CR 701.8) | tests_rust/test_resolve.py extend | green  | feature/rust-effect-each-opponent-discards |
 | rust(effect-destroy-target-artifact): artifact-filter destroy (CR 701.7) | tests_rust/test_resolve.py extend | green  | feature/rust-effect-destroy-target-artifact |
 | rust(effect-destroy-target-land): land-filter destroy (CR 701.7) | tests_rust/test_resolve.py extend | green  | feature/rust-effect-destroy-target-land |
+| rust(gap-g6-activate-ability-summoning-sick): CR 302.1 gate in apply_action + legal_decisions | tests_rust/test_tap.py + test_legal.py extend | green  | feature/rust-gap-g6-activate-ability-summoning-sick |
+| rust(gap-g14-advance-phase-auto-draw): CR 504.1 auto-draw on PHASE_DRAW entry with CR 103.7c first-turn skip | tests_rust/test_steps.py extend | green  | feature/rust-gap-g14-advance-phase-auto-draw |
+| rust(gap-g10+g11): empty-library draw flags player, `apply_sbas` locks loss via sticky `has_lost` (CR 704.5b, CR 104.2) | tests_rust/test_library.py + test_winloss.py invert + extend | green  | feature/rust-gap-g10-draw-empty-deckout |
+| rust(gap-g1g2-advance-phase-composition): CR 106.4 mana-empty on every phase exit + CR 514.1/514.2 cleanup-step on PHASE_CLEANUP entry | tests_rust/test_steps.py + test_cleanup.py + test_mana.py extend | green  | feature/rust-gap-g1g2-advance-phase-composition |
+| rust(gap-g23-mulligan-cap): per-player `mulligan_count` field; `mulligan` / `mulligan_to_n` raise after 7 calls (CR 103.4 / Python `max_mulligans=7`) | tests_rust/test_mulligan.py extend | green  | feature/rust-gap-g23-mulligan-cap |
 
 ## Build invocation reminder
 

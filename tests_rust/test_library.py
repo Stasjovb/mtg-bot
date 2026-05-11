@@ -1003,19 +1003,17 @@ def test_effect_search_library_for_basic_land_tapped_enters_tapped(
     assert synthetic_state.is_summoning_sick(top_id) is False
 
 
-def test_drawcards_from_empty_library_is_silent_no_op_no_loser(engine):
-    """Cross-feature with sba + winloss: under the round-8 first-slice
-    convention, ``Effect::DrawCards`` against an empty library is a
-    SILENT short-circuit — no deck-out loss flag, no SBA-driven loss.
+def test_drawcards_from_empty_library_marks_player_for_loss_on_next_sba(engine):
+    """Round-26 G10 closure: ``Effect::DrawCards`` against an empty
+    library now flips the player's ``attempted_draw_on_empty`` cause
+    signal AND surfaces them as a loser. CR 704.5b — a player who
+    attempted to draw from an empty library loses on the next SBA pass.
 
-    Real MTG (CR 704.5b): a player who attempts to draw from an empty
-    library loses on the next SBA pass. The Rust engine defers
-    deck-out integration (state.rs has no ``attempted_draw_on_empty``
-    field; ``losers()`` is purely ``life <= 0`` in
-    ``state_ops_winloss.rs``). This test pins down that current
-    behavior so a future deck-out slice flips the assertion
-    deliberately — see ``docs/SEARCH_LIMITATIONS.md`` for the
-    deferred-deck-out entry."""
+    The Rust engine now models the loss eagerly (``losers()`` reads the
+    cause-signal directly so the loss is visible BEFORE ``apply_sbas``
+    runs, matching Python's eager ``p.has_lost = True`` in
+    ``turn.draw_card``), and ``apply_sbas`` transitions the cause-signal
+    into the sticky ``has_lost`` flag so the loss is irrevocable."""
     # Tiny library (1 card) so DrawCards-2 over-draws by 1.
     state = engine.make_synthetic_state(
         num_battlefield=0, num_hand=1, num_library=1
@@ -1029,20 +1027,30 @@ def test_drawcards_from_empty_library_is_silent_no_op_no_loser(engine):
 
     # Library drained, hand grew by the one available card. No crash.
     assert state.library_sizes[0] == 0
-    # SBA reports zero destructions, no loser registered.
+    # The empty-pop flipped the cause-signal — p0 is now a loser per
+    # CR 704.5b, observable BEFORE the next SBA pass.
+    assert list(state.losers()) == [0]
+    assert state.winner_id == 1
+    assert state.is_game_over() is True
+    # apply_sbas transitions cause-signal -> sticky has_lost; the loss
+    # is now permanent. Return count stays 0 (no creatures destroyed —
+    # player-loss is a separate SBA category, doesn't bump the count).
     assert state.apply_sbas() == 0
-    assert list(state.losers()) == []
-    assert state.winner_id is None
-    # Life totals unchanged — deck-out doesn't manifest via life.
+    assert list(state.losers()) == [0]
+    assert state.winner_id == 1
+    # gain_life on the dead player cannot revive them — has_lost is
+    # sticky. Life total unchanged either way (deck-out doesn't manifest
+    # via life).
     assert list(state.life_totals) == life_before
 
 
-def test_drawcards_count_larger_than_library_drains_no_sba_loss(engine):
-    """Cross-feature with sba: a DrawCards-N resolution where N >
-    library size empties the library cleanly (silent short-circuit at
-    each empty-pop) AND no SBA-loss is registered. Documents the
-    current deferred-deck-out shape — same rationale as the previous
-    test, but with a much larger over-draw delta."""
+def test_drawcards_count_larger_than_library_drains_then_loses_on_sba(engine):
+    """Round-26 G10 closure: a DrawCards-N resolution where N > library
+    size empties the library AND flags the player. Same shape as the
+    previous test but with a much larger over-draw delta: the
+    ``attempted_draw_on_empty`` cause-signal only flips once (it's a
+    bool, not a counter) regardless of how many extra pops short-circuit
+    on the empty library."""
     # Library size 3, draw 100 — drains the library and short-circuits
     # the remaining 97 pops.
     state = engine.make_synthetic_state(
@@ -1060,10 +1068,15 @@ def test_drawcards_count_larger_than_library_drains_no_sba_loss(engine):
     # All 3 cards drained from library to hand. No crash, no error.
     assert state.library_sizes[0] == 0
     assert state.hand_sizes[0] == hand_before + 3
-    # No SBA-loss for the empty-library draw — current deferred shape.
+    # Empty-library pop flipped the cause-signal — p0 is now a loser.
+    assert list(state.losers()) == [0]
+    assert state.winner_id == 1
+    # apply_sbas locks in the loss via has_lost; return count stays 0
+    # (no creatures destroyed). Idempotent: subsequent passes are no-ops.
     assert state.apply_sbas() == 0
-    assert list(state.losers()) == []
-    assert state.winner_id is None
+    assert list(state.losers()) == [0]
+    assert state.apply_sbas() == 0
+    assert list(state.losers()) == [0]
 
 
 def test_effect_drawcards_clone_does_not_mutate_original_library_or_hand(
