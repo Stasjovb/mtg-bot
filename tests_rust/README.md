@@ -225,6 +225,8 @@ the test lands in a commit.
 
 | rust(effect-tap-enchanted-permanent): Effect::TapEnchantedPermanent — taps source's `attached_to` host; idempotent (2 EoE cards). | tests_rust/test_tap.py extend | green  | feature/rust-effect-tap-enchanted-permanent |
 
+| rust(until-leaves-foundation): new `exiled_with_source: Option<u32>` field on GameObject + `return_paired_exiles_for(source_id)` pymethod + Effect::ExileTargetCreatureUntilSourceLeaves (All-Fates-Stalker shape, 3 EoE cards). Manual return hook; auto-fire-on-bf-leave is follow-up. | tests_rust/test_zones.py extend | green  | feature/rust-until-leaves-foundation |
+
 ## Build invocation reminder
 
 ```

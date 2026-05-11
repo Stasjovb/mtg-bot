@@ -168,6 +168,7 @@ fn push_object(
         damage: 0,
         counters: 0,
         attached_to: None,
+        exiled_with_source: None,
         ueot_modifiers: Vec::new(),
     });
     *next_id += 1;

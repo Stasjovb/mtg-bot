@@ -452,6 +452,7 @@ fn apply_effect(
                 obj.damage = 0;
                 obj.counters = 0;
                 obj.attached_to = None;
+                obj.exiled_with_source = None;
                 Arc::make_mut(&mut state.players[defender].hand).push(obj);
             }
         },
@@ -544,6 +545,7 @@ fn apply_effect(
                     obj.damage = 0;
                     obj.counters = 0;
                     obj.attached_to = None;
+                    obj.exiled_with_source = None;
                     gy_mut.push(obj);
                 }
             }
@@ -605,6 +607,7 @@ fn apply_effect(
                 obj.damage = 0;
                 obj.counters = 0;
                 obj.attached_to = None;
+                obj.exiled_with_source = None;
                 Arc::make_mut(&mut state.players[defender].exile).push(obj);
             }
         },
@@ -766,6 +769,7 @@ fn apply_effect(
                 obj.damage = 0;
                 obj.counters = 0;
                 obj.attached_to = None;
+                obj.exiled_with_source = None;
                 Arc::make_mut(&mut state.players[active].graveyard).push(obj);
             }
         },
@@ -871,6 +875,7 @@ fn apply_effect(
                 obj.damage = 0;
                 obj.counters = 0;
                 obj.attached_to = None;
+                obj.exiled_with_source = None;
                 Arc::make_mut(&mut state.players[defender].graveyard).push(obj);
             }
         },
@@ -1011,6 +1016,7 @@ fn apply_effect(
                 obj.damage = 0;
                 obj.counters = 0;
                 obj.attached_to = None;
+                obj.exiled_with_source = None;
                 Arc::make_mut(&mut state.players[defender].graveyard).push(obj);
             }
         },
@@ -1210,6 +1216,7 @@ fn apply_effect(
                     damage: 0,
                     counters: 0,
                     attached_to: None,
+                    exiled_with_source: None,
                     ueot_modifiers: Vec::new(),
                 });
                 next_id += 1;
@@ -1376,6 +1383,7 @@ fn apply_effect(
                 obj.damage = 0;
                 obj.counters = 0;
                 obj.attached_to = None;
+                obj.exiled_with_source = None;
                 Arc::make_mut(&mut player.battlefield).push(obj);
             }
             // CR 701.19 "always shuffle after search" deliberately
@@ -1655,6 +1663,7 @@ fn apply_effect(
                 obj.damage = 0;
                 obj.counters = 0;
                 obj.attached_to = None;
+                obj.exiled_with_source = None;
                 obj.controller = target_controller;
                 Arc::make_mut(
                     &mut state.players[target_controller as usize].graveyard,
@@ -1843,6 +1852,7 @@ fn apply_effect(
                 obj.damage = 0;
                 obj.counters = 0;
                 obj.attached_to = None;
+                obj.exiled_with_source = None;
                 Arc::make_mut(&mut state.players[controller_idx].graveyard)
                     .push(obj);
             }
@@ -1883,6 +1893,7 @@ fn apply_effect(
             obj.damage = 0;
             obj.counters = 0;
             obj.attached_to = None;
+            obj.exiled_with_source = None;
             Arc::make_mut(&mut state.players[controller_idx].hand).push(obj);
         }
         Effect::ReturnCreatureFromYourGraveyardToBattlefield => {
@@ -1924,6 +1935,7 @@ fn apply_effect(
             obj.damage = 0;
             obj.counters = 0;
             obj.attached_to = None;
+            obj.exiled_with_source = None;
             Arc::make_mut(&mut state.players[controller_idx].battlefield).push(obj);
         }
         // Round-26: EachOpponentLosesLife. CR 118.4 — "life loss"
@@ -2268,6 +2280,7 @@ fn apply_effect(
                 obj.damage = 0;
                 obj.counters = 0;
                 obj.attached_to = None;
+                obj.exiled_with_source = None;
                 Arc::make_mut(&mut state.players[opponent_idx].graveyard)
                     .push(obj);
             }
@@ -2316,6 +2329,7 @@ fn apply_effect(
                     obj.damage = 0;
                     obj.counters = 0;
                     obj.attached_to = None;
+                    obj.exiled_with_source = None;
                     gy_mut.push(obj);
                 }
             }
@@ -2355,6 +2369,7 @@ fn apply_effect(
                 obj.damage = 0;
                 obj.counters = 0;
                 obj.attached_to = None;
+                obj.exiled_with_source = None;
                 Arc::make_mut(&mut state.players[defender_idx].graveyard).push(obj);
             }
         }
@@ -2397,6 +2412,7 @@ fn apply_effect(
                 obj.damage = 0;
                 obj.counters = 0;
                 obj.attached_to = None;
+                obj.exiled_with_source = None;
                 Arc::make_mut(&mut state.players[defender_idx].graveyard).push(obj);
             }
         }
@@ -2438,6 +2454,7 @@ fn apply_effect(
                 obj.damage = 0;
                 obj.counters = 0;
                 obj.attached_to = None;
+                obj.exiled_with_source = None;
                 Arc::make_mut(&mut state.players[defender_idx].graveyard).push(obj);
             }
         }
@@ -3023,6 +3040,7 @@ fn apply_effect(
             obj.damage = 0;
             obj.counters = 0;
             obj.attached_to = None;
+            obj.exiled_with_source = None;
             Arc::make_mut(&mut player.hand).push(obj);
             // No shuffle (G19 deferral).
         }
@@ -3122,6 +3140,7 @@ fn apply_effect(
             obj.damage = 0;
             obj.counters = 0;
             obj.attached_to = None;
+            obj.exiled_with_source = None;
             let lib_mut: &mut Vec<GameObject> =
                 Arc::make_mut(&mut state.players[pidx].library);
             lib_mut.insert(0, obj); // bottom of library
@@ -3544,6 +3563,7 @@ fn apply_effect(
                 damage: 0,
                 counters: 0,
                 attached_to: None,
+                exiled_with_source: None,
                 ueot_modifiers: Vec::new(),
             };
             Arc::make_mut(&mut state.players[cidx].battlefield).push(new_obj);
@@ -3612,6 +3632,7 @@ fn apply_effect(
             obj.damage = 0;
             obj.counters = 0;
             obj.attached_to = None;
+            obj.exiled_with_source = None;
             Arc::make_mut(&mut state.players[cidx].graveyard).push(obj);
             // Apply inner effect.
             apply_effect(state, inner_effect.as_ref(), source_obj_id)?;
@@ -3680,6 +3701,7 @@ fn apply_effect(
             obj.damage = 0;
             obj.counters = 0;
             obj.attached_to = None;
+            obj.exiled_with_source = None;
             let lib_mut: &mut Vec<GameObject> =
                 Arc::make_mut(&mut state.players[owner_idx].library);
             lib_mut.insert(0, obj); // lib[0] = bottom (Rust convention)
@@ -3784,6 +3806,7 @@ fn apply_effect(
             obj.damage = 0;
             obj.counters = 0;
             obj.attached_to = None;
+            obj.exiled_with_source = None;
             Arc::make_mut(&mut state.players[tidx].graveyard).push(obj);
         }
         // Round-28 enchanted-permanent tap. Same `attached_to` lookup
@@ -3820,12 +3843,118 @@ fn apply_effect(
                 }
             }
         }
+        // Round-28 "until source leaves" exile. Pick defender's first
+        // creature, stamp `exiled_with_source = Some(source_id)`,
+        // move to exile. CR 400.7 zone-change reset for all other
+        // per-object state. The link enables manual return via
+        // `return_paired_exiles_for(source_id)`.
+        Effect::ExileTargetCreatureUntilSourceLeaves => {
+            let defender = (1 - state.active_player) as usize;
+            let target_id: Option<u32> = {
+                let bf = &state.players[defender].battlefield;
+                let registry = &state.registry;
+                bf.iter().find_map(|obj| {
+                    let printing = registry.lookup(obj.printing_id)?;
+                    if printing.card_types.iter().any(|t| t == "Creature") {
+                        Some(obj.id)
+                    } else {
+                        None
+                    }
+                })
+            };
+            let Some(target_id) = target_id else {
+                return Ok(()); // fizzle — no eligible creature
+            };
+            // Capture target's owner (= controller) before mutation.
+            let owner_idx: usize = {
+                let obj = state.players[defender]
+                    .battlefield
+                    .iter()
+                    .find(|o| o.id == target_id)
+                    .expect("target_id was just found in bf");
+                obj.controller as usize
+            };
+            // Remove from defender's bf, stamp link, move to owner's
+            // exile zone with CR 400.7 reset (preserving the link).
+            let bf_mut: &mut Vec<GameObject> =
+                Arc::make_mut(&mut state.players[defender].battlefield);
+            let pos = bf_mut
+                .iter()
+                .position(|o| o.id == target_id)
+                .expect("target_id was just found in bf but missing on re-scan");
+            let mut obj = bf_mut.remove(pos);
+            obj.zone = ZONE_EXILE;
+            obj.tapped = false;
+            obj.summoning_sick = true; // r28 CE1 universal-true default
+            obj.damage = 0;
+            obj.counters = 0;
+            obj.attached_to = None;
+            obj.exiled_with_source = Some(source_obj_id);
+            Arc::make_mut(&mut state.players[owner_idx].exile).push(obj);
+        }
     }
     Ok(())
 }
 
 #[pymethods]
 impl GameState {
+    /// Round-28 "until source leaves" — return every exiled object
+    /// whose `exiled_with_source` matches `source_id` to its owner's
+    /// battlefield. CR 400.7 zone-change reset on the way back
+    /// (tapped, summoning_sick=true per r28 CE1, damage, counters,
+    /// attached_to, exiled_with_source all cleared).
+    ///
+    /// Manual hook: callers (harness / future leaves-bf primitive
+    /// extension) must invoke this when the source leaves the
+    /// battlefield. Auto-firing on every bf-leaving zone change is a
+    /// follow-up slice. Returns the count of objects returned.
+    fn return_paired_exiles_for(&mut self, source_id: u32) -> i32 {
+        let mut returned = 0i32;
+        for pidx in 0..self.players.len() {
+            // Collect ids first to avoid borrow conflicts.
+            let to_return: Vec<u32> = self.players[pidx]
+                .exile
+                .iter()
+                .filter_map(|o| {
+                    if o.exiled_with_source == Some(source_id) {
+                        Some(o.id)
+                    } else {
+                        None
+                    }
+                })
+                .collect();
+            if to_return.is_empty() {
+                continue;
+            }
+            let exile_mut: &mut Vec<GameObject> =
+                Arc::make_mut(&mut self.players[pidx].exile);
+            let mut popped: Vec<GameObject> = Vec::with_capacity(to_return.len());
+            exile_mut.retain(|o| {
+                if to_return.contains(&o.id) {
+                    let mut obj = o.clone();
+                    obj.zone = ZONE_BATTLEFIELD;
+                    obj.tapped = false;
+                    obj.summoning_sick = true; // r28 CE1 default; also CR 302.1 for ETB
+                    obj.damage = 0;
+                    obj.counters = 0;
+                    obj.attached_to = None;
+                    obj.exiled_with_source = None;
+                    popped.push(obj);
+                    false
+                } else {
+                    true
+                }
+            });
+            let bf_mut: &mut Vec<GameObject> =
+                Arc::make_mut(&mut self.players[pidx].battlefield);
+            for obj in popped {
+                bf_mut.push(obj);
+                returned += 1;
+            }
+        }
+        returned
+    }
+
     /// Resolve the top stack item. Returns the resolved item as a
     /// dict (same shape as `pop_top_of_stack`), or `None` if the
     /// stack was empty.
@@ -4038,6 +4167,7 @@ impl GameState {
             damage: 0,
             counters: 0,
             attached_to: None,
+            exiled_with_source: None,
             ueot_modifiers: Vec::new(),
         };
 

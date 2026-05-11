@@ -365,6 +365,7 @@ impl GameState {
             obj.damage = 0;
             obj.counters = 0;
             obj.attached_to = None;
+            obj.exiled_with_source = None;
             lib.insert(0, obj);
         }
         Ok(())
@@ -572,6 +573,7 @@ impl GameState {
             obj.damage = 0;
             obj.counters = 0;
             obj.attached_to = None;
+            obj.exiled_with_source = None;
             lib.insert(0, obj);
         }
         Ok(())
