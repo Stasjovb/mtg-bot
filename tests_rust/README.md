@@ -221,6 +221,8 @@ the test lands in a commit.
 
 | rust(effect-optional-sac-artifact): Effect::OptionalSacArtifactForEffect — Lithobraking-shape 'may sac for effect' with first-slice deterministic-yes (2 EoE cards). | tests_rust/test_resolve.py extend | green  | feature/rust-effect-optional-sac-artifact |
 
+| rust(effect-destroy-enchanted-permanent): Effect::DestroyEnchantedPermanent — Cryoshatter-shape; reads source's attached_to, destroys the host (4 EoE cards). | tests_rust/test_resolve.py extend | green  | feature/rust-effect-destroy-enchanted-permanent |
+
 ## Build invocation reminder
 
 ```
