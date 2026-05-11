@@ -1251,3 +1251,106 @@ def test_resolve_move_self_counters_clone_isolation(synthetic_state):
         d for d in synthetic_state.battlefield_snapshot() if d["id"] == src_id
     )
     assert orig_src["counters"] == 2
+
+
+# -------------------- Round-28 PutPlusOneCounterOnEachOfUpToNTargetCreatures --------------------
+
+
+def _weftblade_dict(max_n: int = 2):
+    return {
+        "name": "Weftblade Enhancer (synthetic)",
+        "card_types": ["Instant"],
+        "mana_cost": {"G": 1, "generic": 1},
+        "effects": [
+            {
+                "kind": "put_plus_one_counter_on_each_of_up_to_n_target_creatures",
+                "max_n": max_n,
+            }
+        ],
+    }
+
+
+def test_register_plus1_up_to_n_default(empty_registry):
+    pid = empty_registry.register_printing(
+        {
+            "name": "default-up-to-n",
+            "card_types": ["Instant"],
+            "effects": [
+                {"kind": "put_plus_one_counter_on_each_of_up_to_n_target_creatures"}
+            ],
+        }
+    )
+    eff = empty_registry.get_printing_effects(pid)[0]
+    assert eff["max_n"] == 2
+
+
+def test_register_plus1_up_to_n_negative_raises(empty_registry):
+    import pytest
+    with pytest.raises(ValueError, match="non-negative"):
+        empty_registry.register_printing(_weftblade_dict(max_n=-1))
+
+
+def test_resolve_plus1_up_to_n_picks_first_n_creatures(synthetic_state):
+    """max_n=2 — first 2 creatures on p0's bf (Grizzly Bears) each get
+    +1 counter. Third creature untouched."""
+    snap = synthetic_state.battlefield_snapshot()
+    p0_bears = [
+        d["id"] for d in snap
+        if d["controller_id"] == 0 and d["printing_name"] == "Grizzly Bears"
+    ]
+    assert len(p0_bears) >= 3
+    spell_id = synthetic_state.register_and_inject_object(
+        _weftblade_dict(max_n=2), 0, ZONE_HAND
+    )
+    synthetic_state.push_to_stack(spell_id, 0)
+    synthetic_state.resolve_top_of_stack()
+
+    new_snap = synthetic_state.battlefield_snapshot()
+    by_id = {d["id"]: d for d in new_snap}
+    assert by_id[p0_bears[0]]["counters"] == 1
+    assert by_id[p0_bears[1]]["counters"] == 1
+    # Third bear untouched (only 2 targets).
+    assert by_id[p0_bears[2]]["counters"] == 0
+
+
+def test_resolve_plus1_up_to_n_max_zero_is_noop(synthetic_state):
+    snap = synthetic_state.battlefield_snapshot()
+    bears = [
+        d["id"] for d in snap
+        if d["controller_id"] == 0 and d["printing_name"] == "Grizzly Bears"
+    ]
+    spell_id = synthetic_state.register_and_inject_object(
+        _weftblade_dict(max_n=0), 0, ZONE_HAND
+    )
+    synthetic_state.push_to_stack(spell_id, 0)
+    synthetic_state.resolve_top_of_stack()
+    new_snap = synthetic_state.battlefield_snapshot()
+    by_id = {d["id"]: d for d in new_snap}
+    for bid in bears:
+        assert by_id[bid]["counters"] == 0
+
+
+def test_resolve_plus1_up_to_n_overflows_into_opponent(synthetic_state):
+    """max_n=10 — all 5 of p0's creatures get counters; remaining
+    targets fall through to p1's bf."""
+    snap = synthetic_state.battlefield_snapshot()
+    p0_creatures = [
+        d["id"] for d in snap
+        if d["controller_id"] == 0 and d["printing_name"] == "Grizzly Bears"
+    ]
+    p1_creatures = [
+        d["id"] for d in snap
+        if d["controller_id"] == 1 and d["printing_name"] == "Grizzly Bears"
+    ]
+    spell_id = synthetic_state.register_and_inject_object(
+        _weftblade_dict(max_n=10), 0, ZONE_HAND
+    )
+    synthetic_state.push_to_stack(spell_id, 0)
+    synthetic_state.resolve_top_of_stack()
+
+    new_snap = synthetic_state.battlefield_snapshot()
+    by_id = {d["id"]: d for d in new_snap}
+    for cid in p0_creatures:
+        assert by_id[cid]["counters"] == 1
+    for cid in p1_creatures:
+        assert by_id[cid]["counters"] == 1

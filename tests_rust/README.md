@@ -213,6 +213,8 @@ the test lands in a commit.
 
 | rust(effect-conditional-tapped-creatures): Effect::ConditionalOnTappedCreatures — Flight-Deck-Coordinator-shape intervening-if (6 EoE cards). Recursive nested effect via Box<Effect>. | tests_rust/test_resolve.py extend | green  | feature/rust-effect-conditional-tapped-creatures |
 
+| rust(effect-plus1-up-to-n): Effect::PutPlusOneCounterOnEachOfUpToNTargetCreatures — Weftblade-Enhancer-shape multi-target counter add (2 EoE cards). | tests_rust/test_counters.py extend | green  | feature/rust-effect-plus1-up-to-n |
+
 ## Build invocation reminder
 
 ```
