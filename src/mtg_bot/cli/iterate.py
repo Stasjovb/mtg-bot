@@ -1322,14 +1322,40 @@ def main(argv=None) -> None:  # pragma: no cover
         ),
     )
     parser.add_argument(
-        "--use-shm-server", action="store_true",
+        "--use-shm-self-play", action="store_true",
         help=(
-            "Use the SharedTensorNNEvalServer (PR #40) for self-play "
+            "Use the SharedTensorNNEvalServer (PR #40) for SELF-PLAY "
             "on the LOCAL master shard. Linux-only; remote shards "
             "(Mac/Win10) ignore the flag silently. Bench numbers from "
             "PR #40 show 3-10x NN throughput vs the per-worker "
-            "NNEvaluator path. Off by default — opt in once you've "
-            "smoke-tested an iter cycle on master."
+            "NNEvaluator path; PR #41 smoke at 4w showed ~36 percent "
+            "per-game improvement. Off by default."
+        ),
+    )
+    parser.add_argument(
+        "--use-shm-eval", action="store_true",
+        help=(
+            "Use the SharedTensorNNEvalServer for EVAL on the LOCAL "
+            "master shard. Master constructs two SHM servers (one per "
+            "weights set) and workers route via cfg.weights_path. "
+            "Linux-only. **Off by default and currently NOT "
+            "recommended for production**: PR #41 smoke surfaced a "
+            "per-game wall regression vs the legacy per-worker "
+            "NNEvaluator path that reproduced at 14 workers — root "
+            "cause TBD. The flag exists so the eval-side wiring "
+            "stays exercised + benchable; production iter chains "
+            "should leave it off until the regression is understood. "
+            "See todo a72f1c8e... in hub/data/mtg_bot/todos.json."
+        ),
+    )
+    parser.add_argument(
+        "--use-shm-server", action="store_true",
+        help=(
+            "DEPRECATED — back-compat alias for --use-shm-self-play "
+            "AND --use-shm-eval. Use the split flags instead; the "
+            "two phases have different perf profiles (self-play is "
+            "the win; eval is currently a regression). Prefer "
+            "--use-shm-self-play alone."
         ),
     )
     parser.add_argument(
@@ -1761,7 +1787,11 @@ def main(argv=None) -> None:  # pragma: no cover
                     phase_prune_enabled=not args.no_phase_priority_prune,
                 ),
                 action_encoding_version=iter_action_encoding_version,
-                use_shm_server=args.use_shm_server,
+                # Self-play SHM: the new --use-shm-self-play flag, OR
+                # the deprecated --use-shm-server (back-compat alias).
+                use_shm_server=(
+                    args.use_shm_self_play or args.use_shm_server
+                ),
             )
         print(
             f"[iterate]   gen done in {gen_elapsed/60:.1f}m: "
@@ -1953,7 +1983,14 @@ def main(argv=None) -> None:  # pragma: no cover
                         old_action_encoding_version=(
                             best_action_encoding_version
                         ),
-                        use_shm_server=args.use_shm_server,
+                        # Eval SHM: the new --use-shm-eval flag, OR
+                        # the deprecated --use-shm-server back-compat
+                        # alias. Default off — see flag help for the
+                        # current perf-regression caveat (todo
+                        # a72f1c8e).
+                        use_shm_server=(
+                            args.use_shm_eval or args.use_shm_server
+                        ),
                     )
                 )
             n_decided = wins_new + wins_old
