@@ -776,3 +776,379 @@ def test_mill_target_player_clone_does_not_affect_original(synthetic_state):
     # Source untouched.
     assert synthetic_state.library_sizes == source_lib_before
     assert synthetic_state.graveyard_sizes == source_gy_before
+
+
+# --- Cross-feature edge-case coverage --------------------------------------
+#
+# These tests exercise the library / draw / mill / surveil / search
+# primitives together with sibling subsystems: Effect-dispatch via
+# resolve_top_of_stack, zone tagging via find_object_zone, fingerprinting,
+# state-based actions (apply_sbas), and CoW (clone_once). They probe the
+# documented current behavior of the engine — including the deliberate
+# divergences from real MTG that are tracked in
+# ``docs/SEARCH_LIMITATIONS.md`` (the round-23 SearchLibraryForBasicLand
+# no-shuffle gap; DrawCards-on-empty-library as a silent short-circuit
+# instead of a CR 704.5b deck-out loss).
+#
+# **Effect-dispatch shape (mirroring ``test_resolve.py``):**
+#   - Build a printing dict whose ``effects`` list carries the kind under
+#     test, register+inject it as a hand object, push it on the stack,
+#     and call ``resolve_top_of_stack``.
+#   - Inspect zone sizes, ``find_object_zone(obj_id)``, ``is_tapped``,
+#     etc. for the cross-feature assertion.
+#
+# These tests do NOT touch Rust source — they assert the dispatch shape
+# the round-1..round-23 slices already implement.
+
+ZONE_BATTLEFIELD = 2
+
+
+def _draw_two_dict():
+    """Concentrate-shaped sorcery — draw 2 cards on resolve."""
+    return {
+        "name": "Test Draw 2 (lib edge)",
+        "card_types": ["Sorcery"],
+        "mana_cost": {"U": 1, "generic": 1},
+        "effects": [{"kind": "draw_cards", "count": 2}],
+    }
+
+
+def _draw_huge_dict():
+    """A draw-100 sorcery — exercises empty-library short-circuit when
+    the library has fewer than 100 cards."""
+    return {
+        "name": "Test Draw 100 (lib edge)",
+        "card_types": ["Sorcery"],
+        "mana_cost": {"U": 5, "generic": 5},
+        "effects": [{"kind": "draw_cards", "count": 100}],
+    }
+
+
+def _mill_two_dict():
+    """A mill-2 sorcery — Effect::Mill (controller mills self)."""
+    return {
+        "name": "Test Mill 2 (lib edge)",
+        "card_types": ["Sorcery"],
+        "mana_cost": {"U": 1},
+        "effects": [{"kind": "mill", "count": 2}],
+    }
+
+
+def _mill_target_player_two_dict():
+    """A mill-target-player-2 sorcery — Effect::MillTargetPlayer; per
+    the round-19 spec, deterministic target is the defender."""
+    return {
+        "name": "Test MillTargetPlayer 2 (lib edge)",
+        "card_types": ["Sorcery"],
+        "mana_cost": {"U": 1, "generic": 1},
+        "effects": [{"kind": "mill_target_player", "count": 2}],
+    }
+
+
+def _surveil_one_dict():
+    """A Surveil-1 sorcery — first-slice deterministic keep-on-top, no
+    library mutation from the dispatch (round-23 scope)."""
+    return {
+        "name": "Test Surveil 1 (lib edge)",
+        "card_types": ["Sorcery"],
+        "mana_cost": {"U": 1},
+        "effects": [{"kind": "surveil", "count": 1}],
+    }
+
+
+def _basic_land_tapped_dict():
+    """Rampant-Growth-shaped sorcery — search a basic land, put it onto
+    the battlefield TAPPED (round-23 SearchLibraryForBasicLandTapped)."""
+    return {
+        "name": "Test BasicLandTapped (lib edge)",
+        "card_types": ["Sorcery"],
+        "effects": [
+            {"kind": "search_library_for_basic_land_tapped", "count": 1}
+        ],
+    }
+
+
+def test_effect_drawcards_moves_top_of_library_to_hand(synthetic_state):
+    """Cross-feature: ``Effect::DrawCards`` dispatch moves the actual
+    top-of-library obj_id from the library Vec onto the controller's
+    hand Vec. Top = LAST element of the library Vec (round-1 zones
+    convention). After resolution, the formerly-top library card has
+    ``find_object_zone == ZONE_HAND``.
+
+    The synthetic seed lays p0's library as ids 17..66 push-order, so
+    the top of library is id 66, second-from-top is id 65."""
+    top_id = 17 + P0_LIBRARY_SIZE - 1  # 66
+    second_id = 17 + P0_LIBRARY_SIZE - 2  # 65
+    assert synthetic_state.find_object_zone(top_id) != ZONE_HAND
+
+    obj_id = synthetic_state.register_and_inject_object(
+        _draw_two_dict(), 0, ZONE_HAND
+    )
+    synthetic_state.push_to_stack(obj_id, 0)
+    synthetic_state.resolve_top_of_stack()
+
+    # Both formerly-top library cards now live in hand.
+    assert synthetic_state.find_object_zone(top_id) == ZONE_HAND
+    assert synthetic_state.find_object_zone(second_id) == ZONE_HAND
+
+
+def test_effect_mill_moves_top_of_library_to_graveyard(synthetic_state):
+    """Cross-feature: ``Effect::Mill`` dispatch moves the top-of-library
+    obj_id to the CONTROLLER's graveyard. Round-1 zones convention: top
+    of library = LAST element of the library Vec. After resolution, the
+    formerly-top card has ``find_object_zone == ZONE_GRAVEYARD``."""
+    top_id = 17 + P0_LIBRARY_SIZE - 1  # 66
+    second_id = 17 + P0_LIBRARY_SIZE - 2  # 65
+    assert synthetic_state.find_object_zone(top_id) != ZONE_GRAVEYARD
+
+    obj_id = synthetic_state.register_and_inject_object(
+        _mill_two_dict(), 0, ZONE_HAND
+    )
+    synthetic_state.push_to_stack(obj_id, 0)
+    synthetic_state.resolve_top_of_stack()
+
+    # Both formerly-top library cards now live in the controller's
+    # graveyard. The source sorcery also lands there via CR 608.2m.
+    assert synthetic_state.find_object_zone(top_id) == ZONE_GRAVEYARD
+    assert synthetic_state.find_object_zone(second_id) == ZONE_GRAVEYARD
+
+
+def test_effect_mill_target_player_mills_target_not_source(synthetic_state):
+    """Cross-feature: ``Effect::MillTargetPlayer`` mills the DEFENDER's
+    library (deterministic target = 1 - active_player per round-19),
+    NOT the source's controller. Load-bearing distinction from
+    ``Effect::Mill`` (which would hit the controller).
+
+    p0 casts the spell; p1 is the defender, so p1's library shrinks by
+    2 and p0's library is untouched."""
+    p0_lib_before = synthetic_state.library_sizes[0]
+    p1_lib_before = synthetic_state.library_sizes[1]
+    p1_gy_before = synthetic_state.graveyard_sizes[1]
+
+    obj_id = synthetic_state.register_and_inject_object(
+        _mill_target_player_two_dict(), 0, ZONE_HAND  # controller p0
+    )
+    synthetic_state.push_to_stack(obj_id, 0)
+    synthetic_state.resolve_top_of_stack()
+
+    # p1 (target / defender) milled.
+    assert synthetic_state.library_sizes[1] == p1_lib_before - 2
+    assert synthetic_state.graveyard_sizes[1] == p1_gy_before + 2
+    # p0 (controller / source) library untouched. p0's graveyard gained
+    # only the source sorcery (CR 608.2m post-resolve), not the milled
+    # cards.
+    assert synthetic_state.library_sizes[0] == p0_lib_before
+
+
+def test_effect_surveil_first_slice_keeps_library_and_top_id_unchanged(
+    synthetic_state,
+):
+    """Cross-feature: round-23 Surveil first-slice deterministic choice
+    is "keep all on top". So Surveil 1 does NOT move the top-of-library
+    card anywhere — library size and the identity of the top card both
+    stay put. Documents the round-23 first-slice behavior (a future
+    slice will plumb a real "which to graveyard" decision callback).
+
+    See ``docs/SEARCH_LIMITATIONS.md`` for the deferred surveil-routing
+    decision-callback work."""
+    top_id = 17 + P0_LIBRARY_SIZE - 1  # 66
+    lib_before = synthetic_state.library_sizes[0]
+    gy_before = synthetic_state.graveyard_sizes[0]
+
+    obj_id = synthetic_state.register_and_inject_object(
+        _surveil_one_dict(), 0, ZONE_HAND
+    )
+    synthetic_state.push_to_stack(obj_id, 0)
+    synthetic_state.resolve_top_of_stack()
+
+    # Library size unchanged — keep-all-on-top is mechanically a no-op
+    # on the library. Top-of-library id is also unchanged (the round-22
+    # scry returns top-first, so [0] is still the same obj_id).
+    assert synthetic_state.library_sizes[0] == lib_before
+    assert synthetic_state.find_object_zone(top_id) == 1  # ZONE_LIBRARY
+    assert synthetic_state.scry(0, 1) == [top_id]
+    # Graveyard gained only the source (sorcery via CR 608.2m), not any
+    # surveil-routed card.
+    assert synthetic_state.graveyard_sizes[0] == gy_before + 1
+
+
+def test_effect_search_library_for_basic_land_tapped_enters_tapped(
+    synthetic_state,
+):
+    """Cross-feature: round-23 ``SearchLibraryForBasicLandTapped`` puts
+    a basic Forest from the library onto the active player's battlefield
+    TAPPED. Probes the zones + tapped intersection.
+
+    The synthetic seed library is 100% Forest (card_types=["Land"]);
+    deterministic first-match-from-top picks the top-of-library card
+    (id 66). It lands on p0's battlefield with ``is_tapped == True``
+    and ``find_object_zone == ZONE_BATTLEFIELD``.
+
+    **Documented no-shuffle gap:** the round-23 first slice does NOT
+    shuffle the library after the search (CR 701.19/701.22 would
+    require it). Tracked in ``docs/SEARCH_LIMITATIONS.md`` — pending
+    RNG-externalization work."""
+    top_id = 17 + P0_LIBRARY_SIZE - 1  # 66 — the searched land
+
+    obj_id = synthetic_state.register_and_inject_object(
+        _basic_land_tapped_dict(), 0, ZONE_HAND
+    )
+    synthetic_state.push_to_stack(obj_id, 0)
+    synthetic_state.resolve_top_of_stack()
+
+    # The land moved to p0's battlefield, tapped.
+    assert synthetic_state.find_object_zone(top_id) == ZONE_BATTLEFIELD
+    assert synthetic_state.is_tapped(top_id) is True
+    # NOT summoning-sick (CR 302.1 applies to creatures; a land bypasses).
+    assert synthetic_state.is_summoning_sick(top_id) is False
+
+
+def test_drawcards_from_empty_library_is_silent_no_op_no_loser(engine):
+    """Cross-feature with sba + winloss: under the round-8 first-slice
+    convention, ``Effect::DrawCards`` against an empty library is a
+    SILENT short-circuit — no deck-out loss flag, no SBA-driven loss.
+
+    Real MTG (CR 704.5b): a player who attempts to draw from an empty
+    library loses on the next SBA pass. The Rust engine defers
+    deck-out integration (state.rs has no ``attempted_draw_on_empty``
+    field; ``losers()`` is purely ``life <= 0`` in
+    ``state_ops_winloss.rs``). This test pins down that current
+    behavior so a future deck-out slice flips the assertion
+    deliberately — see ``docs/SEARCH_LIMITATIONS.md`` for the
+    deferred-deck-out entry."""
+    # Tiny library (1 card) so DrawCards-2 over-draws by 1.
+    state = engine.make_synthetic_state(
+        num_battlefield=0, num_hand=1, num_library=1
+    )
+    assert state.library_sizes[0] == 1
+    life_before = list(state.life_totals)
+
+    obj_id = state.register_and_inject_object(_draw_two_dict(), 0, ZONE_HAND)
+    state.push_to_stack(obj_id, 0)
+    state.resolve_top_of_stack()
+
+    # Library drained, hand grew by the one available card. No crash.
+    assert state.library_sizes[0] == 0
+    # SBA reports zero destructions, no loser registered.
+    assert state.apply_sbas() == 0
+    assert list(state.losers()) == []
+    assert state.winner_id is None
+    # Life totals unchanged — deck-out doesn't manifest via life.
+    assert list(state.life_totals) == life_before
+
+
+def test_drawcards_count_larger_than_library_drains_no_sba_loss(engine):
+    """Cross-feature with sba: a DrawCards-N resolution where N >
+    library size empties the library cleanly (silent short-circuit at
+    each empty-pop) AND no SBA-loss is registered. Documents the
+    current deferred-deck-out shape — same rationale as the previous
+    test, but with a much larger over-draw delta."""
+    # Library size 3, draw 100 — drains the library and short-circuits
+    # the remaining 97 pops.
+    state = engine.make_synthetic_state(
+        num_battlefield=0, num_hand=0, num_library=3
+    )
+    assert state.library_sizes[0] == 3
+    hand_before = state.hand_sizes[0]
+
+    obj_id = state.register_and_inject_object(
+        _draw_huge_dict(), 0, ZONE_BATTLEFIELD
+    )
+    state.push_to_stack(obj_id, 0)
+    state.resolve_top_of_stack()
+
+    # All 3 cards drained from library to hand. No crash, no error.
+    assert state.library_sizes[0] == 0
+    assert state.hand_sizes[0] == hand_before + 3
+    # No SBA-loss for the empty-library draw — current deferred shape.
+    assert state.apply_sbas() == 0
+    assert list(state.losers()) == []
+    assert state.winner_id is None
+
+
+def test_effect_drawcards_clone_does_not_mutate_original_library_or_hand(
+    synthetic_state,
+):
+    """CoW canary on the Effect-dispatch path: resolving DrawCards on a
+    clone leaves the source state's library AND hand exactly as before.
+    The library order, the library size, AND the hand size on the source
+    must all be untouched.
+
+    Cross-feature with the CoW Arc-make-mut invariant — the round-8
+    DrawCards arm uses ``Arc::make_mut`` on both ``player.library`` and
+    ``player.hand``, so a clone+resolve should clone-on-write both
+    zones."""
+    spell_obj_id = synthetic_state.register_and_inject_object(
+        _draw_two_dict(), 0, ZONE_HAND
+    )
+    synthetic_state.push_to_stack(spell_obj_id, 0)
+    source_lib_before = _library_obj_ids(synthetic_state, 0, P0_LIBRARY_SIZE)
+    source_hand_before = synthetic_state.hand_sizes[0]
+    source_lib_size_before = synthetic_state.library_sizes[0]
+
+    cloned = synthetic_state.clone_once()
+    cloned.resolve_top_of_stack()
+
+    # Source: untouched on every front (library order + size + hand size).
+    source_lib_after = _library_obj_ids(synthetic_state, 0, P0_LIBRARY_SIZE)
+    assert source_lib_after == source_lib_before
+    assert synthetic_state.library_sizes[0] == source_lib_size_before
+    assert synthetic_state.hand_sizes[0] == source_hand_before
+    # Clone: library shrank by 2 (the two drawn cards), source sorcery
+    # routed to graveyard via CR 608.2m, drew 2 to hand. Net hand delta
+    # on clone: -1 (source leaves) + 2 (drawn) = +1.
+    assert cloned.library_sizes[0] == source_lib_size_before - 2
+    assert cloned.hand_sizes[0] == source_hand_before - 1 + 2
+
+
+def test_fingerprint_changes_when_library_order_changes(synthetic_state):
+    """Cross-feature with round-22 fingerprinting: two clones of the
+    same state with the same library *contents* but different *order*
+    have DIFFERENT fingerprints. The fingerprint covers the library
+    Vec's order (not just its set membership), so a shuffle is
+    observable via fingerprint diff alone."""
+    a = synthetic_state.clone_once()
+    b = synthetic_state.clone_once()
+
+    a.shuffle_library_with_seed(0, 1)
+    b.shuffle_library_with_seed(0, 99)
+
+    # Same contents on both (shuffle is a permutation), but different
+    # order — fingerprint differs.
+    a_order = _library_obj_ids(a, 0, P0_LIBRARY_SIZE)
+    b_order = _library_obj_ids(b, 0, P0_LIBRARY_SIZE)
+    assert sorted(a_order) == sorted(b_order)
+    assert a_order != b_order
+    assert a.fingerprint() != b.fingerprint()
+
+
+def test_fingerprint_changes_after_mill_target_player_moves_card(
+    synthetic_state,
+):
+    """Cross-feature with round-22 fingerprinting + round-19 mill: a
+    mill_target_player call changes the fingerprint because both the
+    library and the graveyard contents change. Pins down that the
+    fingerprint is sensitive to library->graveyard zone moves."""
+    fp_before = synthetic_state.fingerprint()
+
+    milled = synthetic_state.mill_target_player(0, 1)
+    assert milled == 1
+
+    fp_after = synthetic_state.fingerprint()
+    assert fp_after != fp_before
+
+
+def test_find_object_zone_post_mill_reports_graveyard(synthetic_state):
+    """Cross-feature with zones (round-1 find_object_zone): after a
+    mill, the milled card's ``find_object_zone`` reports
+    ``ZONE_GRAVEYARD``, NOT ``ZONE_LIBRARY``. Confirms zone-tag and
+    Vec-membership are kept in lockstep across the library->graveyard
+    move (the obj.zone field is stamped to ZONE_GRAVEYARD on the way
+    out per the round-10 mill arm)."""
+    top_id = 17 + P0_LIBRARY_SIZE - 1  # 66 — top of p0's library
+    assert synthetic_state.find_object_zone(top_id) == 1  # ZONE_LIBRARY
+
+    milled = synthetic_state.mill_target_player(0, 1)
+    assert milled == 1
+
+    assert synthetic_state.find_object_zone(top_id) == ZONE_GRAVEYARD

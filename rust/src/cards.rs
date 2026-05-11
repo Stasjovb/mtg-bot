@@ -68,6 +68,20 @@ pub enum Effect {
     /// Mill: caller's controller puts the top `count` cards of their
     /// library into their graveyard. No target — controller implicit.
     Mill { count: i32 },
+    /// Target player puts the top `count` cards of their library into
+    /// their graveyard (CR 701.13b "mill"). 2 cards in EoE pool per
+    /// round-20 measurement (Scrabbling Skullcrab etc.).
+    ///
+    /// **Distinct from `Effect::Mill`** — that arm mills the
+    /// CONTROLLER's library. `MillTargetPlayer` mills a chosen target
+    /// player (in 2-player engine = defender). First-slice
+    /// deterministic choice: defender (= 1 - controller). Future
+    /// multiplayer / archenemy work needs an explicit choice callback.
+    ///
+    /// Negative `count` raises. count=0 is a legal no-op. If the
+    /// library has fewer than `count` cards, all remaining cards mill
+    /// (Python parity).
+    MillTargetPlayer { count: i32 },
     /// Exile target permanent (CR 406). Removes from its current
     /// zone to its owner's exile zone. First-slice owner =
     /// controller.
@@ -434,6 +448,87 @@ pub enum Effect {
     /// DiscardSelf raise-on-negative shape; "lose -2 life" is
     /// schema nonsense).
     EachOpponentLosesLife { amount: i32 },
+    /// The SOURCE's controller loses `amount` life (CR 118.4 — life
+    /// loss, not damage). 7 cards in EoE pool per round-20 measurement
+    /// (Decode Transmissions etc.). Punisher / drawback pattern — the
+    /// caster pays a life cost on resolution.
+    ///
+    /// **Distinct from `EachOpponentLosesLife` (round 24)** — that arm
+    /// subtracts from the OPPONENT's life. This arm subtracts from the
+    /// SOURCE's CONTROLLER's life (typically the caster). Both use the
+    /// same source-finder pattern (round-24 5-zone walk + stack scan).
+    ///
+    /// **Distinct from `GainLife` with negative `amount`** — that
+    /// pattern raises ("gain -2 life" is schema nonsense). `LoseLife`
+    /// is the closed-vocab variant for losing life; negative `amount`
+    /// here also raises (defense-in-depth).
+    ///
+    /// amount=0 is a legal no-op. Negative amount raises.
+    LoseLife { amount: i32 },
+    /// Target opponent loses `amount` life (CR 118.4). 2 cards in EoE
+    /// pool per round-20 measurement (Dubious Delicacy etc.).
+    ///
+    /// **Distinct from `EachOpponentLosesLife` (round 24)** — that arm
+    /// hits ALL opponents (in 2-player land = the one opponent).
+    /// `TargetOpponentLosesLife` is targeted: the caster CHOOSES which
+    /// opponent loses life. In a 2-player engine these collapse to the
+    /// same runtime effect, but the variants stay distinct to mirror
+    /// Python's closed Effect vocabulary.
+    ///
+    /// **First-slice deterministic choice**: the one opponent (= 1 -
+    /// controller). Future multiplayer / archenemy work needs an
+    /// explicit choice callback. Negative `amount` raises; amount=0
+    /// is a legal no-op.
+    TargetOpponentLosesLife { amount: i32 },
+    /// Each opponent of the source's controller discards a card (CR
+    /// 701.8). Let's Play a Game pattern — 2 cards in the EoE pool
+    /// per round-20 measurement. Mirrors Python's
+    /// `EachOpponentDiscards(count: int = 1)` dataclass.
+    ///
+    /// **Distinct from `DiscardCard { target: AnyPlayer }` (round 15)**
+    /// — that arm picks the DEFENDING player's hand[0] (caller-
+    /// targeted, Mind Rot shape — active player forces the defender to
+    /// discard). `EachOpponentDiscards` fires on the SOURCE'S
+    /// controller's opponents (source-relative, independent of
+    /// active_player at apply-effect time). In two-player land both
+    /// collapse to "the one opponent discards hand[0]" but the
+    /// variants stay distinct to mirror Python's closed Effect
+    /// vocabulary (round-15 pattern).
+    ///
+    /// **Distinct from `DiscardSelf` (round 24).** Same source-finder
+    /// pattern (5-zone walk + stack scan) and same hand[0] +
+    /// graveyard-push primitive, but `DiscardSelf` fires on the
+    /// CONTROLLER while this arm fires on the OPPONENT of the
+    /// controller. Inverted target on an otherwise identical dispatch
+    /// shape — composes round-24 EachOpponentLosesLife's opponent-
+    /// resolution with round-24 DiscardSelf's discard primitive.
+    ///
+    /// **Source-finder dispatch (round-23 pattern).** Walks both
+    /// players' five tracked zones (hand / library / battlefield /
+    /// graveyard / exile) plus the stack to recover the source's
+    /// `controller`. Punisher / "let's play a game" effects fire on
+    /// whoever controls the source regardless of where the source
+    /// currently sits, since the `controller` field doesn't change on
+    /// zone moves.
+    ///
+    /// **Two-player "each opponent" reduces to "the one opponent".**
+    /// opponent_id = 1 - controller. The single opponent's hand[0] is
+    /// popped to graveyard with CR 400.7 state reset (mirrors round-24
+    /// DiscardSelf). Up to `count` discards in a row; empty hand stops
+    /// early (Python parity with `for _ in range(self.count): if not
+    /// p.hand: break` inside `EachOpponentDiscards.resolve`).
+    ///
+    /// **Empty opponent hand = silent no-op** (Python parity). **Source
+    /// not found anywhere = silent fizzle** (lost-track-of-source
+    /// tolerance, mirrors round-24 / round-25 / round-26 shape).
+    ///
+    /// **`count` shape mirrors Python.** Python's
+    /// `EachOpponentDiscards(count: int = 1)` carries a `count: int = 1`
+    /// default; this Rust variant mirrors that exactly. Missing
+    /// `count` registers as count=1 (NOT a KeyError, mirrors
+    /// DiscardSelf / TargetOpponentDiscards default-handling). Negative
+    /// `count` raises at register / resolve time.
+    EachOpponentDiscards { count: i32 },
     /// Destroy every creature on the battlefield (Wrath of God pattern,
     /// CR 701.7 + 701.4 AOE). Indestructible creatures (CR 702.12)
     /// are NOT destroyed — round-13 keyword check is honored.
@@ -481,6 +576,59 @@ pub enum Effect {
     /// with a Land-skip + indestructible-skip filter. Unit variant —
     /// the "non-land permanent" target shape is intrinsic.
     DestroyTargetNonlandPermanent,
+    /// Destroy target artifact on the defending player's battlefield
+    /// (CR 701.7, artifact-filter). 2 cards in EoE pool per round-20
+    /// measurement (Drill Too Deep, Scour for Scrap). Unit variant.
+    ///
+    /// **First-slice deterministic choice**: defender's FIRST artifact
+    /// (top-to-bottom scan), skipping indestructible (CR 702.12) per
+    /// the round-24 DestroyTargetNonlandPermanent convention.
+    /// Empty / no-artifacts / only-indestructible-artifacts = silent
+    /// fizzle.
+    ///
+    /// **Distinct from `DestroyTargetNonlandPermanent` (round 24)** —
+    /// that arm filters `!card_types.contains("Land")` (picks creatures,
+    /// artifacts, enchantments, planeswalkers — anything non-land).
+    /// This arm filters `card_types.contains("Artifact")` (artifacts
+    /// only). Identical dispatch shape otherwise (defender-side scan,
+    /// indestructible-skip, first-match, silent fizzle on empty /
+    /// only-indestructible-artifacts). Mirrors Python's
+    /// `DestroyTargetArtifact(Destroy)` constructor sugar with
+    /// `targets=(TargetSpec(IsArtifact()),)`.
+    DestroyTargetArtifact,
+    /// Destroy target land on the defending player's battlefield
+    /// (CR 701.7, land-filter). 2 cards in EoE pool per round-20
+    /// measurement (Dust Bowl etc.). Unit variant.
+    ///
+    /// **First-slice deterministic choice**: defender's FIRST land
+    /// (top-to-bottom scan), skipping indestructible. Mirrors round-25
+    /// `DestroyTargetArtifact` exactly with the filter swapped.
+    /// Empty / no-lands / only-indestructible-lands = silent fizzle.
+    ///
+    /// **Distinct from `DestroyTargetArtifact` (round 25)** —
+    /// that arm filters `card_types.contains("Artifact")` (artifacts
+    /// only). This arm filters `card_types.contains("Land")` (lands
+    /// only). Identical dispatch shape otherwise (defender-side scan,
+    /// indestructible-skip, first-match, silent fizzle on empty /
+    /// only-indestructible-lands). Mirrors Python's
+    /// `DestroyTargetLand(Destroy)` constructor sugar with
+    /// `targets=(TargetSpec(IsLand()),)`.
+    DestroyTargetLand,
+    /// Deal `amount` damage to any target — creature OR player
+    /// (Lightning Bolt pattern, CR 701.4). 7 cards in EoE pool per
+    /// round-20 measurement (Debris Field Crusher etc.). Mirrors
+    /// Python's `DealDamageAnyTarget(DealDamage)` constructor sugar —
+    /// the "any target" filter is intrinsic to the variant, distinct
+    /// from `DealDamage { target: AnyPlayer/AnyCreature }` which
+    /// requires a target dict.
+    ///
+    /// First-slice deterministic choice: prefer the defender's first
+    /// creature on their battlefield (mirrors the `AnyCreature` arm
+    /// in `DealDamage`); fall back to defender-as-player life
+    /// subtraction (mirrors the `AnyPlayer` arm) when no creature is
+    /// available. Future slice plumbs an explicit choice callback.
+    /// Negative `amount` raises at register and at resolve time.
+    DealDamageAnyTarget { amount: i32 },
 }
 
 #[derive(Clone, Debug)]
@@ -626,6 +774,22 @@ fn parse_effect(dict: &Bound<'_, PyDict>) -> PyResult<Effect> {
         "mill" => {
             let count: i32 = require(dict, "count")?.extract()?;
             Ok(Effect::Mill { count })
+        }
+        "mill_target_player" => {
+            // Python's `MillTargetPlayer(amount: int = 1)` carries a
+            // default amount. The Rust bridge uses `count` (mirrors the
+            // `mill` arm's field name + the Mill / ScryN / Surveil /
+            // DrawCards / DamageEachOpponent count-field convention)
+            // and requires the field — missing `count` is a KeyError
+            // at register time. Negative `count` surfaces at register
+            // time (defense-in-depth; `apply_effect` re-checks).
+            let count: i32 = require(dict, "count")?.extract()?;
+            if count < 0 {
+                return Err(PyValueError::new_err(format!(
+                    "mill_target_player: count must be non-negative, got {count}"
+                )));
+            }
+            Ok(Effect::MillTargetPlayer { count })
         }
         "exile_target" => {
             let target_any = require(dict, "target")?;
@@ -831,6 +995,71 @@ fn parse_effect(dict: &Bound<'_, PyDict>) -> PyResult<Effect> {
             }
             Ok(Effect::EachOpponentLosesLife { amount })
         }
+        "lose_life" => {
+            // Python's `LoseLife(amount: int)` carries a required
+            // `amount` field with no default. Mirror that here: missing
+            // `amount` is a KeyError at register time; negative amount
+            // surfaces at register time (defense-in-depth;
+            // `apply_effect` re-checks). Distinct from
+            // `each_opponent_loses_life` — same shape but the
+            // dispatch subtracts from the source's CONTROLLER's life
+            // (not the opponent's).
+            let amount: i32 = require(dict, "amount")?.extract()?;
+            if amount < 0 {
+                return Err(PyValueError::new_err(format!(
+                    "lose_life: amount must be non-negative, got {amount}"
+                )));
+            }
+            Ok(Effect::LoseLife { amount })
+        }
+        "target_opponent_loses_life" => {
+            // Python's `TargetOpponentLosesLife(amount: int = 1)` has
+            // an `amount` field defaulting to 1. Mirror that here:
+            // missing `amount` defaults to 1, present `amount` extracts
+            // as i32. Negative `amount` surfaces at register time
+            // (defense-in-depth; `apply_effect` re-checks). Distinct
+            // from `each_opponent_loses_life` — same round-26 source-
+            // finder dispatch shape in 2-player land, but the variant
+            // stays separate to mirror Python's closed Effect
+            // vocabulary (targeted vs each-opponent semantics).
+            let amount: i32 = match dict.get_item("amount")? {
+                Some(a) => a.extract().map_err(|e| {
+                    PyValueError::new_err(format!(
+                        "target_opponent_loses_life.amount must be an integer (got: {e})"
+                    ))
+                })?,
+                None => 1,
+            };
+            if amount < 0 {
+                return Err(PyValueError::new_err(format!(
+                    "target_opponent_loses_life: amount must be non-negative, got {amount}"
+                )));
+            }
+            Ok(Effect::TargetOpponentLosesLife { amount })
+        }
+        "each_opponent_discards" => {
+            // Python's `EachOpponentDiscards(count: int = 1)` dataclass
+            // has a `count` field defaulting to 1. Mirror that here:
+            // missing `count` defaults to 1, present `count` extracts as
+            // i32. Negative `count` surfaces at register time (defense-
+            // in-depth; `apply_effect` re-checks). Mirrors DiscardSelf /
+            // TargetOpponentLosesLife default-handling shape rather than
+            // EachOpponentLosesLife's required-amount shape.
+            let count: i32 = match dict.get_item("count")? {
+                Some(a) => a.extract().map_err(|e| {
+                    PyValueError::new_err(format!(
+                        "each_opponent_discards.count must be an integer (got: {e})"
+                    ))
+                })?,
+                None => 1,
+            };
+            if count < 0 {
+                return Err(PyValueError::new_err(format!(
+                    "each_opponent_discards: count must be non-negative, got {count}"
+                )));
+            }
+            Ok(Effect::EachOpponentDiscards { count })
+        }
         "destroy_all_creatures" => {
             // Unit variant — no required fields. Python's
             // `DestroyAllCreatures` carries optional narrowing fields
@@ -846,8 +1075,39 @@ fn parse_effect(dict: &Bound<'_, PyDict>) -> PyResult<Effect> {
             // ("non-Land, non-indestructible"). Extra keys ignored.
             Ok(Effect::DestroyTargetNonlandPermanent)
         }
+        "destroy_target_artifact" => {
+            // Unit variant — no required fields. Filter is intrinsic
+            // ("Artifact, non-indestructible"). Extra keys ignored.
+            // Mirrors `destroy_target_nonland_permanent` parser arm
+            // shape (silent-drop convention for unrecognized keys).
+            Ok(Effect::DestroyTargetArtifact)
+        }
+        "destroy_target_land" => {
+            // Unit variant — no required fields. Filter is intrinsic
+            // ("Land, non-indestructible"). Extra keys ignored.
+            // Mirrors `destroy_target_artifact` parser arm shape
+            // (silent-drop convention for unrecognized keys); only the
+            // intrinsic filter differs.
+            Ok(Effect::DestroyTargetLand)
+        }
+        "deal_damage_any_target" => {
+            // Python's `DealDamageAnyTarget(DealDamage)` carries only
+            // the inherited `amount` field; the "any target" filter is
+            // intrinsic to the variant (no `target` dict to parse —
+            // distinct from `deal_damage`'s required `target` field).
+            // Missing `amount` is a KeyError at register time;
+            // negative amount surfaces at register time (defense-in-
+            // depth; `apply_effect` re-checks).
+            let amount: i32 = require(dict, "amount")?.extract()?;
+            if amount < 0 {
+                return Err(PyValueError::new_err(format!(
+                    "deal_damage_any_target: amount must be non-negative, got {amount}"
+                )));
+            }
+            Ok(Effect::DealDamageAnyTarget { amount })
+        }
         other => Err(PyValueError::new_err(format!(
-            "unknown effect kind {other:?}; valid: deal_damage, draw_cards, gain_life, return_to_hand, mill, exile_target, tap_target, untap_target, sacrifice, add_counters, discard_card, scry_n, destroy_target, damage_each_opponent, damage_each_creature, create_token, add_mana_to_pool, search_library_for_basic_land_tapped, put_plus_one_counter_on_self, surveil, counter_target_spell, return_creature_from_your_graveyard_to_battlefield, discard_self, each_opponent_loses_life, destroy_all_creatures, destroy_target_nonland_permanent"
+            "unknown effect kind {other:?}; valid: deal_damage, draw_cards, gain_life, return_to_hand, mill, mill_target_player, exile_target, tap_target, untap_target, sacrifice, add_counters, discard_card, scry_n, destroy_target, damage_each_opponent, damage_each_creature, create_token, add_mana_to_pool, search_library_for_basic_land_tapped, put_plus_one_counter_on_self, surveil, counter_target_spell, return_creature_from_your_graveyard_to_battlefield, discard_self, each_opponent_loses_life, lose_life, target_opponent_loses_life, each_opponent_discards, destroy_all_creatures, destroy_target_nonland_permanent, destroy_target_artifact, destroy_target_land, deal_damage_any_target"
         ))),
     }
 }
@@ -1051,6 +1311,10 @@ fn effect_to_pydict<'py>(
             d.set_item("kind", "mill")?;
             d.set_item("count", *count)?;
         }
+        Effect::MillTargetPlayer { count } => {
+            d.set_item("kind", "mill_target_player")?;
+            d.set_item("count", *count)?;
+        }
         Effect::ExileTarget { target } => {
             d.set_item("kind", "exile_target")?;
             d.set_item("target", target_filter_to_pydict(py, target)?)?;
@@ -1128,11 +1392,33 @@ fn effect_to_pydict<'py>(
             d.set_item("kind", "each_opponent_loses_life")?;
             d.set_item("amount", *amount)?;
         }
+        Effect::LoseLife { amount } => {
+            d.set_item("kind", "lose_life")?;
+            d.set_item("amount", *amount)?;
+        }
+        Effect::TargetOpponentLosesLife { amount } => {
+            d.set_item("kind", "target_opponent_loses_life")?;
+            d.set_item("amount", *amount)?;
+        }
+        Effect::EachOpponentDiscards { count } => {
+            d.set_item("kind", "each_opponent_discards")?;
+            d.set_item("count", *count)?;
+        }
         Effect::DestroyAllCreatures => {
             d.set_item("kind", "destroy_all_creatures")?;
         }
         Effect::DestroyTargetNonlandPermanent => {
             d.set_item("kind", "destroy_target_nonland_permanent")?;
+        }
+        Effect::DestroyTargetArtifact => {
+            d.set_item("kind", "destroy_target_artifact")?;
+        }
+        Effect::DestroyTargetLand => {
+            d.set_item("kind", "destroy_target_land")?;
+        }
+        Effect::DealDamageAnyTarget { amount } => {
+            d.set_item("kind", "deal_damage_any_target")?;
+            d.set_item("amount", *amount)?;
         }
     }
     Ok(d)

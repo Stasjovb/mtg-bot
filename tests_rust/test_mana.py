@@ -424,3 +424,310 @@ def test_pay_mana_cost_complex_multi_color(synthetic_state):
     assert synthetic_state.get_mana_pool(0) == {
         "W": 0, "U": 0, "B": 0, "R": 0, "G": 1, "C": 0
     }
+
+
+# --- cross-feature edge-case coverage -------------------------------
+#
+# These tests exercise mana-pool interactions across slice boundaries:
+# Effect dispatch through ``resolve_top_of_stack`` (the ``apply_effect``
+# path), the action layer's ``ActivateAbility`` mana-ability arm, phase
+# transitions, the cross-engine ``fingerprint`` / ``mana_pool_snapshot``
+# projections, and CoW canaries on the cross-feature paths.
+
+# Mirror of ``ZONE_BATTLEFIELD`` in ``state_ops_zones.rs`` so we can use
+# ``register_and_inject_object`` to seed a mana-effect-bearing printing
+# without poking the registry directly. Matches the constants used in
+# ``tests_rust/test_resolve.py``.
+ZONE_BATTLEFIELD = 2
+
+
+def _add_mana_dict(color, amount, name=None):
+    """Build a Forest-shaped printing whose effects list contains an
+    ``add_mana_to_pool`` entry. Used to drive ``resolve_top_of_stack``
+    end-to-end via ``register_and_inject_object`` + ``push_to_stack``.
+
+    Mirrors the helper in ``tests_rust/test_resolve.py`` but kept local
+    so this module stays independently importable."""
+    return {
+        "name": name or f"Test Mana ({color}x{amount})",
+        "card_types": ["Land"],
+        "effects": [
+            {"kind": "add_mana_to_pool", "color": color, "amount": amount}
+        ],
+    }
+
+
+def test_add_mana_to_pool_effect_dispatch_updates_pool(synthetic_state):
+    """Cross-slice: an ``Effect::AddManaToPool`` reached via
+    ``resolve_top_of_stack`` (not the direct ``add_mana`` primitive)
+    still mutates the active player's mana pool. Loads the apply_effect
+    path, not the slot_mut path."""
+    obj_id = synthetic_state.register_and_inject_object(
+        _add_mana_dict("G", 2), 0, ZONE_BATTLEFIELD
+    )
+    synthetic_state.push_to_stack(obj_id, 0)
+    synthetic_state.resolve_top_of_stack()
+    assert synthetic_state.is_stack_empty() is True
+    assert synthetic_state.get_mana_pool(0)["G"] == 2
+
+
+def test_mana_pool_persists_across_phase_boundary_documented_quirk(
+    synthetic_state,
+):
+    """**Documented divergence from CR 106.4.** The Rust engine does
+    NOT empty mana pools on phase / step boundaries — neither
+    ``advance_phase`` nor the CLEANUP -> UNTAP wrap calls
+    ``empty_all_mana_pools``. Real MTG empties the pool at the end of
+    every phase and step (CR 106.4); the Rust slice currently exposes
+    ``empty_all_mana_pools`` as a primitive that the phase machinery
+    *will* call, but the wiring has not landed yet. This test pins the
+    observed behavior so a future "empty on phase boundary" slice
+    flips it deliberately rather than silently.
+
+    See module docstring in ``rust/src/state_ops_mana.rs`` and the
+    ``empty_all_mana_pools`` docstring in same file."""
+    synthetic_state.add_mana(0, "G", 3)
+    assert synthetic_state.get_mana_pool(0)["G"] == 3
+    synthetic_state.advance_phase()
+    # Quirk: pool survives the phase tick.
+    assert synthetic_state.get_mana_pool(0)["G"] == 3
+    # Even the CLEANUP -> UNTAP wrap (which fires the round-2 untap
+    # sweep + round-14 summoning-sick clear) does NOT touch the pool.
+    synthetic_state.set_phase(11)  # PHASE_CLEANUP
+    synthetic_state.advance_phase()
+    assert synthetic_state.get_mana_pool(0)["G"] == 3
+
+
+def test_two_add_mana_to_pool_effects_resolve_in_lifo_order(synthetic_state):
+    """Two distinct stack items each with an ``AddManaToPool`` effect
+    resolve LIFO (the most recently pushed item resolves first). Their
+    contributions accumulate into the same pool color slot."""
+    oid1 = synthetic_state.register_and_inject_object(
+        _add_mana_dict("G", 2, name="First"), 0, ZONE_BATTLEFIELD
+    )
+    oid2 = synthetic_state.register_and_inject_object(
+        _add_mana_dict("G", 3, name="Second"), 0, ZONE_BATTLEFIELD
+    )
+    synthetic_state.push_to_stack(oid1, 0)
+    synthetic_state.push_to_stack(oid2, 0)
+    assert synthetic_state.stack_size() == 2
+
+    # Top (oid2, amount=3) resolves first.
+    top1 = synthetic_state.resolve_top_of_stack()
+    assert top1["source_obj_id"] == oid2
+    assert synthetic_state.get_mana_pool(0)["G"] == 3
+
+    # Then the bottom (oid1, amount=2) resolves; total = 5.
+    top2 = synthetic_state.resolve_top_of_stack()
+    assert top2["source_obj_id"] == oid1
+    assert synthetic_state.get_mana_pool(0)["G"] == 5
+    assert synthetic_state.is_stack_empty() is True
+
+
+def test_activate_ability_taps_forest_for_green(synthetic_state):
+    """Cross-slice: ``apply_action({'kind': 'activate_ability', ...})``
+    on a Forest taps the source and credits the controller's pool —
+    the round-25 mana-ability arm in ``state_ops_actions.rs`` mirrors
+    the Python ``ActivatedAbility(is_mana_ability=True) + AddManaToPool``
+    idiom. Goes through the closed-action enum + dispatcher rather than
+    the direct ``tap_for_mana`` primitive."""
+    forest_id = _forest_id(synthetic_state, 0)
+    assert synthetic_state.is_tapped(forest_id) is False
+    assert synthetic_state.get_mana_pool(0)["G"] == 0
+
+    synthetic_state.apply_action(
+        {"kind": "activate_ability", "source_id": forest_id, "ability_index": 0}
+    )
+
+    assert synthetic_state.is_tapped(forest_id) is True
+    assert synthetic_state.get_mana_pool(0)["G"] == 1
+
+
+def test_activate_ability_credits_source_controller_not_active_player(
+    synthetic_state,
+):
+    """ActivateAbility's mana-ability arm credits the source's
+    *controller*, NOT ``state.active_player``. Activating a Forest on
+    player 1's battlefield while player 0 is still the active player
+    must add green to player 1's pool, not player 0's. This pins the
+    round-25 inline dispatch's controller resolution (it reads
+    ``state.players[pidx]`` for whichever player owns the source's
+    battlefield slot)."""
+    assert synthetic_state.active_player == 0
+    p1_forest = _forest_id(synthetic_state, 1)
+
+    synthetic_state.apply_action(
+        {"kind": "activate_ability", "source_id": p1_forest, "ability_index": 0}
+    )
+
+    # Player 1 (source controller) gets the mana; player 0 untouched.
+    assert synthetic_state.get_mana_pool(0)["G"] == 0
+    assert synthetic_state.get_mana_pool(1)["G"] == 1
+    assert synthetic_state.is_tapped(p1_forest) is True
+
+
+def test_add_mana_isolation_across_players(synthetic_state):
+    """Each player's pool is independent: a mutation on player 0's pool
+    leaves player 1's pool entirely untouched, and vice versa. Mirrors
+    the by-value ``Player`` array in ``GameState.players``."""
+    synthetic_state.add_mana(0, "G", 4)
+    synthetic_state.add_mana(0, "U", 2)
+    # Player 1's pool is still all zero across every color.
+    expected_zero = {"W": 0, "U": 0, "B": 0, "R": 0, "G": 0, "C": 0}
+    assert synthetic_state.get_mana_pool(1) == expected_zero
+
+    # Now mutate p1; p0's pool keeps its existing contents.
+    synthetic_state.add_mana(1, "R", 1)
+    assert synthetic_state.get_mana_pool(0) == {
+        "W": 0, "U": 2, "B": 0, "R": 0, "G": 4, "C": 0
+    }
+    assert synthetic_state.get_mana_pool(1) == {
+        "W": 0, "U": 0, "B": 0, "R": 1, "G": 0, "C": 0
+    }
+
+
+def test_add_mana_to_pool_effect_on_clone_does_not_mutate_original(
+    synthetic_state,
+):
+    """CoW canary on the cross-slice effect-dispatch path: cloning the
+    state and then resolving an ``AddManaToPool`` effect on the clone
+    leaves the original's pool untouched. The clone takes its own
+    by-value copy of the ``Player`` struct (and thus of ``ManaPool``)
+    — the registry + battlefield Arc bumps don't bleed mutations back
+    into the original."""
+    # Pre-inject the printing into the original's registry so cloning
+    # carries the printing into the clone (Arc<RegistryData> share).
+    obj_id = synthetic_state.register_and_inject_object(
+        _add_mana_dict("B", 3), 0, ZONE_BATTLEFIELD
+    )
+    clone = synthetic_state.clone_once()
+    clone.push_to_stack(obj_id, 0)
+    clone.resolve_top_of_stack()
+    # Clone's pool gained 3 black; original's pool is still empty.
+    assert clone.get_mana_pool(0)["B"] == 3
+    assert synthetic_state.get_mana_pool(0)["B"] == 0
+
+
+def test_fingerprint_differs_when_mana_pool_color_or_amount_differs(
+    synthetic_state,
+):
+    """The fingerprint folds the mana pool into the gameplay-hash
+    (``state_ops_fingerprint.rs::player_signature`` emits a sorted
+    ``[key, count]`` list). Two states that differ ONLY in mana pool
+    contents — same color but different amount, or same amount but
+    different color — must produce different fingerprints. A state
+    that returns to the original pool returns to the original
+    fingerprint."""
+    fp_empty = synthetic_state.fingerprint()
+    synthetic_state.add_mana(0, "G", 1)
+    fp_g1 = synthetic_state.fingerprint()
+    assert fp_g1 != fp_empty
+
+    # Different amount: G:1 vs G:2.
+    synthetic_state.add_mana(0, "G", 1)
+    fp_g2 = synthetic_state.fingerprint()
+    assert fp_g2 != fp_g1
+    assert fp_g2 != fp_empty
+
+    # Different color: a fresh state with W:1 must not collide with G:1.
+    other = synthetic_state.clone_once()  # carries G:2 forward
+    other.empty_mana_pool(0)
+    other.add_mana(0, "W", 1)
+    fp_w1 = other.fingerprint()
+    # Build a second fresh-empty state and compare W:1 vs G:1 directly.
+    # (The cloned `other` has the same registry/zones as synthetic_state
+    # so the only diff is the pool.)
+    assert fp_w1 != fp_g1
+    assert fp_w1 != fp_g2
+
+    # Round-trip: drain the pool and the fingerprint returns to the
+    # initial-empty digest.
+    synthetic_state.empty_mana_pool(0)
+    assert synthetic_state.fingerprint() == fp_empty
+
+
+def test_mana_pool_snapshot_matches_get_mana_pool_after_mutations(
+    synthetic_state,
+):
+    """``mana_pool_snapshot(p)`` (the parity-harness projection) and
+    ``get_mana_pool(p)`` return the same 6-key dict at every point: at
+    the empty seed, after mid-color mutations, and after a full empty.
+    Both are read-only projections of the same underlying ``ManaPool``
+    struct — they must agree by construction."""
+    # Seed empty.
+    assert synthetic_state.mana_pool_snapshot(0) == synthetic_state.get_mana_pool(0)
+
+    # Mutate across multiple colors.
+    synthetic_state.add_mana(0, "G", 2)
+    synthetic_state.add_mana(0, "W", 1)
+    synthetic_state.add_mana(0, "C", 3)
+    snap = synthetic_state.mana_pool_snapshot(0)
+    pool = synthetic_state.get_mana_pool(0)
+    assert snap == pool
+    assert snap == {"W": 1, "U": 0, "B": 0, "R": 0, "G": 2, "C": 3}
+
+    # Drain and re-check.
+    synthetic_state.empty_mana_pool(0)
+    assert synthetic_state.mana_pool_snapshot(0) == synthetic_state.get_mana_pool(0)
+    assert synthetic_state.mana_pool_snapshot(0) == {
+        "W": 0, "U": 0, "B": 0, "R": 0, "G": 0, "C": 0
+    }
+
+
+def test_multi_color_pool_entries_coexist(synthetic_state):
+    """Adding mana of different colors to the same player's pool does
+    NOT collapse colors together — each WUBRG/C slot is independently
+    addressable. Two consecutive ``add_mana`` calls with different
+    colors leave both colors' counts non-zero, and a third call to a
+    third color stacks on without touching the first two."""
+    synthetic_state.add_mana(0, "W", 2)
+    synthetic_state.add_mana(0, "G", 3)
+    pool = synthetic_state.get_mana_pool(0)
+    assert pool["W"] == 2
+    assert pool["G"] == 3
+    # Other colors stay zero.
+    assert pool["U"] == 0
+    assert pool["B"] == 0
+    assert pool["R"] == 0
+    assert pool["C"] == 0
+
+    # Stack on a third color; first two are untouched.
+    synthetic_state.add_mana(0, "C", 1)
+    pool = synthetic_state.get_mana_pool(0)
+    assert pool == {"W": 2, "U": 0, "B": 0, "R": 0, "G": 3, "C": 1}
+
+    # Pay a cost that consumes from two colors + generic; the
+    # untouched slot stays put.
+    assert synthetic_state.pay_mana_cost(0, {"W": 1, "G": 1, "generic": 1}) is True
+    pool = synthetic_state.get_mana_pool(0)
+    # generic drains from C first (deterministic order), so C goes
+    # 1->0; W goes 2->1; G goes 3->2.
+    assert pool == {"W": 1, "U": 0, "B": 0, "R": 0, "G": 2, "C": 0}
+
+
+def test_add_mana_to_pool_effect_rejects_negative_amount_at_register_time(
+    synthetic_state,
+):
+    """**Quirk: negative-amount AddManaToPool is rejected by the
+    bridge parser, not at apply_effect time.** The Rust bridge's
+    ``parse_effect`` enforces ``amount >= 0`` when reading the printing
+    dict's ``add_mana_to_pool`` entry, so an ill-formed printing fails
+    *registration* with a ``ValueError`` rather than reaching the
+    stack-resolution path. This mirrors the direct ``add_mana(p, c,
+    -1)`` raise (test_add_mana_negative_amount_raises) — there's no
+    silent-no-op path for negative-amount mana addition anywhere.
+
+    Pinning this at the test layer ensures a future bridge refactor
+    that loosens parse-time validation surfaces here loudly instead of
+    silently letting bogus negative effects through to the apply
+    path."""
+    with pytest.raises(ValueError):
+        synthetic_state.register_and_inject_object(
+            _add_mana_dict("G", -1, name="BadMana"),
+            0,
+            ZONE_BATTLEFIELD,
+        )
+    # State after the rejected register is unmutated: pool stays empty.
+    expected_zero = {"W": 0, "U": 0, "B": 0, "R": 0, "G": 0, "C": 0}
+    assert synthetic_state.get_mana_pool(0) == expected_zero
+    assert synthetic_state.get_mana_pool(1) == expected_zero

@@ -144,3 +144,239 @@ def test_tap_one_clone_does_not_tap_other(synthetic_state):
     assert other.is_tapped(obj_id) is False, (
         "CoW broken: tapping one clone leaked into the other"
     )
+
+
+# --- Cross-feature edge-case coverage --------------------------------
+#
+# These tests pin tap/untap behavior at the seams where it intersects
+# with other primitives — Effect dispatch, ActivateAbility, the untap
+# step, fingerprinting, summoning sickness, and CoW. Each test
+# documents the current Rust behavior; some pin deliberate divergences
+# from CR (see the activate-ability-while-summoning-sick test) and
+# others pin defensive no-op shapes (unknown player ids, hand-zone
+# tap attempts).
+
+
+def test_tap_object_on_hand_zone_returns_false(synthetic_state):
+    """Only battlefield permanents have a meaningful tapped state.
+    `tap_object` against a hand-zone object id is a silent no-op
+    returning False — `mutate_battlefield_obj` only walks battlefields
+    (see the docstring in `rust/src/state_ops_tap.rs`), so a
+    hand-resident id falls through to the `unwrap_or(false)` arm.
+    Mirrors the unknown-id case but lands on a real object that
+    just lives in the wrong zone. `is_tapped` returns None for the
+    same reason (no battlefield match)."""
+    # With defaults, p0's hand is ids 10..16.
+    hand_id = 10
+    assert synthetic_state.find_object_zone(hand_id) == 0  # ZONE_HAND
+    assert synthetic_state.tap_object(hand_id) is False
+    assert synthetic_state.is_tapped(hand_id) is None
+    assert synthetic_state.untap_object(hand_id) is False
+
+
+def test_untap_all_for_player_on_empty_battlefield_is_no_op(engine):
+    """`untap_all_for_player` short-circuits before the
+    `Arc::make_mut` clone when the target battlefield has no
+    permanents to flip (mirrors the
+    `battlefield.iter().all(|o| !o.tapped)` early-return in
+    `state_ops_tap.rs`). The empty-battlefield case is a stricter
+    flavor of the early return — there are no objects at all, so
+    nothing to iterate. Must not panic."""
+    state = engine.make_synthetic_state(
+        num_battlefield=0, num_hand=1, num_library=1
+    )
+    # Sanity: both players' battlefields are empty.
+    assert state.battlefield_sizes == [0, 0]
+    # Must not raise.
+    state.untap_all_for_player(0)
+    state.untap_all_for_player(1)
+    assert state.battlefield_sizes == [0, 0]
+
+
+def test_untap_all_for_player_unknown_player_is_silent_no_op(synthetic_state):
+    """`untap_all_for_player` with an out-of-range player_id silently
+    returns without mutating anything. Mirrors the `find(|p| p.id ==
+    player_id)` -> `None` path in `state_ops_tap.rs`. Both real
+    players' tapped states stay exactly as they were."""
+    p0_obj = _bf_ids(synthetic_state, 0)[0]
+    p1_obj = _bf_ids(synthetic_state, 1)[0]
+    assert synthetic_state.tap_object(p0_obj) is True
+    assert synthetic_state.tap_object(p1_obj) is True
+    # Unknown player id — neither 0 nor 1.
+    synthetic_state.untap_all_for_player(99)
+    # Both sides still tapped.
+    assert synthetic_state.is_tapped(p0_obj) is True
+    assert synthetic_state.is_tapped(p1_obj) is True
+
+
+def test_untap_all_for_player_leaves_summoning_sick_alone(engine):
+    """The untap-step primitive only flips `tapped`; it must NOT
+    touch `summoning_sick`. Cross-feature with summoning sickness —
+    the `clear_summoning_sick_for_player_inline` sweep is the
+    sibling helper in `state_ops_steps.rs` that handles sickness; this
+    primitive stays narrowly scoped to tap state."""
+    state = engine.make_synthetic_state()
+    # Give p0 enough green to cast the elves in their hand. The
+    # first hand object (id 10) is a Llanowar Elves printing — a
+    # creature with mana_produced — which lets us put a
+    # summoning-sick permanent on the battlefield.
+    state.add_mana(0, "G", 1)
+    elves_id = 10
+    assert state.printing_name_of(elves_id) == "Llanowar Elves"
+    assert state.cast_creature(elves_id, 0) is True
+    assert state.is_summoning_sick(elves_id) is True
+    # Tap the elves (e.g. as if activating its mana ability).
+    assert state.tap_object(elves_id) is True
+    # The untap-step sweep flips tapped back but must leave
+    # summoning_sick=True intact — the two flags are independent.
+    state.untap_all_for_player(0)
+    assert state.is_tapped(elves_id) is False
+    assert state.is_summoning_sick(elves_id) is True, (
+        "untap_all_for_player must only flip the tapped flag — "
+        "summoning_sick is owned by the steps slice's separate sweep"
+    )
+
+
+def test_untap_all_for_player_is_idempotent_on_untapped_state(synthetic_state):
+    """Calling `untap_all_for_player` on a battlefield where every
+    permanent is already untapped is a no-op — the
+    `iter().all(|o| !o.tapped)` early-return in `state_ops_tap.rs`
+    skips the `Arc::make_mut` clone entirely. The fingerprint
+    (which projects every per-object flag, including tapped) must
+    stay identical across the no-op call. This is the
+    expected-no-mutation parity check that catches a regression
+    where the sweep accidentally pays the CoW clone even when
+    nothing changes."""
+    fp_before = synthetic_state.fingerprint()
+    # Every p0 permanent already untapped (per the seed).
+    synthetic_state.untap_all_for_player(0)
+    fp_after = synthetic_state.fingerprint()
+    assert fp_before == fp_after, (
+        "untap_all_for_player on already-untapped state must be a "
+        "perfect no-op (fingerprint stable)"
+    )
+
+
+def test_untap_all_for_player_clone_isolation(synthetic_state):
+    """**CoW canary for the untap-step primitive.** Mirrors
+    `test_tap_one_clone_does_not_tap_other` but on the bulk-untap
+    path: tap a permanent on the original, clone, then call
+    `untap_all_for_player` on the clone. The clone's permanent
+    must come up untapped while the original's stays tapped — the
+    `Arc::make_mut` inside the helper must clone the Vec on first
+    write so the original's Arc reference is left alone.
+
+    Load-bearing for any search idiom that clones a parent state
+    and advances through the untap step on the child (the standard
+    MCTS rollout shape)."""
+    obj_id = _bf_ids(synthetic_state, 0)[0]
+    assert synthetic_state.tap_object(obj_id) is True
+    clone = synthetic_state.clone_once()
+    assert clone.is_tapped(obj_id) is True
+    # Bulk-untap on the clone only.
+    clone.untap_all_for_player(0)
+    assert clone.is_tapped(obj_id) is False
+    # Original must NOT see the untap leak across.
+    assert synthetic_state.is_tapped(obj_id) is True, (
+        "CoW broken: untap_all_for_player on a clone leaked into the original"
+    )
+
+
+def test_fingerprint_changes_when_tapped_flag_differs(synthetic_state):
+    """The fingerprint projects every battlefield object's tapped
+    flag (see `object_signature` in
+    `rust/src/state_ops_fingerprint.rs` — field index 1 is
+    `int(tapped)`). Two states that differ ONLY in a single
+    permanent's tap state must produce different fingerprints.
+    Cross-feature pin: tap is gameplay-relevant for parity hashing,
+    not a transient ephemeral marker."""
+    obj_id = _bf_ids(synthetic_state, 0)[0]
+    fp_untapped = synthetic_state.fingerprint()
+    assert synthetic_state.tap_object(obj_id) is True
+    fp_tapped = synthetic_state.fingerprint()
+    assert fp_untapped != fp_tapped, (
+        "fingerprint should hash tapped state — two states differing "
+        "only in a single tap must hash to different digests"
+    )
+
+
+def test_fingerprint_stable_across_tap_then_untap_roundtrip(synthetic_state):
+    """A tap-then-untap round-trip is a net no-op at the
+    state-of-objects level. The fingerprint folds the tapped bit
+    into every per-object signature, so an exact round-trip must
+    leave the fingerprint identical to the starting digest. Pins
+    that no other field is accidentally co-mutated during a tap
+    (e.g. a regression where `tap_object` also touched
+    `summoning_sick` or `counters`)."""
+    obj_id = _bf_ids(synthetic_state, 0)[0]
+    fp_start = synthetic_state.fingerprint()
+    assert synthetic_state.tap_object(obj_id) is True
+    assert synthetic_state.untap_object(obj_id) is True
+    fp_round = synthetic_state.fingerprint()
+    assert fp_start == fp_round, (
+        "tap+untap round-trip must leave fingerprint stable — any "
+        "delta implies tap_object/untap_object touched a field "
+        "beyond `tapped`"
+    )
+
+
+def test_activate_ability_taps_source_via_same_tapped_flag(synthetic_state):
+    """Cross-feature: the mana-ability ActivateAbility dispatch in
+    `state_ops_actions.rs` flips the source's `tapped` flag through
+    `Arc::make_mut` on the controller's battlefield — the same
+    field the round-1 tap primitive owns. `is_tapped` (which only
+    reads the `tapped` field) must report the change just as if
+    `tap_object` had been called directly. A second tap attempt via
+    `tap_object` after the activate must return False (already
+    tapped — the activate's tap is observationally identical to a
+    primitive tap)."""
+    # p0's first Forest at obj_id 0.
+    forest_id = _bf_ids(synthetic_state, 0)[0]
+    assert synthetic_state.printing_name_of(forest_id) == "Forest"
+    assert synthetic_state.is_tapped(forest_id) is False
+    # Activate the Forest's mana ability via the action dispatcher.
+    synthetic_state.apply_action(
+        {"kind": "activate_ability", "source_id": forest_id, "ability_index": 0}
+    )
+    # The activate's tap is the SAME tapped flag tap_object reads/writes.
+    assert synthetic_state.is_tapped(forest_id) is True
+    # A subsequent primitive tap is a no-op (already tapped).
+    assert synthetic_state.tap_object(forest_id) is False
+    # And the primitive untap successfully reverses it.
+    assert synthetic_state.untap_object(forest_id) is True
+    assert synthetic_state.is_tapped(forest_id) is False
+
+
+def test_activate_ability_on_summoning_sick_creature_succeeds(engine):
+    """**Documented divergence from CR 302.1.** A summoning-sick
+    creature CAN'T tap to activate `{T}`-cost abilities in real MTG
+    — the activate would fail "the rules don't allow this ability
+    to be activated". The Rust `apply_action` dispatcher for
+    ActivateAbility (in `state_ops_actions.rs`) currently checks
+    only `tapped` + `mana_produced`; it does NOT check
+    `summoning_sick`. `legal_decisions` shares the same gap (see
+    the "first-slice approximation" comment around line 836 of
+    `state_ops_legal.rs`). This test pins the current permissive
+    behavior so a future slice that adds the sickness gate flips
+    this test deliberately (and updates `SEARCH_LIMITATIONS.md` to
+    drop the entry)."""
+    state = engine.make_synthetic_state()
+    # First hand object is a Llanowar Elves (creature with
+    # mana_produced=Some(G)). Cast it to put a summoning-sick
+    # mana-producer on the battlefield.
+    state.add_mana(0, "G", 1)
+    elves_id = 10
+    assert state.printing_name_of(elves_id) == "Llanowar Elves"
+    assert state.cast_creature(elves_id, 0) is True
+    assert state.is_summoning_sick(elves_id) is True
+    assert state.is_tapped(elves_id) is False
+    pool_before = state.get_mana_pool(0)["G"]
+    # Real MTG: this should fail with "summoning sick". Rust today:
+    # the activate succeeds, the elves taps, the pool gains 1G.
+    state.apply_action(
+        {"kind": "activate_ability", "source_id": elves_id, "ability_index": 0}
+    )
+    assert state.is_tapped(elves_id) is True
+    assert state.get_mana_pool(0)["G"] == pool_before + 1
+    # And summoning_sick stays True — the activate didn't clear it.
+    assert state.is_summoning_sick(elves_id) is True

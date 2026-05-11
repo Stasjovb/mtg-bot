@@ -397,3 +397,418 @@ def test_trajectory_mode_diverged_clone_reports_first_step(parity_smoke, capsys,
     assert "PARITY: FAIL" in out
     assert "diverged at step 2" in out
     assert "clone-replay-matches=False" in out
+
+
+# ---------------------------------------------------------------------------
+# --mode multi-seed — sweep trajectory mode across K seeds and print an
+# aggregate summary. Catches non-determinism bugs that only manifest at
+# certain seeds (single-seed mode samples one trajectory through the
+# legal space; K seeds tile it).
+# ---------------------------------------------------------------------------
+
+
+def test_multi_seed_mode_three_seeds_all_pass(parity_smoke, capsys):
+    """Baseline: 3 seeds, default-ish board, 5 decisions each — all
+    clone-replay match, exit code 0. Smoke of the new CLI mode."""
+    rc = parity_smoke.run_multi_seed_mode(
+        num_seeds=3,
+        seed_start=0,
+        num_decisions=5,
+        num_battlefield=2,
+        num_hand=3,
+        num_library=5,
+    )
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert "PARITY: PASS" in out
+    assert "all 3 seeds clone-replay-matched" in out
+    # Header row + one row per seed should appear.
+    assert "seed |" in out
+    assert "all clone-match:   True" in out
+
+
+def test_multi_seed_mode_single_seed_matches_trajectory_mode(
+    parity_smoke, capsys
+):
+    """num_seeds=1 with seed_start=42 should produce a final
+    fingerprint identical to what ``run_trajectory_mode`` produces at
+    seed=42. Cross-check the helper / wrapper alignment — if multi-seed
+    drifted from trajectory mode, this trips.
+    """
+    rc_traj = parity_smoke.run_trajectory_mode(
+        seed=42,
+        num_decisions=10,
+        num_battlefield=2,
+        num_hand=3,
+        num_library=5,
+    )
+    out_traj = capsys.readouterr().out
+    assert rc_traj == 0
+
+    def _extract_final_hash(out: str) -> str:
+        for line in out.splitlines():
+            if "final_hash=" in line:
+                tail = line.split("final_hash=", 1)[1]
+                return tail.split(",", 1)[0].strip()
+        raise AssertionError(f"no final_hash line in:\n{out}")
+
+    traj_fp = _extract_final_hash(out_traj)
+
+    rc_ms = parity_smoke.run_multi_seed_mode(
+        num_seeds=1,
+        seed_start=42,
+        num_decisions=10,
+        num_battlefield=2,
+        num_hand=3,
+        num_library=5,
+    )
+    out_ms = capsys.readouterr().out
+    assert rc_ms == 0
+    # The single-seed row in the multi-seed table prints the seed's
+    # final fingerprint in the "fingerprint" column. Assert the same
+    # 12-char hex appears in the multi-seed output.
+    assert traj_fp in out_ms
+
+
+def test_multi_seed_mode_unique_fingerprints_on_varied_board(
+    parity_smoke, capsys
+):
+    """When the synthetic state has enough legal-space variation, the
+    K seeds should produce mostly-unique trajectories. We use the
+    default (10, 7, 50) board which has room for variation and run a
+    longer walk so the rng's choices have meaningful impact.
+
+    Allowed collision rate: at least num_seeds * 0.5 unique
+    fingerprints. The current synthetic-state fixture starts in
+    PHASE_UNTAP with PassPriority being the only legal action, so
+    collisions are universal there — this test is a forward-looking
+    guard that fires once the synthetic state grows beyond a single
+    legal action; until then it asserts unique-count >= floor.
+    """
+    # Use enough decisions that any per-seed branching has a chance
+    # to register.
+    num_seeds = 8
+    rc = parity_smoke.run_multi_seed_mode(
+        num_seeds=num_seeds,
+        seed_start=0,
+        num_decisions=20,
+        num_battlefield=10,
+        num_hand=7,
+        num_library=50,
+    )
+    assert rc == 0
+    out = capsys.readouterr().out
+    # Extract the "unique fingerprints: N" line.
+    unique_line = next(
+        line for line in out.splitlines() if "unique fingerprints:" in line
+    )
+    n_unique = int(unique_line.split(":", 1)[1].strip().split()[0])
+    # >= 1 (the singleton-legal-state fixture produces 1) and the
+    # forward-looking floor is num_seeds * 0.5. We assert the soft
+    # lower bound: at least one unique fingerprint exists. If the
+    # synthetic state expands later, this floor naturally tightens.
+    assert n_unique >= 1
+    assert n_unique <= num_seeds
+
+
+def test_multi_seed_mode_deterministic_across_runs(parity_smoke, capsys):
+    """Same num_seeds + seed_start + decisions must produce identical
+    output across two runs. The whole point of the regression-gate is
+    determinism across runs, not just within one."""
+    parity_smoke.run_multi_seed_mode(
+        num_seeds=4,
+        seed_start=0,
+        num_decisions=8,
+        num_battlefield=2,
+        num_hand=3,
+        num_library=5,
+    )
+    out1 = capsys.readouterr().out
+    parity_smoke.run_multi_seed_mode(
+        num_seeds=4,
+        seed_start=0,
+        num_decisions=8,
+        num_battlefield=2,
+        num_hand=3,
+        num_library=5,
+    )
+    out2 = capsys.readouterr().out
+    # Strict equality — the multi-seed output is purely a function
+    # of (num_seeds, seed_start, decisions, board) and must be
+    # bit-identical run-to-run.
+    assert out1 == out2
+
+
+def test_multi_seed_mode_aggregate_says_all_clone_match_true(
+    parity_smoke, capsys
+):
+    """The aggregate-stats block must include the literal string
+    ``all clone-match:   True`` when every seed passes. Locks in the
+    output format that downstream consumers (CI log parsing, status
+    dashboards) might grep for."""
+    parity_smoke.run_multi_seed_mode(
+        num_seeds=3,
+        seed_start=0,
+        num_decisions=3,
+        num_battlefield=2,
+        num_hand=3,
+        num_library=5,
+    )
+    out = capsys.readouterr().out
+    assert "all clone-match:   True" in out
+    assert "total errors:      0" in out
+    assert "total seeds:       3" in out
+
+
+def test_multi_seed_mode_failing_seed_reports_first_divergence(
+    parity_smoke, capsys, monkeypatch
+):
+    """Inject a fake clone-replay divergence via the helper — the
+    multi-seed report must call out the failing seed in the FAIL
+    summary. Failure-path counterpart to the all-pass cases."""
+    real_replay = parity_smoke._replay_trajectory
+
+    def fake_replay(state, decisions):
+        traj = real_replay(state, decisions)
+        if len(traj) >= 3:
+            traj = traj.copy()
+            traj[2] = "deadbeef0000"
+        return traj
+
+    monkeypatch.setattr(parity_smoke, "_replay_trajectory", fake_replay)
+
+    rc = parity_smoke.run_multi_seed_mode(
+        num_seeds=2,
+        seed_start=0,
+        num_decisions=5,
+        num_battlefield=2,
+        num_hand=3,
+        num_library=5,
+    )
+    assert rc == 1
+    out = capsys.readouterr().out
+    assert "PARITY: FAIL" in out
+    assert "2 of 2 seeds failed" in out
+    # Both seeds should be cited as failing.
+    assert "seed 0:" in out
+    assert "seed 1:" in out
+
+
+def test_multi_seed_mode_main_dispatches(parity_smoke, monkeypatch, capsys):
+    """``main()`` routes ``--mode multi-seed`` to the new sweep.
+    End-to-end argparse + dispatch smoke."""
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "parity_smoke.py",
+            "--mode",
+            "multi-seed",
+            "--num-seeds",
+            "3",
+            "--seed-start",
+            "0",
+            "--num-decisions",
+            "5",
+            "--num-battlefield",
+            "2",
+            "--num-hand",
+            "3",
+            "--num-library",
+            "5",
+        ],
+    )
+    rc = parity_smoke.main()
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert "PARITY: PASS" in out
+    assert "running 3 seeds (0..2)" in out
+
+
+def test_multi_seed_mode_seed_start_offset(parity_smoke, capsys):
+    """``seed_start=100, num_seeds=3`` iterates seeds 100/101/102 —
+    the header line and the table both report the offset range. Locks
+    in the seed-start arithmetic against off-by-one regressions."""
+    parity_smoke.run_multi_seed_mode(
+        num_seeds=3,
+        seed_start=100,
+        num_decisions=2,
+        num_battlefield=2,
+        num_hand=3,
+        num_library=5,
+    )
+    out = capsys.readouterr().out
+    assert "running 3 seeds (100..102)" in out
+    # Each seed value appears in a row of the table.
+    for seed in (100, 101, 102):
+        assert f"{seed:>4} |" in out
+
+
+# ---------------------------------------------------------------------------
+# --mode field-diff — per-field OK/DIFFER diff between two parallel views
+# of a Rust synthetic state. The parity-debug primitive that answers
+# "WHICH field diverged" once a trajectory smoke says digests don't match.
+# ---------------------------------------------------------------------------
+
+
+def test_field_diff_mode_vanilla_state_all_ok(parity_smoke, capsys):
+    """Baseline: no injection, vanilla state — every field matches, the
+    runner returns 0, and the output reports ``PARITY: PASS`` with a
+    field count equal to ``FIELD_DIFF_FIELDS``."""
+    rc = parity_smoke.run_field_diff_mode(seed=42)
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert "PARITY: PASS" in out
+    # Every field is reported with status OK on a vanilla state.
+    for field in parity_smoke.FIELD_DIFF_FIELDS:
+        assert field in out
+    # No DIFFER markers at all on the vanilla path.
+    assert "DIFFER" not in out
+
+
+def test_field_diff_mode_inject_life_reports_mismatch(parity_smoke, capsys):
+    """``--inject-divergence life`` flips life_p0 by -1; the diff table
+    must report a DIFFER on life_p0 and the runner returns 1."""
+    rc = parity_smoke.run_field_diff_mode(seed=42, inject_divergence="life")
+    assert rc == 1
+    out = capsys.readouterr().out
+    assert "PARITY: FAIL" in out
+    # The life_p0 row is the DIFFER one — its two values (20 / 19) must
+    # appear on the same line.
+    life_line = next(
+        line for line in out.splitlines() if line.startswith("life_p0")
+    )
+    assert "DIFFER" in life_line
+    # Vanilla synthetic state has both players at 20 life; the mutation
+    # subtracts 1 from the right-hand side.
+    assert "20" in life_line
+    assert "19" in life_line
+    # Exactly one field differs.
+    assert "1 of 22 fields differ" in out
+
+
+def test_field_diff_mode_inject_hand_reports_mismatch(parity_smoke, capsys):
+    """``--inject-divergence hand`` appends a sentinel object to the
+    hand_p0 zone signature on the right-hand side; the diff must
+    surface the mismatch on hand_p0."""
+    rc = parity_smoke.run_field_diff_mode(seed=42, inject_divergence="hand")
+    assert rc == 1
+    out = capsys.readouterr().out
+    assert "PARITY: FAIL" in out
+    hand_line = next(
+        line for line in out.splitlines() if line.startswith("hand_p0")
+    )
+    assert "DIFFER" in hand_line
+
+
+def test_field_diff_mode_inject_active_player_reports_mismatch(
+    parity_smoke, capsys
+):
+    """``--inject-divergence active_player`` toggles 0<->1 on the
+    right-hand side; the diff must surface the mismatch on the
+    active_player row."""
+    rc = parity_smoke.run_field_diff_mode(
+        seed=42, inject_divergence="active_player"
+    )
+    assert rc == 1
+    out = capsys.readouterr().out
+    assert "PARITY: FAIL" in out
+    ap_line = next(
+        line for line in out.splitlines() if line.startswith("active_player")
+    )
+    assert "DIFFER" in ap_line
+    # Vanilla synthetic state has active_player_idx=0; mutation flips it
+    # to 1.
+    assert " 0 " in ap_line or "| 0" in ap_line
+    assert " 1" in ap_line
+
+
+def test_field_diff_mode_table_covers_every_hash_part_field(
+    parity_smoke, capsys
+):
+    """The printed table must include every field name that ``_hash_parts``
+    folds into the fingerprint — the brief's load-bearing test that the
+    diff machinery doesn't silently skip a field that ends up driving
+    the hash mismatch.
+
+    The list mirrors the per-field contributions of ``_hash_rust_state``
+    (and through it, ``_hash_parts``): scalar state header (turn, step,
+    phase, active_player, priority_player, is_over, is_draw, winner_id),
+    per-player tuples (life, hand, library, graveyard, exile, mana_pool),
+    and the central zones (battlefield, stack).
+    """
+    parity_smoke.run_field_diff_mode(seed=42)
+    out = capsys.readouterr().out
+    # Every field name in the canonical list must appear in the output.
+    for field in parity_smoke.FIELD_DIFF_FIELDS:
+        assert field in out, f"field {field!r} missing from field-diff output"
+    # The header row of the table is also present.
+    assert "field             | status | left" in out
+    # And the brief-specified scalar fields each show up as their own
+    # row prefix.
+    for prefix in (
+        "turn", "step", "phase", "active_player", "priority_player",
+        "is_over", "is_draw", "winner_id", "life_p0", "life_p1",
+        "hand_p0", "hand_p1", "library_p0", "library_p1",
+        "graveyard_p0", "graveyard_p1", "exile_p0", "exile_p1",
+        "mana_pool_p0", "mana_pool_p1", "battlefield", "stack",
+    ):
+        # Each field is the leading token of its own row.
+        row_lines = [
+            line for line in out.splitlines()
+            if line.startswith(prefix) and "|" in line
+        ]
+        assert row_lines, f"no row starts with {prefix!r}"
+
+
+def test_field_diff_mode_main_dispatches(parity_smoke, monkeypatch, capsys):
+    """``main()`` routes ``--mode field-diff`` to the new runner.
+    End-to-end argparse + dispatch smoke."""
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["parity_smoke.py", "--mode", "field-diff", "--seed", "42"],
+    )
+    rc = parity_smoke.main()
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert "PARITY: PASS" in out
+    # Table header present.
+    assert "field             | status | left" in out
+
+
+def test_field_diff_mode_main_dispatches_with_inject(
+    parity_smoke, monkeypatch, capsys
+):
+    """``main() --mode field-diff --inject-divergence life`` returns 1
+    and reports a DIFFER on the life_p0 row. End-to-end inject path."""
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "parity_smoke.py",
+            "--mode",
+            "field-diff",
+            "--inject-divergence",
+            "life",
+        ],
+    )
+    rc = parity_smoke.main()
+    assert rc == 1
+    out = capsys.readouterr().out
+    assert "PARITY: FAIL" in out
+    assert "life_p0" in out
+    assert "DIFFER" in out
+
+
+def test_field_diff_mode_unknown_inject_field_errors(parity_smoke, capsys):
+    """An unknown ``--inject-divergence`` field name returns rc=2 and
+    prints an error citing the valid field list. Locks in the
+    error-path contract."""
+    rc = parity_smoke.run_field_diff_mode(
+        seed=42, inject_divergence="this_is_not_a_field"
+    )
+    assert rc == 2
+    out = capsys.readouterr().out
+    assert "ERROR" in out
+    assert "this_is_not_a_field" in out

@@ -471,6 +471,71 @@ fn apply_effect(
                 Arc::make_mut(&mut player.graveyard).push(obj);
             }
         }
+        // MillTargetPlayer — Scrabbling Skullcrab pattern (CR 701.13b).
+        // 2 cards in the EoE pool per round-20 measurement.
+        //
+        // **Distinct from Effect::Mill.** Mill (above) mills the
+        // CONTROLLER's library — no target. MillTargetPlayer mills a
+        // chosen target PLAYER's library. First-slice deterministic
+        // choice: defender (= 1 - active_player), mirroring the
+        // DealDamage / TapTarget / TargetOpponentLosesLife "the one
+        // opponent" convention. Future multiplayer / archenemy work
+        // needs an explicit choice callback.
+        //
+        // **Negative count raises** loudly (defense-in-depth; the
+        // parse_effect bridge already checks at register time, but
+        // synthetic / injected printings could bypass the parser).
+        // **count=0 is a legal no-op** (mirrors GainLife / DrawCards /
+        // Mill / EachOpponentLosesLife / LoseLife zero-count
+        // conventions). **Fewer cards in library than `count`**: mill
+        // all remaining cards (Python parity with
+        // `if not target.library: break`).
+        //
+        // **Top-of-library = LAST element of the Vec** (round-1 zones
+        // convention, mirrored by the existing Mill arm and library
+        // primitives in `state_ops_library.rs`). Per-object state reset
+        // on graveyard move (CR 400.7), mirroring DestroyAllCreatures /
+        // DestroyTarget / ExileTarget reset shape.
+        //
+        // **Inlining note.** A `mill_target_player` primitive exists in
+        // `state_ops_library.rs` (round-19); per the recurring per-slice
+        // file-isolation pattern (E0624 cross-file `#[pymethods]`
+        // friction) this arm inlines the equivalent pop-N + push-to-
+        // graveyard logic. A follow-up consolidation slice can collapse
+        // onto the shared primitive once cross-file private-fn calls
+        // re-open.
+        Effect::MillTargetPlayer { count } => {
+            if *count < 0 {
+                return Err(PyValueError::new_err(format!(
+                    "MillTargetPlayer count must be non-negative, got {count}"
+                )));
+            }
+            // First-slice: defender = 1 - active_player. (Targeted-
+            // player choice plumbing deferred — mirrors existing
+            // single-target first-slice conventions.)
+            let target_idx = (1 - state.active_player) as usize;
+            let library_mut = Arc::make_mut(&mut state.players[target_idx].library);
+            let n_to_mill = (*count as usize).min(library_mut.len());
+            if n_to_mill == 0 {
+                // count=0 OR empty target library — silent no-op.
+            } else {
+                let mut milled: Vec<GameObject> = Vec::with_capacity(n_to_mill);
+                for _ in 0..n_to_mill {
+                    if let Some(obj) = library_mut.pop() {
+                        milled.push(obj);
+                    }
+                }
+                let gy_mut = Arc::make_mut(&mut state.players[target_idx].graveyard);
+                for mut obj in milled {
+                    obj.zone = ZONE_GRAVEYARD;
+                    obj.tapped = false;
+                    obj.summoning_sick = false;
+                    obj.damage = 0;
+                    obj.counters = 0;
+                    gy_mut.push(obj);
+                }
+            }
+        }
         // Round-11: ExileTarget. Move a target permanent from its
         // current zone to its owner's exile zone (CR 406). First-
         // slice convention: owner == controller, so "owner's exile"
@@ -1858,6 +1923,268 @@ fn apply_effect(
             state.players[opponent_idx].life =
                 state.players[opponent_idx].life.saturating_sub(*amount);
         }
+        // LoseLife: CR 118.4 — "life loss" (not damage). The SOURCE's
+        // controller loses `amount` life. Punisher / drawback pattern
+        // (Decode Transmissions shape) — 7 cards in the EoE pool per
+        // round-20 measurement.
+        //
+        // **Distinct from round-26 EachOpponentLosesLife.** Same source-
+        // finder pattern (5-zone walk + stack scan), but the recipient
+        // is the source's CONTROLLER (typically the caster paying a
+        // self-inflicted life cost) — NOT the controller's opponent.
+        // Inverted target on an otherwise identical dispatch shape.
+        //
+        // **Source-finder dispatch (round-24 pattern).** Walks both
+        // players' five tracked zones (hand / library / battlefield /
+        // graveyard / exile) plus the stack to recover the source's
+        // `controller`. Mirrors EachOpponentLosesLife / DiscardSelf —
+        // punisher effects fire on whoever controls the source
+        // regardless of where the source currently sits, since the
+        // `controller` field doesn't change on zone moves.
+        //
+        // **Direct life subtraction.** Negative life is handled by the
+        // SBA loop (round-5+); no clamp here beyond the saturating_sub
+        // that prevents underflow on the i32.
+        //
+        // **amount<0 raises** loudly (defense-in-depth; parse_effect
+        // catches at register time). **amount=0 is a legal no-op**
+        // (mirrors GainLife / DrawCards / Mill / EachOpponentLosesLife
+        // / DiscardSelf zero-amount conventions). **Source not found
+        // anywhere = silent fizzle** (lost-track-of-source tolerance,
+        // mirrors EachOpponentLosesLife / DiscardSelf shape).
+        Effect::LoseLife { amount } => {
+            if *amount < 0 {
+                return Err(PyValueError::new_err(format!(
+                    "LoseLife amount must be non-negative, got {amount}"
+                )));
+            }
+            // Source-controller resolution mirrors round-24
+            // EachOpponentLosesLife / DiscardSelf 5-zone walk + stack
+            // scan.
+            let mut source_controller: Option<u8> = None;
+            'outer: for player in state.players.iter() {
+                for zone in [
+                    &player.hand,
+                    &player.library,
+                    &player.battlefield,
+                    &player.graveyard,
+                    &player.exile,
+                ] {
+                    for obj in zone.iter() {
+                        if obj.id == source_obj_id {
+                            source_controller = Some(obj.controller);
+                            break 'outer;
+                        }
+                    }
+                }
+            }
+            if source_controller.is_none() {
+                if let Some(item) = state
+                    .stack
+                    .iter()
+                    .find(|i| i.source_obj_id == source_obj_id)
+                {
+                    source_controller = Some(item.controller);
+                }
+            }
+            let Some(controller) = source_controller else {
+                return Ok(()); // source not found: silent fizzle
+            };
+            let controller_idx = controller as usize;
+            // CONTROLLER (not opponent) loses life — distinguishes from
+            // round-26 EachOpponentLosesLife.
+            state.players[controller_idx].life =
+                state.players[controller_idx].life.saturating_sub(*amount);
+        }
+        // TargetOpponentLosesLife: CR 118.4 — "life loss" (not damage).
+        // Target opponent loses `amount` life. 2 cards in EoE pool per
+        // round-20 measurement (Dubious Delicacy etc.).
+        //
+        // **Distinct from EachOpponentLosesLife.** That arm hits ALL
+        // opponents (in 2-player land = the one opponent).
+        // TargetOpponentLosesLife is targeted — the caster CHOOSES which
+        // opponent loses life. In a 2-player engine these collapse to
+        // the same runtime effect, but the variants stay distinct to
+        // mirror Python's closed Effect vocabulary (targeted vs
+        // each-opponent semantics — round-15 pattern).
+        //
+        // **First-slice deterministic choice**: pick the one opponent
+        // (= 1 - controller). Multiplayer / archenemy work needs an
+        // explicit choice callback; deferred.
+        //
+        // **Source-finder dispatch (round-24 pattern).** Walks both
+        // players' five tracked zones (hand / library / battlefield /
+        // graveyard / exile) plus the stack to recover the source's
+        // `controller`. Mirrors EachOpponentLosesLife / LoseLife /
+        // DiscardSelf — punisher / targeted effects fire on whoever
+        // controls the source regardless of where the source currently
+        // sits, since the `controller` field doesn't change on zone
+        // moves.
+        //
+        // **amount<0 raises** loudly (defense-in-depth; parse_effect
+        // catches at register time). **amount=0 is a legal no-op**
+        // (mirrors GainLife / DrawCards / Mill / EachOpponentLosesLife
+        // / LoseLife zero-amount conventions). **Source not found
+        // anywhere = silent fizzle** (lost-track-of-source tolerance,
+        // mirrors EachOpponentLosesLife / LoseLife shape).
+        Effect::TargetOpponentLosesLife { amount } => {
+            if *amount < 0 {
+                return Err(PyValueError::new_err(format!(
+                    "TargetOpponentLosesLife amount must be non-negative, got {amount}"
+                )));
+            }
+            // Source-controller resolution (mirrors round-24 /
+            // round-25): 5-zone walk + stack scan.
+            let mut source_controller: Option<u8> = None;
+            'outer: for player in state.players.iter() {
+                for zone in [
+                    &player.hand,
+                    &player.library,
+                    &player.battlefield,
+                    &player.graveyard,
+                    &player.exile,
+                ] {
+                    for obj in zone.iter() {
+                        if obj.id == source_obj_id {
+                            source_controller = Some(obj.controller);
+                            break 'outer;
+                        }
+                    }
+                }
+            }
+            if source_controller.is_none() {
+                if let Some(item) = state
+                    .stack
+                    .iter()
+                    .find(|i| i.source_obj_id == source_obj_id)
+                {
+                    source_controller = Some(item.controller);
+                }
+            }
+            let Some(controller) = source_controller else {
+                return Ok(()); // source not found: silent fizzle
+            };
+            // 2-player: "target opponent" = the one opponent of the
+            // controller. Identical runtime behavior to
+            // EachOpponentLosesLife in 2-player land.
+            let opponent_id = 1 - controller;
+            let opponent_idx = opponent_id as usize;
+            state.players[opponent_idx].life =
+                state.players[opponent_idx].life.saturating_sub(*amount);
+        }
+        // EachOpponentDiscards: CR 701.8 — "discard a card." Each
+        // opponent of the SOURCE's controller discards `count` cards.
+        // Let's Play a Game pattern — 2 cards in the EoE pool per
+        // round-20 measurement. Mirrors Python's
+        // `EachOpponentDiscards(count: int = 1)` dataclass.
+        //
+        // **Distinct from round-15 DiscardCard { target: AnyPlayer }.**
+        // DiscardCard's AnyPlayer arm targets the DEFENDING player
+        // (active player's spell forces the opponent to discard, Mind
+        // Rot / caller-targeted shape). EachOpponentDiscards fires on
+        // the SOURCE's controller's opponents — source-relative,
+        // independent of active_player at apply-effect time. In a
+        // 2-player engine both collapse to "the one opponent discards
+        // hand[0]" but the variants stay distinct to mirror Python's
+        // closed Effect vocabulary (round-15 pattern).
+        //
+        // **Distinct from round-24 DiscardSelf.** Same source-finder +
+        // hand[0]-pop primitive, but DiscardSelf fires on the
+        // CONTROLLER while this arm fires on the OPPONENT of the
+        // controller (= 1 - controller in 2-player land). Inverted
+        // target on otherwise identical dispatch shape — composes
+        // round-24 EachOpponentLosesLife's opponent-resolution with
+        // round-24 DiscardSelf's discard primitive.
+        //
+        // **Source-finder dispatch (round-24 pattern).** Walks both
+        // players' five tracked zones (hand / library / battlefield /
+        // graveyard / exile) plus the stack to recover the source's
+        // `controller`. Mirrors DiscardSelf / EachOpponentLosesLife —
+        // punisher / source-relative effects fire on whoever controls
+        // the source regardless of where the source currently sits,
+        // since the `controller` field doesn't change on zone moves.
+        //
+        // **First-slice deterministic choice**: opponent discards
+        // hand[0]. Mirrors round-15 DiscardCard + round-24 DiscardSelf
+        // hand[0] convention. Up to `count` discards in a row; stop
+        // early on empty hand (Python parity with `for _ in
+        // range(self.count): if not p.hand: break` inside
+        // `EachOpponentDiscards.resolve`).
+        //
+        // **Per-object state reset on zone change** (CR 400.7) —
+        // tapped / summoning_sick / damage / counters reset on the way
+        // to graveyard. Schema-uniform with every other zone-move arm.
+        //
+        // **count<0 raises** loudly (defense-in-depth; parse_effect
+        // catches at register time). **count=0 is a legal no-op**
+        // (mirrors DiscardSelf / GainLife / DrawCards / Mill zero-
+        // count conventions). **Empty opponent hand = silent no-op**
+        // (Python parity with `if not p.hand: break`). **Source not
+        // found anywhere = silent fizzle** (lost-track-of-source
+        // tolerance, mirrors round-24 / round-25 / round-26 shape).
+        Effect::EachOpponentDiscards { count } => {
+            if *count < 0 {
+                return Err(PyValueError::new_err(format!(
+                    "EachOpponentDiscards count must be non-negative, got {count}"
+                )));
+            }
+            if *count == 0 {
+                return Ok(());
+            }
+            // Source-controller resolution (mirrors round-24 /
+            // round-25 / round-26 shape): 5-zone walk + stack scan.
+            let mut source_controller: Option<u8> = None;
+            'outer: for player in state.players.iter() {
+                for zone in [
+                    &player.hand,
+                    &player.library,
+                    &player.battlefield,
+                    &player.graveyard,
+                    &player.exile,
+                ] {
+                    for obj in zone.iter() {
+                        if obj.id == source_obj_id {
+                            source_controller = Some(obj.controller);
+                            break 'outer;
+                        }
+                    }
+                }
+            }
+            if source_controller.is_none() {
+                if let Some(item) = state
+                    .stack
+                    .iter()
+                    .find(|i| i.source_obj_id == source_obj_id)
+                {
+                    source_controller = Some(item.controller);
+                }
+            }
+            let Some(controller) = source_controller else {
+                return Ok(()); // source not found: silent fizzle
+            };
+            // 2-player "each opponent" reduces to "the one opponent".
+            let opponent_idx = (1 - controller) as usize;
+            let target_count = *count as usize;
+            for _ in 0..target_count {
+                if state.players[opponent_idx].hand.is_empty() {
+                    break; // empty hand: silent no-op (Python parity)
+                }
+                // Pop hand[0] of the opponent (deterministic first-
+                // slice choice; mirrors round-15 DiscardCard +
+                // round-24 DiscardSelf hand[0] convention).
+                let hand_mut: &mut Vec<GameObject> =
+                    Arc::make_mut(&mut state.players[opponent_idx].hand);
+                let mut obj = hand_mut.remove(0);
+                // CR 400.7 zone-change reset (mirrors DiscardSelf).
+                obj.zone = ZONE_GRAVEYARD;
+                obj.tapped = false;
+                obj.summoning_sick = false;
+                obj.damage = 0;
+                obj.counters = 0;
+                Arc::make_mut(&mut state.players[opponent_idx].graveyard)
+                    .push(obj);
+            }
+        }
         // Round-24: DestroyAllCreatures. CR 701.7 + 701.4 AOE — Wrath
         // of God pattern. Destroys every creature on the battlefield
         // (both players), honoring indestructible (CR 702.12) inline.
@@ -1940,6 +2267,146 @@ fn apply_effect(
                 obj.damage = 0;
                 obj.counters = 0;
                 Arc::make_mut(&mut state.players[defender_idx].graveyard).push(obj);
+            }
+        }
+        // DestroyTargetArtifact. CR 701.7 with Artifact filter — Drill
+        // Too Deep / Scour for Scrap pattern. 2 cards in EoE pool per
+        // round-20 measurement. Mirrors round-24
+        // DestroyTargetNonlandPermanent line-for-line but with an
+        // `card_types.contains("Artifact")` filter in place of the
+        // `!card_types.contains("Land")` filter. Scans defender's
+        // battlefield top-to-bottom; picks the first Artifact that is
+        // not indestructible. Empty / no-artifacts /
+        // only-indestructible-artifacts defender bf = silent fizzle.
+        Effect::DestroyTargetArtifact => {
+            let defender_idx = (1 - state.active_player) as usize;
+            let target_id: Option<u32> = {
+                let bf = &state.players[defender_idx].battlefield;
+                let registry = &state.registry;
+                bf.iter().find_map(|obj| {
+                    let printing = registry.lookup(obj.printing_id)?;
+                    if !printing.card_types.iter().any(|t| t == "Artifact") {
+                        return None; // not an artifact
+                    }
+                    if printing.keywords.iter().any(|k| k == "indestructible") {
+                        return None;
+                    }
+                    Some(obj.id)
+                })
+            };
+            if let Some(target_id) = target_id {
+                let bf_mut: &mut Vec<GameObject> =
+                    Arc::make_mut(&mut state.players[defender_idx].battlefield);
+                let pos = bf_mut
+                    .iter()
+                    .position(|o| o.id == target_id)
+                    .expect("target_id from scan but not found on re-scan");
+                let mut obj = bf_mut.remove(pos);
+                obj.zone = ZONE_GRAVEYARD;
+                obj.tapped = false;
+                obj.summoning_sick = false;
+                obj.damage = 0;
+                obj.counters = 0;
+                Arc::make_mut(&mut state.players[defender_idx].graveyard).push(obj);
+            }
+        }
+        // DestroyTargetLand. CR 701.7 with Land filter — Dust Bowl /
+        // Petrified Field pattern. 2 cards in EoE pool per round-20
+        // measurement. Mirrors round-25 DestroyTargetArtifact
+        // line-for-line but with an `card_types.contains("Land")`
+        // filter in place of the `card_types.contains("Artifact")`
+        // filter. Scans defender's battlefield top-to-bottom; picks
+        // the first Land that is not indestructible. Empty / no-lands
+        // / only-indestructible-lands defender bf = silent fizzle.
+        Effect::DestroyTargetLand => {
+            let defender_idx = (1 - state.active_player) as usize;
+            let target_id: Option<u32> = {
+                let bf = &state.players[defender_idx].battlefield;
+                let registry = &state.registry;
+                bf.iter().find_map(|obj| {
+                    let printing = registry.lookup(obj.printing_id)?;
+                    if !printing.card_types.iter().any(|t| t == "Land") {
+                        return None; // not a land
+                    }
+                    if printing.keywords.iter().any(|k| k == "indestructible") {
+                        return None;
+                    }
+                    Some(obj.id)
+                })
+            };
+            if let Some(target_id) = target_id {
+                let bf_mut: &mut Vec<GameObject> =
+                    Arc::make_mut(&mut state.players[defender_idx].battlefield);
+                let pos = bf_mut
+                    .iter()
+                    .position(|o| o.id == target_id)
+                    .expect("target_id from scan but not found on re-scan");
+                let mut obj = bf_mut.remove(pos);
+                obj.zone = ZONE_GRAVEYARD;
+                obj.tapped = false;
+                obj.summoning_sick = false;
+                obj.damage = 0;
+                obj.counters = 0;
+                Arc::make_mut(&mut state.players[defender_idx].graveyard).push(obj);
+            }
+        }
+        // DealDamageAnyTarget — Lightning Bolt's "any target" shape
+        // (CR 701.4). The "any target" filter is intrinsic to the
+        // variant; distinct from the existing DealDamage variant
+        // which dispatches on TargetFilter::{AnyPlayer, AnyCreature}.
+        //
+        // **First-slice deterministic choice**: scan the defender's
+        // battlefield top-to-bottom and pick the FIRST object whose
+        // printing's `card_types` contains "Creature". If none, fall
+        // back to the defender-as-player life-subtraction shape. This
+        // composes the AnyCreature arm's damage-write shape with the
+        // AnyPlayer arm's life-subtraction shape from the existing
+        // DealDamage match. Future slice plumbs an explicit choice
+        // callback.
+        //
+        // **Negative amount raises** at register time AND here as
+        // defense-in-depth (mirrors the round-3 raise-on-negative
+        // shape for DealDamage's amount; registered effects already
+        // validated `amount >= 0`, but synthetic / injected printings
+        // could bypass the parser).
+        Effect::DealDamageAnyTarget { amount } => {
+            if *amount < 0 {
+                return Err(PyValueError::new_err(format!(
+                    "DealDamageAnyTarget amount must be non-negative, got {amount}"
+                )));
+            }
+            let defender_idx = (1 - state.active_player) as usize;
+            let amount_i16 = (*amount).min(i16::MAX as i32) as i16;
+            // First-slice deterministic choice: prefer defender's
+            // first creature (mirrors the AnyCreature arm's
+            // type-filtered scan); fall back to defender-as-player.
+            let creature_target: Option<u32> = {
+                let bf = &state.players[defender_idx].battlefield;
+                let registry = &state.registry;
+                bf.iter().find_map(|obj| {
+                    let printing = registry.lookup(obj.printing_id)?;
+                    if printing.card_types.iter().any(|t| t == "Creature") {
+                        Some(obj.id)
+                    } else {
+                        None
+                    }
+                })
+            };
+            if let Some(target_id) = creature_target {
+                let bf_mut: &mut Vec<GameObject> =
+                    Arc::make_mut(&mut state.players[defender_idx].battlefield);
+                for obj in bf_mut.iter_mut() {
+                    if obj.id == target_id {
+                        obj.damage = obj.damage.saturating_add(amount_i16);
+                        break;
+                    }
+                }
+            } else {
+                // No creature on defender's battlefield — damage the
+                // player directly. Mirror the AnyPlayer arm's
+                // life-subtraction shape (raw `-=`, no saturation —
+                // life is i32 and amounts are bounded by deck pool).
+                state.players[defender_idx].life -= *amount;
             }
         }
     }

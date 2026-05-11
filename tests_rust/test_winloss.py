@@ -325,3 +325,340 @@ def test_revive_via_gain_life_clears_draw_and_winner_id(synthetic_state):
     assert synthetic_state.is_draw is False
     assert synthetic_state.winner_id is None
     assert synthetic_state.is_over() is False
+
+
+# ---------------------------------------------------------------------------
+# Cross-feature edge cases — winloss outcome derivation under the full stack.
+#
+# The tests above cover the pure-derivation winloss helpers in isolation
+# (set_life / lose_life / gain_life followed by losers / winner /
+# is_game_over). The block below threads the outcome derivation through
+# the higher engine layers — Effect dispatch (LoseLife, DealDamage to a
+# player, EachOpponentLosesLife), combat damage routing to players,
+# fingerprinting, the SBA loop, and clone CoW — and pins the
+# parity-critical contract that the 1000-game smoke harness depends on:
+# identical winner / loser / is_over readings between the Python and
+# Rust engines after a game ends.
+#
+# These tests compose existing primitives; none of them probes new Rust
+# behavior. A future refactor that breaks (e.g.) the post-game-over
+# no-op invariant on apply_sbas_until_quiescent, or that desyncs the
+# fingerprint from a life-zeroing Effect, surfaces here.
+# ---------------------------------------------------------------------------
+
+
+# Zone constants — mirror test_resolve.py / state_ops_zones.rs.
+ZONE_HAND = 0
+ZONE_BATTLEFIELD = 2
+
+
+def _lose_life_dict(amount):
+    """Self-life-loss printing — controller loses `amount` on resolve."""
+    return {
+        "name": f"Test SelfLoseLife (x{amount})",
+        "card_types": ["Sorcery"],
+        "mana_cost": {"U": 1, "generic": 2},
+        "effects": [{"kind": "lose_life", "amount": amount}],
+    }
+
+
+def _deal_damage_to_player_dict(amount):
+    """DealDamage to any_player — Bombard-shaped direct burn at the
+    opponent's face. Hits the defender (non-controller) under the
+    first-slice dispatch."""
+    return {
+        "name": f"Test PlayerBurn (x{amount})",
+        "card_types": ["Sorcery"],
+        "mana_cost": {"R": 1, "generic": 1},
+        "effects": [
+            {
+                "kind": "deal_damage",
+                "amount": amount,
+                "target": {"kind": "any_player"},
+            }
+        ],
+    }
+
+
+def _each_opponent_loses_life_dict(amount):
+    """Each-opponent-life-loss printing — every opponent of source's
+    controller loses `amount` life."""
+    return {
+        "name": f"Test EachOppLose (x{amount})",
+        "card_types": ["Sorcery"],
+        "mana_cost": {"B": 1, "generic": 1},
+        "effects": [{"kind": "each_opponent_loses_life", "amount": amount}],
+    }
+
+
+def test_effect_lose_life_to_zero_marks_loser_and_game_over(synthetic_state):
+    """Cross-feature: Effect::LoseLife + apply_sbas_until_quiescent ->
+    winloss derivation. Resolving a LoseLife-20 spell controlled by p0
+    drops p0 to exactly 0; the pure-derivation winloss flags p0 as
+    loser, p1 as winner, and is_game_over True after one quiescent
+    SBA pass. Mirrors test_life.py's parallel test but pins the
+    contract from the winloss side."""
+    src_id = synthetic_state.register_and_inject_object(
+        _lose_life_dict(20), 0, ZONE_BATTLEFIELD
+    )
+    synthetic_state.push_to_stack(src_id, 0)
+    synthetic_state.resolve_top_of_stack()
+    assert synthetic_state.get_life(0) == 0
+    synthetic_state.apply_sbas_until_quiescent()
+    assert list(synthetic_state.losers()) == [0]
+    assert synthetic_state.winner() == 1
+    assert synthetic_state.winner_id == 1
+    assert synthetic_state.is_game_over() is True
+    assert synthetic_state.is_over() is True
+    assert synthetic_state.is_draw is False
+
+
+def test_effect_deal_damage_to_player_to_zero_marks_loser(synthetic_state):
+    """Cross-feature with the damage Effect arm: DealDamage{any_player,
+    20} resolves -> defender (p1) drops to exactly 0 -> winloss
+    derivation flags p1 as the loser, p0 as winner. Distinct codepath
+    from LoseLife (CR 119.3) but the same observable outcome under the
+    first-slice no-prevention dispatch."""
+    src_id = synthetic_state.register_and_inject_object(
+        _deal_damage_to_player_dict(20), 0, ZONE_BATTLEFIELD
+    )
+    synthetic_state.push_to_stack(src_id, 0)
+    synthetic_state.resolve_top_of_stack()
+    assert synthetic_state.get_life(1) == 0
+    synthetic_state.apply_sbas_until_quiescent()
+    assert list(synthetic_state.losers()) == [1]
+    assert synthetic_state.winner() == 0
+    assert synthetic_state.winner_id == 0
+    assert synthetic_state.is_game_over() is True
+
+
+def test_mutual_zero_via_sequential_lose_life_is_draw(synthetic_state):
+    """Mutual-KO outcome under pure-derivation. Two sequential
+    lose_life calls drive both players to 0 — the closest cross-feature
+    analog the Rust engine exposes for "both die in the same event"
+    (combat damage doesn't symmetrically hit both PLAYERS in one
+    swing; the simplest reproducible mutual-KO at this layer is back-
+    to-back life zeroing).
+
+    Under pure-derivation winloss (see module docstring): two losers
+    -> winner = None, is_draw = True, losers = [0, 1], is_game_over =
+    True. Parity-critical: the Python engine's draw-detection must
+    land here too. This is the load-bearing mutual-KO contract for
+    the 1000-game parity smoke."""
+    synthetic_state.lose_life(0, 20)
+    synthetic_state.lose_life(1, 20)
+    assert synthetic_state.get_life(0) == 0
+    assert synthetic_state.get_life(1) == 0
+    synthetic_state.apply_sbas_until_quiescent()
+    assert sorted(synthetic_state.losers()) == [0, 1]
+    assert synthetic_state.winner() is None
+    assert synthetic_state.winner_id is None
+    assert synthetic_state.is_draw is True
+    assert synthetic_state.is_game_over() is True
+    assert synthetic_state.is_over() is True
+
+
+def test_combat_damage_zeroes_defender_and_marks_loss(engine):
+    """Cross-feature with the combat slice: an unblocked attacker
+    deals combat damage to the defending player; if the defender's
+    life was at exactly attacker.power, they drop to 0 and the
+    winloss derivation flags them as a loser. Composes
+    declare_attacker + deal_combat_damage (which routes through the
+    same players[idx].life write as lose_life) + the post-SBA winloss
+    derivation."""
+    state = engine.make_synthetic_state(num_battlefield=10, num_hand=7, num_library=50)
+    # Pre-load: defender (p1) at 2 life — exactly attacker.power.
+    state.set_life(1, 2)
+    attacker = 5  # P0_FIRST_BEAR_ID (Grizzly Bears, 2/2)
+    assert state.declare_attacker(attacker) is True
+    state.deal_combat_damage()
+    assert state.get_life(1) == 0
+    state.apply_sbas_until_quiescent()
+    assert list(state.losers()) == [1]
+    assert state.winner() == 0
+    assert state.winner_id == 0
+    assert state.is_game_over() is True
+
+
+def test_is_game_over_false_on_healthy_mid_game_state(synthetic_state):
+    """Anti-canary: a state that has had cross-feature mutations but
+    still has both players above 0 reads as not-over. Damages a few
+    creatures, resolves a non-lethal life-loss spell, runs an SBA
+    pass — none of that should flip is_game_over to True while both
+    players remain alive."""
+    # Non-lethal life loss.
+    src_id = synthetic_state.register_and_inject_object(
+        _lose_life_dict(3), 0, ZONE_BATTLEFIELD
+    )
+    synthetic_state.push_to_stack(src_id, 0)
+    synthetic_state.resolve_top_of_stack()
+    # Some creature damage that does NOT kill any creature.
+    synthetic_state.deal_damage(5, 1)  # 1 damage on a 2/2 — survives
+    synthetic_state.apply_sbas_until_quiescent()
+    # Both players still alive (p0 at 17, p1 at 20).
+    assert synthetic_state.get_life(0) == 17
+    assert synthetic_state.get_life(1) == 20
+    assert list(synthetic_state.losers()) == []
+    assert synthetic_state.winner() is None
+    assert synthetic_state.winner_id is None
+    assert synthetic_state.is_game_over() is False
+    assert synthetic_state.is_over() is False
+    assert synthetic_state.is_draw is False
+
+
+def test_winner_transitions_from_none_to_player_id_after_lethal_effect(
+    synthetic_state,
+):
+    """winner() flips from None to the surviving player_idx exactly
+    when the lethal Effect resolves. Pin the transition point: pre-
+    resolution (spell on stack, both players still alive) winner() is
+    None; post-resolution + SBA quiescence winner() is the survivor's
+    idx. Cross-feature: stack + resolve + SBA + winloss."""
+    src_id = synthetic_state.register_and_inject_object(
+        _deal_damage_to_player_dict(20), 0, ZONE_BATTLEFIELD
+    )
+    synthetic_state.push_to_stack(src_id, 0)
+    # Pre-resolve: spell on stack, defender still at 20.
+    assert synthetic_state.winner() is None
+    assert synthetic_state.winner_id is None
+    assert synthetic_state.is_game_over() is False
+
+    synthetic_state.resolve_top_of_stack()
+    synthetic_state.apply_sbas_until_quiescent()
+    # Post-resolve: defender at 0, controller is the winner.
+    assert synthetic_state.winner() == 0
+    assert synthetic_state.winner_id == 0
+    assert synthetic_state.is_game_over() is True
+
+
+def test_clone_lethal_effect_does_not_decide_original(synthetic_state):
+    """Stronger CoW canary across the full apply_effect path.
+    Resolving a LoseLife-20 effect on a CLONE drops the clone's p0 to
+    0 — the clone reports game-over with p1 as winner — but the
+    original sees no life change, no losers, no winner, and
+    is_game_over False. Same load-bearing CoW invariant as the
+    primitive-level test_clone_loss_does_not_bleed_back, exercised
+    through the higher Effect dispatch / SBA loop pathway that the
+    parity smoke runs through."""
+    src_id = synthetic_state.register_and_inject_object(
+        _lose_life_dict(20), 0, ZONE_BATTLEFIELD
+    )
+    synthetic_state.push_to_stack(src_id, 0)
+
+    cloned = synthetic_state.clone_once()
+    cloned.resolve_top_of_stack()
+    cloned.apply_sbas_until_quiescent()
+
+    # Clone reflects the kill.
+    assert cloned.get_life(0) == 0
+    assert list(cloned.losers()) == [0]
+    assert cloned.winner() == 1
+    assert cloned.winner_id == 1
+    assert cloned.is_game_over() is True
+
+    # Original is untouched in life, outcome AND stack — the spell is
+    # still on the original's stack, both players still at 20.
+    assert synthetic_state.get_life(0) == 20
+    assert synthetic_state.get_life(1) == 20
+    assert list(synthetic_state.losers()) == []
+    assert synthetic_state.winner() is None
+    assert synthetic_state.winner_id is None
+    assert synthetic_state.is_game_over() is False
+    assert synthetic_state.stack_size() == 1
+
+
+def test_fingerprint_changes_when_game_ends(synthetic_state):
+    """Parity-critical: the 12-char SHA1 fingerprint MUST observably
+    change when a player drops to 0 and the game flips to game-over
+    (because the fingerprint folds in life totals). A future
+    refactor that accidentally cached the fingerprint across a life-
+    zeroing mutation would silently break the 1000-game parity smoke
+    — this test pins that drift."""
+    fp_before = synthetic_state.fingerprint()
+    assert synthetic_state.is_game_over() is False
+    # Drop p0 to 0 via lose_life (the cross-feature path most likely
+    # to be hit during real play).
+    synthetic_state.lose_life(0, 20)
+    synthetic_state.apply_sbas_until_quiescent()
+    assert synthetic_state.is_game_over() is True
+    fp_after = synthetic_state.fingerprint()
+    assert fp_after != fp_before
+    # Determinism canary: fingerprint at game-over is stable on
+    # back-to-back reads.
+    assert synthetic_state.fingerprint() == fp_after
+
+
+def test_apply_sbas_until_quiescent_after_game_over_is_noop(synthetic_state):
+    """Sequential apply_sbas_until_quiescent calls after the first one
+    flags the game as decided are no-ops. The winloss derivation is
+    pure-read from life totals, so a "decided" game doesn't generate
+    new SBA work — losers stay losers, winner stays the same. Pin
+    that the loop converges immediately on a game-over state and
+    that the outcome reads are stable across repeated calls.
+
+    This is the parity-load-bearing post-game-over no-op contract."""
+    synthetic_state.lose_life(0, 20)
+    # First quiescent call decides the game.
+    passes_1 = synthetic_state.apply_sbas_until_quiescent()
+    assert synthetic_state.is_game_over() is True
+    assert synthetic_state.winner() == 1
+    # Snapshot life + outcome state for cross-call comparison.
+    life_after_first = list(synthetic_state.life_totals)
+    losers_after_first = list(synthetic_state.losers())
+
+    # Second call must NOT fire any new SBA (game already decided —
+    # no battlefield creatures damaged, no zone churn).
+    passes_2 = synthetic_state.apply_sbas_until_quiescent()
+    assert passes_2 == 0
+    # Outcome still identical.
+    assert synthetic_state.is_game_over() is True
+    assert synthetic_state.winner() == 1
+    assert synthetic_state.winner_id == 1
+    assert list(synthetic_state.losers()) == losers_after_first
+    assert list(synthetic_state.life_totals) == life_after_first
+
+    # Third call: still a no-op.
+    passes_3 = synthetic_state.apply_sbas_until_quiescent()
+    assert passes_3 == 0
+    assert synthetic_state.is_game_over() is True
+    assert synthetic_state.winner() == 1
+
+    # Document: passes_1 may be 0 (no creatures to destroy, the
+    # life-zeroing is a pure-derivation read), but the contract is
+    # that the SECOND and THIRD calls are no-ops regardless of what
+    # the first returns.
+    assert passes_1 >= 0
+
+
+def test_each_opponent_loses_life_lethal_then_revive_flips_outcome(
+    synthetic_state,
+):
+    """Cross-feature with the each-opponent-life-loss arm + the pure-
+    derivation revive caveat: resolve EachOpponentLosesLife(20) by p0
+    -> p1 drops to 0 -> p1 is the loser, winner = 0. Then gain_life
+    on p1 reverses the outcome under pure-derivation (no SBA-driven
+    permanent-loss model yet): p1 is back above 0, no losers, no
+    winner, game is no longer over. The composition pins both
+    half-cycles of the round-1 winloss model — the cross-feature
+    EachOpponent + winloss interaction AND the pure-derivation
+    'gain_life clears the loser flag' contract."""
+    src_id = synthetic_state.register_and_inject_object(
+        _each_opponent_loses_life_dict(20), 0, ZONE_BATTLEFIELD
+    )
+    synthetic_state.push_to_stack(src_id, 0)
+    synthetic_state.resolve_top_of_stack()
+    assert synthetic_state.get_life(1) == 0
+
+    synthetic_state.apply_sbas_until_quiescent()
+    assert list(synthetic_state.losers()) == [1]
+    assert synthetic_state.winner() == 0
+    assert synthetic_state.is_game_over() is True
+
+    # Revive p1: pure-derivation flips the outcome back to ongoing.
+    synthetic_state.gain_life(1, 5)
+    assert synthetic_state.get_life(1) == 5
+    assert list(synthetic_state.losers()) == []
+    assert synthetic_state.winner() is None
+    assert synthetic_state.winner_id is None
+    assert synthetic_state.is_game_over() is False
+    assert synthetic_state.is_draw is False

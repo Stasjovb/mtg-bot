@@ -1193,6 +1193,84 @@ def test_each_opponent_loses_life_negative_amount_raises():
         )
 
 
+# --- LoseLife round-trip + error paths -----------------------------
+#
+# CR 118.4 — life loss (not damage). Powers the Decode Transmissions
+# pattern (7 EoE cards) — the SOURCE's controller pays a life cost on
+# resolution. Distinct from `each_opponent_loses_life` (round 26): the
+# round-trip shape is identical (required `amount` field), but the
+# DISPATCH subtracts from the source's CONTROLLER's life, not the
+# opponent's. Mirrors Python's `LoseLife(amount: int)` dataclass shape.
+
+
+def test_round_trip_lose_life_amount_two():
+    """Happy path: amount=2 round-trips faithfully. Mirrors Python's
+    `LoseLife(amount: int)` dataclass shape — required `amount` field
+    with no default."""
+    reg = mtg_bot_engine.Registry()
+    pid = reg.register_printing(
+        {
+            "name": "Test Decode Transmissions",
+            "card_types": ["Sorcery"],
+            "mana_cost": {"U": 1, "generic": 2},
+            "effects": [{"kind": "lose_life", "amount": 2}],
+        }
+    )
+    effects = [dict(e) for e in reg.get_printing_effects(pid)]
+    assert effects[0] == {"kind": "lose_life", "amount": 2}
+
+
+def test_round_trip_lose_life_amount_zero():
+    """amount=0 is a legal no-op shape (mirrors GainLife / DrawCards /
+    Mill / EachOpponentLosesLife / DiscardSelf zero-amount round-trip
+    conventions). Registers and round-trips without error."""
+    reg = mtg_bot_engine.Registry()
+    pid = reg.register_printing(
+        {
+            "name": "Test Zero Drawback",
+            "card_types": ["Sorcery"],
+            "effects": [{"kind": "lose_life", "amount": 0}],
+        }
+    )
+    effects = [dict(e) for e in reg.get_printing_effects(pid)]
+    assert effects[0] == {"kind": "lose_life", "amount": 0}
+
+
+def test_lose_life_missing_amount_raises():
+    """Python's `LoseLife(amount: int)` has no default — the Rust
+    parser mirrors that: omitting `amount` raises KeyError at register
+    time (defense-in-depth, surfaced earlier than the resolve guard).
+    Mirrors EachOpponentLosesLife / DamageEachOpponent shape — distinct
+    from DiscardSelf / PutPlusOneCounterOnSelf which default to
+    amount=1."""
+    reg = mtg_bot_engine.Registry()
+    with pytest.raises(KeyError, match="amount"):
+        reg.register_printing(
+            {
+                "name": "Broken",
+                "card_types": ["Sorcery"],
+                "effects": [{"kind": "lose_life"}],
+            }
+        )
+
+
+def test_lose_life_negative_amount_raises():
+    """Register-time guard on negative amount (matches the apply_effect
+    guard, surfaced earlier in the pipeline). Mirrors
+    EachOpponentLosesLife / DamageEachOpponent / DiscardSelf negative
+    register-time check shape — 'lose -2 life' is schema nonsense
+    (use GainLife for raising life totals)."""
+    reg = mtg_bot_engine.Registry()
+    with pytest.raises(ValueError, match="non-negative"):
+        reg.register_printing(
+            {
+                "name": "Broken",
+                "card_types": ["Sorcery"],
+                "effects": [{"kind": "lose_life", "amount": -1}],
+            }
+        )
+
+
 # --- DestroyTargetNonlandPermanent round-trip ---------------------
 #
 # Round-25 bridge ext: closed-vocabulary unit variant mirroring
@@ -1264,6 +1342,81 @@ def test_destroy_target_nonland_permanent_in_multi_effect_list():
     effects = [dict(e) for e in reg.get_printing_effects(pid)]
     assert effects[0] == {"kind": "draw_cards", "count": 1}
     assert effects[1] == {"kind": "destroy_target_nonland_permanent"}
+
+
+# --- DealDamageAnyTarget round-trip --------------------------------
+#
+# Bridge ext: Lightning Bolt-style "any target" damage (CR 701.4).
+# 7 cards in the EoE pool per round-20 measurement (Debris Field
+# Crusher etc.). Mirrors Python's `DealDamageAnyTarget(DealDamage)`
+# constructor sugar — the "any target" filter is intrinsic to the
+# variant. Distinct from `deal_damage` which requires a `target`
+# dict; this variant's parser arm takes only `amount`.
+
+
+def test_round_trip_deal_damage_any_target_amount_three():
+    """Happy path: amount=3 round-trips faithfully. Mirrors Python's
+    `DealDamageAnyTarget(amount=N)` constructor sugar — the "any
+    target" filter is intrinsic (no `target` dict to round-trip)."""
+    reg = mtg_bot_engine.Registry()
+    pid = reg.register_printing(
+        {
+            "name": "Test Debris Field Crusher",
+            "card_types": ["Sorcery"],
+            "mana_cost": {"R": 1, "generic": 2},
+            "effects": [{"kind": "deal_damage_any_target", "amount": 3}],
+        }
+    )
+    effects = [dict(e) for e in reg.get_printing_effects(pid)]
+    assert effects[0] == {"kind": "deal_damage_any_target", "amount": 3}
+
+
+def test_round_trip_deal_damage_any_target_amount_zero():
+    """amount=0 is a legal no-op shape (mirrors GainLife / DrawCards /
+    Mill / DamageEachOpponent zero-amount round-trip conventions).
+    Registers and round-trips without error."""
+    reg = mtg_bot_engine.Registry()
+    pid = reg.register_printing(
+        {
+            "name": "Test Fizzle Bolt",
+            "card_types": ["Instant"],
+            "effects": [{"kind": "deal_damage_any_target", "amount": 0}],
+        }
+    )
+    effects = [dict(e) for e in reg.get_printing_effects(pid)]
+    assert effects[0] == {"kind": "deal_damage_any_target", "amount": 0}
+
+
+def test_deal_damage_any_target_missing_amount_raises():
+    """Python's `DealDamageAnyTarget` inherits `amount` from `DealDamage`
+    with no default — the Rust parser mirrors that: omitting `amount`
+    raises KeyError at register time (defense-in-depth, surfaced
+    earlier than the resolve guard)."""
+    reg = mtg_bot_engine.Registry()
+    with pytest.raises(KeyError, match="amount"):
+        reg.register_printing(
+            {
+                "name": "Broken",
+                "card_types": ["Instant"],
+                "effects": [{"kind": "deal_damage_any_target"}],
+            }
+        )
+
+
+def test_deal_damage_any_target_negative_amount_raises():
+    """Register-time guard on negative amount (matches the apply_effect
+    guard, surfaced earlier in the pipeline). Mirrors EachOpponentLosesLife
+    / DamageEachOpponent / DiscardSelf negative register-time check
+    shape — 'deal -1 damage to any target' is schema nonsense."""
+    reg = mtg_bot_engine.Registry()
+    with pytest.raises(ValueError, match="non-negative"):
+        reg.register_printing(
+            {
+                "name": "Broken",
+                "card_types": ["Instant"],
+                "effects": [{"kind": "deal_damage_any_target", "amount": -1}],
+            }
+        )
 
 
 def test_vanilla_card_with_no_mana_cost_or_effects():
@@ -1592,3 +1745,379 @@ def test_register_n_times_micros_returns_positive():
     # ~50us even on a slow box; release-mode CPython is usually
     # under 5us.
     assert micros < 200.0, f"register too slow: {micros:.2f}us"
+
+
+# --- TargetOpponentLosesLife round-trip + error paths -----------------
+#
+# CR 118.4 — life loss (not damage). Powers the Dubious Delicacy pattern
+# (2 EoE cards). Distinct from `each_opponent_loses_life` (round 26):
+# the round-trip shape is identical in 2-player land (same `amount`
+# field) and the runtime behavior collapses to the same opponent life
+# subtraction, but the variants stay separate to mirror Python's
+# `TargetOpponentLosesLife(amount: int = 1)` dataclass shape (targeted
+# vs each-opponent semantics).
+
+
+def test_round_trip_target_opponent_loses_life_amount_two():
+    """Happy path: amount=2 round-trips faithfully. Mirrors Python's
+    `TargetOpponentLosesLife(amount: int = 1)` dataclass shape — `amount`
+    field with default 1, so explicit values round-trip cleanly."""
+    reg = mtg_bot_engine.Registry()
+    pid = reg.register_printing(
+        {
+            "name": "Test Dubious Delicacy",
+            "card_types": ["Artifact"],
+            "mana_cost": {"generic": 2},
+            "effects": [{"kind": "target_opponent_loses_life", "amount": 3}],
+        }
+    )
+    effects = [dict(e) for e in reg.get_printing_effects(pid)]
+    assert effects[0] == {"kind": "target_opponent_loses_life", "amount": 3}
+
+
+def test_round_trip_target_opponent_loses_life_amount_zero():
+    """amount=0 is a legal no-op shape (mirrors GainLife / DrawCards /
+    Mill / EachOpponentLosesLife / LoseLife zero-amount round-trip
+    conventions). Registers and round-trips without error."""
+    reg = mtg_bot_engine.Registry()
+    pid = reg.register_printing(
+        {
+            "name": "Test Zero Targeted Drain",
+            "card_types": ["Sorcery"],
+            "effects": [{"kind": "target_opponent_loses_life", "amount": 0}],
+        }
+    )
+    effects = [dict(e) for e in reg.get_printing_effects(pid)]
+    assert effects[0] == {"kind": "target_opponent_loses_life", "amount": 0}
+
+
+def test_round_trip_target_opponent_loses_life_default_amount_one():
+    """Python's `TargetOpponentLosesLife(amount: int = 1)` carries a
+    default of 1. Mirror the default-handling shape from
+    PutPlusOneCounterOnSelf / DiscardSelf: omitting `amount` registers
+    as amount=1 (NOT a KeyError, unlike EachOpponentLosesLife / LoseLife
+    which have no default and require the field)."""
+    reg = mtg_bot_engine.Registry()
+    pid = reg.register_printing(
+        {
+            "name": "Test Default Drain",
+            "card_types": ["Sorcery"],
+            "effects": [{"kind": "target_opponent_loses_life"}],
+        }
+    )
+    effects = [dict(e) for e in reg.get_printing_effects(pid)]
+    assert effects[0] == {"kind": "target_opponent_loses_life", "amount": 1}
+
+
+def test_target_opponent_loses_life_negative_amount_raises():
+    """Register-time guard on negative amount (matches the apply_effect
+    guard, surfaced earlier in the pipeline). Mirrors
+    EachOpponentLosesLife / LoseLife / DamageEachOpponent /
+    DiscardSelf negative register-time check shape — 'target opponent
+    loses -2 life' is schema nonsense (use GainLife on the opponent
+    for raising life totals, if that ever becomes a thing)."""
+    reg = mtg_bot_engine.Registry()
+    with pytest.raises(ValueError, match="non-negative"):
+        reg.register_printing(
+            {
+                "name": "Broken",
+                "card_types": ["Sorcery"],
+                "effects": [
+                    {"kind": "target_opponent_loses_life", "amount": -1}
+                ],
+            }
+        )
+
+
+# --- MillTargetPlayer round-trip + error paths ------------------------
+#
+# CR 701.13b — "mill" (a player puts the top N cards of their library
+# into their graveyard). Powers the Scrabbling Skullcrab pattern (2 EoE
+# cards per round-20 measurement). Distinct from `mill` (round-10): that
+# arm mills the CONTROLLER's library; `mill_target_player` mills a
+# TARGET player (= defender in 2-player land).
+
+
+def test_round_trip_mill_target_player_count_three():
+    """Happy path: count=3 round-trips faithfully. Mirrors the existing
+    `mill` arm's `count` field shape — Scrabbling Skullcrab is mill-2,
+    larger variants exist in the broader format pool."""
+    reg = mtg_bot_engine.Registry()
+    pid = reg.register_printing(
+        {
+            "name": "Test Scrabbling Skullcrab",
+            "card_types": ["Creature"],
+            "power": 2,
+            "toughness": 2,
+            "mana_cost": {"generic": 1, "U": 1},
+            "effects": [{"kind": "mill_target_player", "count": 3}],
+        }
+    )
+    effects = [dict(e) for e in reg.get_printing_effects(pid)]
+    assert effects[0] == {"kind": "mill_target_player", "count": 3}
+
+
+def test_round_trip_mill_target_player_count_zero():
+    """count=0 is a legal no-op shape (mirrors GainLife / DrawCards /
+    Mill / EachOpponentLosesLife / LoseLife zero-count round-trip
+    conventions). Registers and round-trips without error."""
+    reg = mtg_bot_engine.Registry()
+    pid = reg.register_printing(
+        {
+            "name": "Test Zero Targeted Mill",
+            "card_types": ["Sorcery"],
+            "effects": [{"kind": "mill_target_player", "count": 0}],
+        }
+    )
+    effects = [dict(e) for e in reg.get_printing_effects(pid)]
+    assert effects[0] == {"kind": "mill_target_player", "count": 0}
+
+
+def test_mill_target_player_missing_count_raises():
+    """`count` has no first-slice default — mirrors the `mill` arm's
+    required-field shape (Surveil / EachOpponentLosesLife / LoseLife
+    convention rather than the PutPlusOneCounterOnSelf / DiscardSelf /
+    SearchLibraryForBasicLandTapped default-1 convention). Missing
+    `count` surfaces as a KeyError at register time."""
+    reg = mtg_bot_engine.Registry()
+    with pytest.raises(KeyError):
+        reg.register_printing(
+            {
+                "name": "Broken",
+                "card_types": ["Sorcery"],
+                "effects": [{"kind": "mill_target_player"}],
+            }
+        )
+
+
+def test_mill_target_player_negative_count_raises():
+    """Register-time guard on negative count (matches the apply_effect
+    guard, surfaced earlier in the pipeline). Mirrors Surveil /
+    SearchLibraryForBasicLandTapped / TargetOpponentLosesLife negative
+    register-time check shape — 'mill target player -2 cards' is
+    schema nonsense (use the reverse mill direction with a future
+    library-restore effect if that ever lands)."""
+    reg = mtg_bot_engine.Registry()
+    with pytest.raises(ValueError, match="non-negative"):
+        reg.register_printing(
+            {
+                "name": "Broken",
+                "card_types": ["Sorcery"],
+                "effects": [{"kind": "mill_target_player", "count": -1}],
+            }
+        )
+
+
+# --- EachOpponentDiscards round-trip + error paths -------------------
+#
+# CR 701.8 — discard. Powers the "Let's Play a Game" pattern (2 EoE
+# cards). Distinct from `discard_card` (round 15): DiscardCard targets
+# the DEFENDING player (caller-targeted, Mind Rot shape); this variant
+# fires on the SOURCE's controller's opponents (source-relative). In a
+# 2-player engine both collapse to "the one opponent discards hand[0]"
+# but the variants stay separate to mirror Python's
+# `EachOpponentDiscards(count: int = 1)` dataclass shape. Default-
+# handling mirrors DiscardSelf / TargetOpponentDiscards (count
+# defaults to 1) rather than EachOpponentLosesLife's required-amount
+# shape.
+
+
+def test_round_trip_each_opponent_discards_default_count_is_one():
+    """Omitting `count` defaults to 1 (Python parity:
+    `EachOpponentDiscards(count: int = 1)` dataclass has count
+    default to 1; mirrors DiscardSelf / TargetOpponentDiscards
+    default-handling shape rather than EachOpponentLosesLife's
+    required-amount shape)."""
+    reg = mtg_bot_engine.Registry()
+    pid = reg.register_printing(
+        {
+            "name": "Test Lets Play a Game",
+            "card_types": ["Sorcery"],
+            "mana_cost": {"B": 1, "generic": 2},
+            "effects": [{"kind": "each_opponent_discards"}],
+        }
+    )
+    effects = [dict(e) for e in reg.get_printing_effects(pid)]
+    assert effects[0] == {"kind": "each_opponent_discards", "count": 1}
+
+
+def test_round_trip_each_opponent_discards_count_two():
+    """Happy path: count=2 round-trips faithfully. Mirrors Python's
+    `EachOpponentDiscards(count: int = 1)` dataclass shape — `count`
+    field with default 1, can be overridden."""
+    reg = mtg_bot_engine.Registry()
+    pid = reg.register_printing(
+        {
+            "name": "Test Heavy Discard",
+            "card_types": ["Sorcery"],
+            "mana_cost": {"B": 1, "generic": 3},
+            "effects": [{"kind": "each_opponent_discards", "count": 2}],
+        }
+    )
+    effects = [dict(e) for e in reg.get_printing_effects(pid)]
+    assert effects[0] == {"kind": "each_opponent_discards", "count": 2}
+
+
+def test_each_opponent_discards_negative_count_raises():
+    """Register-time guard on negative count (matches the apply_effect
+    guard, surfaced earlier in the pipeline). Mirrors DiscardSelf /
+    EachOpponentLosesLife / TargetOpponentLosesLife negative
+    register-time check shape — 'each opponent discards -1 cards' is
+    schema nonsense."""
+    reg = mtg_bot_engine.Registry()
+    with pytest.raises(ValueError, match="non-negative"):
+        reg.register_printing(
+            {
+                "name": "Broken",
+                "card_types": ["Sorcery"],
+                "effects": [
+                    {"kind": "each_opponent_discards", "count": -1}
+                ],
+            }
+        )
+
+
+def test_each_opponent_discards_in_unknown_kind_error_string():
+    """The unknown-kind error string enumerates the valid kinds —
+    `each_opponent_discards` must appear so a future regression that
+    accidentally drops the parser arm surfaces with a helpful error."""
+    reg = mtg_bot_engine.Registry()
+    with pytest.raises(ValueError, match="each_opponent_discards"):
+        reg.register_printing(
+            {
+                "name": "Broken",
+                "card_types": ["Sorcery"],
+                "effects": [{"kind": "obviously_not_a_real_kind"}],
+            }
+        )
+
+
+# --- DestroyTargetArtifact round-trip -------------------------------
+#
+# Bridge ext: Drill Too Deep / Scour for Scrap shape — "destroy target
+# artifact" (CR 701.7, artifact filter). 2 cards in the EoE pool per
+# round-20 measurement. Mirrors Python's
+# `DestroyTargetArtifact(Destroy)` constructor sugar with
+# `targets=(TargetSpec(IsArtifact()),)`. Unit variant — no fields;
+# the artifact filter is intrinsic to the variant. Round-trip is a
+# bare `{"kind": "destroy_target_artifact"}` dict.
+
+
+def test_round_trip_destroy_target_artifact_unit_variant():
+    """Happy path: unit-variant round-trips as a single `kind` key
+    with no extra fields. Mirrors `destroy_target_nonland_permanent`
+    / `counter_target_spell` unit-variant round-trip shape."""
+    reg = mtg_bot_engine.Registry()
+    pid = reg.register_printing(
+        {
+            "name": "Test Drill Too Deep",
+            "card_types": ["Instant"],
+            "mana_cost": {"B": 1, "generic": 2},
+            "effects": [{"kind": "destroy_target_artifact"}],
+        }
+    )
+    effects = [dict(e) for e in reg.get_printing_effects(pid)]
+    assert effects[0] == {"kind": "destroy_target_artifact"}
+
+
+def test_round_trip_destroy_target_artifact_extra_keys_ignored():
+    """Silent-drop convention for unrecognized keys on a unit variant
+    (matches `destroy_target_nonland_permanent` parser shape). An
+    accidental `target` key on the registered dict does NOT raise —
+    the parser ignores it and round-trips a bare unit dict."""
+    reg = mtg_bot_engine.Registry()
+    pid = reg.register_printing(
+        {
+            "name": "Test Scour for Scrap",
+            "card_types": ["Sorcery"],
+            "mana_cost": {"R": 1, "generic": 1},
+            "effects": [
+                {
+                    "kind": "destroy_target_artifact",
+                    "target": {"kind": "any_creature"},  # ignored
+                }
+            ],
+        }
+    )
+    effects = [dict(e) for e in reg.get_printing_effects(pid)]
+    assert effects[0] == {"kind": "destroy_target_artifact"}
+
+
+def test_destroy_target_artifact_in_unknown_kind_error_string():
+    """The unknown-kind error string enumerates the valid kinds —
+    `destroy_target_artifact` must appear so a future regression that
+    accidentally drops the parser arm surfaces with a helpful error."""
+    reg = mtg_bot_engine.Registry()
+    with pytest.raises(ValueError, match="destroy_target_artifact"):
+        reg.register_printing(
+            {
+                "name": "Broken",
+                "card_types": ["Sorcery"],
+                "effects": [{"kind": "obviously_not_a_real_kind"}],
+            }
+        )
+
+
+# --- DestroyTargetLand round-trip -----------------------------------
+#
+# Bridge ext: Dust Bowl / Petrified Field shape — "destroy target
+# land" (CR 701.7, land filter). 2 cards in the EoE pool per round-20
+# measurement. Mirrors Python's `DestroyTargetLand(Destroy)` constructor
+# sugar with `targets=(TargetSpec(IsLand()),)`. Unit variant — no fields;
+# the land filter is intrinsic to the variant. Round-trip is a bare
+# `{"kind": "destroy_target_land"}` dict. Mirrors round-25
+# `destroy_target_artifact` round-trip shape with the kind string
+# swapped.
+
+
+def test_round_trip_destroy_target_land_unit_variant():
+    """Happy path: unit-variant round-trips as a single `kind` key
+    with no extra fields. Mirrors `destroy_target_artifact`
+    unit-variant round-trip shape."""
+    reg = mtg_bot_engine.Registry()
+    pid = reg.register_printing(
+        {
+            "name": "Test Dust Bowl",
+            "card_types": ["Land"],
+            "effects": [{"kind": "destroy_target_land"}],
+        }
+    )
+    effects = [dict(e) for e in reg.get_printing_effects(pid)]
+    assert effects[0] == {"kind": "destroy_target_land"}
+
+
+def test_round_trip_destroy_target_land_extra_keys_ignored():
+    """Silent-drop convention for unrecognized keys on a unit variant
+    (matches `destroy_target_artifact` parser shape). An accidental
+    `target` key on the registered dict does NOT raise — the parser
+    ignores it and round-trips a bare unit dict."""
+    reg = mtg_bot_engine.Registry()
+    pid = reg.register_printing(
+        {
+            "name": "Test Petrified Field",
+            "card_types": ["Land"],
+            "effects": [
+                {
+                    "kind": "destroy_target_land",
+                    "target": {"kind": "any_creature"},  # ignored
+                }
+            ],
+        }
+    )
+    effects = [dict(e) for e in reg.get_printing_effects(pid)]
+    assert effects[0] == {"kind": "destroy_target_land"}
+
+
+def test_destroy_target_land_in_unknown_kind_error_string():
+    """The unknown-kind error string enumerates the valid kinds —
+    `destroy_target_land` must appear so a future regression that
+    accidentally drops the parser arm surfaces with a helpful error."""
+    reg = mtg_bot_engine.Registry()
+    with pytest.raises(ValueError, match="destroy_target_land"):
+        reg.register_printing(
+            {
+                "name": "Broken",
+                "card_types": ["Sorcery"],
+                "effects": [{"kind": "obviously_not_a_real_kind"}],
+            }
+        )

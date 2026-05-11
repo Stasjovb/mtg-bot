@@ -584,3 +584,399 @@ def test_regrowth_clone_isolation(synthetic_state):
     assert synthetic_state.find_object_zone(obj_id) == ZONE_GRAVEYARD
     assert synthetic_state.hand_sizes == hand_source_before
     assert synthetic_state.graveyard_sizes == gy_source_before
+
+
+# --- cross-primitive: Effect dispatch composes with zone primitives -----
+#
+# These tests verify the end-state zone bookkeeping after Effect dispatch
+# arms drive zone moves. Every recent Effect arm either composes the
+# zone primitives (move_object,
+# move_object_from_graveyard_to_battlefield) or inlines the same
+# logic (Arc::make_mut pop/push) due to the per-slice file-isolation
+# rule that kept dispatch out of state_ops_zones.rs.
+#
+# We don't test the Effect logic itself here — the per-effect resolve
+# tests in ``test_resolve.py`` cover that. We test the cross-cut: that
+# after Effect dispatch, ``find_object_zone`` and the zone-size readers
+# agree on where the affected object now lives. A bug like "the inline
+# move shrinks the source zone but forgets to stamp ``obj.zone =
+# new_zone``" would slip past test_resolve.py (which mostly checks
+# zone-size deltas) but fail here.
+
+
+def _destroy_target_creature_dict():
+    """Murder-shaped: instant that destroys target creature (defender's
+    first battlefield obj). Source post-resolves to controller's
+    graveyard per CR 608.2m."""
+    return {
+        "name": "Test Murder (zones-cross)",
+        "card_types": ["Instant"],
+        "mana_cost": {"B": 1, "generic": 2},
+        "effects": [
+            {
+                "kind": "destroy_target",
+                "target": {"kind": "any_creature"},
+            }
+        ],
+    }
+
+
+def _sacrifice_target_creature_dict():
+    """Sacrifice-target sorcery: active player sacrifices their first
+    battlefield object."""
+    return {
+        "name": "Test Sacrifice (zones-cross)",
+        "card_types": ["Sorcery"],
+        "mana_cost": {"B": 1},
+        "effects": [
+            {
+                "kind": "sacrifice",
+                "target": {"kind": "any_creature"},
+            }
+        ],
+    }
+
+
+def _exile_target_creature_dict():
+    """Path-style exile: target creature -> owner's exile."""
+    return {
+        "name": "Test Path (zones-cross)",
+        "card_types": ["Instant"],
+        "mana_cost": {"W": 1},
+        "effects": [
+            {
+                "kind": "exile_target",
+                "target": {"kind": "any_creature"},
+            }
+        ],
+    }
+
+
+def _reanimate_dict_cross():
+    """Reanimate-shaped sorcery: return first creature from your
+    graveyard to the battlefield. Composes with the round-17 primitive
+    ``move_object_from_graveyard_to_battlefield`` under the hood."""
+    return {
+        "name": "Test Reanimate (zones-cross)",
+        "card_types": ["Sorcery"],
+        "mana_cost": {"B": 1, "generic": 1},
+        "effects": [
+            {"kind": "return_creature_from_your_graveyard_to_battlefield"}
+        ],
+    }
+
+
+def _vanilla_creature_dict_cross(name="Test Bear (zones-cross)"):
+    """A vanilla 2/2 creature target — what reanimate picks up."""
+    return {
+        "name": name,
+        "card_types": ["Creature"],
+        "mana_cost": {"generic": 2},
+        "power": 2,
+        "toughness": 2,
+    }
+
+
+def _discard_self_creature_dict():
+    """Irreverent-Gremlin-shaped: a creature whose ETB-style effect
+    makes its controller discard one card from hand."""
+    return {
+        "name": "Test Irreverent Gremlin (zones-cross)",
+        "card_types": ["Creature"],
+        "mana_cost": {"R": 1},
+        "power": 1,
+        "toughness": 1,
+        "effects": [{"kind": "discard_self", "amount": 1}],
+    }
+
+
+# --- 1. find_object_zone reflects post-dispatch zone -----------------
+
+
+def test_find_object_zone_after_destroy_target_returns_graveyard(synthetic_state):
+    """After ``Effect::DestroyTarget`` dispatch moves a creature to the
+    defender's graveyard, ``find_object_zone`` reflects the new home.
+    Pinning the cross-cut: the inline move in the destroy arm must
+    update ``GameObject.zone`` (not just the per-zone Vec membership)
+    so the iterating reader resolves to the graveyard."""
+    target_obj_id = 67  # p1's bf[0] in the synthetic seed.
+    assert synthetic_state.find_object_zone(target_obj_id) == ZONE_BATTLEFIELD
+
+    spell_obj_id = synthetic_state.register_and_inject_object(
+        _destroy_target_creature_dict(), 0, ZONE_HAND
+    )
+    synthetic_state.push_to_stack(spell_obj_id, 0)
+    synthetic_state.resolve_top_of_stack()
+
+    assert synthetic_state.find_object_zone(target_obj_id) == ZONE_GRAVEYARD
+
+
+def test_find_object_zone_after_sacrifice_returns_graveyard(synthetic_state):
+    """After ``Effect::Sacrifice`` dispatch moves the active player's
+    first battlefield obj to their graveyard, ``find_object_zone``
+    resolves to ZONE_GRAVEYARD."""
+    target_obj_id = 0  # p0's bf[0] in the synthetic seed.
+    assert synthetic_state.find_object_zone(target_obj_id) == ZONE_BATTLEFIELD
+
+    spell_obj_id = synthetic_state.register_and_inject_object(
+        _sacrifice_target_creature_dict(), 0, ZONE_HAND
+    )
+    synthetic_state.push_to_stack(spell_obj_id, 0)
+    synthetic_state.resolve_top_of_stack()
+
+    assert synthetic_state.find_object_zone(target_obj_id) == ZONE_GRAVEYARD
+
+
+def test_find_object_zone_after_exile_target_returns_exile(synthetic_state):
+    """After ``Effect::ExileTarget`` dispatch moves a creature into
+    the defender's exile, ``find_object_zone`` resolves to
+    ZONE_EXILE (round-14 widened the reader to iterate exile)."""
+    target_obj_id = 67  # p1's bf[0].
+    assert synthetic_state.find_object_zone(target_obj_id) == ZONE_BATTLEFIELD
+
+    spell_obj_id = synthetic_state.register_and_inject_object(
+        _exile_target_creature_dict(), 0, ZONE_HAND
+    )
+    synthetic_state.push_to_stack(spell_obj_id, 0)
+    synthetic_state.resolve_top_of_stack()
+
+    assert synthetic_state.find_object_zone(target_obj_id) == ZONE_EXILE
+    assert synthetic_state.exile_contains(target_obj_id) is True
+
+
+# --- 2. round-trip: battlefield -> graveyard -> battlefield ----------
+
+
+def test_destroy_then_reanimate_round_trips_through_graveyard(synthetic_state):
+    """A creature destroyed by ``Effect::DestroyTarget`` lands in the
+    defender's graveyard, then ``Effect::ReturnCreatureFromYour
+    GraveyardToBattlefield`` (cast by that same player) pulls it back
+    to the battlefield. find_object_zone tracks both legs of the trip;
+    the reanimated copy enters with summoning_sick=true (CR 302.1) and
+    no leftover tapped state from before the destroy.
+
+    The defender (p1) is the one whose creature got destroyed, so p1
+    is the player who reanimates — but in the synthetic state p0 is
+    active. Build a state where p1 has the creature and p1 reanimates
+    after switching active player.
+    """
+    # Use a clean synthetic state. Put a creature on p0's battlefield
+    # (p0 = active), then sacrifice it ourselves — that lands it in
+    # p0's graveyard, and we reanimate from p0's graveyard.
+    creature_id = synthetic_state.register_and_inject_object(
+        _vanilla_creature_dict_cross(), 0, ZONE_BATTLEFIELD
+    )
+    # Tap + damage before destroy to exercise the state reset.
+    assert synthetic_state.tap_object(creature_id) is True
+    assert synthetic_state.deal_damage(creature_id, 1) is True
+    assert synthetic_state.is_tapped(creature_id) is True
+
+    # Sacrifice (active player sacs their own — picks bf[0], which
+    # is the synthetic forest at obj_id 0, not our creature). Instead
+    # use the round-1 primitive directly to send our creature to the
+    # graveyard — same end-state.
+    assert synthetic_state.move_object(creature_id, ZONE_GRAVEYARD, 0) is True
+    assert synthetic_state.find_object_zone(creature_id) == ZONE_GRAVEYARD
+
+    # Reanimate via the Effect dispatch (composes with the round-17
+    # primitive under the hood).
+    reanimate_id = synthetic_state.register_and_inject_object(
+        _reanimate_dict_cross(), 0, ZONE_HAND
+    )
+    synthetic_state.push_to_stack(reanimate_id, 0)
+    synthetic_state.resolve_top_of_stack()
+
+    # Round-trip complete: creature back on battlefield with state
+    # reset (summoning sickness stamped, tapped cleared, damage
+    # cleared).
+    assert synthetic_state.find_object_zone(creature_id) == ZONE_BATTLEFIELD
+    assert synthetic_state.is_summoning_sick(creature_id) is True
+    assert synthetic_state.is_tapped(creature_id) is False
+    assert synthetic_state.get_damage(creature_id) == 0
+
+
+# --- 3. hand -> graveyard via DiscardSelf -----------------------------
+
+
+def test_discard_self_dispatch_moves_hand_card_to_graveyard(synthetic_state):
+    """Inject a DiscardSelf source on p0's battlefield, push to stack,
+    resolve. The first hand card moves to p0's graveyard.
+    ``find_object_zone`` agrees: the discarded id now resolves to
+    ZONE_GRAVEYARD."""
+    # Snapshot p0's first hand card BEFORE the source injection
+    # (register_and_inject_object appends to the requested zone, so
+    # putting the source on battlefield doesn't perturb hand[0]).
+    p0_first_hand_id = synthetic_state.hand_snapshot(0)[0]["id"]
+    assert synthetic_state.find_object_zone(p0_first_hand_id) == ZONE_HAND
+
+    src_id = synthetic_state.register_and_inject_object(
+        _discard_self_creature_dict(), 0, ZONE_BATTLEFIELD
+    )
+    synthetic_state.push_to_stack(src_id, 0)
+    synthetic_state.resolve_top_of_stack()
+
+    # The discarded card lives in p0's graveyard now.
+    assert synthetic_state.find_object_zone(p0_first_hand_id) == ZONE_GRAVEYARD
+
+
+# --- 4. Library -> hand via draw_card composes with find_object_zone --
+
+
+def test_draw_card_then_find_object_zone_tracks_to_hand(synthetic_state):
+    """``draw_card`` returns the obj_id of the drawn card. After the
+    draw, ``find_object_zone`` on that id resolves to ZONE_HAND. This
+    is the round-1 primitive composition the rest of the engine builds
+    on; it's covered by ``test_draw_card_moves_top_of_library_to_hand``
+    above, but we re-pin here as the cross-primitive contract:
+    draw_card's return value + find_object_zone agree."""
+    drawn_id = synthetic_state.draw_card(0)
+    assert drawn_id is not None
+    assert synthetic_state.find_object_zone(drawn_id) == ZONE_HAND
+
+
+# --- 5. graveyard_to_battlefield primitive no-op on non-graveyard obj --
+
+
+def test_reanimate_primitive_idempotent_on_battlefield_object(synthetic_state):
+    """Round-17 primitive direct: send a creature to graveyard, call
+    move_object_from_graveyard_to_battlefield once -> True (now on bf).
+    Call it again on the same id -> False (no longer in graveyard, so
+    the primitive's gating returns False without movement). This is
+    the explicit idempotence canary for the primitive — different
+    from ``test_reanimate_returns_false_when_id_not_in_graveyard``
+    which uses a never-graveyard id; here the id WAS in graveyard but
+    was already pulled out."""
+    obj_id = _put_creature_into_p0_graveyard(synthetic_state)
+
+    # First call: success.
+    assert (
+        synthetic_state.move_object_from_graveyard_to_battlefield(0, obj_id)
+        is True
+    )
+    assert synthetic_state.find_object_zone(obj_id) == ZONE_BATTLEFIELD
+    bf_after_first = synthetic_state.battlefield_sizes[0]
+
+    # Second call: object is on battlefield, not in graveyard -> no-op.
+    assert (
+        synthetic_state.move_object_from_graveyard_to_battlefield(0, obj_id)
+        is False
+    )
+    # No double-add: battlefield count is unchanged.
+    assert synthetic_state.battlefield_sizes[0] == bf_after_first
+    assert synthetic_state.find_object_zone(obj_id) == ZONE_BATTLEFIELD
+
+
+# --- 6. Cleanup-step zone preservation --------------------------------
+
+
+def test_cleanup_step_does_not_change_object_zones(synthetic_state):
+    """cleanup_step_for_active_player enforces hand-size discard (no-op
+    here: 7 cards == 7) and clears marked damage on permanents — but
+    objects themselves don't change zones from this alone. Pin the
+    contract: a battlefield object stays on the battlefield, a hand
+    object stays in hand, a library object stays in library."""
+    bf_id = P0_FIRST_BATTLEFIELD_ID
+    hand_id = P0_FIRST_HAND_ID
+    lib_id = P0_FIRST_LIBRARY_ID
+    # Pre-state.
+    assert synthetic_state.find_object_zone(bf_id) == ZONE_BATTLEFIELD
+    assert synthetic_state.find_object_zone(hand_id) == ZONE_HAND
+    assert synthetic_state.find_object_zone(lib_id) == ZONE_LIBRARY
+    bf_before = synthetic_state.battlefield_sizes
+    hand_before = synthetic_state.hand_sizes
+    library_before = synthetic_state.library_sizes
+    gy_before = synthetic_state.graveyard_sizes
+
+    synthetic_state.cleanup_step_for_active_player()
+
+    # All three objects still in their original zones.
+    assert synthetic_state.find_object_zone(bf_id) == ZONE_BATTLEFIELD
+    assert synthetic_state.find_object_zone(hand_id) == ZONE_HAND
+    assert synthetic_state.find_object_zone(lib_id) == ZONE_LIBRARY
+    # No zone-size delta: 7 cards in hand == hand-size limit, so no
+    # discard fires; cleanup damage-clear doesn't touch counts.
+    assert synthetic_state.battlefield_sizes == bf_before
+    assert synthetic_state.hand_sizes == hand_before
+    assert synthetic_state.library_sizes == library_before
+    assert synthetic_state.graveyard_sizes == gy_before
+
+
+# --- 7. Multi-zone state after a sequence ----------------------------
+
+
+def test_multi_zone_find_after_sequence(synthetic_state):
+    """Build a state where one custom-injected object lives in each
+    tracked zone (hand, library, battlefield, graveyard, exile). Then
+    walk every id and assert find_object_zone returns the right
+    constant. Exercises the full zone-search iteration order in one
+    test — a regression where any one zone arm drops out of the
+    iteration would surface here."""
+    # Inject one custom object into each zone for player 0. Use the
+    # vanilla creature dict so the registry has a printing for each
+    # (the printing doesn't matter for the find — only the zone does).
+    hand_obj = synthetic_state.register_and_inject_object(
+        _vanilla_creature_dict_cross("Hand Resident"), 0, ZONE_HAND
+    )
+    library_obj = synthetic_state.register_and_inject_object(
+        _vanilla_creature_dict_cross("Library Resident"), 0, ZONE_LIBRARY
+    )
+    bf_obj = synthetic_state.register_and_inject_object(
+        _vanilla_creature_dict_cross("BF Resident"), 0, ZONE_BATTLEFIELD
+    )
+    gy_obj = synthetic_state.register_and_inject_object(
+        _vanilla_creature_dict_cross("GY Resident"), 0, ZONE_GRAVEYARD
+    )
+    # No direct injection helper for exile — route via move_object.
+    # Inject as battlefield-resident then bounce to exile.
+    pre_exile_obj = synthetic_state.register_and_inject_object(
+        _vanilla_creature_dict_cross("To-Exile Resident"), 0, ZONE_BATTLEFIELD
+    )
+    assert (
+        synthetic_state.move_object(pre_exile_obj, ZONE_EXILE, 0) is True
+    )
+    exile_obj = pre_exile_obj
+
+    # Each find resolves to the correct zone.
+    assert synthetic_state.find_object_zone(hand_obj) == ZONE_HAND
+    assert synthetic_state.find_object_zone(library_obj) == ZONE_LIBRARY
+    assert synthetic_state.find_object_zone(bf_obj) == ZONE_BATTLEFIELD
+    assert synthetic_state.find_object_zone(gy_obj) == ZONE_GRAVEYARD
+    assert synthetic_state.find_object_zone(exile_obj) == ZONE_EXILE
+
+
+# --- 8. CoW canary across Effect-driven moves ------------------------
+
+
+def test_clone_isolation_across_destroy_target_dispatch(synthetic_state):
+    """CoW canary at the cross-primitive level. Clone the state, run a
+    full ``Effect::DestroyTarget`` resolve on the clone — the clone's
+    target lands in graveyard, the original's stays on battlefield.
+    Also: find_object_zone on the original still returns
+    ZONE_BATTLEFIELD for the target.
+
+    Mirrors test_clone_then_move_does_not_affect_original but routes
+    through the Effect dispatch (which inlines its own move logic
+    rather than calling move_object) — confirms the Arc::make_mut
+    on the destroy arm is correctly scoped."""
+    target_obj_id = 67  # p1's bf[0].
+
+    spell_obj_id = synthetic_state.register_and_inject_object(
+        _destroy_target_creature_dict(), 0, ZONE_HAND
+    )
+    synthetic_state.push_to_stack(spell_obj_id, 0)
+    bf_source_before = synthetic_state.battlefield_sizes
+    gy_source_before = synthetic_state.graveyard_sizes
+
+    cloned = synthetic_state.clone_once()
+    cloned.resolve_top_of_stack()
+
+    # Clone diverged: target in p1's graveyard.
+    assert cloned.find_object_zone(target_obj_id) == ZONE_GRAVEYARD
+
+    # Original untouched: target still on p1's battlefield, no zone
+    # deltas. find_object_zone reads the original's zones, NOT the
+    # clone's — load-bearing for the rust-side Arc-isolation.
+    assert synthetic_state.find_object_zone(target_obj_id) == ZONE_BATTLEFIELD
+    assert synthetic_state.battlefield_sizes == bf_source_before
+    assert synthetic_state.graveyard_sizes == gy_source_before
+    assert synthetic_state.stack_size() == 1

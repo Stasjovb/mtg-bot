@@ -9,6 +9,7 @@ Usage:
     PYTHONPATH=src python scripts/parity_smoke.py --seed 42
     PYTHONPATH=src python scripts/parity_smoke.py --mode initial-state --seed 42
     PYTHONPATH=src python scripts/parity_smoke.py --mode trajectory --seed 42 --num-decisions 20
+    PYTHONPATH=src python scripts/parity_smoke.py --mode multi-seed --num-seeds 10 --num-decisions 20
 
 Modes:
     game           — Run a full game with RandomAgent on each engine.
@@ -31,6 +32,22 @@ Modes:
                      trajectory compare is deferred until Python's
                      ``legal.py:legal_actions`` and Rust's
                      ``legal_decisions`` have full coverage parity.
+    multi-seed     — Run trajectory mode across K seeds and print an
+                     aggregate summary table. Catches non-determinism
+                     bugs that only surface at certain seeds — the
+                     single-seed trajectory mode is necessary but not
+                     sufficient since a fixed seed only exercises one
+                     path through the legal space.
+    field-diff     — Build a Rust synthetic state and print a
+                     per-field OK/DIFFER diff between two parallel
+                     views of it. Parity-debug primitive: when a
+                     future trajectory smoke says "digests diverge at
+                     decision 47", run this mode at that state to see
+                     "life=20/19 — DIVERGE" instead of just two
+                     mismatched digests. Supports
+                     ``--inject-divergence FIELD`` to artificially
+                     mutate one field on the right-hand view so the
+                     diff machinery itself can be smoke-tested.
 
 Exit codes:
     0 — both engines agree (or only one engine ran successfully and
@@ -545,6 +562,103 @@ def _replay_trajectory(state, decisions: list[dict]) -> list[str]:
     return trajectory
 
 
+@dataclass
+class TrajectorySeedResult:
+    """One seed's outcome from the trajectory walk + clone-replay check.
+
+    Used by both ``run_trajectory_mode`` (single-seed) and
+    ``run_multi_seed_mode`` (K seeds). The single-seed runner prints
+    one of these and translates to an exit code; the multi-seed
+    runner collects a list of them and prints an aggregate table.
+
+    Fields:
+      seed              — the seed the walk was driven with.
+      n_decisions       — number of decisions actually applied. Equals
+                          ``num_decisions`` on success; on a walk-time
+                          ``RuntimeError`` it's the count completed
+                          before the abort.
+      final_fingerprint — last fingerprint in the original trajectory,
+                          or ``None`` if the walk failed before any
+                          state was produced.
+      clone_match       — True iff the clone-replay trajectory is
+                          byte-equal to the original. False on either
+                          trajectory mismatch OR a clone-side
+                          exception that the original walk didn't hit.
+      error             — short error string if anything went wrong
+                          (walk RuntimeError, clone-replay exception),
+                          else None. Used for the "errors" column in
+                          the multi-seed table.
+      orig_trajectory   — full original trajectory (initial + after
+                          each step). Populated when the walk
+                          succeeded; left as an empty list on walk
+                          failure. Carried so the single-seed runner
+                          can print the divergence-step diagnostic
+                          without recomputing.
+      clone_trajectory  — full clone-replay trajectory. Empty list if
+                          the clone-replay raised.
+      decisions         — the decisions actually applied (so the
+                          divergence-step diagnostic can render the
+                          triggering action).
+    """
+
+    seed: int
+    n_decisions: int = 0
+    final_fingerprint: str | None = None
+    clone_match: bool = False
+    error: str | None = None
+    orig_trajectory: list[str] = field(default_factory=list)
+    clone_trajectory: list[str] = field(default_factory=list)
+    decisions: list[dict] = field(default_factory=list)
+
+
+def _run_single_seed_trajectory(
+    seed: int,
+    num_decisions: int,
+    num_battlefield: int,
+    num_hand: int,
+    num_library: int,
+) -> TrajectorySeedResult:
+    """Run the trajectory walk + clone-replay check for one seed and
+    return a result struct (no printing — the caller decides whether
+    to print a single-seed line or aggregate into a multi-seed table).
+
+    Assumes ``mtg_bot_engine`` is importable; the caller is responsible
+    for the up-front import-error handling.
+    """
+    import mtg_bot_engine
+
+    res = TrajectorySeedResult(seed=seed)
+    state = mtg_bot_engine.make_synthetic_state(
+        num_battlefield, num_hand, num_library
+    )
+    # Clone BEFORE any mutation so the clone is byte-identical to the
+    # starting state. If we cloned after walking, we'd be cloning the
+    # post-walk state — meaningless for replay.
+    clone = state.clone_once()
+
+    try:
+        decisions, orig_trajectory = _walk_trajectory(state, seed, num_decisions)
+    except RuntimeError as e:
+        res.error = f"walk: {type(e).__name__}: {e}"
+        return res
+
+    res.decisions = decisions
+    res.orig_trajectory = orig_trajectory
+    res.n_decisions = len(decisions)
+    res.final_fingerprint = orig_trajectory[-1]
+
+    try:
+        clone_trajectory = _replay_trajectory(clone, decisions)
+    except Exception as e:
+        res.error = f"clone-replay: {type(e).__name__}: {e}"
+        res.clone_match = False
+        return res
+
+    res.clone_trajectory = clone_trajectory
+    res.clone_match = orig_trajectory == clone_trajectory
+    return res
+
+
 def run_trajectory_mode(
     seed: int,
     num_decisions: int,
@@ -565,59 +679,65 @@ def run_trajectory_mode(
          Report the first divergence on failure.
 
     Returns 0 on PASS, 1 on FAIL, 2 on import / contract error.
+
+    Thin wrapper around :func:`_run_single_seed_trajectory` — the
+    helper does the actual walk + replay and returns a result struct;
+    this function prints the single-seed status line and translates to
+    an exit code. ``run_multi_seed_mode`` calls the helper directly
+    so it can aggregate K results without printing per-seed full
+    diagnostics.
     """
     try:
-        import mtg_bot_engine
+        import mtg_bot_engine  # noqa: F401  (used by helper)
     except ImportError as e:
         print(f"[trajectory] ERROR: mtg_bot_engine not built ({e})")
         print("  -> run `maturin develop --release -m rust/Cargo.toml`")
         return 2
 
-    state = mtg_bot_engine.make_synthetic_state(
-        num_battlefield, num_hand, num_library
-    )
-    # Clone BEFORE any mutation so the clone is byte-identical to the
-    # starting state. If we cloned after walking, we'd be cloning the
-    # post-walk state — meaningless for replay.
-    clone = state.clone_once()
-
     print("[python] (skipped — trajectory mode runs Rust-only for now)")
 
-    try:
-        decisions, orig_trajectory = _walk_trajectory(state, seed, num_decisions)
-    except RuntimeError as e:
-        print(f"[  rust] ERROR during trajectory walk: {e}")
+    result = _run_single_seed_trajectory(
+        seed=seed,
+        num_decisions=num_decisions,
+        num_battlefield=num_battlefield,
+        num_hand=num_hand,
+        num_library=num_library,
+    )
+
+    # Walk-time failure (RuntimeError from _walk_trajectory) — abort
+    # with scaffold-error exit code, since this signals a contract
+    # violation (e.g. empty legal_decisions) rather than a parity bug.
+    if result.error is not None and not result.orig_trajectory:
+        print(f"[  rust] ERROR during trajectory walk: {result.error}")
         return 2
 
-    final_hash = orig_trajectory[-1]
-
-    # Replay on the clone.
-    try:
-        clone_trajectory = _replay_trajectory(clone, decisions)
-    except Exception as e:
-        # Any exception on the clone-replay (when the original walk
-        # succeeded) is itself a divergence — record + report.
+    # Clone-replay exception (original walk succeeded but clone raised):
+    # itself a divergence — report + return 1.
+    if result.error is not None and not result.clone_trajectory:
         print(
             f"[  rust] trajectory of {num_decisions} decisions, "
-            f"final_hash={final_hash}, clone-replay-matches=False"
+            f"final_hash={result.final_fingerprint}, clone-replay-matches=False"
         )
         print(
             f"PARITY: FAIL — clone-replay raised "
-            f"{type(e).__name__} ({e}) where original did not"
+            f"{result.error} where original did not"
         )
         return 1
 
-    matches = orig_trajectory == clone_trajectory
     print(
         f"[  rust] trajectory of {num_decisions} decisions, "
-        f"final_hash={final_hash}, clone-replay-matches={matches}"
+        f"final_hash={result.final_fingerprint}, "
+        f"clone-replay-matches={result.clone_match}"
     )
 
-    if matches:
+    if result.clone_match:
         print(f"PARITY: PASS — Rust trajectory deterministic across seed={seed}")
         return 0
 
     # Find the first divergence step.
+    orig_trajectory = result.orig_trajectory
+    clone_trajectory = result.clone_trajectory
+    decisions = result.decisions
     div_step = next(
         (
             i
@@ -652,6 +772,407 @@ def run_trajectory_mode(
     return 1
 
 
+# ---------- multi-seed mode -----------------------------------------------
+
+
+def run_multi_seed_mode(
+    num_seeds: int,
+    seed_start: int,
+    num_decisions: int,
+    num_battlefield: int = 2,
+    num_hand: int = 3,
+    num_library: int = 5,
+) -> int:
+    """Run trajectory mode across K seeds and print an aggregate summary.
+
+    For each seed in ``[seed_start, seed_start + num_seeds)``:
+      1. Build a fresh synthetic Rust state.
+      2. Walk ``num_decisions`` deterministic decisions.
+      3. Clone-replay them on a pre-walk clone.
+      4. Record (seed, n_decisions, final_fp, clone_match, error).
+
+    Prints a per-seed table + aggregate stats, then a final PASS/FAIL
+    summary line. Returns 0 if every seed clone-replay-matched with
+    no errors; 1 if any seed had a divergence or error; 2 on import
+    failure.
+
+    Catches non-determinism bugs that only manifest at specific
+    seeds — the single-seed mode is necessary but not sufficient
+    because a fixed seed only exercises one path through the legal
+    space. By sweeping K seeds we tile that space and the chance
+    that a real nondeterminism bug stays hidden drops sharply with K.
+    """
+    try:
+        import mtg_bot_engine  # noqa: F401  (used by helper)
+    except ImportError as e:
+        print(f"[multi-seed] ERROR: mtg_bot_engine not built ({e})")
+        print("  -> run `maturin develop --release -m rust/Cargo.toml`")
+        return 2
+
+    seed_end = seed_start + num_seeds
+    print(
+        f"[multi-seed] running {num_seeds} seeds ({seed_start}..{seed_end - 1}), "
+        f"{num_decisions} decisions each, "
+        f"board=({num_battlefield},{num_hand},{num_library})"
+    )
+    print()
+    # Header: keep column widths in sync with the data rows below so
+    # the table reads cleanly in a terminal.
+    print("seed |   decisions | fingerprint  | clone-match | errors")
+    print("-----|-------------|--------------|-------------|-------")
+
+    results: list[TrajectorySeedResult] = []
+    for seed in range(seed_start, seed_end):
+        result = _run_single_seed_trajectory(
+            seed=seed,
+            num_decisions=num_decisions,
+            num_battlefield=num_battlefield,
+            num_hand=num_hand,
+            num_library=num_library,
+        )
+        results.append(result)
+        fp_display = result.final_fingerprint if result.final_fingerprint else "-"
+        err_display = result.error if result.error else "-"
+        print(
+            f"{seed:>4} | {result.n_decisions:>11} | {fp_display:<12} | "
+            f"{str(result.clone_match):<11} | {err_display}"
+        )
+
+    # Aggregate stats.
+    all_match = all(r.clone_match for r in results)
+    n_errors = sum(1 for r in results if r.error is not None)
+    fingerprints = [r.final_fingerprint for r in results if r.final_fingerprint]
+    unique_fingerprints = len(set(fingerprints))
+    failing_seeds = [r for r in results if not r.clone_match or r.error is not None]
+
+    uniq_note = ""
+    if fingerprints:
+        if unique_fingerprints == len(fingerprints):
+            uniq_note = "  (every seed produced a unique trajectory)"
+        else:
+            uniq_note = (
+                f"  ({len(fingerprints) - unique_fingerprints} collisions across "
+                f"{len(fingerprints)} runs)"
+            )
+
+    print()
+    print("aggregate:")
+    print(f"  total seeds:       {num_seeds}")
+    print(f"  all clone-match:   {all_match}")
+    print(f"  unique fingerprints: {unique_fingerprints}{uniq_note}")
+    print(f"  total errors:      {n_errors}")
+    print()
+
+    if all_match and n_errors == 0:
+        print(
+            f"PARITY: PASS — all {num_seeds} seeds clone-replay-matched"
+        )
+        return 0
+
+    n_failed = len(failing_seeds)
+    print(f"PARITY: FAIL — {n_failed} of {num_seeds} seeds failed")
+    for r in failing_seeds:
+        if r.error is not None:
+            print(f"  seed {r.seed}: {r.error}")
+        else:
+            # No exception but clone_match is False — a fingerprint
+            # mismatch between original and clone-replay. Cite the
+            # first-divergence step the way single-seed mode does.
+            div_step = next(
+                (
+                    i
+                    for i, (a, b) in enumerate(
+                        zip(r.orig_trajectory, r.clone_trajectory)
+                    )
+                    if a != b
+                ),
+                min(len(r.orig_trajectory), len(r.clone_trajectory)),
+            )
+            print(f"  seed {r.seed}: clone-replay diverged at step {div_step}")
+    return 1
+
+
+# ---------- field-diff mode ----------------------------------------------
+
+
+# Canonical ordering of fields the field-diff mode reports on. Mirrors the
+# fields that ``_hash_rust_state`` folds into its hash recipe, plus the
+# scalar/zone fields the task brief specifically names. Keeping this list
+# in module scope makes it easy to assert "every field in _hash_parts shows
+# up in the diff table" in tests + lets the inject-divergence flag accept
+# the same field names.
+FIELD_DIFF_FIELDS: tuple[str, ...] = (
+    "turn",
+    "step",
+    "phase",
+    "active_player",
+    "priority_player",
+    "is_over",
+    "is_draw",
+    "winner_id",
+    "life_p0",
+    "life_p1",
+    "hand_p0",
+    "hand_p1",
+    "library_p0",
+    "library_p1",
+    "graveyard_p0",
+    "graveyard_p1",
+    "exile_p0",
+    "exile_p1",
+    "mana_pool_p0",
+    "mana_pool_p1",
+    "battlefield",
+    "stack",
+)
+
+
+def _build_field_view(state) -> dict:
+    """Build a field-keyed view of a Rust GameState from its snapshot getters.
+
+    Returns an ordered dict (insertion-order = ``FIELD_DIFF_FIELDS`` order)
+    keyed by field name, with values being the comparable signatures:
+
+      * scalar fields (life, active_player, ...) -> the raw value
+      * zone fields (hand_p0, battlefield, ...) -> tuple of per-object
+        8-tuples produced by ``_rust_zone_obj_sig``
+      * stack -> tuple of per-stack-item 8-tuples produced by
+        ``_rust_stack_obj_sig``
+      * mana_pool_pN -> tuple of sorted ``(symbol, count)`` items
+
+    Both the "python-side recipe walk" and the "Rust-direct snapshot walk"
+    feed off ``_build_field_view`` — by construction both views start
+    field-equal on a vanilla state, which is the field-diff mode's
+    null-hypothesis baseline. The mode's value comes from the
+    inject-divergence flag (smoke-test the smoke) and from a future
+    bridge implementation that walks the Python GameState through a
+    parallel ``_build_python_field_view`` -- left as a TODO for the next
+    slice once Python-side snapshot getters land.
+
+    Step and phase are both surfaced — Rust's ``state.step`` returns the
+    enum string (e.g. ``"UNTAP"``) which corresponds to a sub-step; the
+    ``phase`` field uses the same string today (we don't yet have a
+    separate phase enum on the Rust side) but is plumbed in as its own
+    diff slot so a future "phase != step" expansion doesn't break the
+    table layout.
+    """
+    view: dict = {}
+    view["turn"] = state.turn_number
+    view["step"] = state.step
+    view["phase"] = state.step  # same as step today, see docstring
+    view["active_player"] = state.active_player_idx
+    view["priority_player"] = state.priority_player_idx
+    view["is_over"] = state.is_over()
+    view["is_draw"] = state.is_draw
+    view["winner_id"] = state.winner_id
+    view["life_p0"] = state.get_life(0)
+    view["life_p1"] = state.get_life(1)
+    view["hand_p0"] = tuple(_rust_zone_obj_sig(d) for d in state.hand_snapshot(0))
+    view["hand_p1"] = tuple(_rust_zone_obj_sig(d) for d in state.hand_snapshot(1))
+    view["library_p0"] = tuple(
+        _rust_zone_obj_sig(d) for d in state.library_snapshot(0)
+    )
+    view["library_p1"] = tuple(
+        _rust_zone_obj_sig(d) for d in state.library_snapshot(1)
+    )
+    view["graveyard_p0"] = tuple(
+        _rust_zone_obj_sig(d) for d in state.graveyard_snapshot(0)
+    )
+    view["graveyard_p1"] = tuple(
+        _rust_zone_obj_sig(d) for d in state.graveyard_snapshot(1)
+    )
+    view["exile_p0"] = tuple(_rust_zone_obj_sig(d) for d in state.exile_snapshot(0))
+    view["exile_p1"] = tuple(_rust_zone_obj_sig(d) for d in state.exile_snapshot(1))
+    view["mana_pool_p0"] = tuple(sorted(state.mana_pool_snapshot(0).items()))
+    view["mana_pool_p1"] = tuple(sorted(state.mana_pool_snapshot(1).items()))
+    view["battlefield"] = tuple(
+        _rust_zone_obj_sig(d) for d in state.battlefield_snapshot()
+    )
+    view["stack"] = tuple(_rust_stack_obj_sig(d) for d in state.stack_snapshot())
+    return view
+
+
+# Mapping of inject-divergence field name -> a transform that returns a
+# *different* but type-compatible value. Used by --inject-divergence to
+# smoke-test that the diff machinery actually detects per-field changes.
+# Each transform takes the current value and returns a guaranteed-different
+# replacement.
+def _mutate_field_value(field: str, value):
+    """Return a value guaranteed to differ from ``value`` for ``field``.
+
+    The mutation is type-aware so the post-mutation view still type-checks
+    when compared element-by-element. For scalar int fields we add 1; for
+    booleans we negate; for the step/phase string we tack on a suffix; for
+    zone tuples we replace with the empty tuple (clearly different from
+    any non-empty zone, and also distinct from an already-empty zone when
+    we use a sentinel marker — see below).
+
+    For zones that are already empty in the vanilla state (graveyard,
+    exile, stack), we inject a fake sentinel tuple so the post-mutation
+    value is meaningfully different from the empty baseline.
+    """
+    sentinel_obj = ("__INJECTED__", 1, 0, 0, 0, None, 0, -1)
+    sentinel_stack = (None, 0, 0, 0, 0, None, 0, -1)
+    if field in ("turn",):
+        return (value or 0) + 1
+    if field in ("active_player", "priority_player"):
+        return 1 - (value or 0)  # toggle 0 <-> 1
+    if field in ("life_p0", "life_p1"):
+        return (value if value is not None else 20) - 1
+    if field == "winner_id":
+        return 0 if value is None else None
+    if field in ("is_over", "is_draw"):
+        return not value
+    if field in ("step", "phase"):
+        return f"{value}__INJECTED__"
+    if field in ("mana_pool_p0", "mana_pool_p1"):
+        # Replace with a clearly-different mana set; tuple of sorted items
+        # so the comparison signature stays type-uniform.
+        return tuple(sorted({"W": 99}.items()))
+    if field in (
+        "hand_p0", "hand_p1", "library_p0", "library_p1",
+        "graveyard_p0", "graveyard_p1", "exile_p0", "exile_p1",
+        "battlefield",
+    ):
+        # Append a sentinel so empty zones still get a non-trivially-
+        # different post-injection signature.
+        return tuple(value) + (sentinel_obj,)
+    if field == "stack":
+        return tuple(value) + (sentinel_stack,)
+    raise ValueError(
+        f"_mutate_field_value: unknown field {field!r} "
+        f"(no mutation recipe)"
+    )
+
+
+def run_field_diff_mode(
+    seed: int,
+    num_battlefield: int = 10,
+    num_hand: int = 7,
+    num_library: int = 50,
+    inject_divergence: str | None = None,
+) -> int:
+    """Build a Rust synthetic state and report a per-field diff between
+    two parallel views of it.
+
+    Today both views are walked from the same Rust state via the snapshot
+    getters — one through ``_hash_rust_state``'s recipe (the
+    "python-recipe" view) and one direct (the "rust-direct" view). On a
+    vanilla state they're identical by construction; the value of this
+    mode is twofold:
+
+      1. ``--inject-divergence FIELD`` artificially mutates one field on
+         the rust-direct view after building it, so we can verify the
+         diff actually catches per-field mismatches. Smoke-tests the
+         smoke before the actually-divergent bridge case exists.
+      2. When the future cross-engine bridge lands (Python engine wired
+         in), one side switches to a Python-walked view and any read-
+         side drift surfaces as a localized "life=20/19 — DIVERGE" entry
+         instead of "different digest, good luck".
+
+    Returns 0 if every field matches, 1 if any field differs, 2 on
+    import error.
+
+    The ``seed`` argument is informational today (make_synthetic_state is
+    deterministic), matching the contract on ``run_initial_state_compare``.
+    """
+    try:
+        import mtg_bot_engine
+    except ImportError as e:
+        print(f"[field-diff] ERROR: mtg_bot_engine not built ({e})")
+        print("  -> run `maturin develop --release -m rust/Cargo.toml`")
+        return 2
+
+    # Accept unqualified per-player field names (e.g. "life" instead of
+    # "life_p0") as a convenience — defaults to player 0. Matches the
+    # task brief's CLI surface: `--inject-divergence life` is shorter
+    # and reads more naturally than `--inject-divergence life_p0`.
+    if inject_divergence is not None and inject_divergence not in FIELD_DIFF_FIELDS:
+        # Try suffixing _p0 for the per-player family fields.
+        candidate = f"{inject_divergence}_p0"
+        if candidate in FIELD_DIFF_FIELDS:
+            inject_divergence = candidate
+        else:
+            print(
+                f"[field-diff] ERROR: unknown --inject-divergence field "
+                f"{inject_divergence!r}; must be one of: "
+                f"{', '.join(FIELD_DIFF_FIELDS)}"
+            )
+            return 2
+
+    state = mtg_bot_engine.make_synthetic_state(
+        num_battlefield, num_hand, num_library
+    )
+
+    # Both views come from the same _build_field_view today (see docstring
+    # — the bridge to a Python-walked view is the next slice). For the
+    # inject-divergence path we mutate ONE field on the right-hand side
+    # to prove the diff actually fires.
+    left = _build_field_view(state)
+    right = _build_field_view(state)
+
+    if inject_divergence is not None:
+        right[inject_divergence] = _mutate_field_value(
+            inject_divergence, right[inject_divergence]
+        )
+
+    # Walk every field in canonical order. For each field, emit one row
+    # of the table — OK if equal, DIFFER with the two values if not.
+    print(
+        f"[field-diff] synthetic state "
+        f"[bf={num_battlefield}, hand={num_hand}, lib={num_library}, seed={seed}]"
+        + (
+            f" (--inject-divergence {inject_divergence})"
+            if inject_divergence is not None
+            else ""
+        )
+    )
+    print()
+    # Column widths chosen so a 20-char field name + a "DIFFER" verdict +
+    # short value reprs fit on a typical terminal line; long zone tuples
+    # are truncated in the rendering helper.
+    print("field             | status | left                                  | right")
+    print("------------------|--------|---------------------------------------|--------")
+
+    n_differ = 0
+    for field in FIELD_DIFF_FIELDS:
+        l_val = left.get(field)
+        r_val = right.get(field)
+        if l_val == r_val:
+            print(f"{field:<17} | OK     | {_field_repr(l_val):<37} | (same)")
+        else:
+            n_differ += 1
+            print(
+                f"{field:<17} | DIFFER | "
+                f"{_field_repr(l_val):<37} | {_field_repr(r_val)}"
+            )
+
+    print()
+    if n_differ == 0:
+        print(
+            f"PARITY: PASS — all {len(FIELD_DIFF_FIELDS)} fields match between views"
+        )
+        return 0
+
+    print(
+        f"PARITY: FAIL — {n_differ} of {len(FIELD_DIFF_FIELDS)} fields differ"
+    )
+    return 1
+
+
+def _field_repr(value, max_len: int = 35) -> str:
+    """Render a field value as a short, single-line string.
+
+    Long zone tuples get truncated with ``...`` so the table reads
+    cleanly. Truncation is purely cosmetic for the printed table — the
+    actual equality comparison is done on the unrendered values.
+    """
+    rendered = repr(value)
+    if len(rendered) > max_len:
+        return rendered[: max_len - 3] + "..."
+    return rendered
+
+
 def main() -> int:
     p = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     p.add_argument("--seed", type=int, default=42)
@@ -665,7 +1186,7 @@ def main() -> int:
     )
     p.add_argument(
         "--mode",
-        choices=("game", "initial-state", "trajectory"),
+        choices=("game", "initial-state", "trajectory", "multi-seed", "field-diff"),
         default="game",
         help=(
             "Which parity check to run. 'game' (default) plays a full game on "
@@ -673,14 +1194,45 @@ def main() -> int:
             "Rust synthetic state and asserts its native fingerprint() matches "
             "a Python reimplementation of the hash recipe. 'trajectory' walks "
             "a Rust state through N decisions and asserts clone-replay "
-            "determinism (Rust-only — cross-engine compare deferred)."
+            "determinism (Rust-only — cross-engine compare deferred). "
+            "'multi-seed' runs 'trajectory' across K seeds and prints an "
+            "aggregate summary. 'field-diff' builds a synthetic state, walks "
+            "two parallel views of it, and prints a per-field OK/DIFFER table "
+            "— the parity-debug primitive used to answer 'WHICH field "
+            "diverged' once a trajectory smoke says digests don't match."
+        ),
+    )
+    p.add_argument(
+        "--inject-divergence",
+        type=str,
+        default=None,
+        help=(
+            "(field-diff) artificially mutate one field on the right-hand "
+            "view post-snapshot so the diff machinery has something to "
+            "detect. Smoke-test the smoke. Valid field names: "
+            + ", ".join(FIELD_DIFF_FIELDS) + "."
         ),
     )
     p.add_argument(
         "--num-decisions",
         type=int,
         default=20,
-        help="(trajectory) number of decisions to apply during the walk.",
+        help="(trajectory / multi-seed) number of decisions to apply per walk.",
+    )
+    p.add_argument(
+        "--num-seeds",
+        type=int,
+        default=10,
+        help="(multi-seed) number of seeds to run the trajectory walk on.",
+    )
+    p.add_argument(
+        "--seed-start",
+        type=int,
+        default=0,
+        help=(
+            "(multi-seed) starting seed; sweep iterates "
+            "[seed_start, seed_start + num_seeds)."
+        ),
     )
     p.add_argument(
         "--num-battlefield",
@@ -718,6 +1270,25 @@ def main() -> int:
     if args.mode == "trajectory":
         return run_trajectory_mode(
             seed=args.seed,
+            num_decisions=args.num_decisions,
+            num_battlefield=args.num_battlefield,
+            num_hand=args.num_hand,
+            num_library=args.num_library,
+        )
+
+    if args.mode == "field-diff":
+        return run_field_diff_mode(
+            seed=args.seed,
+            num_battlefield=args.num_battlefield,
+            num_hand=args.num_hand,
+            num_library=args.num_library,
+            inject_divergence=args.inject_divergence,
+        )
+
+    if args.mode == "multi-seed":
+        return run_multi_seed_mode(
+            num_seeds=args.num_seeds,
+            seed_start=args.seed_start,
             num_decisions=args.num_decisions,
             num_battlefield=args.num_battlefield,
             num_hand=args.num_hand,

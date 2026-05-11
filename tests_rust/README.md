@@ -167,6 +167,14 @@ the test lands in a commit.
 | rust(legal-decisions-declare-blockers): emit DeclareBlockers during defender's combat | tests_rust/test_legal.py extend | green  | feature/rust-legal-decisions-declare-blockers |
 | rust(effect-destroy-all-creatures): Wrath of God (CR 701.7 AOE) | tests_rust/test_resolve.py extend | green  | feature/rust-effect-destroy-all-creatures |
 | rust(effect-destroy-target-non-land-permanent): non-land destroy (CR 701.7) | tests_rust/test_resolve.py extend | green  | feature/rust-effect-destroy-target-non-land-permanent |
+| rust(activate-ability-mana-primitive): flip ActivateAbility stub to real (mana abilities) | tests_rust/test_actions.py extend | green  | feature/rust-activate-ability-mana-primitive |
+| rust(effect-deal-damage-any-target): Lightning Bolt-style any-target damage (CR 701.4) | tests_rust/test_resolve.py extend | green  | feature/rust-effect-deal-damage-any-target |
+| rust(effect-lose-life): controller loses life (CR 118.4) | tests_rust/test_resolve.py extend | green  | feature/rust-effect-lose-life |
+| rust(effect-target-opponent-loses-life): targeted opponent life-loss (CR 118.4) | tests_rust/test_resolve.py extend | green  | feature/rust-effect-target-opponent-loses-life |
+| rust(effect-mill-target-player): targeted mill (CR 701.13b) | tests_rust/test_resolve.py extend | green  | feature/rust-effect-mill-target-player |
+| rust(effect-each-opponent-discards): each-opponent discard (CR 701.8) | tests_rust/test_resolve.py extend | green  | feature/rust-effect-each-opponent-discards |
+| rust(effect-destroy-target-artifact): artifact-filter destroy (CR 701.7) | tests_rust/test_resolve.py extend | green  | feature/rust-effect-destroy-target-artifact |
+| rust(effect-destroy-target-land): land-filter destroy (CR 701.7) | tests_rust/test_resolve.py extend | green  | feature/rust-effect-destroy-target-land |
 
 ## Build invocation reminder
 

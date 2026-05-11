@@ -706,54 +706,321 @@ def test_apply_action_unknown_kind_message_mentions_declare_blockers(synthetic_s
 
 # --- ActivateAbility -------------------------------------------------
 #
-# Round-23 slice (Phase 3, batch 4): extend the Action enum +
+# Round-23 slice (Phase 3, batch 4): extended the Action enum +
 # apply_action dispatcher with ``Action::ActivateAbility { source_id,
-# ability_index }``. The Python dataclass
-# ``ActivateAbility(source_id: int, ability_index: int)`` carries two
-# ints — the GameObject id of the permanent whose ability fires and
-# the 0-based index into the source's printing.activated_abilities
-# list (CR 602.2 — printings can have multiple activated abilities).
+# ability_index }``. Round-24 (`feature/rust-legal-decisions-activate-
+# ability`) wired the legal_decisions emission for the same shape
+# (untapped permanents whose printing's mana_produced.is_some(), with
+# ability_index=0). **Round-25 (this slice) flips the dispatch from
+# a "not implemented yet" stub to a real call** for the same
+# mana-ability scope.
+#
+# The Python dataclass ``ActivateAbility(source_id: int,
+# ability_index: int)`` carries two ints — the GameObject id of the
+# permanent whose ability fires and the 0-based index into the
+# source's printing.activated_abilities list (CR 602.2 — printings
+# can have multiple activated abilities).
 #
 # Round-20 frequency: 8 of 420 decisions (~1.9%) — 5th-most-frequent
 # variant after ``PassPriority``, ``DeclareAttackers``, ``PlayLand``,
 # and ``DeclareBlockers``.
 #
-# **Dispatch is stubbed.** A grep across ``rust/src/`` confirms no
-# Rust ``activate_ability`` primitive exists yet (rounds 1-22 didn't
-# build one). The variant + bridge round-trip ship now, so callers
-# building Action dicts can already use the ``activate_ability`` shape
-# and hit a clear "not implemented yet" error path rather than the
-# generic ``unknown action kind`` rejection. A future slice adds the
-# primitive (mana-cost pay + ability resolution, analogous to
-# ``play_land`` / ``cast_creature``) then flips the dispatch arm to a
-# real ``call_method1("activate_ability", ...)`` call. Until then,
-# happy-path dispatch raises ``ValueError`` with the documented
-# message — these tests assert on the stubbed error path, NOT on a
-# successful activation outcome.
+# **Dispatch scope: mana abilities only.** The arm now:
+#   1. Validates ``ability_index == 0`` (anything else raises — non-
+#      mana activated abilities need richer primitives, future slice).
+#   2. Locates the source on either player's battlefield (raises if
+#      not found).
+#   3. Validates the printing has ``mana_produced`` (raises if not —
+#      this slice doesn't support non-mana activated abilities).
+#   4. Validates the source is untapped (raises if tapped — a tapped
+#      permanent can't pay the implicit {T} tap cost).
+#   5. Taps the source via the per-zone CoW Arc::make_mut path and
+#      credits the controller's mana pool one pip per element of
+#      ``mana_produced`` (W/U/B/R/G/C — saturating u8 add).
+#
+# Mirrors the legal_decisions emission gate exactly — the harness
+# can now emit-and-apply ActivateAbility round-trips without raising.
 
 
-def test_apply_action_activate_ability_stub_raises_value_error(synthetic_state):
-    """Happy-path stub: a well-formed ActivateAbility dict parses
-    cleanly but the dispatch arm raises ``ValueError`` because no
-    Rust primitive exists yet. The error message names the variant
-    + flags it as future work so a follow-up slice grepping for the
-    string finds the dispatch site to flip."""
-    with pytest.raises(ValueError, match=r"ActivateAbility dispatch not implemented yet"):
+def test_apply_action_activate_ability_mana_taps_source_and_credits_pool(
+    synthetic_state,
+):
+    """Happy path: a well-formed ActivateAbility dict on an untapped
+    Forest on the priority player's battlefield taps the Forest and
+    adds one G pip to the controller's mana pool.
+
+    Pins the post-stub success contract — the round-23 "not
+    implemented yet" path is gone."""
+    forest_id = P0_FIRST_BATTLEFIELD_ID
+    assert synthetic_state.printing_name_of(forest_id) == "Forest"
+    assert synthetic_state.is_tapped(forest_id) is False
+    assert synthetic_state.get_mana_pool(0)["G"] == 0
+
+    synthetic_state.apply_action(
+        {"kind": "activate_ability", "source_id": forest_id, "ability_index": 0}
+    )
+
+    assert synthetic_state.is_tapped(forest_id) is True
+    assert synthetic_state.get_mana_pool(0)["G"] == 1
+
+
+def test_apply_action_activate_ability_returns_none(synthetic_state):
+    """``apply_action`` is a side-effecting mutator — the
+    ActivateAbility arm returns ``None`` per the dispatcher's overall
+    convention (locked in by the PassPriority test at the top of the
+    file)."""
+    forest_id = P0_FIRST_BATTLEFIELD_ID
+    result = synthetic_state.apply_action(
+        {"kind": "activate_ability", "source_id": forest_id, "ability_index": 0}
+    )
+    assert result is None
+
+
+def test_apply_action_activate_ability_on_tapped_source_raises(synthetic_state):
+    """A source that's already tapped can't have its tap-for-mana
+    ability activated (CR 602.2 — paying the implicit {T} cost
+    requires an untapped permanent). Raises ValueError with the
+    "already tapped" substring; no state mutation."""
+    forest_id = P0_FIRST_BATTLEFIELD_ID
+    # Pre-tap the Forest.
+    assert synthetic_state.tap_object(forest_id) is True
+    assert synthetic_state.is_tapped(forest_id) is True
+    pool_before = synthetic_state.get_mana_pool(0)["G"]
+
+    with pytest.raises(ValueError, match=r"already tapped"):
         synthetic_state.apply_action(
-            {"kind": "activate_ability", "source_id": 5, "ability_index": 0}
+            {
+                "kind": "activate_ability",
+                "source_id": forest_id,
+                "ability_index": 0,
+            }
+        )
+
+    # Pool unchanged — the raise short-circuits before the credit.
+    assert synthetic_state.get_mana_pool(0)["G"] == pool_before
+
+
+def test_apply_action_activate_ability_on_non_mana_source_raises(synthetic_state):
+    """A source whose printing has no ``mana_produced`` (e.g. Grizzly
+    Bears) can't be tap-for-mana'd. Raises ValueError with the "no
+    mana_produced" substring; no state mutation. Locks in the
+    first-slice scope — non-mana activated abilities surface loudly
+    rather than silently no-op'ing."""
+    bears_id = P0_FIRST_BEARS_ID
+    assert synthetic_state.printing_name_of(bears_id) == "Grizzly Bears"
+    assert synthetic_state.is_tapped(bears_id) is False
+
+    with pytest.raises(ValueError, match=r"no mana_produced"):
+        synthetic_state.apply_action(
+            {
+                "kind": "activate_ability",
+                "source_id": bears_id,
+                "ability_index": 0,
+            }
+        )
+
+    # Bears stayed untapped — the raise short-circuits before any
+    # tap mutation.
+    assert synthetic_state.is_tapped(bears_id) is False
+
+
+def test_apply_action_activate_ability_on_source_not_on_battlefield_raises(
+    synthetic_state,
+):
+    """A source id that isn't on either player's battlefield raises
+    ValueError with the "not on any battlefield" substring. A hand
+    object (e.g. one of the Llanowar Elves at id 10..16) is a clean
+    no-match — it lives in the hand zone, not the battlefield zone.
+    No state mutation."""
+    hand_id = P0_FIRST_HAND_ID  # in hand, not on battlefield
+    assert synthetic_state.find_object_zone(hand_id) == ZONE_HAND
+
+    with pytest.raises(ValueError, match=r"not on any battlefield"):
+        synthetic_state.apply_action(
+            {
+                "kind": "activate_ability",
+                "source_id": hand_id,
+                "ability_index": 0,
+            }
         )
 
 
-def test_apply_action_activate_ability_stub_error_mentions_round_24(synthetic_state):
-    """The stub message points at round 24+ as the follow-up window.
-    Pin the substring so the message stays informative — a future
-    slice that flips the dispatch to a real call must also delete
-    this test (it documents the stub-state, not the eventual real
-    behavior)."""
-    with pytest.raises(ValueError, match=r"round 24"):
+def test_apply_action_activate_ability_with_unknown_source_id_raises(
+    synthetic_state,
+):
+    """A completely unknown source id (never assigned to any object)
+    also takes the "not on any battlefield" path — the search is by
+    id presence, not by object existence elsewhere. Pins that the
+    error message is shape-invariant."""
+    with pytest.raises(ValueError, match=r"not on any battlefield"):
         synthetic_state.apply_action(
-            {"kind": "activate_ability", "source_id": 5, "ability_index": 2}
+            {
+                "kind": "activate_ability",
+                "source_id": 9999,  # no object has this id
+                "ability_index": 0,
+            }
         )
+
+
+def test_apply_action_activate_ability_ability_index_one_raises(synthetic_state):
+    """First-slice scope: only ``ability_index = 0`` is dispatched.
+    Non-zero indices raise ValueError flagging that non-mana
+    activated abilities are a future slice — the harness picks the
+    raise up loudly rather than silently no-op'ing on an out-of-scope
+    Action."""
+    forest_id = P0_FIRST_BATTLEFIELD_ID
+    with pytest.raises(ValueError, match=r"only ability_index=0"):
+        synthetic_state.apply_action(
+            {
+                "kind": "activate_ability",
+                "source_id": forest_id,
+                "ability_index": 1,
+            }
+        )
+    # Forest stayed untapped.
+    assert synthetic_state.is_tapped(forest_id) is False
+
+
+def test_apply_action_activate_ability_ability_index_two_raises_too(synthetic_state):
+    """Locks in the ``ability_index != 0`` raise is shape-invariant
+    over the specific non-zero value (i.e. not just a `== 1`
+    guard)."""
+    forest_id = P0_FIRST_BATTLEFIELD_ID
+    with pytest.raises(ValueError, match=r"only ability_index=0"):
+        synthetic_state.apply_action(
+            {
+                "kind": "activate_ability",
+                "source_id": forest_id,
+                "ability_index": 2,
+            }
+        )
+
+
+def test_apply_action_activate_ability_opponent_source_is_allowed_by_dispatcher(
+    synthetic_state,
+):
+    """The dispatcher is permissive about which side controls the
+    source — it credits the **controller's** pool regardless of who
+    has priority. ``legal_decisions`` only emits ActivateAbility for
+    the priority player's permanents, so production callers won't
+    hit this path; but a direct caller building the dict by hand
+    gets the same successful behavior, with the mana landing in the
+    controller's pool, not the priority player's. Locks in that the
+    dispatcher reads the controller from the battlefield index
+    rather than assuming `priority_player`."""
+    # Find p1's first Forest via the unified battlefield_snapshot
+    # (returns both players' battlefields; filter by controller_id).
+    all_bf = synthetic_state.battlefield_snapshot()
+    p1_forest = next(
+        obj
+        for obj in all_bf
+        if obj["controller_id"] == 1
+        and synthetic_state.printing_name_of(obj["id"]) == "Forest"
+    )
+    p1_forest_id = p1_forest["id"]
+    assert synthetic_state.is_tapped(p1_forest_id) is False
+    assert synthetic_state.get_mana_pool(0)["G"] == 0
+    assert synthetic_state.get_mana_pool(1)["G"] == 0
+    # Priority player is still 0; deliberately ActivateAbility a
+    # p1-controlled Forest.
+    assert synthetic_state.get_priority_player() == 0
+
+    synthetic_state.apply_action(
+        {
+            "kind": "activate_ability",
+            "source_id": p1_forest_id,
+            "ability_index": 0,
+        }
+    )
+
+    # Forest tapped; mana credited to p1 (the controller), NOT p0.
+    assert synthetic_state.is_tapped(p1_forest_id) is True
+    assert synthetic_state.get_mana_pool(1)["G"] == 1
+    assert synthetic_state.get_mana_pool(0)["G"] == 0
+
+
+def test_apply_action_activate_ability_two_forests_sequentially_pools_two_green(
+    synthetic_state,
+):
+    """Mana-pool persistence across consecutive ActivateAbility
+    applies: tap two Forests in sequence, the controller's green
+    pool ends at 2. Pins that the dispatch arm credits **into** the
+    existing pool (saturating add) rather than overwriting."""
+    forest_a = P0_FIRST_BATTLEFIELD_ID
+    forest_b = P0_FIRST_BATTLEFIELD_ID + 1
+    assert synthetic_state.printing_name_of(forest_a) == "Forest"
+    assert synthetic_state.printing_name_of(forest_b) == "Forest"
+    assert synthetic_state.get_mana_pool(0)["G"] == 0
+
+    synthetic_state.apply_action(
+        {"kind": "activate_ability", "source_id": forest_a, "ability_index": 0}
+    )
+    synthetic_state.apply_action(
+        {"kind": "activate_ability", "source_id": forest_b, "ability_index": 0}
+    )
+
+    assert synthetic_state.is_tapped(forest_a) is True
+    assert synthetic_state.is_tapped(forest_b) is True
+    assert synthetic_state.get_mana_pool(0)["G"] == 2
+
+
+def test_apply_action_activate_ability_clone_isolation(synthetic_state):
+    """CoW canary via the ActivateAbility bridge: applying an
+    ActivateAbility to a clone mutates **only the clone's**
+    battlefield (the source becomes tapped + the pool gains a G) —
+    the original's per-zone Arc<Vec<GameObject>> stays untouched.
+    Locks in that the dispatcher's Arc::make_mut path on the
+    battlefield zone honors the per-zone CoW invariant
+    (state.players[N].battlefield is Arc<Vec<GameObject>>; mutating
+    via Arc::make_mut clones the inner Vec when any other clone is
+    observing it)."""
+    forest_id = P0_FIRST_BATTLEFIELD_ID
+    cloned = synthetic_state.clone_once()
+    assert synthetic_state.is_tapped(forest_id) is False
+    assert cloned.is_tapped(forest_id) is False
+
+    cloned.apply_action(
+        {"kind": "activate_ability", "source_id": forest_id, "ability_index": 0}
+    )
+
+    # Clone mutated.
+    assert cloned.is_tapped(forest_id) is True
+    assert cloned.get_mana_pool(0)["G"] == 1
+    # Original untouched — the per-zone Arc make_mut cloned, not shared.
+    assert synthetic_state.is_tapped(forest_id) is False
+    assert synthetic_state.get_mana_pool(0)["G"] == 0
+
+
+def test_apply_action_activate_ability_bridge_roundtrip_via_legal_decisions(
+    synthetic_state,
+):
+    """End-to-end harness round-trip: emit an ActivateAbility dict
+    via ``legal_decisions``, pass it directly to ``apply_action``,
+    verify state mutates. Pins that the dict shape
+    legal_decisions emits (round 24) is exactly what apply_action
+    consumes (round 25) — no key drift between emit and apply.
+
+    legal_decisions only emits ActivateAbility under the sorcery-
+    timing gate (main phase + empty stack — see test_legal.py's
+    "off_sorcery_timing" / "nonempty_stack" suppression tests).
+    The synthetic state's default phase is UNTAP, so we set
+    PHASE_MAIN1=3 first; the priority player is already 0 with 5
+    Forests on their battlefield."""
+    PHASE_MAIN1 = 3
+    synthetic_state.set_phase(PHASE_MAIN1)
+    actions = synthetic_state.legal_decisions(0)
+    # Find the first ActivateAbility action emitted.
+    aa = next(a for a in actions if a.get("kind") == "activate_ability")
+    source_id = aa["source_id"]
+    assert aa["ability_index"] == 0
+    assert synthetic_state.is_tapped(source_id) is False
+    assert synthetic_state.get_mana_pool(0)["G"] == 0
+
+    # Round-trip: apply the dict legal_decisions just emitted.
+    synthetic_state.apply_action(aa)
+
+    assert synthetic_state.is_tapped(source_id) is True
+    assert synthetic_state.get_mana_pool(0)["G"] == 1
 
 
 def test_apply_action_activate_ability_missing_source_id_raises_key_error(
@@ -762,8 +1029,8 @@ def test_apply_action_activate_ability_missing_source_id_raises_key_error(
     """Missing the ``source_id`` key raises ``KeyError`` —
     ``parse_action`` rejects before dispatch (single point of
     validation, mirrors the ``card_id``-missing shape on
-    ``play_land``). The KeyError fires BEFORE the dispatch-stub
-    ValueError, so this test pins the parse-time gate."""
+    ``play_land``). The KeyError fires BEFORE any dispatch path, so
+    this test pins the parse-time gate."""
     with pytest.raises(KeyError, match="source_id"):
         synthetic_state.apply_action(
             {"kind": "activate_ability", "ability_index": 0}
@@ -789,7 +1056,7 @@ def test_apply_action_activate_ability_wrong_type_for_source_id_raises(
 ):
     """``source_id`` must be a u32-extractable integer. A string fails
     PyO3's ``extract::<u32>`` machinery → ``TypeError`` / ``ValueError``.
-    The dispatch-stub never runs; the parse-time gate fires first."""
+    Dispatch never runs; the parse-time gate fires first."""
     with pytest.raises((TypeError, ValueError)):
         synthetic_state.apply_action(
             {
@@ -1473,3 +1740,397 @@ def test_apply_action_unknown_kind_message_mentions_activate_station(
     subclasses now have Rust variants.**"""
     with pytest.raises(ValueError, match=r"activate_station"):
         synthetic_state.apply_action({"kind": "frobnicate"})
+
+
+# --- Cross-variant edge cases ---------------------------------------
+#
+# Rolling-integration slice (post-round-25 dispatch flip): broader
+# edge-case coverage spanning all 8 Action variants. Motivation:
+# round-25 (commit b155a91) flipped the ActivateAbility dispatch from
+# a "not implemented yet" stub to a real mana-ability dispatch, so the
+# cross-variant interactions (PlayLand-then-ActivateAbility on the
+# just-played land, repeated DeclareAttackers semantics, the full
+# legal_decisions round-trip surface) need a second look. The
+# per-variant happy-path / missing-key / wrong-type tests above are
+# in place; these add the cross-variant + sequencing + stubbed-
+# dispatch-error breadth.
+
+PHASE_MAIN1 = 3
+ZONE_LIBRARY = 1
+
+
+# Category 1: cross-action sequencing -------------------------------
+
+
+def test_apply_action_play_land_then_activate_ability_on_same_land(
+    synthetic_state,
+):
+    """Two-step composite sanity: PlayLand a Forest, then
+    ActivateAbility on the just-played Forest. The Forest enters the
+    battlefield untapped (per the round-4 play_land primitive); the
+    immediate ActivateAbility taps it and credits one G to the
+    priority player's pool. Locks in that the two arms compose
+    cleanly — a future slice changing land-ETB or the mana-pool credit
+    direction would break this end-to-end."""
+    forest_id = _move_forest_into_hand(synthetic_state, 0)
+    pool_before = synthetic_state.get_mana_pool(0)["G"]
+
+    synthetic_state.apply_action({"kind": "play_land", "card_id": forest_id})
+    # Forest is on the battlefield, untapped.
+    assert synthetic_state.find_object_zone(forest_id) == ZONE_BATTLEFIELD
+    assert synthetic_state.is_tapped(forest_id) is False
+
+    synthetic_state.apply_action(
+        {"kind": "activate_ability", "source_id": forest_id, "ability_index": 0}
+    )
+    # Forest now tapped + one G in pool.
+    assert synthetic_state.is_tapped(forest_id) is True
+    assert synthetic_state.get_mana_pool(0)["G"] == pool_before + 1
+
+
+def test_apply_action_activate_ability_same_forest_twice_second_raises_already_tapped(
+    synthetic_state,
+):
+    """ActivateAbility on the SAME untapped Forest twice: the first
+    call taps + credits a G; the second hits the "already tapped"
+    guard in the dispatch and raises ValueError. Pins the second-call
+    failure mode — locks in that the dispatcher checks the
+    `tapped` flag on every call (no caching, no per-turn untap-on-
+    activate shortcut)."""
+    forest_id = P0_FIRST_BATTLEFIELD_ID
+    synthetic_state.apply_action(
+        {"kind": "activate_ability", "source_id": forest_id, "ability_index": 0}
+    )
+    assert synthetic_state.is_tapped(forest_id) is True
+
+    with pytest.raises(ValueError, match=r"already tapped"):
+        synthetic_state.apply_action(
+            {
+                "kind": "activate_ability",
+                "source_id": forest_id,
+                "ability_index": 0,
+            }
+        )
+
+
+def test_apply_action_declare_attackers_twice_accumulates_not_overwrites(
+    synthetic_state,
+):
+    """Sequencing semantics surprise: ``declare_attacker`` PUSHES onto
+    ``state.attackers`` (see ``state_ops_combat.rs:501``); the apply_action
+    DeclareAttackers arm iterates the dispatch list and calls the
+    primitive per id, never clearing first. Therefore two consecutive
+    DeclareAttackers([a]) + DeclareAttackers([b]) calls ACCUMULATE
+    into [a, b] rather than the second OVERWRITING the first.
+
+    Pins this so a future slice that switches the semantics (e.g.
+    Python's `_declare_attackers` reassigns `state.attackers = list(
+    eligible_set)` — an overwrite) trips loudly. Production callers
+    that want overwrite semantics must reset_combat() between
+    dispatches; the dispatcher doesn't impose that for them."""
+    a0 = P0_FIRST_BEAR_ID
+    a1 = P0_FIRST_BEAR_ID + 1
+
+    synthetic_state.apply_action(
+        {"kind": "declare_attackers", "attacker_ids": [a0]}
+    )
+    assert synthetic_state.get_attackers() == [a0]
+
+    synthetic_state.apply_action(
+        {"kind": "declare_attackers", "attacker_ids": [a1]}
+    )
+    # Accumulates — NOT overwrites. Both bears now on the attacker list.
+    assert synthetic_state.get_attackers() == [a0, a1]
+
+
+def test_apply_action_declare_attackers_then_empty_does_not_clear(
+    synthetic_state,
+):
+    """Companion to the accumulate test: passing an empty
+    ``attacker_ids`` set on the second call does NOT clear the prior
+    declaration. The dispatcher iterates the empty list to zero
+    primitive calls — a true no-op rather than a reset. Locks in that
+    callers wanting to ``clear`` the attackers list must invoke a
+    distinct reset primitive (reset_combat, end_combat_step, ...)
+    rather than relying on an empty-set DeclareAttackers dispatch."""
+    bear_id = P0_FIRST_BEAR_ID
+    synthetic_state.apply_action(
+        {"kind": "declare_attackers", "attacker_ids": [bear_id]}
+    )
+    assert synthetic_state.get_attackers() == [bear_id]
+
+    synthetic_state.apply_action(
+        {"kind": "declare_attackers", "attacker_ids": []}
+    )
+    # Untouched — the empty list is a no-op, not a reset.
+    assert synthetic_state.get_attackers() == [bear_id]
+
+
+# Category 2: unknown-kind error message completeness ---------------
+
+
+def test_apply_action_unknown_kind_message_lists_all_eight_variants(
+    synthetic_state,
+):
+    """The unknown-kind ValueError message lists EVERY currently
+    supported kind so a caller building dicts by hand can spot a
+    typo immediately. Single regression test that exercises the
+    completeness of the listed-kinds substring — per-variant tests
+    above each pin their own substring, but only this one fails if
+    the message drops one in a careless refactor (e.g. an
+    alphabetize-the-list edit that mistakenly drops a comma-
+    separated entry)."""
+    expected = [
+        "pass_priority",
+        "play_land",
+        "declare_attackers",
+        "declare_blockers",
+        "activate_ability",
+        "cast_spell",
+        "turn_face_up",
+        "unlock_room_half",
+        "activate_station",
+    ]
+    try:
+        synthetic_state.apply_action({"kind": "frobnicate"})
+    except ValueError as exc:
+        msg = str(exc)
+    else:
+        pytest.fail("expected ValueError for unknown kind")
+    for kind in expected:
+        assert kind in msg, f"unknown-kind message missing {kind!r}: {msg!r}"
+
+
+# Category 3: bridge round-trip via legal_decisions ------------------
+
+
+def test_apply_action_every_legal_decision_round_trips_without_raising(
+    synthetic_state,
+):
+    """Round-25 broadens what ``legal_decisions`` emits to include
+    real-dispatch ActivateAbility (mana abilities). Every dict that
+    falls out of ``legal_decisions(0)`` on the default synthetic state
+    in MAIN1 must apply cleanly via ``apply_action`` against a fresh
+    clone of the state. Pins the emit/apply contract end-to-end
+    across all the currently-emitted kinds (PassPriority, PlayLand
+    [pending hand contents], CastSpell, ActivateAbility) — a
+    future slice that adds an emission variant without also wiring
+    the apply arm trips this test.
+
+    Sets up the state with both a Forest (PlayLand) and an existing
+    Llanowar Elf in hand (CastSpell). Uses clones for each apply so
+    one action's mutation doesn't break a later action's
+    preconditions."""
+    forest_id = _move_forest_into_hand(synthetic_state, 0)
+    # Llanowar Elves are already in P0's hand at ids 10..16 — pin
+    # presence rather than re-import.
+    assert synthetic_state.printing_name_of(P0_FIRST_HAND_ID) == "Llanowar Elves"
+    synthetic_state.add_mana(0, "G", 1)  # cover CastSpell mana cost
+    synthetic_state.set_phase(PHASE_MAIN1)
+
+    actions = synthetic_state.legal_decisions(0)
+    # Sanity: round-25 emits all four production kinds in this state.
+    kinds = {a["kind"] for a in actions}
+    assert {"pass_priority", "play_land", "cast_spell", "activate_ability"}.issubset(
+        kinds
+    ), f"missing emission kind(s) in {kinds!r}"
+
+    # Apply each action against its own clone — no cross-action
+    # interference (e.g. CastSpell pays the G, then ActivateAbility
+    # would have nothing to apply if we shared the state).
+    for action in actions:
+        clone = synthetic_state.clone_once()
+        # MUST NOT raise.
+        clone.apply_action(action)
+    # Original state is unchanged after the loop (all mutations
+    # happened on clones).
+    assert synthetic_state.find_object_zone(forest_id) == ZONE_HAND
+
+
+# Category 5: CastSpell flag pass-through ---------------------------
+
+
+def test_apply_action_cast_spell_with_warp_and_kicked_true_still_dispatches(
+    synthetic_state,
+):
+    """``use_warp=True`` + ``kicked=True`` together: still routes to
+    the base ``cast_creature`` primitive (round-25 flags-ignored
+    contract). The Elf lands on the battlefield and only the base
+    {G} mana cost is paid — neither alt-cost machinery fires. Locks
+    in the combinatorial flag-ignored property across multiple
+    True flags."""
+    elf_id = P0_FIRST_HAND_ID
+    synthetic_state.add_mana(0, "G", 1)
+
+    synthetic_state.apply_action(
+        {
+            "kind": "cast_spell",
+            "card_id": elf_id,
+            "use_warp": True,
+            "kicked": True,
+        }
+    )
+
+    assert synthetic_state.find_object_zone(elf_id) == ZONE_BATTLEFIELD
+    # Only the base G was spent — neither warp's alt-cost nor kicker's
+    # extra pip was debited (would have failed for insufficient mana
+    # if the kicker pip had been wired).
+    assert synthetic_state.get_mana_pool(0)["G"] == 0
+
+
+def test_apply_action_cast_spell_cast_room_half_left_routes_to_cast_creature(
+    synthetic_state,
+):
+    """``cast_room_half="left"`` still routes to ``cast_creature`` —
+    no special Room-half dispatch yet. The Llanowar Elf isn't a Room,
+    but the dispatcher doesn't check for that; the flag is data-only
+    and the base creature cast path runs unchanged. Pins that the
+    Option<String> path with a non-None value is observationally
+    identical to a None value (parity with the existing
+    cast_room_half_string_preserved test, but specifically with
+    "left" rather than an arbitrary value, since "left" is the
+    canonical wire value the Room mechanic uses)."""
+    elf_id = P0_FIRST_HAND_ID
+    synthetic_state.add_mana(0, "G", 1)
+
+    synthetic_state.apply_action(
+        {
+            "kind": "cast_spell",
+            "card_id": elf_id,
+            "cast_room_half": "left",
+        }
+    )
+
+    assert synthetic_state.find_object_zone(elf_id) == ZONE_BATTLEFIELD
+
+
+# Category 6: ActivateAbility ability_index gate --------------------
+
+
+def test_apply_action_activate_ability_ability_index_large_value_raises(
+    synthetic_state,
+):
+    """Large non-zero ``ability_index`` (999) — same dispatch raise
+    as index=1 / index=2 (the per-variant tests above), pinning that
+    the gate is `!= 0` rather than a small-int allowlist. A future
+    slice that adds support for `ability_index in {1, 2}` (e.g.
+    Spacecraft launch costs) would need to grow this gate; this
+    test stays as a "did we forget to extend the gate?" canary."""
+    forest_id = P0_FIRST_BATTLEFIELD_ID
+    with pytest.raises(ValueError, match=r"only ability_index=0"):
+        synthetic_state.apply_action(
+            {
+                "kind": "activate_ability",
+                "source_id": forest_id,
+                "ability_index": 999,
+            }
+        )
+
+
+def test_apply_action_activate_ability_negative_ability_index_raises_at_parse(
+    synthetic_state,
+):
+    """A negative ``ability_index`` (-1) fails PyO3's
+    ``extract::<u32>`` machinery at PARSE time — before the dispatch
+    gate ever runs. The error is OverflowError / ValueError / TypeError
+    depending on PyO3's mood (the conversion path differs between
+    PyLong subtypes); we accept the union. Locks in that the u32 type
+    boundary at parse is the first defense — the negative value
+    never reaches the dispatch arm's `!= 0` gate."""
+    forest_id = P0_FIRST_BATTLEFIELD_ID
+    with pytest.raises((TypeError, ValueError, OverflowError)):
+        synthetic_state.apply_action(
+            {
+                "kind": "activate_ability",
+                "source_id": forest_id,
+                "ability_index": -1,
+            }
+        )
+
+
+# Category 7: bad inputs --------------------------------------------
+
+
+def test_apply_action_empty_kind_string_is_unknown_kind(synthetic_state):
+    """``apply_action({"kind": ""})`` falls through the
+    ``parse_action`` match arms to the `other => Err(...)` arm — the
+    empty string isn't a registered variant. Raises ValueError with
+    the unknown-kind message. Locks in that the empty-string edge
+    case takes the unknown-kind path, NOT a special-cased "missing
+    kind" error (which would shadow the legitimate ``kind=""`` typo
+    case behind a KeyError-looking message)."""
+    with pytest.raises(ValueError, match=r"unknown action kind"):
+        synthetic_state.apply_action({"kind": ""})
+
+
+# Category 8: CoW canary on dispatched actions ----------------------
+
+
+def test_apply_action_play_land_on_clone_leaves_original_unchanged(
+    synthetic_state,
+):
+    """Cross-snapshot CoW canary for a real-dispatch action (not the
+    PassPriority u8-toggle covered above): apply PlayLand on a clone
+    and assert the ORIGINAL state's hand / battlefield / library
+    snapshots are byte-for-byte identical pre- and post-clone-mutation.
+    Locks in the per-zone Arc<Vec<GameObject>> CoW invariant survives
+    a multi-zone mutation (PlayLand moves a card from hand to
+    battlefield — two zones change).
+
+    Round-25 motivation: dispatch flips that compose multiple
+    primitives (PlayLand alone is one primitive but mutates two
+    zones — the ActivateAbility flip in round-25 likewise mutates the
+    battlefield Arc + the mana pool) need broader CoW coverage than
+    the priority-player u8 test at the top of the file."""
+    forest_id = _move_forest_into_hand(synthetic_state, 0)
+    p0_hand_before = synthetic_state.hand_snapshot(0)
+    p0_bf_before = synthetic_state.battlefield_snapshot()
+    p0_lib_before = synthetic_state.library_snapshot(0)
+    p0_hand_size_before = synthetic_state.hand_sizes[0]
+    p0_bf_size_before = synthetic_state.battlefield_sizes[0]
+
+    cloned = synthetic_state.clone_once()
+    cloned.apply_action({"kind": "play_land", "card_id": forest_id})
+
+    # Clone reflects the mutation.
+    assert cloned.find_object_zone(forest_id) == ZONE_BATTLEFIELD
+    assert cloned.hand_sizes[0] == p0_hand_size_before - 1
+    assert cloned.battlefield_sizes[0] == p0_bf_size_before + 1
+
+    # Original is untouched across every snapshot.
+    assert synthetic_state.find_object_zone(forest_id) == ZONE_HAND
+    assert synthetic_state.hand_sizes[0] == p0_hand_size_before
+    assert synthetic_state.battlefield_sizes[0] == p0_bf_size_before
+    assert synthetic_state.hand_snapshot(0) == p0_hand_before
+    assert synthetic_state.battlefield_snapshot() == p0_bf_before
+    assert synthetic_state.library_snapshot(0) == p0_lib_before
+
+
+def test_apply_action_cast_spell_on_clone_leaves_original_unchanged(
+    synthetic_state,
+):
+    """Companion CoW canary for the CastSpell arm: a clone-side cast
+    of a Llanowar Elf mutates the clone's hand / battlefield / mana
+    pool — the original's snapshots stay byte-identical. CastSpell
+    routes to cast_creature, which spends mana AND moves the card —
+    so the canary covers three independent piece of state (zone for
+    the card, the mana pool, and battlefield sizes). Pins that the
+    Arc-backed zones + mana pool both honor CoW under dispatch."""
+    elf_id = P0_FIRST_HAND_ID
+    synthetic_state.add_mana(0, "G", 1)
+    pool_before = synthetic_state.get_mana_pool(0)["G"]
+    hand_before = synthetic_state.hand_snapshot(0)
+    bf_before = synthetic_state.battlefield_snapshot()
+
+    cloned = synthetic_state.clone_once()
+    cloned.apply_action({"kind": "cast_spell", "card_id": elf_id})
+
+    # Clone reflects the mutation.
+    assert cloned.find_object_zone(elf_id) == ZONE_BATTLEFIELD
+    assert cloned.get_mana_pool(0)["G"] == pool_before - 1
+
+    # Original untouched across every observable surface.
+    assert synthetic_state.find_object_zone(elf_id) == ZONE_HAND
+    assert synthetic_state.get_mana_pool(0)["G"] == pool_before
+    assert synthetic_state.hand_snapshot(0) == hand_before
+    assert synthetic_state.battlefield_snapshot() == bf_before
