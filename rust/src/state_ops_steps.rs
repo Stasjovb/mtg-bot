@@ -25,23 +25,45 @@
 //!
 //! `advance_phase` should fire the tap-slice's `untap_all_for_player`
 //! sweep whenever the new phase is UNTAP — that's the load-bearing
-//! integration test for the parallel-TDD harness composing.
+//! integration test for the parallel-TDD harness composing. It also
+//! fires the zone-slice's `draw_card` on entry to PHASE_DRAW per
+//! CR 504.1 (the active player draws one card during their draw
+//! step), with the CR 103.7c first-turn skip for the player going
+//! first in a two-player game.
 //!
 //! `multiple-pymethods` does let two sibling `#[pymethods] impl
 //! GameState` blocks coexist, but methods defined in each block keep
 //! their default Rust visibility (private to the module that owns
-//! them). The tap-slice's `untap_all_for_player` is `fn`-private to
-//! `state_ops_tap.rs`, so a direct call from this module hits E0624.
-//! The brief's contingency for exactly this case is to INLINE the
-//! equivalent body here. The inlined version mirrors the tap-slice
-//! logic (skip the `Arc::make_mut` clone if every permanent is
-//! already untapped; one CoW clone covers all the in-place flips).
+//! them). The tap-slice's `untap_all_for_player` and the zone-slice's
+//! `draw_card` are both `fn`-private to their owning modules, so a
+//! direct call from this module hits E0624. The brief's contingency
+//! for exactly this case is to INLINE the equivalent body here. The
+//! inlined versions mirror the sibling logic (skip the
+//! `Arc::make_mut` clone if every permanent is already untapped /
+//! mirror the `pop` + zone-stamp + push pattern from `draw_card`).
 //! When the parallel-slice constraint relaxes a follow-up can either
-//! promote `untap_all_for_player` to `pub(crate)` or factor the sweep
-//! into a free function — until then the duplication is the right
-//! call (no edits to sibling files mid-parallel-development).
+//! promote the originals to `pub(crate)` or factor the helpers into
+//! free functions — until then the duplication is the right call
+//! (no edits to sibling files mid-parallel-development).
+//!
+//! ## CR 103.7c first-turn skip
+//!
+//! Per CR 103.7c, "in a two-player game, the player who plays first
+//! skips the draw step of their first turn." Python's `simulate.py`
+//! gates this on `state.turn_number != 1` alone (see comment in
+//! `simulate.py:300-310`): on turn 1 the active player IS the
+//! starting player because `turn_number` only ticks past 1 after the
+//! first turn ends, so `turn_number == 1` is sufficient regardless
+//! of which seat started.
+//!
+//! Rust mirror: `advance_phase` gates the auto-draw on
+//! `turn_number != 1`. The synthetic-state harness seeds
+//! `turn_number = 5` so the gate is open by default; tests that
+//! exercise the first-turn skip explicitly drop `turn_number` to 1
+//! before walking through the draw step.
 
 use crate::state::{GameObject, GameState};
+use crate::state_ops_zones::ZONE_HAND;
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 use std::sync::Arc;
@@ -115,6 +137,32 @@ fn clear_summoning_sick_for_player_inline(state: &mut GameState, player_id: u8) 
     }
 }
 
+/// Free-function mirror of `state_ops_zones.rs:draw_card`. See the
+/// module docstring for why this duplication exists. Same shape —
+/// pop the top of library (= last element of the Vec), stamp the
+/// drawn object's `zone` to `ZONE_HAND`, push onto hand. On an
+/// empty library this is a silent no-op at this layer; the G10
+/// "deck-out on empty draw" slice owns the loss-flag side-effect
+/// via the sibling slice's `Player.attempted_draw_on_empty` flag —
+/// the inline mirror here intentionally only handles the move-side
+/// of the operation so the deck-out logic stays single-sourced.
+///
+/// CoW-safe: each zone Vec mutation routes through `Arc::make_mut`.
+fn draw_card_inline(state: &mut GameState, player_id: u8) {
+    let idx = player_id as usize;
+    if idx >= state.players.len() {
+        return;
+    }
+    let player = &mut state.players[idx];
+    let lib = Arc::make_mut(&mut player.library);
+    let mut obj = match lib.pop() {
+        Some(o) => o,
+        None => return,
+    };
+    obj.zone = ZONE_HAND;
+    Arc::make_mut(&mut player.hand).push(obj);
+}
+
 #[pymethods]
 impl GameState {
     /// Expose `active_player` to Python. The field already exists on
@@ -143,6 +191,18 @@ impl GameState {
     /// on every UNTAP entry, including the initial wrap that flips
     /// the active player — the new active player's permanents
     /// untap at the top of their turn.
+    ///
+    /// When the new phase is DRAW, fire `draw_card` on the active
+    /// player per CR 504.1 (active player draws one card during
+    /// their draw step), gated by the CR 103.7c first-turn skip
+    /// (`turn_number != 1`). See the module docstring for why the
+    /// first-turn check is `turn_number` alone — Python's
+    /// `simulate.py` uses the same gate and the rationale (on turn
+    /// 1 the active player IS the starting player) applies bit-for-
+    /// bit here. The synthetic-state harness seeds
+    /// `turn_number = 5`, so the gate is open by default; an
+    /// explicit setter (none yet) or stepping back to 1 would let
+    /// callers exercise the first-turn skip.
     fn advance_phase(&mut self) -> u8 {
         if self.phase == PHASE_CLEANUP {
             self.phase = PHASE_UNTAP;
@@ -171,6 +231,19 @@ impl GameState {
             // new active player's permanents at their UNTAP entry".
             // Same CoW shape as the untap sweep — see the helper.
             clear_summoning_sick_for_player_inline(self, self.active_player);
+        }
+        if self.phase == PHASE_DRAW && self.turn_number != 1 {
+            // CR 504.1 — active player draws one card during their
+            // draw step. CR 103.7c first-turn skip: the player who
+            // plays first skips their draw step on turn 1. Python's
+            // `simulate.py` gates on `turn_number != 1` alone
+            // (rationale: on turn 1 the active player IS the
+            // starting player because turn_number only ticks past 1
+            // after the first turn ends — see the comment block in
+            // `simulate.py:300-310`). Mirror the same gate here so
+            // parity holds bit-for-bit. Inlined draw — see the
+            // module docstring for the cross-slice friction note.
+            draw_card_inline(self, self.active_player);
         }
         self.phase
     }
