@@ -121,6 +121,17 @@ def main(argv=None) -> None:
             "'debug_hangs' (gitignored). Pass empty string to disable."
         ),
     )
+    parser.add_argument(
+        "--use-shm-server", action="store_true",
+        help=(
+            "Use the SharedTensorNNEvalServer (PR #40) on the LOCAL "
+            "master shard. Master constructs two SHM servers (one per "
+            "weights set) and routes workers via cfg.weights_path. "
+            "Linux-only; remote shards (Mac/Win10) ignore the flag "
+            "silently. See `mtg_bot iterate --use-shm-server` for the "
+            "matching self-play flag."
+        ),
+    )
     args = parser.parse_args(argv)
 
     label = args.label or f"{args.new}_vs_{args.old}_{args.games}g"
@@ -150,6 +161,7 @@ def main(argv=None) -> None:
         hang_dump_root=hang_dump_root,
         opponent_label=label,
         heuristics=HeuristicsConfig.disabled(),
+        use_shm_server=args.use_shm_server,
     )
 
     slack_extra = ceil(args.games * args.queue_slack_pct)

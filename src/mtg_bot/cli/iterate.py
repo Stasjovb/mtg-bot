@@ -530,6 +530,7 @@ def _self_play_distributed(  # pragma: no cover
     use_belief_weighted: bool = False,
     heuristics: HeuristicsConfig | None = None,
     action_encoding_version: str = "positional_v1",
+    use_shm_server: bool = False,
 ) -> tuple[int, int, float]:
     """Distributed self-play: dispatch the iter's games across the
     shards in ``shards_config``, gather all per-shard npzs into the
@@ -569,6 +570,7 @@ def _self_play_distributed(  # pragma: no cover
         architecture=architecture,
         policy_hidden_sizes=policy_hidden_sizes,
         action_encoding_version=action_encoding_version,
+        use_shm_server=use_shm_server,
     )
     started = time.perf_counter()
     extra_kwargs: dict = {}
@@ -635,6 +637,7 @@ def _eval_match_distributed(  # pragma: no cover
     use_belief_weighted: bool = False,
     new_action_encoding_version: str = "positional_v1",
     old_action_encoding_version: str = "positional_v1",
+    use_shm_server: bool = False,
 ) -> tuple[int, int, int, float]:
     """Distributed eval-gate match. Mirrors ``_eval_match``'s return
     contract ``(new_wins, old_wins, draws, elapsed_seconds)`` so
@@ -670,6 +673,7 @@ def _eval_match_distributed(  # pragma: no cover
         policy_hidden_sizes=policy_hidden_sizes,
         new_action_encoding_version=new_action_encoding_version,
         old_action_encoding_version=old_action_encoding_version,
+        use_shm_server=use_shm_server,
     )
     started = time.perf_counter()
     extra_kwargs: dict = {}
@@ -1318,6 +1322,17 @@ def main(argv=None) -> None:  # pragma: no cover
         ),
     )
     parser.add_argument(
+        "--use-shm-server", action="store_true",
+        help=(
+            "Use the SharedTensorNNEvalServer (PR #40) for self-play "
+            "on the LOCAL master shard. Linux-only; remote shards "
+            "(Mac/Win10) ignore the flag silently. Bench numbers from "
+            "PR #40 show 3-10x NN throughput vs the per-worker "
+            "NNEvaluator path. Off by default — opt in once you've "
+            "smoke-tested an iter cycle on master."
+        ),
+    )
+    parser.add_argument(
         "--reconcile-state", action="store_true",
         help=(
             "Recover from a partial-iter crash where the trainer "
@@ -1746,6 +1761,7 @@ def main(argv=None) -> None:  # pragma: no cover
                     phase_prune_enabled=not args.no_phase_priority_prune,
                 ),
                 action_encoding_version=iter_action_encoding_version,
+                use_shm_server=args.use_shm_server,
             )
         print(
             f"[iterate]   gen done in {gen_elapsed/60:.1f}m: "
@@ -1937,6 +1953,7 @@ def main(argv=None) -> None:  # pragma: no cover
                         old_action_encoding_version=(
                             best_action_encoding_version
                         ),
+                        use_shm_server=args.use_shm_server,
                     )
                 )
             n_decided = wins_new + wins_old

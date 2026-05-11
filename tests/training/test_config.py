@@ -413,6 +413,53 @@ def test_nn_pimc_config_device_auto_round_trips_through_dict() -> None:
     assert rebuilt == cfg
 
 
+def test_nn_pimc_config_build_uses_shm_handle_when_set(
+    tmp_path: Path,
+) -> None:
+    """When a worker-process SHM handle is installed (via
+    ``set_worker_handle``), ``NNPimcConfig.build()`` returns a strategy
+    that uses :class:`SharedTensorNNEvalClient` instead of constructing
+    a per-worker NNEvaluator. The cfg's own ``weights_path`` / ``device``
+    fields are IGNORED in this branch — proves the precedence ordering.
+    Skipped on Windows where the SHM server isn't supported."""
+    import sys
+    if sys.platform == "win32":
+        pytest.skip("SharedTensorNNEvalServer is Linux-only")
+
+    from mtg_bot.search.shm_nn_eval_server import (
+        SharedTensorNNEvalClient,
+        SharedTensorNNEvalServer,
+        set_worker_handle,
+    )
+
+    weights = _save_value_weights(tmp_path)
+    server = SharedTensorNNEvalServer(
+        weights_path=weights,
+        device="cpu",
+        with_policy=False,
+        batch_size=1,
+        batch_wait_ms=0.0,
+        n_slots=4,
+    )
+    try:
+        with server:
+            set_worker_handle(server.handle())
+            try:
+                cfg = NNPimcConfig(
+                    weights_path=str(weights), samples=2, inner_nodes=4,
+                    batch_size=1, device="cpu",
+                )
+                strategy = cfg.build(seed=0)
+                mcts = strategy.inner_factory()
+                assert isinstance(mcts.evaluator, SharedTensorNNEvalClient)
+            finally:
+                # Restore the global to None so other tests aren't
+                # affected by this one's state.
+                set_worker_handle(None)  # type: ignore[arg-type]
+    finally:
+        server.stop(timeout=5.0)
+
+
 def test_nn_pimc_config_device_auto_resolves_via_auto_device_in_build(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
