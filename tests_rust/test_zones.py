@@ -1178,3 +1178,165 @@ def test_resolve_create_token_copy_clone_isolation(synthetic_state):
     )
     assert p0_bears_clone == p0_bears_before + 1
     assert p0_bears_src == p0_bears_before
+
+
+# -------------------- Round-28 OwnerPutsTargetArtifactOrCreatureOnTopOrBottomOfLibrary --------------------
+#
+# Effect: "Target artifact or creature's owner puts it on top or bottom
+# of their library." 2 EoE cards. Python class lives at
+# `effects/generic/zone_moves.py:30`.
+#
+# **First-slice deterministic-bottom.** Python prompts the OWNER's
+# agent for top vs bottom; Rust has no decision-callback substrate yet,
+# so we always pick bottom (= lib[0] per Rust convention). A reasonable
+# first-slice mirror because decision-callback agents typically
+# default-pick the bottom option (least disruptive).
+#
+# **Owner-as-controller simplification.** Rust doesn't track an
+# owner-vs-controller distinction; first-slice synthetic states never
+# split them, so we treat target.controller as the owner.
+#
+# **Target selection.** First defender (= 1 - active_player) permanent
+# whose card_types contains "Artifact" OR "Creature". No eligible
+# target = silent fizzle.
+
+
+def _lost_in_space_dict():
+    """Synthetic Lost-in-Space-shape spell. Controller-of-source casts
+    it from hand; defender picks up the bounce."""
+    return {
+        "name": "Synthetic Lost in Space",
+        "card_types": ["Sorcery"],
+        "mana_cost": {"generic": 2, "U": 1},
+        "effects": [
+            {
+                "kind": (
+                    "owner_puts_target_artifact_or_creature_"
+                    "on_top_or_bottom_of_library"
+                )
+            }
+        ],
+    }
+
+
+def _vanilla_artifact_for_bounce(name="Bounce Target Artifact"):
+    return {
+        "name": name,
+        "card_types": ["Artifact"],
+        "mana_cost": {"generic": 1},
+    }
+
+
+def test_register_owner_puts_target_aoc_top_or_bottom(engine):
+    """Unit variant registers + round-trips cleanly."""
+    reg = engine.Registry()
+    pid = reg.register_printing(_lost_in_space_dict())
+    eff = reg.get_printing_effects(pid)[0]
+    assert eff["kind"] == (
+        "owner_puts_target_artifact_or_creature_on_top_or_bottom_of_library"
+    )
+
+
+def test_resolve_owner_puts_aoc_bottom_moves_defender_creature_to_lib_bottom(
+    synthetic_state,
+):
+    """Casting puts first defender creature on bottom of OWNER's
+    library. Synthetic state's p1 bf has Forests (non-creature,
+    non-artifact) then Grizzly Bears — Bears is first eligible."""
+    snap = synthetic_state.battlefield_snapshot()
+    p1_first_bear_id = next(
+        d["id"] for d in snap
+        if d["controller_id"] == 1 and d["printing_name"] == "Grizzly Bears"
+    )
+    p1_lib_before = synthetic_state.library_sizes[1]
+    spell_id = synthetic_state.register_and_inject_object(
+        _lost_in_space_dict(), 0, ZONE_HAND
+    )
+    synthetic_state.push_to_stack(spell_id, 0)
+    synthetic_state.resolve_top_of_stack()
+
+    # Target left battlefield.
+    assert synthetic_state.find_object_zone(p1_first_bear_id) == ZONE_LIBRARY
+    # Owner's library grew by 1.
+    assert synthetic_state.library_sizes[1] == p1_lib_before + 1
+    # Bottom of library (lib[0]) is the target.
+    p1_lib_snap = synthetic_state.library_snapshot(1)
+    assert p1_lib_snap[0]["id"] == p1_first_bear_id
+
+
+def test_resolve_owner_puts_aoc_bottom_owner_is_controller(synthetic_state):
+    """The card lands in the OWNER's library — owner is the target's
+    controller (Rust treats controller as owner). Inject an artifact
+    on p1's bf; cast the spell from p0 — the artifact moves to p1's
+    library, NOT p0's."""
+    # Move existing p1 creatures out so the artifact is first eligible.
+    state = synthetic_state.clone_once()
+    snap = state.battlefield_snapshot()
+    p1_creature_ids = [
+        d["id"] for d in snap
+        if d["controller_id"] == 1 and d["printing_name"] == "Grizzly Bears"
+    ]
+    for cid in p1_creature_ids:
+        state.move_object(cid, 3, 1)  # to p1 graveyard
+    artifact_id = state.register_and_inject_object(
+        _vanilla_artifact_for_bounce(), 1, ZONE_BATTLEFIELD
+    )
+    p0_lib_before = state.library_sizes[0]
+    p1_lib_before = state.library_sizes[1]
+    spell_id = state.register_and_inject_object(
+        _lost_in_space_dict(), 0, ZONE_HAND
+    )
+    state.push_to_stack(spell_id, 0)
+    state.resolve_top_of_stack()
+
+    # Artifact landed in p1's library (owner = controller = 1).
+    assert state.find_object_zone(artifact_id) == ZONE_LIBRARY
+    assert state.library_sizes[0] == p0_lib_before
+    assert state.library_sizes[1] == p1_lib_before + 1
+    # Bottom of p1's library.
+    p1_lib_snap = state.library_snapshot(1)
+    assert p1_lib_snap[0]["id"] == artifact_id
+
+
+def test_resolve_owner_puts_aoc_bottom_no_eligible_fizzles(synthetic_state):
+    """No artifacts and no creatures on defender's bf → silent fizzle.
+    The source sorcery still routes to graveyard (CR 608.2m)."""
+    state = synthetic_state.clone_once()
+    snap = state.battlefield_snapshot()
+    p1_creature_ids = [
+        d["id"] for d in snap
+        if d["controller_id"] == 1 and d["printing_name"] == "Grizzly Bears"
+    ]
+    for cid in p1_creature_ids:
+        state.move_object(cid, 3, 1)  # graveyard
+    p1_lib_before = state.library_sizes[1]
+    spell_id = state.register_and_inject_object(
+        _lost_in_space_dict(), 0, ZONE_HAND
+    )
+    state.push_to_stack(spell_id, 0)
+    state.resolve_top_of_stack()  # must not raise
+
+    # Defender's library unchanged.
+    assert state.library_sizes[1] == p1_lib_before
+    # Source sorcery routed to p0's graveyard.
+    assert state.find_object_zone(spell_id) == ZONE_GRAVEYARD
+
+
+def test_resolve_owner_puts_aoc_bottom_clone_isolation(synthetic_state):
+    """Resolving on the clone leaves the source state untouched."""
+    snap = synthetic_state.battlefield_snapshot()
+    p1_first_bear_id = next(
+        d["id"] for d in snap
+        if d["controller_id"] == 1 and d["printing_name"] == "Grizzly Bears"
+    )
+    spell_id = synthetic_state.register_and_inject_object(
+        _lost_in_space_dict(), 0, ZONE_HAND
+    )
+    synthetic_state.push_to_stack(spell_id, 0)
+    cloned = synthetic_state.clone_once()
+    cloned.resolve_top_of_stack()
+
+    # Clone: target moved to library.
+    assert cloned.find_object_zone(p1_first_bear_id) == ZONE_LIBRARY
+    # Source state: target still on battlefield (no resolve happened).
+    assert synthetic_state.find_object_zone(p1_first_bear_id) == ZONE_BATTLEFIELD

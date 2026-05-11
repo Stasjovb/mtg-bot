@@ -3595,6 +3595,72 @@ fn apply_effect(
             // Apply inner effect.
             apply_effect(state, inner_effect.as_ref(), source_obj_id)?;
         }
+        // Round-28 "owner puts target artifact-or-creature on top or
+        // bottom of their library." First-slice deterministic-BOTTOM:
+        // Python prompts the owner's agent for top vs bottom; Rust
+        // has no decision callback substrate yet so we always pick
+        // bottom (= lib[0] per Rust convention; lib[len-1] is top).
+        //
+        // Target selection mirrors TapTargetArtifactOrCreature: first
+        // defender (= 1 - active_player) permanent whose
+        // card_types contains "Artifact" OR "Creature". No eligible
+        // target = silent fizzle.
+        //
+        // Owner = target's controller (Rust doesn't track an
+        // owner-vs-controller distinction; first-slice synthetic
+        // states never split the two, so controller == owner).
+        //
+        // CR 400.7 zone-change reset: tapped, summoning_sick (true
+        // per r28 CE1 universal default), damage, counters all reset.
+        Effect::OwnerPutsTargetArtifactOrCreatureOnTopOrBottomOfLibrary => {
+            let _ = source_obj_id;
+            let defender = (1 - state.active_player) as usize;
+            let target_id: Option<u32> = {
+                let bf = &state.players[defender].battlefield;
+                let registry = &state.registry;
+                bf.iter().find_map(|obj| {
+                    let printing = registry.lookup(obj.printing_id)?;
+                    if printing
+                        .card_types
+                        .iter()
+                        .any(|t| t == "Artifact" || t == "Creature")
+                    {
+                        Some(obj.id)
+                    } else {
+                        None
+                    }
+                })
+            };
+            let Some(target_id) = target_id else {
+                return Ok(()); // fizzle
+            };
+            // Capture owner (= controller) before mutating zones.
+            let owner_idx: usize = {
+                let bf = &state.players[defender].battlefield;
+                let obj = bf
+                    .iter()
+                    .find(|o| o.id == target_id)
+                    .expect("target_id was just found in bf but missing on re-scan");
+                obj.controller as usize
+            };
+            // Remove from battlefield, reset per CR 400.7, insert at
+            // owner's lib[0] (= bottom of library).
+            let bf_mut: &mut Vec<GameObject> =
+                Arc::make_mut(&mut state.players[defender].battlefield);
+            let pos = bf_mut
+                .iter()
+                .position(|o| o.id == target_id)
+                .expect("target_id was just found in bf but missing on re-scan");
+            let mut obj = bf_mut.remove(pos);
+            obj.zone = ZONE_LIBRARY;
+            obj.tapped = false;
+            obj.summoning_sick = true; // r28 CE1 universal-true default
+            obj.damage = 0;
+            obj.counters = 0;
+            let lib_mut: &mut Vec<GameObject> =
+                Arc::make_mut(&mut state.players[owner_idx].library);
+            lib_mut.insert(0, obj); // lib[0] = bottom (Rust convention)
+        }
     }
     Ok(())
 }
