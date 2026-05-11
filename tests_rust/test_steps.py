@@ -431,23 +431,117 @@ def test_full_12_phase_lap_visits_each_step_name_exactly_once(synthetic_state):
         assert PHASE_NAME_BY_INDEX[phase] == name
 
 
-def test_advance_phase_does_not_draw_a_card(synthetic_state):
-    """The Rust ``advance_phase`` does NOT auto-fire the Python turn
-    machinery's draw-step ``draw_card`` (that's a higher-layer concern
-    not modeled in this slice — see ``rust/src/state_ops_steps.rs``).
-    Pins the today-shape so a future "auto-draw" wiring slice has to
-    update this test and the test-side commentary together. Cross-
-    feature with library + zones: the snapshot getters report unchanged
-    sizes through the DRAW step."""
+def test_advance_phase_draws_a_card_on_entering_draw_step(synthetic_state):
+    """CR 504.1 — the active player draws one card on entering their
+    draw step. ``advance_phase`` fires ``draw_card`` automatically
+    when the new phase becomes PHASE_DRAW (gated by the CR 103.7c
+    first-turn skip on ``turn_number == 1``). The synthetic-state
+    harness seeds ``turn_number = 5`` so the gate is open by default:
+    walking UNTAP -> UPKEEP -> DRAW should move one card from the top
+    of the active player's library to their hand. Cross-feature with
+    library + zones — the snapshot sizes flip in lockstep with the
+    drawn card."""
     hand_before = len(synthetic_state.hand_snapshot(0))
     lib_before = len(synthetic_state.library_snapshot(0))
-    # Advance UNTAP -> UPKEEP -> DRAW. Past DRAW just in case the
-    # implementation grew a "draw at the start of upkeep" rule.
-    synthetic_state.advance_phase()  # UPKEEP
-    synthetic_state.advance_phase()  # DRAW
-    assert synthetic_state.current_phase() == PHASE_DRAW
+    # synthetic_state.active_player == 0 and turn_number == 5 (open
+    # gate), so the auto-draw fires for player 0 on entry to DRAW.
+    assert synthetic_state.active_player == 0
+    assert synthetic_state.turn_number == 5
+    synthetic_state.advance_phase()  # UPKEEP — no draw on this entry
     assert len(synthetic_state.hand_snapshot(0)) == hand_before
     assert len(synthetic_state.library_snapshot(0)) == lib_before
+    synthetic_state.advance_phase()  # DRAW — auto-draw fires
+    assert synthetic_state.current_phase() == PHASE_DRAW
+    assert len(synthetic_state.hand_snapshot(0)) == hand_before + 1
+    assert len(synthetic_state.library_snapshot(0)) == lib_before - 1
+
+
+def _make_turn1_state(engine):
+    """Build a fresh ``GameState`` via ``make_state`` — that helper
+    seeds ``turn_number = 1`` directly (versus the synthetic-state
+    fixture which seeds turn 5). Use this to exercise the CR 103.7c
+    first-turn skip gate.
+
+    Builds a small two-card registry (Forest + Grizzly Bears) and
+    gives each player a 3-card library + a 1-card hand so the
+    hand_snapshot / library_snapshot deltas have somewhere to land.
+    """
+    reg = engine.Registry()
+    forest = {
+        "name": "Forest",
+        "card_types": ["Land"],
+        "mana_cost": {},
+        "effects": [],
+        "mana_produced": ["G"],
+    }
+    bears = {
+        "name": "Grizzly Bears",
+        "card_types": ["Creature"],
+        "mana_cost": {"G": 1, "generic": 1},
+        "effects": [],
+        "power": 2,
+        "toughness": 2,
+    }
+    reg.register_printing(forest)
+    reg.register_printing(bears)
+    return engine.make_state(
+        reg,
+        [0, 0, 1],  # p0 library
+        [0, 0, 1],  # p1 library
+        p0_hand_printing_ids=[1],
+        p1_hand_printing_ids=[1],
+    )
+
+
+def test_advance_phase_first_turn_active_player_skips_draw_step(engine):
+    """CR 103.7c — in a two-player game, the player who plays first
+    skips the draw step of their first turn. Python's ``simulate.py``
+    gates this on ``state.turn_number != 1`` alone (on turn 1 the
+    active player IS the starting player because ``turn_number`` only
+    ticks past 1 after the first turn ends), and the Rust mirror in
+    ``state_ops_steps.rs::advance_phase`` uses the same gate.
+
+    Build a fresh state via ``make_state`` (which seeds
+    ``turn_number = 1``), walk UNTAP -> UPKEEP -> DRAW, and assert
+    that the active player's hand / library sizes are unchanged on
+    entry to DRAW — the gate fires."""
+    state = _make_turn1_state(engine)
+    assert state.turn_number == 1
+    assert state.active_player == 0
+    assert state.current_phase() == PHASE_UNTAP
+    hand_before = len(state.hand_snapshot(0))
+    lib_before = len(state.library_snapshot(0))
+    state.advance_phase()  # UPKEEP — no draw on this entry
+    state.advance_phase()  # DRAW — gate closed at turn 1, no auto-draw
+    assert state.current_phase() == PHASE_DRAW
+    assert len(state.hand_snapshot(0)) == hand_before
+    assert len(state.library_snapshot(0)) == lib_before
+
+
+def test_advance_phase_p1_first_draw_step_does_draw_card(synthetic_state):
+    """Companion to the first-turn-skip test. On turn 2 (or any
+    turn != 1) the non-starting player's draw step DOES fire the
+    auto-draw — confirms the gate is purely on ``turn_number != 1``,
+    not on which seat is active. Walks the synthetic state's
+    turn-5 seed up one full turn (12 advances, which bumps
+    turn_number to 6 and flips active_player to 1), then advances
+    UPKEEP -> DRAW for player 1 and asserts the auto-draw fired."""
+    # Walk one full turn so active_player flips 0 -> 1 and
+    # turn_number 5 -> 6 (still != 1, gate stays open).
+    for _ in range(12):
+        synthetic_state.advance_phase()
+    assert synthetic_state.active_player == 1
+    assert synthetic_state.turn_number == 6
+    assert synthetic_state.current_phase() == PHASE_UNTAP
+    hand_before = len(synthetic_state.hand_snapshot(1))
+    lib_before = len(synthetic_state.library_snapshot(1))
+    synthetic_state.advance_phase()  # UPKEEP — no draw on this entry
+    assert len(synthetic_state.hand_snapshot(1)) == hand_before
+    assert len(synthetic_state.library_snapshot(1)) == lib_before
+    synthetic_state.advance_phase()  # DRAW — auto-draw fires for p1
+    assert synthetic_state.current_phase() == PHASE_DRAW
+    assert len(synthetic_state.hand_snapshot(1)) == hand_before + 1
+    assert len(synthetic_state.library_snapshot(1)) == lib_before - 1
 
 
 def test_main1_phase_emits_cast_spell_in_legal_decisions(synthetic_state):
@@ -506,30 +600,43 @@ def test_phase_advance_preserves_life_totals(synthetic_state):
     assert synthetic_state.life_totals == [13, 7]
 
 
-def test_phase_advance_preserves_zone_sizes(synthetic_state):
+def test_phase_advance_preserves_zone_sizes_except_for_auto_draw(
+    synthetic_state,
+):
     """Cross-feature with the zones slice: a full lap through all 12
-    phases (including the CLEANUP -> UNTAP wrap) leaves hand /
-    library / battlefield sizes unchanged on both players. The only
-    zone-touching side-effect of ``advance_phase`` is the per-
-    controller untap sweep, which mutates tapped-flags in place
-    rather than moving objects between zones."""
-    sizes_before = (
-        len(synthetic_state.hand_snapshot(0)),
-        len(synthetic_state.hand_snapshot(1)),
-        len(synthetic_state.library_snapshot(0)),
-        len(synthetic_state.library_snapshot(1)),
-        len(synthetic_state.battlefield_snapshot()),
-    )
+    phases is zone-neutral EXCEPT for the CR 504.1 auto-draw on
+    entry to PHASE_DRAW (one card moves library -> hand for the
+    active player). The seed's turn_number is 5 so the CR 103.7c
+    first-turn skip is open; the active player at DRAW entry is
+    player 0 (the seed's ``active_player``), so p0's hand grows by
+    one and p0's library shrinks by one. Battlefield is unchanged
+    by the lap — the per-controller untap sweep mutates tapped-flags
+    in place rather than moving objects."""
+    p0_hand_before = len(synthetic_state.hand_snapshot(0))
+    p0_lib_before = len(synthetic_state.library_snapshot(0))
+    p1_hand_before = len(synthetic_state.hand_snapshot(1))
+    p1_lib_before = len(synthetic_state.library_snapshot(1))
+    bf_before = len(synthetic_state.battlefield_snapshot())
+    # One full lap (12 advances) visits PHASE_DRAW exactly once with
+    # active_player == 0 (the seed's value). The CLEANUP -> UNTAP
+    # wrap flips active_player to 1 but the DRAW step has already
+    # fired earlier in the lap with p0 active.
     for _ in range(12):
         synthetic_state.advance_phase()
-    sizes_after = (
-        len(synthetic_state.hand_snapshot(0)),
-        len(synthetic_state.hand_snapshot(1)),
-        len(synthetic_state.library_snapshot(0)),
-        len(synthetic_state.library_snapshot(1)),
-        len(synthetic_state.battlefield_snapshot()),
-    )
-    assert sizes_before == sizes_after
+    assert (
+        len(synthetic_state.hand_snapshot(0)) == p0_hand_before + 1
+    ), "active player's hand should grow by 1 (auto-draw at PHASE_DRAW)"
+    assert (
+        len(synthetic_state.library_snapshot(0)) == p0_lib_before - 1
+    ), "active player's library should shrink by 1 (auto-draw at PHASE_DRAW)"
+    # The off-side (p1) was never the active player during the lap
+    # (active flips from 0 -> 1 only at the very END of the lap via
+    # the CLEANUP -> UNTAP wrap, after p1's DRAW step has already
+    # been visited as the OFF-side), so p1's zones are untouched.
+    assert len(synthetic_state.hand_snapshot(1)) == p1_hand_before
+    assert len(synthetic_state.library_snapshot(1)) == p1_lib_before
+    # Battlefield untouched on both sides.
+    assert len(synthetic_state.battlefield_snapshot()) == bf_before
 
 
 def test_fingerprint_changes_on_every_phase_advance(synthetic_state):

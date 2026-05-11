@@ -233,18 +233,6 @@ behavior per CR / Python, parity impact, and closeable / accepted.
   no-op contract. Listed here for clarity. See invariant I7.
 - **Closeable**: not a gap. Parity invariant.
 
-### G14. `advance_phase` does not auto-fire `draw_card` on the DRAW step
-
-- **Pinned by**: `tests_rust/test_steps.py::test_advance_phase_does_not_draw_a_card`.
-- **Rust today**: Walking `UNTAP -> UPKEEP -> DRAW` via `advance_phase`
-  does NOT call `draw_card`. The DRAW step is a phase tag only.
-- **CR / Python expected**: CR 504.1 — the active player draws one
-  card during their draw step. Python's turn machinery models this.
-- **Impact**: HIGH for any multi-turn game. Without explicit
-  `draw_card` calls from the harness, Rust hands stagnate.
-- **Closeable**: yes — slice that wires `draw_card` into
-  `advance_phase` on entry to `PHASE_DRAW`.
-
 ### G15. `advance_phase`'s CLEANUP -> UNTAP wrap does not reset priority
 
 - **Pinned by**: `tests_rust/test_steps.py::test_advance_phase_keeps_priority_player_in_sync_with_active`;
@@ -535,6 +523,22 @@ refactor on either side that breaks the parity surfaces immediately.
   `legal.py:661-663` and `actions.py:_activate_ability`
   precheck. Closes parity gap G6 (entry removed from "Confirmed
   gaps" above).
+
+### I18. `advance_phase` auto-fires `draw_card` on entry to PHASE_DRAW, gated by CR 103.7c
+
+- **Pinned by**:
+  `tests_rust/test_steps.py::test_advance_phase_draws_a_card_on_entering_draw_step`,
+  `tests_rust/test_steps.py::test_advance_phase_first_turn_active_player_skips_draw_step`,
+  `tests_rust/test_steps.py::test_advance_phase_p1_first_draw_step_does_draw_card`.
+- **Invariant**: CR 504.1 — the active player draws one card on
+  entering their draw step. `advance_phase` calls `draw_card` for
+  the active player whenever the new phase becomes `PHASE_DRAW`,
+  gated by the CR 103.7c first-turn skip (`turn_number != 1`).
+  Mirrors Python's `simulate.py` gate, which uses the same
+  `state.turn_number != 1` shape (rationale: on turn 1 the active
+  player IS the starting player, so `turn_number` alone fully
+  determines the skip in a two-player game). Closes parity gap G14
+  (entry removed from "Confirmed gaps" above).
 
 ---
 

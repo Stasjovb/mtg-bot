@@ -625,17 +625,24 @@ def test_end_turn_and_start_next_does_not_empty_mana_pool_documented_gap(
 def test_advance_phase_through_cleanup_does_not_enforce_hand_size_gap(
     synthetic_state,
 ):
-    """**Documented gap pin.** The active player keeping 10 cards in
+    """**Documented gap pin.** The active player keeping a stuffed
     hand and advancing through every phase via ``advance_phase`` does
     NOT auto-fire the CR 514.1 hand-size discard — discard only fires
     when a caller explicitly invokes ``cleanup_step_for_active_player``
     or ``end_turn_and_start_next``. The phase machinery and the
     cleanup primitive are not yet wired together.
 
+    G14 interaction (round 26): ``advance_phase`` now fires CR 504.1
+    auto-draw on entry to PHASE_DRAW, so a single full-lap walk
+    grows the active player's hand by one before reaching CLEANUP.
+    The test still pins the no-auto-discard gap — just on the
+    post-auto-draw hand size (initial 10 + 1 auto-draw = 11), with
+    the assertion updated to reflect the new shape.
+
     Confirms the gap by stuffing the hand to 10, walking
-    ``advance_phase`` until the turn wraps, and asserting the hand is
-    STILL at 10 on the new turn. A future "wire cleanup into phase
-    transitions" slice flips this assertion."""
+    ``advance_phase`` until the turn wraps, and asserting the hand
+    is at 11 on the new turn (one card came in from the DRAW step
+    auto-draw, no cards left via cleanup discard)."""
     for _ in range(3):
         synthetic_state.draw_card(0)
     assert synthetic_state.hand_sizes[0] == 10
@@ -648,8 +655,12 @@ def test_advance_phase_through_cleanup_does_not_enforce_hand_size_gap(
         if synthetic_state.current_phase() == 0 and prev_phase != 0:
             break
     assert synthetic_state.turn_number == starting_turn + 1
-    # Hand survived the turn wrap — discard did not auto-fire.
-    assert synthetic_state.hand_sizes[0] == 10
+    # Hand survived the turn wrap — discard did not auto-fire. The
+    # G14 auto-draw fired exactly once during the lap (active player
+    # was p0 throughout DRAW; the active swap happens at the very
+    # end of the lap on CLEANUP -> UNTAP). So p0's hand is at 11,
+    # not 10 — the +1 is the auto-draw, NOT a discard miss.
+    assert synthetic_state.hand_sizes[0] == 11
 
 
 def test_cleanup_is_idempotent_when_already_clean(synthetic_state):
