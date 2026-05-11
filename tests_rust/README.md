@@ -243,6 +243,8 @@ the test lands in a commit.
 
 | rust(effect-each-opponent-sacrifices-creature): Effect::EachOpponentSacrificesCreature — Cruel-Edict-shape; each opponent sacrifices a creature (3+ EoE cards); same source-finder + opponent-as-target shape as EachOpponentDiscards / EachOpponentMillsCards. | tests_rust/test_resolve.py extend | green  | feature/rust-effect-each-opponent-sacrifices-creature |
 
+| rust(effect-grant-keyword-target-ueot): Effect::GrantKeywordToTargetCreatureUntilEOT { keyword } — grant any keyword UEOT to target creature; closes GrantUnblockableUEOT (3+ EoE cards) and forward-compatible with future GrantHasteUEOT / GrantFlyingUEOT cards. | tests_rust/test_ueot.py extend | green  | feature/rust-effect-grant-keyword-target-ueot |
+
 ## Build invocation reminder
 
 ```
