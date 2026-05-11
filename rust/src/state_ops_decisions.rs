@@ -65,12 +65,13 @@ pub(crate) fn auto_resolve_pending(
         | "send_all_to_graveyard"
         | "may_do_yes"
         | "may_do_no"
+        | "pick_top"
         | "default" => {}
         other => {
             return Err(PyValueError::new_err(format!(
                 "auto_resolve_pending_decisions: unknown strategy {other:?}; \
                  valid strategies: keep_all_on_top, send_all_to_graveyard, \
-                 may_do_yes, may_do_no, default"
+                 may_do_yes, may_do_no, pick_top, default"
             )))
         }
     }
@@ -103,7 +104,7 @@ pub(crate) fn auto_resolve_pending(
                 // Python's no-agent-seated default).
                 let say_yes = match strategy {
                     "may_do_no" => false,
-                    _ => true, // default, may_do_yes, keep_all_on_top, send_all_to_graveyard
+                    _ => true, // default, may_do_yes, keep_all_on_top, send_all_to_graveyard, pick_top
                 };
                 if say_yes {
                     crate::state_ops_resolve::apply_effect_pub(
@@ -113,6 +114,59 @@ pub(crate) fn auto_resolve_pending(
                     )?;
                 }
             }
+            PendingDecision::PickCardFromExaminedChoice {
+                controller, cards, ..
+            } => {
+                // "default" / "pick_top" → pick cards[0] (the topmost
+                // popped — matches Python's no-agent-seated fallback
+                // in LookTopNPutOneInHandRestToGraveyard.resolve).
+                // Other strategies fall through to the same default
+                // for robustness (a multi-variant queue should not
+                // panic if drained with an unrelated strategy).
+                resolve_pick_card_to_hand(state, controller, cards, /*chosen_idx*/ 0)?;
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Apply a "pick card to hand, rest to graveyard" decision.
+/// Routes `cards[chosen_idx]` to controller's hand and every other
+/// card to controller's graveyard, in popped order (cards[0] first if
+/// it isn't the chosen, then cards[1] if it isn't the chosen, etc.).
+fn resolve_pick_card_to_hand(
+    state: &mut GameState,
+    controller: u8,
+    cards: Vec<GameObject>,
+    chosen_idx: usize,
+) -> PyResult<()> {
+    if chosen_idx >= cards.len() {
+        // Empty cards Vec or out-of-range chosen — empty pop is the
+        // legitimate no-op path (library was empty). Out-of-range
+        // chosen_idx is a programmer error; this is only ever called
+        // with chosen_idx=0, so an empty cards Vec means we just
+        // drop the decision silently. Surface as Ok(()) — matches
+        // Python's empty-library short-circuit.
+        return Ok(());
+    }
+    let pidx = controller as usize;
+    let mut sorted_cards = cards;
+    let chosen = sorted_cards.remove(chosen_idx);
+    // Route chosen to hand.
+    {
+        let hand_mut: &mut Vec<GameObject> =
+            Arc::make_mut(&mut state.players[pidx].hand);
+        let mut obj = chosen;
+        obj.zone = 0; // ZONE_HAND
+        hand_mut.push(obj);
+    }
+    // Route the rest (preserving popped order) to graveyard.
+    {
+        let gy_mut: &mut Vec<GameObject> =
+            Arc::make_mut(&mut state.players[pidx].graveyard);
+        for mut obj in sorted_cards.into_iter() {
+            obj.zone = 3; // ZONE_GRAVEYARD
+            gy_mut.push(obj);
         }
     }
     Ok(())
@@ -217,6 +271,17 @@ impl GameState {
                     // pending_decisions Vec; the dict is a snapshot.
                     let inner_dict = crate::cards::effect_to_pydict(py, inner_effect.as_ref())?;
                     d.set_item("inner_effect", inner_dict)?;
+                }
+                PendingDecision::PickCardFromExaminedChoice {
+                    source_obj_id,
+                    controller,
+                    cards,
+                } => {
+                    d.set_item("kind", "PickCardFromExaminedChoice")?;
+                    d.set_item("source_obj_id", *source_obj_id)?;
+                    d.set_item("controller", *controller)?;
+                    let card_ids: Vec<u32> = cards.iter().map(|o| o.id).collect();
+                    d.set_item("cards", card_ids)?;
                 }
             }
             out.append(d)?;
@@ -390,6 +455,66 @@ impl GameState {
         Ok(())
     }
 
+    /// Consume the head `PickCardFromExaminedChoice` on the pending-
+    /// decisions queue: route `chosen_id` to the controller's hand and
+    /// every other examined card to the controller's graveyard (in
+    /// popped order). `chosen_id` MUST be one of the examined card
+    /// ids; an unknown id raises `ValueError` transactionally (no
+    /// mutation on failure).
+    ///
+    /// Powers the round-28 `LookTopNPutOneInHandRestToGraveyard`
+    /// Effect (Commune-with-Evil family). The dispatcher mirrors
+    /// Python's `LookTopNPutOneInHandRestToGraveyard.resolve`: the
+    /// chosen card is moved to hand and revealed to all (the latter
+    /// is a Python-side log/observability feature with no Rust
+    /// surface yet); the rest go to graveyard in popped order.
+    ///
+    /// Raises `ValueError` if the queue is empty, its head is not a
+    /// `PickCardFromExaminedChoice`, or `chosen_id` is not one of the
+    /// examined ids.
+    fn submit_pick_card_decision(&mut self, chosen_id: u32) -> PyResult<()> {
+        if self.pending_decisions.is_empty() {
+            return Err(PyValueError::new_err(
+                "submit_pick_card_decision: no pending decision",
+            ));
+        }
+        // Inspect head — fail before any mutation on a discriminant
+        // mismatch or unknown chosen_id.
+        let chosen_idx = match &self.pending_decisions[0] {
+            PendingDecision::PickCardFromExaminedChoice { cards, .. } => {
+                let idx = cards.iter().position(|o| o.id == chosen_id);
+                match idx {
+                    Some(i) => i,
+                    None => {
+                        return Err(PyValueError::new_err(format!(
+                            "submit_pick_card_decision: chosen_id {chosen_id} \
+                             is not one of the examined card ids {:?}",
+                            cards.iter().map(|o| o.id).collect::<Vec<u32>>()
+                        )));
+                    }
+                }
+            }
+            other => {
+                return Err(PyValueError::new_err(format!(
+                    "submit_pick_card_decision: head of pending-decisions queue is \
+                     not a PickCardFromExaminedChoice (got {:?}); call the \
+                     variant-specific submit_* dispatcher (e.g. \
+                     submit_surveil_decision, submit_may_do_decision)",
+                    std::mem::discriminant(other)
+                )));
+            }
+        };
+        // Validation passed — consume the head and route.
+        let decision = self.pending_decisions.remove(0);
+        let (controller, cards) = match decision {
+            PendingDecision::PickCardFromExaminedChoice {
+                controller, cards, ..
+            } => (controller, cards),
+            _ => unreachable!("validated above"),
+        };
+        resolve_pick_card_to_hand(self, controller, cards, chosen_idx)
+    }
+
     /// Drain the pending-decisions queue using a deterministic
     /// strategy. Useful for callers that don't model the choice
     /// dimension (training harnesses, parity tests, deterministic
@@ -407,7 +532,11 @@ impl GameState {
     ///   Surveil falls through to `keep_all_on_top`.
     /// * `"may_do_no"` — MayDo answers "no" (drop inner effect).
     ///   Surveil falls through to `keep_all_on_top`.
-    /// * `"default"` — Surveil keeps all on top; MayDo answers "yes"
+    /// * `"pick_top"` — PickCardFromExamined picks the topmost
+    ///   examined card (cards[0]). Other variants fall through to
+    ///   their own per-variant defaults.
+    /// * `"default"` — Surveil keeps all on top; MayDo answers "yes";
+    ///   PickCardFromExamined picks the topmost examined card
     ///   (mirrors the base-Agent default in Python).
     ///
     /// Raises `ValueError` on an unknown strategy.

@@ -384,6 +384,29 @@ impl GameState {
                         json!(*controller),
                         Value::String(format!("{:?}", inner_effect)),
                     ]),
+                    // Round-28 pick-card-from-examined decision: stable
+                    // serialized form by variant-tag + source/controller
+                    // + per-examined-card object signature (same shape
+                    // as SurveilChoice — the examined cards live in
+                    // NEITHER library nor graveyard while pending, so
+                    // they need to participate in the fingerprint to
+                    // make a pending-card state distinguishable from
+                    // a state where the cards already moved).
+                    PendingDecision::PickCardFromExaminedChoice {
+                        source_obj_id,
+                        controller,
+                        cards,
+                    } => Value::Array(vec![
+                        Value::String("PickCardFromExaminedChoice".to_string()),
+                        json!(*source_obj_id),
+                        json!(*controller),
+                        Value::Array(
+                            cards
+                                .iter()
+                                .map(|o| object_signature(self, o))
+                                .collect(),
+                        ),
+                    ]),
                 })
                 .collect();
             parts_vec.push(Value::Array(pds));

@@ -3976,6 +3976,48 @@ fn apply_effect(
                 inner_effect: inner_effect.clone(),
             });
         }
+        // Round-28 "look at top N, put one in hand, rest to graveyard"
+        // — Commune-with-Evil family. Same pop-and-package shape as
+        // Surveil but routes to hand+graveyard instead of library-top
+        // +graveyard, and asks the controller to pick ONE rather than
+        // partitioning the whole set.
+        //
+        // Controller convention: `state.active_player` — same first-
+        // slice shape as Surveil / DrawCards.
+        //
+        // Empty / clamp behavior: `n=0` or library_len<n emits a
+        // PendingDecision with a (possibly empty) cards Vec. The
+        // submit dispatcher and auto-resolve handle an empty Vec as
+        // an O(1) no-op. Mirrors Python's `if not examined: return`
+        // short-circuit while preserving the substrate invariant
+        // (one PendingDecision per Effect arm).
+        Effect::LookTopNPutOneInHandRestToGraveyard { n } => {
+            if *n < 0 {
+                return Err(PyValueError::new_err(format!(
+                    "LookTopNPutOneInHandRestToGraveyard: n must be non-negative, got {n}"
+                )));
+            }
+            let controller = state.active_player;
+            let pidx = controller as usize;
+            let lib_len = state.players[pidx].library.len();
+            let count = (*n as usize).min(lib_len);
+            let lib_mut: &mut Vec<GameObject> =
+                Arc::make_mut(&mut state.players[pidx].library);
+            let mut cards: Vec<GameObject> = Vec::with_capacity(count);
+            for _ in 0..count {
+                let popped = lib_mut.pop().expect(
+                    "library length checked above; pop cannot fail",
+                );
+                cards.push(popped);
+            }
+            state.pending_decisions.push(
+                PendingDecision::PickCardFromExaminedChoice {
+                    source_obj_id,
+                    controller,
+                    cards,
+                },
+            );
+        }
     }
     Ok(())
 }

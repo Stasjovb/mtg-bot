@@ -639,6 +639,29 @@ refactor on either side that breaks the parity surfaces immediately.
     `tests_rust/test_pending_decisions.py` (13 tests covering parse,
     push-pending, submit yes/no, auto-resolve strategies, dispatcher
     cross-variant rejection, fingerprint divergence, clone isolation).
+  - **Round-28 extension — `PickCardFromExaminedChoice` variant.**
+    Third variant on the multi-variant substrate, pushed by
+    `Effect::LookTopNPutOneInHandRestToGraveyard` (Commune-with-Evil
+    family, 4 EoE cards). Payload: `{ source_obj_id, controller,
+    cards: Vec<GameObject> }` carrying the examined cards in popped
+    order (`cards[0]` = topmost). Dispatcher
+    `submit_pick_card_decision(chosen_id)` routes `chosen_id` to
+    controller's hand and every other examined card to controller's
+    graveyard (popped order); unknown id raises `ValueError`
+    transactionally. Auto-resolve gains `"pick_top"` (picks
+    `cards[0]`) plus `"default"` fallback (picks `cards[0]`) —
+    mirrors Python's no-agent-seated fallback in
+    `LookTopNPutOneInHandRestToGraveyard.resolve`. Fingerprint
+    serializer carries the per-card object signature (cards live in
+    NEITHER library nor graveyard while pending — must participate
+    in fingerprint to distinguish a pending state from one where
+    routing already completed). Pinned by 16 new tests in
+    `tests_rust/test_pending_decisions.py` (parse + default-n +
+    negative-n; pop+push; submit by id covering topmost / non-
+    topmost / unknown id / empty queue; cross-variant dispatcher
+    rejection; auto-resolve `pick_top` / `default`; non-pause
+    `resolve_top_of_stack` auto-resolve; zero-count / library-clamp;
+    fingerprint divergence; clone isolation).
 
 ### I23. UEOT-modifier framework: per-object expiring continuous effects with CR 514.3 cleanup-step expiration
 
