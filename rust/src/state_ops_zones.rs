@@ -188,10 +188,24 @@ impl GameState {
     /// "Top of library" = LAST element of the library `Vec`. See the
     /// module docstring for why the Python convention (front = top)
     /// is flipped here.
+    ///
+    /// **Empty-library side-effect (CR 704.5b).** When the library
+    /// is empty the pop returns `None` AND the player's
+    /// `attempted_draw_on_empty` cause-signal is set to `true` —
+    /// the next `apply_sbas` pass transitions that into the
+    /// sticky `has_lost` flag. `losers()` ALSO OR's the flag in
+    /// directly so the loss is observable BEFORE the SBA pass runs.
+    /// Mirrors Python's eager `p.has_lost = True` shape in
+    /// `turn.draw_card`. Round-26 G10 closure.
     fn draw_card(&mut self, player_id: u8) -> Option<u32> {
         let player = &mut self.players[player_id as usize];
         let lib = Arc::make_mut(&mut player.library);
-        let mut obj = lib.pop()?;
+        let Some(mut obj) = lib.pop() else {
+            // CR 704.5b: empty-library draw flags the player for
+            // loss on the next SBA pass.
+            player.attempted_draw_on_empty = true;
+            return None;
+        };
         obj.zone = ZONE_HAND;
         let drawn_id = obj.id;
         Arc::make_mut(&mut player.hand).push(obj);

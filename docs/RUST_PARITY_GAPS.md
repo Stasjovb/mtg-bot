@@ -188,44 +188,6 @@ behavior per CR / Python, parity impact, and closeable / accepted.
 - **Impact**: zero today, high when G8 is closed.
 - **Closeable**: bundled with G8.
 
-### G10. `DrawCards` from empty library is a silent no-op (no deck-out loss)
-
-- **Pinned by**: `tests_rust/test_library.py::test_drawcards_from_empty_library_is_silent_no_op_no_loser`,
-  `test_drawcards_count_larger_than_library_drains_no_sba_loss`.
-- **Rust today**: `Effect::DrawCards` against an empty library
-  short-circuits silently per draw. `apply_sbas` does NOT mark the
-  player as a loser. There is no `attempted_draw_on_empty` field on
-  the Rust `Player` struct.
-- **CR / Python expected**: CR 704.5b — a player who attempted to
-  draw from an empty library loses on the next SBA pass. Python
-  models this.
-- **Impact**: HIGH for games that mill out or draw heavily. Rust
-  games that would deck-out in Python continue indefinitely.
-- **Closeable**: yes — add `attempted_draw_on_empty: bool` to
-  `Player`, set it in the `DrawCards` empty-pop arm, check it in
-  `losers()` / `apply_sbas`. Pending slice.
-
-### G11. Game-end loss is pure-derivation from `life <= 0`; no `has_lost` field
-
-- **Pinned by**: `tests_rust/test_winloss.py` module docstring;
-  `test_gain_life_from_zero_revives_player`,
-  `test_each_opponent_loses_life_lethal_then_revive_flips_outcome`;
-  `@pytest.mark.skip` on `test_explicit_lose_game_marks_player`.
-- **Rust today**: `losers()` is computed purely from current life
-  totals (`life <= 0`). There is no `Player.has_lost` field. A
-  player at 0 life who gains life is removed from the loser list and
-  the game becomes ongoing again.
-- **CR / Python expected**: CR 104.3a / SBA-driven permanent loss —
-  a player who drops to 0 life loses, and "you lose the game" effects
-  (Phage, Bargain, deck-out) flag the player irrevocably. Python
-  preserves the loss across subsequent life changes.
-- **Impact**: medium. Observable in any game where a player drops
-  to 0 and then gains life (uncommon but legal).
-- **Closeable**: yes — add `has_lost: bool` to `Player` and switch
-  `losers()` to the OR of `has_lost` and `life <= 0`. The skipped
-  `test_explicit_lose_game_marks_player` is the API surface pin for
-  the future `state.lose_game(p)` primitive.
-
 ### G12. Mutual KO model is two sequential `lose_life` calls, not a single Effect
 
 - **Pinned by**: `tests_rust/test_winloss.py::test_mutual_zero_via_sequential_lose_life_is_draw` (docstring note: "the closest cross-feature analog the Rust engine exposes for 'both die in the same event'").
@@ -535,6 +497,38 @@ refactor on either side that breaks the parity surfaces immediately.
 - **Pinned by**: `tests_rust/test_deck.py::test_find_object_zone_after_make_state_agrees_with_setup`.
 - **Invariant**: Every library object reads `ZONE_LIBRARY`; every
   hand object reads `ZONE_HAND` immediately after `make_state`.
+
+### I17. Empty-library draw flags the player; `apply_sbas` locks the loss into the sticky `has_lost`
+
+- **Pinned by**:
+  `tests_rust/test_library.py::test_drawcards_from_empty_library_marks_player_for_loss_on_next_sba`,
+  `test_drawcards_count_larger_than_library_drains_then_loses_on_sba`,
+  `tests_rust/test_zones.py::test_draw_card_from_empty_library_returns_none`
+  (no-crash + cause-signal side-effect),
+  `tests_rust/test_winloss.py::test_explicit_lose_game_marks_player`,
+  `test_each_opponent_loses_life_lethal_then_sba_locks_the_loss`.
+- **Invariant** (CR 704.5b / CR 104.2 — round-26 G10 + G11 closure):
+  - The `draw_card` primitive AND the `Effect::DrawCards`
+    resolution arm flip `Player.attempted_draw_on_empty = true`
+    when the library pop returns `None`.
+  - `losers()` returns a player if **any** of the OR'd-three signals
+    are true: `has_lost`, `attempted_draw_on_empty`, or `life <= 0`.
+    Read directly (no SBA pass required) so the loss is observable
+    eagerly — mirrors Python's `p.has_lost = True` in
+    `turn.draw_card`.
+  - `apply_sbas` transitions the cause-signals (`attempted_draw_on_empty`
+    OR `life <= 0`) into the sticky `Player.has_lost = true`. Once
+    `has_lost` is set, no `gain_life` can revive the player. The
+    return value of `apply_sbas` remains the count of CREATURES
+    destroyed in the pass — the player-loss transition doesn't bump
+    it (separate SBA category in CR ordering).
+  - The pure-derivation revive semantics on `life <= 0` are preserved
+    UNTIL `apply_sbas` runs (so `set_life(0, 0); gain_life(0, 5)`
+    without an SBA pass in between still flips the player back out of
+    `losers()` — see `test_gain_life_from_zero_revives_player`).
+  - The explicit `lose_game(p)` primitive (Phage / Bargain) sets
+    `has_lost` directly without going through SBA — useful for
+    "you lose the game" cards where life is not the trigger.
 
 ---
 

@@ -175,6 +175,7 @@ the test lands in a commit.
 | rust(effect-each-opponent-discards): each-opponent discard (CR 701.8) | tests_rust/test_resolve.py extend | green  | feature/rust-effect-each-opponent-discards |
 | rust(effect-destroy-target-artifact): artifact-filter destroy (CR 701.7) | tests_rust/test_resolve.py extend | green  | feature/rust-effect-destroy-target-artifact |
 | rust(effect-destroy-target-land): land-filter destroy (CR 701.7) | tests_rust/test_resolve.py extend | green  | feature/rust-effect-destroy-target-land |
+| rust(gap-g10+g11): empty-library draw flags player, `apply_sbas` locks loss via sticky `has_lost` (CR 704.5b, CR 104.2) | tests_rust/test_library.py + test_winloss.py invert + extend | green  | feature/rust-gap-g10-draw-empty-deckout |
 
 ## Build invocation reminder
 

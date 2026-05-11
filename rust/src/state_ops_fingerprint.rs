@@ -173,10 +173,14 @@ fn player_signature(state: &GameState, idx: usize) -> Value {
     Value::Array(vec![
         json!(p.id),
         json!(p.life),
-        // has_lost: pure-derivation per state_ops_winloss — life <= 0.
-        // Python's hash_state uses `getattr(p, "has_lost", False)` which
-        // is also a bool, so the types match.
-        json!(p.life <= 0),
+        // has_lost: round-26 G11 closure — the explicit sticky loss
+        // flag now lives on `Player`. Pinned baselines were computed
+        // when the slot was the derived `life <= 0`; for every state
+        // used in those baselines the player is alive (life=20), so
+        // `has_lost == false == (life <= 0 is false)` and the digest
+        // is identical. New flows that drop `has_lost = true` without
+        // dropping life shift the digest deliberately (mirrors Python).
+        json!(p.has_lost),
         zone_signature(state, &p.hand),
         zone_signature(state, &p.library),
         zone_signature(state, &p.graveyard),
