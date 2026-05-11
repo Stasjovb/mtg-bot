@@ -812,3 +812,344 @@ def test_field_diff_mode_unknown_inject_field_errors(parity_smoke, capsys):
     out = capsys.readouterr().out
     assert "ERROR" in out
     assert "this_is_not_a_field" in out
+
+
+# ---------------------------------------------------------------------------
+# --mode cross-engine — FIRST cross-engine parity check (round 27 / Phase 5).
+# Builds matched Python + Rust states from the tiny synthetic deck, drives
+# N PassPriority decisions on both, and reports field-level divergences
+# along with a gap-doc lookup.
+#
+# This is the inaugural cross-engine compare — divergences ARE expected
+# (the bridge has known gaps documented in RUST_PARITY_GAPS.md). The
+# tests below are xfailed-pinned on the divergences they detect, so the
+# count of xfailed tests becomes the "open parity items" tally.
+# ---------------------------------------------------------------------------
+
+
+def test_cross_engine_mode_returns_walk_result_with_steps(parity_smoke):
+    """``walk_both`` produces a CrossEngineWalkResult with one
+    CrossEngineStep per applied decision. Smoke that the helper runs
+    end-to-end without raising on the tiny synthetic deck."""
+    from mtg_bot.parity.cross_engine import (
+        tiny_synthetic_deckspec,
+        walk_both,
+    )
+
+    result = walk_both(tiny_synthetic_deckspec(), n_decisions=5)
+    assert result.error is None
+    assert result.aborted_at is None
+    assert len(result.steps) == 5
+    # Each step has the action it applied recorded.
+    for step in result.steps:
+        assert step.action_dict == {"kind": "pass_priority"}
+
+
+def test_cross_engine_mode_initial_state_has_known_field_divergences(parity_smoke):
+    """The initial state of a tiny-synthetic Python state vs the matched
+    Rust state DOES have field-level divergences — both library_p0 and
+    library_p1 will differ on the per-object ``summoning_sick`` slot
+    (Python defaults True, Rust defaults False on library cards).
+
+    Pinned as a load-bearing fact: the FIRST cross-engine compare
+    surfaces this divergence at step 0. If a future slice fixes
+    either side's default, this test flips. Treated as an xfail-pin
+    because the divergence is the headline finding of the first
+    slice; it's a NEW parity bug that needs a gap entry in
+    RUST_PARITY_GAPS.md (see ``docs/RUST_PARITY_GAPS.md`` cross-engine
+    section)."""
+    from mtg_bot.parity.cross_engine import (
+        tiny_synthetic_deckspec,
+        walk_both,
+    )
+
+    result = walk_both(tiny_synthetic_deckspec(), n_decisions=0)
+    field_names = {d.field for d in result.initial_divergences}
+    # Both library zones diverge on the summoning_sick slot in the
+    # per-object signature.
+    assert "library_p0" in field_names
+    assert "library_p1" in field_names
+
+
+def test_cross_engine_mode_detects_pass_priority_divergence_at_step_0(parity_smoke):
+    """After the first PassPriority decision, Python's
+    ``apply_action(PassPriority)`` is a no-op (Python's priority_loop
+    owns priority management, not apply_action) — while Rust's
+    pass_priority TOGGLES the priority_player field. This is gap G3
+    (documented in RUST_PARITY_GAPS.md).
+
+    The xfail-pinned divergence: the cross-engine smoke flags
+    ``priority_player`` at step 0 with gap G3 lookup. When a future
+    slice closes G3 by composing priority+steps+stack, this test
+    flips to PASS and the xpass mark surfaces the closure."""
+    from mtg_bot.parity.cross_engine import (
+        tiny_synthetic_deckspec,
+        walk_both,
+    )
+
+    result = walk_both(tiny_synthetic_deckspec(), n_decisions=2)
+    # Step 0's divergence list must include priority_player and the
+    # gap lookup must resolve to G3.
+    step_0 = result.steps[0]
+    priority_div = next(
+        (d for d in step_0.divergences if d.field == "priority_player"), None,
+    )
+    assert priority_div is not None, (
+        f"expected priority_player divergence at step 0; "
+        f"actual divergences: {[d.field for d in step_0.divergences]}"
+    )
+    assert priority_div.known_gap == "I25"
+    assert priority_div.py_value == 0
+    assert priority_div.rust_value == 1
+
+
+@pytest.mark.xfail(
+    reason="Known parity divergence: summoning_sick=True on Python library "
+    "GameObjects vs False on Rust library objects (see "
+    "docs/RUST_PARITY_GAPS.md cross-engine section). xfail-pinned as "
+    "the inaugural cross-engine NOVEL divergence — the count of "
+    "xfailed cross-engine tests is the 'open parity items' tally.",
+    strict=True,
+)
+def test_cross_engine_mode_initial_libraries_byte_equal_after_make_state():
+    """The library_pN field views from Python and Rust MUST match
+    byte-for-byte on the initial state. This is the canonical parity
+    contract — both engines built from the same DeckSpec should
+    produce byte-identical zone signatures."""
+    from mtg_bot.parity.cross_engine import (
+        tiny_synthetic_deckspec,
+        build_matched_states,
+        build_python_field_view,
+    )
+    import importlib.util
+    import pathlib
+    repo_root = pathlib.Path(__file__).resolve().parent.parent
+    spec = importlib.util.spec_from_file_location(
+        "parity_smoke", repo_root / "scripts" / "parity_smoke.py",
+    )
+    parity_smoke = importlib.util.module_from_spec(spec)
+    sys.modules["parity_smoke"] = parity_smoke
+    spec.loader.exec_module(parity_smoke)
+
+    deck = tiny_synthetic_deckspec()
+    py_state, rust_state = build_matched_states(deck)
+    py_view = build_python_field_view(py_state)
+    rust_view = parity_smoke._build_field_view(rust_state)
+
+    # The xfail-pinned assertion: libraries match byte-for-byte. Today
+    # they don't (summoning_sick mismatch). When a future slice closes
+    # this, the xfail flips to xpass and the test maintainer removes
+    # the marker.
+    assert py_view["library_p0"] == rust_view["library_p0"]
+    assert py_view["library_p1"] == rust_view["library_p1"]
+
+
+@pytest.mark.xfail(
+    reason="Known parity divergence: Rust's apply_action(pass_priority) "
+    "toggles priority_player (G3 — pass_priority is a pure toggle), "
+    "while Python's apply_action(PassPriority) is a no-op. Pinned "
+    "so the G3 closure surfaces as xpass.",
+    strict=True,
+)
+def test_cross_engine_mode_priority_player_unchanged_by_pass_priority():
+    """After applying PassPriority on both engines, priority_player
+    must agree. Today Rust toggles 0->1 while Python keeps 0. xfail-
+    pinned on G3."""
+    from mtg_bot.parity.cross_engine import (
+        tiny_synthetic_deckspec,
+        walk_both,
+    )
+
+    result = walk_both(tiny_synthetic_deckspec(), n_decisions=1)
+    step_0 = result.steps[0]
+    priority_div = next(
+        (d for d in step_0.divergences if d.field == "priority_player"), None,
+    )
+    assert priority_div is None, (
+        f"priority_player diverged: {priority_div.py_value=} {priority_div.rust_value=}"
+    )
+
+
+def test_cross_engine_mode_inject_divergence_flags_life_at_step_0(parity_smoke):
+    """``walk_both(inject_divergence=True)`` artificially perturbs the
+    Rust state's life_p0 BEFORE the initial compare. The harness must
+    surface a life_p0 divergence in the initial-state report.
+
+    Smoke-test-the-smoke: this proves the harness is actually
+    detecting a fake cross-engine divergence, not just reporting
+    what we already know about. Failure mode is "harness silently
+    misses the perturbation" — which would mean the cross-engine
+    code path isn't actually comparing what we think it's
+    comparing."""
+    from mtg_bot.parity.cross_engine import (
+        tiny_synthetic_deckspec,
+        walk_both,
+    )
+
+    result = walk_both(
+        tiny_synthetic_deckspec(), n_decisions=0, inject_divergence=True,
+    )
+    initial_fields = {d.field for d in result.initial_divergences}
+    assert "life_p0" in initial_fields
+    life_div = next(
+        d for d in result.initial_divergences if d.field == "life_p0"
+    )
+    # Python is at default 20; Rust has been perturbed to 19.
+    assert life_div.py_value == 20
+    assert life_div.rust_value == 19
+
+
+def test_cross_engine_mode_cli_dispatches(parity_smoke, monkeypatch, capsys):
+    """``main()`` routes ``--mode cross-engine`` to the new runner.
+    End-to-end argparse + dispatch smoke. The runner is expected to
+    return 1 (divergences detected) on the current cross-engine state
+    — the first slice expects divergences, see the xfail-pinned tests
+    above."""
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "parity_smoke.py",
+            "--mode",
+            "cross-engine",
+            "--seed",
+            "42",
+            "--decisions",
+            "5",
+        ],
+    )
+    rc = parity_smoke.main()
+    # Today expect rc=1 (divergences). When the inaugural parity gaps
+    # close, this becomes rc=0; flip the assertion at that point.
+    assert rc == 1
+    out = capsys.readouterr().out
+    # The CLI prints the cross-engine header.
+    assert "[cross-engine]" in out
+    # And the aggregate summary lists priority_player as a known I25
+    # parity invariant (G3 was closed by the r27 priority composition
+    # layer; the cross-engine apply_action surface residual is now
+    # documented under I25).
+    assert "I25" in out
+    # The final verdict is PARITY: FAIL (until divergences close).
+    assert "PARITY: FAIL" in out
+
+
+def test_cross_engine_mode_cli_inject_divergence_flags_life(
+    parity_smoke, monkeypatch, capsys
+):
+    """``main() --mode cross-engine --inject-divergence yes`` flips
+    Rust's life_p0 to 19 before the compare; the runner must report
+    a life_p0 divergence in the output and exit 1."""
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "parity_smoke.py",
+            "--mode",
+            "cross-engine",
+            "--seed",
+            "42",
+            "--decisions",
+            "0",
+            "--inject-divergence",
+            "yes",
+        ],
+    )
+    rc = parity_smoke.main()
+    assert rc == 1
+    out = capsys.readouterr().out
+    assert "life_p0" in out
+    assert "(--inject-divergence)" in out
+    # The initial-state block prints py=20 and rust=19.
+    assert "20" in out and "19" in out
+
+
+def test_cross_engine_mode_step_index_increments(parity_smoke):
+    """``CrossEngineStep.step_index`` must be the loop index, not a
+    sentinel. The walk_both helper fills it in after step_both returns.
+    Catches a regression where the index would always be -1."""
+    from mtg_bot.parity.cross_engine import (
+        tiny_synthetic_deckspec,
+        walk_both,
+    )
+
+    result = walk_both(tiny_synthetic_deckspec(), n_decisions=4)
+    assert [s.step_index for s in result.steps] == [0, 1, 2, 3]
+
+
+def test_cross_engine_mode_first_divergence_step_helper(parity_smoke):
+    """``result.first_divergence_step()`` returns -1 when the initial
+    state diverges (i.e., "before any decision"). On a parity-clean
+    initial state it returns the first step index whose divergences
+    are non-empty, or None on a fully-clean walk."""
+    from mtg_bot.parity.cross_engine import (
+        tiny_synthetic_deckspec,
+        walk_both,
+    )
+
+    result = walk_both(tiny_synthetic_deckspec(), n_decisions=5)
+    # Today: the initial state diverges on library_pN, so the helper
+    # returns -1 (sentinel "before any decision").
+    assert result.first_divergence_step() == -1
+
+
+def test_cross_engine_default_gap_lookup_priority_player_resolves_i25(parity_smoke):
+    """The gap-doc lookup walks RUST_PARITY_GAPS.md and maps
+    ``priority_player`` to I25 (the priority composition invariant
+    that documents the cross-engine apply_action-level residual after
+    G3/G4/G15 were closed). Locks in the lookup contract — the
+    hard-coded mapping in :func:`_load_gap_doc_index` must resolve
+    to a section that ACTUALLY exists in the doc."""
+    from mtg_bot.parity.cross_engine import default_gap_lookup
+
+    assert default_gap_lookup("priority_player") == "I25"
+
+
+def test_cross_engine_default_gap_lookup_unknown_field_returns_none(parity_smoke):
+    """Fields not in the curated lookup table return None — the
+    "NOVEL divergence" signal. The summoning_sick + mana_pool type
+    divergences are NOT yet documented as gaps, so they should
+    surface as NOVEL.
+
+    Note: ``library_p0`` / ``hand_p0`` aren't in the curated map —
+    the divergences we see today are on the per-object
+    summoning_sick slot, which is properly NOVEL until a gap entry
+    documents it.
+    """
+    from mtg_bot.parity.cross_engine import default_gap_lookup
+
+    assert default_gap_lookup("library_p0") is None
+    assert default_gap_lookup("hand_p0") is None
+    assert default_gap_lookup("graveyard_p0") is None
+
+
+def test_cross_engine_build_python_state_step_is_untap(parity_smoke):
+    """``build_python_state`` sets ``state.step = Step.UNTAP`` to match
+    Rust's PHASE_UNTAP=0 starting phase. Without this Python's default
+    state.step is None and the cross-engine step diff would be
+    swamped by a None vs "UNTAP" mismatch."""
+    from mtg_bot.parity.cross_engine import (
+        build_python_state,
+        tiny_synthetic_deckspec,
+    )
+    from mtg_bot.turn import Step
+
+    py_state = build_python_state(tiny_synthetic_deckspec())
+    assert py_state.step == Step.UNTAP
+
+
+def test_cross_engine_build_rust_state_priority_is_zero(parity_smoke):
+    """The Rust state's starting priority_player must be 0 — Python's
+    default is also 0. This is the contract make_state advertises;
+    a regression here would be the first divergence the harness
+    detects on step 0."""
+    from mtg_bot.parity.cross_engine import (
+        build_rust_state,
+        tiny_synthetic_deckspec,
+    )
+
+    rust_state = build_rust_state(tiny_synthetic_deckspec())
+    assert rust_state.priority_player_idx == 0
+    assert rust_state.active_player_idx == 0
+    assert rust_state.turn_number == 1
+    assert rust_state.step == "UNTAP"

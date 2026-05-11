@@ -158,7 +158,8 @@
 //! collides with synthetic-state ids.
 
 use crate::cards::{parse_printing, Effect, RegistryData, TargetFilter};
-use crate::state::{GameObject, GameState, StackItem};
+use crate::state::{GameObject, GameState, PendingDecision, StackItem, UeotModifier};
+use crate::state_ops_decisions::auto_resolve_pending;
 use crate::state_ops_zones::{
     ZONE_BATTLEFIELD, ZONE_EXILE, ZONE_GRAVEYARD, ZONE_HAND, ZONE_LIBRARY,
 };
@@ -182,9 +183,13 @@ fn stack_item_to_dict<'py>(
 }
 
 /// Find the source GameObject by id across both players' four
-/// tracked zones. Returns a copy (GameObject is `Copy`) along with
-/// its printing_id, so the caller can drop the borrow on `state`
-/// before mutating it (e.g. to apply damage).
+/// tracked zones. Returns its `printing_id` (a `u32`) so the
+/// caller can drop the borrow on `state` before mutating it
+/// (e.g. to apply damage). Round-27 note: pre-r27 this returned a
+/// full Copy of the GameObject; the UEOT-modifiers Vec made
+/// GameObject `Clone` rather than `Copy`, but every caller only
+/// needs the `printing_id`, so the return shape contracted to a
+/// scalar.
 fn find_source_printing_id(state: &GameState, obj_id: u32) -> Option<u32> {
     for player in &state.players {
         for zone in [
@@ -1198,6 +1203,7 @@ fn apply_effect(
                     summoning_sick: true,
                     damage: 0,
                     counters: 0,
+                    ueot_modifiers: Vec::new(),
                 });
                 next_id += 1;
             }
@@ -1447,68 +1453,94 @@ fn apply_effect(
                 }
             }
         }
-        // Round-23: Surveil. CR 701.42 — controller looks at the top
-        // `count` cards of their library and may put any number of
-        // them into their graveyard; the rest stay on top in any
-        // order. Powers Appendage Amalgam, etc. — 16 cards in the EoE
-        // pool per round-20 measurement.
+        // Round-27 G20 closure: Surveil. CR 701.43 — controller looks
+        // at the top `count` cards of their library and may put any
+        // number of them into their graveyard; the rest stay on top
+        // in any order. Powers Appendage Amalgam, etc.
         //
         // **Sibling of ScryN (round 16).** Same look-at-top-N shape,
-        // different destination zone: Scry routes the chosen cards to
-        // the bottom of the library; Surveil routes them to the
-        // graveyard.
+        // different destination zone: Scry routes chosen cards to the
+        // bottom of the library; Surveil routes them to the graveyard.
         //
-        // **First-slice deterministic shortcut: keep all on top.**
-        // Mirrors round-16 ScryN's "keep all on top" first-slice
-        // choice — satisfies the "surveil happened" semantics without
-        // requiring a decision callback to choose which cards go to
-        // the graveyard (deferred to a future slice that plumbs a real
-        // "which to graveyard" decision surface, parallel to the
-        // deferred ScryN "which to bottom" plumbing). Keep-on-top is
-        // mechanically a no-op on both the library and the graveyard
-        // — no zone moves, no order change — so there is literally
-        // nothing to mutate here.
+        // **Decision-callback substrate (Option B: state-machine).**
+        // Surveil pops `count` cards (clamped to library size) off the
+        // library top and packages them into a
+        // `PendingDecision::SurveilChoice` on `state.pending_decisions`.
+        // The Effect arm short-circuits — the cards are NOT yet in the
+        // graveyard and NOT yet back on the library. The caller drains
+        // via `submit_surveil_decision(top, graveyard)` (the dispatcher
+        // moves each card to its chosen zone) or
+        // `auto_resolve_pending_decisions("keep_all_on_top" |
+        // "send_all_to_graveyard")` (the deterministic fast-path that
+        // preserves r23 baseline behavior).
         //
-        // **Controller convention: ``state.active_player``** — same
-        // first-slice shape as ScryN / DrawCards / GainLife (all
+        // **Why state-machine over Pyo3 callback (Option A).** Pending
+        // decisions participate in fingerprint / clone / CoW just like
+        // any other gameplay state. A `Bound<PyAny>` callback baked into
+        // the apply_effect signature would not survive fingerprinting,
+        // would break clone semantics (callbacks aren't cloneable across
+        // a Python boundary safely), and would couple every Effect-
+        // resolution call site to a Python callable — incompatible with
+        // pure-Rust MCTS rollouts. Mirrors Python's pause-and-resume
+        // `ResolutionSurveilDecision` shape in
+        // `mtg_bot.search.resolution_channel`.
+        //
+        // **Controller convention: ``state.active_player``** — first-
+        // slice shape consistent with ScryN / DrawCards / GainLife (all
         // implicit-controller). Real MTG plumbs the spell controller
-        // through ``StackItem.controller``; deferred. `source_obj_id`
-        // (round-23 refactor parameter) is ignored here — Surveil is
-        // controller-targeted, not source-targeted.
+        // through `StackItem.controller`; deferred. `source_obj_id` is
+        // recorded on the SurveilChoice for log-correlation and future
+        // controller-resolution work.
         //
-        // **Negative ``count`` raises** loudly (CR 701.42 doesn't
+        // **Negative ``count`` raises** loudly (CR 701.43 doesn't
         // define Surveil -1; surface it as a schema error). Mirrors
-        // ScryN's negative-count rejection. Defense-in-depth: the
-        // parser already rejects negatives at register time.
+        // ScryN's negative-count rejection.
         //
-        // **count > library size** is silently a no-op under the
-        // keep-all-on-top first slice (CR 701.42 would clamp to
-        // "look at all cards in the library", same as Scry; with
-        // keep-on-top no cards move regardless).
+        // **count > library size**: CR 701.43 clamps to library size
+        // ("look at all cards in the library"). We pop `min(count,
+        // library.len())` cards; the rest of the dispatch is unchanged.
         //
-        // **Inlining note (cross-file friction).** Round-16 ScryN
-        // already collapses to a sign-check + a no-op under keep-on-
-        // top; Surveil is the same shape, so the dispatch reduces to
-        // the same sign check. A future slice that plumbs the real
-        // "which to graveyard" decision can grow the inline path here
-        // (popping N cards from library top, presenting them through
-        // a Python-side `choose_surveil` callback, routing chosen
-        // cards to `Arc::make_mut(&mut player.graveyard).push(obj)`
-        // and the rest back to library top in original order).
+        // **count = 0**: legitimate no-op. We still push an empty
+        // SurveilChoice so the caller's invariant (every Surveil emits
+        // exactly one PendingDecision) holds; auto-resolve discards it
+        // in O(1). Pre-r27 r23-baseline tests use auto-resolve via the
+        // post-resolve hook, so count=0 plus auto-resolve is bit-equal
+        // to the pre-r27 behavior.
         Effect::Surveil { count } => {
             if *count < 0 {
                 return Err(PyValueError::new_err(format!(
                     "Surveil count must be non-negative, got {count}"
                 )));
             }
-            // First-slice deterministic keep-all-on-top: no library /
-            // graveyard mutation needed. Empty / clamped library is
-            // a silent no-op (nothing to look at, nothing to move).
-            // Bind the controller to make the convention explicit for
-            // future readers (the real "which to graveyard" decision
-            // will resolve against this player), mirroring ScryN.
-            let _controller = state.active_player as usize;
-            let _ = source_obj_id; // controller-targeted, not source-targeted
+            let controller = state.active_player;
+            let pidx = controller as usize;
+            // Clamp count to library size (CR 701.43 fold).
+            let lib_len = state.players[pidx].library.len();
+            let n = (*count as usize).min(lib_len);
+            // Pop n cards off library TOP. Round-1 zones convention:
+            // top of library = LAST element of the Vec. So we pop n
+            // times from the back. Order in `cards`: cards[0] is the
+            // topmost card (first popped), cards[1] is second-from-top,
+            // etc. The submit dispatcher preserves this ordering when
+            // routing back to the library top.
+            let lib_mut: &mut Vec<GameObject> =
+                Arc::make_mut(&mut state.players[pidx].library);
+            let mut cards: Vec<GameObject> = Vec::with_capacity(n);
+            for _ in 0..n {
+                let popped = lib_mut.pop().expect(
+                    "library length checked above; pop cannot fail",
+                );
+                cards.push(popped);
+                // The card currently lives in NO zone — its `zone`
+                // field is stale until the submit dispatcher writes
+                // the new zone. The submit path rewrites zone before
+                // pushing back to library or graveyard.
+            }
+            state.pending_decisions.push(PendingDecision::SurveilChoice {
+                source_obj_id,
+                controller,
+                cards,
+            });
         }
         // Round-23: CounterTargetSpell. CR 701.5 — counter target
         // spell on the stack; the countered spell moves to its
@@ -2414,6 +2446,61 @@ fn apply_effect(
                 state.players[defender_idx].life -= *amount;
             }
         }
+        // Round-27 UEOT-framework proof. Source gets +P/+T UEOT.
+        //
+        // Mechanism: locate the source GameObject on whichever
+        // battlefield holds it; push a
+        // `UeotModifier::PowerToughnessBonus { power, toughness }`
+        // entry onto the object's `ueot_modifiers` Vec. The effective
+        // P/T readers in `state_ops_combat.rs` /
+        // `state_ops_sba.rs::is_lethal` walk the Vec on top of
+        // printed/counter values. The entry auto-expires at the
+        // next `cleanup_step_for_active_player` /
+        // `advance_phase`-through-PHASE_CLEANUP via the round-27
+        // CR 514.3 UEOT-clear pass landed in `state_ops_cleanup.rs`.
+        //
+        // **Source-not-on-battlefield handling.** Mirrors the round-23
+        // `PutPlusOneCounterOnSelf` arm: walk both players'
+        // battlefields, no-op if the source isn't there (the source
+        // could be an in-flight stack item that hasn't yet moved,
+        // a graveyard-resident ability source for a future variant,
+        // etc.). Python parity: `if source is None: return`.
+        //
+        // **0/0 bonus is a legal no-op** — registration accepts
+        // it for parity edge cases. The Vec push still happens
+        // (so the next cleanup-step UEOT-clear pass touches the
+        // object), but downstream `ueot_power_bonus()` /
+        // `ueot_toughness_bonus()` readers see zero — the only
+        // observable effect is that the object goes through one
+        // CoW clone on the next cleanup. Skip the Vec push when
+        // both bonuses are zero, to keep the warm path allocation-
+        // free.
+        Effect::PumpSelfUntilEOT { power_bonus, toughness_bonus } => {
+            if *power_bonus == 0 && *toughness_bonus == 0 {
+                return Ok(());
+            }
+            // Walk both battlefields to find the source object.
+            for pidx in 0..state.players.len() {
+                if state.players[pidx]
+                    .battlefield
+                    .iter()
+                    .any(|o| o.id == source_obj_id)
+                {
+                    let zone: &mut Vec<GameObject> =
+                        Arc::make_mut(&mut state.players[pidx].battlefield);
+                    for obj in zone.iter_mut() {
+                        if obj.id == source_obj_id {
+                            obj.ueot_modifiers.push(UeotModifier::PowerToughnessBonus {
+                                power: *power_bonus,
+                                toughness: *toughness_bonus,
+                            });
+                            break;
+                        }
+                    }
+                    break;
+                }
+            }
+        }
     }
     Ok(())
 }
@@ -2503,6 +2590,68 @@ impl GameState {
             .stack
             .pop()
             .expect("peeked top but pop returned None — stack invariant broken");
+        // Auto-resolve any pending decisions (Round-27 G20 closure).
+        // Pre-r27 behavior: Surveil etc. resolved with deterministic
+        // "keep all on top". The decision-callback substrate now
+        // packages those into PendingDecisions during apply_effect;
+        // stack resolution defaults to the same "keep all on top"
+        // strategy so existing baseline tests (test_library.py r23
+        // surveil, etc.) are bit-equal to the pre-r27 path.
+        // Callers that want to observe / control the decision use
+        // `resolve_top_of_stack_pause` (no auto-resolve) instead.
+        auto_resolve_pending(self, "keep_all_on_top")?;
+        Ok(Some(stack_item_to_dict(py, &popped)?))
+    }
+
+    /// Same as `resolve_top_of_stack` but does NOT auto-resolve any
+    /// `PendingDecision`s the effect dispatch leaves on the queue.
+    /// The caller is responsible for either submitting decisions
+    /// (`submit_surveil_decision`) or calling
+    /// `auto_resolve_pending_decisions(strategy)` afterward.
+    ///
+    /// For tests / harnesses that need to introspect mid-resolution
+    /// state (a SurveilChoice carrying its observed cards, before
+    /// the controller routes them). The CR 608.2m post-resolve
+    /// source mover still fires (the Sorcery still lands in the
+    /// graveyard); the only difference is the pending decision
+    /// queue remains populated.
+    fn resolve_top_of_stack_pause<'py>(
+        &mut self,
+        py: Python<'py>,
+    ) -> PyResult<Option<Bound<'py, PyDict>>> {
+        let top = match self.stack.last() {
+            None => return Ok(None),
+            Some(item) => item.clone(),
+        };
+        let effects: Vec<Effect> = match find_source_printing_id(self, top.source_obj_id)
+        {
+            Some(printing_id) => match self.registry.lookup(printing_id) {
+                Some(printing) => printing.effects.clone(),
+                None => Vec::new(),
+            },
+            None => Vec::new(),
+        };
+        for effect in &effects {
+            apply_effect(self, effect, top.source_obj_id)?;
+        }
+        let post_resolve_zone = move_source_post_resolve(self, top.source_obj_id);
+        if post_resolve_zone == Some(ZONE_BATTLEFIELD) {
+            let etb_effects: Vec<Effect> =
+                match find_source_printing_id(self, top.source_obj_id) {
+                    Some(printing_id) => match self.registry.lookup(printing_id) {
+                        Some(printing) => printing.etb_effects.clone(),
+                        None => Vec::new(),
+                    },
+                    None => Vec::new(),
+                };
+            for effect in &etb_effects {
+                apply_effect(self, effect, top.source_obj_id)?;
+            }
+        }
+        let popped = self
+            .stack
+            .pop()
+            .expect("peeked top but pop returned None — stack invariant broken");
         Ok(Some(stack_item_to_dict(py, &popped)?))
     }
 
@@ -2569,6 +2718,7 @@ impl GameState {
             summoning_sick: false,
             damage: 0,
             counters: 0,
+            ueot_modifiers: Vec::new(),
         };
 
         let player = &mut self.players[controller as usize];

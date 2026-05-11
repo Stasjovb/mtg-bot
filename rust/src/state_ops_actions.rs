@@ -136,6 +136,19 @@ impl GameState {
     /// `actions::parse_action`.
     fn apply_action(slf: Bound<'_, Self>, action_dict: &Bound<'_, PyDict>) -> PyResult<()> {
         let action = parse_action(action_dict)?;
+        // Round-27 G3 closure: every non-PassPriority arm is a
+        // priority-round-breaking mutation — record up front whether
+        // we'll need to reset `consecutive_passes` and (for the
+        // CR 117.1c "AP gets priority after a spell is cast / ability
+        // resolves" rule) `priority_player = active_player` after a
+        // successful dispatch.
+        //
+        // PassPriority itself does NOT reset (it INCREMENTS the
+        // counter via the underlying `pass_priority` primitive).
+        // Stubs that always raise (TurnFaceUp / UnlockRoomHalf /
+        // ActivateStation) never reach the post-arm reset because
+        // they short-circuit with `?` propagation.
+        let is_pass_priority = matches!(action, Action::PassPriority);
         match action {
             Action::PassPriority => {
                 // Cross-file pymethod dispatch (round-16 pattern):
@@ -534,7 +547,41 @@ impl GameState {
                         }
                     }
                 }
+                // Round-27 G4 closure: priority reset after the
+                // activate happens at the post-arm reset block
+                // (below) — same shape as every other non-pass arm.
             }
+        }
+        // Round-27 G3 + G4 post-arm reset (CR 117.1c).
+        //
+        // After any non-PassPriority action successfully dispatches,
+        // the priority round it interrupted ends:
+        //
+        //  - `priority_player` resets to `active_player` (CR 117.1c
+        //    — AP gets priority after a spell is cast or an ability
+        //    resolves; for non-spell actions like PlayLand /
+        //    DeclareAttackers / DeclareBlockers the parity-load-bearing
+        //    behavior is the same: priority returns to the active
+        //    player after the action, mirroring Python
+        //    `simulate.py:priority_loop` which sets
+        //    `priority_idx = state.active_player_idx` after every
+        //    non-pass branch).
+        //
+        //  - `consecutive_passes` resets to 0 — a non-pass mutation
+        //    breaks any in-flight pass streak.
+        //
+        // Cast/activate also touched `priority_player` from inside
+        // their respective primitive bodies (cast_creature) /
+        // dispatch arm (ActivateAbility), which is harmless — the
+        // post-arm reset writes the same value (AP) again. Keeping
+        // the reset BOTH at the primitive layer AND here protects
+        // direct-primitive callers (e.g. tests that call
+        // `cast_creature` directly without going through
+        // `apply_action`) from a missed reset.
+        if !is_pass_priority {
+            let mut state = slf.borrow_mut();
+            state.priority_player = state.active_player;
+            state.consecutive_passes = 0;
         }
         Ok(())
     }

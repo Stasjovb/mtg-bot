@@ -52,6 +52,20 @@
 //! fingerprint — it's a per-call safety counter, not part of the
 //! gameplay-relevant state digest.
 //!
+//! ## Atomic London transaction (round-27 G21 + G22 closure)
+//!
+//! `mulligan_atomic(player_id, seed, bottom_card_ids)` is the
+//! parity-correct entrypoint for the harness — it folds shuffle +
+//! redraw + bottom-N into one call so a caller can't observe a
+//! state with the hand still at 7 after the Nth mulligan. The
+//! bottom-count is gated against the per-player `mulligan_count`
+//! pre-increment: the Nth mulligan (where `mulligan_count` is N-1
+//! at call time, incrementing to N) bottoms exactly N cards. The
+//! legacy `mulligan` / `mulligan_to_n` / `bottom_cards_from_hand`
+//! primitives are KEPT for backwards compatibility with existing
+//! tests and call sites, but parity-driving callers should use
+//! `mulligan_atomic`.
+//!
 //! ## CoW
 //!
 //! All mutation flows through `Arc::make_mut` on the touched zones
@@ -345,6 +359,212 @@ impl GameState {
             // defensive — future slices may reuse this primitive on
             // wider zones, and a stale `tapped` / `summoning_sick`
             // bit on a now-library object would be a latent bug).
+            obj.zone = ZONE_LIBRARY;
+            obj.tapped = false;
+            obj.summoning_sick = false;
+            obj.damage = 0;
+            obj.counters = 0;
+            lib.insert(0, obj);
+        }
+        Ok(())
+    }
+
+    /// Round-27 G21 + G22 closure: atomic London-mulligan transaction.
+    ///
+    /// Folds shuffle + redraw-7 + bottom-N into a single primitive so
+    /// the harness can never observe a state with the hand still at
+    /// 7 after the Nth mulligan. The Nth mulligan (where the per-
+    /// player `mulligan_count` is N-1 at call time, incrementing to
+    /// N) bottoms exactly N cards — the bottom-count is gated against
+    /// the post-increment `mulligan_count` so the first call
+    /// bottoms 1, the second bottoms 2, etc.
+    ///
+    /// Ordering:
+    ///
+    /// 1. Validate `player_id`.
+    /// 2. Pre-check `bottom_card_ids.len() == mulligan_count + 1`
+    ///    (count check BEFORE any mutation so a wrong-count call
+    ///    leaves the state byte-identical to its pre-call shape).
+    /// 3. Increment `mulligan_count`.
+    /// 4. Cap check: if post-increment > 7, raise `ValueError`
+    ///    BEFORE any zone mutation (matches the legacy
+    ///    `mulligan` / `mulligan_to_n` ordering).
+    /// 5. Shuffle: drain hand into library, Fisher-Yates with `seed`,
+    ///    redraw 7 (or until library is empty).
+    /// 6. Verify each `bottom_card_id` is in the post-redraw hand;
+    ///    raise `ValueError` on any unknown id (the shuffle has
+    ///    already happened, so the state has mutated — bottom step
+    ///    is skipped on a verification failure).
+    /// 7. Bottom the chosen ids in the caller-specified order: the
+    ///    FIRST id ends up at the very bottom (`lib[0]`); each
+    ///    successive id sits one slot above. Matches the
+    ///    `bottom_cards_from_hand` orientation contract.
+    ///
+    /// Errors:
+    ///
+    /// - `ValueError` if `player_id` is not 0 or 1.
+    /// - `ValueError` if `bottom_card_ids.len() != mulligan_count + 1`
+    ///   (count mismatch — no mutation has happened yet).
+    /// - `ValueError` if post-increment `mulligan_count > 7` (cap;
+    ///   no zone mutation has happened yet, but `mulligan_count`
+    ///   has been bumped — matches the legacy variants).
+    /// - `ValueError` if any `bottom_card_id` is not in the post-
+    ///   redraw hand (shuffle has happened; bottom step skipped).
+    ///
+    /// The CALLER chooses which cards to bottom (no decision-callback
+    /// machinery in the Rust port yet). Since the post-shuffle hand
+    /// is deterministic in `(state, seed)`, parity_smoke and MCTS
+    /// can pre-compute the bottom set offline.
+    ///
+    /// CoW-safe (same `Arc::make_mut` discipline as `mulligan` /
+    /// `bottom_cards_from_hand`). Backwards-compatibility note: the
+    /// legacy `mulligan`, `mulligan_to_n`, and `bottom_cards_from_hand`
+    /// primitives remain in place — only `mulligan_atomic` is the
+    /// parity-correct entrypoint for new callers.
+    fn mulligan_atomic(
+        &mut self,
+        player_id: u8,
+        seed: u64,
+        bottom_card_ids: Vec<u32>,
+    ) -> PyResult<()> {
+        let idx = player_id as usize;
+        if idx >= 2 {
+            return Err(PyValueError::new_err(format!(
+                "player_id {player_id} out of range (must be 0 or 1)"
+            )));
+        }
+        let player = &mut self.players[idx];
+
+        // Step 2: pre-check the bottom count against the per-player
+        // mulligan_count. The Nth mulligan (count BEFORE increment is
+        // N-1, becomes N after the increment in step 3) bottoms
+        // exactly N cards, so the expected size is
+        // `mulligan_count + 1` at this point. Doing this BEFORE the
+        // increment means a wrong-count call leaves state byte-
+        // identical to its pre-call shape (no mulligan_count bump,
+        // no shuffle, no bottom).
+        let expected = (player.mulligan_count as usize).saturating_add(1);
+        if bottom_card_ids.len() != expected {
+            return Err(PyValueError::new_err(format!(
+                "mulligan_atomic: bottom_card_ids has {got} entries, expected \
+                 {expected} (the Nth mulligan must bottom N cards; \
+                 mulligan_count is currently {pre} so this is mulligan #{n})",
+                got = bottom_card_ids.len(),
+                pre = player.mulligan_count,
+                n = expected,
+            )));
+        }
+
+        // Step 3 + 4: increment then cap-check. Same ordering as the
+        // legacy variants — the 8th call (which would push count from
+        // 7 to 8) is the one that raises. Mirrors Python
+        // `simulate.setup_game(max_mulligans=7)`.
+        player.mulligan_count = player.mulligan_count.saturating_add(1);
+        if player.mulligan_count > 7 {
+            return Err(PyValueError::new_err(format!(
+                "player {player_id} has already mulliganed 7 times \
+                 (CR 103.4 / Python simulate.max_mulligans cap); \
+                 mulligan_count is now {count}",
+                count = player.mulligan_count,
+            )));
+        }
+
+        // Step 5: shuffle. Same recipe as `mulligan` — drain hand
+        // into library, Fisher-Yates with `seed`, redraw 7 (or until
+        // empty). Scoped block so the `&mut player.hand` /
+        // `&mut player.library` borrows from the shuffle don't outlast
+        // the redraw step.
+        {
+            let hand = Arc::make_mut(&mut player.hand);
+            let returning: Vec<_> = hand.drain(..).collect();
+            let lib = Arc::make_mut(&mut player.library);
+            for mut obj in returning {
+                obj.zone = ZONE_LIBRARY;
+                lib.push(obj);
+            }
+
+            let n = lib.len();
+            if n >= 2 {
+                let mut rng = XorShift64::new(seed);
+                for i in (1..n).rev() {
+                    let j = rng.next_usize_below(i + 1);
+                    lib.swap(i, j);
+                }
+            }
+        }
+
+        // Redraw 7 (or until empty). Top of library = LAST element.
+        {
+            let hand = Arc::make_mut(&mut player.hand);
+            let lib = Arc::make_mut(&mut player.library);
+            for _ in 0..7 {
+                let Some(mut obj) = lib.pop() else {
+                    break;
+                };
+                obj.zone = ZONE_HAND;
+                hand.push(obj);
+            }
+        }
+
+        // Step 6: verify every bottom_card_id is in the post-redraw
+        // hand. The shuffle has already mutated state — atomic-vs-
+        // legacy distinction is that the legacy split would let the
+        // caller forget the bottom step entirely; here, any invalid
+        // id raises BEFORE the bottoming runs, but the shuffle has
+        // already happened. Callers should pre-compute valid ids.
+        {
+            let hand_ids: std::collections::HashSet<u32> =
+                player.hand.iter().map(|o| o.id).collect();
+            for id in &bottom_card_ids {
+                if !hand_ids.contains(id) {
+                    return Err(PyValueError::new_err(format!(
+                        "mulligan_atomic: bottom_card_id {id} is not in \
+                         player {player_id}'s post-redraw hand (hand has \
+                         {hand_size} cards)",
+                        hand_size = player.hand.len(),
+                    )));
+                }
+            }
+            // Also reject duplicate ids — bottoming the same card
+            // twice is nonsensical and would corrupt the library.
+            if hand_ids.len() < bottom_card_ids.len() {
+                // The hand has at least bottom_card_ids.len() distinct
+                // entries (since each id passed the contains check),
+                // so if there are duplicates in bottom_card_ids itself
+                // we'd see a duplicate-key insertion below. Check
+                // explicitly via a count.
+            }
+            let unique: std::collections::HashSet<u32> =
+                bottom_card_ids.iter().copied().collect();
+            if unique.len() != bottom_card_ids.len() {
+                return Err(PyValueError::new_err(format!(
+                    "mulligan_atomic: bottom_card_ids contains duplicate \
+                     entries ({duplicates} unique of {total})",
+                    duplicates = unique.len(),
+                    total = bottom_card_ids.len(),
+                )));
+            }
+        }
+
+        // Step 7: remove each chosen id from hand and append it to
+        // the bottom of the library. Per the orientation contract
+        // (`bottom_cards_from_hand`: hand[0] ends up at lib[0] /
+        // very bottom; later ids sit above it), the FIRST id in
+        // `bottom_card_ids` lands at the very bottom (`lib[0]`).
+        // Implementation: walk the ids in REVERSE and insert each at
+        // `lib[0]` — the last-walked (which is the first-supplied)
+        // ends up at the bottom-most slot.
+        let hand = Arc::make_mut(&mut player.hand);
+        let lib = Arc::make_mut(&mut player.library);
+        for id in bottom_card_ids.iter().rev() {
+            // Find the position in hand by id. Linear scan is fine —
+            // hand is at most 7 entries here.
+            let pos = hand
+                .iter()
+                .position(|o| o.id == *id)
+                .expect("verified above that id is in hand");
+            let mut obj = hand.remove(pos);
+            // Reset per-instance state (mirrors `bottom_cards_from_hand`).
             obj.zone = ZONE_LIBRARY;
             obj.tapped = false;
             obj.summoning_sick = false;

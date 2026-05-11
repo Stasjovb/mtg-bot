@@ -183,18 +183,19 @@ fn draw_card_inline(state: &mut GameState, player_id: u8) {
 /// Free-function mirror of `state_ops_cleanup.rs:cleanup_step_for_active_player`,
 /// scoped to the side-effects `advance_phase` needs on entry to
 /// PHASE_CLEANUP (CR 514.1 hand-size discard at max=7 for the active
-/// player + CR 514.2 marked-damage clear on both battlefields). The
-/// `#[pymethods]` variant returns a `Bound<PyDict>` summary, which
+/// player + CR 514.2 marked-damage clear on both battlefields + CR
+/// 514.3 UEOT-modifier expiration on both battlefields, round-27).
+/// The `#[pymethods]` variant returns a `Bound<PyDict>` summary, which
 /// would require threading a `Python<'py>` token into `advance_phase`
 /// (currently a plain `&mut self -> u8`). The inline mirror drops the
 /// summary dict and keeps the call site GIL-free, matching the
 /// established workaround pattern documented in the module docstring
 /// (same friction as `untap_all_for_player_inline` / `draw_card_inline`).
 ///
-/// Order: hand-size discard FIRST, then damage clear — preserves the
-/// CR 514.1-before-514.2 sequencing already baked into
-/// `cleanup_step_for_active_player`. See that primitive's module
-/// docstring for why ordering matters.
+/// Order: hand-size discard FIRST, then damage clear, then UEOT clear
+/// — preserves the CR 514.1-before-514.2-before-514.3 sequencing
+/// baked into `cleanup_step_for_active_player`. See that primitive's
+/// module docstring for why ordering matters.
 ///
 /// CoW-safe: each zone mutation routes through `Arc::make_mut`. The
 /// damage-clear pass short-circuits when no permanent on a given
@@ -237,6 +238,24 @@ fn cleanup_step_for_active_player_inline(state: &mut GameState) {
         let zone: &mut Vec<GameObject> = Arc::make_mut(&mut player.battlefield);
         for obj in zone.iter_mut() {
             obj.damage = 0;
+        }
+    }
+    // (3) CR 514.3 — drain every UEOT modifier on every battlefield
+    // permanent (round-27 closure of parity gap G7). Mirrors the
+    // primitive `cleanup_step_for_active_player`'s CR-514.3 pass; same
+    // CoW shape — skip the `Arc::make_mut` clone when no permanent on
+    // a battlefield has any UEOT modifier.
+    for player in state.players.iter_mut() {
+        if player
+            .battlefield
+            .iter()
+            .all(|o| o.ueot_modifiers.is_empty())
+        {
+            continue;
+        }
+        let zone: &mut Vec<GameObject> = Arc::make_mut(&mut player.battlefield);
+        for obj in zone.iter_mut() {
+            obj.ueot_modifiers.clear();
         }
     }
 }
@@ -331,12 +350,27 @@ impl GameState {
         // The inline mirror exists for the same GIL-token reason as
         // the other inline helpers — see this file's module docstring.
         empty_all_mana_pools_inline(self);
+        // Round-27 G3 closure: advancing the phase is a non-pass
+        // mutation — it breaks any consecutive-pass streak that was
+        // building up before the advance. Reset to 0 so a subsequent
+        // `pass_priority` re-starts counting from 1.
+        self.consecutive_passes = 0;
         if self.phase == PHASE_CLEANUP {
             self.phase = PHASE_UNTAP;
             self.turn_number += 1;
             // Two-player swap. If the engine ever grows past two
             // players, replace with `(active_player + 1) % n`.
             self.active_player = 1 - self.active_player;
+            // Round-27 G15 closure: CR 117.1a — the active player
+            // gets priority at the start of each step (and at the
+            // start of each turn). On the CLEANUP -> UNTAP wrap the
+            // active player has just flipped, so reset priority to
+            // the NEW active player here. Mirrors Python's
+            // `simulate.py:212-213` which sets
+            // `state.priority_player_idx = 0` after the active-player
+            // swap at the start of a new turn — the Rust version is
+            // the same rule generalized for either seat.
+            self.priority_player = self.active_player;
         } else {
             self.phase += 1;
         }

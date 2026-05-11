@@ -255,17 +255,33 @@ fn read_creature_status(state: &GameState, obj_id: u32) -> Option<(bool, bool)> 
     None
 }
 
-/// Read printing.power for a battlefield creature, returning 0 for
-/// non-creatures or unknown ids. Used by `deal_combat_damage` to size
-/// each side's contribution to the symmetric exchange.
+/// Read effective power for a battlefield creature, returning 0 for
+/// non-creatures or unknown ids. "Effective" =
+/// `printed_power + ueot_power_bonus` per CR 613 layer 7c additive
+/// stacking (round-27 UEOT framework). Counters do not yet feed into
+/// the power side (round-2's net-counter model is toughness-only —
+/// `state_ops_sba.rs` adds `obj.counters` to effective toughness,
+/// not to effective power; that asymmetry is intentional, mirroring
+/// Python's `effective_power` shape). Used by `deal_combat_damage`
+/// to size each side's contribution to the symmetric exchange.
 fn battlefield_creature_power(state: &GameState, obj_id: u32) -> i16 {
-    let Some((_, printing_id)) = locate_battlefield_obj(state, obj_id) else {
+    let Some((player_idx, printing_id)) = locate_battlefield_obj(state, obj_id) else {
         return 0;
     };
     let Some(printing) = state.registry.lookup(printing_id) else {
         return 0;
     };
-    printing.power.unwrap_or(0)
+    let base = printing.power.unwrap_or(0) as i32;
+    let bonus = state.players[player_idx]
+        .battlefield
+        .iter()
+        .find(|o| o.id == obj_id)
+        .map(|o| o.ueot_power_bonus())
+        .unwrap_or(0);
+    let effective = base + bonus;
+    // Saturate into i16 to match the existing return-shape contract;
+    // a 32k+ effective power is unreachable on any real card.
+    effective.clamp(i16::MIN as i32, i16::MAX as i32) as i16
 }
 
 /// Does this battlefield permanent's printing carry the
@@ -282,28 +298,68 @@ fn battlefield_has_vigilance(state: &GameState, obj_id: u32) -> bool {
 /// printings whose `keywords` Vec doesn't contain the lowercase
 /// keyword string. Shared by the vigilance / deathtouch / lifelink
 /// branches.
+///
+/// **Round-27 UEOT framework.** The keyword set this reader walks
+/// is the UNION of the printing's printed keywords AND any
+/// `UeotModifier::GrantKeyword` currently on the object's
+/// `ueot_modifiers` stack (CR 613 layer 6 keyword grants). The
+/// printed-side stays the strict baseline; UEOT grants stack
+/// additively on top and clear on entry to PHASE_CLEANUP (see
+/// `state_ops_cleanup.rs::clear_ueot_modifiers_all`). This is what
+/// gates the "and gains haste/flying/lifelink UEOT" pump-rider
+/// branches at combat time.
 fn battlefield_has_keyword(state: &GameState, obj_id: u32, keyword: &str) -> bool {
-    let Some((_, printing_id)) = locate_battlefield_obj(state, obj_id) else {
+    let Some((player_idx, printing_id)) = locate_battlefield_obj(state, obj_id) else {
         return false;
     };
     let Some(printing) = state.registry.lookup(printing_id) else {
         return false;
     };
-    printing.keywords.iter().any(|k| k == keyword)
+    if printing.keywords.iter().any(|k| k == keyword) {
+        return true;
+    }
+    // UEOT-granted keywords (CR 613 layer 6).
+    state.players[player_idx]
+        .battlefield
+        .iter()
+        .find(|o| o.id == obj_id)
+        .map(|o| o.ueot_has_keyword(keyword))
+        .unwrap_or(false)
 }
 
-/// Read printing.toughness for a battlefield creature, returning 0
-/// for non-creatures or unknown ids. Used by `deal_combat_damage` to
-/// size the deathtouch upgrade (the recipient's damage is bumped to
-/// at least this value).
+/// Read effective toughness for a battlefield creature, returning 0
+/// for non-creatures or unknown ids. "Effective" =
+/// `printed_toughness + ueot_toughness_bonus` per CR 613 layer 7c
+/// additive stacking (round-27 UEOT framework). Used by
+/// `deal_combat_damage` to size the deathtouch upgrade (the
+/// recipient's damage is bumped to at least this value).
+///
+/// **Asymmetry note (intentional, pinned by test_combat.py).** This
+/// reader does NOT fold `obj.counters` into effective toughness, even
+/// though `state_ops_sba.rs::collect_sba_victims` DOES. Combat math
+/// in the round-5 + round-13 slices was sized off printed toughness;
+/// the counters-affect-combat path is deferred until a parity test
+/// explicitly demands it. UEOT bonuses fold in here because they
+/// otherwise have no consumer at combat time, defeating the
+/// PumpTargetCreatureUntilEOT proof (a +2/+2 attacker NEEDS the
+/// toughness math to size the deathtouch upgrade off the bumped
+/// value).
 fn battlefield_creature_toughness(state: &GameState, obj_id: u32) -> i16 {
-    let Some((_, printing_id)) = locate_battlefield_obj(state, obj_id) else {
+    let Some((player_idx, printing_id)) = locate_battlefield_obj(state, obj_id) else {
         return 0;
     };
     let Some(printing) = state.registry.lookup(printing_id) else {
         return 0;
     };
-    printing.toughness.unwrap_or(0)
+    let base = printing.toughness.unwrap_or(0) as i32;
+    let ueot_bonus = state.players[player_idx]
+        .battlefield
+        .iter()
+        .find(|o| o.id == obj_id)
+        .map(|o| o.ueot_toughness_bonus())
+        .unwrap_or(0);
+    let effective = base + ueot_bonus;
+    effective.clamp(i16::MIN as i32, i16::MAX as i32) as i16
 }
 
 /// Read controller (player index) of a battlefield creature, or
@@ -418,6 +474,65 @@ fn battlefield_creature_alive(state: &GameState, obj_id: u32) -> bool {
 
 #[pymethods]
 impl GameState {
+    /// **Round-27 UEOT framework: effective-power getter.** Returns
+    /// the current effective power of a battlefield creature
+    /// (printing.power.unwrap_or(0) + sum of
+    /// `UeotModifier::PowerToughnessBonus.power` on the object's
+    /// `ueot_modifiers` Vec). Saturates into i16 to match the
+    /// combat-side return shape; `None` if the object isn't on a
+    /// battlefield or its printing has no `power` (non-creature).
+    ///
+    /// Mirrors Python's `mtg_bot.game.effective_power(state, obj)`
+    /// for tests + the parity-smoke harness. Combat readers
+    /// (`declare_attacker`, `deal_combat_damage`) use the
+    /// module-private `battlefield_creature_power` of the same
+    /// shape; this public getter wraps it.
+    fn effective_power(&self, obj_id: u32) -> Option<i16> {
+        if locate_battlefield_obj(self, obj_id).is_none() {
+            return None;
+        }
+        let (_, printing_id) = locate_battlefield_obj(self, obj_id)?;
+        let printing = self.registry.lookup(printing_id)?;
+        printing.power?; // creature predicate
+        Some(battlefield_creature_power(self, obj_id))
+    }
+
+    /// **Round-27 UEOT framework: effective-toughness getter.**
+    /// Returns the current effective toughness of a battlefield
+    /// creature (printing.toughness + sum of
+    /// `UeotModifier::PowerToughnessBonus.toughness`). Saturates
+    /// into i16; `None` if the object isn't on a battlefield or
+    /// its printing has no `toughness` (non-creature).
+    ///
+    /// Mirrors Python's `mtg_bot.game.effective_toughness(state,
+    /// obj)`. The combat-side `battlefield_creature_toughness`
+    /// returns the same number; this public getter wraps it.
+    /// NOTE: this getter does NOT fold in `obj.counters` (the
+    /// signed +1/+1 / -1/-1 net-counter contribution) — the
+    /// asymmetry matches `battlefield_creature_toughness`'s
+    /// combat-side shape and is pinned by `test_combat.py`. The
+    /// SBA-side `is_lethal` predicate DOES fold counters in; use
+    /// that for the lethal-damage view.
+    fn effective_toughness(&self, obj_id: u32) -> Option<i16> {
+        let (_, printing_id) = locate_battlefield_obj(self, obj_id)?;
+        let printing = self.registry.lookup(printing_id)?;
+        printing.toughness?; // creature predicate
+        Some(battlefield_creature_toughness(self, obj_id))
+    }
+
+    /// **Round-27 UEOT framework: effective-keyword getter.**
+    /// Returns `true` iff the battlefield permanent's effective
+    /// keyword set contains `keyword` — the UNION of the printing's
+    /// printed keywords AND any `UeotModifier::GrantKeyword` on the
+    /// object's `ueot_modifiers` Vec. Lowercase match (the bridge
+    /// already lowercases printed keywords at register time;
+    /// callers pass the keyword in lowercase). Returns `false` for
+    /// unknown obj_ids or non-battlefield objects, mirroring the
+    /// existing `battlefield_has_keyword` private helper's shape.
+    fn has_keyword(&self, obj_id: u32, keyword: &str) -> bool {
+        battlefield_has_keyword(self, obj_id, keyword)
+    }
+
     /// Declare the battlefield creature with `obj_id` as an attacker.
     ///
     /// On success: pushes `obj_id` onto `self.attackers`, taps the

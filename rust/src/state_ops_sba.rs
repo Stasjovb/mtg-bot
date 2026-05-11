@@ -148,11 +148,24 @@ impl GameState {
                 // from both destruction-by-damage (704.5g) and
                 // destruction-by-zero-toughness (704.5f). Damage and
                 // counters still track; only the destruction step is
-                // skipped.
-                if printing.keywords.iter().any(|k| k == "indestructible") {
+                // skipped. Round-27 UEOT framework: indestructibility
+                // can also be granted UEOT (Plaza of Heroes), so the
+                // gate folds in any `UeotModifier::GrantKeyword`
+                // entries too.
+                if printing.keywords.iter().any(|k| k == "indestructible")
+                    || obj.ueot_has_keyword("indestructible")
+                {
                     continue;
                 }
-                let effective_toughness = toughness as i32 + obj.counters;
+                // Round-27 UEOT framework: effective_toughness folds
+                // in `ueot_toughness_bonus` (CR 613 layer 7c) on top
+                // of the pre-r27 (printed + counters) calculation, so
+                // an "until end of turn" +N/+M pump shrinks the
+                // lethal-damage and zero-toughness victims correctly.
+                // PumpTargetCreatureUntilEOT-tier riders need this
+                // path to fire.
+                let effective_toughness =
+                    toughness as i32 + obj.counters + obj.ueot_toughness_bonus();
                 // 704.5f first per CR ordering.
                 if effective_toughness <= 0 {
                     victims.push((obj.controller, obj.id));
@@ -303,7 +316,14 @@ impl GameState {
                 if obj.id == obj_id {
                     let printing = self.registry.lookup(obj.printing_id)?;
                     let toughness = printing.toughness?;
-                    let effective_toughness = toughness as i32 + obj.counters;
+                    // Round-27 UEOT framework: keep this predicate in
+                    // lockstep with `collect_sba_victims`'s effective-
+                    // toughness recipe — fold counters AND
+                    // `ueot_toughness_bonus` so a UEOT-pumped creature
+                    // surfaces the right is_lethal answer at the
+                    // mid-turn parity boundary.
+                    let effective_toughness =
+                        toughness as i32 + obj.counters + obj.ueot_toughness_bonus();
                     return Some(obj.damage as i32 >= effective_toughness);
                 }
             }

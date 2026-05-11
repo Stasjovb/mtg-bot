@@ -943,14 +943,18 @@ def test_effect_mill_target_player_mills_target_not_source(synthetic_state):
 def test_effect_surveil_first_slice_keeps_library_and_top_id_unchanged(
     synthetic_state,
 ):
-    """Cross-feature: round-23 Surveil first-slice deterministic choice
-    is "keep all on top". So Surveil 1 does NOT move the top-of-library
-    card anywhere — library size and the identity of the top card both
-    stay put. Documents the round-23 first-slice behavior (a future
-    slice will plumb a real "which to graveyard" decision callback).
-
-    See ``docs/SEARCH_LIMITATIONS.md`` for the deferred surveil-routing
-    decision-callback work."""
+    """Cross-feature: round-23 Surveil baseline is "keep all on top".
+    Surveil 1 does NOT move the top-of-library card anywhere — library
+    size and the identity of the top card both stay put. After the
+    round-27 G20 closure (decision-callback substrate landed) this
+    baseline now flows through `resolve_top_of_stack`'s auto-resolve
+    path with strategy ``"keep_all_on_top"``: the Surveil arm pops
+    cards into a `PendingDecision::SurveilChoice`, then the auto-
+    resolve at the tail of `resolve_top_of_stack` returns them to
+    library top in the original order. The library + graveyard
+    observation surface is bit-equal to the pre-r27 path. Real
+    surveil-to-graveyard now uses the new `submit_surveil_decision`
+    dispatcher — see `tests_rust/test_pending_decisions.py`."""
     top_id = 17 + P0_LIBRARY_SIZE - 1  # 66
     lib_before = synthetic_state.library_sizes[0]
     gy_before = synthetic_state.graveyard_sizes[0]

@@ -161,6 +161,7 @@ fn push_object(
         summoning_sick: false,
         damage: 0,
         counters: 0,
+        ueot_modifiers: Vec::new(),
     });
     *next_id += 1;
 }
@@ -309,5 +310,7 @@ pub fn make_state(
         attackers: Vec::new(),
         blockers: Vec::new(),
         stack: Vec::new(),
+        consecutive_passes: 0,
+        pending_decisions: Vec::new(),
     })
 }

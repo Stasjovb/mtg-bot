@@ -195,12 +195,18 @@ fn move_from_hand_to_battlefield(
     let hand = Arc::make_mut(&mut player.hand);
     let mut obj = hand.remove(pos);
     obj.zone = ZONE_BATTLEFIELD;
+    let snapshot = obj.clone();
     let bf = Arc::make_mut(&mut player.battlefield);
     bf.push(obj);
-    // Return a copy of the freshly-pushed object for the caller's
-    // book-keeping (e.g. summoning-sick stamping is done by the
-    // caller before this push, see `cast_creature`).
-    Some(obj)
+    // Return a snapshot clone of the freshly-pushed object for the
+    // caller's book-keeping (e.g. summoning-sick stamping is done by
+    // the caller AFTER this push via `bf.iter_mut().find()`, see
+    // `cast_creature`). Round-27 note: `GameObject` lost its `Copy`
+    // derive when `ueot_modifiers: Vec<UeotModifier>` landed, so the
+    // pre-r27 "return the moved value by copy" shape now requires an
+    // explicit clone — the empty-modifiers warm path makes that
+    // clone cheap (a null heap ptr + zero len/cap).
+    Some(snapshot)
 }
 
 #[pymethods]
@@ -319,6 +325,20 @@ impl GameState {
         if let Some(obj) = bf.iter_mut().find(|o| o.id == obj_id) {
             obj.summoning_sick = true;
         }
+        // Round-27 G4 closure: CR 117.1c — the active player gets
+        // priority after a spell is cast (or after an ability
+        // resolves). The Rust `cast_creature` primitive fuses the
+        // Python "push to stack -> resolve" sequence into a single
+        // mutation (no-stack semantics — see the docstring above), so
+        // the "after cast" priority reset happens here at the
+        // primitive layer. A future stack-using cast slice will need
+        // to re-think when the reset fires (after the cast push? or
+        // after the resolution pop?), but the no-stack shape today
+        // makes "after the primitive succeeds" the only well-defined
+        // moment. Also reset `consecutive_passes` — a successful
+        // cast is a non-pass mutation that breaks any pass streak.
+        self.priority_player = self.active_player;
+        self.consecutive_passes = 0;
         Ok(true)
     }
 }

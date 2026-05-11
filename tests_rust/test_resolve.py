@@ -3950,34 +3950,43 @@ def test_resolve_put_plus_one_counter_on_self_finds_source_on_opponent_battlefie
     assert synthetic_state.get_counters(spell_obj_id) == 1
 
 
-# --- round-23: Surveil dispatch ------------------------------------
+# --- round-23: Surveil dispatch (round-27 G20 closure: decision-callback) ---
 #
-# CR 701.42: Surveil N — the controller looks at the top N cards of
+# CR 701.43: Surveil N — the controller looks at the top N cards of
 # their library, then chooses any number to put into their graveyard.
 # The rest stay on top in any order. Powers Appendage Amalgam, etc.
 # Sibling of ScryN (round 16): same look-at-top-N shape, different
 # destination zone (graveyard not bottom-of-library).
 #
-# **First-slice deterministic choice: keep all on top.** Mirrors
-# round-16 ScryN's first-slice choice — mechanically a no-op on both
-# library and graveyard (no zone moves, no order change). Future
-# slice plumbs a real "which to graveyard" decision callback.
+# **Round-27 G20 closure: state-machine decision callback.** The
+# Surveil arm now pops the observed cards off library top and
+# packages them into a `PendingDecision::SurveilChoice`. The caller
+# either submits via `submit_surveil_decision(top_ids, graveyard_ids)`
+# (the real CR 701.43 choice surface) or auto-resolves via
+# `auto_resolve_pending_decisions(strategy)`. The tests below drive
+# `resolve_top_of_stack`, which auto-resolves with strategy
+# "keep_all_on_top" — making the observation surface bit-equal to
+# the pre-r27 round-23 first-slice (deterministic keep-all). Tests
+# of the decision substrate itself live in
+# `tests_rust/test_pending_decisions.py`.
 #
-# **Negative count raises** loudly (CR 701.42 doesn't define
+# **Negative count raises** loudly (CR 701.43 doesn't define
 # Surveil -1; surface it as a schema error). Mirrors ScryN's
 # negative-count rejection.
 #
 # **count = 0** is a legitimate no-op (mirrors ScryN count=0 / the
-# round-2 amount=0 conventions).
+# round-2 amount=0 conventions). The substrate still emits one
+# (empty) SurveilChoice — the auto-resolve drains it in O(1).
 #
-# **count > library size** is also a no-op under keep-all-on-top
-# (CR 701.42 would clamp to "look at all cards"; with keep-on-top no
-# cards move regardless of the clamp).
+# **count > library size** clamps to library size (CR 701.43); with
+# `resolve_top_of_stack`'s "keep_all_on_top" auto-resolve, the
+# observed cards return to top in the original order, so the
+# observation surface is unchanged.
 #
 # **Controller convention: state.active_player** — same first-slice
 # shape as ScryN / DrawCards / GainLife. Real MTG plumbs the spell
 # controller through StackItem.controller; deferred. `source_obj_id`
-# is ignored (controller-targeted, not source-targeted).
+# is recorded on the SurveilChoice for log-correlation.
 
 
 def _surveil_dict(count=2):

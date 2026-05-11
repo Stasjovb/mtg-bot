@@ -41,40 +41,6 @@ How the smoke consumes this doc:
 Each entry: short name, pinning test, current Rust behavior, expected
 behavior per CR / Python, parity impact, and closeable / accepted.
 
-### G3. `pass_priority` is a pure toggle (no step-end / stack-resolution composition)
-
-- **Pinned by**: `tests_rust/test_priority.py::test_both_pass_priority_with_empty_stack_does_not_advance_step`,
-  `test_both_pass_priority_with_nonempty_stack_does_not_resolve_top`,
-  `test_priority_unaffected_by_phase_advance_in_this_slice`,
-  `test_advance_phase_full_lap_does_not_touch_priority`.
-- **Rust today**: `pass_priority` flips `priority_player` and nothing
-  else. Two `pass_priority` calls with an empty stack do NOT advance
-  the step; with a non-empty stack they do NOT resolve the top.
-  `advance_phase` does NOT reset priority to the new active player.
-- **CR / Python expected**: CR 117.4 — both-pass with empty stack ends
-  the step; with non-empty stack resolves the top. CR 117.1a — active
-  player gets priority at the start of each step.
-- **Impact**: low at primitive level (this is the slice-boundary
-  composition — callers like `complete_priority_round` exist for
-  explicit composition). The smoke harness drives state through
-  explicit composition calls; pure-toggle behavior is observable only
-  when the harness uses `pass_priority` directly without composing.
-- **Closeable**: yes — accepted slice-boundary pin. A future slice
-  will integrate priority + steps + stack.
-
-### G4. `cast_creature` / `activate_ability` do not touch priority
-
-- **Pinned by**: `tests_rust/test_priority.py::test_cast_spell_does_not_change_priority_player`,
-  `test_activate_mana_ability_does_not_change_priority_player`.
-- **Rust today**: Casting a creature or activating a (mana) ability
-  leaves `priority_player` unchanged.
-- **CR / Python expected**: CR 117.1c — the active player gets
-  priority after a spell is cast or an ability resolves.
-- **Impact**: low-to-medium. As with G3, the harness composes via
-  higher-level primitives; pure cast/activate behavior is observable
-  only when the harness inspects priority directly.
-- **Closeable**: yes — same slice as G3.
-
 ### G5. `legal_decisions(non_priority_player)` returns the `[pass_priority]` singleton
 
 - **Pinned by**: `tests_rust/test_priority.py::test_legal_decisions_for_non_priority_player_still_emits_pass_priority`;
@@ -91,19 +57,6 @@ behavior per CR / Python, parity impact, and closeable / accepted.
   → no actions" notices this is intentional Python parity.
 - **Closeable**: not a gap — it is the deliberate parity contract.
   See invariant I5 for the matching invariant entry.
-
-### G7. Cleanup step does not run "until end of turn" effect expiration (CR 514.3)
-
-- **Pinned by**: docstring on `test_cleanup.py` ("CR 514.3 ('until end
-  of turn' effects expire) and CR 514.4 (no-trigger repeat cleanup
-  step) are deferred").
-- **Rust today**: `cleanup_step_for_active_player` models CR 514.1
-  (hand-size discard) and CR 514.2 (damage clear) only.
-- **CR / Python expected**: CR 514.3 fires "until end of turn"
-  expiration; CR 514.4 specifies the no-trigger repeat behavior.
-- **Impact**: zero today (no continuous-effect or triggered-ability
-  machinery in Rust yet), high once continuous effects land.
-- **Closeable**: deferred until continuous-effect framework exists.
 
 ### G8. `+1/+1` vs `-1/-1` counters cancel as net-i32 at write time, not as separate stacks at SBA
 
@@ -162,21 +115,6 @@ behavior per CR / Python, parity impact, and closeable / accepted.
   no-op contract. Listed here for clarity. See invariant I7.
 - **Closeable**: not a gap. Parity invariant.
 
-### G15. `advance_phase`'s CLEANUP -> UNTAP wrap does not reset priority
-
-- **Pinned by**: `tests_rust/test_steps.py::test_advance_phase_keeps_priority_player_in_sync_with_active`;
-  `tests_rust/test_priority.py::test_priority_unaffected_by_phase_advance_in_this_slice`,
-  `test_advance_phase_full_lap_does_not_touch_priority`.
-- **Rust today**: When `advance_phase` wraps CLEANUP -> UNTAP and
-  flips `active_player`, the `priority_player` field is not touched.
-- **CR / Python expected**: CR 117.1a — the new active player gets
-  priority at the start of their turn.
-- **Impact**: low when harness drives priority explicitly; high if
-  smoke compares the `priority_player_idx` field across the
-  turn-boundary.
-- **Closeable**: yes — same slice as G3 / G4 (priority + steps
-  integration).
-
 ### G16. `set_phase` does not fire the untap sweep
 
 - **Pinned by**: `tests_rust/test_steps.py::test_set_phase_does_not_fire_untap_sweep`.
@@ -231,50 +169,6 @@ behavior per CR / Python, parity impact, and closeable / accepted.
   resulting library order will diverge from Python.
 - **Closeable**: yes — pending RNG externalization work to seed the
   shuffle deterministically inside `apply_effect`.
-
-### G20. Surveil first-slice keeps everything on top (no decision callback)
-
-- **Pinned by**: `tests_rust/test_library.py::test_effect_surveil_first_slice_keeps_library_and_top_id_unchanged`
-  (docstring note); also tracked in `docs/SEARCH_LIMITATIONS.md`.
-- **Rust today**: `Effect::Surveil` deterministically keeps all
-  observed cards on top. No "which to graveyard" decision callback.
-- **CR / Python expected**: Real surveil lets the controller route
-  each observed card to top-of-library or graveyard.
-- **Impact**: low — visible whenever a surveil effect resolves;
-  Rust never sends to graveyard.
-- **Closeable**: yes — pending decision-callback plumbing for surveil
-  and scry.
-
-### G21. `mulligan` always draws 7; no London-style hand-shrink
-
-- **Pinned by**: `tests_rust/test_mulligan.py::test_mulligan_keeps_hand_at_seven_pinning_london_simplification`;
-  module-level cross-feature docstring (lines 430-453).
-- **Rust today**: `mulligan(player, seed)` always leaves the hand at
-  size 7. It does not take a mulligan-count parameter and never
-  shrinks the hand. A separate `mulligan_to_n(player, n_cards, seed)`
-  primitive provides the smaller-hand draw shape.
-- **CR / Python expected**: CR 103.4 — each successive mulligan
-  draws a smaller hand (7 → 6 → 5 → ...). London mulligan keeps the
-  hand at 7 visually but requires bottoming N cards atomically.
-- **Impact**: medium — observable whenever a player mulligans and
-  the parity harness checks hand size. The bridge currently expects
-  the caller to invoke `bottom_cards_from_hand` as a separate step.
-- **Closeable**: yes — accepted simplification. A future "real
-  London-mulligan transaction" slice consolidates the two-call flow.
-
-### G22. `mulligan` does not enforce the bottom-N step
-
-- **Pinned by**: `tests_rust/test_mulligan.py` module docstring (gap 5).
-- **Rust today**: A caller who calls `mulligan` without then calling
-  `bottom_cards_from_hand` ends up with too many cards in hand. The
-  primitive does not enforce the bottoming.
-- **CR / Python expected**: CR 103.4 — the London-mulligan
-  transaction is atomic (shuffle + draw 7 + bottom N). Python's
-  flow enforces the bottoming.
-- **Impact**: low when the harness drives mulligan via composed
-  primitives; medium if direct `mulligan` calls leak into the smoke
-  harness.
-- **Closeable**: yes — bundled with G21 (atomic London transaction).
 
 ### G24. No scry-on-keep step after mulligan-to-7 (Paris rule)
 
@@ -519,6 +413,134 @@ refactor on either side that breaks the parity surfaces immediately.
   `test_cleanup.py::test_cleanup_step_does_not_empty_mana_pool_at_primitive_layer`);
   the mana-empty hook is owned exclusively by `advance_phase`.
 
+### I24. `mulligan_atomic` folds shuffle + redraw-7 + bottom-N into one transaction (CR 103.4 London)
+
+- **Pinned by**:
+  `tests_rust/test_mulligan.py::test_mulligan_atomic_seventh_call_succeeds_eighth_raises`,
+  `test_mulligan_atomic_bottoms_correct_number_for_each_mulligan_count`,
+  `test_mulligan_atomic_bottom_count_mismatch_raises`,
+  `test_mulligan_atomic_invalid_card_id_raises`,
+  `test_mulligan_atomic_hand_size_invariant`,
+  `test_mulligan_atomic_library_grows_by_old_hand_minus_bottom`,
+  `test_mulligan_atomic_clone_isolation`,
+  `test_mulligan_atomic_fingerprint_stable_for_same_seed_and_bottoms`.
+- **Invariant** (CR 103.4 / round-27 G21 + G22 closure):
+  - `mulligan_atomic(player_id, seed, bottom_card_ids)` is the
+    parity-correct entrypoint for the harness. The Nth mulligan
+    (per-player `mulligan_count` is N-1 at call time, becomes N
+    after the increment) bottoms exactly N cards — the
+    `bottom_card_ids.len() == mulligan_count + 1` pre-check fires
+    BEFORE the increment / shuffle / bottoming so a wrong-count call
+    leaves state byte-identical.
+  - Ordering is (1) player_id validation, (2) bottom-count pre-check,
+    (3) increment `mulligan_count`, (4) cap check (> 7 raises),
+    (5) shuffle library (drain hand + Fisher-Yates with `seed` +
+    redraw 7), (6) verify each `bottom_card_id` is in the post-redraw
+    hand AND that the list contains no duplicates, (7) remove each
+    chosen id from hand and insert at `lib[0]` in REVERSE iteration
+    order so the FIRST id supplied lands at the very bottom (matches
+    `bottom_cards_from_hand`'s orientation contract).
+  - Hand-size invariant: post-call hand size is always
+    `7 - mulligan_count` (drew 7, bottomed `mulligan_count`). A caller
+    using the atomic primitive can NEVER observe a state with the
+    hand still at 7 after the Nth mulligan — closes the G21 / G22
+    observable gap.
+  - Bottom-count mismatch (`bottom_card_ids.len() !=
+    mulligan_count + 1`) raises BEFORE any mutation; the state's
+    fingerprint, hand size, library size, and `mulligan_count` are
+    all unchanged.
+  - Cap shared with the legacy `mulligan` / `mulligan_to_n`: the
+    7-call total is per-player and counts atomic calls too. The 8th
+    call raises with no zone mutation (the cap check fires before
+    the shuffle), though `mulligan_count` itself was bumped (matches
+    legacy ordering).
+  - Invalid `bottom_card_id` (not in post-redraw hand) OR duplicate
+    ids raise AFTER the shuffle has happened — the bottom step is
+    skipped but the shuffle has already mutated state. Callers should
+    pre-compute valid ids by probing a clone with the same `seed`.
+  - The legacy `mulligan`, `mulligan_to_n`, and `bottom_cards_from_hand`
+    primitives are KEPT for backwards compatibility; only
+    `mulligan_atomic` is the parity-correct entrypoint for new
+    callers. Closes parity gaps G21 + G22 (entries removed from
+    "Confirmed gaps" above).
+
+### I25. Priority composition layer: `pass_priority` increments a counter, non-pass mutations reset it, `complete_step_via_priority_round` routes between CR 117.4 / 117.5 legs, and `advance_phase` resets priority on the CLEANUP -> UNTAP wrap (CR 117.1a / 117.1c / 117.4)
+
+- **Pinned by** (round-27 G3 + G4 + G15 closure):
+  - **Counter increment + reset**: `tests_rust/test_priority.py::test_consecutive_passes_increments_on_each_pass`,
+    `test_consecutive_passes_resets_on_non_pass_action`,
+    `test_complete_priority_round_resets_consecutive_passes`,
+    `test_pass_priority_alone_does_not_advance_step_or_resolve`.
+  - **G3 composer (`complete_step_via_priority_round`)**:
+    `tests_rust/test_priority.py::test_complete_step_via_priority_round_advances_step_when_stack_empty`,
+    `test_complete_step_via_priority_round_resolves_top_when_stack_nonempty`,
+    `test_complete_step_via_priority_round_with_multi_item_stack_pops_only_top`,
+    `test_complete_step_via_priority_round_resets_priority_to_active_after_resolution`;
+    cross-feature: `tests_rust/test_stack.py::test_complete_step_via_priority_round_drains_then_advances`.
+  - **G4 (cast / activate reset priority to active)**:
+    `tests_rust/test_priority.py::test_cast_spell_resets_priority_to_active`,
+    `test_cast_spell_failure_does_not_touch_priority`,
+    `test_activate_mana_ability_resets_priority_to_active`.
+  - **G15 (advance_phase priority reset on wrap)**:
+    `tests_rust/test_priority.py::test_advance_phase_full_lap_resets_priority_to_active_at_wrap`,
+    `test_priority_unaffected_by_advance_phase_within_a_turn`;
+    `tests_rust/test_steps.py::test_advance_phase_keeps_priority_player_in_sync_with_active`.
+- **Invariant** (CR 117.1a / CR 117.1c / CR 117.4 / CR 117.5 / round-27 G3 + G4 + G15 closure):
+  - `GameState.consecutive_passes: u8` tracks consecutive `pass_priority`
+    calls since the last non-pass mutation. `pass_priority` increments
+    it (saturating); every non-pass mutation
+    (`cast_creature`, `apply_action` for non-PassPriority arms,
+    `advance_phase`, `give_priority_to`, the round-9
+    `complete_priority_round` composer, and the new
+    `complete_step_via_priority_round` composer's resolution leg)
+    resets it to 0.
+  - `complete_step_via_priority_round() -> bool` is the harness-facing
+    "both players have passed" composer. Internally calls
+    `pass_priority` twice, then routes by stack state:
+    - **Non-empty stack** → CR 117.4 / 117.5: pop the top, reset
+      `priority_player = active_player` (CR 117.1c), reset
+      `consecutive_passes`, return `False` (no step advance).
+    - **Empty stack** → CR 117.4: call `advance_phase` (which handles
+      mana-empty, the per-phase hooks, the CLEANUP -> UNTAP wrap with
+      the CR 117.1a priority reset, and the consecutive_passes reset),
+      return `True` (step advanced).
+    Mirrors Python's `simulate.py:priority_loop` logic (lines
+    245-280): when `pass_count >= alive_count()` with `state.stack`
+    non-empty, call `resolve_top_of_stack` and reset
+    `priority_idx = state.active_player_idx`; with empty stack,
+    return (end-of-step). The pop-only stepping-stone shape (no
+    effect dispatch) is preserved — real effect dispatch is the
+    job of `resolve_top_of_stack` in `state_ops_resolve.rs` per
+    the cross-file private-method friction documented on the
+    older `complete_priority_round`.
+  - `cast_creature` resets `priority_player = active_player` AND
+    `consecutive_passes = 0` on a successful cast (CR 117.1c).
+    Failure paths (precondition gate, insufficient mana) are a
+    no-op on priority — the reset only fires after a successful
+    mutation. Mirrors Python's no-stack semantics where the
+    primitive fuses push + resolve and "priority returns to AP"
+    fires once at the end.
+  - `apply_action` resets `priority_player = active_player` AND
+    `consecutive_passes = 0` after EVERY non-PassPriority arm
+    succeeds (PlayLand / DeclareAttackers / DeclareBlockers /
+    CastSpell / ActivateAbility). PassPriority itself flows through
+    the underlying `pass_priority` toggle and INCREMENTS the
+    counter instead. Mirrors Python's `simulate.py:priority_loop`
+    pattern of `priority_idx = state.active_player_idx` after
+    every non-pass branch.
+  - `advance_phase` resets `priority_player = active_player` on the
+    CLEANUP -> UNTAP wrap (CR 117.1a — the new active player gets
+    priority at the start of their turn). Within-turn step advances
+    do NOT touch priority (the within-step CR 117.1a reset is the
+    composer's responsibility, not `advance_phase`'s). Mirrors
+    Python's `simulate.py:212-213` which sets
+    `state.priority_player_idx = 0` at the start of turn 1.
+  - `consecutive_passes` is NOT serialized into the fingerprint —
+    like `mulligan_count` (I21), it's a transient bookkeeping
+    counter, not part of the gameplay-relevant state digest. Pinned
+    fingerprint baselines below are unchanged. Closes parity gaps
+    G3, G4, and G15 (entries removed from "Confirmed gaps" above).
+
 ### I21. `mulligan` / `mulligan_to_n` raise after 7 calls per player (CR 103.4 cap)
 
 - **Pinned by**:
@@ -545,6 +567,138 @@ refactor on either side that breaks the parity surfaces immediately.
     per-call safety counter, not part of the gameplay-relevant state
     digest. Pinned fingerprint baselines below are unchanged. Closes
     parity gap G23 (entry removed from "Confirmed gaps" above).
+
+### I22. Decision-callback substrate via `pending_decisions` (CR 701.43 Surveil; G20 closure)
+
+- **Pinned by**: every test in
+  `tests_rust/test_pending_decisions.py`; the round-23 baselines in
+  `tests_rust/test_resolve.py::test_resolve_surveil_*` and
+  `tests_rust/test_library.py::test_effect_surveil_first_slice_keeps_library_and_top_id_unchanged`
+  still hold via the auto-resolve path.
+- **Invariant** (round-27 G20 closure):
+  - `GameState.pending_decisions: Vec<PendingDecision>` — a FIFO
+    queue of choices the engine is waiting on. The first variant is
+    `PendingDecision::SurveilChoice { source_obj_id, controller,
+    cards }`. Future variants (G22 `LondonBottomN`, G24
+    `ScryOnKeep`, future `ModalChooseOne` / `ManifestDread`) follow
+    the same shape.
+  - `Effect::Surveil` pops `min(count, library_len)` cards off
+    library top and packages them into a `SurveilChoice` — the cards
+    live in NEITHER library nor graveyard while the decision is
+    pending. The arm short-circuits; nothing else mutates.
+  - `state.has_pending_decision()` / `state.pending_decisions()` —
+    introspection. `state.submit_surveil_decision(top_ids,
+    graveyard_ids)` — the dispatcher: every pending id must appear
+    in exactly one list; mismatches raise `ValueError`
+    transactionally (no mutation on failure). The dispatcher routes
+    `top_ids` back to library top in the submitted order (`top_ids[0]`
+    is the topmost card after submission) and `graveyard_ids` into
+    the controller's graveyard in the submitted order.
+  - `state.auto_resolve_pending_decisions(strategy)` — deterministic
+    drain for callers that don't model the choice dimension.
+    Strategies: `"keep_all_on_top"` (the round-23 baseline, bit-equal
+    to the pre-r27 path) and `"send_all_to_graveyard"` (mirror, for
+    surveil-for-graveyard-fill effects). An unknown strategy raises
+    `ValueError` transactionally.
+  - `resolve_top_of_stack` opts INTO `"keep_all_on_top"` auto-resolve
+    at the end so existing baseline tests (round-23 Surveil etc.) are
+    bit-equal to the pre-r27 path. The new
+    `resolve_top_of_stack_pause` pymethod runs the same flow WITHOUT
+    auto-resolving — for callers (tests, MCTS, parity_smoke) that
+    want to inspect / submit decisions.
+  - The queue participates in `Clone` (cloned with the state) and in
+    fingerprint serialization: a state with a pending decision
+    hashes differently from one without. The fingerprint serializer
+    appends the pending-decisions slot ONLY when non-empty, so
+    pre-r27 pinned baselines (every state in `test_fingerprint.py`
+    has empty `pending_decisions`) remain bit-equal — no baseline
+    shifts in this slice.
+  - Mirrors Python's pause-and-resume decision shape in
+    `src/mtg_bot/search/resolution_channel.py`
+    (`ResolutionSurveilDecision`, the `ResolutionChannelAgent` pause
+    / rollback / replay harness).
+
+### I23. UEOT-modifier framework: per-object expiring continuous effects with CR 514.3 cleanup-step expiration
+
+- **Pinned by**:
+  `tests_rust/test_ueot.py` (19 tests — full lifecycle including
+  effect parsing, effective-P/T accessors, PumpSelfUntilEOT resolve,
+  cleanup_step / advance_phase / end_turn_and_start_next clearing,
+  CoW preservation across clones);
+  `tests_rust/test_combat.py::test_ueot_pumped_attacker_damages_defender_for_effective_power`,
+  `test_ueot_pumped_blocker_survives_what_would_have_been_lethal`,
+  `test_ueot_pumped_creature_dies_when_ueot_clears`,
+  `test_ueot_granted_keyword_via_has_keyword_reader`;
+  `tests_rust/test_cleanup.py::test_cleanup_step_no_op_at_initial_state`,
+  `test_cleanup_step_returns_summary`,
+  `test_clone_then_cleanup_does_not_affect_original`,
+  `test_cleanup_is_idempotent_when_already_clean`,
+  `test_cleanup_alone_does_not_move_objects_between_zones`
+  (each pin the new `ueot_cleared` summary-dict key).
+- **Invariant** (CR 613 + CR 514.3 / round-27 G7 closure):
+  - `GameObject` carries a `ueot_modifiers: Vec<UeotModifier>` Vec.
+    `UeotModifier` is a closed enum with three variants today:
+    `PowerToughnessBonus { power, toughness }` (CR 613.7c, pump
+    effects), `GrantKeyword { keyword }` (CR 613.6, haste / flying
+    / lifelink etc.), and `BecomesLandCreature { power, toughness,
+    color_or_subtype }` (CR 613.4 + 7b, manland-animate). Adding a
+    new variant is a build-time error in every effective-P/T /
+    keyword reader until handled (exhaustiveness via the
+    `UeotModifier::… {} => {}` arms in `ueot_power_bonus()` /
+    `ueot_toughness_bonus()` / `ueot_has_keyword()`).
+  - Adding the Vec costs the struct its `Copy` derive. The empty
+    case is a 24-byte null-ptr / zero len/cap (no heap allocation),
+    so the per-object footprint grows but stays cheap on the warm
+    path. One downstream call site (`state_ops_library.rs`'s
+    `find_obj` closure that previously used `*ref` deref) now uses
+    `.clone()`.
+  - Effective-P/T readers fold UEOT bonuses on top of printed +
+    counter contributions: combat's `battlefield_creature_power` /
+    `_toughness`, SBA's `collect_sba_victims` /
+    `is_lethal`. The public Python-facing getters are
+    `effective_power(obj_id)`, `effective_toughness(obj_id)`,
+    `has_keyword(obj_id, keyword)` (all on `GameState`,
+    Python-callable, mirror Python's `mtg_bot.game.effective_*`).
+  - **Intentional asymmetry**: `battlefield_creature_toughness`
+    (combat-side) folds UEOT bonus but NOT `obj.counters`; SBA's
+    effective_toughness folds BOTH. This mirrors the pre-r27
+    asymmetry (combat math sized off printed P/T, SBA's lethal-
+    damage / zero-toughness keyed off printed + counters). Future
+    slice can promote combat to fold counters once a parity test
+    demands it.
+  - **CR 514.3 firing point**:
+    `cleanup_step_for_active_player` runs CR 514.1 (hand-size
+    discard) → CR 514.2 (damage clear) → CR 514.3 (UEOT clear),
+    in that order. Its summary dict gains a new `ueot_cleared` key.
+    `advance_phase` composes the same UEOT clear via its inline
+    mirror `cleanup_step_for_active_player_inline` on entry to
+    PHASE_CLEANUP. A new `clear_ueot_modifiers_all` primitive on
+    GameState is callable independently for tests that want to
+    assert the clear in isolation. Closes parity gap G7 (entry
+    removed from "Confirmed gaps" above).
+  - **PumpSelfUntilEOT** (12-card EoE pool target) is the proving
+    Effect. Parse arm: `pump_self_until_eot` with
+    `power_bonus: int = 0`, `toughness_bonus: int = 0` defaults
+    (mirrors Python's dataclass shape). Apply arm walks both
+    battlefields to find the source by id, pushes a
+    `PowerToughnessBonus` modifier onto the source's
+    `ueot_modifiers` Vec, no-op if source is not on battlefield.
+    Negative bonuses allowed (debuff edge case); 0/0 is a legal
+    warm-path no-op (skipped before the Vec push).
+  - **UEOT modifiers are NOT serialized into the parity
+    fingerprint.** A mid-turn snapshot vs an end-of-turn snapshot
+    would naturally differ in raw modifier Vecs but be parity-
+    equal at gameplay boundaries (cleanup auto-drains). The 12
+    pinned fingerprint baselines below are unchanged — `object_signature`
+    in `state_ops_fingerprint.rs` continues to project only
+    `(name, tapped, summoning_sick, damage, counters, attached_to,
+    controller, id)`. Effective P/T (with bonus) still surfaces
+    through the `effective_power` / `effective_toughness` getters
+    — that's the gameplay-load-bearing observable, not the raw
+    modifier list. A future slice that needs end-of-turn vs mid-
+    turn parity at fingerprint level can fold UEOT in and shift
+    every baseline; doing so today would bind the smoke harness to
+    a Python-side serializer shape that hasn't been pinned.
 
 ---
 
@@ -586,6 +740,84 @@ Python recipe must be updated in lockstep.
 
 ---
 
+## Known divergences flagged by cross-engine smoke (xfail-pinned)
+
+Round 27 / Phase 5 — the first cross-engine smoke harness landed in
+`scripts/parity_smoke.py --mode cross-engine`. It drives matched
+Python and Rust states through N PassPriority decisions on a tiny
+synthetic deck (Forest + Grizzly Bears) and reports per-field
+divergences with gap-doc lookup. The xfail-pinned tests in
+`tests/test_parity_smoke.py` (two as of r27) flag the inaugural
+NOVEL divergences — when the underlying gap closes, the xfail flips
+to xpass and we either renumber as G<n> below or drop it from this
+section.
+
+The inaugural cross-engine NOVEL divergences (NOT yet entered as
+proper G-numbered gaps because the closure path may be cosmetic
+rather than architectural — TBD by the follow-up slice):
+
+### CE1. `summoning_sick` default differs between Python and Rust on library objects
+
+- **Pinned by**:
+  `tests/test_parity_smoke.py::test_cross_engine_mode_initial_libraries_byte_equal_after_make_state`
+  (xfail-pinned).
+- **Today**: Python's `GameObject.summoning_sick` defaults to `True`
+  for every newly-allocated GameObject regardless of zone — including
+  library cards (where the field is gameplay-irrelevant). Rust's
+  `make_state` builds library `GameObject`s with `summoning_sick =
+  false`. Both engines hash this field into their fingerprint via
+  the per-object 8-tuple `(printing_name, tapped, summoning_sick,
+  damage, counters, attached_to, controller_id, id)`. The mismatched
+  default propagates straight into a cross-engine fingerprint
+  divergence on the initial state.
+- **Expected**: align the defaults. Either Python stops setting
+  `summoning_sick=True` on library objects (the field is only
+  meaningful for permanents on the battlefield), or Rust starts
+  setting it `true` on library objects (matching Python). Closing
+  the gap either way is a one-field-default change on the affected
+  side, no architectural lift.
+- **Impact**: high for the cross-engine fingerprint contract — every
+  cross-engine comparison from now until close hits this on the
+  zone signatures. Low for actual gameplay (the field's only effect
+  is on `can_attack`, which gates on battlefield zone before
+  consulting the field).
+- **Closeable**: yes — Phase 5 follow-up slice picks a side and
+  flips the default. Once closed, this entry moves to "Confirmed
+  gaps" with a real G-number (or gets folded into a parity
+  invariant if the closure makes the two engines byte-equal on
+  this field).
+
+### CE2. `pass_priority` apply_action behavior differs
+
+- **Pinned by**:
+  `tests/test_parity_smoke.py::test_cross_engine_mode_priority_player_unchanged_by_pass_priority`
+  (xfail-pinned). This is the cross-engine manifestation of the
+  already-documented gap G3 (`pass_priority` is a pure toggle).
+- **Today**: Python's `apply_action(PassPriority)` is a no-op —
+  priority management is owned by `simulate.priority_loop`, not by
+  `apply_action`. Rust's `apply_action({"kind": "pass_priority"})`
+  flips `priority_player` to `1 - priority_player`. The cross-
+  engine smoke surfaces this as a `priority_player` divergence on
+  every odd-numbered PassPriority step.
+- **Expected**: same as G3 — the closure is the priority +
+  steps + stack composition slice that integrates the round-9
+  primitives.
+- **Impact**: this is THE most-likely-to-be-hit cross-engine
+  divergence; every PassPriority decision the smoke takes will
+  flag it. Effectively gates the cross-engine harness's ability
+  to exercise multi-step decision scripts with a clean priority
+  field. Workaround: the smoke harness drives both engines
+  through `apply_action` directly and reports the divergence
+  rather than papering over it — honest failure count is the real
+  progress signal.
+- **Closeable**: yes — bundled with the G3/G4/G15 priority
+  composition slice.
+
+(Other smoke-flagged divergences may be added by follow-up Phase 5
+slices as the deck pool / decision script grows.)
+
+---
+
 ## Maintenance
 
 When a slice closes one of the gaps above, drop the entry from the
@@ -595,3 +827,12 @@ add an entry following the same shape — short name, pinning test,
 Rust today, expected, impact, closeable. The 1000-game smoke harness
 parses this doc by section header (`### G<n>` and `### I<n>` are the
 stable anchors), so keep the numbering monotonic.
+
+The `### CE<n>` anchors above are the cross-engine-smoke-flagged
+entries (round 27 onwards). They follow the same shape as G/I entries
+but use a separate prefix to make it obvious which divergences were
+detected by the cross-engine harness vs the slice-internal Rust tests.
+A future slice that closes a CE<n> entry either upgrades it to a
+proper G<n> (with a deeper investigation than the smoke could
+provide) or drops it entirely if the closure makes it a parity
+invariant.

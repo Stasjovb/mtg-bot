@@ -2370,3 +2370,149 @@ def test_multi_attacker_first_strike_only_one_blocker(synthetic_state):
         "defender — 2 damage. The FS attacker was blocked; its damage "
         "stayed on the blocker."
     )
+
+
+# ----------------------------- round-27 UEOT-bonus combat composition --------
+#
+# The UEOT-framework slice adds `UeotModifier::PowerToughnessBonus` to
+# every effective-P/T reader, including `battlefield_creature_power` /
+# `battlefield_creature_toughness` in `state_ops_combat.rs`. These tests
+# pin the bridge between the UEOT modifier stack and the combat-damage
+# math: a haste creature with a +N/+N ETB-pump-self attacks for
+# `printed_power + N` (not `printed_power`) when unblocked.
+#
+# Why HASTE on the creature: a freshly-resolved creature is
+# summoning-sick (CR 302.1, stamped at post-resolve), so it can't
+# attack on the turn it was cast unless it has haste. Without haste
+# the test would need to walk a full turn boundary (untap step clears
+# summoning sickness) — but cleanup clears UEOT modifiers too, so the
+# bonus would expire before combat. Haste on the printing lifts the
+# summoning-sick gate without touching the cleanup pathway.
+
+
+def _haste_pump_self_creature_dict(power_bonus=2, toughness_bonus=2):
+    """A 2/2 haste creature whose ETB pumps itself +N/+M UEOT. Haste
+    lifts the summoning-sick gate so the same-turn attack succeeds
+    while the UEOT modifier is still live."""
+    return {
+        "name": f"Haste UEOT-pump Bear +{power_bonus}/+{toughness_bonus}",
+        "card_types": ["Creature"],
+        "mana_cost": {"G": 1, "generic": 1},
+        "power": 2,
+        "toughness": 2,
+        "keywords": ["haste"],
+        "effects": [],
+        "etb_effects": [
+            {
+                "kind": "pump_self_until_eot",
+                "power_bonus": power_bonus,
+                "toughness_bonus": toughness_bonus,
+            }
+        ],
+    }
+
+
+def test_ueot_pumped_attacker_damages_defender_for_effective_power(
+    synthetic_state,
+):
+    """A haste 2/2 with ETB +2/+2-self UEOT attacks unblocked. The
+    defender takes 4 damage (printed 2 + UEOT 2), not the bare 2 the
+    pre-UEOT reader would have returned. Pins
+    ``battlefield_creature_power``'s UEOT-bonus fold."""
+    ZONE_HAND_LOCAL = 0
+    obj_id = synthetic_state.register_and_inject_object(
+        _haste_pump_self_creature_dict(2, 2), 0, ZONE_HAND_LOCAL
+    )
+    synthetic_state.push_to_stack(obj_id, 0)
+    synthetic_state.resolve_top_of_stack()
+    # Sanity: creature landed with UEOT modifier; effective power 4.
+    assert synthetic_state.effective_power(obj_id) == 4
+    # Haste lifts the summoning-sick attack gate.
+    assert synthetic_state.declare_attacker(obj_id) is True
+    life_before = synthetic_state.get_life(1)
+    synthetic_state.deal_combat_damage()
+    # Defender lost 4 = effective power.
+    assert synthetic_state.get_life(1) == life_before - 4
+
+
+def test_ueot_pumped_blocker_survives_what_would_have_been_lethal(
+    synthetic_state,
+):
+    """A haste 2/2 with ETB +0/+2-self UEOT blocks a 3-power attacker.
+    The attacker deals 3 damage to the blocker — pre-UEOT, the 2/2
+    would die (3 >= 2 toughness); with +0/+2 the blocker becomes
+    effective 2/4, so 3 damage is non-lethal and SBA's lethal-damage
+    check returns False. Pins ``battlefield_creature_toughness``'s
+    UEOT-bonus fold AND `is_lethal`'s UEOT fold."""
+    ZONE_HAND_LOCAL = 0
+    # Attacker: a 3/3 with haste from p0's existing bears? Easier: use
+    # a fresh haste 3/3 attacker.
+    attacker_id = synthetic_state.register_and_inject_object(
+        _keyword_creature_dict(3, 3, ["haste"]), 0, ZONE_BATTLEFIELD
+    )
+    # Blocker on p1: a 2/2 haste with +0/+2 ETB pump (effective 2/4).
+    blocker_id = synthetic_state.register_and_inject_object(
+        _haste_pump_self_creature_dict(0, 2), 1, ZONE_HAND_LOCAL
+    )
+    # Resolving a spell while priority is on p0 still works for p1's
+    # creature via this slice's simplified non-priority-aware
+    # resolve — push as p1 and resolve.
+    synthetic_state.push_to_stack(blocker_id, 1)
+    synthetic_state.resolve_top_of_stack()
+    assert synthetic_state.effective_toughness(blocker_id) == 4
+
+    assert synthetic_state.declare_attacker(attacker_id) is True
+    assert synthetic_state.declare_blocker(blocker_id, attacker_id) is True
+    synthetic_state.deal_combat_damage()
+    # Blocker took 3 damage. With UEOT-bumped toughness 4, that's
+    # NON-lethal — is_lethal returns False.
+    assert synthetic_state.get_damage(blocker_id) == 3
+    assert synthetic_state.is_lethal(blocker_id) is False
+
+
+def test_ueot_pumped_creature_dies_when_ueot_clears(synthetic_state):
+    """The flip side: a 2/2 was pre-damaged to 3, kept alive by a
+    +0/+2 UEOT bonus (effective toughness 4 > damage 3); after the
+    cleanup step clears the modifier, effective toughness drops to 2
+    and an SBA pass marks it dead. Pins the cleanup → SBA lifecycle
+    that powers "combat tricks that fade".
+    """
+    ZONE_HAND_LOCAL = 0
+    obj_id = synthetic_state.register_and_inject_object(
+        _haste_pump_self_creature_dict(0, 2), 0, ZONE_HAND_LOCAL
+    )
+    synthetic_state.push_to_stack(obj_id, 0)
+    synthetic_state.resolve_top_of_stack()
+    # Stamp 3 damage on the 2/4 effective creature — non-lethal under
+    # the UEOT bump.
+    synthetic_state.deal_damage(obj_id, 3)
+    assert synthetic_state.is_lethal(obj_id) is False
+    assert synthetic_state.get_damage(obj_id) == 3
+
+    # Cleanup drains the UEOT bonus AND zeroes marked damage (CR
+    # 514.2). After cleanup the creature is back to 2/2 with 0
+    # damage — alive.
+    synthetic_state.cleanup_step_for_active_player()
+    assert synthetic_state.effective_toughness(obj_id) == 2
+    assert synthetic_state.get_damage(obj_id) == 0
+    assert synthetic_state.is_lethal(obj_id) is False
+
+
+def test_ueot_granted_keyword_via_has_keyword_reader(synthetic_state):
+    """A printing's `has_keyword` reader returns True for any printed
+    keyword. Round-27 also folds UEOT-granted keywords — but
+    PumpSelfUntilEOT today only pushes PowerToughnessBonus modifiers
+    (the Rust enum has a `GrantKeyword` variant but no Effect arm
+    surfaces it yet). This test pins the printed-side baseline so a
+    UEOT-side bug that drops the printed contributions surfaces
+    here. Future-slice `Effect::GrantKeywordUEOT` (or similar) will
+    extend this test to assert the UEOT-side fold.
+    """
+    obj_id = synthetic_state.register_and_inject_object(
+        _keyword_creature_dict(2, 2, ["haste", "flying"]),
+        0,
+        ZONE_BATTLEFIELD,
+    )
+    assert synthetic_state.has_keyword(obj_id, "haste") is True
+    assert synthetic_state.has_keyword(obj_id, "flying") is True
+    assert synthetic_state.has_keyword(obj_id, "trample") is False
