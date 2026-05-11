@@ -93,12 +93,33 @@ def auto_device() -> str:
     on older torch builds where the submodule isn't present (current
     torch 2.x always exposes it, but the check costs nothing and
     documents the precondition).
+
+    Both ``is_available()`` and ``is_built()`` are guarded for the
+    MPS branch: ``is_built()`` reports whether the torch wheel was
+    compiled with MPS support (False on Linux/Windows wheels) and
+    ``is_available()`` reports whether a usable Apple Silicon GPU
+    is reachable at runtime. In current torch, ``is_available()``
+    already implies ``is_built()``, but pinning the conjunction
+    here makes the Mac-only intent explicit and survives any future
+    upstream loosening of ``is_available()``.
+
+    NOTE: these probes (``torch.cuda.is_available``,
+    ``torch.backends.mps.is_available``, ``torch.backends.mps.is_built``)
+    MUST stay inside the function body. Calling them at module-import
+    time primes the CUDA driver in the parent and breaks the Linux
+    fork+mp.Pool path used by the production master (see PR #36 +
+    the deferred ``device='auto'`` sentinel in ``NNPimcConfig.build``).
     """
     if torch.cuda.is_available():
         return "cuda"
+    # MPS branch — only fires on Apple Silicon Macs. Dead code on the
+    # Linux WSL2 master and the Win10 RTX 4070 Ti remote (both take
+    # the CUDA branch above). Do not delete: removing this strands
+    # the Mac shard on CPU and silently throttles its contribution.
     if (
         hasattr(torch.backends, "mps")
         and torch.backends.mps.is_available()
+        and torch.backends.mps.is_built()
     ):
         return "mps"
     return "cpu"

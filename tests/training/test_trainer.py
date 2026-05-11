@@ -48,16 +48,19 @@ def test_auto_device_returns_cuda_mps_or_cpu():
 def test_auto_device_prefers_cuda_when_available(monkeypatch):
     """CUDA wins when available, regardless of MPS state."""
     monkeypatch.setattr(torch.cuda, "is_available", lambda: True)
-    # Even if MPS also reports available, CUDA takes precedence.
+    # Even if MPS also reports available + built, CUDA takes precedence.
     if hasattr(torch.backends, "mps"):
         monkeypatch.setattr(
             torch.backends.mps, "is_available", lambda: True,
+        )
+        monkeypatch.setattr(
+            torch.backends.mps, "is_built", lambda: True,
         )
     assert auto_device() == "cuda"
 
 
 def test_auto_device_falls_back_to_mps_when_no_cuda(monkeypatch):
-    """No CUDA but MPS available → "mps" (Apple Silicon path)."""
+    """No CUDA but MPS available + built → "mps" (Apple Silicon path)."""
     monkeypatch.setattr(torch.cuda, "is_available", lambda: False)
     # ``torch.backends.mps`` exists on torch 2.x; if the test box's
     # build is unusually old, skip rather than fake the attribute.
@@ -65,6 +68,9 @@ def test_auto_device_falls_back_to_mps_when_no_cuda(monkeypatch):
         pytest.skip("torch.backends.mps not present on this build")
     monkeypatch.setattr(
         torch.backends.mps, "is_available", lambda: True,
+    )
+    monkeypatch.setattr(
+        torch.backends.mps, "is_built", lambda: True,
     )
     assert auto_device() == "mps"
 
@@ -76,6 +82,30 @@ def test_auto_device_falls_back_to_cpu_when_neither(monkeypatch):
         monkeypatch.setattr(
             torch.backends.mps, "is_available", lambda: False,
         )
+        monkeypatch.setattr(
+            torch.backends.mps, "is_built", lambda: False,
+        )
+    assert auto_device() == "cpu"
+
+
+def test_auto_device_falls_back_to_cpu_when_mps_available_but_not_built(
+    monkeypatch,
+):
+    """MPS reports available but the torch wheel wasn't compiled with
+    MPS support (``is_built() == False``) → "cpu". This guards against
+    a future upstream change to ``is_available()`` semantics on
+    non-Apple platforms; the current torch contract makes this case
+    unreachable in practice, but the conjunction in auto_device()
+    keeps the Mac-only intent explicit, so a regression-test pins it."""
+    monkeypatch.setattr(torch.cuda, "is_available", lambda: False)
+    if not hasattr(torch.backends, "mps"):
+        pytest.skip("torch.backends.mps not present on this build")
+    monkeypatch.setattr(
+        torch.backends.mps, "is_available", lambda: True,
+    )
+    monkeypatch.setattr(
+        torch.backends.mps, "is_built", lambda: False,
+    )
     assert auto_device() == "cpu"
 
 
