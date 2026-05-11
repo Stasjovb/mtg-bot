@@ -71,6 +71,7 @@ _SCRIPTS_DIR = _REPO_ROOT / "scripts"
 
 import os
 
+from mtg_bot.cli import _common
 from mtg_bot.decks import Deck, decks_from_json
 from mtg_bot.training import (
     DataGenProgress,
@@ -1143,16 +1144,45 @@ def main(argv=None) -> None:  # pragma: no cover
         ),
     )
     parser.add_argument(
-        "--per-game-timeout-sec", type=float, default=300.0,
+        "--per-game-timeout-self-play-sec", type=float,
+        default=_common.DEFAULT_PER_GAME_TIMEOUT_SELF_PLAY_SEC,
         help=(
-            "Wall-clock cap per individual self-play / eval game "
-            "(default 300s, ~50x typical). When a single game "
-            "exceeds this budget the worker raises TimeoutError, "
-            "the data-gen empty-chunk handler / eval-pool-resilience "
-            "draw conversion absorbs it, and the pool advances. "
-            "Mitigates the rare engine-state-corruption hang (todo "
-            "d4f2a8c1; underlying root-cause work is todo 9c5e3b71). "
-            "Pass 0 or negative to disable."
+            "Wall-clock cap per individual self-play game "
+            f"(default {_common.DEFAULT_PER_GAME_TIMEOUT_SELF_PLAY_SEC}s). "
+            "Self-play is uncontended (one worker per shard) so the "
+            "completed-game p99 wall sits well under 400s and 300s "
+            "covers the bulk; rare clips fall through the data-gen "
+            "empty-chunk handler and the pool advances. Mitigates "
+            "the rare engine-state-corruption hang (todo d4f2a8c1; "
+            "underlying root-cause work is todo 9c5e3b71). Pass 0 "
+            "or negative to disable."
+        ),
+    )
+    parser.add_argument(
+        "--per-game-timeout-eval-sec", type=float,
+        default=_common.DEFAULT_PER_GAME_TIMEOUT_EVAL_SEC,
+        help=(
+            "Wall-clock cap per individual eval-match game "
+            f"(default {_common.DEFAULT_PER_GAME_TIMEOUT_EVAL_SEC}s). "
+            "Eval is 14-worker contended — shared GPU/CPU inflates "
+            "per-decision wall ~2x relative to self-play, so games "
+            "genuinely need more headroom. PR #46 (commit 591164b9, "
+            "2026-05-09) eval against v21 1024-trunk: completed game "
+            "used 178.8s for 592 decisions while timed-out games had "
+            "logged 515-645 decisions when killed (real progress, "
+            "not wedges) — confirming 180s/300s caps clip the median, "
+            "not the p99. Eval-pool resilience converts timeouts to "
+            "draws. Pass 0 or negative to disable."
+        ),
+    )
+    parser.add_argument(
+        "--per-game-timeout-sec", type=float, default=None,
+        help=(
+            "DEPRECATED back-compat alias. If set, overrides BOTH "
+            "--per-game-timeout-self-play-sec and "
+            "--per-game-timeout-eval-sec with this single value. "
+            "Prefer the split flags so self-play (uncontended) and "
+            "eval (14-worker contended) can have different budgets."
         ),
     )
     parser.add_argument(
@@ -1389,6 +1419,16 @@ def main(argv=None) -> None:  # pragma: no cover
         ),
     )
     args = parser.parse_args(argv)
+
+    # Back-compat: --per-game-timeout-sec, if explicitly passed,
+    # overrides BOTH phase-specific timeouts. Existing scripts that
+    # pass the single legacy flag keep working with no behavior
+    # change; new scripts should use the split flags so self-play
+    # (uncontended) and eval (14-worker contended) can have distinct
+    # budgets per the rationale in ``cli._common``.
+    if args.per_game_timeout_sec is not None:
+        args.per_game_timeout_self_play_sec = args.per_game_timeout_sec
+        args.per_game_timeout_eval_sec = args.per_game_timeout_sec
 
     if args.use_belief_weighted and not args.use_ismcts:
         parser.error(
@@ -1736,7 +1776,7 @@ def main(argv=None) -> None:  # pragma: no cover
                 n_workers=args.workers,
                 output=data_path,
                 enable_mulligans=args.enable_mulligans,
-                per_game_timeout_sec=args.per_game_timeout_sec,
+                per_game_timeout_sec=args.per_game_timeout_self_play_sec,
                 hidden_sizes=iter_hidden_sizes,
                 architecture=best_architecture,
                 policy_hidden_sizes=best_policy_hidden_sizes,
@@ -1764,7 +1804,7 @@ def main(argv=None) -> None:  # pragma: no cover
                 nodes=args.nodes,
                 seed=cycle_seed,
                 enable_mulligans=args.enable_mulligans,
-                per_game_timeout_sec=args.per_game_timeout_sec,
+                per_game_timeout_sec=args.per_game_timeout_self_play_sec,
                 hidden_sizes=iter_hidden_sizes,
                 architecture=best_architecture,
                 policy_hidden_sizes=best_policy_hidden_sizes,
@@ -1930,7 +1970,7 @@ def main(argv=None) -> None:  # pragma: no cover
                     n_workers=args.workers,
                     seed=cycle_seed + 7777,
                     enable_mulligans=args.enable_mulligans,
-                    per_game_timeout_sec=args.per_game_timeout_sec,
+                    per_game_timeout_sec=args.per_game_timeout_eval_sec,
                     hidden_sizes=iter_hidden_sizes,
                     new_architecture=iter_architecture,
                     old_architecture=best_architecture,
@@ -1956,7 +1996,7 @@ def main(argv=None) -> None:  # pragma: no cover
                         nodes=args.nodes,
                         seed=cycle_seed + 7777,
                         enable_mulligans=args.enable_mulligans,
-                        per_game_timeout_sec=args.per_game_timeout_sec,
+                        per_game_timeout_sec=args.per_game_timeout_eval_sec,
                         hidden_sizes=iter_hidden_sizes,
                         new_architecture=iter_architecture,
                         old_architecture=best_architecture,
