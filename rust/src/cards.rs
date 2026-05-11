@@ -711,6 +711,36 @@ pub enum Effect {
     /// modifier auto-expires at the next cleanup step via the r27
     /// CR 514.3 UEOT-clear pass.
     PumpTargetCreatureUntilEOT { power_bonus: i32, toughness_bonus: i32 },
+    /// **Round 28 highest-frequency-class coverage.** Run multiple
+    /// effects in order as a single composite effect. Mirrors
+    /// Python's `Sequence(effects: tuple[Effect, ...])`
+    /// (`src/mtg_bot/effects/combinators.py:1314`) — 54 cards in the
+    /// EoE pool use it (highest-frequency Python class not yet in
+    /// Rust per r27 measurement).
+    ///
+    /// **Mechanism.** At resolve time, walks the `effects` Vec and
+    /// calls `apply_effect` on each child in order with the same
+    /// `source_obj_id`. Children share resolve-time state mutations
+    /// (e.g. a `Sequence` of `[DrawCards{count:1}, DiscardSelf]`
+    /// resolves to "draw, then discard" — a looting effect).
+    ///
+    /// **Targeting simplification.** Python's `Sequence` carries
+    /// cast-time targeting machinery (at most one child may require
+    /// a target; the target is passed to that child at resolve).
+    /// The Rust first-slice does NOT carry cast-time target plumbing
+    /// for nested effects — each child resolves with the same
+    /// first-slice deterministic-target convention it uses on its own
+    /// (e.g. `TapTarget{AnyCreature}` picks defender's bf[0],
+    /// independent of the Sequence wrapper).
+    ///
+    /// **Recursion.** A Sequence can contain Sequences — the variant
+    /// is fully nestable because `apply_effect` is a regular function
+    /// and the `Vec<Effect>` type is heap-allocated.
+    ///
+    /// **Empty Sequence.** A `Sequence { effects: vec![] }` is a
+    /// legal no-op (matches Python's empty-tuple-initialized
+    /// Sequence).
+    Sequence { effects: Vec<Effect> },
 }
 
 #[derive(Clone, Debug)]
@@ -1245,8 +1275,38 @@ fn parse_effect(dict: &Bound<'_, PyDict>) -> PyResult<Effect> {
             };
             Ok(Effect::PumpTargetCreatureUntilEOT { power_bonus, toughness_bonus })
         }
+        "sequence" => {
+            // Round-28 highest-frequency-class coverage. Mirrors
+            // Python's Sequence(effects: tuple[Effect, ...]).
+            // Field `effects` is a list of nested effect dicts;
+            // recursively parse each via this same parse_effect
+            // function. Empty list is legal (no-op Sequence).
+            let nested = dict.get_item("effects")?.ok_or_else(|| {
+                PyValueError::new_err(
+                    "sequence: missing required 'effects' field (list of nested effect dicts)",
+                )
+            })?;
+            let items: Vec<Bound<'_, PyAny>> = nested
+                .try_iter()
+                .map_err(|e| {
+                    PyValueError::new_err(format!(
+                        "sequence.effects must be iterable (got: {e})"
+                    ))
+                })?
+                .collect::<PyResult<Vec<_>>>()?;
+            let mut children: Vec<Effect> = Vec::with_capacity(items.len());
+            for item in items {
+                let child_dict = item.downcast::<PyDict>().map_err(|_| {
+                    PyValueError::new_err(
+                        "sequence.effects entries must be dicts (effect-shape)",
+                    )
+                })?;
+                children.push(parse_effect(child_dict)?);
+            }
+            Ok(Effect::Sequence { effects: children })
+        }
         other => Err(PyValueError::new_err(format!(
-            "unknown effect kind {other:?}; valid: deal_damage, draw_cards, gain_life, return_to_hand, mill, mill_target_player, exile_target, tap_target, untap_target, sacrifice, add_counters, discard_card, scry_n, destroy_target, damage_each_opponent, damage_each_creature, create_token, add_mana_to_pool, search_library_for_basic_land_tapped, put_plus_one_counter_on_self, surveil, counter_target_spell, return_creature_from_your_graveyard_to_battlefield, discard_self, each_opponent_loses_life, lose_life, target_opponent_loses_life, each_opponent_discards, destroy_all_creatures, destroy_target_nonland_permanent, destroy_target_artifact, destroy_target_land, deal_damage_any_target, pump_self_until_eot, pump_target_creature_until_eot"
+            "unknown effect kind {other:?}; valid: deal_damage, draw_cards, gain_life, return_to_hand, mill, mill_target_player, exile_target, tap_target, untap_target, sacrifice, add_counters, discard_card, scry_n, destroy_target, damage_each_opponent, damage_each_creature, create_token, add_mana_to_pool, search_library_for_basic_land_tapped, put_plus_one_counter_on_self, surveil, counter_target_spell, return_creature_from_your_graveyard_to_battlefield, discard_self, each_opponent_loses_life, lose_life, target_opponent_loses_life, each_opponent_discards, destroy_all_creatures, destroy_target_nonland_permanent, destroy_target_artifact, destroy_target_land, deal_damage_any_target, pump_self_until_eot, pump_target_creature_until_eot, sequence"
         ))),
     }
 }
@@ -1568,6 +1628,17 @@ fn effect_to_pydict<'py>(
             d.set_item("kind", "pump_target_creature_until_eot")?;
             d.set_item("power_bonus", *power_bonus)?;
             d.set_item("toughness_bonus", *toughness_bonus)?;
+        }
+        Effect::Sequence { effects } => {
+            d.set_item("kind", "sequence")?;
+            // Recursively serialize each child via effect_to_pydict
+            // (same function recurses safely — Effect is heap-
+            // allocated via Vec<Effect>).
+            let children: Vec<Bound<'_, PyDict>> = effects
+                .iter()
+                .map(|child| effect_to_pydict(py, child))
+                .collect::<PyResult<Vec<_>>>()?;
+            d.set_item("effects", children)?;
         }
     }
     Ok(d)

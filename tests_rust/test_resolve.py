@@ -7511,3 +7511,201 @@ def test_resolve_destroy_target_land_skips_active_players_own(engine):
     assert state.find_object_zone(own_land_id) == ZONE_BATTLEFIELD
     assert state.battlefield_sizes[0] == p0_bf_before
     assert state.battlefield_sizes[1] == p1_bf_before
+
+
+# -------------------- Round-28 Sequence combinator (54 cards) --------------------
+
+
+def _looting_dict():
+    """Sequence of DrawCards(2) + GainLife(3). Two effects with
+    distinct observables — library shrinks by 2, life grows by 3. The
+    cleaner Sequence pin than a draw-discard since each child's
+    side-effect lands on a different field."""
+    return {
+        "name": "Synthetic Sequence Looter",
+        "card_types": ["Instant"],
+        "mana_cost": {"R": 1},
+        "effects": [
+            {
+                "kind": "sequence",
+                "effects": [
+                    {"kind": "draw_cards", "count": 2},
+                    {"kind": "gain_life", "amount": 3},
+                ],
+            }
+        ],
+    }
+
+
+def test_register_sequence_two_children_round_trips(engine):
+    """Sequence dict with 2 children parses + reads back."""
+    reg = engine.Registry()
+    pid = reg.register_printing(_looting_dict())
+    effects = reg.get_printing_effects(pid)
+    assert len(effects) == 1
+    seq = effects[0]
+    assert seq["kind"] == "sequence"
+    assert len(seq["effects"]) == 2
+    assert seq["effects"][0]["kind"] == "draw_cards"
+    assert seq["effects"][0]["count"] == 2
+    assert seq["effects"][1]["kind"] == "gain_life"
+    assert seq["effects"][1]["amount"] == 3
+
+
+def test_register_sequence_empty_is_legal_no_op(engine):
+    """An empty Sequence registers cleanly (Python parity)."""
+    reg = engine.Registry()
+    pid = reg.register_printing(
+        {
+            "name": "Empty Sequence",
+            "card_types": ["Instant"],
+            "mana_cost": {"generic": 0},
+            "effects": [{"kind": "sequence", "effects": []}],
+        }
+    )
+    effects = reg.get_printing_effects(pid)
+    assert effects[0]["kind"] == "sequence"
+    assert effects[0]["effects"] == []
+
+
+def test_register_sequence_missing_effects_field_raises(engine):
+    """`sequence` without an `effects` list raises ValueError at parse."""
+    reg = engine.Registry()
+    with pytest.raises(ValueError, match="missing required 'effects'"):
+        reg.register_printing(
+            {
+                "name": "Bad Sequence",
+                "card_types": ["Instant"],
+                "mana_cost": {"generic": 0},
+                "effects": [{"kind": "sequence"}],
+            }
+        )
+
+
+def test_register_sequence_non_dict_child_raises(engine):
+    """Non-dict entries in `effects` raise ValueError."""
+    reg = engine.Registry()
+    with pytest.raises(ValueError):
+        reg.register_printing(
+            {
+                "name": "Bad Child",
+                "card_types": ["Instant"],
+                "mana_cost": {"generic": 0},
+                "effects": [{"kind": "sequence", "effects": ["not a dict"]}],
+            }
+        )
+
+
+def test_register_sequence_nested_sequence_round_trips(engine):
+    """Sequence can contain a Sequence — full nestability pin."""
+    reg = engine.Registry()
+    pid = reg.register_printing(
+        {
+            "name": "Nested",
+            "card_types": ["Instant"],
+            "mana_cost": {"generic": 0},
+            "effects": [
+                {
+                    "kind": "sequence",
+                    "effects": [
+                        {
+                            "kind": "sequence",
+                            "effects": [{"kind": "draw_cards", "count": 1}],
+                        },
+                    ],
+                }
+            ],
+        }
+    )
+    effects = reg.get_printing_effects(pid)
+    outer = effects[0]
+    assert outer["kind"] == "sequence"
+    assert len(outer["effects"]) == 1
+    inner = outer["effects"][0]
+    assert inner["kind"] == "sequence"
+    assert len(inner["effects"]) == 1
+    assert inner["effects"][0]["kind"] == "draw_cards"
+
+
+def test_resolve_sequence_executes_children_in_order(synthetic_state):
+    """Cast a Sequence(draw_cards(2) + gain_life(3)). After resolve:
+      - library shrank by 2 (DrawCards child fired);
+      - p0's life is +3 from baseline (GainLife child fired);
+      - source went to graveyard (post-resolve, CR 608.2m for instant);
+      - hand net delta: -1 (source removed by push) +2 (draws) = +1.
+    Confirms BOTH children ran in order from the same source_obj_id."""
+    pid = synthetic_state.register_and_inject_object(
+        _looting_dict(), 0, ZONE_HAND
+    )
+    p0_hand_before = synthetic_state.hand_sizes[0]
+    p0_lib_before = synthetic_state.library_sizes[0]
+    p0_life_before = synthetic_state.get_life(0)
+
+    synthetic_state.push_to_stack(pid, 0)
+    synthetic_state.resolve_top_of_stack()
+
+    assert synthetic_state.library_sizes[0] == p0_lib_before - 2
+    assert synthetic_state.get_life(0) == p0_life_before + 3
+    assert synthetic_state.find_object_zone(pid) == ZONE_GRAVEYARD
+    # Source removed from hand (-1) and 2 cards drawn (+2): net +1.
+    assert synthetic_state.hand_sizes[0] == p0_hand_before + 1
+
+
+def test_resolve_sequence_empty_is_silent_no_op(synthetic_state):
+    """A `Sequence{effects:[]}` resolves cleanly with zero side
+    effects."""
+    pid = synthetic_state.register_and_inject_object(
+        {
+            "name": "Empty Resolver",
+            "card_types": ["Instant"],
+            "mana_cost": {"generic": 0},
+            "effects": [{"kind": "sequence", "effects": []}],
+        },
+        0,
+        ZONE_HAND,
+    )
+    p0_hand_before = synthetic_state.hand_sizes[0]
+    p0_lib_before = synthetic_state.library_sizes[0]
+    p0_gy_before = synthetic_state.graveyard_sizes[0]
+
+    synthetic_state.push_to_stack(pid, 0)
+    synthetic_state.resolve_top_of_stack()
+
+    # Source went to graveyard (instant), nothing else changed.
+    assert synthetic_state.find_object_zone(pid) == ZONE_GRAVEYARD
+    assert synthetic_state.library_sizes[0] == p0_lib_before
+    # Hand lost the source (which was in hand pre-cast). Net -1.
+    assert synthetic_state.hand_sizes[0] == p0_hand_before - 1
+    assert synthetic_state.graveyard_sizes[0] == p0_gy_before + 1
+
+
+def test_resolve_sequence_nested_executes_inner(synthetic_state):
+    """A Sequence containing a Sequence containing DrawCards fires the
+    inner effect — recursion works end-to-end."""
+    pid = synthetic_state.register_and_inject_object(
+        {
+            "name": "Nested Cast",
+            "card_types": ["Instant"],
+            "mana_cost": {"generic": 0},
+            "effects": [
+                {
+                    "kind": "sequence",
+                    "effects": [
+                        {
+                            "kind": "sequence",
+                            "effects": [{"kind": "draw_cards", "count": 2}],
+                        },
+                    ],
+                }
+            ],
+        },
+        0,
+        ZONE_HAND,
+    )
+    p0_lib_before = synthetic_state.library_sizes[0]
+
+    synthetic_state.push_to_stack(pid, 0)
+    synthetic_state.resolve_top_of_stack()
+
+    # Inner DrawCards(2) fired — library shrank by 2.
+    assert synthetic_state.library_sizes[0] == p0_lib_before - 2

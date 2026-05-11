@@ -6,9 +6,9 @@ This page is the rolling-progress snapshot for the Rust engine port's `Effect` e
 
 ## Headline numbers
 
-- **34 of 228 Python Effect classes covered (14.9%)** — by distinct-class count.
-- **330 of 690 per-card emissions covered (47.8%)** — weighted by how many cards each class appears on. This is the more load-bearing metric: high-frequency classes pull the bulk of cards into Rust even at low class-count coverage.
-- **35 Rust `Effect` variants** in `rust/src/cards.rs` today; 475 parser-claimed printings across the loaded pools.
+- **35 of 228 Python Effect classes covered (15.4%)** — by distinct-class count.
+- **384 of 690 per-card emissions covered (55.7%)** — weighted by how many cards each class appears on. This is the more load-bearing metric: high-frequency classes pull the bulk of cards into Rust even at low class-count coverage.
+- **36 Rust `Effect` variants** in `rust/src/cards.rs` today; 475 parser-claimed printings across the loaded pools.
 - **0 Rust variants without a Python counterpart** — the bridge is in sync with the Python vocabulary.
 - **1 Rust variant(s) built ahead of the pool** (allowlisted in `RUST_AHEAD_OF_POOL`): `ScryN`. These have no pool card exercising them today and are NOT counted as orphans.
 
@@ -18,11 +18,11 @@ Python Effect classes are split by how many cards they appear on. The Rust port 
 
 ### Frequency >= 10 (14 classes)
 
-- Covered by Rust: **9 / 14** (64.3%)
+- Covered by Rust: **10 / 14** (71.4%)
 
 | Python class | Frequency | Rust support |
 |---|---:|---|
-| `Sequence` | 54 | no |
+| `Sequence` | 54 | yes |
 | `DrawCards` | 45 | yes |
 | `CreateToken` | 41 | yes |
 | `AddManaToPool` | 33 | yes |
@@ -85,6 +85,7 @@ Python Effect classes are split by how many cards they appear on. The Rust port 
 | 33 | `Effect::DealDamageAnyTarget` | `DealDamageAnyTarget` | 7 |
 | 34 | `Effect::PumpSelfUntilEOT` | `PumpSelfUntilEOT` | 12 |
 | 35 | `Effect::PumpTargetCreatureUntilEOT` | `PumpTargetCreatureUntilEOT` | 26 |
+| 36 | `Effect::Sequence` | `Sequence` | 54 |
 
 ## High-frequency Python classes NOT yet in Rust
 
@@ -92,7 +93,6 @@ These are the next-best ports by cards-covered-per-variant and are the recommend
 
 | Python class | Frequency | Example card |
 |---|---:|---|
-| `Sequence` | 54 | Alpharael, Dreaming Acolyte |
 | `EquipToTargetCreatureYouControl` | 14 | Atomic Microsizer |
 | `BecomeLandCreatureUEOT` | 13 | Blinkmoth Nexus |
 | `ModalChooseOne` | 13 | Archenemy's Charm |
