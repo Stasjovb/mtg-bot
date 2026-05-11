@@ -515,11 +515,14 @@ class SharedTensorNNEvalClient(Evaluator):
         feats = extract_features(engine, player_id)
         return self._call_value(feats)
 
-    # ``evaluate`` and ``batch_evaluate`` inherit the base-class
-    # implementations: ``evaluate`` short-circuits terminal states,
-    # then delegates to ``_evaluate_nonterminal``; ``batch_evaluate``
-    # iterates per-state (server-side batching across worker calls
-    # happens automatically in the dispatcher).
+    # ``evaluate`` inherits the base-class implementation: terminal
+    # short-circuit, then delegate to ``_evaluate_nonterminal``.
+    # ``batch_evaluate`` is overridden below to submit all N requests
+    # before waiting on any — without this, the dispatcher only ever
+    # sees one in-flight request per worker, capping cross-worker
+    # fusion at ``N_workers`` instead of ``N_workers * batch_size``.
+    # See ``docs/LEVER2_INVESTIGATION_2026_05_10.md`` for the wire-up
+    # numbers behind this design.
 
     def evaluate_with_policy(
         self, state: "GameState", player_id: "PlayerID",
@@ -542,16 +545,204 @@ class SharedTensorNNEvalClient(Evaluator):
         mask = ae.legal_action_mask(state, player_id)
         return self._call_value_policy(feats, mask)
 
+    def batch_evaluate(
+        self, states: "Sequence[GameState]", player_id: "PlayerID",
+    ) -> list[float]:
+        """Batched value-only evaluation.
+
+        Submits all non-terminal slot indices to the request queue
+        *before* waiting on any response, so the dispatcher fuses the
+        N requests into one (or few) GPU forward passes. The legacy
+        for-loop sent each request as its own round-trip and capped
+        each worker's in-flight count at 1 — see the Lever 2
+        investigation doc for the wall-time math.
+
+        Terminal states short-circuit per-element to the engine's
+        true result (matching ``Evaluator.evaluate``) without touching
+        the slot machinery. The returned list preserves input order
+        and mixes terminal + non-terminal values transparently.
+
+        Backpressure choice (a): if the non-terminal subset exceeds
+        the slot pool size, raise rather than chunk. Production sizes
+        ``n_slots >= batch_size + n_workers`` precisely so a single
+        worker's batch always fits; a caller asking for more is a
+        config bug, not a runtime case worth silently handling.
+        """
+        if not states:
+            return []
+
+        # Partition. Terminal states get their value immediately and
+        # never acquire a slot. Non-terminal states extract features
+        # up front so the slot's I/O window is as tight as possible.
+        out: list[float] = [0.0] * len(states)
+        nonterminal_indices: list[int] = []
+        nonterminal_features: list[np.ndarray] = []
+        for i, s in enumerate(states):
+            if s.is_terminal():
+                winner = s.winner()
+                if winner is None:
+                    out[i] = 0.0
+                else:
+                    out[i] = 1.0 if winner == player_id else -1.0
+                continue
+            engine = _engine_state(s)
+            nonterminal_indices.append(i)
+            nonterminal_features.append(
+                extract_features(engine, player_id),
+            )
+
+        if not nonterminal_indices:
+            return out
+
+        n = len(nonterminal_indices)
+        if n > self._h.n_slots:
+            raise RuntimeError(
+                f"batch_evaluate requested {n} non-terminal slots, but "
+                f"server pool only has {self._h.n_slots}. Either raise "
+                f"n_slots or shrink the MCTS batch_size; this client "
+                f"does not chunk."
+            )
+
+        slots = self._submit_batch(
+            features=nonterminal_features, masks=None,
+        )
+        try:
+            for k, slot in enumerate(slots):
+                self._await_response(slot)
+                out[nonterminal_indices[k]] = float(
+                    self._h.values[slot, 0].item(),
+                )
+        finally:
+            for slot in slots:
+                self._h.free_slots.put(slot)
+        return out
+
     def batch_evaluate_with_policy(
         self, states: "Sequence[GameState]", player_id: "PlayerID",
     ) -> list[tuple[float, np.ndarray]]:
+        """Batched (value + policy) evaluation. Same shape as
+        :meth:`batch_evaluate`: submit all slot indices, then drain
+        responses. See that method for the backpressure rationale.
+
+        Terminal states short-circuit to ``(±1/0, all-zeros policy)``,
+        matching the single-state ``evaluate_with_policy`` semantics.
+        Result list preserves input order.
+        """
         if not self._with_policy:
             raise RuntimeError(
                 "batch_evaluate_with_policy requires a policy-head server",
             )
-        return [
-            self.evaluate_with_policy(s, player_id) for s in states
+        ae = _action_encoding()
+        vocab_size = ae.ACTION_VOCAB_SIZE
+        if not states:
+            return []
+
+        # Partition. Terminal states get the synthetic (value, zeros)
+        # answer immediately; non-terminals are bundled into one
+        # batched submit.
+        out: list[tuple[float, np.ndarray]] = [
+            (0.0, np.zeros(vocab_size, dtype=np.float32))
+            for _ in states
         ]
+        nonterminal_indices: list[int] = []
+        nonterminal_features: list[np.ndarray] = []
+        nonterminal_masks: list[np.ndarray] = []
+        for i, s in enumerate(states):
+            if s.is_terminal():
+                winner = s.winner()
+                if winner is None:
+                    value = 0.0
+                else:
+                    value = 1.0 if winner == player_id else -1.0
+                out[i] = (value, np.zeros(vocab_size, dtype=np.float32))
+                continue
+            engine = _engine_state(s)
+            nonterminal_indices.append(i)
+            nonterminal_features.append(
+                extract_features(engine, player_id),
+            )
+            nonterminal_masks.append(
+                ae.legal_action_mask(s, player_id),
+            )
+
+        if not nonterminal_indices:
+            return out
+
+        n = len(nonterminal_indices)
+        if n > self._h.n_slots:
+            raise RuntimeError(
+                f"batch_evaluate_with_policy requested {n} non-terminal "
+                f"slots, but server pool only has {self._h.n_slots}. "
+                f"Either raise n_slots or shrink the MCTS batch_size; "
+                f"this client does not chunk."
+            )
+
+        slots = self._submit_batch(
+            features=nonterminal_features,
+            masks=nonterminal_masks,
+        )
+        try:
+            for k, slot in enumerate(slots):
+                self._await_response(slot)
+                value = float(self._h.values[slot, 0].item())
+                policy = self._h.policies[slot].clone().numpy()
+                out[nonterminal_indices[k]] = (value, policy)
+        finally:
+            for slot in slots:
+                self._h.free_slots.put(slot)
+        return out
+
+    def _submit_batch(
+        self,
+        *,
+        features: list[np.ndarray],
+        masks: Optional[list[np.ndarray]],
+    ) -> list[int]:
+        """Acquire ``len(features)`` slots, write all input rows, then
+        submit every slot index to the request queue.
+
+        The "submit all before waiting on any" ordering is the whole
+        point: it gives the dispatcher up to ``len(features)`` items
+        on its queue at once, which is what enables it to fuse them
+        into a single forward pass.
+
+        On any failure (e.g. interrupted ``free_slots.get()``), the
+        already-acquired slots are released before re-raising so the
+        pool doesn't leak. Slots returned by this method are owned by
+        the caller until released.
+        """
+        n = len(features)
+        if masks is not None:
+            assert self._h.masks is not None
+            assert self._h.policies is not None
+            assert len(masks) == n
+
+        # Acquire slots one at a time. If we're interrupted partway
+        # (BaseException, e.g. KeyboardInterrupt), release whatever
+        # we've got so we don't leak the pool.
+        slots: list[int] = []
+        try:
+            for _ in range(n):
+                slots.append(self._h.free_slots.get())
+            # Write all input rows. Tight loop — no waiting between
+            # rows, no submissions yet.
+            for k, slot in enumerate(slots):
+                np_feats = np.ascontiguousarray(
+                    features[k], dtype=np.float32,
+                )
+                self._h.features[slot].copy_(torch.from_numpy(np_feats))
+                if masks is not None:
+                    np_mask = np.ascontiguousarray(masks[k], dtype=bool)
+                    self._h.masks[slot].copy_(torch.from_numpy(np_mask))
+            # Submit ALL slot indices before returning so the
+            # dispatcher sees them as a batched window.
+            for slot in slots:
+                self._h.request_queue.put(slot)
+        except BaseException:
+            for slot in slots:
+                self._h.free_slots.put(slot)
+            raise
+        return slots
 
     # ---- raw request paths (for bench / testing) ------------------------
 
