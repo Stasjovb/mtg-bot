@@ -38,6 +38,16 @@ Modes:
                      single-seed trajectory mode is necessary but not
                      sufficient since a fixed seed only exercises one
                      path through the legal space.
+    field-diff     — Build a Rust synthetic state and print a
+                     per-field OK/DIFFER diff between two parallel
+                     views of it. Parity-debug primitive: when a
+                     future trajectory smoke says "digests diverge at
+                     decision 47", run this mode at that state to see
+                     "life=20/19 — DIVERGE" instead of just two
+                     mismatched digests. Supports
+                     ``--inject-divergence FIELD`` to artificially
+                     mutate one field on the right-hand view so the
+                     diff machinery itself can be smoke-tested.
 
 Exit codes:
     0 — both engines agree (or only one engine ran successfully and
@@ -882,6 +892,287 @@ def run_multi_seed_mode(
     return 1
 
 
+# ---------- field-diff mode ----------------------------------------------
+
+
+# Canonical ordering of fields the field-diff mode reports on. Mirrors the
+# fields that ``_hash_rust_state`` folds into its hash recipe, plus the
+# scalar/zone fields the task brief specifically names. Keeping this list
+# in module scope makes it easy to assert "every field in _hash_parts shows
+# up in the diff table" in tests + lets the inject-divergence flag accept
+# the same field names.
+FIELD_DIFF_FIELDS: tuple[str, ...] = (
+    "turn",
+    "step",
+    "phase",
+    "active_player",
+    "priority_player",
+    "is_over",
+    "is_draw",
+    "winner_id",
+    "life_p0",
+    "life_p1",
+    "hand_p0",
+    "hand_p1",
+    "library_p0",
+    "library_p1",
+    "graveyard_p0",
+    "graveyard_p1",
+    "exile_p0",
+    "exile_p1",
+    "mana_pool_p0",
+    "mana_pool_p1",
+    "battlefield",
+    "stack",
+)
+
+
+def _build_field_view(state) -> dict:
+    """Build a field-keyed view of a Rust GameState from its snapshot getters.
+
+    Returns an ordered dict (insertion-order = ``FIELD_DIFF_FIELDS`` order)
+    keyed by field name, with values being the comparable signatures:
+
+      * scalar fields (life, active_player, ...) -> the raw value
+      * zone fields (hand_p0, battlefield, ...) -> tuple of per-object
+        8-tuples produced by ``_rust_zone_obj_sig``
+      * stack -> tuple of per-stack-item 8-tuples produced by
+        ``_rust_stack_obj_sig``
+      * mana_pool_pN -> tuple of sorted ``(symbol, count)`` items
+
+    Both the "python-side recipe walk" and the "Rust-direct snapshot walk"
+    feed off ``_build_field_view`` — by construction both views start
+    field-equal on a vanilla state, which is the field-diff mode's
+    null-hypothesis baseline. The mode's value comes from the
+    inject-divergence flag (smoke-test the smoke) and from a future
+    bridge implementation that walks the Python GameState through a
+    parallel ``_build_python_field_view`` -- left as a TODO for the next
+    slice once Python-side snapshot getters land.
+
+    Step and phase are both surfaced — Rust's ``state.step`` returns the
+    enum string (e.g. ``"UNTAP"``) which corresponds to a sub-step; the
+    ``phase`` field uses the same string today (we don't yet have a
+    separate phase enum on the Rust side) but is plumbed in as its own
+    diff slot so a future "phase != step" expansion doesn't break the
+    table layout.
+    """
+    view: dict = {}
+    view["turn"] = state.turn_number
+    view["step"] = state.step
+    view["phase"] = state.step  # same as step today, see docstring
+    view["active_player"] = state.active_player_idx
+    view["priority_player"] = state.priority_player_idx
+    view["is_over"] = state.is_over()
+    view["is_draw"] = state.is_draw
+    view["winner_id"] = state.winner_id
+    view["life_p0"] = state.get_life(0)
+    view["life_p1"] = state.get_life(1)
+    view["hand_p0"] = tuple(_rust_zone_obj_sig(d) for d in state.hand_snapshot(0))
+    view["hand_p1"] = tuple(_rust_zone_obj_sig(d) for d in state.hand_snapshot(1))
+    view["library_p0"] = tuple(
+        _rust_zone_obj_sig(d) for d in state.library_snapshot(0)
+    )
+    view["library_p1"] = tuple(
+        _rust_zone_obj_sig(d) for d in state.library_snapshot(1)
+    )
+    view["graveyard_p0"] = tuple(
+        _rust_zone_obj_sig(d) for d in state.graveyard_snapshot(0)
+    )
+    view["graveyard_p1"] = tuple(
+        _rust_zone_obj_sig(d) for d in state.graveyard_snapshot(1)
+    )
+    view["exile_p0"] = tuple(_rust_zone_obj_sig(d) for d in state.exile_snapshot(0))
+    view["exile_p1"] = tuple(_rust_zone_obj_sig(d) for d in state.exile_snapshot(1))
+    view["mana_pool_p0"] = tuple(sorted(state.mana_pool_snapshot(0).items()))
+    view["mana_pool_p1"] = tuple(sorted(state.mana_pool_snapshot(1).items()))
+    view["battlefield"] = tuple(
+        _rust_zone_obj_sig(d) for d in state.battlefield_snapshot()
+    )
+    view["stack"] = tuple(_rust_stack_obj_sig(d) for d in state.stack_snapshot())
+    return view
+
+
+# Mapping of inject-divergence field name -> a transform that returns a
+# *different* but type-compatible value. Used by --inject-divergence to
+# smoke-test that the diff machinery actually detects per-field changes.
+# Each transform takes the current value and returns a guaranteed-different
+# replacement.
+def _mutate_field_value(field: str, value):
+    """Return a value guaranteed to differ from ``value`` for ``field``.
+
+    The mutation is type-aware so the post-mutation view still type-checks
+    when compared element-by-element. For scalar int fields we add 1; for
+    booleans we negate; for the step/phase string we tack on a suffix; for
+    zone tuples we replace with the empty tuple (clearly different from
+    any non-empty zone, and also distinct from an already-empty zone when
+    we use a sentinel marker — see below).
+
+    For zones that are already empty in the vanilla state (graveyard,
+    exile, stack), we inject a fake sentinel tuple so the post-mutation
+    value is meaningfully different from the empty baseline.
+    """
+    sentinel_obj = ("__INJECTED__", 1, 0, 0, 0, None, 0, -1)
+    sentinel_stack = (None, 0, 0, 0, 0, None, 0, -1)
+    if field in ("turn",):
+        return (value or 0) + 1
+    if field in ("active_player", "priority_player"):
+        return 1 - (value or 0)  # toggle 0 <-> 1
+    if field in ("life_p0", "life_p1"):
+        return (value if value is not None else 20) - 1
+    if field == "winner_id":
+        return 0 if value is None else None
+    if field in ("is_over", "is_draw"):
+        return not value
+    if field in ("step", "phase"):
+        return f"{value}__INJECTED__"
+    if field in ("mana_pool_p0", "mana_pool_p1"):
+        # Replace with a clearly-different mana set; tuple of sorted items
+        # so the comparison signature stays type-uniform.
+        return tuple(sorted({"W": 99}.items()))
+    if field in (
+        "hand_p0", "hand_p1", "library_p0", "library_p1",
+        "graveyard_p0", "graveyard_p1", "exile_p0", "exile_p1",
+        "battlefield",
+    ):
+        # Append a sentinel so empty zones still get a non-trivially-
+        # different post-injection signature.
+        return tuple(value) + (sentinel_obj,)
+    if field == "stack":
+        return tuple(value) + (sentinel_stack,)
+    raise ValueError(
+        f"_mutate_field_value: unknown field {field!r} "
+        f"(no mutation recipe)"
+    )
+
+
+def run_field_diff_mode(
+    seed: int,
+    num_battlefield: int = 10,
+    num_hand: int = 7,
+    num_library: int = 50,
+    inject_divergence: str | None = None,
+) -> int:
+    """Build a Rust synthetic state and report a per-field diff between
+    two parallel views of it.
+
+    Today both views are walked from the same Rust state via the snapshot
+    getters — one through ``_hash_rust_state``'s recipe (the
+    "python-recipe" view) and one direct (the "rust-direct" view). On a
+    vanilla state they're identical by construction; the value of this
+    mode is twofold:
+
+      1. ``--inject-divergence FIELD`` artificially mutates one field on
+         the rust-direct view after building it, so we can verify the
+         diff actually catches per-field mismatches. Smoke-tests the
+         smoke before the actually-divergent bridge case exists.
+      2. When the future cross-engine bridge lands (Python engine wired
+         in), one side switches to a Python-walked view and any read-
+         side drift surfaces as a localized "life=20/19 — DIVERGE" entry
+         instead of "different digest, good luck".
+
+    Returns 0 if every field matches, 1 if any field differs, 2 on
+    import error.
+
+    The ``seed`` argument is informational today (make_synthetic_state is
+    deterministic), matching the contract on ``run_initial_state_compare``.
+    """
+    try:
+        import mtg_bot_engine
+    except ImportError as e:
+        print(f"[field-diff] ERROR: mtg_bot_engine not built ({e})")
+        print("  -> run `maturin develop --release -m rust/Cargo.toml`")
+        return 2
+
+    # Accept unqualified per-player field names (e.g. "life" instead of
+    # "life_p0") as a convenience — defaults to player 0. Matches the
+    # task brief's CLI surface: `--inject-divergence life` is shorter
+    # and reads more naturally than `--inject-divergence life_p0`.
+    if inject_divergence is not None and inject_divergence not in FIELD_DIFF_FIELDS:
+        # Try suffixing _p0 for the per-player family fields.
+        candidate = f"{inject_divergence}_p0"
+        if candidate in FIELD_DIFF_FIELDS:
+            inject_divergence = candidate
+        else:
+            print(
+                f"[field-diff] ERROR: unknown --inject-divergence field "
+                f"{inject_divergence!r}; must be one of: "
+                f"{', '.join(FIELD_DIFF_FIELDS)}"
+            )
+            return 2
+
+    state = mtg_bot_engine.make_synthetic_state(
+        num_battlefield, num_hand, num_library
+    )
+
+    # Both views come from the same _build_field_view today (see docstring
+    # — the bridge to a Python-walked view is the next slice). For the
+    # inject-divergence path we mutate ONE field on the right-hand side
+    # to prove the diff actually fires.
+    left = _build_field_view(state)
+    right = _build_field_view(state)
+
+    if inject_divergence is not None:
+        right[inject_divergence] = _mutate_field_value(
+            inject_divergence, right[inject_divergence]
+        )
+
+    # Walk every field in canonical order. For each field, emit one row
+    # of the table — OK if equal, DIFFER with the two values if not.
+    print(
+        f"[field-diff] synthetic state "
+        f"[bf={num_battlefield}, hand={num_hand}, lib={num_library}, seed={seed}]"
+        + (
+            f" (--inject-divergence {inject_divergence})"
+            if inject_divergence is not None
+            else ""
+        )
+    )
+    print()
+    # Column widths chosen so a 20-char field name + a "DIFFER" verdict +
+    # short value reprs fit on a typical terminal line; long zone tuples
+    # are truncated in the rendering helper.
+    print("field             | status | left                                  | right")
+    print("------------------|--------|---------------------------------------|--------")
+
+    n_differ = 0
+    for field in FIELD_DIFF_FIELDS:
+        l_val = left.get(field)
+        r_val = right.get(field)
+        if l_val == r_val:
+            print(f"{field:<17} | OK     | {_field_repr(l_val):<37} | (same)")
+        else:
+            n_differ += 1
+            print(
+                f"{field:<17} | DIFFER | "
+                f"{_field_repr(l_val):<37} | {_field_repr(r_val)}"
+            )
+
+    print()
+    if n_differ == 0:
+        print(
+            f"PARITY: PASS — all {len(FIELD_DIFF_FIELDS)} fields match between views"
+        )
+        return 0
+
+    print(
+        f"PARITY: FAIL — {n_differ} of {len(FIELD_DIFF_FIELDS)} fields differ"
+    )
+    return 1
+
+
+def _field_repr(value, max_len: int = 35) -> str:
+    """Render a field value as a short, single-line string.
+
+    Long zone tuples get truncated with ``...`` so the table reads
+    cleanly. Truncation is purely cosmetic for the printed table — the
+    actual equality comparison is done on the unrendered values.
+    """
+    rendered = repr(value)
+    if len(rendered) > max_len:
+        return rendered[: max_len - 3] + "..."
+    return rendered
+
+
 def main() -> int:
     p = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     p.add_argument("--seed", type=int, default=42)
@@ -895,7 +1186,7 @@ def main() -> int:
     )
     p.add_argument(
         "--mode",
-        choices=("game", "initial-state", "trajectory", "multi-seed"),
+        choices=("game", "initial-state", "trajectory", "multi-seed", "field-diff"),
         default="game",
         help=(
             "Which parity check to run. 'game' (default) plays a full game on "
@@ -905,7 +1196,21 @@ def main() -> int:
             "a Rust state through N decisions and asserts clone-replay "
             "determinism (Rust-only — cross-engine compare deferred). "
             "'multi-seed' runs 'trajectory' across K seeds and prints an "
-            "aggregate summary."
+            "aggregate summary. 'field-diff' builds a synthetic state, walks "
+            "two parallel views of it, and prints a per-field OK/DIFFER table "
+            "— the parity-debug primitive used to answer 'WHICH field "
+            "diverged' once a trajectory smoke says digests don't match."
+        ),
+    )
+    p.add_argument(
+        "--inject-divergence",
+        type=str,
+        default=None,
+        help=(
+            "(field-diff) artificially mutate one field on the right-hand "
+            "view post-snapshot so the diff machinery has something to "
+            "detect. Smoke-test the smoke. Valid field names: "
+            + ", ".join(FIELD_DIFF_FIELDS) + "."
         ),
     )
     p.add_argument(
@@ -969,6 +1274,15 @@ def main() -> int:
             num_battlefield=args.num_battlefield,
             num_hand=args.num_hand,
             num_library=args.num_library,
+        )
+
+    if args.mode == "field-diff":
+        return run_field_diff_mode(
+            seed=args.seed,
+            num_battlefield=args.num_battlefield,
+            num_hand=args.num_hand,
+            num_library=args.num_library,
+            inject_divergence=args.inject_divergence,
         )
 
     if args.mode == "multi-seed":
