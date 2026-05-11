@@ -1027,3 +1027,134 @@ def test_plus1_on_each_creature_clone_isolation(synthetic_state):
     src_by_id = {d["id"]: d for d in src_snap}
     for cid in bear_ids:
         assert src_by_id[cid]["counters"] == 0
+
+
+# -------------------- Round-28 PutPlusOneCounterOnCreatureYouControl --------------------
+
+
+def _rayblade_dict(amount: int = 1):
+    """Rayblade-Trooper-shape: put +1/+1 counter on target creature
+    you control."""
+    return {
+        "name": "Rayblade Trooper (synthetic)",
+        "mana_cost": {"W": 1},
+        "card_types": ["Instant"],
+        "effects": [
+            {
+                "kind": "put_plus_one_counter_on_creature_you_control",
+                "amount": amount,
+            }
+        ],
+    }
+
+
+def test_register_plus1_on_creature_you_control_default(empty_registry):
+    pid = empty_registry.register_printing(
+        {
+            "name": "default-target-counter",
+            "card_types": ["Instant"],
+            "effects": [{"kind": "put_plus_one_counter_on_creature_you_control"}],
+        }
+    )
+    effects = empty_registry.get_printing_effects(pid)
+    assert effects[0]["kind"] == "put_plus_one_counter_on_creature_you_control"
+    assert effects[0]["amount"] == 1
+
+
+def test_register_plus1_on_creature_you_control_negative_raises(empty_registry):
+    import pytest
+    with pytest.raises(ValueError, match="non-negative"):
+        empty_registry.register_printing(
+            {
+                "name": "bad-target-counter",
+                "card_types": ["Instant"],
+                "effects": [
+                    {
+                        "kind": "put_plus_one_counter_on_creature_you_control",
+                        "amount": -2,
+                    }
+                ],
+            }
+        )
+
+
+def test_plus1_on_creature_you_control_pumps_first_p0_creature(synthetic_state):
+    """First creature on p0's bf (first Grizzly Bears since Forests
+    come before but are non-creature) gets +1 counter; others
+    untouched."""
+    snap = synthetic_state.battlefield_snapshot()
+    p0_bears = [
+        d for d in snap
+        if d["controller_id"] == 0 and d["printing_name"] == "Grizzly Bears"
+    ]
+    assert len(p0_bears) >= 2
+    first_bear_id = p0_bears[0]["id"]
+    second_bear_id = p0_bears[1]["id"]
+
+    spell_id = synthetic_state.register_and_inject_object(
+        _rayblade_dict(amount=1), 0, ZONE_HAND
+    )
+    synthetic_state.push_to_stack(spell_id, 0)
+    synthetic_state.resolve_top_of_stack()
+
+    new_snap = synthetic_state.battlefield_snapshot()
+    by_id = {d["id"]: d for d in new_snap}
+    assert by_id[first_bear_id]["counters"] == 1
+    assert by_id[second_bear_id]["counters"] == 0
+
+
+def test_plus1_on_creature_you_control_amount_zero_is_noop(synthetic_state):
+    snap = synthetic_state.battlefield_snapshot()
+    bear_ids = [
+        d["id"] for d in snap
+        if d["controller_id"] == 0 and d["printing_name"] == "Grizzly Bears"
+    ]
+    spell_id = synthetic_state.register_and_inject_object(
+        _rayblade_dict(amount=0), 0, ZONE_HAND
+    )
+    synthetic_state.push_to_stack(spell_id, 0)
+    synthetic_state.resolve_top_of_stack()
+
+    new_snap = synthetic_state.battlefield_snapshot()
+    by_id = {d["id"]: d for d in new_snap}
+    for cid in bear_ids:
+        assert by_id[cid]["counters"] == 0
+
+
+def test_plus1_on_creature_you_control_no_creatures_fizzles(synthetic_state):
+    """No eligible creatures on controller's bf → silent fizzle."""
+    state = synthetic_state.clone_once()
+    snap = state.battlefield_snapshot()
+    bear_ids = [
+        d["id"] for d in snap
+        if d["controller_id"] == 0 and d["printing_name"] == "Grizzly Bears"
+    ]
+    for bid in bear_ids:
+        state.move_object(bid, 3, 0)  # ZONE_GRAVEYARD
+
+    spell_id = state.register_and_inject_object(
+        _rayblade_dict(amount=3), 0, ZONE_HAND
+    )
+    state.push_to_stack(spell_id, 0)
+    state.resolve_top_of_stack()  # should not raise
+
+
+def test_plus1_on_creature_you_control_clone_isolation(synthetic_state):
+    snap = synthetic_state.battlefield_snapshot()
+    first_bear_id = next(
+        d["id"] for d in snap
+        if d["controller_id"] == 0 and d["printing_name"] == "Grizzly Bears"
+    )
+    spell_id = synthetic_state.register_and_inject_object(
+        _rayblade_dict(amount=2), 0, ZONE_HAND
+    )
+    synthetic_state.push_to_stack(spell_id, 0)
+    cloned = synthetic_state.clone_once()
+    cloned.resolve_top_of_stack()
+
+    clone_snap = cloned.battlefield_snapshot()
+    src_snap = synthetic_state.battlefield_snapshot()
+    clone_first = next(d for d in clone_snap if d["id"] == first_bear_id)
+    src_first = next(d for d in src_snap if d["id"] == first_bear_id)
+    assert clone_first["counters"] == 2
+    assert src_first["counters"] == 0
