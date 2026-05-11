@@ -227,6 +227,8 @@ the test lands in a commit.
 
 | rust(until-leaves-foundation): new `exiled_with_source: Option<u32>` field on GameObject + `return_paired_exiles_for(source_id)` pymethod + Effect::ExileTargetCreatureUntilSourceLeaves (All-Fates-Stalker shape, 3 EoE cards). Manual return hook; auto-fire-on-bf-leave is follow-up. | tests_rust/test_zones.py extend | green  | feature/rust-until-leaves-foundation |
 
+| rust(effect-exile-opps-nonland-until-leaves): Effect::ExileOpponentsNonlandPermanentUntilLeaves — Hardlight-Containment-shape; broader filter on the r28 until-leaves foundation (4 EoE cards). | tests_rust/test_zones.py extend | green  | feature/rust-effect-exile-opps-nonland-until-leaves |
+
 ## Build invocation reminder
 
 ```

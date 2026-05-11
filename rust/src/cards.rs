@@ -1155,6 +1155,21 @@ pub enum Effect {
     /// Auto-firing the return is a follow-up slice; for now the
     /// link is stamped but the return must be triggered manually.
     ExileTargetCreatureUntilSourceLeaves,
+    /// **Round 28 coverage extension.** Exile a non-land permanent
+    /// an opponent controls until source leaves the battlefield.
+    /// Mirrors Python's `ExileOpponentsNonlandPermanentUntilLeaves`
+    /// (`effects/generic/exile.py:588` — 4 EoE cards).
+    ///
+    /// **First-slice deterministic target.** First permanent on the
+    /// defender's bf whose card_types do NOT contain "Land".
+    /// Defender = 1 - active_player (first-slice owner-as-controller
+    /// shape). No eligible target → silent fizzle.
+    ///
+    /// **Mechanism** is the same as ExileTargetCreatureUntilSourceLeaves:
+    /// stamp target's `exiled_with_source = Some(source_id)` and move
+    /// to owner's exile. Manual return via
+    /// `return_paired_exiles_for(source_id)`.
+    ExileOpponentsNonlandPermanentUntilLeaves,
 }
 
 #[derive(Clone, Debug)]
@@ -1759,6 +1774,9 @@ fn parse_effect(dict: &Bound<'_, PyDict>) -> PyResult<Effect> {
         "exile_target_creature_until_source_leaves" => {
             Ok(Effect::ExileTargetCreatureUntilSourceLeaves)
         }
+        "exile_opponents_nonland_permanent_until_leaves" => {
+            Ok(Effect::ExileOpponentsNonlandPermanentUntilLeaves)
+        }
         "put_charge_counters_on_self" => {
             let amount: i32 = match dict.get_item("amount")? {
                 Some(a) => a.extract().map_err(|e| {
@@ -2005,7 +2023,7 @@ fn parse_effect(dict: &Bound<'_, PyDict>) -> PyResult<Effect> {
             Ok(Effect::Sequence { effects: children })
         }
         other => Err(PyValueError::new_err(format!(
-            "unknown effect kind {other:?}; valid: deal_damage, draw_cards, gain_life, return_to_hand, mill, mill_target_player, exile_target, tap_target, untap_target, sacrifice, add_counters, discard_card, scry_n, destroy_target, damage_each_opponent, damage_each_creature, create_token, add_mana_to_pool, search_library_for_basic_land_tapped, put_plus_one_counter_on_self, surveil, counter_target_spell, return_creature_from_your_graveyard_to_battlefield, discard_self, each_opponent_loses_life, lose_life, target_opponent_loses_life, each_opponent_discards, destroy_all_creatures, destroy_target_nonland_permanent, destroy_target_artifact, destroy_target_land, deal_damage_any_target, pump_self_until_eot, pump_target_creature_until_eot, sequence, pump_creatures_you_control_until_eot, return_creature_from_your_graveyard_to_hand, put_plus_one_counter_on_each_creature_you_control, put_plus_one_counter_on_creature_you_control, add_n_mana_of_chosen_color, search_library_for_card, pump_creatures_opponents_control_until_eot, put_card_from_graveyard_on_bottom_of_library, move_self_counters_to_target_creature_you_control, deal_damage_equal_to_source_power_any_target, tap_target_artifact_or_creature, conditional_on_tapped_creatures, put_plus_one_counter_on_each_of_up_to_n_target_creatures, put_charge_counters_on_self, create_token_copy_of_target_creature_you_control, optional_sac_artifact_for_effect, owner_puts_target_artifact_or_creature_on_top_or_bottom_of_library, attach_to_target_creature_you_control, destroy_enchanted_permanent, tap_enchanted_permanent, exile_target_creature_until_source_leaves"
+            "unknown effect kind {other:?}; valid: deal_damage, draw_cards, gain_life, return_to_hand, mill, mill_target_player, exile_target, tap_target, untap_target, sacrifice, add_counters, discard_card, scry_n, destroy_target, damage_each_opponent, damage_each_creature, create_token, add_mana_to_pool, search_library_for_basic_land_tapped, put_plus_one_counter_on_self, surveil, counter_target_spell, return_creature_from_your_graveyard_to_battlefield, discard_self, each_opponent_loses_life, lose_life, target_opponent_loses_life, each_opponent_discards, destroy_all_creatures, destroy_target_nonland_permanent, destroy_target_artifact, destroy_target_land, deal_damage_any_target, pump_self_until_eot, pump_target_creature_until_eot, sequence, pump_creatures_you_control_until_eot, return_creature_from_your_graveyard_to_hand, put_plus_one_counter_on_each_creature_you_control, put_plus_one_counter_on_creature_you_control, add_n_mana_of_chosen_color, search_library_for_card, pump_creatures_opponents_control_until_eot, put_card_from_graveyard_on_bottom_of_library, move_self_counters_to_target_creature_you_control, deal_damage_equal_to_source_power_any_target, tap_target_artifact_or_creature, conditional_on_tapped_creatures, put_plus_one_counter_on_each_of_up_to_n_target_creatures, put_charge_counters_on_self, create_token_copy_of_target_creature_you_control, optional_sac_artifact_for_effect, owner_puts_target_artifact_or_creature_on_top_or_bottom_of_library, attach_to_target_creature_you_control, destroy_enchanted_permanent, tap_enchanted_permanent, exile_target_creature_until_source_leaves, exile_opponents_nonland_permanent_until_leaves"
         ))),
     }
 }
@@ -2411,6 +2429,9 @@ fn effect_to_pydict<'py>(
         }
         Effect::ExileTargetCreatureUntilSourceLeaves => {
             d.set_item("kind", "exile_target_creature_until_source_leaves")?;
+        }
+        Effect::ExileOpponentsNonlandPermanentUntilLeaves => {
+            d.set_item("kind", "exile_opponents_nonland_permanent_until_leaves")?;
         }
         Effect::Sequence { effects } => {
             d.set_item("kind", "sequence")?;

@@ -3892,6 +3892,53 @@ fn apply_effect(
             obj.exiled_with_source = Some(source_obj_id);
             Arc::make_mut(&mut state.players[owner_idx].exile).push(obj);
         }
+        // Round-28 broader-filter "until leaves" exile. Same shape
+        // as ExileTargetCreatureUntilSourceLeaves but filters on
+        // "not a Land" rather than "is a Creature" — so artifacts,
+        // enchantments, planeswalkers, and creatures are all
+        // eligible. Defender = 1 - active_player.
+        Effect::ExileOpponentsNonlandPermanentUntilLeaves => {
+            let defender = (1 - state.active_player) as usize;
+            let target_id: Option<u32> = {
+                let bf = &state.players[defender].battlefield;
+                let registry = &state.registry;
+                bf.iter().find_map(|obj| {
+                    let printing = registry.lookup(obj.printing_id)?;
+                    let is_land = printing.card_types.iter().any(|t| t == "Land");
+                    if !is_land {
+                        Some(obj.id)
+                    } else {
+                        None
+                    }
+                })
+            };
+            let Some(target_id) = target_id else {
+                return Ok(()); // fizzle — no eligible permanent
+            };
+            let owner_idx: usize = {
+                let obj = state.players[defender]
+                    .battlefield
+                    .iter()
+                    .find(|o| o.id == target_id)
+                    .expect("target_id was just found in bf");
+                obj.controller as usize
+            };
+            let bf_mut: &mut Vec<GameObject> =
+                Arc::make_mut(&mut state.players[defender].battlefield);
+            let pos = bf_mut
+                .iter()
+                .position(|o| o.id == target_id)
+                .expect("target_id was just found in bf but missing on re-scan");
+            let mut obj = bf_mut.remove(pos);
+            obj.zone = ZONE_EXILE;
+            obj.tapped = false;
+            obj.summoning_sick = true; // r28 CE1 universal-true default
+            obj.damage = 0;
+            obj.counters = 0;
+            obj.attached_to = None;
+            obj.exiled_with_source = Some(source_obj_id);
+            Arc::make_mut(&mut state.players[owner_idx].exile).push(obj);
+        }
     }
     Ok(())
 }
