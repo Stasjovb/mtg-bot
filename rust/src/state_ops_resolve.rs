@@ -3528,6 +3528,73 @@ fn apply_effect(
             };
             Arc::make_mut(&mut state.players[cidx].battlefield).push(new_obj);
         }
+        // Round-28 "may sac for inner effect". First-slice
+        // deterministic-yes: if controller controls an artifact,
+        // sacrifice the first one + recursively apply inner. No
+        // artifact = full no-op (no inner either).
+        Effect::OptionalSacArtifactForEffect { inner_effect } => {
+            // Locate source controller.
+            let mut src_controller: Option<u8> = None;
+            'outer: for player in &state.players {
+                for zone in [
+                    &player.hand,
+                    &player.library,
+                    &player.battlefield,
+                    &player.graveyard,
+                    &player.exile,
+                ] {
+                    if let Some(obj) = zone.iter().find(|o| o.id == source_obj_id) {
+                        src_controller = Some(obj.controller);
+                        break 'outer;
+                    }
+                }
+            }
+            if src_controller.is_none() {
+                if let Some(item) = state
+                    .stack
+                    .iter()
+                    .find(|i| i.source_obj_id == source_obj_id)
+                {
+                    src_controller = Some(item.controller);
+                }
+            }
+            let cidx = match src_controller {
+                Some(c) => c as usize,
+                None => state.active_player as usize,
+            };
+            // Pick first artifact on controller's bf.
+            let artifact_id: Option<u32> = {
+                let bf = &state.players[cidx].battlefield;
+                let registry = &state.registry;
+                bf.iter().find_map(|obj| {
+                    let printing = registry.printings.get(obj.printing_id as usize)?;
+                    if printing.card_types.iter().any(|t| t == "Artifact") {
+                        Some(obj.id)
+                    } else {
+                        None
+                    }
+                })
+            };
+            let Some(artifact_id) = artifact_id else {
+                return Ok(()); // no artifact → no-op
+            };
+            // Sacrifice: remove from bf, push to graveyard with CR 400.7 reset.
+            let bf_mut: &mut Vec<GameObject> =
+                Arc::make_mut(&mut state.players[cidx].battlefield);
+            let pos = bf_mut
+                .iter()
+                .position(|o| o.id == artifact_id)
+                .expect("artifact_id was just found in bf but not on re-scan");
+            let mut obj = bf_mut.remove(pos);
+            obj.zone = ZONE_GRAVEYARD;
+            obj.tapped = false;
+            obj.summoning_sick = true; // r28 CE1 universal default
+            obj.damage = 0;
+            obj.counters = 0;
+            Arc::make_mut(&mut state.players[cidx].graveyard).push(obj);
+            // Apply inner effect.
+            apply_effect(state, inner_effect.as_ref(), source_obj_id)?;
+        }
     }
     Ok(())
 }

@@ -8090,3 +8090,103 @@ def test_resolve_conditional_tapped_filter_skips_non_creatures(synthetic_state):
     # No draw — Forests are non-creature so they didn't satisfy the
     # tapped-creature predicate.
     assert synthetic_state.library_sizes[0] == p0_lib_before
+
+
+# -------------------- Round-28 OptionalSacArtifactForEffect (2 cards) --------------------
+
+
+def _lithobraking_dict():
+    return {
+        "name": "Lithobraking (synthetic)",
+        "card_types": ["Sorcery"],
+        "mana_cost": {"R": 1},
+        "effects": [
+            {
+                "kind": "optional_sac_artifact_for_effect",
+                "inner_effect": {"kind": "draw_cards", "count": 1},
+            }
+        ],
+    }
+
+
+def _vanilla_artifact_for_sac(name="Sac Target Artifact"):
+    return {
+        "name": name,
+        "card_types": ["Artifact"],
+        "mana_cost": {"generic": 1},
+    }
+
+
+def test_register_optional_sac_artifact_missing_inner_raises(engine):
+    import pytest
+    reg = engine.Registry()
+    with pytest.raises(ValueError, match="missing required 'inner_effect'"):
+        reg.register_printing(
+            {
+                "name": "Bad",
+                "card_types": ["Sorcery"],
+                "effects": [{"kind": "optional_sac_artifact_for_effect"}],
+            }
+        )
+
+
+def test_register_optional_sac_artifact_round_trips(engine):
+    reg = engine.Registry()
+    pid = reg.register_printing(_lithobraking_dict())
+    eff = reg.get_printing_effects(pid)[0]
+    assert eff["kind"] == "optional_sac_artifact_for_effect"
+    assert eff["inner_effect"]["kind"] == "draw_cards"
+    assert eff["inner_effect"]["count"] == 1
+
+
+def test_resolve_optional_sac_artifact_sacs_and_applies_inner(synthetic_state):
+    """Inject artifact on p0 bf, cast Lithobraking; artifact goes to
+    graveyard, draw fires."""
+    artifact_id = synthetic_state.register_and_inject_object(
+        _vanilla_artifact_for_sac(), 0, ZONE_BATTLEFIELD
+    )
+    spell_id = synthetic_state.register_and_inject_object(
+        _lithobraking_dict(), 0, ZONE_HAND
+    )
+    p0_lib_before = synthetic_state.library_sizes[0]
+    p0_gy_before = synthetic_state.graveyard_sizes[0]
+
+    synthetic_state.push_to_stack(spell_id, 0)
+    synthetic_state.resolve_top_of_stack()
+
+    # Artifact in graveyard.
+    assert synthetic_state.find_object_zone(artifact_id) == ZONE_GRAVEYARD
+    # Draw fired: library shrank by 1.
+    assert synthetic_state.library_sizes[0] == p0_lib_before - 1
+    # Graveyard: +1 (artifact sac'd) + 1 (sorcery post-resolve) = +2.
+    assert synthetic_state.graveyard_sizes[0] == p0_gy_before + 2
+
+
+def test_resolve_optional_sac_artifact_no_artifact_full_noop(synthetic_state):
+    """No artifact on p0 bf → full no-op (no sac AND no draw)."""
+    # Synthetic state defaults: only Forests + Grizzly Bears on p0 bf.
+    spell_id = synthetic_state.register_and_inject_object(
+        _lithobraking_dict(), 0, ZONE_HAND
+    )
+    p0_lib_before = synthetic_state.library_sizes[0]
+    synthetic_state.push_to_stack(spell_id, 0)
+    synthetic_state.resolve_top_of_stack()
+    # No draw fired (inner skipped because no artifact).
+    assert synthetic_state.library_sizes[0] == p0_lib_before
+
+
+def test_resolve_optional_sac_artifact_clone_isolation(synthetic_state):
+    artifact_id = synthetic_state.register_and_inject_object(
+        _vanilla_artifact_for_sac(), 0, ZONE_BATTLEFIELD
+    )
+    spell_id = synthetic_state.register_and_inject_object(
+        _lithobraking_dict(), 0, ZONE_HAND
+    )
+    synthetic_state.push_to_stack(spell_id, 0)
+    cloned = synthetic_state.clone_once()
+    cloned.resolve_top_of_stack()
+
+    # Clone: artifact in graveyard.
+    assert cloned.find_object_zone(artifact_id) == ZONE_GRAVEYARD
+    # Source: artifact still on bf (no resolve happened).
+    assert synthetic_state.find_object_zone(artifact_id) == ZONE_BATTLEFIELD
