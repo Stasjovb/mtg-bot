@@ -171,6 +171,12 @@ class SharedTensorServerHandle:
     free_slots: "mp.Queue[int]"
     request_queue: "mp.Queue[int]"
     response_events: list[Any]  # list[mp.Event] — typing imprecise
+    # Cross-process shutdown signal. The server sets this in ``stop()``
+    # so that workers blocked in ``_call_value*`` notice the server is
+    # gone and raise instead of hanging on a response event that will
+    # never be signaled. Set once, never reset within a server's
+    # lifetime; ``start()`` allocates a fresh handle if reused.
+    server_stopped: Any  # mp.Event
     # Shared tensors. ``features``, ``values`` always present;
     # ``masks`` / ``policies`` only when ``with_policy=True``.
     features: torch.Tensor
@@ -305,6 +311,14 @@ class SharedTensorNNEvalServer:
         # Per-slot response events. Worker waits on its slot's event
         # after submitting; server sets it after writing the output.
         self._response_events = [ctx.Event() for _ in range(self._n_slots)]
+        # Cross-process shutdown signal — set in ``stop()`` so that
+        # any worker mid-``_call_value*`` notices the server is gone
+        # and raises ``RuntimeError`` instead of hanging on a response
+        # event that will never be signaled. The dispatcher does NOT
+        # consult this; the dispatcher's own loop is gated by
+        # ``_stop_evt`` (a thread-local event), since the dispatcher
+        # lives in the same process as the server.
+        self._server_stopped = ctx.Event()
 
         # Dispatcher state.
         self._stop_evt = threading.Event()
@@ -321,6 +335,9 @@ class SharedTensorNNEvalServer:
         if self._dispatch_thread is not None:
             return
         self._stop_evt.clear()
+        # Clear the cross-process shutdown signal so a restart-after-
+        # stop server doesn't immediately fail every client call.
+        self._server_stopped.clear()
         self._dispatch_thread = threading.Thread(
             target=self._dispatch_loop,
             name="shm-nn-eval-server-dispatcher",
@@ -331,6 +348,27 @@ class SharedTensorNNEvalServer:
     def stop(self, timeout: float = 5.0) -> None:
         if self._dispatch_thread is None:
             return
+        # Order matters here. Before joining the dispatcher we must
+        # unblock any worker stuck in ``_call_value*`` on a per-slot
+        # response event. Otherwise the worker's wait() hangs forever
+        # (the dispatcher won't dispatch the slot after we stop) and
+        # at process exit ``concurrent.futures.process._python_exit``
+        # deadlocks joining the worker proc, which deadlocks joining
+        # its own internal threads — observed in the field as a 40+
+        # minute hang on eval-shard cleanup.
+        # Step 1: tell workers the server is going down so any in-
+        # flight call raises after wake.
+        self._server_stopped.set()
+        # Step 2: signal every per-slot response event. Workers
+        # currently in wait() return immediately and check
+        # _server_stopped on the next line. Workers about to enter
+        # wait() see the event already set and exit the same path.
+        for ev in self._response_events:
+            try:
+                ev.set()
+            except Exception:  # noqa: BLE001
+                pass
+        # Step 3: stop the dispatcher.
         self._stop_evt.set()
         # Wake the dispatcher if it's blocked on the request_queue.
         # Sentinel value -1 (slot indices are always >= 0).
@@ -353,6 +391,7 @@ class SharedTensorNNEvalServer:
             free_slots=self._free_slots,
             request_queue=self._request_queue,
             response_events=self._response_events,
+            server_stopped=self._server_stopped,
             features=self._features,
             values=self._values,
             masks=self._masks,
@@ -516,14 +555,47 @@ class SharedTensorNNEvalClient(Evaluator):
 
     # ---- raw request paths (for bench / testing) ------------------------
 
+    # Poll interval for the shutdown-aware wait. Normal calls return in
+    # microseconds-to-low-milliseconds (substrate p50 74us, production
+    # p95 ~3-4 ms), so wait() almost always returns True before the
+    # first tick elapses — zero perceptible cost on the happy path.
+    # Worst case: a worker observes server shutdown within this many
+    # seconds. 0.5s is comfortably below the per-game timeout and well
+    # within ``stop(timeout=5.0)``'s budget.
+    _SHUTDOWN_POLL_S = 0.5
+
+    def _await_response(self, slot: int) -> None:
+        """Wait for the dispatcher to write outputs for ``slot``, with
+        shutdown detection. Raises ``RuntimeError`` if the server is
+        stopped before the response is written."""
+        while not self._h.response_events[slot].wait(
+            timeout=self._SHUTDOWN_POLL_S,
+        ):
+            # wait() timed out without being set. If the server has
+            # gone down, bail; otherwise loop and keep waiting.
+            if self._h.server_stopped.is_set():
+                raise RuntimeError(
+                    "SharedTensorNNEvalServer stopped before response "
+                    f"was written (slot {slot})"
+                )
+        # The event fired. Two cases:
+        # (a) Dispatcher wrote outputs and set the event — normal path.
+        # (b) Server's ``stop()`` set the event to wake us; outputs
+        #     are NOT valid. Distinguish via ``server_stopped``.
+        self._h.response_events[slot].clear()
+        if self._h.server_stopped.is_set():
+            raise RuntimeError(
+                "SharedTensorNNEvalServer stopped while waiting for "
+                f"response (slot {slot})"
+            )
+
     def _call_value(self, feats: np.ndarray) -> float:
         slot = self._h.free_slots.get()
         try:
             np_feats = np.ascontiguousarray(feats, dtype=np.float32)
             self._h.features[slot].copy_(torch.from_numpy(np_feats))
             self._h.request_queue.put(slot)
-            self._h.response_events[slot].wait()
-            self._h.response_events[slot].clear()
+            self._await_response(slot)
             return float(self._h.values[slot, 0].item())
         finally:
             self._h.free_slots.put(slot)
@@ -540,8 +612,7 @@ class SharedTensorNNEvalClient(Evaluator):
             np_mask = np.ascontiguousarray(mask, dtype=bool)
             self._h.masks[slot].copy_(torch.from_numpy(np_mask))
             self._h.request_queue.put(slot)
-            self._h.response_events[slot].wait()
-            self._h.response_events[slot].clear()
+            self._await_response(slot)
             value = float(self._h.values[slot, 0].item())
             policy = self._h.policies[slot].clone().numpy()
             return value, policy
