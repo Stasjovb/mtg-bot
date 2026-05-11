@@ -197,6 +197,8 @@ the test lands in a commit.
 
 | rust(effect-plus1-target-creature-you-control): Effect::PutPlusOneCounterOnCreatureYouControl — Rayblade-Trooper-shape single-target +1/+1 counter add (3 EoE cards). | tests_rust/test_counters.py extend | green  | feature/rust-effect-plus1-target-creature-you-control |
 
+| rust(effect-add-n-mana-chosen-color): Effect::AddNManaOfChosenColor — Lotus-Field-shape mint-N-of-one-color with first-slice deterministic options[0] pick (4 EoE cards). | tests_rust/test_mana.py extend | green  | feature/rust-effect-add-n-mana-chosen-color |
+
 ## Build invocation reminder
 
 ```

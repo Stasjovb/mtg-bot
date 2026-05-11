@@ -2842,6 +2842,72 @@ fn apply_effect(
                 }
             }
         }
+        // Round-28 Lotus-Field-shape mana minting. First-slice
+        // deterministic color choice: pick options[0]. Mirrors
+        // Python's "no-agent-seated" fallback. amount=0 is a no-op;
+        // negative raises (defense-in-depth, parse catches at register
+        // time). Empty options Vec would have failed at parse — treat
+        // as defensive invariant here.
+        Effect::AddNManaOfChosenColor { amount, options } => {
+            if *amount < 0 {
+                return Err(PyValueError::new_err(format!(
+                    "AddNManaOfChosenColor amount must be non-negative, got {amount}"
+                )));
+            }
+            if *amount == 0 {
+                return Ok(());
+            }
+            let Some(chosen) = options.first() else {
+                return Err(PyValueError::new_err(
+                    "AddNManaOfChosenColor: options is empty",
+                ));
+            };
+            // Source controller (mirrors AddManaToPool's active-player
+            // shape — first-slice convention).
+            let mut src_controller: Option<u8> = None;
+            'outer: for player in &state.players {
+                for zone in [
+                    &player.hand,
+                    &player.library,
+                    &player.battlefield,
+                    &player.graveyard,
+                    &player.exile,
+                ] {
+                    if let Some(obj) = zone.iter().find(|o| o.id == source_obj_id) {
+                        src_controller = Some(obj.controller);
+                        break 'outer;
+                    }
+                }
+            }
+            if src_controller.is_none() {
+                if let Some(item) = state
+                    .stack
+                    .iter()
+                    .find(|i| i.source_obj_id == source_obj_id)
+                {
+                    src_controller = Some(item.controller);
+                }
+            }
+            let controller_idx = match src_controller {
+                Some(c) => c as usize,
+                None => state.active_player as usize,
+            };
+            let amount_u8 = (*amount).min(u8::MAX as i32) as u8;
+            let pool = &mut state.players[controller_idx].mana_pool;
+            match chosen.as_str() {
+                "W" => pool.white = pool.white.saturating_add(amount_u8),
+                "U" => pool.blue = pool.blue.saturating_add(amount_u8),
+                "B" => pool.black = pool.black.saturating_add(amount_u8),
+                "R" => pool.red = pool.red.saturating_add(amount_u8),
+                "G" => pool.green = pool.green.saturating_add(amount_u8),
+                "C" => pool.colorless = pool.colorless.saturating_add(amount_u8),
+                other => {
+                    return Err(PyValueError::new_err(format!(
+                        "AddNManaOfChosenColor: unknown color {other:?}; valid: W, U, B, R, G, C"
+                    )));
+                }
+            }
+        }
     }
     Ok(())
 }
