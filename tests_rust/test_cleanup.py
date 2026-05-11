@@ -434,3 +434,327 @@ def test_end_turn_and_start_next_clone_isolation(synthetic_state):
     assert synthetic_state.graveyard_sizes == src_gy
     assert synthetic_state.get_damage(P0_BATTLEFIELD_FIRST) == src_damage_p0
     assert synthetic_state.get_damage(P1_BATTLEFIELD_FIRST) == src_damage_p1
+
+
+# --------------------------------------------------------------------------
+# CR 514 cross-feature edge-case coverage
+# --------------------------------------------------------------------------
+#
+# These tests pin cross-primitive interactions between cleanup_step_for_
+# active_player and the other engine primitives that compose with it —
+# Effect dispatch (DealDamage / DealDamageAnyTarget / DamageEachCreature),
+# the mana-pool slice (AddManaToPool), advance_phase, and fingerprint.
+#
+# Each test asks "does cleanup correctly observe / clear / preserve the
+# state that some OTHER slice mutated"? The earlier tests in this file
+# all stamp damage via the engine's raw `deal_damage` primitive; these
+# go through the full stack -> resolve -> Effect-dispatch path so we
+# catch any wiring gap between Effect arms and the cleanup sweep.
+#
+# Also documents two known gaps the Rust engine has today, locked in
+# with explicit assertions so the gap is visible (rather than asserted
+# away) and a future "close the gap" slice has a failing test waiting:
+#
+# - Mana pool is NOT emptied by cleanup_step_for_active_player /
+#   end_turn_and_start_next (CR 106.4 — "When a phase or step ends,
+#   each player's mana pool empties"). The empty_mana_pool primitive
+#   exists; nothing wires it into the cleanup composition yet.
+# - Hand-size enforcement does NOT auto-fire when advance_phase wraps
+#   through CLEANUP. The active player must explicitly call
+#   cleanup_step_for_active_player or end_turn_and_start_next.
+#
+# Both gaps are documented in the assertions below so they show up in
+# the parity harness when (and only when) someone changes the behavior.
+
+
+# Helper printings — match the existing test_resolve.py shape, kept
+# inline here so this file stays self-contained.
+_ZONE_HAND = 0
+_ZONE_BATTLEFIELD = 2
+
+
+def _bombard_any_creature_dict(amount):
+    """A DealDamage{any_creature, amount} sorcery — picks the FIRST
+    object on the defender's battlefield (smallest index)."""
+    return {
+        "name": "Edge Bombard",
+        "card_types": ["Sorcery"],
+        "mana_cost": {"R": 1, "generic": 2},
+        "effects": [
+            {
+                "kind": "deal_damage",
+                "amount": amount,
+                "target": {"kind": "any_creature"},
+            }
+        ],
+    }
+
+
+def _bolt_any_target_dict(amount):
+    """A DealDamageAnyTarget{amount} instant — Lightning Bolt-shaped.
+    Picks the defender's first creature; falls back to player life
+    if there is no creature."""
+    return {
+        "name": "Edge Bolt",
+        "card_types": ["Instant"],
+        "mana_cost": {"R": 1},
+        "effects": [{"kind": "deal_damage_any_target", "amount": amount}],
+    }
+
+
+def _pyroclasm_dict(amount):
+    """A DamageEachCreature{amount} sorcery — Pyroclasm-shaped.
+    Marks `amount` damage on every creature on both battlefields."""
+    return {
+        "name": "Edge Pyroclasm",
+        "card_types": ["Sorcery"],
+        "mana_cost": {"R": 1, "generic": 1},
+        "effects": [{"kind": "damage_each_creature", "amount": amount}],
+    }
+
+
+# The synthetic seed lays the first 5 bf objects per player as Forests
+# (Land) and the next 5 as Grizzly Bears (Creature). DealDamage with
+# `any_creature` targets the smallest-index OBJECT on the defender's
+# battlefield (slice docstring); DealDamageAnyTarget filters for
+# Creature first. Pin both ids here so the assertions are concrete.
+P1_FIRST_OBJ_ID = 67       # First object on p1 bf (a Forest / Land)
+P1_FIRST_CREATURE_ID = 72  # First Creature on p1 bf (a Grizzly Bears)
+P0_CREATURE_IDS = (5, 6, 7, 8, 9)
+P1_CREATURE_IDS = (72, 73, 74, 75, 76)
+
+
+def test_cleanup_clears_damage_stamped_via_effect_deal_damage(synthetic_state):
+    """Cross-feature: Effect::DealDamage dispatches through the stack
+    and marks damage on the defender's first battlefield object;
+    cleanup observes that mark and zeroes it. Validates that the
+    cleanup primitive doesn't only see damage stamped via the raw
+    deal_damage primitive — it picks up damage written by the full
+    resolve-time dispatch path too."""
+    spell_id = synthetic_state.register_and_inject_object(
+        _bombard_any_creature_dict(amount=2), 0, _ZONE_BATTLEFIELD
+    )
+    synthetic_state.push_to_stack(spell_id, 0)
+    synthetic_state.resolve_top_of_stack()
+    assert synthetic_state.get_damage(P1_FIRST_OBJ_ID) == 2
+
+    summary = synthetic_state.cleanup_step_for_active_player()
+    assert summary["damage_cleared"] == 1
+    assert synthetic_state.get_damage(P1_FIRST_OBJ_ID) == 0
+
+
+def test_cleanup_clears_damage_stamped_via_deal_damage_any_target(
+    synthetic_state,
+):
+    """Cross-feature: Effect::DealDamageAnyTarget (Lightning Bolt
+    shape) marks 3 damage on the defender's first Creature; cleanup
+    clears it the same way the simpler DealDamage path clears.
+    Pins that the variant's damage-write feeds the same per-object
+    marker the cleanup sweep walks."""
+    spell_id = synthetic_state.register_and_inject_object(
+        _bolt_any_target_dict(amount=3), 0, _ZONE_BATTLEFIELD
+    )
+    synthetic_state.push_to_stack(spell_id, 0)
+    synthetic_state.resolve_top_of_stack()
+    assert synthetic_state.get_damage(P1_FIRST_CREATURE_ID) == 3
+
+    summary = synthetic_state.cleanup_step_for_active_player()
+    assert summary["damage_cleared"] == 1
+    assert synthetic_state.get_damage(P1_FIRST_CREATURE_ID) == 0
+
+
+def test_cleanup_clears_damage_stamped_via_damage_each_creature(
+    synthetic_state,
+):
+    """Cross-feature: Effect::DamageEachCreature marks `amount` on
+    EVERY creature on both battlefields (5 + 5 = 10 in the synthetic
+    seed); cleanup reports `damage_cleared == 10` and zeroes them
+    all. The largest cross-feature damage-clear case in this file —
+    exercises the cleanup sweep's both-players battlefield walk."""
+    spell_id = synthetic_state.register_and_inject_object(
+        _pyroclasm_dict(amount=2), 0, _ZONE_BATTLEFIELD
+    )
+    synthetic_state.push_to_stack(spell_id, 0)
+    synthetic_state.resolve_top_of_stack()
+    for cid in P0_CREATURE_IDS + P1_CREATURE_IDS:
+        assert synthetic_state.get_damage(cid) == 2
+
+    summary = synthetic_state.cleanup_step_for_active_player()
+    assert summary["damage_cleared"] == 10
+    for cid in P0_CREATURE_IDS + P1_CREATURE_IDS:
+        assert synthetic_state.get_damage(cid) == 0
+
+
+def test_cleanup_does_not_empty_mana_pool_documented_gap(synthetic_state):
+    """**Documented gap pin.** CR 106.4 says "When a phase or step ends,
+    each player's mana pool empties." The Rust ``empty_mana_pool`` and
+    ``empty_all_mana_pools`` primitives exist (see ``state_ops_mana.rs``)
+    but ``cleanup_step_for_active_player`` does NOT call them today —
+    the cleanup composition only models CR 514.1 (hand-size) and
+    CR 514.2 (damage clear). This test pins the current behavior so a
+    future "close the gap" slice flips this assertion to ``== 0`` /
+    empty pool and updates the cleanup primitive in lockstep.
+
+    See SEARCH_LIMITATIONS.md ledger for the deliberate divergence
+    once that slice lands."""
+    synthetic_state.add_mana(0, "G", 3)
+    synthetic_state.add_mana(1, "R", 2)
+    synthetic_state.cleanup_step_for_active_player()
+    # Mana pool survives cleanup today — gap pinned.
+    assert synthetic_state.get_mana_pool(0)["G"] == 3
+    assert synthetic_state.get_mana_pool(1)["R"] == 2
+
+
+def test_end_turn_and_start_next_does_not_empty_mana_pool_documented_gap(
+    synthetic_state,
+):
+    """**Documented gap pin (companion of the cleanup gap test).**
+    ``end_turn_and_start_next`` composes cleanup_step + advance_phase;
+    neither call clears the mana pool. CR 106.4 expects mana to empty
+    at every step / phase end, and certainly by the cleanup -> untap
+    wrap. Pinning the current behavior so the future fix's assertion
+    flip is visible."""
+    synthetic_state.add_mana(0, "G", 3)
+    synthetic_state.add_mana(1, "R", 2)
+    synthetic_state.end_turn_and_start_next()
+    # Both pools survive the full end-of-turn wrap today.
+    assert synthetic_state.get_mana_pool(0)["G"] == 3
+    assert synthetic_state.get_mana_pool(1)["R"] == 2
+
+
+def test_advance_phase_through_cleanup_does_not_enforce_hand_size_gap(
+    synthetic_state,
+):
+    """**Documented gap pin.** The active player keeping 10 cards in
+    hand and advancing through every phase via ``advance_phase`` does
+    NOT auto-fire the CR 514.1 hand-size discard — discard only fires
+    when a caller explicitly invokes ``cleanup_step_for_active_player``
+    or ``end_turn_and_start_next``. The phase machinery and the
+    cleanup primitive are not yet wired together.
+
+    Confirms the gap by stuffing the hand to 10, walking
+    ``advance_phase`` until the turn wraps, and asserting the hand is
+    STILL at 10 on the new turn. A future "wire cleanup into phase
+    transitions" slice flips this assertion."""
+    for _ in range(3):
+        synthetic_state.draw_card(0)
+    assert synthetic_state.hand_sizes[0] == 10
+    starting_turn = synthetic_state.turn_number
+
+    # Advance until we wrap to a new turn (phase resets to 0).
+    for _ in range(20):
+        prev_phase = synthetic_state.current_phase()
+        synthetic_state.advance_phase()
+        if synthetic_state.current_phase() == 0 and prev_phase != 0:
+            break
+    assert synthetic_state.turn_number == starting_turn + 1
+    # Hand survived the turn wrap — discard did not auto-fire.
+    assert synthetic_state.hand_sizes[0] == 10
+
+
+def test_cleanup_is_idempotent_when_already_clean(synthetic_state):
+    """Calling ``cleanup_step_for_active_player`` twice in a row is
+    safe — the second call is a true no-op when nothing changed
+    between calls. Pins that the cleanup sweep's damage-counter loop
+    doesn't double-count and the hand-size enforcer doesn't re-trigger
+    on an already-clean hand."""
+    synthetic_state.deal_damage(P0_BATTLEFIELD_FIRST, 3)
+    first = synthetic_state.cleanup_step_for_active_player()
+    assert first == {"discarded": 0, "damage_cleared": 1}
+    second = synthetic_state.cleanup_step_for_active_player()
+    # Second call sees nothing to clean: no damage, hand still <= 7.
+    assert second == {"discarded": 0, "damage_cleared": 0}
+    # State is identical to first-call post-state.
+    assert synthetic_state.get_damage(P0_BATTLEFIELD_FIRST) == 0
+    assert synthetic_state.hand_sizes[0] == 7
+
+
+def test_cleanup_on_clone_does_not_clear_originals_effect_damage(
+    synthetic_state,
+):
+    """**CoW canary across Effect dispatch + cleanup.** Stamp damage
+    via the full Effect::DamageEachCreature path on the source state;
+    clone; cleanup the clone. The original's marked damage must
+    survive untouched, even though the same battlefield Vec sat
+    under both states a moment ago. Composes the round-3 Effect
+    dispatch CoW guarantee with the round-8 cleanup CoW guarantee."""
+    spell_id = synthetic_state.register_and_inject_object(
+        _pyroclasm_dict(amount=2), 0, _ZONE_BATTLEFIELD
+    )
+    synthetic_state.push_to_stack(spell_id, 0)
+    synthetic_state.resolve_top_of_stack()
+    # Every creature now at damage=2 on the source.
+    for cid in P0_CREATURE_IDS + P1_CREATURE_IDS:
+        assert synthetic_state.get_damage(cid) == 2
+
+    cloned = synthetic_state.clone_once()
+    summary = cloned.cleanup_step_for_active_player()
+    assert summary["damage_cleared"] == 10
+
+    # Clone is clean.
+    for cid in P0_CREATURE_IDS + P1_CREATURE_IDS:
+        assert cloned.get_damage(cid) == 0
+    # Source untouched — damage stamps survive the clone's cleanup.
+    for cid in P0_CREATURE_IDS + P1_CREATURE_IDS:
+        assert synthetic_state.get_damage(cid) == 2
+
+
+def test_cleanup_changes_fingerprint_iff_state_changed(synthetic_state):
+    """Fingerprint cross-feature: cleanup that finds work to do
+    mutates state and the fingerprint changes; cleanup on an already-
+    clean state is a true no-op and the fingerprint is byte-identical
+    before and after. Pins that the cleanup primitive doesn't have a
+    hidden side-effect (mutation that doesn't feed the fingerprint
+    digest, or vice versa)."""
+    # Dirty cleanup: damage stamp on a permanent.
+    synthetic_state.deal_damage(P0_BATTLEFIELD_FIRST, 2)
+    fp_dirty = synthetic_state.fingerprint()
+    synthetic_state.cleanup_step_for_active_player()
+    fp_clean = synthetic_state.fingerprint()
+    assert fp_dirty != fp_clean, (
+        "cleanup that zeroes a non-zero damage marker must change the "
+        "fingerprint — damage is part of the per-object signature"
+    )
+
+    # Re-running cleanup on the now-clean state is fingerprint-stable.
+    fp_before_idempotent = synthetic_state.fingerprint()
+    synthetic_state.cleanup_step_for_active_player()
+    fp_after_idempotent = synthetic_state.fingerprint()
+    assert fp_before_idempotent == fp_after_idempotent
+
+
+def test_cleanup_alone_does_not_move_objects_between_zones(synthetic_state):
+    """Inverse-completeness check (already covered indirectly in the
+    zones cross-primitive file). When cleanup has nothing to do —
+    hand at 7, no damage anywhere — it must NOT silently shuffle
+    objects between zones. Snapshot every zone's contents before
+    and after and confirm bit-identical equality.
+
+    Specifically pinning the no-zone-move guarantee on the cleanup
+    primitive itself, so a regression that e.g. moves cards out of
+    hand during cleanup-with-no-discard would surface here rather
+    than only in the higher-level end_turn_and_start_next tests."""
+    hand_before = synthetic_state.hand_snapshot(0)
+    lib_before = synthetic_state.library_snapshot(0)
+    gy_before = synthetic_state.graveyard_snapshot(0)
+    bf_before = synthetic_state.battlefield_snapshot()
+    sizes_before = (
+        synthetic_state.hand_sizes,
+        synthetic_state.battlefield_sizes,
+        synthetic_state.library_sizes,
+        synthetic_state.graveyard_sizes,
+    )
+
+    summary = synthetic_state.cleanup_step_for_active_player()
+    assert summary == {"discarded": 0, "damage_cleared": 0}
+
+    assert synthetic_state.hand_snapshot(0) == hand_before
+    assert synthetic_state.library_snapshot(0) == lib_before
+    assert synthetic_state.graveyard_snapshot(0) == gy_before
+    assert synthetic_state.battlefield_snapshot() == bf_before
+    assert (
+        synthetic_state.hand_sizes,
+        synthetic_state.battlefield_sizes,
+        synthetic_state.library_sizes,
+        synthetic_state.graveyard_sizes,
+    ) == sizes_before
