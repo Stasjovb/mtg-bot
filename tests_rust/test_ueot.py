@@ -489,3 +489,212 @@ def test_clone_then_cleanup_does_not_affect_original_ueot(synthetic_state):
     assert cloned.effective_power(obj_id) == 2
     # Source: UEOT still live (cleanup didn't run on it).
     assert synthetic_state.effective_power(obj_id) == 5
+
+
+# ---------------------------------------------------------------- PumpTargetCreatureUntilEOT (r28)
+
+
+def _pump_target_instant_dict(power_bonus: int = 3, toughness_bonus: int = 3):
+    """Giant-Growth-shape instant: cast and resolve, the spell pumps
+    the first creature on the controller's battlefield +N/+M UEOT.
+
+    This is the simplest end-to-end PumpTargetCreatureUntilEOT proof —
+    cast as an instant with one effect; resolve puts the source in the
+    graveyard (CR 608.2m) but the resolve dispatch fires the effect
+    first against the source's controller's battlefield."""
+    return {
+        "name": "Giant Growth (synthetic)",
+        "mana_cost": {"G": 1},
+        "card_types": ["Instant"],
+        "effects": [
+            {
+                "kind": "pump_target_creature_until_eot",
+                "power_bonus": power_bonus,
+                "toughness_bonus": toughness_bonus,
+            }
+        ],
+    }
+
+
+def test_register_pump_target_creature_until_eot_default_values(empty_registry):
+    """Missing power_bonus / toughness_bonus default to 0 (mirrors the
+    PumpSelfUntilEOT schema)."""
+    pid = empty_registry.register_printing(
+        {
+            "name": "default-target-pump",
+            "card_types": ["Instant"],
+            "effects": [{"kind": "pump_target_creature_until_eot"}],
+        }
+    )
+    effects = empty_registry.get_printing_effects(pid)
+    assert len(effects) == 1
+    assert effects[0]["kind"] == "pump_target_creature_until_eot"
+    assert effects[0]["power_bonus"] == 0
+    assert effects[0]["toughness_bonus"] == 0
+
+
+def test_register_pump_target_creature_until_eot_negative_bonuses(empty_registry):
+    """Negative bonuses allowed (debuff-shaped target pumps)."""
+    pid = empty_registry.register_printing(
+        {
+            "name": "shrink-target",
+            "card_types": ["Instant"],
+            "effects": [
+                {
+                    "kind": "pump_target_creature_until_eot",
+                    "power_bonus": -2,
+                    "toughness_bonus": -3,
+                }
+            ],
+        }
+    )
+    effects = empty_registry.get_printing_effects(pid)
+    assert effects[0]["power_bonus"] == -2
+    assert effects[0]["toughness_bonus"] == -3
+
+
+def _first_creature_id_on_battlefield(state, player_id: int) -> int:
+    """Helper: find the id of the first creature on `player_id`'s
+    battlefield in zone-iteration order. Mirrors the arm's selection
+    logic so tests can assert on the actually-pumped creature."""
+    snap = state.battlefield_snapshot()
+    # battlefield_snapshot returns p0-then-p1 by-player order (per
+    # round-21 documented Rust-only divergence); filter to the
+    # requested controller.
+    for d in snap:
+        if d["controller_id"] != player_id:
+            continue
+        # First-creature-on-battlefield: synthetic state has Forests
+        # (Land) then Grizzly Bears (Creature). The arm filters on
+        # card_types contains "Creature".
+        if d["printing_name"] == "Grizzly Bears":
+            return d["id"]
+    raise AssertionError(f"no Grizzly Bears on player {player_id}'s battlefield")
+
+
+def test_pump_target_creature_until_eot_pumps_controllers_first_creature(synthetic_state):
+    """Load-bearing PumpTargetCreatureUntilEOT proof: the resolving
+    spell pumps the FIRST creature on the source's controller's
+    battlefield. Synthetic state's p0 battlefield has Forests
+    (non-creature) then Grizzly Bears; the first eligible target is
+    the first Grizzly Bears."""
+    target_id = _first_creature_id_on_battlefield(synthetic_state, 0)
+    pump_id = synthetic_state.register_and_inject_object(
+        _pump_target_instant_dict(power_bonus=3, toughness_bonus=3),
+        0,
+        ZONE_HAND,
+    )
+    synthetic_state.push_to_stack(pump_id, 0)
+    synthetic_state.resolve_top_of_stack()
+
+    # Grizzly Bears moved from 2/2 to 5/5 via the UEOT bonus.
+    assert synthetic_state.effective_power(target_id) == 5
+    assert synthetic_state.effective_toughness(target_id) == 5
+
+
+def test_pump_target_creature_until_eot_zero_zero_is_noop(synthetic_state):
+    """0/0 is a legal no-op: warm path stays allocation-free; no
+    modifier written; target's effective P/T equals printed."""
+    target_id = _first_creature_id_on_battlefield(synthetic_state, 0)
+    pump_id = synthetic_state.register_and_inject_object(
+        _pump_target_instant_dict(power_bonus=0, toughness_bonus=0),
+        0,
+        ZONE_HAND,
+    )
+    synthetic_state.push_to_stack(pump_id, 0)
+    synthetic_state.resolve_top_of_stack()
+
+    assert synthetic_state.effective_power(target_id) == 2
+    assert synthetic_state.effective_toughness(target_id) == 2
+
+
+def test_pump_target_creature_until_eot_no_creature_fizzles_silently(synthetic_state):
+    """No creatures on the source's controller's battlefield → silent
+    fizzle. The source still goes to graveyard (CR 608.2m) and no
+    modifier lands anywhere."""
+    state = synthetic_state.clone_once()
+    # Drain p0's battlefield by moving every object to graveyard.
+    while True:
+        snap = state.battlefield_snapshot()
+        my_ids = [d["id"] for d in snap if d["controller_id"] == 0]
+        if not my_ids:
+            break
+        state.move_object(my_ids[0], 3, 0)  # ZONE_GRAVEYARD
+
+    pump_id = state.register_and_inject_object(
+        _pump_target_instant_dict(power_bonus=3, toughness_bonus=3),
+        0,
+        ZONE_HAND,
+    )
+    state.push_to_stack(pump_id, 0)
+    # Should resolve without raising; no creature was on p0 bf, so no
+    # modifier was written anywhere.
+    state.resolve_top_of_stack()
+
+
+def test_pump_target_creature_until_eot_clears_at_cleanup(synthetic_state):
+    """The UEOT modifier auto-clears at the next cleanup step — same
+    contract PumpSelfUntilEOT pins."""
+    target_id = _first_creature_id_on_battlefield(synthetic_state, 0)
+    pump_id = synthetic_state.register_and_inject_object(
+        _pump_target_instant_dict(power_bonus=2, toughness_bonus=2),
+        0,
+        ZONE_HAND,
+    )
+    synthetic_state.push_to_stack(pump_id, 0)
+    synthetic_state.resolve_top_of_stack()
+    assert synthetic_state.effective_power(target_id) == 4
+
+    synthetic_state.cleanup_step_for_active_player()
+
+    assert synthetic_state.effective_power(target_id) == 2
+    assert synthetic_state.effective_toughness(target_id) == 2
+
+
+def test_pump_target_creature_until_eot_picks_first_of_multiple(synthetic_state):
+    """When multiple creatures are eligible, pick the FIRST one (zone-
+    iteration order) — first-slice deterministic convention. Pumps
+    target_id (first Grizzly Bears); second Grizzly Bears stays
+    printed."""
+    snap = synthetic_state.battlefield_snapshot()
+    p0_creatures = [
+        d for d in snap if d["controller_id"] == 0 and d["printing_name"] == "Grizzly Bears"
+    ]
+    assert len(p0_creatures) >= 2, (
+        "synthetic state default has >=2 Grizzly Bears on p0 battlefield"
+    )
+    first_bear_id = p0_creatures[0]["id"]
+    second_bear_id = p0_creatures[1]["id"]
+
+    pump_id = synthetic_state.register_and_inject_object(
+        _pump_target_instant_dict(power_bonus=1, toughness_bonus=1),
+        0,
+        ZONE_HAND,
+    )
+    synthetic_state.push_to_stack(pump_id, 0)
+    synthetic_state.resolve_top_of_stack()
+
+    # Only the first Bears creature gets pumped; second stays printed.
+    # (Bears printed P/T = 2/2 per synthetic state's Grizzly Bears.)
+    assert synthetic_state.effective_power(first_bear_id) == 3
+    assert synthetic_state.effective_power(second_bear_id) == 2
+
+
+def test_pump_target_creature_until_eot_clone_isolation(synthetic_state):
+    """CoW isolation: clone before resolve; resolve on clone; original's
+    targets remain printed P/T."""
+    target_id = _first_creature_id_on_battlefield(synthetic_state, 0)
+    pump_id = synthetic_state.register_and_inject_object(
+        _pump_target_instant_dict(power_bonus=3, toughness_bonus=3),
+        0,
+        ZONE_HAND,
+    )
+    synthetic_state.push_to_stack(pump_id, 0)
+    cloned = synthetic_state.clone_once()
+
+    cloned.resolve_top_of_stack()
+
+    # Clone has pumped target.
+    assert cloned.effective_power(target_id) == 5
+    # Original target still at printed P/T (no pump written).
+    assert synthetic_state.effective_power(target_id) == 2

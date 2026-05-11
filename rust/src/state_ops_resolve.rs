@@ -2501,6 +2501,87 @@ fn apply_effect(
                 }
             }
         }
+        // Round-28 UEOT-coverage extension. Same mechanism as
+        // PumpSelfUntilEOT but on a TARGET creature: the first
+        // creature on the source's controller's battlefield (mirrors
+        // Giant Growth-style oracle text "target creature gets +X/+Y
+        // UEOT" — typically cast to buff your own creature). The
+        // source's controller is looked up by finding the source
+        // object's `controller` field across any zone; if the source
+        // can't be located (rare; resolve_top fizzle path) the spell
+        // is a silent no-op.
+        //
+        // **Eligibility = is_creature_now on the source-controller's
+        // battlefield.** First creature in zone-iteration order wins;
+        // empty battlefield (or no creatures on it) fizzles silently.
+        // No creature-type filter beyond `is_creature_now` (per the
+        // round-23 PutPlusOneCounterOnSelf precedent that gates on
+        // `card_types contains "Creature"`).
+        //
+        // `(0, 0)` short-circuits before doing the lookup — pure
+        // no-op without touching state.
+        Effect::PumpTargetCreatureUntilEOT { power_bonus, toughness_bonus } => {
+            if *power_bonus == 0 && *toughness_bonus == 0 {
+                return Ok(());
+            }
+            // Locate source controller by scanning every zone.
+            // Mirrors the same "source could be anywhere" search the
+            // PumpSelfUntilEOT arm uses, extended to non-battlefield
+            // zones because the source spell typically resolves from
+            // the stack (technically zone=stack, but the source
+            // GameObject lives in whatever zone the spell came from
+            // before being put on the stack — first-slice: scan all
+            // tracked zones).
+            let mut src_controller: Option<u8> = None;
+            'outer: for player in &state.players {
+                for zone in [
+                    &player.hand,
+                    &player.library,
+                    &player.battlefield,
+                    &player.graveyard,
+                    &player.exile,
+                ] {
+                    if let Some(obj) = zone.iter().find(|o| o.id == source_obj_id) {
+                        src_controller = Some(obj.controller);
+                        break 'outer;
+                    }
+                }
+            }
+            let Some(controller) = src_controller else {
+                return Ok(()); // source untrackable → silent fizzle
+            };
+            // Pick the first creature on the controller's battlefield.
+            // Creature-ness gates on the printing's `card_types`
+            // (mirrors state_ops_cast.rs:304 and state_ops_legal.rs:571
+            // — the canonical creature-detection pattern).
+            let cidx = controller as usize;
+            let target_id: Option<u32> = {
+                let bf = &state.players[cidx].battlefield;
+                let registry = &state.registry;
+                bf.iter().find_map(|obj| {
+                    let printing = registry.printings.get(obj.printing_id as usize)?;
+                    if printing.card_types.iter().any(|t| t == "Creature") {
+                        Some(obj.id)
+                    } else {
+                        None
+                    }
+                })
+            };
+            let Some(target_id) = target_id else {
+                return Ok(()); // no eligible creature → silent fizzle
+            };
+            let zone: &mut Vec<GameObject> =
+                Arc::make_mut(&mut state.players[cidx].battlefield);
+            for obj in zone.iter_mut() {
+                if obj.id == target_id {
+                    obj.ueot_modifiers.push(UeotModifier::PowerToughnessBonus {
+                        power: *power_bonus,
+                        toughness: *toughness_bonus,
+                    });
+                    break;
+                }
+            }
+        }
     }
     Ok(())
 }
