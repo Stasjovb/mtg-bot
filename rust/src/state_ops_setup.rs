@@ -309,5 +309,6 @@ pub fn make_state(
         attackers: Vec::new(),
         blockers: Vec::new(),
         stack: Vec::new(),
+        pending_decisions: Vec::new(),
     })
 }

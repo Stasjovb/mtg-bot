@@ -18,6 +18,7 @@ mod state_ops_combat;
 mod state_ops_counters;
 mod state_ops_counterspell;
 mod state_ops_damage;
+mod state_ops_decisions;
 mod state_ops_deck;
 mod state_ops_fingerprint;
 mod state_ops_legal;
