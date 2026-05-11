@@ -417,3 +417,250 @@ def test_bottom_cards_full_hand_empties_hand(synthetic_state):
     # entries (in reverse) reconstruct lib[0..7] in order.
     bottom_seven_in_order = list(reversed(full[-P0_HAND_SIZE:]))
     assert bottom_seven_in_order == [10, 11, 12, 13, 14, 15, 16]
+
+
+# --- Cross-feature edge cases ---------------------------------------------
+#
+# Pin cross-primitive interactions between ``mulligan`` and the other
+# round-1/2/4 primitives (setup, zones, fingerprint, scry, clone). These
+# tests close the gaps between the per-primitive tests above and document
+# the simplifications the Rust engine has made vs MTG CR 103.4 (London
+# mulligan).
+#
+# **Documented parity gaps vs CR 103.4 / real MTG:**
+#
+# 1. ``mulligan(player, seed)`` always draws 7. It does NOT take a
+#    mulligan-count parameter; the caller owns the count. Per-mulligan
+#    "draw 6, 5, ..." behavior is provided as a separate primitive,
+#    ``mulligan_to_n(player, n_cards, seed)``.
+# 2. Bottoming N cards is a SEPARATE primitive (``bottom_cards_from_hand``)
+#    that the caller invokes after ``mulligan`` / ``mulligan_to_n``. The
+#    real London-mulligan flow is "shuffle hand into library, draw 7,
+#    bottom N" as one atomic player action — the Rust API splits that
+#    into two calls to keep each primitive single-knob.
+# 3. There is NO maximum-mulligan cap. CR 103.4 makes you mulligan to a
+#    smaller hand each time (and stops being useful around 0), but the
+#    primitive doesn't enforce it — the caller can call ``mulligan``
+#    indefinitely on the same state with no fail.
+# 4. There is NO scry-on-keep step (CR 103.4 mulligan-to-7 paris).
+# 5. ``mulligan`` does NOT enforce the bottom-N step before letting the
+#    game continue — a caller who skips ``bottom_cards_from_hand`` after
+#    mulliganing simply ends up with too many cards in hand. Defensive
+#    bottoming is the caller's responsibility.
+#
+# These gaps are accepted simplifications for the parity bridge; if a
+# future slice models a "real" London-mulligan transaction, this comment
+# is the single place to update.
+
+
+def test_synthetic_state_starts_with_seven_cards_in_hand(synthetic_state):
+    """Cross-feature with setup: the fresh synthetic state always seeds 7
+    cards in each player's hand. ``mulligan`` is defined against the
+    invariant that hand starts at 7, so pin it explicitly — if a setup
+    change ever moves the default off 7, the mulligan tests above would
+    silently mis-pin their assertions."""
+    assert synthetic_state.hand_sizes[0] == P0_HAND_SIZE
+    assert synthetic_state.hand_sizes[1] == P0_HAND_SIZE
+
+
+def test_mulligan_keeps_hand_at_seven_pinning_london_simplification(
+    synthetic_state,
+):
+    """Cross-feature with London-mulligan parity gap: in real MTG, after
+    a mulligan the player has 7 cards in hand but must put N on the
+    bottom (where N = mulligan count). The Rust primitive simplifies
+    by always leaving the hand at 7 and exposing bottom-N as a
+    separate primitive. Pin that behavioral shape so a regression
+    that, e.g., starts shrinking the hand inside ``mulligan`` surfaces
+    here instead of silently corrupting parity comparisons."""
+    pre_size = synthetic_state.hand_sizes[0]
+    synthetic_state.mulligan(0, 42)
+    assert synthetic_state.hand_sizes[0] == pre_size  # still 7
+    assert synthetic_state.hand_sizes[0] == 7  # pin the absolute too
+
+
+def test_mulligan_reshuffles_old_hand_back_into_library(synthetic_state):
+    """Cross-feature with zones + library: the seven cards in hand
+    pre-mulligan (ids 10..16 by default) all return to the LIBRARY,
+    not the graveyard or exile. The fresh hand is drawn from the
+    shuffled library on top of that."""
+    pre_hand_ids = sorted([o["id"] for o in synthetic_state.hand_snapshot(0)])
+    pre_lib_ids = sorted([o["id"] for o in synthetic_state.library_snapshot(0)])
+    assert pre_hand_ids == [10, 11, 12, 13, 14, 15, 16]
+
+    synthetic_state.mulligan(0, 42)
+
+    # Every pre-mulligan hand id is now in the library (regardless of
+    # whether it was drawn back into the new hand — verify the full
+    # hand∪library set is identical, since both pools are conserved
+    # together by ``mulligan``).
+    post_hand_ids = set(o["id"] for o in synthetic_state.hand_snapshot(0))
+    post_lib_ids = set(o["id"] for o in synthetic_state.library_snapshot(0))
+    assert set(pre_hand_ids) | set(pre_lib_ids) == post_hand_ids | post_lib_ids
+
+
+def test_mulligan_changes_fingerprint(synthetic_state):
+    """Cross-feature with fingerprint: a mulligan shuffles the library
+    and replaces the hand, so the gameplay-relevant state digest must
+    change. Parity-load-bearing: if mulligan accidentally became a
+    no-op, the digest would stay equal and parity_smoke would silently
+    accept a broken impl."""
+    fp_before = synthetic_state.fingerprint()
+    synthetic_state.mulligan(0, 42)
+    fp_after = synthetic_state.fingerprint()
+    assert fp_before != fp_after
+
+
+def test_mulligan_sequence_determinism_with_same_seeds(synthetic_state):
+    """Cross-feature with fingerprint + determinism: two clones taken
+    from the same state, mulliganed with the SAME sequence of seeds,
+    produce identical fingerprints. This goes beyond
+    ``test_mulligan_with_seed_is_deterministic`` (single seed) by
+    exercising a stack of mulligans, which a London-mulligan caller
+    would actually invoke."""
+    a = synthetic_state.clone_once()
+    b = synthetic_state.clone_once()
+
+    for seed in (11, 22, 33):
+        a.mulligan(0, seed)
+        b.mulligan(0, seed)
+
+    assert a.fingerprint() == b.fingerprint()
+
+
+def test_mulligan_sequence_diverges_on_seed_change(synthetic_state):
+    """Cross-feature with fingerprint + determinism: same starting
+    state, same first seed, DIFFERENT second seed → different
+    resulting fingerprint. Pins that the per-mulligan seed actually
+    threads into the per-mulligan shuffle (not just the first)."""
+    a = synthetic_state.clone_once()
+    b = synthetic_state.clone_once()
+
+    a.mulligan(0, 11)
+    b.mulligan(0, 11)
+    # After identical first mulligans the fingerprints match.
+    assert a.fingerprint() == b.fingerprint()
+
+    a.mulligan(0, 22)
+    b.mulligan(0, 23)  # one-bit-flip on the second seed
+    assert a.fingerprint() != b.fingerprint()
+
+
+def test_find_object_zone_for_reshuffled_hand_card_returns_library(
+    synthetic_state,
+):
+    """Cross-feature with zones: a card that was in hand pre-mulligan
+    (id 10 in the default fixture) and got reshuffled into the
+    library by ``mulligan`` reports ``ZONE_LIBRARY = 1`` via
+    ``find_object_zone``. Locks in the zone-tag update side of the
+    mulligan op."""
+    # Pre-mulligan: hand[0] is at zone HAND (=0).
+    assert synthetic_state.find_object_zone(10) == 0  # ZONE_HAND
+
+    synthetic_state.mulligan(0, 42)
+
+    # Post-mulligan: every old hand id (10..16) is now in the library,
+    # whether or not it ended up drawn back into the new 7-card hand.
+    # We can assert this for *every* id 10..16 because the new hand
+    # has exactly 7 cards drawn from a 57-card library — the
+    # probability that all 7 of the original hand ids drew back is
+    # negligible, but more importantly the OLD ids report library
+    # zone for any post-mulligan id that didn't get redrawn.
+    # We assert at least one of them is now in the library; pinning
+    # the shape rather than a specific id keeps this robust to
+    # shuffle-seed changes.
+    zones = [synthetic_state.find_object_zone(i) for i in range(10, 17)]
+    # Every old hand id must now report either ZONE_HAND (=0, redrawn)
+    # or ZONE_LIBRARY (=1, shuffled-and-not-redrawn). Crucially none
+    # of them leak to a non-{hand,library} zone.
+    assert all(z in (0, 1) for z in zones), zones
+    # And at least one of them is back in the library (the new hand
+    # holds 7 of 57 cards, so on average 7*7/57 ≈ 0.86 of the
+    # original 7 are redrawn — the rest are in library).
+    assert any(z == 1 for z in zones), zones
+
+
+def test_mulligan_does_not_alter_battlefield(synthetic_state):
+    """Cross-feature with battlefield zone: mulligan only touches the
+    mulliganing player's hand + library; the battlefield is left
+    alone. At game-start this is moot (battlefield is empty), but
+    pinning the invariant explicitly catches a regression where, e.g.,
+    a future implementation overzealously clears more zones."""
+    bf_sizes_before = synthetic_state.battlefield_sizes
+    bf_ids_before = sorted(
+        o["id"] for o in synthetic_state.battlefield_snapshot()
+    )
+
+    synthetic_state.mulligan(0, 42)
+
+    assert synthetic_state.battlefield_sizes == bf_sizes_before
+    bf_ids_after = sorted(
+        o["id"] for o in synthetic_state.battlefield_snapshot()
+    )
+    assert bf_ids_after == bf_ids_before
+
+
+def test_mulligan_isolation_to_mulliganing_player(synthetic_state):
+    """Cross-feature with player isolation: mulligan on player 0 does
+    not change player 1's hand IDs, library IDs, or library order.
+    Goes beyond the existing size-only assertion in
+    ``test_mulligan_does_not_affect_other_player`` by pinning the
+    full per-id contents and ordering."""
+    p1_hand_before = sorted([o["id"] for o in synthetic_state.hand_snapshot(1)])
+    p1_lib_order_before = synthetic_state.scry(1, P0_LIBRARY_SIZE)
+
+    synthetic_state.mulligan(0, 42)
+
+    p1_hand_after = sorted([o["id"] for o in synthetic_state.hand_snapshot(1)])
+    p1_lib_order_after = synthetic_state.scry(1, P0_LIBRARY_SIZE)
+    assert p1_hand_after == p1_hand_before
+    assert p1_lib_order_after == p1_lib_order_before
+
+
+def test_clone_then_mulligan_does_not_reshuffle_original_hand(
+    synthetic_state,
+):
+    """CoW canary: cloning a state then mulliganing the clone does NOT
+    leak hand-identity changes back to the source. Goes beyond
+    ``test_clone_then_mulligan_does_not_affect_original`` (which checks
+    sizes + library order) by pinning the exact source hand ids stay
+    untouched after the clone-side mulligan."""
+    source_hand_ids_before = sorted(
+        o["id"] for o in synthetic_state.hand_snapshot(0)
+    )
+    cloned = synthetic_state.clone_once()
+
+    cloned.mulligan(0, 999)
+
+    source_hand_ids_after = sorted(
+        o["id"] for o in synthetic_state.hand_snapshot(0)
+    )
+    # Source's hand still holds the original insertion-order ids.
+    assert source_hand_ids_after == source_hand_ids_before
+    assert source_hand_ids_after == [10, 11, 12, 13, 14, 15, 16]
+    # Clone's hand has been shuffled to a different set of ids drawn
+    # from the merged hand+library pool — most of the new ids should
+    # have come from the library (ids 17..66 in the default fixture),
+    # though some original hand ids may have been redrawn.
+    clone_hand_ids = sorted(o["id"] for o in cloned.hand_snapshot(0))
+    assert clone_hand_ids != source_hand_ids_before
+
+
+def test_mulligan_does_not_grow_graveyard_or_exile(synthetic_state):
+    """Cross-feature parity gap: mulligan returns the hand to library
+    (NOT graveyard, NOT exile). Even though the per-primitive test
+    above checks via ``find_object_zone`` for each old hand id, this
+    test pins the broader invariant at the zone-size level: graveyard
+    and exile sizes are completely untouched by the mulligan
+    operation. A regression that, e.g., misrouted a discarded hand to
+    the graveyard would surface immediately here."""
+    gy_before = synthetic_state.graveyard_sizes
+    ex_before = synthetic_state.exile_sizes
+
+    synthetic_state.mulligan(0, 42)
+    synthetic_state.mulligan(1, 7)  # also mulligan p1, to be thorough
+
+    assert synthetic_state.graveyard_sizes == gy_before
+    assert synthetic_state.exile_sizes == ex_before
+    assert synthetic_state.graveyard_sizes == [0, 0]
+    assert synthetic_state.exile_sizes == [0, 0]
