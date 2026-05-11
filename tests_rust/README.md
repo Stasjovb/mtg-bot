@@ -195,6 +195,8 @@ the test lands in a commit.
 
 | rust(effect-plus1-each-creature): Effect::PutPlusOneCounterOnEachCreatureYouControl — anthem-shape per-creature +1/+1 counter add for source's controller (3 EoE cards, Atmospheric Greenhouse). | tests_rust/test_counters.py extend | green  | feature/rust-effect-plus1-each-creature |
 
+| rust(effect-plus1-target-creature-you-control): Effect::PutPlusOneCounterOnCreatureYouControl — Rayblade-Trooper-shape single-target +1/+1 counter add (3 EoE cards). | tests_rust/test_counters.py extend | green  | feature/rust-effect-plus1-target-creature-you-control |
+
 ## Build invocation reminder
 
 ```

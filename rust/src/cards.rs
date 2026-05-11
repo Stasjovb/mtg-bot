@@ -797,6 +797,22 @@ pub enum Effect {
     /// permanent). Cards with that rider compose via separate effect
     /// chains for now.
     PutPlusOneCounterOnEachCreatureYouControl { amount: i32 },
+    /// **Round 28 coverage extension.** Put `amount` +1/+1 counter(s)
+    /// on a target creature the source's controller controls. Mirrors
+    /// Python's `PutPlusOneCounterOnCreatureYouControl(amount: int = 1)`
+    /// (counters.py:844 — Rayblade-Trooper-shape, 3 EoE cards).
+    ///
+    /// **First-slice deterministic target choice.** Same shape as
+    /// `PumpTargetCreatureUntilEOT`: pick the FIRST creature on the
+    /// source-controller's battlefield (zone-iteration order). Empty
+    /// battlefield or no eligible creatures = silent fizzle.
+    ///
+    /// **Schema simplification.** Python's class composes via the
+    /// `PutPlusOneCounters` base which carries a `targets` filter
+    /// (IsCreature & ControlledByYou). The Rust first slice carries
+    /// the implicit shape via the resolve arm's selection logic.
+    /// negative `amount` raises; `amount=0` is a legal no-op.
+    PutPlusOneCounterOnCreatureYouControl { amount: i32 },
 }
 
 #[derive(Clone, Debug)]
@@ -1353,6 +1369,24 @@ fn parse_effect(dict: &Bound<'_, PyDict>) -> PyResult<Effect> {
             }
             Ok(Effect::PutPlusOneCounterOnEachCreatureYouControl { amount })
         }
+        "put_plus_one_counter_on_creature_you_control" => {
+            // Python's PutPlusOneCounterOnCreatureYouControl uses
+            // PutPlusOneCounters base default of amount=1.
+            let amount: i32 = match dict.get_item("amount")? {
+                Some(a) => a.extract().map_err(|e| {
+                    PyValueError::new_err(format!(
+                        "put_plus_one_counter_on_creature_you_control.amount must be an integer (got: {e})"
+                    ))
+                })?,
+                None => 1,
+            };
+            if amount < 0 {
+                return Err(PyValueError::new_err(format!(
+                    "put_plus_one_counter_on_creature_you_control: amount must be non-negative, got {amount}"
+                )));
+            }
+            Ok(Effect::PutPlusOneCounterOnCreatureYouControl { amount })
+        }
         "pump_creatures_you_control_until_eot" => {
             // Round-28 anthem-shape UEOT effect. Mirrors the
             // PumpSelfUntilEOT / PumpTargetCreatureUntilEOT schema:
@@ -1740,6 +1774,10 @@ fn effect_to_pydict<'py>(
         }
         Effect::PutPlusOneCounterOnEachCreatureYouControl { amount } => {
             d.set_item("kind", "put_plus_one_counter_on_each_creature_you_control")?;
+            d.set_item("amount", *amount)?;
+        }
+        Effect::PutPlusOneCounterOnCreatureYouControl { amount } => {
+            d.set_item("kind", "put_plus_one_counter_on_creature_you_control")?;
             d.set_item("amount", *amount)?;
         }
         Effect::Sequence { effects } => {

@@ -2773,6 +2773,75 @@ fn apply_effect(
                 }
             }
         }
+        // Round-28 single-target counter add. Rayblade-Trooper-shape:
+        // pick the FIRST creature on source-controller's bf and add
+        // `amount` to its `counters` scalar. Empty bf or no eligible
+        // creatures fizzles silently. amount=0 short-circuits;
+        // negative raises.
+        Effect::PutPlusOneCounterOnCreatureYouControl { amount } => {
+            if *amount < 0 {
+                return Err(PyValueError::new_err(format!(
+                    "PutPlusOneCounterOnCreatureYouControl amount must be non-negative, got {amount}"
+                )));
+            }
+            if *amount == 0 {
+                return Ok(());
+            }
+            // Locate source controller.
+            let mut src_controller: Option<u8> = None;
+            'outer: for player in &state.players {
+                for zone in [
+                    &player.hand,
+                    &player.library,
+                    &player.battlefield,
+                    &player.graveyard,
+                    &player.exile,
+                ] {
+                    if let Some(obj) = zone.iter().find(|o| o.id == source_obj_id) {
+                        src_controller = Some(obj.controller);
+                        break 'outer;
+                    }
+                }
+            }
+            if src_controller.is_none() {
+                if let Some(item) = state
+                    .stack
+                    .iter()
+                    .find(|i| i.source_obj_id == source_obj_id)
+                {
+                    src_controller = Some(item.controller);
+                }
+            }
+            let Some(controller) = src_controller else {
+                return Ok(());
+            };
+            let cidx = controller as usize;
+            // Pick first creature on controller's bf.
+            let target_id: Option<u32> = {
+                let bf = &state.players[cidx].battlefield;
+                let registry = &state.registry;
+                bf.iter().find_map(|obj| {
+                    let printing = registry.printings.get(obj.printing_id as usize)?;
+                    if printing.card_types.iter().any(|t| t == "Creature") {
+                        Some(obj.id)
+                    } else {
+                        None
+                    }
+                })
+            };
+            let Some(target_id) = target_id else {
+                return Ok(());
+            };
+            let delta = *amount;
+            let zone: &mut Vec<GameObject> =
+                Arc::make_mut(&mut state.players[cidx].battlefield);
+            for obj in zone.iter_mut() {
+                if obj.id == target_id {
+                    obj.counters = obj.counters.saturating_add(delta);
+                    break;
+                }
+            }
+        }
     }
     Ok(())
 }
