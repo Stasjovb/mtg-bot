@@ -3078,6 +3078,35 @@ fn apply_effect(
                 }
             }
         }
+        // Round-28 graveyard-to-library-bottom move. Scans
+        // graveyards in player order; takes graveyard[0] (first card)
+        // from whichever player has a non-empty graveyard; moves to
+        // that player's library bottom (lib[0] per Rust's convention).
+        // Empty-graveyards-both-sides = silent fizzle.
+        Effect::PutCardFromGraveyardOnBottomOfLibrary => {
+            let _ = source_obj_id;
+            let mut found: Option<usize> = None;
+            for (pidx, player) in state.players.iter().enumerate() {
+                if !player.graveyard.is_empty() {
+                    found = Some(pidx);
+                    break;
+                }
+            }
+            let Some(pidx) = found else {
+                return Ok(()); // no graveyards have any cards
+            };
+            let gy_mut: &mut Vec<GameObject> =
+                Arc::make_mut(&mut state.players[pidx].graveyard);
+            let mut obj = gy_mut.remove(0);
+            obj.zone = ZONE_LIBRARY;
+            obj.tapped = false;
+            obj.summoning_sick = true; // r28 CE1 universal-true default
+            obj.damage = 0;
+            obj.counters = 0;
+            let lib_mut: &mut Vec<GameObject> =
+                Arc::make_mut(&mut state.players[pidx].library);
+            lib_mut.insert(0, obj); // bottom of library
+        }
     }
     Ok(())
 }

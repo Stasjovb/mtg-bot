@@ -895,6 +895,27 @@ pub enum Effect {
     /// modifier auto-expires at the next CR 514.3 cleanup-step pass.
     /// `(0, 0)` short-circuits; empty opponent bf fizzles silently.
     PumpCreaturesOpponentsControlUntilEOT { power_bonus: i32, toughness_bonus: i32 },
+    /// **Round 28 coverage extension.** Put a target card from a
+    /// graveyard on the bottom of its owner's library. Mirrors
+    /// Python's `PutCardFromGraveyardOnBottomOfLibrary`
+    /// (`graveyard.py:420` — Chrome-Companion-shape, 2 EoE cards).
+    ///
+    /// **First-slice deterministic target choice.** Scans graveyards
+    /// in player-order (p0 first, then p1). Takes the FIRST card
+    /// encountered (`graveyard[0]` if non-empty). Real MTG lets the
+    /// activating player choose any card in any graveyard; deferred
+    /// until decision callbacks exist.
+    ///
+    /// **Zone-change reset (CR 400.7).** tapped, summoning_sick,
+    /// damage, counters reset on move. summoning_sick=true per r28
+    /// CE1 universal default (library zone, gameplay-irrelevant).
+    ///
+    /// **"Bottom of library" = `lib[0]`** by Rust's convention
+    /// (lib[len-1] = top, lib[0] = bottom). Insert via
+    /// `lib.insert(0, ...)`.
+    ///
+    /// Empty-graveyards-on-both-sides = silent fizzle.
+    PutCardFromGraveyardOnBottomOfLibrary,
 }
 
 #[derive(Clone, Debug)]
@@ -1451,6 +1472,10 @@ fn parse_effect(dict: &Bound<'_, PyDict>) -> PyResult<Effect> {
             }
             Ok(Effect::PutPlusOneCounterOnEachCreatureYouControl { amount })
         }
+        "put_card_from_graveyard_on_bottom_of_library" => {
+            // Unit variant; no fields.
+            Ok(Effect::PutCardFromGraveyardOnBottomOfLibrary)
+        }
         "pump_creatures_opponents_control_until_eot" => {
             // Mirror schema of pump_creatures_you_control_until_eot.
             let power_bonus: i32 = match dict.get_item("power_bonus")? {
@@ -1631,7 +1656,7 @@ fn parse_effect(dict: &Bound<'_, PyDict>) -> PyResult<Effect> {
             Ok(Effect::Sequence { effects: children })
         }
         other => Err(PyValueError::new_err(format!(
-            "unknown effect kind {other:?}; valid: deal_damage, draw_cards, gain_life, return_to_hand, mill, mill_target_player, exile_target, tap_target, untap_target, sacrifice, add_counters, discard_card, scry_n, destroy_target, damage_each_opponent, damage_each_creature, create_token, add_mana_to_pool, search_library_for_basic_land_tapped, put_plus_one_counter_on_self, surveil, counter_target_spell, return_creature_from_your_graveyard_to_battlefield, discard_self, each_opponent_loses_life, lose_life, target_opponent_loses_life, each_opponent_discards, destroy_all_creatures, destroy_target_nonland_permanent, destroy_target_artifact, destroy_target_land, deal_damage_any_target, pump_self_until_eot, pump_target_creature_until_eot, sequence, pump_creatures_you_control_until_eot, return_creature_from_your_graveyard_to_hand, put_plus_one_counter_on_each_creature_you_control, put_plus_one_counter_on_creature_you_control, add_n_mana_of_chosen_color, search_library_for_card, pump_creatures_opponents_control_until_eot"
+            "unknown effect kind {other:?}; valid: deal_damage, draw_cards, gain_life, return_to_hand, mill, mill_target_player, exile_target, tap_target, untap_target, sacrifice, add_counters, discard_card, scry_n, destroy_target, damage_each_opponent, damage_each_creature, create_token, add_mana_to_pool, search_library_for_basic_land_tapped, put_plus_one_counter_on_self, surveil, counter_target_spell, return_creature_from_your_graveyard_to_battlefield, discard_self, each_opponent_loses_life, lose_life, target_opponent_loses_life, each_opponent_discards, destroy_all_creatures, destroy_target_nonland_permanent, destroy_target_artifact, destroy_target_land, deal_damage_any_target, pump_self_until_eot, pump_target_creature_until_eot, sequence, pump_creatures_you_control_until_eot, return_creature_from_your_graveyard_to_hand, put_plus_one_counter_on_each_creature_you_control, put_plus_one_counter_on_creature_you_control, add_n_mana_of_chosen_color, search_library_for_card, pump_creatures_opponents_control_until_eot, put_card_from_graveyard_on_bottom_of_library"
         ))),
     }
 }
@@ -1989,6 +2014,9 @@ fn effect_to_pydict<'py>(
             d.set_item("kind", "pump_creatures_opponents_control_until_eot")?;
             d.set_item("power_bonus", *power_bonus)?;
             d.set_item("toughness_bonus", *toughness_bonus)?;
+        }
+        Effect::PutCardFromGraveyardOnBottomOfLibrary => {
+            d.set_item("kind", "put_card_from_graveyard_on_bottom_of_library")?;
         }
         Effect::Sequence { effects } => {
             d.set_item("kind", "sequence")?;

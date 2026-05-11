@@ -203,6 +203,8 @@ the test lands in a commit.
 
 | rust(effect-pump-creatures-opponents-control-ueot): Effect::PumpCreaturesOpponentsControlUntilEOT — debuff-anthem mirror of PumpCreaturesYouControlUntilEOT, hits opponent's bf creatures (2 EoE cards). | tests_rust/test_ueot.py extend | green  | feature/rust-effect-pump-creatures-opponents-control-ueot |
 
+| rust(effect-put-card-from-gy-bottom-library): Effect::PutCardFromGraveyardOnBottomOfLibrary — Chrome-Companion-shape graveyard-to-library-bottom move (2 EoE cards). | tests_rust/test_zones.py extend | green  | feature/rust-effect-put-card-from-gy-bottom-library |
+
 ## Build invocation reminder
 
 ```
