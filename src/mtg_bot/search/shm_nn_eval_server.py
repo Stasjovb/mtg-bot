@@ -177,6 +177,17 @@ class SharedTensorServerHandle:
     # never be signaled. Set once, never reset within a server's
     # lifetime; ``start()`` allocates a fresh handle if reused.
     server_stopped: Any  # mp.Event
+    # Cross-process lock serializing the multi-slot acquire phase of
+    # ``SharedTensorNNEvalClient._submit_batch``. Without this, N
+    # concurrent workers each calling ``free_slots.get()`` in a tight
+    # loop can each accumulate partial allocations, exhaust the pool
+    # before any worker reaches its full count, and deadlock — the
+    # multi-worker contention regression test pins this scenario.
+    # The lock only gates the *acquire* phase (microseconds in the
+    # uncontended case); writes, submits, waits, and reads all
+    # proceed in parallel as before, so dispatcher fusion across
+    # workers is unaffected.
+    acquire_lock: Any  # mp.synchronize.Lock
     # Shared tensors. ``features``, ``values`` always present;
     # ``masks`` / ``policies`` only when ``with_policy=True``.
     features: torch.Tensor
@@ -319,6 +330,10 @@ class SharedTensorNNEvalServer:
         # ``_stop_evt`` (a thread-local event), since the dispatcher
         # lives in the same process as the server.
         self._server_stopped = ctx.Event()
+        # Cross-process lock used by clients to serialize the multi-
+        # slot acquire phase of ``_submit_batch``. See
+        # ``SharedTensorServerHandle.acquire_lock`` for rationale.
+        self._acquire_lock = ctx.Lock()
 
         # Dispatcher state.
         self._stop_evt = threading.Event()
@@ -392,6 +407,7 @@ class SharedTensorNNEvalServer:
             request_queue=self._request_queue,
             response_events=self._response_events,
             server_stopped=self._server_stopped,
+            acquire_lock=self._acquire_lock,
             features=self._features,
             values=self._values,
             masks=self._masks,
@@ -562,11 +578,12 @@ class SharedTensorNNEvalClient(Evaluator):
         the slot machinery. The returned list preserves input order
         and mixes terminal + non-terminal values transparently.
 
-        Backpressure choice (a): if the non-terminal subset exceeds
-        the slot pool size, raise rather than chunk. Production sizes
-        ``n_slots >= batch_size + n_workers`` precisely so a single
-        worker's batch always fits; a caller asking for more is a
-        config bug, not a runtime case worth silently handling.
+        Backpressure: if the non-terminal subset exceeds the slot
+        pool size, the call automatically chunks into ``ceil(N /
+        n_slots)`` sub-batches run sequentially through the existing
+        batched-submit path, then concatenates results in input order.
+        ``N <= n_slots`` (the production-sized case) is unchanged —
+        a single submit, identical to the pre-chunking behavior.
         """
         if not states:
             return []
@@ -594,27 +611,13 @@ class SharedTensorNNEvalClient(Evaluator):
         if not nonterminal_indices:
             return out
 
-        n = len(nonterminal_indices)
-        if n > self._h.n_slots:
-            raise RuntimeError(
-                f"batch_evaluate requested {n} non-terminal slots, but "
-                f"server pool only has {self._h.n_slots}. Either raise "
-                f"n_slots or shrink the MCTS batch_size; this client "
-                f"does not chunk."
-            )
-
-        slots = self._submit_batch(
-            features=nonterminal_features, masks=None,
+        values, _ = self._call_chunked(
+            features=nonterminal_features,
+            masks=None,
+            vocab_size=0,
         )
-        try:
-            for k, slot in enumerate(slots):
-                self._await_response(slot)
-                out[nonterminal_indices[k]] = float(
-                    self._h.values[slot, 0].item(),
-                )
-        finally:
-            for slot in slots:
-                self._h.free_slots.put(slot)
+        for k, v in enumerate(values):
+            out[nonterminal_indices[k]] = v
         return out
 
     def batch_evaluate_with_policy(
@@ -668,29 +671,83 @@ class SharedTensorNNEvalClient(Evaluator):
         if not nonterminal_indices:
             return out
 
-        n = len(nonterminal_indices)
-        if n > self._h.n_slots:
-            raise RuntimeError(
-                f"batch_evaluate_with_policy requested {n} non-terminal "
-                f"slots, but server pool only has {self._h.n_slots}. "
-                f"Either raise n_slots or shrink the MCTS batch_size; "
-                f"this client does not chunk."
-            )
-
-        slots = self._submit_batch(
+        values, policies = self._call_chunked(
             features=nonterminal_features,
             masks=nonterminal_masks,
+            vocab_size=vocab_size,
         )
-        try:
-            for k, slot in enumerate(slots):
-                self._await_response(slot)
-                value = float(self._h.values[slot, 0].item())
-                policy = self._h.policies[slot].clone().numpy()
-                out[nonterminal_indices[k]] = (value, policy)
-        finally:
-            for slot in slots:
-                self._h.free_slots.put(slot)
+        for k, v in enumerate(values):
+            out[nonterminal_indices[k]] = (v, policies[k])
         return out
+
+    def _call_chunked(
+        self,
+        *,
+        features: list[np.ndarray],
+        masks: Optional[list[np.ndarray]],
+        vocab_size: int,
+    ) -> tuple[list[float], list[np.ndarray]]:
+        """Submit ``features`` (and optionally ``masks``) through the
+        SHM slot machinery, chunking into sub-batches of at most
+        ``self._h.n_slots`` so any oversize request degrades gracefully
+        instead of crashing or blocking on a too-small slot pool.
+
+        Returns ``(values, policies)``. ``policies`` is an empty list
+        when ``masks is None`` (value-only path); otherwise one
+        np.ndarray of length ``vocab_size`` per input row, in input
+        order.
+
+        Common case (``N <= n_slots``): one chunk, single submit —
+        identical to the pre-chunking path. Only oversize batches
+        take the multi-chunk route, which is the rare config-mismatch
+        case PR #49 hit before n_slots was bumped.
+
+        Invariants preserved across chunks:
+        - Input order: results are appended in the order chunks are
+          processed, which iterates ``features``/``masks`` in order.
+        - Slot lifecycle: each chunk acquires + writes + submits +
+          waits + releases its slots within a ``try/finally`` so
+          exceptions (including ``server_stopped`` raised by
+          ``_await_response``) don't leak slots.
+        - ``server_stopped`` detection: the first sub-batch to hit a
+          stopped server raises immediately; subsequent chunks are
+          not started.
+        """
+        n = len(features)
+        if masks is not None:
+            assert len(masks) == n
+        if n == 0:
+            return [], []
+
+        chunk_size = min(n, self._h.n_slots)
+        values: list[float] = []
+        policies: list[np.ndarray] = []
+
+        for start in range(0, n, chunk_size):
+            end = min(start + chunk_size, n)
+            chunk_features = features[start:end]
+            chunk_masks = (
+                masks[start:end] if masks is not None else None
+            )
+            slots = self._submit_batch(
+                features=chunk_features,
+                masks=chunk_masks,
+            )
+            try:
+                for slot in slots:
+                    self._await_response(slot)
+                    values.append(
+                        float(self._h.values[slot, 0].item())
+                    )
+                    if masks is not None:
+                        assert self._h.policies is not None
+                        policies.append(
+                            self._h.policies[slot].clone().numpy()
+                        )
+            finally:
+                for slot in slots:
+                    self._h.free_slots.put(slot)
+        return values, policies
 
     def _submit_batch(
         self,
@@ -706,6 +763,15 @@ class SharedTensorNNEvalClient(Evaluator):
         on its queue at once, which is what enables it to fuse them
         into a single forward pass.
 
+        The acquire phase is serialized across workers by the
+        handle's ``acquire_lock`` (an mp.Lock). Without that, N
+        concurrent workers each grabbing slots one at a time can
+        each accumulate a partial allocation, exhaust the pool, and
+        deadlock — see the multi-worker contention regression test.
+        Holding the lock only for the acquire is deliberate: writes,
+        submits, waits, and reads all run in parallel as before, so
+        cross-worker dispatcher fusion is unaffected.
+
         On any failure (e.g. interrupted ``free_slots.get()``), the
         already-acquired slots are released before re-raising so the
         pool doesn't leak. Slots returned by this method are owned by
@@ -717,13 +783,16 @@ class SharedTensorNNEvalClient(Evaluator):
             assert self._h.policies is not None
             assert len(masks) == n
 
-        # Acquire slots one at a time. If we're interrupted partway
-        # (BaseException, e.g. KeyboardInterrupt), release whatever
-        # we've got so we don't leak the pool.
+        # Acquire slots atomically (all N or none). The lock prevents
+        # the partial-allocation deadlock pattern. If we're
+        # interrupted partway through the get() loop (BaseException,
+        # e.g. KeyboardInterrupt), release whatever we have before
+        # re-raising so the pool doesn't leak.
         slots: list[int] = []
         try:
-            for _ in range(n):
-                slots.append(self._h.free_slots.get())
+            with self._h.acquire_lock:
+                for _ in range(n):
+                    slots.append(self._h.free_slots.get())
             # Write all input rows. Tight loop — no waiting between
             # rows, no submissions yet.
             for k, slot in enumerate(slots):
