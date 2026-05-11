@@ -991,3 +991,178 @@ def test_pump_creatures_opponents_control_clone_isolation(synthetic_state):
     for cid in p1_bear_ids:
         assert cloned.effective_power(cid) == 1
         assert synthetic_state.effective_power(cid) == 2  # source unchanged
+
+
+# ---------------------------------------------------------------- PumpTargetArtifactOrCreatureUntilEOT (r28)
+
+
+def _pump_target_artifact_or_creature_dict(power_bonus: int = 2, toughness_bonus: int = 2):
+    """Broader-filter pump instant — eligible on artifact OR creature."""
+    return {
+        "name": "Test Artifact-or-Creature Pump",
+        "mana_cost": {"R": 1},
+        "card_types": ["Instant"],
+        "effects": [
+            {
+                "kind": "pump_target_artifact_or_creature_until_eot",
+                "power_bonus": power_bonus,
+                "toughness_bonus": toughness_bonus,
+            }
+        ],
+    }
+
+
+def test_register_pump_target_artifact_or_creature_default_values(empty_registry):
+    """Missing power_bonus / toughness_bonus default to 0."""
+    pid = empty_registry.register_printing(
+        {
+            "name": "default-artifact-or-creature-pump",
+            "card_types": ["Instant"],
+            "effects": [{"kind": "pump_target_artifact_or_creature_until_eot"}],
+        }
+    )
+    effects = empty_registry.get_printing_effects(pid)
+    assert len(effects) == 1
+    assert effects[0]["kind"] == "pump_target_artifact_or_creature_until_eot"
+    assert effects[0]["power_bonus"] == 0
+    assert effects[0]["toughness_bonus"] == 0
+
+
+def test_register_pump_target_artifact_or_creature_negative_bonuses(empty_registry):
+    """Negative bonuses allowed (debuff-shaped)."""
+    pid = empty_registry.register_printing(
+        {
+            "name": "shrink-artifact-or-creature",
+            "card_types": ["Instant"],
+            "effects": [
+                {
+                    "kind": "pump_target_artifact_or_creature_until_eot",
+                    "power_bonus": -2,
+                    "toughness_bonus": -3,
+                }
+            ],
+        }
+    )
+    effects = empty_registry.get_printing_effects(pid)
+    assert effects[0]["power_bonus"] == -2
+    assert effects[0]["toughness_bonus"] == -3
+
+
+def test_pump_target_artifact_or_creature_pumps_first_creature(synthetic_state):
+    """When the controller's bf has Forests + Grizzly Bears, the first
+    eligible (Creature) is the first Grizzly Bears (Lands are NOT
+    eligible since the filter is artifact OR creature)."""
+    target_id = _first_creature_id_on_battlefield(synthetic_state, 0)
+    pump_id = synthetic_state.register_and_inject_object(
+        _pump_target_artifact_or_creature_dict(power_bonus=2, toughness_bonus=2),
+        0,
+        ZONE_HAND,
+    )
+    synthetic_state.push_to_stack(pump_id, 0)
+    synthetic_state.resolve_top_of_stack()
+
+    assert synthetic_state.effective_power(target_id) == 4
+    assert synthetic_state.effective_toughness(target_id) == 4
+
+
+def test_pump_target_artifact_or_creature_pumps_artifact_when_no_creature(synthetic_state):
+    """When the controller's bf has an Artifact but NO Creature, the
+    artifact is the chosen target — broader filter than
+    PumpTargetCreatureUntilEOT. Build a state with an artifact on p0
+    bf and no creatures."""
+    state = synthetic_state.clone_once()
+    # Drain p0's battlefield to no creatures.
+    while True:
+        snap = state.battlefield_snapshot()
+        my_creature_ids = [
+            d["id"] for d in snap
+            if d["controller_id"] == 0
+            and d["printing_name"] == "Grizzly Bears"
+        ]
+        if not my_creature_ids:
+            break
+        state.move_object(my_creature_ids[0], 3, 0)  # → graveyard
+
+    # Inject a basic artifact onto p0 bf.
+    artifact_id = state.register_and_inject_object(
+        {
+            "name": "Test Vehicle",
+            "card_types": ["Artifact"],
+            "mana_cost": {"generic": 1},
+            "power": 1,
+            "toughness": 1,
+            "effects": [],
+        },
+        0,
+        2,  # ZONE_BATTLEFIELD
+    )
+
+    pump_id = state.register_and_inject_object(
+        _pump_target_artifact_or_creature_dict(power_bonus=3, toughness_bonus=3),
+        0,
+        ZONE_HAND,
+    )
+    state.push_to_stack(pump_id, 0)
+    state.resolve_top_of_stack()
+
+    # The artifact got pumped — confirms the broader filter.
+    assert state.effective_power(artifact_id) == 4
+    assert state.effective_toughness(artifact_id) == 4
+
+
+def test_pump_target_artifact_or_creature_zero_zero_is_noop(synthetic_state):
+    """0/0 is a legal no-op; target keeps printed P/T."""
+    target_id = _first_creature_id_on_battlefield(synthetic_state, 0)
+    pump_id = synthetic_state.register_and_inject_object(
+        _pump_target_artifact_or_creature_dict(power_bonus=0, toughness_bonus=0),
+        0,
+        ZONE_HAND,
+    )
+    synthetic_state.push_to_stack(pump_id, 0)
+    synthetic_state.resolve_top_of_stack()
+
+    assert synthetic_state.effective_power(target_id) == 2
+    assert synthetic_state.effective_toughness(target_id) == 2
+
+
+def test_pump_target_artifact_or_creature_no_eligible_target_fizzles(synthetic_state):
+    """If controller's bf has NO artifacts and NO creatures (only Lands),
+    fizzle silently."""
+    state = synthetic_state.clone_once()
+    while True:
+        snap = state.battlefield_snapshot()
+        my_non_land_ids = [
+            d["id"] for d in snap
+            if d["controller_id"] == 0
+            and d["printing_name"] == "Grizzly Bears"
+        ]
+        if not my_non_land_ids:
+            break
+        state.move_object(my_non_land_ids[0], 3, 0)
+
+    pump_id = state.register_and_inject_object(
+        _pump_target_artifact_or_creature_dict(power_bonus=3, toughness_bonus=3),
+        0,
+        ZONE_HAND,
+    )
+    state.push_to_stack(pump_id, 0)
+    # Resolve without raising; no modifier written anywhere.
+    state.resolve_top_of_stack()
+
+
+def test_pump_target_artifact_or_creature_clears_at_cleanup(synthetic_state):
+    """UEOT modifier auto-clears at cleanup step."""
+    target_id = _first_creature_id_on_battlefield(synthetic_state, 0)
+    pump_id = synthetic_state.register_and_inject_object(
+        _pump_target_artifact_or_creature_dict(power_bonus=2, toughness_bonus=2),
+        0,
+        ZONE_HAND,
+    )
+    synthetic_state.push_to_stack(pump_id, 0)
+    synthetic_state.resolve_top_of_stack()
+    assert synthetic_state.effective_power(target_id) == 4
+
+    synthetic_state.cleanup_step_for_active_player()
+
+    assert synthetic_state.effective_power(target_id) == 2
+    assert synthetic_state.effective_toughness(target_id) == 2

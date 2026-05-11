@@ -4066,6 +4066,67 @@ fn apply_effect(
         // opponent's library `count` cards. Empty library stops the
         // inner loop silently — CR 704.5b applies to drawing, not
         // milling.
+        // Round-28 broader-filter pump (artifact OR creature). Same
+        // shape as PumpTargetCreatureUntilEOT but the eligibility
+        // filter is "card_types contains Artifact OR Creature"
+        // rather than just "Creature". UEOT-modifier mechanism is
+        // identical — modifier auto-expires at the next cleanup step
+        // via the r27 CR 514.3 UEOT-clear pass.
+        Effect::PumpTargetArtifactOrCreatureUntilEOT { power_bonus, toughness_bonus } => {
+            if *power_bonus == 0 && *toughness_bonus == 0 {
+                return Ok(());
+            }
+            // Source-controller resolution (mirrors PumpTargetCreatureUntilEOT).
+            let mut src_controller: Option<u8> = None;
+            'outer: for player in &state.players {
+                for zone in [
+                    &player.hand,
+                    &player.library,
+                    &player.battlefield,
+                    &player.graveyard,
+                    &player.exile,
+                ] {
+                    if let Some(obj) = zone.iter().find(|o| o.id == source_obj_id) {
+                        src_controller = Some(obj.controller);
+                        break 'outer;
+                    }
+                }
+            }
+            let Some(controller) = src_controller else {
+                return Ok(()); // source untrackable → silent fizzle
+            };
+            let cidx = controller as usize;
+            let target_id: Option<u32> = {
+                let bf = &state.players[cidx].battlefield;
+                let registry = &state.registry;
+                bf.iter().find_map(|obj| {
+                    let printing = registry.printings.get(obj.printing_id as usize)?;
+                    let is_eligible = printing
+                        .card_types
+                        .iter()
+                        .any(|t| t == "Artifact" || t == "Creature");
+                    if is_eligible {
+                        Some(obj.id)
+                    } else {
+                        None
+                    }
+                })
+            };
+            let Some(target_id) = target_id else {
+                return Ok(()); // no eligible artifact/creature → silent fizzle
+            };
+            let zone: &mut Vec<GameObject> =
+                Arc::make_mut(&mut state.players[cidx].battlefield);
+            for obj in zone.iter_mut() {
+                if obj.id == target_id {
+                    obj.ueot_modifiers.push(UeotModifier::PowerToughnessBonus {
+                        power: *power_bonus,
+                        toughness: *toughness_bonus,
+                    });
+                    break;
+                }
+            }
+        }
         Effect::EachOpponentMillsCards { count } => {
             if *count < 0 {
                 return Err(PyValueError::new_err(format!(

@@ -239,6 +239,8 @@ the test lands in a commit.
 
 | rust(effect-each-opponent-mills): Effect::EachOpponentMillsCards { count } — each opponent mills `count` cards (3+ EoE cards); mirrors EachOpponentDiscards source-finder shape but routes the opponent's library top → graveyard. | tests_rust/test_resolve.py extend | green  | feature/rust-effect-each-opponent-mills |
 
+| rust(effect-pump-target-artifact-or-creature): Effect::PumpTargetArtifactOrCreatureUntilEOT — broader-filter UEOT pump (3+ EoE cards); same shape as PumpTargetCreatureUntilEOT but eligibility is artifact OR creature. | tests_rust/test_ueot.py extend | green  | feature/rust-effect-pump-target-artifact-or-creature |
+
 ## Build invocation reminder
 
 ```
