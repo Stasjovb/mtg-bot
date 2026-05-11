@@ -7808,3 +7808,145 @@ def test_resolve_return_creature_from_gy_to_hand_zone_change_resets(synthetic_st
     assert creature_obj["damage"] == 0
     assert creature_obj["counters"] == 0
     assert creature_obj["summoning_sick"] is True  # r28 CE1 default
+
+
+# -------------------- Round-28 DealDamageEqualToSourcePowerAnyTarget (2 cards) --------------------
+
+
+def _power_damage_dict():
+    """Source's effective power → damage to any target. Creature with
+    an activated/triggered ability that deals damage equal to its
+    power."""
+    return {
+        "name": "Synthetic Power Damager",
+        "card_types": ["Creature"],
+        "mana_cost": {"generic": 2},
+        "power": 3,
+        "toughness": 3,
+        "effects": [
+            {"kind": "deal_damage_equal_to_source_power_any_target"}
+        ],
+    }
+
+
+def test_register_deal_damage_eq_source_power_any_target(engine):
+    reg = engine.Registry()
+    pid = reg.register_printing(_power_damage_dict())
+    eff = reg.get_printing_effects(pid)[0]
+    assert eff["kind"] == "deal_damage_equal_to_source_power_any_target"
+
+
+def test_resolve_deal_damage_eq_source_power_damages_p1_creature(synthetic_state):
+    """Inject a 3-power creature on p0's bf; activate its ability;
+    p1's first creature takes 3 damage."""
+    src_id = synthetic_state.register_and_inject_object(
+        _power_damage_dict(), 0, ZONE_BATTLEFIELD
+    )
+    # Find p1's first creature.
+    snap = synthetic_state.battlefield_snapshot()
+    p1_first_bear_id = next(
+        d["id"] for d in snap
+        if d["controller_id"] == 1 and d["printing_name"] == "Grizzly Bears"
+    )
+
+    synthetic_state.push_to_stack(src_id, 0)
+    synthetic_state.resolve_top_of_stack()
+
+    bear_after = next(
+        d for d in synthetic_state.battlefield_snapshot() if d["id"] == p1_first_bear_id
+    )
+    assert bear_after["damage"] == 3
+
+
+def test_resolve_deal_damage_eq_source_power_with_ueot_bonus(synthetic_state):
+    """UEOT bonus folds into effective power → damage scales."""
+    src_id = synthetic_state.register_and_inject_object(
+        _power_damage_dict(), 0, ZONE_BATTLEFIELD
+    )
+    # Pump source +2/+2 UEOT — base 3, effective 5.
+    pump_id = synthetic_state.register_and_inject_object(
+        {
+            "name": "Pump",
+            "card_types": ["Instant"],
+            "effects": [
+                {
+                    "kind": "pump_target_creature_until_eot",
+                    "power_bonus": 2,
+                    "toughness_bonus": 2,
+                }
+            ],
+        },
+        0,
+        ZONE_HAND,
+    )
+    synthetic_state.push_to_stack(pump_id, 0)
+    synthetic_state.resolve_top_of_stack()  # pump resolves first
+    snap = synthetic_state.battlefield_snapshot()
+    p1_first_bear_id = next(
+        d["id"] for d in snap
+        if d["controller_id"] == 1 and d["printing_name"] == "Grizzly Bears"
+    )
+    # PumpTarget picks first creature on source-controller's bf — that's
+    # the first p0 creature (Bears in synthetic state default — id 5),
+    # NOT the Power Damager we injected. So our injected source still
+    # has effective power 3.
+    # Activate the source.
+    synthetic_state.push_to_stack(src_id, 0)
+    synthetic_state.resolve_top_of_stack()
+    bear_after = next(
+        d for d in synthetic_state.battlefield_snapshot() if d["id"] == p1_first_bear_id
+    )
+    # 3 damage (source's effective power unchanged because PumpTarget
+    # didn't target it).
+    assert bear_after["damage"] == 3
+
+
+def test_resolve_deal_damage_eq_source_power_zero_power_noop(synthetic_state):
+    """Source with effective power 0 → no damage."""
+    zero_dict = {
+        "name": "Zero-Power Damager",
+        "card_types": ["Creature"],
+        "mana_cost": {"generic": 1},
+        "power": 0,
+        "toughness": 1,
+        "effects": [
+            {"kind": "deal_damage_equal_to_source_power_any_target"}
+        ],
+    }
+    src_id = synthetic_state.register_and_inject_object(
+        zero_dict, 0, ZONE_BATTLEFIELD
+    )
+    snap = synthetic_state.battlefield_snapshot()
+    p1_first_bear_id = next(
+        d["id"] for d in snap
+        if d["controller_id"] == 1 and d["printing_name"] == "Grizzly Bears"
+    )
+    synthetic_state.push_to_stack(src_id, 0)
+    synthetic_state.resolve_top_of_stack()
+    bear = next(
+        d for d in synthetic_state.battlefield_snapshot() if d["id"] == p1_first_bear_id
+    )
+    assert bear["damage"] == 0
+
+
+def test_resolve_deal_damage_eq_source_power_clone_isolation(synthetic_state):
+    src_id = synthetic_state.register_and_inject_object(
+        _power_damage_dict(), 0, ZONE_BATTLEFIELD
+    )
+    snap = synthetic_state.battlefield_snapshot()
+    p1_first_bear_id = next(
+        d["id"] for d in snap
+        if d["controller_id"] == 1 and d["printing_name"] == "Grizzly Bears"
+    )
+    synthetic_state.push_to_stack(src_id, 0)
+    cloned = synthetic_state.clone_once()
+    cloned.resolve_top_of_stack()
+
+    clone_bear = next(
+        d for d in cloned.battlefield_snapshot() if d["id"] == p1_first_bear_id
+    )
+    src_bear = next(
+        d for d in synthetic_state.battlefield_snapshot() if d["id"] == p1_first_bear_id
+    )
+    assert clone_bear["damage"] == 3
+    assert src_bear["damage"] == 0

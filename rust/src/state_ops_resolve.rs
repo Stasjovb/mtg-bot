@@ -3190,6 +3190,58 @@ fn apply_effect(
                 }
             }
         }
+        // Round-28 power-scaling damage spell (Mishra's Bauble shape).
+        // Compute source's effective power inline, then route through
+        // the same any-target selection as DealDamageAnyTarget.
+        Effect::DealDamageEqualToSourcePowerAnyTarget => {
+            // Look up source on either battlefield to get printed power
+            // and UEOT bonus. If source isn't on battlefield, effective
+            // power is 0 → no damage.
+            let mut amount: i32 = 0;
+            for player in &state.players {
+                if let Some(obj) = player.battlefield.iter().find(|o| o.id == source_obj_id)
+                {
+                    if let Some(printing) =
+                        state.registry.printings.get(obj.printing_id as usize)
+                    {
+                        let base = printing.power.unwrap_or(0) as i32;
+                        let bonus = obj.ueot_power_bonus();
+                        amount = (base + bonus).max(0);
+                    }
+                    break;
+                }
+            }
+            if amount == 0 {
+                return Ok(());
+            }
+            // Reuse DealDamageAnyTarget's selection shape.
+            let defender_idx = (1 - state.active_player) as usize;
+            let creature_target: Option<u32> = {
+                let bf = &state.players[defender_idx].battlefield;
+                let registry = &state.registry;
+                bf.iter().find_map(|obj| {
+                    let printing = registry.lookup(obj.printing_id)?;
+                    if printing.card_types.iter().any(|t| t == "Creature") {
+                        Some(obj.id)
+                    } else {
+                        None
+                    }
+                })
+            };
+            let amount_i16 = amount.min(i16::MAX as i32) as i16;
+            if let Some(target_id) = creature_target {
+                let bf_mut: &mut Vec<GameObject> =
+                    Arc::make_mut(&mut state.players[defender_idx].battlefield);
+                for obj in bf_mut.iter_mut() {
+                    if obj.id == target_id {
+                        obj.damage = obj.damage.saturating_add(amount_i16);
+                        break;
+                    }
+                }
+            } else {
+                state.players[defender_idx].life -= amount;
+            }
+        }
     }
     Ok(())
 }
