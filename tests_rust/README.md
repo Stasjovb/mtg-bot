@@ -249,6 +249,8 @@ the test lands in a commit.
 
 | rust(effect-tap-another-target-creature): Effect::TapAnotherTargetCreature — Starport-Security activated-ability family (2+ EoE cards); cross-player scan, filters on Creature card_type with id != source, taps. | tests_rust/test_resolve.py extend | green  | feature/rust-effect-tap-another-target-creature |
 
+| rust(effect-return-all-creatures-grave-to-bf): Effect::ReturnAllCreaturesFromYourGraveyardToBattlefield — Awakening-Hall mass-reanimation (2+ EoE cards); iterate controller's graveyard, move every creature to bf with ETB reset. | tests_rust/test_zones.py extend | green  | feature/rust-effect-return-all-creatures-grave-to-bf |
+
 ## Build invocation reminder
 
 ```
