@@ -346,6 +346,33 @@ pub enum PendingDecision {
         controller: u8,
         inner_effect: Box<crate::cards::Effect>,
     },
+    /// **Round 28 pick-one-from-examined decision substrate.** "Look at
+    /// the top N cards of your library; put ONE into your hand and the
+    /// rest into your graveyard" — controller chooses WHICH examined
+    /// card goes to hand. Pushed by
+    /// `Effect::LookTopNPutOneInHandRestToGraveyard` (Commune-with-
+    /// Evil family, 4 EoE cards).
+    ///
+    /// **Payload.** Carries the examined GameObjects fully (same shape
+    /// as `SurveilChoice`) so the submit dispatcher can re-emit them
+    /// with up-to-date zone/controller/counters without re-borrowing
+    /// the library. Order matches popped-off-top order: `cards[0]` was
+    /// topmost, `cards[1]` second, etc.
+    ///
+    /// **Submit.** `submit_pick_card_decision(chosen_id)` consumes the
+    /// head, routes `chosen_id` to the controller's hand and every
+    /// other examined card to the controller's graveyard (in popped
+    /// order). `chosen_id` MUST be one of the examined ids; an unknown
+    /// id raises `ValueError` transactionally.
+    ///
+    /// **Auto-resolve default.** `"default"` picks the topmost card
+    /// (cards[0]) — matches Python's no-agent-seated fallback in
+    /// `LookTopNPutOneInHandRestToGraveyard.resolve`.
+    PickCardFromExaminedChoice {
+        source_obj_id: u32,
+        controller: u8,
+        cards: Vec<GameObject>,
+    },
 }
 
 /// `GameState` carries an `Arc<RegistryData>` so every clone shares

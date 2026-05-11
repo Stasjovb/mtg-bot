@@ -738,3 +738,309 @@ def test_clone_isolates_may_do_pending_decisions(synthetic_state):
     assert synthetic_state.has_pending_decision() is True
     # The source's hand is still pre-inner-draw.
     assert synthetic_state.hand_sizes[0] == hand_before
+
+
+# =====================================================================
+# Round-28 LookTopN-put-one-in-hand-rest-to-graveyard
+# =====================================================================
+#
+# Third variant of the multi-variant decision-callback substrate:
+# ``PendingDecision::PickCardFromExaminedChoice`` — examine top N
+# cards of library, controller picks ONE to put into hand, rest go to
+# graveyard. Dispatcher: ``submit_pick_card_decision(chosen_id)``.
+# Auto-resolve: ``"default"`` / ``"pick_top"`` pick the topmost (cards[0]).
+
+
+def _look_top_n_dict(n: int = 4):
+    """A LookTopN sorcery — Effect::LookTopNPutOneInHandRestToGraveyard
+    dispatched on resolve."""
+    return {
+        "name": f"Test LookTopN {n}",
+        "card_types": ["Sorcery"],
+        "mana_cost": {"B": 1},
+        "effects": [{"kind": "look_top_n_put_one_in_hand_rest_to_graveyard", "n": n}],
+    }
+
+
+def test_look_top_n_registers_with_n_field(engine):
+    """A LookTopN sorcery registers cleanly and round-trips its `n`
+    through the printing readback."""
+    reg = engine.Registry()
+    pid = reg.register_printing(_look_top_n_dict(n=3))
+    effects = reg.get_printing_effects(pid)
+    assert len(effects) == 1
+    eff = effects[0]
+    assert eff["kind"] == "look_top_n_put_one_in_hand_rest_to_graveyard"
+    assert eff["n"] == 3
+
+
+def test_look_top_n_default_n_is_4(engine):
+    """Omitting `n` defaults to 4 — Commune-with-Evil's printed value."""
+    reg = engine.Registry()
+    pid = reg.register_printing(
+        {
+            "name": "Test LookTopN default",
+            "card_types": ["Sorcery"],
+            "mana_cost": {"B": 1},
+            "effects": [{"kind": "look_top_n_put_one_in_hand_rest_to_graveyard"}],
+        }
+    )
+    effects = reg.get_printing_effects(pid)
+    assert effects[0]["n"] == 4
+
+
+def test_look_top_n_negative_n_raises(engine):
+    """Negative `n` is a hard ValueError at register time."""
+    reg = engine.Registry()
+    with pytest.raises(ValueError):
+        reg.register_printing(
+            {
+                "name": "Bad LookTopN",
+                "card_types": ["Sorcery"],
+                "mana_cost": {"B": 1},
+                "effects": [{"kind": "look_top_n_put_one_in_hand_rest_to_graveyard", "n": -1}],
+            }
+        )
+
+
+def test_look_top_n_resolve_pops_cards_and_pushes_pending_choice(synthetic_state):
+    """Resolving LookTopN-2 pops 2 cards from library top and pushes
+    one PickCardFromExaminedChoice carrying those 2 cards. Hand and
+    graveyard are NOT yet touched by the inner routing (graveyard still
+    gains the source via CR 608.2m)."""
+    library_before = synthetic_state.library_sizes[0]
+    graveyard_before = synthetic_state.graveyard_sizes[0]
+    hand_before = synthetic_state.hand_sizes[0]
+    top_two = [obj["id"] for obj in synthetic_state.library_snapshot(0)[-2:]]
+    top_two.reverse()  # cards[0] = topmost (popped first)
+
+    spell_obj_id = synthetic_state.register_and_inject_object(
+        _look_top_n_dict(n=2), 0, ZONE_HAND
+    )
+    synthetic_state.push_to_stack(spell_obj_id, 0)
+    synthetic_state.resolve_top_of_stack_pause()
+
+    assert synthetic_state.library_sizes[0] == library_before - 2
+    # Graveyard gained 1 (source). Examined cards NOT yet routed.
+    assert synthetic_state.graveyard_sizes[0] == graveyard_before + 1
+    assert synthetic_state.hand_sizes[0] == hand_before
+    for cid in top_two:
+        zone = synthetic_state.find_object_zone(cid)
+        assert zone not in (ZONE_HAND, ZONE_LIBRARY, ZONE_GRAVEYARD)
+
+    pds = synthetic_state.pending_decisions()
+    assert len(pds) == 1
+    pd = pds[0]
+    assert pd["kind"] == "PickCardFromExaminedChoice"
+    assert pd["source_obj_id"] == spell_obj_id
+    assert pd["controller"] == 0
+    assert pd["cards"] == top_two
+
+
+def test_submit_pick_card_picks_topmost_routes_one_to_hand(synthetic_state):
+    """Submitting cards[0] (topmost) routes it to hand and the second
+    examined card to graveyard."""
+    hand_before = synthetic_state.hand_sizes[0]
+    graveyard_before = synthetic_state.graveyard_sizes[0]
+    top_two = [obj["id"] for obj in synthetic_state.library_snapshot(0)[-2:]]
+    top_two.reverse()
+
+    spell_obj_id = synthetic_state.register_and_inject_object(
+        _look_top_n_dict(n=2), 0, ZONE_HAND
+    )
+    synthetic_state.push_to_stack(spell_obj_id, 0)
+    synthetic_state.resolve_top_of_stack_pause()
+
+    synthetic_state.submit_pick_card_decision(top_two[0])
+
+    assert synthetic_state.has_pending_decision() is False
+    assert synthetic_state.find_object_zone(top_two[0]) == ZONE_HAND
+    assert synthetic_state.find_object_zone(top_two[1]) == ZONE_GRAVEYARD
+    assert synthetic_state.hand_sizes[0] == hand_before + 1
+    assert synthetic_state.graveyard_sizes[0] == graveyard_before + 2
+
+
+def test_submit_pick_card_picks_non_topmost(synthetic_state):
+    """Picking cards[1] routes it to hand and cards[0] to graveyard."""
+    top_two = [obj["id"] for obj in synthetic_state.library_snapshot(0)[-2:]]
+    top_two.reverse()
+
+    spell_obj_id = synthetic_state.register_and_inject_object(
+        _look_top_n_dict(n=2), 0, ZONE_HAND
+    )
+    synthetic_state.push_to_stack(spell_obj_id, 0)
+    synthetic_state.resolve_top_of_stack_pause()
+
+    synthetic_state.submit_pick_card_decision(top_two[1])
+
+    assert synthetic_state.has_pending_decision() is False
+    assert synthetic_state.find_object_zone(top_two[1]) == ZONE_HAND
+    assert synthetic_state.find_object_zone(top_two[0]) == ZONE_GRAVEYARD
+
+
+def test_submit_pick_card_unknown_id_raises(synthetic_state):
+    """An id not in the examined Vec raises ValueError. Queue intact."""
+    spell_obj_id = synthetic_state.register_and_inject_object(
+        _look_top_n_dict(n=2), 0, ZONE_HAND
+    )
+    synthetic_state.push_to_stack(spell_obj_id, 0)
+    synthetic_state.resolve_top_of_stack_pause()
+
+    with pytest.raises(ValueError):
+        synthetic_state.submit_pick_card_decision(999999)
+    assert synthetic_state.has_pending_decision() is True
+    assert synthetic_state.pending_decisions()[0]["kind"] == "PickCardFromExaminedChoice"
+
+
+def test_submit_pick_card_with_empty_queue_raises(synthetic_state):
+    """submit_pick_card_decision on an empty queue raises ValueError."""
+    assert synthetic_state.has_pending_decision() is False
+    with pytest.raises(ValueError):
+        synthetic_state.submit_pick_card_decision(42)
+
+
+def test_submit_pick_card_on_surveil_head_raises(synthetic_state):
+    """submit_pick_card_decision on a SurveilChoice head raises
+    ValueError. Queue intact."""
+    spell_obj_id = synthetic_state.register_and_inject_object(
+        _surveil_dict(count=1), 0, ZONE_HAND
+    )
+    synthetic_state.push_to_stack(spell_obj_id, 0)
+    synthetic_state.resolve_top_of_stack_pause()
+    assert synthetic_state.pending_decisions()[0]["kind"] == "SurveilChoice"
+
+    with pytest.raises(ValueError):
+        synthetic_state.submit_pick_card_decision(42)
+    assert synthetic_state.has_pending_decision() is True
+    assert synthetic_state.pending_decisions()[0]["kind"] == "SurveilChoice"
+
+
+def test_auto_resolve_pick_top_picks_topmost(synthetic_state):
+    """auto_resolve('pick_top') picks cards[0] (the topmost examined
+    card) — matches Python's no-agent-seated fallback."""
+    hand_before = synthetic_state.hand_sizes[0]
+    graveyard_before = synthetic_state.graveyard_sizes[0]
+    top_two = [obj["id"] for obj in synthetic_state.library_snapshot(0)[-2:]]
+    top_two.reverse()
+
+    spell_obj_id = synthetic_state.register_and_inject_object(
+        _look_top_n_dict(n=2), 0, ZONE_HAND
+    )
+    synthetic_state.push_to_stack(spell_obj_id, 0)
+    synthetic_state.resolve_top_of_stack_pause()
+
+    synthetic_state.auto_resolve_pending_decisions("pick_top")
+
+    assert synthetic_state.has_pending_decision() is False
+    assert synthetic_state.find_object_zone(top_two[0]) == ZONE_HAND
+    assert synthetic_state.find_object_zone(top_two[1]) == ZONE_GRAVEYARD
+    assert synthetic_state.hand_sizes[0] == hand_before + 1
+    assert synthetic_state.graveyard_sizes[0] == graveyard_before + 2
+
+
+def test_auto_resolve_default_picks_topmost_for_pick_card_variant(synthetic_state):
+    """auto_resolve('default') delivers the same outcome as 'pick_top'
+    for PickCardFromExaminedChoice."""
+    top_two = [obj["id"] for obj in synthetic_state.library_snapshot(0)[-2:]]
+    top_two.reverse()
+
+    spell_obj_id = synthetic_state.register_and_inject_object(
+        _look_top_n_dict(n=2), 0, ZONE_HAND
+    )
+    synthetic_state.push_to_stack(spell_obj_id, 0)
+    synthetic_state.resolve_top_of_stack_pause()
+
+    synthetic_state.auto_resolve_pending_decisions("default")
+
+    assert synthetic_state.has_pending_decision() is False
+    assert synthetic_state.find_object_zone(top_two[0]) == ZONE_HAND
+    assert synthetic_state.find_object_zone(top_two[1]) == ZONE_GRAVEYARD
+
+
+def test_resolve_top_of_stack_auto_resolves_look_top_n(synthetic_state):
+    """The non-pause resolve_top_of_stack auto-resolves the LookTopN.
+    Topmost examined card lands in hand."""
+    hand_before = synthetic_state.hand_sizes[0]
+    top_id_before = synthetic_state.library_snapshot(0)[-1]["id"]
+    spell_obj_id = synthetic_state.register_and_inject_object(
+        _look_top_n_dict(n=2), 0, ZONE_HAND
+    )
+    synthetic_state.push_to_stack(spell_obj_id, 0)
+    synthetic_state.resolve_top_of_stack()
+
+    assert synthetic_state.has_pending_decision() is False
+    assert synthetic_state.find_object_zone(top_id_before) == ZONE_HAND
+    assert synthetic_state.hand_sizes[0] == hand_before + 1
+
+
+def test_look_top_n_zero_emits_empty_pending(synthetic_state):
+    """LookTopN with n=0 emits a PendingDecision with empty cards.
+    Auto-resolve drains it as an O(1) no-op."""
+    library_before = synthetic_state.library_sizes[0]
+    hand_before = synthetic_state.hand_sizes[0]
+
+    spell_obj_id = synthetic_state.register_and_inject_object(
+        _look_top_n_dict(n=0), 0, ZONE_HAND
+    )
+    synthetic_state.push_to_stack(spell_obj_id, 0)
+    synthetic_state.resolve_top_of_stack_pause()
+
+    pds = synthetic_state.pending_decisions()
+    assert len(pds) == 1
+    assert pds[0]["cards"] == []
+    assert synthetic_state.library_sizes[0] == library_before
+
+    synthetic_state.auto_resolve_pending_decisions("default")
+    assert synthetic_state.has_pending_decision() is False
+    assert synthetic_state.hand_sizes[0] == hand_before
+
+
+def test_look_top_n_count_exceeds_library_clamps(engine):
+    """LookTopN with n > library size pops every available card."""
+    state = engine.make_synthetic_state(num_battlefield=0, num_hand=0, num_library=2)
+    spell_obj_id = state.register_and_inject_object(
+        _look_top_n_dict(n=5), 0, ZONE_BATTLEFIELD
+    )
+    state.push_to_stack(spell_obj_id, 0)
+    state.resolve_top_of_stack_pause()
+
+    pds = state.pending_decisions()
+    assert len(pds) == 1
+    assert len(pds[0]["cards"]) == 2
+    assert state.library_sizes[0] == 0
+
+
+def test_fingerprint_pick_card_pending_differs_from_empty(synthetic_state):
+    """A state with a pending PickCardFromExaminedChoice fingerprints
+    differently from a state with no pending decision."""
+    fp_clean = synthetic_state.fingerprint()
+    spell_obj_id = synthetic_state.register_and_inject_object(
+        _look_top_n_dict(n=2), 0, ZONE_HAND
+    )
+    synthetic_state.push_to_stack(spell_obj_id, 0)
+    synthetic_state.resolve_top_of_stack_pause()
+    fp_pending = synthetic_state.fingerprint()
+    assert fp_pending != fp_clean
+
+
+def test_clone_isolates_pick_card_pending_decisions(synthetic_state):
+    """clone_once() deep-clones the PickCardFromExaminedChoice. Resolving
+    the clone leaves the source's queue intact (CoW canary)."""
+    top_two = [obj["id"] for obj in synthetic_state.library_snapshot(0)[-2:]]
+    top_two.reverse()
+    spell_obj_id = synthetic_state.register_and_inject_object(
+        _look_top_n_dict(n=2), 0, ZONE_HAND
+    )
+    synthetic_state.push_to_stack(spell_obj_id, 0)
+    synthetic_state.resolve_top_of_stack_pause()
+
+    clone = synthetic_state.clone_once()
+    assert clone.has_pending_decision() is True
+    assert clone.pending_decisions()[0]["kind"] == "PickCardFromExaminedChoice"
+
+    clone.submit_pick_card_decision(top_two[0])
+    assert clone.has_pending_decision() is False
+    assert clone.find_object_zone(top_two[0]) == ZONE_HAND
+
+    assert synthetic_state.has_pending_decision() is True
+    assert synthetic_state.pending_decisions()[0]["cards"] == top_two
