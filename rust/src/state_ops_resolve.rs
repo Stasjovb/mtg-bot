@@ -2582,6 +2582,19 @@ fn apply_effect(
                 }
             }
         }
+        // Round-28 highest-frequency-class coverage. Sequence walks
+        // its child Vec in order, calling apply_effect recursively on
+        // each child with the same source_obj_id. Children share
+        // resolve-time state — a Sequence of
+        // [DrawCards { count: 1 }, DiscardSelf] resolves to "draw,
+        // then discard" (a looting effect). Empty Vec is a legal
+        // no-op. Recursion is safe: Effect is heap-allocated via
+        // Vec<Effect>, and apply_effect is a regular function.
+        Effect::Sequence { effects } => {
+            for child in effects {
+                apply_effect(state, child, source_obj_id)?;
+            }
+        }
     }
     Ok(())
 }

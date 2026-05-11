@@ -187,6 +187,8 @@ the test lands in a commit.
 | rust(ce1-summoning-sick-default): align `make_state` / `set_library_for_player` to Python's universal `summoning_sick=true` default; new `clear_summoning_sick_for_player` pymethod for test fixtures. Closes CE1 (r27 cross-engine divergence). Pinned digest `a1193453edec` → `411d5b757c22`. | tests_rust/test_setup.py + tests_rust/test_legal.py + tests/test_parity_smoke.py extend | green  | feature/rust-ce1-summoning-sick-default |
 | rust(effect-pump-target-creature-ueot): `Effect::PumpTargetCreatureUntilEOT` — first-creature-on-source-controller's-battlefield pump via the r27 UeotModifier framework. Giant-Growth-shape spells (26 EoE cards, highest-frequency Python class not yet in Rust per r27 measurement). | tests_rust/test_ueot.py extend | green  | feature/rust-effect-pump-target-creature-ueot |
 
+| rust(effect-sequence): Effect::Sequence { effects: Vec<Effect> } combinator with recursive apply — Python Sequence(effects=...) (54 EoE cards, highest-freq Python class). Nestable. | tests_rust/test_resolve.py extend | green  | feature/rust-effect-sequence |
+
 ## Build invocation reminder
 
 ```
