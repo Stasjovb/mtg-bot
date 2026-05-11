@@ -247,6 +247,8 @@ the test lands in a commit.
 
 | rust(effect-untap-target-other-permanent): Effect::UntapTargetOtherPermanent — Nanoform-Sentinel trigger family (3+ EoE cards); scans both players' bf in zone order, picks first tapped permanent whose id != source. | tests_rust/test_resolve.py extend | green  | feature/rust-effect-untap-target-other-permanent |
 
+| rust(effect-tap-another-target-creature): Effect::TapAnotherTargetCreature — Starport-Security activated-ability family (2+ EoE cards); cross-player scan, filters on Creature card_type with id != source, taps. | tests_rust/test_resolve.py extend | green  | feature/rust-effect-tap-another-target-creature |
+
 ## Build invocation reminder
 
 ```
