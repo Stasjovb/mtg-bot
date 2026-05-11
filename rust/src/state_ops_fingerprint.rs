@@ -407,6 +407,26 @@ impl GameState {
                                 .collect(),
                         ),
                     ]),
+                    // Round-28 choose-one-mode decision: stable
+                    // serialized form by variant-tag + source/controller
+                    // + each mode's Debug format. Same Debug-over-serde
+                    // choice as MayDoChoice (avoids deriving Serialize
+                    // on every Effect arm in this slice).
+                    PendingDecision::ChooseModeChoice {
+                        source_obj_id,
+                        controller,
+                        modes,
+                    } => Value::Array(vec![
+                        Value::String("ChooseModeChoice".to_string()),
+                        json!(*source_obj_id),
+                        json!(*controller),
+                        Value::Array(
+                            modes
+                                .iter()
+                                .map(|m| Value::String(format!("{:?}", m)))
+                                .collect(),
+                        ),
+                    ]),
                 })
                 .collect();
             parts_vec.push(Value::Array(pds));
