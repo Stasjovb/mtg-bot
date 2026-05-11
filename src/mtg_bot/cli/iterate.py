@@ -1322,40 +1322,44 @@ def main(argv=None) -> None:  # pragma: no cover
         ),
     )
     parser.add_argument(
-        "--use-shm-self-play", action="store_true",
+        "--use-shm-self-play",
+        action=argparse.BooleanOptionalAction,
+        default=(sys.platform == "linux"),
         help=(
             "Use the SharedTensorNNEvalServer (PR #40) for SELF-PLAY "
             "on the LOCAL master shard. Linux-only; remote shards "
             "(Mac/Win10) ignore the flag silently. Bench numbers from "
             "PR #40 show 3-10x NN throughput vs the per-worker "
             "NNEvaluator path; PR #41 smoke at 4w showed ~36 percent "
-            "per-game improvement. Off by default."
+            "per-game improvement. Default ON on Linux, OFF on "
+            "Windows/Mac (the SHM server can't be constructed there). "
+            "Pass --no-use-shm-self-play to fall back to the legacy "
+            "per-worker NNEvaluator path."
         ),
     )
     parser.add_argument(
-        "--use-shm-eval", action="store_true",
+        "--use-shm-eval",
+        action=argparse.BooleanOptionalAction,
+        default=(sys.platform == "linux"),
         help=(
             "Use the SharedTensorNNEvalServer for EVAL on the LOCAL "
             "master shard. Master constructs two SHM servers (one per "
             "weights set) and workers route via cfg.weights_path. "
-            "Linux-only. **Off by default and currently NOT "
-            "recommended for production**: PR #41 smoke surfaced a "
-            "per-game wall regression vs the legacy per-worker "
-            "NNEvaluator path that reproduced at 14 workers — root "
-            "cause TBD. The flag exists so the eval-side wiring "
-            "stays exercised + benchable; production iter chains "
-            "should leave it off until the regression is understood. "
-            "See todo a72f1c8e... in hub/data/mtg_bot/todos.json."
+            "Linux-only. Default ON on Linux, OFF on Windows/Mac. "
+            "Pass --no-use-shm-eval to fall back to the legacy per-"
+            "worker NNEvaluator path. (Earlier wall-regression at 14 "
+            "workers was traced to the shutdown deadlock fixed in "
+            "PR #43; the substrate now hits 2,981 RPS @ 14w / 8,695 "
+            "RPS @ 32w with p50 RTT 74us.)"
         ),
     )
     parser.add_argument(
         "--use-shm-server", action="store_true",
         help=(
             "DEPRECATED — back-compat alias for --use-shm-self-play "
-            "AND --use-shm-eval. Use the split flags instead; the "
-            "two phases have different perf profiles (self-play is "
-            "the win; eval is currently a regression). Prefer "
-            "--use-shm-self-play alone."
+            "AND --use-shm-eval. Both split flags now default ON on "
+            "Linux; prefer the split flags (with --no-* to opt out) "
+            "rather than this alias."
         ),
     )
     parser.add_argument(
