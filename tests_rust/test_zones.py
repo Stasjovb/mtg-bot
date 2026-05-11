@@ -980,3 +980,106 @@ def test_clone_isolation_across_destroy_target_dispatch(synthetic_state):
     assert synthetic_state.battlefield_sizes == bf_source_before
     assert synthetic_state.graveyard_sizes == gy_source_before
     assert synthetic_state.stack_size() == 1
+
+
+# -------------------- Round-28 PutCardFromGraveyardOnBottomOfLibrary --------------------
+
+
+def _chrome_companion_dict():
+    return {
+        "name": "Chrome Companion (synthetic)",
+        "card_types": ["Sorcery"],
+        "mana_cost": {"generic": 1},
+        "effects": [
+            {"kind": "put_card_from_graveyard_on_bottom_of_library"}
+        ],
+    }
+
+
+def _vanilla_creature_for_gy_test(name="Test Creature"):
+    return {
+        "name": name,
+        "card_types": ["Creature"],
+        "mana_cost": {"generic": 1},
+        "power": 1,
+        "toughness": 1,
+    }
+
+
+def test_register_put_card_from_graveyard_on_bottom_of_library(engine):
+    """Unit variant registers cleanly."""
+    reg = engine.Registry()
+    pid = reg.register_printing(_chrome_companion_dict())
+    effects = reg.get_printing_effects(pid)
+    assert effects[0]["kind"] == "put_card_from_graveyard_on_bottom_of_library"
+
+
+def test_resolve_put_card_from_gy_bottom_moves_to_library_bottom(synthetic_state):
+    """Inject a creature into p0's graveyard, cast the spell —
+    the creature moves to bottom of p0's library."""
+    card_id = synthetic_state.register_and_inject_object(
+        _vanilla_creature_for_gy_test(), 0, 3  # ZONE_GRAVEYARD
+    )
+    spell_id = synthetic_state.register_and_inject_object(
+        _chrome_companion_dict(), 0, ZONE_HAND
+    )
+    synthetic_state.push_to_stack(spell_id, 0)
+    synthetic_state.resolve_top_of_stack()
+
+    assert synthetic_state.find_object_zone(card_id) == 1  # ZONE_LIBRARY
+    # Bottom = lib[0]. Verify via library_snapshot if it gives ordered list.
+    lib_snap = synthetic_state.library_snapshot(0)
+    # lib[0] is bottom per Rust convention.
+    assert lib_snap[0]["id"] == card_id
+
+
+def test_resolve_put_card_from_gy_bottom_picks_p0_first(synthetic_state):
+    """When both players have graveyards, p0's graveyard is scanned
+    first (deterministic first-slice convention)."""
+    p0_card_id = synthetic_state.register_and_inject_object(
+        _vanilla_creature_for_gy_test(name="P0 Card"), 0, 3
+    )
+    p1_card_id = synthetic_state.register_and_inject_object(
+        _vanilla_creature_for_gy_test(name="P1 Card"), 1, 3
+    )
+    spell_id = synthetic_state.register_and_inject_object(
+        _chrome_companion_dict(), 0, ZONE_HAND
+    )
+    synthetic_state.push_to_stack(spell_id, 0)
+    synthetic_state.resolve_top_of_stack()
+
+    # p0's card moved; p1's stayed.
+    assert synthetic_state.find_object_zone(p0_card_id) == 1  # ZONE_LIBRARY
+    assert synthetic_state.find_object_zone(p1_card_id) == 3  # ZONE_GRAVEYARD
+
+
+def test_resolve_put_card_from_gy_bottom_empty_both_fizzles(synthetic_state):
+    """No cards in either graveyard → silent fizzle. The source
+    sorcery still routes to graveyard (CR 608.2m)."""
+    spell_id = synthetic_state.register_and_inject_object(
+        _chrome_companion_dict(), 0, ZONE_HAND
+    )
+    synthetic_state.push_to_stack(spell_id, 0)
+    p0_gy_before = synthetic_state.graveyard_sizes[0]
+    synthetic_state.resolve_top_of_stack()
+    # Source went to graveyard.
+    assert synthetic_state.find_object_zone(spell_id) == 3
+    # p0 graveyard grew by 1 (the spell).
+    assert synthetic_state.graveyard_sizes[0] == p0_gy_before + 1
+
+
+def test_resolve_put_card_from_gy_bottom_uses_p1_when_p0_empty(synthetic_state):
+    """If p0's graveyard is empty but p1's has cards, picks from p1."""
+    p1_card_id = synthetic_state.register_and_inject_object(
+        _vanilla_creature_for_gy_test(name="P1 Lonely"), 1, 3
+    )
+    spell_id = synthetic_state.register_and_inject_object(
+        _chrome_companion_dict(), 0, ZONE_HAND
+    )
+    synthetic_state.push_to_stack(spell_id, 0)
+    synthetic_state.resolve_top_of_stack()
+
+    # p1's card moved to p1's library bottom.
+    assert synthetic_state.find_object_zone(p1_card_id) == 1
+    p1_lib_snap = synthetic_state.library_snapshot(1)
+    assert p1_lib_snap[0]["id"] == p1_card_id
