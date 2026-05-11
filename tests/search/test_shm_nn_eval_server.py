@@ -395,3 +395,328 @@ def test_stop_wakes_all_in_flight_workers(server_factory):
         f"expected {n_threads} errors, got {len(errors)}: {errors!r}"
     )
     assert all("stopped" in e.lower() for e in errors)
+
+
+# ---------- batched submit (real batching, not per-state for-loop) ----------
+#
+# Regression coverage for the Lever 2 investigation finding (PR #45):
+# the previous ``batch_evaluate_with_policy`` was a Python for-loop
+# over single-slot round-trips, so a worker could have at most one
+# request in flight per batch. The new implementation acquires N
+# slots, writes all input rows, submits *all* slot indices before
+# waiting on any response. The dispatcher sees the N items together
+# and fuses them into one (or few) forward passes.
+
+
+def _terminal_adapter() -> MtgGameStateAdapter:
+    """Build a fresh adapter and force it into a terminal state
+    (both players at 0 life → state-based actions resolve the game).
+    Returns the adapter for use in mixed-batch tests."""
+    from mtg_bot.turn import state_based_actions
+
+    state = setup_game(
+        [RandomAgent(), RandomAgent()],
+        decks=simple_test_decklists(),
+        seed=7,
+    )
+    adapter = MtgGameStateAdapter(state)
+    for p in adapter.engine_state.players:
+        p.life = 0
+    state_based_actions(adapter.engine_state)
+    assert adapter.is_terminal()
+    return adapter
+
+
+def test_batched_with_policy_matches_local_for_n_states(
+    server_factory, adapter,
+):
+    """The new batched call must produce bit-for-bit (within float
+    epsilon) the same outputs as the legacy NNEvaluator's batched
+    call given matched weights. The load-bearing correctness check
+    for this PR."""
+    server, ref, _ = server_factory(
+        with_policy=True, batch_size=8, batch_wait_ms=2.0, n_slots=16,
+    )
+    adapters = [adapter, adapter, adapter, adapter, adapter]
+    with server:
+        client = SharedTensorNNEvalClient(server.handle())
+        server_results = client.batch_evaluate_with_policy(
+            adapters, player_id=0,
+        )
+    local_results = ref.batch_evaluate_with_policy(adapters, player_id=0)
+    assert len(server_results) == len(local_results)
+    for (v_s, p_s), (v_l, p_l) in zip(server_results, local_results):
+        assert v_s == pytest.approx(float(v_l), abs=1e-5)
+        np.testing.assert_allclose(p_s, p_l, atol=1e-5)
+
+
+def test_batched_value_only_matches_local_for_n_states(
+    server_factory, adapter,
+):
+    """Value-only batched call mirrors the with-policy path."""
+    server, ref, _ = server_factory(
+        with_policy=False, batch_size=8, batch_wait_ms=2.0, n_slots=16,
+    )
+    adapters = [adapter] * 5
+    with server:
+        client = SharedTensorNNEvalClient(server.handle())
+        server_values = client.batch_evaluate(adapters, player_id=0)
+    local_values = ref.batch_evaluate(adapters, player_id=0)
+    assert len(server_values) == len(local_values)
+    for v_s, v_l in zip(server_values, local_values):
+        assert v_s == pytest.approx(float(v_l), abs=1e-5)
+
+
+def test_batched_submits_all_slots_before_waiting(server_factory, adapter):
+    """The batched call must put all N slot indices on the request
+    queue *before* waiting on any response — so the dispatcher fuses
+    them into a single batch. Verified via the dispatcher's
+    batch_sizes telemetry: with batch_wait_ms generous enough for
+    all submits to land in the same window, batch_sizes should show
+    one batch of size N (not N batches of size 1)."""
+    server, _, _ = server_factory(
+        with_policy=True,
+        batch_size=8,
+        batch_wait_ms=20.0,
+        n_slots=16,
+    )
+    adapters = [adapter] * 6
+    with server:
+        client = SharedTensorNNEvalClient(server.handle())
+        results = client.batch_evaluate_with_policy(adapters, player_id=0)
+    assert len(results) == 6
+    # The whole point: the dispatcher saw all 6 requests as one batch
+    # (or at worst a small handful), NOT as 6 sequential batch=1
+    # dispatches.
+    assert server.requests_served == 6
+    assert max(server.batch_sizes) >= 2, (
+        f"batched submit produced no fusion: batch_sizes={server.batch_sizes}"
+    )
+    # In practice with batch_wait_ms=20 and a CPU dispatcher, all 6
+    # land in one batch — but we tolerate <=3 to absorb scheduler
+    # variance.
+    assert server.batches_dispatched <= 3
+
+
+def test_batched_preserves_input_order(server_factory):
+    """Run a heterogeneous batch by mixing distinct adapter seeds, and
+    verify that the position-i output corresponds to the position-i
+    input. Without correct indexing, the result list could be
+    permuted by slot-allocation order."""
+    server, ref, _ = server_factory(
+        with_policy=True, batch_size=8, batch_wait_ms=2.0, n_slots=16,
+    )
+    # Construct adapters that produce distinguishable values so a
+    # permutation would be visible.
+    adapters = []
+    for seed in (1, 2, 3, 4, 5):
+        state = setup_game(
+            [RandomAgent(), RandomAgent()],
+            decks=simple_test_decklists(),
+            seed=seed,
+        )
+        adapters.append(MtgGameStateAdapter(state))
+    with server:
+        client = SharedTensorNNEvalClient(server.handle())
+        batched = client.batch_evaluate_with_policy(adapters, player_id=0)
+    # Compare against per-state single calls — the order MUST match
+    # the input states' order, not slot order.
+    for i, (v_b, p_b) in enumerate(batched):
+        v_l, p_l = ref.evaluate_with_policy(adapters[i], player_id=0)
+        assert v_b == pytest.approx(float(v_l), abs=1e-5), (
+            f"value at position {i} mismatched — likely a "
+            f"slot-vs-index ordering bug"
+        )
+        np.testing.assert_allclose(p_b, p_l, atol=1e-5)
+
+
+def test_batched_with_policy_handles_mixed_terminal_states(
+    server_factory, adapter,
+):
+    """Realistic case: an MCTS batch can contain terminal leaves
+    alongside non-terminal ones. Terminal states must short-circuit
+    to the synthetic (winner-determined value, all-zeros policy)
+    WITHOUT acquiring a slot; non-terminal states must hit the
+    server. Order preservation across the mix is what makes the
+    indexing correct."""
+    server, ref, _ = server_factory(
+        with_policy=True, batch_size=8, batch_wait_ms=2.0, n_slots=16,
+    )
+    terminal = _terminal_adapter()
+    # 5 states: terminal, non-term, non-term, terminal, non-term.
+    mixed = [terminal, adapter, adapter, terminal, adapter]
+    with server:
+        client = SharedTensorNNEvalClient(server.handle())
+        results = client.batch_evaluate_with_policy(mixed, player_id=0)
+    assert len(results) == 5
+    # Terminal positions must match the single-call evaluate_with_policy
+    # short-circuit: both-zero-life finish is a draw → value 0.0,
+    # policy all zeros. (Same value the legacy single-state path
+    # returns; cross-verified via the local reference.)
+    term_v_ref, term_p_ref = ref.evaluate_with_policy(terminal, 0)
+    assert term_v_ref == 0.0
+    for i in (0, 3):
+        v, p = results[i]
+        assert v == pytest.approx(float(term_v_ref), abs=1e-5)
+        np.testing.assert_array_equal(p, term_p_ref)
+    # Non-terminal positions match the legacy single-state path.
+    for i in (1, 2, 4):
+        v_b, p_b = results[i]
+        v_l, p_l = ref.evaluate_with_policy(mixed[i], 0)
+        assert v_b == pytest.approx(float(v_l), abs=1e-5)
+        np.testing.assert_allclose(p_b, p_l, atol=1e-5)
+    # Critically: only the non-terminal subset hit the server. We
+    # had 3 non-terminals; expect 3 requests served.
+    assert server.requests_served == 3
+
+
+def test_batched_value_only_handles_mixed_terminal_states(
+    server_factory, adapter,
+):
+    """Same coverage as the with-policy mix, for the value-only path."""
+    server, ref, _ = server_factory(
+        with_policy=False, batch_size=8, batch_wait_ms=2.0, n_slots=16,
+    )
+    terminal = _terminal_adapter()
+    mixed = [adapter, terminal, adapter, terminal]
+    with server:
+        client = SharedTensorNNEvalClient(server.handle())
+        results = client.batch_evaluate(mixed, player_id=0)
+    assert len(results) == 4
+    # Terminal positions: draw (both at 0 life) → 0.0.
+    assert results[1] == pytest.approx(0.0)
+    assert results[3] == pytest.approx(0.0)
+    # Non-terminal positions match local NN.
+    local_v = ref.batch_evaluate([adapter], player_id=0)[0]
+    assert results[0] == pytest.approx(float(local_v), abs=1e-5)
+    assert results[2] == pytest.approx(float(local_v), abs=1e-5)
+    # Only 2 non-terminals hit the server.
+    assert server.requests_served == 2
+
+
+def test_batched_empty_states_returns_empty(server_factory):
+    """Empty input → empty output, no slot acquisition, no server
+    traffic. (Important: don't block on free_slots.get() for zero
+    states.)"""
+    server, _, _ = server_factory(
+        with_policy=True, batch_size=8, batch_wait_ms=2.0, n_slots=16,
+    )
+    with server:
+        client = SharedTensorNNEvalClient(server.handle())
+        assert client.batch_evaluate_with_policy([], player_id=0) == []
+        assert client.batch_evaluate([], player_id=0) == []
+    assert server.requests_served == 0
+
+
+def test_batched_with_policy_all_terminal_skips_server(
+    server_factory,
+):
+    """A batch consisting entirely of terminal states must return
+    immediately without acquiring a single slot — important so that
+    a terminal-heavy MCTS frontier doesn't pointlessly serialize on
+    the request queue."""
+    server, _, _ = server_factory(
+        with_policy=True, batch_size=4, batch_wait_ms=2.0, n_slots=4,
+    )
+    terminal = _terminal_adapter()
+    with server:
+        client = SharedTensorNNEvalClient(server.handle())
+        results = client.batch_evaluate_with_policy(
+            [terminal, terminal, terminal], player_id=0,
+        )
+    assert len(results) == 3
+    for v, p in results:
+        assert v == pytest.approx(0.0)
+        np.testing.assert_array_equal(p, np.zeros_like(p))
+    assert server.requests_served == 0
+
+
+def test_batched_raises_when_request_exceeds_slot_pool(
+    server_factory, adapter,
+):
+    """Backpressure option (a): asking for more states than n_slots
+    is a config bug; raise loudly rather than chunk. Production sizes
+    n_slots >= MCTS batch_size + N_workers precisely so this never
+    fires; the test confirms we catch a misconfiguration."""
+    server, _, _ = server_factory(
+        with_policy=True, batch_size=2, batch_wait_ms=0.0, n_slots=2,
+    )
+    with server:
+        client = SharedTensorNNEvalClient(server.handle())
+        # 3 non-terminal states, pool of 2 → clear error.
+        with pytest.raises(RuntimeError, match="slot pool|slots, but"):
+            client.batch_evaluate_with_policy(
+                [adapter, adapter, adapter], player_id=0,
+            )
+
+
+def test_batched_value_only_raises_when_request_exceeds_slot_pool(
+    server_factory, adapter,
+):
+    server, _, _ = server_factory(
+        with_policy=False, batch_size=2, batch_wait_ms=0.0, n_slots=2,
+    )
+    with server:
+        client = SharedTensorNNEvalClient(server.handle())
+        with pytest.raises(RuntimeError, match="slot pool|slots, but"):
+            client.batch_evaluate(
+                [adapter, adapter, adapter], player_id=0,
+            )
+
+
+def test_batched_release_all_slots_on_server_stop_mid_call(
+    server_factory, adapter,
+):
+    """If the server stops while a batched call is mid-await, every
+    slot acquired by the call must be returned to the pool so the
+    next run doesn't observe a leak. We park the dispatcher on a
+    long batch window (batch_wait_ms = 10s, batch_size larger than
+    the request) so the call is guaranteed to be waiting at
+    ``_await_response`` when we stop the server; then we restart it
+    and verify free_slots is full."""
+    server, _, _ = server_factory(
+        with_policy=True,
+        batch_size=16,           # never fills with N < 16
+        batch_wait_ms=10000.0,   # 10s window
+        n_slots=8,
+    )
+    server.start()
+    client = SharedTensorNNEvalClient(server.handle())
+
+    result: list[Any] = []
+
+    def _call() -> None:
+        try:
+            client.batch_evaluate_with_policy(
+                [adapter, adapter, adapter, adapter], player_id=0,
+            )
+            result.append(("ok",))
+        except RuntimeError as e:
+            result.append(("err", str(e)))
+
+    t = threading.Thread(target=_call, daemon=True)
+    t.start()
+    time.sleep(0.3)  # let the call land in _await_response
+
+    server.stop(timeout=5.0)
+    t.join(timeout=3.0)
+    assert not t.is_alive(), (
+        "batched-call thread did not return after server.stop()"
+    )
+    assert len(result) == 1 and result[0][0] == "err", (
+        f"expected RuntimeError; got {result!r}"
+    )
+
+    # All 4 slots that were acquired must have been released.
+    # Restart the server and drain free_slots — it should yield all
+    # n_slots = 8 indices.
+    server.start()
+    drained: list[int] = []
+    for _ in range(8):
+        # Use a timeout so the test fails fast instead of hanging if
+        # slots were leaked.
+        drained.append(server.handle().free_slots.get(timeout=2.0))
+    assert sorted(drained) == list(range(8)), (
+        f"slot pool not full after stop+restart; drained={drained}"
+    )
+    server.stop(timeout=2.0)
