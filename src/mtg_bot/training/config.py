@@ -250,17 +250,17 @@ class NNPimcConfig:
 
     def build(self, seed: int = 0) -> SearchStrategy:
         # Fork-inherited SHM server handle takes precedence over the
-        # per-worker NNEvaluator path. ``run_shard_pull`` (and any
-        # other Pool initializer that's installed one via
-        # :func:`mtg_bot.search.shm_nn_eval_server.set_worker_handle`)
-        # makes the handle visible here; absent that, the legacy
-        # NNEvaluator construction runs unchanged. Lets the iter chain
-        # opt into the SHM server via a spec flag without duplicating
-        # the build()-side construction logic.
+        # per-worker NNEvaluator path. Looked up by ``self.weights_path``
+        # first (eval routes new vs old via this key — two SHM servers
+        # in master, each registered under its weights path); falls
+        # back to the singleton handle (self-play registers under
+        # the singleton slot via ``run_shard_pull``'s Pool initializer).
+        # Absent any handle, the legacy NNEvaluator construction runs
+        # unchanged.
         from mtg_bot.search.shm_nn_eval_server import (
             maybe_get_worker_handle,
         )
-        shm_handle = maybe_get_worker_handle()
+        shm_handle = maybe_get_worker_handle(self.weights_path)
         if shm_handle is not None:
             from mtg_bot.search.shm_nn_eval_server import (
                 SharedTensorNNEvalClient,

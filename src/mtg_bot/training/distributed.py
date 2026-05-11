@@ -805,6 +805,13 @@ class EvalJobSpec:
     heuristics: HeuristicsConfig = field(
         default_factory=HeuristicsConfig.disabled,
     )
+    # Opt into SharedTensorNNEvalServer for this eval shard. Linux-only
+    # (gated in run_shard_eval_pull). Master constructs TWO SHM servers
+    # (one per weights set); workers route requests via the cfg's
+    # weights_path. Remote shards (Mac/Win10) keep the per-worker
+    # NNEvaluator path regardless of this flag — see the matching
+    # field on SelfPlayJobSpec for the same rationale.
+    use_shm_server: bool = False
 
     def to_dict(self) -> dict[str, Any]:
         def _posix(p):
@@ -843,6 +850,7 @@ class EvalJobSpec:
             "old_action_encoding_version": (
                 self.old_action_encoding_version
             ),
+            "use_shm_server": self.use_shm_server,
         }
 
     @classmethod
@@ -887,6 +895,7 @@ class EvalJobSpec:
             old_action_encoding_version=d.get(
                 "old_action_encoding_version"
             ),
+            use_shm_server=bool(d.get("use_shm_server", False)),
         )
 
 
@@ -2735,17 +2744,21 @@ def run_shard_pull(
 
     shard_t0 = _time.perf_counter()
     # Optional: install a SharedTensorNNEvalServer (PR #40) for this
-    # shard's workers. Linux-only; remote shards (Mac/Win10) ignore the
-    # spec flag silently. The server is constructed BEFORE the executor
-    # so workers fork-inherit the shared-tensor mmap + mp.Event fds.
-    # Workers' ``NNPimcConfig.build`` picks up the handle via
-    # :func:`mtg_bot.search.shm_nn_eval_server.maybe_get_worker_handle`
-    # set by the initializer below.
+    # shard's workers. Linux-only — gated tightly. On Win10 the server
+    # raises NotImplementedError; on Mac the SHM server would proceed
+    # but auto_device falls back to CPU rather than MPS (the SHM
+    # server doesn't have MPS-tested device routing), which would
+    # regress the Mac shard from its existing per-worker MPS path.
+    # Both remotes get the legacy per-worker NNEvaluator path
+    # regardless of the spec flag — flag only takes effect on the
+    # master (Linux WSL2). The server is constructed BEFORE the
+    # executor so workers fork-inherit the shared-tensor mmap +
+    # mp.Event fds.
     shm_server = None
     shm_initializer = None
     shm_initargs: tuple = ()
     shm_mp_context = None
-    if spec.use_shm_server and sys.platform != "win32":
+    if spec.use_shm_server and sys.platform == "linux":
         from mtg_bot.search.shm_nn_eval_server import (
             SharedTensorNNEvalServer,
             set_worker_handle,
@@ -3230,12 +3243,100 @@ def run_shard_eval_pull(
         )
 
     shard_t0 = _time.perf_counter()
+    # Optional: install TWO SharedTensorNNEvalServers (PR #40) for the
+    # eval workers — one per weights set. Workers route requests via
+    # the cfg's ``weights_path`` since both new and old cfgs flow
+    # through the same fork-Pool initializer (each handle is
+    # registered under its weights_path key). Linux-only gate, same
+    # rationale as run_shard_pull: Win10 raises NotImplementedError
+    # on SHM server construction; Mac SHM construction would proceed
+    # but with CPU fallback (no MPS routing yet), regressing Mac
+    # MPS workers — keep the legacy per-worker NNEvaluator path on
+    # both remotes.
+    shm_new_server = None
+    shm_old_server = None
+    shm_initializer = None
+    shm_initargs: tuple = ()
+    shm_mp_context = None
+    if spec.use_shm_server and sys.platform == "linux":
+        from mtg_bot.search.shm_nn_eval_server import (
+            SharedTensorNNEvalServer,
+            set_worker_handle,
+        )
+        try:
+            shm_new_server = SharedTensorNNEvalServer(
+                weights_path=Path(spec.new_weights_path),
+                device=None,
+                with_policy=True,
+                batch_size=32,
+                batch_wait_ms=0.5,
+                n_slots=max(64, n_workers + 16),
+                hidden_sizes=spec.hidden_sizes,
+                architecture=spec.new_architecture,
+                policy_hidden_sizes=spec.policy_hidden_sizes,
+            )
+            shm_new_server.start()
+            if spec.old_weights_path is not None:
+                shm_old_server = SharedTensorNNEvalServer(
+                    weights_path=Path(spec.old_weights_path),
+                    device=None,
+                    with_policy=True,
+                    batch_size=32,
+                    batch_wait_ms=0.5,
+                    n_slots=max(64, n_workers + 16),
+                    hidden_sizes=spec.hidden_sizes,
+                    architecture=spec.old_architecture,
+                    policy_hidden_sizes=spec.policy_hidden_sizes,
+                )
+                shm_old_server.start()
+
+            # Custom initializer registers both handles under their
+            # weights_path keys. ``NNPimcConfig.build`` looks up by
+            # ``self.weights_path`` so new_cfg and old_cfg route to
+            # the matching server transparently.
+            def _eval_shm_init(
+                new_handle, new_path, old_handle, old_path,
+            ):
+                set_worker_handle(new_handle, weights_path=new_path)
+                if old_handle is not None and old_path is not None:
+                    set_worker_handle(old_handle, weights_path=old_path)
+
+            shm_initializer = _eval_shm_init
+            shm_initargs = (
+                shm_new_server.handle(),
+                spec.new_weights_path,
+                shm_old_server.handle() if shm_old_server is not None else None,
+                spec.old_weights_path,
+            )
+            shm_mp_context = mp.get_context("fork")
+            print(
+                f"[eval shard {label}] using 2x SharedTensorNNEvalServer "
+                f"(device={shm_new_server._device}, "
+                f"n_slots={max(64, n_workers + 16)})"
+            )
+        except NotImplementedError as e:
+            print(
+                f"[eval shard {label}] SHM server unavailable ({e}); "
+                f"falling back to per-worker NNEvaluator path"
+            )
+            if shm_new_server is not None:
+                shm_new_server.stop(timeout=2.0)
+                shm_new_server = None
+            if shm_old_server is not None:
+                shm_old_server.stop(timeout=2.0)
+                shm_old_server = None
+
     # See run_shard_pull above for why this isn't ``with ... as exe``:
     # ProcessPoolExecutor.__exit__ calls shutdown(wait=True), which
     # blocks forever on a worker stuck in C-extension code past the
     # per-game timeout. Manual shutdown(wait=False) returns promptly;
     # OS reaps orphan workers when the parent exits.
-    exe = _cf.ProcessPoolExecutor(max_workers=n_workers)
+    exe_kwargs: dict[str, Any] = {"max_workers": n_workers}
+    if shm_initializer is not None:
+        exe_kwargs["initializer"] = shm_initializer
+        exe_kwargs["initargs"] = shm_initargs
+        exe_kwargs["mp_context"] = shm_mp_context
+    exe = _cf.ProcessPoolExecutor(**exe_kwargs)
     try:
         in_flight: dict[_cf.Future, int] = {}
         queue_drained = False
@@ -3416,6 +3517,10 @@ def run_shard_eval_pull(
     finally:
         heartbeat.stop()
         exe.shutdown(wait=False)
+        if shm_new_server is not None:
+            shm_new_server.stop(timeout=5.0)
+        if shm_old_server is not None:
+            shm_old_server.stop(timeout=5.0)
     if progress is not None:
         progress.finalize(status="completed")
     if events is not None:

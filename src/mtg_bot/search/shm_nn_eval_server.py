@@ -89,29 +89,75 @@ def _action_encoding():
     return _ae
 
 
-# Worker-process global. ``run_shard_pull``'s Pool initializer calls
-# :func:`set_worker_handle` with the fork-inherited SHM server handle;
-# :class:`NNPimcConfig.build` calls :func:`maybe_get_worker_handle` to
-# decide between the SHM client and the legacy per-worker NNEvaluator.
-# Unset in the master parent and in non-SHM workers — both return
-# ``None``, which preserves the existing build() behavior.
-_WORKER_SHM_HANDLE: Optional["SharedTensorServerHandle"] = None
+# Worker-process globals. The "default" handle is the back-compat
+# single-server slot used by self-play (``run_shard_pull`` /
+# ``mtg_bot bench nn-eval-server --mode shm``). The "by weights_path"
+# dict supports the eval case where the master has TWO servers (one
+# per weights set) and workers route requests by the cfg's
+# ``weights_path``. Both are unset in the master parent and in
+# non-SHM workers; :func:`maybe_get_worker_handle` returns ``None``
+# in that case, which preserves the legacy ``NNEvaluator`` path.
+_WORKER_SHM_DEFAULT_HANDLE: Optional["SharedTensorServerHandle"] = None
+_WORKER_SHM_HANDLES_BY_PATH: dict[str, "SharedTensorServerHandle"] = {}
 
 
-def set_worker_handle(handle: "SharedTensorServerHandle") -> None:
+def set_worker_handle(
+    handle: Optional["SharedTensorServerHandle"],
+    weights_path: Optional[str] = None,
+) -> None:
     """Install a fork-inherited SHM server handle on the calling
     worker process. Intended for use as an mp.Pool initializer when
-    the master has spun up a :class:`SharedTensorNNEvalServer`."""
-    global _WORKER_SHM_HANDLE
-    _WORKER_SHM_HANDLE = handle
+    the master has spun up one or more :class:`SharedTensorNNEvalServer`.
+
+    Two registration shapes:
+
+    - ``weights_path=None`` (default) → install as the "singleton"
+      handle, used by callers that don't disambiguate by weights
+      path. ``handle=None`` clears it.
+    - ``weights_path="...pt"`` → register under the given key so
+      ``maybe_get_worker_handle(weights_path)`` returns this handle.
+      Used by the eval path where the master holds two servers
+      (new + old weights), workers route via the cfg's
+      ``weights_path``.
+    """
+    global _WORKER_SHM_DEFAULT_HANDLE
+    if weights_path is None:
+        _WORKER_SHM_DEFAULT_HANDLE = handle
+    else:
+        if handle is None:
+            _WORKER_SHM_HANDLES_BY_PATH.pop(weights_path, None)
+        else:
+            _WORKER_SHM_HANDLES_BY_PATH[weights_path] = handle
 
 
-def maybe_get_worker_handle() -> Optional["SharedTensorServerHandle"]:
+def maybe_get_worker_handle(
+    weights_path: Optional[str] = None,
+) -> Optional["SharedTensorServerHandle"]:
     """Return the worker's SHM handle if one was installed via
-    :func:`set_worker_handle`, else ``None``. Lets the existing
-    :class:`NNPimcConfig.build` swap to the SHM client transparently
-    while keeping the per-worker NNEvaluator path as the default."""
-    return _WORKER_SHM_HANDLE
+    :func:`set_worker_handle`, else ``None``.
+
+    Lookup order:
+
+    1. If ``weights_path`` is provided and matches a registered
+       per-path handle, return that. This is the eval path's
+       routing key.
+    2. Otherwise return the singleton handle (or ``None`` if not
+       set). Self-play registers only the singleton; legacy callers
+       that don't pass ``weights_path`` continue to work unchanged.
+    """
+    if weights_path is not None:
+        h = _WORKER_SHM_HANDLES_BY_PATH.get(weights_path)
+        if h is not None:
+            return h
+    return _WORKER_SHM_DEFAULT_HANDLE
+
+
+def clear_worker_handles() -> None:
+    """Forget all installed handles. Used by tests to isolate state
+    between cases."""
+    global _WORKER_SHM_DEFAULT_HANDLE
+    _WORKER_SHM_DEFAULT_HANDLE = None
+    _WORKER_SHM_HANDLES_BY_PATH.clear()
 
 
 @dataclasses.dataclass

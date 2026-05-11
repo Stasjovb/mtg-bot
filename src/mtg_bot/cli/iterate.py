@@ -637,6 +637,7 @@ def _eval_match_distributed(  # pragma: no cover
     use_belief_weighted: bool = False,
     new_action_encoding_version: str = "positional_v1",
     old_action_encoding_version: str = "positional_v1",
+    use_shm_server: bool = False,
 ) -> tuple[int, int, int, float]:
     """Distributed eval-gate match. Mirrors ``_eval_match``'s return
     contract ``(new_wins, old_wins, draws, elapsed_seconds)`` so
@@ -672,6 +673,7 @@ def _eval_match_distributed(  # pragma: no cover
         policy_hidden_sizes=policy_hidden_sizes,
         new_action_encoding_version=new_action_encoding_version,
         old_action_encoding_version=old_action_encoding_version,
+        use_shm_server=use_shm_server,
     )
     started = time.perf_counter()
     extra_kwargs: dict = {}
@@ -1951,6 +1953,7 @@ def main(argv=None) -> None:  # pragma: no cover
                         old_action_encoding_version=(
                             best_action_encoding_version
                         ),
+                        use_shm_server=args.use_shm_server,
                     )
                 )
             n_decided = wins_new + wins_old
