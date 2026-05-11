@@ -242,12 +242,18 @@
 //! - Source untapped: tap-for-mana abilities pay `{T}` as cost (CR
 //!   605.1a — mana abilities tap the source). Python's line 658-660
 //!   gates `if ability.cost.tap_self and obj.tapped: continue`.
-//! - First-slice **does not** filter by summoning sickness for
-//!   non-creature mana sources (lands aren't creatures, so the
-//!   sickness gate at lines 662-664 doesn't apply). Once
-//!   creature-tap mana abilities (Llanowar Elves, Birds of Paradise)
-//!   land in the bridge, the slice gains the same is_creature +
-//!   summoning_sick + haste check.
+//! - **Summoning sickness gate** (parity gap G6 closure): a
+//!   permanent whose `summoning_sick` flag is true does NOT emit a
+//!   tap-for-mana ActivateAbility. Mirrors Python's
+//!   `legal.py:661-663` short-circuit inside the `tap_self`
+//!   cost-payability block. The general gate is
+//!   `summoning_sick && cost.tap_self`; mana abilities always tap
+//!   (CR 605.1a), so for this first-slice's mana-only filter
+//!   `summoning_sick` alone is sufficient. A future slice landing
+//!   non-mana activated abilities will narrow the gate to skip
+//!   ONLY tap-cost abilities. The haste-keyword exception (CR
+//!   702.10 — haste creatures shed sickness on entry) lands with
+//!   the full `activated_abilities` bridge.
 //!
 //! **Dispatch is a known stub.** The Rust `Action::ActivateAbility`
 //! variant's `apply_action` arm at `state_ops_actions.rs:248-277`
@@ -828,15 +834,28 @@ impl GameState {
         // `activated_abilities` field yet (see `cards.rs:361-396` and
         // the module docstring's "ActivateAbility extension"
         // section). We approximate by emitting one ActivateAbility
-        // (ability_index=0) per untapped mana-producer permanent —
-        // i.e. every untapped object on the priority player's
-        // battlefield whose printing has `mana_produced.is_some()`.
-        // This covers Forest's tap-for-{G} ability and every
-        // basic-land equivalent. Creature mana sources (Llanowar
-        // Elves, Birds of Paradise) aren't covered yet — they'd
-        // emit incorrectly until the `is_creature` + `summoning_sick`
-        // + `haste` filter ports in, which lands with the full
-        // `activated_abilities` bridge.
+        // (ability_index=0) per untapped, non-summoning-sick
+        // mana-producer permanent — i.e. every untapped object on
+        // the priority player's battlefield whose printing has
+        // `mana_produced.is_some()`. This covers Forest's
+        // tap-for-{G} ability and every basic-land equivalent, plus
+        // creature mana sources (Llanowar Elves, Birds of Paradise)
+        // once they've shed summoning sickness. A just-cast
+        // creature mana source is excluded by the `summoning_sick`
+        // gate below — mirrors Python's `legal.py:661-663`
+        // (`is_creature_now(obj) && obj.summoning_sick` short-
+        // circuit inside the tap-self cost-payability block).
+        //
+        // **The gate is `summoning_sick && requires_tap_cost`.** All
+        // mana abilities have an implicit `{T}` cost (CR 605.1a), so
+        // for the first-slice mana-only filter every emitted ability
+        // is a tap-cost ability and `summoning_sick` alone is
+        // sufficient to reject. A future slice that lands non-mana
+        // activated abilities (loyalty abilities, sacrifice abilities
+        // without tap, etc.) will narrow this to "skip the source
+        // ONLY for abilities whose `cost.tap_self` is true" so a
+        // summoning-sick creature with a non-tap-cost ability still
+        // emits. Pins G6 closure; see `docs/RUST_PARITY_GAPS.md`.
         //
         // **No dedup by printing name.** Unlike PlayLand / CastSpell,
         // each ActivateAbility carries a per-object source_id and
@@ -848,6 +867,17 @@ impl GameState {
         // for the same reason.
         for obj in self.players[idx].battlefield.iter() {
             if obj.tapped {
+                continue;
+            }
+            // CR 302.1 — summoning-sick permanents can't pay a tap
+            // cost. See the long-form note above for why the gate is
+            // `summoning_sick` alone (not `summoning_sick &&
+            // ability.cost.tap_self`) in this slice's mana-only
+            // approximation. Mirrors Python's
+            // `legal.py`:661-663 short-circuit (the `tap_self` cost
+            // block returns `continue` when the source is a
+            // summoning-sick creature). Closes G6.
+            if obj.summoning_sick {
                 continue;
             }
             let Some(printing) = self.registry.lookup(obj.printing_id) else {
