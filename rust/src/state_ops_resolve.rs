@@ -3741,6 +3741,51 @@ fn apply_effect(
                 }
             }
         }
+        // Round-28 enchanted-permanent destroy (Cryoshatter-shape).
+        // Read source's `attached_to`; if Some(target_id) and target
+        // exists on a battlefield, move it to its controller's
+        // graveyard with CR 400.7 zone-change reset. Source not on
+        // bf / attached_to is None / target untracked → silent fizzle.
+        Effect::DestroyEnchantedPermanent => {
+            // Locate source on a battlefield, capture its attached_to.
+            let mut target_id_opt: Option<u32> = None;
+            for player in &state.players {
+                if let Some(src) = player.battlefield.iter().find(|o| o.id == source_obj_id) {
+                    target_id_opt = src.attached_to;
+                    break;
+                }
+            }
+            let Some(target_id) = target_id_opt else {
+                return Ok(()); // source not on bf or no host → fizzle
+            };
+            // Locate target on either battlefield + capture owner-as-controller.
+            let mut target_loc: Option<usize> = None;
+            for (pidx, player) in state.players.iter().enumerate() {
+                if player.battlefield.iter().any(|o| o.id == target_id) {
+                    target_loc = Some(pidx);
+                    break;
+                }
+            }
+            let Some(tidx) = target_loc else {
+                return Ok(()); // target untracked → fizzle
+            };
+            // Remove from battlefield, reset per CR 400.7, push to
+            // owner's graveyard.
+            let bf_mut: &mut Vec<GameObject> =
+                Arc::make_mut(&mut state.players[tidx].battlefield);
+            let pos = bf_mut
+                .iter()
+                .position(|o| o.id == target_id)
+                .expect("target_id was just found in bf but missing on re-scan");
+            let mut obj = bf_mut.remove(pos);
+            obj.zone = ZONE_GRAVEYARD;
+            obj.tapped = false;
+            obj.summoning_sick = true; // r28 CE1 universal-true default
+            obj.damage = 0;
+            obj.counters = 0;
+            obj.attached_to = None;
+            Arc::make_mut(&mut state.players[tidx].graveyard).push(obj);
+        }
     }
     Ok(())
 }

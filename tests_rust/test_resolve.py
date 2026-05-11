@@ -8190,3 +8190,90 @@ def test_resolve_optional_sac_artifact_clone_isolation(synthetic_state):
     assert cloned.find_object_zone(artifact_id) == ZONE_GRAVEYARD
     # Source: artifact still on bf (no resolve happened).
     assert synthetic_state.find_object_zone(artifact_id) == ZONE_BATTLEFIELD
+
+
+# -------------------- Round-28 DestroyEnchantedPermanent (4 cards) --------------------
+
+
+def _cryoshatter_dict():
+    """Cryoshatter-shape aura: triggered ability destroys what it's
+    attached to. Modeled as an enchantment with an activated/triggered
+    effect."""
+    return {
+        "name": "Cryoshatter (synthetic)",
+        "card_types": ["Enchantment"],
+        "mana_cost": {"U": 1, "generic": 1},
+        "effects": [
+            {"kind": "destroy_enchanted_permanent"}
+        ],
+    }
+
+
+def test_register_destroy_enchanted_permanent(engine):
+    reg = engine.Registry()
+    pid = reg.register_printing(_cryoshatter_dict())
+    eff = reg.get_printing_effects(pid)[0]
+    assert eff["kind"] == "destroy_enchanted_permanent"
+
+
+def test_resolve_destroy_enchanted_permanent_kills_host(synthetic_state):
+    """Aura attached to p1's first creature; resolve destroys the
+    creature, moves it to its controller's graveyard."""
+    snap = synthetic_state.battlefield_snapshot()
+    p1_first_bear_id = next(
+        d["id"] for d in snap
+        if d["controller_id"] == 1 and d["printing_name"] == "Grizzly Bears"
+    )
+    # Inject the aura onto p0's bf and attach to the target.
+    aura_id = synthetic_state.register_and_inject_object(
+        _cryoshatter_dict(), 0, ZONE_BATTLEFIELD
+    )
+    synthetic_state.attach(aura_id, p1_first_bear_id)
+    p1_gy_before = synthetic_state.graveyard_sizes[1]
+
+    synthetic_state.push_to_stack(aura_id, 0)
+    synthetic_state.resolve_top_of_stack()
+
+    # Target moved to p1's graveyard.
+    assert synthetic_state.find_object_zone(p1_first_bear_id) == ZONE_GRAVEYARD
+    assert synthetic_state.graveyard_sizes[1] == p1_gy_before + 1
+
+
+def test_resolve_destroy_enchanted_permanent_no_attached_fizzles(synthetic_state):
+    """Source has attached_to=None → silent fizzle."""
+    aura_id = synthetic_state.register_and_inject_object(
+        _cryoshatter_dict(), 0, ZONE_BATTLEFIELD
+    )
+    # Don't attach to anything.
+    synthetic_state.push_to_stack(aura_id, 0)
+    synthetic_state.resolve_top_of_stack()  # must not raise
+
+
+def test_resolve_destroy_enchanted_permanent_source_off_bf_fizzles(synthetic_state):
+    """Source not on bf → silent fizzle (aura already left)."""
+    aura_id = synthetic_state.register_and_inject_object(
+        _cryoshatter_dict(), 0, ZONE_HAND
+    )
+    synthetic_state.push_to_stack(aura_id, 0)
+    # Aura is in hand, not bf, so the read of attached_to comes back
+    # None (we only scan bf in the new arm). Must resolve cleanly.
+    synthetic_state.resolve_top_of_stack()
+
+
+def test_resolve_destroy_enchanted_permanent_clone_isolation(synthetic_state):
+    snap = synthetic_state.battlefield_snapshot()
+    p1_first_bear_id = next(
+        d["id"] for d in snap
+        if d["controller_id"] == 1 and d["printing_name"] == "Grizzly Bears"
+    )
+    aura_id = synthetic_state.register_and_inject_object(
+        _cryoshatter_dict(), 0, ZONE_BATTLEFIELD
+    )
+    synthetic_state.attach(aura_id, p1_first_bear_id)
+    synthetic_state.push_to_stack(aura_id, 0)
+    cloned = synthetic_state.clone_once()
+    cloned.resolve_top_of_stack()
+
+    # Clone: target in graveyard. Source: target still on bf.
+    assert cloned.find_object_zone(p1_first_bear_id) == ZONE_GRAVEYARD
+    assert synthetic_state.find_object_zone(p1_first_bear_id) == ZONE_BATTLEFIELD
