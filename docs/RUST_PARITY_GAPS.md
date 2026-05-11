@@ -41,39 +41,6 @@ How the smoke consumes this doc:
 Each entry: short name, pinning test, current Rust behavior, expected
 behavior per CR / Python, parity impact, and closeable / accepted.
 
-### G1. Mana pool not emptied on phase / step boundary
-
-- **Pinned by**: `tests_rust/test_mana.py::test_mana_pool_persists_across_phase_boundary_documented_quirk`;
-  `tests_rust/test_cleanup.py::test_cleanup_does_not_empty_mana_pool_documented_gap`,
-  `test_end_turn_and_start_next_does_not_empty_mana_pool_documented_gap`.
-- **Rust today**: `advance_phase`, `cleanup_step_for_active_player`,
-  and `end_turn_and_start_next` never call `empty_mana_pool` /
-  `empty_all_mana_pools`. Mana left in a pool persists indefinitely
-  across phase and turn transitions.
-- **CR / Python expected**: CR 106.4 — "When a phase or step ends,
-  each player's mana pool empties." Python empties mana pools at every
-  step/phase boundary.
-- **Impact**: medium-to-high. Rust will store mana that Python has
-  thrown away, so Rust can pay for spells Python cannot. Observable
-  in any game where the active player floats mana out of a step.
-- **Closeable**: yes — the `empty_all_mana_pools` primitive exists.
-  Pending slice: wire it into `advance_phase` and the cleanup
-  composition.
-
-### G2. Hand-size enforcement does not auto-fire at end of turn
-
-- **Pinned by**: `tests_rust/test_cleanup.py::test_advance_phase_through_cleanup_does_not_enforce_hand_size_gap`.
-- **Rust today**: `advance_phase` walking through `PHASE_CLEANUP` does
-  NOT invoke `cleanup_step_for_active_player` / hand-size discard.
-  The caller must explicitly call `cleanup_step_for_active_player`
-  or `end_turn_and_start_next` to trigger CR 514.1.
-- **CR / Python expected**: CR 514.1 fires automatically at the start
-  of the cleanup step.
-- **Impact**: medium. Visible whenever a turn ends with > 7 cards in
-  hand and the game machinery isn't explicitly calling
-  `end_turn_and_start_next`.
-- **Closeable**: yes — slice that wires cleanup into `advance_phase`.
-
 ### G3. `pass_priority` is a pure toggle (no step-end / stack-resolution composition)
 
 - **Pinned by**: `tests_rust/test_priority.py::test_both_pass_priority_with_empty_stack_does_not_advance_step`,
@@ -538,6 +505,36 @@ refactor on either side that breaks the parity surfaces immediately.
   `state.turn_number != 1` shape (rationale: on turn 1 the active
   player IS the starting player, so `turn_number` alone fully
   determines the skip in a two-player game).
+
+### I20. `advance_phase` fully composes phase-boundary side effects (CR 106.4 / 514.1 / 514.2)
+
+- **Pinned by**:
+  `tests_rust/test_mana.py::test_mana_pool_empties_on_advance_phase`;
+  `tests_rust/test_cleanup.py::test_end_turn_and_start_next_empties_mana_pool`,
+  `test_advance_phase_through_cleanup_enforces_hand_size`;
+  `tests_rust/test_steps.py::test_advance_phase_empties_both_mana_pools_on_every_tick`,
+  `test_advance_phase_empties_mana_pool_across_every_phase_in_lap`,
+  `test_advance_phase_into_cleanup_fires_hand_size_discard`,
+  `test_advance_phase_into_cleanup_fires_damage_clear`,
+  `test_advance_phase_cleanup_hook_targets_old_active_player`,
+  `test_advance_phase_cleanup_hook_idempotent_when_hand_at_max`,
+  `test_clone_advance_phase_into_cleanup_does_not_affect_original`.
+- **Invariant**: Closing the round-26 G1 + G2 gaps. Every
+  `advance_phase` tick empties both players' mana pools BEFORE the
+  phase counter ticks forward (CR 106.4 — mana pool empties on
+  phase exit). Whenever the new phase is `PHASE_CLEANUP`,
+  `advance_phase` fires the inline mirror of
+  `cleanup_step_for_active_player` on entry: CR 514.1 hand-size
+  discard for the active player (max=7, deterministic-end-of-Vec
+  pop) followed by CR 514.2 marked-damage clear on both
+  battlefields. Combined with the round-2 untap sweep, the
+  round-14 summoning-sick clear, and the round-26 G14 auto-draw,
+  `advance_phase` now models every phase-entry / phase-exit hook
+  the Rust engine carries. The `cleanup_step_for_active_player`
+  primitive itself remains layered below CR 106.4 (calling it
+  directly does NOT empty mana pools — see
+  `test_cleanup.py::test_cleanup_step_does_not_empty_mana_pool_at_primitive_layer`);
+  the mana-empty hook is owned exclusively by `advance_phase`.
 
 ---
 

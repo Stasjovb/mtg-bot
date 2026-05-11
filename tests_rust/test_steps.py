@@ -600,41 +600,65 @@ def test_phase_advance_preserves_life_totals(synthetic_state):
     assert synthetic_state.life_totals == [13, 7]
 
 
-def test_phase_advance_preserves_zone_sizes_except_for_auto_draw(
+def test_phase_advance_preserves_zone_sizes_except_for_auto_draw_and_cleanup_discard(
     synthetic_state,
 ):
-    """Cross-feature with the zones slice: a full lap through all 12
-    phases is zone-neutral EXCEPT for the CR 504.1 auto-draw on
-    entry to PHASE_DRAW (one card moves library -> hand for the
-    active player). The seed's turn_number is 5 so the CR 103.7c
-    first-turn skip is open; the active player at DRAW entry is
-    player 0 (the seed's ``active_player``), so p0's hand grows by
-    one and p0's library shrinks by one. Battlefield is unchanged
-    by the lap — the per-controller untap sweep mutates tapped-flags
-    in place rather than moving objects."""
+    """Cross-feature with the zones / cleanup slices: a full lap
+    through all 12 phases is zone-neutral on p1 but shifts one card
+    on p0 — the active player throughout the DRAW step and the
+    active player at CLEANUP entry.
+
+    During the lap (active_player=0 the entire time until the very
+    final CLEANUP -> UNTAP wrap):
+
+    1. PHASE_DRAW entry fires the G14 CR 504.1 auto-draw — p0's
+       library -> hand by 1.
+    2. PHASE_CLEANUP entry fires the G1+G2 hook
+       ``cleanup_step_for_active_player_inline``. p0's hand starts
+       the lap at 7 (default) and grew to 8 from the auto-draw, so
+       CR 514.1 discards 1 card (hand -> graveyard, +1).
+    3. The CLEANUP -> UNTAP wrap on the final advance flips active
+       to p1; p1's zones were untouched throughout.
+
+    Net per-zone delta on p0:
+    - hand:      7 -> 8 (draw) -> 7 (discard)         = 0
+    - library:  50 -> 49 (draw)                       = -1
+    - graveyard: 0 -> 1 (cleanup discard)             = +1
+
+    p1's hand / library / graveyard are unchanged because p1 was
+    never the active player at any DRAW or CLEANUP entry. Battlefield
+    on both sides is untouched — the per-controller untap sweep
+    mutates tapped-flags in place rather than moving objects."""
     p0_hand_before = len(synthetic_state.hand_snapshot(0))
     p0_lib_before = len(synthetic_state.library_snapshot(0))
+    p0_grave_before = len(synthetic_state.graveyard_snapshot(0))
     p1_hand_before = len(synthetic_state.hand_snapshot(1))
     p1_lib_before = len(synthetic_state.library_snapshot(1))
+    p1_grave_before = len(synthetic_state.graveyard_snapshot(1))
     bf_before = len(synthetic_state.battlefield_snapshot())
-    # One full lap (12 advances) visits PHASE_DRAW exactly once with
-    # active_player == 0 (the seed's value). The CLEANUP -> UNTAP
-    # wrap flips active_player to 1 but the DRAW step has already
-    # fired earlier in the lap with p0 active.
+    # One full lap (12 advances). PHASE_DRAW + PHASE_CLEANUP each
+    # fire exactly once with active_player == 0 (the seed's value).
     for _ in range(12):
         synthetic_state.advance_phase()
+    # p0: auto-draw (+1 to hand, -1 to library) followed by cleanup
+    # discard (-1 to hand, +1 to graveyard) — net zero on hand,
+    # -1 on library, +1 on graveyard.
     assert (
-        len(synthetic_state.hand_snapshot(0)) == p0_hand_before + 1
-    ), "active player's hand should grow by 1 (auto-draw at PHASE_DRAW)"
+        len(synthetic_state.hand_snapshot(0)) == p0_hand_before
+    ), "active player's hand should be back to start (auto-draw +1, cleanup discard -1)"
     assert (
         len(synthetic_state.library_snapshot(0)) == p0_lib_before - 1
     ), "active player's library should shrink by 1 (auto-draw at PHASE_DRAW)"
+    assert (
+        len(synthetic_state.graveyard_snapshot(0)) == p0_grave_before + 1
+    ), "active player's graveyard should grow by 1 (cleanup discard at PHASE_CLEANUP)"
     # The off-side (p1) was never the active player during the lap
     # (active flips from 0 -> 1 only at the very END of the lap via
-    # the CLEANUP -> UNTAP wrap, after p1's DRAW step has already
+    # the CLEANUP -> UNTAP wrap, after p1's DRAW + CLEANUP steps have
     # been visited as the OFF-side), so p1's zones are untouched.
     assert len(synthetic_state.hand_snapshot(1)) == p1_hand_before
     assert len(synthetic_state.library_snapshot(1)) == p1_lib_before
+    assert len(synthetic_state.graveyard_snapshot(1)) == p1_grave_before
     # Battlefield untouched on both sides.
     assert len(synthetic_state.battlefield_snapshot()) == bf_before
 
@@ -726,3 +750,150 @@ def test_set_phase_does_not_fire_untap_sweep(synthetic_state):
     synthetic_state.set_phase(PHASE_MAIN1)
     synthetic_state.set_phase(PHASE_UNTAP)
     assert synthetic_state.is_tapped(p0_obj) is True
+
+
+# --- G1 + G2 closure: advance_phase fully composes phase-boundary -----
+# side effects (CR 106.4 mana empty + CR 514.1 hand-size discard +
+# CR 514.2 damage clear). Pinned as additional invariants alongside
+# the inverted G1 / G2 pinning tests in test_mana.py / test_cleanup.py.
+
+
+def test_advance_phase_empties_both_mana_pools_on_every_tick(synthetic_state):
+    """CR 106.4 — "When a phase or step ends, each player's mana pool
+    empties." ``advance_phase`` empties BOTH players' pools on every
+    tick, not just the active player's. Pins the both-sides scope so
+    a future refactor that narrows the hook to just the active side
+    surfaces here."""
+    synthetic_state.add_mana(0, "G", 3)
+    synthetic_state.add_mana(1, "R", 2)
+    assert synthetic_state.get_mana_pool(0)["G"] == 3
+    assert synthetic_state.get_mana_pool(1)["R"] == 2
+    synthetic_state.advance_phase()
+    # Both players' pools emptied — not just the active side.
+    assert synthetic_state.get_mana_pool(0) == {
+        "W": 0, "U": 0, "B": 0, "R": 0, "G": 0, "C": 0,
+    }
+    assert synthetic_state.get_mana_pool(1) == {
+        "W": 0, "U": 0, "B": 0, "R": 0, "G": 0, "C": 0,
+    }
+
+
+def test_advance_phase_empties_mana_pool_across_every_phase_in_lap(
+    synthetic_state,
+):
+    """CR 106.4 fires on every phase boundary, not just at cleanup.
+    Walk a full lap and stage mana before each tick — every tick
+    leaves both pools empty. Pins the "every phase end" scope so a
+    future refactor that scopes the hook to cleanup only surfaces
+    here."""
+    for _ in range(12):
+        synthetic_state.add_mana(0, "G", 1)
+        synthetic_state.add_mana(1, "R", 1)
+        assert synthetic_state.get_mana_pool(0)["G"] == 1
+        assert synthetic_state.get_mana_pool(1)["R"] == 1
+        synthetic_state.advance_phase()
+        assert synthetic_state.get_mana_pool(0)["G"] == 0
+        assert synthetic_state.get_mana_pool(1)["R"] == 0
+
+
+def test_advance_phase_into_cleanup_fires_hand_size_discard(synthetic_state):
+    """CR 514.1 — entering PHASE_CLEANUP triggers the hand-size
+    discard for the active player. Stuff p0's hand past 7, walk
+    straight to CLEANUP via ``set_phase(END_STEP) + advance_phase``,
+    and assert the hand is at 7 and the graveyard absorbed the
+    overflow. Pins the entry-side hook on the CLEANUP transition."""
+    for _ in range(3):
+        synthetic_state.draw_card(0)
+    assert synthetic_state.hand_sizes[0] == 10
+    gy_before = synthetic_state.graveyard_sizes[0]
+    synthetic_state.set_phase(PHASE_END_STEP)
+    synthetic_state.advance_phase()  # END_STEP -> CLEANUP fires hook
+    assert synthetic_state.current_phase() == PHASE_CLEANUP
+    assert synthetic_state.hand_sizes[0] == 7
+    assert synthetic_state.graveyard_sizes[0] == gy_before + 3
+
+
+def test_advance_phase_into_cleanup_fires_damage_clear(synthetic_state):
+    """CR 514.2 — entering PHASE_CLEANUP zeros marked damage on EVERY
+    permanent on every battlefield. Stamp damage on permanents on
+    both sides, advance into CLEANUP, and assert both sides come up
+    clean. Pins the both-battlefields scope of the damage half of
+    the cleanup hook."""
+    p0_obj = _bf_id_for(0)
+    p1_obj = _bf_id_for(1)
+    synthetic_state.deal_damage(p0_obj, 3)
+    synthetic_state.deal_damage(p1_obj, 5)
+    assert synthetic_state.get_damage(p0_obj) == 3
+    assert synthetic_state.get_damage(p1_obj) == 5
+    synthetic_state.set_phase(PHASE_END_STEP)
+    synthetic_state.advance_phase()  # END_STEP -> CLEANUP fires hook
+    assert synthetic_state.current_phase() == PHASE_CLEANUP
+    assert synthetic_state.get_damage(p0_obj) == 0
+    assert synthetic_state.get_damage(p1_obj) == 0
+
+
+def test_advance_phase_cleanup_hook_targets_old_active_player(
+    synthetic_state,
+):
+    """The CR 514.1 hand-size discard fires on the OLD active player
+    — the one whose turn is ending — because the cleanup hook runs
+    on ENTRY to CLEANUP, before the CLEANUP -> UNTAP wrap flips
+    active. Stuff p0's hand to 10 with active=0, walk into CLEANUP,
+    and assert p0 took the discard (not p1)."""
+    for _ in range(3):
+        synthetic_state.draw_card(0)
+    # Also stuff p1 to over-7 to make the assertion observable: if
+    # the hook accidentally targeted the NEW active player (p1),
+    # we'd see p1's hand at 7 and p0's at 10. We want the opposite.
+    for _ in range(3):
+        synthetic_state.draw_card(1)
+    assert synthetic_state.hand_sizes == [10, 10]
+    assert synthetic_state.active_player == 0
+    synthetic_state.set_phase(PHASE_END_STEP)
+    synthetic_state.advance_phase()  # END_STEP -> CLEANUP
+    # p0 (the active player at entry to CLEANUP) took the discard;
+    # p1 (the inactive side) kept their stuffed hand.
+    assert synthetic_state.hand_sizes[0] == 7
+    assert synthetic_state.hand_sizes[1] == 10
+
+
+def test_advance_phase_cleanup_hook_idempotent_when_hand_at_max(
+    synthetic_state,
+):
+    """When the active player's hand is already at exactly 7, the
+    cleanup hook does NOT discard. Pins the at-threshold behavior
+    so a future off-by-one in the inline mirror surfaces here."""
+    assert synthetic_state.hand_sizes[0] == 7
+    gy_before = synthetic_state.graveyard_sizes[0]
+    synthetic_state.set_phase(PHASE_END_STEP)
+    synthetic_state.advance_phase()  # END_STEP -> CLEANUP
+    assert synthetic_state.hand_sizes[0] == 7
+    assert synthetic_state.graveyard_sizes[0] == gy_before
+
+
+def test_clone_advance_phase_into_cleanup_does_not_affect_original(
+    synthetic_state,
+):
+    """CoW canary on the G1+G2 hooks — both the cleanup-step
+    discard / damage-clear and the mana-empty must operate on the
+    clone's zones without bleeding into the original. Stage damage +
+    mana + a stuffed hand on the source, clone, walk the clone into
+    CLEANUP, and verify the original's state survived."""
+    for _ in range(3):
+        synthetic_state.draw_card(0)
+    synthetic_state.add_mana(0, "G", 3)
+    p0_obj = _bf_id_for(0)
+    synthetic_state.deal_damage(p0_obj, 4)
+    cloned = synthetic_state.clone_once()
+    cloned.set_phase(PHASE_END_STEP)
+    cloned.advance_phase()
+    # Clone took the cleanup hook: hand discarded to 7, damage cleared,
+    # mana pool emptied (the latter from the CR 106.4 mana-empty hook
+    # firing on the END_STEP -> CLEANUP transition).
+    assert cloned.hand_sizes[0] == 7
+    assert cloned.get_damage(p0_obj) == 0
+    assert cloned.get_mana_pool(0)["G"] == 0
+    # Original is untouched on every axis.
+    assert synthetic_state.hand_sizes[0] == 10
+    assert synthetic_state.get_damage(p0_obj) == 4
+    assert synthetic_state.get_mana_pool(0)["G"] == 3

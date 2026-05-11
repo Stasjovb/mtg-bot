@@ -471,31 +471,31 @@ def test_add_mana_to_pool_effect_dispatch_updates_pool(synthetic_state):
     assert synthetic_state.get_mana_pool(0)["G"] == 2
 
 
-def test_mana_pool_persists_across_phase_boundary_documented_quirk(
+def test_mana_pool_empties_on_advance_phase(
     synthetic_state,
 ):
-    """**Documented divergence from CR 106.4.** The Rust engine does
-    NOT empty mana pools on phase / step boundaries — neither
-    ``advance_phase`` nor the CLEANUP -> UNTAP wrap calls
-    ``empty_all_mana_pools``. Real MTG empties the pool at the end of
-    every phase and step (CR 106.4); the Rust slice currently exposes
-    ``empty_all_mana_pools`` as a primitive that the phase machinery
-    *will* call, but the wiring has not landed yet. This test pins the
-    observed behavior so a future "empty on phase boundary" slice
-    flips it deliberately rather than silently.
+    """CR 106.4 — "When a phase or step ends, each player's mana pool
+    empties." ``advance_phase`` empties both players' mana pools on
+    EVERY phase exit (i.e. once per call, regardless of which phase
+    you came from). The closed gap means a caller cannot float mana
+    across a phase tick; floating must land within a single phase.
 
-    See module docstring in ``rust/src/state_ops_mana.rs`` and the
-    ``empty_all_mana_pools`` docstring in same file."""
+    Pins the closed gap so a future refactor that detaches
+    ``advance_phase`` from the mana-empty hook surfaces here. The
+    underlying primitive is ``empty_all_mana_pools`` in
+    ``state_ops_mana.rs``; ``advance_phase`` mirrors it inline (see
+    ``empty_all_mana_pools_inline`` in ``state_ops_steps.rs``)."""
     synthetic_state.add_mana(0, "G", 3)
     assert synthetic_state.get_mana_pool(0)["G"] == 3
     synthetic_state.advance_phase()
-    # Quirk: pool survives the phase tick.
-    assert synthetic_state.get_mana_pool(0)["G"] == 3
-    # Even the CLEANUP -> UNTAP wrap (which fires the round-2 untap
-    # sweep + round-14 summoning-sick clear) does NOT touch the pool.
+    # CR 106.4 fired on phase exit — pool is empty.
+    assert synthetic_state.get_mana_pool(0)["G"] == 0
+    # And the wrap path (CLEANUP -> UNTAP) also empties — re-stage
+    # some mana on p1 and exercise the wrap.
+    synthetic_state.add_mana(1, "R", 2)
     synthetic_state.set_phase(11)  # PHASE_CLEANUP
     synthetic_state.advance_phase()
-    assert synthetic_state.get_mana_pool(0)["G"] == 3
+    assert synthetic_state.get_mana_pool(1)["R"] == 0
 
 
 def test_two_add_mana_to_pool_effects_resolve_in_lifo_order(synthetic_state):

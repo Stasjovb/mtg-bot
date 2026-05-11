@@ -176,6 +176,7 @@ the test lands in a commit.
 | rust(effect-destroy-target-artifact): artifact-filter destroy (CR 701.7) | tests_rust/test_resolve.py extend | green  | feature/rust-effect-destroy-target-artifact |
 | rust(effect-destroy-target-land): land-filter destroy (CR 701.7) | tests_rust/test_resolve.py extend | green  | feature/rust-effect-destroy-target-land |
 | rust(gap-g14-advance-phase-auto-draw): CR 504.1 auto-draw on PHASE_DRAW entry with CR 103.7c first-turn skip | tests_rust/test_steps.py extend | green  | feature/rust-gap-g14-advance-phase-auto-draw |
+| rust(gap-g1g2-advance-phase-composition): CR 106.4 mana-empty on every phase exit + CR 514.1/514.2 cleanup-step on PHASE_CLEANUP entry | tests_rust/test_steps.py + test_cleanup.py + test_mana.py extend | green  | feature/rust-gap-g1g2-advance-phase-composition |
 
 ## Build invocation reminder
 
