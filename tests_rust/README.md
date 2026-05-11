@@ -193,6 +193,8 @@ the test lands in a commit.
 
 | rust(effect-return-creature-gy-to-hand): Effect::ReturnCreatureFromYourGraveyardToHand — mirror of the existing graveyard-to-bf arm with destination=ZONE_HAND (3 EoE cards). | tests_rust/test_resolve.py extend | green  | feature/rust-effect-return-creature-graveyard-to-hand |
 
+| rust(effect-plus1-each-creature): Effect::PutPlusOneCounterOnEachCreatureYouControl — anthem-shape per-creature +1/+1 counter add for source's controller (3 EoE cards, Atmospheric Greenhouse). | tests_rust/test_counters.py extend | green  | feature/rust-effect-plus1-each-creature |
+
 ## Build invocation reminder
 
 ```
