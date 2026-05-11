@@ -20,7 +20,8 @@
     min-height: 100vh; padding: 32px 24px;
   }
   .page { max-width: 900px; margin: 0 auto; }
-  header { display: flex; align-items: baseline; gap: 12px; margin-bottom: 28px; }
+  header { display: flex; align-items: baseline; gap: 12px; margin-bottom: 28px;
+    flex-wrap: wrap; }
   h1 { font-size: 1.4rem; font-weight: 700; letter-spacing: -0.02em; }
   #refresh-indicator { margin-left: auto; font-size: 0.75rem; color: var(--muted); }
 
@@ -78,13 +79,20 @@
   .progress-fill.stopped { background: var(--amber); }
   .progress-pct { font-family: monospace; font-size: 0.9rem; min-width: 64px; text-align: right; }
 
-  .stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  /* minmax(0, 1fr) on each track lets stat tiles shrink below their
+     intrinsic content width on narrow viewports — without it, a long
+     value like "[42.1%, 58.7%] -> undecided" forces the column wider
+     than the card and the page horizontally scrolls. Long label text
+     wraps via word-break instead of clipping at the tile edge. */
+  .stats { display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(min(150px, 100%), 1fr));
     gap: 12px; margin-top: 14px; }
   .stat { padding: 10px 12px; background: var(--bg); border: 1px solid var(--border);
-    border-radius: 8px; }
+    border-radius: 8px; min-width: 0; }
   .stat-label { font-size: 0.7rem; color: var(--muted); text-transform: uppercase;
-    letter-spacing: 0.08em; margin-bottom: 4px; }
-  .stat-value { font-size: 0.95rem; font-family: monospace; }
+    letter-spacing: 0.08em; margin-bottom: 4px; word-break: break-word; }
+  .stat-value { font-size: 0.95rem; font-family: monospace;
+    word-break: break-word; overflow-wrap: anywhere; }
 
   .chart-wrap { margin-top: 20px; height: 240px; }
 
@@ -156,25 +164,46 @@
   /* Per-machine sub-cards inside aggregated training-progress cards.
      One row per host with five stats: games, secs/game, crashes,
      timed out, workers. Compact — uses the same dark surface + border
-     the parent stats grid uses, just smaller padding and font. */
+     the parent stats grid uses, just smaller padding and font.
+
+     Layout strategy:
+     - Wide viewports (>640px): one row per host, label + 5 stat
+       columns laid out via CSS grid.
+     - Narrow viewports (<=640px): the same row collapses to a
+       wrapped flex layout — the machine label takes its own line,
+       and the stat cells flow as tile chips that wrap to a second
+       row as needed instead of forcing horizontal page scroll.
+     The machines container also clips overflow defensively so any
+     single absurdly-wide cell can be scrolled rather than pushing
+     the page off-screen. */
   .machines { margin-top: 14px; display: flex;
-    flex-direction: column; gap: 4px; }
+    flex-direction: column; gap: 4px; min-width: 0; }
   .machines-label { font-size: 0.7rem; color: var(--muted);
     text-transform: uppercase; letter-spacing: 0.08em;
     margin-bottom: 2px; }
   .machine-row { display: grid;
-    grid-template-columns: 1fr repeat(5, minmax(80px, auto));
+    grid-template-columns: minmax(0, 1fr) repeat(5, minmax(0, auto));
     align-items: center; gap: 12px;
     padding: 6px 10px; background: var(--bg);
     border: 1px solid var(--border); border-radius: 8px;
-    font-size: 0.78rem; }
+    font-size: 0.78rem; min-width: 0; }
+  /* Wrapper around the 5 per-host stat tiles. `display: contents`
+     dissolves the wrapper from the layout tree, so its 5 children
+     participate as direct grid items in `.machine-row` — preserving
+     the wide-viewport row layout. The narrow-viewport media query
+     overrides this back to `display: flex` so the same wrapper can
+     wrap the tiles to a second line. */
+  .machine-stats-wrap { display: contents; }
   .machine-label { font-family: monospace; color: var(--text);
-    overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    min-width: 0; }
   .machine-stat { display: flex; flex-direction: column; gap: 2px;
-    text-align: right; }
+    text-align: right; min-width: 0; }
   .machine-stat-label { font-size: 0.6rem; color: var(--muted);
-    text-transform: uppercase; letter-spacing: 0.06em; }
-  .machine-stat-value { font-family: monospace; font-size: 0.82rem; }
+    text-transform: uppercase; letter-spacing: 0.06em;
+    white-space: nowrap; }
+  .machine-stat-value { font-family: monospace; font-size: 0.82rem;
+    white-space: nowrap; }
 
   /* Stop-run button + confirmation modal. The button sits on the
      right side of every running card's header; the modal is a single
@@ -215,6 +244,61 @@
   .modal .btn-confirm-stop { background: #4c1d1d; color: #fecaca;
     border: 1px solid #7f1d1d; }
   .modal .btn-confirm-stop:hover { background: #7f1d1d; color: #fff; }
+
+  /* Older-runs table needs to scroll horizontally inside its card
+     rather than blow past the viewport on narrow screens — 8 columns
+     of monospace data don't fit in ~390px no matter how we squeeze. */
+  #older .card { overflow-x: auto; }
+  #older table { min-width: 600px; }
+
+  /* Bench pairings table same treatment — already wrapped in
+     .pairings-wrap which has overflow-x:auto, but pin a min-width so
+     columns don't squish to unreadable on narrow screens. */
+  .pairings { min-width: 560px; }
+
+  /* Narrow-viewport overrides (phones, portrait tablets). The cutoff
+     is sized so an iPhone 12/13 portrait (390px CSS pixels) renders
+     stacked, while a small laptop window stays in the grid layout.
+     Approach: reduce edge gutters, collapse the per-machine row to a
+     wrapped flex layout (label on top, stat chips wrap underneath),
+     and force the stats grid to two columns minimum so labels like
+     "WILSON 95% CI" have room to render without being clipped. */
+  @media (max-width: 640px) {
+    body { padding: 16px 12px; }
+    .card { padding: 16px 14px; }
+    h1 { font-size: 1.2rem; }
+
+    .run-header { gap: 8px; }
+    .run-id { font-size: 0.85rem; word-break: break-all; }
+    .run-meta { font-size: 0.7rem; word-break: break-all; }
+    .stop-btn { margin-left: 0; }
+
+    /* Stat tiles: force a 2-up grid on narrow viewports. minmax(0, 1fr)
+       still applies so individual tiles can shrink. */
+    .stats { grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 8px; }
+    .stat { padding: 8px 10px; }
+    .stat-value { font-size: 0.88rem; }
+
+    /* Per-machine rows: stack the label on its own line, then let
+       stats flow as wrap-friendly tiles. Far more legible than a
+       6-column row crammed into 360px or a horizontal scroll. */
+    .machine-row { display: flex; flex-direction: column;
+      align-items: stretch; gap: 6px; padding: 8px 10px; }
+    .machine-label { white-space: normal; overflow: visible;
+      text-overflow: clip; font-weight: 600; }
+    .machine-stats-wrap { display: flex; flex-wrap: wrap; gap: 8px 14px; }
+    .machine-stat { flex: 0 0 auto; text-align: left;
+      flex-direction: row; align-items: baseline; gap: 6px; }
+
+    /* Replays footer grid — single column on phones so the captured-
+       game tags don't get truncated mid-name. */
+    .replays-footer .replays-list { grid-template-columns: 1fr; }
+
+    .chart-wrap { height: 200px; }
+
+    .modal { padding: 18px 18px; }
+  }
 </style>
 </head>
 <body>
@@ -906,8 +990,14 @@ function renderMachines(el, run) {
       : (m.elapsed_seconds && m.n_games_done
         ? m.elapsed_seconds / m.n_games_done
         : null);
+    // The 5 stat tiles get wrapped in `.machine-stats-wrap` so the
+    // narrow-viewport CSS (`@media max-width: 640px`) can flex-wrap
+    // them as a group below the label without breaking the wide-
+    // viewport CSS-grid layout (where the wrapper is a no-op
+    // `display: contents` member of the row's grid).
     html += '<div class="machine-row">'
       + '<div class="machine-label">' + esc(m.label || '?') + '</div>'
+      + '<div class="machine-stats-wrap">'
       + '<div class="machine-stat">'
         + '<div class="machine-stat-label">games</div>'
         + '<div class="machine-stat-value">'
@@ -932,6 +1022,7 @@ function renderMachines(el, run) {
         + '<div class="machine-stat-label">workers</div>'
         + '<div class="machine-stat-value">'
         + String(m.n_workers || 0) + '</div>'
+      + '</div>'
       + '</div>'
       + '</div>';
   }
