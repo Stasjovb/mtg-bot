@@ -909,7 +909,6 @@ def run_shard_local(
         save_dataset,
     )
     from mtg_bot.training.data_gen import ReplayCaptureConfig
-    from mtg_bot.training.trainer import auto_device
 
     cfg = NNPimcConfig(
         weights_path=spec.weights_path,
@@ -928,8 +927,11 @@ def run_shard_local(
         # Mac picks "mps", Win10 picks "cuda" (or "cpu" if no GPU).
         # Tests construct NNPimcConfig() directly without ``device=``
         # and stay on the CPU default — production goes through this
-        # spec-decoding path which always opts in.
-        device=auto_device(),
+        # spec-decoding path which always opts in. ``"auto"`` defers
+        # the auto_device() call into the worker (NNPimcConfig.build);
+        # a parent-side resolution would prime CUDA here and break
+        # Linux fork() in the mp.Pool below.
+        device="auto",
     )
 
     deck_pool = None
@@ -2392,7 +2394,17 @@ def _machine_metadata() -> dict[str, Any]:
     try:  # noqa: SIM105
         import torch  # type: ignore
         info["torch_version"] = torch.__version__
-        info["cuda_available"] = bool(torch.cuda.is_available())
+        # ``is_built()`` checks the static "torch was compiled with CUDA"
+        # build flag — does NOT probe the runtime device list, so it does
+        # NOT prime the parent's CUDA context. ``torch.cuda.is_available()``
+        # would also work, but it primes CUDA at the C level (sets the bad-
+        # fork flag), and this metadata is captured on the parent thread
+        # of run_shard_pull / run_shard_eval_pull *before* mp.Pool fork()
+        # — on Linux that crashes every worker with "Cannot re-initialize
+        # CUDA in forked subprocess". The lossier diagnostic (build flag
+        # vs runtime probe) is acceptable since workers re-resolve via
+        # auto_device() at NN-build time anyway.
+        info["cuda_available"] = bool(torch.backends.cuda.is_built())
     except Exception:  # noqa: BLE001
         pass
     return info
@@ -2512,13 +2524,16 @@ def run_shard_pull(
         _winner_to_p0_outcome,
     )
     from mtg_bot.training.progress import DataGenProgress
-    from mtg_bot.training.trainer import auto_device
 
     cfg = NNPimcConfig(
         weights_path=spec.weights_path,
         samples=spec.samples,
         inner_nodes=spec.inner_nodes,
-        device=auto_device(),
+        # ``"auto"`` defers the auto_device() call into NNPimcConfig.build,
+        # which runs in the mp.Pool worker. Calling auto_device() here
+        # in run_shard_pull's parent thread would prime CUDA and break
+        # Linux fork() in the worker pool below.
+        device="auto",
         batch_size=32,
         with_policy=spec.with_policy,
         puct=True,
@@ -2974,9 +2989,11 @@ def run_shard_eval_pull(
     from mtg_bot.training.config import HeuristicConfig, PimcConfig
     from mtg_bot.training.data_gen import ReplayCaptureConfig
     from mtg_bot.training.progress import EvalProgress
-    from mtg_bot.training.trainer import auto_device
 
-    _device = auto_device()
+    # ``"auto"`` defers auto_device() resolution into NNPimcConfig.build,
+    # which runs in the mp.Pool worker. Calling auto_device() here in
+    # run_shard_eval_pull's parent thread would prime CUDA and break
+    # Linux fork() in the worker pool below.
     new_cfg = NNPimcConfig(
         weights_path=spec.new_weights_path,
         samples=spec.samples, inner_nodes=spec.inner_nodes,
@@ -2987,7 +3004,7 @@ def run_shard_eval_pull(
         action_encoding_version=spec.new_action_encoding_version,
         use_ismcts=spec.use_ismcts,
         use_belief_weighted=spec.use_belief_weighted,
-        device=_device,
+        device="auto",
     )
     if spec.old_weights_path is not None:
         old_cfg = NNPimcConfig(
@@ -3000,7 +3017,7 @@ def run_shard_eval_pull(
             action_encoding_version=spec.old_action_encoding_version,
             use_ismcts=spec.use_ismcts,
             use_belief_weighted=spec.use_belief_weighted,
-            device=_device,
+            device="auto",
         )
         p1_factory = old_cfg.build
     else:

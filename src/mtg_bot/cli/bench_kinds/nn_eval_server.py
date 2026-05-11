@@ -146,10 +146,66 @@ def _server_worker(args: tuple) -> tuple[float, list[float]]:
     return elapsed, latencies
 
 
+# Globals populated via the fork-Pool initializer for --mode shm.
+# Workers inherit the handle (shared tensors + mp.Event refs) via fork.
+_SHM_HANDLE = None
+
+
+def _shm_init_worker(handle):
+    """fork-Pool initializer for --mode shm. Sets the per-worker
+    SharedTensorServerHandle in module globals so _shm_worker can
+    pull it without round-tripping through args (which would pickle
+    the handle and break the fork-inheritance contract)."""
+    import torch
+    torch.set_num_threads(1)
+    global _SHM_HANDLE
+    _SHM_HANDLE = handle
+
+
+def _shm_worker(args: tuple) -> tuple[float, list[float]]:
+    """Worker for --mode shm. Uses the fork-inherited shared-memory
+    handle to ship requests with sub-100us per-trip overhead."""
+    requests_per, with_policy, seed = args
+    from mtg_bot.features import FEATURE_DIM
+    from mtg_bot.search.shm_nn_eval_server import SharedTensorNNEvalClient
+    rng = np.random.default_rng(seed)
+    client = SharedTensorNNEvalClient(_SHM_HANDLE)
+    feats = rng.standard_normal(
+        (requests_per, FEATURE_DIM),
+    ).astype(np.float32)
+    latencies: list[float] = []
+    started = time.perf_counter()
+    if with_policy:
+        from mtg_bot.training.action_encoding import ACTION_VOCAB_SIZE
+        masks = rng.integers(
+            0, 2, size=(requests_per, ACTION_VOCAB_SIZE),
+        ).astype(bool)
+        masks[:, 0] = True
+        for i in range(requests_per):
+            t0 = time.perf_counter()
+            _ = client._call_value_policy(feats[i], masks[i])
+            latencies.append(time.perf_counter() - t0)
+    else:
+        for i in range(requests_per):
+            t0 = time.perf_counter()
+            _ = client._call_value(feats[i])
+            latencies.append(time.perf_counter() - t0)
+    elapsed = time.perf_counter() - started
+    return elapsed, latencies
+
+
 def main(argv=None) -> None:  # pragma: no cover
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
-        "--mode", choices=["local", "server"], required=True,
+        "--mode", choices=["local", "server", "shm"], required=True,
+        help=(
+            "local: each worker holds its own NNEvaluator. server: "
+            "centralized NNEvalServer over TCP/UDS (mp.connection). "
+            "shm: SharedTensorNNEvalServer with fork-inherited "
+            "shared-memory tensors (Linux-only; the Lever 2 path). "
+            "Use 'shm' for the production master after the WSL2 "
+            "migration."
+        ),
     )
     parser.add_argument("--workers", type=int, default=24)
     parser.add_argument("--requests-per", type=int, default=200)
@@ -167,10 +223,49 @@ def main(argv=None) -> None:  # pragma: no cover
         help="cpu or cuda. Default: auto.",
     )
     parser.add_argument(
+        "--server-address", default=None,
+        help=(
+            "Server bind address. Default: ('127.0.0.1', 0) (TCP loopback). "
+            "Pass a filesystem path (e.g. /tmp/mtgbot_nn_eval.sock) to use "
+            "a Unix domain socket on Linux — much lower IPC latency than "
+            "TCP loopback (~50us vs ~2ms p50 with batch_wait=0.5ms). "
+            "Ignored on Windows where multiprocessing.Listener interprets "
+            "a string as an AF_PIPE name instead. To pin a TCP port, "
+            "pass host:port (e.g. 127.0.0.1:39620)."
+        ),
+    )
+    parser.add_argument(
+        "--shm-n-slots", type=int, default=64,
+        help=(
+            "For --mode shm: size of the shared-memory request slot pool. "
+            "Caps in-flight requests at this value; workers block on slot "
+            "acquisition when N concurrent requests >= n_slots. "
+            "Default 64. Should be >= number of workers."
+        ),
+    )
+    parser.add_argument(
         "--out", type=Path, default=None,
         help="If given, append a JSON line summary to this file.",
     )
     args = parser.parse_args(argv)
+
+    server_address: Any
+    if args.server_address is None:
+        server_address = ("127.0.0.1", 0)
+    elif ":" in args.server_address and not args.server_address.startswith("/"):
+        host, _, port = args.server_address.rpartition(":")
+        server_address = (host, int(port))
+    else:
+        # Filesystem path → AF_UNIX on Linux, AF_PIPE on Windows. Clean
+        # up any stale socket from a previous crashed bench so the
+        # Listener can bind.
+        import os
+        if os.path.exists(args.server_address):
+            try:
+                os.unlink(args.server_address)
+            except OSError:
+                pass
+        server_address = args.server_address
 
     requests_total = args.workers * args.requests_per
     print(
@@ -181,6 +276,7 @@ def main(argv=None) -> None:  # pragma: no cover
     )
 
     proxy = None
+    shm_server = None
     if args.mode == "server":
         import torch
         from mtg_bot.search.nn_eval_server import (
@@ -195,6 +291,7 @@ def main(argv=None) -> None:  # pragma: no cover
             with_policy=args.with_policy,
             batch_size=args.server_batch_size,
             batch_wait_ms=args.server_batch_wait_ms,
+            address=server_address,
         )
         h = proxy.handle()
         print(
@@ -213,6 +310,30 @@ def main(argv=None) -> None:  # pragma: no cover
             for i in range(args.workers)
         ]
         worker_fn = _server_worker
+    elif args.mode == "shm":
+        from mtg_bot.search.shm_nn_eval_server import (
+            SharedTensorNNEvalServer,
+        )
+        shm_server = SharedTensorNNEvalServer(
+            weights_path=args.weights,
+            device=args.server_device,
+            with_policy=args.with_policy,
+            batch_size=args.server_batch_size,
+            batch_wait_ms=args.server_batch_wait_ms,
+            n_slots=args.shm_n_slots,
+        )
+        shm_server.start()
+        print(
+            f"# shm server: device={shm_server._device} "
+            f"batch_size={args.server_batch_size} "
+            f"batch_wait_ms={args.server_batch_wait_ms} "
+            f"n_slots={args.shm_n_slots}"
+        )
+        per_args = [
+            (args.requests_per, args.with_policy, 1000 + i)
+            for i in range(args.workers)
+        ]
+        worker_fn = _shm_worker
     else:
         per_args = [
             (
@@ -227,12 +348,26 @@ def main(argv=None) -> None:  # pragma: no cover
 
     started = time.perf_counter()
     try:
-        ctx = mp.get_context("spawn")
-        with ctx.Pool(args.workers) as pool:
-            results = pool.map(worker_fn, per_args)
+        if args.mode == "shm":
+            # shm REQUIRES fork — workers inherit shared-tensor storage
+            # and mp.Event file descriptors. spawn would re-pickle the
+            # handle and break the inheritance contract.
+            ctx = mp.get_context("fork")
+            with ctx.Pool(
+                args.workers,
+                initializer=_shm_init_worker,
+                initargs=(shm_server.handle(),),
+            ) as pool:
+                results = pool.map(worker_fn, per_args)
+        else:
+            ctx = mp.get_context("spawn")
+            with ctx.Pool(args.workers) as pool:
+                results = pool.map(worker_fn, per_args)
     finally:
         if proxy is not None:
             proxy.stop(timeout=10.0)
+        if shm_server is not None:
+            shm_server.stop(timeout=10.0)
     wall = time.perf_counter() - started
 
     per_worker_walls = [r[0] for r in results]

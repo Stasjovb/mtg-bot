@@ -199,7 +199,7 @@ class NNEvalServer:
         self,
         weights_path: Optional[Path] = None,
         *,
-        device: str = "cuda" if torch.cuda.is_available() else "cpu",
+        device: Optional[str] = None,
         with_policy: bool = False,
         batch_size: int = 32,
         batch_wait_ms: float = 5.0,
@@ -208,6 +208,14 @@ class NNEvalServer:
         model_factory: Optional[Any] = None,
         logger: Optional[logging.Logger] = None,
     ) -> None:
+        # ``device=None`` means "pick best at construction time". Resolved
+        # inside ``__init__`` (not as a function-default expression) so
+        # ``torch.cuda.is_available()`` doesn't fire at module-import time
+        # — that import-time probe primes CUDA in the parent and breaks
+        # any downstream Linux fork() in mp.Pool workers with "Cannot
+        # re-initialize CUDA in forked subprocess".
+        if device is None:
+            device = "cuda" if torch.cuda.is_available() else "cpu"
         self._device = torch.device(device)
         self._with_policy = with_policy
         self._batch_size = max(1, int(batch_size))
@@ -991,7 +999,7 @@ def _server_subprocess_main(
 def launch_server_subprocess(
     weights_path: Optional[Path] = None,
     *,
-    device: str = "cuda" if torch.cuda.is_available() else "cpu",
+    device: Optional[str] = None,
     with_policy: bool = False,
     batch_size: int = 32,
     batch_wait_ms: float = 5.0,
