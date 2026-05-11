@@ -7950,3 +7950,143 @@ def test_resolve_deal_damage_eq_source_power_clone_isolation(synthetic_state):
     )
     assert clone_bear["damage"] == 3
     assert src_bear["damage"] == 0
+
+
+# -------------------- Round-28 ConditionalOnTappedCreatures (6 cards) --------------------
+
+
+def _flight_deck_dict(min_count: int = 2):
+    """Flight-Deck-Coordinator-shape intervening-if: 'if you control
+    two or more tapped creatures, draw a card'."""
+    return {
+        "name": "Synthetic Flight Deck",
+        "card_types": ["Instant"],
+        "mana_cost": {"generic": 1},
+        "effects": [
+            {
+                "kind": "conditional_on_tapped_creatures",
+                "min_count": min_count,
+                "effect": {"kind": "draw_cards", "count": 1},
+            }
+        ],
+    }
+
+
+def test_register_conditional_on_tapped_creatures_required_effect(engine):
+    import pytest
+    reg = engine.Registry()
+    with pytest.raises(ValueError, match="missing required 'effect'"):
+        reg.register_printing(
+            {
+                "name": "Bad Conditional",
+                "card_types": ["Instant"],
+                "effects": [{"kind": "conditional_on_tapped_creatures"}],
+            }
+        )
+
+
+def test_register_conditional_default_min_count(engine):
+    """Default min_count = 2 (mirrors Python)."""
+    reg = engine.Registry()
+    pid = reg.register_printing(_flight_deck_dict())
+    del reg
+    # re-build to round-trip via dict
+    eff = engine.Registry()
+    pid2 = eff.register_printing(_flight_deck_dict())
+    out = eff.get_printing_effects(pid2)[0]
+    assert out["kind"] == "conditional_on_tapped_creatures"
+    assert out["min_count"] == 2
+    assert out["effect"]["kind"] == "draw_cards"
+
+
+def test_register_conditional_nested_round_trip(engine):
+    """The nested effect dict round-trips."""
+    reg = engine.Registry()
+    pid = reg.register_printing(
+        {
+            "name": "Test",
+            "card_types": ["Instant"],
+            "effects": [
+                {
+                    "kind": "conditional_on_tapped_creatures",
+                    "min_count": 3,
+                    "effect": {"kind": "gain_life", "amount": 5},
+                }
+            ],
+        }
+    )
+    eff = reg.get_printing_effects(pid)[0]
+    assert eff["min_count"] == 3
+    assert eff["effect"]["kind"] == "gain_life"
+    assert eff["effect"]["amount"] == 5
+
+
+def test_resolve_conditional_fires_when_enough_tapped(synthetic_state):
+    """Tap 2 of p0's creatures; cast the spell; draw fires."""
+    snap = synthetic_state.battlefield_snapshot()
+    p0_creatures = [
+        d["id"] for d in snap
+        if d["controller_id"] == 0 and d["printing_name"] == "Grizzly Bears"
+    ][:2]
+    for cid in p0_creatures:
+        synthetic_state.tap_object(cid)
+
+    spell_id = synthetic_state.register_and_inject_object(
+        _flight_deck_dict(min_count=2), 0, ZONE_HAND
+    )
+    p0_lib_before = synthetic_state.library_sizes[0]
+    synthetic_state.push_to_stack(spell_id, 0)
+    synthetic_state.resolve_top_of_stack()
+
+    # Draw fired: library shrank by 1.
+    assert synthetic_state.library_sizes[0] == p0_lib_before - 1
+
+
+def test_resolve_conditional_skips_when_not_enough_tapped(synthetic_state):
+    """Only 1 tapped creature, but min_count=2 → skip draw."""
+    snap = synthetic_state.battlefield_snapshot()
+    p0_first_bear = next(
+        d["id"] for d in snap
+        if d["controller_id"] == 0 and d["printing_name"] == "Grizzly Bears"
+    )
+    synthetic_state.tap_object(p0_first_bear)
+    spell_id = synthetic_state.register_and_inject_object(
+        _flight_deck_dict(min_count=2), 0, ZONE_HAND
+    )
+    p0_lib_before = synthetic_state.library_sizes[0]
+    synthetic_state.push_to_stack(spell_id, 0)
+    synthetic_state.resolve_top_of_stack()
+    # No draw fired.
+    assert synthetic_state.library_sizes[0] == p0_lib_before
+
+
+def test_resolve_conditional_zero_min_count_always_fires(synthetic_state):
+    """min_count=0 means always fires (degenerate but legal)."""
+    spell_id = synthetic_state.register_and_inject_object(
+        _flight_deck_dict(min_count=0), 0, ZONE_HAND
+    )
+    p0_lib_before = synthetic_state.library_sizes[0]
+    synthetic_state.push_to_stack(spell_id, 0)
+    synthetic_state.resolve_top_of_stack()
+    assert synthetic_state.library_sizes[0] == p0_lib_before - 1
+
+
+def test_resolve_conditional_tapped_filter_skips_non_creatures(synthetic_state):
+    """Tapped non-creatures (e.g. tapped Forests) don't count toward
+    min_count. Tap 2 Forests + 0 Bears → no fire."""
+    snap = synthetic_state.battlefield_snapshot()
+    p0_forests = [
+        d["id"] for d in snap
+        if d["controller_id"] == 0 and d["printing_name"] == "Forest"
+    ][:2]
+    for fid in p0_forests:
+        synthetic_state.tap_object(fid)
+    spell_id = synthetic_state.register_and_inject_object(
+        _flight_deck_dict(min_count=2), 0, ZONE_HAND
+    )
+    p0_lib_before = synthetic_state.library_sizes[0]
+    synthetic_state.push_to_stack(spell_id, 0)
+    synthetic_state.resolve_top_of_stack()
+    # No draw — Forests are non-creature so they didn't satisfy the
+    # tapped-creature predicate.
+    assert synthetic_state.library_sizes[0] == p0_lib_before
