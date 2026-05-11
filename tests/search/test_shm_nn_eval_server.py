@@ -21,6 +21,7 @@ import sys
 import threading
 import time
 from pathlib import Path
+from typing import Any
 
 import numpy as np
 import pytest
@@ -262,3 +263,135 @@ def test_evaluate_with_policy_rejected_when_with_policy_false(
             client.evaluate_with_policy(adapter, player_id=0)
         with pytest.raises(RuntimeError, match="policy-head"):
             client.batch_evaluate_with_policy([adapter], player_id=0)
+
+
+# ---------- shutdown / liveness --------------------------------------------
+#
+# Regression coverage for the eval-shard cleanup deadlock observed in
+# the field 2026-05-10: workers stuck mid-``evaluate_with_policy`` in
+# ``Event.wait()`` once the server exits — atexit then deadlocks the
+# whole process tree joining workers that can never return. The fix
+# is a cross-process ``server_stopped`` mp.Event surfaced on the
+# handle; ``stop()`` sets it and signals every per-slot response
+# event so any in-flight ``_call_value*`` call wakes and raises.
+
+
+def test_handle_surfaces_server_stopped_event(server_factory):
+    server, _, _ = server_factory(batch_size=1, batch_wait_ms=0.0)
+    handle = server.handle()
+    assert hasattr(handle, "server_stopped")
+    assert not handle.server_stopped.is_set()
+
+
+def test_stop_sets_server_stopped(server_factory):
+    server, _, _ = server_factory(batch_size=1, batch_wait_ms=0.0)
+    server.start()
+    handle = server.handle()
+    assert not handle.server_stopped.is_set()
+    server.stop(timeout=2.0)
+    assert handle.server_stopped.is_set()
+
+
+def test_start_after_stop_clears_server_stopped(server_factory):
+    """A server that is stopped and restarted should serve calls
+    again — ``start()`` clears the shutdown signal so workers holding
+    the fork-inherited handle observe the reset."""
+    server, _, _ = server_factory(batch_size=1, batch_wait_ms=0.0)
+    server.start()
+    server.stop(timeout=2.0)
+    handle = server.handle()
+    assert handle.server_stopped.is_set()
+    server.start()
+    assert not handle.server_stopped.is_set()
+    server.stop(timeout=2.0)
+
+
+def test_client_raises_when_server_stops_mid_call(server_factory):
+    """A client blocked in ``_call_value`` waiting for a response that
+    will never come (the dispatcher is parked on a slow batch window
+    and we ``stop()`` before the timeout) must wake and raise
+    promptly. Without the fix, this hangs forever — the deadlock
+    that bit production eval cleanup."""
+    server, _, _ = server_factory(
+        batch_size=8,           # never fills with a single request
+        batch_wait_ms=10000.0,  # 10s batch window — far longer than test
+        n_slots=4,
+    )
+    server.start()
+    client = SharedTensorNNEvalClient(server.handle())
+
+    result: list[Any] = []
+
+    def _call() -> None:
+        try:
+            client._call_value(np.zeros(FEATURE_DIM, dtype=np.float32))
+            result.append(("ok",))
+        except RuntimeError as e:
+            result.append(("err", str(e)))
+
+    t = threading.Thread(target=_call, daemon=True)
+    t.start()
+    time.sleep(0.2)  # let the worker land in wait()
+
+    t_stop_start = time.monotonic()
+    server.stop(timeout=5.0)
+    stop_wall_s = time.monotonic() - t_stop_start
+
+    t.join(timeout=2.0)
+    assert not t.is_alive(), (
+        "client thread still alive 2.0s after server.stop() — the "
+        "shutdown deadlock is back"
+    )
+    assert stop_wall_s < 3.0, (
+        f"server.stop() took {stop_wall_s:.2f}s — should return promptly"
+    )
+    assert len(result) == 1 and result[0][0] == "err", (
+        f"client did not raise; got {result!r}"
+    )
+    assert "stopped" in result[0][1].lower()
+
+
+def test_stop_wakes_all_in_flight_workers(server_factory):
+    """Multiple worker threads blocked in ``_call_value`` must all
+    wake and raise when the server is stopped — not just the one
+    holding a particular slot."""
+    server, _, _ = server_factory(
+        batch_size=16,          # never fills with N < 16 threads
+        batch_wait_ms=10000.0,  # 10s — far longer than test
+        n_slots=8,
+    )
+    server.start()
+    n_threads = 6  # less than n_slots so each can acquire a slot
+
+    errors: list[str] = []
+    errors_lock = threading.Lock()
+
+    def _call() -> None:
+        client = SharedTensorNNEvalClient(server.handle())
+        try:
+            client._call_value(np.zeros(FEATURE_DIM, dtype=np.float32))
+        except RuntimeError as e:
+            with errors_lock:
+                errors.append(str(e))
+
+    threads = [
+        threading.Thread(target=_call, daemon=True)
+        for _ in range(n_threads)
+    ]
+    for t in threads:
+        t.start()
+    time.sleep(0.3)  # let all threads land in wait()
+
+    server.stop(timeout=5.0)
+
+    for t in threads:
+        t.join(timeout=2.0)
+    alive = [i for i, t in enumerate(threads) if t.is_alive()]
+    assert not alive, (
+        f"threads {alive} still alive after stop() — shutdown broadcast "
+        f"missed some workers"
+    )
+    assert len(errors) == n_threads, (
+        f"expected {n_threads} errors, got {len(errors)}: {errors!r}"
+    )
+    assert all("stopped" in e.lower() for e in errors)
