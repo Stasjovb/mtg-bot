@@ -98,6 +98,22 @@ pub struct Player {
     /// `turn.draw_card`, where the loss is visible to the very next
     /// `losers()` read). Round-26 G10 closure.
     pub attempted_draw_on_empty: bool,
+    /// Per-player count of `mulligan` / `mulligan_to_n` calls taken on
+    /// this state. Incremented at the START of each call; if it
+    /// exceeds the practical London-mulligan cap (7 — mirrors Python
+    /// `simulate.setup_game(max_mulligans=7)`), the call raises
+    /// instead of performing the shuffle. Round-26 G23 closure.
+    /// Per CR 103.4 the 8th mulligan would draw a hand of -1 cards,
+    /// which is nonsensical; Python guards it by capping the loop at
+    /// 7 mulligans before forcing keep. The Rust primitive raises so
+    /// callers can't silently exceed the cap.
+    ///
+    /// NOT serialized into the fingerprint — this is a per-call
+    /// safety counter, not part of the gameplay-relevant state digest.
+    /// Same `(state, seed)` pre- and post-mulligan must produce the
+    /// same fingerprint regardless of how many mulligans were taken
+    /// to get there.
+    pub mulligan_count: u32,
 }
 
 /// One pending entry on the stack. First-slice shape: just an obj_id
@@ -274,6 +290,7 @@ fn make_player(
         exile: Arc::new(Vec::new()),
         has_lost: false,
         attempted_draw_on_empty: false,
+        mulligan_count: 0,
     }
 }
 
