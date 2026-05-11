@@ -39,6 +39,7 @@ import sys
 import time
 import traceback
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any, Callable, Optional
 
 from mtg_bot.agents import RandomAgent
@@ -390,12 +391,26 @@ def _play_one_match_game_packed(
         winner, decisions = _play_one_match_game(*args)
         return winner, decisions, "completed"
     except TimeoutError as exc:
+        # Preserve the partial decisions count that the inner
+        # ``_play_one_match_game`` attached to the exception before
+        # raising. Pre-instrumentation this slot was a hardcoded 0,
+        # which made it impossible to tell from the event log alone
+        # whether a timed-out game wedged in its first decision
+        # (count ~ 0) or just barely missed the wall budget on a
+        # legitimately long game (count in the hundreds). Falling
+        # back to 0 when the attribute is missing keeps backward
+        # compat with any TimeoutError raised before the inner
+        # function got to the attach step (e.g. shutdown races).
+        partial_decisions = int(
+            getattr(exc, "decisions_completed", 0) or 0,
+        )
         print(
             f"[worker] eval game {game_idx} timed out "
-            f"({exc}); dropping this game, pool continues.",
+            f"({exc}) at decisions={partial_decisions}; "
+            f"dropping this game, pool continues.",
             file=sys.stderr,
         )
-        return None, 0, "timed_out"
+        return None, partial_decisions, "timed_out"
     except Exception as exc:  # noqa: BLE001 - intentional broad catch
         print(
             f"[worker] eval game {game_idx} crashed "
@@ -418,8 +433,11 @@ def _play_one_match_game_indexed(
 
     Same worker-crash / timeout handling as the packed variant:
     engine-level exceptions become ``(None, 0, "crashed")`` and
-    per-game timeouts become ``(None, 0, "timed_out")``; the driver
-    keys off the trailing string to bucket the result.
+    per-game timeouts become ``(None, partial_decisions, "timed_out")``
+    — the decisions slot carries however many decisions the inner
+    game completed before the timeout fired (zero if the game wedged
+    in its first decision); the driver keys off the trailing string
+    to bucket the result.
     """
     game_idx = args[0]
     return game_idx, _play_one_match_game_packed(args)
@@ -478,6 +496,7 @@ def _play_one_match_game(
     replay_config: Optional[ReplayCaptureConfig] = None,
     hang_dump_dir: Optional[str] = None,
     heuristics: Optional[HeuristicsConfig] = None,
+    heartbeat_path: Optional[str] = None,
 ) -> tuple[Optional[PlayerID], int]:
     """Play one game and return ``(winner_or_None, decisions)``.
     Used by both the sequential and parallel match drivers — same
@@ -551,7 +570,14 @@ def _play_one_match_game(
     if per_game_timeout_sec is not None and per_game_timeout_sec > 0:
         from mtg_bot.training._hang_progress import HangProgress
         from mtg_bot.training._timeout import run_with_timeout
-        progress = HangProgress()
+        # Wire the heartbeat side-channel through ``HangProgress`` when
+        # the controller asks for it. Disabled by default — existing
+        # callers (eval CLI without --use-shm-server progress dir, unit
+        # tests) get identical behavior to before.
+        progress = HangProgress(
+            heartbeat_path=Path(heartbeat_path)
+            if heartbeat_path is not None else None,
+        )
         try:
             winner, decisions = run_with_timeout(
                 _play_capped_game,
@@ -583,6 +609,16 @@ def _play_one_match_game(
                         "progress": progress.snapshot(),
                     },
                 )
+            # Force a final heartbeat so the on-disk record reflects
+            # the count at the moment the timeout fired.
+            progress.emit_final_heartbeat(reason="timed_out")
+            # Attach the partial decisions count to the exception so the
+            # outer ``_play_one_match_game_packed`` wrapper can preserve
+            # it in the (None, decisions, "timed_out") sentinel instead
+            # of losing it to a hardcoded 0. Without this attribute the
+            # exception still raises with the original message — the
+            # wrapper falls back to 0 on AttributeError.
+            exc.decisions_completed = progress.decisions_completed  # type: ignore[attr-defined]
             raise
     else:
         winner, decisions = _play_capped_game(

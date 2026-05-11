@@ -39,8 +39,11 @@ than block the worker on a lock.
 
 from __future__ import annotations
 
+import json as _json
 import time
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
+from pathlib import Path
 from typing import Optional
 
 
@@ -52,6 +55,17 @@ class HangProgress:
     Fields are deliberately small + shallow-copy-safe — we want the
     snapshot serializable into the hang-dump JSON without any active-
     record gymnastics.
+
+    Heartbeat emission (decisions-zero diagnosis 2026-05-10): when
+    ``heartbeat_path`` is set, ``record`` appends a one-line JSON
+    heartbeat to that file every ``heartbeat_every_n_decisions``
+    decisions **AND** at least ``heartbeat_min_seconds`` after the last
+    heartbeat (sparser-of-the-two semantics). This gives the parent
+    controller a way to see how far an in-flight game progressed before
+    a per-game timeout fired — answering "did the game wedge in its
+    first decision, or grind through hundreds of decisions and just
+    blow the wall budget?". Disabled by default (``heartbeat_path=None``)
+    so existing callers pay nothing.
     """
 
     started_at: float = field(default_factory=time.perf_counter)
@@ -60,6 +74,17 @@ class HangProgress:
     last_decision_repr: str = ""
     last_update_at: float = field(default_factory=time.perf_counter)
     last_n_legal: int = 0
+
+    # Heartbeat config — opt-in via ``heartbeat_path``. Bookkeeping
+    # fields track the last emitted heartbeat so the throttle is
+    # decision-AND-time-gated.
+    heartbeat_path: Optional[Path] = None
+    heartbeat_every_n_decisions: int = 50
+    heartbeat_min_seconds: float = 5.0
+    _last_heartbeat_decisions: int = field(default=0, init=False, repr=False)
+    _last_heartbeat_at: float = field(
+        default_factory=time.perf_counter, init=False, repr=False,
+    )
 
     def record(
         self,
@@ -83,7 +108,57 @@ class HangProgress:
             r = "<unrepr-able>"
         self.last_decision_repr = r[:160]
         self.last_n_legal = n_legal
-        self.last_update_at = time.perf_counter()
+        now = time.perf_counter()
+        self.last_update_at = now
+        # Heartbeat throttle: only emit when BOTH "N decisions since
+        # last emit" AND "K seconds since last emit" have elapsed.
+        # User spec called for "the sparser of N=50 / K=5s" — sparser
+        # rate ⇔ longer interval ⇔ AND of the two thresholds.
+        if self.heartbeat_path is not None:
+            decisions_since = (
+                self.decisions_completed - self._last_heartbeat_decisions
+            )
+            seconds_since = now - self._last_heartbeat_at
+            if (
+                decisions_since >= self.heartbeat_every_n_decisions
+                and seconds_since >= self.heartbeat_min_seconds
+            ):
+                self._emit_heartbeat(now, reason="periodic")
+                self._last_heartbeat_decisions = self.decisions_completed
+                self._last_heartbeat_at = now
+
+    def emit_final_heartbeat(self, reason: str) -> None:
+        """Force a heartbeat write irrespective of throttle gates.
+        Called by the timeout / hang-dump path so the on-disk record
+        always reflects the *final* decision count when a game ends.
+        No-op when ``heartbeat_path`` is unset."""
+        if self.heartbeat_path is None:
+            return
+        self._emit_heartbeat(time.perf_counter(), reason=reason)
+
+    def _emit_heartbeat(self, now: float, reason: str) -> None:
+        """Write one JSONL line to ``heartbeat_path``. Best-effort —
+        any I/O exception is swallowed (a diagnostic side-channel must
+        never break the game loop). The line schema mirrors the main
+        EventLog so the controller can splice these straight in."""
+        assert self.heartbeat_path is not None
+        payload = {
+            "ts": datetime.now(timezone.utc).isoformat(),
+            "event": "game_heartbeat",
+            "reason": reason,
+            "decisions_completed": self.decisions_completed,
+            "last_active_player": self.last_active_player,
+            "last_decision_repr": self.last_decision_repr,
+            "last_n_legal": self.last_n_legal,
+            "seconds_since_started": round(now - self.started_at, 3),
+        }
+        try:
+            self.heartbeat_path.parent.mkdir(parents=True, exist_ok=True)
+            with self.heartbeat_path.open("a", encoding="utf-8") as f:
+                f.write(_json.dumps(payload, default=str) + "\n")
+        except OSError:
+            # Diagnostic side-channel — never propagate I/O errors.
+            pass
 
     def snapshot(self) -> dict:
         """Read-side: produce a JSON-serializable summary for the

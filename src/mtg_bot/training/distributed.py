@@ -2402,6 +2402,57 @@ class EventLog:
             f.write(line + "\n")
 
 
+def _drain_game_heartbeats(
+    heartbeats_dir: Path,
+    game_idx: int,
+    events: "EventLog",
+) -> None:
+    """Read a worker's per-game heartbeat JSONL file (written from
+    inside ``_play_capped_game`` via ``HangProgress``) and splice each
+    line into the controller's main EventLog, tagged with
+    ``game_idx``. Deletes the file afterward so the heartbeats dir
+    doesn't accumulate stale files across runs.
+
+    Best-effort: missing file = no-op (game ran too fast / wedged
+    before the first heartbeat was due, OR the worker didn't have
+    heartbeats wired in). Malformed lines are skipped silently — a
+    diagnostic side-channel must not bring down the eval loop.
+    """
+    hb_path = heartbeats_dir / f"game_{game_idx:05d}.jsonl"
+    if not hb_path.exists():
+        return
+    try:
+        with hb_path.open("r", encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    payload = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                # Preserve the worker's ``ts`` (when the heartbeat
+                # was actually recorded inside the inner game thread)
+                # under ``worker_ts`` — ``EventLog.record`` re-stamps
+                # the top-level ``ts`` with the controller's drain time,
+                # which clusters at game_end and would otherwise hide
+                # the real wall-clock progression. The ``event`` slot
+                # also gets re-stamped via the first arg, so strip it.
+                worker_ts = payload.pop("ts", None)
+                payload.pop("event", None)
+                if worker_ts is not None:
+                    payload["worker_ts"] = worker_ts
+                events.record(
+                    "game_heartbeat",
+                    game_idx=game_idx,
+                    **payload,
+                )
+        hb_path.unlink()
+    except OSError:
+        # Side-channel must never propagate I/O errors.
+        pass
+
+
 def _machine_metadata() -> dict[str, Any]:
     """Best-effort machine info captured once per shard at startup.
     Useful when one shard's results look weird and you want to know
@@ -3141,6 +3192,13 @@ def run_shard_eval_pull(
 
     progress: Optional[EvalProgress] = None
     events: Optional[EventLog] = None
+    # Per-game heartbeats: each worker writes a JSONL file named
+    # ``game_<idx>.jsonl`` into this dir during the in-flight game.
+    # The controller drains + deletes each file on game_end (or
+    # whenever the future resolves, crash/timeout included). Disabled
+    # when no ``progress_dir`` was provided — same opt-in pattern as
+    # the events log itself.
+    heartbeats_dir: Optional[Path] = None
     if progress_dir is not None:
         progress_dir.mkdir(parents=True, exist_ok=True)
         progress = EvalProgress(
@@ -3160,6 +3218,10 @@ def run_shard_eval_pull(
         events = EventLog(
             progress_dir / f"{run_id}_shard_{label}_events.jsonl"
         )
+        heartbeats_dir = (
+            progress_dir / f"{run_id}_shard_{label}_heartbeats"
+        )
+        heartbeats_dir.mkdir(parents=True, exist_ok=True)
         events.record(
             "shard_start",
             run_id=run_id, label=label, mode="eval",
@@ -3234,12 +3296,20 @@ def run_shard_eval_pull(
         )
 
     def _build_args(game_idx: int) -> tuple:
+        # Per-game heartbeat file: when the controller is set up with a
+        # progress_dir, each worker writes throttled progress lines
+        # into its own file so the controller can splice them back into
+        # the main EventLog. ``None`` disables the worker-side write
+        # entirely — keeps the no-progress-dir code path zero-cost.
+        hb_path: Optional[str] = None
+        if heartbeats_dir is not None:
+            hb_path = str(heartbeats_dir / f"game_{game_idx:05d}.jsonl")
         return (
             game_idx, p0_factory, p1_factory, spec.base_seed,
             4000,  # decision_cap, mirrors run_match's default
             spec.enable_mulligans, spec.per_game_timeout_sec,
             deck_pool, replay_config, hang_dump_dir,
-            spec.heuristics,
+            spec.heuristics, hb_path,
         )
 
     shard_t0 = _time.perf_counter()
@@ -3472,10 +3542,33 @@ def run_shard_eval_pull(
                 else:
                     draws += 1
                 if progress is not None:
+                    # avg_decisions semantics: only count finished
+                    # games' decisions toward the running average. A
+                    # timed_out game's partial count would bias the
+                    # average downward — the controller already drops
+                    # the game from the win-rate denominator, so we
+                    # do the same for the decisions-per-game stat.
+                    # The full partial count is still preserved in the
+                    # game_end event below for diagnostic visibility.
                     progress.record_game(
-                        winner=winner, decisions=decisions,
+                        winner=winner,
+                        decisions=0 if is_timeout or is_crash else decisions,
                         crashed=is_crash,
                         timed_out=is_timeout,
+                    )
+                # Splice any per-game heartbeat lines the worker
+                # wrote during the in-flight game into the main
+                # events log BEFORE the game_end summary so the
+                # diagnosis reader sees the progression in order.
+                # No-op when no heartbeat file exists (the controller
+                # didn't pass a progress_events_dir, or the game ran
+                # too fast / wedged before the first heartbeat was due).
+                if (
+                    events is not None
+                    and heartbeats_dir is not None
+                ):
+                    _drain_game_heartbeats(
+                        heartbeats_dir, int(game_idx), events,
                     )
                 if events is not None:
                     events.record(
