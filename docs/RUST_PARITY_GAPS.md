@@ -125,25 +125,6 @@ behavior per CR / Python, parity impact, and closeable / accepted.
 - **Closeable**: not a gap — it is the deliberate parity contract.
   See invariant I5 for the matching invariant entry.
 
-### G6. `ActivateAbility` does not check summoning sickness (CR 302.1)
-
-- **Pinned by**: `tests_rust/test_tap.py::test_activate_ability_on_summoning_sick_creature_succeeds`.
-- **Rust today**: `apply_action({"kind": "activate_ability", ...})`
-  on a summoning-sick mana-producer (e.g. just-cast Llanowar Elves)
-  taps the creature and credits the controller's mana pool. Both
-  the action dispatcher in `state_ops_actions.rs` and the
-  `legal_decisions` enumerator in `state_ops_legal.rs` share this
-  gap.
-- **CR / Python expected**: CR 302.1 — a summoning-sick creature
-  cannot tap to pay tap-cost activations. Python rejects the
-  activation.
-- **Impact**: HIGH for normal gameplay. Rust will produce mana from
-  a just-cast Llanowar Elves; Python won't. Easy to hit in any game
-  that casts a mana-producer and then tries to use it the same turn.
-- **Closeable**: yes — add a `summoning_sick && requires_tap` gate
-  to both `apply_action`'s `activate_ability` arm and `legal.py`'s
-  activated-ability emitter. Pending slice.
-
 ### G7. Cleanup step does not run "until end of turn" effect expiration (CR 514.3)
 
 - **Pinned by**: docstring on `test_cleanup.py` ("CR 514.3 ('until end
@@ -535,6 +516,25 @@ refactor on either side that breaks the parity surfaces immediately.
 - **Pinned by**: `tests_rust/test_deck.py::test_find_object_zone_after_make_state_agrees_with_setup`.
 - **Invariant**: Every library object reads `ZONE_LIBRARY`; every
   hand object reads `ZONE_HAND` immediately after `make_state`.
+
+### I17. Summoning-sick permanents with tap-cost activated abilities are excluded from both dispatch and emission
+
+- **Pinned by**: `tests_rust/test_tap.py::test_activate_ability_on_summoning_sick_creature_with_tap_cost_is_rejected`;
+  `tests_rust/test_legal.py::test_legal_decisions_activate_ability_excludes_summoning_sick_creature`.
+- **Invariant**: CR 302.1 — a creature with `summoning_sick == true`
+  whose activated ability has a tap cost (e.g. `{T}`) cannot pay
+  that cost. The Rust port enforces this gate on BOTH sides:
+  `apply_action`'s `ActivateAbility` arm in `state_ops_actions.rs`
+  raises `ValueError` (no mutation), and the `legal_decisions`
+  emitter in `state_ops_legal.rs` does NOT emit an
+  `ActivateAbility` dict for the sick source. The general gate is
+  `summoning_sick && requires_tap_cost`; the first-slice
+  mana-only filter (the only wired ActivateAbility dispatch case
+  today, where every printing's mana ability has an implicit
+  `{T}`) gates on `summoning_sick` alone. Mirrors Python's
+  `legal.py:661-663` and `actions.py:_activate_ability`
+  precheck. Closes parity gap G6 (entry removed from "Confirmed
+  gaps" above).
 
 ---
 
