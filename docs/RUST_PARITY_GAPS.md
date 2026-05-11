@@ -245,37 +245,6 @@ behavior per CR / Python, parity impact, and closeable / accepted.
 - **Closeable**: yes — pending decision-callback plumbing for surveil
   and scry.
 
-### G21. `mulligan` always draws 7; no London-style hand-shrink
-
-- **Pinned by**: `tests_rust/test_mulligan.py::test_mulligan_keeps_hand_at_seven_pinning_london_simplification`;
-  module-level cross-feature docstring (lines 430-453).
-- **Rust today**: `mulligan(player, seed)` always leaves the hand at
-  size 7. It does not take a mulligan-count parameter and never
-  shrinks the hand. A separate `mulligan_to_n(player, n_cards, seed)`
-  primitive provides the smaller-hand draw shape.
-- **CR / Python expected**: CR 103.4 — each successive mulligan
-  draws a smaller hand (7 → 6 → 5 → ...). London mulligan keeps the
-  hand at 7 visually but requires bottoming N cards atomically.
-- **Impact**: medium — observable whenever a player mulligans and
-  the parity harness checks hand size. The bridge currently expects
-  the caller to invoke `bottom_cards_from_hand` as a separate step.
-- **Closeable**: yes — accepted simplification. A future "real
-  London-mulligan transaction" slice consolidates the two-call flow.
-
-### G22. `mulligan` does not enforce the bottom-N step
-
-- **Pinned by**: `tests_rust/test_mulligan.py` module docstring (gap 5).
-- **Rust today**: A caller who calls `mulligan` without then calling
-  `bottom_cards_from_hand` ends up with too many cards in hand. The
-  primitive does not enforce the bottoming.
-- **CR / Python expected**: CR 103.4 — the London-mulligan
-  transaction is atomic (shuffle + draw 7 + bottom N). Python's
-  flow enforces the bottoming.
-- **Impact**: low when the harness drives mulligan via composed
-  primitives; medium if direct `mulligan` calls leak into the smoke
-  harness.
-- **Closeable**: yes — bundled with G21 (atomic London transaction).
-
 ### G24. No scry-on-keep step after mulligan-to-7 (Paris rule)
 
 - **Pinned by**: `tests_rust/test_mulligan.py` module docstring (gap 4).
@@ -518,6 +487,57 @@ refactor on either side that breaks the parity surfaces immediately.
   directly does NOT empty mana pools — see
   `test_cleanup.py::test_cleanup_step_does_not_empty_mana_pool_at_primitive_layer`);
   the mana-empty hook is owned exclusively by `advance_phase`.
+
+### I24. `mulligan_atomic` folds shuffle + redraw-7 + bottom-N into one transaction (CR 103.4 London)
+
+- **Pinned by**:
+  `tests_rust/test_mulligan.py::test_mulligan_atomic_seventh_call_succeeds_eighth_raises`,
+  `test_mulligan_atomic_bottoms_correct_number_for_each_mulligan_count`,
+  `test_mulligan_atomic_bottom_count_mismatch_raises`,
+  `test_mulligan_atomic_invalid_card_id_raises`,
+  `test_mulligan_atomic_hand_size_invariant`,
+  `test_mulligan_atomic_library_grows_by_old_hand_minus_bottom`,
+  `test_mulligan_atomic_clone_isolation`,
+  `test_mulligan_atomic_fingerprint_stable_for_same_seed_and_bottoms`.
+- **Invariant** (CR 103.4 / round-27 G21 + G22 closure):
+  - `mulligan_atomic(player_id, seed, bottom_card_ids)` is the
+    parity-correct entrypoint for the harness. The Nth mulligan
+    (per-player `mulligan_count` is N-1 at call time, becomes N
+    after the increment) bottoms exactly N cards — the
+    `bottom_card_ids.len() == mulligan_count + 1` pre-check fires
+    BEFORE the increment / shuffle / bottoming so a wrong-count call
+    leaves state byte-identical.
+  - Ordering is (1) player_id validation, (2) bottom-count pre-check,
+    (3) increment `mulligan_count`, (4) cap check (> 7 raises),
+    (5) shuffle library (drain hand + Fisher-Yates with `seed` +
+    redraw 7), (6) verify each `bottom_card_id` is in the post-redraw
+    hand AND that the list contains no duplicates, (7) remove each
+    chosen id from hand and insert at `lib[0]` in REVERSE iteration
+    order so the FIRST id supplied lands at the very bottom (matches
+    `bottom_cards_from_hand`'s orientation contract).
+  - Hand-size invariant: post-call hand size is always
+    `7 - mulligan_count` (drew 7, bottomed `mulligan_count`). A caller
+    using the atomic primitive can NEVER observe a state with the
+    hand still at 7 after the Nth mulligan — closes the G21 / G22
+    observable gap.
+  - Bottom-count mismatch (`bottom_card_ids.len() !=
+    mulligan_count + 1`) raises BEFORE any mutation; the state's
+    fingerprint, hand size, library size, and `mulligan_count` are
+    all unchanged.
+  - Cap shared with the legacy `mulligan` / `mulligan_to_n`: the
+    7-call total is per-player and counts atomic calls too. The 8th
+    call raises with no zone mutation (the cap check fires before
+    the shuffle), though `mulligan_count` itself was bumped (matches
+    legacy ordering).
+  - Invalid `bottom_card_id` (not in post-redraw hand) OR duplicate
+    ids raise AFTER the shuffle has happened — the bottom step is
+    skipped but the shuffle has already mutated state. Callers should
+    pre-compute valid ids by probing a clone with the same `seed`.
+  - The legacy `mulligan`, `mulligan_to_n`, and `bottom_cards_from_hand`
+    primitives are KEPT for backwards compatibility; only
+    `mulligan_atomic` is the parity-correct entrypoint for new
+    callers. Closes parity gaps G21 + G22 (entries removed from
+    "Confirmed gaps" above).
 
 ### I21. `mulligan` / `mulligan_to_n` raise after 7 calls per player (CR 103.4 cap)
 

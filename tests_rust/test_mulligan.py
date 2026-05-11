@@ -429,30 +429,31 @@ def test_bottom_cards_full_hand_empties_hand(synthetic_state):
 #
 # **Documented parity gaps vs CR 103.4 / real MTG:**
 #
-# 1. ``mulligan(player, seed)`` always draws 7. It does NOT take a
-#    mulligan-count parameter; the caller owns the count. Per-mulligan
-#    "draw 6, 5, ..." behavior is provided as a separate primitive,
-#    ``mulligan_to_n(player, n_cards, seed)``.
-# 2. Bottoming N cards is a SEPARATE primitive (``bottom_cards_from_hand``)
-#    that the caller invokes after ``mulligan`` / ``mulligan_to_n``. The
-#    real London-mulligan flow is "shuffle hand into library, draw 7,
-#    bottom N" as one atomic player action — the Rust API splits that
-#    into two calls to keep each primitive single-knob.
-# 3. G23 closed: mulligan raises after 7 calls per CR 103.4 (London-style
+# 1. G21 + G22 closed (round-27): the atomic ``mulligan_atomic(player,
+#    seed, bottom_card_ids)`` primitive folds shuffle + redraw +
+#    bottom-N into a single call, gated on ``mulligan_count`` so the
+#    Nth call bottoms exactly N cards. The legacy split-primitive
+#    flow (``mulligan`` / ``mulligan_to_n`` + ``bottom_cards_from_hand``)
+#    is kept for backwards compatibility but is no longer the parity-
+#    correct entrypoint. A caller using ``mulligan_atomic`` can never
+#    observe a state with the hand still at 7 after the Nth mulligan
+#    (the previous G21 / G22 gap). The legacy ``mulligan(player, seed)``
+#    primitive still always draws 7 — that's the accepted simplification
+#    for the unparameterized entrypoint and is pinned by the existing
+#    legacy tests.
+# 2. G23 closed: mulligan raises after 7 calls per CR 103.4 (London-style
 #    cap). Mirrors Python ``simulate.setup_game(max_mulligans=7)`` — the
 #    London-mulligan loop allows up to 7 mulligans per player before
 #    forcing a keep. The 8th call on the same player raises
 #    ``ValueError`` instead of performing the shuffle. The cap is
-#    shared between ``mulligan`` and ``mulligan_to_n`` (a mixed
-#    sequence of 5 + 3 hits the cap on the 8th call regardless of
-#    which variant). ``mulligan_count`` is NOT serialized into the
-#    fingerprint — it's a per-call safety counter, not part of the
-#    gameplay-relevant state digest.
-# 4. There is NO scry-on-keep step (CR 103.4 mulligan-to-7 paris).
-# 5. ``mulligan`` does NOT enforce the bottom-N step before letting the
-#    game continue — a caller who skips ``bottom_cards_from_hand`` after
-#    mulliganing simply ends up with too many cards in hand. Defensive
-#    bottoming is the caller's responsibility.
+#    shared between ``mulligan``, ``mulligan_to_n``, and
+#    ``mulligan_atomic`` (a mixed sequence of 5 + 3 hits the cap on the
+#    8th call regardless of which variant). ``mulligan_count`` is NOT
+#    serialized into the fingerprint — it's a per-call safety counter,
+#    not part of the gameplay-relevant state digest.
+# 3. G24 still open: there is NO scry-on-keep step (CR 103.4 Paris
+#    mulligan). Closing this needs the decision-callback substrate that
+#    a sibling slice is still building.
 #
 # These gaps are accepted simplifications for the parity bridge; if a
 # future slice models a "real" London-mulligan transaction, this comment
@@ -778,3 +779,231 @@ def test_mulligan_count_does_not_affect_fingerprint(synthetic_state):
     # mulligan_count is 1 on both. Fingerprints match (determinism +
     # counter-not-serialized).
     assert a.fingerprint() == b.fingerprint()
+
+
+# --- G21 + G22 closure: atomic London-mulligan transaction (round-27) -----
+#
+# ``mulligan_atomic(player_id, seed, bottom_card_ids)`` folds shuffle +
+# redraw-7 + bottom-N into one primitive. The bottom-count is gated
+# against the per-player ``mulligan_count``: the Nth call bottoms
+# exactly N cards (pre-increment count N-1 means expected size N).
+# The shuffle uses the same xorshift64 seeded Fisher-Yates as the
+# legacy variants, so a caller can pre-compute the post-redraw hand
+# ids and pick which to bottom offline (parity_smoke + MCTS recipe).
+#
+# These tests pin the atomic primitive's signature + invariants; the
+# legacy ``mulligan`` / ``mulligan_to_n`` / ``bottom_cards_from_hand``
+# tests above continue to pin the split-flow primitives, which are
+# retained for backwards compatibility.
+
+
+def _hand_ids(state, player_id):
+    """Pull the current hand ids for ``player_id``."""
+    return [o["id"] for o in state.hand_snapshot(player_id)]
+
+
+def test_mulligan_atomic_seventh_call_succeeds_eighth_raises(synthetic_state):
+    """The atomic primitive shares the 7-call cap with the legacy
+    variants. Each of the first 7 calls succeeds (bottoming 1, 2,
+    ..., 7 cards in turn); the 8th raises ``ValueError`` without
+    mutating zones."""
+    for i in range(7):
+        # Compute the bottom ids AFTER the shuffle by probing a clone
+        # to find what the post-redraw hand will look like... but the
+        # atomic primitive shuffles + redraws as one. Easier: just
+        # bottom the first ``i+1`` cards of the post-redraw hand.
+        # Use a clone to probe the post-redraw hand ids deterministically.
+        probe = synthetic_state.clone_once()
+        probe.mulligan(0, 100 + i)
+        post_redraw_ids = _hand_ids(probe, 0)
+        bottom_ids = post_redraw_ids[: i + 1]
+        synthetic_state.mulligan_atomic(0, 100 + i, bottom_ids)
+    # After 7 successful atomic calls, the cap is reached. 8th must raise.
+    probe = synthetic_state.clone_once()
+    # The 8th call expects bottom_card_ids.len() == mulligan_count + 1 == 8,
+    # but we can't legally probe more than the hand size — and the cap
+    # check fires after the count check, so we must supply exactly 8 ids.
+    # The synthetic state has only 7 cards in hand post-mulligan, so 8
+    # valid ids don't exist. Construct 8 distinct integer placeholders;
+    # the cap check fires after the count check passes, BEFORE the
+    # post-redraw verification, so the 8th call raises on the cap rather
+    # than on the missing ids.
+    eight_ids = [9000 + j for j in range(8)]
+    with pytest.raises(ValueError):
+        synthetic_state.mulligan_atomic(0, 999, eight_ids)
+
+
+def test_mulligan_atomic_bottoms_correct_number_for_each_mulligan_count(
+    synthetic_state,
+):
+    """Mulligan #1 bottoms 1 card; mulligan #2 bottoms 2 cards; mulligan
+    #3 bottoms 3 cards. Library accounting confirms each call moved
+    exactly N cards from hand to library bottom."""
+    base_lib = synthetic_state.library_sizes[0]
+    for n_mulls_taken in (1, 2, 3):
+        probe = synthetic_state.clone_once()
+        probe.mulligan(0, 50 + n_mulls_taken)
+        post_redraw_ids = _hand_ids(probe, 0)
+        bottom_ids = post_redraw_ids[:n_mulls_taken]
+        synthetic_state.mulligan_atomic(0, 50 + n_mulls_taken, bottom_ids)
+        # Hand must be 7 - n_mulls_taken (started at 7, drew 7, bottomed
+        # n_mulls_taken; net hand size = 7 - n_mulls_taken).
+        assert synthetic_state.hand_sizes[0] == 7 - n_mulls_taken
+        # Library: started at base_lib, returned 7 (or 7-n_mulls_taken
+        # if previous mulls already shrank hand), drew 7, bottomed
+        # n_mulls_taken. Net library size = base_lib + n_mulls_taken
+        # (the cumulative bottomed cards). But mulligan-then-bottom
+        # within a single atomic call: hand goes from (7 - (n-1)) at
+        # start of THIS call to 7 - n at end of THIS call. So one
+        # additional card gets moved to library each call.
+        # Easier invariant: total cards conserved.
+        total = (
+            synthetic_state.hand_sizes[0] + synthetic_state.library_sizes[0]
+        )
+        assert total == 7 + base_lib  # 7 starting hand + 50 starting library
+
+
+def test_mulligan_atomic_bottom_count_mismatch_raises(synthetic_state):
+    """Supplying the wrong number of bottom_card_ids raises ``ValueError``
+    and does NOT mutate the state (the count check fires BEFORE the
+    increment, shuffle, or bottoming)."""
+    fp_before = synthetic_state.fingerprint()
+    hand_before = synthetic_state.hand_sizes[0]
+    lib_before = synthetic_state.library_sizes[0]
+    # First mulligan should bottom 1 card; supply 0 ids.
+    with pytest.raises(ValueError):
+        synthetic_state.mulligan_atomic(0, 42, [])
+    # State byte-identical: fingerprint, hand size, library size,
+    # mulligan_count all unchanged.
+    assert synthetic_state.fingerprint() == fp_before
+    assert synthetic_state.hand_sizes[0] == hand_before
+    assert synthetic_state.library_sizes[0] == lib_before
+    # First mulligan should bottom 1 card; supply 2 ids.
+    with pytest.raises(ValueError):
+        synthetic_state.mulligan_atomic(0, 42, [10, 11])
+    assert synthetic_state.fingerprint() == fp_before
+    # Now that mulligan_count is still 0, a correct atomic call (1 id)
+    # would succeed — verify by probing.
+    probe = synthetic_state.clone_once()
+    probe.mulligan(0, 42)
+    post_redraw_ids = _hand_ids(probe, 0)
+    synthetic_state.mulligan_atomic(0, 42, post_redraw_ids[:1])
+    assert synthetic_state.hand_sizes[0] == 6  # 7 drew, 1 bottomed
+
+
+def test_mulligan_atomic_invalid_card_id_raises(synthetic_state):
+    """An id not in the post-redraw hand raises ``ValueError``. The
+    shuffle has already happened (state mutated), but the bottom step
+    is skipped — verify by checking the hand size is still 7 (drew 7,
+    bottomed 0)."""
+    # Use a clearly-invalid id (9999) that no synthetic-state object holds.
+    with pytest.raises(ValueError):
+        synthetic_state.mulligan_atomic(0, 42, [9999])
+    # The pre-check on bottom_card_ids count was OK (count=1 ==
+    # mulligan_count+1=1), the increment happened, the shuffle+redraw
+    # happened, but the post-redraw verification rejected 9999. Hand
+    # has 7 cards (drew 7, bottomed 0).
+    assert synthetic_state.hand_sizes[0] == 7
+
+
+def test_mulligan_atomic_hand_size_invariant(synthetic_state):
+    """After ``mulligan_atomic`` the hand size is (7 - mulligan_count):
+    drew 7, bottomed mulligan_count. Pins the load-bearing invariant
+    that makes G21 / G22 closed — a caller using the atomic primitive
+    can NEVER observe a hand of 7 after the Nth mulligan."""
+    # Mulligan #1: bottoms 1, leaves 6.
+    probe = synthetic_state.clone_once()
+    probe.mulligan(0, 11)
+    post_redraw = _hand_ids(probe, 0)
+    synthetic_state.mulligan_atomic(0, 11, post_redraw[:1])
+    assert synthetic_state.hand_sizes[0] == 6
+
+    # Mulligan #2: bottoms 2, leaves 5.
+    probe2 = synthetic_state.clone_once()
+    probe2.mulligan(0, 22)
+    post_redraw2 = _hand_ids(probe2, 0)
+    synthetic_state.mulligan_atomic(0, 22, post_redraw2[:2])
+    assert synthetic_state.hand_sizes[0] == 5
+
+    # Mulligan #3: bottoms 3, leaves 4.
+    probe3 = synthetic_state.clone_once()
+    probe3.mulligan(0, 33)
+    post_redraw3 = _hand_ids(probe3, 0)
+    synthetic_state.mulligan_atomic(0, 33, post_redraw3[:3])
+    assert synthetic_state.hand_sizes[0] == 4
+
+
+def test_mulligan_atomic_library_grows_by_old_hand_minus_bottom(synthetic_state):
+    """Library accounting check: each atomic call adds N cards to the
+    library bottom (where N is the mulligan number for this call).
+    Before-and-after library sizes confirm the shift."""
+    base_lib = synthetic_state.library_sizes[0]
+    base_hand = synthetic_state.hand_sizes[0]
+    # base_hand = 7, base_lib = 50; total = 57.
+
+    probe = synthetic_state.clone_once()
+    probe.mulligan(0, 77)
+    post_redraw = _hand_ids(probe, 0)
+    synthetic_state.mulligan_atomic(0, 77, post_redraw[:1])
+    # After mulligan #1: hand has 6, library has base_lib + 1 = 51.
+    # Total conserved.
+    assert synthetic_state.hand_sizes[0] == 6
+    assert synthetic_state.library_sizes[0] == base_lib + 1
+    assert (
+        synthetic_state.hand_sizes[0] + synthetic_state.library_sizes[0]
+        == base_hand + base_lib
+    )
+
+    # And the bottomed id is at the very bottom of the library — lib[0]
+    # in the Vec sense — which scry top-first shows as the LAST element.
+    full_lib = synthetic_state.scry(0, synthetic_state.library_sizes[0])
+    assert full_lib[-1] == post_redraw[0]  # bottomed card at lib[0]
+
+
+def test_mulligan_atomic_clone_isolation(synthetic_state):
+    """``mulligan_atomic`` on a clone does NOT leak any mutation back
+    to the source state. Hand, library, mulligan_count, fingerprint
+    all unchanged on the source after the clone-side call."""
+    fp_before = synthetic_state.fingerprint()
+    hand_before = synthetic_state.hand_sizes[0]
+    lib_before = synthetic_state.library_sizes[0]
+    lib_order_before = synthetic_state.scry(0, P0_LIBRARY_SIZE)
+
+    cloned = synthetic_state.clone_once()
+    probe = synthetic_state.clone_once()
+    probe.mulligan(0, 555)
+    post_redraw = _hand_ids(probe, 0)
+    cloned.mulligan_atomic(0, 555, post_redraw[:1])
+
+    # Source: byte-identical.
+    assert synthetic_state.fingerprint() == fp_before
+    assert synthetic_state.hand_sizes[0] == hand_before
+    assert synthetic_state.library_sizes[0] == lib_before
+    assert synthetic_state.scry(0, P0_LIBRARY_SIZE) == lib_order_before
+    # Clone: diverged — hand is 6, library has +1.
+    assert cloned.hand_sizes[0] == hand_before - 1
+    assert cloned.library_sizes[0] == lib_before + 1
+
+
+def test_mulligan_atomic_fingerprint_stable_for_same_seed_and_bottoms(
+    synthetic_state,
+):
+    """Two clones from the same source, atomic-mulliganed with the same
+    seed AND the same bottom_card_ids, produce identical fingerprints.
+    Determinism check on the atomic primitive."""
+    a = synthetic_state.clone_once()
+    b = synthetic_state.clone_once()
+
+    probe = synthetic_state.clone_once()
+    probe.mulligan(0, 4242)
+    post_redraw = _hand_ids(probe, 0)
+    bottom_ids = post_redraw[:1]
+
+    a.mulligan_atomic(0, 4242, bottom_ids)
+    b.mulligan_atomic(0, 4242, bottom_ids)
+
+    assert a.fingerprint() == b.fingerprint()
+    assert a.hand_sizes == b.hand_sizes
+    assert a.library_sizes == b.library_sizes
+    # Library order (post-shuffle, post-redraw, post-bottom) matches.
+    assert a.scry(0, a.library_sizes[0]) == b.scry(0, b.library_sizes[0])
