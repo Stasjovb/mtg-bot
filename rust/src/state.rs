@@ -147,6 +147,22 @@ pub struct GameState {
     pub blockers: Vec<(u32, u32)>,
     /// The stack — top is the LAST element of the Vec for O(1) pop.
     pub stack: Vec<StackItem>,
+    /// Count of consecutive `pass_priority` invocations since the last
+    /// non-pass mutation. Round-27 G3 closure: needed by the
+    /// `complete_step_via_priority_round` composer to detect "both
+    /// players have passed in succession" (CR 117.4) without callers
+    /// having to track the count themselves. Reset by any non-pass
+    /// state-mutating action (`cast_creature`, `apply_action` for
+    /// non-`pass_priority` arms, `advance_phase`, etc.) — see the
+    /// reset call sites in `state_ops_cast.rs`, `state_ops_actions.rs`,
+    /// and `state_ops_steps.rs`.
+    ///
+    /// NOT serialized into the fingerprint — like `mulligan_count`,
+    /// this is a transient bookkeeping counter, not part of the
+    /// gameplay-relevant state digest. Same observable game state
+    /// pre- and post-pass must produce the same fingerprint regardless
+    /// of how many consecutive passes happened to get there.
+    pub consecutive_passes: u8,
 }
 
 #[pymethods]
@@ -403,5 +419,6 @@ pub fn make_synthetic_state(
         attackers: Vec::new(),
         blockers: Vec::new(),
         stack: Vec::new(),
+        consecutive_passes: 0,
     }
 }

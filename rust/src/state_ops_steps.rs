@@ -331,12 +331,27 @@ impl GameState {
         // The inline mirror exists for the same GIL-token reason as
         // the other inline helpers — see this file's module docstring.
         empty_all_mana_pools_inline(self);
+        // Round-27 G3 closure: advancing the phase is a non-pass
+        // mutation — it breaks any consecutive-pass streak that was
+        // building up before the advance. Reset to 0 so a subsequent
+        // `pass_priority` re-starts counting from 1.
+        self.consecutive_passes = 0;
         if self.phase == PHASE_CLEANUP {
             self.phase = PHASE_UNTAP;
             self.turn_number += 1;
             // Two-player swap. If the engine ever grows past two
             // players, replace with `(active_player + 1) % n`.
             self.active_player = 1 - self.active_player;
+            // Round-27 G15 closure: CR 117.1a — the active player
+            // gets priority at the start of each step (and at the
+            // start of each turn). On the CLEANUP -> UNTAP wrap the
+            // active player has just flipped, so reset priority to
+            // the NEW active player here. Mirrors Python's
+            // `simulate.py:212-213` which sets
+            // `state.priority_player_idx = 0` after the active-player
+            // swap at the start of a new turn — the Rust version is
+            // the same rule generalized for either seat.
+            self.priority_player = self.active_player;
         } else {
             self.phase += 1;
         }

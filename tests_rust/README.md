@@ -181,6 +181,7 @@ the test lands in a commit.
 | rust(gap-g1g2-advance-phase-composition): CR 106.4 mana-empty on every phase exit + CR 514.1/514.2 cleanup-step on PHASE_CLEANUP entry | tests_rust/test_steps.py + test_cleanup.py + test_mana.py extend | green  | feature/rust-gap-g1g2-advance-phase-composition |
 | rust(gap-g23-mulligan-cap): per-player `mulligan_count` field; `mulligan` / `mulligan_to_n` raise after 7 calls (CR 103.4 / Python `max_mulligans=7`) | tests_rust/test_mulligan.py extend | green  | feature/rust-gap-g23-mulligan-cap |
 | rust(gap-g21g22-london-mulligan): atomic `mulligan_atomic(p, seed, bottom_card_ids)` folds shuffle + redraw-7 + bottom-N into one transaction (CR 103.4 London) | tests_rust/test_mulligan.py extend | green  | feature/rust-gap-g21g22-london-mulligan |
+| rust(gap-g3+g4+g15-priority-composition-layer): `consecutive_passes` counter + `complete_step_via_priority_round` composer + CR 117.1a/1c/4 priority resets in advance_phase/cast_creature/apply_action | tests_rust/test_priority.py invert + extend, tests_rust/test_stack.py + test_steps.py extend | green  | feature/rust-priority-composition-layer |
 
 ## Build invocation reminder
 
