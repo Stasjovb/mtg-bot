@@ -988,6 +988,21 @@ pub enum Effect {
     /// Negative min_count is legal (always-fires) but ill-formed
     /// from a parity perspective; min_count=0 always fires.
     ConditionalOnTappedCreatures { effect: Box<Effect>, min_count: i32 },
+    /// **Round 28 coverage extension.** Put a +1/+1 counter on each
+    /// of up to `max_n` target creatures. Mirrors Python's
+    /// `PutPlusOneCounterOnEachOfUpToNTargetCreatures(max_n=2)`
+    /// (`counters.py:179` — Weftblade-Enhancer-shape, 2 EoE cards).
+    ///
+    /// **First-slice deterministic target choice.** Scans
+    /// battlefields in player order (source controller first, then
+    /// opponent); picks the first min(max_n, eligible_count)
+    /// creatures encountered. Real MTG lets the player pick ANY
+    /// creature (either side); deferred until decision callbacks.
+    /// Empty / no-eligible-creatures fizzles silently.
+    ///
+    /// **Schema.** `max_n` defaults to 2. Negative max_n is illegal
+    /// and raises at parse. max_n=0 is a legal no-op.
+    PutPlusOneCounterOnEachOfUpToNTargetCreatures { max_n: i32 },
 }
 
 #[derive(Clone, Debug)]
@@ -1557,6 +1572,22 @@ fn parse_effect(dict: &Bound<'_, PyDict>) -> PyResult<Effect> {
         "tap_target_artifact_or_creature" => {
             Ok(Effect::TapTargetArtifactOrCreature)
         }
+        "put_plus_one_counter_on_each_of_up_to_n_target_creatures" => {
+            let max_n: i32 = match dict.get_item("max_n")? {
+                Some(m) => m.extract().map_err(|e| {
+                    PyValueError::new_err(format!(
+                        "put_plus_one_counter_on_each_of_up_to_n_target_creatures.max_n must be an integer (got: {e})"
+                    ))
+                })?,
+                None => 2,
+            };
+            if max_n < 0 {
+                return Err(PyValueError::new_err(format!(
+                    "put_plus_one_counter_on_each_of_up_to_n_target_creatures: max_n must be non-negative, got {max_n}"
+                )));
+            }
+            Ok(Effect::PutPlusOneCounterOnEachOfUpToNTargetCreatures { max_n })
+        }
         "conditional_on_tapped_creatures" => {
             // Required nested effect.
             let nested = dict.get_item("effect")?.ok_or_else(|| {
@@ -1763,7 +1794,7 @@ fn parse_effect(dict: &Bound<'_, PyDict>) -> PyResult<Effect> {
             Ok(Effect::Sequence { effects: children })
         }
         other => Err(PyValueError::new_err(format!(
-            "unknown effect kind {other:?}; valid: deal_damage, draw_cards, gain_life, return_to_hand, mill, mill_target_player, exile_target, tap_target, untap_target, sacrifice, add_counters, discard_card, scry_n, destroy_target, damage_each_opponent, damage_each_creature, create_token, add_mana_to_pool, search_library_for_basic_land_tapped, put_plus_one_counter_on_self, surveil, counter_target_spell, return_creature_from_your_graveyard_to_battlefield, discard_self, each_opponent_loses_life, lose_life, target_opponent_loses_life, each_opponent_discards, destroy_all_creatures, destroy_target_nonland_permanent, destroy_target_artifact, destroy_target_land, deal_damage_any_target, pump_self_until_eot, pump_target_creature_until_eot, sequence, pump_creatures_you_control_until_eot, return_creature_from_your_graveyard_to_hand, put_plus_one_counter_on_each_creature_you_control, put_plus_one_counter_on_creature_you_control, add_n_mana_of_chosen_color, search_library_for_card, pump_creatures_opponents_control_until_eot, put_card_from_graveyard_on_bottom_of_library, move_self_counters_to_target_creature_you_control, deal_damage_equal_to_source_power_any_target, tap_target_artifact_or_creature, conditional_on_tapped_creatures"
+            "unknown effect kind {other:?}; valid: deal_damage, draw_cards, gain_life, return_to_hand, mill, mill_target_player, exile_target, tap_target, untap_target, sacrifice, add_counters, discard_card, scry_n, destroy_target, damage_each_opponent, damage_each_creature, create_token, add_mana_to_pool, search_library_for_basic_land_tapped, put_plus_one_counter_on_self, surveil, counter_target_spell, return_creature_from_your_graveyard_to_battlefield, discard_self, each_opponent_loses_life, lose_life, target_opponent_loses_life, each_opponent_discards, destroy_all_creatures, destroy_target_nonland_permanent, destroy_target_artifact, destroy_target_land, deal_damage_any_target, pump_self_until_eot, pump_target_creature_until_eot, sequence, pump_creatures_you_control_until_eot, return_creature_from_your_graveyard_to_hand, put_plus_one_counter_on_each_creature_you_control, put_plus_one_counter_on_creature_you_control, add_n_mana_of_chosen_color, search_library_for_card, pump_creatures_opponents_control_until_eot, put_card_from_graveyard_on_bottom_of_library, move_self_counters_to_target_creature_you_control, deal_damage_equal_to_source_power_any_target, tap_target_artifact_or_creature, conditional_on_tapped_creatures, put_plus_one_counter_on_each_of_up_to_n_target_creatures"
         ))),
     }
 }
@@ -2138,6 +2169,10 @@ fn effect_to_pydict<'py>(
             d.set_item("kind", "conditional_on_tapped_creatures")?;
             d.set_item("effect", effect_to_pydict(py, effect)?)?;
             d.set_item("min_count", *min_count)?;
+        }
+        Effect::PutPlusOneCounterOnEachOfUpToNTargetCreatures { max_n } => {
+            d.set_item("kind", "put_plus_one_counter_on_each_of_up_to_n_target_creatures")?;
+            d.set_item("max_n", *max_n)?;
         }
         Effect::Sequence { effects } => {
             d.set_item("kind", "sequence")?;

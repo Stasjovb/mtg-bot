@@ -3328,6 +3328,88 @@ fn apply_effect(
             }
             // else: silent no-op
         }
+        // Round-28 multi-target counter add (Weftblade-Enhancer-shape).
+        // Pick first min(max_n, eligible) creatures across both
+        // battlefields in player-order (source controller first, then
+        // opponent), add a +1/+1 counter to each. max_n=0 short-
+        // circuits.
+        Effect::PutPlusOneCounterOnEachOfUpToNTargetCreatures { max_n } => {
+            if *max_n <= 0 {
+                return Ok(());
+            }
+            // Locate source controller.
+            let mut src_controller: Option<u8> = None;
+            'outer: for player in &state.players {
+                for zone in [
+                    &player.hand,
+                    &player.library,
+                    &player.battlefield,
+                    &player.graveyard,
+                    &player.exile,
+                ] {
+                    if let Some(obj) = zone.iter().find(|o| o.id == source_obj_id) {
+                        src_controller = Some(obj.controller);
+                        break 'outer;
+                    }
+                }
+            }
+            if src_controller.is_none() {
+                if let Some(item) = state
+                    .stack
+                    .iter()
+                    .find(|i| i.source_obj_id == source_obj_id)
+                {
+                    src_controller = Some(item.controller);
+                }
+            }
+            let cidx = match src_controller {
+                Some(c) => c as usize,
+                None => state.active_player as usize,
+            };
+            let oidx = 1 - cidx;
+            let limit = *max_n as usize;
+            // Collect first min(limit, total) creature ids: controller
+            // first, then opponent.
+            let mut picked_ids: Vec<(usize, u32)> = Vec::with_capacity(limit);
+            for &pidx in &[cidx, oidx] {
+                if picked_ids.len() >= limit {
+                    break;
+                }
+                let bf = &state.players[pidx].battlefield;
+                let registry = &state.registry;
+                for obj in bf.iter() {
+                    if picked_ids.len() >= limit {
+                        break;
+                    }
+                    let Some(printing) = registry.printings.get(obj.printing_id as usize)
+                    else {
+                        continue;
+                    };
+                    if printing.card_types.iter().any(|t| t == "Creature") {
+                        picked_ids.push((pidx, obj.id));
+                    }
+                }
+            }
+            if picked_ids.is_empty() {
+                return Ok(());
+            }
+            // Apply +1 counter to each. Use Arc::make_mut once per
+            // affected battlefield.
+            // Group by player.
+            for &pidx in &[cidx, oidx] {
+                let any = picked_ids.iter().any(|(p, _)| *p == pidx);
+                if !any {
+                    continue;
+                }
+                let bf_mut: &mut Vec<GameObject> =
+                    Arc::make_mut(&mut state.players[pidx].battlefield);
+                for obj in bf_mut.iter_mut() {
+                    if picked_ids.iter().any(|(p, id)| *p == pidx && *id == obj.id) {
+                        obj.counters = obj.counters.saturating_add(1);
+                    }
+                }
+            }
+        }
     }
     Ok(())
 }
