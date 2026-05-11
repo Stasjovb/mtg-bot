@@ -585,64 +585,74 @@ def test_cleanup_clears_damage_stamped_via_damage_each_creature(
         assert synthetic_state.get_damage(cid) == 0
 
 
-def test_cleanup_does_not_empty_mana_pool_documented_gap(synthetic_state):
-    """**Documented gap pin.** CR 106.4 says "When a phase or step ends,
-    each player's mana pool empties." The Rust ``empty_mana_pool`` and
-    ``empty_all_mana_pools`` primitives exist (see ``state_ops_mana.rs``)
-    but ``cleanup_step_for_active_player`` does NOT call them today —
-    the cleanup composition only models CR 514.1 (hand-size) and
-    CR 514.2 (damage clear). This test pins the current behavior so a
-    future "close the gap" slice flips this assertion to ``== 0`` /
-    empty pool and updates the cleanup primitive in lockstep.
+def test_cleanup_step_does_not_empty_mana_pool_at_primitive_layer(
+    synthetic_state,
+):
+    """**Layering pin.** The ``cleanup_step_for_active_player``
+    primitive is scoped to CR 514.1 (hand-size discard) + CR 514.2
+    (damage clear). The CR 106.4 "phase or step ends, each player's
+    mana pool empties" rule is OWNED by the phase machinery
+    (``advance_phase``), NOT by this lower-level primitive — callers
+    that invoke the cleanup primitive directly (e.g. tests building
+    up state piece by piece) get the discard + damage clear but the
+    mana pool survives.
 
-    See SEARCH_LIMITATIONS.md ledger for the deliberate divergence
-    once that slice lands."""
+    This is a deliberate layering decision: ``advance_phase`` empties
+    pools on every phase boundary (see the entry composition in
+    ``state_ops_steps.rs::advance_phase``), so a caller walking
+    ``advance_phase`` through CLEANUP DOES see pools empty — the
+    side-effect rides on the phase tick, not on the cleanup primitive
+    call. The companion test
+    ``test_advance_phase_through_cleanup_empties_mana_pool`` covers
+    the phase-machinery path."""
     synthetic_state.add_mana(0, "G", 3)
     synthetic_state.add_mana(1, "R", 2)
     synthetic_state.cleanup_step_for_active_player()
-    # Mana pool survives cleanup today — gap pinned.
+    # Pool survives because the primitive is layered below the
+    # CR 106.4 hook; that hook fires inside ``advance_phase``, not
+    # inside the cleanup primitive.
     assert synthetic_state.get_mana_pool(0)["G"] == 3
     assert synthetic_state.get_mana_pool(1)["R"] == 2
 
 
-def test_end_turn_and_start_next_does_not_empty_mana_pool_documented_gap(
+def test_end_turn_and_start_next_empties_mana_pool(
     synthetic_state,
 ):
-    """**Documented gap pin (companion of the cleanup gap test).**
-    ``end_turn_and_start_next`` composes cleanup_step + advance_phase;
-    neither call clears the mana pool. CR 106.4 expects mana to empty
-    at every step / phase end, and certainly by the cleanup -> untap
-    wrap. Pinning the current behavior so the future fix's assertion
-    flip is visible."""
+    """CR 106.4 closure — ``end_turn_and_start_next`` composes
+    cleanup_step + ``advance_phase``; the ``advance_phase`` lap through
+    CLEANUP -> UNTAP empties both players' mana pools (and in fact a
+    single advance_phase call empties them, since the CR 106.4 hook
+    fires on every phase exit). Pins the closed gap so a future
+    refactor that detaches ``advance_phase`` from the mana-empty hook
+    surfaces here."""
     synthetic_state.add_mana(0, "G", 3)
     synthetic_state.add_mana(1, "R", 2)
     synthetic_state.end_turn_and_start_next()
-    # Both pools survive the full end-of-turn wrap today.
-    assert synthetic_state.get_mana_pool(0)["G"] == 3
-    assert synthetic_state.get_mana_pool(1)["R"] == 2
+    # Pools emptied at the phase boundary inside the wrap.
+    assert synthetic_state.get_mana_pool(0)["G"] == 0
+    assert synthetic_state.get_mana_pool(1)["R"] == 0
 
 
-def test_advance_phase_through_cleanup_does_not_enforce_hand_size_gap(
+def test_advance_phase_through_cleanup_enforces_hand_size(
     synthetic_state,
 ):
-    """**Documented gap pin.** The active player keeping a stuffed
-    hand and advancing through every phase via ``advance_phase`` does
-    NOT auto-fire the CR 514.1 hand-size discard — discard only fires
-    when a caller explicitly invokes ``cleanup_step_for_active_player``
-    or ``end_turn_and_start_next``. The phase machinery and the
-    cleanup primitive are not yet wired together.
+    """CR 514.1 closure — ``advance_phase`` walking through
+    PHASE_CLEANUP auto-fires the hand-size discard on the active
+    player. Stuff p0's hand to 10, walk ``advance_phase`` until the
+    turn wraps, and assert p0's hand is at 7 on the new turn.
 
-    G14 interaction (round 26): ``advance_phase`` now fires CR 504.1
-    auto-draw on entry to PHASE_DRAW, so a single full-lap walk
-    grows the active player's hand by one before reaching CLEANUP.
-    The test still pins the no-auto-discard gap — just on the
-    post-auto-draw hand size (initial 10 + 1 auto-draw = 11), with
-    the assertion updated to reflect the new shape.
+    During the lap:
+    - p0's hand starts at 10
+    - ``advance_phase`` entry to PHASE_DRAW fires the G14 auto-draw
+      (CR 504.1), bumping the hand to 11
+    - ``advance_phase`` entry to PHASE_CLEANUP fires
+      ``cleanup_step_for_active_player_inline`` (CR 514.1 +
+      CR 514.2), discarding 4 cards to land at 7
+    - the CLEANUP -> UNTAP wrap on the final advance flips active to
+      p1 (whose hand was untouched throughout, at 7)
 
-    Confirms the gap by stuffing the hand to 10, walking
-    ``advance_phase`` until the turn wraps, and asserting the hand
-    is at 11 on the new turn (one card came in from the DRAW step
-    auto-draw, no cards left via cleanup discard)."""
+    Pins the closed gap so a future refactor that detaches
+    ``advance_phase`` from the cleanup-step hook surfaces here."""
     for _ in range(3):
         synthetic_state.draw_card(0)
     assert synthetic_state.hand_sizes[0] == 10
@@ -655,12 +665,11 @@ def test_advance_phase_through_cleanup_does_not_enforce_hand_size_gap(
         if synthetic_state.current_phase() == 0 and prev_phase != 0:
             break
     assert synthetic_state.turn_number == starting_turn + 1
-    # Hand survived the turn wrap — discard did not auto-fire. The
-    # G14 auto-draw fired exactly once during the lap (active player
-    # was p0 throughout DRAW; the active swap happens at the very
-    # end of the lap on CLEANUP -> UNTAP). So p0's hand is at 11,
-    # not 10 — the +1 is the auto-draw, NOT a discard miss.
-    assert synthetic_state.hand_sizes[0] == 11
+    # CR 514.1 fired on entry to CLEANUP and discarded down to 7.
+    # The G14 auto-draw earlier in the lap raised the hand to 11
+    # before the discard pulled it back to 7 — net change from
+    # the starting 10 is -3 (= +1 auto-draw - 4 cleanup-discards).
+    assert synthetic_state.hand_sizes[0] == 7
 
 
 def test_cleanup_is_idempotent_when_already_clean(synthetic_state):
