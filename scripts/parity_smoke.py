@@ -70,7 +70,7 @@ import random
 import sys
 import traceback
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, Optional
 
 
 # ---------- state hashing -------------------------------------------------
@@ -1173,6 +1173,158 @@ def _field_repr(value, max_len: int = 35) -> str:
     return rendered
 
 
+def run_cross_engine_mode(
+    seed: int,
+    num_decisions: int,
+    inject_divergence: bool = False,
+) -> int:
+    """Build matched Python + Rust states on the tiny synthetic deck,
+    drive them through ``num_decisions`` PassPriority actions, and
+    report a per-step divergence diagnostic.
+
+    This is the FIRST cross-engine compare landing — round 27's Phase 5
+    slice. Until this lands, ``parity_smoke.py`` has been able to
+    inspect EITHER Rust state (trajectory / multi-seed / field-diff /
+    initial-state) OR Python state (game-mode RandomAgent walk), but
+    never bridged them.
+
+    Output format:
+
+    1. Initial state field views — print one line per field that
+       differs between the two engines BEFORE any action is applied.
+    2. Per-step walks — for each of the ``num_decisions`` steps,
+       print the divergence list (or "(clean)" on a step with no
+       new disagreement).
+    3. Aggregate summary — count of unique-field divergences across
+       all steps; for each, the gap-doc reference (or "NOVEL" if
+       unmatched). The exit code is 0 only when there are zero
+       divergences.
+
+    ``inject_divergence`` (smoke-test-the-smoke): when True, the
+    Rust state's player-0 life is set to 19 before the initial-state
+    compare runs. This proves the harness CAN detect a fake
+    cross-engine divergence at step 0 and exits non-zero. Mirrors
+    the round-25 ``--mode field-diff --inject-divergence`` pattern.
+
+    Returns 0 on parity-clean (which on the first slice is impossible
+    without further engine work — but the inject-divergence path is
+    deterministic about it), 1 on detected divergences, 2 on import
+    error.
+    """
+    try:
+        import mtg_bot_engine  # noqa: F401
+    except ImportError as e:
+        print(f"[cross-engine] ERROR: mtg_bot_engine not built ({e})")
+        print("  -> run `maturin develop --release -m rust/Cargo.toml`")
+        return 2
+
+    try:
+        from mtg_bot.parity.cross_engine import (
+            tiny_synthetic_deckspec,
+            walk_both,
+        )
+    except ImportError as e:
+        print(f"[cross-engine] ERROR: mtg_bot.parity not importable ({e})")
+        print("  -> make sure PYTHONPATH=src and src/mtg_bot/parity/ exists")
+        return 2
+
+    spec = tiny_synthetic_deckspec()
+    result = walk_both(
+        spec, n_decisions=num_decisions, inject_divergence=inject_divergence,
+    )
+
+    print(
+        f"[cross-engine] tiny synthetic state (Forest + Grizzly Bears) "
+        f"with seed={seed}, decisions={num_decisions}"
+        + (" (--inject-divergence)" if inject_divergence else "")
+    )
+
+    if result.error is not None:
+        print(f"[cross-engine] ERROR: aborted at step {result.aborted_at}: {result.error}")
+        return 2
+
+    # Initial state diff.
+    print()
+    print("== initial state (before any decision) ==")
+    if not result.initial_divergences:
+        print("  (no divergences — Python + Rust fingerprint blocks agree at step 0)")
+    else:
+        for d in result.initial_divergences:
+            gap_tag = f"matches gap {d.known_gap}" if d.known_gap else "NOVEL"
+            print(f"  DIFFER {d.field}: ({gap_tag})")
+            print(f"    py:   {_short_repr(d.py_value)}")
+            print(f"    rust: {_short_repr(d.rust_value)}")
+
+    # Per-step walk.
+    print()
+    print(f"== driving {num_decisions} PassPriority decisions ==")
+    for step in result.steps:
+        if not step.divergences:
+            print(f"  step {step.step_index}: (clean — both engines agree)")
+            continue
+        diverging_fields = [d.field for d in step.divergences]
+        print(
+            f"  step {step.step_index}: {len(step.divergences)} field(s) differ: "
+            f"{', '.join(diverging_fields)}"
+        )
+
+    # Aggregate summary — one row per unique (field, gap) tuple.
+    # The smoke harness's report value is "what's the lookup against
+    # RUST_PARITY_GAPS.md?" — so dedupe by field+gap, not by step.
+    print()
+    print("== aggregate divergence summary ==")
+    unique: dict[tuple[str, Optional[str]], FieldDivergenceAggregate] = {}
+    for d in result.initial_divergences:
+        unique.setdefault(
+            (d.field, d.known_gap),
+            FieldDivergenceAggregate(field=d.field, known_gap=d.known_gap),
+        ).count += 1
+    for step in result.steps:
+        for d in step.divergences:
+            unique.setdefault(
+                (d.field, d.known_gap),
+                FieldDivergenceAggregate(field=d.field, known_gap=d.known_gap),
+            ).count += 1
+
+    if not unique:
+        print("  (no divergences across the full walk)")
+        print()
+        print("PARITY: PASS — Python and Rust agree on every field at every step")
+        return 0
+
+    print(
+        f"  {len(unique)} unique field(s) diverged across "
+        f"{1 + len(result.steps)} state observations"
+    )
+    for agg in unique.values():
+        gap_tag = (
+            f"matches gap {agg.known_gap}"
+            if agg.known_gap
+            else "NOVEL (not in RUST_PARITY_GAPS.md)"
+        )
+        print(f"  - {agg.field}: occurrences={agg.count}, {gap_tag}")
+
+    print()
+    print(f"PARITY: FAIL — {len(unique)} unique field divergences detected")
+    return 1
+
+
+@dataclass
+class FieldDivergenceAggregate:
+    """One row in the aggregate divergence summary table."""
+    field: str
+    known_gap: str | None = None
+    count: int = 0
+
+
+def _short_repr(value, max_len: int = 80) -> str:
+    """Render a value as a short, single-line repr for the diff table."""
+    s = repr(value)
+    if len(s) <= max_len:
+        return s
+    return s[: max_len - 3] + "..."
+
+
 def main() -> int:
     p = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     p.add_argument("--seed", type=int, default=42)
@@ -1186,7 +1338,7 @@ def main() -> int:
     )
     p.add_argument(
         "--mode",
-        choices=("game", "initial-state", "trajectory", "multi-seed", "field-diff"),
+        choices=("game", "initial-state", "trajectory", "multi-seed", "field-diff", "cross-engine"),
         default="game",
         help=(
             "Which parity check to run. 'game' (default) plays a full game on "
@@ -1199,7 +1351,11 @@ def main() -> int:
             "aggregate summary. 'field-diff' builds a synthetic state, walks "
             "two parallel views of it, and prints a per-field OK/DIFFER table "
             "— the parity-debug primitive used to answer 'WHICH field "
-            "diverged' once a trajectory smoke says digests don't match."
+            "diverged' once a trajectory smoke says digests don't match. "
+            "'cross-engine' (round-27 Phase 5) builds matched Python + Rust "
+            "states from the tiny synthetic deck, drives N PassPriority "
+            "decisions on both, and reports per-step divergences with "
+            "gap-doc lookup."
         ),
     )
     p.add_argument(
@@ -1210,7 +1366,19 @@ def main() -> int:
             "(field-diff) artificially mutate one field on the right-hand "
             "view post-snapshot so the diff machinery has something to "
             "detect. Smoke-test the smoke. Valid field names: "
-            + ", ".join(FIELD_DIFF_FIELDS) + "."
+            + ", ".join(FIELD_DIFF_FIELDS) + ". "
+            "(cross-engine) when set to any truthy value, perturbs the "
+            "Rust state's player-0 life by -1 before the initial compare, "
+            "proving the harness flags an artificial cross-engine divergence."
+        ),
+    )
+    p.add_argument(
+        "--decisions",
+        type=int,
+        default=None,
+        help=(
+            "(cross-engine) number of PassPriority decisions to drive on "
+            "BOTH engines. Falls back to --num-decisions when unset."
         ),
     )
     p.add_argument(
@@ -1293,6 +1461,21 @@ def main() -> int:
             num_battlefield=args.num_battlefield,
             num_hand=args.num_hand,
             num_library=args.num_library,
+        )
+
+    if args.mode == "cross-engine":
+        n_decisions = args.decisions if args.decisions is not None else args.num_decisions
+        # In cross-engine mode --inject-divergence works as a flag rather
+        # than a field-picker; any non-empty value (and the default truthy
+        # case below) triggers the life-perturbation path. Mirrors the
+        # field-diff contract where the flag is field-name-keyed; here
+        # the smoke-test-the-smoke target is fixed (life_p0 -= 1) so the
+        # flag is binary.
+        inject = bool(args.inject_divergence)
+        return run_cross_engine_mode(
+            seed=args.seed,
+            num_decisions=n_decisions,
+            inject_divergence=inject,
         )
 
     colors = args.colors.split(",")

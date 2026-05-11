@@ -586,6 +586,84 @@ Python recipe must be updated in lockstep.
 
 ---
 
+## Known divergences flagged by cross-engine smoke (xfail-pinned)
+
+Round 27 / Phase 5 — the first cross-engine smoke harness landed in
+`scripts/parity_smoke.py --mode cross-engine`. It drives matched
+Python and Rust states through N PassPriority decisions on a tiny
+synthetic deck (Forest + Grizzly Bears) and reports per-field
+divergences with gap-doc lookup. The xfail-pinned tests in
+`tests/test_parity_smoke.py` (two as of r27) flag the inaugural
+NOVEL divergences — when the underlying gap closes, the xfail flips
+to xpass and we either renumber as G<n> below or drop it from this
+section.
+
+The inaugural cross-engine NOVEL divergences (NOT yet entered as
+proper G-numbered gaps because the closure path may be cosmetic
+rather than architectural — TBD by the follow-up slice):
+
+### CE1. `summoning_sick` default differs between Python and Rust on library objects
+
+- **Pinned by**:
+  `tests/test_parity_smoke.py::test_cross_engine_mode_initial_libraries_byte_equal_after_make_state`
+  (xfail-pinned).
+- **Today**: Python's `GameObject.summoning_sick` defaults to `True`
+  for every newly-allocated GameObject regardless of zone — including
+  library cards (where the field is gameplay-irrelevant). Rust's
+  `make_state` builds library `GameObject`s with `summoning_sick =
+  false`. Both engines hash this field into their fingerprint via
+  the per-object 8-tuple `(printing_name, tapped, summoning_sick,
+  damage, counters, attached_to, controller_id, id)`. The mismatched
+  default propagates straight into a cross-engine fingerprint
+  divergence on the initial state.
+- **Expected**: align the defaults. Either Python stops setting
+  `summoning_sick=True` on library objects (the field is only
+  meaningful for permanents on the battlefield), or Rust starts
+  setting it `true` on library objects (matching Python). Closing
+  the gap either way is a one-field-default change on the affected
+  side, no architectural lift.
+- **Impact**: high for the cross-engine fingerprint contract — every
+  cross-engine comparison from now until close hits this on the
+  zone signatures. Low for actual gameplay (the field's only effect
+  is on `can_attack`, which gates on battlefield zone before
+  consulting the field).
+- **Closeable**: yes — Phase 5 follow-up slice picks a side and
+  flips the default. Once closed, this entry moves to "Confirmed
+  gaps" with a real G-number (or gets folded into a parity
+  invariant if the closure makes the two engines byte-equal on
+  this field).
+
+### CE2. `pass_priority` apply_action behavior differs
+
+- **Pinned by**:
+  `tests/test_parity_smoke.py::test_cross_engine_mode_priority_player_unchanged_by_pass_priority`
+  (xfail-pinned). This is the cross-engine manifestation of the
+  already-documented gap G3 (`pass_priority` is a pure toggle).
+- **Today**: Python's `apply_action(PassPriority)` is a no-op —
+  priority management is owned by `simulate.priority_loop`, not by
+  `apply_action`. Rust's `apply_action({"kind": "pass_priority"})`
+  flips `priority_player` to `1 - priority_player`. The cross-
+  engine smoke surfaces this as a `priority_player` divergence on
+  every odd-numbered PassPriority step.
+- **Expected**: same as G3 — the closure is the priority +
+  steps + stack composition slice that integrates the round-9
+  primitives.
+- **Impact**: this is THE most-likely-to-be-hit cross-engine
+  divergence; every PassPriority decision the smoke takes will
+  flag it. Effectively gates the cross-engine harness's ability
+  to exercise multi-step decision scripts with a clean priority
+  field. Workaround: the smoke harness drives both engines
+  through `apply_action` directly and reports the divergence
+  rather than papering over it — honest failure count is the real
+  progress signal.
+- **Closeable**: yes — bundled with the G3/G4/G15 priority
+  composition slice.
+
+(Other smoke-flagged divergences may be added by follow-up Phase 5
+slices as the deck pool / decision script grows.)
+
+---
+
 ## Maintenance
 
 When a slice closes one of the gaps above, drop the entry from the
@@ -595,3 +673,12 @@ add an entry following the same shape — short name, pinning test,
 Rust today, expected, impact, closeable. The 1000-game smoke harness
 parses this doc by section header (`### G<n>` and `### I<n>` are the
 stable anchors), so keep the numbering monotonic.
+
+The `### CE<n>` anchors above are the cross-engine-smoke-flagged
+entries (round 27 onwards). They follow the same shape as G/I entries
+but use a separate prefix to make it obvious which divergences were
+detected by the cross-engine harness vs the slice-internal Rust tests.
+A future slice that closes a CE<n> entry either upgrades it to a
+proper G<n> (with a deeper investigation than the smoke could
+provide) or drops it entirely if the closure makes it a parity
+invariant.

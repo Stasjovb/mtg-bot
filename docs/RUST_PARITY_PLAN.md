@@ -158,13 +158,46 @@ points exactly at the spot to fix.
 | Phase | Goal | Rounds est. | Output |
 |---|---|---|---|
 | **Phase 0** ✓ | Engine primitives | rounds 1-19 (done) | 19 Effect variants, ~676 Rust tests |
-| **Phase 1** ✓ (this round) | Discovery + scaffold | round 20 | RUST_PARITY_PLAN.md, parity_smoke.py |
-| **Phase 2** | Externalize RNG + spec GameState API | round 21 | external-RNG threading on existing slices, PyO3 surface for setup/clone/is_over |
-| **Phase 3** | Action types + legal_decisions enumerator | rounds 22-25 | 6 most-common Actions, legal_decisions parity tests on synthetic states |
+| **Phase 1** ✓ (round 20) | Discovery + scaffold | round 20 | RUST_PARITY_PLAN.md, parity_smoke.py |
+| **Phase 2** ✓ | Externalize RNG + spec GameState API | round 21 | external-RNG threading on existing slices, PyO3 surface for setup/clone/is_over |
+| **Phase 3** ✓ (round 24) | Action types + legal_decisions enumerator | rounds 22-25 | 6 most-common Actions, legal_decisions parity tests on synthetic states |
 | **Phase 4a** | Top-14 high-frequency Effects | rounds 26-30 | covers most card emissions |
 | **Phase 4b** | Mid-frequency Effects (next ~50) | rounds 31-35 | covers most card-instances |
-| **Phase 5** | Per-step trajectory diff on 1 game | round 36 | parity_smoke.py passes on 1 game |
+| **Phase 5: FIRST SLICE DONE (round 27)** | Per-step trajectory diff on 1 game | round 36 | `parity_smoke.py --mode cross-engine` runs N decisions on matched Python+Rust states + reports field-level divergences with gap-doc lookup. First slice ships on tiny synthetic state (Forest + Bears + PassPriority); next slices grow the deck pool + decision script. |
 | **Phase 6** | Scale to 1000 games | round 37+ | the goal |
+
+### Phase 5: cross-engine smoke harness — what landed in round 27
+
+`scripts/parity_smoke.py --mode cross-engine` is the closing-the-loop
+slice. The pieces built up over rounds 21-26 (PyO3 GameState, snapshot
+getters, `fingerprint()` recipe, `make_state` deck loader, legal-action
+enumerator, all the Action variants) are now driven side-by-side
+against the Python engine through the same decision script.
+
+Architecture:
+
+- `src/mtg_bot/parity/cross_engine.py` — reusable helper API:
+  `tiny_synthetic_deckspec()` returns a minimal Forest + Bears deck;
+  `build_matched_states(spec)` builds Python + Rust starting states
+  from the same DeckSpec; `walk_both(spec, n)` drives N decisions and
+  reports a `CrossEngineWalkResult` with per-step divergences.
+- CLI: `parity_smoke.py --mode cross-engine --seed N --decisions M`
+  prints a human-readable report. `--inject-divergence` perturbs
+  Rust's life_p0 to verify the harness flags artificial divergences
+  (smoke-test-the-smoke).
+- Gap-doc lookup: divergences map to `RUST_PARITY_GAPS.md` section
+  ids via a curated `field → gap id` table in
+  `cross_engine.default_gap_lookup`. Fields without an entry surface
+  as "NOVEL" — the headline output of the first slice (NOVEL
+  divergences are NEW parity bugs).
+
+The first slice's tiny-synthetic deck (Forest + Bears, no shuffle, no
+play) is deliberately small — the bridge plumbing has known gaps
+(documented in RUST_PARITY_GAPS.md) and the value is in surfacing
+those gaps with a precise diagnostic instead of "fingerprints don't
+match, good luck". Larger decks + non-PassPriority decisions come in
+follow-up Phase 5 slices once the inaugural NOVEL divergences are
+addressed.
 
 Long-tail bespoke effects + sagas + planeswalkers + battles are
 outside Phase 6 scope. The 1000-game parity smoke uses a
