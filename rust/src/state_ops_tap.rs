@@ -120,5 +120,32 @@ impl GameState {
             obj.tapped = false;
         }
     }
+
+    /// Clear `summoning_sick` on every battlefield permanent controlled
+    /// by `player_id`. Mirrors the beginning-of-untap-step sweep that
+    /// `advance_phase` composes (`state_ops_steps.rs::clear_summoning_sick_for_player_inline`);
+    /// exposed as a pymethod so test fixtures can place creatures via
+    /// `move_object` and then mark them as "been on the battlefield
+    /// long enough" without driving a full turn loop.
+    ///
+    /// In real play this fires exactly once per turn during the
+    /// active player's untap step (CR 302.1 — a creature you control
+    /// continuously since the beginning of your most recent turn
+    /// doesn't have summoning sickness). The public pymethod is a
+    /// test convenience; production game flow continues to use
+    /// `advance_phase` for the composed untap + sickness-clear hook.
+    fn clear_summoning_sick_for_player(&mut self, player_id: u8) {
+        let player = match self.players.iter_mut().find(|p| p.id == player_id) {
+            Some(p) => p,
+            None => return,
+        };
+        if player.battlefield.iter().all(|o| !o.summoning_sick) {
+            return;
+        }
+        let zone: &mut Vec<GameObject> = Arc::make_mut(&mut player.battlefield);
+        for obj in zone.iter_mut() {
+            obj.summoning_sick = false;
+        }
+    }
 }
 

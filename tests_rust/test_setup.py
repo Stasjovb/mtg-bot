@@ -172,17 +172,22 @@ def test_make_state_id_allocation_order(engine):
 
 
 def test_make_state_per_object_state_zeroed(engine):
+    # Round-28 CE1 closure: make_state defaults summoning_sick=true on
+    # library + hand objects to match Python's universal default
+    # (gameplay-irrelevant in non-battlefield zones; the field is
+    # cleared by the active player's untap step when on battlefield).
+    # tapped / damage / counters remain zero-initialized.
     reg = _two_card_registry(engine)
     state = engine.make_state(reg, [0, 1], [1, 0], p0_hand_printing_ids=[0])
     for player_id in (0, 1):
         for d in state.library_snapshot(player_id):
             assert d["tapped"] is False
-            assert d["summoning_sick"] is False
+            assert d["summoning_sick"] is True
             assert d["damage"] == 0
             assert d["counters"] == 0
         for d in state.hand_snapshot(player_id):
             assert d["tapped"] is False
-            assert d["summoning_sick"] is False
+            assert d["summoning_sick"] is True
             assert d["damage"] == 0
             assert d["counters"] == 0
 
@@ -527,7 +532,12 @@ def test_make_state_shuffle_single_card_library_noop(engine):
 # snapshot semantics). If this digest changes, either parity smoke
 # breaks or the parity_smoke.py:hash_state recipe needs the same
 # update on both sides of the bridge.
-EXPECTED_MAKE_STATE_CANONICAL_DEFAULT_FP = "a1193453edec"
+EXPECTED_MAKE_STATE_CANONICAL_DEFAULT_FP = "411d5b757c22"
+# Round-28 CE1 closure flipped this baseline: make_state now defaults
+# summoning_sick=true on library + hand objects (matches Python's
+# universal default), which is folded into each object's 8-tuple in
+# the fingerprint serializer. Previous baseline was "a1193453edec"
+# from round-23 (summoning_sick=false default).
 
 
 def test_make_state_canonical_default_fingerprint_pinned(engine):
