@@ -731,3 +731,120 @@ def test_add_mana_to_pool_effect_rejects_negative_amount_at_register_time(
     expected_zero = {"W": 0, "U": 0, "B": 0, "R": 0, "G": 0, "C": 0}
     assert synthetic_state.get_mana_pool(0) == expected_zero
     assert synthetic_state.get_mana_pool(1) == expected_zero
+
+
+# -------------------- Round-28 AddNManaOfChosenColor (4 cards) --------------------
+
+
+def _lotus_field_dict(amount: int = 3, options=None):
+    """Lotus-Field-shape: add N mana of any one color (options-driven
+    deterministic-pick-first in first-slice)."""
+    spec = {
+        "name": "Synthetic Lotus Field",
+        "card_types": ["Land"],
+        "effects": [
+            {
+                "kind": "add_n_mana_of_chosen_color",
+                "amount": amount,
+            }
+        ],
+    }
+    if options is not None:
+        spec["effects"][0]["options"] = options
+    return spec
+
+
+def test_register_add_n_mana_of_chosen_color_default_options(empty_registry):
+    pid = empty_registry.register_printing(_lotus_field_dict(amount=3))
+    effects = empty_registry.get_printing_effects(pid)
+    assert effects[0]["kind"] == "add_n_mana_of_chosen_color"
+    assert effects[0]["amount"] == 3
+    # Default options: W/U/B/R/G (no C in the default set; mirrors
+    # Python's `options: tuple[str, ...] = ("W", "U", "B", "R", "G")`).
+    assert effects[0]["options"] == ["W", "U", "B", "R", "G"]
+
+
+def test_register_add_n_mana_of_chosen_color_explicit_options(empty_registry):
+    pid = empty_registry.register_printing(
+        _lotus_field_dict(amount=2, options=["G", "R"])
+    )
+    effects = empty_registry.get_printing_effects(pid)
+    assert effects[0]["options"] == ["G", "R"]
+
+
+def test_register_add_n_mana_missing_amount_raises(empty_registry):
+    import pytest
+    with pytest.raises(ValueError, match="missing required 'amount'"):
+        empty_registry.register_printing(
+            {
+                "name": "no-amount",
+                "card_types": ["Land"],
+                "effects": [{"kind": "add_n_mana_of_chosen_color"}],
+            }
+        )
+
+
+def test_register_add_n_mana_negative_amount_raises(empty_registry):
+    import pytest
+    with pytest.raises(ValueError, match="non-negative"):
+        empty_registry.register_printing(_lotus_field_dict(amount=-1))
+
+
+def test_register_add_n_mana_invalid_color_raises(empty_registry):
+    import pytest
+    with pytest.raises(ValueError, match="unknown color"):
+        empty_registry.register_printing(
+            _lotus_field_dict(amount=1, options=["X"])
+        )
+
+
+def test_register_add_n_mana_empty_options_raises(empty_registry):
+    import pytest
+    with pytest.raises(ValueError, match="options must be non-empty"):
+        empty_registry.register_printing(_lotus_field_dict(amount=1, options=[]))
+
+
+def test_resolve_add_n_mana_picks_first_option_default_w(synthetic_state):
+    """Default options is (W, U, B, R, G); first-slice deterministic
+    pick is W. Resolving adds amount White mana to controller's pool."""
+    pool_before_w = synthetic_state.get_mana_pool(0)["W"]
+    spell_id = synthetic_state.register_and_inject_object(
+        _lotus_field_dict(amount=3), 0, ZONE_BATTLEFIELD
+    )
+    synthetic_state.push_to_stack(spell_id, 0)
+    synthetic_state.resolve_top_of_stack()
+    assert synthetic_state.get_mana_pool(0)["W"] == pool_before_w + 3
+
+
+def test_resolve_add_n_mana_picks_first_option_custom_green(synthetic_state):
+    """options=[G,R,U] -> picks G (first), mints amount green mana."""
+    pool_before_g = synthetic_state.get_mana_pool(0)["G"]
+    spell_id = synthetic_state.register_and_inject_object(
+        _lotus_field_dict(amount=2, options=["G", "R", "U"]), 0, ZONE_BATTLEFIELD
+    )
+    synthetic_state.push_to_stack(spell_id, 0)
+    synthetic_state.resolve_top_of_stack()
+    assert synthetic_state.get_mana_pool(0)["G"] == pool_before_g + 2
+
+
+def test_resolve_add_n_mana_amount_zero_is_noop(synthetic_state):
+    """amount=0 short-circuits; no pool change."""
+    pool_before = synthetic_state.get_mana_pool(0)
+    spell_id = synthetic_state.register_and_inject_object(
+        _lotus_field_dict(amount=0), 0, ZONE_BATTLEFIELD
+    )
+    synthetic_state.push_to_stack(spell_id, 0)
+    synthetic_state.resolve_top_of_stack()
+    pool_after = synthetic_state.get_mana_pool(0)
+    assert pool_after == pool_before
+
+
+def test_resolve_add_n_mana_clone_isolation(synthetic_state):
+    spell_id = synthetic_state.register_and_inject_object(
+        _lotus_field_dict(amount=4, options=["R"]), 0, ZONE_BATTLEFIELD
+    )
+    synthetic_state.push_to_stack(spell_id, 0)
+    cloned = synthetic_state.clone_once()
+    cloned.resolve_top_of_stack()
+
+    assert cloned.get_mana_pool(0)["R"] == synthetic_state.get_mana_pool(0)["R"] + 4

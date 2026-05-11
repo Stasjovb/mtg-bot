@@ -813,6 +813,23 @@ pub enum Effect {
     /// the implicit shape via the resolve arm's selection logic.
     /// negative `amount` raises; `amount=0` is a legal no-op.
     PutPlusOneCounterOnCreatureYouControl { amount: i32 },
+    /// **Round 28 coverage extension.** Add `amount` mana of a single
+    /// color chosen by the controller at resolution time. Mirrors
+    /// Python's `AddNManaOfChosenColor(amount: int, options: tuple[str, ...])`
+    /// (`mana.py:85` — Lotus-Field-shape, 4 EoE cards: "Add three mana
+    /// of any one color").
+    ///
+    /// **First-slice deterministic color choice.** Picks `options[0]`
+    /// (first available color, default `"W"`). Mirrors Python's
+    /// "first color in options" deterministic fallback when no agent
+    /// is seated. Future decision-callback slice plumbs the explicit
+    /// player choice through the pending_decisions queue.
+    ///
+    /// **Schema.** `amount: i32` and `options: Vec<String>` (default
+    /// WUBRG). Empty options Vec is illegal; non-WUBRGC entries
+    /// raise. amount<0 raises at parse + apply. amount=0 is a legal
+    /// no-op (no color minted).
+    AddNManaOfChosenColor { amount: i32, options: Vec<String> },
 }
 
 #[derive(Clone, Debug)]
@@ -1369,6 +1386,57 @@ fn parse_effect(dict: &Bound<'_, PyDict>) -> PyResult<Effect> {
             }
             Ok(Effect::PutPlusOneCounterOnEachCreatureYouControl { amount })
         }
+        "add_n_mana_of_chosen_color" => {
+            // Python's AddNManaOfChosenColor(amount: int,
+            // options: tuple[str, ...] = ("W","U","B","R","G")).
+            let amount: i32 = match dict.get_item("amount")? {
+                Some(a) => a.extract().map_err(|e| {
+                    PyValueError::new_err(format!(
+                        "add_n_mana_of_chosen_color.amount must be an integer (got: {e})"
+                    ))
+                })?,
+                None => {
+                    return Err(PyValueError::new_err(
+                        "add_n_mana_of_chosen_color: missing required 'amount' field",
+                    ));
+                }
+            };
+            if amount < 0 {
+                return Err(PyValueError::new_err(format!(
+                    "add_n_mana_of_chosen_color: amount must be non-negative, got {amount}"
+                )));
+            }
+            let options: Vec<String> = match dict.get_item("options")? {
+                Some(items) => {
+                    let raw: Vec<String> = items.extract().map_err(|e| {
+                        PyValueError::new_err(format!(
+                            "add_n_mana_of_chosen_color.options must be a list of color strings (got: {e})"
+                        ))
+                    })?;
+                    if raw.is_empty() {
+                        return Err(PyValueError::new_err(
+                            "add_n_mana_of_chosen_color: options must be non-empty",
+                        ));
+                    }
+                    for c in &raw {
+                        if !matches!(c.as_str(), "W" | "U" | "B" | "R" | "G" | "C") {
+                            return Err(PyValueError::new_err(format!(
+                                "add_n_mana_of_chosen_color: unknown color {c:?}; valid: W, U, B, R, G, C"
+                            )));
+                        }
+                    }
+                    raw
+                }
+                None => vec![
+                    "W".into(),
+                    "U".into(),
+                    "B".into(),
+                    "R".into(),
+                    "G".into(),
+                ],
+            };
+            Ok(Effect::AddNManaOfChosenColor { amount, options })
+        }
         "put_plus_one_counter_on_creature_you_control" => {
             // Python's PutPlusOneCounterOnCreatureYouControl uses
             // PutPlusOneCounters base default of amount=1.
@@ -1441,7 +1509,7 @@ fn parse_effect(dict: &Bound<'_, PyDict>) -> PyResult<Effect> {
             Ok(Effect::Sequence { effects: children })
         }
         other => Err(PyValueError::new_err(format!(
-            "unknown effect kind {other:?}; valid: deal_damage, draw_cards, gain_life, return_to_hand, mill, mill_target_player, exile_target, tap_target, untap_target, sacrifice, add_counters, discard_card, scry_n, destroy_target, damage_each_opponent, damage_each_creature, create_token, add_mana_to_pool, search_library_for_basic_land_tapped, put_plus_one_counter_on_self, surveil, counter_target_spell, return_creature_from_your_graveyard_to_battlefield, discard_self, each_opponent_loses_life, lose_life, target_opponent_loses_life, each_opponent_discards, destroy_all_creatures, destroy_target_nonland_permanent, destroy_target_artifact, destroy_target_land, deal_damage_any_target, pump_self_until_eot, pump_target_creature_until_eot, sequence, pump_creatures_you_control_until_eot, return_creature_from_your_graveyard_to_hand"
+            "unknown effect kind {other:?}; valid: deal_damage, draw_cards, gain_life, return_to_hand, mill, mill_target_player, exile_target, tap_target, untap_target, sacrifice, add_counters, discard_card, scry_n, destroy_target, damage_each_opponent, damage_each_creature, create_token, add_mana_to_pool, search_library_for_basic_land_tapped, put_plus_one_counter_on_self, surveil, counter_target_spell, return_creature_from_your_graveyard_to_battlefield, discard_self, each_opponent_loses_life, lose_life, target_opponent_loses_life, each_opponent_discards, destroy_all_creatures, destroy_target_nonland_permanent, destroy_target_artifact, destroy_target_land, deal_damage_any_target, pump_self_until_eot, pump_target_creature_until_eot, sequence, pump_creatures_you_control_until_eot, return_creature_from_your_graveyard_to_hand, put_plus_one_counter_on_each_creature_you_control, put_plus_one_counter_on_creature_you_control, add_n_mana_of_chosen_color"
         ))),
     }
 }
@@ -1779,6 +1847,11 @@ fn effect_to_pydict<'py>(
         Effect::PutPlusOneCounterOnCreatureYouControl { amount } => {
             d.set_item("kind", "put_plus_one_counter_on_creature_you_control")?;
             d.set_item("amount", *amount)?;
+        }
+        Effect::AddNManaOfChosenColor { amount, options } => {
+            d.set_item("kind", "add_n_mana_of_chosen_color")?;
+            d.set_item("amount", *amount)?;
+            d.set_item("options", options.clone())?;
         }
         Effect::Sequence { effects } => {
             d.set_item("kind", "sequence")?;
