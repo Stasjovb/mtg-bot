@@ -3273,6 +3273,61 @@ fn apply_effect(
                 }
             }
         }
+        // Round-28 intervening-if conditional. Count source-
+        // controller's tapped creatures; if >= min_count, recursively
+        // apply nested effect. Otherwise silent no-op.
+        Effect::ConditionalOnTappedCreatures { effect, min_count } => {
+            // Locate source controller.
+            let mut src_controller: Option<u8> = None;
+            'outer: for player in &state.players {
+                for zone in [
+                    &player.hand,
+                    &player.library,
+                    &player.battlefield,
+                    &player.graveyard,
+                    &player.exile,
+                ] {
+                    if let Some(obj) = zone.iter().find(|o| o.id == source_obj_id) {
+                        src_controller = Some(obj.controller);
+                        break 'outer;
+                    }
+                }
+            }
+            if src_controller.is_none() {
+                if let Some(item) = state
+                    .stack
+                    .iter()
+                    .find(|i| i.source_obj_id == source_obj_id)
+                {
+                    src_controller = Some(item.controller);
+                }
+            }
+            let Some(controller) = src_controller else {
+                return Ok(()); // source not found → silent fizzle
+            };
+            let cidx = controller as usize;
+            // Count tapped creatures on controller's battlefield.
+            let tapped_count: i32 = {
+                let bf = &state.players[cidx].battlefield;
+                let registry = &state.registry;
+                bf.iter()
+                    .filter(|obj| {
+                        if !obj.tapped {
+                            return false;
+                        }
+                        let Some(printing) = registry.printings.get(obj.printing_id as usize)
+                        else {
+                            return false;
+                        };
+                        printing.card_types.iter().any(|t| t == "Creature")
+                    })
+                    .count() as i32
+            };
+            if tapped_count >= *min_count {
+                apply_effect(state, effect.as_ref(), source_obj_id)?;
+            }
+            // else: silent no-op
+        }
     }
     Ok(())
 }

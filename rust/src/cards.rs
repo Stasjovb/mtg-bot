@@ -967,6 +967,27 @@ pub enum Effect {
     /// Idempotent on already-tapped target (silent no-op). Empty /
     /// no-eligible defender bf → silent fizzle.
     TapTargetArtifactOrCreature,
+    /// **Round 28 coverage extension.** Run `effect` only if the
+    /// source's controller has at least `min_count` tapped creatures
+    /// on their battlefield. Mirrors Python's
+    /// `ConditionalOnTappedCreatures(effect, min_count=2)`
+    /// (`combinators.py:1007` — Flight-Deck-Coordinator-shape
+    /// intervening-if clause, 6 EoE cards).
+    ///
+    /// **Mechanism.** At resolve time, locate source controller;
+    /// count tapped creatures on that player's battlefield; if
+    /// `count >= min_count`, recursively call `apply_effect` on the
+    /// nested effect with the same source_obj_id. Otherwise silent
+    /// no-op (matches Python's "skipped" log line).
+    ///
+    /// **Recursion.** Box<Effect> for the nested effect — Effect is
+    /// heap-allocated so the recursion is safe (same shape as
+    /// Sequence's Vec<Effect>).
+    ///
+    /// **Schema.** `effect` required; `min_count` defaults to 2.
+    /// Negative min_count is legal (always-fires) but ill-formed
+    /// from a parity perspective; min_count=0 always fires.
+    ConditionalOnTappedCreatures { effect: Box<Effect>, min_count: i32 },
 }
 
 #[derive(Clone, Debug)]
@@ -1536,6 +1557,32 @@ fn parse_effect(dict: &Bound<'_, PyDict>) -> PyResult<Effect> {
         "tap_target_artifact_or_creature" => {
             Ok(Effect::TapTargetArtifactOrCreature)
         }
+        "conditional_on_tapped_creatures" => {
+            // Required nested effect.
+            let nested = dict.get_item("effect")?.ok_or_else(|| {
+                PyValueError::new_err(
+                    "conditional_on_tapped_creatures: missing required 'effect' field",
+                )
+            })?;
+            let nested_dict = nested.downcast::<PyDict>().map_err(|_| {
+                PyValueError::new_err(
+                    "conditional_on_tapped_creatures.effect must be a dict (effect-shape)",
+                )
+            })?;
+            let inner = parse_effect(nested_dict)?;
+            let min_count: i32 = match dict.get_item("min_count")? {
+                Some(m) => m.extract().map_err(|e| {
+                    PyValueError::new_err(format!(
+                        "conditional_on_tapped_creatures.min_count must be an integer (got: {e})"
+                    ))
+                })?,
+                None => 2,
+            };
+            Ok(Effect::ConditionalOnTappedCreatures {
+                effect: Box::new(inner),
+                min_count,
+            })
+        }
         "pump_creatures_opponents_control_until_eot" => {
             // Mirror schema of pump_creatures_you_control_until_eot.
             let power_bonus: i32 = match dict.get_item("power_bonus")? {
@@ -1716,7 +1763,7 @@ fn parse_effect(dict: &Bound<'_, PyDict>) -> PyResult<Effect> {
             Ok(Effect::Sequence { effects: children })
         }
         other => Err(PyValueError::new_err(format!(
-            "unknown effect kind {other:?}; valid: deal_damage, draw_cards, gain_life, return_to_hand, mill, mill_target_player, exile_target, tap_target, untap_target, sacrifice, add_counters, discard_card, scry_n, destroy_target, damage_each_opponent, damage_each_creature, create_token, add_mana_to_pool, search_library_for_basic_land_tapped, put_plus_one_counter_on_self, surveil, counter_target_spell, return_creature_from_your_graveyard_to_battlefield, discard_self, each_opponent_loses_life, lose_life, target_opponent_loses_life, each_opponent_discards, destroy_all_creatures, destroy_target_nonland_permanent, destroy_target_artifact, destroy_target_land, deal_damage_any_target, pump_self_until_eot, pump_target_creature_until_eot, sequence, pump_creatures_you_control_until_eot, return_creature_from_your_graveyard_to_hand, put_plus_one_counter_on_each_creature_you_control, put_plus_one_counter_on_creature_you_control, add_n_mana_of_chosen_color, search_library_for_card, pump_creatures_opponents_control_until_eot, put_card_from_graveyard_on_bottom_of_library, move_self_counters_to_target_creature_you_control, deal_damage_equal_to_source_power_any_target, tap_target_artifact_or_creature"
+            "unknown effect kind {other:?}; valid: deal_damage, draw_cards, gain_life, return_to_hand, mill, mill_target_player, exile_target, tap_target, untap_target, sacrifice, add_counters, discard_card, scry_n, destroy_target, damage_each_opponent, damage_each_creature, create_token, add_mana_to_pool, search_library_for_basic_land_tapped, put_plus_one_counter_on_self, surveil, counter_target_spell, return_creature_from_your_graveyard_to_battlefield, discard_self, each_opponent_loses_life, lose_life, target_opponent_loses_life, each_opponent_discards, destroy_all_creatures, destroy_target_nonland_permanent, destroy_target_artifact, destroy_target_land, deal_damage_any_target, pump_self_until_eot, pump_target_creature_until_eot, sequence, pump_creatures_you_control_until_eot, return_creature_from_your_graveyard_to_hand, put_plus_one_counter_on_each_creature_you_control, put_plus_one_counter_on_creature_you_control, add_n_mana_of_chosen_color, search_library_for_card, pump_creatures_opponents_control_until_eot, put_card_from_graveyard_on_bottom_of_library, move_self_counters_to_target_creature_you_control, deal_damage_equal_to_source_power_any_target, tap_target_artifact_or_creature, conditional_on_tapped_creatures"
         ))),
     }
 }
@@ -2086,6 +2133,11 @@ fn effect_to_pydict<'py>(
         }
         Effect::TapTargetArtifactOrCreature => {
             d.set_item("kind", "tap_target_artifact_or_creature")?;
+        }
+        Effect::ConditionalOnTappedCreatures { effect, min_count } => {
+            d.set_item("kind", "conditional_on_tapped_creatures")?;
+            d.set_item("effect", effect_to_pydict(py, effect)?)?;
+            d.set_item("min_count", *min_count)?;
         }
         Effect::Sequence { effects } => {
             d.set_item("kind", "sequence")?;

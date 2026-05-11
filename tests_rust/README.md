@@ -211,6 +211,8 @@ the test lands in a commit.
 
 | rust(effect-tap-artifact-or-creature): Effect::TapTargetArtifactOrCreature — broader-filter tap variant (defender's first artifact OR creature; 2 EoE cards). | tests_rust/test_tap.py extend | green  | feature/rust-effect-tap-artifact-or-creature |
 
+| rust(effect-conditional-tapped-creatures): Effect::ConditionalOnTappedCreatures — Flight-Deck-Coordinator-shape intervening-if (6 EoE cards). Recursive nested effect via Box<Effect>. | tests_rust/test_resolve.py extend | green  | feature/rust-effect-conditional-tapped-creatures |
+
 ## Build invocation reminder
 
 ```
