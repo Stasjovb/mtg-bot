@@ -7127,6 +7127,127 @@ def test_resolve_each_opponent_mills_missing_count_defaults_to_one(engine):
     assert effects[0]["count"] == 1
 
 
+# --- EachOpponentSacrificesCreature dispatch ------------------------
+#
+# **EachOpponentSacrificesCreature scope** (round-28). Mirrors
+# `EachOpponentDiscards` source-finder shape; on the resolution side,
+# picks the (2-player) opponent's first creature on battlefield and
+# sends it to their graveyard with CR 400.7 zone-change reset.
+# No eligible creature → silent fizzle.
+
+
+def _each_opponent_sacrifices_creature_dict(card_types=None):
+    """A test source: defaults to Creature card_types so the source
+    stays on bf after resolve (no CR 608.2m graveyard side-effect)."""
+    if card_types is None:
+        card_types = ["Creature"]
+    p = {
+        "name": "Test EachOpponentSacrificesCreature",
+        "card_types": card_types,
+        "mana_cost": {"B": 2, "generic": 1},
+        "effects": [{"kind": "each_opponent_sacrifices_creature"}],
+    }
+    if "Creature" in card_types:
+        p["power"] = 2
+        p["toughness"] = 2
+    return p
+
+
+def _first_p1_creature_id(state):
+    """Helper: id of the first creature on p1's battlefield."""
+    snap = state.battlefield_snapshot()
+    for d in snap:
+        if d["controller_id"] == 1 and d["printing_name"] == "Grizzly Bears":
+            return d["id"]
+    raise AssertionError("no Grizzly Bears on p1 battlefield")
+
+
+def test_resolve_each_opponent_sacrifices_p1_loses_first_creature(synthetic_state):
+    """Source on p0's battlefield → p1 (the opponent) sacrifices their
+    first creature. p1 graveyard +1; p1 bf shrinks by 1."""
+    target_id = _first_p1_creature_id(synthetic_state)
+    src_id = synthetic_state.register_and_inject_object(
+        _each_opponent_sacrifices_creature_dict(), 0, ZONE_BATTLEFIELD
+    )
+    p1_grave_before = synthetic_state.graveyard_sizes[1]
+    p0_grave_before = synthetic_state.graveyard_sizes[0]
+
+    synthetic_state.push_to_stack(src_id, 0)
+    synthetic_state.resolve_top_of_stack()
+
+    assert synthetic_state.is_stack_empty() is True
+    # Target moved from p1 bf to p1 graveyard.
+    assert synthetic_state.find_object_zone(target_id) == 3  # ZONE_GRAVEYARD
+    assert synthetic_state.graveyard_sizes[1] == p1_grave_before + 1
+    # p0's graveyard unchanged (source is on bf, not on stack -> moves nowhere).
+    assert synthetic_state.graveyard_sizes[0] == p0_grave_before
+
+
+def test_resolve_each_opponent_sacrifices_no_creature_silent_fizzle(engine):
+    """Opponent's bf has no creature → silent fizzle. No graveyard
+    delta on either side."""
+    state = engine.make_synthetic_state(
+        num_battlefield=0, num_hand=0, num_library=2
+    )
+    src_id = state.register_and_inject_object(
+        _each_opponent_sacrifices_creature_dict(), 0, ZONE_BATTLEFIELD
+    )
+    p0_grave_before = state.graveyard_sizes[0]
+    p1_grave_before = state.graveyard_sizes[1]
+
+    state.push_to_stack(src_id, 0)
+    state.resolve_top_of_stack()  # no raise
+
+    assert state.is_stack_empty() is True
+    assert state.graveyard_sizes[0] == p0_grave_before
+    assert state.graveyard_sizes[1] == p1_grave_before
+
+
+def test_resolve_each_opponent_sacrifices_opponent_source_active_player_loses_creature(
+    synthetic_state,
+):
+    """Source on p1's bf (controller=1) → p0 (opponent of p1)
+    sacrifices their first creature. Confirms source-relative
+    resolution, not active-player-relative."""
+    snap = synthetic_state.battlefield_snapshot()
+    p0_first_bear_id = next(
+        d["id"] for d in snap
+        if d["controller_id"] == 0 and d["printing_name"] == "Grizzly Bears"
+    )
+    src_id = synthetic_state.register_and_inject_object(
+        _each_opponent_sacrifices_creature_dict(), 1, ZONE_BATTLEFIELD
+    )
+    p0_grave_before = synthetic_state.graveyard_sizes[0]
+    assert synthetic_state.active_player == 0
+
+    synthetic_state.push_to_stack(src_id, 1)
+    synthetic_state.resolve_top_of_stack()
+
+    # p0's first creature went to p0's graveyard.
+    assert synthetic_state.find_object_zone(p0_first_bear_id) == 3
+    assert synthetic_state.graveyard_sizes[0] == p0_grave_before + 1
+
+
+def test_resolve_each_opponent_sacrifices_resets_per_object_state(synthetic_state):
+    """The sacrificed creature has its tapped/damage/counters cleared
+    on the way off bf (CR 400.7)."""
+    target_id = _first_p1_creature_id(synthetic_state)
+    # Tap the target and add damage; both should be cleared.
+    synthetic_state.tap_object(target_id)
+    src_id = synthetic_state.register_and_inject_object(
+        _each_opponent_sacrifices_creature_dict(), 0, ZONE_BATTLEFIELD
+    )
+    synthetic_state.push_to_stack(src_id, 0)
+    synthetic_state.resolve_top_of_stack()
+
+    # Find the object now in p1 graveyard via snapshot.
+    g_snap = synthetic_state.graveyard_snapshot(1)
+    target = next(d for d in g_snap if d["id"] == target_id)
+    assert target["tapped"] is False
+    assert target["damage"] == 0
+    assert target["counters"] == 0
+
+
 # --- DestroyTargetArtifact dispatch ---------------------------------
 #
 # **DestroyTargetArtifact scope** (mirrored in the Rust module docstring

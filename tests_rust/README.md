@@ -241,6 +241,8 @@ the test lands in a commit.
 
 | rust(effect-pump-target-artifact-or-creature): Effect::PumpTargetArtifactOrCreatureUntilEOT — broader-filter UEOT pump (3+ EoE cards); same shape as PumpTargetCreatureUntilEOT but eligibility is artifact OR creature. | tests_rust/test_ueot.py extend | green  | feature/rust-effect-pump-target-artifact-or-creature |
 
+| rust(effect-each-opponent-sacrifices-creature): Effect::EachOpponentSacrificesCreature — Cruel-Edict-shape; each opponent sacrifices a creature (3+ EoE cards); same source-finder + opponent-as-target shape as EachOpponentDiscards / EachOpponentMillsCards. | tests_rust/test_resolve.py extend | green  | feature/rust-effect-each-opponent-sacrifices-creature |
+
 ## Build invocation reminder
 
 ```

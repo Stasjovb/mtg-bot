@@ -4127,6 +4127,78 @@ fn apply_effect(
                 }
             }
         }
+        // Round-28 EachOpponentSacrificesCreature (3+ EoE cards).
+        // Mirrors the round-24 EachOpponentDiscards source-finder
+        // shape; on the resolution side, picks the (single 2-player)
+        // opponent's first creature on battlefield and sends it to
+        // their graveyard with CR 400.7 zone-change reset. No
+        // eligible creature → silent fizzle.
+        Effect::EachOpponentSacrificesCreature => {
+            // Source-controller resolution (mirrors EachOpponentDiscards).
+            let mut source_controller: Option<u8> = None;
+            'outer: for player in state.players.iter() {
+                for zone in [
+                    &player.hand,
+                    &player.library,
+                    &player.battlefield,
+                    &player.graveyard,
+                    &player.exile,
+                ] {
+                    for obj in zone.iter() {
+                        if obj.id == source_obj_id {
+                            source_controller = Some(obj.controller);
+                            break 'outer;
+                        }
+                    }
+                }
+            }
+            if source_controller.is_none() {
+                if let Some(item) = state
+                    .stack
+                    .iter()
+                    .find(|i| i.source_obj_id == source_obj_id)
+                {
+                    source_controller = Some(item.controller);
+                }
+            }
+            let Some(controller) = source_controller else {
+                return Ok(()); // source not found: silent fizzle
+            };
+            let opponent_idx = (1 - controller) as usize;
+            // Pick first creature on opponent's bf.
+            let target_id: Option<u32> = {
+                let bf = &state.players[opponent_idx].battlefield;
+                let registry = &state.registry;
+                bf.iter().find_map(|obj| {
+                    let printing = registry.printings.get(obj.printing_id as usize)?;
+                    if printing.card_types.iter().any(|t| t == "Creature") {
+                        Some(obj.id)
+                    } else {
+                        None
+                    }
+                })
+            };
+            let Some(target_id) = target_id else {
+                return Ok(()); // no eligible creature → silent fizzle
+            };
+            // Pop from opponent's bf, route to opponent's graveyard
+            // with CR 400.7 zone-change reset.
+            let bf_mut: &mut Vec<GameObject> =
+                Arc::make_mut(&mut state.players[opponent_idx].battlefield);
+            let pos = bf_mut
+                .iter()
+                .position(|o| o.id == target_id)
+                .expect("target_id found above");
+            let mut obj = bf_mut.remove(pos);
+            obj.zone = ZONE_GRAVEYARD;
+            obj.tapped = false;
+            obj.summoning_sick = false;
+            obj.damage = 0;
+            obj.counters = 0;
+            obj.attached_to = None;
+            obj.exiled_with_source = None;
+            Arc::make_mut(&mut state.players[opponent_idx].graveyard).push(obj);
+        }
         Effect::EachOpponentMillsCards { count } => {
             if *count < 0 {
                 return Err(PyValueError::new_err(format!(
