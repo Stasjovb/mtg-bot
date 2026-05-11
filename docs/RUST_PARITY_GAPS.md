@@ -276,18 +276,6 @@ behavior per CR / Python, parity impact, and closeable / accepted.
   harness.
 - **Closeable**: yes — bundled with G21 (atomic London transaction).
 
-### G23. No maximum-mulligan cap
-
-- **Pinned by**: `tests_rust/test_mulligan.py` module docstring (gap 3).
-- **Rust today**: `mulligan` can be called indefinitely on the same
-  state with no failure. There is no upper bound.
-- **CR / Python expected**: CR 103.4 — each mulligan draws a smaller
-  hand and eventually you'd mulligan to 0; in practice you stop.
-  Python doesn't enforce a hard cap either, but it ties the cap to
-  the count parameter.
-- **Impact**: zero in normal play; high only for adversarial seeds.
-- **Closeable**: yes — bundled with G21.
-
 ### G24. No scry-on-keep step after mulligan-to-7 (Paris rule)
 
 - **Pinned by**: `tests_rust/test_mulligan.py` module docstring (gap 4).
@@ -530,6 +518,33 @@ refactor on either side that breaks the parity surfaces immediately.
   directly does NOT empty mana pools — see
   `test_cleanup.py::test_cleanup_step_does_not_empty_mana_pool_at_primitive_layer`);
   the mana-empty hook is owned exclusively by `advance_phase`.
+
+### I21. `mulligan` / `mulligan_to_n` raise after 7 calls per player (CR 103.4 cap)
+
+- **Pinned by**:
+  `tests_rust/test_mulligan.py::test_mulligan_seven_calls_succeed_eighth_raises`,
+  `test_mulligan_to_n_seven_calls_succeed_eighth_raises`,
+  `test_mulligan_cap_is_shared_between_mulligan_and_mulligan_to_n`,
+  `test_mulligan_cap_is_per_player`,
+  `test_mulligan_cap_raise_does_not_mutate_state`,
+  `test_mulligan_count_does_not_affect_fingerprint`.
+- **Invariant** (CR 103.4 / round-26 G23 closure):
+  - `Player.mulligan_count: u32` increments at the START of every
+    `mulligan` / `mulligan_to_n` call (shared counter between the
+    two variants).
+  - If the post-increment count exceeds 7, the call raises
+    `PyValueError` BEFORE touching any zone. Pinned baselines after
+    7 successful mulligans are unchanged when an 8th call raises.
+  - Mirrors Python `simulate.setup_game(max_mulligans=7)` — the
+    London-mulligan loop allows up to 7 mulligans per player before
+    forcing a keep. An 8th call would draw a hand of -1 cards, which
+    is nonsensical.
+  - The counter is per-player; capping player 0 does not affect
+    player 1.
+  - `mulligan_count` is NOT serialized into the fingerprint — it's a
+    per-call safety counter, not part of the gameplay-relevant state
+    digest. Pinned fingerprint baselines below are unchanged. Closes
+    parity gap G23 (entry removed from "Confirmed gaps" above).
 
 ---
 

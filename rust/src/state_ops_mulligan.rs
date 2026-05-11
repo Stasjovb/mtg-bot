@@ -39,6 +39,19 @@
 //! can depend on without growing `pub` API. Documented here so the
 //! duplication is visible to the next round.
 //!
+//! ## Max-mulligan cap (round-26 G23 closure)
+//!
+//! Each call to `mulligan` or `mulligan_to_n` increments
+//! `Player.mulligan_count` BEFORE the shuffle. If the count exceeds
+//! 7, the call raises `PyValueError` instead of mutating any zone.
+//! Mirrors Python `simulate.setup_game(max_mulligans=7)` — the
+//! London-mulligan loop allows at most 7 mulligans per player before
+//! forcing a keep; an 8th call is nonsensical (mulligan to -1 cards).
+//!
+//! `mulligan_count` is intentionally NOT serialized into the
+//! fingerprint — it's a per-call safety counter, not part of the
+//! gameplay-relevant state digest.
+//!
 //! ## CoW
 //!
 //! All mutation flows through `Arc::make_mut` on the touched zones
@@ -106,6 +119,24 @@ impl GameState {
             )));
         }
         let player = &mut self.players[idx];
+
+        // Round-26 G23 closure: cap mulligan count per player at 7.
+        // Mirrors Python `simulate.setup_game(max_mulligans=7)` — the
+        // London-mulligan loop allows up to 7 mulligans before
+        // forcing a keep. The 8th call is nonsensical (mulligan to
+        // -1 cards) and raises. The counter increments BEFORE the
+        // cap check so the 8th call (which would set count=8) is the
+        // one that raises, while calls 1..7 (count becomes 1..7) all
+        // succeed.
+        player.mulligan_count = player.mulligan_count.saturating_add(1);
+        if player.mulligan_count > 7 {
+            return Err(PyValueError::new_err(format!(
+                "player {player_id} has already mulliganed 7 times \
+                 (CR 103.4 / Python simulate.max_mulligans cap); \
+                 mulligan_count is now {count}",
+                count = player.mulligan_count,
+            )));
+        }
 
         // Step 1: drain the hand into the library. Each returned
         // object's zone field is restamped to ZONE_LIBRARY so a
@@ -179,6 +210,20 @@ impl GameState {
         }
         let n_cards = n_cards as usize;
         let player = &mut self.players[idx];
+
+        // Round-26 G23 closure: shared cap with `mulligan` — at most
+        // 7 mulligan / mulligan_to_n calls per player. Same shape as
+        // above: increment first, raise if the post-increment count
+        // exceeds 7.
+        player.mulligan_count = player.mulligan_count.saturating_add(1);
+        if player.mulligan_count > 7 {
+            return Err(PyValueError::new_err(format!(
+                "player {player_id} has already mulliganed 7 times \
+                 (CR 103.4 / Python simulate.max_mulligans cap); \
+                 mulligan_count is now {count}",
+                count = player.mulligan_count,
+            )));
+        }
 
         // Step 1 + 2: drain the hand into the library, then shuffle.
         // Same as mulligan(); the only divergence is the draw count.
