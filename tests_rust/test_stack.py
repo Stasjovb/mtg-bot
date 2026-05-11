@@ -760,3 +760,25 @@ def test_stack_survives_clone_replay_fingerprint_identical(engine):
     assert cloned.stack_snapshot() == state.stack_snapshot()
     # Re-fingerprint after a no-op clone is still equal.
     assert cloned.fingerprint() == state.fingerprint()
+
+
+def test_complete_step_via_priority_round_drains_then_advances(engine):
+    """Round-27 G3 closure (cross-feature priority x stack x steps).
+
+    Sequencing two ``complete_step_via_priority_round`` calls with a
+    one-item stack: the first call resolves the top (returns False);
+    the second call sees an empty stack and advances the phase
+    (returns True). Pins the two-leg routing across consecutive
+    composer invocations."""
+    state = engine.make_synthetic_state()
+    state.push_to_stack(42, 0)
+    starting_phase = state.current_phase()
+
+    # First call: stack non-empty -> resolves the top, returns False.
+    assert state.complete_step_via_priority_round() is False
+    assert state.is_stack_empty() is True
+    assert state.current_phase() == starting_phase
+
+    # Second call: stack empty -> advances the phase, returns True.
+    assert state.complete_step_via_priority_round() is True
+    assert state.current_phase() == starting_phase + 1

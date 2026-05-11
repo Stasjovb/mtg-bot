@@ -112,28 +112,30 @@ def test_pass_priority_on_clone_does_not_affect_original(synthetic_state):
     assert synthetic_state.get_priority_player() == 0
 
 
-def test_priority_unaffected_by_phase_advance_in_this_slice(synthetic_state):
-    """SLICE BOUNDARY LOCK-IN.
+def test_priority_unaffected_by_advance_phase_within_a_turn(synthetic_state):
+    """Round-27 G15 closure (within-turn shape).
 
-    CR 117.1a: at the start of each step (and after each spell or
-    ability resolves), the active player gets priority. The Rust
-    engine does NOT implement that composition yet — `advance_phase`
-    is in `state_ops_steps.rs` and intentionally does not touch
-    `priority_player`. A future slice will integrate the two
-    primitives.
+    CR 117.1a: at the start of each step, the active player gets
+    priority. The Rust port models this at the TURN boundary only
+    (CLEANUP -> UNTAP wrap); within-turn step advances do NOT touch
+    `priority_player`. Mirrors Python's `simulate.py`: the priority
+    loop owns within-step priority management; `state.priority_player_idx`
+    is only directly mutated at turn rollover (line 213).
 
-    Until then, this test pins the current behavior: advancing the
-    phase leaves priority alone. If a future slice changes that, this
-    test must be updated (or removed) deliberately so the integration
-    is a conscious choice rather than a silent semantics drift.
+    Hands priority to the non-active player and advances a single
+    step (UNTAP -> UPKEEP, no wrap). Priority stays put — the
+    within-turn advance does not fire the CR 117.1a reset.
     """
     # Hand priority to the non-active player so we can detect any
     # accidental "active player gets priority" reset.
     synthetic_state.give_priority_to(1)
     assert synthetic_state.get_priority_player() == 1
-    synthetic_state.advance_phase()
-    # Priority did NOT reset to the active player (0). This proves the
-    # composition is NOT wired up yet.
+    synthetic_state.advance_phase()  # UNTAP -> UPKEEP, no turn wrap
+    # Priority did NOT reset to the active player (0). The reset
+    # only fires on CLEANUP -> UNTAP wrap — see
+    # ``test_advance_phase_full_lap_resets_priority_to_active_at_wrap``
+    # and ``test_advance_phase_keeps_priority_player_in_sync_with_active``
+    # for that path.
     assert synthetic_state.get_priority_player() == 1
 
 
@@ -336,43 +338,179 @@ PHASE_END_STEP = 10
 PHASE_CLEANUP = 11
 
 
-def test_both_pass_priority_with_empty_stack_does_not_advance_step(synthetic_state):
-    """SLICE BOUNDARY LOCK-IN (priority × steps).
+def test_pass_priority_alone_does_not_advance_step_or_resolve(synthetic_state):
+    """Round-27 G3 closure (primitive-layer invariant).
 
-    CR 117.4: when all players pass in succession with an empty stack,
-    the current step ends. The Rust engine does NOT wire that
-    composition up yet — ``pass_priority`` is a pure toggle and the
-    caller is responsible for deciding when a round has completed and
-    invoking ``advance_phase`` separately. Both-passes here leaves the
-    phase exactly where it started. When a future slice integrates the
-    two primitives, this test must change deliberately."""
+    Even after the priority + composition layer lands,
+    ``pass_priority`` itself remains a pure toggle that increments
+    ``consecutive_passes``. The step does NOT auto-end when two
+    passes happen in sequence at the PRIMITIVE layer — that's the
+    composer's job (``complete_step_via_priority_round``). Pinning
+    this primitive/composer separation so a future "smart
+    pass_priority" refactor surfaces deliberately."""
     assert synthetic_state.current_phase() == PHASE_UNTAP
     assert synthetic_state.is_stack_empty() is True
     synthetic_state.pass_priority()
     synthetic_state.pass_priority()
-    # Step is unchanged; priority is back to where it started.
+    # Step is unchanged; priority is back to where it started; the
+    # counter shows two consecutive passes.
     assert synthetic_state.current_phase() == PHASE_UNTAP
+    assert synthetic_state.get_priority_player() == 0
+    assert synthetic_state.get_consecutive_passes() == 2
+
+
+def test_complete_step_via_priority_round_advances_step_when_stack_empty(
+    synthetic_state,
+):
+    """Round-27 G3 closure (composer, empty-stack leg — CR 117.4).
+
+    When both players pass in succession with an empty stack, the
+    current step ends. The composer ``complete_step_via_priority_round``
+    routes both passes + ``advance_phase`` in one call and returns
+    ``True`` to signal the step advanced."""
+    assert synthetic_state.current_phase() == PHASE_UNTAP
+    assert synthetic_state.is_stack_empty() is True
+    advanced = synthetic_state.complete_step_via_priority_round()
+    assert advanced is True
+    # Phase ticked one step forward (UNTAP -> UPKEEP).
+    assert synthetic_state.current_phase() == PHASE_UPKEEP
+    # Counter reset (advance_phase is a non-pass mutation).
+    assert synthetic_state.get_consecutive_passes() == 0
+
+
+def test_complete_step_via_priority_round_resolves_top_when_stack_nonempty(
+    synthetic_state,
+):
+    """Round-27 G3 closure (composer, non-empty-stack leg — CR 117.4).
+
+    When both players pass with a non-empty stack, the top resolves
+    INSTEAD of the step ending. The composer returns ``False`` to
+    signal "no step advance — more priority rounds happen", priority
+    resets to the active player (CR 117.1c), and the stack item is
+    popped."""
+    starting_phase = synthetic_state.current_phase()
+    synthetic_state.push_to_stack(42, 0)
+    assert synthetic_state.stack_size() == 1
+    advanced = synthetic_state.complete_step_via_priority_round()
+    assert advanced is False
+    # Stack drained, step unchanged, priority reset to active player.
+    assert synthetic_state.stack_size() == 0
+    assert synthetic_state.current_phase() == starting_phase
+    assert synthetic_state.get_priority_player() == synthetic_state.active_player
+    assert synthetic_state.get_consecutive_passes() == 0
+
+
+def test_complete_step_via_priority_round_with_multi_item_stack_pops_only_top(
+    synthetic_state,
+):
+    """Round-27 G3 closure (composer, multi-item stack).
+
+    Push A then B (B on top). Composer pops only the TOP (B); A
+    stays on the stack. Returns ``False`` (resolution leg). Mirrors
+    the pop-only stepping-stone shape of ``complete_priority_round``
+    — real effect dispatch is still the job of ``resolve_top_of_stack``
+    in ``state_ops_resolve.rs`` (cross-file private-method friction)."""
+    synthetic_state.push_to_stack(100, 0)
+    synthetic_state.push_to_stack(200, 1)
+    assert synthetic_state.stack_size() == 2
+    advanced = synthetic_state.complete_step_via_priority_round()
+    assert advanced is False
+    assert synthetic_state.stack_size() == 1
+    # A is still on top.
+    top = synthetic_state.peek_top_of_stack()
+    assert top == {"source_obj_id": 100, "controller": 0}
+
+
+def test_complete_step_via_priority_round_resets_priority_to_active_after_resolution(
+    synthetic_state,
+):
+    """Round-27 G3 closure (CR 117.1c — composer resolution leg).
+
+    Even when priority was on the NON-active player at the time
+    both-passes is invoked, the composer's stack-resolution leg
+    resets priority to the active player. Mirrors the same reset
+    contract that the existing ``complete_priority_round`` primitive
+    pins for the pop-only stepping-stone."""
+    synthetic_state.push_to_stack(9, 1)
+    # Hand priority to the non-active player BEFORE the composer
+    # call so we can detect the post-resolution reset. The composer's
+    # two internal pass_priority calls will flip it 1 -> 0 -> 1, then
+    # the resolution leg resets to active_player (0).
+    synthetic_state.give_priority_to(1)
+    assert synthetic_state.get_priority_player() == 1
+    synthetic_state.complete_step_via_priority_round()
+    assert synthetic_state.get_priority_player() == synthetic_state.active_player
     assert synthetic_state.get_priority_player() == 0
 
 
-def test_both_pass_priority_with_nonempty_stack_does_not_resolve_top(synthetic_state):
-    """SLICE BOUNDARY LOCK-IN (priority × stack).
+def test_consecutive_passes_increments_on_each_pass(synthetic_state):
+    """Round-27 G3 closure (counter increment).
 
-    CR 117.4 says both-pass with a non-empty stack resolves the top
-    object. In this slice, ``pass_priority`` does not consult the
-    stack at all — that composition is exposed via the explicit
-    ``complete_priority_round()`` primitive instead. Pinning the
-    current behavior: two pass_priority calls leave the stack
-    untouched; the caller must call ``complete_priority_round()`` to
-    pop the top."""
-    synthetic_state.push_to_stack(42, 0)
-    assert synthetic_state.stack_size() == 1
+    Each ``pass_priority`` invocation bumps ``consecutive_passes`` by
+    one. Pinning the increment so a future refactor that switches the
+    counter to a different shape (e.g. computed from history) keeps
+    the same single-call surface."""
+    assert synthetic_state.get_consecutive_passes() == 0
+    synthetic_state.pass_priority()
+    assert synthetic_state.get_consecutive_passes() == 1
+    synthetic_state.pass_priority()
+    assert synthetic_state.get_consecutive_passes() == 2
+    synthetic_state.pass_priority()
+    assert synthetic_state.get_consecutive_passes() == 3
+
+
+def test_consecutive_passes_resets_on_non_pass_action(synthetic_state):
+    """Round-27 G3 closure (counter reset on non-pass mutation).
+
+    Any non-pass action breaks the consecutive-pass streak. Walk
+    through the four reset paths: explicit `give_priority_to`,
+    `advance_phase`, `cast_creature`, and `apply_action` with a
+    non-pass arm (ActivateAbility). All four must drop the counter
+    back to 0."""
+    # give_priority_to resets.
     synthetic_state.pass_priority()
     synthetic_state.pass_priority()
-    # Stack item still there; nothing resolved.
-    assert synthetic_state.stack_size() == 1
-    top = synthetic_state.peek_top_of_stack()
-    assert top == {"source_obj_id": 42, "controller": 0}
+    assert synthetic_state.get_consecutive_passes() == 2
+    synthetic_state.give_priority_to(0)
+    assert synthetic_state.get_consecutive_passes() == 0
+
+    # advance_phase resets.
+    synthetic_state.pass_priority()
+    assert synthetic_state.get_consecutive_passes() == 1
+    synthetic_state.advance_phase()
+    assert synthetic_state.get_consecutive_passes() == 0
+
+    # cast_creature resets.
+    synthetic_state.pass_priority()
+    assert synthetic_state.get_consecutive_passes() == 1
+    synthetic_state.add_mana(0, "G", 1)
+    assert synthetic_state.cast_creature(10, 0) is True
+    assert synthetic_state.get_consecutive_passes() == 0
+
+    # apply_action(ActivateAbility) resets.
+    synthetic_state.pass_priority()
+    assert synthetic_state.get_consecutive_passes() == 1
+    synthetic_state.apply_action(
+        {"kind": "activate_ability", "source_id": 0, "ability_index": 0}
+    )
+    assert synthetic_state.get_consecutive_passes() == 0
+
+
+def test_complete_priority_round_resets_consecutive_passes(synthetic_state):
+    """Round-27 G3 closure (round-9 composer also resets counter).
+
+    The older ``complete_priority_round`` primitive (pop-only
+    stepping-stone) is on the same composition path as the new
+    ``complete_step_via_priority_round`` for the non-empty-stack leg.
+    Both reset the counter so a subsequent priority round starts
+    fresh."""
+    synthetic_state.push_to_stack(55, 0)
+    synthetic_state.pass_priority()
+    synthetic_state.pass_priority()
+    assert synthetic_state.get_consecutive_passes() == 2
+    result = synthetic_state.complete_priority_round()
+    assert result == {"source_obj_id": 55, "controller": 0}
+    assert synthetic_state.get_consecutive_passes() == 0
 
 
 def test_complete_priority_round_resolves_top_instead_of_advancing_step(
@@ -434,38 +572,56 @@ def test_legal_decisions_for_non_priority_player_still_emits_pass_priority(
     assert kinds == ["pass_priority"]
 
 
-def test_cast_spell_does_not_change_priority_player(synthetic_state):
-    """SLICE BOUNDARY LOCK-IN (priority × cast).
+def test_cast_spell_resets_priority_to_active(synthetic_state):
+    """Round-27 G4 closure (priority × cast — CR 117.1c).
 
-    CR 117.1c: after a spell is cast (or an ability resolves), the
-    active player gets priority. The Rust ``cast_creature`` primitive
-    does NOT touch ``priority_player`` — same parallel-slice file-
-    isolation rationale that keeps ``advance_phase`` out of priority's
-    domain. Pin the current behavior so a future "priority resets on
-    cast" integration is a deliberate slice, not an accidental drift.
+    After a spell is cast, the active player gets priority. The Rust
+    ``cast_creature`` primitive fuses the Python "push to stack ->
+    resolve" sequence into a single mutation (no-stack semantics —
+    see the primitive's docstring), so the "after cast" priority
+    reset happens at the end of the primitive on success.
 
     P0_FIRST_HAND_ID == 10 (Llanowar Elves, cost {G}) per the
-    synthetic seed; we give priority to player 1 so any accidental
-    "reset to active player on cast" would be observable."""
+    synthetic seed; we give priority to player 1 BEFORE the cast so
+    the post-cast reset is observable (priority moves 1 -> 0)."""
     elf_id = 10
     synthetic_state.add_mana(0, "G", 1)
     synthetic_state.give_priority_to(1)
     assert synthetic_state.get_priority_player() == 1
     assert synthetic_state.cast_creature(elf_id, 0) is True
-    # Priority did NOT reset to the active player (0) — still 1.
+    # Priority reset to the active player (0). Also breaks any
+    # in-flight pass streak.
+    assert synthetic_state.get_priority_player() == synthetic_state.active_player
+    assert synthetic_state.get_priority_player() == 0
+    assert synthetic_state.get_consecutive_passes() == 0
+
+
+def test_cast_spell_failure_does_not_touch_priority(synthetic_state):
+    """Round-27 G4 closure (failed-cast no-op contract).
+
+    A cast that fails its precondition gate (insufficient mana, wrong
+    type, unknown obj_id, etc.) returns ``False`` without mutating
+    state. Priority must stay where the caller put it — the reset
+    only fires on a SUCCESSFUL cast. Pinning the failure-path no-op
+    so future cast slices don't accidentally fire the reset before
+    validating preconditions."""
+    elf_id = 10
+    # Don't add mana — the cast will fail at the pay_mana_cost gate.
+    synthetic_state.give_priority_to(1)
+    assert synthetic_state.get_priority_player() == 1
+    assert synthetic_state.cast_creature(elf_id, 0) is False
+    # Priority untouched on failure.
     assert synthetic_state.get_priority_player() == 1
 
 
-def test_activate_mana_ability_does_not_change_priority_player(synthetic_state):
-    """SLICE BOUNDARY LOCK-IN (priority × activate).
+def test_activate_mana_ability_resets_priority_to_active(synthetic_state):
+    """Round-27 G4 closure (priority × activate — CR 117.1c).
 
-    Same shape as the cast-spell pin: activating a mana ability does
-    not touch ``priority_player``. CR 117.7b clarifies that mana
-    abilities don't use the stack and don't actually consume priority
-    in real MTG — but the Rust primitive doesn't model that
-    sub-nuance, it just leaves the priority field alone. Pin the
-    current behavior so the future "priority management on
-    activations" integration is a deliberate slice.
+    Mirror of the cast-spell pin: activating a mana ability resets
+    priority to the active player. CR 117.7b clarifies mana abilities
+    don't use the stack at all (they resolve immediately) — the
+    "after the ability resolves" moment is right at the end of the
+    primitive's mutation phase.
 
     Source id 0 is a Forest on p0's battlefield in the synthetic
     seed; ability index 0 is its tap-for-{G} mana ability."""
@@ -474,31 +630,45 @@ def test_activate_mana_ability_does_not_change_priority_player(synthetic_state):
     synthetic_state.apply_action(
         {"kind": "activate_ability", "source_id": 0, "ability_index": 0}
     )
-    # Priority unchanged.
-    assert synthetic_state.get_priority_player() == 1
+    # Priority reset to active player (0); pass streak (if any) broken.
+    assert synthetic_state.get_priority_player() == synthetic_state.active_player
+    assert synthetic_state.get_priority_player() == 0
+    assert synthetic_state.get_consecutive_passes() == 0
 
 
-def test_advance_phase_full_lap_does_not_touch_priority(synthetic_state):
-    """SLICE BOUNDARY LOCK-IN (priority × steps, lap-scale).
+def test_advance_phase_full_lap_resets_priority_to_active_at_wrap(synthetic_state):
+    """Round-27 G15 closure (priority × steps, lap-scale — CR 117.1a).
 
-    Companion to ``test_priority_unaffected_by_phase_advance_in_this_slice``
-    (single-step variant): walking ALL 12 phases (UNTAP → UPKEEP →
-    DRAW → MAIN1 → BEGIN_COMBAT → DECLARE_ATTACKERS → DECLARE_BLOCKERS
-    → COMBAT_DAMAGE → END_COMBAT → MAIN2 → END_STEP → CLEANUP → UNTAP)
-    must not touch ``priority_player`` either. Pins the lap-scale
-    invariant: there is no hidden phase whose entry resets priority.
-    (CR 117.1a says the active player gets priority at the start of
-    EACH step; this test proves the Rust engine implements zero of
-    those resets in this slice.)"""
-    # Stash priority on the non-active player so any reset is observable.
+    Walking ALL 12 phases (UNTAP → ... → CLEANUP → UNTAP) fires the
+    CLEANUP -> UNTAP wrap exactly once. On that wrap, ``active_player``
+    flips AND ``priority_player`` resets to the new active player.
+    Within-turn step advances (the other 11 of the 12) do NOT touch
+    priority — only the wrap.
+
+    Seed: active=0, priority=1 (give_priority_to). After the wrap:
+    active=1, priority=1 (reset to new active). Same value before
+    and after the wrap, but the path differs — to make the post-wrap
+    state-machine observable, we additionally check that an
+    in-between advance leaves the manually-set priority alone."""
+    # Stash priority on the non-active player so the within-turn
+    # advances are observed not touching it.
     synthetic_state.give_priority_to(1)
     assert synthetic_state.get_priority_player() == 1
-    for _ in range(12):  # one full lap
+    starting_active = synthetic_state.active_player
+    # 11 within-turn advances: priority stays at 1, active stays put.
+    for i in range(11):
         synthetic_state.advance_phase()
         assert synthetic_state.get_priority_player() == 1, (
-            f"priority reset at phase {synthetic_state.current_phase()} "
-            "during full-lap walk — slice boundary moved"
+            f"priority reset on within-turn advance at phase "
+            f"{synthetic_state.current_phase()} (iter {i}) — should "
+            "only reset on CLEANUP -> UNTAP wrap"
         )
+        assert synthetic_state.active_player == starting_active
+    # 12th advance: CLEANUP -> UNTAP wrap. active flips; priority
+    # resets to NEW active player.
+    synthetic_state.advance_phase()
+    assert synthetic_state.active_player == 1 - starting_active
+    assert synthetic_state.get_priority_player() == synthetic_state.active_player
 
 
 def test_pass_priority_on_clone_does_not_mutate_original_step(synthetic_state):

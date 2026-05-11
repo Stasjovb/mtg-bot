@@ -713,22 +713,30 @@ def test_clone_advance_phase_does_not_mutate_original(synthetic_state):
 def test_advance_phase_keeps_priority_player_in_sync_with_active(
     synthetic_state,
 ):
-    """Cross-feature with the priority slice: ``advance_phase``'s
-    CLEANUP -> UNTAP wrap flips ``active_player``, but the priority
-    machinery (``get_priority_player``) is the sibling slice's job —
-    not ``advance_phase``'s. Pin today's shape: the priority pointer
-    is NOT automatically reset to the new active player by
-    ``advance_phase``. (A higher-layer "start of next turn" hook owns
-    that wiring; if it ever migrates into ``advance_phase``, this
-    test surfaces the change.)"""
-    synthetic_state.give_priority_to(1)
-    assert synthetic_state.get_priority_player() == 1
+    """Round-27 G15 closure (priority × steps — CR 117.1a).
+
+    ``advance_phase``'s CLEANUP -> UNTAP wrap flips ``active_player``
+    AND resets ``priority_player`` to the new active player.
+    Mirrors Python's `simulate.py:212-213` which sets
+    `state.priority_player_idx = 0` at the start of turn 1 (the same
+    rule generalized for either seat). The within-turn advances
+    (other 11 of 12 in a lap) do NOT touch priority — only the wrap.
+
+    Seed priority to a NON-active player (0 — but synthetic starts
+    with active=0, so 0 is also the active seed) — hand it instead
+    to player 1 BEFORE the wrap so the post-wrap reset to the NEW
+    active (which becomes 1) is observable as the "stays at 1"
+    side-effect even though the path went through a reset write."""
+    # The seed already has active=0. Set priority to 0 (active) so
+    # the post-wrap reset to NEW-active=1 is visibly a delta.
+    synthetic_state.give_priority_to(0)
+    assert synthetic_state.get_priority_player() == 0
     synthetic_state.set_phase(PHASE_CLEANUP)
     synthetic_state.advance_phase()  # CLEANUP -> UNTAP, active flips
     assert synthetic_state.active_player == 1
-    # Priority still points where give_priority_to last set it; the
-    # wrap did NOT touch it.
+    # Priority reset to the NEW active player (1) on the wrap.
     assert synthetic_state.get_priority_player() == 1
+    assert synthetic_state.get_priority_player() == synthetic_state.active_player
 
 
 def test_set_phase_does_not_fire_untap_sweep(synthetic_state):

@@ -41,40 +41,6 @@ How the smoke consumes this doc:
 Each entry: short name, pinning test, current Rust behavior, expected
 behavior per CR / Python, parity impact, and closeable / accepted.
 
-### G3. `pass_priority` is a pure toggle (no step-end / stack-resolution composition)
-
-- **Pinned by**: `tests_rust/test_priority.py::test_both_pass_priority_with_empty_stack_does_not_advance_step`,
-  `test_both_pass_priority_with_nonempty_stack_does_not_resolve_top`,
-  `test_priority_unaffected_by_phase_advance_in_this_slice`,
-  `test_advance_phase_full_lap_does_not_touch_priority`.
-- **Rust today**: `pass_priority` flips `priority_player` and nothing
-  else. Two `pass_priority` calls with an empty stack do NOT advance
-  the step; with a non-empty stack they do NOT resolve the top.
-  `advance_phase` does NOT reset priority to the new active player.
-- **CR / Python expected**: CR 117.4 — both-pass with empty stack ends
-  the step; with non-empty stack resolves the top. CR 117.1a — active
-  player gets priority at the start of each step.
-- **Impact**: low at primitive level (this is the slice-boundary
-  composition — callers like `complete_priority_round` exist for
-  explicit composition). The smoke harness drives state through
-  explicit composition calls; pure-toggle behavior is observable only
-  when the harness uses `pass_priority` directly without composing.
-- **Closeable**: yes — accepted slice-boundary pin. A future slice
-  will integrate priority + steps + stack.
-
-### G4. `cast_creature` / `activate_ability` do not touch priority
-
-- **Pinned by**: `tests_rust/test_priority.py::test_cast_spell_does_not_change_priority_player`,
-  `test_activate_mana_ability_does_not_change_priority_player`.
-- **Rust today**: Casting a creature or activating a (mana) ability
-  leaves `priority_player` unchanged.
-- **CR / Python expected**: CR 117.1c — the active player gets
-  priority after a spell is cast or an ability resolves.
-- **Impact**: low-to-medium. As with G3, the harness composes via
-  higher-level primitives; pure cast/activate behavior is observable
-  only when the harness inspects priority directly.
-- **Closeable**: yes — same slice as G3.
-
 ### G5. `legal_decisions(non_priority_player)` returns the `[pass_priority]` singleton
 
 - **Pinned by**: `tests_rust/test_priority.py::test_legal_decisions_for_non_priority_player_still_emits_pass_priority`;
@@ -161,21 +127,6 @@ behavior per CR / Python, parity impact, and closeable / accepted.
 - **Impact**: none — this is the parity-load-bearing post-game-over
   no-op contract. Listed here for clarity. See invariant I7.
 - **Closeable**: not a gap. Parity invariant.
-
-### G15. `advance_phase`'s CLEANUP -> UNTAP wrap does not reset priority
-
-- **Pinned by**: `tests_rust/test_steps.py::test_advance_phase_keeps_priority_player_in_sync_with_active`;
-  `tests_rust/test_priority.py::test_priority_unaffected_by_phase_advance_in_this_slice`,
-  `test_advance_phase_full_lap_does_not_touch_priority`.
-- **Rust today**: When `advance_phase` wraps CLEANUP -> UNTAP and
-  flips `active_player`, the `priority_player` field is not touched.
-- **CR / Python expected**: CR 117.1a — the new active player gets
-  priority at the start of their turn.
-- **Impact**: low when harness drives priority explicitly; high if
-  smoke compares the `priority_player_idx` field across the
-  turn-boundary.
-- **Closeable**: yes — same slice as G3 / G4 (priority + steps
-  integration).
 
 ### G16. `set_phase` does not fire the untap sweep
 
@@ -518,6 +469,83 @@ refactor on either side that breaks the parity surfaces immediately.
   directly does NOT empty mana pools — see
   `test_cleanup.py::test_cleanup_step_does_not_empty_mana_pool_at_primitive_layer`);
   the mana-empty hook is owned exclusively by `advance_phase`.
+
+### I25. Priority composition layer: `pass_priority` increments a counter, non-pass mutations reset it, `complete_step_via_priority_round` routes between CR 117.4 / 117.5 legs, and `advance_phase` resets priority on the CLEANUP -> UNTAP wrap (CR 117.1a / 117.1c / 117.4)
+
+- **Pinned by** (round-27 G3 + G4 + G15 closure):
+  - **Counter increment + reset**: `tests_rust/test_priority.py::test_consecutive_passes_increments_on_each_pass`,
+    `test_consecutive_passes_resets_on_non_pass_action`,
+    `test_complete_priority_round_resets_consecutive_passes`,
+    `test_pass_priority_alone_does_not_advance_step_or_resolve`.
+  - **G3 composer (`complete_step_via_priority_round`)**:
+    `tests_rust/test_priority.py::test_complete_step_via_priority_round_advances_step_when_stack_empty`,
+    `test_complete_step_via_priority_round_resolves_top_when_stack_nonempty`,
+    `test_complete_step_via_priority_round_with_multi_item_stack_pops_only_top`,
+    `test_complete_step_via_priority_round_resets_priority_to_active_after_resolution`;
+    cross-feature: `tests_rust/test_stack.py::test_complete_step_via_priority_round_drains_then_advances`.
+  - **G4 (cast / activate reset priority to active)**:
+    `tests_rust/test_priority.py::test_cast_spell_resets_priority_to_active`,
+    `test_cast_spell_failure_does_not_touch_priority`,
+    `test_activate_mana_ability_resets_priority_to_active`.
+  - **G15 (advance_phase priority reset on wrap)**:
+    `tests_rust/test_priority.py::test_advance_phase_full_lap_resets_priority_to_active_at_wrap`,
+    `test_priority_unaffected_by_advance_phase_within_a_turn`;
+    `tests_rust/test_steps.py::test_advance_phase_keeps_priority_player_in_sync_with_active`.
+- **Invariant** (CR 117.1a / CR 117.1c / CR 117.4 / CR 117.5 / round-27 G3 + G4 + G15 closure):
+  - `GameState.consecutive_passes: u8` tracks consecutive `pass_priority`
+    calls since the last non-pass mutation. `pass_priority` increments
+    it (saturating); every non-pass mutation
+    (`cast_creature`, `apply_action` for non-PassPriority arms,
+    `advance_phase`, `give_priority_to`, the round-9
+    `complete_priority_round` composer, and the new
+    `complete_step_via_priority_round` composer's resolution leg)
+    resets it to 0.
+  - `complete_step_via_priority_round() -> bool` is the harness-facing
+    "both players have passed" composer. Internally calls
+    `pass_priority` twice, then routes by stack state:
+    - **Non-empty stack** → CR 117.4 / 117.5: pop the top, reset
+      `priority_player = active_player` (CR 117.1c), reset
+      `consecutive_passes`, return `False` (no step advance).
+    - **Empty stack** → CR 117.4: call `advance_phase` (which handles
+      mana-empty, the per-phase hooks, the CLEANUP -> UNTAP wrap with
+      the CR 117.1a priority reset, and the consecutive_passes reset),
+      return `True` (step advanced).
+    Mirrors Python's `simulate.py:priority_loop` logic (lines
+    245-280): when `pass_count >= alive_count()` with `state.stack`
+    non-empty, call `resolve_top_of_stack` and reset
+    `priority_idx = state.active_player_idx`; with empty stack,
+    return (end-of-step). The pop-only stepping-stone shape (no
+    effect dispatch) is preserved — real effect dispatch is the
+    job of `resolve_top_of_stack` in `state_ops_resolve.rs` per
+    the cross-file private-method friction documented on the
+    older `complete_priority_round`.
+  - `cast_creature` resets `priority_player = active_player` AND
+    `consecutive_passes = 0` on a successful cast (CR 117.1c).
+    Failure paths (precondition gate, insufficient mana) are a
+    no-op on priority — the reset only fires after a successful
+    mutation. Mirrors Python's no-stack semantics where the
+    primitive fuses push + resolve and "priority returns to AP"
+    fires once at the end.
+  - `apply_action` resets `priority_player = active_player` AND
+    `consecutive_passes = 0` after EVERY non-PassPriority arm
+    succeeds (PlayLand / DeclareAttackers / DeclareBlockers /
+    CastSpell / ActivateAbility). PassPriority itself flows through
+    the underlying `pass_priority` toggle and INCREMENTS the
+    counter instead. Mirrors Python's `simulate.py:priority_loop`
+    pattern of `priority_idx = state.active_player_idx` after
+    every non-pass branch.
+  - `advance_phase` resets `priority_player = active_player` on the
+    CLEANUP -> UNTAP wrap (CR 117.1a — the new active player gets
+    priority at the start of their turn). Within-turn step advances
+    do NOT touch priority (the within-step CR 117.1a reset is the
+    composer's responsibility, not `advance_phase`'s). Mirrors
+    Python's `simulate.py:212-213` which sets
+    `state.priority_player_idx = 0` at the start of turn 1.
+  - `consecutive_passes` is NOT serialized into the fingerprint —
+    like `mulligan_count` (I21), it's a transient bookkeeping
+    counter, not part of the gameplay-relevant state digest. Pinned
+    fingerprint baselines below are unchanged. Closes parity gaps
+    G3, G4, and G15 (entries removed from "Confirmed gaps" above).
 
 ### I21. `mulligan` / `mulligan_to_n` raise after 7 calls per player (CR 103.4 cap)
 
