@@ -2063,6 +2063,123 @@ def test_resolve_untap_other_clone_isolation(synthetic_state):
     assert synthetic_state.is_tapped(target_id) is True
 
 
+# --- TapAnotherTargetCreature dispatch (round-28) -------------------
+#
+# Mirrors Python's TapAnotherTargetCreature (Starport-Security family,
+# 2+ EoE cards). Same scan shape as UntapTargetOtherPermanent but
+# filters on Creature and taps.
+
+
+def _tap_another_creature_dict():
+    return {
+        "name": "Test Starport Security",
+        "card_types": ["Creature"],
+        "mana_cost": {"W": 1, "generic": 1},
+        "power": 2,
+        "toughness": 2,
+        "effects": [{"kind": "tap_another_target_creature"}],
+    }
+
+
+def test_resolve_tap_another_taps_first_non_source_creature(synthetic_state):
+    """Source on p0's bf; the first creature on p0 that isn't the source
+    gets tapped. (synthetic_state's p0 bf has Forests then Grizzly Bears
+    — the first non-source creature is the first Grizzly Bears.)"""
+    snap = synthetic_state.battlefield_snapshot()
+    first_p0_bear = next(
+        d["id"] for d in snap
+        if d["controller_id"] == 0 and d["printing_name"] == "Grizzly Bears"
+    )
+    assert synthetic_state.is_tapped(first_p0_bear) is False
+
+    src_id = synthetic_state.register_and_inject_object(
+        _tap_another_creature_dict(), 0, ZONE_BATTLEFIELD
+    )
+    synthetic_state.push_to_stack(src_id, 0)
+    synthetic_state.resolve_top_of_stack()
+
+    assert synthetic_state.is_tapped(first_p0_bear) is True
+
+
+def test_resolve_tap_another_skips_source_itself(synthetic_state):
+    """Source creature itself stays untapped — the arm filters it out
+    via the id != source_obj_id gate."""
+    src_id = synthetic_state.register_and_inject_object(
+        _tap_another_creature_dict(), 0, ZONE_BATTLEFIELD
+    )
+    synthetic_state.push_to_stack(src_id, 0)
+    synthetic_state.resolve_top_of_stack()
+    # Source untouched (only the other creature got tapped).
+    assert synthetic_state.is_tapped(src_id) is False
+
+
+def test_resolve_tap_another_no_other_creature_fizzles(engine):
+    """No other creatures on either bf → silent fizzle. The source
+    creature (sole bf object after injection) stays untapped."""
+    state = engine.make_synthetic_state(
+        num_battlefield=0, num_hand=0, num_library=2
+    )
+    src_id = state.register_and_inject_object(
+        _tap_another_creature_dict(), 0, ZONE_BATTLEFIELD
+    )
+    state.push_to_stack(src_id, 0)
+    state.resolve_top_of_stack()  # no raise
+
+    assert state.is_tapped(src_id) is False
+
+
+def test_resolve_tap_another_can_tap_opponents_creature(synthetic_state):
+    """If p0 has only the source, scan moves to p1's bf and taps p1's
+    first creature."""
+    state = synthetic_state.clone_once()
+    snap = state.battlefield_snapshot()
+    # Drain every existing p0 creature so the scan reaches p1.
+    p0_bears = [
+        d["id"] for d in snap
+        if d["controller_id"] == 0 and d["printing_name"] == "Grizzly Bears"
+    ]
+    for cid in p0_bears:
+        state.move_object(cid, 3, 0)  # → graveyard
+
+    p1_bear = next(
+        d["id"] for d in snap
+        if d["controller_id"] == 1 and d["printing_name"] == "Grizzly Bears"
+    )
+    assert state.is_tapped(p1_bear) is False
+
+    src_id = state.register_and_inject_object(
+        _tap_another_creature_dict(), 0, ZONE_BATTLEFIELD
+    )
+    state.push_to_stack(src_id, 0)
+    state.resolve_top_of_stack()
+
+    # p1's first creature got tapped via the cross-player scan.
+    assert state.is_tapped(p1_bear) is True
+
+
+def test_resolve_tap_another_already_tapped_is_legal_noop(synthetic_state):
+    """If the first eligible creature is already tapped, the dispatch
+    still picks it and the re-tap is a legal no-op (matches existing
+    TapTarget contract)."""
+    snap = synthetic_state.battlefield_snapshot()
+    first_p0_bear = next(
+        d["id"] for d in snap
+        if d["controller_id"] == 0 and d["printing_name"] == "Grizzly Bears"
+    )
+    # Pre-tap the target.
+    synthetic_state.tap_object(first_p0_bear)
+    assert synthetic_state.is_tapped(first_p0_bear) is True
+
+    src_id = synthetic_state.register_and_inject_object(
+        _tap_another_creature_dict(), 0, ZONE_BATTLEFIELD
+    )
+    synthetic_state.push_to_stack(src_id, 0)
+    synthetic_state.resolve_top_of_stack()  # no raise
+
+    # Stays tapped.
+    assert synthetic_state.is_tapped(first_p0_bear) is True
+
+
 # --- round-14 Sacrifice dispatch ------------------------------------
 #
 # Round-14 foundation (`feature/rust-tdd-base-r14`) added a new

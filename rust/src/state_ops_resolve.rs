@@ -4142,6 +4142,40 @@ fn apply_effect(
         //
         // No eligible permanent (everything untapped, or only the
         // source itself is tapped) → silent fizzle.
+        // Round-28 TapAnotherTargetCreature (Starport-Security family,
+        // 2+ EoE cards). Same scan shape as UntapTargetOtherPermanent
+        // but filters on Creature and taps. Already-tapped target is
+        // a silent no-op (matches the existing TapTarget contract).
+        Effect::TapAnotherTargetCreature => {
+            let mut found: Option<(usize, u32)> = None;
+            'outer_tatc: for (pidx, player) in state.players.iter().enumerate() {
+                for obj in player.battlefield.iter() {
+                    if obj.id == source_obj_id {
+                        continue;
+                    }
+                    let printing_idx = obj.printing_id as usize;
+                    let Some(printing) = state.registry.printings.get(printing_idx) else {
+                        continue;
+                    };
+                    if !printing.card_types.iter().any(|t| t == "Creature") {
+                        continue;
+                    }
+                    found = Some((pidx, obj.id));
+                    break 'outer_tatc;
+                }
+            }
+            if let Some((pidx, target_id)) = found {
+                let zone: &mut Vec<GameObject> =
+                    Arc::make_mut(&mut state.players[pidx].battlefield);
+                for obj in zone.iter_mut() {
+                    if obj.id == target_id {
+                        obj.tapped = true;
+                        break;
+                    }
+                }
+            }
+            // else: no eligible creature → silent fizzle.
+        }
         Effect::UntapTargetOtherPermanent => {
             // Find first eligible (tapped, not source) across both
             // players' battlefields. Track (player_idx, obj_id) for
