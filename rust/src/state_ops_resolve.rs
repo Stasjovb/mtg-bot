@@ -4133,6 +4133,40 @@ fn apply_effect(
         // opponent's first creature on battlefield and sends it to
         // their graveyard with CR 400.7 zone-change reset. No
         // eligible creature → silent fizzle.
+        // Round-28 UntapTargetOtherPermanent (Nanoform-Sentinel
+        // trigger family, 3+ EoE cards). Scans both players'
+        // battlefields in zone-iteration order; picks the FIRST
+        // tapped permanent whose id != source_obj_id and untaps it.
+        // Mirrors Python's `[o for o in state.battlefield if
+        // o.id != source_id and o.tapped]` filter + pick-first.
+        //
+        // No eligible permanent (everything untapped, or only the
+        // source itself is tapped) → silent fizzle.
+        Effect::UntapTargetOtherPermanent => {
+            // Find first eligible (tapped, not source) across both
+            // players' battlefields. Track (player_idx, obj_id) for
+            // the mutating pass.
+            let mut found: Option<(usize, u32)> = None;
+            'outer: for (pidx, player) in state.players.iter().enumerate() {
+                for obj in player.battlefield.iter() {
+                    if obj.id != source_obj_id && obj.tapped {
+                        found = Some((pidx, obj.id));
+                        break 'outer;
+                    }
+                }
+            }
+            if let Some((pidx, target_id)) = found {
+                let zone: &mut Vec<GameObject> =
+                    Arc::make_mut(&mut state.players[pidx].battlefield);
+                for obj in zone.iter_mut() {
+                    if obj.id == target_id {
+                        obj.tapped = false;
+                        break;
+                    }
+                }
+            }
+            // else: no eligible permanent → silent fizzle.
+        }
         // Round-28 GrantKeywordToTargetCreatureUntilEOT
         // (GrantUnblockable family, 3+ EoE cards; generalized to any
         // keyword). Same shape as PumpTargetCreatureUntilEOT but
