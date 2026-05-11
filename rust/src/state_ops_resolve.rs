@@ -3446,6 +3446,88 @@ fn apply_effect(
                 }
             }
         }
+        // Round-28 token-copy. Pick first creature on source-
+        // controller's bf (deterministic first-slice target); allocate
+        // a new obj_id (max+1 across all zones); push a new GameObject
+        // with the same printing_id onto controller's bf. Token ETBs
+        // summoning-sick.
+        Effect::CreateTokenCopyOfTargetCreatureYouControl => {
+            // Locate source controller.
+            let mut src_controller: Option<u8> = None;
+            'outer: for player in &state.players {
+                for zone in [
+                    &player.hand,
+                    &player.library,
+                    &player.battlefield,
+                    &player.graveyard,
+                    &player.exile,
+                ] {
+                    if let Some(obj) = zone.iter().find(|o| o.id == source_obj_id) {
+                        src_controller = Some(obj.controller);
+                        break 'outer;
+                    }
+                }
+            }
+            if src_controller.is_none() {
+                if let Some(item) = state
+                    .stack
+                    .iter()
+                    .find(|i| i.source_obj_id == source_obj_id)
+                {
+                    src_controller = Some(item.controller);
+                }
+            }
+            let cidx = match src_controller {
+                Some(c) => c as usize,
+                None => state.active_player as usize,
+            };
+            // Pick first creature on controller's bf.
+            let target_printing_id: Option<u32> = {
+                let bf = &state.players[cidx].battlefield;
+                let registry = &state.registry;
+                bf.iter().find_map(|obj| {
+                    let printing = registry.printings.get(obj.printing_id as usize)?;
+                    if printing.card_types.iter().any(|t| t == "Creature") {
+                        Some(obj.printing_id)
+                    } else {
+                        None
+                    }
+                })
+            };
+            let Some(printing_id) = target_printing_id else {
+                return Ok(()); // no eligible target
+            };
+            // Allocate new id: max across every object on both players.
+            let mut max_id: u32 = 0;
+            for player in &state.players {
+                for zone in [
+                    &player.hand,
+                    &player.library,
+                    &player.battlefield,
+                    &player.graveyard,
+                    &player.exile,
+                ] {
+                    for obj in zone.iter() {
+                        if obj.id > max_id {
+                            max_id = obj.id;
+                        }
+                    }
+                }
+            }
+            let new_id = max_id + 1;
+            let new_obj = GameObject {
+                id: new_id,
+                printing_id,
+                controller: cidx as u8,
+                zone: ZONE_BATTLEFIELD,
+                tapped: false,
+                summoning_sick: true,
+                damage: 0,
+                counters: 0,
+                ueot_modifiers: Vec::new(),
+            };
+            Arc::make_mut(&mut state.players[cidx].battlefield).push(new_obj);
+        }
     }
     Ok(())
 }
