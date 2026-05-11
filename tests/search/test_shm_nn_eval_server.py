@@ -8,6 +8,9 @@ Covers:
 - Concurrent workers get batched into one dispatcher pass.
 - Backpressure: workers block on free_slots when N concurrent
   requests >= n_slots.
+- Chunking: an oversize batch (N > n_slots) chunks rather than
+  raises.
+- Multi-worker contention regression for the PR #49 field incident.
 
 Linux-only — Windows raises NotImplementedError because the
 fork-shared-tensor substrate doesn't exist there. The skip is at
@@ -631,37 +634,54 @@ def test_batched_with_policy_all_terminal_skips_server(
     assert server.requests_served == 0
 
 
-def test_batched_raises_when_request_exceeds_slot_pool(
+def test_batched_chunks_when_request_exceeds_slot_pool(
     server_factory, adapter,
 ):
-    """Backpressure option (a): asking for more states than n_slots
-    is a config bug; raise loudly rather than chunk. Production sizes
-    n_slots >= MCTS batch_size + N_workers precisely so this never
-    fires; the test confirms we catch a misconfiguration."""
-    server, _, _ = server_factory(
+    """Backpressure option (b): asking for more states than n_slots
+    chunks into ``ceil(N / n_slots)`` sub-batches run sequentially
+    rather than raising. With n_slots=2 and a 5-state batch, the call
+    runs 3 sub-batches (2 + 2 + 1) and returns 5 correctly-ordered
+    results that match the reference single-state computation."""
+    server, ref, _ = server_factory(
         with_policy=True, batch_size=2, batch_wait_ms=0.0, n_slots=2,
     )
     with server:
         client = SharedTensorNNEvalClient(server.handle())
-        # 3 non-terminal states, pool of 2 → clear error.
-        with pytest.raises(RuntimeError, match="slot pool|slots, but"):
-            client.batch_evaluate_with_policy(
-                [adapter, adapter, adapter], player_id=0,
-            )
+        # 5 non-terminal states, pool of 2 → must chunk, not raise.
+        results = client.batch_evaluate_with_policy(
+            [adapter] * 5, player_id=0,
+        )
+    assert len(results) == 5
+    # Outputs match the legacy reference for every position — proves
+    # chunked submissions reassemble correctly in input order.
+    v_ref, p_ref = ref.evaluate_with_policy(adapter, player_id=0)
+    for v, p in results:
+        assert v == pytest.approx(float(v_ref), abs=1e-5)
+        np.testing.assert_allclose(p, p_ref, atol=1e-5)
+    # 5 requests across a pool of 2 = 3 dispatches at minimum.
+    assert server.requests_served == 5
+    assert server.batches_dispatched >= 3
 
 
-def test_batched_value_only_raises_when_request_exceeds_slot_pool(
+def test_batched_value_only_chunks_when_request_exceeds_slot_pool(
     server_factory, adapter,
 ):
-    server, _, _ = server_factory(
+    """Value-only counterpart to the with-policy chunking test."""
+    server, ref, _ = server_factory(
         with_policy=False, batch_size=2, batch_wait_ms=0.0, n_slots=2,
     )
     with server:
         client = SharedTensorNNEvalClient(server.handle())
-        with pytest.raises(RuntimeError, match="slot pool|slots, but"):
-            client.batch_evaluate(
-                [adapter, adapter, adapter], player_id=0,
-            )
+        # 5 non-terminal states, pool of 2 → must chunk, not raise.
+        results = client.batch_evaluate(
+            [adapter] * 5, player_id=0,
+        )
+    assert len(results) == 5
+    v_ref = float(ref.evaluate(adapter, player_id=0))
+    for v in results:
+        assert v == pytest.approx(v_ref, abs=1e-5)
+    assert server.requests_served == 5
+    assert server.batches_dispatched >= 3
 
 
 def test_batched_release_all_slots_on_server_stop_mid_call(
@@ -720,3 +740,109 @@ def test_batched_release_all_slots_on_server_stop_mid_call(
         f"slot pool not full after stop+restart; drained={drained}"
     )
     server.stop(timeout=2.0)
+
+
+# ---------- multi-worker contention regression (PR #49 scenario) ------------
+#
+# Field incident 2026-05-10: 14 search workers calling
+# ``batch_evaluate_with_policy([32 states])`` against a server with
+# ``n_slots=64`` starved — 8 of 9 games stalled at ~0.4 dec/sec
+# because only ~2 workers could have full batches in flight at the
+# 64-slot pool (14 * 32 = 448 slot-requests vs. a 64-slot pool, and
+# the per-call all-or-nothing acquire serialized them onto a tiny
+# fraction of the slot budget). PR #49 bumped the default
+# ``n_slots`` in ``distributed.py`` to ``max(64, n_workers * 32 +
+# 16)`` to give every worker a full batch's worth of headroom.
+#
+# This test pins the broken pre-#49 config to prove the in-process
+# slot machinery handles it: 14 threads, n_slots=64, each asking
+# for 32. Two server-side changes make this robust:
+#
+# 1. ``acquire_lock`` serializes the multi-slot acquire phase so
+#    concurrent workers cannot deadlock by accumulating partial
+#    allocations (the failure mode this test originally exposed —
+#    without the lock the threads stall indefinitely at <2/14
+#    completed).
+# 2. Chunking (PR #47 follow-up, change 1 in this PR) makes any
+#    oversize batch degrade into sub-batches rather than crashing,
+#    so a future config-mismatch where N > n_slots still completes.
+
+
+def test_concurrent_workers_make_progress_under_contention(server_factory, adapter):
+    """Regression for the PR #49 field incident. With the pre-#49
+    config (n_slots=64, batch_size=32, 14 workers each issuing 32-
+    state batched calls), every thread must complete inside a
+    bounded wall — no thread stuck waiting indefinitely on the slot
+    pool."""
+    server, _, _ = server_factory(
+        with_policy=True,
+        batch_size=32,
+        batch_wait_ms=0.5,
+        n_slots=64,
+    )
+    n_threads = 14
+    per_thread_batch = 32
+    wall_budget_s = 30.0
+
+    durations: list[float] = [-1.0] * n_threads
+    result_counts: list[int] = [-1] * n_threads
+    errors: list[BaseException] = []
+    errors_lock = threading.Lock()
+
+    with server:
+        handle = server.handle()
+
+        def _worker(i: int) -> None:
+            client = SharedTensorNNEvalClient(handle)
+            t0 = time.monotonic()
+            try:
+                results = client.batch_evaluate_with_policy(
+                    [adapter] * per_thread_batch, player_id=0,
+                )
+                result_counts[i] = len(results)
+            except BaseException as e:  # noqa: BLE001
+                with errors_lock:
+                    errors.append(e)
+            finally:
+                durations[i] = time.monotonic() - t0
+
+        threads = [
+            threading.Thread(target=_worker, args=(i,))
+            for i in range(n_threads)
+        ]
+        t0 = time.monotonic()
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join(timeout=wall_budget_s)
+        overall_wall_s = time.monotonic() - t0
+
+    # All threads completed (none still alive at the timeout).
+    alive = [i for i, t in enumerate(threads) if t.is_alive()]
+    assert not alive, (
+        f"threads {alive} still alive after {wall_budget_s}s — "
+        f"contention starvation regression. durations={durations!r}"
+    )
+    # No worker errored out.
+    assert not errors, f"workers raised: {errors!r}"
+    # Every worker returned the expected 32-result list.
+    assert all(c == per_thread_batch for c in result_counts), (
+        f"unexpected result counts: {result_counts!r}"
+    )
+    # No single thread stalled longer than the wall budget.
+    assert all(0 <= d < wall_budget_s for d in durations), (
+        f"some thread took >= {wall_budget_s}s: {durations!r}"
+    )
+    # Overall wall under the budget (the per-thread join already
+    # enforces this, but pin the aggregate explicitly).
+    assert overall_wall_s < wall_budget_s, (
+        f"overall wall {overall_wall_s:.2f}s exceeded budget"
+    )
+    # The dispatcher fused at least some requests — there should be
+    # FEWER than n_threads * per_thread_batch single-row batches.
+    # (Strict upper bound would over-constrain; the load-bearing
+    # assertion is progress, this is a soft sanity check.)
+    assert server.batches_dispatched < n_threads * per_thread_batch, (
+        f"no fusion at all — every request became its own batch: "
+        f"batches_dispatched={server.batches_dispatched}"
+    )
