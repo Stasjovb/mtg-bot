@@ -364,11 +364,14 @@ fn apply_effect(
         // follow-up consolidation slice can collapse the two
         // implementations once that constraint relaxes.
         //
-        // Empty-library handling: if the library is exhausted before
-        // we've drawn `count` cards, we stop silently. Real MTG: the
-        // player loses on the next state-based-action check (CR
-        // 704.5b). Deck-out integration is deferred — for first slice
-        // this is a silent short-circuit.
+        // Empty-library handling (CR 704.5b — round-26 G10 closure).
+        // If the library is exhausted before we've drawn `count` cards
+        // we stop AND flip the player's `attempted_draw_on_empty`
+        // cause-signal. The next `apply_sbas` pass transitions that
+        // into the sticky `has_lost` flag; `losers()` ALSO reads the
+        // cause-signal directly so the loss is observable BEFORE the
+        // SBA pass runs. Mirrors Python's eager `p.has_lost = True`
+        // in `turn.draw_card`.
         Effect::DrawCards { count } => {
             let controller = state.active_player as usize;
             let n = (*count).max(0) as usize;
@@ -376,7 +379,9 @@ fn apply_effect(
                 let player = &mut state.players[controller];
                 let lib = Arc::make_mut(&mut player.library);
                 let Some(mut obj) = lib.pop() else {
-                    break; // empty library — silent short-circuit
+                    // CR 704.5b — empty-library draw flags the player.
+                    player.attempted_draw_on_empty = true;
+                    break;
                 };
                 obj.zone = ZONE_HAND;
                 Arc::make_mut(&mut player.hand).push(obj);

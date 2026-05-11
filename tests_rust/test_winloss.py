@@ -7,21 +7,21 @@ flag, ``GameState.winner_id`` / ``GameState.is_draw``, and
 **Composes with the round-1 life slice.** A player at life <= 0 is a
 loser (CR 104.3a, simplified).
 
-**Implementation choice — pure derivation (option c).** ``losers()``
-is computed purely from current life totals (life <= 0). There is
-NO ``Player.has_lost`` field on the Rust ``Player`` struct in this
-slice — adding such a field would require editing
-``rust/src/state.rs``, which is shared with sibling TDD-slice agents
-(damage, cards-bridge) running in parallel against the same base
-commit. Doing so would cause merge conflicts.
+**Implementation (round-26 G10 + G11 closure).** ``losers()`` is
+computed as the OR of three signals on each player:
+``has_lost`` (sticky, set by ``apply_sbas`` or ``lose_game``);
+``attempted_draw_on_empty`` (CR 704.5b cause-signal, read directly
+so the empty-library loss is observable before the next SBA pass);
+``life <= 0`` (pure-derivation, preserved so the existing
+revival semantics around ``gain_life`` from 0 still hold UNTIL
+``apply_sbas`` runs and locks in the loss).
 
-Consequently, "you lose the game" effects (Phage the Untouchable,
-Bargain, decking-out, etc.) are deferred to a future slice that can
-add the explicit-loss field at a moment when ``state.rs`` is not
-being shared with siblings. The
-``test_explicit_lose_game_marks_player`` test stays in the file as a
-``@pytest.mark.skip(reason=...)`` to lock in the API surface for
-whoever picks up that follow-up.
+"You lose the game" effects (Phage the Untouchable, Bargain, deck-out)
+go through the ``lose_game(p)`` primitive which flips the sticky
+``has_lost`` flag directly. ``apply_sbas`` is the SBA-driven
+transition: a player at life <= 0 or with the empty-library cause-
+signal becomes ``has_lost = true`` on the next pass and the loss
+is irrevocable.
 
 **Winner semantics.** With pure derivation in a 2-player game:
 - 0 losers -> winner = None (game ongoing).
@@ -191,22 +191,22 @@ def test_winner_unaffected_by_clone_then_lose(synthetic_state):
     assert synthetic_state.winner() is None
 
 
-@pytest.mark.skip(
-    reason=(
-        "explicit-loss field deferred to future slice (pure-derivation "
-        "option c chosen here to avoid editing state.rs while sibling "
-        "agents are also editing it). When that slice lands, this test "
-        "should pass: state.lose_game(0) flags player 0 as a loser "
-        "regardless of life total — for 'you lose the game' effects "
-        "like Phage / Bargain / decking out."
-    )
-)
 def test_explicit_lose_game_marks_player(synthetic_state):
-    """Locked-in API surface for the future explicit-loss slice."""
+    """Round-26 G11 closure: ``lose_game(p)`` is the explicit primitive
+    for "you lose the game" effects (Phage / Bargain / deck-out). It
+    flips the sticky ``has_lost`` flag — irrevocable, no ``gain_life``
+    can undo it (even when the player is at full life)."""
+    # p0 at full life, but losing the game.
+    assert synthetic_state.get_life(0) == 20
     synthetic_state.lose_game(0)
     assert list(synthetic_state.losers()) == [0]
     assert synthetic_state.winner() == 1
     assert synthetic_state.is_game_over() is True
+    # Life is untouched — the loss is not a life-total side effect.
+    assert synthetic_state.get_life(0) == 20
+    # The loss is sticky: gain_life cannot revive p0.
+    synthetic_state.gain_life(0, 5)
+    assert list(synthetic_state.losers()) == [0]
 
 
 # -----------------------------------------------------------------
@@ -630,18 +630,19 @@ def test_apply_sbas_until_quiescent_after_game_over_is_noop(synthetic_state):
     assert passes_1 >= 0
 
 
-def test_each_opponent_loses_life_lethal_then_revive_flips_outcome(
+def test_each_opponent_loses_life_lethal_then_sba_locks_the_loss(
     synthetic_state,
 ):
-    """Cross-feature with the each-opponent-life-loss arm + the pure-
-    derivation revive caveat: resolve EachOpponentLosesLife(20) by p0
-    -> p1 drops to 0 -> p1 is the loser, winner = 0. Then gain_life
-    on p1 reverses the outcome under pure-derivation (no SBA-driven
-    permanent-loss model yet): p1 is back above 0, no losers, no
-    winner, game is no longer over. The composition pins both
-    half-cycles of the round-1 winloss model — the cross-feature
-    EachOpponent + winloss interaction AND the pure-derivation
-    'gain_life clears the loser flag' contract."""
+    """Cross-feature with the each-opponent-life-loss arm + round-26
+    G11 SBA-driven permanence: resolve EachOpponentLosesLife(20) by
+    p0 -> p1 drops to 0 -> p1 is the loser, winner = 0. Calling
+    ``apply_sbas_until_quiescent`` transitions ``life <= 0`` into the
+    sticky ``has_lost``; subsequent ``gain_life`` cannot revive p1.
+
+    Pre-SBA the revive is still possible (preserved by the pure-
+    derivation OR branch on ``life <= 0`` — see
+    ``test_gain_life_from_zero_revives_player``); this test exercises
+    the SBA path where the lock-in fires."""
     src_id = synthetic_state.register_and_inject_object(
         _each_opponent_loses_life_dict(20), 0, ZONE_BATTLEFIELD
     )
@@ -654,11 +655,12 @@ def test_each_opponent_loses_life_lethal_then_revive_flips_outcome(
     assert synthetic_state.winner() == 0
     assert synthetic_state.is_game_over() is True
 
-    # Revive p1: pure-derivation flips the outcome back to ongoing.
+    # After SBA, the loss is locked in. gain_life raises p1's life back
+    # above 0 but the sticky has_lost keeps them in the loser pool.
     synthetic_state.gain_life(1, 5)
     assert synthetic_state.get_life(1) == 5
-    assert list(synthetic_state.losers()) == []
-    assert synthetic_state.winner() is None
-    assert synthetic_state.winner_id is None
-    assert synthetic_state.is_game_over() is False
+    assert list(synthetic_state.losers()) == [1]
+    assert synthetic_state.winner() == 0
+    assert synthetic_state.winner_id == 0
+    assert synthetic_state.is_game_over() is True
     assert synthetic_state.is_draw is False

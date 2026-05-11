@@ -177,6 +177,7 @@ the test lands in a commit.
 | rust(effect-destroy-target-land): land-filter destroy (CR 701.7) | tests_rust/test_resolve.py extend | green  | feature/rust-effect-destroy-target-land |
 | rust(gap-g6-activate-ability-summoning-sick): CR 302.1 gate in apply_action + legal_decisions | tests_rust/test_tap.py + test_legal.py extend | green  | feature/rust-gap-g6-activate-ability-summoning-sick |
 | rust(gap-g14-advance-phase-auto-draw): CR 504.1 auto-draw on PHASE_DRAW entry with CR 103.7c first-turn skip | tests_rust/test_steps.py extend | green  | feature/rust-gap-g14-advance-phase-auto-draw |
+| rust(gap-g10+g11): empty-library draw flags player, `apply_sbas` locks loss via sticky `has_lost` (CR 704.5b, CR 104.2) | tests_rust/test_library.py + test_winloss.py invert + extend | green  | feature/rust-gap-g10-draw-empty-deckout |
 
 ## Build invocation reminder
 

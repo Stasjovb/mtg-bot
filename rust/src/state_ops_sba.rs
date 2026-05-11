@@ -179,7 +179,26 @@ impl GameState {
     /// Single-pass, no quiescence loop — see module docstring for
     /// the deferred semantics. 704.5f checked before 704.5g per CR
     /// ordering; in practice the union of victims is the same set.
+    ///
+    /// **Player-loss transition (round-26 G10 + G11).** Before the
+    /// creature pass, fold the per-player cause-signals
+    /// (`attempted_draw_on_empty`, `life <= 0`) into the sticky
+    /// `has_lost` flag. This is the SBA transition that makes deck-out
+    /// loss permanent (CR 704.5b) and locks in the life <= 0 loss
+    /// (CR 704.5a). The return value remains the count of creatures
+    /// destroyed in this pass — the player-loss work doesn't bump
+    /// it (existing tests assert creature-count semantics; player
+    /// loss is a separate SBA category in CR ordering).
     fn apply_sbas(&mut self) -> PyResult<usize> {
+        // 704.5a / 704.5b player-loss SBAs first — fold cause-signals
+        // into the sticky `has_lost`. Idempotent: re-running after a
+        // player is already flagged is a no-op (preserves invariant
+        // I7 — apply_sbas after game-over is stable).
+        for p in self.players.iter_mut() {
+            if !p.has_lost && (p.attempted_draw_on_empty || p.life <= 0) {
+                p.has_lost = true;
+            }
+        }
         let victims = self.collect_sba_victims();
         let count = victims.len();
         for (controller, obj_id) in victims {
