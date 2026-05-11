@@ -415,3 +415,464 @@ def test_proliferate_clone_isolation(synthetic_state):
     assert synthetic_state.get_counters(obj_id) == 3, (
         "CoW broken: proliferate on clone leaked into original"
     )
+
+
+# --- Cross-feature edge cases ------------------------------------------------
+#
+# These tests compose the counter primitives with sibling slices
+# (Effect dispatch, state-based actions, register_and_inject_object,
+# clone / fingerprint / snapshot) to pin the interaction surface that
+# isolated counter tests cannot cover. They follow the convention
+# established in ``test_sba.py``'s "Cross-feature: SBA + Effect
+# interactions" block — printing dicts via the round-3 schema,
+# ``register_and_inject_object`` to inject creatures with explicit
+# P/T, ``resolve_top_of_stack`` to drive Effects through the same
+# path the spell-resolution call site uses.
+#
+# Each test exercises a documented seam:
+#   * Effect::AddCounters (round-15) on a filtered AnyCreature target
+#   * Effect::AddCounters with negative count -> 0-toughness SBA
+#     (CR 704.5f cross with state_ops_sba.rs)
+#   * Effect::PutPlusOneCounterOnSelf (round-23) source_obj_id pattern
+#   * Indestructible carve-out (CR 702.12b) blocks counter-driven 704.5f
+#   * Clone-replay fingerprint identity for counter mutations
+#   * CoW canary on the AddCounters Effect dispatch (clone vs original)
+#   * Counter add/remove net effect through alternating apply_effect
+#   * +1/+1 vs -1/-1 cancellation at SBA — Rust collapses to net-i32
+#     (documented quirk, NOT a separate-kind cancellation rule)
+#   * Counter "kind" distinction in storage (net-i32 model — no separate
+#     stacks for + and -, documented gap)
+#   * Counters surface through battlefield_snapshot (bridge round-trip)
+
+
+ZONE_HAND = 0
+ZONE_BATTLEFIELD = 2
+ZONE_GRAVEYARD = 3
+
+
+def _two_two_creature_dict():
+    """Vanilla 2/2 creature printing — no keywords, no special effects.
+    Mirrors ``_two_two_creature_dict`` in test_sba.py."""
+    return {
+        "name": "Test Counter-Edge 2/2",
+        "card_types": ["Creature"],
+        "mana_cost": {"generic": 2},
+        "power": 2,
+        "toughness": 2,
+        "keywords": [],
+        "effects": [],
+    }
+
+
+def _indestructible_2_2_dict():
+    """Indestructible 2/2 creature — CR 702.12 exemption canary."""
+    return {
+        "name": "Test Counter-Edge Indestructible 2/2",
+        "card_types": ["Creature"],
+        "mana_cost": {"generic": 2},
+        "power": 2,
+        "toughness": 2,
+        "keywords": ["indestructible"],
+        "effects": [],
+    }
+
+
+def _giant_growth_counters_dict(amount):
+    """AddCounters{any_creature, amount} instant — Giant-Growth-shaped.
+    Same schema as test_resolve.py's ``_giant_growth_dict`` /
+    test_sba.py's ``_wither_dict``."""
+    return {
+        "name": f"Test +{amount}/+{amount} Counter",
+        "card_types": ["Instant"],
+        "mana_cost": {"G": 1},
+        "effects": [
+            {
+                "kind": "add_counters",
+                "count": amount,
+                "target": {"kind": "any_creature"},
+            }
+        ],
+    }
+
+
+def _self_counter_dict(amount=1):
+    """Creature with PutPlusOneCounterOnSelf{amount} — Blade-of-the-
+    Swarm-shaped. Same schema as test_resolve.py's ``_self_counter_dict``."""
+    return {
+        "name": f"Test Counter-Edge Self-Counter (x{amount})",
+        "card_types": ["Creature"],
+        "power": 1,
+        "toughness": 1,
+        "effects": [
+            {
+                "kind": "put_plus_one_counter_on_self",
+                "amount": amount,
+            }
+        ],
+    }
+
+
+def test_add_counters_effect_applies_to_filtered_any_creature_target(engine):
+    """``Effect::AddCounters {target: AnyCreature, count: 2}`` resolves
+    by picking the FIRST creature on the defending player's
+    battlefield (round-15 deterministic shape) and depositing +2
+    net counters there. Cross-feature with round-15 Effect dispatch
+    and round-2 ``get_counters`` read-side: the counter contribution
+    must surface via the counter primitive after the spell resolves.
+
+    Uses a synthetic state where p1's bf[0] is itself a creature so
+    the filtered AnyCreature pick lands on a creature target rather
+    than the synthetic seed's default bf[0] (a Forest with no
+    toughness — the AddCounters arm doesn't currently filter on
+    creature-type, but a future tightening would; this test would
+    catch it)."""
+    state = engine.make_synthetic_state(
+        num_battlefield=0, num_hand=1, num_library=1
+    )
+    # Inject the AnyCreature target onto p1's bf[0] (= defender's
+    # smallest-index battlefield object).
+    target_id = state.register_and_inject_object(
+        _two_two_creature_dict(), 1, ZONE_BATTLEFIELD
+    )
+    assert state.get_counters(target_id) == 0
+
+    spell_id = state.register_and_inject_object(
+        _giant_growth_counters_dict(amount=2), 0, ZONE_HAND
+    )
+    state.push_to_stack(spell_id, 0)
+    state.resolve_top_of_stack()
+
+    # The filtered AnyCreature pick deposited +2 counters on the
+    # target via the round-2 net-i32 model.
+    assert state.get_counters(target_id) == 2
+    # Power-bonus / toughness-bonus accessors return the same value
+    # (the round-2 read-side reports the net counter contribution).
+    assert state.power_bonus_from_counters(target_id) == 2
+    assert state.toughness_bonus_from_counters(target_id) == 2
+
+
+def test_add_counters_effect_negative_drives_sba_destruction_via_704_5f(engine):
+    """``Effect::AddCounters {target: AnyCreature, count: -2}`` on a
+    fresh 2/2 leaves effective toughness 2 + (-2) = 0. The round-12
+    0-toughness SBA (CR 704.5f) destroys it on the next ``apply_sbas``
+    pass — NOT the damage-stamp path (CR 704.5g), since no damage
+    was dealt. This pins the cross-feature interaction between
+    Effect dispatch (round-15), counter storage (round-2), and the
+    SBA loop (round-16's counter-aware effective-toughness check).
+
+    Distinct from the damage-stamp path: a -1/-1 counter is NOT
+    damage; CR 704.5f checks effective toughness <= 0, not marked
+    damage >= toughness. The two destruction rules can fire on the
+    same creature but for different reasons — this test isolates
+    the 704.5f-only path."""
+    state = engine.make_synthetic_state(
+        num_battlefield=0, num_hand=1, num_library=1
+    )
+    creature_id = state.register_and_inject_object(
+        _two_two_creature_dict(), 1, ZONE_BATTLEFIELD
+    )
+    spell_id = state.register_and_inject_object(
+        _giant_growth_counters_dict(amount=-2), 0, ZONE_HAND
+    )
+    state.push_to_stack(spell_id, 0)
+    state.resolve_top_of_stack()
+
+    # Counter applied: net = -2. No damage dealt.
+    assert state.get_counters(creature_id) == -2
+    assert state.get_damage(creature_id) == 0
+    # Effective toughness = 2 + (-2) = 0 -> 704.5f triggers.
+    assert state.find_object_zone(creature_id) == ZONE_BATTLEFIELD
+    assert state.apply_sbas() == 1
+    assert state.find_object_zone(creature_id) == ZONE_GRAVEYARD
+
+
+def test_put_plus_one_counter_on_self_lands_on_source_battlefield_obj(
+    synthetic_state,
+):
+    """``Effect::PutPlusOneCounterOnSelf {amount: 3}`` resolves by
+    locating the source GameObject (the resolving stack item's
+    source, threaded through ``apply_effect`` via the round-23
+    ``source_obj_id`` parameter) on a battlefield zone and adding
+    counters to it. Cross-feature with round-23 source-finding
+    pattern and round-2 ``get_counters`` read-side.
+
+    Distinct from AddCounters which picks defender's bf[0]: this
+    arm picks "self" by obj_id regardless of controller / zone-index
+    position. Pins both:
+    1. counters land on the SOURCE, not bf[0]
+    2. ``get_counters`` reads back the value from the same id"""
+    spell_obj_id = synthetic_state.register_and_inject_object(
+        _self_counter_dict(amount=3), 0, ZONE_BATTLEFIELD
+    )
+    # Pre-condition: source on p0's bf, no counters yet. The default
+    # synthetic state's bf[0] is a Forest (id 0); the source we
+    # just injected lives at the END of p0's bf, NOT at bf[0]. This
+    # is the key cross-feature property to pin — PutPlusOneCounterOnSelf
+    # picks by obj_id, not by battlefield position.
+    assert synthetic_state.get_counters(spell_obj_id) == 0
+    assert synthetic_state.get_counters(P0_FIRST_BATTLEFIELD_ID) == 0
+
+    synthetic_state.push_to_stack(spell_obj_id, 0)
+    synthetic_state.resolve_top_of_stack()
+
+    # +3 counters lands on the SOURCE, not bf[0].
+    assert synthetic_state.get_counters(spell_obj_id) == 3
+    # bf[0] (Forest, id 0) is untouched — confirms the source-finder
+    # did not mistakenly fall back to the AddCounters-shaped bf[0]
+    # pick.
+    assert synthetic_state.get_counters(P0_FIRST_BATTLEFIELD_ID) == 0
+
+
+def test_counters_survive_clone_replay_fingerprint_identity(synthetic_state):
+    """Two clones that apply the same counter mutation produce the
+    same fingerprint. Cross-feature canary that the counter field
+    serializes deterministically into the round-22 SHA1 fingerprint
+    — if the counters slot drifts (e.g. counters stored in a hash
+    map with iteration-order leakage), the digest diverges across
+    clones even with identical observable state.
+
+    This is the cross-engine parity property the round-22
+    ``hash_state`` recipe relies on: the per-object 8-tuple includes
+    ``counters`` at a stable position, so two replays of the same
+    sequence produce identical fingerprints."""
+    obj_id = P0_FIRST_BATTLEFIELD_ID
+    # Drive both clones through the same sequence: set +3, add -1.
+    a = synthetic_state.clone_once()
+    b = synthetic_state.clone_once()
+    a.set_counters(obj_id, 3)
+    a.add_counters(obj_id, -1)
+    b.set_counters(obj_id, 3)
+    b.add_counters(obj_id, -1)
+    assert a.get_counters(obj_id) == 2
+    assert b.get_counters(obj_id) == 2
+    # Fingerprints must match — same observable state across the
+    # entire 12-char digest.
+    assert a.fingerprint() == b.fingerprint()
+    # And the original (still at 0 counters) must NOT match — proves
+    # the fingerprint is actually sensitive to the counter field and
+    # not e.g. always-zero from a serialization bug.
+    assert synthetic_state.fingerprint() != a.fingerprint()
+
+
+def test_add_counters_effect_on_clone_does_not_mutate_original(engine):
+    """**CoW canary for the Effect::AddCounters dispatch path.**
+    Resolving a counter spell on a clone must not retroactively
+    mutate the original's battlefield Vec. Same load-bearing
+    invariant as ``test_counter_change_on_clone_does_not_affect_original``
+    but exercising the full Effect-dispatch path (round-15) rather
+    than the bare ``add_counters`` primitive — verifies
+    ``Arc::make_mut`` is called correctly inside the Effect arm."""
+    state = engine.make_synthetic_state(
+        num_battlefield=0, num_hand=1, num_library=1
+    )
+    target_id = state.register_and_inject_object(
+        _two_two_creature_dict(), 1, ZONE_BATTLEFIELD
+    )
+    spell_id = state.register_and_inject_object(
+        _giant_growth_counters_dict(amount=2), 0, ZONE_HAND
+    )
+
+    other = state.clone_once()
+    # Mutate ONLY the clone: push and resolve the spell.
+    other.push_to_stack(spell_id, 0)
+    other.resolve_top_of_stack()
+    assert other.get_counters(target_id) == 2
+
+    # Original must NOT see the counter mutation — the spell is
+    # still in the original's hand, the stack is empty, and the
+    # target's counter value is unchanged.
+    assert state.get_counters(target_id) == 0
+    assert state.find_object_zone(spell_id) == ZONE_HAND
+    assert state.is_stack_empty() is True
+
+
+def test_add_then_remove_counters_net_zero_via_apply_effect(engine):
+    """Resolving ``AddCounters{+3}`` then ``AddCounters{-3}`` against
+    the same defender bf[0] leaves the target at net 0 counters.
+    Pins the cross-feature property that the round-15 Effect arm
+    composes additively on the round-2 i32 net-counter field — no
+    separate "kind" buckets that would resist cancellation.
+
+    This is the running-net behavior implied by the net-i32 model:
+    a +N counter and a -N counter cancel into the storage layer
+    directly, not via an SBA pass."""
+    state = engine.make_synthetic_state(
+        num_battlefield=0, num_hand=2, num_library=1
+    )
+    target_id = state.register_and_inject_object(
+        _two_two_creature_dict(), 1, ZONE_BATTLEFIELD
+    )
+    plus_spell = state.register_and_inject_object(
+        _giant_growth_counters_dict(amount=3), 0, ZONE_HAND
+    )
+    minus_spell = state.register_and_inject_object(
+        _giant_growth_counters_dict(amount=-3), 0, ZONE_HAND
+    )
+
+    # Resolve +3.
+    state.push_to_stack(plus_spell, 0)
+    state.resolve_top_of_stack()
+    assert state.get_counters(target_id) == 3
+
+    # Resolve -3.
+    state.push_to_stack(minus_spell, 0)
+    state.resolve_top_of_stack()
+    assert state.get_counters(target_id) == 0
+
+
+def test_plus_one_minus_one_cancellation_quirk_net_i32_collapses_pre_sba(engine):
+    """**Documented quirk: net-i32 collapses +1/+1 vs -1/-1 BEFORE
+    SBAs.** Real MTG (CR 704.5r / 704.5p) cancels +1/+1 and -1/-1
+    counters at SBA time, but stores them as distinct counter kinds
+    pre-cancellation. The Rust net-i32 model (round-2) collapses
+    both kinds into a single signed integer at write time — so a
+    creature that received 3 +1/+1 counters and then 2 -1/-1
+    counters reads as ``counters == 1`` immediately, BEFORE any SBA
+    pass.
+
+    The observable effect is the same for the destruction rules:
+    a 2/2 with effective toughness 2 + 1 = 3 survives, identical to
+    real MTG's post-cancellation result. The difference is
+    inexpressible queries like "how many +1/+1 counters does this
+    creature have right now" — see ``state_ops_counters.rs`` module
+    docstring for the divergence note. This test pins the quirk so
+    a future SBA-level cancellation slice replaces it deliberately
+    rather than by accident."""
+    state = engine.make_synthetic_state(
+        num_battlefield=0, num_hand=2, num_library=1
+    )
+    target_id = state.register_and_inject_object(
+        _two_two_creature_dict(), 1, ZONE_BATTLEFIELD
+    )
+    plus_spell = state.register_and_inject_object(
+        _giant_growth_counters_dict(amount=3), 0, ZONE_HAND
+    )
+    minus_spell = state.register_and_inject_object(
+        _giant_growth_counters_dict(amount=-2), 0, ZONE_HAND
+    )
+
+    # Resolve +3 then -2. Real MTG would store these as 3 +1/+1 and
+    # 2 -1/-1 counters BEFORE SBAs; the Rust net-i32 model stores
+    # them as net +1 immediately at write time.
+    state.push_to_stack(plus_spell, 0)
+    state.resolve_top_of_stack()
+    state.push_to_stack(minus_spell, 0)
+    state.resolve_top_of_stack()
+    # Net storage is +1 BEFORE any SBA pass — the quirk.
+    assert state.get_counters(target_id) == 1
+
+    # SBA is a no-op (effective toughness 2 + 1 = 3 > 0, no damage).
+    assert state.apply_sbas() == 0
+    # Net value still +1 post-SBA — the observable destruction
+    # outcome matches real MTG even though the internal representation
+    # diverges.
+    assert state.get_counters(target_id) == 1
+
+
+def test_indestructible_blocks_counter_driven_704_5f_destruction(engine):
+    """CR 702.12 indestructible carves out the 704.5f (0-toughness)
+    destruction the same way it carves out 704.5g (lethal damage).
+    A counter-driven path to effective toughness 0 on an
+    indestructible creature does NOT destroy it.
+
+    Cross-feature with state_ops_sba.rs's indestructible-keyword
+    check (round-13). Mirrors ``test_indestructible_creature_with_zero_toughness_survives``
+    in test_sba.py but routes the counter through the round-15
+    AddCounters Effect dispatch path rather than the bare
+    ``set_counters`` primitive — proves the indestructible
+    exemption is at the SBA layer (where it should be), not at
+    the counter-write layer."""
+    state = engine.make_synthetic_state(
+        num_battlefield=0, num_hand=1, num_library=1
+    )
+    indest_id = state.register_and_inject_object(
+        _indestructible_2_2_dict(), 1, ZONE_BATTLEFIELD
+    )
+    spell_id = state.register_and_inject_object(
+        _giant_growth_counters_dict(amount=-2), 0, ZONE_HAND
+    )
+    state.push_to_stack(spell_id, 0)
+    state.resolve_top_of_stack()
+
+    # Counter wrote through fine — indestructible doesn't prevent
+    # the counter write itself, only the destruction step.
+    assert state.get_counters(indest_id) == -2
+    # SBA does NOT destroy (CR 702.12b exemption).
+    assert state.apply_sbas() == 0
+    assert state.find_object_zone(indest_id) == ZONE_BATTLEFIELD
+    # Counter value preserved post-SBA (the indestructible carve-out
+    # at the SBA layer skips the destruction step entirely; the
+    # counter field is untouched by the SBA pass).
+    assert state.get_counters(indest_id) == -2
+
+
+def test_counters_distinguished_from_damage_in_storage(synthetic_state):
+    """The counter field and the damage field are independent
+    per-object scalars. Setting +3 counters does not pollute the
+    damage marker, and dealing 1 damage does not pollute the counter
+    field. Cross-feature with round-1 ``deal_damage`` and round-2
+    ``set_counters``: the two storage slots must stay separate so
+    SBAs can read each independently.
+
+    The net-i32 model intentionally collapses +1/+1 and -1/-1
+    counter KINDS into a single signed integer (documented quirk —
+    see the SBA cross-feature test above), but counter vs damage
+    are genuinely separate fields and must remain so."""
+    obj_id = P0_FIRST_BATTLEFIELD_ID
+    # Baseline.
+    assert synthetic_state.get_counters(obj_id) == 0
+    assert synthetic_state.get_damage(obj_id) == 0
+
+    # Set counters: damage must stay 0.
+    synthetic_state.set_counters(obj_id, 3)
+    assert synthetic_state.get_counters(obj_id) == 3
+    assert synthetic_state.get_damage(obj_id) == 0
+
+    # Deal damage: counters must stay 3.
+    synthetic_state.deal_damage(obj_id, 1)
+    assert synthetic_state.get_counters(obj_id) == 3
+    assert synthetic_state.get_damage(obj_id) == 1
+
+    # Negative counters: damage must stay 1.
+    synthetic_state.set_counters(obj_id, -2)
+    assert synthetic_state.get_counters(obj_id) == -2
+    assert synthetic_state.get_damage(obj_id) == 1
+
+
+def test_counters_surface_through_battlefield_snapshot_round_trip(
+    synthetic_state,
+):
+    """Counters set on a battlefield permanent appear in the
+    ``battlefield_snapshot`` dict under the ``counters`` key.
+    Cross-feature with the bridge / snapshot path (round-22 phase-2a)
+    — same field flows into the fingerprint per-object 8-tuple, so
+    the snapshot is the de-facto serialized form of the counter
+    storage.
+
+    Distinct from the ``test_battlefield_snapshot_reflects_counters_field``
+    test in test_snapshot.py: that pins the snapshot side; this one
+    pins it from the counter-test perspective — if counters
+    storage ever moves (e.g. into a side-table keyed by id), the
+    snapshot path must keep surfacing the same value.
+
+    Note on the gap: there is no dedicated "counter snapshot
+    getter" today — the per-object scalar surface IS the snapshot
+    via ``battlefield_snapshot``. A future multi-kind counter map
+    (charge / lore / loyalty / brick / stun / time) would need its
+    own getter; this test documents the current single-value
+    surface."""
+    obj_id = P0_FIRST_BATTLEFIELD_ID
+    synthetic_state.set_counters(obj_id, 4)
+
+    snap = synthetic_state.battlefield_snapshot()
+    matching = [d for d in snap if d["id"] == obj_id]
+    assert len(matching) == 1
+    assert matching[0]["counters"] == 4
+
+    # Round-trip via clone: the clone's snapshot reports the same
+    # value (the counter field rides the Arc<Vec<GameObject>>
+    # refcount bump in clone_once).
+    snap_clone = synthetic_state.clone_once().battlefield_snapshot()
+    matching_clone = [d for d in snap_clone if d["id"] == obj_id]
+    assert len(matching_clone) == 1
+    assert matching_clone[0]["counters"] == 4
