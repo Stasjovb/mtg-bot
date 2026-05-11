@@ -1,10 +1,10 @@
 """Per-state-size perf bench for the Rust ``GameState.fingerprint()``.
 
-Complements ``scripts/bench_rust_clone.py`` (the existing precedent —
-head-to-head clone perf vs Python). ``fingerprint()`` runs on every
-step in ``scripts/parity_smoke.py --mode trajectory``, so its per-call
-cost as state size grows is load-bearing: clone is an Arc refcount
-bump (essentially free), but fingerprint walks every object in every
+Complements ``scripts/bench_rust_clone.py`` (the sibling per-state-
+size clone bench). ``fingerprint()`` runs on every step in
+``scripts/parity_smoke.py --mode trajectory``, so its per-call cost
+as state size grows is load-bearing: clone is an Arc refcount bump
+(essentially free), but fingerprint walks every object in every
 zone + computes a SHA1 digest. This bench measures the magnitude of
 that difference across a handful of representative state shapes.
 
@@ -54,12 +54,12 @@ def time_fingerprint_ns(state, n: int) -> float:
 def time_clone_ns(state, n: int) -> float:
     """Total wall-clock nanoseconds for ``n`` ``clone_once()`` calls.
 
-    Note: ``clone_n_times_micros`` (used by ``bench_rust_clone.py``)
-    runs the loop in Rust without PyO3 round-trip costs, which makes
-    it a tighter measurement of pure Rust clone cost. Here we use
-    ``clone_once()`` so both clone and fingerprint pay the same
-    Python→Rust call overhead — the ratio reflects what a Python
-    caller (parity_smoke) actually pays per step.
+    Note: ``clone_n_times_micros`` runs the loop in Rust without PyO3
+    round-trip costs, which makes it a tighter measurement of pure
+    Rust clone cost. Here we use ``clone_once()`` so both clone and
+    fingerprint pay the same Python→Rust call overhead — the ratio
+    reflects what a Python caller (parity_smoke) actually pays per
+    step. ``bench_rust_clone.py`` makes the same choice.
     """
     for _ in range(WARMUP_ITERS):
         state.clone_once()
