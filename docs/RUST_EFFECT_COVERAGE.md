@@ -6,9 +6,9 @@ This page is the rolling-progress snapshot for the Rust engine port's `Effect` e
 
 ## Headline numbers
 
-- **29 of 228 Python Effect classes covered (12.7%)** — by distinct-class count.
-- **286 of 690 per-card emissions covered (41.4%)** — weighted by how many cards each class appears on. This is the more load-bearing metric: high-frequency classes pull the bulk of cards into Rust even at low class-count coverage.
-- **30 Rust `Effect` variants** in `rust/src/cards.rs` today; 475 parser-claimed printings across the loaded pools.
+- **33 of 228 Python Effect classes covered (14.5%)** — by distinct-class count.
+- **304 of 690 per-card emissions covered (44.1%)** — weighted by how many cards each class appears on. This is the more load-bearing metric: high-frequency classes pull the bulk of cards into Rust even at low class-count coverage.
+- **34 Rust `Effect` variants** in `rust/src/cards.rs` today; 475 parser-claimed printings across the loaded pools.
 - **0 Rust variants without a Python counterpart** — the bridge is in sync with the Python vocabulary.
 - **1 Rust variant(s) built ahead of the pool** (allowlisted in `RUST_AHEAD_OF_POOL`): `ScryN`. These have no pool card exercising them today and are NOT counted as orphans.
 
@@ -18,7 +18,7 @@ Python Effect classes are split by how many cards they appear on. The Rust port 
 
 ### Frequency >= 10 (14 classes)
 
-- Covered by Rust: **7 / 14** (50.0%)
+- Covered by Rust: **8 / 14** (57.1%)
 
 | Python class | Frequency | Rust support |
 |---|---:|---|
@@ -34,12 +34,12 @@ Python Effect classes are split by how many cards they appear on. The Rust port 
 | `EquipToTargetCreatureYouControl` | 14 | no |
 | `BecomeLandCreatureUEOT` | 13 | no |
 | `ModalChooseOne` | 13 | no |
-| `PumpSelfUntilEOT` | 12 | no |
+| `PumpSelfUntilEOT` | 12 | yes |
 | `ManifestDread` | 10 | no |
 
 ### Frequency 2-9 (53 classes)
 
-- Covered by Rust: **19 / 53** (35.8%)
+- Covered by Rust: **22 / 53** (41.5%)
 
 ### Frequency 1 (161 singletons)
 
@@ -77,9 +77,13 @@ Python Effect classes are split by how many cards they appear on. The Rust port 
 | 25 | `Effect::EachOpponentLosesLife` | `EachOpponentLosesLife` | 6 |
 | 26 | `Effect::LoseLife` | `LoseLife` | 7 |
 | 27 | `Effect::TargetOpponentLosesLife` | `TargetOpponentLosesLife` | 2 |
-| 28 | `Effect::DestroyAllCreatures` | `DestroyAllCreatures` | 3 |
-| 29 | `Effect::DestroyTargetNonlandPermanent` | `DestroyTargetNonlandPermanent` | 2 |
-| 30 | `Effect::DealDamageAnyTarget` | `DealDamageAnyTarget` | 7 |
+| 28 | `Effect::EachOpponentDiscards` | `EachOpponentDiscards` | 2 |
+| 29 | `Effect::DestroyAllCreatures` | `DestroyAllCreatures` | 3 |
+| 30 | `Effect::DestroyTargetNonlandPermanent` | `DestroyTargetNonlandPermanent` | 2 |
+| 31 | `Effect::DestroyTargetArtifact` | `DestroyTargetArtifact` | 2 |
+| 32 | `Effect::DestroyTargetLand` | `DestroyTargetLand` | 2 |
+| 33 | `Effect::DealDamageAnyTarget` | `DealDamageAnyTarget` | 7 |
+| 34 | `Effect::PumpSelfUntilEOT` | `PumpSelfUntilEOT` | 12 |
 
 ## High-frequency Python classes NOT yet in Rust
 
@@ -92,6 +96,5 @@ These are the next-best ports by cards-covered-per-variant and are the recommend
 | `EquipToTargetCreatureYouControl` | 14 | Atomic Microsizer |
 | `BecomeLandCreatureUEOT` | 13 | Blinkmoth Nexus |
 | `ModalChooseOne` | 13 | Archenemy's Charm |
-| `PumpSelfUntilEOT` | 12 | Attack-in-the-Box |
 | `ManifestDread` | 10 | Bashful Beastie |
 

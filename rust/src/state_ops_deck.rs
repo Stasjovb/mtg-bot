@@ -112,6 +112,7 @@ impl GameState {
                 summoning_sick: false,
                 damage: 0,
                 counters: 0,
+                ueot_modifiers: Vec::new(),
             });
             next_id += 1;
         }

@@ -615,10 +615,18 @@ impl GameState {
         // of the library.
         let drained: Vec<GameObject> = lib.drain(start..).collect();
         let find_obj = |id: u32| -> GameObject {
-            *drained
+            // Round-27 (UEOT framework): GameObject lost its `Copy`
+            // derive when `ueot_modifiers: Vec<UeotModifier>` landed.
+            // Replace the `*ref` deref with an explicit `.clone()` on
+            // the found reference. The empty-modifiers case (the
+            // common path for cards-in-library, which haven't seen
+            // any UEOT effect) clones a single null heap pointer +
+            // zero len/cap — cheap even without Copy semantics.
+            drained
                 .iter()
                 .find(|o| o.id == id)
                 .expect("validated above: id must be in drained")
+                .clone()
         };
         // Rebuild the library as (front -> back, bottom -> top):
         //   [bottom_ids in given order]  (bottom_ids[0] = very bottom)

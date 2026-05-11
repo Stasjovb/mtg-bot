@@ -180,6 +180,7 @@ the test lands in a commit.
 | rust(gap-g10+g11): empty-library draw flags player, `apply_sbas` locks loss via sticky `has_lost` (CR 704.5b, CR 104.2) | tests_rust/test_library.py + test_winloss.py invert + extend | green  | feature/rust-gap-g10-draw-empty-deckout |
 | rust(gap-g1g2-advance-phase-composition): CR 106.4 mana-empty on every phase exit + CR 514.1/514.2 cleanup-step on PHASE_CLEANUP entry | tests_rust/test_steps.py + test_cleanup.py + test_mana.py extend | green  | feature/rust-gap-g1g2-advance-phase-composition |
 | rust(gap-g23-mulligan-cap): per-player `mulligan_count` field; `mulligan` / `mulligan_to_n` raise after 7 calls (CR 103.4 / Python `max_mulligans=7`) | tests_rust/test_mulligan.py extend | green  | feature/rust-gap-g23-mulligan-cap |
+| rust(ueot-framework): per-object `UeotModifier` Vec on `GameObject`; `Effect::PumpSelfUntilEOT` arm; CR 514.3 cleanup-step expiration via `cleanup_step_for_active_player` + `advance_phase`; closes G7. `effective_power` / `effective_toughness` / `has_keyword` getters fold UEOT modifiers into combat + SBA. | tests_rust/test_ueot.py (new) + test_combat.py + test_cleanup.py extend | green  | feature/rust-ueot-framework |
 
 ## Build invocation reminder
 

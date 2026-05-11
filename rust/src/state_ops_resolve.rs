@@ -158,7 +158,7 @@
 //! collides with synthetic-state ids.
 
 use crate::cards::{parse_printing, Effect, RegistryData, TargetFilter};
-use crate::state::{GameObject, GameState, StackItem};
+use crate::state::{GameObject, GameState, StackItem, UeotModifier};
 use crate::state_ops_zones::{
     ZONE_BATTLEFIELD, ZONE_EXILE, ZONE_GRAVEYARD, ZONE_HAND, ZONE_LIBRARY,
 };
@@ -182,9 +182,13 @@ fn stack_item_to_dict<'py>(
 }
 
 /// Find the source GameObject by id across both players' four
-/// tracked zones. Returns a copy (GameObject is `Copy`) along with
-/// its printing_id, so the caller can drop the borrow on `state`
-/// before mutating it (e.g. to apply damage).
+/// tracked zones. Returns its `printing_id` (a `u32`) so the
+/// caller can drop the borrow on `state` before mutating it
+/// (e.g. to apply damage). Round-27 note: pre-r27 this returned a
+/// full Copy of the GameObject; the UEOT-modifiers Vec made
+/// GameObject `Clone` rather than `Copy`, but every caller only
+/// needs the `printing_id`, so the return shape contracted to a
+/// scalar.
 fn find_source_printing_id(state: &GameState, obj_id: u32) -> Option<u32> {
     for player in &state.players {
         for zone in [
@@ -1198,6 +1202,7 @@ fn apply_effect(
                     summoning_sick: true,
                     damage: 0,
                     counters: 0,
+                    ueot_modifiers: Vec::new(),
                 });
                 next_id += 1;
             }
@@ -2414,6 +2419,61 @@ fn apply_effect(
                 state.players[defender_idx].life -= *amount;
             }
         }
+        // Round-27 UEOT-framework proof. Source gets +P/+T UEOT.
+        //
+        // Mechanism: locate the source GameObject on whichever
+        // battlefield holds it; push a
+        // `UeotModifier::PowerToughnessBonus { power, toughness }`
+        // entry onto the object's `ueot_modifiers` Vec. The effective
+        // P/T readers in `state_ops_combat.rs` /
+        // `state_ops_sba.rs::is_lethal` walk the Vec on top of
+        // printed/counter values. The entry auto-expires at the
+        // next `cleanup_step_for_active_player` /
+        // `advance_phase`-through-PHASE_CLEANUP via the round-27
+        // CR 514.3 UEOT-clear pass landed in `state_ops_cleanup.rs`.
+        //
+        // **Source-not-on-battlefield handling.** Mirrors the round-23
+        // `PutPlusOneCounterOnSelf` arm: walk both players'
+        // battlefields, no-op if the source isn't there (the source
+        // could be an in-flight stack item that hasn't yet moved,
+        // a graveyard-resident ability source for a future variant,
+        // etc.). Python parity: `if source is None: return`.
+        //
+        // **0/0 bonus is a legal no-op** — registration accepts
+        // it for parity edge cases. The Vec push still happens
+        // (so the next cleanup-step UEOT-clear pass touches the
+        // object), but downstream `ueot_power_bonus()` /
+        // `ueot_toughness_bonus()` readers see zero — the only
+        // observable effect is that the object goes through one
+        // CoW clone on the next cleanup. Skip the Vec push when
+        // both bonuses are zero, to keep the warm path allocation-
+        // free.
+        Effect::PumpSelfUntilEOT { power_bonus, toughness_bonus } => {
+            if *power_bonus == 0 && *toughness_bonus == 0 {
+                return Ok(());
+            }
+            // Walk both battlefields to find the source object.
+            for pidx in 0..state.players.len() {
+                if state.players[pidx]
+                    .battlefield
+                    .iter()
+                    .any(|o| o.id == source_obj_id)
+                {
+                    let zone: &mut Vec<GameObject> =
+                        Arc::make_mut(&mut state.players[pidx].battlefield);
+                    for obj in zone.iter_mut() {
+                        if obj.id == source_obj_id {
+                            obj.ueot_modifiers.push(UeotModifier::PowerToughnessBonus {
+                                power: *power_bonus,
+                                toughness: *toughness_bonus,
+                            });
+                            break;
+                        }
+                    }
+                    break;
+                }
+            }
+        }
     }
     Ok(())
 }
@@ -2569,6 +2629,7 @@ impl GameState {
             summoning_sick: false,
             damage: 0,
             counters: 0,
+            ueot_modifiers: Vec::new(),
         };
 
         let player = &mut self.players[controller as usize];

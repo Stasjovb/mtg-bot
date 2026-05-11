@@ -92,19 +92,6 @@ behavior per CR / Python, parity impact, and closeable / accepted.
 - **Closeable**: not a gap — it is the deliberate parity contract.
   See invariant I5 for the matching invariant entry.
 
-### G7. Cleanup step does not run "until end of turn" effect expiration (CR 514.3)
-
-- **Pinned by**: docstring on `test_cleanup.py` ("CR 514.3 ('until end
-  of turn' effects expire) and CR 514.4 (no-trigger repeat cleanup
-  step) are deferred").
-- **Rust today**: `cleanup_step_for_active_player` models CR 514.1
-  (hand-size discard) and CR 514.2 (damage clear) only.
-- **CR / Python expected**: CR 514.3 fires "until end of turn"
-  expiration; CR 514.4 specifies the no-trigger repeat behavior.
-- **Impact**: zero today (no continuous-effect or triggered-ability
-  machinery in Rust yet), high once continuous effects land.
-- **Closeable**: deferred until continuous-effect framework exists.
-
 ### G8. `+1/+1` vs `-1/-1` counters cancel as net-i32 at write time, not as separate stacks at SBA
 
 - **Pinned by**: `tests_rust/test_counters.py::test_plus_one_minus_one_cancellation_quirk_net_i32_collapses_pre_sba`.
@@ -545,6 +532,88 @@ refactor on either side that breaks the parity surfaces immediately.
     per-call safety counter, not part of the gameplay-relevant state
     digest. Pinned fingerprint baselines below are unchanged. Closes
     parity gap G23 (entry removed from "Confirmed gaps" above).
+
+### I23. UEOT-modifier framework: per-object expiring continuous effects with CR 514.3 cleanup-step expiration
+
+- **Pinned by**:
+  `tests_rust/test_ueot.py` (19 tests — full lifecycle including
+  effect parsing, effective-P/T accessors, PumpSelfUntilEOT resolve,
+  cleanup_step / advance_phase / end_turn_and_start_next clearing,
+  CoW preservation across clones);
+  `tests_rust/test_combat.py::test_ueot_pumped_attacker_damages_defender_for_effective_power`,
+  `test_ueot_pumped_blocker_survives_what_would_have_been_lethal`,
+  `test_ueot_pumped_creature_dies_when_ueot_clears`,
+  `test_ueot_granted_keyword_via_has_keyword_reader`;
+  `tests_rust/test_cleanup.py::test_cleanup_step_no_op_at_initial_state`,
+  `test_cleanup_step_returns_summary`,
+  `test_clone_then_cleanup_does_not_affect_original`,
+  `test_cleanup_is_idempotent_when_already_clean`,
+  `test_cleanup_alone_does_not_move_objects_between_zones`
+  (each pin the new `ueot_cleared` summary-dict key).
+- **Invariant** (CR 613 + CR 514.3 / round-27 G7 closure):
+  - `GameObject` carries a `ueot_modifiers: Vec<UeotModifier>` Vec.
+    `UeotModifier` is a closed enum with three variants today:
+    `PowerToughnessBonus { power, toughness }` (CR 613.7c, pump
+    effects), `GrantKeyword { keyword }` (CR 613.6, haste / flying
+    / lifelink etc.), and `BecomesLandCreature { power, toughness,
+    color_or_subtype }` (CR 613.4 + 7b, manland-animate). Adding a
+    new variant is a build-time error in every effective-P/T /
+    keyword reader until handled (exhaustiveness via the
+    `UeotModifier::… {} => {}` arms in `ueot_power_bonus()` /
+    `ueot_toughness_bonus()` / `ueot_has_keyword()`).
+  - Adding the Vec costs the struct its `Copy` derive. The empty
+    case is a 24-byte null-ptr / zero len/cap (no heap allocation),
+    so the per-object footprint grows but stays cheap on the warm
+    path. One downstream call site (`state_ops_library.rs`'s
+    `find_obj` closure that previously used `*ref` deref) now uses
+    `.clone()`.
+  - Effective-P/T readers fold UEOT bonuses on top of printed +
+    counter contributions: combat's `battlefield_creature_power` /
+    `_toughness`, SBA's `collect_sba_victims` /
+    `is_lethal`. The public Python-facing getters are
+    `effective_power(obj_id)`, `effective_toughness(obj_id)`,
+    `has_keyword(obj_id, keyword)` (all on `GameState`,
+    Python-callable, mirror Python's `mtg_bot.game.effective_*`).
+  - **Intentional asymmetry**: `battlefield_creature_toughness`
+    (combat-side) folds UEOT bonus but NOT `obj.counters`; SBA's
+    effective_toughness folds BOTH. This mirrors the pre-r27
+    asymmetry (combat math sized off printed P/T, SBA's lethal-
+    damage / zero-toughness keyed off printed + counters). Future
+    slice can promote combat to fold counters once a parity test
+    demands it.
+  - **CR 514.3 firing point**:
+    `cleanup_step_for_active_player` runs CR 514.1 (hand-size
+    discard) → CR 514.2 (damage clear) → CR 514.3 (UEOT clear),
+    in that order. Its summary dict gains a new `ueot_cleared` key.
+    `advance_phase` composes the same UEOT clear via its inline
+    mirror `cleanup_step_for_active_player_inline` on entry to
+    PHASE_CLEANUP. A new `clear_ueot_modifiers_all` primitive on
+    GameState is callable independently for tests that want to
+    assert the clear in isolation. Closes parity gap G7 (entry
+    removed from "Confirmed gaps" above).
+  - **PumpSelfUntilEOT** (12-card EoE pool target) is the proving
+    Effect. Parse arm: `pump_self_until_eot` with
+    `power_bonus: int = 0`, `toughness_bonus: int = 0` defaults
+    (mirrors Python's dataclass shape). Apply arm walks both
+    battlefields to find the source by id, pushes a
+    `PowerToughnessBonus` modifier onto the source's
+    `ueot_modifiers` Vec, no-op if source is not on battlefield.
+    Negative bonuses allowed (debuff edge case); 0/0 is a legal
+    warm-path no-op (skipped before the Vec push).
+  - **UEOT modifiers are NOT serialized into the parity
+    fingerprint.** A mid-turn snapshot vs an end-of-turn snapshot
+    would naturally differ in raw modifier Vecs but be parity-
+    equal at gameplay boundaries (cleanup auto-drains). The 12
+    pinned fingerprint baselines below are unchanged — `object_signature`
+    in `state_ops_fingerprint.rs` continues to project only
+    `(name, tapped, summoning_sick, damage, counters, attached_to,
+    controller, id)`. Effective P/T (with bonus) still surfaces
+    through the `effective_power` / `effective_toughness` getters
+    — that's the gameplay-load-bearing observable, not the raw
+    modifier list. A future slice that needs end-of-turn vs mid-
+    turn parity at fingerprint level can fold UEOT in and shift
+    every baseline; doing so today would bind the smoke harness to
+    a Python-side serializer shape that hasn't been pinned.
 
 ---
 

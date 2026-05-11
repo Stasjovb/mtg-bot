@@ -37,10 +37,18 @@ mod state_ops_winloss;
 mod state_ops_zones;
 
 /// Return `std::mem::size_of::<GameObject>()` in bytes. Exposed so
-/// the bench script and tests can sanity-check that the POD shape
+/// the bench script and tests can sanity-check the per-object shape
 /// stays small as the field set evolves — adding even one `String`
 /// field would multiply the per-zone byte cost by an order of
 /// magnitude. Catches that regression at bench time.
+///
+/// Round-27 UEOT framework: GameObject grew a
+/// `ueot_modifiers: Vec<UeotModifier>` field, adding the Vec's
+/// 24-byte heap-handle (ptr + len + cap) to the per-object size.
+/// The Vec stays empty-by-default so no heap allocation fires on
+/// any object that hasn't seen a UEOT effect; the byte_size
+/// regression test should be updated to the new ceiling rather
+/// than asserting <=20 (the pre-r27 figure).
 #[pyfunction]
 fn gameobject_byte_size() -> usize {
     std::mem::size_of::<state::GameObject>()
