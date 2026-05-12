@@ -852,14 +852,15 @@ pub struct GameState {
     /// modified — matches Python's `winner_id is None` gate at
     /// `turn.py:1389`.
     ///
-    /// **`is_draw` semantics under sticky.** The `is_draw` getter now
-    /// returns `True` ONLY if BOTH players have `has_lost = True` AND
-    /// `winner_id_sticky.is_none()`. Mirrors Python's `is_draw` — a
-    /// state with a sticky-written winner is NOT a draw, even if both
-    /// players are now lost. This matches Python's path where
-    /// `is_draw` is only set on the alive=0 transition (turn.py:1384-
-    /// 1386), and Python's `is_over = winner_id is not None or is_draw`
-    /// stays True via the sticky winner.
+    /// **`is_draw` semantics under sticky.** Independent of
+    /// `winner_id_sticky` — `is_draw` is True iff both players have
+    /// `has_lost = True`. Mirrors Python: the SBA writer at
+    /// `turn.py:1384-1386` gates ONLY on `not state.is_draw`, NOT on
+    /// `winner_id is None`. So a sequential-kills shape — first
+    /// player dies (SBA writes winner_id), then later both die (SBA
+    /// writes is_draw) — ends up with BOTH fields populated:
+    /// `winner_id == 0 AND is_draw == True`. This is a valid Python
+    /// post-state and Rust mirrors it.
     ///
     /// **Not serialized into the fingerprint.** Like `mulligan_count`,
     /// `consecutive_passes`, and `next_etb_timestamp`, this is

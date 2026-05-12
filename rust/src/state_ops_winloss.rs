@@ -210,23 +210,20 @@ impl GameState {
     /// helper; combine ``losers() == [0, 1]`` with the loser count if
     /// needed.
     ///
-    /// **CE12 sticky-winner closure.** When `winner_id_sticky` is
-    /// `Some(_)` (a prior `apply_sbas` pass committed a sole-survivor
-    /// winner), the game is NOT a draw even if both players later
-    /// have `has_lost = True`. Mirrors Python: `is_draw` is only set
-    /// to `True` on the alive=0 transition INSIDE the same SBA pass
-    /// that observed neither alive — if a prior SBA pass already
-    /// wrote `winner_id`, the alive=1 -> alive=0 transition does not
-    /// flip `is_draw` (it ONLY writes draw on the initial alive=0
-    /// observation, gated by `winner_id is None`). `is_draw` here
-    /// returns `True` ONLY for the bilateral simultaneous-loss-
-    /// without-prior-write shape (both has_lost = True AND
-    /// winner_id_sticky is None).
+    /// **CE12 sticky-winner closure.** `is_draw` flips True on the
+    /// alive=0 transition REGARDLESS of whether a prior SBA pass
+    /// committed a sole-survivor winner. Python's writer
+    /// (`turn.py:1384-1386`) gates ONLY on `not state.is_draw`, NOT
+    /// on `winner_id is None` — so a bilateral-kill-after-prior-
+    /// winner shape ends up with both `winner_id` set AND
+    /// `is_draw = True`. The Rust getter mirrors that:
+    /// `True` iff both players carry `has_lost = True`, independent
+    /// of `winner_id_sticky`. (This means `winner_id == Some(0) AND
+    /// is_draw == True` is a valid state — Python emits it in the
+    /// sequential-kills shape, and Rust now does too.)
     #[getter]
     fn is_draw(&self) -> bool {
-        self.winner_id_sticky.is_none()
-            && self.players[0].has_lost
-            && self.players[1].has_lost
+        self.players[0].has_lost && self.players[1].has_lost
     }
 
     /// Python-property-style accessor: ``state.winner_id`` (NOT

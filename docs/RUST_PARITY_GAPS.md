@@ -1712,16 +1712,17 @@ them to call the helper is a follow-up housekeeping pass.
      fallback case).
   2. `is_over()` getter — returns `winner_id_sticky.is_some() ||
      p0.has_lost || p1.has_lost`. Mirrors Python's
-     `winner_id is not None or is_draw` (a sticky winner keeps
-     is_over True forever even after `is_draw` ALSO becomes true
-     downstream — though in Rust the sticky-vs-is_draw branches are
-     mutually exclusive by construction, so the OR is just
-     defensive).
-  3. `is_draw` getter — returns `winner_id_sticky.is_none() &&
-     p0.has_lost && p1.has_lost`. The sticky-None guard mirrors
-     Python's `is_draw = True` write at `turn.py:1384-1386`, which
-     fires ONLY on the initial alive=0 observation (i.e. when no
-     prior SBA pass committed a sole-survivor winner).
+     `winner_id is not None or is_draw` — a sticky winner keeps
+     is_over True forever, and a bilateral-loss draw keeps it True
+     via the `has_lost` union.
+  3. `is_draw` getter — returns `p0.has_lost && p1.has_lost`,
+     INDEPENDENT of `winner_id_sticky`. Mirrors Python: the SBA
+     writer at `turn.py:1384-1386` gates ONLY on `not state.is_draw`,
+     NOT on `winner_id is None`. So a sequential-kills sequence —
+     SBA pass A flips winner_id to 0 (after p1's loss commit), SBA
+     pass B sees both lost and flips is_draw to True — lands with
+     BOTH `winner_id == 0` AND `is_draw == True`. Rust's read-side
+     getters reproduce that compound shape.
 
 - **Why a shadow field instead of inlining the write into
   `has_lost`**: Python's `Player.has_lost` and

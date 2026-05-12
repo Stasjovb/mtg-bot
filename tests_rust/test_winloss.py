@@ -839,9 +839,16 @@ def test_ce12_single_player_loss_writes_sticky_on_first_sba(synthetic_state):
 def test_ce12_sequential_kills_winner_id_stays_sticky(synthetic_state):
     """**CE12 core invariant.** p1 dies on SBA pass A
     (winner_id_sticky = Some(0)); then p0 ALSO dies on SBA pass B —
-    but winner_id STAYS Some(0). is_draw STAYS False. is_over STAYS
-    True. This is the BOTH-LOST transition that pre-CE12 Rust
-    returned None for; post-closure it matches Python's sticky.
+    but winner_id STAYS Some(0). is_over STAYS True. ``is_draw``
+    ALSO flips True on the second SBA pass (mirrors Python — its
+    writer at turn.py:1384-1386 is gated on `not state.is_draw`,
+    NOT on `winner_id is None`, so the alive=0 transition flips
+    is_draw True regardless of whether winner_id was previously
+    written). The sequential-kills shape lands with BOTH fields
+    populated: winner_id=0 AND is_draw=True.
+
+    This is the BOTH-LOST transition that pre-CE12 Rust got wrong
+    via the `winner_id` slot (returned None instead of sticky 0).
     """
     # Phase A: kill p1, fire SBA. sticky <- Some(0).
     synthetic_state.set_life(1, 0)
@@ -850,16 +857,16 @@ def test_ce12_sequential_kills_winner_id_stays_sticky(synthetic_state):
     assert synthetic_state.is_draw is False
     assert synthetic_state.is_over() is True
     # Phase B: kill p0, fire SBA. p0 has_lost flips True; both
-    # players now has_lost=True; but winner_id_sticky was already
-    # written, so the gate `is_none()` blocks any overwrite, and
-    # the (true, true) branch in the gate would skip anyway.
+    # players now has_lost=True; winner_id_sticky was already
+    # written (write-once gate blocks overwrite), so winner_id
+    # stays at Some(0).
     synthetic_state.set_life(0, 0)
     synthetic_state.apply_sbas_until_quiescent()
     # *** Load-bearing: winner_id is STILL Some(0), not None. ***
     assert synthetic_state.winner_id == 0
-    # is_draw stays False — the sticky-winner block prevents the
-    # "both lost" branch from declaring a draw.
-    assert synthetic_state.is_draw is False
+    # is_draw flips True on the alive=0 transition — independent
+    # of the sticky-winner state, matching Python.
+    assert synthetic_state.is_draw is True
     # is_over reads True (either via sticky.is_some() OR has_lost).
     assert synthetic_state.is_over() is True
 
