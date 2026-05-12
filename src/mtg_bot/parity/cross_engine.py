@@ -5997,3 +5997,238 @@ def flash_selector(py_state, rust_state, step_index: int) -> dict:
             return {"kind": "pass_priority"}
 
     return retaliation_selector(py_state, rust_state, step_index)
+
+
+# ---------------------------------------------------------------------------
+# Phase 5 follow-up #21: activated_mid_combat_selector -- extend the
+# cross-engine smoke onto activated-ability emission + dispatch DURING
+# THE COMBAT PHASE. Tests two distinct surfaces neither prior probe
+# touched:
+#
+#   * **legal_decisions emission at a non-MAIN step.** Both engines
+#     gate ActivateAbility emission inside the ``_is_sorcery_timing``
+#     conjunct (Python's ``legal.py:303-304`` early-return; Rust's
+#     ``state_ops_legal.rs:769-839`` `is_sorcery_timing` post-instant-
+#     speed return). At a COMBAT-phase priority window (active=p0,
+#     priority=p0, step != MAIN), both should emit ONLY
+#     ``[PassPriority]`` -- no ActivateAbility for the Forest, even
+#     though CR 605.1 mana abilities are nominally activatable at any
+#     priority window. This is a SHARED engine limitation (NOT a CE
+#     divergence); the probe pins both engines on the same side of it.
+#
+#   * **apply_action(activate_ability) dispatch mid-combat.** Neither
+#     engine's ActivateAbility dispatch arm gates on phase / step --
+#     Python's ``actions._activate_ability:1928-1940`` only checks
+#     controller match; Rust's ``state_ops_actions.rs:440-631`` only
+#     checks ``mana_produced`` + summoning-sick + tapped state.
+#     Direct-construct an ``ActivateAbility(forest_id, 0)`` dict, feed
+#     to ``step_both`` mid-combat. Both engines should:
+#       - Tap the Forest.
+#       - Add 1 {G} to p0's mana pool (mana ability resolves
+#         immediately per CR 605.3a, no stack push).
+#     Cross-engine compare the post-activation field-view: Forest
+#     tapped on bf, mana_pool_p0 has one G coin, stack empty on both.
+#
+#   * **Phase-advance mana-pool empty (I20).** After the activation,
+#     advance phase from current combat step to the next step (still
+#     in combat, e.g. DECLARE_ATTACKERS -> DECLARE_BLOCKERS or
+#     BEGINNING_OF_COMBAT -> DECLARE_ATTACKERS). The mana pool
+#     emptying timing per I20 (mana pools empty on every phase /
+#     step boundary on both engines) should fire on both: post-
+#     advance mana_pool_p0 == empty 6-tuple.
+#
+# **What surface this exercises that prior probes don't:**
+#
+#   * Phase 5 flash probe (CE19) drove the legal-decisions emission
+#     surface for instant-speed CastSpell. THIS probe drives the
+#     legal-decisions emission surface for ActivateAbility at a non-
+#     sorcery-timing window AND the apply_action dispatch surface
+#     for ActivateAbility at a non-MAIN phase. Two separate axes,
+#     same underlying ``_is_sorcery_timing`` gate.
+#
+#   * Counterspell probe (CE19 sibling) drove the stack-composition
+#     resolve path. Mana abilities BYPASS the stack (CR 605.3a) on
+#     both engines -- the dispatch arm credits the pool inline -- so
+#     this probe drives the no-stack ability-resolve path mid-
+#     combat, complementary to the stack-going-through path the
+#     counterspell probe pinned.
+#
+# **Predicted outcomes (per the brief's three buckets):**
+#
+#   * **(a) Clean pass** -- both engines refuse to emit
+#     ActivateAbility at BEGINNING_OF_COMBAT (sorcery-timing gate),
+#     both engines accept apply_action(activate_ability) mid-combat
+#     and credit {G} to the pool, both engines empty the pool at the
+#     next phase boundary. Parity-clean across all three tests.
+#
+#   * **(b) NEW divergence -- CE20** -- one engine emits
+#     ActivateAbility at BEGINNING_OF_COMBAT while the other doesn't
+#     (gate asymmetry), or one accepts the apply_action while the
+#     other rejects (dispatch-arm phase gate asymmetry), or the
+#     mana-empty timing differs by one step (I20 deviation).
+#     Document, xfail-pin, do NOT fix.
+#
+#   * **(c) Old known gap** -- the divergence matches an existing
+#     CE / G / I entry; xfail-pin with a reference. Most likely
+#     candidate is the I20 mana-empty-on-phase-advance composition.
+#
+# **Setup (matches counterspell + flash side-channel pattern):**
+#   1. Walk the retaliation_selector backbone to step 167 (turn 13
+#      PRECOMBAT_MAIN, active=p0, priority=p0).
+#   2. Side-channel-advance phase by ONE step on both engines via
+#      ``advance_phase_python`` + ``rust_state.advance_phase()``.
+#      Lands at BEGINNING_OF_COMBAT (turn 13, active=p0, priority=p0).
+#   3. Inject a fresh untapped, unsick Forest onto p0's bf on both
+#      engines. Avoids depending on whether p0's existing Forests
+#      are tapped from the cast-Bears step (turn 13 PRECOMBAT_MAIN
+#      tapped 2 Forests to pay {1}{G} -- the others may or may not
+#      be tapped from earlier turns' mana usage). The fresh-Forest
+#      injection makes the precondition deterministic.
+#   4. Probe ``legal_decisions(0)`` / ``legal_actions(state, 0)``
+#      emission. Both should NOT include the fresh Forest's
+#      ActivateAbility (sorcery-timing gate). Then directly apply
+#      ``ActivateAbility(forest_id, 0)`` and compare post-state.
+#      Then advance phase and compare mana-pool post-state.
+# ---------------------------------------------------------------------------
+
+
+_MID_COMBAT_FOREST_PRINTING_NAME = "Combat Forest"
+
+
+def activated_mid_combat_side_channel(py_state, rust_state) -> tuple[int, int]:
+    """Side-channel inject a fresh untapped, unsick Forest onto p0's
+    BATTLEFIELD on BOTH engines.
+
+    Same pattern as the flash probe's
+    :func:`flash_side_channel` (which injects into HAND) plus the
+    first-strike probe's ``state.battlefield.append`` shape (centralized
+    Python bf list, per-player Rust bf via
+    ``register_and_inject_object(..., ZONE_BATTLEFIELD)``).
+
+    Why a distinct printing name (``"Combat Forest"``) rather than
+    reusing the deckspec's ``"Forest"``: the
+    :func:`activated_mid_combat_selector` and tests detect "has the
+    injection fired yet?" by scanning for this name. A fresh name
+    means idempotency checks don't false-positive on the existing
+    Forests p0 played during the retaliation walk.
+
+    The Forest is injected with:
+      * ``tapped = False`` -- ready to activate.
+      * ``summoning_sick = False`` -- per CR 302.1 summoning sickness
+        applies only to creatures tapping for tap-cost abilities, but
+        the synthetic Forest defaults to ``summoning_sick = True`` on
+        both engines (the CE1 universal default); the explicit
+        override mirrors the first-strike probe's normalization.
+      * ``mana_produced = ("G",)`` on Python (via the printing's
+        ``activated_abilities`` tuple wired up the same way
+        :func:`build_python_state` does for deckspec Forests) and
+        ``mana_produced = ["G"]`` on Rust (the parse_printing-validated
+        list-of-strings shape).
+      * Fresh ETB timestamp on Python via the
+        :func:`build_python_state` next_timestamp bump pattern; Rust's
+        helper stamps the timestamp internally.
+
+    Returns ``(py_forest_id, rust_forest_id)`` so callers can pin
+    apply_action / emission lookups by source id.
+    """
+    from mtg_bot.cards.base import CardPrinting, ManaCost
+    from mtg_bot.effects.generic.mana import AddManaToPool
+    from mtg_bot.effects.base import ActivatedAbility, ActivationCost
+    from mtg_bot.game import Zone
+
+    # ---- Python side ----------------------------------------------------
+    # Wire up an explicit ``{T}: Add {G}`` mana ability the same way
+    # :func:`build_python_state` does for deckspec lands. Without this
+    # the printing's ``activated_abilities`` tuple is empty and
+    # ``apply_action({"kind": "activate_ability", "source_id": forest_id,
+    # "ability_index": 0})`` silently no-ops on Python's side
+    # (``_activate_ability`` returns when ``ability_index >= len(abilities)``).
+    forest_abilities = (
+        ActivatedAbility(
+            cost=ActivationCost(tap_self=True),
+            effect=AddManaToPool(produces=(("G", 1),)),
+            is_mana_ability=True,
+        ),
+    )
+    forest_printing = CardPrinting(
+        name=_MID_COMBAT_FOREST_PRINTING_NAME,
+        mana_cost_str="",
+        mana_cost=ManaCost(),
+        type_line="Basic Land - Forest",
+        supertypes=("Basic",),
+        card_types=("Land",),
+        subtypes=("Forest",),
+        power=None,
+        toughness=None,
+        produces=frozenset({"G"}),
+        activated_abilities=forest_abilities,
+    )
+    py_obj = py_state.new_object(
+        forest_printing, owner_id=0, zone=Zone.BATTLEFIELD,
+    )
+    # Defaults from ``new_object``: tapped=False (correct), but
+    # summoning_sick is True by default. Override so the Forest is
+    # immediately tap-eligible. (CR 302.1: sickness only restricts
+    # creatures' tap-cost ability use; the override is here for
+    # invariant-symmetry with the first-strike probe's normalization
+    # pattern.)
+    py_obj.summoning_sick = False
+    py_obj.tapped = False
+    py_obj.damage = 0
+    # Snapshot a fresh ETB timestamp the same way cast/resolve paths do.
+    py_obj.etb_timestamp = py_state.next_timestamp
+    py_state.next_timestamp += 1
+    py_state.battlefield.append(py_obj)
+
+    # ---- Rust side ------------------------------------------------------
+    # Rust's register_and_inject_object stamps a fresh etb_timestamp
+    # internally (ZONE_BATTLEFIELD branch). summoning_sick defaults to
+    # False in the helper -- matches the override applied to py_obj.
+    ZONE_BATTLEFIELD = 2
+    rust_obj_id = rust_state.register_and_inject_object(
+        {
+            "name": _MID_COMBAT_FOREST_PRINTING_NAME,
+            "card_types": ["Land"],
+            "mana_produced": ["G"],
+        },
+        0,  # controller = p0
+        ZONE_BATTLEFIELD,
+    )
+
+    return int(py_obj.id), int(rust_obj_id)
+
+
+def activated_mid_combat_selector(py_state, rust_state, step_index: int) -> dict:
+    """Cross-engine smoke selector for the activated-ability mid-
+    combat probe.
+
+    Same shape as :func:`flash_selector`: the selector exists for
+    pre-injection walks-clean baseline parity with the prior probes'
+    naming convention. The activated-mid-combat probe's load-bearing
+    surface is the three direct-call tests in test_parity_smoke.py
+    -- this selector's walk_both output doesn't include the legal-
+    decisions emission or the apply_action dispatch state in its
+    field-view tuple, so the walk itself walks parity-clean as long
+    as it doesn't perturb the backbone.
+
+    The selector's only state-machine branch fires at step 168 (one
+    step after retaliation_selector's natural setpoint of turn 13
+    PRECOMBAT_MAIN end), where it injects the Combat Forest onto
+    p0's bf and emits pass_priority. Same trigger-detection pattern
+    as :func:`flash_selector` (3 creatures on bf and no Combat Forest
+    yet).
+    """
+    combat_forest_already_injected = any(
+        obj.printing.name == _MID_COMBAT_FOREST_PRINTING_NAME
+        for obj in py_state.battlefield
+    )
+    if not combat_forest_already_injected:
+        creature_count = sum(
+            1 for o in py_state.battlefield
+            if "Creature" in o.printing.card_types
+        )
+        if creature_count >= 3:
+            activated_mid_combat_side_channel(py_state, rust_state)
+            return {"kind": "pass_priority"}
+
+    return retaliation_selector(py_state, rust_state, step_index)
