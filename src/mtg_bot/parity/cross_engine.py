@@ -4756,3 +4756,198 @@ def indestructible_selector(py_state, rust_state, step_index: int) -> dict:
                 }
 
     return retaliation_selector(py_state, rust_state, step_index)
+
+
+# ---------------------------------------------------------------------------
+# Phase 5 follow-up #17: hexproof_selector — extend the cross-engine
+# smoke onto hexproof (CR 702.11). Distinct from the indestructible /
+# defender / first-strike / haste / lifelink / vigilance / deathtouch /
+# menace probes in WHERE the gate is supposed to fire: hexproof gates
+# at the TARGET-SELECTION layer (spell/ability target legality), per
+# CR 702.11a — "a permanent or player with hexproof can't be the target
+# of spells or abilities your opponents control."
+#
+# **State of the union (audited 2026-05-12):** neither engine currently
+# enforces hexproof. The keyword is recognized by both parsers and
+# stored on the printing, but:
+#
+#   * Python `legal_targets` / `_enumerate_for_filter` (effects/base.py
+#     lines 78-151) walks the battlefield + players with NO hexproof
+#     gate; controller-relativeness is not consulted, and the
+#     `TargetFilter` grammar (effects/target_filter.py) has no
+#     hexproof-aware atom. The destroy primitive `turn.destroy(state,
+#     obj)` (turn.py:522-539) gates ONLY on indestructible — no
+#     hexproof check.
+#   * Rust `Effect::DestroyTarget` (state_ops_resolve.rs:1023-1078)
+#     picks the defender's `bf[0]` with NO target filtering beyond
+#     creature-vs-player; the module docstring explicitly flags this
+#     at lines 40-46: "No creature-type filtering, no protection /
+#     hexproof / shroud, no per-spell target-selection."
+#   * Rust `legal_decisions` (state_ops_legal.rs:537) emits attack /
+#     block decisions only; there is no "cast spell with target"
+#     decision surface yet, so hexproof can't be filtered at
+#     enumeration time on the Rust side because no enumeration
+#     happens.
+#   * Python `cards/parser/statics.py` lines 244-255 explicitly notes
+#     "hexproof remains engine-unenforced metadata" as the rationale
+#     for picking the broader OTHER_CREATURES_YOU_CONTROL anthem
+#     scope for "Other permanents you control have hexproof"
+#     (Lecture Hall, DSK).
+#
+# **Predicted outcome: (c) old known gap.** Both engines mishandle
+# hexproof IDENTICALLY (don't enforce at all), so per-step cross-
+# engine parity is preserved — the divergence vs. real MTG is shared,
+# not asymmetric. The probe pins this shared-bug parity so a future
+# one-sided fix on either engine surfaces as a NEW CE divergence.
+#
+# **If a divergence DOES surface** (CE18 candidate shape): the most
+# likely surface is the keyword-detection axis. Rust's potential
+# future hexproof enforcement might read `printing.keywords` while
+# Python's might read `effective_keywords(state, obj)` (which folds
+# in UEOT-granted keywords from Plaza of Heroes etc.). The
+# indestructible probe surfaced this same axis as the future risk
+# (see indestructible_selector docstring) — hexproof would extend
+# the same shape because hexproof grants are present in the data
+# pool (Illvoi Light Jammer's "...gains hexproof until end of
+# turn." on equipment_builder.py line 145).
+#
+# **Setup chosen: Option B (side-channel inject onto p1 bf) rather than
+# Option A (hexproof creature in the deckspec).** Same `CardDef`-
+# doesn't-carry-keywords reasoning as every prior keyword probe; see
+# `first_strike_side_channel` for the full rationale. The inject
+# targets p1's bf (controller=1) so it's an OPPONENT'S creature
+# relative to p0 (the destroy-spell caster) — the only scenario where
+# hexproof should actually fire (CR 702.11a: "your opponents control").
+# A self-targeting test (Test B) creates a second injection on p0's
+# bf (controller=0) to exercise the "your own hexproof creature is
+# still a legal target for your own destroy" rule.
+#
+# **Trigger detection (stateless).** The injection fires the FIRST
+# time the selector observes >=3 creatures on bf and no Bear Sage
+# in any zone yet. Mirrors the indestructible probe's trigger shape —
+# uniquely true at step 168 on the retaliation_selector walk.
+# ---------------------------------------------------------------------------
+
+
+# Name of the synthetic hexproof printing injected by
+# :func:`hexproof_side_channel`. Distinct from every prior probe's
+# printing name (Bear Idol / Charging Bears / Lurking Bears /
+# Voracious Bears / Patient Bears / Vigilant Bears / Hasty Bears /
+# Menacing Bears / Defender Bears) so the nine probes' trigger gates
+# stay mutually independent on the same multi_blocker_deckspec walk.
+_HEXPROOF_PRINTING_NAME = "Bear Sage"
+
+
+def hexproof_side_channel(py_state, rust_state) -> tuple[int, int]:
+    """Side-channel inject a 2/2 hexproof creature onto BOTH engines'
+    p1 battlefield (i.e., on p0's OPPONENT's side, so hexproof is
+    actually CR 702.11a-relevant when p0 tries to target it).
+
+    Mirror of :func:`indestructible_side_channel` with one keyword
+    swap: the injected printing carries ``"hexproof"`` instead of
+    ``"indestructible"``. Same inject-on-p1-bf rationale — the brief's
+    Test A scenario needs the hexproof creature to be on the
+    OPPONENT's side relative to the destroy-spell caster (p0).
+
+    Unlike the indestructible probe this side-channel does NOT clear
+    Bears id 5's summoning sickness — there's no combat scenario this
+    probe drives; the Bear Sage just sits on p1's bf as a destroy-
+    target shape for the three post-walk tests.
+
+    The synthetic printing's name is :data:`_HEXPROOF_PRINTING_NAME`
+    (``"Bear Sage"``) so this probe's trigger gate doesn't collide
+    with the eight prior probes' gates.
+
+    Returns ``(py_obj_id, rust_obj_id)``. Ids match because both
+    engines allocate in lockstep through step 167 of the retaliation
+    walk.
+    """
+    from mtg_bot.cards.base import CardPrinting, ManaCost
+    from mtg_bot.game import Zone
+
+    # ---- Python side: hexproof printing on p1 bf ----
+    hex_printing = CardPrinting(
+        name=_HEXPROOF_PRINTING_NAME,
+        mana_cost_str="",
+        mana_cost=ManaCost(),
+        type_line="Creature",
+        supertypes=(),
+        card_types=("Creature",),
+        subtypes=(),
+        power=2,
+        toughness=2,
+        produces=frozenset(),
+        keywords=frozenset({"hexproof"}),
+    )
+    py_obj = py_state.new_object(
+        hex_printing, owner_id=1, zone=Zone.BATTLEFIELD,
+    )
+    py_obj.controller_id = 1
+    py_obj.summoning_sick = False
+    py_obj.tapped = False
+    py_obj.damage = 0
+    py_obj.etb_timestamp = py_state.next_timestamp
+    py_state.next_timestamp += 1
+    py_state.battlefield.append(py_obj)
+
+    # ---- Rust side: hexproof printing on p1 bf ----
+    ZONE_BATTLEFIELD = 2
+    rust_obj_id = rust_state.register_and_inject_object(
+        {
+            "name": _HEXPROOF_PRINTING_NAME,
+            "card_types": ["Creature"],
+            "power": 2,
+            "toughness": 2,
+            "keywords": ["hexproof"],
+        },
+        1,  # controller = p1 (opponent of the destroy-spell caster p0)
+        ZONE_BATTLEFIELD,
+    )
+
+    return int(py_obj.id), int(rust_obj_id)
+
+
+def hexproof_selector(py_state, rust_state, step_index: int) -> dict:
+    """Cross-engine smoke selector that injects a hexproof creature on
+    p1's bf at step 168 then defers to :func:`retaliation_selector`
+    for the rest of the walk.
+
+    Structurally simpler than the indestructible selector — there is
+    no combat scenario this selector drives (the destroy-target tests
+    are post-walk, off the selector path). The Bear Sage just sits on
+    p1's bf for the post-walk tests to operate on.
+
+    Expected walk shape:
+
+      * **Steps 0-167** — identical to retaliation_selector's walk.
+      * **Step 168** — hexproof injection fires; selector returns
+        ``pass_priority``.
+      * **Steps 169-200** — pure delegation to retaliation_selector;
+        the Bear Sage is not involved in any combat decision (no
+        attack with p0, no block by p1 in the walk's natural shape —
+        retaliation_selector's combat logic walks through Bears 9/11
+        which stay tapped and the Bear Sage's hexproof has no engine
+        gate to fire against anyway).
+
+    Stateless — same idempotency guarantee as the prior probes.
+    """
+    hex_already_injected = any(
+        obj.printing.name == _HEXPROOF_PRINTING_NAME
+        for obj in py_state.battlefield
+    ) or any(
+        obj.printing.name == _HEXPROOF_PRINTING_NAME
+        for p in py_state.players
+        for zone_list in (p.hand, p.library, p.graveyard, p.exile)
+        for obj in zone_list
+    )
+
+    if not hex_already_injected:
+        creature_count = sum(
+            1 for o in py_state.battlefield
+            if "Creature" in o.printing.card_types
+        )
+        if creature_count >= 3:
+            hexproof_side_channel(py_state, rust_state)
+            return {"kind": "pass_priority"}
+
+    return retaliation_selector(py_state, rust_state, step_index)
