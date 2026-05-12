@@ -565,6 +565,182 @@ def create_app(progress_dir: Path) -> Flask:
             "sentinel_path": str(path),
         })
 
+    @app.route("/api/runs/<run_id>/force_kill", methods=["POST"])
+    def api_run_force_kill(run_id: str):
+        """Force-kill ``run_id`` immediately, bypassing the
+        producer-drain handshake.
+
+        Use this for ZOMBIE runs whose master is already dead — the
+        clean ``/stop`` path waits for a producer to poll the sentinel
+        and finalize its JSON, which a dead master will never do.
+        Force-kill writes the terminal status directly to ``runs.db``:
+        ``UPDATE runs SET status='killed', ended_at=NOW() WHERE
+        run_id=? AND status='running'``.
+
+        Process termination is OUT OF SCOPE for this endpoint — we
+        do NOT signal / kill any OS process. (That needs a PID column
+        on ``runs`` which is being added in a sibling slice.) The
+        sentinel write below is cheap insurance against a straggler
+        worker that's still alive: if one happens to be polling, it
+        will see the sentinel and drop out cleanly even though the
+        DB row already shows terminal.
+
+        Cycle-vs-single-run targeting matches ``/stop``: if the run
+        has a ``cycle_id`` (JSON-side, freshest) or a
+        ``parent_run_id`` (DB-side, canonical post-backfill), the
+        cycle is the actual target — child stages will inherit
+        terminal status on the next backfill pass.
+
+        Idempotent: if the row is already terminal (completed /
+        failed / killed), the endpoint returns ``forced=false`` with
+        the existing status and does NOT mutate the DB, the
+        ``extra_json``, or the sentinel. The ``forced=true`` path
+        also stashes ``original_status="force_killed"`` in the
+        target's ``run_progress`` aggregate-row ``extra_json`` so
+        the UI labels the row as ``force_killed`` (distinct from a
+        clean ``stopped`` or the backfill heuristic's ``killed``).
+
+        Request body is an optional JSON ``{"reason": str}`` —
+        threaded into the sentinel (cheap audit trail).
+        """
+        progress_dir: Path = app.config["PROGRESS_DIR"]
+        run = _get_run_detail(progress_dir, run_id)
+        if run is None:
+            abort(404)
+        body = request.get_json(silent=True) or {}
+        reason = body.get("reason") if isinstance(body, dict) else None
+
+        # Cycle-vs-single targeting — same priority order as /stop.
+        cycle_id = (
+            _read_json_cycle_id(progress_dir, run_id)
+            or run.get("parent_run_id")
+        )
+        target_id = cycle_id if cycle_id else run_id
+
+        # Re-read the target row directly so the idempotency check sees
+        # the canonical DB status (not the UI-translated ``original_status``
+        # the JSON-side might shadow over ``killed`` etc.). If the user
+        # clicked force-kill on a child run we want to look at the
+        # cycle's DB status, not the child's.
+        db_path = progress_dir / "runs.db"
+        if not db_path.is_file():
+            # Defensive: detail lookup above already exercises the
+            # backfill which creates the DB, but if the file is missing
+            # there's nothing to force-kill.
+            abort(404)
+        conn = runs_db.connect(db_path)
+        try:
+            target_row = conn.execute(
+                "SELECT status FROM runs WHERE run_id = ?", (target_id,),
+            ).fetchone()
+            if target_row is None:
+                # The cycle pointer dangled — shouldn't happen post-
+                # backfill, but if it does, fall back to the clicked
+                # run_id as the target so the user still gets feedback.
+                target_id = run_id
+                target_row = conn.execute(
+                    "SELECT status FROM runs WHERE run_id = ?", (run_id,),
+                ).fetchone()
+            previous_status = (
+                target_row["status"] if target_row is not None else None
+            )
+            if previous_status != "running":
+                # Idempotent no-op for terminal rows. Return the same
+                # response shape as the success path so the front-end
+                # doesn't need branchy parsing.
+                return jsonify({
+                    "ok": True,
+                    "run_id": run_id,
+                    "stopped_target": target_id,
+                    "is_cycle_stop": bool(cycle_id),
+                    "forced": False,
+                    "previous_status": previous_status,
+                    "sentinel_path": None,
+                })
+
+            # 1) Direct DB write — UPDATE status='killed', ended_at=NOW().
+            #    Guarded by status='running' so a concurrent finalize
+            #    can't be clobbered.
+            ended = runs_db.now_iso()
+            with runs_db.transaction(conn):
+                conn.execute(
+                    """
+                    UPDATE runs
+                    SET status = 'killed', ended_at = ?
+                    WHERE run_id = ? AND status = 'running'
+                    """,
+                    (ended, target_id),
+                )
+                # 2) Stamp original_status="force_killed" on the
+                #    aggregate run_progress row so the UI distinguishes
+                #    this from a clean "stopped" or the stale-running
+                #    backfill's "killed". We merge into existing
+                #    extra_json rather than replace.
+                agg = conn.execute(
+                    """
+                    SELECT extra_json FROM run_progress
+                    WHERE run_id = ? AND shard_label IS NULL
+                    """,
+                    (target_id,),
+                ).fetchone()
+                if agg is not None:
+                    extra_raw = agg["extra_json"]
+                    try:
+                        extra = (
+                            json.loads(extra_raw)
+                            if extra_raw else {}
+                        )
+                        if not isinstance(extra, dict):
+                            extra = {}
+                    except (json.JSONDecodeError, TypeError):
+                        extra = {}
+                    extra["original_status"] = "force_killed"
+                    conn.execute(
+                        """
+                        UPDATE run_progress
+                        SET extra_json = ?, updated_at = ?
+                        WHERE run_id = ? AND shard_label IS NULL
+                        """,
+                        (json.dumps(extra), ended, target_id),
+                    )
+                else:
+                    # No aggregate row yet — create one with just the
+                    # original_status marker so the UI surfaces the
+                    # distinct label. Other counter columns stay NULL.
+                    conn.execute(
+                        """
+                        INSERT INTO run_progress(
+                            run_id, shard_label, extra_json, updated_at
+                        ) VALUES (?, NULL, ?, ?)
+                        """,
+                        (
+                            target_id,
+                            json.dumps({
+                                "original_status": "force_killed",
+                            }),
+                            ended,
+                        ),
+                    )
+        finally:
+            conn.close()
+
+        # 3) Sentinel write — straggler insurance. A worker that's
+        #    still alive AND polling will exit cleanly when it sees
+        #    this. For true zombies (master dead), the sentinel is
+        #    harmless on-disk noise that cleanup_orphans() reaps on
+        #    the next iterate kickoff.
+        path = write_stop(progress_dir, target_id, reason=reason)
+
+        return jsonify({
+            "ok": True,
+            "run_id": run_id,
+            "stopped_target": target_id,
+            "is_cycle_stop": bool(cycle_id),
+            "forced": True,
+            "previous_status": previous_status,
+            "sentinel_path": str(path),
+        })
+
     @app.route("/api/runs/<run_id>/stop", methods=["GET"])
     def api_run_stop_status(run_id: str):
         """Diagnostic: report whether a stop has been requested for
