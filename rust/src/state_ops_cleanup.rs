@@ -268,6 +268,15 @@ impl GameState {
             }
         }
 
+        // (4) ETB-trigger Slice 1 — reset the once-per-turn ledger
+        // so any `once_per_turn = true` triggered ability becomes
+        // re-fireable next turn. Mirrors Python's
+        // `state.once_per_turn_fired.clear()` at cleanup.
+        // Substrate-only in Slice 1: no Slice-1 trigger fixture
+        // uses the gate, but the reset is part of the substrate
+        // contract.
+        self.triggered_this_turn.clear();
+
         let d = PyDict::new(py);
         d.set_item("discarded", discarded)?;
         d.set_item("damage_cleared", damage_cleared)?;

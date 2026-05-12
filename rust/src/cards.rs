@@ -1851,6 +1851,173 @@ pub enum Effect {
     DrawCardsEqualToResolvingCombatDamage,
 }
 
+// --- ETB trigger substrate (Slice 1) -----------------------------
+//
+// Mirrors Python's `src/mtg_bot/effects/predicates.py:Event` +
+// `effects/base.py:TriggeredAbility`. First-slice scope (per
+// `docs/RUST_ETB_TRIGGER_AUDIT.md` §6.1):
+//
+// - **Event::Enters only** is wired today. Other variants land in
+//   later slices (Slice 3+); listing them here lets the parser /
+//   matcher fail loud on out-of-scope events at register time
+//   without expanding scope.
+// - **Predicate algebra is minimal**: `Always`, `SourceIsSelf`,
+//   `SourceIsCreature`, `Not(Box<Predicate>)`, `And(Box<Predicate>,
+//   Box<Predicate>)`. Enough to express the smoke-probe shape
+//   ("when ANOTHER creature enters under your control" — see
+//   audit §5.4 Example A) and the canonical IsSelf shape ("when
+//   ~ enters"). Richer predicates (HasSubtype, IsLand, IsArtifact,
+//   Controlled, Subject) follow in Slice 3+.
+// - **TriggeredAbility carries `event`, `predicate`, `effect`, and
+//   `once_per_turn`.** The Python shape also carries `requires_void`
+//   / `tier_threshold` / `room_half`; the Rust mirror omits those
+//   gates in Slice 1 (they default to "always fire") because the
+//   Slice 1 smoke probe doesn't need them. Slice 3+ adds them in
+//   lockstep with the Predicate expansion.
+//
+/// Event taxonomy for the trigger dispatcher (mirror of
+/// Python's `Event` enum at `src/mtg_bot/effects/predicates.py`).
+/// First-slice scope wires only `Enters`; later slices add the
+/// rest. Listed here so the parser can validate the registry-dict
+/// `event` key at register time rather than at dispatch time.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum Event {
+    /// "When/whenever X enters the battlefield" — fires from
+    /// `dispatch_event(Event::Enters, source_id)` walks. Today's
+    /// only wired event (Slice 1).
+    Enters,
+    /// "When X dies" / "When X is put into a graveyard from
+    /// the battlefield". Stub for Slice 4+; no dispatch site yet.
+    Dies,
+    /// "When you cast a spell" / "When X is cast". Stub for
+    /// Slice 5+; no dispatch site yet.
+    Cast,
+    /// "When X attacks". Stub for Slice 6+; no dispatch site yet.
+    Attacks,
+    /// "When X deals damage" / combat-damage triggers. Stub for
+    /// Slice 7+; no dispatch site yet.
+    DealsDamage,
+}
+
+/// Predicate algebra over the trigger subject (the GameObject the
+/// event happened to) and source (the GameObject carrying the
+/// ability). First-slice closed-enum minimal surface; mirrors a
+/// strict subset of Python's predicate algebra at
+/// `src/mtg_bot/effects/predicates.py`.
+///
+/// **Evaluation contract.** `matches(state, source_id, subject_id)`
+/// returns `true` when the predicate is satisfied for this firing.
+/// `Always` always matches; `SourceIsSelf` checks that the source
+/// IS the subject (canonical "when ~ enters" shape);
+/// `SourceIsCreature` checks the source's printing carries the
+/// "Creature" card_type; `Not(p)` inverts; `And(a, b)` is logical
+/// AND with short-circuit.
+#[derive(Clone, Debug)]
+pub enum Predicate {
+    /// Always matches. Equivalent to no filter.
+    Always,
+    /// Matches when the source object IS the subject of the event
+    /// (canonical "this creature enters" / "when ~ enters" shape).
+    SourceIsSelf,
+    /// Matches when the source object's printing has "Creature" in
+    /// its card_types. Building block for shapes like "when ANOTHER
+    /// creature enters — your creature has this ability".
+    SourceIsCreature,
+    /// Logical negation.
+    Not(Box<Predicate>),
+    /// Logical AND (short-circuits on the left operand's `false`).
+    And(Box<Predicate>, Box<Predicate>),
+}
+
+impl Predicate {
+    /// Evaluate the predicate against the firing context.
+    ///
+    /// `source_id` is the GameObject carrying the ability;
+    /// `subject_id` is the GameObject the event happened to (the
+    /// creature that just entered the battlefield, for Enters).
+    /// Both ids are u32-keyed object ids resolved at dispatch time.
+    pub(crate) fn matches(
+        &self,
+        state: &crate::state::GameState,
+        source_id: u32,
+        subject_id: u32,
+    ) -> bool {
+        match self {
+            Predicate::Always => true,
+            Predicate::SourceIsSelf => source_id == subject_id,
+            Predicate::SourceIsCreature => {
+                // Walk all four tracked zones on both players to find
+                // the source object, then look up its printing's
+                // card_types. Mirrors `find_source_printing_id` shape.
+                for player in &state.players {
+                    for zone in [
+                        &player.hand,
+                        &player.library,
+                        &player.battlefield,
+                        &player.graveyard,
+                    ] {
+                        for obj in zone.iter() {
+                            if obj.id == source_id {
+                                if let Some(printing) =
+                                    state.registry.lookup(obj.printing_id)
+                                {
+                                    return printing
+                                        .card_types
+                                        .iter()
+                                        .any(|t| t == "Creature");
+                                }
+                                return false;
+                            }
+                        }
+                    }
+                }
+                false
+            }
+            Predicate::Not(inner) => !inner.matches(state, source_id, subject_id),
+            Predicate::And(a, b) => {
+                a.matches(state, source_id, subject_id)
+                    && b.matches(state, source_id, subject_id)
+            }
+        }
+    }
+}
+
+/// A triggered ability on a `CardPrinting`. Mirrors Python's
+/// `TriggeredAbility` dataclass at
+/// `src/mtg_bot/effects/base.py:680`.
+///
+/// **Slice 1 scope.** Only the predicate-style path is wired
+/// (`event` is required and never `None` on the Rust side; Python's
+/// optional shape is the legacy string-key path Slice 1 doesn't
+/// mirror). `requires_void`, `tier_threshold`, `room_half` from
+/// Python are omitted here — defaults of "always fire" suffice for
+/// the smoke probe; they land alongside their gates in Slice 3+.
+#[derive(Clone, Debug)]
+pub struct TriggeredAbility {
+    /// The event family this ability listens for (today only
+    /// `Event::Enters`).
+    pub event: Event,
+    /// Filter over the firing context (source object, subject
+    /// object, game state). Slice 1 minimum: `Always`,
+    /// `SourceIsSelf`, `SourceIsCreature`, with `And` / `Not`
+    /// compositions.
+    pub predicate: Predicate,
+    /// The payload effect to push as a `StackItem::TriggeredAbility`
+    /// when this ability fires. Same closed `Effect` vocabulary the
+    /// spell-resolve path consumes; the trigger resolver hands the
+    /// effect to `apply_effect` exactly the way spell resolution
+    /// does.
+    pub effect: Effect,
+    /// "This ability triggers only once each turn." When true the
+    /// dispatcher records `(source_id, ability_index)` in
+    /// `GameState.triggered_this_turn` on push and suppresses repeat
+    /// fires within the same turn. Reset at cleanup step. Slice 1
+    /// wires the ledger but no SLICE-1 test exercises the gate (the
+    /// canonical IsSelf-enters trigger fires at most once per
+    /// permanent's life anyway).
+    pub once_per_turn: bool,
+}
+
 #[derive(Clone, Debug)]
 pub struct CardPrinting {
     pub name: Arc<str>,
@@ -1894,7 +2061,33 @@ pub struct CardPrinting {
     /// scope: the effects fire IMMEDIATELY on entry, no separate
     /// stack item — real MTG triggers them onto the stack and
     /// resolves in priority order; that timing nuance is deferred.
+    ///
+    /// **Legacy in flight.** Slice 1 of the ETB-trigger closure
+    /// (`docs/RUST_ETB_TRIGGER_AUDIT.md`) introduces
+    /// `triggered_abilities` (predicate-path) — the audit's "fix
+    /// 4 Python-incompatible properties of the inline `etb_effects`
+    /// hatch" plan. The cast-and-resolve site still consults
+    /// `etb_effects` as a back-compat shim so existing test fixtures
+    /// keep working; new fixtures should use `triggered_abilities`.
+    /// Slice 2 fans out the predicate path to every ETB-stamping
+    /// site, retiring the inline path.
     pub etb_effects: Vec<Effect>,
+    /// **ETB-trigger substrate (Slice 1).** Predicate-style
+    /// triggered abilities on this printing. Empty Vec = no
+    /// predicate-style triggers (back-compat default — every
+    /// pre-Slice-1 registry dict implicitly has this empty).
+    /// Future slices add more dispatch sites; today only the
+    /// cast-and-resolve path consumes this via
+    /// `state_ops_resolve::dispatch_event(Event::Enters, ...)`.
+    ///
+    /// Mirrors Python's `CardPrinting.triggered_abilities` tuple at
+    /// `src/mtg_bot/cards/base.py`. Registry dict input under the
+    /// `triggered_abilities` key is parsed by
+    /// `parse_triggered_ability` (see this file). Missing key in
+    /// the dict = empty Vec (the `#[serde(default)]`-equivalent
+    /// shape — keeps every existing registry-dict caller working
+    /// without modification).
+    pub triggered_abilities: Vec<TriggeredAbility>,
 }
 
 /// Plain Rust container for the printings table. Held behind an
@@ -3332,6 +3525,23 @@ pub fn parse_printing(dict: &Bound<'_, PyDict>) -> PyResult<CardPrinting> {
         }
         None => Vec::new(),
     };
+    // Slice 1 ETB-trigger substrate: `triggered_abilities` defaults
+    // to empty Vec when absent (back-compat for every pre-Slice-1
+    // registry dict).
+    let triggered_abilities = match dict.get_item("triggered_abilities")? {
+        Some(ta_any) => {
+            let mut out = Vec::new();
+            for item in ta_any.try_iter()? {
+                let item = item?;
+                let ta_dict = item.downcast::<PyDict>().map_err(|_| {
+                    PyValueError::new_err("each triggered_ability must be a dict")
+                })?;
+                out.push(parse_triggered_ability(ta_dict)?);
+            }
+            out
+        }
+        None => Vec::new(),
+    };
     Ok(CardPrinting {
         name: Arc::from(name),
         mana_cost,
@@ -3342,7 +3552,123 @@ pub fn parse_printing(dict: &Bound<'_, PyDict>) -> PyResult<CardPrinting> {
         card_types,
         keywords,
         etb_effects,
+        triggered_abilities,
     })
+}
+
+/// Parse one `TriggeredAbility` from a registry dict. Dict shape:
+///
+/// ```python
+/// {
+///     "event": "enters",            # required; lowercase string
+///     "effect": {...},              # required; same shape as parse_effect input
+///     "predicate": {...},           # optional; defaults to {"kind": "always"}
+///     "once_per_turn": False,       # optional; defaults to False
+/// }
+/// ```
+///
+/// Slice 1 accepts only `"enters"` as an event (other variants
+/// raise loudly) because other dispatch sites don't exist yet —
+/// allowing them through would let registry-dict callers stamp
+/// triggers that never fire, masking the missing-fanout bug.
+fn parse_triggered_ability(
+    dict: &Bound<'_, PyDict>,
+) -> PyResult<TriggeredAbility> {
+    let event_str: String = require(dict, "event")?.extract().map_err(|_| {
+        PyValueError::new_err("triggered_ability.event must be a string")
+    })?;
+    let event = match event_str.as_str() {
+        "enters" => Event::Enters,
+        // Slice 1 raises loud on out-of-scope events. Slice 3+ adds
+        // these to the dispatch fan-out at the same time as adding
+        // them here, in lockstep so the parser surface stays
+        // consistent with the dispatcher's coverage.
+        "dies" | "cast" | "attacks" | "deals_damage" => {
+            return Err(PyValueError::new_err(format!(
+                "triggered_ability.event {event_str:?} is not yet wired in Slice 1; \
+                 only \"enters\" dispatches today"
+            )));
+        }
+        other => {
+            return Err(PyValueError::new_err(format!(
+                "unknown triggered_ability.event {other:?}; \
+                 valid: enters (Slice 1)"
+            )));
+        }
+    };
+    let effect_any = require(dict, "effect")?;
+    let effect_dict = effect_any.downcast::<PyDict>().map_err(|_| {
+        PyValueError::new_err("triggered_ability.effect must be a dict")
+    })?;
+    let effect = parse_effect(effect_dict)?;
+    let predicate = match dict.get_item("predicate")? {
+        Some(pred_any) => {
+            let pred_dict = pred_any.downcast::<PyDict>().map_err(|_| {
+                PyValueError::new_err("triggered_ability.predicate must be a dict")
+            })?;
+            parse_predicate(pred_dict)?
+        }
+        None => Predicate::Always,
+    };
+    let once_per_turn = match dict.get_item("once_per_turn")? {
+        Some(v) => v.extract::<bool>().map_err(|_| {
+            PyValueError::new_err(
+                "triggered_ability.once_per_turn must be a bool",
+            )
+        })?,
+        None => false,
+    };
+    Ok(TriggeredAbility {
+        event,
+        predicate,
+        effect,
+        once_per_turn,
+    })
+}
+
+/// Parse one `Predicate` from a registry dict. Dict shape:
+///
+/// ```python
+/// {"kind": "always"}
+/// {"kind": "source_is_self"}
+/// {"kind": "source_is_creature"}
+/// {"kind": "not", "inner": {...}}
+/// {"kind": "and", "left": {...}, "right": {...}}
+/// ```
+///
+/// Slice 1 minimum surface; later slices add more variants.
+fn parse_predicate(dict: &Bound<'_, PyDict>) -> PyResult<Predicate> {
+    let kind: String = require(dict, "kind")?.extract()?;
+    match kind.as_str() {
+        "always" => Ok(Predicate::Always),
+        "source_is_self" => Ok(Predicate::SourceIsSelf),
+        "source_is_creature" => Ok(Predicate::SourceIsCreature),
+        "not" => {
+            let inner_any = require(dict, "inner")?;
+            let inner_dict = inner_any.downcast::<PyDict>().map_err(|_| {
+                PyValueError::new_err("predicate.not.inner must be a dict")
+            })?;
+            Ok(Predicate::Not(Box::new(parse_predicate(inner_dict)?)))
+        }
+        "and" => {
+            let left_any = require(dict, "left")?;
+            let right_any = require(dict, "right")?;
+            let left_dict = left_any.downcast::<PyDict>().map_err(|_| {
+                PyValueError::new_err("predicate.and.left must be a dict")
+            })?;
+            let right_dict = right_any.downcast::<PyDict>().map_err(|_| {
+                PyValueError::new_err("predicate.and.right must be a dict")
+            })?;
+            Ok(Predicate::And(
+                Box::new(parse_predicate(left_dict)?),
+                Box::new(parse_predicate(right_dict)?),
+            ))
+        }
+        other => Err(PyValueError::new_err(format!(
+            "unknown predicate kind {other:?}; \
+             valid: always, source_is_self, source_is_creature, not, and (Slice 1)"
+        ))),
+    }
 }
 
 // --- Rust -> dict (round-trip) -----------------------------------

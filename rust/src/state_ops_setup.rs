@@ -398,5 +398,7 @@ pub fn make_state(
         // smoke callers opt in via `set_external_rng(Some(rng))` after
         // `make_state` returns.
         rng: None,
+        // ETB-trigger Slice 1: empty once-per-turn ledger at construction.
+        triggered_this_turn: std::collections::HashSet::new(),
     })
 }

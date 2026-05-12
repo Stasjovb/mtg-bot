@@ -773,3 +773,77 @@ Section 3.1 covers the four Python-incompatible properties.
 - `bf_iter_etb_sorted(state)` — `rust/src/bf_iter.rs:61` (CE5
   closure introduced this; future-trigger-emitter is one of its
   documented consumers per the module docstring at lines 12-16).
+
+---
+
+## Slice 1 completion notice (landed)
+
+`feature/etb-trigger-slice-1` shipped the substrate listed in §6.1:
+
+- `Event` enum (`Enters` wired; `Dies` / `Cast` / `Attacks` /
+  `DealsDamage` declared but parser raises loudly on register so
+  callers can't stamp triggers that never fire) — `rust/src/cards.rs`.
+- `Predicate` algebra: `Always`, `SourceIsSelf`, `SourceIsCreature`,
+  `Not(Box<Predicate>)`, `And(Box<Predicate>, Box<Predicate>)`.
+  Minimum to express the audit's §5.4 Example A Panharmonicon-shape
+  probe (`SourceIsCreature AND NOT SourceIsSelf`) plus the canonical
+  IsSelf-enters shape. Richer predicates (HasSubtype, IsLand, etc.)
+  follow in Slice 3+.
+- `TriggeredAbility { event, predicate, effect, once_per_turn }`
+  struct + `CardPrinting.triggered_abilities: Vec<TriggeredAbility>`
+  field (defaults to empty when the registry dict omits it —
+  back-compat shape for every pre-Slice-1 caller).
+- `StackItemKind` discriminant + `TriggerPayload { effect,
+  ability_index }` on `StackItem` (lower-churn variant of the
+  audit's enum proposal — pre-Slice-1 readers of
+  `item.source_obj_id` / `item.controller` keep working unchanged).
+- `dispatch_event(state, Event, subject_id)` walker
+  (`rust/src/state_ops_resolve.rs`) — snapshots
+  `bf_iter_etb_sorted(state)` at entry, walks every printing's
+  triggered_abilities, evaluates predicate, pushes matching firings
+  via `push_triggered_ability`. Slice 1 dispatches only `Enters`;
+  the parser surface keeps that contract in lockstep.
+- `push_triggered_ability` helper (same file).
+- Once-per-turn ledger on `GameState.triggered_this_turn:
+  HashSet<(u32, u32)>` (cleared at `cleanup_step_for_active_player`).
+  Substrate-only in Slice 1 — no Slice 1 test fixture exercises the
+  gate (the IsSelf shape fires at most once per permanent's life).
+- One wiring point: `resolve_top_of_stack` (and `_pause` variant)
+  fires `dispatch_event(Event::Enters, source_id)` AFTER the legacy
+  inline `etb_effects` loop and AFTER popping the resolving spell's
+  stack item. Pop-then-dispatch matters: the trigger goes on top of
+  the now-empty stack and resolves LIFO on the next call to
+  `resolve_top_of_stack`.
+
+Slice 1 substrate smoke (`tests_rust/test_triggers.py`, 11 tests,
+459 LOC): parser surface (defaults, valid kinds, raises on unwired
+events / unknown predicates); end-to-end IsSelf draw on cast-resolve;
+end-to-end Panharmonicon-shape "another creature enters" probe;
+negative-case regression that "another creature" doesn't fire on
+the source's own ETB; cleanup-step ledger clear shape.
+
+**Out of scope for Slice 1 (queued for Slice 2+):**
+
+- Fan-out from the other 11 ETB-stamping sites (§4). Today only the
+  cast-and-resolve path (RS1) is wired.
+- Bridging `etb_effects` into the predicate path (synthesize
+  `TriggeredAbility { event=Enters, predicate=SourceIsSelf,
+  effect=... }` per `etb_effects` entry at registry-load time, retire
+  the inline hatch).
+- Smoke-harness `cross_engine.py:370-384` registry-dict wiring —
+  needs a `triggered_abilities` key so the harness can actually
+  exercise the new substrate against the Python engine for CE19
+  closure.
+- Richer Predicate variants (HasSubtype, IsLand, IsArtifact,
+  Controlled, Subject) — needed for landfall / artifact-enters /
+  Kavu-shape predicates from `cards/parser/triggers.py:603-1266`.
+- Target selection on triggers that need it (DealDamage with an
+  AnyPlayer / AnyCreature target) — today the trigger resolver
+  re-uses `apply_effect`'s deferred targeting (defending player /
+  first defender bf object); Slice 4+ adds push-time target picking
+  + fizzle check.
+- Wider `Event` variant coverage (Dies, Cast, Attacks, DealsDamage).
+- Panharmonicon-shape `etb_trigger_multiplier`.
+- Combat-damage aggregator dedup.
+
+LOC: ~715 production + ~459 tests.
