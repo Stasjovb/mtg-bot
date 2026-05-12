@@ -877,7 +877,7 @@ deterministically from
 `(turn_number, active_player, source_obj_id, library_len)`.
 
 **Why this diverges from cross-engine MT parity**: the 8 pymethod
-shuffle sites covered by CE8 (I34 in `RUST_PARITY_GAPS.md`) accept
+shuffle sites covered by CE8 (I41 in `RUST_PARITY_GAPS.md`) accept
 an optional `rng: &Bound<PyAny>` kwarg and consume Python's
 `random.Random._randbelow(n)` for byte-identical shuffles. The
 G19 arm does NOT yet thread that external rng through, because
