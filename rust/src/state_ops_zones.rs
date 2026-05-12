@@ -176,7 +176,7 @@ impl GameState {
         obj_id: u32,
         target_zone: u8,
         target_player: u8,
-    ) -> bool {
+    ) -> PyResult<bool> {
         // Find + remove from source zone (search both players, all five
         // tracked zones — round-14 added exile to the iteration).
         //
@@ -215,7 +215,7 @@ impl GameState {
             }
         }
         let Some(mut obj) = taken else {
-            return false;
+            return Ok(false);
         };
         // Round-29 Void LTB tracking: flag flips only on
         // battlefield-exit of a nonland permanent. See
@@ -232,6 +232,17 @@ impl GameState {
         if target_zone == ZONE_BATTLEFIELD {
             obj.etb_timestamp = crate::state::reserve_etb_timestamp(self);
         }
+        // ETB-trigger Slice 2 (RS9): capture the obj_id of objects
+        // entering the battlefield so we can fan-out
+        // `dispatch_event(Event::Enters, ...)` AFTER the push releases
+        // the player-mut borrow. Non-bf moves leave `entered_id` as
+        // None so the dispatch is a no-op for hand/library/exile/
+        // graveyard moves.
+        let entered_id: Option<u32> = if target_zone == ZONE_BATTLEFIELD {
+            Some(obj.id)
+        } else {
+            None
+        };
 
         let target = &mut self.players[target_player as usize];
         let dest: &mut Zone = match target_zone {
@@ -245,7 +256,16 @@ impl GameState {
             _ => &mut target.graveyard,
         };
         Arc::make_mut(dest).push(obj);
-        true
+        // ETB-trigger Slice 2 (RS9): queue + drain ENTERS for the
+        // newly-arrived bf permanent. Mirrors Python's
+        // `put_into_battlefield` per-permanent fan-out — the generic
+        // `move_object` primitive carries every Effect arm that
+        // routes through it.
+        if let Some(id) = entered_id {
+            self.pending_etb_dispatches.push(id);
+            crate::state_ops_resolve::drain_pending_etb_dispatches(self)?;
+        }
+        Ok(true)
     }
 
     /// Pop the top of `player_id`'s library and push it onto that
@@ -352,7 +372,14 @@ impl GameState {
         obj.exiled_with_source = None;
         // CE4 closure: stamp ETB timestamp on this reanimation.
         obj.etb_timestamp = etb_ts;
+        let entered_id = obj.id;
         Arc::make_mut(&mut player.battlefield).push(obj);
+        // ETB-trigger Slice 2 (RS10): queue + drain ENTERS for the
+        // reanimated creature. Mirrors Python's
+        // `put_into_battlefield` / `_trigger_etb_abilities` call on
+        // the reanimation path.
+        self.pending_etb_dispatches.push(entered_id);
+        crate::state_ops_resolve::drain_pending_etb_dispatches(self)?;
         Ok(true)
     }
 

@@ -400,5 +400,8 @@ pub fn make_state(
         rng: None,
         // ETB-trigger Slice 1: empty once-per-turn ledger at construction.
         triggered_this_turn: std::collections::HashSet::new(),
+        // ETB-trigger Slice 2: empty deferred-dispatch queue at
+        // construction.
+        pending_etb_dispatches: Vec::new(),
     })
 }

@@ -504,6 +504,47 @@ pub(crate) fn apply_effect_pub(
     apply_effect(state, effect, source_obj_id)
 }
 
+/// **Slice 2 — drain the deferred ETB dispatch queue.** Effect arms
+/// that move permanents onto the battlefield (RS2-RS12 in
+/// `docs/RUST_ETB_TRIGGER_AUDIT.md`) push the entered permanent's id
+/// onto `state.pending_etb_dispatches` instead of dispatching directly.
+/// The surrounding caller (every site that owns a "resolving slot" on
+/// the stack — `resolve_top_of_stack`, `_pause`, plus the standalone
+/// bf-entry primitives `play_land` / `cast_creature` / `move_object` /
+/// `move_object_from_graveyard_to_battlefield` /
+/// `register_and_inject_object` / `return_paired_exiles_for` /
+/// `resolve_manifest_dread_to_battlefield`) calls this drainer AFTER
+/// the resolving slot is removed from the stack so the trigger pushes
+/// land on top of a clean (or at least non-resolving) stack.
+///
+/// **Drain order:** FIFO. The arm pushes ids in the order they
+/// landed on the battlefield; the drainer dispatches in the same
+/// order, mirroring Python's per-permanent
+/// `put_into_battlefield -> _trigger_etb_abilities` loop.
+///
+/// **Re-entrancy:** drain takes the queue with `std::mem::take` to
+/// avoid borrow conflicts; if a dispatch's effect re-fills the queue
+/// (e.g. a chain of ETB triggers that themselves create permanents),
+/// the new ids land in the queue and a subsequent drain picks them
+/// up. Today the only way to re-fill mid-drain is via a triggered
+/// ability that creates a token / reanimates — substrate-wise that's
+/// supported and the drain loops until empty.
+pub(crate) fn drain_pending_etb_dispatches(state: &mut GameState) -> PyResult<()> {
+    // Loop until the queue stays empty across a drain (re-entrant
+    // dispatches can re-fill mid-loop). Bounded by the number of
+    // permanents that can enter in a single resolution — finite,
+    // not unbounded.
+    loop {
+        let drained: Vec<u32> = std::mem::take(&mut state.pending_etb_dispatches);
+        if drained.is_empty() {
+            return Ok(());
+        }
+        for entered_id in drained {
+            dispatch_event(state, Event::Enters, entered_id)?;
+        }
+    }
+}
+
 fn apply_effect(
     state: &mut GameState,
     effect: &Effect,
@@ -1447,6 +1488,10 @@ fn apply_effect(
             let n_u32 = n as u32; // n is the *count parameter (i32 → usize → u32 safe; count ≥ 0 was validated above)
             let bf_etb_base = state.next_etb_timestamp;
             state.next_etb_timestamp = state.next_etb_timestamp.saturating_add(n_u32);
+            // ETB-trigger Slice 2 (RS4): collect each fresh token's id
+            // so we can dispatch_event(Event::Enters, ...) for each
+            // AFTER the bf-push pass releases the player-mut borrow.
+            let mut token_ids: Vec<u32> = Vec::with_capacity(n);
             let bf: &mut Vec<GameObject> =
                 Arc::make_mut(&mut state.players[active as usize].battlefield);
             for i in 0..n {
@@ -1464,8 +1509,13 @@ fn apply_effect(
                     etb_timestamp: bf_etb_base.saturating_add(i as u32),
                     ueot_modifiers: Vec::new(),
                 });
+                token_ids.push(next_id);
                 next_id += 1;
             }
+            // ETB-trigger Slice 2 (RS4): queue ENTERS per token in
+            // stamp order. Drained by the surrounding resolver after
+            // the resolving spell's stack item pops.
+            state.pending_etb_dispatches.extend(token_ids);
         }
         // Round-23: AddManaToPool. CR 106.1 — the resolution of a mana
         // ability. The active player (= controller of the resolving
@@ -1610,6 +1660,11 @@ fn apply_effect(
                 return Ok(());
             }
             let controller_idx = state.active_player as usize;
+            // ETB-trigger Slice 2 (RS2): collect the obj_id of every
+            // land we move onto the battlefield so we can fan out
+            // `dispatch_event(Event::Enters, ...)` for each AFTER the
+            // post-search shuffle drops its registry/zone borrows.
+            let mut entered_ids: Vec<u32> = Vec::with_capacity(n);
             for _ in 0..n {
                 // Locate the topmost basic-land match (forward iter
                 // = top-to-bottom post-CE3, lib[0] = top). Inlined
@@ -1654,6 +1709,7 @@ fn apply_effect(
                 obj.attached_to = None;
                 obj.exiled_with_source = None;
                 obj.etb_timestamp = etb_ts;
+                entered_ids.push(obj.id);
                 Arc::make_mut(&mut player.battlefield).push(obj);
             }
             // G19 closure: CR 701.19 / 701.22 — always shuffle the
@@ -1729,6 +1785,12 @@ fn apply_effect(
                     }
                 }
             }
+            // ETB-trigger Slice 2 (RS2): queue ENTERS dispatches per
+            // searched-up land, in stamp order (= the order they were
+            // moved onto the battlefield above). The caller
+            // (`resolve_top_of_stack` / `_pause`) drains the queue
+            // after popping the resolving spell's stack item.
+            state.pending_etb_dispatches.extend(entered_ids);
         }
         // Round-23: PutPlusOneCounterOnSelf. CR 122.6 + 701.13 — put
         // `amount` +1/+1 counters on the resolving spell's source
@@ -2278,7 +2340,12 @@ fn apply_effect(
             obj.attached_to = None;
             obj.exiled_with_source = None;
             obj.etb_timestamp = etb_ts;
+            let entered_id = obj.id;
             Arc::make_mut(&mut state.players[controller_idx].battlefield).push(obj);
+            // ETB-trigger Slice 2 (RS3): queue ENTERS dispatch for
+            // the reanimated creature. Drained by the surrounding
+            // resolver after the resolving spell's stack item pops.
+            state.pending_etb_dispatches.push(entered_id);
         }
         // Round-26: EachOpponentLosesLife. CR 118.4 — "life loss"
         // (not damage). Each opponent of the SOURCE's controller
@@ -3953,6 +4020,11 @@ fn apply_effect(
                 ueot_modifiers: Vec::new(),
             };
             Arc::make_mut(&mut state.players[cidx].battlefield).push(new_obj);
+            // ETB-trigger Slice 2 (RS5): queue ENTERS dispatch for
+            // the cloned token. Same emission contract as RS4 —
+            // drained by the surrounding resolver after the
+            // resolving spell's stack item pops.
+            state.pending_etb_dispatches.push(new_id);
         }
         // Round-28 "may sac for inner effect". First-slice
         // deterministic-yes: if controller controls an artifact,
@@ -4965,12 +5037,23 @@ fn apply_effect(
             // counter is bumped once per moved creature.
             let bf_etb_base = state.next_etb_timestamp;
             state.next_etb_timestamp = state.next_etb_timestamp.saturating_add(moved.len() as u32);
+            // ETB-trigger Slice 2 (RS6): collect each reanimated
+            // creature's id for the post-push dispatch fan-out.
+            let mut entered_ids: Vec<u32> = Vec::with_capacity(moved.len());
             let bf_mut: &mut Vec<GameObject> =
                 Arc::make_mut(&mut state.players[controller_idx].battlefield);
             for (i, mut obj) in moved.into_iter().enumerate() {
                 obj.etb_timestamp = bf_etb_base.saturating_add(i as u32);
+                entered_ids.push(obj.id);
                 bf_mut.push(obj);
             }
+            // ETB-trigger Slice 2 (RS6): queue ENTERS per
+            // mass-reanimated creature in stamp order. Drained by
+            // the surrounding resolver after the resolving spell's
+            // stack item pops. Order matters — death/ETB chains can
+            // ripple, but mirror Python's centralized list-walk by
+            // emitting in the ETB-stamp order we just stamped above.
+            state.pending_etb_dispatches.extend(entered_ids);
         }
         // Round-28 TapAnotherTargetCreature (Starport-Security family,
         // 2+ EoE cards). Same scan shape as UntapTargetOtherPermanent
@@ -5461,8 +5544,12 @@ impl GameState {
     /// extension) must invoke this when the source leaves the
     /// battlefield. Auto-firing on every bf-leaving zone change is a
     /// follow-up slice. Returns the count of objects returned.
-    fn return_paired_exiles_for(&mut self, source_id: u32) -> i32 {
+    fn return_paired_exiles_for(&mut self, source_id: u32) -> PyResult<i32> {
         let mut returned = 0i32;
+        // ETB-trigger Slice 2 (RS7): collect each recalled
+        // permanent's id across both players so we can drain ENTERS
+        // dispatches after all bf-pushes complete.
+        let mut entered_ids: Vec<u32> = Vec::new();
         for pidx in 0..self.players.len() {
             // Collect ids first to avoid borrow conflicts.
             let to_return: Vec<u32> = self.players[pidx]
@@ -5507,11 +5594,20 @@ impl GameState {
                 Arc::make_mut(&mut self.players[pidx].battlefield);
             for (i, mut obj) in popped.into_iter().enumerate() {
                 obj.etb_timestamp = bf_etb_base.saturating_add(i as u32);
+                entered_ids.push(obj.id);
                 bf_mut.push(obj);
                 returned += 1;
             }
         }
-        returned
+        // ETB-trigger Slice 2 (RS7): queue ENTERS per recalled
+        // permanent + drain. Mirrors Python's `put_into_battlefield`
+        // per recalled object inside `return_paired_exiles_for`. Uses
+        // the deferred-dispatch pattern (push to queue then drain) so
+        // the call site is consistent with RS2-RS6's resolver-driven
+        // drain shape and re-entrant ETB chains land correctly.
+        self.pending_etb_dispatches.extend(entered_ids);
+        drain_pending_etb_dispatches(self)?;
+        Ok(returned)
     }
 
     /// Resolve the top stack item. Returns the resolved item as a
@@ -5562,6 +5658,12 @@ impl GameState {
                 .stack
                 .pop()
                 .expect("peeked top but pop returned None — stack invariant broken");
+            // Slice 2 — drain any ETB dispatches the trigger's
+            // effect deferred. A trigger that lands a permanent on
+            // bf (e.g. a token-creating ETB trigger) populates the
+            // queue; we fan out the events now that the resolving
+            // trigger slot has been popped.
+            drain_pending_etb_dispatches(self)?;
             // Auto-resolve any pending decisions the trigger effect
             // may have queued (Surveil on ETB, etc.). Matches the
             // spell-path's terminal call below.
@@ -5647,6 +5749,15 @@ impl GameState {
         if post_resolve_zone == Some(ZONE_BATTLEFIELD) {
             dispatch_event(self, Event::Enters, top.source_obj_id)?;
         }
+        // Slice 2 — drain any ETB dispatches that effect arms
+        // deferred via `pending_etb_dispatches` (RS2-RS7's spell-
+        // effect resolutions: search-and-bf, reanimation, token
+        // creation, mass reanim, clone-target, exile-recall). The
+        // queue mechanism keeps the stack untouched during
+        // `apply_effect` so the resolver's `pop()` always drains
+        // the resolving slot, regardless of how many permanents
+        // entered during the effect pass.
+        drain_pending_etb_dispatches(self)?;
         // Auto-resolve any pending decisions (Round-27 G20 closure).
         // Pre-r27 behavior: Surveil etc. resolved with deterministic
         // "keep all on top". The decision-callback substrate now
@@ -5694,6 +5805,8 @@ impl GameState {
                 .stack
                 .pop()
                 .expect("peeked top but pop returned None — stack invariant broken");
+            // Slice 2: drain any RS-site deferred dispatches.
+            drain_pending_etb_dispatches(self)?;
             return Ok(Some(stack_item_to_dict(py, &popped)?));
         }
         let effects: Vec<Effect> = match find_source_printing_id(self, top.source_obj_id)
@@ -5733,6 +5846,11 @@ impl GameState {
             // `resolve_top_of_stack` above.
             dispatch_event(self, Event::Enters, top.source_obj_id)?;
         }
+        // Slice 2: drain any RS-site deferred dispatches from the
+        // effect pass above. Mirrors the `resolve_top_of_stack`
+        // drain — the `_pause` variant just skips the
+        // auto-resolve-pending step, not the ETB fan-out.
+        drain_pending_etb_dispatches(self)?;
         Ok(Some(stack_item_to_dict(py, &popped)?))
     }
 
@@ -5829,6 +5947,17 @@ impl GameState {
         // is insert(0, ...). For other zones (HAND, BATTLEFIELD,
         // GRAVEYARD) append-to-tail is the established pattern and
         // stays.
+        // ETB-trigger Slice 2 (RS8): capture entered_id when the test
+        // injection lands directly on the battlefield, so we can
+        // dispatch `Event::Enters` AFTER releasing the player-mut
+        // borrow below. Non-bf injections are no-ops on the trigger
+        // path (the object isn't on the battlefield, so no permanent
+        // observes its arrival).
+        let entered_id: Option<u32> = if target_zone == ZONE_BATTLEFIELD {
+            Some(next_id)
+        } else {
+            None
+        };
         match target_zone {
             ZONE_HAND => {
                 Arc::make_mut(&mut player.hand).push(obj);
@@ -5847,6 +5976,14 @@ impl GameState {
                     "register_and_inject_object: unsupported target_zone {other} (valid: 0-3)"
                 )));
             }
+        }
+        // ETB-trigger Slice 2 (RS8): test-fixture battlefield
+        // injections fan out ENTERS via the deferred-dispatch queue
+        // so per-test substrate fixtures can exercise observer-style
+        // triggers. Non-bf injections are a no-op on the trigger path.
+        if let Some(id) = entered_id {
+            self.pending_etb_dispatches.push(id);
+            drain_pending_etb_dispatches(self)?;
         }
         Ok(next_id)
     }

@@ -847,3 +847,64 @@ the source's own ETB; cleanup-step ledger clear shape.
 - Combat-damage aggregator dedup.
 
 LOC: ~715 production + ~459 tests.
+
+---
+
+## Slice 2 completion notice (landed)
+
+`feature/etb-trigger-slice-2` shipped piece (1) of the Slice 1 prep
+notes — fan out `dispatch_event(Event::Enters, ...)` to the 11 other
+ETB-stamping sites in §4 — via a deferred-dispatch queue rather than
+inline calls.
+
+**Pattern** (`docs/RUST_PARITY_GAPS.md` I47): every bf-entry site
+pushes the entered permanent's id onto
+`GameState.pending_etb_dispatches: Vec<u32>` instead of dispatching
+inline. The surrounding caller (the resolver in spell-resolve cases,
+or the bf-entry primitive itself in standalone-method cases) drains
+the queue via `state_ops_resolve::drain_pending_etb_dispatches` AFTER
+the resolving slot leaves the stack. The deferred path keeps
+`apply_effect` stack-quiet, so the resolver's `pop()` always drains
+the resolving slot regardless of how many permanents entered.
+
+**Sites wired**:
+
+- RS2 `state_ops_resolve.rs` (`Effect::SearchLibraryForBasicLandTapped`)
+- RS3 `state_ops_resolve.rs` (`Effect::ReturnCreatureFromYourGraveyardToBattlefield`)
+- RS4 `state_ops_resolve.rs` (`Effect::CreateToken` block allocator; one push per token)
+- RS5 `state_ops_resolve.rs` (`Effect::CreateTokenCopyOfTargetCreatureYouControl`)
+- RS6 `state_ops_resolve.rs` (`Effect::ReturnAllCreaturesFromYourGraveyardToBattlefield` mass reanim)
+- RS7 `state_ops_resolve.rs::return_paired_exiles_for` (signature flipped from `i32` to `PyResult<i32>`)
+- RS8 `state_ops_resolve.rs::register_and_inject_object` (test fixture; bf-targets only)
+- RS9 `state_ops_zones.rs::move_object` (signature flipped from `bool` to `PyResult<bool>`; bf-targets only)
+- RS10 `state_ops_zones.rs::move_object_from_graveyard_to_battlefield`
+- RS11 `state_ops_cast.rs::move_from_hand_to_battlefield` (routes `play_land` + `cast_creature` no-stack primitive)
+- RS12 `state_ops_decisions.rs::resolve_manifest_dread_to_battlefield`
+
+Plus the queue substrate itself: `GameState.pending_etb_dispatches`
+field + `drain_pending_etb_dispatches` helper in `state_ops_resolve.rs`.
+
+**Regression tests** in `tests_rust/test_triggers.py` (13 new RS-site
+tests + 1 once-per-turn end-to-end test, on top of Slice 1's 11):
+each RS-site has a self-ETB-draw probe verifying the trigger fires +
+the controller draws a card; RS9 has an extra negative-case guard
+pinning that non-bf moves stay silent; the once-per-turn ledger test
+pins suppress + cleanup-reset.
+
+**Rust gate**: 1902/1902 pass (vs Slice 1's 1885 baseline).
+
+**Out of scope for Slice 2 (queued for Slice 3+):**
+
+- Piece (2) from Slice 1's prep notes — bridge legacy `etb_effects`
+  into the predicate path by synthesizing
+  `TriggeredAbility { event=Enters, predicate=SourceIsSelf,
+  effect=... }` per `etb_effects` entry at registry-load time, then
+  retire the inline `etb_effects` hatch in `resolve_top_of_stack` /
+  `_pause`. Slice 2 leaves the inline hatch in place — double-fire
+  surface is dormant today (no EoE printing carries both shapes).
+- Smoke-harness `cross_engine.py` registry-dict wiring for
+  `triggered_abilities`.
+- Richer Predicate variants (HasSubtype, IsLand, IsArtifact,
+  Controlled, Subject).
+- Wider Event variants (Dies, Cast, Attacks, DealsDamage).
+- Panharmonicon-shape `etb_trigger_multiplier`.

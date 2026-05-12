@@ -1078,6 +1078,42 @@ pub struct GameState {
     /// subsequent trigger ATTEMPT fired — and that attempt is
     /// part of the gameplay shape itself).
     pub triggered_this_turn: std::collections::HashSet<(u32, u32)>,
+    /// **ETB-trigger substrate (Slice 2) — deferred dispatch queue.**
+    /// Effect arms inside `apply_effect` that move permanents onto
+    /// the battlefield (RS2-RS12 in `docs/RUST_ETB_TRIGGER_AUDIT.md`)
+    /// don't call `dispatch_event` directly — instead they push the
+    /// entered permanent's id here, and the surrounding caller
+    /// (currently `resolve_top_of_stack`, `play_land`, `cast_creature`,
+    /// `move_object`, `move_object_from_graveyard_to_battlefield`,
+    /// `register_and_inject_object`, `return_paired_exiles_for`, and
+    /// `resolve_manifest_dread_to_battlefield`) drains the queue after
+    /// the resolving slot is removed.
+    ///
+    /// **Why deferred?** Effect arms can mutate the stack (e.g.
+    /// `Effect::CounterTargetSpell` removes a stack item; future
+    /// trigger-from-trigger paths may push more triggers). Dispatching
+    /// inside `apply_effect` would compete with the resolver's
+    /// "pop the resolving slot" step — the resolver assumes the
+    /// resolving slot is at `stack.last()` at pop time, and an
+    /// inline dispatch breaks that invariant by piling a fresh
+    /// trigger on top of the resolving slot. Deferring the
+    /// dispatch keeps the stack untouched during `apply_effect`
+    /// and gives the resolver a clean pop.
+    ///
+    /// **Drain semantics.** The caller drains by `std::mem::take`
+    /// + iterating, calling `dispatch_event(Event::Enters, id)`
+    /// per id in push order. Order matches Python's centralized
+    /// `state.battlefield` walk (the same ETB-stamp order produced
+    /// by the Effect arm). FIFO drain — first entered fires first
+    /// (mirrors Python's per-permanent
+    /// `put_into_battlefield` -> `_trigger_etb_abilities` loop).
+    ///
+    /// **Not serialized into the fingerprint.** Bookkeeping like
+    /// `triggered_this_turn`. The queue is empty across stack
+    /// resolution boundaries (every drain site empties it before
+    /// returning to its caller), so the field is observably empty
+    /// when fingerprinted.
+    pub pending_etb_dispatches: Vec<u32>,
 }
 
 impl Clone for GameState {
@@ -1111,6 +1147,7 @@ impl Clone for GameState {
             winner_id_sticky: self.winner_id_sticky,
             rng,
             triggered_this_turn: self.triggered_this_turn.clone(),
+            pending_etb_dispatches: self.pending_etb_dispatches.clone(),
         }
     }
 }
@@ -1512,5 +1549,10 @@ pub fn make_synthetic_state(
         // ETB-trigger Slice 1: empty ledger at construction; reset
         // each turn at cleanup.
         triggered_this_turn: std::collections::HashSet::new(),
+        // ETB-trigger Slice 2: empty deferred-dispatch queue at
+        // construction; drained by the surrounding resolver / move
+        // primitive after the resolving slot is removed from the
+        // stack.
+        pending_etb_dispatches: Vec::new(),
     }
 }

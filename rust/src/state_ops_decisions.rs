@@ -540,6 +540,15 @@ fn resolve_manifest_dread_to_battlefield(
         obj.etb_timestamp = etb_ts;
         bf_mut.push(obj);
     }
+    // ETB-trigger Slice 2 (RS12): queue + drain ENTERS for the
+    // manifested face-down permanent. Mirrors Python's
+    // `put_into_battlefield` / `_trigger_etb_abilities` on the
+    // ManifestDread resolve path. Dispatch BEFORE the attach +
+    // counter follow-ups so per-permanent ETB triggers see the
+    // manifested object in its freshly-arrived state (no attach
+    // relationship / no counter delta).
+    state.pending_etb_dispatches.push(manifested_id);
+    crate::state_ops_resolve::drain_pending_etb_dispatches(state)?;
     // Route the rest (preserving popped order) to graveyard.
     {
         let gy_mut: &mut Vec<GameObject> =
