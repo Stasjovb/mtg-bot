@@ -74,8 +74,19 @@
 //! calling `mulligan` on the clone leaves the source state's hand
 //! and library untouched — verified by
 //! `test_clone_then_mulligan_does_not_affect_original`.
+//!
+//! ## CE8 Slice 2 — external-RNG path on the three mulligan shuffles
+//!
+//! `mulligan`, `mulligan_to_n`, and `mulligan_atomic` each gain an
+//! optional `rng: Option<&Bound<'_, PyAny>>` kwarg. When `Some(_)`,
+//! the in-mulligan Fisher-Yates shuffle consumes draws from the
+//! supplied Python `random.Random` via `external_rng::next_below`,
+//! matching what `random.Random.shuffle(list)` would produce on the
+//! Python side (bit-identical). When `None` (default), the legacy
+//! xorshift64 path runs unchanged so production cli/bench callers
+//! and every existing pinned baseline stay byte-equivalent.
 
-use crate::state::GameState;
+use crate::state::{GameObject, GameState};
 use crate::state_ops_zones::{ZONE_HAND, ZONE_LIBRARY};
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
@@ -114,6 +125,40 @@ impl XorShift64 {
     }
 }
 
+/// Fisher-Yates (Knuth) shuffle of a `GameObject` slice in place.
+///
+/// When `rng` is `Some(py_random)`, draws come from the supplied
+/// Python `random.Random` via `external_rng::next_below`, matching
+/// what `random.Random.shuffle(list)` produces on the Python side
+/// bit-for-bit. When `rng` is `None`, falls back to the inline
+/// xorshift64 seeded with `seed`. No-op for len < 2.
+///
+/// CE8 Slice 2 substrate: shared by the three mulligan shuffle sites
+/// in this module (`mulligan`, `mulligan_to_n`, `mulligan_atomic`).
+fn fisher_yates_shuffle_optional(
+    v: &mut [GameObject],
+    rng: Option<&Bound<'_, PyAny>>,
+    seed: u64,
+) -> PyResult<()> {
+    let n = v.len();
+    if n < 2 {
+        return Ok(());
+    }
+    if let Some(py_rng) = rng {
+        for i in (1..n).rev() {
+            let j = crate::external_rng::next_below(py_rng, i + 1)?;
+            v.swap(i, j);
+        }
+    } else {
+        let mut xorshift = XorShift64::new(seed);
+        for i in (1..n).rev() {
+            let j = xorshift.next_usize_below(i + 1);
+            v.swap(i, j);
+        }
+    }
+    Ok(())
+}
+
 #[pymethods]
 impl GameState {
     /// Move every card in `player_id`'s hand back to that player's
@@ -124,9 +169,19 @@ impl GameState {
     /// Raises `ValueError` if `player_id` is not 0 or 1.
     ///
     /// CoW-safe: hand + library mutations both route through
-    /// `Arc::make_mut`. Same `(state, seed)` produces the same
-    /// post-mulligan state, byte for byte (determinism guarantee).
-    fn mulligan(&mut self, player_id: u8, seed: u64) -> PyResult<()> {
+    /// `Arc::make_mut`. Same `(state, seed)` on the `rng=None` path
+    /// produces the same post-mulligan state, byte for byte
+    /// (determinism guarantee). When `rng=Some(py_random)`, the
+    /// in-mulligan shuffle consumes draws from the supplied stream
+    /// (CE8 Slice 2 — matches Python `random.Random.shuffle`
+    /// byte-for-byte).
+    #[pyo3(signature = (player_id, seed, *, rng = None))]
+    fn mulligan(
+        &mut self,
+        player_id: u8,
+        seed: u64,
+        rng: Option<&Bound<'_, PyAny>>,
+    ) -> PyResult<()> {
         let idx = player_id as usize;
         if idx >= 2 {
             return Err(PyValueError::new_err(format!(
@@ -169,15 +224,9 @@ impl GameState {
             }
 
             // Step 2: Fisher-Yates shuffle of the library (no-op when
-            // n < 2). Mirrors state_ops_library.rs's shuffle.
-            let n = lib.len();
-            if n >= 2 {
-                let mut rng = XorShift64::new(seed);
-                for i in (1..n).rev() {
-                    let j = rng.next_usize_below(i + 1);
-                    lib.swap(i, j);
-                }
-            }
+            // n < 2). CE8 Slice 2: external rng owns draw order when
+            // supplied; otherwise legacy xorshift64 seeded with `seed`.
+            fisher_yates_shuffle_optional(lib, rng, seed)?;
         }
 
         // Step 3: draw 7 (or until empty). Top of library = lib[0]
@@ -212,7 +261,18 @@ impl GameState {
     ///   cards than the library can provide.
     ///
     /// CoW-safe (same `Arc::make_mut` discipline as `mulligan`).
-    fn mulligan_to_n(&mut self, player_id: u8, n_cards: i32, seed: u64) -> PyResult<()> {
+    ///
+    /// CE8 Slice 2: `rng=Some(py_random)` routes the in-mulligan
+    /// shuffle through the external stream; `rng=None` (default)
+    /// keeps the legacy xorshift64 path for backward compat.
+    #[pyo3(signature = (player_id, n_cards, seed, *, rng = None))]
+    fn mulligan_to_n(
+        &mut self,
+        player_id: u8,
+        n_cards: i32,
+        seed: u64,
+        rng: Option<&Bound<'_, PyAny>>,
+    ) -> PyResult<()> {
         let idx = player_id as usize;
         if idx >= 2 {
             return Err(PyValueError::new_err(format!(
@@ -262,14 +322,9 @@ impl GameState {
                 )));
             }
 
-            let n = lib.len();
-            if n >= 2 {
-                let mut rng = XorShift64::new(seed);
-                for i in (1..n).rev() {
-                    let j = rng.next_usize_below(i + 1);
-                    lib.swap(i, j);
-                }
-            }
+            // CE8 Slice 2: external rng owns draw order when supplied;
+            // otherwise legacy xorshift64 seeded with `seed`.
+            fisher_yates_shuffle_optional(lib, rng, seed)?;
         }
 
         // Step 3: draw exactly n_cards (guarded above to be ≤ lib.len()).
@@ -427,11 +482,13 @@ impl GameState {
     /// legacy `mulligan`, `mulligan_to_n`, and `bottom_cards_from_hand`
     /// primitives remain in place — only `mulligan_atomic` is the
     /// parity-correct entrypoint for new callers.
+    #[pyo3(signature = (player_id, seed, bottom_card_ids, *, rng = None))]
     fn mulligan_atomic(
         &mut self,
         player_id: u8,
         seed: u64,
         bottom_card_ids: Vec<u32>,
+        rng: Option<&Bound<'_, PyAny>>,
     ) -> PyResult<()> {
         let idx = player_id as usize;
         if idx >= 2 {
@@ -476,10 +533,11 @@ impl GameState {
         }
 
         // Step 5: shuffle. Same recipe as `mulligan` — drain hand
-        // into library, Fisher-Yates with `seed`, redraw 7 (or until
-        // empty). Scoped block so the `&mut player.hand` /
-        // `&mut player.library` borrows from the shuffle don't outlast
-        // the redraw step.
+        // into library, Fisher-Yates, redraw 7 (or until empty).
+        // CE8 Slice 2: external rng owns draw order when supplied;
+        // otherwise legacy xorshift64 seeded with `seed`. Scoped block
+        // so the `&mut player.hand` / `&mut player.library` borrows
+        // from the shuffle don't outlast the redraw step.
         {
             let hand = Arc::make_mut(&mut player.hand);
             let returning: Vec<_> = hand.drain(..).collect();
@@ -489,14 +547,7 @@ impl GameState {
                 lib.push(obj);
             }
 
-            let n = lib.len();
-            if n >= 2 {
-                let mut rng = XorShift64::new(seed);
-                for i in (1..n).rev() {
-                    let j = rng.next_usize_below(i + 1);
-                    lib.swap(i, j);
-                }
-            }
+            fisher_yates_shuffle_optional(lib, rng, seed)?;
         }
 
         // Redraw 7 (or until empty). Top of library = lib[0] (post-CE3).

@@ -38,6 +38,18 @@
 //! through `Arc::make_mut` on each zone they touch, preserving the
 //! CoW invariant. The `*_clone_does_not_affect_original` tests are
 //! the load-bearing canaries.
+//!
+//! ## CE8 Slice 2 — external-RNG path on the three gameplay shuffle sites
+//!
+//! `shuffle_library_with_seed`, `search_library_and_move_to_hand`,
+//! and `search_library_for_first_of_type_and_shuffle` each gain an
+//! optional `rng: Option<&Bound<'_, PyAny>>` kwarg. When `Some(_)`,
+//! the Fisher-Yates draws come from the supplied Python
+//! `random.Random` via `external_rng::next_below`, matching what
+//! `random.Random.shuffle(list)` would produce on the Python side
+//! (bit-identical). When `None` (default), the legacy xorshift64
+//! path runs unchanged so production cli/bench callers and every
+//! existing pinned baseline stay byte-equivalent.
 
 use crate::state::{GameObject, GameState};
 use pyo3::exceptions::{PyIndexError, PyValueError};
@@ -87,6 +99,44 @@ impl XorShift64 {
     }
 }
 
+/// Fisher-Yates (Knuth) shuffle of a `GameObject` slice in place.
+///
+/// When `rng` is `Some(py_random)`, draws come from the supplied
+/// Python `random.Random` via `external_rng::next_below`, matching
+/// what `random.Random.shuffle(list)` produces on the Python side
+/// bit-for-bit. When `rng` is `None`, falls back to the inline
+/// xorshift64 seeded with `seed`. No-op for len < 2.
+///
+/// CE8 Slice 2 substrate: shared by all three gameplay shuffle sites
+/// in this module (`shuffle_library_with_seed`,
+/// `search_library_and_move_to_hand`,
+/// `search_library_for_first_of_type_and_shuffle`). The control flow
+/// is the standard `for i in (1..n).rev() { swap(i, j) }` Fisher-Yates
+/// loop; only the source of `j` differs between the two paths.
+fn fisher_yates_shuffle_optional(
+    v: &mut [GameObject],
+    rng: Option<&Bound<'_, PyAny>>,
+    seed: u64,
+) -> PyResult<()> {
+    let n = v.len();
+    if n < 2 {
+        return Ok(());
+    }
+    if let Some(py_rng) = rng {
+        for i in (1..n).rev() {
+            let j = crate::external_rng::next_below(py_rng, i + 1)?;
+            v.swap(i, j);
+        }
+    } else {
+        let mut xorshift = XorShift64::new(seed);
+        for i in (1..n).rev() {
+            let j = xorshift.next_usize_below(i + 1);
+            v.swap(i, j);
+        }
+    }
+    Ok(())
+}
+
 #[pymethods]
 impl GameState {
     /// Move the object with id `obj_id` from `player_id`'s HAND to
@@ -122,9 +172,14 @@ impl GameState {
         Ok(true)
     }
 
-    /// Shuffle `player_id`'s library in place using a seeded inline
-    /// xorshift64 + Fisher-Yates. Same `(library_state, seed)` always
-    /// produces the same permutation — see module docstring for the
+    /// Shuffle `player_id`'s library in place using Fisher-Yates.
+    /// When `rng` is `Some(py_random)`, draws come from the supplied
+    /// Python `random.Random` (CE8 Slice 2 substrate — matches
+    /// `random.Random.shuffle(list)` byte-for-byte). When `rng` is
+    /// `None` (default), falls back to an inline xorshift64 seeded
+    /// with `seed` for backward compatibility. Same
+    /// `(library_state, seed)` on the `rng=None` path always produces
+    /// the same permutation — see module docstring for the
     /// determinism guarantee and RNG-choice rationale.
     ///
     /// CoW-safe: routes through `Arc::make_mut` on the library Vec.
@@ -132,10 +187,12 @@ impl GameState {
     /// nothing meaningful in those cases, but we still pay the
     /// `Arc::make_mut` cost for consistency — callers that care can
     /// gate on `library_sizes[player_id] >= 2` themselves).
+    #[pyo3(signature = (player_id, seed, *, rng = None))]
     fn shuffle_library_with_seed(
         &mut self,
         player_id: u8,
         seed: u64,
+        rng: Option<&Bound<'_, PyAny>>,
     ) -> PyResult<()> {
         let idx = player_id as usize;
         if idx >= 2 {
@@ -143,17 +200,7 @@ impl GameState {
         }
         let player = &mut self.players[idx];
         let lib = Arc::make_mut(&mut player.library);
-        let n = lib.len();
-        if n < 2 {
-            return Ok(());
-        }
-        let mut rng = XorShift64::new(seed);
-        // Fisher-Yates (Knuth shuffle): for i from n-1 down to 1,
-        // pick j in [0, i] and swap lib[i] and lib[j].
-        for i in (1..n).rev() {
-            let j = rng.next_usize_below(i + 1);
-            lib.swap(i, j);
-        }
+        fisher_yates_shuffle_optional(lib, rng, seed)?;
         Ok(())
     }
 
@@ -225,11 +272,13 @@ impl GameState {
     /// CoW-safe: each zone Vec mutation routes through `Arc::make_mut`,
     /// so cloning a `GameState` and calling this on the clone leaves
     /// the source's library and hand untouched.
+    #[pyo3(signature = (player_id, printing_id, shuffle_seed, *, rng = None))]
     fn search_library_and_move_to_hand(
         &mut self,
         player_id: u8,
         printing_id: u32,
         shuffle_seed: u64,
+        rng: Option<&Bound<'_, PyAny>>,
     ) -> PyResult<Option<u32>> {
         let idx = player_id as usize;
         if idx >= 2 {
@@ -256,16 +305,12 @@ impl GameState {
             None
         };
         // Shuffle the library regardless of search outcome — failed
-        // search still shuffles per CR 701.18.
+        // search still shuffles per CR 701.18. CE8 Slice 2: when `rng`
+        // is `Some(_)`, the post-search shuffle consumes draws from the
+        // external stream; otherwise the legacy xorshift64 path runs
+        // seeded with `shuffle_seed`.
         let lib = Arc::make_mut(&mut player.library);
-        let n = lib.len();
-        if n >= 2 {
-            let mut rng = XorShift64::new(shuffle_seed);
-            for i in (1..n).rev() {
-                let j = rng.next_usize_below(i + 1);
-                lib.swap(i, j);
-            }
-        }
+        fisher_yates_shuffle_optional(lib, rng, shuffle_seed)?;
         Ok(moved_id)
     }
 
@@ -401,11 +446,13 @@ impl GameState {
     ///
     /// Raises `ValueError` on out-of-range `player_id`, mirroring the
     /// search-only sibling.
+    #[pyo3(signature = (player_id, card_type, seed, *, rng = None))]
     fn search_library_for_first_of_type_and_shuffle(
         &mut self,
         player_id: u8,
         card_type: &str,
         seed: u64,
+        rng: Option<&Bound<'_, PyAny>>,
     ) -> PyResult<Option<u32>> {
         let idx = player_id as usize;
         if idx >= 2 {
@@ -446,16 +493,11 @@ impl GameState {
         };
         // ALWAYS shuffle (CR 701.19) — operates on the post-removal
         // library when a card was found, on the unchanged library on
-        // a miss.
+        // a miss. CE8 Slice 2: when `rng` is `Some(_)`, the post-search
+        // shuffle consumes draws from the external stream; otherwise
+        // the legacy xorshift64 path runs seeded with `seed`.
         let lib = Arc::make_mut(&mut player.library);
-        let n = lib.len();
-        if n >= 2 {
-            let mut rng = XorShift64::new(seed);
-            for i in (1..n).rev() {
-                let j = rng.next_usize_below(i + 1);
-                lib.swap(i, j);
-            }
-        }
+        fisher_yates_shuffle_optional(lib, rng, seed)?;
         Ok(moved_id)
     }
 

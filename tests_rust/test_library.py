@@ -1360,3 +1360,193 @@ def test_resolve_search_library_for_card_clone_isolation(synthetic_state):
     # Clone: artifact in hand. Source: artifact still in library.
     assert cloned.find_object_zone(artifact_id) == ZONE_HAND
     assert synthetic_state.find_object_zone(artifact_id) == ZONE_LIBRARY
+
+
+# -------------------------------------------------------------------------
+# CE8 Slice 2 — external-RNG path on the three gameplay shuffle sites.
+#
+# `shuffle_library_with_seed`, `search_library_and_move_to_hand`, and
+# `search_library_for_first_of_type_and_shuffle` all accept an optional
+# `rng` kwarg (a Python `random.Random` instance). When supplied, the
+# Fisher-Yates shuffle consumes draws from the supplied stream via
+# `_randbelow`, matching `random.Random.shuffle(list)` byte-for-byte.
+# When `rng=None` (default), the legacy xorshift64 path runs unchanged.
+# -------------------------------------------------------------------------
+
+
+def test_shuffle_library_with_external_rng_matches_python_shuffle(synthetic_state):
+    """CE8 Slice 2: passing `rng=random.Random(seed)` to
+    `shuffle_library_with_seed` produces a library order bit-identical
+    to what `random.Random(seed).shuffle(obj_ids)` produces on the
+    Python side."""
+    import random
+
+    pre_ids = _library_obj_ids(synthetic_state, 0, P0_LIBRARY_SIZE)
+    # Python reference using the same seed.
+    py_ids = list(pre_ids)
+    random.Random(2026).shuffle(py_ids)
+
+    # Rust path consuming from `random.Random(2026)`.
+    synthetic_state.shuffle_library_with_seed(0, 0, rng=random.Random(2026))
+    rust_ids = _library_obj_ids(synthetic_state, 0, P0_LIBRARY_SIZE)
+
+    assert rust_ids == py_ids
+
+
+def test_shuffle_library_with_external_rng_ignores_seed(synthetic_state):
+    """`rng` takes precedence over the `seed` parameter — two calls
+    with the same `rng` state and different `seed` values produce
+    identical library orders."""
+    import random
+
+    a = synthetic_state.clone_once()
+    b = synthetic_state.clone_once()
+
+    a.shuffle_library_with_seed(0, 0, rng=random.Random(42))
+    b.shuffle_library_with_seed(0, 99_999, rng=random.Random(42))
+
+    a_ids = _library_obj_ids(a, 0, P0_LIBRARY_SIZE)
+    b_ids = _library_obj_ids(b, 0, P0_LIBRARY_SIZE)
+    assert a_ids == b_ids
+
+
+def test_shuffle_library_with_external_rng_none_falls_back_to_xorshift(
+    synthetic_state,
+):
+    """Backward compat: `rng=None` (or omitting the kwarg) keeps the
+    xorshift64 path bit-equivalent to pre-slice behavior."""
+    a = synthetic_state.clone_once()
+    b = synthetic_state.clone_once()
+
+    a.shuffle_library_with_seed(0, 42)
+    b.shuffle_library_with_seed(0, 42, rng=None)
+
+    a_ids = _library_obj_ids(a, 0, P0_LIBRARY_SIZE)
+    b_ids = _library_obj_ids(b, 0, P0_LIBRARY_SIZE)
+    assert a_ids == b_ids
+
+
+def test_search_library_and_move_to_hand_with_external_rng_matches_python_shuffle(
+    synthetic_state,
+):
+    """The post-search shuffle in `search_library_and_move_to_hand`
+    routes through the external rng when supplied. Compare the
+    post-shuffle library against a Python reference that does the
+    same remove + `random.Random(seed).shuffle` on obj_ids.
+    """
+    import random
+
+    pre_ids = _library_obj_ids(synthetic_state, 0, P0_LIBRARY_SIZE)
+
+    # Python reference: remove the first Forest then shuffle.
+    py_ids = list(pre_ids)
+    # First match for FOREST_PID = id 17 (lib[0]), per the synthetic
+    # state's id allocation.
+    py_ids.remove(P0_FIRST_LIBRARY_ID)
+    random.Random(2026).shuffle(py_ids)
+
+    found = synthetic_state.search_library_and_move_to_hand(
+        0, FOREST_PID, 0, rng=random.Random(2026)
+    )
+    assert found == P0_FIRST_LIBRARY_ID
+    rust_ids = _library_obj_ids(synthetic_state, 0, P0_LIBRARY_SIZE - 1)
+    assert rust_ids == py_ids
+
+
+def test_search_library_and_move_to_hand_with_external_rng_failed_search_still_shuffles(
+    synthetic_state,
+):
+    """Per CR 701.18, a failed search still shuffles. Confirm the
+    external-rng path triggers the shuffle even when no match is
+    found."""
+    import random
+
+    pre_ids = _library_obj_ids(synthetic_state, 0, P0_LIBRARY_SIZE)
+    py_ids = list(pre_ids)
+    random.Random(7).shuffle(py_ids)
+
+    # printing_id 99 is not in the library; search misses.
+    found = synthetic_state.search_library_and_move_to_hand(
+        0, 99, 0, rng=random.Random(7)
+    )
+    assert found is None
+    rust_ids = _library_obj_ids(synthetic_state, 0, P0_LIBRARY_SIZE)
+    assert rust_ids == py_ids
+
+
+def test_search_library_and_move_to_hand_with_external_rng_none_falls_back(
+    synthetic_state,
+):
+    """Backward compat for `search_library_and_move_to_hand`: omitting
+    `rng` (or passing `rng=None`) keeps the xorshift64 path bit-equal."""
+    a = synthetic_state.clone_once()
+    b = synthetic_state.clone_once()
+
+    a.search_library_and_move_to_hand(0, FOREST_PID, 42)
+    b.search_library_and_move_to_hand(0, FOREST_PID, 42, rng=None)
+
+    a_ids = _library_obj_ids(a, 0, P0_LIBRARY_SIZE - 1)
+    b_ids = _library_obj_ids(b, 0, P0_LIBRARY_SIZE - 1)
+    assert a_ids == b_ids
+
+
+def test_search_library_for_first_of_type_and_shuffle_with_external_rng_matches_python(
+    synthetic_state,
+):
+    """The post-search shuffle in
+    `search_library_for_first_of_type_and_shuffle` routes through the
+    external rng when supplied. Reference: Python remove-the-first-Land
+    + `random.Random(seed).shuffle` on obj_ids."""
+    import random
+
+    pre_ids = _library_obj_ids(synthetic_state, 0, P0_LIBRARY_SIZE)
+
+    # First Land match in library = lib[0] = id 17 (the entire library
+    # is Forest in the synthetic state).
+    py_ids = list(pre_ids)
+    py_ids.remove(P0_FIRST_LIBRARY_ID)
+    random.Random(2026).shuffle(py_ids)
+
+    found = synthetic_state.search_library_for_first_of_type_and_shuffle(
+        0, "Land", 0, rng=random.Random(2026)
+    )
+    assert found == P0_FIRST_LIBRARY_ID
+    rust_ids = _library_obj_ids(synthetic_state, 0, P0_LIBRARY_SIZE - 1)
+    assert rust_ids == py_ids
+
+
+def test_search_library_for_first_of_type_and_shuffle_with_external_rng_none_falls_back(
+    synthetic_state,
+):
+    """Backward compat: omitting `rng` keeps the xorshift64 path
+    bit-equal to passing `rng=None`."""
+    a = synthetic_state.clone_once()
+    b = synthetic_state.clone_once()
+
+    a.search_library_for_first_of_type_and_shuffle(0, "Land", 42)
+    b.search_library_for_first_of_type_and_shuffle(0, "Land", 42, rng=None)
+
+    a_ids = _library_obj_ids(a, 0, P0_LIBRARY_SIZE - 1)
+    b_ids = _library_obj_ids(b, 0, P0_LIBRARY_SIZE - 1)
+    assert a_ids == b_ids
+
+
+def test_shuffle_library_with_external_rng_is_deterministic(synthetic_state):
+    """Two clones + two fresh `random.Random(seed)` of the same seed
+    produce byte-identical libraries."""
+    import random
+
+    a = synthetic_state.clone_once()
+    b = synthetic_state.clone_once()
+    a.shuffle_library_with_seed(0, 0, rng=random.Random(99))
+    b.shuffle_library_with_seed(0, 0, rng=random.Random(99))
+    a_ids = _library_obj_ids(a, 0, P0_LIBRARY_SIZE)
+    b_ids = _library_obj_ids(b, 0, P0_LIBRARY_SIZE)
+    assert a_ids == b_ids
+
+
+def test_shuffle_library_with_external_rng_raises_on_invalid_rng(synthetic_state):
+    """Passing an object without `_randbelow` surfaces a Python-side
+    error (matches the substrate contract in `external_rng`)."""
+    with pytest.raises((AttributeError, TypeError)):
+        synthetic_state.shuffle_library_with_seed(0, 0, rng=42)
