@@ -6,10 +6,10 @@ This page is the rolling-progress snapshot for the Rust engine port's `Effect` e
 
 ## Headline numbers
 
-- **56 of 228 Python Effect classes covered (24.6%)** — by distinct-class count.
-- **454 of 690 per-card emissions covered (65.8%)** — weighted by how many cards each class appears on. This is the more load-bearing metric: high-frequency classes pull the bulk of cards into Rust even at low class-count coverage.
-- **58 Rust `Effect` variants** in `rust/src/cards.rs` today; 475 parser-claimed printings across the loaded pools.
-- **0 Rust variants without a Python counterpart** — the bridge is in sync with the Python vocabulary.
+- **65 of 228 Python Effect classes covered (28.5%)** — by distinct-class count.
+- **482 of 690 per-card emissions covered (69.9%)** — weighted by how many cards each class appears on. This is the more load-bearing metric: high-frequency classes pull the bulk of cards into Rust even at low class-count coverage.
+- **71 Rust `Effect` variants** in `rust/src/cards.rs` today; 475 parser-claimed printings across the loaded pools.
+- **WARNING: 3 Rust variant(s) with no Python counterpart**: `Effect::ChooseOneMode` -> `ChooseOneMode`, `Effect::GrantKeywordToTargetCreatureUntilEOT` -> `GrantKeywordToTargetCreatureUntilEOT`, `Effect::SetBasePTUntilEOT` -> `SetBasePTUntilEOT`. This indicates bridge drift — either Python emits the class under a different name, or the Rust variant is unused. Audit `RUST_TO_PYTHON_OVERRIDES` / `RUST_AHEAD_OF_POOL` in `scripts/measure_effect_coverage.py`.
 - **1 Rust variant(s) built ahead of the pool** (allowlisted in `RUST_AHEAD_OF_POOL`): `ScryN`. These have no pool card exercising them today and are NOT counted as orphans.
 
 ## Coverage by frequency tier
@@ -18,7 +18,7 @@ Python Effect classes are split by how many cards they appear on. The Rust port 
 
 ### Frequency >= 10 (14 classes)
 
-- Covered by Rust: **10 / 14** (71.4%)
+- Covered by Rust: **11 / 14** (78.6%)
 
 | Python class | Frequency | Rust support |
 |---|---:|---|
@@ -31,7 +31,7 @@ Python Effect classes are split by how many cards they appear on. The Rust port 
 | `PutPlusOneCounterOnSelf` | 16 | yes |
 | `Surveil` | 16 | yes |
 | `SearchLibraryForBasicLandTapped` | 15 | yes |
-| `EquipToTargetCreatureYouControl` | 14 | no |
+| `EquipToTargetCreatureYouControl` | 14 | yes |
 | `BecomeLandCreatureUEOT` | 13 | no |
 | `ModalChooseOne` | 13 | no |
 | `PumpSelfUntilEOT` | 12 | yes |
@@ -39,11 +39,11 @@ Python Effect classes are split by how many cards they appear on. The Rust port 
 
 ### Frequency 2-9 (53 classes)
 
-- Covered by Rust: **43 / 53** (81.1%)
+- Covered by Rust: **45 / 53** (84.9%)
 
 ### Frequency 1 (161 singletons)
 
-- Covered by Rust: **3 / 161** (1.9%)
+- Covered by Rust: **9 / 161** (5.6%)
 - The long tail is dominated by bespoke per-card classes; porting these to Rust before the generic vocabulary fills out would be poor return on investment.
 
 ## Rust variants and their Python counterparts
@@ -104,10 +104,23 @@ Python Effect classes are split by how many cards they appear on. The Rust port 
 | 52 | `Effect::OptionalSacArtifactForEffect` | `OptionalSacArtifactForEffect` | 2 |
 | 53 | `Effect::OwnerPutsTargetArtifactOrCreatureOnTopOrBottomOfLibrary` | `OwnerPutsTargetArtifactOrCreatureOnTopOrBottomOfLibrary` | 2 |
 | 54 | `Effect::AttachToTargetCreatureYouControl` | `AttachToTargetCreatureYouControl` | 5 |
-| 55 | `Effect::DestroyEnchantedPermanent` | `DestroyEnchantedPermanent` | 4 |
-| 56 | `Effect::TapEnchantedPermanent` | `TapEnchantedPermanent` | 2 |
-| 57 | `Effect::ExileTargetCreatureUntilSourceLeaves` | `ExileTargetCreatureUntilSourceLeaves` | 3 |
-| 58 | `Effect::ExileOpponentsNonlandPermanentUntilLeaves` | `ExileOpponentsNonlandPermanentUntilLeaves` | 4 |
+| 55 | `Effect::EquipToTargetCreatureYouControl` | `EquipToTargetCreatureYouControl` | 14 |
+| 56 | `Effect::DestroyEnchantedPermanent` | `DestroyEnchantedPermanent` | 4 |
+| 57 | `Effect::TapEnchantedPermanent` | `TapEnchantedPermanent` | 2 |
+| 58 | `Effect::ExileTargetCreatureUntilSourceLeaves` | `ExileTargetCreatureUntilSourceLeaves` | 3 |
+| 59 | `Effect::ExileOpponentsNonlandPermanentUntilLeaves` | `ExileOpponentsNonlandPermanentUntilLeaves` | 4 |
+| 60 | `Effect::MayDo` | `MayDo` | 4 |
+| 61 | `Effect::LookTopNPutOneInHandRestToGraveyard` | `LookTopNPutOneInHandRestToGraveyard` | 1 |
+| 62 | `Effect::ChooseOneMode` | `ChooseOneMode` | 0 |
+| 63 | `Effect::IfYouDo` | `IfYouDo` | 4 |
+| 64 | `Effect::EachOpponentMillsCards` | `EachOpponentMillsCards` | 1 |
+| 65 | `Effect::PumpTargetArtifactOrCreatureUntilEOT` | `PumpTargetArtifactOrCreatureUntilEOT` | 1 |
+| 66 | `Effect::EachOpponentSacrificesCreature` | `EachOpponentSacrificesCreature` | 1 |
+| 67 | `Effect::GrantKeywordToTargetCreatureUntilEOT` | `GrantKeywordToTargetCreatureUntilEOT` | 0 |
+| 68 | `Effect::UntapTargetOtherPermanent` | `UntapTargetOtherPermanent` | 1 |
+| 69 | `Effect::TapAnotherTargetCreature` | `TapAnotherTargetCreature` | 1 |
+| 70 | `Effect::ReturnAllCreaturesFromYourGraveyardToBattlefield` | `ReturnAllCreaturesFromYourGraveyardToBattlefield` | 1 |
+| 71 | `Effect::SetBasePTUntilEOT` | `SetBasePTUntilEOT` | 0 |
 
 ## High-frequency Python classes NOT yet in Rust
 
@@ -115,7 +128,6 @@ These are the next-best ports by cards-covered-per-variant and are the recommend
 
 | Python class | Frequency | Example card |
 |---|---:|---|
-| `EquipToTargetCreatureYouControl` | 14 | Atomic Microsizer |
 | `BecomeLandCreatureUEOT` | 13 | Blinkmoth Nexus |
 | `ModalChooseOne` | 13 | Archenemy's Charm |
 | `ManifestDread` | 10 | Bashful Beastie |
