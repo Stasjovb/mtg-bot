@@ -1390,23 +1390,26 @@ fn apply_effect(
         // inlined here per the per-slice file-isolation convention
         // every other arm in this file follows.
         //
-        // **Seed source — xorshift64 fallback only (Effect-rng
-        // threading deferred).** CE8 wired all 8 pymethod-surface
+        // **Seed source — `state.rng_ref()` external rng if set,
+        // xorshift64 fallback otherwise (Effect-rng-threading closure,
+        // G19 follow-up).** CE8 Slice 2 wired all 8 pymethod-surface
         // shuffle sites to consume an optional `rng: &Bound<PyAny>`
-        // kwarg, falling through to xorshift64 when `None`.
-        // `Effect::SearchLibraryForBasicLandTapped` resolves inside
-        // `apply_effect`, which does NOT yet thread an external rng
-        // through (no `rng` param on `apply_effect`,
-        // `resolve_top_of_stack`, or any of the dozens of intervening
-        // call sites). Closing that threading is a separate slice;
-        // for G19 we honor the CR 701.19 "always shuffle" invariant
-        // via the legacy xorshift64 path. Seed is derived
-        // deterministically from `(turn_number, active_player,
-        // source_obj_id, library_len)` — stable across reproducible
-        // runs of the same state machine, distinct enough across
-        // resolutions that the same library doesn't get the same
-        // permutation twice in one game. Cross-engine MT parity for
-        // THIS Effect is deferred — see SEARCH_LIMITATIONS entry.
+        // kwarg, falling through to xorshift64 when `None`. The
+        // Effect-rng-threading closure extends that substrate to the
+        // single Effect arm that consumes randomness today
+        // (`Effect::SearchLibraryForBasicLandTapped`) by stashing the
+        // optional `random.Random` on `GameState.rng` (caller-set via
+        // `set_external_rng`) rather than threading a parameter
+        // through every intervening call site
+        // (`apply_effect` / `resolve_top_of_stack` / etc — Option A in
+        // `docs/RUST_EFFECT_RNG_AUDIT.md`). When `state.rng_ref()` is
+        // `Some(py_rng)`, the post-search Fisher-Yates reads draws via
+        // `external_rng::next_below(py_rng, n)` → byte-identical to
+        // Python's `random.Random.shuffle(list)`. When `None`, the
+        // legacy xorshift64 path runs — seed derived deterministically
+        // from `(turn_number, active_player, source_obj_id,
+        // library_len)`, stable across reruns of the same starting
+        // state.
         //
         // **count<0 raises** loudly (defense-in-depth; parse_effect
         // catches this at register time). **count=0 is a legal no-op**
@@ -1494,48 +1497,74 @@ fn apply_effect(
             // G19 closure: CR 701.19 / 701.22 — always shuffle the
             // library after a search, whether or not a card was
             // found (the early-`break` above on no-match falls
-            // through to here too). Inlined Fisher-Yates over
-            // xorshift64; seed mixes turn / active_player /
+            // through to here too). Effect-rng-threading closure:
+            // route through `state.rng_ref()` when set (external
+            // Python `random.Random`), fall back to inlined
+            // xorshift64 otherwise; seed mixes turn / active_player /
             // source_obj_id / library_len for determinism within a
             // run without giving identical permutations across
-            // separate searches in the same game. See arm-head
-            // comment for the rng-threading deferral rationale.
+            // separate searches in the same game.
             let lib_len = state.players[controller_idx].library.len();
             if lib_len >= 2 {
-                // xorshift64 seed: distinct per (turn, ap, source,
-                // lib_len) tuple. The zero-collapse defense matches
-                // every other xorshift site in the engine.
-                let mut seed = (state.turn_number as u64)
-                    .wrapping_mul(0x9E37_79B9_7F4A_7C15)
-                    ^ ((state.active_player as u64) << 56)
-                    ^ ((source_obj_id as u64) << 16)
-                    ^ (lib_len as u64);
-                if seed == 0 {
-                    seed = 0xdead_beef_dead_beef;
-                }
-                let player = &mut state.players[controller_idx];
-                let lib = Arc::make_mut(&mut player.library);
-                let n = lib.len();
-                let mut x = seed;
-                for i in (1..n).rev() {
-                    // xorshift64 step.
-                    x ^= x << 13;
-                    x ^= x >> 7;
-                    x ^= x << 17;
-                    // Rejection-sample to an unbiased index in
-                    // [0, i+1). i+1 <= library size (~100), so the
-                    // rejection-rate cost is negligible.
-                    let n_u64 = (i + 1) as u64;
-                    let bound = u64::MAX - (u64::MAX % n_u64);
-                    let mut r = x;
-                    while r >= bound {
-                        r ^= r << 13;
-                        r ^= r >> 7;
-                        r ^= r << 17;
-                        x = r;
+                // Effect-rng path: consume from the stashed Python
+                // `random.Random` if the caller installed one via
+                // `set_external_rng`. We extract the `Py<PyAny>` into
+                // an owned reference BEFORE taking the `&mut
+                // self.players[..]` borrow so the rng borrow doesn't
+                // conflict with the mutable-zone borrow that
+                // `Arc::make_mut` produces below.
+                let py_rng_owned: Option<Py<PyAny>> = state
+                    .rng_ref()
+                    .map(|r| Python::with_gil(|py| r.clone_ref(py)));
+                if let Some(py_rng) = py_rng_owned {
+                    let player = &mut state.players[controller_idx];
+                    let lib = Arc::make_mut(&mut player.library);
+                    let n = lib.len();
+                    Python::with_gil(|py| -> PyResult<()> {
+                        let bound = py_rng.bind(py);
+                        for i in (1..n).rev() {
+                            let j = crate::external_rng::next_below(bound, i + 1)?;
+                            lib.swap(i, j);
+                        }
+                        Ok(())
+                    })?;
+                } else {
+                    // xorshift64 fallback: distinct seed per (turn,
+                    // ap, source, lib_len) tuple. The zero-collapse
+                    // defense matches every other xorshift site in
+                    // the engine.
+                    let mut seed = (state.turn_number as u64)
+                        .wrapping_mul(0x9E37_79B9_7F4A_7C15)
+                        ^ ((state.active_player as u64) << 56)
+                        ^ ((source_obj_id as u64) << 16)
+                        ^ (lib_len as u64);
+                    if seed == 0 {
+                        seed = 0xdead_beef_dead_beef;
                     }
-                    let j = (r % n_u64) as usize;
-                    lib.swap(i, j);
+                    let player = &mut state.players[controller_idx];
+                    let lib = Arc::make_mut(&mut player.library);
+                    let n = lib.len();
+                    let mut x = seed;
+                    for i in (1..n).rev() {
+                        // xorshift64 step.
+                        x ^= x << 13;
+                        x ^= x >> 7;
+                        x ^= x << 17;
+                        // Rejection-sample to an unbiased index in
+                        // [0, i+1). i+1 <= library size (~100), so the
+                        // rejection-rate cost is negligible.
+                        let n_u64 = (i + 1) as u64;
+                        let bound = u64::MAX - (u64::MAX % n_u64);
+                        let mut r = x;
+                        while r >= bound {
+                            r ^= r << 13;
+                            r ^= r >> 7;
+                            r ^= r << 17;
+                            x = r;
+                        }
+                        let j = (r % n_u64) as usize;
+                        lib.swap(i, j);
+                    }
                 }
             }
         }

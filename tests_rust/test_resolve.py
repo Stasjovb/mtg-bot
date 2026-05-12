@@ -4333,6 +4333,231 @@ def test_resolve_search_library_for_basic_land_tapped_shuffle_is_deterministic(
     )
 
 
+# --- Effect-rng-threading closure (G19 follow-up) -------------------
+#
+# **Effect::SearchLibraryForBasicLandTapped consumes the state-stashed
+# external rng.** Caller installs a Python `random.Random` via
+# `state.set_external_rng(rng)`; the post-search Fisher-Yates reads
+# draws via `_randbelow`, producing byte-identical permutations to
+# what `random.Random.shuffle(list)` produces on the Python side.
+# Mirrors the CE8 Slice 2 substrate established for the 8 pymethod-
+# surface shuffle sites (I41), but plumbed via a stashed field on
+# GameState rather than a per-call kwarg (avoids signature churn
+# through `apply_effect`/`resolve_top_of_stack`/etc — Option A in
+# `docs/RUST_EFFECT_RNG_AUDIT.md`).
+
+
+def test_resolve_search_library_for_basic_land_tapped_external_rng_matches_python_shuffle(
+    synthetic_state,
+):
+    """When `set_external_rng(random.Random(seed))` is installed before
+    resolution, the post-search library order matches what Python's
+    `random.Random(seed).shuffle(obj_ids)` produces byte-for-byte.
+
+    The synthetic seed has p0's library at ids 17..66 in push-order
+    (id 17 = top). After a count=1 search that pulls id 17 to the
+    battlefield, the remaining 49 ids [18..66] are Fisher-Yates'd via
+    the threaded rng. The Python reference shuffles [18..67) with a
+    fresh `random.Random(seed)` and reads back the post-shuffle list.
+    """
+    import random
+
+    spell_obj_id = synthetic_state.register_and_inject_object(
+        _rampant_growth_dict(count=1), 0, ZONE_HAND
+    )
+    # Python reference: build the expected post-search library by
+    # removing id 17 (top of library = searched land) and shuffling
+    # the remaining ids with a fresh `random.Random(seed)`. The
+    # `external_rng::next_below` callback consumes `_randbelow(n)`
+    # draws in the exact pattern `random.Random.shuffle` uses, so the
+    # post-resolve Rust library reads the same order Python's shuffle
+    # produces.
+    seed = 2026
+    py_remaining = list(range(18, 67))
+    random.Random(seed).shuffle(py_remaining)
+
+    synthetic_state.set_external_rng(random.Random(seed))
+    synthetic_state.push_to_stack(spell_obj_id, 0)
+    synthetic_state.resolve_top_of_stack()
+
+    post_ids = [snap["id"] for snap in synthetic_state.library_snapshot(0)]
+    assert post_ids == py_remaining, (
+        "Effect-rng-threading: SearchLibraryForBasicLandTapped's post-"
+        "search shuffle must match `random.Random(seed).shuffle` byte-"
+        "for-byte when the rng is set via `set_external_rng`."
+    )
+
+
+def test_resolve_search_library_for_basic_land_tapped_external_rng_none_falls_back_to_xorshift(
+    engine,
+):
+    """Backward compat: with no rng set (or `set_external_rng(None)`),
+    the resolve arm falls back to the legacy xorshift64 path — same
+    output as a state that never had `set_external_rng` called at all.
+    Pins that production cli/bench callers (which never install an
+    external rng) remain on the deterministic xorshift64 path.
+    """
+    state_a = engine.make_synthetic_state(num_battlefield=0, num_hand=1, num_library=50)
+    state_b = engine.make_synthetic_state(num_battlefield=0, num_hand=1, num_library=50)
+
+    # state_a: never call set_external_rng (default None).
+    # state_b: explicitly call set_external_rng(None).
+    state_b.set_external_rng(None)
+
+    obj_id_a = state_a.register_and_inject_object(
+        _rampant_growth_dict(count=1), 0, ZONE_HAND
+    )
+    obj_id_b = state_b.register_and_inject_object(
+        _rampant_growth_dict(count=1), 0, ZONE_HAND
+    )
+    assert obj_id_a == obj_id_b
+
+    state_a.push_to_stack(obj_id_a, 0)
+    state_a.resolve_top_of_stack()
+    state_b.push_to_stack(obj_id_b, 0)
+    state_b.resolve_top_of_stack()
+
+    ids_a = [snap["id"] for snap in state_a.library_snapshot(0)]
+    ids_b = [snap["id"] for snap in state_b.library_snapshot(0)]
+    assert ids_a == ids_b, (
+        "set_external_rng(None) must be byte-equivalent to never having "
+        "set it — both stay on the xorshift64 fallback path."
+    )
+
+
+def test_resolve_search_library_for_basic_land_tapped_external_rng_differs_from_xorshift(
+    engine,
+):
+    """Sanity check that the two paths actually differ: installing an
+    external rng produces a DIFFERENT permutation than the xorshift64
+    fallback (overwhelmingly likely — the two PRNGs share no algebraic
+    relationship, so collision is birthday-style improbable).
+    """
+    import random
+
+    state_xs = engine.make_synthetic_state(
+        num_battlefield=0, num_hand=1, num_library=50
+    )
+    state_rng = engine.make_synthetic_state(
+        num_battlefield=0, num_hand=1, num_library=50
+    )
+    state_rng.set_external_rng(random.Random(7))
+
+    obj_id_xs = state_xs.register_and_inject_object(
+        _rampant_growth_dict(count=1), 0, ZONE_HAND
+    )
+    obj_id_rng = state_rng.register_and_inject_object(
+        _rampant_growth_dict(count=1), 0, ZONE_HAND
+    )
+
+    state_xs.push_to_stack(obj_id_xs, 0)
+    state_xs.resolve_top_of_stack()
+    state_rng.push_to_stack(obj_id_rng, 0)
+    state_rng.resolve_top_of_stack()
+
+    ids_xs = [snap["id"] for snap in state_xs.library_snapshot(0)]
+    ids_rng = [snap["id"] for snap in state_rng.library_snapshot(0)]
+    # Both paths preserve the multiset (49 ids, all in [18..66]).
+    assert sorted(ids_xs) == sorted(ids_rng)
+    # But the orderings differ (the two PRNGs produce different
+    # permutations of the same multiset).
+    assert ids_xs != ids_rng, (
+        "The external-rng path must differ from the xorshift64 fallback "
+        "— they're independent PRNG streams."
+    )
+
+
+def test_resolve_search_library_for_basic_land_tapped_external_rng_preserved_across_clone(
+    synthetic_state,
+):
+    """`GameState.clone()` (via `clone_once`) preserves the stashed rng
+    reference — the cloned state shares the SAME `random.Random`
+    instance (Python refcount bump). Pins the manual `Clone` impl on
+    `GameState` that this slice introduced.
+
+    A clone made post-`set_external_rng` must carry the rng forward,
+    observable by running an Effect-rng-consuming resolution on it and
+    confirming the post-resolve library matches what `random.Random(seed)`
+    would have produced.
+    """
+    import random
+
+    seed = 99
+    synthetic_state.set_external_rng(random.Random(seed))
+
+    # Clone BEFORE resolving — the clone inherits the rng. The clone's
+    # rng is a fresh `random.Random(seed)` via the `clone_ref` Python
+    # refcount bump on the same instance; consuming on the clone
+    # advances that shared instance.
+    state_cloned = synthetic_state.clone_once()
+
+    obj_id = state_cloned.register_and_inject_object(
+        _rampant_growth_dict(count=1), 0, ZONE_HAND
+    )
+    state_cloned.push_to_stack(obj_id, 0)
+    state_cloned.resolve_top_of_stack()
+
+    # Post-resolve library must match what `random.Random(seed).shuffle`
+    # produces over the remaining 49 ids (top-of-library = id 17 was
+    # searched into bf; ids 18..66 remain).
+    py_remaining = list(range(18, 67))
+    random.Random(seed).shuffle(py_remaining)
+
+    cloned_ids = [snap["id"] for snap in state_cloned.library_snapshot(0)]
+    assert cloned_ids == py_remaining, (
+        "Clone preserves the rng reference — the cloned state's "
+        "post-resolve shuffle reads from the same rng instance."
+    )
+
+
+def test_resolve_search_library_for_basic_land_tapped_external_rng_clone_isolation(
+    synthetic_state,
+):
+    """The rng is SHARED across clones (one Python `random.Random`
+    instance, refcount bumped), so two clones that BOTH resolve a
+    rng-consuming Effect see consecutive (not identical) draws from the
+    same stream. Pins the "caller-owned bookkeeping" semantic: clone
+    isolation on Vec / Arc zones, but ref-shared on the rng.
+
+    The cross-engine smoke harness depends on this (one rng per game
+    consumed by both engines); MCTS-style forking that needs
+    independent streams must reset via `set_external_rng(None)` on
+    the forked branch — documented in the GameState.rng field doc.
+    """
+    import random
+
+    seed = 42
+    synthetic_state.set_external_rng(random.Random(seed))
+
+    state_a = synthetic_state.clone_once()
+    state_b = synthetic_state.clone_once()
+
+    obj_id_a = state_a.register_and_inject_object(
+        _rampant_growth_dict(count=1), 0, ZONE_HAND
+    )
+    obj_id_b = state_b.register_and_inject_object(
+        _rampant_growth_dict(count=1), 0, ZONE_HAND
+    )
+    assert obj_id_a == obj_id_b
+
+    state_a.push_to_stack(obj_id_a, 0)
+    state_a.resolve_top_of_stack()
+    state_b.push_to_stack(obj_id_b, 0)
+    state_b.resolve_top_of_stack()
+
+    ids_a = [snap["id"] for snap in state_a.library_snapshot(0)]
+    ids_b = [snap["id"] for snap in state_b.library_snapshot(0)]
+    # Both libraries are valid permutations of the same 49 ids.
+    assert sorted(ids_a) == sorted(ids_b)
+    # But because the rng is SHARED, state_b's shuffle consumed the
+    # draws state_a hadn't yet consumed — different orderings.
+    assert ids_a != ids_b, (
+        "rng is clone_ref'd (shared instance); back-to-back resolves "
+        "on two clones consume CONSECUTIVE draws from the same rng "
+        "stream, producing different post-resolve permutations."
+    )
+
+
 # --- round-23 PutPlusOneCounterOnSelf dispatch ----------------------
 #
 # **PutPlusOneCounterOnSelf scope** (mirrored in the Rust module

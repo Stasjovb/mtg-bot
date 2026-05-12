@@ -828,3 +828,149 @@ def test_cross_engine_gameplay_shuffles_walk_clean_for_multiple_seeds():
         state.shuffle_library_with_seed(0, 0, rng=random.Random(seed))
         post_ids = [d["id"] for d in state.library_snapshot(0)]
         assert post_ids == ref, f"seed={seed}: post={post_ids!r} != ref={ref!r}"
+
+
+# ---------------------------------------------------------------------------
+# Effect-rng-threading closure (G19 follow-up) — cross-engine MT parity
+# for ``Effect::SearchLibraryForBasicLandTapped``'s post-search shuffle.
+#
+# Extends the CE8 substrate from the 8 pymethod-surface shuffle sites (I41)
+# to the single Effect arm that consumes randomness today. Caller installs
+# a Python ``random.Random`` via ``state.set_external_rng(rng)``; the
+# post-search Fisher-Yates reads draws via ``_randbelow``, producing
+# byte-identical permutations to ``random.Random.shuffle(list)``.
+#
+# Today Python's ``SearchLibraryForBasicLandTapped.resolve`` does NOT
+# shuffle (Stage-3 simplification documented in SEARCH_LIMITATIONS
+# entry 15) — so a direct cross-engine library-comparison still
+# diverges. The pin below compares Rust against the canonical Python MT
+# reference (``random.Random(seed).shuffle``); when the Python-side fix
+# lands, the same reference will match both engines.
+# ---------------------------------------------------------------------------
+
+
+def test_cross_engine_search_library_for_basic_land_tapped_external_rng_matches_python_mt():
+    """Effect-rng-threading: with ``set_external_rng(random.Random(seed))``
+    installed, ``Effect::SearchLibraryForBasicLandTapped``'s post-search
+    Fisher-Yates produces a library order bit-identical to what Python's
+    ``random.Random(seed).shuffle(remaining_obj_ids)`` produces.
+
+    Pins the new ``state.rng_ref()`` substrate consumed inside
+    ``apply_effect``: now that the Effect arm routes through the shared
+    rng, the cross-engine MT parity holds at the post-search-shuffle
+    step (which the legacy xorshift64 path could not deliver).
+    """
+    import random
+    import mtg_bot_engine
+
+    # Build a deterministic Rust state with a known library of distinct
+    # Forest objects so per-card library order is individually pinnable.
+    reg = mtg_bot_engine.Registry()
+    forest_pids = []
+    for i in range(20):
+        pid = reg.register_printing({
+            "name": f"Forest_{i}",
+            "card_types": ["Land"],
+            "mana_cost": {},
+            "effects": [],
+            "mana_produced": ["G"],
+        })
+        forest_pids.append(pid)
+    state = mtg_bot_engine.make_state(
+        reg, list(forest_pids), list(forest_pids)
+    )
+    pre_ids = [d["id"] for d in state.library_snapshot(0)]
+    assert len(pre_ids) == 20
+
+    # Inject a Sorcery whose effect is
+    # SearchLibraryForBasicLandTapped(count=1). The post-resolve mover
+    # sends the Sorcery to graveyard; the search arm removes the topmost
+    # Land (lib[0]) and shuffles the remainder.
+    seed = 2026
+    state.set_external_rng(random.Random(seed))
+    spell_obj_id = state.register_and_inject_object(
+        {
+            "name": "Test Rampant Growth",
+            "card_types": ["Sorcery"],
+            "effects": [
+                {
+                    "kind": "search_library_for_basic_land_tapped",
+                    "count": 1,
+                }
+            ],
+        },
+        0,  # controller
+        0,  # ZONE_HAND (zones: HAND=0, LIBRARY=1, BATTLEFIELD=2, GRAVEYARD=3)
+    )
+    state.push_to_stack(spell_obj_id, 0)
+
+    # Python MT reference: remove the topmost library id (pre_ids[0]
+    # — the searched land), then `random.Random(seed).shuffle` on the
+    # remaining 19 ids.
+    ref = list(pre_ids)
+    ref.remove(pre_ids[0])
+    random.Random(seed).shuffle(ref)
+
+    state.resolve_top_of_stack()
+
+    post_ids = [d["id"] for d in state.library_snapshot(0)]
+    assert post_ids == ref, (
+        "Effect-rng-threading: SearchLibraryForBasicLandTapped's post-"
+        "search shuffle must match `random.Random(seed).shuffle` byte-"
+        f"for-byte under the threaded external rng. got={post_ids!r}, "
+        f"ref={ref!r}"
+    )
+
+
+def test_cross_engine_search_library_for_basic_land_tapped_shared_rng_walks_clean_for_multiple_seeds():
+    """Multi-seed robustness for the Effect-rng-threading substrate.
+    Mirrors the multi-seed companion shapes for I41's gameplay
+    shuffles. Pins that the Effect arm's external-rng path is stable
+    across seeds, not just lucky on one seed.
+    """
+    import random
+    import mtg_bot_engine
+
+    for seed in (1, 7, 42, 100):
+        reg = mtg_bot_engine.Registry()
+        forest_pids = []
+        for i in range(20):
+            pid = reg.register_printing({
+                "name": f"Forest_{i}",
+                "card_types": ["Land"],
+                "mana_cost": {},
+                "effects": [],
+                "mana_produced": ["G"],
+            })
+            forest_pids.append(pid)
+        state = mtg_bot_engine.make_state(
+            reg, list(forest_pids), list(forest_pids)
+        )
+        pre_ids = [d["id"] for d in state.library_snapshot(0)]
+        state.set_external_rng(random.Random(seed))
+        spell_obj_id = state.register_and_inject_object(
+            {
+                "name": "Test Rampant Growth",
+                "card_types": ["Sorcery"],
+                "effects": [
+                    {
+                        "kind": "search_library_for_basic_land_tapped",
+                        "count": 1,
+                    }
+                ],
+            },
+            0,  # controller
+            0,  # ZONE_HAND
+        )
+        state.push_to_stack(spell_obj_id, 0)
+
+        ref = list(pre_ids)
+        ref.remove(pre_ids[0])
+        random.Random(seed).shuffle(ref)
+
+        state.resolve_top_of_stack()
+        post_ids = [d["id"] for d in state.library_snapshot(0)]
+        assert post_ids == ref, (
+            f"seed={seed}: Effect-rng-threading post-search shuffle "
+            f"mismatch. got={post_ids!r}, ref={ref!r}"
+        )

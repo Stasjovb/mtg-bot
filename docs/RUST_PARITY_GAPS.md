@@ -192,6 +192,22 @@ Implementing this slice requires plumbing an
 surface, not justified by G19 alone, but worthwhile when more
 search-then-shuffle Effects join the parity smoke under shared rng.
 
+**Effect-rng-threading closure** (`feature/effect-rng-threading`).
+The cross-engine MT parity deferral above is now closed via Option
+A from `docs/RUST_EFFECT_RNG_AUDIT.md` §4: rather than threading an
+rng parameter through every intervening call site, the rng is
+stashed on `GameState.rng: Option<Py<PyAny>>` (caller-set via the
+new `set_external_rng(rng)` pymethod). The Effect arm reads
+`state.rng_ref()` before its Fisher-Yates loop; when `Some(_)`, it
+consumes draws via `external_rng::next_below` (byte-identical to
+`random.Random.shuffle`); when `None`, it falls back to xorshift64
+(byte-equivalent to pre-closure behavior). Cross-engine smoke now
+sees byte-identical post-search library order under a shared
+`random.Random`. See invariant I43 below for the field lifecycle
+(caller-owned, not serialized into fingerprint, clone-preserved via
+manual `Clone` impl). See the closure notice in
+`SEARCH_LIMITATIONS.md` entry 16.
+
 **Pinning tests** (`tests_rust/test_resolve.py`):
 - `test_resolve_search_library_for_basic_land_tapped_shuffles_library` —
   asserts the post-resolve library is NOT the sequential
@@ -2827,10 +2843,16 @@ get the same permutation twice.
   — asserts two clone-equal starting states produce the same
   post-search library permutation (seed derivation is pure-state).
 
-**Cross-engine MT parity for this Effect is deferred.** A follow-up
-slice can thread `Option<&Bound<'_, PyAny>>` through `apply_effect`
-and unify this site with I41's substrate; tracked in
-`SEARCH_LIMITATIONS.md`'s G19-follow-up entry.
+**Cross-engine MT parity for this Effect was deferred and is now
+closed.** The `feature/effect-rng-threading` slice extended the I41
+substrate to this arm via `GameState.rng: Option<Py<PyAny>>` (Option
+A from `docs/RUST_EFFECT_RNG_AUDIT.md` §4). When the caller installs
+a `random.Random` via `set_external_rng`, the post-search Fisher-
+Yates reads draws via `external_rng::next_below`, producing byte-
+identical permutations to `random.Random.shuffle(list)` on the
+Python side. When unset (production cli / bench), the xorshift64
+path above runs unchanged. See invariant I43 below for the
+`GameState.rng` lifecycle contract.
 
 - **Pinned by**:
   `tests/test_parity_smoke_edge_cases.py::test_cross_engine_shuffle_seed_walks_clean`
@@ -2891,6 +2913,77 @@ and unify this site with I41's substrate; tracked in
   Option 2 is the architecturally correct shape but is a substrate
   slice; schedule when CE5 (cast-vs-resolve) closure lands and the
   cadence has room for substrate work.
+
+### I43. `GameState.rng` — caller-owned external rng for in-Effect shuffles; set via `set_external_rng`, consumed by `Effect::SearchLibraryForBasicLandTapped`, NOT serialized into fingerprint, clone-preserved via manual `Clone` impl
+
+Post-`feature/effect-rng-threading` (this slice), `GameState`
+carries an `rng: Option<Py<PyAny>>` field with the following
+lifecycle contract:
+
+**Set / clear surface.** The
+`GameState.set_external_rng(rng: Option<&Bound<'_, PyAny>>)`
+pymethod installs (or clears) the rng. Caller-owned: the parity
+harness and cross-engine smoke tests opt in once per game by
+passing a Python `random.Random` instance; production cli / bench
+callers leave it unset and stay on the xorshift64 fallback.
+
+**Consumer surface.** Today the only consumer is
+`Effect::SearchLibraryForBasicLandTapped`'s post-search Fisher-
+Yates (see I42). The arm reads `state.rng_ref()` immediately
+before the in-arm shuffle loop; on `Some(_)`, the loop swaps
+indices drawn via `crate::external_rng::next_below(py_rng, n)`
+(byte-identical to `random.Random.shuffle(list)`'s
+`_randbelow(n)` consumption shape). On `None`, the legacy
+xorshift64 fallback runs. Additional Effect arms that grow rng
+consumers (the deferred-shuffle `Effect::SearchLibraryForCard`
+per `docs/RUST_EFFECT_RNG_AUDIT.md` §5 E2; any future "random
+discard" / "random ordering" Effects) plug into the same
+substrate by reading `state.rng_ref()` at their resolve site.
+
+**NOT serialized into the fingerprint.** Like `mulligan_count`,
+`consecutive_passes`, `next_etb_timestamp`, and
+`winner_id_sticky`, the rng field is bookkeeping state, not
+gameplay-relevant state. Two `GameState`s with the same
+observable shape produce identical fingerprints regardless of
+whether/which `random.Random` is stashed on either of them. Pinned
+baselines stay bit-equal — production pinned-fingerprint tests
+that never call `set_external_rng` see no shift, and a test that
+DOES call `set_external_rng` followed by no shuffle-consuming
+Effect also sees no shift.
+
+**Clone semantics.** `GameState` ships a manual `Clone` impl
+(rather than `#[derive(Clone)]`) because PyO3 0.23's
+`Py<T>::Clone` requires the `py-clone` feature, which globally
+panics any clone-without-GIL site — too sharp an edge for a struct
+that already clones cheaply at MCTS rates. The manual impl
+explicitly enters `Python::with_gil` and `clone_ref`s the stashed
+rng (Python refcount bump). All `GameState::clone` call sites
+today run under the GIL (every pymethod entry, plus the implicit
+clones in fingerprint paths), so the GIL acquisition is a no-op
+token-handoff at runtime.
+
+**Two clones share the SAME `random.Random` instance.** This is
+correct for the cross-engine smoke use case (one rng per game,
+consumed by both engines); MCTS-style search-tree forking that
+needs independent rng streams must `set_external_rng(None)` on
+the forked branch.
+
+**Pinned by**:
+- `tests_rust/test_resolve.py::test_resolve_search_library_for_basic_land_tapped_external_rng_matches_python_shuffle`
+  — Effect arm consumes from the stashed rng on resolve.
+- `tests_rust/test_resolve.py::test_resolve_search_library_for_basic_land_tapped_external_rng_none_falls_back_to_xorshift`
+  — `set_external_rng(None)` is byte-equivalent to never setting.
+- `tests_rust/test_resolve.py::test_resolve_search_library_for_basic_land_tapped_external_rng_differs_from_xorshift`
+  — external rng path produces a distinct permutation from
+  xorshift64.
+- `tests_rust/test_resolve.py::test_resolve_search_library_for_basic_land_tapped_external_rng_preserved_across_clone`
+  — clone preserves the rng reference.
+- `tests_rust/test_resolve.py::test_resolve_search_library_for_basic_land_tapped_external_rng_clone_isolation`
+  — clones share the rng instance (consecutive draws).
+- `tests/test_parity_smoke_edge_cases.py::test_cross_engine_search_library_for_basic_land_tapped_external_rng_matches_python_mt`
+  — cross-engine MT byte-for-byte parity under shared rng.
+- `tests/test_parity_smoke_edge_cases.py::test_cross_engine_search_library_for_basic_land_tapped_shared_rng_walks_clean_for_multiple_seeds`
+  — multi-seed robustness companion.
 
 ### ~~CE9.~~ CLOSED: Combat damage assignment walks battlefield in bf-ETB order via shared `bf_iter_etb_sorted` helper
 
