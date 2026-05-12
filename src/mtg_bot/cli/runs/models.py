@@ -24,7 +24,34 @@ STATUSES = ("running", "completed", "failed", "killed")
 
 @dataclass
 class Run:
-    """A row from the ``runs`` table."""
+    """A row from the ``runs`` table.
+
+    Additive columns (all nullable except ``stop_requested``, which
+    defaults to ``False`` / 0):
+
+    - ``pid`` — producer process ID. Lets a future force-kill button
+      actually terminate the process; ``None`` on rows that predate
+      the producer-pid plumbing.
+    - ``host`` — hostname of the producer (typically a tailnet name
+      like ``desktop-j05412i`` or ``greggs-macbook-pro``). The master
+      can't ``Stop-Process`` a remote producer; a force-kill SSHs to
+      ``host`` and uses ``pid``.
+    - ``training_history_json`` — opaque JSON blob holding
+      ``mtg_bot train``'s per-epoch ``train_losses[]`` /
+      ``val_losses[]`` arrays. Today these live only in the
+      producer's progress JSON; once ``train`` is wired through the
+      run lifecycle, they go here.
+    - ``last_progress_at`` — ISO-8601 timestamp of the most recent
+      progress upsert. Auto-stamped by the DB layer on every
+      ``upsert_progress`` so callers don't pass it. Powers a future
+      janitor that marks rows ``status='running' AND
+      last_progress_at < now-6h`` as ``killed``.
+    - ``stop_requested`` — soft flag set when the UI's Force-Kill
+      endpoint is hit or a ``.STOP_<run_id>`` sentinel is detected.
+      Producers poll this (in addition to / instead of the file
+      sentinel). ``False`` (0) by default; flipped via
+      ``db.set_stop_requested`` / ``client.set_stop_requested``.
+    """
 
     run_id: str
     kind: str
@@ -36,6 +63,11 @@ class Run:
     parent_run_id: Optional[str] = None
     label: Optional[str] = None
     notes: Optional[str] = None
+    pid: Optional[int] = None
+    host: Optional[str] = None
+    training_history_json: Optional[str] = None
+    last_progress_at: Optional[str] = None
+    stop_requested: bool = False
 
 
 @dataclass

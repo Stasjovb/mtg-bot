@@ -682,6 +682,8 @@ def create_app(
                 config_json=data["config_json"],
                 parent_run_id=data.get("parent_run_id"),
                 label=data.get("label"),
+                pid=data.get("pid"),
+                host=data.get("host"),
             )
         except KeyError as exc:
             return jsonify({"error": f"missing field: {exc}"}), 400
@@ -791,6 +793,33 @@ def create_app(
             finally:
                 conn.close()
         return jsonify({"ok": True, "run_id": run_id})
+
+    @app.route("/run/<run_id>/stop_request", methods=["POST"])
+    def run_stop_request(run_id: str):
+        """Flip the soft ``stop_requested`` flag on ``run_id``. Body:
+        ``{"value": bool}`` (optional; defaults to ``True``).
+
+        Hooks the UI's Force-Kill button: clicking it POSTs here,
+        which sets the DB flag; the producer polls the flag and
+        drains. Also reachable from any code path that detects a
+        ``.STOP_<run_id>`` sentinel and wants to mirror the request
+        into the DB.
+        """
+        if runs_db_path is None:
+            return _runs_db_disabled()
+        data = request.get_json(silent=True) or {}
+        value = bool(data.get("value", True))
+        with _runs_db.WRITE_LOCK:
+            conn = _runs_db.connect(runs_db_path)
+            try:
+                _runs_db.set_stop_requested(conn, run_id, value=value)
+            finally:
+                conn.close()
+        return jsonify({
+            "ok": True,
+            "run_id": run_id,
+            "stop_requested": value,
+        })
 
     @app.route("/run/<run_id>", methods=["GET"])
     def run_get(run_id: str):

@@ -47,18 +47,23 @@ from mtg_bot.cli.runs.models import (
 
 SCHEMA_SQL = """
 CREATE TABLE IF NOT EXISTS runs (
-    run_id        TEXT PRIMARY KEY,
-    kind          TEXT NOT NULL CHECK(kind IN
-                  ('iterate','self_play','eval','bench','capture','training')),
-    status        TEXT NOT NULL CHECK(status IN
-                  ('running','completed','failed','killed')),
-    started_at    TEXT NOT NULL,
-    ended_at      TEXT,
-    git_commit    TEXT NOT NULL,
-    config_json   TEXT NOT NULL,
-    parent_run_id TEXT REFERENCES runs(run_id),
-    label         TEXT,
-    notes         TEXT
+    run_id                TEXT PRIMARY KEY,
+    kind                  TEXT NOT NULL CHECK(kind IN
+                          ('iterate','self_play','eval','bench','capture','training')),
+    status                TEXT NOT NULL CHECK(status IN
+                          ('running','completed','failed','killed')),
+    started_at            TEXT NOT NULL,
+    ended_at              TEXT,
+    git_commit            TEXT NOT NULL,
+    config_json           TEXT NOT NULL,
+    parent_run_id         TEXT REFERENCES runs(run_id),
+    label                 TEXT,
+    notes                 TEXT,
+    pid                   INTEGER,
+    host                  TEXT,
+    training_history_json TEXT,
+    last_progress_at      TEXT,
+    stop_requested        INTEGER NOT NULL DEFAULT 0
 );
 
 CREATE TABLE IF NOT EXISTS run_progress (
@@ -117,10 +122,68 @@ def _apply_pragmas(conn: sqlite3.Connection) -> None:
     conn.execute("PRAGMA foreign_keys=ON")
 
 
+def _existing_columns(
+    conn: sqlite3.Connection, table: str,
+) -> set[str]:
+    """Names of columns currently in ``table``.
+
+    Used by :func:`_apply_runs_column_migrations` to decide whether
+    each additive column already exists. ``PRAGMA table_info(<t>)``
+    is read-only and safe to call inside an outer transaction.
+    """
+    return {
+        row["name"] for row in conn.execute(
+            f"PRAGMA table_info({table})"
+        ).fetchall()
+    }
+
+
+# Additive column migrations on the ``runs`` table. Each entry is
+# ``(column_name, column_ddl)``. ``column_ddl`` is the part that
+# follows ``ALTER TABLE runs ADD COLUMN`` — so it includes the type
+# and any constant ``DEFAULT``.
+#
+# SQLite restriction: ``ALTER TABLE ... ADD COLUMN`` cannot add a
+# ``NOT NULL`` column without a constant ``DEFAULT`` (existing rows
+# need a value). For ``stop_requested`` we want NOT NULL semantics on
+# fresh tables (the CREATE TABLE in SCHEMA_SQL has ``NOT NULL DEFAULT
+# 0``), but on a pre-existing DB the ALTER path lands the column with
+# the same DEFAULT 0 — every old row gets 0 implicitly, and every new
+# INSERT either provides a value or falls back to 0. Functionally
+# equivalent for callers; the only diff is the column's metadata
+# ``notnull`` flag (1 vs 0). We don't rely on that flag anywhere.
+_RUNS_ADDITIVE_COLUMNS: tuple[tuple[str, str], ...] = (
+    ("pid", "INTEGER"),
+    ("host", "TEXT"),
+    ("training_history_json", "TEXT"),
+    ("last_progress_at", "TEXT"),
+    ("stop_requested", "INTEGER NOT NULL DEFAULT 0"),
+)
+
+
+def _apply_runs_column_migrations(conn: sqlite3.Connection) -> None:
+    """Idempotently add any missing additive columns to ``runs``.
+
+    Guards each ``ALTER TABLE`` with a ``PRAGMA table_info`` lookup
+    so re-running this function on an already-migrated DB is a
+    no-op. Existing rows are unaffected: every additive column is
+    nullable (or has a constant DEFAULT), so the ALTER produces no
+    table rewrite and no row-data churn.
+    """
+    existing = _existing_columns(conn, "runs")
+    for name, ddl in _RUNS_ADDITIVE_COLUMNS:
+        if name in existing:
+            continue
+        conn.execute(f"ALTER TABLE runs ADD COLUMN {name} {ddl}")
+
+
 def apply_schema(conn: sqlite3.Connection) -> None:
     """Idempotent schema apply. Safe to call on a fresh DB or an
-    existing one — every table/index is ``IF NOT EXISTS``."""
+    existing one — every table/index is ``IF NOT EXISTS``, and any
+    additive column migrations on the ``runs`` table are guarded by
+    a ``PRAGMA table_info`` lookup."""
     conn.executescript(SCHEMA_SQL)
+    _apply_runs_column_migrations(conn)
     conn.commit()
 
 
@@ -185,13 +248,18 @@ def insert_run(conn: sqlite3.Connection, run: Run) -> None:
             """
             INSERT INTO runs(
                 run_id, kind, status, started_at, ended_at,
-                git_commit, config_json, parent_run_id, label, notes
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                git_commit, config_json, parent_run_id, label, notes,
+                pid, host, training_history_json, last_progress_at,
+                stop_requested
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 run.run_id, run.kind, run.status, run.started_at,
                 run.ended_at, run.git_commit, run.config_json,
                 run.parent_run_id, run.label, run.notes,
+                run.pid, run.host, run.training_history_json,
+                run.last_progress_at,
+                1 if run.stop_requested else 0,
             ),
         )
 
@@ -215,6 +283,19 @@ def upsert_progress(
     """
     updated_at = update.updated_at or now_iso()
     with transaction(conn):
+        # Stamp runs.last_progress_at on every push, in the same
+        # transaction as the run_progress row write. This makes the
+        # "most-recent progress" timestamp readable directly off the
+        # runs row — janitor / force-kill code doesn't have to JOIN
+        # against run_progress. Update is a no-op if no such run
+        # exists (a slightly odd state — push_progress for an
+        # unknown run — but we don't want to error here; the
+        # existing FK constraint on run_progress.run_id will catch
+        # it on the INSERT below).
+        conn.execute(
+            "UPDATE runs SET last_progress_at = ? WHERE run_id = ?",
+            (updated_at, update.run_id),
+        )
         if update.shard_label is None:
             conn.execute(
                 "DELETE FROM run_progress WHERE run_id = ? "
@@ -350,6 +431,33 @@ def finish_run(
             )
 
 
+def set_stop_requested(
+    conn: sqlite3.Connection,
+    run_id: str,
+    *,
+    value: bool = True,
+) -> None:
+    """Flip the soft ``stop_requested`` flag on ``run_id``.
+
+    The flag is set by the UI's Force-Kill endpoint (or by detecting
+    a ``.STOP_<run_id>`` sentinel) and polled by producers so they
+    can drain cleanly. Default value is ``True`` — the common case
+    is "request a stop"; callers that want to clear the flag (e.g.
+    after a producer acknowledges) pass ``value=False`` explicitly.
+
+    Idempotent: flipping a flag that's already in the target state
+    is a no-op UPDATE that touches one row's column. No error if
+    the row doesn't exist (zero rows updated) — the producer code
+    will simply not find the run and stop itself for an unrelated
+    reason.
+    """
+    with transaction(conn):
+        conn.execute(
+            "UPDATE runs SET stop_requested = ? WHERE run_id = ?",
+            (1 if value else 0, run_id),
+        )
+
+
 # ---- read helpers ----------------------------------------------------------
 
 
@@ -448,6 +556,7 @@ __all__ = [
     "insert_run",
     "list_runs",
     "now_iso",
+    "set_stop_requested",
     "transaction",
     "upsert_artifact",
     "upsert_progress",

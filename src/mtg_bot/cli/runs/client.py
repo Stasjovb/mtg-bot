@@ -31,6 +31,7 @@ from __future__ import annotations
 
 import json
 import os
+import platform
 import sys
 import urllib.error
 import urllib.request
@@ -45,6 +46,22 @@ from mtg_bot.cli.runs.models import (
 
 _ENV_DB_PATH = "MTG_BOT_RUN_DB_PATH"
 _ENV_DB_URL = "MTG_BOT_RUN_DB_URL"
+
+
+def _default_pid() -> int:
+    """Producer process ID for ``start_run``. Resolved per call (not
+    captured at import) so a subprocess that imports this module
+    inherits its own PID rather than the master's."""
+    return os.getpid()
+
+
+def _default_host() -> str:
+    """Hostname for ``start_run``. ``platform.node()`` returns the
+    tailnet-style host the user addresses machines by
+    (``desktop-j05412i``, ``greggs-macbook-pro``, ``desktop-g72aptg``).
+    Resolved per call so a subprocess running on a remote pulls its
+    own hostname rather than the master's."""
+    return platform.node()
 
 
 def _resolved_db_path() -> Optional[Path]:
@@ -151,13 +168,26 @@ def start_run(
     parent_run_id: Optional[str] = None,
     label: Optional[str] = None,
     started_at: Optional[str] = None,
+    pid: Optional[int] = None,
+    host: Optional[str] = None,
 ) -> str:
     """Register a new run. Returns the (possibly server-issued, but
     in practice always-equal-to-input) run_id. Idempotent for
     re-registration of the same run_id is **not** supported — the
     underlying INSERT would fail; callers should not call start_run
-    twice for the same id."""
+    twice for the same id.
+
+    ``pid`` and ``host`` default to the calling process's PID +
+    hostname so producers get sane values without passing them
+    explicitly. A future force-kill button reads these to terminate
+    the run: SSH to ``host``, kill ``pid``. Explicit values override
+    the auto-detection (useful for tests, and for the unusual case
+    of a wrapper script registering a run on behalf of a child
+    subprocess).
+    """
     started = started_at or _db.now_iso()
+    resolved_pid = pid if pid is not None else _default_pid()
+    resolved_host = host if host is not None else _default_host()
     run = Run(
         run_id=run_id,
         kind=kind,
@@ -167,6 +197,8 @@ def start_run(
         config_json=config_json,
         parent_run_id=parent_run_id,
         label=label,
+        pid=resolved_pid,
+        host=resolved_host,
     )
     url = _resolved_db_url()
     if url is not None:
@@ -181,6 +213,8 @@ def start_run(
                     "parent_run_id": run.parent_run_id,
                     "label": run.label,
                     "started_at": run.started_at,
+                    "pid": run.pid,
+                    "host": run.host,
                 },
             )
         except (urllib.error.URLError, OSError, json.JSONDecodeError) as exc:
@@ -353,6 +387,44 @@ def finish_run(
             _warn(f"finish_run({run_id})", exc)
 
 
+def set_stop_requested(
+    run_id: str,
+    value: bool = True,
+) -> None:
+    """Flip the soft ``stop_requested`` flag on the run row.
+
+    Called by the UI's Force-Kill endpoint (and by any code path
+    that detects a ``.STOP_<run_id>`` sentinel) so producers
+    polling the DB see a stop request. Default ``value=True`` —
+    the common case is "request a stop"; callers that want to
+    clear the flag pass ``value=False`` explicitly.
+
+    Same swallow-and-warn semantics as the other client helpers:
+    a transport failure logs a single warning rather than raising,
+    so the existing file-sentinel path remains the source of truth
+    until producers opt in to the DB-poll variant.
+    """
+    url = _resolved_db_url()
+    if url is not None:
+        try:
+            _post_json(
+                f"{url}/run/{run_id}/stop_request",
+                {"value": bool(value)},
+            )
+        except (urllib.error.URLError, OSError, json.JSONDecodeError) as exc:
+            _warn(f"set_stop_requested({run_id})", exc)
+        return
+    if _resolved_db_path() is not None:
+        try:
+            _direct(
+                lambda c: _db.set_stop_requested(
+                    c, run_id, value=bool(value),
+                ),
+            )
+        except Exception as exc:  # noqa: BLE001
+            _warn(f"set_stop_requested({run_id})", exc)
+
+
 __all__ = [
     "configure",
     "finish_run",
@@ -360,5 +432,6 @@ __all__ = [
     "push_artifact",
     "push_event",
     "push_progress",
+    "set_stop_requested",
     "start_run",
 ]
