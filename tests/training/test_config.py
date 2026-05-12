@@ -421,11 +421,7 @@ def test_nn_pimc_config_build_uses_shm_handle_when_set(
     that uses :class:`SharedTensorNNEvalClient` instead of constructing
     a per-worker NNEvaluator. The cfg's own ``weights_path`` / ``device``
     fields are IGNORED in this branch — proves the precedence ordering.
-    Skipped on Windows where the SHM server isn't supported."""
-    import sys
-    if sys.platform == "win32":
-        pytest.skip("SharedTensorNNEvalServer is Linux-only")
-
+    Runs on Linux + Windows (the SHM substrate now works on both)."""
     from mtg_bot.search.shm_nn_eval_server import (
         SharedTensorNNEvalClient,
         SharedTensorNNEvalServer,

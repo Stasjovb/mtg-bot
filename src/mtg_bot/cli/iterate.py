@@ -1354,33 +1354,33 @@ def main(argv=None) -> None:  # pragma: no cover
     parser.add_argument(
         "--use-shm-self-play",
         action=argparse.BooleanOptionalAction,
-        default=(sys.platform == "linux"),
+        default=(sys.platform in ("linux", "win32")),
         help=(
             "Use the SharedTensorNNEvalServer (PR #40) for SELF-PLAY "
-            "on the LOCAL master shard. Linux-only; remote shards "
-            "(Mac/Win10) ignore the flag silently. Bench numbers from "
-            "PR #40 show 3-10x NN throughput vs the per-worker "
-            "NNEvaluator path; PR #41 smoke at 4w showed ~36 percent "
-            "per-game improvement. Default ON on Linux, OFF on "
-            "Windows/Mac (the SHM server can't be constructed there). "
-            "Pass --no-use-shm-self-play to fall back to the legacy "
-            "per-worker NNEvaluator path."
+            "on the LOCAL master shard. Linux + Windows master only; "
+            "remote shards (Mac) ignore the flag silently. Bench "
+            "numbers from PR #40 show 3-10x NN throughput vs the per-"
+            "worker NNEvaluator path; PR #41 smoke at 4w showed ~36 "
+            "percent per-game improvement. Default ON on Linux + "
+            "Windows, OFF on Mac (no MPS routing in the SHM server "
+            "yet). Pass --no-use-shm-self-play to fall back to the "
+            "legacy per-worker NNEvaluator path."
         ),
     )
     parser.add_argument(
         "--use-shm-eval",
         action=argparse.BooleanOptionalAction,
-        default=(sys.platform == "linux"),
+        default=(sys.platform in ("linux", "win32")),
         help=(
             "Use the SharedTensorNNEvalServer for EVAL on the LOCAL "
             "master shard. Master constructs two SHM servers (one per "
             "weights set) and workers route via cfg.weights_path. "
-            "Linux-only. Default ON on Linux, OFF on Windows/Mac. "
-            "Pass --no-use-shm-eval to fall back to the legacy per-"
-            "worker NNEvaluator path. (Earlier wall-regression at 14 "
-            "workers was traced to the shutdown deadlock fixed in "
-            "PR #43; the substrate now hits 2,981 RPS @ 14w / 8,695 "
-            "RPS @ 32w with p50 RTT 74us.)"
+            "Linux + Windows master only. Default ON on Linux + "
+            "Windows, OFF on Mac. Pass --no-use-shm-eval to fall back "
+            "to the legacy per-worker NNEvaluator path. (Earlier "
+            "wall-regression at 14 workers was traced to the shutdown "
+            "deadlock fixed in PR #43; the substrate now hits 2,981 "
+            "RPS @ 14w / 8,695 RPS @ 32w with p50 RTT 74us.)"
         ),
     )
     parser.add_argument(
