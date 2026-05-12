@@ -164,12 +164,25 @@
 //! - `!tapped` (CR 508.1a — a tapped creature can't attack).
 //! - `!summoning_sick || has_haste` keyword (CR 302.1 + 702.10).
 //!
+//! **Enumeration-time defender filter (closed by CE17 / I40).** The
+//! eligibility loop short-circuits any battlefield permanent whose
+//! effective keyword set contains `"defender"` via the shared
+//! `crate::state_ops_combat::battlefield_has_keyword(self, obj.id,
+//! "defender")` helper, matching the apply-time gate at
+//! `state_ops_combat.rs:639-641` and Python's
+//! `combat.py:eligible_attackers` (line 22) `"defender" not in
+//! effective_keywords(state, o)`. The helper reads printed keywords
+//! AND UEOT-granted keywords (CR 613 layer 6), so a creature that
+//! gained defender from a UEOT modifier this turn is filtered too.
+//! Pre-CE17 the filter was deferred to the per-id apply-time gate;
+//! that left `legal_decisions` emitting illegal subsets (search-side
+//! waste, see CE17 entry in `docs/RUST_PARITY_GAPS.md`). Post-CE17
+//! enumeration matches Python's eligible set exactly on the defender
+//! axis.
+//!
 //! **Deferred** (silently included as candidates; the
 //! `declare_attacker` primitive's bool-return filters them at apply
 //! time):
-//! - `"defender"` keyword (CR 702.3) — Python's
-//!   `eligible_attackers` filters this out at enumeration time;
-//!   first slice defers to the primitive's per-id gate at apply.
 //! - Continuous "can't attack" restrictions (Propaganda, Ghostly
 //!   Prison, etc.) — no continuous-effects layer in the Rust engine
 //!   yet.
@@ -550,8 +563,11 @@ impl GameState {
         //
         // Eligibility per `src/mtg_bot/combat.py:eligible_attackers`
         // (lines 15-23): on the active player's battlefield, is a
-        // Creature, not tapped, not summoning-sick OR has haste.
-        // Defender + continuous-restriction filters are deferred —
+        // Creature, not tapped, not summoning-sick OR has haste,
+        // does NOT have the defender keyword. The defender short-
+        // circuit was added by CE17 closure (I40) — mirrors the
+        // apply-time gate at `state_ops_combat.rs:639-641`.
+        // Continuous "can't attack" restrictions remain deferred —
         // see module docstring.
         if self.phase == PHASE_DECLARE_ATTACKERS
             && self.active_player == player_id
@@ -573,6 +589,19 @@ impl GameState {
                 }
                 let has_haste = printing.keywords.iter().any(|k| k == "haste");
                 if obj.summoning_sick && !has_haste {
+                    continue;
+                }
+                // Defender (CR 702.3): a creature with defender can't
+                // attack. Mirrors Python's `combat.py:eligible_attackers`
+                // (line 22) "defender" not in effective_keywords(...)
+                // and the apply-time gate at
+                // `state_ops_combat.rs:639-641`. Uses the shared
+                // `battlefield_has_keyword` helper so the UEOT-granted
+                // case (CR 613 layer 6 keyword grants) is honored
+                // alongside printed defender — same shape the
+                // apply-time gate enforces. See I40 for the post-CE17
+                // invariant pin.
+                if crate::state_ops_combat::battlefield_has_keyword(self, obj.id, "defender") {
                     continue;
                 }
                 eligible.push(obj.id);

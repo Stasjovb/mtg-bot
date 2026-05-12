@@ -1164,6 +1164,58 @@ def test_legal_decisions_declare_attackers_haste_creature_included(
     assert subsets == {(), (hasty_id,)}
 
 
+# --- 28b. CE17 closure — defender keyword excluded from eligibility -
+
+
+def test_legal_decisions_declare_attackers_defender_creature_excluded(
+    engine,
+):
+    """**CE17 / I40 pin** — a creature with the ``defender`` keyword
+    (CR 702.3) is filtered OUT of the eligible-attackers set at
+    enumeration time, mirroring Python's
+    ``combat.py:eligible_attackers`` (line 22) ``"defender" not in
+    effective_keywords(...)`` and the apply-time gate at
+    ``state_ops_combat.rs:639-641``.
+    Board: a normal ``Vanilla Bear`` (eligible) + a ``Defender Wall``
+    (CR 702.3 — can't attack) untapped on p0's battlefield. Expected
+    emission: powerset of {bear} = ``{(), (bear_id,)}`` — i.e. only
+    2 ``declare_attackers`` dicts emit, and NEITHER contains the
+    defender's id. Pre-CE17 closure the enumerator would have emitted
+    the full 2^2 powerset including ``(defender_id,)`` and
+    ``(bear_id, defender_id)``; CE17 (I40) closes that.
+    """
+    state, _, bf_ids, _ = _custom_registry_state(
+        engine,
+        p0_battlefield_printings=["Vanilla Bear", "Defender Wall"],
+    )
+    bear_id, defender_id = bf_ids[0], bf_ids[1]
+    _put_bf_into_declare_attackers(state, 0)
+
+    actions = state.legal_decisions(0)
+
+    kinds = _kinds(actions)
+    assert kinds[0] == "pass_priority"
+    # Defender excluded → 2^1 (only the bear) = 2 subsets.
+    assert kinds.count("declare_attackers") == 2, (
+        f"expected 2 declare_attackers (powerset of the one non-defender "
+        f"attacker), got {kinds.count('declare_attackers')} from actions={actions}"
+    )
+    das = [a for a in actions if a["kind"] == "declare_attackers"]
+    subsets = {tuple(sorted(d["attacker_ids"])) for d in das}
+    # Only legal subsets emit: empty and {bear}.
+    assert subsets == {(), (bear_id,)}, (
+        f"defender id {defender_id} unexpectedly in subsets {subsets}; "
+        f"CE17 / I40 contract: defender excluded from eligibility per "
+        f"CR 702.3 (mirror of state_ops_combat.rs:639-641 apply-time gate)"
+    )
+    # Belt-and-braces: defender_id absent from EVERY emitted subset.
+    for subset in subsets:
+        assert defender_id not in subset, (
+            f"CE17 regression: defender id {defender_id} leaked into "
+            f"declare_attackers subset {subset}"
+        )
+
+
 # --- 29. Non-DECLARE_ATTACKERS phase: no DeclareAttackers -----------
 
 

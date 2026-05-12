@@ -325,7 +325,7 @@ fn battlefield_has_vigilance(state: &GameState, obj_id: u32) -> bool {
 /// `state_ops_cleanup.rs::clear_ueot_modifiers_all`). This is what
 /// gates the "and gains haste/flying/lifelink UEOT" pump-rider
 /// branches at combat time.
-fn battlefield_has_keyword(state: &GameState, obj_id: u32, keyword: &str) -> bool {
+pub(crate) fn battlefield_has_keyword(state: &GameState, obj_id: u32, keyword: &str) -> bool {
     let Some((player_idx, printing_id)) = locate_battlefield_obj(state, obj_id) else {
         return false;
     };
