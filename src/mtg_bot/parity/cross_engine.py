@@ -147,12 +147,28 @@ class DeckSpec:
     via ``random.shuffle`` on a list — Rust uses its own Fisher-Yates
     so the resulting permutation is the SAME modulo any known shuffle-
     convention parity gaps).
+
+    ``shared_rng_seed`` is the CE8 Slice 1 substrate hook: when set to
+    an integer seed, EACH engine constructs its own
+    ``random.Random(shared_rng_seed)`` and consumes Fisher-Yates draws
+    from it in the same p0-then-p1 order — Python via
+    ``rng.shuffle(p0); rng.shuffle(p1)``, Rust via
+    ``make_state(..., rng=rng)`` (which internally consumes p0 draws
+    then p1 draws from the passed rng). Because Mersenne Twister is
+    deterministic, both engines' ``random.Random(seed)`` produce the
+    SAME sequence of draws, yielding bit-identical library_p0 /
+    library_p1 across engines. Closes the Python-MT-vs-Rust-xorshift64
+    gap (CE8). ``shared_rng_seed`` takes precedence over
+    ``shuffle_seed`` when both are set — the rng-substrate path owns
+    the draw stream. Default ``None`` leaves both engines on the
+    legacy ``shuffle_seed`` (or no-shuffle) paths.
     """
 
     card_defs: tuple[CardDef, ...]
     p0_library: tuple[str, ...]
     p1_library: tuple[str, ...]
     shuffle_seed: Optional[int] = None
+    shared_rng_seed: Optional[int] = None
 
 
 # Two pre-built decks for the smoke harness. Anything larger is the next
@@ -371,6 +387,20 @@ def build_rust_state(spec: DeckSpec):
     p0_lib_pids = [name_to_pid[n] for n in spec.p0_library]
     p1_lib_pids = [name_to_pid[n] for n in spec.p1_library]
 
+    # CE8 Slice 1: ``shared_rng_seed`` (when set) drives a fresh
+    # ``random.Random(seed)`` on EACH engine — both follow Fisher-Yates
+    # over the same MT sequence, producing bit-identical library
+    # permutations. Falls back to ``shuffle_seed`` → Rust xorshift64
+    # when no shared seed is set.
+    if spec.shared_rng_seed is not None:
+        import random
+        rust_rng = random.Random(spec.shared_rng_seed)
+        return mtg_bot_engine.make_state(
+            reg,
+            p0_lib_pids,
+            p1_lib_pids,
+            rng=rust_rng,
+        )
     return mtg_bot_engine.make_state(
         reg,
         p0_lib_pids,
@@ -489,14 +519,25 @@ def build_python_state(spec: DeckSpec):
     # the literal None at the step slot while Rust encodes "UNTAP".
     state.step = Step.UNTAP
 
-    if spec.shuffle_seed is not None:
-        # Match Rust's per-player shuffle: p0 uses seed, p1 uses seed *
-        # P1_SEED_MULTIPLIER (the magic constant in state_ops_setup.rs).
-        # Python's random.Random uses Mersenne Twister and the Rust
-        # implementation is a fisher-yates with xorshift64; the two
-        # WILL diverge. Document this in the gap doc as a known issue
-        # if/when we start using shuffle_seed. The first-slice tests
-        # pass shuffle_seed=None to dodge the issue.
+    # CE8 Slice 1 substrate path: ``shared_rng_seed`` (when set) drives
+    # a fresh ``random.Random(seed)`` consumed in p0-then-p1 order via
+    # ``rng.shuffle``. The Rust side constructs its OWN
+    # ``random.Random(seed)`` from the same seed and consumes in the
+    # same order; both engines produce bit-identical libraries because
+    # MT is deterministic for a given seed.
+    if spec.shared_rng_seed is not None:
+        import random
+        py_rng = random.Random(spec.shared_rng_seed)
+        py_rng.shuffle(p0.library)
+        py_rng.shuffle(p1.library)
+    elif spec.shuffle_seed is not None:
+        # Legacy seed-driven path. Python's ``random.Random`` uses
+        # Mersenne Twister and the Rust implementation is a Fisher-
+        # Yates with xorshift64; the two WILL diverge. CE8 Slice 2
+        # extends the ``shared_rng`` path to cover gameplay shuffles
+        # (mulligan / tutor / library-Effect); until then specs that
+        # want cross-engine shuffle parity use ``shared_rng`` instead
+        # of ``shuffle_seed``.
         import random
 
         random.Random(spec.shuffle_seed).shuffle(p0.library)
