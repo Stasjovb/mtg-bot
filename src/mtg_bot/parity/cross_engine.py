@@ -246,6 +246,87 @@ def slightly_bigger_deckspec() -> DeckSpec:
     )
 
 
+def multi_blocker_deckspec() -> DeckSpec:
+    """Third-slice deck: 7-card libs designed to drive a multi-blocker
+    combat at turn 15 (p0 attacks, p1 blocks with TWO Bears).
+
+    The audits' predicted CE6/CE7 closure target — damage assignment
+    order — requires multiple blockers per attacker to surface. The
+    inaugural ``slightly_bigger_deckspec`` only has ONE Grizzly Bears
+    on p1's side and only on p1's library + hand (never reaches the
+    battlefield in time to block — p1 lacks the mana cadence to cast
+    its single Bears before p0 attacks). This deck adds a second Bears
+    to p1's library and reshapes both libraries so by the time p0
+    attacks at turn 15, p1 has TWO unsick untapped Grizzly Bears on
+    its side of the battlefield, eligible to block.
+
+    Library design rationale:
+
+    * **p0 library: 7 cards, Bears at index 5.**
+      ``(Forest, Forest, Forest, Forest, Forest, Bears, Forest)``.
+      p0 draws on turns 3, 5, 7, 9, 11, 13, 15 (7 draws — exact lib
+      size, no empty-draws within the test window). Bears drawn at
+      turn 13 (the 6th draw). Cast turn 13 PRECOMBAT_MAIN (3 Forests
+      already on bf from turns 3/5/7/9/11 land plays). Bears
+      summoning-sick through turn 14. Turn 15 UNTAP clears the
+      sickness → attack at turn 15 DECLARE_ATTACKERS.
+
+    * **p1 library: 7 cards, two Bears interleaved.**
+      ``(Forest, Forest, Bears, Forest, Bears, Forest, Forest)``.
+      p1 draws on turns 2, 4, 6, 8, 10, 12, 14 (7 draws). Bears#1
+      drawn turn 6, Bears#2 drawn turn 10. p1 plays Forests on its
+      MAIN1 of turns 2/4 (2 lands available by turn 6 MAIN1). Casts
+      Bears#1 turn 6 (tap 2 Forests). Bears#1 sick through turn 7.
+      Turn 8 UNTAP clears Bears#1 sickness. Turn 8 MAIN1: Bears#2
+      not yet in hand (drawn turn 10), no second Bears to cast yet.
+      Turn 10 MAIN1: cast Bears#2 (2 untapped Forests from turns 6/8
+      land plays + the turn 8 UNTAP cleared the turn 6 cast). Bears#2
+      sick through turn 11. Turn 12 UNTAP clears Bears#2 sickness.
+      By turn 15 (p0 attacks): both Bears unsick AND untapped (p1
+      never attacks in this slice — see ``multi_block_combat_selector``
+      — so neither Bears' tap state is touched).
+
+    * **Cast-time SBA timing.** The cast at turn 13 (p0) fires
+      Python's ``state_based_actions`` via the harness's
+      :func:`resolve_top_of_stack_python` mirror. Both libraries
+      still have unread cards at turn 13 (p0 has 1 card left, p1
+      has 1 card left) — neither player has tried-and-failed to
+      draw from an empty library yet, so ``has_lost`` stays False
+      on both. The cast's SBA pass finds no losers → ``winner_id``
+      stays None → no premature ``is_over`` flip. Same SBA-safe
+      cast window as the inaugural :func:`slightly_bigger_deckspec`
+      (which casts at turn 9 with 0 lib cards left but also no
+      prior empty-draw attempts).
+
+    Total deck size: 14 cards across both players (7+7). Smallest
+    library shape that simultaneously:
+
+    * Provides enough draws to deliver a Bears to each player's hand
+      with enough mana to cast it before the multi-block window.
+    * Avoids the cast-time SBA-firing asymmetry that would surface
+      a winner_id divergence (CE10-adjacent) before the CE6 target.
+    * Suppresses the existing combat_selector's I26-adjacent
+      empty-blocker walk (the slightly_bigger_deckspec only delivers
+      0 blockers).
+
+    Future slices that probe more combat surfaces (e.g. trample +
+    multi-block, deathtouch + multi-block, first-strike + multi-block)
+    will build on this deck shape by adding keywords to the Bears
+    printing or swapping in richer creatures.
+    """
+    return DeckSpec(
+        card_defs=(_FOREST, _BEARS),
+        p0_library=(
+            "Forest", "Forest", "Forest", "Forest", "Forest",
+            "Grizzly Bears", "Forest",
+        ),
+        p1_library=(
+            "Forest", "Forest", "Grizzly Bears", "Forest",
+            "Grizzly Bears", "Forest", "Forest",
+        ),
+    )
+
+
 # ---------------------------------------------------------------------------
 # State builders
 # ---------------------------------------------------------------------------
@@ -828,10 +909,28 @@ def step_both(py_state, rust_state, action_dict: dict) -> CrossEngineStep:
     from mtg_bot.actions import apply_action as py_apply_action
 
     py_action = _dict_to_python_action(action_dict)
-    # Python's apply_action takes (state, player_id, action). We use
-    # priority_player_idx as the actor — matches Rust's
-    # ``apply_action`` which reads ``priority_player`` for the actor.
-    py_apply_action(py_state, py_state.priority_player_idx, py_action)
+    # Python's apply_action takes (state, player_id, action). For most
+    # action kinds we use priority_player_idx as the actor — matches
+    # Rust's ``apply_action`` which reads ``priority_player`` for the
+    # actor.
+    #
+    # **Declare-blockers actor exception**. Python's ``_declare_blockers``
+    # filters by ``eligible_blockers(state, player_id)`` — the actor
+    # must be the DEFENDER (the player whose creatures are blocking),
+    # not the priority player (which in our harness is the active
+    # player throughout combat because we don't model the
+    # priority-handoff to defender at DECLARE_BLOCKERS). Without this
+    # override Python's validate-loop drops every non-empty
+    # ``assignments`` entry because the active player owns no
+    # eligible blockers, and the harness sees an empty blocked_by set
+    # on the attacker — a parity gap that's a harness construction
+    # issue, not a real cross-engine divergence. Rust's
+    # ``declare_blocker`` primitive reads the blocker's controller
+    # from the bf index so no actor parameter is needed on that side.
+    actor = py_state.priority_player_idx
+    if action_dict.get("kind") == "declare_blockers":
+        actor = 1 - py_state.active_player_idx
+    py_apply_action(py_state, actor, py_action)
     rust_state.apply_action(action_dict)
 
     # CE5 closure: drain Python's stack for actions whose Rust analog
@@ -1702,3 +1801,182 @@ def combat_selector(py_state, rust_state, step_index: int) -> dict:
     # delegate to cast_bears_selector, which in turn delegates to
     # multi_turn_selector. This composes the inheritance chain cleanly.
     return cast_bears_selector(py_state, rust_state, step_index)
+
+
+# ---------------------------------------------------------------------------
+# Phase 5 follow-up #6: multi_block_combat_selector — surface the audits'
+# predicted CE6 (now claimed as CE9 if it surfaces) — combat damage
+# assignment order.
+#
+# Builds on combat_selector with two narrowing changes:
+#
+#   1. **Only p0 attacks.** The base ``combat_selector`` lets either
+#      active player declare attackers when they control an eligible
+#      creature. With both players running the cast script on
+#      :func:`multi_blocker_deckspec`, p1's first Bears comes off
+#      summoning sickness at turn 8 — well before p0 attacks at turn 15.
+#      If p1 attacks first, p1's Bears tap on declare and lose blocker
+#      eligibility (CR 509.1b — a tapped creature can't block). To
+#      preserve p1's two Bears as untapped blockers, this selector
+#      suppresses p1's DECLARE_ATTACKERS emission entirely.
+#
+#   2. **Multi-block in REVERSE bf order.** When p0 attacks with a
+#      Bears and p1 has 2+ eligible blockers on the battlefield, this
+#      selector declares ALL of them as blockers but in REVERSE bf-
+#      iteration order. The reversal is the load-bearing detail: it
+#      forces Python's bf-order damage walk (``combat.py:389,405`` —
+#      ``[o for o in state.battlefield if o.id in attacker.blocked_by]``)
+#      and Rust's ``self.blockers`` declare-order walk
+#      (``state_ops_combat.rs:865-868`` — ``self.blockers.iter().find_map``)
+#      to pick DIFFERENT first blockers. Same attacker, same blockers,
+#      same damage amount — but a different blocker dies on each side.
+#
+# **Predicted CE6 (now CE9 numerically). ** Per the audits
+# (``docs/RUST_BF_ITERATION_AUDIT.md`` §3 and
+# ``docs/CE5_CE6_CE7_CLOSURE_PLAYBOOK.md`` §3), the iteration sites at
+# ``rust/src/state_ops_combat.rs:849, 962, 1025`` walk
+# ``self.attackers`` / ``self.blockers`` Vecs in DECLARE PUSH order,
+# while Python's counterpart walks ``state.battlefield`` filtered by
+# ``attacker.blocked_by`` membership in BATTLEFIELD ETB order. On a
+# single-attacker / single-blocker scene the order question is
+# vacuous (one choice either way). On a single-attacker / two-blocker
+# scene with blockers DECLARED in reverse-bf order, the two iteration
+# orders pick different "first blockers" and the attacker's full
+# power lands on a DIFFERENT blocker per engine.
+#
+# **Closure plan reference.** ``CE5_CE6_CE7_CLOSURE_PLAYBOOK.md`` §3
+# describes the closure: replace Rust's ``self.blockers``-Vec walk
+# with a ``bf_iter_etb_sorted(state)``-filtered walk so the engine
+# picks blockers in bf-ETB order (matching Python's bug for short-
+# term smoke parity per Option A) or fix Python's combat.py to walk
+# declare-order instead (Option B, the engineering-correct fix). The
+# slice author's recommendation in the playbook is Option A. This
+# selector ships the PROBE that surfaces the divergence; the closure
+# itself is the next slice.
+# ---------------------------------------------------------------------------
+
+
+def multi_block_combat_selector(py_state, rust_state, step_index: int) -> dict:
+    """Cross-engine smoke selector that drives p0's attack into p1's
+    multi-block defense on :func:`multi_blocker_deckspec`.
+
+    Two narrowing changes vs :func:`combat_selector`:
+
+      * **DECLARE_ATTACKERS, active player == 0 only**: emit
+        ``declare_attackers`` for p0's Bears. p1's
+        DECLARE_ATTACKERS step falls through to multi_turn_selector
+        (pass + advance). This keeps p1's Bears untapped so they
+        remain eligible blockers when p0 attacks.
+
+      * **DECLARE_BLOCKERS, defender has 2+ eligible blockers**:
+        emit ``declare_blockers`` with the defender's eligible
+        blockers ALL blocking the attacker — but in REVERSE
+        bf-iteration order. This is the load-bearing detail that
+        forces a CE6/CE9-shape divergence: Python's
+        battlefield-order damage walk picks the
+        *lower*-bf-position blocker, Rust's declare-order walk
+        picks the *higher*-bf-position blocker (the one declared
+        first).
+
+    Anything not matching the two narrowed branches above falls back
+    to :func:`combat_selector` (which itself delegates further to
+    :func:`cast_bears_selector` and :func:`multi_turn_selector`).
+
+    The selector is stateless — every branch is derived from
+    observable state on each call. Same shape as the rest of the
+    selector chain.
+    """
+    from mtg_bot.turn import Step
+
+    cur_step = py_state.step
+    active_idx = py_state.active_player_idx
+
+    if cur_step == Step.DECLARE_ATTACKERS:
+        # Narrowing change #1: only p0 may declare attackers. p1's
+        # attackers fall through to the combat_selector fallback,
+        # which inherits the cast_bears -> multi_turn chain and
+        # advances past DECLARE_ATTACKERS via pass_priority. The
+        # combat_selector's own DECLARE_ATTACKERS branch is NOT
+        # entered when active_idx != 0 because we route through
+        # combat_selector via cast_bears -> multi_turn here, not
+        # via combat_selector at the top.
+        if active_idx == 0:
+            attackers = sorted(
+                int(o.id) for o in py_state.battlefield
+                if o.controller_id == active_idx
+                and "Creature" in o.printing.card_types
+                and not o.tapped
+                and not o.summoning_sick
+                and not getattr(o, "attacking", False)
+            )
+            if attackers:
+                return {
+                    "kind": "declare_attackers",
+                    "attacker_ids": attackers,
+                }
+        # active_idx == 1 OR no eligible attackers: fall through to
+        # cast_bears_selector. The cast_bears_selector branch for
+        # DECLARE_ATTACKERS doesn't exist (only combat_selector has
+        # one) — so this falls through to multi_turn_selector, which
+        # advances phase past DECLARE_ATTACKERS and emits pass_priority.
+        return cast_bears_selector(py_state, rust_state, step_index)
+
+    if cur_step == Step.DECLARE_BLOCKERS:
+        # Narrowing change #2: multi-block when defender has 2+
+        # eligible blockers. The reverse-bf-order declaration is
+        # the load-bearing detail.
+        attackers_present = [
+            o for o in py_state.battlefield
+            if getattr(o, "attacking", False)
+        ]
+        if attackers_present:
+            attacker = attackers_present[0]
+            defender_idx = 1 - active_idx
+            # Eligible blockers: defender's untapped non-sick creatures.
+            # CR 509.1b — a tapped creature can't block. CR 302.1 —
+            # summoning-sick creatures can't tap to attack, but CAN
+            # block (sickness applies only to TAPPING for activation
+            # and TAPPING from attacking, not to blocking itself).
+            # However for the multi-block probe shape we want
+            # confidence that both blockers will live through the
+            # cross-engine compare, so we keep the filter conservative
+            # (non-sick AND untapped).
+            eligible_blocker_objs = [
+                o for o in py_state.battlefield
+                if o.controller_id == defender_idx
+                and "Creature" in o.printing.card_types
+                and not o.tapped
+                and not o.summoning_sick
+            ]
+            if len(eligible_blocker_objs) >= 2:
+                # Reverse-bf-order declaration: walk the bf in order
+                # (eligible_blocker_objs is already bf-iteration-order
+                # because list-comprehension preserves iteration order),
+                # then reverse for the declare list.
+                eligible_ids_in_bf_order = [
+                    int(o.id) for o in eligible_blocker_objs
+                ]
+                declare_order = list(reversed(eligible_ids_in_bf_order))
+                assignments = [
+                    [bid, int(attacker.id)] for bid in declare_order
+                ]
+                # Same pre-advance pattern as the combat_selector's
+                # DECLARE_BLOCKERS branch — empty OR non-empty,
+                # declare_blockers leaves no observable state change
+                # that would gate the next selector call's branch
+                # (the per-object blocking flags aren't visible to
+                # the selector's filter), so we advance phase here
+                # to avoid spin.
+                advance_phase_python(py_state)
+                rust_state.advance_phase()
+                return {
+                    "kind": "declare_blockers",
+                    "assignments": assignments,
+                }
+        # No attackers OR <2 blockers: fall through to combat_selector
+        # which handles the empty / single-blocker case. Note this
+        # delegates back to combat_selector's DECLARE_BLOCKERS branch
+        # which handles the empty-assignments case.
+
+    # All non-multi-block branches delegate to combat_selector.
+    return combat_selector(py_state, rust_state, step_index)

@@ -2273,3 +2273,380 @@ def test_cross_engine_clear_combat_both_resets_rust_attackers_vec(
     py_state2, rust_state2 = build_matched_states(slightly_bigger_deckspec())
     result_clear = clear_combat_both(py_state2, rust_state2)
     assert result_clear is None  # no return value
+
+
+# ---------------------------------------------------------------------------
+# Phase 5 follow-up #6: multi_block_combat_selector. Extends combat_selector
+# past the single-attacker / zero-blocker slice into a SINGLE-ATTACKER /
+# TWO-BLOCKER scenario. The audits' predicted CE6 (combat damage assignment
+# order) requires multiple blockers per attacker to surface; this slice's
+# job is to actually drive that surface.
+#
+# **OUTCOME (this slice): CE9 surfaced.** The probe surfaces the audits'
+# predicted divergence on the first multi-block combat (turn 15 p0 attacks
+# p1's two Bears). Python's ``combat.py:389,405`` damage walk
+# (battlefield-order filtered by ``attacker.blocked_by`` membership) and
+# Rust's ``state_ops_combat.rs:865-868`` damage walk (``self.blockers``
+# Vec push order, via ``find_map``) pick different "first blockers" when
+# blockers are declared in REVERSE bf order. Different blocker dies on
+# each side → ``battlefield`` / ``graveyard_p0`` / ``graveyard_p1`` field
+# divergence at the COMBAT_DAMAGE step's compare. Filed as CE9 in
+# ``docs/RUST_PARITY_GAPS.md``; closure plan is the playbook's CE6 plan
+# (now CE9 numerically) using the ``bf_iter_etb_sorted`` helper already
+# in place in ``rust/src/bf_iter.rs``.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.xfail(
+    strict=True,
+    reason=(
+        "CE9 (combat damage assignment order). Python's combat.py:389,405 "
+        "walks state.battlefield filtered by attacker.blocked_by "
+        "membership (battlefield ETB order); Rust's "
+        "state_ops_combat.rs:865-868 walks self.blockers Vec via "
+        "find_map (declare push order). When blockers are declared in "
+        "REVERSE bf order, the two iteration orders pick different "
+        "first blockers — different blocker dies on each side. Strict-"
+        "xfail until the closure slice replaces Rust's self.blockers "
+        "walk with bf_iter_etb_sorted (per "
+        "CE5_CE6_CE7_CLOSURE_PLAYBOOK.md §3 Option A). Filed as CE9 "
+        "in docs/RUST_PARITY_GAPS.md."
+    ),
+)
+def test_cross_engine_multi_block_combat_selector_walks_clean(parity_smoke):
+    """**CE9 clean-walk pin (xfail-strict)**.
+
+    Drive 210 decisions on :func:`multi_blocker_deckspec` with
+    :func:`multi_block_combat_selector` and assert every step walks
+    clean. Today the multi-block COMBAT_DAMAGE step at index 196
+    surfaces the audits' predicted CE6/CE7 (now CE9 numerically)
+    divergence: Python's bf-order damage walk and Rust's
+    self.blockers-Vec damage walk pick DIFFERENT first blockers when
+    blockers are declared in reverse-bf order. Different blocker
+    dies per engine → ``battlefield`` / ``graveyard_p1`` /
+    ``graveyard_p0`` field divergence.
+
+    Mirrors the pre-closure xfail-strict pattern of the earlier CE5
+    cast-vs-resolve clean-walk pin: when the closure slice lands
+    (Rust's blocker walk becomes ``bf_iter_etb_sorted``), this test
+    flips to xpass and the symptom-present companion below gets
+    deleted per the CE2/CE3/CE4/CE5 pair-pin convention.
+    """
+    from mtg_bot.parity.cross_engine import (
+        multi_block_combat_selector,
+        multi_blocker_deckspec,
+        walk_both,
+    )
+
+    result = walk_both(
+        multi_blocker_deckspec(),
+        n_decisions=210,
+        decision_selector=multi_block_combat_selector,
+    )
+    assert result.error is None, (
+        f"walk aborted at step {result.aborted_at}: {result.error}"
+    )
+    assert result.aborted_at is None
+    assert len(result.steps) == 210
+    for step in result.steps:
+        assert step.divergences == [], (
+            f"unexpected divergence at step {step.step_index}: "
+            f"action={step.action_dict} "
+            f"{[(d.field, d.py_value, d.rust_value, d.known_gap) for d in step.divergences]}"
+        )
+
+
+def test_cross_engine_multi_block_combat_selector_surfaces_ce9_at_step_196(
+    parity_smoke,
+):
+    """**CE9 symptom-present pin** (passes today, paired with the
+    strict-xfail clean-walk pin above).
+
+    Pins the EXACT shape of the multi-block damage assignment
+    divergence. The first 195 steps (cast script + multi-block
+    declare) walk clean — Python and Rust agree on every observable
+    field. Step 196 is the first divergence: the COMBAT_DAMAGE branch
+    of the selector applied damage on both engines via the side-
+    channel mirrors, and SBAs committed dead creatures to their
+    graveyards. Different blocker dies per engine → ``battlefield``
+    / ``graveyard_p1`` / ``graveyard_p0`` field divergence.
+
+    Reasoning trail to the surface:
+
+      * Steps 0-68: pre-cast phase walk for both players. p1's first
+        cast lands at step 69 (turn 6 PRECOMBAT_MAIN p1 active).
+      * Step 123: p1 casts Bears#2 (turn 10 PRECOMBAT_MAIN p1 active).
+      * Step 164: p0 casts Bears (turn 13 PRECOMBAT_MAIN p0 active).
+      * Step 193: p0 declares Bears (id=5) as attacker (turn 15
+        DECLARE_ATTACKERS — Bears unsick after turn 14 UNTAP).
+      * Step 195: p1 declares BOTH bears as blockers, in REVERSE bf
+        order: ``assignments=[[11, 5], [9, 5]]`` (Bears id=11
+        declared first, then Bears id=9 — but bf-ETB order has id=9
+        BEFORE id=11 because p1 cast Bears#1=id=9 at turn 6 with a
+        lower timestamp than Bears#2=id=11 cast at turn 10).
+      * Step 196: COMBAT_DAMAGE branch fires the side-channel
+        damage mirrors. Python's bf-order walk picks Bears id=9 as
+        first blocker → damages id=9 lethally → id=9 to gy. Rust's
+        ``self.blockers``-Vec walk picks Bears id=11 (declared
+        first) as first blocker → damages id=11 lethally → id=11
+        to gy. Different blocker dies per engine.
+
+    Pinned divergence shape at step 196:
+
+      * ``battlefield`` — Python has Bears id=11 alive, Rust has
+        Bears id=9 alive. Both engines have the attacker (id=5)
+        removed from bf because back-damage from the two blockers
+        (2+2=4) kills the 2/2 attacker on both sides.
+      * ``graveyard_p1`` — Python has Bears id=9 (killed), Rust has
+        Bears id=11 (killed).
+      * ``graveyard_p0`` — both engines have Bears id=5 (the dead
+        attacker). Per-object signature differs on the residual
+        ``damage`` value: Python's ``move_off_battlefield`` clears
+        damage on the way to gy (damage=0); Rust preserves the
+        damage=4 mark in the graveyard entry.
+
+    Per the CE2/CE3/CE4/CE5 pair-pin convention, this symptom test
+    gets DELETED when the CE9 closure lands.
+    """
+    from mtg_bot.parity.cross_engine import (
+        multi_block_combat_selector,
+        multi_blocker_deckspec,
+        walk_both,
+    )
+
+    result = walk_both(
+        multi_blocker_deckspec(),
+        n_decisions=210,
+        decision_selector=multi_block_combat_selector,
+    )
+    assert result.error is None
+    # The first 196 steps walk clean (the multi-block declare at step
+    # 195 sees only bf-state changes that aren't in the 8-tuple
+    # signature).
+    for i in range(196):
+        assert result.steps[i].divergences == [], (
+            f"unexpected pre-divergence at step {i}: "
+            f"action={result.steps[i].action_dict} "
+            f"{[(d.field, d.py_value, d.rust_value) for d in result.steps[i].divergences]}"
+        )
+    # Step 195: the declare_blockers step. Assignments declared in
+    # REVERSE bf order (id=11 declared first, then id=9).
+    step_195 = result.steps[195]
+    assert step_195.action_dict == {
+        "kind": "declare_blockers",
+        "assignments": [[11, 5], [9, 5]],
+    }
+    assert step_195.divergences == []
+
+    # Step 196: the FIRST divergent step.
+    step_196 = result.steps[196]
+    diverged_fields = {d.field for d in step_196.divergences}
+    assert diverged_fields == {
+        "battlefield", "graveyard_p0", "graveyard_p1",
+    }, f"expected CE9 surface fields, got {diverged_fields}"
+
+    # Pinpoint: which blocker landed in p1's graveyard?
+    gy_p1_div = next(
+        d for d in step_196.divergences if d.field == "graveyard_p1"
+    )
+    py_gy_p1_names_ids = [
+        (sig[0], sig[7]) for sig in gy_p1_div.py_value
+    ]
+    # Python: Bears id=9 (lower-bf-position blocker — first in
+    # Python's bf-order damage walk).
+    assert py_gy_p1_names_ids == [("Grizzly Bears", 9)], (
+        f"py graveyard_p1: {py_gy_p1_names_ids}"
+    )
+    rust_gy_p1_names_ids = [
+        (sig[0], sig[7]) for sig in gy_p1_div.rust_value
+    ]
+    # Rust: Bears id=11 (higher-bf-position blocker but declared
+    # FIRST — first in Rust's self.blockers Vec walk via find_map).
+    assert rust_gy_p1_names_ids == [("Grizzly Bears", 11)], (
+        f"rust graveyard_p1: {rust_gy_p1_names_ids}"
+    )
+
+
+def test_cross_engine_multi_block_combat_selector_pre_combat_walks_clean(
+    parity_smoke,
+):
+    """The pre-combat walk (steps 0-192) on
+    :func:`multi_blocker_deckspec` with
+    :func:`multi_block_combat_selector` is parity-clean. Pins the
+    contract that the multi-block CE9 surface is SPECIFICALLY a
+    damage-assignment-order finding — the cast, mana-ability, draw,
+    advance-phase, and declare-attackers paths all walk clean even
+    on this fatter deck.
+
+    Step 193 is the first declare_attackers emission; step 195 is
+    the declare_blockers emission. Both walk clean — the divergence
+    only surfaces on step 196 when actual damage is applied (the
+    COMBAT_DAMAGE branch fires resolve_combat_damage_python +
+    deal_combat_damage_rust).
+    """
+    from mtg_bot.parity.cross_engine import (
+        multi_block_combat_selector,
+        multi_blocker_deckspec,
+        walk_both,
+    )
+
+    result = walk_both(
+        multi_blocker_deckspec(),
+        n_decisions=196,
+        decision_selector=multi_block_combat_selector,
+    )
+    assert result.error is None
+    for step in result.steps:
+        assert step.divergences == [], (
+            f"pre-combat divergence at step {step.step_index}: "
+            f"action={step.action_dict} "
+            f"{[(d.field, d.py_value, d.rust_value, d.known_gap) for d in step.divergences]}"
+        )
+
+    # Confirm the script shape (the same shape that gates the CE9
+    # surface): three casts (p1 turns 6 + 10, p0 turn 13), one
+    # declare_attackers (p0 turn 15), one declare_blockers (turn 15
+    # COMBAT_DAMAGE / pre-advanced step).
+    casts = [
+        s for s in result.steps
+        if s.action_dict.get("kind") == "cast_spell"
+    ]
+    assert len(casts) == 3, f"expected 3 cast emissions, got {len(casts)}"
+    declares_attackers = [
+        s for s in result.steps
+        if s.action_dict.get("kind") == "declare_attackers"
+    ]
+    assert len(declares_attackers) == 1
+    assert declares_attackers[0].py_view["active_player"] == 0
+    declares_blockers = [
+        s for s in result.steps
+        if s.action_dict.get("kind") == "declare_blockers"
+    ]
+    assert len(declares_blockers) == 1
+    assert declares_blockers[0].action_dict["assignments"] == [[11, 5], [9, 5]]
+
+
+def test_cross_engine_multi_block_combat_selector_suppresses_p1_attacks(
+    parity_smoke,
+):
+    """**Multi-block selector contract**: p1 NEVER attacks. The selector's
+    DECLARE_ATTACKERS branch gates on ``active_idx == 0`` to preserve
+    p1's Bears as untapped blockers (a tapped creature can't block per
+    CR 509.1b — and combat tapping is the principal way Bears would
+    end up tapped on this synthetic deck).
+
+    Across the full 210-step walk, every ``declare_attackers`` action
+    has ``active_player == 0``. p1's DECLARE_ATTACKERS step falls
+    through to the multi_turn fallback (pass_priority + advance).
+    """
+    from mtg_bot.parity.cross_engine import (
+        multi_block_combat_selector,
+        multi_blocker_deckspec,
+        walk_both,
+    )
+
+    result = walk_both(
+        multi_blocker_deckspec(),
+        n_decisions=210,
+        decision_selector=multi_block_combat_selector,
+    )
+    assert result.error is None
+    declares = [
+        s for s in result.steps
+        if s.action_dict.get("kind") == "declare_attackers"
+    ]
+    for d in declares:
+        assert d.py_view["active_player"] == 0, (
+            f"unexpected p1 declare_attackers at step {d.step_index}: "
+            f"{d.action_dict} active={d.py_view['active_player']}"
+        )
+
+
+def test_cross_engine_multi_blocker_deckspec_library_shape(parity_smoke):
+    """**Deckspec contract**: the multi-blocker library shape is the
+    minimum needed to deliver:
+      * One Bears in p0's hand by turn 13 (the cast turn).
+      * Two Bears in p1's hand spaced 4 turns apart (turn 6 + turn 10
+        casts so both Bears are unsick by turn 15).
+
+    Pins the exact library tuples so a future refactor that fiddles
+    with the shape doesn't silently shift the multi-block CE9 step
+    index.
+    """
+    from mtg_bot.parity.cross_engine import multi_blocker_deckspec
+
+    spec = multi_blocker_deckspec()
+    assert spec.p0_library == (
+        "Forest", "Forest", "Forest", "Forest", "Forest",
+        "Grizzly Bears", "Forest",
+    )
+    assert spec.p1_library == (
+        "Forest", "Forest", "Grizzly Bears", "Forest",
+        "Grizzly Bears", "Forest", "Forest",
+    )
+    assert spec.shuffle_seed is None  # no shuffle for parity smoke
+
+
+def test_cross_engine_step_both_routes_declare_blockers_actor_to_defender(
+    parity_smoke,
+):
+    """**step_both actor-routing contract**: when an action's kind is
+    ``declare_blockers``, the harness routes Python's ``apply_action``
+    using the DEFENDER's player id (not the priority player's), so
+    Python's ``_declare_blockers`` validation passes
+    ``eligible_blockers(state, defender_id)`` and the assignments
+    actually take effect.
+
+    Without this routing the declare_blockers action would silently
+    drop every assignment because the harness uses
+    ``priority_player_idx`` as the actor for every action kind, and
+    during DECLARE_BLOCKERS the priority player on a synthetic state
+    is still the active player (the harness doesn't model the
+    priority handoff to defender). The CE9 surface depends on
+    blockers actually being declared — without this routing the
+    multi-block probe would see empty blocked_by sets and the
+    divergence wouldn't surface.
+
+    Smoke check: drive a multi-block walk through the declare_blockers
+    step and verify the attacker's blocked_by set is non-empty on the
+    Python side post-step.
+    """
+    from mtg_bot.parity.cross_engine import (
+        build_matched_states,
+        multi_blocker_deckspec,
+        multi_block_combat_selector,
+        walk_both,
+    )
+
+    result = walk_both(
+        multi_blocker_deckspec(),
+        n_decisions=196,
+        decision_selector=multi_block_combat_selector,
+    )
+    assert result.error is None
+    # After step 195 (declare_blockers), Python's attacker (Bears
+    # id=5) should have blocked_by set to both blockers — populated
+    # by the defender-routed apply_action.
+    py_state, _ = build_matched_states(multi_blocker_deckspec())
+    for i in range(196):
+        action = multi_block_combat_selector(py_state, _, i)
+        from mtg_bot.parity.cross_engine import step_both
+        step_both(py_state, _, action)
+    attacker = next(
+        (o for o in py_state.battlefield if int(o.id) == 5),
+        None,
+    )
+    # If the attacker is None it died from combat damage already (the
+    # COMBAT_DAMAGE branch may have fired in step 195's selector chain
+    # if the advance landed at COMBAT_DAMAGE). On the multi_blocker
+    # deck the COMBAT_DAMAGE fires at step 196 (one step after
+    # declare), so the attacker should still be on bf at step 195's
+    # post-state. If the test breaks here the walk shape has shifted.
+    assert attacker is not None, (
+        "expected attacker (id=5) to still be on bf at end of step 195"
+    )
+    # blocked_by should contain both blocker ids (the order depends on
+    # the declare order — reversed bf order = [11, 9]).
+    assert set(attacker.blocked_by) == {9, 11}, (
+        f"expected blocked_by={{9, 11}}, got {attacker.blocked_by}"
+    )

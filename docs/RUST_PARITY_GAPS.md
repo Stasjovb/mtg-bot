@@ -1488,20 +1488,72 @@ the action-kind gate.
   slice; schedule when CE5 (cast-vs-resolve) closure lands and the
   cadence has room for substrate work.
 
-### CE9. (unallocated — reserved for the next surfacing slice)
+### CE9. Combat damage assignment order diverges on multi-blocker scenes — Python walks battlefield ETB order, Rust walks `self.blockers` Vec push order
 
-CE9 is intentionally left empty. The staging doc
-`docs/PENDING_CE_FILINGS_2026_05_11.md` (merge `50eb79ea`) proposed
-filing three findings as CE7/CE8/CE9, but the in-flight
-CE-pure-derivation-is_over closure (merge `59b6054e`) took CE10
-before the staging doc was applied. Per the playbook's
-monotonic-on-surface numbering policy, this slice files only the
-two findings that still need formal numbering (CE7 inline-vs-
-pymethod CLOSED, CE8 shuffle-PRNG OPEN) and leaves CE9 for the
-next divergence to be surfaced + pinned. Do not pre-allocate CE9
-to any predicted-but-unsurfaced gap (combat damage, cross-player
-find-first, trigger emitter, ...); it gets claimed by whichever
-divergence is pinned by a test next.
+> **Numbering note.** Per the staging note above, CE9 was reserved for
+> the next surfaced + pinned divergence. The Phase-5 follow-up #6
+> slice (`feature/phase5-multi-blocker`) drove a multi-block combat
+> with blockers declared in REVERSE bf order and surfaced exactly the
+> divergence the audits and the playbook (`docs/CE5_CE6_CE7_CLOSURE_PLAYBOOK.md`
+> §3) predicted would be CE6 in the original numbering. The CE9 slot
+> is therefore the audits' predicted CE6 (damage assignment).
+
+- **Pinned by**: `tests/test_parity_smoke.py::test_cross_engine_multi_block_combat_selector_walks_clean`
+  (strict-xfail, the clean-walk pin that flips to xpass after closure)
+  and the companion symptom-present pin
+  `test_cross_engine_multi_block_combat_selector_surfaces_ce9_at_step_196`
+  (passes today, deleted after closure per the pair-pin convention).
+- **Surfaced by**: Phase 5 follow-up #6 multi-blocker probe
+  (`feature/phase5-multi-blocker`). The `multi_block_combat_selector`
+  drives a 210-decision walk on `multi_blocker_deckspec` and, at
+  step 196 (turn 15 END_OF_COMBAT, after the COMBAT_DAMAGE selector
+  branch fires the side-channel damage mirrors), surfaces the
+  divergence: Python killed Bears id=9 (the lower-bf-position
+  blocker); Rust killed Bears id=11 (the higher-bf-position blocker,
+  declared first per the reverse-bf-order declaration).
+- **Rust today**: `rust/src/state_ops_combat.rs:849` walks
+  `self.attackers` Vec in declare-attackers push order;
+  `state_ops_combat.rs:865-868` uses
+  `self.blockers.iter().find_map(...)` to pick the FIRST entry whose
+  attacker matches — i.e. declare-blockers push order;
+  `state_ops_combat.rs:962` iterates `self.blockers` directly for the
+  back-damage walk;
+  `state_ops_combat.rs:1025-1028` inherits the pass-1 order for the
+  alive-check between first-strike and regular passes.
+  All four sites walk DECLARE PUSH order.
+- **CR / Python expected**: Python's `combat.py:389,405` walks
+  ``[o for o in state.battlefield if o.id in attacker.blocked_by]`` —
+  battlefield-order filtered by membership in the attacker's
+  `blocked_by` set. This is bf ETB order (post-CE4 centralized
+  ETB-monotone). Per the playbook's §3 "IMPORTANT REVISION TO THE
+  AUDITS' PREDICTIONS", Python's walk is itself a BUG vs CR 510.1d
+  ("the active player chooses the damage assignment order" = declare
+  order), but the parity reference is Python's observable behavior.
+- **Impact**: HIGH on multi-block combat scenes. Every multi-block
+  combat where blockers are NOT declared in bf-ETB order produces a
+  different per-blocker damage distribution — and on a 2/2 vs 2/2
+  exchange (the minimal probe shape), a DIFFERENT blocker dies on
+  each side. Cascades to `battlefield` / `graveyard_pN` field
+  divergence and any downstream queries that read per-blocker
+  `damage` marks or zone membership.
+- **Closeable**: yes — `docs/CE5_CE6_CE7_CLOSURE_PLAYBOOK.md` §3
+  ships the closure plan. Two viable options:
+  - **Option A (audit recommendation, short-term smoke parity)**:
+    Sort the per-attacker damage-plan walk by source's
+    `etb_timestamp` via the `bf_iter_etb_sorted` helper already in
+    `rust/src/bf_iter.rs` (consumed by CE6's SBA-victim collection
+    closure). Concretely: replace the `find_map` at lines 865-868
+    with a walk that iterates `bf_iter_etb_sorted(state)`, filters
+    to ids appearing in `self.blockers` for this attacker, and
+    takes the first match. Same change at line 962 for the back-
+    damage walk. This MATCHES Python's bug for smoke parity. Slice
+    author recommendation per the playbook.
+  - **Option B (long-term correctness)**: Keep Rust's push-order
+    walk and fix Python's `combat.py:389,405` to walk
+    `attacker.blocked_by` in push order instead. Engineering-
+    correct but doubles the slice scope.
+  - The Phase 5 follow-up #6 slice ships only the PROBE that
+    surfaces the divergence; the closure itself is the next slice.
 
 ### ~~CE10.~~ CLOSED: `is_over` / `winner_id` / `is_draw` surface accessors are SBA-gated (matching Python's SBA-written fields)
 
