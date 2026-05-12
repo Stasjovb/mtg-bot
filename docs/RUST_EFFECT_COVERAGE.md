@@ -6,9 +6,9 @@ This page is the rolling-progress snapshot for the Rust engine port's `Effect` e
 
 ## Headline numbers
 
-- **65 of 228 Python Effect classes covered (28.5%)** — by distinct-class count.
-- **482 of 690 per-card emissions covered (69.9%)** — weighted by how many cards each class appears on. This is the more load-bearing metric: high-frequency classes pull the bulk of cards into Rust even at low class-count coverage.
-- **71 Rust `Effect` variants** in `rust/src/cards.rs` today; 475 parser-claimed printings across the loaded pools.
+- **66 of 228 Python Effect classes covered (28.9%)** — by distinct-class count.
+- **492 of 690 per-card emissions covered (71.3%)** — weighted by how many cards each class appears on. This is the more load-bearing metric: high-frequency classes pull the bulk of cards into Rust even at low class-count coverage.
+- **72 Rust `Effect` variants** in `rust/src/cards.rs` today; 475 parser-claimed printings across the loaded pools.
 - **WARNING: 3 Rust variant(s) with no Python counterpart**: `Effect::ChooseOneMode` -> `ChooseOneMode`, `Effect::GrantKeywordToTargetCreatureUntilEOT` -> `GrantKeywordToTargetCreatureUntilEOT`, `Effect::SetBasePTUntilEOT` -> `SetBasePTUntilEOT`. This indicates bridge drift — either Python emits the class under a different name, or the Rust variant is unused. Audit `RUST_TO_PYTHON_OVERRIDES` / `RUST_AHEAD_OF_POOL` in `scripts/measure_effect_coverage.py`.
 - **1 Rust variant(s) built ahead of the pool** (allowlisted in `RUST_AHEAD_OF_POOL`): `ScryN`. These have no pool card exercising them today and are NOT counted as orphans.
 
@@ -18,7 +18,7 @@ Python Effect classes are split by how many cards they appear on. The Rust port 
 
 ### Frequency >= 10 (14 classes)
 
-- Covered by Rust: **11 / 14** (78.6%)
+- Covered by Rust: **12 / 14** (85.7%)
 
 | Python class | Frequency | Rust support |
 |---|---:|---|
@@ -35,7 +35,7 @@ Python Effect classes are split by how many cards they appear on. The Rust port 
 | `BecomeLandCreatureUEOT` | 13 | no |
 | `ModalChooseOne` | 13 | no |
 | `PumpSelfUntilEOT` | 12 | yes |
-| `ManifestDread` | 10 | no |
+| `ManifestDread` | 10 | yes |
 
 ### Frequency 2-9 (53 classes)
 
@@ -121,6 +121,7 @@ Python Effect classes are split by how many cards they appear on. The Rust port 
 | 69 | `Effect::TapAnotherTargetCreature` | `TapAnotherTargetCreature` | 1 |
 | 70 | `Effect::ReturnAllCreaturesFromYourGraveyardToBattlefield` | `ReturnAllCreaturesFromYourGraveyardToBattlefield` | 1 |
 | 71 | `Effect::SetBasePTUntilEOT` | `SetBasePTUntilEOT` | 0 |
+| 72 | `Effect::ManifestDread` | `ManifestDread` | 10 |
 
 ## High-frequency Python classes NOT yet in Rust
 
@@ -130,5 +131,4 @@ These are the next-best ports by cards-covered-per-variant and are the recommend
 |---|---:|---|
 | `BecomeLandCreatureUEOT` | 13 | Blinkmoth Nexus |
 | `ModalChooseOne` | 13 | Archenemy's Charm |
-| `ManifestDread` | 10 | Bashful Beastie |
 

@@ -443,6 +443,29 @@ impl GameState {
                         Value::String(format!("{:?}", do_action)),
                         Value::String(format!("{:?}", then_action)),
                     ]),
+                    // Round-28 manifest-dread decision: same shape as
+                    // PickCardFromExaminedChoice (variant-tag +
+                    // source/controller + per-examined-card object
+                    // signature). The examined cards live in NEITHER
+                    // library nor bf/graveyard while pending, so they
+                    // must participate in the fingerprint to make a
+                    // pending-card state distinguishable from a state
+                    // where the cards already routed.
+                    PendingDecision::ManifestDreadChoice {
+                        source_obj_id,
+                        controller,
+                        cards,
+                    } => Value::Array(vec![
+                        Value::String("ManifestDreadChoice".to_string()),
+                        json!(*source_obj_id),
+                        json!(*controller),
+                        Value::Array(
+                            cards
+                                .iter()
+                                .map(|o| object_signature(self, o))
+                                .collect(),
+                        ),
+                    ]),
                 })
                 .collect();
             parts_vec.push(Value::Array(pds));

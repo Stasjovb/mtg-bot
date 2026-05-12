@@ -4248,6 +4248,56 @@ fn apply_effect(
                 }
             }
         }
+        // Round-28 ManifestDread first-slice. CR 701.55 — pop top
+        // min(2, library_len) cards into a ManifestDreadChoice and
+        // short-circuit. Substrate-aligned with LookTopN: same pop-
+        // and-package shape, but the submit dispatcher routes the
+        // picked card to bf (with ETB-reset) instead of hand.
+        //
+        // Controller convention: state.active_player (first-slice
+        // shape consistent with Surveil / LookTopN / MayDo /
+        // ChooseOneMode / IfYouDo).
+        //
+        // First-slice: count = 1 ONLY. count > 1 raises with a clear
+        // "deferred" message so a typo doesn't silently no-op. Python's
+        // multi-iter form (Slimy Aquarium, Weight Room riders) and X-
+        // times form (Valgavoth's Onslaught) are documented in
+        // SEARCH_LIMITATIONS.md as deferred.
+        //
+        // Empty / 1-card library partials: emit a PendingDecision
+        // with a (possibly empty / 1-card) cards Vec. Auto-resolve
+        // and submit handle both — empty drains as O(1) no-op,
+        // 1-card manifests the lone card.
+        Effect::ManifestDread { count } => {
+            if *count != 1 {
+                return Err(PyValueError::new_err(format!(
+                    "ManifestDread: first-slice supports count = 1 only \
+                     (got count = {count}); count > 1 (multi-iter) and \
+                     count = 0 (no-op) deferred — see \
+                     docs/SEARCH_LIMITATIONS.md"
+                )));
+            }
+            let controller = state.active_player;
+            let pidx = controller as usize;
+            let lib_len = state.players[pidx].library.len();
+            let pop_count = lib_len.min(2);
+            let lib_mut: &mut Vec<GameObject> =
+                Arc::make_mut(&mut state.players[pidx].library);
+            let mut cards: Vec<GameObject> = Vec::with_capacity(pop_count);
+            for _ in 0..pop_count {
+                let popped = lib_mut.pop().expect(
+                    "library length checked above; pop cannot fail",
+                );
+                cards.push(popped);
+            }
+            state.pending_decisions.push(
+                PendingDecision::ManifestDreadChoice {
+                    source_obj_id,
+                    controller,
+                    cards,
+                },
+            );
+        }
         // Round-28 mass reanimation. Mirrors Python's
         // ReturnAllCreaturesFromYourGraveyardToBattlefield (Awakening-
         // Hall family, 2+ EoE cards). Iterate source-controller's

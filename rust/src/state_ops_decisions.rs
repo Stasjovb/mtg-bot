@@ -69,13 +69,14 @@ pub(crate) fn auto_resolve_pending(
         | "choose_mode_0"
         | "if_you_do_yes"
         | "if_you_do_no"
+        | "manifest_top"
         | "default" => {}
         other => {
             return Err(PyValueError::new_err(format!(
                 "auto_resolve_pending_decisions: unknown strategy {other:?}; \
                  valid strategies: keep_all_on_top, send_all_to_graveyard, \
                  may_do_yes, may_do_no, pick_top, choose_mode_0, \
-                 if_you_do_yes, if_you_do_no, default"
+                 if_you_do_yes, if_you_do_no, manifest_top, default"
             )))
         }
     }
@@ -177,6 +178,21 @@ pub(crate) fn auto_resolve_pending(
                     )?;
                 }
             }
+            PendingDecision::ManifestDreadChoice {
+                controller, cards, ..
+            } => {
+                // "default" / "manifest_top" → pick cards[0] (the
+                // topmost popped — matches Python's no-agent-seated
+                // fallback in ManifestDread.resolve, `manifest_id =
+                // options[0]`). Other strategies fall through to the
+                // same default for robustness.
+                resolve_manifest_dread_to_battlefield(
+                    state,
+                    controller,
+                    cards,
+                    /*chosen_idx*/ 0,
+                )?;
+            }
         }
     }
     Ok(())
@@ -211,6 +227,62 @@ fn resolve_pick_card_to_hand(
         let mut obj = chosen;
         obj.zone = 0; // ZONE_HAND
         hand_mut.push(obj);
+    }
+    // Route the rest (preserving popped order) to graveyard.
+    {
+        let gy_mut: &mut Vec<GameObject> =
+            Arc::make_mut(&mut state.players[pidx].graveyard);
+        for mut obj in sorted_cards.into_iter() {
+            obj.zone = 3; // ZONE_GRAVEYARD
+            gy_mut.push(obj);
+        }
+    }
+    Ok(())
+}
+
+/// Apply a ManifestDread decision. Routes `cards[chosen_idx]` to
+/// the controller's battlefield (with standard ETB state reset) and
+/// every other card to the controller's graveyard, in popped order.
+///
+/// **Face-down semantics — first-slice simplification.** The
+/// manifested card lands on bf with its ORIGINAL printing visible
+/// (name/types/P/T/abilities). Real MTG would set it to a 2/2
+/// vanilla face-down creature (CR 701.34 + 707.2); modeling face-
+/// down state requires either a face-down flag on GameObject
+/// (forces fingerprint baseline rebuilding) or a face-down-
+/// placeholder-printing approach — both deferred. See
+/// SEARCH_LIMITATIONS.md.
+///
+/// Out-of-range `chosen_idx` or an empty cards Vec returns Ok(()) —
+/// the empty case is the legitimate library-exhausted no-op path.
+fn resolve_manifest_dread_to_battlefield(
+    state: &mut GameState,
+    controller: u8,
+    cards: Vec<GameObject>,
+    chosen_idx: usize,
+) -> PyResult<()> {
+    if chosen_idx >= cards.len() {
+        // Empty cards Vec (library was empty) → no-op success.
+        return Ok(());
+    }
+    let pidx = controller as usize;
+    let mut sorted_cards = cards;
+    let chosen = sorted_cards.remove(chosen_idx);
+    // Route chosen to bf with the standard ETB state reset (mirrors
+    // ReturnAllCreaturesFromYourGraveyardToBattlefield's reset).
+    {
+        let bf_mut: &mut Vec<GameObject> =
+            Arc::make_mut(&mut state.players[pidx].battlefield);
+        let mut obj = chosen;
+        obj.zone = 2; // ZONE_BATTLEFIELD
+        obj.tapped = false;
+        obj.summoning_sick = true;
+        obj.damage = 0;
+        obj.counters = 0;
+        obj.attached_to = None;
+        obj.exiled_with_source = None;
+        obj.controller = controller;
+        bf_mut.push(obj);
     }
     // Route the rest (preserving popped order) to graveyard.
     {
@@ -365,6 +437,17 @@ impl GameState {
                     let then_dict = crate::cards::effect_to_pydict(py, then_action.as_ref())?;
                     d.set_item("do_action", do_dict)?;
                     d.set_item("then_action", then_dict)?;
+                }
+                PendingDecision::ManifestDreadChoice {
+                    source_obj_id,
+                    controller,
+                    cards,
+                } => {
+                    d.set_item("kind", "ManifestDreadChoice")?;
+                    d.set_item("source_obj_id", *source_obj_id)?;
+                    d.set_item("controller", *controller)?;
+                    let card_ids: Vec<u32> = cards.iter().map(|o| o.id).collect();
+                    d.set_item("cards", card_ids)?;
                 }
             }
             out.append(d)?;
@@ -709,6 +792,69 @@ impl GameState {
             )?;
         }
         Ok(())
+    }
+
+    /// Consume the head `ManifestDreadChoice` on the pending-
+    /// decisions queue: route `chosen_id` to the controller's
+    /// battlefield (with the standard ETB state reset:
+    /// summoning_sick=true, tapped=false, damage=0, counters=0,
+    /// attached_to=None, exiled_with_source=None) and every other
+    /// examined card to the controller's graveyard (in popped
+    /// order). `chosen_id` MUST be one of the examined card ids;
+    /// an unknown id raises `ValueError` transactionally (no
+    /// mutation on failure).
+    ///
+    /// Powers the round-28 `Effect::ManifestDread` wrapper (Bashful-
+    /// Beastie family, 10 EoE cards — highest-frequency previously-
+    /// unported class). The dispatcher mirrors Python's
+    /// `ManifestDread.resolve`: the chosen card is moved to bf as a
+    /// "face-down" creature (first-slice simplification: original
+    /// printing remains visible — see SEARCH_LIMITATIONS.md); the
+    /// rest go to graveyard in popped order.
+    ///
+    /// Raises `ValueError` if the queue is empty, its head is not a
+    /// `ManifestDreadChoice`, or `chosen_id` is not one of the
+    /// examined ids.
+    fn submit_manifest_dread_decision(&mut self, chosen_id: u32) -> PyResult<()> {
+        if self.pending_decisions.is_empty() {
+            return Err(PyValueError::new_err(
+                "submit_manifest_dread_decision: no pending decision",
+            ));
+        }
+        // Inspect head — fail before any mutation on a discriminant
+        // mismatch or unknown chosen_id.
+        let chosen_idx = match &self.pending_decisions[0] {
+            PendingDecision::ManifestDreadChoice { cards, .. } => {
+                let idx = cards.iter().position(|o| o.id == chosen_id);
+                match idx {
+                    Some(i) => i,
+                    None => {
+                        return Err(PyValueError::new_err(format!(
+                            "submit_manifest_dread_decision: chosen_id {chosen_id} \
+                             is not one of the examined card ids {:?}",
+                            cards.iter().map(|o| o.id).collect::<Vec<u32>>()
+                        )));
+                    }
+                }
+            }
+            other => {
+                return Err(PyValueError::new_err(format!(
+                    "submit_manifest_dread_decision: head of pending-decisions queue is \
+                     not a ManifestDreadChoice (got {:?}); call the \
+                     variant-specific submit_* dispatcher",
+                    std::mem::discriminant(other)
+                )));
+            }
+        };
+        // Validation passed — consume the head and route.
+        let decision = self.pending_decisions.remove(0);
+        let (controller, cards) = match decision {
+            PendingDecision::ManifestDreadChoice {
+                controller, cards, ..
+            } => (controller, cards),
+            _ => unreachable!("validated above"),
+        };
+        resolve_manifest_dread_to_battlefield(self, controller, cards, chosen_idx)
     }
 
     /// Drain the pending-decisions queue using a deterministic

@@ -1142,6 +1142,115 @@ planeswalkers + creature mana sources mature.
 
 ---
 
+## Rust port — `Effect::ManifestDread` face-down state + count > 1 deferred
+
+**Location**: `rust/src/state_ops_resolve.rs` `Effect::ManifestDread`
+resolve arm; `rust/src/state_ops_decisions.rs`
+`resolve_manifest_dread_to_battlefield` helper.
+
+**What we do today**: when a ManifestDread effect resolves, the
+controller picks one of the top 2 (or 1 if library has 1 card)
+examined cards. The picked card is moved to the controller's
+battlefield WITH ITS ORIGINAL PRINTING VISIBLE (name, types, P/T,
+abilities, color all visible to both players). The other examined
+card goes to graveyard. `count > 1` (multi-iter form) and
+`count = 0` (no-op) raise at resolve time with a clear "deferred"
+message; `count = 1` is the only supported value in the first-slice.
+
+**Why this diverges from real MTG**: CR 701.34 + 707 specifies that
+a manifested permanent enters the battlefield FACE DOWN. While
+face down, it has:
+* No name, no card types other than "Creature", no subtypes
+* Base 2/2 power and toughness (CR 707.2c)
+* No abilities (except those that function in any zone or affect
+  the face-down permanent itself)
+* It is colorless
+* Its owner can turn it face up at any time by paying the original
+  printing's mana cost (CR 707.4) if it is a creature card
+
+The first-slice Rust port skips ALL of these — the manifested card
+is functionally a normal permanent of its printing's type. Python's
+`src/mtg_bot/effects/generic/library_lookat.py:ManifestDread`
+similarly sets `card.face_down = True` but only the face-down flag
+is set; the 2/2 vanilla-creature semantics are not threaded through
+the engine's effective-keyword / effective-P/T / effective-card-type
+readers (which would require a layer-1 characteristic-replacement
+implementation across power/toughness/types/abilities). The Rust
+port mirrors the Python state today and additionally drops the
+`face_down` flag because GameObject doesn't have one.
+
+**Why this is OK as a first-slice**: ManifestDread's primary
+strategic value is "pseudo-card-advantage + body on the
+battlefield". Modeling the body as a face-down 2/2 vanilla rather
+than the original creature's printed P/T loses some accuracy in
+combat — a manifested Bashful Beastie (5/5 with stats baked into
+its printing) plays as a 5/5 in this engine but should be a 2/2
+face-down. But every model trained on this engine sees consistent
+ManifestDread behavior — the bias is in the same direction in both
+seats and largely washes out for self-play. Real-MTG correctness
+matters more when face-up flip costs become tactically relevant
+(deferred).
+
+**For `count > 1`**: only a handful of EoE cards reference "manifest
+dread N times" (Slimy Aquarium / Weight Room riders) or "manifest
+dread X times" (Valgavoth's Onslaught). The first-slice gate makes
+those error out loudly rather than silently produce wrong behavior;
+the parse layer accepts any non-negative count so the dict round-
+trip is forward-compatible with the multi-iter follow-up slice.
+
+**Failure mode (face-down semantics)**:
+1. A manifested creature is destroyed by an Auntie's Hovel-style
+   "destroy target X creature" that wouldn't legally target a
+   face-down 2/2 (face-down has no subtypes). Real MTG: spell
+   fizzles. Engine: spell resolves on the visible printing's
+   subtype.
+2. A face-down creature attacks. Real MTG: combat-damage assigner
+   uses the 2/2 P/T. Engine: uses the printing's P/T.
+3. A face-down creature is sacrificed for an effect that requires
+   "creature with mana value N or less" (face-down has mana value
+   0 per CR 707.2d). Real MTG: any face-down satisfies "MV ≤ 0".
+   Engine: uses the printed mana value.
+4. The "turn face up by paying the mana cost" activated ability is
+   missing entirely — the manifest can never flip up in this engine.
+
+**Failure mode (count > 1 gated at resolve)**:
+* Slimy Aquarium's "manifest dread, then put a +1/+1 counter on
+  that creature" works (count=1, ManifestDreadThenPutPlusOneCounters
+  is a separate Python class — and isn't a count > 1 form).
+* Anything that genuinely emits ManifestDread(count=2+) will raise
+  a ValueError at stack-resolve time. This is loud-fail by design;
+  silent partial would be worse.
+
+**When it matters**: face-down state is a moderate-frequency edge
+case once the engine sees real games. count > 1 is a low-frequency
+edge case (a handful of EoE cards). Both rise in priority once
+ManifestDread cards become common in trained decks.
+
+**Fix scope when prioritized (face-down)**: medium. Either (a) add a
+`face_down: bool` field to `GameObject` and bake it into
+effective-P/T / effective-keyword / effective-types readers and the
+fingerprint (requires rebuilding pinned baselines), or (b) introduce
+a "face-down placeholder printing" and have ManifestDread swap the
+manifested card's printing_id to that placeholder, threading the
+original printing through a sidecar `manifested_from_printing_id`
+field so face-up flip can restore it. (a) is more invasive but
+cleaner; (b) avoids the fingerprint churn but adds a sidecar field
+that also needs CR 400.7 zone-change reset semantics.
+
+**Fix scope when prioritized (count > 1)**: small. Iterate the
+resolve arm `count` times, each iteration popping + pushing its own
+ManifestDreadChoice; the submit dispatcher loops naturally as each
+decision drains. Alternatively, carry `remaining_iters: u32` on the
+PendingDecision and re-push on submit. Either approach is ~30 LOC.
+
+**Impact estimate**: strength cost is in the low single digits %
+for face-down semantics in a mature deck-pool; near zero for
+count > 1 in EoE (a few cards). Perf neutral — the face-down
+modeling adds zero hot-path work; the count > 1 path only
+matters when those specific cards resolve.
+
+---
+
 ## Tracked but not in this doc
 
 Things tracked elsewhere that you might also want to know about:

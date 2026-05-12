@@ -1436,6 +1436,54 @@ pub enum Effect {
     /// **Negative values are legal.** "Has base 0/0" is meaningful
     /// (the creature dies to SBA toughness <= 0). No guard.
     SetBasePTUntilEOT { power: i32, toughness: i32 },
+    /// **Round 28 manifest-dread first-slice.** CR 701.55 — "Look at
+    /// the top two cards of your library, manifest one of them, then
+    /// put the other into your graveyard." Mirrors Python's
+    /// `ManifestDread(count: int = 1)` (Bashful-Beastie family, 10
+    /// EoE cards — the highest-frequency unported class).
+    ///
+    /// **Resolve semantics (count = 1).** Pop `min(2, library_len)`
+    /// cards off library top and package them into a
+    /// `PendingDecision::ManifestDreadChoice`. The Effect arm short-
+    /// circuits — cards are NOT yet on battlefield or in graveyard.
+    /// The controller drains via
+    /// `submit_manifest_dread_decision(chosen_id)` (manual) or
+    /// `auto_resolve_pending_decisions("default" | "manifest_top")`
+    /// (deterministic — picks the topmost = cards[0]).
+    ///
+    /// **Empty / 1-card library partials.** library_len=0 emits a
+    /// PendingDecision with an empty `cards` Vec. Drains as an O(1)
+    /// no-op. library_len=1 emits a PendingDecision with cards = [top
+    /// card]; on submit, the lone card is manifested and there's no
+    /// graveyard-bound card. Mirrors Python's
+    /// `if not p.library: return` and `if len(examined) == 1:`
+    /// partials.
+    ///
+    /// **Face-down semantics — first-slice simplification.** The
+    /// "manifested" card is moved to the controller's battlefield
+    /// AS-IS — its original printing remains visible (name, types,
+    /// P/T, abilities). Real MTG would set the permanent to a 2/2
+    /// vanilla face-down creature with no abilities (CR 701.34 +
+    /// 707.2), with the original printing tracked underneath for the
+    /// face-up turn (CR 707.4). Modeling face-down state requires
+    /// either a face-down flag on GameObject (forces fingerprint
+    /// baseline rebuilding) or a face-down-placeholder-printing
+    /// design — both deferred. See `docs/SEARCH_LIMITATIONS.md` for
+    /// the full scope notice.
+    ///
+    /// **First-slice scope.** `count = 1` ONLY. Python supports
+    /// `count = N` ("manifest dread N times") for Slimy Aquarium /
+    /// Weight Room rider effects, and `count = None` (X-times) for
+    /// Valgavoth's Onslaught. The Rust resolve arm raises on
+    /// `count != 1`; the parse layer accepts any non-negative
+    /// `count` so the Effect-enum round-trip is forward-compatible
+    /// with a follow-up multi-iter slice.
+    ///
+    /// **Controller convention.** `state.active_player` — first-
+    /// slice shape consistent with Surveil / LookTopN / MayDo /
+    /// IfYouDo / ChooseOneMode. Real MTG plumbs the spell controller
+    /// through `StackItem.controller`; deferred.
+    ManifestDread { count: i32 },
 }
 
 #[derive(Clone, Debug)]
@@ -2122,6 +2170,28 @@ fn parse_effect(dict: &Bound<'_, PyDict>) -> PyResult<Effect> {
         "return_all_creatures_from_your_graveyard_to_battlefield" => {
             Ok(Effect::ReturnAllCreaturesFromYourGraveyardToBattlefield)
         }
+        "manifest_dread" => {
+            // Round-28 ManifestDread first-slice. Python's
+            // `ManifestDread(count: int = 1)` defaults to 1; we
+            // mirror that. Negative count raises at parse time.
+            // count != 1 is allowed at parse (so dict round-trip
+            // works) but resolve-time-raises with a clear "deferred"
+            // error so a typo doesn't silently no-op.
+            let count: i32 = match dict.get_item("count")? {
+                Some(c) => c.extract().map_err(|e| {
+                    PyValueError::new_err(format!(
+                        "manifest_dread.count must be an integer (got: {e})"
+                    ))
+                })?,
+                None => 1,
+            };
+            if count < 0 {
+                return Err(PyValueError::new_err(format!(
+                    "manifest_dread: count must be non-negative, got {count}"
+                )));
+            }
+            Ok(Effect::ManifestDread { count })
+        }
         "set_base_pt_until_eot" => {
             // Required `power` and `toughness` integer fields. No
             // defaults — every Python card emission spells both out.
@@ -2502,7 +2572,7 @@ fn parse_effect(dict: &Bound<'_, PyDict>) -> PyResult<Effect> {
             Ok(Effect::Sequence { effects: children })
         }
         other => Err(PyValueError::new_err(format!(
-            "unknown effect kind {other:?}; valid: deal_damage, draw_cards, gain_life, return_to_hand, mill, mill_target_player, exile_target, tap_target, untap_target, sacrifice, add_counters, discard_card, scry_n, destroy_target, damage_each_opponent, damage_each_creature, create_token, add_mana_to_pool, search_library_for_basic_land_tapped, put_plus_one_counter_on_self, surveil, counter_target_spell, return_creature_from_your_graveyard_to_battlefield, discard_self, each_opponent_loses_life, lose_life, target_opponent_loses_life, each_opponent_discards, destroy_all_creatures, destroy_target_nonland_permanent, destroy_target_artifact, destroy_target_land, deal_damage_any_target, pump_self_until_eot, pump_target_creature_until_eot, sequence, pump_creatures_you_control_until_eot, return_creature_from_your_graveyard_to_hand, put_plus_one_counter_on_each_creature_you_control, put_plus_one_counter_on_creature_you_control, add_n_mana_of_chosen_color, search_library_for_card, pump_creatures_opponents_control_until_eot, put_card_from_graveyard_on_bottom_of_library, move_self_counters_to_target_creature_you_control, deal_damage_equal_to_source_power_any_target, tap_target_artifact_or_creature, conditional_on_tapped_creatures, put_plus_one_counter_on_each_of_up_to_n_target_creatures, put_charge_counters_on_self, create_token_copy_of_target_creature_you_control, optional_sac_artifact_for_effect, owner_puts_target_artifact_or_creature_on_top_or_bottom_of_library, attach_to_target_creature_you_control, destroy_enchanted_permanent, tap_enchanted_permanent, exile_target_creature_until_source_leaves, exile_opponents_nonland_permanent_until_leaves, may_do, look_top_n_put_one_in_hand_rest_to_graveyard, choose_one_mode, if_you_do, each_opponent_mills_cards, pump_target_artifact_or_creature_until_eot, each_opponent_sacrifices_creature, grant_keyword_to_target_creature_until_eot, untap_target_other_permanent, tap_another_target_creature, return_all_creatures_from_your_graveyard_to_battlefield, set_base_pt_until_eot"
+            "unknown effect kind {other:?}; valid: deal_damage, draw_cards, gain_life, return_to_hand, mill, mill_target_player, exile_target, tap_target, untap_target, sacrifice, add_counters, discard_card, scry_n, destroy_target, damage_each_opponent, damage_each_creature, create_token, add_mana_to_pool, search_library_for_basic_land_tapped, put_plus_one_counter_on_self, surveil, counter_target_spell, return_creature_from_your_graveyard_to_battlefield, discard_self, each_opponent_loses_life, lose_life, target_opponent_loses_life, each_opponent_discards, destroy_all_creatures, destroy_target_nonland_permanent, destroy_target_artifact, destroy_target_land, deal_damage_any_target, pump_self_until_eot, pump_target_creature_until_eot, sequence, pump_creatures_you_control_until_eot, return_creature_from_your_graveyard_to_hand, put_plus_one_counter_on_each_creature_you_control, put_plus_one_counter_on_creature_you_control, add_n_mana_of_chosen_color, search_library_for_card, pump_creatures_opponents_control_until_eot, put_card_from_graveyard_on_bottom_of_library, move_self_counters_to_target_creature_you_control, deal_damage_equal_to_source_power_any_target, tap_target_artifact_or_creature, conditional_on_tapped_creatures, put_plus_one_counter_on_each_of_up_to_n_target_creatures, put_charge_counters_on_self, create_token_copy_of_target_creature_you_control, optional_sac_artifact_for_effect, owner_puts_target_artifact_or_creature_on_top_or_bottom_of_library, attach_to_target_creature_you_control, destroy_enchanted_permanent, tap_enchanted_permanent, exile_target_creature_until_source_leaves, exile_opponents_nonland_permanent_until_leaves, may_do, look_top_n_put_one_in_hand_rest_to_graveyard, choose_one_mode, if_you_do, each_opponent_mills_cards, pump_target_artifact_or_creature_until_eot, each_opponent_sacrifices_creature, grant_keyword_to_target_creature_until_eot, untap_target_other_permanent, tap_another_target_creature, return_all_creatures_from_your_graveyard_to_battlefield, set_base_pt_until_eot, manifest_dread"
         ))),
     }
 }
@@ -2966,6 +3036,10 @@ pub(crate) fn effect_to_pydict<'py>(
             d.set_item("kind", "set_base_pt_until_eot")?;
             d.set_item("power", *power)?;
             d.set_item("toughness", *toughness)?;
+        }
+        Effect::ManifestDread { count } => {
+            d.set_item("kind", "manifest_dread")?;
+            d.set_item("count", *count)?;
         }
         Effect::Sequence { effects } => {
             d.set_item("kind", "sequence")?;

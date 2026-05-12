@@ -1587,3 +1587,427 @@ def test_clone_isolates_if_you_do_pending_decisions(synthetic_state):
     assert synthetic_state.has_pending_decision() is True
     assert synthetic_state.get_life(0) == life_before
     assert synthetic_state.hand_sizes[0] == hand_before
+
+
+# =====================================================================
+# Round-28 ManifestDread (Effect::ManifestDread) + ManifestDreadChoice
+# =====================================================================
+# CR 701.55 — "look at the top two cards of your library, manifest one
+# of them, then put the other into your graveyard." First-slice: count
+# = 1 only; the manifested card lands on bf with its original printing
+# visible (face-down semantics deferred — see SEARCH_LIMITATIONS.md).
+#
+# Dispatcher: ``submit_manifest_dread_decision(chosen_id)``.
+# Auto-resolve: ``"default"`` / ``"manifest_top"`` pick the topmost
+# popped card (cards[0]). Empty library drains as O(1) no-op; 1-card
+# library manifests the lone card with no graveyard step.
+
+
+def _manifest_dread_dict(count: int = 1):
+    """A ManifestDread sorcery — Effect::ManifestDread dispatched on
+    resolve."""
+    return {
+        "name": f"Test ManifestDread {count}",
+        "card_types": ["Sorcery"],
+        "mana_cost": {"B": 1, "U": 1},
+        "effects": [{"kind": "manifest_dread", "count": count}],
+    }
+
+
+# --- register / round-trip ---
+
+
+def test_manifest_dread_registers_with_count_field(engine):
+    """A ManifestDread sorcery registers cleanly and round-trips its
+    `count` through the printing readback."""
+    reg = engine.Registry()
+    pid = reg.register_printing(_manifest_dread_dict(count=1))
+    effects = reg.get_printing_effects(pid)
+    assert len(effects) == 1
+    eff = effects[0]
+    assert eff["kind"] == "manifest_dread"
+    assert eff["count"] == 1
+
+
+def test_manifest_dread_default_count_is_1(engine):
+    """Omitting `count` defaults to 1 — Python's class default."""
+    reg = engine.Registry()
+    pid = reg.register_printing(
+        {
+            "name": "Test ManifestDread default",
+            "card_types": ["Sorcery"],
+            "mana_cost": {"B": 1},
+            "effects": [{"kind": "manifest_dread"}],
+        }
+    )
+    effects = reg.get_printing_effects(pid)
+    assert effects[0]["count"] == 1
+
+
+def test_manifest_dread_negative_count_raises(engine):
+    """Negative `count` is a hard ValueError at register time."""
+    reg = engine.Registry()
+    with pytest.raises(ValueError):
+        reg.register_printing(
+            {
+                "name": "Bad ManifestDread",
+                "card_types": ["Sorcery"],
+                "mana_cost": {"B": 1},
+                "effects": [{"kind": "manifest_dread", "count": -1}],
+            }
+        )
+
+
+def test_manifest_dread_missing_count_in_round_trip_after_explicit_pass(engine):
+    """Explicit count=2 parses cleanly at register time (parse layer
+    accepts any non-negative count for forward-compat). The resolve
+    layer rejects count != 1 — that gate is tested separately."""
+    reg = engine.Registry()
+    pid = reg.register_printing(_manifest_dread_dict(count=2))
+    effects = reg.get_printing_effects(pid)
+    assert effects[0]["count"] == 2
+
+
+# --- resolve happy path ---
+
+
+def test_manifest_dread_resolve_pops_two_cards_and_pushes_pending_choice(
+    synthetic_state,
+):
+    """Resolving ManifestDread pops 2 cards from library top and pushes
+    one ManifestDreadChoice carrying those 2 cards. Hand, bf, and
+    graveyard (beyond the source) are NOT yet touched by the inner
+    routing."""
+    library_before = synthetic_state.library_sizes[0]
+    graveyard_before = synthetic_state.graveyard_sizes[0]
+    hand_before = synthetic_state.hand_sizes[0]
+    top_two = [obj["id"] for obj in synthetic_state.library_snapshot(0)[-2:]]
+    top_two.reverse()  # cards[0] = topmost (popped first)
+
+    spell_obj_id = synthetic_state.register_and_inject_object(
+        _manifest_dread_dict(count=1), 0, ZONE_HAND
+    )
+    synthetic_state.push_to_stack(spell_obj_id, 0)
+    synthetic_state.resolve_top_of_stack_pause()
+
+    assert synthetic_state.library_sizes[0] == library_before - 2
+    # Graveyard gained 1 (source). Examined cards NOT yet routed.
+    assert synthetic_state.graveyard_sizes[0] == graveyard_before + 1
+    assert synthetic_state.hand_sizes[0] == hand_before
+    for cid in top_two:
+        zone = synthetic_state.find_object_zone(cid)
+        assert zone not in (ZONE_HAND, ZONE_LIBRARY, ZONE_GRAVEYARD, ZONE_BATTLEFIELD)
+
+    pds = synthetic_state.pending_decisions()
+    assert len(pds) == 1
+    pd = pds[0]
+    assert pd["kind"] == "ManifestDreadChoice"
+    assert pd["source_obj_id"] == spell_obj_id
+    assert pd["controller"] == 0
+    assert pd["cards"] == top_two
+
+
+def test_submit_manifest_dread_picks_topmost_routes_one_to_bf(synthetic_state):
+    """Submitting cards[0] (topmost) routes it to bf and the second
+    examined card to graveyard."""
+    bf_before = synthetic_state.battlefield_sizes[0]
+    graveyard_before = synthetic_state.graveyard_sizes[0]
+    top_two = [obj["id"] for obj in synthetic_state.library_snapshot(0)[-2:]]
+    top_two.reverse()
+
+    spell_obj_id = synthetic_state.register_and_inject_object(
+        _manifest_dread_dict(count=1), 0, ZONE_HAND
+    )
+    synthetic_state.push_to_stack(spell_obj_id, 0)
+    synthetic_state.resolve_top_of_stack_pause()
+
+    synthetic_state.submit_manifest_dread_decision(top_two[0])
+
+    assert synthetic_state.has_pending_decision() is False
+    assert synthetic_state.find_object_zone(top_two[0]) == ZONE_BATTLEFIELD
+    assert synthetic_state.find_object_zone(top_two[1]) == ZONE_GRAVEYARD
+    assert synthetic_state.battlefield_sizes[0] == bf_before + 1
+    # graveyard_before + 1 (source) + 1 (unchosen card) = +2
+    assert synthetic_state.graveyard_sizes[0] == graveyard_before + 2
+
+
+def test_submit_manifest_dread_picks_non_topmost(synthetic_state):
+    """Picking cards[1] routes it to bf and cards[0] to graveyard."""
+    top_two = [obj["id"] for obj in synthetic_state.library_snapshot(0)[-2:]]
+    top_two.reverse()
+
+    spell_obj_id = synthetic_state.register_and_inject_object(
+        _manifest_dread_dict(count=1), 0, ZONE_HAND
+    )
+    synthetic_state.push_to_stack(spell_obj_id, 0)
+    synthetic_state.resolve_top_of_stack_pause()
+
+    synthetic_state.submit_manifest_dread_decision(top_two[1])
+
+    assert synthetic_state.has_pending_decision() is False
+    assert synthetic_state.find_object_zone(top_two[1]) == ZONE_BATTLEFIELD
+    assert synthetic_state.find_object_zone(top_two[0]) == ZONE_GRAVEYARD
+
+
+def test_submit_manifest_dread_unknown_id_raises(synthetic_state):
+    """An id not in the examined Vec raises ValueError. Queue intact."""
+    spell_obj_id = synthetic_state.register_and_inject_object(
+        _manifest_dread_dict(count=1), 0, ZONE_HAND
+    )
+    synthetic_state.push_to_stack(spell_obj_id, 0)
+    synthetic_state.resolve_top_of_stack_pause()
+
+    with pytest.raises(ValueError):
+        synthetic_state.submit_manifest_dread_decision(999999)
+    assert synthetic_state.has_pending_decision() is True
+    assert synthetic_state.pending_decisions()[0]["kind"] == "ManifestDreadChoice"
+
+
+def test_submit_manifest_dread_with_empty_queue_raises(synthetic_state):
+    """submit_manifest_dread_decision on an empty queue raises ValueError."""
+    assert synthetic_state.has_pending_decision() is False
+    with pytest.raises(ValueError):
+        synthetic_state.submit_manifest_dread_decision(42)
+
+
+def test_submit_manifest_dread_on_surveil_head_raises(synthetic_state):
+    """submit_manifest_dread_decision on a SurveilChoice head raises
+    ValueError. Queue intact."""
+    spell_obj_id = synthetic_state.register_and_inject_object(
+        _surveil_dict(count=1), 0, ZONE_HAND
+    )
+    synthetic_state.push_to_stack(spell_obj_id, 0)
+    synthetic_state.resolve_top_of_stack_pause()
+    assert synthetic_state.pending_decisions()[0]["kind"] == "SurveilChoice"
+
+    with pytest.raises(ValueError):
+        synthetic_state.submit_manifest_dread_decision(42)
+    assert synthetic_state.has_pending_decision() is True
+    assert synthetic_state.pending_decisions()[0]["kind"] == "SurveilChoice"
+
+
+# --- auto-resolve ---
+
+
+def test_auto_resolve_manifest_top_picks_topmost(synthetic_state):
+    """auto_resolve('manifest_top') picks cards[0] (the topmost examined
+    card) — matches Python's no-agent-seated fallback."""
+    bf_before = synthetic_state.battlefield_sizes[0]
+    graveyard_before = synthetic_state.graveyard_sizes[0]
+    top_two = [obj["id"] for obj in synthetic_state.library_snapshot(0)[-2:]]
+    top_two.reverse()
+
+    spell_obj_id = synthetic_state.register_and_inject_object(
+        _manifest_dread_dict(count=1), 0, ZONE_HAND
+    )
+    synthetic_state.push_to_stack(spell_obj_id, 0)
+    synthetic_state.resolve_top_of_stack_pause()
+
+    synthetic_state.auto_resolve_pending_decisions("manifest_top")
+
+    assert synthetic_state.has_pending_decision() is False
+    assert synthetic_state.find_object_zone(top_two[0]) == ZONE_BATTLEFIELD
+    assert synthetic_state.find_object_zone(top_two[1]) == ZONE_GRAVEYARD
+    assert synthetic_state.battlefield_sizes[0] == bf_before + 1
+    assert synthetic_state.graveyard_sizes[0] == graveyard_before + 2
+
+
+def test_auto_resolve_default_picks_topmost_for_manifest_dread_variant(
+    synthetic_state,
+):
+    """auto_resolve('default') delivers the same outcome as
+    'manifest_top' for ManifestDreadChoice."""
+    top_two = [obj["id"] for obj in synthetic_state.library_snapshot(0)[-2:]]
+    top_two.reverse()
+
+    spell_obj_id = synthetic_state.register_and_inject_object(
+        _manifest_dread_dict(count=1), 0, ZONE_HAND
+    )
+    synthetic_state.push_to_stack(spell_obj_id, 0)
+    synthetic_state.resolve_top_of_stack_pause()
+
+    synthetic_state.auto_resolve_pending_decisions("default")
+
+    assert synthetic_state.has_pending_decision() is False
+    assert synthetic_state.find_object_zone(top_two[0]) == ZONE_BATTLEFIELD
+    assert synthetic_state.find_object_zone(top_two[1]) == ZONE_GRAVEYARD
+
+
+def test_resolve_top_of_stack_auto_resolves_manifest_dread(synthetic_state):
+    """The non-pause resolve_top_of_stack auto-resolves the ManifestDread.
+    Topmost examined card lands on bf."""
+    bf_before = synthetic_state.battlefield_sizes[0]
+    top_id_before = synthetic_state.library_snapshot(0)[-1]["id"]
+    spell_obj_id = synthetic_state.register_and_inject_object(
+        _manifest_dread_dict(count=1), 0, ZONE_HAND
+    )
+    synthetic_state.push_to_stack(spell_obj_id, 0)
+    synthetic_state.resolve_top_of_stack()
+
+    assert synthetic_state.has_pending_decision() is False
+    assert synthetic_state.find_object_zone(top_id_before) == ZONE_BATTLEFIELD
+    assert synthetic_state.battlefield_sizes[0] == bf_before + 1
+
+
+# --- ETB-state reset on manifested card ---
+
+
+def test_manifest_dread_manifested_card_has_etb_state(synthetic_state):
+    """The manifested card lands on bf with the standard ETB state
+    reset (summoning_sick=true, tapped=false, controller = the
+    manifest-dread controller)."""
+    top_two = [obj["id"] for obj in synthetic_state.library_snapshot(0)[-2:]]
+    top_two.reverse()
+    top_id = top_two[0]
+
+    spell_obj_id = synthetic_state.register_and_inject_object(
+        _manifest_dread_dict(count=1), 0, ZONE_HAND
+    )
+    synthetic_state.push_to_stack(spell_obj_id, 0)
+    synthetic_state.resolve_top_of_stack_pause()
+    synthetic_state.submit_manifest_dread_decision(top_id)
+
+    # Find the manifested card in the global battlefield snapshot.
+    bf = synthetic_state.battlefield_snapshot()
+    manifested = next((o for o in bf if o["id"] == top_id), None)
+    assert manifested is not None
+    assert manifested["tapped"] is False
+    assert manifested["summoning_sick"] is True
+    assert manifested["damage"] == 0
+    assert manifested["counters"] == 0
+    assert manifested["controller_id"] == 0
+
+
+# --- partial-library edges ---
+
+
+def test_manifest_dread_empty_library_emits_empty_pending(engine):
+    """ManifestDread on an empty library emits a PendingDecision with
+    empty cards. Auto-resolve drains as O(1) no-op."""
+    state = engine.make_synthetic_state(num_battlefield=0, num_hand=0, num_library=0)
+    bf_before = state.battlefield_sizes[0]
+    spell_obj_id = state.register_and_inject_object(
+        _manifest_dread_dict(count=1), 0, ZONE_BATTLEFIELD
+    )
+    state.push_to_stack(spell_obj_id, 0)
+    state.resolve_top_of_stack_pause()
+
+    pds = state.pending_decisions()
+    assert len(pds) == 1
+    assert pds[0]["kind"] == "ManifestDreadChoice"
+    assert pds[0]["cards"] == []
+
+    state.auto_resolve_pending_decisions("default")
+    assert state.has_pending_decision() is False
+    # No card was manifested (library was empty).
+    assert state.battlefield_sizes[0] == bf_before
+
+
+def test_manifest_dread_one_card_library_manifests_lone_card(engine):
+    """ManifestDread on a 1-card library emits a PendingDecision with
+    cards=[lone_top]. Auto-resolve manifests it; no graveyard step."""
+    state = engine.make_synthetic_state(num_battlefield=0, num_hand=0, num_library=1)
+    bf_before = state.battlefield_sizes[0]
+    graveyard_before = state.graveyard_sizes[0]
+    lone_id = state.library_snapshot(0)[-1]["id"]
+
+    spell_obj_id = state.register_and_inject_object(
+        _manifest_dread_dict(count=1), 0, ZONE_BATTLEFIELD
+    )
+    state.push_to_stack(spell_obj_id, 0)
+    state.resolve_top_of_stack_pause()
+
+    pds = state.pending_decisions()
+    assert len(pds) == 1
+    assert pds[0]["cards"] == [lone_id]
+
+    state.auto_resolve_pending_decisions("default")
+    assert state.has_pending_decision() is False
+    assert state.find_object_zone(lone_id) == ZONE_BATTLEFIELD
+    assert state.battlefield_sizes[0] == bf_before + 1
+    # Only the source went to graveyard via stack-resolution; no
+    # second examined card to mill.
+    assert state.graveyard_sizes[0] == graveyard_before + 1
+    assert state.library_sizes[0] == 0
+
+
+def test_manifest_dread_one_card_library_submit_picks_lone(engine):
+    """Manual submit on a 1-card-library ManifestDread routes the lone
+    card to bf."""
+    state = engine.make_synthetic_state(num_battlefield=0, num_hand=0, num_library=1)
+    lone_id = state.library_snapshot(0)[-1]["id"]
+
+    spell_obj_id = state.register_and_inject_object(
+        _manifest_dread_dict(count=1), 0, ZONE_BATTLEFIELD
+    )
+    state.push_to_stack(spell_obj_id, 0)
+    state.resolve_top_of_stack_pause()
+
+    state.submit_manifest_dread_decision(lone_id)
+    assert state.has_pending_decision() is False
+    assert state.find_object_zone(lone_id) == ZONE_BATTLEFIELD
+
+
+# --- count > 1 deferred (first-slice scope gate) ---
+
+
+def test_manifest_dread_count_two_raises_at_resolve(synthetic_state):
+    """count != 1 is deferred — resolve raises with a clear message
+    pointing at SEARCH_LIMITATIONS.md. The parse layer accepts count=2
+    so this gate fires only at resolve time."""
+    spell_obj_id = synthetic_state.register_and_inject_object(
+        _manifest_dread_dict(count=2), 0, ZONE_HAND
+    )
+    synthetic_state.push_to_stack(spell_obj_id, 0)
+    with pytest.raises(ValueError):
+        synthetic_state.resolve_top_of_stack_pause()
+
+
+def test_manifest_dread_count_zero_raises_at_resolve(synthetic_state):
+    """count = 0 is also deferred — first-slice supports count = 1
+    only."""
+    spell_obj_id = synthetic_state.register_and_inject_object(
+        _manifest_dread_dict(count=0), 0, ZONE_HAND
+    )
+    synthetic_state.push_to_stack(spell_obj_id, 0)
+    with pytest.raises(ValueError):
+        synthetic_state.resolve_top_of_stack_pause()
+
+
+# --- fingerprint + clone ---
+
+
+def test_fingerprint_manifest_dread_pending_differs_from_empty(synthetic_state):
+    """A state with a pending ManifestDreadChoice fingerprints
+    differently from a state with no pending decision."""
+    fp_clean = synthetic_state.fingerprint()
+    spell_obj_id = synthetic_state.register_and_inject_object(
+        _manifest_dread_dict(count=1), 0, ZONE_HAND
+    )
+    synthetic_state.push_to_stack(spell_obj_id, 0)
+    synthetic_state.resolve_top_of_stack_pause()
+    fp_pending = synthetic_state.fingerprint()
+    assert fp_pending != fp_clean
+
+
+def test_clone_isolates_manifest_dread_pending_decisions(synthetic_state):
+    """clone_once() deep-clones the ManifestDreadChoice. Resolving
+    the clone leaves the source's queue intact (CoW canary)."""
+    top_two = [obj["id"] for obj in synthetic_state.library_snapshot(0)[-2:]]
+    top_two.reverse()
+    spell_obj_id = synthetic_state.register_and_inject_object(
+        _manifest_dread_dict(count=1), 0, ZONE_HAND
+    )
+    synthetic_state.push_to_stack(spell_obj_id, 0)
+    synthetic_state.resolve_top_of_stack_pause()
+
+    clone = synthetic_state.clone_once()
+    assert clone.has_pending_decision() is True
+    assert clone.pending_decisions()[0]["kind"] == "ManifestDreadChoice"
+
+    clone.submit_manifest_dread_decision(top_two[0])
+    assert clone.has_pending_decision() is False
+    assert clone.find_object_zone(top_two[0]) == ZONE_BATTLEFIELD
+
+    assert synthetic_state.has_pending_decision() is True
+    assert synthetic_state.pending_decisions()[0]["cards"] == top_two
