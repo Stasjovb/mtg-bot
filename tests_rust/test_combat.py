@@ -2666,3 +2666,188 @@ def test_apply_sbas_clears_damage_on_creature_move_to_graveyard(synthetic_state)
     assert gy_obj["tapped"] is False, (
         f"CE9 secondary: tapped should be cleared on move to gy; got {gy_obj}"
     )
+
+
+# ---------------------------------------------------------------------------
+# I32: `state.resolving_combat_damage_amount` production write site —
+# per-event set / reset around the combat-damage assignment apply loop.
+# Closes the deferred write site documented in SEARCH_LIMITATIONS.md
+# (the Effect::DrawCardsEqualToResolvingCombatDamage closure left the
+# write site for this slice; CE9 owned state_ops_combat.rs concurrently
+# and has now landed). Mirrors Python's per-event set / reset boundaries
+# at combat.py:618,623 (granted dealt-damage trigger resolve) and
+# actions.py:2684,2699 (stack-pushed trigger resolve).
+#
+# The slot is set INSIDE apply_damage_pass for the duration of each
+# per-PlanEntry application (so any downstream effect that reads it
+# sees this event's amount) and reset to 0 between events (so a Late-
+# resolving trigger doesn't read a stale value from a prior event).
+# ---------------------------------------------------------------------------
+
+
+def _starwinder_dict():
+    """Starwinder-shape printing carrying
+    Effect::DrawCardsEqualToResolvingCombatDamage. Mirrors the shape
+    used in tests_rust/test_resolve.py for the read-side tests; copied
+    here so the I32 cross-engine tests don't take a hard dependency on
+    that file's private helper."""
+    return {
+        "name": "Synthetic Starwinder (I32)",
+        "card_types": ["Creature"],
+        "mana_cost": {"generic": 3, "U": 1},
+        "power": 2,
+        "toughness": 3,
+        "effects": [
+            {"kind": "draw_cards_equal_to_resolving_combat_damage"}
+        ],
+    }
+
+
+def test_resolving_combat_damage_amount_reset_to_zero_after_player_damage(
+    synthetic_state,
+):
+    """I32 reset boundary: after `deal_combat_damage` runs through to
+    completion, the `resolving_combat_damage_amount` slot is 0 — no
+    matter what value any per-event write set it to during apply.
+
+    A 2/2 attacker hitting an undefended player applies one Player-
+    target damage entry of amount=2. The slot is set to 2 inside the
+    apply loop, then reset to 0 immediately after the entry. Post-
+    `deal_combat_damage`, observers reading the slot see 0.
+    """
+    bear_id = P0_FIRST_BEAR_ID  # 2/2 Grizzly Bears on p0 battlefield
+    assert synthetic_state.declare_attacker(bear_id) is True
+    # Pre-condition: slot starts at 0.
+    assert synthetic_state.resolving_combat_damage_amount == 0
+    synthetic_state.deal_combat_damage()
+    # Defending player took 2.
+    assert synthetic_state.get_life(1) == 18
+    # Slot reset to 0 after the per-event apply finished.
+    assert synthetic_state.resolving_combat_damage_amount == 0, (
+        "I32: write site must reset slot to 0 between events / after "
+        "deal_combat_damage so a Late-resolving trigger doesn't see "
+        "a stale value"
+    )
+
+
+def test_resolving_combat_damage_amount_reset_to_zero_after_creature_damage(
+    synthetic_state,
+):
+    """I32 reset boundary: also verified for creature-target damage
+    entries (attacker damages blocker; blocker damages attacker —
+    multiple events in one `deal_combat_damage` call). The slot ends
+    at 0 regardless of how many events fired."""
+    attacker_id = P0_FIRST_BEAR_ID  # 2/2 on p0
+    blocker_id = P1_FIRST_BEAR_ID  # 2/2 on p1
+    assert synthetic_state.declare_attacker(attacker_id) is True
+    assert synthetic_state.declare_blocker(blocker_id, attacker_id) is True
+    synthetic_state.deal_combat_damage()
+    # Both took 2.
+    assert synthetic_state.get_damage(attacker_id) == 2
+    assert synthetic_state.get_damage(blocker_id) == 2
+    # Slot reset to 0 after the final event.
+    assert synthetic_state.resolving_combat_damage_amount == 0
+
+
+def test_resolving_combat_damage_amount_write_overrides_pre_existing_value(
+    synthetic_state,
+):
+    """I32 set boundary: any pre-existing value in the slot at the
+    time `deal_combat_damage` is called gets overwritten by the
+    per-event writes and then reset to 0. A stale sentinel value
+    (e.g. left over from a prior, badly-cleaned event) cannot
+    survive the apply loop.
+
+    Setup: pre-set the slot to a sentinel (99). After
+    `deal_combat_damage` the slot is 0 — proving the write site both
+    overwrote the sentinel during apply AND reset to 0 after.
+    """
+    bear_id = P0_FIRST_BEAR_ID
+    assert synthetic_state.declare_attacker(bear_id) is True
+    synthetic_state.set_resolving_combat_damage_amount(99)
+    assert synthetic_state.resolving_combat_damage_amount == 99
+    synthetic_state.deal_combat_damage()
+    # Sentinel overwritten and reset to 0.
+    assert synthetic_state.resolving_combat_damage_amount == 0
+    # Defender still took the right amount.
+    assert synthetic_state.get_life(1) == 18
+
+
+def test_resolving_combat_damage_amount_no_attackers_leaves_slot_untouched(
+    synthetic_state,
+):
+    """Negative-case sanity: when `deal_combat_damage` has no attacker
+    plan entries (no attackers declared, OR attackers all have 0
+    power), there are no per-event writes — and so the slot stays at
+    whatever value the caller had pre-set. The reset only fires
+    PER-EVENT inside the apply loop; outside the loop the slot is
+    untouched.
+
+    This pins that the I32 write site is scoped to the per-event
+    apply, NOT a sweeping pre-/post- clear of the slot around the
+    whole `deal_combat_damage` call. A future caller that pre-sets
+    the slot for a reason (e.g. testing the read-side via the setter)
+    and then triggers a no-op `deal_combat_damage` should NOT see
+    their pre-set value clobbered.
+    """
+    synthetic_state.set_resolving_combat_damage_amount(7)
+    # No attackers declared.
+    assert synthetic_state.get_attackers() == []
+    synthetic_state.deal_combat_damage()
+    # Slot untouched — no entries fired, no writes happened.
+    assert synthetic_state.resolving_combat_damage_amount == 7
+
+
+def test_resolving_combat_damage_amount_cross_engine_draw_eq_starwinder(
+    synthetic_state,
+):
+    """I32 cross-engine: drive an actual combat damage event with a
+    Starwinder-shape printing on the battlefield, then resolve the
+    Starwinder Effect with the slot pre-set to the dealt amount.
+    Verifies the controller draws N where N == damage dealt.
+
+    Note: Rust's combat-damage apply loop does NOT push triggered
+    abilities onto the stack today (no trigger dispatcher in
+    state_ops_combat.rs; the SEARCH_LIMITATIONS.md entry calls this
+    out as a future slice). The cross-engine test composes the
+    pieces that DO exist:
+
+    1. Stage a Starwinder printing on p0's battlefield.
+    2. Run `deal_combat_damage` with a 2/2 attacker (no blocker;
+       defender takes 2). This invokes the I32 write site — the
+       slot is set to 2 inside the apply loop and reset to 0 after.
+    3. Re-establish the slot to the dealt amount (2) — emulating
+       what a future apply-loop trigger emitter would carry forward
+       to the stack-pushed trigger's resolve context.
+    4. Push the Starwinder Effect onto the stack and resolve. The
+       Effect reads the slot and draws that many cards.
+
+    This is the highest-fidelity end-to-end exercise of the I32
+    write site we can do today without trigger-dispatch infrastructure.
+    Once the apply-loop trigger emitter lands, step 3 collapses into
+    the per-event write itself.
+    """
+    starwinder_id = synthetic_state.register_and_inject_object(
+        _starwinder_dict(), 0, ZONE_BATTLEFIELD
+    )
+    bear_id = P0_FIRST_BEAR_ID  # 2/2
+    assert synthetic_state.declare_attacker(bear_id) is True
+    # Step 2: real combat damage — slot transiently set to 2, then reset.
+    synthetic_state.deal_combat_damage()
+    assert synthetic_state.get_life(1) == 18
+    assert synthetic_state.resolving_combat_damage_amount == 0
+    # Step 3: re-establish to the dealt amount (emulating the carry-
+    # forward a stack-pushed trigger would receive).
+    synthetic_state.set_resolving_combat_damage_amount(2)
+    p0_hand_before = synthetic_state.hand_sizes[0]
+    p0_lib_before = synthetic_state.library_sizes[0]
+    # Step 4: resolve the Starwinder Effect on the stack.
+    synthetic_state.push_to_stack(starwinder_id, 0)
+    synthetic_state.resolve_top_of_stack()
+    # Controller drew N == damage dealt.
+    assert synthetic_state.hand_sizes[0] == p0_hand_before + 2, (
+        "I32 cross-engine: Starwinder Effect should draw N cards where "
+        f"N == damage dealt (2); got hand growth "
+        f"{synthetic_state.hand_sizes[0] - p0_hand_before}"
+    )
+    assert synthetic_state.library_sizes[0] == p0_lib_before - 2

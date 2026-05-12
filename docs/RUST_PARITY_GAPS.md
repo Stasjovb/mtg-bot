@@ -1512,6 +1512,65 @@ them to call the helper is a follow-up housekeeping pass.
   test suite would shift; deferred until a slice's cadence has
   room.
 
+### I32. `state.resolving_combat_damage_amount` write site: per-event set inside `apply_damage_pass`; reset to 0 between events
+
+- **Pinned by**:
+  `tests_rust/test_combat.py::test_resolving_combat_damage_amount_reset_to_zero_after_player_damage`,
+  `test_resolving_combat_damage_amount_reset_to_zero_after_creature_damage`,
+  `test_resolving_combat_damage_amount_write_overrides_pre_existing_value`,
+  `test_resolving_combat_damage_amount_no_attackers_leaves_slot_untouched`,
+  `test_resolving_combat_damage_amount_cross_engine_draw_eq_starwinder`.
+
+- **Invariant** (closes the `SEARCH_LIMITATIONS.md` "Rust port —
+  `Effect::DrawCardsEqualToResolvingCombatDamage` write site
+  deferred" entry). For each per-PlanEntry application inside
+  `state_ops_combat.rs::GameState::apply_damage_pass`:
+
+  1. `self.resolving_combat_damage_amount = entry.amount as i32`
+     BEFORE the per-entry damage / deathtouch / lifelink mutations
+     fire, so any downstream effect that reads the slot sees this
+     event's amount.
+  2. `self.resolving_combat_damage_amount = 0` AFTER the mutations
+     and lifelink fire, so the slot is 0 between events.
+
+  Mirrors Python's per-event set / reset boundaries at
+  `combat.py:618,623` (granted dealt-damage trigger resolve, around
+  `ability.effect.resolve`) and `actions.py:2684,2699` (stack-pushed
+  trigger resolve, around `effect.resolve` in `resolve_top_of_stack`).
+  In Python the slot is also mirrored from `StackItem.combat_damage_amount`
+  at resolve time (a value the trigger emitter stores at push time);
+  Rust today has no apply-loop trigger emitter, so step 1 IS the
+  production write — the Effect's read-arm
+  (`state_ops_resolve.rs::Effect::DrawCardsEqualToResolvingCombatDamage`)
+  now sees a non-zero value any time a downstream resolve runs while
+  an apply-loop event is in flight.
+
+- **Why per-event, not per-`deal_combat_damage`-call**: the slot's
+  semantic is "the amount THIS event dealt", not "the maximum the
+  step dealt". CR-wise, combat damage is dealt simultaneously
+  (CR 510.2), but observable behavior at the trigger fire site is
+  per-event — Pain for All, Requiem Monolith, Starwinder all read
+  the amount of the event they're observing, not an aggregate. The
+  reset is what enforces the per-event scoping; without it, the
+  last event's amount would leak into a Late-resolving trigger
+  that fires after the apply loop returns.
+
+- **No pre-/post- sweep of the slot around the whole call**: the
+  write site is scoped strictly to the per-event apply, so a caller
+  that pre-sets the slot for a reason (e.g. test harness, or a
+  future trigger emitter that needs to thread an amount through to
+  a no-op `deal_combat_damage` invocation) is NOT clobbered. The
+  no-attacker-leaves-slot-untouched test pins this.
+
+- **Future closure**: when the apply-loop trigger emitter lands
+  (combat-damage triggers pushed to the Rust stack at fire time
+  with `combat_damage_amount` plumbed onto a `StackItem`-equivalent),
+  the read site at `state_ops_resolve.rs:5093` will be unblocked
+  end-to-end inside one engine call — no more "re-establish the
+  slot to the dealt amount" composition step in the cross-engine
+  test. The current write site stays as-is at that point; only
+  the trigger-emitter call site composes around it.
+
 ### ~~CE5.~~ CLOSED: `cast_spell` cross-engine parity via harness-side `resolve_top_of_stack_python` mirror
 
 Closed by the CE5 closure slice (`feature/ce5-cast-resolve`).

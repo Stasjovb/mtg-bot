@@ -1102,6 +1102,29 @@ impl GameState {
     /// two-pass (first-strike present) branches of
     /// `deal_combat_damage` so the deathtouch / lifelink composition
     /// stays in one place.
+    ///
+    /// **`state.resolving_combat_damage_amount` write site (I32).**
+    /// For each per-event damage entry, the slot is set to the literal
+    /// amount BEFORE the damage is applied (so any downstream effect
+    /// that reads it sees this event's amount), and reset to 0 AFTER
+    /// the per-entry mutations + lifelink fire. Mirrors Python's
+    /// per-event set/reset boundary: `combat.py:618,623` sets/resets
+    /// around `ability.effect.resolve` for granted dealt-damage
+    /// triggers; `actions.py:2684,2699` does the same around
+    /// `resolve_top_of_stack` for stack-pushed triggers. Rust today
+    /// has no combat-damage trigger dispatch in the apply loop, but
+    /// the slot is written here so:
+    ///   1. The `Effect::DrawCardsEqualToResolvingCombatDamage`
+    ///      arm — which reads the slot at resolve-arm time — sees a
+    ///      non-zero value when a future stack-pushed trigger from
+    ///      this damage event resolves while the slot is still set.
+    ///   2. The `set_resolving_combat_damage_amount` test setter is
+    ///      no longer the only production writer, closing the
+    ///      `SEARCH_LIMITATIONS.md` deferral.
+    ///   3. Between events the slot is 0, so a Late-resolving trigger
+    ///      doesn't see a stale value from a prior event (the reset
+    ///      is what keeps event-N's amount from leaking into event-
+    ///      N+1's resolution).
     fn apply_damage_pass(&mut self, entries: Vec<PlanEntry>) {
         for entry in entries {
             // Read the source's keywords + controller BEFORE applying
@@ -1115,6 +1138,15 @@ impl GameState {
             let source_has_lifelink =
                 battlefield_has_keyword(self, entry.source_id, "lifelink");
             let source_controller = battlefield_creature_controller(self, entry.source_id);
+
+            // I32: set the resolving-combat-damage-amount slot for the
+            // duration of this event so any downstream effect reading
+            // `state.resolving_combat_damage_amount` (notably
+            // `Effect::DrawCardsEqualToResolvingCombatDamage`, the
+            // Starwinder / Fear-of-Failed-Tests family) sees this
+            // event's amount. Reset to 0 after the per-entry mutations
+            // and lifelink fire so the slot is 0 between events.
+            self.resolving_combat_damage_amount = entry.amount as i32;
 
             match entry.target {
                 DamageTarget::Creature(obj_id) => {
@@ -1156,6 +1188,12 @@ impl GameState {
                     }
                 }
             }
+
+            // I32 reset: clear the slot between events so a future
+            // Late-resolving trigger doesn't read a stale value from
+            // a prior event. Matches Python's `finally: state.
+            // resolving_combat_damage_amount = 0` reset shape.
+            self.resolving_combat_damage_amount = 0;
         }
     }
 }

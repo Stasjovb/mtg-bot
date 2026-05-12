@@ -1834,15 +1834,20 @@ pub enum Effect {
     /// Negative library length is handled by the standard CR 704.5b
     /// path (player flagged for empty-library loss).
     ///
-    /// **First-slice scope — READ-ONLY tracking.** Rust's combat-
-    /// damage assignment (`state_ops_combat.rs`) does NOT yet write
-    /// `resolving_combat_damage_amount` (coordinating with the CE9
-    /// closure agent owning that file). The Effect arm reads the
-    /// slot, but in absence of a write site the value stays at 0
-    /// across normal combat — the trigger resolves as a no-op. Test
-    /// harness exercises the read-side via the
-    /// `set_resolving_combat_damage_amount` setter on `GameState`.
-    /// SEARCH_LIMITATIONS.md documents the deferred write site.
+    /// **Write site (I32, this slice closes the deferral).** The
+    /// `resolving_combat_damage_amount` slot is now written
+    /// per-event inside
+    /// `state_ops_combat.rs::GameState::apply_damage_pass` — set
+    /// to `entry.amount` before the per-entry mutations fire, reset
+    /// to 0 after. Mirrors Python's per-event set/reset boundary
+    /// (`combat.py:618,623` granted dealt-damage trigger resolve,
+    /// `actions.py:2684,2699` stack-pushed trigger resolve). The
+    /// Effect arm reads the slot; under normal combat the slot is
+    /// the dealt amount for whichever event is in flight. The
+    /// `set_resolving_combat_damage_amount` test setter remains
+    /// available for synthetic / cross-engine harness tests that
+    /// emulate the apply-loop write outside a real combat flow.
+    /// RUST_PARITY_GAPS.md I32 documents the lifecycle.
     DrawCardsEqualToResolvingCombatDamage,
 }
 
