@@ -1570,6 +1570,59 @@ pub enum Effect {
     /// effective toughness) flips the creature to graveyard the same
     /// way the existing damage paths do (CR 704.5g).
     DealDamageToOpponentCreature { amount: i32 },
+    /// **Round-28 look-at-top-N-reveal-or-counter wrapper.** Mirrors
+    /// Python's `LookAtTopNRevealOrCounter(n, filter_name, max_power,
+    /// counter_on_miss)` (Pulsar-Squadron-Ace + Living-Phone family,
+    /// freq 2 in the EoE pool). Examines the top `n` cards of the
+    /// CONTROLLER's library; controller MAY reveal one matching the
+    /// filter and put it into hand; the rest go to the bottom of the
+    /// library in a "random" order. If no card was revealed (because
+    /// none matched, the agent declined, or the library was too small)
+    /// AND `counter_on_miss` is true, a +1/+1 counter lands on the
+    /// resolving source if it's currently on the battlefield.
+    ///
+    /// **Resolve semantics.** Pops `min(n, library_len)` cards off
+    /// library top and packages them into a
+    /// `PendingDecision::LookAtTopNRevealOrCounterChoice`. The Effect
+    /// arm short-circuits — examined cards are NOT yet routed. The
+    /// controller drains via `submit_look_at_top_n_decision(reveal,
+    /// chosen_id)` (manual) or `auto_resolve_pending_decisions("default"
+    /// | "reveal_no")` (deterministic, no-reveal — matches Python's
+    /// no-agent-seated fallback because the Python class only reveals
+    /// when an agent is seated AND the agent picks something).
+    ///
+    /// **Filter / max_power.** `filter_name` is one of `"spacecraft"`,
+    /// `"creature"`, `"artifact"`; `max_power` (default 0 = no cap)
+    /// gates the `"creature"` filter — Living Phone uses
+    /// `filter_name="creature"`, `max_power=2`. Other `filter_name`
+    /// values are rejected at parse. The reveal-side dispatcher
+    /// validates the picked card matches the filter (it must be in
+    /// the examined set AND match `_matches` semantics); a mismatch
+    /// raises `ValueError` transactionally.
+    ///
+    /// **Bottom-the-rest is "random order".** First-slice
+    /// simplification: we route the remainder to the BOTTOM of the
+    /// library in popped order (cards[0] — the topmost popped — goes
+    /// to the bottom first, then cards[1], etc.). Real MTG asks for a
+    /// random order; we use a deterministic popped-order. Documented
+    /// in SEARCH_LIMITATIONS as deferred — re-routes via the engine's
+    /// rng once the rng-externalization work lands.
+    ///
+    /// **Empty library short-circuit.** `n=0` or library_len=0 emits a
+    /// PendingDecision with an empty `cards` Vec. Drains as an O(1)
+    /// no-op via auto-resolve (also triggers the counter rider IF
+    /// `counter_on_miss=true` and the source is on bf — matches
+    /// Python: no reveal happened, so the miss rider fires).
+    ///
+    /// **Controller convention.** `state.active_player` — first-slice
+    /// shape consistent with Surveil / LookTopN / MayDo / IfYouDo /
+    /// ChooseOneMode / ManifestDread.
+    LookAtTopNRevealOrCounter {
+        n: i32,
+        filter_name: String,
+        max_power: i32,
+        counter_on_miss: bool,
+    },
 }
 
 #[derive(Clone, Debug)]
@@ -2509,6 +2562,77 @@ fn parse_effect(dict: &Bound<'_, PyDict>) -> PyResult<Effect> {
                 else_effect: else_inner.map(Box::new),
             })
         }
+        "look_at_top_n_reveal_or_counter" => {
+            // Round-28 Living-Phone family. Required `n` (Python's class
+            // default is 5 for Pulsar Squadron Ace but we make it
+            // required at parse to match the every-card-emits-it
+            // convention — registrations omit only when the printed
+            // body literally says "top 5", which they spell explicitly).
+            //
+            // Actually — Python's class HAS a default of n=5. Mirror
+            // that so dict round-trip with omitted `n` works.
+            let n: i32 = match dict.get_item("n")? {
+                Some(v) => v.extract().map_err(|e| {
+                    PyValueError::new_err(format!(
+                        "look_at_top_n_reveal_or_counter.n must be an integer (got: {e})"
+                    ))
+                })?,
+                None => {
+                    return Err(PyValueError::new_err(
+                        "look_at_top_n_reveal_or_counter: missing required 'n' field",
+                    ));
+                }
+            };
+            if n < 0 {
+                return Err(PyValueError::new_err(format!(
+                    "look_at_top_n_reveal_or_counter: n must be non-negative, got {n}"
+                )));
+            }
+            let filter_name: String = match dict.get_item("filter_name")? {
+                Some(s) => s.extract().map_err(|e| {
+                    PyValueError::new_err(format!(
+                        "look_at_top_n_reveal_or_counter.filter_name must be a string (got: {e})"
+                    ))
+                })?,
+                None => "spacecraft".to_string(), // Python class default
+            };
+            match filter_name.as_str() {
+                "spacecraft" | "creature" | "artifact" => {}
+                other => {
+                    return Err(PyValueError::new_err(format!(
+                        "look_at_top_n_reveal_or_counter: filter_name must be one of \
+                         'spacecraft', 'creature', 'artifact' (got: {other:?})"
+                    )));
+                }
+            }
+            let max_power: i32 = match dict.get_item("max_power")? {
+                Some(m) => m.extract().map_err(|e| {
+                    PyValueError::new_err(format!(
+                        "look_at_top_n_reveal_or_counter.max_power must be an integer (got: {e})"
+                    ))
+                })?,
+                None => 0, // Python class default — 0 means "no power cap"
+            };
+            if max_power < 0 {
+                return Err(PyValueError::new_err(format!(
+                    "look_at_top_n_reveal_or_counter: max_power must be non-negative, got {max_power}"
+                )));
+            }
+            let counter_on_miss: bool = match dict.get_item("counter_on_miss")? {
+                Some(b) => b.extract().map_err(|e| {
+                    PyValueError::new_err(format!(
+                        "look_at_top_n_reveal_or_counter.counter_on_miss must be a bool (got: {e})"
+                    ))
+                })?,
+                None => true, // Python class default — Pulsar Squadron Ace shape
+            };
+            Ok(Effect::LookAtTopNRevealOrCounter {
+                n,
+                filter_name,
+                max_power,
+                counter_on_miss,
+            })
+        }
         "pump_creatures_opponents_control_until_eot" => {
             // Mirror schema of pump_creatures_you_control_until_eot.
             let power_bonus: i32 = match dict.get_item("power_bonus")? {
@@ -3188,6 +3312,18 @@ pub(crate) fn effect_to_pydict<'py>(
         Effect::DealDamageToOpponentCreature { amount } => {
             d.set_item("kind", "deal_damage_to_opponent_creature")?;
             d.set_item("amount", *amount)?;
+        }
+        Effect::LookAtTopNRevealOrCounter {
+            n,
+            filter_name,
+            max_power,
+            counter_on_miss,
+        } => {
+            d.set_item("kind", "look_at_top_n_reveal_or_counter")?;
+            d.set_item("n", *n)?;
+            d.set_item("filter_name", filter_name.as_str())?;
+            d.set_item("max_power", *max_power)?;
+            d.set_item("counter_on_miss", *counter_on_miss)?;
         }
         Effect::Sequence { effects } => {
             d.set_item("kind", "sequence")?;

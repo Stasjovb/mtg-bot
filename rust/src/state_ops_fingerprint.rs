@@ -466,6 +466,34 @@ impl GameState {
                                 .collect(),
                         ),
                     ]),
+                    // Round-28 look-at-top-N-reveal-or-counter: same
+                    // examined-cards-as-object-signatures shape as
+                    // PickCardFromExaminedChoice / ManifestDreadChoice,
+                    // plus the filter context (filter_name + max_power
+                    // + counter_on_miss) so two pending decisions that
+                    // share examined ids but differ in filter scope
+                    // produce different digests.
+                    PendingDecision::LookAtTopNRevealOrCounterChoice {
+                        source_obj_id,
+                        controller,
+                        cards,
+                        filter_name,
+                        max_power,
+                        counter_on_miss,
+                    } => Value::Array(vec![
+                        Value::String("LookAtTopNRevealOrCounterChoice".to_string()),
+                        json!(*source_obj_id),
+                        json!(*controller),
+                        Value::Array(
+                            cards
+                                .iter()
+                                .map(|o| object_signature(self, o))
+                                .collect(),
+                        ),
+                        Value::String(filter_name.clone()),
+                        json!(*max_power),
+                        Value::Bool(*counter_on_miss),
+                    ]),
                 })
                 .collect();
             parts_vec.push(Value::Array(pds));

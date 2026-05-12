@@ -2011,3 +2011,506 @@ def test_clone_isolates_manifest_dread_pending_decisions(synthetic_state):
 
     assert synthetic_state.has_pending_decision() is True
     assert synthetic_state.pending_decisions()[0]["cards"] == top_two
+
+
+# =====================================================================
+# Round-28 LookAtTopNRevealOrCounter (Effect::LookAtTopNRevealOrCounter)
+# + LookAtTopNRevealOrCounterChoice
+# =====================================================================
+# Python's `LookAtTopNRevealOrCounter(n, filter_name, max_power,
+# counter_on_miss)` (Pulsar-Squadron-Ace + Living-Phone family, freq 2
+# in EoE pool). Looks at top N cards; controller MAY reveal one
+# matching the filter and put it in hand; the rest go to library
+# bottom in popped order. On miss, optionally put a +1/+1 counter on
+# source.
+#
+# Dispatcher: ``submit_look_at_top_n_decision(reveal: bool,
+# chosen_id: int | None)``.
+# Auto-resolve: ``"default"`` / ``"reveal_no"`` mirror Python's
+# no-agent-seated path. ``"reveal_yes"`` picks the first examined
+# card matching the filter (deterministic convenience).
+
+
+def _living_phone_dict():
+    """A LookAtTopNRevealOrCounter sorcery — Living-Phone shape (n=4,
+    filter='creature', max_power=2, counter_on_miss=False)."""
+    return {
+        "name": "Test Living Phone",
+        "card_types": ["Sorcery"],
+        "mana_cost": {"U": 1},
+        "effects": [
+            {
+                "kind": "look_at_top_n_reveal_or_counter",
+                "n": 4,
+                "filter_name": "creature",
+                "max_power": 2,
+                "counter_on_miss": False,
+            }
+        ],
+    }
+
+
+def _pulsar_squadron_ace_dict():
+    """A Pulsar-Squadron-Ace-shape creature (n=5, filter='spacecraft',
+    max_power=0, counter_on_miss=True). Exercised here by pushing the
+    bf-side creature obj as the stack item — the resolve resolves the
+    creature's effect as if from bf."""
+    return {
+        "name": "Test Pulsar Ace Body",
+        "card_types": ["Creature"],
+        "mana_cost": {"W": 1},
+        "power": 2,
+        "toughness": 2,
+        "effects": [
+            {
+                "kind": "look_at_top_n_reveal_or_counter",
+                "n": 5,
+                "filter_name": "spacecraft",
+                "max_power": 0,
+                "counter_on_miss": True,
+            }
+        ],
+    }
+
+
+def _creature_printing_dict(name: str, power: int = 1):
+    return {
+        "name": name,
+        "card_types": ["Creature"],
+        "mana_cost": {"G": 1},
+        "power": power,
+        "toughness": 1,
+        "effects": [],
+    }
+
+
+# --- register / round-trip ---
+
+
+def test_look_at_top_n_registers_with_all_fields(engine):
+    reg = engine.Registry()
+    pid = reg.register_printing(_living_phone_dict())
+    effects = reg.get_printing_effects(pid)
+    assert len(effects) == 1
+    eff = effects[0]
+    assert eff["kind"] == "look_at_top_n_reveal_or_counter"
+    assert eff["n"] == 4
+    assert eff["filter_name"] == "creature"
+    assert eff["max_power"] == 2
+    assert eff["counter_on_miss"] is False
+
+
+def test_look_at_top_n_filter_defaults(engine):
+    reg = engine.Registry()
+    pid = reg.register_printing(
+        {
+            "name": "Test default",
+            "card_types": ["Sorcery"],
+            "mana_cost": {"W": 1},
+            "effects": [{"kind": "look_at_top_n_reveal_or_counter", "n": 5}],
+        }
+    )
+    eff = reg.get_printing_effects(pid)[0]
+    assert eff["filter_name"] == "spacecraft"
+    assert eff["max_power"] == 0
+    assert eff["counter_on_miss"] is True
+
+
+def test_look_at_top_n_missing_n_raises(engine):
+    reg = engine.Registry()
+    with pytest.raises(ValueError):
+        reg.register_printing(
+            {
+                "name": "Bad missing n",
+                "card_types": ["Sorcery"],
+                "mana_cost": {"W": 1},
+                "effects": [{"kind": "look_at_top_n_reveal_or_counter"}],
+            }
+        )
+
+
+def test_look_at_top_n_negative_n_raises(engine):
+    reg = engine.Registry()
+    with pytest.raises(ValueError):
+        reg.register_printing(
+            {
+                "name": "Bad negative n",
+                "card_types": ["Sorcery"],
+                "mana_cost": {"W": 1},
+                "effects": [
+                    {"kind": "look_at_top_n_reveal_or_counter", "n": -3}
+                ],
+            }
+        )
+
+
+def test_look_at_top_n_unknown_filter_raises(engine):
+    reg = engine.Registry()
+    with pytest.raises(ValueError):
+        reg.register_printing(
+            {
+                "name": "Bad filter",
+                "card_types": ["Sorcery"],
+                "mana_cost": {"W": 1},
+                "effects": [
+                    {
+                        "kind": "look_at_top_n_reveal_or_counter",
+                        "n": 5,
+                        "filter_name": "land",
+                    }
+                ],
+            }
+        )
+
+
+def test_look_at_top_n_negative_max_power_raises(engine):
+    reg = engine.Registry()
+    with pytest.raises(ValueError):
+        reg.register_printing(
+            {
+                "name": "Bad max_power",
+                "card_types": ["Sorcery"],
+                "mana_cost": {"W": 1},
+                "effects": [
+                    {
+                        "kind": "look_at_top_n_reveal_or_counter",
+                        "n": 5,
+                        "max_power": -1,
+                    }
+                ],
+            }
+        )
+
+
+# --- resolve happy path ---
+
+
+def test_look_at_top_n_resolve_pops_n_cards_and_pushes_pending(synthetic_state):
+    library_before = synthetic_state.library_sizes[0]
+    n = 4
+    top_n = [obj["id"] for obj in synthetic_state.library_snapshot(0)[-n:]]
+    top_n.reverse()  # cards[0] = topmost (popped first)
+
+    spell_obj_id = synthetic_state.register_and_inject_object(
+        _living_phone_dict(), 0, ZONE_HAND
+    )
+    synthetic_state.push_to_stack(spell_obj_id, 0)
+    synthetic_state.resolve_top_of_stack_pause()
+
+    assert synthetic_state.library_sizes[0] == library_before - n
+    pds = synthetic_state.pending_decisions()
+    assert len(pds) == 1
+    pd = pds[0]
+    assert pd["kind"] == "LookAtTopNRevealOrCounterChoice"
+    assert pd["source_obj_id"] == spell_obj_id
+    assert pd["controller"] == 0
+    assert pd["cards"] == top_n
+    assert pd["filter_name"] == "creature"
+    assert pd["max_power"] == 2
+    assert pd["counter_on_miss"] is False
+
+
+def test_submit_reveal_no_routes_all_to_library_bottom(synthetic_state):
+    library_before = synthetic_state.library_sizes[0]
+    spell_obj_id = synthetic_state.register_and_inject_object(
+        _living_phone_dict(), 0, ZONE_HAND
+    )
+    synthetic_state.push_to_stack(spell_obj_id, 0)
+    synthetic_state.resolve_top_of_stack_pause()
+    synthetic_state.submit_look_at_top_n_decision(False, None)
+    assert synthetic_state.has_pending_decision() is False
+    assert synthetic_state.library_sizes[0] == library_before
+
+
+def test_submit_reveal_no_counter_on_miss_fires_when_source_on_bf(engine):
+    state = engine.make_synthetic_state(num_battlefield=0, num_hand=0, num_library=5)
+    source_id = state.register_and_inject_object(
+        _pulsar_squadron_ace_dict(), 0, ZONE_BATTLEFIELD
+    )
+    counters_before = state.get_counters(source_id)
+    state.push_to_stack(source_id, 0)
+    state.resolve_top_of_stack_pause()
+    state.submit_look_at_top_n_decision(False, None)
+
+    counters_after = state.get_counters(source_id)
+    assert counters_after == counters_before + 1
+    assert state.find_object_zone(source_id) == ZONE_BATTLEFIELD
+
+
+def test_submit_reveal_no_counter_on_miss_skipped_when_disabled(engine):
+    state = engine.make_synthetic_state(num_battlefield=0, num_hand=0, num_library=5)
+    source_id = state.register_and_inject_object(
+        _living_phone_dict(), 0, ZONE_BATTLEFIELD
+    )
+    counters_before = state.get_counters(source_id)
+    state.push_to_stack(source_id, 0)
+    state.resolve_top_of_stack_pause()
+    state.submit_look_at_top_n_decision(False, None)
+    assert state.get_counters(source_id) == counters_before
+
+
+def test_submit_reveal_no_counter_skipped_when_source_off_bf(synthetic_state):
+    spell_obj_id = synthetic_state.register_and_inject_object(
+        _pulsar_squadron_ace_dict(), 0, ZONE_HAND
+    )
+    synthetic_state.push_to_stack(spell_obj_id, 0)
+    synthetic_state.resolve_top_of_stack_pause()
+    synthetic_state.submit_look_at_top_n_decision(False, None)
+    # No exception; source moved to graveyard via stack resolution.
+
+
+def test_submit_reveal_yes_routes_chosen_to_hand_rest_to_bottom(synthetic_state):
+    creature_id = synthetic_state.register_and_inject_object(
+        _creature_printing_dict("Test Creature", power=1), 0, ZONE_LIBRARY,
+    )
+    hand_before = synthetic_state.hand_sizes[0]
+    library_before = synthetic_state.library_sizes[0]
+
+    spell_obj_id = synthetic_state.register_and_inject_object(
+        _living_phone_dict(), 0, ZONE_HAND
+    )
+    synthetic_state.push_to_stack(spell_obj_id, 0)
+    synthetic_state.resolve_top_of_stack_pause()
+    pd = synthetic_state.pending_decisions()[0]
+    assert creature_id in pd["cards"]
+
+    synthetic_state.submit_look_at_top_n_decision(True, creature_id)
+
+    assert synthetic_state.has_pending_decision() is False
+    assert synthetic_state.find_object_zone(creature_id) == ZONE_HAND
+    assert synthetic_state.hand_sizes[0] == hand_before + 1
+    assert synthetic_state.library_sizes[0] == library_before - 1
+
+
+def test_submit_reveal_yes_rejects_unfiltered_card(synthetic_state):
+    spell_obj_id = synthetic_state.register_and_inject_object(
+        _living_phone_dict(), 0, ZONE_HAND
+    )
+    synthetic_state.push_to_stack(spell_obj_id, 0)
+    synthetic_state.resolve_top_of_stack_pause()
+    pd = synthetic_state.pending_decisions()[0]
+    non_matching_id = pd["cards"][0]
+    with pytest.raises(ValueError):
+        synthetic_state.submit_look_at_top_n_decision(True, non_matching_id)
+    assert synthetic_state.has_pending_decision() is True
+
+
+def test_submit_reveal_yes_rejects_creature_with_too_high_power(synthetic_state):
+    big_creature_id = synthetic_state.register_and_inject_object(
+        _creature_printing_dict("Big Creature", power=3), 0, ZONE_LIBRARY,
+    )
+    spell_obj_id = synthetic_state.register_and_inject_object(
+        _living_phone_dict(), 0, ZONE_HAND
+    )
+    synthetic_state.push_to_stack(spell_obj_id, 0)
+    synthetic_state.resolve_top_of_stack_pause()
+    with pytest.raises(ValueError):
+        synthetic_state.submit_look_at_top_n_decision(True, big_creature_id)
+
+
+def test_submit_reveal_yes_with_no_chosen_id_raises(synthetic_state):
+    spell_obj_id = synthetic_state.register_and_inject_object(
+        _living_phone_dict(), 0, ZONE_HAND
+    )
+    synthetic_state.push_to_stack(spell_obj_id, 0)
+    synthetic_state.resolve_top_of_stack_pause()
+    with pytest.raises(ValueError):
+        synthetic_state.submit_look_at_top_n_decision(True, None)
+
+
+def test_submit_unknown_chosen_id_raises(synthetic_state):
+    spell_obj_id = synthetic_state.register_and_inject_object(
+        _living_phone_dict(), 0, ZONE_HAND
+    )
+    synthetic_state.push_to_stack(spell_obj_id, 0)
+    synthetic_state.resolve_top_of_stack_pause()
+    with pytest.raises(ValueError):
+        synthetic_state.submit_look_at_top_n_decision(True, 999999)
+    assert synthetic_state.has_pending_decision() is True
+
+
+def test_submit_look_at_top_n_with_empty_queue_raises(synthetic_state):
+    assert synthetic_state.has_pending_decision() is False
+    with pytest.raises(ValueError):
+        synthetic_state.submit_look_at_top_n_decision(False, None)
+
+
+def test_submit_look_at_top_n_on_surveil_head_raises(synthetic_state):
+    spell_obj_id = synthetic_state.register_and_inject_object(
+        _surveil_dict(count=1), 0, ZONE_HAND
+    )
+    synthetic_state.push_to_stack(spell_obj_id, 0)
+    synthetic_state.resolve_top_of_stack_pause()
+    assert synthetic_state.pending_decisions()[0]["kind"] == "SurveilChoice"
+    with pytest.raises(ValueError):
+        synthetic_state.submit_look_at_top_n_decision(False, None)
+    assert synthetic_state.pending_decisions()[0]["kind"] == "SurveilChoice"
+
+
+def test_submit_may_do_on_look_at_top_n_head_raises(synthetic_state):
+    spell_obj_id = synthetic_state.register_and_inject_object(
+        _living_phone_dict(), 0, ZONE_HAND
+    )
+    synthetic_state.push_to_stack(spell_obj_id, 0)
+    synthetic_state.resolve_top_of_stack_pause()
+    with pytest.raises(ValueError):
+        synthetic_state.submit_may_do_decision(True)
+    assert synthetic_state.pending_decisions()[0]["kind"] == (
+        "LookAtTopNRevealOrCounterChoice"
+    )
+
+
+# --- auto-resolve ---
+
+
+def test_auto_resolve_default_routes_all_to_library_bottom(synthetic_state):
+    library_before = synthetic_state.library_sizes[0]
+    spell_obj_id = synthetic_state.register_and_inject_object(
+        _living_phone_dict(), 0, ZONE_HAND
+    )
+    synthetic_state.push_to_stack(spell_obj_id, 0)
+    synthetic_state.resolve_top_of_stack_pause()
+    synthetic_state.auto_resolve_pending_decisions("default")
+    assert synthetic_state.has_pending_decision() is False
+    assert synthetic_state.library_sizes[0] == library_before
+
+
+def test_auto_resolve_reveal_no_matches_default(synthetic_state):
+    library_before = synthetic_state.library_sizes[0]
+    spell_obj_id = synthetic_state.register_and_inject_object(
+        _living_phone_dict(), 0, ZONE_HAND
+    )
+    synthetic_state.push_to_stack(spell_obj_id, 0)
+    synthetic_state.resolve_top_of_stack_pause()
+    synthetic_state.auto_resolve_pending_decisions("reveal_no")
+    assert synthetic_state.has_pending_decision() is False
+    assert synthetic_state.library_sizes[0] == library_before
+
+
+def test_auto_resolve_reveal_yes_picks_matching_creature(synthetic_state):
+    creature_id = synthetic_state.register_and_inject_object(
+        _creature_printing_dict("Test Pick", power=1), 0, ZONE_LIBRARY,
+    )
+    hand_before = synthetic_state.hand_sizes[0]
+    spell_obj_id = synthetic_state.register_and_inject_object(
+        _living_phone_dict(), 0, ZONE_HAND
+    )
+    synthetic_state.push_to_stack(spell_obj_id, 0)
+    synthetic_state.resolve_top_of_stack_pause()
+    synthetic_state.auto_resolve_pending_decisions("reveal_yes")
+    assert synthetic_state.has_pending_decision() is False
+    assert synthetic_state.find_object_zone(creature_id) == ZONE_HAND
+    assert synthetic_state.hand_sizes[0] == hand_before + 1
+
+
+def test_auto_resolve_reveal_yes_falls_through_when_no_match(engine):
+    state = engine.make_synthetic_state(num_battlefield=0, num_hand=0, num_library=5)
+    source_id = state.register_and_inject_object(
+        _pulsar_squadron_ace_dict(), 0, ZONE_BATTLEFIELD
+    )
+    counters_before = state.get_counters(source_id)
+    state.push_to_stack(source_id, 0)
+    state.resolve_top_of_stack_pause()
+    state.auto_resolve_pending_decisions("reveal_yes")
+    assert state.has_pending_decision() is False
+    assert state.get_counters(source_id) == counters_before + 1
+
+
+def test_resolve_top_of_stack_auto_resolves_look_at_top_n(synthetic_state):
+    library_before = synthetic_state.library_sizes[0]
+    spell_obj_id = synthetic_state.register_and_inject_object(
+        _living_phone_dict(), 0, ZONE_HAND
+    )
+    synthetic_state.push_to_stack(spell_obj_id, 0)
+    synthetic_state.resolve_top_of_stack()
+    assert synthetic_state.has_pending_decision() is False
+    assert synthetic_state.library_sizes[0] == library_before
+
+
+# --- partial-library edges ---
+
+
+def test_look_at_top_n_empty_library_emits_empty_pending(engine):
+    state = engine.make_synthetic_state(num_battlefield=0, num_hand=0, num_library=0)
+    source_id = state.register_and_inject_object(
+        _pulsar_squadron_ace_dict(), 0, ZONE_BATTLEFIELD
+    )
+    counters_before = state.get_counters(source_id)
+    state.push_to_stack(source_id, 0)
+    state.resolve_top_of_stack_pause()
+    pds = state.pending_decisions()
+    assert len(pds) == 1
+    assert pds[0]["kind"] == "LookAtTopNRevealOrCounterChoice"
+    assert pds[0]["cards"] == []
+    state.auto_resolve_pending_decisions("default")
+    assert state.has_pending_decision() is False
+    assert state.get_counters(source_id) == counters_before + 1
+
+
+def test_look_at_top_n_library_smaller_than_n_clamps(engine):
+    state = engine.make_synthetic_state(num_battlefield=0, num_hand=0, num_library=2)
+    library_before = state.library_sizes[0]
+    spell_obj_id = state.register_and_inject_object(
+        _living_phone_dict(), 0, ZONE_HAND
+    )
+    state.push_to_stack(spell_obj_id, 0)
+    state.resolve_top_of_stack_pause()
+    pds = state.pending_decisions()
+    assert len(pds) == 1
+    assert len(pds[0]["cards"]) == 2
+    state.auto_resolve_pending_decisions("default")
+    assert state.has_pending_decision() is False
+    assert state.library_sizes[0] == library_before
+
+
+# --- fingerprint + clone ---
+
+
+def test_fingerprint_look_at_top_n_pending_differs_from_empty(synthetic_state):
+    fp_clean = synthetic_state.fingerprint()
+    spell_obj_id = synthetic_state.register_and_inject_object(
+        _living_phone_dict(), 0, ZONE_HAND
+    )
+    synthetic_state.push_to_stack(spell_obj_id, 0)
+    synthetic_state.resolve_top_of_stack_pause()
+    fp_pending = synthetic_state.fingerprint()
+    assert fp_pending != fp_clean
+
+
+def test_fingerprint_look_at_top_n_diverges_across_filter_scope(engine):
+    state_a = engine.make_synthetic_state(num_battlefield=0, num_hand=0, num_library=5)
+    state_b = engine.make_synthetic_state(num_battlefield=0, num_hand=0, num_library=5)
+    spell_a = state_a.register_and_inject_object(
+        _living_phone_dict(), 0, ZONE_HAND
+    )
+    spell_b = state_b.register_and_inject_object(
+        _pulsar_squadron_ace_dict(), 0, ZONE_HAND
+    )
+    state_a.push_to_stack(spell_a, 0)
+    state_b.push_to_stack(spell_b, 0)
+    state_a.resolve_top_of_stack_pause()
+    state_b.resolve_top_of_stack_pause()
+    assert state_a.fingerprint() != state_b.fingerprint()
+
+
+def test_clone_isolates_look_at_top_n_pending_decisions(synthetic_state):
+    library_before = synthetic_state.library_sizes[0]
+    spell_obj_id = synthetic_state.register_and_inject_object(
+        _living_phone_dict(), 0, ZONE_HAND
+    )
+    synthetic_state.push_to_stack(spell_obj_id, 0)
+    synthetic_state.resolve_top_of_stack_pause()
+    src_pd_cards = synthetic_state.pending_decisions()[0]["cards"]
+
+    clone = synthetic_state.clone_once()
+    assert clone.has_pending_decision() is True
+    assert clone.pending_decisions()[0]["kind"] == (
+        "LookAtTopNRevealOrCounterChoice"
+    )
+
+    clone.submit_look_at_top_n_decision(False, None)
+    assert clone.has_pending_decision() is False
+    assert clone.library_sizes[0] == library_before
+
+    assert synthetic_state.has_pending_decision() is True
+    assert synthetic_state.pending_decisions()[0]["cards"] == src_pd_cards
