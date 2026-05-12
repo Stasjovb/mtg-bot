@@ -3414,20 +3414,15 @@ the forked branch.
     in `docs/SEARCH_LIMITATIONS.md` and audit §2.5).
 
 - **Out of scope for Slice 2** (queued for Slice 3+):
-  - Bridging legacy `etb_effects: Vec<Effect>` into the predicate
-    path by synthesizing
-    `TriggeredAbility { event=Enters, predicate=SourceIsSelf,
-    effect=... }` per `etb_effects` entry at registry-load time,
-    then retiring the inline `etb_effects` hatch in
-    `resolve_top_of_stack`. Slice 2 leaves the inline hatch in
-    place — both paths fire today and a printing carrying both
-    `etb_effects` and a matching `triggered_abilities` entry would
-    double-fire. No EoE printing carries both today (the audit
-    notes that the inline hatch is dead from the smoke harness's
-    point of view), so the double-fire surface is dormant until
-    Slice 3 retires the legacy path.
-  - Smoke-harness `cross_engine.py` registry-dict wiring for the
-    `triggered_abilities` key.
+  - ~~Bridging legacy `etb_effects: Vec<Effect>` into the predicate
+    path~~ — **closed by Slice 3 — see I49.** The parse-time
+    synthesis + inline-loop retirement landed together, so a
+    printing carrying `etb_effects` now fires the same effect via
+    the predicate-path dispatcher (no double-fire surface).
+  - ~~Smoke-harness `cross_engine.py` registry-dict wiring for the
+    `triggered_abilities` key.~~ — **closed by Slice 3 — see I49.**
+    `CardDef.triggered_abilities` ports through both
+    `build_python_state` and `build_rust_state`.
   - Richer Predicate variants (HasSubtype, IsLand, IsArtifact,
     Controlled, Subject).
   - Wider Event variants (Dies, Cast, Attacks, DealsDamage).
@@ -3522,6 +3517,116 @@ the forked branch.
     side-channel).
   - Auto-tap-from-lands composer to match Python's `can_pay_cost`
     headroom accounting on the Rust side.
+
+### I49. Legacy `etb_effects: Vec<Effect>` bridged to `triggered_abilities` at parse time + cross_engine.py `printing_dict` wires `triggered_abilities` through to Rust's `register_and_inject_object` (Slice 3 of ETB-trigger closure)
+
+- **Pinned by**:
+  - `tests/test_cross_engine_etb_triggers.py::test_card_def_carries_triggered_abilities_field`
+    (DeckSpec-side: `CardDef.triggered_abilities` defaults to empty
+    tuple, accepts a tuple of trigger dicts).
+  - `tests/test_cross_engine_etb_triggers.py::test_python_state_builder_wires_triggered_abilities`
+    (Python-side: dict-shape triggered_abilities translate via the
+    `_ta_dict_to_python_triggered_ability` bridge into Python's
+    `TriggeredAbility(event=Event.ENTERS, predicate=IsSelf(), effect=DrawCards(amount=1))`).
+  - `tests/test_cross_engine_etb_triggers.py::test_rust_state_builder_wires_triggered_abilities`
+    (Rust-side: the registered printing dispatches the synthesized
+    self-ETB trigger when an instance enters the battlefield; the
+    trigger lands on the stack post-resolve as a `StackItemKind::TriggeredAbility`).
+  - `tests/test_cross_engine_etb_triggers.py::test_pre_slice_3_specs_unaffected`
+    (regression guard: a DeckSpec leaving `triggered_abilities` at
+    the default empty tuple produces zero triggers, zero stack
+    pushes, identical to pre-Slice-3 behavior).
+  - `tests_rust/test_triggers.py` (all 24 substrate + RS-site smokes,
+    unchanged — the bridge is a parse-time-only rewrite; the
+    dispatch path's observable shape doesn't change).
+  - Updated regression tests across `tests_rust/test_resolve.py`,
+    `test_zones.py`, `test_ueot.py`, `test_pending_decisions.py`,
+    `test_combat.py` — every test that previously cast a printing
+    carrying `etb_effects` and asserted the side-effects had landed
+    after ONE `resolve_top_of_stack` call now drains an additional
+    `resolve_top_of_stack` to pop the on-stack ETB trigger that the
+    Slice 3 synthesis produces. Observable end-state matches the
+    pre-Slice-3 inline shape.
+
+- **Invariant — parse-time synthesis**. `cards.rs::parse_printing`
+  reads `etb_effects: Vec<Effect>` from the registry dict (kept for
+  back-compat with pre-Slice-3 fixtures), then synthesizes one
+  `TriggeredAbility { event: Event::Enters,
+  predicate: Predicate::SourceIsSelf, effect: <each etb_effect>,
+  once_per_turn: false }` per `etb_effects` entry and appends to
+  `triggered_abilities`. Synthesized entries land AFTER any
+  explicitly-declared `triggered_abilities` so dispatcher walk order
+  is stable (declaration order first, then synthesized self-ETB
+  shims). Resolver-side: the inline `etb_effects` loop in
+  `resolve_top_of_stack` and `resolve_top_of_stack_pause` is
+  retired — every self-ETB effect now fires through the
+  predicate-path `dispatch_event(Event::Enters, source_id)` walker,
+  same substrate as Slice 1/2's Panharmonicon-shape observer
+  triggers.
+
+- **Observable behavior change — triggers now go on the stack**.
+  Pre-Slice-3 the inline `etb_effects` loop applied the effects
+  immediately at resolution time (no stack push, no priority
+  window). Post-Slice-3 each `etb_effects` entry becomes a
+  `StackItem::TriggeredAbility` that resolves LIFO on a subsequent
+  `resolve_top_of_stack` call. The on-stack shape is CR-faithful
+  (CR 603 — triggered abilities go on the stack), preserves the
+  Slice 1/2 fingerprint baselines (the same effect lands the same
+  observable end-state once the stack drains), and only the
+  intermediate state at "just after the cast resolved but before
+  the trigger drained" differs.
+
+- **No double-fire**. The audit pinned the legacy inline path as
+  the ONLY pre-Slice-3 self-ETB site. Slice 3 retires that loop in
+  one go, so there's no risk of a printing carrying both
+  `etb_effects` and an explicit `triggered_abilities` entry that
+  matches `SourceIsSelf` firing the same effect twice. (Pre-Slice-3
+  the audit verified no EoE printing carried both shapes; today
+  there's no path to double-fire even if a future fixture did.)
+
+- **Cross-engine wiring** (`src/mtg_bot/parity/cross_engine.py`):
+  - `CardDef` gains a `triggered_abilities: tuple[dict, ...] = ()`
+    field carrying registry-dict-shape entries.
+  - `build_rust_state` passes `triggered_abilities` through the
+    `printing_dict` builder into `register_printing` — Rust's
+    parser handles the dict shape (existing Slice 1 surface).
+  - `build_python_state` translates each dict through the new
+    `_ta_dict_to_python_triggered_ability` helper into Python's
+    `TriggeredAbility(event=Event.ENTERS, predicate=..., effect=...,
+    once_per_turn=...)` shape, then attaches the resulting tuple to
+    `CardPrinting.triggered_abilities`.
+  - Effect-kind / predicate-kind translation surfaces (`_ta_dict_to_
+    python_effect`, `_ta_dict_to_python_predicate`) currently cover
+    the substrate-minimum kinds — `draw_cards`, `gain_life` for
+    effects; `always`, `source_is_self`, `source_is_creature`,
+    `not`, `and` for predicates. New CE19-shape probes add an arm
+    per kind in lockstep with the Rust `parse_effect` /
+    `parse_predicate` arm.
+
+- **CR backing** — same as I47 (CR 603.6a). Slice 3 doesn't add
+  new CR coverage; it consolidates the existing self-ETB inline
+  hatch into the same dispatch substrate.
+
+- **Out of scope for Slice 3** (queued for Slice 4+):
+  - Richer Predicate variants (`HasSubtype`, `IsLand`, `IsArtifact`,
+    `Controlled`, `Subject`) — needed for landfall, artifact-enters,
+    Kavu-shape predicates from `cards/parser/triggers.py:603-1266`.
+  - Wider `Event` variants (`Dies`, `Cast`, `Attacks`,
+    `DealsDamage`) and their dispatch sites.
+  - Panharmonicon-shape `etb_trigger_multiplier` for cards that
+    grant N-x ETB firings.
+  - A full multi-turn cross-engine smoke that drives a CE19-shape
+    probe end-to-end through both engines and asserts fingerprint
+    parity once the predicate algebra is rich enough to express
+    "another creature enters under your control" (today's
+    `SourceIsCreature & ~SourceIsSelf` Slice 1 substrate is close
+    but lacks the `Controlled(YOU)` predicate needed for a
+    Panharmonicon-faithful probe).
+  - Removing `CardPrinting.etb_effects` from the Rust struct
+    entirely. The field stays as the synthesis source for back-compat
+    with pre-Slice-3 fixtures; a future cleanup slice can retire the
+    field once all in-tree fixtures move to `triggered_abilities`
+    directly.
 
 ### ~~CE9.~~ CLOSED: Combat damage assignment walks battlefield in bf-ETB order via shared `bf_iter_etb_sorted` helper
 

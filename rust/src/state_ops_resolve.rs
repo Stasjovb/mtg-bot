@@ -64,22 +64,30 @@
 //!   Creatures specifically: when entering the battlefield via
 //!   this path, `summoning_sick` is stamped `true` (CR 302.1 —
 //!   the new permanent has summoning sickness).
-//! - **ETB-triggered effects** (round-9 slice). After post-resolve
-//!   movement places a permanent on the controller's battlefield,
-//!   the source printing's `etb_effects: Vec<Effect>` are dispatched
-//!   one-by-one through the same `apply_effect` path the spell-
-//!   effects use. First-slice simplifications (mirrored in
+//! - **ETB-triggered effects** (round-9 slice; Slice 3 of the
+//!   ETB-trigger closure retired the inline path). After
+//!   post-resolve movement places a permanent on the controller's
+//!   battlefield, every ENTERS-shaped triggered ability on the
+//!   source printing fires through the predicate-path
+//!   `dispatch_event(Event::Enters, source_id)` walker. Legacy
+//!   `etb_effects: Vec<Effect>` entries are bridged to the same
+//!   substrate at parse time (`cards.rs::parse_printing` synthesizes
+//!   a `TriggeredAbility { event: Enters, predicate: SourceIsSelf,
+//!   effect: ... }` per `etb_effects` entry), so a printing carrying
+//!   `etb_effects=[DrawCards(1)]` and a printing carrying
+//!   `triggered_abilities=[{event: enters, predicate: source_is_self,
+//!   effect: draw_cards(1)}]` produce identical observable state.
+//!   First-slice simplifications (mirrored in
 //!   `tests_rust/test_resolve.py`):
-//!   - **Apply immediately, no real stack triggering.** Real MTG:
-//!     ETB triggers go onto the stack and resolve in priority
-//!     order, can be responded to with instant-speed effects, and
-//!     (for "deal damage" ETBs) carry their own targets chosen
-//!     on-trigger. First slice applies them inline at resolution
-//!     time, same convention as the spell-effects path.
+//!   - **Real on-stack triggering** post-Slice-3. ENTERS triggers
+//!     get pushed onto the stack via `push_triggered_ability` and
+//!     resolve LIFO on the next priority round. Pre-Slice-3 they
+//!     applied inline at resolution time; the on-stack shape is
+//!     CR-faithful and supports response windows.
 //!   - **Gating: only fire when the source landed on battlefield.**
 //!     If post-resolve sent the source to graveyard (instant /
 //!     sorcery) or left it in place (empty card_types escape
-//!     hatch), `etb_effects` are skipped — by definition the
+//!     hatch), ENTERS triggers are skipped — by definition the
 //!     trigger condition "this enters the battlefield" wasn't met.
 //!     A schema-allowed but semantically-nonsense Instant carrying
 //!     an etb_effects entry will NOT fire it; only its `effects`
@@ -5697,26 +5705,17 @@ impl GameState {
         // with no movement applied (transactional shape).
         let post_resolve_zone = move_source_post_resolve(self, top.source_obj_id);
 
-        // Round-9: fire ETB-triggered effects when (and only when)
-        // the source landed on the battlefield. Real MTG: ETB
-        // triggers go onto the stack and resolve in priority order.
-        // First slice applies them inline, same convention as the
-        // spell-effects path. Snapshot etb_effects via the same
-        // borrow-then-drop pattern we use for spell effects so we
-        // can mutate state while iterating.
-        if post_resolve_zone == Some(ZONE_BATTLEFIELD) {
-            let etb_effects: Vec<Effect> =
-                match find_source_printing_id(self, top.source_obj_id) {
-                    Some(printing_id) => match self.registry.lookup(printing_id) {
-                        Some(printing) => printing.etb_effects.clone(),
-                        None => Vec::new(),
-                    },
-                    None => Vec::new(),
-                };
-            for effect in &etb_effects {
-                apply_effect(self, effect, top.source_obj_id)?;
-            }
-        }
+        // ETB-trigger Slice 3: legacy `etb_effects` inline loop
+        // retired. The parse-time bridge in `cards.rs::parse_printing`
+        // synthesizes a `TriggeredAbility { event: Enters,
+        // predicate: SourceIsSelf, effect: ... }` per `etb_effects`
+        // entry at registry-load time, so the predicate-path
+        // `dispatch_event(Event::Enters, top.source_obj_id)` call
+        // below handles every self-ETB effect that used to fire here.
+        // The previous pop-then-dispatch ordering is preserved
+        // (drain the resolving slot from the stack first, then
+        // dispatch ENTERS) so the trigger goes on the now-empty
+        // stack and resolves LIFO on the next priority round.
 
         // Drain the popped item BEFORE firing dispatch_event below —
         // ETB triggers go onto the stack ABOVE where the resolving
@@ -5730,22 +5729,13 @@ impl GameState {
             .pop()
             .expect("peeked top but pop returned None — stack invariant broken");
 
-        // ETB-trigger Slice 1: predicate-path dispatch fan-out.
-        // Walks every permanent's triggered_abilities + pushes
-        // matching `Event::Enters` triggers onto the stack. The
-        // legacy inline `etb_effects` loop above still fires for
-        // back-compat with pre-Slice-1 test fixtures that use the
-        // old shape; Slice 2 retires the inline path once the 11
-        // ETB-stamping sites all route through dispatch_event.
-        //
-        // Note: dispatching AFTER the inline etb_effects mirrors
-        // Python's ordering (the just-cast source's own self-ETB
-        // effects fire first in real MTG; predicate-path triggers
-        // fan-out to OTHER permanents observing the event). Slice
-        // 2 merges these into a single dispatch_event call by
-        // synthesizing a `TriggeredAbility { event=Enters,
-        // predicate=SourceIsSelf, effect=... }` per `etb_effects`
-        // entry at registry-load time.
+        // ETB-trigger predicate-path dispatch fan-out (Slice 1
+        // wiring; Slice 3 absorbed the legacy `etb_effects` inline
+        // hatch by synthesizing
+        // `TriggeredAbility { event=Enters, predicate=SourceIsSelf,
+        // effect=... }` per `etb_effects` entry at parse time —
+        // every self-ETB effect now fires through the same walker
+        // as the Panharmonicon-shape observer triggers).
         if post_resolve_zone == Some(ZONE_BATTLEFIELD) {
             dispatch_event(self, Event::Enters, top.source_obj_id)?;
         }
@@ -5821,19 +5811,12 @@ impl GameState {
             apply_effect(self, effect, top.source_obj_id)?;
         }
         let post_resolve_zone = move_source_post_resolve(self, top.source_obj_id);
-        if post_resolve_zone == Some(ZONE_BATTLEFIELD) {
-            let etb_effects: Vec<Effect> =
-                match find_source_printing_id(self, top.source_obj_id) {
-                    Some(printing_id) => match self.registry.lookup(printing_id) {
-                        Some(printing) => printing.etb_effects.clone(),
-                        None => Vec::new(),
-                    },
-                    None => Vec::new(),
-                };
-            for effect in &etb_effects {
-                apply_effect(self, effect, top.source_obj_id)?;
-            }
-        }
+        // ETB-trigger Slice 3: legacy `etb_effects` inline loop
+        // retired in `_pause` for the same reason as in
+        // `resolve_top_of_stack` (the parse-time bridge synthesizes
+        // `TriggeredAbility { event: Enters, predicate: SourceIsSelf,
+        // effect: ... }` per `etb_effects` entry; the dispatch_event
+        // call below handles them).
         // Pop the resolving spell's stack item BEFORE firing
         // dispatch_event — see the same-shaped comment in
         // `resolve_top_of_stack` above for the ordering rationale.

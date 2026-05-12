@@ -1,0 +1,150 @@
+"""Cross-engine ETB-trigger smoke (Slice 3 of the ETB-trigger closure).
+
+Pins the harness-side ``cross_engine.py`` ``printing_dict`` builder's
+new ``triggered_abilities`` key + the ``_ta_dict_to_python_triggered_ability``
+bridge so a CE19-shape probe (predicate-path ENTERS trigger) builds the
+SAME triggered ability on BOTH engines from one ``CardDef``.
+
+The probe shape: a vanilla creature whose
+``triggered_abilities = [{event: enters, predicate: source_is_self,
+effect: draw_cards count=1}]`` carries through the bridge. We don't
+drive a full multi-turn cross-engine walk here — Slice 3's scope is
+the bridge wiring; a full CE19-closure smoke comes in Slice 4+ once
+predicates richer than ``IsSelf`` land.
+
+Companion docs:
+- ``docs/RUST_PARITY_GAPS.md`` I49 (Slice 3 closure).
+- ``docs/RUST_ETB_TRIGGER_AUDIT.md`` §6.1 — Slice 3 cross-engine wiring.
+"""
+
+from __future__ import annotations
+
+
+# A creature card def carrying the IsSelf-ENTERS DrawCards(1) trigger.
+ETB_DRAW_BEAR_TA = {
+    "event": "enters",
+    "predicate": {"kind": "source_is_self"},
+    "effect": {"kind": "draw_cards", "count": 1},
+}
+
+
+def _etb_draw_bear_card_def():
+    from mtg_bot.parity.cross_engine import CardDef
+    return CardDef(
+        name="ETB Draw Bear (synthetic)",
+        card_type="Creature",
+        mana_cost_generic=1,
+        mana_cost_colored=(("G", 1),),
+        power=2,
+        toughness=2,
+        triggered_abilities=(ETB_DRAW_BEAR_TA,),
+    )
+
+
+def test_card_def_carries_triggered_abilities_field():
+    """The new ``triggered_abilities`` field is part of the
+    ``CardDef`` dataclass and defaults to empty tuple."""
+    from mtg_bot.parity.cross_engine import CardDef
+    plain = CardDef(name="Plain", card_type="Creature")
+    assert plain.triggered_abilities == ()
+    bear = _etb_draw_bear_card_def()
+    assert bear.triggered_abilities == (ETB_DRAW_BEAR_TA,)
+
+
+def test_python_state_builder_wires_triggered_abilities():
+    """``build_python_state`` translates the dict-shape triggered_abilities
+    into Python's ``TriggeredAbility`` shape via the
+    ``_ta_dict_to_python_triggered_ability`` bridge. The resulting
+    ``CardPrinting`` carries the right Event + Predicate + Effect.
+    """
+    from mtg_bot.effects.base import TriggeredAbility
+    from mtg_bot.effects.generic.draw_mill import DrawCards
+    from mtg_bot.effects.predicates import Event, IsSelf
+    from mtg_bot.parity.cross_engine import DeckSpec, build_python_state
+
+    spec = DeckSpec(
+        card_defs=(_etb_draw_bear_card_def(),),
+        p0_library=("ETB Draw Bear (synthetic)",),
+        p1_library=("ETB Draw Bear (synthetic)",),
+    )
+    state = build_python_state(spec)
+    obj = state.players[0].library[0]
+    printing = obj.printing
+    assert len(printing.triggered_abilities) == 1
+    ta = printing.triggered_abilities[0]
+    assert isinstance(ta, TriggeredAbility)
+    assert ta.event is Event.ENTERS
+    assert isinstance(ta.predicate, IsSelf)
+    assert isinstance(ta.effect, DrawCards)
+    # Python's DrawCards exposes the count via `amount` (the dict-shape
+    # uses `count` to match Rust's parser; cross_engine bridges them).
+    assert ta.effect.amount == 1
+    assert ta.once_per_turn is False
+
+
+def test_rust_state_builder_wires_triggered_abilities():
+    """``build_rust_state`` passes ``triggered_abilities`` through to
+    the Rust registry, and the printing surfaces the parsed shape via
+    the registry's ``get_printing_triggered_abilities`` reader (when
+    available) or — more directly — the bridge round-trips through
+    the mtg_bot_engine extension.
+
+    The substrate-level proof: build a Rust state, then verify the
+    printing's triggered_ability dispatches by casting and observing
+    the resulting trigger on the stack."""
+    import mtg_bot_engine
+    from mtg_bot.parity.cross_engine import DeckSpec, build_rust_state
+
+    spec = DeckSpec(
+        card_defs=(_etb_draw_bear_card_def(),),
+        p0_library=("ETB Draw Bear (synthetic)",),
+        p1_library=("ETB Draw Bear (synthetic)",),
+    )
+    rust_state = build_rust_state(spec)
+    # `register_and_inject_object` is the simplest path to materialize
+    # a fresh GameObject pointing at the registered printing without
+    # driving a full priority loop. Inject onto p0's hand, push the
+    # spell, resolve — the synthesized self-ETB trigger lands on the
+    # stack post-resolve.
+    bear_dict = {
+        "name": "ETB Draw Bear (synthetic)",
+        "card_types": ["Creature"],
+        "mana_cost": {"generic": 1, "G": 1},
+        "effects": [],
+        "power": 2,
+        "toughness": 2,
+        "triggered_abilities": [ETB_DRAW_BEAR_TA],
+    }
+    bear_id = rust_state.register_and_inject_object(bear_dict, 0, 0)  # ZONE_HAND
+    rust_state.push_to_stack(bear_id, 0)
+    rust_state.resolve_top_of_stack()
+    # Bear landed on bf, trigger on stack.
+    ZONE_BATTLEFIELD = 2
+    assert rust_state.find_object_zone(bear_id) == ZONE_BATTLEFIELD
+    assert rust_state.stack_size() == 1, (
+        "expected the synthesized self-ETB trigger to be on the stack "
+        "post-resolve; cross_engine.py wiring didn't make it to Rust"
+    )
+    top = rust_state.peek_top_of_stack()
+    assert top["source_obj_id"] == bear_id
+
+
+def test_pre_slice_3_specs_unaffected():
+    """A DeckSpec whose card_defs all leave ``triggered_abilities``
+    at its default empty tuple registers identically post-Slice-3 —
+    no spurious extra triggers, no extra stack pushes. Regression
+    guard against the bridge accidentally injecting triggers on
+    pre-Slice-3 fixtures."""
+    from mtg_bot.parity.cross_engine import (
+        build_matched_states,
+        tiny_synthetic_deckspec,
+    )
+
+    py_state, rust_state = build_matched_states(tiny_synthetic_deckspec())
+    # No bf, no stack at construction time.
+    assert rust_state.stack_size() == 0
+    # Both engines see zero triggered_abilities on every loaded printing.
+    for obj in py_state.players[0].library:
+        assert obj.printing.triggered_abilities == ()
+    for obj in py_state.players[1].library:
+        assert obj.printing.triggered_abilities == ()

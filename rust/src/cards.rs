@@ -3633,7 +3633,7 @@ pub fn parse_printing(dict: &Bound<'_, PyDict>) -> PyResult<CardPrinting> {
     // Slice 1 ETB-trigger substrate: `triggered_abilities` defaults
     // to empty Vec when absent (back-compat for every pre-Slice-1
     // registry dict).
-    let triggered_abilities = match dict.get_item("triggered_abilities")? {
+    let mut triggered_abilities = match dict.get_item("triggered_abilities")? {
         Some(ta_any) => {
             let mut out = Vec::new();
             for item in ta_any.try_iter()? {
@@ -3647,6 +3647,36 @@ pub fn parse_printing(dict: &Bound<'_, PyDict>) -> PyResult<CardPrinting> {
         }
         None => Vec::new(),
     };
+    // ETB-trigger Slice 3: bridge legacy `etb_effects: Vec<Effect>`
+    // into the predicate path. Each `etb_effects` entry is the
+    // shape "when this enters, apply effect" — i.e. an IsSelf-only
+    // ENTERS trigger. Synthesize that as a TriggeredAbility and
+    // append to triggered_abilities so the predicate-path dispatch
+    // walker (state_ops_resolve::dispatch_event) handles it via the
+    // same substrate as every other ENTERS trigger.
+    //
+    // Synthesis is APPENDED (not prepended) so explicit
+    // `triggered_abilities` entries fire in declaration order BEFORE
+    // the synthesized self-ETB shim. This preserves the same
+    // dispatcher walk order that Slice 1/2's tests pin on (ability
+    // index iteration is left-to-right; synthesized entries get
+    // higher indices). For printings that DON'T also carry an
+    // explicit `triggered_abilities` entry the order doesn't matter.
+    //
+    // Audit pins (`docs/RUST_ETB_TRIGGER_AUDIT.md` §3.1) the legacy
+    // hatch as "the synthesis source, not the runtime path"
+    // post-Slice-3 — the `etb_effects` field is still parsed for
+    // back-compat with pre-Slice-3 fixtures, but the resolver no
+    // longer iterates it directly (Slice 3 retires the inline loop
+    // in `resolve_top_of_stack` + `_pause`).
+    for effect in &etb_effects {
+        triggered_abilities.push(TriggeredAbility {
+            event: Event::Enters,
+            predicate: Predicate::SourceIsSelf,
+            effect: effect.clone(),
+            once_per_turn: false,
+        });
+    }
     // CE20 Slice 1 substrate: `activated_abilities` defaults to empty
     // Vec when absent (back-compat for every pre-CE20-Slice-1 registry
     // dict). Same parse shape as `triggered_abilities`.

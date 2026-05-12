@@ -2771,6 +2771,8 @@ def test_ueot_pumped_attacker_damages_defender_for_effective_power(
     )
     synthetic_state.push_to_stack(obj_id, 0)
     synthetic_state.resolve_top_of_stack()
+    # Slice 3 bridge: drain the on-stack ETB pump trigger.
+    synthetic_state.resolve_top_of_stack()
     # Sanity: creature landed with UEOT modifier; effective power 4.
     assert synthetic_state.effective_power(obj_id) == 4
     # Haste lifts the summoning-sick attack gate.
@@ -2805,6 +2807,8 @@ def test_ueot_pumped_blocker_survives_what_would_have_been_lethal(
     # resolve — push as p1 and resolve.
     synthetic_state.push_to_stack(blocker_id, 1)
     synthetic_state.resolve_top_of_stack()
+    # Slice 3 bridge: drain the on-stack ETB pump trigger.
+    synthetic_state.resolve_top_of_stack()
     assert synthetic_state.effective_toughness(blocker_id) == 4
 
     assert synthetic_state.declare_attacker(attacker_id) is True
@@ -2828,6 +2832,8 @@ def test_ueot_pumped_creature_dies_when_ueot_clears(synthetic_state):
         _haste_pump_self_creature_dict(0, 2), 0, ZONE_HAND_LOCAL
     )
     synthetic_state.push_to_stack(obj_id, 0)
+    synthetic_state.resolve_top_of_stack()
+    # Slice 3 bridge: drain the on-stack ETB pump trigger.
     synthetic_state.resolve_top_of_stack()
     # Stamp 3 damage on the 2/4 effective creature — non-lethal under
     # the UEOT bump.
