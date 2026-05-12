@@ -1288,130 +1288,121 @@ The counter `state.next_etb_timestamp` and the per-object slot
 (transient bookkeeping; mirrors the `mulligan_count` /
 `consecutive_passes` precedent).
 
-### CE5. `cast_spell` resolves immediately on Rust (no stack) — Python pushes a StackItem and defers resolve
+### ~~CE5.~~ CLOSED: `cast_spell` cross-engine parity via harness-side `resolve_top_of_stack_python` mirror
 
-> **Note on playbook divergence.** The pre-staged
-> `docs/CE5_CE6_CE7_CLOSURE_PLAYBOOK.md` (merged in `e1989b8b`)
-> predicted CE5 would be the SBA victim collection divergence
-> based on the ORDER_SENSITIVE_SURFACES.md audit's ranking. The
-> cast_bears_selector probe surfaced a different divergence FIRST
-> — the cast-vs-resolve gap below — because the probe drove
-> `cast_spell` before reaching any SBA-relevant state (no
-> creature death on this deck). The playbook's planned "CE5
-> closure — SBA victim collection" should be re-labeled as CE6
-> when a future slice implements it; its CE6 (damage assignment)
-> and CE7 (target picks) bump correspondingly. The playbook's
-> shared helper proposal (`bf_iter_etb_sorted`) and its closure
-> recipes stay valid — they're contingent on the SBA / combat /
-> target-pick surfaces being exercised, which CE5 (this entry)
-> doesn't touch.
+Closed by the CE5 closure slice (`feature/ce5-cast-resolve`).
+Option (2) from the pre-closure two-option plan — the lowest-cost
+harness-side mirror — was taken. Rust's
+`state_ops_cast.rs::cast_creature` keeps its no-stack semantics
+(cast + resolve fused into one primitive); the cross-engine
+harness in `src/mtg_bot/parity/cross_engine.py` now drains
+Python's stack after every `cast_spell` action so the post-step
+compare sees Python's resolved state instead of its in-flight
+StackItem.
 
-- **Pinned by**:
-  `tests/test_parity_smoke.py::test_cross_engine_cast_bears_selector_walks_clean`
-  (strict-xfail, this slice). Companion passing pin
-  `test_cross_engine_cast_bears_selector_surfaces_ce5_cast_resolve_at_step_108`
-  fixes the exact symptom values (Python stack has 1 item, Rust
-  stack is empty; Rust battlefield has the Bears, Python doesn't).
-- **Surfaced by**: Phase-5 follow-up #4 — the `cast_bears_selector`
-  in `src/mtg_bot/parity/cross_engine.py`. Drives multi-turn play on
-  `slightly_bigger_deckspec` until p0 has Grizzly Bears in hand AND
-  two untapped non-sick Forests on the battlefield (turn 9 PRECOMBAT_MAIN).
-  Activates each Forest in turn for `{G}{G}`, then emits
-  `cast_spell(card_id=Bears)`. The first divergence appears on
-  **step 108**, the cast step itself:
-  - Python `battlefield`: 6 objects (no Bears). Python `stack`:
-    `(('None', 0, 0, 0, 0, None, 0, None),)` — one StackItem for the
-    Bears spell, signature degenerate because `StackItem` doesn't
-    carry a `printing` attribute the zone-signature reader can read.
-  - Rust `battlefield`: 7 objects, last is `('Grizzly Bears', tapped=0,
-    summoning_sick=1, ...)`. Rust `stack`: empty `()`.
-- **Rust today**: `state_ops_cast.rs::cast_creature` (line 298) fuses
-  cast + resolve into one primitive. After validating the printing
-  type is `"Creature"` and the mana cost is payable from the pool, it
-  pays the cost, calls `move_from_hand_to_battlefield`, and stamps
-  the new permanent with `summoning_sick = true`. The card never
-  transits the stack. The docstring at line 293 explicitly flags
-  this: *"No-stack semantics. The Python pipeline pushes a
-  `StackItem`, settles priority, then resolves; this primitive
-  short-circuits to the resolved state. ETB triggers, 'when X is
-  cast' hooks, and any choice points the spell normally presents
-  are deferred until a Rust-side stack lands."*
-- **CR / Python expected**: CR 601.2 — casting a spell puts it on
-  the stack; resolution happens later as a separate step (CR
-  608.2). Python's `actions._cast_spell` (line 1361) pushes a
-  `StackItem` onto `state.stack` at line 1759 and returns; the
-  spell sits there until priority passes (CR 117.4) and
-  `resolve_top_of_stack` (line 2655) pops it, runs the ETB
-  resolver, and moves the card to the battlefield. The Python
-  shape is the parity reference.
-- **Impact**: high. Any decision script that casts a non-mana
-  spell diverges immediately on the cast step. The cross-engine
-  harness on `cast_bears_selector` aborts at step 108 with two
-  field views diverged. Any downstream observable that walks
-  `state.stack` (counter-spell timing, "when X is cast" triggers,
-  the stack's contribution to fingerprint, an opponent's
-  response-priority window) sees the divergence cascade. The
-  battlefield difference also cascades onto subsequent
-  `is_over`, win-determination (Rust marks game-over on empty-
-  library draw via I19 at turn 10, Python defers via SBAs — see
-  step 119 in the same walk).
-- **Closeable**: yes — two-option closure:
-  1. **Grow Rust a real stack-and-priority surface**. Refactor
-     `cast_creature` to push a `StackItem`-equivalent
-     (`crate::stack_item::StackItem`) onto `state.stack` and
-     defer the bf transition to a `resolve_top_of_stack`
-     primitive matching Python's resolution flow. Mirrors the
-     full priority-loop architecture Python already has. Large
-     surface — every cast site, every resolution-time hook (ETB
-     triggers, "when X is cast" hooks, target re-legality
-     checks, ward checks, counterspell timing), every observer
-     that wants the in-flight stack contents needs to be wired
-     through. This is the long-term "Rust grows the stack"
-     direction the multiple `cast_creature` / no-stack-semantics
-     docstrings in `state_ops_cast.rs` already flag.
-  2. **Drive Python through a side-channel resolve immediately
-     after cast**. Harness-side parity bridge: after every
-     `cast_spell` action_dict the cross-engine harness applies,
-     call `resolve_top_of_stack(py_state)` on the Python side
-     so Python's stack drains down to match Rust's empty stack
-     and the resolved permanent lands on Python's battlefield.
-     This is a HARNESS-only mirror — production Python still
-     uses the stack — but parity-aligns the cross-engine view.
-     The same pattern as the multi-turn slice's
-     `advance_phase_python` Python-side mirror of Rust's
-     `advance_phase`. Lowest-cost option; suitable until Rust
-     grows its own stack.
-- **Side findings from the same walk** (NOT pinned as separate CE
-  entries; recorded here so a future closure pass doesn't
-  re-discover them):
-  - **Rust `ActivateAbility` rejects summoning-sick LANDS.** The
-    dispatch arm in `state_ops_actions.rs` (line ~523) gates on
-    `obj.summoning_sick` for any source, regardless of whether
-    the source is a creature. CR 302.1 restricts summoning
-    sickness to creatures tapping for tap-cost abilities; lands
-    are exempt. Python's `actions._activate_ability` doesn't
-    gate at all (the gate is in `legal.py:661-663` and reads
-    `is_creature_now(obj) && obj.summoning_sick`). The
-    cross-engine harness sidesteps this by filtering sick
-    Forests on the Python-reference side; without the filter
-    the harness aborts at step 67 with a Rust raise on the
-    freshly-played Forest. Likely root cause: the
-    `state_ops_actions.rs` comment claims to mirror Python's
-    gate but drops the `is_creature_now` guard. One-line fix
-    on the Rust side; document as a G<n> entry alongside the
-    CE5 closure when both flow together.
-  - **Rust marks game-over eagerly on empty-library draw.**
-    CLOSED as CE10 (CE-pure-derivation-is_over) — see entry below.
-    The cross-engine smoke at step 119 (turn 10 ap=1 DRAW) used
-    to surface `is_over=True`/`winner_id=0` on Rust while Python
-    stayed `False`/`None`; post-CE10, Rust's surface `is_over`/
-    `winner_id`/`is_draw` are SBA-gated and match Python's
-    SBA-written fields. The eager pure-derivation predicate
-    stays available via `losers()`/`winner()`/`is_game_over()`
-    for callers that need pre-SBA loss observability.
+**Closure shape.** A new harness primitive
+`resolve_top_of_stack_python(py_state) -> int` in
+`src/mtg_bot/parity/cross_engine.py` drains the Python stack until
+empty, mirroring `simulate.priority_loop` line 257: pop one item
+via `resolve_top_of_stack`, run `state_based_actions`, repeat. The
+while-loop also catches any trigger items the resolve itself
+pushes (ETBs etc.) — today no-op on the synthetic deck (Bears has
+no triggers), correct shape for future trigger-bearing printings.
+
+`step_both` is the integration site. After both engines apply the
+action dict, the harness checks
+`action_dict["kind"] in _RUST_AUTO_RESOLVE_ACTION_KINDS` (today:
+just `cast_spell`) and runs the drain if so. The frozenset gate is
+the extension point: any future Rust primitive that ships fused
+cast+resolve semantics (e.g. a no-stack `activate_non_mana_ability`
+arm) appends its kind there. This is the same harness-mirror
+pattern as `advance_phase_python` — HARNESS-only, production
+engines unchanged. Rust keeps its no-stack `cast_creature`;
+production Python keeps its push-StackItem-then-resolve flow
+through the real priority loop.
+
+**Tests.** The pre-closure strict-xfail clean-walk pin
+`test_cross_engine_cast_bears_selector_walks_clean` flipped to
+expected-pass at N=150 decisions (the brief's target window). The
+walk traverses every prior surface divergence point cleanly: the
+cast at step 108 (this slice), the empty-library draw at step 119
+(closed independently by CE10's SBA-gating of the surface
+accessors), and the post-cast/post-loss-flag turns 10+. Companion
+symptom-pin
+`test_cross_engine_cast_bears_selector_surfaces_ce5_cast_resolve_at_step_108`
+deleted per the CE2/CE3/CE4 closure-pair contract — the symptom no
+longer surfaces post-closure. Two new regression tests pin the new
+equilibrium:
+
+- `test_cross_engine_cast_bears_selector_cast_step_108_walks_clean_post_ce5`
+  — at step 108 (the cast step) both engines agree: 7 bf objects
+  including Grizzly Bears, empty stack on both sides.
+- `test_cross_engine_resolve_top_of_stack_python_drains_stack` —
+  exercises the harness primitive directly: pins the step_both
+  integration AND the no-op contract on empty stacks.
+
+**Invariant: see I28 below** — pins the harness-mirror as the
+canonical Python-Rust cast comparison contract.
+
+**Fingerprint baselines.** Zero shifts. The mirror is harness-only;
+no production engine code path changed on either side. Rust's
+`cast_creature` still emits the same bf-stamped, no-stack
+post-state it always has; Python's `_cast_spell` still pushes a
+StackItem (production Python's priority loop drains it normally).
+The only place the new primitive runs is `step_both` in the
+cross-engine harness.
+
+**Out of scope (recorded as future slices).** The
+cast_bears_selector probe surfaced one side finding while reaching
+step 108 that this slice intentionally does NOT address:
+
+- **Rust `ActivateAbility` rejects summoning-sick LANDS** (CR 302.1
+  applies only to creatures tapping for tap-cost abilities; lands
+  are exempt). The `state_ops_actions.rs` dispatch arm at line ~523
+  gates on `obj.summoning_sick` regardless of card type. The
+  selector sidesteps this by Python-side filtering sick lands; a
+  future one-line slice can drop the gate when source is a land.
+
+(The second pre-closure side finding — Rust's eager `is_over` on
+empty-library draw at step 119 — was closed by CE10 in
+`feature/ce-pure-derivation-is-over`, which landed before this
+slice. Both engines now stay stale on the surface accessors until
+SBAs fire, and the 150-decision walk crosses step 119 parity-clean.)
+
+The next-natural CE5-closure-extension is to widen the
+`cast_bears_selector` (or a successor) past the cast into combat
+declarations, which would surface the playbook's CE7 (combat damage
+assignment — formerly playbook-CE6 pre-renumber)
+collection-order divergence as the next CE candidate.
 
 (Other smoke-flagged divergences may be added by follow-up Phase 5
 slices as the deck pool / decision script grows.)
+
+### I28. Cross-engine `cast_spell` parity via harness-side `resolve_top_of_stack_python` mirror
+
+`step_both` in `src/mtg_bot/parity/cross_engine.py` drains Python's
+stack via `resolve_top_of_stack_python` after every action whose
+kind is in `_RUST_AUTO_RESOLVE_ACTION_KINDS` (today:
+`{"cast_spell"}`). The drain mirrors `simulate.priority_loop`'s
+"resolve until empty" contract (CR 117.4): pop one StackItem via
+`resolve_top_of_stack`, run `state_based_actions`, repeat. This
+parity-aligns Python's observable state with Rust's no-stack
+`cast_creature` semantics for cross-engine comparison purposes.
+
+The invariant: when the cross-engine walker applies a `cast_spell`
+action, the post-step compare sees both engines' stacks empty and
+both engines' battlefields with the resolved permanent. Production
+Python is unchanged — the harness primitive is invoked only from
+`step_both`. Production Rust is unchanged — `cast_creature`'s
+no-stack semantics are preserved (documented in the
+`state_ops_cast.rs:293` docstring and reaffirmed here).
+
+Extension point: any future Rust primitive that ships fused
+cast+resolve semantics for a different action kind appends its
+kind to `_RUST_AUTO_RESOLVE_ACTION_KINDS`. The drain itself is
+already trigger-loop-correct (the while-loop catches any items the
+resolve itself pushes), so the only update needed for new kinds is
+the action-kind gate.
 
 ### CE8. `shuffle_deck` PRNG diverges — Python uses Mersenne Twister, Rust uses xorshift64
 

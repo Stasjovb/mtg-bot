@@ -733,6 +733,59 @@ def _dict_to_python_action(action_dict: dict):
     )
 
 
+def resolve_top_of_stack_python(py_state) -> int:
+    """Harness-side mirror of Rust's auto-resolve-on-cast semantics (CE5 closure).
+
+    Rust's ``cast_spell`` (``state_ops_cast.rs::cast_creature``) fuses
+    cast + resolve into one primitive — the card moves directly from
+    hand to battlefield, skipping the stack entirely (no-stack
+    semantics per the docstring at line 293). Python's ``_cast_spell``
+    pushes a ``StackItem`` onto ``state.stack`` and defers the bf
+    transition to ``resolve_top_of_stack``, which fires once both
+    players pass priority (CR 117.4) via ``simulate.priority_loop``.
+
+    To compare apples-to-apples on the cross-engine smoke without
+    growing Rust a full stack-and-priority surface, this harness
+    primitive drains Python's stack down to empty after every
+    ``cast_spell`` action. The drain mirrors the canonical pattern in
+    ``simulate.priority_loop`` (line 257): pop one item, run SBAs,
+    repeat until the stack is empty.
+
+    This is the same pattern as :func:`advance_phase_python` — a
+    HARNESS-only Python mirror of a Rust primitive's semantics. The
+    production Python engine still drives spell resolution through the
+    real priority loop; this helper only runs from the cross-engine
+    walker.
+
+    Returns the count of stack items drained (0 if the stack was
+    already empty — a harmless no-op on non-cast actions).
+    """
+    from mtg_bot.actions import resolve_top_of_stack
+    from mtg_bot.turn import state_based_actions
+
+    drained = 0
+    # Each resolve may itself push triggered-ability items (ETBs etc.)
+    # onto the stack; the while-loop drains them too, matching the
+    # priority loop's "keep resolving until empty" contract. On the
+    # current synthetic deck (Bears has no ETB) the loop runs exactly
+    # one iteration, but the shape is correct for future printings
+    # that ship triggers.
+    while py_state.stack:
+        resolve_top_of_stack(py_state)
+        state_based_actions(py_state)
+        drained += 1
+    return drained
+
+
+# Action kinds whose Rust-side semantics fuse cast+resolve into a
+# single mutation — the harness drains Python's stack after these to
+# match Rust's empty-stack observable. Today this is exactly
+# ``cast_spell``; if a future Rust primitive grows similar no-stack
+# semantics (e.g. an ``activate_non_mana_ability`` arm that bypasses
+# the stack), append its kind here.
+_RUST_AUTO_RESOLVE_ACTION_KINDS: frozenset[str] = frozenset({"cast_spell"})
+
+
 def step_both(py_state, rust_state, action_dict: dict) -> CrossEngineStep:
     """Apply ``action_dict`` to both engines and compare post-step views.
 
@@ -740,6 +793,14 @@ def step_both(py_state, rust_state, action_dict: dict) -> CrossEngineStep:
     place. Returns a :class:`CrossEngineStep` carrying the views +
     the per-field divergence list. The step index is left at -1 by
     default — the outer harness fills it in.
+
+    **CE5 closure — cast-vs-resolve mirror.** When ``action_dict``'s
+    kind is in :data:`_RUST_AUTO_RESOLVE_ACTION_KINDS` (today:
+    ``cast_spell``), the harness drains Python's stack via
+    :func:`resolve_top_of_stack_python` AFTER both engines apply the
+    action and BEFORE the field-view compare runs. This parity-aligns
+    the cross-engine view on Rust's no-stack ``cast_creature``
+    semantics without modifying production Rust to grow a real stack.
     """
     from mtg_bot.actions import apply_action as py_apply_action
 
@@ -749,6 +810,11 @@ def step_both(py_state, rust_state, action_dict: dict) -> CrossEngineStep:
     # ``apply_action`` which reads ``priority_player`` for the actor.
     py_apply_action(py_state, py_state.priority_player_idx, py_action)
     rust_state.apply_action(action_dict)
+
+    # CE5 closure: drain Python's stack for actions whose Rust analog
+    # auto-resolves. See :func:`resolve_top_of_stack_python` docstring.
+    if action_dict.get("kind") in _RUST_AUTO_RESOLVE_ACTION_KINDS:
+        resolve_top_of_stack_python(py_state)
 
     ps = parity_smoke()
     py_view = build_python_field_view(py_state)
