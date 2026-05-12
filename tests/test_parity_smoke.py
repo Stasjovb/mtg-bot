@@ -8715,3 +8715,679 @@ def test_cross_engine_activated_cost_selector_pre_injection_walks_clean(parity_s
         "Bear Caster should not yet exist at end of step 167 -- "
         "injection fires at step 168"
     )
+
+
+# ---------------------------------------------------------------------------
+# Phase 5 follow-up #21: multi_keyword_selector tests — MULTI-KEYWORD
+# COMPOSITION combat (the eleven single-keyword surfaces — FS / DT /
+# trample / lifelink / vigilance / haste / menace / defender /
+# indestructible / double-strike / flying — are now well-covered, all
+# clean or closed; this probe asks whether the keywords COMPOSE
+# correctly on the same creature).
+#
+# Three scenarios:
+#
+#   * **Test A — Lifelink + Deathtouch (LL+DT).** A 2/2 LL+DT
+#     attacker vs a 4/4 vanilla blocker. Per CR 702.2b + 702.15b:
+#     attacker deals 2 to blocker; deathtouch upgrades mark to >= 4
+#     (lethal); blocker dies. Blocker deals 4 back to attacker;
+#     attacker (2 toughness) dies via SBA. Lifelink fires on the
+#     literal 2 damage dealt -> p0 gains 2 life. Expected outcome on
+#     both engines: both creatures dead, p0 life +2.
+#
+#   * **Test B — First-strike + Deathtouch (FS+DT).** A 2/2 FS+DT
+#     attacker vs a 4/4 vanilla blocker. Per CR 702.7c + 702.2b:
+#     first-strike pass deals 2 to blocker; deathtouch upgrades the
+#     mark to >= 4 (lethal); blocker dies in the pass-1-alive-filter
+#     gate. The regular pass alive-predicate filter drops the
+#     blocker's back-damage entry (source is dead). Expected:
+#     attacker survives with 0 marked damage, blocker dead.
+#
+#   * **Test C — Trample + Lifelink (T+LL).** A 4/4 T+LL attacker
+#     vs a 2/2 vanilla blocker. Per CR 702.19b + 702.15b: trample
+#     assigns lethal (= 2) to blocker, spills remaining 2 to
+#     defender. Lifelink fires on BOTH entries (the blocker hit AND
+#     the defender hit). Expected: blocker dead, attacker alive,
+#     defender takes 2, p0 gains 4 life.
+#
+# **OUTCOME: (a) CLEAN PASS — no novel cross-engine divergence
+# surfaced.** Both engines compose the keywords correctly per CR.
+# Specifically:
+#
+#   * Lifelink fires per damage event (Python's combat.py:535-541) /
+#     per plan entry (Rust's state_ops_combat.rs:1357-1364) at the
+#     LITERAL `amount` value, not the deathtouch-upgraded mark. This
+#     is correct (CR 702.15b: "Damage dealt by a creature with
+#     lifelink causes its controller to gain that much life" — the
+#     "that much" refers to the damage dealt, not the marked damage
+#     after deathtouch upgrade).
+#
+#   * Deathtouch upgrades the recipient's mark to its toughness
+#     (Python's `obj.marked_lethal = True` flag + SBA gate / Rust's
+#     `obj.damage = recipient_toughness` upgrade at apply-time
+#     state_ops_combat.rs:1336-1340). Both fire on creature-target
+#     entries only; both fire BEFORE the post-combat SBA pass.
+#
+#   * Trample's spill-to-defender (Python combat.py:436-440 / Rust
+#     state_ops_combat.rs:995-1008) fires the lifelink hook on the
+#     spilled-to-defender entry the SAME way as the blocker entry
+#     because lifelink runs in the per-event/per-entry apply loop
+#     downstream of the plan partition (both engines).
+#
+#   * The CE18-closure alive-predicate filter (Rust
+#     state_ops_combat.rs:1209-1247) drops the FS-killed blocker's
+#     back-damage entry, matching Python's per-substep blockers-list
+#     rebuild (combat.py:_resolve_damage_step). Both engines agree
+#     on Test B's "attacker survives with 0 marked damage" outcome.
+#
+# Pinned by five new tests:
+#
+#   * test_cross_engine_multi_keyword_selector_walks_clean — full
+#     200-decision walk on multi_blocker_deckspec with the LL+DT
+#     injection, parity-clean every step.
+#   * test_cross_engine_multi_keyword_lifelink_deathtouch — direct-
+#     combat structural pin (Test A: LL+DT 2/2 vs vanilla 4/4).
+#   * test_cross_engine_multi_keyword_first_strike_deathtouch —
+#     direct-combat structural pin (Test B: FS+DT 2/2 vs vanilla 4/4).
+#   * test_cross_engine_multi_keyword_trample_lifelink — direct-
+#     combat structural pin (Test C: T+LL 4/4 vs vanilla 2/2).
+#   * test_cross_engine_multi_keyword_selector_pre_injection_walks_clean
+#     — steps 0-167 parity-clean (the selector's delegate-to-
+#     retaliation_selector backbone is unchanged before step-168
+#     injection).
+# ---------------------------------------------------------------------------
+
+
+def test_cross_engine_multi_keyword_selector_walks_clean(parity_smoke):
+    """**Multi-keyword (LL+DT) clean-walk pin** — 200-decision walk on
+    :func:`multi_blocker_deckspec` with :func:`multi_keyword_selector`
+    is parity-clean every step. The LL+DT injection at step 168 +
+    the single-blocker COMBAT_DAMAGE step around index 175 compose
+    correctly on both engines: 2 damage assigned to Bears id 9 fires
+    BOTH deathtouch mark-upgrade (mark >= 2 = toughness, blocker
+    dies) AND lifelink (+2 life on p0).
+
+    No CE21 surfaced on this slice. Outcome (a) — keywords compose
+    correctly.
+    """
+    from mtg_bot.parity.cross_engine import (
+        multi_blocker_deckspec,
+        multi_keyword_selector,
+        walk_both,
+    )
+
+    result = walk_both(
+        multi_blocker_deckspec(),
+        n_decisions=200,
+        decision_selector=multi_keyword_selector,
+    )
+    assert result.error is None, (
+        f"walk aborted at step {result.aborted_at}: {result.error}"
+    )
+    for step in result.steps:
+        assert step.divergences == [], (
+            f"unexpected divergence at step {step.step_index}: "
+            f"action={step.action_dict} "
+            f"{[(d.field, d.py_value, d.rust_value, d.known_gap) for d in step.divergences]}"
+        )
+
+
+def test_cross_engine_multi_keyword_lifelink_deathtouch(parity_smoke):
+    """**Test A — LL+DT composition pin** — fresh-state, direct
+    combat invocation on both engines.
+
+    Setup: 2/2 lifelink+deathtouch Bear Inquisitor on p0 bf; 4/4
+    vanilla Bear Behemoth on p1 bf. Declare attack + block; resolve
+    combat damage + SBAs.
+
+    Expected end-state (matches both engines):
+      * Attacker DEAD (took 4 back-damage from 4/4 blocker; 4 >=
+        toughness 2 = lethal).
+      * Blocker DEAD (took 2 damage; deathtouch upgrades mark to
+        >= 4 = toughness; blocker dies in SBA per CR 702.2b).
+      * p0 life = 22 (was 20; +2 from lifelink on the 2-damage
+        creature event; lifelink fires on literal `amount`, not the
+        deathtouch-upgraded mark).
+      * p1 life = 20 (unchanged; no spillover, no trample).
+      * Bear Inquisitor in p0 graveyard.
+      * Bear Behemoth in p1 graveyard.
+
+    Pins the contract that lifelink + deathtouch on the same source
+    compose correctly: lifelink fires on the literal damage dealt
+    (not the post-deathtouch upgraded mark), and deathtouch's mark
+    upgrade is independent of lifelink.
+    """
+    from mtg_bot.cards.base import CardPrinting, ManaCost
+    from mtg_bot.combat import resolve_combat_damage
+    from mtg_bot.game import Zone
+    from mtg_bot.parity.cross_engine import (
+        build_matched_states,
+        multi_blocker_deckspec,
+    )
+    from mtg_bot.turn import state_based_actions
+
+    py_state, rust_state = build_matched_states(multi_blocker_deckspec())
+
+    # ---- Python side: LL+DT 2/2 + vanilla 4/4 ----
+    ll_dt_printing = CardPrinting(
+        name="Bear Inquisitor",
+        mana_cost_str="",
+        mana_cost=ManaCost(),
+        type_line="Creature",
+        supertypes=(),
+        card_types=("Creature",),
+        subtypes=(),
+        power=2,
+        toughness=2,
+        produces=frozenset(),
+        keywords=frozenset({"lifelink", "deathtouch"}),
+    )
+    py_atk = py_state.new_object(
+        ll_dt_printing, owner_id=0, zone=Zone.BATTLEFIELD,
+    )
+    py_atk.summoning_sick = False
+    py_atk.tapped = False
+    py_atk.damage = 0
+    py_atk.etb_timestamp = py_state.next_timestamp
+    py_state.next_timestamp += 1
+    py_state.battlefield.append(py_atk)
+
+    behemoth_printing = CardPrinting(
+        name="Bear Behemoth",
+        mana_cost_str="",
+        mana_cost=ManaCost(),
+        type_line="Creature",
+        supertypes=(),
+        card_types=("Creature",),
+        subtypes=(),
+        power=4,
+        toughness=4,
+        produces=frozenset(),
+        keywords=frozenset(),
+    )
+    py_blk = py_state.new_object(
+        behemoth_printing, owner_id=1, zone=Zone.BATTLEFIELD,
+    )
+    py_blk.controller_id = 1
+    py_blk.summoning_sick = False
+    py_blk.tapped = False
+    py_blk.damage = 0
+    py_blk.etb_timestamp = py_state.next_timestamp
+    py_state.next_timestamp += 1
+    py_state.battlefield.append(py_blk)
+
+    py_atk.attacking = True
+    py_atk.tapped = True
+    py_blk.blocking = int(py_atk.id)
+    py_atk.blocked_by.append(int(py_blk.id))
+
+    py_p0_before = py_state.players[0].life
+    py_p1_before = py_state.players[1].life
+    resolve_combat_damage(py_state, defending_player_id=1)
+    state_based_actions(py_state)
+
+    py_atk_alive = any(o.id == py_atk.id for o in py_state.battlefield)
+    py_blk_alive = any(o.id == py_blk.id for o in py_state.battlefield)
+    assert not py_atk_alive, (
+        "Python LL+DT: attacker should be DEAD (took 4 back-damage from "
+        "4/4 blocker; 4 >= toughness 2 = lethal)"
+    )
+    assert not py_blk_alive, (
+        "Python LL+DT: blocker should be DEAD (took 2 damage; deathtouch "
+        "upgrades mark to >= toughness 4 per CR 702.2b)"
+    )
+    assert py_state.players[0].life == py_p0_before + 2, (
+        f"Python LL+DT: p0 life should be {py_p0_before + 2} (+2 from "
+        f"lifelink on the literal 2-damage event); got "
+        f"{py_state.players[0].life}"
+    )
+    assert py_state.players[1].life == py_p1_before, (
+        f"Python LL+DT: p1 life unchanged at {py_p1_before} (no spillover, "
+        f"no trample); got {py_state.players[1].life}"
+    )
+
+    # ---- Rust side: LL+DT 2/2 + vanilla 4/4 ----
+    rust_atk_id = rust_state.register_and_inject_object(
+        {
+            "name": "Bear Inquisitor",
+            "card_types": ["Creature"],
+            "power": 2,
+            "toughness": 2,
+            "keywords": ["lifelink", "deathtouch"],
+        },
+        0, 2,
+    )
+    rust_blk_id = rust_state.register_and_inject_object(
+        {
+            "name": "Bear Behemoth",
+            "card_types": ["Creature"],
+            "power": 4,
+            "toughness": 4,
+            "keywords": [],
+        },
+        1, 2,
+    )
+    rust_state.declare_attacker(rust_atk_id)
+    rust_state.declare_blocker(rust_blk_id, rust_atk_id)
+    rust_p0_before = rust_state.get_life(0)
+    rust_p1_before = rust_state.get_life(1)
+    rust_state.deal_combat_damage()
+    rust_state.apply_sbas()
+
+    rust_bf_ids = {int(e["id"]) for e in rust_state.battlefield_snapshot()}
+    assert rust_atk_id not in rust_bf_ids, (
+        "Rust LL+DT: attacker should be DEAD"
+    )
+    assert rust_blk_id not in rust_bf_ids, (
+        "Rust LL+DT: blocker should be DEAD"
+    )
+    assert rust_state.get_life(0) == rust_p0_before + 2, (
+        f"Rust LL+DT: p0 life should be {rust_p0_before + 2} (+2 from "
+        f"lifelink); got {rust_state.get_life(0)}"
+    )
+    assert rust_state.get_life(1) == rust_p1_before, (
+        f"Rust LL+DT: p1 life unchanged at {rust_p1_before}; got "
+        f"{rust_state.get_life(1)}"
+    )
+
+
+def test_cross_engine_multi_keyword_first_strike_deathtouch(parity_smoke):
+    """**Test B — FS+DT composition pin** — fresh-state, direct
+    combat invocation on both engines.
+
+    Setup: 2/2 first-strike+deathtouch Bear Slayer on p0 bf; 4/4
+    vanilla Bear Behemoth on p1 bf. Declare attack + block; resolve
+    combat damage + SBAs.
+
+    Expected end-state (matches both engines):
+      * FS substep: attacker deals 2 to blocker; deathtouch upgrades
+        mark to >= toughness 4 (lethal). Blocker dies via mid-combat
+        SBA (Python) or pass-2 alive-predicate filter (Rust).
+      * Regular substep: blocker is dead; its back-damage entry is
+        dropped (source is dead — Rust's `battlefield_creature_alive`
+        filter at state_ops_combat.rs:1211 / Python's per-substep
+        blockers-list rebuild at combat.py:_resolve_damage_step).
+        Attacker takes no back-damage.
+      * Attacker ALIVE with 0 marked damage.
+      * Blocker DEAD; Bear Behemoth in p1 graveyard.
+      * Life totals unchanged (no creature-to-player damage; no
+        trample; no lifelink).
+
+    Pins the contract that first-strike + deathtouch on the same
+    source compose correctly: deathtouch upgrades the FS-substep
+    mark to lethal (so the blocker dies BEFORE the regular substep),
+    and the alive-predicate filter then drops the blocker's
+    back-damage. This is the load-bearing CE18-closure-touches-
+    deathtouch axis the brief flagged as a potential CE21 site.
+    """
+    from mtg_bot.cards.base import CardPrinting, ManaCost
+    from mtg_bot.combat import resolve_combat_damage
+    from mtg_bot.game import Zone
+    from mtg_bot.parity.cross_engine import (
+        build_matched_states,
+        multi_blocker_deckspec,
+    )
+    from mtg_bot.turn import state_based_actions
+
+    py_state, rust_state = build_matched_states(multi_blocker_deckspec())
+
+    # ---- Python side ----
+    fs_dt_printing = CardPrinting(
+        name="Bear Slayer",
+        mana_cost_str="",
+        mana_cost=ManaCost(),
+        type_line="Creature",
+        supertypes=(),
+        card_types=("Creature",),
+        subtypes=(),
+        power=2,
+        toughness=2,
+        produces=frozenset(),
+        keywords=frozenset({"first strike", "deathtouch"}),
+    )
+    py_atk = py_state.new_object(
+        fs_dt_printing, owner_id=0, zone=Zone.BATTLEFIELD,
+    )
+    py_atk.summoning_sick = False
+    py_atk.tapped = False
+    py_atk.damage = 0
+    py_atk.etb_timestamp = py_state.next_timestamp
+    py_state.next_timestamp += 1
+    py_state.battlefield.append(py_atk)
+
+    behemoth_printing = CardPrinting(
+        name="Bear Behemoth",
+        mana_cost_str="",
+        mana_cost=ManaCost(),
+        type_line="Creature",
+        supertypes=(),
+        card_types=("Creature",),
+        subtypes=(),
+        power=4,
+        toughness=4,
+        produces=frozenset(),
+        keywords=frozenset(),
+    )
+    py_blk = py_state.new_object(
+        behemoth_printing, owner_id=1, zone=Zone.BATTLEFIELD,
+    )
+    py_blk.controller_id = 1
+    py_blk.summoning_sick = False
+    py_blk.tapped = False
+    py_blk.damage = 0
+    py_blk.etb_timestamp = py_state.next_timestamp
+    py_state.next_timestamp += 1
+    py_state.battlefield.append(py_blk)
+
+    py_atk.attacking = True
+    py_atk.tapped = True
+    py_blk.blocking = int(py_atk.id)
+    py_atk.blocked_by.append(int(py_blk.id))
+
+    py_p0_before = py_state.players[0].life
+    py_p1_before = py_state.players[1].life
+    resolve_combat_damage(py_state, defending_player_id=1)
+    state_based_actions(py_state)
+
+    py_atk_alive = any(o.id == py_atk.id for o in py_state.battlefield)
+    py_blk_alive = any(o.id == py_blk.id for o in py_state.battlefield)
+    assert py_atk_alive, (
+        "Python FS+DT: attacker should be ALIVE (FS killed the blocker "
+        "BEFORE the regular substep; alive-predicate / per-substep "
+        "rebuild drops blocker's back-damage)"
+    )
+    assert not py_blk_alive, (
+        "Python FS+DT: blocker should be DEAD (FS substep + deathtouch "
+        "upgrades mark to lethal)"
+    )
+    # Attacker's marked damage cleared by mid-combat SBA's apply pass —
+    # actually, marked damage persists through end-of-turn cleanup
+    # (CR 514.2). Within the resolve_combat_damage call + immediate SBA,
+    # the attacker's damage stays whatever the regular substep would
+    # have applied. The post-CE18 alive-filter drops the blocker's
+    # back-damage entry, so attacker damage = 0.
+    py_atk_obj = next(o for o in py_state.battlefield if o.id == py_atk.id)
+    assert py_atk_obj.damage == 0, (
+        f"Python FS+DT: attacker should have 0 marked damage (FS killed "
+        f"blocker; regular-substep back-damage entry dropped because "
+        f"source is dead); got damage={py_atk_obj.damage}"
+    )
+    assert py_state.players[0].life == py_p0_before, (
+        f"Python FS+DT: p0 life unchanged at {py_p0_before} (no "
+        f"lifelink); got {py_state.players[0].life}"
+    )
+    assert py_state.players[1].life == py_p1_before, (
+        f"Python FS+DT: p1 life unchanged at {py_p1_before} (no "
+        f"spillover, no trample); got {py_state.players[1].life}"
+    )
+
+    # ---- Rust side ----
+    rust_atk_id = rust_state.register_and_inject_object(
+        {
+            "name": "Bear Slayer",
+            "card_types": ["Creature"],
+            "power": 2,
+            "toughness": 2,
+            "keywords": ["first_strike", "deathtouch"],
+        },
+        0, 2,
+    )
+    rust_blk_id = rust_state.register_and_inject_object(
+        {
+            "name": "Bear Behemoth",
+            "card_types": ["Creature"],
+            "power": 4,
+            "toughness": 4,
+            "keywords": [],
+        },
+        1, 2,
+    )
+    rust_state.declare_attacker(rust_atk_id)
+    rust_state.declare_blocker(rust_blk_id, rust_atk_id)
+    rust_p0_before = rust_state.get_life(0)
+    rust_p1_before = rust_state.get_life(1)
+    rust_state.deal_combat_damage()
+    rust_state.apply_sbas()
+
+    rust_bf_ids = {int(e["id"]) for e in rust_state.battlefield_snapshot()}
+    assert rust_atk_id in rust_bf_ids, (
+        "Rust FS+DT: attacker should be ALIVE (FS killed blocker; "
+        "alive-predicate filter drops back-damage entry)"
+    )
+    assert rust_blk_id not in rust_bf_ids, (
+        "Rust FS+DT: blocker should be DEAD"
+    )
+    rust_atk_damage = next(
+        (int(e.get("damage", 0))
+         for e in rust_state.battlefield_snapshot()
+         if int(e["id"]) == rust_atk_id),
+        None,
+    )
+    assert rust_atk_damage == 0, (
+        f"Rust FS+DT: attacker damage=0 (back-damage entry dropped); "
+        f"got damage={rust_atk_damage}"
+    )
+    assert rust_state.get_life(0) == rust_p0_before, (
+        f"Rust FS+DT: p0 life unchanged at {rust_p0_before}; got "
+        f"{rust_state.get_life(0)}"
+    )
+    assert rust_state.get_life(1) == rust_p1_before, (
+        f"Rust FS+DT: p1 life unchanged at {rust_p1_before}; got "
+        f"{rust_state.get_life(1)}"
+    )
+
+
+def test_cross_engine_multi_keyword_trample_lifelink(parity_smoke):
+    """**Test C — T+LL composition pin** — fresh-state, direct combat
+    invocation on both engines.
+
+    Setup: 4/4 trample+lifelink Bear Crusher on p0 bf; 2/2 vanilla
+    Bear Cub on p1 bf. Declare attack + block; resolve combat
+    damage + SBAs.
+
+    Expected end-state (matches both engines):
+      * Attacker (4 power) assigns 2 to blocker (= blocker's
+        toughness = lethal floor under non-deathtouch), 2 trample-
+        excess to defender (CR 702.19b).
+      * Blocker DEAD (took 2 = toughness).
+      * Attacker ALIVE (took 2 back-damage from 2/2 blocker; 2 <
+        toughness 4 = non-lethal).
+      * Attacker damage = 2 (marked).
+      * p0 life = 24 (was 20; +4 from lifelink — TWO entries fire:
+        +2 from the blocker hit AND +2 from the defender hit. Pins
+        the contract that lifelink fires on the trample-spillover
+        entry too, not just the blocker entry.)
+      * p1 life = 18 (was 20; -2 from trample excess).
+      * Bear Cub in p1 graveyard.
+
+    This is the load-bearing T+LL composition pin — surfaces the
+    "lifelink + trample double-counts or misses spillover" axis the
+    brief flagged as a potential CE21 candidate.
+    """
+    from mtg_bot.cards.base import CardPrinting, ManaCost
+    from mtg_bot.combat import resolve_combat_damage
+    from mtg_bot.game import Zone
+    from mtg_bot.parity.cross_engine import (
+        build_matched_states,
+        multi_blocker_deckspec,
+    )
+    from mtg_bot.turn import state_based_actions
+
+    py_state, rust_state = build_matched_states(multi_blocker_deckspec())
+
+    # ---- Python side ----
+    t_ll_printing = CardPrinting(
+        name="Bear Crusher",
+        mana_cost_str="",
+        mana_cost=ManaCost(),
+        type_line="Creature",
+        supertypes=(),
+        card_types=("Creature",),
+        subtypes=(),
+        power=4,
+        toughness=4,
+        produces=frozenset(),
+        keywords=frozenset({"trample", "lifelink"}),
+    )
+    py_atk = py_state.new_object(
+        t_ll_printing, owner_id=0, zone=Zone.BATTLEFIELD,
+    )
+    py_atk.summoning_sick = False
+    py_atk.tapped = False
+    py_atk.damage = 0
+    py_atk.etb_timestamp = py_state.next_timestamp
+    py_state.next_timestamp += 1
+    py_state.battlefield.append(py_atk)
+
+    cub_printing = CardPrinting(
+        name="Bear Cub",
+        mana_cost_str="",
+        mana_cost=ManaCost(),
+        type_line="Creature",
+        supertypes=(),
+        card_types=("Creature",),
+        subtypes=(),
+        power=2,
+        toughness=2,
+        produces=frozenset(),
+        keywords=frozenset(),
+    )
+    py_blk = py_state.new_object(
+        cub_printing, owner_id=1, zone=Zone.BATTLEFIELD,
+    )
+    py_blk.controller_id = 1
+    py_blk.summoning_sick = False
+    py_blk.tapped = False
+    py_blk.damage = 0
+    py_blk.etb_timestamp = py_state.next_timestamp
+    py_state.next_timestamp += 1
+    py_state.battlefield.append(py_blk)
+
+    py_atk.attacking = True
+    py_atk.tapped = True
+    py_blk.blocking = int(py_atk.id)
+    py_atk.blocked_by.append(int(py_blk.id))
+
+    py_p0_before = py_state.players[0].life
+    py_p1_before = py_state.players[1].life
+    resolve_combat_damage(py_state, defending_player_id=1)
+    state_based_actions(py_state)
+
+    py_atk_alive = any(o.id == py_atk.id for o in py_state.battlefield)
+    py_blk_alive = any(o.id == py_blk.id for o in py_state.battlefield)
+    assert py_atk_alive, (
+        "Python T+LL: attacker should be ALIVE (took 2 < toughness 4 "
+        "back-damage)"
+    )
+    assert not py_blk_alive, (
+        "Python T+LL: blocker should be DEAD (took 2 = toughness)"
+    )
+    assert py_state.players[0].life == py_p0_before + 4, (
+        f"Python T+LL: p0 life should be {py_p0_before + 4} (+4 from "
+        f"lifelink: 2 on blocker hit + 2 on defender trample-spillover "
+        f"hit; pins the contract that lifelink fires on both entries); "
+        f"got {py_state.players[0].life}"
+    )
+    assert py_state.players[1].life == py_p1_before - 2, (
+        f"Python T+LL: p1 life should be {py_p1_before - 2} (-2 from "
+        f"trample excess: 4 power - 2 lethal-to-blocker = 2 spillover); "
+        f"got {py_state.players[1].life}"
+    )
+
+    # ---- Rust side ----
+    rust_atk_id = rust_state.register_and_inject_object(
+        {
+            "name": "Bear Crusher",
+            "card_types": ["Creature"],
+            "power": 4,
+            "toughness": 4,
+            "keywords": ["trample", "lifelink"],
+        },
+        0, 2,
+    )
+    rust_blk_id = rust_state.register_and_inject_object(
+        {
+            "name": "Bear Cub",
+            "card_types": ["Creature"],
+            "power": 2,
+            "toughness": 2,
+            "keywords": [],
+        },
+        1, 2,
+    )
+    rust_state.declare_attacker(rust_atk_id)
+    rust_state.declare_blocker(rust_blk_id, rust_atk_id)
+    rust_p0_before = rust_state.get_life(0)
+    rust_p1_before = rust_state.get_life(1)
+    rust_state.deal_combat_damage()
+    rust_state.apply_sbas()
+
+    rust_bf_ids = {int(e["id"]) for e in rust_state.battlefield_snapshot()}
+    assert rust_atk_id in rust_bf_ids, (
+        "Rust T+LL: attacker should be ALIVE"
+    )
+    assert rust_blk_id not in rust_bf_ids, (
+        "Rust T+LL: blocker should be DEAD"
+    )
+    assert rust_state.get_life(0) == rust_p0_before + 4, (
+        f"Rust T+LL: p0 life should be {rust_p0_before + 4} (+4 from "
+        f"lifelink; matches Python); got {rust_state.get_life(0)}"
+    )
+    assert rust_state.get_life(1) == rust_p1_before - 2, (
+        f"Rust T+LL: p1 life should be {rust_p1_before - 2} (-2 trample "
+        f"excess; matches Python); got {rust_state.get_life(1)}"
+    )
+
+
+def test_cross_engine_multi_keyword_selector_pre_injection_walks_clean(
+    parity_smoke,
+):
+    """Pre-injection backbone steps 0-167 are parity-clean for the
+    multi_keyword_selector.
+
+    Confirms the retaliation_selector backbone the Bear Inquisitor
+    injection rides on stays divergence-free up to the injection
+    step. Distinguishes between "the LL+DT side-channel itself
+    introduces a divergence" and "something upstream is divergent
+    and the probe just inherits it".
+    """
+    from mtg_bot.parity.cross_engine import (
+        build_matched_states,
+        multi_blocker_deckspec,
+        multi_keyword_selector,
+        step_both,
+        walk_both,
+    )
+
+    result = walk_both(
+        multi_blocker_deckspec(),
+        n_decisions=168,
+        decision_selector=multi_keyword_selector,
+    )
+    assert result.error is None, (
+        f"pre-injection walk aborted at step {result.aborted_at}: "
+        f"{result.error}"
+    )
+    for step in result.steps:
+        assert step.divergences == [], (
+            f"pre-injection divergence at step {step.step_index}: "
+            f"action={step.action_dict} "
+            f"{[(d.field, d.py_value, d.rust_value, d.known_gap) for d in step.divergences]}"
+        )
+
+    # Sanity: the Bear Inquisitor injection hasn't fired yet at end
+    # of step 167 (3 creatures land on bf only at step 167's apply
+    # step -- the selector's >= 3 trigger fires the NEXT call,
+    # i.e. step 168).
+    py_state, rust_state = build_matched_states(multi_blocker_deckspec())
+    for i in range(168):
+        action = multi_keyword_selector(py_state, rust_state, i)
+        step_both(py_state, rust_state, action)
+    in_any_zone = any(
+        o.printing.name == "Bear Inquisitor"
+        for o in py_state.battlefield
+    )
+    assert not in_any_zone, (
+        "Bear Inquisitor should not yet exist at end of step 167 -- "
+        "injection fires at step 168"
+    )

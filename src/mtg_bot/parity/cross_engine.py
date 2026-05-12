@@ -6468,3 +6468,321 @@ def activated_cost_selector(py_state, rust_state, step_index: int) -> dict:
             return {"kind": "pass_priority"}
 
     return retaliation_selector(py_state, rust_state, step_index)
+
+
+# ---------------------------------------------------------------------------
+# Phase 5 follow-up #21: multi_keyword_selector — extend the cross-engine
+# smoke onto MULTI-KEYWORD COMPOSITION combat. The single-keyword surface
+# is now well-covered:
+#
+#   * first_strike (FS) — clean
+#   * deathtouch (DT) — CE14 closed
+#   * trample (T) — CE15 closed
+#   * lifelink (LL) — clean
+#   * vigilance, haste, menace, defender — clean
+#   * indestructible, double_strike — CE17/CE18 closed
+#   * flying — clean
+#
+# This probe asks the next question: do these keywords COMPOSE correctly
+# on the SAME creature? Three scenarios from the brief:
+#
+#   * **Test A — Lifelink + Deathtouch (LL+DT).** A 2/2 with BOTH
+#     keywords attacks a 4/4 vanilla blocker.
+#     Per CR 702.2b: any nonzero damage from a deathtouch source is
+#     lethal damage. Per CR 702.15b: lifelink fires for the literal
+#     damage amount dealt, regardless of survival.
+#     Expected: attacker deals 2 to blocker → blocker dies (deathtouch
+#     upgrades mark to >= 4). Blocker deals 4 to attacker → attacker
+#     dies. p0 gains 2 life (lifelink fires on the 2 damage dealt to
+#     the blocker even though the attacker dies in the same pass).
+#
+#   * **Test B — First-strike + Deathtouch (FS+DT).** A 2/2 with BOTH
+#     keywords attacks a 4/4 vanilla blocker.
+#     Per CR 702.7c + CR 702.2b: first-strike pass deals 2 to blocker;
+#     deathtouch upgrades the mark to 4 (lethal); blocker dies before
+#     the regular pass. The regular pass alive-predicate filter (post-
+#     CE18 in Rust; per-substep rebuild in Python) drops the blocker's
+#     back-damage entry because the source (the blocker) is dead.
+#     Expected: attacker survives with 0 marked damage (no back-damage
+#     in the regular pass because the source died). Blocker in
+#     graveyard.
+#
+#   * **Test C — Trample + Lifelink (T+LL).** A 4/4 with BOTH keywords
+#     attacks a 2/2 vanilla blocker.
+#     Per CR 702.19b + CR 702.15b: trample assigns lethal (= 2 = blocker
+#     toughness) to the blocker, spills the remaining 2 to the defender.
+#     Lifelink fires on BOTH damage entries.
+#     Expected: blocker dies (took 2 = toughness). Defender takes 2 (4 -
+#     2 lethal-to-blocker). p0 gains 4 life (lifelink: 2 from blocker
+#     hit + 2 from defender hit).
+#
+# **Likely failure modes (CE21 candidates):**
+#
+#   * Keyword-composition order: one engine applies deathtouch's mark
+#     upgrade BEFORE first-strike's substep filter (or vice versa).
+#   * Lifelink + trample double-counts or misses the trample-excess
+#     portion (one engine fires LL only on the blocker entry, not the
+#     defender entry).
+#   * FS+DT dies-before-back-damage: the alive-predicate from CE18
+#     closure (state_ops_combat.rs:1209-1247) interacts with deathtouch's
+#     mark-upgrade hook (state_ops_combat.rs:1336-1340) — different
+#     gating could surface a divergence on the attacker's marked damage
+#     or whether the attacker survives.
+#
+# **Read of the two engines (audit):**
+#
+# * Python (combat.py:411-453, 526-541):
+#   - `has_trample = "trample" in attacker_kws` (line 411)
+#   - `has_deathtouch = "deathtouch" in attacker_kws` (line 412)
+#   - Assignment loop with `need = 1 if deathtouch else toughness - damage`
+#     (line 423); deathtouch sets `need=1`, then last_blocker without
+#     trample absorbs remainder; with trample the remainder spills to
+#     defender (lines 436-440).
+#   - In the apply loop (lines 483-541), per damage event:
+#     - `if "deathtouch" in source_kws: obj.marked_lethal = True` (526-527)
+#     - `if "lifelink" in source_kws: gain_life(...)` (535-541) — fires
+#       PER EVENT, including the trample-excess "player" event.
+#
+# * Rust (state_ops_combat.rs):
+#   - Plan-build (lines 849-1078): per-attacker, computes `need = 1 if
+#     deathtouch else blocker_toughness - blocker_damage`; trample branch
+#     uses `min(remaining, need)` for each blocker AND spills remainder
+#     to defender (lines 999-1008). No-trample branch's last blocker
+#     absorbs remainder (lines 1047-1051).
+#   - Apply pass (lines 1302-1364): per entry,
+#     - `source_has_deathtouch`, `source_has_lifelink` looked up per entry
+#       via `battlefield_has_keyword` BEFORE applying the mutation
+#       (lines 1310-1313). Critical: the keyword lookup happens BEFORE
+#       the source might die — so even when the attacker dies in pass-2
+#       back-damage, its source_has_lifelink is correctly captured.
+#     - Creature target: damage applied to obj.damage; if deathtouch,
+#       upgrade obj.damage to >= recipient_toughness (lines 1336-1340).
+#     - Player target: subtract from life.
+#     - Lifelink: `self.players[cidx].life += entry.amount as i32` per
+#       entry (lines 1357-1364). Fires on creature AND player targets.
+#
+# Both engines correctly read the source's keywords PER DAMAGE EVENT
+# at apply-time (Python) / PER PLAN ENTRY at apply-time (Rust). They
+# both fire lifelink for the literal `entry.amount` regardless of
+# target kind. They both upgrade deathtouch marks to recipient's
+# toughness. **PREDICTED OUTCOME: (a) clean pass on all three tests
+# end-state.** The only divergence axes I can imagine:
+#
+#   * If Rust's pass-2 alive-predicate filter (CE18 closure) drops the
+#     blocker's back-damage entry in Test B (FS+DT) — both engines
+#     drop it (because the source/blocker is dead). Parity-clean.
+#   * If Python's per-substep blockers-list rebuild interacts oddly
+#     with deathtouch's marked_lethal flag — but the flag only affects
+#     SBA, not the damage-application loop. Parity-clean.
+#
+# Best guess: **(a) clean pass**. If a divergence DOES surface, it'd
+# be one of:
+#
+#   * Lifelink fires on the deathtouch-upgraded mark vs the literal
+#     amount (Rust correctly fires on `entry.amount`; Python correctly
+#     fires on the literal `amount` from the event tuple, NOT the
+#     upgraded `obj.damage`).
+#   * The CE18 redirect (state_ops_combat.rs:1209-1247) treats a Test-B
+#     FS-killed blocker's back-damage entry differently than its forward
+#     damage entry, surfacing as a marked-damage divergence on the
+#     attacker.
+#
+# Setup: SAME pattern as every prior keyword probe — side-channel inject
+# a creature with the COMBINED keywords onto p0 bf at step 168. Three
+# side-channels (one per test) with distinct printing names so the
+# trigger gates stay mutually independent. For the walk-clean test we
+# inject Bear Inquisitor (LL+DT); Tests B and C use direct-combat tests
+# with their own injection setups (mirrors Test B/C of the double-strike
+# probe).
+# ---------------------------------------------------------------------------
+
+
+# Name of the synthetic LL+DT printing injected by
+# :func:`multi_keyword_ll_dt_side_channel`. Distinct from every prior
+# probe's printing name so the trigger gates stay mutually independent
+# on the same multi_blocker_deckspec walk.
+_MULTI_KW_LL_DT_PRINTING_NAME = "Bear Inquisitor"
+
+# Names for the direct-combat-test injections (FS+DT, T+LL). Not used
+# in the walk-clean selector — they're used by the focused tests.
+_MULTI_KW_FS_DT_PRINTING_NAME = "Bear Slayer"
+_MULTI_KW_T_LL_PRINTING_NAME = "Bear Crusher"
+
+
+def multi_keyword_ll_dt_side_channel(py_state, rust_state) -> tuple[int, int]:
+    """Side-channel inject a 2/2 lifelink+deathtouch creature onto BOTH
+    engines' p0 battlefield as an immediate attacker (sick cleared,
+    untapped, no damage).
+
+    Mirror of :func:`double_strike_side_channel` with two differences:
+
+      * The injected printing carries BOTH ``lifelink`` AND
+        ``deathtouch`` keywords (no spelling-split — both single-token
+        on both engines).
+      * The printing name is :data:`_MULTI_KW_LL_DT_PRINTING_NAME`
+        ("Bear Inquisitor") so this probe's trigger gate is independent
+        of every prior keyword probe.
+
+    Also side-channel-untaps p1's Bears id 9 so it becomes the SOLE
+    eligible blocker for the post-injection DECLARE_BLOCKERS step
+    (Bears id 11 stays tapped from its turn-12 attack — single-blocker
+    shape consistent with the double-strike probe's custom branch).
+
+    Returns ``(py_obj_id, rust_obj_id)``. Ids match because both
+    engines allocate in lockstep through step 167 of the retaliation
+    walk.
+    """
+    from mtg_bot.cards.base import CardPrinting, ManaCost
+    from mtg_bot.game import Zone
+
+    # ---- Python side: LL+DT 2/2 on p0 bf ----
+    ll_dt_printing = CardPrinting(
+        name=_MULTI_KW_LL_DT_PRINTING_NAME,
+        mana_cost_str="",
+        mana_cost=ManaCost(),
+        type_line="Creature",
+        supertypes=(),
+        card_types=("Creature",),
+        subtypes=(),
+        power=2,
+        toughness=2,
+        produces=frozenset(),
+        keywords=frozenset({"lifelink", "deathtouch"}),
+    )
+    py_obj = py_state.new_object(
+        ll_dt_printing, owner_id=0, zone=Zone.BATTLEFIELD,
+    )
+    py_obj.controller_id = 0
+    py_obj.summoning_sick = False
+    py_obj.tapped = False
+    py_obj.damage = 0
+    py_obj.etb_timestamp = py_state.next_timestamp
+    py_state.next_timestamp += 1
+    py_state.battlefield.append(py_obj)
+
+    # ---- Rust side: LL+DT 2/2 on p0 bf ----
+    ZONE_BATTLEFIELD = 2
+    rust_obj_id = rust_state.register_and_inject_object(
+        {
+            "name": _MULTI_KW_LL_DT_PRINTING_NAME,
+            "card_types": ["Creature"],
+            "power": 2,
+            "toughness": 2,
+            "keywords": ["lifelink", "deathtouch"],
+        },
+        0,  # controller = p0 (the attacking side)
+        ZONE_BATTLEFIELD,
+    )
+
+    # ---- Side-channel untap of p1's Bears id 9 so it becomes the
+    # SOLE eligible blocker. Bears id 11 stays tapped — single-blocker
+    # shape consistent with double_strike_selector's custom DECLARE_BLOCKERS
+    # branch. ----
+    for obj in py_state.battlefield:
+        if (
+            obj.controller_id == 1
+            and obj.printing.name == "Grizzly Bears"
+            and int(obj.id) == 9
+        ):
+            obj.tapped = False
+    for entry in rust_state.battlefield_snapshot():
+        if (
+            entry["controller_id"] == 1
+            and entry["printing_name"] == "Grizzly Bears"
+            and int(entry["id"]) == 9
+        ):
+            rust_state.untap_object(int(entry["id"]))
+
+    return int(py_obj.id), int(rust_obj_id)
+
+
+def multi_keyword_selector(py_state, rust_state, step_index: int) -> dict:
+    """Cross-engine smoke selector that drives a single-blocker combat
+    with a MULTI-KEYWORD (lifelink + deathtouch) attacker on
+    :func:`multi_blocker_deckspec`.
+
+    Structurally similar to :func:`double_strike_selector` —
+    delegates to :func:`retaliation_selector` for everything before
+    and after the side-channel injection, and side-channel-injects a
+    LL+DT creature on p0's bf at step 168. Adds an explicit
+    DECLARE_BLOCKERS branch for the single-blocker shape because only
+    Bears id 9 is untapped on p1 (Bears id 11 stays tapped from its
+    turn-12 attack).
+
+    Expected walk shape:
+
+      * **Steps 0-167** — identical to retaliation_selector's walk.
+      * **Step 168** — LL+DT injection fires (Bear Inquisitor 2/2
+        LL+DT on p0 bf, summoning_sick=False; Bears id 9 untapped);
+        selector returns ``pass_priority``.
+      * **Step ~171** (DECLARE_ATTACKERS p0) — emit ``[bear_inquisitor_id]``
+        (the LL+DT creature; Bears id 5 still sick, filtered out).
+      * **Step ~173** (DECLARE_BLOCKERS) — emit
+        ``[[9, bear_inquisitor_id]]`` (Bears id 9 blocks).
+      * **Step ~175** (COMBAT_DAMAGE):
+          - Attacker (LL+DT) deals 2 to Bears 9. Deathtouch upgrades
+            Bears 9's mark to >= 2 (= toughness) → lethal. Lifelink
+            fires for amount=2 → p0 gains 2 life.
+          - Bears 9 (vanilla, 2/2) deals 2 back to attacker. Attacker
+            damage now 2 = toughness 2 → lethal (no deathtouch on
+            blocker, but vanilla 2 damage suffices anyway).
+          - SBA: both die.
+      * End state: p0 bf has Bears id 5 (sick); p1 bf has Bears id 11
+        (still tapped); p0 gy has Bear Inquisitor; p1 gy has Bears id
+        9; p0 life = 14 (was 12 + 2 from lifelink); p1 life = 20.
+
+    Stateless — same idempotency guarantee as the prior probes.
+    """
+    from mtg_bot.turn import Step
+
+    ll_dt_already_injected = any(
+        obj.printing.name == _MULTI_KW_LL_DT_PRINTING_NAME
+        for obj in py_state.battlefield
+    ) or any(
+        obj.printing.name == _MULTI_KW_LL_DT_PRINTING_NAME
+        for p in py_state.players
+        for zone_list in (p.hand, p.library, p.graveyard, p.exile)
+        for obj in zone_list
+    )
+
+    if not ll_dt_already_injected:
+        creature_count = sum(
+            1 for o in py_state.battlefield
+            if "Creature" in o.printing.card_types
+        )
+        if creature_count >= 3:
+            multi_keyword_ll_dt_side_channel(py_state, rust_state)
+            return {"kind": "pass_priority"}
+
+    cur_step = py_state.step
+    active_idx = py_state.active_player_idx
+
+    if cur_step == Step.DECLARE_BLOCKERS:
+        # Custom single-blocker branch: if the attacker is the LL+DT
+        # creature and there's exactly one eligible blocker (Bears id 9
+        # post-untap), assign it as the sole blocker. Mirrors
+        # double_strike_selector's DECLARE_BLOCKERS shape.
+        attackers_present = [
+            o for o in py_state.battlefield
+            if getattr(o, "attacking", False)
+        ]
+        if attackers_present:
+            defender_idx = 1 - active_idx
+            eligible_blockers = [
+                o for o in py_state.battlefield
+                if o.controller_id == defender_idx
+                and "Creature" in o.printing.card_types
+                and not o.tapped
+                and not o.summoning_sick
+            ]
+            if len(eligible_blockers) == 1:
+                attacker = attackers_present[0]
+                blocker = eligible_blockers[0]
+                advance_phase_python(py_state)
+                rust_state.advance_phase()
+                return {
+                    "kind": "declare_blockers",
+                    "assignments": [[int(blocker.id), int(attacker.id)]],
+                }
+
+    return retaliation_selector(py_state, rust_state, step_index)
