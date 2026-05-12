@@ -2447,6 +2447,83 @@ them to call the helper is a follow-up housekeeping pass.
   produces the same target pick as the pre-I39 defender-only walk
   (or both fizzle).
 
+### I40. `legal_decisions` declare_attackers eligibility filters defender via shared `battlefield_has_keyword` helper (mirrors apply-time gate)
+
+- **Pinned by**:
+  `tests_rust/test_legal.py::test_legal_decisions_declare_attackers_defender_creature_excluded`,
+  `tests/test_parity_smoke.py::test_cross_engine_defender_selector_legal_decisions_excludes_defender`
+  (formerly the CE17 strict-xfail symptom pin, now expected-pass).
+
+- **Invariant** (closes CE17, per Phase 5 "converge Rust toward
+  Python, never modify Python" — Option A from the CE17 closure-
+  plan). The DeclareAttackers eligibility loop in
+  `state_ops_legal.rs::legal_decisions` short-circuits any
+  battlefield permanent whose effective keyword set contains
+  `"defender"` via
+  `crate::state_ops_combat::battlefield_has_keyword(self, obj.id,
+  "defender")`. The helper reads printed keywords AND
+  UEOT-granted keywords (CR 613 layer 6) — same surface the
+  apply-time gate consults — so a creature that gained defender
+  from a UEOT modifier this turn is filtered too.
+
+  Mirrors:
+  - Python's source-of-truth filter at
+    `src/mtg_bot/combat.py:eligible_attackers` line 22:
+    `"defender" not in effective_keywords(state, o)`.
+  - Rust's apply-time gate at `state_ops_combat.rs:639-641`
+    (`if battlefield_has_keyword(self, obj_id, "defender") {
+    return false; }`).
+
+  Same helper, same lookup, both surfaces.
+
+- **Pre-I40 gap**: `state_ops_legal.rs:556-608` (DeclareAttackers
+  emission inside `legal_decisions`) filtered eligibility on
+  ``tapped`` + ``creature`` + ``summoning_sick`` vs ``haste`` only
+  — NO DEFENDER FILTER. The module docstring at lines 167-180
+  flagged this as deferred: *"Defender keyword (CR 702.3) —
+  Python's eligible_attackers filters this out at enumeration time;
+  first slice defers to the primitive's per-id gate at apply."*
+  Result: every declare_attackers subset that included a
+  defender's id was emitted as if legal — e.g. with Bears id 5
+  and Bear Wall id 14 (defender) both untapped on p0's bf, the
+  emitted subsets were ``[(), (5,), (14,), (5, 14)]``; the last
+  two were illegal per CR 702.3. Apply-time silently dropped
+  illegal subsets, so production engine state was unaffected, but
+  MCTS / ISMCTS / capability-probe paths wasted node expansions on
+  illegal candidates.
+
+- **Why a shared helper instead of inlining**: same rationale as
+  I27/I30/I31/I33/I39 — centralize through the existing
+  `battlefield_has_keyword` (UEOT-aware) so the eligibility filter
+  and the apply-time gate read the same truth. The slot was
+  visible at `state_ops_combat.rs:328` (was previously file-private
+  `fn`; CE17 closure widens to `pub(crate)` so
+  `state_ops_legal.rs` can call it cross-module).
+
+- **Fix shape**: one logical clause added to the eligibility loop
+  (after the summoning-sick-vs-haste gate, before the
+  `eligible.push(obj.id)`):
+
+      if crate::state_ops_combat::battlefield_has_keyword(self, obj.id, "defender") {
+          continue;
+      }
+
+- **Cross-reference**: I40 (enumeration) and the apply-time gate
+  at `state_ops_combat.rs:639-641` are the two halves of the
+  CR 702.3 enforcement on the Rust side. Python collapses both
+  surfaces into a single `eligible_attackers` reader because its
+  `legal_actions` doesn't enumerate DeclareAttackers subsets
+  (search-side combat-decisions factoring instead — see
+  `state_ops_legal.rs` module docstring on "DeclareAttackers
+  emission (Rust-only)").
+
+- **Fingerprint baselines**: NO shifts. `legal_decisions` is a
+  pure reader; it does not mutate `GameState`. The CE17 closure
+  changes only the emission shape — production self-play / eval
+  state outcomes were already unaffected pre-closure (apply-time
+  silently dropped illegal subsets). The fingerprint baselines in
+  `tests_rust/test_fingerprint.py` are bit-equal pre- vs post-I40.
+
 ### ~~CE5.~~ CLOSED: `cast_spell` cross-engine parity via harness-side `resolve_top_of_stack_python` mirror
 
 Closed by the CE5 closure slice (`feature/ce5-cast-resolve`).
@@ -3349,60 +3426,39 @@ for non-menace combat are unchanged on both sides.
 
 ---
 
-### CE17 — `legal_decisions` emits `declare_attackers` subsets containing defenders (CR 702.3)
+### CE17 — CLOSED by `feature/ce17-defender-legal`
 
-- **Pinned by**: `tests/test_parity_smoke.py::test_cross_engine_defender_selector_legal_decisions_surfaces_ce17`
-  (strict-xfail) + the three clean-walk pins
-  `test_cross_engine_defender_selector_defender_only_walks_clean` /
-  `..._both_walks_clean` /
-  `..._normal_only_walks_clean` (apply-time defender gate parity).
-- **Rust today**: `state_ops_legal.rs:556-608` (the DeclareAttackers
-  emission inside `legal_decisions`) filters eligibility on
-  ``tapped`` + ``creature`` + ``summoning_sick`` vs ``haste`` only —
-  **NO DEFENDER FILTER**. The module docstring at lines 167-180
-  explicitly flags this as deferred: *"Defender keyword (CR 702.3) —
-  Python's eligible_attackers filters this out at enumeration time;
-  first slice defers to the primitive's per-id gate at apply."* As
-  a result, every declare_attackers subset that includes a
-  defender's id is emitted as if legal — e.g. given a state with
-  Bears id 5 and Bear Wall id 14 (defender) both untapped on p0's
-  bf, the emitted subsets are
-  ``[(), (5,), (14,), (5, 14)]``; the last two are illegal per
-  CR 702.3.
-- **Expected** (matching Python): defender ids are filtered out of
-  the eligibility set at enumeration time, matching the apply-time
-  primitive's rejection at `state_ops_combat.rs:639-641`
-  (`if battlefield_has_keyword(self, obj_id, "defender") { return
-  false; }`). Python's `combat.py:eligible_attackers` (line 22)
-  encodes the source-of-truth filter: `"defender" not in
-  effective_keywords(state, o)`.
-- **Apply-time gates ARE parity-clean.** Both engines silently drop
-  the defender when `declare_attackers([defender_id])` is APPLIED
-  (Python via `eligible_attackers` filter at `actions.py:2527-2529`;
-  Rust via `declare_attacker`'s defender gate at
-  `state_ops_combat.rs:639-641`). The CE17 surface is purely on
-  the *legal_decisions enumeration* side — the per-step
-  field-view compare across all three defender_selector scenarios
-  (`defender_only` / `both` / `normal_only`) walks parity-clean for
-  200 decisions.
-- **Likely impact**: Search-side. MCTS / ISMCTS / capability-probe
-  paths that enumerate over `legal_decisions` will see the
-  defender-bearing subsets as candidates and either prune them
-  via apply-time rejection (wasted node expansions) or, worse,
-  encode them into the policy head's slot mapping as "legal"
-  options (priors get spread thinly over illegal moves). The
-  apply-path engine state is unaffected — illegal subsets are
-  silently dropped at apply time, so combat outcomes don't
-  diverge. Production self-play / eval would observe modest
-  expansion-side waste on decks with defenders (uncommon in
-  random EoE decks), bounded by the small set of defender-bearing
-  printings.
-- **Closeable**: Yes, single one-line fix in
-  `rust/src/state_ops_legal.rs` around line 575 — add a
-  `battlefield_has_keyword(self, obj_id, "defender")` short-circuit
-  to the eligibility filter, mirroring the apply-time gate. Per
-  the brief: not closing in this slice. Documented + xfail-pinned
-  in `feature/phase5-defender`.
+**Status**: closed 2026-05-12 via Option A (Rust-side convergence
+on Python), per Phase 5 convention "converge Rust toward Python,
+never modify Python". Closure invariant lives at **I40** below.
+
+The xfail-strict symptom pin
+`test_cross_engine_defender_selector_legal_decisions_surfaces_ce17`
+was renamed to
+`test_cross_engine_defender_selector_legal_decisions_excludes_defender`
+and the `@pytest.mark.xfail(strict=True, ...)` decorator removed,
+flipping it from xfail-pass to a regular regression pin. The test
+was both the strict-xfail and the symptom-pin (the CE17 probe shipped
+a single combined test rather than the CE2-CE16 pair-pin pattern, so
+there is no separate companion symptom-pin to delete).
+
+One new Rust-side regression test in `tests_rust/test_legal.py`:
+`test_legal_decisions_declare_attackers_defender_creature_excluded`
+— builds a 2-creature p0 battlefield (Vanilla Bear + Defender Wall),
+drives to DECLARE_ATTACKERS, and asserts the emitted powerset is
+`{(), (bear_id,)}` (defender filtered out at enumeration time, not
+just at apply).
+
+The three apply-time clean-walk pins
+(`test_cross_engine_defender_selector_defender_only_walks_clean` /
+`..._both_walks_clean` / `..._normal_only_walks_clean`) and the
+pre-injection backbone pin
+(`test_cross_engine_defender_selector_pre_injection_walks_clean`)
+continue to pass unchanged — the closure adds a filter at
+enumeration time but does not affect the apply-time gate at
+`state_ops_combat.rs:639-641`, which was already correct.
+
+See I40 for the post-closure invariant pin.
 
 ---
 

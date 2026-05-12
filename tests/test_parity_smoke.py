@@ -4687,61 +4687,48 @@ def test_cross_engine_defender_selector_normal_only_walks_clean(parity_smoke):
     assert rust_defender["summoning_sick"] is False
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "CE17 — Rust's legal_decisions emission does NOT filter the "
-        "defender keyword (state_ops_legal.rs:556-608 DeclareAttackers "
-        "eligibility loop reads tapped + creature + sickness-vs-haste "
-        "only; defender filter is deferred per the module docstring at "
-        "lines 167-180). The apply-time gate at "
-        "state_ops_combat.rs:639-641 correctly rejects defender, but "
-        "the enumeration emits subsets including the defender id as "
-        "if legal — violating the contract that legal_decisions "
-        "returns only LEGAL decisions. Fix shape: add a "
-        "battlefield_has_keyword(..., \"defender\") short-circuit to "
-        "the eligibility filter in state_ops_legal.rs around line 575, "
-        "mirroring the apply-time gate."
-    ),
-)
-def test_cross_engine_defender_selector_legal_decisions_surfaces_ce17(
+def test_cross_engine_defender_selector_legal_decisions_excludes_defender(
     parity_smoke,
 ):
-    """**CE17 strict-xfail symptom pin** — Test A from the brief.
+    """**CE17 / I40 closure regression** — flipped from strict-xfail
+    to expected-pass by ``feature/ce17-defender-legal``. Test A from
+    the original CE17 probe brief.
 
     Drives 168 selector decisions to land at the post-injection
     DECLARE_ATTACKERS step with both Bear Wall (id 14, defender) and
     Bears id 5 (normal attacker, summoning-sickness cleared by the
     side-channel) on p0's battlefield, then asserts that Rust's
     ``legal_decisions(0)`` does NOT include the defender id in any
-    emitted ``declare_attackers`` subset. The xfail pins the CURRENT
-    (illegal-emission) behavior; when CE17 is closed by adding the
-    defender filter to ``state_ops_legal.rs``'s eligibility loop,
-    this test should flip from xfail-pass to strict-pass and the
-    decorator should be removed.
+    emitted ``declare_attackers`` subset.
 
-    Currently observed Rust ``legal_decisions(0)`` emission at the
+    Pre-CE17 closure this assertion failed (Rust emitted ``(defender_id,)``
+    and ``(normal_id, defender_id)`` as if legal). Post-CE17 closure
+    (state_ops_legal.rs eligibility loop now short-circuits on
+    ``battlefield_has_keyword(self, obj.id, "defender")``, mirroring
+    the apply-time gate at ``state_ops_combat.rs:639-641``) the
+    assertion passes — defender ids are filtered out of the eligibility
+    set at enumeration time, matching Python's
+    ``combat.py:eligible_attackers`` (line 22).
+
+    Post-CE17 Rust ``legal_decisions(0)`` emission at the
     DECLARE_ATTACKERS step (with bf={p0: Forests + Bears id 5 +
     Bear Wall id 14; p1: Forests + Bears ids 9, 11}):
 
       * ``declare_attackers([])`` — LEGAL (decline to attack).
       * ``declare_attackers([5])`` — LEGAL (Bears id 5 untapped,
         not sick, no defender → eligible).
-      * ``declare_attackers([14])`` — **ILLEGAL** per CR 702.3
-        (defender can't attack) — but Rust emits it anyway.
-      * ``declare_attackers([5, 14])`` — **ILLEGAL** per CR 702.3
-        (combined subset contains a defender).
+
+    The two pre-CE17 illegal subsets (``([14])`` and ``([5, 14])``)
+    are no longer emitted — the defender filter at
+    ``state_ops_legal.rs:~588`` (per CE17 closure) drops Bear Wall
+    id 14 from the eligible set before powerset enumeration.
 
     Python's ``legal_actions(state, 0)`` does not emit
     DeclareAttackers at all (it uses a search-side combat-decisions
     factoring rather than enumerating subsets — see the divergence
     rationale in ``state_ops_legal.rs`` module docstring), so the
-    cross-engine "shape" compare is Rust-only at present. The
-    assertion below is therefore "Rust's emitted subsets should not
-    include the defender id" — pre-closure: at least one subset
-    includes id 14, so the assertion fails (xfail). Post-closure:
-    no subsets include id 14, so the assertion passes (xfail
-    flips to strict-pass).
+    cross-engine "shape" compare remains Rust-only. The assertion
+    is "Rust's emitted subsets do not include the defender id".
     """
     from mtg_bot.combat import eligible_attackers
     from mtg_bot.parity.cross_engine import (
@@ -4807,10 +4794,11 @@ def test_cross_engine_defender_selector_legal_decisions_surfaces_ce17(
         f"eligible set {py_elig_ids}"
     )
 
-    # Rust's legal_decisions: pin the CE17 surface — defender id is
-    # currently emitted as a legal candidate. Post-closure this
-    # assertion will pass (no subset contains the defender id) and
-    # the xfail flips.
+    # Rust's legal_decisions: CE17 / I40 contract — no emitted
+    # declare_attackers subset contains the defender id (the
+    # eligibility loop short-circuits on
+    # battlefield_has_keyword(..., "defender"), mirroring the
+    # apply-time gate at state_ops_combat.rs:639-641).
     ld = rust_state.legal_decisions(0)
     da_subsets = [
         tuple(a["attacker_ids"]) for a in ld
@@ -4818,15 +4806,14 @@ def test_cross_engine_defender_selector_legal_decisions_surfaces_ce17(
     ]
     illegal_subsets = [s for s in da_subsets if defender_id in s]
     assert not illegal_subsets, (
-        f"CE17 — Rust legal_decisions emits {len(illegal_subsets)} "
-        f"declare_attackers subset(s) containing the defender id "
-        f"{defender_id} (CR 702.3 violation): {illegal_subsets}. "
-        f"All emitted subsets: {da_subsets}. Python's "
-        f"eligible_attackers correctly filters the defender out "
-        f"(combat.py:22); Rust's state_ops_legal.rs:556-608 "
-        f"eligibility loop is missing the defender filter — fix "
-        f"shape: add a battlefield_has_keyword(..., \"defender\") "
-        f"short-circuit around line 575."
+        f"CE17 regression — Rust legal_decisions emits "
+        f"{len(illegal_subsets)} declare_attackers subset(s) "
+        f"containing the defender id {defender_id} (CR 702.3 "
+        f"violation): {illegal_subsets}. All emitted subsets: "
+        f"{da_subsets}. CE17 closure adds a "
+        f"battlefield_has_keyword(..., \"defender\") short-circuit "
+        f"to state_ops_legal.rs's eligibility loop; if this assertion "
+        f"fails, the filter has regressed."
     )
 
 
