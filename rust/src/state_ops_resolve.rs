@@ -5074,6 +5074,75 @@ fn apply_effect(
                 },
             );
         }
+        // Round-28 freq-2 closure — Starwinder / Fear-of-Failed-Tests.
+        // "When a creature you control deals combat damage to a player,
+        // you may draw that many cards." Reads
+        // state.resolving_combat_damage_amount and draws that many
+        // cards for the SOURCE's controller (zone-scan + stack-scan
+        // fallback, same shape as DiscardSelf et al.).
+        //
+        // **First-slice read-only.** The combat-damage write site in
+        // state_ops_combat.rs is deferred (CE9 closure agent owns the
+        // file); see SEARCH_LIMITATIONS.md. Until that lands, the
+        // amount stays at 0 across normal combat and the Effect
+        // resolves as a no-op. Test harness exercises the read-side
+        // via state.set_resolving_combat_damage_amount(n).
+        //
+        // amount <= 0 → silent no-op (matches Python).
+        Effect::DrawCardsEqualToResolvingCombatDamage => {
+            let amount = state.resolving_combat_damage_amount;
+            if amount <= 0 {
+                return Ok(());
+            }
+            // Locate source controller (zone-scan first, stack scan
+            // fallback). Same pattern as DiscardSelf / EachOpponent*.
+            let mut source_controller: Option<u8> = None;
+            'outer: for player in state.players.iter() {
+                for zone in [
+                    &player.hand,
+                    &player.library,
+                    &player.battlefield,
+                    &player.graveyard,
+                    &player.exile,
+                ] {
+                    for obj in zone.iter() {
+                        if obj.id == source_obj_id {
+                            source_controller = Some(obj.controller);
+                            break 'outer;
+                        }
+                    }
+                }
+            }
+            if source_controller.is_none() {
+                if let Some(item) = state
+                    .stack
+                    .iter()
+                    .find(|i| i.source_obj_id == source_obj_id)
+                {
+                    source_controller = Some(item.controller);
+                }
+            }
+            let Some(controller) = source_controller else {
+                return Ok(()); // source not found anywhere: silent fizzle
+            };
+            let controller_idx = controller as usize;
+            // Inline draw loop — same pattern as Effect::DrawCards.
+            // CR 704.5b empty-library handling flips
+            // attempted_draw_on_empty so the SBA pass converts it to
+            // has_lost.
+            let n = amount as usize;
+            for _ in 0..n {
+                let player = &mut state.players[controller_idx];
+                let lib = Arc::make_mut(&mut player.library);
+                if lib.is_empty() {
+                    player.attempted_draw_on_empty = true;
+                    break;
+                }
+                let mut obj = lib.remove(0);
+                obj.zone = ZONE_HAND;
+                Arc::make_mut(&mut player.hand).push(obj);
+            }
+        }
     }
     Ok(())
 }

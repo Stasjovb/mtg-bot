@@ -1251,6 +1251,77 @@ matters when those specific cards resolve.
 
 ---
 
+## Rust port — `Effect::DrawCardsEqualToResolvingCombatDamage` write site deferred
+
+**Location**: `rust/src/cards.rs`
+`Effect::DrawCardsEqualToResolvingCombatDamage` declaration;
+`rust/src/state_ops_resolve.rs` resolve arm; `rust/src/state.rs`
+`GameState.resolving_combat_damage_amount` field +
+`set_resolving_combat_damage_amount` test setter.
+
+**What we do today**: the variant ships as a READ-ONLY first slice.
+The Effect's resolve arm reads
+`state.resolving_combat_damage_amount` (i32 slot on GameState),
+clamps `<=0` to a silent no-op, then draws that many cards for the
+source's controller via the standard zone-scan + stack-scan source
+lookup. The slot has a `set_resolving_combat_damage_amount` test-
+only setter so the read-side is exercised end-to-end. **There is no
+production write site yet** — Rust's combat-damage assignment in
+`state_ops_combat.rs` does not write the slot, so under normal play
+the slot stays at 0 and any Starwinder/Fear-of-Failed-Tests trigger
+that lands on the stack resolves as a no-op.
+
+**Why this diverges from real MTG**: Python's
+`DrawCardsEqualToResolvingCombatDamage` (effects/generic/draw_mill.py:89)
+reads `state.resolving_combat_damage_amount`, which Python's combat-
+damage assignment code path mirrors from the firing trigger's
+`combat_damage_amount` arg during resolution. Rust mirrors the
+Python schema (same field name, same i32 type, same "amount <= 0 ->
+no-op" semantic), but the combat-side write site is owned by the
+CE9 closure agent that's editing `state_ops_combat.rs` concurrently
+— deferring the write here avoids a conflict.
+
+**Why this is OK as a first-slice**: the Effect class itself + its
+GameState slot + its read-side dispatch are the load-bearing
+gameplay pieces. Wiring the write site is mechanical (one or two
+calls in the combat-damage assignment path that mirror Python's
+`state.resolving_combat_damage_amount = amount` before firing the
+trigger). The first slice locks in the closed Effect vocabulary
+(parse + round-trip + resolve dispatch) so a follow-up slice can
+add the combat-side write without touching cards.rs / state.rs.
+
+The variant counts as covered by the closed-vocabulary
+`Effect` enum (the parity gate measures parser-claimed coverage,
+not end-to-end gameplay coverage), so `RUST_EFFECT_COVERAGE.md`
+correctly reports it as "yes". A future audit dimension —
+"variants whose Rust write site is plumbed" — would surface this
+deferral; not in scope today.
+
+**Failure mode**: any card with a "Whenever ~ deals combat damage,
+draw that many cards" trigger (Starwinder / Fear of Failed Tests,
+2 EoE cards) plays as if the draw rider is missing whenever combat
+runs through the Rust engine. The trigger fires, lands on the
+stack, resolves, but the draw count is 0 → silent no-op. In self-
+play the bias is symmetric (both seats run on the same engine), so
+training signal still progresses, but card-strength is
+systematically understated for these cards.
+
+**Fix scope when prioritized**: small (~10-20 LOC). The CE9
+closure agent's `state_ops_combat.rs` edits should land first,
+then the write site goes into the combat-damage assignment loop:
+mirror Python's pattern of "compute amount, set
+state.resolving_combat_damage_amount = amount, push the trigger to
+the stack with that amount as part of its context, reset the slot
+to 0 after the trigger pops". Mechanical.
+
+**Impact estimate**: strength cost is small (2 cards in EoE; both
+rare); perf neutral (one i32 write + one i32 read per
+combat-damage-trigger fire). Risk of write-site bugs (forgetting
+to reset to 0 between trigger fires) is documented inline at the
+read site.
+
+---
+
 ## Tracked but not in this doc
 
 Things tracked elsewhere that you might also want to know about:

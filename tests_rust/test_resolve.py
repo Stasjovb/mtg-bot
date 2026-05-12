@@ -9538,3 +9538,181 @@ def test_resolve_deal_damage_to_opponent_creature_clone_isolation(
     # Original: stack still has the spell, no damage applied.
     assert synthetic_state.stack_size() == 1
     assert synthetic_state.get_damage(target_obj_id) == 0
+
+
+# -------------------- Round-28 DrawCardsEqualToResolvingCombatDamage (2 cards) --------------------
+# Starwinder / Fear-of-Failed-Tests shape: "Whenever a creature you
+# control deals combat damage to a player, you may draw that many
+# cards." The "may" is engine-flattened to always-yes.
+#
+# **First-slice scope.** Rust's combat-damage assignment doesn't yet
+# write state.resolving_combat_damage_amount (CE9 closure agent owns
+# state_ops_combat.rs). The Effect arm reads the slot; tests inject
+# the amount via state.set_resolving_combat_damage_amount(n) to
+# exercise the read-side. See docs/SEARCH_LIMITATIONS.md for the
+# deferred write site.
+
+
+def _starwinder_dict():
+    """Starwinder-shape printing: a creature with a trigger-resolve-
+    time effect that draws cards equal to
+    state.resolving_combat_damage_amount."""
+    return {
+        "name": "Synthetic Starwinder",
+        "card_types": ["Creature"],
+        "mana_cost": {"generic": 3, "U": 1},
+        "power": 2,
+        "toughness": 3,
+        "effects": [
+            {"kind": "draw_cards_equal_to_resolving_combat_damage"}
+        ],
+    }
+
+
+def test_register_draw_cards_equal_to_resolving_combat_damage(engine):
+    """Round-trip: register a printing carrying the variant; readback
+    via get_printing_effects produces the same kind string."""
+    reg = engine.Registry()
+    pid = reg.register_printing(_starwinder_dict())
+    eff = reg.get_printing_effects(pid)[0]
+    assert eff["kind"] == "draw_cards_equal_to_resolving_combat_damage"
+
+
+def test_register_draw_cards_equal_to_resolving_combat_damage_unknown_field(
+    engine,
+):
+    """Variant is fieldless; unknown extra fields on the effect dict
+    are silently ignored (consistent with other fieldless variants —
+    parse_effect dispatches on `kind` and never inspects extras for
+    unit-style arms). This pins the contract."""
+    reg = engine.Registry()
+    pid = reg.register_printing(
+        {
+            "name": "Bonus Fields",
+            "card_types": ["Creature"],
+            "mana_cost": {"generic": 1},
+            "power": 1,
+            "toughness": 1,
+            "effects": [
+                {
+                    "kind": "draw_cards_equal_to_resolving_combat_damage",
+                    "extra_field_we_ignore": 42,
+                }
+            ],
+        }
+    )
+    eff = reg.get_printing_effects(pid)[0]
+    assert eff["kind"] == "draw_cards_equal_to_resolving_combat_damage"
+    # No extra field surfaces on read-back (round-trip is pure).
+    assert "extra_field_we_ignore" not in eff
+
+
+def test_resolve_draw_eq_combat_damage_zero_amount_is_noop(synthetic_state):
+    """resolving_combat_damage_amount defaults to 0 — the Effect should
+    be a silent no-op (no cards drawn, stack still drains)."""
+    src_id = synthetic_state.register_and_inject_object(
+        _starwinder_dict(), 0, ZONE_BATTLEFIELD
+    )
+    # Sanity: the slot is 0 out of the box.
+    assert synthetic_state.resolving_combat_damage_amount == 0
+
+    p0_hand_before = synthetic_state.hand_sizes[0]
+    p0_lib_before = synthetic_state.library_sizes[0]
+
+    synthetic_state.push_to_stack(src_id, 0)
+    synthetic_state.resolve_top_of_stack()
+
+    # No draw fired; stack drained.
+    assert synthetic_state.hand_sizes[0] == p0_hand_before
+    assert synthetic_state.library_sizes[0] == p0_lib_before
+    assert synthetic_state.is_stack_empty() is True
+
+
+def test_resolve_draw_eq_combat_damage_happy_path(synthetic_state):
+    """Inject the amount via set_resolving_combat_damage_amount(3);
+    resolve the trigger; controller draws 3 cards."""
+    src_id = synthetic_state.register_and_inject_object(
+        _starwinder_dict(), 0, ZONE_BATTLEFIELD
+    )
+    synthetic_state.set_resolving_combat_damage_amount(3)
+    assert synthetic_state.resolving_combat_damage_amount == 3
+
+    p0_hand_before = synthetic_state.hand_sizes[0]
+    p0_lib_before = synthetic_state.library_sizes[0]
+
+    synthetic_state.push_to_stack(src_id, 0)
+    synthetic_state.resolve_top_of_stack()
+
+    # Hand grew by 3, library shrank by 3.
+    assert synthetic_state.hand_sizes[0] == p0_hand_before + 3
+    assert synthetic_state.library_sizes[0] == p0_lib_before - 3
+
+
+def test_resolve_draw_eq_combat_damage_reads_source_controller(
+    synthetic_state,
+):
+    """Source on p1's battlefield + pushed by p1 → p1 draws (not the
+    active_player p0). Confirms the Effect dispatches on source's
+    controller, not state.active_player."""
+    src_id = synthetic_state.register_and_inject_object(
+        _starwinder_dict(), 1, ZONE_BATTLEFIELD
+    )
+    synthetic_state.set_resolving_combat_damage_amount(2)
+
+    p0_hand_before = synthetic_state.hand_sizes[0]
+    p1_hand_before = synthetic_state.hand_sizes[1]
+    p1_lib_before = synthetic_state.library_sizes[1]
+
+    synthetic_state.push_to_stack(src_id, 1)
+    synthetic_state.resolve_top_of_stack()
+
+    # p1 drew, p0 didn't.
+    assert synthetic_state.hand_sizes[0] == p0_hand_before
+    assert synthetic_state.hand_sizes[1] == p1_hand_before + 2
+    assert synthetic_state.library_sizes[1] == p1_lib_before - 2
+
+
+def test_resolve_draw_eq_combat_damage_negative_amount_is_noop(
+    synthetic_state,
+):
+    """Defensive: a negative amount (illegal in real MTG but defensible
+    if a future write site clamps wrong) silent no-ops rather than
+    erroring out. Matches Python's `if amount <= 0: return`."""
+    src_id = synthetic_state.register_and_inject_object(
+        _starwinder_dict(), 0, ZONE_BATTLEFIELD
+    )
+    synthetic_state.set_resolving_combat_damage_amount(-5)
+
+    p0_hand_before = synthetic_state.hand_sizes[0]
+    p0_lib_before = synthetic_state.library_sizes[0]
+
+    synthetic_state.push_to_stack(src_id, 0)
+    synthetic_state.resolve_top_of_stack()
+
+    assert synthetic_state.hand_sizes[0] == p0_hand_before
+    assert synthetic_state.library_sizes[0] == p0_lib_before
+
+
+def test_resolve_draw_eq_combat_damage_clone_isolation(synthetic_state):
+    """CoW canary: cloning after pushing the trigger and resolving on
+    the clone must not bleed draws into the original. Confirms the
+    library/hand Arcs fork via Arc::make_mut on the clone side only."""
+    src_id = synthetic_state.register_and_inject_object(
+        _starwinder_dict(), 0, ZONE_BATTLEFIELD
+    )
+    synthetic_state.set_resolving_combat_damage_amount(2)
+    synthetic_state.push_to_stack(src_id, 0)
+    cloned = synthetic_state.clone_once()
+
+    p0_hand_before = synthetic_state.hand_sizes[0]
+    p0_lib_before = synthetic_state.library_sizes[0]
+
+    cloned.resolve_top_of_stack()
+
+    # Clone: draws fired.
+    assert cloned.hand_sizes[0] == p0_hand_before + 2
+    assert cloned.library_sizes[0] == p0_lib_before - 2
+    # Original: untouched, stack still loaded.
+    assert synthetic_state.hand_sizes[0] == p0_hand_before
+    assert synthetic_state.library_sizes[0] == p0_lib_before
+    assert synthetic_state.stack_size() == 1
