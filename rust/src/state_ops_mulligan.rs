@@ -86,7 +86,7 @@
 //! xorshift64 path runs unchanged so production cli/bench callers
 //! and every existing pinned baseline stay byte-equivalent.
 
-use crate::state::{GameObject, GameState};
+use crate::state::{GameObject, GameState, PendingDecision};
 use crate::state_ops_zones::{ZONE_HAND, ZONE_LIBRARY};
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
@@ -632,6 +632,82 @@ impl GameState {
             obj.exiled_with_source = None;
             lib.push(obj);
         }
+        Ok(())
+    }
+
+    /// Round-30 G24 closure — Paris scry-on-keep. The harness/caller
+    /// calls this when the player decides to stop mulliganing. If the
+    /// player's `mulligan_count > 0`, this pops the top card of their
+    /// library and pushes a `PendingDecision::ScryChoice` so the
+    /// controller can decide whether to keep it on top of their library
+    /// or send it to the bottom (CR 103.4).
+    ///
+    /// When `mulligan_count == 0` (the player kept their initial 7
+    /// without mulliganing), this is a NO-OP — no scry fires, no
+    /// pending decision pushed, no state mutation. Mirrors CR 103.4's
+    /// "after each mulligan" gate: a player who never mulliganed never
+    /// scrys.
+    ///
+    /// Existing tests / call sites that never call `keep_hand`
+    /// continue to work unchanged (backward compat): the mulligan
+    /// flow is N calls to `mulligan` / `mulligan_atomic`, and the
+    /// caller implicitly "keeps" by stopping. Adding `keep_hand` to
+    /// the explicit-keep step at the harness layer is what makes the
+    /// scry fire — calling code that doesn't model the scry-on-keep
+    /// behavior simply doesn't call this method.
+    ///
+    /// **Empty-library guard.** If the player's library is empty when
+    /// `keep_hand` fires, the variant pushed carries an empty `cards`
+    /// Vec. Submit / auto-resolve treat the empty case as a no-op
+    /// (the decision is consumed without routing anything). This is
+    /// defensive — a real London-mulligan-to-empty-library is a
+    /// degenerate corner case, but the variant shape stays uniform
+    /// with the other examined-cards variants for fingerprint /
+    /// dict-serialization symmetry.
+    ///
+    /// Errors:
+    ///
+    /// - `ValueError` if `player_id` is not 0 or 1.
+    ///
+    /// CoW-safe: library mutation routes through `Arc::make_mut`. The
+    /// `pending_decisions` Vec is per-state-owned (not behind an Arc),
+    /// so cloning a `GameState` and calling `keep_hand` on the clone
+    /// leaves the source's pending-decision queue and library
+    /// untouched.
+    fn keep_hand(&mut self, player_id: u8) -> PyResult<()> {
+        let idx = player_id as usize;
+        if idx >= 2 {
+            return Err(PyValueError::new_err(format!(
+                "player_id {player_id} out of range (must be 0 or 1)"
+            )));
+        }
+        let player = &mut self.players[idx];
+        // No-op when the player never mulliganed. Mirrors CR 103.4's
+        // "after each mulligan" gate.
+        if player.mulligan_count == 0 {
+            return Ok(());
+        }
+        // Pop the top of the library (lib[0] = top, post-CE3). Defensive
+        // empty-library guard — push the ScryChoice with an empty cards
+        // Vec so the submit/auto-resolve path can still drain the head.
+        let cards: Vec<GameObject> = {
+            let lib = Arc::make_mut(&mut player.library);
+            if lib.is_empty() {
+                Vec::new()
+            } else {
+                vec![lib.remove(0)]
+            }
+        };
+        // Source obj id sentinel: there's no resolving spell driving the
+        // Paris scry — it's a setup-phase trigger. Use 0 as the sentinel
+        // (consistent with the "no specific source" convention; the
+        // dispatcher only needs the variant tag + controller + cards to
+        // route the card).
+        self.pending_decisions.push(PendingDecision::ScryChoice {
+            source_obj_id: 0,
+            controller: player_id,
+            cards,
+        });
         Ok(())
     }
 }

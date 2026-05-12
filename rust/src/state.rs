@@ -398,10 +398,12 @@ pub struct StackItem {
 /// Round-27 G20 closure introduces the substrate. First variant:
 /// `SurveilChoice` — the cards looked at, the controller, and the
 /// source obj id (for log-correlation). The dispatcher
-/// `submit_surveil_decision` consumes this variant; future variants
-/// (`LondonBottomN` for G22, `ScryOnKeep` for G24, `ModalChooseOne`,
-/// `ManifestDread`, ...) follow the same `apply_effect` → push →
-/// pause / caller pops → submit shape.
+/// `submit_surveil_decision` consumes this variant; round-28 added
+/// MayDo / PickCard / ChooseMode / IfYouDo / ManifestDread /
+/// LookAtTopNRevealOrCounter variants; round-29 added
+/// OptionalManaCost; round-30 G24 closure adds `ScryChoice` (Paris
+/// scry-on-keep). All variants follow the same `apply_effect` →
+/// push → pause / caller pops → submit shape.
 ///
 /// **State-affecting**: a pending decision IS part of the gameplay-
 /// relevant digest. A state with a pending decision differs from
@@ -703,6 +705,50 @@ pub enum PendingDecision {
         controller: u8,
         cost: crate::cards::ManaCost,
         inner_effect: Box<crate::cards::Effect>,
+    },
+    /// **Round-30 G24 closure — Paris scry-on-keep decision substrate.**
+    /// CR 103.4 — after keeping a mulliganed hand the controller scrys 1
+    /// (looks at the top card of their library and either keeps it on
+    /// top or sends it to the bottom). Pushed by `GameState.keep_hand`
+    /// when the player's `mulligan_count > 0`.
+    ///
+    /// **Shape vs `SurveilChoice`.** Scry-1 is functionally a "look at
+    /// top 1, route to library-top or library-bottom" — same look-at-top
+    /// + per-card destination flow as Surveil, but the route choices
+    /// differ (library-top vs library-bottom rather than library-top vs
+    /// graveyard). A separate variant keeps the dispatcher surface
+    /// honest: `submit_surveil_decision` routes to library/graveyard;
+    /// `submit_scry_decision` routes to library-top/library-bottom.
+    ///
+    /// **Payload.** A single `card` (the top card of the controller's
+    /// library, popped off pre-push). Carries the full `GameObject` so
+    /// the submit dispatcher can re-emit it into library-top or library-
+    /// bottom without re-borrowing the source library. Stored as a
+    /// `Vec<GameObject>` of length 1 to mirror the other examined-cards
+    /// variants' shape (`SurveilChoice` etc.) — keeps the fingerprint
+    /// + dict serialization shape uniform across variants.
+    ///
+    /// **Submit.** `submit_scry_decision(keep_on_top: bool)` consumes
+    /// the head. `keep_on_top=true` pushes the card back to library top
+    /// (lib[0]); `keep_on_top=false` pushes the card to the library
+    /// bottom (tail of the Vec).
+    ///
+    /// **Auto-resolve.** `"default"` / `"scry_keep_top"` route the card
+    /// back to library top (matches Python's no-agent-seated default —
+    /// keeping the top card is the conservative non-decision). The
+    /// `"scry_send_bottom"` strategy routes to the bottom.
+    ///
+    /// **Empty-library partial.** An empty `cards` Vec at push time
+    /// means the library was empty when `keep_hand` ran — the variant
+    /// is pushed-and-immediately-equivalent-to-empty on auto-resolve
+    /// (no card to route). Manual submit with an empty Vec is a no-op
+    /// that consumes the head. In practice the caller has just drawn
+    /// 7 cards via `mulligan_atomic`, so a 7-deep library at this point
+    /// has the top card available; the empty path is defensive.
+    ScryChoice {
+        source_obj_id: u32,
+        controller: u8,
+        cards: Vec<GameObject>,
     },
 }
 

@@ -211,18 +211,78 @@ or remove cards from the library set).
 
 See invariant I35 below for the post-search shuffle contract.
 
-### G24. No scry-on-keep step after mulligan-to-7 (Paris rule)
+### ~~G24.~~ CLOSED: `keep_hand(player_id)` fires a Paris scry-on-keep when `mulligan_count > 0`
 
-- **Pinned by**: `tests_rust/test_mulligan.py` module docstring (gap 4).
-- **Rust today**: Keeping a mulliganed hand does NOT trigger any
-  scry. The Paris rule (one scry after each mulligan you kept on
-  7) is not modeled.
-- **CR / Python expected**: CR 103.4 Paris mulligan — one scry on
-  each mulliganed-then-kept hand. Python's flow models this if
-  enabled.
-- **Impact**: low — only visible if the parity harness exercises
-  the post-mulligan scry decision.
-- **Closeable**: yes — pending Paris-rule decision-callback slice.
+- **Pinned by** (round-30 G24 closure):
+  - **`keep_hand` no-op when mulligan_count == 0**:
+    `tests_rust/test_mulligan.py::test_keep_hand_no_op_when_mulligan_count_is_zero`.
+  - **`keep_hand` fires scry when mulligan_count > 0**:
+    `tests_rust/test_mulligan.py::test_keep_hand_fires_scry_when_mulligan_count_positive`.
+  - **`keep_hand` unknown player rejection**:
+    `tests_rust/test_mulligan.py::test_keep_hand_unknown_player_raises`.
+  - **`submit_scry_decision` routing**:
+    `tests_rust/test_mulligan.py::test_submit_scry_decision_keep_on_top_returns_card_to_library_top`,
+    `test_submit_scry_decision_send_to_bottom_routes_to_library_bottom`,
+    `test_submit_scry_decision_empty_queue_raises`,
+    `test_submit_scry_decision_wrong_head_discriminant_raises`,
+    `test_submit_scry_decision_keep_top_fingerprint_matches_pre_keep`.
+  - **Auto-resolve strategies**:
+    `tests_rust/test_mulligan.py::test_auto_resolve_scry_keep_top_routes_to_library_top`,
+    `test_auto_resolve_scry_send_bottom_routes_to_library_bottom`,
+    `test_auto_resolve_default_for_scry_keeps_on_top`.
+  - **Fingerprint + cross-player + clone isolation**:
+    `tests_rust/test_mulligan.py::test_keep_hand_changes_fingerprint_while_pending`,
+    `test_keep_hand_does_not_affect_other_player`,
+    `test_keep_hand_clone_isolation`,
+    `test_keep_hand_preserves_library_card_set`,
+    `test_keep_hand_for_player_one`.
+  - **Pending-decisions dict round-trip + empty-library guard**:
+    `tests_rust/test_mulligan.py::test_pending_decisions_dict_round_trip_for_scry_choice`,
+    `test_keep_hand_after_multiple_mulligans_still_one_scry`,
+    `test_keep_hand_with_empty_library_pushes_empty_scry_choice`.
+- **Invariant** (CR 103.4 Paris mulligan / round-30 G24 closure):
+  - `GameState.keep_hand(player_id)` is the harness-driven "I'm done
+    mulliganing" entrypoint. When the player's `mulligan_count > 0`
+    it pops the top of their library and pushes a
+    `PendingDecision::ScryChoice { source_obj_id: 0, controller,
+    cards: vec![top_card] }`. When `mulligan_count == 0` (the
+    player kept their initial 7 without mulliganing), `keep_hand`
+    is a strict no-op — no pending decision pushed, no zone
+    mutation, byte-identical fingerprint. Mirrors CR 103.4's
+    "after each mulligan" gate.
+  - The new `PendingDecision::ScryChoice` variant mirrors
+    `SurveilChoice`'s shape (source_obj_id + controller + Vec of
+    examined GameObjects) but the submit dispatcher routes very
+    differently: `submit_scry_decision(keep_on_top: bool)` pushes
+    the examined card to library top (`lib.insert(0, obj)`) on
+    `keep_on_top=true`, or to library bottom (`lib.push(obj)`) on
+    `keep_on_top=false`. A separate variant keeps the dispatcher
+    surface honest — Surveil routes to library/graveyard; Scry
+    routes to library-top/library-bottom.
+  - `auto_resolve_pending_decisions` gains three new strategies:
+    `"scry_keep_top"` (route to library top — matches Python's
+    conservative no-agent-seated default), `"scry_send_bottom"`
+    (route to library bottom), and `"default"` (which for
+    `ScryChoice` is equivalent to `"scry_keep_top"`).
+  - Empty-library guard: if the library is empty at `keep_hand`
+    time, the variant is pushed with `cards: vec![]`. Submit /
+    auto-resolve treat the empty case as a head-drain no-op.
+  - **Backward compatibility**: existing tests / call sites that
+    never call `keep_hand` continue to work unchanged. The scry
+    is OPT-IN at the harness layer — calling code that doesn't
+    want the scry simply doesn't call `keep_hand`.
+  - The pending-decisions fingerprint slot serializes `ScryChoice`
+    with the variant-tag + source/controller + per-examined-card
+    object signature (same shape as `SurveilChoice` /
+    `PickCardFromExaminedChoice`). Empty queues stay
+    bit-equivalent to pre-r27 baselines.
+
+The Paris-rule scry-on-keep is now end-to-end functional: harness
+drives N `mulligan_atomic` calls then `keep_hand`, the engine
+pauses on a `ScryChoice` if mulligan_count > 0, and the harness
+either calls `submit_scry_decision(keep_on_top: bool)` or
+`auto_resolve_pending_decisions(strategy)` to drain. See invariant
+I24 below for the integration with the atomic-mulligan lifecycle.
 
 ---
 
@@ -548,6 +608,21 @@ refactor on either side that breaks the parity surfaces immediately.
     `mulligan_atomic` is the parity-correct entrypoint for new
     callers. Closes parity gaps G21 + G22 (entries removed from
     "Confirmed gaps" above).
+  - **Round-30 G24 closure — Paris scry-on-keep integration.** After
+    the final `mulligan_atomic` call (or after deciding to keep the
+    initial 7 without mulliganing), the harness calls
+    `GameState.keep_hand(player_id)` to signal "I'm done
+    mulliganing." When the player's `mulligan_count > 0`, this
+    pops the top card of their library and pushes a
+    `PendingDecision::ScryChoice` (see G24 above), modeling CR 103.4
+    Paris scry-on-keep. When `mulligan_count == 0`, `keep_hand` is
+    a strict no-op. The scry is OPT-IN at the harness layer:
+    callers that don't model the post-mulligan scry simply don't
+    call `keep_hand`. Cross-reference: see the new
+    `PendingDecision::ScryChoice` variant + the
+    `submit_scry_decision` / auto-resolve `"scry_keep_top"` /
+    `"scry_send_bottom"` dispatchers documented under the (closed)
+    G24 entry above.
 
 ### I25. Priority composition layer: `pass_priority` increments a counter, non-pass mutations reset it, `complete_step_via_priority_round` routes between CR 117.4 / 117.5 legs, and `advance_phase` resets priority on the CLEANUP -> UNTAP wrap (CR 117.1a / 117.1c / 117.4)
 

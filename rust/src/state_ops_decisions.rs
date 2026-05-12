@@ -148,6 +148,8 @@ pub(crate) fn auto_resolve_pending(
         | "reveal_no"
         | "optional_pay_yes"
         | "optional_pay_no"
+        | "scry_keep_top"
+        | "scry_send_bottom"
         | "default" => {}
         other => {
             return Err(PyValueError::new_err(format!(
@@ -155,7 +157,8 @@ pub(crate) fn auto_resolve_pending(
                  valid strategies: keep_all_on_top, send_all_to_graveyard, \
                  may_do_yes, may_do_no, pick_top, choose_mode_0, \
                  if_you_do_yes, if_you_do_no, manifest_top, reveal_yes, \
-                 reveal_no, optional_pay_yes, optional_pay_no, default"
+                 reveal_no, optional_pay_yes, optional_pay_no, \
+                 scry_keep_top, scry_send_bottom, default"
             )))
         }
     }
@@ -339,6 +342,18 @@ pub(crate) fn auto_resolve_pending(
                         // "trigger does nothing" fallback.
                     }
                 }
+            }
+            PendingDecision::ScryChoice {
+                controller, cards, ..
+            } => {
+                // "scry_send_bottom" → route the card to library bottom.
+                // "default" / "scry_keep_top" → route to library top
+                // (matches Python's no-agent-seated default — keeping
+                // the top card is the conservative non-decision).
+                // Unrelated strategies (e.g. "may_do_yes" on a mixed
+                // queue) fall through to keep_top for robustness.
+                let send_bottom = matches!(strategy, "scry_send_bottom");
+                resolve_scry_with_keep_on_top(state, controller, cards, !send_bottom)?;
             }
             PendingDecision::LookAtTopNRevealOrCounterChoice {
                 source_obj_id,
@@ -767,6 +782,41 @@ fn resolve_surveil_with_strategy(
     }
 }
 
+/// Round-30 G24 closure — Paris scry-on-keep routing helper. Routes
+/// the single examined card carried by a `ScryChoice` either to the
+/// top of the controller's library (when `keep_on_top=true`) or to
+/// the bottom of the library (when `keep_on_top=false`).
+///
+/// Pure mutator on `state.players[controller].library`. An empty
+/// `cards` Vec (defensive: library was empty when `keep_hand` ran)
+/// is a silent no-op.
+fn resolve_scry_with_keep_on_top(
+    state: &mut GameState,
+    controller: u8,
+    cards: Vec<GameObject>,
+    keep_on_top: bool,
+) -> PyResult<()> {
+    if cards.is_empty() {
+        // Empty pre-popped card list — defensive no-op (library was
+        // empty when keep_hand ran).
+        return Ok(());
+    }
+    let pidx = controller as usize;
+    let lib_mut: &mut Vec<GameObject> =
+        Arc::make_mut(&mut state.players[pidx].library);
+    for mut obj in cards.into_iter() {
+        obj.zone = 1; // ZONE_LIBRARY
+        if keep_on_top {
+            // Library top = lib[0] (post-CE3).
+            lib_mut.insert(0, obj);
+        } else {
+            // Library bottom = tail of the Vec (post-CE3).
+            lib_mut.push(obj);
+        }
+    }
+    Ok(())
+}
+
 #[pymethods]
 impl GameState {
     /// Whether any `PendingDecision` is currently waiting for the
@@ -935,6 +985,22 @@ impl GameState {
                     d.set_item("cost", cost_dict)?;
                     let inner_dict = crate::cards::effect_to_pydict(py, inner_effect.as_ref())?;
                     d.set_item("inner_effect", inner_dict)?;
+                }
+                PendingDecision::ScryChoice {
+                    source_obj_id,
+                    controller,
+                    cards,
+                } => {
+                    // Round-30 G24 closure: same dict shape as
+                    // SurveilChoice / PickCardFromExaminedChoice — the
+                    // examined card list is a flat list of u32 ids. With
+                    // a non-empty library at keep_hand time, len == 1
+                    // (Paris scry-1); with an empty library, len == 0.
+                    d.set_item("kind", "ScryChoice")?;
+                    d.set_item("source_obj_id", *source_obj_id)?;
+                    d.set_item("controller", *controller)?;
+                    let card_ids: Vec<u32> = cards.iter().map(|o| o.id).collect();
+                    d.set_item("cards", card_ids)?;
                 }
             }
             out.append(d)?;
@@ -1563,6 +1629,60 @@ impl GameState {
         Ok(())
     }
 
+    /// Round-30 G24 closure — submit a Paris scry-on-keep decision.
+    /// Consumes the head `ScryChoice` on the pending-decisions queue:
+    /// on `keep_on_top=true` the examined card returns to the
+    /// controller's library top (lib[0]); on `keep_on_top=false` the
+    /// examined card moves to the controller's library bottom (tail
+    /// of the Vec).
+    ///
+    /// Powers the round-30 `GameState::keep_hand` flow. Mirrors
+    /// CR 103.4 "scry 1" semantics: look at the top card, decide
+    /// whether to keep it on top or send it to the bottom.
+    ///
+    /// **Empty-library partial.** If the variant was pushed with an
+    /// empty `cards` Vec (library was empty at `keep_hand` time), the
+    /// submit is a no-op that just consumes the head. Both
+    /// `keep_on_top=true` and `keep_on_top=false` produce the same
+    /// (empty) result.
+    ///
+    /// Transactional shape: validation runs before any mutation, so a
+    /// failed submit (queue empty, head not a ScryChoice) leaves the
+    /// state intact.
+    ///
+    /// Raises `ValueError` if:
+    /// - the queue is empty
+    /// - the head is not a `ScryChoice`
+    fn submit_scry_decision(&mut self, keep_on_top: bool) -> PyResult<()> {
+        if self.pending_decisions.is_empty() {
+            return Err(PyValueError::new_err(
+                "submit_scry_decision: no pending decision",
+            ));
+        }
+        // Inspect head — fail before any mutation on a discriminant
+        // mismatch.
+        match &self.pending_decisions[0] {
+            PendingDecision::ScryChoice { .. } => {}
+            other => {
+                return Err(PyValueError::new_err(format!(
+                    "submit_scry_decision: head of pending-decisions queue is \
+                     not a ScryChoice (got {:?}); call the variant-specific \
+                     submit_* dispatcher (e.g. submit_surveil_decision)",
+                    std::mem::discriminant(other)
+                )));
+            }
+        }
+        // Validation passed — consume the head.
+        let decision = self.pending_decisions.remove(0);
+        let (controller, cards) = match decision {
+            PendingDecision::ScryChoice {
+                controller, cards, ..
+            } => (controller, cards),
+            _ => unreachable!("validated above"),
+        };
+        resolve_scry_with_keep_on_top(self, controller, cards, keep_on_top)
+    }
+
     /// Drain the pending-decisions queue using a deterministic
     /// strategy. Useful for callers that don't model the choice
     /// dimension (training harnesses, parity tests, deterministic
@@ -1598,12 +1718,18 @@ impl GameState {
     ///   their own per-variant defaults.
     /// * `"optional_pay_no"` — OptionalManaCostChoice drops without
     ///   paying or applying the inner. Other variants fall through.
+    /// * `"scry_keep_top"` — ScryChoice routes the examined card back
+    ///   to library top. Other variants fall through to their own
+    ///   per-variant defaults.
+    /// * `"scry_send_bottom"` — ScryChoice routes the examined card to
+    ///   library bottom. Other variants fall through.
     /// * `"default"` — Surveil keeps all on top; MayDo + IfYouDo
     ///   answer "yes"; PickCardFromExamined picks the topmost
     ///   examined card; ChooseModeChoice picks `modes[0]`; the
     ///   OptionalManaCostChoice does the Python-parity "pay if
     ///   affordable, else skip" (mirrors the base-Agent default in
-    ///   Python).
+    ///   Python); ScryChoice routes the examined card back to library
+    ///   top (conservative non-decision).
     ///
     /// Raises `ValueError` on an unknown strategy.
     fn auto_resolve_pending_decisions(&mut self, strategy: &str) -> PyResult<()> {
