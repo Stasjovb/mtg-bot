@@ -56,6 +56,14 @@ beforeEach(() => {
     + '<button id="stop-modal-cancel">Cancel</button>'
     + '<button id="stop-modal-confirm">Stop run</button>'
     + '</div></div></div>'
+    + '<div class="modal-overlay" id="force-kill-modal">'
+    + '<div class="modal">'
+    + '<h2 id="force-kill-modal-title">Force kill run?</h2>'
+    + '<p id="force-kill-modal-body"></p>'
+    + '<div class="modal-actions">'
+    + '<button id="force-kill-modal-cancel">Cancel</button>'
+    + '<button id="force-kill-modal-confirm">Force kill</button>'
+    + '</div></div></div>'
     + '</body>';
 
   globalThis.fetch = vi.fn().mockResolvedValue({
