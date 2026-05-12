@@ -227,27 +227,31 @@
 //! mana abilities is a Python-side limitation we inherit unchanged
 //! for trajectory parity.
 //!
-//! **First-slice scope: mana-producer permanents only.** Python's
-//! `CardPrinting` has an `activated_abilities: tuple[ActivatedAbility,
-//! ...]` field (see `src/mtg_bot/cards/base.py:490`) listing every
-//! activated ability the printing grants. Rust's `CardPrinting` (see
-//! `cards.rs:361-396`) does NOT have an `activated_abilities` field —
-//! bridge slices through round-23 added `mana_produced`, `keywords`,
-//! `card_types`, `power`/`toughness`, but `activated_abilities` is a
-//! deferred bridge extension because it requires porting the
-//! `ActivatedAbility` + `ActivationCost` + per-effect dataclass tree.
+//! **Two-path emission (CE20 Slice 1):** Rust's `CardPrinting`
+//! now carries BOTH a legacy `mana_produced: Option<Vec<String>>`
+//! field (free-mana-ability hatch) AND an `activated_abilities:
+//! Vec<ActivatedAbility>` Vec (cost-paying abilities). The
+//! emission loop walks both:
 //!
-//! Without `activated_abilities`, we can't iterate abilities directly.
-//! **First-slice approximation**: treat every untapped permanent on
-//! the priority player's battlefield whose printing has
-//! `mana_produced.is_some()` as having a single implicit "tap for
-//! mana" ability at `ability_index=0`. This covers Forests + every
-//! other basic-land equivalent in the Rust card pool today; once the
-//! `activated_abilities` bridge ports over (a bigger slice that wires
-//! the full ability/cost/effect dataclass tree through PyO3), this
-//! shortcut goes away and the enumerator iterates
-//! `effective_activated_abilities(state, obj)` per Python's line
-//! 617-618. Documented in `docs/SEARCH_LIMITATIONS.md`.
+//! - **Legacy path** — every untapped permanent whose printing
+//!   has `mana_produced.is_some()` emits a single
+//!   ActivateAbility at `ability_index = 0`. Covers Forest, etc.
+//!   The legacy path will eventually be bridged into a
+//!   synthesized `ActivatedAbility { is_mana_ability: true,
+//!   cost: { tap_self: true }, effect: AddManaToPool(...) }`
+//!   entry by a follow-up slice.
+//! - **New path** — every `printing.activated_abilities[i]` is
+//!   considered per-ability; emits when the cost is affordable
+//!   from the controller's pool AND (for tap_self abilities) the
+//!   source is untapped + non-sick (creature-only, CR 302.1).
+//!
+//! **Affordability gate is pool-only** (narrower than Python's
+//! `can_pay_cost` which accounts for auto-tap-from-lands).
+//! `pool_can_cover(pool, cost.mana)` mirrors
+//! `state_ops_cast.rs::pay_mana_cost`'s pre-mutation check:
+//! colored pips matchable + post-colored generic coverage. A
+//! follow-up slice grows an auto-tap composer to converge with
+//! Python's headroom accounting.
 //!
 //! **Gating** (mirror Python):
 //! - Source on the priority player's battlefield (Python's outer loop
@@ -258,25 +262,20 @@
 //!   605.1a — mana abilities tap the source). Python's line 658-660
 //!   gates `if ability.cost.tap_self and obj.tapped: continue`.
 //! - **Summoning sickness gate** (parity gap G6 closure): a
-//!   permanent whose `summoning_sick` flag is true does NOT emit a
-//!   tap-for-mana ActivateAbility. Mirrors Python's
-//!   `legal.py:661-663` short-circuit inside the `tap_self`
-//!   cost-payability block. The general gate is
-//!   `summoning_sick && cost.tap_self`; mana abilities always tap
-//!   (CR 605.1a), so for this first-slice's mana-only filter
-//!   `summoning_sick` alone is sufficient. A future slice landing
-//!   non-mana activated abilities will narrow the gate to skip
-//!   ONLY tap-cost abilities. The haste-keyword exception (CR
-//!   702.10 — haste creatures shed sickness on entry) lands with
-//!   the full `activated_abilities` bridge.
+//!   creature whose `summoning_sick` flag is true does NOT emit a
+//!   tap-cost ActivateAbility. Mirrors Python's
+//!   `legal.py:661-663` short-circuit. The gate is
+//!   `is_creature && summoning_sick && cost.tap_self`. The haste-
+//!   keyword exception (CR 702.10) lands with a future static-
+//!   abilities slice.
 //!
-//! **Dispatch is a known stub.** The Rust `Action::ActivateAbility`
-//! variant's `apply_action` arm at `state_ops_actions.rs:248-277`
-//! raises `ValueError("ActivateAbility dispatch not implemented
-//! yet ...")` because no Rust `activate_ability` primitive exists.
-//! The trajectory-mode `parity-smoke` harness's retry loop catches
-//! the ValueError and skips. This slice ships emission only; dispatch
-//! is the next slice's scope.
+//! **Dispatch is wired** post-CE20-Slice-1. See
+//! `state_ops_actions.rs::Action::ActivateAbility` arm — it pays
+//! the cost via `state_ops_cast::pay_mana_cost_pub`, taps the source
+//! for `tap_self`, and either dispatches `apply_effect` directly
+//! (`is_mana_ability=true`) or pushes a `StackItem::new_trigger`-
+//! shaped slot for the next `resolve_top_of_stack` to fire
+//! (`is_mana_ability=false`, mirrors CR 605/113.3b).
 //!
 //! **Dict shape**: `{"kind": "activate_ability", "source_id": <id>,
 //! "ability_index": 0}`. Round-trips through `parse_action` (round-23
@@ -459,10 +458,9 @@ fn cast_spell_dict(py: Python<'_>, card_id: u32) -> PyResult<Bound<'_, PyDict>> 
 /// "ability_index": <u32>}` dict. Mirrors
 /// `actions.rs:action_to_pydict`'s `Action::ActivateAbility` arm so a
 /// dict produced here round-trips through `parse_action` and back
-/// without key drift. First-slice always uses `ability_index = 0`
-/// because Rust's `CardPrinting` doesn't carry an
-/// `activated_abilities` list yet — see module docstring's
-/// "ActivateAbility extension" section.
+/// without key drift. Post-CE20-Slice-1: callers can pass any
+/// `ability_index` in the printing's `activated_abilities` range
+/// (legacy `mana_produced` path always uses `ability_index = 0`).
 fn activate_ability_dict(
     py: Python<'_>,
     source_id: u32,

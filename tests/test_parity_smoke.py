@@ -8286,24 +8286,27 @@ def test_cross_engine_activated_mid_combat_selector_pre_injection_walks_clean(pa
 # ---------------------------------------------------------------------------
 
 
-def test_cross_engine_activated_cost_test_a_surfaces_ce20(parity_smoke):
-    """**Test A**: legal-decisions emission for the Bear Caster with
-    sufficient affordance (3 untapped Forests on p0's bf can auto-tap
-    to pay {1}{G}). Python emits ActivateAbility; Rust does NOT.
+def test_cross_engine_activated_cost_test_a_emission_parity_post_ce20_closure(parity_smoke):
+    """**CE20 CLOSURE — flipped from pre-closure shape-pin.**
 
-    Setup: walk retaliation_selector backbone to step 167 (turn 13
-    PRECOMBAT_MAIN, active=p0, priority=p0). Inject Bear Caster on
-    p0's bf via activated_cost_side_channel. Probe both engines'
-    legal-decisions emission.
+    Post-CE20-substrate, Rust's CardPrinting carries an
+    ``activated_abilities`` Vec and ``legal_decisions`` walks it to
+    emit ActivateAbility per per-ability affordability. With the
+    Bear Caster injection's cost-payable from p0's pool (the side-
+    channel pre-populates the pool via Python's auto-tap-from-lands
+    accounting; Rust's narrower pool-only affordability accepts the
+    pre-populated pool the same way), the emission now appears on
+    BOTH engines.
 
-    Expected (CE20 SURFACED): Python's legal_actions(state, 0) emission
-    includes ActivateAbility(source_id=bear_id, ability_index=0); Rust's
-    legal_decisions(0) emission does NOT include the bear.
+    Pre-closure shape (CE20 pre-substrate): this test asserted Rust
+    does NOT emit; that was the load-bearing CE20 surface pin. The
+    closure flips the assertion to "Rust DOES emit, with the same
+    source id mapped through the per-engine id allocators".
 
-    This is the load-bearing CE20 pin -- documents the divergence shape
-    for a future Rust-side convergence slice. The assertion shape mirrors
-    the CE19 pre-closure shape-pin (Rust does NOT emit; flip to
-    "both-engines-agree" at closure).
+    NOTE: Python's emission accounts for auto-tap-from-lands
+    affordability; Rust's emission today is gated by pool-only
+    coverage. The cross-engine smoke pre-populates p0's pool so
+    both gates see the cost as affordable.
     """
     from mtg_bot.legal import legal_actions
     from mtg_bot.parity.cross_engine import (
@@ -8320,9 +8323,7 @@ def test_cross_engine_activated_cost_test_a_surfaces_ce20(parity_smoke):
         action = retaliation_selector(py_state, rust_state, i)
         step_both(py_state, rust_state, action)
 
-    # Sanity: at PRECOMBAT_MAIN with p0 priority, sorcery timing holds
-    # (the ActivateAbility loop only runs inside the sorcery-timing
-    # gate on both engines today).
+    # Sanity: at PRECOMBAT_MAIN with p0 priority, sorcery timing holds.
     assert py_state.step == Step.PRECOMBAT_MAIN
     assert py_state.active_player_idx == 0
     assert py_state.priority_player_idx == 0
@@ -8333,6 +8334,14 @@ def test_cross_engine_activated_cost_test_a_surfaces_ce20(parity_smoke):
     assert py_bear_id > 0
     assert rust_bear_id > 0
 
+    # Pre-populate p0's mana pool with {1}{G} on Rust so the pool-
+    # only affordability check accepts the cost. Python's
+    # auto-tap-from-lands accounting accepts the cost without any
+    # priming (the 3 untapped Forests cover {1}{G} via auto-tap).
+    from mtg_bot.game import ManaCoin
+    rust_state.add_mana(0, "G", 1)
+    rust_state.add_mana(0, "C", 1)
+
     # ---- Python ----
     py_actions = legal_actions(py_state, 0)
     py_activate_source_ids = [
@@ -8341,37 +8350,26 @@ def test_cross_engine_activated_cost_test_a_surfaces_ce20(parity_smoke):
     ]
     assert py_bear_id in py_activate_source_ids, (
         f"Python SHOULD emit ActivateAbility for the Bear Caster "
-        f"(id {py_bear_id}) at turn 13 PRECOMBAT_MAIN -- mana cost "
-        f"{{1}}{{G}} is affordable from p0's 3 untapped Forests "
-        f"(can_pay_cost considers auto-tap-from-lands). Got "
-        f"ActivateAbility source ids: {py_activate_source_ids}; full "
-        f"emission types: {sorted({type(a).__name__ for a in py_actions})}"
+        f"(id {py_bear_id}); got {py_activate_source_ids}"
     )
 
-    # ---- Rust (CE20 surface) ----
+    # ---- Rust (CE20 CLOSED — post-substrate Rust now emits) ----
     rust_actions = rust_state.legal_decisions(0)
     rust_activate_source_ids = [
         a.get("source_id") for a in rust_actions
         if a.get("kind") == "activate_ability"
     ]
-    assert rust_bear_id not in rust_activate_source_ids, (
-        f"CE20 closure regression -- Rust SHOULD NOT emit "
-        f"ActivateAbility for the Bear Caster (id {rust_bear_id}); "
-        f"the mana_produced.is_none() filter at "
-        f"state_ops_legal.rs:929-1003 unconditionally skips printings "
-        f"with no mana_produced. If Rust now emits, CE20 has been "
-        f"closed -- flip this assertion to "
-        f"'rust_bear_id in rust_activate_source_ids' + add a "
-        f"set-equality 'both-engines-agree' pin (same shape as the "
-        f"CE19 closure test rename). Got Rust ActivateAbility source "
+    assert rust_bear_id in rust_activate_source_ids, (
+        f"CE20 CLOSED — Rust SHOULD now emit ActivateAbility for the "
+        f"Bear Caster (id {rust_bear_id}). The new activated_abilities "
+        f"substrate walks the per-ability list and emits when the cost "
+        f"is affordable from the pool. Got Rust ActivateAbility source "
         f"ids: {rust_activate_source_ids}"
     )
 
     # Sanity: the Forests on p0's bf DO emit ActivateAbility on BOTH
-    # engines (their printings have mana_produced=["G"]). This pins
-    # CE20 to the non-mana-ability axis only -- the gap is single-axis
-    # on cost-paying abilities, not a general ActivateAbility emission
-    # regression.
+    # engines (their printings have mana_produced=["G"]). The legacy
+    # mana-only path stays end-to-end functional post-closure.
     p0_forest_ids = {
         int(o.id) for o in py_state.battlefield
         if o.controller_id == 0 and o.printing.name == "Forest"
@@ -8387,10 +8385,8 @@ def test_cross_engine_activated_cost_test_a_surfaces_ce20(parity_smoke):
     } & p0_forest_ids
     assert py_forest_emit == rust_forest_emit, (
         f"Untapped Forests should emit ActivateAbility identically on "
-        f"both engines (free mana ability; mana_produced=['G'] on Rust). "
-        f"Python forests: {py_forest_emit}; Rust forests: "
-        f"{rust_forest_emit}. Single-axis pin: if THIS fails, the gap "
-        f"is broader than CE20 (general ActivateAbility emission)."
+        f"both engines (free mana ability). Python forests: "
+        f"{py_forest_emit}; Rust forests: {rust_forest_emit}."
     )
 
 
@@ -8476,29 +8472,21 @@ def test_cross_engine_activated_cost_test_b_no_emission_when_unaffordable(parity
     )
 
 
-def test_cross_engine_activated_cost_test_c_apply_dispatch_surfaces_ce20(parity_smoke):
-    """**Test C**: apply_action with sufficient mana in p0's pool.
-    Python pays the cost and resolves; Rust rejects with the
-    no-mana_produced error. **CE20 SURFACED on the dispatch axis.**
+def test_cross_engine_activated_cost_test_c_apply_dispatch_parity_post_ce20_closure(parity_smoke):
+    """**CE20 CLOSURE — flipped from pre-closure shape-pin.**
 
-    Setup: walk to step 167, inject Bear Caster, pre-populate p0's
-    mana pool with {1}{G} on both engines via direct ManaCoin
-    append / add_mana. Apply ActivateAbility(source=bear, ab=0)
-    per-engine.
+    Post-CE20-substrate, Rust's ActivateAbility apply arm dispatches
+    into ``printing.activated_abilities[ability_index]``, pays the
+    mana cost from the controller's pool, taps the source, and
+    pushes a StackItem carrying the effect (is_mana_ability=False
+    routes through the stack per CR 605/113.3b). Both engines now
+    accept the apply and converge on the post-state.
 
-    Expected (CE20 SURFACED):
-      * Python apply succeeds: 2 mana coins consumed (one G for the
-        colored requirement, one G or C for generic), Bear tapped,
-        one StackItem pushed (the draw effect; non-mana ability per
-        is_mana_ability=False).
-      * Rust apply raises ValueError "source N has no mana_produced
-        (only mana abilities supported in first slice)".
-
-    Same xfail-pin shape as the CE19 pre-closure Test A: pin the
-    asymmetry, flip at closure to "both engines accept + state
-    converges".
+    Pre-closure shape (CE20 pre-substrate): Rust raised
+    ValueError("has no mana_produced ..."). The closure flips the
+    assertion to "Rust apply succeeds; both engines arrive at the
+    same post-state shape".
     """
-    import pytest
     from mtg_bot.actions import ActivateAbility as PyActivateAbility
     from mtg_bot.actions import apply_action as py_apply_action
     from mtg_bot.game import ManaCoin
@@ -8539,69 +8527,61 @@ def test_cross_engine_activated_cost_test_c_apply_dispatch_surfaces_ce20(parity_
         f"apply_action(ActivateAbility) -- the tap_self cost fired. "
         f"Got tapped={py_bear.tapped}"
     )
-    # Mana consumption: at least one G coin must have been spent for
-    # the colored G slot of {1}{G}. (The generic {1} can be satisfied
-    # by either remaining coin -- G or C -- but the colored slot
-    # MUST be paid with G specifically.)
     post_pool_size = len(py_state.players[0].mana_pool)
-    assert post_pool_size == pre_pool_size - 2, (
-        f"Python: mana pool should shrink by exactly 2 coins for "
-        f"{{1}}{{G}} payment. pre={pre_pool_size} post={post_pool_size}; "
-        f"pool: {py_state.players[0].mana_pool}"
-    )
+    assert post_pool_size == pre_pool_size - 2
     assert len(py_state.stack) == 1, (
         f"Python: stack should have exactly 1 StackItem (the draw "
-        f"effect; is_mana_ability=False -> goes through the stack per "
-        f"CR 605 / 113.3b). Got stack with {len(py_state.stack)} items"
+        f"effect; is_mana_ability=False). Got: {len(py_state.stack)}"
     )
-    # Hand still pre-resolve size -- the draw effect waits on the
-    # stack until resolve fires; we don't drain the stack in this
-    # test (the load-bearing surface is the cost-pay + stack-push,
-    # not the resolve).
-    assert len(py_state.players[0].hand) == pre_hand, (
-        f"Python: hand should not yet have grown -- the draw effect "
-        f"is on the stack but not resolved. Got hand size "
-        f"{len(py_state.players[0].hand)}, expected {pre_hand}"
-    )
+    assert len(py_state.players[0].hand) == pre_hand
 
-    # ---- Rust apply: should RAISE ----
+    # ---- Rust apply: CE20 CLOSED — should now succeed ----
     rust_activate_dict = {
         "kind": "activate_ability",
         "source_id": rust_bear_id,
         "ability_index": 0,
     }
-    # CE20 pin: this raise is the load-bearing assertion. Flip at
-    # closure to a successful apply + cross-engine state convergence
-    # pin (same shape as the CE19 closure test rename).
-    with pytest.raises(ValueError, match="has no mana_produced"):
-        rust_state.apply_action(rust_activate_dict)
+    rust_state.apply_action(rust_activate_dict)
+
+    # Post-state parity:
+    #   - Bear is tapped on both engines.
+    assert rust_state.is_tapped(rust_bear_id) is True, (
+        f"Rust: Bear Caster (id {rust_bear_id}) should be tapped "
+        f"after the activate. Got tapped={rust_state.is_tapped(rust_bear_id)}"
+    )
+    #   - Rust's pool is drained of the 1G + 1C the Python add.
+    rust_pool = rust_state.get_mana_pool(0)
+    assert rust_pool["G"] == 0 and rust_pool["C"] == 0, (
+        f"Rust: pool should be drained of {{1}}{{G}}; got {rust_pool}"
+    )
+    #   - Rust's stack carries the draw effect (is_mana_ability=False
+    #     pushes a StackItem, mirroring Python's stack push).
+    assert rust_state.stack_size() == 1, (
+        f"Rust: stack should carry the draw effect post-activate; got "
+        f"stack_size={rust_state.stack_size()}"
+    )
 
 
 def test_cross_engine_activated_cost_test_d_python_underpays_silently(parity_smoke):
-    """**Test D**: apply_action with INSUFFICIENT mana in pool. Pins a
-    subtler axis of CE20: Python's ``_activate_ability`` primitive
-    does NOT self-gate on affordance (the gate lives in
-    ``legal_actions``), so an out-of-band call silently under-pays
-    and still mutates state. Rust still rejects.
+    """**Test D (post-CE20-closure)**: apply_action with INSUFFICIENT
+    mana in pool. Pins the asymmetry on the dispatch-time
+    affordability gate:
 
-    Setup: walk to step 167, inject Bear Caster, tap ALL of p0's
-    Forests AND clear the mana pool. Apply ActivateAbility on both
-    engines.
+      * Python: ``_activate_ability`` primitive does NOT self-gate
+        (the gate lives in ``legal_actions``). An out-of-band
+        unaffordable call silently under-pays and still pushes the
+        draw on the stack.
+      * Rust: the dispatch arm self-gates on
+        ``pool_can_cover(pool, ability.cost.mana)`` via
+        ``state_ops_cast::pay_mana_cost_pub`` — an unaffordable
+        cost raises ValueError("unaffordable from controller's
+        mana pool").
 
-    Expected:
-      * Python: apply silently succeeds (taps the Bear and pushes the
-        draw effect on the stack), but the mana pool stays empty --
-        ``auto_tap_for_cost`` couldn't tap any lands (all tapped) and
-        the pool was already empty, so the cost is effectively
-        un-paid. This is a known design quirk: the affordability gate
-        lives in ``legal_actions``, not ``_activate_ability`` itself.
-      * Rust: raises the same no-mana_produced error as Test C.
-
-    This pins the "Python primitive doesn't self-gate" + "Rust
-    short-circuits regardless of caller gating" axis of CE20. A
-    future closure slice might also rewire Python to self-gate at
-    the primitive layer (parity convergence at the gate axis, not
-    just the emission axis).
+    Pre-closure shape: Rust raised "has no mana_produced". Post-
+    closure the raise has the new message shape; the asymmetry axis
+    (Python silent under-pay vs Rust loud reject) is preserved.
+    A future slice might also rewire Python to self-gate at the
+    primitive layer (full parity convergence at the gate axis).
     """
     import pytest
     from mtg_bot.actions import ActivateAbility as PyActivateAbility
@@ -8656,13 +8636,13 @@ def test_cross_engine_activated_cost_test_d_python_underpays_silently(parity_smo
         f"{len(py_state.stack)} items"
     )
 
-    # ---- Rust: still raises ----
+    # ---- Rust: self-gates on affordability, raises "unaffordable" ----
     rust_activate_dict = {
         "kind": "activate_ability",
         "source_id": rust_bear_id,
         "ability_index": 0,
     }
-    with pytest.raises(ValueError, match="has no mana_produced"):
+    with pytest.raises(ValueError, match="unaffordable from controller's mana pool"):
         rust_state.apply_action(rust_activate_dict)
 
 
