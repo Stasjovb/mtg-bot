@@ -441,152 +441,63 @@ impl GameState {
                 source_id,
                 ability_index,
             } => {
-                // Round-25 slice: flip the round-23 stub to a real
-                // dispatch for **mana abilities only**. The matching
-                // emission in `legal_decisions` (round-24,
-                // `state_ops_legal.rs`) only emits ActivateAbility
-                // for untapped permanents whose printing's
-                // `mana_produced.is_some()`, with `ability_index = 0`.
-                // We mirror that filter exactly: only `ability_index
-                // = 0` + `mana_produced.is_some()` is supported in
-                // this slice; anything else raises (loud failure on
-                // out-of-scope ActivateAbility caller input —
-                // honors the "silent no-op pipeline runs are
-                // pipeline bugs" guidance: a caller that built an
-                // ActivateAbility dict for a non-mana ability should
-                // know immediately that the dispatcher can't honor
-                // it yet rather than getting a misleading-success
-                // no-mutation return).
+                // CE20 Slice 1 dispatch: now covers BOTH legacy
+                // mana-only printings (`mana_produced.is_some()`,
+                // `ability_index = 0`) AND the new cost-paying
+                // `printing.activated_abilities` substrate (any
+                // ability_index in range). Mirrors Python's
+                // `actions._activate_ability` at
+                // `src/mtg_bot/actions.py:1928-2002`:
                 //
-                // **Why inline rather than `call_method1` cross-file
-                // dispatch.** The mana-ability flow is small —
-                // locate the source on a battlefield, validate the
-                // printing has `mana_produced`, validate the source
-                // is untapped, then tap it + credit the controller's
-                // mana pool. There's no existing
-                // `activate_ability(source_id, ability_index)`
-                // primitive on `state_ops_mana.rs` to call (the
-                // existing `tap_for_mana(obj_id)` doesn't take an
-                // ability_index, doesn't validate the input source
-                // belongs to the priority player vs the opponent —
-                // legal_decisions' emission gate handles that
-                // upstream — and returns `Option<String>` silently
-                // on every failure mode, which would mask the
-                // ability_index!=0 / not-on-battlefield / tapped /
-                // non-mana-source error paths this dispatch needs
-                // to surface). Inlining the logic here keeps every
-                // error path's message specific and the slice
-                // self-contained — no sibling-file edits required.
+                //   1. Locate the source on a battlefield.
+                //   2. Resolve the ability:
+                //      - `ability_index = 0` AND
+                //        `printing.activated_abilities` is empty AND
+                //        `printing.mana_produced.is_some()` → legacy
+                //        free-mana-ability path (back-compat with
+                //        every pre-Slice-1 caller).
+                //      - Otherwise dispatch into
+                //        `printing.activated_abilities[ability_index]`.
+                //   3. Cost-pay phase: check tap-self gate (untapped
+                //      + non-sick for creatures) + mana affordability,
+                //      then commit (tap source, debit pool).
+                //   4. Effect phase: `is_mana_ability=true` →
+                //      `apply_effect` directly (CR 605.3a — mana
+                //      abilities bypass the stack); `is_mana_ability=false`
+                //      → push a `StackItem::new_trigger`-shaped slot
+                //      so the next `resolve_top_of_stack` fires it.
                 //
-                // **Future slice.** Non-mana activated abilities
-                // (e.g. tap a creature for an effect, mana-cost-pay
-                // for a pump ability, loyalty abilities on
-                // planeswalkers) need richer primitives — cost-pay
-                // composition + effect-resolution composition. That
-                // belongs in a follow-up slice when the production
-                // workload (parity_smoke trajectory mode emitting
-                // legal non-mana ActivateAbility decisions) demands
-                // it; until then the `ability_index != 0` raise
-                // here surfaces the gap loudly to the harness.
+                // **The legacy mana_produced path stays.** The Slice
+                // 1 emission loop in `state_ops_legal.rs` still emits
+                // ActivateAbility for `mana_produced.is_some()`
+                // permanents under `ability_index = 0`, so the
+                // dispatcher must continue to honor that shape. A
+                // future slice will bridge `mana_produced` into a
+                // synthesized `ActivatedAbility { is_mana_ability:
+                // true, cost: { tap_self: true }, effect:
+                // AddManaToPool(...) }` entry and retire the side-
+                // channel; until then both paths coexist.
                 let mut binding = slf.borrow_mut();
                 let state: &mut GameState = &mut *binding;
-                if ability_index != 0 {
-                    return Err(PyValueError::new_err(format!(
-                        "ActivateAbility dispatch: only ability_index=0 \
-                         (mana ability) is supported in this slice; got \
-                         {ability_index}. Non-mana activated abilities \
-                         require richer primitives (future slice)."
-                    )));
-                }
                 // Phase 1: locate the source on a battlefield (either
-                // player's — legal_decisions only emits for the
-                // priority player, but the dispatcher is permissive
-                // here so a direct caller building the dict by hand
-                // gets the same error message regardless of which
-                // side controls the source; the unique invariant we
-                // enforce is "on SOME battlefield, untapped,
-                // mana_produced"). Read the printing's
-                // `mana_produced` Vec up-front so the mutation phase
-                // doesn't need to re-borrow the registry.
-                let mut found: Option<(usize, usize, Vec<String>)> = None;
-                // (controller_idx, bf_pos, mana_symbols)
+                // player's — `legal_decisions` only emits for the
+                // priority player but the dispatcher is permissive so
+                // a direct hand-built caller gets the same error
+                // shape regardless of which side controls the source).
+                let mut found: Option<(usize, usize, u32)> = None;
+                // (controller_idx, bf_pos, printing_id)
                 for pidx in 0..state.players.len() {
                     if let Some(pos) = state.players[pidx]
                         .battlefield
                         .iter()
                         .position(|o| o.id == source_id)
                     {
-                        let obj = &state.players[pidx].battlefield[pos];
-                        let printing =
-                            state.registry.lookup(obj.printing_id).ok_or_else(|| {
-                                PyValueError::new_err(format!(
-                                    "ActivateAbility: source {source_id} \
-                                     printing not in registry"
-                                ))
-                            })?;
-                        let mana = printing.mana_produced.clone().ok_or_else(|| {
-                            PyValueError::new_err(format!(
-                                "ActivateAbility: source {source_id} has no \
-                                 mana_produced (only mana abilities supported \
-                                 in first slice)"
-                            ))
-                        })?;
-                        if obj.tapped {
-                            return Err(PyValueError::new_err(format!(
-                                "ActivateAbility: source {source_id} is \
-                                 already tapped"
-                            )));
-                        }
-                        // CR 302.1 summoning-sickness gate (gap G6). A
-                        // creature that hasn't been controlled
-                        // continuously since the start of its
-                        // controller's most recent turn can't pay a
-                        // tap cost (or use itself for an "activate
-                        // only as a sorcery" cost that involves
-                        // tapping). The general rule is
-                        // `is_creature && summoning_sick && requires_tap_cost`;
-                        // for the only ability currently wired through
-                        // this dispatch arm (mana abilities at
-                        // `ability_index = 0`), every printing's
-                        // tap-for-mana ability has an implicit `{T}`
-                        // cost, so `is_creature && summoning_sick` is
-                        // sufficient to reject. A future slice that
-                        // lands non-mana activated abilities will
-                        // narrow this to
-                        // `is_creature && summoning_sick && ability.cost.tap_self`
-                        // — until then this approximation is exact
-                        // (mana abilities always tap). Mirrors
-                        // Python's `legal.py:661-663` gate
-                        // (`is_creature_now(obj) && obj.summoning_sick`)
-                        // and the matching dispatch precheck in
-                        // `actions.py:_activate_ability` /
-                        // `_can_fire_sac_for_mana`.
-                        //
-                        // **Creature-only gating (CR 302.1).** Summoning
-                        // sickness applies ONLY to creatures; lands
-                        // (Forests, Mountains, etc.) can tap for mana
-                        // the turn they enter the battlefield. Without
-                        // this guard, a freshly-played Forest with
-                        // `summoning_sick = true` (inherited from the
-                        // CE1 universal-true default on every new
-                        // permanent) would be rejected, which is
-                        // wrong per the rules.  Pins G6 closure; see
-                        // `docs/RUST_PARITY_GAPS.md` I17.
-                        let is_creature =
-                            printing.card_types.iter().any(|t| t == "Creature");
-                        if is_creature && obj.summoning_sick {
-                            return Err(PyValueError::new_err(format!(
-                                "ActivateAbility: source {source_id} is \
-                                 summoning-sick (CR 302.1) — can't tap \
-                                 for mana the turn it entered the \
-                                 battlefield"
-                            )));
-                        }
-                        found = Some((pidx, pos, mana));
+                        let printing_id = state.players[pidx].battlefield[pos].printing_id;
+                        found = Some((pidx, pos, printing_id));
                         break;
                     }
                 }
-                let (controller_idx, bf_pos, mana_symbols) = match found {
+                let (controller_idx, bf_pos, printing_id) = match found {
                     Some(t) => t,
                     None => {
                         return Err(PyValueError::new_err(format!(
@@ -595,35 +506,207 @@ impl GameState {
                         )))
                     }
                 };
-                // Phase 2: commit. Tap the source via Arc::make_mut on
-                // the controller's battlefield zone (preserves the
-                // per-zone CoW invariant — clones of the state that
-                // observed the zone before the tap remain
-                // untouched), then credit the controller's mana pool.
-                // Saturating u8 add per the existing AddManaToPool /
-                // tap_for_mana convention in state_ops_mana.rs (255
-                // pips of any one color is more than any real game
-                // produces; silent wrap would be a worse failure
-                // mode than capping).
-                let bf_mut = Arc::make_mut(&mut state.players[controller_idx].battlefield);
-                bf_mut[bf_pos].tapped = true;
-                let pool = &mut state.players[controller_idx].mana_pool;
-                for sym in &mana_symbols {
-                    match sym.as_str() {
-                        "W" => pool.white = pool.white.saturating_add(1),
-                        "U" => pool.blue = pool.blue.saturating_add(1),
-                        "B" => pool.black = pool.black.saturating_add(1),
-                        "R" => pool.red = pool.red.saturating_add(1),
-                        "G" => pool.green = pool.green.saturating_add(1),
-                        "C" => pool.colorless = pool.colorless.saturating_add(1),
-                        other => {
-                            return Err(PyValueError::new_err(format!(
-                                "ActivateAbility: unknown mana symbol \
-                                 {other:?} in mana_produced (valid: W, U, B, \
-                                 R, G, C)"
-                            )))
+                // Phase 2: resolve the ability shape. We snapshot
+                // everything we need from the immutable registry view
+                // up-front so the mutation phases below can borrow
+                // `state.players[...]` freely.
+                #[derive(Debug)]
+                struct ResolvedAbility {
+                    /// Mana to spend from the controller's pool.
+                    mana_cost: crate::cards::ManaCost,
+                    /// Tap the source as part of cost?
+                    tap_self: bool,
+                    /// Effect to fire on resolution.
+                    effect: crate::cards::Effect,
+                    /// Mana ability (CR 605.3a — bypass stack)?
+                    is_mana_ability: bool,
+                    /// True iff this came from the legacy
+                    /// `mana_produced` side-channel (we don't carry
+                    /// a `ManaCost` for those; the effect arm builds
+                    /// the AddManaToPool sequence inline).
+                    is_legacy_mana_produced: bool,
+                    /// For legacy mana_produced: the color symbols.
+                    /// Empty for the new activated_abilities path.
+                    legacy_mana_symbols: Vec<String>,
+                    /// Whether the source's printing has the "Creature"
+                    /// card_type — gated below by summoning sickness
+                    /// when combined with `tap_self`.
+                    is_creature: bool,
+                }
+                let resolved: ResolvedAbility = {
+                    let printing = state.registry.lookup(printing_id).ok_or_else(|| {
+                        PyValueError::new_err(format!(
+                            "ActivateAbility: source {source_id} printing \
+                             not in registry"
+                        ))
+                    })?;
+                    let is_creature =
+                        printing.card_types.iter().any(|t| t == "Creature");
+                    // New path: ability_index falls inside
+                    // printing.activated_abilities.
+                    if (ability_index as usize) < printing.activated_abilities.len() {
+                        let ab = &printing.activated_abilities[ability_index as usize];
+                        ResolvedAbility {
+                            mana_cost: ab.cost.mana.clone(),
+                            tap_self: ab.cost.tap_self,
+                            effect: ab.effect.clone(),
+                            is_mana_ability: ab.is_mana_ability,
+                            is_legacy_mana_produced: false,
+                            legacy_mana_symbols: Vec::new(),
+                            is_creature,
+                        }
+                    } else if ability_index == 0 && printing.mana_produced.is_some() {
+                        // Legacy free-mana-ability path: implicit
+                        // `{T}: Add {color(s)}`. Zero mana cost,
+                        // tap_self=true, is_mana_ability=true.
+                        ResolvedAbility {
+                            mana_cost: crate::cards::ManaCost::default(),
+                            tap_self: true,
+                            // Effect.clone-able dummy — the legacy
+                            // path's effect commit goes through the
+                            // `legacy_mana_symbols` add-mana loop
+                            // below, not `apply_effect`. We use a
+                            // GainLife(0) sentinel so the field is
+                            // populated; it's never read because
+                            // `is_legacy_mana_produced=true` routes
+                            // around `apply_effect`.
+                            effect: crate::cards::Effect::GainLife { amount: 0 },
+                            is_mana_ability: true,
+                            is_legacy_mana_produced: true,
+                            legacy_mana_symbols: printing
+                                .mana_produced
+                                .clone()
+                                .unwrap_or_default(),
+                            is_creature,
+                        }
+                    } else {
+                        // ability_index out of range AND no legacy
+                        // mana_produced fallback. Loud fail — the
+                        // emission gate in legal_decisions never
+                        // produces this shape; a direct caller built
+                        // a malformed dict.
+                        return Err(PyValueError::new_err(format!(
+                            "ActivateAbility: source {source_id} has no \
+                             ability at index {ability_index} \
+                             (printing has {} activated_abilities and \
+                             mana_produced={})",
+                            printing.activated_abilities.len(),
+                            if printing.mana_produced.is_some() {
+                                "Some(...)"
+                            } else {
+                                "None"
+                            }
+                        )));
+                    }
+                };
+                // Phase 3: cost-pay precheck. tap_self requires the
+                // source untapped and non-sick (creature-only —
+                // CR 302.1, see I17).
+                if resolved.tap_self {
+                    let obj = &state.players[controller_idx].battlefield[bf_pos];
+                    if obj.tapped {
+                        return Err(PyValueError::new_err(format!(
+                            "ActivateAbility: source {source_id} is \
+                             already tapped (tap_self cost can't be paid)"
+                        )));
+                    }
+                    if resolved.is_creature && obj.summoning_sick {
+                        return Err(PyValueError::new_err(format!(
+                            "ActivateAbility: source {source_id} is \
+                             summoning-sick (CR 302.1) — can't pay \
+                             tap_self cost the turn it entered the \
+                             battlefield"
+                        )));
+                    }
+                }
+                // Phase 4: pay the mana cost (if any). pay_mana_cost
+                // on the controller's pool either succeeds (commits)
+                // or returns false with no mutation. Mirrors the
+                // affordability shape Python's `auto_tap_for_cost`
+                // checks before committing — but unlike Python,
+                // Rust's pool is the SOLE mana source for cost-pay
+                // (no auto-tap-from-lands fallback yet); the caller
+                // is responsible for pre-populating the pool from
+                // their lands. A future slice can grow an auto-tap
+                // composer that mirrors the Python pipeline.
+                let mana_paid: bool = {
+                    let pool = &mut state.players[controller_idx].mana_pool;
+                    crate::state_ops_cast::pay_mana_cost_pub(pool, &resolved.mana_cost)
+                };
+                if !mana_paid {
+                    return Err(PyValueError::new_err(format!(
+                        "ActivateAbility: source {source_id} cost is \
+                         unaffordable from controller's mana pool \
+                         (mana_cost generic={}, W={}, U={}, B={}, R={}, G={})",
+                        resolved.mana_cost.generic,
+                        resolved.mana_cost.white,
+                        resolved.mana_cost.blue,
+                        resolved.mana_cost.black,
+                        resolved.mana_cost.red,
+                        resolved.mana_cost.green,
+                    )));
+                }
+                // Phase 5: commit tap_self (if applicable). The mana
+                // cost is already debited above.
+                if resolved.tap_self {
+                    let bf_mut = Arc::make_mut(
+                        &mut state.players[controller_idx].battlefield,
+                    );
+                    bf_mut[bf_pos].tapped = true;
+                }
+                // Phase 6: dispatch the effect.
+                if resolved.is_legacy_mana_produced {
+                    // Legacy free-mana-ability fast path: credit the
+                    // controller's pool with the listed pips. Same
+                    // saturating-u8 convention as before.
+                    let pool = &mut state.players[controller_idx].mana_pool;
+                    for sym in &resolved.legacy_mana_symbols {
+                        match sym.as_str() {
+                            "W" => pool.white = pool.white.saturating_add(1),
+                            "U" => pool.blue = pool.blue.saturating_add(1),
+                            "B" => pool.black = pool.black.saturating_add(1),
+                            "R" => pool.red = pool.red.saturating_add(1),
+                            "G" => pool.green = pool.green.saturating_add(1),
+                            "C" => pool.colorless = pool.colorless.saturating_add(1),
+                            other => {
+                                return Err(PyValueError::new_err(format!(
+                                    "ActivateAbility: unknown mana symbol \
+                                     {other:?} in mana_produced (valid: \
+                                     W, U, B, R, G, C)"
+                                )))
+                            }
                         }
                     }
+                } else if resolved.is_mana_ability {
+                    // New-substrate mana ability: bypass the stack
+                    // and resolve immediately.
+                    crate::state_ops_resolve::apply_effect_pub(
+                        state,
+                        &resolved.effect,
+                        source_id,
+                    )?;
+                } else {
+                    // Non-mana ability: push a stack item carrying
+                    // the effect payload so a subsequent
+                    // `resolve_top_of_stack` fires it (CR 605 /
+                    // 113.3b — non-mana activated abilities use the
+                    // stack). Mirrors Python's `_activate_ability`
+                    // stack push at `actions.py:1928-2002`. We use
+                    // the existing `new_trigger` shape (it's the
+                    // closest payload-carrying StackItem variant; the
+                    // resolver fires it via `apply_effect` and
+                    // skips `move_source_post_resolve`, exactly the
+                    // semantics we want for an activated ability).
+                    // `ability_index` rides through as the payload's
+                    // dedup key — matches what Python's
+                    // `StackItem.ability` reference encodes.
+                    let controller = controller_idx as u8;
+                    state.stack.push(crate::state::StackItem::new_trigger(
+                        source_id,
+                        controller,
+                        resolved.effect.clone(),
+                        ability_index,
+                    ));
                 }
                 // Round-27 G4 closure: priority reset after the
                 // activate happens at the post-arm reset block

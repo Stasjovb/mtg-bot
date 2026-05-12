@@ -1464,6 +1464,7 @@ pub fn make_synthetic_state(
         keywords: Vec::new(),
         etb_effects: Vec::new(),
         triggered_abilities: Vec::new(),
+        activated_abilities: Vec::new(),
     });
     let bears_pid = builder.push_printing(CardPrinting {
         name: Arc::from("Grizzly Bears"),
@@ -1480,6 +1481,7 @@ pub fn make_synthetic_state(
         keywords: Vec::new(),
         etb_effects: Vec::new(),
         triggered_abilities: Vec::new(),
+        activated_abilities: Vec::new(),
     });
     let elves_pid = builder.push_printing(CardPrinting {
         name: Arc::from("Llanowar Elves"),
@@ -1502,6 +1504,7 @@ pub fn make_synthetic_state(
         keywords: Vec::new(),
         etb_effects: Vec::new(),
         triggered_abilities: Vec::new(),
+        activated_abilities: Vec::new(),
     });
     let registry = builder.snapshot();
 

@@ -475,6 +475,32 @@ fn activate_ability_dict(
     Ok(d)
 }
 
+/// **CE20 Slice 1.** Pure-pool affordability check for an activated
+/// ability's mana cost. Mirrors `state_ops_cast.rs::pay_mana_cost`'s
+/// pre-mutation gate (colored pips must be matchable by same-color
+/// pool mana, then `pool_total - colored_total >= generic`) without
+/// the commit step. Returns `true` iff the controller's pool can
+/// cover `cost` outright — no auto-tap-from-lands accounting (the
+/// Rust side doesn't yet have an auto-tap composer; a future slice
+/// will grow one to match Python's `can_pay_cost`).
+fn pool_can_cover(pool: &crate::state::ManaPool, cost: &crate::cards::ManaCost) -> bool {
+    if pool.white < cost.white
+        || pool.blue < cost.blue
+        || pool.black < cost.black
+        || pool.red < cost.red
+        || pool.green < cost.green
+    {
+        return false;
+    }
+    let rem_total = (pool.white - cost.white) as u32
+        + (pool.blue - cost.blue) as u32
+        + (pool.black - cost.black) as u32
+        + (pool.red - cost.red) as u32
+        + (pool.green - cost.green) as u32
+        + (pool.colorless) as u32;
+    rem_total >= cost.generic as u32
+}
+
 /// Build a `{"kind": "declare_attackers", "attacker_ids": [...]}` dict.
 /// Mirrors `actions.rs:action_to_pydict`'s `Action::DeclareAttackers`
 /// arm so a dict produced here round-trips through `parse_action` and
@@ -969,15 +995,15 @@ impl GameState {
         // ActivateAbility loop at lines 612-829 has no dedup HashSet
         // for the same reason.
         for obj in self.players[idx].battlefield.iter() {
-            if obj.tapped {
-                continue;
-            }
             let Some(printing) = self.registry.lookup(obj.printing_id) else {
                 continue;
             };
-            if printing.mana_produced.is_none() {
-                continue;
-            }
+            let is_creature = printing.card_types.iter().any(|t| t == "Creature");
+            // Legacy free-mana-ability emission (back-compat with
+            // CE20 Slice 1 — `mana_produced` stays as the hatch
+            // for "{T}: Add {color}" until a future slice bridges
+            // it into a synthesized ActivatedAbility entry).
+            //
             // CR 302.1 — summoning sickness applies ONLY to creatures
             // tapping for tap-cost abilities. Lands (Forests,
             // Mountains, etc.) can tap for mana the turn they enter
@@ -985,21 +1011,49 @@ impl GameState {
             // carries `summoning_sick = true` (the CE1 universal
             // default). The gate is
             // `is_creature && summoning_sick && requires_tap_cost`;
-            // for this mana-only slice every emitted ability has an
-            // implicit `{T}` cost (CR 605.1a), so
-            // `is_creature && summoning_sick` is sufficient.
-            // Mirrors Python's `legal.py:661-663` short-circuit
-            // (`is_creature_now(obj) && obj.summoning_sick` inside
-            // the `tap_self` cost-payability block). A future slice
-            // that lands non-mana activated abilities will narrow
-            // this to "skip the source ONLY for abilities whose
-            // `cost.tap_self` is true". See I17 in
-            // `docs/RUST_PARITY_GAPS.md`.
-            let is_creature = printing.card_types.iter().any(|t| t == "Creature");
-            if is_creature && obj.summoning_sick {
-                continue;
+            // every legacy mana ability has an implicit `{T}` cost
+            // (CR 605.1a), so `is_creature && summoning_sick` is
+            // sufficient here. Mirrors Python's `legal.py:661-663`.
+            if !obj.tapped
+                && printing.mana_produced.is_some()
+                && !(is_creature && obj.summoning_sick)
+            {
+                actions.push(activate_ability_dict(py, obj.id, 0)?);
             }
-            actions.push(activate_ability_dict(py, obj.id, 0)?);
+            // CE20 Slice 1: walk the new activated_abilities Vec.
+            // Per-ability:
+            //   - tap_self abilities skip a tapped source AND a
+            //     summoning-sick creature source (CR 302.1 narrows
+            //     the sickness gate to abilities whose cost requires
+            //     tapping the source — non-tap-cost abilities on a
+            //     fresh creature still emit).
+            //   - mana affordability: the controller's pool must
+            //     cover the ability's mana cost. Pure pool check
+            //     (no auto-tap-from-lands composer yet in Rust).
+            //     Diverges from Python's `can_pay_cost`, which
+            //     accounts for auto-tap headroom from untapped
+            //     lands; for the Slice 1 closure shape we accept
+            //     the narrower gate (the cross-engine smoke
+            //     pre-populates the pool before driving
+            //     ActivateAbility). A future slice grows the
+            //     composer.
+            for (ability_index, ability) in
+                printing.activated_abilities.iter().enumerate()
+            {
+                if ability.cost.tap_self {
+                    if obj.tapped {
+                        continue;
+                    }
+                    if is_creature && obj.summoning_sick {
+                        continue;
+                    }
+                }
+                let pool = &self.players[idx].mana_pool;
+                if !pool_can_cover(pool, &ability.cost.mana) {
+                    continue;
+                }
+                actions.push(activate_ability_dict(py, obj.id, ability_index as u32)?);
+            }
         }
 
         // Final emission order: [PassPriority, (DeclareAttackers...),

@@ -828,16 +828,17 @@ def test_apply_action_activate_ability_on_tapped_source_raises(synthetic_state):
 
 
 def test_apply_action_activate_ability_on_non_mana_source_raises(synthetic_state):
-    """A source whose printing has no ``mana_produced`` (e.g. Grizzly
-    Bears) can't be tap-for-mana'd. Raises ValueError with the "no
-    mana_produced" substring; no state mutation. Locks in the
-    first-slice scope — non-mana activated abilities surface loudly
-    rather than silently no-op'ing."""
+    """A source whose printing has no ``mana_produced`` AND no
+    ``activated_abilities`` (e.g. Grizzly Bears in the synthetic
+    registry) can't be activated. Post-CE20-Slice-1 the dispatcher
+    raises with the "has no ability at index 0" message — the
+    fallback to ``mana_produced`` requires it to be `Some(_)`, and
+    no `activated_abilities[0]` exists. No state mutation."""
     bears_id = P0_FIRST_BEARS_ID
     assert synthetic_state.printing_name_of(bears_id) == "Grizzly Bears"
     assert synthetic_state.is_tapped(bears_id) is False
 
-    with pytest.raises(ValueError, match=r"no mana_produced"):
+    with pytest.raises(ValueError, match=r"has no ability at index 0"):
         synthetic_state.apply_action(
             {
                 "kind": "activate_ability",
@@ -890,13 +891,16 @@ def test_apply_action_activate_ability_with_unknown_source_id_raises(
 
 
 def test_apply_action_activate_ability_ability_index_one_raises(synthetic_state):
-    """First-slice scope: only ``ability_index = 0`` is dispatched.
-    Non-zero indices raise ValueError flagging that non-mana
-    activated abilities are a future slice — the harness picks the
-    raise up loudly rather than silently no-op'ing on an out-of-scope
-    Action."""
+    """Post-CE20-Slice-1: a printing with only the legacy
+    `mana_produced` hatch (e.g. Forest) has exactly one valid
+    ability (`ability_index = 0`); any non-zero index raises with
+    the "has no ability at index N" message. A printing that ALSO
+    carries `activated_abilities` would dispatch the corresponding
+    index into that Vec; the synthetic registry's Forest has
+    `activated_abilities = []`, so `ability_index >= 1` falls
+    through to the no-ability raise."""
     forest_id = P0_FIRST_BATTLEFIELD_ID
-    with pytest.raises(ValueError, match=r"only ability_index=0"):
+    with pytest.raises(ValueError, match=r"has no ability at index 1"):
         synthetic_state.apply_action(
             {
                 "kind": "activate_ability",
@@ -909,11 +913,12 @@ def test_apply_action_activate_ability_ability_index_one_raises(synthetic_state)
 
 
 def test_apply_action_activate_ability_ability_index_two_raises_too(synthetic_state):
-    """Locks in the ``ability_index != 0`` raise is shape-invariant
-    over the specific non-zero value (i.e. not just a `== 1`
-    guard)."""
+    """Locks in the post-CE20-Slice-1 raise is shape-invariant over
+    the specific non-zero value (i.e. not just a `== 1` guard) when
+    the printing has only the legacy `mana_produced` hatch and no
+    `activated_abilities`."""
     forest_id = P0_FIRST_BATTLEFIELD_ID
-    with pytest.raises(ValueError, match=r"only ability_index=0"):
+    with pytest.raises(ValueError, match=r"has no ability at index 2"):
         synthetic_state.apply_action(
             {
                 "kind": "activate_ability",
@@ -2043,12 +2048,13 @@ def test_apply_action_activate_ability_ability_index_large_value_raises(
 ):
     """Large non-zero ``ability_index`` (999) — same dispatch raise
     as index=1 / index=2 (the per-variant tests above), pinning that
-    the gate is `!= 0` rather than a small-int allowlist. A future
-    slice that adds support for `ability_index in {1, 2}` (e.g.
-    Spacecraft launch costs) would need to grow this gate; this
-    test stays as a "did we forget to extend the gate?" canary."""
+    the gate is "out-of-range index" rather than a small-int
+    allowlist. Post-CE20-Slice-1 the message includes the index value
+    + the printing's `activated_abilities.len()` for diagnostics; a
+    future slice that bridges `mana_produced` into a synthesized
+    activated_abilities entry would shift the message shape."""
     forest_id = P0_FIRST_BATTLEFIELD_ID
-    with pytest.raises(ValueError, match=r"only ability_index=0"):
+    with pytest.raises(ValueError, match=r"has no ability at index 999"):
         synthetic_state.apply_action(
             {
                 "kind": "activate_ability",
