@@ -2974,3 +2974,234 @@ def deathtouch_selector(py_state, rust_state, step_index: int) -> dict:
             return {"kind": "pass_priority"}
 
     return retaliation_selector(py_state, rust_state, step_index)
+
+
+# ---------------------------------------------------------------------------
+# Phase 5 follow-up #11: lifelink_selector — extend the cross-engine smoke
+# onto lifelink combat damage application (CR 702.15). Mirrors
+# :func:`deathtouch_selector` exactly except:
+#
+#   1. The injected creature carries the ``lifelink`` keyword instead of
+#      ``deathtouch``.
+#   2. The trigger-detection gate is keyed on a distinct printing name
+#      ("Bear Cleric") so the lifelink + deathtouch + first-strike probes
+#      stay independent on the same multi_blocker_deckspec walk.
+#
+# **Composition probe — different surface shape from CE14/CE15.** Where
+# deathtouch (CE14) and trample-deathtouch (CE15) probes targeted the
+# damage-assignment SPLIT (CR 510.1c — how the attacker's power is
+# distributed across blockers), lifelink composes damage application
+# with a per-event LIFE GAIN on the source's controller. Per CR 702.15b:
+# "Damage dealt by a creature with lifelink causes its controller to
+# gain that much life." Per CR 702.15a (modern wording): the life gain
+# fires alongside damage as a replacement-style effect on a per-event
+# basis (not a stack-pushed trigger — the change from 2010 reflects the
+# Magic 2010 rules update).
+#
+# **Both engines wire lifelink at damage-apply time.**
+#
+#   * **Python** (``combat.py:533-541``): inside the
+#     ``resolve_combat_damage`` apply loop, after each damage event
+#     applies its amount to the target, ``if "lifelink" in source_kws:
+#     gain_life(state, source_controller, amount)`` fires. Lifelink
+#     fires for both creature-target events and player-target events
+#     (the gate is per-event, not per-target-kind).
+#
+#   * **Rust** (``state_ops_combat.rs:1227-1297``, ``apply_damage_pass``):
+#     for each ``PlanEntry`` in the damage plan, after the per-target
+#     mutation lands, ``if source_has_lifelink { self.players[cidx].life
+#     += entry.amount as i32; }`` fires. Same per-event shape — fires
+#     for both ``DamageTarget::Creature`` and ``DamageTarget::Player``.
+#
+# **Expected outcome (a) — clean pass.** On the multi_blocker_deckspec
+# walk with the lifelink_selector setup (2/2 lifelink attacker vs two
+# 2/2 Bears multi-block), Python and Rust should both:
+#
+#   * Assign 2 damage to the first blocker (need_0 = 2; remaining
+#     drops to 0; loop exits before blocker_1 with the post-CE14
+#     ``if remaining <= 0: break`` guard on both engines).
+#   * Fire lifelink for amount=2 → p0 gains 2 life.
+#   * Apply blockers' back-damage (2 + 2 = 4) to the attacker; attacker
+#     dies via SBA. Blockers have no lifelink, so no p1 life gain.
+#   * Post-combat: p0 life = 22; p1 life = 20 unchanged.
+#
+# If Rust DOESN'T honor lifelink — the predicted CE16 candidate — the
+# divergence surfaces at the COMBAT_DAMAGE step on the ``life_p0``
+# field of the per-step harness compare (Python p0.life=22, Rust
+# p0.life=20).
+#
+# **Other possible CE16 shapes to watch for**:
+#
+#   * Lifelink-fires-on-zero-amount disagreement (Python's guard at
+#     combat.py:486 is ``if amount <= 0: continue``; Rust's plan
+#     filters ``amount > 0`` upstream, so this shape would only
+#     surface if the trample-or-deathtouch composition emitted a
+#     zero-amount entry to either branch — not exercised by this
+#     vanilla-lifelink probe).
+#   * Lifelink + dead-source-source_controller race (Python reads
+#     source_kws + source_controller off the snapshot tuple captured
+#     before apply; Rust reads via
+#     ``battlefield_has_keyword(self, entry.source_id, "lifelink")``
+#     at apply-time. If the source dies in the same pass, the
+#     keyword lookup could miss. The vanilla 2/2-vs-two-2/2 setup
+#     here kills the attacker via back-damage in the same apply
+#     pass — load-bearing surface for the source-died-too-early
+#     edge case).
+#
+# **Setup mirrors deathtouch_selector exactly.** Same
+# multi_blocker_deckspec walk, same step-168 injection point, same
+# side-channel-untap of p1's Bears blockers. The only divergence is the
+# keyword on the injected printing (``lifelink`` instead of
+# ``deathtouch``) and the printing name (``"Bear Cleric"`` instead of
+# ``"Bear Assassin"``).
+# ---------------------------------------------------------------------------
+
+
+# Name of the synthetic lifelink printing injected by
+# :func:`lifelink_side_channel`. Kept module-level so the trigger-
+# detection gate in :func:`lifelink_selector` and the tests can
+# refer to the same name without drift. Distinct from
+# :data:`_FIRST_STRIKE_PRINTING_NAME` and :data:`_DEATHTOUCH_PRINTING_NAME`
+# so the three probes' trigger gates are mutually independent.
+_LIFELINK_PRINTING_NAME = "Bear Cleric"
+
+
+def lifelink_side_channel(py_state, rust_state) -> tuple[int, int]:
+    """Side-channel inject a 2/2 lifelink creature onto BOTH engines'
+    p0 battlefield.
+
+    Mirror of :func:`deathtouch_side_channel` — same shape, same
+    side-channel-untap of p1's Bears blockers, same return contract.
+    The only differences are:
+
+      * The synthetic printing's keyword is ``"lifelink"`` (single
+        token on both engines; same lower-case spelling, no
+        hyphen/space split like first_strike).
+      * The synthetic printing's name is :data:`_LIFELINK_PRINTING_NAME`
+        (``"Bear Cleric"``) so this probe's trigger gate doesn't
+        collide with the deathtouch probe's ``"Bear Assassin"`` gate
+        or the first-strike probe's ``"Bear Knight"`` gate.
+
+    Returns ``(py_obj_id, rust_obj_id)``. Ids match because both
+    engines allocate in lockstep through step 167 of the
+    retaliation walk.
+
+    See :func:`first_strike_side_channel` for the full rationale on
+    why Option B (side-channel inject onto bf) is used rather than
+    Option A (add a lifelink creature to the deckspec). Same
+    reasoning applies: ``CardDef`` doesn't carry a ``keywords``
+    field, so the deckspec route would require multi-file fanout.
+    """
+    from mtg_bot.cards.base import CardPrinting, ManaCost
+    from mtg_bot.game import Zone
+
+    # ---- Python side ----
+    ll_printing = CardPrinting(
+        name=_LIFELINK_PRINTING_NAME,
+        mana_cost_str="",
+        mana_cost=ManaCost(),
+        type_line="Creature",
+        supertypes=(),
+        card_types=("Creature",),
+        subtypes=(),
+        power=2,
+        toughness=2,
+        produces=frozenset(),
+        keywords=frozenset({"lifelink"}),
+    )
+    py_obj = py_state.new_object(
+        ll_printing, owner_id=0, zone=Zone.BATTLEFIELD,
+    )
+    py_obj.summoning_sick = False
+    py_obj.tapped = False
+    py_obj.damage = 0
+    py_obj.etb_timestamp = py_state.next_timestamp
+    py_state.next_timestamp += 1
+    py_state.battlefield.append(py_obj)
+
+    # ---- Rust side ----
+    ZONE_BATTLEFIELD = 2
+    rust_obj_id = rust_state.register_and_inject_object(
+        {
+            "name": _LIFELINK_PRINTING_NAME,
+            "card_types": ["Creature"],
+            "power": 2,
+            "toughness": 2,
+            "keywords": ["lifelink"],
+        },
+        0,
+        ZONE_BATTLEFIELD,
+    )
+
+    # Side-channel untap of p1's Bears blockers (same rationale as
+    # deathtouch_side_channel / first_strike_side_channel — p1's bears
+    # are still tapped from their turn-12 attack, and the multi-block
+    # branch we want to exercise requires them to be eligible
+    # blockers).
+    for obj in py_state.battlefield:
+        if (
+            obj.controller_id == 1
+            and obj.printing.name == "Grizzly Bears"
+        ):
+            obj.tapped = False
+    for entry in rust_state.battlefield_snapshot():
+        if (
+            entry["controller_id"] == 1
+            and entry["printing_name"] == "Grizzly Bears"
+        ):
+            rust_state.untap_object(int(entry["id"]))
+    return int(py_obj.id), int(rust_obj_id)
+
+
+def lifelink_selector(py_state, rust_state, step_index: int) -> dict:
+    """Cross-engine smoke selector that drives a lifelink + multi-block
+    combat on :func:`multi_blocker_deckspec`.
+
+    Structurally identical to :func:`deathtouch_selector` —
+    delegates to :func:`retaliation_selector` for everything before
+    and after the side-channel injection, and side-channel-injects a
+    lifelink attacker at the same step-168 trigger point. The only
+    differences:
+
+      * The injected creature carries ``lifelink`` instead of
+        ``deathtouch``.
+      * The trigger gate keys on :data:`_LIFELINK_PRINTING_NAME`
+        (``"Bear Cleric"``) — same gate shape, different name.
+
+    Expected walk shape:
+
+      * **Steps 0-167** — identical to retaliation_selector's walk.
+      * **Step 168** — lifelink injection fires; selector returns
+        ``pass_priority``.
+      * **Steps 169-N** — retaliation_selector delegate drives
+        DECLARE_ATTACKERS([14 = lifelink attacker]),
+        DECLARE_BLOCKERS([[11, 14], [9, 14]]) (multi-block branch
+        because both Bears are now untapped + unsick), COMBAT_DAMAGE
+        (where the lifelink life gain surfaces — both engines should
+        gain 2 on p0 from the 2 damage assigned to the first blocker).
+
+    The selector is stateless — same idempotency guarantee as
+    deathtouch_selector: post-injection, the trigger gate flips
+    permanently because the Bear Cleric object stays in some zone
+    (bf or gy).
+    """
+    ll_already_injected = any(
+        obj.printing.name == _LIFELINK_PRINTING_NAME
+        for obj in py_state.battlefield
+    ) or any(
+        obj.printing.name == _LIFELINK_PRINTING_NAME
+        for p in py_state.players
+        for zone_list in (p.hand, p.library, p.graveyard, p.exile)
+        for obj in zone_list
+    )
+
+    if not ll_already_injected:
+        creature_count = sum(
+            1 for o in py_state.battlefield
+            if "Creature" in o.printing.card_types
+        )
+        if creature_count >= 3:
+            lifelink_side_channel(py_state, rust_state)
+            return {"kind": "pass_priority"}
+
+    return retaliation_selector(py_state, rust_state, step_index)
