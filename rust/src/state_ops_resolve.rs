@@ -1123,6 +1123,20 @@ fn apply_effect(
         // ``saturating_add`` here on each player's battlefield,
         // mirroring how round-3 DealDamage / round-15 AddCounters
         // inline their primitives for the same E0624 cross-file reason.
+        //
+        // **bf-ETB iteration (I33 closure).** Visit order matches
+        // Python's centralized `state.battlefield` walk via the shared
+        // `crate::bf_iter::bf_iter_etb_sorted` helper. Outcome is
+        // order-invariant for damage marking (each eligible creature
+        // gets `+amount` exactly once via the saturating_add), so the
+        // observable post-state is identical pre- and post-closure on
+        // every existing fixture. The change is pre-emptive: visit
+        // order becomes load-bearing when the future trigger emitter
+        // (CE8 substrate) walks the same victims to push
+        // damage-trigger / death-trigger stack items — at that point
+        // the relative emission order must mirror Python's centralized
+        // walk for cross-engine smoke parity. See I33 in
+        // `docs/RUST_PARITY_GAPS.md`.
         Effect::DamageEachCreature { amount } => {
             if *amount < 0 {
                 return Err(PyValueError::new_err(format!(
@@ -1130,30 +1144,31 @@ fn apply_effect(
                 )));
             }
             let amount_i16 = (*amount).min(i16::MAX as i32) as i16;
-            // Snapshot which obj_ids on each player's battlefield are
-            // creatures BEFORE mutating, so we drop the registry borrow
-            // before reaching for ``Arc::make_mut`` on the zone Vec.
-            for pidx in 0..state.players.len() {
-                let creature_ids: Vec<u32> = state.players[pidx]
-                    .battlefield
-                    .iter()
-                    .filter_map(|obj| match state.registry.lookup(obj.printing_id) {
-                        Some(printing)
-                            if printing.card_types.iter().any(|t| t == "Creature") =>
-                        {
-                            Some(obj.id)
-                        }
-                        _ => None,
-                    })
-                    .collect();
-                if creature_ids.is_empty() {
-                    continue;
-                }
+            // Collect (controller_idx, obj_id) for every Creature on
+            // either bf in bf-ETB-timestamp order, so the per-player
+            // mutating pass below applies damage in the same order
+            // Python's centralized `state.battlefield` walk emits.
+            let victims: Vec<(usize, u32)> = crate::bf_iter::bf_iter_etb_sorted(state)
+                .into_iter()
+                .filter_map(|obj| {
+                    let printing = state.registry.printings.get(obj.printing_id as usize)?;
+                    if printing.card_types.iter().any(|t| t == "Creature") {
+                        Some((obj.controller as usize, obj.id))
+                    } else {
+                        None
+                    }
+                })
+                .collect();
+            if victims.is_empty() {
+                return Ok(());
+            }
+            for (pidx, target_id) in victims {
                 let bf_mut: &mut Vec<GameObject> =
                     Arc::make_mut(&mut state.players[pidx].battlefield);
                 for obj in bf_mut.iter_mut() {
-                    if creature_ids.contains(&obj.id) {
+                    if obj.id == target_id {
                         obj.damage = obj.damage.saturating_add(amount_i16);
+                        break;
                     }
                 }
             }
@@ -2349,52 +2364,55 @@ fn apply_effect(
         // Round-24: DestroyAllCreatures. CR 701.7 + 701.4 AOE — Wrath
         // of God pattern. Destroys every creature on the battlefield
         // (both players), honoring indestructible (CR 702.12) inline.
+        // **bf-ETB iteration (I33 closure).** The victim-collection
+        // walk uses the shared `crate::bf_iter::bf_iter_etb_sorted`
+        // helper so destroyable creatures are enumerated in Python's
+        // centralized `state.battlefield` (ETB-monotone) order rather
+        // than p0-then-p1 per-player order. Outcome is order-invariant:
+        // each destroyable creature ends up in its OWN controller's
+        // graveyard regardless of visit order, and per-controller
+        // graveyard insertion order is preserved (Python's centralized
+        // walk filtered to a single controller produces the same
+        // per-controller sequence as the per-player walk did). The
+        // change is pre-emptive: visit order becomes load-bearing for
+        // future death-trigger emission (CE8 substrate). See I33 in
+        // `docs/RUST_PARITY_GAPS.md`.
         Effect::DestroyAllCreatures => {
             let _ = source_obj_id; // implicit-target AOE; source not relevant
-            let mut any_destroyed = false;
-            for pidx in 0..state.players.len() {
-                let destroyable_ids: Vec<u32> = state.players[pidx]
-                    .battlefield
-                    .iter()
-                    .filter_map(|obj| {
-                        let printing = state.registry.lookup(obj.printing_id)?;
-                        if !printing.card_types.iter().any(|t| t == "Creature") {
-                            return None;
-                        }
-                        if printing.keywords.iter().any(|k| k == "indestructible") {
-                            return None;
-                        }
-                        Some(obj.id)
-                    })
-                    .collect();
-                if destroyable_ids.is_empty() {
-                    continue;
-                }
-                any_destroyed = true;
+            // Collect (controller_idx, obj_id) for every destroyable
+            // Creature on either bf in bf-ETB-timestamp order, then
+            // pop from each controller's bf and push into their
+            // graveyard.
+            let destroyable: Vec<(usize, u32)> = crate::bf_iter::bf_iter_etb_sorted(state)
+                .into_iter()
+                .filter_map(|obj| {
+                    let printing = state.registry.lookup(obj.printing_id)?;
+                    if !printing.card_types.iter().any(|t| t == "Creature") {
+                        return None;
+                    }
+                    if printing.keywords.iter().any(|k| k == "indestructible") {
+                        return None;
+                    }
+                    Some((obj.controller as usize, obj.id))
+                })
+                .collect();
+            let any_destroyed = !destroyable.is_empty();
+            for (pidx, target_id) in destroyable {
                 let bf_mut: &mut Vec<GameObject> =
                     Arc::make_mut(&mut state.players[pidx].battlefield);
-                let mut destroyed: Vec<GameObject> =
-                    Vec::with_capacity(destroyable_ids.len());
-                bf_mut.retain(|obj| {
-                    if destroyable_ids.contains(&obj.id) {
-                        destroyed.push(obj.clone());
-                        false
-                    } else {
-                        true
-                    }
-                });
-                let gy_mut: &mut Vec<GameObject> =
-                    Arc::make_mut(&mut state.players[pidx].graveyard);
-                for mut obj in destroyed {
-                    obj.zone = ZONE_GRAVEYARD;
-                    obj.tapped = false;
-                    obj.summoning_sick = false;
-                    obj.damage = 0;
-                    obj.counters = 0;
-                    obj.attached_to = None;
-                    obj.exiled_with_source = None;
-                    gy_mut.push(obj);
-                }
+                let pos = match bf_mut.iter().position(|o| o.id == target_id) {
+                    Some(p) => p,
+                    None => continue, // defensively skip — should never miss
+                };
+                let mut obj = bf_mut.remove(pos);
+                obj.zone = ZONE_GRAVEYARD;
+                obj.tapped = false;
+                obj.summoning_sick = false;
+                obj.damage = 0;
+                obj.counters = 0;
+                obj.attached_to = None;
+                obj.exiled_with_source = None;
+                Arc::make_mut(&mut state.players[pidx].graveyard).push(obj);
             }
             // Round-29 Void LTB: DestroyAllCreatures is filtered to
             // Creature-typed permanents only, which are nonland by

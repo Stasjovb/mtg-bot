@@ -1571,6 +1571,97 @@ them to call the helper is a follow-up housekeeping pass.
   test. The current write site stays as-is at that point; only
   the trigger-emitter call site composes around it.
 
+### I33. Mass-effect resolve arms walk battlefield in bf-ETB-timestamp order via shared `bf_iter_etb_sorted` helper
+
+- **Pinned by**:
+  `tests_rust/test_resolve.py::test_resolve_damage_each_creature_bf_etb_interleaved`,
+  `test_resolve_destroy_all_creatures_bf_etb_interleaved`,
+  `test_resolve_destroy_all_creatures_bf_etb_indestructible_interleaved`.
+
+- **Invariant** (closes pre-emptive parity for two MEDIUM-risk mass-
+  effect sites in `state_ops_resolve.rs` flagged by
+  `docs/RUST_BF_ITERATION_AUDIT.md` § 4 R3-adjacent shape, per
+  `feature/bf-iter-resolve-arms`). Post-closure, both arms iterate
+  every Creature on either battlefield via the centralized
+  `crate::bf_iter::bf_iter_etb_sorted` helper rather than walking
+  `for pidx in 0..state.players.len()` per-player Vec order:
+
+  1. `Effect::DamageEachCreature` — collects every Creature's
+     `(controller_idx, obj_id)` pair from the helper, then applies
+     `damage = damage.saturating_add(amount)` to each via a
+     per-controller `Arc::make_mut` mutating pass. Damage marking is
+     idempotent, so the OUTCOME is bit-identical pre- and post-closure
+     on every existing fixture (28 prior tests stay green); the
+     change is pre-emptive for future trigger emission order
+     (CE8 substrate).
+
+  2. `Effect::DestroyAllCreatures` — collects every destroyable
+     (Creature, non-indestructible) `(controller_idx, obj_id)` pair
+     from the helper, then pops each from its controller's bf and
+     pushes into that controller's graveyard with CR 400.7 zone-
+     change reset. Per-controller graveyard contents stay identical
+     pre- and post-closure (the centralized walk filtered to a
+     single controller produces the same per-controller sequence as
+     the prior per-player walk did), so the existing 9 pinned tests
+     for DestroyAllCreatures stay bit-equal. The Round-29 Void LTB
+     flag (`state.permanent_left_battlefield_this_turn`) is still
+     set once if any creature was destroyed.
+
+  Mirrors Python's `effects/generic/damage.py:DealNDamageToEachCreature`
+  victim collection
+  (`victims = [o for o in state.battlefield if o.printing.is_creature]`)
+  and `effects/generic/destroy.py:DestroyAllCreatures.resolve`
+  (`for obj in state.battlefield if obj.printing.is_creature: destroy(...)`)
+  walks against the centralized `state.battlefield` ETB-monotone order.
+
+- **Why a shared helper instead of inlining**: same rationale as
+  I27 (SBA victim collection) and I30 (cross-player find-first). The
+  post-CE4 abstraction step is to centralize every "walk both
+  players' bfs in ETB order" reader through `bf_iter_etb_sorted`.
+  Today's consumers post-I33: `collect_sba_victims` (I27),
+  `Effect::TapAnotherTargetCreature` (I30),
+  `Effect::UntapTargetOtherPermanent` (I30), `deal_combat_damage`
+  (I31 — both call sites), `Effect::DamageEachCreature` (this
+  invariant), `Effect::DestroyAllCreatures` (this invariant). The
+  future trigger emitter is gated on CE8 substrate.
+
+- **Why pre-emptive, not probe-surfaced**: the damage / destroy
+  outcomes are order-invariant (each eligible Creature gets `+amount`
+  exactly once / ends up in its own owner's graveyard exactly once),
+  so today's parity smoke harness does NOT observe a divergence
+  through these two sites — the change is for future-proofing when
+  CE8's trigger emitter lands and visit order becomes load-bearing
+  for stack-pushed damage / death triggers. Closing while the
+  `bf_iter_etb_sorted` helper pattern is established (I27 / I30 /
+  I31 precedent) saves a future probe-close-probe round once
+  triggers exist.
+
+- **Tie-break invariant**: synthetic-state fixtures with default-0
+  ETB timestamps preserve the pre-closure p0-then-p1 walk via the
+  helper's stable sort, keeping pre-I33 pinned baselines bit-equal.
+  Real ETB-driven flows produce strictly-monotonic timestamps and
+  the helper emits the ETB-interleaved order Python's
+  `state.battlefield` walk emits. The three new pinning tests use
+  `register_and_inject_object` to drive strictly-monotonic ETB
+  stamps interleaved across both players (p0_old → p1_mid →
+  p0_new → p1_new) to exercise the non-trivial direction.
+
+- **Out of scope for this slice**: 
+  - Other R3-cluster single-controller find-first arms in
+    `state_ops_resolve.rs` (e.g. `PumpCreaturesYouControlUntilEOT`,
+    `PutPlusOneCounterOnEachCreatureYouControl`) — single-player
+    walks are parity-safe under CE4's intra-player-monotone
+    timestamps (audit § 4 R6 LOW classification).
+  - "Defender-only" find-first arms (DestroyTargetNonlandPermanent,
+    DestroyTargetArtifact, DestroyTargetLand, TapTargetArtifactOrCreature)
+    walk only `state.players[defender_idx].battlefield` for their
+    first eligible target. These pick a wrong-player target relative
+    to Python's `~IsLand() & ~IsPlayer()` (etc.) any-bf filter, but
+    that's a TARGETING semantics divergence beyond the ETB tie-break
+    question — handled by the broader target-resolution rewrite
+    in `docs/SEARCH_LIMITATIONS.md`'s first-slice deterministic
+    target deferral, not this invariant.
+
 ### ~~CE5.~~ CLOSED: `cast_spell` cross-engine parity via harness-side `resolve_top_of_stack_python` mirror
 
 Closed by the CE5 closure slice (`feature/ce5-cast-resolve`).
