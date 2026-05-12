@@ -351,7 +351,7 @@ refactor on either side that breaks the parity surfaces immediately.
   determines the skip in a two-player game). Closes parity gap G14
   (entry removed from "Confirmed gaps" above).
 
-### I19. Empty-library draw flags the player; `apply_sbas` locks the loss into the sticky `has_lost`
+### I19. Empty-library draw flags the player; `apply_sbas` locks the loss into the sticky `has_lost`; surface accessors (`is_over` / `winner_id` / `is_draw`) are SBA-gated
 
 - **Pinned by**:
   `tests_rust/test_library.py::test_drawcards_from_empty_library_marks_player_for_loss_on_next_sba`,
@@ -359,8 +359,12 @@ refactor on either side that breaks the parity surfaces immediately.
   `tests_rust/test_zones.py::test_draw_card_from_empty_library_returns_none`
   (no-crash + cause-signal side-effect),
   `tests_rust/test_winloss.py::test_explicit_lose_game_marks_player`,
-  `test_each_opponent_loses_life_lethal_then_sba_locks_the_loss`.
-- **Invariant** (CR 704.5b / CR 104.2 — round-26 G10 + G11 closure):
+  `test_each_opponent_loses_life_lethal_then_sba_locks_the_loss`,
+  `test_winner_id_pre_sba_stale_matches_python_semantics`,
+  `test_is_over_winner_id_eager_for_empty_library_draw_via_pure_derivation`.
+- **Invariant** (CR 704.5b / CR 104.2 — round-26 G10 + G11 closure,
+  refined by CE10 CE-pure-derivation-is_over): two parallel API
+  layers on the winloss surface.
   - The `draw_card` primitive, the `Effect::DrawCards` resolution
     arm, AND `advance_phase`'s auto-draw step (the
     `draw_card_inline` mirror used on entry to PHASE_DRAW — see
@@ -370,11 +374,27 @@ refactor on either side that breaks the parity surfaces immediately.
     side-effect so a player who decks out via ANY draw path
     (cast spell that resolves DrawCards, side-channel pymethod
     call, or auto-draw at start of their turn) gets flagged.
-  - `losers()` returns a player if **any** of the OR'd-three signals
-    are true: `has_lost`, `attempted_draw_on_empty`, or `life <= 0`.
-    Read directly (no SBA pass required) so the loss is observable
-    eagerly — mirrors Python's `p.has_lost = True` in
-    `turn.draw_card`.
+  - **Layer 1 — eager / cause-flags-driven** (the Rust-native
+    API, unchanged from G10): `losers()` returns a player if
+    **any** of the OR'd-three signals are true: `has_lost`,
+    `attempted_draw_on_empty`, or `life <= 0`. Read directly (no
+    SBA pass required) so the loss is observable eagerly. `winner()`
+    and `is_game_over()` use the same OR'd-three predicate. This
+    layer mirrors Python's eager `p.has_lost = True` in
+    `turn.draw_card` — both engines can observe the cause-flag
+    side-effect immediately.
+  - **Layer 2 — SBA-gated / Python-named API** (the surface
+    accessors, refined by CE10): `is_over()`, `state.winner_id`
+    (getter), `state.is_draw` (getter) read ONLY from the sticky
+    `Player.has_lost` flag. They match Python's identically-named
+    fields exactly: Python's `winner_id` and `is_draw` are written
+    only by `apply_state_based_actions` (`turn.py` lines 1384-1392),
+    and `is_over` reads them. Pre-CE10, Rust's surface used the
+    same eager OR'd-three predicate as Layer 1; that surfaced as a
+    cross-engine smoke divergence on empty-library draws (the
+    smoke harness doesn't fire SBAs between steps). Post-CE10,
+    Layer 2 is SBA-gated, so both engines stay stale on the
+    surface until `apply_sbas` commits the loss.
   - `apply_sbas` transitions the cause-signals (`attempted_draw_on_empty`
     OR `life <= 0`) into the sticky `Player.has_lost = true`. Once
     `has_lost` is set, no `gain_life` can revive the player. The
@@ -385,9 +405,13 @@ refactor on either side that breaks the parity surfaces immediately.
     UNTIL `apply_sbas` runs (so `set_life(0, 0); gain_life(0, 5)`
     without an SBA pass in between still flips the player back out of
     `losers()` — see `test_gain_life_from_zero_revives_player`).
+    Layer 2 stays stale through this revive sequence (no SBA fired
+    — `has_lost` not set).
   - The explicit `lose_game(p)` primitive (Phage / Bargain) sets
     `has_lost` directly without going through SBA — useful for
     "you lose the game" cards where life is not the trigger.
+    Because it writes `has_lost` directly, it flips BOTH layers
+    in one call (the only path that does so without an SBA pass).
 
 ### I20. `advance_phase` fully composes phase-boundary side effects (CR 106.4 / 514.1 / 514.2)
 
@@ -1297,20 +1321,159 @@ The counter `state.next_etb_timestamp` and the per-object slot
     gate but drops the `is_creature_now` guard. One-line fix
     on the Rust side; document as a G<n> entry alongside the
     CE5 closure when both flow together.
-  - **Rust marks game-over eagerly on empty-library draw.** At
-    step 119 (turn 10 ap=1 DRAW) Rust's `is_over` flips to
-    True with `winner_id=0` because p1 drew from an empty
-    library and the I19 `attempted_draw_on_empty` signal
-    short-circuits `losers()` without waiting for an SBA pass.
-    Python's `is_over()` returns False until SBAs run. This is
-    documented as I19 (the eager-loss invariant is intentional
-    on the Rust side) but the timing divergence relative to
-    Python's SBA-deferred loss is observable on multi-turn
-    cross-engine smoke and could be its own CE<n> if a future
-    slice wants tighter timing parity.
+  - **Rust marks game-over eagerly on empty-library draw.**
+    CLOSED as CE10 (CE-pure-derivation-is_over) — see entry below.
+    The cross-engine smoke at step 119 (turn 10 ap=1 DRAW) used
+    to surface `is_over=True`/`winner_id=0` on Rust while Python
+    stayed `False`/`None`; post-CE10, Rust's surface `is_over`/
+    `winner_id`/`is_draw` are SBA-gated and match Python's
+    SBA-written fields. The eager pure-derivation predicate
+    stays available via `losers()`/`winner()`/`is_game_over()`
+    for callers that need pre-SBA loss observability.
 
 (Other smoke-flagged divergences may be added by follow-up Phase 5
 slices as the deck pool / decision script grows.)
+
+### ~~CE10.~~ CLOSED: `is_over` / `winner_id` / `is_draw` surface accessors are SBA-gated (matching Python's SBA-written fields)
+
+> **Numbering note.** Skipping CE6-CE9 deliberately. The
+> `docs/CE5_CE6_CE7_CLOSURE_PLAYBOOK.md` reserved CE5-CE7 for the
+> SBA-victim-collection / damage-assignment / target-pick sequence
+> based on the ORDER_SENSITIVE_SURFACES.md audit's ranked
+> predictions. The cast_bears_selector probe surfaced a different
+> divergence first (the cast-vs-resolve gap, also currently numbered
+> CE5 — a separate in-flight renumbering will resolve the collision).
+> CE-pure-derivation-is_over was surfaced informally by the Phase-5
+> edge-case slice and pinned by strict-xfail in
+> `tests/test_parity_smoke_edge_cases.py`; the retro doc ranked it
+> as priority #2 for the next session. Jumping to CE10 here leaves
+> CE6-CE9 free for the playbook's pre-staged slices and any
+> renumbering fallout from the cast-vs-resolve collision.
+
+Closed by `feature/ce-pure-derivation-is-over` (this slice). The
+pre-closure Rust implementation of the three Python-named surface
+accessors used the same eager OR'd-three predicate as the Rust-native
+`losers()` / `winner()` / `is_game_over()` API:
+
+```rust
+fn is_over(&self) -> bool {
+    self.is_game_over()  // OR'd-three across both players
+}
+#[getter]
+fn winner_id(&self) -> Option<u8> {
+    self.winner()  // OR'd-three with the unique-survivor short-circuit
+}
+#[getter]
+fn is_draw(&self) -> bool {
+    // OR'd-three on both players simultaneously
+}
+```
+
+Python's same-named fields (`GameState.is_over`, `GameState.winner_id`,
+`GameState.is_draw`) are written ONLY by
+`turn.apply_state_based_actions` (lines 1383-1393). The cross-engine
+smoke harness (`scripts/parity_smoke.py`, `tests/test_parity_smoke*.py`)
+does NOT fire SBAs between decision steps, so an empty-library
+side-channel `draw_card` surfaced a NOVEL divergence: Rust's
+`attempted_draw_on_empty` cause-flag eagerly flipped `is_over` to
+True / `winner_id` to the opponent, while Python's `winner_id` field
+stayed `None` because no SBA wrote to it. The cause-flag side
+(`has_lost` on Python, `attempted_draw_on_empty` on Rust) agreed; the
+surface accessors diverged.
+
+Pinned by (now-passing, was strict-xfail):
+
+- `tests/test_parity_smoke_edge_cases.py::test_cross_engine_empty_library_side_channel_draw_walks_clean`
+  — empty-library side-channel draw via `play_a_land_selector`,
+  walks parity-clean at N=2 steps.
+- `tests/test_parity_smoke_edge_cases.py::test_cross_engine_single_card_libraries_multi_turn_walks_clean`
+  — 1-card libraries via `multi_turn_selector`, walks parity-clean
+  at N=100 steps after both engines deplete their libraries by
+  turn 3 and the inline auto-draw fires on subsequent DRAW steps.
+
+Also pinned by the post-closure shape on the companion symptom test:
+
+- `test_cross_engine_empty_library_side_channel_draw_post_closure_both_engines_stay_stale`
+  — inverted from its pre-closure shape, now asserts that both
+  engines stay stale on the surface (no SBA fired) and that
+  `is_over` / `winner_id` are absent from the divergence set.
+
+**The closure.** Rust's `is_over` / `winner_id` / `is_draw` getters
+in `rust/src/state_ops_winloss.rs` now read ONLY from the sticky
+`Player.has_lost` flag, mirroring Python's surface exactly:
+
+```rust
+fn is_over(&self) -> bool {
+    self.players[0].has_lost || self.players[1].has_lost
+}
+#[getter]
+fn winner_id(&self) -> Option<u8> {
+    match (p0.has_lost, p1.has_lost) {
+        (false, true) => Some(p0.id),
+        (true, false) => Some(p1.id),
+        _ => None,
+    }
+}
+#[getter]
+fn is_draw(&self) -> bool {
+    self.players[0].has_lost && self.players[1].has_lost
+}
+```
+
+The Rust-native API stays unchanged: `losers()`, `winner()`,
+`is_game_over()`, and `is_player_alive()` still use the eager OR'd-three
+predicate (`has_lost || attempted_draw_on_empty || life <= 0`) so
+callers that need pre-SBA loss observability — notably `apply_sbas`
+itself, which folds cause-flags into the sticky `has_lost` — keep
+their existing semantics. See I19 ("Empty-library draw flags the
+player...") for the full two-layer invariant.
+
+**Why Option A (modify Rust) over Option B (modify Python).** Python
+is the reference per `docs/RUST_PARITY_PLAN.md` ("Python is the source
+of truth; Rust mirrors"); modifying Python risks downstream churn in
+search, training, and the 7000+ Python test suite. Modifying Rust is
+the smaller surface — three method bodies — and lands the parity
+without touching the well-tested Python pathway.
+
+**Tests updated.** Three existing Rust tests pinned the pre-closure
+eager-surface behavior; they were updated in-place to either (a)
+call `apply_sbas_until_quiescent` to commit the loss before asserting
+on `winner_id`, or (b) switch to the eager `winner()` / `is_game_over()`
+API where the test's intent was eager-cause-flag observability:
+
+- `tests_rust/test_library.py::test_drawcards_from_empty_library_marks_player_for_loss_on_next_sba`
+- `tests_rust/test_library.py::test_drawcards_count_larger_than_library_drains_then_loses_on_sba`
+- `tests_rust/test_steps.py::test_advance_phase_auto_draw_on_empty_library_flags_attempted_draw`
+
+Plus seven tests in `tests_rust/test_winloss.py` under the "Python-
+compatible outcome getters" heading were rewritten to pin the new
+SBA-gated semantics (renamed with `_sba_gated` suffix where helpful;
+two new tests added pinning the parity-critical pre-SBA-stale
+contract): `test_is_over_sba_gated_one_dead_via_set_life_then_sba`,
+`test_is_over_sba_gated_both_dead_via_set_life_then_sba`,
+`test_is_draw_all_four_shapes_sba_gated`,
+`test_winner_id_all_four_shapes_sba_gated`,
+`test_winner_id_pre_sba_stale_matches_python_semantics`,
+`test_is_over_winner_id_eager_for_empty_library_draw_via_pure_derivation`,
+`test_revive_via_gain_life_pre_sba_clears_eager_loss`.
+
+**Fingerprint baselines unaffected.** The `fingerprint()` method
+inlines its own `life <= 0`-based predicate (see
+`state_ops_fingerprint.rs:295-304`), not the surface accessors, so
+the closure doesn't shift any pinned fingerprint baseline. The
+fingerprint's eager predicate matches Python's `hash_state` recipe
+shape (which reads Python's `is_over()` field-view at hash time, NOT
+a synthetic re-derivation) — that recipe was always cause-flag-driven
+because Python's stack/UI tests run SBAs before hashing. Cross-engine
+fingerprint byte-equality stays out of scope (see the module
+docstring's "Cross-engine parity scope" — Python's `mana_pool` shape
+diverges).
+
+**Composes with** I19 (the I-invariant that documents the two-layer
+API split) and with future SBA-driven slices (death-trigger emission,
+the trigger-queue mirror) which will keep using the eager `losers()` /
+`winner()` API to detect cause-flags-driven loss before SBA writes
+`has_lost`.
 
 ---
 
