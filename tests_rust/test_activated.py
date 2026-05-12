@@ -37,6 +37,33 @@ ZONE_BATTLEFIELD = 2
 ZONE_GRAVEYARD = 3
 
 
+def _tap_all_default_p0_mana_sources(synthetic_state):
+    """Tap every default-mana-producing object on p0's battlefield.
+
+    Post-I49 (auto-tap-from-lands composer), `legal_decisions`
+    affordability widens to include untapped mana sources on bf.
+    The synthetic state's default `make_synthetic_state(10, 7, 50)`
+    pre-seeds p0 with 5 Forests (mana_produced=["G"]) on the
+    battlefield, which compose to 5 G of headroom.
+
+    Tests that want to isolate the affordability check to a SPECIFIC
+    pool state (e.g. "pool is empty, prove the ability does NOT
+    emit") must first tap out those default Forests so the headroom
+    composer can't silently cover the cost.
+
+    Tapping a non-mana-producing source (Grizzly Bears) is harmless;
+    we tap every untapped p0 object whose printing has
+    `mana_produced`.
+    """
+    for obj in synthetic_state.battlefield_snapshot():
+        if obj.get("controller_id") != 0:
+            continue
+        if obj.get("tapped"):
+            continue
+        if obj.get("printing_name") in ("Forest", "Llanowar Elves"):
+            synthetic_state.tap_object(obj["id"])
+
+
 def _bear_caster_dict():
     """A 2/2 creature with the activated ability
     ``{1}{G}, {T}: Draw a card``. is_mana_ability=False so the ability
@@ -328,11 +355,19 @@ def test_bear_caster_emits_activate_when_affordable(synthetic_state):
 
 def test_bear_caster_no_emission_when_unaffordable(synthetic_state):
     """``legal_decisions`` does NOT emit ActivateAbility(bear, 0)
-    when p0's mana pool can't cover {1}{G}."""
+    when p0's mana pool can't cover {1}{G}.
+
+    Post-I49: the auto-tap-from-lands composer widens emission-side
+    affordability to include untapped mana sources on bf, so this
+    test must first tap out the synthetic state's default Forests
+    to force the composer to return an empty headroom — only then
+    does the pool-empty branch dominate.
+    """
     bear_id = synthetic_state.register_and_inject_object(
         _bear_caster_dict(), 0, ZONE_BATTLEFIELD,
     )
     synthetic_state.force_set_summoning_sick(bear_id, False)
+    _tap_all_default_p0_mana_sources(synthetic_state)
     synthetic_state.empty_mana_pool(0)
 
     # Park into PRECOMBAT_MAIN so the sorcery-timing gate is open
@@ -401,4 +436,200 @@ def test_bear_caster_no_emission_when_summoning_sick(synthetic_state):
     assert bear_emits == [], (
         f"Bear Caster should NOT emit ActivateAbility when summoning-"
         f"sick (CR 302.1 tap_self gate). Got {bear_emits}"
+    )
+
+
+# --- auto-tap-from-lands headroom composer (I49) -------------------
+
+
+def _forest_dict():
+    """Vanilla Forest — non-creature land with `mana_produced=["G"]`.
+    Mirrors the synthetic-state Forest baked into `state.rs:1462`.
+    """
+    return {
+        "name": "Forest",
+        "card_types": ["Land"],
+        "mana_produced": ["G"],
+    }
+
+
+def test_auto_tap_headroom_emits_with_empty_pool_plus_untapped_forests(
+    synthetic_state,
+):
+    """**I49 load-bearing pin.** Bear Caster's `{1}{G}` cost is
+    affordable via auto-tap-from-lands headroom: empty pool + 2
+    untapped Forests on p0's bf compose to `{G}{G}` of headroom,
+    which covers `{1}{G}` (1 G colored + 1 generic paid by the
+    second G).
+
+    Pre-closure (pool-only `pool_can_cover`): emission skipped
+    because the floating pool is empty.
+    Post-closure (`auto_tap_headroom_pool` composer): emission
+    fires because pool + 2-Forest headroom covers the cost.
+    """
+    # Start from a battlefield where ONLY the 2 Forests we inject
+    # contribute headroom (tap out the synthetic state's default
+    # mana sources first).
+    _tap_all_default_p0_mana_sources(synthetic_state)
+    bear_id = synthetic_state.register_and_inject_object(
+        _bear_caster_dict(), 0, ZONE_BATTLEFIELD,
+    )
+    synthetic_state.force_set_summoning_sick(bear_id, False)
+    # 2 untapped Forests on p0's bf (default non-sick on injection).
+    synthetic_state.register_and_inject_object(
+        _forest_dict(), 0, ZONE_BATTLEFIELD,
+    )
+    synthetic_state.register_and_inject_object(
+        _forest_dict(), 0, ZONE_BATTLEFIELD,
+    )
+    synthetic_state.empty_mana_pool(0)
+
+    synthetic_state.set_phase(3)  # PRECOMBAT_MAIN
+    actions = synthetic_state.legal_decisions(0)
+    bear_emits = [
+        a for a in actions
+        if a.get("kind") == "activate_ability"
+        and a.get("source_id") == bear_id
+    ]
+    assert len(bear_emits) == 1, (
+        f"Bear Caster should emit ActivateAbility when 2 untapped "
+        f"Forests cover {{1}}{{G}} via auto-tap headroom. Got "
+        f"{len(bear_emits)} emissions; full action list: {actions}"
+    )
+
+
+def test_auto_tap_headroom_no_emission_with_empty_pool_no_lands(
+    synthetic_state,
+):
+    """Bear Caster with empty pool AND no mana sources on bf: no
+    headroom to compose, no emission. Anchors the "we still skip
+    when there's truly nothing to pay with" branch.
+    """
+    # Tap out the synthetic state's default Forests so the composer
+    # genuinely sees zero headroom.
+    _tap_all_default_p0_mana_sources(synthetic_state)
+    bear_id = synthetic_state.register_and_inject_object(
+        _bear_caster_dict(), 0, ZONE_BATTLEFIELD,
+    )
+    synthetic_state.force_set_summoning_sick(bear_id, False)
+    synthetic_state.empty_mana_pool(0)
+
+    synthetic_state.set_phase(3)
+    actions = synthetic_state.legal_decisions(0)
+    bear_emits = [
+        a for a in actions
+        if a.get("kind") == "activate_ability"
+        and a.get("source_id") == bear_id
+    ]
+    assert bear_emits == [], (
+        f"Bear Caster should NOT emit ActivateAbility with empty pool "
+        f"and zero mana sources on bf. Got {bear_emits}"
+    )
+
+
+def test_auto_tap_headroom_excludes_tapped_lands(synthetic_state):
+    """Tapped Forests don't contribute headroom — a tapped land can't
+    be tapped again to produce mana. Pool empty + 2 TAPPED Forests:
+    Bear Caster emission skipped.
+    """
+    # Tap out the default Forests first; then inject 2 Forests
+    # explicitly and tap them too. The composer should see zero
+    # headroom because every mana source on the bf is tapped.
+    _tap_all_default_p0_mana_sources(synthetic_state)
+    bear_id = synthetic_state.register_and_inject_object(
+        _bear_caster_dict(), 0, ZONE_BATTLEFIELD,
+    )
+    synthetic_state.force_set_summoning_sick(bear_id, False)
+    f1 = synthetic_state.register_and_inject_object(
+        _forest_dict(), 0, ZONE_BATTLEFIELD,
+    )
+    f2 = synthetic_state.register_and_inject_object(
+        _forest_dict(), 0, ZONE_BATTLEFIELD,
+    )
+    synthetic_state.tap_object(f1)
+    synthetic_state.tap_object(f2)
+    synthetic_state.empty_mana_pool(0)
+
+    synthetic_state.set_phase(3)
+    actions = synthetic_state.legal_decisions(0)
+    bear_emits = [
+        a for a in actions
+        if a.get("kind") == "activate_ability"
+        and a.get("source_id") == bear_id
+    ]
+    assert bear_emits == [], (
+        f"Bear Caster should NOT emit ActivateAbility when all Forests "
+        f"are tapped (zero headroom). Got {bear_emits}"
+    )
+
+
+def test_auto_tap_headroom_gates_on_source_sickness_not_land_sickness(
+    synthetic_state,
+):
+    """CR 302.1 summoning-sickness gate applies to the SOURCE of the
+    tap-cost activation, not the mana-source lands. A summoning-sick
+    Bear Caster can't pay its own tap_self cost even when 2 untapped
+    Forests are available — the gate fires on the Bear, not on the
+    Forests. Pool empty + Bear sick + 2 untapped Forests: emission
+    skipped.
+    """
+    # The 2 Forests we inject DO contribute headroom; the gate that
+    # blocks emission is the source's own summoning-sickness, not
+    # the composer's pool-coverage check.
+    _tap_all_default_p0_mana_sources(synthetic_state)
+    bear_id = synthetic_state.register_and_inject_object(
+        _bear_caster_dict(), 0, ZONE_BATTLEFIELD,
+    )
+    # Bear is sick — can't pay its own tap_self.
+    synthetic_state.force_set_summoning_sick(bear_id, True)
+    # Forests are non-sick (lands skip CR 302.1 — only creature
+    # tap-cost activations are gated).
+    synthetic_state.register_and_inject_object(
+        _forest_dict(), 0, ZONE_BATTLEFIELD,
+    )
+    synthetic_state.register_and_inject_object(
+        _forest_dict(), 0, ZONE_BATTLEFIELD,
+    )
+    synthetic_state.empty_mana_pool(0)
+
+    synthetic_state.set_phase(3)
+    actions = synthetic_state.legal_decisions(0)
+    bear_emits = [
+        a for a in actions
+        if a.get("kind") == "activate_ability"
+        and a.get("source_id") == bear_id
+    ]
+    assert bear_emits == [], (
+        f"Bear Caster should NOT emit ActivateAbility when itself "
+        f"summoning-sick, regardless of Forest headroom. Got {bear_emits}"
+    )
+
+
+def test_auto_tap_headroom_pool_only_path_still_works(synthetic_state):
+    """Regression — the pool-only emission path stays end-to-end
+    functional. Bear Caster with `{1}{G}` in pool + 0 untapped
+    Forests still emits ActivateAbility; the composer is a strict
+    widening of the affordability check, never a narrowing.
+    """
+    # Tap out default mana sources so the assertion is specifically
+    # about the pool-only path, not the composer's headroom widening.
+    _tap_all_default_p0_mana_sources(synthetic_state)
+    bear_id = synthetic_state.register_and_inject_object(
+        _bear_caster_dict(), 0, ZONE_BATTLEFIELD,
+    )
+    synthetic_state.force_set_summoning_sick(bear_id, False)
+    synthetic_state.add_mana(0, "C", 1)
+    synthetic_state.add_mana(0, "G", 1)
+    # No untapped Forests on bf — pool alone must cover.
+
+    synthetic_state.set_phase(3)
+    actions = synthetic_state.legal_decisions(0)
+    bear_emits = [
+        a for a in actions
+        if a.get("kind") == "activate_ability"
+        and a.get("source_id") == bear_id
+    ]
+    assert len(bear_emits) == 1, (
+        f"Pool-only affordability path still emits: pool covers "
+        f"{{1}}{{G}} directly. Got {len(bear_emits)} emissions."
     )
