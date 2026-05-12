@@ -4415,3 +4415,495 @@ def test_cross_engine_menace_selector_pre_injection_walks_clean(parity_smoke):
         "Bear Bully should not yet exist at end of step 167 — "
         "menace injection fires at step 168"
     )
+
+
+# ---------------------------------------------------------------------------
+# Phase 5 follow-up #15: defender_selector — extend retaliation_selector with
+# a side-channel-injected 2/2 defender creature on p0's battlefield, then
+# drive three attack-decision variants (CR 702.3 — "A creature with
+# defender can't attack"). The REJECT branch symmetric to haste's ACCEPT
+# branch (probe 63eb245a): a creature with the ``defender`` keyword CANNOT
+# be declared as an attacker. Mirrors :func:`haste_selector` (and
+# :func:`menace_selector`'s three-variant factory shape) exactly except:
+#
+#   * Injected creature carries ``defender`` instead of ``haste`` /
+#     ``menace``, and is NOT summoning-sick (no haste-style fixture
+#     needed — defender is a printed restriction, not a battlefield-
+#     state restriction).
+#   * Trigger gate keys on :data:`_DEFENDER_PRINTING_NAME`
+#     ("Bear Wall") so the seven probes' trigger gates are mutually
+#     independent.
+#   * Three test variants via :func:`make_defender_selector`:
+#
+#       1. ``"defender_only"`` — try ``declare_attackers([defender_id])``
+#          ALONE. Both engines should reject (Python via
+#          ``eligible_attackers`` filter at ``combat.py:22``; Rust via
+#          ``declare_attacker``'s defender gate at
+#          ``state_ops_combat.rs:639-641``). Net: empty attackers Vec
+#          on both engines.
+#       2. ``"both"`` — try ``declare_attackers([defender_id,
+#          normal_id])``. Defender dropped, normal attacker goes
+#          through. Net: 1 attacker (normal) on both.
+#       3. ``"normal_only"`` — try ``declare_attackers([normal_id])``.
+#          Clean baseline — defender stays passively on bf untouched.
+#
+# **OUTCOME on this probe: NEW DIVERGENCE — CE17 SURFACED.**
+#
+# **CE17: legal_decisions emits defender as a candidate attacker.**
+# Rust's ``state_ops_legal.rs:556-608`` DeclareAttackers eligibility
+# loop filters on tapped + creature + sickness-vs-haste only —
+# **NO DEFENDER FILTER**. The module docstring (lines 167-180) flags
+# this as deferred: "*Defender keyword (CR 702.3) — Python's
+# eligible_attackers filters this out at enumeration time; first
+# slice defers to the primitive's per-id gate at apply.*" The
+# apply-time gate at ``state_ops_combat.rs:639-641`` correctly
+# rejects defender, but the legal_decisions emitter doesn't — so
+# subsets containing the defender id are enumerated as if legal,
+# violating the contract that ``legal_decisions`` returns only
+# LEGAL decisions.
+#
+# **Confirmed shape** (with 2/2 Bear Wall id 14 + 2/2 Bears id 5 on
+# p0 bf at the DECLARE_ATTACKERS step):
+#
+#   * Rust ``legal_decisions(0)`` emits four declare_attackers
+#     subsets: ``[(), (5,), (14,), (5, 14)]``. The last two
+#     ``(14,)`` and ``(5, 14)`` BOTH contain the defender and are
+#     ILLEGAL per CR 702.3. Only ``()`` and ``(5,)`` are legal.
+#   * Python's ``legal_actions(state, 0)`` does NOT emit
+#     ``DeclareAttackers`` at all (Python uses a search-side
+#     combat-decisions factoring rather than enumerating
+#     declare-attackers subsets in legal_actions — see
+#     state_ops_legal.rs:541-548 module docstring on "DeclareAttackers
+#     emission (Rust-only)"). The cross-engine compare on the
+#     enumeration shape is therefore Rust-only at present; the
+#     **per-engine** assertion is that Rust's emitted subsets should
+#     NOT include the defender id.
+#
+# **NOT FIXING per brief** — xfail-pin CE17. The fix shape (out of
+# scope for this probe) is to add a ``battlefield_has_keyword(...,
+# "defender")`` short-circuit to the eligibility filter in
+# ``state_ops_legal.rs`` around line 575, mirroring the apply-time
+# gate at ``state_ops_combat.rs:639-641``. This is a one-line
+# parity-add that aligns the legal_decisions enumeration with the
+# apply-time semantics.
+#
+# **Apply-time gates are CLEAN.** All three variants' walk_both
+# produces zero per-step divergences — Python and Rust each silently
+# drop the defender from their respective declare_attackers apply
+# paths, leaving the defender at ``attacking=False`` / ``tapped=
+# False`` / on its controller's bf. The per-step field-view compare
+# observes ZERO divergence on the apply path. The CE17 surface is
+# purely on the legal_decisions enumeration side.
+#
+# Five pinning tests:
+#
+#   1. ``test_cross_engine_defender_selector_defender_only_walks_clean``
+#      — scenario A (``"defender_only"``): full 200-decision walk
+#      parity-clean. Apply-time defender rejection works on both
+#      engines (Test B from the brief — apply_action divergence-free).
+#   2. ``test_cross_engine_defender_selector_both_walks_clean``
+#      — scenario B (``"both"``): full 200-decision walk parity-clean.
+#      Mixed defender + normal request — defender dropped, normal
+#      attacker proceeds.
+#   3. ``test_cross_engine_defender_selector_normal_only_walks_clean``
+#      — scenario C (``"normal_only"``): full 200-decision walk
+#      parity-clean. Defender stays passively on bf untapped /
+#      not-attacking while the normal attacker drives combat
+#      (Test C from the brief — defender invisible when not asked).
+#   4. ``test_cross_engine_defender_selector_legal_decisions_surfaces_ce17``
+#      — STRICT-XFAIL Test A from the brief. Drives 168 selector
+#      decisions to land at the post-injection DECLARE_ATTACKERS
+#      step with both Bear Wall (id 14) and Bears id 5 on p0 bf,
+#      then asserts that Rust's ``legal_decisions(0)`` does NOT
+#      include the defender id in any emitted declare_attackers
+#      subset. The xfail pins the CURRENT (illegal-emission)
+#      behavior; when CE17 is closed the xfail flips to a strict
+#      pass.
+#   5. ``test_cross_engine_defender_selector_pre_injection_walks_clean``
+#      — pre-injection backbone steps 0-163 parity-clean. Shared
+#      across all three scenarios. (The injection fires at step
+#      164 in the defender_selector walk — earlier than the
+#      vigilance/haste/menace probes' step 168 because the
+#      side-channel clearing of Bears id 5's summoning sickness
+#      means the cast-and-pass loop is shorter.)
+# ---------------------------------------------------------------------------
+
+
+def test_cross_engine_defender_selector_defender_only_walks_clean(parity_smoke):
+    """**Defender apply-time reject clean-walk pin** (scenario A —
+    ``"defender_only"``) — 200-decision walk on
+    :func:`multi_blocker_deckspec` with
+    ``make_defender_selector("defender_only")`` is parity-clean every
+    step. With ``declare_attackers([defender_id])`` requested ALONE,
+    both engines silently drop the defender (Python via
+    ``eligible_attackers`` filter at ``combat.py:22``; Rust via
+    ``declare_attacker``'s defender gate at
+    ``state_ops_combat.rs:639-641``). Net: empty attackers Vec on
+    both engines, no per-step field-view divergence.
+    """
+    from mtg_bot.parity.cross_engine import (
+        make_defender_selector,
+        multi_blocker_deckspec,
+        walk_both,
+    )
+
+    selector = make_defender_selector("defender_only")
+    result = walk_both(
+        multi_blocker_deckspec(),
+        n_decisions=200,
+        decision_selector=selector,
+    )
+    assert result.error is None, (
+        f"walk aborted at step {result.aborted_at}: {result.error}"
+    )
+    for step in result.steps:
+        assert step.divergences == [], (
+            f"unexpected divergence at step {step.step_index}: "
+            f"action={step.action_dict} "
+            f"{[(d.field, d.py_value, d.rust_value, d.known_gap) for d in step.divergences]}"
+        )
+
+
+def test_cross_engine_defender_selector_both_walks_clean(parity_smoke):
+    """**Defender + normal mixed clean-walk pin** (scenario B —
+    ``"both"``) — 200-decision walk on :func:`multi_blocker_deckspec`
+    with ``make_defender_selector("both")`` is parity-clean every step.
+    With ``declare_attackers([defender_id, normal_id])`` requested,
+    both engines drop the defender and accept the normal attacker.
+    Net: 1 attacker (the normal creature) on both engines; combat
+    proceeds with the multi-block damage shape (attacker dies to
+    4 back-damage, first blocker dies, second survives).
+    """
+    from mtg_bot.parity.cross_engine import (
+        make_defender_selector,
+        multi_blocker_deckspec,
+        walk_both,
+    )
+
+    selector = make_defender_selector("both")
+    result = walk_both(
+        multi_blocker_deckspec(),
+        n_decisions=200,
+        decision_selector=selector,
+    )
+    assert result.error is None, (
+        f"walk aborted at step {result.aborted_at}: {result.error}"
+    )
+    for step in result.steps:
+        assert step.divergences == [], (
+            f"unexpected divergence at step {step.step_index}: "
+            f"action={step.action_dict} "
+            f"{[(d.field, d.py_value, d.rust_value, d.known_gap) for d in step.divergences]}"
+        )
+
+
+def test_cross_engine_defender_selector_normal_only_walks_clean(parity_smoke):
+    """**Defender baseline clean-walk pin** (scenario C —
+    ``"normal_only"``) — 200-decision walk on
+    :func:`multi_blocker_deckspec` with
+    ``make_defender_selector("normal_only")`` is parity-clean every
+    step. With ``declare_attackers([normal_id])`` requested (defender
+    left passive on bf), the normal attacker drives combat without
+    any defender involvement. Defender stays on bf untapped,
+    not-attacking. Both engines walk identical state.
+
+    Additionally pins the post-walk state: the defender (Bear Wall,
+    id 14) is on p0's battlefield with ``attacking=False``,
+    ``tapped=False``, ``summoning_sick=False`` — defender is
+    invisible when not asked to attack. This is the brief's Test C
+    contract — "combat proceeds without the defender; defender stays
+    untapped (no combat tap)".
+    """
+    from mtg_bot.parity.cross_engine import (
+        build_matched_states,
+        make_defender_selector,
+        multi_blocker_deckspec,
+        step_both,
+        walk_both,
+    )
+
+    selector = make_defender_selector("normal_only")
+    result = walk_both(
+        multi_blocker_deckspec(),
+        n_decisions=200,
+        decision_selector=selector,
+    )
+    assert result.error is None, (
+        f"walk aborted at step {result.aborted_at}: {result.error}"
+    )
+    for step in result.steps:
+        assert step.divergences == [], (
+            f"unexpected divergence at step {step.step_index}: "
+            f"action={step.action_dict} "
+            f"{[(d.field, d.py_value, d.rust_value, d.known_gap) for d in step.divergences]}"
+        )
+
+    # Direct-read structural pin: defender stays untouched on both
+    # engines post-walk. Brief's Test C contract.
+    py_state, rust_state = build_matched_states(multi_blocker_deckspec())
+    for i in range(200):
+        action = make_defender_selector("normal_only")(
+            py_state, rust_state, i,
+        )
+        step_both(py_state, rust_state, action)
+
+    py_defender = next(
+        (o for o in py_state.battlefield
+         if o.printing.name == "Bear Wall"),
+        None,
+    )
+    assert py_defender is not None, (
+        "expected Bear Wall on Python p0 bf post-walk; defender "
+        "should be untouched"
+    )
+    assert py_defender.controller_id == 0
+    assert getattr(py_defender, "attacking", False) is False, (
+        "defender should not be attacking — CR 702.3 forbids it, "
+        "and the selector never requested it to attack in the "
+        "normal_only scenario"
+    )
+    assert py_defender.tapped is False, (
+        "defender should not be tapped — never attacked, never "
+        "blocked, never activated; should stay untapped (Test C "
+        "from the brief)"
+    )
+    assert py_defender.summoning_sick is False, (
+        "defender's summoning_sick should be False (injection set "
+        "it False at step 164)"
+    )
+
+    rust_defender = next(
+        (e for e in rust_state.battlefield_snapshot()
+         if e.get("printing_name") == "Bear Wall"),
+        None,
+    )
+    assert rust_defender is not None, (
+        "expected Bear Wall on Rust p0 bf post-walk"
+    )
+    assert rust_defender["controller_id"] == 0
+    assert rust_defender["tapped"] is False, (
+        "Rust defender should be untapped (matches Python)"
+    )
+    assert rust_defender["summoning_sick"] is False
+
+
+@pytest.mark.xfail(
+    strict=True,
+    reason=(
+        "CE17 — Rust's legal_decisions emission does NOT filter the "
+        "defender keyword (state_ops_legal.rs:556-608 DeclareAttackers "
+        "eligibility loop reads tapped + creature + sickness-vs-haste "
+        "only; defender filter is deferred per the module docstring at "
+        "lines 167-180). The apply-time gate at "
+        "state_ops_combat.rs:639-641 correctly rejects defender, but "
+        "the enumeration emits subsets including the defender id as "
+        "if legal — violating the contract that legal_decisions "
+        "returns only LEGAL decisions. Fix shape: add a "
+        "battlefield_has_keyword(..., \"defender\") short-circuit to "
+        "the eligibility filter in state_ops_legal.rs around line 575, "
+        "mirroring the apply-time gate."
+    ),
+)
+def test_cross_engine_defender_selector_legal_decisions_surfaces_ce17(
+    parity_smoke,
+):
+    """**CE17 strict-xfail symptom pin** — Test A from the brief.
+
+    Drives 168 selector decisions to land at the post-injection
+    DECLARE_ATTACKERS step with both Bear Wall (id 14, defender) and
+    Bears id 5 (normal attacker, summoning-sickness cleared by the
+    side-channel) on p0's battlefield, then asserts that Rust's
+    ``legal_decisions(0)`` does NOT include the defender id in any
+    emitted ``declare_attackers`` subset. The xfail pins the CURRENT
+    (illegal-emission) behavior; when CE17 is closed by adding the
+    defender filter to ``state_ops_legal.rs``'s eligibility loop,
+    this test should flip from xfail-pass to strict-pass and the
+    decorator should be removed.
+
+    Currently observed Rust ``legal_decisions(0)`` emission at the
+    DECLARE_ATTACKERS step (with bf={p0: Forests + Bears id 5 +
+    Bear Wall id 14; p1: Forests + Bears ids 9, 11}):
+
+      * ``declare_attackers([])`` — LEGAL (decline to attack).
+      * ``declare_attackers([5])`` — LEGAL (Bears id 5 untapped,
+        not sick, no defender → eligible).
+      * ``declare_attackers([14])`` — **ILLEGAL** per CR 702.3
+        (defender can't attack) — but Rust emits it anyway.
+      * ``declare_attackers([5, 14])`` — **ILLEGAL** per CR 702.3
+        (combined subset contains a defender).
+
+    Python's ``legal_actions(state, 0)`` does not emit
+    DeclareAttackers at all (it uses a search-side combat-decisions
+    factoring rather than enumerating subsets — see the divergence
+    rationale in ``state_ops_legal.rs`` module docstring), so the
+    cross-engine "shape" compare is Rust-only at present. The
+    assertion below is therefore "Rust's emitted subsets should not
+    include the defender id" — pre-closure: at least one subset
+    includes id 14, so the assertion fails (xfail). Post-closure:
+    no subsets include id 14, so the assertion passes (xfail
+    flips to strict-pass).
+    """
+    from mtg_bot.combat import eligible_attackers
+    from mtg_bot.parity.cross_engine import (
+        build_matched_states,
+        make_defender_selector,
+        multi_blocker_deckspec,
+        step_both,
+    )
+
+    py_state, rust_state = build_matched_states(multi_blocker_deckspec())
+    # Use the normal_only selector to drive into the POST-INJECTION
+    # DECLARE_ATTACKERS step. The injection fires on selector call
+    # 165; the next DA step at active=p0 with defender on bf lands
+    # at decision 167 (post-apply step name = DECLARE_ATTACKERS).
+    # We stop at decision 167 (167 selector calls applied) — the
+    # next selector call WOULD fire the defender_only-style DA
+    # emission that pre-advances the phase, but we want to probe
+    # legal_decisions BEFORE the emission so we cap the loop here.
+    selector = make_defender_selector("normal_only")
+    for i in range(168):
+        action = selector(py_state, rust_state, i)
+        # Only break when we hit the POST-INJECTION DA emission
+        # (defender on bf, active=p0). Earlier turns also fire
+        # declare_attackers but pre-injection.
+        defender_on_bf = any(
+            o.printing.name == "Bear Wall"
+            for o in py_state.battlefield
+        )
+        is_p0_da = (
+            py_state.step.name == "DECLARE_ATTACKERS"
+            and py_state.active_player_idx == 0
+        )
+        if (
+            action.get("kind") == "declare_attackers"
+            and defender_on_bf
+            and is_p0_da
+        ):
+            break
+        step_both(py_state, rust_state, action)
+
+    # Sanity: we should be in DECLARE_ATTACKERS active=0 with the
+    # defender on bf and no attackers declared yet.
+    assert py_state.step.name == "DECLARE_ATTACKERS", (
+        f"expected to be in DECLARE_ATTACKERS, got {py_state.step.name}"
+    )
+    assert py_state.active_player_idx == 0, (
+        f"expected p0 active, got {py_state.active_player_idx}"
+    )
+    defender = [
+        o for o in py_state.battlefield
+        if o.printing.name == "Bear Wall"
+    ]
+    assert defender, "expected Bear Wall on p0 bf at DA step"
+    defender_id = int(defender[0].id)
+
+    # Python's eligible_attackers correctly filters the defender out
+    # (combat.py:22) — pin this as the source of truth for "what the
+    # CR 702.3-correct emission should be".
+    py_elig_ids = {o.id for o in eligible_attackers(py_state, 0)}
+    assert defender_id not in py_elig_ids, (
+        f"Python's eligible_attackers should filter the defender out "
+        f"per CR 702.3 — defender id {defender_id} unexpectedly in "
+        f"eligible set {py_elig_ids}"
+    )
+
+    # Rust's legal_decisions: pin the CE17 surface — defender id is
+    # currently emitted as a legal candidate. Post-closure this
+    # assertion will pass (no subset contains the defender id) and
+    # the xfail flips.
+    ld = rust_state.legal_decisions(0)
+    da_subsets = [
+        tuple(a["attacker_ids"]) for a in ld
+        if a.get("kind") == "declare_attackers"
+    ]
+    illegal_subsets = [s for s in da_subsets if defender_id in s]
+    assert not illegal_subsets, (
+        f"CE17 — Rust legal_decisions emits {len(illegal_subsets)} "
+        f"declare_attackers subset(s) containing the defender id "
+        f"{defender_id} (CR 702.3 violation): {illegal_subsets}. "
+        f"All emitted subsets: {da_subsets}. Python's "
+        f"eligible_attackers correctly filters the defender out "
+        f"(combat.py:22); Rust's state_ops_legal.rs:556-608 "
+        f"eligibility loop is missing the defender filter — fix "
+        f"shape: add a battlefield_has_keyword(..., \"defender\") "
+        f"short-circuit around line 575."
+    )
+
+
+def test_cross_engine_defender_selector_pre_injection_walks_clean(parity_smoke):
+    """Pre-injection walk (steps 0-164) on :func:`multi_blocker_deckspec`
+    with any of the three defender_selector variants is parity-clean.
+    Pins the contract that the defender probe's
+    delegate-to-retaliation_selector backbone is unchanged — steps
+    0-164 are identical to retaliation_selector's walk shape and
+    surface no divergences. The defender injection fires SPECIFICALLY
+    at selector call 165 (the 166th decision, 0-indexed 165), not
+    before — the trigger gate ``creature_count >= 3`` becomes true
+    only after Bears id 5 has resolved onto the battlefield at
+    decision 164.
+
+    Tests with the ``"normal_only"`` variant — all three variants
+    share the same pre-injection backbone (they only diverge at the
+    DECLARE_ATTACKERS branch around step 168, well past the
+    injection point).
+    """
+    from mtg_bot.parity.cross_engine import (
+        build_matched_states,
+        make_defender_selector,
+        multi_blocker_deckspec,
+        step_both,
+        walk_both,
+    )
+
+    selector = make_defender_selector("normal_only")
+    # 165 decisions takes us to "after Bears id 5 resolved, before
+    # the injection fires on the next selector call". The injection
+    # fires during selector call index 165 (the 166th call) because
+    # that's when creature_count first reaches 3.
+    result = walk_both(
+        multi_blocker_deckspec(),
+        n_decisions=165,
+        decision_selector=selector,
+    )
+    assert result.error is None
+    for step in result.steps:
+        assert step.divergences == [], (
+            f"pre-injection divergence at step {step.step_index}: "
+            f"action={step.action_dict} "
+            f"{[(d.field, d.py_value, d.rust_value, d.known_gap) for d in step.divergences]}"
+        )
+
+    # Walk shape sanity: rebuild matched states, drive 165 steps, and
+    # confirm the pre-injection bf state (Bears id 5 has resolved
+    # but Bear Wall has NOT yet been injected).
+    py_state, rust_state = build_matched_states(multi_blocker_deckspec())
+    for i in range(165):
+        action = selector(py_state, rust_state, i)
+        step_both(py_state, rust_state, action)
+
+    creatures = [
+        o for o in py_state.battlefield
+        if "Creature" in o.printing.card_types
+    ]
+    assert len(creatures) == 3, (
+        f"expected 3 creatures on bf at end of decision 164 (Bears "
+        f"ids 5/9/11 — Bears 5 just cast this turn, Bears 9/11 on "
+        f"p1 bf from earlier), got {len(creatures)}: "
+        f"{[(o.id, o.controller_id, o.summoning_sick) for o in creatures]}"
+    )
+    # No Bear Wall in any zone yet (the defender injection hasn't
+    # fired — it fires on the NEXT selector call, decision 165).
+    bear_wall_anywhere = (
+        any(o.printing.name == "Bear Wall" for o in py_state.battlefield)
+        or any(
+            o.printing.name == "Bear Wall"
+            for p in py_state.players
+            for zone in (p.hand, p.library, p.graveyard, p.exile)
+            for o in zone
+        )
+    )
+    assert not bear_wall_anywhere, (
+        "Bear Wall should not yet exist after decision 164 — "
+        "defender injection fires on selector call 165 (the 166th "
+        "decision, 0-indexed 165)"
+    )
