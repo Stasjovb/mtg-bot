@@ -6232,3 +6232,239 @@ def activated_mid_combat_selector(py_state, rust_state, step_index: int) -> dict
             return {"kind": "pass_priority"}
 
     return retaliation_selector(py_state, rust_state, step_index)
+
+
+# ---------------------------------------------------------------------------
+# Phase 5 follow-up #22: activated_cost_selector -- extend the cross-engine
+# smoke onto activated abilities that require PAYING MANA (not free mana
+# abilities). The prior probe (#21, activated_mid_combat) only exercised the
+# free-mana axis: a `{T}: Add {G}` Forest whose ActivationCost has
+# `mana=None`. THIS probe injects a creature with `{1}{G}, {T}: Draw a
+# card` and probes both engines' emission + dispatch behavior at every
+# affordance corner.
+#
+# **Predicted divergence (validated by scratch-probe before this probe
+# landed)**: Rust's enumerator + dispatch BOTH ignore non-mana activated
+# abilities entirely.
+#
+#   * Rust's `state_ops_legal.rs:929-1003` ActivateAbility emission loop
+#     filters battlefield objects on `printing.mana_produced.is_some()`.
+#     A printing with no `mana_produced` set never emits ActivateAbility
+#     regardless of any activated ability the source might carry on the
+#     Python side.
+#   * Rust's `state_ops_actions.rs:440-631` ActivateAbility dispatch arm
+#     hard-rejects any source whose printing lacks `mana_produced` with
+#     `"ActivateAbility: source <id> has no mana_produced (only mana
+#     abilities supported in first slice)"`.
+#   * Rust's `parse_printing` (`cards.rs:3437-3556`) has no
+#     `activated_abilities` field at all -- the Rust `CardPrinting`
+#     struct only carries `mana_produced: Option<Vec<String>>` as its
+#     ability-shape representation. Non-mana activated abilities are
+#     not representable in Rust today.
+#
+# Python's `legal.py:612-829` ActivateAbility loop walks each object's
+# `effective_activated_abilities` and per-ability cost-payability
+# checks. For a `{1}{G}, {T}: Draw a card` ability, Python's gate at
+# `legal.py:653-657` calls `can_pay_cost(state, player_id,
+# effective_mana, spell_kind=...)`; the auto-tap-from-lands accounting
+# means the affordability bar is "is there enough mana in pool +
+# untapped lands". Python's `_activate_ability` (`actions.py:1928-2002`)
+# pays mana via `auto_tap_for_cost` and pushes the (non-mana) ability
+# onto the stack (`is_mana_ability=False`).
+#
+# **What surface this exercises that prior probes don't:**
+#
+#   * Prior #21 (activated_mid_combat) exercised free mana abilities
+#     (Forest's `{T}: Add {G}`, `cost.mana=None`). Both engines emit +
+#     dispatch parity-clean (mana_produced.is_some() on both sides).
+#     THIS probe exercises the orthogonal axis: cost-paying activated
+#     abilities (`cost.mana=ManaCost(...)`). Rust has no representation,
+#     so the predicted asymmetry is single-axis on the
+#     non-mana-ability emission + dispatch surfaces.
+#   * Prior #19 (counterspell) exercised stack-going-through resolves.
+#     This probe drives a non-mana activated ability that ALSO goes
+#     through the stack on Python (CR 605: only mana abilities bypass
+#     the stack; `{1}{G}, T: Draw` is a regular activated ability). On
+#     Rust, the dispatch never fires, so the stack composition isn't
+#     probed -- the load-bearing surface is the emission + dispatch
+#     reject.
+#
+# **Test surfaces (four tests total in test_parity_smoke.py):**
+#
+#   * Test A -- emission with sufficient affordance: Python emits
+#     ActivateAbility for the Bear Caster (3 untapped Forests on bf can
+#     auto-tap to pay {1}{G}); Rust does NOT (mana_produced.is_none()
+#     gate). Predicted CE20 surface.
+#
+#   * Test B -- emission with INSUFFICIENT affordance: tap all of p0's
+#     Forests AND ensure the mana pool is empty. Python's can_pay_cost
+#     gate fails -> no emission. Rust still doesn't emit (mana_produced
+#     gate fires unconditionally for non-mana abilities). Both engines
+#     in the "no emit" bucket -- parity-clean on this branch, but for
+#     entirely different reasons (Python: cost-affordability; Rust:
+#     no-representation). The branch pins the affordability gate isn't
+#     accidentally surfacing as a CE.
+#
+#   * Test C -- apply_action with sufficient mana in pool: pre-populate
+#     p0's mana pool with {1}{G} via direct ManaCoin append /
+#     `rust_state.add_mana`. Python apply succeeds: 2 G coins consumed
+#     to pay {1}{G} (one for the colored G slot, one for generic {1}
+#     via G-pays-generic), Bear taps, stack gets one StackItem (draw
+#     effect). Rust apply raises a ValueError (no mana_produced).
+#     Predicted CE20 surface on the dispatch axis. The test PINS the
+#     Rust raise as the current behavior; xfail-pinned via the same
+#     pattern as the CE17 / CE18 / CE19 pre-closure shape-pins.
+#
+#   * Test D -- apply_action with INSUFFICIENT mana in pool: empty p0's
+#     mana pool AND tap all forests. Python's `_activate_ability` is
+#     ill-formed input on this path (the gate lives in legal_actions,
+#     not _activate_ability) -- it calls auto_tap_for_cost which silently
+#     fails to find enough mana and proceeds anyway, tapping the Bear
+#     and pushing the draw on the stack (a known design quirk of
+#     the Python primitive -- callers MUST gate on legal_actions).
+#     Rust raises the same no-mana_produced error as Test C. This
+#     test PINS the Python "silent under-pay" behavior + the Rust
+#     reject -- documents a subtler axis of the CE20 surface (Python's
+#     primitive doesn't self-gate; the search-side filter is the
+#     only gate; Rust short-circuits regardless of caller gating).
+#
+# **Pre-injection walks_clean** ride on the activated_cost_selector
+# shape, mirroring every prior probe's baseline pin.
+#
+# **Predicted outcome**: (b) NEW divergence -- CE20 -- "Rust ignores
+# non-mana activated abilities entirely (no `activated_abilities`
+# field on Rust's `CardPrinting`; `mana_produced.is_some()` filter
+# in legal_decisions + dispatch arm)". Document, xfail-pin Tests A
+# + C (the load-bearing CE20 surfaces); Test B + D's both-engines-
+# don't-emit / both-engines-reject branches are passing assertions
+# (parity-on-neither-side, not divergences).
+# ---------------------------------------------------------------------------
+
+
+_BEAR_CASTER_PRINTING_NAME = "Bear Caster"
+
+
+def activated_cost_side_channel(py_state, rust_state) -> tuple[int, int]:
+    """Side-channel inject a "Bear Caster" 2/2 creature with the
+    activated ability ``{1}{G}, {T}: Draw a card.`` onto p0's
+    battlefield on BOTH engines.
+
+    Same shape as :func:`activated_mid_combat_side_channel` but with
+    different ability semantics:
+
+      * Python: ``activated_abilities`` carries an :class:`ActivatedAbility`
+        whose ``cost.mana = ManaCost(generic=1, colored=(("G", 1),))``
+        and ``cost.tap_self = True``. ``effect = DrawCards(amount=1)``,
+        ``is_mana_ability = False`` (so the ability goes through the
+        stack per CR 605 / 113.3b -- only mana abilities bypass).
+      * Rust: the registry dict ships ``card_types=["Creature"]`` with
+        ``power=2 toughness=2`` and -- crucially -- NO ``mana_produced``
+        key. Rust's ``CardPrinting`` has no ``activated_abilities``
+        representation at all (`cards.rs:3437-3556`), so the
+        cost-paying activated ability simply doesn't exist on the
+        Rust side. Same printing name as Python for idempotency-check
+        + diagnostic clarity.
+
+    The Bear Caster is injected with:
+      * ``tapped = False`` -- ready to activate.
+      * ``summoning_sick = False`` -- ready to tap for the ability
+        cost (creatures with tap-cost activations are gated by CR
+        302.1 / 702.10 on both engines; the override clears the
+        sickness so the cost-payability gate fires on the MANA
+        side, not the sickness side, isolating the probe axis).
+      * Fresh ETB timestamp on both engines (Python via
+        ``py_state.next_timestamp``; Rust via the
+        ``register_and_inject_object(..., ZONE_BATTLEFIELD)`` branch
+        which stamps internally).
+
+    Returns ``(py_bear_id, rust_bear_id)`` so callers pin
+    apply_action / emission lookups by source id (per-engine id
+    allocators diverge for synthetic injections, same as the prior
+    probe).
+    """
+    from mtg_bot.cards.base import CardPrinting, ManaCost
+    from mtg_bot.effects.generic.draw_mill import DrawCards
+    from mtg_bot.effects.base import ActivatedAbility, ActivationCost
+    from mtg_bot.game import Zone
+
+    # ---- Python side ----------------------------------------------------
+    bear_abilities = (
+        ActivatedAbility(
+            cost=ActivationCost(
+                mana=ManaCost(generic=1, colored=(("G", 1),)),
+                tap_self=True,
+            ),
+            effect=DrawCards(amount=1),
+            is_mana_ability=False,
+        ),
+    )
+    bear_printing = CardPrinting(
+        name=_BEAR_CASTER_PRINTING_NAME,
+        mana_cost_str="{1}{G}",
+        mana_cost=ManaCost(generic=1, colored=(("G", 1),)),
+        type_line="Creature - Bear",
+        supertypes=(),
+        card_types=("Creature",),
+        subtypes=("Bear",),
+        power=2,
+        toughness=2,
+        produces=frozenset(),
+        activated_abilities=bear_abilities,
+    )
+    py_obj = py_state.new_object(
+        bear_printing, owner_id=0, zone=Zone.BATTLEFIELD,
+    )
+    py_obj.summoning_sick = False
+    py_obj.tapped = False
+    py_obj.damage = 0
+    py_obj.etb_timestamp = py_state.next_timestamp
+    py_state.next_timestamp += 1
+    py_state.battlefield.append(py_obj)
+
+    # ---- Rust side ------------------------------------------------------
+    # No mana_produced -- non-mana ability on Python is invisible to
+    # Rust's enumerator + dispatch (CE20 surface).
+    ZONE_BATTLEFIELD = 2
+    rust_obj_id = rust_state.register_and_inject_object(
+        {
+            "name": _BEAR_CASTER_PRINTING_NAME,
+            "card_types": ["Creature"],
+            "power": 2,
+            "toughness": 2,
+        },
+        0,  # controller = p0
+        ZONE_BATTLEFIELD,
+    )
+
+    return int(py_obj.id), int(rust_obj_id)
+
+
+def activated_cost_selector(py_state, rust_state, step_index: int) -> dict:
+    """Cross-engine smoke selector for the cost-paying activated-
+    ability probe.
+
+    Same shape as :func:`activated_mid_combat_selector` -- the
+    selector exists for pre-injection walks-clean baseline parity
+    with prior probes' naming convention. The probe's load-bearing
+    surface is the four direct-call tests in test_parity_smoke.py;
+    the selector's walk_both output doesn't include the legal-
+    decisions emission or the apply_action dispatch state in its
+    field-view tuple, so the walk itself walks parity-clean as long
+    as it doesn't perturb the backbone.
+
+    Trigger detection: 3 creatures on p0's bf + no Bear Caster yet.
+    """
+    bear_caster_already_injected = any(
+        obj.printing.name == _BEAR_CASTER_PRINTING_NAME
+        for obj in py_state.battlefield
+    )
+    if not bear_caster_already_injected:
+        creature_count = sum(
+            1 for o in py_state.battlefield
+            if "Creature" in o.printing.card_types
+        )
+        if creature_count >= 3:
+            activated_cost_side_channel(py_state, rust_state)
+            return {"kind": "pass_priority"}
+
+    return retaliation_selector(py_state, rust_state, step_index)
