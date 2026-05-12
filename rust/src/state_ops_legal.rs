@@ -61,16 +61,18 @@
 //!
 //! Mirrors Python's sorcery-speed CastSpell emission at
 //! `src/mtg_bot/legal.py:335-445` (the `_is_sorcery_speed_spell` loop
-//! that comes AFTER PlayLand). The Python source also has an
-//! instant-speed CastSpell block at lines 230-301 — that block runs
-//! BEFORE the sorcery-timing gate (line 303), so on a state that fails
-//! sorcery timing Python may still emit instant-speed casts. **First
-//! slice ignores the instant-speed block**: every cast is gated by the
-//! same sorcery-timing short-circuit at line 148 of this file. Future
-//! slices add the instant-speed window by moving the CastSpell loop
-//! ABOVE the sorcery-timing return and threading the
-//! `card.printing.is_instant || "flash" in keywords` predicate; the
-//! per-card emission code stays the same.
+//! that comes AFTER PlayLand) AND the instant-speed CastSpell block at
+//! `src/mtg_bot/legal.py:217-301` (the `instant_speed = card.printing
+//! .is_instant or "flash" in card.printing.keywords` loop that comes
+//! BEFORE the sorcery-timing gate at line 303). **Post-CE19 closure**
+//! the Rust enumerator places the entire CastSpell loop ABOVE the
+//! sorcery-timing short-circuit and gates per-card on
+//! `is_instant || keywords.contains("flash") || is_sorcery_timing`,
+//! so a flash creature or Instant in the priority holder's hand emits
+//! at non-active priority windows the same way Python does. The
+//! shared `seen_castspell` dedup HashSet collapses any double-eligible
+//! card (theoretically flash-on-instant — degenerate but harmless) to
+//! a single emission. See I46 in `docs/RUST_PARITY_GAPS.md`.
 //!
 //! **Deferred mana-affordability check.** Python's `_can_cast` (lines
 //! 252-254 / 383-385) calls `state.can_pay_cost(...)` to refuse spells
@@ -747,18 +749,91 @@ impl GameState {
         //   active == priority AND step in MAIN_STEPS AND stack
         //   empty AND _has_priority. Priority is already confirmed
         //   above; the remaining conjuncts gate the sorcery-speed
-        //   block (PlayLand here, plus CastSpell / DeclareAttackers /
-        //   ActivateAbility in future slices).
+        //   block (PlayLand, sorcery-speed CastSpell, ActivateAbility).
         //
-        // First-slice short-circuit: there are no instant-speed
-        // actions to emit yet, so if it isn't sorcery timing we
-        // return early at this point — Python's instant-speed block
-        // (lines 246-301) is a no-op in our world. When CastSpell
-        // lands, this early-return shrinks to a `continue past
-        // sorcery-only block`.
+        // **CE19 closure**: pre-closure this short-circuit returned
+        // early after the DeclareAttackers / DeclareBlockers
+        // branches, dropping the CastSpell loop entirely when
+        // sorcery timing failed. That mis-modeled the instant-speed
+        // CastSpell window: a flash creature or printed Instant in
+        // the priority holder's hand should emit CastSpell at any
+        // priority window the holder has — active or not (CR 702.13a
+        // for flash; CR 117.1 + 307.1 for instants). Post-closure
+        // the CastSpell loop lives ABOVE the sorcery-timing gate and
+        // gates per-card on
+        // `is_instant || has("flash") || is_sorcery_timing` — same
+        // shape as Python's `legal.py:217-301` instant-speed block
+        // + `legal.py:335-445` sorcery-speed block sharing the
+        // `seen_instant` HashSet. See I46 (post-closure invariant
+        // pin in `docs/RUST_PARITY_GAPS.md`).
         let is_sorcery_timing = self.active_player == player_id
             && (self.phase == PHASE_MAIN1 || self.phase == PHASE_MAIN2)
             && self.stack.is_empty();
+
+        // **CastSpell emission — instant-speed window first**
+        // (Python `legal.py:217-301`). Walk the hand and emit a
+        // CastSpell for any printed Instant or any card with the
+        // "flash" keyword, regardless of sorcery timing. The dedup
+        // HashSet is shared with the sorcery-speed pass below — a
+        // card that could emit at both windows (degenerate but
+        // harmless) is emitted ONCE at the instant-speed slot, same
+        // as Python's `seen_instant` set living in scope across
+        // both blocks.
+        //
+        // **Filter**:
+        //   * Land cards never CastSpell (CR 305.1).
+        //   * Per-card timing gate: `is_instant` (CR 307.1) OR
+        //     `"flash" in keywords` (CR 702.13a). Other cards skip
+        //     this pass and may be picked up by the sorcery-speed
+        //     pass below.
+        //
+        // **Dedup** (Python lines 233-244 / 349-363): keyed on
+        // `(printing.name, ...flags)` 6-tuple. With all flags
+        // defaulted, this collapses to `(printing.name,)` — same
+        // shape as the PlayLand dedup below.
+        //
+        // **Emission order** (matches Python's `legal.py`):
+        // `[PassPriority, (DeclareAttackers...), CastSpell
+        // (instant/flash)..., PlayLand..., CastSpell (sorcery)...,
+        // ActivateAbility...]`. The instant-speed CastSpell pass
+        // runs BEFORE the sorcery-timing gate (so a non-active
+        // priority holder still emits flashes / instants); the
+        // sorcery-speed pass runs AFTER PlayLand. This is the CE19
+        // closure shape (see I46 in `docs/RUST_PARITY_GAPS.md`) —
+        // pre-closure the entire CastSpell block was gated by the
+        // single sorcery-timing short-circuit, dropping flash + any
+        // future Instants at off-active priority windows.
+        let mut seen_castspell: HashSet<&str> = HashSet::new();
+        for obj in self.players[idx].hand.iter() {
+            let Some(printing) = self.registry.lookup(obj.printing_id) else {
+                continue;
+            };
+            let is_land = printing.card_types.iter().any(|t| t == "Land");
+            if is_land {
+                continue;
+            }
+            let is_instant = printing
+                .card_types
+                .iter()
+                .any(|t| t == "Instant");
+            let has_flash = printing.keywords.iter().any(|k| k == "flash");
+            if !(is_instant || has_flash) {
+                continue;
+            }
+            let name: &str = printing.name.as_ref();
+            if seen_castspell.contains(name) {
+                continue;
+            }
+            seen_castspell.insert(name);
+            actions.push(cast_spell_dict(py, obj.id)?);
+        }
+
+        // Post-instant-speed sorcery-timing gate. Everything after
+        // this point (PlayLand, sorcery-speed CastSpell,
+        // ActivateAbility) is sorcery-speed only, so if it isn't
+        // sorcery timing we return here with whatever
+        // PassPriority + DeclareAttackers / DeclareBlockers +
+        // instant-speed CastSpell emissions we've already pushed.
         if !is_sorcery_timing {
             return Ok(actions);
         }
@@ -798,52 +873,51 @@ impl GameState {
             actions.push(play_land_dict(py, obj.id)?);
         }
 
-        // PlayLand goes BEFORE PassPriority in Python's natural
-        // append order — but Python prepends PassPriority at line
-        // 178, so Python's final list shape is
-        // `[PassPriority, PlayLand_1, PlayLand_2, ...]`. We match
-        // that by pushing PassPriority first then PlayLands after.
-
-        // Python lines 335-445: sorcery-speed CastSpell emission.
+        // **CastSpell emission — sorcery-speed pass** (Python
+        // `legal.py:335-445`). Walk the hand and emit a CastSpell
+        // for every non-Land card that isn't already in the
+        // `seen_castspell` HashSet from the instant-speed pass
+        // above. The shared HashSet means an instant or flash card
+        // emitted instant-speed is NOT re-emitted here (matches
+        // Python's sorcery-speed loop short-circuit at line 366:
+        // `if "flash" in card.printing.keywords: continue` plus the
+        // `_is_sorcery_speed_spell` filter at lines 339-345 that
+        // excludes Instants).
         //
-        // Walks hand for non-Land cards and emits a base CastSpell
-        // (no alt-cost flags). The Python source has additional
-        // alt-cost emissions (kicker / warp / impending /
-        // cast_for_free / Room-half) interleaved inside the same
-        // loop body; first-slice ships the no-flags emission only —
-        // see the "Deferred alt-cost flags" section of the module
-        // docstring.
+        // **Filter** (Python lines 339-345, narrowed): non-Land
+        // cards that aren't Instant and don't have flash. Python
+        // gates `_is_sorcery_speed_spell` on
+        // `is_creature || is_sorcery || (is_permanent && !is_instant
+        // && !is_land)`. The complement of (Instant ∪ Flash ∪ Land)
+        // covers Creatures, Sorceries, and other non-Land non-
+        // Instant permanents.
         //
-        // **Filter** (Python lines 366-345, narrowed): non-Land
-        // cards. Python additionally excludes Instants (they get
-        // cast in the instant-speed block above, lines 246-301)
-        // and gates `_is_sorcery_speed_spell` on
-        // is_creature || is_sorcery || (is_permanent && !is_instant
-        // && !is_land). First-slice approximation: "not Land"
-        // captures every printing in the synthetic-state registry
-        // (Forest = Land filtered out; Creatures emit; no other
-        // types registered yet).
-        //
-        // **Dedup** (Python lines 349-363): keyed on
-        // `(printing.name, ...flags)` 6-tuple. With all flags
-        // defaulted, this collapses to `(printing.name,)` — same
-        // shape as the PlayLand dedup above. Two Llanowar Elves
-        // in hand emit a single CastSpell carrying the first
-        // hand-order Elves' id.
-        let mut seen_castspell: HashSet<&str> = HashSet::new();
+        // **Dedup** uses the SHARED `seen_castspell` HashSet —
+        // mirrors Python's `seen_instant` set living in scope
+        // across both blocks. Two Llanowar Elves in hand emit a
+        // single CastSpell carrying the first hand-order Elves' id.
         for obj in self.players[idx].hand.iter() {
             let Some(printing) = self.registry.lookup(obj.printing_id) else {
                 continue;
             };
-            // Skip Lands — they emit PlayLand actions, not
-            // CastSpell. Lands play via the special action, not
-            // cast via the stack (CR 305.1).
             let is_land = printing.card_types.iter().any(|t| t == "Land");
             if is_land {
                 continue;
             }
-            // Dedup by printing name (first-slice key — see
-            // module docstring for the future 6-tuple shape).
+            // Instants + flash were already eligible at the instant-
+            // speed pass; the shared HashSet would dedupe them, but
+            // we still skip explicitly so the per-card filter
+            // mirrors Python's `_is_sorcery_speed_spell` (which
+            // excludes Instants and flash-keyword cards from this
+            // loop's filter pre-dedup) one-to-one.
+            let is_instant = printing
+                .card_types
+                .iter()
+                .any(|t| t == "Instant");
+            let has_flash = printing.keywords.iter().any(|k| k == "flash");
+            if is_instant || has_flash {
+                continue;
+            }
             let name: &str = printing.name.as_ref();
             if seen_castspell.contains(name) {
                 continue;
@@ -929,10 +1003,15 @@ impl GameState {
         }
 
         // Final emission order: [PassPriority, (DeclareAttackers...),
-        // PlayLand..., CastSpell..., ActivateAbility...]. Matches
-        // Python's `legal.py` natural append order under the
-        // sorcery-timing gate (DeclareAttackers is the Rust-only
-        // exception, see its module-docstring section).
+        // (DeclareBlockers...), CastSpell(instant/flash)...,
+        // PlayLand..., CastSpell(sorcery)..., ActivateAbility...].
+        // Matches Python's `legal.py` natural append order:
+        // instant-speed CastSpell block (lines 217-301), sorcery-
+        // timing gate (line 303), PlayLand (lines 319-329), sorcery-
+        // speed CastSpell block (lines 335-445), ActivateAbility
+        // (lines 612-829). DeclareAttackers / DeclareBlockers are
+        // Rust-only emissions outside Python's loop (see their
+        // module-docstring sections). CE19 closure shape; see I46.
 
         Ok(actions)
     }
