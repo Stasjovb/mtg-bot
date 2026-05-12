@@ -458,6 +458,48 @@ pub enum PendingDecision {
         do_action: Box<crate::cards::Effect>,
         then_action: Box<crate::cards::Effect>,
     },
+    /// **Round 28 manifest-dread decision substrate.** CR 701.55 —
+    /// "look at top two, manifest one, the other to graveyard."
+    /// Pushed by `Effect::ManifestDread` (Bashful-Beastie family, 10
+    /// EoE cards). Shape-aligned with `PickCardFromExaminedChoice`
+    /// but routes the picked card to BATTLEFIELD (not hand) and the
+    /// rest to graveyard.
+    ///
+    /// **Payload.** Carries the examined GameObjects fully (same
+    /// shape as `PickCardFromExaminedChoice`) so the submit
+    /// dispatcher can re-emit them into battlefield/graveyard
+    /// without re-borrowing the library. Order matches popped-off-
+    /// top order: `cards[0]` was topmost, `cards[1]` second, etc.
+    /// With a 1-card library the Vec has length 1; with an empty
+    /// library it's empty.
+    ///
+    /// **Submit.** `submit_manifest_dread_decision(chosen_id)`
+    /// consumes the head, routes `chosen_id` to the controller's
+    /// battlefield (with the standard ETB state reset:
+    /// summoning_sick=true, tapped=false, damage=0, counters=0,
+    /// attached_to=None, exiled_with_source=None) and every other
+    /// examined card to the controller's graveyard (in popped
+    /// order). `chosen_id` MUST be one of the examined ids; an
+    /// unknown id raises `ValueError` transactionally.
+    ///
+    /// **Empty-library partial.** An empty `cards` Vec drains as an
+    /// O(1) no-op on auto-resolve. Manual submit with any id raises
+    /// (no ids in the pending set).
+    ///
+    /// **Auto-resolve default.** `"default"` / `"manifest_top"` pick
+    /// the topmost card (cards[0]) — matches Python's no-agent-
+    /// seated fallback in `ManifestDread.resolve`
+    /// (`manifest_id = options[0]` before the agent override).
+    ///
+    /// **Face-down state — first-slice simplification.** The
+    /// manifested card lands on bf with its ORIGINAL printing
+    /// (name/types/P/T visible). Real MTG face-down semantics (CR
+    /// 701.34 + 707) are deferred — see SEARCH_LIMITATIONS.md.
+    ManifestDreadChoice {
+        source_obj_id: u32,
+        controller: u8,
+        cards: Vec<GameObject>,
+    },
 }
 
 /// `GameState` carries an `Arc<RegistryData>` so every clone shares
