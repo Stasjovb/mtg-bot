@@ -356,6 +356,8 @@ fn resolve_manifest_dread_to_battlefield(
     let mut sorted_cards = cards;
     let chosen = sorted_cards.remove(chosen_idx);
     let manifested_id = chosen.id;
+    // CE4 closure: reserve ETB timestamp before the player-mut borrow.
+    let etb_ts = crate::state::reserve_etb_timestamp(state);
     // Route chosen to bf with the standard ETB state reset (mirrors
     // ReturnAllCreaturesFromYourGraveyardToBattlefield's reset).
     {
@@ -370,6 +372,7 @@ fn resolve_manifest_dread_to_battlefield(
         obj.attached_to = None;
         obj.exiled_with_source = None;
         obj.controller = controller;
+        obj.etb_timestamp = etb_ts;
         bf_mut.push(obj);
     }
     // Route the rest (preserving popped order) to graveyard.

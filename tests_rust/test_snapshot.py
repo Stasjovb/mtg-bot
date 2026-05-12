@@ -551,25 +551,37 @@ def test_battlefield_snapshot_controller_id_matches_seed(synthetic_state):
     assert all(d["controller_id"] == 1 for d in p1_dicts)
 
 
-def test_battlefield_snapshot_p0_then_p1_ordering(engine):
-    """Build a state with only p1 having battlefield content (via
-    a non-default seed), then add a p0 permanent via
-    register_and_inject_object — the projection still emits p0
-    first, even though chronologically p1 was populated first."""
+def test_battlefield_snapshot_etb_timestamp_ordering(engine):
+    """**CE4 closure.** Build a state with no initial battlefield
+    content, then inject a p1 permanent first followed by a p0
+    permanent. The snapshot emits in ETB-timestamp order (matching
+    Python's centralized ``state.battlefield`` append order), not
+    in controller-grouped order: p1 first (it ETBed first), p0
+    second.
+
+    Pre-CE4 this test pinned the controller-grouped emission order
+    ("p0 first, p1 second — ordering is by zone owner, not
+    insertion") which Phase 5 multi-turn cross-engine smoke caught
+    as a divergence from Python on step 28. The closure flipped the
+    snapshot to emit in ``etb_timestamp`` order via stable-sort.
+    """
     state = engine.make_synthetic_state(
         num_battlefield=0, num_hand=0, num_library=0
     )
     # Populate p1 with a single Bears, then p0 with a single Forest.
+    # Each `register_and_inject_object` into ZONE_BATTLEFIELD stamps a
+    # fresh `etb_timestamp` via the counter — p1's Bears gets the
+    # lower timestamp; p0's Forest gets the higher.
     p1_obj = state.register_and_inject_object(_BEARS, 1, ZONE_BATTLEFIELD)
     p0_obj = state.register_and_inject_object(_FOREST, 0, ZONE_BATTLEFIELD)
 
     snap = state.battlefield_snapshot()
     assert len(snap) == 2
-    # p0 first, p1 second — ordering is by zone owner, not insertion.
-    assert snap[0]["id"] == p0_obj
-    assert snap[0]["controller_id"] == 0
-    assert snap[1]["id"] == p1_obj
-    assert snap[1]["controller_id"] == 1
+    # ETB order: p1's Bears entered first, p0's Forest entered second.
+    assert snap[0]["id"] == p1_obj
+    assert snap[0]["controller_id"] == 1
+    assert snap[1]["id"] == p0_obj
+    assert snap[1]["controller_id"] == 0
 
 
 # --- edge-case: clone CoW canary across all six getters ---------------

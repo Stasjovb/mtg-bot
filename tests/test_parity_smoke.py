@@ -1351,24 +1351,22 @@ def test_cross_engine_play_a_land_selector_emits_pass_priority_when_no_land(pari
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "CE4: battlefield order diverges between Python (ETB-timestamp "
-        "centralized list) and Rust (per-controller-grouped split). "
-        "First fires at step 28, turn 3 PRECOMBAT_MAIN. Closure plan in "
-        "docs/RUST_PARITY_GAPS.md CE4 entry. Strict-xfail until closed; "
-        "flips to xpass when the underlying ordering divergence is fixed."
-    ),
-)
 def test_cross_engine_multi_turn_selector_walks_clean(parity_smoke):
     """Drive 50 decisions on the slightly_bigger_deckspec with the
     multi_turn_selector and assert every step walks clean.
 
-    Pinned strict-xfail until CE4 closes — the battlefield-order
-    divergence surfaces at step 28 once both players have a permanent
-    on the battlefield. When CE4 closes the test flips to xpass and
-    the maintainer removes the marker.
+    **CE4 closure (this slice).** Pre-CE4 this was strict-xfail because
+    Rust's ``battlefield_snapshot`` emitted in controller-grouped order
+    (p0's bf then p1's bf) while Python's centralized
+    ``state.battlefield`` is ordered by ETB timestamp; the first
+    divergence surfaced at step 28 (turn 3 PRECOMBAT_MAIN play_land)
+    once both players had a permanent on the battlefield. The closure
+    slice added a per-object ``etb_timestamp`` field stamped at every
+    bf-entry primitive and stable-sorts ``battlefield_snapshot`` (and
+    the fingerprint's battlefield walk) by that field, producing the
+    same emission order Python's ``state.battlefield.append()`` flow
+    produces. The xfail marker was removed alongside the companion
+    symptom-pin test (per the closure-pair contract; see ``docs/RUST_PARITY_GAPS.md``).
     """
     from mtg_bot.parity.cross_engine import (
         multi_turn_selector,
@@ -1391,65 +1389,6 @@ def test_cross_engine_multi_turn_selector_walks_clean(parity_smoke):
             f"unexpected divergence at step {step.step_index}: "
             f"{[(d.field, d.py_value, d.rust_value, d.known_gap) for d in step.divergences]}"
         )
-
-
-def test_cross_engine_multi_turn_selector_surfaces_ce4_battlefield_ordering(parity_smoke):
-    """**CE4 symptom-present pin.** Drive 29 decisions with the
-    multi_turn_selector and assert the FIRST divergence is at step
-    28 (turn 3 PRECOMBAT_MAIN play_land), on the ``battlefield``
-    field, with the Python value carrying Mountain-then-Forest
-    (ETB order: Mountain entered turn 2, Forest entered turn 3)
-    and the Rust value carrying Forest-then-Mountain (controller
-    order: p0's bf first, then p1's bf).
-
-    This is the companion to the strict-xfail clean-walk test
-    above. When CE4 closes:
-      * The clean-walk strict-xfail flips to xpass; remove its marker.
-      * This symptom test starts FAILING because the values would
-        agree. The maintainer removes / inverts this test as part of
-        the closure pair contract (mirrors the CE2 / CE3 closure
-        pattern).
-    """
-    from mtg_bot.parity.cross_engine import (
-        multi_turn_selector,
-        slightly_bigger_deckspec,
-        walk_both,
-    )
-
-    result = walk_both(
-        slightly_bigger_deckspec(),
-        n_decisions=29,
-        decision_selector=multi_turn_selector,
-    )
-    assert result.error is None
-    # Steps 0..27: clean (every phase boundary of turns 1+2 walks parity-
-    # clean, including the active-player swap on the CLEANUP -> UNTAP wrap).
-    for step in result.steps[:28]:
-        assert step.divergences == [], (
-            f"unexpected divergence at step {step.step_index} "
-            f"(expected step 28 to be the first): "
-            f"{[(d.field, d.py_value, d.rust_value) for d in step.divergences]}"
-        )
-    # Step 28: the FIRST divergence — battlefield ordering, fired by
-    # p0 playing Forest while p1's Mountain is already on the bf.
-    step_28 = result.steps[28]
-    assert step_28.action_dict == {"kind": "play_land", "card_id": 0}
-    assert step_28.py_view["turn"] == 3
-    assert step_28.py_view["step"] == "PRECOMBAT_MAIN"
-    assert step_28.py_view["active_player"] == 0
-    fields = {d.field for d in step_28.divergences}
-    assert fields == {"battlefield"}, (
-        f"expected only `battlefield` to diverge; got {sorted(fields)}"
-    )
-    bf_div = next(d for d in step_28.divergences if d.field == "battlefield")
-    # Python: ETB-timestamp order — Mountain (turn 2 p1 MAIN1) first,
-    # Forest (turn 3 p0 MAIN1) second.
-    assert bf_div.py_value[0][0] == "Mountain"
-    assert bf_div.py_value[1][0] == "Forest"
-    # Rust: controller-grouped — p0's bf first (Forest), then p1's bf
-    # (Mountain).
-    assert bf_div.rust_value[0][0] == "Forest"
-    assert bf_div.rust_value[1][0] == "Mountain"
 
 
 def test_cross_engine_multi_turn_selector_turn_1_skips_draw(parity_smoke):

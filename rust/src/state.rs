@@ -79,6 +79,33 @@ pub struct GameObject {
     /// when `None`, so default-state pinned baselines stay
     /// byte-identical.
     pub exiled_with_source: Option<u32>,
+    /// **CE4 closure — ETB-timestamp ordering.** Monotonic counter
+    /// stamped at every battlefield-entry call site (cast →
+    /// move_from_hand_to_battlefield, play_land, every ETB pathway in
+    /// state_ops_resolve, token creation, reanimation, manifest, …).
+    /// Defaults to `0` for every freshly-allocated GameObject; the
+    /// non-zero values are written only when a Rust call site explicitly
+    /// stamps the object as it enters the battlefield. Used by
+    /// `battlefield_snapshot` (state_ops_snapshot.rs) and the
+    /// fingerprint's battlefield walk (state_ops_fingerprint.rs) to
+    /// emit battlefield objects in ETB order across both players,
+    /// mirroring Python's centralized `state.battlefield` list ordered
+    /// by `append()` order. Stable-sort by this field is the single
+    /// observable surface — the field itself is NOT emitted into the
+    /// per-object 8-tuple or the snapshot dict (keeping pre-CE4 pinned
+    /// baselines bit-equal for states with no real ETBs, e.g. synthetic
+    /// states with battlefields built up front in `make_player`).
+    ///
+    /// Ties (same `etb_timestamp` — possible only when a single Effect
+    /// resolution pushes multiple bf objects without bumping the
+    /// counter between pushes) are broken by stable-sort: insertion
+    /// order is preserved within the same timestamp. Current call
+    /// sites stamp a FRESH timestamp on every push (counter += 1 per
+    /// push), so the multi-token / batch-bf-injection arms produce
+    /// strictly-monotonic timestamps and the stable-sort tie-break
+    /// path is only exercised by states constructed without going
+    /// through a stamp site (default-0 case in synthetic-state fixtures).
+    pub etb_timestamp: u32,
     /// Round-27 UEOT framework — per-object expiring-modifier stack.
     /// Each entry is a CR-613-layer continuous modifier with implicit
     /// `expires_at = "cleanup"`. Cleared in bulk on entry to
@@ -156,6 +183,24 @@ pub enum UeotModifier {
     /// additive bonuses (`PowerToughnessBonus`) stack ON TOP of the
     /// set base, matching CR 613.7c.
     SetBasePT { power: i32, toughness: i32 },
+}
+
+/// **CE4 closure — reserve the next monotonic ETB timestamp.**
+///
+/// Reads `state.next_etb_timestamp`, increments the counter (saturating
+/// add — u32 is wide enough that a realistic game won't overflow), and
+/// returns the just-reserved value for the caller to stamp onto the
+/// object before pushing it to a battlefield Vec.
+///
+/// Centralizes the read-then-bump idiom so every ETB call site stays
+/// one-line. Saturating add keeps the corner-case tail-state sortable
+/// (if a pathological state ever runs the counter to u32::MAX, all
+/// further ETBs land at u32::MAX — still stable-sort-comparable, just
+/// indistinguishable in order beyond that point).
+pub fn reserve_etb_timestamp(state: &mut GameState) -> u32 {
+    let ts = state.next_etb_timestamp;
+    state.next_etb_timestamp = state.next_etb_timestamp.saturating_add(1);
+    ts
 }
 
 impl GameObject {
@@ -674,6 +719,29 @@ pub struct GameState {
     /// empty queues stay bit-identical). FIFO: the dispatcher
     /// consumes index 0 first.
     pub pending_decisions: Vec<PendingDecision>,
+    /// **CE4 closure — monotonic ETB-timestamp source.** Bookkeeping
+    /// counter incremented once per battlefield-entry primitive
+    /// (move_from_hand_to_battlefield / play_land / every ETB pathway
+    /// in state_ops_resolve / token / manifest / reanimation). Each
+    /// call site reads the current value via
+    /// `stamp_etb_timestamp(&mut state, &mut obj)` (see
+    /// `state_ops_zones.rs`), which writes the counter into the
+    /// object's `etb_timestamp` and bumps the counter by 1 (saturating
+    /// — u32 is wide enough that a realistic game won't overflow, but
+    /// a saturating bump on the corner case still produces a sortable
+    /// tail-state).
+    ///
+    /// **Not serialized into the fingerprint.** Like `mulligan_count`
+    /// and `consecutive_passes`, this is a transient bookkeeping
+    /// counter, not part of the gameplay-relevant digest. Two states
+    /// reached via different histories that share the same observable
+    /// battlefield ORDER must share a fingerprint regardless of how
+    /// many bf-entries happened along the way. The per-object
+    /// `etb_timestamp` slot is also kept out of the 8-tuple to
+    /// preserve pre-CE4 pinned baselines; the fingerprint reads ETB
+    /// order via a stable-sort by `etb_timestamp` at battlefield-walk
+    /// time rather than emitting the field itself.
+    pub next_etb_timestamp: u32,
 }
 
 #[pymethods]
@@ -799,6 +867,13 @@ fn make_object(id: u32, controller: u8, printing_id: u32) -> GameObject {
         counters: 0,
         attached_to: None,
         exiled_with_source: None,
+        // CE4 closure: synthetic-state fixtures pre-populate the
+        // battlefield without going through stamp_etb_timestamp, so
+        // every object defaults to 0. The stable-sort in the snapshot
+        // / fingerprint preserves the make_player insertion order
+        // (p0-then-p1, all timestamps tied at 0) — pre-CE4 baselines
+        // stay bit-equal.
+        etb_timestamp: 0,
         ueot_modifiers: Vec::new(),
     }
 }
@@ -962,5 +1037,6 @@ pub fn make_synthetic_state(
         permanent_left_battlefield_this_turn: false,
         spell_warped_this_turn: false,
         pending_decisions: Vec::new(),
+        next_etb_timestamp: 0,
     }
 }
