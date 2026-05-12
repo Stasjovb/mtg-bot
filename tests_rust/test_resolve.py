@@ -8801,3 +8801,301 @@ def test_resolve_destroy_enchanted_permanent_clone_isolation(synthetic_state):
     # Clone: target in graveyard. Source: target still on bf.
     assert cloned.find_object_zone(p1_first_bear_id) == ZONE_GRAVEYARD
     assert synthetic_state.find_object_zone(p1_first_bear_id) == ZONE_BATTLEFIELD
+
+
+# --- DealDamageToOpponentCreature dispatch --------------------------
+#
+# **DealDamageToOpponentCreature scope** (mirrored in the Rust module
+# docstring on `cards.rs`):
+#
+# - **Glassworks // Shattered Yard family — 2 EoE cards.** Mirrors
+#   Python's `DealDamageToOpponentCreature(DealDamage)` sugar with
+#   filter `IsCreature() & ControlledByOpponent()` — same `DealDamage`
+#   shape as `DealDamageToTargetCreature` but the target must be a
+#   creature controlled by an opponent of the SOURCE's controller.
+# - **First-slice deterministic choice**: iterate opponents in player
+#   order; pick the FIRST `Creature` printing on each opponent's
+#   battlefield (smallest bf index). Silent fizzle if no opponent
+#   creature.
+# - **Source-controller direction** (not active-player direction).
+#   Inverts target side correctly when p1 casts the source on p0's
+#   turn — mirrors LoseLife / TargetOpponentLosesLife shape.
+# - **Negative amount raises** at register time AND at resolve time
+#   (defense-in-depth — mirrors DealDamage / DealDamageAnyTarget).
+# - **SBA fires post-resolve.** Lethal damage (damage >= effective
+#   toughness) flips the creature to graveyard via the standard SBA
+#   pass (CR 704.5g).
+
+
+def _shattered_yard_dict(amount=3):
+    """A deal-damage-to-opponent-creature printing — Shattered Yard-shaped
+    (sorcery, deals N damage to target creature an opponent controls)."""
+    return {
+        "name": "Test Shattered Yard",
+        "card_types": ["Sorcery"],
+        "mana_cost": {"R": 1, "generic": 2},
+        "effects": [
+            {"kind": "deal_damage_to_opponent_creature", "amount": amount}
+        ],
+    }
+
+
+def test_resolve_deal_damage_to_opponent_creature_register_round_trip(
+    empty_registry,
+):
+    """Round-trip: register a printing, look up its effects, confirm the
+    Effect dict survives the parse + serialize round-trip."""
+    pid = empty_registry.register_printing(_shattered_yard_dict(amount=3))
+    effects = empty_registry.get_printing_effects(pid)
+    assert len(effects) == 1
+    assert effects[0]["kind"] == "deal_damage_to_opponent_creature"
+    assert effects[0]["amount"] == 3
+
+
+def test_resolve_deal_damage_to_opponent_creature_missing_amount_raises(
+    empty_registry,
+):
+    """Missing `amount` field is a register-time KeyError (mirrors the
+    deal_damage_any_target / pump arms' required-field shape)."""
+    with pytest.raises(KeyError):
+        empty_registry.register_printing(
+            {
+                "name": "Test Missing Amount",
+                "card_types": ["Sorcery"],
+                "mana_cost": {"R": 1, "generic": 2},
+                "effects": [{"kind": "deal_damage_to_opponent_creature"}],
+            }
+        )
+
+
+def test_resolve_deal_damage_to_opponent_creature_negative_amount_raises_at_register(
+    empty_registry,
+):
+    """Register-time guard on negative amount (defense-in-depth, the
+    apply_effect guard is the secondary check). Mirrors DealDamageAnyTarget
+    / EachOpponentLosesLife / DiscardSelf / PutPlusOneCounterOnSelf
+    negative-amount register-time check shape."""
+    with pytest.raises(ValueError, match="non-negative"):
+        empty_registry.register_printing(_shattered_yard_dict(amount=-1))
+
+
+def test_resolve_deal_damage_to_opponent_creature_happy_path(synthetic_state):
+    """End-to-end happy path. Source is on p0's bf (controller=0);
+    resolution scans p1's bf top-to-bottom and damages the FIRST
+    creature it finds. The synthetic seed seats lands first on p1's
+    bf (Forest at bf[0..5]) then creatures — Bears at bf[5] — so the
+    Land filter must skip past the Forests and land damage on the
+    first Bears (obj_id 72 in the standard fixture)."""
+    target_obj_id = 72  # p1's bf[5], the first Bears (skipping 5 Forests)
+    assert synthetic_state.get_damage(target_obj_id) == 0
+
+    spell_obj_id = synthetic_state.register_and_inject_object(
+        _shattered_yard_dict(amount=2), 0, ZONE_BATTLEFIELD
+    )
+    synthetic_state.push_to_stack(spell_obj_id, 0)
+    life_before = list(synthetic_state.life_totals)
+    resolved = synthetic_state.resolve_top_of_stack()
+
+    assert resolved is not None
+    # First creature (Bears at 72) took the damage; Forest at bf[0]
+    # untouched (Creature filter).
+    assert synthetic_state.get_damage(target_obj_id) == 2
+    assert synthetic_state.get_damage(67) == 0  # p1 bf[0] Forest
+    # Life totals untouched (creatures take damage, not players).
+    assert list(synthetic_state.life_totals) == life_before
+    assert synthetic_state.is_stack_empty() is True
+
+
+def test_resolve_deal_damage_to_opponent_creature_skips_source_controllers_creatures(
+    engine,
+):
+    """The filter excludes creatures controlled by the source's controller.
+    Setup: p0 (= source's controller) has a creature on their bf; p1
+    has a creature on their bf. The damage must land on p1's creature,
+    NOT p0's — this is the critical distinction from `DealDamageAnyTarget`
+    and `DealDamage{AnyCreature}` which scan defender's bf without
+    a controller filter."""
+    state = engine.make_synthetic_state(
+        num_battlefield=0, num_hand=1, num_library=1
+    )
+    p0_creature_id = state.register_and_inject_object(
+        {
+            "name": "Test P0 Bear",
+            "card_types": ["Creature"],
+            "power": 2,
+            "toughness": 2,
+        },
+        0,
+        ZONE_BATTLEFIELD,
+    )
+    p1_creature_id = state.register_and_inject_object(
+        {
+            "name": "Test P1 Bear",
+            "card_types": ["Creature"],
+            "power": 2,
+            "toughness": 2,
+        },
+        1,
+        ZONE_BATTLEFIELD,
+    )
+    spell_obj_id = state.register_and_inject_object(
+        _shattered_yard_dict(amount=2), 0, ZONE_HAND
+    )
+    state.push_to_stack(spell_obj_id, 0)
+    state.resolve_top_of_stack()
+
+    # P1's creature damaged; P0's untouched.
+    assert state.get_damage(p1_creature_id) == 2
+    assert state.get_damage(p0_creature_id) == 0
+
+
+def test_resolve_deal_damage_to_opponent_creature_no_eligible_target_fizzles(
+    engine,
+):
+    """If no opponent has any creature on bf, the spell fizzles silently —
+    no damage applied anywhere, no life change, no error. Stack still
+    pops and the source still moves post-resolve."""
+    state = engine.make_synthetic_state(
+        num_battlefield=0, num_hand=1, num_library=1
+    )
+    # P1 has only a Land on bf (no creature).
+    land_id = state.register_and_inject_object(
+        {
+            "name": "Test Plains",
+            "card_types": ["Land"],
+            "mana_produced": ["W"],
+        },
+        1,
+        ZONE_BATTLEFIELD,
+    )
+    # P0 has a creature on bf — but the filter excludes source-
+    # controller's own creatures, so this is NOT eligible either.
+    p0_creature_id = state.register_and_inject_object(
+        {
+            "name": "Test P0 Bear",
+            "card_types": ["Creature"],
+            "power": 2,
+            "toughness": 2,
+        },
+        0,
+        ZONE_BATTLEFIELD,
+    )
+    spell_obj_id = state.register_and_inject_object(
+        _shattered_yard_dict(amount=3), 0, ZONE_HAND
+    )
+    state.push_to_stack(spell_obj_id, 0)
+    life_before = list(state.life_totals)
+    state.resolve_top_of_stack()
+
+    # No damage applied to either creature, no life change.
+    assert state.get_damage(land_id) == 0
+    assert state.get_damage(p0_creature_id) == 0
+    assert list(state.life_totals) == life_before
+    assert state.is_stack_empty() is True
+
+
+def test_resolve_deal_damage_to_opponent_creature_p1_source_attacks_p0(
+    synthetic_state,
+):
+    """Inverted controller direction: source is controlled by p1 while
+    active_player stays 0. The dispatch must damage p0's first creature
+    (NOT p1's) — because the OPPONENT of the source's CONTROLLER (= p1)
+    is p0. Cross-checks that the dispatch reads `obj.controller` /
+    `StackItem.controller` rather than `state.active_player`."""
+    # Synthetic seed has both players' bfs seeded. P0's first Bears
+    # is at obj_id 5 (p0 bf[5], skipping 5 Forests at bf[0..4]); p1's
+    # first Bears is at obj_id 72.
+    p0_first_bear_id = 5
+    p1_first_bear_id = 72
+    assert synthetic_state.get_damage(p0_first_bear_id) == 0
+    assert synthetic_state.get_damage(p1_first_bear_id) == 0
+
+    # Inject the source onto p1's bf (controller=1).
+    src_id = synthetic_state.register_and_inject_object(
+        _shattered_yard_dict(amount=2), 1, ZONE_BATTLEFIELD
+    )
+    # Push with controller=1 (p1's spell resolving on the stack).
+    synthetic_state.push_to_stack(src_id, 1)
+    synthetic_state.resolve_top_of_stack()
+
+    # p0's first Bears took the damage; p1's untouched.
+    assert synthetic_state.get_damage(p0_first_bear_id) == 2
+    assert synthetic_state.get_damage(p1_first_bear_id) == 0
+
+
+def test_resolve_deal_damage_to_opponent_creature_lethal_damage_destroys_via_sba(
+    engine,
+):
+    """damage >= effective toughness flips the opponent's creature to
+    graveyard on the next SBA pass (CR 704.5g). Verifies the damage-
+    stamp path composes cleanly with SBA destruction — same shape as
+    the round-3 DealDamage path."""
+    state = engine.make_synthetic_state(
+        num_battlefield=0, num_hand=1, num_library=1
+    )
+    # P1 has a 2/2 Bear.
+    bear_id = state.register_and_inject_object(
+        {
+            "name": "Test Bear",
+            "card_types": ["Creature"],
+            "power": 2,
+            "toughness": 2,
+        },
+        1,
+        ZONE_BATTLEFIELD,
+    )
+    spell_obj_id = state.register_and_inject_object(
+        _shattered_yard_dict(amount=3), 0, ZONE_HAND
+    )
+    state.push_to_stack(spell_obj_id, 0)
+    state.resolve_top_of_stack()
+
+    # Damage stamped (3 >= toughness 2 = lethal).
+    assert state.get_damage(bear_id) == 3
+    # SBA destroys it.
+    assert state.apply_sbas() == 1
+    assert state.find_object_zone(bear_id) == ZONE_GRAVEYARD
+
+
+def test_resolve_deal_damage_to_opponent_creature_zero_amount_no_op(
+    synthetic_state,
+):
+    """amount=0 is a legal no-op (mirrors GainLife / DrawCards / Mill /
+    DealDamageAnyTarget zero-amount conventions). The variant still
+    fires (target search happens, no damage applied), the stack pops,
+    no error."""
+    target_obj_id = 72  # p1's first Bears
+    spell_obj_id = synthetic_state.register_and_inject_object(
+        _shattered_yard_dict(amount=0), 0, ZONE_BATTLEFIELD
+    )
+    synthetic_state.push_to_stack(spell_obj_id, 0)
+    life_before = list(synthetic_state.life_totals)
+    synthetic_state.resolve_top_of_stack()
+
+    assert synthetic_state.get_damage(target_obj_id) == 0
+    assert list(synthetic_state.life_totals) == life_before
+    assert synthetic_state.is_stack_empty() is True
+
+
+def test_resolve_deal_damage_to_opponent_creature_clone_isolation(
+    synthetic_state,
+):
+    """CoW canary: cloning the state and resolving the spell on the clone
+    must not bleed damage back into the original — the bf battlefield
+    Vec is Arc-shared, and the clone-then-mutate path must trigger a
+    `Arc::make_mut` fork on the clone's side only."""
+    target_obj_id = 72  # p1's first Bears
+    spell_obj_id = synthetic_state.register_and_inject_object(
+        _shattered_yard_dict(amount=3), 0, ZONE_BATTLEFIELD
+    )
+    synthetic_state.push_to_stack(spell_obj_id, 0)
+    cloned = synthetic_state.clone_once()
+
+    cloned.resolve_top_of_stack()
+
+    # Clone: stack drained, target creature damaged.
+    assert cloned.is_stack_empty() is True
+    assert cloned.get_damage(target_obj_id) == 3
+    # Original: stack still has the spell, no damage applied.
+    assert synthetic_state.stack_size() == 1
+    assert synthetic_state.get_damage(target_obj_id) == 0

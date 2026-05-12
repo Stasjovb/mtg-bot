@@ -4582,6 +4582,101 @@ fn apply_effect(
                 Arc::make_mut(&mut state.players[opponent_idx].graveyard).push(obj);
             }
         }
+        // DealDamageToOpponentCreature — Glassworks // Shattered Yard
+        // family (2 EoE cards). Mirrors Python's
+        // `DealDamageToOpponentCreature(DealDamage)` sugar with filter
+        // `IsCreature() & ControlledByOpponent()`. Distinct from
+        // `DealDamageAnyTarget` (which can hit a player) AND from
+        // `DealDamage { target: AnyCreature }` (which picks bf[0] of
+        // the active player's defender without a card-type filter).
+        //
+        // Source-controller direction: scan source GameObject across
+        // the 5 zones + stack to recover `source.controller`. Opponent
+        // pool = every player whose id != source_controller (in 2-player
+        // engine = the one opponent).
+        //
+        // First-slice deterministic choice: iterate opponents in
+        // ascending player order; pick the FIRST `Creature` printing on
+        // each opponent's battlefield (smallest bf index). Return on
+        // first match — silent fizzle if no opponent has a creature.
+        // Source-controller's own creatures are excluded by construction
+        // (we only scan the opponents).
+        //
+        // Negative `amount` raises at register time AND here as defense-
+        // in-depth (mirrors the DealDamage / DealDamageAnyTarget
+        // raise-on-negative shape).
+        Effect::DealDamageToOpponentCreature { amount } => {
+            if *amount < 0 {
+                return Err(PyValueError::new_err(format!(
+                    "DealDamageToOpponentCreature amount must be non-negative, got {amount}"
+                )));
+            }
+            // Source-controller resolution (5-zone walk + stack scan;
+            // mirrors LoseLife / TargetOpponentLosesLife shape).
+            let mut source_controller: Option<u8> = None;
+            'outer: for player in state.players.iter() {
+                for zone in [
+                    &player.hand,
+                    &player.library,
+                    &player.battlefield,
+                    &player.graveyard,
+                    &player.exile,
+                ] {
+                    for obj in zone.iter() {
+                        if obj.id == source_obj_id {
+                            source_controller = Some(obj.controller);
+                            break 'outer;
+                        }
+                    }
+                }
+            }
+            if source_controller.is_none() {
+                if let Some(item) = state
+                    .stack
+                    .iter()
+                    .find(|i| i.source_obj_id == source_obj_id)
+                {
+                    source_controller = Some(item.controller);
+                }
+            }
+            let Some(controller) = source_controller else {
+                return Ok(()); // source not found: silent fizzle
+            };
+            // First eligible target: scan opponents (players whose id
+            // != controller) in ascending order; pick the first
+            // Creature on each opponent's bf (smallest index). 2-player
+            // engine: exactly one opponent at `1 - controller`, but
+            // generalize via the iterator to keep the shape n-player-
+            // ready.
+            let mut found: Option<(usize, u32)> = None;
+            'outer_dd: for (pidx, player) in state.players.iter().enumerate() {
+                if pidx as u8 == controller {
+                    continue;
+                }
+                for obj in player.battlefield.iter() {
+                    let printing_idx = obj.printing_id as usize;
+                    let Some(printing) = state.registry.printings.get(printing_idx) else {
+                        continue;
+                    };
+                    if printing.card_types.iter().any(|t| t == "Creature") {
+                        found = Some((pidx, obj.id));
+                        break 'outer_dd;
+                    }
+                }
+            }
+            if let Some((pidx, target_id)) = found {
+                let amount_i16 = (*amount).min(i16::MAX as i32) as i16;
+                let bf_mut: &mut Vec<GameObject> =
+                    Arc::make_mut(&mut state.players[pidx].battlefield);
+                for obj in bf_mut.iter_mut() {
+                    if obj.id == target_id {
+                        obj.damage = obj.damage.saturating_add(amount_i16);
+                        break;
+                    }
+                }
+            }
+            // else: no opponent creature → silent fizzle.
+        }
     }
     Ok(())
 }
