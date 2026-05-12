@@ -3434,3 +3434,299 @@ def vigilance_selector(py_state, rust_state, step_index: int) -> dict:
             return {"kind": "pass_priority"}
 
     return retaliation_selector(py_state, rust_state, step_index)
+
+
+# ---------------------------------------------------------------------------
+# Phase 5 follow-up #13: haste_selector — extend the cross-engine smoke
+# onto haste combat (CR 702.10). Mirrors :func:`vigilance_selector`
+# exactly except:
+#
+#   1. The injected creature carries the ``haste`` keyword instead of
+#      ``vigilance``.
+#   2. The injected creature is STILL ``summoning_sick=True`` post-
+#      injection (this is the load-bearing setup — testing that haste
+#      bypasses the summoning-sickness gate on DECLARE_ATTACKERS
+#      ELIGIBILITY, the surface CR 702.10b governs). All four prior
+#      probes (FS/DT/LL/VG) left the injected creature
+#      ``summoning_sick=False``, so this is the first probe that
+#      actually exercises the sickness-vs-eligibility branch.
+#   3. The trigger-detection gate is keyed on a distinct printing name
+#      ("Bear Sprinter") so the FS / DT / LL / VG / haste probes all
+#      stay independent on the same multi_blocker_deckspec walk.
+#
+# **Different surface from the damage-application axes (FS/DT/trample/
+# lifelink) AND from the vigilance tap-step axis.** Where the four
+# damage-axis keywords gate behavior at `apply_damage_pass` /
+# `resolve_combat_damage` and vigilance gates the tap step itself,
+# haste gates DECLARE_ATTACKERS *eligibility* — specifically the
+# summoning-sickness restriction (CR 302.1). Per CR 702.10b "A
+# creature with haste can attack and {T} as soon as it comes under
+# its controller's control", a haste creature is a LEGAL attacker
+# even while summoning-sick.
+#
+# **Both engines wire haste at declare-attackers eligibility.**
+#
+#   * **Python** (``combat.py:21``): inside ``eligible_attackers``'s
+#     comprehension filter, ``(not o.summoning_sick or "haste" in
+#     effective_keywords(state, o))`` — the keyword bypasses the
+#     sickness exclusion. ``declare_attackers`` itself doesn't
+#     re-validate, so a sick haste creature requested via
+#     DECLARE_ATTACKERS([id]) makes it through.
+#
+#   * **Rust** (``state_ops_combat.rs:648-651``, ``declare_attacker``):
+#     after eligibility checks pass, ``let has_haste =
+#     battlefield_has_keyword(self, obj_id, "haste"); if
+#     summoning_sick && !has_haste { return false; }`` — the keyword
+#     pre-read short-circuits the sick-rejection. Also wired at
+#     ``state_ops_legal.rs:574-577`` for the legal_decisions
+#     enumeration filter (same gate shape).
+#
+# **Expected outcome (a) — clean pass.** On the multi_blocker_deckspec
+# walk with the haste_selector setup (2/2 haste attacker — STILL
+# summoning-sick — vs two 2/2 Bears multi-block), Python and Rust
+# should both:
+#
+#   * Accept the sick haste creature as a legal attacker per the
+#     keyword gate. Post-DECLARE_ATTACKERS: ``attacker.attacking ==
+#     True`` AND ``attacker.summoning_sick == True`` (haste does NOT
+#     remove summoning sickness — it just bypasses the attack
+#     restriction; the flag clears at the controller's next untap
+#     step per CR 302.1, not at declare). The creature DOES tap (no
+#     vigilance) per CR 508.1c.
+#   * Run the normal multi-block COMBAT_DAMAGE branch — the haste
+#     attacker takes 4 back-damage from two 2/2 Bears, dies via SBA.
+#     Haste doesn't gate damage so there's no extra branch.
+#   * Post-combat: p0 life = 12 (unchanged from pre-combat — no
+#     lifelink → no life gain), p1 life = 20. p0 gy = [Bear Sprinter
+#     id 14] (attacker died from 4 back-damage), p1 gy = [Grizzly
+#     Bears id 9], p1 bf still has Grizzly Bears id 11 (survived
+#     post-CE14 ``if remaining <= 0: break`` guard).
+#
+# If Rust DOESN'T honor haste — the CE16 candidate shape — the
+# divergence surfaces at the DECLARE_ATTACKERS step on the
+# ``attacking`` field of the attacker in the per-step harness
+# compare: Python attacker.attacking=True, Rust attacker.attacking=
+# False (because the DeclareAttackers apply path rejected the sick
+# creature). The harness compare also surfaces a ``tapped`` divergence
+# (Python: tapped=True after declare; Rust: tapped=False because the
+# tap mutation never ran).
+#
+# **Other possible CE16 shapes to watch for**:
+#
+#   * Haste-wired-but-at-wrong-site disagreement — e.g. Rust might
+#     un-stick the haste creature on declare (clear summoning_sick
+#     incorrectly) instead of leaving it set. The harness's
+#     summoning_sick field on the bf-zone signature catches this.
+#   * Haste-bypass-applies-to-blocking (it shouldn't — CR 302.1 only
+#     restricts attacking + tap-cost abilities, NOT blocking, so a
+#     sick non-haste creature can block fine). Not exercised by this
+#     probe — the haste attacker is the attacker, not a blocker.
+# ---------------------------------------------------------------------------
+
+
+# Name of the synthetic haste printing injected by
+# :func:`haste_side_channel`. Kept module-level so the trigger-
+# detection gate in :func:`haste_selector` and the tests can refer
+# to the same name without drift. Distinct from
+# :data:`_FIRST_STRIKE_PRINTING_NAME`, :data:`_DEATHTOUCH_PRINTING_NAME`,
+# :data:`_LIFELINK_PRINTING_NAME`, and :data:`_VIGILANCE_PRINTING_NAME`
+# so the five probes' trigger gates are mutually independent.
+_HASTE_PRINTING_NAME = "Bear Sprinter"
+
+
+def haste_side_channel(py_state, rust_state) -> tuple[int, int]:
+    """Side-channel inject a 2/2 SUMMONING-SICK haste creature onto BOTH
+    engines' p0 battlefield.
+
+    Mirror of :func:`vigilance_side_channel` — same shape, same
+    side-channel-untap of p1's Bears blockers, same return contract.
+    The only differences are:
+
+      * The synthetic printing's keyword is ``"haste"``.
+      * The synthetic printing's name is :data:`_HASTE_PRINTING_NAME`
+        (``"Bear Sprinter"``) so this probe's trigger gate doesn't
+        collide with the four prior probes' gates.
+      * **The injected creature is ``summoning_sick = True``.** On the
+        Rust side, :meth:`register_and_inject_object` hardcodes
+        ``summoning_sick: false`` (see
+        ``state_ops_resolve.rs:5548``); we flip it to true via the
+        :meth:`force_set_summoning_sick` test-helper that lives in
+        ``state_ops_tap.rs`` for exactly this purpose. On the Python
+        side, the ``py_obj.summoning_sick = True`` assignment goes
+        through directly. This is the load-bearing setup: the haste
+        keyword's effect is to BYPASS the summoning-sickness
+        rejection on declare-attackers eligibility, so we need a
+        sick creature for the bypass to be observable.
+
+    Returns ``(py_obj_id, rust_obj_id)``. Ids match because both
+    engines allocate in lockstep through step 167 of the
+    retaliation walk.
+
+    See :func:`first_strike_side_channel` for the full rationale on
+    why Option B (side-channel inject onto bf) is used rather than
+    Option A (add a haste creature to the deckspec). Same reasoning
+    applies: ``CardDef`` doesn't carry a ``keywords`` field, so the
+    deckspec route would require multi-file fanout.
+    """
+    from mtg_bot.cards.base import CardPrinting, ManaCost
+    from mtg_bot.game import Zone
+
+    # ---- Python side ----
+    haste_printing = CardPrinting(
+        name=_HASTE_PRINTING_NAME,
+        mana_cost_str="",
+        mana_cost=ManaCost(),
+        type_line="Creature",
+        supertypes=(),
+        card_types=("Creature",),
+        subtypes=(),
+        power=2,
+        toughness=2,
+        produces=frozenset(),
+        keywords=frozenset({"haste"}),
+    )
+    py_obj = py_state.new_object(
+        haste_printing, owner_id=0, zone=Zone.BATTLEFIELD,
+    )
+    # The load-bearing flag: leave summoning_sick = True so the
+    # haste bypass on declare-attackers eligibility (CR 702.10b) is
+    # what makes the attack legal. All four prior probes left this
+    # False; the haste probe is the first to exercise this branch.
+    py_obj.summoning_sick = True
+    py_obj.tapped = False
+    py_obj.damage = 0
+    py_obj.etb_timestamp = py_state.next_timestamp
+    py_state.next_timestamp += 1
+    py_state.battlefield.append(py_obj)
+
+    # ---- Rust side ----
+    ZONE_BATTLEFIELD = 2
+    rust_obj_id = rust_state.register_and_inject_object(
+        {
+            "name": _HASTE_PRINTING_NAME,
+            "card_types": ["Creature"],
+            "power": 2,
+            "toughness": 2,
+            "keywords": ["haste"],
+        },
+        0,
+        ZONE_BATTLEFIELD,
+    )
+    # ``register_and_inject_object`` hardcodes summoning_sick=false on
+    # the freshly-stamped GameObject (see
+    # rust/src/state_ops_resolve.rs:5548). Flip it to true via the
+    # test-helper that lives next to ``tap_object`` / ``untap_object``
+    # in rust/src/state_ops_tap.rs — same fixture-setup escape hatch
+    # convention, scoped to cross-engine smoke probes.
+    rust_state.force_set_summoning_sick(int(rust_obj_id), True)
+
+    # Side-channel untap of p1's Bears blockers (same rationale as
+    # vigilance_side_channel / lifelink_side_channel /
+    # deathtouch_side_channel / first_strike_side_channel — p1's
+    # bears are still tapped from their turn-12 attack, and the
+    # multi-block branch we want to exercise requires them to be
+    # eligible blockers).
+    for obj in py_state.battlefield:
+        if (
+            obj.controller_id == 1
+            and obj.printing.name == "Grizzly Bears"
+        ):
+            obj.tapped = False
+    for entry in rust_state.battlefield_snapshot():
+        if (
+            entry["controller_id"] == 1
+            and entry["printing_name"] == "Grizzly Bears"
+        ):
+            rust_state.untap_object(int(entry["id"]))
+    return int(py_obj.id), int(rust_obj_id)
+
+
+def haste_selector(py_state, rust_state, step_index: int) -> dict:
+    """Cross-engine smoke selector that drives a haste-while-sick +
+    multi-block combat on :func:`multi_blocker_deckspec`.
+
+    Structurally identical to :func:`vigilance_selector` — delegates
+    to :func:`retaliation_selector` for everything before and after
+    the side-channel injection, and side-channel-injects a haste
+    attacker at the same step-168 trigger point. The differences:
+
+      * The injected creature carries ``haste`` instead of
+        ``vigilance``.
+      * The injected creature is ``summoning_sick=True`` (see
+        :func:`haste_side_channel` for the rationale).
+      * The trigger gate keys on :data:`_HASTE_PRINTING_NAME`
+        (``"Bear Sprinter"``) — same gate shape, different name.
+
+    Expected walk shape:
+
+      * **Steps 0-167** — identical to retaliation_selector's walk.
+      * **Step 168** — haste injection fires (sick attacker on p0
+        bf); selector returns ``pass_priority``.
+      * **Steps 169-N** — retaliation_selector delegate drives
+        DECLARE_ATTACKERS([14 = haste attacker]) (where the haste
+        eligibility bypass lands — both engines should set
+        ``attacking=True`` AND ``tapped=True``, leaving
+        ``summoning_sick=True`` untouched), DECLARE_BLOCKERS([[11,
+        14], [9, 14]]) (multi-block branch because both Bears are
+        now untapped), COMBAT_DAMAGE (attacker dies from 4
+        back-damage; same shape as the vigilance probe modulo the
+        tap mutation — no haste damage gate).
+
+    The selector is stateless — same idempotency guarantee as
+    vigilance_selector: post-injection, the trigger gate flips
+    permanently because the Bear Sprinter object stays in some
+    zone (bf or gy).
+    """
+    from mtg_bot.turn import Step
+
+    haste_already_injected = any(
+        obj.printing.name == _HASTE_PRINTING_NAME
+        for obj in py_state.battlefield
+    ) or any(
+        obj.printing.name == _HASTE_PRINTING_NAME
+        for p in py_state.players
+        for zone_list in (p.hand, p.library, p.graveyard, p.exile)
+        for obj in zone_list
+    )
+
+    if not haste_already_injected:
+        creature_count = sum(
+            1 for o in py_state.battlefield
+            if "Creature" in o.printing.card_types
+        )
+        if creature_count >= 3:
+            haste_side_channel(py_state, rust_state)
+            return {"kind": "pass_priority"}
+
+    # Post-injection DECLARE_ATTACKERS override: the
+    # :func:`retaliation_selector` filter at line ~2125 excludes
+    # summoning-sick creatures from its attacker enumeration —
+    # which is a search-side approximation of CR 302.1, not a
+    # CR 702.10b-aware filter. For the haste probe we need the
+    # sick haste creature included in the attacker set so the
+    # engines' apply-path haste bypass actually runs. The Bear
+    # Sprinter on bf is summoning-sick AND has the haste keyword,
+    # so it's a legal attacker; emit declare_attackers with it
+    # included in addition to whatever other unsick attackers
+    # retaliation_selector would have picked.
+    cur_step = py_state.step
+    active_idx = py_state.active_player_idx
+    if cur_step == Step.DECLARE_ATTACKERS:
+        attackers = sorted(
+            int(o.id) for o in py_state.battlefield
+            if o.controller_id == active_idx
+            and "Creature" in o.printing.card_types
+            and not o.tapped
+            and (
+                not o.summoning_sick
+                or "haste" in o.printing.keywords
+            )
+            and not getattr(o, "attacking", False)
+        )
+        if attackers:
+            return {
+                "kind": "declare_attackers",
+                "attacker_ids": attackers,
+            }
+
+    return retaliation_selector(py_state, rust_state, step_index)
