@@ -953,11 +953,15 @@ def test_advance_phase_auto_draw_on_empty_library_flags_attempted_draw(engine):
     # p1's empty library was never popped (not the active player), so
     # p1 is not flagged.
     assert list(state.losers()) == [0]
-    assert state.winner_id == 1
-    assert state.is_game_over() is True
+    assert state.winner() == 1  # eager (cause-flag-driven)
+    assert state.is_game_over() is True  # eager
+    # Post-CE10 (CE-pure-derivation-is_over): the SBA-gated surface
+    # (winner_id getter) stays stale until apply_sbas commits the loss.
+    assert state.winner_id is None
     # apply_sbas transitions the cause-signal into the sticky has_lost;
     # the loss is now permanent. Return count stays 0 — player-loss
     # is a separate SBA category from creature destruction.
     assert state.apply_sbas() == 0
     assert list(state.losers()) == [0]
+    # Post-SBA: surface flips to match.
     assert state.winner_id == 1

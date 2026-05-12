@@ -1038,15 +1038,19 @@ def test_drawcards_from_empty_library_marks_player_for_loss_on_next_sba(engine):
     # Library drained, hand grew by the one available card. No crash.
     assert state.library_sizes[0] == 0
     # The empty-pop flipped the cause-signal — p0 is now a loser per
-    # CR 704.5b, observable BEFORE the next SBA pass.
+    # CR 704.5b, observable BEFORE the next SBA pass via the eager API.
     assert list(state.losers()) == [0]
-    assert state.winner_id == 1
-    assert state.is_game_over() is True
+    assert state.winner() == 1  # eager (cause-flag-driven)
+    assert state.is_game_over() is True  # eager
+    # Post-CE10 (CE-pure-derivation-is_over): the SBA-gated surface
+    # (winner_id getter) stays stale until apply_sbas commits the loss.
+    assert state.winner_id is None
     # apply_sbas transitions cause-signal -> sticky has_lost; the loss
     # is now permanent. Return count stays 0 (no creatures destroyed —
     # player-loss is a separate SBA category, doesn't bump the count).
     assert state.apply_sbas() == 0
     assert list(state.losers()) == [0]
+    # Post-SBA: surface flips to match.
     assert state.winner_id == 1
     # gain_life on the dead player cannot revive them — has_lost is
     # sticky. Life total unchanged either way (deck-out doesn't manifest
@@ -1078,13 +1082,18 @@ def test_drawcards_count_larger_than_library_drains_then_loses_on_sba(engine):
     # All 3 cards drained from library to hand. No crash, no error.
     assert state.library_sizes[0] == 0
     assert state.hand_sizes[0] == hand_before + 3
-    # Empty-library pop flipped the cause-signal — p0 is now a loser.
+    # Empty-library pop flipped the cause-signal — p0 is now a loser
+    # via the eager API.
     assert list(state.losers()) == [0]
-    assert state.winner_id == 1
+    assert state.winner() == 1  # eager
+    # Post-CE10: SBA-gated surface stays stale.
+    assert state.winner_id is None
     # apply_sbas locks in the loss via has_lost; return count stays 0
     # (no creatures destroyed). Idempotent: subsequent passes are no-ops.
     assert state.apply_sbas() == 0
     assert list(state.losers()) == [0]
+    # Post-SBA: surface flips to match.
+    assert state.winner_id == 1
     assert state.apply_sbas() == 0
     assert list(state.losers()) == [0]
 
