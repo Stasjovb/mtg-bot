@@ -1078,6 +1078,22 @@ The counter `state.next_etb_timestamp` and the per-object slot
 
 ### CE5. `cast_spell` resolves immediately on Rust (no stack) — Python pushes a StackItem and defers resolve
 
+> **Note on playbook divergence.** The pre-staged
+> `docs/CE5_CE6_CE7_CLOSURE_PLAYBOOK.md` (merged in `e1989b8b`)
+> predicted CE5 would be the SBA victim collection divergence
+> based on the ORDER_SENSITIVE_SURFACES.md audit's ranking. The
+> cast_bears_selector probe surfaced a different divergence FIRST
+> — the cast-vs-resolve gap below — because the probe drove
+> `cast_spell` before reaching any SBA-relevant state (no
+> creature death on this deck). The playbook's planned "CE5
+> closure — SBA victim collection" should be re-labeled as CE6
+> when a future slice implements it; its CE6 (damage assignment)
+> and CE7 (target picks) bump correspondingly. The playbook's
+> shared helper proposal (`bf_iter_etb_sorted`) and its closure
+> recipes stay valid — they're contingent on the SBA / combat /
+> target-pick surfaces being exercised, which CE5 (this entry)
+> doesn't touch.
+
 - **Pinned by**:
   `tests/test_parity_smoke.py::test_cross_engine_cast_bears_selector_walks_clean`
   (strict-xfail, this slice). Companion passing pin
