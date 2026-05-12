@@ -2278,59 +2278,42 @@ def test_cross_engine_clear_combat_both_resets_rust_attackers_vec(
 # ---------------------------------------------------------------------------
 # Phase 5 follow-up #6: multi_block_combat_selector. Extends combat_selector
 # past the single-attacker / zero-blocker slice into a SINGLE-ATTACKER /
-# TWO-BLOCKER scenario. The audits' predicted CE6 (combat damage assignment
-# order) requires multiple blockers per attacker to surface; this slice's
-# job is to actually drive that surface.
+# TWO-BLOCKER scenario. Surfaced and (now) closes the audits' predicted
+# CE9 (combat damage assignment order) divergence.
 #
-# **OUTCOME (this slice): CE9 surfaced.** The probe surfaces the audits'
-# predicted divergence on the first multi-block combat (turn 15 p0 attacks
-# p1's two Bears). Python's ``combat.py:389,405`` damage walk
-# (battlefield-order filtered by ``attacker.blocked_by`` membership) and
-# Rust's ``state_ops_combat.rs:865-868`` damage walk (``self.blockers``
-# Vec push order, via ``find_map``) pick different "first blockers" when
-# blockers are declared in REVERSE bf order. Different blocker dies on
-# each side → ``battlefield`` / ``graveyard_p0`` / ``graveyard_p1`` field
-# divergence at the COMBAT_DAMAGE step's compare. Filed as CE9 in
-# ``docs/RUST_PARITY_GAPS.md``; closure plan is the playbook's CE6 plan
-# (now CE9 numerically) using the ``bf_iter_etb_sorted`` helper already
-# in place in ``rust/src/bf_iter.rs``.
+# **STATUS: CE9 CLOSED** by ``feature/ce9-blocker-bf-order``. Rust's two
+# iteration sites in ``rust/src/state_ops_combat.rs`` (the per-attacker
+# first-blocker walk at lines 865-868 and the back-damage walk at line
+# 962) now iterate via the shared ``bf_iter_etb_sorted`` helper in
+# ``rust/src/bf_iter.rs`` (the same helper introduced by the CE5/CE6
+# closure for SBA victim collection), filtered by membership in
+# ``self.blockers``. This matches Python's ``combat.py:389,405`` walk
+# of ``[o for o in state.battlefield if o.id in attacker.blocked_by]``.
+# Per the playbook §3 Option A: parity with observable Python first;
+# CR 510.1d "active player chooses damage assignment order" is a
+# separate long-term Python-side fix. See ``docs/RUST_PARITY_GAPS.md``
+# I31 for the closure invariant.
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "CE9 (combat damage assignment order). Python's combat.py:389,405 "
-        "walks state.battlefield filtered by attacker.blocked_by "
-        "membership (battlefield ETB order); Rust's "
-        "state_ops_combat.rs:865-868 walks self.blockers Vec via "
-        "find_map (declare push order). When blockers are declared in "
-        "REVERSE bf order, the two iteration orders pick different "
-        "first blockers — different blocker dies on each side. Strict-"
-        "xfail until the closure slice replaces Rust's self.blockers "
-        "walk with bf_iter_etb_sorted (per "
-        "CE5_CE6_CE7_CLOSURE_PLAYBOOK.md §3 Option A). Filed as CE9 "
-        "in docs/RUST_PARITY_GAPS.md."
-    ),
-)
 def test_cross_engine_multi_block_combat_selector_walks_clean(parity_smoke):
-    """**CE9 clean-walk pin (xfail-strict)**.
+    """**CE9 clean-walk pin** (expected-pass post-closure).
 
     Drive 210 decisions on :func:`multi_blocker_deckspec` with
     :func:`multi_block_combat_selector` and assert every step walks
-    clean. Today the multi-block COMBAT_DAMAGE step at index 196
-    surfaces the audits' predicted CE6/CE7 (now CE9 numerically)
+    clean. Pre-closure, the multi-block COMBAT_DAMAGE step at index
+    196 surfaced the audits' predicted CE6/CE7 (numbered CE9 here)
     divergence: Python's bf-order damage walk and Rust's
-    self.blockers-Vec damage walk pick DIFFERENT first blockers when
-    blockers are declared in reverse-bf order. Different blocker
-    dies per engine → ``battlefield`` / ``graveyard_p1`` /
-    ``graveyard_p0`` field divergence.
+    self.blockers-Vec damage walk picked DIFFERENT first blockers
+    when blockers were declared in reverse-bf order.
 
-    Mirrors the pre-closure xfail-strict pattern of the earlier CE5
-    cast-vs-resolve clean-walk pin: when the closure slice lands
-    (Rust's blocker walk becomes ``bf_iter_etb_sorted``), this test
-    flips to xpass and the symptom-present companion below gets
-    deleted per the CE2/CE3/CE4/CE5 pair-pin convention.
+    Post-closure, Rust's combat-damage iteration consumes
+    ``bf_iter_etb_sorted`` (same helper as the CE5/CE6 SBA closure)
+    and the entire 210-decision walk runs clean.
+
+    Mirrors the post-closure clean-walk pattern of CE2/CE3/CE4/CE5/CE6:
+    a single expected-pass clean-walk pin; the companion symptom-pin
+    that previously documented the surface shape was deleted on closure.
     """
     from mtg_bot.parity.cross_engine import (
         multi_block_combat_selector,
@@ -2354,117 +2337,6 @@ def test_cross_engine_multi_block_combat_selector_walks_clean(parity_smoke):
             f"action={step.action_dict} "
             f"{[(d.field, d.py_value, d.rust_value, d.known_gap) for d in step.divergences]}"
         )
-
-
-def test_cross_engine_multi_block_combat_selector_surfaces_ce9_at_step_196(
-    parity_smoke,
-):
-    """**CE9 symptom-present pin** (passes today, paired with the
-    strict-xfail clean-walk pin above).
-
-    Pins the EXACT shape of the multi-block damage assignment
-    divergence. The first 195 steps (cast script + multi-block
-    declare) walk clean — Python and Rust agree on every observable
-    field. Step 196 is the first divergence: the COMBAT_DAMAGE branch
-    of the selector applied damage on both engines via the side-
-    channel mirrors, and SBAs committed dead creatures to their
-    graveyards. Different blocker dies per engine → ``battlefield``
-    / ``graveyard_p1`` / ``graveyard_p0`` field divergence.
-
-    Reasoning trail to the surface:
-
-      * Steps 0-68: pre-cast phase walk for both players. p1's first
-        cast lands at step 69 (turn 6 PRECOMBAT_MAIN p1 active).
-      * Step 123: p1 casts Bears#2 (turn 10 PRECOMBAT_MAIN p1 active).
-      * Step 164: p0 casts Bears (turn 13 PRECOMBAT_MAIN p0 active).
-      * Step 193: p0 declares Bears (id=5) as attacker (turn 15
-        DECLARE_ATTACKERS — Bears unsick after turn 14 UNTAP).
-      * Step 195: p1 declares BOTH bears as blockers, in REVERSE bf
-        order: ``assignments=[[11, 5], [9, 5]]`` (Bears id=11
-        declared first, then Bears id=9 — but bf-ETB order has id=9
-        BEFORE id=11 because p1 cast Bears#1=id=9 at turn 6 with a
-        lower timestamp than Bears#2=id=11 cast at turn 10).
-      * Step 196: COMBAT_DAMAGE branch fires the side-channel
-        damage mirrors. Python's bf-order walk picks Bears id=9 as
-        first blocker → damages id=9 lethally → id=9 to gy. Rust's
-        ``self.blockers``-Vec walk picks Bears id=11 (declared
-        first) as first blocker → damages id=11 lethally → id=11
-        to gy. Different blocker dies per engine.
-
-    Pinned divergence shape at step 196:
-
-      * ``battlefield`` — Python has Bears id=11 alive, Rust has
-        Bears id=9 alive. Both engines have the attacker (id=5)
-        removed from bf because back-damage from the two blockers
-        (2+2=4) kills the 2/2 attacker on both sides.
-      * ``graveyard_p1`` — Python has Bears id=9 (killed), Rust has
-        Bears id=11 (killed).
-      * ``graveyard_p0`` — both engines have Bears id=5 (the dead
-        attacker). Per-object signature differs on the residual
-        ``damage`` value: Python's ``move_off_battlefield`` clears
-        damage on the way to gy (damage=0); Rust preserves the
-        damage=4 mark in the graveyard entry.
-
-    Per the CE2/CE3/CE4/CE5 pair-pin convention, this symptom test
-    gets DELETED when the CE9 closure lands.
-    """
-    from mtg_bot.parity.cross_engine import (
-        multi_block_combat_selector,
-        multi_blocker_deckspec,
-        walk_both,
-    )
-
-    result = walk_both(
-        multi_blocker_deckspec(),
-        n_decisions=210,
-        decision_selector=multi_block_combat_selector,
-    )
-    assert result.error is None
-    # The first 196 steps walk clean (the multi-block declare at step
-    # 195 sees only bf-state changes that aren't in the 8-tuple
-    # signature).
-    for i in range(196):
-        assert result.steps[i].divergences == [], (
-            f"unexpected pre-divergence at step {i}: "
-            f"action={result.steps[i].action_dict} "
-            f"{[(d.field, d.py_value, d.rust_value) for d in result.steps[i].divergences]}"
-        )
-    # Step 195: the declare_blockers step. Assignments declared in
-    # REVERSE bf order (id=11 declared first, then id=9).
-    step_195 = result.steps[195]
-    assert step_195.action_dict == {
-        "kind": "declare_blockers",
-        "assignments": [[11, 5], [9, 5]],
-    }
-    assert step_195.divergences == []
-
-    # Step 196: the FIRST divergent step.
-    step_196 = result.steps[196]
-    diverged_fields = {d.field for d in step_196.divergences}
-    assert diverged_fields == {
-        "battlefield", "graveyard_p0", "graveyard_p1",
-    }, f"expected CE9 surface fields, got {diverged_fields}"
-
-    # Pinpoint: which blocker landed in p1's graveyard?
-    gy_p1_div = next(
-        d for d in step_196.divergences if d.field == "graveyard_p1"
-    )
-    py_gy_p1_names_ids = [
-        (sig[0], sig[7]) for sig in gy_p1_div.py_value
-    ]
-    # Python: Bears id=9 (lower-bf-position blocker — first in
-    # Python's bf-order damage walk).
-    assert py_gy_p1_names_ids == [("Grizzly Bears", 9)], (
-        f"py graveyard_p1: {py_gy_p1_names_ids}"
-    )
-    rust_gy_p1_names_ids = [
-        (sig[0], sig[7]) for sig in gy_p1_div.rust_value
-    ]
-    # Rust: Bears id=11 (higher-bf-position blocker but declared
-    # FIRST — first in Rust's self.blockers Vec walk via find_map).
-    assert rust_gy_p1_names_ids == [("Grizzly Bears", 11)], (
-        f"rust graveyard_p1: {rust_gy_p1_names_ids}"
-    )
 
 
 def test_cross_engine_multi_block_combat_selector_pre_combat_walks_clean(
