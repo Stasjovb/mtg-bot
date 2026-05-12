@@ -3730,3 +3730,367 @@ def haste_selector(py_state, rust_state, step_index: int) -> dict:
             }
 
     return retaliation_selector(py_state, rust_state, step_index)
+
+
+# ---------------------------------------------------------------------------
+# Phase 5 follow-up #14: menace_selector — extend the cross-engine smoke
+# onto menace combat (CR 702.110). Mirrors :func:`vigilance_selector` /
+# :func:`haste_selector` exactly except:
+#
+#   1. The injected creature carries the ``menace`` keyword (and is
+#      not summoning-sick, like the FS/DT/LL/VG probes — the
+#      summoning_sick=True load-bearing fixture is haste-specific).
+#   2. The injected creature's printing name is ``"Bear Bully"`` so
+#      the FS / DT / LL / VG / haste / menace probes' trigger gates
+#      are all mutually independent on the same multi_blocker_deckspec
+#      walk.
+#   3. The DECLARE_BLOCKERS branch is parameterized over three
+#      block-decisions (``"none"``, ``"both"``, ``"single"``)
+#      because menace's surface is at the *legality of the block
+#      assignment*, not at attack-time. The three modes exercise:
+#
+#         * **none**: legal (zero blockers — CR 702.110b "except by
+#           two or more creatures" doesn't require blocking, just
+#           constrains how the attacker is blocked when blocked at
+#           all).
+#         * **both**: legal (multi-block satisfies the >=2
+#           requirement).
+#         * **single**: ILLEGAL (CR 702.110b — a single creature
+#           assigned to a menace attacker is not a legal block).
+#
+# **NEW SURFACE — DECLARE_BLOCKERS legality.** Where the prior six
+# probes gate behavior at damage-application (FS/DT/LL/trample),
+# tap-step (vigilance), or declare-attackers eligibility (haste,
+# defender-would-be), menace gates DECLARE_BLOCKERS *legality* — a
+# single-blocker assignment against a menace attacker is illegal and
+# must be filtered or rejected. This is a distinct axis from all
+# prior probes.
+#
+# **Python wires menace as a post-validation drop** (``actions.py:
+# 2555-2566``, ``_declare_blockers``): after per-pair validation
+# accepts blockers, the post-loop pass groups validated blockers by
+# attacker and, for each attacker with ``"menace" in
+# attackers[aid].printing.keywords and len(blocker_ids) < 2``, calls
+# ``validated.pop(bid, None)`` on each blocker assigned to that
+# attacker. The illegal single block is silently dropped; the
+# attacker proceeds as if unblocked. The action itself does NOT
+# raise / return False — Python's apply path treats the request as
+# "do your best; drop illegal sub-pieces".
+#
+# **Rust wires menace as a PREDICATE-ONLY surface that the apply
+# path does NOT consult** (``state_ops_combat.rs:779-789``,
+# ``is_legal_block_assignment``). The predicate correctly returns
+# ``false`` for a single-blocker menace assignment, but the
+# ``Action::DeclareBlockers`` dispatcher
+# (``state_ops_actions.rs:241-243``) only iterates
+# ``declare_blocker(blocker_id, attacker_id)`` per pair and never
+# calls ``is_legal_block_assignment`` to validate the final
+# assignment. The single blocker gets pushed onto
+# ``self.blockers`` and combat damage proceeds as a normal
+# single-block.
+#
+# **Predicted CE16 surface — apply_action divergence on a
+# single-blocker menace block.** With a 2/2 menace attacker
+# (Bear Bully) vs two 2/2 Bears and a SINGLE blocker (one Grizzly
+# Bears) declared:
+#
+#   * **Python**: drops the single blocker via the menace post-
+#     validation pass. Attacker goes through unblocked → 2 damage
+#     to p1 (life 20 → 18). Attacker survives (no back-damage),
+#     blocker survives (no exchange). p0 gy = []; p1 gy = [];
+#     bf still has both p1 Bears.
+#   * **Rust**: accepts the single blocker (no apply-time menace
+#     check). Attacker and single blocker exchange 2-each combat
+#     damage → both go to graveyard via SBA. p1 life unchanged
+#     (20). p0 gy = [Bear Bully]; p1 gy = [Grizzly Bears id 9].
+#     One Bears survives on p1 bf.
+#
+# Surfaces at the COMBAT_DAMAGE / END_OF_COMBAT step (one selector
+# call past the single-blocker declare) on the harness's per-step
+# field-view compare: ``life_p1``, ``graveyard_p0``, ``graveyard_p1``,
+# ``battlefield`` all diverge. Note: ``state.blockers`` itself is
+# NOT in the per-step compare's field set (the snapshot is
+# zone-keyed; the blockers Vec is not exposed as a comparable
+# field), so the divergence is observed *downstream* of the
+# illegal acceptance — at the damage-application step where Rust's
+# accepted single block plays out as a normal trade.
+#
+# **Outcomes A and B (no blockers, both blockers) are predicted
+# clean.** Both engines:
+#   * ``"none"``: empty assignments → attacker unblocked → 2 damage
+#     to p1 (life 18). Same as the post-CE15 single-attacker /
+#     no-block default.
+#   * ``"both"``: two-blocker multi-block → attacker dies to 4
+#     back-damage, first blocker (Grizzly Bears id 9) dies, second
+#     blocker (id 11) survives. Same as the vigilance / haste
+#     probes' multi-block damage shape (menace is invisible when
+#     the multi-block requirement is satisfied).
+# ---------------------------------------------------------------------------
+
+
+# Name of the synthetic menace printing injected by
+# :func:`menace_side_channel`. Kept module-level so the trigger-
+# detection gate in :func:`menace_selector` and the tests can refer
+# to the same name without drift. Distinct from
+# :data:`_FIRST_STRIKE_PRINTING_NAME`,
+# :data:`_DEATHTOUCH_PRINTING_NAME`,
+# :data:`_LIFELINK_PRINTING_NAME`,
+# :data:`_VIGILANCE_PRINTING_NAME`, and
+# :data:`_HASTE_PRINTING_NAME` so the six probes' trigger gates are
+# mutually independent.
+_MENACE_PRINTING_NAME = "Bear Bully"
+
+
+def menace_side_channel(py_state, rust_state) -> tuple[int, int]:
+    """Side-channel inject a 2/2 menace creature onto BOTH engines'
+    p0 battlefield.
+
+    Mirror of :func:`vigilance_side_channel` / :func:`haste_side_channel`
+    — same shape, same side-channel-untap of p1's Bears blockers, same
+    return contract. The only differences are:
+
+      * The synthetic printing's keyword is ``"menace"``.
+      * The synthetic printing's name is :data:`_MENACE_PRINTING_NAME`
+        (``"Bear Bully"``) so this probe's trigger gate doesn't
+        collide with the five prior probes' gates.
+      * The injected creature is ``summoning_sick = False`` (no
+        haste needed — menace gates DECLARE_BLOCKERS legality, not
+        DECLARE_ATTACKERS eligibility, so the sick-on-injection
+        load-bearing setup haste needed doesn't apply here).
+
+    Returns ``(py_obj_id, rust_obj_id)``. Ids match because both
+    engines allocate in lockstep through step 167 of the
+    retaliation walk.
+
+    See :func:`first_strike_side_channel` for the full rationale on
+    why Option B (side-channel inject onto bf) is used rather than
+    Option A (add a menace creature to the deckspec). Same reasoning
+    applies: ``CardDef`` doesn't carry a ``keywords`` field, so the
+    deckspec route would require multi-file fanout.
+    """
+    from mtg_bot.cards.base import CardPrinting, ManaCost
+    from mtg_bot.game import Zone
+
+    # ---- Python side ----
+    menace_printing = CardPrinting(
+        name=_MENACE_PRINTING_NAME,
+        mana_cost_str="",
+        mana_cost=ManaCost(),
+        type_line="Creature",
+        supertypes=(),
+        card_types=("Creature",),
+        subtypes=(),
+        power=2,
+        toughness=2,
+        produces=frozenset(),
+        keywords=frozenset({"menace"}),
+    )
+    py_obj = py_state.new_object(
+        menace_printing, owner_id=0, zone=Zone.BATTLEFIELD,
+    )
+    py_obj.summoning_sick = False
+    py_obj.tapped = False
+    py_obj.damage = 0
+    py_obj.etb_timestamp = py_state.next_timestamp
+    py_state.next_timestamp += 1
+    py_state.battlefield.append(py_obj)
+
+    # ---- Rust side ----
+    ZONE_BATTLEFIELD = 2
+    rust_obj_id = rust_state.register_and_inject_object(
+        {
+            "name": _MENACE_PRINTING_NAME,
+            "card_types": ["Creature"],
+            "power": 2,
+            "toughness": 2,
+            "keywords": ["menace"],
+        },
+        0,
+        ZONE_BATTLEFIELD,
+    )
+
+    # Side-channel untap of p1's Bears blockers (same rationale as
+    # vigilance_side_channel / haste_side_channel / lifelink /
+    # deathtouch / first_strike — p1's bears are still tapped from
+    # their turn-12 attack, and the multi-block / single-block
+    # branches we want to exercise require them to be eligible
+    # blockers).
+    for obj in py_state.battlefield:
+        if (
+            obj.controller_id == 1
+            and obj.printing.name == "Grizzly Bears"
+        ):
+            obj.tapped = False
+    for entry in rust_state.battlefield_snapshot():
+        if (
+            entry["controller_id"] == 1
+            and entry["printing_name"] == "Grizzly Bears"
+        ):
+            rust_state.untap_object(int(entry["id"]))
+    return int(py_obj.id), int(rust_obj_id)
+
+
+def make_menace_selector(block_decision: str):
+    """Factory for the menace-probe selector — parameterized by the
+    DECLARE_BLOCKERS branch decision the selector emits for the
+    menace attacker.
+
+    ``block_decision`` is one of:
+
+      * ``"none"`` — emit ``declare_blockers`` with empty
+        assignments. Both engines should handle this identically
+        (no menace surface — attacker is unblocked).
+      * ``"both"`` — emit ``declare_blockers`` with BOTH p1 Bears
+        blocking the menace attacker (multi-block; satisfies the
+        menace >=2 requirement). Both engines should handle this
+        identically — the menace constraint is satisfied so menace
+        is invisible.
+      * ``"single"`` — emit ``declare_blockers`` with ONLY ONE p1
+        Bears (Grizzly Bears at the lower bf-position, id 9)
+        blocking the menace attacker. ILLEGAL per CR 702.110b.
+        **This is the CE16 surface** — Python silently drops the
+        illegal block; Rust accepts it.
+
+    The factory pattern keeps each test self-contained — the three
+    test variants get three closure-bound selectors that walk the
+    SAME deckspec / SAME injection / SAME pre-167 retaliation
+    backbone, differing only at the DECLARE_BLOCKERS branch.
+    """
+    if block_decision not in ("none", "both", "single"):
+        raise ValueError(
+            f"block_decision must be one of 'none' / 'both' / 'single', "
+            f"got {block_decision!r}"
+        )
+
+    def menace_selector(py_state, rust_state, step_index: int) -> dict:
+        """Cross-engine smoke selector that drives a menace + N-block
+        combat on :func:`multi_blocker_deckspec`.
+
+        Structurally identical to :func:`vigilance_selector` /
+        :func:`haste_selector` — delegates to
+        :func:`retaliation_selector` for everything before and after
+        the side-channel injection, and side-channel-injects a
+        menace attacker at the same step-168 trigger point. The
+        differences:
+
+          * The injected creature carries ``menace`` instead of
+            ``vigilance`` / ``haste``.
+          * The trigger gate keys on :data:`_MENACE_PRINTING_NAME`
+            (``"Bear Bully"``).
+          * The DECLARE_BLOCKERS branch is overridden — instead of
+            delegating to retaliation_selector's reverse-bf-order
+            multi-block, we emit assignments according to
+            ``block_decision`` so the test exercises the chosen
+            menace block scenario.
+
+        Expected walk shape:
+
+          * **Steps 0-167** — identical to retaliation_selector's
+            walk.
+          * **Step 168** — menace injection fires; selector returns
+            ``pass_priority``.
+          * **Step 171** (DECLARE_ATTACKERS) — retaliation_selector
+            delegate drives ``declare_attackers([14 = menace
+            attacker])``.
+          * **Step 173** (DECLARE_BLOCKERS) — branch-specific
+            assignment emitted per ``block_decision``.
+          * **Step 174+** (COMBAT_DAMAGE / END_OF_COMBAT) — damage
+            applies according to the block resolution. THIS IS
+            WHERE CE16 SURFACES on the ``"single"`` variant: Python
+            drops the illegal block (attacker unblocked, 2 damage
+            to p1), Rust accepts it (attacker + blocker trade,
+            both die).
+
+        Stateless — same idempotency guarantee as the prior probes.
+        """
+        from mtg_bot.turn import Step
+
+        menace_already_injected = any(
+            obj.printing.name == _MENACE_PRINTING_NAME
+            for obj in py_state.battlefield
+        ) or any(
+            obj.printing.name == _MENACE_PRINTING_NAME
+            for p in py_state.players
+            for zone_list in (p.hand, p.library, p.graveyard, p.exile)
+            for obj in zone_list
+        )
+
+        if not menace_already_injected:
+            creature_count = sum(
+                1 for o in py_state.battlefield
+                if "Creature" in o.printing.card_types
+            )
+            if creature_count >= 3:
+                menace_side_channel(py_state, rust_state)
+                return {"kind": "pass_priority"}
+
+        # Post-injection DECLARE_BLOCKERS override. The
+        # :func:`retaliation_selector` delegate emits a reverse-bf-
+        # order multi-block when defender has 2+ blockers, which
+        # corresponds to ``block_decision == "both"`` but not the
+        # other two variants. Override the DECLARE_BLOCKERS branch
+        # to emit per ``block_decision``; the rest of the walk
+        # falls through to retaliation_selector unchanged.
+        cur_step = py_state.step
+        active_idx = py_state.active_player_idx
+        if cur_step == Step.DECLARE_BLOCKERS:
+            attackers_present = [
+                o for o in py_state.battlefield
+                if getattr(o, "attacking", False)
+            ]
+            if attackers_present:
+                attacker = attackers_present[0]
+                defender_idx = 1 - active_idx
+                eligible_blocker_objs = [
+                    o for o in py_state.battlefield
+                    if o.controller_id == defender_idx
+                    and "Creature" in o.printing.card_types
+                    and not o.tapped
+                    and not o.summoning_sick
+                ]
+                if block_decision == "none":
+                    # Empty assignments — legal (unblocked menace
+                    # attacker; CR 702.110b only constrains HOW the
+                    # attacker is blocked, not whether it must be).
+                    advance_phase_python(py_state)
+                    rust_state.advance_phase()
+                    return {
+                        "kind": "declare_blockers",
+                        "assignments": [],
+                    }
+                if block_decision == "both" and len(eligible_blocker_objs) >= 2:
+                    # Reverse-bf-order multi-block (same shape as
+                    # retaliation_selector / vigilance / haste).
+                    # Legal — multi-block satisfies the menace
+                    # >=2 requirement.
+                    eligible_ids_in_bf_order = [
+                        int(o.id) for o in eligible_blocker_objs
+                    ]
+                    declare_order = list(reversed(eligible_ids_in_bf_order))
+                    assignments = [
+                        [bid, int(attacker.id)] for bid in declare_order
+                    ]
+                    advance_phase_python(py_state)
+                    rust_state.advance_phase()
+                    return {
+                        "kind": "declare_blockers",
+                        "assignments": assignments,
+                    }
+                if block_decision == "single" and len(eligible_blocker_objs) >= 1:
+                    # SINGLE blocker — ILLEGAL per CR 702.110b. The
+                    # CE16 surface. Pick the lower-bf-position
+                    # blocker (Grizzly Bears id 9) for determinism;
+                    # the menace illegality is independent of which
+                    # single blocker is picked.
+                    blocker_id = int(eligible_blocker_objs[0].id)
+                    assignments = [[blocker_id, int(attacker.id)]]
+                    advance_phase_python(py_state)
+                    rust_state.advance_phase()
+                    return {
+                        "kind": "declare_blockers",
+                        "assignments": assignments,
+                    }
+
+        return retaliation_selector(py_state, rust_state, step_index)
+
+    return menace_selector

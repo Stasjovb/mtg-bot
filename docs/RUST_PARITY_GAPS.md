@@ -2992,6 +2992,97 @@ See I37 for the post-closure invariant pin.
 
 ---
 
+### CE16. `Action::DeclareBlockers` apply path accepts a single-blocker menace block; Python silently drops it
+
+- **Pinned by**: `tests/test_parity_smoke.py::test_cross_engine_menace_selector_single_blocker_walks_clean`
+  (strict-xfail, the clean-walk pin that flips to xpass after closure)
+  and the companion symptom-present pin
+  `test_cross_engine_menace_selector_single_blocker_surfaces_ce16_at_step_174`
+  (passes today, deleted after closure per the pair-pin convention).
+  Plus two scenario-A / scenario-B parity-clean baselines
+  (`..._no_blockers_walks_clean`, `..._both_blockers_walks_clean`)
+  and a pre-injection backbone pin
+  (`..._pre_injection_walks_clean`).
+- **Surfaced by**: Phase 5 follow-up #14 menace probe
+  (`feature/phase5-menace`). The `make_menace_selector("single")`
+  driver walks the standard `multi_blocker_deckspec` retaliation
+  backbone, side-channel-injects a 2/2 menace "Bear Bully" onto
+  p0's bf at step 168, then at step 173 (DECLARE_BLOCKERS) emits a
+  SINGLE-blocker assignment ``[[9, 14]]`` — Grizzly Bears id 9
+  against the menace attacker — illegal per CR 702.110b. The
+  divergence surfaces at step 174 (post END_OF_COMBAT, one
+  selector call past the COMBAT_DAMAGE branch) on the per-step
+  field-view compare.
+- **Rust today**: `rust/src/state_ops_actions.rs:241-243`
+  (``Action::DeclareBlockers`` arm) iterates the assignments Vec
+  and calls ``declare_blocker(blocker_id, attacker_id)`` per pair.
+  The per-pair primitive at `state_ops_combat.rs:698-738`
+  validates only attacker membership / blocker tapped / flying-or-
+  reach / skulk — it has NO menace gate. A post-loop validation
+  call to `state_ops_combat.rs:779-789`
+  (``is_legal_block_assignment``) would catch the illegal
+  single-blocker assignment (the predicate correctly returns
+  ``false`` for a menace attacker with exactly one blocker), but
+  the apply path never invokes it. The single block is pushed
+  onto ``self.blockers`` and stays; combat damage proceeds as a
+  normal single-block exchange (attacker + blocker trade).
+- **CR / Python expected**: CR 702.110b — "A creature with menace
+  can't be blocked except by two or more creatures." Python's
+  `actions.py:_declare_blockers` (lines 2555-2566) post-validates
+  the per-pair-validated assignments: groups blockers by attacker,
+  and for each attacker carrying ``"menace" in ...keywords`` AND
+  ``len(blocker_ids) < 2``, calls ``validated.pop(bid, None)`` on
+  each blocker assigned to that attacker. The illegal single block
+  is silently dropped; the attacker proceeds as if unblocked. The
+  action does NOT raise / return False — Python's apply path
+  treats the request as "do your best; drop illegal sub-pieces".
+- **Impact**: HIGH on any combat where the agent / search emits a
+  single-blocker assignment against a menace attacker. On the
+  CE16 probe shape (2/2 menace vs 2/2 single blocker), the
+  divergence cascades to four observable fields at step 174:
+  - ``life_p1``: Python 18 (unblocked menace dealt 2 damage),
+    Rust 20 (attacker was blocked, no through-damage).
+  - ``graveyard_p0``: Python () (attacker survived because the
+    block was dropped — no back-damage), Rust [(14, 'Bear Bully')]
+    (attacker took 2 back-damage from the accepted blocker,
+    dies).
+  - ``graveyard_p1``: Python () (no blocker engaged because the
+    block was dropped), Rust [(9, 'Grizzly Bears')] (blocker took
+    lethal 2 from the 2/2 menace).
+  - ``battlefield``: divergent on three id memberships (14
+    on/off, 9 on/off, plus residual damage marks).
+  The legal-action emitter is silently permissive on both sides
+  (`state_ops_legal.rs:692-705` emits the full (M+1)^N product
+  for DeclareBlockers without filtering single-blocker menace
+  assignments out; Python's `legal.py` doesn't emit DeclareBlockers
+  at all). The CE16 surface is specifically the apply path's
+  accept-vs-drop asymmetry.
+- **Closeable**: yes — two viable options:
+  - **Option A (Rust-side convergence on Python, per Phase 5
+    convention)**: After the per-pair `declare_blocker` loop in
+    `state_ops_actions.rs:241-243`, run a post-loop validation
+    pass that calls `is_legal_block_assignment(attacker_id)` for
+    each unique attacker referenced in the just-pushed blockers
+    and, on `false`, unwinds the matching `(attacker_id, _)`
+    entries from `self.blockers` via `.retain(|(a, _)| *a !=
+    attacker_id)`. The predicate already exists and is correct;
+    this slice's edit is wiring it into the apply path.
+    Mirrors Python's `validated.pop(bid, ...)` shape exactly —
+    silently drop illegal sub-pieces, don't reject the action
+    wholesale.
+  - **Option B (Rust-side raise at apply time)**: Change
+    `Action::DeclareBlockers` to return an error on illegal
+    final-assignment — Python's
+    `actions.py:_declare_blockers` (lines 2555-2566) DOESN'T do
+    this, so Option B is an engineering-correct behavior shift
+    that requires Python to mirror. Out of scope for parity
+    convergence; defer.
+  - The Phase 5 follow-up #14 slice ships only the PROBE that
+    surfaces the divergence (CE16); the closure itself is the
+    next slice.
+
+---
+
 ## Maintenance
 
 When a slice closes one of the gaps above, drop the entry from the
