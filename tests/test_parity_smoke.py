@@ -3495,3 +3495,317 @@ def test_cross_engine_lifelink_selector_pre_injection_walks_clean(
         "Bear Cleric should not yet exist at end of step 167 — "
         "lifelink injection fires at step 168"
     )
+
+
+# ---------------------------------------------------------------------------
+# Phase 5 follow-up #12: vigilance_selector — extend retaliation_selector
+# with a side-channel-injected 2/2 vigilance creature on p0's battlefield
+# at step 168, then drive an attack (CR 702.20 — "Attacking doesn't cause
+# this creature to tap") at turn 13 PRECOMBAT. Mirrors
+# :func:`lifelink_selector` exactly except the injected creature carries
+# ``vigilance`` instead of ``lifelink`` and the trigger gate keys on
+# :data:`_VIGILANCE_PRINTING_NAME` ("Bear Watcher") so the four
+# keyword-combat probes (FS / DT / LL / vigilance) stay independent on
+# the same multi_blocker_deckspec walk.
+#
+# **OUTCOME on this probe: CLEAN PASS — no novel cross-engine divergence
+# surfaced.** Both engines wire vigilance at declare-attackers time:
+#
+#   * **Python**: ``combat.py:103-104`` inside
+#     ``declare_attackers``'s per-attacker loop suppresses the
+#     ``tap_permanent`` call when ``"vigilance" in
+#     effective_keywords(state, obj)``.
+#   * **Rust**: ``state_ops_combat.rs:654-669`` in ``declare_attacker``
+#     reads ``has_vigilance = battlefield_has_vigilance(...)`` and
+#     skips the ``mutate_battlefield_obj(... |obj| obj.tapped = true)``
+#     branch entirely.
+#
+# Both engines mark the attacker ``attacking=True`` without also setting
+# ``tapped=True``. The post-DECLARE_ATTACKERS state has
+# ``attacker.tapped == False`` on BOTH engines. The rest of combat
+# proceeds normally: two 2/2 Bears multi-block, deal 4 back-damage, the
+# vigilance attacker dies via SBA. Post-combat: p0 life = 12 (unchanged
+# — no lifelink → no life gain), p1 life = 20. p0 gy = [Bear Watcher],
+# p1 gy = [Grizzly Bears id 9], p1 bf still has Grizzly Bears id 11.
+#
+# Three pinning tests guard the contract:
+#
+#   1. ``test_cross_engine_vigilance_selector_walks_clean`` — full
+#      200-decision walk parity-clean on every step (which is where
+#      the DECLARE_ATTACKERS ``tapped`` field is compared
+#      cross-engine).
+#   2. ``test_cross_engine_vigilance_selector_post_declare_attacker_untapped``
+#      — direct-read structural assertion that AFTER the
+#      DECLARE_ATTACKERS step (step 171) the attacker on both engines
+#      reports ``tapped == False`` AND ``attacking == True`` (mirror).
+#      Pins the EXPECTED vigilance shape so a future refactor that
+#      silently breaks the vigilance gate (e.g. dropping the
+#      ``!has_vigilance`` guard in Rust's declare_attacker, or moving
+#      the keyword lookup to AFTER tap_permanent) fails loudly with a
+#      specific diagnostic.
+#   3. ``test_cross_engine_vigilance_selector_pre_injection_walks_clean``
+#      — steps 0-167 are parity-clean. The injection fires at step 168;
+#      pre-injection backbone is identical to retaliation_selector.
+# ---------------------------------------------------------------------------
+
+
+def test_cross_engine_vigilance_selector_walks_clean(parity_smoke):
+    """**Vigilance clean-walk pin** — 200-decision walk on
+    :func:`multi_blocker_deckspec` with :func:`vigilance_selector` is
+    parity-clean every step. The vigilance injection at step 168 + the
+    DECLARE_ATTACKERS step at index 171 compose correctly on both
+    engines: the attacker is marked attacking but NOT tapped, mirroring
+    Python's ``if "vigilance" not in effective_keywords(state, obj):
+    tap_permanent(state, obj)`` guard in
+    :func:`mtg_bot.combat.declare_attackers` and Rust's
+    ``if !has_vigilance { ... obj.tapped = true ... }`` branch in
+    :meth:`GameState::declare_attacker`.
+
+    Mirrors the lifelink probe's post-walk-clean shape: vigilance
+    behavior is already parity across both engines (no CE16 surfaced
+    on this slice), so this test is a "doesn't regress" guard rather
+    than a strict-xfail pre-closure pin.
+    """
+    from mtg_bot.parity.cross_engine import (
+        multi_blocker_deckspec,
+        vigilance_selector,
+        walk_both,
+    )
+
+    result = walk_both(
+        multi_blocker_deckspec(),
+        n_decisions=200,
+        decision_selector=vigilance_selector,
+    )
+    assert result.error is None, (
+        f"walk aborted at step {result.aborted_at}: {result.error}"
+    )
+    for step in result.steps:
+        assert step.divergences == [], (
+            f"unexpected divergence at step {step.step_index}: "
+            f"action={step.action_dict} "
+            f"{[(d.field, d.py_value, d.rust_value, d.known_gap) for d in step.divergences]}"
+        )
+
+
+def test_cross_engine_vigilance_selector_post_declare_attacker_untapped(
+    parity_smoke,
+):
+    """**Vigilance post-DECLARE_ATTACKERS structural pin** — drives 172
+    selector decisions to walk through the DECLARE_ATTACKERS step (171)
+    and asserts the EXACT vigilance-honored state on both engines.
+    Pins the load-bearing surface — ``attacker.tapped`` AFTER declare —
+    so a future refactor that silently breaks the vigilance gate fails
+    loudly with a specific diagnostic rather than a generic walk-clean
+    divergence.
+
+    Expected post-DECLARE_ATTACKERS state (matches both engines today):
+
+      * Vigilance attacker (id 14, "Bear Watcher") is on p0's
+        battlefield with ``attacking == True`` AND ``tapped == False``.
+        This is the CR 702.20 contract: attacking doesn't tap a
+        vigilance creature.
+
+    Additionally pins the post-combat state (181 decisions) — the
+    attacker dies via SBA from 4 back-damage from the two Bears
+    blockers; vigilance doesn't gate damage so there's no life-gain or
+    damage-distribution surface to assert beyond "matches lifelink
+    probe modulo no life gain".
+    """
+    from mtg_bot.parity.cross_engine import (
+        build_matched_states,
+        multi_blocker_deckspec,
+        step_both,
+        vigilance_selector,
+    )
+
+    # ---- Phase 1: post-DECLARE_ATTACKERS attacker state ----
+    py_state, rust_state = build_matched_states(multi_blocker_deckspec())
+    for i in range(172):
+        action = vigilance_selector(py_state, rust_state, i)
+        step_both(py_state, rust_state, action)
+
+    # The vigilance attacker (id 14, "Bear Watcher") should be on bf
+    # with attacking=True, tapped=False.
+    py_att = next(
+        (o for o in py_state.battlefield if o.id == 14), None
+    )
+    assert py_att is not None, (
+        "expected Bear Watcher (id 14) on Python p0 bf after step 171; "
+        f"bf ids = {[o.id for o in py_state.battlefield]}"
+    )
+    assert py_att.printing.name == "Bear Watcher", (
+        f"expected id 14 to be Bear Watcher, got {py_att.printing.name}"
+    )
+    assert py_att.attacking is True, (
+        f"expected Python attacker.attacking = True, got "
+        f"{py_att.attacking}"
+    )
+    assert py_att.tapped is False, (
+        f"expected Python attacker.tapped = False (vigilance honored "
+        f"per CR 702.20), got {py_att.tapped}"
+    )
+
+    rust_att = next(
+        (e for e in rust_state.battlefield_snapshot() if int(e["id"]) == 14),
+        None,
+    )
+    assert rust_att is not None, (
+        "expected Bear Watcher (id 14) on Rust p0 bf after step 171"
+    )
+    assert rust_att.get("printing_name") == "Bear Watcher", (
+        f"expected id 14 to be Bear Watcher on Rust, got "
+        f"{rust_att.get('printing_name')}"
+    )
+    assert rust_att["tapped"] is False, (
+        f"expected Rust attacker.tapped = False (vigilance honored), "
+        f"got {rust_att['tapped']}"
+    )
+
+    # ---- Phase 2: post-combat state (drive 180 total decisions —
+    #      past COMBAT_DAMAGE and SBA cleanup) ----
+    for i in range(172, 180):
+        action = vigilance_selector(py_state, rust_state, i)
+        step_both(py_state, rust_state, action)
+
+    # Life totals: no lifelink → no life gain → p0 unchanged at 12
+    # (was 12 entering combat after turn-12 retaliation), p1 at 20.
+    assert py_state.players[0].life == 12, (
+        f"expected Python p0 life = 12 (no lifelink → no life gain), "
+        f"got {py_state.players[0].life}"
+    )
+    assert py_state.players[1].life == 20, (
+        f"expected Python p1 life = 20 (unchanged), got "
+        f"{py_state.players[1].life}"
+    )
+    rust_life = rust_state.life_totals
+    assert rust_life[0] == 12, (
+        f"expected Rust p0 life = 12 (matches Python), got "
+        f"{rust_life[0]}"
+    )
+    assert rust_life[1] == 20, (
+        f"expected Rust p1 life = 20 (matches Python), got "
+        f"{rust_life[1]}"
+    )
+
+    # p0 graveyard: Bear Watcher (vigilance attacker died from 4
+    # back-damage — vigilance doesn't grant damage prevention).
+    py_p0_gy = [
+        (o.id, o.printing.name) for o in py_state.players[0].graveyard
+    ]
+    assert py_p0_gy == [(14, "Bear Watcher")], (
+        f"expected Python p0 gy = [(14, 'Bear Watcher')], got {py_p0_gy}"
+    )
+    rust_p0_gy = [
+        (e["id"], e.get("printing_name"))
+        for e in rust_state.graveyard_snapshot(0)
+    ]
+    assert rust_p0_gy == [(14, "Bear Watcher")], (
+        f"expected Rust p0 gy = [(14, 'Bear Watcher')], got {rust_p0_gy}"
+    )
+
+    # p1 graveyard: Grizzly Bears id 9 (first blocker took lethal 2;
+    # same shape as the lifelink probe — vigilance doesn't change the
+    # damage-assignment branch).
+    py_p1_gy = [
+        (o.id, o.printing.name) for o in py_state.players[1].graveyard
+    ]
+    assert py_p1_gy == [(9, "Grizzly Bears")], (
+        f"expected Python p1 gy = [(9, 'Grizzly Bears')], got {py_p1_gy}"
+    )
+    rust_p1_gy = [
+        (e["id"], e.get("printing_name"))
+        for e in rust_state.graveyard_snapshot(1)
+    ]
+    assert rust_p1_gy == [(9, "Grizzly Bears")], (
+        f"expected Rust p1 gy = [(9, 'Grizzly Bears')], got {rust_p1_gy}"
+    )
+
+    # p1 battlefield still has Grizzly Bears id 11 (second blocker
+    # survived because remaining was 0 after first blocker absorbed
+    # need=2 — post-CE14 ``if remaining <= 0: break`` guard).
+    py_bf_bears = sorted(
+        o.id for o in py_state.battlefield
+        if o.printing.name == "Grizzly Bears"
+    )
+    assert py_bf_bears == [5, 11], (
+        f"expected Python bf Grizzly Bears ids = [5, 11], got "
+        f"{py_bf_bears}"
+    )
+    rust_bf_bears = sorted(
+        int(e["id"]) for e in rust_state.battlefield_snapshot()
+        if e.get("printing_name") == "Grizzly Bears"
+    )
+    assert rust_bf_bears == [5, 11], (
+        f"expected Rust bf Grizzly Bears ids = [5, 11], got "
+        f"{rust_bf_bears}"
+    )
+
+
+def test_cross_engine_vigilance_selector_pre_injection_walks_clean(
+    parity_smoke,
+):
+    """Pre-injection walk (steps 0-167) on :func:`multi_blocker_deckspec`
+    with :func:`vigilance_selector` is parity-clean. Pins the contract
+    that the vigilance probe's delegate-to-retaliation_selector
+    backbone is unchanged — steps 0-167 are identical to
+    retaliation_selector's walk shape and surface no divergences.
+    The vigilance injection fires SPECIFICALLY at step 168, not before.
+
+    Validates the pre-condition: at the end of step 167, the bf has
+    exactly 3 creatures and no Bear Watcher (the vigilance injection
+    hasn't fired). Same shape as the first-strike + deathtouch +
+    lifelink probes' pre-injection tests.
+    """
+    from mtg_bot.parity.cross_engine import (
+        build_matched_states,
+        multi_blocker_deckspec,
+        step_both,
+        vigilance_selector,
+        walk_both,
+    )
+
+    result = walk_both(
+        multi_blocker_deckspec(),
+        n_decisions=168,
+        decision_selector=vigilance_selector,
+    )
+    assert result.error is None
+    for step in result.steps:
+        assert step.divergences == [], (
+            f"pre-injection divergence at step {step.step_index}: "
+            f"action={step.action_dict} "
+            f"{[(d.field, d.py_value, d.rust_value, d.known_gap) for d in step.divergences]}"
+        )
+
+    # Walk shape sanity: rebuild matched states, drive 168 steps, and
+    # confirm the pre-injection bf state.
+    py_state, rust_state = build_matched_states(multi_blocker_deckspec())
+    for i in range(168):
+        action = vigilance_selector(py_state, rust_state, i)
+        step_both(py_state, rust_state, action)
+
+    creatures = [
+        o for o in py_state.battlefield
+        if "Creature" in o.printing.card_types
+    ]
+    assert len(creatures) == 3, (
+        f"expected 3 creatures on bf at end of step 167, got "
+        f"{len(creatures)}: "
+        f"{[(o.id, o.controller_id, o.summoning_sick) for o in creatures]}"
+    )
+    # No Bear Watcher in any zone yet (the vigilance injection hasn't
+    # fired).
+    bear_watcher_anywhere = (
+        any(o.printing.name == "Bear Watcher" for o in py_state.battlefield)
+        or any(
+            o.printing.name == "Bear Watcher"
+            for p in py_state.players
+            for zone in (p.hand, p.library, p.graveyard, p.exile)
+            for o in zone
+        )
+    )
+    assert not bear_watcher_anywhere, (
+        "Bear Watcher should not yet exist at end of step 167 — "
+        "vigilance injection fires at step 168"
+    )
