@@ -4951,3 +4951,333 @@ def hexproof_selector(py_state, rust_state, step_index: int) -> dict:
             return {"kind": "pass_priority"}
 
     return retaliation_selector(py_state, rust_state, step_index)
+
+
+# ---------------------------------------------------------------------------
+# Phase 5 follow-up #18: double_strike_selector — extend the cross-engine
+# smoke onto double-strike combat damage timing (CR 702.4). Distinct
+# composition probe vs the first_strike_selector slice: a double-strike
+# creature emits damage in BOTH the first-strike damage substep AND the
+# regular damage substep (CR 702.4b — "A creature with double strike
+# has both first strike and the ability to deal damage in the regular
+# combat damage step").
+#
+# **State-of-the-union audit (2026-05-12):**
+#
+#   * Rust :func:`passes_for` (state_ops_combat.rs:473-481) returns
+#     ``vec![Pass::FirstStrike, Pass::Regular]`` for double-strike
+#     sources. ``deal_combat_damage`` (state_ops_combat.rs:840-870 +
+#     1090-1115) calls ``passes_for`` per-attacker and per-blocker to
+#     emit damage entries into BOTH substeps; the partition at
+#     line 1143 splits plan entries into FS-pass / regular-pass by
+#     ``pass == Pass::FirstStrike``.
+#   * Python ``_deals_in_step`` (combat.py:280-291): ``has_double``
+#     returns True for both ``first_strike_step=True`` (FS substep) and
+#     ``first_strike_step=False`` (regular substep). The
+#     ``_any_first_or_double_strike_in_combat`` gate
+#     (combat.py:294-301) recognizes ``"double strike"`` in
+#     ``effective_keywords(state, obj)``, so combat splits into the
+#     two-substep flow when ANY DS creature is in combat.
+#
+# Both engines therefore PARTICIPATE the same DS creature in both
+# substeps. Predicted outcome: **clean pass** — the same composition
+# surface as first-strike (already clean), just one creature being
+# walked across BOTH passes instead of distinct FS / regular
+# participants.
+#
+# **Likely failure modes that this probe would surface (CE18
+# candidates):**
+#
+#   * **Rust collapses DS into a single emit.** A bug in ``passes_for``
+#     that returned only ``[Pass::FirstStrike]`` or only
+#     ``[Pass::Regular]`` for double-strike would cause Rust's
+#     attacker to deal half as much damage as Python's.
+#   * **Order divergence between FS and regular substeps.** Python
+#     fires SBA between substeps (combat.py:317-318); Rust does not
+#     (state_ops_combat.rs:1041-1077 docstring explicitly notes
+#     "SBAs are NOT fired between passes"). The first-strike probe
+#     already absorbed this divergence into a converged end-state
+#     because the dead blocker's regular-step damage emit is filtered
+#     out by Rust's alive-predicate (state_ops_combat.rs:1066). The
+#     double-strike axis: when the DS attacker SURVIVES the FS substep
+#     but the blocker dies, Rust must keep emitting the regular-step
+#     damage from the DS attacker (it's still alive). If a sloppy
+#     alive-predicate filter knocked the DS attacker's regular emit
+#     out incorrectly, the divergence surfaces here.
+#   * **Wrong-controller damage attribution.** A bug where the DS
+#     attacker's regular-pass damage gets credited to the blocker's
+#     controller instead of the defending player (when blocker is
+#     dead).
+#
+# **Test scenarios (from the brief):**
+#
+#   * **Test A — DS + vanilla blocker.** p0 attacks with 2/2
+#     double-strike Bear Champion (injected on p0's bf at step 168);
+#     p1 blocks with 2/2 vanilla Bears (id 9 — sole blocker because
+#     p1's other Bears are still tapped from turn-12 attack and Bear
+#     Idol-style single-blocker shape applies).
+#     FS substep: DS attacker deals 2 to blocker; blocker dies in
+#     mid-combat SBA (Python) / damage<toughness alive-predicate
+#     filters its regular-pass damage emit (Rust). Attacker takes NO
+#     damage in FS substep (blocker is vanilla, no FS/DS). Regular
+#     substep: DS attacker is still alive and deals ANOTHER 2 damage;
+#     blocker is dead so the damage WASTED (no trample = no
+#     spillover to defender). End state: DS attacker alive on bf,
+#     blocker in graveyard, p1 life unchanged (=20).
+#
+#   * **Test B — DS + larger 4/4 blocker.** Side-channel-inject a
+#     4/4 vanilla Bear Behemoth on p1's bf so the regular-step damage
+#     surface fires: DS attacker (2/2) takes 4 from the 4/4 blocker
+#     in regular substep (lethal). FS substep: DS attacker deals
+#     2 to 4/4 blocker (NOT lethal — blocker damage=2, toughness=4,
+#     survives). Regular substep: DS attacker deals ANOTHER 2 (total
+#     blocker damage = 4, lethal post-SBA); blocker deals 4 to DS
+#     attacker (lethal). End state: BOTH creatures in graveyard.
+#
+#   * **Test C — DS + no blocker.** p0 attacks with DS; p1 doesn't
+#     block (no eligible blockers). Defender takes 4 damage total
+#     (2 first-strike + 2 regular). p1 life = 20 - 4 = 16.
+#
+# **Setup chosen: Option B (side-channel inject onto p0 bf for DS;
+# additional inject for Test B's 4/4 blocker).** Same
+# ``CardDef``-doesn't-carry-keywords reasoning as every prior
+# keyword probe. The keyword spelling split is identical to
+# first-strike: Python's ``"double strike"`` (space), Rust's
+# ``"double_strike"`` (underscore).
+#
+# **Trigger detection (stateless).** The injection fires the FIRST
+# time the selector observes the state ">=3 creatures on bf, no
+# Bear Champion in any zone yet". This is uniquely true at step
+# 168 on the retaliation walk — same shape as every prior probe.
+# The post-injection DECLARE_BLOCKERS branch defers to the
+# single-blocker custom branch (see indestructible_selector's
+# DECLARE_BLOCKERS shape) because p1's Bears 9/11 stay tapped from
+# the turn-12 attack and only one blocker (the bf-ETB-first
+# eligible Bears) is in play. Test B handles the 4/4 case
+# separately by injecting the larger blocker post-walk and
+# field-writing the necessary state.
+# ---------------------------------------------------------------------------
+
+
+# Name of the synthetic double-strike printing injected by
+# :func:`double_strike_side_channel`. Distinct from
+# :data:`_FIRST_STRIKE_PRINTING_NAME` (Bear Knight),
+# :data:`_DEATHTOUCH_PRINTING_NAME`, :data:`_LIFELINK_PRINTING_NAME`,
+# :data:`_VIGILANCE_PRINTING_NAME`, :data:`_HASTE_PRINTING_NAME`,
+# :data:`_MENACE_PRINTING_NAME`, :data:`_DEFENDER_PRINTING_NAME`,
+# :data:`_INDESTRUCTIBLE_PRINTING_NAME` (Bear Idol), and
+# :data:`_HEXPROOF_PRINTING_NAME` (Bear Sage) so the ten probes'
+# trigger gates stay mutually independent on the same
+# multi_blocker_deckspec walk.
+_DOUBLE_STRIKE_PRINTING_NAME = "Bear Champion"
+
+
+def double_strike_side_channel(py_state, rust_state) -> tuple[int, int]:
+    """Side-channel inject a 2/2 double-strike creature onto BOTH
+    engines' p0 battlefield as an immediate attacker (sick cleared,
+    untapped, no damage).
+
+    Mirror of :func:`first_strike_side_channel` with TWO key
+    differences:
+
+      * The injected printing carries ``"double strike"`` (Python) /
+        ``"double_strike"`` (Rust) instead of ``"first strike"`` /
+        ``"first_strike"``.
+      * This side-channel does NOT untap p1's existing Bears — they
+        stay tapped from their turn-12 attack and are NOT eligible
+        blockers; the SOLE eligible blocker remains the bf-ETB-first
+        unsick Bears id 9 IF p1's Bears 9/11 happen to be unsick. But
+        on this walk p1's Bears were tapped by attacking at turn 12 —
+        so without an untap they're filtered out by the DECLARE_BLOCKERS
+        eligibility gate. p0's Bears id 5 is summoning-sick (cast this
+        turn) and similarly filtered out.
+        The probe relies on the **single-blocker custom branch** in
+        the post-injection selector (see indestructible_selector's
+        DECLARE_BLOCKERS shape) emitting an empty assignment list when
+        no eligible blocker is present — Test C exactly. For Test A
+        we MUST have a blocker, so the selector explicitly UNTAPS one
+        of p1's Bears (id 9) so it becomes an eligible blocker. Test B
+        (the 4/4 blocker case) is driven directly with a post-walk
+        field-write rather than through the selector.
+
+    Bears id 5's summoning sickness is cleared (force_set_summoning_sick
+    test-helper) — but Bears id 5 is NOT the attacker; the DS attacker
+    is the freshly-injected Bear Champion. We clear Bears 5's sickness
+    only so retaliation_selector's DECLARE_ATTACKERS branch doesn't
+    accidentally include Bears 5 in the attack — wait, Bears 5 isn't
+    sick by the time DECLARE_ATTACKERS fires? Yes it is — Bears 5 was
+    cast turn 13, summoning_sick is True. We do NOT clear it on this
+    probe (different from indestructible_selector). The DS attacker
+    is the SOLE eligible attacker.
+
+    p1's Bears id 9 is force-untapped so it's an eligible blocker for
+    the Test A combat. p1's Bears id 11 stays tapped, so the multi-block
+    branch falls through to the single-blocker shape.
+
+    Returns ``(py_obj_id, rust_obj_id)``. Ids match because both
+    engines allocate in lockstep through step 167 of the retaliation
+    walk.
+    """
+    from mtg_bot.cards.base import CardPrinting, ManaCost
+    from mtg_bot.game import Zone
+
+    # ---- Python side: double-strike printing on p0 bf ----
+    ds_printing = CardPrinting(
+        name=_DOUBLE_STRIKE_PRINTING_NAME,
+        mana_cost_str="",
+        mana_cost=ManaCost(),
+        type_line="Creature",
+        supertypes=(),
+        card_types=("Creature",),
+        subtypes=(),
+        power=2,
+        toughness=2,
+        produces=frozenset(),
+        keywords=frozenset({"double strike"}),
+    )
+    py_obj = py_state.new_object(
+        ds_printing, owner_id=0, zone=Zone.BATTLEFIELD,
+    )
+    py_obj.controller_id = 0
+    py_obj.summoning_sick = False
+    py_obj.tapped = False
+    py_obj.damage = 0
+    py_obj.etb_timestamp = py_state.next_timestamp
+    py_state.next_timestamp += 1
+    py_state.battlefield.append(py_obj)
+
+    # ---- Rust side: double-strike printing on p0 bf ----
+    ZONE_BATTLEFIELD = 2
+    rust_obj_id = rust_state.register_and_inject_object(
+        {
+            "name": _DOUBLE_STRIKE_PRINTING_NAME,
+            "card_types": ["Creature"],
+            "power": 2,
+            "toughness": 2,
+            "keywords": ["double_strike"],
+        },
+        0,  # controller = p0 (the attacking side)
+        ZONE_BATTLEFIELD,
+    )
+
+    # ---- Side-channel untap of p1's Bears id 9 so it becomes the
+    # SOLE eligible blocker. Bears id 11 stays tapped — keeping the
+    # single-blocker shape consistent with the indestructible probe's
+    # DECLARE_BLOCKERS custom branch. ----
+    for obj in py_state.battlefield:
+        if (
+            obj.controller_id == 1
+            and obj.printing.name == "Grizzly Bears"
+            and int(obj.id) == 9
+        ):
+            obj.tapped = False
+    for entry in rust_state.battlefield_snapshot():
+        if (
+            entry["controller_id"] == 1
+            and entry["printing_name"] == "Grizzly Bears"
+            and int(entry["id"]) == 9
+        ):
+            rust_state.untap_object(int(entry["id"]))
+
+    return int(py_obj.id), int(rust_obj_id)
+
+
+def double_strike_selector(py_state, rust_state, step_index: int) -> dict:
+    """Cross-engine smoke selector that drives a single-blocker combat
+    with a DOUBLE-STRIKE attacker on :func:`multi_blocker_deckspec`.
+
+    Structurally similar to :func:`indestructible_selector` —
+    delegates to :func:`retaliation_selector` for everything before
+    and after the side-channel injection, and side-channel-injects
+    a double-strike creature on p0's bf at step 168. Adds an
+    explicit DECLARE_BLOCKERS branch for the single-blocker shape
+    (retaliation_selector's >=2-blocker branch doesn't fire because
+    only Bears 9 is untapped on p1).
+
+    Expected walk shape:
+
+      * **Steps 0-167** — identical to retaliation_selector's walk.
+      * **Step 168** — DS injection fires (Bear Champion 2/2 DS on p0
+        bf, summoning_sick=False; p1's Bears 9 untapped); selector
+        returns ``pass_priority``.
+      * **Step ~171** (DECLARE_ATTACKERS p0) — emit ``[bear_champion_id]``
+        (the DS creature; Bears id 5 still sick, filtered out).
+      * **Step ~173** (DECLARE_BLOCKERS) — emit ``[[9, bear_champion_id]]``
+        (Bears id 9 blocks the DS attacker; sole eligible blocker
+        because Bears 11 is still tapped).
+      * **Step ~175** (COMBAT_DAMAGE):
+          - FS substep: DS attacker emits 2 dmg to Bears 9. Bears 9
+            (vanilla) emits no FS damage.
+          - SBA (Python) / alive-filter (Rust): Bears 9 (damage=2 >=
+            toughness=2) dies.
+          - Regular substep: DS attacker emits ANOTHER 2 dmg. But
+            Bears 9 is dead — the alive-predicate filter (Rust) or
+            zone check (Python) drops the damage on the floor (no
+            trample = no spillover to defender). DS attacker emits
+            its second damage entry, target is gone.
+          - Regular substep: Bears 9 is dead, emits no regular damage.
+          - SBA: nothing else dies.
+
+      * End state: DS attacker on p0 bf (untouched, damage=0),
+        Bears id 5 still on p0 bf (sick), Bears id 9 in p1 graveyard,
+        Bears id 11 still on p1 bf (tapped). p1 life = 20 (no
+        trample, no spillover).
+
+    Stateless — same idempotency guarantee as the prior probes.
+    """
+    from mtg_bot.turn import Step
+
+    ds_already_injected = any(
+        obj.printing.name == _DOUBLE_STRIKE_PRINTING_NAME
+        for obj in py_state.battlefield
+    ) or any(
+        obj.printing.name == _DOUBLE_STRIKE_PRINTING_NAME
+        for p in py_state.players
+        for zone_list in (p.hand, p.library, p.graveyard, p.exile)
+        for obj in zone_list
+    )
+
+    if not ds_already_injected:
+        creature_count = sum(
+            1 for o in py_state.battlefield
+            if "Creature" in o.printing.card_types
+        )
+        if creature_count >= 3:
+            double_strike_side_channel(py_state, rust_state)
+            return {"kind": "pass_priority"}
+
+    cur_step = py_state.step
+    active_idx = py_state.active_player_idx
+
+    if cur_step == Step.DECLARE_BLOCKERS:
+        # Custom single-blocker branch: if the attacker is the DS
+        # creature and there's exactly one eligible blocker (Bears id 9
+        # post-untap), assign it as the sole blocker. The
+        # retaliation_selector's >=2-blocker branch doesn't fire because
+        # Bears 11 is still tapped; combat_selector's empty-block branch
+        # would silently advance past the block step without exercising
+        # the single-blocker apply path.
+        attackers_present = [
+            o for o in py_state.battlefield
+            if getattr(o, "attacking", False)
+        ]
+        if attackers_present:
+            defender_idx = 1 - active_idx
+            eligible_blockers = [
+                o for o in py_state.battlefield
+                if o.controller_id == defender_idx
+                and "Creature" in o.printing.card_types
+                and not o.tapped
+                and not o.summoning_sick
+            ]
+            if len(eligible_blockers) == 1:
+                attacker = attackers_present[0]
+                blocker = eligible_blockers[0]
+                advance_phase_python(py_state)
+                rust_state.advance_phase()
+                return {
+                    "kind": "declare_blockers",
+                    "assignments": [[int(blocker.id), int(attacker.id)]],
+                }
+
+    return retaliation_selector(py_state, rust_state, step_index)
