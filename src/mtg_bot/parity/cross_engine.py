@@ -2170,3 +2170,261 @@ def retaliation_selector(py_state, rust_state, step_index: int) -> dict:
     # All non-bilateral / non-multi-block branches delegate to
     # combat_selector.
     return combat_selector(py_state, rust_state, step_index)
+
+
+# ---------------------------------------------------------------------------
+# Phase 5 follow-up #8: mass_removal_selector — extend the cross-engine
+# smoke onto a Wrath-style ``DestroyAllCreatures`` resolution. After
+# :func:`retaliation_selector`'s walk lands 3 creatures on the
+# battlefield (turn 13 PRECOMBAT_MAIN: p0 has Bears id 5 sick; p1 has
+# Bears ids 9, 11 unsick) — exactly one selector-step before the
+# multi_turn baseline starts advancing the phase — fire a mass
+# destruction. Surfaces a different cross-engine surface from the
+# prior probes:
+#
+#   * **Mass-destruction order.** CR 701.7 + 701.4 AOE — every
+#     creature on the battlefield is destroyed simultaneously. The
+#     Rust I33 closure (`rust/src/state_ops_resolve.rs:2386`) collects
+#     victims via the shared :func:`bf_iter_etb_sorted` helper so
+#     destroyable creatures are enumerated in Python's centralized
+#     ``state.battlefield`` (ETB-monotone) order rather than
+#     p0-then-p1 per-player order. The outcome is order-invariant
+#     (each victim ends up in its own controller's graveyard), so the
+#     test pins per-controller graveyard contents post-wrath rather
+#     than a global "all victims in one graveyard" order.
+#
+#   * **Void-flag transition (Round-29 LTB substrate).** With 3
+#     creatures leaving the battlefield simultaneously, the
+#     `permanent_left_battlefield_this_turn` flag should be set ONCE
+#     (it's a per-state boolean, not a per-creature counter). Both
+#     engines should agree.
+#
+#   * **SBA pass count en masse.** The mass destruction commits 3
+#     LTB transitions; the SBA pass that follows finds no new
+#     state-based-action targets (no creatures left with lethal
+#     damage, no empty libraries to lose on, no life<=0 transitions
+#     because nothing dealt damage). One SBA pass should suffice on
+#     both engines.
+#
+#   * **etb_timestamp clearing on LTB.** The departing objects'
+#     `etb_timestamp` was load-bearing on the battlefield (the bf-ETB
+#     order is the I33-closed iteration key). Once they're in
+#     graveyards, the timestamp is no longer relevant — but neither
+#     engine explicitly clears it. The signature compare reads the
+#     post-LTB graveyard objects and (since the signature snapshot is
+#     `(name, tapped, sick, dmg, counters, attached_to, ctrl, id)`)
+#     does NOT include etb_timestamp directly, so this surface is
+#     observed only as a stability indicator: if the timestamp leaks
+#     into a comparable field (controller? id?), it would surface
+#     here.
+#
+#   * **Per-object cleanup on LTB**. Each LTB transition clears or
+#     preserves a battery of per-object flags. Python's
+#     `move_off_battlefield` clears `damage`, `tapped`, `attacking`,
+#     `blocking`, `attached_to`, but specifically does NOT clear
+#     `summoning_sick`. Rust's `Effect::DestroyAllCreatures` resolve
+#     loop sets `obj.summoning_sick = false` explicitly. The summoning
+#     sickness flag carries no gameplay meaning in the graveyard
+#     (CR 302.1 — summoning sickness is a battlefield-only state) but
+#     the fingerprint captures the raw field; **this is the predicted
+#     CE13 surfacing surface** on this probe (the sole summoning-sick
+#     creature on the bf at fire time is p0's just-cast Bears id 5;
+#     after the wrath, Python's graveyard has it with `sick=True`
+#     and Rust's has `sick=False`).
+#
+# **Setup chosen: Option B (side-channel inject) rather than Option A
+# (Wrath in the deckspec).** Rust's `CastSpell` action dispatch only
+# routes to `cast_creature` — sorceries cannot be cast through the
+# `apply_action(cast_spell)` path on Rust today (see
+# `rust/src/state_ops_actions.rs:245-292`). The side-channel route:
+#   1. Build a synthetic `Sorcery` printing carrying
+#      `Effect::DestroyAllCreatures` on both engines.
+#   2. Inject it into p0's hand (Rust:
+#      `register_and_inject_object`; Python: build a `CardPrinting`
+#      + `GameObject` + append to hand).
+#   3. Mimic the cast: remove from hand, push a `StackItem` /
+#      `push_to_stack(obj_id, controller)`, then call
+#      `resolve_top_of_stack` on both engines + SBA pass.
+# This is the same harness-helper pattern as
+# :func:`resolve_combat_damage_python` / :func:`deal_combat_damage_rust`
+# / :func:`clear_combat_both` — a side-channel mirror of an effect
+# both engines compose internally, called from the selector at the
+# triggering decision step.
+#
+# **Trigger detection (stateless).** The selector fires the wrath the
+# FIRST time it observes the state "p0 just cast a creature, 3
+# creatures on bf (1 of them sick), no Wrath in any graveyard yet".
+# This is unique to step 168 on the retaliation_selector walk —
+# after p0's turn-13 Bears cast (step 167) but before the
+# multi_turn baseline starts advancing past PRECOMBAT_MAIN. The
+# "no Wrath in any graveyard yet" gate keeps the selector
+# idempotent on subsequent calls (the wrath ends up in p0's
+# graveyard post-resolve, so the gate fires exactly once).
+# ---------------------------------------------------------------------------
+
+
+def mass_removal_side_channel(py_state, rust_state) -> None:
+    """Side-channel mirror of a Wrath-of-God-style cast + resolve.
+
+    Inject a synthetic ``DestroyAllCreatures`` sorcery into p0's hand
+    on BOTH engines, mimic the cast (remove from hand, push to
+    stack), resolve, and run a SBA pass. The shape mirrors what the
+    `_cast_spell` + `resolve_top_of_stack` + `state_based_actions`
+    pipeline composes on the real Python engine — but driven directly
+    from the harness because Rust's `CastSpell` action arm only
+    routes to `cast_creature` today.
+
+    Same side-channel-a-method-neither-engine-reaches-via-apply_action
+    pattern as :func:`resolve_combat_damage_python` /
+    :func:`deal_combat_damage_rust`.
+
+    No return value — the post-resolve state is the observable.
+    """
+    from mtg_bot.cards.base import CardPrinting, ManaCost
+    from mtg_bot.effects.generic.destroy import DestroyAllCreatures
+    from mtg_bot.game import StackItem, Zone
+    from mtg_bot.turn import state_based_actions
+    from mtg_bot.actions import resolve_top_of_stack
+
+    # Python side: build a Sorcery printing + GameObject, push to
+    # stack, resolve, run SBAs. The `summoning_sick = False`
+    # normalization is a harness-construction detail — Python's
+    # `new_object` defaults sick=True (the field is gameplay-
+    # irrelevant for non-bf objects but the fingerprint compares
+    # the raw field; Rust's `register_and_inject_object` sets
+    # sick=False, so we normalize the injected Wrath to match).
+    # NOTE: this normalization is ONLY about the injected Wrath
+    # itself (a non-creature card), NOT about the per-object LTB
+    # cleanup of victim creatures — that surface is the load-bearing
+    # divergence this probe is meant to surface, and we intentionally
+    # do NOT normalize it.
+    wrath_printing = CardPrinting(
+        name="Wrath",
+        mana_cost_str="",
+        mana_cost=ManaCost(),
+        type_line="Sorcery",
+        supertypes=(),
+        card_types=("Sorcery",),
+        subtypes=(),
+        power=None,
+        toughness=None,
+        produces=frozenset(),
+        spell_effect=DestroyAllCreatures(),
+    )
+    wrath_obj = py_state.new_object(
+        wrath_printing, owner_id=0, zone=Zone.HAND,
+    )
+    wrath_obj.summoning_sick = False
+    py_state.players[0].hand.append(wrath_obj)
+    # Mimic cast: remove from hand, push to stack, then resolve.
+    py_state.players[0].hand.remove(wrath_obj)
+    wrath_obj.zone = Zone.STACK
+    py_state.stack.append(StackItem(source=wrath_obj, controller_id=0))
+    resolve_top_of_stack(py_state)
+    state_based_actions(py_state)
+
+    # Rust side: register the same shape, push to stack, resolve.
+    # `register_and_inject_object` handles the printing registration
+    # + GameObject construction + zone placement; the result is the
+    # u32 obj_id which we hand to `push_to_stack`. The
+    # `resolve_top_of_stack` call applies `Effect::DestroyAllCreatures`
+    # and moves the source to controller's graveyard per CR 608.2m
+    # (sorcery -> graveyard).
+    #
+    # **SBA pass after resolve.** Mirrors Python's
+    # `state_based_actions(state)` call above. Rust's `apply_sbas`
+    # composes the same surface (creature lethality, empty-library
+    # loss, life<=0 loss, ...); no creatures with lethal damage are
+    # left after the wrath so the call is effectively a no-op on
+    # this probe, but firing it unconditionally keeps the
+    # cross-engine compose identical to Python's.
+    ZONE_HAND = 0
+    wrath_rust_id = rust_state.register_and_inject_object(
+        {
+            "name": "Wrath",
+            "card_types": ["Sorcery"],
+            "effects": [{"kind": "destroy_all_creatures"}],
+        },
+        0,
+        ZONE_HAND,
+    )
+    rust_state.push_to_stack(wrath_rust_id, 0)
+    rust_state.resolve_top_of_stack()
+    rust_state.apply_sbas()
+
+
+def mass_removal_selector(py_state, rust_state, step_index: int) -> dict:
+    """Cross-engine smoke selector that drives a Wrath-style mass
+    destruction on :func:`multi_blocker_deckspec` after
+    :func:`retaliation_selector`'s walk lands 3 creatures on the
+    battlefield.
+
+    Differs from :func:`retaliation_selector` in exactly one way:
+    when the observable state matches the "p0 just cast Bears#3,
+    3 creatures on bf, no Wrath in any graveyard yet" window
+    (uniquely step 168 on the retaliation walk), the selector
+    side-channels a mass-destruction via :func:`mass_removal_side_channel`
+    and returns ``pass_priority``. The wrath ends up in p0's
+    graveyard, so the "no Wrath in any graveyard yet" gate keeps
+    the selector idempotent on subsequent calls — every step after
+    168 delegates back to :func:`retaliation_selector`.
+
+    Expected walk shape on :func:`multi_blocker_deckspec`:
+
+    * **Steps 0-167** — identical to retaliation_selector's walk.
+      Builds out the 3-creature bf state (p0=Bears id 5 sick, p1=Bears
+      ids 9, 11 unsick) at the end of step 167.
+
+    * **Step 168** — wrath fires. Side-channel injects + casts +
+      resolves a Sorcery carrying ``DestroyAllCreatures``. Post-resolve
+      state: p0 graveyard = [Bears id 5, Wrath id 14], p1 graveyard
+      = [Bears id 9, Bears id 11], bf has only lands. The
+      ``permanent_left_battlefield_this_turn`` flag is True on both
+      engines (Round-29 Void LTB substrate). Selector emits
+      ``pass_priority``.
+
+    * **Steps 169-N** — retaliation_selector takes over. The bf has no
+      creatures, so DECLARE_ATTACKERS branches fall through to
+      cast_bears_selector (no Bears in hand on either side anymore).
+      The walk drains out the remaining lands + library through
+      multi_turn-style phase advances until both libraries deplete
+      and SBA flips ``has_lost`` on both players.
+
+    The selector is stateless — the wrath-fire branch is gated on the
+    observable "no Wrath in any graveyard yet" check, which flips
+    after step 168's side-channel commits the Wrath to p0's
+    graveyard. Same shape as the prior probes.
+    """
+    # Stateless trigger detection. The wrath fires the FIRST time we
+    # observe:
+    #   1. >= 3 creatures on the bf (the retaliation walk's
+    #      end-of-step-167 state).
+    #   2. No Wrath in any graveyard (post-fire, this gate flips
+    #      and we delegate back to retaliation_selector).
+    # The combined gate is uniquely true at step 168 on the
+    # retaliation walk; on every other step at least one clause is
+    # false.
+    wrath_already_fired = any(
+        any(o.printing.name == "Wrath" for o in p.graveyard)
+        for p in py_state.players
+    )
+    if not wrath_already_fired:
+        creature_count = sum(
+            1 for o in py_state.battlefield
+            if "Creature" in o.printing.card_types
+        )
+        if creature_count >= 3:
+            # Trigger condition met — side-channel the mass destruction
+            # on both engines, then emit pass_priority so the harness's
+            # per-step compare fires after the LTB transitions have
+            # settled. The side-channel does NOT touch the phase —
+            # post-resolve, the active player is still p0, the step is
+            # still PRECOMBAT_MAIN; the next selector call will see
+            # "no creatures, Wrath in graveyard" and delegate to
+            # retaliation_selector which will advance phase normally.
+            mass_removal_side_channel(py_state, rust_state)
+            return {"kind": "pass_priority"}
+
+    # Default branch: delegate to retaliation_selector for everything
+    # before the wrath fires AND for everything after.
+    return retaliation_selector(py_state, rust_state, step_index)

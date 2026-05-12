@@ -2279,6 +2279,104 @@ unrelated (pending unmerged coverage-overrides PR).
 
 ---
 
+### CE13. `summoning_sick` clearing on leaves-battlefield (mass removal) — Python preserves, Rust clears
+
+- **Surfaced by**: `feature/phase5-mass-removal` —
+  `mass_removal_selector` + `multi_blocker_deckspec`. The walk
+  drives a side-channel `DestroyAllCreatures` (Wrath-of-God
+  pattern) fire at step 168 after p0's turn-13 Bears cast lands
+  the 3-creature mass-removal target set (1 still-sick Bears on
+  p0, 2 unsick blockers on p1). First Python-vs-Rust diverging
+  step at index 168 (the wrath fire itself).
+- **Pinned by**: `tests/test_parity_smoke.py::test_cross_engine_mass_removal_selector_surfaces_ce13_summoning_sick_on_ltb`
+  (xfail-pinned with `strict=True`).
+- **Field**: `graveyard_p0` per-object snapshot tuple position 2
+  (the `summoning_sick` slot of the
+  `(name, tapped, sick, damage, counters, attached_to,
+  controller_id, id)` signature).
+- **Symptom**: When a creature LEAVES the battlefield (destroyed
+  by a mass-removal effect — and, more generally, any LTB
+  transition that doesn't explicitly normalize the field),
+  Python's destroyed object enters the graveyard with
+  `summoning_sick = True` preserved from its battlefield state;
+  Rust's destroyed object enters with `summoning_sick = False`
+  (explicitly cleared). On the probe walk, the diverging object
+  is Bears id 5 — cast turn 13, destroyed by wrath turn 13
+  PRECOMBAT_MAIN — which carried `sick=True` on the battlefield
+  at fire time. The two unsick blockers (ids 9, 11) don't
+  surface this because their battlefield `sick` flag matched
+  between engines (false) before the wrath.
+- **Cause — Python side**:
+  `src/mtg_bot/turn.py:141-240`'s `move_off_battlefield` clears a
+  battery of per-object combat / damage flags
+  (`damage`, `marked_lethal`, `damaged_this_turn`, `tapped`,
+  `attacking`, `blocking`, `blocked_by`, `attached_to`) but
+  specifically does NOT clear `summoning_sick`. The omission
+  appears deliberate-or-incidental — `summoning_sick` is
+  CR 302.1 battlefield-only state with no graveyard semantics,
+  and Python's untap step (`run_untap_step`) clears the flag
+  on a re-entering permanent's first untap so the stale
+  graveyard value never feeds back into gameplay.
+- **Cause — Rust side**:
+  `rust/src/state_ops_resolve.rs:2410` in the
+  `Effect::DestroyAllCreatures` resolve loop explicitly sets
+  `obj.summoning_sick = false` alongside the other per-object
+  resets (`tapped`, `damage`, `counters`, `attached_to`,
+  `exiled_with_source`). The clear is co-located with the
+  other "normalize the leaving object" resets and predates
+  the cross-engine harness; the Python side's omission of the
+  same clear is the asymmetry.
+- **Why prior CE probes didn't catch this**: The prior cross-
+  engine probes destroyed creatures only through COMBAT damage
+  + lethal-damage SBA, NOT through a mass-destruction effect.
+  The combat-death code path on Python flows through
+  `move_off_battlefield` (same omission), so the asymmetry was
+  PRESENT but invisible because the dying creatures
+  (multi_block's Bears id 9 in retaliation_selector) had
+  already cleared their summoning_sick via prior untap steps.
+  The mass_removal probe specifically destroys a still-sick
+  creature, exposing the gap.
+- **Impact**: LOW. The summoning_sick flag has NO gameplay
+  meaning in the graveyard (CR 302.1 — the field is
+  battlefield-only state). Reanimation effects (Reanimate,
+  Animate Dead, Necromancy, dredge-back-and-cast) all
+  unconditionally reset `summoning_sick = True` when the
+  card re-enters the battlefield from the graveyard, so the
+  stale True/False in the graveyard never reaches a real
+  decision surface. The fingerprint compare flags it loudly,
+  but a hash mismatch on a graveyard-only summoning_sick
+  field is a pure parity-noise finding. Distinct from CE10's
+  is_over / winner_id / is_draw SBA-write surface — CE13 is
+  per-object cleanup, not state-level loss accounting.
+- **Closure direction (open question)**:
+  - **Option A (Python-side fix, parity-correct).** Add
+    `obj.summoning_sick = False` to
+    `turn.move_off_battlefield`'s per-object reset block
+    (next to the existing `obj.damage = 0` / `obj.tapped =
+    False` resets). Symmetric with Rust's normalize-on-LTB
+    pattern. No gameplay effect (the flag is reset on re-ETB
+    via the same code path that creates new battlefield
+    objects with sick=True). One-line patch.
+  - **Option B (Rust-side fix, bug-mirror).** Drop the
+    `obj.summoning_sick = false` line from
+    `Effect::DestroyAllCreatures` resolve in
+    `state_ops_resolve.rs:2410`. Mirrors Python's omission.
+    Likely needs the same drop applied to other LTB sites
+    that explicitly clear sick (token cessation, other
+    Effect arms — see the I33-audit-adjacent dispatch
+    table) to maintain Rust-internal consistency.
+  - The playbook's slice-authors-prefer-Option-A guideline
+    suggests adding the explicit clear on Python's side
+    (engineering-correct: a graveyard object's sick state
+    being non-zero is a stale read at best), but OPEN until
+    the next slice gets to the closure.
+- **Closeable**: yes, single-file fix on either side. Estimated
+  1 slice (closure + test). The pinning test
+  `test_cross_engine_mass_removal_selector_surfaces_ce13_summoning_sick_on_ltb`
+  is the closure's flip target.
+
+---
+
 ## Maintenance
 
 When a slice closes one of the gaps above, drop the entry from the

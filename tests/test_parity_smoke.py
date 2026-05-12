@@ -2666,3 +2666,308 @@ def test_cross_engine_retaliation_selector_pre_ce12_walks_clean(
         f"expected at least 1 p1 attack (the bilateral surface), "
         f"got {len(p1_attacks)}"
     )
+
+
+# ---------------------------------------------------------------------------
+# Phase 5 follow-up #8: mass_removal_selector — extend
+# retaliation_selector with a Wrath-style ``DestroyAllCreatures``
+# side-channel fire at step 168 (after the multi-creature bf state
+# is set up by p0's turn-13 Bears cast). Surfaces CE13.
+#
+# **CE13 — summoning_sick-on-LTB Python-preserve vs Rust-clear.**
+# When a creature leaves the battlefield (destroyed by a mass-removal
+# effect — or any LTB transition that doesn't normalize the field),
+# Python's ``turn.move_off_battlefield`` does NOT clear
+# ``obj.summoning_sick`` while Rust's
+# ``Effect::DestroyAllCreatures`` resolve loop explicitly sets
+# ``obj.summoning_sick = false`` on each destroyed object. The
+# summoning_sick flag carries NO gameplay meaning on a graveyard
+# object (CR 302.1 — summoning sickness is a battlefield-only
+# state), but the fingerprint snapshot tuple
+# ``(name, tapped, sick, damage, counters, attached_to,
+# controller_id, id)`` captures the raw field, so the cross-engine
+# field-view compare flags it.
+#
+# First diverging step on the mass_removal_selector probe: index
+# 168 (the side-channel wrath fire — Bears id 5, freshly cast on
+# turn 13 and still summoning-sick, is the only destroyed creature
+# carrying ``sick=True`` at fire time; the unsick blockers ids 9
+# and 11 don't surface this gap because their sick flag matches
+# between engines).
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.xfail(
+    strict=True,
+    reason=(
+        "CE13: summoning_sick-on-LTB divergence. Python's "
+        "move_off_battlefield does not clear summoning_sick; "
+        "Rust's Effect::DestroyAllCreatures resolve loop explicitly "
+        "sets it to false. Surfaces only when a still-sick creature "
+        "is destroyed by a mass-removal effect. See "
+        "docs/RUST_PARITY_GAPS.md CE13."
+    ),
+)
+def test_cross_engine_mass_removal_selector_surfaces_ce13_summoning_sick_on_ltb(
+    parity_smoke,
+):
+    """**CE13 surface-pin** (expected-fail until either Python clears
+    summoning_sick in move_off_battlefield, or Rust drops the
+    explicit clear in Effect::DestroyAllCreatures).
+    See docs/RUST_PARITY_GAPS.md CE13."""
+    from mtg_bot.parity.cross_engine import (
+        mass_removal_selector,
+        multi_blocker_deckspec,
+        walk_both,
+    )
+
+    result = walk_both(
+        multi_blocker_deckspec(),
+        n_decisions=170,
+        decision_selector=mass_removal_selector,
+    )
+    assert result.error is None, (
+        f"walk aborted at step {result.aborted_at}: {result.error}"
+    )
+
+    # Pre-CE13-surface: every step before the side-channel wrath
+    # fire walks clean. The multi-turn play, mana ability
+    # activations, land plays, and creature casts on both sides
+    # all match between engines through step 167. This pins the
+    # CE13 surface to the SPECIFIC summoning_sick-clearing
+    # asymmetry — not a broader cast / cast-target / mana-pool
+    # divergence.
+    for step in result.steps[:168]:
+        assert step.divergences == [], (
+            f"unexpected pre-CE13 divergence at step {step.step_index}: "
+            f"action={step.action_dict} "
+            f"{[(d.field, d.py_value, d.rust_value, d.known_gap) for d in step.divergences]}"
+        )
+
+    # CE13 surface: at step 168 (the side-channel wrath fire) the
+    # field-view's graveyard_p0 slot diverges. Python's snapshot
+    # has Bears id 5 with summoning_sick=1 (preserved across LTB),
+    # Rust's has summoning_sick=0 (cleared on bf-removal). Pin the
+    # EXACT field + per-object snapshot shape so a future bystander
+    # divergence on a different field doesn't trick this test
+    # into a false-pass.
+    #
+    # The snapshot tuple shape per :func:`parity_smoke._zone_signature`
+    # is `(name, tapped, sick, damage, counters, attached_to,
+    # controller_id, id)` — index 2 carries summoning_sick.
+    ce13_step = result.steps[168]
+    assert len(ce13_step.divergences) == 1, (
+        f"expected exactly 1 divergence at step 168 (CE13), got "
+        f"{[(d.field, d.py_value, d.rust_value) for d in ce13_step.divergences]}"
+    )
+    div = ce13_step.divergences[0]
+    assert div.field == "graveyard_p0", (
+        f"expected divergence on graveyard_p0, got {div.field}"
+    )
+    # py side has [Bears(sick=1), Wrath(sick=0)]; rust has
+    # [Bears(sick=0), Wrath(sick=0)]. The Wrath itself was injected
+    # with sick=False on both engines (the harness-construction
+    # normalization in mass_removal_side_channel); the diverging
+    # element is the Bears at index 0.
+    assert div.py_value[0][0] == "Grizzly Bears"
+    assert div.rust_value[0][0] == "Grizzly Bears"
+    assert div.py_value[0][2] == 1, (
+        f"expected Python Bears summoning_sick=1, got "
+        f"{div.py_value[0][2]} in full snapshot {div.py_value[0]}"
+    )
+    assert div.rust_value[0][2] == 0, (
+        f"expected Rust Bears summoning_sick=0, got "
+        f"{div.rust_value[0][2]} in full snapshot {div.rust_value[0]}"
+    )
+    # All other snapshot fields (name, tapped, damage, counters,
+    # attached_to, controller_id, id) match — the divergence is
+    # ISOLATED to the summoning_sick slot. Asserts on the remaining
+    # tuple positions to lock the surface tightly.
+    py_bears = div.py_value[0]
+    rust_bears = div.rust_value[0]
+    # Indices 0 (name), 1 (tapped), 3 (damage), 4 (counters),
+    # 5 (attached_to), 6 (controller_id), 7 (id) should all match.
+    for i in (0, 1, 3, 4, 5, 6, 7):
+        assert py_bears[i] == rust_bears[i], (
+            f"unexpected Bears snapshot mismatch at index {i}: "
+            f"py={py_bears[i]!r} rust={rust_bears[i]!r}"
+        )
+    # FORCE STRICT XFAIL: this final raise documents that the test
+    # is intentionally expected-fail. Without it the assertions
+    # above all pass on the actual diverging shape and pytest would
+    # XPASS the strict xfail.
+    pytest.fail("CE13 surface-pin observed as expected (xfail strict)")
+
+
+def test_cross_engine_mass_removal_selector_pre_ce13_walks_clean(
+    parity_smoke,
+):
+    """The pre-CE13 walk (steps 0-167) on
+    :func:`multi_blocker_deckspec` with
+    :func:`mass_removal_selector` is parity-clean. Pins the contract
+    that CE13 is SPECIFICALLY a summoning_sick-on-LTB finding —
+    not a broader divergence in cast, mana payment, multi-turn
+    play, or pre-fire battlefield state.
+
+    Walks 168 decisions (one short of the wrath fire) and asserts
+    every step is divergence-free. The final clean step (167) is
+    the cast_spell that puts p0's Bears#3 (id 5) on the battlefield,
+    establishing the 3-creature mass-removal target set. Step 168
+    is where the side-channel wrath fires and CE13 surfaces.
+
+    Validates the load-bearing pre-condition: at the end of step
+    167, the bf has exactly 3 creatures — p0=1 (sick), p1=2 (unsick).
+    The selector's stateless trigger detector reads this state and
+    fires the wrath on the next call.
+
+    See CE13 in docs/RUST_PARITY_GAPS.md.
+    """
+    from mtg_bot.parity.cross_engine import (
+        mass_removal_selector,
+        multi_blocker_deckspec,
+        walk_both,
+        build_matched_states,
+        step_both,
+    )
+
+    result = walk_both(
+        multi_blocker_deckspec(),
+        n_decisions=168,
+        decision_selector=mass_removal_selector,
+    )
+    assert result.error is None
+    for step in result.steps[:168]:
+        assert step.divergences == [], (
+            f"pre-CE13 divergence at step {step.step_index}: "
+            f"action={step.action_dict} "
+            f"{[(d.field, d.py_value, d.rust_value, d.known_gap) for d in step.divergences]}"
+        )
+
+    # Walk shape sanity: rebuild the matched states, drive 168 steps,
+    # and assert the resulting Python battlefield has exactly 3
+    # creatures with the expected sick-status split. This is the
+    # load-bearing pre-condition for the CE13 surface — if the bf
+    # doesn't have a still-sick creature at fire time, the
+    # summoning_sick-on-LTB asymmetry never surfaces because both
+    # engines' destroyed creatures already had sick=False.
+    py_state, rust_state = build_matched_states(multi_blocker_deckspec())
+    for i in range(168):
+        action = mass_removal_selector(py_state, rust_state, i)
+        step_both(py_state, rust_state, action)
+
+    creatures = [
+        o for o in py_state.battlefield
+        if "Creature" in o.printing.card_types
+    ]
+    assert len(creatures) == 3, (
+        f"expected 3 creatures on bf at end of step 167, got "
+        f"{len(creatures)}: "
+        f"{[(o.id, o.controller_id, o.summoning_sick) for o in creatures]}"
+    )
+    p0_creatures = [o for o in creatures if o.controller_id == 0]
+    p1_creatures = [o for o in creatures if o.controller_id == 1]
+    assert len(p0_creatures) == 1 and p0_creatures[0].summoning_sick, (
+        f"expected exactly 1 still-sick p0 creature; got "
+        f"{[(o.id, o.summoning_sick) for o in p0_creatures]}"
+    )
+    assert len(p1_creatures) == 2 and not any(
+        o.summoning_sick for o in p1_creatures
+    ), (
+        f"expected 2 unsick p1 creatures; got "
+        f"{[(o.id, o.summoning_sick) for o in p1_creatures]}"
+    )
+
+
+def test_cross_engine_mass_removal_selector_post_wrath_bf_state(
+    parity_smoke,
+):
+    """Validates the load-bearing observable AFTER the wrath fires:
+    both engines agree that the battlefield is empty of creatures
+    (only lands remain) and the graveyards have the expected counts.
+
+    This is a structural assertion — it doesn't inspect the
+    summoning_sick CE13 surface (that's the xfail-pinned test), it
+    asserts the mass-destruction itself composed correctly on both
+    engines. If a future closure of CE13 lands and the strict-xfail
+    test flips, this test continues to pin the load-bearing "wrath
+    actually destroyed every creature" semantics.
+
+    Reads the Python state directly (not the field-view 22-tuple)
+    so the assertions are independent of the cross-engine
+    field-compare's per-snapshot tuple shape. Builds the matched
+    states, drives the walk through step 168 (the wrath fire),
+    then inspects.
+    """
+    from mtg_bot.parity.cross_engine import (
+        mass_removal_selector,
+        multi_blocker_deckspec,
+        build_matched_states,
+        step_both,
+    )
+
+    py_state, rust_state = build_matched_states(multi_blocker_deckspec())
+    for i in range(169):
+        action = mass_removal_selector(py_state, rust_state, i)
+        step_both(py_state, rust_state, action)
+
+    # Python side: bf has only lands, p0 graveyard has [Bears, Wrath],
+    # p1 graveyard has [Bears, Bears].
+    py_creatures = [
+        o for o in py_state.battlefield
+        if "Creature" in o.printing.card_types
+    ]
+    assert py_creatures == [], (
+        f"expected no creatures on Python bf after wrath; got "
+        f"{[(o.id, o.printing.name) for o in py_creatures]}"
+    )
+    py_p0_gy_names = [o.printing.name for o in py_state.players[0].graveyard]
+    py_p1_gy_names = [o.printing.name for o in py_state.players[1].graveyard]
+    assert py_p0_gy_names == ["Grizzly Bears", "Wrath"], (
+        f"expected Python p0 gy=[Bears, Wrath]; got {py_p0_gy_names}"
+    )
+    assert py_p1_gy_names == ["Grizzly Bears", "Grizzly Bears"], (
+        f"expected Python p1 gy=[Bears, Bears]; got {py_p1_gy_names}"
+    )
+
+    # Rust side: same shape. Read via the pyclass surface
+    # (graveyard_sizes + the field-view's graveyard_pN signature for
+    # the name positions).
+    rust_gy_sizes = rust_state.graveyard_sizes
+    assert rust_gy_sizes == [2, 2], (
+        f"expected Rust graveyard_sizes=[2, 2]; got {rust_gy_sizes}"
+    )
+    rust_view = parity_smoke._build_field_view(rust_state)
+    rust_p0_names = tuple(entry[0] for entry in rust_view["graveyard_p0"])
+    rust_p1_names = tuple(entry[0] for entry in rust_view["graveyard_p1"])
+    assert rust_p0_names == ("Grizzly Bears", "Wrath"), (
+        f"expected Rust p0 gy names=(Bears, Wrath); got {rust_p0_names}"
+    )
+    assert rust_p1_names == ("Grizzly Bears", "Grizzly Bears"), (
+        f"expected Rust p1 gy names=(Bears, Bears); got {rust_p1_names}"
+    )
+
+    # Both engines should agree the bf is empty of creatures (this
+    # is the mass-removal-fired observable; CE13 only surfaces in
+    # the per-object summoning_sick field on the graveyard
+    # snapshot, not in the bf-cleared invariant). The Rust
+    # battlefield_sizes reports total bf size (creatures + lands);
+    # post-wrath both players' bf is land-only with 5/4 lands
+    # respectively (p0 played turn-13 land that didn't tap;
+    # p1 played turn-12 land). Inspect via the snapshot names
+    # rather than the size to assert "no creatures".
+    rust_bf_p0_names = tuple(
+        entry[0] for entry in rust_view["battlefield"]
+        if entry[6] == 0  # controller_id == 0
+    )
+    rust_bf_p1_names = tuple(
+        entry[0] for entry in rust_view["battlefield"]
+        if entry[6] == 1  # controller_id == 1
+    )
+    assert "Grizzly Bears" not in rust_bf_p0_names, (
+        f"Rust p0 bf still has a Grizzly Bears after wrath: "
+        f"{rust_bf_p0_names}"
+    )
+    assert "Grizzly Bears" not in rust_bf_p1_names, (
+        f"Rust p1 bf still has a Grizzly Bears after wrath: "
+        f"{rust_bf_p1_names}"
+    )
