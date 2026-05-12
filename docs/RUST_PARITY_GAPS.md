@@ -3969,6 +3969,114 @@ injection: backbone has no flash divergence to surface).
 
 See I46 for the post-closure invariant pin.
 
+### CE20. Rust's `legal_decisions` and `ActivateAbility` dispatch ignore non-mana activated abilities entirely (cost-paying activated abilities have no representation in Rust's `CardPrinting`)
+
+- **Surfaced by**: Phase 5 follow-up #22 (`feature/phase5-activated-cost`) —
+  `tests/test_parity_smoke.py::test_cross_engine_activated_cost_test_a_surfaces_ce20`
+  (emission-side pin asserting Rust does NOT emit ActivateAbility for
+  a `{1}{G}, T: Draw a card` Bear Caster on p0's bf even with
+  affordance available) and
+  `..._test_c_apply_dispatch_surfaces_ce20`
+  (dispatch-side pin asserting `rust_state.apply_action({"kind":
+  "activate_ability", ...})` raises ValueError("source N has no
+  mana_produced") for the same source). Three parity-clean sanity pins
+  (Test B no-affordance both-engines-don't-emit, Test D no-affordance
+  Python-underpays-Rust-rejects, pre-injection walks-clean) bound the
+  divergence to the non-mana-ability axis.
+- **Rust today**:
+  1. **`parse_printing` (`cards.rs:3437-3556`)** has no
+     `activated_abilities` field on `CardPrinting`; the only
+     ability-shape representation is `mana_produced:
+     Option<Vec<String>>`. Cost-paying activated abilities have no
+     Rust-side representation at all -- a Python
+     `ActivatedAbility(cost=ActivationCost(mana=ManaCost({1}{G}),
+     tap_self=True), effect=DrawCards(1), is_mana_ability=False)`
+     simply cannot be expressed in a Rust printing dict.
+  2. **`state_ops_legal.rs:929-1003`** ActivateAbility emission
+     loop filters battlefield objects on
+     `printing.mana_produced.is_some()`. A printing with no
+     `mana_produced` is silently skipped -- no ActivateAbility ever
+     emits for it, regardless of phase / priority / affordance.
+  3. **`state_ops_actions.rs:440-631`** ActivateAbility dispatch
+     arm hard-rejects any source whose printing lacks
+     `mana_produced` with `"ActivateAbility: source <id> has no
+     mana_produced (only mana abilities supported in first slice)"`.
+     The arm also rejects `ability_index != 0` with a separate
+     error, but the no-mana_produced check fires first for non-mana
+     sources.
+- **CR / Python expected**: Python's `legal.py:612-829`
+  ActivateAbility loop walks each object's
+  `effective_activated_abilities` and per-ability cost-payability
+  checks (`legal.py:653-657` calls `can_pay_cost(state, player_id,
+  effective_mana, spell_kind=...)`; the auto-tap-from-lands
+  accounting makes "is there enough mana in pool + untapped lands"
+  the affordability bar). Python's
+  `actions._activate_ability:1928-2002` pays mana via
+  `auto_tap_for_cost`, optionally taps the source (`tap_self`), and
+  pushes the ability onto the stack (`is_mana_ability=False`) so a
+  later resolve fires the effect. CR 602.5: "To activate an ability
+  is to put it onto the stack and pay its costs, so that it will
+  eventually resolve and have its effect."
+- **Impact**: at every priority window where the agent might
+  activate a cost-paying ability, the Rust-side legal-action
+  enumerator silently DROPS every such ability from the candidate
+  list, and any direct apply_action call into Rust for one of
+  these abilities raises. In real EoE play this affects every
+  printing with an activated ability that has a cost beyond a
+  free `{T}` tap-for-mana: equipment equip costs, planeswalker
+  loyalty activations, Spacecraft station-charge spends,
+  fight-ability creature pumps, sac-for-effect activations,
+  draw-a-card activations. The agent never considers any of these
+  surfaces. The gap also blocks the cross-engine smoke from
+  exercising any non-mana activated ability dispatch -- the trajectory
+  harness's retry loop would catch the no-mana_produced raise and
+  skip, masking the affordability-axis surfaces. Bounded today
+  because the synthetic test deckspec has no non-mana-ability
+  printings; once EoE production printings (equipment +
+  planeswalkers + spacecraft) flow through the cross-engine
+  harness, this gap dominates the activated-ability axis.
+  Additionally, the related axis at apply-side: Python's
+  `_activate_ability` doesn't self-gate on affordance (the gate
+  lives in `legal_actions`), so an out-of-band caller that drives
+  apply_action with an unaffordable cost silently under-pays --
+  Test D pins this as a SUBTLER axis of CE20 distinct from the
+  primary emission + dispatch surfaces.
+- **Closeable**: yes, but spans a larger refactor than CE17 / CE18
+  / CE19. Option A (Rust-side convergence on Python) requires:
+  1. Add `activated_abilities: Vec<ActivatedAbilityDesc>` to Rust's
+     `CardPrinting` struct (`cards.rs:1772+`). Each desc carries
+     cost + effect shape (start with `mana: ManaCost`, `tap_self:
+     bool`, `effect: AbilityEffect` enum; expand as printings
+     demand).
+  2. Update `parse_printing` to read `activated_abilities` from the
+     dict (back-compat: empty Vec when absent).
+  3. Rewrite the `state_ops_legal.rs:929-1003` emission loop to
+     walk `printing.activated_abilities` (every entry, not just
+     index 0) and per-ability call a new `can_pay_ability_cost`
+     primitive (mirrors Python's `can_pay_cost`).
+  4. Rewrite the `state_ops_actions.rs:440-631` dispatch arm to
+     dispatch on `ability_index` into the printing's
+     `activated_abilities`, pay the cost via a new
+     `auto_tap_for_cost` Rust primitive, and -- for
+     non-mana abilities (`is_mana_ability=False`) -- push a stack
+     item (which in turn needs Rust to grow a real stack; CE5
+     today fuses cast+resolve).
+  5. Either convert the existing `mana_produced` shape into a
+     synthesized "free mana ability" desc (cleaner) or keep both
+     paths in parallel during migration.
+  Approximate: ~400-600 line refactor across cards.rs +
+  state_ops_legal.rs + state_ops_actions.rs + a new
+  state_ops_cost.rs for the cost-pay primitive, gated behind a
+  real Rust-side stack landing (currently CE5-mirrored on the
+  harness side). Out of scope of this probe slice (brief says "do
+  NOT fix"). Post-closure the Test A assertion flips from "Rust
+  does NOT emit" to "Python and Rust emissions agree on the bear
+  id"; Test C flips from "Rust raises" to "Rust apply succeeds + 
+  field-view convergence on mana_pool + stack + bf". Test B + D
+  stay parity-clean (Test B always negative on both sides; Test D
+  changes shape -- once Rust self-gates AND Python self-gates,
+  both engines reject the out-of-band call).
+
 ---
 
 ## Maintenance
