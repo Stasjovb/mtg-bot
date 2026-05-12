@@ -1149,25 +1149,100 @@ impl GameState {
             //     back (gates out non-FS sources hit by a FS source,
             //     and gates out DS sources that took lethal in step
             //     1 from striking a second time).
-            // (b) Creature targets must also be still alive after
-            //     pass 1 — a DS source whose only blocker died in
-            //     step 1 has no creature target in step 2 (real MTG
-            //     would let trample spill the second strike to the
-            //     defender, but this slice does not wire DS+trample;
-            //     deferred). Player targets always pass — `Player`
-            //     entries are never filtered here.
+            // (b) Creature targets — if the original creature target
+            //     died in pass 1, REDIRECT the entry to
+            //     `Player(defending_player)` IF the attacker (= the
+            //     source) has no remaining alive blockers. This
+            //     mirrors Python's "rebuild blockers list per-substep
+            //     yields empty → route to defender" shape
+            //     (combat.py:_resolve_damage_step at line 405/413).
+            //     If at least one other blocker is still alive (e.g.
+            //     a 2-blocker setup where only one died), the entry
+            //     is dropped — the remaining blocker(s) absorbed
+            //     their own assignments via separate plan entries,
+            //     and there's no spillover.
+            //     Player targets always pass — `Player` entries are
+            //     never filtered here.
             //
             // SBAs are NOT fired between passes — the alive check is
             // a within-function `damage < toughness` predicate, same
             // shape as the round-9 first-strike slice.
+            //
+            // CE18 closure (I45). Before the closure, Rust simply
+            // dropped pass-2 creature-target entries when the target
+            // died in FS. That filter was CR-correct (CR 510.1h: a
+            // creature stays blocked even if all blockers leave; the
+            // attacker's remaining damage is wasted without trample),
+            // but Python's behavior is over-permissive — it rebuilds
+            // the blockers list per-substep, finds it empty, and
+            // routes the damage to the defender. Per Phase 5
+            // convention "converge Rust toward Python regardless of
+            // CR-correctness", we redirect here.
+            //
+            // Pre-build alive-blocker-by-attacker map from the
+            // declared `self.blockers` list: for each attacker, count
+            // how many of its declared blockers are still alive
+            // post-FS-pass. The map is keyed by attacker_id so the
+            // pass-2 filter can decide redirect-vs-drop per attacker
+            // source.
+            let alive_blockers_per_attacker: std::collections::HashMap<u32, u32> = {
+                let mut m: std::collections::HashMap<u32, u32> =
+                    std::collections::HashMap::new();
+                for (att_id, blk_id) in self.blockers.iter() {
+                    if battlefield_creature_alive(self, *blk_id) {
+                        *m.entry(*att_id).or_insert(0) += 1;
+                    }
+                }
+                m
+            };
+            // Set of declared attacker ids — used to gate the I45
+            // redirect: ONLY entries whose source is an attacker
+            // (`self.attackers`) qualify for the spillover-to-defender
+            // redirect. A blocker's back-damage entry that targets a
+            // dead attacker still gets DROPPED (matches Python's
+            // single-attacker-per-blocker model — a blocker has one
+            // creature target, the attacker; if the attacker is dead,
+            // the back-damage is wasted, not redirected to the
+            // blocker's own controller or anywhere else).
+            let attacker_id_set: std::collections::HashSet<u32> =
+                self.attackers.iter().copied().collect();
             let pass_2: Vec<PlanEntry> = pass_2_all
                 .into_iter()
                 .filter(|e| battlefield_creature_alive(self, e.source_id))
-                .filter(|e| match e.target {
+                .filter_map(|e| match e.target {
                     DamageTarget::Creature(target_id) => {
-                        battlefield_creature_alive(self, target_id)
+                        if battlefield_creature_alive(self, target_id) {
+                            Some(e)
+                        } else if attacker_id_set.contains(&e.source_id) {
+                            // Source is an attacker AND its creature
+                            // target is dead in FS pass. CE18 / I45
+                            // redirect: if the attacker has no
+                            // remaining alive blockers, redirect to
+                            // the defending player. Otherwise drop
+                            // (the surviving blocker(s) have their
+                            // own entries and there's no spillover).
+                            let n_alive = alive_blockers_per_attacker
+                                .get(&e.source_id)
+                                .copied()
+                                .unwrap_or(0);
+                            if n_alive == 0 {
+                                Some(PlanEntry {
+                                    source_id: e.source_id,
+                                    target: DamageTarget::Player(defending_player),
+                                    amount: e.amount,
+                                    pass: e.pass,
+                                })
+                            } else {
+                                None
+                            }
+                        } else {
+                            // Source is a blocker (back-damage entry)
+                            // whose attacker target died in FS pass.
+                            // No redirect — back-damage is wasted.
+                            None
+                        }
                     }
-                    DamageTarget::Player(_) => true,
+                    DamageTarget::Player(_) => Some(e),
                 })
                 .collect();
             self.apply_damage_pass(pass_2);

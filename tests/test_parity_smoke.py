@@ -5924,16 +5924,13 @@ def test_cross_engine_hexproof_unenforced_at_target_enumeration(parity_smoke):
 # Tests pin the contract:
 #
 #   * test_cross_engine_double_strike_selector_walks_clean —
-#     XFAIL-PINNED (strict=True) on the full walk because life_p1
-#     diverges from step 174 onward. Flips to strict-pass when
-#     CE18 is closed.
-#   * test_cross_engine_double_strike_selector_surfaces_ce18_at_step_174
-#     — companion strict-xfail symptom-pin asserting the EXACT
-#     divergence shape (life_p1: py=18, rust=20). Mirrors the
-#     CE17/CE16 pair-pin convention.
+#     **CE18 CLOSED**: full 200-decision walk is parity-clean,
+#     including step 174 (post-COMBAT_DAMAGE) which pre-closure
+#     diverged on life_p1. Companion symptom-pin
+#     test_cross_engine_double_strike_selector_surfaces_ce18_at_step_174
+#     deleted at closure per the CE2-CE17 pair-pin convention.
 #   * test_cross_engine_double_strike_post_combat_structural_state
-#     — direct-read structural pin on the post-combat bf + gy state
-#     (which both engines agree on — only life_p1 diverges).
+#     — direct-read structural pin on the post-combat bf + gy state.
 #   * test_cross_engine_double_strike_larger_blocker_mutual_death
 #     — Test B: 4/4 blocker case, parity-clean.
 #   * test_cross_engine_double_strike_unblocked_full_damage_to_defender
@@ -5943,41 +5940,22 @@ def test_cross_engine_hexproof_unenforced_at_target_enumeration(parity_smoke):
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "CE18 — Rust's combat damage plan-build-upfront + alive-predicate "
-        "filter (state_ops_combat.rs:1163-1172) drops the double-strike "
-        "attacker's regular-substep damage entry when the sole blocker died "
-        "in the FS substep; Python's per-substep rebuild of the blockers "
-        "list (combat.py:_resolve_damage_step at line 389/405) yields an "
-        "empty list post-SBA-between-substeps and routes the regular-pass "
-        "damage to the defending player. Net divergence: life_p1 py=18, "
-        "rust=20 at step 174 (post-COMBAT_DAMAGE) and persisting through "
-        "step 199. CR 702.4 + CR 510.1h say a creature that's been blocked "
-        "stays blocked even if all blockers leave mid-combat — without "
-        "trample, the attacker's remaining damage is wasted (Rust is "
-        "CR-correct, Python is CR-divergent). Phase 5 convention requires "
-        "converging Rust toward Python regardless of CR-correctness; CE18 "
-        "closure shape: in state_ops_combat.rs:1163-1172, when the pass-2 "
-        "alive-predicate filter rejects a Creature target, redirect to "
-        "Player(defending_player) if the attacker's blocked-by set is now "
-        "empty. See docs/RUST_PARITY_GAPS.md CE18 entry for the full "
-        "diagnosis."
-    ),
-)
 def test_cross_engine_double_strike_selector_walks_clean(parity_smoke):
-    """**Double-strike full-walk parity pin (XFAIL — CE18).** 200-decision
+    """**Double-strike full-walk parity pin (CE18 CLOSED).** 200-decision
     walk on :func:`multi_blocker_deckspec` with
-    :func:`double_strike_selector`. Pre-closure: divergent on
-    ``life_p1`` from step 174 (post-COMBAT_DAMAGE) onward; every
-    other field is parity-clean. Post-closure: every step parity-
-    clean and this xfail flips to strict-pass.
+    :func:`double_strike_selector`. Post-closure (invariant I45): every
+    step is parity-clean, including step 174 (post-COMBAT_DAMAGE) which
+    pre-closure diverged on ``life_p1`` (Python 18 vs Rust 20).
 
-    The xfail decorator is ``strict=True`` so the harness flags a
-    silent CE18 closure (where the test would pass) as a failure —
-    the decorator must be removed at closure to make the test green
-    again.
+    Closure shape (state_ops_combat.rs:1163-1234): when the pass-2
+    alive-predicate filter rejects a Creature target because the
+    target died in the FS substep, the entry is REDIRECTED to
+    `DamageTarget::Player(defending_player)` IF the source attacker
+    has no remaining alive blockers (matches Python's "rebuild
+    blockers per-substep yields empty → route to defender" shape).
+    Companion symptom pin
+    ``test_cross_engine_double_strike_selector_surfaces_ce18_at_step_174``
+    deleted at closure per the CE2-CE17 pair-pin convention.
     """
     from mtg_bot.parity.cross_engine import (
         double_strike_selector,
@@ -5999,80 +5977,6 @@ def test_cross_engine_double_strike_selector_walks_clean(parity_smoke):
             f"action={step.action_dict} "
             f"{[(d.field, d.py_value, d.rust_value, d.known_gap) for d in step.divergences]}"
         )
-
-
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "CE18 symptom pin — see the walks_clean test's reason. The "
-        "assertion below pins the POST-closure expectation (Python p1 "
-        "took 2 damage from redirected DS regular-pass damage; "
-        "Rust converges to MATCH Python by routing the filtered "
-        "regular-pass-target-died entry to the defender). Pre-closure "
-        "Rust life_p1=20 ≠ Python 18; assertion fails; strict-xfail "
-        "absorbs the failure. Post-closure Rust life_p1=18 == Python; "
-        "assertion passes; strict-xfail surfaces the closure → remove "
-        "the decorator + this test per the CE2-CE15 pair-pin convention."
-    ),
-)
-def test_cross_engine_double_strike_selector_surfaces_ce18_at_step_174(
-    parity_smoke,
-):
-    """**CE18 strict-xfail symptom pin** — Test A from the brief.
-    Drives the 200-decision walk and asserts the EXACT post-closure
-    parity shape at step 174: Rust life_p1 matches Python's
-    life_p1 (= 18, both engines route the DS attacker's
-    regular-substep damage to the defender when the sole blocker
-    died in the FS substep).
-
-    Pre-closure: Rust life_p1=20 ≠ Python 18 → the per-step
-    divergence list contains a `life_p1` entry; this test's
-    assertion that Rust matches Python on that step fails →
-    strict-xfail. Post-closure: Rust converges to 18; per-step
-    divergence list is empty for `life_p1` at step 174; assertion
-    passes → strict-xfail surfaces the closure.
-
-    Mirrors the CE17 strict-xfail symptom pin convention.
-    """
-    from mtg_bot.parity.cross_engine import (
-        double_strike_selector,
-        multi_blocker_deckspec,
-        walk_both,
-    )
-
-    result = walk_both(
-        multi_blocker_deckspec(),
-        n_decisions=200,
-        decision_selector=double_strike_selector,
-    )
-    assert result.error is None
-
-    # Find step 174 (post-COMBAT_DAMAGE — where CE18 first surfaces).
-    step_174 = next(
-        (s for s in result.steps if s.step_index == 174), None,
-    )
-    assert step_174 is not None, "step 174 missing from walk results"
-
-    # Pin POST-closure expectation: NO divergence on `life_p1` at step
-    # 174. Pre-closure this assertion fails because the divergence DOES
-    # exist; post-closure (Rust converged to match Python) it passes.
-    life_p1_divergences = [
-        d for d in step_174.divergences if d.field == "life_p1"
-    ]
-    assert life_p1_divergences == [], (
-        f"CE18 — Rust life_p1 diverges from Python at step 174 "
-        f"(post-COMBAT_DAMAGE): "
-        f"{[(d.py_value, d.rust_value) for d in life_p1_divergences]}. "
-        f"Python routes the DS attacker's regular-substep damage to "
-        f"the defending player when the sole blocker died in the FS "
-        f"substep (combat.py:_resolve_damage_step rebuilds blockers "
-        f"list per-substep, finds it empty, routes to defender at "
-        f"line 413). Rust filters out the regular-pass entry via the "
-        f"alive-predicate at state_ops_combat.rs:1163-1172. Fix shape: "
-        f"redirect filtered-out creature targets to "
-        f"DamageTarget::Player(defending_player) when the attacker's "
-        f"blocked-by set is empty post-FS-substep."
-    )
 
 
 def test_cross_engine_double_strike_post_combat_structural_state(parity_smoke):

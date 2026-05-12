@@ -1781,33 +1781,44 @@ def test_double_strike_attacker_strikes_twice_unblocked(synthetic_state):
 def test_double_strike_attacker_kills_blocker_in_first_strike_step(synthetic_state):
     """A 2/2 double-strike attacker vs a 2/2 vanilla blocker. The
     first-strike substep deals 2 to the blocker (lethal mark). The
-    regular substep: the attacker's second strike has no remaining
-    blocker target (single-blocker model, blocker died during step 1)
-    — the second strike fizzles since this slice does NOT wire
-    double-strike + trample. The blocker did NOT first-strike, so in
-    the regular substep the dead blocker contributes no back-damage
-    (its damage>=toughness gates it out). Net: blocker has 2 damage,
-    attacker has 0."""
+    regular substep: the attacker's only blocker is dead post-FS;
+    per **invariant I45 (CE18 closure)** the regular-substep damage
+    spills to the defending player (Python-parity behavior,
+    CR-divergent — CR 702.4 + 510.1h says the damage is wasted, but
+    Phase 5 convention is "converge Rust toward Python regardless of
+    CR-correctness"). The blocker did NOT first-strike, so in the
+    regular substep the dead blocker contributes no back-damage (its
+    damage>=toughness gates it out). Net: blocker has 2 damage,
+    attacker has 0, p1 life dropped 20 → 18."""
     attacker_id = synthetic_state.register_and_inject_object(
         _keyword_creature_dict(2, 2, ["double_strike"]), 0, ZONE_BATTLEFIELD
     )
     blocker_id = synthetic_state.register_and_inject_object(
         _keyword_creature_dict(2, 2, []), 1, ZONE_BATTLEFIELD
     )
+    assert synthetic_state.get_life(1) == 20
     assert synthetic_state.declare_attacker(attacker_id) is True
     assert synthetic_state.declare_blocker(blocker_id, attacker_id) is True
     synthetic_state.deal_combat_damage()
-    # Blocker took 2 in step 1 (lethal), no second hit (attacker's
-    # second strike fizzles — no trample, single-blocker model).
+    # Blocker took 2 in step 1 (lethal), no second hit on the blocker
+    # (it's dead — the regular-pass entry was redirected to defender).
     assert synthetic_state.get_damage(blocker_id) == 2, (
         "double-strike vs vanilla 2/2: blocker takes lethal in first-strike "
-        "step; second-strike has no creature target and does not pile on"
+        "step; second-strike damage redirects to defender (I45), not piled "
+        "onto the dead blocker"
     )
     # Attacker took 0 — blocker died before the regular substep, so
     # its non-first-strike back-damage doesn't fire.
     assert synthetic_state.get_damage(attacker_id) == 0, (
         "double-strike vs vanilla 2/2: blocker died in step 1, can't "
         "back-damage the attacker in step 2"
+    )
+    # I45 spillover: regular-substep damage redirects from the dead
+    # blocker to the defending player.
+    assert synthetic_state.get_life(1) == 18, (
+        "I45 (CE18 closure): when a DS attacker's sole blocker died in the "
+        "FS substep, the regular-substep damage must spill to the defending "
+        "player (Python-parity). p1 life: 20 - 2 = 18."
     )
 
 
@@ -1909,6 +1920,194 @@ def test_clone_then_double_strike_combat_does_not_affect_original(synthetic_stat
     assert synthetic_state.is_tapped(attacker_id) is False, (
         "CoW broken: declaring DS attacker on clone leaked into original "
         "battlefield"
+    )
+
+
+# ----- CE18 closure: double-strike regular-damage spillover to defender ----
+#
+# Invariant **I45** (`docs/RUST_PARITY_GAPS.md`). With a double-strike
+# attacker whose creature target dies in the first-strike substep, the
+# regular-substep damage entry is REDIRECTED to the defending player IF
+# the attacker has no remaining alive blockers. If at least one blocker
+# is still alive, the entry is dropped (no spillover — the surviving
+# blocker(s) have their own assignments).
+#
+# This mirrors Python's `combat.py:_resolve_damage_step` which rebuilds
+# the per-attacker blockers list per-substep, finds it empty
+# post-SBA-between-substeps, and routes to the defender at line 413
+# (`if not blockers:`). CR 702.4 + CR 510.1h say a creature stays
+# blocked even if all blockers leave (Python is CR-divergent;
+# Phase 5 convention is "converge Rust toward Python").
+#
+# Tests B and C below (`test_double_strike_larger_blocker_*`,
+# `test_double_strike_unblocked_*`) are regression-only — they were
+# already parity-clean pre-CE18 — but pinning them here keeps the
+# I45 surface coverage complete.
+
+
+def test_double_strike_regular_damage_spills_to_defender_when_sole_blocker_dies_fs(
+    synthetic_state,
+):
+    """**I45 / CE18 closure** — Test A from the brief. A 2/2 DS
+    attacker vs a single 2/2 vanilla blocker. FS substep: blocker
+    takes 2 (lethal). Regular substep: the attacker's only blocker
+    is dead, so the regular-pass entry redirects to the defender.
+    p1 life drops 20 → 18.
+
+    Companion to the cross-engine probe pins (CE18) — same shape,
+    direct Rust-side state setup."""
+    attacker_id = synthetic_state.register_and_inject_object(
+        _keyword_creature_dict(2, 2, ["double_strike"]), 0, ZONE_BATTLEFIELD
+    )
+    blocker_id = synthetic_state.register_and_inject_object(
+        _keyword_creature_dict(2, 2, []), 1, ZONE_BATTLEFIELD
+    )
+    assert synthetic_state.get_life(1) == 20
+    assert synthetic_state.declare_attacker(attacker_id) is True
+    assert synthetic_state.declare_blocker(blocker_id, attacker_id) is True
+    synthetic_state.deal_combat_damage()
+    # Blocker took lethal in FS; no second hit piled onto the corpse.
+    assert synthetic_state.get_damage(blocker_id) == 2, (
+        "DS + sole blocker died in FS: regular-pass damage redirects to "
+        "defender (I45), not piled onto the dead blocker"
+    )
+    # Attacker untouched — blocker is vanilla (no FS, no back-damage in
+    # the regular substep from a dead source).
+    assert synthetic_state.get_damage(attacker_id) == 0
+    # I45 spillover: regular-substep damage redirects to defender.
+    assert synthetic_state.get_life(1) == 18, (
+        "I45: DS + sole blocker died in FS substep — regular-substep "
+        "damage spills to defender. p1 life: 20 - 2 = 18."
+    )
+
+
+def test_double_strike_regular_damage_does_not_spill_when_other_blocker_alive(
+    synthetic_state,
+):
+    """**I45 negative branch** — DS attacker (3/3) vs TWO blockers
+    (a 2/2 and a 2/2). FS substep: under the no-trample assignment
+    walk, the 3-power attacker assigns `need=2` to blocker A
+    (lethal, damage=2); then `assigned = remaining=1` to blocker B
+    (is_last absorbs remainder, damage=1, NOT lethal). Regular
+    substep: blocker A is dead, blocker B alive — I45's
+    redirect-to-defender precondition requires the attacker's
+    blocked-by set to be EMPTY, which it is NOT (B alive). The
+    regular-pass entry on the dead blocker A is DROPPED (not
+    redirected); the regular-pass entry on blocker B fires for
+    another 1 damage (B total: 2 = lethal). Both blockers also
+    contribute back-damage to the attacker in the regular substep
+    (vanilla blockers, only fire in regular substep, but blocker A
+    is dead, so only B fires for 2). Net: attacker takes 2 damage,
+    blocker A takes 2, blocker B takes 2, defender life UNCHANGED.
+
+    Pins the negative branch of the I45 redirect: "drop, don't
+    spill, when other blockers are still alive."""
+    attacker_id = synthetic_state.register_and_inject_object(
+        _keyword_creature_dict(3, 3, ["double_strike"]), 0, ZONE_BATTLEFIELD
+    )
+    blocker_a_id = synthetic_state.register_and_inject_object(
+        _keyword_creature_dict(2, 2, []), 1, ZONE_BATTLEFIELD
+    )
+    blocker_b_id = synthetic_state.register_and_inject_object(
+        _keyword_creature_dict(2, 2, []), 1, ZONE_BATTLEFIELD
+    )
+    assert synthetic_state.get_life(1) == 20
+    assert synthetic_state.declare_attacker(attacker_id) is True
+    assert synthetic_state.declare_blocker(blocker_a_id, attacker_id) is True
+    assert synthetic_state.declare_blocker(blocker_b_id, attacker_id) is True
+    synthetic_state.deal_combat_damage()
+    # Blocker A took 2 in FS (lethal). Regular-pass entry on A is
+    # DROPPED by I45 (B still alive — not redirected).
+    assert synthetic_state.get_damage(blocker_a_id) == 2, (
+        "I45 negative branch: blocker A took lethal in FS (2 damage); "
+        "regular-pass entry dropped (not redirected — blocker B alive)"
+    )
+    # Blocker B took 1 in FS (is_last absorbs remainder = 1), then
+    # another 1 in regular = 2 total (lethal).
+    assert synthetic_state.get_damage(blocker_b_id) == 2, (
+        "I45 negative branch: blocker B (is_last absorbs remainder=1 in "
+        "FS) survives FS (damage=1 < toughness=2), takes another 1 in "
+        "regular substep (total 2 = lethal)"
+    )
+    # Attacker takes back-damage from blocker B in the regular substep
+    # (vanilla blocker A was dead, only B fires).
+    assert synthetic_state.get_damage(attacker_id) == 2, (
+        "I45 negative branch: surviving blocker B deals 2 back to attacker "
+        "in regular substep; dead blocker A's back-damage gated out"
+    )
+    # No spillover to defender — the I45 redirect's empty-blockers
+    # precondition is NOT satisfied (blocker B is still alive).
+    assert synthetic_state.get_life(1) == 20, (
+        "I45 negative branch: defender life MUST NOT change — the redirect "
+        "fires only when the attacker has zero alive blockers. With "
+        "blocker B still alive, the regular-pass entry on the dead "
+        "blocker A is dropped (not redirected)."
+    )
+
+
+def test_double_strike_vs_larger_blocker_mutual_death_no_spillover_regression(
+    synthetic_state,
+):
+    """**I45 regression — Test B from the brief.** A 2/2 DS attacker
+    vs a 4/4 vanilla blocker. FS substep: blocker takes 2 (NOT
+    lethal — damage 2 < toughness 4). Regular substep: blocker is
+    still alive, so the regular-pass entry stays on the blocker
+    (NOT redirected); blocker takes another 2 (total 4 = lethal);
+    4/4 blocker deals 4 to attacker (lethal). End: both creatures
+    have lethal marks, defender life unchanged.
+
+    Regression pin: I45's redirect MUST NOT fire when the original
+    target is still alive after FS pass."""
+    attacker_id = synthetic_state.register_and_inject_object(
+        _keyword_creature_dict(2, 2, ["double_strike"]), 0, ZONE_BATTLEFIELD
+    )
+    blocker_id = synthetic_state.register_and_inject_object(
+        _keyword_creature_dict(4, 4, []), 1, ZONE_BATTLEFIELD
+    )
+    assert synthetic_state.get_life(1) == 20
+    assert synthetic_state.declare_attacker(attacker_id) is True
+    assert synthetic_state.declare_blocker(blocker_id, attacker_id) is True
+    synthetic_state.deal_combat_damage()
+    # Blocker took 2+2 = 4 (lethal — toughness 4 met).
+    assert synthetic_state.get_damage(blocker_id) == 4, (
+        "DS vs 4/4: blocker survives FS (2 damage < 4 toughness), takes "
+        "another 2 in regular substep (total 4)"
+    )
+    # Attacker took 4 from 4/4 back-damage (lethal).
+    assert synthetic_state.get_damage(attacker_id) == 4, (
+        "DS vs 4/4: 4/4 blocker deals 4 (lethal) to attacker in regular "
+        "substep"
+    )
+    # No spillover — blocker was alive after FS, regular entry was NOT
+    # redirected.
+    assert synthetic_state.get_life(1) == 20, (
+        "I45 regression: blocker survived FS substep, so the regular-pass "
+        "creature-target entry stays on the blocker (NOT redirected). "
+        "Defender life unchanged."
+    )
+
+
+def test_double_strike_unblocked_full_damage_to_defender_regression(
+    synthetic_state,
+):
+    """**I45 regression — Test C from the brief.** A 2/2 DS attacker
+    with NO blocker. FS substep: defender takes 2. Regular substep:
+    defender takes another 2. p1 life drops 20 → 16.
+
+    Regression pin: I45 redirect only applies to creature-target
+    entries that die in FS — unblocked attackers' Player-target
+    entries are NOT affected by the filter, both substeps fire."""
+    attacker_id = synthetic_state.register_and_inject_object(
+        _keyword_creature_dict(2, 2, ["double_strike"]), 0, ZONE_BATTLEFIELD
+    )
+    assert synthetic_state.get_life(1) == 20
+    assert synthetic_state.declare_attacker(attacker_id) is True
+    synthetic_state.deal_combat_damage()
+    # Defender took 2 in FS + 2 in regular = 4.
+    assert synthetic_state.get_life(1) == 16, (
+        "I45 regression: DS attacker unblocked deals damage in BOTH "
+        "substeps directly to defender (player-target entries are not "
+        "filtered). p1 life: 20 - 4 = 16."
     )
 
 
