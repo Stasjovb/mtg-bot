@@ -1155,3 +1155,89 @@ def test_cross_engine_build_rust_state_priority_is_zero(parity_smoke):
     assert rust_state.active_player_idx == 0
     assert rust_state.turn_number == 1
     assert rust_state.step == "UNTAP"
+
+
+# ---------------------------------------------------------------------------
+# Phase 5 follow-up slice: slightly_bigger_deckspec (Forest + Mountain +
+# Grizzly Bears). The first slice's tiny synthetic state covers
+# mono-color Forest + Bears; this slice expands by ONE basic land
+# (Mountain) so the registry round-trips two basic-land entries with
+# different `mana_produced` colors and the per-zone signatures span
+# THREE distinct printing_names in adjacent slots. PassPriority remains
+# the only driver — legal_actions / play_land / activate_ability parity
+# is deferred to the next slice.
+#
+# Expected outcome under the current binary (CE2-closure landed at the
+# apply_action layer — pass_priority is a no-op on Rust just like
+# Python): the harness reports NO divergences across the full walk.
+# If a later regression reintroduces a divergence on this deck, the
+# test will surface it as a NEW CE<n> candidate rather than a known-
+# gap-masked nothing-burger.
+# ---------------------------------------------------------------------------
+
+
+def test_cross_engine_slightly_bigger_deckspec_walks_clean(parity_smoke):
+    """Drive 200 PassPriority decisions on the 3-card-kind synthetic
+    deck (Forest + Mountain + Grizzly Bears) and assert no field-view
+    divergences surface.
+
+    The point of the slice: confirm the bridge's registry +
+    zone-signature recipe stay parity-clean as the card pool grows by
+    one basic-land color. A clean walk here means the next natural
+    expansion is the decision-script side (PlayLand / ActivateAbility),
+    not more cards.
+
+    If a regression surfaces a NEW divergence on this deck, the
+    failure mode is "unexpected divergence on field <X>"; the assertion
+    message names the offending field + step index for fast triage.
+    Pin via xfail with a fresh CE<n> entry in
+    ``docs/RUST_PARITY_GAPS.md`` if that happens.
+    """
+    from mtg_bot.parity.cross_engine import (
+        slightly_bigger_deckspec,
+        walk_both,
+    )
+
+    result = walk_both(slightly_bigger_deckspec(), n_decisions=200)
+    assert result.error is None, (
+        f"walk aborted at step {result.aborted_at}: {result.error}"
+    )
+    assert result.aborted_at is None
+    assert len(result.steps) == 200
+    assert result.initial_divergences == [], (
+        "initial-state divergences on slightly_bigger_deckspec; "
+        f"expected clean start. Fields: "
+        f"{[d.field for d in result.initial_divergences]}"
+    )
+    # Walk every step; any divergence is unexpected under current
+    # binary semantics. Pinpoint the first offender for triage.
+    for step in result.steps:
+        assert step.divergences == [], (
+            f"unexpected divergence at step {step.step_index} on "
+            f"slightly_bigger_deckspec: "
+            f"{[(d.field, d.py_value, d.rust_value, d.known_gap) for d in step.divergences]}"
+        )
+
+
+def test_cross_engine_slightly_bigger_deckspec_initial_libraries_have_three_kinds(parity_smoke):
+    """Sanity-check the new deckspec's libraries actually carry THREE
+    distinct printing_names — guards against an accidental edit that
+    flattens the deck back to two kinds and silently weakens the
+    coverage delta over tiny_synthetic_deckspec."""
+    from mtg_bot.parity.cross_engine import (
+        build_matched_states,
+        slightly_bigger_deckspec,
+        build_python_field_view,
+    )
+
+    py_state, rust_state = build_matched_states(slightly_bigger_deckspec())
+    py_view = build_python_field_view(py_state)
+    # library_p0 is a tuple of per-object 8-tuples; index 0 is the
+    # printing_name. Collect unique names across BOTH players.
+    p0_names = {sig[0] for sig in py_view["library_p0"]}
+    p1_names = {sig[0] for sig in py_view["library_p1"]}
+    union = p0_names | p1_names
+    assert union == {"Forest", "Mountain", "Grizzly Bears"}, (
+        f"slightly_bigger_deckspec should expose three printing_names "
+        f"across libraries; got {sorted(union)}"
+    )

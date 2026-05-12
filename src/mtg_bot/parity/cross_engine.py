@@ -174,6 +174,21 @@ _BEARS = CardDef(
 )
 
 
+# Second basic land type — used by ``slightly_bigger_deckspec`` to expand
+# the cross-engine smoke beyond the mono-color Forest+Bears slice.
+# Mountain is the canonical red basic; including it exercises
+# heterogeneous library / hand zone signatures (printing_name varies
+# Forest vs Mountain) and a second `mana_produced` color in the
+# registry without dragging in spell-cast / play-land / mana-tap
+# action plumbing. PassPriority decisions remain the only driver,
+# matching the first slice's scope.
+_MOUNTAIN = CardDef(
+    name="Mountain",
+    card_type="Land",
+    mana_produced=("R",),
+)
+
+
 def tiny_synthetic_deckspec() -> DeckSpec:
     """The first-slice deck: 3-card libraries each, no shuffle.
 
@@ -188,6 +203,46 @@ def tiny_synthetic_deckspec() -> DeckSpec:
         card_defs=(_FOREST, _BEARS),
         p0_library=("Forest", "Forest", "Grizzly Bears"),
         p1_library=("Grizzly Bears", "Forest", "Forest"),
+    )
+
+
+def slightly_bigger_deckspec() -> DeckSpec:
+    """Second-slice deck: adds Mountain to the Forest + Bears registry.
+
+    Smallest viable expansion of the inaugural ``tiny_synthetic_deckspec``.
+    Both players' libraries now contain THREE card kinds (Forest,
+    Mountain, Grizzly Bears) interleaved in an asymmetric order so the
+    per-zone signature has a non-trivial 4-card-deep sequence.
+
+    p0 library: [Forest, Mountain, Forest, Grizzly Bears]
+    p1 library: [Mountain, Grizzly Bears, Forest, Mountain]
+
+    What this exercises that the first slice doesn't:
+      * Heterogeneous library zone signature — the per-object 8-tuple
+        snapshot now has varying ``printing_name`` slots in adjacent
+        positions, so a "zone signature collapse" bug (e.g. printing_name
+        accidentally being a constant) would surface on the
+        ``library_pN`` field-view comparison.
+      * Registry with a second basic land — Rust ``register_printing``
+        is exercised with TWO basic-land entries differing only in
+        ``mana_produced``. Round-trips ``mana_produced`` through Rust's
+        printing schema for a non-Forest color.
+      * No new action surface — PassPriority decisions are still the
+        only driver. Legal-action enumerator parity, PlayLand /
+        CastSpell apply_action dispatch, and mana-tap activation are
+        all explicitly out of scope so the next-slice surface stays
+        narrow.
+
+    The point of the slice: confirm the cross-engine bridge's zone-
+    signature recipe and registry round-trip stay parity-clean as the
+    card pool grows by one color. If they DO stay clean, the next
+    natural slice expands the decision script (play_land /
+    activate_ability) on this same deck.
+    """
+    return DeckSpec(
+        card_defs=(_FOREST, _BEARS, _MOUNTAIN),
+        p0_library=("Forest", "Mountain", "Forest", "Grizzly Bears"),
+        p1_library=("Mountain", "Grizzly Bears", "Forest", "Mountain"),
     )
 
 
