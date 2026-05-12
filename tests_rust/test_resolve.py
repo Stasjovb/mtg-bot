@@ -4240,6 +4240,88 @@ def test_resolve_search_library_for_basic_land_tapped_count_zero_no_op(
     assert synthetic_state.battlefield_sizes[0] == bf_before
 
 
+def test_resolve_search_library_for_basic_land_tapped_shuffles_library(
+    synthetic_state,
+):
+    """G19 closure (CR 701.19 / 701.22): the resolve arm shuffles the
+    library after the search, whether or not a card was found.
+
+    The synthetic seed lays p0's library as obj ids 17..66 in
+    push-order (id 17 = top, id 66 = bottom). After a count=1 search
+    that pulls id 17 to the battlefield, the remaining 49 ids
+    (18..66) WOULD all still be in the library in the same relative
+    order if no shuffle ran. With G19's shuffle, that exact
+    sequential order is broken: the post-resolve library order is a
+    deterministic xorshift64 permutation of [18..67) (49 elements,
+    seed derived from turn/active_player/source_obj_id/lib_len).
+
+    We pin "shuffled" by asserting the post-resolve library id
+    order is NOT identical to the sequential [18, 19, 20, ..., 66]
+    that the no-shuffle path would have produced. The probability
+    of any deterministic permutation accidentally matching the
+    identity sequence is 1/49! ≈ 0 — but more importantly the seed
+    is fixed by state, so this assertion is deterministic, not
+    probabilistic.
+    """
+    spell_obj_id = synthetic_state.register_and_inject_object(
+        _rampant_growth_dict(count=1), 0, ZONE_HAND
+    )
+    synthetic_state.push_to_stack(spell_obj_id, 0)
+    synthetic_state.resolve_top_of_stack()
+
+    # The synthetic seed had ids 17..66 in p0's library; the top
+    # (id 17) was searched into the battlefield. Without shuffle
+    # the remaining library would read [18, 19, ..., 66] in Vec
+    # order; with G19's shuffle it reads a deterministic
+    # xorshift64 permutation of the same set.
+    post_ids = [
+        snap["id"] for snap in synthetic_state.library_snapshot(0)
+    ]
+    no_shuffle_expected = list(range(18, 67))
+    assert sorted(post_ids) == no_shuffle_expected, (
+        "shuffle preserves multiset of ids — only the order changes"
+    )
+    assert post_ids != no_shuffle_expected, (
+        "G19: library must be shuffled after the search per CR 701.19"
+    )
+
+
+def test_resolve_search_library_for_basic_land_tapped_shuffle_is_deterministic(
+    engine,
+):
+    """The G19 shuffle is xorshift64-seeded off
+    (turn_number, active_player, source_obj_id, library_len), so two
+    identical resolutions on two clone-equal states produce the same
+    library permutation. Pins determinism: the seed derivation must
+    not depend on hidden state (heap addresses, timing, etc.).
+    """
+    state_a = engine.make_synthetic_state(num_battlefield=0, num_hand=1, num_library=50)
+    state_b = engine.make_synthetic_state(num_battlefield=0, num_hand=1, num_library=50)
+
+    obj_id_a = state_a.register_and_inject_object(
+        _rampant_growth_dict(count=1), 0, ZONE_HAND
+    )
+    obj_id_b = state_b.register_and_inject_object(
+        _rampant_growth_dict(count=1), 0, ZONE_HAND
+    )
+    # Both register_and_inject_object calls assign the same next-id
+    # (max+1) given identical starting states; sanity-check that
+    # before relying on equal post-search seeds.
+    assert obj_id_a == obj_id_b
+
+    state_a.push_to_stack(obj_id_a, 0)
+    state_a.resolve_top_of_stack()
+    state_b.push_to_stack(obj_id_b, 0)
+    state_b.resolve_top_of_stack()
+
+    ids_a = [snap["id"] for snap in state_a.library_snapshot(0)]
+    ids_b = [snap["id"] for snap in state_b.library_snapshot(0)]
+    assert ids_a == ids_b, (
+        "G19 shuffle must be deterministic — same starting state "
+        "must produce the same post-search library permutation"
+    )
+
+
 # --- round-23 PutPlusOneCounterOnSelf dispatch ----------------------
 #
 # **PutPlusOneCounterOnSelf scope** (mirrored in the Rust module

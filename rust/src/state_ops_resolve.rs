@@ -1367,14 +1367,32 @@ fn apply_effect(
         // set. See SEARCH_LIMITATIONS entry for the deferred supertypes
         // work.
         //
-        // **No shuffle.** CR 701.19's "always shuffle after search"
-        // invariant is deliberately not honored in this first slice —
-        // shuffling would require threading an RNG seed through
-        // `apply_effect`, and the deterministic first-match pick is
-        // reproducible without one. The
-        // `search_library_for_first_of_type_and_shuffle` primitive in
-        // `state_ops_library.rs` is the right composition once
-        // RNG-externalization lands. Documented in SEARCH_LIMITATIONS.
+        // **Post-search shuffle (CR 701.19 / 701.22 — G19 closure).**
+        // After all `count` basic-land picks (or partial-fill on
+        // early exhaust), the library is Fisher-Yates shuffled in
+        // place. Mirrors the post-CE8 `fisher_yates_shuffle_optional`
+        // primitive in `state_ops_library.rs` (and its 7 sibling
+        // shuffle sites) — same xorshift64 control flow, just
+        // inlined here per the per-slice file-isolation convention
+        // every other arm in this file follows.
+        //
+        // **Seed source — xorshift64 fallback only (Effect-rng
+        // threading deferred).** CE8 wired all 8 pymethod-surface
+        // shuffle sites to consume an optional `rng: &Bound<PyAny>`
+        // kwarg, falling through to xorshift64 when `None`.
+        // `Effect::SearchLibraryForBasicLandTapped` resolves inside
+        // `apply_effect`, which does NOT yet thread an external rng
+        // through (no `rng` param on `apply_effect`,
+        // `resolve_top_of_stack`, or any of the dozens of intervening
+        // call sites). Closing that threading is a separate slice;
+        // for G19 we honor the CR 701.19 "always shuffle" invariant
+        // via the legacy xorshift64 path. Seed is derived
+        // deterministically from `(turn_number, active_player,
+        // source_obj_id, library_len)` — stable across reproducible
+        // runs of the same state machine, distinct enough across
+        // resolutions that the same library doesn't get the same
+        // permutation twice in one game. Cross-engine MT parity for
+        // THIS Effect is deferred — see SEARCH_LIMITATIONS entry.
         //
         // **count<0 raises** loudly (defense-in-depth; parse_effect
         // catches this at register time). **count=0 is a legal no-op**
@@ -1459,10 +1477,53 @@ fn apply_effect(
                 obj.etb_timestamp = etb_ts;
                 Arc::make_mut(&mut player.battlefield).push(obj);
             }
-            // CR 701.19 "always shuffle after search" deliberately
-            // NOT honored in this first slice — see module docstring
-            // + SEARCH_LIMITATIONS entry for the deferred RNG-
-            // externalization work.
+            // G19 closure: CR 701.19 / 701.22 — always shuffle the
+            // library after a search, whether or not a card was
+            // found (the early-`break` above on no-match falls
+            // through to here too). Inlined Fisher-Yates over
+            // xorshift64; seed mixes turn / active_player /
+            // source_obj_id / library_len for determinism within a
+            // run without giving identical permutations across
+            // separate searches in the same game. See arm-head
+            // comment for the rng-threading deferral rationale.
+            let lib_len = state.players[controller_idx].library.len();
+            if lib_len >= 2 {
+                // xorshift64 seed: distinct per (turn, ap, source,
+                // lib_len) tuple. The zero-collapse defense matches
+                // every other xorshift site in the engine.
+                let mut seed = (state.turn_number as u64)
+                    .wrapping_mul(0x9E37_79B9_7F4A_7C15)
+                    ^ ((state.active_player as u64) << 56)
+                    ^ ((source_obj_id as u64) << 16)
+                    ^ (lib_len as u64);
+                if seed == 0 {
+                    seed = 0xdead_beef_dead_beef;
+                }
+                let player = &mut state.players[controller_idx];
+                let lib = Arc::make_mut(&mut player.library);
+                let n = lib.len();
+                let mut x = seed;
+                for i in (1..n).rev() {
+                    // xorshift64 step.
+                    x ^= x << 13;
+                    x ^= x >> 7;
+                    x ^= x << 17;
+                    // Rejection-sample to an unbiased index in
+                    // [0, i+1). i+1 <= library size (~100), so the
+                    // rejection-rate cost is negligible.
+                    let n_u64 = (i + 1) as u64;
+                    let bound = u64::MAX - (u64::MAX % n_u64);
+                    let mut r = x;
+                    while r >= bound {
+                        r ^= r << 13;
+                        r ^= r >> 7;
+                        r ^= r << 17;
+                        x = r;
+                    }
+                    let j = (r % n_u64) as usize;
+                    lib.swap(i, j);
+                }
+            }
         }
         // Round-23: PutPlusOneCounterOnSelf. CR 122.6 + 701.13 — put
         // `amount` +1/+1 counters on the resolving spell's source

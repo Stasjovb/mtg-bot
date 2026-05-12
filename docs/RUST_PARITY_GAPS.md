@@ -157,18 +157,59 @@ behavior per CR / Python, parity impact, and closeable / accepted.
   of who-gets-credited is non-obvious. See invariant I9.
 - **Closeable**: not a gap.
 
-### G19. SearchLibraryForBasicLandTapped does not shuffle (CR 701.19 / 701.22)
+### ~~G19.~~ CLOSED: `SearchLibraryForBasicLandTapped` shuffles the library after the search per CR 701.19 / 701.22
 
-- **Pinned by**: `tests_rust/test_library.py::test_effect_search_library_for_basic_land_tapped_enters_tapped`
-  (docstring note); also tracked in `docs/SEARCH_LIMITATIONS.md`.
-- **Rust today**: The round-23 first slice does NOT shuffle the
-  library after the deterministic first-match-from-top search.
-- **CR / Python expected**: CR 701.19 / 701.22 — search-then-shuffle
-  effects always shuffle, whether or not a card was found.
-- **Impact**: medium. Visible whenever a search effect runs; the
-  resulting library order will diverge from Python.
-- **Closeable**: yes — pending RNG externalization work to seed the
-  shuffle deterministically inside `apply_effect`.
+Closed by `feature/g19-search-shuffle`. The `Effect::SearchLibraryForBasicLandTapped`
+resolve arm in `rust/src/state_ops_resolve.rs` now Fisher-Yates
+shuffles the active player's library after all `count` picks have
+landed (or after the early-`break` on no-more-basic-lands).
+Honors CR 701.19 / 701.22's "always shuffle after search" invariant
+regardless of search outcome.
+
+**Shuffle source — xorshift64 fallback only (Effect-rng threading
+deferred).** CE8 (Slice 1 + Slice 2) wired all 8 pymethod-surface
+gameplay shuffle sites to consume an optional `rng: &Bound<PyAny>`
+kwarg, falling through to xorshift64 when `None`.
+`Effect::SearchLibraryForBasicLandTapped` resolves inside the
+private `apply_effect` function, which does NOT yet thread an
+external `rng` through (no `rng` param on `apply_effect`,
+`resolve_top_of_stack`, `resolve_top_of_stack_pause`, or any of
+the dozens of intervening call sites). G19 closes the
+"no shuffle at all" gap via the legacy xorshift64 path; the seed
+is derived deterministically from
+`(turn_number, active_player, source_obj_id, library_len)` so the
+same starting state produces the same post-search library
+permutation across reruns.
+
+**Cross-engine MT parity for THIS Effect is deferred** to an
+Effect-rng-threading slice (separate from G19). Pinned in
+`SEARCH_LIMITATIONS.md` — see the new follow-up entry there.
+Implementing this slice requires plumbing an
+`Option<&Bound<'_, PyAny>>` rng parameter through `apply_effect`,
+`apply_effect_pub`, `resolve_top_of_stack`,
+`resolve_top_of_stack_pause`, `auto_resolve_pending_decisions`
+(round-28), and every test surface that calls those — large
+surface, not justified by G19 alone, but worthwhile when more
+search-then-shuffle Effects join the parity smoke under shared rng.
+
+**Pinning tests** (`tests_rust/test_resolve.py`):
+- `test_resolve_search_library_for_basic_land_tapped_shuffles_library` —
+  asserts the post-resolve library is NOT the sequential
+  identity permutation that the no-shuffle path would have
+  produced.
+- `test_resolve_search_library_for_basic_land_tapped_shuffle_is_deterministic` —
+  asserts two clone-equal starting states produce the same
+  post-search library permutation (seed derivation is pure-state).
+
+The existing 7 round-23 tests under the
+`test_resolve_search_library_for_basic_land_tapped_*` prefix
+continue to pass; their assertions (top-of-library → battlefield,
+second-from-top still in library, etc.) survive the shuffle
+because the synthetic seed library is 100% Forest (identical
+printings, distinct ids — shuffle reorders ids but doesn't add
+or remove cards from the library set).
+
+See invariant I35 below for the post-search shuffle contract.
 
 ### G24. No scry-on-keep step after mulligan-to-7 (Paris rule)
 
@@ -2032,13 +2073,58 @@ rewired site against Python's MT reference).
 
 **Out of scope (carry-forwards):**
 
-- **G19** — `SearchLibraryForBasicLandTapped` no-shuffle arm in
-  `state_ops_resolve.rs`. Substrate is in place; closure is a
-  one-Effect-arm edit gated as a separate slice.
+- ~~**G19**~~ — closed by `feature/g19-search-shuffle`. The
+  `Effect::SearchLibraryForBasicLandTapped` arm in
+  `state_ops_resolve.rs` now shuffles per CR 701.19 / 701.22 via
+  an inlined xorshift64 Fisher-Yates. The arm did NOT join the
+  external_rng substrate — Effect resolution doesn't currently
+  thread an `rng` through `apply_effect`, so the post-search
+  shuffle is xorshift64-only. Cross-engine MT parity for this
+  one Effect is a follow-up Effect-rng-threading slice. See
+  invariant I35 + the SEARCH_LIMITATIONS follow-up entry.
 - **xorshift64 struct deduplication** — three identical
   `XorShift64` struct copies remain (one per file: setup, library,
-  mulligan). Consolidating into `rust/src/rng_internal.rs` is a
-  housekeeping follow-up; not load-bearing for parity.
+  mulligan); G19 added an inline xorshift64 in `state_ops_resolve.rs`
+  too, technically a fourth occurrence (open-coded, not a struct).
+  Consolidating into `rust/src/rng_internal.rs` is a housekeeping
+  follow-up; not load-bearing for parity.
+
+### I35. `Effect::SearchLibraryForBasicLandTapped` shuffles the library after the search per CR 701.19 / 701.22
+
+Post-`feature/g19-search-shuffle` (this closure), the
+`Effect::SearchLibraryForBasicLandTapped` resolve arm in
+`rust/src/state_ops_resolve.rs::apply_effect` Fisher-Yates shuffles
+the active player's library after all `count` picks have landed
+(or after the early-`break` on no-more-basic-lands). Honors CR
+701.19 / 701.22's "always shuffle after search" invariant
+regardless of search outcome.
+
+**Shuffle path: inlined xorshift64 only.** Unlike the 8 pymethod
+shuffle sites covered by I34, this Effect arm doesn't yet consume
+the external_rng substrate — `apply_effect` lacks the `rng`
+parameter that would thread it through, and adding it touches every
+intervening call site (`resolve_top_of_stack`,
+`resolve_top_of_stack_pause`, `apply_effect_pub`,
+`auto_resolve_pending_decisions`, plus every test surface). The
+inlined xorshift64 path seeds off
+`(turn_number, active_player, source_obj_id, library_len)` mixed
+through the golden-ratio constant `0x9E3779B97F4A7C15` — stable
+across reruns of the same starting state, distinct enough across
+back-to-back resolutions in one game that the same library doesn't
+get the same permutation twice.
+
+**Pinned by**:
+- `tests_rust/test_resolve.py::test_resolve_search_library_for_basic_land_tapped_shuffles_library`
+  — asserts post-resolve library is NOT the sequential identity
+  permutation the no-shuffle path would have produced.
+- `tests_rust/test_resolve.py::test_resolve_search_library_for_basic_land_tapped_shuffle_is_deterministic`
+  — asserts two clone-equal starting states produce the same
+  post-search library permutation (seed derivation is pure-state).
+
+**Cross-engine MT parity for this Effect is deferred.** A follow-up
+slice can thread `Option<&Bound<'_, PyAny>>` through `apply_effect`
+and unify this site with I34's substrate; tracked in
+`SEARCH_LIMITATIONS.md`'s G19-follow-up entry.
 
 - **Pinned by**:
   `tests/test_parity_smoke_edge_cases.py::test_cross_engine_shuffle_seed_walks_clean`

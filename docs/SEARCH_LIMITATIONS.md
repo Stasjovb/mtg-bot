@@ -801,11 +801,12 @@ by the rarity of "proliferating my opponent makes me lose".
 
 ---
 
-## 15. SearchLibraryForBasicLandTapped: no shuffle + supertypes-proxy filter
+## 15. SearchLibraryForBasicLandTapped: supertypes-proxy filter + xorshift64-only post-search shuffle
 
 **Location**: `rust/src/state_ops_resolve.rs::apply_effect` —
 search for the `Effect::SearchLibraryForBasicLandTapped` arm (round-23
-effect-coverage slice). Variant declared in `rust/src/cards.rs`.
+effect-coverage slice; G19 closure post-shuffle). Variant declared
+in `rust/src/cards.rs`.
 
 **What we do today**: when an
 `Effect::SearchLibraryForBasicLandTapped { count }` resolves, the
@@ -813,32 +814,32 @@ active player's library is scanned top-to-bottom (Vec iter rev), the
 topmost object whose printing's `card_types` contains "Land" is
 removed and placed onto the controller's battlefield with
 `tapped = true`, `summoning_sick = false`. Repeats up to `count`
-times; partial fill is allowed if fewer matches exist. The library is
-NOT shuffled afterward.
+times; partial fill is allowed if fewer matches exist. **After all
+picks (or the early-`break` on no-more-basic-lands), the library is
+Fisher-Yates shuffled per CR 701.19 / 701.22** (G19 closure —
+xorshift64-only path; see follow-up gap #16 below for the
+cross-engine MT parity deferral).
 
-**Why this diverges from CR 701.19 / 701.22**: two shortcuts.
+**Why this diverges from Python / CR**: two remaining shortcuts.
 
-1. *No shuffle.* CR 701.19 says searching a library always shuffles
-   the library, regardless of search outcome. The deterministic
-   first-match pick means the Rust dispatch is reproducible without
-   threading an RNG seed through `apply_effect`, but the missing
-   shuffle creates an observable divergence from Python (which always
-   shuffles after `SearchLibraryForBasicLandTapped`).
-2. *"Basic land" filter is a `card_types` Land check, not a true
+1. *"Basic land" filter is a `card_types` Land check, not a true
    supertypes check.* Python's `is_basic_land` is
    `is_land and "Basic" in supertypes`. The Rust bridge has no
    `supertypes` field today (it ships `card_types` + `keywords` +
    P/T/mana_produced and not much else), so "basic" half of "basic
    land" is approximated by the card_types Land check.
+2. *Python's `SearchLibraryForBasicLandTapped.resolve` also does NOT
+   call `shuffle_library`*. The docstring claims "then shuffle" but
+   the resolve method elides it (Stage-3 simplification documented
+   on the class — "picks the FIRST count basic lands in library
+   order (no extra shuffle)"). So Rust's G19-closure post-search
+   shuffle is technically MORE CR-compliant than Python's path
+   today; this introduces a new cross-engine library-order
+   divergence (see follow-up gap #16 below).
 
 **Failure mode**:
 
-1. *Shuffle gap.* Python's `Player.library` will have a different
-   order after the search than the Rust state — every subsequent
-   draw / scry / mill from that library will diverge. The parity
-   smoke harness will surface this on any deck that runs through a
-   basic-land tutor.
-2. *Supertypes-proxy false positive.* If a card with
+1. *Supertypes-proxy false positive.* If a card with
    `card_types=["Land"]` but supertypes excluding "Basic" enters the
    library (e.g. a non-basic dual land, fetch land, shock land), the
    Rust dispatch will pick it up; Python's `is_basic_land` will
@@ -849,19 +850,10 @@ NOT shuffled afterward.
    non-basic lands enter scope.
 
 **When it matters**:
-- Shuffle gap: every parity-smoke run that exercises any of the 15
-  EoE cards driving this effect (Beamsaw Prospector, Kavaron Harrier,
-  Larval Scoutlander, the Lander token, Moldering Gym, etc.). Local
-  test-only runs that don't touch parity smoke are unaffected.
 - Supertypes gap: zero in the EoE pool; non-zero the moment a
   non-basic land joins the bridge.
 
 **Fix scope when prioritized**:
-- *Shuffle*: small — compose with
-  `state_ops_library.rs::search_library_for_first_of_type_and_shuffle`
-  once the per-slice file-isolation constraint relaxes (or once an
-  `RngSeed` is threaded through `apply_effect`). The xorshift64
-  generator is already in `state_ops_library.rs`.
 - *Supertypes*: medium — grow `CardPrinting` with a
   `supertypes: Vec<String>` field, extend the parser to require/parse
   it, swap the filter to check `supertypes.iter().any(|s| s ==
@@ -869,10 +861,64 @@ NOT shuffled afterward.
   builds a printing dict.
 
 **Impact estimate**:
-- Shuffle: zero gameplay strength impact in tests (deterministic
-  first-match is fine for engine-level tests); 100% of parity-smoke
-  divergence after any basic-land tutor.
 - Supertypes: zero today (EoE pool only); rises with cards.
+
+---
+
+## 16. SearchLibraryForBasicLandTapped: cross-engine MT parity deferred (G19 follow-up)
+
+**Location**: `rust/src/state_ops_resolve.rs::apply_effect` — the
+`Effect::SearchLibraryForBasicLandTapped` arm (post-G19 closure).
+
+**What we do today**: G19 closed the "Rust never shuffles after this
+search" gap by adding an inlined xorshift64 Fisher-Yates over the
+active player's library after the search. The seed is derived
+deterministically from
+`(turn_number, active_player, source_obj_id, library_len)`.
+
+**Why this diverges from cross-engine MT parity**: the 8 pymethod
+shuffle sites covered by CE8 (I34 in `RUST_PARITY_GAPS.md`) accept
+an optional `rng: &Bound<PyAny>` kwarg and consume Python's
+`random.Random._randbelow(n)` for byte-identical shuffles. The
+G19 arm does NOT yet thread that external rng through, because
+`apply_effect` (and `resolve_top_of_stack` /
+`resolve_top_of_stack_pause` / `apply_effect_pub` /
+`auto_resolve_pending_decisions`) don't carry an `rng` parameter.
+So under a shared `random.Random`, the post-search library order
+in Rust matches xorshift64 output, not Python MT output —
+divergent from Python (which shows no shuffle today; see gap #15
+above).
+
+**Failure mode**: every cross-engine smoke run that exercises a
+basic-land tutor will see the post-search library_p* fields
+diverge. The G19 closure leaves Rust honoring CR 701.19 / 701.22
+even though Python doesn't; a follow-up "Effect-rng threading"
+slice can unify the two engines under a shared `random.Random`
+once Python is also updated to shuffle (CR-correctness fix on the
+Python side).
+
+**Fix scope when prioritized**: medium. Two coordinated changes:
+1. *Effect-rng threading.* Add `rng: Option<&Bound<'_, PyAny>>` to
+   `apply_effect`, `apply_effect_pub`, `resolve_top_of_stack`,
+   `resolve_top_of_stack_pause`,
+   `auto_resolve_pending_decisions`, plus every test surface and
+   internal caller. Route the rng into the G19 arm's Fisher-Yates
+   loop via `external_rng::next_below`. Mirrors CE8 Slice 2's
+   substrate.
+2. *Python-side fix.* Add the missing
+   `shuffle_library(state, controller_id)` call at the end of
+   `SearchLibraryForBasicLandTapped.resolve` (CR 701.19 / 701.22
+   compliance). Drop the Stage-3 "no extra shuffle" docstring
+   note. Once both sides shuffle AND consume the shared rng,
+   cross-engine library parity restores.
+
+**Impact estimate**: zero gameplay strength impact (the shuffle
+output doesn't affect what got searched — only what gets drawn
+next from the library); 100% of parity-smoke divergence on any
+deck that runs through a basic-land tutor (15 EoE cards: Beamsaw
+Prospector, Kavaron Harrier, Larval Scoutlander, the Lander
+token, Moldering Gym, etc.). Local test-only runs that don't
+touch parity smoke are unaffected.
 
 ---
 

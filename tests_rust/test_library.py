@@ -994,10 +994,10 @@ def test_effect_search_library_for_basic_land_tapped_enters_tapped(
     (id 66). It lands on p0's battlefield with ``is_tapped == True``
     and ``find_object_zone == ZONE_BATTLEFIELD``.
 
-    **Documented no-shuffle gap:** the round-23 first slice does NOT
-    shuffle the library after the search (CR 701.19/701.22 would
-    require it). Tracked in ``docs/SEARCH_LIMITATIONS.md`` — pending
-    RNG-externalization work."""
+    **G19 closure (CR 701.19 / 701.22):** the resolve arm now shuffles
+    the library after the search. The shuffle is observable by a
+    separate test (``test_resolve_search_library_for_basic_land_tapped_shuffles_library``);
+    this test stays focused on the tapped-zones intersection."""
     top_id = 17  # post-CE3: top = lib[0] = id 17 (first push-order)
 
     obj_id = synthetic_state.register_and_inject_object(
