@@ -3099,6 +3099,91 @@ the forked branch.
     transition; mutual-KO via empty libraries follows the same
     apply_sbas-gated shape.
 
+### I45. Double-strike regular-substep damage spills to the defending player when the attacker's only blocker died in the first-strike substep (CE18 closure)
+
+- **Pinned by**:
+  - `tests/test_parity_smoke.py::test_cross_engine_double_strike_selector_walks_clean`
+    (200-decision cross-engine clean-walk pin on
+    `multi_blocker_deckspec` + `double_strike_selector`, formerly
+    the CE18 strict-xfail walks_clean pin, now expected-pass).
+  - `tests_rust/test_combat.py::test_double_strike_regular_damage_spills_to_defender_when_sole_blocker_dies_fs`
+    (Rust-side direct synthetic-state pin: 2/2 DS attacker + 1 vanilla
+    blocker → defender life drops 20 → 18 after combat damage).
+  - `tests_rust/test_combat.py::test_double_strike_regular_damage_does_not_spill_when_other_blocker_alive`
+    (negative-branch pin: 3/3 DS attacker + 2 blockers, only the
+    first dies in FS → no spillover to defender; the entry on the
+    dead blocker is DROPPED, not redirected).
+  - `tests_rust/test_combat.py::test_double_strike_vs_larger_blocker_mutual_death_no_spillover_regression`
+    (regression: blocker survives FS → regular entry stays on the
+    blocker, NOT redirected).
+  - `tests_rust/test_combat.py::test_double_strike_unblocked_full_damage_to_defender_regression`
+    (regression: player-target entries unaffected by the filter).
+  - `tests_rust/test_combat.py::test_double_strike_attacker_kills_blocker_in_first_strike_step`
+    (existing test, updated at closure to assert defender life drops
+    on the sole-blocker-dies-in-FS scenario).
+
+- **Invariant** (closes CE18, per Phase 5 "converge Rust toward
+  Python, never modify Python, regardless of CR-correctness"). In
+  `state_ops_combat.rs:deal_combat_damage`, when the two-pass
+  first-strike / double-strike timing kicks in and the pass-2
+  alive-predicate filter rejects an entry with
+  `target = DamageTarget::Creature(target_id)` because the target
+  died in pass 1:
+
+  - **If the entry's `source_id` is in `self.attackers` AND
+    the source has no remaining alive blockers** (computed by
+    counting `(att_id, blk_id) in self.blockers` rows whose
+    `blk_id` still satisfies `battlefield_creature_alive`), the
+    entry is **redirected** to
+    `DamageTarget::Player(defending_player)` (= `1 - active_player`),
+    preserving `amount` and `pass`.
+  - **If the entry's `source_id` is in `self.attackers` AND the
+    source still has ≥1 alive blocker**, the entry is **dropped**
+    (the surviving blocker(s) have their own assignments — no
+    spillover).
+  - **If the entry's `source_id` is a blocker** (back-damage entry
+    whose attacker target is now dead), the entry is **dropped**
+    (back-damage doesn't redirect anywhere — the blocker has a
+    single attacker target by construction; once it's dead, the
+    second-strike back-damage is wasted).
+  - Player-target entries are **never** filtered (a
+    `DamageTarget::Player(_)` entry passes through unchanged).
+  - Source-alive filter (filter (a)) still gates: a source that
+    took lethal damage in pass 1 doesn't strike back, including
+    DS sources that fell in pass 1 (they don't get a second
+    strike).
+
+  This mirrors Python's per-substep `_resolve_damage_step` shape,
+  where `combat.py:389,405` rebuilds the attacker's `blockers` list
+  freshly each substep (`[o for o in state.battlefield if o.id in
+  attacker.blocked_by]`) and `combat.py:413`'s `if not blockers:`
+  branch routes to the defending player.
+
+- **Why this is a parity invariant, NOT a CR-correctness claim.**
+  CR 702.4 + CR 510.1h say a creature stays blocked even if all
+  its blockers leave the battlefield mid-combat; without trample,
+  the attacker's remaining damage is wasted. Python's behavior is
+  CR-divergent (over-permissive: routes damage to the defender
+  that should be wasted). Phase 5 convention overrides
+  CR-correctness — Rust converges on Python. A future global
+  Python-side fix (rewrite `combat.py:413` to NOT route to
+  defender when `attacker.blocked_by` is non-empty even if its
+  current battlefield-residents are dead) would let Rust ALSO drop
+  the redirect, but that's a separate scope (tracked as a
+  follow-up; the Phase 5 reference is Python today).
+
+- **Cross-reference**:
+  - **I32** — `state.resolving_combat_damage_amount` set/reset
+    per damage event, including redirected entries (the redirect
+    preserves `amount`, so the slot's value at apply time is
+    correct on either branch).
+  - **CE9** — bf-ETB-ordered blocker iteration, which feeds the
+    attacker_blocker_ids set the redirect map is keyed against.
+  - **CE14 / CE15** — the multi-blocker damage assignment walks
+    that decide which blockers receive how much damage in pass 1
+    (the inputs to the redirect's "are any blockers still alive"
+    check).
+
 ### ~~CE9.~~ CLOSED: Combat damage assignment walks battlefield in bf-ETB order via shared `bf_iter_etb_sorted` helper
 
 Closed by `feature/ce9-blocker-bf-order` (this slice). Per the
@@ -3669,68 +3754,53 @@ See I40 for the post-closure invariant pin.
 
 ---
 
-### CE18. Double-strike attacker's regular-step damage routes to defender (Python) vs filtered out (Rust) when the sole blocker died in the first-strike substep
+### CE18 — CLOSED by `feature/ce18-double-strike-spillover`
 
-- **Surfaced by**: Phase 5 follow-up #18 (`feature/phase5-double-strike`) —
-  `tests/test_parity_smoke.py::test_cross_engine_double_strike_selector_surfaces_ce18_at_step_174`
-  (strict-xfail symptom pin) and
-  `test_cross_engine_double_strike_selector_walks_clean` (xfail-pin
-  on the 200-decision walk; the full clean-walk passes EVERY field
-  EXCEPT `life_p1` from step 174 onward).
-- **Rust today**: When a double-strike (CR 702.4) attacker damages
-  its sole blocker to lethal in the first-strike substep, Rust's
-  `state_ops_combat.rs:1163-1172` pass-2 filter drops the
-  regular-substep damage entry whose `target =
-  DamageTarget::Creature(blocker_id)` because
-  `battlefield_creature_alive(self, target_id)` returns false
-  (blocker has damage >= toughness post-FS-pass; SBAs are NOT
-  fired between passes per the line-1160 docstring, but the
-  in-function alive predicate stands in for the SBA's "move to
-  graveyard" effect for filter purposes). The DS attacker's
-  regular-substep damage is therefore WASTED — no spillover to the
-  defender. p1 life unchanged: 20 → 20 across the COMBAT_DAMAGE step.
-- **CR / Python expected**: Python's `combat.py:_resolve_damage_step`
-  (lines 369-440) is called fresh per substep, with SBAs fired
-  between substeps (`combat.py:317-318`). On the regular substep,
-  Python rebuilds `blockers = [o for o in state.battlefield if
-  o.id in attacker.blocked_by]` (line 389 / 405). Since the
-  blocker is now in `players[1].graveyard` (post-SBA), the list
-  comprehension yields `[]`. Line 413's `if not blockers:`
-  branch then routes the DS attacker's regular-substep damage to
-  the DEFENDING PLAYER as if the attacker were unblocked. p1 life
-  takes 2 damage on the regular substep: 20 → 18.
-- **Real MTG (CR 702.4 + CR 510.1h)**: a creature that's been
-  blocked stays blocked even if all its blockers leave the
-  battlefield mid-combat. Without trample, the attacker's
-  remaining damage is wasted — it doesn't spill to the defender.
-  **Python's behavior is CR-divergent** (over-permissive: routes
-  damage to defender that shouldn't go through). **Rust's behavior
-  is CR-correct** (filters out the wasted entry). The CE divergence
-  is therefore an interesting one — neither engine is "right by
-  Phase 5 convention", but the **Phase 5 convention is "converge
-  Rust toward Python"**, so a future CE18 closure would teach Rust
-  to route the wasted damage to the defender to match Python's
-  shape, NOT teach Python to filter it out.
-- **Impact**: 2 life of divergence per DS-vs-single-vanilla-blocker
-  combat where the DS attacker out-toughs the blocker by exactly
-  enough to kill it in the FS substep. Probably uncommon in real
-  Edge of Eternities decklists (no double-strike printings in the
-  EoE set's keyword distribution as of audit 2026-05-12 — need to
-  re-check via `scripts/scout_keywords.py` if EoE adds any). The
-  divergence is one-axis (life_p1 only), persistent across all
-  subsequent steps, and surfaces every step from 174 onward in the
-  walk_both fingerprint compare.
-- **Closeable**: yes — Option A (Rust-side convergence on Python,
-  per Phase 5 convention). The fix: when the pass-2 filter drops
-  an attacker's creature-target entry due to alive-predicate
-  failure, instead of dropping it, redirect to
-  `DamageTarget::Player(defending_player)` IF the attacker's
-  blocked-by set is now empty (all blockers dead). This re-creates
-  Python's "rebuild blockers list per-substep yields empty →
-  route to defender" shape on Rust's plan-build-upfront
-  architecture. Estimated 20-50 line change in
-  `state_ops_combat.rs:1163-1172`. Out of scope of this slice
-  (probe-only; brief says "do NOT fix").
+**Status**: closed 2026-05-12 via Option A (Rust-side convergence
+on Python), per Phase 5 convention "converge Rust toward Python,
+never modify Python, regardless of CR-correctness". Closure
+invariant lives at **I45** below.
+
+The strict-xfail symptom pin
+`test_cross_engine_double_strike_selector_surfaces_ce18_at_step_174`
+was deleted (CE2-CE17 pair-pin convention). The strict-xfail
+`@pytest.mark.xfail(strict=True, ...)` decorator on
+`test_cross_engine_double_strike_selector_walks_clean` was
+removed, flipping it from xfail-strict to a regular expected-pass
+parity pin.
+
+Four new Rust-side regression tests in `tests_rust/test_combat.py`:
+
+- `test_double_strike_regular_damage_spills_to_defender_when_sole_blocker_dies_fs`
+  — Test A: 2/2 DS attacker vs 2/2 vanilla blocker, sole blocker
+  dies in FS, regular-pass damage spills to defender (life -2).
+- `test_double_strike_regular_damage_does_not_spill_when_other_blocker_alive`
+  — I45 negative branch: 3/3 DS attacker vs two 2/2 blockers; only
+  the first dies in FS; the second is still alive so the
+  regular-pass entry on the dead first blocker is DROPPED (not
+  redirected). Defender life unchanged.
+- `test_double_strike_vs_larger_blocker_mutual_death_no_spillover_regression`
+  — Test B: 2/2 DS vs 4/4 blocker; blocker survives FS so regular
+  entry stays on the blocker (NOT redirected); both die after
+  regular pass; defender life unchanged.
+- `test_double_strike_unblocked_full_damage_to_defender_regression`
+  — Test C: 2/2 DS unblocked; player-target entries are never
+  affected by the filter; defender takes 4.
+
+The existing
+`test_double_strike_attacker_kills_blocker_in_first_strike_step`
+was also updated: its docstring + assertions now reflect the I45
+spillover (defender life drops 20 → 18 after the closure; previously
+the test was silent on defender life and the no-spillover behavior
+was correct for the pre-CE18 model).
+
+The four cross-engine apply-time pins (the structural-state pin,
+the Test-B mutual-death pin, the Test-C unblocked pin, and the
+pre-injection backbone pin) continue to pass unchanged — they were
+already parity-clean pre-closure, only the walks_clean Test A pin
+was the load-bearing surface.
+
+See I45 for the post-closure invariant pin.
 
 ---
 
