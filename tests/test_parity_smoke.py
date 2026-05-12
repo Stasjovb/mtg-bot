@@ -4184,28 +4184,19 @@ def test_cross_engine_haste_selector_pre_injection_walks_clean(
 #     satisfied.
 #   * **C** (``"single"``): one blocker → ILLEGAL per CR 702.110b.
 #
-# **OUTCOME on this probe: CE16 SURFACED — divergence pinned via
-# strict-xfail on scenario C.** Scenarios A + B walk clean — both
-# engines handle the legal block scenarios identically. Scenario C
-# surfaces the predicted apply_action divergence: Python silently
-# drops the single illegal block (per ``actions.py:2555-2566``
-# post-validation menace check), Rust accepts it (per
-# ``state_ops_combat.rs:779-789`` — ``is_legal_block_assignment``
-# exists as a read-only predicate but is NOT consulted by
-# ``Action::DeclareBlockers`` at ``state_ops_actions.rs:241-243``).
+# **OUTCOME on this probe: CE16 SURFACED then CLOSED by
+# ``feature/ce16-menace-validation``** — the Rust
+# ``Action::DeclareBlockers`` apply arm now post-validates each
+# unique attacker's block assignment via
+# ``is_legal_block_assignment`` (the predicate at
+# ``state_ops_combat.rs:779-789``) and silently drops illegal
+# final assignments from ``self.blockers`` via ``.retain``,
+# mirroring Python's ``actions.py:2555-2566`` ``validated.pop(...)``
+# post-validation pass. Single-blocker menace assignments are now
+# dropped on both engines; the attacker proceeds unblocked.
+# Scenarios A (none) + B (both) + C (single) all walk clean.
 #
-# Divergence shape at step 174 (post END_OF_COMBAT, one selector
-# call past the COMBAT_DAMAGE branch):
-#
-#   * Python: attacker unblocked → 2 damage to p1 → ``life_p1 = 18``;
-#     no creatures killed; ``graveyard_p0 = ()``, ``graveyard_p1 =
-#     ()``; ``battlefield`` still has all three Bears + Bear Bully.
-#   * Rust: attacker blocked by Grizzly Bears id 9 → 2-each combat
-#     damage exchange → both die via SBA; ``life_p1 = 20``;
-#     ``graveyard_p0 = [Bear Bully id 14]``, ``graveyard_p1 =
-#     [Grizzly Bears id 9]``; ``battlefield`` lost both.
-#
-# Three pinning tests guard the contract:
+# Three pinning tests guard the contract post-closure:
 #
 #   1. ``test_cross_engine_menace_selector_no_blockers_walks_clean``
 #      — scenario A (``"none"``): full 200-decision walk parity-clean.
@@ -4213,15 +4204,12 @@ def test_cross_engine_haste_selector_pre_injection_walks_clean(
 #   2. ``test_cross_engine_menace_selector_both_blockers_walks_clean``
 #      — scenario B (``"both"``): full 200-decision walk parity-clean.
 #      Multi-block satisfies the menace >=2 requirement.
-#   3. ``test_cross_engine_menace_selector_single_blocker_surfaces_ce16_at_step_174``
-#      — scenario C (``"single"``): symptom-present pin with EXACT
-#      field shape (py kills neither, rust kills both via single-block
-#      trade). Passes today; deleted after closure per the CE2-CE15
-#      pair-pin convention.
-#   4. ``test_cross_engine_menace_selector_single_blocker_walks_clean``
-#      — scenario C strict-xfail clean-walk pin. Fails today
-#      (divergence at step 174); flips to xpass after CE16 closure.
-#   5. ``test_cross_engine_menace_selector_pre_injection_walks_clean``
+#   3. ``test_cross_engine_menace_selector_single_blocker_walks_clean``
+#      — scenario C (``"single"``): full 200-decision walk
+#      parity-clean post-CE16-closure. The companion symptom-pin
+#      (``..._surfaces_ce16_at_step_174``) was deleted at closure
+#      per the CE2-CE15 pair-pin convention.
+#   4. ``test_cross_engine_menace_selector_pre_injection_walks_clean``
 #      — pre-injection backbone steps 0-167 parity-clean. Shared
 #      across all three scenarios (the injection + DECLARE_BLOCKERS
 #      override fire AFTER step 167).
@@ -4311,148 +4299,27 @@ def test_cross_engine_menace_selector_both_blockers_walks_clean(parity_smoke):
         )
 
 
-def test_cross_engine_menace_selector_single_blocker_surfaces_ce16_at_step_174(
-    parity_smoke,
-):
-    """**CE16 symptom-present pin** (scenario C) — drives 175 selector
-    decisions and asserts the EXACT divergence shape at step 174
-    (post END_OF_COMBAT, one selector call past the COMBAT_DAMAGE
-    branch).
-
-    Surface: Python's ``_declare_blockers``
-    (``actions.py:2555-2566``) post-validation menace check drops
-    the single illegal blocker; Rust's
-    ``Action::DeclareBlockers`` dispatcher
-    (``state_ops_actions.rs:241-243``) accepts the single blocker
-    because ``declare_blocker`` is the only primitive called per
-    pair and it has no menace gate.
-    ``state_ops_combat.rs:779-789`` exposes an
-    ``is_legal_block_assignment`` predicate that correctly returns
-    ``False`` for a single-blocker menace assignment, but the
-    apply path NEVER calls it.
-
-    Expected divergence at step 174:
-      * Python: p1 life = 18 (2 damage from unblocked menace
-        attacker), p0 gy = (), p1 gy = (), Bear Bully still on p0
-        bf, both Grizzly Bears still on p1 bf.
-      * Rust: p1 life = 20 (attacker was blocked, no damage
-        through), p0 gy = [Bear Bully id 14], p1 gy = [Grizzly
-        Bears id 9], Grizzly Bears id 11 still on p1 bf.
-
-    Pinned as a symptom-present pin (passes today). Deleted after
-    closure per the CE2-CE15 pair-pin convention.
-    """
-    from mtg_bot.parity.cross_engine import (
-        build_matched_states,
-        make_menace_selector,
-        multi_blocker_deckspec,
-        step_both,
-    )
-
-    selector = make_menace_selector("single")
-    py_state, rust_state = build_matched_states(multi_blocker_deckspec())
-    result_step = None
-    for i in range(175):
-        action = selector(py_state, rust_state, i)
-        result_step = step_both(py_state, rust_state, action)
-
-    # ---- Direct-read structural pin on Python: attacker unblocked ----
-    assert py_state.players[1].life == 18, (
-        f"Python: expected p1 life = 18 (unblocked menace attacker "
-        f"dealt 2 damage — single blocker was dropped per "
-        f"actions.py:2555-2566 menace post-validation), got "
-        f"{py_state.players[1].life}"
-    )
-    py_p0_gy = [(o.id, o.printing.name) for o in py_state.players[0].graveyard]
-    assert py_p0_gy == [], (
-        f"Python: expected p0 gy = [] (attacker survived because "
-        f"the single illegal block was dropped; attacker took no "
-        f"back-damage), got {py_p0_gy}"
-    )
-    py_p1_gy = [(o.id, o.printing.name) for o in py_state.players[1].graveyard]
-    assert py_p1_gy == [], (
-        f"Python: expected p1 gy = [] (no blocker actually engaged "
-        f"because the single illegal block was dropped), got "
-        f"{py_p1_gy}"
-    )
-    py_bear_bully = next(
-        (o for o in py_state.battlefield if o.printing.name == "Bear Bully"),
-        None,
-    )
-    assert py_bear_bully is not None, (
-        "Python: expected Bear Bully (id 14) still on p0 bf "
-        "(attacker survived unblocked combat)"
-    )
-
-    # ---- Direct-read structural pin on Rust: single-block trade ----
-    rust_life = rust_state.life_totals
-    assert rust_life[1] == 20, (
-        f"Rust: expected p1 life = 20 (attacker was blocked by "
-        f"the single illegal blocker — Rust accepted the block "
-        f"because apply_action never calls is_legal_block_assignment), "
-        f"got {rust_life[1]}"
-    )
-    rust_p0_gy = [
-        (e["id"], e.get("printing_name"))
-        for e in rust_state.graveyard_snapshot(0)
-    ]
-    assert rust_p0_gy == [(14, "Bear Bully")], (
-        f"Rust: expected p0 gy = [(14, 'Bear Bully')] (attacker "
-        f"died from the single blocker's 2 back-damage), got "
-        f"{rust_p0_gy}"
-    )
-    rust_p1_gy = [
-        (e["id"], e.get("printing_name"))
-        for e in rust_state.graveyard_snapshot(1)
-    ]
-    assert rust_p1_gy == [(9, "Grizzly Bears")], (
-        f"Rust: expected p1 gy = [(9, 'Grizzly Bears')] (single "
-        f"blocker took lethal 2 from the menace attacker), got "
-        f"{rust_p1_gy}"
-    )
-
-    # ---- Per-field divergence list from the last step ----
-    assert result_step is not None
-    diverging_fields = {d.field for d in result_step.divergences}
-    expected_diverge = {"life_p1", "graveyard_p0", "graveyard_p1", "battlefield"}
-    assert expected_diverge.issubset(diverging_fields), (
-        f"CE16 expected divergence fields {expected_diverge} should "
-        f"be a subset of the actual divergence at step 174; got "
-        f"{sorted(diverging_fields)}"
-    )
-
-
-@pytest.mark.xfail(
-    reason=(
-        "CE16: Rust's Action::DeclareBlockers dispatcher "
-        "(state_ops_actions.rs:241-243) does NOT call "
-        "is_legal_block_assignment to validate the final block "
-        "assignment, so a single-blocker assignment against a "
-        "menace attacker is accepted on the Rust side. Python's "
-        "_declare_blockers (actions.py:2555-2566) post-validates "
-        "and drops the illegal single block. Divergence surfaces "
-        "at step 174 on life_p1 / graveyard_p0 / graveyard_p1 / "
-        "battlefield fields. Closeable via apply-side menace gate "
-        "in state_ops_actions.rs's DeclareBlockers arm or via "
-        "post-loop validation that calls is_legal_block_assignment "
-        "and unwinds matching blockers from self.blockers — the "
-        "predicate already exists in state_ops_combat.rs:779-789 "
-        "but is unconsulted by apply_action."
-    ),
-    strict=True,
-)
 def test_cross_engine_menace_selector_single_blocker_walks_clean(parity_smoke):
-    """**CE16 strict-xfail clean-walk pin** (scenario C) — 200-decision
-    walk on :func:`multi_blocker_deckspec` with the
-    ``block_decision="single"`` menace_selector. Fails today
-    (divergence at step 174); flips to xpass after CE16 closure.
+    """**CE16 closure pin** (scenario C) — 200-decision walk on
+    :func:`multi_blocker_deckspec` with the ``block_decision="single"``
+    menace_selector is parity-clean.
 
-    Pair-pin with
-    :func:`test_cross_engine_menace_selector_single_blocker_surfaces_ce16_at_step_174`
-    per the CE2-CE15 convention — the symptom-present pin documents
-    the EXACT field shape today; the strict-xfail clean-walk pin
-    is the closure trigger (it flips to xpass when the divergence
-    is fixed, alerting that the symptom-pin should be deleted).
+    CE16 closed by ``feature/ce16-menace-validation``: the Rust
+    ``Action::DeclareBlockers`` apply arm
+    (``state_ops_actions.rs``) now post-validates each unique
+    attacker's block assignment via ``is_legal_block_assignment``
+    (the predicate at ``state_ops_combat.rs:779-789``) and silently
+    drops illegal final assignments from ``self.blockers`` via
+    ``.retain``, mirroring Python's ``actions.py:2555-2566``
+    ``validated.pop(...)`` post-validation pass. Single-blocker
+    menace assignments are now dropped on both engines; the
+    attacker proceeds unblocked.
+
+    Was strict-xfail pre-closure (alongside a companion
+    ``..._surfaces_ce16_at_step_174`` symptom-pin that asserted the
+    exact divergence shape); both the xfail decorator and the
+    symptom-pin were removed at closure per the CE2-CE15 pair-pin
+    convention.
     """
     from mtg_bot.parity.cross_engine import (
         make_menace_selector,

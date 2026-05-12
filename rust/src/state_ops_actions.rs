@@ -238,8 +238,50 @@ impl GameState {
                 // the same attacker, the round-5 combat-damage model
                 // assigns the attacker's power to the first declared
                 // blocker for that attacker.
+                //
+                // CE16 closure (Phase 5 follow-up #15): after the
+                // per-pair `declare_blocker` loop, post-validate each
+                // attacker's block assignment via
+                // `is_legal_block_assignment` (defined in
+                // `state_ops_combat.rs:779-789`). Illegal final
+                // assignments — today, only menace attackers with
+                // exactly one blocker (CR 702.110b) — are silently
+                // dropped from `state.blockers` via `.retain`, mirroring
+                // Python's `actions.py:2555-2566` `validated.pop(...)`
+                // post-validation pass. The attacker proceeds as if
+                // unblocked; combat damage hits the defender. We
+                // collect the unique attacker ids from the just-pushed
+                // assignments (the dispatch only changes blocks for
+                // attackers it touches — leaving pre-existing legal
+                // blocks for OTHER attackers alone), then for each
+                // failing attacker call `.retain` on `state.blockers`
+                // to unwind its blocker entries. Order of the retain
+                // walk doesn't matter — `is_legal_block_assignment`
+                // is read-only on `state.blockers`, and we collect
+                // the failing-attacker set BEFORE mutating.
+                let mut unique_attackers: Vec<u32> = Vec::new();
+                for (_, attacker_id) in &assignments {
+                    if !unique_attackers.contains(attacker_id) {
+                        unique_attackers.push(*attacker_id);
+                    }
+                }
                 for (blocker_id, attacker_id) in assignments {
                     slf.call_method1("declare_blocker", (blocker_id, attacker_id))?;
+                }
+                // Identify attackers whose final assignment is illegal
+                // (read-only predicate call), then prune.
+                let illegal: Vec<u32> = {
+                    let state = slf.borrow();
+                    unique_attackers
+                        .into_iter()
+                        .filter(|aid| !state.is_legal_block_assignment(*aid))
+                        .collect()
+                };
+                if !illegal.is_empty() {
+                    let mut state = slf.borrow_mut();
+                    state
+                        .blockers
+                        .retain(|(a, _)| !illegal.contains(a));
                 }
             }
             Action::CastSpell {

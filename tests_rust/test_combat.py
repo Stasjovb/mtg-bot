@@ -1578,6 +1578,153 @@ def test_non_menace_attacker_with_one_blocker_legal(synthetic_state):
     )
 
 
+# ----------------------------- CE16 closure --------------------------------
+#
+# CE16 closure (Phase 5 follow-up #15): the Rust
+# ``Action::DeclareBlockers`` apply arm in
+# ``state_ops_actions.rs`` post-validates each unique attacker's block
+# assignment via ``is_legal_block_assignment`` after the per-pair
+# ``declare_blocker`` loop. Illegal final assignments — today, menace
+# attackers with exactly one blocker (CR 702.110b) — are silently
+# dropped from ``state.blockers`` via ``.retain``, mirroring Python's
+# ``actions.py:2555-2566`` ``validated.pop(...)`` post-validation pass.
+# The attacker proceeds as if unblocked; combat damage hits the
+# defender.
+#
+# These four tests are the apply-side regression layer that pairs with
+# the cross-engine parity-smoke pins in
+# ``tests/test_parity_smoke.py::...menace_selector_*``. The synthetic-
+# state tests above exercise the predicate directly; these tests
+# exercise the apply dispatcher's post-loop retain pass.
+
+
+def test_apply_action_declare_blockers_menace_single_blocker_dropped(
+    synthetic_state,
+):
+    """**CE16 closure regression** — apply_action on a single-blocker
+    menace assignment drops the block silently from ``state.blockers``.
+    Mirrors Python's ``actions.py:2555-2566`` post-validation pop.
+    Attacker proceeds unblocked.
+    """
+    attacker_id = synthetic_state.register_and_inject_object(
+        _keyword_creature_dict(3, 3, ["menace"]), 0, ZONE_BATTLEFIELD
+    )
+    blocker_id = synthetic_state.register_and_inject_object(
+        _keyword_creature_dict(2, 2, []), 1, ZONE_BATTLEFIELD
+    )
+    assert synthetic_state.declare_attacker(attacker_id) is True
+
+    synthetic_state.apply_action(
+        {
+            "kind": "declare_blockers",
+            "assignments": [(blocker_id, attacker_id)],
+        }
+    )
+
+    # The single-blocker menace assignment is illegal; the retain
+    # pass drops it from state.blockers entirely.
+    assert synthetic_state.get_blockers() == [], (
+        "menace + single blocker: the illegal block must be silently "
+        "dropped from state.blockers by the apply-side post-loop "
+        "retain pass; got "
+        f"{synthetic_state.get_blockers()}"
+    )
+
+
+def test_apply_action_declare_blockers_menace_two_blockers_retained(
+    synthetic_state,
+):
+    """**CE16 closure regression** — apply_action on a two-blocker
+    menace assignment retains both blockers. Multi-block satisfies the
+    menace >=2 requirement; the retain pass is a no-op for this
+    attacker.
+    """
+    attacker_id = synthetic_state.register_and_inject_object(
+        _keyword_creature_dict(3, 3, ["menace"]), 0, ZONE_BATTLEFIELD
+    )
+    blocker_a = synthetic_state.register_and_inject_object(
+        _keyword_creature_dict(2, 2, []), 1, ZONE_BATTLEFIELD
+    )
+    blocker_b = synthetic_state.register_and_inject_object(
+        _keyword_creature_dict(2, 2, []), 1, ZONE_BATTLEFIELD
+    )
+    assert synthetic_state.declare_attacker(attacker_id) is True
+
+    synthetic_state.apply_action(
+        {
+            "kind": "declare_blockers",
+            "assignments": [
+                (blocker_a, attacker_id),
+                (blocker_b, attacker_id),
+            ],
+        }
+    )
+
+    # Both blockers retained; storage shape is (attacker, blocker).
+    assert synthetic_state.get_blockers() == [
+        (attacker_id, blocker_a),
+        (attacker_id, blocker_b),
+    ], (
+        "menace + 2 blockers: both blockers must be retained "
+        "(multi-block satisfies CR 702.110b); got "
+        f"{synthetic_state.get_blockers()}"
+    )
+
+
+def test_apply_action_declare_blockers_menace_zero_blockers_unblocked(
+    synthetic_state,
+):
+    """**CE16 closure regression** — an unblocked menace attacker
+    (apply_action with empty assignments) is legal; the retain pass
+    has no attackers to inspect. Menace constrains HOW the attacker
+    is blocked, not whether it must be blocked.
+    """
+    attacker_id = synthetic_state.register_and_inject_object(
+        _keyword_creature_dict(3, 3, ["menace"]), 0, ZONE_BATTLEFIELD
+    )
+    assert synthetic_state.declare_attacker(attacker_id) is True
+
+    synthetic_state.apply_action(
+        {"kind": "declare_blockers", "assignments": []}
+    )
+
+    assert synthetic_state.get_blockers() == [], (
+        "menace + 0 blockers: state.blockers stays empty (no blockers "
+        "declared, nothing to validate); got "
+        f"{synthetic_state.get_blockers()}"
+    )
+
+
+def test_apply_action_declare_blockers_non_menace_single_blocker_retained(
+    synthetic_state,
+):
+    """**CE16 closure regression** — a vanilla (non-menace) attacker
+    with a single blocker is legal; the retain pass does NOT drop it.
+    The menace branch must not have leaked into the default path.
+    """
+    attacker_id = synthetic_state.register_and_inject_object(
+        _keyword_creature_dict(2, 2, []), 0, ZONE_BATTLEFIELD
+    )
+    blocker_id = synthetic_state.register_and_inject_object(
+        _keyword_creature_dict(2, 2, []), 1, ZONE_BATTLEFIELD
+    )
+    assert synthetic_state.declare_attacker(attacker_id) is True
+
+    synthetic_state.apply_action(
+        {
+            "kind": "declare_blockers",
+            "assignments": [(blocker_id, attacker_id)],
+        }
+    )
+
+    # Storage shape is (attacker, blocker).
+    assert synthetic_state.get_blockers() == [(attacker_id, blocker_id)], (
+        "non-menace + 1 blocker: blocker must be retained — the "
+        "menace gate must not leak into the vanilla path; got "
+        f"{synthetic_state.get_blockers()}"
+    )
+
+
 # ----------------------------- double-strike -------------------------------
 #
 # Double-strike (CR 702.4): a creature with double strike deals combat damage
