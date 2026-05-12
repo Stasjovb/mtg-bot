@@ -147,5 +147,38 @@ impl GameState {
             obj.summoning_sick = false;
         }
     }
+
+    /// Test-only side-channel: force-set the `summoning_sick` flag on
+    /// the battlefield permanent with `obj_id`. Returns `true` if the
+    /// state changed (object was found and flag differed), `false`
+    /// otherwise (no such object on any battlefield, or already at the
+    /// requested value).
+    ///
+    /// Why this exists: `register_and_inject_object` hardcodes
+    /// `summoning_sick: false` on the injected permanent. The Phase 5
+    /// haste cross-engine probe needs to inject a creature that's
+    /// STILL summoning-sick (CR 702.10 — haste bypasses the
+    /// summoning-sickness gate on declare-attackers; the only way to
+    /// observe that bypass is to start the creature in the sick
+    /// state). The vigilance / lifelink / deathtouch / first-strike
+    /// probes all left the injected creature `summoning_sick=false`,
+    /// so they did not need this helper.
+    ///
+    /// Mirrors the test-helper convention of `register_and_inject_object`
+    /// — it's not a production primitive (real summoning-sick flips
+    /// happen via the untap-step sweep in `state_ops_steps.rs` and the
+    /// ETB stamp in `state_ops_cast.rs::resolve_*`), it's a fixture-
+    /// setup escape hatch used only by cross-engine smoke probes.
+    fn force_set_summoning_sick(&mut self, obj_id: u32, value: bool) -> bool {
+        mutate_battlefield_obj(self, obj_id, |obj| {
+            if obj.summoning_sick == value {
+                false
+            } else {
+                obj.summoning_sick = value;
+                true
+            }
+        })
+        .unwrap_or(false)
+    }
 }
 

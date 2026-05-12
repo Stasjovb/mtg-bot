@@ -3809,3 +3809,359 @@ def test_cross_engine_vigilance_selector_pre_injection_walks_clean(
         "Bear Watcher should not yet exist at end of step 167 — "
         "vigilance injection fires at step 168"
     )
+
+
+# ---------------------------------------------------------------------------
+# Phase 5 follow-up #13: haste_selector — extend retaliation_selector with
+# a side-channel-injected 2/2 SUMMONING-SICK haste creature on p0's
+# battlefield at step 168, then drive an attack (CR 702.10b — "A creature
+# with haste can attack and {T} as soon as it comes under its controller's
+# control") at turn 13 PRECOMBAT. Mirrors :func:`vigilance_selector`
+# exactly except the injected creature carries ``haste`` instead of
+# ``vigilance``, is left in the ``summoning_sick=True`` state (load-
+# bearing — exercises the haste bypass of the CR 302.1 sickness gate),
+# and the trigger gate keys on :data:`_HASTE_PRINTING_NAME`
+# ("Bear Sprinter") so the five keyword-combat probes (FS / DT / LL /
+# vigilance / haste) stay independent on the same multi_blocker_deckspec
+# walk.
+#
+# **OUTCOME on this probe: CLEAN PASS — no novel cross-engine divergence
+# surfaced.** Both engines wire haste at declare-attackers eligibility:
+#
+#   * **Python** (``combat.py:21``): inside ``eligible_attackers``'s
+#     comprehension filter, the predicate ``(not o.summoning_sick or
+#     "haste" in effective_keywords(state, o))`` bypasses the sickness
+#     exclusion when the keyword is present. ``declare_attackers``
+#     itself does not re-validate eligibility, so a sick haste creature
+#     requested via DECLARE_ATTACKERS([id]) makes it through.
+#
+#   * **Rust** (``state_ops_combat.rs:648-651``): in
+#     ``declare_attacker``, ``let has_haste = battlefield_has_keyword(
+#     self, obj_id, "haste"); if summoning_sick && !has_haste { return
+#     false; }`` short-circuits the sick-rejection on the keyword. The
+#     same gate appears in ``state_ops_legal.rs:574-577`` for the
+#     legal_decisions enumeration filter.
+#
+# Both engines mark the haste attacker ``attacking=True`` AND
+# ``tapped=True`` (no vigilance → standard CR 508.1c tap step runs)
+# while LEAVING ``summoning_sick=True`` untouched (haste bypasses the
+# attack restriction but does not remove summoning sickness — that
+# clears at the controller's next untap step per CR 302.1, not at
+# declare). The rest of combat proceeds normally: two 2/2 Bears
+# multi-block, deal 4 back-damage, the haste attacker dies via SBA.
+# Post-combat: p0 life = 12 (unchanged — no lifelink), p1 life = 20.
+# p0 gy = [Bear Sprinter], p1 gy = [Grizzly Bears id 9], p1 bf still
+# has Grizzly Bears id 11.
+#
+# **DECLARE_ATTACKERS selector override.** The
+# :func:`retaliation_selector` delegate filters out ``summoning_sick``
+# creatures at its attacker enumeration site (line ~2125) — a
+# search-side approximation of CR 302.1 that is NOT keyword-aware.
+# For this probe to actually drive the sick haste creature through
+# DECLARE_ATTACKERS, the :func:`haste_selector` overrides the
+# DECLARE_ATTACKERS branch with a keyword-aware predicate
+# ``(not o.summoning_sick or "haste" in o.printing.keywords)`` BEFORE
+# falling through to retaliation_selector. Without that override, the
+# Bear Sprinter is silently excluded and the probe degenerates to a
+# pass-priority walk that doesn't exercise the haste apply-path.
+#
+# Three pinning tests guard the contract:
+#
+#   1. ``test_cross_engine_haste_selector_walks_clean`` — full
+#      200-decision walk parity-clean on every step (which is where
+#      the DECLARE_ATTACKERS ``attacking`` + ``tapped`` +
+#      ``summoning_sick`` fields are compared cross-engine).
+#   2. ``test_cross_engine_haste_selector_post_declare_attacker_state``
+#      — direct-read structural assertion that AFTER the
+#      DECLARE_ATTACKERS step (step 171) the attacker on both engines
+#      reports ``attacking == True``, ``tapped == True`` (haste does
+#      NOT grant vigilance), AND ``summoning_sick == True`` (haste
+#      bypasses but does not remove summoning sickness). Pins the
+#      EXPECTED haste shape so a future refactor that silently breaks
+#      the haste gate (e.g. dropping the ``has_haste`` branch in
+#      Rust's declare_attacker, or clearing summoning_sick on declare)
+#      fails loudly with a specific diagnostic.
+#   3. ``test_cross_engine_haste_selector_pre_injection_walks_clean``
+#      — steps 0-167 are parity-clean. The injection fires at step
+#      168; pre-injection backbone is identical to
+#      retaliation_selector.
+# ---------------------------------------------------------------------------
+
+
+def test_cross_engine_haste_selector_walks_clean(parity_smoke):
+    """**Haste clean-walk pin** — 200-decision walk on
+    :func:`multi_blocker_deckspec` with :func:`haste_selector` is
+    parity-clean every step. The haste injection at step 168
+    (``summoning_sick=True`` Bear Sprinter on p0 bf) + the
+    DECLARE_ATTACKERS step at index 171 compose correctly on both
+    engines: the sick haste creature is accepted as a legal attacker,
+    mirroring Python's ``(not o.summoning_sick or "haste" in
+    effective_keywords(state, o))`` guard in
+    :func:`mtg_bot.combat.eligible_attackers` and Rust's
+    ``if summoning_sick && !has_haste { return false; }`` branch in
+    :meth:`GameState::declare_attacker`.
+
+    Mirrors the vigilance probe's post-walk-clean shape: haste
+    eligibility behavior is already parity across both engines (no
+    CE16 surfaced on this slice), so this test is a "doesn't regress"
+    guard rather than a strict-xfail pre-closure pin.
+    """
+    from mtg_bot.parity.cross_engine import (
+        haste_selector,
+        multi_blocker_deckspec,
+        walk_both,
+    )
+
+    result = walk_both(
+        multi_blocker_deckspec(),
+        n_decisions=200,
+        decision_selector=haste_selector,
+    )
+    assert result.error is None, (
+        f"walk aborted at step {result.aborted_at}: {result.error}"
+    )
+    for step in result.steps:
+        assert step.divergences == [], (
+            f"unexpected divergence at step {step.step_index}: "
+            f"action={step.action_dict} "
+            f"{[(d.field, d.py_value, d.rust_value, d.known_gap) for d in step.divergences]}"
+        )
+
+
+def test_cross_engine_haste_selector_post_declare_attacker_state(
+    parity_smoke,
+):
+    """**Haste post-DECLARE_ATTACKERS structural pin** — drives 172
+    selector decisions to walk through the DECLARE_ATTACKERS step (171)
+    and asserts the EXACT haste-honored state on both engines. Pins
+    the load-bearing surface — ``attacker.attacking`` + ``tapped`` +
+    ``summoning_sick`` AFTER declare — so a future refactor that
+    silently breaks the haste gate fails loudly with a specific
+    diagnostic rather than a generic walk-clean divergence.
+
+    Expected post-DECLARE_ATTACKERS state (matches both engines today):
+
+      * Haste attacker (id 14, "Bear Sprinter") is on p0's
+        battlefield with ``attacking == True`` (haste bypassed the
+        sickness gate; CR 702.10b), ``tapped == True`` (no vigilance
+        → standard CR 508.1c tap step), AND ``summoning_sick == True``
+        (haste bypasses but does NOT clear summoning sickness — the
+        flag clears at the next untap step per CR 302.1, not on
+        declare).
+
+    Additionally pins the post-combat state (181 decisions) — the
+    attacker dies via SBA from 4 back-damage from the two Bears
+    blockers; haste doesn't gate damage so there's no life-gain or
+    damage-distribution surface to assert beyond "matches vigilance
+    probe modulo the post-declare tap state".
+    """
+    from mtg_bot.parity.cross_engine import (
+        build_matched_states,
+        haste_selector,
+        multi_blocker_deckspec,
+        step_both,
+    )
+
+    # ---- Phase 1: post-DECLARE_ATTACKERS attacker state ----
+    py_state, rust_state = build_matched_states(multi_blocker_deckspec())
+    for i in range(172):
+        action = haste_selector(py_state, rust_state, i)
+        step_both(py_state, rust_state, action)
+
+    # The haste attacker (id 14, "Bear Sprinter") should be on bf
+    # with attacking=True, tapped=True, summoning_sick=True.
+    py_att = next(
+        (o for o in py_state.battlefield if o.id == 14), None
+    )
+    assert py_att is not None, (
+        "expected Bear Sprinter (id 14) on Python p0 bf after step 171; "
+        f"bf ids = {[o.id for o in py_state.battlefield]}"
+    )
+    assert py_att.printing.name == "Bear Sprinter", (
+        f"expected id 14 to be Bear Sprinter, got {py_att.printing.name}"
+    )
+    assert py_att.attacking is True, (
+        f"expected Python attacker.attacking = True (haste bypassed "
+        f"summoning-sickness gate per CR 702.10b), got "
+        f"{py_att.attacking}"
+    )
+    assert py_att.tapped is True, (
+        f"expected Python attacker.tapped = True (haste does NOT "
+        f"grant vigilance — standard CR 508.1c tap step ran), got "
+        f"{py_att.tapped}"
+    )
+    assert py_att.summoning_sick is True, (
+        f"expected Python attacker.summoning_sick = True (haste "
+        f"bypasses but does NOT remove summoning sickness — flag "
+        f"clears at the next untap step per CR 302.1), got "
+        f"{py_att.summoning_sick}"
+    )
+
+    rust_att = next(
+        (e for e in rust_state.battlefield_snapshot() if int(e["id"]) == 14),
+        None,
+    )
+    assert rust_att is not None, (
+        "expected Bear Sprinter (id 14) on Rust p0 bf after step 171"
+    )
+    assert rust_att.get("printing_name") == "Bear Sprinter", (
+        f"expected id 14 to be Bear Sprinter on Rust, got "
+        f"{rust_att.get('printing_name')}"
+    )
+    assert rust_att["tapped"] is True, (
+        f"expected Rust attacker.tapped = True (haste doesn't grant "
+        f"vigilance), got {rust_att['tapped']}"
+    )
+    assert rust_att["summoning_sick"] is True, (
+        f"expected Rust attacker.summoning_sick = True (haste bypasses "
+        f"but does NOT clear summoning sickness), got "
+        f"{rust_att['summoning_sick']}"
+    )
+
+    # ---- Phase 2: post-combat state (drive 180 total decisions —
+    #      past COMBAT_DAMAGE and SBA cleanup) ----
+    for i in range(172, 180):
+        action = haste_selector(py_state, rust_state, i)
+        step_both(py_state, rust_state, action)
+
+    # Life totals: no lifelink → no life gain → p0 unchanged at 12
+    # (was 12 entering combat after turn-12 retaliation), p1 at 20.
+    assert py_state.players[0].life == 12, (
+        f"expected Python p0 life = 12 (no lifelink → no life gain), "
+        f"got {py_state.players[0].life}"
+    )
+    assert py_state.players[1].life == 20, (
+        f"expected Python p1 life = 20 (unchanged), got "
+        f"{py_state.players[1].life}"
+    )
+    rust_life = rust_state.life_totals
+    assert rust_life[0] == 12, (
+        f"expected Rust p0 life = 12 (matches Python), got "
+        f"{rust_life[0]}"
+    )
+    assert rust_life[1] == 20, (
+        f"expected Rust p1 life = 20 (matches Python), got "
+        f"{rust_life[1]}"
+    )
+
+    # p0 graveyard: Bear Sprinter (haste attacker died from 4
+    # back-damage — haste doesn't grant damage prevention).
+    py_p0_gy = [
+        (o.id, o.printing.name) for o in py_state.players[0].graveyard
+    ]
+    assert py_p0_gy == [(14, "Bear Sprinter")], (
+        f"expected Python p0 gy = [(14, 'Bear Sprinter')], got {py_p0_gy}"
+    )
+    rust_p0_gy = [
+        (e["id"], e.get("printing_name"))
+        for e in rust_state.graveyard_snapshot(0)
+    ]
+    assert rust_p0_gy == [(14, "Bear Sprinter")], (
+        f"expected Rust p0 gy = [(14, 'Bear Sprinter')], got {rust_p0_gy}"
+    )
+
+    # p1 graveyard: Grizzly Bears id 9 (first blocker took lethal 2;
+    # same shape as the vigilance probe — haste doesn't change the
+    # damage-assignment branch).
+    py_p1_gy = [
+        (o.id, o.printing.name) for o in py_state.players[1].graveyard
+    ]
+    assert py_p1_gy == [(9, "Grizzly Bears")], (
+        f"expected Python p1 gy = [(9, 'Grizzly Bears')], got {py_p1_gy}"
+    )
+    rust_p1_gy = [
+        (e["id"], e.get("printing_name"))
+        for e in rust_state.graveyard_snapshot(1)
+    ]
+    assert rust_p1_gy == [(9, "Grizzly Bears")], (
+        f"expected Rust p1 gy = [(9, 'Grizzly Bears')], got {rust_p1_gy}"
+    )
+
+    # p1 battlefield still has Grizzly Bears id 11 (second blocker
+    # survived because remaining was 0 after first blocker absorbed
+    # need=2 — post-CE14 ``if remaining <= 0: break`` guard).
+    py_bf_bears = sorted(
+        o.id for o in py_state.battlefield
+        if o.printing.name == "Grizzly Bears"
+    )
+    assert py_bf_bears == [5, 11], (
+        f"expected Python bf Grizzly Bears ids = [5, 11], got "
+        f"{py_bf_bears}"
+    )
+    rust_bf_bears = sorted(
+        int(e["id"]) for e in rust_state.battlefield_snapshot()
+        if e.get("printing_name") == "Grizzly Bears"
+    )
+    assert rust_bf_bears == [5, 11], (
+        f"expected Rust bf Grizzly Bears ids = [5, 11], got "
+        f"{rust_bf_bears}"
+    )
+
+
+def test_cross_engine_haste_selector_pre_injection_walks_clean(
+    parity_smoke,
+):
+    """Pre-injection walk (steps 0-167) on :func:`multi_blocker_deckspec`
+    with :func:`haste_selector` is parity-clean. Pins the contract that
+    the haste probe's delegate-to-retaliation_selector backbone is
+    unchanged — steps 0-167 are identical to retaliation_selector's
+    walk shape and surface no divergences. The haste injection fires
+    SPECIFICALLY at step 168, not before.
+
+    Validates the pre-condition: at the end of step 167, the bf has
+    exactly 3 creatures and no Bear Sprinter (the haste injection
+    hasn't fired). Same shape as the first-strike + deathtouch +
+    lifelink + vigilance probes' pre-injection tests.
+    """
+    from mtg_bot.parity.cross_engine import (
+        build_matched_states,
+        haste_selector,
+        multi_blocker_deckspec,
+        step_both,
+        walk_both,
+    )
+
+    result = walk_both(
+        multi_blocker_deckspec(),
+        n_decisions=168,
+        decision_selector=haste_selector,
+    )
+    assert result.error is None
+    for step in result.steps:
+        assert step.divergences == [], (
+            f"pre-injection divergence at step {step.step_index}: "
+            f"action={step.action_dict} "
+            f"{[(d.field, d.py_value, d.rust_value, d.known_gap) for d in step.divergences]}"
+        )
+
+    # Walk shape sanity: rebuild matched states, drive 168 steps, and
+    # confirm the pre-injection bf state.
+    py_state, rust_state = build_matched_states(multi_blocker_deckspec())
+    for i in range(168):
+        action = haste_selector(py_state, rust_state, i)
+        step_both(py_state, rust_state, action)
+
+    creatures = [
+        o for o in py_state.battlefield
+        if "Creature" in o.printing.card_types
+    ]
+    assert len(creatures) == 3, (
+        f"expected 3 creatures on bf at end of step 167, got "
+        f"{len(creatures)}: "
+        f"{[(o.id, o.controller_id, o.summoning_sick) for o in creatures]}"
+    )
+    # No Bear Sprinter in any zone yet (the haste injection hasn't
+    # fired).
+    bear_sprinter_anywhere = (
+        any(o.printing.name == "Bear Sprinter" for o in py_state.battlefield)
+        or any(
+            o.printing.name == "Bear Sprinter"
+            for p in py_state.players
+            for zone in (p.hand, p.library, p.graveyard, p.exile)
+            for o in zone
+        )
+    )
+    assert not bear_sprinter_anywhere, (
+        "Bear Sprinter should not yet exist at end of step 167 — "
+        "haste injection fires at step 168"
+    )
