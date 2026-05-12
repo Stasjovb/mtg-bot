@@ -4,6 +4,7 @@ use pyo3::prelude::*;
 mod actions;
 mod bf_iter;
 mod cards;
+mod external_rng;
 mod state;
 
 // TDD slices: each file adds one `#[pymethods] impl GameState`

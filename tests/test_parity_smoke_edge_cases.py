@@ -465,3 +465,122 @@ def test_cross_engine_shuffle_seed_surfaces_library_divergence_for_multiple_seed
         assert "library_p1" in fields, (
             f"seed={seed}: expected library_p1 to diverge; got fields={sorted(fields)}"
         )
+
+
+# ---------------------------------------------------------------------------
+# CE8 Slice 1 — externalized RNG substrate cross-engine closure.
+#
+# These tests exercise the NEW ``shared_rng_seed`` path on ``DeckSpec``
+# which threads a Python ``random.Random(seed)`` through both engines.
+# Python consumes via ``rng.shuffle(p0); rng.shuffle(p1)`` (Fisher-Yates
+# over ``_randbelow``); Rust consumes via ``make_state(..., rng=Random(seed))``
+# (its own Fisher-Yates calling back to ``_randbelow`` on the same seed).
+# Because MT is deterministic, both engines produce identical libraries.
+# ---------------------------------------------------------------------------
+
+
+def test_cross_engine_shared_rng_seed_walks_clean():
+    """CE8 Slice 1 closure substrate: ``shared_rng_seed`` produces
+    bit-identical library_p0 and library_p1 across Python and Rust.
+
+    Flips the CE8 strict-xfail at line 401 from xfail-passes-as-xfail
+    to a clean PASS — the substrate is available; specs that need
+    cross-engine shuffle parity opt in via ``shared_rng_seed`` instead
+    of the legacy ``shuffle_seed`` field.
+    """
+    from mtg_bot.parity.cross_engine import (
+        DeckSpec,
+        slightly_bigger_deckspec,
+        walk_both,
+    )
+
+    base = slightly_bigger_deckspec()
+    deck = DeckSpec(
+        card_defs=base.card_defs,
+        p0_library=base.p0_library,
+        p1_library=base.p1_library,
+        shared_rng_seed=42,
+    )
+    result = walk_both(deck, n_decisions=0)
+    fields = {d.field for d in result.initial_divergences}
+    # CE8 Slice 1 closure: with the externalized RNG substrate,
+    # library_p0 and library_p1 agree across engines.
+    assert "library_p0" not in fields, (
+        f"library_p0 diverged with shared_rng_seed=42; fields={sorted(fields)}"
+    )
+    assert "library_p1" not in fields, (
+        f"library_p1 diverged with shared_rng_seed=42; fields={sorted(fields)}"
+    )
+
+
+def test_cross_engine_shared_rng_seed_matches_python_random_shuffle_byte_for_byte():
+    """Per-card library order pinning: the Rust library produced via
+    ``shared_rng_seed`` matches what Python's ``random.Random(seed)``
+    .shuffle produces on the same starting decklist. Asserts at the
+    per-card-id level so a single-swap divergence isolates to one
+    swap, not just an aggregate hash mismatch.
+    """
+    import random
+    from mtg_bot.parity.cross_engine import (
+        DeckSpec,
+        slightly_bigger_deckspec,
+        build_rust_state,
+    )
+
+    base = slightly_bigger_deckspec()
+    deck = DeckSpec(
+        card_defs=base.card_defs,
+        p0_library=base.p0_library,
+        p1_library=base.p1_library,
+        shared_rng_seed=2026,
+    )
+    # Reference: Python's random.Random(seed) on the raw printing-name lists.
+    name_to_pid = {c.name: i for i, c in enumerate(base.card_defs)}
+    p0_pids_input = [name_to_pid[n] for n in base.p0_library]
+    p1_pids_input = [name_to_pid[n] for n in base.p1_library]
+    ref_rng = random.Random(2026)
+    p0_pids_ref = list(p0_pids_input)
+    ref_rng.shuffle(p0_pids_ref)
+    p1_pids_ref = list(p1_pids_input)
+    ref_rng.shuffle(p1_pids_ref)
+
+    rust_state = build_rust_state(deck)
+    rust_p0 = [d["printing_id"] for d in rust_state.library_snapshot(0)]
+    rust_p1 = [d["printing_id"] for d in rust_state.library_snapshot(1)]
+
+    assert rust_p0 == p0_pids_ref, (
+        f"Rust p0 library {rust_p0!r} != Python MT reference {p0_pids_ref!r}"
+    )
+    assert rust_p1 == p1_pids_ref, (
+        f"Rust p1 library {rust_p1!r} != Python MT reference {p1_pids_ref!r}"
+    )
+
+
+def test_cross_engine_shared_rng_seed_walks_clean_for_multiple_seeds():
+    """Multi-seed robustness: ``shared_rng_seed`` produces clean walks
+    across seeds 1, 7, 42, 100 — the same range the legacy
+    ``shuffle_seed`` divergence companion uses. Validates that the
+    substrate is stable, not just lucky on one seed.
+    """
+    from mtg_bot.parity.cross_engine import (
+        DeckSpec,
+        slightly_bigger_deckspec,
+        walk_both,
+    )
+
+    base = slightly_bigger_deckspec()
+    for seed in (1, 7, 42, 100):
+        deck = DeckSpec(
+            card_defs=base.card_defs,
+            p0_library=base.p0_library,
+            p1_library=base.p1_library,
+            shared_rng_seed=seed,
+        )
+        result = walk_both(deck, n_decisions=0)
+        fields = {d.field for d in result.initial_divergences}
+        assert "library_p0" not in fields, (
+            f"seed={seed}: library_p0 diverged; fields={sorted(fields)}"
+        )
+        assert "library_p1" not in fields, (
+            f"seed={seed}: library_p1 diverged; fields={sorted(fields)}"
+        )

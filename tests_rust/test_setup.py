@@ -735,3 +735,198 @@ def test_make_state_min_size_one_card_library_each_constructs_valid_state(engine
     assert isinstance(fp, str) and len(fp) == 12
     # Legal-decisions handoff still works at the size floor.
     assert [a["kind"] for a in state.legal_decisions(0)] == ["pass_priority"]
+
+
+# --- 14. CE8 Slice 1 — external-RNG setup-shuffle path ---------------
+#
+# ``make_state`` accepts an optional ``rng`` parameter (a Python
+# ``random.Random`` instance). When provided, both player libraries
+# consume Fisher-Yates draws from this SHARED external stream via
+# ``_randbelow``, matching what ``random.Random.shuffle(p0);
+# random.Random.shuffle(p1)`` produces on the Python side.
+#
+# Backward compat: ``rng=None`` (default) keeps the xorshift64 +
+# ``shuffle_seed`` path bit-equivalent to pre-slice behavior.
+
+
+def test_make_state_with_external_rng_matches_python_shuffle(engine):
+    """CE8 Slice 1 substrate: passing a ``random.Random(seed)`` into
+    ``make_state`` produces the SAME library permutation that
+    ``random.Random(seed).shuffle(list)`` produces on the Python side,
+    bit-for-bit, for both p0 and p1.
+
+    The streams are SHARED — p0 consumes its N-1 draws first, then
+    p1 consumes the next N-1 draws from the same advanced state.
+    """
+    import random
+
+    reg = _two_card_registry(engine)
+    p0_deck = [0] * 8 + [1] * 8  # 16-card deck: 8 Forest + 8 Bears
+    p1_deck = [1] * 8 + [0] * 8  # 16-card deck: 8 Bears + 8 Forest
+
+    # Reference permutation: Python's random.Random.shuffle in p0-then-p1 order.
+    py_rng = random.Random(2026)
+    py_p0 = list(p0_deck)
+    py_rng.shuffle(py_p0)
+    py_p1 = list(p1_deck)
+    py_rng.shuffle(py_p1)
+
+    # Rust side: pass a FRESH random.Random(seed=2026) consuming in the
+    # same p0-then-p1 order.
+    rust_rng = random.Random(2026)
+    state = engine.make_state(reg, p0_deck, p1_deck, rng=rust_rng)
+    rust_p0 = [d["printing_id"] for d in state.library_snapshot(0)]
+    rust_p1 = [d["printing_id"] for d in state.library_snapshot(1)]
+
+    assert rust_p0 == py_p0, f"p0 mismatch: rust={rust_p0} py={py_p0}"
+    assert rust_p1 == py_p1, f"p1 mismatch: rust={rust_p1} py={py_p1}"
+
+
+def test_make_state_with_external_rng_is_deterministic(engine):
+    """Two ``make_state`` calls with two ``random.Random(seed)`` of the
+    same seed produce identical library permutations.
+    """
+    import random
+
+    reg = _two_card_registry(engine)
+    deck = [0] * 4 + [1] * 4
+
+    state_a = engine.make_state(reg, deck, deck, rng=random.Random(99))
+    state_b = engine.make_state(reg, deck, deck, rng=random.Random(99))
+
+    fp_a = state_a.fingerprint()
+    fp_b = state_b.fingerprint()
+    assert fp_a == fp_b
+
+
+def test_make_state_with_external_rng_different_seeds_diverge(engine):
+    """``random.Random(seed_a)`` and ``random.Random(seed_b)`` produce
+    different libraries (with astronomical probability for a 16-card
+    deck of mixed printings)."""
+    import random
+
+    reg = _two_card_registry(engine)
+    deck = [0] * 8 + [1] * 8
+
+    state_a = engine.make_state(reg, deck, deck, rng=random.Random(1))
+    state_b = engine.make_state(reg, deck, deck, rng=random.Random(2))
+
+    lib_a = [d["printing_id"] for d in state_a.library_snapshot(0)]
+    lib_b = [d["printing_id"] for d in state_b.library_snapshot(0)]
+    assert lib_a != lib_b
+
+
+def test_make_state_with_external_rng_ignores_shuffle_seed(engine):
+    """``rng`` takes precedence over ``shuffle_seed``. When both are
+    set, the rng owns the draw stream — the xorshift64 path is
+    skipped entirely. Two calls with the same ``rng`` state and
+    different ``shuffle_seed`` produce identical libraries.
+    """
+    import random
+
+    reg = _two_card_registry(engine)
+    deck = [0] * 4 + [1] * 4
+
+    state_a = engine.make_state(
+        reg, deck, deck, shuffle_seed=12345, rng=random.Random(7)
+    )
+    state_b = engine.make_state(
+        reg, deck, deck, shuffle_seed=99999, rng=random.Random(7)
+    )
+    assert state_a.fingerprint() == state_b.fingerprint()
+
+
+def test_make_state_rng_none_is_backward_compatible(engine):
+    """Explicit ``rng=None`` is byte-equivalent to omitting the param.
+    Production callers (cli, bench) that stay on the xorshift64 path
+    must see no fingerprint shift.
+    """
+    reg = _two_card_registry(engine)
+    deck = [0, 1, 0, 1, 0, 1]
+
+    fp_omit = engine.make_state(reg, deck, deck, shuffle_seed=42).fingerprint()
+    fp_none = engine.make_state(
+        reg, deck, deck, shuffle_seed=42, rng=None
+    ).fingerprint()
+    assert fp_omit == fp_none
+
+
+def test_make_state_with_external_rng_preserves_library_size(engine):
+    """External-RNG shuffle still preserves library size — no
+    duplication, no loss. Same invariant the xorshift64 path holds."""
+    import random
+
+    reg = _two_card_registry(engine)
+    deck = [0] * 5 + [1] * 5
+
+    state = engine.make_state(reg, deck, deck, rng=random.Random(123))
+    assert state.library_sizes == [10, 10]
+    # Multiset of printings is preserved per player.
+    p0_pids = sorted(d["printing_id"] for d in state.library_snapshot(0))
+    p1_pids = sorted(d["printing_id"] for d in state.library_snapshot(1))
+    assert p0_pids == [0, 0, 0, 0, 0, 1, 1, 1, 1, 1]
+    assert p1_pids == [0, 0, 0, 0, 0, 1, 1, 1, 1, 1]
+
+
+def test_make_state_with_external_rng_does_not_touch_hand(engine):
+    """Even with an external rng, hand order is preserved — hand is
+    drawn AFTER the shuffle in caller-supplied order. Mirrors the
+    xorshift64 path's hand-immutability invariant.
+    """
+    import random
+
+    reg = _two_card_registry(engine)
+    state = engine.make_state(
+        reg,
+        [0, 1, 0, 1, 0, 1],
+        [1, 0, 1, 0],
+        p0_hand_printing_ids=[0, 1, 0, 1],
+        p1_hand_printing_ids=[1, 0, 1, 0],
+        rng=random.Random(99),
+    )
+    p0_hand = [d["printing_id"] for d in state.hand_snapshot(0)]
+    p1_hand = [d["printing_id"] for d in state.hand_snapshot(1)]
+    assert p0_hand == [0, 1, 0, 1]
+    assert p1_hand == [1, 0, 1, 0]
+
+
+def test_make_state_with_external_rng_empty_library_is_noop(engine):
+    """Empty library + external rng → no draws consumed, no error."""
+    import random
+
+    reg = _two_card_registry(engine)
+    py_rng = random.Random(42)
+    state = engine.make_state(reg, [], [], rng=py_rng)
+    assert state.library_sizes == [0, 0]
+    # No draws were consumed from py_rng; verifying by checking the
+    # next draw matches a fresh Random(42)'s first draw.
+    fresh = random.Random(42)
+    assert py_rng._randbelow(100) == fresh._randbelow(100)
+
+
+def test_make_state_with_external_rng_single_card_library_is_noop(engine):
+    """One-card library + external rng → Fisher-Yates degenerates to a
+    no-op; no _randbelow draws consumed.
+    """
+    import random
+
+    reg = _two_card_registry(engine)
+    py_rng = random.Random(42)
+    state = engine.make_state(reg, [0], [1], rng=py_rng)
+    assert state.library_sizes == [1, 1]
+    # Verify draw stream untouched — first draw of py_rng matches
+    # first draw of a fresh Random(42).
+    fresh = random.Random(42)
+    assert py_rng._randbelow(100) == fresh._randbelow(100)
+
+
+def test_make_state_with_external_rng_raises_on_invalid_rng(engine):
+    """Passing an object without ``_randbelow`` raises a Python-side
+    error from the callback (e.g. AttributeError). Surfaces as the
+    sequence of any non-Random object missing the method.
+    """
+    # int has no _randbelow — should raise on the first draw.
+    reg = _two_card_registry(engine)
+    deck = [0, 1, 0, 1]  # 4 cards → 3 draws → callback fires
+    with pytest.raises((AttributeError, TypeError)):
+        engine.make_state(reg, deck, deck, rng=42)

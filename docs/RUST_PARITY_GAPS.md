@@ -1894,6 +1894,35 @@ the action-kind gate.
 
 ### CE8. `shuffle_deck` PRNG diverges — Python uses Mersenne Twister, Rust uses xorshift64
 
+> **Status: PARTIALLY CLOSED by `feature/ce8-slice-1` (substrate +
+> setup-shuffle).** The PyO3 external-RNG substrate
+> (`rust/src/external_rng.rs`) and the two setup-shuffle entries in
+> `state_ops_setup.rs:345-346` (post-slice line numbers) now accept
+> a Python `random.Random` instance via the `rng=` parameter on
+> `make_state`. The harness's `DeckSpec.shared_rng_seed` opts both
+> engines into a shared `random.Random(seed)` Fisher-Yates stream,
+> producing bit-identical library_p0 / library_p1. Three new
+> cross-engine smoke tests in `tests/test_parity_smoke_edge_cases.py`
+> (`test_cross_engine_shared_rng_seed_walks_clean`,
+> `test_cross_engine_shared_rng_seed_matches_python_random_shuffle_byte_for_byte`,
+> `test_cross_engine_shared_rng_seed_walks_clean_for_multiple_seeds`)
+> pin the closure for the setup shuffle.
+>
+> **Slice 2 scope** (independently shippable): the 6 gameplay
+> shuffle entries — `state_ops_library.rs:150, 263, ~482`
+> (`shuffle_library_with_seed`, `search_library_and_move_to_hand`,
+> `search_library_for_first_of_type_and_shuffle`) and
+> `state_ops_mulligan.rs:129, 215, 433` (mulligan variants). Each
+> takes the same `rng: Option<&Bound<'_, PyAny>>` pattern as the
+> setup-shuffle path. G19 (SearchLibraryForBasicLandTapped
+> no-shuffle) is also slated for Slice 2 — substrate is in place.
+>
+> The legacy `shuffle_seed` strict-xfail at line 401 of
+> `tests/test_parity_smoke_edge_cases.py` and its line-427 companion
+> stay as-is: they pin the LEGACY xorshift64 path, which is preserved
+> by Slice 1 as the `rng=None` backward-compat fallback. Production
+> cli/bench callers don't need the rewire today.
+>
 > **Numbering note.** CE7 above is the (closed-today) inline-vs-
 > pymethod asymmetry; CE9 is intentionally left unallocated for
 > the next surfacing slice. See the staging doc

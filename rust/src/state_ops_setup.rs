@@ -29,30 +29,45 @@
 //!   diffs the same fingerprint on both sides starting from an
 //!   identical empty-board / fresh-hand state.
 //!
-//! ## Optional in-Rust shuffle (`shuffle_seed`)
+//! ## Optional in-Rust shuffle (`shuffle_seed` + `rng`)
 //!
-//! When `shuffle_seed` is `Some(s)`, each player's library is shuffled
-//! in place with an inline xorshift64 + Fisher-Yates (same RNG as
+//! When `shuffle_seed` is `Some(s)` (and `rng` is `None`), each
+//! player's library is shuffled in place with an inline xorshift64
+//! + Fisher-Yates (same RNG as
 //! `state_ops_library.rs::shuffle_library_with_seed`). Hands are NOT
 //! shuffled — hand order is caller-controlled (matches Python's
 //! `simulate.setup_game`, where the hand is drawn AFTER the shuffle in
 //! library order).
 //!
-//! p0 and p1 get independent permutations: p1's seed is derived as
-//! `s.wrapping_mul(0x9E3779B97F4A7C15)` (the golden-ratio xor
-//! constant — same pattern round-16 search-and-shuffle uses to
-//! decorrelate two streams from a single user-facing seed). Two
+//! When using xorshift fallback, p0 and p1 get independent permutations:
+//! p1's seed is derived as `s.wrapping_mul(0x9E3779B97F4A7C15)` (the
+//! golden-ratio xor constant — same pattern round-16 search-and-shuffle
+//! uses to decorrelate two streams from a single user-facing seed). Two
 //! make_state calls with the same `shuffle_seed` always produce the
 //! same permutation, byte for byte.
 //!
-//! When `shuffle_seed` is `None` (default), library order is preserved
-//! exactly as the caller passed it — backward-compatible with the
-//! round-23 phase-2 signature.
+//! ### CE8 Slice 1 — external-RNG path
 //!
-//! The primary parity path remains Python-side shuffling via
-//! `random.Random(seed).shuffle(deck_ids)` before calling make_state;
-//! the in-Rust shuffle is for Rust-only parity-smoke modes and future
-//! RNG-externalization work.
+//! When `rng` is `Some(py_random)` (a Python `random.Random` instance),
+//! both player libraries consume Fisher-Yates draws from the SAME
+//! shared external stream via `external_rng::next_below`. This matches
+//! exactly what Python's `random.Random.shuffle(list)` produces, so
+//! the cross-engine harness can pass the same `random.Random` into
+//! both engines and get bit-identical library_p0 / library_p1 post-
+//! shuffle. The `P1_SEED_MULTIPLIER` derivation is bypassed because
+//! the rng's own state machine owns draw order — p0 consumes its
+//! draws first, then p1 consumes the next draws from the same stream
+//! (matches `random.Random.shuffle(p0); random.Random.shuffle(p1)`
+//! on the Python side).
+//!
+//! When `rng` is `None` and `shuffle_seed` is `None` (default),
+//! library order is preserved exactly as the caller passed it —
+//! backward-compatible with the round-23 phase-2 signature.
+//!
+//! Precedence: if `rng` is `Some(_)`, the rng owns the shuffle and
+//! `shuffle_seed` is ignored. This is the CE8-substrate's contract:
+//! once a caller opts into externalized RNG, the integer seed is
+//! obsolete because the rng's internal state replaces it.
 
 #![allow(dead_code)]
 
@@ -130,6 +145,30 @@ fn fisher_yates_shuffle<T>(v: &mut [T], seed: u64) {
     }
 }
 
+/// Fisher-Yates (Knuth) shuffle of `v` in place consuming draws from a
+/// Python `random.Random` instance via `external_rng::next_below`.
+/// No-op for len < 2. Returns PyResult because each `_randbelow`
+/// callback can raise (e.g. if the passed object lacks `_randbelow`).
+///
+/// CE8 Slice 1 substrate: gives the cross-engine harness a way to pass
+/// the SAME `random.Random` into both engines so draw-order divergence
+/// surfaces loudly. See `external_rng` module docstring for the
+/// rationale.
+fn fisher_yates_shuffle_with_external_rng<T>(
+    v: &mut [T],
+    rng: &Bound<'_, PyAny>,
+) -> PyResult<()> {
+    let n = v.len();
+    if n < 2 {
+        return Ok(());
+    }
+    for i in (1..n).rev() {
+        let j = crate::external_rng::next_below(rng, i + 1)?;
+        v.swap(i, j);
+    }
+    Ok(())
+}
+
 /// Validate every entry in one printing-id Vec is `< registry_len`;
 /// raise PyValueError with the offending id on first miss.
 fn validate_printing_ids(ids: &[u32], registry_len: u32) -> PyResult<()> {
@@ -200,13 +239,23 @@ fn push_object(
 ///   run; the caller decides what (if anything) starts in hand.
 ///   Hand order is never shuffled, even when `shuffle_seed` is set
 ///   (hand is conceptually drawn AFTER the shuffle, in library order).
-/// * `shuffle_seed` — optional `u64`. When `Some(s)`, each player's
-///   library is shuffled in place via inline xorshift64 + Fisher-Yates
-///   before the state is constructed. p0 uses seed `s` directly; p1
-///   uses `s.wrapping_mul(0x9E3779B97F4A7C15)` (golden-ratio xor
-///   constant — decorrelates the two streams from a single
-///   user-facing seed). When `None`, no shuffle is performed —
-///   library order is the caller's input order.
+/// * `shuffle_seed` — optional `u64`. When `Some(s)` and `rng` is
+///   `None`, each player's library is shuffled in place via inline
+///   xorshift64 + Fisher-Yates before the state is constructed. p0
+///   uses seed `s` directly; p1 uses
+///   `s.wrapping_mul(0x9E3779B97F4A7C15)` (golden-ratio xor constant —
+///   decorrelates the two streams from a single user-facing seed).
+///   When `None` (and `rng` is also `None`), no shuffle is performed
+///   — library order is the caller's input order. IGNORED when `rng`
+///   is `Some(_)`.
+/// * `rng` — optional Python `random.Random` instance (CE8 Slice 1
+///   substrate). When `Some(_)`, both library shuffles consume draws
+///   from this shared external stream via
+///   `external_rng::next_below`. Matches what
+///   `random.Random.shuffle(p0); random.Random.shuffle(p1)` produces
+///   on the Python side, enabling cross-engine bit-parity on shuffled
+///   libraries. Defaults to `None`; production callers (cli, bench)
+///   stay on the xorshift64 path.
 ///
 /// **Object ids:** allocated sequentially starting from 0 in this
 /// order — p0 library, p0 hand, p1 library, p1 hand. Within each
@@ -232,6 +281,7 @@ fn push_object(
     p0_hand_printing_ids = None,
     p1_hand_printing_ids = None,
     shuffle_seed = None,
+    rng = None,
 ))]
 pub fn make_state(
     registry: &Bound<'_, cards::Registry>,
@@ -240,6 +290,7 @@ pub fn make_state(
     p0_hand_printing_ids: Option<Vec<u32>>,
     p1_hand_printing_ids: Option<Vec<u32>>,
     shuffle_seed: Option<u64>,
+    rng: Option<&Bound<'_, PyAny>>,
 ) -> PyResult<GameState> {
     let snapshot = registry.borrow().snapshot();
     let registry_len = snapshot.len() as u32;
@@ -276,10 +327,24 @@ pub fn make_state(
 
     // Optional in-Rust shuffle. Runs AFTER id allocation so the
     // shuffle reorders whole GameObjects (id + printing_id together).
-    // p1 uses a derived seed so p0 and p1 don't share a permutation
-    // even when their starting libraries happen to be identical.
     // Hands are intentionally NOT shuffled — see module docstring.
-    if let Some(seed) = shuffle_seed {
+    //
+    // Precedence (CE8 Slice 1):
+    //   * `rng = Some(py_random)` → both libraries consume from the
+    //     SHARED external stream, in the order p0 then p1, matching
+    //     `random.Random.shuffle(p0); random.Random.shuffle(p1)`.
+    //     `shuffle_seed` is ignored on this path.
+    //   * `rng = None, shuffle_seed = Some(s)` → legacy xorshift64
+    //     path: p0 uses `s`, p1 uses `s.wrapping_mul(P1_SEED_MULTIPLIER)`.
+    //     The derived p1 seed keeps the two streams decorrelated so
+    //     p0 and p1 don't share a permutation even when their
+    //     starting libraries happen to be identical.
+    //   * `rng = None, shuffle_seed = None` → no shuffle (caller-
+    //     order preserved). Backward-compat.
+    if let Some(py_rng) = rng {
+        fisher_yates_shuffle_with_external_rng(&mut p0_library_vec, py_rng)?;
+        fisher_yates_shuffle_with_external_rng(&mut p1_library_vec, py_rng)?;
+    } else if let Some(seed) = shuffle_seed {
         fisher_yates_shuffle(&mut p0_library_vec, seed);
         let p1_seed = seed.wrapping_mul(P1_SEED_MULTIPLIER);
         fisher_yates_shuffle(&mut p1_library_vec, p1_seed);
