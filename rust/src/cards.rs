@@ -1112,6 +1112,33 @@ pub enum Effect {
     /// the first creature on that same battlefield, and stamps
     /// `source.attached_to = Some(target_id)`.
     AttachToTargetCreatureYouControl,
+    /// **Round 29 coverage extension.** "Equip [cost]:" activated-
+    /// ability resolution per CR 702.6. Mirrors Python's
+    /// `EquipToTargetCreatureYouControl`
+    /// (`effects/generic/attach.py:117`), the activated-ability
+    /// sibling of `AttachToTargetCreatureYouControl` (Atomic
+    /// Microsizer family — 14 EoE cards, the highest-frequency
+    /// in-pool Effect class still missing from Rust).
+    ///
+    /// **Semantics identical to `AttachToTargetCreatureYouControl`.**
+    /// Re-targets the source Equipment onto a creature the
+    /// controller controls, replacing any prior attachment by
+    /// overwriting `source.attached_to`. The distinct variant exists
+    /// for logging/diagnostics parity with Python (`describe`
+    /// returns "equip: ..." vs the ETB attach's "attach this
+    /// Equipment to ..."): a tooling consumer reading
+    /// `effect_to_pydict` can tell ETB-attach from a paid Equip
+    /// activation. The resolve mutation itself is identical.
+    ///
+    /// **First-slice deterministic target.** First creature on the
+    /// source-controller's battlefield that isn't the source
+    /// itself. Same shape as the Attach variant.
+    ///
+    /// **First-slice scope.** Drops the granted-keywords rider
+    /// (the Python parent class accepts one, but `EquipToTargetCreatureYouControl`
+    /// passes the default empty frozenset — equip activations
+    /// don't carry UEOT keyword grants on EoE cards).
+    EquipToTargetCreatureYouControl,
     /// **Round 28 coverage extension.** Destroy the permanent that
     /// the resolving aura is enchanting. Mirrors Python's
     /// `DestroyEnchantedPermanent` (`destroy.py:213` — Cryoshatter
@@ -2004,6 +2031,9 @@ fn parse_effect(dict: &Bound<'_, PyDict>) -> PyResult<Effect> {
         "attach_to_target_creature_you_control" => {
             Ok(Effect::AttachToTargetCreatureYouControl)
         }
+        "equip_to_target_creature_you_control" => {
+            Ok(Effect::EquipToTargetCreatureYouControl)
+        }
         "destroy_enchanted_permanent" => {
             Ok(Effect::DestroyEnchantedPermanent)
         }
@@ -2869,6 +2899,9 @@ pub(crate) fn effect_to_pydict<'py>(
         }
         Effect::AttachToTargetCreatureYouControl => {
             d.set_item("kind", "attach_to_target_creature_you_control")?;
+        }
+        Effect::EquipToTargetCreatureYouControl => {
+            d.set_item("kind", "equip_to_target_creature_you_control")?;
         }
         Effect::DestroyEnchantedPermanent => {
             d.set_item("kind", "destroy_enchanted_permanent")?;

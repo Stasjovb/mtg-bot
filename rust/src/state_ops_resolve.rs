@@ -3776,6 +3776,57 @@ fn apply_effect(
                 }
             }
         }
+        // Round-29 Equip activated-ability resolution (CR 702.6).
+        // Identical mutation to AttachToTargetCreatureYouControl —
+        // re-stamps `source.attached_to` to the first creature on
+        // the controller's bf that isn't the source itself. The
+        // distinct variant exists for logging/diagnostics parity
+        // with Python's EquipToTargetCreatureYouControl, which
+        // overrides only `describe`. CR 702.6c: equip can re-target
+        // an Equipment that's already attached — stamping over an
+        // existing `attached_to` is the expected behavior.
+        Effect::EquipToTargetCreatureYouControl => {
+            // Locate source on a battlefield + capture its controller.
+            let mut src_loc: Option<(usize, u32)> = None;
+            for (pidx, player) in state.players.iter().enumerate() {
+                if player.battlefield.iter().any(|o| o.id == source_obj_id) {
+                    src_loc = Some((pidx, source_obj_id));
+                    break;
+                }
+            }
+            let Some((cidx, src_id)) = src_loc else {
+                return Ok(()); // source not on bf → silent fizzle
+            };
+            // Pick the first creature on source-controller's bf
+            // that ISN'T the source itself. Mirrors the Attach
+            // variant's deterministic first-slice choice.
+            let target_id: Option<u32> = {
+                let bf = &state.players[cidx].battlefield;
+                let registry = &state.registry;
+                bf.iter().find_map(|obj| {
+                    if obj.id == src_id {
+                        return None; // can't attach to self
+                    }
+                    let printing = registry.printings.get(obj.printing_id as usize)?;
+                    if printing.card_types.iter().any(|t| t == "Creature") {
+                        Some(obj.id)
+                    } else {
+                        None
+                    }
+                })
+            };
+            let Some(target_id) = target_id else {
+                return Ok(()); // no eligible creature → silent fizzle
+            };
+            let bf_mut: &mut Vec<GameObject> =
+                Arc::make_mut(&mut state.players[cidx].battlefield);
+            for obj in bf_mut.iter_mut() {
+                if obj.id == src_id {
+                    obj.attached_to = Some(target_id);
+                    break;
+                }
+            }
+        }
         // Round-28 enchanted-permanent destroy (Cryoshatter-shape).
         // Read source's `attached_to`; if Some(target_id) and target
         // exists on a battlefield, move it to its controller's

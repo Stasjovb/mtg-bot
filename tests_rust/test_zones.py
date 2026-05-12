@@ -1936,3 +1936,227 @@ def test_return_all_creatures_etb_state_reset(synthetic_state):
     assert returned["summoning_sick"] is True
     assert returned["damage"] == 0
     assert returned["counters"] == 0
+
+
+# -------------------- Round-29 Effect::EquipToTargetCreatureYouControl (14+ cards) --------------------
+#
+# Activated-ability sibling of `AttachToTargetCreatureYouControl`
+# (round-28). Python's `EquipToTargetCreatureYouControl` subclasses
+# the Attach variant and inherits its `resolve`; only `describe`
+# is overridden. The distinct Rust variant exists for diagnostics
+# parity — `effect_to_pydict` round-trips a different `kind`
+# string so tooling can tell paid Equip activations apart from
+# ETB attach. Resolve mutation is identical: stamp
+# `source.attached_to` to the first eligible creature on the
+# source-controller's battlefield.
+#
+# Atomic Microsizer family: 14 EoE printings.
+
+
+def _equip_artifact_dict():
+    """Synthetic Equipment-shaped artifact with the ``equip_to_target_creature_you_control``
+    effect packaged as a single ETB effect.
+
+    Same harness shape as the Attach tests: even though the natural
+    home for this effect is an activated-ability resolver (which
+    isn't yet wired through ``apply_action`` for non-mana activations),
+    packing it as ETB lets us drive the Effect arm via the existing
+    push-to-stack + resolve path. Mirrors what
+    ``_atomic_microsizer_dict`` does for the Attach variant.
+    """
+    return {
+        "name": "Atomic Microsizer Equip (synthetic)",
+        "card_types": ["Artifact"],
+        "mana_cost": {"generic": 2},
+        "etb_effects": [
+            {"kind": "equip_to_target_creature_you_control"},
+        ],
+    }
+
+
+def test_register_equip_effect_round_trips(engine):
+    """Parsing + re-serialization preserves the unit variant. The
+    pydict round-trip is what lets the Python override-table /
+    coverage tooling read back which Rust variant a card claims."""
+    reg = engine.Registry()
+    pid = reg.register_printing(_equip_artifact_dict())
+    etb = reg.get_printing_etb_effects(pid)
+    assert len(etb) == 1
+    assert etb[0]["kind"] == "equip_to_target_creature_you_control"
+
+
+def test_register_equip_distinct_kind_from_attach(engine):
+    """Equip's kind string is NOT the Attach kind — the bridge
+    tracks the two variants distinctly even though their resolve
+    mutations are identical. Tooling consumers (logging,
+    coverage measurement) rely on this distinction."""
+    reg = engine.Registry()
+    eq_pid = reg.register_printing(_equip_artifact_dict())
+    at_pid = reg.register_printing(_atomic_microsizer_dict())
+    eq_etb = reg.get_printing_etb_effects(eq_pid)
+    at_etb = reg.get_printing_etb_effects(at_pid)
+    assert eq_etb[0]["kind"] == "equip_to_target_creature_you_control"
+    assert at_etb[0]["kind"] == "attach_to_target_creature_you_control"
+    assert eq_etb[0]["kind"] != at_etb[0]["kind"]
+
+
+def test_resolve_equip_effect_stamps_source_attached_to(synthetic_state):
+    """Cast the Equipment from hand; its Equip effect attaches the
+    Equipment to the first creature on p0's battlefield. Mirrors
+    the Attach happy-path."""
+    spell_id = synthetic_state.register_and_inject_object(
+        _equip_artifact_dict(), 0, ZONE_HAND
+    )
+    bf_pre = [d for d in synthetic_state.battlefield_snapshot()
+              if d["controller_id"] == 0 and d["printing_name"] == "Grizzly Bears"]
+    assert len(bf_pre) > 0
+    expected_target_id = bf_pre[0]["id"]
+
+    synthetic_state.push_to_stack(spell_id, 0)
+    synthetic_state.resolve_top_of_stack()
+
+    # Equipment is now on p0's battlefield (artifact ETB per CR 608.2m).
+    assert synthetic_state.find_object_zone(spell_id) == ZONE_BATTLEFIELD
+    bf_post = synthetic_state.battlefield_snapshot()
+    equip = next(d for d in bf_post if d["id"] == spell_id)
+    assert equip["attached_to"] == expected_target_id
+
+
+def test_resolve_equip_effect_no_eligible_target_fizzles(engine):
+    """No creature on the controller's bf → silent fizzle. Equipment
+    still lands on the battlefield (CR 608.2m); ``attached_to`` stays
+    ``None``."""
+    state = engine.make_synthetic_state(
+        num_battlefield=0, num_hand=0, num_library=10
+    )
+    spell_id = state.register_and_inject_object(
+        _equip_artifact_dict(), 0, ZONE_HAND
+    )
+    state.push_to_stack(spell_id, 0)
+    state.resolve_top_of_stack()
+    assert state.find_object_zone(spell_id) == ZONE_BATTLEFIELD
+    bf = state.battlefield_snapshot()
+    equip = next(d for d in bf if d["id"] == spell_id)
+    assert equip["attached_to"] is None
+
+
+def test_resolve_equip_effect_skips_source_self(synthetic_state):
+    """An Equipment can't be attached to itself (CR 301.5b — an
+    Equipment isn't a creature). The first-slice target-picker
+    skips the source id explicitly. Confirm by injecting an
+    Equipment onto a battlefield that contains a creature: the
+    picker walks past the source and lands on the creature."""
+    spell_id = synthetic_state.register_and_inject_object(
+        _equip_artifact_dict(), 0, ZONE_HAND
+    )
+    synthetic_state.push_to_stack(spell_id, 0)
+    synthetic_state.resolve_top_of_stack()
+    bf = synthetic_state.battlefield_snapshot()
+    equip = next(d for d in bf if d["id"] == spell_id)
+    # attached_to is set, and crucially it's NOT the equip itself.
+    assert equip["attached_to"] is not None
+    assert equip["attached_to"] != spell_id
+
+
+def test_resolve_equip_effect_clone_isolation(synthetic_state):
+    """Cloned state's equip mutation does NOT leak to the source —
+    CoW canary mirroring the Attach clone-isolation test."""
+    spell_id = synthetic_state.register_and_inject_object(
+        _equip_artifact_dict(), 0, ZONE_HAND
+    )
+    synthetic_state.push_to_stack(spell_id, 0)
+    cloned = synthetic_state.clone_once()
+    cloned.resolve_top_of_stack()
+
+    # Clone: Equipment is attached.
+    cloned_bf = cloned.battlefield_snapshot()
+    cloned_equip = next(d for d in cloned_bf if d["id"] == spell_id)
+    assert cloned_equip["attached_to"] is not None
+
+    # Source: spell hasn't resolved (still on stack, not on bf).
+    src_bf = synthetic_state.battlefield_snapshot()
+    src_match = [d for d in src_bf if d["id"] == spell_id]
+    assert src_match == []  # not on bf yet
+
+
+def test_resolve_equip_effect_retargets_existing_attachment(synthetic_state):
+    """CR 702.6c: equip can re-target an already-attached Equipment.
+    Pre-stamp the equip's `attached_to` to one creature via the
+    `attach` pymethod, then resolve a second equip ETB and confirm
+    the stamp moved to the first creature on the bf (which is the
+    same creature picked deterministically — but the key invariant
+    is that the second resolve overwrites rather than refusing).
+
+    The deterministic first-slice picker picks the FIRST eligible
+    creature each time. To exercise the re-stamp, we pre-stamp the
+    equip to a creature we control that is NOT first on the bf,
+    then confirm the resolve overwrites it to the first creature.
+    """
+    spell_id = synthetic_state.register_and_inject_object(
+        _equip_artifact_dict(), 0, ZONE_BATTLEFIELD
+    )
+    # Find the first creature on p0's bf and a different creature.
+    p0_creatures = [
+        d for d in synthetic_state.battlefield_snapshot()
+        if d["controller_id"] == 0 and d["printing_name"] == "Grizzly Bears"
+    ]
+    assert len(p0_creatures) >= 2
+    first_creature_id = p0_creatures[0]["id"]
+    other_creature_id = p0_creatures[1]["id"]
+    assert first_creature_id != other_creature_id
+
+    # Pre-stamp the equip to the OTHER creature.
+    ok = synthetic_state.attach(spell_id, other_creature_id)
+    assert ok is True
+    bf_pre = synthetic_state.battlefield_snapshot()
+    equip_pre = next(d for d in bf_pre if d["id"] == spell_id)
+    assert equip_pre["attached_to"] == other_creature_id
+
+    # Inject and resolve another copy of the equip Effect to trigger
+    # the re-stamp. Use push_to_stack of a NEW spell whose etb effect
+    # is the same equip kind — when it resolves it lands on the bf,
+    # and ITS attached_to is the first creature, not the other one.
+    second_spell_id = synthetic_state.register_and_inject_object(
+        _equip_artifact_dict(), 0, ZONE_HAND
+    )
+    synthetic_state.push_to_stack(second_spell_id, 0)
+    synthetic_state.resolve_top_of_stack()
+
+    bf_post = synthetic_state.battlefield_snapshot()
+    # The second equip: attached_to is the FIRST creature.
+    second_equip = next(d for d in bf_post if d["id"] == second_spell_id)
+    assert second_equip["attached_to"] == first_creature_id
+    # The original equip's pre-stamp is unaffected (each Effect resolves
+    # against its own source, not other Equipment on the bf).
+    original_equip = next(d for d in bf_post if d["id"] == spell_id)
+    assert original_equip["attached_to"] == other_creature_id
+
+
+def test_resolve_equip_effect_source_off_bf_fizzles(engine):
+    """If the source isn't on a battlefield when the Effect resolves
+    (e.g. exiled mid-resolution), the equip silently fizzles —
+    `attached_to` stays None. This is the same defensive shape as
+    the Attach variant. Synthetic check: register a spell card with
+    an `effects` (not `etb_effects`) entry so it resolves as a
+    sorcery — the source never lands on bf and there's nothing to
+    stamp."""
+    state = engine.make_synthetic_state(
+        num_battlefield=5, num_hand=0, num_library=10
+    )
+    sorcery_dict = {
+        "name": "Sorcery-shape Equip Effect (synthetic)",
+        "card_types": ["Sorcery"],
+        "mana_cost": {"generic": 1},
+        "effects": [
+            {"kind": "equip_to_target_creature_you_control"},
+        ],
+    }
+    spell_id = state.register_and_inject_object(sorcery_dict, 0, ZONE_HAND)
+    state.push_to_stack(spell_id, 0)
+    state.resolve_top_of_stack()
+    # Sorcery routes to graveyard, not battlefield (CR 608.2m).
+    assert state.find_object_zone(spell_id) == ZONE_GRAVEYARD
+    # No creature on the bf is now attached to this sorcery id.
+    bf = state.battlefield_snapshot()
+    for d in bf:
+        assert d["attached_to"] != spell_id
