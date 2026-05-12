@@ -3804,6 +3804,71 @@ See I45 for the post-closure invariant pin.
 
 ---
 
+### CE19. Rust's `legal_decisions` ignores the flash keyword and the instant-speed CastSpell window — flash creatures don't emit at non-active-player priority windows
+
+- **Surfaced by**: Phase 5 follow-up #20 (`feature/phase5-flash`) —
+  `tests/test_parity_smoke.py::test_cross_engine_flash_test_a_surfaces_ce19`
+  (shape pin asserting Rust does NOT emit CastSpell for a flash
+  creature at p1's turn / p0 priority, while Python does). Two
+  parity-clean sanity pins (Test B own-turn, Test C vanilla
+  negative) confirm the divergence is single-axis on the flash +
+  off-active-priority window combination.
+- **Rust today**: `state_ops_legal.rs:759-764` short-circuits the
+  entire CastSpell emission block on the sorcery-timing predicate
+  `active_player == player_id && (phase == PHASE_MAIN1 || phase ==
+  PHASE_MAIN2) && stack.is_empty()`. There is NO instant-speed
+  window: when `active_player != priority_player` the function
+  returns at this gate with just `[PassPriority]` (modulo the
+  DeclareAttackers / DeclareBlockers extensions which gate on
+  `phase == PHASE_DECLARE_ATTACKERS` / `DECLARE_BLOCKERS` and don't
+  fire here). The `"flash"` keyword is never read by the
+  enumerator — the module docstring at lines 70-73 explicitly
+  defers the instant-speed extension:
+  `"Future slices add the instant-speed window by moving the
+  CastSpell loop ABOVE the sorcery-timing return and threading the
+  card.printing.is_instant || "flash" in keywords predicate; the
+  per-card emission code stays the same."`
+- **CR / Python expected**: Python's `legal.py:217-301` has an
+  instant-speed CastSpell block BEFORE the sorcery-timing gate at
+  line 303. The filter `card.printing.is_instant or "flash" in
+  card.printing.keywords` (line 248) accepts flash creatures, and
+  the per-card affordability / target / cost checks gate the
+  emission. A flash creature in the priority holder's hand emits
+  `CastSpell(card.id)` at any priority window the holder has,
+  active or not. CR 702.13a: "Flash is a static ability that
+  modifies the rules for when the spell with that ability can be
+  cast (see rules 117 and 307). You may cast this spell any time
+  you could cast an instant."
+- **Impact**: at every off-active-player priority window during
+  the opponent's turn, the search-side legal-action enumerator
+  silently DROPS every flash creature in hand from the candidate
+  list. The agent never considers casting a flash creature at
+  instant speed. In real EoE play this affects every flash printing
+  the bot might draw — instant-speed surprise blockers, end-of-turn
+  flashed creatures, response casts in combat. The agent learns
+  flash creatures as pure sorcery-speed permanents. Bounded:
+  affects ONLY flash creatures (regular instants would hit the
+  same gate, but Rust has no Instant printings in the synthetic
+  test pool today — see the related "no instant cast through
+  apply_action({'kind': 'cast_spell'})" gap that the counterspell /
+  mass-removal probes' side-channel pattern documents). Once EoE
+  Instants land, this gap doubles in scope.
+- **Closeable**: yes — Option A (Rust-side convergence on Python).
+  The fix shape: move the CastSpell emission loop ABOVE the
+  sorcery-timing short-circuit at lines 759-764, gate the
+  per-card emission on `printing.card_types.contains("Instant") ||
+  printing.keywords.contains("flash") || is_sorcery_timing`,
+  collapsing to the existing sorcery-speed shape when
+  `is_sorcery_timing` is true and to the instant-speed-only filter
+  when not. Approximate: ~30-50 line refactor in
+  `state_ops_legal.rs`. The dedup HashSet stays the same shape;
+  the filter predicate is the only behavioral change. Post-closure
+  the Test A assertion flips from "Rust does NOT emit" to "Python
+  and Rust emissions agree on the flash card id". Out of scope of
+  this probe slice (brief says "do NOT fix").
+
+---
+
 ## Maintenance
 
 When a slice closes one of the gaps above, drop the entry from the

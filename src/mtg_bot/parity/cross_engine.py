@@ -5783,3 +5783,217 @@ def counterspell_selector(py_state, rust_state, step_index: int) -> dict:
             return {"kind": "pass_priority"}
 
     return retaliation_selector(py_state, rust_state, step_index)
+
+
+# ---------------------------------------------------------------------------
+# Phase 5 follow-up #20: flash_selector -- extend the cross-engine smoke
+# onto a CR 702.13 flash keyword. Tests whether ``legal_decisions``
+# emits ``CastSpell`` options for a flash creature at the RIGHT
+# priority windows. Flash lets a player cast a creature spell any time
+# they could cast an instant (CR 702.13a) -- i.e., at non-active-
+# player priority windows + during the opponent's turn + in response
+# to other spells.
+#
+# **What this probe measures (different surface from prior probes).**
+# Prior keyword probes (flying / first_strike / etc) drive combat /
+# resolve-side effects and measure their observable field-view shape
+# in walk_both. This probe drives the LEGAL-DECISIONS EMISSION layer
+# directly: inject a flash creature into a hand, set up a priority
+# window where active != priority (i.e. opponent's turn but priority
+# holder is the flash creature's owner), and ask each engine's
+# ``legal_decisions(player_id)`` what it emits. The flash creature's
+# CastSpell variant SHOULD appear in the emission list if the engine
+# honors flash; SHOULD NOT appear if the engine treats every creature
+# as sorcery-speed-only.
+#
+# **Predicted CE19 surface.** Python's ``legal.py:217-301`` has an
+# instant-speed CastSpell block BEFORE the sorcery-timing gate at
+# line 303; it emits CastSpell for any card whose printing satisfies
+# ``is_instant or "flash" in keywords`` AND whose targets/cost/etc
+# pass. Rust's ``state_ops_legal.rs:759-764`` short-circuits the
+# entire CastSpell block on the sorcery-timing predicate
+# ``active_player == player_id && phase in MAIN && stack.is_empty()``
+# -- there is NO instant-speed window in Rust, and the keyword
+# ``"flash"`` is never read by the enumerator. Result: at a priority
+# window where ``priority_player == 0`` but ``active_player == 1``
+# (opponent's turn, p0 holds priority in response to something),
+# Python emits ``CastSpell(bear_flash_id)`` but Rust emits only
+# ``[PassPriority]``.
+#
+# Three test scenarios pinned via fresh-state direct-call (the
+# walk_both compare doesn't include legal_decisions emissions in its
+# field-view tuple -- same shape CE17 used for the defender legal-
+# emission probe):
+#
+#   * **Test A** (predicted CE19): p1's turn PRECOMBAT_MAIN with
+#     ``priority_player = 0``. p0 has Bear Flash (2/2 + flash) in
+#     hand. Python emits CastSpell(bear_flash); Rust emits only
+#     PassPriority. Divergence: Rust's legal_decisions misses the
+#     instant-speed window for flash creatures.
+#
+#   * **Test B** (parity-clean sanity): p0's turn PRECOMBAT_MAIN
+#     with ``priority_player = 0`` (sorcery timing on the active
+#     player's own main phase). Both engines emit CastSpell for the
+#     flash creature -- Python via the instant-speed block, Rust
+#     via the sorcery-speed CastSpell block. The flash keyword is
+#     irrelevant here (sorcery-timing covers every non-instant
+#     spell). Parity-clean.
+#
+#   * **Test C** (parity-clean NEGATIVE): same priority-window setup
+#     as Test A (p1's turn, p0 priority) but with a VANILLA bear
+#     (NO flash keyword) in p0's hand. Both engines should NOT emit
+#     CastSpell -- Python because vanilla creatures fail the
+#     instant-speed-castable filter (``card.printing.is_instant or
+#     "flash" in card.printing.keywords`` is False); Rust because
+#     the sorcery-timing gate fails (active != priority). Parity-
+#     clean. If this test DIVERGES, the divergence is broader than
+#     a flash-keyword gap -- it's an instant-speed-window-honored
+#     mismatch on vanilla creatures, which would be a different and
+#     larger CE.
+#
+# **Setup**: side-channel inject a printing into p0's hand (no
+# cast; the test probes the ENUMERATOR, not the cast pipeline). Same
+# pattern as the counterspell probe's hand-inject step, minus the
+# "push to stack + resolve" steps.
+# ---------------------------------------------------------------------------
+
+
+_BEAR_FLASH_PRINTING_NAME = "Bear Flash"
+_VANILLA_BEAR_PRINTING_NAME = "Vanilla Bear"
+
+
+def flash_side_channel(py_state, rust_state) -> tuple[int, int]:
+    """Side-channel inject a flash creature ("Bear Flash" 2/2 with the
+    ``flash`` keyword) into p0's hand on BOTH engines.
+
+    Mirrors the counterspell probe's hand-inject pattern, minus the
+    cast/resolve steps -- the flash probe measures the legal-decisions
+    EMISSION shape, not the cast pipeline.
+
+    Returns ``(py_obj_id, rust_obj_id)`` so callers can pin emission
+    lookups by card id.
+    """
+    from mtg_bot.cards.base import CardPrinting, ManaCost
+    from mtg_bot.game import Zone
+
+    # ---- Python side ----
+    flash_printing = CardPrinting(
+        name=_BEAR_FLASH_PRINTING_NAME,
+        mana_cost_str="",
+        mana_cost=ManaCost(),
+        type_line="Creature",
+        supertypes=(),
+        card_types=("Creature",),
+        subtypes=(),
+        power=2,
+        toughness=2,
+        produces=frozenset(),
+        keywords=frozenset({"flash"}),
+    )
+    py_obj = py_state.new_object(
+        flash_printing, owner_id=0, zone=Zone.HAND,
+    )
+    py_obj.summoning_sick = False
+    py_state.players[0].hand.append(py_obj)
+
+    # ---- Rust side ----
+    ZONE_HAND = 0
+    rust_obj_id = rust_state.register_and_inject_object(
+        {
+            "name": _BEAR_FLASH_PRINTING_NAME,
+            "card_types": ["Creature"],
+            "power": 2,
+            "toughness": 2,
+            "keywords": ["flash"],
+        },
+        0,  # controller = p0
+        ZONE_HAND,
+    )
+
+    return int(py_obj.id), int(rust_obj_id)
+
+
+def vanilla_creature_side_channel(py_state, rust_state) -> tuple[int, int]:
+    """Side-channel inject a vanilla 2/2 creature (NO keywords) into
+    p0's hand on BOTH engines.
+
+    Used by Test C -- the parity-clean negative branch. A vanilla
+    creature at a non-sorcery-timing window should NOT emit CastSpell
+    on either engine (Python's instant-speed filter rejects vanillas;
+    Rust's sorcery-timing short-circuit rejects everything).
+    """
+    from mtg_bot.cards.base import CardPrinting, ManaCost
+    from mtg_bot.game import Zone
+
+    # ---- Python side ----
+    vanilla_printing = CardPrinting(
+        name=_VANILLA_BEAR_PRINTING_NAME,
+        mana_cost_str="",
+        mana_cost=ManaCost(),
+        type_line="Creature",
+        supertypes=(),
+        card_types=("Creature",),
+        subtypes=(),
+        power=2,
+        toughness=2,
+        produces=frozenset(),
+    )
+    py_obj = py_state.new_object(
+        vanilla_printing, owner_id=0, zone=Zone.HAND,
+    )
+    py_obj.summoning_sick = False
+    py_state.players[0].hand.append(py_obj)
+
+    # ---- Rust side ----
+    ZONE_HAND = 0
+    rust_obj_id = rust_state.register_and_inject_object(
+        {
+            "name": _VANILLA_BEAR_PRINTING_NAME,
+            "card_types": ["Creature"],
+            "power": 2,
+            "toughness": 2,
+        },
+        0,  # controller = p0
+        ZONE_HAND,
+    )
+
+    return int(py_obj.id), int(rust_obj_id)
+
+
+def flash_selector(py_state, rust_state, step_index: int) -> dict:
+    """Cross-engine smoke selector for the flash probe.
+
+    Drives a stateless hand-inject of a Bear Flash creature when the
+    backbone walk lands the 3-creature bf state (uniquely step 168 on
+    the retaliation walk), then delegates to
+    :func:`retaliation_selector` for the rest of the walk.
+
+    The walk_both compare DOES NOT include ``legal_decisions``
+    emissions in its field-view tuple, so this selector's primary
+    purpose is to land the post-injection backbone state cleanly so
+    the pre-injection walks_clean test pins the divergence-free
+    backbone. The legal-decisions-emission divergence (predicted
+    CE19) is surfaced by the direct-call Test A / B / C in
+    ``test_parity_smoke.py``, not by this selector's walk.
+
+    Same idempotency / trigger-detection pattern as the prior probes.
+    """
+    flash_already_injected = any(
+        obj.printing.name == _BEAR_FLASH_PRINTING_NAME
+        for p in py_state.players
+        for zone_list in (p.hand, p.library, p.graveyard, p.exile)
+        for obj in zone_list
+    ) or any(
+        obj.printing.name == _BEAR_FLASH_PRINTING_NAME
+        for obj in py_state.battlefield
+    )
+    if not flash_already_injected:
+        creature_count = sum(
+            1 for o in py_state.battlefield
+            if "Creature" in o.printing.card_types
+        )
+        if creature_count >= 3:
+            flash_side_channel(py_state, rust_state)
+            return {"kind": "pass_priority"}
+
+    return retaliation_selector(py_state, rust_state, step_index)
