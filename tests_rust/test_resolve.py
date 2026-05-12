@@ -3549,6 +3549,55 @@ def test_resolve_damage_each_creature_stacks_with_existing_damage(
         assert synthetic_state.get_damage(cid) == 2
 
 
+# --- I33 closure: DamageEachCreature walks bf in ETB-timestamp order --
+#
+# `DamageEachCreature` collects victims via the shared
+# `bf_iter_etb_sorted` helper rather than walking p0's bf then p1's bf
+# in per-player Vec order. Damage marking is order-invariant (each
+# eligible creature gets +amount via saturating_add exactly once), so
+# the OUTCOME is identical under both visit orders — these tests pin
+# the no-regression direction with strictly-monotonic interleaved ETB
+# stamps to ensure the new bf-walk doesn't lose any victim when the
+# bfs are non-trivially ordered. See I33 in
+# `docs/RUST_PARITY_GAPS.md`.
+
+
+def test_resolve_damage_each_creature_bf_etb_interleaved(engine):
+    """With strictly-monotonic ETB stamps interleaved across players
+    (p0_old → p1_mid → p0_new), the bf-ETB walk visits every Creature
+    on either bf — same as Python's centralized walk. Verifies the
+    new collect-via-`bf_iter_etb_sorted` shape doesn't miss any
+    victim when bf-ETB order differs from p0-then-p1 walk."""
+    state = engine.make_synthetic_state(
+        num_battlefield=0, num_hand=0, num_library=2
+    )
+    # ETB stamps strictly monotonic in injection order — interleaved
+    # across players to create a meaningful divergence between
+    # per-player-walk and bf-ETB walk.
+    p0_old = state.register_and_inject_object(
+        _two_two_creature_dict(), 0, ZONE_BATTLEFIELD
+    )
+    p1_mid = state.register_and_inject_object(
+        _two_two_creature_dict(), 1, ZONE_BATTLEFIELD
+    )
+    p0_new = state.register_and_inject_object(
+        _two_two_creature_dict(), 0, ZONE_BATTLEFIELD
+    )
+    p1_new = state.register_and_inject_object(
+        _two_two_creature_dict(), 1, ZONE_BATTLEFIELD
+    )
+
+    spell_obj_id = state.register_and_inject_object(
+        _pyroclasm_dict(amount=2), 0, ZONE_HAND
+    )
+    state.push_to_stack(spell_obj_id, 0)
+    state.resolve_top_of_stack()
+
+    # Every creature took the damage regardless of visit order.
+    for cid in (p0_old, p1_mid, p0_new, p1_new):
+        assert state.get_damage(cid) == 2
+
+
 # --- round-19 CreateToken dispatch ----------------------------------
 #
 # **CreateToken scope** (mirrored in the Rust module docstring on
@@ -5881,6 +5930,97 @@ def test_resolve_destroy_all_creatures_clone_isolation(synthetic_state):
     assert synthetic_state.graveyard_sizes[0] == p0_grave_before
     assert synthetic_state.graveyard_sizes[1] == p1_grave_before
     assert synthetic_state.stack_size() == 1
+
+
+# --- I33 closure: DestroyAllCreatures walks bf in ETB-timestamp order -
+#
+# `DestroyAllCreatures` collects destroyable victims via the shared
+# `bf_iter_etb_sorted` helper rather than walking p0's bf then p1's bf
+# in per-player Vec order. Destruction is order-invariant (each
+# destroyable creature ends up in its OWN controller's graveyard via
+# `Arc::make_mut` on that controller's zones), so per-controller
+# graveyard contents and post-bf state are identical under both visit
+# orders. These tests pin the no-regression direction with strictly-
+# monotonic interleaved ETB stamps to ensure the new bf-walk doesn't
+# lose any victim when the bfs are non-trivially ordered, AND verifies
+# that indestructible filtering still works correctly under the
+# centralized walk. See I33 in `docs/RUST_PARITY_GAPS.md`.
+
+
+def test_resolve_destroy_all_creatures_bf_etb_interleaved(engine):
+    """With strictly-monotonic ETB stamps interleaved across players,
+    the bf-ETB walk destroys every Creature on either bf and routes
+    each to its OWN controller's graveyard — same as Python's
+    centralized walk filtered to per-controller graveyards. Verifies
+    the new collect-via-`bf_iter_etb_sorted` shape doesn't miss any
+    victim when bf-ETB order differs from p0-then-p1 walk."""
+    state = engine.make_synthetic_state(
+        num_battlefield=0, num_hand=0, num_library=2
+    )
+    # ETB stamps strictly monotonic in injection order — interleaved
+    # across players.
+    p0_old = state.register_and_inject_object(
+        _wrath_vanilla_creature_dict(), 0, ZONE_BATTLEFIELD
+    )
+    p1_mid = state.register_and_inject_object(
+        _wrath_vanilla_creature_dict(), 1, ZONE_BATTLEFIELD
+    )
+    p0_new = state.register_and_inject_object(
+        _wrath_vanilla_creature_dict(), 0, ZONE_BATTLEFIELD
+    )
+    p1_new = state.register_and_inject_object(
+        _wrath_vanilla_creature_dict(), 1, ZONE_BATTLEFIELD
+    )
+
+    spell_obj_id = state.register_and_inject_object(
+        _wrath_dict(), 0, ZONE_HAND
+    )
+    state.push_to_stack(spell_obj_id, 0)
+    state.resolve_top_of_stack()
+
+    # Every Creature destroyed; each in its own controller's
+    # graveyard.
+    for cid in (p0_old, p0_new):
+        assert state.find_object_zone(cid) == ZONE_GRAVEYARD
+    for cid in (p1_mid, p1_new):
+        assert state.find_object_zone(cid) == ZONE_GRAVEYARD
+
+
+def test_resolve_destroy_all_creatures_bf_etb_indestructible_interleaved(
+    engine,
+):
+    """Indestructible filter still works under the centralized
+    bf-ETB walk: with indestructible creatures interleaved with
+    vanilla ones in ETB order, only the vanilla creatures die."""
+    state = engine.make_synthetic_state(
+        num_battlefield=0, num_hand=0, num_library=2
+    )
+    # Interleaved indestructible / vanilla creatures across players,
+    # strictly-monotonic ETB stamps.
+    p0_vanilla_old = state.register_and_inject_object(
+        _wrath_vanilla_creature_dict(), 0, ZONE_BATTLEFIELD
+    )
+    p1_indestr_mid = state.register_and_inject_object(
+        _wrath_indestructible_dict(), 1, ZONE_BATTLEFIELD
+    )
+    p0_indestr_new = state.register_and_inject_object(
+        _wrath_indestructible_dict(), 0, ZONE_BATTLEFIELD
+    )
+    p1_vanilla_new = state.register_and_inject_object(
+        _wrath_vanilla_creature_dict(), 1, ZONE_BATTLEFIELD
+    )
+
+    spell_obj_id = state.register_and_inject_object(
+        _wrath_dict(), 0, ZONE_HAND
+    )
+    state.push_to_stack(spell_obj_id, 0)
+    state.resolve_top_of_stack()
+
+    # Vanilla creatures destroyed; indestructible ones survive.
+    assert state.find_object_zone(p0_vanilla_old) == ZONE_GRAVEYARD
+    assert state.find_object_zone(p1_vanilla_new) == ZONE_GRAVEYARD
+    assert state.find_object_zone(p1_indestr_mid) == ZONE_BATTLEFIELD
+    assert state.find_object_zone(p0_indestr_new) == ZONE_BATTLEFIELD
 
 
 # --- DestroyTargetNonlandPermanent dispatch -------------------------
