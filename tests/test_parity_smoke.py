@@ -3229,3 +3229,269 @@ def test_cross_engine_deathtouch_selector_pre_injection_walks_clean(
         "Bear Assassin should not yet exist at end of step 167 — "
         "deathtouch injection fires at step 168"
     )
+
+
+# ---------------------------------------------------------------------------
+# Phase 5 follow-up #11: lifelink_selector — extend retaliation_selector
+# with a side-channel-injected 2/2 lifelink creature on p0's battlefield
+# at step 168, then drive multi-block combat (CR 702.15 — "Damage dealt by
+# a creature with lifelink causes its controller to gain that much life")
+# at turn 13 PRECOMBAT. Mirrors :func:`deathtouch_selector` exactly except
+# the injected creature carries ``lifelink`` instead of ``deathtouch`` and
+# the trigger gate keys on :data:`_LIFELINK_PRINTING_NAME` ("Bear Cleric")
+# so the three keyword-combat probes (FS / DT / LL) stay independent on
+# the same multi_blocker_deckspec walk.
+#
+# **OUTCOME on this probe: CLEAN PASS — no novel cross-engine divergence
+# surfaced.** Both engines wire lifelink at damage-apply time:
+#
+#   * **Python**: ``combat.py:533-541`` calls
+#     ``gain_life(state, source_controller, amount)`` per damage event
+#     when ``"lifelink" in source_kws``.
+#   * **Rust**: ``state_ops_combat.rs:1282-1289`` increments
+#     ``self.players[cidx].life += entry.amount as i32`` per ``PlanEntry``
+#     when ``battlefield_has_keyword(self, entry.source_id, "lifelink")``.
+#
+# Both engines fire lifelink per-event in their respective damage-apply
+# loops, so the 2-damage assignment to the first blocker (need_0 = 2;
+# remaining drops to 0 and the apply loop exits before blocker_1 per the
+# post-CE14 ``if remaining <= 0: break`` guard on each engine) results in
+# +2 life on p0's controller. Post-combat: p0 life = 14 (was 12 from
+# turn-12 retaliation Bears attack; +2 from lifelink), p1 life = 20.
+# p0 gy = [Bear Cleric] (attacker died from 4 back-damage from blockers),
+# p1 gy = [Grizzly Bears id 9] (first blocker died from assigned 2),
+# p1 bf still has Grizzly Bears id 11 (survived because remaining was 0
+# after blocker_0).
+#
+# Three pinning tests guard the contract:
+#
+#   1. ``test_cross_engine_lifelink_selector_walks_clean`` — full
+#      200-decision walk parity-clean on every step.
+#   2. ``test_cross_engine_lifelink_selector_post_combat_state`` —
+#      direct-read structural assertion on life totals + bf / gy
+#      contents post-COMBAT_DAMAGE. Pins the EXPECTED outcome shape so
+#      a future refactor that silently breaks lifelink composition
+#      (e.g. dropping the lifelink keyword read in apply_damage_pass,
+#      or moving the source-keyword lookup to AFTER apply when the
+#      attacker has died) fails loudly rather than silently passing
+#      the walk-clean test (which would also fail, but the direct-
+#      read pin makes the failure mode obvious — "p0 didn't gain 2
+#      life" is faster to diagnose than "step 174 has field
+#      'life_p0'='12' vs '14'").
+#   3. ``test_cross_engine_lifelink_selector_pre_injection_walks_clean``
+#      — steps 0-167 are parity-clean. The injection fires at step 168;
+#      pre-injection backbone is identical to retaliation_selector.
+# ---------------------------------------------------------------------------
+
+
+def test_cross_engine_lifelink_selector_walks_clean(parity_smoke):
+    """**Lifelink clean-walk pin** — 200-decision walk on
+    :func:`multi_blocker_deckspec` with :func:`lifelink_selector` is
+    parity-clean every step. The lifelink injection at step 168 + the
+    multi-block COMBAT_DAMAGE step at index 174 compose correctly on
+    both engines: 2 damage assigned to blocker_0 fires lifelink for
+    +2 life on p0's controller, mirroring Python's per-event
+    ``gain_life`` call in :func:`mtg_bot.combat.resolve_combat_damage`
+    and Rust's per-PlanEntry ``self.players[cidx].life += entry.amount``
+    in :meth:`GameState::apply_damage_pass`.
+
+    Mirrors the first-strike probe's post-walk-clean shape: lifelink
+    behavior is already parity across both engines (no CE16 surfaced
+    on this slice), so this test is a "doesn't regress" guard rather
+    than a strict-xfail pre-closure pin.
+    """
+    from mtg_bot.parity.cross_engine import (
+        lifelink_selector,
+        multi_blocker_deckspec,
+        walk_both,
+    )
+
+    result = walk_both(
+        multi_blocker_deckspec(),
+        n_decisions=200,
+        decision_selector=lifelink_selector,
+    )
+    assert result.error is None, (
+        f"walk aborted at step {result.aborted_at}: {result.error}"
+    )
+    for step in result.steps:
+        assert step.divergences == [], (
+            f"unexpected divergence at step {step.step_index}: "
+            f"action={step.action_dict} "
+            f"{[(d.field, d.py_value, d.rust_value, d.known_gap) for d in step.divergences]}"
+        )
+
+
+def test_cross_engine_lifelink_selector_post_combat_state(parity_smoke):
+    """**Lifelink post-combat structural pin** — drives 180 selector
+    decisions to walk past the lifelink COMBAT_DAMAGE step and asserts
+    the EXACT post-combat life totals + bf / gy contents on both
+    engines. Pins the shape so a future refactor that silently breaks
+    lifelink composition fails loudly with a specific diagnostic
+    rather than a generic walk-clean divergence.
+
+    Expected post-combat state (matches both engines today):
+
+      * p0 life = 14 (was 12 entering combat; +2 from lifelink on the
+        single 2-damage event to the first blocker).
+      * p1 life = 20 (unchanged — Bears blockers have no lifelink and
+        deal back-damage to the attacker, not to p1).
+      * p0 graveyard = [Bear Cleric id 14] (attacker died from 4
+        back-damage from both blockers' 2 power each).
+      * p1 graveyard = [Grizzly Bears id 9] (first blocker took
+        assigned 2 damage = its toughness, marked lethal, SBA destroyed).
+      * p1 battlefield still has Grizzly Bears id 11 (second blocker
+        survived because ``remaining = 0`` after blocker_0 absorbed
+        its need=2; the post-CE14 ``if remaining <= 0: break`` guard
+        skips blocker_1 entirely).
+    """
+    from mtg_bot.parity.cross_engine import (
+        build_matched_states,
+        lifelink_selector,
+        multi_blocker_deckspec,
+        step_both,
+    )
+
+    py_state, rust_state = build_matched_states(multi_blocker_deckspec())
+    for i in range(180):
+        action = lifelink_selector(py_state, rust_state, i)
+        step_both(py_state, rust_state, action)
+
+    # ---- Life totals (the load-bearing lifelink composition surface) ----
+    assert py_state.players[0].life == 14, (
+        f"expected Python p0 life = 14 (12 pre-combat + 2 lifelink "
+        f"gain), got {py_state.players[0].life}"
+    )
+    assert py_state.players[1].life == 20, (
+        f"expected Python p1 life = 20 (unchanged; blockers have no "
+        f"lifelink), got {py_state.players[1].life}"
+    )
+    rust_life = rust_state.life_totals
+    assert rust_life[0] == 14, (
+        f"expected Rust p0 life = 14 (matches Python), got "
+        f"{rust_life[0]}"
+    )
+    assert rust_life[1] == 20, (
+        f"expected Rust p1 life = 20 (matches Python), got "
+        f"{rust_life[1]}"
+    )
+
+    # ---- p0 graveyard: Bear Cleric (the lifelink attacker died from
+    #      back-damage) ----
+    py_p0_gy = [(o.id, o.printing.name) for o in py_state.players[0].graveyard]
+    assert py_p0_gy == [(14, "Bear Cleric")], (
+        f"expected Python p0 gy = [(14, 'Bear Cleric')], got {py_p0_gy}"
+    )
+    rust_p0_gy = [
+        (e["id"], e.get("printing_name"))
+        for e in rust_state.graveyard_snapshot(0)
+    ]
+    assert rust_p0_gy == [(14, "Bear Cleric")], (
+        f"expected Rust p0 gy = [(14, 'Bear Cleric')], got {rust_p0_gy}"
+    )
+
+    # ---- p1 graveyard: Grizzly Bears id 9 (first blocker took
+    #      lethal 2) ----
+    py_p1_gy = [(o.id, o.printing.name) for o in py_state.players[1].graveyard]
+    assert py_p1_gy == [(9, "Grizzly Bears")], (
+        f"expected Python p1 gy = [(9, 'Grizzly Bears')], got {py_p1_gy}"
+    )
+    rust_p1_gy = [
+        (e["id"], e.get("printing_name"))
+        for e in rust_state.graveyard_snapshot(1)
+    ]
+    assert rust_p1_gy == [(9, "Grizzly Bears")], (
+        f"expected Rust p1 gy = [(9, 'Grizzly Bears')], got {rust_p1_gy}"
+    )
+
+    # ---- p1 battlefield still has Grizzly Bears id 11 (second blocker
+    #      survived because remaining was 0 after first blocker absorbed
+    #      need=2). ----
+    py_bf_bears = sorted(
+        o.id for o in py_state.battlefield
+        if o.printing.name == "Grizzly Bears"
+    )
+    # p0 has Bears id 5 (the original turn-13-cast sick one); p1 has
+    # Bears id 11 (the surviving second blocker). Bears 9 is in p1's
+    # graveyard.
+    assert py_bf_bears == [5, 11], (
+        f"expected Python bf Grizzly Bears ids = [5, 11], got "
+        f"{py_bf_bears}"
+    )
+    rust_bf_bears = sorted(
+        int(e["id"]) for e in rust_state.battlefield_snapshot()
+        if e.get("printing_name") == "Grizzly Bears"
+    )
+    assert rust_bf_bears == [5, 11], (
+        f"expected Rust bf Grizzly Bears ids = [5, 11], got "
+        f"{rust_bf_bears}"
+    )
+
+
+def test_cross_engine_lifelink_selector_pre_injection_walks_clean(
+    parity_smoke,
+):
+    """Pre-injection walk (steps 0-167) on :func:`multi_blocker_deckspec`
+    with :func:`lifelink_selector` is parity-clean. Pins the contract
+    that the lifelink probe's delegate-to-retaliation_selector
+    backbone is unchanged — steps 0-167 are identical to
+    retaliation_selector's walk shape and surface no divergences.
+    The lifelink injection fires SPECIFICALLY at step 168, not before.
+
+    Validates the pre-condition: at the end of step 167, the bf has
+    exactly 3 creatures and no Bear Cleric (the lifelink injection
+    hasn't fired). Same shape as the first-strike + deathtouch probes'
+    pre-injection tests.
+    """
+    from mtg_bot.parity.cross_engine import (
+        build_matched_states,
+        lifelink_selector,
+        multi_blocker_deckspec,
+        step_both,
+        walk_both,
+    )
+
+    result = walk_both(
+        multi_blocker_deckspec(),
+        n_decisions=168,
+        decision_selector=lifelink_selector,
+    )
+    assert result.error is None
+    for step in result.steps:
+        assert step.divergences == [], (
+            f"pre-injection divergence at step {step.step_index}: "
+            f"action={step.action_dict} "
+            f"{[(d.field, d.py_value, d.rust_value, d.known_gap) for d in step.divergences]}"
+        )
+
+    # Walk shape sanity: rebuild matched states, drive 168 steps, and
+    # confirm the pre-injection bf state.
+    py_state, rust_state = build_matched_states(multi_blocker_deckspec())
+    for i in range(168):
+        action = lifelink_selector(py_state, rust_state, i)
+        step_both(py_state, rust_state, action)
+
+    creatures = [
+        o for o in py_state.battlefield
+        if "Creature" in o.printing.card_types
+    ]
+    assert len(creatures) == 3, (
+        f"expected 3 creatures on bf at end of step 167, got "
+        f"{len(creatures)}: "
+        f"{[(o.id, o.controller_id, o.summoning_sick) for o in creatures]}"
+    )
+    # No Bear Cleric in any zone yet (the lifelink injection hasn't
+    # fired).
+    bear_cleric_anywhere = (
+        any(o.printing.name == "Bear Cleric" for o in py_state.battlefield)
+        or any(
+            o.printing.name == "Bear Cleric"
+            for p in py_state.players
+            for zone in (p.hand, p.library, p.graveyard, p.exile)
+            for o in zone
+        )
+    )
+    assert not bear_cleric_anywhere, (
+        "Bear Cleric should not yet exist at end of step 167 — "
+        "lifelink injection fires at step 168"
+    )
