@@ -1241,3 +1241,156 @@ def test_cross_engine_slightly_bigger_deckspec_initial_libraries_have_three_kind
         f"slightly_bigger_deckspec should expose three printing_names "
         f"across libraries; got {sorted(union)}"
     )
+
+
+# ---------------------------------------------------------------------------
+# Phase 5 follow-up #2: extend the DECISION script (not the deck) — drive a
+# draw + play_land via ``play_a_land_selector``. This is the first slice that
+# moves cards off the library on both engines, and it surfaces the **library
+# pop-orientation divergence** (CE3) — Python pops from index 0 (head =
+# deck-top); Rust pops from the tail (end = deck-top). Same DeckSpec ->
+# different draw, cascading into different hand contents and a play_land
+# action that fires on Python but silently no-ops on Rust because the
+# Python-side card_id isn't in Rust's hand.
+#
+# Expected outcome under the current binary (CE3 open): the walk runs
+# without aborting, but ``hand_p0`` and ``library_p0`` diverge starting
+# at step 0, and ``battlefield`` diverges starting at step 1. The
+# xfail-pinned test below documents the symptom; when the CE3 closure
+# slice lands, the xfail flips to xpass and the maintainer either
+# upgrades the entry to a G<n> closure-note or drops it from the gap
+# doc.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.xfail(
+    reason=(
+        "CE3 — library pop-orientation divergence. Python's "
+        "turn.draw_card pops library[0] (head=deck-top); Rust's "
+        "draw_card pops the Vec tail (end=deck-top). Same DeckSpec ->"
+        " different draw -> diverging hand_p0/library_p0, cascading "
+        "into battlefield when play_land fires on Python with a "
+        "card_id that's still in Rust's library. See "
+        "docs/RUST_PARITY_GAPS.md section CE3 for the closure plan."
+    ),
+    strict=True,
+)
+def test_cross_engine_play_a_land_selector_walks_clean(parity_smoke):
+    """Drive 10 decisions with ``play_a_land_selector`` on the
+    slightly_bigger_deckspec and assert every step walks clean.
+
+    Under the current binary this test xfails: step 0 surfaces a
+    ``hand_p0`` / ``library_p0`` divergence (CE3 root cause), and
+    step 1 surfaces a ``battlefield`` divergence (CE3 cascade — Python
+    plays a land Rust's play_land arm silently rejects). When the
+    CE3 closure slice lands, the test flips to xpass and the
+    maintainer removes the xfail marker.
+
+    Note: ``strict=True`` — an unexpected xpass surfaces as a test
+    failure. That's the signal the underlying gap closed and the
+    pin should be removed or upgraded.
+    """
+    from mtg_bot.parity.cross_engine import (
+        play_a_land_selector,
+        slightly_bigger_deckspec,
+        walk_both,
+    )
+
+    result = walk_both(
+        slightly_bigger_deckspec(),
+        n_decisions=10,
+        decision_selector=play_a_land_selector,
+    )
+    assert result.error is None, (
+        f"walk aborted at step {result.aborted_at}: {result.error}"
+    )
+    assert result.aborted_at is None
+    assert len(result.steps) == 10
+    # The clean-walk assertion that xfails today.
+    for step in result.steps:
+        assert step.divergences == [], (
+            f"unexpected divergence at step {step.step_index}: "
+            f"{[(d.field, d.py_value, d.rust_value, d.known_gap) for d in step.divergences]}"
+        )
+
+
+def test_cross_engine_play_a_land_selector_reports_ce3_symptom_at_step_0(parity_smoke):
+    """Positive-direction CE3 pin: under the current binary, step 0
+    MUST surface ``hand_p0`` and ``library_p0`` divergences after the
+    side-channel draw. This pins the symptom shape so a partial
+    closure that accidentally moves only one of the two fields (e.g.
+    flips Rust's draw_card pop orientation without re-synchronizing
+    the library serialization) is caught here as a half-state.
+
+    When the CE3 closure slice lands, this test should be removed
+    alongside the xfail above — the "symptom present" assertion will
+    fail once the divergence is gone."""
+    from mtg_bot.parity.cross_engine import (
+        play_a_land_selector,
+        slightly_bigger_deckspec,
+        walk_both,
+    )
+
+    result = walk_both(
+        slightly_bigger_deckspec(),
+        n_decisions=1,
+        decision_selector=play_a_land_selector,
+    )
+    assert result.error is None
+    assert len(result.steps) == 1
+    step_0 = result.steps[0]
+    field_names = {d.field for d in step_0.divergences}
+    # CE3's signature: both hand and library diverge on step 0 because
+    # Python and Rust drew from opposite ends of the library.
+    assert "hand_p0" in field_names, (
+        f"CE3 symptom missing at step 0: expected hand_p0 divergence "
+        f"after the side-channel draw, got fields {sorted(field_names)}"
+    )
+    assert "library_p0" in field_names, (
+        f"CE3 symptom missing at step 0: expected library_p0 "
+        f"divergence after the side-channel draw, got fields "
+        f"{sorted(field_names)}"
+    )
+
+
+def test_cross_engine_play_a_land_selector_emits_pass_priority_when_no_land(parity_smoke):
+    """Selector contract: if no Land lives in Python's hand on step
+    >= 1, the selector falls back to ``pass_priority`` rather than
+    raising or returning a malformed dict. Drives a 0-card-library
+    deck so the step-0 draw doesn't put a Land in hand, then verifies
+    step 1 emits ``pass_priority``.
+
+    Guards a regression where the selector's land-lookup loop falls
+    off the end without an else-branch — silently returning None
+    would crash the harness rather than producing a clean fallback."""
+    from mtg_bot.parity.cross_engine import (
+        CardDef,
+        DeckSpec,
+        play_a_land_selector,
+        walk_both,
+    )
+
+    # Two-card creature-only deck. The step-0 draw puts a Bears in
+    # Python's hand (and a Bears in Rust's hand by tail-pop — both
+    # happen to be Bears here since the deck is mono-Bears, dodging
+    # CE3 for this particular guard test).
+    bears = CardDef(
+        name="Grizzly Bears",
+        card_type="Creature",
+        mana_cost_generic=1,
+        mana_cost_colored=(("G", 1),),
+        power=2,
+        toughness=2,
+    )
+    deck = DeckSpec(
+        card_defs=(bears,),
+        p0_library=("Grizzly Bears", "Grizzly Bears"),
+        p1_library=("Grizzly Bears", "Grizzly Bears"),
+    )
+    result = walk_both(
+        deck, n_decisions=2, decision_selector=play_a_land_selector,
+    )
+    assert result.error is None
+    assert result.steps[0].action_dict == {"kind": "pass_priority"}
+    # Step 1: no land in hand -> selector falls back to pass.
+    assert result.steps[1].action_dict == {"kind": "pass_priority"}

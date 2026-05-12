@@ -904,6 +904,76 @@ I25 invariant text below was tightened to reflect that
 PassPriority via apply_action is now bit-equivalent to Python's
 return-fast path.
 
+### CE3. Library pop-orientation divergence — Python pops `library[0]` (head=deck-top), Rust pops `lib.pop()` (tail=deck-top)
+
+- **Pinned by**:
+  `tests/test_parity_smoke.py::test_cross_engine_play_a_land_selector_walks_clean`
+  (strict-xfail on the clean-walk assertion);
+  `tests/test_parity_smoke.py::test_cross_engine_play_a_land_selector_reports_ce3_symptom_at_step_0`
+  (positive-direction "symptom present" pin).
+- **Rust today**: `state_ops_zones.rs::draw_card` does
+  `Arc::make_mut(&mut player.library).pop()` — pops the **tail** of
+  the `Vec<GameObject>`. Built from the same `DeckSpec` source order
+  as Python, this means the LAST card listed in the deckspec is the
+  one Rust draws first.
+- **CR / Python expected**: `src/mtg_bot/turn.py::draw_card` does
+  `top = p.library.pop(0)` — pops the **head** of the `list`. The
+  FIRST card listed in the deckspec is the one Python draws first.
+  Python's convention: index 0 = top of library.
+- **Observable symptom on the smoke harness**:
+  `cross_engine.play_a_land_selector` calls `draw_card` once on
+  each engine at step 0 (side-channel — not via `apply_action`), then
+  emits `pass_priority`. The post-step compare reports two divergences:
+    * `hand_p0`: Python has the deckspec's first card; Rust has the
+      deckspec's last card. (For the slightly_bigger_deckspec,
+      Python's p0_library `[Forest, Mountain, Forest, Grizzly Bears]`
+      gives Python `Forest(id=0)` in hand, Rust `Grizzly Bears(id=3)`.)
+    * `library_p0`: per-object 8-tuple sequences differ by which card
+      was popped (Python's library is the deckspec tail-3; Rust's is
+      the deckspec head-3).
+  When the selector subsequently emits a `play_land` action on the
+  Python-side card_id (step 1), Python plays it; Rust's `play_land`
+  silently returns `false` (the card is not in Rust's hand — it's
+  still in Rust's library) and `battlefield` joins the divergence
+  list. Single root cause; the cascade is observable.
+- **Impact**: HIGH on any decision script that draws cards. Every
+  PHASE_DRAW step in the eventual 1000-game smoke would diverge
+  immediately on which card moved from library to hand, and the
+  decision driver would propose action_dicts for card_ids the
+  opposite engine doesn't have in hand. Without closure, the smoke
+  harness can only exercise the no-draw subset of game states —
+  which is essentially "the first untap step of the first turn,
+  forever."
+- **Closeable**: yes — straightforward Rust-side fix in
+  `state_ops_zones.rs::draw_card` (swap `lib.pop()` for
+  `lib.remove(0)`, or equivalently store the library reversed and
+  keep the `.pop()` shape — the latter avoids the O(n) shift cost
+  on long libraries). Two consequences to handle in the closure
+  slice: (1) the `mulligan` / `mulligan_to_n` / `shuffle_library_with_seed`
+  / `make_state` paths that build the library Vec all currently
+  expect index 0 = bottom-of-library; they'd need to be audited /
+  flipped together to keep the convention consistent. (2) The
+  `state_ops_fingerprint.rs::object_signature` iteration order
+  walks the Vec front-to-back; the fingerprint baselines may shift
+  depending on which direction is chosen as canonical. Recommended:
+  align Rust to Python (index 0 = top), even though the .pop() cost
+  goes from O(1) to O(n) — Python's convention is the parity
+  reference and the eventual 1000-game smoke needs convention-
+  matched zones. Alternative: keep Rust's .pop() shape and add a
+  `library_iter()` wrapper on Rust that reverses for serialization,
+  pushing the convention bridge into the parity layer. Either path
+  is in scope for one slice.
+- **Why this wasn't caught sooner**: nothing in the cross-engine
+  harness drove `draw_card` until this slice. The inaugural Phase 5
+  smoke (`tiny_synthetic_deckspec` + 200 PassPriority decisions) and
+  the probe expansion (`slightly_bigger_deckspec` + 200 PassPriority
+  decisions) both started from empty hands and never moved a card
+  out of the library, so the orientation difference was latent. The
+  Rust-only `mulligan` / `shuffle_library_with_seed` test suite uses
+  the same deckspec on both sides of every assertion, so the
+  orientation convention is self-consistent within the Rust tests
+  and the divergence only surfaces when Python is the comparison.
+
 (Other smoke-flagged divergences may be added by follow-up Phase 5
 slices as the deck pool / decision script grows.)
 

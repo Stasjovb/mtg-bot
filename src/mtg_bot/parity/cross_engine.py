@@ -844,3 +844,79 @@ def _default_pass_priority_selector(py_state, rust_state, step_index: int) -> di
     this slice is meant to surface.
     """
     return {"kind": "pass_priority"}
+
+
+def play_a_land_selector(py_state, rust_state, step_index: int) -> dict:
+    """Phase-5 follow-up selector: draw + play_land probe.
+
+    This selector extends the inaugural pass-priority script with two
+    real action surfaces:
+
+    * **Draw (step 0 only)** — On ``step_index == 0``, the selector
+      mutates BOTH engines directly: it calls Python's
+      ``turn.draw_card`` on p0's library and Rust's ``draw_card``
+      pymethod on the same player. This is NOT an action both engines
+      apply through ``apply_action`` (Python's Action enum has no
+      ``DrawCard`` variant — draws are turn-based actions, not
+      priority decisions). After the side-channel draw, the selector
+      still emits ``pass_priority`` so ``step_both`` runs its
+      compare AFTER the draw and the harness reports whatever
+      hand/library divergences surface.
+
+    * **PlayLand (step >= 1)** — Subsequent steps scan p0's Python
+      hand for a Land printing. If found, the selector emits
+      ``play_land`` for that card's id; otherwise it falls back to
+      ``pass_priority``. The land lookup runs on the Python hand
+      because (a) Python's ``GameObject.printing.card_types`` is the
+      natural type-tag accessor and (b) once the two engines diverge
+      on step 0 the hands differ between them — using Python's hand
+      mirrors "the parity reference decides the script; the Rust
+      impl is exercised by replaying that script", which is the
+      shape any real cross-engine comparison wants.
+
+    Deliberately NOT phased through UNTAP -> UPKEEP -> DRAW ->
+    PRECOMBAT_MAIN. Python's ``apply_action(PlayLand)`` does not
+    gate on the step (the gate lives in ``legal_actions``, NOT in
+    ``actions._play_land`` — see ``src/mtg_bot/actions.py``), and
+    Rust's ``play_land`` primitive likewise has no step gate (see
+    ``rust/src/state_ops_cast.rs::play_land`` docstring "Does not
+    consult sorcery speed"). The land enters from a step=UNTAP state
+    just fine; that mirrors the apply-action-only scope of this
+    slice.
+
+    **CE3 finding.** This selector surfaces the **library pop-
+    orientation divergence** that has been latent in the cross-engine
+    bridge since both engines exposed a ``draw_card`` but nothing
+    drove it. Python's ``turn.draw_card`` does ``library.pop(0)``
+    (TOP of list = deck-top). Rust's ``draw_card`` does ``lib.pop()``
+    (TAIL of Vec = deck-top). Built from the same ``DeckSpec`` in
+    the same source order, the two engines disagree on WHICH card
+    is the next to draw. After the step-0 side-channel draw,
+    ``hand_p0`` and ``library_p0`` field views diverge — and may
+    cascade onto the battlefield if the play_land selector lands on
+    differing cards. See ``docs/RUST_PARITY_GAPS.md`` CE3 entry for
+    the full diagnosis and closure plan.
+    """
+    if step_index == 0:
+        # Drive a single draw on both engines so subsequent steps have
+        # a card in hand to play (or in Rust's case, to compare
+        # against). The Python-side import is local because
+        # ``mtg_bot.turn`` isn't imported at module top (the
+        # cross-engine module deliberately keeps its imports narrow).
+        from mtg_bot.turn import draw_card as _py_draw_card
+
+        if py_state.players[0].library:
+            _py_draw_card(py_state, 0)
+        # Rust's draw_card returns Option<u32>; the result is unused —
+        # we only care about the side-effect on hand/library.
+        rust_state.draw_card(0)
+        return {"kind": "pass_priority"}
+
+    # Subsequent steps: look for a Land in p0's Python hand. The
+    # printing exposes a ``card_types`` tuple; "Land" matches both
+    # basic and nonbasic. If found, emit play_land; else pass.
+    p0_hand = py_state.players[0].hand
+    for obj in p0_hand:
+        if "Land" in obj.printing.card_types:
+            return {"kind": "play_land", "card_id": int(obj.id)}
+    return {"kind": "pass_priority"}
