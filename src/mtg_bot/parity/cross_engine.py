@@ -707,12 +707,15 @@ def _dict_to_python_action(action_dict: dict):
     * ``play_land`` → ``PlayLand(card_id=...)``
     * ``cast_spell`` → ``CastSpell(card_id=...)``
     * ``activate_ability`` → ``ActivateAbility(source_id=..., ability_index=...)``
+    * ``declare_attackers`` → ``DeclareAttackers(attacker_ids=frozenset(...))``
+    * ``declare_blockers`` → ``DeclareBlockers(assignments=((blocker_id, attacker_id), ...))``
 
     Unknown kinds raise ``ValueError`` to mirror Rust's strict-parse
     contract.
     """
     from mtg_bot.actions import (
-        ActivateAbility, CastSpell, PassPriority, PlayLand,
+        ActivateAbility, CastSpell, DeclareAttackers, DeclareBlockers,
+        PassPriority, PlayLand,
     )
 
     kind = action_dict.get("kind")
@@ -726,6 +729,26 @@ def _dict_to_python_action(action_dict: dict):
         return ActivateAbility(
             source_id=int(action_dict["source_id"]),
             ability_index=int(action_dict["ability_index"]),
+        )
+    if kind == "declare_attackers":
+        # Rust shape: ``attacker_ids`` is a list of u32; Python's
+        # ``DeclareAttackers.attacker_ids`` is a frozenset[int]. The
+        # set conversion drops Rust's iteration order, but Python's
+        # ``_declare_attackers`` re-filters through ``eligible_attackers``
+        # which iterates ``state.battlefield`` (centralized) — so the
+        # post-apply attacker order is parity-equivalent regardless.
+        return DeclareAttackers(
+            attacker_ids=frozenset(int(i) for i in action_dict["attacker_ids"])
+        )
+    if kind == "declare_blockers":
+        # Rust shape: ``assignments`` is a list of (blocker_id, attacker_id)
+        # tuples. Python's ``DeclareBlockers.assignments`` is the same
+        # shape (tuple of 2-tuples). Coerce each pair to int.
+        return DeclareBlockers(
+            assignments=tuple(
+                (int(pair[0]), int(pair[1]))
+                for pair in action_dict["assignments"]
+            )
         )
     raise ValueError(
         f"unsupported action kind for cross-engine step: {kind!r} "
@@ -1397,3 +1420,285 @@ def cast_bears_selector(py_state, rust_state, step_index: int) -> dict:
 
     # Delegate to the multi-turn baseline for everything else.
     return multi_turn_selector(py_state, rust_state, step_index)
+
+
+# ---------------------------------------------------------------------------
+# Phase 5 follow-up #5: combat_selector — extend cast_bears_selector past the
+# cast into combat declarations and damage. Builds on cast_bears_selector's
+# state machine + adds three new branches:
+#
+#   1. DECLARE_ATTACKERS step, active player controls a non-sick, non-tapped,
+#      undeclared creature: emit ``declare_attackers`` with that creature.
+#   2. DECLARE_BLOCKERS step, defender has no eligible blockers (this slice's
+#      synthetic deck): emit ``declare_blockers`` with empty assignments so
+#      both engines see the no-block path before advance fires.
+#   3. COMBAT_DAMAGE step: side-channel ``resolve_combat_damage`` (Python) +
+#      ``deal_combat_damage`` (Rust) to actually deal damage, then fall
+#      through to multi_turn_selector for the phase advance. Both helpers
+#      are NOT routed through ``apply_action`` on either engine — Python's
+#      ``simulate.run_step`` calls ``resolve_combat_damage`` directly at the
+#      COMBAT_DAMAGE step; Rust exposes ``deal_combat_damage`` as a
+#      pymethod the harness must invoke explicitly (no auto-fire in
+#      ``advance_phase``). Same "side-channel a method neither engine
+#      reaches via apply_action" pattern as :func:`advance_phase_python`.
+#   4. END_OF_COMBAT step: side-channel ``clear_combat_state`` (Python) +
+#      ``clear_combat`` (Rust) to drop the attacking / blocking flags and
+#      reset the per-state attackers / blockers Vecs. Without this Rust's
+#      ``self.attackers`` would persist across turns and the next
+#      DECLARE_ATTACKERS step's eligibility check would already see the
+#      stale entries.
+#
+# **Expected behavior on the slightly_bigger_deckspec.** After
+# cast_bears_selector lands Bears on p0's battlefield at step 108 (turn 9
+# PRECOMBAT_MAIN), the harness walks the remaining combat steps as pass-
+# only (Bears is summoning-sick, can't attack). Turn 9's combat is empty;
+# turn 9 cleanup wraps to turn 10 (p1 active, no creatures); turn 10
+# cleanup wraps to turn 11 (p0 active, Bears unsick). At turn 11
+# DECLARE_ATTACKERS, the selector emits ``declare_attackers([3])`` for
+# Bears. Defender p1 has no creatures so DECLARE_BLOCKERS emits empty
+# assignments. COMBAT_DAMAGE deals 2 to p1 (Bears unblocked, 2/2). p1's
+# life drops 20 -> 18 on both engines.
+#
+# **Predicted CE candidates** (from RUST_BF_ITERATION_AUDIT.md §3 and
+# CE5_CE6_CE7_CLOSURE_PLAYBOOK.md §3): the audits flag damage assignment
+# ORDER as the next likely surfacing surface (Python walks
+# ``state.battlefield`` filtered by ``attacker.blocked_by`` per
+# combat.py:389/405; Rust walks ``self.blockers`` Vec per
+# state_ops_combat.rs:849/962/1025). On a single-attacker / zero-blocker
+# slice (which this is), the order question doesn't arise — the
+# divergence requires multi-blocker. So this probe is the **gate** that
+# unblocks the order-CE probe rather than the order-CE probe itself.
+# ---------------------------------------------------------------------------
+
+
+def resolve_combat_damage_python(py_state) -> bool:
+    """Harness-side mirror of Python's ``simulate.run_step`` combat-damage hook.
+
+    Python's combat damage is NOT routed through ``apply_action``; the
+    real engine calls :func:`mtg_bot.combat.resolve_combat_damage` from
+    ``simulate.run_step`` when ``state.step == Step.COMBAT_DAMAGE``. The
+    cross-engine harness drives ``apply_action`` directly + side-channel
+    advance_phase, so this hook never fires automatically. The harness
+    helper invokes ``resolve_combat_damage`` against the side opposite
+    the active player (mirroring ``simulate.run_step`` lines 339-346),
+    then runs SBAs.
+
+    Returns ``True`` if any attacker was on the battlefield (i.e. damage
+    actually fired), ``False`` if no attackers (fast no-op).
+
+    Same side-channel HARNESS-only pattern as
+    :func:`advance_phase_python` and :func:`resolve_top_of_stack_python`.
+    """
+    from mtg_bot.combat import resolve_combat_damage
+    from mtg_bot.turn import state_based_actions
+
+    if not any(o.attacking for o in py_state.battlefield):
+        return False
+    # Defender is the non-active player. Python's ``_next_alive`` walks
+    # the player list filtering out lost players; on the synthetic
+    # 2-player deck this collapses to ``1 - active_player_idx``.
+    defender_idx = 1 - py_state.active_player_idx
+    defender_id = py_state.players[defender_idx].id
+    resolve_combat_damage(py_state, defender_id)
+    state_based_actions(py_state)
+    return True
+
+
+def deal_combat_damage_rust(rust_state) -> bool:
+    """Harness-side mirror of Rust's combat-damage entry on the Rust side.
+
+    Rust's ``deal_combat_damage`` is exposed as a pymethod and must be
+    invoked explicitly — ``advance_phase`` only composes mana-pool /
+    untap / draw / cleanup side effects, not combat damage. The harness
+    fires it whenever Python's mirror fired (so both sides apply damage
+    in the same step) and returns ``True`` if any attacker was declared
+    on the Rust side, else ``False``.
+
+    **SBA pass after damage.** Python's
+    :func:`mtg_bot.combat.resolve_combat_damage` (the mirror's parity
+    target) does NOT itself fire SBAs, but
+    :func:`mtg_bot.simulate.run_step` runs ``state_based_actions(state)``
+    immediately after the combat-damage hook (simulate.py:343-345). The
+    Python-side harness mirror :func:`resolve_combat_damage_python`
+    composes the same shape (damage + SBA pass) so this Rust mirror
+    must do the same. Without the SBA pass here, Python's
+    ``has_lost`` / ``is_over`` flips eagerly (e.g. on an empty-library
+    draw flag that gets locked in by SBA) while Rust's surface stays
+    stale — a synthetic asymmetry that's a HARNESS bug, not a real
+    cross-engine divergence (I19's two-layer winloss surface).
+    Mirroring the SBA pass keeps both engines aligned post-CE10.
+    """
+    # ``GameState.attackers`` isn't exposed as a pymethod; we infer
+    # "any attackers" by checking for a non-empty battlefield_snapshot
+    # entry with attacking=True via Python's side instead. Since this
+    # helper is always called paired with resolve_combat_damage_python,
+    # the caller already gates on Python's "any attacker" check; we
+    # just unconditionally invoke ``deal_combat_damage`` here, which
+    # is a no-op when ``self.attackers`` is empty (the for-loop at
+    # state_ops_combat.rs:849 walks an empty Vec).
+    rust_state.deal_combat_damage()
+    # Mirror Python's post-damage ``state_based_actions(state)`` from
+    # simulate.run_step. ``apply_sbas`` is the Rust analog — it walks
+    # every state-based action category (creature lethality, empty-
+    # library loss, life <= 0 loss, ...) and commits the loss-flag
+    # transition into the sticky ``Player.has_lost``. Post-CE10 the
+    # surface accessor ``is_over()`` is gated on ``has_lost``, so
+    # this call is what keeps Python's eager SBA-driven
+    # ``is_over`` / ``is_draw`` flips in sync with Rust's.
+    rust_state.apply_sbas()
+    return True
+
+
+def clear_combat_both(py_state, rust_state) -> None:
+    """Side-channel clear-combat mirror.
+
+    Python's ``simulate.run_step`` calls
+    :func:`mtg_bot.combat.clear_combat_state` at END_OF_COMBAT to drop
+    ``attacking`` / ``blocking`` / ``blocked_by`` from every battlefield
+    object. Rust exposes ``clear_combat`` as a pymethod that empties
+    ``self.attackers`` / ``self.blockers``.
+
+    Without this side-channel, Rust's ``self.attackers`` would persist
+    across turns; the next DECLARE_ATTACKERS step would see stale
+    entries. Python's per-object ``attacking`` flag isn't in the
+    cross-engine field-view's 8-tuple, but the tapped flag IS — and
+    once Bears is tapped from attacking, the per-object signature
+    diverges from a freshly-untapped Bears the next turn until the
+    untap sweep clears it. This helper is the per-call discipline that
+    keeps the symmetric clear-combat shape parity-aligned.
+    """
+    from mtg_bot.combat import clear_combat_state
+
+    clear_combat_state(py_state)
+    rust_state.clear_combat()
+
+
+def combat_selector(py_state, rust_state, step_index: int) -> dict:
+    """Cross-engine smoke selector that drives cast + combat to completion.
+
+    Wraps :func:`cast_bears_selector` and adds four new branches:
+
+      * **DECLARE_ATTACKERS, active player owns a non-sick non-tapped
+        Creature** → emit ``declare_attackers`` with that creature's id.
+        Multiple eligible creatures sort by id (deterministic) and all
+        attack — but on the current ``slightly_bigger_deckspec`` only
+        one Grizzly Bears is ever cast per game, so the set is at most
+        a 1-element set.
+
+      * **DECLARE_BLOCKERS, defender has 0 eligible blockers** → emit
+        ``declare_blockers`` with empty assignments. The empty-set
+        path exercises Rust's ``Action::DeclareBlockers { assignments
+        = [] }`` arm and Python's ``DeclareBlockers(assignments=())``
+        arm so both engines see the no-block dispatch fire (rather
+        than just side-channel advancing past the step).
+
+      * **COMBAT_DAMAGE step** → side-channel
+        :func:`resolve_combat_damage_python` + the Rust mirror, then
+        delegate to multi_turn_selector for the phase advance. The
+        damage application + advance both happen in this single
+        decision so the harness's per-step compare on COMBAT_DAMAGE
+        sees the post-damage state.
+
+      * **END_OF_COMBAT step** → side-channel
+        :func:`clear_combat_both` to drop ``attacking`` / ``blocking``
+        flags and reset Rust's ``self.attackers`` / ``self.blockers``,
+        then delegate to multi_turn_selector for the advance. Without
+        this Rust's attackers Vec would persist into the next turn.
+
+    Anything not matching one of the four combat branches above falls
+    back to :func:`cast_bears_selector` (which itself falls back to
+    :func:`multi_turn_selector`).
+    """
+    from mtg_bot.turn import Step
+
+    cur_step = py_state.step
+    active_idx = py_state.active_player_idx
+    ap = py_state.players[active_idx]
+
+    if cur_step == Step.DECLARE_ATTACKERS:
+        # Find non-sick non-tapped creatures the active player controls.
+        # Filter intentionally narrow: only ``card_types`` containing
+        # "Creature" (the Bears in this deck) — the Forests / Mountains
+        # are also on the bf but lands aren't legal attackers. The
+        # ``attacking is False`` guard prevents re-declaring on the
+        # second visit to this step (the harness emits declare_attackers
+        # ONCE; on the next selector call Bears is now tapped and
+        # filtered out by the ``not o.tapped`` check anyway, but the
+        # explicit ``not o.attacking`` guard is the load-bearing one
+        # for the empty-attacker case).
+        attackers = sorted(
+            int(o.id) for o in py_state.battlefield
+            if o.controller_id == active_idx
+            and "Creature" in o.printing.card_types
+            and not o.tapped
+            and not o.summoning_sick
+            and not getattr(o, "attacking", False)
+        )
+        if attackers:
+            return {
+                "kind": "declare_attackers",
+                "attacker_ids": attackers,
+            }
+        # No eligible attackers (or already declared) — advance past
+        # this step via the multi_turn fallback.
+
+    elif cur_step == Step.DECLARE_BLOCKERS:
+        # Emit ``declare_blockers`` with empty assignments AND
+        # side-channel advance the phase in the same selector call. The
+        # advance has to happen here (not on the next call) because
+        # there's no observable state change from an empty-assignments
+        # ``DeclareBlockers`` apply — without an in-call advance the
+        # selector would re-emit on every visit and the harness would
+        # spin forever in DECLARE_BLOCKERS step.
+        #
+        # The advance fires BEFORE step_both applies declare_blockers.
+        # That's OK because Python's ``_declare_blockers`` doesn't gate
+        # on ``state.step`` (it only reads per-object ``attacking`` /
+        # ``blocking`` flags), and Rust's ``Action::DeclareBlockers``
+        # dispatch goes through ``declare_blocker`` per-pair which
+        # checks ``self.attackers.contains(&attacker_id)``, also not
+        # gated on phase. The post-apply state has Python's step at
+        # COMBAT_DAMAGE and Rust's phase at COMBAT_DAMAGE — both moved
+        # together, parity preserved.
+        attackers_present = any(
+            getattr(o, "attacking", False) for o in py_state.battlefield
+        )
+        if attackers_present:
+            advance_phase_python(py_state)
+            rust_state.advance_phase()
+            return {
+                "kind": "declare_blockers",
+                "assignments": [],
+            }
+
+    elif cur_step == Step.COMBAT_DAMAGE:
+        # Side-channel: apply combat damage on BOTH engines, then run
+        # the multi_turn fallback to advance past this step. The damage
+        # mirror is harmless on a no-attackers state (Rust's
+        # ``deal_combat_damage`` walks an empty Vec; Python's helper
+        # short-circuits on ``any(attacking)``). Fire unconditionally
+        # to keep the per-step compare's invariant simple — combat
+        # damage either fires on both engines or on neither.
+        fired_py = resolve_combat_damage_python(py_state)
+        if fired_py:
+            deal_combat_damage_rust(rust_state)
+        # Fall through to multi_turn_selector to advance past
+        # COMBAT_DAMAGE -> END_OF_COMBAT. The advance fires
+        # AFTER the damage application above.
+
+    elif cur_step == Step.END_OF_COMBAT:
+        # Side-channel: clear ``attacking`` / ``blocking`` flags on
+        # Python objects and ``self.attackers`` / ``self.blockers``
+        # on Rust. Mirrors Python's ``simulate.run_step`` END_OF_COMBAT
+        # hook. Fire BEFORE the advance so the post-step compare sees
+        # the cleared state. (If we cleared AFTER the advance, the
+        # comparison at END_OF_COMBAT would see lingering attackers on
+        # Rust — invisible to the field-view 8-tuple, but a hazard for
+        # future probes that observe via the legal_decisions emitter.)
+        clear_combat_both(py_state, rust_state)
+        # Fall through to multi_turn_selector to advance phase.
+
+    # All non-combat branches (and the combat-branch fall-throughs)
+    # delegate to cast_bears_selector, which in turn delegates to
+    # multi_turn_selector. This composes the inheritance chain cleanly.
+    return cast_bears_selector(py_state, rust_state, step_index)
