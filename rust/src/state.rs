@@ -801,6 +801,29 @@ pub struct GameState {
     /// order via a stable-sort by `etb_timestamp` at battlefield-walk
     /// time rather than emitting the field itself.
     pub next_etb_timestamp: u32,
+    /// **Round 28 freq-2 closure — resolving combat-damage amount.**
+    /// Bookkeeping slot read by
+    /// `Effect::DrawCardsEqualToResolvingCombatDamage` (Starwinder /
+    /// Fear-of-Failed-Tests family) at trigger-resolve time to find
+    /// out "that many cards" — N is the damage amount the resolving
+    /// combat-damage trigger was fired with. Mirrors Python's
+    /// `GameState.resolving_combat_damage_amount` (game.py:2666).
+    ///
+    /// **First-slice scope — READ-ONLY in Rust today.** The Rust
+    /// combat-damage assignment (`state_ops_combat.rs`) does NOT
+    /// write this field yet — coordinating with the CE9 closure agent
+    /// editing the same file. The Effect's resolve arm reads it; in
+    /// the absence of a write site the value stays at 0 and the
+    /// Effect resolves as a silent no-op. Test-only setter
+    /// `set_resolving_combat_damage_amount` lets the test harness
+    /// inject the value to exercise the read-side. See
+    /// SEARCH_LIMITATIONS.md for the deferral note.
+    ///
+    /// Not serialized into the fingerprint — like other transient
+    /// resolve-time slots, the same observable game state pre- and
+    /// post-resolve must produce the same digest regardless of the
+    /// intermediate amount.
+    pub resolving_combat_damage_amount: i32,
 }
 
 #[pymethods]
@@ -911,6 +934,24 @@ impl GameState {
     #[getter]
     fn is_void_active(&self) -> bool {
         self.permanent_left_battlefield_this_turn || self.spell_warped_this_turn
+    }
+
+    /// Test-only setter for the resolving-combat-damage amount slot.
+    /// Mirrors Python's `state.resolving_combat_damage_amount`. The
+    /// production combat-damage assignment code path that would
+    /// write this in Rust is deferred (CE9 closure agent owns
+    /// `state_ops_combat.rs`); for now tests inject the value
+    /// directly to exercise the read-side
+    /// (`Effect::DrawCardsEqualToResolvingCombatDamage`).
+    fn set_resolving_combat_damage_amount(&mut self, amount: i32) {
+        self.resolving_combat_damage_amount = amount;
+    }
+
+    /// Read-only getter for the resolving-combat-damage amount slot.
+    /// Mirrors Python's `state.resolving_combat_damage_amount`.
+    #[getter]
+    fn resolving_combat_damage_amount(&self) -> i32 {
+        self.resolving_combat_damage_amount
     }
 
     /// Read-only getter for the LTB half of the Void predicate.
@@ -1119,5 +1160,6 @@ pub fn make_synthetic_state(
         spell_warped_this_turn: false,
         pending_decisions: Vec::new(),
         next_etb_timestamp: 0,
+        resolving_combat_damage_amount: 0,
     }
 }

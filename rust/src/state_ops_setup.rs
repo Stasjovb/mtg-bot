@@ -327,5 +327,6 @@ pub fn make_state(
         spell_warped_this_turn: false,
         pending_decisions: Vec::new(),
         next_etb_timestamp: 0,
+        resolving_combat_damage_amount: 0,
     })
 }

@@ -1817,6 +1817,33 @@ pub enum Effect {
         cost: ManaCost,
         inner_effect: Box<Effect>,
     },
+    /// **Round 28 freq-2 closure — Starwinder / Fear-of-Failed-Tests
+    /// shape.** "When a creature you control deals combat damage to
+    /// a player, you may draw that many cards." Mirrors Python's
+    /// `DrawCardsEqualToResolvingCombatDamage`
+    /// (`effects/generic/draw_mill.py:89` — 2 EoE cards). The "may"
+    /// is engine-flattened to always-yes (same precedent as other
+    /// OptionalXyz simplifications elsewhere — see the Python class
+    /// docstring).
+    ///
+    /// **Mechanism.** Reads
+    /// `state.resolving_combat_damage_amount` (i32 slot on
+    /// GameState), then draws that many cards for the source's
+    /// controller (zone-scan + stack-scan fallback, same pattern as
+    /// DiscardSelf et al.). `amount <= 0` is a silent no-op.
+    /// Negative library length is handled by the standard CR 704.5b
+    /// path (player flagged for empty-library loss).
+    ///
+    /// **First-slice scope — READ-ONLY tracking.** Rust's combat-
+    /// damage assignment (`state_ops_combat.rs`) does NOT yet write
+    /// `resolving_combat_damage_amount` (coordinating with the CE9
+    /// closure agent owning that file). The Effect arm reads the
+    /// slot, but in absence of a write site the value stays at 0
+    /// across normal combat — the trigger resolves as a no-op. Test
+    /// harness exercises the read-side via the
+    /// `set_resolving_combat_damage_amount` setter on `GameState`.
+    /// SEARCH_LIMITATIONS.md documents the deferred write site.
+    DrawCardsEqualToResolvingCombatDamage,
 }
 
 #[derive(Clone, Debug)]
@@ -3138,6 +3165,13 @@ fn parse_effect(dict: &Bound<'_, PyDict>) -> PyResult<Effect> {
                 inner_effect: Box::new(inner),
             })
         }
+        "draw_cards_equal_to_resolving_combat_damage" => {
+            // Round-28 freq-2 closure — Starwinder / Fear-of-Failed-
+            // Tests shape. Unit variant; reads
+            // state.resolving_combat_damage_amount at resolve time.
+            // No fields to parse.
+            Ok(Effect::DrawCardsEqualToResolvingCombatDamage)
+        }
         "sequence" => {
             // Round-28 highest-frequency-class coverage. Mirrors
             // Python's Sequence(effects: tuple[Effect, ...]).
@@ -3169,7 +3203,7 @@ fn parse_effect(dict: &Bound<'_, PyDict>) -> PyResult<Effect> {
             Ok(Effect::Sequence { effects: children })
         }
         other => Err(PyValueError::new_err(format!(
-            "unknown effect kind {other:?}; valid: deal_damage, draw_cards, gain_life, return_to_hand, mill, mill_target_player, exile_target, tap_target, untap_target, sacrifice, add_counters, discard_card, scry_n, destroy_target, damage_each_opponent, damage_each_creature, create_token, add_mana_to_pool, search_library_for_basic_land_tapped, put_plus_one_counter_on_self, surveil, counter_target_spell, return_creature_from_your_graveyard_to_battlefield, discard_self, each_opponent_loses_life, lose_life, target_opponent_loses_life, each_opponent_discards, destroy_all_creatures, destroy_target_nonland_permanent, destroy_target_artifact, destroy_target_land, deal_damage_any_target, pump_self_until_eot, pump_target_creature_until_eot, sequence, pump_creatures_you_control_until_eot, return_creature_from_your_graveyard_to_hand, put_plus_one_counter_on_each_creature_you_control, put_plus_one_counter_on_creature_you_control, add_n_mana_of_chosen_color, search_library_for_card, pump_creatures_opponents_control_until_eot, put_card_from_graveyard_on_bottom_of_library, move_self_counters_to_target_creature_you_control, deal_damage_equal_to_source_power_any_target, tap_target_artifact_or_creature, conditional_on_tapped_creatures, put_plus_one_counter_on_each_of_up_to_n_target_creatures, put_charge_counters_on_self, create_token_copy_of_target_creature_you_control, optional_sac_artifact_for_effect, owner_puts_target_artifact_or_creature_on_top_or_bottom_of_library, attach_to_target_creature_you_control, destroy_enchanted_permanent, tap_enchanted_permanent, exile_target_creature_until_source_leaves, exile_opponents_nonland_permanent_until_leaves, may_do, look_top_n_put_one_in_hand_rest_to_graveyard, choose_one_mode, if_you_do, each_opponent_mills_cards, pump_target_artifact_or_creature_until_eot, each_opponent_sacrifices_creature, grant_keyword_to_target_creature_until_eot, untap_target_other_permanent, tap_another_target_creature, return_all_creatures_from_your_graveyard_to_battlefield, set_base_pt_until_eot, manifest_dread, manifest_dread_then_attach_self, manifest_dread_then_put_plus_one_counters_on_it, conditional_if_void, deal_damage_to_opponent_creature, optional_mana_cost_then_effect"
+            "unknown effect kind {other:?}; valid: deal_damage, draw_cards, gain_life, return_to_hand, mill, mill_target_player, exile_target, tap_target, untap_target, sacrifice, add_counters, discard_card, scry_n, destroy_target, damage_each_opponent, damage_each_creature, create_token, add_mana_to_pool, search_library_for_basic_land_tapped, put_plus_one_counter_on_self, surveil, counter_target_spell, return_creature_from_your_graveyard_to_battlefield, discard_self, each_opponent_loses_life, lose_life, target_opponent_loses_life, each_opponent_discards, destroy_all_creatures, destroy_target_nonland_permanent, destroy_target_artifact, destroy_target_land, deal_damage_any_target, pump_self_until_eot, pump_target_creature_until_eot, sequence, pump_creatures_you_control_until_eot, return_creature_from_your_graveyard_to_hand, put_plus_one_counter_on_each_creature_you_control, put_plus_one_counter_on_creature_you_control, add_n_mana_of_chosen_color, search_library_for_card, pump_creatures_opponents_control_until_eot, put_card_from_graveyard_on_bottom_of_library, move_self_counters_to_target_creature_you_control, deal_damage_equal_to_source_power_any_target, tap_target_artifact_or_creature, conditional_on_tapped_creatures, put_plus_one_counter_on_each_of_up_to_n_target_creatures, put_charge_counters_on_self, create_token_copy_of_target_creature_you_control, optional_sac_artifact_for_effect, owner_puts_target_artifact_or_creature_on_top_or_bottom_of_library, attach_to_target_creature_you_control, destroy_enchanted_permanent, tap_enchanted_permanent, exile_target_creature_until_source_leaves, exile_opponents_nonland_permanent_until_leaves, may_do, look_top_n_put_one_in_hand_rest_to_graveyard, choose_one_mode, if_you_do, each_opponent_mills_cards, pump_target_artifact_or_creature_until_eot, each_opponent_sacrifices_creature, grant_keyword_to_target_creature_until_eot, untap_target_other_permanent, tap_another_target_creature, return_all_creatures_from_your_graveyard_to_battlefield, set_base_pt_until_eot, manifest_dread, manifest_dread_then_attach_self, manifest_dread_then_put_plus_one_counters_on_it, conditional_if_void, deal_damage_to_opponent_creature, optional_mana_cost_then_effect, draw_cards_equal_to_resolving_combat_damage"
         ))),
     }
 }
@@ -3705,6 +3739,9 @@ pub(crate) fn effect_to_pydict<'py>(
             d.set_item("kind", "optional_mana_cost_then_effect")?;
             d.set_item("cost", mana_cost_to_pydict(py, cost)?)?;
             d.set_item("inner_effect", effect_to_pydict(py, inner_effect)?)?;
+        }
+        Effect::DrawCardsEqualToResolvingCombatDamage => {
+            d.set_item("kind", "draw_cards_equal_to_resolving_combat_damage")?;
         }
     }
     Ok(d)

@@ -6,9 +6,9 @@ This page is the rolling-progress snapshot for the Rust engine port's `Effect` e
 
 ## Headline numbers
 
-- **73 of 228 Python Effect classes covered (32.0%)** — by distinct-class count.
-- **520 of 690 per-card emissions covered (75.4%)** — weighted by how many cards each class appears on. This is the more load-bearing metric: high-frequency classes pull the bulk of cards into Rust even at low class-count coverage.
-- **79 Rust `Effect` variants** in `rust/src/cards.rs` today; 475 parser-claimed printings across the loaded pools.
+- **74 of 228 Python Effect classes covered (32.5%)** — by distinct-class count.
+- **522 of 690 per-card emissions covered (75.7%)** — weighted by how many cards each class appears on. This is the more load-bearing metric: high-frequency classes pull the bulk of cards into Rust even at low class-count coverage.
+- **80 Rust `Effect` variants** in `rust/src/cards.rs` today; 475 parser-claimed printings across the loaded pools.
 - **WARNING: 3 Rust variant(s) with no Python counterpart**: `Effect::ChooseOneMode` -> `ChooseOneMode`, `Effect::GrantKeywordToTargetCreatureUntilEOT` -> `GrantKeywordToTargetCreatureUntilEOT`, `Effect::SetBasePTUntilEOT` -> `SetBasePTUntilEOT`. This indicates bridge drift — either Python emits the class under a different name, or the Rust variant is unused. Audit `RUST_TO_PYTHON_OVERRIDES` / `RUST_AHEAD_OF_POOL` in `scripts/measure_effect_coverage.py`.
 - **1 Rust variant(s) built ahead of the pool** (allowlisted in `RUST_AHEAD_OF_POOL`): `ScryN`. These have no pool card exercising them today and are NOT counted as orphans.
 
@@ -39,7 +39,7 @@ Python Effect classes are split by how many cards they appear on. The Rust port 
 
 ### Frequency 2-9 (53 classes)
 
-- Covered by Rust: **51 / 53** (96.2%)
+- Covered by Rust: **52 / 53** (98.1%)
 
 ### Frequency 1 (161 singletons)
 
@@ -129,6 +129,7 @@ Python Effect classes are split by how many cards they appear on. The Rust port 
 | 77 | `Effect::LookAtTopNRevealOrCounter` | `LookAtTopNRevealOrCounter` | 2 |
 | 78 | `Effect::BecomeLandCreatureUEOT` | `BecomeLandCreatureUEOT` | 13 |
 | 79 | `Effect::OptionalManaCostThenEffect` | `OptionalManaCostThenEffect` | 2 |
+| 80 | `Effect::DrawCardsEqualToResolvingCombatDamage` | `DrawCardsEqualToResolvingCombatDamage` | 2 |
 
 ## High-frequency Python classes NOT yet in Rust
 
