@@ -584,3 +584,247 @@ def test_cross_engine_shared_rng_seed_walks_clean_for_multiple_seeds():
         assert "library_p1" not in fields, (
             f"seed={seed}: library_p1 diverged; fields={sorted(fields)}"
         )
+
+
+# ---------------------------------------------------------------------------
+# CE8 Slice 2 — external-RNG closure across the 6 gameplay shuffle sites.
+#
+# Slice 2 extends the substrate from setup-shuffle (Slice 1) to the
+# remaining 6 gameplay shuffle entries: 3 in state_ops_library.rs
+# (`shuffle_library_with_seed`, `search_library_and_move_to_hand`,
+# `search_library_for_first_of_type_and_shuffle`) and 3 in
+# state_ops_mulligan.rs (`mulligan`, `mulligan_to_n`,
+# `mulligan_atomic`).
+#
+# Each test pins Rust's post-shuffle library against the canonical
+# Python reference (`random.Random(seed).shuffle(obj_ids)`) so a
+# single-swap divergence isolates to one swap, mirroring the per-card
+# Slice 1 byte-for-byte pattern. The cross-engine harness doesn't
+# drive these gameplay shuffles through `walk_both` (mid-game
+# shuffles aren't currently exercised); pinning against the Python MT
+# reference directly is sufficient — both engines consume Fisher-
+# Yates draws from a `random.Random(seed)` so any time both engines
+# call out to the same `random.Random` they produce the same
+# permutation.
+# ---------------------------------------------------------------------------
+
+
+def _build_minimal_rust_state_with_shuffled_library():
+    """Helper: build a Rust state with a known per-player library
+    seeded from a fresh registry. Returns ``(state, registry,
+    p0_pids, p1_pids)`` for downstream gameplay-shuffle tests.
+
+    Uses 16 distinct printings on each side so per-card library order
+    is individually distinguishable post-shuffle (a no-collision setup
+    that surfaces single-swap divergences clearly).
+    """
+    import mtg_bot_engine
+
+    reg = mtg_bot_engine.Registry()
+    for i in range(16):
+        reg.register_printing({
+            "name": f"Forest_{i}",
+            "card_types": ["Land"],
+            "mana_cost": {},
+            "effects": [],
+            "mana_produced": ["G"],
+        })
+    p0_pids = list(range(16))
+    p1_pids = list(range(16))
+    state = mtg_bot_engine.make_state(reg, p0_pids, p1_pids)
+    return state, reg, p0_pids, p1_pids
+
+
+def test_cross_engine_shuffle_library_with_seed_matches_python_mt_byte_for_byte():
+    """CE8 Slice 2 (R3): ``shuffle_library_with_seed(player_id, seed,
+    rng=random.Random(seed))`` produces a library order bit-identical
+    to ``random.Random(seed).shuffle(obj_ids)`` on the Python side.
+    """
+    import random
+
+    state, _reg, _p0_pids, _p1_pids = _build_minimal_rust_state_with_shuffled_library()
+    pre_ids = [d["id"] for d in state.library_snapshot(0)]
+
+    # Python reference.
+    ref = list(pre_ids)
+    random.Random(2026).shuffle(ref)
+
+    state.shuffle_library_with_seed(0, 0, rng=random.Random(2026))
+    post_ids = [d["id"] for d in state.library_snapshot(0)]
+    assert post_ids == ref
+
+
+def test_cross_engine_search_library_and_move_to_hand_matches_python_mt_byte_for_byte():
+    """CE8 Slice 2 (R4): the post-search shuffle in
+    ``search_library_and_move_to_hand`` matches a Python reference
+    (remove-the-first-match + `random.Random(seed).shuffle`)."""
+    import random
+
+    state, _reg, _p0_pids, _p1_pids = _build_minimal_rust_state_with_shuffled_library()
+    pre_ids = [d["id"] for d in state.library_snapshot(0)]
+    # Searched printing_id=5 → matches the obj at library index 5.
+    target_pid = 5
+    target_obj_id = next(
+        d["id"]
+        for d in state.library_snapshot(0)
+        if d["printing_id"] == target_pid
+    )
+
+    ref = list(pre_ids)
+    ref.remove(target_obj_id)
+    random.Random(2026).shuffle(ref)
+
+    found = state.search_library_and_move_to_hand(
+        0, target_pid, 0, rng=random.Random(2026)
+    )
+    assert found == target_obj_id
+    post_ids = [d["id"] for d in state.library_snapshot(0)]
+    assert post_ids == ref
+
+
+def test_cross_engine_search_library_for_first_of_type_and_shuffle_matches_python_mt_byte_for_byte():
+    """CE8 Slice 2 (R5): the post-search shuffle in
+    ``search_library_for_first_of_type_and_shuffle`` matches a Python
+    reference (remove-the-first-match-of-type + `random.Random(seed).shuffle`)."""
+    import random
+
+    state, _reg, _p0_pids, _p1_pids = _build_minimal_rust_state_with_shuffled_library()
+    pre_ids = [d["id"] for d in state.library_snapshot(0)]
+    # All 16 are Lands; first match is library[0].
+    target_obj_id = pre_ids[0]
+
+    ref = list(pre_ids)
+    ref.remove(target_obj_id)
+    random.Random(2026).shuffle(ref)
+
+    found = state.search_library_for_first_of_type_and_shuffle(
+        0, "Land", 0, rng=random.Random(2026)
+    )
+    assert found == target_obj_id
+    post_ids = [d["id"] for d in state.library_snapshot(0)]
+    assert post_ids == ref
+
+
+def test_cross_engine_mulligan_matches_python_mt_byte_for_byte():
+    """CE8 Slice 2 (R6): the in-mulligan shuffle in ``mulligan``
+    matches a Python reference (return hand to library, shuffle with
+    `random.Random(seed)`, draw 7 off the top)."""
+    import random
+    import mtg_bot_engine
+
+    reg = mtg_bot_engine.Registry()
+    for i in range(20):
+        reg.register_printing({
+            "name": f"Forest_{i}",
+            "card_types": ["Land"],
+            "mana_cost": {},
+            "effects": [],
+            "mana_produced": ["G"],
+        })
+    state = mtg_bot_engine.make_state(
+        reg, list(range(20)), list(range(20)),
+        p0_hand_printing_ids=[0, 1, 2],
+    )
+    pre_lib_ids = [d["id"] for d in state.library_snapshot(0)]
+    pre_hand_ids = [d["id"] for d in state.hand_snapshot(0)]
+
+    # Python reference: drain hand into library (in hand order), then
+    # shuffle, then draw 7.
+    combined = list(pre_lib_ids) + list(pre_hand_ids)
+    random.Random(2026).shuffle(combined)
+    expected_hand = combined[:7]
+    expected_lib = combined[7:]
+
+    state.mulligan(0, 0, rng=random.Random(2026))
+    post_hand_ids = [d["id"] for d in state.hand_snapshot(0)]
+    post_lib_ids = [d["id"] for d in state.library_snapshot(0)]
+    assert post_hand_ids == expected_hand
+    assert post_lib_ids == expected_lib
+
+
+def test_cross_engine_mulligan_to_n_matches_python_mt_byte_for_byte():
+    """CE8 Slice 2 (R7): the in-mulligan shuffle in ``mulligan_to_n``
+    matches a Python reference."""
+    import random
+    import mtg_bot_engine
+
+    reg = mtg_bot_engine.Registry()
+    for i in range(20):
+        reg.register_printing({
+            "name": f"Forest_{i}",
+            "card_types": ["Land"],
+            "mana_cost": {},
+            "effects": [],
+            "mana_produced": ["G"],
+        })
+    state = mtg_bot_engine.make_state(
+        reg, list(range(20)), list(range(20)),
+        p0_hand_printing_ids=[0, 1, 2, 3],
+    )
+    pre_lib_ids = [d["id"] for d in state.library_snapshot(0)]
+    pre_hand_ids = [d["id"] for d in state.hand_snapshot(0)]
+
+    combined = list(pre_lib_ids) + list(pre_hand_ids)
+    random.Random(11).shuffle(combined)
+    n_cards = 5
+    expected_hand = combined[:n_cards]
+    expected_lib = combined[n_cards:]
+
+    state.mulligan_to_n(0, n_cards, 0, rng=random.Random(11))
+    assert [d["id"] for d in state.hand_snapshot(0)] == expected_hand
+    assert [d["id"] for d in state.library_snapshot(0)] == expected_lib
+
+
+def test_cross_engine_mulligan_atomic_matches_python_mt_byte_for_byte():
+    """CE8 Slice 2 (R8): the in-mulligan shuffle in ``mulligan_atomic``
+    matches a Python reference."""
+    import random
+    import mtg_bot_engine
+
+    reg = mtg_bot_engine.Registry()
+    for i in range(20):
+        reg.register_printing({
+            "name": f"Forest_{i}",
+            "card_types": ["Land"],
+            "mana_cost": {},
+            "effects": [],
+            "mana_produced": ["G"],
+        })
+    state = mtg_bot_engine.make_state(
+        reg, list(range(20)), list(range(20)),
+        p0_hand_printing_ids=[0, 1, 2, 3, 4],
+    )
+    pre_lib_ids = [d["id"] for d in state.library_snapshot(0)]
+    pre_hand_ids = [d["id"] for d in state.hand_snapshot(0)]
+
+    combined = list(pre_lib_ids) + list(pre_hand_ids)
+    random.Random(99).shuffle(combined)
+    expected_post_redraw_hand = combined[:7]
+
+    # mulligan_atomic on the first call (mulligan_count was 0) expects
+    # exactly 1 bottom id; pick the first id of the expected post-redraw
+    # hand.
+    bottom_ids = [expected_post_redraw_hand[0]]
+    state.mulligan_atomic(0, 0, bottom_ids, rng=random.Random(99))
+    # Hand post-bottom = expected_post_redraw_hand without the bottomed id.
+    assert [d["id"] for d in state.hand_snapshot(0)] == expected_post_redraw_hand[1:]
+
+
+def test_cross_engine_gameplay_shuffles_walk_clean_for_multiple_seeds():
+    """Multi-seed robustness for the gameplay-shuffle substrate.
+    Validates that Rust's ``shuffle_library_with_seed`` (the
+    canonical gameplay-shuffle primitive) matches Python's MT
+    reference across seeds 1, 7, 42, 100 — the same seed range the
+    Slice 1 multi-seed companion uses."""
+    import random
+
+    for seed in (1, 7, 42, 100):
+        state, _reg, _p0_pids, _p1_pids = (
+            _build_minimal_rust_state_with_shuffled_library()
+        )
+        pre_ids = [d["id"] for d in state.library_snapshot(0)]
+        ref = list(pre_ids)
+        random.Random(seed).shuffle(ref)
+        state.shuffle_library_with_seed(0, 0, rng=random.Random(seed))
+        post_ids = [d["id"] for d in state.library_snapshot(0)]
+        assert post_ids == ref, f"seed={seed}: post={post_ids!r} != ref={ref!r}"

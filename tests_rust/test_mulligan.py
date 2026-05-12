@@ -1007,3 +1007,150 @@ def test_mulligan_atomic_fingerprint_stable_for_same_seed_and_bottoms(
     assert a.library_sizes == b.library_sizes
     # Library order (post-shuffle, post-redraw, post-bottom) matches.
     assert a.scry(0, a.library_sizes[0]) == b.scry(0, b.library_sizes[0])
+
+
+# -------------------------------------------------------------------------
+# CE8 Slice 2 — external-RNG path on the three mulligan shuffle sites.
+#
+# `mulligan`, `mulligan_to_n`, and `mulligan_atomic` each accept an
+# optional `rng` kwarg (a Python `random.Random` instance). When
+# supplied, the in-mulligan Fisher-Yates shuffle consumes draws from
+# the supplied stream via `_randbelow`, matching what
+# `random.Random.shuffle(list)` would produce on the Python side
+# (bit-identical). When `rng=None` (default), the legacy xorshift64
+# path runs unchanged.
+# -------------------------------------------------------------------------
+
+
+def _library_ids(state, player_id):
+    return state.scry(player_id, state.library_sizes[player_id])
+
+
+def test_mulligan_with_external_rng_matches_python_shuffle(synthetic_state):
+    """CE8 Slice 2: with `rng=random.Random(seed)`, the in-mulligan
+    shuffle matches Python's `random.Random(seed).shuffle` byte-for-
+    byte. The post-redraw hand + library order are pinned by the
+    matching draw stream.
+    """
+    import random
+
+    # Build the reference order: drain hand into library (in hand order),
+    # shuffle the combined deck with random.Random(seed), then take 7
+    # off the top for the hand.
+    initial_hand = _hand_ids(synthetic_state, 0)
+    initial_lib = _library_ids(synthetic_state, 0)
+    combined = list(initial_lib) + list(initial_hand)
+    random.Random(2026).shuffle(combined)
+    expected_hand = combined[:7]
+    expected_lib = combined[7:]
+
+    synthetic_state.mulligan(0, 0, rng=random.Random(2026))
+    rust_hand = _hand_ids(synthetic_state, 0)
+    rust_lib = _library_ids(synthetic_state, 0)
+
+    assert rust_hand == expected_hand
+    assert rust_lib == expected_lib
+
+
+def test_mulligan_with_external_rng_none_falls_back_to_xorshift(synthetic_state):
+    """Backward compat: `rng=None` is bit-equivalent to omitting the
+    kwarg — production callers stay on xorshift64."""
+    a = synthetic_state.clone_once()
+    b = synthetic_state.clone_once()
+    a.mulligan(0, 42)
+    b.mulligan(0, 42, rng=None)
+    assert a.fingerprint() == b.fingerprint()
+
+
+def test_mulligan_with_external_rng_ignores_seed(synthetic_state):
+    """`rng` takes precedence over `seed`. Same rng state + different
+    seed → identical post-mulligan state."""
+    import random
+
+    a = synthetic_state.clone_once()
+    b = synthetic_state.clone_once()
+    a.mulligan(0, 0, rng=random.Random(7))
+    b.mulligan(0, 99_999, rng=random.Random(7))
+    assert a.fingerprint() == b.fingerprint()
+
+
+def test_mulligan_to_n_with_external_rng_matches_python_shuffle(synthetic_state):
+    """`mulligan_to_n` with an external rng matches a Python reference
+    shuffle: drain hand into library, shuffle with
+    `random.Random(seed)`, draw `n_cards` from the top."""
+    import random
+
+    initial_hand = _hand_ids(synthetic_state, 0)
+    initial_lib = _library_ids(synthetic_state, 0)
+    combined = list(initial_lib) + list(initial_hand)
+    random.Random(11).shuffle(combined)
+    n_cards = 5
+    expected_hand = combined[:n_cards]
+    expected_lib = combined[n_cards:]
+
+    synthetic_state.mulligan_to_n(0, n_cards, 0, rng=random.Random(11))
+    assert _hand_ids(synthetic_state, 0) == expected_hand
+    assert _library_ids(synthetic_state, 0) == expected_lib
+
+
+def test_mulligan_to_n_with_external_rng_none_falls_back(synthetic_state):
+    """Backward compat for `mulligan_to_n`."""
+    a = synthetic_state.clone_once()
+    b = synthetic_state.clone_once()
+    a.mulligan_to_n(0, 6, 42)
+    b.mulligan_to_n(0, 6, 42, rng=None)
+    assert a.fingerprint() == b.fingerprint()
+
+
+def test_mulligan_atomic_with_external_rng_matches_python_shuffle(synthetic_state):
+    """`mulligan_atomic` with an external rng yields the same post-
+    shuffle hand as the Python reference, allowing the caller to pre-
+    compute the bottom set deterministically.
+    """
+    import random
+
+    initial_hand = _hand_ids(synthetic_state, 0)
+    initial_lib = _library_ids(synthetic_state, 0)
+    combined = list(initial_lib) + list(initial_hand)
+    random.Random(2026).shuffle(combined)
+    expected_post_redraw_hand = combined[:7]
+
+    # First mulligan → bottoms 1 card. Pick the first id from the
+    # expected post-redraw hand.
+    bottom_ids = [expected_post_redraw_hand[0]]
+    synthetic_state.mulligan_atomic(0, 0, bottom_ids, rng=random.Random(2026))
+    # Post-bottom hand: the expected hand minus the bottomed card.
+    expected_post_bottom_hand = expected_post_redraw_hand[1:]
+    assert _hand_ids(synthetic_state, 0) == expected_post_bottom_hand
+
+
+def test_mulligan_atomic_with_external_rng_none_falls_back(synthetic_state):
+    """Backward compat for `mulligan_atomic`."""
+    probe = synthetic_state.clone_once()
+    probe.mulligan(0, 9999)
+    bottom_ids = _hand_ids(probe, 0)[:1]
+
+    a = synthetic_state.clone_once()
+    b = synthetic_state.clone_once()
+    a.mulligan_atomic(0, 9999, bottom_ids)
+    b.mulligan_atomic(0, 9999, bottom_ids, rng=None)
+    assert a.fingerprint() == b.fingerprint()
+
+
+def test_mulligan_with_external_rng_is_deterministic(synthetic_state):
+    """Two `random.Random(seed)` instances with the same seed produce
+    byte-identical post-mulligan state."""
+    import random
+
+    a = synthetic_state.clone_once()
+    b = synthetic_state.clone_once()
+    a.mulligan(0, 0, rng=random.Random(2026))
+    b.mulligan(0, 0, rng=random.Random(2026))
+    assert a.fingerprint() == b.fingerprint()
+
+
+def test_mulligan_with_external_rng_raises_on_invalid_rng(synthetic_state):
+    """Passing an object without `_randbelow` surfaces a Python-side
+    error."""
+    with pytest.raises((AttributeError, TypeError)):
+        synthetic_state.mulligan(0, 0, rng=42)
