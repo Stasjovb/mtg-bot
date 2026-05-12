@@ -451,9 +451,18 @@ def test_bottom_cards_full_hand_empties_hand(synthetic_state):
 #    8th call regardless of which variant). ``mulligan_count`` is NOT
 #    serialized into the fingerprint — it's a per-call safety counter,
 #    not part of the gameplay-relevant state digest.
-# 3. G24 still open: there is NO scry-on-keep step (CR 103.4 Paris
-#    mulligan). Closing this needs the decision-callback substrate that
-#    a sibling slice is still building.
+# 3. G24 closed (round-30): the ``keep_hand(player_id)`` pymethod fires
+#    a Paris scry-on-keep when ``mulligan_count > 0``. The flow is N
+#    ``mulligan_atomic`` calls followed by ``keep_hand`` to "stop
+#    mulliganing"; if the player took at least one mulligan, the keep
+#    pops the top of their library and pushes a
+#    ``PendingDecision::ScryChoice``. The caller resolves with
+#    ``submit_scry_decision(keep_on_top: bool)`` or auto-resolves with
+#    strategies ``"scry_keep_top"`` / ``"scry_send_bottom"`` /
+#    ``"default"`` (default keeps the card on top — the conservative
+#    no-agent-seated fallback). Mirrors CR 103.4. Existing tests that
+#    don't call ``keep_hand`` continue to work unchanged: the scry is
+#    OPT-IN at the harness layer.
 #
 # These gaps are accepted simplifications for the parity bridge; if a
 # future slice models a "real" London-mulligan transaction, this comment
@@ -1154,3 +1163,468 @@ def test_mulligan_with_external_rng_raises_on_invalid_rng(synthetic_state):
     error."""
     with pytest.raises((AttributeError, TypeError)):
         synthetic_state.mulligan(0, 0, rng=42)
+
+
+# --- G24 closure: Paris scry-on-keep (round-30) ----------------------------
+#
+# ``keep_hand(player_id)`` is the harness-driven "I'm done mulliganing"
+# step. When ``mulligan_count > 0`` for the player, it pops the top
+# card of their library and pushes a ``PendingDecision::ScryChoice``;
+# the caller resolves with ``submit_scry_decision(keep_on_top: bool)``
+# or auto-resolves. When ``mulligan_count == 0`` (the player kept
+# their initial 7 without mulliganing), it's a no-op — mirrors
+# CR 103.4's "after each mulligan" gate.
+#
+# These tests pin: (1) parse round-trip of the new dict shape;
+# (2) keep_hand fires the scry on mulligan_count > 0;
+# (3) keep_hand is a no-op when mulligan_count == 0;
+# (4) submit_scry_decision routes keep_on_top to lib[0];
+# (5) submit_scry_decision routes send_to_bottom to lib[-1];
+# (6) cross-player isolation (player 0 keep doesn't touch player 1);
+# (7) clone isolation;
+# (8) library shape is preserved (no cards lost / duplicated);
+# (9) error path on missing-fields / wrong-discriminant dispatcher use.
+
+
+def _library_top_id(state, player_id):
+    """Top of player_id's library — lib[0] post-CE3."""
+    return state.library_snapshot(player_id)[0]["id"]
+
+
+def _library_bottom_id(state, player_id):
+    """Bottom of player_id's library — the LAST element of the Vec."""
+    snap = state.library_snapshot(player_id)
+    return snap[-1]["id"]
+
+
+def test_keep_hand_no_op_when_mulligan_count_is_zero(synthetic_state):
+    """Player kept their initial 7 without mulliganing: keep_hand
+    must NOT push a scry decision and must NOT mutate the library.
+    Mirrors CR 103.4 — scry only fires after each mulligan."""
+    fp_before = synthetic_state.fingerprint()
+    lib_before = synthetic_state.library_sizes[0]
+    top_before = _library_top_id(synthetic_state, 0)
+
+    synthetic_state.keep_hand(0)
+
+    # No pending decision pushed.
+    assert synthetic_state.has_pending_decision() is False
+    assert synthetic_state.pending_decisions() == []
+    # Library size and top card unchanged.
+    assert synthetic_state.library_sizes[0] == lib_before
+    assert _library_top_id(synthetic_state, 0) == top_before
+    # Fingerprint byte-identical (no zone mutation, empty pending queue).
+    assert synthetic_state.fingerprint() == fp_before
+
+
+def test_keep_hand_fires_scry_when_mulligan_count_positive(synthetic_state):
+    """After a mulligan, keep_hand pops the library top and pushes a
+    ScryChoice. The popped card is NOT in the library while pending."""
+    # Mulligan once first (bottom 1 card per the atomic primitive).
+    probe = synthetic_state.clone_once()
+    probe.mulligan(0, 42)
+    post_redraw = [o["id"] for o in probe.hand_snapshot(0)]
+    synthetic_state.mulligan_atomic(0, 42, post_redraw[:1])
+
+    lib_before = synthetic_state.library_sizes[0]
+    top_before = _library_top_id(synthetic_state, 0)
+
+    synthetic_state.keep_hand(0)
+
+    # Library lost the top card.
+    assert synthetic_state.library_sizes[0] == lib_before - 1
+    # ScryChoice on the queue carrying that exact id.
+    assert synthetic_state.has_pending_decision() is True
+    pds = synthetic_state.pending_decisions()
+    assert len(pds) == 1
+    assert pds[0]["kind"] == "ScryChoice"
+    assert pds[0]["controller"] == 0
+    assert pds[0]["cards"] == [top_before]
+
+
+def test_keep_hand_unknown_player_raises(synthetic_state):
+    """player_id outside {0, 1} raises ValueError without mutation."""
+    fp_before = synthetic_state.fingerprint()
+    with pytest.raises(ValueError):
+        synthetic_state.keep_hand(99)
+    assert synthetic_state.fingerprint() == fp_before
+
+
+def test_submit_scry_decision_keep_on_top_returns_card_to_library_top(
+    synthetic_state,
+):
+    """keep_on_top=True routes the examined card back to lib[0]
+    (library top). Library size and top card return to pre-keep_hand
+    values."""
+    probe = synthetic_state.clone_once()
+    probe.mulligan(0, 42)
+    post_redraw = [o["id"] for o in probe.hand_snapshot(0)]
+    synthetic_state.mulligan_atomic(0, 42, post_redraw[:1])
+
+    lib_before_keep = synthetic_state.library_sizes[0]
+    top_before_keep = _library_top_id(synthetic_state, 0)
+
+    synthetic_state.keep_hand(0)
+    # Now route keep_on_top=True.
+    synthetic_state.submit_scry_decision(True)
+
+    # Queue drained.
+    assert synthetic_state.has_pending_decision() is False
+    # Library size back to pre-keep_hand value.
+    assert synthetic_state.library_sizes[0] == lib_before_keep
+    # Top card is the same id it was before keep_hand.
+    assert _library_top_id(synthetic_state, 0) == top_before_keep
+
+
+def test_submit_scry_decision_send_to_bottom_routes_to_library_bottom(
+    synthetic_state,
+):
+    """keep_on_top=False routes the examined card to lib[len-1]
+    (library bottom = tail of Vec). Library size returns to pre-
+    keep_hand; bottom card is the examined id; top is what was
+    second-from-top pre-keep_hand."""
+    probe = synthetic_state.clone_once()
+    probe.mulligan(0, 42)
+    post_redraw = [o["id"] for o in probe.hand_snapshot(0)]
+    synthetic_state.mulligan_atomic(0, 42, post_redraw[:1])
+
+    snap_before = [o["id"] for o in synthetic_state.library_snapshot(0)]
+    lib_before_keep = synthetic_state.library_sizes[0]
+    top_before_keep = snap_before[0]
+    second_before_keep = snap_before[1]
+    expected_bottom_before_keep = snap_before[-1]
+
+    synthetic_state.keep_hand(0)
+    synthetic_state.submit_scry_decision(False)
+
+    # Queue drained.
+    assert synthetic_state.has_pending_decision() is False
+    # Library size back to pre-keep_hand value.
+    assert synthetic_state.library_sizes[0] == lib_before_keep
+    # Top of library is now the second card (since the original top
+    # was sent to bottom).
+    assert _library_top_id(synthetic_state, 0) == second_before_keep
+    # Bottom of library is the originally-top card.
+    assert _library_bottom_id(synthetic_state, 0) == top_before_keep
+    # And the previously-bottom card is now second-from-bottom.
+    bottom_two = [
+        o["id"] for o in synthetic_state.library_snapshot(0)[-2:]
+    ]
+    assert bottom_two == [expected_bottom_before_keep, top_before_keep]
+
+
+def test_keep_hand_preserves_library_card_set(synthetic_state):
+    """Cards in the library are not lost or duplicated by the scry-
+    on-keep flow. Both keep_on_top and send_to_bottom preserve the
+    set of card ids."""
+    for keep_on_top in (True, False):
+        state = synthetic_state.clone_once()
+        probe = state.clone_once()
+        probe.mulligan(0, 42)
+        post_redraw = [o["id"] for o in probe.hand_snapshot(0)]
+        state.mulligan_atomic(0, 42, post_redraw[:1])
+        ids_before = set(o["id"] for o in state.library_snapshot(0))
+
+        state.keep_hand(0)
+        state.submit_scry_decision(keep_on_top)
+
+        ids_after = set(o["id"] for o in state.library_snapshot(0))
+        assert ids_before == ids_after, (
+            f"keep_on_top={keep_on_top} changed the library card set"
+        )
+
+
+def test_keep_hand_does_not_affect_other_player(synthetic_state):
+    """Player 0's keep_hand does not touch player 1's library /
+    pending-decisions queue / hand."""
+    # Mulligan player 0.
+    probe = synthetic_state.clone_once()
+    probe.mulligan(0, 42)
+    post_redraw = [o["id"] for o in probe.hand_snapshot(0)]
+    synthetic_state.mulligan_atomic(0, 42, post_redraw[:1])
+
+    p1_hand_before = synthetic_state.hand_sizes[1]
+    p1_lib_before = synthetic_state.library_sizes[1]
+    p1_lib_snap_before = [
+        o["id"] for o in synthetic_state.library_snapshot(1)
+    ]
+
+    synthetic_state.keep_hand(0)
+    synthetic_state.submit_scry_decision(True)
+
+    assert synthetic_state.hand_sizes[1] == p1_hand_before
+    assert synthetic_state.library_sizes[1] == p1_lib_before
+    assert [o["id"] for o in synthetic_state.library_snapshot(1)] == (
+        p1_lib_snap_before
+    )
+
+
+def test_keep_hand_clone_isolation(synthetic_state):
+    """keep_hand on a clone does NOT leak any mutation back to the
+    source state. Source's library, pending-decisions, fingerprint
+    all unchanged."""
+    # Mulligan both source and clone equivalently first so the keep_hand
+    # call on the clone actually fires.
+    probe = synthetic_state.clone_once()
+    probe.mulligan(0, 42)
+    post_redraw = [o["id"] for o in probe.hand_snapshot(0)]
+    synthetic_state.mulligan_atomic(0, 42, post_redraw[:1])
+
+    fp_before = synthetic_state.fingerprint()
+    lib_before = synthetic_state.library_sizes[0]
+    lib_snap_before = [
+        o["id"] for o in synthetic_state.library_snapshot(0)
+    ]
+
+    cloned = synthetic_state.clone_once()
+    cloned.keep_hand(0)
+    cloned.submit_scry_decision(False)
+
+    # Source: byte-identical.
+    assert synthetic_state.fingerprint() == fp_before
+    assert synthetic_state.library_sizes[0] == lib_before
+    assert [
+        o["id"] for o in synthetic_state.library_snapshot(0)
+    ] == lib_snap_before
+    assert synthetic_state.has_pending_decision() is False
+    # Clone: diverged. Original top sent to bottom.
+    assert (
+        cloned.library_snapshot(0)[-1]["id"] == lib_snap_before[0]
+    )
+
+
+def test_keep_hand_changes_fingerprint_while_pending(synthetic_state):
+    """A pending ScryChoice IS part of the gameplay-relevant digest.
+    After keep_hand pushes the decision (but before submit), the
+    fingerprint must differ from the pre-keep_hand baseline."""
+    probe = synthetic_state.clone_once()
+    probe.mulligan(0, 42)
+    post_redraw = [o["id"] for o in probe.hand_snapshot(0)]
+    synthetic_state.mulligan_atomic(0, 42, post_redraw[:1])
+
+    fp_before_keep = synthetic_state.fingerprint()
+    synthetic_state.keep_hand(0)
+    fp_pending = synthetic_state.fingerprint()
+    assert fp_pending != fp_before_keep
+
+
+def test_submit_scry_decision_keep_top_fingerprint_matches_pre_keep(
+    synthetic_state,
+):
+    """keep_on_top=True restores the library to its pre-keep_hand
+    shape, so the post-submit fingerprint matches the pre-keep
+    fingerprint (the only state change was the pending-then-drained
+    decision)."""
+    probe = synthetic_state.clone_once()
+    probe.mulligan(0, 42)
+    post_redraw = [o["id"] for o in probe.hand_snapshot(0)]
+    synthetic_state.mulligan_atomic(0, 42, post_redraw[:1])
+
+    fp_pre_keep = synthetic_state.fingerprint()
+    synthetic_state.keep_hand(0)
+    synthetic_state.submit_scry_decision(True)
+    fp_post_submit = synthetic_state.fingerprint()
+    assert fp_post_submit == fp_pre_keep
+
+
+def test_submit_scry_decision_empty_queue_raises(synthetic_state):
+    """submit_scry_decision with no pending decision raises ValueError."""
+    assert synthetic_state.has_pending_decision() is False
+    with pytest.raises(ValueError):
+        synthetic_state.submit_scry_decision(True)
+
+
+def test_submit_scry_decision_wrong_head_discriminant_raises(synthetic_state):
+    """submit_scry_decision when the head is a different variant
+    (e.g. SurveilChoice from a real surveil) raises ValueError without
+    mutating state."""
+    # Set up: cast a Surveil-1 sorcery to seat a SurveilChoice at the
+    # head of the queue.
+    ZONE_HAND = 0
+    spell_obj_id = synthetic_state.register_and_inject_object(
+        {
+            "name": "Test Surveil 1 (G24 wrong-head test)",
+            "card_types": ["Sorcery"],
+            "mana_cost": {"U": 1},
+            "effects": [{"kind": "surveil", "count": 1}],
+        },
+        0,
+        ZONE_HAND,
+    )
+    synthetic_state.push_to_stack(spell_obj_id, 0)
+    synthetic_state.resolve_top_of_stack_pause()
+    # Head is a SurveilChoice, not a ScryChoice.
+    assert synthetic_state.pending_decisions()[0]["kind"] == "SurveilChoice"
+    fp_before = synthetic_state.fingerprint()
+    with pytest.raises(ValueError):
+        synthetic_state.submit_scry_decision(True)
+    # Queue untouched; fingerprint preserved.
+    assert synthetic_state.fingerprint() == fp_before
+    assert synthetic_state.has_pending_decision() is True
+
+
+def test_auto_resolve_scry_keep_top_routes_to_library_top(synthetic_state):
+    """auto_resolve_pending_decisions with strategy "scry_keep_top"
+    routes the examined card back to library top, draining the
+    queue."""
+    probe = synthetic_state.clone_once()
+    probe.mulligan(0, 42)
+    post_redraw = [o["id"] for o in probe.hand_snapshot(0)]
+    synthetic_state.mulligan_atomic(0, 42, post_redraw[:1])
+
+    lib_before_keep = synthetic_state.library_sizes[0]
+    top_before_keep = _library_top_id(synthetic_state, 0)
+
+    synthetic_state.keep_hand(0)
+    synthetic_state.auto_resolve_pending_decisions("scry_keep_top")
+
+    assert synthetic_state.has_pending_decision() is False
+    assert synthetic_state.library_sizes[0] == lib_before_keep
+    assert _library_top_id(synthetic_state, 0) == top_before_keep
+
+
+def test_auto_resolve_scry_send_bottom_routes_to_library_bottom(
+    synthetic_state,
+):
+    """auto_resolve_pending_decisions with strategy "scry_send_bottom"
+    routes the examined card to library bottom."""
+    probe = synthetic_state.clone_once()
+    probe.mulligan(0, 42)
+    post_redraw = [o["id"] for o in probe.hand_snapshot(0)]
+    synthetic_state.mulligan_atomic(0, 42, post_redraw[:1])
+
+    top_before_keep = _library_top_id(synthetic_state, 0)
+
+    synthetic_state.keep_hand(0)
+    synthetic_state.auto_resolve_pending_decisions("scry_send_bottom")
+
+    assert synthetic_state.has_pending_decision() is False
+    assert _library_bottom_id(synthetic_state, 0) == top_before_keep
+
+
+def test_auto_resolve_default_for_scry_keeps_on_top(synthetic_state):
+    """auto_resolve_pending_decisions with strategy "default" routes
+    a ScryChoice to library top (mirrors Python's conservative no-
+    agent-seated default — keep what you've got)."""
+    probe = synthetic_state.clone_once()
+    probe.mulligan(0, 42)
+    post_redraw = [o["id"] for o in probe.hand_snapshot(0)]
+    synthetic_state.mulligan_atomic(0, 42, post_redraw[:1])
+
+    lib_before_keep = synthetic_state.library_sizes[0]
+    top_before_keep = _library_top_id(synthetic_state, 0)
+
+    synthetic_state.keep_hand(0)
+    synthetic_state.auto_resolve_pending_decisions("default")
+
+    assert synthetic_state.has_pending_decision() is False
+    assert synthetic_state.library_sizes[0] == lib_before_keep
+    assert _library_top_id(synthetic_state, 0) == top_before_keep
+
+
+def test_pending_decisions_dict_round_trip_for_scry_choice(synthetic_state):
+    """The pending_decisions() dict snapshot carries the expected
+    schema for a ScryChoice: kind, source_obj_id, controller, cards."""
+    probe = synthetic_state.clone_once()
+    probe.mulligan(0, 42)
+    post_redraw = [o["id"] for o in probe.hand_snapshot(0)]
+    synthetic_state.mulligan_atomic(0, 42, post_redraw[:1])
+
+    top_before_keep = _library_top_id(synthetic_state, 0)
+
+    synthetic_state.keep_hand(0)
+    pds = synthetic_state.pending_decisions()
+    assert len(pds) == 1
+    pd = pds[0]
+    assert pd["kind"] == "ScryChoice"
+    # source_obj_id is 0 (sentinel — no resolving spell drives the
+    # Paris scry).
+    assert pd["source_obj_id"] == 0
+    assert pd["controller"] == 0
+    assert pd["cards"] == [top_before_keep]
+    # Verify schema completeness.
+    assert set(pd.keys()) == {"kind", "source_obj_id", "controller", "cards"}
+
+
+def test_keep_hand_for_player_one(synthetic_state):
+    """Player 1 can also keep_hand after mulliganing — the controller
+    field on the ScryChoice tracks correctly."""
+    probe = synthetic_state.clone_once()
+    probe.mulligan(1, 42)
+    post_redraw = [o["id"] for o in probe.hand_snapshot(1)]
+    synthetic_state.mulligan_atomic(1, 42, post_redraw[:1])
+
+    top_p1_before = _library_top_id(synthetic_state, 1)
+    synthetic_state.keep_hand(1)
+
+    pds = synthetic_state.pending_decisions()
+    assert len(pds) == 1
+    assert pds[0]["kind"] == "ScryChoice"
+    assert pds[0]["controller"] == 1
+    assert pds[0]["cards"] == [top_p1_before]
+    # Player 0's library / queue unaffected.
+    assert synthetic_state.has_pending_decision() is True
+    # Drain it back to top to keep state consistent.
+    synthetic_state.submit_scry_decision(True)
+    assert _library_top_id(synthetic_state, 1) == top_p1_before
+
+
+def test_keep_hand_after_multiple_mulligans_still_one_scry(synthetic_state):
+    """After multiple mulligans, keep_hand fires exactly ONE scry-1
+    (not one per mulligan). Pins CR 103.4 — the scry is on the kept
+    hand, not on each individual mulligan along the way."""
+    # Take 3 mulligans.
+    for n_mulls in (1, 2, 3):
+        probe = synthetic_state.clone_once()
+        probe.mulligan(0, 50 + n_mulls)
+        post_redraw = [o["id"] for o in probe.hand_snapshot(0)]
+        synthetic_state.mulligan_atomic(
+            0, 50 + n_mulls, post_redraw[:n_mulls]
+        )
+    # Now keep — exactly one ScryChoice gets pushed.
+    synthetic_state.keep_hand(0)
+    pds = synthetic_state.pending_decisions()
+    assert len(pds) == 1
+    assert pds[0]["kind"] == "ScryChoice"
+
+
+def test_keep_hand_with_empty_library_pushes_empty_scry_choice(
+    engine, synthetic_state,
+):
+    """Defensive: if the library is empty at keep_hand time, the
+    variant pushed carries an empty cards Vec. submit / auto-resolve
+    treat this as a no-op."""
+    # Build a tiny state: 1-card library, 0-hand, 0-bf.
+    state = engine.make_synthetic_state(
+        num_battlefield=0,
+        num_hand=0,
+        num_library=1,
+    )
+    # Mulligan to bump mulligan_count to 1 (puts the 1 lib card back,
+    # shuffles, redraws 1 — but mulligan() always draws up to 7 from
+    # what's available, so the 1 card ends in hand).
+    state.mulligan(0, 42)
+    # Now library is empty; manually drain hand too (it has the 1 card).
+    # mulligan_count is 1. keep_hand with empty library: the pop is
+    # skipped and an empty ScryChoice is pushed.
+    # First, drain the hand so the library stays empty.
+    # We can't easily drain via API — instead, just call keep_hand and
+    # verify the pushed cards list is empty (since library has 0 cards
+    # after we move the hand-card into bf via a bottom_cards... actually,
+    # easier: don't bother — just verify the empty-library case via the
+    # cards list being possibly empty. To force an empty library at
+    # keep_hand time, use mulligan_to_n(player, 0, ...) which draws 0
+    # cards after returning the hand to the library; then bottom every
+    # card we just put there. But that's complex; use the direct route:
+    # after mulligan, library has 0 (drew the 1 card up to hand). So
+    # keep_hand sees an empty library.
+    assert state.library_sizes[0] == 0
+    state.keep_hand(0)
+    pds = state.pending_decisions()
+    assert len(pds) == 1
+    assert pds[0]["kind"] == "ScryChoice"
+    assert pds[0]["cards"] == []
+    # submit is a no-op that drains the head.
+    state.submit_scry_decision(True)
+    assert state.has_pending_decision() is False
+    assert state.library_sizes[0] == 0

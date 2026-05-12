@@ -536,6 +536,30 @@ impl GameState {
                         Value::String(format!("{:?}", cost)),
                         Value::String(format!("{:?}", inner_effect)),
                     ]),
+                    // Round-30 G24 closure — Paris scry-on-keep. Same
+                    // examined-cards-as-object-signatures shape as
+                    // SurveilChoice / PickCardFromExaminedChoice — the
+                    // pre-popped library top lives only in this variant
+                    // until the controller picks keep_on_top or
+                    // send_to_bottom, so the examined card must
+                    // participate in the fingerprint to make a pending-
+                    // scry state distinguishable from one where the
+                    // scry already routed.
+                    PendingDecision::ScryChoice {
+                        source_obj_id,
+                        controller,
+                        cards,
+                    } => Value::Array(vec![
+                        Value::String("ScryChoice".to_string()),
+                        json!(*source_obj_id),
+                        json!(*controller),
+                        Value::Array(
+                            cards
+                                .iter()
+                                .map(|o| object_signature(self, o))
+                                .collect(),
+                        ),
+                    ]),
                 })
                 .collect();
             parts_vec.push(Value::Array(pds));
