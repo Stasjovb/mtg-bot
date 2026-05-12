@@ -40,7 +40,7 @@ ZONE_GRAVEYARD = 3
 def _tap_all_default_p0_mana_sources(synthetic_state):
     """Tap every default-mana-producing object on p0's battlefield.
 
-    Post-I49 (auto-tap-from-lands composer), `legal_decisions`
+    Post-I50 (auto-tap-from-lands composer), `legal_decisions`
     affordability widens to include untapped mana sources on bf.
     The synthetic state's default `make_synthetic_state(10, 7, 50)`
     pre-seeds p0 with 5 Forests (mana_produced=["G"]) on the
@@ -357,7 +357,7 @@ def test_bear_caster_no_emission_when_unaffordable(synthetic_state):
     """``legal_decisions`` does NOT emit ActivateAbility(bear, 0)
     when p0's mana pool can't cover {1}{G}.
 
-    Post-I49: the auto-tap-from-lands composer widens emission-side
+    Post-I50: the auto-tap-from-lands composer widens emission-side
     affordability to include untapped mana sources on bf, so this
     test must first tap out the synthetic state's default Forests
     to force the composer to return an empty headroom — only then
@@ -439,7 +439,7 @@ def test_bear_caster_no_emission_when_summoning_sick(synthetic_state):
     )
 
 
-# --- auto-tap-from-lands headroom composer (I49) -------------------
+# --- auto-tap-from-lands headroom composer (I50) -------------------
 
 
 def _forest_dict():
@@ -456,7 +456,7 @@ def _forest_dict():
 def test_auto_tap_headroom_emits_with_empty_pool_plus_untapped_forests(
     synthetic_state,
 ):
-    """**I49 load-bearing pin.** Bear Caster's `{1}{G}` cost is
+    """**I50 load-bearing pin.** Bear Caster's `{1}{G}` cost is
     affordable via auto-tap-from-lands headroom: empty pool + 2
     untapped Forests on p0's bf compose to `{G}{G}` of headroom,
     which covers `{1}{G}` (1 G colored + 1 generic paid by the

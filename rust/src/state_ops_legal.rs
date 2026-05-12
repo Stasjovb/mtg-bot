@@ -524,7 +524,7 @@ fn pool_can_cover(pool: &crate::state::ManaPool, cost: &crate::cards::ManaCost) 
 /// actions that tap the lands first). Matches Python's "permissive
 /// in `legal_actions`, strict in `_activate_ability`" model.
 ///
-/// Pins I49; see `docs/RUST_PARITY_GAPS.md`.
+/// Pins I50; see `docs/RUST_PARITY_GAPS.md`.
 fn auto_tap_headroom_pool(
     state: &crate::state::GameState,
     player_idx: usize,
@@ -1093,7 +1093,7 @@ impl GameState {
             //     composes pool + tappable-land coverage. The
             //     apply-time cost-pay path stays strict (the
             //     controller must have the mana already in pool to
-            //     activate); only emission widens. Pins I49.
+            //     activate); only emission widens. Pins I50.
             let headroom_pool = auto_tap_headroom_pool(self, idx);
             for (ability_index, ability) in
                 printing.activated_abilities.iter().enumerate()

@@ -3522,10 +3522,10 @@ the forked branch.
     true }, effect: AddManaToPool(...) }` entry (retires the
     side-channel).
   - ~~Auto-tap-from-lands composer to match Python's `can_pay_cost`
-    headroom accounting on the Rust side.~~ **CLOSED by I49** —
+    headroom accounting on the Rust side.~~ **CLOSED by I50** —
     see below.
 
-### I49. `legal_decisions` ActivateAbility emission affordability includes auto-tap-from-lands headroom via `auto_tap_headroom_pool` composer (CE20 follow-up closure)
+### I50. `legal_decisions` ActivateAbility emission affordability includes auto-tap-from-lands headroom via `auto_tap_headroom_pool` composer (CE20 follow-up closure)
 
 - **Pinned by**:
   - `tests/test_parity_smoke.py::test_cross_engine_activated_cost_test_e_auto_tap_headroom_emission_parity`
@@ -3561,7 +3561,7 @@ the forked branch.
   The `ActivateAbility` emission filter at
   `state_ops_legal.rs:1056` calls
   `pool_can_cover(&auto_tap_headroom_pool(self, idx), &ability.cost.mana)`
-  instead of the pre-I49 `pool_can_cover(&self.players[idx].mana_pool, ...)`.
+  instead of the pre-I50 `pool_can_cover(&self.players[idx].mana_pool, ...)`.
 
 - **Apply-time strictness preserved.** The
   `ActivateAbility` apply arm in `state_ops_actions.rs:622-656`

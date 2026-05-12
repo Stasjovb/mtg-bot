@@ -8647,9 +8647,9 @@ def test_cross_engine_activated_cost_test_d_python_underpays_silently(parity_smo
 
 
 def test_cross_engine_activated_cost_test_e_auto_tap_headroom_emission_parity(parity_smoke):
-    """**Test E (post-I49 auto-tap-from-lands composer closure)**.
+    """**Test E (post-I50 auto-tap-from-lands composer closure)**.
 
-    Pre-I49 the cross-engine smoke pre-populated p0's pool with
+    Pre-I50 the cross-engine smoke pre-populated p0's pool with
     `{1}{G}` before driving the ActivateAbility emission probe
     because Rust's affordability was POOL-ONLY — Python's
     auto-tap-from-lands accounting wasn't mirrored on the Rust
@@ -8658,7 +8658,7 @@ def test_cross_engine_activated_cost_test_e_auto_tap_headroom_emission_parity(pa
     accounting; Rust's narrower pool-only affordability accepts the
     pre-populated pool the same way".
 
-    Post-I49 Rust's `auto_tap_headroom_pool` composer matches
+    Post-I50 Rust's `auto_tap_headroom_pool` composer matches
     Python's `can_pay_cost` model: emission-side affordability now
     sums pool + headroom from untapped non-sick mana sources on bf.
     With the side-channel's 3 untapped Forests on p0's bf, an empty
@@ -8723,14 +8723,14 @@ def test_cross_engine_activated_cost_test_e_auto_tap_headroom_emission_parity(pa
         f"can_pay_cost auto-tap headroom. Got {py_activate_source_ids}"
     )
 
-    # ---- Rust emits via auto_tap_headroom_pool composer (I49) ----
+    # ---- Rust emits via auto_tap_headroom_pool composer (I50) ----
     rust_actions = rust_state.legal_decisions(0)
     rust_activate_source_ids = [
         a.get("source_id") for a in rust_actions
         if a.get("kind") == "activate_ability"
     ]
     assert rust_bear_id in rust_activate_source_ids, (
-        f"I49 CLOSED — Rust SHOULD now emit ActivateAbility for Bear "
+        f"I50 CLOSED — Rust SHOULD now emit ActivateAbility for Bear "
         f"Caster (id {rust_bear_id}) with 0 pool + 3 untapped Forests, "
         f"matching Python's auto-tap-from-lands accounting. Got Rust "
         f"ActivateAbility source ids: {rust_activate_source_ids}"
