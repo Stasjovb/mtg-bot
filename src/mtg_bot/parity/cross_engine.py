@@ -3205,3 +3205,232 @@ def lifelink_selector(py_state, rust_state, step_index: int) -> dict:
             return {"kind": "pass_priority"}
 
     return retaliation_selector(py_state, rust_state, step_index)
+
+
+# ---------------------------------------------------------------------------
+# Phase 5 follow-up #12: vigilance_selector — extend the cross-engine smoke
+# onto vigilance combat (CR 702.20). Mirrors :func:`lifelink_selector`
+# exactly except:
+#
+#   1. The injected creature carries the ``vigilance`` keyword instead of
+#      ``lifelink``.
+#   2. The trigger-detection gate is keyed on a distinct printing name
+#      ("Bear Watcher") so the vigilance + lifelink + deathtouch +
+#      first-strike probes all stay independent on the same
+#      multi_blocker_deckspec walk.
+#
+# **Different surface from the damage-application axes (FS/DT/trample/
+# lifelink).** Where those four keywords all gate behavior at
+# `apply_damage_pass` / `resolve_combat_damage` (damage-time
+# branching), vigilance gates the DECLARE_ATTACKERS tap step itself.
+# Per CR 702.20 ("Attacking doesn't cause this creature to tap"), a
+# vigilance attacker should NOT be tapped as part of the declare-
+# attackers action — the tap that normally fires per CR 508.1c is
+# suppressed entirely.
+#
+# **Both engines wire vigilance at declare-attackers time.**
+#
+#   * **Python** (``combat.py:103-104``): inside
+#     ``declare_attackers``'s per-attacker loop, after marking
+#     ``obj.attacking = True``, ``if "vigilance" not in
+#     effective_keywords(state, obj): tap_permanent(state, obj)``
+#     suppresses the tap step when vigilance is present.
+#
+#   * **Rust** (``state_ops_combat.rs:654-669``,
+#     ``declare_attacker``): after eligibility checks pass,
+#     ``let has_vigilance = battlefield_has_vigilance(self, obj_id);
+#     if !has_vigilance { mutate_battlefield_obj(self, obj_id, |obj|
+#     { obj.tapped = true; }); }`` skips the tap mutation entirely
+#     for vigilance creatures.
+#
+# **Expected outcome (a) — clean pass.** On the multi_blocker_deckspec
+# walk with the vigilance_selector setup (2/2 vigilance attacker vs
+# two 2/2 Bears multi-block), Python and Rust should both:
+#
+#   * Mark the attacker as ``attacking = True`` and SKIP the tap
+#     mutation per the vigilance gate. Post-DECLARE_ATTACKERS:
+#     ``attacker.tapped == False`` on both engines.
+#   * Run the normal multi-block COMBAT_DAMAGE branch — the
+#     vigilance attacker takes 4 back-damage from two 2/2 Bears,
+#     dies via SBA. Vigilance doesn't gate damage so there's no
+#     extra branch to compose.
+#   * Post-combat: p0 life = 12 (unchanged from pre-combat — no
+#     lifelink → no life gain), p1 life = 20. p0 gy = [Bear Watcher
+#     id 14] (attacker died from 4 back-damage), p1 gy = [Grizzly
+#     Bears id 9] (first blocker took the 2 assigned damage), p1 bf
+#     still has Grizzly Bears id 11 (survived because remaining = 0
+#     after blocker_0 absorbed need=2).
+#
+# If Rust DOESN'T honor vigilance — the predicted CE16 candidate
+# shape — the divergence surfaces at the DECLARE_ATTACKERS step on
+# the ``tapped`` field of the attacker in the per-step harness
+# compare (Python attacker.tapped=False, Rust attacker.tapped=True).
+#
+# **Other possible CE16 shapes to watch for**:
+#
+#   * Vigilance-wired-but-at-wrong-site disagreement (e.g. Rust might
+#     un-tap the attacker after declare instead of skipping the tap;
+#     end state matches but mid-state differs). The harness compares
+#     end-of-step state after each agent decision, so as long as the
+#     vigilance gate runs in the same step boundary (it does — both
+#     engines gate at declare_attackers, not at a later cleanup pass)
+#     the end-of-step compare catches this shape cleanly.
+#   * Vigilance + summoning-sick composition (a sick vigilance creature
+#     should still be rejected as an attacker). Not exercised by this
+#     probe — the injected creature has ``summoning_sick=False``.
+# ---------------------------------------------------------------------------
+
+
+# Name of the synthetic vigilance printing injected by
+# :func:`vigilance_side_channel`. Kept module-level so the trigger-
+# detection gate in :func:`vigilance_selector` and the tests can
+# refer to the same name without drift. Distinct from
+# :data:`_FIRST_STRIKE_PRINTING_NAME`, :data:`_DEATHTOUCH_PRINTING_NAME`,
+# and :data:`_LIFELINK_PRINTING_NAME` so the four probes' trigger
+# gates are mutually independent.
+_VIGILANCE_PRINTING_NAME = "Bear Watcher"
+
+
+def vigilance_side_channel(py_state, rust_state) -> tuple[int, int]:
+    """Side-channel inject a 2/2 vigilance creature onto BOTH engines'
+    p0 battlefield.
+
+    Mirror of :func:`lifelink_side_channel` — same shape, same
+    side-channel-untap of p1's Bears blockers, same return contract.
+    The only differences are:
+
+      * The synthetic printing's keyword is ``"vigilance"`` (single
+        token on both engines; same lower-case spelling, no
+        hyphen/space split like first_strike).
+      * The synthetic printing's name is :data:`_VIGILANCE_PRINTING_NAME`
+        (``"Bear Watcher"``) so this probe's trigger gate doesn't
+        collide with the lifelink probe's ``"Bear Cleric"`` gate,
+        the deathtouch probe's ``"Bear Assassin"`` gate, or the
+        first-strike probe's ``"Bear Knight"`` gate.
+
+    Returns ``(py_obj_id, rust_obj_id)``. Ids match because both
+    engines allocate in lockstep through step 167 of the
+    retaliation walk.
+
+    See :func:`first_strike_side_channel` for the full rationale on
+    why Option B (side-channel inject onto bf) is used rather than
+    Option A (add a vigilance creature to the deckspec). Same
+    reasoning applies: ``CardDef`` doesn't carry a ``keywords``
+    field, so the deckspec route would require multi-file fanout.
+    """
+    from mtg_bot.cards.base import CardPrinting, ManaCost
+    from mtg_bot.game import Zone
+
+    # ---- Python side ----
+    vig_printing = CardPrinting(
+        name=_VIGILANCE_PRINTING_NAME,
+        mana_cost_str="",
+        mana_cost=ManaCost(),
+        type_line="Creature",
+        supertypes=(),
+        card_types=("Creature",),
+        subtypes=(),
+        power=2,
+        toughness=2,
+        produces=frozenset(),
+        keywords=frozenset({"vigilance"}),
+    )
+    py_obj = py_state.new_object(
+        vig_printing, owner_id=0, zone=Zone.BATTLEFIELD,
+    )
+    py_obj.summoning_sick = False
+    py_obj.tapped = False
+    py_obj.damage = 0
+    py_obj.etb_timestamp = py_state.next_timestamp
+    py_state.next_timestamp += 1
+    py_state.battlefield.append(py_obj)
+
+    # ---- Rust side ----
+    ZONE_BATTLEFIELD = 2
+    rust_obj_id = rust_state.register_and_inject_object(
+        {
+            "name": _VIGILANCE_PRINTING_NAME,
+            "card_types": ["Creature"],
+            "power": 2,
+            "toughness": 2,
+            "keywords": ["vigilance"],
+        },
+        0,
+        ZONE_BATTLEFIELD,
+    )
+
+    # Side-channel untap of p1's Bears blockers (same rationale as
+    # lifelink_side_channel / deathtouch_side_channel /
+    # first_strike_side_channel — p1's bears are still tapped from
+    # their turn-12 attack, and the multi-block branch we want to
+    # exercise requires them to be eligible blockers).
+    for obj in py_state.battlefield:
+        if (
+            obj.controller_id == 1
+            and obj.printing.name == "Grizzly Bears"
+        ):
+            obj.tapped = False
+    for entry in rust_state.battlefield_snapshot():
+        if (
+            entry["controller_id"] == 1
+            and entry["printing_name"] == "Grizzly Bears"
+        ):
+            rust_state.untap_object(int(entry["id"]))
+    return int(py_obj.id), int(rust_obj_id)
+
+
+def vigilance_selector(py_state, rust_state, step_index: int) -> dict:
+    """Cross-engine smoke selector that drives a vigilance + multi-block
+    combat on :func:`multi_blocker_deckspec`.
+
+    Structurally identical to :func:`lifelink_selector` —
+    delegates to :func:`retaliation_selector` for everything before
+    and after the side-channel injection, and side-channel-injects a
+    vigilance attacker at the same step-168 trigger point. The only
+    differences:
+
+      * The injected creature carries ``vigilance`` instead of
+        ``lifelink``.
+      * The trigger gate keys on :data:`_VIGILANCE_PRINTING_NAME`
+        (``"Bear Watcher"``) — same gate shape, different name.
+
+    Expected walk shape:
+
+      * **Steps 0-167** — identical to retaliation_selector's walk.
+      * **Step 168** — vigilance injection fires; selector returns
+        ``pass_priority``.
+      * **Steps 169-N** — retaliation_selector delegate drives
+        DECLARE_ATTACKERS([14 = vigilance attacker]) (where the
+        vigilance no-tap surface lands — both engines should set
+        ``attacking=True`` WITHOUT also setting ``tapped=True``),
+        DECLARE_BLOCKERS([[11, 14], [9, 14]]) (multi-block branch
+        because both Bears are now untapped + unsick), COMBAT_DAMAGE
+        (attacker dies from 4 back-damage; same shape as the
+        lifelink probe modulo life totals — no vigilance damage
+        gate).
+
+    The selector is stateless — same idempotency guarantee as
+    lifelink_selector: post-injection, the trigger gate flips
+    permanently because the Bear Watcher object stays in some zone
+    (bf or gy).
+    """
+    vig_already_injected = any(
+        obj.printing.name == _VIGILANCE_PRINTING_NAME
+        for obj in py_state.battlefield
+    ) or any(
+        obj.printing.name == _VIGILANCE_PRINTING_NAME
+        for p in py_state.players
+        for zone_list in (p.hand, p.library, p.graveyard, p.exile)
+        for obj in zone_list
+    )
+
+    if not vig_already_injected:
+        creature_count = sum(
+            1 for o in py_state.battlefield
+            if "Creature" in o.printing.card_types
+        )
+        if creature_count >= 3:
+            vigilance_side_channel(py_state, rust_state)
+            return {"kind": "pass_priority"}
+
+    return retaliation_selector(py_state, rust_state, step_index)
