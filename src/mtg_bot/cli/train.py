@@ -637,8 +637,18 @@ def main(argv=None) -> None:
                 "val_value_losses": history.val_value_losses,
                 "train_policy_losses": history.train_policy_losses,
                 "val_policy_losses": history.val_policy_losses,
-                "final_train_loss": history.train_losses[-1],
-                "final_val_loss": history.val_losses[-1],
+                # ``--epochs 0`` (smoke runs that just want a fresh
+                # registered version with no training) produces empty
+                # loss lists; guard the ``[-1]`` accesses so the post-
+                # train summary doesn't IndexError.
+                "final_train_loss": (
+                    history.train_losses[-1]
+                    if history.train_losses else None
+                ),
+                "final_val_loss": (
+                    history.val_losses[-1]
+                    if history.val_losses else None
+                ),
                 "best_val_loss": history.best_val_loss,
                 "best_val_epoch": history.best_val_epoch,
             },
@@ -696,21 +706,27 @@ def main(argv=None) -> None:
 
     print(f"\n# Done in {elapsed:.1f}s. Registered as {version}.")
     print(f"# Weights:  {registry.weights_path(version)}")
-    print(f"# Final train loss: {history.train_losses[-1]:.4f}")
-    print(f"# Final val loss:   {history.val_losses[-1]:.4f}")
-    if has_any_policy:
+    # ``--epochs 0`` short-circuits the post-train summary block: the
+    # registered version exists, but there were no epochs to report
+    # losses for. Don't IndexError on the empty history lists.
+    if history.train_losses:
+        print(f"# Final train loss: {history.train_losses[-1]:.4f}")
+        print(f"# Final val loss:   {history.val_losses[-1]:.4f}")
+        if has_any_policy:
+            print(
+                f"#   value:  train={history.train_value_losses[-1]:.4f} "
+                f"val={history.val_value_losses[-1]:.4f}"
+            )
+            print(
+                f"#   policy: train={history.train_policy_losses[-1]:.4f} "
+                f"val={history.val_policy_losses[-1]:.4f}"
+            )
         print(
-            f"#   value:  train={history.train_value_losses[-1]:.4f} "
-            f"val={history.val_value_losses[-1]:.4f}"
+            f"# Best val loss: {history.best_val_loss:.4f} "
+            f"at epoch {history.best_val_epoch}"
         )
-        print(
-            f"#   policy: train={history.train_policy_losses[-1]:.4f} "
-            f"val={history.val_policy_losses[-1]:.4f}"
-        )
-    print(
-        f"# Best val loss: {history.best_val_loss:.4f} "
-        f"at epoch {history.best_val_epoch}"
-    )
+    else:
+        print("# epochs_trained=0; no per-epoch losses to report")
 
 
 if __name__ == "__main__":

@@ -325,6 +325,99 @@ def test_train_main_parses_parent_run_id_from_notes(
     assert rows[0]["parent_run_id"] == "iter_007_cycle"
 
 
+def test_train_main_with_epochs_zero_registers_cleanly(
+    monkeypatch, tmp_path,
+):
+    """``--epochs 0`` is a smoke-test mode: just register a fresh
+    version with no actual training. Previously this crashed with
+    ``IndexError: list index out of range`` because the post-train
+    summary blindly indexed ``history.train_losses[-1]``. Now it
+    must complete cleanly with epochs_trained=0 in metadata.
+    """
+    monkeypatch.delenv("MTG_BOT_RUN_DB_PATH", raising=False)
+    monkeypatch.delenv("MTG_BOT_RUN_DB_URL", raising=False)
+
+    data_dir = tmp_path / "data"
+    data_dir.mkdir()
+    _write_synthetic_npz(data_dir, n=64, seed=9)
+
+    registry_root = tmp_path / "weights"
+    progress_path = tmp_path / "progress" / "train.json"
+
+    # The interesting bit: epochs=0 must complete without an
+    # IndexError. If the bug regresses, this raises.
+    cli_train.main(_common_args(
+        data_dir=data_dir,
+        registry_root=registry_root,
+        progress_path=progress_path,
+        epochs=0,
+    ))
+
+    # Weights file + metadata still landed in the registry.
+    weights = registry_root / "v1" / "weights.pt"
+    metadata = registry_root / "v1" / "metadata.json"
+    assert weights.is_file()
+    assert metadata.is_file()
+    meta = json.loads(metadata.read_text(encoding="utf-8"))
+    assert meta["training"]["epochs_trained"] == 0
+    # final_*_loss fields must be present but None (not blindly
+    # indexed into empty lists).
+    assert meta["training_history"]["final_train_loss"] is None
+    assert meta["training_history"]["final_val_loss"] is None
+    assert meta["training_history"]["train_losses"] == []
+
+
+def test_train_main_with_epochs_zero_lands_db_rows(
+    monkeypatch, tmp_path,
+):
+    """``--epochs 0`` with DB configured: start_run + finish_run
+    both land (status=completed). No per-epoch events fire because
+    the trainer's epoch loop never executes. The final aggregate
+    progress row carries epochs_trained=0."""
+    db_path = tmp_path / "runs.db"
+    monkeypatch.setenv("MTG_BOT_RUN_DB_PATH", str(db_path))
+    monkeypatch.delenv("MTG_BOT_RUN_DB_URL", raising=False)
+    monkeypatch.setattr(lifecycle, "git_commit_short", lambda: "abc")
+
+    data_dir = tmp_path / "data"
+    data_dir.mkdir()
+    _write_synthetic_npz(data_dir, n=64, seed=10)
+
+    registry_root = tmp_path / "weights"
+    progress_path = tmp_path / "progress" / "train.json"
+
+    cli_train.main(_common_args(
+        data_dir=data_dir,
+        registry_root=registry_root,
+        progress_path=progress_path,
+        epochs=0,
+    ))
+
+    conn = runs_db.connect(db_path)
+    try:
+        run_rows = list(conn.execute("SELECT * FROM runs"))
+        event_rows = list(conn.execute(
+            "SELECT event_type FROM run_events"
+        ))
+        progress_rows = list(conn.execute("SELECT * FROM run_progress"))
+    finally:
+        conn.close()
+
+    assert len(run_rows) == 1
+    assert run_rows[0]["status"] == "completed"
+    assert run_rows[0]["kind"] == "training"
+    # No epoch_completed events with epochs=0.
+    assert [r["event_type"] for r in event_rows].count(
+        "epoch_completed"
+    ) == 0
+    # The post-train aggregate progress row landed with
+    # training_history showing epochs_trained=0.
+    assert len(progress_rows) == 1
+    extra = json.loads(progress_rows[0]["extra_json"])
+    assert extra["training_history"]["epochs_trained"] == 0
+    assert extra["training_history"]["train_losses"] == []
+
+
 def test_parent_run_id_from_notes_helper():
     """Direct unit test for the helper — covers the regex paths."""
     assert cli_train._parent_run_id_from_notes("") is None
