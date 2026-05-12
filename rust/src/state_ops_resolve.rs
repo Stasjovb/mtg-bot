@@ -4298,6 +4298,57 @@ fn apply_effect(
                 },
             );
         }
+        // Round-28 LookAtTopNRevealOrCounter — Living-Phone / Pulsar-
+        // Squadron-Ace family (freq 2 in EoE pool). Pop top
+        // min(n, library_len) cards into a LookAtTopNRevealOrCounterChoice
+        // and short-circuit. Submit dispatcher routes reveal-yes →
+        // (chosen to hand, rest to library bottom); reveal-no → (all
+        // to library bottom + optional counter-on-miss rider).
+        //
+        // Controller convention: state.active_player (first-slice
+        // shape consistent with Surveil / LookTopN / MayDo / ChooseOneMode
+        // / IfYouDo / ManifestDread).
+        //
+        // Empty / partial library: emit a PendingDecision with a
+        // (possibly empty / partial) cards Vec. Auto-resolve and submit
+        // handle both — empty drains as "no reveal possible" so the
+        // counter-on-miss rider fires (matches Python: empty examined
+        // → no reveal happened → counter rider fires).
+        Effect::LookAtTopNRevealOrCounter {
+            n,
+            filter_name,
+            max_power,
+            counter_on_miss,
+        } => {
+            if *n < 0 {
+                return Err(PyValueError::new_err(format!(
+                    "LookAtTopNRevealOrCounter: n must be non-negative, got {n}"
+                )));
+            }
+            let controller = state.active_player;
+            let pidx = controller as usize;
+            let lib_len = state.players[pidx].library.len();
+            let pop_count = (*n as usize).min(lib_len);
+            let lib_mut: &mut Vec<GameObject> =
+                Arc::make_mut(&mut state.players[pidx].library);
+            let mut cards: Vec<GameObject> = Vec::with_capacity(pop_count);
+            for _ in 0..pop_count {
+                let popped = lib_mut.pop().expect(
+                    "library length checked above; pop cannot fail",
+                );
+                cards.push(popped);
+            }
+            state.pending_decisions.push(
+                PendingDecision::LookAtTopNRevealOrCounterChoice {
+                    source_obj_id,
+                    controller,
+                    cards,
+                    filter_name: filter_name.clone(),
+                    max_power: *max_power,
+                    counter_on_miss: *counter_on_miss,
+                },
+            );
+        }
         // Round-28 mass reanimation. Mirrors Python's
         // ReturnAllCreaturesFromYourGraveyardToBattlefield (Awakening-
         // Hall family, 2+ EoE cards). Iterate source-controller's

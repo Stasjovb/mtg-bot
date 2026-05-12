@@ -500,6 +500,57 @@ pub enum PendingDecision {
         controller: u8,
         cards: Vec<GameObject>,
     },
+    /// **Round-28 look-at-top-N-reveal-or-counter decision substrate.**
+    /// Pushed by `Effect::LookAtTopNRevealOrCounter` (Pulsar-Squadron-
+    /// Ace / Living-Phone family, freq 2 in EoE pool). Shape-aligned
+    /// with `PickCardFromExaminedChoice` but routes very differently:
+    ///
+    /// - On a "reveal yes" submit (with a chosen_id): the chosen card
+    ///   goes to the controller's HAND; the rest go to the BOTTOM of
+    ///   the controller's library (preserving popped order — see the
+    ///   "random order" deferred note on `Effect::LookAtTopNRevealOrCounter`).
+    /// - On a "reveal no" submit (no chosen_id needed): ALL examined
+    ///   cards go to the bottom of the library. THEN, if
+    ///   `counter_on_miss` is true and the source is on the
+    ///   battlefield, a +1/+1 counter lands on the source.
+    ///
+    /// **Filter / max_power constraints.** Carried on the variant so
+    /// the submit dispatcher can validate that `chosen_id` (when
+    /// supplied) matches the filter. The filter check is intrinsic to
+    /// the spell's "you may reveal a [filter_name] card" rider —
+    /// submitting a non-matching id is a programmer error and raises
+    /// `ValueError` transactionally.
+    ///
+    /// **Payload.** Carries the examined GameObjects (same shape as
+    /// `PickCardFromExaminedChoice` / `ManifestDreadChoice`). Order
+    /// matches popped-off-top order: `cards[0]` was topmost, `cards[1]`
+    /// second, etc.
+    ///
+    /// **Submit.** `submit_look_at_top_n_decision(reveal, chosen_id)`
+    /// consumes the head. `reveal=False` ignores `chosen_id` (callers
+    /// pass `None`); `reveal=True` requires `chosen_id` to be one of
+    /// the examined ids whose printing matches the filter.
+    ///
+    /// **Auto-resolve.** `"default"` / `"reveal_no"` route every
+    /// examined card to the library bottom (no hand-route) and fire
+    /// the `counter_on_miss` rider — matches Python's no-agent-seated
+    /// fallback (the Python class only reveals when an agent is
+    /// seated AND the agent picks something via
+    /// `choose_card_from_library`).
+    LookAtTopNRevealOrCounterChoice {
+        source_obj_id: u32,
+        controller: u8,
+        cards: Vec<GameObject>,
+        /// One of `"spacecraft"`, `"creature"`, `"artifact"`. Carried
+        /// for the submit-time filter check.
+        filter_name: String,
+        /// Inclusive power cap for `"creature"` filter. 0 means
+        /// "no cap" — matches Python's class default.
+        max_power: i32,
+        /// Whether to put a +1/+1 counter on source if no card was
+        /// revealed (Pulsar Squadron Ace = true; Living Phone = false).
+        counter_on_miss: bool,
+    },
 }
 
 /// `GameState` carries an `Arc<RegistryData>` so every clone shares

@@ -70,13 +70,16 @@ pub(crate) fn auto_resolve_pending(
         | "if_you_do_yes"
         | "if_you_do_no"
         | "manifest_top"
+        | "reveal_yes"
+        | "reveal_no"
         | "default" => {}
         other => {
             return Err(PyValueError::new_err(format!(
                 "auto_resolve_pending_decisions: unknown strategy {other:?}; \
                  valid strategies: keep_all_on_top, send_all_to_graveyard, \
                  may_do_yes, may_do_no, pick_top, choose_mode_0, \
-                 if_you_do_yes, if_you_do_no, manifest_top, default"
+                 if_you_do_yes, if_you_do_no, manifest_top, reveal_yes, \
+                 reveal_no, default"
             )))
         }
     }
@@ -193,6 +196,66 @@ pub(crate) fn auto_resolve_pending(
                     /*chosen_idx*/ 0,
                 )?;
             }
+            PendingDecision::LookAtTopNRevealOrCounterChoice {
+                source_obj_id,
+                controller,
+                cards,
+                filter_name,
+                max_power,
+                counter_on_miss,
+            } => {
+                // "reveal_yes" → pick the FIRST examined card that
+                // matches the filter (`filter_name` + `max_power` for
+                // the `"creature"` filter) and route it to hand; the
+                // rest go to library bottom. No counter-on-miss rider
+                // fires (a reveal happened).
+                //
+                // "default" / "reveal_no" / unrelated → no reveal; all
+                // examined go to library bottom; fire counter-on-miss
+                // rider if applicable + source still on bf.
+                //
+                // The Python class's no-agent-seated fallback IS the
+                // no-reveal path (the agent-seated check at
+                // `if options and p.agent is not None` guards the
+                // reveal). So our "default" matches Python.
+                let do_reveal_attempt = matches!(strategy, "reveal_yes");
+                let pick_idx: Option<usize> = if do_reveal_attempt {
+                    let mut idx: Option<usize> = None;
+                    for (i, obj) in cards.iter().enumerate() {
+                        if card_matches_filter(
+                            state,
+                            obj.printing_id,
+                            &filter_name,
+                            max_power,
+                        ) {
+                            idx = Some(i);
+                            break;
+                        }
+                    }
+                    idx
+                } else {
+                    None
+                };
+                match pick_idx {
+                    Some(idx) => {
+                        resolve_look_at_top_n_reveal_yes(
+                            state,
+                            controller,
+                            cards,
+                            idx,
+                        )?;
+                    }
+                    None => {
+                        resolve_look_at_top_n_reveal_no(
+                            state,
+                            controller,
+                            source_obj_id,
+                            cards,
+                            counter_on_miss,
+                        )?;
+                    }
+                }
+            }
         }
     }
     Ok(())
@@ -291,6 +354,149 @@ fn resolve_manifest_dread_to_battlefield(
         for mut obj in sorted_cards.into_iter() {
             obj.zone = 3; // ZONE_GRAVEYARD
             gy_mut.push(obj);
+        }
+    }
+    Ok(())
+}
+
+/// Whether the printing with `printing_id` matches `filter_name`
+/// per Python's `LookAtTopNRevealOrCounter._matches`:
+/// - `"spacecraft"`: any Spacecraft card (currently approximated by
+///   checking `card_types` for `"Spacecraft"` or subtypes carrying
+///   the string — Rust printings don't yet track subtypes, so today
+///   we accept only an exact `"Spacecraft"` card_type entry).
+/// - `"creature"`: any Creature; with `max_power > 0`, additionally
+///   require `printed_power <= max_power`. Living Phone shape.
+/// - `"artifact"`: any Artifact.
+///
+/// Unknown filter strings return false (defensive — parse_effect
+/// already rejects them).
+pub(crate) fn card_matches_filter(
+    state: &crate::state::GameState,
+    printing_id: u32,
+    filter_name: &str,
+    max_power: i32,
+) -> bool {
+    let printing = match state.registry.lookup(printing_id) {
+        Some(p) => p,
+        None => return false,
+    };
+    match filter_name {
+        "spacecraft" => {
+            // Rust's CardPrinting carries only `card_types`. Real
+            // Spacecraft cards have card_type == "Spacecraft" (a
+            // top-level type, not a subtype) — first-slice match
+            // mirrors that.
+            printing.card_types.iter().any(|t| t == "Spacecraft")
+        }
+        "creature" => {
+            let is_creature = printing.card_types.iter().any(|t| t == "Creature");
+            if !is_creature {
+                return false;
+            }
+            if max_power > 0 {
+                match printing.power {
+                    Some(p) => (p as i32) <= max_power,
+                    None => false, // no printed power → can't satisfy a cap
+                }
+            } else {
+                true
+            }
+        }
+        "artifact" => printing.card_types.iter().any(|t| t == "Artifact"),
+        _ => false,
+    }
+}
+
+/// Apply a "reveal yes" submit: route `cards[chosen_idx]` to the
+/// controller's hand; route every other examined card to the BOTTOM
+/// of the controller's library (preserving popped order: cards[0],
+/// then cards[1], etc.). No counter-on-miss rider fires.
+fn resolve_look_at_top_n_reveal_yes(
+    state: &mut GameState,
+    controller: u8,
+    cards: Vec<GameObject>,
+    chosen_idx: usize,
+) -> PyResult<()> {
+    if chosen_idx >= cards.len() {
+        // Empty cards (library exhausted) — fall through silently.
+        return Ok(());
+    }
+    let pidx = controller as usize;
+    let mut sorted_cards = cards;
+    let chosen = sorted_cards.remove(chosen_idx);
+    // Route chosen to hand.
+    {
+        let hand_mut: &mut Vec<GameObject> =
+            Arc::make_mut(&mut state.players[pidx].hand);
+        let mut obj = chosen;
+        obj.zone = 0; // ZONE_HAND
+        hand_mut.push(obj);
+    }
+    // Route the rest to library BOTTOM (Vec.insert at position 0 in
+    // popped order — so cards[0] of the remainder ends up DEEPEST,
+    // cards[-1] of the remainder ends up just above it; the original
+    // order-of-popping is preserved bottom-up). With our Vec
+    // convention (top = Vec.last()), "bottom" = index 0.
+    {
+        let lib_mut: &mut Vec<GameObject> =
+            Arc::make_mut(&mut state.players[pidx].library);
+        // We push to bottom (index 0) in popped order so that
+        // cards[0] (the topmost popped) ends up DEEPEST below
+        // cards[1]. This is a deterministic mirror of the "random
+        // order" rider — see SEARCH_LIMITATIONS.
+        for mut obj in sorted_cards.into_iter() {
+            obj.zone = 1; // ZONE_LIBRARY
+            lib_mut.insert(0, obj);
+        }
+    }
+    Ok(())
+}
+
+/// Apply a "reveal no" submit: route ALL examined cards to the
+/// BOTTOM of the controller's library (in popped order). If
+/// `counter_on_miss` is true AND the source is on the battlefield,
+/// add a +1/+1 counter to the source.
+fn resolve_look_at_top_n_reveal_no(
+    state: &mut GameState,
+    controller: u8,
+    source_obj_id: u32,
+    cards: Vec<GameObject>,
+    counter_on_miss: bool,
+) -> PyResult<()> {
+    let pidx = controller as usize;
+    // Bottom in popped order (cards[0] → deepest, cards[-1] →
+    // just above it).
+    {
+        let lib_mut: &mut Vec<GameObject> =
+            Arc::make_mut(&mut state.players[pidx].library);
+        for mut obj in cards.into_iter() {
+            obj.zone = 1; // ZONE_LIBRARY
+            lib_mut.insert(0, obj);
+        }
+    }
+    // Counter-on-miss rider: if `counter_on_miss` is true and source
+    // is currently on some battlefield (Python checks
+    // `source in state.battlefield`), add +1/+1 counter. If source
+    // isn't on bf (still on stack, or destroyed in response), silent
+    // no-op — Python parity.
+    if counter_on_miss {
+        let mut found_pidx: Option<usize> = None;
+        for (pi, player) in state.players.iter().enumerate() {
+            if player.battlefield.iter().any(|o| o.id == source_obj_id) {
+                found_pidx = Some(pi);
+                break;
+            }
+        }
+        if let Some(spi) = found_pidx {
+            let bf_mut: &mut Vec<GameObject> =
+                Arc::make_mut(&mut state.players[spi].battlefield);
+            for obj in bf_mut.iter_mut() {
+                if obj.id == source_obj_id {
+                    obj.counters = obj.counters.saturating_add(1);
+                    break;
+                }
+            }
         }
     }
     Ok(())
@@ -448,6 +654,23 @@ impl GameState {
                     d.set_item("controller", *controller)?;
                     let card_ids: Vec<u32> = cards.iter().map(|o| o.id).collect();
                     d.set_item("cards", card_ids)?;
+                }
+                PendingDecision::LookAtTopNRevealOrCounterChoice {
+                    source_obj_id,
+                    controller,
+                    cards,
+                    filter_name,
+                    max_power,
+                    counter_on_miss,
+                } => {
+                    d.set_item("kind", "LookAtTopNRevealOrCounterChoice")?;
+                    d.set_item("source_obj_id", *source_obj_id)?;
+                    d.set_item("controller", *controller)?;
+                    let card_ids: Vec<u32> = cards.iter().map(|o| o.id).collect();
+                    d.set_item("cards", card_ids)?;
+                    d.set_item("filter_name", filter_name.as_str())?;
+                    d.set_item("max_power", *max_power)?;
+                    d.set_item("counter_on_miss", *counter_on_miss)?;
                 }
             }
             out.append(d)?;
@@ -855,6 +1078,120 @@ impl GameState {
             _ => unreachable!("validated above"),
         };
         resolve_manifest_dread_to_battlefield(self, controller, cards, chosen_idx)
+    }
+
+    /// Consume the head `LookAtTopNRevealOrCounterChoice` on the
+    /// pending-decisions queue.
+    ///
+    /// On `reveal=True`, `chosen_id` MUST be supplied (not None) and
+    /// must:
+    /// 1. Be one of the examined card ids on the head variant.
+    /// 2. Match the variant's `filter_name` (and `max_power` cap for
+    ///    the `"creature"` filter) — Python's `_matches` check.
+    ///
+    /// The chosen card moves to the controller's HAND; the rest go
+    /// to the BOTTOM of the controller's library in popped order
+    /// (first-slice simplification — see
+    /// `Effect::LookAtTopNRevealOrCounter` docstring on the
+    /// "random order" deferred work). No counter-on-miss rider
+    /// fires (a card was revealed).
+    ///
+    /// On `reveal=False`, `chosen_id` is ignored (pass any u32 — `0`
+    /// is the conventional sentinel). ALL examined cards go to the
+    /// library bottom in popped order. If the variant's
+    /// `counter_on_miss` is true AND the source is on the battlefield,
+    /// a +1/+1 counter lands on the source. Source-not-on-bf is a
+    /// silent no-op for the counter rider (matches Python's
+    /// `source in state.battlefield` check).
+    ///
+    /// Transactional shape: validation runs before any mutation; a
+    /// failed submit leaves the queue intact.
+    ///
+    /// Raises `ValueError` if:
+    /// - the queue is empty
+    /// - the head is not a `LookAtTopNRevealOrCounterChoice`
+    /// - `reveal=True` and `chosen_id` is not one of the examined ids
+    /// - `reveal=True` and the chosen card's printing doesn't match
+    ///   the filter
+    #[pyo3(signature = (reveal, chosen_id=None))]
+    fn submit_look_at_top_n_decision(
+        &mut self,
+        reveal: bool,
+        chosen_id: Option<u32>,
+    ) -> PyResult<()> {
+        if self.pending_decisions.is_empty() {
+            return Err(PyValueError::new_err(
+                "submit_look_at_top_n_decision: no pending decision",
+            ));
+        }
+        // Inspect head — fail before any mutation.
+        let chosen_idx: Option<usize> = match &self.pending_decisions[0] {
+            PendingDecision::LookAtTopNRevealOrCounterChoice {
+                cards,
+                filter_name,
+                max_power,
+                ..
+            } => {
+                if reveal {
+                    let cid = chosen_id.ok_or_else(|| {
+                        PyValueError::new_err(
+                            "submit_look_at_top_n_decision: reveal=True requires \
+                             chosen_id (got None)",
+                        )
+                    })?;
+                    let idx = cards.iter().position(|o| o.id == cid).ok_or_else(|| {
+                        PyValueError::new_err(format!(
+                            "submit_look_at_top_n_decision: chosen_id {cid} is not \
+                             one of the examined card ids {:?}",
+                            cards.iter().map(|o| o.id).collect::<Vec<u32>>()
+                        ))
+                    })?;
+                    // Filter check.
+                    let obj = &cards[idx];
+                    if !card_matches_filter(self, obj.printing_id, filter_name, *max_power) {
+                        return Err(PyValueError::new_err(format!(
+                            "submit_look_at_top_n_decision: chosen card (id {cid}, \
+                             printing_id {}) does not match filter {filter_name:?} \
+                             (max_power={max_power})",
+                            obj.printing_id
+                        )));
+                    }
+                    Some(idx)
+                } else {
+                    None
+                }
+            }
+            other => {
+                return Err(PyValueError::new_err(format!(
+                    "submit_look_at_top_n_decision: head of pending-decisions queue is \
+                     not a LookAtTopNRevealOrCounterChoice (got {:?}); call the \
+                     variant-specific submit_* dispatcher",
+                    std::mem::discriminant(other)
+                )));
+            }
+        };
+        // Validation passed — consume the head and route.
+        let decision = self.pending_decisions.remove(0);
+        let (source_obj_id, controller, cards, counter_on_miss) = match decision {
+            PendingDecision::LookAtTopNRevealOrCounterChoice {
+                source_obj_id,
+                controller,
+                cards,
+                counter_on_miss,
+                ..
+            } => (source_obj_id, controller, cards, counter_on_miss),
+            _ => unreachable!("validated above"),
+        };
+        match chosen_idx {
+            Some(idx) => resolve_look_at_top_n_reveal_yes(self, controller, cards, idx),
+            None => resolve_look_at_top_n_reveal_no(
+                self,
+                controller,
+                source_obj_id,
+                cards,
+                counter_on_miss,
+            ),
+        }
     }
 
     /// Drain the pending-decisions queue using a deterministic
