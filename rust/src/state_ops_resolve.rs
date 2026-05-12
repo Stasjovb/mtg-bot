@@ -2501,29 +2501,30 @@ fn apply_effect(
             }
         }
         // DestroyTargetNonlandPermanent. CR 701.7 with non-land filter
-        // — Drag to the Roots / Drill Too Deep pattern. Scans defender's
-        // battlefield top-to-bottom; picks first non-Land, non-
-        // indestructible object. Empty / only-Lands / only-indestructible
-        // defender bf = silent fizzle.
+        // — Drag to the Roots / Drill Too Deep pattern. Walks BOTH
+        // players' battlefield in ETB-timestamp order via the shared
+        // `crate::bf_iter::bf_iter_etb_sorted` helper, picking the
+        // first non-Land, non-indestructible permanent. Mirrors
+        // Python's `effects/generic/destroy.py:DestroyTargetNonlandPermanent`
+        // `TargetSpec(~IsLand() & ~IsPlayer())` filter against the
+        // centralized `state.battlefield` walk (no controller
+        // restriction). See invariant I39.
         Effect::DestroyTargetNonlandPermanent => {
-            let defender_idx = (1 - state.active_player) as usize;
-            let target_id: Option<u32> = {
-                let bf = &state.players[defender_idx].battlefield;
-                let registry = &state.registry;
-                bf.iter().find_map(|obj| {
-                    let printing = registry.lookup(obj.printing_id)?;
+            let target: Option<(usize, u32)> = crate::bf_iter::bf_iter_etb_sorted(state)
+                .into_iter()
+                .find_map(|obj| {
+                    let printing = state.registry.lookup(obj.printing_id)?;
                     if printing.card_types.iter().any(|t| t == "Land") {
                         return None;
                     }
                     if printing.keywords.iter().any(|k| k == "indestructible") {
                         return None;
                     }
-                    Some(obj.id)
-                })
-            };
-            if let Some(target_id) = target_id {
+                    Some((obj.controller as usize, obj.id))
+                });
+            if let Some((pidx, target_id)) = target {
                 let bf_mut: &mut Vec<GameObject> =
-                    Arc::make_mut(&mut state.players[defender_idx].battlefield);
+                    Arc::make_mut(&mut state.players[pidx].battlefield);
                 let pos = bf_mut
                     .iter()
                     .position(|o| o.id == target_id)
@@ -2540,40 +2541,37 @@ fn apply_effect(
                 obj.attached_to = None;
                 obj.exiled_with_source = None;
                 let printing_id = obj.printing_id;
-                Arc::make_mut(&mut state.players[defender_idx].graveyard).push(obj);
+                Arc::make_mut(&mut state.players[pidx].graveyard).push(obj);
                 // Round-29 Void LTB: nonland target by filter; helper
                 // re-checks via printing for defense-in-depth.
                 mark_left_battlefield_if_nonland(state, printing_id);
             }
         }
         // DestroyTargetArtifact. CR 701.7 with Artifact filter — Drill
-        // Too Deep / Scour for Scrap pattern. 2 cards in EoE pool per
-        // round-20 measurement. Mirrors round-24
-        // DestroyTargetNonlandPermanent line-for-line but with an
-        // `card_types.contains("Artifact")` filter in place of the
-        // `!card_types.contains("Land")` filter. Scans defender's
-        // battlefield top-to-bottom; picks the first Artifact that is
-        // not indestructible. Empty / no-artifacts /
-        // only-indestructible-artifacts defender bf = silent fizzle.
+        // Too Deep / Scour for Scrap pattern. Walks BOTH players'
+        // battlefield in ETB-timestamp order via the shared
+        // `crate::bf_iter::bf_iter_etb_sorted` helper, picking the
+        // first Artifact that is not indestructible. Mirrors
+        // Python's `effects/generic/destroy.py:DestroyTargetArtifact`
+        // `TargetSpec(IsArtifact())` filter against the centralized
+        // `state.battlefield` walk (no controller restriction). See
+        // invariant I39.
         Effect::DestroyTargetArtifact => {
-            let defender_idx = (1 - state.active_player) as usize;
-            let target_id: Option<u32> = {
-                let bf = &state.players[defender_idx].battlefield;
-                let registry = &state.registry;
-                bf.iter().find_map(|obj| {
-                    let printing = registry.lookup(obj.printing_id)?;
+            let target: Option<(usize, u32)> = crate::bf_iter::bf_iter_etb_sorted(state)
+                .into_iter()
+                .find_map(|obj| {
+                    let printing = state.registry.lookup(obj.printing_id)?;
                     if !printing.card_types.iter().any(|t| t == "Artifact") {
                         return None; // not an artifact
                     }
                     if printing.keywords.iter().any(|k| k == "indestructible") {
                         return None;
                     }
-                    Some(obj.id)
-                })
-            };
-            if let Some(target_id) = target_id {
+                    Some((obj.controller as usize, obj.id))
+                });
+            if let Some((pidx, target_id)) = target {
                 let bf_mut: &mut Vec<GameObject> =
-                    Arc::make_mut(&mut state.players[defender_idx].battlefield);
+                    Arc::make_mut(&mut state.players[pidx].battlefield);
                 let pos = bf_mut
                     .iter()
                     .position(|o| o.id == target_id)
@@ -2590,7 +2588,7 @@ fn apply_effect(
                 obj.attached_to = None;
                 obj.exiled_with_source = None;
                 let printing_id = obj.printing_id;
-                Arc::make_mut(&mut state.players[defender_idx].graveyard).push(obj);
+                Arc::make_mut(&mut state.players[pidx].graveyard).push(obj);
                 // Round-29 Void LTB: artifact target may also be a
                 // land (treasure tokens / artifact lands). Helper gates
                 // on the printing.
@@ -2598,32 +2596,30 @@ fn apply_effect(
             }
         }
         // DestroyTargetLand. CR 701.7 with Land filter — Dust Bowl /
-        // Petrified Field pattern. 2 cards in EoE pool per round-20
-        // measurement. Mirrors round-25 DestroyTargetArtifact
-        // line-for-line but with an `card_types.contains("Land")`
-        // filter in place of the `card_types.contains("Artifact")`
-        // filter. Scans defender's battlefield top-to-bottom; picks
-        // the first Land that is not indestructible. Empty / no-lands
-        // / only-indestructible-lands defender bf = silent fizzle.
+        // Petrified Field pattern. Walks BOTH players' battlefield
+        // in ETB-timestamp order via the shared
+        // `crate::bf_iter::bf_iter_etb_sorted` helper, picking the
+        // first Land that is not indestructible. Mirrors Python's
+        // `effects/generic/destroy.py:DestroyTargetLand`
+        // `TargetSpec(IsLand())` filter against the centralized
+        // `state.battlefield` walk (no controller restriction). See
+        // invariant I39.
         Effect::DestroyTargetLand => {
-            let defender_idx = (1 - state.active_player) as usize;
-            let target_id: Option<u32> = {
-                let bf = &state.players[defender_idx].battlefield;
-                let registry = &state.registry;
-                bf.iter().find_map(|obj| {
-                    let printing = registry.lookup(obj.printing_id)?;
+            let target: Option<(usize, u32)> = crate::bf_iter::bf_iter_etb_sorted(state)
+                .into_iter()
+                .find_map(|obj| {
+                    let printing = state.registry.lookup(obj.printing_id)?;
                     if !printing.card_types.iter().any(|t| t == "Land") {
                         return None; // not a land
                     }
                     if printing.keywords.iter().any(|k| k == "indestructible") {
                         return None;
                     }
-                    Some(obj.id)
-                })
-            };
-            if let Some(target_id) = target_id {
+                    Some((obj.controller as usize, obj.id))
+                });
+            if let Some((pidx, target_id)) = target {
                 let bf_mut: &mut Vec<GameObject> =
-                    Arc::make_mut(&mut state.players[defender_idx].battlefield);
+                    Arc::make_mut(&mut state.players[pidx].battlefield);
                 let pos = bf_mut
                     .iter()
                     .position(|o| o.id == target_id)
@@ -2640,7 +2636,7 @@ fn apply_effect(
                 obj.attached_to = None;
                 obj.exiled_with_source = None;
                 let printing_id = obj.printing_id;
-                Arc::make_mut(&mut state.players[defender_idx].graveyard).push(obj);
+                Arc::make_mut(&mut state.players[pidx].graveyard).push(obj);
                 // Round-29 Void LTB: target is a Land by filter, so the
                 // helper short-circuits to no-op — but call it anyway
                 // for uniformity (the gate lives in one place, every
@@ -3470,30 +3466,35 @@ fn apply_effect(
                 state.players[defender_idx].life -= amount;
             }
         }
-        // Round-28 broader-filter tap. Pick first defender permanent
-        // whose printing's card_types contains "Artifact" OR
-        // "Creature". Idempotent on already-tapped target. No
-        // eligible target → silent fizzle.
+        // Round-28 broader-filter tap. Walks BOTH players' battlefield
+        // in ETB-timestamp order via the shared
+        // `crate::bf_iter::bf_iter_etb_sorted` helper, picking the
+        // first permanent whose printing's `card_types` contains
+        // "Artifact" OR "Creature". Idempotent on already-tapped
+        // target. No eligible target → silent fizzle. Mirrors
+        // Python's `effects/generic/tap.py:TapTargetArtifactOrCreature`
+        // filter against the centralized `state.battlefield` walk
+        // (no controller restriction). See invariant I39.
         Effect::TapTargetArtifactOrCreature => {
-            let defender = (1 - state.active_player) as usize;
-            let target_id: Option<u32> = {
-                let bf = &state.players[defender].battlefield;
-                let registry = &state.registry;
-                bf.iter().find_map(|obj| {
-                    let printing = registry.lookup(obj.printing_id)?;
-                    if printing.card_types.iter().any(|t| t == "Artifact" || t == "Creature")
+            let target: Option<(usize, u32)> = crate::bf_iter::bf_iter_etb_sorted(state)
+                .into_iter()
+                .find_map(|obj| {
+                    let printing = state.registry.lookup(obj.printing_id)?;
+                    if printing
+                        .card_types
+                        .iter()
+                        .any(|t| t == "Artifact" || t == "Creature")
                     {
-                        Some(obj.id)
+                        Some((obj.controller as usize, obj.id))
                     } else {
                         None
                     }
-                })
-            };
-            let Some(target_id) = target_id else {
+                });
+            let Some((pidx, target_id)) = target else {
                 return Ok(()); // fizzle
             };
             let bf_mut: &mut Vec<GameObject> =
-                Arc::make_mut(&mut state.players[defender].battlefield);
+                Arc::make_mut(&mut state.players[pidx].battlefield);
             for obj in bf_mut.iter_mut() {
                 if obj.id == target_id {
                     obj.tapped = true;

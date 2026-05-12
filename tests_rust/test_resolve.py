@@ -6187,34 +6187,39 @@ def _vanilla_artifact_dict():
 def test_resolve_destroy_target_nonland_permanent_destroys_first_creature(
     synthetic_state,
 ):
-    """End-to-end happy path. The synthetic seed places p1's bf as
-    [Forest, Forest, Forest, Forest, Forest, Bears, Bears, ...] —
-    the first Bears object (obj_id 72 = base 67 + 5 forests) is the
-    first NON-Land permanent. Resolving Drag must skip the 5 Forests
-    and destroy that Bears."""
-    target_obj_id = 72  # p1's bf[5], the first Bears
+    """End-to-end happy path. The synthetic seed places p0's bf as
+    [Forest×5, Bears×5] (ids 0-9) and p1's bf as [Forest×5, Bears×5]
+    (ids 67-76), all with ETB timestamp 0 (synthetic fixture). The
+    centralized `bf_iter_etb_sorted` walk under the I39 cross-player
+    closure produces stable-sort tie-break order p0-then-p1, so the
+    first NON-Land permanent is p0's bf[5] = obj_id 5 (p0's first
+    Bears). Resolving Drag must skip the 5 Forests and destroy that
+    Bears."""
+    target_obj_id = 5  # p0's bf[5], the first Bears across both players
     assert synthetic_state.find_object_zone(target_obj_id) == ZONE_BATTLEFIELD
 
     spell_obj_id = synthetic_state.register_and_inject_object(
         _drag_to_the_roots_dict(), 0, ZONE_HAND
     )
-    p1_bf_before = synthetic_state.battlefield_sizes[1]
-    p1_grave_before = synthetic_state.graveyard_sizes[1]
+    p0_bf_before = synthetic_state.battlefield_sizes[0]
     p0_grave_before = synthetic_state.graveyard_sizes[0]
 
     synthetic_state.push_to_stack(spell_obj_id, 0)
     synthetic_state.resolve_top_of_stack()
 
-    # The first non-Land (Bears at obj_id 72) moved to p1's graveyard.
+    # The first non-Land (Bears at obj_id 5 on p0's bf) moved to p0's
+    # graveyard. p0 is BOTH source-controller AND owner of the chosen
+    # target — DestroyTargetNonlandPermanent doesn't restrict by
+    # controller, mirroring Python's any-bf filter.
     assert synthetic_state.find_object_zone(target_obj_id) == ZONE_GRAVEYARD
-    assert synthetic_state.battlefield_sizes[1] == p1_bf_before - 1
-    assert synthetic_state.graveyard_sizes[1] == p1_grave_before + 1
-    # p1's bf[0] Forest stays put (Lands skipped).
-    assert synthetic_state.find_object_zone(67) == ZONE_BATTLEFIELD
-    # Stack drained; source sorcery in p0's graveyard.
+    assert synthetic_state.battlefield_sizes[0] == p0_bf_before - 1
+    # p0's bf[0] Forest stays put (Lands skipped).
+    assert synthetic_state.find_object_zone(0) == ZONE_BATTLEFIELD
+    # Stack drained; source sorcery also lands in p0's graveyard, plus
+    # the destroyed Bears, so p0's graveyard grew by 2.
     assert synthetic_state.is_stack_empty() is True
     assert synthetic_state.find_object_zone(spell_obj_id) == ZONE_GRAVEYARD
-    assert synthetic_state.graveyard_sizes[0] == p0_grave_before + 1
+    assert synthetic_state.graveyard_sizes[0] == p0_grave_before + 2
 
 
 def test_resolve_destroy_target_nonland_permanent_only_land_fizzles(engine):
@@ -6415,14 +6420,16 @@ def test_resolve_destroy_target_nonland_permanent_empty_battlefield_fizzles(
     assert state.graveyard_sizes[0] == p0_grave_before + 1
 
 
-def test_resolve_destroy_target_nonland_permanent_skips_active_players_own(
+def test_resolve_destroy_target_nonland_permanent_targets_source_controller_when_only_eligible(
     engine,
 ):
-    """The scan walks the DEFENDING player's battlefield only. The
-    active player's own non-Land permanents are NOT viable targets.
-    Setup: p1's bf is empty, p0's bf has a Creature. Resolving Drag
-    (cast by p0, defender = p1) must FIZZLE — not destroy p0's own
-    creature."""
+    """The walk crosses BOTH players' battlefield (I39 closure).
+    DestroyTargetNonlandPermanent has no controller restriction
+    (mirroring Python's `~IsLand() & ~IsPlayer()` filter against the
+    centralized `state.battlefield`), so when only the source's own
+    creature is eligible the spell DOES destroy it. Setup: p1's bf
+    is empty, p0's bf has a Creature. Resolving Drag (cast by p0)
+    destroys p0's own Bears."""
     state = engine.make_synthetic_state(
         num_battlefield=0, num_hand=1, num_library=1
     )
@@ -6445,9 +6452,10 @@ def test_resolve_destroy_target_nonland_permanent_skips_active_players_own(
     state.push_to_stack(spell_obj_id, 0)
     state.resolve_top_of_stack()
 
-    # p0's own creature stays put — scan was defender-side only.
-    assert state.find_object_zone(own_creature_id) == ZONE_BATTLEFIELD
-    assert state.battlefield_sizes[0] == p0_bf_before
+    # p0's own creature got destroyed — the filter is controller-
+    # agnostic, matching Python's any-bf walk.
+    assert state.find_object_zone(own_creature_id) == ZONE_GRAVEYARD
+    assert state.battlefield_sizes[0] == p0_bf_before - 1
     assert state.battlefield_sizes[1] == p1_bf_before
 
 
@@ -6457,8 +6465,10 @@ def test_resolve_destroy_target_nonland_permanent_resets_state(
     """Per-object state reset on zone change (CR 400.7): tapped /
     damage / counters all reset on the way to graveyard. Pre-load
     the target with non-default state, resolve Drag, and verify the
-    destroyed object's counters/damage reset to zero."""
-    target_obj_id = 72  # p1's bf[5], the first Bears (first non-Land)
+    destroyed object's counters/damage reset to zero. Under the I39
+    cross-player walk, the first non-Land permanent is p0's bf[5] =
+    obj_id 5 (p0's first Bears)."""
+    target_obj_id = 5  # p0's bf[5], the first Bears across both players
     synthetic_state.tap_object(target_obj_id)
     synthetic_state.add_counters(target_obj_id, 3)
     synthetic_state.deal_damage(target_obj_id, 2)
@@ -8168,14 +8178,16 @@ def test_resolve_destroy_target_artifact_empty_battlefield_fizzles(engine):
     assert state.graveyard_sizes[0] == p0_grave_before + 1
 
 
-def test_resolve_destroy_target_artifact_skips_active_players_own(engine):
-    """The scan walks the DEFENDING player's battlefield only. The
-    active player's own artifact is NOT a viable target (regression
-    guard — this matches round-17 DestroyTarget / round-24
-    DestroyTargetNonlandPermanent's asymmetric defender-side
-    targeting). Setup: p1's bf is empty, p0's bf has an Artifact.
-    Resolving Drill Too Deep (cast by p0, defender = p1) must
-    FIZZLE — not destroy p0's own artifact."""
+def test_resolve_destroy_target_artifact_targets_source_controller_when_only_eligible(
+    engine,
+):
+    """The walk crosses BOTH players' battlefield (I39 closure).
+    DestroyTargetArtifact has no controller restriction (mirroring
+    Python's `IsArtifact()` filter against the centralized
+    `state.battlefield`), so when only the source's own artifact is
+    eligible the spell DOES destroy it. Setup: p1's bf is empty,
+    p0's bf has an Artifact. Resolving Drill Too Deep (cast by p0)
+    destroys p0's own artifact."""
     state = engine.make_synthetic_state(
         num_battlefield=0, num_hand=1, num_library=1
     )
@@ -8193,9 +8205,10 @@ def test_resolve_destroy_target_artifact_skips_active_players_own(engine):
     state.push_to_stack(spell_obj_id, 0)
     state.resolve_top_of_stack()
 
-    # p0's own artifact stays put — scan was defender-side only.
-    assert state.find_object_zone(own_artifact_id) == ZONE_BATTLEFIELD
-    assert state.battlefield_sizes[0] == p0_bf_before
+    # p0's own artifact got destroyed — the filter is controller-
+    # agnostic, matching Python's any-bf walk.
+    assert state.find_object_zone(own_artifact_id) == ZONE_GRAVEYARD
+    assert state.battlefield_sizes[0] == p0_bf_before - 1
     assert state.battlefield_sizes[1] == p1_bf_before
 
 
@@ -8422,14 +8435,16 @@ def test_resolve_destroy_target_land_empty_battlefield_fizzles(engine):
     assert state.graveyard_sizes[0] == p0_grave_before + 1
 
 
-def test_resolve_destroy_target_land_skips_active_players_own(engine):
-    """The scan walks the DEFENDING player's battlefield only. The
-    active player's own land is NOT a viable target (regression guard
-    — this matches round-25 DestroyTargetArtifact / round-24
-    DestroyTargetNonlandPermanent / round-17 DestroyTarget's
-    asymmetric defender-side targeting). Setup: p1's bf is empty,
-    p0's bf has a Land. Resolving Dust Bowl (cast by p0, defender = p1)
-    must FIZZLE — not destroy p0's own land."""
+def test_resolve_destroy_target_land_targets_source_controller_when_only_eligible(
+    engine,
+):
+    """The walk crosses BOTH players' battlefield (I39 closure).
+    DestroyTargetLand has no controller restriction (mirroring
+    Python's `IsLand()` filter against the centralized
+    `state.battlefield`), so when only the source's own land is
+    eligible the spell DOES destroy it. Setup: p1's bf is empty,
+    p0's bf has a Land. Resolving Dust Bowl (cast by p0) destroys
+    p0's own land."""
     state = engine.make_synthetic_state(
         num_battlefield=0, num_hand=1, num_library=1
     )
@@ -8447,10 +8462,416 @@ def test_resolve_destroy_target_land_skips_active_players_own(engine):
     state.push_to_stack(spell_obj_id, 0)
     state.resolve_top_of_stack()
 
-    # p0's own land stays put — scan was defender-side only.
-    assert state.find_object_zone(own_land_id) == ZONE_BATTLEFIELD
-    assert state.battlefield_sizes[0] == p0_bf_before
+    # p0's own land got destroyed — the filter is controller-agnostic,
+    # matching Python's any-bf walk.
+    assert state.find_object_zone(own_land_id) == ZONE_GRAVEYARD
+    assert state.battlefield_sizes[0] == p0_bf_before - 1
     assert state.battlefield_sizes[1] == p1_bf_before
+
+
+# --- I39 closure: defender-only target arms walk bf-ETB across both players --
+#
+# Before I39, the four "defender-only" target arms
+# (DestroyTargetNonlandPermanent, DestroyTargetArtifact,
+# DestroyTargetLand, TapTargetArtifactOrCreature) scanned only
+# `state.players[(1 - active_player)].battlefield` for the first
+# eligible target. Python's matching `Destroy.resolve` /
+# `Tap.resolve` walk the centralized `state.battlefield` filtered by
+# `TargetSpec(filter)` — no controller restriction, ETB-insertion
+# order across BOTH players. The I39 closure widens the Rust target
+# pick from defender-only to `bf_iter_etb_sorted(state)` filtered by
+# the same predicate, matching Python.
+#
+# These tests pin the closure direction with strictly-monotonic ETB
+# stamps interleaved across players. Each arm gets a triplet:
+#
+# - "cross-player ETB-interleave": source is p1; p0 has an older
+#   eligible target; p1 has a newer one. Pre-I39 Rust would pick p1's
+#   (defender's first). Post-I39 Rust picks p0's (ETB-first across
+#   both bfs), matching Python's any-bf-walk.
+# - "defender-only case (no opponent permanents)": only defender has
+#   eligible target; behavior unchanged (defender's first match still
+#   wins, since p0's bf is empty).
+# - "source-controller case (no defender permanents)": only source's
+#   bf has eligible targets; verifies cross-controller targeting works
+#   (Pre-I39 Rust would fizzle even though Python would destroy/tap).
+
+
+def _vanilla_creature_dict_i39():
+    """A vanilla 2/2 creature for I39 cross-player walk tests."""
+    return {
+        "name": "I39 Test Bear",
+        "card_types": ["Creature"],
+        "power": 2,
+        "toughness": 2,
+    }
+
+
+def _vanilla_artifact_dict_i39():
+    """A vanilla artifact for I39 cross-player walk tests."""
+    return {
+        "name": "I39 Test Junk",
+        "card_types": ["Artifact"],
+    }
+
+
+def _vanilla_land_dict_i39():
+    """A vanilla land for I39 cross-player walk tests."""
+    return {
+        "name": "I39 Test Forest",
+        "card_types": ["Land"],
+        "mana_produced": ["G"],
+    }
+
+
+def test_resolve_destroy_target_nonland_permanent_picks_etb_first_across_players(
+    engine,
+):
+    """Cross-player ETB-interleave: source is p1; p0 has an older
+    creature; p1 has a newer one. Pre-I39, the defender-only walk
+    picked p0's (defender = 1 - active_player = 0) creature even
+    though p1's was ETB-first relative to source. Wait — pre-I39
+    behavior would still pick p0's since defender = 0 here. The
+    crisper pin: source is p0 (active_player = 0), p1 has an older
+    creature, p0 has a newer one. Pre-I39 picked p1's (defender's
+    first). Post-I39 picks p0's (ETB-first across both bfs).
+    Matches Python's any-bf walk."""
+    state = engine.make_synthetic_state(
+        num_battlefield=0, num_hand=0, num_library=2
+    )
+    # Strictly-monotonic ETB stamps interleaved across players.
+    p0_old = state.register_and_inject_object(
+        _vanilla_creature_dict_i39(), 0, ZONE_BATTLEFIELD
+    )
+    p1_mid = state.register_and_inject_object(
+        _vanilla_creature_dict_i39(), 1, ZONE_BATTLEFIELD
+    )
+    p0_new = state.register_and_inject_object(
+        _vanilla_creature_dict_i39(), 0, ZONE_BATTLEFIELD
+    )
+
+    spell_obj_id = state.register_and_inject_object(
+        _drag_to_the_roots_dict(), 0, ZONE_HAND
+    )
+    state.push_to_stack(spell_obj_id, 0)
+    state.resolve_top_of_stack()
+
+    # ETB-first non-Land is p0_old. Pre-I39: defender (p1)
+    # would have been scanned and p1_mid destroyed. Post-I39:
+    # p0_old destroyed (ETB-first across both players).
+    assert state.find_object_zone(p0_old) == ZONE_GRAVEYARD
+    assert state.find_object_zone(p1_mid) == ZONE_BATTLEFIELD
+    assert state.find_object_zone(p0_new) == ZONE_BATTLEFIELD
+
+
+def test_resolve_destroy_target_nonland_permanent_defender_only_no_opponent_eligible(
+    engine,
+):
+    """No-divergence direction: only defender (p1) has an eligible
+    non-Land permanent; source (p0) has only a Land. Both pre- and
+    post-I39 pick the defender's creature. Pinned to ensure the new
+    cross-player walk doesn't regress the defender-only-eligible
+    flow."""
+    state = engine.make_synthetic_state(
+        num_battlefield=0, num_hand=0, num_library=2
+    )
+    # p0 has a Land only (not eligible).
+    p0_land = state.register_and_inject_object(
+        _vanilla_land_dict_i39(), 0, ZONE_BATTLEFIELD
+    )
+    # p1 has the only eligible non-Land permanent.
+    p1_creature = state.register_and_inject_object(
+        _vanilla_creature_dict_i39(), 1, ZONE_BATTLEFIELD
+    )
+
+    spell_obj_id = state.register_and_inject_object(
+        _drag_to_the_roots_dict(), 0, ZONE_HAND
+    )
+    state.push_to_stack(spell_obj_id, 0)
+    state.resolve_top_of_stack()
+
+    # p1's creature destroyed (only eligible target); p0's Land
+    # untouched (filter skips Lands).
+    assert state.find_object_zone(p1_creature) == ZONE_GRAVEYARD
+    assert state.find_object_zone(p0_land) == ZONE_BATTLEFIELD
+
+
+def test_resolve_destroy_target_nonland_permanent_source_controller_only_eligible(
+    engine,
+):
+    """Source-only direction: only source (p0) has an eligible non-Land
+    permanent; defender (p1) has only a Land. Pre-I39 the defender-only
+    walk found no target and FIZZLED, contradicting Python's any-bf
+    walk which destroys p0's own creature. Post-I39 the cross-player
+    walk finds and destroys p0's creature."""
+    state = engine.make_synthetic_state(
+        num_battlefield=0, num_hand=0, num_library=2
+    )
+    p0_creature = state.register_and_inject_object(
+        _vanilla_creature_dict_i39(), 0, ZONE_BATTLEFIELD
+    )
+    p1_land = state.register_and_inject_object(
+        _vanilla_land_dict_i39(), 1, ZONE_BATTLEFIELD
+    )
+
+    spell_obj_id = state.register_and_inject_object(
+        _drag_to_the_roots_dict(), 0, ZONE_HAND
+    )
+    state.push_to_stack(spell_obj_id, 0)
+    state.resolve_top_of_stack()
+
+    # p0's own creature destroyed (source-controller path works).
+    assert state.find_object_zone(p0_creature) == ZONE_GRAVEYARD
+    assert state.find_object_zone(p1_land) == ZONE_BATTLEFIELD
+
+
+def test_resolve_destroy_target_artifact_picks_etb_first_across_players(engine):
+    """Cross-player ETB-interleave for DestroyTargetArtifact. p0 has
+    an older artifact; p1 has a newer one. Pre-I39 the defender-only
+    walk picked p1's; post-I39 the bf-ETB walk picks p0's."""
+    state = engine.make_synthetic_state(
+        num_battlefield=0, num_hand=0, num_library=2
+    )
+    p0_old_artifact = state.register_and_inject_object(
+        _vanilla_artifact_dict_i39(), 0, ZONE_BATTLEFIELD
+    )
+    p1_new_artifact = state.register_and_inject_object(
+        _vanilla_artifact_dict_i39(), 1, ZONE_BATTLEFIELD
+    )
+
+    spell_obj_id = state.register_and_inject_object(
+        _drill_too_deep_dict(), 0, ZONE_HAND
+    )
+    state.push_to_stack(spell_obj_id, 0)
+    state.resolve_top_of_stack()
+
+    # ETB-first artifact is p0's. Pre-I39 would have hit p1's.
+    assert state.find_object_zone(p0_old_artifact) == ZONE_GRAVEYARD
+    assert state.find_object_zone(p1_new_artifact) == ZONE_BATTLEFIELD
+
+
+def test_resolve_destroy_target_artifact_defender_only_no_opponent_eligible(
+    engine,
+):
+    """No-divergence direction: only defender (p1) has an Artifact;
+    source (p0) has only a Creature (not eligible)."""
+    state = engine.make_synthetic_state(
+        num_battlefield=0, num_hand=0, num_library=2
+    )
+    p0_creature = state.register_and_inject_object(
+        _vanilla_creature_dict_i39(), 0, ZONE_BATTLEFIELD
+    )
+    p1_artifact = state.register_and_inject_object(
+        _vanilla_artifact_dict_i39(), 1, ZONE_BATTLEFIELD
+    )
+
+    spell_obj_id = state.register_and_inject_object(
+        _drill_too_deep_dict(), 0, ZONE_HAND
+    )
+    state.push_to_stack(spell_obj_id, 0)
+    state.resolve_top_of_stack()
+
+    # p1's artifact destroyed (only eligible target); p0's creature
+    # untouched (filter requires Artifact).
+    assert state.find_object_zone(p1_artifact) == ZONE_GRAVEYARD
+    assert state.find_object_zone(p0_creature) == ZONE_BATTLEFIELD
+
+
+def test_resolve_destroy_target_artifact_source_controller_only_eligible(engine):
+    """Source-only direction: only source (p0) has an Artifact;
+    defender (p1) has only a Creature. Pre-I39 would have fizzled;
+    post-I39 destroys p0's own artifact."""
+    state = engine.make_synthetic_state(
+        num_battlefield=0, num_hand=0, num_library=2
+    )
+    p0_artifact = state.register_and_inject_object(
+        _vanilla_artifact_dict_i39(), 0, ZONE_BATTLEFIELD
+    )
+    p1_creature = state.register_and_inject_object(
+        _vanilla_creature_dict_i39(), 1, ZONE_BATTLEFIELD
+    )
+
+    spell_obj_id = state.register_and_inject_object(
+        _drill_too_deep_dict(), 0, ZONE_HAND
+    )
+    state.push_to_stack(spell_obj_id, 0)
+    state.resolve_top_of_stack()
+
+    # p0's own artifact destroyed; p1's creature untouched.
+    assert state.find_object_zone(p0_artifact) == ZONE_GRAVEYARD
+    assert state.find_object_zone(p1_creature) == ZONE_BATTLEFIELD
+
+
+def test_resolve_destroy_target_land_picks_etb_first_across_players(engine):
+    """Cross-player ETB-interleave for DestroyTargetLand. p0 has
+    an older land; p1 has a newer one. Pre-I39 picked p1's; post-I39
+    picks p0's."""
+    state = engine.make_synthetic_state(
+        num_battlefield=0, num_hand=0, num_library=2
+    )
+    p0_old_land = state.register_and_inject_object(
+        _vanilla_land_dict_i39(), 0, ZONE_BATTLEFIELD
+    )
+    p1_new_land = state.register_and_inject_object(
+        _vanilla_land_dict_i39(), 1, ZONE_BATTLEFIELD
+    )
+
+    spell_obj_id = state.register_and_inject_object(
+        _dust_bowl_dict(), 0, ZONE_HAND
+    )
+    state.push_to_stack(spell_obj_id, 0)
+    state.resolve_top_of_stack()
+
+    # ETB-first land is p0's. Pre-I39 would have hit p1's.
+    assert state.find_object_zone(p0_old_land) == ZONE_GRAVEYARD
+    assert state.find_object_zone(p1_new_land) == ZONE_BATTLEFIELD
+
+
+def test_resolve_destroy_target_land_defender_only_no_opponent_eligible(engine):
+    """No-divergence direction: only defender (p1) has a Land;
+    source (p0) has only a Creature."""
+    state = engine.make_synthetic_state(
+        num_battlefield=0, num_hand=0, num_library=2
+    )
+    p0_creature = state.register_and_inject_object(
+        _vanilla_creature_dict_i39(), 0, ZONE_BATTLEFIELD
+    )
+    p1_land = state.register_and_inject_object(
+        _vanilla_land_dict_i39(), 1, ZONE_BATTLEFIELD
+    )
+
+    spell_obj_id = state.register_and_inject_object(
+        _dust_bowl_dict(), 0, ZONE_HAND
+    )
+    state.push_to_stack(spell_obj_id, 0)
+    state.resolve_top_of_stack()
+
+    # p1's land destroyed (only eligible); p0's creature untouched.
+    assert state.find_object_zone(p1_land) == ZONE_GRAVEYARD
+    assert state.find_object_zone(p0_creature) == ZONE_BATTLEFIELD
+
+
+def test_resolve_destroy_target_land_source_controller_only_eligible(engine):
+    """Source-only direction: only source (p0) has a Land; defender
+    (p1) has only a Creature. Pre-I39 fizzled; post-I39 destroys p0's
+    own land."""
+    state = engine.make_synthetic_state(
+        num_battlefield=0, num_hand=0, num_library=2
+    )
+    p0_land = state.register_and_inject_object(
+        _vanilla_land_dict_i39(), 0, ZONE_BATTLEFIELD
+    )
+    p1_creature = state.register_and_inject_object(
+        _vanilla_creature_dict_i39(), 1, ZONE_BATTLEFIELD
+    )
+
+    spell_obj_id = state.register_and_inject_object(
+        _dust_bowl_dict(), 0, ZONE_HAND
+    )
+    state.push_to_stack(spell_obj_id, 0)
+    state.resolve_top_of_stack()
+
+    # p0's own land destroyed; p1's creature untouched.
+    assert state.find_object_zone(p0_land) == ZONE_GRAVEYARD
+    assert state.find_object_zone(p1_creature) == ZONE_BATTLEFIELD
+
+
+def _tap_aoc_dict_i39():
+    """A tap-target-artifact-or-creature spell for I39 tests."""
+    return {
+        "name": "I39 Test Twiddle",
+        "card_types": ["Instant"],
+        "mana_cost": {"generic": 1},
+        "effects": [{"kind": "tap_target_artifact_or_creature"}],
+    }
+
+
+def test_resolve_tap_target_artifact_or_creature_picks_etb_first_across_players(
+    engine,
+):
+    """Cross-player ETB-interleave for TapTargetArtifactOrCreature.
+    p0 has an older creature; p1 has a newer artifact. Pre-I39 the
+    defender-only walk picked p1's artifact; post-I39 the bf-ETB
+    walk picks p0's creature."""
+    state = engine.make_synthetic_state(
+        num_battlefield=0, num_hand=0, num_library=2
+    )
+    p0_old_creature = state.register_and_inject_object(
+        _vanilla_creature_dict_i39(), 0, ZONE_BATTLEFIELD
+    )
+    p1_new_artifact = state.register_and_inject_object(
+        _vanilla_artifact_dict_i39(), 1, ZONE_BATTLEFIELD
+    )
+
+    spell_obj_id = state.register_and_inject_object(
+        _tap_aoc_dict_i39(), 0, ZONE_HAND
+    )
+    state.push_to_stack(spell_obj_id, 0)
+    state.resolve_top_of_stack()
+
+    # ETB-first artifact-or-creature is p0_old_creature.
+    snap = state.battlefield_snapshot()
+    by_id = {d["id"]: d for d in snap}
+    assert by_id[p0_old_creature]["tapped"] is True
+    assert by_id[p1_new_artifact]["tapped"] is False
+
+
+def test_resolve_tap_target_artifact_or_creature_defender_only_no_opponent_eligible(
+    engine,
+):
+    """No-divergence direction: only defender (p1) has an Artifact;
+    source (p0) has only a Land (not eligible — filter is
+    Artifact-or-Creature)."""
+    state = engine.make_synthetic_state(
+        num_battlefield=0, num_hand=0, num_library=2
+    )
+    p0_land = state.register_and_inject_object(
+        _vanilla_land_dict_i39(), 0, ZONE_BATTLEFIELD
+    )
+    p1_artifact = state.register_and_inject_object(
+        _vanilla_artifact_dict_i39(), 1, ZONE_BATTLEFIELD
+    )
+
+    spell_obj_id = state.register_and_inject_object(
+        _tap_aoc_dict_i39(), 0, ZONE_HAND
+    )
+    state.push_to_stack(spell_obj_id, 0)
+    state.resolve_top_of_stack()
+
+    snap = state.battlefield_snapshot()
+    by_id = {d["id"]: d for d in snap}
+    # p1's artifact tapped (only eligible); p0's land untouched.
+    assert by_id[p1_artifact]["tapped"] is True
+    assert by_id[p0_land]["tapped"] is False
+
+
+def test_resolve_tap_target_artifact_or_creature_source_controller_only_eligible(
+    engine,
+):
+    """Source-only direction: only source (p0) has a Creature;
+    defender (p1) has only a Land (not eligible). Pre-I39 fizzled;
+    post-I39 taps p0's own creature."""
+    state = engine.make_synthetic_state(
+        num_battlefield=0, num_hand=0, num_library=2
+    )
+    p0_creature = state.register_and_inject_object(
+        _vanilla_creature_dict_i39(), 0, ZONE_BATTLEFIELD
+    )
+    p1_land = state.register_and_inject_object(
+        _vanilla_land_dict_i39(), 1, ZONE_BATTLEFIELD
+    )
+
+    spell_obj_id = state.register_and_inject_object(
+        _tap_aoc_dict_i39(), 0, ZONE_HAND
+    )
+    state.push_to_stack(spell_obj_id, 0)
+    state.resolve_top_of_stack()
+
+    snap = state.battlefield_snapshot()
+    by_id = {d["id"]: d for d in snap}
+    # p0's own creature tapped (cross-controller path works).
+    assert by_id[p0_creature]["tapped"] is True
+    assert by_id[p1_land]["tapped"] is False
 
 
 # -------------------- Round-28 Sequence combinator (54 cards) --------------------

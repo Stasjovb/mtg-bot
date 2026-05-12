@@ -2248,6 +2248,130 @@ them to call the helper is a follow-up housekeeping pass.
     implementation whose silent-drop shape this invariant
     matches.
 
+### I39. "Defender-only" target arms in `state_ops_resolve.rs` walk both players' battlefield in ETB-timestamp order via shared `bf_iter_etb_sorted` helper (no controller restriction)
+
+- **Pinned by**:
+  `tests_rust/test_resolve.py::test_resolve_destroy_target_nonland_permanent_picks_etb_first_across_players`,
+  `test_resolve_destroy_target_nonland_permanent_defender_only_no_opponent_eligible`,
+  `test_resolve_destroy_target_nonland_permanent_source_controller_only_eligible`,
+  `test_resolve_destroy_target_artifact_picks_etb_first_across_players`,
+  `test_resolve_destroy_target_artifact_defender_only_no_opponent_eligible`,
+  `test_resolve_destroy_target_artifact_source_controller_only_eligible`,
+  `test_resolve_destroy_target_land_picks_etb_first_across_players`,
+  `test_resolve_destroy_target_land_defender_only_no_opponent_eligible`,
+  `test_resolve_destroy_target_land_source_controller_only_eligible`,
+  `test_resolve_tap_target_artifact_or_creature_picks_etb_first_across_players`,
+  `test_resolve_tap_target_artifact_or_creature_defender_only_no_opponent_eligible`,
+  `test_resolve_tap_target_artifact_or_creature_source_controller_only_eligible`.
+
+- **Invariant** (closes the I33-flagged "defender-only" target-arm
+  divergence, per `feature/defender-only-target-arms`). The four
+  "first-slice deterministic target" arms in `state_ops_resolve.rs`
+  now select their target via the centralized
+  `crate::bf_iter::bf_iter_etb_sorted` helper rather than scanning
+  `state.players[(1 - active_player)].battlefield` top-to-bottom:
+
+  1. `Effect::DestroyTargetNonlandPermanent` (~line 2503) — first
+     non-Land, non-indestructible permanent across BOTH bfs.
+  2. `Effect::DestroyTargetArtifact` (~line 2549) — first Artifact,
+     non-indestructible permanent across BOTH bfs.
+  3. `Effect::DestroyTargetLand` (~line 2600) — first Land,
+     non-indestructible permanent across BOTH bfs.
+  4. `Effect::TapTargetArtifactOrCreature` (~line 3477) — first
+     permanent matching the Artifact-OR-Creature filter across BOTH
+     bfs. Idempotent on already-tapped target.
+
+  Each arm reads the controller index off `obj.controller` rather
+  than the prior hard-coded `defender_idx = (1 - active_player)`,
+  then performs the mutating `Arc::make_mut` pass on
+  `state.players[controller].battlefield` (and `.graveyard` for the
+  destroy arms).
+
+  Mirrors Python's
+  `effects/generic/destroy.py:Destroy.resolve` and
+  `effects/generic/tap.py:Tap.resolve`, which use the `TargetSpec`
+  grammar against the centralized `state.battlefield` (a single
+  list aggregating both players' permanents in ETB-insertion
+  order — see `game.py:2585`). Python's filters
+  (`~IsLand() & ~IsPlayer()`, `IsArtifact()`, `IsLand()`, and the
+  `IsArtifact() | IsCreature()` union for `TapTargetArtifactOrCreature`)
+  carry NO controller restriction, so Rust's pre-I39 defender-only
+  walk picked a wrong-player target whenever the source's own bf
+  carried the first ETB-ordered eligible permanent (and worse,
+  fizzled when ONLY the source had an eligible target).
+
+- **Three divergence directions pinned per arm** (12 tests total):
+
+  - **Cross-player ETB-interleave** — source's bf has the older
+    eligible permanent; defender's has the newer one. Pre-I39 picked
+    defender's (wrong); post-I39 picks source's (matches Python).
+  - **Defender-only-eligible** — only defender has an eligible
+    permanent. Behavior unchanged pre/post I39 (the walk still finds
+    it).
+  - **Source-controller-only-eligible** — only source has an
+    eligible permanent. Pre-I39 fizzled (defender's walk found
+    nothing); post-I39 destroys/taps the source's own permanent
+    matching Python.
+
+- **Why a shared helper instead of inlining**: same rationale as
+  I27 (SBA victim collection), I30 (cross-player find-first taps/
+  untaps), I31 (combat damage assignment), and I33 (mass-effect
+  resolve arms). The post-CE4 abstraction step is to centralize
+  every "walk both players' bfs in ETB order" reader through
+  `bf_iter_etb_sorted`. Today's consumers post-I39:
+  `collect_sba_victims` (I27),
+  `Effect::TapAnotherTargetCreature` (I30),
+  `Effect::UntapTargetOtherPermanent` (I30),
+  `deal_combat_damage` (I31 — both call sites),
+  `Effect::DamageEachCreature` (I33),
+  `Effect::DestroyAllCreatures` (I33),
+  `Effect::DestroyTargetNonlandPermanent` (this invariant),
+  `Effect::DestroyTargetArtifact` (this invariant),
+  `Effect::DestroyTargetLand` (this invariant),
+  `Effect::TapTargetArtifactOrCreature` (this invariant).
+  The future trigger emitter is gated on CE8 substrate.
+
+- **Tie-break invariant**: synthetic-state fixtures with default-0
+  ETB timestamps preserve the pre-closure p0-then-p1 walk via the
+  helper's stable sort. The 12 new pinning tests use
+  `register_and_inject_object` to drive strictly-monotonic ETB
+  stamps so the cross-player direction is exercised meaningfully;
+  the unmodified existing tests continue to rely on the tie-break
+  shape. A small handful of pre-I39 tests with synthetic-state
+  fixtures had to be updated: their assertions pinned the now-fixed
+  bug (the "defender-only" scan happening to also pick the
+  defender's bf[0] match), and the new tests' "destroys p0's own
+  permanent" / "picks p0's first Bears in cross-player walk"
+  shapes reflect Python's any-bf walk semantics. These are:
+  `test_resolve_destroy_target_nonland_permanent_destroys_first_creature`,
+  `test_resolve_destroy_target_nonland_permanent_resets_state`,
+  `test_resolve_destroy_target_*_targets_source_controller_when_only_eligible`
+  (3 renamed from `_skips_active_players_own`),
+  `test_resolve_tap_aoc_picks_first_creature_in_bf_etb_order`
+  (renamed from `_picks_first_creature_on_defender_bf`),
+  `test_resolve_tap_aoc_picks_creature_over_later_artifact` (renamed
+  from `_picks_artifact_when_present`), and the `_no_eligible_fizzles`
+  / `_idempotent_on_already_tapped` shapes.
+
+- **Why surfaced now (not earlier)**: I33 closed the two MEDIUM-risk
+  mass-effect sites and explicitly deferred this slice with the note
+  "defender-only 'target' arms walk only
+  `state.players[defender_idx].battlefield` for their first eligible
+  target. These pick a wrong-player target relative to Python's
+  any-bf filter, but that's a TARGETING semantics divergence beyond
+  the ETB tie-break question." This slice closes that follow-up:
+  the divergence is broader than ETB-monotone-order — it's a
+  controller-scope mismatch — and the fix shape is the same
+  helper-driven walk that all the I27/I30/I31/I33 sibling arms
+  already use.
+
+- **Fingerprint baselines**: bit-equal pre- vs post-I39 on every
+  synthetic-state fixture in `tests_rust/test_fingerprint.py`. The
+  synthetic-state fixtures don't carry cross-player ETB-interleaved
+  eligible targets for these four effects, so the centralized walk
+  produces the same target pick as the pre-I39 defender-only walk
+  (or both fizzle).
+
 ### ~~CE5.~~ CLOSED: `cast_spell` cross-engine parity via harness-side `resolve_top_of_stack_python` mirror
 
 Closed by the CE5 closure slice (`feature/ce5-cast-resolve`).
