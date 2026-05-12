@@ -1082,6 +1082,66 @@ with the `battlefield` field divergence — Python emitting
 Mountain-then-Forest (ETB order), Rust emitting Forest-then-Mountain
 (controller order).
 
+### ~~CE7.~~ CLOSED: `draw_card_inline` mirror flags `attempted_draw_on_empty` matching the pymethod and `Effect::DrawCards` arms
+
+> **Numbering note.** Filed at CE7 even though CE6 (SBA-collection,
+> the playbook's predicted CE5) and CE10 (CE-pure-derivation-is_over)
+> landed first. The staging doc `docs/PENDING_CE_FILINGS_2026_05_11.md`
+> (merge `50eb79ea`) originally reserved CE7 for the pure-derivation-
+> is_over finding, but the in-flight is_over closure (merge
+> `59b6054e`) took CE10 by the time this entry was filed. Per the
+> playbook's monotonic-on-surface numbering policy, this entry
+> takes the next-available pre-CE10 slot (CE7); CE8 below covers
+> the still-open shuffle-PRNG finding, and CE9 is intentionally
+> left unallocated for the next surfacing slice to claim.
+
+Closed by `feature/draw-card-inline-flag` (feature commit
+`1673e582`, merge `63f03067`). Pre-closure, Rust had two
+`draw_card` paths with diverging empty-library behavior:
+
+- `state_ops_zones.rs::draw_card` (pymethod) flagged
+  `Player.attempted_draw_on_empty = true` on empty pop.
+- `state_ops_steps.rs::draw_card_inline` (the `advance_phase`
+  auto-draw mirror used on entry to PHASE_DRAW per CR 504.1) was
+  a silent no-op on empty libraries.
+- `state_ops_resolve.rs::Effect::DrawCards` (the resolution arm)
+  flagged correctly.
+
+Result: a player who decked out via the DRAW step (the common case
+in real games) was un-flagged on Rust side, even though deck-out
+via cast-spell-resolves-DrawCards or side-channel pymethod call
+was correctly flagged.
+
+**Closure shape.** Option B per the closure brief — mirror the
+flag-set into the inline path directly rather than delegating to
+the pymethod (Option A would have required `pub(crate)` visibility
+on the pymethod, outside the slice scope). The inline mirror also
+picks up the pymethod's defensive `attached_to` /
+`exiled_with_source` reset on the drawn object (CR 400.7 round-28
+attach foundation), so the two paths now match bit-for-bit.
+
+Pinned by
+`tests_rust/test_steps.py::test_advance_phase_auto_draw_on_empty_library_flags_attempted_draw`
+(line 910) — synthetic state with `num_battlefield=0, num_hand=0,
+num_library=0`, seeds `turn_number=5` so the CR 103.7c first-turn-
+skip gate is open, walks UNTAP → UPKEEP → DRAW, asserts
+`state.losers() == [0]` eagerly + `state.is_game_over() is True` +
+`state.winner_id == 1` + `apply_sbas` locks the loss into the
+sticky `has_lost`. The I19 invariant bullet (see "I19. Empty-library
+draw flags the player...") was extended (in the same closure slice)
+to list `advance_phase`'s auto-draw step as the third entrypoint
+that flips the cause-signal.
+
+The closure SURFACED the same CE-pure-derivation-is_over divergence
+ultimately filed as CE10:
+`test_cross_engine_single_card_libraries_multi_turn_walks_clean`
+(line 308 in `tests/test_parity_smoke_edge_cases.py`) flipped from
+passing to strict-xfailed at step 39 once the (newly fixed)
+auto-draw path made Rust's `attempted_draw_on_empty` flip
+observable on the multi-turn path; Python's SBA-gated `is_over`
+stayed False. CE10's SBA-gate of the surface accessors then closed
+the cascade.
+
 ### ~~CE6.~~ CLOSED: `collect_sba_victims` walks the battlefield in ETB-timestamp order (via shared `bf_iter_etb_sorted` helper)
 
 > **Note on numbering.** The closure playbook
@@ -1352,6 +1412,91 @@ The counter `state.next_etb_timestamp` and the per-object slot
 
 (Other smoke-flagged divergences may be added by follow-up Phase 5
 slices as the deck pool / decision script grows.)
+
+### CE8. `shuffle_deck` PRNG diverges — Python uses Mersenne Twister, Rust uses xorshift64
+
+> **Numbering note.** CE7 above is the (closed-today) inline-vs-
+> pymethod asymmetry; CE9 is intentionally left unallocated for
+> the next surfacing slice. See the staging doc
+> `docs/PENDING_CE_FILINGS_2026_05_11.md` (merge `50eb79ea`) for
+> the reconciliation history — the is_over closure pre-empted the
+> staging doc's proposed CE7 and took CE10 instead, so this
+> finding shifts from staged-CE9 to filed-CE8.
+
+- **Pinned by**:
+  `tests/test_parity_smoke_edge_cases.py::test_cross_engine_shuffle_seed_walks_clean`
+  (line 401, strict-xfail) for the clean-walk pin at step 0.
+  Companion passing pin
+  `test_cross_engine_shuffle_seed_surfaces_library_divergence_for_multiple_seeds`
+  (line 427) confirms the divergence shape across seeds 1, 7, 42, 100.
+- **Surfaced by**: Phase-5 edge-case probe round (`c4dd5d5a`).
+  `slightly_bigger_deckspec` with `shuffle_seed=42` builds matched
+  states; the initial-state field view diverges on `library_p0` and
+  `library_p1` at step 0 (before any decision is applied).
+  Reproducible per-seed: the same seed produces the same Python
+  permutation and the same Rust permutation, just different from
+  each other.
+- **Rust today**: Rust's shuffle (called internally during
+  `make_state` when `shuffle_seed` is set, plus in
+  `Effect::ShuffleLibrary` and friends) uses a xorshift64 PRNG,
+  chosen for its small footprint and reproducibility within Rust's
+  own gate. The same seed that produces permutation P_py on
+  Python's `random.Random` produces permutation P_rust on Rust's
+  xorshift64; P_py ≠ P_rust except by birthday-style accident.
+- **CR / Python expected**: CR 103.4 / 701.20 mandate that the
+  library is randomized; the CR is silent on WHICH PRNG the engine
+  uses. The parity reference is "Python's Mersenne Twister output
+  for any given seed" because the cross-engine smoke contract pins
+  Python as the parity source-of-truth for observable state (per
+  `RUST_PARITY_PLAN` Decision 1).
+- **Impact**: medium. Does NOT block real-game play (each engine's
+  internal randomization is sound). DOES block cross-engine smoke
+  at any spec that sets a non-`None` `shuffle_seed`. The harness
+  sidesteps this today by defaulting `shuffle_seed=None` (no initial
+  shuffle); every other Phase-5 cross-engine test relies on that
+  default. Also blocks closure of G19 (the
+  SearchLibraryForBasicLandTapped no-shuffle gap) because both gaps
+  share the RNG-externalization closure path.
+- **Closeable**: yes — three-option closure (mirrors the
+  `RUST_PARITY_PLAN.md` Decision 1 options):
+  1. **Rust adopts Mersenne Twister.** Port MT19937 into Rust
+     (existing crate `rand_mt` or a vendored impl) and route every
+     `shuffle_deck` site through it. Largest surface; ties Rust to
+     a specific Python implementation detail.
+  2. **Both engines accept an external RNG stream.** Add a
+     `seed_bytes` (or `pre_shuffled_indices`) parameter to
+     `make_state` on both sides; the harness pre-computes the
+     shuffle on one side (e.g. Python) and feeds the result to the
+     other (via the parameter). Decouples engines from PRNG choice;
+     matches the `RUST_PARITY_PLAN` Decision 1 option (b). Medium
+     surface. Also closes G19 because the
+     SearchLibraryForBasicLandTapped Rust arm can consume the same
+     external stream to mirror Python's shuffle behavior.
+  3. **Harness disables shuffle entirely.** Force `shuffle_seed=None`
+     on every cross-engine spec; the strict-xfail flips by removing
+     the test. Lowest cost but does not close G19 and leaves real
+     shuffles untested cross-engine.
+
+  Recommendation per the retro doc's "Honorable mentions" (RNG
+  externalization gates CE8 + G19 + many search-library Effects):
+  Option 2 is the architecturally correct shape but is a substrate
+  slice; schedule when CE5 (cast-vs-resolve) closure lands and the
+  cadence has room for substrate work.
+
+### CE9. (unallocated — reserved for the next surfacing slice)
+
+CE9 is intentionally left empty. The staging doc
+`docs/PENDING_CE_FILINGS_2026_05_11.md` (merge `50eb79ea`) proposed
+filing three findings as CE7/CE8/CE9, but the in-flight
+CE-pure-derivation-is_over closure (merge `59b6054e`) took CE10
+before the staging doc was applied. Per the playbook's
+monotonic-on-surface numbering policy, this slice files only the
+two findings that still need formal numbering (CE7 inline-vs-
+pymethod CLOSED, CE8 shuffle-PRNG OPEN) and leaves CE9 for the
+next divergence to be surfaced + pinned. Do not pre-allocate CE9
+to any predicted-but-unsurfaced gap (combat damage, cross-player
+find-first, trigger emitter, ...); it gets claimed by whichever
+divergence is pinned by a test next.
 
 ### ~~CE10.~~ CLOSED: `is_over` / `winner_id` / `is_draw` surface accessors are SBA-gated (matching Python's SBA-written fields)
 
