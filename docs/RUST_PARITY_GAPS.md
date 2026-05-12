@@ -3274,6 +3274,63 @@ for non-menace combat are unchanged on both sides.
 
 ---
 
+### CE17 — `legal_decisions` emits `declare_attackers` subsets containing defenders (CR 702.3)
+
+- **Pinned by**: `tests/test_parity_smoke.py::test_cross_engine_defender_selector_legal_decisions_surfaces_ce17`
+  (strict-xfail) + the three clean-walk pins
+  `test_cross_engine_defender_selector_defender_only_walks_clean` /
+  `..._both_walks_clean` /
+  `..._normal_only_walks_clean` (apply-time defender gate parity).
+- **Rust today**: `state_ops_legal.rs:556-608` (the DeclareAttackers
+  emission inside `legal_decisions`) filters eligibility on
+  ``tapped`` + ``creature`` + ``summoning_sick`` vs ``haste`` only —
+  **NO DEFENDER FILTER**. The module docstring at lines 167-180
+  explicitly flags this as deferred: *"Defender keyword (CR 702.3) —
+  Python's eligible_attackers filters this out at enumeration time;
+  first slice defers to the primitive's per-id gate at apply."* As
+  a result, every declare_attackers subset that includes a
+  defender's id is emitted as if legal — e.g. given a state with
+  Bears id 5 and Bear Wall id 14 (defender) both untapped on p0's
+  bf, the emitted subsets are
+  ``[(), (5,), (14,), (5, 14)]``; the last two are illegal per
+  CR 702.3.
+- **Expected** (matching Python): defender ids are filtered out of
+  the eligibility set at enumeration time, matching the apply-time
+  primitive's rejection at `state_ops_combat.rs:639-641`
+  (`if battlefield_has_keyword(self, obj_id, "defender") { return
+  false; }`). Python's `combat.py:eligible_attackers` (line 22)
+  encodes the source-of-truth filter: `"defender" not in
+  effective_keywords(state, o)`.
+- **Apply-time gates ARE parity-clean.** Both engines silently drop
+  the defender when `declare_attackers([defender_id])` is APPLIED
+  (Python via `eligible_attackers` filter at `actions.py:2527-2529`;
+  Rust via `declare_attacker`'s defender gate at
+  `state_ops_combat.rs:639-641`). The CE17 surface is purely on
+  the *legal_decisions enumeration* side — the per-step
+  field-view compare across all three defender_selector scenarios
+  (`defender_only` / `both` / `normal_only`) walks parity-clean for
+  200 decisions.
+- **Likely impact**: Search-side. MCTS / ISMCTS / capability-probe
+  paths that enumerate over `legal_decisions` will see the
+  defender-bearing subsets as candidates and either prune them
+  via apply-time rejection (wasted node expansions) or, worse,
+  encode them into the policy head's slot mapping as "legal"
+  options (priors get spread thinly over illegal moves). The
+  apply-path engine state is unaffected — illegal subsets are
+  silently dropped at apply time, so combat outcomes don't
+  diverge. Production self-play / eval would observe modest
+  expansion-side waste on decks with defenders (uncommon in
+  random EoE decks), bounded by the small set of defender-bearing
+  printings.
+- **Closeable**: Yes, single one-line fix in
+  `rust/src/state_ops_legal.rs` around line 575 — add a
+  `battlefield_has_keyword(self, obj_id, "defender")` short-circuit
+  to the eligibility filter, mirroring the apply-time gate. Per
+  the brief: not closing in this slice. Documented + xfail-pinned
+  in `feature/phase5-defender`.
+
+---
+
 ## Maintenance
 
 When a slice closes one of the gaps above, drop the entry from the

@@ -4094,3 +4094,400 @@ def make_menace_selector(block_decision: str):
         return retaliation_selector(py_state, rust_state, step_index)
 
     return menace_selector
+
+
+# ---------------------------------------------------------------------------
+# Phase 5 follow-up #15: defender_selector — extend the cross-engine smoke
+# onto defender combat (CR 702.3). The REJECT branch symmetric to haste's
+# ACCEPT branch (probe 63eb245a): a creature with the ``defender`` keyword
+# CANNOT be declared as an attacker, where haste's bypass of the
+# summoning-sickness gate makes a sick creature able to attack.
+#
+# Mirrors :func:`haste_selector` exactly except:
+#
+#   1. The injected creature carries the ``defender`` keyword instead of
+#      ``haste`` and is NOT summoning-sick (no haste-fixture needed —
+#      defender is a sticky printed restriction, not a battlefield-state
+#      restriction that haste-style fixtures need to set up).
+#   2. The injected creature's printing name is ``"Bear Wall"`` so the
+#      seven probes (FS / DT / LL / VG / haste / menace / defender) have
+#      mutually-independent trigger gates on the same
+#      multi_blocker_deckspec walk.
+#   3. The DECLARE_ATTACKERS branch is parameterized over three
+#      attack-decisions (``"defender_only"``, ``"both"``, ``"normal_only"``)
+#      because defender's surface is at the *eligibility of the attack
+#      assignment*, not at apply-or-damage-time. The three modes
+#      exercise:
+#
+#         * **defender_only**: declare attack with ONLY the defender —
+#           ILLEGAL per CR 702.3. Both engines should reject (Python
+#           via ``eligible_attackers`` filter; Rust via
+#           ``declare_attacker``'s defender gate at
+#           ``state_ops_combat.rs:639-641``). Net: no attackers
+#           declared on either engine.
+#         * **both**: declare attack with BOTH the defender AND a
+#           normal attacker. Defender filtered out, normal attacker
+#           goes through. Net: 1 attacker (the normal creature) on
+#           both engines.
+#         * **normal_only**: declare attack with ONLY the normal
+#           attacker (defender stays passively on bf). Clean baseline
+#           — defender is invisible when not asked to attack.
+#
+# **PREDICTED NEW SURFACE — legal_decisions emission divergence (CE17).**
+# Reading ``rust/src/state_ops_legal.rs:556-608``: the
+# ``DeclareAttackers`` emission gates eligibility on tapped + creature
+# + summoning_sick-vs-haste, but DOES NOT FILTER DEFENDERS. The module
+# docstring (lines 166-180) explicitly flags this as deferred:
+# *"Defender keyword (CR 702.3) — Python's eligible_attackers filters
+# this out at enumeration time; first slice defers to the primitive's
+# per-id gate at apply."* The apply-time gate at
+# ``state_ops_combat.rs:639-641`` correctly rejects defender via
+# ``battlefield_has_keyword(self, obj_id, "defender") -> return false``,
+# but legal_decisions emits subsets that INCLUDE the defender id —
+# violating the contract that ``legal_decisions`` should enumerate
+# only LEGAL decisions.
+#
+# This is exactly the "Rust doesn't gate at legal_decisions but
+# correctly gates at apply" CE17 candidate the brief calls out. The
+# divergence is not visible on the per-step field-view compare (the
+# field view doesn't include the legal_decisions emission) — instead,
+# we surface it via a direct ``rust_state.legal_decisions(0)`` probe
+# in Test A that asserts the defender id does NOT appear in any
+# emitted ``declare_attackers`` subset's ``attacker_ids``.
+#
+# **Python's side**. ``src/mtg_bot/combat.py:eligible_attackers``
+# (lines 15-23) explicitly filters defenders at enumeration time:
+# ``"defender" not in effective_keywords(state, o)``. The downstream
+# ``_declare_attackers`` apply path filters via the same
+# ``eligible_attackers`` set (``actions.py:2527-2529``), so a
+# declare_attackers([defender_id]) request is silently dropped to
+# []. Python's ``legal_actions`` itself doesn't emit DeclareAttackers
+# at all (it's a search-side combat-decisions emission, not a
+# legal_actions emission) — see the module-docstring note in
+# state_ops_legal.rs lines 167-180. Cross-engine compare on the
+# *enumeration shape* is therefore Rust-only: we assert about Rust's
+# emission directly.
+#
+# **Rust's side**. Two surfaces, ONE diverges from the contract:
+#
+#   * ``state_ops_legal.rs:556-608`` (legal_decisions): NO defender
+#     filter — the eligibility loop reads tapped, creature, and
+#     summoning_sick-vs-haste only. The defender keyword check is
+#     deferred. THIS IS WHERE CE17 SURFACES — emitted subsets include
+#     the defender as a "legal" attacker.
+#   * ``state_ops_combat.rs:639-641`` (declare_attacker apply):
+#     correctly returns ``false`` for any creature with the defender
+#     keyword. Apply-time rejection works.
+#
+# **Outcome prediction**:
+#
+#   * **Test A** (legal_decisions probe): CE17 SURFACES. The Rust
+#     legal_decisions emission for p0 in DECLARE_ATTACKERS includes
+#     ``declare_attackers`` variants whose ``attacker_ids`` contains
+#     the defender id. Expected fix shape (out of scope for this
+#     probe per the brief): add a ``battlefield_has_keyword(... ,
+#     "defender")`` short-circuit to the eligibility filter in
+#     state_ops_legal.rs around line 575.
+#   * **Test B** (apply_action with defender-only declare): CLEAN.
+#     Both engines reject — net empty attackers Vec on Rust + empty
+#     Python attackers. The per-step field-view compare is clean.
+#   * **Test C** (defender + normal attacker, declare both): CLEAN.
+#     Both engines accept the normal attacker and drop the defender;
+#     post-DECLARE_ATTACKERS state has exactly the normal attacker
+#     attacking + tapped + the defender untouched. Per-step field-
+#     view compare is clean.
+#   * **Pre-injection walk** (steps 0-167): CLEAN. The
+#     defender_selector's delegate-to-retaliation_selector backbone
+#     is unchanged before the step-168 injection.
+# ---------------------------------------------------------------------------
+
+
+# Name of the synthetic defender printing injected by
+# :func:`defender_side_channel`. Kept module-level so the trigger-
+# detection gate in :func:`make_defender_selector` and the tests can
+# refer to the same name without drift. Distinct from
+# :data:`_FIRST_STRIKE_PRINTING_NAME`,
+# :data:`_DEATHTOUCH_PRINTING_NAME`,
+# :data:`_LIFELINK_PRINTING_NAME`,
+# :data:`_VIGILANCE_PRINTING_NAME`,
+# :data:`_HASTE_PRINTING_NAME`, and
+# :data:`_MENACE_PRINTING_NAME` so the seven probes' trigger gates
+# are mutually independent.
+_DEFENDER_PRINTING_NAME = "Bear Wall"
+
+
+def defender_side_channel(py_state, rust_state) -> tuple[int, int]:
+    """Side-channel inject a 2/2 defender creature onto BOTH engines'
+    p0 battlefield, AND side-channel-clear Bears id 5's summoning
+    sickness so a non-defender creature is available as a "normal
+    attacker" for the ``"both"`` / ``"normal_only"`` scenarios.
+
+    Mirror of :func:`haste_side_channel` — same shape, same
+    side-channel-untap of p1's Bears blockers, same return contract.
+    The differences are:
+
+      * The synthetic printing's keyword is ``"defender"``.
+      * The synthetic printing's name is :data:`_DEFENDER_PRINTING_NAME`
+        (``"Bear Wall"``) so this probe's trigger gate doesn't
+        collide with the six prior probes' gates.
+      * The injected creature is ``summoning_sick = False`` (defender
+        is a printed restriction, not a battlefield-state restriction
+        — no haste-style summoning_sick=True fixture needed; clear
+        summoning sickness is the simpler invariant for the apply-
+        time gate to fire on cleanly).
+      * **Bears id 5's summoning sickness is cleared.** The prior
+        retaliation walk leaves p0's Bears id 5 with
+        ``summoning_sick = True`` (cast this turn). For Test C
+        ("defender + normal attacker") we need a non-defender p0
+        creature that IS eligible to attack — clearing id 5's
+        sickness via the same ``force_set_summoning_sick`` Rust
+        test-helper haste_side_channel uses (with ``False`` instead
+        of ``True``) makes id 5 the natural "normal attacker".
+
+    Returns ``(py_obj_id, rust_obj_id)``. Ids match because both
+    engines allocate in lockstep through step 167 of the
+    retaliation walk.
+
+    See :func:`first_strike_side_channel` for the full rationale on
+    why Option B (side-channel inject onto bf) is used rather than
+    Option A (add a defender creature to the deckspec). Same
+    reasoning applies: ``CardDef`` doesn't carry a ``keywords`` field,
+    so the deckspec route would require multi-file fanout.
+    """
+    from mtg_bot.cards.base import CardPrinting, ManaCost
+    from mtg_bot.game import Zone
+
+    # ---- Python side: defender printing ----
+    defender_printing = CardPrinting(
+        name=_DEFENDER_PRINTING_NAME,
+        mana_cost_str="",
+        mana_cost=ManaCost(),
+        type_line="Creature",
+        supertypes=(),
+        card_types=("Creature",),
+        subtypes=(),
+        power=2,
+        toughness=2,
+        produces=frozenset(),
+        keywords=frozenset({"defender"}),
+    )
+    py_obj = py_state.new_object(
+        defender_printing, owner_id=0, zone=Zone.BATTLEFIELD,
+    )
+    py_obj.summoning_sick = False
+    py_obj.tapped = False
+    py_obj.damage = 0
+    py_obj.etb_timestamp = py_state.next_timestamp
+    py_state.next_timestamp += 1
+    py_state.battlefield.append(py_obj)
+
+    # ---- Rust side: defender printing ----
+    ZONE_BATTLEFIELD = 2
+    rust_obj_id = rust_state.register_and_inject_object(
+        {
+            "name": _DEFENDER_PRINTING_NAME,
+            "card_types": ["Creature"],
+            "power": 2,
+            "toughness": 2,
+            "keywords": ["defender"],
+        },
+        0,
+        ZONE_BATTLEFIELD,
+    )
+
+    # Clear summoning sickness on p0's Bears id 5 (cast this turn —
+    # currently sick) so it's eligible to attack as the "normal
+    # attacker" in Test C. Mirrors the haste_side_channel pattern
+    # exactly (force_set_summoning_sick on the Rust side), with the
+    # opposite value.
+    for obj in py_state.battlefield:
+        if (
+            obj.controller_id == 0
+            and obj.printing.name == "Grizzly Bears"
+        ):
+            obj.summoning_sick = False
+    for entry in rust_state.battlefield_snapshot():
+        if (
+            entry["controller_id"] == 0
+            and entry["printing_name"] == "Grizzly Bears"
+        ):
+            rust_state.force_set_summoning_sick(int(entry["id"]), False)
+
+    # Side-channel untap of p1's Bears blockers (same rationale as
+    # haste_side_channel — p1's bears are still tapped from their
+    # turn-12 attack, and Test C's combat damage exchange requires
+    # them to be eligible blockers).
+    for obj in py_state.battlefield:
+        if (
+            obj.controller_id == 1
+            and obj.printing.name == "Grizzly Bears"
+        ):
+            obj.tapped = False
+    for entry in rust_state.battlefield_snapshot():
+        if (
+            entry["controller_id"] == 1
+            and entry["printing_name"] == "Grizzly Bears"
+        ):
+            rust_state.untap_object(int(entry["id"]))
+    return int(py_obj.id), int(rust_obj_id)
+
+
+def make_defender_selector(attack_decision: str):
+    """Factory for the defender-probe selector — parameterized by the
+    DECLARE_ATTACKERS branch decision the selector emits.
+
+    ``attack_decision`` is one of:
+
+      * ``"defender_only"`` — emit ``declare_attackers`` with ONLY the
+        defender id. ILLEGAL per CR 702.3. Both engines should reject
+        — Python via ``eligible_attackers`` filter, Rust via
+        ``declare_attacker``'s defender gate. Net: empty attackers on
+        both. **This is the apply-time REJECT scenario** that pairs
+        with haste's apply-time ACCEPT scenario.
+      * ``"both"`` — emit ``declare_attackers`` with BOTH the defender
+        AND the normal attacker (Bears id 5, summoning-sickness
+        cleared by the side-channel). Both engines should drop the
+        defender and keep the normal attacker. Net: 1 attacker on
+        both engines.
+      * ``"normal_only"`` — emit ``declare_attackers`` with ONLY the
+        normal attacker. Defender stays passively on bf untouched.
+        Clean baseline scenario — defender is invisible when not
+        asked to attack.
+
+    The factory pattern keeps each test self-contained — the three
+    test variants get three closure-bound selectors that walk the
+    SAME deckspec / SAME injection / SAME pre-167 retaliation
+    backbone, differing only at the DECLARE_ATTACKERS branch.
+    """
+    if attack_decision not in ("defender_only", "both", "normal_only"):
+        raise ValueError(
+            f"attack_decision must be one of 'defender_only' / 'both' "
+            f"/ 'normal_only', got {attack_decision!r}"
+        )
+
+    def defender_selector(py_state, rust_state, step_index: int) -> dict:
+        """Cross-engine smoke selector that drives a defender + N-attacker
+        combat on :func:`multi_blocker_deckspec`.
+
+        Structurally identical to :func:`haste_selector` /
+        :func:`menace_selector` — delegates to
+        :func:`retaliation_selector` for everything before and after
+        the side-channel injection, and side-channel-injects a
+        defender creature at the same step-168 trigger point. The
+        differences:
+
+          * The injected creature carries ``defender`` (not haste).
+          * The trigger gate keys on :data:`_DEFENDER_PRINTING_NAME`
+            (``"Bear Wall"``).
+          * The DECLARE_ATTACKERS branch is overridden — instead of
+            delegating to retaliation_selector's
+            non-sick-non-defender enumeration, we emit the attacker
+            list specified by ``attack_decision``.
+
+        Expected walk shape:
+
+          * **Steps 0-167** — identical to retaliation_selector's
+            walk.
+          * **Step 168** — defender injection fires; selector returns
+            ``pass_priority``.
+          * **Step 171** (DECLARE_ATTACKERS) — branch-specific
+            attacker list emitted per ``attack_decision``.
+          * **Step 173+** — DECLARE_BLOCKERS / COMBAT_DAMAGE /
+            END_OF_COMBAT — damage applies according to whichever
+            attackers got through.
+
+        Stateless — same idempotency guarantee as the prior probes.
+        """
+        from mtg_bot.turn import Step
+
+        defender_already_injected = any(
+            obj.printing.name == _DEFENDER_PRINTING_NAME
+            for obj in py_state.battlefield
+        ) or any(
+            obj.printing.name == _DEFENDER_PRINTING_NAME
+            for p in py_state.players
+            for zone_list in (p.hand, p.library, p.graveyard, p.exile)
+            for obj in zone_list
+        )
+
+        if not defender_already_injected:
+            creature_count = sum(
+                1 for o in py_state.battlefield
+                if "Creature" in o.printing.card_types
+            )
+            if creature_count >= 3:
+                defender_side_channel(py_state, rust_state)
+                return {"kind": "pass_priority"}
+
+        cur_step = py_state.step
+        active_idx = py_state.active_player_idx
+        if cur_step == Step.DECLARE_ATTACKERS:
+            # Locate the defender id (Bear Wall on p0 bf) and the
+            # normal attacker id (Bears id 5 on p0 bf, sickness
+            # cleared by the side-channel).
+            defender_id = next(
+                (
+                    int(o.id) for o in py_state.battlefield
+                    if o.controller_id == active_idx
+                    and o.printing.name == _DEFENDER_PRINTING_NAME
+                ),
+                None,
+            )
+            normal_id = next(
+                (
+                    int(o.id) for o in py_state.battlefield
+                    if o.controller_id == active_idx
+                    and "Creature" in o.printing.card_types
+                    and not o.tapped
+                    and not o.summoning_sick
+                    and o.printing.name != _DEFENDER_PRINTING_NAME
+                    and not getattr(o, "attacking", False)
+                ),
+                None,
+            )
+            # Build the attacker_ids list per the closure-bound
+            # decision. Each branch deliberately requests an
+            # action that exercises the defender-vs-eligibility
+            # surface (or its absence) — we WANT to see what the
+            # apply path does with each shape, not to pre-filter
+            # to "what would obviously succeed".
+            #
+            # **All three branches pre-advance**. Once DA fires the
+            # selector should NEVER re-enter the DA branch on this
+            # turn — but the defender silently drops on both engines
+            # (its ``attacking`` flag stays False) so a naive "don't
+            # emit if defender already attacking" re-entry guard
+            # spins forever. The non-defender_only branches ALSO
+            # spin once the normal attacker is attacking because
+            # the defender survives the override's "and not
+            # attacking" filter and re-triggers the DA branch via
+            # retaliation_selector's fallback, which is itself
+            # NOT defender-aware. To break all three cycles
+            # cleanly: in-call ``advance_phase`` BEFORE returning
+            # the action — same pattern
+            # :func:`combat_selector`'s DECLARE_BLOCKERS branch
+            # uses. Phase parity holds because Python's
+            # ``_declare_attackers`` / Rust's
+            # ``Action::DeclareAttackers`` don't gate on phase.
+            attackers_to_declare = None
+            if attack_decision == "defender_only" and defender_id is not None:
+                attackers_to_declare = [defender_id]
+            elif (
+                attack_decision == "both"
+                and defender_id is not None
+                and normal_id is not None
+            ):
+                attackers_to_declare = sorted([defender_id, normal_id])
+            elif attack_decision == "normal_only" and normal_id is not None:
+                attackers_to_declare = [normal_id]
+            if attackers_to_declare is not None:
+                advance_phase_python(py_state)
+                rust_state.advance_phase()
+                return {
+                    "kind": "declare_attackers",
+                    "attacker_ids": attackers_to_declare,
+                }
+
+        return retaliation_selector(py_state, rust_state, step_index)
+
+    return defender_selector
