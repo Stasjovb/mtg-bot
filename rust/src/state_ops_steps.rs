@@ -156,13 +156,22 @@ fn clear_summoning_sick_for_player_inline(state: &mut GameState, player_id: u8) 
 
 /// Free-function mirror of `state_ops_zones.rs:draw_card`. See the
 /// module docstring for why this duplication exists. Same shape —
-/// pop the top of library (= last element of the Vec), stamp the
-/// drawn object's `zone` to `ZONE_HAND`, push onto hand. On an
-/// empty library this is a silent no-op at this layer; the G10
-/// "deck-out on empty draw" slice owns the loss-flag side-effect
-/// via the sibling slice's `Player.attempted_draw_on_empty` flag —
-/// the inline mirror here intentionally only handles the move-side
-/// of the operation so the deck-out logic stays single-sourced.
+/// pop the top of library (= first element of the Vec, post-CE3),
+/// stamp the drawn object's `zone` to `ZONE_HAND`, push onto hand.
+///
+/// **Empty-library side-effect (CR 704.5b — round-26 G10 closure).**
+/// When the library is empty the pop is skipped AND the player's
+/// `attempted_draw_on_empty` cause-signal flips to `true`. The next
+/// `apply_sbas` pass transitions that into the sticky `has_lost`
+/// flag; `losers()` ALSO reads the cause-signal directly so the
+/// loss is observable BEFORE the SBA pass runs. Mirrors the
+/// pymethod `draw_card` (state_ops_zones.rs) and the
+/// `Effect::DrawCards` resolution arm (state_ops_resolve.rs) — all
+/// three entrypoints share the same loss-flag side-effect. Prior to
+/// this slice the inline path was silent on empty, which left a
+/// player who decked out via the DRAW step (the auto-draw at start
+/// of turn — the common case) un-flagged on Rust side. See
+/// `docs/RUST_PARITY_GAPS.md` I19 for the full invariant.
 ///
 /// CoW-safe: each zone Vec mutation routes through `Arc::make_mut`.
 fn draw_card_inline(state: &mut GameState, player_id: u8) {
@@ -173,11 +182,20 @@ fn draw_card_inline(state: &mut GameState, player_id: u8) {
     let player = &mut state.players[idx];
     let lib = Arc::make_mut(&mut player.library);
     if lib.is_empty() {
+        // CR 704.5b — empty-library draw flags the player for loss
+        // on the next SBA pass. Mirrors the pymethod draw_card and
+        // the Effect::DrawCards arm.
+        player.attempted_draw_on_empty = true;
         return;
     }
     // Post-CE3: top of library = lib[0].
     let mut obj = lib.remove(0);
     obj.zone = ZONE_HAND;
+    // Round-28 attach foundation: CR 400.7 clears attach state on
+    // zone change. A library card can't legally be attached today,
+    // but reset defensively to mirror the pymethod's `draw_card`.
+    obj.attached_to = None;
+    obj.exiled_with_source = None;
     Arc::make_mut(&mut player.hand).push(obj);
 }
 

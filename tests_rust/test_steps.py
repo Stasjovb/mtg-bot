@@ -905,3 +905,59 @@ def test_clone_advance_phase_into_cleanup_does_not_affect_original(
     assert synthetic_state.hand_sizes[0] == 10
     assert synthetic_state.get_damage(p0_obj) == 4
     assert synthetic_state.get_mana_pool(0)["G"] == 3
+
+
+def test_advance_phase_auto_draw_on_empty_library_flags_attempted_draw(engine):
+    """CR 704.5b / I19 closure — when ``advance_phase`` fires the
+    CR 504.1 auto-draw on entry to PHASE_DRAW and the active player's
+    library is empty, the inline auto-draw path flips
+    ``Player.attempted_draw_on_empty`` to ``true``. Prior to this slice
+    the inline mirror was a silent no-op on empty, so a player who
+    decked out via the DRAW step (the common case — auto-draw at start
+    of turn) was un-flagged on Rust side, even though the pymethod
+    ``draw_card`` and ``Effect::DrawCards`` arms both flagged.
+
+    The observable is ``state.losers()`` (which reads the cause-signal
+    directly so the loss is eager — no SBA pass required) and the
+    derived ``is_game_over`` / ``winner_id`` predicates. Mirrors the
+    test style of ``tests_rust/test_library.py::
+    test_drawcards_from_empty_library_marks_player_for_loss_on_next_sba``
+    but exercises the inline auto-draw path instead of the pymethod /
+    Effect::DrawCards paths.
+    """
+    # ``make_synthetic_state`` seeds turn_number=5 (gate open for the
+    # CR 103.7c first-turn skip), active_player=0, phase=UNTAP. Set
+    # both libraries to 0 so p0's auto-draw on PHASE_DRAW entry hits
+    # an empty pop — p1's empty library is harmless because p1 is not
+    # the active player.
+    state = engine.make_synthetic_state(
+        num_battlefield=0, num_hand=0, num_library=0
+    )
+    assert state.active_player == 0
+    assert state.turn_number == 5
+    assert state.current_phase() == PHASE_UNTAP
+    assert state.library_sizes[0] == 0
+    # Before the auto-draw fires p0 is NOT a loser — empty library
+    # alone doesn't trigger the loss; only an attempted draw does
+    # (CR 704.5b is about the attempt, not the size). p1 is also
+    # not flagged for the same reason.
+    assert list(state.losers()) == []
+    assert state.is_game_over() is False
+    state.advance_phase()  # UNTAP -> UPKEEP: no draw hook.
+    assert list(state.losers()) == []
+    state.advance_phase()  # UPKEEP -> DRAW: the inline auto-draw fires.
+    assert state.current_phase() == PHASE_DRAW
+    # The empty-library inline pop flipped attempted_draw_on_empty
+    # on the ACTIVE player (p0) only; losers() reads the cause-signal
+    # directly so p0 is a loser eagerly, BEFORE any SBA pass runs.
+    # p1's empty library was never popped (not the active player), so
+    # p1 is not flagged.
+    assert list(state.losers()) == [0]
+    assert state.winner_id == 1
+    assert state.is_game_over() is True
+    # apply_sbas transitions the cause-signal into the sticky has_lost;
+    # the loss is now permanent. Return count stays 0 — player-loss
+    # is a separate SBA category from creature destruction.
+    assert state.apply_sbas() == 0
+    assert list(state.losers()) == [0]
+    assert state.winner_id == 1

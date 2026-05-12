@@ -269,46 +269,72 @@ def test_cross_engine_asymmetric_deck_sizes_walk_clean():
 # ---------------------------------------------------------------------------
 # Edge case #4: 1-card libraries + multi_turn_selector. The
 # advance_phase composition on BOTH engines uses an "inline" draw_card
-# variant that is a silent no-op on empty libraries (in Rust:
-# state_ops_steps.rs::draw_card_inline; in Python:
-# advance_phase_python calls turn.draw_card which DOES set has_lost).
-# So the parity here is fragile by construction — Python's
-# advance_phase_python flags has_lost, Rust's advance_phase does NOT
-# set attempted_draw_on_empty. But because Python's is_over needs
-# winner_id (only an SBA writes it), the symptom doesn't surface on
-# the is_over field-view — the two engines stay "consistently wrong
-# in different ways" and the per-field comparison stays clean.
+# variant. Historical state (before feature/draw-card-inline-flag):
 #
-# This test pins the current "harness-consistent" state: both engines
-# walk the deck through 8+ turns without crashing and without flagging
-# is_over=True. If the harness ever starts running SBAs between steps
-# (a likely future improvement), the divergence would surface and this
-# test would FAIL — at which point the maintainer reads the docstring
-# and either fixes the Rust draw_card_inline OR adds a side-channel
-# SBA fire on the Python harness.
+# * Python: advance_phase_python calls turn.draw_card which DOES set
+#   has_lost eagerly on empty pop, but Python's is_over reads
+#   winner_id (only written by an SBA pass) so the loss didn't
+#   surface via the is_over field-view in this harness.
+# * Rust: state_ops_steps.rs::draw_card_inline was a SILENT no-op on
+#   empty libraries — the sibling pymethod draw_card /
+#   Effect::DrawCards arms set attempted_draw_on_empty but the
+#   auto-draw inline path didn't, leaving the active player
+#   un-flagged when they decked out via the DRAW step.
+#
+# So the parity here used to be "consistently wrong in different
+# ways" — both engines silently failed to surface the deck-out loss
+# on is_over and the per-field comparison stayed clean.
+#
+# Post-closure (feature/draw-card-inline-flag, 2026-05-11): the Rust
+# auto-draw inline path now flips attempted_draw_on_empty on empty
+# pop, mirroring the pymethod / Effect::DrawCards arms. The closure
+# SURFACES the SAME CE-pure-derivation-is_over divergence pinned by
+# the strict-xfail above (Rust derives is_over eagerly over the
+# loss-cause flags; Python's is_over reads winner_id which only an
+# SBA writes). The test below is now strict-xfailed for the same
+# reason — see its xfail marker for the closure plan.
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.xfail(
+    strict=True,
+    reason=(
+        "Inline-asymmetry sub-finding CLOSED "
+        "(feature/draw-card-inline-flag): the Rust auto-draw inline "
+        "path (state_ops_steps.rs::draw_card_inline) now flags "
+        "attempted_draw_on_empty on empty pop, mirroring the "
+        "pymethod draw_card / Effect::DrawCards arms. The closure "
+        "surfaces the SAME CE-pure-derivation-is_over divergence "
+        "pinned by the strict-xfail above "
+        "(test_cross_engine_empty_library_side_channel_draw_walks_clean) "
+        "— at step 39 once p0 decks out via the DRAW step, Rust's "
+        "is_over flips eagerly to True (winner_id=0) while Python's "
+        "is_over stays False because no SBA writes winner_id in this "
+        "harness. Xfailed strict until either (a) Python grows pure-"
+        "derivation is_over, (b) the harness fires SBAs between "
+        "steps, or (c) the smoke marks is_over/winner_id as known-"
+        "gap fields."
+    ),
+)
 def test_cross_engine_single_card_libraries_multi_turn_walks_clean():
     """Both players start with 1-card libraries. Drive 100 decisions of
     multi_turn_selector (multiple full turns, with DRAW steps on turn 2+
     that consume the single card and then attempt empty-library draws
-    on turn 3+). The walk should be clean — neither engine surfaces
-    is_over=True (Python because no SBA fires the loss into winner_id;
-    Rust because advance_phase uses draw_card_inline which is a silent
-    no-op on empty, NOT the pymethod that flags attempted_draw_on_empty).
+    on turn 3+).
 
-    Documented divergence: the Rust draw_card_inline / draw_card
-    pymethod asymmetry means the deck-out doesn't surface in the
-    advance-phase walk path even though it WOULD surface if the
-    harness side-channeled the pymethod (see the empty-library
-    test above for the side-channel divergence shape).
-
-    If the underlying inline draw is fixed to set
-    attempted_draw_on_empty (or the harness fires an SBA pass between
-    steps), this test starts failing with an is_over/winner_id
-    divergence — at which point either fix Python to derive is_over
-    pure-style OR add the SBA fire on the Python harness.
+    Post-closure status (feature/draw-card-inline-flag, 2026-05-11):
+    the inline-asymmetry sub-finding from the round-up docstring above
+    is CLOSED — Rust's auto-draw inline path now flips
+    attempted_draw_on_empty on empty pop, so the deck-out DOES surface
+    in the advance-phase walk path on Rust side. The closure surfaces
+    the SAME CE-pure-derivation-is_over divergence already pinned by
+    test_cross_engine_empty_library_side_channel_draw_walks_clean
+    above: Rust's is_over/winner_id flip eagerly (turn-3 auto-draw on
+    empty library => attempted_draw_on_empty=True => is_over=True via
+    the OR'd loss-cause predicate), while Python's is_over reads
+    winner_id which only an SBA pass writes. Hence the strict-xfail.
+    The is_over derivation divergence remains the open finding to
+    chase next.
     """
     from mtg_bot.parity.cross_engine import (
         CardDef,

@@ -361,9 +361,15 @@ refactor on either side that breaks the parity surfaces immediately.
   `tests_rust/test_winloss.py::test_explicit_lose_game_marks_player`,
   `test_each_opponent_loses_life_lethal_then_sba_locks_the_loss`.
 - **Invariant** (CR 704.5b / CR 104.2 — round-26 G10 + G11 closure):
-  - The `draw_card` primitive AND the `Effect::DrawCards`
-    resolution arm flip `Player.attempted_draw_on_empty = true`
-    when the library pop returns `None`.
+  - The `draw_card` primitive, the `Effect::DrawCards` resolution
+    arm, AND `advance_phase`'s auto-draw step (the
+    `draw_card_inline` mirror used on entry to PHASE_DRAW — see
+    `feature/draw-card-inline-flag`) all flip
+    `Player.attempted_draw_on_empty = true` when the library pop
+    returns `None`. All three entrypoints share the loss-flag
+    side-effect so a player who decks out via ANY draw path
+    (cast spell that resolves DrawCards, side-channel pymethod
+    call, or auto-draw at start of their turn) gets flagged.
   - `losers()` returns a player if **any** of the OR'd-three signals
     are true: `has_lost`, `attempted_draw_on_empty`, or `life <= 0`.
     Read directly (no SBA pass required) so the loss is observable
