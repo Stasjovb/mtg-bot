@@ -2750,3 +2750,227 @@ def first_strike_selector(py_state, rust_state, step_index: int) -> dict:
     # Default branch: delegate to retaliation_selector for everything
     # before the FS injection AND for everything after.
     return retaliation_selector(py_state, rust_state, step_index)
+
+
+# ---------------------------------------------------------------------------
+# Phase 5 follow-up #10: deathtouch_selector — extend the cross-engine
+# smoke onto deathtouch + multi-block damage assignment (CR 702.2 +
+# CR 510.1c). Mirrors :func:`first_strike_selector` exactly except:
+#
+#   1. The injected creature carries the ``deathtouch`` keyword instead
+#      of ``first_strike``.
+#   2. The trigger-detection gate is keyed on the deathtouch printing
+#      name ("Bear Assassin") so the two probes are independent.
+#
+# **High-yield CE candidate.** Deathtouch changes the damage SPLIT
+# (not just timing) per CR 702.2b — "any nonzero amount of combat
+# damage assigned to a creature by a source with deathtouch is
+# considered to be lethal damage." Combined with CR 510.1c (the
+# attacker chooses an assignment order on blockers; for each
+# blocker the attacker may not assign damage beyond that blocker's
+# "lethal damage" unless the previous blockers have all been
+# assigned lethal damage already), this means a 2/2 deathtouch
+# attacker blocked by two 2/2 blockers can assign 1 to each
+# (because 1 counts as lethal due to deathtouch), killing BOTH.
+#
+# Python honors this in ``combat.py:423`` — ``need = 1 if
+# has_deathtouch`` overrides the normal ``effective_toughness -
+# damage`` lethal calculation, so the multi-blocker assignment
+# loop spreads 1 damage per blocker. With the deathtouch
+# lethal-marking flag (``combat.py:526-527`` —
+# ``obj.marked_lethal = True``) the SBA pass destroys both
+# blockers.
+#
+# Rust's ``state_ops_combat.rs:849-978`` builds a plan that
+# (for the no-trample branch, the one this probe exercises) finds
+# the FIRST eligible blocker via ``bf_iter_etb_sorted`` and emits
+# a single PlanEntry assigning ``attacker_power`` to that blocker
+# (lines 956-964). The deathtouch keyword IS read elsewhere — the
+# damage-application pass at ``state_ops_combat.rs:1136-1167``
+# bumps the recipient's marked damage to its toughness on
+# deathtouch — but that upgrade only affects the FIRST blocker
+# (the one the plan emitted to). The SECOND blocker takes zero
+# damage and survives.
+#
+# **Expected divergence shape (CE14 candidate).** End of FS-style
+# multi-block on deathtouch attacker:
+#
+#   * **Python**: both blockers die. p1 gy = [Bears 9, Bears 11].
+#     p0 bf has the deathtouch attacker still (because it took 2
+#     damage back — 1 from each blocker — but its toughness 2 ==
+#     damage 2, which is also lethal by SBA. So actually the
+#     attacker dies too). p0 gy = [Bear Assassin].
+#   * **Rust**: only the first blocker dies. p1 gy = [Bears 9].
+#     p1 bf still has Bears 11 (untouched, no damage). The
+#     attacker takes 2 damage from Bears 9 (back-damage from
+#     every blocker, ``state_ops_combat.rs:984-1037``) — so
+#     attacker dies in pass 2. p0 gy = [Bear Assassin], p1 gy =
+#     [Bears 9]. Bears 11 stays on bf untouched.
+#
+# So the load-bearing divergence is whether **Bears 11 survives**:
+# Python kills it (deathtouch's "1 damage is lethal" assignment
+# splits), Rust spares it (plan only emits to first_blocker).
+# This is observable in the harness's per-step bf snapshot at
+# COMBAT_DAMAGE — both engines diverge on p1's bf creature count
+# and per-creature damage.
+#
+# **No-go: do NOT fix the divergence in this slice.** Per the
+# probe slice spec, surfacing a CE is the end goal; xfail-pin
+# and document. Fix lives in a follow-up CE14 closure slice that
+# extends Rust's no-trample multi-block branch to walk
+# bf-ETB-sorted blockers and assign per-blocker (need=1 on
+# deathtouch).
+#
+# **Setup mirrors first_strike_selector exactly.** Same
+# multi_blocker_deckspec walk, same step-168 injection point,
+# same side-channel-untap of p1's Bears blockers. The only
+# divergence is the keyword on the injected printing.
+# ---------------------------------------------------------------------------
+
+
+# Name of the synthetic deathtouch printing injected by
+# :func:`deathtouch_side_channel`. Kept module-level so the trigger-
+# detection gate in :func:`deathtouch_selector` and the tests can
+# refer to the same name without drift. Distinct from
+# :data:`_FIRST_STRIKE_PRINTING_NAME` so the two probes' trigger
+# gates are independent.
+_DEATHTOUCH_PRINTING_NAME = "Bear Assassin"
+
+
+def deathtouch_side_channel(py_state, rust_state) -> tuple[int, int]:
+    """Side-channel inject a 2/2 deathtouch creature onto BOTH engines'
+    p0 battlefield.
+
+    Mirror of :func:`first_strike_side_channel` — same shape, same
+    side-channel-untap of p1's Bears blockers, same return contract.
+    The only differences are:
+
+      * The synthetic printing's keyword is ``"deathtouch"`` (Rust
+        spelling) / ``"deathtouch"`` (Python spelling — happens to be
+        the same single-token form, unlike first_strike).
+      * The synthetic printing's name is :data:`_DEATHTOUCH_PRINTING_NAME`
+        (``"Bear Assassin"``) so this probe's trigger gate doesn't
+        collide with the first-strike probe's ``"Bear Knight"`` gate.
+
+    Returns ``(py_obj_id, rust_obj_id)``. Ids match because both
+    engines allocate in lockstep through step 167 of the
+    retaliation walk.
+
+    See :func:`first_strike_side_channel` for the full rationale on
+    why Option B (side-channel inject onto bf) is used rather than
+    Option A (add a deathtouch creature to the deckspec). Same
+    reasoning applies: ``CardDef`` doesn't carry a ``keywords``
+    field, so the deckspec route would require multi-file fanout.
+    """
+    from mtg_bot.cards.base import CardPrinting, ManaCost
+    from mtg_bot.game import Zone
+
+    # ---- Python side ----
+    dt_printing = CardPrinting(
+        name=_DEATHTOUCH_PRINTING_NAME,
+        mana_cost_str="",
+        mana_cost=ManaCost(),
+        type_line="Creature",
+        supertypes=(),
+        card_types=("Creature",),
+        subtypes=(),
+        power=2,
+        toughness=2,
+        produces=frozenset(),
+        keywords=frozenset({"deathtouch"}),
+    )
+    py_obj = py_state.new_object(
+        dt_printing, owner_id=0, zone=Zone.BATTLEFIELD,
+    )
+    py_obj.summoning_sick = False
+    py_obj.tapped = False
+    py_obj.damage = 0
+    py_obj.etb_timestamp = py_state.next_timestamp
+    py_state.next_timestamp += 1
+    py_state.battlefield.append(py_obj)
+
+    # ---- Rust side ----
+    ZONE_BATTLEFIELD = 2
+    rust_obj_id = rust_state.register_and_inject_object(
+        {
+            "name": _DEATHTOUCH_PRINTING_NAME,
+            "card_types": ["Creature"],
+            "power": 2,
+            "toughness": 2,
+            "keywords": ["deathtouch"],
+        },
+        0,
+        ZONE_BATTLEFIELD,
+    )
+
+    # Side-channel untap of p1's Bears blockers (same rationale as
+    # first_strike_side_channel — p1's bears are still tapped from
+    # their turn-12 attack, and the multi-block branch we want to
+    # exercise requires them to be eligible blockers).
+    for obj in py_state.battlefield:
+        if (
+            obj.controller_id == 1
+            and obj.printing.name == "Grizzly Bears"
+        ):
+            obj.tapped = False
+    for entry in rust_state.battlefield_snapshot():
+        if (
+            entry["controller_id"] == 1
+            and entry["printing_name"] == "Grizzly Bears"
+        ):
+            rust_state.untap_object(int(entry["id"]))
+    return int(py_obj.id), int(rust_obj_id)
+
+
+def deathtouch_selector(py_state, rust_state, step_index: int) -> dict:
+    """Cross-engine smoke selector that drives a deathtouch + multi-block
+    combat on :func:`multi_blocker_deckspec`.
+
+    Structurally identical to :func:`first_strike_selector` —
+    delegates to :func:`retaliation_selector` for everything before
+    and after the side-channel injection, and side-channel-injects
+    a deathtouch attacker at the same step-168 trigger point. The
+    only differences:
+
+      * The injected creature carries ``deathtouch`` instead of
+        ``first_strike``.
+      * The trigger gate keys on :data:`_DEATHTOUCH_PRINTING_NAME`
+        (``"Bear Assassin"``) — same gate shape, different name.
+
+    Expected walk shape:
+
+      * **Steps 0-167** — identical to retaliation_selector's walk.
+      * **Step 168** — deathtouch injection fires; selector returns
+        ``pass_priority``.
+      * **Steps 169-N** — retaliation_selector delegate drives
+        DECLARE_ATTACKERS([14 = deathtouch attacker]),
+        DECLARE_BLOCKERS([[11, 14], [9, 14]]) (multi-block branch
+        because both Bears are now untapped + unsick), COMBAT_DAMAGE
+        (where the deathtouch divergence surfaces — Python kills
+        both blockers, Rust kills only the first).
+
+    The selector is stateless — same idempotency guarantee as
+    first_strike_selector: post-injection, the trigger gate flips
+    permanently because the Bear Assassin object stays in some
+    zone (bf or gy).
+    """
+    dt_already_injected = any(
+        obj.printing.name == _DEATHTOUCH_PRINTING_NAME
+        for obj in py_state.battlefield
+    ) or any(
+        obj.printing.name == _DEATHTOUCH_PRINTING_NAME
+        for p in py_state.players
+        for zone_list in (p.hand, p.library, p.graveyard, p.exile)
+        for obj in zone_list
+    )
+
+    if not dt_already_injected:
+        creature_count = sum(
+            1 for o in py_state.battlefield
+            if "Creature" in o.printing.card_types
+        )
+        if creature_count >= 3:
+            deathtouch_side_channel(py_state, rust_state)
+            return {"kind": "pass_priority"}
+
+    return retaliation_selector(py_state, rust_state, step_index)

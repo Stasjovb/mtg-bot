@@ -2585,6 +2585,134 @@ See I35 for the post-closure invariant pin.
 
 ---
 
+### CE14. Deathtouch + multi-block damage assignment split — Python splits 1-per-blocker (CR 702.2b), Rust assigns full power to first blocker only
+
+- **Surfaced by**: `feature/phase5-deathtouch` —
+  `deathtouch_selector` + `multi_blocker_deckspec`. The walk
+  drives a side-channel-injected 2/2 deathtouch attacker
+  ("Bear Assassin") onto p0's bf at step 168, then
+  delegates to `retaliation_selector` for phase advance +
+  declare_attackers([14]) + declare_blockers([[11, 14],
+  [9, 14]]) + COMBAT_DAMAGE. First Python-vs-Rust diverging
+  step at index 174 (the `pass_priority` that fires
+  COMBAT_DAMAGE on both engines, right after step 173's
+  declare_blockers).
+- **Pinned by**:
+  `tests/test_parity_smoke.py::test_cross_engine_deathtouch_selector_walks_clean`
+  (xfail-pinned with `strict=True`) +
+  `test_cross_engine_deathtouch_selector_surfaces_ce14_at_step_174`
+  (symptom-present pin, passes today).
+- **Fields**:
+  - `graveyard_p1` — Python: 2 Bears (ids 9 + 11); Rust: 1
+    Bears (id 9 only).
+  - `battlefield` — Python: Bears 11 absent (in p1 gy); Rust:
+    Bears 11 still present (untouched, 0 damage marked).
+- **Symptom**: With a 2/2 deathtouch attacker blocked by two
+  2/2 Bears (ids 9, 11), CR 702.2b + CR 510.1c require that
+  1 damage assigned to ANY blocker counts as lethal (because
+  deathtouch makes any nonzero damage lethal), so the
+  attacker may assign 1 damage to each blocker — killing
+  BOTH. Python honors this and both blockers land in
+  p1's graveyard. Rust assigns the full 2 damage to the first
+  blocker only (the bf-ETB-first eligible blocker, id 9),
+  killing it but leaving blocker 11 untouched on the
+  battlefield. Bears 11's `damage` field is 0 in Rust's bf
+  snapshot — the plan never emitted an entry targeting it.
+- **Cause — Python side**: `src/mtg_bot/combat.py:419-435` in
+  `resolve_combat_damage` runs a per-blocker assignment loop:
+  ```
+  remaining = attacker_power
+  for i, blocker in enumerate(blockers):
+      if remaining <= 0:
+          break
+      need = 1 if has_deathtouch else max(
+          0, effective_toughness(state, blocker) - blocker.damage
+      )
+      is_last = i == len(blockers) - 1
+      if is_last and not has_trample:
+          assigned = remaining
+      else:
+          assigned = min(remaining, need)
+      damage_events_typed.append(
+          ("creature", blocker.id, assigned, ...)
+      )
+      remaining -= assigned
+  ```
+  With deathtouch + multi-block, `need = 1` per blocker, so
+  blocker 9 gets assigned=1, remaining=1; blocker 11 is last
+  (no trample) so assigned=remaining=1. Both blockers are
+  then `marked_lethal=True` via `combat.py:526-527` on the
+  apply-damage pass, and SBA destroys them.
+- **Cause — Rust side**:
+  `rust/src/state_ops_combat.rs:849-978` builds the combat
+  damage plan. The no-trample branch (line 956-964) only
+  walks ONE blocker — `first_blocker` via
+  `bf_iter_etb_sorted` filtered by `attacker_blocker_ids` —
+  and emits a single PlanEntry assigning `attacker_power`
+  (full 2 damage) to that blocker. The deathtouch keyword IS
+  read at apply-time
+  (`state_ops_combat.rs:1136-1166`) — it upgrades the
+  recipient's marked damage to toughness — but only the
+  first blocker is a recipient. The trample branch (line
+  905-955) already has a deathtouch cap (`blocker_cap = 1 if
+  attacker_has_deathtouch`), so the asymmetry is
+  no-trample-specific: trample+deathtouch works correctly,
+  deathtouch-only (no trample) drops blocker 2+.
+- **Why prior CE probes didn't catch this**: The CE9 closure
+  fixed the bf-order walk for multi-block blocker selection
+  (Rust now uses `bf_iter_etb_sorted` like Python), so the
+  "which blocker is first" disagreement that CE9 surfaced is
+  closed. But CE9's probe didn't carry deathtouch — the
+  attacker was a vanilla 2/2, so the single-PlanEntry
+  damage assignment (which is correct for vanilla
+  multi-block: one blocker absorbs all the power, the rest
+  take zero — that's the simplified-MTG approximation Rust
+  ships and Python's per-blocker walk happens to match
+  observationally because non-deathtouch `need =
+  effective_toughness` makes the first blocker absorb its
+  full toughness, which equals attacker_power here). The
+  CE9 probe also didn't pin the load-bearing "what does
+  blocker 2 look like" surface — only "which blocker dies"
+  — so the symmetric-blocker-survival shape on a vanilla
+  attacker happened to match.
+- **Impact**: MEDIUM. The divergence changes the post-combat
+  creature distribution by ONE blocker per deathtouch +
+  multi-block event. Rust under-kills creatures — the
+  defending player keeps a blocker that should have died.
+  Self-play and eval that involve deathtouch creatures
+  (currently rare in the EoE pool but non-zero) will diverge
+  on every multi-block engagement. Distinct from CE9 (which
+  was "which blocker dies" — same total deaths); this is
+  "how many blockers die" (different totals).
+- **Closure direction (open question)**:
+  - **Option A (Rust-side convergence on Python, parity-
+    correct).** Extend Rust's no-trample multi-block branch
+    in `state_ops_combat.rs:956-964` to walk ALL blockers
+    matching `attacker_blocker_ids` (in `bf_iter_etb_sorted`
+    order, same iterator the trample branch already uses)
+    and emit a PlanEntry per blocker with `need = 1 if
+    attacker_has_deathtouch else blocker_toughness`. Mirror
+    Python's "is_last gets remaining" semantics for the
+    no-trample case. The trample branch already has the
+    deathtouch=1 cap; the no-trample branch just hasn't
+    been generalized past first_blocker yet. Single-file
+    edit, ~30 LOC. This is the natural CE14 closure because
+    Python's multi-block assignment already honors
+    CR 702.2b correctly.
+  - **Option B (Python-side fix, bug-mirror).** Drop the
+    `need = 1 if has_deathtouch` override in
+    `combat.py:423` and always use `effective_toughness -
+    damage` (the non-deathtouch path). Symmetric with
+    Rust's first-blocker-only assignment. WRONG per
+    CR 702.2b — this would regress Python's deathtouch
+    correctness. Not viable.
+  - Option A is the obvious pick (Rust converges on Python's
+    correct behavior); OPEN only because the playbook
+    requires explicit slice-author selection at closure
+    time.
+
+---
+
 ## Maintenance
 
 When a slice closes one of the gaps above, drop the entry from the
