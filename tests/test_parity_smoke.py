@@ -4165,3 +4165,386 @@ def test_cross_engine_haste_selector_pre_injection_walks_clean(
         "Bear Sprinter should not yet exist at end of step 167 — "
         "haste injection fires at step 168"
     )
+
+
+# ---------------------------------------------------------------------------
+# Phase 5 follow-up #14: menace_selector — extend retaliation_selector with
+# a side-channel-injected 2/2 menace creature on p0's battlefield at step
+# 168, then drive a SINGLE-blocker DECLARE_BLOCKERS request (illegal per
+# CR 702.110b — "can't be blocked except by two or more creatures") at
+# turn 13 to surface the predicted CE16 divergence.
+#
+# Mirrors :func:`vigilance_selector` / :func:`haste_selector` exactly
+# except the injected creature carries ``menace`` and the
+# DECLARE_BLOCKERS branch is parameterized — three test scenarios
+# exercise three block decisions:
+#
+#   * **A** (``"none"``): zero blockers → legal, menace invisible.
+#   * **B** (``"both"``): two blockers → legal multi-block, menace
+#     satisfied.
+#   * **C** (``"single"``): one blocker → ILLEGAL per CR 702.110b.
+#
+# **OUTCOME on this probe: CE16 SURFACED — divergence pinned via
+# strict-xfail on scenario C.** Scenarios A + B walk clean — both
+# engines handle the legal block scenarios identically. Scenario C
+# surfaces the predicted apply_action divergence: Python silently
+# drops the single illegal block (per ``actions.py:2555-2566``
+# post-validation menace check), Rust accepts it (per
+# ``state_ops_combat.rs:779-789`` — ``is_legal_block_assignment``
+# exists as a read-only predicate but is NOT consulted by
+# ``Action::DeclareBlockers`` at ``state_ops_actions.rs:241-243``).
+#
+# Divergence shape at step 174 (post END_OF_COMBAT, one selector
+# call past the COMBAT_DAMAGE branch):
+#
+#   * Python: attacker unblocked → 2 damage to p1 → ``life_p1 = 18``;
+#     no creatures killed; ``graveyard_p0 = ()``, ``graveyard_p1 =
+#     ()``; ``battlefield`` still has all three Bears + Bear Bully.
+#   * Rust: attacker blocked by Grizzly Bears id 9 → 2-each combat
+#     damage exchange → both die via SBA; ``life_p1 = 20``;
+#     ``graveyard_p0 = [Bear Bully id 14]``, ``graveyard_p1 =
+#     [Grizzly Bears id 9]``; ``battlefield`` lost both.
+#
+# Three pinning tests guard the contract:
+#
+#   1. ``test_cross_engine_menace_selector_no_blockers_walks_clean``
+#      — scenario A (``"none"``): full 200-decision walk parity-clean.
+#      Menace invisible when defender declines to block.
+#   2. ``test_cross_engine_menace_selector_both_blockers_walks_clean``
+#      — scenario B (``"both"``): full 200-decision walk parity-clean.
+#      Multi-block satisfies the menace >=2 requirement.
+#   3. ``test_cross_engine_menace_selector_single_blocker_surfaces_ce16_at_step_174``
+#      — scenario C (``"single"``): symptom-present pin with EXACT
+#      field shape (py kills neither, rust kills both via single-block
+#      trade). Passes today; deleted after closure per the CE2-CE15
+#      pair-pin convention.
+#   4. ``test_cross_engine_menace_selector_single_blocker_walks_clean``
+#      — scenario C strict-xfail clean-walk pin. Fails today
+#      (divergence at step 174); flips to xpass after CE16 closure.
+#   5. ``test_cross_engine_menace_selector_pre_injection_walks_clean``
+#      — pre-injection backbone steps 0-167 parity-clean. Shared
+#      across all three scenarios (the injection + DECLARE_BLOCKERS
+#      override fire AFTER step 167).
+# ---------------------------------------------------------------------------
+
+
+def test_cross_engine_menace_selector_no_blockers_walks_clean(parity_smoke):
+    """**Menace no-blockers clean-walk pin** (scenario A) — 200-decision
+    walk on :func:`multi_blocker_deckspec` with the
+    ``block_decision="none"`` menace_selector is parity-clean every
+    step. With zero blockers declared the menace constraint is
+    vacuously satisfied (CR 702.110b only restricts HOW the attacker
+    is blocked, not whether it must be), so this scenario does NOT
+    exercise the apply-time menace gate — it pins the "menace is
+    invisible when defender doesn't block" baseline contract.
+
+    Both engines should:
+      * Accept the empty ``declare_blockers`` assignment.
+      * Apply 2 combat damage from the menace attacker to p1 →
+        p1 life: 20 → 18 (matches the unblocked single-attacker
+        baseline; no menace-specific surface fires).
+      * Leave Bear Bully on p0's battlefield post-combat (attacker
+        took no back-damage).
+    """
+    from mtg_bot.parity.cross_engine import (
+        make_menace_selector,
+        multi_blocker_deckspec,
+        walk_both,
+    )
+
+    selector = make_menace_selector("none")
+    result = walk_both(
+        multi_blocker_deckspec(),
+        n_decisions=200,
+        decision_selector=selector,
+    )
+    assert result.error is None, (
+        f"walk aborted at step {result.aborted_at}: {result.error}"
+    )
+    for step in result.steps:
+        assert step.divergences == [], (
+            f"unexpected divergence at step {step.step_index}: "
+            f"action={step.action_dict} "
+            f"{[(d.field, d.py_value, d.rust_value, d.known_gap) for d in step.divergences]}"
+        )
+
+
+def test_cross_engine_menace_selector_both_blockers_walks_clean(parity_smoke):
+    """**Menace multi-block clean-walk pin** (scenario B) — 200-decision
+    walk on :func:`multi_blocker_deckspec` with the
+    ``block_decision="both"`` menace_selector is parity-clean every
+    step. With TWO blockers declared the menace >=2 requirement is
+    satisfied and menace is invisible — this scenario pins the
+    "multi-block legality is unaffected by menace" baseline contract.
+
+    Both engines should:
+      * Accept the two-blocker ``declare_blockers`` assignment.
+      * Apply combat damage: attacker (2 power) → first blocker
+        (lethal, blocker dies). Blockers (2 + 2 = 4 power back) →
+        attacker (dies). Standard multi-block damage shape (matches
+        vigilance / haste probes' post-multi-block state modulo the
+        attacker's tapped flag).
+      * Post-combat: p0 gy = [Bear Bully id 14], p1 gy = [Grizzly
+        Bears id 9 — first blocker took lethal 2], p1 bf still has
+        Grizzly Bears id 11 (post-CE14 ``if remaining <= 0: break``).
+    """
+    from mtg_bot.parity.cross_engine import (
+        make_menace_selector,
+        multi_blocker_deckspec,
+        walk_both,
+    )
+
+    selector = make_menace_selector("both")
+    result = walk_both(
+        multi_blocker_deckspec(),
+        n_decisions=200,
+        decision_selector=selector,
+    )
+    assert result.error is None, (
+        f"walk aborted at step {result.aborted_at}: {result.error}"
+    )
+    for step in result.steps:
+        assert step.divergences == [], (
+            f"unexpected divergence at step {step.step_index}: "
+            f"action={step.action_dict} "
+            f"{[(d.field, d.py_value, d.rust_value, d.known_gap) for d in step.divergences]}"
+        )
+
+
+def test_cross_engine_menace_selector_single_blocker_surfaces_ce16_at_step_174(
+    parity_smoke,
+):
+    """**CE16 symptom-present pin** (scenario C) — drives 175 selector
+    decisions and asserts the EXACT divergence shape at step 174
+    (post END_OF_COMBAT, one selector call past the COMBAT_DAMAGE
+    branch).
+
+    Surface: Python's ``_declare_blockers``
+    (``actions.py:2555-2566``) post-validation menace check drops
+    the single illegal blocker; Rust's
+    ``Action::DeclareBlockers`` dispatcher
+    (``state_ops_actions.rs:241-243``) accepts the single blocker
+    because ``declare_blocker`` is the only primitive called per
+    pair and it has no menace gate.
+    ``state_ops_combat.rs:779-789`` exposes an
+    ``is_legal_block_assignment`` predicate that correctly returns
+    ``False`` for a single-blocker menace assignment, but the
+    apply path NEVER calls it.
+
+    Expected divergence at step 174:
+      * Python: p1 life = 18 (2 damage from unblocked menace
+        attacker), p0 gy = (), p1 gy = (), Bear Bully still on p0
+        bf, both Grizzly Bears still on p1 bf.
+      * Rust: p1 life = 20 (attacker was blocked, no damage
+        through), p0 gy = [Bear Bully id 14], p1 gy = [Grizzly
+        Bears id 9], Grizzly Bears id 11 still on p1 bf.
+
+    Pinned as a symptom-present pin (passes today). Deleted after
+    closure per the CE2-CE15 pair-pin convention.
+    """
+    from mtg_bot.parity.cross_engine import (
+        build_matched_states,
+        make_menace_selector,
+        multi_blocker_deckspec,
+        step_both,
+    )
+
+    selector = make_menace_selector("single")
+    py_state, rust_state = build_matched_states(multi_blocker_deckspec())
+    result_step = None
+    for i in range(175):
+        action = selector(py_state, rust_state, i)
+        result_step = step_both(py_state, rust_state, action)
+
+    # ---- Direct-read structural pin on Python: attacker unblocked ----
+    assert py_state.players[1].life == 18, (
+        f"Python: expected p1 life = 18 (unblocked menace attacker "
+        f"dealt 2 damage — single blocker was dropped per "
+        f"actions.py:2555-2566 menace post-validation), got "
+        f"{py_state.players[1].life}"
+    )
+    py_p0_gy = [(o.id, o.printing.name) for o in py_state.players[0].graveyard]
+    assert py_p0_gy == [], (
+        f"Python: expected p0 gy = [] (attacker survived because "
+        f"the single illegal block was dropped; attacker took no "
+        f"back-damage), got {py_p0_gy}"
+    )
+    py_p1_gy = [(o.id, o.printing.name) for o in py_state.players[1].graveyard]
+    assert py_p1_gy == [], (
+        f"Python: expected p1 gy = [] (no blocker actually engaged "
+        f"because the single illegal block was dropped), got "
+        f"{py_p1_gy}"
+    )
+    py_bear_bully = next(
+        (o for o in py_state.battlefield if o.printing.name == "Bear Bully"),
+        None,
+    )
+    assert py_bear_bully is not None, (
+        "Python: expected Bear Bully (id 14) still on p0 bf "
+        "(attacker survived unblocked combat)"
+    )
+
+    # ---- Direct-read structural pin on Rust: single-block trade ----
+    rust_life = rust_state.life_totals
+    assert rust_life[1] == 20, (
+        f"Rust: expected p1 life = 20 (attacker was blocked by "
+        f"the single illegal blocker — Rust accepted the block "
+        f"because apply_action never calls is_legal_block_assignment), "
+        f"got {rust_life[1]}"
+    )
+    rust_p0_gy = [
+        (e["id"], e.get("printing_name"))
+        for e in rust_state.graveyard_snapshot(0)
+    ]
+    assert rust_p0_gy == [(14, "Bear Bully")], (
+        f"Rust: expected p0 gy = [(14, 'Bear Bully')] (attacker "
+        f"died from the single blocker's 2 back-damage), got "
+        f"{rust_p0_gy}"
+    )
+    rust_p1_gy = [
+        (e["id"], e.get("printing_name"))
+        for e in rust_state.graveyard_snapshot(1)
+    ]
+    assert rust_p1_gy == [(9, "Grizzly Bears")], (
+        f"Rust: expected p1 gy = [(9, 'Grizzly Bears')] (single "
+        f"blocker took lethal 2 from the menace attacker), got "
+        f"{rust_p1_gy}"
+    )
+
+    # ---- Per-field divergence list from the last step ----
+    assert result_step is not None
+    diverging_fields = {d.field for d in result_step.divergences}
+    expected_diverge = {"life_p1", "graveyard_p0", "graveyard_p1", "battlefield"}
+    assert expected_diverge.issubset(diverging_fields), (
+        f"CE16 expected divergence fields {expected_diverge} should "
+        f"be a subset of the actual divergence at step 174; got "
+        f"{sorted(diverging_fields)}"
+    )
+
+
+@pytest.mark.xfail(
+    reason=(
+        "CE16: Rust's Action::DeclareBlockers dispatcher "
+        "(state_ops_actions.rs:241-243) does NOT call "
+        "is_legal_block_assignment to validate the final block "
+        "assignment, so a single-blocker assignment against a "
+        "menace attacker is accepted on the Rust side. Python's "
+        "_declare_blockers (actions.py:2555-2566) post-validates "
+        "and drops the illegal single block. Divergence surfaces "
+        "at step 174 on life_p1 / graveyard_p0 / graveyard_p1 / "
+        "battlefield fields. Closeable via apply-side menace gate "
+        "in state_ops_actions.rs's DeclareBlockers arm or via "
+        "post-loop validation that calls is_legal_block_assignment "
+        "and unwinds matching blockers from self.blockers — the "
+        "predicate already exists in state_ops_combat.rs:779-789 "
+        "but is unconsulted by apply_action."
+    ),
+    strict=True,
+)
+def test_cross_engine_menace_selector_single_blocker_walks_clean(parity_smoke):
+    """**CE16 strict-xfail clean-walk pin** (scenario C) — 200-decision
+    walk on :func:`multi_blocker_deckspec` with the
+    ``block_decision="single"`` menace_selector. Fails today
+    (divergence at step 174); flips to xpass after CE16 closure.
+
+    Pair-pin with
+    :func:`test_cross_engine_menace_selector_single_blocker_surfaces_ce16_at_step_174`
+    per the CE2-CE15 convention — the symptom-present pin documents
+    the EXACT field shape today; the strict-xfail clean-walk pin
+    is the closure trigger (it flips to xpass when the divergence
+    is fixed, alerting that the symptom-pin should be deleted).
+    """
+    from mtg_bot.parity.cross_engine import (
+        make_menace_selector,
+        multi_blocker_deckspec,
+        walk_both,
+    )
+
+    selector = make_menace_selector("single")
+    result = walk_both(
+        multi_blocker_deckspec(),
+        n_decisions=200,
+        decision_selector=selector,
+    )
+    assert result.error is None, (
+        f"walk aborted at step {result.aborted_at}: {result.error}"
+    )
+    for step in result.steps:
+        assert step.divergences == [], (
+            f"unexpected divergence at step {step.step_index}: "
+            f"action={step.action_dict} "
+            f"{[(d.field, d.py_value, d.rust_value, d.known_gap) for d in step.divergences]}"
+        )
+
+
+def test_cross_engine_menace_selector_pre_injection_walks_clean(parity_smoke):
+    """Pre-injection walk (steps 0-167) on :func:`multi_blocker_deckspec`
+    with any of the three menace_selector variants is parity-clean.
+    Pins the contract that the menace probe's
+    delegate-to-retaliation_selector backbone is unchanged — steps
+    0-167 are identical to retaliation_selector's walk shape and
+    surface no divergences. The menace injection + DECLARE_BLOCKERS
+    override fire SPECIFICALLY at / after step 168, not before.
+
+    Tests with the ``"none"`` variant — all three variants share the
+    same pre-167 backbone (they only diverge at the DECLARE_BLOCKERS
+    branch around step 173, well past step 167).
+
+    Validates the pre-condition: at the end of step 167, the bf has
+    exactly 3 creatures and no Bear Bully (the menace injection
+    hasn't fired). Same shape as the FS / DT / LL / VG / haste
+    probes' pre-injection tests.
+    """
+    from mtg_bot.parity.cross_engine import (
+        build_matched_states,
+        make_menace_selector,
+        multi_blocker_deckspec,
+        step_both,
+        walk_both,
+    )
+
+    selector = make_menace_selector("none")
+    result = walk_both(
+        multi_blocker_deckspec(),
+        n_decisions=168,
+        decision_selector=selector,
+    )
+    assert result.error is None
+    for step in result.steps:
+        assert step.divergences == [], (
+            f"pre-injection divergence at step {step.step_index}: "
+            f"action={step.action_dict} "
+            f"{[(d.field, d.py_value, d.rust_value, d.known_gap) for d in step.divergences]}"
+        )
+
+    # Walk shape sanity: rebuild matched states, drive 168 steps, and
+    # confirm the pre-injection bf state.
+    py_state, rust_state = build_matched_states(multi_blocker_deckspec())
+    for i in range(168):
+        action = selector(py_state, rust_state, i)
+        step_both(py_state, rust_state, action)
+
+    creatures = [
+        o for o in py_state.battlefield
+        if "Creature" in o.printing.card_types
+    ]
+    assert len(creatures) == 3, (
+        f"expected 3 creatures on bf at end of step 167, got "
+        f"{len(creatures)}: "
+        f"{[(o.id, o.controller_id, o.summoning_sick) for o in creatures]}"
+    )
+    # No Bear Bully in any zone yet (the menace injection hasn't
+    # fired).
+    bear_bully_anywhere = (
+        any(o.printing.name == "Bear Bully" for o in py_state.battlefield)
+        or any(
+            o.printing.name == "Bear Bully"
+            for p in py_state.players
+            for zone in (p.hand, p.library, p.graveyard, p.exile)
+            for o in zone
+        )
+    )
+    assert not bear_bully_anywhere, (
+        "Bear Bully should not yet exist at end of step 167 — "
+        "menace injection fires at step 168"
+    )
