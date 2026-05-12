@@ -394,5 +394,9 @@ pub fn make_state(
         next_etb_timestamp: 0,
         resolving_combat_damage_amount: 0,
         winner_id_sticky: None,
+        // Effect-rng-threading closure: default `None`; cross-engine
+        // smoke callers opt in via `set_external_rng(Some(rng))` after
+        // `make_state` returns.
+        rng: None,
     })
 }

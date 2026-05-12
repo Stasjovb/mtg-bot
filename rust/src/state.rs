@@ -756,7 +756,15 @@ pub enum PendingDecision {
 /// the printings catalogue at refcount-bump cost. Per-instance
 /// state — players, zones, turn counter — clones via the `Player`
 /// struct's CoW zones (see `Zone` doc).
-#[derive(Clone, Debug)]
+///
+/// **Clone is implemented manually** (rather than `#[derive(Clone)]`)
+/// because the `rng: Option<Py<PyAny>>` field cannot use the pyo3
+/// `py-clone` feature without taking on the global "panic when GIL not
+/// held" footgun. The manual impl explicitly acquires the GIL via
+/// `Python::with_gil` and calls `clone_ref` on the stashed rng, which
+/// just bumps the Python refcount. Every other field uses its standard
+/// `Clone` implementation.
+#[derive(Debug)]
 #[pyclass(name = "GameState")]
 pub struct GameState {
     pub players: [Player; 2],
@@ -920,6 +928,81 @@ pub struct GameState {
     /// sole-survivor SBA pass and another didn't — pinned baselines
     /// stay bit-equal.
     pub winner_id_sticky: Option<u8>,
+    /// **Effect-rng-threading closure (G19 follow-up) — caller-owned
+    /// external rng for in-Effect shuffles.** Optional handle to a
+    /// Python `random.Random` instance set by the caller via
+    /// `set_external_rng`. When `Some(_)`, the Effect resolve arms
+    /// that consume randomness (today only
+    /// `Effect::SearchLibraryForBasicLandTapped` post-search Fisher-
+    /// Yates per CR 701.19 / 701.22) read draws from this stream via
+    /// `crate::external_rng::next_below`, producing byte-identical
+    /// permutations to Python's `random.Random.shuffle(list)`. When
+    /// `None` (default), the legacy xorshift64 fallback runs unchanged.
+    ///
+    /// **Caller-owned bookkeeping — not part of gameplay-relevant state.**
+    /// This field is NOT serialized into the fingerprint (see I43 in
+    /// `docs/RUST_PARITY_GAPS.md`) — two states with the same
+    /// gameplay-observable shape must produce the same digest regardless
+    /// of whether/which rng is stashed. Production callers (cli, bench)
+    /// leave this `None` and stay byte-equivalent to pre-slice behavior;
+    /// only the parity harness and cross-engine smoke tests opt in via
+    /// `set_external_rng`.
+    ///
+    /// **Clone semantics.** `clone_ref`'d through the manual `Clone`
+    /// impl on `GameState` — two clones share the SAME `random.Random`
+    /// instance (Python refcount bump). For the cross-engine smoke use
+    /// case this is correct (one rng per game). MCTS-style search-tree
+    /// forking that depends on independent rng streams must call
+    /// `set_external_rng(None)` on the forked branches.
+    pub rng: Option<Py<PyAny>>,
+}
+
+impl Clone for GameState {
+    fn clone(&self) -> Self {
+        // Cloning a `Py<PyAny>` requires the GIL because it bumps the
+        // Python-side refcount. All `GameState::clone` call sites today
+        // are inside pymethods (clone_once, clone_n_times_micros, the
+        // implicit clones in fingerprint serialization paths) which run
+        // under the GIL by construction; `Python::with_gil` is a no-op
+        // when the GIL is already held (just hands back a token).
+        let rng = self
+            .rng
+            .as_ref()
+            .map(|r| Python::with_gil(|py| r.clone_ref(py)));
+        GameState {
+            players: self.players.clone(),
+            registry: self.registry.clone(),
+            active_player: self.active_player,
+            priority_player: self.priority_player,
+            turn_number: self.turn_number,
+            phase: self.phase,
+            attackers: self.attackers.clone(),
+            blockers: self.blockers.clone(),
+            stack: self.stack.clone(),
+            consecutive_passes: self.consecutive_passes,
+            permanent_left_battlefield_this_turn: self.permanent_left_battlefield_this_turn,
+            spell_warped_this_turn: self.spell_warped_this_turn,
+            pending_decisions: self.pending_decisions.clone(),
+            next_etb_timestamp: self.next_etb_timestamp,
+            resolving_combat_damage_amount: self.resolving_combat_damage_amount,
+            winner_id_sticky: self.winner_id_sticky,
+            rng,
+        }
+    }
+}
+
+impl GameState {
+    /// **Effect-rng-threading closure — borrow the stashed external rng.**
+    /// Returns `Some(&Py<PyAny>)` when a Python `random.Random` (or
+    /// compatible) has been set via `set_external_rng`, otherwise
+    /// `None`. Effect resolve arms that consume randomness call this
+    /// to decide between the external-rng path (Python MT byte-for-byte
+    /// parity) and the xorshift64 fallback (production cli / bench).
+    /// Crate-private — exposed only to sibling rust modules; Python
+    /// callers manipulate the rng via the `set_external_rng` pymethod.
+    pub(crate) fn rng_ref(&self) -> Option<&Py<PyAny>> {
+        self.rng.as_ref()
+    }
 }
 
 #[pymethods]
@@ -1070,6 +1153,44 @@ impl GameState {
     #[getter]
     fn spell_warped_this_turn(&self) -> bool {
         self.spell_warped_this_turn
+    }
+
+    /// **Effect-rng-threading closure (G19 follow-up) — install a
+    /// caller-owned Python `random.Random` for in-Effect shuffles.**
+    ///
+    /// Pass `Some(random_random_instance)` to opt this state into the
+    /// external-rng path: Effect resolve arms that consume randomness
+    /// (today only `Effect::SearchLibraryForBasicLandTapped`'s post-
+    /// search Fisher-Yates per CR 701.19 / 701.22) will read draws via
+    /// `_randbelow`, producing byte-identical permutations to what
+    /// `random.Random.shuffle(list)` produces on the Python side. Pass
+    /// `None` to clear (return to the xorshift64 fallback).
+    ///
+    /// Mirrors the substrate established by CE8 Slice 2 for the 8
+    /// pymethod-surface shuffle sites (I41) — same fall-through
+    /// convention: when `rng` is `None`, the legacy xorshift64 path
+    /// runs unchanged. Production cli / bench callers leave this
+    /// unset and stay on the xorshift64 path; cross-engine smoke
+    /// tests opt in.
+    ///
+    /// **Lifecycle.** Caller-owned. The harness sets the rng once per
+    /// game (before any `apply_effect` / `resolve_top_of_stack` /
+    /// `auto_resolve_pending_decisions` call that might fire a shuffle-
+    /// consuming Effect) and clears it at end-of-game. Two
+    /// `state.clone_once()` siblings share the SAME `random.Random`
+    /// instance — for the cross-engine smoke use case this is correct
+    /// (one rng per game). MCTS-style search-tree forking that depends
+    /// on independent rng streams must call `set_external_rng(None)`
+    /// on the forked branches before play continues.
+    ///
+    /// **Not serialized into the fingerprint.** Bookkeeping state, not
+    /// gameplay state. Two `GameState`s with the same observable shape
+    /// fingerprint identically regardless of whether/which rng is
+    /// stashed (see I43).
+    #[pyo3(signature = (rng = None))]
+    fn set_external_rng(&mut self, rng: Option<&Bound<'_, PyAny>>) -> PyResult<()> {
+        self.rng = rng.map(|r| r.clone().unbind());
+        Ok(())
     }
 }
 
@@ -1258,5 +1379,8 @@ pub fn make_synthetic_state(
         next_etb_timestamp: 0,
         resolving_combat_damage_amount: 0,
         winner_id_sticky: None,
+        // Effect-rng-threading closure: default `None`; cross-engine
+        // smoke callers opt in via `set_external_rng(Some(rng))`.
+        rng: None,
     }
 }

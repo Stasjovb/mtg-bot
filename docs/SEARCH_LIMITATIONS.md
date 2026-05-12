@@ -865,60 +865,61 @@ cross-engine MT parity deferral).
 
 ---
 
-## 16. SearchLibraryForBasicLandTapped: cross-engine MT parity deferred (G19 follow-up)
+## ~~16.~~ CLOSED: SearchLibraryForBasicLandTapped consumes the external rng via state.rng (G19 follow-up)
 
-**Location**: `rust/src/state_ops_resolve.rs::apply_effect` — the
-`Effect::SearchLibraryForBasicLandTapped` arm (post-G19 closure).
+**Closed by** `feature/effect-rng-threading`. The
+`Effect::SearchLibraryForBasicLandTapped` resolve arm in
+`rust/src/state_ops_resolve.rs::apply_effect` now routes its post-
+search Fisher-Yates shuffle through the external rng substrate (CE8
+Slice 2 / I41) — when the caller installs a Python `random.Random`
+via the new `GameState.set_external_rng(rng)` pymethod, the in-Effect
+shuffle reads draws via `external_rng::next_below`, producing byte-
+identical permutations to `random.Random.shuffle(list)`. When no rng
+is installed (production cli / bench callers), the legacy xorshift64
+fallback runs unchanged.
 
-**What we do today**: G19 closed the "Rust never shuffles after this
-search" gap by adding an inlined xorshift64 Fisher-Yates over the
-active player's library after the search. The seed is derived
-deterministically from
-`(turn_number, active_player, source_obj_id, library_len)`.
+Threading shape: per the
+[Effect-rng audit](RUST_EFFECT_RNG_AUDIT.md) §4 "Option A"
+recommendation, the rng is stashed on `GameState.rng:
+Option<Py<PyAny>>` (set via `set_external_rng`, cleared via
+`set_external_rng(None)`) rather than threaded as a parameter
+through every intervening call site (`apply_effect` /
+`resolve_top_of_stack` / `apply_effect_pub` /
+`auto_resolve_pending_decisions`). The Effect arm reads the rng via
+`state.rng_ref()` before the in-arm Fisher-Yates loop.
 
-**Why this diverges from cross-engine MT parity**: the 8 pymethod
-shuffle sites covered by CE8 (I41 in `RUST_PARITY_GAPS.md`) accept
-an optional `rng: &Bound<PyAny>` kwarg and consume Python's
-`random.Random._randbelow(n)` for byte-identical shuffles. The
-G19 arm does NOT yet thread that external rng through, because
-`apply_effect` (and `resolve_top_of_stack` /
-`resolve_top_of_stack_pause` / `apply_effect_pub` /
-`auto_resolve_pending_decisions`) don't carry an `rng` parameter.
-So under a shared `random.Random`, the post-search library order
-in Rust matches xorshift64 output, not Python MT output —
-divergent from Python (which shows no shuffle today; see gap #15
-above).
+**Pinning tests**:
+- `tests_rust/test_resolve.py::test_resolve_search_library_for_basic_land_tapped_external_rng_matches_python_shuffle`
+  — post-search library matches `random.Random(seed).shuffle` byte-
+  for-byte.
+- `tests_rust/test_resolve.py::test_resolve_search_library_for_basic_land_tapped_external_rng_none_falls_back_to_xorshift`
+  — backward compat: `set_external_rng(None)` is byte-equivalent to
+  never setting it.
+- `tests_rust/test_resolve.py::test_resolve_search_library_for_basic_land_tapped_external_rng_differs_from_xorshift`
+  — sanity check that the two paths produce distinct permutations.
+- `tests_rust/test_resolve.py::test_resolve_search_library_for_basic_land_tapped_external_rng_preserved_across_clone`
+  — `GameState.clone()` preserves the stashed rng reference (Python
+  refcount bump via the manual `Clone` impl).
+- `tests_rust/test_resolve.py::test_resolve_search_library_for_basic_land_tapped_external_rng_clone_isolation`
+  — pins the shared-rng-across-clones semantic (single instance,
+  consecutive draws).
+- `tests/test_parity_smoke_edge_cases.py::test_cross_engine_search_library_for_basic_land_tapped_external_rng_matches_python_mt`
+  — cross-engine pin: Rust post-resolve library matches Python's
+  MT reference under a shared `random.Random`.
+- `tests/test_parity_smoke_edge_cases.py::test_cross_engine_search_library_for_basic_land_tapped_shared_rng_walks_clean_for_multiple_seeds`
+  — multi-seed robustness companion (seeds 1, 7, 42, 100).
 
-**Failure mode**: every cross-engine smoke run that exercises a
-basic-land tutor will see the post-search library_p* fields
-diverge. The G19 closure leaves Rust honoring CR 701.19 / 701.22
-even though Python doesn't; a follow-up "Effect-rng threading"
-slice can unify the two engines under a shared `random.Random`
-once Python is also updated to shuffle (CR-correctness fix on the
-Python side).
+**Closure invariant**: see I43 in `docs/RUST_PARITY_GAPS.md` for the
+`GameState.rng` field lifecycle (caller-set via `set_external_rng`,
+consumed by `Effect::SearchLibraryForBasicLandTapped`, not serialized
+into fingerprint, clone-preserved via the manual `Clone` impl).
 
-**Fix scope when prioritized**: medium. Two coordinated changes:
-1. *Effect-rng threading.* Add `rng: Option<&Bound<'_, PyAny>>` to
-   `apply_effect`, `apply_effect_pub`, `resolve_top_of_stack`,
-   `resolve_top_of_stack_pause`,
-   `auto_resolve_pending_decisions`, plus every test surface and
-   internal caller. Route the rng into the G19 arm's Fisher-Yates
-   loop via `external_rng::next_below`. Mirrors CE8 Slice 2's
-   substrate.
-2. *Python-side fix.* Add the missing
-   `shuffle_library(state, controller_id)` call at the end of
-   `SearchLibraryForBasicLandTapped.resolve` (CR 701.19 / 701.22
-   compliance). Drop the Stage-3 "no extra shuffle" docstring
-   note. Once both sides shuffle AND consume the shared rng,
-   cross-engine library parity restores.
-
-**Impact estimate**: zero gameplay strength impact (the shuffle
-output doesn't affect what got searched — only what gets drawn
-next from the library); 100% of parity-smoke divergence on any
-deck that runs through a basic-land tutor (15 EoE cards: Beamsaw
-Prospector, Kavaron Harrier, Larval Scoutlander, the Lander
-token, Moldering Gym, etc.). Local test-only runs that don't
-touch parity smoke are unaffected.
+**Python-side follow-up still open.** Python's
+`SearchLibraryForBasicLandTapped.resolve` does NOT shuffle today
+(Stage-3 simplification documented in #15 above). Closing #15 will
+restore full cross-engine library parity end-to-end when the Python
+side calls `shuffle_library(state, controller_id)` at the end of
+the arm under the same shared rng.
 
 ---
 
