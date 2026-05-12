@@ -181,8 +181,17 @@ impl GameState {
     /// for example, internal Rust paths inside ``apply_sbas`` itself
     /// that need to know which players to flag — should use
     /// ``losers()`` or ``is_game_over()`` directly.
+    ///
+    /// **CE12 sticky-winner closure.** When `winner_id_sticky` is
+    /// `Some(_)` (written by a prior `apply_sbas` pass at a sole-
+    /// survivor moment), `is_over` reads `True` even if both players
+    /// later end up with `has_lost = True`. Mirrors Python's
+    /// `is_over = winner_id is not None or is_draw`: a sticky winner
+    /// keeps `is_over` `True` forever.
     fn is_over(&self) -> bool {
-        self.players[0].has_lost || self.players[1].has_lost
+        self.winner_id_sticky.is_some()
+            || self.players[0].has_lost
+            || self.players[1].has_lost
     }
 
     /// Python-property-style accessor: ``state.is_draw`` (NOT
@@ -200,6 +209,18 @@ impl GameState {
     /// attempted_draw_on_empty || life <= 0``), there is no direct
     /// helper; combine ``losers() == [0, 1]`` with the loser count if
     /// needed.
+    ///
+    /// **CE12 sticky-winner closure.** `is_draw` flips True on the
+    /// alive=0 transition REGARDLESS of whether a prior SBA pass
+    /// committed a sole-survivor winner. Python's writer
+    /// (`turn.py:1384-1386`) gates ONLY on `not state.is_draw`, NOT
+    /// on `winner_id is None` — so a bilateral-kill-after-prior-
+    /// winner shape ends up with both `winner_id` set AND
+    /// `is_draw = True`. The Rust getter mirrors that:
+    /// `True` iff both players carry `has_lost = True`, independent
+    /// of `winner_id_sticky`. (This means `winner_id == Some(0) AND
+    /// is_draw == True` is a valid state — Python emits it in the
+    /// sequential-kills shape, and Rust now does too.)
     #[getter]
     fn is_draw(&self) -> bool {
         self.players[0].has_lost && self.players[1].has_lost
@@ -221,8 +242,33 @@ impl GameState {
     /// semantics — cause-flags-driven, eager), use ``winner()``,
     /// which kept the OR'd-three predicate so the pre-existing tests
     /// still pass.
+    ///
+    /// **CE12 sticky-winner closure.** Reads
+    /// `winner_id_sticky` first; if `Some(_)`, returns it. Otherwise
+    /// falls back to the live derivation from `has_lost` (CE10's
+    /// shape). This makes `winner_id` STICKY across the alive=1 ->
+    /// alive=0 transition: once `apply_sbas` writes a sole-survivor
+    /// winner into `winner_id_sticky`, that value is returned forever
+    /// even if both players later become `has_lost = True`. Mirrors
+    /// Python's `state.winner_id` — gated on `winner_id is None` at
+    /// `turn.py:1389`, so the field is write-once.
+    ///
+    /// The fallback `(false, true) -> Some(0)` / `(true, false) ->
+    /// Some(1)` branch still fires when the sticky field is None and
+    /// exactly one player has `has_lost = True` — this is the
+    /// "between the per-player commit pass and the sticky-write" hole
+    /// closed by `apply_sbas`'s write site. Because the write site
+    /// runs INSIDE `apply_sbas` (right after the commit pass), the
+    /// fallback is observable only between commit-pass mutations on
+    /// the SBA-internal trajectory and from a state where some other
+    /// path (e.g. `lose_game`) mutated `has_lost` without going
+    /// through `apply_sbas` — the fallback preserves the CE10
+    /// observable behavior in those cases.
     #[getter]
     fn winner_id(&self) -> Option<u8> {
+        if let Some(id) = self.winner_id_sticky {
+            return Some(id);
+        }
         let p0 = &self.players[0];
         let p1 = &self.players[1];
         match (p0.has_lost, p1.has_lost) {

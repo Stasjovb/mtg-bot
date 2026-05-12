@@ -1662,6 +1662,121 @@ them to call the helper is a follow-up housekeeping pass.
     in `docs/SEARCH_LIMITATIONS.md`'s first-slice deterministic
     target deferral, not this invariant.
 
+### I34. `winner_id` is sticky across the BOTH-LOST transition via a write-once shadow field on `GameState`
+
+- **Pinned by**:
+  `tests_rust/test_winloss.py::test_ce12_single_player_loss_writes_sticky_on_first_sba`,
+  `test_ce12_sequential_kills_winner_id_stays_sticky`,
+  `test_ce12_simultaneous_bilateral_kill_no_sticky_writes_draw`,
+  `test_ce12_game_not_ended_pre_sba_no_sticky_write`,
+  `test_ce12_sba_with_no_losers_leaves_sticky_none`,
+  `test_ce12_sticky_survives_clone`,
+  `test_ce12_fingerprint_excludes_winner_id_sticky`;
+  `tests/test_parity_smoke.py::test_cross_engine_retaliation_selector_walks_clean`
+  (260-decision bilateral-combat walk, parity-clean post-closure).
+
+- **Invariant** (closes CE12, per Phase 5 "converge Rust toward
+  Python, never modify Python" — Option B from the CE12 closure-
+  direction options). `GameState` carries a new field
+  `winner_id_sticky: Option<u8>` (default `None`). The
+  field is the canonical mirror of Python's
+  `GameState.winner_id` write-once SBA-written semantic
+  (`turn.py:1387-1393` — gated on `state.winner_id is None`, so
+  once written the field is STICKY and the alive=1 -> alive=0
+  transition never clears it).
+
+  **Write path** (inside `state_ops_sba.rs::apply_sbas`, right
+  after the per-player `has_lost` commit pass):
+
+  ```text
+  if winner_id_sticky.is_none() {
+      match (p0.has_lost, p1.has_lost) {
+          (false, true) -> winner_id_sticky = Some(p0.id),
+          (true, false) -> winner_id_sticky = Some(p1.id),
+          _             -> {} // ongoing or simultaneous-both-lost
+      }
+  }
+  ```
+
+  The `is_none()` gate enforces write-once. The `(true, true)`
+  branch skips — matching Python's path where `apply_state_based_actions`
+  sees `len(alive) == 0` first and only writes `is_draw=True`,
+  leaving `winner_id` at None (the simultaneous-loss-without-prior-
+  write shape).
+
+  **Read paths** (`state_ops_winloss.rs`):
+
+  1. `winner_id` getter — returns `winner_id_sticky` if `Some(_)`,
+     else falls back to the pre-CE12 live derivation from
+     `has_lost` flags (CE10's two-layer split is preserved for the
+     fallback case).
+  2. `is_over()` getter — returns `winner_id_sticky.is_some() ||
+     p0.has_lost || p1.has_lost`. Mirrors Python's
+     `winner_id is not None or is_draw` — a sticky winner keeps
+     is_over True forever, and a bilateral-loss draw keeps it True
+     via the `has_lost` union.
+  3. `is_draw` getter — returns `p0.has_lost && p1.has_lost`,
+     INDEPENDENT of `winner_id_sticky`. Mirrors Python: the SBA
+     writer at `turn.py:1384-1386` gates ONLY on `not state.is_draw`,
+     NOT on `winner_id is None`. So a sequential-kills sequence —
+     SBA pass A flips winner_id to 0 (after p1's loss commit), SBA
+     pass B sees both lost and flips is_draw to True — lands with
+     BOTH `winner_id == 0` AND `is_draw == True`. Rust's read-side
+     getters reproduce that compound shape.
+
+- **Why a shadow field instead of inlining the write into
+  `has_lost`**: Python's `Player.has_lost` and
+  `GameState.winner_id` carry DIFFERENT semantics — `has_lost` is
+  per-player and stays True forever once set, while `winner_id`
+  captures "which player was the sole-survivor at the first SBA
+  pass that observed exactly one alive". Bilaterally killing both
+  players via sequential SBA passes leaves `has_lost == [true,
+  true]` but `winner_id` at the player who survived the FIRST
+  alive=1 SBA pass. A single field can't carry both pieces of
+  information; the shadow field captures the "first sole-survivor
+  moment" cleanly.
+
+- **Bookkeeping field — NOT serialized into fingerprint**: mirrors
+  `mulligan_count` (I21), `consecutive_passes` (I25), and
+  `next_etb_timestamp` (CE4 closure) — bookkeeping state for the
+  SBA-gated outcome API, NOT part of the gameplay-relevant state
+  digest. The pinned fingerprint baselines (`make_state`,
+  synthetic-state mutation deltas) stay bit-equal. Pinned by
+  `test_ce12_fingerprint_excludes_winner_id_sticky`: two states
+  reached via different paths (one through SBA + sticky-write, one
+  through `lose_game` which bypasses `apply_sbas`) that share the
+  same observable `has_lost` shape and life totals produce the
+  same fingerprint despite differing in `winner_id_sticky`.
+
+- **Cross-reference**:
+  - **I19** (the foundational empty-library SBA-driven loss
+    transition) — `winner_id_sticky` is written by the SAME
+    `apply_sbas` pass that flips `attempted_draw_on_empty ->
+    has_lost`, so the empty-library single-loss case writes the
+    sticky in lockstep with the eager loss commit.
+  - **I29** (Void LTB and second-half flag) — independent
+    bookkeeping, listed here for I-section navigation only.
+  - **CE10's two-layer API split** (the cause-flags eager API:
+    `losers` / `winner` / `is_game_over` / `is_player_alive` —
+    UNAFFECTED by sticky). The sticky-winner closure operates
+    exclusively on the SBA-gated outcome layer (`is_over` /
+    `winner_id` / `is_draw`), preserving the eager API's pre-SBA
+    semantics for in-flight scans (`apply_sbas` itself, harness
+    code that needs to detect cause-flag-driven loss before the
+    next SBA pass).
+
+- **Closure direction rationale**: CE12 offered an Option A
+  (Python-side fix — clear `state.winner_id` on alive=0
+  transition) and Option B (Rust-side shadow field). Option B was
+  taken per Phase 5 convention "converge Rust toward Python, never
+  modify Python". The Python semantic IS the bug-for-bug source
+  of truth for the cross-engine smoke harness, replay capture
+  (`replay_capture.py:325` reward signal), and the eval rounds'
+  per-game outcome attribution. Modifying Python here would have
+  shifted the reward signal on every existing replay corpus and
+  required a parallel pass through the trained-weights pipeline;
+  the shadow field is a no-op on every existing baseline.
+
 ### ~~CE5.~~ CLOSED: `cast_spell` cross-engine parity via harness-side `resolve_top_of_stack_python` mirror
 
 Closed by the CE5 closure slice (`feature/ce5-cast-resolve`).
@@ -2200,82 +2315,21 @@ unrelated (pending unmerged coverage-overrides PR).
 
 ---
 
-### CE12. `winner_id` accessor in BOTH-LOST (post-game-over → mutual-loss) state — Python-sticky vs Rust-live-derived
+### CE12 — CLOSED by `feature/ce12-sticky-winner-id`
 
-- **Surfaced by**: `feature/phase5-retaliation` — bilateral combat
-  on `retaliation_selector` + `multi_blocker_deckspec`. The walk
-  drives both players to attack on their respective turns; both
-  hit empty-library SBA losses with the prior winner already
-  written. First Python-vs-Rust diverging step at index 226 (the
-  END_OF_COMBAT step of p0's second attack-turn after Python's
-  earlier-stuck winner_id).
-- **Pinned by**: `tests/test_parity_smoke.py::test_cross_engine_retaliation_selector_surfaces_ce12_winner_id_sticky_vs_derived`
-  (xfail-pinned with `strict=True`).
-- **Field**: `winner_id` on the field-view 22-tuple.
-- **Symptom**: After both engines transition from "exactly one
-  loser" to "both losers" (because the second player's loss-cause
-  flag — empty-library `attempted_draw_on_empty` here — finally
-  commits to `has_lost=True` via a subsequent SBA pass), Python's
-  `state.winner_id` STAYS at the originally-written winner id (0
-  in this probe), while Rust's `state.winner_id` getter switches
-  to `None` (the "both have_lost → draw → no winner" branch of
-  the post-CE10 live derivation).
-- **Cause — Python side**: `turn.py:1383-1393`'s SBA write
-  predicate gates the `state.winner_id = alive[0].id` assignment
-  on `state.winner_id is None` — once written, the field is
-  STICKY. The subsequent transition to alive=0 only writes
-  `is_draw = True`; it never CLEARS the already-written
-  `winner_id`. The field models "the first player to be the
-  sole-survivor at any SBA pass", not the live derivation.
-- **Cause — Rust side**: `rust/src/state_ops_winloss.rs:225-235`'s
-  `winner_id()` getter is a pure live derivation from the two
-  `has_lost` flags: `(false, true) -> Some(0)`, `(true, false) ->
-  Some(1)`, `(true, true) | (false, false) -> None`. There is no
-  written-once shadow field. The CE10 closure (this getter's
-  prior shape was a pure-derivation `Optional<u8>` of the
-  cause-flags union) gated it to `has_lost` for parity with
-  Python's SBA-write semantics, but missed the BOTH-LOST
-  transition: Python keeps the sticky write, Rust re-derives to
-  None.
-- **Why CE10 didn't catch this**: CE10's regression suite drove
-  ONE-loser scenarios (test_winloss.py focuses on `has_lost==
-  [true, false]` and `[false, true]` shapes). The mutual-KO test
-  `test_mutual_zero_via_sequential_lose_life_is_draw` validates
-  `is_draw == True` but doesn't co-assert `winner_id == None` in
-  the post-game-over re-trigger shape that retaliation_selector
-  drives — it constructs the mutual KO atomically without first
-  writing a winner.
-- **Impact**: MEDIUM. The fingerprint and field-view both
-  surface `winner_id`. Replay-write paths (`replay_capture.py:325`)
-  read `state.winner_id` to compute per-player reward signal;
-  the Python-sticky semantic gives "p0 wins" on a position that
-  later becomes a draw, biasing training data. Cross-engine smoke
-  flags it on every retaliation-shaped walk that drives
-  post-game-over combat damage. Distinct from CE10 — CE10 closed
-  the {is_over, winner_id, is_draw} surface to MATCH Python's
-  SBA-write semantics for the SINGLE-loser case; CE12 surfaces
-  that the closure-direction was wrong for the BOTH-LOST
-  transition (or equivalently: Python's SBA writer is missing a
-  `winner_id = None` reset when the alive count drops from 1 to
-  0).
-- **Closure direction (open question)**:
-  - **Option A (Python-side fix, engineering-correct).** Update
-    `turn.py:1383-1393` to also CLEAR `state.winner_id` when
-    transitioning alive=1 → alive=0. Real-MTG-correct: a "draw"
-    state has no winner. Two-line patch + targeted test.
-    Existing tests that consume `winner_id` after `is_draw=True`
-    may need to update their expectations (likely none today —
-    the harness rarely drives post-game-over mutations).
-  - **Option B (Rust-side fix, parity-shortcut).** Grow Rust a
-    SHADOW sticky `winner_id_written: Option<u8>` field written
-    by `apply_sbas` mirroring Python's "write once, never clear"
-    semantics. The CE10 closure pattern; consistent with the
-    other Python-SBA-written surfaces.
-  - The playbook's slice-authors-prefer-Option-A guideline
-    applies here too (engineering-correct over bug-mirror), but
-    OPEN until the next slice gets to the closure.
-- **Closeable**: yes, single-file fix on either side. Estimated 1-2
-  slices (closure + test) once direction is picked.
+**Status**: closed 2026-05-12 via Option B (Rust-side sticky shadow
+field), per Phase 5 convention "converge Rust toward Python, never
+modify Python". Closure invariant lives at **I34** below.
+
+The xfail-strict surface-pin
+`test_cross_engine_retaliation_selector_surfaces_ce12_winner_id_sticky_vs_derived`
+was retired; its companion
+`test_cross_engine_retaliation_selector_pre_ce12_walks_clean` was
+generalized to
+`test_cross_engine_retaliation_selector_walks_clean` (full 260-step
+walk parity-clean, no carve-out around step 226).
+
+See I34 for the post-closure invariant pin.
 
 ---
 

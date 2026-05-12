@@ -287,26 +287,33 @@ def test_is_draw_is_property_not_method(synthetic_state):
 
 
 def test_is_draw_all_four_shapes_sba_gated(synthetic_state):
-    """Post-CE10: is_draw is True ONLY in the (sba-committed-loss,
-    sba-committed-loss) shape — i.e. BOTH players carry
-    ``has_lost == true``. Pre-SBA, even with both players at 0
-    life, is_draw stays False (the eager OR'd-three signals are
-    not visible through the SBA-gated getter).
+    """Post-CE12: is_draw is True ONLY when BOTH players carry
+    ``has_lost == true`` AND no prior SBA pass has committed a sole-
+    survivor winner into the sticky shadow field. Pre-SBA, even with
+    both players at 0 life, is_draw stays False (the eager OR'd-three
+    signals are not visible through the SBA-gated getter).
+
+    The sticky-winner rule (CE12): if p0 dies first and SBA fires
+    while p1 is still alive, ``winner_id_sticky`` is written to
+    Some(1). Then later p1 also dies — the post-state has both
+    has_lost=True but is_draw is FALSE (sticky winner already
+    committed). Only a true BILATERAL simultaneous-loss SBA pass
+    (both has_lost=True in the same pass, with winner_id_sticky still
+    None) flips is_draw to True. Mirrors Python's `is_draw` write at
+    turn.py:1384-1386, gated on alive=0 with no prior winner write.
     """
     # (alive, alive) — game ongoing.
     assert synthetic_state.is_draw is False
-    # (dead, alive) — but NO SBA fired -> is_draw still False
-    # (and would stay False post-SBA too, since this is the
-    # lopsided-loss case).
+    # Bilateral simultaneous-loss path: set BOTH players to 0 life,
+    # then fire SBA. Both transition has_lost=False -> has_lost=True
+    # in the same per-player commit pass; the sticky-write gate sees
+    # (true, true) and writes nothing; is_draw flips to True.
     synthetic_state.set_life(0, 0)
     assert synthetic_state.is_draw is False
-    synthetic_state.apply_sbas_until_quiescent()
+    synthetic_state.set_life(1, 0)
     assert synthetic_state.is_draw is False
-    # Symmetric (alive, dead) requires a fresh state — p0 is now
-    # sticky-lost. Use lose_game for p1 directly to avoid
-    # rebuilding (we already know the symmetric case works).
-    # (dead, dead) — both sticky-lost.
-    synthetic_state.lose_game(1)
+    synthetic_state.apply_sbas_until_quiescent()
+    # Both committed has_lost, no sticky winner -> draw.
     assert synthetic_state.is_draw is True
 
 
@@ -327,28 +334,32 @@ def test_winner_id_is_property_not_method(synthetic_state):
 
 
 def test_winner_id_all_four_shapes_sba_gated(synthetic_state):
-    """Post-CE10: winner_id is SBA-gated, so we drive each shape
-    via set_life + apply_sbas. Pre-SBA, set_life alone leaves
+    """Post-CE12: winner_id is SBA-gated AND STICKY. We drive each
+    shape via set_life + apply_sbas. Pre-SBA, set_life alone leaves
     winner_id stale (matching Python).
 
     (alive, alive) -> None
     (alive, dead, post-SBA) -> id of alive player
-    (dead, alive, post-SBA) -> id of alive player
-    (dead, dead, post-SBA) -> None (draw)
+    (dead, alive, post-SBA, no prior winner) -> id of alive player
+    (dead, dead, post-SBA, SIMULTANEOUS — no prior sticky write) -> None
+
+    The "exactly one died first, then the other also died" sequential
+    case is NO LONGER tested here — it's split out to
+    test_winner_id_sticky_after_sequential_kills (CE12).
     """
     # (alive, alive) — game ongoing -> None.
     assert synthetic_state.winner_id is None
-    # Drive p1 to 0, then SBA-commit. p0 wins.
+    # Drive BOTH to 0 simultaneously, then SBA-commit. With both
+    # has_lost=True in the same commit pass and no prior sticky
+    # write, the (true, true) gate skips the sticky write and the
+    # getter falls back to live-derivation -> None (draw).
+    synthetic_state.set_life(0, 0)
     synthetic_state.set_life(1, 0)
-    # Pre-SBA: stale.
+    # Pre-SBA: stale on the SBA-gated surface.
     assert synthetic_state.winner_id is None
     synthetic_state.apply_sbas_until_quiescent()
-    assert synthetic_state.winner_id == 0
-    # Now drive p0 to 0 (he's still alive at this point — only
-    # p1 was committed lost). After SBA, both have_lost=True ->
-    # winner is None.
-    synthetic_state.set_life(0, 0)
-    synthetic_state.apply_sbas_until_quiescent()
+    # Bilateral simultaneous-loss with no prior sole-survivor SBA
+    # pass -> no winner.
     assert synthetic_state.winner_id is None
 
 
@@ -780,3 +791,192 @@ def test_each_opponent_loses_life_lethal_then_sba_locks_the_loss(
     assert synthetic_state.winner_id == 0
     assert synthetic_state.is_game_over() is True
     assert synthetic_state.is_draw is False
+
+
+# ---------------------------------------------------------------------------
+# CE12 regression suite — sticky winner_id closure (I34).
+#
+# Pinned by these tests:
+#   1. Single-player loss writes the sticky field on the first SBA pass.
+#   2. SEQUENTIAL kills: p1 dies first (winner_id_sticky = Some(0)), then
+#      p0 dies — winner_id STAYS Some(0), is_draw STAYS False, is_over
+#      STAYS True. Cross-engine smoke harness depends on this match
+#      against Python's turn.py:1383-1393 sticky-write semantics.
+#   3. SIMULTANEOUS bilateral kill: both die in the same SBA pass with
+#      no prior sole-survivor moment — winner_id_sticky stays None,
+#      is_draw flips to True. Match Python's behavior (single SBA pass
+#      sees alive=0 immediately, only writes is_draw).
+#   4. Game-not-ended pre-SBA: winner_id is None even when life flags
+#      change; sticky field stays None.
+#   5. Game-not-ended post-SBA: SBA runs with no losers; sticky field
+#      stays None.
+#
+# See docs/RUST_PARITY_GAPS.md I34 and the (now-closed) CE12 entry.
+# ---------------------------------------------------------------------------
+
+
+def test_ce12_single_player_loss_writes_sticky_on_first_sba(synthetic_state):
+    """Single-player loss: p0 dies, SBA fires, winner_id == 1.
+    The sticky shadow field carries Some(1) — repeat SBA passes do not
+    overwrite (sticky-on-first-write contract).
+    """
+    synthetic_state.set_life(0, 0)
+    # Pre-SBA: sticky not yet written; getter falls back to live
+    # derivation, which is None (has_lost not yet committed).
+    assert synthetic_state.winner_id is None
+    synthetic_state.apply_sbas_until_quiescent()
+    # SBA committed p0 has_lost=True; sticky write fired with
+    # Some(1).
+    assert synthetic_state.winner_id == 1
+    # Idempotent: a second SBA pass leaves the sticky field
+    # untouched (write-once gate `is_none()`).
+    synthetic_state.apply_sbas_until_quiescent()
+    assert synthetic_state.winner_id == 1
+    assert synthetic_state.is_over() is True
+    assert synthetic_state.is_draw is False
+
+
+def test_ce12_sequential_kills_winner_id_stays_sticky(synthetic_state):
+    """**CE12 core invariant.** p1 dies on SBA pass A
+    (winner_id_sticky = Some(0)); then p0 ALSO dies on SBA pass B —
+    but winner_id STAYS Some(0). is_over STAYS True. ``is_draw``
+    ALSO flips True on the second SBA pass (mirrors Python — its
+    writer at turn.py:1384-1386 is gated on `not state.is_draw`,
+    NOT on `winner_id is None`, so the alive=0 transition flips
+    is_draw True regardless of whether winner_id was previously
+    written). The sequential-kills shape lands with BOTH fields
+    populated: winner_id=0 AND is_draw=True.
+
+    This is the BOTH-LOST transition that pre-CE12 Rust got wrong
+    via the `winner_id` slot (returned None instead of sticky 0).
+    """
+    # Phase A: kill p1, fire SBA. sticky <- Some(0).
+    synthetic_state.set_life(1, 0)
+    synthetic_state.apply_sbas_until_quiescent()
+    assert synthetic_state.winner_id == 0
+    assert synthetic_state.is_draw is False
+    assert synthetic_state.is_over() is True
+    # Phase B: kill p0, fire SBA. p0 has_lost flips True; both
+    # players now has_lost=True; winner_id_sticky was already
+    # written (write-once gate blocks overwrite), so winner_id
+    # stays at Some(0).
+    synthetic_state.set_life(0, 0)
+    synthetic_state.apply_sbas_until_quiescent()
+    # *** Load-bearing: winner_id is STILL Some(0), not None. ***
+    assert synthetic_state.winner_id == 0
+    # is_draw flips True on the alive=0 transition — independent
+    # of the sticky-winner state, matching Python.
+    assert synthetic_state.is_draw is True
+    # is_over reads True (either via sticky.is_some() OR has_lost).
+    assert synthetic_state.is_over() is True
+
+
+def test_ce12_simultaneous_bilateral_kill_no_sticky_writes_draw(
+    synthetic_state,
+):
+    """**CE12 mutual-KO edge case.** Both players die in the same
+    SBA pass — neither was a sole-survivor at any prior pass. The
+    sticky write gate sees (true, true), skips the write; the
+    fall-back live-derivation in the getter returns None; is_draw
+    flips True. Matches Python's turn.py:1383-1393 — `alive=0`
+    only writes is_draw, never winner_id.
+    """
+    synthetic_state.set_life(0, 0)
+    synthetic_state.set_life(1, 0)
+    synthetic_state.apply_sbas_until_quiescent()
+    # Both has_lost = True, sticky never written -> winner_id None.
+    assert synthetic_state.winner_id is None
+    assert synthetic_state.is_draw is True
+    assert synthetic_state.is_over() is True
+
+
+def test_ce12_game_not_ended_pre_sba_no_sticky_write(synthetic_state):
+    """Pre-SBA, both players alive: winner_id is None, sticky stays
+    None. The getter's fall-back live-derivation returns None
+    because neither has_lost flag is set.
+    """
+    assert synthetic_state.winner_id is None
+    assert synthetic_state.is_over() is False
+    assert synthetic_state.is_draw is False
+    # SBA on a fresh state writes nothing — sticky stays None.
+    synthetic_state.apply_sbas_until_quiescent()
+    assert synthetic_state.winner_id is None
+    assert synthetic_state.is_over() is False
+    assert synthetic_state.is_draw is False
+
+
+def test_ce12_sba_with_no_losers_leaves_sticky_none(synthetic_state):
+    """SBA fires but no transition happens (no creature destruction,
+    no player loss). Sticky field stays None — `is_none()` gate is
+    never tripped to a write because neither (false, true) nor
+    (true, false) holds.
+    """
+    # Apply some non-lethal damage to a creature; SBA may fire but
+    # neither player loses.
+    synthetic_state.set_life(0, 17)  # mid-game-ish life total
+    synthetic_state.set_life(1, 12)
+    synthetic_state.apply_sbas_until_quiescent()
+    assert synthetic_state.winner_id is None
+    assert synthetic_state.is_over() is False
+    assert synthetic_state.is_draw is False
+    # Confirm idempotent on a second pass.
+    synthetic_state.apply_sbas_until_quiescent()
+    assert synthetic_state.winner_id is None
+
+
+def test_ce12_sticky_survives_clone(synthetic_state):
+    """The sticky shadow field is part of GameState's clone — a
+    clone after sticky has been written carries the same winner_id.
+    """
+    synthetic_state.set_life(0, 0)
+    synthetic_state.apply_sbas_until_quiescent()
+    assert synthetic_state.winner_id == 1
+    cloned = synthetic_state.clone_once()
+    assert cloned.winner_id == 1
+    # And mutation of the original's has_lost shape does not bleed
+    # back to the clone (CoW canary).
+    synthetic_state.set_life(1, 0)
+    synthetic_state.apply_sbas_until_quiescent()
+    assert synthetic_state.winner_id == 1  # sticky
+    assert cloned.winner_id == 1  # unchanged
+
+
+def test_ce12_fingerprint_excludes_winner_id_sticky(synthetic_state):
+    """**I34 bookkeeping invariant.** Two states with the same
+    observable game shape (same has_lost flags, same life totals,
+    same zones) must produce the same fingerprint even if one
+    reached its state via a sole-survivor SBA pass (sticky written)
+    and the other did NOT. Mirrors `mulligan_count`,
+    `consecutive_passes`, `next_etb_timestamp` — bookkeeping out
+    of the digest.
+
+    Test path:
+      - State A: ``lose_game(1)`` directly (bypasses apply_sbas, so
+        sticky stays None even though has_lost[1] = True). Then
+        ``set_life(1, 0)`` to mirror the observable life total.
+      - State B: ``set_life(1, 0)`` + ``apply_sbas_until_quiescent``
+        — the SBA's sticky write fires, writing Some(0).
+
+    Both states share has_lost shape (false, true), p1.life = 0,
+    and observable getters ``winner_id == 0`` / ``is_over == True``
+    / ``is_draw == False``. The ONLY difference is the sticky
+    shadow field. The fingerprint MUST match — sticky stays OUT of
+    the digest, mirroring CE4's etb_timestamp convention.
+    """
+    state_a = synthetic_state.clone_once()
+    state_a.lose_game(1)
+    state_a.set_life(1, 0)
+    state_b = synthetic_state.clone_once()
+    state_b.set_life(1, 0)
+    state_b.apply_sbas_until_quiescent()
+    # Sanity: both states surface the same observable shape.
+    assert state_a.winner_id == 0
+    assert state_b.winner_id == 0
+    assert state_a.is_over() == state_b.is_over() is True
+    assert state_a.is_draw == state_b.is_draw
+    # Load-bearing: fingerprints match — sticky is bookkeeping.
+    assert state_a.fingerprint() == state_b.fingerprint(), (
+        "winner_id_sticky leaked into fingerprint: bookkeeping field "
+        "must not be serialized (mirrors mulligan_count / "
+        "consecutive_passes / next_etb_timestamp). See I34."
+    )

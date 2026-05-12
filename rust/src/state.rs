@@ -825,6 +825,55 @@ pub struct GameState {
     /// post-resolve must produce the same digest regardless of the
     /// intermediate amount.
     pub resolving_combat_damage_amount: i32,
+    /// **CE12 closure — sticky winner_id shadow.** Mirrors Python's
+    /// `GameState.winner_id`: a write-once `Option<u8>` field set by
+    /// `apply_sbas` the FIRST time the SBA pass observes "exactly one
+    /// player has `has_lost = True` AND `winner_id_sticky.is_none()`",
+    /// and never modified thereafter. Once set, subsequent reads of
+    /// the `winner_id` getter return this value even if BOTH players
+    /// have `has_lost = True` later (bilateral kill / mutual KO after
+    /// a prior sole-survivor moment).
+    ///
+    /// **Read path.** The `winner_id` getter returns
+    /// `winner_id_sticky` if it is `Some(_)`; otherwise it falls back
+    /// to the live derivation from the two `has_lost` flags (CE10's
+    /// post-closure shape: `(false, true) -> Some(0)`,
+    /// `(true, false) -> Some(1)`, otherwise `None`). The fallback
+    /// preserves "game not over yet" (both alive) and bilateral
+    /// simultaneous-loss-without-prior-write (both lost in the same
+    /// SBA pass with no sole-survivor moment in between) — those
+    /// shapes still return `None`.
+    ///
+    /// **Write path.** Inside `apply_sbas`, after the per-player
+    /// loss-flag commit pass, we check whether exactly one player now
+    /// has `has_lost = True`. If yes AND `winner_id_sticky` is still
+    /// `None`, we write `winner_id_sticky = Some(survivor_id)`. The
+    /// gate on `is_none()` enforces write-once: once written, never
+    /// modified — matches Python's `winner_id is None` gate at
+    /// `turn.py:1389`.
+    ///
+    /// **`is_draw` semantics under sticky.** Independent of
+    /// `winner_id_sticky` — `is_draw` is True iff both players have
+    /// `has_lost = True`. Mirrors Python: the SBA writer at
+    /// `turn.py:1384-1386` gates ONLY on `not state.is_draw`, NOT on
+    /// `winner_id is None`. So a sequential-kills shape — first
+    /// player dies (SBA writes winner_id), then later both die (SBA
+    /// writes is_draw) — ends up with BOTH fields populated:
+    /// `winner_id == 0 AND is_draw == True`. This is a valid Python
+    /// post-state and Rust mirrors it.
+    ///
+    /// **Not serialized into the fingerprint.** Like `mulligan_count`,
+    /// `consecutive_passes`, and `next_etb_timestamp`, this is
+    /// bookkeeping state for the SBA-gated outcome API, not part of
+    /// the gameplay-relevant state digest. The derived `winner_id` /
+    /// `is_draw` getters ARE part of the field-view 22-tuple that the
+    /// cross-engine smoke harness compares, so the OBSERVABLE behavior
+    /// is sticky. But two states with the same `has_lost` flags and
+    /// the same observable game shape MUST produce the same
+    /// fingerprint regardless of whether one path went through a
+    /// sole-survivor SBA pass and another didn't — pinned baselines
+    /// stay bit-equal.
+    pub winner_id_sticky: Option<u8>,
 }
 
 #[pymethods]
@@ -1162,5 +1211,6 @@ pub fn make_synthetic_state(
         pending_decisions: Vec::new(),
         next_etb_timestamp: 0,
         resolving_combat_damage_amount: 0,
+        winner_id_sticky: None,
     }
 }
