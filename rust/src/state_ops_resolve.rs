@@ -4896,6 +4896,35 @@ fn apply_effect(
             }
             // else: no opponent creature → silent fizzle.
         }
+        // Round-29 OptionalManaCostThenEffect — Kavaron-Harrier /
+        // Oreplate-Pangolin family. "You may pay {cost}. If you do,
+        // [inner_effect]." Pushes a PendingDecision::OptionalManaCostChoice
+        // carrying the mana cost and inner Effect on the heap, and
+        // short-circuits. Controller drains via
+        // submit_optional_mana_cost_decision(pay) (manual) or
+        // auto_resolve_pending_decisions("default" | "optional_pay_yes"
+        // | "optional_pay_no") (deterministic).
+        //
+        // Controller convention: state.active_player — first-slice
+        // shape consistent with Surveil / MayDo / IfYouDo / etc.
+        //
+        // No cost / inner-effect evaluation happens here: the decision
+        // is just packaged. Affordability is checked at submit time so
+        // the controller's pool state is the one in effect WHEN the
+        // decision is resolved (matching Python's
+        // OptionalManaCostThenEffect.resolve, which inspects pool
+        // state at resolve time).
+        Effect::OptionalManaCostThenEffect { cost, inner_effect } => {
+            let controller = state.active_player;
+            state.pending_decisions.push(
+                PendingDecision::OptionalManaCostChoice {
+                    source_obj_id,
+                    controller,
+                    cost: cost.clone(),
+                    inner_effect: inner_effect.clone(),
+                },
+            );
+        }
     }
     Ok(())
 }

@@ -2865,3 +2865,449 @@ def test_fingerprint_differs_then_attach_vs_plain_manifest_dread(engine):
     # differ in source_obj_id + then_attach_to_source — so fingerprints
     # MUST differ.
     assert fp1 != fp2
+
+
+# =====================================================================
+# Round-29 OptionalManaCostThenEffect substrate (Kavaron-Harrier /
+# Oreplate-Pangolin family — "you may pay {cost}. If you do,
+# [inner_effect]").
+# =====================================================================
+#
+# Pushed by `Effect::OptionalManaCostThenEffect` and resolved via
+# `submit_optional_mana_cost_decision(pay: bool)` or auto-resolve
+# strategies `"default"` / `"optional_pay_yes"` / `"optional_pay_no"`.
+#
+# Python parity for the no-agent-seated default: pay-if-affordable,
+# else trigger does nothing. Rust's `"default"` strategy mirrors this
+# (auto-checks affordability, pays + applies inner only if pool can
+# cover the cost; otherwise drops silently). `"optional_pay_yes"`
+# is the explicit "force-yes" strategy that raises on unaffordable.
+
+
+def _optional_mana_cost_draw_dict(generic_cost: int = 1, draw_count: int = 1):
+    """A sorcery whose body is OptionalManaCostThenEffect — for each
+    cast, the controller may pay {generic_cost}; if they do, they
+    draw `draw_count` cards. Modeled as a sorcery so the substrate
+    is testable via push_to_stack + resolve."""
+    return {
+        "name": (
+            f"Test OptionalManaCost {generic_cost} Draw {draw_count}"
+        ),
+        "card_types": ["Sorcery"],
+        "mana_cost": {"U": 1},
+        "effects": [{
+            "kind": "optional_mana_cost_then_effect",
+            "cost": {"generic": generic_cost},
+            "inner_effect": {"kind": "draw_cards", "count": draw_count},
+        }],
+    }
+
+
+# --- register / parse round-trip -------------------------------------
+
+
+def test_optional_mana_cost_registers_with_cost_and_inner(engine):
+    """Round-trip the effect through register + readback. Both `cost`
+    and `inner_effect` come back through the dict serializer."""
+    reg = engine.Registry()
+    pid = reg.register_printing(
+        _optional_mana_cost_draw_dict(generic_cost=2, draw_count=3),
+    )
+    effects = reg.get_printing_effects(pid)
+    assert len(effects) == 1
+    eff = effects[0]
+    assert eff["kind"] == "optional_mana_cost_then_effect"
+    assert eff["cost"] == {"generic": 2}
+    assert eff["inner_effect"]["kind"] == "draw_cards"
+    assert eff["inner_effect"]["count"] == 3
+
+
+def test_optional_mana_cost_missing_cost_raises(engine):
+    """Missing `cost` is a hard ValueError at register time."""
+    reg = engine.Registry()
+    bad = {
+        "name": "Bad OptionalManaCost (no cost)",
+        "card_types": ["Sorcery"],
+        "mana_cost": {"U": 1},
+        "effects": [{
+            "kind": "optional_mana_cost_then_effect",
+            "inner_effect": {"kind": "draw_cards", "count": 1},
+        }],
+    }
+    with pytest.raises(ValueError):
+        reg.register_printing(bad)
+
+
+def test_optional_mana_cost_missing_inner_effect_raises(engine):
+    """Missing `inner_effect` is a hard ValueError at register time."""
+    reg = engine.Registry()
+    bad = {
+        "name": "Bad OptionalManaCost (no inner)",
+        "card_types": ["Sorcery"],
+        "mana_cost": {"U": 1},
+        "effects": [{
+            "kind": "optional_mana_cost_then_effect",
+            "cost": {"generic": 1},
+        }],
+    }
+    with pytest.raises(ValueError):
+        reg.register_printing(bad)
+
+
+# --- resolve pushes OptionalManaCostChoice ---------------------------
+
+
+def test_optional_mana_cost_resolve_pushes_pending_choice(synthetic_state):
+    """Resolving an OptionalManaCostThenEffect sorcery pushes exactly
+    one OptionalManaCostChoice onto the queue. The inner draw has
+    NOT yet fired (hand size unchanged by the inner effect — the
+    source still moves to graveyard via CR 608.2m so graveyard grew
+    by 1)."""
+    hand_before = synthetic_state.hand_sizes[0]
+    graveyard_before = synthetic_state.graveyard_sizes[0]
+    spell_obj_id = synthetic_state.register_and_inject_object(
+        _optional_mana_cost_draw_dict(generic_cost=1, draw_count=2),
+        0,
+        ZONE_HAND,
+    )
+    synthetic_state.push_to_stack(spell_obj_id, 0)
+    synthetic_state.resolve_top_of_stack_pause()
+
+    # Source moved to graveyard, but inner draw is pending.
+    assert synthetic_state.graveyard_sizes[0] == graveyard_before + 1
+    # Net hand: inject +1, cast -1, no inner draw yet.
+    assert synthetic_state.hand_sizes[0] == hand_before
+
+    pds = synthetic_state.pending_decisions()
+    assert len(pds) == 1
+    pd = pds[0]
+    assert pd["kind"] == "OptionalManaCostChoice"
+    assert pd["controller"] == 0
+    assert pd["source_obj_id"] == spell_obj_id
+    assert pd["cost"] == {"generic": 1}
+    assert pd["inner_effect"]["kind"] == "draw_cards"
+    assert pd["inner_effect"]["count"] == 2
+
+
+# --- submit: pay yes (sufficient mana) -------------------------------
+
+
+def test_submit_optional_pay_yes_with_sufficient_mana_applies_inner(
+    synthetic_state,
+):
+    """``submit_optional_mana_cost_decision(True)`` with the cost
+    payable from the pool deducts the cost atomically and applies
+    the inner draw."""
+    # Give p0 1 generic-payable mana ({C}).
+    synthetic_state.add_mana(0, "C", 1)
+    pool_before = synthetic_state.get_mana_pool(0)
+    assert pool_before["C"] == 1
+
+    hand_before = synthetic_state.hand_sizes[0]
+    spell_obj_id = synthetic_state.register_and_inject_object(
+        _optional_mana_cost_draw_dict(generic_cost=1, draw_count=2),
+        0,
+        ZONE_HAND,
+    )
+    synthetic_state.push_to_stack(spell_obj_id, 0)
+    synthetic_state.resolve_top_of_stack_pause()
+
+    synthetic_state.submit_optional_mana_cost_decision(True)
+
+    # Pool drained, inner draw fired.
+    pool_after = synthetic_state.get_mana_pool(0)
+    assert pool_after["C"] == 0
+    assert synthetic_state.has_pending_decision() is False
+    # Cast was net zero on hand; the inner draw added 2.
+    assert synthetic_state.hand_sizes[0] == hand_before + 2
+
+
+# --- submit: pay yes (insufficient mana) -----------------------------
+
+
+def test_submit_optional_pay_yes_without_mana_raises_transactionally(
+    synthetic_state,
+):
+    """``submit_optional_mana_cost_decision(True)`` when the
+    controller's pool can't cover the cost raises ValueError. The
+    queue is left intact (transactional shape: no partial mutation)."""
+    pool_before = synthetic_state.get_mana_pool(0)
+    assert pool_before["C"] == 0  # empty pool
+    hand_before = synthetic_state.hand_sizes[0]
+    spell_obj_id = synthetic_state.register_and_inject_object(
+        _optional_mana_cost_draw_dict(generic_cost=1, draw_count=2),
+        0,
+        ZONE_HAND,
+    )
+    synthetic_state.push_to_stack(spell_obj_id, 0)
+    synthetic_state.resolve_top_of_stack_pause()
+
+    with pytest.raises(ValueError):
+        synthetic_state.submit_optional_mana_cost_decision(True)
+
+    # Transactional: queue intact, pool unchanged, hand unchanged.
+    assert synthetic_state.has_pending_decision() is True
+    assert synthetic_state.pending_decisions()[0]["kind"] == (
+        "OptionalManaCostChoice"
+    )
+    pool_after = synthetic_state.get_mana_pool(0)
+    assert pool_after == pool_before
+    assert synthetic_state.hand_sizes[0] == hand_before
+
+
+# --- submit: pay no --------------------------------------------------
+
+
+def test_submit_optional_pay_no_drops_inner_no_pool_change(synthetic_state):
+    """``submit_optional_mana_cost_decision(False)`` drops the
+    decision without touching the pool or applying the inner. Works
+    even with a payable pool — the controller is allowed to skip."""
+    synthetic_state.add_mana(0, "C", 1)
+    pool_before = synthetic_state.get_mana_pool(0)
+    hand_before = synthetic_state.hand_sizes[0]
+
+    spell_obj_id = synthetic_state.register_and_inject_object(
+        _optional_mana_cost_draw_dict(generic_cost=1, draw_count=2),
+        0,
+        ZONE_HAND,
+    )
+    synthetic_state.push_to_stack(spell_obj_id, 0)
+    synthetic_state.resolve_top_of_stack_pause()
+
+    synthetic_state.submit_optional_mana_cost_decision(False)
+
+    assert synthetic_state.has_pending_decision() is False
+    # No inner draw, no mana drain.
+    assert synthetic_state.hand_sizes[0] == hand_before
+    assert synthetic_state.get_mana_pool(0) == pool_before
+
+
+# --- submit dispatcher mismatches ------------------------------------
+
+
+def test_submit_optional_mana_cost_with_empty_queue_raises(synthetic_state):
+    """``submit_optional_mana_cost_decision`` on an empty queue raises
+    ValueError."""
+    assert synthetic_state.has_pending_decision() is False
+    with pytest.raises(ValueError):
+        synthetic_state.submit_optional_mana_cost_decision(True)
+
+
+def test_submit_optional_mana_cost_on_surveil_head_raises(synthetic_state):
+    """``submit_optional_mana_cost_decision`` when the head is a
+    SurveilChoice raises ValueError; queue stays intact."""
+    spell_obj_id = synthetic_state.register_and_inject_object(
+        _surveil_dict(count=1), 0, ZONE_HAND
+    )
+    synthetic_state.push_to_stack(spell_obj_id, 0)
+    synthetic_state.resolve_top_of_stack_pause()
+    assert synthetic_state.pending_decisions()[0]["kind"] == "SurveilChoice"
+
+    with pytest.raises(ValueError):
+        synthetic_state.submit_optional_mana_cost_decision(True)
+    assert synthetic_state.has_pending_decision() is True
+    assert synthetic_state.pending_decisions()[0]["kind"] == "SurveilChoice"
+
+
+def test_submit_surveil_on_optional_mana_cost_head_raises(synthetic_state):
+    """``submit_surveil_decision`` when the head is an
+    OptionalManaCostChoice raises ValueError. Symmetric cross-variant
+    rejection."""
+    spell_obj_id = synthetic_state.register_and_inject_object(
+        _optional_mana_cost_draw_dict(generic_cost=1, draw_count=1),
+        0,
+        ZONE_HAND,
+    )
+    synthetic_state.push_to_stack(spell_obj_id, 0)
+    synthetic_state.resolve_top_of_stack_pause()
+    assert synthetic_state.pending_decisions()[0]["kind"] == (
+        "OptionalManaCostChoice"
+    )
+
+    with pytest.raises(ValueError):
+        synthetic_state.submit_surveil_decision([], [])
+    assert synthetic_state.has_pending_decision() is True
+    assert synthetic_state.pending_decisions()[0]["kind"] == (
+        "OptionalManaCostChoice"
+    )
+
+
+# --- auto-resolve strategies -----------------------------------------
+
+
+def test_auto_resolve_default_pays_when_affordable(synthetic_state):
+    """``auto_resolve_pending_decisions("default")`` mirrors Python's
+    no-agent-seated default: pay-if-affordable, apply inner. The
+    inner draw fires."""
+    synthetic_state.add_mana(0, "C", 1)
+    hand_before = synthetic_state.hand_sizes[0]
+    spell_obj_id = synthetic_state.register_and_inject_object(
+        _optional_mana_cost_draw_dict(generic_cost=1, draw_count=2),
+        0,
+        ZONE_HAND,
+    )
+    synthetic_state.push_to_stack(spell_obj_id, 0)
+    synthetic_state.resolve_top_of_stack_pause()
+
+    synthetic_state.auto_resolve_pending_decisions("default")
+
+    assert synthetic_state.has_pending_decision() is False
+    assert synthetic_state.hand_sizes[0] == hand_before + 2
+    assert synthetic_state.get_mana_pool(0)["C"] == 0
+
+
+def test_auto_resolve_default_skips_when_unaffordable(synthetic_state):
+    """``auto_resolve_pending_decisions("default")`` on an
+    unaffordable cost drops the decision silently — matches Python's
+    "trigger does nothing" fallback."""
+    pool_before = synthetic_state.get_mana_pool(0)
+    assert pool_before["C"] == 0  # cannot pay {1}
+    hand_before = synthetic_state.hand_sizes[0]
+    spell_obj_id = synthetic_state.register_and_inject_object(
+        _optional_mana_cost_draw_dict(generic_cost=1, draw_count=2),
+        0,
+        ZONE_HAND,
+    )
+    synthetic_state.push_to_stack(spell_obj_id, 0)
+    synthetic_state.resolve_top_of_stack_pause()
+
+    synthetic_state.auto_resolve_pending_decisions("default")
+
+    assert synthetic_state.has_pending_decision() is False
+    # No inner draw, no mana drain.
+    assert synthetic_state.hand_sizes[0] == hand_before
+    assert synthetic_state.get_mana_pool(0) == pool_before
+
+
+def test_auto_resolve_optional_pay_yes_with_mana_applies_inner(
+    synthetic_state,
+):
+    """``"optional_pay_yes"`` strategy with sufficient pool pays + applies
+    inner — same observable behavior as default-with-payable-pool."""
+    synthetic_state.add_mana(0, "C", 2)
+    hand_before = synthetic_state.hand_sizes[0]
+    spell_obj_id = synthetic_state.register_and_inject_object(
+        _optional_mana_cost_draw_dict(generic_cost=2, draw_count=1),
+        0,
+        ZONE_HAND,
+    )
+    synthetic_state.push_to_stack(spell_obj_id, 0)
+    synthetic_state.resolve_top_of_stack_pause()
+
+    synthetic_state.auto_resolve_pending_decisions("optional_pay_yes")
+
+    assert synthetic_state.has_pending_decision() is False
+    assert synthetic_state.hand_sizes[0] == hand_before + 1
+    assert synthetic_state.get_mana_pool(0)["C"] == 0
+
+
+def test_auto_resolve_optional_pay_yes_without_mana_raises(synthetic_state):
+    """``"optional_pay_yes"`` with insufficient pool is a programmer
+    error and raises ValueError. The queue is consumed up to the
+    failing decision (the head is removed via the auto-resolve loop's
+    `remove(0)` before the affordability check). The failing decision
+    is reported in the error message."""
+    assert synthetic_state.get_mana_pool(0)["C"] == 0
+    spell_obj_id = synthetic_state.register_and_inject_object(
+        _optional_mana_cost_draw_dict(generic_cost=3, draw_count=1),
+        0,
+        ZONE_HAND,
+    )
+    synthetic_state.push_to_stack(spell_obj_id, 0)
+    synthetic_state.resolve_top_of_stack_pause()
+
+    with pytest.raises(ValueError):
+        synthetic_state.auto_resolve_pending_decisions("optional_pay_yes")
+
+
+def test_auto_resolve_optional_pay_no_drops(synthetic_state):
+    """``"optional_pay_no"`` drops the decision unconditionally —
+    works even with a payable pool (no mana drained)."""
+    synthetic_state.add_mana(0, "C", 1)
+    pool_before = synthetic_state.get_mana_pool(0)
+    hand_before = synthetic_state.hand_sizes[0]
+    spell_obj_id = synthetic_state.register_and_inject_object(
+        _optional_mana_cost_draw_dict(generic_cost=1, draw_count=2),
+        0,
+        ZONE_HAND,
+    )
+    synthetic_state.push_to_stack(spell_obj_id, 0)
+    synthetic_state.resolve_top_of_stack_pause()
+
+    synthetic_state.auto_resolve_pending_decisions("optional_pay_no")
+
+    assert synthetic_state.has_pending_decision() is False
+    assert synthetic_state.hand_sizes[0] == hand_before
+    assert synthetic_state.get_mana_pool(0) == pool_before
+
+
+def test_resolve_top_of_stack_auto_resolves_optional_mana_cost(
+    synthetic_state,
+):
+    """The non-pause ``resolve_top_of_stack`` auto-resolves an
+    OptionalManaCostChoice via the "default" strategy. With a
+    payable pool, the inner draw fires automatically."""
+    synthetic_state.add_mana(0, "C", 1)
+    hand_before = synthetic_state.hand_sizes[0]
+    spell_obj_id = synthetic_state.register_and_inject_object(
+        _optional_mana_cost_draw_dict(generic_cost=1, draw_count=2),
+        0,
+        ZONE_HAND,
+    )
+    synthetic_state.push_to_stack(spell_obj_id, 0)
+    synthetic_state.resolve_top_of_stack()
+
+    assert synthetic_state.has_pending_decision() is False
+    assert synthetic_state.hand_sizes[0] == hand_before + 2
+
+
+# --- fingerprint + clone --------------------------------------------
+
+
+def test_fingerprint_optional_mana_cost_pending_differs_from_empty(
+    synthetic_state,
+):
+    """A state with a pending OptionalManaCostChoice fingerprints
+    differently from the same state with no pending decisions."""
+    fp_clean = synthetic_state.fingerprint()
+    spell_obj_id = synthetic_state.register_and_inject_object(
+        _optional_mana_cost_draw_dict(generic_cost=1, draw_count=1),
+        0,
+        ZONE_HAND,
+    )
+    synthetic_state.push_to_stack(spell_obj_id, 0)
+    synthetic_state.resolve_top_of_stack_pause()
+    assert synthetic_state.has_pending_decision() is True
+    fp_pending = synthetic_state.fingerprint()
+    assert fp_pending != fp_clean
+
+
+def test_clone_isolates_optional_mana_cost_pending_decisions(synthetic_state):
+    """``clone_once()`` deep-clones a pending OptionalManaCostChoice.
+    Resolving the clone leaves the source's queue intact (CoW canary
+    for the new variant)."""
+    synthetic_state.add_mana(0, "C", 1)
+    hand_before = synthetic_state.hand_sizes[0]
+    spell_obj_id = synthetic_state.register_and_inject_object(
+        _optional_mana_cost_draw_dict(generic_cost=1, draw_count=2),
+        0,
+        ZONE_HAND,
+    )
+    synthetic_state.push_to_stack(spell_obj_id, 0)
+    synthetic_state.resolve_top_of_stack_pause()
+    assert synthetic_state.has_pending_decision() is True
+
+    clone = synthetic_state.clone_once()
+    assert clone.has_pending_decision() is True
+    assert clone.pending_decisions()[0]["kind"] == (
+        "OptionalManaCostChoice"
+    )
+
+    clone.submit_optional_mana_cost_decision(True)
+    assert clone.has_pending_decision() is False
+    assert clone.hand_sizes[0] == hand_before + 2
+
+    # Source still has the pending decision; source hand stays at pre-
+    # inner-draw value (the cast itself was net zero on hand).
+    assert synthetic_state.has_pending_decision() is True
+    assert synthetic_state.hand_sizes[0] == hand_before

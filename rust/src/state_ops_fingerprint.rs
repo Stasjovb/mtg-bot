@@ -514,6 +514,24 @@ impl GameState {
                         json!(*max_power),
                         Value::Bool(*counter_on_miss),
                     ]),
+                    // Round-29 optional-mana-cost decision: variant-tag +
+                    // source/controller + Debug-format of both cost and
+                    // inner_effect. Same Debug-over-Serialize choice as
+                    // MayDoChoice / ChooseModeChoice / IfYouDoChoice
+                    // (avoids deriving Serialize on the Effect enum
+                    // recursion).
+                    PendingDecision::OptionalManaCostChoice {
+                        source_obj_id,
+                        controller,
+                        cost,
+                        inner_effect,
+                    } => Value::Array(vec![
+                        Value::String("OptionalManaCostChoice".to_string()),
+                        json!(*source_obj_id),
+                        json!(*controller),
+                        Value::String(format!("{:?}", cost)),
+                        Value::String(format!("{:?}", inner_effect)),
+                    ]),
                 })
                 .collect();
             parts_vec.push(Value::Array(pds));
