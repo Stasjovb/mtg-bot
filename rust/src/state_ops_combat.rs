@@ -776,7 +776,7 @@ impl GameState {
     ///
     /// Read-only: never mutates state. Returns `true` for unknown
     /// `attacker_id` (no blockers can match → 0 blockers → legal).
-    fn is_legal_block_assignment(&self, attacker_id: u32) -> bool {
+    pub fn is_legal_block_assignment(&self, attacker_id: u32) -> bool {
         let blocker_count = self
             .blockers
             .iter()
