@@ -2733,6 +2733,183 @@ def test_deathtouch_attacker_three_blockers_all_marked_lethal(synthetic_state):
     assert synthetic_state.get_damage(attacker_id) == 6
 
 
+# ---------------------------------------------------------------------------
+# CE15 closure regression tests — trample + multi-block damage assignment
+# walks ALL blockers in bf-ETB order with `need = 1 if deathtouch else
+# effective_toughness - blocker.damage` per blocker; whatever power
+# remains after every blocker has absorbed its `need_i` spills to the
+# defender (Python's `combat.py:419-440` loop shape under
+# has_trample=True). Pins CR 702.19b (trample's lethal-to-blocker
+# floor) + CR 702.19c (deathtouch redefines the floor to 1) for the
+# multi-block case. Pre-CE15, the trample branch only emitted to
+# first_blocker (round-9 simplification) — blockers 2..N took zero
+# damage. See `docs/RUST_PARITY_GAPS.md` I37 for the post-closure
+# invariant.
+# ---------------------------------------------------------------------------
+
+
+def test_trample_two_blockers_no_deathtouch_no_excess(synthetic_state):
+    """CE15 regression — trample + 2 blockers, no deathtouch. A 4/4
+    trample attacker vs two 2/2 blockers. Per CR 702.19b, the attacker
+    must assign at least lethal (= toughness) to each blocker before
+    tramping over. need_0=2, need_1=2; total need = 4 == attacker_power
+    so no trample-through.
+
+    Pre-CE15: blocker A took 4 damage (single-PlanEntry), blocker B
+    took 0, defender took 0. Post-CE15: blocker A takes 2 (dies),
+    blocker B takes 2 (dies), defender takes 0.
+    """
+    attacker_id = synthetic_state.register_and_inject_object(
+        _keyword_creature_dict(4, 4, ["trample"]), 0, ZONE_BATTLEFIELD
+    )
+    bf_first_blocker = synthetic_state.register_and_inject_object(
+        _keyword_creature_dict(2, 2, []), 1, ZONE_BATTLEFIELD
+    )
+    bf_second_blocker = synthetic_state.register_and_inject_object(
+        _keyword_creature_dict(2, 2, []), 1, ZONE_BATTLEFIELD
+    )
+    assert synthetic_state.get_life(1) == 20
+    assert synthetic_state.declare_attacker(attacker_id) is True
+    assert synthetic_state.declare_blocker(bf_first_blocker, attacker_id) is True
+    assert synthetic_state.declare_blocker(bf_second_blocker, attacker_id) is True
+    synthetic_state.deal_combat_damage()
+    # Each 2/2 blocker takes exactly 2 (lethal floor per CR 702.19b).
+    assert synthetic_state.get_damage(bf_first_blocker) == 2, (
+        "CE15: trample first blocker takes need = toughness = 2 "
+        "(was 4 pre-closure: single-PlanEntry to first_blocker)"
+    )
+    assert synthetic_state.get_damage(bf_second_blocker) == 2, (
+        "CE15: trample second blocker takes need = toughness = 2 "
+        "(was 0 pre-closure: trample branch only walked first_blocker)"
+    )
+    # need_total = 2 + 2 = 4 = attacker_power, so no trample-through.
+    assert synthetic_state.get_life(1) == 20, (
+        "CE15: no trample excess when total need == attacker_power"
+    )
+    # Attacker takes back-damage from both blockers (2 + 2 = 4).
+    assert synthetic_state.get_damage(attacker_id) == 4
+
+
+def test_trample_two_blockers_no_deathtouch_with_excess(synthetic_state):
+    """CE15 regression — trample + 2 blockers + excess. A 5/5 trample
+    attacker vs two 2/2 blockers. need_0=2, need_1=2; total need = 4;
+    attacker_power = 5; trample-through = 5 - 4 = 1.
+
+    Pre-CE15: blocker A took 2 (with blocker_cap=blocker_toughness),
+    defender took 3 (single-blocker trample math: 5 - 2 = 3),
+    blocker B took 0. Post-CE15: blocker A 2, blocker B 2,
+    defender 1.
+    """
+    attacker_id = synthetic_state.register_and_inject_object(
+        _keyword_creature_dict(5, 5, ["trample"]), 0, ZONE_BATTLEFIELD
+    )
+    bf_first_blocker = synthetic_state.register_and_inject_object(
+        _keyword_creature_dict(2, 2, []), 1, ZONE_BATTLEFIELD
+    )
+    bf_second_blocker = synthetic_state.register_and_inject_object(
+        _keyword_creature_dict(2, 2, []), 1, ZONE_BATTLEFIELD
+    )
+    assert synthetic_state.get_life(1) == 20
+    assert synthetic_state.declare_attacker(attacker_id) is True
+    assert synthetic_state.declare_blocker(bf_first_blocker, attacker_id) is True
+    assert synthetic_state.declare_blocker(bf_second_blocker, attacker_id) is True
+    synthetic_state.deal_combat_damage()
+    # need = 2 per blocker, fully absorbed by each.
+    assert synthetic_state.get_damage(bf_first_blocker) == 2, (
+        "CE15: first blocker takes 2 (was 2 pre-closure too — "
+        "single-PlanEntry shape happened to match here)"
+    )
+    assert synthetic_state.get_damage(bf_second_blocker) == 2, (
+        "CE15: second blocker takes 2 (was 0 pre-closure: trample "
+        "branch only walked first_blocker)"
+    )
+    # Trample-through = 5 - 4 = 1 to defender.
+    assert synthetic_state.get_life(1) == 19, (
+        "CE15: trample excess = power - sum(need_i) = 5 - 4 = 1 "
+        "(was 3 pre-closure: single-blocker trample math used "
+        "blocker_cap = first_blocker.toughness)"
+    )
+    # Attacker takes back-damage from both blockers (2 + 2 = 4).
+    assert synthetic_state.get_damage(attacker_id) == 4
+
+
+def test_trample_deathtouch_two_blockers_excess(synthetic_state):
+    """CE15 regression — trample + deathtouch + 2 blockers. A 4/4
+    trample+deathtouch attacker vs two 2/2 blockers. CR 702.19c:
+    deathtouch redefines need = 1 per blocker. need_0=1, need_1=1;
+    total need = 2; trample-through = 4 - 2 = 2. Both blockers
+    take 1, upgraded to lethal=toughness via the apply-pass
+    deathtouch check.
+
+    Pre-CE15: blocker A took 1 (deathtouch cap=1 already correct in
+    trample branch), defender took 3 (single-blocker trample math:
+    4 - 1 = 3), blocker B took 0. Post-CE15: blocker A 1 (lethal),
+    blocker B 1 (lethal), defender 2.
+    """
+    attacker_id = synthetic_state.register_and_inject_object(
+        _keyword_creature_dict(4, 4, ["trample", "deathtouch"]),
+        0,
+        ZONE_BATTLEFIELD,
+    )
+    bf_first_blocker = synthetic_state.register_and_inject_object(
+        _keyword_creature_dict(2, 2, []), 1, ZONE_BATTLEFIELD
+    )
+    bf_second_blocker = synthetic_state.register_and_inject_object(
+        _keyword_creature_dict(2, 2, []), 1, ZONE_BATTLEFIELD
+    )
+    assert synthetic_state.get_life(1) == 20
+    assert synthetic_state.declare_attacker(attacker_id) is True
+    assert synthetic_state.declare_blocker(bf_first_blocker, attacker_id) is True
+    assert synthetic_state.declare_blocker(bf_second_blocker, attacker_id) is True
+    synthetic_state.deal_combat_damage()
+    # Both blockers take 1 (deathtouch need=1), upgraded to lethal
+    # (>= toughness=2) by the apply-pass deathtouch check.
+    assert synthetic_state.get_damage(bf_first_blocker) >= 2, (
+        "CE15: first blocker takes 1 (deathtouch need=1), upgraded "
+        "to lethal by apply-pass deathtouch check"
+    )
+    assert synthetic_state.get_damage(bf_second_blocker) >= 2, (
+        "CE15: second blocker takes 1 (was 0 pre-closure: trample "
+        "branch only walked first_blocker), upgraded to lethal "
+        "by apply-pass deathtouch check"
+    )
+    # Trample-through = 4 - (1 + 1) = 2 to defender.
+    assert synthetic_state.get_life(1) == 18, (
+        "CE15: trample excess = power - sum(need_i) = 4 - 2 = 2 "
+        "(was 3 pre-closure: single-blocker math used "
+        "blocker_cap=1, excess = 4 - 1 = 3)"
+    )
+    # Attacker takes back-damage from both blockers (2 + 2 = 4).
+    assert synthetic_state.get_damage(attacker_id) == 4
+
+
+def test_trample_single_blocker_preserved_post_ce15(synthetic_state):
+    """CE15 regression — single-blocker trample observable preserved.
+    A 5/5 trample attacker vs single 2/2 blocker. Pre- and post-CE15
+    behavior must be bit-equal: blocker takes 2 (lethal floor),
+    defender takes 3 (5 - 2 = 3 trample-through).
+
+    This pins the round-9 single-blocker trample shape so future
+    refactors of the bf_ordered_blockers loop don't regress the
+    common single-blocker case.
+    """
+    attacker_id = synthetic_state.register_and_inject_object(
+        _keyword_creature_dict(5, 5, ["trample"]), 0, ZONE_BATTLEFIELD
+    )
+    blocker_id = synthetic_state.register_and_inject_object(
+        _keyword_creature_dict(2, 2, []), 1, ZONE_BATTLEFIELD
+    )
+    assert synthetic_state.get_life(1) == 20
+    assert synthetic_state.declare_attacker(attacker_id) is True
+    assert synthetic_state.declare_blocker(blocker_id, attacker_id) is True
+    synthetic_state.deal_combat_damage()
+    # Single-blocker trample: blocker takes 2 (its toughness),
+    # defender takes 3 (excess = 5 - 2 = 3). Identical to the
+    # pre-CE15 round-9 single-blocker assertion.
+    assert synthetic_state.get_damage(blocker_id) == 2
+    assert synthetic_state.get_life(1) == 17
+
+
 def test_apply_sbas_clears_damage_on_creature_move_to_graveyard(synthetic_state):
     """CE9 secondary closure: when SBA destruction moves a lethally
     damaged creature to its controller's graveyard, the obj's
