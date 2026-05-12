@@ -33,12 +33,22 @@ the per-worker local-NN reference of 1,355 RPS (PR #39 bench).
 
 Constraints:
 
-- Fork-only: the design relies on children inheriting shared-tensor
-  storage + mp.Event file descriptors via fork. Spawn-launched
-  workers would need explicit re-construction of the shared
-  state, which we don't support. On Linux this is fine — the
-  production master uses fork after the WSL2 migration. Windows
-  is out of scope for this module.
+- The substrate works on both Linux fork and Windows spawn. On Linux,
+  workers fork-inherit the shared-tensor mmap + mp.Event fds (the
+  original design). On Windows there is no ``fork`` start method, but
+  ``torch.Tensor.share_memory_()`` allocates a named shared-memory
+  region (via Windows file-mapping primitives) and the ``mp.Queue``
+  / ``mp.Event`` objects from a ``spawn`` context are picklable, so
+  passing the handle through ``ProcessPoolExecutor(initializer=
+  set_worker_handle, initargs=(handle,), mp_context=
+  mp.get_context("spawn"))`` reconstructs the shared state on each
+  worker at startup. The picked start method is the host's natural
+  default: fork on Linux, spawn on Windows.
+- macOS support is implemented at the substrate level (spawn works
+  the same as on Windows) but disabled at the call-site gate in
+  ``mtg_bot.training.distributed`` because the SHM server's device
+  routing doesn't currently auto-select MPS — running on Mac would
+  fall back to CPU and regress the existing per-worker MPS path.
 - One server per master process. Multiple instances on the same
   host work but each holds its own slot pool + dispatcher thread.
 
@@ -46,7 +56,8 @@ The API mirrors :class:`NNEvalServer` / :class:`NNEvalClient` so a
 PIMC config can swap implementations transparently. Where the two
 diverge: this server doesn't take ``address`` (no socket) and the
 handle is a Python object holding shared-tensor + event references
-that only works across fork (not pickle-across-host).
+that only work between processes of a single host (not pickle-across-
+host).
 """
 
 from __future__ import annotations
@@ -160,13 +171,38 @@ def clear_worker_handles() -> None:
     _WORKER_SHM_HANDLES_BY_PATH.clear()
 
 
+def preferred_mp_context() -> "mp.context.BaseContext":
+    """Return the preferred multiprocessing context for SHM-server
+    workers on this host.
+
+    - Linux / macOS: ``fork``. Workers inherit the shared-tensor mmap
+      and mp.Event file descriptors directly — the original design.
+    - Windows: ``spawn``. ``fork`` is not available on Windows; spawn
+      workers pickle-reconstruct the handle from the executor's
+      ``initargs``. torch's named shared-memory regions and mp.Queue
+      / mp.Event from a spawn context all survive the round-trip.
+
+    The selection is independent of the platform gate in
+    :mod:`mtg_bot.training.distributed` — callers choose whether to
+    install a SHM server per their own policy; this helper just picks
+    the right child-process start method when they do.
+    """
+    methods = mp.get_all_start_methods()
+    if "fork" in methods:
+        return mp.get_context("fork")
+    return mp.get_context("spawn")
+
+
 @dataclasses.dataclass
 class SharedTensorServerHandle:
     """Lightweight handle a worker uses to attach to the server.
 
-    All fields are fork-inheritable (mp.Queue, mp.Event lists, shared
-    tensors). Do not pickle this handle across processes — pass it
-    through fork-inherited references only.
+    All fields are inter-process safe via the host's mp context:
+    fork-inheritable on Linux, picklable on Windows (passed through
+    ``ProcessPoolExecutor(initializer=set_worker_handle,
+    initargs=(handle,))``). Either way, do not pickle this handle
+    across host boundaries — the shared-memory regions are
+    process-host local.
     """
     free_slots: "mp.Queue[int]"
     request_queue: "mp.Queue[int]"
@@ -230,13 +266,6 @@ class SharedTensorNNEvalServer:
         model_factory: Optional[Any] = None,
         logger: Optional[logging.Logger] = None,
     ) -> None:
-        if sys.platform == "win32":
-            raise NotImplementedError(
-                "SharedTensorNNEvalServer is Linux-only — relies on "
-                "fork-inherited shared-tensor storage. Use the existing "
-                "NNEvalServer with TCP/UDS on Windows."
-            )
-
         # Deferred CUDA resolution: same pattern as PR #36's fix to
         # NNEvalServer. Don't call torch.cuda.is_available() in any
         # function default or at module import — it primes CUDA on
@@ -309,8 +338,15 @@ class SharedTensorNNEvalServer:
             self._masks = None
             self._policies = None
 
-        # Sync primitives.
-        ctx = mp.get_context("fork")
+        # Sync primitives. Use the host's preferred context — fork on
+        # Linux/macOS, spawn on Windows. The free_slots / request_queue
+        # / response_events objects from a spawn context are picklable
+        # so they survive the executor's initializer pickle round-trip
+        # on Windows; on Linux they're fork-inherited as before. The
+        # *fork-only* phrasing in earlier revisions of this module was
+        # historical: torch.Tensor.share_memory_() works fine across
+        # spawn on Windows too.
+        ctx = preferred_mp_context()
         # ``free_slots`` is the slot allocator. Pre-fill with all N
         # indices. Workers do .get() to acquire and .put() to release.
         self._free_slots: "mp.Queue[int]" = ctx.Queue()
