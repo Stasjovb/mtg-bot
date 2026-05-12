@@ -484,13 +484,16 @@ def test_register_tap_target_artifact_or_creature(engine):
     assert eff["kind"] == "tap_target_artifact_or_creature"
 
 
-def test_resolve_tap_aoc_picks_first_creature_on_defender_bf(synthetic_state):
-    """First creature on defender (p1) gets tapped. Synthetic state's
-    p1 bf has Forests (non-creature, non-artifact) then Grizzly Bears."""
+def test_resolve_tap_aoc_picks_first_creature_in_bf_etb_order(synthetic_state):
+    """Under the I39 cross-player closure, the walk picks the first
+    artifact-or-creature in bf-ETB order across both players. With
+    synthetic-state fixtures (all ETB timestamps tied at 0) the
+    stable-sort tie-break preserves p0-then-p1 insertion order, so
+    the first Grizzly Bears on p0's bf is the first match."""
     snap = synthetic_state.battlefield_snapshot()
-    p1_first_bear_id = next(
+    p0_first_bear_id = next(
         d["id"] for d in snap
-        if d["controller_id"] == 1 and d["printing_name"] == "Grizzly Bears"
+        if d["controller_id"] == 0 and d["printing_name"] == "Grizzly Bears"
     )
     spell_id = synthetic_state.register_and_inject_object(
         _tap_aoc_dict(), 0, ZONE_HAND_LOCAL
@@ -499,72 +502,80 @@ def test_resolve_tap_aoc_picks_first_creature_on_defender_bf(synthetic_state):
     synthetic_state.resolve_top_of_stack()
 
     bear_after = next(
-        d for d in synthetic_state.battlefield_snapshot() if d["id"] == p1_first_bear_id
+        d for d in synthetic_state.battlefield_snapshot() if d["id"] == p0_first_bear_id
     )
     assert bear_after["tapped"] is True
 
 
-def test_resolve_tap_aoc_picks_artifact_when_present(synthetic_state):
-    """Inject an artifact onto p1's bf — Forests are non-creature
-    non-artifact, so they're skipped; then we hit the artifact (which
-    appears in zone order BEFORE the Grizzly Bears since make_state /
-    register_and_inject_object pushes to the back of the bf zone).
-    Actually since artifact is appended LAST, the existing Grizzly
-    Bears comes first. So Bears gets tapped, not the artifact. This
-    test verifies that BOTH being in the eligible set works — pick
-    the FIRST match regardless of type."""
+def test_resolve_tap_aoc_picks_creature_over_later_artifact(synthetic_state):
+    """Inject an artifact onto p1's bf. The synthetic fixture already
+    has Grizzly Bears on BOTH players' bfs (default num_battlefield=10
+    splits 5 Forests + 5 Bears per side). Under the I39 cross-player
+    walk with synthetic-state tied timestamps (p0-then-p1 stable-sort
+    tie-break), the first artifact-or-creature is p0's first Bears,
+    NOT the late-injected p1 artifact. This pins that BOTH types are
+    eligible AND that bf-ETB order — not artifact-priority — picks
+    the target."""
     artifact_id = synthetic_state.register_and_inject_object(
         _vanilla_artifact_dict_tap(), 1, ZONE_BATTLEFIELD
     )
     snap = synthetic_state.battlefield_snapshot()
-    p1_first_bear_id = next(
+    p0_first_bear_id = next(
         d["id"] for d in snap
-        if d["controller_id"] == 1 and d["printing_name"] == "Grizzly Bears"
+        if d["controller_id"] == 0 and d["printing_name"] == "Grizzly Bears"
     )
     spell_id = synthetic_state.register_and_inject_object(
         _tap_aoc_dict(), 0, ZONE_HAND_LOCAL
     )
     synthetic_state.push_to_stack(spell_id, 0)
     synthetic_state.resolve_top_of_stack()
-    # Existing Bears tapped (first in zone order); injected artifact
-    # not tapped (came after, second).
+    # p0's first Bears tapped (first in bf-ETB walk order); injected
+    # artifact not tapped (came after, walked last).
     snap_after = synthetic_state.battlefield_snapshot()
-    bear_after = next(d for d in snap_after if d["id"] == p1_first_bear_id)
+    bear_after = next(d for d in snap_after if d["id"] == p0_first_bear_id)
     art_after = next(d for d in snap_after if d["id"] == artifact_id)
     assert bear_after["tapped"] is True
     assert art_after["tapped"] is False
 
 
 def test_resolve_tap_aoc_no_eligible_fizzles(synthetic_state):
-    """No artifacts and no creatures on p1's bf → fizzle."""
+    """No artifacts and no creatures on either player's bf → fizzle.
+    Under the I39 cross-player walk we must clear creatures from BOTH
+    p0 and p1, not just the defender (p1)."""
     state = synthetic_state.clone_once()
     snap = state.battlefield_snapshot()
-    p1_creature_ids = [
+    bear_ids = [
         d["id"] for d in snap
-        if d["controller_id"] == 1 and d["printing_name"] == "Grizzly Bears"
+        if d["printing_name"] == "Grizzly Bears"
     ]
-    for cid in p1_creature_ids:
-        state.move_object(cid, 3, 1)  # graveyard
+    for cid in bear_ids:
+        # Move to that bear's owner's graveyard.
+        controller_id = next(
+            d["controller_id"] for d in snap if d["id"] == cid
+        )
+        state.move_object(cid, 3, controller_id)
     spell_id = state.register_and_inject_object(_tap_aoc_dict(), 0, ZONE_HAND_LOCAL)
     state.push_to_stack(spell_id, 0)
     state.resolve_top_of_stack()  # should not raise
 
 
 def test_resolve_tap_aoc_idempotent_on_already_tapped(synthetic_state):
-    """Already-tapped target stays tapped (idempotent)."""
+    """Already-tapped target stays tapped (idempotent). Under I39 the
+    target is p0's first Bears (first in bf-ETB order across both
+    players' battlefields)."""
     snap = synthetic_state.battlefield_snapshot()
-    p1_first_bear_id = next(
+    p0_first_bear_id = next(
         d["id"] for d in snap
-        if d["controller_id"] == 1 and d["printing_name"] == "Grizzly Bears"
+        if d["controller_id"] == 0 and d["printing_name"] == "Grizzly Bears"
     )
-    synthetic_state.tap_object(p1_first_bear_id)
+    synthetic_state.tap_object(p0_first_bear_id)
     spell_id = synthetic_state.register_and_inject_object(
         _tap_aoc_dict(), 0, ZONE_HAND_LOCAL
     )
     synthetic_state.push_to_stack(spell_id, 0)
     synthetic_state.resolve_top_of_stack()
     bear_after = next(
-        d for d in synthetic_state.battlefield_snapshot() if d["id"] == p1_first_bear_id
+        d for d in synthetic_state.battlefield_snapshot() if d["id"] == p0_first_bear_id
     )
     assert bear_after["tapped"] is True
 
