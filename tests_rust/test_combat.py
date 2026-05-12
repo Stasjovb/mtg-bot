@@ -2516,3 +2516,153 @@ def test_ueot_granted_keyword_via_has_keyword_reader(synthetic_state):
     assert synthetic_state.has_keyword(obj_id, "haste") is True
     assert synthetic_state.has_keyword(obj_id, "flying") is True
     assert synthetic_state.has_keyword(obj_id, "trample") is False
+
+
+# ---------------------------------------------------------------------------
+# CE9 closure regression tests — combat damage assignment walks the
+# battlefield in bf-ETB-timestamp order via the shared
+# ``bf_iter_etb_sorted`` helper (not declare-order push of
+# ``self.blockers``). Mirrors Python's ``combat.py:389,405``
+# `[o for o in state.battlefield if o.id in attacker.blocked_by]`
+# walk. Filed and closed by `feature/ce9-blocker-bf-order` — see
+# `docs/RUST_PARITY_GAPS.md` I31 and the closure summary in
+# `docs/CE5_CE6_CE7_CLOSURE_PLAYBOOK.md` §3.
+# ---------------------------------------------------------------------------
+
+
+def test_multi_block_damage_assignment_picks_etb_first_blocker(synthetic_state):
+    """CE9 regression. Declare two blockers against one attacker in
+    REVERSE bf-ETB order (the higher-timestamp blocker declared
+    first, then the lower-timestamp blocker). Assert that the
+    LOWER-timestamp blocker is the one that takes the attacker's
+    damage — matching the bf-ETB order, NOT the declare order.
+
+    Pre-CE9 closure, Rust walked ``self.blockers`` Vec in declare
+    push order and picked the higher-timestamp blocker (declared
+    first) as the damage recipient — diverging from Python's
+    ``[o for o in state.battlefield if o.id in attacker.blocked_by]``
+    walk which is bf-ETB ordered (post-CE4). Post-closure, Rust
+    walks ``bf_iter_etb_sorted`` filtered to ids in ``self.blockers``
+    so the per-attacker first-blocker pick agrees with Python.
+    """
+    # Inject in order so ETB timestamps are: attacker < first_blocker
+    # < second_blocker. ``register_and_inject_object`` bumps
+    # ``next_etb_timestamp`` on every battlefield injection.
+    attacker_id = synthetic_state.register_and_inject_object(
+        _keyword_creature_dict(2, 2, []), 0, ZONE_BATTLEFIELD
+    )
+    # bf-ETB order: this blocker comes BEFORE the second one.
+    bf_first_blocker = synthetic_state.register_and_inject_object(
+        _keyword_creature_dict(2, 2, []), 1, ZONE_BATTLEFIELD
+    )
+    # bf-ETB order: this blocker comes AFTER the first one.
+    bf_second_blocker = synthetic_state.register_and_inject_object(
+        _keyword_creature_dict(2, 2, []), 1, ZONE_BATTLEFIELD
+    )
+    assert synthetic_state.declare_attacker(attacker_id) is True
+    # Declare blockers in REVERSE bf-ETB order: the bf-later blocker
+    # gets declared FIRST, the bf-earlier blocker second. Pre-CE9
+    # Rust's find_map walk of self.blockers Vec would pick the
+    # bf-later one (the first push); post-CE9 the bf-ETB walk picks
+    # the bf-earlier one.
+    assert synthetic_state.declare_blocker(bf_second_blocker, attacker_id) is True
+    assert synthetic_state.declare_blocker(bf_first_blocker, attacker_id) is True
+    # Sanity: self.blockers Vec is in declare push order.
+    assert synthetic_state.get_blockers() == [
+        (attacker_id, bf_second_blocker),
+        (attacker_id, bf_first_blocker),
+    ]
+    synthetic_state.deal_combat_damage()
+    # The attacker's 2 power goes to the FIRST blocker in BF-ETB
+    # order (bf_first_blocker), not the first-declared one. The
+    # bf-later blocker takes 0 damage from the attacker because the
+    # single-blocker damage simplification (round-5 scope reminder)
+    # assigns the attacker's full power to ONE blocker only.
+    assert synthetic_state.get_damage(bf_first_blocker) == 2, (
+        "CE9 regression: attacker's damage must go to the "
+        "bf-ETB-first blocker, not the declare-first blocker"
+    )
+    assert synthetic_state.get_damage(bf_second_blocker) == 0
+    # Both blockers still deal back-damage to the attacker (2+2=4).
+    # Pre-CE9 the back-damage walk also iterated self.blockers
+    # directly — post-CE9 the back-damage walk uses
+    # bf_iter_etb_sorted too. The accumulated total is unchanged
+    # (every blocker still emits its damage entry); only the order
+    # of accumulation differs (no observable difference on this
+    # 2/2 vs 2/2 exchange).
+    assert synthetic_state.get_damage(attacker_id) == 4
+
+
+def test_multi_block_damage_back_damage_uses_etb_order(synthetic_state):
+    """CE9 regression: the back-damage walk (each blocker dealing
+    its power to the attacker) also iterates the battlefield in
+    bf-ETB-timestamp order via ``bf_iter_etb_sorted``, not the
+    ``self.blockers`` Vec push order. The accumulated damage on
+    the attacker is unchanged (2+2=4 vs 2+2=4); the ordering shift
+    is invisible on a symmetric exchange but matters for any
+    future variant where the order of accumulation is observable
+    (e.g. lifelink life gain on an interleaved bf, deathtouch
+    upgrade-then-mark-lethal sequencing).
+    """
+    attacker_id = synthetic_state.register_and_inject_object(
+        _keyword_creature_dict(3, 3, []), 0, ZONE_BATTLEFIELD
+    )
+    bf_first_blocker = synthetic_state.register_and_inject_object(
+        _keyword_creature_dict(2, 2, []), 1, ZONE_BATTLEFIELD
+    )
+    bf_second_blocker = synthetic_state.register_and_inject_object(
+        _keyword_creature_dict(1, 1, []), 1, ZONE_BATTLEFIELD
+    )
+    assert synthetic_state.declare_attacker(attacker_id) is True
+    # Declare in reverse bf order.
+    assert synthetic_state.declare_blocker(bf_second_blocker, attacker_id) is True
+    assert synthetic_state.declare_blocker(bf_first_blocker, attacker_id) is True
+    synthetic_state.deal_combat_damage()
+    # Sum of blocker powers: 2 + 1 = 3 damage to attacker.
+    assert synthetic_state.get_damage(attacker_id) == 3
+    # Attacker damage routed to the bf-ETB-first blocker (3 power
+    # to bf_first_blocker, none spilled to bf_second_blocker per
+    # the single-blocker damage simplification).
+    assert synthetic_state.get_damage(bf_first_blocker) == 3
+    assert synthetic_state.get_damage(bf_second_blocker) == 0
+
+
+def test_apply_sbas_clears_damage_on_creature_move_to_graveyard(synthetic_state):
+    """CE9 secondary closure: when SBA destruction moves a lethally
+    damaged creature to its controller's graveyard, the obj's
+    ``damage`` and ``tapped`` fields reset to 0 / false on the way
+    in. Mirrors Python's ``turn.move_off_battlefield``:230-240
+    semantics (CR 400.7 / 614.12).
+
+    Pre-closure, Rust's `apply_sbas` move-to-graveyard preserved
+    the damage mark and the tapped flag — invisible on most
+    pre-CE9 tests because graveyard contents were rarely compared
+    on a per-object damage basis, but surfaced by the multi-block
+    cross-engine smoke when Python's gy entry showed damage=0 and
+    Rust's showed damage=lethal.
+    """
+    # Inject a 2/2 with damage already at lethal (pre-stamped via
+    # deal_damage instead of routing through combat).
+    obj_id = synthetic_state.register_and_inject_object(
+        _keyword_creature_dict(2, 2, []), 0, ZONE_BATTLEFIELD
+    )
+    # Tap and damage to lethal so SBA picks it up.
+    synthetic_state.tap_object(obj_id)
+    synthetic_state.deal_damage(obj_id, 2)
+    assert synthetic_state.get_damage(obj_id) == 2
+    assert synthetic_state.is_tapped(obj_id) is True
+    # Run SBAs — the creature has lethal damage marked (CR 704.5g).
+    destroyed = synthetic_state.apply_sbas()
+    assert destroyed >= 1
+    # Locate the dead creature in p0's graveyard.
+    gy_entries = synthetic_state.graveyard_snapshot(0)
+    matching = [e for e in gy_entries if e["id"] == obj_id]
+    assert len(matching) == 1, f"expected one gy entry for {obj_id}, got {matching}"
+    gy_obj = matching[0]
+    # Damage and tapped were cleared on the move-off-battlefield.
+    assert gy_obj["damage"] == 0, (
+        f"CE9 secondary: damage should be cleared on move to gy; got {gy_obj}"
+    )
+    assert gy_obj["tapped"] is False, (
+        f"CE9 secondary: tapped should be cleared on move to gy; got {gy_obj}"
+    )

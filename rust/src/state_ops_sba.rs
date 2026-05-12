@@ -252,6 +252,25 @@ impl GameState {
             };
             obj.zone = ZONE_GRAVEYARD;
             obj.controller = controller;
+            // Per-object state reset on zone-change (CR 400.7 / 614.12).
+            // Python's `turn.move_off_battlefield` clears combat marks
+            // (damage, tapped, attached_to) on the way to the
+            // destination zone; Rust's SBA destroy path inlines its
+            // own move and previously preserved the marks. CE9
+            // secondary closure (paired with the bf-order iteration
+            // fix in `state_ops_combat.rs`): match Python's clear-on-
+            // move-off by zeroing `damage` and `tapped` here so the
+            // graveyard signature compares clean post-multi-block.
+            // counters stay (CR 400.7 carves out "counters on the
+            // permanent" — but CR 121.2 says counters cease to exist
+            // on zone change for most counter kinds; Python's
+            // move_off_battlefield does NOT clear counters either, so
+            // we follow Python's observable behavior). attached_to is
+            // also cleared per Python's `obj.attached_to = None` at
+            // move_off_battlefield:240.
+            obj.damage = 0;
+            obj.tapped = false;
+            obj.attached_to = None;
             let printing_id = obj.printing_id;
             // Push onto the controller's graveyard.
             let target = &mut self.players[controller as usize];

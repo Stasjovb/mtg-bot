@@ -860,12 +860,34 @@ impl GameState {
                 attacker_has_first_strike,
                 attacker_has_double_strike,
             );
-            // Find the FIRST blocker matching this attacker (single-
-            // blocker damage simplification — see module docstring).
-            let first_blocker: Option<u32> = self
+            // Find the FIRST blocker matching this attacker, ordered by
+            // bf-ETB timestamp via the shared `bf_iter_etb_sorted`
+            // helper. Mirrors Python's `combat.py:389,405` walk:
+            // ``[o for o in state.battlefield if o.id in attacker.blocked_by]``
+            // — pick the lowest-bf-position eligible blocker. CE9 closure
+            // (see `docs/RUST_PARITY_GAPS.md` and the playbook §3
+            // Option A): the previous `self.blockers.iter().find_map(...)`
+            // walked declare-blockers push order, which diverged from
+            // Python whenever blockers were declared in non-bf order.
+            // (CR 510.1d says the ACTIVE player chooses damage
+            // assignment order — declare order — so Python's walk is
+            // technically a bug vs CR, but parity with observable
+            // Python is the reference here; long-term correctness is
+            // tracked as a follow-up Python-side fix.)
+            let attacker_blocker_ids: std::collections::HashSet<u32> = self
                 .blockers
                 .iter()
-                .find_map(|(a, b)| if *a == attacker_id { Some(*b) } else { None });
+                .filter_map(|(a, b)| if *a == attacker_id { Some(*b) } else { None })
+                .collect();
+            let first_blocker: Option<u32> = crate::bf_iter::bf_iter_etb_sorted(self)
+                .into_iter()
+                .find_map(|obj| {
+                    if attacker_blocker_ids.contains(&obj.id) {
+                        Some(obj.id)
+                    } else {
+                        None
+                    }
+                });
             if let Some(blocker_id) = first_blocker {
                 if attacker_power > 0 {
                     // Trample (CR 702.19): the attacker is required
@@ -959,7 +981,26 @@ impl GameState {
         // assignment order. (Real MTG: each blocker also deals damage
         // simultaneously; multi-blocker complexity is deferred but
         // the back-damage lane is symmetric.)
-        for &(attacker_id, blocker_id) in &self.blockers {
+        //
+        // CE9 closure: iterate the blockers in bf-ETB timestamp order
+        // via `bf_iter_etb_sorted`, filtered to ids that appear in
+        // `self.blockers`. This matches Python's `combat.py` back-
+        // damage walk, which is also bf-ordered (the per-blocker
+        // damage value is unchanged — only the relative order of
+        // accumulation differs, and end-state fields agree because
+        // every blocker still takes its assigned damage). The
+        // attacker_id per blocker is recovered via a lookup into
+        // `self.blockers`.
+        let blocker_to_attacker: std::collections::HashMap<u32, u32> = self
+            .blockers
+            .iter()
+            .map(|(a, b)| (*b, *a))
+            .collect();
+        for obj in crate::bf_iter::bf_iter_etb_sorted(self) {
+            let Some(&attacker_id) = blocker_to_attacker.get(&obj.id) else {
+                continue;
+            };
+            let blocker_id = obj.id;
             let blocker_power = battlefield_creature_power(self, blocker_id);
             let blocker_has_first_strike =
                 battlefield_has_keyword(self, blocker_id, "first_strike");
