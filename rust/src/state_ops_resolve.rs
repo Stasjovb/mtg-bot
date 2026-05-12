@@ -474,7 +474,12 @@ fn apply_effect(
                 // where the target lives.
                 obj.zone = ZONE_HAND;
                 obj.tapped = false;
-                obj.summoning_sick = false;
+                // CE13 closure: `summoning_sick` is NOT reset here.
+                // Python's `turn.move_off_battlefield` deliberately
+                // omits the clear (CR 302.1 — sickness is battlefield-
+                // only state; preserving the flag in non-battlefield
+                // zones has no gameplay impact, and the re-ETB path
+                // restamps `sick=true`). See I35.
                 obj.damage = 0;
                 obj.counters = 0;
                 obj.attached_to = None;
@@ -634,7 +639,10 @@ fn apply_effect(
                 // `defender`'s exile (where the target lives).
                 obj.zone = ZONE_EXILE;
                 obj.tapped = false;
-                obj.summoning_sick = false;
+                // CE13 closure: `summoning_sick` is NOT reset here.
+                // Python's `turn.move_off_battlefield` deliberately
+                // omits the clear (CR 302.1 — sickness is battlefield-
+                // only state). See I35.
                 obj.damage = 0;
                 obj.counters = 0;
                 obj.attached_to = None;
@@ -800,7 +808,10 @@ fn apply_effect(
                 // permanent's owner lives).
                 obj.zone = ZONE_GRAVEYARD;
                 obj.tapped = false;
-                obj.summoning_sick = false;
+                // CE13 closure: `summoning_sick` is NOT reset here.
+                // Python's `turn.move_off_battlefield` deliberately
+                // omits the clear (CR 302.1 — sickness is battlefield-
+                // only state). See I35.
                 obj.damage = 0;
                 obj.counters = 0;
                 obj.attached_to = None;
@@ -1051,7 +1062,10 @@ fn apply_effect(
                 // the destroyed permanent's owner lives).
                 obj.zone = ZONE_GRAVEYARD;
                 obj.tapped = false;
-                obj.summoning_sick = false;
+                // CE13 closure: `summoning_sick` is NOT reset here.
+                // Python's `turn.move_off_battlefield` deliberately
+                // omits the clear (CR 302.1 — sickness is battlefield-
+                // only state). See I35.
                 obj.damage = 0;
                 obj.counters = 0;
                 obj.attached_to = None;
@@ -2407,7 +2421,10 @@ fn apply_effect(
                 let mut obj = bf_mut.remove(pos);
                 obj.zone = ZONE_GRAVEYARD;
                 obj.tapped = false;
-                obj.summoning_sick = false;
+                // CE13 closure: `summoning_sick` is NOT reset here.
+                // Python's `turn.move_off_battlefield` deliberately
+                // omits the clear (CR 302.1 — sickness is battlefield-
+                // only state). See I35.
                 obj.damage = 0;
                 obj.counters = 0;
                 obj.attached_to = None;
@@ -2453,7 +2470,10 @@ fn apply_effect(
                 let mut obj = bf_mut.remove(pos);
                 obj.zone = ZONE_GRAVEYARD;
                 obj.tapped = false;
-                obj.summoning_sick = false;
+                // CE13 closure: `summoning_sick` is NOT reset here.
+                // Python's `turn.move_off_battlefield` deliberately
+                // omits the clear (CR 302.1 — sickness is battlefield-
+                // only state). See I35.
                 obj.damage = 0;
                 obj.counters = 0;
                 obj.attached_to = None;
@@ -2500,7 +2520,10 @@ fn apply_effect(
                 let mut obj = bf_mut.remove(pos);
                 obj.zone = ZONE_GRAVEYARD;
                 obj.tapped = false;
-                obj.summoning_sick = false;
+                // CE13 closure: `summoning_sick` is NOT reset here.
+                // Python's `turn.move_off_battlefield` deliberately
+                // omits the clear (CR 302.1 — sickness is battlefield-
+                // only state). See I35.
                 obj.damage = 0;
                 obj.counters = 0;
                 obj.attached_to = None;
@@ -2547,7 +2570,10 @@ fn apply_effect(
                 let mut obj = bf_mut.remove(pos);
                 obj.zone = ZONE_GRAVEYARD;
                 obj.tapped = false;
-                obj.summoning_sick = false;
+                // CE13 closure: `summoning_sick` is NOT reset here.
+                // Python's `turn.move_off_battlefield` deliberately
+                // omits the clear (CR 302.1 — sickness is battlefield-
+                // only state). See I35.
                 obj.damage = 0;
                 obj.counters = 0;
                 obj.attached_to = None;
@@ -4881,7 +4907,10 @@ fn apply_effect(
             let mut obj = bf_mut.remove(pos);
             obj.zone = ZONE_GRAVEYARD;
             obj.tapped = false;
-            obj.summoning_sick = false;
+            // CE13 closure: `summoning_sick` is NOT reset here.
+            // Python's `turn.move_off_battlefield` deliberately
+            // omits the clear (CR 302.1 — sickness is battlefield-
+            // only state). See I35.
             obj.damage = 0;
             obj.counters = 0;
             obj.attached_to = None;
