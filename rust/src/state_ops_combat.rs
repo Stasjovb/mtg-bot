@@ -876,13 +876,21 @@ impl GameState {
             // tracked as a follow-up Python-side fix.)
             //
             // CE14 closure: collect the FULL bf-ETB-sorted blocker list
-            // (not just first_blocker). The no-trample branch now walks
-            // every blocker with `need_i = 1 if deathtouch else
-            // blocker_toughness`, mirroring Python's combat.py:419-435
-            // per-blocker assignment loop. The trample branch keeps its
-            // existing first-blocker-only assignment (the round-9
-            // simplification) — extending trample to multi-block with
-            // per-blocker damage spill is a separate slice (see I31).
+            // (not just first_blocker). The no-trample branch walks every
+            // blocker with `need_i = 1 if deathtouch else
+            // effective_toughness - blocker.damage`, mirroring Python's
+            // combat.py:419-435 per-blocker assignment loop.
+            //
+            // CE15 closure: the trample branch now also walks every
+            // blocker with the same `need_i` formula, mirroring Python's
+            // loop end-to-end. The last blocker DOES NOT absorb the
+            // remainder (Python's `is_last and not has_trample` tail
+            // intentionally excludes the trample case); whatever damage
+            // remains after each blocker has absorbed its `need_i` spills
+            // to the defender via the existing trample-spill emission.
+            // Pre-CE15, the trample branch only emitted to first_blocker
+            // (round-9 simplification) — multi-blocker trample under-
+            // killed by N-1 blockers per engagement.
             let attacker_blocker_ids: std::collections::HashSet<u32> = self
                 .blockers
                 .iter()
@@ -901,7 +909,16 @@ impl GameState {
             let first_blocker: Option<u32> = bf_ordered_blockers.first().copied();
             let attacker_has_deathtouch =
                 battlefield_has_keyword(self, attacker_id, "deathtouch");
-            if let Some(blocker_id) = first_blocker {
+            // The `first_blocker.is_some()` check gates "blocked vs
+            // unblocked": when at least one blocker exists, we enter
+            // the multi-block damage assignment walk (CE14/CE15);
+            // otherwise we fall through to the `else if attacker_power
+            // > 0` unblocked branch. The actual loop iterates
+            // `bf_ordered_blockers` directly — `first_blocker` itself
+            // is no longer used inside either branch (pre-CE15 both
+            // branches assigned damage to `first_blocker` as a
+            // shortcut; post-CE15 both walk every blocker).
+            if let Some(_first_blocker_id) = first_blocker {
                 if attacker_power > 0 {
                     // Trample (CR 702.19): the attacker is required
                     // to assign at least lethal (= blocker.toughness)
@@ -920,50 +937,71 @@ impl GameState {
                     // remainder (mirrors Python's
                     // combat.py:419-435 "is_last gets remaining" tail).
                     if attacker_has_trample {
-                        let blocker_toughness =
-                            battlefield_creature_toughness(self, blocker_id);
-                        // Trample's "lethal to blocker" floor (CR
-                        // 702.19b) is normally `blocker.toughness` —
-                        // the attacker must assign at least that much
-                        // before tramping any over to the defender.
-                        // CR 702.19c carves out the deathtouch case:
-                        // an attacker with BOTH trample and deathtouch
-                        // only has to assign 1 damage to each blocker
-                        // before assigning the rest as trample, because
-                        // 1 damage from deathtouch already counts as
-                        // lethal (CR 702.2b). So the per-blocker cap
-                        // becomes 1 when the attacker also has
-                        // deathtouch, freeing up `power - 1` to spill
-                        // through to the defender.
-                        let blocker_cap = if attacker_has_deathtouch {
-                            1
-                        } else {
-                            blocker_toughness
-                        };
-                        // Damage to blocker: min(attacker_power,
-                        // blocker_cap). When attacker_power <=
-                        // blocker_cap the blocker absorbs all of it
-                        // (no excess); when attacker_power >
-                        // blocker_cap the blocker takes the cap's
-                        // worth and the rest goes to the defender.
-                        let to_blocker = std::cmp::min(attacker_power, blocker_cap);
-                        if to_blocker > 0 {
-                            for &p in &passes_for_source {
-                                plan.push(PlanEntry {
-                                    source_id: attacker_id,
-                                    target: DamageTarget::Creature(blocker_id),
-                                    amount: to_blocker,
-                                    pass: p,
-                                });
+                        // CE15 closure: walk ALL blockers (not just
+                        // first_blocker), mirroring Python's
+                        // combat.py:419-435 loop shape under
+                        // has_trample=True. Per CR 702.19b, the attacker
+                        // must assign at least `need_i = blocker_i.
+                        // toughness - blocker_i.damage` to each blocker
+                        // before tramping over to the defender; CR
+                        // 702.19c carves out the deathtouch case (1
+                        // damage suffices per blocker because CR 702.2b
+                        // makes that lethal). Whatever power remains
+                        // after every blocker has absorbed its `need_i`
+                        // spills to the defender via the trample-excess
+                        // emission below.
+                        //
+                        // Python's loop tail `is_last and not has_trample:
+                        // assigned = remaining` is intentionally NOT
+                        // applied here — under trample the last blocker
+                        // also takes only `min(remaining, need)`, and the
+                        // remainder becomes the trample-through.
+                        let mut remaining: i16 = attacker_power;
+                        for &blocker_id_i in bf_ordered_blockers.iter() {
+                            if remaining <= 0 {
+                                break;
                             }
+                            // CR 702.19c: deathtouch redefines lethal
+                            // to 1 per blocker, freeing up the rest as
+                            // trample-through.
+                            let need: i16 = if attacker_has_deathtouch {
+                                1
+                            } else {
+                                let blocker_toughness =
+                                    battlefield_creature_toughness(self, blocker_id_i);
+                                let blocker_damage =
+                                    battlefield_creature_damage(self, blocker_id_i);
+                                let raw = (blocker_toughness as i32)
+                                    - (blocker_damage as i32);
+                                if raw < 0 { 0 } else { raw as i16 }
+                            };
+                            // Trample case: no is_last-takes-remainder
+                            // tail (the trample-spill code path below
+                            // handles the remainder). Each blocker
+                            // absorbs only its lethal floor.
+                            let assigned: i16 = std::cmp::min(remaining, need);
+                            if assigned > 0 {
+                                for &p in &passes_for_source {
+                                    plan.push(PlanEntry {
+                                        source_id: attacker_id,
+                                        target: DamageTarget::Creature(blocker_id_i),
+                                        amount: assigned,
+                                        pass: p,
+                                    });
+                                }
+                            }
+                            remaining -= assigned;
                         }
-                        let excess = (attacker_power as i32) - (blocker_cap as i32);
-                        if excess > 0 {
+                        // Trample-through: whatever power remains after
+                        // every blocker has absorbed its `need_i` spills
+                        // to the defender (Python's `if has_trample and
+                        // remaining > 0` block in combat.py:436-440).
+                        if remaining > 0 {
                             for &p in &passes_for_source {
                                 plan.push(PlanEntry {
                                     source_id: attacker_id,
                                     target: DamageTarget::Player(defending_player),
-                                    amount: excess as i16,
+                                    amount: remaining,
                                     pass: p,
                                 });
                             }

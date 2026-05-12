@@ -2066,6 +2066,117 @@ them to call the helper is a follow-up housekeeping pass.
     the deathtouch-cap-is-1 rule to cover the no-trample
     branch too — the rule now applies uniformly to all
     deathtouch attackers regardless of trample presence.
+  - **I37** (trample multi-block damage assignment walks all
+    blockers with per-blocker `need_i` floor; remainder spills
+    to defender). I37 lands the structural per-blocker walk in
+    the trample branch (CE15 closure) — I36 + I37 together
+    specify the post-CE14/CE15 multi-block damage assignment
+    shape uniformly across the trample and no-trample boundaries.
+
+### I37. Trample multi-block damage assignment walks ALL blockers in bf-ETB order with per-blocker `need_i` floor; remainder spills to defender (CR 702.19b + 702.19c)
+
+- **Pinned by**:
+  `tests_rust/test_combat.py::test_trample_two_blockers_no_deathtouch_no_excess`,
+  `test_trample_two_blockers_no_deathtouch_with_excess`,
+  `test_trample_deathtouch_two_blockers_excess`,
+  `test_trample_single_blocker_preserved_post_ce15`;
+  plus the pre-existing single-blocker trample test family
+  (`test_trample_blocked_excess_goes_to_defender`,
+  `test_trample_blocked_no_excess_when_attacker_smaller_than_blocker_toughness`,
+  `test_trample_blocked_exact_lethal_no_excess`,
+  `test_trample_only_4_4_vs_3_3_blocker_pins_existing_round9_behavior`,
+  `test_trample_deathtouch_4_4_vs_3_3_blocker_one_to_blocker_three_to_defender`,
+  `test_trample_deathtouch_4_4_vs_5_5_blocker_one_to_blocker_three_to_defender`,
+  `test_trample_deathtouch_1_1_vs_3_3_blocker_no_trample_excess`,
+  `test_trample_deathtouch_exact_one_power_no_excess`).
+
+- **Invariant** (closes CE15, per Phase 5 "converge Rust toward
+  Python, never modify Python"). In
+  `rust/src/state_ops_combat.rs::deal_combat_damage`, the trample
+  branch walks every blocker in `bf_iter_etb_sorted` order with
+  per-blocker `need_i`:
+
+  ```rust
+  // attacker_has_trample == true
+  let mut remaining: i16 = attacker_power;
+  for &blocker_id_i in bf_ordered_blockers.iter() {
+      if remaining <= 0 { break; }
+      let need: i16 = if attacker_has_deathtouch {
+          1  // CR 702.19c: deathtouch redefines lethal to 1
+      } else {
+          max(0, effective_toughness(blocker) - blocker.damage)
+      };
+      // Trample: NO is_last-takes-remainder tail (the spill below
+      // handles the remainder). Each blocker absorbs only its
+      // lethal floor.
+      let assigned: i16 = min(remaining, need);
+      // emit PlanEntry { blocker_id_i, assigned } via passes_for_source
+      remaining -= assigned;
+  }
+  if remaining > 0 {
+      // emit PlanEntry { defender, remaining } — trample-through
+  }
+  ```
+
+  Matches Python's `combat.py:419-440` loop element-by-element
+  under `has_trample=True`. Python's `is_last and not has_trample:
+  assigned = remaining` tail is intentionally NOT applied in the
+  trample case (the `if has_trample and remaining > 0` block at
+  Python's `combat.py:436-440` collects the remainder for the
+  defender).
+
+- **Why I36 and I37 are split** rather than folded into one
+  invariant: the two branches share the bf-ETB iteration pattern
+  and the deathtouch lethal redefinition, but diverge on what
+  happens to the remainder after every blocker has absorbed its
+  `need_i`. The no-trample branch (I36) has Python's `is_last and
+  not has_trample: assigned = remaining` tail — the last blocker
+  absorbs whatever power remains, preserving the round-5 single-
+  blocker "assign full power to first blocker" observable. The
+  trample branch (I37) routes the remainder to the defender as
+  trample-through. Future refactors that consolidate the two
+  branches into a single loop must preserve both tails by gating
+  on `has_trample` inside the loop body.
+
+- **Single-blocker observable preserved**: with exactly ONE
+  blocker, the trample loop runs once with `assigned = min(power,
+  need)`, then `remaining = power - assigned` spills to the
+  defender. Bit-equal to the pre-CE15
+  `to_blocker = min(power, blocker_cap)` /
+  `excess = power - blocker_cap` math (where `blocker_cap = 1 if
+  deathtouch else blocker_toughness`). The 8 pre-existing
+  single-blocker trample / trample+deathtouch tests continue to
+  pass without modification.
+
+- **Pre-CE15 gap**: the trample branch had a single-PlanEntry
+  shortcut that emitted only to `first_blocker` (the bf-ETB-first
+  eligible blocker) carrying `min(power, blocker_cap)`, leaving
+  blockers 2..N untouched with `damage=0`. CE14's diagnostic note
+  surfaced the asymmetry: CE14 fixed the no-trample branch's
+  identical pattern, leaving the trample branch as the same bug
+  with different downstream math. CE15 closes the trample-branch
+  half preemptively (no separate probe; the diagnosis was
+  complete).
+
+- **Cross-reference**:
+  - **CE15** (the divergence this closure retired). Identified
+    in CE14's diagnostic note rather than via a fresh
+    cross-engine probe.
+  - **I31** (combat damage assignment walks bf-ETB-sorted). I37
+    composes on top of I31 — bf-ETB walk order determines the
+    iteration sequence; per-blocker `need_i` determines the
+    per-blocker assignment.
+  - **I36** (deathtouch's lethal redefinition in BOTH branches).
+    I37 generalizes the per-blocker walk pattern across the
+    trample/no-trample boundary; I36 generalizes the deathtouch
+    lethal redefinition across the same boundary. The two
+    invariants stack: I36 + I37 together specify the post-CE14/
+    CE15 multi-block damage assignment shape uniformly.
+  - **Multi-block back-damage walk** unchanged (every declared
+    blocker still emits its own back-damage PlanEntry — that pass
+    already iterated all blockers pre-CE15). I31's bf-ETB-monotone
+    back-damage walk composes orthogonally with I37's per-blocker
+    forward-damage walk.
 
 ### ~~CE5.~~ CLOSED: `cast_spell` cross-engine parity via harness-side `resolve_top_of_stack_python` mirror
 
@@ -2819,6 +2930,65 @@ single-PlanEntry simplification Rust shipped under round-5 scope,
 which CE14 generalized.
 
 See I36 for the post-closure invariant pin.
+
+---
+
+### CE15 — CLOSED by `feature/ce15-trample-multiblock`
+
+**Status**: closed 2026-05-12 via Option A (Rust-side convergence
+on Python), per Phase 5 convention "converge Rust toward Python,
+never modify Python". Closure invariant lives at **I37** below.
+
+**Closed preemptively based on the deathtouch probe's diagnosis**;
+no separate OPEN-phase probe was run because CE14's closure
+(`f5d37b37`) explicitly identified the same bug pattern in the
+trample branch as part of its diagnostic note ("Rust's
+`state_ops_combat.rs:905-955` (trample branch) only emits to
+`first_blocker` for the in-blocker portion, while Python's
+`combat.py:419-435` walks all blockers"). The fix mirrors CE14's
+no-trample multi-block per-blocker assignment loop: the trample
+branch now walks every blocker in `bf_iter_etb_sorted` order with
+`need_i = 1 if deathtouch else effective_toughness - blocker.damage`
+per blocker, then spills the remainder to the defender via the
+existing trample-excess emission (Python's `if has_trample and
+remaining > 0` block at `combat.py:436-440`).
+
+The trample branch's pre-existing deathtouch=1 cap was preserved
+unchanged (CE14's diagnostic note confirmed it was correct);
+CE15's edit is structural — the single-PlanEntry first-blocker
+shortcut becomes a per-blocker walk. Single-blocker trample
+behavior is bit-equal to the pre-CE15 shape (loop runs once,
+absorbs `min(power, need)`, remainder spills to defender —
+identical to the pre-CE15 `to_blocker = min(power, cap)` /
+`excess = power - cap` math).
+
+4 new regression tests in `tests_rust/test_combat.py`:
+
+- `test_trample_two_blockers_no_deathtouch_no_excess` — 4/4 trample
+  vs 2x 2/2: blocker A 2 (dies), blocker B 2 (dies), defender 0.
+  Pre-CE15: blocker A 4, blocker B 0, defender 0.
+- `test_trample_two_blockers_no_deathtouch_with_excess` — 5/5
+  trample vs 2x 2/2: blocker A 2, blocker B 2, defender 1.
+  Pre-CE15: blocker A 2, blocker B 0, defender 3 (single-blocker
+  trample math used `blocker_cap = first_blocker.toughness`).
+- `test_trample_deathtouch_two_blockers_excess` — 4/4
+  trample+deathtouch vs 2x 2/2: blocker A 1 (lethal), blocker B 1
+  (lethal), defender 2. Pre-CE15: blocker A 1, blocker B 0,
+  defender 3.
+- `test_trample_single_blocker_preserved_post_ce15` — pins the
+  round-9 single-blocker shape post-refactor (5/5 trample vs 2/2:
+  blocker 2, defender 3) so future per-blocker-loop refactors
+  don't regress the common case.
+
+No cross-engine smoke probe was added for CE15 — existing combat
+probes' smoke runs don't use trample, and the preemptive-closure
+trade-off intentionally skips probe authoring. A future
+trample-bearing deckspec walk (or extending the
+`first_strike_selector` to add trample) would surface any
+remaining wiring asymmetry, but the unit-test surface above
+covers the load-bearing damage-distribution shapes.
+
+See I37 for the post-closure invariant pin.
 
 ---
 
