@@ -1,27 +1,36 @@
 # Phase 5 status & closure roadmap
 
-Snapshot date: 2026-05-12 (end-of-day; CE8 fully closed via two slices,
-CE9-CE12 closed, CE13 surfaced, bilateral combat probe walks 260
-decisions clean).
+Snapshot date: 2026-05-12 (afternoon-wave end; CE13-CE18 all closed,
+G12 / G19 / G24 all closed, Effect-rng-threading shipped, defender-
+only target arms rewritten, and seven single-keyword probes walked
+clean across the bilateral combat backbone).
 
-**Punchline.** The biggest open architectural item shipped today — CE8
-(PRNG mismatch / shuffle RNG externalization) is FULLY CLOSED across
-all 8 gameplay shuffle sites via the PyO3 `_randbelow` callback
-substrate, which simultaneously unblocks G19. CE9 (multi-block combat
-blocker ordering) closed with a 1000/1000 clean multi-block smoke;
-CE10/CE11/CE12 closed in single small slices; the retaliation probe
-walks 260 decisions of bilateral combat clean. The Rust engine carries
-**80 `Effect` variants** covering **75.7%** of per-card emissions on
-the EoE+stellar_sights+special_guests_eoe+duskmourn pool. Only ONE
-open CE divergence remains (CE13, a low-impact graveyard `summoning_sick`
-field asymmetry) and one substrate item (G19) is now a one-line
-Effect-arm edit on top of the external-RNG plumbing CE8 left in place.
-Phase 4a/4b are functionally complete (freq>=10 head: 13/14, with the
-remaining 1 case shipped under a renamed Rust variant; freq 2-9 mid:
-52/53, 98.1%). The remaining work to a 1000-game cross-engine smoke
-is now a handful of small slices plus a Phase 5 probe extension into
-the next combat keyword surface (first-strike / deathtouch / trample /
-lifelink / counterspells).
+**Punchline.** **The cross-engine smoke is now byte-identical across
+twelve combat surfaces** — cast resolve, multi-block, bilateral
+combat, first-strike, double-strike (post-CE18), deathtouch + multi-
+block damage assignment (post-CE14), trample + multi-block damage
+assignment (post-CE15), lifelink, vigilance, haste, menace (post-
+CE16), defender (post-CE17), indestructible, flying, and hexproof
+(shared-gap parity). The double-strike spillover divergence (CE18)
+closed late in the wave, so **zero open CE divergences remain — first
+"all open CEs closed" state in the project**. CE8's external-RNG
+substrate from the morning closed end-to-end today via the Effect-
+rng-threading slice that put the rng on `GameState.rng` and threaded
+it through `Effect::SearchLibraryForBasicLandTapped` — cross-engine
+MT shuffle parity is byte-identical under a shared `random.Random`.
+G19 closed in two stages (xorshift64 fallback + Effect-rng-threading);
+G12 was audited and retired as already-effectively-closed; G24 (Paris
+scry-on-keep) shipped a new `PendingDecision::ScryChoice` variant +
+dispatcher. The Rust engine carries **80 `Effect` variants** covering
+**75.7%** of per-card emissions on the EoE+stellar_sights+
+special_guests_eoe+duskmourn pool. **Open CE count: 0. Open G-gap
+count: 1 (G8 multi-kind counter map, no pool card asks the question).**
+Phase 4a/4b are functionally complete (freq>=10 head: 13/14, freq 2-9:
+52/53). The remaining work to a 1000-game cross-engine smoke is
+bounded: a handful of additional probe extensions into the event-
+driven surface (ETB triggers, activated abilities mid-combat,
+counterspells, flash) plus the substrate prerequisites those probes
+will surface.
 
 ---
 
@@ -29,34 +38,34 @@ lifelink / counterspells).
 
 ### Numbers
 
-- **80 Rust `Effect` variants** in `rust/src/cards.rs` (was 77 at
-  2026-05-11 snapshot; +3 today including
-  `DrawCardsEqualToResolvingCombatDamage`, plus 2 carried from late
-  2026-05-11 — `OptionalManaCostThenEffect`,
-  `ManifestDreadThenPutPlusOneCountersOnIt`).
-- **74 / 228 Python Effect classes covered (32.5%)** by class count
-  (was 31.1%).
-- **522 / 690 per-card emissions covered (75.7%)** — the load-bearing
-  weighted metric (was 74.8%).
+- **80 Rust `Effect` variants** in `rust/src/cards.rs` (unchanged from
+  the morning snapshot — today's Effect work was variant-internal:
+  G19's Fisher-Yates shuffle threaded through
+  `Effect::SearchLibraryForBasicLandTapped`'s resolve arm, plus
+  Effect-rng-threading routing the rng read through `state.rng_ref()`).
+  Note: G24 added `PendingDecision::ScryChoice`, but that's a pending-
+  decision variant, not an `Effect` variant.
+- **74 / 228 Python Effect classes covered (32.5%)** — unchanged.
+- **522 / 690 per-card emissions covered (75.7%)** — unchanged.
 - **Frequency tiers** (`docs/RUST_EFFECT_COVERAGE.md`):
   - Freq >= 10 (head, 14 classes): **13 / 14 covered (92.9%)** —
-    only `ModalChooseOne` shows as "no", but Rust ships
-    `Effect::ChooseOneMode` (1:1 functional match); the coverage
-    table flips to 14/14 once the `feature/coverage-overrides` PR
-    merges the override map.
-  - Freq 2-9 (mid, 53 classes): **52 / 53 covered (98.1%)** — was
-    49/53 at 2026-05-11 (`DrawCardsEqualToResolvingCombatDamage`
-    closed the last freq-2 miss).
+    unchanged; `ModalChooseOne` still gated on the unmerged
+    `feature/coverage-overrides` PR to flip to 14/14 via the
+    override map.
+  - Freq 2-9 (mid, 53 classes): **52 / 53 covered (98.1%)** —
+    unchanged.
   - Freq 1 singletons (161 classes): **9 / 161 (5.6%)** — explicitly
-    out of Phase 5/6 scope per `RUST_PARITY_PLAN.md` "Phasing" §3.
-- **Rust test gate**: ~1814 passing on main (was 1693 at 2026-05-11
-  start-of-session; +121 today across CE8 + CE9 + CE11 + CE12 + the
-  combat-damage write-site + freq-2 closure + bf-iter resolve arms).
-- **Python test gate**: 10127 passed / 12 skipped / 3 xfailed
-  (CE13 strict-xfail + CE8 legacy-path companion symptom-pin + one
-  pre-existing). One pre-existing red unrelated to Phase 5:
-  `test_no_orphan_rust_variants` (3 orphans pending the unmerged
-  `feature/coverage-overrides` PR).
+    out of Phase 5/6 scope.
+- **Rust test gate**: **1874 passing on main** (was 1814 at the
+  end-of-day-yesterday snapshot; **+60 today** across the afternoon-
+  wave CE closures, keyword probes, Effect-rng-threading pins,
+  defender-only target arms regression tests, and G12 / G24 cross-
+  engine pins).
+- **Python test gate**: ~10255 passed / 10-12 skipped / 0-2 xfailed
+  depending on slice (no remaining strict-xfails as of end-of-day —
+  CE13 / CE17 / CE18 all retired their pre-closure pair-pins). One
+  pre-existing red unrelated to Phase 5: `test_no_orphan_rust_variants`
+  (3 orphans pending the unmerged `feature/coverage-overrides` PR).
 
 ### Parity plan status (`docs/RUST_PARITY_PLAN.md`)
 
@@ -64,76 +73,143 @@ lifelink / counterspells).
 |---|---|
 | 0 Engine primitives | done (r1-r19) |
 | 1 Discovery + scaffold | done (r20) |
-| 2 Externalize RNG + spec GameState API | **done end-of-day 2026-05-12** (CE8 closure landed the external-RNG substrate + rewired all 8 shuffle sites via `external_rng::next_below`) |
+| 2 Externalize RNG + spec GameState API | **done** (CE8 substrate + Effect-rng-threading both shipped; cross-engine MT shuffle parity byte-identical) |
 | 3 Action types + legal_decisions | done (r22-r25) |
-| 4a Top-14 high-frequency Effects | done modulo coverage-overrides PR merge (13/14 shipped, `ModalChooseOne` -> `Effect::ChooseOneMode` 1:1) |
-| 4b Mid-frequency Effects (next ~50) | **done modulo 1 singleton** (52/53 shipped — was 49/53 yesterday) |
-| **5 Per-step trajectory diff** | **in flight — all 12 prior CEs closed; CE13 surfaced + pinned; bilateral combat probe walks 260 decisions clean; mass-removal probe walks 168 decisions clean** |
-| 6 Scale to 1000 games | **partial — 1000/1000 clean multi-block combat smoke on `multi_blocker_deckspec` post-CE9 closure** |
+| 4a Top-14 high-frequency Effects | done modulo coverage-overrides PR merge |
+| 4b Mid-frequency Effects (next ~50) | done modulo 1 singleton (52/53 shipped) |
+| **5 Per-step trajectory diff** | **substantially advanced — all CEs surfaced through CE18 are closed; cross-engine smoke walks 200 decisions clean on 7+ keyword surfaces and 1000/1000 clean on multi-block** |
+| 6 Scale to 1000 games | **partial — 1000/1000 clean multi-block combat smoke on `multi_blocker_deckspec`; 200/200 clean walks on retaliation + first-strike + lifelink + vigilance + haste + indestructible + flying + hexproof + defender (normal_only) + double-strike (post-CE18) surfaces** |
 
-### Cross-engine divergences surfaced + closed today (2026-05-12)
+### Cross-engine divergences surfaced + closed in today's afternoon wave
 
-The probe-close-probe cadence held all day. Closed CEs delta vs the
-2026-05-11 snapshot (CE5 + CE6 + CE7 + CE10 closed late 2026-05-11):
+The probe-close-probe cadence accelerated this afternoon. Delta vs
+the 2026-05-12 end-of-day-yesterday snapshot (which had CE13 as the
+lone open CE):
 
-- **CE8** (shuffle PRNG mismatch — Python MT19937 vs Rust xorshift64).
-  CLOSED in 2 slices today:
-  - Slice 1 (`4cc6d57a`, merge `0c594782`): new `rust/src/external_rng.rs`
-    + PyO3 `_randbelow` callback + setup-shuffle rewire + cross-engine
-    `shared_rng_seed` substrate in `parity/cross_engine.py`.
-  - Slice 2 (`14e78d4a`, merge `832501a3`): remaining 6 gameplay
-    shuffle sites in `state_ops_library.rs` (3 sites) +
-    `state_ops_mulligan.rs` (3 sites) rewired through the same
-    helper. Simultaneously unblocks **G19** (the closure is now a
-    one-line Effect-arm edit at the `SearchLibraryForBasicLandTapped`
-    resolve site).
-- **CE9** (multi-block combat blocker walk: Rust used `self.blockers`
-  push order, Python walks centralized `state.battlefield` filtered
-  by `attacker.blocked_by`). CLOSED `9633953e` + `cdd6ce00` (merge
-  `90a015dc`). 1000/1000 clean multi-block smoke on
-  `multi_blocker_deckspec`. Secondary closure folded in:
-  SBA-destroy now clears per-object `damage`/`tapped`/`attached_to`
-  on move-to-graveyard (mirrors `turn.move_off_battlefield`).
-- **CE10** (`is_over` / `winner_id` / `is_draw` pure-derivation
-  asymmetry). CLOSED late 2026-05-11 via SBA-gated accessors on the
-  Rust side.
-- **CE11** (cross-player find-first arms — `TapAnotherTargetCreature`
-  + `UntapTargetOtherPermanent`). CLOSED late 2026-05-11 via
-  `bf_iter_etb_sorted` helper consumption.
-- **CE12** (winner_id sticky-vs-derived in BOTH-LOST transition,
-  surfaced today by the retaliation probe). CLOSED `882be26b` +
-  `850bf3d0` (merge `33ba594d`). Rust `winner_id_sticky: Option<u8>`
-  write-once shadow field mirrors Python's `turn.py:1383-1393` SBA
-  write semantics. Retaliation probe now walks 260 decisions clean
-  (was 226 at surface time).
-- **CE13** (`summoning_sick` field clearing on leaves-battlefield
-  via mass removal — Python preserves, Rust clears). SURFACED today
-  by `feature/phase5-mass-removal` (`00944235`, merge `798a4e70`),
-  pinned at `tests/test_parity_smoke.py::test_cross_engine_mass_removal_selector_surfaces_ce13_summoning_sick_on_ltb`
-  (xfail-strict). LOW impact (graveyard-only field, CR 302.1
-  battlefield-only state); closure direction is a 1-line Python or
-  Rust edit. Closure agent in flight as of this writing.
+- **CE13** (`summoning_sick` cleared on Rust LTB; Python preserves).
+  CLOSED via `feature/ce13-summoning-sick-ltb` (merge `ba097c70`).
+  Rust now preserves the flag matching Python's
+  `turn.move_off_battlefield`.
+- **CE14** (deathtouch + multi-block damage assignment split — Python
+  walks every blocker with need=1; Rust over-counted). CLOSED
+  `b348994b` (merge `17bffc61`). Per-blocker need=1 assignment
+  matches Python. Surfaced by the deathtouch probe (`c3ed2636`) and
+  closed same-session.
+- **CE15** (trample + multi-block damage assignment — Python walks
+  every blocker with need-based assignment incl. trample excess
+  routing; Rust short-circuited). CLOSED `e6dc6433` (merge
+  `ecc44429`). Per-blocker need + trample excess matches Python.
+- **CE16** (menace single-blocker apply-path divergence — Rust didn't
+  post-validate block assignments). CLOSED `bbcacfae` (merge
+  `5a45da9d`). `Action::DeclareBlockers` apply arm now post-validates
+  via `is_legal_block_assignment` (silently drops illegal single-
+  blocker menace assignments).
+- **CE17** (legal_decisions emitted defender as attacker candidate
+  even though apply-time gate correctly rejected). CLOSED `85841f5f`
+  (merge `8e89ded3`). One-line filter in
+  `state_ops_legal.rs`'s DeclareAttackers eligibility loop calls
+  `battlefield_has_keyword(self, obj_id, "defender")` to short-
+  circuit, mirroring the apply-time gate.
+- **CE18** (double-strike attacker damages sole blocker to lethal in
+  FS substep; Python redirects regular-pass damage to defender; Rust
+  dropped). SURFACED + CLOSED same-day. Closure `77a53c36` (merge
+  `7a26022f`) rewrites `deal_combat_damage` pass-2 filter as a
+  `filter_map` that redirects to `DamageTarget::Player(defending_player)`
+  when source-is-attacker AND alive-blocker-count==0. Phase 5
+  convention overrode CR-correctness (Rust pre-closure was CR-
+  correct; Python is over-permissive). Invariant I45 added.
 
-Cross-engine deltas vs the 2026-05-11 snapshot:
-- Open CE count: **1 (CE13) down from 4 in the prior snapshot** (CE4
-  was in-flight at the time; CE5/CE6/CE7 were predicted; today
-  CE5-CE12 are all closed and CE13 is the only new survivor).
-- Open G count: **G8 + G12 + G19 + G24 = 4** (no net change in count,
-  but G19 is now substrate-unblocked and a one-line slice — see §2).
+### G-gaps closed today
 
-### What's running cleanly end-of-day
+- **G12** (mutual KO is two sequential `lose_life` calls, not one
+  atomic symmetric Effect). CLOSED via `feature/g12-audit` (merge
+  `2edebfd1`). The audit established that the underlying substrate
+  gap is structurally still present, BUT the observable end-state IS
+  the parity-load-bearing contract and matches bit-equal on both
+  engines via `apply_sbas_until_quiescent`. Invariant I44 added
+  pinning the cross-engine end-state contract.
+- **G19** (`SearchLibraryForBasicLandTapped` does not shuffle).
+  CLOSED in two stages: morning's `feature/g19-search-shuffle`
+  shipped the xorshift64 fallback Fisher-Yates; afternoon's
+  `feature/effect-rng-threading` (merge `7b8de90e`) added
+  `GameState.rng: Option<Py<PyAny>>` field + `set_external_rng`
+  pymethod + threading through the resolve arm. Cross-engine MT
+  shuffle parity is now byte-identical under a shared
+  `random.Random`. Invariant I43 added.
+- **G24** (no Paris scry-on-keep step after mulligan). CLOSED via
+  `feature/g24-paris-scry-on-keep` (merge `1e2e546b`). New
+  `PendingDecision::ScryChoice` variant + `keep_hand(player_id)`
+  pymethod + `submit_scry_decision(keep_on_top: bool)` dispatcher +
+  3 auto-resolve strategies (`scry_keep_top` / `scry_send_bottom` /
+  default). 19 new pinning tests.
+
+### Substrate items closed today
+
+- **Defender-only target arms rewrite** (deferred from yesterday's
+  bf-iter-resolve-arms slice). CLOSED via
+  `feature/defender-only-target-arms` (merge `f53559d3`). Four arms
+  (`DestroyTargetNonlandPermanent`, `DestroyTargetArtifact`,
+  `DestroyTargetLand`, `TapTargetArtifactOrCreature`) now walk
+  `bf_iter_etb_sorted` across both players matching Python's
+  `TargetSpec` filter (no controller restriction). Invariant I39
+  added. 12 new regression tests pin the closure direction.
+- **Effect-rng-threading** (deferred since CE8 substrate landed).
+  CLOSED via `feature/effect-rng-threading` (merge `7b8de90e`).
+  Option A from `docs/RUST_EFFECT_RNG_AUDIT.md` §4 (per-state-stash,
+  not per-call-signature parameter) shipped. Invariant I43 added.
+
+### Phase 5 keyword probes that walked clean today (no novel CE)
+
+Seven single-keyword probes extended the cross-engine smoke and
+walked parity-clean for 200 decisions on the retaliation backbone:
+
+- **vigilance** (CR 702.20) — merge `09ef4911`.
+- **haste** (CR 702.10) — merge `79d8c43d`.
+- **lifelink** (CR 702.15) — merge `34aaf8fd`.
+- **first-strike** (CR 510.5) — merge from morning wave.
+- **indestructible** (CR 702.12) — merge `a4b49c7e`.
+- **hexproof** (CR 702.11) — merge `04c2f346` (shared-gap parity:
+  neither engine enforces hexproof today; pinned at current
+  behavior).
+- **flying** (CR 702.9) — merge `b6080614`.
+
+Plus four probes that surfaced + closed same-session:
+deathtouch+multi-block (CE14), trample+multi-block (CE15), menace
+(CE16), defender (CE17), and double-strike (CE18).
+
+### Cross-engine deltas vs the 2026-05-12 end-of-day-yesterday snapshot
+
+- **Open CE count: 0** (was 1: CE13). CE13-CE18 all closed today;
+  CE18 surfaced + closed same-day. **First "all open CEs closed"
+  state in the project.**
+- **Open G-gap count: 1** (was 4: G8 + G12 + G19 + G24). G12 / G19 /
+  G24 all closed today. G8 remains the lone surviving open G, low
+  priority — no pool card asks the multi-kind-counter-stack
+  divergence question. G5 / G9 / G13 / G16 / G17 / G18 are
+  documented as parity invariants, not gaps (deliberate symmetric
+  contracts or test-setup-only asymmetries).
+- **Highest invariant: I45** (CE18 closure pin) — was I38 yesterday.
+  Today added I39 (defender-only target arms), I40 (legal_decisions
+  defender filter), I41 (external_rng substrate — renumbered from
+  duplicate I34), I42 (post-search shuffle contract — renumbered
+  from duplicate I35), I43 (GameState.rng lifecycle), I44 (mutual-
+  KO end-state), I45 (double-strike spillover).
+
+### What's running cleanly end-of-afternoon
 
 - All single-color / two-color synthetic deckspecs through full
   multi-turn play with land drops + creature casts + combat.
 - `multi_blocker_deckspec` with `multi_block_combat_selector`:
-  **1000/1000 clean games** (CE9 closure).
+  1000/1000 clean games.
 - `multi_blocker_deckspec` with `retaliation_selector` (bilateral
-  combat — both players attack on their own turns): **260 decisions
-  clean** (CE12 closure).
-- `mass_removal_selector`: 168 decisions clean (trips on CE13
-  field-snapshot divergence at step 168 — the wrath fire itself).
-- Shuffle-seed cross-engine smoke with `shared_rng_seed` (CE8 Slice
-  1 substrate): byte-equal libraries across multiple seeds.
+  combat): 260+ decisions clean.
+- `multi_blocker_deckspec` with each of seven keyword side-channel
+  selectors layered onto retaliation: 200/200 decisions clean.
+- Cross-engine shuffle smoke with `shared_rng_seed`: byte-identical
+  libraries across multiple seeds, including post-search shuffle
+  inside `Effect::SearchLibraryForBasicLandTapped`.
+- All four defender-only target arms: cross-player ETB-walk matches
+  Python via `bf_iter_etb_sorted`.
 
 ---
 
@@ -141,42 +217,28 @@ Cross-engine deltas vs the 2026-05-11 snapshot:
 
 ### Open G-gaps in `RUST_PARITY_GAPS.md`
 
-| Gap | Description | Status post-CE8 | Slice scope | Priority |
+| Gap | Description | Status | Slice scope | Priority |
 |---|---|---|---|---|
-| **G8** | +1/+1 and -1/-1 counters stored as net `i32`, cancel at write-time not SBA | unchanged — needs multi-kind counter map | medium | **low** (no pool cards ask the divergence question) |
-| **G12** | Mutual KO is two sequential `lose_life` calls, not one atomic symmetric Effect | unchanged | small | **low** (observable end-state already matches) |
-| **G19** | `SearchLibraryForBasicLandTapped` does not shuffle | **substrate now in place** — CE8 Slice 2 left the external-RNG plumbing wired into every shuffle pymethod. Closure is now a one-line Effect-arm edit calling `fisher_yates_shuffle_optional` post-search. | **small** (was medium) | **medium-high** — single-Effect-arm slice, biggest leverage of the open G items |
-| **G24** | No scry-on-keep step after mulligan-to-7 (Paris rule) | unchanged | small (reuses PendingDecision substrate) | **low** (harness does not drive mulligan loops today) |
+| **G8** | +1/+1 and -1/-1 counters stored as net `i32`, cancel at write-time not SBA | unchanged — needs multi-kind counter map; G9 bundles in the matching snapshot getter | medium | **low** (no pool card asks the divergence question) |
+
+That's it for open gameplay-divergence gaps. The remaining G-entries
+(G5 / G9 / G13 / G16 / G17 / G18) are parity invariants documented
+under the `Confirmed gaps` heading for forward-debugging context, not
+real divergences.
 
 ### Open CE-gaps
 
-| CE | Description | Status | Closure scope |
-|---|---|---|---|
-| **CE13** | `summoning_sick` cleared on Rust LTB (DestroyAllCreatures); Python preserves the flag into graveyard | surfaced today; impact LOW (graveyard-only field, CR 302.1 has no semantics for it); strict-xfail pinned | 1-line edit, Python or Rust side; closure agent in flight |
+**None.** CE1-CE18 all closed.
 
-### Substrate deferrals from prior slices (not closed today)
+### Substrate deferrals not closed today
 
-These continue to apply; today's CE closures did not touch them:
-
-- **Defender-only target arms rewrite** (per the `bf-iter-resolve-arms`
-  agent's documented follow-up — `2026-05-12-bf-iter-resolve-arms`
-  worklog). The Destroy/Tap target arms for non-attached single-target
-  forms (`DestroyTargetNonlandPermanent`, `DestroyTargetArtifact`,
-  `DestroyTargetLand`, `TapTargetArtifactOrCreature` — ~6 sites) have
-  a SEMANTIC divergence vs Python: Python's `TargetSpec` filter walks
-  centralized bf across both players via ETB tie-break; Rust's target
-  picker takes defender's first match. Pre-emptive ETB-iter agent's
-  scope explicitly EXCLUDED these — they're a target-resolution
-  rewrite, not an ETB tie-break. Fix scope: medium (Rust target picker
-  widens to `bf_iter_etb_sorted` + filter; may shift first-slice
-  deterministic baselines and need fingerprint rebake on dependent
-  tests).
-- **`spell_warped_this_turn` flag setter**. The bool field landed on
-  `GameState` but no Rust production call site flips it yet (deferred
-  from 2026-05-11). Without it, `Effect::ConditionalIfVoid` is shipped
+- **`spell_warped_this_turn` flag setter**. The bool field lives on
+  `GameState` but no Rust production call site flips it yet (see
+  `feature/warp-flag-substrate` for the documented gap, merge
+  `72264b63`). Without it, `Effect::ConditionalIfVoid` is shipped
   but not load-bearing for the 4 EoE Void cards. Fix scope: small
-  (warp-cast cost path single-site). Priority: medium — only when a
-  probe drives a Void card.
+  (warp-cast cost path single-site). Priority: medium — only when
+  a probe drives a Void card.
 - **ManifestDread face-down state + count > 1 deferrals** (unchanged
   since 2026-05-11): face-down state needs either fingerprint
   baseline rebuild or sidecar field; count>1 is ~30 LoC. Priority:
@@ -184,9 +246,9 @@ These continue to apply; today's CE closures did not touch them:
 - **`Effect::EquipToTargetCreatureYouControl` `granted_keywords_ueot`
   rider** (Atomic Microsizer family always passes empty frozenset).
   Unchanged.
-- **`Effect::LookAtTopNRevealOrCounter` "random order" tail** — now
-  unblocked by CE8 substrate (external RNG is wired). One-Effect-arm
-  rewire follow-up.
+- **`Effect::LookAtTopNRevealOrCounter` "random order" tail** —
+  unblocked by Effect-rng-threading (state.rng is now plumbed); a
+  one-Effect-arm rewire follow-up.
 
 ### High-frequency Effects still missing
 
@@ -196,145 +258,151 @@ Per `RUST_EFFECT_COVERAGE.md`, the only remaining freq>=10 class is:
 |---|---:|---|
 | `ModalChooseOne` | 13 | functionally shipped as `Effect::ChooseOneMode`; gated on `feature/coverage-overrides` PR merge to flip the orphan-map entry |
 
-So freq >= 10 is **functionally complete**. The freq 2-9 tier is at
-**52/53 (98.1%)** — the one remaining class is the lone freq-2 long-
-tail miss; not load-bearing for the current cross-engine smoke.
+The freq 2-9 tier is at **52/53 (98.1%)** — the one remaining class
+is the lone freq-2 long-tail miss; not load-bearing for the current
+cross-engine smoke.
 
 ### Singletons (freq 1)
 
 Explicitly **out of Phase 5/6 scope** per `RUST_PARITY_PLAN.md`
-"Phasing" §3 (161 classes, 5.6% covered). The 1000-game smoke uses a
-"core-effects-only" pool that excludes them by construction.
+"Phasing" §3 (161 classes, 5.6% covered).
 
 ---
 
 ## 3. Recommended closure sequence
 
-Ordered by leverage. Today materially shortened this list by closing
-the biggest substrate item (CE8 + G19 substrate) and the largest open
-CE batch (CE5-CE12 all closed). The remaining items are mostly
-one-slice closures plus the next probe extension.
+Today's afternoon wave compressed the closure list dramatically. The
+"one-slice closures" stack from yesterday is mostly drained — only
+the `spell_warped` setter, ManifestDread count>1, the
+`LookAtTopNRevealOrCounter` random-order rewire, and the coverage-
+overrides PR remain as small slices.
 
-1. **G19 closure (SearchLibraryForBasicLandTapped shuffle).** Now a
-   one-line Effect-arm edit calling `fisher_yates_shuffle_optional`
-   in the resolve arm; the external-RNG plumbing CE8 Slice 2 left
-   behind makes this a 30-minute slice. **Closes**: G19 + the
-   `LookAtTopNRevealOrCounter` "random order" first-slice deferral.
+Ordered by leverage:
 
-2. **Defender-only target arms rewrite.** The `DestroyTargetNonlandPermanent`
-   / `DestroyTargetArtifact` / `DestroyTargetLand` /
-   `TapTargetArtifactOrCreature` family widens from defender-only
-   first-match to centralized `bf_iter_etb_sorted` + filter to match
-   Python's `TargetSpec`. **Slice scope**: medium (semantic shift may
-   rebase first-slice deterministic baselines on dependent tests).
-   **Closes**: a documented follow-up from the bf-iter-resolve-arms
-   slice (`2026-05-12-bf-iter-resolve-arms` worklog).
+1. **Continue Phase 5 probes — event-driven surface.** The keyword-
+   on-printing surface is now well-exercised (12 surfaces clean).
+   Next priorities for the probe-close-probe cadence:
+   - **Counterspells** (CR 701.5) — distinct surface from keyword
+     gates; would surface the counter-target-spell interaction with
+     stack-targeting and uncounterable. The Rust port already has
+     `Effect::CounterTargetSpell` (variant 22, freq 7), so substrate
+     is in place; the probe just needs a deckspec + selector. (A
+     concurrent agent is mid-flight on this probe as of this
+     writing.)
+   - **ETB triggers** — event-driven dispatch path, distinct from
+     the static-keyword gates. Likely to surface CE19 in the trigger
+     emitter / event ordering substrate.
+   - **Activated abilities mid-combat** — priority-window interaction
+     between combat damage and the stack.
+   - **Flash** (CR 702.8) — instant-speed creature casts during
+     combat; exercises the timing-restriction layer and the can-cast
+     gate at non-main-phase steps.
+   - **Modal spells** — `ModalChooseOne` / `Effect::ChooseOneMode`
+     interaction with cross-engine smoke. Requires the coverage-
+     overrides merge to land first to avoid orphan-test red.
 
-3. **`spell_warped_this_turn` flag setter.** Single-site addition on
-   the warp-cast cost path. **Closes**: makes `Effect::ConditionalIfVoid`
-   load-bearing for the 4 EoE Void cards.
+2. **`spell_warped_this_turn` flag setter.** Single-site addition on
+   the warp-cast cost path. Closes the Void-cards substrate gap.
 
-4. **Continue Phase 5 probes — next combat keyword surface.** The
-   probe-close-probe cadence is the win. Next surfaces to drive in
-   priority order:
-   - First-strike / double-strike (priority probe agent is in flight
-     as of writing).
-   - Deathtouch + trample assignment edge cases.
-   - Lifelink interactions with simultaneous combat damage.
-   - Counterspells (would need a Rust counter-target primitive — net
-     new substrate, but likely small).
-   Each probe is expected to surface one CE divergence; each closes
-   in a small slice on top of the now-rich substrate.
+3. **`LookAtTopNRevealOrCounter` "random order" tail.** One-Effect-
+   arm rewire on the now-plumbed `state.rng`. Small slice.
 
-5. **CE13 closure.** 1-line edit (Python's `turn.move_off_battlefield`
-   adds the `obj.summoning_sick = False` clear, OR Rust's
-   `Effect::DestroyAllCreatures` drops the clear). Impact LOW —
-   noise-only divergence on a graveyard field — but pinning it
-   removes the only open CE entry. Closure agent already in flight.
-
-6. **ManifestDread face-down + count>1.** Unchanged scope. Priority
+4. **ManifestDread face-down + count>1.** Unchanged scope. Priority
    medium-low.
 
-7. **G24 Paris-scry-on-keep.** Unchanged. Priority low.
+5. **G8 multi-kind counter map.** Unchanged. Low priority until a
+   pool card asks the divergence question.
 
-8. **G8 + G12.** Unchanged. Both low priority.
-
-9. **`feature/coverage-overrides` PR merge.** User-gated. Flips
+6. **`feature/coverage-overrides` PR merge.** User-gated. Flips
    `test_no_orphan_rust_variants` green and the coverage table reads
-   the orphan-mapped variants correctly. Not blocking any closure.
+   the orphan-mapped variants (`ChooseOneMode`,
+   `GrantKeywordToTargetCreatureUntilEOT`, `SetBasePTUntilEOT`) as
+   covered. Not blocking any closure.
 
 **One-slice vs substrate-prep summary** (revised):
 
-- One-slice closures: G19, CE13, `spell_warped` setter, ManifestDread
-  count>1, coverage-overrides merge.
-- Medium scope: defender-only target arms (semantic shift),
-  ManifestDread face-down (substrate choice), G8 (multi-kind counter
-  map).
-- **No remaining substrate-prep blockers** — CE8 closure today
-  retired the biggest one. RNG externalization is the prerequisite
-  for G19 and the `LookAtTopNRevealOrCounter` deferral, and it is
-  now in place.
+- One-slice closures remaining: `spell_warped` setter,
+  `LookAtTopNRevealOrCounter` rewire, ManifestDread count>1,
+  coverage-overrides merge.
+- Medium scope: ManifestDread face-down (substrate choice),
+  G8 (multi-kind counter map).
+- **No remaining cross-engine CE divergences** — the open-CE column
+  is empty for the first time in the project. The next divergence
+  will come from a probe extension into the event-driven surface.
 
 ---
 
 ## 4. What "ready to test" means concretely
 
 The plan doc's target is **1000-game cross-engine smoke clean**.
-Today is the inflection point on this estimate — CE8 was the largest
-remaining architectural item and it closed in two slices.
+Today is a second inflection point on this estimate.
 
 Estimate evolution:
 - 2026-05-11 morning: **80-85% remaining** (pre-CE2 closure).
 - 2026-05-11 mid-day: **60-70%** (post-CE3 + multi-turn walk).
-- 2026-05-11 end-of-day retro: **60-70%** (CE5 surfaced + 3 CEs
-  pre-staged for next session).
-- 2026-05-12 mid-day retro: **45-55%** (CE9 closed with 1000/1000
-  clean multi-block, CE11 closed, CE12 surfaced + small).
-- **End-of-day 2026-05-12: 30-40% remaining.**
+- 2026-05-11 end-of-day retro: **60-70%** (CE5 surfaced).
+- 2026-05-12 mid-day: **45-55%** (CE9 closed with 1000/1000 multi-
+  block, CE11 closed, CE12 surfaced).
+- 2026-05-12 end-of-day-yesterday snapshot: **30-40%** (CE8 closed,
+  CE13 lone open).
+- **End-of-afternoon 2026-05-12: 20-30% remaining.**
 
-**Rationale for 30-40%:**
+**Rationale for 20-30%:**
 
-1. CE8 (the biggest open architectural item) shipped — both slices
-   merged to main + 17 tests_rust + 7 cross-engine smoke regression
-   tests pin the closure. The cross-engine harness can now drive a
-   shuffle-seeded scenario without a divergence at step 0.
-2. CE9 closed with 1000/1000 clean multi-block combat — the first
-   1000-game-clean signal in the project, on a real-content deck spec
-   (multi_blocker_deckspec, not Forest + Bears synthetic).
-3. CE10/CE11/CE12 all closed; the retaliation probe walks 260
-   decisions of bilateral combat with summoning-sick clears + active-
-   player swaps + multi-block damage + sticky winner accounting all
-   matching Python.
-4. Only CE13 remains open and it's LOW-impact + 1-line closure.
-5. G19 went from "medium scope, requires substrate" to "30-minute
-   one-line edit".
-6. The remaining CE risks are concentrated in combat keywords
-   (first-strike, deathtouch, trample, lifelink) and the trigger
-   emitter substrate — areas with NO pre-emptive audit yet, so the
-   probe-close cadence will drive their discovery.
+1. **Zero open CE divergences.** Every CE surfaced through CE18 is
+   closed. The cross-engine smoke now drives twelve combat surfaces
+   to byte-identical state for 200+ decisions each. This is the
+   first time in the project the "open CE" column has been empty.
+2. **Cross-engine MT shuffle parity is byte-identical.** Effect-rng-
+   threading shipped end-to-end; `Effect::SearchLibraryForBasicLandTapped`
+   consumes the harness-supplied `random.Random` via
+   `state.rng_ref()`. Multi-seed cross-engine smoke confirms byte-
+   identical post-search libraries.
+3. **Three of four open G-gaps closed.** G12 audited + retired, G19
+   closed in two stages (xorshift fallback + MT-parity threading),
+   G24 shipped Paris scry-on-keep with 19 pinning tests. Only G8
+   remains, and it's low priority.
+4. **The substrate stack is small.** `spell_warped` setter,
+   `LookAtTopNRevealOrCounter` rewire, ManifestDread count>1, and
+   coverage-overrides PR are the only remaining named follow-ups.
+5. **Defender-only target arms rewrite is in.** Yesterday's
+   documented `bf-iter-resolve-arms` follow-up shipped; four arms
+   now walk `bf_iter_etb_sorted` across both players matching
+   Python's `TargetSpec` filter.
+6. **The remaining risk is concentrated in the event-driven surface
+   (ETB triggers, activated abilities mid-combat, flash, counter-
+   spells).** No pre-emptive audit yet, so the probe-close cadence
+   will drive their discovery. Each surface probe will likely
+   surface 1-2 CE divergences (mirroring today's keyword-probe
+   rate); each closes in a small-to-medium slice.
 
-**Velocity bound.** At today's rate (~3-4 CE / substrate closures per
-session + 1-2 probe extensions), and assuming each new combat-keyword
-surface yields ~1 CE divergence (mirror of today's rate), a reasonable
-end-state estimate is **3-5 more sessions to 1000-game-ready**, down
-from yesterday's 4-6 estimate. The main risks: (a) trigger-emitter
-substrate is bigger than expected (currently no audit), and (b)
-combat keyword interactions surface a layered-continuous-effect gap
-that triggers a Phase 7+ refactor mid-Phase-5.
+**Velocity bound.** Today's afternoon wave closed 6 CEs + 3 G-gaps +
+2 substrate items + landed 6 clean keyword probes + 1 surface-then-
+close (CE18) in a single session. That rate is unusually high —
+sustaining it would put 1000-game-ready inside the next session. A
+more realistic projection accounting for substrate discovery (trigger
+emitter, layered effects for granted-keywords parity) is **3-5 more
+sessions to 1000-game-ready**, with the keyword surface essentially
+complete and remaining work biased toward event-driven dispatch and
+substrate-prep.
 
-The remaining work is bounded, on a known curve, and now front-loaded
-into single-slice closures plus probe extensions rather than substrate
-rewrites.
+The main risks: (a) the trigger-emitter substrate may need a Phase
+7-shaped surface (`Effect`-emitted events as first-class actions on
+the stack) that materially expands scope; (b) flash + priority-
+window interactions could surface a layered-continuous-effect gap
+that triggers a Phase 7+ refactor mid-Phase-5; (c) the ManifestDread
+face-down deferral becomes load-bearing when a probe drives a
+manifest-dread card.
 
 ---
 
 ## 5. Forward-looking items beyond Phase 5
 
-Out of scope of Phase 5 and Phase 6 (unchanged from 2026-05-11):
+Out of scope of Phase 5 and Phase 6 (unchanged):
 
 - **The 161 singleton Effect classes** — explicitly excluded from
-  the parity deck pool. The 1000-game smoke uses a "core-effects-only"
-  pool by construction.
+  the parity deck pool. The 1000-game smoke uses a "core-effects-
+  only" pool by construction.
 - **Layered continuous-effect cache** — Rust has no analog today.
   Per parity plan risks §3, missing layered logic for anthems /
   pump-UEOT / become-creature effects becomes a silent-wrong-answer
@@ -342,21 +410,26 @@ Out of scope of Phase 5 and Phase 6 (unchanged from 2026-05-11):
   and Layer 7 (P/T) are the most common; Layer 1-5 rarer. UEOT
   modifiers get us partway but the full layer engine is Phase 7+.
 - **Full combat damage assignment edge cases** — current Rust covers
-  basics + multi-block (post-CE9). Real combat parity with first-
-  strike, double-strike, deathtouch (damage-assignment-order edge
-  cases), trample (excess-damage routing), and lifelink (simultaneous
-  with combat damage on triggered abilities) are Phase 5 probe targets
-  but the deep parity work (e.g. byte-identical 800-line Python
-  combat-damage step) is Phase 7+.
+  basics + multi-block + deathtouch-no-trample (CE14) + trample-
+  multi-block (CE15) + double-strike spillover (CE18). The probe
+  surface for plain first-strike, vigilance, lifelink, haste,
+  menace, defender, indestructible, flying, hexproof is all clean.
+  Real combat parity edge cases past today's surface — protection,
+  shadow / fear / intimidate, banding (out of scope per pool), and
+  multi-step trigger chains within combat damage — are Phase 7+.
 - **Stack timing on multi-level trigger chains** — round 9 ETB
-  covers simple cases; deep trigger-chain ordering may need careful
-  Rust-side replay tests when the trigger emitter substrate lands.
-  Phase 7+.
+  covers simple cases. Deep trigger-chain ordering and the trigger
+  emitter substrate are the next-largest known unknowns. Phase 7+.
+- **Counterspell parity** — `Effect::CounterTargetSpell` (variant
+  22) is shipped; the cross-engine probe extension into counter-
+  target interactions is in the recommended next-slice queue. Likely
+  to surface a CE19 in the stack-targeting / can-be-countered
+  gating layer.
 
 **Review queue**: `feature/coverage-overrides` PR (`2bcdd842`,
 pushed 2026-05-11) remains unmerged. Required to flip
-`test_no_orphan_rust_variants` green and have `RUST_EFFECT_COVERAGE.md`
-read the 3 orphan-mapped variants (`ChooseOneMode`,
-`GrantKeywordToTargetCreatureUntilEOT`, `SetBasePTUntilEOT`) as
-covered. Not blocking any Phase 5 closure, but it's the persistent
-pre-existing red on every Python gate.
+`test_no_orphan_rust_variants` green and have
+`RUST_EFFECT_COVERAGE.md` read the 3 orphan-mapped variants
+(`ChooseOneMode`, `GrantKeywordToTargetCreatureUntilEOT`,
+`SetBasePTUntilEOT`) as covered. Not blocking any Phase 5 closure,
+but it's the persistent pre-existing red on every Python gate.
