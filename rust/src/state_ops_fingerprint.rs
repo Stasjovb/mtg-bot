@@ -474,6 +474,8 @@ impl GameState {
                         controller,
                         cards,
                         then_attach_to_source,
+                        then_plus_one_counter_on_manifested,
+                        counter_amount,
                     } => Value::Array(vec![
                         Value::String("ManifestDreadChoice".to_string()),
                         json!(*source_obj_id),
@@ -485,6 +487,8 @@ impl GameState {
                                 .collect(),
                         ),
                         json!(*then_attach_to_source),
+                        json!(*then_plus_one_counter_on_manifested),
+                        json!(*counter_amount),
                     ]),
                     // Round-28 look-at-top-N-reveal-or-counter: same
                     // examined-cards-as-object-signatures shape as

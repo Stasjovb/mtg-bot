@@ -4391,6 +4391,8 @@ fn apply_effect(
                     controller,
                     cards,
                     then_attach_to_source: false,
+                    then_plus_one_counter_on_manifested: false,
+                    counter_amount: 0,
                 },
             );
         }
@@ -4453,6 +4455,71 @@ fn apply_effect(
                     controller,
                     cards,
                     then_attach_to_source: true,
+                    then_plus_one_counter_on_manifested: false,
+                    counter_amount: 0,
+                },
+            );
+        }
+        // Round-29 ManifestDreadThenPutPlusOneCountersOnIt composition
+        // (Moldering-Gym / Weight-Room Room-door family). Mirrors
+        // Python's `ManifestDreadThenPutPlusOneCountersOnIt.resolve`
+        // (`effects/generic/library_lookat.py:451` — Slimy Aquarium
+        // counter_amount=1, Weight Room counter_amount=3). Same pop-
+        // and-package shape as `Effect::ManifestDread`; the pending
+        // carries `then_plus_one_counter_on_manifested: true` and the
+        // chosen `counter_amount` so the submit dispatcher stamps the
+        // counter on the manifested permanent as a follow-up.
+        //
+        // **Controller convention.** `state.active_player` — matches
+        // plain `Effect::ManifestDread`. These are Room-door triggers
+        // that resolve during the controller's turn (the unlocked-half
+        // ETB fires on the active player's turn-cycle); active_player
+        // IS the source's controller in every printed surface in the
+        // pool today. Python reads `controller_id` from the trigger
+        // call site, which is also active_player at resolution.
+        //
+        // **First-slice scope.** `count = 1` ONLY at the manifest
+        // iteration level (same gate as `Effect::ManifestDread` — no
+        // Python printing of this class emits count != 1). The
+        // `counter_amount` rider accepts any non-negative integer
+        // (Slimy Aquarium=1, Weight Room=3).
+        //
+        // **Empty / 1-card library partials.** Same drain shape as
+        // plain ManifestDread: empty cards Vec → submit no-ops both
+        // the manifest and the counter add; 1-card Vec → manifest the
+        // lone card and stamp the counter on it.
+        Effect::ManifestDreadThenPutPlusOneCountersOnIt {
+            count,
+            counter_amount,
+        } => {
+            if *count != 1 {
+                return Err(PyValueError::new_err(format!(
+                    "ManifestDreadThenPutPlusOneCountersOnIt: first-slice supports \
+                     count = 1 only (got count = {count}); count > 1 (multi-iter) \
+                     and count = 0 (no-op) deferred — see \
+                     docs/SEARCH_LIMITATIONS.md"
+                )));
+            }
+            let controller = state.active_player;
+            let pidx = controller as usize;
+            let lib_len = state.players[pidx].library.len();
+            let pop_count = lib_len.min(2);
+            let lib_mut: &mut Vec<GameObject> =
+                Arc::make_mut(&mut state.players[pidx].library);
+            let mut cards: Vec<GameObject> = Vec::with_capacity(pop_count);
+            for _ in 0..pop_count {
+                // Post-CE3: top = lib[0]. Remove from head.
+                let removed = lib_mut.remove(0);
+                cards.push(removed);
+            }
+            state.pending_decisions.push(
+                PendingDecision::ManifestDreadChoice {
+                    source_obj_id,
+                    controller,
+                    cards,
+                    then_attach_to_source: false,
+                    then_plus_one_counter_on_manifested: true,
+                    counter_amount: *counter_amount,
                 },
             );
         }

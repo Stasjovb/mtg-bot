@@ -588,11 +588,36 @@ pub enum PendingDecision {
     /// is skipped (no panic, no error). Mirrors Python's
     /// `next((o for o in state.battlefield if o.id == source_id), None)`
     /// → `if source is None: return` fallback.
+    ///
+    /// **`then_plus_one_counter_on_manifested` + `counter_amount`
+    /// rider.** When the bool flag is `true`, after routing the chosen
+    /// card to bf the submit dispatcher locates the just-manifested
+    /// permanent (by the captured `manifested_id`) and stamps
+    /// `obj.counters += counter_amount`. Mirrors Python's
+    /// `ManifestDreadThenPutPlusOneCountersOnIt` (Slimy-Aquarium /
+    /// Weight-Room Room-door trigger family — counter_amount=1 and
+    /// counter_amount=3 in the EoE pool). When `false` (default), the
+    /// counter step is skipped — preserves the existing
+    /// `Effect::ManifestDread` and `Effect::ManifestDreadThenAttachSelf`
+    /// behaviors bit-for-bit. The two follow-up flags
+    /// (`then_attach_to_source` and `then_plus_one_counter_on_manifested`)
+    /// are independent — no Python card emits both today, but the
+    /// substrate doesn't prevent it: if both are set, the dispatcher
+    /// runs the attach then the counter add in that order.
+    ///
+    /// **Counter step no-op on empty manifest.** If the cards Vec was
+    /// empty at resolve (library exhausted), no card was manifested
+    /// and the counter step is naturally skipped — the dispatcher's
+    /// helper-local `manifested_id` is captured AFTER the manifest
+    /// routing succeeds, so an empty Vec means no counter target
+    /// exists. Mirrors Python's `if not new_ids: return` early-exit.
     ManifestDreadChoice {
         source_obj_id: u32,
         controller: u8,
         cards: Vec<GameObject>,
         then_attach_to_source: bool,
+        then_plus_one_counter_on_manifested: bool,
+        counter_amount: i32,
     },
     /// **Round-28 look-at-top-N-reveal-or-counter decision substrate.**
     /// Pushed by `Effect::LookAtTopNRevealOrCounter` (Pulsar-Squadron-
