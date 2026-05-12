@@ -12,6 +12,7 @@ import threading
 import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -317,6 +318,186 @@ def test_run_shard_local_writes_npz_with_per_shard_filename(
     assert progress["status"] == "completed"
     assert progress["n_games_total"] == 2
     assert progress["n_games_done"] == 2
+
+
+def test_run_shard_local_shm_off_skips_server_construction(
+    tmp_path: Path, monkeypatch,
+):
+    """When ``spec.use_shm_server`` is False (the legacy default),
+    ``run_shard_local`` must not import or construct a
+    ``SharedTensorNNEvalServer``. Mirrors the no-op behavior the
+    pull-mode runner preserves so off-flag callers stay on the
+    per-worker NNEvaluator path."""
+    from mtg_bot.training.distributed import (
+        SelfPlayJobSpec,
+        run_shard_local,
+    )
+
+    weights_path, hidden_sizes = _tiny_dual_head_weights(tmp_path)
+    out_dir = tmp_path / "iterate_data"
+    progress_dir = tmp_path / "training_progress"
+    spec = SelfPlayJobSpec(
+        weights_path=str(weights_path),
+        samples=1, inner_nodes=10,
+        hidden_sizes=hidden_sizes,
+        base_seed=0,
+        enable_mulligans=False,
+        per_game_timeout_sec=None,
+        with_policy=True,
+        use_shm_server=False,
+    )
+    constructed: list[Any] = []
+
+    def _explode(*args, **kwargs):
+        constructed.append((args, kwargs))
+        raise AssertionError(
+            "SharedTensorNNEvalServer must not be constructed when "
+            "spec.use_shm_server is False"
+        )
+
+    monkeypatch.setattr(
+        "mtg_bot.search.shm_nn_eval_server.SharedTensorNNEvalServer",
+        _explode,
+    )
+    shard = ShardConfig(host="local", label="L0")
+    run_shard_local(
+        shard, spec,
+        n_games=1,
+        progress_dir=progress_dir,
+        output_dir=out_dir,
+        run_id_prefix="iter_001_shm_off",
+        stamp="20260512T120000Z",
+    )
+    assert constructed == []
+
+
+def test_run_shard_local_shm_on_constructs_starts_stops_server(
+    tmp_path: Path, monkeypatch, capsys,
+):
+    """When ``spec.use_shm_server`` is True on a supported platform
+    (linux/win32), ``run_shard_local`` must construct the SHM server,
+    start it before the pool spins up, and stop it on shard exit
+    (try/finally). Uses a fake SHM server class so the test doesn't
+    require real model weights matching the SHM server's loader
+    contract — we're pinning the activation-block lifecycle, not the
+    server itself (covered by tests/search/test_shm_nn_eval_server.py).
+    """
+    import sys as _sys
+    if _sys.platform not in ("linux", "win32"):
+        pytest.skip("SHM activation gated to linux+win32")
+
+    from mtg_bot.training.distributed import (
+        SelfPlayJobSpec,
+        run_shard_local,
+    )
+
+    weights_path, hidden_sizes = _tiny_dual_head_weights(tmp_path)
+    out_dir = tmp_path / "iterate_data"
+    progress_dir = tmp_path / "training_progress"
+    events: list[str] = []
+
+    class _FakeServer:
+        def __init__(self, *args, **kwargs):
+            self._device = "fake-cpu"
+            self._init_kwargs = kwargs
+            events.append("construct")
+
+        def start(self):
+            events.append("start")
+
+        def stop(self, timeout: float = 5.0):
+            events.append(f"stop:{timeout}")
+
+        def handle(self):
+            return object()
+
+    monkeypatch.setattr(
+        "mtg_bot.search.shm_nn_eval_server.SharedTensorNNEvalServer",
+        _FakeServer,
+    )
+    spec = SelfPlayJobSpec(
+        weights_path=str(weights_path),
+        samples=1, inner_nodes=10,
+        hidden_sizes=hidden_sizes,
+        base_seed=0,
+        enable_mulligans=False,
+        per_game_timeout_sec=None,
+        with_policy=True,
+        use_shm_server=True,
+    )
+    shard = ShardConfig(host="local", label="L0", n_workers=2)
+    run_shard_local(
+        shard, spec,
+        n_games=1,
+        progress_dir=progress_dir,
+        output_dir=out_dir,
+        run_id_prefix="iter_001_shm_on",
+        stamp="20260512T120100Z",
+    )
+    # Server was constructed, started, and stopped — in that order.
+    assert "construct" in events
+    assert "start" in events
+    assert any(e.startswith("stop:") for e in events)
+    assert events.index("construct") < events.index("start")
+    assert events.index("start") < next(
+        i for i, e in enumerate(events) if e.startswith("stop:")
+    )
+    # Activation banner appeared on stdout.
+    captured = capsys.readouterr()
+    assert "using SharedTensorNNEvalServer" in captured.out
+
+
+def test_run_shard_local_shm_not_implemented_falls_back(
+    tmp_path: Path, monkeypatch, capsys,
+):
+    """If the SHM server raises ``NotImplementedError`` at construct
+    time (or before start) — the documented unsupported-host path —
+    ``run_shard_local`` must print the fallback banner and continue
+    on the per-worker NNEvaluator path WITHOUT trying to stop a
+    half-built server. Mirrors ``run_shard_pull``'s fallback shape."""
+    import sys as _sys
+    if _sys.platform not in ("linux", "win32"):
+        pytest.skip("SHM activation gated to linux+win32")
+
+    from mtg_bot.training.distributed import (
+        SelfPlayJobSpec,
+        run_shard_local,
+    )
+
+    weights_path, hidden_sizes = _tiny_dual_head_weights(tmp_path)
+    out_dir = tmp_path / "iterate_data"
+    progress_dir = tmp_path / "training_progress"
+
+    class _NotImpl:
+        def __init__(self, *args, **kwargs):
+            raise NotImplementedError("SHM disabled on this host")
+
+    monkeypatch.setattr(
+        "mtg_bot.search.shm_nn_eval_server.SharedTensorNNEvalServer",
+        _NotImpl,
+    )
+    spec = SelfPlayJobSpec(
+        weights_path=str(weights_path),
+        samples=1, inner_nodes=10,
+        hidden_sizes=hidden_sizes,
+        base_seed=0,
+        enable_mulligans=False,
+        per_game_timeout_sec=None,
+        with_policy=True,
+        use_shm_server=True,
+    )
+    shard = ShardConfig(host="local", label="L0", n_workers=2)
+    run_shard_local(
+        shard, spec,
+        n_games=1,
+        progress_dir=progress_dir,
+        output_dir=out_dir,
+        run_id_prefix="iter_001_shm_fallback",
+        stamp="20260512T120200Z",
+    )
+    captured = capsys.readouterr()
+    assert "SHM server unavailable" in captured.out
+    assert "falling back" in captured.out
 
 
 # ---- pull-model queue test server -------------------------------
