@@ -539,6 +539,23 @@ pub struct GameState {
     /// pre- and post-pass must produce the same fingerprint regardless
     /// of how many consecutive passes happened to get there.
     pub consecutive_passes: u8,
+    /// EoE "Void" condition tracking — first half. True if any
+    /// nonland permanent left the battlefield this turn (cleared at
+    /// turn boundary). Mirrors Python's
+    /// `GameState.permanent_left_battlefield_this_turn`. Substrate
+    /// only in this slice: no Rust call sites set this yet, so it
+    /// remains `false` everywhere — the `Effect::ConditionalIfVoid`
+    /// resolver reads it but the predicate will always evaluate to
+    /// false until the LTB-tracking and warp-tracking call sites
+    /// are wired (deferred until those mechanics land). Stays out of
+    /// the fingerprint (transient turn-scoped flag; same observable
+    /// state pre- and post-turn produces the same digest).
+    pub permanent_left_battlefield_this_turn: bool,
+    /// EoE "Void" condition tracking — second half. True if any
+    /// spell was warped this turn. Mirrors Python's
+    /// `GameState.spell_warped_this_turn`. Same substrate-only
+    /// status as the LTB flag above.
+    pub spell_warped_this_turn: bool,
     /// Decisions the engine is waiting on. Round-27 G20 closure —
     /// effects whose resolution needs a controller-provided choice
     /// (Surveil, future London bottom-N, future scry-on-keep,
@@ -642,6 +659,31 @@ impl GameState {
         self.printing_name_of(obj_id).ok_or_else(|| {
             PyKeyError::new_err(format!("no game object with id {obj_id}"))
         })
+    }
+
+    /// Test-only setter for the EoE Void condition flags. Sets
+    /// `permanent_left_battlefield_this_turn` and
+    /// `spell_warped_this_turn` directly. Mirrors Python's
+    /// equivalent fields on `GameState`; the production call sites
+    /// that flip these (LTB tracking, warp tracking) are not yet
+    /// wired in Rust, so tests inject the state directly. Both
+    /// arguments default to `False`.
+    #[pyo3(signature = (permanent_left_battlefield = false, spell_warped = false))]
+    fn set_void_flags(
+        &mut self,
+        permanent_left_battlefield: bool,
+        spell_warped: bool,
+    ) {
+        self.permanent_left_battlefield_this_turn = permanent_left_battlefield;
+        self.spell_warped_this_turn = spell_warped;
+    }
+
+    /// Read-only getter for the void-active predicate, mirroring
+    /// Python's `is_void_active(state)`. True iff either of the two
+    /// void flags is set.
+    #[getter]
+    fn is_void_active(&self) -> bool {
+        self.permanent_left_battlefield_this_turn || self.spell_warped_this_turn
     }
 }
 
@@ -817,6 +859,8 @@ pub fn make_synthetic_state(
         blockers: Vec::new(),
         stack: Vec::new(),
         consecutive_passes: 0,
+        permanent_left_battlefield_this_turn: false,
+        spell_warped_this_turn: false,
         pending_decisions: Vec::new(),
     }
 }

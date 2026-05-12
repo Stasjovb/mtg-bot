@@ -8801,3 +8801,259 @@ def test_resolve_destroy_enchanted_permanent_clone_isolation(synthetic_state):
     # Clone: target in graveyard. Source: target still on bf.
     assert cloned.find_object_zone(p1_first_bear_id) == ZONE_GRAVEYARD
     assert synthetic_state.find_object_zone(p1_first_bear_id) == ZONE_BATTLEFIELD
+
+
+# -------------------- Round-29 ConditionalIfVoid (4 cards) --------------------
+#
+# Mirrors Python's `ConditionalIfVoid(then_effect, else_effect=None)`
+# (combinators.py:1409 — "Void —" rider on Decode Transmissions /
+# Hymn of the Faller family). Intervening-if at resolve time: if
+# Void is active (a nonland permanent left the battlefield this turn
+# OR a spell was warped this turn), apply then_effect; else apply
+# else_effect or no-op.
+#
+# Substrate note: the void flags
+# (`permanent_left_battlefield_this_turn`, `spell_warped_this_turn`)
+# are read-only from the resolver — no Rust call sites flip them
+# yet. Tests inject the flag state directly via
+# `state.set_void_flags(...)`. Once the LTB / warp tracking lands as
+# a follow-up, the resolve arm here picks up real Void-true behavior
+# for free.
+
+
+def _conditional_if_void_decode_dict(with_else: bool = True):
+    """Decode-Transmissions-shape: 'draw two cards; Void — instead draw four'.
+
+    For our test we use simpler nested effects (draw_cards) — the
+    conditional shape is what matters.
+    """
+    base: dict = {
+        "name": "Synthetic Decode Transmissions",
+        "card_types": ["Instant"],
+        "mana_cost": {"generic": 3, "U": 1},
+        "effects": [
+            {
+                "kind": "conditional_if_void",
+                "then_effect": {"kind": "draw_cards", "count": 4},
+            }
+        ],
+    }
+    if with_else:
+        base["effects"][0]["else_effect"] = {"kind": "draw_cards", "count": 2}
+    return base
+
+
+def _hymn_of_the_faller_dict():
+    """Hymn-of-the-Faller-shape: 'draw a card; Void — draw another card'.
+
+    The then-branch is a Sequence so we can validate nested combinator
+    recursion through ConditionalIfVoid.
+    """
+    return {
+        "name": "Synthetic Hymn",
+        "card_types": ["Sorcery"],
+        "mana_cost": {"B": 1},
+        "effects": [
+            {
+                "kind": "conditional_if_void",
+                "then_effect": {
+                    "kind": "sequence",
+                    "effects": [
+                        {"kind": "draw_cards", "count": 1},
+                        {"kind": "draw_cards", "count": 1},
+                    ],
+                },
+                "else_effect": {"kind": "draw_cards", "count": 1},
+            }
+        ],
+    }
+
+
+def test_register_conditional_if_void_round_trip_with_else(engine):
+    """Register a printing with explicit else, round-trip via the
+    effect_to_pydict path; both branches survive."""
+    reg = engine.Registry()
+    pid = reg.register_printing(_conditional_if_void_decode_dict(with_else=True))
+    eff = reg.get_printing_effects(pid)[0]
+    assert eff["kind"] == "conditional_if_void"
+    assert eff["then_effect"]["kind"] == "draw_cards"
+    assert eff["then_effect"]["count"] == 4
+    assert eff["else_effect"]["kind"] == "draw_cards"
+    assert eff["else_effect"]["count"] == 2
+
+
+def test_register_conditional_if_void_round_trip_without_else(engine):
+    """Register a printing with no else key — round-trip returns
+    else_effect=None (mirrors Python's optional second branch)."""
+    reg = engine.Registry()
+    pid = reg.register_printing(_conditional_if_void_decode_dict(with_else=False))
+    eff = reg.get_printing_effects(pid)[0]
+    assert eff["kind"] == "conditional_if_void"
+    assert eff["then_effect"]["kind"] == "draw_cards"
+    assert eff["else_effect"] is None
+
+
+def test_register_conditional_if_void_missing_then_effect_raises(engine):
+    """The then-branch is required; missing it raises ValueError at
+    parse time. Mirrors `conditional_on_tapped_creatures`'s parse-time
+    contract."""
+    import pytest
+    reg = engine.Registry()
+    with pytest.raises(ValueError, match="missing required 'then_effect'"):
+        reg.register_printing(
+            {
+                "name": "Bad Conditional If Void",
+                "card_types": ["Instant"],
+                "effects": [{"kind": "conditional_if_void"}],
+            }
+        )
+
+
+def test_register_conditional_if_void_explicit_none_else(engine):
+    """Explicit Python None for else_effect is accepted and round-
+    trips back as None (treated identically to key-absent)."""
+    reg = engine.Registry()
+    pid = reg.register_printing(
+        {
+            "name": "Explicit-None-Else Conditional",
+            "card_types": ["Instant"],
+            "effects": [
+                {
+                    "kind": "conditional_if_void",
+                    "then_effect": {"kind": "draw_cards", "count": 1},
+                    "else_effect": None,
+                }
+            ],
+        }
+    )
+    eff = reg.get_printing_effects(pid)[0]
+    assert eff["else_effect"] is None
+
+
+def test_resolve_conditional_if_void_inactive_runs_else_branch(synthetic_state):
+    """Void inactive (default state) → else-branch fires.
+
+    Synthetic state has no events that flip the void flags; verify
+    `is_void_active` is False and the else-branch (draw 2) runs.
+    """
+    assert synthetic_state.is_void_active is False
+    spell_id = synthetic_state.register_and_inject_object(
+        _conditional_if_void_decode_dict(with_else=True), 0, ZONE_HAND
+    )
+    p0_lib_before = synthetic_state.library_sizes[0]
+    synthetic_state.push_to_stack(spell_id, 0)
+    synthetic_state.resolve_top_of_stack()
+
+    # Else-branch fired: drew 2.
+    assert synthetic_state.library_sizes[0] == p0_lib_before - 2
+
+
+def test_resolve_conditional_if_void_active_runs_then_branch(synthetic_state):
+    """Set permanent_left_battlefield_this_turn → Void is active →
+    then-branch fires (draw 4)."""
+    synthetic_state.set_void_flags(permanent_left_battlefield=True)
+    assert synthetic_state.is_void_active is True
+    spell_id = synthetic_state.register_and_inject_object(
+        _conditional_if_void_decode_dict(with_else=True), 0, ZONE_HAND
+    )
+    p0_lib_before = synthetic_state.library_sizes[0]
+    synthetic_state.push_to_stack(spell_id, 0)
+    synthetic_state.resolve_top_of_stack()
+
+    # Then-branch fired: drew 4.
+    assert synthetic_state.library_sizes[0] == p0_lib_before - 4
+
+
+def test_resolve_conditional_if_void_active_via_warp_flag(synthetic_state):
+    """The second void-predicate input (spell_warped_this_turn) also
+    flips Void to active — covers the OR-arm of the predicate."""
+    synthetic_state.set_void_flags(spell_warped=True)
+    assert synthetic_state.is_void_active is True
+    spell_id = synthetic_state.register_and_inject_object(
+        _conditional_if_void_decode_dict(with_else=True), 0, ZONE_HAND
+    )
+    p0_lib_before = synthetic_state.library_sizes[0]
+    synthetic_state.push_to_stack(spell_id, 0)
+    synthetic_state.resolve_top_of_stack()
+    assert synthetic_state.library_sizes[0] == p0_lib_before - 4
+
+
+def test_resolve_conditional_if_void_no_else_inactive_is_noop(synthetic_state):
+    """No else-branch + Void inactive → silent no-op (mirrors
+    Python's None-branch fall-through)."""
+    assert synthetic_state.is_void_active is False
+    spell_id = synthetic_state.register_and_inject_object(
+        _conditional_if_void_decode_dict(with_else=False), 0, ZONE_HAND
+    )
+    p0_lib_before = synthetic_state.library_sizes[0]
+    synthetic_state.push_to_stack(spell_id, 0)
+    synthetic_state.resolve_top_of_stack()
+    # No draw fired.
+    assert synthetic_state.library_sizes[0] == p0_lib_before
+
+
+def test_resolve_conditional_if_void_no_else_active_runs_then(synthetic_state):
+    """No else-branch + Void active → then-branch fires."""
+    synthetic_state.set_void_flags(permanent_left_battlefield=True)
+    spell_id = synthetic_state.register_and_inject_object(
+        _conditional_if_void_decode_dict(with_else=False), 0, ZONE_HAND
+    )
+    p0_lib_before = synthetic_state.library_sizes[0]
+    synthetic_state.push_to_stack(spell_id, 0)
+    synthetic_state.resolve_top_of_stack()
+    # Then-branch fired: drew 4.
+    assert synthetic_state.library_sizes[0] == p0_lib_before - 4
+
+
+def test_resolve_conditional_if_void_nested_sequence_then_branch(synthetic_state):
+    """Then-branch is a Sequence — recursion through apply_effect
+    must dispatch both inner effects.
+
+    Hymn shape: then = Sequence(draw, draw) → 2 cards drawn under
+    Void; else = single draw → 1 card under non-Void."""
+    synthetic_state.set_void_flags(permanent_left_battlefield=True)
+    spell_id = synthetic_state.register_and_inject_object(
+        _hymn_of_the_faller_dict(), 0, ZONE_HAND
+    )
+    p0_lib_before = synthetic_state.library_sizes[0]
+    synthetic_state.push_to_stack(spell_id, 0)
+    synthetic_state.resolve_top_of_stack()
+    # Nested Sequence(draw, draw) under Void → 2 draws.
+    assert synthetic_state.library_sizes[0] == p0_lib_before - 2
+
+
+def test_resolve_conditional_if_void_nested_sequence_else_branch(synthetic_state):
+    """Same Hymn-shape spell, Void inactive → else-branch fires
+    (single draw)."""
+    spell_id = synthetic_state.register_and_inject_object(
+        _hymn_of_the_faller_dict(), 0, ZONE_HAND
+    )
+    p0_lib_before = synthetic_state.library_sizes[0]
+    synthetic_state.push_to_stack(spell_id, 0)
+    synthetic_state.resolve_top_of_stack()
+    # Else-branch: 1 draw.
+    assert synthetic_state.library_sizes[0] == p0_lib_before - 1
+
+
+def test_resolve_conditional_if_void_clone_isolation(synthetic_state):
+    """Clone-once: each branch fires only in the state it was set up
+    for. Confirms the void flags + the nested effect dispatch are
+    both fork-safe."""
+    spell_id = synthetic_state.register_and_inject_object(
+        _conditional_if_void_decode_dict(with_else=True), 0, ZONE_HAND
+    )
+    cloned = synthetic_state.clone_once()
+    cloned.set_void_flags(permanent_left_battlefield=True)
+
+    p0_lib_orig = synthetic_state.library_sizes[0]
+    p0_lib_clone = cloned.library_sizes[0]
+
+    synthetic_state.push_to_stack(spell_id, 0)
+    synthetic_state.resolve_top_of_stack()
+    cloned.push_to_stack(spell_id, 0)
+    cloned.resolve_top_of_stack()
+
+    # Source state: void inactive → else-branch (draw 2).
+    assert synthetic_state.library_sizes[0] == p0_lib_orig - 2
+    # Clone: void active → then-branch (draw 4).
+    assert cloned.library_sizes[0] == p0_lib_clone - 4

@@ -4582,6 +4582,27 @@ fn apply_effect(
                 Arc::make_mut(&mut state.players[opponent_idx].graveyard).push(obj);
             }
         }
+        // Round-29 intervening-if keyed on EoE "Void" condition.
+        // Mirrors Python's `ConditionalIfVoid.resolve` (combinators.py:
+        // 1446): read `is_void_active(state)`; if true, apply
+        // `then_effect`; else if `else_effect` is Some, apply it; else
+        // no-op. Recurses via `apply_effect` with the same
+        // source_obj_id so nested target-resolution / source-relative
+        // lookups stay anchored to the outer spell.
+        Effect::ConditionalIfVoid { then_effect, else_effect } => {
+            let void_active = state.permanent_left_battlefield_this_turn
+                || state.spell_warped_this_turn;
+            let branch: Option<&Effect> = if void_active {
+                Some(then_effect.as_ref())
+            } else {
+                else_effect.as_deref()
+            };
+            if let Some(inner) = branch {
+                apply_effect(state, inner, source_obj_id)?;
+            }
+            // else: silent no-op (matches Python's None-branch fall-
+            // through).
+        }
     }
     Ok(())
 }
