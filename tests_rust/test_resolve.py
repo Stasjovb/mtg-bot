@@ -1493,10 +1493,19 @@ def test_resolve_exile_target_with_any_player_raises(synthetic_state):
 
 
 def test_resolve_exile_target_object_state_resets(synthetic_state):
-    """An exiled creature has its ``tapped`` / ``summoning_sick`` /
-    ``damage`` / ``counters`` fields reset to defaults on the way to
-    exile — CR 400.7 (a card that changes zones becomes a new object).
-    Mirrors the ReturnToHand reset convention."""
+    """An exiled creature has its ``tapped`` / ``damage`` / ``counters``
+    fields reset to defaults on the way to exile — CR 400.7 (a card
+    that changes zones becomes a new object).
+
+    Mirrors the ReturnToHand reset convention. The ``summoning_sick``
+    flag is intentionally NOT reset on LTB (CE13 closure / I35
+    invariant — Python's ``turn.move_off_battlefield`` deliberately
+    omits the clear). The synthetic battlefield object here was
+    injected with ``summoning_sick=false``, so the post-exile read
+    returns false trivially — preserving the as-is semantics. The
+    dedicated CE13 regression below uses a freshly-cast (sick=True)
+    creature to pin the preserve-on-LTB direction explicitly.
+    """
     target_obj_id = 67  # First p1 battlefield object.
 
     # Stamp non-default state on the target before exile.
@@ -1515,7 +1524,9 @@ def test_resolve_exile_target_object_state_resets(synthetic_state):
     synthetic_state.push_to_stack(exile_obj_id, 0)
     synthetic_state.resolve_top_of_stack()
 
-    # Target now in p1's exile, defaults restored.
+    # Target now in p1's exile. tapped / damage / counters all
+    # restored to defaults. summoning_sick stays as it was on the
+    # battlefield (false here — synthetic-state default).
     assert synthetic_state.exile_contains(target_obj_id) is True
     assert synthetic_state.exile_object_tapped(target_obj_id) is False
     assert synthetic_state.exile_object_summoning_sick(target_obj_id) is False
@@ -9856,3 +9867,233 @@ def test_resolve_draw_eq_combat_damage_clone_isolation(synthetic_state):
     assert synthetic_state.hand_sizes[0] == p0_hand_before
     assert synthetic_state.library_sizes[0] == p0_lib_before
     assert synthetic_state.stack_size() == 1
+
+
+# ---------------------------------------------------------------------------
+# CE13 closure: `summoning_sick` preserved on LTB (I35 invariant).
+#
+# Python's `turn.move_off_battlefield` deliberately does NOT reset
+# `obj.summoning_sick` when an object leaves the battlefield. Pre-CE13
+# Rust's destroy / exile / bounce / sacrifice arms in
+# `state_ops_resolve.rs` explicitly cleared the flag alongside the
+# other CR 400.7 per-object resets, producing a cross-engine fingerprint
+# mismatch on any LTB of a still-sick creature. The CE13 closure
+# removes the unnecessary clears from every LTB arm, matching Python's
+# preserve-on-LTB semantics. ETB sites (creature-spell resolve,
+# token creation, reanimate, search-for-land-into-bf) still stamp
+# `sick=true` (or `sick=false` for lands) as before — only the LTB
+# direction changes.
+#
+# Regression tests:
+#   - destroy_target / destroy_all_creatures / destroy_target_artifact
+#   - exile_target
+#   - return_to_hand (bounce)
+#   - sacrifice
+#   - reanimate (the ETB reset still stamps sick=true post-reanimate)
+#
+# See I35 in `docs/RUST_PARITY_GAPS.md`.
+# ---------------------------------------------------------------------------
+
+
+def _gy_entry_for_id(state, player_id: int, obj_id: int) -> dict | None:
+    """Walk `player_id`'s graveyard_snapshot and return the entry dict
+    matching `obj_id`, or None if no entry matches."""
+    for entry in state.graveyard_snapshot(player_id):
+        if entry["id"] == obj_id:
+            return entry
+    return None
+
+
+def _hand_entry_for_id(state, player_id: int, obj_id: int) -> dict | None:
+    """Walk `player_id`'s hand_snapshot and return the entry dict
+    matching `obj_id`, or None if no entry matches."""
+    for entry in state.hand_snapshot(player_id):
+        if entry["id"] == obj_id:
+            return entry
+    return None
+
+
+def test_ce13_destroy_target_preserves_summoning_sick_on_ltb(
+    synthetic_state,
+):
+    """Destroying a freshly-cast (still summoning-sick) creature must
+    NOT clear `summoning_sick` on the graveyard object. Matches
+    Python's `move_off_battlefield` preserve-on-LTB semantics.
+    I35 invariant.
+
+    Setup: cast a Bears under p1 (so p1 controls a sick creature on
+    its bf). To avoid target-filter ordering issues (the seeded p1
+    bf has earlier objects), use DestroyAllCreatures (Wrath) which
+    sweeps every creature on both bfs — guaranteeing our sick Bears
+    is destroyed regardless of its bf position.
+    """
+    sick_creature_id = synthetic_state.register_and_inject_object(
+        _creature_dict(), 1, ZONE_HAND
+    )
+    synthetic_state.push_to_stack(sick_creature_id, 1)
+    synthetic_state.resolve_top_of_stack()
+    assert synthetic_state.is_summoning_sick(sick_creature_id) is True
+
+    wrath_id = synthetic_state.register_and_inject_object(
+        _wrath_dict(), 0, ZONE_HAND
+    )
+    synthetic_state.push_to_stack(wrath_id, 0)
+    synthetic_state.resolve_top_of_stack()
+
+    # Sick creature now in p1's graveyard. Its summoning_sick flag
+    # must be PRESERVED (true) per CE13 closure / I35.
+    entry = _gy_entry_for_id(synthetic_state, 1, sick_creature_id)
+    assert entry is not None, (
+        f"sick creature id={sick_creature_id} missing from p1 graveyard"
+    )
+    assert entry["summoning_sick"] is True, (
+        f"CE13 regression: expected summoning_sick=True (preserved "
+        f"on LTB), got {entry['summoning_sick']}. Entry: {entry}"
+    )
+    # Other CR 400.7 resets still apply.
+    assert entry["tapped"] is False
+    assert entry["damage"] == 0
+    assert entry["counters"] == 0
+
+
+def test_ce13_destroy_all_creatures_preserves_summoning_sick_for_all_sick(
+    synthetic_state,
+):
+    """Mass destroy (Wrath of God) on multiple summoning-sick
+    creatures: ALL preserved. Pins the exact CE13 surface site (the
+    probe-identified Effect::DestroyAllCreatures resolve loop)."""
+    # Cast two creatures: one under p0, one under p1. Both end up
+    # sick on their respective battlefields.
+    sick_p0_id = synthetic_state.register_and_inject_object(
+        _creature_dict(), 0, ZONE_HAND
+    )
+    synthetic_state.push_to_stack(sick_p0_id, 0)
+    synthetic_state.resolve_top_of_stack()
+    sick_p1_id = synthetic_state.register_and_inject_object(
+        _creature_dict(), 1, ZONE_HAND
+    )
+    synthetic_state.push_to_stack(sick_p1_id, 1)
+    synthetic_state.resolve_top_of_stack()
+
+    assert synthetic_state.is_summoning_sick(sick_p0_id) is True
+    assert synthetic_state.is_summoning_sick(sick_p1_id) is True
+
+    # Wrath.
+    wrath_id = synthetic_state.register_and_inject_object(
+        _wrath_dict(), 0, ZONE_HAND
+    )
+    synthetic_state.push_to_stack(wrath_id, 0)
+    synthetic_state.resolve_top_of_stack()
+
+    # Both creatures now in their owners' graveyards with sick=true.
+    p0_entry = _gy_entry_for_id(synthetic_state, 0, sick_p0_id)
+    p1_entry = _gy_entry_for_id(synthetic_state, 1, sick_p1_id)
+    assert p0_entry is not None
+    assert p1_entry is not None
+    assert p0_entry["summoning_sick"] is True, (
+        f"CE13 regression: p0 sick creature lost summoning_sick on "
+        f"DestroyAllCreatures: {p0_entry}"
+    )
+    assert p1_entry["summoning_sick"] is True, (
+        f"CE13 regression: p1 sick creature lost summoning_sick on "
+        f"DestroyAllCreatures: {p1_entry}"
+    )
+
+
+def test_ce13_exile_target_preserves_summoning_sick_focused(engine):
+    """Focused variant of test_ce13_exile_target_preserves_summoning_sick_on_ltb
+    that builds a clean state (empty bfs) so the ExileTarget filter
+    deterministically picks our just-cast sick Bears on p1's bf[0]."""
+    state = engine.make_synthetic_state(
+        num_battlefield=0, num_hand=1, num_library=1
+    )
+    sick_p1_id = state.register_and_inject_object(
+        _creature_dict(), 1, ZONE_HAND
+    )
+    state.push_to_stack(sick_p1_id, 1)
+    state.resolve_top_of_stack()
+    assert state.is_summoning_sick(sick_p1_id) is True
+
+    exile_id = state.register_and_inject_object(
+        _exile_creature_dict(), 0, ZONE_HAND
+    )
+    state.push_to_stack(exile_id, 0)
+    state.resolve_top_of_stack()
+
+    # Sick creature now in p1's exile. summoning_sick preserved.
+    assert state.exile_contains(sick_p1_id) is True
+    assert state.exile_object_summoning_sick(sick_p1_id) is True, (
+        f"CE13 regression: ExileTarget cleared summoning_sick on a "
+        f"sick creature; expected True (preserved), got "
+        f"{state.exile_object_summoning_sick(sick_p1_id)}"
+    )
+    assert state.exile_object_tapped(sick_p1_id) is False
+    assert state.exile_object_damage(sick_p1_id) == 0
+    assert state.exile_object_counters(sick_p1_id) == 0
+
+
+def test_ce13_return_to_hand_preserves_summoning_sick_focused(engine):
+    """Bouncing (ReturnToHand) a freshly-cast sick creature must
+    preserve summoning_sick on the hand-zone object. I35 invariant."""
+    state = engine.make_synthetic_state(
+        num_battlefield=0, num_hand=1, num_library=1
+    )
+    sick_p1_id = state.register_and_inject_object(
+        _creature_dict(), 1, ZONE_HAND
+    )
+    state.push_to_stack(sick_p1_id, 1)
+    state.resolve_top_of_stack()
+    assert state.is_summoning_sick(sick_p1_id) is True
+
+    bounce_id = state.register_and_inject_object(
+        _bounce_creature_dict(), 0, ZONE_HAND
+    )
+    state.push_to_stack(bounce_id, 0)
+    state.resolve_top_of_stack()
+
+    # Sick creature returned to p1's hand. summoning_sick preserved.
+    entry = _hand_entry_for_id(state, 1, sick_p1_id)
+    assert entry is not None, (
+        f"sick creature id={sick_p1_id} missing from p1 hand"
+    )
+    assert entry["summoning_sick"] is True, (
+        f"CE13 regression: ReturnToHand cleared summoning_sick on a "
+        f"sick creature; expected True, got {entry['summoning_sick']}. "
+        f"Entry: {entry}"
+    )
+
+
+def test_ce13_reanimate_etb_still_stamps_summoning_sick_true(
+    synthetic_state,
+):
+    """ETB resets remain correct: a creature pulled from the graveyard
+    back to the battlefield via reanimation gets `summoning_sick=True`
+    stamped on re-ETB. Pins that the CE13 LTB-only change does NOT
+    regress the ETB direction (an essential half of the symmetric
+    "preserve on LTB, restamp on ETB" invariant). I35 invariant.
+
+    Even if the graveyard object carried `summoning_sick=True` from
+    its pre-LTB state (post-CE13), the reanimate path's ETB-stamp
+    must STILL set the field to true — so reanimating an already-sick
+    graveyard object yields a still-sick bf object, AND reanimating
+    a non-sick graveyard object (e.g. one that left via end-of-turn
+    cleanup of a hasty creature) also yields a sick bf object."""
+    # Drop a creature into p0's graveyard. The synthetic injection
+    # defaults summoning_sick=False; that's fine — the ETB stamp
+    # must produce True regardless of the pre-ETB value.
+    creature_id = synthetic_state.register_and_inject_object(
+        _vanilla_creature_dict(), 0, ZONE_GRAVEYARD
+    )
+    reanimate_id = synthetic_state.register_and_inject_object(
+        _reanimate_dict(), 0, ZONE_HAND
+    )
+    synthetic_state.push_to_stack(reanimate_id, 0)
+    synthetic_state.resolve_top_of_stack()
+
+    # Creature moved to p0's battlefield. Reanimate stamped
+    # summoning_sick=True on ETB.
+    assert synthetic_state.find_object_zone(creature_id) == ZONE_BATTLEFIELD
+    assert synthetic_state.is_summoning_sick(creature_id) is True, (
+        "CE13 regression: ETB-side reanimate stamp regression — "
+        "expected summoning_sick=True on reanimated creature"
+    )
