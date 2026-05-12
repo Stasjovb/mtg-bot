@@ -11,6 +11,18 @@ self-play emits per-batch npzs under ``--output-dir`` and prints
 ``--progress-dir/{run_id}_shard_<label>_result.json`` and prints
 ``{"result_path": "..."}``. The orchestrator scps that file back and
 parses it.
+
+Run-DB lifecycle: wraps each shard's body in
+:func:`mtg_bot.cli.runs.lifecycle.run_lifecycle` so the master's
+runs.db has a per-shard row alongside the aggregate iter row.
+``kind`` mirrors the master's: ``data_gen`` for self-play,
+``eval`` for eval (so the dashboard's roll-ups treat per-shard rows
+as the right shape of work). The shard derives its own
+``shard_run_id = f"{run_id}_shard_{label}"`` and uses ``run_id`` as
+the ``parent_run_id`` so the UI can list shards under their parent
+iter. Transport defaults to the REST path
+(``MTG_BOT_RUN_DB_URL=http://master:5099``) on remote shards —
+they don't share a filesystem with the master.
 """
 
 from __future__ import annotations
@@ -20,9 +32,11 @@ import base64
 import json
 import os
 import signal
+import socket
 import sys
 from pathlib import Path
 
+from mtg_bot.cli.runs import lifecycle as _lifecycle
 from mtg_bot.training.distributed import (
     EvalJobSpec,
     SelfPlayJobSpec,
@@ -32,19 +46,135 @@ from mtg_bot.training.distributed import (
 )
 
 
-def _decode_b64_json(s: str) -> dict:  # pragma: no cover
+def _decode_b64_json(s: str) -> dict:
     return json.loads(base64.b64decode(s.encode("ascii")).decode("utf-8"))
 
 
-def _run(argv=None) -> None:  # pragma: no cover
-    """Parse args and dispatch to ``run_shard_pull`` /
-    ``run_shard_eval_pull``.
+def _shard_label() -> str:
+    """Hostname-based identifier for the run_progress.shard_label
+    column. Best-effort: ``socket.gethostname()`` always returns
+    something (falls back to the OS netbios name on Windows / loopback
+    on POSIX). Used so the master's runs.db can distinguish
+    per-shard progress rows for the same iter."""
+    try:
+        return socket.gethostname() or "unknown"
+    except OSError:
+        return "unknown"
 
-    Separated from ``main`` so ``main`` can wrap it in the
-    ``os._exit`` finalizer without ballooning the indented body.
-    Exercised only at runtime via SSH; ``main()`` mock-stubs
-    ``_run`` for the os._exit-finalizer tests.
+
+def _build_shard_config(spec_dict: dict, shard_dict: dict, args) -> dict:
+    """Bundle the argparse view + shard/spec dict tags into the JSON
+    blob stored in ``runs.config_json``. The full spec dict is too
+    large to be useful here (it carries the whole NN architecture
+    desc); we keep the small identifying fields and let the master's
+    parent run_id row carry the rest."""
+    return {
+        "mode": args.mode,
+        "run_id": args.run_id,
+        "shard_label": shard_dict.get("label") or shard_dict.get("host"),
+        "shard_host": shard_dict.get("host"),
+        "iter_total_games": args.iter_total_games,
+        "stamp": args.stamp,
+        "queue_url": args.queue_url,
+        "progress_dir": str(args.progress_dir),
+        "output_dir": str(args.output_dir),
+        "weights_path": spec_dict.get("weights_path"),
+        "new_weights_path": spec_dict.get("new_weights_path"),
+        "old_weights_path": spec_dict.get("old_weights_path"),
+        "samples": spec_dict.get("samples"),
+        "inner_nodes": spec_dict.get("inner_nodes"),
+        "base_seed": spec_dict.get("base_seed"),
+        "hostname": _shard_label(),
+    }
+
+
+def _run_pull_shard(args, shard_dict: dict, spec_dict: dict) -> None:
+    """Execute a self-play (``--mode=pull``) shard under run_lifecycle.
+
+    Split out from ``_run`` so it is unit-testable: tests mock
+    ``run_shard_pull`` and verify the start_run / finish_run / artifact
+    trio fires with the expected kind / parent_run_id / shard_label.
     """
+    shard = ShardConfig.from_dict(shard_dict)
+    spec = SelfPlayJobSpec.from_dict(spec_dict)
+    n_workers = (
+        shard.n_workers if shard.n_workers and shard.n_workers > 0
+        else max(1, (os.cpu_count() or 1) - 2)
+    )
+    label = shard.display_label
+    shard_run_id = f"{args.run_id}_shard_{label}"
+    progress_json_path = args.progress_dir / f"{shard_run_id}.json"
+    config = _build_shard_config(spec_dict, shard_dict, args)
+    # ``kind="self_play"`` is the schema-valid value for the master's
+    # data-gen step; the JSON-side legacy alias ``"data_gen"`` is
+    # remapped by the backfill table at
+    # :data:`mtg_bot.cli.runs.backfill._KIND_JSON_TO_DB`, but the DB
+    # itself only allows the canonical kinds.
+    with _lifecycle.run_lifecycle(
+        run_id=shard_run_id,
+        kind="self_play",
+        config=config,
+        progress_json_path=progress_json_path,
+        parent_run_id=args.run_id,
+        label=label,
+    ):
+        npz_paths = run_shard_pull(
+            spec,
+            queue_url=args.queue_url,
+            run_id=args.run_id,
+            n_workers=n_workers,
+            output_dir=args.output_dir,
+            label=label,
+            stamp=args.stamp,
+            iter_total_games=args.iter_total_games,
+            progress_dir=args.progress_dir,
+        )
+    print(json.dumps({"npz_paths": [str(p) for p in npz_paths]}))
+
+
+def _run_eval_shard(args, shard_dict: dict, spec_dict: dict) -> None:
+    """Execute an eval (``--mode=eval``) shard under run_lifecycle.
+
+    Mirrors :func:`_run_pull_shard` but for the eval path: ``kind`` is
+    ``"eval"`` so the dashboard sums it with other eval-shard rows.
+    """
+    shard = ShardConfig.from_dict(shard_dict)
+    eval_spec = EvalJobSpec.from_dict(spec_dict)
+    n_workers = (
+        shard.n_workers if shard.n_workers and shard.n_workers > 0
+        else max(1, (os.cpu_count() or 1) - 2)
+    )
+    label = shard.display_label
+    shard_run_id = f"{args.run_id}_shard_{label}"
+    progress_json_path = args.progress_dir / f"{shard_run_id}.json"
+    config = _build_shard_config(spec_dict, shard_dict, args)
+    with _lifecycle.run_lifecycle(
+        run_id=shard_run_id,
+        kind="eval",
+        config=config,
+        progress_json_path=progress_json_path,
+        parent_run_id=args.run_id,
+        label=label,
+    ):
+        counts = run_shard_eval_pull(
+            eval_spec,
+            queue_url=args.queue_url,
+            run_id=args.run_id,
+            n_workers=n_workers,
+            label=label,
+            iter_total_games=args.iter_total_games,
+            progress_dir=args.progress_dir,
+        )
+    args.progress_dir.mkdir(parents=True, exist_ok=True)
+    result_path = (
+        args.progress_dir
+        / f"{args.run_id}_shard_{label}_result.json"
+    )
+    result_path.write_text(json.dumps(counts), encoding="utf-8")
+    print(json.dumps({"result_path": str(result_path), **counts}))
+
+
+def _parse_args(argv=None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
         "--mode", default="pull", choices=["pull", "eval"],
@@ -94,48 +224,26 @@ def _run(argv=None) -> None:  # pragma: no cover
     parser.add_argument(
         "--progress-dir", type=Path, default=Path("training_progress"),
     )
-    args = parser.parse_args(argv)
+    return parser.parse_args(argv)
 
-    shard = ShardConfig.from_dict(_decode_b64_json(args.shard_b64))
 
-    n_workers = (
-        shard.n_workers if shard.n_workers and shard.n_workers > 0
-        else max(1, (os.cpu_count() or 1) - 2)
-    )
+def _run(argv=None) -> None:
+    """Parse args and dispatch to ``_run_pull_shard`` /
+    ``_run_eval_shard``.
 
+    Separated from ``main`` so ``main`` can wrap it in the
+    ``os._exit`` finalizer without ballooning the indented body.
+    The heavy lifting (run_lifecycle wrap + the call into
+    ``run_shard_pull`` / ``run_shard_eval_pull``) lives in the
+    per-mode helpers so the tests can drive each path independently.
+    """
+    args = _parse_args(argv)
+    shard_dict = _decode_b64_json(args.shard_b64)
+    spec_dict = _decode_b64_json(args.spec_b64)
     if args.mode == "pull":
-        spec = SelfPlayJobSpec.from_dict(_decode_b64_json(args.spec_b64))
-        npz_paths = run_shard_pull(
-            spec,
-            queue_url=args.queue_url,
-            run_id=args.run_id,
-            n_workers=n_workers,
-            output_dir=args.output_dir,
-            label=shard.display_label,
-            stamp=args.stamp,
-            iter_total_games=args.iter_total_games,
-            progress_dir=args.progress_dir,
-        )
-        print(json.dumps({"npz_paths": [str(p) for p in npz_paths]}))
+        _run_pull_shard(args, shard_dict, spec_dict)
         return
-
-    eval_spec = EvalJobSpec.from_dict(_decode_b64_json(args.spec_b64))
-    counts = run_shard_eval_pull(
-        eval_spec,
-        queue_url=args.queue_url,
-        run_id=args.run_id,
-        n_workers=n_workers,
-        label=shard.display_label,
-        iter_total_games=args.iter_total_games,
-        progress_dir=args.progress_dir,
-    )
-    args.progress_dir.mkdir(parents=True, exist_ok=True)
-    result_path = (
-        args.progress_dir
-        / f"{args.run_id}_shard_{shard.display_label}_result.json"
-    )
-    result_path.write_text(json.dumps(counts), encoding="utf-8")
-    print(json.dumps({"result_path": str(result_path), **counts}))
+    _run_eval_shard(args, shard_dict, spec_dict)
 
 
 def _terminate_active_children() -> None:
