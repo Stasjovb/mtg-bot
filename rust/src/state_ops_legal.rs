@@ -477,10 +477,9 @@ fn activate_ability_dict(
 /// ability's mana cost. Mirrors `state_ops_cast.rs::pay_mana_cost`'s
 /// pre-mutation gate (colored pips must be matchable by same-color
 /// pool mana, then `pool_total - colored_total >= generic`) without
-/// the commit step. Returns `true` iff the controller's pool can
-/// cover `cost` outright — no auto-tap-from-lands accounting (the
-/// Rust side doesn't yet have an auto-tap composer; a future slice
-/// will grow one to match Python's `can_pay_cost`).
+/// the commit step. Returns `true` iff `pool` can cover `cost`
+/// outright. Composes with `auto_tap_headroom_pool` for the broader
+/// emission-side affordability check.
 fn pool_can_cover(pool: &crate::state::ManaPool, cost: &crate::cards::ManaCost) -> bool {
     if pool.white < cost.white
         || pool.blue < cost.blue
@@ -497,6 +496,67 @@ fn pool_can_cover(pool: &crate::state::ManaPool, cost: &crate::cards::ManaCost) 
         + (pool.green - cost.green) as u32
         + (pool.colorless) as u32;
     rem_total >= cost.generic as u32
+}
+
+/// **CE20 follow-up — auto-tap-from-lands headroom composer.**
+/// Returns a hypothetical `ManaPool` the `player_idx` controller
+/// COULD achieve by tapping every available mana source on their
+/// battlefield (lands + mana creatures), on top of their current
+/// floating pool.
+///
+/// Walks the controller's battlefield for sources that meet ALL of:
+///   - `printing.mana_produced.is_some()` (a free `{T}: Add ...`
+///     mana ability — Forests, Llanowar Elves, Birds of Paradise),
+///   - the object is NOT tapped (a tapped land has no headroom),
+///   - if the object is a creature, it is NOT summoning-sick (CR
+///     302.1 — newly-entered creatures can't pay tap costs).
+///
+/// For each qualifying source, credits each color symbol in
+/// `mana_produced` saturating-added to the matching pool slot.
+///
+/// Used as the emission-side affordability composer for
+/// `ActivateAbility` enumeration: a player with 0 floating mana but
+/// 3 untapped Forests on bf should see `{2}{G}` activated abilities
+/// emit (Python's `can_pay_cost` accounts for this auto-tap headroom
+/// at `actions.py:336-403`). The APPLY-TIME cost-pay path remains
+/// strict: a player still must have the mana physically in their
+/// pool to activate (via separate `ActivateAbility(forest, 0)`
+/// actions that tap the lands first). Matches Python's "permissive
+/// in `legal_actions`, strict in `_activate_ability`" model.
+///
+/// Pins I49; see `docs/RUST_PARITY_GAPS.md`.
+fn auto_tap_headroom_pool(
+    state: &crate::state::GameState,
+    player_idx: usize,
+) -> crate::state::ManaPool {
+    let mut pool = state.players[player_idx].mana_pool;
+    for obj in state.players[player_idx].battlefield.iter() {
+        let Some(printing) = state.registry.lookup(obj.printing_id) else {
+            continue;
+        };
+        let Some(symbols) = printing.mana_produced.as_ref() else {
+            continue;
+        };
+        if obj.tapped {
+            continue;
+        }
+        let is_creature = printing.card_types.iter().any(|t| t == "Creature");
+        if is_creature && obj.summoning_sick {
+            continue;
+        }
+        for sym in symbols {
+            match sym.as_str() {
+                "W" => pool.white = pool.white.saturating_add(1),
+                "U" => pool.blue = pool.blue.saturating_add(1),
+                "B" => pool.black = pool.black.saturating_add(1),
+                "R" => pool.red = pool.red.saturating_add(1),
+                "G" => pool.green = pool.green.saturating_add(1),
+                "C" => pool.colorless = pool.colorless.saturating_add(1),
+                _ => {} // validate_mana_symbol gates registration; defensive no-op.
+            }
+        }
+    }
+    pool
 }
 
 /// Build a `{"kind": "declare_attackers", "attacker_ids": [...]}` dict.
@@ -1018,23 +1078,23 @@ impl GameState {
             {
                 actions.push(activate_ability_dict(py, obj.id, 0)?);
             }
-            // CE20 Slice 1: walk the new activated_abilities Vec.
-            // Per-ability:
+            // CE20 Slice 1 + auto-tap follow-up: walk the new
+            // activated_abilities Vec. Per-ability:
             //   - tap_self abilities skip a tapped source AND a
             //     summoning-sick creature source (CR 302.1 narrows
             //     the sickness gate to abilities whose cost requires
             //     tapping the source — non-tap-cost abilities on a
             //     fresh creature still emit).
-            //   - mana affordability: the controller's pool must
-            //     cover the ability's mana cost. Pure pool check
-            //     (no auto-tap-from-lands composer yet in Rust).
-            //     Diverges from Python's `can_pay_cost`, which
-            //     accounts for auto-tap headroom from untapped
-            //     lands; for the Slice 1 closure shape we accept
-            //     the narrower gate (the cross-engine smoke
-            //     pre-populates the pool before driving
-            //     ActivateAbility). A future slice grows the
-            //     composer.
+            //   - mana affordability: emission-side checks the
+            //     controller's current pool PLUS auto-tap headroom
+            //     from untapped non-sick mana sources on bf (via
+            //     `auto_tap_headroom_pool`). Matches Python's
+            //     `can_pay_cost` (`actions.py:336-403`), which
+            //     composes pool + tappable-land coverage. The
+            //     apply-time cost-pay path stays strict (the
+            //     controller must have the mana already in pool to
+            //     activate); only emission widens. Pins I49.
+            let headroom_pool = auto_tap_headroom_pool(self, idx);
             for (ability_index, ability) in
                 printing.activated_abilities.iter().enumerate()
             {
@@ -1046,8 +1106,7 @@ impl GameState {
                         continue;
                     }
                 }
-                let pool = &self.players[idx].mana_pool;
-                if !pool_can_cover(pool, &ability.cost.mana) {
+                if !pool_can_cover(&headroom_pool, &ability.cost.mana) {
                     continue;
                 }
                 actions.push(activate_ability_dict(py, obj.id, ability_index as u32)?);

@@ -8646,6 +8646,97 @@ def test_cross_engine_activated_cost_test_d_python_underpays_silently(parity_smo
         rust_state.apply_action(rust_activate_dict)
 
 
+def test_cross_engine_activated_cost_test_e_auto_tap_headroom_emission_parity(parity_smoke):
+    """**Test E (post-I49 auto-tap-from-lands composer closure)**.
+
+    Pre-I49 the cross-engine smoke pre-populated p0's pool with
+    `{1}{G}` before driving the ActivateAbility emission probe
+    because Rust's affordability was POOL-ONLY — Python's
+    auto-tap-from-lands accounting wasn't mirrored on the Rust
+    side. Test A documents this gap explicitly: "the side-channel
+    pre-populates the pool via Python's auto-tap-from-lands
+    accounting; Rust's narrower pool-only affordability accepts the
+    pre-populated pool the same way".
+
+    Post-I49 Rust's `auto_tap_headroom_pool` composer matches
+    Python's `can_pay_cost` model: emission-side affordability now
+    sums pool + headroom from untapped non-sick mana sources on bf.
+    With the side-channel's 3 untapped Forests on p0's bf, an empty
+    pool composes to `{G}{G}{G}` of headroom, which covers
+    `{1}{G}` directly — and the emission appears on BOTH engines
+    WITHOUT priming the pool.
+
+    Pins the converged emission-side affordability axis.
+    """
+    from mtg_bot.legal import legal_actions
+    from mtg_bot.parity.cross_engine import (
+        activated_cost_side_channel,
+        build_matched_states,
+        multi_blocker_deckspec,
+        retaliation_selector,
+        step_both,
+    )
+    from mtg_bot.turn import Step
+
+    py_state, rust_state = build_matched_states(multi_blocker_deckspec())
+    for i in range(167):
+        action = retaliation_selector(py_state, rust_state, i)
+        step_both(py_state, rust_state, action)
+
+    assert py_state.step == Step.PRECOMBAT_MAIN
+    assert py_state.active_player_idx == 0
+    assert py_state.priority_player_idx == 0
+
+    py_bear_id, rust_bear_id = activated_cost_side_channel(
+        py_state, rust_state,
+    )
+    assert py_bear_id > 0
+    assert rust_bear_id > 0
+
+    # **Crucial:** explicitly clear BOTH engines' p0 pools so the
+    # affordability gate has to flow through the auto-tap-from-lands
+    # composer on each side (not just consume floating mana that
+    # leaked from earlier walk steps). The retaliation_selector
+    # backbone leaves a couple of G coins in Python's pool from
+    # tap-for-mana actions during the walk; without this clear, the
+    # post-emission assertion would pass via floating mana, not via
+    # the auto-tap composer — defeating the whole point of Test E.
+    py_state.players[0].mana_pool.clear()
+    rust_state.empty_mana_pool(0)
+    rust_pool = rust_state.get_mana_pool(0)
+    assert all(rust_pool[c] == 0 for c in ("W", "U", "B", "R", "G", "C")), (
+        f"Test E precondition: Rust's p0 mana pool starts empty; got {rust_pool}"
+    )
+    assert len(py_state.players[0].mana_pool) == 0, (
+        "Test E precondition: Python p0's mana pool is empty after clear."
+    )
+
+    # ---- Python emits via can_pay_cost auto-tap headroom ----
+    py_actions = legal_actions(py_state, 0)
+    py_activate_source_ids = [
+        int(a.source_id) for a in py_actions
+        if type(a).__name__ == "ActivateAbility"
+    ]
+    assert py_bear_id in py_activate_source_ids, (
+        f"Python SHOULD emit ActivateAbility for Bear Caster (id "
+        f"{py_bear_id}) with 0 pool + 3 untapped Forests via "
+        f"can_pay_cost auto-tap headroom. Got {py_activate_source_ids}"
+    )
+
+    # ---- Rust emits via auto_tap_headroom_pool composer (I49) ----
+    rust_actions = rust_state.legal_decisions(0)
+    rust_activate_source_ids = [
+        a.get("source_id") for a in rust_actions
+        if a.get("kind") == "activate_ability"
+    ]
+    assert rust_bear_id in rust_activate_source_ids, (
+        f"I49 CLOSED — Rust SHOULD now emit ActivateAbility for Bear "
+        f"Caster (id {rust_bear_id}) with 0 pool + 3 untapped Forests, "
+        f"matching Python's auto-tap-from-lands accounting. Got Rust "
+        f"ActivateAbility source ids: {rust_activate_source_ids}"
+    )
+
+
 def test_cross_engine_activated_cost_selector_pre_injection_walks_clean(parity_smoke):
     """Pre-injection backbone steps 0-167 are parity-clean for the
     activated_cost_selector.

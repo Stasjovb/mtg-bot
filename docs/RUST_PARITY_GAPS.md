@@ -3480,13 +3480,19 @@ the forked branch.
     `mana_produced.is_some()`, falls back to the legacy free-mana-
     ability behavior; otherwise raises `"has no ability at index N"`.
 
-- **Affordability gate** (emission AND apply): pool-only via
-  `pool_can_cover` (legal.rs) / `pay_mana_cost_pub` (actions.rs).
-  Pool-only is narrower than Python's `can_pay_cost`, which accounts
-  for auto-tap-from-lands headroom — a future slice grows an
-  auto-tap composer to converge the two. Until then, cross-engine
-  smoke pre-populates the controller's pool when driving non-mana-
-  ability activation directly.
+- **Affordability gate**:
+  - **Emission** (`legal.rs`): pool + auto-tap-from-lands headroom
+    via `auto_tap_headroom_pool` (I49). Matches Python's
+    `can_pay_cost` model — sums the controller's current pool plus
+    every untapped non-sick mana source on bf
+    (`printing.mana_produced.is_some()`), then runs `pool_can_cover`
+    on the composed pool.
+  - **Apply** (`actions.rs`): pool-only via `pay_mana_cost_pub` —
+    the controller must already have the mana in pool to commit.
+    Activator must tap mana sources ahead of time via separate
+    `ActivateAbility(forest, 0)` actions. Matches Python's
+    "permissive in `legal_actions`, strict in `_activate_ability`"
+    model.
 
 - **Tap-self gate** (emission AND apply): tapped source rejects;
   summoning-sick creature source rejects (CR 302.1 narrows to
@@ -3520,8 +3526,77 @@ the forked branch.
     `ActivatedAbility { is_mana_ability: true, cost: { tap_self:
     true }, effect: AddManaToPool(...) }` entry (retires the
     side-channel).
-  - Auto-tap-from-lands composer to match Python's `can_pay_cost`
-    headroom accounting on the Rust side.
+  - ~~Auto-tap-from-lands composer to match Python's `can_pay_cost`
+    headroom accounting on the Rust side.~~ **CLOSED by I49** —
+    see below.
+
+### I49. `legal_decisions` ActivateAbility emission affordability includes auto-tap-from-lands headroom via `auto_tap_headroom_pool` composer (CE20 follow-up closure)
+
+- **Pinned by**:
+  - `tests/test_parity_smoke.py::test_cross_engine_activated_cost_test_e_auto_tap_headroom_emission_parity`
+    (cross-engine emission convergence: with 0 floating pool + 3
+    untapped Forests on p0's bf, BOTH engines emit
+    `ActivateAbility` for the Bear Caster `{1}{G}` cost via
+    auto-tap headroom).
+  - 5 `tests_rust/test_activated.py` regression pins:
+    - `test_auto_tap_headroom_emits_with_empty_pool_plus_untapped_forests`
+    - `test_auto_tap_headroom_no_emission_with_empty_pool_no_lands`
+    - `test_auto_tap_headroom_excludes_tapped_lands`
+    - `test_auto_tap_headroom_gates_on_source_sickness_not_land_sickness`
+    - `test_auto_tap_headroom_pool_only_path_still_works`
+  - `tests_rust/test_activated.py::test_bear_caster_no_emission_when_unaffordable`
+    (updated to tap default-bf Forests first, anchoring the
+    "zero-headroom + empty pool" branch).
+
+- **Invariant.** `state_ops_legal.rs::auto_tap_headroom_pool(state,
+  player_idx) -> ManaPool` composes the controller's emission-side
+  affordability pool as:
+
+  ```text
+  start_with: state.players[player_idx].mana_pool
+  for each obj on state.players[player_idx].battlefield:
+      if printing.mana_produced is None: continue
+      if obj.tapped: continue
+      if is_creature(printing) && obj.summoning_sick: continue
+      for sym in mana_produced:
+          pool[sym] += 1  (saturating)
+  return pool
+  ```
+
+  The `ActivateAbility` emission filter at
+  `state_ops_legal.rs:1056` calls
+  `pool_can_cover(&auto_tap_headroom_pool(self, idx), &ability.cost.mana)`
+  instead of the pre-I49 `pool_can_cover(&self.players[idx].mana_pool, ...)`.
+
+- **Apply-time strictness preserved.** The
+  `ActivateAbility` apply arm in `state_ops_actions.rs:622-656`
+  still uses the pool-only `pay_mana_cost_pub` gate — players must
+  physically have the mana in their pool to activate. Only emission
+  widens. Matches Python's "permissive in `legal_actions`, strict
+  in `_activate_ability`" model — Python's `actions.py:336-403`
+  `can_pay_cost` accounts for auto-tap-from-lands headroom; Python's
+  `_activate_ability` calls `auto_tap_for_cost` ahead of time but
+  doesn't self-gate.
+
+- **CR 302.1 still applies to the SOURCE, not the mana lands.** A
+  summoning-sick Bear Caster can't activate its `{T}` ability even
+  when 2 untapped Forests provide headroom. The composer only
+  excludes summoning-sick CREATURE mana sources (Llanowar Elves on
+  the ETB turn) — lands skip CR 302.1 entirely.
+
+- **Saturating add.** Each per-symbol increment is
+  `pool.color = pool.color.saturating_add(1)` (u8 slot). A
+  battlefield with 256+ untapped Forests caps at 255 G headroom; no
+  realistic test surface hits the cap, but the saturating add
+  prevents wrap-around UB if a fuzz / stress test ever fabricates
+  one.
+
+- **No bf-iteration-order dependency.** Unlike
+  `bf_iter_etb_sorted` (CE5 invariant I26), the composer's output
+  is order-independent — it's a per-color count summation, so
+  whatever iteration order `battlefield.iter()` produces yields the
+  same `ManaPool`. The CE5 bf-walk-order invariant isn't a
+  load-bearing input here.
 
 ### ~~CE9.~~ CLOSED: Combat damage assignment walks battlefield in bf-ETB order via shared `bf_iter_etb_sorted` helper
 
