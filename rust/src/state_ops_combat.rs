@@ -860,11 +860,11 @@ impl GameState {
                 attacker_has_first_strike,
                 attacker_has_double_strike,
             );
-            // Find the FIRST blocker matching this attacker, ordered by
+            // Find ALL blockers matching this attacker, ordered by
             // bf-ETB timestamp via the shared `bf_iter_etb_sorted`
             // helper. Mirrors Python's `combat.py:389,405` walk:
             // ``[o for o in state.battlefield if o.id in attacker.blocked_by]``
-            // — pick the lowest-bf-position eligible blocker. CE9 closure
+            // — bf-ETB-sorted eligible blockers. CE9 closure
             // (see `docs/RUST_PARITY_GAPS.md` and the playbook §3
             // Option A): the previous `self.blockers.iter().find_map(...)`
             // walked declare-blockers push order, which diverged from
@@ -874,20 +874,33 @@ impl GameState {
             // technically a bug vs CR, but parity with observable
             // Python is the reference here; long-term correctness is
             // tracked as a follow-up Python-side fix.)
+            //
+            // CE14 closure: collect the FULL bf-ETB-sorted blocker list
+            // (not just first_blocker). The no-trample branch now walks
+            // every blocker with `need_i = 1 if deathtouch else
+            // blocker_toughness`, mirroring Python's combat.py:419-435
+            // per-blocker assignment loop. The trample branch keeps its
+            // existing first-blocker-only assignment (the round-9
+            // simplification) — extending trample to multi-block with
+            // per-blocker damage spill is a separate slice (see I31).
             let attacker_blocker_ids: std::collections::HashSet<u32> = self
                 .blockers
                 .iter()
                 .filter_map(|(a, b)| if *a == attacker_id { Some(*b) } else { None })
                 .collect();
-            let first_blocker: Option<u32> = crate::bf_iter::bf_iter_etb_sorted(self)
+            let bf_ordered_blockers: Vec<u32> = crate::bf_iter::bf_iter_etb_sorted(self)
                 .into_iter()
-                .find_map(|obj| {
+                .filter_map(|obj| {
                     if attacker_blocker_ids.contains(&obj.id) {
                         Some(obj.id)
                     } else {
                         None
                     }
-                });
+                })
+                .collect();
+            let first_blocker: Option<u32> = bf_ordered_blockers.first().copied();
+            let attacker_has_deathtouch =
+                battlefield_has_keyword(self, attacker_id, "deathtouch");
             if let Some(blocker_id) = first_blocker {
                 if attacker_power > 0 {
                     // Trample (CR 702.19): the attacker is required
@@ -899,9 +912,13 @@ impl GameState {
                     // tests can see the blocker's marked damage equal
                     // its toughness (not the attacker's full power).
                     //
-                    // Without trample, the attacker assigns its full
-                    // power to the blocker — same as the round-5
-                    // single-blocker simplification.
+                    // Without trample, the attacker assigns damage
+                    // to each blocker in turn per CR 510.1c, with
+                    // `need = 1 if deathtouch else blocker_toughness`
+                    // per blocker (CR 702.2b's deathtouch lethal
+                    // redefinition); the last blocker absorbs the
+                    // remainder (mirrors Python's
+                    // combat.py:419-435 "is_last gets remaining" tail).
                     if attacker_has_trample {
                         let blocker_toughness =
                             battlefield_creature_toughness(self, blocker_id);
@@ -918,8 +935,6 @@ impl GameState {
                         // becomes 1 when the attacker also has
                         // deathtouch, freeing up `power - 1` to spill
                         // through to the defender.
-                        let attacker_has_deathtouch =
-                            battlefield_has_keyword(self, attacker_id, "deathtouch");
                         let blocker_cap = if attacker_has_deathtouch {
                             1
                         } else {
@@ -954,13 +969,59 @@ impl GameState {
                             }
                         }
                     } else {
-                        for &p in &passes_for_source {
-                            plan.push(PlanEntry {
-                                source_id: attacker_id,
-                                target: DamageTarget::Creature(blocker_id),
-                                amount: attacker_power,
-                                pass: p,
-                            });
+                        // CE14 closure: walk ALL blockers (not just
+                        // first_blocker), mirroring Python's
+                        // combat.py:419-435 loop shape. Per CR 702.2b
+                        // + CR 510.1c, an attacker with deathtouch
+                        // treats 1 damage to each blocker as lethal
+                        // for the assignment-order rule, so
+                        // `need = 1 if deathtouch else
+                        // effective_toughness - blocker.damage`. The
+                        // last blocker (no trample) absorbs whatever
+                        // power remains — Python's `is_last and not
+                        // has_trample: assigned = remaining` tail —
+                        // which preserves the round-5 single-blocker
+                        // "assign full power to first blocker"
+                        // observable shape on the 1-blocker case
+                        // (one blocker = is_last from i=0, takes all
+                        // attacker_power).
+                        let n_blockers = bf_ordered_blockers.len();
+                        let mut remaining: i16 = attacker_power;
+                        for (i, &blocker_id) in bf_ordered_blockers.iter().enumerate() {
+                            if remaining <= 0 {
+                                break;
+                            }
+                            let need: i16 = if attacker_has_deathtouch {
+                                1
+                            } else {
+                                let blocker_toughness =
+                                    battlefield_creature_toughness(self, blocker_id);
+                                let blocker_damage =
+                                    battlefield_creature_damage(self, blocker_id);
+                                let raw = (blocker_toughness as i32)
+                                    - (blocker_damage as i32);
+                                if raw < 0 { 0 } else { raw as i16 }
+                            };
+                            let is_last = i == n_blockers - 1;
+                            // is_last and not has_trample: absorb the
+                            // remainder (Python's
+                            // combat.py:427-428 tail).
+                            let assigned: i16 = if is_last {
+                                remaining
+                            } else {
+                                std::cmp::min(remaining, need)
+                            };
+                            if assigned > 0 {
+                                for &p in &passes_for_source {
+                                    plan.push(PlanEntry {
+                                        source_id: attacker_id,
+                                        target: DamageTarget::Creature(blocker_id),
+                                        amount: assigned,
+                                        pass: p,
+                                    });
+                                }
+                            }
+                            remaining -= assigned;
                         }
                     }
                 }

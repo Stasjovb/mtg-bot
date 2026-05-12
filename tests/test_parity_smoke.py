@@ -3102,81 +3102,41 @@ def test_cross_engine_first_strike_selector_pre_injection_walks_clean(
 # :data:`_DEATHTOUCH_PRINTING_NAME` ("Bear Assassin") so the two probes
 # are independent.
 #
-# **OUTCOME on this probe: NEW DIVERGENCE — CE14 surfaced.**
-#
-# Python's ``combat.py:419-435`` multi-block assignment loop honors
-# CR 702.2b ("any nonzero amount of combat damage assigned to a
-# creature by a source with deathtouch is considered to be lethal
-# damage") via the ``need = 1 if has_deathtouch`` override. With a
-# 2/2 deathtouch attacker blocked by two 2/2 Bears, Python assigns 1
-# damage to each blocker (deathtouch makes 1 == lethal for the
-# assignment-order rule CR 510.1c), AND sets ``marked_lethal=True``
-# on each via ``combat.py:526-527``. SBA pass destroys both blockers.
-#
-# Rust's ``state_ops_combat.rs:849-978`` no-trample multi-block
-# branch only emits a single PlanEntry to ``first_blocker`` (the
-# bf-ETB-first eligible blocker) carrying the full ``attacker_power``.
-# The deathtouch lethal-mark upgrade at
-# ``state_ops_combat.rs:1162-1166`` fires on the recipient — but the
-# recipient is only the first blocker. The second blocker takes zero
-# damage and survives.
-#
-# First diverging step: **174** (the ``pass_priority`` that fires the
-# COMBAT_DAMAGE step on both engines, just after step 173's
-# ``declare_blockers [[11, 14], [9, 14]]``). Fields:
-#   * ``graveyard_p1``: Python has [Bears 9, Bears 11]; Rust has
-#     [Bears 9].
-#   * ``battlefield``: Python lost Bears 11; Rust still has it.
-#
-# Filed as CE14 in ``docs/RUST_PARITY_GAPS.md``. Closure direction
-# OPEN — Option A (Rust converges on Python: extend the no-trample
-# multi-block branch to walk bf-ETB-sorted blockers and emit
-# per-blocker PlanEntries with ``need = 1 if deathtouch else
-# blocker_toughness``, mirroring the trample branch's already-present
-# deathtouch cap) is the natural CE14 closure since Python's
-# multi-block assignment already honors CR 702.2b.
-#
-# **No-go: do NOT fix in this slice.** The probe surfaces the
-# divergence and pins it via xfail-strict so a future CE14 closure
-# slice flips the xpass and the symptom-present pin gets deleted
-# per the CE2-CE13 pair-pin convention.
+# **CE14 CLOSED** by ``feature/ce14-deathtouch-multiblock``: Rust's
+# ``state_ops_combat.rs`` no-trample multi-block branch now walks ALL
+# blockers in bf-ETB order with ``need = 1 if deathtouch else
+# effective_toughness - blocker.damage`` per blocker (Python's
+# ``combat.py:419-435`` shape, with the "is_last gets remaining" tail
+# preserving the round-5 single-blocker observable behavior). With a
+# 2/2 deathtouch attacker blocked by two 2/2 Bears, both Python and
+# Rust now assign 1 damage to each blocker, deathtouch upgrades each
+# mark to lethal=2 via the apply-damage pass, and SBA destroys both.
+# The strict-xfail walk-clean pin below has been flipped to a normal
+# passing test; the symptom-present pin has been deleted per the
+# CE2-CE13 pair-pin convention.
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "CE14 (deathtouch multi-block damage assignment split). "
-        "Python's combat.py:419-435 honors CR 702.2b via "
-        "`need = 1 if has_deathtouch`, splitting 1 damage per "
-        "blocker so deathtouch + multi-block kills every blocker. "
-        "Rust's state_ops_combat.rs:849-978 no-trample multi-block "
-        "branch only emits a single PlanEntry to the bf-ETB-first "
-        "blocker carrying full attacker_power — the second blocker "
-        "takes zero damage and survives. First diverging step 174 "
-        "(COMBAT_DAMAGE). Strict-xfail until the CE14 closure slice "
-        "extends Rust's no-trample branch to walk all blockers with "
-        "the deathtouch=1 cap. Filed as CE14 in "
-        "docs/RUST_PARITY_GAPS.md."
-    ),
-)
 def test_cross_engine_deathtouch_selector_walks_clean(parity_smoke):
-    """**CE14 clean-walk pin (xfail-strict)**.
+    """**CE14 clean-walk pin (passing post-closure)**.
 
     Walks 200 decisions on :func:`multi_blocker_deckspec` with
     :func:`deathtouch_selector` and asserts every step is parity-
-    clean. Today the multi-block COMBAT_DAMAGE step at index 174
-    surfaces CE14: Python kills both blockers via deathtouch's
-    CR 702.2b lethal-mark assignment override; Rust kills only the
-    bf-ETB-first blocker (the no-trample branch emits all damage to
-    a single PlanEntry).
+    clean. Pre-closure, the multi-block COMBAT_DAMAGE step at index
+    174 surfaced CE14: Python killed both blockers via deathtouch's
+    CR 702.2b lethal-mark assignment override; Rust killed only the
+    bf-ETB-first blocker (the no-trample branch emitted all damage
+    to a single PlanEntry). Post-closure
+    (``feature/ce14-deathtouch-multiblock``), Rust walks all
+    blockers in bf-ETB order with ``need = 1 if deathtouch`` per
+    blocker, matching Python's ``combat.py:419-435`` loop shape, so
+    every step is parity-clean.
 
-    Mirrors the pre-closure xfail-strict pattern of CE9's
-    multi-block clean-walk pin: when the CE14 closure slice lands
-    (Rust's no-trample multi-block branch becomes per-blocker with a
-    deathtouch=1 cap), this test flips to xpass and the
-    symptom-present companion below gets deleted per the
-    CE2-CE13 pair-pin convention.
+    Mirrors the CE9 / CE12 / CE13 post-closure pattern: the
+    formerly-xfailed clean-walk pin becomes an expected-pass full-
+    walk parity assertion, and the symptom-present companion is
+    deleted per the CE2-CE13 pair-pin convention. See I36 for the
+    post-closure invariant.
     """
     from mtg_bot.parity.cross_engine import (
         deathtouch_selector,
@@ -3198,117 +3158,6 @@ def test_cross_engine_deathtouch_selector_walks_clean(parity_smoke):
             f"action={step.action_dict} "
             f"{[(d.field, d.py_value, d.rust_value, d.known_gap) for d in step.divergences]}"
         )
-
-
-def test_cross_engine_deathtouch_selector_surfaces_ce14_at_step_174(
-    parity_smoke,
-):
-    """**CE14 symptom-present pin** (passes today, paired with the
-    strict-xfail clean-walk pin above).
-
-    Pins the EXACT shape of the deathtouch multi-block divergence
-    so a future refactor that accidentally moves the surface (e.g.
-    different step index, different fields) fails loudly rather than
-    silently masking CE14.
-
-    At step 174 (the ``pass_priority`` decision that fires
-    COMBAT_DAMAGE on both engines, right after step 173's
-    ``declare_blockers [[11, 14], [9, 14]]``), the diverging fields
-    are:
-
-      * ``graveyard_p1`` — Python: 2 Bears (ids 9 + 11). Rust: 1
-        Bears (id 9).
-      * ``battlefield`` — Python: Bears 11 absent (moved to gy).
-        Rust: Bears 11 still present (untouched, 0 damage).
-
-    Reasoning trail: by step 173 both engines have agreed on
-    ``declare_blockers [[11, 14], [9, 14]]`` (the
-    :func:`retaliation_selector` delegate's multi-block branch).
-    Step 174's COMBAT_DAMAGE step is where the deathtouch
-    assignment split surfaces — Python's
-    ``combat.resolve_combat_damage`` walks blockers in bf order
-    (ids 9, 11) with ``need = 1`` per blocker, assigning 1 + 1 and
-    marking both lethal via deathtouch. Rust's
-    ``deal_combat_damage`` plan only emits a single entry to
-    ``first_blocker = 9`` carrying the full attacker_power=2;
-    blocker 11 takes zero damage.
-
-    Deleted after the CE14 closure slice per the CE2-CE13 pair-pin
-    convention.
-    """
-    from mtg_bot.parity.cross_engine import (
-        deathtouch_selector,
-        multi_blocker_deckspec,
-        walk_both,
-    )
-
-    result = walk_both(
-        multi_blocker_deckspec(),
-        n_decisions=180,
-        decision_selector=deathtouch_selector,
-    )
-    assert result.error is None, (
-        f"walk aborted at step {result.aborted_at}: {result.error}"
-    )
-
-    # First-divergence step is exactly 174 (the COMBAT_DAMAGE-firing
-    # pass_priority right after declare_blockers at step 173).
-    first_div_step_idx = next(
-        (s.step_index for s in result.steps if s.divergences), None
-    )
-    assert first_div_step_idx == 174, (
-        f"expected first divergence at step 174 (COMBAT_DAMAGE on "
-        f"deathtouch + multi-block), got "
-        f"{first_div_step_idx}"
-    )
-
-    # The diverging step's fields are exactly graveyard_p1 +
-    # battlefield. Sorted for order-stable comparison.
-    div_step = result.steps[174]
-    diverging_fields = sorted(d.field for d in div_step.divergences)
-    assert diverging_fields == ["battlefield", "graveyard_p1"], (
-        f"expected fields ['battlefield', 'graveyard_p1'] at step "
-        f"174, got {diverging_fields}"
-    )
-
-    # Symptom shape: Python's graveyard_p1 has 2 Bears (deathtouch
-    # killed both); Rust's has 1 (only first_blocker died). Use a
-    # set comparison on the printing_name + id tuples since gy
-    # ordering matters less than the membership for the symptom.
-    py_gy_div = next(d for d in div_step.divergences if d.field == "graveyard_p1")
-    py_gy_ids = sorted(t[7] for t in py_gy_div.py_value)
-    rust_gy_ids = sorted(t[7] for t in py_gy_div.rust_value)
-    assert py_gy_ids == [9, 11], (
-        f"expected Python p1 gy ids [9, 11] (both blockers dead); "
-        f"got {py_gy_ids}"
-    )
-    assert rust_gy_ids == [9], (
-        f"expected Rust p1 gy ids [9] (only first_blocker dead); "
-        f"got {rust_gy_ids}"
-    )
-
-    # Symptom shape: Python's battlefield is missing Bears 11; Rust's
-    # battlefield still has it.
-    bf_div = next(d for d in div_step.divergences if d.field == "battlefield")
-    py_bf_ids_creatures = sorted(
-        t[7] for t in bf_div.py_value
-        if t[0] == "Grizzly Bears"
-    )
-    rust_bf_ids_creatures = sorted(
-        t[7] for t in bf_div.rust_value
-        if t[0] == "Grizzly Bears"
-    )
-    # Python: only Bears 5 (p0, sick) survives. Rust: Bears 5 + Bears
-    # 11 (the surviving second blocker).
-    assert py_bf_ids_creatures == [5], (
-        f"expected Python bf Grizzly Bears = [5]; got "
-        f"{py_bf_ids_creatures}"
-    )
-    assert rust_bf_ids_creatures == [5, 11], (
-        f"expected Rust bf Grizzly Bears = [5, 11] (Bears 11 "
-        f"survived because Rust's plan only damaged first_blocker); "
-        f"got {rust_bf_ids_creatures}"
-    )
 
 
 def test_cross_engine_deathtouch_selector_pre_injection_walks_clean(
