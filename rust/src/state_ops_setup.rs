@@ -169,6 +169,10 @@ fn push_object(
         counters: 0,
         attached_to: None,
         exiled_with_source: None,
+        // CE4 closure: make_state never places objects directly on
+        // battlefield (bf is built up by ETB primitives), so the
+        // default 0 is fine for hand / library / starting zones.
+        etb_timestamp: 0,
         ueot_modifiers: Vec::new(),
     });
     *next_id += 1;
@@ -322,5 +326,6 @@ pub fn make_state(
         permanent_left_battlefield_this_turn: false,
         spell_warped_this_turn: false,
         pending_decisions: Vec::new(),
+        next_etb_timestamp: 0,
     })
 }

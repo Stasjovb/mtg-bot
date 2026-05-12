@@ -962,73 +962,119 @@ Vec construction order (`make_state` and `make_synthetic_state`
 push input order into the Vec; the fingerprint walks that Vec
 front-to-back unchanged).
 
-### CE4. `battlefield` ordering — Rust groups by controller, Python orders by ETB timestamp
+### ~~CE4.~~ CLOSED: `battlefield_snapshot` emits in `etb_timestamp` order (matching Python's centralized append order)
 
-- **Pinned by**:
-  `tests/test_parity_smoke.py::test_cross_engine_multi_turn_selector_surfaces_ce4_battlefield_ordering`
-  (strict-xfail, this slice). The companion clean-walk pin
-  `test_cross_engine_multi_turn_selector_walks_clean` is xfailed
-  on the same root cause.
-- **Surfaced by**: Phase-5 follow-up #3 — the `multi_turn_selector`
-  in `src/mtg_bot/parity/cross_engine.py`. Drives multiple turns of
-  play on `slightly_bigger_deckspec`; the divergence first appears
-  on **step 28**, turn 3 PRECOMBAT_MAIN, when p0 plays a Forest while
-  p1's Mountain is already on the battlefield. Both engines have the
-  same two cards but in different orders:
-  - Python `battlefield`: `(('Mountain' [p1], ...), ('Forest' [p0], ...))`
-    — ETB-timestamp order, Mountain entered first (turn 2 p1 MAIN1)
-    and Forest entered second (turn 3 p0 MAIN1).
-  - Rust `battlefield`: `(('Forest' [p0], ...), ('Mountain' [p1], ...))`
-    — controller-grouped order, p0's battlefield emits before p1's
-    regardless of ETB order.
-- **Rust today**: `state_ops_snapshot.rs::battlefield_snapshot`
-  (line 179) flat-emits `players[0].battlefield` THEN
-  `players[1].battlefield`. Each `Player` carries its own
-  `battlefield: Arc<Vec<GameObject>>`; the snapshot getter
-  concatenates them in player-index order. The docstring on
-  `battlefield_snapshot` explicitly flags this divergence and
-  predicts it will surface "the first time a p1 permanent ETBs
-  between two p0 permanents" — which is exactly what the
-  `multi_turn_selector` walks into on step 28.
-- **CR / Python expected**: `state.battlefield` is one centralized
-  list (`game.py:GameState.battlefield`, populated by
-  `actions._play_land` line 1084 doing `card.zone = Zone.BATTLEFIELD`
-  and `state.battlefield.append(card)` elsewhere — let the parity-
-  closure slice trace the exact append site). Order is ETB
-  timestamp across both players, NOT controller-grouped. CR 506.1
-  / CR 608.2g do not mandate a battlefield iteration order, but
-  Python's centralized list is the parity reference and the
-  cross-engine harness compares against it.
-- **Impact**: medium. Multi-turn cross-engine smoke fails on step
-  28 onwards. Any downstream comparison that walks
-  `battlefield_snapshot()` order-sensitively (e.g. cleanup-step
-  damage clear iterating bf in order; legal_decisions emitting
-  ActivateAbility in source-id order; the 8-tuple zone signature
-  the fingerprint folds) sees ordering-only divergences. The
-  underlying engine state is parity-equal — same cards on the same
-  controllers; only the read-order through `battlefield_snapshot`
-  diverges.
-- **Closeable**: yes — two-option closure:
-  1. **Refactor Rust to a single centralized `state.battlefield: Arc<Vec<GameObject>>`**.
-     Strongest parity (the per-player split goes away entirely).
-     Touches every site that walks
-     `player.battlefield` — `state_ops_cast.rs::move_from_hand_to_battlefield`,
-     `state_ops_resolve.rs` (every ETB pathway), the snapshot
-     getter, and the SBA pass. Large surface; this is the
-     "Rust battlefield representation refactor" the
-     `battlefield_snapshot` docstring alludes to.
-  2. **Stamp ETB timestamp on each `GameObject` and sort
-     `battlefield_snapshot`'s output by it**. Minimal-surface
-     closure — only `state_ops_snapshot.rs::battlefield_snapshot`
-     and a new per-object `etb_timestamp: u32` field change.
-     Equivalent observable parity for the cross-engine smoke;
-     leaves the per-player Vec structure intact for iteration
-     hot paths.
+Closed by the CE4 closure slice (`feature/ce4-bf-etb-order`). Option
+(2) from the brief — the minimal-surface "stamp + sort" closure — was
+taken. The per-player `battlefield: Arc<Vec<GameObject>>` split stays
+intact; the snapshot and fingerprint readers stable-sort their
+collected refs by a new per-object `etb_timestamp: u32` slot before
+emitting.
 
-   The brief calls out option (1) as cleaner long-term; option (2)
-   is the cheaper one-slice closure if a follow-up slice wants to
-   unblock multi-turn cross-engine smoke without touching every
-   ETB site.
+- **Per-object slot**: `GameObject.etb_timestamp: u32` (defaults to
+  `0`). Stamped at every battlefield-entry primitive by reading
+  `state.next_etb_timestamp` and bumping the counter
+  (`state::reserve_etb_timestamp(&mut state)`). Stamped sites:
+  * `state_ops_cast.rs::move_from_hand_to_battlefield` (the
+    `play_land` + `cast_creature` shared helper — refactored to take
+    `&mut GameState` so it can bump the counter; both call sites
+    updated).
+  * `state_ops_zones.rs::move_object` (the generic mover —
+    conditionally stamps when `target_zone == ZONE_BATTLEFIELD`).
+  * `state_ops_zones.rs::move_object_from_graveyard_to_battlefield`
+    (the reanimation primitive).
+  * `state_ops_resolve.rs::move_source_post_resolve` (the canonical
+    CR 608.2m permanent-mover — covers ResolveCreature /
+    ResolveArtifact / ResolveEnchantment / ResolvePlaneswalker / any
+    permanent-typed source landing post-resolve).
+  * `state_ops_resolve.rs::Effect::CreateToken` (multi-token batch —
+    reserves a contiguous block of timestamps so the within-effect
+    creation order is strictly monotonic; bumps the counter once per
+    token).
+  * `state_ops_resolve.rs::Effect::CreateTokenCopyOfTargetCreatureYouControl`.
+  * `state_ops_resolve.rs::Effect::SearchLibraryForBasicLandTapped`
+    (loops over `count`; each searched land gets a fresh timestamp).
+  * `state_ops_resolve.rs::Effect::ReturnCreatureFromYourGraveyardToBattlefield`.
+  * `state_ops_resolve.rs::ReturnAllCreaturesFromYourGraveyardToBattlefield`
+    (multi-bf-push; contiguous timestamp block, one per moved creature).
+  * `state_ops_resolve.rs::register_and_inject_object` (test-injection
+    primitive; stamps only when `target_zone == ZONE_BATTLEFIELD`).
+  * `state_ops_resolve.rs::return_paired_exiles_for` (the round-28
+    "until source leaves" manual hook; multi-bf-push, contiguous
+    timestamp block).
+  * `state_ops_decisions.rs::resolve_manifest_dread_to_battlefield`
+    (manifest-dread chosen card → bf).
+
+- **Bookkeeping counter**: `GameState.next_etb_timestamp: u32`
+  (defaults to `0`). NOT serialized into the fingerprint — same
+  precedent as `mulligan_count` and `consecutive_passes`: transient
+  bookkeeping, not gameplay-relevant. Two states reached via
+  different histories that share the same observable battlefield
+  ORDER share a fingerprint regardless of how many bf-entries
+  happened to get there.
+
+- **Per-object slot is also NOT in the fingerprint's 8-tuple.** The
+  field is read only as the **stable-sort key** in
+  `state_ops_snapshot.rs::battlefield_snapshot` and the matching
+  battlefield walk in `state_ops_fingerprint.rs::fingerprint`. The
+  per-object 8-tuple shape (`printing_name, tapped, summoning_sick,
+  damage, counters, attached_to, controller_id, id`) is unchanged.
+  Consequence: every pinned fingerprint baseline involving
+  `make_synthetic_state` stays bit-equal, because synthetic-state
+  battlefields are built via `make_player` (which doesn't call
+  `reserve_etb_timestamp`) — every object has timestamp 0, the
+  stable-sort tie-breaks on the original p0-then-p1, insertion-order
+  walk, and the emitted sequence matches the pre-CE4 walk byte-for-
+  byte. Real ETB-driven flows produce strictly-monotonic timestamps
+  (each `reserve_etb_timestamp` call bumps the counter), so the sort
+  produces the ETB-interleaved order Python emits.
+
+The xfail-pinned cross-engine smoke test
+`tests/test_parity_smoke.py::test_cross_engine_multi_turn_selector_walks_clean`
+flipped to expected-pass; the companion symptom-pin
+`test_cross_engine_multi_turn_selector_surfaces_ce4_battlefield_ordering`
+was removed alongside the xfail per the closure-pair contract
+(mirrors the CE3 closure pattern). The pre-CE4 test
+`tests_rust/test_snapshot.py::test_battlefield_snapshot_p0_then_p1_ordering`
+that pinned the controller-grouped emission order was renamed and
+inverted to
+`test_battlefield_snapshot_etb_timestamp_ordering`, asserting that
+two `register_and_inject_object` calls into ZONE_BATTLEFIELD emit
+in the order they were called (p1's Bears first, p0's Forest
+second), not in controller-grouped order. All other pinned
+fingerprint baselines stayed bit-equal — full rust gate (1693
+tests) green post-flip.
+
+The matching cross-engine smoke (50 decisions with `multi_turn_selector`
+on `slightly_bigger_deckspec`, seed 42) walks clean across all 50
+steps post-closure. Pre-CE4 the same harness aborted at step 28
+with the `battlefield` field divergence — Python emitting
+Mountain-then-Forest (ETB order), Rust emitting Forest-then-Mountain
+(controller order).
+
+### I26. `battlefield_snapshot` / fingerprint emit in ETB-timestamp monotonic order
+
+Post-CE4 the observable battlefield order is the per-object
+`etb_timestamp` sort key, stable-sort tie-breaking on the original
+p0-then-p1, insertion-order walk. The invariant: two states with
+the same set of bf objects and the same `etb_timestamp` values
+produce identical `battlefield_snapshot` outputs and identical
+fingerprint battlefield slots.
+
+The fingerprint reads ETB order via this sort and does NOT serialize
+`etb_timestamp` into the per-object 8-tuple — so the same gameplay-
+relevant content reached via different ETB histories produces the
+same digest as long as the relative order of the bf objects ends up
+the same. (Two histories that produce different relative bf orders
+do produce different digests; that's the intended sensitivity from
+the CE4 closure.) Synthetic-state baselines all have timestamp 0
+per-object and tie-break to the pre-CE4 walk, so the format is
+backward-compatible with every pre-CE4 pinned digest.
+
+The counter `state.next_etb_timestamp` and the per-object slot
+`etb_timestamp` are both NOT serialized into the fingerprint
+(transient bookkeeping; mirrors the `mulligan_count` /
+`consecutive_passes` precedent).
 
 (Other smoke-flagged divergences may be added by follow-up Phase 5
 slices as the deck pool / decision script grows.)

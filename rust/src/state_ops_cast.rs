@@ -82,7 +82,7 @@
 //! and ``test_play_land_clone_then_play_does_not_affect_original``
 //! are the load-bearing canaries.
 
-use crate::state::{GameObject, GameState, ManaPool, Player};
+use crate::state::{GameObject, GameState, ManaPool};
 use pyo3::exceptions::PyIndexError;
 use pyo3::prelude::*;
 use std::sync::Arc;
@@ -182,19 +182,32 @@ fn pay_mana_cost(pool: &mut ManaPool, cost: &crate::cards::ManaCost) -> bool {
     true
 }
 
-/// Move the GameObject with id `obj_id` out of `player.hand` and
-/// onto `player.battlefield`, stamping its `zone` field to
-/// battlefield. Returns the moved object on success, or `None` if
-/// no object with that id is in hand. Both zone mutations route
-/// through `Arc::make_mut` so the CoW invariant holds.
+/// Move the GameObject with id `obj_id` out of `state.players[idx].hand`
+/// and onto `state.players[idx].battlefield`, stamping its `zone`
+/// field to battlefield. Returns the moved object on success, or
+/// `None` if no object with that id is in hand. Both zone mutations
+/// route through `Arc::make_mut` so the CoW invariant holds.
+///
+/// **CE4 closure**: stamps the freshly-entering permanent's
+/// `etb_timestamp` from `state.next_etb_timestamp` (then bumps the
+/// counter by 1, saturating). This is THE canonical bf-entry helper
+/// for play_land + cast_creature; future helpers that fold spell
+/// resolution into the same primitive should route through here.
 fn move_from_hand_to_battlefield(
-    player: &mut Player,
+    state: &mut GameState,
+    idx: usize,
     obj_id: u32,
 ) -> Option<GameObject> {
-    let pos = player.hand.iter().position(|o| o.id == obj_id)?;
+    let pos = state.players[idx].hand.iter().position(|o| o.id == obj_id)?;
+    // CE4: reserve the timestamp BEFORE the borrow-conflict-prone
+    // mutable zone slices so we never need a second borrow of `state`.
+    let etb_ts = state.next_etb_timestamp;
+    state.next_etb_timestamp = state.next_etb_timestamp.saturating_add(1);
+    let player = &mut state.players[idx];
     let hand = Arc::make_mut(&mut player.hand);
     let mut obj = hand.remove(pos);
     obj.zone = ZONE_BATTLEFIELD;
+    obj.etb_timestamp = etb_ts;
     let snapshot = obj.clone();
     let bf = Arc::make_mut(&mut player.battlefield);
     bf.push(obj);
@@ -265,8 +278,7 @@ impl GameState {
         // `move_from_hand_to_battlefield`; that's fine — the cost is
         // a single second linear scan we already know will hit, and
         // it keeps the helper self-contained.
-        let player = &mut self.players[idx];
-        let moved = move_from_hand_to_battlefield(player, obj_id);
+        let moved = move_from_hand_to_battlefield(self, idx, obj_id);
         Ok(moved.is_some())
     }
 
@@ -310,17 +322,17 @@ impl GameState {
         };
         // Phase 2: try the mana spend on a copy of the pool. If it
         // succeeds, commit; otherwise return false with no mutation.
-        let player = &mut self.players[idx];
-        let mut pool_copy = player.mana_pool;
+        let mut pool_copy = self.players[idx].mana_pool;
         if !pay_mana_cost(&mut pool_copy, &cost) {
             return Ok(false);
         }
-        player.mana_pool = pool_copy;
+        self.players[idx].mana_pool = pool_copy;
         // Phase 3: move the card. Stamp summoning sickness AFTER the
         // push (stamp on the in-place battlefield slot, since
         // `move_from_hand_to_battlefield` returns the snapshot at
         // push time).
-        let _ = move_from_hand_to_battlefield(player, obj_id);
+        let _ = move_from_hand_to_battlefield(self, idx, obj_id);
+        let player = &mut self.players[idx];
         let bf = Arc::make_mut(&mut player.battlefield);
         if let Some(obj) = bf.iter_mut().find(|o| o.id == obj_id) {
             obj.summoning_sick = true;

@@ -169,6 +169,12 @@ impl GameState {
         };
         obj.zone = target_zone;
         obj.controller = target_player;
+        // CE4 closure: ETB-stamp the object only when it's entering
+        // the battlefield. Reserves the timestamp BEFORE the mutable
+        // player borrow below.
+        if target_zone == ZONE_BATTLEFIELD {
+            obj.etb_timestamp = crate::state::reserve_etb_timestamp(self);
+        }
 
         let target = &mut self.players[target_player as usize];
         let dest: &mut Zone = match target_zone {
@@ -264,11 +270,14 @@ impl GameState {
                 "player_id {player_id} out of range (must be 0 or 1)"
             )));
         }
-        let player = &mut self.players[idx];
-        let pos = match player.graveyard.iter().position(|o| o.id == obj_id) {
+        let pos = match self.players[idx].graveyard.iter().position(|o| o.id == obj_id) {
             Some(p) => p,
             None => return Ok(false),
         };
+        // CE4: reserve the timestamp BEFORE the mutable player borrow
+        // so we never need a second borrow of `self`.
+        let etb_ts = crate::state::reserve_etb_timestamp(self);
+        let player = &mut self.players[idx];
         let gy = Arc::make_mut(&mut player.graveyard);
         let mut obj = gy.remove(pos);
         // Per-object state reset (CR 400.7) + the summoning-sickness
@@ -284,6 +293,8 @@ impl GameState {
         // enters unattached.
         obj.attached_to = None;
         obj.exiled_with_source = None;
+        // CE4 closure: stamp ETB timestamp on this reanimation.
+        obj.etb_timestamp = etb_ts;
         Arc::make_mut(&mut player.battlefield).push(obj);
         Ok(true)
     }

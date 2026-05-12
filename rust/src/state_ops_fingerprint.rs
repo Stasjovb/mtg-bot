@@ -65,6 +65,19 @@
 //! * `sort_keys=False`: we never emit JSON objects (only arrays),
 //!   so this is moot for our output.
 //!
+//! ## Battlefield ordering (CE4 closure)
+//!
+//! The battlefield slot is emitted in `etb_timestamp` order via a
+//! stable sort over the union of both players' battlefield Vecs (see
+//! `battlefield_snapshot` in `state_ops_snapshot.rs` for the matching
+//! per-object dict variant). The per-object 8-tuple shape does NOT
+//! include `etb_timestamp` — that field is bookkeeping only, surfaced
+//! through the sort key. Synthetic-state baselines (every bf object
+//! at timestamp 0) keep the pre-CE4 p0-then-p1 walk order via stable
+//! sort ties, so pinned digests remain bit-equal. Real ETB-driven
+//! flows produce strictly-monotonic timestamps and emit in
+//! Python-equivalent append-order.
+//!
 //! ## Cross-engine parity scope
 //!
 //! Full byte-equality between the Rust fingerprint and Python's
@@ -292,20 +305,25 @@ impl GameState {
             player_signature(self, 0),
             player_signature(self, 1),
             // Battlefield is centralized on Python's GameState; on
-            // the Rust side it's split across players. We emit p0's
-            // battlefield then p1's — same shape as
-            // `battlefield_snapshot`. See snapshot module docstring
-            // for the Python interleave-by-ETB-timestamp caveat.
+            // the Rust side it's split across players. CE4 closure:
+            // collect refs from both Vecs, stable-sort by
+            // `etb_timestamp` so the emitted order matches Python's
+            // `state.battlefield` append-order. Synthetic states
+            // (where every bf object has timestamp 0 because
+            // `make_player` doesn't call `reserve_etb_timestamp`)
+            // keep the pre-CE4 p0-then-p1 ordering via stable-sort
+            // ties — pinned baselines stay bit-equal.
             {
-                let mut bf = Vec::with_capacity(
+                let mut refs: Vec<&GameObject> = Vec::with_capacity(
                     self.players[0].battlefield.len() + self.players[1].battlefield.len(),
                 );
                 for player in &self.players {
                     for obj in player.battlefield.iter() {
-                        bf.push(object_signature(self, obj));
+                        refs.push(obj);
                     }
                 }
-                Value::Array(bf)
+                refs.sort_by_key(|o| o.etb_timestamp);
+                Value::Array(refs.iter().map(|o| object_signature(self, o)).collect())
             },
             // Stack: today's StackItem has just (source_obj_id,
             // controller). For fingerprint purposes we emit it in

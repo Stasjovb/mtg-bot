@@ -289,6 +289,16 @@ fn move_source_post_resolve(state: &mut GameState, source_obj_id: u32) -> Option
     if dest_zone == ZONE_BATTLEFIELD && creature {
         obj.summoning_sick = true;
     }
+    // CE4 closure: when this resolution lands the source on the
+    // battlefield (ResolveCreature / ResolveArtifact / Enchantment /
+    // Planeswalker — every permanent-typed source), stamp a fresh
+    // ETB timestamp so it sorts after every previously-ETBed object.
+    // Non-bf destinations (graveyard for instants / sorceries) leave
+    // the field at its prior (likely zero) value — the snapshot /
+    // fingerprint only sort-reads `etb_timestamp` for bf entries.
+    if dest_zone == ZONE_BATTLEFIELD {
+        obj.etb_timestamp = crate::state::reserve_etb_timestamp(state);
+    }
     let player = &mut state.players[controller as usize];
     let dest = match dest_zone {
         ZONE_HAND => &mut player.hand,
@@ -1219,9 +1229,19 @@ fn apply_effect(
             // Push n tokens onto the active player's battlefield via
             // Arc::make_mut so a clone of the state pre-resolve keeps
             // its old battlefield Vec untouched.
+            //
+            // CE4 closure: stamp each token with a fresh
+            // etb_timestamp. Multi-token effects produce strictly-
+            // monotonic timestamps so the snapshot / fingerprint walk
+            // preserves the within-effect creation order while
+            // intermixing correctly with timestamps from prior /
+            // subsequent ETBs.
+            let n_u32 = n as u32; // n is the *count parameter (i32 → usize → u32 safe; count ≥ 0 was validated above)
+            let bf_etb_base = state.next_etb_timestamp;
+            state.next_etb_timestamp = state.next_etb_timestamp.saturating_add(n_u32);
             let bf: &mut Vec<GameObject> =
                 Arc::make_mut(&mut state.players[active as usize].battlefield);
-            for _ in 0..n {
+            for i in 0..n {
                 bf.push(GameObject {
                     id: next_id,
                     printing_id: token_pid,
@@ -1233,6 +1253,7 @@ fn apply_effect(
                     counters: 0,
                     attached_to: None,
                     exiled_with_source: None,
+                    etb_timestamp: bf_etb_base.saturating_add(i as u32),
                     ueot_modifiers: Vec::new(),
                 });
                 next_id += 1;
@@ -1385,6 +1406,9 @@ fn apply_effect(
                     Some(p) => p,
                     None => break, // no more basic lands — stop early silently
                 };
+                // CE4 closure: reserve before the player-mut borrow.
+                let etb_ts = crate::state::reserve_etb_timestamp(state);
+                let active = state.active_player;
                 let player = &mut state.players[controller_idx];
                 let lib = Arc::make_mut(&mut player.library);
                 let mut obj = lib.remove(p);
@@ -1395,11 +1419,12 @@ fn apply_effect(
                 obj.zone = ZONE_BATTLEFIELD;
                 obj.tapped = true;
                 obj.summoning_sick = false;
-                obj.controller = state.active_player;
+                obj.controller = active;
                 obj.damage = 0;
                 obj.counters = 0;
                 obj.attached_to = None;
                 obj.exiled_with_source = None;
+                obj.etb_timestamp = etb_ts;
                 Arc::make_mut(&mut player.battlefield).push(obj);
             }
             // CR 701.19 "always shuffle after search" deliberately
@@ -1938,6 +1963,8 @@ fn apply_effect(
             // graveyard to battlefield; per round-17 conv:
             // summoning_sick=true, tapped=false, damage=0, counters=0,
             // zone=ZONE_BATTLEFIELD.
+            // CE4 closure: reserve ETB timestamp before player-mut borrow.
+            let etb_ts = crate::state::reserve_etb_timestamp(state);
             let graveyard_mut: &mut Vec<GameObject> =
                 Arc::make_mut(&mut state.players[controller_idx].graveyard);
             let pos = graveyard_mut
@@ -1952,6 +1979,7 @@ fn apply_effect(
             obj.counters = 0;
             obj.attached_to = None;
             obj.exiled_with_source = None;
+            obj.etb_timestamp = etb_ts;
             Arc::make_mut(&mut state.players[controller_idx].battlefield).push(obj);
         }
         // Round-26: EachOpponentLosesLife. CR 118.4 — "life loss"
@@ -3569,6 +3597,9 @@ fn apply_effect(
                 }
             }
             let new_id = max_id + 1;
+            // CE4 closure: stamp the fresh-token ETB timestamp.
+            let etb_ts = state.next_etb_timestamp;
+            state.next_etb_timestamp = state.next_etb_timestamp.saturating_add(1);
             let new_obj = GameObject {
                 id: new_id,
                 printing_id,
@@ -3580,6 +3611,7 @@ fn apply_effect(
                 counters: 0,
                 attached_to: None,
                 exiled_with_source: None,
+                etb_timestamp: etb_ts,
                 ueot_modifiers: Vec::new(),
             };
             Arc::make_mut(&mut state.players[cidx].battlefield).push(new_obj);
@@ -4501,9 +4533,16 @@ fn apply_effect(
                     true
                 }
             });
+            // CE4 closure: reserve a contiguous block of timestamps so
+            // each retrieved creature gets a strictly-monotonic ETB
+            // timestamp matching the in-effect resolution order. The
+            // counter is bumped once per moved creature.
+            let bf_etb_base = state.next_etb_timestamp;
+            state.next_etb_timestamp = state.next_etb_timestamp.saturating_add(moved.len() as u32);
             let bf_mut: &mut Vec<GameObject> =
                 Arc::make_mut(&mut state.players[controller_idx].battlefield);
-            for obj in moved {
+            for (i, mut obj) in moved.into_iter().enumerate() {
+                obj.etb_timestamp = bf_etb_base.saturating_add(i as u32);
                 bf_mut.push(obj);
             }
         }
@@ -4910,9 +4949,15 @@ impl GameState {
                     true
                 }
             });
+            // CE4 closure: reserve a contiguous block of timestamps
+            // so each returning permanent gets a strictly-monotonic
+            // ETB timestamp matching the in-loop drain order.
+            let bf_etb_base = self.next_etb_timestamp;
+            self.next_etb_timestamp = self.next_etb_timestamp.saturating_add(popped.len() as u32);
             let bf_mut: &mut Vec<GameObject> =
                 Arc::make_mut(&mut self.players[pidx].battlefield);
-            for obj in popped {
+            for (i, mut obj) in popped.into_iter().enumerate() {
+                obj.etb_timestamp = bf_etb_base.saturating_add(i as u32);
                 bf_mut.push(obj);
                 returned += 1;
             }
@@ -5122,6 +5167,21 @@ impl GameState {
             }
         }
 
+        // CE4 closure: register_and_inject_object stamps a fresh
+        // etb_timestamp only when injecting into ZONE_BATTLEFIELD;
+        // injections into hand / library / graveyard / exile use the
+        // default 0 (the object isn't on the battlefield yet, so its
+        // ordering relative to bf objects is undefined). The stamp
+        // bump is unconditional to keep the call site branch-free —
+        // an unused timestamp leaks no observable state because only
+        // the bf entries are sort-keyed by `etb_timestamp`.
+        let etb_ts = if target_zone == ZONE_BATTLEFIELD {
+            let ts = self.next_etb_timestamp;
+            self.next_etb_timestamp = self.next_etb_timestamp.saturating_add(1);
+            ts
+        } else {
+            0
+        };
         let obj = GameObject {
             id: next_id,
             printing_id,
@@ -5133,6 +5193,7 @@ impl GameState {
             counters: 0,
             attached_to: None,
             exiled_with_source: None,
+            etb_timestamp: etb_ts,
             ueot_modifiers: Vec::new(),
         };
 
