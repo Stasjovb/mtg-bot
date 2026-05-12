@@ -495,10 +495,28 @@ pub enum PendingDecision {
     /// manifested card lands on bf with its ORIGINAL printing
     /// (name/types/P/T visible). Real MTG face-down semantics (CR
     /// 701.34 + 707) are deferred — see SEARCH_LIMITATIONS.md.
+    ///
+    /// **`then_attach_to_source` rider.** When `true`, after routing
+    /// the chosen card to bf the submit dispatcher locates the source
+    /// (by `source_obj_id`) on its controller's bf and stamps
+    /// `source.attached_to = manifested_id`. Mirrors Python's
+    /// `ManifestDreadThenAttachSelf` (Conductive-Machete-family
+    /// Equipment ETB, freq 3). When `false` (default), the dispatcher
+    /// runs the plain manifest-dread routing only — preserves the
+    /// existing `Effect::ManifestDread` behavior bit-for-bit.
+    ///
+    /// **LTB during the decision window.** If the source has left the
+    /// battlefield between resolve-push and submit (e.g. destroyed by
+    /// a separate effect, returned to hand), the attach step is
+    /// SILENT PARTIAL: the manifest still completes, but the attach
+    /// is skipped (no panic, no error). Mirrors Python's
+    /// `next((o for o in state.battlefield if o.id == source_id), None)`
+    /// → `if source is None: return` fallback.
     ManifestDreadChoice {
         source_obj_id: u32,
         controller: u8,
         cards: Vec<GameObject>,
+        then_attach_to_source: bool,
     },
 }
 

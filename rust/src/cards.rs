@@ -1484,6 +1484,61 @@ pub enum Effect {
     /// IfYouDo / ChooseOneMode. Real MTG plumbs the spell controller
     /// through `StackItem.controller`; deferred.
     ManifestDread { count: i32 },
+    /// **Round-29 manifest-then-attach composition.** Mirrors Python's
+    /// `ManifestDreadThenAttachSelf` (`effects/generic/library_lookat.py:510`
+    /// — Conductive-Machete / Killer's-Mask / Cursed-Windbreaker /
+    /// Dissection-Tools Duskmourn Equipment ETB family, freq 3 in
+    /// the EoE-adjacent pool — included via the duskmourn pool the
+    /// coverage script loads). Oracle text: *"When this Equipment
+    /// enters, manifest dread, then attach this Equipment to that
+    /// creature."*
+    ///
+    /// **Composition strategy (Option A).** Stitches the round-28
+    /// `Effect::ManifestDread` substrate with the round-28 attach
+    /// foundation (the `attached_to: Option<u32>` slot on
+    /// `GameObject` + the `attach(aura_id, target_id)` pymethod).
+    /// Adds NO new `PendingDecision` variant — instead extends
+    /// `PendingDecision::ManifestDreadChoice` with a
+    /// `then_attach_to_source: bool` field (`false` for the existing
+    /// `Effect::ManifestDread` arm, `true` for this one). The submit
+    /// dispatcher reads the flag and runs the attach as a follow-up.
+    ///
+    /// **Resolve.** Pop top `min(2, library_len)` cards into a
+    /// `ManifestDreadChoice` with `then_attach_to_source: true`. The
+    /// controller is the SOURCE'S controller (not `state.active_player`):
+    /// this variant is always an Equipment ETB, so the source lives on
+    /// a bf at resolve time and its controller field is authoritative.
+    /// Source NOT on a bf → silent fizzle (no pending pushed). Mirrors
+    /// Python's `if "Equipment" not in source.printing.subtypes: return`
+    /// gate (which fires when there's no Equipment-typed source — same
+    /// observable behavior as "no source on bf").
+    ///
+    /// **Submit + attach.** After the existing manifest-dread routing
+    /// runs (chosen → bf with ETB reset, rest → graveyard), if
+    /// `then_attach_to_source` is true the dispatcher locates the
+    /// source on its controller's bf and stamps
+    /// `source.attached_to = manifested_id`. If the source has LTB
+    /// during the decision window (destroyed / returned to hand /
+    /// bounced), the attach step is a silent partial — the manifest
+    /// completes but the attach is skipped. Mirrors Python's
+    /// `if manifested is None: return` and the implicit "Equipment
+    /// gone" fall-through.
+    ///
+    /// **Empty / 1-card library partials.** Same as `ManifestDread`:
+    /// empty library → pending with empty cards → drain as O(1) no-op
+    /// (no manifest, no attach). 1-card library → manifest the lone
+    /// card; if `then_attach_to_source` is true, attach to it.
+    ///
+    /// **First-slice scope.** `count = 1` ONLY (no Python printing of
+    /// this class emits other values; the count field is reserved for
+    /// schema parity with `ManifestDread`). Count != 1 raises with
+    /// the same "deferred — see SEARCH_LIMITATIONS.md" message as
+    /// the `Effect::ManifestDread` arm.
+    ///
+    /// **Schema.** Identical to `ManifestDread`: `count: i32` only,
+    /// defaults to 1, parse-accepts any non-negative integer for
+    /// forward-compat round-trip.
+    ManifestDreadThenAttachSelf { count: i32 },
     /// **Round-29 coverage extension.** Intervening-if effect keyed
     /// on the EoE "Void" condition. At resolve time, if Void is
     /// active (a nonland permanent left the battlefield this turn
@@ -2278,6 +2333,27 @@ fn parse_effect(dict: &Bound<'_, PyDict>) -> PyResult<Effect> {
             }
             Ok(Effect::ManifestDread { count })
         }
+        "manifest_dread_then_attach_self" => {
+            // Round-29 ManifestDreadThenAttachSelf composition.
+            // Schema mirrors `manifest_dread` exactly: optional `count`
+            // field defaulting to 1, non-negative required. The
+            // resolve arm gates count != 1 to deferred at the same
+            // place as `Effect::ManifestDread`.
+            let count: i32 = match dict.get_item("count")? {
+                Some(c) => c.extract().map_err(|e| {
+                    PyValueError::new_err(format!(
+                        "manifest_dread_then_attach_self.count must be an integer (got: {e})"
+                    ))
+                })?,
+                None => 1,
+            };
+            if count < 0 {
+                return Err(PyValueError::new_err(format!(
+                    "manifest_dread_then_attach_self: count must be non-negative, got {count}"
+                )));
+            }
+            Ok(Effect::ManifestDreadThenAttachSelf { count })
+        }
         "set_base_pt_until_eot" => {
             // Required `power` and `toughness` integer fields. No
             // defaults — every Python card emission spells both out.
@@ -2704,7 +2780,7 @@ fn parse_effect(dict: &Bound<'_, PyDict>) -> PyResult<Effect> {
             Ok(Effect::Sequence { effects: children })
         }
         other => Err(PyValueError::new_err(format!(
-            "unknown effect kind {other:?}; valid: deal_damage, draw_cards, gain_life, return_to_hand, mill, mill_target_player, exile_target, tap_target, untap_target, sacrifice, add_counters, discard_card, scry_n, destroy_target, damage_each_opponent, damage_each_creature, create_token, add_mana_to_pool, search_library_for_basic_land_tapped, put_plus_one_counter_on_self, surveil, counter_target_spell, return_creature_from_your_graveyard_to_battlefield, discard_self, each_opponent_loses_life, lose_life, target_opponent_loses_life, each_opponent_discards, destroy_all_creatures, destroy_target_nonland_permanent, destroy_target_artifact, destroy_target_land, deal_damage_any_target, pump_self_until_eot, pump_target_creature_until_eot, sequence, pump_creatures_you_control_until_eot, return_creature_from_your_graveyard_to_hand, put_plus_one_counter_on_each_creature_you_control, put_plus_one_counter_on_creature_you_control, add_n_mana_of_chosen_color, search_library_for_card, pump_creatures_opponents_control_until_eot, put_card_from_graveyard_on_bottom_of_library, move_self_counters_to_target_creature_you_control, deal_damage_equal_to_source_power_any_target, tap_target_artifact_or_creature, conditional_on_tapped_creatures, put_plus_one_counter_on_each_of_up_to_n_target_creatures, put_charge_counters_on_self, create_token_copy_of_target_creature_you_control, optional_sac_artifact_for_effect, owner_puts_target_artifact_or_creature_on_top_or_bottom_of_library, attach_to_target_creature_you_control, destroy_enchanted_permanent, tap_enchanted_permanent, exile_target_creature_until_source_leaves, exile_opponents_nonland_permanent_until_leaves, may_do, look_top_n_put_one_in_hand_rest_to_graveyard, choose_one_mode, if_you_do, each_opponent_mills_cards, pump_target_artifact_or_creature_until_eot, each_opponent_sacrifices_creature, grant_keyword_to_target_creature_until_eot, untap_target_other_permanent, tap_another_target_creature, return_all_creatures_from_your_graveyard_to_battlefield, set_base_pt_until_eot, manifest_dread, conditional_if_void, deal_damage_to_opponent_creature"
+            "unknown effect kind {other:?}; valid: deal_damage, draw_cards, gain_life, return_to_hand, mill, mill_target_player, exile_target, tap_target, untap_target, sacrifice, add_counters, discard_card, scry_n, destroy_target, damage_each_opponent, damage_each_creature, create_token, add_mana_to_pool, search_library_for_basic_land_tapped, put_plus_one_counter_on_self, surveil, counter_target_spell, return_creature_from_your_graveyard_to_battlefield, discard_self, each_opponent_loses_life, lose_life, target_opponent_loses_life, each_opponent_discards, destroy_all_creatures, destroy_target_nonland_permanent, destroy_target_artifact, destroy_target_land, deal_damage_any_target, pump_self_until_eot, pump_target_creature_until_eot, sequence, pump_creatures_you_control_until_eot, return_creature_from_your_graveyard_to_hand, put_plus_one_counter_on_each_creature_you_control, put_plus_one_counter_on_creature_you_control, add_n_mana_of_chosen_color, search_library_for_card, pump_creatures_opponents_control_until_eot, put_card_from_graveyard_on_bottom_of_library, move_self_counters_to_target_creature_you_control, deal_damage_equal_to_source_power_any_target, tap_target_artifact_or_creature, conditional_on_tapped_creatures, put_plus_one_counter_on_each_of_up_to_n_target_creatures, put_charge_counters_on_self, create_token_copy_of_target_creature_you_control, optional_sac_artifact_for_effect, owner_puts_target_artifact_or_creature_on_top_or_bottom_of_library, attach_to_target_creature_you_control, destroy_enchanted_permanent, tap_enchanted_permanent, exile_target_creature_until_source_leaves, exile_opponents_nonland_permanent_until_leaves, may_do, look_top_n_put_one_in_hand_rest_to_graveyard, choose_one_mode, if_you_do, each_opponent_mills_cards, pump_target_artifact_or_creature_until_eot, each_opponent_sacrifices_creature, grant_keyword_to_target_creature_until_eot, untap_target_other_permanent, tap_another_target_creature, return_all_creatures_from_your_graveyard_to_battlefield, set_base_pt_until_eot, manifest_dread, manifest_dread_then_attach_self, conditional_if_void, deal_damage_to_opponent_creature"
         ))),
     }
 }
@@ -3171,6 +3247,10 @@ pub(crate) fn effect_to_pydict<'py>(
         }
         Effect::ManifestDread { count } => {
             d.set_item("kind", "manifest_dread")?;
+            d.set_item("count", *count)?;
+        }
+        Effect::ManifestDreadThenAttachSelf { count } => {
+            d.set_item("kind", "manifest_dread_then_attach_self")?;
             d.set_item("count", *count)?;
         }
         Effect::ConditionalIfVoid { then_effect, else_effect } => {

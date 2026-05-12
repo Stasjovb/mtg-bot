@@ -179,18 +179,27 @@ pub(crate) fn auto_resolve_pending(
                 }
             }
             PendingDecision::ManifestDreadChoice {
-                controller, cards, ..
+                source_obj_id,
+                controller,
+                cards,
+                then_attach_to_source,
             } => {
                 // "default" / "manifest_top" → pick cards[0] (the
                 // topmost popped — matches Python's no-agent-seated
                 // fallback in ManifestDread.resolve, `manifest_id =
                 // options[0]`). Other strategies fall through to the
                 // same default for robustness.
+                //
+                // `then_attach_to_source` rider (round-29): after the
+                // manifest routing, if true, stamp source.attached_to
+                // = manifested_id. Silent partial if source LTB'd.
                 resolve_manifest_dread_to_battlefield(
                     state,
+                    source_obj_id,
                     controller,
                     cards,
                     /*chosen_idx*/ 0,
+                    then_attach_to_source,
                 )?;
             }
         }
@@ -253,21 +262,37 @@ fn resolve_pick_card_to_hand(
 /// placeholder-printing approach — both deferred. See
 /// SEARCH_LIMITATIONS.md.
 ///
+/// **`then_attach_to_source` rider (round-29 ManifestDreadThenAttachSelf).**
+/// After the manifest routing completes, if `then_attach_to_source`
+/// is `true`, locate `source_obj_id` on its controller's battlefield
+/// and stamp `source.attached_to = manifested_id`. If the source has
+/// LTB'd between resolve-push and this submit (destroyed, returned to
+/// hand, etc.), the attach step is a silent partial — manifest stays
+/// applied, attach skipped. Mirrors Python's `manifested is None`
+/// fall-through and the implicit "Equipment gone" path.
+///
 /// Out-of-range `chosen_idx` or an empty cards Vec returns Ok(()) —
 /// the empty case is the legitimate library-exhausted no-op path.
+/// (When `then_attach_to_source` is true and the cards Vec is empty,
+/// no manifested permanent exists so the attach step is naturally
+/// skipped.)
 fn resolve_manifest_dread_to_battlefield(
     state: &mut GameState,
+    source_obj_id: u32,
     controller: u8,
     cards: Vec<GameObject>,
     chosen_idx: usize,
+    then_attach_to_source: bool,
 ) -> PyResult<()> {
     if chosen_idx >= cards.len() {
-        // Empty cards Vec (library was empty) → no-op success.
+        // Empty cards Vec (library was empty) → no-op success. No
+        // manifested permanent → attach step is naturally a no-op.
         return Ok(());
     }
     let pidx = controller as usize;
     let mut sorted_cards = cards;
     let chosen = sorted_cards.remove(chosen_idx);
+    let manifested_id = chosen.id;
     // Route chosen to bf with the standard ETB state reset (mirrors
     // ReturnAllCreaturesFromYourGraveyardToBattlefield's reset).
     {
@@ -292,6 +317,32 @@ fn resolve_manifest_dread_to_battlefield(
             obj.zone = 3; // ZONE_GRAVEYARD
             gy_mut.push(obj);
         }
+    }
+    // Round-29 ManifestDreadThenAttachSelf attach follow-up. Locate
+    // source on ANY player's bf (the Equipment's controller may have
+    // changed in pathological cases; common-case is `controller`).
+    // Silent partial if source has LTB'd — mirrors Python's
+    // `manifested is None: return` and the implicit "Equipment off
+    // bf" fall-through.
+    if then_attach_to_source {
+        let mut src_player_idx: Option<usize> = None;
+        for (pidx, player) in state.players.iter().enumerate() {
+            if player.battlefield.iter().any(|o| o.id == source_obj_id) {
+                src_player_idx = Some(pidx);
+                break;
+            }
+        }
+        if let Some(spidx) = src_player_idx {
+            let bf_mut: &mut Vec<GameObject> =
+                Arc::make_mut(&mut state.players[spidx].battlefield);
+            for obj in bf_mut.iter_mut() {
+                if obj.id == source_obj_id {
+                    obj.attached_to = Some(manifested_id);
+                    break;
+                }
+            }
+        }
+        // else: source LTB'd → silent partial (manifest already done).
     }
     Ok(())
 }
@@ -442,12 +493,14 @@ impl GameState {
                     source_obj_id,
                     controller,
                     cards,
+                    then_attach_to_source,
                 } => {
                     d.set_item("kind", "ManifestDreadChoice")?;
                     d.set_item("source_obj_id", *source_obj_id)?;
                     d.set_item("controller", *controller)?;
                     let card_ids: Vec<u32> = cards.iter().map(|o| o.id).collect();
                     d.set_item("cards", card_ids)?;
+                    d.set_item("then_attach_to_source", *then_attach_to_source)?;
                 }
             }
             out.append(d)?;
@@ -848,13 +901,23 @@ impl GameState {
         };
         // Validation passed — consume the head and route.
         let decision = self.pending_decisions.remove(0);
-        let (controller, cards) = match decision {
+        let (source_obj_id, controller, cards, then_attach_to_source) = match decision {
             PendingDecision::ManifestDreadChoice {
-                controller, cards, ..
-            } => (controller, cards),
+                source_obj_id,
+                controller,
+                cards,
+                then_attach_to_source,
+            } => (source_obj_id, controller, cards, then_attach_to_source),
             _ => unreachable!("validated above"),
         };
-        resolve_manifest_dread_to_battlefield(self, controller, cards, chosen_idx)
+        resolve_manifest_dread_to_battlefield(
+            self,
+            source_obj_id,
+            controller,
+            cards,
+            chosen_idx,
+            then_attach_to_source,
+        )
     }
 
     /// Drain the pending-decisions queue using a deterministic

@@ -6,9 +6,9 @@ This page is the rolling-progress snapshot for the Rust engine port's `Effect` e
 
 ## Headline numbers
 
-- **68 of 228 Python Effect classes covered (29.8%)** — by distinct-class count.
-- **498 of 690 per-card emissions covered (72.2%)** — weighted by how many cards each class appears on. This is the more load-bearing metric: high-frequency classes pull the bulk of cards into Rust even at low class-count coverage.
-- **74 Rust `Effect` variants** in `rust/src/cards.rs` today; 475 parser-claimed printings across the loaded pools.
+- **69 of 228 Python Effect classes covered (30.3%)** — by distinct-class count.
+- **501 of 690 per-card emissions covered (72.6%)** — weighted by how many cards each class appears on. This is the more load-bearing metric: high-frequency classes pull the bulk of cards into Rust even at low class-count coverage.
+- **75 Rust `Effect` variants** in `rust/src/cards.rs` today; 475 parser-claimed printings across the loaded pools.
 - **WARNING: 3 Rust variant(s) with no Python counterpart**: `Effect::ChooseOneMode` -> `ChooseOneMode`, `Effect::GrantKeywordToTargetCreatureUntilEOT` -> `GrantKeywordToTargetCreatureUntilEOT`, `Effect::SetBasePTUntilEOT` -> `SetBasePTUntilEOT`. This indicates bridge drift — either Python emits the class under a different name, or the Rust variant is unused. Audit `RUST_TO_PYTHON_OVERRIDES` / `RUST_AHEAD_OF_POOL` in `scripts/measure_effect_coverage.py`.
 - **1 Rust variant(s) built ahead of the pool** (allowlisted in `RUST_AHEAD_OF_POOL`): `ScryN`. These have no pool card exercising them today and are NOT counted as orphans.
 
@@ -39,7 +39,7 @@ Python Effect classes are split by how many cards they appear on. The Rust port 
 
 ### Frequency 2-9 (53 classes)
 
-- Covered by Rust: **47 / 53** (88.7%)
+- Covered by Rust: **48 / 53** (90.6%)
 
 ### Frequency 1 (161 singletons)
 
@@ -122,8 +122,9 @@ Python Effect classes are split by how many cards they appear on. The Rust port 
 | 70 | `Effect::ReturnAllCreaturesFromYourGraveyardToBattlefield` | `ReturnAllCreaturesFromYourGraveyardToBattlefield` | 1 |
 | 71 | `Effect::SetBasePTUntilEOT` | `SetBasePTUntilEOT` | 0 |
 | 72 | `Effect::ManifestDread` | `ManifestDread` | 10 |
-| 73 | `Effect::ConditionalIfVoid` | `ConditionalIfVoid` | 4 |
-| 74 | `Effect::DealDamageToOpponentCreature` | `DealDamageToOpponentCreature` | 2 |
+| 73 | `Effect::ManifestDreadThenAttachSelf` | `ManifestDreadThenAttachSelf` | 3 |
+| 74 | `Effect::ConditionalIfVoid` | `ConditionalIfVoid` | 4 |
+| 75 | `Effect::DealDamageToOpponentCreature` | `DealDamageToOpponentCreature` | 2 |
 
 ## High-frequency Python classes NOT yet in Rust
 
