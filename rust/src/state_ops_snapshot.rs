@@ -35,16 +35,16 @@
 //! - `zone: int` (the u8 zone constant — `ZONE_HAND` / `ZONE_LIBRARY`
 //!   / `ZONE_BATTLEFIELD` / `ZONE_GRAVEYARD` / `ZONE_EXILE`).
 //!
-//! **Battlefield ordering caveat.** `battlefield_snapshot` returns
-//! player 0's battlefield in zone-insertion order followed by player
-//! 1's battlefield in zone-insertion order. Python's
-//! `state.battlefield` is centralized on `GameState` and ordered by
-//! ETB timestamp across both players, so Rust's by-player split won't
-//! match Python's interleaved ordering whenever a p1 permanent ETB'd
-//! between two p0 permanents (or vice versa). Phase 5 work is to
-//! align Rust's iteration order with Python's centralized
-//! ETB-timestamp order; the parity harness's first divergence will
-//! surface this naturally.
+//! **Battlefield ordering (CE4 closure).** `battlefield_snapshot`
+//! collects every bf object from both players and emits them in
+//! ascending `etb_timestamp` order — matching Python's centralized
+//! `state.battlefield` append-order. Stable-sort ties preserve the
+//! p0-then-p1 traversal so synthetic-state baselines (which never
+//! call `reserve_etb_timestamp` and so leave every object at
+//! timestamp 0) stay bit-equal to the pre-CE4 snapshot. Real
+//! ETB-driven flows produce strictly-monotonic timestamps (every
+//! `reserve_etb_timestamp` bumps the counter), so the sort produces
+//! the ETB-interleaved order Python emits.
 
 use crate::state::GameState;
 use pyo3::exceptions::PyIndexError;
@@ -163,29 +163,55 @@ impl GameState {
     }
 
     /// Snapshot of BOTH players' battlefields combined into a single
-    /// flat list. Order: player 0's battlefield in zone-insertion
-    /// order, then player 1's battlefield in zone-insertion order.
+    /// flat list, ordered by per-object `etb_timestamp` (matching
+    /// Python's centralized `state.battlefield` append-order).
     ///
-    /// **Phase 5: align battlefield iteration order with Python's
-    /// centralized ETB-timestamp order.** Python's
-    /// `state.battlefield` is one centralized list ordered by ETB
-    /// timestamp across both players; this Rust by-player-split
-    /// projection diverges whenever the two players' ETB events
-    /// interleave. The parity harness will surface this naturally
-    /// the first time a p1 permanent ETBs between two p0
-    /// permanents — at that point Phase 5 reorders Rust's
-    /// emission (or refactors the underlying Rust battlefield
-    /// representation) to match Python.
+    /// **CE4 closure (this slice).** Pre-CE4 this getter flat-emitted
+    /// `players[0].battlefield` followed by `players[1].battlefield`
+    /// — controller-grouped order. Python's `state.battlefield` is
+    /// one centralized list populated by `state.battlefield.append(card)`
+    /// at every ETB site, so its iteration order is monotone in ETB
+    /// timestamp. The first observable divergence surfaced on Phase 5
+    /// multi-turn smoke when both players had a permanent on the
+    /// battlefield (step 28 of the slightly_bigger_deckspec run).
+    ///
+    /// Post-CE4: we collect refs from both per-player Vecs, then
+    /// **stable-sort by `etb_timestamp`** before emitting. The
+    /// stable-sort matters for the synthetic-state path: `make_player`
+    /// pre-populates each player's battlefield without going through
+    /// a `reserve_etb_timestamp` call, so every synthetic-state bf
+    /// object has timestamp 0; stable-sort preserves the
+    /// p0-then-p1 walk order in that case, keeping pre-CE4 pinned
+    /// snapshot baselines bit-equal. Real ETB-driven flows produce
+    /// strictly-monotonic timestamps (each `reserve_etb_timestamp`
+    /// call bumps the counter), so the sort produces the
+    /// ETB-interleaved order Python emits.
     fn battlefield_snapshot<'py>(
         &self,
         py: Python<'py>,
     ) -> PyResult<Vec<Bound<'py, PyDict>>> {
-        let mut out: Vec<Bound<'py, PyDict>> =
-            Vec::with_capacity(self.players[0].battlefield.len() + self.players[1].battlefield.len());
+        // Collect by-reference into a single Vec, sort by
+        // (etb_timestamp), then project to per-object dicts in the
+        // sorted order. Allocating refs first lets us avoid building
+        // the heavier PyDict structures for objects we'd just throw
+        // away if the sort moved them — but every entry will be
+        // emitted regardless, so the sort allocation is one-shot.
+        let mut refs: Vec<&crate::state::GameObject> = Vec::with_capacity(
+            self.players[0].battlefield.len() + self.players[1].battlefield.len(),
+        );
         for player in &self.players {
             for obj in player.battlefield.iter() {
-                out.push(object_to_pydict(py, self, obj)?);
+                refs.push(obj);
             }
+        }
+        // Stable sort: ties (same `etb_timestamp` — e.g. synthetic
+        // states with default-0 timestamps) preserve the
+        // p0-then-p1, insertion-order traversal so pre-CE4 baselines
+        // stay bit-equal.
+        refs.sort_by_key(|obj| obj.etb_timestamp);
+        let mut out: Vec<Bound<'py, PyDict>> = Vec::with_capacity(refs.len());
+        for obj in refs {
+            out.push(object_to_pydict(py, self, obj)?);
         }
         Ok(out)
     }

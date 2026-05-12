@@ -119,6 +119,9 @@ impl GameState {
                 counters: 0,
                 attached_to: None,
                 exiled_with_source: None,
+                // CE4 closure: deck-loaded library cards never start
+                // on battlefield; default 0 is correct.
+                etb_timestamp: 0,
                 ueot_modifiers: Vec::new(),
             });
             next_id += 1;
