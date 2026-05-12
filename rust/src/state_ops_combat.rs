@@ -279,9 +279,20 @@ fn battlefield_creature_power(state: &GameState, obj_id: u32) -> i16 {
     // Round-28 CR 613.4 layer 7b: a UEOT SetBasePT override replaces
     // the printed base. Last-applied wins. Layer 7c additive bonuses
     // (PowerToughnessBonus) still stack on top.
+    //
+    // Round-28 manland animation: a UEOT BecomesLandCreature ALSO
+    // overrides the base P/T (the land's "creature half" has base
+    // power and toughness as specified by the activated ability —
+    // e.g. Blinkmoth Nexus's 1/1, Lavaclaw Reaches's 2/2). Same
+    // last-applied wins shape as SetBasePT. SetBasePT takes
+    // precedence when both are present (e.g. a Genemorph-Imago-style
+    // SetBasePT cast on an already-animated land); this mirrors the
+    // intuition that an explicit "has base P/T N/N" override is more
+    // specific than the manland's intrinsic creature-half P/T.
     let base = obj
         .and_then(|o| o.ueot_base_pt_override())
         .map(|(p, _)| p)
+        .or_else(|| obj.and_then(|o| o.ueot_becomes_land_creature_pt()).map(|(p, _)| p))
         .unwrap_or(printed_base);
     let bonus = obj.map(|o| o.ueot_power_bonus()).unwrap_or(0);
     let effective = base + bonus;
@@ -364,10 +375,13 @@ fn battlefield_creature_toughness(state: &GameState, obj_id: u32) -> i16 {
         .find(|o| o.id == obj_id);
     // Round-28 CR 613.4 layer 7b: SetBasePT overrides the printed
     // base. Last-applied wins. Layer 7c additive bonuses stack on
-    // top.
+    // top. Round-28 manland animation also overrides the printed
+    // base; SetBasePT takes precedence when both are present (same
+    // semantics as battlefield_creature_power above).
     let base = obj
         .and_then(|o| o.ueot_base_pt_override())
         .map(|(_, t)| t)
+        .or_else(|| obj.and_then(|o| o.ueot_becomes_land_creature_pt()).map(|(_, t)| t))
         .unwrap_or(printed_base);
     let ueot_bonus = obj.map(|o| o.ueot_toughness_bonus()).unwrap_or(0);
     let effective = base + ueot_bonus;
@@ -503,9 +517,24 @@ impl GameState {
         if locate_battlefield_obj(self, obj_id).is_none() {
             return None;
         }
-        let (_, printing_id) = locate_battlefield_obj(self, obj_id)?;
+        let (player_idx, printing_id) = locate_battlefield_obj(self, obj_id)?;
         let printing = self.registry.lookup(printing_id)?;
-        printing.power?; // creature predicate
+        // Creature predicate is satisfied either by a printed-power
+        // value OR by a UEOT BecomesLandCreature modifier on the
+        // object (round-28 manland animation — the land has no
+        // printed power, but its activated ability has flipped it to
+        // a creature with base P/T from the modifier).
+        if printing.power.is_none() {
+            let is_animated = self.players[player_idx]
+                .battlefield
+                .iter()
+                .find(|o| o.id == obj_id)
+                .map(|o| o.ueot_is_creature_via_become())
+                .unwrap_or(false);
+            if !is_animated {
+                return None;
+            }
+        }
         Some(battlefield_creature_power(self, obj_id))
     }
 
@@ -526,9 +555,22 @@ impl GameState {
     /// SBA-side `is_lethal` predicate DOES fold counters in; use
     /// that for the lethal-damage view.
     fn effective_toughness(&self, obj_id: u32) -> Option<i16> {
-        let (_, printing_id) = locate_battlefield_obj(self, obj_id)?;
+        let (player_idx, printing_id) = locate_battlefield_obj(self, obj_id)?;
         let printing = self.registry.lookup(printing_id)?;
-        printing.toughness?; // creature predicate
+        // Same creature-predicate widening as `effective_power`:
+        // a UEOT BecomesLandCreature modifier flips a printing-side
+        // non-creature into an effective creature for the duration.
+        if printing.toughness.is_none() {
+            let is_animated = self.players[player_idx]
+                .battlefield
+                .iter()
+                .find(|o| o.id == obj_id)
+                .map(|o| o.ueot_is_creature_via_become())
+                .unwrap_or(false);
+            if !is_animated {
+                return None;
+            }
+        }
         Some(battlefield_creature_toughness(self, obj_id))
     }
 

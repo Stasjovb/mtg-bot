@@ -1623,6 +1623,51 @@ pub enum Effect {
         max_power: i32,
         counter_on_miss: bool,
     },
+    /// **Round 28 manland animation (CR 613.4 + 613.6 + 613.7b).**
+    /// Source land becomes a `power/toughness` creature until end of
+    /// turn, optionally gaining a subtype (e.g., "Blinkmoth",
+    /// "Elemental"). Mirrors Python's `BecomeLandCreatureUEOT(power,
+    /// toughness, granted_subtype, ...)` (13 cards in the EoE pool —
+    /// Blinkmoth Nexus / Lavaclaw Reaches / Wandering Fumarole
+    /// manland-animate activated abilities).
+    ///
+    /// **"Self" semantics — manland animation always targets the
+    /// activator's own land.** The recipient is the source GameObject
+    /// itself (the activated-ability source). Same shape as
+    /// `PumpSelfUntilEOT`. If the source has left the battlefield
+    /// between activation and resolve, the effect is a silent no-op.
+    ///
+    /// **The land stays a land.** Per CR 305.3, an animated land is
+    /// BOTH a land and a creature for the duration. The `card_types`
+    /// of the printing remains unchanged (still contains "Land"); the
+    /// `BecomesLandCreature` modifier conceptually adds "Creature" to
+    /// the effective type set. Effective-P/T readers
+    /// (`battlefield_creature_power` / `_toughness`,
+    /// `effective_power` / `effective_toughness`) honor the modifier:
+    /// when present, they treat the object as a creature with base
+    /// `power`/`toughness` (layer 7b override). Layer 7c additive
+    /// bonuses (`PowerToughnessBonus`) still stack on top.
+    ///
+    /// **Mechanism.** Pushes a `UeotModifier::BecomesLandCreature {
+    /// power, toughness, color_or_subtype }` entry onto the source's
+    /// `ueot_modifiers` Vec. Auto-expires at the next CR 514.3
+    /// UEOT-clear pass (cleanup step), reverting the land to its
+    /// non-creature state.
+    ///
+    /// **Schema simplification vs Python.** Python's
+    /// `BecomeLandCreatureUEOT` carries `granted_keywords`,
+    /// `unblockable`, `granted_activated_abilities`, and
+    /// `granted_triggered_abilities`. The Rust first slice carries
+    /// only `power`, `toughness`, and optional `granted_subtype` —
+    /// the keyword / unblockable / granted-ability riders compose
+    /// via separate effect chains or wait for follow-up slices.
+    /// `(0, 0)` with no subtype is a legal no-op for parity edge
+    /// cases.
+    BecomeLandCreatureUEOT {
+        power: i32,
+        toughness: i32,
+        granted_subtype: Option<String>,
+    },
 }
 
 #[derive(Clone, Debug)]
@@ -2361,6 +2406,63 @@ fn parse_effect(dict: &Bound<'_, PyDict>) -> PyResult<Effect> {
                     ))
                 })?;
             Ok(Effect::SetBasePTUntilEOT { power, toughness })
+        }
+        "become_land_creature_ueot" => {
+            // Round-28 manland animation. Required `power` and
+            // `toughness` integer fields — every Python emission of
+            // BecomeLandCreatureUEOT spells both out. Optional
+            // `granted_subtype` is `None` when absent (matches
+            // Python's `granted_subtype: str | None = None` default).
+            // Negative power/toughness are accepted (no guard) — the
+            // Python dataclass has no raise-on-negative either, and
+            // a debuff-shaped manland would still register cleanly.
+            let power: i32 = dict
+                .get_item("power")?
+                .ok_or_else(|| {
+                    PyValueError::new_err(
+                        "become_land_creature_ueot: missing required 'power' field",
+                    )
+                })?
+                .extract()
+                .map_err(|e| {
+                    PyValueError::new_err(format!(
+                        "become_land_creature_ueot.power must be an integer (got: {e})"
+                    ))
+                })?;
+            let toughness: i32 = dict
+                .get_item("toughness")?
+                .ok_or_else(|| {
+                    PyValueError::new_err(
+                        "become_land_creature_ueot: missing required 'toughness' field",
+                    )
+                })?
+                .extract()
+                .map_err(|e| {
+                    PyValueError::new_err(format!(
+                        "become_land_creature_ueot.toughness must be an integer (got: {e})"
+                    ))
+                })?;
+            let granted_subtype: Option<String> = match dict.get_item("granted_subtype")? {
+                Some(v) if v.is_none() => None,
+                Some(v) => {
+                    let s: String = v.extract().map_err(|e| {
+                        PyValueError::new_err(format!(
+                            "become_land_creature_ueot.granted_subtype must be a string or None (got: {e})"
+                        ))
+                    })?;
+                    if s.is_empty() {
+                        None
+                    } else {
+                        Some(s)
+                    }
+                }
+                None => None,
+            };
+            Ok(Effect::BecomeLandCreatureUEOT {
+                power,
+                toughness,
+                granted_subtype,
+            })
         }
         "grant_keyword_to_target_creature_until_eot" => {
             // Required `keyword` field: non-empty lowercase string.
@@ -3324,6 +3426,21 @@ pub(crate) fn effect_to_pydict<'py>(
             d.set_item("filter_name", filter_name.as_str())?;
             d.set_item("max_power", *max_power)?;
             d.set_item("counter_on_miss", *counter_on_miss)?;
+        }
+        Effect::BecomeLandCreatureUEOT {
+            power,
+            toughness,
+            granted_subtype,
+        } => {
+            d.set_item("kind", "become_land_creature_ueot")?;
+            d.set_item("power", *power)?;
+            d.set_item("toughness", *toughness)?;
+            // Emit `granted_subtype` as the string when set, None
+            // otherwise — round-trip preserves the optionality.
+            match granted_subtype {
+                Some(s) => d.set_item("granted_subtype", s.as_str())?,
+                None => d.set_item("granted_subtype", py.None())?,
+            }
         }
         Effect::Sequence { effects } => {
             d.set_item("kind", "sequence")?;

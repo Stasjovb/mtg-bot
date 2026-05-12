@@ -208,6 +208,37 @@ impl GameObject {
         last
     }
 
+    /// **Round-28 manland animation (CR 613.4 + 613.7b).** If any
+    /// `UeotModifier::BecomesLandCreature` is on this object, return
+    /// the `(power, toughness)` of the LAST one in the Vec (most-
+    /// recent push wins; mirrors CR layer-7 last-applied semantics).
+    /// Otherwise return `None`.
+    ///
+    /// Used by effective-P/T readers to detect "this land is a
+    /// creature RIGHT NOW with base P/T (p, t)". The land also stays
+    /// a land for the duration (CR 305.3), but the type-union piece is
+    /// handled at the type-set reader level, not on this method.
+    pub fn ueot_becomes_land_creature_pt(&self) -> Option<(i32, i32)> {
+        let mut last: Option<(i32, i32)> = None;
+        for m in &self.ueot_modifiers {
+            if let UeotModifier::BecomesLandCreature { power, toughness, .. } = m {
+                last = Some((*power, *toughness));
+            }
+        }
+        last
+    }
+
+    /// True iff some `UeotModifier::BecomesLandCreature` is on this
+    /// object — the "this permanent is a creature RIGHT NOW even if
+    /// its printing has no printed power" gate. Used by effective-P/T
+    /// readers and the effective-creature-type predicate to fold the
+    /// manland-animate window into combat-relevant queries.
+    pub fn ueot_is_creature_via_become(&self) -> bool {
+        self.ueot_modifiers
+            .iter()
+            .any(|m| matches!(m, UeotModifier::BecomesLandCreature { .. }))
+    }
+
     /// True iff some `UeotModifier::GrantKeyword` on this object
     /// carries `keyword` (case-sensitive lowercase match — the
     /// printing-side keyword vocab is already lowercased in

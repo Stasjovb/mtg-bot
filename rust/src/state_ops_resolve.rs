@@ -4349,6 +4349,49 @@ fn apply_effect(
                 },
             );
         }
+        // Round-28 BecomeLandCreatureUEOT (Blinkmoth Nexus / Lavaclaw
+        // Reaches / Wandering Fumarole family, 13 EoE cards). CR 305.3
+        // — animated land is BOTH a land and a creature UEOT. Same
+        // "self" semantics as PumpSelfUntilEOT: the recipient is the
+        // source GameObject (the activated-ability source on the
+        // battlefield). If the source has left the battlefield between
+        // activation and resolve, silent no-op. Pushes a
+        // `UeotModifier::BecomesLandCreature` onto the source's
+        // `ueot_modifiers`; effective-P/T readers honor the modifier
+        // when present (base P/T from the modifier, layer 7c additive
+        // bonuses stack on top). The modifier auto-expires at the next
+        // cleanup step via the r27 CR 514.3 UEOT-clear pass, reverting
+        // the land to its non-creature state.
+        Effect::BecomeLandCreatureUEOT {
+            power,
+            toughness,
+            granted_subtype,
+        } => {
+            // Walk both battlefields to find the source object.
+            for pidx in 0..state.players.len() {
+                if state.players[pidx]
+                    .battlefield
+                    .iter()
+                    .any(|o| o.id == source_obj_id)
+                {
+                    let zone: &mut Vec<GameObject> =
+                        Arc::make_mut(&mut state.players[pidx].battlefield);
+                    for obj in zone.iter_mut() {
+                        if obj.id == source_obj_id {
+                            obj.ueot_modifiers.push(UeotModifier::BecomesLandCreature {
+                                power: *power,
+                                toughness: *toughness,
+                                color_or_subtype: granted_subtype
+                                    .clone()
+                                    .unwrap_or_default(),
+                            });
+                            break;
+                        }
+                    }
+                    break;
+                }
+            }
+        }
         // Round-28 mass reanimation. Mirrors Python's
         // ReturnAllCreaturesFromYourGraveyardToBattlefield (Awakening-
         // Hall family, 2+ EoE cards). Iterate source-controller's
