@@ -117,6 +117,12 @@ class CardDef:
     Two card kinds are needed for the first slice:
       * a vanilla basic Land (Forest) — produces {G}, no spell effect.
       * a vanilla Creature (Grizzly Bears) — 2/2, costs {1}{G}, no effects.
+
+    ETB-trigger Slice 3: the ``triggered_abilities`` field carries
+    predicate-path ENTERS triggers. Each entry is a dict matching the
+    Rust ``parse_triggered_ability`` schema (and the Python
+    ``TriggeredAbility`` shape on the other side). Default = empty
+    tuple, back-compat for every pre-Slice-3 fixture.
     """
 
     name: str
@@ -126,6 +132,103 @@ class CardDef:
     mana_produced: tuple[str, ...] = ()  # for lands
     power: Optional[int] = None
     toughness: Optional[int] = None
+    triggered_abilities: tuple[dict, ...] = ()
+
+
+# ---------------------------------------------------------------------------
+# triggered_abilities dict -> Python TriggeredAbility bridge
+# ---------------------------------------------------------------------------
+
+
+def _ta_dict_to_python_effect(eff_dict: dict):
+    """Translate one effect-dict (the same dict shape Rust's
+    ``parse_effect`` consumes) into a Python ``Effect`` instance.
+
+    ETB-trigger Slice 3 minimal surface — only the effects exercised
+    by today's CE19-shape probes. Each new effect kind a probe wants
+    to drive cross-engine adds one arm here in lockstep with its
+    Rust ``parse_effect`` arm.
+    """
+    kind = eff_dict["kind"]
+    if kind == "draw_cards":
+        # The dict-shape uses ``count`` (mirroring Rust's
+        # ``parse_effect``); Python's ``DrawCards`` exposes the same
+        # value as ``amount``. Translate.
+        from mtg_bot.effects.generic.draw_mill import DrawCards
+        return DrawCards(amount=eff_dict.get("count", 1))
+    if kind == "gain_life":
+        from mtg_bot.effects.generic.life import GainLife
+        return GainLife(amount=eff_dict.get("amount", 0))
+    raise ValueError(
+        f"cross_engine triggered_abilities bridge: unsupported "
+        f"effect kind {kind!r} (extend `_ta_dict_to_python_effect` "
+        f"in src/mtg_bot/parity/cross_engine.py when adding a new "
+        f"CE19-shape probe)"
+    )
+
+
+def _ta_dict_to_python_predicate(pred_dict: dict | None):
+    """Translate one predicate-dict (Rust's ``parse_predicate`` shape)
+    into a Python ``TriggerPredicate``.
+
+    Slice 1 substrate kinds: ``always``, ``source_is_self``,
+    ``source_is_creature``, ``not``, ``and``. Future predicate
+    variants land in lockstep with the Rust side.
+    """
+    from mtg_bot.effects.predicates import Always, IsSelf, Not, And, Source
+    from mtg_bot.effects.object_predicates import IsCreature
+
+    if pred_dict is None:
+        return Always()
+    kind = pred_dict["kind"]
+    if kind == "always":
+        return Always()
+    if kind == "source_is_self":
+        return IsSelf()
+    if kind == "source_is_creature":
+        # Python's "the source is a creature" reads via Source(IsCreature()).
+        return Source(inner=IsCreature())
+    if kind == "not":
+        return Not(_ta_dict_to_python_predicate(pred_dict["inner"]))
+    if kind == "and":
+        return And(
+            _ta_dict_to_python_predicate(pred_dict["left"]),
+            _ta_dict_to_python_predicate(pred_dict["right"]),
+        )
+    raise ValueError(
+        f"cross_engine triggered_abilities bridge: unsupported "
+        f"predicate kind {kind!r}"
+    )
+
+
+def _ta_dict_to_python_triggered_ability(ta_dict: dict):
+    """Translate one triggered-ability-dict into a Python
+    ``TriggeredAbility`` instance carrying the matching Event,
+    predicate, and Effect.
+
+    Slice 3 only wires ``event="enters"`` — same coverage gate as
+    Rust's parser. Future events follow in lockstep.
+    """
+    from mtg_bot.effects.base import TriggeredAbility
+    from mtg_bot.effects.predicates import Event
+
+    event_str = ta_dict["event"]
+    if event_str == "enters":
+        event = Event.ENTERS
+    else:
+        raise ValueError(
+            f"cross_engine triggered_abilities bridge: event "
+            f"{event_str!r} is not yet wired"
+        )
+    predicate = _ta_dict_to_python_predicate(ta_dict.get("predicate"))
+    effect = _ta_dict_to_python_effect(ta_dict["effect"])
+    once_per_turn = ta_dict.get("once_per_turn", False)
+    return TriggeredAbility(
+        event=event,
+        predicate=predicate,
+        effect=effect,
+        once_per_turn=once_per_turn,
+    )
 
 
 @dataclass(frozen=True)
@@ -381,6 +484,19 @@ def build_rust_state(spec: DeckSpec):
             printing_dict["power"] = card.power
         if card.toughness is not None:
             printing_dict["toughness"] = card.toughness
+        # ETB-trigger Slice 3: pass triggered_abilities through to the
+        # Rust registry so CE19-shape probes (predicate-path ENTERS
+        # triggers) can drive both engines from the same DeckSpec.
+        # The dict shape mirrors Rust's `parse_triggered_ability`
+        # parser (see `rust/src/cards.rs::parse_triggered_ability`):
+        # ``{"event": "enters", "predicate": {"kind": ...},
+        #    "effect": {"kind": ...}, "once_per_turn": bool}``.
+        # Pre-Slice-3 fixtures default to an empty tuple so this is a
+        # no-op for the existing cross-engine smoke specs.
+        if card.triggered_abilities:
+            printing_dict["triggered_abilities"] = [
+                dict(ta) for ta in card.triggered_abilities
+            ]
         pid = reg.register_printing(printing_dict)
         name_to_pid[card.name] = pid
 
@@ -486,6 +602,16 @@ def build_python_state(spec: DeckSpec):
                 )
                 for color in card.mana_produced
             )
+        # ETB-trigger Slice 3: bridge the harness-side
+        # ``triggered_abilities`` dict-list into Python's
+        # ``TriggeredAbility`` shape so the Python engine wires the
+        # same predicate-path triggers Rust does. Each dict matches
+        # both `parse_triggered_ability` (Rust) and
+        # `_ta_dict_to_python_triggered_ability` (this module).
+        triggered_abilities = tuple(
+            _ta_dict_to_python_triggered_ability(ta)
+            for ta in card.triggered_abilities
+        )
         printings[card.name] = CardPrinting(
             name=card.name,
             mana_cost_str="",
@@ -498,6 +624,7 @@ def build_python_state(spec: DeckSpec):
             toughness=card.toughness,
             produces=frozenset(card.mana_produced),
             activated_abilities=activated_abilities,
+            triggered_abilities=triggered_abilities,
         )
 
     state = GameState()
