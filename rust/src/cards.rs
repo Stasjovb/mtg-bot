@@ -1722,6 +1722,37 @@ pub enum Effect {
         toughness: i32,
         granted_subtype: Option<String>,
     },
+    /// **Round 29 optional-mana-cost wrapper.** "You may pay {cost}. If
+    /// you do, [inner_effect]." Mirrors Python's
+    /// `OptionalManaCostThenEffect(cost_str, inner_effect)`
+    /// (`effects/combinators.py:1469` — Kavaron-Harrier / Oreplate-
+    /// Pangolin "may pay {1}; if you do, ..." trigger family, freq 2
+    /// in the EoE pool).
+    ///
+    /// **Resolve semantics.** Pushes a
+    /// `PendingDecision::OptionalManaCostChoice` onto the queue and
+    /// short-circuits. The controller drains via
+    /// `submit_optional_mana_cost_decision(pay)` (manual) or
+    /// `auto_resolve_pending_decisions("default" | "optional_pay_yes"
+    /// | "optional_pay_no")`. On a `pay=true` submit, the dispatcher
+    /// validates the controller can pay the cost from their mana
+    /// pool; if so, the cost is deducted atomically and the inner
+    /// effect is applied via `apply_effect` (with the original
+    /// `source_obj_id` so identity-coupled riders retain identity).
+    /// If the pool can't afford the cost, `pay=true` raises
+    /// `ValueError` transactionally — no mutation. On `pay=false`,
+    /// the decision is dropped.
+    ///
+    /// **Python parity for the no-agent default.** Python's
+    /// `OptionalManaCostThenEffect.resolve` is auto-resolving: it
+    /// pays whenever the controller can afford, otherwise the trigger
+    /// does nothing. The Rust `"default"` strategy mirrors this — if
+    /// the pool can afford the cost, pay it and apply the inner; if
+    /// not, drop the decision silently.
+    OptionalManaCostThenEffect {
+        cost: ManaCost,
+        inner_effect: Box<Effect>,
+    },
 }
 
 #[derive(Clone, Debug)]
@@ -2974,6 +3005,37 @@ fn parse_effect(dict: &Bound<'_, PyDict>) -> PyResult<Effect> {
             }
             Ok(Effect::DealDamageToOpponentCreature { amount })
         }
+        "optional_mana_cost_then_effect" => {
+            // Round-29 OptionalManaCostThenEffect — Kavaron-Harrier /
+            // Oreplate-Pangolin family. Required `cost` (mana cost
+            // dict) and `inner_effect` (nested effect dict).
+            let cost_any = dict.get_item("cost")?.ok_or_else(|| {
+                PyValueError::new_err(
+                    "optional_mana_cost_then_effect: missing required 'cost' field",
+                )
+            })?;
+            let cost_dict = cost_any.downcast::<PyDict>().map_err(|_| {
+                PyValueError::new_err(
+                    "optional_mana_cost_then_effect.cost must be a dict",
+                )
+            })?;
+            let cost = parse_mana_cost(cost_dict)?;
+            let inner_any = dict.get_item("inner_effect")?.ok_or_else(|| {
+                PyValueError::new_err(
+                    "optional_mana_cost_then_effect: missing required 'inner_effect' field",
+                )
+            })?;
+            let inner_dict = inner_any.downcast::<PyDict>().map_err(|_| {
+                PyValueError::new_err(
+                    "optional_mana_cost_then_effect.inner_effect must be a dict (effect-shape)",
+                )
+            })?;
+            let inner = parse_effect(inner_dict)?;
+            Ok(Effect::OptionalManaCostThenEffect {
+                cost,
+                inner_effect: Box::new(inner),
+            })
+        }
         "sequence" => {
             // Round-28 highest-frequency-class coverage. Mirrors
             // Python's Sequence(effects: tuple[Effect, ...]).
@@ -3005,7 +3067,7 @@ fn parse_effect(dict: &Bound<'_, PyDict>) -> PyResult<Effect> {
             Ok(Effect::Sequence { effects: children })
         }
         other => Err(PyValueError::new_err(format!(
-            "unknown effect kind {other:?}; valid: deal_damage, draw_cards, gain_life, return_to_hand, mill, mill_target_player, exile_target, tap_target, untap_target, sacrifice, add_counters, discard_card, scry_n, destroy_target, damage_each_opponent, damage_each_creature, create_token, add_mana_to_pool, search_library_for_basic_land_tapped, put_plus_one_counter_on_self, surveil, counter_target_spell, return_creature_from_your_graveyard_to_battlefield, discard_self, each_opponent_loses_life, lose_life, target_opponent_loses_life, each_opponent_discards, destroy_all_creatures, destroy_target_nonland_permanent, destroy_target_artifact, destroy_target_land, deal_damage_any_target, pump_self_until_eot, pump_target_creature_until_eot, sequence, pump_creatures_you_control_until_eot, return_creature_from_your_graveyard_to_hand, put_plus_one_counter_on_each_creature_you_control, put_plus_one_counter_on_creature_you_control, add_n_mana_of_chosen_color, search_library_for_card, pump_creatures_opponents_control_until_eot, put_card_from_graveyard_on_bottom_of_library, move_self_counters_to_target_creature_you_control, deal_damage_equal_to_source_power_any_target, tap_target_artifact_or_creature, conditional_on_tapped_creatures, put_plus_one_counter_on_each_of_up_to_n_target_creatures, put_charge_counters_on_self, create_token_copy_of_target_creature_you_control, optional_sac_artifact_for_effect, owner_puts_target_artifact_or_creature_on_top_or_bottom_of_library, attach_to_target_creature_you_control, destroy_enchanted_permanent, tap_enchanted_permanent, exile_target_creature_until_source_leaves, exile_opponents_nonland_permanent_until_leaves, may_do, look_top_n_put_one_in_hand_rest_to_graveyard, choose_one_mode, if_you_do, each_opponent_mills_cards, pump_target_artifact_or_creature_until_eot, each_opponent_sacrifices_creature, grant_keyword_to_target_creature_until_eot, untap_target_other_permanent, tap_another_target_creature, return_all_creatures_from_your_graveyard_to_battlefield, set_base_pt_until_eot, manifest_dread, manifest_dread_then_attach_self, conditional_if_void, deal_damage_to_opponent_creature"
+            "unknown effect kind {other:?}; valid: deal_damage, draw_cards, gain_life, return_to_hand, mill, mill_target_player, exile_target, tap_target, untap_target, sacrifice, add_counters, discard_card, scry_n, destroy_target, damage_each_opponent, damage_each_creature, create_token, add_mana_to_pool, search_library_for_basic_land_tapped, put_plus_one_counter_on_self, surveil, counter_target_spell, return_creature_from_your_graveyard_to_battlefield, discard_self, each_opponent_loses_life, lose_life, target_opponent_loses_life, each_opponent_discards, destroy_all_creatures, destroy_target_nonland_permanent, destroy_target_artifact, destroy_target_land, deal_damage_any_target, pump_self_until_eot, pump_target_creature_until_eot, sequence, pump_creatures_you_control_until_eot, return_creature_from_your_graveyard_to_hand, put_plus_one_counter_on_each_creature_you_control, put_plus_one_counter_on_creature_you_control, add_n_mana_of_chosen_color, search_library_for_card, pump_creatures_opponents_control_until_eot, put_card_from_graveyard_on_bottom_of_library, move_self_counters_to_target_creature_you_control, deal_damage_equal_to_source_power_any_target, tap_target_artifact_or_creature, conditional_on_tapped_creatures, put_plus_one_counter_on_each_of_up_to_n_target_creatures, put_charge_counters_on_self, create_token_copy_of_target_creature_you_control, optional_sac_artifact_for_effect, owner_puts_target_artifact_or_creature_on_top_or_bottom_of_library, attach_to_target_creature_you_control, destroy_enchanted_permanent, tap_enchanted_permanent, exile_target_creature_until_source_leaves, exile_opponents_nonland_permanent_until_leaves, may_do, look_top_n_put_one_in_hand_rest_to_graveyard, choose_one_mode, if_you_do, each_opponent_mills_cards, pump_target_artifact_or_creature_until_eot, each_opponent_sacrifices_creature, grant_keyword_to_target_creature_until_eot, untap_target_other_permanent, tap_another_target_creature, return_all_creatures_from_your_graveyard_to_battlefield, set_base_pt_until_eot, manifest_dread, manifest_dread_then_attach_self, conditional_if_void, deal_damage_to_opponent_creature, optional_mana_cost_then_effect"
         ))),
     }
 }
@@ -3531,6 +3593,11 @@ pub(crate) fn effect_to_pydict<'py>(
                 .map(|child| effect_to_pydict(py, child))
                 .collect::<PyResult<Vec<_>>>()?;
             d.set_item("effects", children)?;
+        }
+        Effect::OptionalManaCostThenEffect { cost, inner_effect } => {
+            d.set_item("kind", "optional_mana_cost_then_effect")?;
+            d.set_item("cost", mana_cost_to_pydict(py, cost)?)?;
+            d.set_item("inner_effect", effect_to_pydict(py, inner_effect)?)?;
         }
     }
     Ok(d)

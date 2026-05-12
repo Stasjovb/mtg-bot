@@ -32,11 +32,85 @@
 //! dispatchers consume the head of the Vec (index 0); the auto-
 //! resolve drains in FIFO order until the queue is empty.
 
+use crate::cards::ManaCost;
 use crate::state::{GameObject, GameState, PendingDecision};
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyList};
 use std::sync::Arc;
+
+/// Whether `state.players[controller]`'s mana pool can afford `cost`
+/// (same algorithm as `pay_mana_cost`'s validation phase — colored
+/// requirements must be matchable by same-color mana; the remaining
+/// post-colored pool must cover generic). Pure read; never mutates.
+fn can_pay_mana_cost_internal(
+    state: &GameState,
+    controller: u8,
+    cost: &ManaCost,
+) -> bool {
+    let idx = controller as usize;
+    if idx >= 2 {
+        return false;
+    }
+    let pool = &state.players[idx].mana_pool;
+    if (pool.white as u32) < cost.white as u32
+        || (pool.blue as u32) < cost.blue as u32
+        || (pool.black as u32) < cost.black as u32
+        || (pool.red as u32) < cost.red as u32
+        || (pool.green as u32) < cost.green as u32
+    {
+        return false;
+    }
+    let rem_white = pool.white as u32 - cost.white as u32;
+    let rem_blue = pool.blue as u32 - cost.blue as u32;
+    let rem_black = pool.black as u32 - cost.black as u32;
+    let rem_red = pool.red as u32 - cost.red as u32;
+    let rem_green = pool.green as u32 - cost.green as u32;
+    let rem_colorless = pool.colorless as u32;
+    let rem_total = rem_white + rem_blue + rem_black + rem_red + rem_green + rem_colorless;
+    rem_total >= cost.generic as u32
+}
+
+/// Atomically deduct `cost` from `state.players[controller]`'s mana
+/// pool. Returns `true` on success (pool mutated, cost paid),
+/// `false` on insufficient mana (pool untouched). Same drain order
+/// as `pay_mana_cost`: colored first, then generic from
+/// C → W → U → B → R → G.
+fn pay_mana_cost_internal(
+    state: &mut GameState,
+    controller: u8,
+    cost: &ManaCost,
+) -> bool {
+    if !can_pay_mana_cost_internal(state, controller, cost) {
+        return false;
+    }
+    let idx = controller as usize;
+    let pool = &mut state.players[idx].mana_pool;
+    pool.white -= cost.white;
+    pool.blue -= cost.blue;
+    pool.black -= cost.black;
+    pool.red -= cost.red;
+    pool.green -= cost.green;
+    let mut remaining_generic = cost.generic as u32;
+    for slot in [
+        &mut pool.colorless,
+        &mut pool.white,
+        &mut pool.blue,
+        &mut pool.black,
+        &mut pool.red,
+        &mut pool.green,
+    ] {
+        if remaining_generic == 0 {
+            break;
+        }
+        let avail = *slot as u32;
+        let take = avail.min(remaining_generic);
+        *slot -= take as u8;
+        remaining_generic -= take;
+    }
+    debug_assert_eq!(remaining_generic, 0);
+    true
+}
 
 /// Auto-resolve every pending decision currently on the queue using
 /// `strategy`. The auto-resolver drains in FIFO order (index 0 first)
@@ -72,6 +146,8 @@ pub(crate) fn auto_resolve_pending(
         | "manifest_top"
         | "reveal_yes"
         | "reveal_no"
+        | "optional_pay_yes"
+        | "optional_pay_no"
         | "default" => {}
         other => {
             return Err(PyValueError::new_err(format!(
@@ -79,7 +155,7 @@ pub(crate) fn auto_resolve_pending(
                  valid strategies: keep_all_on_top, send_all_to_graveyard, \
                  may_do_yes, may_do_no, pick_top, choose_mode_0, \
                  if_you_do_yes, if_you_do_no, manifest_top, reveal_yes, \
-                 reveal_no, default"
+                 reveal_no, optional_pay_yes, optional_pay_no, default"
             )))
         }
     }
@@ -204,6 +280,55 @@ pub(crate) fn auto_resolve_pending(
                     /*chosen_idx*/ 0,
                     then_attach_to_source,
                 )?;
+            }
+            PendingDecision::OptionalManaCostChoice {
+                source_obj_id,
+                controller,
+                cost,
+                inner_effect,
+            } => {
+                // "optional_pay_no" → drop the decision unconditionally.
+                // "optional_pay_yes" → REQUIRE affordability (raise on
+                // unaffordable — programmer error to force-yes when
+                // broke; the explicit strategy says "I expect this to
+                // succeed").
+                // "default" / unrelated → Python parity: pay-if-affordable,
+                // else drop silently. Matches
+                // OptionalManaCostThenEffect.resolve.
+                match strategy {
+                    "optional_pay_no" => {
+                        // Drop; do nothing.
+                    }
+                    "optional_pay_yes" => {
+                        if !pay_mana_cost_internal(state, controller, &cost) {
+                            return Err(PyValueError::new_err(format!(
+                                "auto_resolve_pending_decisions(\"optional_pay_yes\"): \
+                                 controller P{controller} cannot afford cost {cost:?} \
+                                 from mana pool {:?}",
+                                state.players[controller as usize].mana_pool
+                            )));
+                        }
+                        crate::state_ops_resolve::apply_effect_pub(
+                            state,
+                            &inner_effect,
+                            source_obj_id,
+                        )?;
+                    }
+                    _ => {
+                        // "default" / cross-strategy fallback: pay-if-
+                        // affordable. Matches Python's no-agent-seated
+                        // resolve.
+                        if pay_mana_cost_internal(state, controller, &cost) {
+                            crate::state_ops_resolve::apply_effect_pub(
+                                state,
+                                &inner_effect,
+                                source_obj_id,
+                            )?;
+                        }
+                        // else: drop silently — matches Python's
+                        // "trigger does nothing" fallback.
+                    }
+                }
             }
             PendingDecision::LookAtTopNRevealOrCounterChoice {
                 source_obj_id,
@@ -727,6 +852,41 @@ impl GameState {
                     d.set_item("filter_name", filter_name.as_str())?;
                     d.set_item("max_power", *max_power)?;
                     d.set_item("counter_on_miss", *counter_on_miss)?;
+                }
+                PendingDecision::OptionalManaCostChoice {
+                    source_obj_id,
+                    controller,
+                    cost,
+                    inner_effect,
+                } => {
+                    d.set_item("kind", "OptionalManaCostChoice")?;
+                    d.set_item("source_obj_id", *source_obj_id)?;
+                    d.set_item("controller", *controller)?;
+                    // Cost surfaces as a mana-cost-shape dict, matching
+                    // the schema used in `Effect::OptionalManaCostThenEffect`'s
+                    // dict serialization.
+                    let cost_dict = PyDict::new(py);
+                    if cost.generic > 0 {
+                        cost_dict.set_item("generic", cost.generic)?;
+                    }
+                    if cost.white > 0 {
+                        cost_dict.set_item("W", cost.white)?;
+                    }
+                    if cost.blue > 0 {
+                        cost_dict.set_item("U", cost.blue)?;
+                    }
+                    if cost.black > 0 {
+                        cost_dict.set_item("B", cost.black)?;
+                    }
+                    if cost.red > 0 {
+                        cost_dict.set_item("R", cost.red)?;
+                    }
+                    if cost.green > 0 {
+                        cost_dict.set_item("G", cost.green)?;
+                    }
+                    d.set_item("cost", cost_dict)?;
+                    let inner_dict = crate::cards::effect_to_pydict(py, inner_effect.as_ref())?;
+                    d.set_item("inner_effect", inner_dict)?;
                 }
             }
             out.append(d)?;
@@ -1260,6 +1420,83 @@ impl GameState {
         }
     }
 
+    /// Consume the head `OptionalManaCostChoice` on the pending-
+    /// decisions queue with a `pay`/`skip` answer. On `pay=True`, the
+    /// dispatcher validates that the controller can pay the variant's
+    /// `cost` from their mana pool — if not, raises `ValueError`
+    /// transactionally (no mutation; the pending decision stays at the
+    /// head of the queue). On success, the cost is deducted from the
+    /// pool atomically, then the inner effect is applied via the
+    /// standard `apply_effect` dispatcher with the original
+    /// `source_obj_id` propagated (so identity-coupled riders retain
+    /// the resolving spell's identity). On `pay=False`, the variant
+    /// is dropped without paying or applying the inner effect.
+    ///
+    /// Powers the round-29 `Effect::OptionalManaCostThenEffect`
+    /// wrapper (Kavaron-Harrier / Oreplate-Pangolin "you may pay {1};
+    /// if you do, ..." family, freq 2 in EoE pool).
+    ///
+    /// Transactional shape: validation runs before any mutation. A
+    /// failed submit (queue empty, head not a OptionalManaCostChoice,
+    /// or pay=True without enough mana) leaves the state intact.
+    ///
+    /// Raises `ValueError` if:
+    /// - the queue is empty
+    /// - the head is not a `OptionalManaCostChoice`
+    /// - `pay=True` and the controller's mana pool can't cover the cost
+    fn submit_optional_mana_cost_decision(&mut self, pay: bool) -> PyResult<()> {
+        if self.pending_decisions.is_empty() {
+            return Err(PyValueError::new_err(
+                "submit_optional_mana_cost_decision: no pending decision",
+            ));
+        }
+        // Inspect head — fail before any mutation on a discriminant
+        // mismatch or an unaffordable pay=True.
+        match &self.pending_decisions[0] {
+            PendingDecision::OptionalManaCostChoice { cost, controller, .. } => {
+                if pay && !can_pay_mana_cost_internal(self, *controller, cost) {
+                    return Err(PyValueError::new_err(format!(
+                        "submit_optional_mana_cost_decision: controller P{} cannot \
+                         afford cost {cost:?} from mana pool {:?}",
+                        controller,
+                        self.players[*controller as usize].mana_pool
+                    )));
+                }
+            }
+            other => {
+                return Err(PyValueError::new_err(format!(
+                    "submit_optional_mana_cost_decision: head of pending-decisions queue is \
+                     not an OptionalManaCostChoice (got {:?}); call the \
+                     variant-specific submit_* dispatcher",
+                    std::mem::discriminant(other)
+                )));
+            }
+        }
+        // Validation passed — consume the head.
+        let decision = self.pending_decisions.remove(0);
+        let (source_obj_id, controller, cost, inner_effect) = match decision {
+            PendingDecision::OptionalManaCostChoice {
+                source_obj_id,
+                controller,
+                cost,
+                inner_effect,
+            } => (source_obj_id, controller, cost, inner_effect),
+            _ => unreachable!("validated above"),
+        };
+        if pay {
+            let ok = pay_mana_cost_internal(self, controller, &cost);
+            // Belt-and-suspenders: validation above already confirmed
+            // affordability — pay must succeed.
+            debug_assert!(ok);
+            crate::state_ops_resolve::apply_effect_pub(
+                self,
+                &inner_effect,
+                source_obj_id,
+            )?;
+        }
+        Ok(())
+    }
+
     /// Drain the pending-decisions queue using a deterministic
     /// strategy. Useful for callers that don't model the choice
     /// dimension (training harnesses, parity tests, deterministic
@@ -1288,10 +1525,19 @@ impl GameState {
     ///   per-variant defaults.
     /// * `"if_you_do_no"` — IfYouDoChoice drops both. MayDo also
     ///   answers "no" (shared yes/no semantics).
+    /// * `"optional_pay_yes"` — OptionalManaCostChoice pays the cost
+    ///   and applies the inner effect; raises `ValueError` if the
+    ///   controller's pool can't cover the cost (programmer error
+    ///   to force-yes when broke). Other variants fall through to
+    ///   their own per-variant defaults.
+    /// * `"optional_pay_no"` — OptionalManaCostChoice drops without
+    ///   paying or applying the inner. Other variants fall through.
     /// * `"default"` — Surveil keeps all on top; MayDo + IfYouDo
     ///   answer "yes"; PickCardFromExamined picks the topmost
-    ///   examined card; ChooseModeChoice picks `modes[0]` (mirrors
-    ///   the base-Agent default in Python).
+    ///   examined card; ChooseModeChoice picks `modes[0]`; the
+    ///   OptionalManaCostChoice does the Python-parity "pay if
+    ///   affordable, else skip" (mirrors the base-Agent default in
+    ///   Python).
     ///
     /// Raises `ValueError` on an unknown strategy.
     fn auto_resolve_pending_decisions(&mut self, strategy: &str) -> PyResult<()> {

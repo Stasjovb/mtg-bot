@@ -645,6 +645,40 @@ pub enum PendingDecision {
         /// revealed (Pulsar Squadron Ace = true; Living Phone = false).
         counter_on_miss: bool,
     },
+    /// **Round-29 optional-mana-cost decision substrate.** Pushed by
+    /// `Effect::OptionalManaCostThenEffect` (Kavaron-Harrier family /
+    /// Oreplate-Pangolin: "you may pay {cost}. If you do,
+    /// [inner_effect]", freq 2 in EoE pool).
+    ///
+    /// **Payload.** Carries the mana cost AND the inner Effect on the
+    /// heap. On a "yes" submit, `submit_optional_mana_cost_decision(true)`
+    /// validates the controller can pay `cost` from their mana pool —
+    /// if not, raises `ValueError` transactionally (no mutation). On
+    /// success, the cost is deducted atomically before
+    /// `apply_effect(state, &inner_effect, source_obj_id)` runs. On a
+    /// "no" submit, the decision is dropped without paying or applying
+    /// the inner effect.
+    ///
+    /// **Python parity.** Python's `OptionalManaCostThenEffect.resolve`
+    /// is auto-resolving: it pays whenever the controller can afford
+    /// the cost, otherwise the trigger does nothing. There is no
+    /// agent-mediated choice in Python. The Rust default (auto-resolve
+    /// `"default"`) therefore answers "yes if affordable, else no" —
+    /// the same observable behavior as Python. The substrate exposes
+    /// the choice explicitly so agents CAN override (e.g. "skip paying
+    /// even when affordable" for value preservation), but the
+    /// no-agent-seated default tracks Python exactly.
+    ///
+    /// **Auto-resolve strategies.** `"optional_pay_yes"` attempts to
+    /// pay (raising ValueError if unaffordable — programmer error to
+    /// force-yes when broke); `"optional_pay_no"` drops the decision;
+    /// `"default"` does the Python-parity affordability-check.
+    OptionalManaCostChoice {
+        source_obj_id: u32,
+        controller: u8,
+        cost: crate::cards::ManaCost,
+        inner_effect: Box<crate::cards::Effect>,
+    },
 }
 
 /// `GameState` carries an `Arc<RegistryData>` so every clone shares
