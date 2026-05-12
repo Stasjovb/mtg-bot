@@ -4491,3 +4491,268 @@ def make_defender_selector(attack_decision: str):
         return retaliation_selector(py_state, rust_state, step_index)
 
     return defender_selector
+
+
+# ---------------------------------------------------------------------------
+# Phase 5 follow-up #16: indestructible_selector — extend the cross-engine
+# smoke onto indestructible combat (CR 702.12). Tests three distinct
+# surfaces where indestructible composes with the SBA destroy gate and
+# the destroy-effect resolve path:
+#
+#   1. **SBA lethal-damage filter (CR 704.5g + 702.12a).** A 2/2
+#      indestructible creature with damage >= toughness should NOT be
+#      moved to the graveyard. Python's `turn.state_based_actions` lethal-
+#      damage branch (turn.py:1251 — `elif "indestructible" in kws:
+#      continue`) and Rust's `state_ops_sba::collect_sba_victims`
+#      (state_ops_sba.rs:163 — `if printing.keywords.iter().any(|k| k ==
+#      "indestructible") { continue; }`) both gate on the keyword.
+#      Test A exercises this via real combat damage (2 dmg to a 2/2
+#      indestructible blocker).
+#
+#   2. **SBA excess-damage filter.** Same as scenario 1 but with
+#      damage strictly greater than toughness (5 to a 2/2). Both
+#      engines' SBA paths gate on the keyword BEFORE the damage>=
+#      toughness compare, so the excess is irrelevant — but a sloppy
+#      port that only special-cases damage==toughness would diverge.
+#      Test B side-channel-marks 5 damage on the Bear Idol post-walk,
+#      then runs an SBA pass.
+#
+#   3. **Destroy-effect filter (CR 702.12 + 701.7).** A direct
+#      "destroy target creature" effect on an indestructible target
+#      should NOT move the target to graveyard. Python's
+#      `turn.destroy(state, obj)` (turn.py:532-537) returns False
+#      without moving; Rust's `Effect::DestroyTarget`
+#      (state_ops_resolve.rs:1023-1078) early-returns Ok(()) when the
+#      target's printing carries indestructible. Test C side-channel-
+#      casts a destroy_target on a fresh-state Bear Idol (p1's only bf
+#      object so it's bf[0] = the AnyCreature target).
+#
+# **Predicted outcome: clean pass (no novel CE divergence).** Reading
+# the two SBA call sites + the two destroy call sites, both engines
+# honor `printing.keywords.iter().any(|k| k == "indestructible")`
+# symmetrically with Python's `"indestructible" in effective_keywords(
+# state, obj)`. The keyword-detection paths differ in spelling
+# (lowercase-string on Rust vs frozenset membership on Python) but
+# the effective gate fires on the same printing carry. No surface
+# this probe touches is independently keyed off any UEOT framework
+# or layer-6 wiring that would cause divergence — only the printing-
+# native `keywords` field.
+#
+# **If a divergence DOES surface** (CE18 candidate shape): most likely
+# at the "keyword detection differs" surface — e.g. Rust's SBA filter
+# uses `printing.keywords` directly while Python's uses
+# `effective_keywords(state, obj)`. If a future "grant indestructible
+# UEOT" effect is added, the Python path picks it up but Rust's
+# direct-printing path doesn't. This probe does NOT exercise that
+# surface (no UEOT-granted indestructible in scope) but documents it
+# as the most-likely follow-up.
+#
+# **Setup chosen: Option B (side-channel inject onto p1 bf) rather than
+# Option A (indestructible creature in the deckspec).** Same
+# `CardDef`-doesn't-carry-keywords reasoning as every prior keyword
+# probe; see `first_strike_side_channel` for the full rationale. The
+# inject targets p1's bf (controller=1) — distinct from every prior
+# probe's p0-bf injection — because the probe needs the
+# indestructible creature to be the DEFENDER (taking damage from
+# p0's attacker), not the attacker.
+#
+# **Trigger detection (stateless).** The injection fires the FIRST
+# time the selector observes 3 creatures on bf (the
+# retaliation_selector backbone's end-of-step-167 state: p0=Bears id
+# 5 sick, p1=Bears ids 9 and 11 tapped from their turn-12 attack) and
+# no Bear Idol in any zone yet. Mirrors the prior probes' trigger
+# shape — uniquely true at step 168.
+# ---------------------------------------------------------------------------
+
+
+# Name of the synthetic indestructible printing injected by
+# :func:`indestructible_side_channel`. Distinct from
+# :data:`_FIRST_STRIKE_PRINTING_NAME`,
+# :data:`_DEATHTOUCH_PRINTING_NAME`,
+# :data:`_LIFELINK_PRINTING_NAME`,
+# :data:`_VIGILANCE_PRINTING_NAME`,
+# :data:`_HASTE_PRINTING_NAME`,
+# :data:`_MENACE_PRINTING_NAME`, and
+# :data:`_DEFENDER_PRINTING_NAME` so the eight probes' trigger gates
+# stay mutually independent on the same multi_blocker_deckspec walk.
+_INDESTRUCTIBLE_PRINTING_NAME = "Bear Idol"
+
+
+def indestructible_side_channel(py_state, rust_state) -> tuple[int, int]:
+    """Side-channel inject a 2/2 indestructible creature onto BOTH
+    engines' p1 battlefield, AND side-channel-clear Bears id 5's
+    summoning sickness so p0 has an eligible attacker for combat.
+
+    Mirror of :func:`defender_side_channel` with two key differences:
+
+      * **Inject on p1's bf, not p0's.** The probe needs the
+        indestructible creature to be the DEFENDER (taking damage
+        from p0's attacker), not the attacker. ``controller=1`` on
+        ``register_and_inject_object`` + ``controller_id=1`` on the
+        Python GameObject.
+      * **Do NOT untap p1's existing Bears.** Bears ids 9 and 11 stay
+        tapped from their turn-12 attack and are NOT eligible
+        blockers; the Bear Idol becomes the SOLE eligible blocker for
+        the post-injection combat. This matches the brief's "p1
+        blocks with the indestructible Bear Idol" scenario.
+
+    The synthetic printing's name is
+    :data:`_INDESTRUCTIBLE_PRINTING_NAME` (``"Bear Idol"``) so this
+    probe's trigger gate doesn't collide with the seven prior probes'
+    gates.
+
+    Bears id 5's summoning sickness is cleared (force_set_summoning_sick
+    test-helper) so p0 has an eligible attacker at the post-injection
+    DECLARE_ATTACKERS step.
+
+    Returns ``(py_obj_id, rust_obj_id)``. Ids match because both
+    engines allocate in lockstep through step 167 of the retaliation
+    walk.
+    """
+    from mtg_bot.cards.base import CardPrinting, ManaCost
+    from mtg_bot.game import Zone
+
+    # ---- Python side: indestructible printing ----
+    indestr_printing = CardPrinting(
+        name=_INDESTRUCTIBLE_PRINTING_NAME,
+        mana_cost_str="",
+        mana_cost=ManaCost(),
+        type_line="Creature",
+        supertypes=(),
+        card_types=("Creature",),
+        subtypes=(),
+        power=2,
+        toughness=2,
+        produces=frozenset(),
+        keywords=frozenset({"indestructible"}),
+    )
+    py_obj = py_state.new_object(
+        indestr_printing, owner_id=1, zone=Zone.BATTLEFIELD,
+    )
+    py_obj.controller_id = 1
+    py_obj.summoning_sick = False
+    py_obj.tapped = False
+    py_obj.damage = 0
+    py_obj.etb_timestamp = py_state.next_timestamp
+    py_state.next_timestamp += 1
+    py_state.battlefield.append(py_obj)
+
+    # ---- Rust side: indestructible printing ----
+    ZONE_BATTLEFIELD = 2
+    rust_obj_id = rust_state.register_and_inject_object(
+        {
+            "name": _INDESTRUCTIBLE_PRINTING_NAME,
+            "card_types": ["Creature"],
+            "power": 2,
+            "toughness": 2,
+            "keywords": ["indestructible"],
+        },
+        1,  # controller = p1 (the defender side)
+        ZONE_BATTLEFIELD,
+    )
+
+    # Clear summoning sickness on p0's Bears id 5 (cast this turn —
+    # currently sick) so p0 has an eligible attacker at the post-
+    # injection DECLARE_ATTACKERS step. Mirrors haste/defender pattern.
+    for obj in py_state.battlefield:
+        if (
+            obj.controller_id == 0
+            and obj.printing.name == "Grizzly Bears"
+        ):
+            obj.summoning_sick = False
+    for entry in rust_state.battlefield_snapshot():
+        if (
+            entry["controller_id"] == 0
+            and entry["printing_name"] == "Grizzly Bears"
+        ):
+            rust_state.force_set_summoning_sick(int(entry["id"]), False)
+
+    return int(py_obj.id), int(rust_obj_id)
+
+
+def indestructible_selector(py_state, rust_state, step_index: int) -> dict:
+    """Cross-engine smoke selector that drives a single-blocker combat
+    with an indestructible defender on :func:`multi_blocker_deckspec`.
+
+    Structurally similar to :func:`haste_selector` —
+    delegates to :func:`retaliation_selector` for everything before
+    and after the side-channel injection, and side-channel-injects
+    an indestructible creature on p1's bf at step 168. Adds an
+    explicit DECLARE_BLOCKERS branch for the single-blocker shape
+    (retaliation_selector's >=2-blocker branch doesn't fire because
+    p1's Bears 9/11 stay tapped → only Bear Idol is eligible).
+
+    Expected walk shape:
+
+      * **Steps 0-167** — identical to retaliation_selector's walk.
+      * **Step 168** — indestructible injection fires; selector
+        returns ``pass_priority``.
+      * **Step ~171** (DECLARE_ATTACKERS p0) — emit ``[5]`` (Bears id
+        5, sickness cleared by side-channel).
+      * **Step ~173** (DECLARE_BLOCKERS) — emit ``[[14, 5]]`` (Bear
+        Idol id 14 blocks Bears id 5; sole eligible blocker because
+        p1's other Bears are still tapped from turn-12 attack).
+      * **Step ~175** (COMBAT_DAMAGE) — each takes 2 damage.
+      * **SBA** — Bears id 5 (2/2 with damage=2) dies; Bear Idol
+        (2/2 indestructible with damage=2) STAYS on bf.
+
+    Stateless — same idempotency guarantee as the prior probes.
+    """
+    from mtg_bot.turn import Step
+
+    indestr_already_injected = any(
+        obj.printing.name == _INDESTRUCTIBLE_PRINTING_NAME
+        for obj in py_state.battlefield
+    ) or any(
+        obj.printing.name == _INDESTRUCTIBLE_PRINTING_NAME
+        for p in py_state.players
+        for zone_list in (p.hand, p.library, p.graveyard, p.exile)
+        for obj in zone_list
+    )
+
+    if not indestr_already_injected:
+        creature_count = sum(
+            1 for o in py_state.battlefield
+            if "Creature" in o.printing.card_types
+        )
+        if creature_count >= 3:
+            indestructible_side_channel(py_state, rust_state)
+            return {"kind": "pass_priority"}
+
+    cur_step = py_state.step
+    active_idx = py_state.active_player_idx
+
+    if cur_step == Step.DECLARE_BLOCKERS:
+        # Custom single-blocker branch: if the Bear Idol is on the
+        # defending side and an attacker is present, block with
+        # exactly the Bear Idol. retaliation_selector's >=2-blocker
+        # branch doesn't fire here because p1's Bears 9/11 are still
+        # tapped, and combat_selector's empty-block branch would
+        # silently advance past the block step without exercising the
+        # single-blocker apply path.
+        attackers_present = [
+            o for o in py_state.battlefield
+            if getattr(o, "attacking", False)
+        ]
+        if attackers_present:
+            defender_idx = 1 - active_idx
+            bear_idol = next(
+                (
+                    o for o in py_state.battlefield
+                    if o.controller_id == defender_idx
+                    and o.printing.name == _INDESTRUCTIBLE_PRINTING_NAME
+                    and not o.tapped
+                    and not o.summoning_sick
+                ),
+                None,
+            )
+            if bear_idol is not None:
+                attacker = attackers_present[0]
+                advance_phase_python(py_state)
+                rust_state.advance_phase()
+                return {
+                    "kind": "declare_blockers",
+                    "assignments": [[int(bear_idol.id), int(attacker.id)]],
+                }
+
+    return retaliation_selector(py_state, rust_state, step_index)
