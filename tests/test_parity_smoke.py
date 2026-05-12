@@ -1328,3 +1328,204 @@ def test_cross_engine_play_a_land_selector_emits_pass_priority_when_no_land(pari
     assert result.steps[0].action_dict == {"kind": "pass_priority"}
     # Step 1: no land in hand -> selector falls back to pass.
     assert result.steps[1].action_dict == {"kind": "pass_priority"}
+
+
+# ---------------------------------------------------------------------------
+# Phase 5 follow-up #3: multi-turn selector. Drives ``advance_phase`` on both
+# engines via a side-channel + emits ``play_land`` in MAIN phases. Walks
+# multiple full turns so the harness exercises:
+#
+#   * Turn 1 DRAW skip (CR 103.7c — first turn active player skips draw step).
+#   * Turn 1 -> Turn 2 CLEANUP -> UNTAP wrap (turn_number bump + active swap).
+#   * Turn 2 UNTAP sweep + summoning-sick clear (CR 302.1).
+#   * Turn 2 DRAW step auto-draw (CR 504.1).
+#   * Turn 3+ MAIN phase land drop with both players' permanents on the
+#     battlefield.
+#
+# **Outcome (this slice)**: NOVEL divergence CE4 — ``battlefield`` order
+# disagrees between Python (ETB-timestamp-ordered centralized list) and
+# Rust (per-controller-grouped split). Surfaces at step 28, turn 3
+# PRECOMBAT_MAIN, when p0 plays a Forest while p1's Mountain is already
+# on the battlefield. Pinned strict-xfail below; closure plan in
+# ``docs/RUST_PARITY_GAPS.md`` CE4 entry.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.xfail(
+    strict=True,
+    reason=(
+        "CE4: battlefield order diverges between Python (ETB-timestamp "
+        "centralized list) and Rust (per-controller-grouped split). "
+        "First fires at step 28, turn 3 PRECOMBAT_MAIN. Closure plan in "
+        "docs/RUST_PARITY_GAPS.md CE4 entry. Strict-xfail until closed; "
+        "flips to xpass when the underlying ordering divergence is fixed."
+    ),
+)
+def test_cross_engine_multi_turn_selector_walks_clean(parity_smoke):
+    """Drive 50 decisions on the slightly_bigger_deckspec with the
+    multi_turn_selector and assert every step walks clean.
+
+    Pinned strict-xfail until CE4 closes — the battlefield-order
+    divergence surfaces at step 28 once both players have a permanent
+    on the battlefield. When CE4 closes the test flips to xpass and
+    the maintainer removes the marker.
+    """
+    from mtg_bot.parity.cross_engine import (
+        multi_turn_selector,
+        slightly_bigger_deckspec,
+        walk_both,
+    )
+
+    result = walk_both(
+        slightly_bigger_deckspec(),
+        n_decisions=50,
+        decision_selector=multi_turn_selector,
+    )
+    assert result.error is None, (
+        f"walk aborted at step {result.aborted_at}: {result.error}"
+    )
+    assert result.aborted_at is None
+    assert len(result.steps) == 50
+    for step in result.steps:
+        assert step.divergences == [], (
+            f"unexpected divergence at step {step.step_index}: "
+            f"{[(d.field, d.py_value, d.rust_value, d.known_gap) for d in step.divergences]}"
+        )
+
+
+def test_cross_engine_multi_turn_selector_surfaces_ce4_battlefield_ordering(parity_smoke):
+    """**CE4 symptom-present pin.** Drive 29 decisions with the
+    multi_turn_selector and assert the FIRST divergence is at step
+    28 (turn 3 PRECOMBAT_MAIN play_land), on the ``battlefield``
+    field, with the Python value carrying Mountain-then-Forest
+    (ETB order: Mountain entered turn 2, Forest entered turn 3)
+    and the Rust value carrying Forest-then-Mountain (controller
+    order: p0's bf first, then p1's bf).
+
+    This is the companion to the strict-xfail clean-walk test
+    above. When CE4 closes:
+      * The clean-walk strict-xfail flips to xpass; remove its marker.
+      * This symptom test starts FAILING because the values would
+        agree. The maintainer removes / inverts this test as part of
+        the closure pair contract (mirrors the CE2 / CE3 closure
+        pattern).
+    """
+    from mtg_bot.parity.cross_engine import (
+        multi_turn_selector,
+        slightly_bigger_deckspec,
+        walk_both,
+    )
+
+    result = walk_both(
+        slightly_bigger_deckspec(),
+        n_decisions=29,
+        decision_selector=multi_turn_selector,
+    )
+    assert result.error is None
+    # Steps 0..27: clean (every phase boundary of turns 1+2 walks parity-
+    # clean, including the active-player swap on the CLEANUP -> UNTAP wrap).
+    for step in result.steps[:28]:
+        assert step.divergences == [], (
+            f"unexpected divergence at step {step.step_index} "
+            f"(expected step 28 to be the first): "
+            f"{[(d.field, d.py_value, d.rust_value) for d in step.divergences]}"
+        )
+    # Step 28: the FIRST divergence — battlefield ordering, fired by
+    # p0 playing Forest while p1's Mountain is already on the bf.
+    step_28 = result.steps[28]
+    assert step_28.action_dict == {"kind": "play_land", "card_id": 0}
+    assert step_28.py_view["turn"] == 3
+    assert step_28.py_view["step"] == "PRECOMBAT_MAIN"
+    assert step_28.py_view["active_player"] == 0
+    fields = {d.field for d in step_28.divergences}
+    assert fields == {"battlefield"}, (
+        f"expected only `battlefield` to diverge; got {sorted(fields)}"
+    )
+    bf_div = next(d for d in step_28.divergences if d.field == "battlefield")
+    # Python: ETB-timestamp order — Mountain (turn 2 p1 MAIN1) first,
+    # Forest (turn 3 p0 MAIN1) second.
+    assert bf_div.py_value[0][0] == "Mountain"
+    assert bf_div.py_value[1][0] == "Forest"
+    # Rust: controller-grouped — p0's bf first (Forest), then p1's bf
+    # (Mountain).
+    assert bf_div.rust_value[0][0] == "Forest"
+    assert bf_div.rust_value[1][0] == "Mountain"
+
+
+def test_cross_engine_multi_turn_selector_turn_1_skips_draw(parity_smoke):
+    """CR 103.7c first-turn skip pin. Across the first 11 decisions
+    (turn 1 UNTAP -> CLEANUP via the side-channel advance_phase), the
+    active player's hand stays empty — no draw fires on turn 1's DRAW
+    step. The harness reads hand_p0 size at each step; on the
+    UNTAP -> UPKEEP -> DRAW transition (steps 0 / 1) the hand stays at
+    0 cards.
+
+    Surfaces I18 + Rust's gated draw on both engines uniformly. If
+    either engine drew a card on turn 1, this test would FAIL with
+    `hand_p0 size > 0` at the step the draw happened. Both engines
+    are pinned to the same gate (`turn_number != 1`), so both
+    correctly skip.
+    """
+    from mtg_bot.parity.cross_engine import (
+        multi_turn_selector,
+        slightly_bigger_deckspec,
+        walk_both,
+    )
+
+    result = walk_both(
+        slightly_bigger_deckspec(),
+        n_decisions=11,
+        decision_selector=multi_turn_selector,
+    )
+    assert result.error is None
+    # The full turn 1 walk: 11 phases (UPKEEP..CLEANUP per the
+    # side-channel advance + the side-channel-into-UNTAP wrap). p0
+    # is active for all of turn 1; their hand stays empty because
+    # CR 103.7c skips their draw step on turn 1.
+    for step in result.steps[:11]:
+        assert step.py_view["turn"] in (1, 2)
+        # Active player on turn 1 is 0; on the wrap-into-turn-2 step it's 1.
+        if step.py_view["turn"] == 1:
+            assert step.py_view["active_player"] == 0
+            # p0's hand stays empty — no draw on turn 1.
+            assert len(step.py_view["hand_p0"]) == 0
+        # No divergences during turn 1 + wrap — the first divergence
+        # is at step 28, well into turn 3.
+        assert step.divergences == []
+
+
+def test_cross_engine_multi_turn_selector_turn_2_drawstep_fires(parity_smoke):
+    """Companion to the turn-1 skip pin. On turn 2's DRAW step (the
+    new active player is p1 after the CLEANUP -> UNTAP wrap), the
+    active player draws one card. Verify the hand_p1 size flips from
+    0 to 1 at the right boundary, on BOTH engines uniformly (no
+    divergence).
+    """
+    from mtg_bot.parity.cross_engine import (
+        multi_turn_selector,
+        slightly_bigger_deckspec,
+        walk_both,
+    )
+
+    result = walk_both(
+        slightly_bigger_deckspec(),
+        n_decisions=14,
+        decision_selector=multi_turn_selector,
+    )
+    assert result.error is None
+    # Step 11: turn 2 UNTAP — p1 is now active, p1 hand empty.
+    step_11 = result.steps[11]
+    assert step_11.py_view["turn"] == 2
+    assert step_11.py_view["step"] == "UNTAP"
+    assert step_11.py_view["active_player"] == 1
+    assert len(step_11.py_view["hand_p1"]) == 0
+    # Step 12: UPKEEP.
+    assert result.steps[12].py_view["step"] == "UPKEEP"
+    assert len(result.steps[12].py_view["hand_p1"]) == 0
+    # Step 13: DRAW — p1 draws one card via the side-channel
+    # advance_phase composition on both engines (CR 504.1).
+    step_13 = result.steps[13]
+    assert step_13.py_view["step"] == "DRAW"
+    assert len(step_13.py_view["hand_p1"]) == 1
+    # Both engines agree (no divergence).
+    assert step_13.divergences == []

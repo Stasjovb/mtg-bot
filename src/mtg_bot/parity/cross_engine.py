@@ -920,3 +920,222 @@ def play_a_land_selector(py_state, rust_state, step_index: int) -> dict:
         if "Land" in obj.printing.card_types:
             return {"kind": "play_land", "card_id": int(obj.id)}
     return {"kind": "pass_priority"}
+
+
+# ---------------------------------------------------------------------------
+# Phase-5 multi-turn slice — side-channel advance_phase helper
+# ---------------------------------------------------------------------------
+#
+# Rust exposes ``state.advance_phase()`` as a pymethod that fully composes the
+# phase-boundary side effects (CR 106.4 mana-pool empty on exit + CR 302.1
+# untap sweep + CR 514.1/514.2 cleanup discard/damage clear + CR 504.1
+# draw-step gated by CR 103.7c). Python's apply_action(PassPriority) is a
+# pure no-op; Python's natural phase advancer is ``simulate.run_step`` /
+# ``run_turn`` which run the whole step including the priority loop, triggers,
+# and turn-based actions. That's MUCH more than Rust's ``advance_phase`` does.
+#
+# For the multi-turn cross-engine harness we want the SAME composition on
+# both sides — just the side-effects Rust models, no Python-side extras.
+# The shape below is a deliberate mirror of Rust's ``advance_phase`` body
+# in ``rust/src/state_ops_steps.rs`` so a cross-engine walk that calls
+# both engines' advance_phase yields parity-matched state changes. This is
+# a HARNESS-only helper (not a real Python engine method) — the production
+# Python engine drives phase changes through ``run_turn`` / ``run_step``,
+# not through this routine. Documenting it here as a harness limitation
+# rather than as a real engine fix, per the task brief.
+#
+# If a future slice needs the full Python composition (triggers, UEOT
+# cleanup, etc.), the natural shape is to delete this helper and have
+# the harness drive ``run_step`` on Python while still driving
+# ``advance_phase`` on Rust — and then re-derive the cross-engine
+# divergence-mapping as the new shape's first slice.
+# ---------------------------------------------------------------------------
+
+
+# Canonical Python step order matching Rust's PHASE_UNTAP..PHASE_CLEANUP
+# integer sequence. Index in this tuple == Rust phase integer.
+_PY_STEP_BY_PHASE_INT: tuple = ()
+
+
+def _step_for_phase(phase_int: int):
+    """Translate a Rust phase integer (0..11) to the matching Python
+    ``Step`` enum. Rust's PHASE_UNTAP=0 .. PHASE_CLEANUP=11, mirroring
+    ``turn.STEP_ORDER``.
+    """
+    from mtg_bot.turn import STEP_ORDER
+
+    if 0 <= phase_int < len(STEP_ORDER):
+        return STEP_ORDER[phase_int]
+    raise ValueError(f"phase_int out of range: {phase_int}")
+
+
+def advance_phase_python(py_state) -> int:
+    """Side-channel Python mirror of Rust's ``state.advance_phase()``.
+
+    Mirrors the composition in ``rust/src/state_ops_steps.rs::advance_phase``
+    bit-for-bit:
+
+    1. Empty both players' mana pools (CR 106.4 — phase-exit).
+    2. If phase == CLEANUP: wrap to UNTAP, ``turn_number += 1``, swap
+       ``active_player_idx``, reset ``priority_player_idx`` to the new
+       active player.
+    3. Else: tick the phase forward by 1.
+    4. If new phase == UNTAP: run the untap sweep (untap all permanents
+       for the new active player) and clear summoning sickness on
+       their permanents.
+    5. If new phase == DRAW and ``turn_number != 1``: draw a card for
+       the active player (CR 504.1 gated by CR 103.7c).
+    6. If new phase == CLEANUP: run the cleanup-step's hand-size
+       discard for the active player (max=7) and clear marked damage
+       on all battlefield permanents (CR 514.1 + CR 514.2).
+
+    Returns the new phase integer (matches Rust's return shape).
+
+    Deliberately NOT a real Python engine entrypoint — this is a
+    harness primitive used only by the cross-engine smoke walker.
+    The production Python engine drives phase changes through
+    ``simulate.run_step`` / ``run_turn`` which compose a much larger
+    surface (triggers, UEOT continuous-effect expiration, priority
+    loop). This helper restricts the composition to exactly what
+    Rust's ``advance_phase`` does so the cross-engine walk compares
+    apples-to-apples.
+    """
+    from mtg_bot.turn import (
+        STEP_ORDER,
+        Step,
+        run_untap_step,
+    )
+
+    # 1. CR 106.4 — empty both players' mana pools BEFORE the phase counter
+    #    ticks forward. Mirrors Rust's ``empty_all_mana_pools_inline``.
+    for p in py_state.players:
+        p.mana_pool.clear()
+
+    # Determine current phase as an integer.
+    cur_step = py_state.step
+    cur_phase_int = STEP_ORDER.index(cur_step) if cur_step in STEP_ORDER else 0
+
+    if cur_step == Step.CLEANUP:
+        # 2. Wrap to UNTAP, bump turn, swap active player, reset priority.
+        new_phase_int = 0
+        py_state.turn_number += 1
+        py_state.active_player_idx = 1 - py_state.active_player_idx
+        py_state.priority_player_idx = py_state.active_player_idx
+    else:
+        new_phase_int = cur_phase_int + 1
+
+    new_step = STEP_ORDER[new_phase_int]
+    py_state.step = new_step
+
+    if new_step == Step.UNTAP:
+        # 4. Untap sweep + summoning-sick clear via the existing primitive.
+        #    ``run_untap_step`` does both (and a bunch of Python-only
+        #    bookkeeping that Rust doesn't model — controller_untap
+        #    expiry, phasing, agent overrides). The Python-only extras
+        #    are inert on the synthetic deck (no continuous effects,
+        #    no phased cards, no agent overrides), so calling
+        #    ``run_untap_step`` produces the same observable state as
+        #    a minimal "untap + clear summoning sick" mirror would.
+        run_untap_step(py_state)
+
+    if new_step == Step.DRAW and py_state.turn_number != 1:
+        # 5. CR 504.1 gated by CR 103.7c. Same draw_card primitive used
+        #    by the play_a_land_selector's step-0 side-channel draw.
+        from mtg_bot.turn import draw_card as _py_draw_card
+
+        _py_draw_card(py_state, py_state.active_player_idx)
+
+    if new_step == Step.CLEANUP:
+        # 6. CR 514.1 hand-size discard + CR 514.2 damage clear.
+        #    NOT calling ``run_cleanup_step`` directly because that
+        #    Python primitive composes a much larger surface (UEOT
+        #    expiration, copy reverts, control-change reverts, layer
+        #    cache rebuilds) that Rust's ``advance_phase`` does NOT
+        #    do. We inline only the two CR 514 hooks Rust models.
+        from mtg_bot.game import Zone
+
+        ap = py_state.player_by_id(py_state.active_player_idx)
+        while len(ap.hand) > 7:
+            card = ap.hand.pop()
+            card.zone = Zone.GRAVEYARD
+            ap.graveyard.append(card)
+        # Damage clear on both battlefields. ``damage`` is the Python
+        # field (a per-GameObject scalar — Rust's ``damage`` slot maps
+        # to the same observable). The reset happens at the same
+        # phase boundary on both sides.
+        for obj in py_state.battlefield:
+            obj.damage = 0
+
+    return new_phase_int
+
+
+def multi_turn_selector(py_state, rust_state, step_index: int) -> dict:
+    """Phase-5 multi-turn cross-engine smoke selector.
+
+    Drives multiple turns of play by combining:
+
+    * **Side-channel phase advance.** When the current phase is NOT a
+      phase where a meaningful action lives (UNTAP / UPKEEP / DRAW /
+      BEGINNING_OF_COMBAT / DECLARE_ATTACKERS / DECLARE_BLOCKERS /
+      COMBAT_DAMAGE / END_OF_COMBAT / END_STEP / CLEANUP), the selector
+      side-channels ``advance_phase`` on BOTH engines and then emits
+      ``pass_priority`` so the harness's per-step compare fires after
+      the phase-boundary side effects have settled. Using a side-
+      channel is a deliberate harness limitation — Python's
+      ``apply_action(PassPriority)`` is a pure no-op and there is no
+      ``advance_phase`` action variant either side dispatches through
+      ``apply_action``. The same pattern as the inaugural draw side-
+      channel in :func:`play_a_land_selector`.
+
+    * **MAIN-phase land drop.** When the current phase is
+      PRECOMBAT_MAIN or POSTCOMBAT_MAIN and p0's hand contains a Land,
+      emit ``play_land`` for the first such land. Subsequent decisions
+      on the same MAIN phase find no more lands (Python's
+      ``_play_land`` removed the only one), so the selector advances
+      phase on the next call.
+
+    The harness's per-step compare fires AFTER both side-channels +
+    the emitted action are applied. The point of the slice is to surface
+    the first NOVEL divergence triggered by multi-turn play — most
+    likely candidates per :doc:`docs/RUST_PARITY_GAPS.md`:
+
+    * **I18 (CR 103.7c first-turn skip)** — on turn 1's DRAW step, both
+      engines must skip the auto-draw. If they don't agree, hand_p0
+      and library_p0 diverge at the UNTAP -> DRAW boundary.
+    * **I20 (advance_phase mana-empty + CLEANUP hooks)** — if the two
+      engines compose phase-boundary effects differently, mana_pool /
+      hand / battlefield diverge after the relevant boundary.
+    * **Untap sweep + summoning-sick clear (I10)** — first surfaces
+      on turn 2's UNTAP entry since turn 1's UNTAP is the starting
+      state's phase (no prior phase to advance FROM).
+    * **CLEANUP -> UNTAP wrap** — turn 2's beginning involves
+      ``turn_number += 1`` + ``active_player_idx`` swap. First test
+      of these composed side effects under cross-engine.
+
+    The selector deliberately does NOT touch combat (no creatures
+    to attack with on this deck, and the selector returns
+    pass_priority through DECLARE_ATTACKERS / DECLARE_BLOCKERS).
+    """
+    from mtg_bot.turn import STEP_ORDER, Step
+
+    cur_step = py_state.step
+    active_idx = py_state.active_player_idx
+
+    # Phases where we have a meaningful action to drive. Right now: MAIN1
+    # / MAIN2 for play_land. Everything else: advance and pass.
+    if cur_step in (Step.PRECOMBAT_MAIN, Step.POSTCOMBAT_MAIN):
+        # Look for a Land in the active player's hand.
+        ap_hand = py_state.players[active_idx].hand
+        for obj in ap_hand:
+            if "Land" in obj.printing.card_types:
+                return {"kind": "play_land", "card_id": int(obj.id)}
+        # No land available — advance phase past this MAIN step.
+        advance_phase_python(py_state)
+        rust_state.advance_phase()
+        return {"kind": "pass_priority"}
+
+    # All other phases: side-channel advance on both engines, then emit
+    # pass_priority so the harness's compare runs after the phase boundary.
+    advance_phase_python(py_state)
+    rust_state.advance_phase()
+    return {"kind": "pass_priority"}

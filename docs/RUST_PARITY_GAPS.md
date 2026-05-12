@@ -962,6 +962,74 @@ Vec construction order (`make_state` and `make_synthetic_state`
 push input order into the Vec; the fingerprint walks that Vec
 front-to-back unchanged).
 
+### CE4. `battlefield` ordering — Rust groups by controller, Python orders by ETB timestamp
+
+- **Pinned by**:
+  `tests/test_parity_smoke.py::test_cross_engine_multi_turn_selector_surfaces_ce4_battlefield_ordering`
+  (strict-xfail, this slice). The companion clean-walk pin
+  `test_cross_engine_multi_turn_selector_walks_clean` is xfailed
+  on the same root cause.
+- **Surfaced by**: Phase-5 follow-up #3 — the `multi_turn_selector`
+  in `src/mtg_bot/parity/cross_engine.py`. Drives multiple turns of
+  play on `slightly_bigger_deckspec`; the divergence first appears
+  on **step 28**, turn 3 PRECOMBAT_MAIN, when p0 plays a Forest while
+  p1's Mountain is already on the battlefield. Both engines have the
+  same two cards but in different orders:
+  - Python `battlefield`: `(('Mountain' [p1], ...), ('Forest' [p0], ...))`
+    — ETB-timestamp order, Mountain entered first (turn 2 p1 MAIN1)
+    and Forest entered second (turn 3 p0 MAIN1).
+  - Rust `battlefield`: `(('Forest' [p0], ...), ('Mountain' [p1], ...))`
+    — controller-grouped order, p0's battlefield emits before p1's
+    regardless of ETB order.
+- **Rust today**: `state_ops_snapshot.rs::battlefield_snapshot`
+  (line 179) flat-emits `players[0].battlefield` THEN
+  `players[1].battlefield`. Each `Player` carries its own
+  `battlefield: Arc<Vec<GameObject>>`; the snapshot getter
+  concatenates them in player-index order. The docstring on
+  `battlefield_snapshot` explicitly flags this divergence and
+  predicts it will surface "the first time a p1 permanent ETBs
+  between two p0 permanents" — which is exactly what the
+  `multi_turn_selector` walks into on step 28.
+- **CR / Python expected**: `state.battlefield` is one centralized
+  list (`game.py:GameState.battlefield`, populated by
+  `actions._play_land` line 1084 doing `card.zone = Zone.BATTLEFIELD`
+  and `state.battlefield.append(card)` elsewhere — let the parity-
+  closure slice trace the exact append site). Order is ETB
+  timestamp across both players, NOT controller-grouped. CR 506.1
+  / CR 608.2g do not mandate a battlefield iteration order, but
+  Python's centralized list is the parity reference and the
+  cross-engine harness compares against it.
+- **Impact**: medium. Multi-turn cross-engine smoke fails on step
+  28 onwards. Any downstream comparison that walks
+  `battlefield_snapshot()` order-sensitively (e.g. cleanup-step
+  damage clear iterating bf in order; legal_decisions emitting
+  ActivateAbility in source-id order; the 8-tuple zone signature
+  the fingerprint folds) sees ordering-only divergences. The
+  underlying engine state is parity-equal — same cards on the same
+  controllers; only the read-order through `battlefield_snapshot`
+  diverges.
+- **Closeable**: yes — two-option closure:
+  1. **Refactor Rust to a single centralized `state.battlefield: Arc<Vec<GameObject>>`**.
+     Strongest parity (the per-player split goes away entirely).
+     Touches every site that walks
+     `player.battlefield` — `state_ops_cast.rs::move_from_hand_to_battlefield`,
+     `state_ops_resolve.rs` (every ETB pathway), the snapshot
+     getter, and the SBA pass. Large surface; this is the
+     "Rust battlefield representation refactor" the
+     `battlefield_snapshot` docstring alludes to.
+  2. **Stamp ETB timestamp on each `GameObject` and sort
+     `battlefield_snapshot`'s output by it**. Minimal-surface
+     closure — only `state_ops_snapshot.rs::battlefield_snapshot`
+     and a new per-object `etb_timestamp: u32` field change.
+     Equivalent observable parity for the cross-engine smoke;
+     leaves the per-player Vec structure intact for iteration
+     hot paths.
+
+   The brief calls out option (1) as cleaner long-term; option (2)
+   is the cheaper one-slice closure if a follow-up slice wants to
+   unblock multi-turn cross-engine smoke without touching every
+   ETB site.
+
 (Other smoke-flagged divergences may be added by follow-up Phase 5
 slices as the deck pool / decision script grows.)
 
