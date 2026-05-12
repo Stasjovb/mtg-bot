@@ -253,6 +253,8 @@ the test lands in a commit.
 
 | rust(effect-set-base-pt-ueot): UeotModifier::SetBasePT + Effect::SetBasePTUntilEOT — CR 613.4 layer 7b base override (Genemorph-Imago family, 2+ EoE cards). Composers (effective_power/toughness, SBA toughness) read the LAST SetBasePT if present, else printed base. Layer 7c additive bonuses still stack on top. | tests_rust/test_ueot.py extend | green  | feature/rust-effect-set-base-pt-ueot |
 
+| rust(effect-conditional-if-void): Effect::ConditionalIfVoid — Decode-Transmissions / Hymn-of-the-Faller-shape intervening-if keyed on the EoE Void condition (4 EoE cards). Substrate: adds `permanent_left_battlefield_this_turn` + `spell_warped_this_turn` bool fields on GameState, both default false; resolver reads `is_void_active` (OR of the two flags). Production call sites that flip the flags are deferred (no LTB / warp tracking in Rust yet); the predicate falls through to the else-branch until they land. Pinned fingerprint baselines unchanged (flags are not part of the digest). | tests_rust/test_resolve.py extend | green | feature/rust-effect-conditional-if-void |
+
 ## Build invocation reminder
 
 ```
