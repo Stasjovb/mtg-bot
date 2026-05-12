@@ -349,10 +349,15 @@ def main(argv=None) -> None:  # pragma: no cover
     started = time.perf_counter()
     try:
         if args.mode == "shm":
-            # shm REQUIRES fork — workers inherit shared-tensor storage
-            # and mp.Event file descriptors. spawn would re-pickle the
-            # handle and break the inheritance contract.
-            ctx = mp.get_context("fork")
+            # shm uses fork on Linux (workers inherit shared-tensor
+            # storage and mp.Event file descriptors), spawn on Windows
+            # (workers pickle-rehydrate the handle via the Pool
+            # initializer). torch.Tensor.share_memory_() works in both
+            # cases; the substrate is portable.
+            from mtg_bot.search.shm_nn_eval_server import (
+                preferred_mp_context,
+            )
+            ctx = preferred_mp_context()
             with ctx.Pool(
                 args.workers,
                 initializer=_shm_init_worker,

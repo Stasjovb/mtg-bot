@@ -2795,23 +2795,24 @@ def run_shard_pull(
 
     shard_t0 = _time.perf_counter()
     # Optional: install a SharedTensorNNEvalServer (PR #40) for this
-    # shard's workers. Linux-only — gated tightly. On Win10 the server
-    # raises NotImplementedError; on Mac the SHM server would proceed
-    # but auto_device falls back to CPU rather than MPS (the SHM
-    # server doesn't have MPS-tested device routing), which would
+    # shard's workers. Linux + Windows master — gated by the
+    # SHM_SUPPORTED_PLATFORMS set below. On Linux workers fork-inherit
+    # the shared-tensor mmap + mp.Event fds; on Windows the handle
+    # pickle-rehydrates in spawn workers via the executor initializer
+    # (both substrates verified end-to-end). macOS remains gated off
+    # because auto_device falls back to CPU rather than MPS for the
+    # SHM server (no MPS-tested device routing yet), which would
     # regress the Mac shard from its existing per-worker MPS path.
-    # Both remotes get the legacy per-worker NNEvaluator path
-    # regardless of the spec flag — flag only takes effect on the
-    # master (Linux WSL2). The server is constructed BEFORE the
-    # executor so workers fork-inherit the shared-tensor mmap +
-    # mp.Event fds.
+    # The master Win11 5090 needed this gate relaxed in 2026-05-12
+    # to recover NN-batch utilization at nodes=200 K=8 self-play.
     shm_server = None
     shm_initializer = None
     shm_initargs: tuple = ()
     shm_mp_context = None
-    if spec.use_shm_server and sys.platform == "linux":
+    if spec.use_shm_server and sys.platform in ("linux", "win32"):
         from mtg_bot.search.shm_nn_eval_server import (
             SharedTensorNNEvalServer,
+            preferred_mp_context,
             set_worker_handle,
         )
         try:
@@ -2837,16 +2838,18 @@ def run_shard_pull(
             shm_server.start()
             shm_initializer = set_worker_handle
             shm_initargs = (shm_server.handle(),)
-            shm_mp_context = mp.get_context("fork")
+            shm_mp_context = preferred_mp_context()
             print(
                 f"[shard {label}] using SharedTensorNNEvalServer "
                 f"(device={shm_server._device}, n_slots="
                 f"{max(64, n_workers + 16)})"
             )
         except NotImplementedError as e:
-            # On a host where the SHM server is unsupported (Windows),
-            # fall through to the legacy per-worker NNEvaluator path.
-            # The cfg's device="auto" path runs as before.
+            # On a host where the SHM server is unsupported (now only
+            # macOS by policy — Linux and Windows both go through the
+            # active branch above), fall through to the legacy per-
+            # worker NNEvaluator path. The cfg's device="auto" path
+            # runs as before.
             print(
                 f"[shard {label}] SHM server unavailable ({e}); "
                 f"falling back to per-worker NNEvaluator path"
@@ -3322,21 +3325,21 @@ def run_shard_eval_pull(
     # Optional: install TWO SharedTensorNNEvalServers (PR #40) for the
     # eval workers — one per weights set. Workers route requests via
     # the cfg's ``weights_path`` since both new and old cfgs flow
-    # through the same fork-Pool initializer (each handle is
-    # registered under its weights_path key). Linux-only gate, same
-    # rationale as run_shard_pull: Win10 raises NotImplementedError
-    # on SHM server construction; Mac SHM construction would proceed
-    # but with CPU fallback (no MPS routing yet), regressing Mac
-    # MPS workers — keep the legacy per-worker NNEvaluator path on
-    # both remotes.
+    # through the same SHM-pool initializer (each handle is registered
+    # under its weights_path key). Linux + Windows master — gated the
+    # same as run_shard_pull. The fork+CUDA crash class fixed in
+    # PR #41 doesn't apply on Windows-spawn (children are fresh
+    # interpreters that re-init CUDA from scratch); macOS stays
+    # gated off because the SHM server lacks MPS device routing.
     shm_new_server = None
     shm_old_server = None
     shm_initializer = None
     shm_initargs: tuple = ()
     shm_mp_context = None
-    if spec.use_shm_server and sys.platform == "linux":
+    if spec.use_shm_server and sys.platform in ("linux", "win32"):
         from mtg_bot.search.shm_nn_eval_server import (
             SharedTensorNNEvalServer,
+            preferred_mp_context,
             set_worker_handle,
         )
         try:
@@ -3390,7 +3393,7 @@ def run_shard_eval_pull(
                 shm_old_server.handle() if shm_old_server is not None else None,
                 spec.old_weights_path,
             )
-            shm_mp_context = mp.get_context("fork")
+            shm_mp_context = preferred_mp_context()
             print(
                 f"[eval shard {label}] using 2x SharedTensorNNEvalServer "
                 f"(device={shm_new_server._device}, "

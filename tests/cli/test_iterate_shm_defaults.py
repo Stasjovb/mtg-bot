@@ -2,17 +2,20 @@
 ``--use-shm-self-play`` and ``--use-shm-eval`` flags.
 
 The SharedTensorNNEvalServer (PR #40, deadlock fix in PR #43) is the
-fast path for both self-play and eval NN traffic on Linux. It can't be
-constructed on Windows (fork-shared-tensor storage doesn't exist) and
-isn't wired into Mac MPS yet, so the defaults flip per platform:
+fast path for both self-play and eval NN traffic. The substrate works
+on Linux fork + Windows spawn (verified 2026-05-12 via scripts/
+scout_shm_pool.py + the SHM server test suite running on Windows);
+macOS isn't wired into MPS routing yet. So the defaults flip per
+platform:
 
 * Linux → both flags default ON (use the SHM server).
-* Windows / Mac → both flags default OFF (fall back to the legacy
-  per-worker NNEvaluator path).
+* Windows → both flags default ON (substrate runs over spawn).
+* Mac → both flags default OFF (fall back to the legacy per-worker
+  NNEvaluator path so MPS workers keep their existing fast path).
 
 Argparse's ``BooleanOptionalAction`` gives us ``--no-use-shm-self-play``
-/ ``--no-use-shm-eval`` for free, so a Linux user who hits a regression
-can opt out without a code change. These tests pin both halves of that
+/ ``--no-use-shm-eval`` for free, so a user who hits a regression can
+opt out without a code change. These tests pin both halves of that
 contract: the platform-conditional default, and the ability to flip
 each flag independently with its ``--no-*`` counterpart.
 """
@@ -59,13 +62,14 @@ def _iterate_parser() -> argparse.ArgumentParser:
 
 
 def test_use_shm_self_play_default_is_platform_conditional():
-    """No flag passed → default tracks ``sys.platform == 'linux'``."""
+    """No flag passed → default tracks ``sys.platform in ('linux',
+    'win32')``."""
     parser = _iterate_parser()
     ns = parser.parse_args([
         "--bootstrap-version", "v4",
         "--deck-pool", "data/17lands/eoe_decks.json.gz",
     ])
-    assert ns.use_shm_self_play is (sys.platform == "linux")
+    assert ns.use_shm_self_play is (sys.platform in ("linux", "win32"))
 
 
 def test_use_shm_eval_default_is_platform_conditional():
@@ -75,11 +79,11 @@ def test_use_shm_eval_default_is_platform_conditional():
         "--bootstrap-version", "v4",
         "--deck-pool", "data/17lands/eoe_decks.json.gz",
     ])
-    assert ns.use_shm_eval is (sys.platform == "linux")
+    assert ns.use_shm_eval is (sys.platform in ("linux", "win32"))
 
 
 def test_no_use_shm_self_play_forces_off():
-    """``--no-use-shm-self-play`` must opt out even on Linux."""
+    """``--no-use-shm-self-play`` must opt out even on Linux/Windows."""
     parser = _iterate_parser()
     ns = parser.parse_args([
         "--bootstrap-version", "v4",
@@ -90,7 +94,7 @@ def test_no_use_shm_self_play_forces_off():
 
 
 def test_no_use_shm_eval_forces_off():
-    """``--no-use-shm-eval`` must opt out even on Linux."""
+    """``--no-use-shm-eval`` must opt out even on Linux/Windows."""
     parser = _iterate_parser()
     ns = parser.parse_args([
         "--bootstrap-version", "v4",
@@ -101,9 +105,9 @@ def test_no_use_shm_eval_forces_off():
 
 
 def test_use_shm_self_play_explicit_on_works_everywhere():
-    """The positive form still works (no-op on Linux, opt-in on Mac/Win
-    — though the shard runner will silently no-op there since the SHM
-    construction is platform-gated downstream)."""
+    """The positive form still works (no-op on Linux/Windows, opt-in
+    on Mac — though the shard runner will silently no-op there since
+    the SHM activation is platform-gated downstream)."""
     parser = _iterate_parser()
     ns = parser.parse_args([
         "--bootstrap-version", "v4",
@@ -121,5 +125,5 @@ def test_split_flags_are_independent():
         "--deck-pool", "data/17lands/eoe_decks.json.gz",
         "--no-use-shm-eval",
     ])
-    assert ns.use_shm_self_play is (sys.platform == "linux")
+    assert ns.use_shm_self_play is (sys.platform in ("linux", "win32"))
     assert ns.use_shm_eval is False
