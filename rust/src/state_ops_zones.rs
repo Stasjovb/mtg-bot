@@ -80,7 +80,7 @@ fn take_from_zone(zone: &mut Zone, obj_id: u32) -> Option<GameObject> {
 /// Cheap and idempotent — `bool = true` is fine to set repeatedly.
 /// The reset site is `cleanup_step_for_active_player_inline` in
 /// `state_ops_steps.rs` (entry to PHASE_CLEANUP). See
-/// `docs/RUST_PARITY_GAPS.md` I28 for the full lifecycle invariant.
+/// `docs/RUST_PARITY_GAPS.md` I29 for the full lifecycle invariant.
 pub(crate) fn mark_left_battlefield_if_nonland(
     state: &mut GameState,
     printing_id: u32,
@@ -188,7 +188,7 @@ impl GameState {
         // remove succeeds. Mirrors Python's
         // `turn.move_off_battlefield` (turn.py:158-164) which gates the
         // flag on `not obj.printing.is_land`. See
-        // `docs/RUST_PARITY_GAPS.md` I28 for the full invariant.
+        // `docs/RUST_PARITY_GAPS.md` I29 for the full invariant.
         let mut taken: Option<GameObject> = None;
         let mut source_was_battlefield = false;
         for player in self.players.iter_mut() {

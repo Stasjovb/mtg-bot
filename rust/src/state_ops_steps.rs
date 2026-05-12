@@ -287,7 +287,7 @@ fn cleanup_step_for_active_player_inline(state: &mut GameState) {
     // Python; we clear both Void-tracking flags here so the next
     // turn starts fresh. The flags fire `Effect::ConditionalIfVoid`
     // intervening-if predicates (read via `is_void_active`); see
-    // `docs/RUST_PARITY_GAPS.md` I28 for the lifecycle invariant.
+    // `docs/RUST_PARITY_GAPS.md` I29 for the lifecycle invariant.
     // Cheap unconditional reset — both fields are plain `bool` on
     // GameState (not behind an Arc), so no CoW dance is needed.
     state.permanent_left_battlefield_this_turn = false;

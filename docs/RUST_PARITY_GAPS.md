@@ -1288,7 +1288,7 @@ The counter `state.next_etb_timestamp` and the per-object slot
 (transient bookkeeping; mirrors the `mulligan_count` /
 `consecutive_passes` precedent).
 
-### I28. `state.permanent_left_battlefield_this_turn` flips on every nonland battlefield-exit; resets on entry to PHASE_CLEANUP
+### I29. `state.permanent_left_battlefield_this_turn` flips on every nonland battlefield-exit; resets on entry to PHASE_CLEANUP
 
 - **Pinned by**:
   `tests_rust/test_void.py::test_move_object_creature_from_bf_to_graveyard_flips_flag`,

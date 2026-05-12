@@ -859,7 +859,7 @@ impl GameState {
     /// iff a nonland permanent has left the battlefield this turn
     /// (set inside `move_object` on battlefield-exit; reset on
     /// entry to PHASE_CLEANUP via `advance_phase`). See
-    /// `docs/RUST_PARITY_GAPS.md` I28 for the full lifecycle.
+    /// `docs/RUST_PARITY_GAPS.md` I29 for the full lifecycle.
     #[getter]
     fn permanent_left_battlefield_this_turn(&self) -> bool {
         self.permanent_left_battlefield_this_turn
