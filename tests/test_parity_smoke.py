@@ -4894,3 +4894,404 @@ def test_cross_engine_defender_selector_pre_injection_walks_clean(parity_smoke):
         "defender injection fires on selector call 165 (the 166th "
         "decision, 0-indexed 165)"
     )
+
+
+# ---------------------------------------------------------------------------
+# Phase 5 follow-up #16: indestructible_selector tests (CR 702.12).
+#
+# Three scenarios from the brief:
+#
+#   * **Test A** — indestructible blocker takes lethal damage (damage ==
+#     toughness) via real combat. Both engines: blocker on bf, damage=2,
+#     tapped=True. Exercises the SBA lethal-damage filter (CR 704.5g +
+#     702.12a) — `state_ops_sba::collect_sba_victims` skips creatures
+#     with the indestructible keyword; Python's `turn.state_based_actions`
+#     `elif "indestructible" in kws: continue` does the same.
+#
+#   * **Test B** — indestructible takes EXCESS damage (damage > toughness)
+#     via side-channel damage marking. Both engines: still on bf,
+#     damage=5. Exercises the SAME SBA filter but with the damage axis
+#     pushed past the equality boundary; a sloppy port that special-
+#     cases damage==toughness would diverge.
+#
+#   * **Test C** — indestructible targeted by a direct `destroy_target`
+#     effect. Both engines: still on bf. Exercises a DISTINCT call site
+#     from the SBA filter — `Effect::DestroyTarget`
+#     (state_ops_resolve.rs:1023-1078) on Rust and `turn.destroy(state,
+#     obj)` (turn.py:532-537) on Python; both gate on the keyword
+#     before mutating.
+#
+# Outcome prediction: **clean pass on all three** — both engines' code
+# paths read `keywords` in lockstep. No CE divergence expected. If one
+# surfaces, it's CE18.
+# ---------------------------------------------------------------------------
+
+
+def test_cross_engine_indestructible_selector_walks_clean(parity_smoke):
+    """**Indestructible clean-walk pin (Test A)** — 200-decision walk
+    on :func:`multi_blocker_deckspec` with
+    :func:`indestructible_selector` is parity-clean every step.
+
+    Walk shape:
+
+      * Steps 0-167: identical to retaliation_selector backbone.
+      * Step 168: Bear Idol (2/2 indestructible) injected on p1 bf;
+        Bears id 5 summoning_sick cleared on p0 bf.
+      * DECLARE_ATTACKERS p0: emit [5] (Bears).
+      * DECLARE_BLOCKERS p1: emit [[14, 5]] (Bear Idol blocks; sole
+        eligible blocker because Bears 9/11 still tapped from turn-12
+        attack).
+      * COMBAT_DAMAGE: each takes 2 damage.
+      * SBA: Bears id 5 (damage=2 >= toughness=2) → graveyard.
+        Bear Idol (damage=2, indestructible) STAYS on bf — both
+        engines.
+
+    The SBA indestructible-filter parity is exercised at the per-step
+    field-view compare on the post-COMBAT_DAMAGE step. If either engine
+    incorrectly destroys the Bear Idol via SBA, the bf size / id list
+    diverges and the test fails.
+    """
+    from mtg_bot.parity.cross_engine import (
+        indestructible_selector,
+        multi_blocker_deckspec,
+        walk_both,
+    )
+
+    result = walk_both(
+        multi_blocker_deckspec(),
+        n_decisions=200,
+        decision_selector=indestructible_selector,
+    )
+    assert result.error is None, (
+        f"walk aborted at step {result.aborted_at}: {result.error}"
+    )
+    for step in result.steps:
+        assert step.divergences == [], (
+            f"unexpected divergence at step {step.step_index}: "
+            f"action={step.action_dict} "
+            f"{[(d.field, d.py_value, d.rust_value, d.known_gap) for d in step.divergences]}"
+        )
+
+
+def test_cross_engine_indestructible_post_combat_state(parity_smoke):
+    """**Indestructible post-combat structural pin (Test A)** — drives
+    enough decisions for combat damage + SBA to fire (175 steps —
+    just past COMBAT_DAMAGE at step 173, before CLEANUP at step 177
+    which zeroes damage marks per CR 514.2), then asserts the Bear
+    Idol is STILL on p1's bf with ``damage=2, summoning_sick=False``
+    on both engines.
+
+    Pins the brief's Test A contract: "post-combat-damage AND post-SBA,
+    p1's Bear Idol is STILL ON THE BATTLEFIELD with damage=2".
+
+    Note on tapped state: the Bear Idol stays ``tapped=False`` because
+    blocking does NOT tap a creature in MTG (CR 509 — only attacking
+    taps per CR 508.1c). Both engines agree.
+
+    Also pins the attacker's death: Bears id 5 should be in p0's
+    graveyard (2 damage from Bear Idol >= toughness 2 = lethal; no
+    indestructible on Bears).
+    """
+    from mtg_bot.parity.cross_engine import (
+        build_matched_states,
+        indestructible_selector,
+        multi_blocker_deckspec,
+        step_both,
+    )
+
+    py_state, rust_state = build_matched_states(multi_blocker_deckspec())
+    # 175 steps: past COMBAT_DAMAGE (step 173) where damage applied
+    # and SBA ran, but before CLEANUP (step 177) which zeroes damage
+    # marks (CR 514.2 — damage clears at end of turn).
+    for i in range(175):
+        action = indestructible_selector(py_state, rust_state, i)
+        step_both(py_state, rust_state, action)
+
+    # Bear Idol should be on p1's bf, with damage=2 on both engines.
+    py_idol = next(
+        (o for o in py_state.battlefield
+         if o.printing.name == "Bear Idol"),
+        None,
+    )
+    assert py_idol is not None, (
+        "expected Bear Idol on Python p1 bf post-combat — "
+        "indestructible should have protected it from SBA "
+        "destruction. bf names = "
+        f"{[(o.id, o.printing.name) for o in py_state.battlefield]}"
+    )
+    assert py_idol.controller_id == 1
+    assert py_idol.damage == 2, (
+        f"expected Python Bear Idol damage = 2 (took 2 from Bears 5 "
+        f"in combat), got {py_idol.damage}"
+    )
+    assert py_idol.summoning_sick is False
+
+    rust_idol = next(
+        (e for e in rust_state.battlefield_snapshot()
+         if e.get("printing_name") == "Bear Idol"),
+        None,
+    )
+    assert rust_idol is not None, (
+        "expected Bear Idol on Rust p1 bf post-combat — "
+        "indestructible should have protected it from SBA destruction"
+    )
+    assert rust_idol["controller_id"] == 1
+    assert rust_idol["damage"] == 2, (
+        f"expected Rust Bear Idol damage = 2, got {rust_idol['damage']}"
+    )
+    assert rust_idol["summoning_sick"] is False
+
+    # Bears id 5 (the attacker) should be DEAD — 2 damage from Bear
+    # Idol >= toughness 2 = lethal, no indestructible on the attacker.
+    py_p0_gy_ids = {o.id for o in py_state.players[0].graveyard}
+    assert 5 in py_p0_gy_ids, (
+        f"expected Bears id 5 in Python p0 graveyard (died to combat "
+        f"damage from Bear Idol), got {py_p0_gy_ids}"
+    )
+    rust_p0_gy_ids = {
+        int(e["id"]) for e in rust_state.graveyard_snapshot(0)
+    }
+    assert 5 in rust_p0_gy_ids, (
+        f"expected Bears id 5 in Rust p0 graveyard, got {rust_p0_gy_ids}"
+    )
+
+
+def test_cross_engine_indestructible_excess_damage_sba(parity_smoke):
+    """**Indestructible excess-damage SBA pin (Test B)** — drives the
+    walk to post-combat state where Bear Idol has damage=2, then
+    side-channel-marks ADDITIONAL damage so total = 5 (well past
+    toughness=2). Calls ``apply_sbas`` and asserts Bear Idol is STILL
+    on bf on both engines.
+
+    A sloppy port that special-cased ``damage == toughness`` (rather
+    than ``damage >= toughness``) for the indestructible early-return
+    would surface as a divergence here. Both engines today gate on
+    the indestructible keyword BEFORE the damage>=toughness compare,
+    so excess damage is irrelevant.
+    """
+    from mtg_bot.parity.cross_engine import (
+        build_matched_states,
+        indestructible_selector,
+        multi_blocker_deckspec,
+        step_both,
+    )
+
+    py_state, rust_state = build_matched_states(multi_blocker_deckspec())
+    # 175 decisions: just past COMBAT_DAMAGE (step 173) where damage
+    # applied and SBA ran. Stop BEFORE CLEANUP (step 177) which
+    # zeroes damage marks (CR 514.2) — we want the existing damage=2
+    # on the Bear Idol to persist so we can layer additional damage
+    # on top.
+    for i in range(175):
+        action = indestructible_selector(py_state, rust_state, i)
+        step_both(py_state, rust_state, action)
+
+    # Locate Bear Idol on both engines and side-channel-mark
+    # additional damage. Python: direct field write. Rust:
+    # `deal_damage(obj_id, amount)` adds to the existing damage.
+    py_idol = next(
+        (o for o in py_state.battlefield
+         if o.printing.name == "Bear Idol"),
+        None,
+    )
+    assert py_idol is not None
+    rust_idol_id = next(
+        (int(e["id"]) for e in rust_state.battlefield_snapshot()
+         if e.get("printing_name") == "Bear Idol"),
+        None,
+    )
+    assert rust_idol_id is not None
+
+    # Add 3 more damage to bring total to 5 (a 2/2 with damage 5 is
+    # well past lethal; a non-indestructible creature dies on the
+    # next SBA pass).
+    py_idol.damage += 3
+    rust_state.deal_damage(rust_idol_id, 3)
+    assert py_idol.damage == 5
+    assert rust_state.get_damage(rust_idol_id) == 5
+
+    # Run SBA passes on both engines. Bear Idol should NOT be
+    # destroyed despite damage > toughness, because indestructible
+    # gates BEFORE the lethal-damage compare.
+    from mtg_bot.turn import state_based_actions as py_sba
+
+    py_sba(py_state)
+    rust_state.apply_sbas()
+
+    # Bear Idol still on bf with damage=5 on both engines.
+    py_idol_after = next(
+        (o for o in py_state.battlefield
+         if o.printing.name == "Bear Idol"),
+        None,
+    )
+    assert py_idol_after is not None, (
+        "expected Bear Idol still on Python p1 bf after excess-damage "
+        "SBA pass — indestructible gates before damage>=toughness "
+        "compare. bf names = "
+        f"{[(o.id, o.printing.name) for o in py_state.battlefield]}"
+    )
+    assert py_idol_after.damage == 5
+
+    rust_idol_after = next(
+        (e for e in rust_state.battlefield_snapshot()
+         if e.get("printing_name") == "Bear Idol"),
+        None,
+    )
+    assert rust_idol_after is not None, (
+        "expected Bear Idol still on Rust p1 bf after excess-damage "
+        "SBA pass — indestructible gates before damage>=toughness "
+        "compare"
+    )
+    assert rust_idol_after["damage"] == 5
+
+
+def test_cross_engine_indestructible_direct_destroy_effect(parity_smoke):
+    """**Indestructible destroy-effect pin (Test C)** — exercises the
+    DISTINCT call site from the SBA filter: a direct
+    ``Effect::DestroyTarget``-style resolution on an indestructible
+    target.
+
+    Uses a FRESH matched state (no walk) — injects Bear Idol on p1's
+    bf as the sole bf object (so Rust's
+    ``TargetFilter::AnyCreature`` picks it as ``bf[0]``), then:
+
+      * **Python**: directly calls ``turn.destroy(state, idol_obj)``.
+        Returns False (indestructible filter at turn.py:532-537 fires).
+      * **Rust**: side-channel-casts a synthetic ``destroy_target``
+        sorcery via the same ``register_and_inject_object`` +
+        ``push_to_stack`` + ``resolve_top_of_stack`` pipeline that
+        :func:`mass_removal_side_channel` uses. The
+        ``Effect::DestroyTarget`` resolve at
+        ``state_ops_resolve.rs:1023-1078`` peeks the target's
+        ``printing.keywords`` for ``"indestructible"`` and early-
+        returns Ok(()) without mutating.
+
+    Both engines: Bear Idol still on p1's bf post-resolve. No CE
+    divergence expected — both code paths gate on the keyword on the
+    printing.
+    """
+    from mtg_bot.cards.base import CardPrinting, ManaCost
+    from mtg_bot.game import Zone
+    from mtg_bot.parity.cross_engine import (
+        build_matched_states,
+        multi_blocker_deckspec,
+    )
+
+    py_state, rust_state = build_matched_states(multi_blocker_deckspec())
+
+    # ---- Inject Bear Idol on p1's bf on both engines ----
+    indestr_printing = CardPrinting(
+        name="Bear Idol",
+        mana_cost_str="",
+        mana_cost=ManaCost(),
+        type_line="Creature",
+        supertypes=(),
+        card_types=("Creature",),
+        subtypes=(),
+        power=2,
+        toughness=2,
+        produces=frozenset(),
+        keywords=frozenset({"indestructible"}),
+    )
+    py_idol = py_state.new_object(
+        indestr_printing, owner_id=1, zone=Zone.BATTLEFIELD,
+    )
+    py_idol.summoning_sick = False
+    py_idol.tapped = False
+    py_idol.damage = 0
+    py_idol.etb_timestamp = py_state.next_timestamp
+    py_state.next_timestamp += 1
+    py_state.battlefield.append(py_idol)
+
+    ZONE_BATTLEFIELD = 2
+    rust_idol_id = rust_state.register_and_inject_object(
+        {
+            "name": "Bear Idol",
+            "card_types": ["Creature"],
+            "power": 2,
+            "toughness": 2,
+            "keywords": ["indestructible"],
+        },
+        1,  # controller = p1
+        ZONE_BATTLEFIELD,
+    )
+
+    # ---- Python side: direct destroy() call ----
+    # Python's turn.destroy is the lowest-level destroy primitive
+    # used by every "destroy target X" effect (DestroyTargetCreature,
+    # DestroyTargetArtifact, ...). It returns False without moving
+    # the object when the target carries indestructible.
+    from mtg_bot.turn import destroy as py_destroy
+
+    py_destroy_result = py_destroy(py_state, py_idol)
+    assert py_destroy_result is False, (
+        "expected Python destroy() to return False for indestructible "
+        "target (CR 702.12 — destroy fizzles)"
+    )
+
+    # ---- Rust side: cast a synthetic destroy_target sorcery ----
+    # Mirrors mass_removal_side_channel's shape but with the
+    # destroy_target effect kind. The target filter is "any_creature"
+    # which picks bf[0] of the DEFENDER (1 - active_player = p1).
+    # Since p1's bf has only the Bear Idol on it, bf[0] == Bear Idol.
+    ZONE_HAND = 0
+    spell_rust_id = rust_state.register_and_inject_object(
+        {
+            "name": "Doom Blade",
+            "card_types": ["Sorcery"],
+            "effects": [
+                {
+                    "kind": "destroy_target",
+                    "target": {"kind": "any_creature"},
+                },
+            ],
+        },
+        0,  # controller = p0 (the active player; defender = p1)
+        ZONE_HAND,
+    )
+    rust_state.push_to_stack(spell_rust_id, 0)
+    rust_state.resolve_top_of_stack()
+    rust_state.apply_sbas()
+
+    # ---- Both engines: Bear Idol STILL on p1's bf ----
+    py_idol_after = next(
+        (o for o in py_state.battlefield
+         if o.printing.name == "Bear Idol"),
+        None,
+    )
+    assert py_idol_after is not None, (
+        "expected Bear Idol still on Python p1 bf after destroy() — "
+        "indestructible should have suppressed the destroy. bf = "
+        f"{[(o.id, o.printing.name, o.controller_id) for o in py_state.battlefield]}"
+    )
+    assert py_idol_after.controller_id == 1
+    # Bear Idol should NOT be in any graveyard.
+    for player_idx in (0, 1):
+        gy_names = [
+            o.printing.name
+            for o in py_state.players[player_idx].graveyard
+        ]
+        assert "Bear Idol" not in gy_names, (
+            f"Bear Idol unexpectedly in Python p{player_idx} graveyard"
+            f" — indestructible filter failed: {gy_names}"
+        )
+
+    rust_idol_after = next(
+        (e for e in rust_state.battlefield_snapshot()
+         if e.get("printing_name") == "Bear Idol"),
+        None,
+    )
+    assert rust_idol_after is not None, (
+        "expected Bear Idol still on Rust p1 bf after destroy_target "
+        "resolve — indestructible should have suppressed the destroy"
+    )
+    assert rust_idol_after["controller_id"] == 1
+    for player_idx in (0, 1):
+        rust_gy_names = [
+            e.get("printing_name")
+            for e in rust_state.graveyard_snapshot(player_idx)
+        ]
+        assert "Bear Idol" not in rust_gy_names, (
+            f"Bear Idol unexpectedly in Rust p{player_idx} graveyard "
+            f"— indestructible filter failed: {rust_gy_names}"
+        )
