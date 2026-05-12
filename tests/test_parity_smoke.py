@@ -7791,3 +7791,462 @@ def test_cross_engine_flash_selector_pre_injection_walks_clean(parity_smoke):
         "Bear Flash should not yet exist at end of step 167 -- "
         "flash injection fires at step 168"
     )
+
+
+# ---------------------------------------------------------------------------
+# Phase 5 follow-up #21: activated_mid_combat tests. Pins the
+# activated_mid_combat_selector walk + the predicted shared engine
+# behavior at a non-MAIN priority window. See
+# cross_engine.activated_mid_combat_selector for the full design notes.
+#
+# **Test surfaces:**
+#
+#   * Test A: ``legal_decisions(0)`` emission at BEGINNING_OF_COMBAT
+#     with priority on the active player. Both engines should refuse
+#     to emit ActivateAbility for the injected Forest (the
+#     ``_is_sorcery_timing`` gate fails because step != MAIN). Same
+#     parity-clean axis the flash Test C pinned for the vanilla
+#     creature -- both engines on the same side of a shared gate.
+#
+#   * Test B: direct ``apply_action(activate_ability)`` mid-combat.
+#     Neither engine's dispatch arm phase-gates, so both should
+#     accept and credit {G}. Field-view compare: Forest tapped, G
+#     coin in pool, no stack push (mana abilities resolve immediately
+#     per CR 605.3a).
+#
+#   * Test C: phase-advance from the mid-combat step. The {G}
+#     credited in Test B should empty (per I20 mana-pool-empty-on-
+#     phase-boundary semantics). Both engines should agree.
+#
+#   * Test D (pre-injection walk-clean): the
+#     activated_mid_combat_selector backbone walks parity-clean for
+#     steps 0..167 (the pre-injection window). Same shape as every
+#     prior probe's walk-clean baseline.
+# ---------------------------------------------------------------------------
+
+
+def test_cross_engine_activated_mid_combat_test_a_no_emission_off_main(parity_smoke):
+    """**Test A**: legal_decisions for an untapped Forest on p0's
+    battlefield at BEGINNING_OF_COMBAT with p0 holding priority.
+
+    Setup: walk the retaliation_selector backbone to step 167 (turn
+    13 PRECOMBAT_MAIN, active=p0, priority=p0). Side-channel-advance
+    phase by ONE step on both engines (PRECOMBAT_MAIN ->
+    BEGINNING_OF_COMBAT). Inject a fresh untapped, unsick "Combat
+    Forest" onto p0's bf. Probe legal_decisions(0) emission.
+
+    Expected (parity-clean): both engines refuse to emit
+    ActivateAbility for the Combat Forest because the
+    ``_is_sorcery_timing`` gate fails (step=BEGINNING_OF_COMBAT not
+    in MAIN_STEPS, regardless of priority/active alignment). Python's
+    ``legal.py:303-304`` returns early after the instant-speed
+    CastSpell pass; Rust's ``state_ops_legal.rs:837-839`` returns
+    early at the matching post-instant-speed gate.
+
+    This is a SHARED engine limitation (CR 605.1 mana abilities are
+    nominally activatable at any priority window), NOT a CE
+    divergence. The test pins both engines on the same side.
+
+    If this test FAILS with one engine emitting ActivateAbility and
+    the other not, that's a NEW CE -- the gate is being applied
+    asymmetrically. Document as CE20 and xfail-pin.
+    """
+    from mtg_bot.legal import legal_actions
+    from mtg_bot.parity.cross_engine import (
+        activated_mid_combat_side_channel,
+        advance_phase_python,
+        build_matched_states,
+        multi_blocker_deckspec,
+        retaliation_selector,
+        step_both,
+    )
+    from mtg_bot.turn import Step
+
+    py_state, rust_state = build_matched_states(multi_blocker_deckspec())
+    for i in range(167):
+        action = retaliation_selector(py_state, rust_state, i)
+        step_both(py_state, rust_state, action)
+
+    # Sanity: turn 13 PRECOMBAT_MAIN active=p0 priority=p0.
+    assert py_state.step == Step.PRECOMBAT_MAIN
+    assert py_state.active_player_idx == 0
+    assert py_state.priority_player_idx == 0
+
+    # Advance ONE step: PRECOMBAT_MAIN -> BEGINNING_OF_COMBAT. Active
+    # stays p0, priority flows back to p0 (active player gets priority
+    # at the start of every step per CR 117.3a).
+    advance_phase_python(py_state)
+    rust_state.advance_phase()
+    assert py_state.step == Step.BEGINNING_OF_COMBAT
+    assert py_state.active_player_idx == 0
+    assert rust_state.active_player_idx == 0, (
+        f"Rust active_player_idx={rust_state.active_player_idx} != Python's 0"
+    )
+
+    # Inject a fresh untapped, unsick Combat Forest on p0's bf.
+    py_forest_id, rust_forest_id = activated_mid_combat_side_channel(
+        py_state, rust_state,
+    )
+
+    # ---- Probe Python's legal_actions(state, 0) ----
+    py_actions = legal_actions(py_state, 0)
+    py_activate_source_ids = [
+        int(a.source_id) for a in py_actions
+        if type(a).__name__ == "ActivateAbility"
+    ]
+    assert py_forest_id not in py_activate_source_ids, (
+        f"Python should NOT emit ActivateAbility for the Combat "
+        f"Forest (id {py_forest_id}) at BEGINNING_OF_COMBAT -- "
+        f"the _is_sorcery_timing gate at legal.py:303-304 returns "
+        f"early because step=BEGINNING_OF_COMBAT is not in "
+        f"MAIN_STEPS. If Python now emits, the gate's been moved -- "
+        f"this is a Python-only change that surfaces a NEW asymmetry "
+        f"vs Rust (CE20 candidate). Python emission ActivateAbility "
+        f"source ids: {py_activate_source_ids}; full emission types: "
+        f"{[type(a).__name__ for a in py_actions]}"
+    )
+
+    # ---- Probe Rust's legal_decisions(0) ----
+    rust_actions = rust_state.legal_decisions(0)
+    rust_activate_source_ids = [
+        a.get("source_id") for a in rust_actions
+        if a.get("kind") == "activate_ability"
+    ]
+    assert rust_forest_id not in rust_activate_source_ids, (
+        f"Rust should NOT emit ActivateAbility for the Combat Forest "
+        f"(id {rust_forest_id}) at BEGINNING_OF_COMBAT -- the "
+        f"is_sorcery_timing gate at state_ops_legal.rs:837-839 "
+        f"returns before the ActivateAbility emission loop runs. If "
+        f"Rust now emits, the gate's been moved -- this is a "
+        f"Rust-only change that surfaces a NEW asymmetry vs Python "
+        f"(CE20 candidate). Rust emission ActivateAbility source ids: "
+        f"{rust_activate_source_ids}; full emission kinds: "
+        f"{[a.get('kind') for a in rust_actions]}"
+    )
+
+    # Parity-clean shape pin: both engines emit ONLY pass_priority
+    # (no flash creatures, no instants, no sorcery-timing-gated
+    # actions). DeclareAttackers is gated on
+    # ``step == PHASE_DECLARE_ATTACKERS`` in Rust (not yet at
+    # BEGINNING_OF_COMBAT) and Python doesn't enumerate it either
+    # (legal_actions never emits DeclareAttackers per the docstring
+    # at engine.py:10-19).
+    rust_kinds = sorted(a.get("kind") for a in rust_actions)
+    assert rust_kinds == ["pass_priority"], (
+        f"Rust at BEGINNING_OF_COMBAT with empty hand + no eligible "
+        f"emission should produce ONLY pass_priority; got: {rust_kinds}"
+    )
+    py_types = sorted(type(a).__name__ for a in py_actions)
+    assert py_types == ["PassPriority"], (
+        f"Python at BEGINNING_OF_COMBAT should produce ONLY "
+        f"PassPriority; got: {py_types}"
+    )
+
+
+def test_cross_engine_activated_mid_combat_test_b_apply_dispatch_parity(parity_smoke):
+    """**Test B**: directly apply ``ActivateAbility(forest_id, 0)``
+    mid-combat (BEGINNING_OF_COMBAT) on both engines.
+
+    Setup: walk + advance + inject as in Test A. Then build an
+    ``{"kind": "activate_ability", "source_id": forest_id,
+    "ability_index": 0}`` dict and feed it to :func:`step_both`.
+
+    Expected (parity-clean): both engines accept the apply_action,
+    tap the Forest, and credit {G} to p0's mana pool. No stack push
+    on either engine (CR 605.3a mana abilities resolve immediately).
+
+    Test verifies:
+      * Forest's ``tapped`` flag flips True on both engines.
+      * p0's mana_pool gains exactly one G coin on both engines.
+      * Stack stays empty on both engines (no StackItem push for
+        the mana ability resolution).
+      * The cross-engine field-view divergence list for this step
+        is empty -- both engines agree on every fingerprinted field.
+
+    If the field-view compare DIVERGES on mana_pool_p0,
+    battlefield, or stack, that's the predicted CE20 surface --
+    document and xfail-pin.
+    """
+    from mtg_bot.parity.cross_engine import (
+        activated_mid_combat_side_channel,
+        advance_phase_python,
+        build_matched_states,
+        multi_blocker_deckspec,
+        retaliation_selector,
+        step_both,
+    )
+    from mtg_bot.turn import Step
+
+    py_state, rust_state = build_matched_states(multi_blocker_deckspec())
+    for i in range(167):
+        action = retaliation_selector(py_state, rust_state, i)
+        step_both(py_state, rust_state, action)
+
+    advance_phase_python(py_state)
+    rust_state.advance_phase()
+    assert py_state.step == Step.BEGINNING_OF_COMBAT
+
+    py_forest_id, rust_forest_id = activated_mid_combat_side_channel(
+        py_state, rust_state,
+    )
+    # Sanity: the freshly-injected Forest's id collision-free wrt the
+    # existing bf objects. Both engines allocate ids monotonically from
+    # the next-id pool; the helper guarantees no collision via the
+    # ``max+1`` scan on Rust side and Python's ``next_object_id``
+    # bump.
+    assert py_forest_id > 0
+    assert rust_forest_id > 0
+
+    # ---- Apply ActivateAbility on BOTH engines via step_both ----
+    activate_dict = {
+        "kind": "activate_ability",
+        "source_id": py_forest_id,
+        "ability_index": 0,
+    }
+    # Rust uses its own forest id (per-engine id allocation diverges
+    # for synthetic injections). Feed Rust its own dict.
+    rust_activate_dict = {
+        "kind": "activate_ability",
+        "source_id": rust_forest_id,
+        "ability_index": 0,
+    }
+    # step_both feeds the SAME dict to both engines, but the Python
+    # and Rust Forest ids may differ. Work around by applying
+    # directly per-engine (the step_both shape is for matched-id
+    # decisions; this probe deliberately diverges ids).
+    from mtg_bot.parity.cross_engine import (
+        _dict_to_python_action,
+        build_python_field_view,
+    )
+    from mtg_bot.actions import apply_action as py_apply_action
+
+    py_action = _dict_to_python_action(activate_dict)
+    py_apply_action(py_state, 0, py_action)
+    rust_state.apply_action(rust_activate_dict)
+
+    # ---- Compare post-state ----
+    # Python: find the Combat Forest object on bf; check tapped + pool.
+    py_forest = next(
+        o for o in py_state.battlefield
+        if int(o.id) == py_forest_id
+    )
+    assert py_forest.tapped, (
+        f"Python: Combat Forest (id {py_forest_id}) should be tapped "
+        f"after ActivateAbility; got tapped={py_forest.tapped}"
+    )
+    py_green_coins = sum(
+        1 for coin in py_state.players[0].mana_pool
+        if getattr(coin, "color", None) == "G"
+    )
+    assert py_green_coins == 1, (
+        f"Python: p0's mana_pool should have exactly 1 G coin after "
+        f"ActivateAbility (Forest's mana ability resolves "
+        f"immediately per CR 605.3a); got {py_green_coins} G coins. "
+        f"Pool: {py_state.players[0].mana_pool}"
+    )
+    assert len(py_state.stack) == 0, (
+        f"Python stack should be empty after mana ability activation "
+        f"(CR 605.3a -- mana abilities bypass the stack); got stack "
+        f"with {len(py_state.stack)} items"
+    )
+
+    # Rust: same checks via the engine's public getters.
+    rust_view = parity_smoke._build_field_view(rust_state)
+    rust_mana_p0 = dict(rust_view["mana_pool_p0"])
+    assert rust_mana_p0.get("G", 0) == 1, (
+        f"Rust: p0's mana_pool should have exactly 1 G after "
+        f"ActivateAbility; got mana_pool_p0={rust_view['mana_pool_p0']}"
+    )
+    assert rust_view["stack"] == (), (
+        f"Rust stack should be empty after mana ability (CR 605.3a); "
+        f"got: {rust_view['stack']}"
+    )
+    # Locate the Rust Combat Forest in the bf zone signature and
+    # verify tapped=True. The zone signature is a tuple of 8-tuples
+    # (printing_name, tapped, sick, dmg, counters, attached_to,
+    # ctrl, id) -- index 1 is tapped.
+    rust_forest_entries = [
+        entry for entry in rust_view["battlefield"]
+        if entry[0] == "Combat Forest"
+    ]
+    assert len(rust_forest_entries) == 1, (
+        f"Rust battlefield should contain exactly one Combat Forest; "
+        f"got {len(rust_forest_entries)}: {rust_forest_entries}"
+    )
+    # Zone signature encodes ``tapped`` as 0/1 int rather than
+    # bool (matches the Rust getter's wire shape; the Python normalizer
+    # passes the int through unchanged). Compare against truthy.
+    assert bool(rust_forest_entries[0][1]), (
+        f"Rust: Combat Forest should be tapped after ActivateAbility; "
+        f"got bf entry: {rust_forest_entries[0]}"
+    )
+
+    # ---- Cross-engine field-view compare on mana / bf / stack ----
+    py_view = build_python_field_view(py_state)
+    # Mana pool parity: both engines should agree on the 6-color
+    # tuple. This is the load-bearing field for the probe.
+    assert py_view["mana_pool_p0"] == rust_view["mana_pool_p0"], (
+        f"mana_pool_p0 diverges post-ActivateAbility -- predicted "
+        f"CE20 surface. Python: {py_view['mana_pool_p0']}; Rust: "
+        f"{rust_view['mana_pool_p0']}. Document as CE20 and "
+        f"xfail-pin per the brief's outcome (b) shape."
+    )
+    # Stack parity: both empty.
+    assert py_view["stack"] == rust_view["stack"], (
+        f"stack diverges post-ActivateAbility -- predicted CE20 "
+        f"surface (mana abilities should bypass the stack on both "
+        f"engines). Python: {py_view['stack']}; Rust: "
+        f"{rust_view['stack']}"
+    )
+
+
+def test_cross_engine_activated_mid_combat_test_c_phase_advance_empties_pool(parity_smoke):
+    """**Test C**: after the mid-combat activation in Test B,
+    advance phase ONE step (BEGINNING_OF_COMBAT -> DECLARE_ATTACKERS)
+    on both engines. The {G} credited by the activation should
+    empty (per I20 -- both engines empty mana pools on every
+    phase / step boundary).
+
+    Setup: same as Test B through the activation. Then advance phase
+    once. Compare post-advance mana_pool_p0 on both engines.
+
+    Expected (parity-clean): both engines' mana_pool_p0 becomes the
+    canonical empty 6-tuple
+    ``(('B',0),('C',0),('G',0),('R',0),('U',0),('W',0))``.
+
+    Documented as I20 in the gap doc (mana-pool-empty-on-phase-
+    advance composition). If the timing differs by one step --
+    e.g. Python empties at COMBAT_DAMAGE while Rust empties at
+    DECLARE_ATTACKERS -- that's a NEW CE divergence surface
+    distinct from I20 (which is about presence-of-empty, not
+    timing-of-empty). Document as CE20 and xfail-pin.
+    """
+    from mtg_bot.parity.cross_engine import (
+        _dict_to_python_action,
+        activated_mid_combat_side_channel,
+        advance_phase_python,
+        build_matched_states,
+        build_python_field_view,
+        multi_blocker_deckspec,
+        retaliation_selector,
+        step_both,
+    )
+    from mtg_bot.actions import apply_action as py_apply_action
+    from mtg_bot.turn import Step
+
+    py_state, rust_state = build_matched_states(multi_blocker_deckspec())
+    for i in range(167):
+        action = retaliation_selector(py_state, rust_state, i)
+        step_both(py_state, rust_state, action)
+
+    advance_phase_python(py_state)
+    rust_state.advance_phase()
+    assert py_state.step == Step.BEGINNING_OF_COMBAT
+
+    py_forest_id, rust_forest_id = activated_mid_combat_side_channel(
+        py_state, rust_state,
+    )
+
+    # Activate the Forest on both engines.
+    py_apply_action(
+        py_state, 0, _dict_to_python_action({
+            "kind": "activate_ability",
+            "source_id": py_forest_id,
+            "ability_index": 0,
+        }),
+    )
+    rust_state.apply_action({
+        "kind": "activate_ability",
+        "source_id": rust_forest_id,
+        "ability_index": 0,
+    })
+
+    # Sanity: both engines have {G} in p0's pool pre-advance.
+    py_view_pre = build_python_field_view(py_state)
+    rust_view_pre = parity_smoke._build_field_view(rust_state)
+    assert dict(py_view_pre["mana_pool_p0"]).get("G", 0) == 1
+    assert dict(rust_view_pre["mana_pool_p0"]).get("G", 0) == 1
+
+    # ---- Advance phase ONE step ----
+    advance_phase_python(py_state)
+    rust_state.advance_phase()
+    assert py_state.step == Step.DECLARE_ATTACKERS
+
+    # ---- Compare post-advance mana_pool ----
+    py_view_post = build_python_field_view(py_state)
+    rust_view_post = parity_smoke._build_field_view(rust_state)
+
+    expected_empty = (
+        ("B", 0), ("C", 0), ("G", 0),
+        ("R", 0), ("U", 0), ("W", 0),
+    )
+    assert py_view_post["mana_pool_p0"] == expected_empty, (
+        f"Python: mana_pool_p0 should empty after phase advance "
+        f"(I20). Got: {py_view_post['mana_pool_p0']}"
+    )
+    assert rust_view_post["mana_pool_p0"] == expected_empty, (
+        f"Rust: mana_pool_p0 should empty after phase advance "
+        f"(I20). Got: {rust_view_post['mana_pool_p0']}"
+    )
+
+    # Cross-engine parity on the post-advance mana_pool: both empty.
+    assert py_view_post["mana_pool_p0"] == rust_view_post["mana_pool_p0"], (
+        f"Post-phase-advance mana_pool_p0 diverges between engines -- "
+        f"CE20 candidate (mana-empty timing asymmetry). Python: "
+        f"{py_view_post['mana_pool_p0']}; Rust: "
+        f"{rust_view_post['mana_pool_p0']}"
+    )
+
+
+def test_cross_engine_activated_mid_combat_selector_pre_injection_walks_clean(parity_smoke):
+    """Pre-injection backbone steps 0-167 are parity-clean for the
+    activated_mid_combat_selector.
+
+    Same shape as the corresponding pre-injection test for every
+    prior probe -- confirms the retaliation_selector backbone the
+    Combat Forest injection rides on stays divergence-free up to
+    the injection step. Distinguishes between "the Combat Forest
+    side-channel itself introduces a divergence" and "something
+    upstream of the side-channel is divergent and the probe just
+    inherits it".
+    """
+    from mtg_bot.parity.cross_engine import (
+        activated_mid_combat_selector,
+        build_matched_states,
+        multi_blocker_deckspec,
+        step_both,
+        walk_both,
+    )
+
+    result = walk_both(
+        multi_blocker_deckspec(),
+        n_decisions=168,
+        decision_selector=activated_mid_combat_selector,
+    )
+    assert result.error is None, (
+        f"pre-injection walk aborted at step {result.aborted_at}: "
+        f"{result.error}"
+    )
+    for step in result.steps:
+        assert step.divergences == [], (
+            f"pre-injection divergence at step {step.step_index}: "
+            f"action={step.action_dict} "
+            f"{[(d.field, d.py_value, d.rust_value, d.known_gap) for d in step.divergences]}"
+        )
+
+    # Sanity: the Combat Forest injection hasn't fired yet at end of
+    # step 167 (3 creatures land on bf only at step 167's apply step
+    # -- the selector's >= 3 trigger fires the NEXT call, i.e. step
+    # 168).
+    py_state, rust_state = build_matched_states(multi_blocker_deckspec())
+    for i in range(168):
+        action = activated_mid_combat_selector(py_state, rust_state, i)
+        step_both(py_state, rust_state, action)
+    in_any_zone = any(
+        o.printing.name == "Combat Forest"
+        for o in py_state.battlefield
+    )
+    assert not in_any_zone, (
+        "Combat Forest should not yet exist at end of step 167 -- "
+        "injection fires at step 168"
+    )
