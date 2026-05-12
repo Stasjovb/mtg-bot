@@ -1,10 +1,12 @@
 # NN representation roadmap
 
-Forward-looking plan for moving the NN's view of game state away from the
-hand-engineered fixed-width featurizer and toward a learned structured
-representation. Captures the architectural reasoning, data-cost analysis,
-and a phased path that doesn't bet the project on a single big-bang
-rewrite.
+Plan for moving the NN's view of game state away from the hand-engineered
+fixed-width featurizer and toward a learned structured representation.
+
+**Status:** the four-step committed plan in this doc replaces the earlier
+research-style Phase 0/1/2/3 decision tree. We're not running Phase 0 (aux
+heads on the current featurizer) as a probe — we're committing directly
+to the structured input. We're explicitly not pursuing Phase 3 (MuZero).
 
 ## Current state
 
@@ -35,18 +37,21 @@ That ceiling is the immediate bottleneck. The NN cannot distinguish:
   (card identity is invisible).
 - "Counterspell on top of stack" from "Lightning Bolt on top of stack"
   (stack contents collapse to one scalar).
+- "Opponent has had 5 turns of UU mana open and never countered anything"
+  (game history is not in the input — at all).
 - "8 turns of board pressure remaining" from "lethal next turn" (no
   turn / clock encoding).
 
 Hand-engineering more aggregate features (mana-by-color, hand cost
 histograms, etc.) buys local wins but does not break the
-no-card-identity ceiling.
+no-card-identity ceiling or the no-history ceiling.
 
 ## Goal
 
 Feed the NN the entire engine state — every card, every permanent,
-every counter, every relationship — without information loss, and let
-the trunk learn its own abstractions.
+every counter, every relationship, plus the recent history of public
+actions — without information loss, and let the trunk learn its own
+abstractions.
 
 ## What "lossless input" actually requires
 
@@ -58,6 +63,7 @@ The engine's `GameState` is fundamentally **variable-shape**:
   selections).
 - Variable per-turn history (spells cast this turn, lands played,
   damage dealt, etc.).
+- Variable game history (sequence of public actions taken).
 
 A flat fixed-size vector cannot represent this without truncating or
 aggregating — which is exactly where the current 51-dim featurizer
@@ -69,10 +75,10 @@ architecture that handles variable-length input.
 Two canonical architecture choices:
 
 1. **Self-attention transformer over a set of per-object tokens.** Each
-   permanent, hand card, graveyard card, stack item gets its own token.
-   Attention sees all of them. Pool to a fixed vector for the value /
-   policy heads. This is the AlphaStar / OpenAI Five entity-attention
-   pattern.
+   permanent, hand card, graveyard card, stack item, recent action gets
+   its own token. Attention sees all of them. Pool to a fixed vector for
+   the value / policy heads. This is the AlphaStar / OpenAI Five
+   entity-attention pattern.
 2. **Graph neural net over `GameObject`s with relation edges**
    (`attached_to`, `attacking`, `blocking`, `targeting`,
    `controlled_by`). More expressive for the inherently relational
@@ -82,14 +88,16 @@ Two canonical architecture choices:
 Each token would carry:
 
 - A **learned printing embedding** (~8-16 dim per printing, ~287 EoE
-  cards = ~4,600 trainable params total — see "Phase 1" below).
+  cards = ~4,600 trainable params total). Embeddings trained jointly
+  with the rest of the network — the model discovers card2vec-style
+  clusters from how cards correlate with winning.
 - Structural attributes: P/T modifiers, counters of each kind, tapped
   state, summoning sick, damage marked, position in zone, controller,
   zone identity (encoded as a token-type embedding).
 
-The stack becomes another set of tokens. Triggered-ability state,
-delayed effects, continuous effects all become per-token features of
-the appropriate object.
+The stack becomes another set of tokens. Recent actions become tokens.
+Triggered-ability state, delayed effects, continuous effects all become
+per-token features of the appropriate object.
 
 Nothing the engine tracks has to be aggregated or lost — it just has
 to be expressible as per-object features plus relational edges.
@@ -118,7 +126,7 @@ running more iters and / or buying a couple more workers.
 
 Mitigating factors that further reduce data hunger:
 
-- **Auxiliary supervision** (see Phase 0 below) multiplies effective
+- **Auxiliary supervision** (Step 4 below) multiplies effective
   gradient signal per state.
 - **Data augmentation is free** — features are viewer-relative so every
   state can train at both perspectives.
@@ -134,7 +142,7 @@ the moment the input shape changes. Training has to restart from a
 fresh init. That's a real cost in wall-clock time and compute, but it's
 a one-shot cost, not an ongoing constraint.
 
-## What MuZero would give vs cost
+## Why we're not pursuing MuZero
 
 MuZero replaces "hand-engineer the features OR hand-engineer the
 structured input" with "learn the entire state representation." It
@@ -151,226 +159,321 @@ MCTS runs in **latent space** using the learned dynamics, so search
 becomes pure NN forward passes — no engine clones, no game-tree
 expansion through the rules engine.
 
-The latent `z` is whatever the optimizer finds most useful for
-predicting future returns and future latent states under the dynamics
-model. It is, in the most direct sense possible, **unsupervised
-representation learning for the game state**.
-
-### Why MuZero is appealing for MtG specifically
-
-1. **The MtG engine is expensive to clone.** Cloning a `GameState`
-   during MCTS is non-trivial even with the Rust port. A learned
-   dynamics model is just a NN forward pass — potentially 10-100×
-   faster than engine simulation, **if** the dynamics model is
-   accurate enough.
-2. **The MtG engine is complex.** Layers, replacement effects,
-   triggered abilities, stack interactions, copy effects — a correct
-   dynamics model has to implicitly learn all of this. A learned model
-   bypasses the rules engine entirely during search (still needed for
-   training and actual play).
-
-### Why MuZero is hard / risky for MtG specifically
+**Why MuZero is hard for MtG specifically:**
 
 1. **MtG's rules are Turing-complete-ish.** For chess, dynamics is
    "apply move → new board." For MtG, the dynamics model has to learn
-   the entire engine. Atari MuZero gets away with this because Atari
-   dynamics are pixel-level deterministic functions; MtG has long-range
-   causal chains and complex rule interactions.
+   replacement effects, layers, triggered abilities, stack
+   interactions, copy effects. Atari MuZero gets away with this because
+   Atari dynamics are pixel-level deterministic functions; MtG has
+   long-range causal chains.
 2. **The dynamics model has to be accurate over the planning horizon.**
-   If MuZero plans 10 moves deep, the dynamics model has to be roughly
-   accurate over 10 steps. Errors compound. Training the dynamics model
-   to be that accurate is a major research problem on its own.
-3. **You still need the real engine.** Training requires real
-   trajectories (otherwise value targets come from hallucinated
-   rollouts). Real play requires the real engine. MuZero only avoids
-   the engine **during MCTS** — a smaller fraction of total compute
-   than for Atari.
-4. **More heads, more data, more debugging complexity.** Pure
-   AlphaZero: two heads (value, policy). MuZero: three heads, two of
-   which jointly determine the latent space. When the agent plays
-   badly: is the dynamics wrong? Is the representation pathological?
-   Is the latent space collapsing? Versus AlphaZero where you can
-   diagnose each head independently.
+   Errors compound. Training the dynamics model to be that accurate is
+   a major research problem on its own.
+3. **You still need the real engine** for training (real outcomes) and
+   actual play. MuZero only avoids the engine **during MCTS**.
+4. **Debugging is much harder** — three jointly-trained heads vs two,
+   and the latent space is opaque.
 
-### Verdict on MuZero
+**Verdict:** the gap between AlphaZero with structured input (the
+committed plan in this doc) and MuZero is enormous. The structured-input
+path captures the bulk of the representation-learning win at a fraction
+of the complexity. MuZero remains the conceptual endpoint of the
+unsupervised-features path, but we're not pursuing it. Revisit only if
+the structured-input path plateaus *and* engine-clone cost during MCTS
+becomes the dominant bottleneck.
 
-For MtG specifically, the gap between **AlphaZero with structured
-input** (Phase 1 below) and **MuZero** is enormous, and only makes
-sense after AlphaZero with structured input has been pushed to its
-plateau. Phase 1 captures the bulk of the "lossless input" benefit at
-a fraction of the complexity. MuZero is the conceptual endpoint of
-this path but should not be the next step.
+## The committed plan
 
-## Phased plan
+Four steps. Step 2 is independent of the rest and runs in parallel.
+Step 3 is folded into Step 1 architecturally — they're one rewrite, not
+two. Step 4 depends on 1, 2, 3 all being in place.
 
-The plan is deliberately phased so each step is independently valuable
-and each decision point gives empirical signal for whether to continue.
+### Step 1 — Structured per-object input (consolidated)
 
-### Phase 0 — Auxiliary heads on the current featurizer
+The "lossless input" architecture, INCLUDING last-N action tokens from
+the start. Single architectural rewrite, single version-chain break.
 
-Cheapest empirical check that representation learning has signal in
-this domain. No architecture change, no version-chain break.
-
-**What:**
-
-- Add an auxiliary head predicting opponent's hand contents (per-card
-  probability over their decklist). Label from engine ground truth.
-  Loss = multi-label binary cross-entropy.
-- Optionally add a head predicting the next-state feature vector
-  (next-step `extract_features(s')` after the chosen action). Loss =
-  MSE.
-- Mix at low weight (~0.05× of the main value+policy loss).
-
-**Cost:** ~1 week eng. One new tensor per training row in the npz.
-One new head, one new loss term in `trainer.py`. No schema break.
-
-**Decision signal:** if value / policy validation loss improves with
-the aux head active vs without, representation learning helps in this
-domain and Phase 1's bigger investment is justified. If it doesn't,
-think harder before Phase 1.
-
-**Bonus path that's not strictly Phase 0 but uses the same head:**
-the learned belief distribution over opponent's hand can bias PIMC
-determinizations — instead of sampling K=8 uniform-ish worlds, sample
-K=8 worlds weighted by what the belief network thinks is plausible.
-Same head, double duty (training-signal AND search-time prior). The
-existing `--use-belief-weighted` flag on `mtg_bot iterate` may already
-have scaffolding for this — worth checking what shape its current
-belief is.
-
-### Phase 1 — Per-object transformer / GNN input
-
-The "no nuance missed" architecture. The biggest single representational
-upgrade available. Captures probably 80% of the long-term win.
-
-**What:**
+**What lands together in this step:**
 
 - Replace the 51-dim flat featurizer with a sequence of per-object
-  tokens (permanents, hand cards, graveyard cards, stack items).
-- Learned printing embeddings (8-16 dim per printing, jointly trained
-  with rest of network). For EoE pool: ~287 cards × 16 dim = ~4,600
-  embedding params.
-- Each token = printing_embedding + structural attribute vector (P/T
-  mods, counters, tapped, summoning sick, attached_to, controller,
-  zone, position-in-zone).
-- Trunk = self-attention transformer (or GNN). Maybe 2-4 attention
-  layers, hidden dim ~256-512.
+  tokens: permanents, hand cards, graveyard cards, exile cards, stack
+  items, **recent action events**, and a small set of global tokens
+  (turn count, phase, priority).
+- Each token carries a learned printing embedding (8-16 dim per
+  printing, ~287 EoE cards × 16 dim = ~4,600 embedding params) plus
+  structural attribute vectors.
+- Trunk = self-attention transformer (2-4 attention layers, hidden dim
+  ~256-512) over the token set. Optional: relational edges as GNN if
+  attention isn't enough.
 - Value / policy heads take the pooled trunk output.
+- Configurable `N` for the recent-action window in input (default
+  probably 16-32 strategically-relevant actions filtered from raw
+  priority passes — see "Open design questions" below).
 
 **Cost:**
 
 - ~3-5 weeks eng: model code (PyTorch transformer/GNN), dataset
   format change (variable-length per-state), `data_gen.py` rewrite
   for the new format, training loop tweaks.
-- ~2-4 weeks of compute for hyperparameter sweep (number of attention
-  layers, embedding dim, training data scale).
-- **Version chain breaks.** v25 → v26 fresh init. All existing weights
-  incompatible with the new input shape.
+- ~2-4 weeks of compute for hyperparameter sweep.
+- **Version chain breaks.** v25 → vN fresh init. All existing weights
+  incompatible.
 - ~3-5× more total parameters than today's MLP trunk (mostly in the
   transformer layers and embedding tables).
-- ~5-10× more samples needed to fully exploit the bigger model. Scale
-  the cluster, run more iters.
+- ~5-10× more samples needed. Scale the cluster, run more iters.
 
 **Implementation hurdles:**
 
-- The input is no longer fixed-shape (variable permanents per board),
-  so the training pipeline needs to handle variable-length sequences.
-  Padding + attention masks are the standard approach.
+- Variable-length input: padding + attention masks are the standard
+  approach.
 - The MCTS NN-eval cache key (`mcts._cache_key`) currently assumes a
-  fixed-shape featurization. Needs to be rebuilt around the structured
-  input (likely a canonical-state hash already exists in
+  fixed-shape featurization. Rebuild around the structured input
+  (likely via the canonical-state hash that already exists in
   `canonical_state.py`).
 - The SHM eval server's shared-tensor pool assumes fixed-dim per slot.
-  Will need to allocate for the max sequence length and use attention
-  masks for short inputs.
+  Allocate for the max sequence length and use attention masks.
 
-**Decision signal:** if value / policy loss drops meaningfully vs the
-final Phase 0 baseline, the structured input was worth it. If not, the
-hand-engineered features were closer to information-complete than
-expected, and we should rethink.
+**What folding action history into this step buys:**
 
-### Phase 2 — Scale up auxiliary supervision
+Doing the lossless-input rewrite and adding last-N action tokens as
+separate steps would mean two architectural rewrites, two version-chain
+breaks, and two periods where the trunk is unstable. Doing them together
+means the trunk is built for the full input shape from day one — same
+eng cost as Step 1 alone for the trunk work (adding another token type
+is cheap), with one v-chain break instead of two.
 
-Once the trunk can represent structured info, push harder on
-self-supervised signals that the simple aggregate featurizer couldn't
-support.
+### Step 2 — Deck-belief model (offline, parallel)
+
+A standalone supervised model trained on 17lands data with no
+dependency on the main NN. Runs in parallel with Step 1.
 
 **What:**
 
-- Belief weighting feeds PIMC determinizations (the bonus path from
-  Phase 0, now on the more-expressive trunk).
-- Masked-token prediction: mask some objects, predict their attributes
-  from context. BERT-style.
-- Multi-step dynamics: predict the feature vector N steps ahead. Forces
-  the trunk to encode dynamics-relevant state.
-- Action-consistency loss: prediction of `V(s')` for the most-visited
-  child must agree with `V(s)` minus the action's local effect.
+Given a multi-hot vector of cards the opponent has revealed (played,
+cast, discarded), predict a probability distribution over which other
+cards are in their deck.
 
-**Cost:** ~2-3 weeks eng + ongoing compute. Aux losses are cheap
-(just new heads and loss terms). Bigger cost is the dataset infra to
-record the multi-step state windows.
+**Why it works as a fully offline problem:**
 
-### Phase 3 (optional, ambitious) — MuZero or hybrid
+The opponent's deck doesn't change during the game — it's a fixed
+property of the player, and what changes is our knowledge of it. Each
+revealed card is a sample drawn from the (private) deck. This is
+Bayesian posterior tracking over an unknown decklist given observations
+— same structure as poker range tracking. The training data is just
+17lands decklists with sampled prefixes:
 
-Consider **only** if:
+```
+training tuple = (revealed_cards: multi-hot[287], rest_of_deck: multi-hot[287])
+```
 
-- Phase 1+2 has measurably plateaued.
-- The dominant bottleneck is engine clone cost during MCTS (not
-  representation quality).
-- There's appetite for multi-month research-grade work with a real
-  risk of "it doesn't beat AlphaZero with structured input."
+Generated by walking each decklist in `data/17lands/eoe_decks.json.gz`
+and randomly choosing prefixes of varying sizes. For ~5,000 EoE decks
+× ~40 cards × ~10 prefix sizes each, ~2M training rows.
 
-**What:** full MuZero — learned representation, learned dynamics,
-learned prediction. MCTS in latent space. Engine used only for
-training data generation and real play.
+**Cost:** ~1-2 days eng. Tiny model (input ~287, output ~287, hidden
+128-256, or even a co-occurrence matrix with Bayesian smoothing as a
+baseline). Trains in minutes on a 5090.
 
-**Cost:** months. Possibly research-grade. Most existing infrastructure
-for "engine state → features" gets thrown away; instead you have
-"engine state → observation tensor" + "learned dynamics."
+**Standalone value before Step 4 lands:**
 
-**Honest take:** Phase 1 captures most of the win. Phase 3 is the
-conceptually clean endpoint but the marginal upside over Phase 1+2 is
-small relative to the cost. Worth knowing about, not worth prioritizing
-unless Phase 1+2 has plateaued.
+Even before integration with the hand-belief head, the deck-belief
+model can bias PIMC determinizations directly — instead of sampling K=8
+opponent decks uniformly, sample weighted by the deck-belief
+distribution. This is importance sampling for hidden-info search and
+should improve search quality at fixed K.
 
-## Decision points / triggers
+### Step 3 — Last-N action tokens in NN input
 
-- After Phase 0: if aux losses help, commit to Phase 1.
-- After Phase 1: if structured input doesn't beat the final 51-dim
-  baseline by a meaningful margin, rethink before Phase 2 (maybe the
-  bottleneck isn't input, maybe it's the search or the loss
-  formulation).
-- After Phase 2: revisit MuZero only if (a) the plateau is real and
-  (b) engine clone cost during MCTS is the dominant fraction of
-  wall-clock.
+**Folded into Step 1.** Not a separate step in execution. The
+structured-input rewrite includes recent-action tokens from day one.
+Documented separately here because the design choices (action
+representation, filtering, N defaults) are distinct concerns even
+though they share an architecture with Step 1.
 
-## Constraints / what stays fixed
+### Step 4 — Probability-over-hand head
 
-- **Action encoding** (`src/mtg_bot/training/action_encoding.py`)
-  stays at canonical_v2 for now. The action space is a separate
-  concern from the state representation. Changing both at once is too
-  much change at once.
+Bolts onto Step 1's trunk, conditioned on Step 2's deck-belief.
+
+**Architecture:**
+
+```
+trunk_z = trunk(state_tokens)                                     # from Step 1
+deck_belief = deck_model(opponent_revealed_cards)                 # from Step 2
+hand_belief = hand_head(trunk_z, deck_belief.detach())            # new in Step 4
+```
+
+The `.detach()` prevents gradients from the hand-belief head from
+polluting the deck-belief model's learning. Hand-belief reads
+deck-belief as a fixed conditional input.
+
+**Loss:** multi-label binary cross-entropy. Each card in opponent's
+decklist gets a P(in hand right now) target from engine ground truth
+during self-play training. Weight in the total loss: ~0.05× the main
+value+policy losses.
+
+**Why the trunk now has the information to learn the counterspell-not-cast
+signal:**
+
+The current featurizer encodes essentially no game history, so a
+belief head built on it literally cannot learn "opponent had counter
+mana open for 5 turns and didn't act → counterspell unlikely." Step 1's
+structured input includes recent action tokens, so the trunk sees
+"opp_passed_priority during my high-value spell with N mana open" as
+discrete events. The hand-belief head learns the conditional
+probabilities over many self-play trajectories.
+
+**Inference use:**
+
+Both deck-belief and hand-belief outputs feed PIMC determinization
+sampling — picking opponent worlds weighted by what we currently
+believe is plausible. This is the ReBeL / DeepStack pattern in poker
+exactly: maintain a belief distribution over opponent's hidden range,
+sample from it during search.
+
+## Open design questions to nail down before Step 1 starts
+
+1. **What is an "action"?** Decisions in MtG are heterogeneous: cast
+   spell, activate ability, pass priority, choose blocker assignment,
+   choose target, scry top of deck. Fixed-shape per-action token shape
+   needs to be decided up front. Probable shape:
+   `(action_kind, source_object_or_emb, target_object_or_emb,
+   mana_cost_paid, controller, turn, step)`. Open: whether to include
+   the value the bot estimated at the time the action was taken — a
+   strong signal, but requires capturing it at data-gen time.
+
+2. **Action visibility per player.** Some actions are public (cast
+   spell, attack), some have private components (scry reveals the top
+   card only to the scryer). Featurize from each player's perspective —
+   their own private observations + the public history.
+
+3. **N's default and the within-turn density problem.** Last 32 raw
+   actions might cover only 2-3 turns in dense combat phases. Last 8
+   turns might be 100s of actions. Likely answer: filter to
+   strategically-relevant actions (cast / activate / attack / block /
+   discard) and drop raw priority passes from the input. Defaults
+   probably N=16-32 with the filter applied.
+
+4. **PIMC integration design.** `mtg_bot iterate` already has a
+   `--use-belief-weighted` flag — survey what its current
+   implementation actually does (uniform? heuristic-weighted?) before
+   designing the new pipeline. The integration point for both
+   deck-belief (Step 2) and hand-belief (Step 4) is where PIMC picks
+   determinizations; replace the current sampler with importance
+   sampling from the learned beliefs.
+
+5. **Cache key for the new trunk.** The MCTS NN-eval cache assumes
+   fixed-shape input today. Likely answer: hash the canonical-state
+   representation (`canonical_state.py` already provides this) rather
+   than the raw input tensor.
+
+6. **Pooling strategy for value / policy heads.** Attention output is
+   per-token; the value head needs a single scalar and the policy head
+   needs a fixed action-vocab distribution. Common pooling choices:
+   mean-pool over tokens, attention-pool with a learned query, take a
+   `[CLS]`-style summary token. Worth picking before training starts;
+   wrong choice can cap performance regardless of trunk quality.
+
+## Validation strategy per step
+
+**Step 1 (structured input):**
+
+- Value / policy loss on a held-out test set, vs the final v25
+  baseline.
+- Head-to-head match between Step-1 trunk and v25 at matched search
+  budget (same nodes, same K). The trunk has to win at the deployment
+  configuration to justify the v-chain break.
+- Wall-time per game and per training epoch — confirm the larger model
+  isn't blowing the per-iter time budget.
+
+**Step 2 (deck-belief):**
+
+- Predict-rest-of-deck accuracy on held-out 17lands decks. Target
+  probably 70-85% recall at the right confidence threshold.
+- Calibration plot: P(card in deck) vs empirical frequency.
+- Standalone PIMC win-rate at fixed K with belief-weighted
+  determinizations vs uniform. Even before Step 4, this is the
+  standalone measurable value of Step 2.
+
+**Step 4 (hand-belief):**
+
+- Predict-hand-contents accuracy on held-out self-play games.
+- Calibration plot.
+- Effect on PIMC determinization quality (does importance-weighted
+  sampling at fixed K beat uniform at fixed K?).
+- The decisive signal: head-to-head match with hand-belief PIMC
+  weighting vs without, at matched K — does the bot actually play
+  better?
+
+## Compute scaling
+
+Step 1's larger model needs ~5-10× more data than today's pipeline.
+At the current cluster's ~510 g/h with SHM (Win11 master + macOS + Win10
+shards), producing 5M samples per iter takes ~10 hours of self-play per
+iter. Manageable but not painless. Realistic paths:
+
+- Accept slower iter cadence (one full iter per day instead of multiple).
+- Scale the cluster: add a fourth machine, or enable SHM on the macOS
+  shard (currently gate-excluded — separate followup).
+- Reduce K in PIMC if Step 2 + Step 4 succeed at giving smarter
+  determinizations (importance-sampled K=4 might match uniform K=8).
+- Replay buffer + prioritized sampling to extract more gradient signal
+  per recorded sample.
+
+## Constraints / what stays fixed during this work
+
+- **Action encoding** (`src/mtg_bot/training/action_encoding.py`) stays
+  at canonical_v2. The action space is a separate concern from the
+  state representation; changing both at once is too much change at
+  once.
 - **Self-play / training / eval orchestration** doesn't change. The
   cluster, the iterate loop, the eval gate, the watcher — all still
-  work the same way. Only the model architecture and the dataset
-  format change.
+  work the same way. Only the model architecture, the dataset format,
+  and the determinization sampler change.
 - **Engine and Rust port** don't change. The engine is the source of
   truth for ground-truth state and for actual play.
+
+## Sequencing summary
+
+| When | What | Why |
+|---|---|---|
+| Now (parallel) | Start Step 2 (deck-belief model) in its own worktree | Offline, fast, fully decoupled from Step 1 — get it done while Step 1 is still in design |
+| Optional, soon | Use Step 2's output as PIMC determinization prior (no main-NN changes needed) | One-week win, plugs into existing PIMC, no v-chain break |
+| Major commit | Step 1 — consolidated structured-input rewrite (per-object tokens + learned embeddings + last-N action tokens) | Single architectural rewrite; avoids two v-chain breaks |
+| After Step 1 lands | Step 4 — hand-belief head conditioned on Step 2's deck-belief | All substrate is in place; this is the natural integration point |
+
+## What we explicitly rejected from the earlier doc version
+
+- **Phase 0** (aux heads on the current 51-dim featurizer as a probe):
+  the current featurizer is too information-poor for aux heads to
+  surface their real potential. Phase 0 would underestimate the win,
+  and its plumbing work would be partially throwaway when Step 1
+  rewrites the dataset format. Skipping straight to Step 1 captures
+  the real signal sooner.
+- **Phase 3** (MuZero / learned dynamics in latent space): see "Why
+  we're not pursuing MuZero" above. The complexity gap to Step 1 +
+  Step 4 is enormous, and the marginal upside is small for an
+  engine-rich domain like MtG. Revisit only if Step 1 + Step 4
+  plateaus and engine-clone cost during MCTS becomes the dominant
+  bottleneck.
 
 ## References
 
 - Current featurizer: `src/mtg_bot/features.py` (51 dims, layout
   documented in module docstring + index constants).
 - Trainer: `src/mtg_bot/training/trainer.py`.
-- Belief-weighted MCTS scaffolding: search for
-  `use_belief_weighted` in `src/mtg_bot/cli/iterate.py` and
-  `src/mtg_bot/search/`.
-- Canonical state hashing (for cache keys): `src/mtg_bot/training/canonical_state.py`.
-- MuZero paper: Schrittwieser et al., "Mastering Atari, Go, Chess and
-  Shogi by Planning with a Learned Model" (Nature 2020).
-- ReBeL / DeepStack (the belief-network pattern this doc references
-  for the aux head): Brown et al., "Combining Deep Reinforcement
-  Learning and Search for Imperfect-Information Games" (NeurIPS 2020).
-- AlphaStar (entity-attention precedent): Vinyals et al., "Grandmaster
-  level in StarCraft II using multi-agent reinforcement learning"
-  (Nature 2019).
+- Belief-weighted MCTS scaffolding: search for `use_belief_weighted`
+  in `src/mtg_bot/cli/iterate.py` and `src/mtg_bot/search/`.
+- Canonical state hashing (for cache keys):
+  `src/mtg_bot/training/canonical_state.py`.
+- 17lands deck pool: `data/17lands/eoe_decks.json.gz` (5,000 EoE
+  decks; the deck-belief training data source).
+- MuZero paper (not the path we're taking): Schrittwieser et al.,
+  "Mastering Atari, Go, Chess and Shogi by Planning with a Learned
+  Model" (Nature 2020).
+- ReBeL / DeepStack (the belief-network pattern Step 4 mirrors):
+  Brown et al., "Combining Deep Reinforcement Learning and Search for
+  Imperfect-Information Games" (NeurIPS 2020).
+- AlphaStar (entity-attention precedent for Step 1):
+  Vinyals et al., "Grandmaster level in StarCraft II using multi-agent
+  reinforcement learning" (Nature 2019).

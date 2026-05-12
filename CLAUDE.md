@@ -312,17 +312,31 @@ prior lookups use the matching slot mapping.
 The 51-dim hand-engineered featurizer at `src/mtg_bot/features.py` is
 the current input to the value+policy network and is information-lossy
 by construction (no card identity, no mana colors, no structured stack
-contents). The forward-looking plan for replacing it with a learned
-structured representation — per-object transformer/GNN input, learned
-printing embeddings, auxiliary heads (e.g. belief over opponent's
-hand), and the optional MuZero-style learned-dynamics endpoint — is in
+contents, no game history). The committed four-step plan for replacing
+it with a structured representation is in
 **[`docs/NN_REPRESENTATION_ROADMAP.md`](docs/NN_REPRESENTATION_ROADMAP.md)**.
 
-Read that doc before making any architectural change to the NN input
-or the trunk. It captures the phased plan (Phase 0 aux heads → Phase 1
-structured input → Phase 2 scaled aux supervision → Phase 3 optional
-MuZero), the data-cost analysis, and the decision triggers between
-phases.
+Summary:
+
+1. **Step 1** — per-object transformer/GNN input with learned printing
+   embeddings, INCLUDING last-N action tokens. Single architectural
+   rewrite, single v-chain break.
+2. **Step 2** — offline deck-belief model trained on 17lands data;
+   independent of the main NN, runs in parallel with Step 1.
+3. **Step 3** — folded into Step 1 (action tokens land with the
+   structured input rewrite).
+4. **Step 4** — hand-belief auxiliary head on Step 1's trunk,
+   conditioned on Step 2's deck-belief.
+
+Both belief outputs feed importance-sampled PIMC determinizations
+(ReBeL / DeepStack pattern).
+
+Read the doc before making any architectural change to the NN input or
+the trunk. It captures the data-cost analysis, the open design
+questions to nail down before Step 1 starts, validation strategy per
+step, and why we explicitly rejected Phase 0 (aux heads on the current
+featurizer) and Phase 3 (MuZero) from the earlier research-style
+version of this roadmap.
 
 ## Documenting deliberate divergences
 
