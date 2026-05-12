@@ -2180,6 +2180,190 @@ def test_resolve_tap_another_already_tapped_is_legal_noop(synthetic_state):
     assert synthetic_state.is_tapped(first_p0_bear) is True
 
 
+# --- CE7 closure: cross-player find-first arms walk ETB-timestamp order ----
+#
+# `Effect::TapAnotherTargetCreature` and `Effect::UntapTargetOtherPermanent`
+# both pick the FIRST eligible target across BOTH players' battlefields
+# in ETB-timestamp order (matching Python's centralized `state.battlefield`
+# walks in `effects/generic/tap.py:277-295` and `:346-386`). Pre-CE7 the
+# Rust side walked p0-then-p1, which diverged from Python whenever a p1
+# permanent had a lower ETB stamp than the first p0 eligible target.
+#
+# These tests use `register_and_inject_object` to drive strictly-monotonic
+# ETB stamps across players: inject p0 OLDER, p1 NEWER → p0's ETB stamp
+# is lower → the ETB-first walk picks p0's creature (the "older one
+# regardless of who controls the source").
+#
+# Tie-break invariant: synthetic-state objects all carry
+# `etb_timestamp == 0` (because `make_player` populates the bf without
+# calling `reserve_etb_timestamp`); the helper's stable sort preserves
+# the pre-CE7 p0-then-p1 walk for those, so every pre-existing test in
+# this section (which exclusively uses `synthetic_state` shaped seeds)
+# stays bit-equal.
+
+
+def _two_two_creature_dict():
+    """Vanilla 2/2 creature printing — used by the CE7 tests below to
+    inject ETB-stamped creatures via `register_and_inject_object`.
+    Mirrors the shape used in `tests_rust/test_sba.py`."""
+    return {
+        "name": "Test 2/2",
+        "card_types": ["Creature"],
+        "mana_cost": {"generic": 2},
+        "power": 2,
+        "toughness": 2,
+        "keywords": [],
+        "effects": [],
+    }
+
+
+def test_resolve_tap_another_picks_etb_first_across_players(engine):
+    """Source on p1's battlefield; p0 has the ETB-OLDER eligible creature
+    and p1 has a NEWER one. Pre-CE7 the Rust scan walked p0-then-p1 and
+    would have picked p0's creature anyway (p0 always came first); we
+    pin the more interesting case where the source is on p1 — Python's
+    centralized walk picks the ETB-first match, which is p0's older
+    creature, NOT p1's newer one.
+
+    Pre-CE7 the per-player walk would have returned p0's creature too
+    (p0 is enumerate-index 0). To make the test specifically exercise
+    ETB-order tie-break (and not just p0-first-by-accident), we also
+    add a sibling case below where p1's creature is ETB-OLDER than
+    p0's: pre-CE7 Rust would have picked p0's NEWER creature; post-CE7
+    Rust matches Python and picks p1's OLDER creature."""
+    state = engine.make_synthetic_state(
+        num_battlefield=0, num_hand=0, num_library=2
+    )
+
+    # Inject p0's eligible creature FIRST so it has the lower ETB stamp.
+    p0_older = state.register_and_inject_object(
+        _two_two_creature_dict(), 0, ZONE_BATTLEFIELD
+    )
+    # Inject the source on p1 (it bumps the timestamp counter).
+    src_id = state.register_and_inject_object(
+        _tap_another_creature_dict(), 1, ZONE_BATTLEFIELD
+    )
+    # Inject p1's eligible creature LAST so it has a higher ETB stamp
+    # than p0_older.
+    p1_newer = state.register_and_inject_object(
+        _two_two_creature_dict(), 1, ZONE_BATTLEFIELD
+    )
+
+    state.push_to_stack(src_id, 1)
+    state.resolve_top_of_stack()
+
+    # The ETB-first eligible creature (p0_older) is tapped, not the
+    # p1_newer creature.
+    assert state.is_tapped(p0_older) is True
+    assert state.is_tapped(p1_newer) is False
+    # The source on p1 was filtered out by the `id != source` gate.
+    assert state.is_tapped(src_id) is False
+
+
+def test_resolve_tap_another_picks_p1_when_p1_etb_first(engine):
+    """The load-bearing CE7 case: p1 has the ETB-OLDER eligible creature,
+    p0 has the NEWER one. Pre-CE7 Rust walked p0-then-p1 and would have
+    picked p0's NEWER creature; post-CE7 Rust matches Python's centralized
+    walk and picks p1's OLDER creature."""
+    state = engine.make_synthetic_state(
+        num_battlefield=0, num_hand=0, num_library=2
+    )
+
+    # Inject p1's eligible creature FIRST so it has the lower ETB stamp.
+    p1_older = state.register_and_inject_object(
+        _two_two_creature_dict(), 1, ZONE_BATTLEFIELD
+    )
+    # Then p0's eligible creature.
+    p0_newer = state.register_and_inject_object(
+        _two_two_creature_dict(), 0, ZONE_BATTLEFIELD
+    )
+    # Source on p0 (its ETB stamp does not affect the find-first
+    # outcome because we filter it out via id != source).
+    src_id = state.register_and_inject_object(
+        _tap_another_creature_dict(), 0, ZONE_BATTLEFIELD
+    )
+
+    state.push_to_stack(src_id, 0)
+    state.resolve_top_of_stack()
+
+    # Post-CE7: ETB-first wins — p1's older creature is tapped, not
+    # p0's newer one.
+    assert state.is_tapped(p1_older) is True
+    assert state.is_tapped(p0_newer) is False
+    # Source itself stays untapped (filtered by id != source).
+    assert state.is_tapped(src_id) is False
+
+
+def test_resolve_untap_other_picks_etb_first_across_players(engine):
+    """Symmetric CE7 case for `UntapTargetOtherPermanent`: p1 has the
+    ETB-OLDER tapped permanent, p0 has a NEWER tapped permanent.
+    Pre-CE7 the Rust scan would have picked p0's tapped permanent
+    (p0-first walk); post-CE7 Rust matches Python and picks p1's
+    ETB-older tapped permanent."""
+    state = engine.make_synthetic_state(
+        num_battlefield=0, num_hand=0, num_library=2
+    )
+
+    # Inject p1's tapped permanent FIRST so it has the lower ETB stamp.
+    p1_older = state.register_and_inject_object(
+        _two_two_creature_dict(), 1, ZONE_BATTLEFIELD
+    )
+    # Then p0's tapped permanent.
+    p0_newer = state.register_and_inject_object(
+        _two_two_creature_dict(), 0, ZONE_BATTLEFIELD
+    )
+    # Tap both — eligibility predicate is "tapped, not source".
+    state.tap_object(p1_older)
+    state.tap_object(p0_newer)
+    assert state.is_tapped(p1_older) is True
+    assert state.is_tapped(p0_newer) is True
+
+    # Source on p0 (untapped, so it wouldn't be eligible even without
+    # the id != source filter).
+    src_id = state.register_and_inject_object(
+        _untap_other_permanent_dict(), 0, ZONE_BATTLEFIELD
+    )
+
+    state.push_to_stack(src_id, 0)
+    state.resolve_top_of_stack()
+
+    # Post-CE7: ETB-first wins — p1's older tapped permanent is
+    # untapped, not p0's newer tapped permanent.
+    assert state.is_tapped(p1_older) is False
+    assert state.is_tapped(p0_newer) is True
+
+
+def test_resolve_untap_other_picks_p0_when_p0_etb_first(engine):
+    """Mirror of the test above: p0 has the ETB-older tapped permanent,
+    p1 has a NEWER one. Both pre- and post-CE7 Rust pick p0's older
+    permanent — pre-CE7 because p0 comes first in the per-player walk,
+    post-CE7 because p0's stamp is lower in the ETB-sorted walk. Pins
+    the no-regression direction of the tie-break."""
+    state = engine.make_synthetic_state(
+        num_battlefield=0, num_hand=0, num_library=2
+    )
+
+    # p0's tapped permanent FIRST so it has the lower ETB stamp.
+    p0_older = state.register_and_inject_object(
+        _two_two_creature_dict(), 0, ZONE_BATTLEFIELD
+    )
+    p1_newer = state.register_and_inject_object(
+        _two_two_creature_dict(), 1, ZONE_BATTLEFIELD
+    )
+    state.tap_object(p0_older)
+    state.tap_object(p1_newer)
+
+    src_id = state.register_and_inject_object(
+        _untap_other_permanent_dict(), 0, ZONE_BATTLEFIELD
+    )
+
+    state.push_to_stack(src_id, 0)
+    state.resolve_top_of_stack()
+
+    assert state.is_tapped(p0_older) is False
+    assert state.is_tapped(p1_newer) is True
+
+
 # --- round-14 Sacrifice dispatch ------------------------------------
 #
 # Round-14 foundation (`feature/rust-tdd-base-r14`) added a new

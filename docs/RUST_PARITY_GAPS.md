@@ -1406,6 +1406,43 @@ The counter `state.next_etb_timestamp` and the per-object slot
   read surface, and the reset is a single cleanup-step write rather
   than a sticky permanent flag.
 
+### I30. Cross-player find-first Effect arms walk battlefield in ETB-timestamp order via shared `bf_iter_etb_sorted` helper
+
+Post-CE11, `Effect::TapAnotherTargetCreature` and
+`Effect::UntapTargetOtherPermanent` enumerate eligible targets via
+the centralized `crate::bf_iter::bf_iter_etb_sorted` helper, which
+stable-sorts refs across both players' battlefields by per-object
+`etb_timestamp`. Tie-break preserves the original p0-then-p1
+insertion-order walk so synthetic-state fixtures (where every bf
+object carries timestamp 0) stay bit-equal with the pre-CE11 walk;
+real ETB-driven flows (`reserve_etb_timestamp` bumps) produce
+strictly-monotonic timestamps and the helper emits the ETB-
+interleaved order Python's `state.battlefield` walk emits.
+
+Both arms read the player index off `obj.controller` rather than
+an outer-loop enumerate index, then perform the mutating
+`Arc::make_mut` write pass on `state.players[pidx].battlefield`
+unchanged from pre-CE11.
+
+The helper is the post-CE4 abstraction step established by I27 (the
+CE6 SBA closure's invariant). Today's consumers post-CE11:
+`collect_sba_victims` (I27), `Effect::TapAnotherTargetCreature`
+(this invariant), `Effect::UntapTargetOtherPermanent` (this
+invariant). Planned consumers per
+`docs/CE5_CE6_CE7_CLOSURE_PLAYBOOK.md`: combat damage assignment
+(CE9 closure target), future trigger emitter (gated on CE8
+substrate). The two existing inline stable-sort sites
+(`state_ops_snapshot.rs::battlefield_snapshot` line 189 and
+`state_ops_fingerprint.rs::fingerprint` lines 316-327) are
+CE4-closed and produce identical output to the helper; refactoring
+them to call the helper is a follow-up housekeeping pass.
+
+**Pinned by**:
+`tests_rust/test_resolve.py::test_resolve_tap_another_picks_etb_first_across_players`,
+`test_resolve_tap_another_picks_p1_when_p1_etb_first`,
+`test_resolve_untap_other_picks_etb_first_across_players`,
+`test_resolve_untap_other_picks_p0_when_p0_etb_first`.
+
 ### ~~CE5.~~ CLOSED: `cast_spell` cross-engine parity via harness-side `resolve_top_of_stack_python` mirror
 
 Closed by the CE5 closure slice (`feature/ce5-cast-resolve`).
@@ -1799,6 +1836,93 @@ API split) and with future SBA-driven slices (death-trigger emission,
 the trigger-queue mirror) which will keep using the eager `losers()` /
 `winner()` API to detect cause-flags-driven loss before SBA writes
 `has_lost`.
+
+### ~~CE11.~~ CLOSED: cross-player find-first Effect arms walk battlefield in ETB-timestamp order (via shared `bf_iter_etb_sorted` helper)
+
+> **Numbering note.** This is the divergence labeled CE7 in the
+> `docs/RUST_BF_ITERATION_AUDIT.md` and `docs/CE5_CE6_CE7_CLOSURE_PLAYBOOK.md`
+> §4 pre-renumber labeling. The numbering collision with CE7 in this
+> doc (`draw_card_inline` mirror flags, closed earlier) is resolved by
+> jumping to CE11 here. The audit's predicted ordering CE5 → CE6 → CE7
+> maps to this doc's CE6 (SBA-victim collection) → CE9 (combat damage
+> assignment, in flight) → CE11 (this slice) at the playbook-coordinated
+> renumber. CE10 was an unrelated surface-accessor closure that took
+> the next number when it landed.
+
+Closed by `feature/cross-player-find-first` (this slice).
+Pre-CE11 the two Effect arms `Effect::TapAnotherTargetCreature`
+(`rust/src/state_ops_resolve.rs:4682`) and `Effect::UntapTargetOtherPermanent`
+(`rust/src/state_ops_resolve.rs:4712`) walked their first-eligible
+target via a labeled `'outer: for (pidx, player) in state.players.iter().enumerate()`
+loop — p0-first, p1-second, in each player's per-player battlefield
+Vec order. Python's `effects/generic/tap.py:277-295` (`TapAnotherTargetCreature`
+via the base `Tap` class's `legal_targets` pipeline) and
+`effects/generic/tap.py:346-386` (`UntapTargetOtherPermanent.legal_targets`)
+both walk the centralized `state.battlefield` (ETB-monotone post-CE4)
+filtered by their respective predicates and pick the first match. The
+two engines diverged whenever a p1 permanent had a lower ETB stamp
+than the first p0 eligible target — i.e. whenever the cross-player
+walk's tie-break direction mattered.
+
+**Closure shape.** Both arms switch their outer iteration to
+`for obj in crate::bf_iter::bf_iter_etb_sorted(state)` (the shared
+helper introduced by the CE6 SBA-victim closure, `cdb01fcd`). Predicate
+logic is unchanged:
+
+- `TapAnotherTargetCreature`: `obj.id != source_obj_id` AND the
+  printing's `card_types` contains `"Creature"`. Pick first.
+- `UntapTargetOtherPermanent`: `obj.id != source_obj_id` AND
+  `obj.tapped`. Pick first.
+
+Player index is read off `obj.controller` rather than the outer
+enumerate index. The mutating per-player `Arc::make_mut` write pass
+is identical to pre-CE11.
+
+**Tests.** Four new regression tests in `tests_rust/test_resolve.py`
+under the "CE7 closure: cross-player find-first arms walk ETB-timestamp
+order" section (CE7 = audit-labeled identifier, kept in test docstrings
+for cross-doc grep-ability):
+
+- `test_resolve_tap_another_picks_etb_first_across_players` — p0
+  ETB-older, p1 newer; source on p1. Pins ETB-first match wins
+  regardless of source controller.
+- `test_resolve_tap_another_picks_p1_when_p1_etb_first` — the
+  LOAD-BEARING direction: p1 ETB-older, p0 newer; pre-CE11 Rust
+  picked p0's newer creature, post-CE11 picks p1's older one
+  matching Python's centralized walk.
+- `test_resolve_untap_other_picks_etb_first_across_players` —
+  symmetric LOAD-BEARING case for the untap arm: p1 ETB-older
+  tapped permanent wins over p0's newer tapped permanent.
+- `test_resolve_untap_other_picks_p0_when_p0_etb_first` — pins the
+  no-regression direction (p0 ETB-older wins under both pre- and
+  post-CE11 walks).
+
+Adds a `_two_two_creature_dict()` helper local to the CE7 test section
+(mirroring the SBA-test convention from `tests_rust/test_sba.py`).
+
+**Fingerprint baselines.** Zero shifts. Pinned baselines use
+deterministic setups where the tie-break direction doesn't matter
+(single-controller resolutions, drain-bf-first patterns, or
+synthetic-seed-shaped fixtures where every bf object's
+`etb_timestamp == 0`). The helper's stable sort preserves the
+pre-CE11 p0-then-p1 walk on those fixtures, so the 10 pre-existing
+tests in the TapAnother + UntapOther sections of `test_resolve.py`
+stay bit-equal — none of them pinned the OLD cross-player p0-first
+behavior in a way that would shift.
+
+**Pre-emptive parity fix.** This closure is NOT smoke-surfaced: no
+cross-engine probe drove a `TapAnotherTargetCreature` /
+`UntapTargetOtherPermanent` resolution with interleaved ETB
+timestamps yet (Starport-Security and Nanoform-Sentinel-shape cards
+exist in the EoE pool, but the current probes don't trigger their
+abilities at non-trivial ETB-interleaved states). Closing now keeps
+the `bf_iter_etb_sorted` helper consumer set complete (CE6's SBA +
+CE11's two find-first arms) while the helper is fresh, rather than
+waiting for a probe to surface the divergence later.
+
+Full rust gate (1760 tests post-closure, +4 vs the pre-CE11 1756)
+green. Pre-existing `test_no_orphan_rust_variants` Python red
+unrelated (pending unmerged coverage-overrides PR).
 
 ---
 

@@ -4679,23 +4679,31 @@ fn apply_effect(
         // 2+ EoE cards). Same scan shape as UntapTargetOtherPermanent
         // but filters on Creature and taps. Already-tapped target is
         // a silent no-op (matches the existing TapTarget contract).
+        //
+        // CE7 closure: cross-player find-first picks the ETB-timestamp-
+        // first eligible target via the shared `bf_iter_etb_sorted`
+        // helper, matching Python's centralized `state.battlefield`
+        // walk in `effects/generic/tap.py:277-295` (TapAnotherTargetCreature
+        // resolves via the base Tap class's `legal_targets`, which walks
+        // `state.battlefield` filtered by `IsCreature() & ~IsSource()`).
+        // Pre-CE7 the Rust side walked p0-then-p1, which diverged from
+        // Python whenever a p1 permanent had a lower ETB stamp than
+        // any p0 eligible target.
         Effect::TapAnotherTargetCreature => {
             let mut found: Option<(usize, u32)> = None;
-            'outer_tatc: for (pidx, player) in state.players.iter().enumerate() {
-                for obj in player.battlefield.iter() {
-                    if obj.id == source_obj_id {
-                        continue;
-                    }
-                    let printing_idx = obj.printing_id as usize;
-                    let Some(printing) = state.registry.printings.get(printing_idx) else {
-                        continue;
-                    };
-                    if !printing.card_types.iter().any(|t| t == "Creature") {
-                        continue;
-                    }
-                    found = Some((pidx, obj.id));
-                    break 'outer_tatc;
+            for obj in crate::bf_iter::bf_iter_etb_sorted(state) {
+                if obj.id == source_obj_id {
+                    continue;
                 }
+                let printing_idx = obj.printing_id as usize;
+                let Some(printing) = state.registry.printings.get(printing_idx) else {
+                    continue;
+                };
+                if !printing.card_types.iter().any(|t| t == "Creature") {
+                    continue;
+                }
+                found = Some((obj.controller as usize, obj.id));
+                break;
             }
             if let Some((pidx, target_id)) = found {
                 let zone: &mut Vec<GameObject> =
@@ -4711,15 +4719,23 @@ fn apply_effect(
         }
         Effect::UntapTargetOtherPermanent => {
             // Find first eligible (tapped, not source) across both
-            // players' battlefields. Track (player_idx, obj_id) for
-            // the mutating pass.
+            // players' battlefields.
+            //
+            // CE7 closure: cross-player find-first picks the ETB-
+            // timestamp-first eligible target via the shared
+            // `bf_iter_etb_sorted` helper, matching Python's centralized
+            // `state.battlefield` walk in
+            // `effects/generic/tap.py:346-386` (`UntapTargetOtherPermanent.legal_targets`
+            // returns `[("permanent", o.id) for o in state.battlefield
+            // if o.id != source_id and o.tapped]`). Pre-CE7 the Rust
+            // side walked p0-then-p1, which diverged from Python
+            // whenever a p1 tapped permanent had a lower ETB stamp
+            // than any p0 eligible target.
             let mut found: Option<(usize, u32)> = None;
-            'outer: for (pidx, player) in state.players.iter().enumerate() {
-                for obj in player.battlefield.iter() {
-                    if obj.id != source_obj_id && obj.tapped {
-                        found = Some((pidx, obj.id));
-                        break 'outer;
-                    }
+            for obj in crate::bf_iter::bf_iter_etb_sorted(state) {
+                if obj.id != source_obj_id && obj.tapped {
+                    found = Some((obj.controller as usize, obj.id));
+                    break;
                 }
             }
             if let Some((pidx, target_id)) = found {
