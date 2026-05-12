@@ -95,3 +95,9 @@ data/17lands/
 # .pyd lands in the venv's site-packages, not in the source tree.
 rust/target/
 
+# Trained deck-belief model artifacts (Step 2 of the NN representation
+# roadmap). Built by scripts/train_deck_belief.py from the 17lands EoE
+# corpus. The .npz baseline + .pt NN are regenerable; the validation
+# JSON report goes to training_progress/ (already gitignored).
+models/
+
