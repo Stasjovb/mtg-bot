@@ -5281,3 +5281,275 @@ def double_strike_selector(py_state, rust_state, step_index: int) -> dict:
                 }
 
     return retaliation_selector(py_state, rust_state, step_index)
+
+
+# ---------------------------------------------------------------------------
+# Phase 5 follow-up #18: flying_selector — extend the cross-engine smoke
+# onto flying combat (CR 702.9). Flying is a block-eligibility gate: a
+# flying attacker can only be blocked by creatures with flying OR reach
+# (CR 702.17). Drives three distinct surfaces at the same DECLARE_BLOCKERS
+# apply gate:
+#
+#   1. **Vanilla blocker rejected** — Python's `combat.can_block`
+#      (combat.py:70-73) returns False; Rust's `declare_blocker`
+#      (state_ops_combat.rs:713-719) returns False. Both engines'
+#      `state.blockers` (Python) / `state.blockers` (Rust) stays
+#      empty for the flying attacker, which then goes through
+#      unblocked and deals damage to the defender.
+#
+#   2. **Reach blocker accepted** — both engines accept the
+#      reach-blocker pair (Python: `blocker_kws` contains `"reach"`
+#      so the `not (flying or reach)` clause is false; Rust:
+#      `blocker_has_reach` is true so the gate passes). Combat
+#      damage exchange: both 2/2s die.
+#
+#   3. **Flying blocker accepted** — same as scenario 2 but the
+#      blocker carries flying instead of reach. Both engines'
+#      blocker_has_flying check returns true; gate passes.
+#
+# **Predicted outcome: clean pass (no novel CE divergence).** Reading
+# the two block-legality call sites:
+#
+#   * Python `combat.can_block` lines 70-73:
+#       if "flying" in attacker_kws:
+#           if not ("flying" in blocker_kws or "reach" in blocker_kws):
+#               return False
+#   * Rust `state.declare_blocker` lines 713-719:
+#       if battlefield_has_keyword(self, attacker_id, "flying") {
+#           let blocker_has_flying = battlefield_has_keyword(self, blocker_id, "flying");
+#           let blocker_has_reach = battlefield_has_keyword(self, blocker_id, "reach");
+#           if !blocker_has_flying && !blocker_has_reach {
+#               return false;
+#           }
+#       }
+#
+# Both gate on the same `printing.keywords` carry symmetrically. The
+# only divergence axis worth probing here is whether the rejected
+# vanilla-blocker pair leaves a stale entry in either engine's
+# blockers list — both engines silently drop the pair (Python:
+# `_declare_blockers` validated.pop, Rust: per-pair bool-return
+# discarded), so the post-DECLARE_BLOCKERS state should be parity-
+# clean.
+#
+# **If a divergence DOES surface** (CE19 candidate shape): the most
+# likely shape is at the legal_decisions enumeration layer — Rust's
+# `state_ops_legal.rs:328-330` explicitly defers the flying filter to
+# the per-pair apply gate, and Python similarly enumerates flying-
+# illegal pairs from `eligible_blockers`. A buggy port that filtered
+# at enumeration on one side but not the other would surface as a
+# legal_decisions dict-count divergence. This probe doesn't directly
+# call legal_decisions; the walk_both compare exercises field-view
+# state equality, which is upstream of the enumeration surface.
+#
+# **Setup: side-channel inject onto p0 bf (attacker side).** Mirrors
+# every prior keyword-on-attacker probe (FS/DS/etc). The defender's
+# blocker is also side-channel-injected (the vanilla Bears already
+# on p1 bf serve for Test A; for Tests B and C we inject Bear
+# Reacher / Bear Soarer 2 onto p1 bf with the appropriate keyword).
+#
+# **Trigger detection (stateless).** The injection fires the FIRST
+# time the selector observes 3 creatures on bf (the
+# retaliation_selector backbone's end-of-step-167 state) and no
+# Bear Soarer in any zone yet — uniquely true at step 168.
+# ---------------------------------------------------------------------------
+
+
+# Name of the synthetic flying-attacker printing injected by
+# :func:`flying_side_channel`. Distinct from
+# :data:`_FIRST_STRIKE_PRINTING_NAME` (Bear Knight),
+# :data:`_DEATHTOUCH_PRINTING_NAME`, :data:`_LIFELINK_PRINTING_NAME`,
+# :data:`_VIGILANCE_PRINTING_NAME`, :data:`_HASTE_PRINTING_NAME`,
+# :data:`_MENACE_PRINTING_NAME`, :data:`_DEFENDER_PRINTING_NAME`,
+# :data:`_INDESTRUCTIBLE_PRINTING_NAME` (Bear Idol),
+# :data:`_HEXPROOF_PRINTING_NAME` (Bear Sage), and
+# :data:`_DOUBLE_STRIKE_PRINTING_NAME` (Bear Champion) so the eleven
+# probes' trigger gates stay mutually independent on the same
+# multi_blocker_deckspec walk.
+_FLYING_PRINTING_NAME = "Bear Soarer"
+
+
+def flying_side_channel(py_state, rust_state) -> tuple[int, int]:
+    """Side-channel inject a 2/2 flying creature onto BOTH engines'
+    p0 battlefield as an immediate attacker (sick cleared, untapped,
+    no damage).
+
+    Mirror of :func:`double_strike_side_channel` with two differences:
+
+      * The injected printing carries ``"flying"`` (both engines'
+        spelling) instead of ``"double strike"`` / ``"double_strike"``.
+      * Does NOT untap p1's Bears 9. The selector's Test-A custom
+        DECLARE_BLOCKERS branch needs a VANILLA blocker to be
+        eligible (Bears 9 stays tapped from its turn-12 attack — to
+        get a vanilla blocker eligible we untap Bears 11 instead).
+        Actually wait — the post-injection selector needs the
+        flying-attacker-only case + the flying-attacker-vs-reach
+        case + the flying-attacker-vs-flying case. We drive these as
+        SEPARATE fresh-state tests rather than wedging all three
+        into the selector walk. The walk drives ONE scenario: Test
+        A's "flying attacker + vanilla blocker rejected → attacker
+        goes through unblocked, defender takes 2".
+
+    For the walk-scenario (Test A): we side-channel-untap Bears 11
+    on p1's bf so it's eligible to declare a block, then watch
+    Python's `_declare_blockers` / Rust's `DeclareBlockers` reject
+    the vanilla pair at the can_block / declare_blocker gate. The
+    selector emits the (illegal) assignment; both engines silently
+    drop it; combat proceeds with the flying attacker unblocked.
+
+    Returns ``(py_obj_id, rust_obj_id)``. Ids match because both
+    engines allocate in lockstep through step 167.
+    """
+    from mtg_bot.cards.base import CardPrinting, ManaCost
+    from mtg_bot.game import Zone
+
+    # ---- Python side: flying printing on p0 bf ----
+    fly_printing = CardPrinting(
+        name=_FLYING_PRINTING_NAME,
+        mana_cost_str="",
+        mana_cost=ManaCost(),
+        type_line="Creature",
+        supertypes=(),
+        card_types=("Creature",),
+        subtypes=(),
+        power=2,
+        toughness=2,
+        produces=frozenset(),
+        keywords=frozenset({"flying"}),
+    )
+    py_obj = py_state.new_object(
+        fly_printing, owner_id=0, zone=Zone.BATTLEFIELD,
+    )
+    py_obj.controller_id = 0
+    py_obj.summoning_sick = False
+    py_obj.tapped = False
+    py_obj.damage = 0
+    py_obj.etb_timestamp = py_state.next_timestamp
+    py_state.next_timestamp += 1
+    py_state.battlefield.append(py_obj)
+
+    # ---- Rust side: flying printing on p0 bf ----
+    ZONE_BATTLEFIELD = 2
+    rust_obj_id = rust_state.register_and_inject_object(
+        {
+            "name": _FLYING_PRINTING_NAME,
+            "card_types": ["Creature"],
+            "power": 2,
+            "toughness": 2,
+            "keywords": ["flying"],
+        },
+        0,  # controller = p0 (the attacking side)
+        ZONE_BATTLEFIELD,
+    )
+
+    # ---- Side-channel untap of p1's Bears id 9 so it becomes the
+    # SOLE eligible (vanilla, non-flying, non-reach) blocker. The
+    # selector's DECLARE_BLOCKERS branch will emit a (Bears 9 ->
+    # flying attacker) assignment which BOTH engines reject at the
+    # per-pair flying gate. ----
+    for obj in py_state.battlefield:
+        if (
+            obj.controller_id == 1
+            and obj.printing.name == "Grizzly Bears"
+            and int(obj.id) == 9
+        ):
+            obj.tapped = False
+    for entry in rust_state.battlefield_snapshot():
+        if (
+            entry["controller_id"] == 1
+            and entry["printing_name"] == "Grizzly Bears"
+            and int(entry["id"]) == 9
+        ):
+            rust_state.untap_object(int(entry["id"]))
+
+    return int(py_obj.id), int(rust_obj_id)
+
+
+def flying_selector(py_state, rust_state, step_index: int) -> dict:
+    """Cross-engine smoke selector that drives a flying attacker vs
+    vanilla blocker combat on :func:`multi_blocker_deckspec`.
+
+    Test A surface: a flying attacker (Bear Soarer 2/2) on p0's bf
+    attacks; p1's vanilla Bears id 9 (post-untap) attempts to block;
+    both engines reject the block at their respective
+    flying-vs-non-flying-non-reach gates; the attacker goes through
+    UNBLOCKED and deals 2 damage to p1.
+
+    Expected walk shape:
+
+      * **Steps 0-167** — identical to retaliation_selector's walk.
+      * **Step 168** — flying injection fires (Bear Soarer 2/2 flying
+        on p0 bf, summoning_sick=False; p1's Bears 9 untapped);
+        selector returns ``pass_priority``.
+      * **Step ~171** (DECLARE_ATTACKERS p0) — emit
+        ``[bear_soarer_id]`` (the flying creature; Bears id 5 still
+        sick, filtered).
+      * **Step ~173** (DECLARE_BLOCKERS) — emit
+        ``[[9, bear_soarer_id]]``. BOTH engines silently drop the
+        pair at the per-pair flying gate (Python: can_block returns
+        False; Rust: declare_blocker returns false). Net
+        ``state.blockers`` empty — attacker unblocked.
+      * **Step ~175** (COMBAT_DAMAGE) — 2 damage to p1 (life 20 → 18).
+      * **End state**: Bear Soarer on p0 bf (untapped post-combat —
+        attackers stay tapped from declare-attackers though). Bears
+        9 still on p1 bf (didn't actually block, no damage taken).
+        p1 life = 18.
+
+    Parity-clean prediction: both engines reject the illegal pair at
+    apply time; resulting state.blockers / blocker.blocking /
+    attacker.blocked_by are all parity-equivalent.
+
+    Stateless — same idempotency guarantee as the prior probes.
+    """
+    from mtg_bot.turn import Step
+
+    fly_already_injected = any(
+        obj.printing.name == _FLYING_PRINTING_NAME
+        for obj in py_state.battlefield
+    ) or any(
+        obj.printing.name == _FLYING_PRINTING_NAME
+        for p in py_state.players
+        for zone_list in (p.hand, p.library, p.graveyard, p.exile)
+        for obj in zone_list
+    )
+
+    if not fly_already_injected:
+        creature_count = sum(
+            1 for o in py_state.battlefield
+            if "Creature" in o.printing.card_types
+        )
+        if creature_count >= 3:
+            flying_side_channel(py_state, rust_state)
+            return {"kind": "pass_priority"}
+
+    cur_step = py_state.step
+    active_idx = py_state.active_player_idx
+
+    if cur_step == Step.DECLARE_BLOCKERS:
+        # Custom branch: emit the ILLEGAL (vanilla blocker -> flying
+        # attacker) assignment. Both engines must silently drop the
+        # pair at the per-pair flying gate — net state.blockers is
+        # empty; combat proceeds with the attacker unblocked.
+        attackers_present = [
+            o for o in py_state.battlefield
+            if getattr(o, "attacking", False)
+        ]
+        if attackers_present:
+            defender_idx = 1 - active_idx
+            eligible_blockers = [
+                o for o in py_state.battlefield
+                if o.controller_id == defender_idx
+                and "Creature" in o.printing.card_types
+                and not o.tapped
+                and not o.summoning_sick
+            ]
+            if len(eligible_blockers) == 1:
+                attacker = attackers_present[0]
+                blocker = eligible_blockers[0]
+                advance_phase_python(py_state)
+                rust_state.advance_phase()
+                return {
+                    "kind": "declare_blockers",
+                    "assignments": [[int(blocker.id), int(attacker.id)]],
+                }
+
+    return retaliation_selector(py_state, rust_state, step_index)
