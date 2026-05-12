@@ -157,8 +157,11 @@
 //! The id assigned is `1 + max(existing object id)` so it never
 //! collides with synthetic-state ids.
 
-use crate::cards::{parse_printing, Effect, RegistryData, TargetFilter};
-use crate::state::{GameObject, GameState, PendingDecision, StackItem, UeotModifier};
+use crate::bf_iter::bf_iter_etb_sorted;
+use crate::cards::{parse_printing, Effect, Event, RegistryData, TargetFilter};
+use crate::state::{
+    GameObject, GameState, PendingDecision, StackItem, StackItemKind, UeotModifier,
+};
 use crate::state_ops_decisions::auto_resolve_pending;
 use crate::state_ops_zones::{
     mark_left_battlefield_if_nonland, ZONE_BATTLEFIELD, ZONE_EXILE,
@@ -334,6 +337,165 @@ fn move_source_post_resolve(state: &mut GameState, source_obj_id: u32) -> Option
 /// recursively apply the MayDo inner effect when the strategy resolves
 /// to "yes"; the private `apply_effect` isn't reachable across module
 /// boundaries so we expose this thin pub wrapper.
+// --- ETB-trigger substrate (Slice 1) -----------------------------
+//
+// Implements the dispatch walker + push helper that fan
+// `Event::Enters` (and future events) out to every triggered
+// ability on every printing on the battlefield. Mirrors Python's
+// `dispatch_event` (`src/mtg_bot/actions.py:3283-3399`) +
+// `push_triggered_ability` (`src/mtg_bot/actions.py:3172-3280`).
+//
+// Slice 1 scope (per `docs/RUST_ETB_TRIGGER_AUDIT.md` §6.1):
+//
+// 1. Walk `bf_iter_etb_sorted(state)` (CE5-introduced helper at
+//    `rust/src/bf_iter.rs:61`) — order matches Python's
+//    `list(state.battlefield)`.
+// 2. Snapshot the bf list AT DISPATCH ENTRY so triggers that ETB
+//    new permanents during dispatch don't observe their own event
+//    in the same pass (mirrors Python's
+//    `actions.py:3343-3345` snapshot comment).
+// 3. For each (source, ability) pair, check (a) the event matches
+//    and (b) the predicate evaluates true.
+// 4. Once-per-turn gate: skip if `(source_id, ability_index) in
+//    state.triggered_this_turn`.
+// 5. On match + non-gated: call `push_triggered_ability` to put a
+//    `StackItem::new_trigger` on the stack.
+//
+// **Defers to Slice 2+:**
+// - APNAP ordering (Python deliberately doesn't either — see
+//   audit §2.5).
+// - Panharmonicon-shape `etb_trigger_multiplier`.
+// - Target selection on triggers that need it (DealDamage trigger
+//   with a chosen target). Slice 1 only proves DrawCards-shape /
+//   GainLife-shape (no target) for the substrate smoke probe.
+// - Fan-out from the other 11 ETB-stamping sites (audit §4).
+// - Combat-damage aggregator dedup.
+
+/// **Slice 1 — dispatch a single event to every triggered ability
+/// on the battlefield.** Walks every permanent in
+/// ETB-timestamp order, matches each printing's
+/// `triggered_abilities` against `(event, subject_id, source)`,
+/// and pushes matching triggers onto the stack via
+/// `push_triggered_ability`.
+///
+/// Slice 1 surface accepts `Event::Enters` (the only wired event
+/// today). Other variants raise `PyValueError` loudly — adding
+/// dispatch coverage in lockstep with new variants keeps the
+/// parser surface and the dispatcher's coverage consistent.
+pub(crate) fn dispatch_event(
+    state: &mut GameState,
+    event: Event,
+    subject_id: u32,
+) -> PyResult<()> {
+    // Defensive: Slice 1 wires only ENTERS. Other events are
+    // declared in the enum so the parser can validate registry
+    // dicts at register time, but no dispatch site fires them yet.
+    // A non-ENTERS call would mean a future caller skipped the
+    // fan-out plan; raise loud rather than silently no-op.
+    if event != Event::Enters {
+        return Err(PyValueError::new_err(format!(
+            "dispatch_event: event {event:?} is not yet wired in Slice 1; \
+             only Event::Enters dispatches today"
+        )));
+    }
+
+    // Snapshot the bf source-id + ability-payload list AT ENTRY so
+    // triggers that ETB new permanents during dispatch don't
+    // observe their own event in the same pass. Materializes
+    // (source_id, source_controller, ability_index, effect-clone)
+    // tuples — once the bf-snapshot is done we no longer hold an
+    // immutable borrow on `state`, so `push_triggered_ability`
+    // (which mutates `state.stack`) is free to fire.
+    let firings: Vec<(u32, u8, u32, Effect, bool)> = {
+        let bf = bf_iter_etb_sorted(state);
+        let mut firings = Vec::new();
+        for source in &bf {
+            // Resolve the source's printing -> its triggered_abilities.
+            let printing = match state.registry.lookup(source.printing_id) {
+                Some(p) => p,
+                None => continue,
+            };
+            for (ability_index, ability) in
+                printing.triggered_abilities.iter().enumerate()
+            {
+                if ability.event != event {
+                    continue;
+                }
+                if !ability
+                    .predicate
+                    .matches(state, source.id, subject_id)
+                {
+                    continue;
+                }
+                // Once-per-turn gate: skip if already fired this turn.
+                if ability.once_per_turn
+                    && state
+                        .triggered_this_turn
+                        .contains(&(source.id, ability_index as u32))
+                {
+                    continue;
+                }
+                firings.push((
+                    source.id,
+                    source.controller,
+                    ability_index as u32,
+                    ability.effect.clone(),
+                    ability.once_per_turn,
+                ));
+            }
+        }
+        firings
+    };
+
+    // Push each matching firing onto the stack. Order matches the
+    // bf walk (Python's "no APNAP simplification" — audit §2.5).
+    for (source_id, controller, ability_index, effect, once_per_turn) in firings {
+        push_triggered_ability(
+            state,
+            source_id,
+            controller,
+            ability_index,
+            effect,
+            once_per_turn,
+        )?;
+    }
+    Ok(())
+}
+
+/// **Slice 1 — push one triggered ability onto the stack.** Adds a
+/// `StackItem::new_trigger` carrying the source object's id, the
+/// trigger's controller, and the payload effect. Bumps the
+/// once-per-turn ledger when the ability is gated.
+///
+/// Slice 1 simplifications (deferred to later slices):
+/// - **No target selection.** Effects that need a target
+///   (DealDamage with AnyPlayer / AnyCreature) fall back on the
+///   existing `apply_effect` resolution-time targeting (defending
+///   player / first defender bf object). Real MTG picks targets at
+///   push time; deferred to Slice 4+ along with the rest of the
+///   target-on-cast plumbing.
+/// - **No fizzle check.** Targets are picked at resolve time, so
+///   "no legal targets at push" is moot under Slice 1's deferred-
+///   targeting shape. Slice 4+ adds the fizzle gate.
+pub(crate) fn push_triggered_ability(
+    state: &mut GameState,
+    source_id: u32,
+    controller: u8,
+    ability_index: u32,
+    effect: Effect,
+    once_per_turn: bool,
+) -> PyResult<()> {
+    state
+        .stack
+        .push(StackItem::new_trigger(source_id, controller, effect, ability_index));
+    if once_per_turn {
+        state
+            .triggered_this_turn
+            .insert((source_id, ability_index));
+    }
+    Ok(())
+}
+
 pub(crate) fn apply_effect_pub(
     state: &mut GameState,
     effect: &Effect,
@@ -5383,6 +5545,30 @@ impl GameState {
             Some(item) => item.clone(),
         };
 
+        // ETB-trigger Slice 1: triggered-ability resolution path.
+        // A `StackItem::TriggeredAbility` carries its effect inline
+        // in `trigger_payload.effect`; the resolver fires that effect
+        // via `apply_effect` and skips `move_source_post_resolve`
+        // (triggers aren't permanents — their source already lives
+        // wherever the trigger fired from).
+        if top.kind == StackItemKind::TriggeredAbility {
+            let payload = top
+                .trigger_payload
+                .as_ref()
+                .expect("StackItemKind::TriggeredAbility must carry trigger_payload");
+            let trigger_effect = payload.effect.clone();
+            apply_effect(self, &trigger_effect, top.source_obj_id)?;
+            let popped = self
+                .stack
+                .pop()
+                .expect("peeked top but pop returned None — stack invariant broken");
+            // Auto-resolve any pending decisions the trigger effect
+            // may have queued (Surveil on ETB, etc.). Matches the
+            // spell-path's terminal call below.
+            auto_resolve_pending(self, "keep_all_on_top")?;
+            return Ok(Some(stack_item_to_dict(py, &popped)?));
+        }
+
         // Find the source's printing_id, then collect a snapshot of
         // its effects so we can drop the registry borrow before
         // mutating self.
@@ -5430,11 +5616,37 @@ impl GameState {
             }
         }
 
-        // Now drain the popped item and return its dict.
+        // Drain the popped item BEFORE firing dispatch_event below —
+        // ETB triggers go onto the stack ABOVE where the resolving
+        // spell sat, but the resolving spell itself has now finished
+        // and its stack-item must come off first. Mirrors Python's
+        // flow: the spell pops first (the spell completed); the
+        // trigger then pushes onto the now-empty stack, resolving
+        // LIFO on the next priority round.
         let popped = self
             .stack
             .pop()
             .expect("peeked top but pop returned None — stack invariant broken");
+
+        // ETB-trigger Slice 1: predicate-path dispatch fan-out.
+        // Walks every permanent's triggered_abilities + pushes
+        // matching `Event::Enters` triggers onto the stack. The
+        // legacy inline `etb_effects` loop above still fires for
+        // back-compat with pre-Slice-1 test fixtures that use the
+        // old shape; Slice 2 retires the inline path once the 11
+        // ETB-stamping sites all route through dispatch_event.
+        //
+        // Note: dispatching AFTER the inline etb_effects mirrors
+        // Python's ordering (the just-cast source's own self-ETB
+        // effects fire first in real MTG; predicate-path triggers
+        // fan-out to OTHER permanents observing the event). Slice
+        // 2 merges these into a single dispatch_event call by
+        // synthesizing a `TriggeredAbility { event=Enters,
+        // predicate=SourceIsSelf, effect=... }` per `etb_effects`
+        // entry at registry-load time.
+        if post_resolve_zone == Some(ZONE_BATTLEFIELD) {
+            dispatch_event(self, Event::Enters, top.source_obj_id)?;
+        }
         // Auto-resolve any pending decisions (Round-27 G20 closure).
         // Pre-r27 behavior: Surveil etc. resolved with deterministic
         // "keep all on top". The decision-callback substrate now
@@ -5468,6 +5680,22 @@ impl GameState {
             None => return Ok(None),
             Some(item) => item.clone(),
         };
+        // ETB-trigger Slice 1: trigger resolution path (same as
+        // `resolve_top_of_stack` above, minus the auto-resolve of
+        // pending decisions — `_pause` leaves them on the queue).
+        if top.kind == StackItemKind::TriggeredAbility {
+            let payload = top
+                .trigger_payload
+                .as_ref()
+                .expect("StackItemKind::TriggeredAbility must carry trigger_payload");
+            let trigger_effect = payload.effect.clone();
+            apply_effect(self, &trigger_effect, top.source_obj_id)?;
+            let popped = self
+                .stack
+                .pop()
+                .expect("peeked top but pop returned None — stack invariant broken");
+            return Ok(Some(stack_item_to_dict(py, &popped)?));
+        }
         let effects: Vec<Effect> = match find_source_printing_id(self, top.source_obj_id)
         {
             Some(printing_id) => match self.registry.lookup(printing_id) {
@@ -5493,10 +5721,18 @@ impl GameState {
                 apply_effect(self, effect, top.source_obj_id)?;
             }
         }
+        // Pop the resolving spell's stack item BEFORE firing
+        // dispatch_event — see the same-shaped comment in
+        // `resolve_top_of_stack` above for the ordering rationale.
         let popped = self
             .stack
             .pop()
             .expect("peeked top but pop returned None — stack invariant broken");
+        if post_resolve_zone == Some(ZONE_BATTLEFIELD) {
+            // ETB-trigger Slice 1: same predicate-path fan-out as
+            // `resolve_top_of_stack` above.
+            dispatch_event(self, Event::Enters, top.source_obj_id)?;
+        }
         Ok(Some(stack_item_to_dict(py, &popped)?))
     }
 

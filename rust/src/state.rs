@@ -380,14 +380,110 @@ pub struct Player {
     pub mulligan_count: u32,
 }
 
-/// One pending entry on the stack. First-slice shape: just an obj_id
-/// (the source spell or activated-ability source) + controller. Real
-/// stack items will need more (target list, choices, modal mode);
-/// future slices extend.
+/// Discriminant for the two kinds of stack items the engine
+/// supports today: spells (or activated abilities sharing the
+/// spell-resolve path) and triggered abilities (pushed by
+/// `dispatch_event` per `docs/RUST_ETB_TRIGGER_AUDIT.md` Slice 1).
+///
+/// **Lower-churn variant of the audit's StackItem-enum proposal.**
+/// Keeping `StackItem` as a struct (rather than a kind-enum) means
+/// every existing call site that reads `item.source_obj_id` /
+/// `item.controller` keeps working unchanged; the new `kind`
+/// discriminant + `trigger_payload` Option are additive. Spell
+/// stack items carry `kind = Spell` and `trigger_payload = None`
+/// (default-constructed via `StackItem::new_spell`); trigger stack
+/// items carry `kind = TriggeredAbility` and a `Some(payload)`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum StackItemKind {
+    /// A spell (or other resolve-via-effects entity that ports
+    /// through `move_source_post_resolve`). The default for every
+    /// pre-Slice-1 call site.
+    Spell,
+    /// A triggered ability pushed by `dispatch_event`. Its
+    /// `Effect` lives in `trigger_payload`; the resolver fires the
+    /// effect via `apply_effect` and DOES NOT call
+    /// `move_source_post_resolve` (triggers aren't permanents —
+    /// their source already lives wherever the trigger fired from).
+    TriggeredAbility,
+}
+
+/// Payload carried on a `StackItem::TriggeredAbility`. Mirrors
+/// Python's `StackItem.ability` reference (the ability is keyed
+/// back to its printing in Python; the Rust side carries the
+/// effect inline because a `CardPrinting`'s `triggered_abilities`
+/// Vec is reachable via
+/// `(source_id -> printing_id -> abilities[ability_index])`, but
+/// inlining the effect avoids a round-trip through the registry
+/// at resolve time).
+///
+/// Slice 1 minimum field set. Future slices (target selection,
+/// fixed_targets, combat-damage aggregator dedup) extend.
+#[derive(Clone, Debug)]
+pub struct TriggerPayload {
+    /// The effect to fire when this trigger resolves.
+    pub effect: crate::cards::Effect,
+    /// Stable identifier for the (source_id, ability_index) pair —
+    /// matches the once-per-turn ledger key in
+    /// `GameState.triggered_this_turn`. `ability_index` is the
+    /// index into `source.printing.triggered_abilities`.
+    pub ability_index: u32,
+}
+
+/// One pending entry on the stack. Two kinds today: spells and
+/// triggered abilities (Slice 1 of the ETB-trigger closure —
+/// `docs/RUST_ETB_TRIGGER_AUDIT.md`). The kind-discriminant +
+/// optional payload pattern keeps every pre-Slice-1 reader of
+/// `item.source_obj_id` / `item.controller` working unchanged;
+/// new readers (the trigger-resolver arm in
+/// `resolve_top_of_stack`) check `kind` first.
 #[derive(Clone, Debug)]
 pub struct StackItem {
     pub source_obj_id: u32,
     pub controller: u8,
+    /// Discriminant. Default `Spell` (every pre-Slice-1 push is
+    /// `Spell`); `TriggeredAbility` is set by
+    /// `push_triggered_ability` in `state_ops_resolve`.
+    pub kind: StackItemKind,
+    /// `Some(_)` iff `kind == TriggeredAbility`. The resolver reads
+    /// the effect from here and calls `apply_effect` directly,
+    /// skipping `move_source_post_resolve` (a trigger has no
+    /// post-resolve permanent to place — its source lives wherever
+    /// the trigger fired from).
+    pub trigger_payload: Option<TriggerPayload>,
+}
+
+impl StackItem {
+    /// Convenience constructor for the spell shape. Every
+    /// pre-Slice-1 call site uses this — the discriminant defaults
+    /// to `Spell`, the payload to `None`.
+    pub(crate) fn new_spell(source_obj_id: u32, controller: u8) -> Self {
+        Self {
+            source_obj_id,
+            controller,
+            kind: StackItemKind::Spell,
+            trigger_payload: None,
+        }
+    }
+
+    /// Convenience constructor for the trigger shape (Slice 1).
+    /// Used by `dispatch_event` / `push_triggered_ability` in
+    /// `state_ops_resolve`.
+    pub(crate) fn new_trigger(
+        source_obj_id: u32,
+        controller: u8,
+        effect: crate::cards::Effect,
+        ability_index: u32,
+    ) -> Self {
+        Self {
+            source_obj_id,
+            controller,
+            kind: StackItemKind::TriggeredAbility,
+            trigger_payload: Some(TriggerPayload {
+                effect,
+                ability_index,
+            }),
+        }
+    }
 }
 
 /// A choice the engine is waiting on. Pushed onto
@@ -955,6 +1051,33 @@ pub struct GameState {
     /// forking that depends on independent rng streams must call
     /// `set_external_rng(None)` on the forked branches.
     pub rng: Option<Py<PyAny>>,
+    /// **ETB-trigger substrate (Slice 1) — once-per-turn ledger.**
+    /// Set of `(source_obj_id, ability_index)` keys for triggered
+    /// abilities flagged `once_per_turn = true` that have already
+    /// fired this turn. Cleared at cleanup step (the per-turn
+    /// reset is the conceptual analog of Python's
+    /// `state.once_per_turn_fired` — see Python's `turn.py:should_fire_trigger`
+    /// and `actions.py:3172-3280`).
+    ///
+    /// **Slice 1 scope.** Substrate only — the ledger is checked
+    /// by `dispatch_event` and updated by `push_triggered_ability`,
+    /// but Slice 1's smoke probe doesn't exercise the gate (the
+    /// canonical IsSelf-enters trigger fires at most once per
+    /// permanent's life anyway, so the once-per-turn gate is moot).
+    /// Slice 2+ fans out to sites that actually need the gate
+    /// (Spacecraft tier-stamp triggers, repeat-fire shapes).
+    ///
+    /// **Not serialized into the fingerprint.** Like
+    /// `mulligan_count`, `consecutive_passes`, `next_etb_timestamp`,
+    /// `winner_id_sticky` — this is bookkeeping state, not
+    /// gameplay-observable. Two states reached via different
+    /// histories that share the same observable battlefield /
+    /// stack / hand / library / graveyard / life MUST produce the
+    /// same fingerprint regardless of which once-per-turn triggers
+    /// have or haven't fired (those would only matter if a
+    /// subsequent trigger ATTEMPT fired — and that attempt is
+    /// part of the gameplay shape itself).
+    pub triggered_this_turn: std::collections::HashSet<(u32, u32)>,
 }
 
 impl Clone for GameState {
@@ -987,6 +1110,7 @@ impl Clone for GameState {
             resolving_combat_damage_amount: self.resolving_combat_damage_amount,
             winner_id_sticky: self.winner_id_sticky,
             rng,
+            triggered_this_turn: self.triggered_this_turn.clone(),
         }
     }
 }
@@ -1302,6 +1426,7 @@ pub fn make_synthetic_state(
         card_types: vec!["Land".to_string()],
         keywords: Vec::new(),
         etb_effects: Vec::new(),
+        triggered_abilities: Vec::new(),
     });
     let bears_pid = builder.push_printing(CardPrinting {
         name: Arc::from("Grizzly Bears"),
@@ -1317,6 +1442,7 @@ pub fn make_synthetic_state(
         card_types: vec!["Creature".to_string()],
         keywords: Vec::new(),
         etb_effects: Vec::new(),
+        triggered_abilities: Vec::new(),
     });
     let elves_pid = builder.push_printing(CardPrinting {
         name: Arc::from("Llanowar Elves"),
@@ -1338,6 +1464,7 @@ pub fn make_synthetic_state(
         card_types: vec!["Creature".to_string()],
         keywords: Vec::new(),
         etb_effects: Vec::new(),
+        triggered_abilities: Vec::new(),
     });
     let registry = builder.snapshot();
 
@@ -1382,5 +1509,8 @@ pub fn make_synthetic_state(
         // Effect-rng-threading closure: default `None`; cross-engine
         // smoke callers opt in via `set_external_rng(Some(rng))`.
         rng: None,
+        // ETB-trigger Slice 1: empty ledger at construction; reset
+        // each turn at cleanup.
+        triggered_this_turn: std::collections::HashSet::new(),
     }
 }

@@ -54,10 +54,12 @@ impl GameState {
     /// owns the stack item (for priority / counter-target logic in
     /// future slices).
     fn push_to_stack(&mut self, source_obj_id: u32, controller: u8) {
-        self.stack.push(StackItem {
-            source_obj_id,
-            controller,
-        });
+        // Slice 1 of ETB-trigger closure: every Python-side
+        // `push_to_stack` call is a spell push (or a spell-shaped
+        // activated-ability push). Triggered-ability pushes go
+        // through `state_ops_resolve::push_triggered_ability` instead,
+        // which constructs a `StackItem::new_trigger`.
+        self.stack.push(StackItem::new_spell(source_obj_id, controller));
     }
 
     /// Return the top stack item as a Python dict
