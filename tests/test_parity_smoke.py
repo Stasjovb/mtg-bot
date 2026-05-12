@@ -6489,3 +6489,665 @@ def test_cross_engine_double_strike_selector_pre_injection_walks_clean(
         "Bear Champion should not yet exist at end of step 167 — DS "
         "injection fires at step 168"
     )
+
+
+# ---------------------------------------------------------------------------
+# Phase 5 follow-up #18: flying_selector tests (CR 702.9).
+#
+# Three scenarios from the brief, all at the DECLARE_BLOCKERS apply
+# gate (CR 702.9 + CR 702.17):
+#
+#   * **Test A** — flying attacker + vanilla blocker attempts to
+#     block. Both engines reject the pair at can_block /
+#     declare_blocker. Attacker goes through unblocked; defender
+#     takes 2 damage.
+#
+#   * **Test B** — flying attacker + reach blocker. Both engines
+#     accept (reach is the gate-opener per CR 702.17). Combat
+#     damage: both 2/2s take 2 damage, both die.
+#
+#   * **Test C** — flying attacker + flying blocker. Both engines
+#     accept. Combat damage: both die.
+#
+# Outcome prediction: **clean pass on all three** — Python's
+# `combat.can_block` (combat.py:70-73) and Rust's
+# `state.declare_blocker` (state_ops_combat.rs:713-719) gate on the
+# same printing.keywords carry symmetrically. No CE divergence
+# expected. If one surfaces, it's CE19.
+# ---------------------------------------------------------------------------
+
+
+def test_cross_engine_flying_selector_walks_clean(parity_smoke):
+    """**Flying clean-walk pin (Test A)** — 200-decision walk on
+    :func:`multi_blocker_deckspec` with :func:`flying_selector` is
+    parity-clean every step.
+
+    Walk shape:
+
+      * Steps 0-167: identical to retaliation_selector backbone.
+      * Step 168: Bear Soarer (2/2 flying) injected on p0 bf;
+        Bears id 9 force-untapped on p1 bf.
+      * DECLARE_ATTACKERS p0: emit [bear_soarer_id].
+      * DECLARE_BLOCKERS p1: emit [[9, bear_soarer_id]]. BOTH
+        engines reject the (vanilla blocker, flying attacker) pair
+        at their respective flying gates. Net blockers empty.
+      * COMBAT_DAMAGE: 2 damage to p1 (life 20 → 18).
+
+    Parity-load-bearing field at the post-DECLARE_BLOCKERS step:
+    the rejected pair must NOT leave a stale entry in either
+    engine's blockers list, and the attacker.blocked_by /
+    blocker.blocking refs must match.
+    """
+    from mtg_bot.parity.cross_engine import (
+        flying_selector,
+        multi_blocker_deckspec,
+        walk_both,
+    )
+
+    result = walk_both(
+        multi_blocker_deckspec(),
+        n_decisions=200,
+        decision_selector=flying_selector,
+    )
+    assert result.error is None, (
+        f"walk aborted at step {result.aborted_at}: {result.error}"
+    )
+    for step in result.steps:
+        assert step.divergences == [], (
+            f"unexpected divergence at step {step.step_index}: "
+            f"action={step.action_dict} "
+            f"{[(d.field, d.py_value, d.rust_value, d.known_gap) for d in step.divergences]}"
+        )
+
+
+def test_cross_engine_flying_post_combat_state(parity_smoke):
+    """**Flying post-combat structural pin (Test A)** — drives enough
+    decisions for combat damage to fire (175 steps — past
+    COMBAT_DAMAGE), then asserts:
+
+      * Bear Soarer still on p0's bf with damage=0 (unblocked, took
+        no damage in return).
+      * Bears id 9 still on p1's bf with damage=0 (its block was
+        rejected; it didn't actually engage in combat).
+      * p1 life = original - 2 (flying attacker dealt 2 to defender
+        unblocked).
+      * No new entries in either engine's graveyards from this combat.
+
+    Both engines must agree on all four checkpoints. If Rust silently
+    accepts the vanilla block (CE19 candidate divergence), Bears id 9
+    would have damage=2 and Bear Soarer damage=2; p1 life would be
+    unchanged at 20.
+    """
+    from mtg_bot.parity.cross_engine import (
+        build_matched_states,
+        flying_selector,
+        multi_blocker_deckspec,
+        step_both,
+    )
+
+    py_state, rust_state = build_matched_states(multi_blocker_deckspec())
+    py_p1_before = py_state.players[1].life
+
+    # 175 steps: past COMBAT_DAMAGE, before CLEANUP which zeroes
+    # damage marks (CR 514.2).
+    for i in range(175):
+        action = flying_selector(py_state, rust_state, i)
+        step_both(py_state, rust_state, action)
+
+    # Bear Soarer should still be on p0's bf with damage=0.
+    py_soarer = next(
+        (o for o in py_state.battlefield
+         if o.printing.name == "Bear Soarer"),
+        None,
+    )
+    assert py_soarer is not None, (
+        "expected Bear Soarer still on Python p0 bf post-combat "
+        "(unblocked — no damage taken). bf = "
+        f"{[(o.id, o.printing.name) for o in py_state.battlefield]}"
+    )
+    assert py_soarer.controller_id == 0
+    assert py_soarer.damage == 0, (
+        f"expected Python Bear Soarer damage=0 (unblocked), "
+        f"got {py_soarer.damage}"
+    )
+
+    rust_soarer = next(
+        (e for e in rust_state.battlefield_snapshot()
+         if e.get("printing_name") == "Bear Soarer"),
+        None,
+    )
+    assert rust_soarer is not None, (
+        "expected Bear Soarer still on Rust p0 bf post-combat"
+    )
+    assert rust_soarer["controller_id"] == 0
+    assert rust_soarer["damage"] == 0, (
+        f"expected Rust Bear Soarer damage=0, got {rust_soarer['damage']}"
+    )
+
+    # Bears id 9 should still be on p1's bf with damage=0 — its
+    # block was rejected by the flying gate, so it didn't engage.
+    py_bears9 = next(
+        (o for o in py_state.battlefield if int(o.id) == 9),
+        None,
+    )
+    assert py_bears9 is not None, (
+        "expected Bears id 9 still on Python p1 bf — its block "
+        "was rejected at the flying gate, so it didn't engage. "
+        f"bf = {[(o.id, o.printing.name) for o in py_state.battlefield]}"
+    )
+    assert py_bears9.damage == 0, (
+        f"expected Python Bears id 9 damage=0 (block rejected), "
+        f"got {py_bears9.damage}"
+    )
+
+    rust_bears9 = next(
+        (e for e in rust_state.battlefield_snapshot()
+         if int(e["id"]) == 9),
+        None,
+    )
+    assert rust_bears9 is not None
+    assert rust_bears9["damage"] == 0, (
+        f"expected Rust Bears id 9 damage=0, got {rust_bears9['damage']}"
+    )
+
+    # p1 life: 20 → 18 (2 damage from unblocked Bear Soarer).
+    assert py_state.players[1].life == py_p1_before - 2, (
+        f"expected Python p1 life={py_p1_before - 2} (2 unblocked "
+        f"damage); got {py_state.players[1].life}"
+    )
+    assert rust_state.get_life(1) == py_p1_before - 2, (
+        f"expected Rust p1 life={py_p1_before - 2}; "
+        f"got {rust_state.get_life(1)}"
+    )
+
+
+def test_cross_engine_flying_vs_reach_blocker(parity_smoke):
+    """**Test B — flying attacker + reach blocker** — fresh-state
+    direct combat. Expected outcome: both engines accept the reach
+    blocker (CR 702.17), combat damage: both 2/2s die.
+
+    Pins that BOTH engines treat reach as a gate-opener for
+    flying-attacker blocks. A buggy port that only honored flying on
+    the BLOCKER side (skipping the reach branch) would surface as a
+    divergence: Rust rejects → Bear Soarer dies / Bear Reacher
+    alive; Python accepts → mutual KO.
+    """
+    from mtg_bot.cards.base import CardPrinting, ManaCost
+    from mtg_bot.combat import resolve_combat_damage
+    from mtg_bot.game import Zone
+    from mtg_bot.parity.cross_engine import (
+        build_matched_states,
+        multi_blocker_deckspec,
+    )
+    from mtg_bot.turn import state_based_actions as py_sba
+
+    py_state, rust_state = build_matched_states(multi_blocker_deckspec())
+
+    # ---- Python side ----
+    soarer_printing = CardPrinting(
+        name="Bear Soarer",
+        mana_cost_str="",
+        mana_cost=ManaCost(),
+        type_line="Creature",
+        supertypes=(),
+        card_types=("Creature",),
+        subtypes=(),
+        power=2,
+        toughness=2,
+        produces=frozenset(),
+        keywords=frozenset({"flying"}),
+    )
+    reacher_printing = CardPrinting(
+        name="Bear Reacher",
+        mana_cost_str="",
+        mana_cost=ManaCost(),
+        type_line="Creature",
+        supertypes=(),
+        card_types=("Creature",),
+        subtypes=(),
+        power=2,
+        toughness=2,
+        produces=frozenset(),
+        keywords=frozenset({"reach"}),
+    )
+
+    py_soarer = py_state.new_object(
+        soarer_printing, owner_id=0, zone=Zone.BATTLEFIELD,
+    )
+    py_soarer.summoning_sick = False
+    py_soarer.tapped = False
+    py_soarer.damage = 0
+    py_soarer.etb_timestamp = py_state.next_timestamp
+    py_state.next_timestamp += 1
+    py_state.battlefield.append(py_soarer)
+
+    py_reacher = py_state.new_object(
+        reacher_printing, owner_id=1, zone=Zone.BATTLEFIELD,
+    )
+    py_reacher.controller_id = 1
+    py_reacher.summoning_sick = False
+    py_reacher.tapped = False
+    py_reacher.damage = 0
+    py_reacher.etb_timestamp = py_state.next_timestamp
+    py_state.next_timestamp += 1
+    py_state.battlefield.append(py_reacher)
+
+    # Declare combat + blocks directly via the apply path (not the
+    # selector). `_declare_blockers` walks `can_block` per pair.
+    py_soarer.attacking = True
+    py_soarer.tapped = True
+    from mtg_bot.actions import _declare_blockers as py_apply_blocks
+    py_apply_blocks(
+        py_state,
+        player_id=1,
+        assignments=((int(py_reacher.id), int(py_soarer.id)),),
+    )
+
+    # can_block accepted: reacher.blocking == soarer.id;
+    # soarer.blocked_by contains reacher.id.
+    assert py_reacher.blocking == int(py_soarer.id), (
+        f"expected Python reacher.blocking={py_soarer.id} "
+        f"(reach blocks flying per CR 702.17); got "
+        f"{py_reacher.blocking}"
+    )
+    assert int(py_reacher.id) in py_soarer.blocked_by
+
+    py_p1_before = py_state.players[1].life
+    resolve_combat_damage(py_state, defending_player_id=1)
+    py_sba(py_state)
+
+    # Both die (2 dmg each, both 2/2). No defender life change.
+    py_bf_names = [o.printing.name for o in py_state.battlefield]
+    assert "Bear Soarer" not in py_bf_names, (
+        f"expected Bear Soarer DEAD on Python (2 dmg from Bear "
+        f"Reacher >= toughness 2); bf={py_bf_names}"
+    )
+    assert "Bear Reacher" not in py_bf_names, (
+        f"expected Bear Reacher DEAD on Python; bf={py_bf_names}"
+    )
+    assert py_state.players[1].life == py_p1_before, (
+        f"expected Python p1 life unchanged at {py_p1_before} "
+        f"(blocker engaged, no spillover); got "
+        f"{py_state.players[1].life}"
+    )
+
+    # ---- Rust side ----
+    rust_soarer_id = rust_state.register_and_inject_object(
+        {
+            "name": "Bear Soarer",
+            "card_types": ["Creature"],
+            "power": 2,
+            "toughness": 2,
+            "keywords": ["flying"],
+        },
+        0, 2,  # controller=p0, zone=battlefield
+    )
+    rust_reacher_id = rust_state.register_and_inject_object(
+        {
+            "name": "Bear Reacher",
+            "card_types": ["Creature"],
+            "power": 2,
+            "toughness": 2,
+            "keywords": ["reach"],
+        },
+        1, 2,  # controller=p1, zone=battlefield
+    )
+
+    rust_state.declare_attacker(rust_soarer_id)
+    # declare_blocker returns true iff the gate passed.
+    rust_block_ok = rust_state.declare_blocker(
+        rust_reacher_id, rust_soarer_id,
+    )
+    assert rust_block_ok is True, (
+        f"expected Rust declare_blocker to ACCEPT reach blocker "
+        f"vs flying attacker (CR 702.17); got {rust_block_ok}"
+    )
+
+    rust_p1_before = rust_state.get_life(1)
+    rust_state.deal_combat_damage()
+    rust_state.apply_sbas()
+
+    rust_bf_names = [
+        e["printing_name"] for e in rust_state.battlefield_snapshot()
+    ]
+    assert "Bear Soarer" not in rust_bf_names, (
+        f"expected Bear Soarer DEAD on Rust; bf={rust_bf_names}"
+    )
+    assert "Bear Reacher" not in rust_bf_names, (
+        f"expected Bear Reacher DEAD on Rust; bf={rust_bf_names}"
+    )
+    assert rust_state.get_life(1) == rust_p1_before, (
+        f"expected Rust p1 life unchanged at {rust_p1_before} "
+        f"(blocker engaged, no spillover); got "
+        f"{rust_state.get_life(1)}"
+    )
+
+    # Cross-engine: both agreed on life delta.
+    assert (
+        py_state.players[1].life - py_p1_before
+        == rust_state.get_life(1) - rust_p1_before
+    )
+
+
+def test_cross_engine_flying_vs_flying_blocker(parity_smoke):
+    """**Test C — flying attacker + flying blocker** — fresh-state
+    direct combat. Expected outcome: both engines accept the flying
+    blocker (CR 702.9 + 702.17 — flying on the blocker passes the
+    gate too), combat damage: both 2/2s die.
+
+    Pins the symmetric block-eligibility shape: flying-vs-flying is
+    just a plain combat, no special interaction beyond the gate
+    accepting the pair.
+    """
+    from mtg_bot.cards.base import CardPrinting, ManaCost
+    from mtg_bot.combat import resolve_combat_damage
+    from mtg_bot.game import Zone
+    from mtg_bot.parity.cross_engine import (
+        build_matched_states,
+        multi_blocker_deckspec,
+    )
+    from mtg_bot.turn import state_based_actions as py_sba
+
+    py_state, rust_state = build_matched_states(multi_blocker_deckspec())
+
+    soarer_printing = CardPrinting(
+        name="Bear Soarer",
+        mana_cost_str="",
+        mana_cost=ManaCost(),
+        type_line="Creature",
+        supertypes=(),
+        card_types=("Creature",),
+        subtypes=(),
+        power=2,
+        toughness=2,
+        produces=frozenset(),
+        keywords=frozenset({"flying"}),
+    )
+    soarer2_printing = CardPrinting(
+        name="Bear Soarer 2",
+        mana_cost_str="",
+        mana_cost=ManaCost(),
+        type_line="Creature",
+        supertypes=(),
+        card_types=("Creature",),
+        subtypes=(),
+        power=2,
+        toughness=2,
+        produces=frozenset(),
+        keywords=frozenset({"flying"}),
+    )
+
+    py_soarer = py_state.new_object(
+        soarer_printing, owner_id=0, zone=Zone.BATTLEFIELD,
+    )
+    py_soarer.summoning_sick = False
+    py_soarer.tapped = False
+    py_soarer.damage = 0
+    py_soarer.etb_timestamp = py_state.next_timestamp
+    py_state.next_timestamp += 1
+    py_state.battlefield.append(py_soarer)
+
+    py_soarer2 = py_state.new_object(
+        soarer2_printing, owner_id=1, zone=Zone.BATTLEFIELD,
+    )
+    py_soarer2.controller_id = 1
+    py_soarer2.summoning_sick = False
+    py_soarer2.tapped = False
+    py_soarer2.damage = 0
+    py_soarer2.etb_timestamp = py_state.next_timestamp
+    py_state.next_timestamp += 1
+    py_state.battlefield.append(py_soarer2)
+
+    py_soarer.attacking = True
+    py_soarer.tapped = True
+    from mtg_bot.actions import _declare_blockers as py_apply_blocks
+    py_apply_blocks(
+        py_state,
+        player_id=1,
+        assignments=((int(py_soarer2.id), int(py_soarer.id)),),
+    )
+
+    assert py_soarer2.blocking == int(py_soarer.id), (
+        f"expected Python flying-blocker.blocking={py_soarer.id} "
+        f"(flying on blocker passes the gate); got "
+        f"{py_soarer2.blocking}"
+    )
+
+    py_p1_before = py_state.players[1].life
+    resolve_combat_damage(py_state, defending_player_id=1)
+    py_sba(py_state)
+
+    py_bf_names = [o.printing.name for o in py_state.battlefield]
+    assert "Bear Soarer" not in py_bf_names
+    assert "Bear Soarer 2" not in py_bf_names
+    assert py_state.players[1].life == py_p1_before
+
+    # ---- Rust side ----
+    rust_soarer_id = rust_state.register_and_inject_object(
+        {
+            "name": "Bear Soarer",
+            "card_types": ["Creature"],
+            "power": 2,
+            "toughness": 2,
+            "keywords": ["flying"],
+        },
+        0, 2,
+    )
+    rust_soarer2_id = rust_state.register_and_inject_object(
+        {
+            "name": "Bear Soarer 2",
+            "card_types": ["Creature"],
+            "power": 2,
+            "toughness": 2,
+            "keywords": ["flying"],
+        },
+        1, 2,
+    )
+
+    rust_state.declare_attacker(rust_soarer_id)
+    rust_block_ok = rust_state.declare_blocker(
+        rust_soarer2_id, rust_soarer_id,
+    )
+    assert rust_block_ok is True, (
+        f"expected Rust declare_blocker to ACCEPT flying blocker "
+        f"vs flying attacker; got {rust_block_ok}"
+    )
+
+    rust_p1_before = rust_state.get_life(1)
+    rust_state.deal_combat_damage()
+    rust_state.apply_sbas()
+
+    rust_bf_names = [
+        e["printing_name"] for e in rust_state.battlefield_snapshot()
+    ]
+    assert "Bear Soarer" not in rust_bf_names
+    assert "Bear Soarer 2" not in rust_bf_names
+    assert rust_state.get_life(1) == rust_p1_before
+
+
+def test_cross_engine_flying_vanilla_blocker_rejected_direct(parity_smoke):
+    """**Test A direct-call pin** — fresh-state direct
+    ``declare_blocker`` call with vanilla blocker against flying
+    attacker. Pins the per-engine rejection shape at the primitive
+    layer (separate from the selector-walk path):
+
+      * Python: ``actions._declare_blockers`` consults
+        ``combat.can_block`` per pair → returns False for
+        (vanilla, flying) → assignment silently dropped → final
+        ``state.blockers`` is empty for the flying attacker.
+      * Rust: ``state.declare_blocker`` returns ``False`` for the
+        pair → ``state.blockers`` is empty.
+
+    Both engines reach the same final shape; this test pins it at
+    the primitive level. If a future regression makes either engine
+    silently accept the illegal pair, the direct-call assertions
+    fire before the selector walk's downstream divergence symptom.
+    """
+    from mtg_bot.cards.base import CardPrinting, ManaCost
+    from mtg_bot.game import Zone
+    from mtg_bot.parity.cross_engine import (
+        build_matched_states,
+        multi_blocker_deckspec,
+    )
+
+    py_state, rust_state = build_matched_states(multi_blocker_deckspec())
+
+    soarer_printing = CardPrinting(
+        name="Bear Soarer",
+        mana_cost_str="",
+        mana_cost=ManaCost(),
+        type_line="Creature",
+        supertypes=(),
+        card_types=("Creature",),
+        subtypes=(),
+        power=2,
+        toughness=2,
+        produces=frozenset(),
+        keywords=frozenset({"flying"}),
+    )
+    vanilla_printing = CardPrinting(
+        name="Bear Walker",
+        mana_cost_str="",
+        mana_cost=ManaCost(),
+        type_line="Creature",
+        supertypes=(),
+        card_types=("Creature",),
+        subtypes=(),
+        power=2,
+        toughness=2,
+        produces=frozenset(),
+        keywords=frozenset(),  # NO flying, NO reach — vanilla.
+    )
+
+    py_soarer = py_state.new_object(
+        soarer_printing, owner_id=0, zone=Zone.BATTLEFIELD,
+    )
+    py_soarer.summoning_sick = False
+    py_soarer.tapped = False
+    py_soarer.damage = 0
+    py_soarer.etb_timestamp = py_state.next_timestamp
+    py_state.next_timestamp += 1
+    py_state.battlefield.append(py_soarer)
+
+    py_vanilla = py_state.new_object(
+        vanilla_printing, owner_id=1, zone=Zone.BATTLEFIELD,
+    )
+    py_vanilla.controller_id = 1
+    py_vanilla.summoning_sick = False
+    py_vanilla.tapped = False
+    py_vanilla.damage = 0
+    py_vanilla.etb_timestamp = py_state.next_timestamp
+    py_state.next_timestamp += 1
+    py_state.battlefield.append(py_vanilla)
+
+    py_soarer.attacking = True
+    py_soarer.tapped = True
+    from mtg_bot.actions import _declare_blockers as py_apply_blocks
+    py_apply_blocks(
+        py_state,
+        player_id=1,
+        assignments=((int(py_vanilla.id), int(py_soarer.id)),),
+    )
+
+    # Python: assignment dropped silently. vanilla.blocking is None
+    # (or unset); soarer.blocked_by is empty.
+    assert py_vanilla.blocking is None or py_vanilla.blocking == 0, (
+        f"expected Python vanilla blocker rejected (blocking=None); "
+        f"got blocking={py_vanilla.blocking}"
+    )
+    assert int(py_vanilla.id) not in py_soarer.blocked_by, (
+        f"expected Python soarer.blocked_by to NOT contain vanilla "
+        f"id={py_vanilla.id}; got blocked_by={py_soarer.blocked_by}"
+    )
+
+    # ---- Rust side ----
+    rust_soarer_id = rust_state.register_and_inject_object(
+        {
+            "name": "Bear Soarer",
+            "card_types": ["Creature"],
+            "power": 2,
+            "toughness": 2,
+            "keywords": ["flying"],
+        },
+        0, 2,
+    )
+    rust_vanilla_id = rust_state.register_and_inject_object(
+        {
+            "name": "Bear Walker",
+            "card_types": ["Creature"],
+            "power": 2,
+            "toughness": 2,
+            "keywords": [],
+        },
+        1, 2,
+    )
+
+    rust_state.declare_attacker(rust_soarer_id)
+    rust_block_ok = rust_state.declare_blocker(
+        rust_vanilla_id, rust_soarer_id,
+    )
+    assert rust_block_ok is False, (
+        f"expected Rust declare_blocker to REJECT vanilla blocker "
+        f"vs flying attacker (CR 702.9 — flying can only be blocked "
+        f"by flying or reach); got {rust_block_ok}"
+    )
+
+
+def test_cross_engine_flying_selector_pre_injection_walks_clean(
+    parity_smoke,
+):
+    """**Flying pre-injection backbone pin** — steps 0-167 on
+    :func:`multi_blocker_deckspec` with :func:`flying_selector` are
+    parity-clean. The flying injection fires at step 168.
+
+    Pins that the pre-167 backbone has not drifted and confirms the
+    end-of-step-167 state matches the trigger gate's expectation:
+    exactly 3 creatures on bf and no Bear Soarer in any zone yet.
+    """
+    from mtg_bot.parity.cross_engine import (
+        build_matched_states,
+        flying_selector,
+        multi_blocker_deckspec,
+        step_both,
+        walk_both,
+    )
+
+    result = walk_both(
+        multi_blocker_deckspec(),
+        n_decisions=168,
+        decision_selector=flying_selector,
+    )
+    assert result.error is None
+    for step in result.steps:
+        assert step.divergences == [], (
+            f"pre-injection divergence at step {step.step_index}: "
+            f"action={step.action_dict} "
+            f"{[(d.field, d.py_value, d.rust_value, d.known_gap) for d in step.divergences]}"
+        )
+
+    py_state, rust_state = build_matched_states(multi_blocker_deckspec())
+    for i in range(168):
+        action = flying_selector(py_state, rust_state, i)
+        step_both(py_state, rust_state, action)
+
+    creatures = [
+        o for o in py_state.battlefield
+        if "Creature" in o.printing.card_types
+    ]
+    assert len(creatures) == 3, (
+        f"expected 3 creatures on bf at end of step 167, got "
+        f"{len(creatures)}"
+    )
+    bear_soarer_anywhere = (
+        any(o.printing.name == "Bear Soarer" for o in py_state.battlefield)
+        or any(
+            o.printing.name == "Bear Soarer"
+            for p in py_state.players
+            for zone in (p.hand, p.library, p.graveyard, p.exile)
+            for o in zone
+        )
+    )
+    assert not bear_soarer_anywhere, (
+        "Bear Soarer should not yet exist at end of step 167 — "
+        "flying injection fires at step 168"
+    )
