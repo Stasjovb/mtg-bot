@@ -37,7 +37,29 @@ from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath, PureWindowsPath
 from typing import Any, Callable, Optional
 
+from mtg_bot.cli.runs import client as _runs_client
 from mtg_bot.search.heuristics_config import HeuristicsConfig
+
+
+_DEFAULT_MASTER_RUNS_DB_PATH = "training_progress/runs.db"
+
+
+def _ensure_master_runs_db_path_default() -> None:
+    """Set ``MTG_BOT_RUN_DB_PATH`` to its conventional default if
+    nothing else has. Master subcommands (iterate / eval) call this
+    before dispatching work so the runs.db rows actually land — the
+    per-subcommand wiring (in eval / shard / iterate) relies on the
+    env var to know whether to write at all.
+
+    Defensive: ``setdefault``-style — never overrides an explicit
+    user setting, so a debug run that sets the var to a custom path
+    or unsets it via blank value still gets what the user asked for.
+    Empty-string means "explicitly off" (matches the convention used
+    elsewhere in the codebase, e.g. ``--hang-dump-dir ''``).
+    """
+    import os as _os
+    if "MTG_BOT_RUN_DB_PATH" not in _os.environ:
+        _os.environ["MTG_BOT_RUN_DB_PATH"] = _DEFAULT_MASTER_RUNS_DB_PATH
 
 
 # ---- queue HTTP retry policy -------------------------------------
@@ -1645,6 +1667,11 @@ def run_distributed_self_play(
     import urllib.request
     import json as _json
 
+    # Light-touch defensive default so master subcommands (iterate)
+    # that don't explicitly configure the run DB still land their
+    # rows. Never overrides a user-set value.
+    _ensure_master_runs_db_path_default()
+
     stamp = _now_stamp()
     output_dir.mkdir(parents=True, exist_ok=True)
     progress_dir.mkdir(parents=True, exist_ok=True)
@@ -2027,6 +2054,11 @@ def run_distributed_eval(
     import threading as _threading
     import urllib.request
     import json as _json
+
+    # Light-touch defensive default so a master eval invoked without
+    # explicit MTG_BOT_RUN_DB_PATH still writes runs.db rows. Same
+    # treatment as run_distributed_self_play.
+    _ensure_master_runs_db_path_default()
 
     stamp = _now_stamp()
     progress_dir.mkdir(parents=True, exist_ok=True)
@@ -2692,6 +2724,28 @@ def run_shard_pull(
     pending_chunks: list = []
     flush_every = max(1, n_workers)
 
+    # Run-DB shadow writes (Phase 1 dual-write). Same shard_run_id as
+    # ``DataGenProgress`` / ``EventLog`` use for the JSON path, so the
+    # SQLite rows roll up under the iter's parent run cleanly. The
+    # ``client.push_progress`` is a no-op when neither
+    # ``MTG_BOT_RUN_DB_PATH`` nor ``MTG_BOT_RUN_DB_URL`` is set, so
+    # this is zero-cost for ad-hoc CLI invocations.
+    shard_run_id = f"{run_id}_shard_{label}"
+
+    def _push_shard_progress_to_db(*, elapsed_s: float) -> None:
+        """Mirror the latest counters to the master's runs.db row.
+        ``shard_label`` keys the row so concurrent shards don't fight
+        for the same (run_id, NULL) aggregate row."""
+        _runs_client.push_progress(
+            shard_run_id,
+            shard_label=label,
+            n_games_done=n_games_completed,
+            n_games_total=iter_total_games,
+            elapsed_seconds=elapsed_s,
+            crashed=n_games_crashed,
+            timed_out=n_games_timed_out,
+        )
+
     # Lease + heartbeat. ``worker_id`` opts us into the server's
     # lease-tracked path; ``heartbeat`` tracks the held jobs and
     # pings /queue/heartbeat. Both are owned by this function so the
@@ -2792,6 +2846,13 @@ def run_shard_pull(
             )
         chunk_idx += 1
         pending_chunks.clear()
+        # Mirror counters into the runs.db row alongside each batch
+        # flush. Coarser-than-per-game cadence matches what
+        # ``DataGenProgress`` writes to the JSON, so the UI sees the
+        # same heartbeat between DB and JSON.
+        _push_shard_progress_to_db(
+            elapsed_s=_time.perf_counter() - shard_t0,
+        )
 
     shard_t0 = _time.perf_counter()
     # Optional: install a SharedTensorNNEvalServer (PR #40) for this
@@ -3094,6 +3155,11 @@ def run_shard_pull(
             n_batches=chunk_idx,
             wall_s=_time.perf_counter() - shard_t0,
         )
+    # Final terminal counters into runs.db so a slow trailing batch
+    # doesn't leave the row showing N-1 games_done.
+    _push_shard_progress_to_db(
+        elapsed_s=_time.perf_counter() - shard_t0,
+    )
     return npz_paths
 
 
@@ -3253,6 +3319,25 @@ def run_shard_eval_pull(
     timed_out = 0
     n_games = 0
     n_dropped_rejected = 0
+
+    # Run-DB shadow writes — see ``run_shard_pull`` for the rationale.
+    # Same shard_run_id convention as the JSON progress path so both
+    # storage paths agree on the per-shard row identity.
+    shard_run_id = f"{run_id}_shard_{label}"
+
+    def _push_eval_shard_progress_to_db(*, elapsed_s: float) -> None:
+        _runs_client.push_progress(
+            shard_run_id,
+            shard_label=label,
+            n_games_done=n_games,
+            n_games_total=iter_total_games,
+            elapsed_seconds=elapsed_s,
+            wins_new=wins_new,
+            wins_old=wins_old,
+            draws=draws,
+            crashed=crashed,
+            timed_out=timed_out,
+        )
 
     if worker_id is None:
         worker_id = _make_worker_id()
@@ -3593,6 +3678,12 @@ def run_shard_eval_pull(
                         crashed=is_crash,
                         timed_out=is_timeout,
                     )
+                # Mirror per-game counters into runs.db. Cheap when
+                # the run-DB is unconfigured (no-op); when configured,
+                # the master sees the per-shard row tick up live.
+                _push_eval_shard_progress_to_db(
+                    elapsed_s=_time.perf_counter() - shard_t0,
+                )
     except BaseException as exc:
         held = heartbeat.held_jobs()
         if held:
@@ -3638,6 +3729,11 @@ def run_shard_eval_pull(
             n_dropped_rejected=n_dropped_rejected,
             wall_s=_time.perf_counter() - shard_t0,
         )
+    # Final terminal counters into runs.db so the shard row reflects
+    # the same totals as the result JSON the orchestrator scps back.
+    _push_eval_shard_progress_to_db(
+        elapsed_s=_time.perf_counter() - shard_t0,
+    )
     return {
         "n_games": n_games,
         "wins_new": wins_new,
@@ -3978,6 +4074,24 @@ def _run_ssh_with_terminal_status_watchdog(
     )
 
 
+def _runs_db_url_env_for_remote(queue_url: Optional[str]) -> Optional[str]:
+    """Reuse the queue_url as the master's runs-db REST endpoint.
+
+    The same ``mtg_bot serve`` process exposes both
+    ``/queue/...`` and ``/run/...`` endpoints on port 5099, so the
+    queue_url IS the runs-db base URL. We don't hardcode
+    ``desktop-j05412i:5099`` because the master may run from the WSL2
+    tailnet hostname (``desktop-j05412i-wsl``) or, in tests, an
+    arbitrary stub URL.
+
+    Returns ``None`` if ``queue_url`` is falsy (no master to talk to);
+    callers then skip injecting the env var altogether so a misconfig
+    doesn't half-poison the remote env."""
+    if not queue_url:
+        return None
+    return queue_url.rstrip("/")
+
+
 def _build_remote_pull_command(
     shard: ShardConfig,
     spec: SelfPlayJobSpec,
@@ -3995,6 +4109,13 @@ def _build_remote_pull_command(
     quoting hazards across cmd.exe vs bash. ``queue_url`` is plain
     ASCII (no quoting needed); the rest of the args are integers
     or short strings.
+
+    Run-DB env: ``MTG_BOT_RUN_DB_URL`` is set to the same master URL
+    the queue endpoints sit behind, so the remote shard's
+    ``runs_client.push_progress`` / ``start_run`` / ``finish_run``
+    calls POST back to the master. POSIX uses single-shot
+    ``VAR=val cmd``; Windows uses ``set VAR=val && cmd`` because
+    cmd.exe lacks the POSIX env-injection form.
     """
     import base64
     spec_b64 = base64.b64encode(
@@ -4016,14 +4137,25 @@ def _build_remote_pull_command(
     )
     repo_path = shard.repo_path or ""
     venv_python = shard.venv_python or ""
+    db_url = _runs_db_url_env_for_remote(queue_url)
     if _is_windows_remote(shard):
+        db_env = (
+            f'set MTG_BOT_RUN_DB_URL={db_url} && '
+            if db_url else ""
+        )
         return (
             f'cd /d "{repo_path}" && '
             f'set PYTHONPATH=src && '
+            f'{db_env}'
             f'"{venv_python}" {args}'
         )
+    db_env = (
+        f'MTG_BOT_RUN_DB_URL={shlex.quote(db_url)} '
+        if db_url else ""
+    )
     return (
         f'cd {shlex.quote(repo_path)} && '
+        f'{db_env}'
         f'PYTHONPATH=src {shlex.quote(venv_python)} {args}'
     )
 
@@ -4039,6 +4171,7 @@ def _build_remote_eval_command(
 ) -> str:
     """Eval counterpart to ``_build_remote_pull_command``. Same shape;
     ``--mode=eval`` and an ``EvalJobSpec`` instead of ``SelfPlayJobSpec``.
+    Run-DB URL injection mirrors the self-play builder.
     """
     import base64
     spec_b64 = base64.b64encode(
@@ -4060,14 +4193,25 @@ def _build_remote_eval_command(
     )
     repo_path = shard.repo_path or ""
     venv_python = shard.venv_python or ""
+    db_url = _runs_db_url_env_for_remote(queue_url)
     if _is_windows_remote(shard):
+        db_env = (
+            f'set MTG_BOT_RUN_DB_URL={db_url} && '
+            if db_url else ""
+        )
         return (
             f'cd /d "{repo_path}" && '
             f'set PYTHONPATH=src && '
+            f'{db_env}'
             f'"{venv_python}" {args}'
         )
+    db_env = (
+        f'MTG_BOT_RUN_DB_URL={shlex.quote(db_url)} '
+        if db_url else ""
+    )
     return (
         f'cd {shlex.quote(repo_path)} && '
+        f'{db_env}'
         f'PYTHONPATH=src {shlex.quote(venv_python)} {args}'
     )
 
