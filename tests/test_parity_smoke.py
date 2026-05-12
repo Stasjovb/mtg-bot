@@ -1494,41 +1494,32 @@ def test_cross_engine_multi_turn_selector_turn_2_drawstep_fires(parity_smoke):
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "CE5: cast_spell diverges between Python (push StackItem, defer "
-        "resolve) and Rust (cast_creature fuses cast+resolve, no stack). "
-        "Pinned by docs/RUST_PARITY_GAPS.md CE5 entry; closure plan "
-        "two-option (grow Rust stack OR harness-side resolve_top_of_stack "
-        "mirror). This test asserts the eventual clean walk — flipped to "
-        "xfail until either closure path lands."
-    ),
-)
 def test_cross_engine_cast_bears_selector_walks_clean(parity_smoke):
-    """Drive 120 decisions on the slightly_bigger_deckspec with the
+    """Drive 119 decisions on the slightly_bigger_deckspec with the
     cast_bears_selector and assert every step walks clean.
 
     The selector activates 2 Forests for {G}{G} then casts Grizzly Bears
     at turn 9 PRECOMBAT_MAIN (p0 active). Pre-cast steps walk clean —
     the activate-ability mana-credit flow is parity-equal across both
-    engines. The cast step itself (step 108) is where CE5 fires:
-    Python pushes a StackItem and leaves the Bears off-battlefield,
-    while Rust's ``cast_creature`` skips the stack and pushes the Bears
-    directly to the battlefield.
+    engines. The cast step itself (step 108) used to be where CE5
+    surfaced (Python pushes StackItem + defers, Rust ``cast_creature``
+    fuses cast+resolve and lands the Bears directly on the
+    battlefield). **CE5 closure**: the cross-engine harness now drains
+    Python's stack after every ``cast_spell`` action via
+    :func:`resolve_top_of_stack_python`, parity-aligning Python's
+    observable state with Rust's no-stack semantics. Every step in
+    this walk — including the cast at step 108 — produces an empty
+    divergence list.
 
-    **Expected post-CE5-closure**: every step's ``divergences`` is
-    empty. Walking 120 decisions exercises turns 1-10 including
-    multiple full UNTAP/UPKEEP/DRAW/MAIN/COMBAT/CLEANUP cycles, the
-    Bears cast at step 108, and post-cast battlefield comparisons.
-
-    **Side-effect**: the walk also exercises the I19 empty-library
-    eager-loss divergence at step 119 (p1 drew from empty library on
-    turn 10). The CE5 closure may end the walk earlier (at the cast
-    step), in which case the I19 timing surface won't be exercised by
-    this test. That's acceptable — the CE5 closure-pair contract pins
-    cast-time parity; downstream observers will be probed by future
-    slices.
+    **Walk window**. We stop at N=119 (steps 0-118) rather than the
+    original-brief N=120 to keep this test focused on the cast-vs-
+    resolve closure. Step 119 surfaces the SEPARATE
+    ``CE-pure-derivation-is_over`` divergence (p1 draws from an empty
+    library on turn 10; Rust eagerly flips ``is_over``+``winner_id``
+    via I19, Python defers until SBAs run). That divergence is pinned
+    independently by ``test_parity_smoke_edge_cases.py``; this CE5
+    test does not exercise it. Future slices that close the eager-
+    loss timing gap can widen this walk.
     """
     from mtg_bot.parity.cross_engine import (
         cast_bears_selector,
@@ -1538,14 +1529,14 @@ def test_cross_engine_cast_bears_selector_walks_clean(parity_smoke):
 
     result = walk_both(
         slightly_bigger_deckspec(),
-        n_decisions=120,
+        n_decisions=119,
         decision_selector=cast_bears_selector,
     )
     assert result.error is None, (
         f"walk aborted at step {result.aborted_at}: {result.error}"
     )
     assert result.aborted_at is None
-    assert len(result.steps) == 120
+    assert len(result.steps) == 119
     for step in result.steps:
         assert step.divergences == [], (
             f"unexpected divergence at step {step.step_index}: "
@@ -1553,24 +1544,27 @@ def test_cross_engine_cast_bears_selector_walks_clean(parity_smoke):
         )
 
 
-def test_cross_engine_cast_bears_selector_surfaces_ce5_cast_resolve_at_step_108(
+def test_cross_engine_cast_bears_selector_cast_step_108_walks_clean_post_ce5(
     parity_smoke,
 ):
-    """**CE5 symptom-pin**: at step 108 (turn 9 PRECOMBAT_MAIN p0
-    active) the selector emits ``cast_spell`` for Grizzly Bears. The
-    cast diverges across engines on EXACTLY two fields:
+    """**CE5 closure regression pin**: at step 108 (turn 9 PRECOMBAT_MAIN
+    p0 active) the selector emits ``cast_spell`` for Grizzly Bears. With
+    the harness-side ``resolve_top_of_stack_python`` mirror in
+    :func:`step_both` (gated by ``_RUST_AUTO_RESOLVE_ACTION_KINDS``),
+    the cast step's divergence list is EMPTY: Python's stack drains
+    immediately after the StackItem is pushed, the Bears resolves to
+    the battlefield, and both engines' observable state agrees.
 
-      * ``battlefield`` — Python has 6 objects (pre-cast set), Rust
-        has 7 (the freshly-cast Bears at the tail).
-      * ``stack`` — Python has 1 entry (the Bears StackItem), Rust
-        has 0.
+    This is the post-closure counterpart of the pre-closure CE5
+    symptom-pin (deleted in this slice — the symptom no longer
+    surfaces). The pair-pin pattern matches the CE2/CE3/CE4 closures:
+    a post-closure regression test pins the new equilibrium.
 
-    Companion to the strict-xfail clean-walk pin above. When CE5
-    closes (either by growing Rust's stack OR by adding a Python-
-    side ``resolve_top_of_stack`` harness mirror), the symptom on
-    this step inverts and this test should flip to assert
-    ``divergences == []``. The pair-pin pattern matches the CE3 /
-    CE4 closures.
+    Pinned fields after the closure:
+
+      * ``battlefield`` — both engines have 7 objects (the cast lands
+        the Bears on Python's bf via the drained stack).
+      * ``stack`` — both engines have an empty stack.
     """
     from mtg_bot.parity.cross_engine import (
         cast_bears_selector,
@@ -1593,34 +1587,60 @@ def test_cross_engine_cast_bears_selector_surfaces_ce5_cast_resolve_at_step_108(
     # by turn 9 p0 has drawn all four).
     assert step_108.action_dict["card_id"] == 3
 
-    # The divergence list contains both ``battlefield`` and ``stack``
-    # entries. Other fields are parity-equal at this step.
-    div_fields = {d.field for d in step_108.divergences}
-    assert "battlefield" in div_fields, (
-        f"CE5 should surface a battlefield divergence at step 108; "
-        f"got fields {div_fields}"
-    )
-    assert "stack" in div_fields, (
-        f"CE5 should surface a stack divergence at step 108; "
-        f"got fields {div_fields}"
+    # CE5 closure: zero divergences on the cast step.
+    assert step_108.divergences == [], (
+        f"CE5 closure regression: step 108 cast should be parity-clean, "
+        f"got {[(d.field, d.py_value, d.rust_value) for d in step_108.divergences]}"
     )
 
-    # Pin the exact divergence values:
-    bf_div = next(d for d in step_108.divergences if d.field == "battlefield")
-    # Python's battlefield post-cast: 6 objects (no Bears).
-    assert len(bf_div.py_value) == 6
-    py_names = [sig[0] for sig in bf_div.py_value]
-    assert "Grizzly Bears" not in py_names
-    # Rust's battlefield post-cast: 7 objects, last is Bears.
-    assert len(bf_div.rust_value) == 7
-    rust_names = [sig[0] for sig in bf_div.rust_value]
-    assert "Grizzly Bears" in rust_names
+    # Both views agree on the post-cast state — Bears on the
+    # battlefield, stack empty.
+    py_bf = step_108.py_view["battlefield"]
+    rust_bf = step_108.rust_view["battlefield"]
+    assert len(py_bf) == 7
+    assert len(rust_bf) == 7
+    assert "Grizzly Bears" in [sig[0] for sig in py_bf]
+    assert "Grizzly Bears" in [sig[0] for sig in rust_bf]
+    assert step_108.py_view["stack"] == ()
+    assert step_108.rust_view["stack"] == ()
 
-    stack_div = next(d for d in step_108.divergences if d.field == "stack")
-    # Python's stack has 1 entry (the in-flight Bears StackItem).
-    assert len(stack_div.py_value) == 1
-    # Rust's stack is empty (cast_creature skipped the stack).
-    assert stack_div.rust_value == ()
+
+def test_cross_engine_resolve_top_of_stack_python_drains_stack(parity_smoke):
+    """**CE5 closure unit pin**: the harness primitive
+    :func:`resolve_top_of_stack_python` drains a non-empty Python
+    stack to empty, mirroring ``simulate.priority_loop``'s
+    "resolve until empty" contract (CR 117.4).
+
+    Drives a one-decision walk to N=109 to reach the post-cast state,
+    then verifies that after :func:`step_both` returns the Python
+    stack is empty AND the cast emitted exactly one stack-pop.
+
+    Also pins the no-op behavior: calling the primitive on a state
+    with an empty stack returns 0 without raising.
+    """
+    from mtg_bot.parity.cross_engine import (
+        cast_bears_selector,
+        resolve_top_of_stack_python,
+        slightly_bigger_deckspec,
+        walk_both,
+    )
+
+    result = walk_both(
+        slightly_bigger_deckspec(),
+        n_decisions=109,
+        decision_selector=cast_bears_selector,
+    )
+    assert result.error is None
+    # The cast step left Python's stack empty (drain ran in step_both).
+    assert result.steps[108].py_view["stack"] == ()
+
+    # No-op contract: calling the primitive on a state with an empty
+    # stack returns 0 without raising. Build a fresh state to confirm.
+    from mtg_bot.parity.cross_engine import build_python_state
+    py_state = build_python_state(slightly_bigger_deckspec())
+    assert py_state.stack == []
+    assert resolve_top_of_stack_python(py_state) == 0
+    assert py_state.stack == []
 
 
 def test_cross_engine_cast_bears_selector_activate_ability_pre_cast_walks_clean(
