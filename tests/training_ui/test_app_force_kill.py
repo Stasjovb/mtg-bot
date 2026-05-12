@@ -285,6 +285,26 @@ def test_force_kill_handles_empty_body(client):
     assert body["forced"] is True
 
 
+def test_index_html_contains_force_kill_button_scaffolding(client):
+    """Force-kill button + modal markup and JS are rendered into the
+    page so the front-end can wire them without an extra fetch.
+    Mirrors the existing ``test_index_html_contains_stop_button_scaffolding``
+    pin for the clean Stop variant.
+    """
+    c, _ = client
+    body = c.get("/").get_data(as_text=True)
+    # CSS class for the new button + the destructive-confirm pill.
+    assert 'class="force-kill-btn"' in body
+    assert ".btn-confirm-force-kill" in body
+    # Modal markup.
+    assert 'id="force-kill-modal"' in body
+    assert 'id="force-kill-modal-confirm"' in body
+    # JS entry point.
+    assert "showForceKillModal" in body
+    # Distinct badge styling for force_killed status.
+    assert ".badge.force_killed" in body
+
+
 def test_force_kill_preserves_existing_extra_json_keys(client):
     """Force-kill merges ``original_status`` into the existing
     ``extra_json``; it must NOT clobber sibling keys the backfill or

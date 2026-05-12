@@ -43,6 +43,13 @@
   .badge.completed { background: #14532d; color: #4ade80; }
   .badge.failed { background: #4c1d1d; color: #fca5a5; }
   .badge.stopped { background: #4c2d1d; color: #fcd34d; }
+  /* ``force_killed`` is the destructive sibling of ``stopped`` — the
+     user clicked Force Kill rather than waiting for the producer to
+     drain. Amber-on-red so it reads as a warning, distinct from the
+     clean stopped badge. */
+  .badge.force_killed { background: #4c1d1d; color: #fcd34d;
+    border: 1px solid #7f1d1d; }
+  .badge.killed { background: #4c1d1d; color: #fca5a5; }
   .badge.unknown { background: #2a2d3a; color: var(--muted); }
   @keyframes pulse {
     0%, 100% { opacity: 1; }
@@ -77,6 +84,10 @@
   .progress-fill.completed { background: var(--green); }
   .progress-fill.failed { background: var(--red); }
   .progress-fill.stopped { background: var(--amber); }
+  /* Force-killed runs get a red fill (more alarming than the amber
+     stopped tint) so the bar visually matches the destructive badge. */
+  .progress-fill.force_killed { background: var(--red); }
+  .progress-fill.killed { background: var(--red); }
   .progress-pct { font-family: monospace; font-size: 0.9rem; min-width: 64px; text-align: right; }
 
   /* minmax(0, 1fr) on each track lets stat tiles shrink below their
@@ -219,6 +230,25 @@
   .stop-pending { color: var(--amber); font-size: 0.72rem;
     margin-left: 8px; font-style: italic; }
 
+  /* Force-kill button: destructive sibling of Stop. Visually distinct
+     amber/red so the user reads it as a warning and doesn't reach for
+     it by accident. Sits next to .stop-btn — Stop stays the default
+     drain path; Force Kill is the escape hatch for zombie runs. */
+  .force-kill-btn {
+    padding: 4px 12px; font-size: 0.75rem;
+    font-weight: 600; letter-spacing: 0.04em; text-transform: uppercase;
+    background: transparent; color: #fcd34d;
+    border: 1px solid #7f1d1d; border-radius: 6px;
+    cursor: pointer; font-family: inherit;
+  }
+  .force-kill-btn:hover { background: #7f1d1d; color: #fef3c7; }
+  .force-kill-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+  /* Confirm button styling inside the force-kill modal: hotter color
+     than the regular Stop confirm so the user double-takes. */
+  .modal .btn-confirm-force-kill { background: #7f1d1d; color: #fef3c7;
+    border: 1px solid #b91c1c; }
+  .modal .btn-confirm-force-kill:hover { background: #b91c1c; color: #fff; }
+
   .modal-overlay {
     position: fixed; inset: 0; background: rgba(0, 0, 0, 0.7);
     display: none; align-items: center; justify-content: center;
@@ -272,6 +302,7 @@
     .run-id { font-size: 0.85rem; word-break: break-all; }
     .run-meta { font-size: 0.7rem; word-break: break-all; }
     .stop-btn { margin-left: 0; }
+    .force-kill-btn { margin-left: 0; }
 
     /* Stat tiles: force a 2-up grid on narrow viewports. minmax(0, 1fr)
        still applies so individual tiles can shrink. */
@@ -329,6 +360,28 @@
       <button type="button" class="btn-confirm-stop"
               id="stop-modal-confirm">
         Stop run
+      </button>
+    </div>
+  </div>
+</div>
+
+<div class="modal-overlay" id="force-kill-modal">
+  <div class="modal" role="dialog"
+       aria-labelledby="force-kill-modal-title">
+    <h2 id="force-kill-modal-title">Force kill run?</h2>
+    <p id="force-kill-modal-body">
+      Force kill — marks the run as stopped without waiting for a
+      producer to drain. Use this for zombie runs whose master is
+      already dead. Does not terminate processes.
+    </p>
+    <div class="modal-actions">
+      <button type="button" class="btn-cancel"
+              id="force-kill-modal-cancel">
+        Cancel
+      </button>
+      <button type="button" class="btn-confirm-force-kill"
+              id="force-kill-modal-confirm">
+        Force kill
       </button>
     </div>
   </div>
@@ -402,7 +455,9 @@ function fmtPolicyWeight(w) {
 
 function statusClass(s) {
   if (s === 'running' || s === 'completed' || s === 'failed'
-      || s === 'stopped') return s;
+      || s === 'stopped' || s === 'killed' || s === 'force_killed') {
+    return s;
+  }
   return 'unknown';
 }
 
@@ -511,6 +566,72 @@ stopModalConfirm.addEventListener('click', async () => {
   refresh();
 });
 
+// Force-kill modal + button wiring. Force kill is the destructive
+// sibling of Stop: instead of writing a sentinel and waiting for the
+// producer to drain, it directly UPDATEs runs.db so a zombie run
+// (master already dead — nobody polls the sentinel) actually goes
+// terminal. The button only renders on running rows; the modal copy
+// makes the destructive nature obvious so the user doesn't reach for
+// it instead of Stop by accident.
+const forceKillModal = document.getElementById('force-kill-modal');
+const forceKillModalBody =
+  document.getElementById('force-kill-modal-body');
+const forceKillModalCancel =
+  document.getElementById('force-kill-modal-cancel');
+const forceKillModalConfirm =
+  document.getElementById('force-kill-modal-confirm');
+let _pendingForceKillRunId = null;
+
+function showForceKillModal(runId) {
+  _pendingForceKillRunId = runId;
+  // Body copy is fixed per the slice spec — destructive-action notice
+  // first, then the run id appended so the user double-checks the
+  // target before clicking through.
+  forceKillModalBody.textContent =
+    'Force kill — marks the run as stopped without waiting for a '
+    + 'producer to drain. Use this for zombie runs whose master is '
+    + 'already dead. Does not terminate processes. '
+    + `Run: ${runId}`;
+  forceKillModal.classList.add('show');
+  forceKillModalConfirm.focus();
+}
+
+function hideForceKillModal() {
+  _pendingForceKillRunId = null;
+  forceKillModal.classList.remove('show');
+}
+
+forceKillModalCancel.addEventListener('click', hideForceKillModal);
+forceKillModal.addEventListener('click', (e) => {
+  if (e.target === forceKillModal) hideForceKillModal();
+});
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape'
+      && forceKillModal.classList.contains('show')) {
+    hideForceKillModal();
+  }
+});
+
+forceKillModalConfirm.addEventListener('click', async () => {
+  const runId = _pendingForceKillRunId;
+  if (!runId) { hideForceKillModal(); return; }
+  try {
+    await fetch(
+      '/api/runs/' + encodeURIComponent(runId) + '/force_kill',
+      { method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ reason: 'ui-force-kill' }) },
+    );
+    // No ``pendingForceKills`` tracking — the DB row flips to terminal
+    // synchronously (server-side write happens before the response
+    // returns), so the next /api/runs poll will show the new status
+    // immediately. Unlike /stop, there's no producer-drain wait.
+  } catch (e) {
+    // Best-effort. UI will resync on next poll.
+  }
+  hideForceKillModal();
+  refresh();
+});
+
 function pctOfDataGen(run) {
   const total = run.n_games_total || 0;
   if (!total) return 0;
@@ -566,6 +687,8 @@ function ensureCard(run) {
         <span class="run-meta" data-field="meta"></span>
         <button type="button" class="stop-btn" data-field="stop"
                 hidden>Stop</button>
+        <button type="button" class="force-kill-btn"
+                data-field="force-kill" hidden>Force kill</button>
         <span class="stop-pending" data-field="stop-pending"
               hidden>stop pending…</span>
       </div>
@@ -596,6 +719,8 @@ function ensureCard(run) {
         <span class="run-meta" data-field="meta"></span>
         <button type="button" class="stop-btn" data-field="stop"
                 hidden>Stop</button>
+        <button type="button" class="force-kill-btn"
+                data-field="force-kill" hidden>Force kill</button>
         <span class="stop-pending" data-field="stop-pending"
               hidden>stop pending…</span>
       </div>
@@ -627,6 +752,8 @@ function ensureCard(run) {
         <span class="run-meta" data-field="meta"></span>
         <button type="button" class="stop-btn" data-field="stop"
                 hidden>Stop</button>
+        <button type="button" class="force-kill-btn"
+                data-field="force-kill" hidden>Force kill</button>
         <span class="stop-pending" data-field="stop-pending"
               hidden>stop pending…</span>
       </div>
@@ -663,6 +790,8 @@ function ensureCard(run) {
         <span class="meta-pill" data-field="policy-weight-pill" hidden></span>
         <button type="button" class="stop-btn" data-field="stop"
                 hidden>Stop</button>
+        <button type="button" class="force-kill-btn"
+                data-field="force-kill" hidden>Force kill</button>
         <span class="stop-pending" data-field="stop-pending"
               hidden>stop pending…</span>
       </div>
@@ -703,6 +832,13 @@ function fillRun(el, run) {
   // chip until the producer flips status to 'stopped'.
   const stopBtn = el.querySelector('[data-field="stop"]');
   const stopPending = el.querySelector('[data-field="stop-pending"]');
+  // Force kill button: the destructive sibling, also running-only.
+  // We don't hide it during pendingStops — the force-kill path is
+  // the escape hatch when the clean Stop is taking too long because
+  // the producer's already dead. Keeping it visible while the clean
+  // stop is "pending" lets the user escalate immediately if no
+  // drain ever happens.
+  const forceKillBtn = el.querySelector('[data-field="force-kill"]');
   if (stopBtn) {
     if (status === 'running') {
       const isPending = pendingStops.has(run.run_id);
@@ -721,6 +857,19 @@ function fillRun(el, run) {
       if (stopPending) stopPending.hidden = true;
       // Producer flipped to terminal status — drop the pending badge.
       pendingStops.delete(run.run_id);
+    }
+  }
+  if (forceKillBtn) {
+    if (status === 'running') {
+      forceKillBtn.hidden = false;
+      if (!forceKillBtn.dataset.wired) {
+        forceKillBtn.dataset.wired = '1';
+        forceKillBtn.addEventListener('click', () => {
+          showForceKillModal(run.run_id);
+        });
+      }
+    } else {
+      forceKillBtn.hidden = true;
     }
   }
   const metaParts = [];
@@ -744,7 +893,8 @@ function fillRun(el, run) {
   if (k === 'eval') fillCls += ' eval';
   if (k === 'bench') fillCls += ' bench';
   if (status === 'completed' || status === 'failed'
-      || status === 'stopped') fillCls += ' ' + status;
+      || status === 'stopped' || status === 'killed'
+      || status === 'force_killed') fillCls += ' ' + status;
   fill.className = fillCls;
   el.querySelector('[data-field="pct"]').textContent = pct.toFixed(1) + '%';
 
