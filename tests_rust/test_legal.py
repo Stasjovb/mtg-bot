@@ -2665,3 +2665,240 @@ def test_legal_decisions_every_emitted_action_round_trips_via_apply_action(
             # Downstream gate rejected the action — fine for the
             # round-trip check; the dict shape was accepted.
             pass
+
+
+# --- 61. CE19 closure: flash + instant-speed CastSpell window -------
+#
+# Pre-closure rust/src/state_ops_legal.rs:759-764 short-circuited the
+# entire CastSpell emission block on a sorcery-timing predicate, so
+# a flash creature or printed Instant in the priority holder's hand
+# was silently dropped at off-active-player priority windows. The
+# closure moves the CastSpell loop ABOVE the sorcery-timing gate and
+# gates per-card on `is_instant || has("flash") || is_sorcery_timing`.
+#
+# These four tests pin the four corners of the timing × flash × type
+# matrix — flash on opponent's turn, flash on own turn, vanilla on
+# opponent's turn, instant on opponent's turn. The
+# `tests/test_parity_smoke.py::test_cross_engine_flash_*` shape-pins
+# the same fix at the cross-engine level via direct-call probes;
+# these Rust-only tests are the unit-level regression surface that
+# tracks any per-card filter regression independently of the cross-
+# engine harness.
+
+
+def _inject_flash_creature_in_hand(state, controller=0):
+    """Inject a 2/2 "Bear Flash" creature (with the ``flash`` keyword)
+    into ``controller``'s hand. Returns the new object id. Mirrors
+    ``cross_engine.flash_side_channel``'s Rust-side injection but
+    skips the Python-side mirror because these tests are Rust-only.
+    """
+    return state.register_and_inject_object(
+        {
+            "name": "Bear Flash",
+            "card_types": ["Creature"],
+            "power": 2,
+            "toughness": 2,
+            "keywords": ["flash"],
+        },
+        controller,
+        ZONE_HAND,
+    )
+
+
+def _inject_vanilla_creature_in_hand(state, controller=0):
+    """Inject a 2/2 vanilla creature (no keywords) into ``controller``'s
+    hand. Returns the new object id."""
+    return state.register_and_inject_object(
+        {
+            "name": "Vanilla Bear CE19",
+            "card_types": ["Creature"],
+            "power": 2,
+            "toughness": 2,
+        },
+        controller,
+        ZONE_HAND,
+    )
+
+
+def _inject_instant_in_hand(state, controller=0):
+    """Inject a Lightning Bolt-style Instant printing into
+    ``controller``'s hand. Returns the new object id. The card_types
+    contain "Instant" — this is the printed-instant arm of the CE19
+    gate, distinct from the flash-keyword arm."""
+    return state.register_and_inject_object(
+        {
+            "name": "Bolt CE19",
+            "card_types": ["Instant"],
+        },
+        controller,
+        ZONE_HAND,
+    )
+
+
+def _walk_to_p1_main_phase(state):
+    """Walk the synthetic state from the default UNTAP/active=0 setup
+    to p1's PRECOMBAT_MAIN. Mirrors the pattern used by the existing
+    off-turn tests at test_legal.py:267-292. After this returns,
+    ``state.active_player == 1`` and ``state.phase == PHASE_MAIN1``.
+    """
+    state.set_phase(PHASE_MAIN1)
+    state.advance_phase()  # to BEGIN_COMBAT
+    safety_cap = 25
+    walks = 0
+    while state.active_player == 0:
+        state.advance_phase()
+        walks += 1
+        assert walks < safety_cap, (
+            f"failed to flip active_player to 1 within {safety_cap} "
+            f"advance_phase calls"
+        )
+    state.set_phase(PHASE_MAIN1)
+
+
+def test_legal_decisions_flash_creature_off_active_turn_emits_cast_spell_ce19(
+    synthetic_state,
+):
+    """**CE19 closure A**: a flash creature on p0's hand emits
+    CastSpell at the priority window during p1's turn.
+
+    Setup: walk to p1's PRECOMBAT_MAIN (active=p1), set priority to
+    p0, empty p0's hand, inject a Bear Flash creature into p0's hand.
+    Probe ``legal_decisions(0)`` — the off-active priority window.
+
+    Pre-CE19-closure Rust dropped this CastSpell at the sorcery-timing
+    short-circuit; post-closure the instant-speed pass above the gate
+    catches `"flash" in keywords` and emits. Mirrors Python's
+    ``legal.py:217-301`` instant-speed block.
+    """
+    _empty_hand(synthetic_state, 0)
+    _walk_to_p1_main_phase(synthetic_state)
+    synthetic_state.give_priority_to(0)
+    assert synthetic_state.active_player == 1
+    assert synthetic_state.get_priority_player() == 0
+
+    bear_flash_id = _inject_flash_creature_in_hand(synthetic_state, 0)
+
+    actions = synthetic_state.legal_decisions(0)
+    cast_ids = [a["card_id"] for a in actions if a["kind"] == "cast_spell"]
+    assert bear_flash_id in cast_ids, (
+        f"CE19 closure regression: Bear Flash (id {bear_flash_id}) "
+        f"should emit CastSpell at p1's turn / p0 priority via the "
+        f"instant-speed window (flash keyword bypasses sorcery "
+        f"timing). Got cast_spell ids: {cast_ids}; full emission "
+        f"kinds: {_kinds(actions)}"
+    )
+
+
+def test_legal_decisions_flash_creature_own_turn_emits_cast_spell(
+    synthetic_state,
+):
+    """**CE19 closure B**: a flash creature on p0's hand emits
+    CastSpell at p0's own PRECOMBAT_MAIN (sorcery timing).
+
+    Same emission as the pre-closure behavior at sorcery timing —
+    flash creatures were already being picked up by the sorcery-speed
+    pass when active == priority. Post-closure they're picked up by
+    the instant-speed pass FIRST (above the sorcery-timing gate); the
+    shared HashSet means the sorcery-speed pass below doesn't double-
+    emit. Test pins that the closure doesn't regress own-turn
+    emission for flash.
+    """
+    _empty_hand(synthetic_state, 0)
+    synthetic_state.set_phase(PHASE_MAIN1)
+    assert synthetic_state.active_player == 0
+    assert synthetic_state.get_priority_player() == 0
+
+    bear_flash_id = _inject_flash_creature_in_hand(synthetic_state, 0)
+
+    actions = synthetic_state.legal_decisions(0)
+    cast_ids = [a["card_id"] for a in actions if a["kind"] == "cast_spell"]
+    assert bear_flash_id in cast_ids, (
+        f"CE19 closure regression: Bear Flash (id {bear_flash_id}) "
+        f"should emit CastSpell at own-turn main phase (sorcery "
+        f"timing OR flash keyword — either branch fires). Got "
+        f"cast_spell ids: {cast_ids}; full emission kinds: "
+        f"{_kinds(actions)}"
+    )
+    # Shared HashSet means no double-emission: the flash card appears
+    # ONCE in the cast_spell list even though both the instant-speed
+    # pass and the sorcery-speed pass would otherwise be candidates.
+    assert cast_ids.count(bear_flash_id) == 1, (
+        f"flash creature should emit ONCE (shared seen_castspell "
+        f"HashSet across instant-speed + sorcery-speed passes). Got "
+        f"{cast_ids.count(bear_flash_id)} emissions of id "
+        f"{bear_flash_id}"
+    )
+
+
+def test_legal_decisions_vanilla_creature_off_active_turn_omits_cast_spell_ce19(
+    synthetic_state,
+):
+    """**CE19 closure C**: a VANILLA creature (no flash, no Instant
+    type) on p0's hand does NOT emit CastSpell at p1's turn.
+
+    The parity-clean negative branch. Vanilla creatures should be
+    emitted ONLY at sorcery timing — the per-card gate's
+    `is_instant || has_flash || is_sorcery_timing` falls through all
+    three clauses (vanilla bears have no keywords and aren't
+    Instants; sorcery-timing fails because active=1 != priority=0).
+
+    If this test FAILS, the CE19 closure has over-corrected and emits
+    sorcery-speed spells at instant-speed windows — a broader and
+    different divergence from CE19.
+    """
+    _empty_hand(synthetic_state, 0)
+    _walk_to_p1_main_phase(synthetic_state)
+    synthetic_state.give_priority_to(0)
+    assert synthetic_state.active_player == 1
+    assert synthetic_state.get_priority_player() == 0
+
+    vanilla_id = _inject_vanilla_creature_in_hand(synthetic_state, 0)
+
+    actions = synthetic_state.legal_decisions(0)
+    cast_ids = [a["card_id"] for a in actions if a["kind"] == "cast_spell"]
+    assert vanilla_id not in cast_ids, (
+        f"CE19 over-correction: vanilla creature (id {vanilla_id}) "
+        f"should NOT emit CastSpell at p1's turn / p0 priority "
+        f"(no flash, not Instant, sorcery-timing fails). Unexpected "
+        f"cast_spell ids: {cast_ids}; this would be a different / "
+        f"larger divergence than the flash + instant-speed window "
+        f"CE19 was about."
+    )
+    # Stronger pin: emission collapses to PassPriority only (the
+    # sorcery-timing gate is closed, no DECLARE_ATTACKERS phase, no
+    # other branches fire).
+    assert _kinds(actions) == ["pass_priority"], (
+        f"off-priority window with vanilla-only hand should emit "
+        f"ONLY PassPriority; got {_kinds(actions)}"
+    )
+
+
+def test_legal_decisions_instant_off_active_turn_emits_cast_spell_ce19(
+    synthetic_state,
+):
+    """**CE19 closure D**: a printed Instant on p0's hand emits
+    CastSpell at the priority window during p1's turn.
+
+    The is_instant arm of the per-card timing gate (Python's
+    ``card.printing.is_instant`` clause at ``legal.py:248``). Distinct
+    from the flash-keyword arm — pin both so a future regression that
+    silently drops one branch (e.g. typos `card_types.contains
+    ("instant")` lowercase) still trips the other test.
+    """
+    _empty_hand(synthetic_state, 0)
+    _walk_to_p1_main_phase(synthetic_state)
+    synthetic_state.give_priority_to(0)
+    assert synthetic_state.active_player == 1
+    assert synthetic_state.get_priority_player() == 0
+
+    bolt_id = _inject_instant_in_hand(synthetic_state, 0)
+
+    actions = synthetic_state.legal_decisions(0)
+    cast_ids = [a["card_id"] for a in actions if a["kind"] == "cast_spell"]
+    assert bolt_id in cast_ids, (
+        f"CE19 closure regression: printed Instant (id {bolt_id}) "
+        f"should emit CastSpell at p1's turn / p0 priority via the "
+        f"instant-speed window (is_instant clause of the per-card "
+        f"gate). Got cast_spell ids: {cast_ids}; full emission "
+        f"kinds: {_kinds(actions)}"
+    )
