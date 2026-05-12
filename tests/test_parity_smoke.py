@@ -7405,9 +7405,10 @@ def _legal_actions_to_dicts(actions):
     return out
 
 
-def test_cross_engine_flash_test_a_surfaces_ce19(parity_smoke):
-    """**Test A — predicted CE19**: legal_decisions for a flash
-    creature on p1's turn (active=p1) with p0 holding priority.
+def test_cross_engine_flash_test_a_closes_ce19(parity_smoke):
+    """**Test A — CE19 CLOSED**: legal_decisions for a flash creature
+    on p1's turn (active=p1) with p0 holding priority emits CastSpell
+    on BOTH engines.
 
     Setup: walk the retaliation_selector backbone to step 167 (turn
     13 PRECOMBAT_MAIN, active=p0). Side-channel-advance phases on
@@ -7417,21 +7418,24 @@ def test_cross_engine_flash_test_a_surfaces_ce19(parity_smoke):
     Inject Bear Flash (2/2 + flash keyword) into p0's hand on both
     engines. Probe ``legal_decisions(0)`` / ``legal_actions(state, 0)``.
 
-    Expected divergence (CE19):
+    Post-CE19-closure expectation (both engines agree):
 
     * **Python**: ``legal.py:217-301`` instant-speed CastSpell block
       runs BEFORE the sorcery-timing gate at line 303. The filter
       ``card.printing.is_instant or "flash" in card.printing.keywords``
       accepts Bear Flash. Emission includes a ``CastSpell(bear_flash_id)``
       dict.
-    * **Rust**: ``state_ops_legal.rs:759-764`` short-circuits the
-      entire CastSpell block on the sorcery-timing predicate
-      ``active == priority``. With active=1 and priority=0, sorcery
-      timing fails. Emission is just ``[PassPriority]``.
+    * **Rust** (post-closure): ``state_ops_legal.rs`` CastSpell loop
+      now lives ABOVE the sorcery-timing short-circuit and gates
+      per-card on ``is_instant || keywords.contains("flash") ||
+      is_sorcery_timing``. The flash keyword triggers the
+      instant-speed pass — Rust emits ``CastSpell`` for the flash
+      card at the off-active priority window, matching Python.
 
-    The assertion shape: Python's emission contains a ``cast_spell``
-    entry naming the flash card; Rust's emission does NOT. This is
-    the CE19 surface.
+    The assertion shape is flipped from the pre-closure shape-pin
+    ("Rust does NOT emit") to the post-closure equality form: both
+    engines emit identical ``cast_spell`` card_id sets, and the flash
+    card's id is in each set. See I46 in ``docs/RUST_PARITY_GAPS.md``.
     """
     from mtg_bot.legal import legal_actions
     from mtg_bot.parity.cross_engine import (
@@ -7510,38 +7514,36 @@ def test_cross_engine_flash_test_a_surfaces_ce19(parity_smoke):
         a["card_id"] for a in rust_actions
         if a.get("kind") == "cast_spell"
     ]
-    # CE19 SURFACE: Rust does NOT emit CastSpell for the flash
-    # creature because its CastSpell block is gated by sorcery
-    # timing (active == priority), and active=1 / priority=0 fails
-    # that gate. The flash keyword is never read by Rust's
-    # enumerator (see state_ops_legal.rs:60-73 module docstring's
-    # "First slice ignores the instant-speed block" note).
-    assert rust_id not in rust_cast_card_ids, (
-        f"CE19 REGRESSION (or unexpected closure): Rust emitted "
-        f"CastSpell for the flash creature (Bear Flash id {rust_id}) "
-        f"at p1's turn / p0 priority. Pre-CE19 closure Rust's "
-        f"legal_decisions short-circuits the CastSpell block on the "
-        f"sorcery-timing predicate (active=1 != priority=0 -> empty "
-        f"emission). Rust emission cast_spell ids: "
-        f"{rust_cast_card_ids}; full emission kinds: "
-        f"{[a.get('kind') for a in rust_actions]}. If Rust has "
-        f"learned to emit at the instant-speed window, flip this "
-        f"test to a strict-pass equality of Python and Rust emissions."
+    # CE19 CLOSED: Rust now emits CastSpell for the flash creature
+    # via the instant-speed pass that lives above the sorcery-timing
+    # short-circuit. The per-card gate at state_ops_legal.rs is
+    # `is_instant || keywords.contains("flash") || is_sorcery_timing`;
+    # the flash keyword fires the first clause, so the off-active
+    # priority window emits regardless of `active != priority`.
+    assert rust_id in rust_cast_card_ids, (
+        f"CE19 closure regression: Rust did NOT emit CastSpell for "
+        f"the flash creature (Bear Flash id {rust_id}) at p1's turn "
+        f"/ p0 priority. Post-closure Rust's legal_decisions should "
+        f"emit via the instant-speed pass above the sorcery-timing "
+        f"gate (state_ops_legal.rs `is_instant || keywords.contains"
+        f"(\"flash\") || is_sorcery_timing`). Rust emission "
+        f"cast_spell ids: {rust_cast_card_ids}; full emission kinds: "
+        f"{[a.get('kind') for a in rust_actions]}. See I46 in "
+        f"docs/RUST_PARITY_GAPS.md."
     )
 
-    # CE19 shape pin: Rust's emission is essentially just
-    # PassPriority + any sorcery-timing-independent actions (none on
-    # this setup -- no DECLARE_ATTACKERS phase, no PlayLand emission
-    # because the priority gate at state_ops_legal.rs:550-552 bails
-    # for off-priority actors and the rest of the function gates on
-    # sorcery_timing which is false here).
-    rust_kinds = sorted(a.get("kind") for a in rust_actions)
-    assert rust_kinds == ["pass_priority"], (
-        f"CE19 pre-closure shape: Rust's legal_decisions for the "
-        f"non-active priority holder should emit ONLY pass_priority "
-        f"(active=1 != priority=0 fails sorcery_timing; the "
-        f"DECLARE_ATTACKERS / ActivateAbility / CastSpell / PlayLand "
-        f"branches are all sorcery-timing-gated). Got: {rust_kinds}"
+    # Both-engines-agree pin: the set of cast_spell card ids matches
+    # exactly between Python and Rust. Stronger than "both contain
+    # the flash id" -- catches a divergence where Rust over-corrects
+    # and emits additional non-flash non-instant cards at the off-
+    # active priority window (which would be a different and larger
+    # divergence than CE19).
+    assert set(py_cast_card_ids) == set(rust_cast_card_ids), (
+        f"CE19 closure should produce identical CastSpell emissions "
+        f"on both engines at the off-active priority window. "
+        f"Python ids: {sorted(py_cast_card_ids)}; "
+        f"Rust ids: {sorted(rust_cast_card_ids)}. "
+        f"Mismatch indicates a per-card filter divergence."
     )
 
 
