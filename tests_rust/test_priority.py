@@ -747,3 +747,88 @@ def test_priority_player_idx_snapshot_property_agrees_after_each_pass(
             synthetic_state.priority_player_idx
             == synthetic_state.get_priority_player()
         )
+
+
+# --- CE2 closure regression -----------------------------------------
+#
+# Round-28 / Phase 5 CE2 closure: ``apply_action({"kind":
+# "pass_priority"})`` is a TRUE NO-OP — it does NOT flip
+# ``priority_player`` and does NOT bump ``consecutive_passes``. Mirrors
+# Python's ``apply_action(PassPriority)`` which is literally a
+# ``return`` (src/mtg_bot/actions.py:990-991). Priority management is
+# owned by the composer ``complete_step_via_priority_round`` and by
+# the ``pass_priority`` primitive when callers drive it directly.
+#
+# These tests pin the new no-op behavior on both directions (p0 passes,
+# p1 passes) so a future regression that re-introduces the toggle
+# surfaces here loudly.
+
+
+def test_apply_action_pass_priority_noop_for_p0(synthetic_state):
+    """**CE2 closure**: when p0 holds priority and applies
+    PassPriority via ``apply_action``, ``priority_player`` stays at
+    0. The arm is a pure no-op."""
+    assert synthetic_state.get_priority_player() == 0
+    synthetic_state.apply_action({"kind": "pass_priority"})
+    assert synthetic_state.get_priority_player() == 0
+
+
+def test_apply_action_pass_priority_noop_for_p1(synthetic_state):
+    """**CE2 closure**: when p1 holds priority and applies
+    PassPriority via ``apply_action``, ``priority_player`` stays at
+    1. The arm is a pure no-op — symmetric with the p0 case."""
+    synthetic_state.give_priority_to(1)
+    assert synthetic_state.get_priority_player() == 1
+    synthetic_state.apply_action({"kind": "pass_priority"})
+    assert synthetic_state.get_priority_player() == 1
+
+
+def test_apply_action_pass_priority_noop_does_not_bump_counter(synthetic_state):
+    """**CE2 closure**: ``apply_action({"kind": "pass_priority"})``
+    does NOT advance the ``consecutive_passes`` counter. The counter
+    only advances when callers invoke the ``pass_priority`` primitive
+    directly OR when the composer drives it.
+
+    Mirrors Python (no equivalent counter exists on the Python side,
+    so the apply_action arm is bit-for-bit a no-op). Composer-driven
+    paths still increment the counter — that contract is pinned by
+    ``test_consecutive_passes_increments_on_each_pass`` above."""
+    assert synthetic_state.get_consecutive_passes() == 0
+    for _ in range(5):
+        synthetic_state.apply_action({"kind": "pass_priority"})
+    assert synthetic_state.get_consecutive_passes() == 0
+    # Sanity: the primitive still increments. We're pinning the
+    # apply_action path's no-op semantics, not breaking the primitive.
+    synthetic_state.pass_priority()
+    assert synthetic_state.get_consecutive_passes() == 1
+
+
+def test_apply_action_pass_priority_noop_preserves_active_player(synthetic_state):
+    """**CE2 closure**: ``apply_action({"kind": "pass_priority"})`` is
+    a pure no-op — ``active_player`` is unchanged. Combined with the
+    priority-unchanged pin above, this proves the arm leaves the
+    state byte-identical on the priority axis. Mirrors invariant I8
+    (active and priority player are independent fields)."""
+    starting_active = synthetic_state.active_player
+    starting_priority = synthetic_state.get_priority_player()
+    synthetic_state.apply_action({"kind": "pass_priority"})
+    assert synthetic_state.active_player == starting_active
+    assert synthetic_state.get_priority_player() == starting_priority
+
+
+def test_apply_action_pass_priority_noop_preserves_fingerprint(synthetic_state):
+    """**CE2 closure**: PassPriority via ``apply_action`` is a true
+    no-op — the parity fingerprint is byte-identical before and
+    after. Pins the digest stability so future refactors that
+    accidentally mutate a non-fingerprinted field (e.g. flip a
+    visibility flag) surface here.
+
+    Note: ``consecutive_passes`` is NOT in the fingerprint (per
+    invariant I25), so even if the counter were mistakenly bumped, the
+    digest would stay stable. The companion test
+    ``test_apply_action_pass_priority_noop_does_not_bump_counter``
+    catches the counter-mutation case."""
+    fp_before = synthetic_state.fingerprint()
+    synthetic_state.apply_action({"kind": "pass_priority"})
+    fp_after = synthetic_state.fingerprint()
+    assert fp_before == fp_after

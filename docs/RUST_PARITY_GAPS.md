@@ -523,11 +523,18 @@ refactor on either side that breaks the parity surfaces immediately.
   - `apply_action` resets `priority_player = active_player` AND
     `consecutive_passes = 0` after EVERY non-PassPriority arm
     succeeds (PlayLand / DeclareAttackers / DeclareBlockers /
-    CastSpell / ActivateAbility). PassPriority itself flows through
-    the underlying `pass_priority` toggle and INCREMENTS the
-    counter instead. Mirrors Python's `simulate.py:priority_loop`
-    pattern of `priority_idx = state.active_player_idx` after
-    every non-pass branch.
+    CastSpell / ActivateAbility). PassPriority itself is a TRUE
+    NO-OP (CE2 closure): the arm leaves `priority_player`,
+    `active_player`, AND `consecutive_passes` untouched. Mirrors
+    Python's `apply_action(PassPriority)` which is literally
+    `return` (src/mtg_bot/actions.py:990-991). Priority management
+    flows through the `pass_priority` primitive directly (which
+    DOES increment the counter and toggle the priority field) or
+    through the composer `complete_step_via_priority_round`
+    (which calls the primitive twice). The post-arm reset block
+    at the bottom of `apply_action` is skipped via the
+    `is_pass_priority` short-circuit so the no-op contract is
+    bit-exact.
   - `advance_phase` resets `priority_player = active_player` on the
     CLEANUP -> UNTAP wrap (CR 117.1a — the new active player gets
     priority at the start of their turn). Within-turn step advances
@@ -873,31 +880,29 @@ injection primitive in `state_ops_resolve.rs` also stays at
 divergences from Python's default; not load-bearing on the cross-
 engine smoke harness which uses `make_state` exclusively.
 
-### CE2. `pass_priority` apply_action behavior differs
+### ~~CE2.~~ CLOSED: `apply_action(PassPriority)` is now a no-op matching Python
 
-- **Pinned by**:
-  `tests/test_parity_smoke.py::test_cross_engine_mode_priority_player_unchanged_by_pass_priority`
-  (xfail-pinned). This is the cross-engine manifestation of the
-  already-documented gap G3 (`pass_priority` is a pure toggle).
-- **Today**: Python's `apply_action(PassPriority)` is a no-op —
-  priority management is owned by `simulate.priority_loop`, not by
-  `apply_action`. Rust's `apply_action({"kind": "pass_priority"})`
-  flips `priority_player` to `1 - priority_player`. The cross-
-  engine smoke surfaces this as a `priority_player` divergence on
-  every odd-numbered PassPriority step.
-- **Expected**: same as G3 — the closure is the priority +
-  steps + stack composition slice that integrates the round-9
-  primitives.
-- **Impact**: this is THE most-likely-to-be-hit cross-engine
-  divergence; every PassPriority decision the smoke takes will
-  flag it. Effectively gates the cross-engine harness's ability
-  to exercise multi-step decision scripts with a clean priority
-  field. Workaround: the smoke harness drives both engines
-  through `apply_action` directly and reports the divergence
-  rather than papering over it — honest failure count is the real
-  progress signal.
-- **Closeable**: yes — bundled with the G3/G4/G15 priority
-  composition slice.
+Closed by the round-28 CE2 slice (`feature/ce2-pass-priority`).
+Rust's `apply_action({"kind": "pass_priority"})` is now a TRUE
+NO-OP — it does NOT flip `priority_player` and it does NOT
+increment `consecutive_passes`. This mirrors Python's
+`apply_action(PassPriority)` which is literally `return`
+(src/mtg_bot/actions.py:990-991). Priority management is owned by
+the composer (`complete_step_via_priority_round`) and by callers
+driving the `pass_priority` primitive directly — NOT by
+`apply_action`. The xfail-pinned cross-engine smoke test
+(`tests/test_parity_smoke.py::test_cross_engine_mode_priority_player_unchanged_by_pass_priority`)
+flipped to expected-pass with the closure. New regression tests in
+`tests_rust/test_priority.py` (5 tests in the "CE2 closure
+regression" block) pin the no-op behavior in both directions
+(p0 passes, p1 passes), pin the counter-unchanged contract, pin the
+active-player-unchanged contract, and pin fingerprint stability.
+Pre-existing rust-side tests that asserted the OLD toggle behavior
+were flipped to assert the new no-op semantics (in
+`tests_rust/test_actions.py` and `tests_rust/test_legal.py`). The
+I25 invariant text below was tightened to reflect that
+PassPriority via apply_action is now bit-equivalent to Python's
+return-fast path.
 
 (Other smoke-flagged divergences may be added by follow-up Phase 5
 slices as the deck pool / decision script grows.)
