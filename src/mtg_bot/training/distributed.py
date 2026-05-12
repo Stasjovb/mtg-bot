@@ -1017,33 +1017,112 @@ def run_shard_local(
         replays_dir=replays_subdir,
     )
 
-    try:
-        features, outcomes, policy_targets, action_masks = (
-            generate_training_data_parallel(
-                p0_factory=cfg.build,
-                p1_factory=cfg.build,
-                n_games=n_games,
-                base_seed=spec.base_seed + shard.seed_offset,
-                n_workers=shard.n_workers,
-                with_policy=True,
-                decision_cap=spec.decision_cap,
-                sample_every=spec.sample_every,
-                enable_mulligans=spec.enable_mulligans,
-                per_game_timeout_sec=spec.per_game_timeout_sec,
-                progress=progress,
-                deck_pool=deck_pool,
-                replay_config=replay_config,
-                hang_dump_dir=hang_dump_dir,
-                heuristics=spec.heuristics,
-                action_encoding_version=(
-                    spec.action_encoding_version or "positional_v1"
-                ),
-            )
+    # Optional: install a SharedTensorNNEvalServer (PR #40) for this
+    # local-shard's worker pool. Mirrors the activation block in
+    # ``run_shard_pull`` (line ~2812) — gated to linux+win32, with a
+    # NotImplementedError fallback to the legacy per-worker
+    # NNEvaluator path. The master Win11 5090 is the headline target:
+    # ``run_shard_local`` is the in-process master path that
+    # bypasses the pull-mode orchestrator's queue server, so without
+    # this block it would silently stay on per-worker CUDA contexts
+    # even with ``--use-shm-self-play`` set. The platform predicate
+    # exactly matches ``run_shard_pull``'s post-merge form so
+    # behavior parity is maintained between the two runners.
+    shm_server = None
+    shm_initializer = None
+    shm_initargs: tuple = ()
+    shm_mp_context = None
+    import os as _os
+    n_workers_for_sizing = (
+        shard.n_workers if shard.n_workers is not None
+        else max(1, (_os.cpu_count() or 1) - 2)
+    )
+    if spec.use_shm_server and sys.platform in ("linux", "win32"):
+        from mtg_bot.search.shm_nn_eval_server import (
+            SharedTensorNNEvalServer,
+            preferred_mp_context,
+            set_worker_handle,
         )
-    except BaseException:
-        progress.finalize(status="failed")
-        raise
-    progress.finalize(status="completed")
+        try:
+            shm_server = SharedTensorNNEvalServer(
+                weights_path=Path(spec.weights_path),
+                device=None,  # auto-resolve in master (CUDA on Win11 5090)
+                with_policy=spec.with_policy,
+                batch_size=32,
+                batch_wait_ms=0.5,
+                # Slot pool sized for the batched-client path (PR #47):
+                # each worker's batch_evaluate_with_policy reserves up
+                # to ``batch_size`` slots up-front, so peak concurrent
+                # demand is ``n_workers * batch_size``. Mirrors the
+                # run_shard_pull sizing exactly so behavior between
+                # the two runners stays aligned at 14 workers.
+                n_slots=max(64, n_workers_for_sizing * 32 + 16),
+                hidden_sizes=spec.hidden_sizes,
+                architecture=spec.architecture,
+                policy_hidden_sizes=spec.policy_hidden_sizes,
+            )
+            shm_server.start()
+            shm_initializer = set_worker_handle
+            shm_initargs = (shm_server.handle(),)
+            shm_mp_context = preferred_mp_context()
+            print(
+                f"[shard {shard.display_label}] using "
+                f"SharedTensorNNEvalServer "
+                f"(device={shm_server._device}, n_slots="
+                f"{max(64, n_workers_for_sizing * 32 + 16)})"
+            )
+        except NotImplementedError as e:
+            # On a host where the SHM server is unsupported (now only
+            # macOS by policy — Linux and Windows both go through the
+            # active branch above), fall through to the legacy per-
+            # worker NNEvaluator path. cfg's device="auto" path runs
+            # as before.
+            print(
+                f"[shard {shard.display_label}] SHM server "
+                f"unavailable ({e}); falling back to per-worker "
+                f"NNEvaluator path"
+            )
+            shm_server = None
+
+    try:
+        try:
+            features, outcomes, policy_targets, action_masks = (
+                generate_training_data_parallel(
+                    p0_factory=cfg.build,
+                    p1_factory=cfg.build,
+                    n_games=n_games,
+                    base_seed=spec.base_seed + shard.seed_offset,
+                    n_workers=shard.n_workers,
+                    with_policy=True,
+                    decision_cap=spec.decision_cap,
+                    sample_every=spec.sample_every,
+                    enable_mulligans=spec.enable_mulligans,
+                    per_game_timeout_sec=spec.per_game_timeout_sec,
+                    progress=progress,
+                    deck_pool=deck_pool,
+                    replay_config=replay_config,
+                    hang_dump_dir=hang_dump_dir,
+                    heuristics=spec.heuristics,
+                    action_encoding_version=(
+                        spec.action_encoding_version or "positional_v1"
+                    ),
+                    pool_initializer=shm_initializer,
+                    pool_initargs=shm_initargs,
+                    pool_mp_context=shm_mp_context,
+                )
+            )
+        except BaseException:
+            progress.finalize(status="failed")
+            raise
+        progress.finalize(status="completed")
+    finally:
+        # Stop the SHM server cleanly on shard exit — match
+        # ``run_shard_pull``'s try/finally lifecycle so a
+        # KeyboardInterrupt / exception still tears the dispatcher
+        # down (otherwise the thread + shared-memory regions leak
+        # past the shard return).
+        if shm_server is not None:
+            shm_server.stop(timeout=5.0)
 
     save_dataset(
         features, outcomes, output_path,

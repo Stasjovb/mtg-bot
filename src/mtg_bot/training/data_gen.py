@@ -294,6 +294,9 @@ def generate_training_data_parallel(
     heuristics: Optional[HeuristicsConfig] = None,
     stop_check: Optional[Callable[[], bool]] = None,
     action_encoding_version: str = "positional_v1",
+    pool_initializer: Optional[Callable[..., None]] = None,
+    pool_initargs: tuple = (),
+    pool_mp_context: Optional["mp.context.BaseContext"] = None,
 ) -> tuple[np.ndarray, ...]:
     """Same contract as ``generate_training_data`` but distributes
     games across a ``multiprocessing.Pool``. Same ``with_policy``
@@ -332,6 +335,16 @@ def generate_training_data_parallel(
     Worker spawn cost on Windows is ~1-2s per worker, paid once per
     pool. Dominates wall clock at very small ``n_games``; amortizes
     away past a few dozen games.
+
+    ``pool_initializer`` / ``pool_initargs`` / ``pool_mp_context``
+    plumb the SharedTensorNNEvalServer activation path from
+    ``run_shard_local`` (and any other in-process caller that wants
+    SHM-routed NN eval). When all three are provided, the
+    ``multiprocessing.Pool`` is created off the supplied context with
+    the initializer + args; workers fork-inherit / pickle-receive the
+    SHM handle before any game runs. Defaults preserve the legacy
+    ``mp.Pool(processes=n_workers)`` (platform default context, no
+    initializer) so direct test callers stay unchanged.
     """
     if heuristics is None:
         heuristics = HeuristicsConfig()
@@ -368,7 +381,20 @@ def generate_training_data_parallel(
     crashed_games: list[int] = []
     timed_out_games: list[int] = []
     stopped_early = False
-    with mp.Pool(processes=n_workers) as pool:
+    # Pool construction: ``run_shard_local``'s SHM path supplies a
+    # ctx + initializer so workers install the SharedTensorNNEval
+    # handle before the first game runs. Legacy callers leave the
+    # three kwargs at their defaults and get the platform-default
+    # pool with no initializer (unchanged from pre-SHM behavior).
+    if pool_mp_context is not None:
+        pool_ctx = pool_mp_context
+    else:
+        pool_ctx = mp
+    pool_kwargs: dict[str, Any] = {"processes": n_workers}
+    if pool_initializer is not None:
+        pool_kwargs["initializer"] = pool_initializer
+        pool_kwargs["initargs"] = pool_initargs
+    with pool_ctx.Pool(**pool_kwargs) as pool:
         for game_idx, chunk in pool.imap_unordered(
             _play_one_parallel_game, args_list, chunksize=1,
         ):
