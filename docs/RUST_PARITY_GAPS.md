@@ -1422,8 +1422,21 @@ The counter `state.next_etb_timestamp` and the per-object slot
   `state_ops_resolve.rs::apply_effect`'s ConditionalIfVoid arm)
   reads the predicate via `state.is_void_active`. The `spell_warped_this_turn`
   half (the other OR-input) is still substrate-only — no Rust call
-  site flips it; warp casting is a future slice (see the deferred
-  note on the ConditionalIfVoid worklog entry).
+  site flips it; warp casting is a future slice. The warp-cast
+  substrate gap is audited at the slice level in
+  `docs/SEARCH_LIMITATIONS.md` under "Rust port — warp alt-cost
+  cast pipeline absent; `state.spell_warped_this_turn` substrate-
+  only" (added 2026-05-12). The audit pins the closure shape: the
+  warp-half setter is a one-line `state.spell_warped_this_turn =
+  true` mirror of Python's `actions.py:1427,1457`, slotted into the
+  future `cast_via_warp` primitive when (1) `CardPrinting` gets a
+  `warp_cost` field, (2) `state_ops_cast.rs` grows a warp-cost
+  primitive, and (3) `Action::CastSpell`'s `use_warp` arm flips
+  from "ignore the flag" to "route to the warp primitive". Until
+  then this I29 invariant covers ONLY the LTB half; the
+  `is_void_active` getter intentionally OR's a permanently-false
+  field so I29's LTB-half setter is still load-bearing for
+  ConditionalIfVoid even with the warp half unwired.
 
   **Why a helper, not a single `move_object` chokepoint**: the
   Rust resolver was built with per-slice file isolation, so every

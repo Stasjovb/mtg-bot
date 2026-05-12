@@ -1297,6 +1297,136 @@ matters when those specific cards resolve.
 
 ---
 
+## Rust port — warp alt-cost cast pipeline absent; `state.spell_warped_this_turn` substrate-only
+
+**Location**: `rust/src/state.rs:758-762` (field declaration),
+`rust/src/state_ops_resolve.rs:4986-4998`
+(`Effect::ConditionalIfVoid` resolver — sole consumer),
+`rust/src/state_ops_actions.rs:245-292` (`Action::CastSpell` arm —
+parses `use_warp` flag but ignores it),
+`rust/src/state_ops_cast.rs:285-355`
+(`GameState::cast_creature` primitive — hand-only, normal mana_cost),
+`rust/src/cards.rs:1855-1898` (`CardPrinting` struct — no
+`warp_cost` / `warp_castable_from_graveyard` /
+`warp_additional_life_cost` fields).
+
+**What we do today**: the `state.spell_warped_this_turn` field
+exists on Rust's `GameState`, is reset on entry to PHASE_CLEANUP
+(state_ops_steps.rs:294), and is read by the
+`Effect::ConditionalIfVoid` resolver via `is_void_active`
+(LTB-half OR warp-half). But **NO production code path in Rust sets
+the flag**. The only writer is the test-only `set_void_flags`
+pymethod (state.rs:971-979). The `Action::CastSpell` dispatch arm
+parses the `use_warp` payload field and round-trips it through the
+bridge, then explicitly ignores it (state_ops_actions.rs:247
+`use_warp: _`) and routes to `cast_creature` — which only consumes
+cards from hand and pays the printing's normal `mana_cost`.
+
+**Why this diverges from Python**: Python's
+`src/mtg_bot/actions.py:1426-1436,1457` flips
+`state.spell_warped_this_turn = True` at two cast-from-zone sites
+(warp-from-hand and warp-from-graveyard for Timeline Culler), each
+paying the printing's `warp_cost` instead of `mana_cost` and an
+optional `warp_additional_life_cost`. Three Python consumers read
+the resulting `is_void_active` predicate:
+`mtg_bot.effects.state_predicates` (line 105-107),
+`mtg_bot.effects.conditions` (315-317), and
+`mtg_bot.effects.combinators` (`ConditionalIfVoid` resolver at
+1450-1452, plus `is_void_active` lookup at 183-189). Rust currently
+ports only the `ConditionalIfVoid` consumer; the other two
+combinators / predicates routes have not been ported. So the
+bounded impact of the missing warp-half setter is exactly:
+`Effect::ConditionalIfVoid`-bearing spells resolved on a turn when
+the controller has cast a warp spell take the `else_effect` /
+no-op branch instead of the `then_effect` branch.
+
+**Pool exposure**: 50 EoE cards mention "warp" in their oracle text
+(measured 2026-05-12 against `data/edge_of_eternities.json`). Per
+the round-29 ConditionalIfVoid slice (commit `de4a578c`), there are
+4 EoE "Void —" rider cards whose `then_effect` is gated on
+`is_void_active` (Decode Transmissions, Hymn of the Faller, and two
+others). On a turn where one player warp-casts a spell and a
+ConditionalIfVoid rider resolves AFTER that cast, Rust takes the
+wrong branch.
+
+**Failure mode**: silent — `Effect::ConditionalIfVoid` resolves
+with `void=false` when only a warp-cast event has occurred this
+turn (LTB events on the same turn still flip the void predicate
+true via I29's LTB half, masking the divergence when both happen).
+The closure is "implement warp cast in Rust → the flag setter
+follows trivially at the warp-cast site (mirror Python actions.py:
+1427,1457)". Until the cast pipeline routes warp distinctly, the
+flag has no production write site to wire up.
+
+**Cross-engine smoke surfacing**: the divergence cannot be surfaced
+by the existing `tests/test_parity_smoke.py` cross-engine harness
+without a warp-cost card in the deckspec, AND a ConditionalIfVoid
+rider that resolves AFTER the warp cast in the same turn. Today's
+parity-smoke deckspec has neither — surfacing this would require
+seeding warp-castable + Void-rider printings into the synthetic
+fixture. Deferred until the warp-cost CardPrinting fields land in
+Rust (a much larger slice — see "Fix scope" below).
+
+**Why it's OK for now**: warp casting is a Rust-side cast-pipeline
+gap, not a flag-substrate gap. The closure is the whole alt-cost
+infrastructure (cost-from-zone primitive + `Effect::Warp` + four
+new `CardPrinting` fields for `warp_cost` /
+`warp_castable_from_graveyard` / `warp_additional_life_cost` /
+`cast_via_warp` end-of-turn-exile rider), not a one-line setter.
+Adding a setter today would be dead code with no production write
+path to hook it into. The flag substrate lives in Rust because
+I29's LTB half consumes it; keeping both halves of the
+`is_void_active` predicate on `GameState` matches Python's struct
+shape so the eventual warp-cast slice slots a one-line write in
+exactly where Python's `actions.py:1427` lives — mechanical
+mirroring.
+
+**Fix scope when prioritized**: large (full warp alt-cost cast
+pipeline).
+1. Add `warp_cost: Option<ManaCost>`,
+   `warp_castable_from_graveyard: bool`,
+   `warp_additional_life_cost: u8`, and `cast_via_warp: bool`
+   (per-GameObject) fields to `CardPrinting` / `GameObject` +
+   bridge dict parsing in `cards.rs`.
+2. Carve the warp-cast cost-payment + zone-removal from
+   `state_ops_cast.rs::cast_creature` into a separate
+   `cast_via_warp(obj_id, player_id, zone_source)` primitive that
+   reads `warp_cost` instead of `mana_cost`, pays the life rider
+   (if any), removes from hand OR graveyard depending on
+   `warp_castable_from_graveyard`, and **flips
+   `state.spell_warped_this_turn = true` at that site** (the
+   one-line mirror of `actions.py:1427`).
+3. Flip `Action::CastSpell`'s `use_warp` arm in
+   `state_ops_actions.rs:245-292` from "ignore the flag" to "route
+   to `cast_via_warp` when `use_warp = true`".
+4. Add an end-of-turn exile rider for `cast_via_warp = true`
+   permanents (mirrors Python's warp-cast leaves-play behavior).
+5. Update I29 in `RUST_PARITY_GAPS.md` to add the warp-half setter
+   site to the void-flag-lifecycle setter list (currently I29 only
+   documents the LTB half's setters; the warp half is noted as
+   "still substrate-only" at line 1382-1385 with this doc-only
+   audit as the deferral pin).
+6. Regression test in `tests_rust/test_void.py`:
+   `test_warp_cast_flips_spell_warped_flag` and
+   `test_conditional_if_void_resolves_then_branch_after_warp_cast`,
+   mirroring the I29 LTB-half tests' shape.
+
+Each step ships independently; (1)+(2)+(3) are the minimum closure
+for the flag setter to have a production write site. (4) is
+orthogonal to this divergence (it's a separate spell-behavior gap).
+
+**Impact estimate**: bounded to ConditionalIfVoid + warp + same-
+turn ordering. Zero impact on any state where (a) no warp spell is
+cast that turn, OR (b) no ConditionalIfVoid rider resolves AFTER
+the warp cast on that turn, OR (c) a nonland LTB on the same turn
+already flipped the void predicate true (the LTB half masks the
+warp-half divergence — common in mid-game). The strength cost is
+proportional to "warp-cast turns with a ConditionalIfVoid rider
+resolving after but no concurrent LTB" — a tiny slice of the
+gameplay surface. Perf neutral.
+
+---
+
 ## Tracked but not in this doc
 
 Things tracked elsewhere that you might also want to know about:
