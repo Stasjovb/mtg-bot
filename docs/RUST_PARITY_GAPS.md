@@ -89,19 +89,64 @@ behavior per CR / Python, parity impact, and closeable / accepted.
 - **Impact**: zero today, high when G8 is closed.
 - **Closeable**: bundled with G8.
 
-### G12. Mutual KO model is two sequential `lose_life` calls, not a single Effect
+### ~~G12.~~ CLOSED: Mutual-KO end-state is parity-load-bearing and matches cross-engine via `apply_sbas_until_quiescent`; the construction-shape divergence is moot
 
-- **Pinned by**: `tests_rust/test_winloss.py::test_mutual_zero_via_sequential_lose_life_is_draw` (docstring note: "the closest cross-feature analog the Rust engine exposes for 'both die in the same event'").
-- **Rust today**: There is no single Effect that drops both players
-  to 0 atomically. Mutual-KO outcomes have to be reproduced by two
-  back-to-back `lose_life(p, n)` calls followed by `apply_sbas_until_quiescent`.
-- **CR / Python expected**: Real MTG sees "both players reduced to 0
-  simultaneously" via combat damage or symmetric Effects.
-  `is_draw == True` is the parity-load-bearing outcome regardless of
-  how the state was constructed.
-- **Impact**: low — the observable end-state (`is_draw`, `losers
-  == [0, 1]`) matches; only the construction shape diverges.
-- **Closeable**: deferred until symmetric-Effect machinery lands.
+Closed by `feature/g12-audit` (2026-05-12). The G12 audit
+(`docs/G12_AUDIT_2026_05_12.md` writeup folded inline here)
+established that the underlying substrate gap that motivated the
+original entry — "no single Effect that drops both players to 0
+atomically on either engine" — is structurally still present, BUT
+the observable end-state IS the parity-load-bearing contract, and
+that end-state matches bit-for-bit on both engines today.
+
+**What changed since G12 was filed**: nothing on the substrate side
+(neither engine ever grew a symmetric two-player `lose_life`
+Effect — `LoseLife` hits controller only, `EachOpponentLosesLife`
+hits the one opponent, `TargetOpponentLosesLife` hits one chosen
+opponent; combat damage is one-directional). What DID change is
+the read-side: CE12's sticky-winner closure (invariant I34) made
+`winner_id` / `is_over` / `is_draw` SBA-gated on both engines. The
+simultaneous-bilateral-kill branch of I34 (both `has_lost` flip in
+the SAME SBA pass -> sticky-write skipped -> `winner_id` stays
+None, `is_draw` flips True) and the sequential branch (alive=1
+SBA pass writes sticky, then alive=0 SBA pass flips `is_draw`,
+leaving `winner_id` at the survivor) are BOTH pinned by I34 and
+exercised by the 260-step `retaliation_selector` cross-engine
+walk that closed CE12.
+
+**Closure-load-bearing fact**: the original G12 entry framed its
+"construction shape diverges" worry as a deferred substrate gap,
+but mutual-KO outcomes in REAL MTG aren't observably constructed
+"in a single atomic step" either — the SBA pass IS the
+simultaneous-loss observation point per CR 704.5a (the "check all
+state-based actions simultaneously" rule). Both engines hit that
+SBA pass in lockstep when fed two `lose_life` calls before
+`apply_sbas_until_quiescent`, so the engines' construction shape
+matches CR's observation shape AND each other.
+
+**Pinning tests** (`tests_rust/test_winloss.py`):
+- `test_mutual_zero_via_sequential_lose_life_is_draw` —
+  Rust-side end-state pin (losers=[0,1], winner_id=None,
+  is_draw=True after two `lose_life` + `apply_sbas`).
+- `test_mutual_zero_cross_engine_end_state_matches_python` —
+  cross-engine pin: both engines produce identical losers /
+  winner_id / is_draw / is_over after two `lose_life(p, 20)` +
+  `apply_sbas_until_quiescent` (simultaneous variant — both
+  `has_lost` flip in one SBA pass).
+- `test_mutual_zero_cross_engine_sequential_variant_matches_python`
+  — cross-engine pin for the sequential variant: alive=1 SBA pass
+  first (sticky writes winner_id=1), then alive=0 SBA pass
+  (sticky preserved, is_draw flips). End-state on both engines:
+  losers=[0,1], winner_id=1, is_draw=True.
+
+The cross-engine `retaliation_selector` walk
+(`tests/test_parity_smoke.py::test_cross_engine_retaliation_selector_walks_clean`,
+260 decisions, bilateral combat) already exercised the SBA-gated
+outcome layer across an end-of-game transition; this G12 closure
+adds the synthetic-state focused pin so the contract has a
+direct two-line repro in addition to the integration walk.
+
+See invariant I44 below for the closure invariant.
 
 ### G13. `apply_sbas_until_quiescent` is a no-op after game-over
 
@@ -2984,6 +3029,75 @@ the forked branch.
   — cross-engine MT byte-for-byte parity under shared rng.
 - `tests/test_parity_smoke_edge_cases.py::test_cross_engine_search_library_for_basic_land_tapped_shared_rng_walks_clean_for_multiple_seeds`
   — multi-seed robustness companion.
+
+### I44. Mutual-KO end-state matches cross-engine after two `lose_life` calls + `apply_sbas_until_quiescent` (G12 closure)
+
+- **Pinned by**:
+  - `tests_rust/test_winloss.py::test_mutual_zero_via_sequential_lose_life_is_draw`
+    (Rust-side end-state pin),
+  - `tests_rust/test_winloss.py::test_mutual_zero_cross_engine_end_state_matches_python`
+    (cross-engine, simultaneous variant),
+  - `tests_rust/test_winloss.py::test_mutual_zero_cross_engine_sequential_variant_matches_python`
+    (cross-engine, sequential variant),
+  - `tests/test_parity_smoke.py::test_cross_engine_retaliation_selector_walks_clean`
+    (integration: 260-decision bilateral combat walk that already
+    exercised the SBA-gated outcome layer through end-of-game).
+
+- **Invariant (closes G12)**. With two `lose_life(p_i, n_i)` calls
+  sufficient to drive both players to `life <= 0` followed by
+  `apply_sbas_until_quiescent`, both engines reach the IDENTICAL
+  observable end-state:
+  - `sorted(losers()) == [0, 1]`
+  - `winner_id` is `None` (simultaneous variant — both `has_lost`
+    flip in one SBA pass, sticky-write gate skips per I34's
+    `(true, true)` branch) OR equal to the survivor's id
+    (sequential variant — first SBA pass observes alive=1,
+    sticky-writes the survivor; second SBA pass observes alive=0
+    but the I34 write-once gate preserves the sticky).
+  - `is_draw == True` (both `has_lost == True`).
+  - `is_over()` / `is_game_over()` == `True`.
+
+  The "which variant fires" branch is driven by how many `apply_sbas`
+  passes the caller interleaves between the two `lose_life` calls:
+  zero interleavings (both `lose_life` first, then SBA) -> sim
+  variant; one interleaved SBA pass (`lose_life(p0)` -> SBA ->
+  `lose_life(p1)` -> SBA) -> sequential variant. Both branches
+  are bit-equal across engines.
+
+- **Why the original substrate "gap" is closeable without a new
+  Effect**: neither engine has a single Effect that hits both
+  players atomically, but neither does REAL MTG: per CR 704.5a,
+  state-based actions are checked simultaneously when a player
+  would receive priority, so the simultaneous-loss observation
+  point is the SBA pass itself — not the Effect resolution. Two
+  back-to-back `lose_life(p, n)` writes to `players[i].life`
+  followed by ONE `apply_sbas_until_quiescent` puts the SBA-gated
+  outcome layer in the same shape as a hypothetical single
+  symmetric Effect would. The CE12 sticky-winner closure pinned
+  this observation-point invariant; the G12 closure makes it
+  load-bearing on the cross-engine surface.
+
+- **NOT a parity-substrate claim about Effects themselves.** If a
+  future EoE printing actually requires a symmetric two-player
+  `LoseLife` Effect (e.g. "each player loses N life" punisher),
+  that's a new Effect variant to add to both engines, with a new
+  G-entry tracking the substrate work. The Effect-level addition
+  doesn't change THIS invariant — both engines would still route
+  through the SAME `players[i].life` mutation + SBA pass,
+  preserving the end-state shape pinned here. G12 is closed at
+  the OBSERVABLE-END-STATE layer; the Effect-vocabulary layer is
+  a separate scope.
+
+- **Cross-reference**:
+  - **I34** — the CE12 sticky-winner closure that makes
+    `winner_id` / `is_over` / `is_draw` SBA-gated and pins the
+    simultaneous-vs-sequential bilateral-kill branches.
+  - **I7** — `apply_sbas_until_quiescent` is a no-op after
+    game-over (so calling SBA again after the mutual-KO
+    transition doesn't flip outcomes).
+  - **I19** — the foundational empty-library SBA-driven loss
+    transition; mutual-KO via empty libraries follows the same
+    apply_sbas-gated shape.
 
 ### ~~CE9.~~ CLOSED: Combat damage assignment walks battlefield in bf-ETB order via shared `bf_iter_etb_sorted` helper
 

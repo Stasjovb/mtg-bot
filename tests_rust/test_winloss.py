@@ -571,7 +571,13 @@ def test_mutual_zero_via_sequential_lose_life_is_draw(synthetic_state):
     -> winner = None, is_draw = True, losers = [0, 1], is_game_over =
     True. Parity-critical: the Python engine's draw-detection must
     land here too. This is the load-bearing mutual-KO contract for
-    the 1000-game parity smoke."""
+    the 1000-game parity smoke.
+
+    **G12 closure pin (2026-05-12).** This test is the Rust-side
+    half of the G12 closure invariant I44 — see
+    `docs/RUST_PARITY_GAPS.md` G12 CLOSED notice and invariant I44.
+    The cross-engine companion is
+    `test_mutual_zero_cross_engine_end_state_matches_python` below."""
     synthetic_state.lose_life(0, 20)
     synthetic_state.lose_life(1, 20)
     assert synthetic_state.get_life(0) == 0
@@ -583,6 +589,93 @@ def test_mutual_zero_via_sequential_lose_life_is_draw(synthetic_state):
     assert synthetic_state.is_draw is True
     assert synthetic_state.is_game_over() is True
     assert synthetic_state.is_over() is True
+
+
+def test_mutual_zero_cross_engine_end_state_matches_python(engine):
+    """**G12 closure cross-engine pin (invariant I44).**
+
+    Both engines reach the IDENTICAL mutual-KO end-state via two
+    sequential ``lose_life`` calls + ``apply_sbas_until_quiescent``:
+    ``losers=[0, 1]``, ``winner_id=None``, ``is_draw=True``,
+    ``is_over=True``.
+
+    The CE12 sticky-winner closure (invariant I34) made
+    ``winner_id`` / ``is_over`` / ``is_draw`` SBA-gated on both
+    engines. The simultaneous-bilateral-kill branch of I34 (both
+    ``has_lost`` flip in the SAME SBA pass -> sticky skip ->
+    ``winner_id`` stays None, ``is_draw`` flips True) is what
+    makes the construction-shape divergence flagged by G12 moot:
+    the observable end-state is parity-load-bearing and matches,
+    regardless of whether the two ``lose_life`` calls came from
+    one symmetric Effect or two sequential ones.
+
+    The sequential variant (alive=1 SBA pass between the two life
+    drops) is covered by ``test_ce12_sequential_kills_winner_id_stays_sticky``
+    + a Python-side companion in the 260-step retaliation_selector
+    walk; this test covers the simultaneous variant
+    (``has_lost`` flips in lockstep on a single pass)."""
+    from mtg_bot.game import GameState, Player
+    from mtg_bot.turn import state_based_actions
+
+    # Rust side
+    rust_state = engine.make_synthetic_state()
+    rust_state.lose_life(0, 20)
+    rust_state.lose_life(1, 20)
+    rust_state.apply_sbas_until_quiescent()
+    rust_losers = sorted(rust_state.losers())
+
+    # Python side — minimal GameState, two direct life mutations,
+    # then drive SBA to a fixed point.
+    py_state = GameState(players=[Player(id=0, life=20), Player(id=1, life=20)])
+    py_state.players[0].life -= 20
+    py_state.players[1].life -= 20
+    state_based_actions(py_state)
+    py_losers = sorted(p.id for p in py_state.players if p.has_lost)
+
+    # Load-bearing: every observable end-state field matches.
+    assert rust_losers == py_losers == [0, 1]
+    assert rust_state.winner_id == py_state.winner_id is None
+    assert rust_state.is_draw == py_state.is_draw is True
+    assert rust_state.is_over() == py_state.is_over() is True
+
+
+def test_mutual_zero_cross_engine_sequential_variant_matches_python(engine):
+    """**G12 closure cross-engine pin, sequential variant (I44).**
+
+    The sequential mutual-KO variant: one ``lose_life`` + SBA pass
+    drops p0 to has_lost (alive=1, sticky writes winner_id=1),
+    then a SECOND ``lose_life`` + SBA pass drops p1 to has_lost
+    (alive=0, sticky stays at 1 by write-once gate, is_draw flips).
+
+    The post-second-pass end-state on both engines is
+    ``losers=[0, 1]``, ``winner_id=1`` (sticky), ``is_draw=True``,
+    ``is_over=True``. This is the compound-shape branch of I34
+    that the original G12 entry called out as the "two
+    back-to-back ``lose_life`` calls" construction shape — and
+    the observable end-state is bit-equal across engines."""
+    from mtg_bot.game import GameState, Player
+    from mtg_bot.turn import state_based_actions
+
+    rust_state = engine.make_synthetic_state()
+    rust_state.lose_life(0, 20)
+    rust_state.apply_sbas_until_quiescent()
+    rust_state.lose_life(1, 20)
+    rust_state.apply_sbas_until_quiescent()
+
+    py_state = GameState(players=[Player(id=0, life=20), Player(id=1, life=20)])
+    py_state.players[0].life -= 20
+    state_based_actions(py_state)
+    py_state.players[1].life -= 20
+    state_based_actions(py_state)
+
+    rust_losers = sorted(rust_state.losers())
+    py_losers = sorted(p.id for p in py_state.players if p.has_lost)
+    assert rust_losers == py_losers == [0, 1]
+    # Sticky winner_id holds at the FIRST sole-survivor (player 1
+    # on this construction order) on both engines.
+    assert rust_state.winner_id == py_state.winner_id == 1
+    assert rust_state.is_draw == py_state.is_draw is True
+    assert rust_state.is_over() == py_state.is_over() is True
 
 
 def test_combat_damage_zeroes_defender_and_marks_loss(engine):
