@@ -1495,7 +1495,7 @@ def test_cross_engine_multi_turn_selector_turn_2_drawstep_fires(parity_smoke):
 
 
 def test_cross_engine_cast_bears_selector_walks_clean(parity_smoke):
-    """Drive 119 decisions on the slightly_bigger_deckspec with the
+    """Drive 150 decisions on the slightly_bigger_deckspec with the
     cast_bears_selector and assert every step walks clean.
 
     The selector activates 2 Forests for {G}{G} then casts Grizzly Bears
@@ -1511,15 +1511,14 @@ def test_cross_engine_cast_bears_selector_walks_clean(parity_smoke):
     this walk — including the cast at step 108 — produces an empty
     divergence list.
 
-    **Walk window**. We stop at N=119 (steps 0-118) rather than the
-    original-brief N=120 to keep this test focused on the cast-vs-
-    resolve closure. Step 119 surfaces the SEPARATE
-    ``CE-pure-derivation-is_over`` divergence (p1 draws from an empty
-    library on turn 10; Rust eagerly flips ``is_over``+``winner_id``
-    via I19, Python defers until SBAs run). That divergence is pinned
-    independently by ``test_parity_smoke_edge_cases.py``; this CE5
-    test does not exercise it. Future slices that close the eager-
-    loss timing gap can widen this walk.
+    Step 119's prior eager-``is_over`` divergence (Rust flipping on
+    empty-library draw while Python deferred until SBAs) is also
+    closed independently as CE10 (`feature/ce-pure-derivation-is-over`,
+    landed before this slice). The 150-decision walk now traverses
+    that boundary cleanly — the surface accessors are SBA-gated on
+    both sides, and neither engine fires SBAs between cross-engine
+    decision steps, so both stay stale together until the next slice
+    grows the harness an SBA hook.
     """
     from mtg_bot.parity.cross_engine import (
         cast_bears_selector,
@@ -1529,14 +1528,14 @@ def test_cross_engine_cast_bears_selector_walks_clean(parity_smoke):
 
     result = walk_both(
         slightly_bigger_deckspec(),
-        n_decisions=119,
+        n_decisions=150,
         decision_selector=cast_bears_selector,
     )
     assert result.error is None, (
         f"walk aborted at step {result.aborted_at}: {result.error}"
     )
     assert result.aborted_at is None
-    assert len(result.steps) == 119
+    assert len(result.steps) == 150
     for step in result.steps:
         assert step.divergences == [], (
             f"unexpected divergence at step {step.step_index}: "
