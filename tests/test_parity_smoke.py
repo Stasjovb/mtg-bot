@@ -2522,3 +2522,147 @@ def test_cross_engine_step_both_routes_declare_blockers_actor_to_defender(
     assert set(attacker.blocked_by) == {9, 11}, (
         f"expected blocked_by={{9, 11}}, got {attacker.blocked_by}"
     )
+
+
+# ---------------------------------------------------------------------------
+# Phase 5 follow-up #7: retaliation_selector — extend
+# multi_block_combat_selector to bilateral combat. Surfaces CE12.
+#
+# **CE12 — winner_id sticky-vs-derived divergence.** Bilateral combat
+# (both players attack on their respective turns) drives both players
+# to empty-library exhaustion + has_lost=True. Python's `winner_id`
+# is a SBA-WRITTEN sticky field (turn.py:1383-1393 — only written when
+# `state.winner_id is None`, never cleared). Rust's `winner_id` is a
+# LIVE-DERIVED getter (state_ops_winloss.rs:225-235 — returns
+# `Some(other_id)` only when exactly one player has has_lost; returns
+# None when both lost). When the state transitions from "exactly one
+# loser" to "both lost", Python keeps the prior winner sticky, Rust
+# switches to None.
+#
+# First diverging step on the retaliation_selector probe: index 226
+# (the END_OF_COMBAT step right after the COMBAT_DAMAGE branch's
+# apply_sbas pass commits p0's `attempted_draw_on_empty` to
+# `has_lost = True`, making both players losers).
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.xfail(
+    strict=True,
+    reason=(
+        "CE12: winner_id sticky-vs-derived divergence in BOTH-LOST "
+        "transition. Python writes winner_id once in SBA and never "
+        "clears; Rust re-derives live from has_lost flags and returns "
+        "None when both lost. See docs/RUST_PARITY_GAPS.md CE12."
+    ),
+)
+def test_cross_engine_retaliation_selector_surfaces_ce12_winner_id_sticky_vs_derived(
+    parity_smoke,
+):
+    """**CE12 surface-pin** (expected-fail until either Python clears
+    winner_id on alive=0, or Rust grows a sticky shadow field).
+    See docs/RUST_PARITY_GAPS.md CE12."""
+    from mtg_bot.parity.cross_engine import (
+        retaliation_selector,
+        multi_blocker_deckspec,
+        walk_both,
+    )
+
+    result = walk_both(
+        multi_blocker_deckspec(),
+        n_decisions=260,
+        decision_selector=retaliation_selector,
+    )
+    assert result.error is None, (
+        f"walk aborted at step {result.aborted_at}: {result.error}"
+    )
+
+    # Pre-CE12-surface: every step before the first divergence walks
+    # clean. The bilateral active-player swap, summoning-sick clear,
+    # symmetric multi-block combat, and life-total accounting all
+    # match between engines through step 225. This pins the
+    # CE12 surface to the SPECIFIC winner_id-accessor asymmetry —
+    # not a broader active-player-swap or symmetric-combat
+    # divergence.
+    for step in result.steps[:226]:
+        assert step.divergences == [], (
+            f"unexpected pre-CE12 divergence at step {step.step_index}: "
+            f"action={step.action_dict} "
+            f"{[(d.field, d.py_value, d.rust_value, d.known_gap) for d in step.divergences]}"
+        )
+
+    # CE12 surface: at step 226 the field-view's winner_id slot
+    # diverges — Python stays at 0 (sticky), Rust returns None
+    # (live-derived from both-has_lost). Pin the EXACT field +
+    # values so a future bystander divergence on a different
+    # field doesn't trick this test into a false-pass.
+    ce12_step = result.steps[226]
+    assert len(ce12_step.divergences) == 1, (
+        f"expected exactly 1 divergence at step 226 (CE12), got "
+        f"{[(d.field, d.py_value, d.rust_value) for d in ce12_step.divergences]}"
+    )
+    div = ce12_step.divergences[0]
+    assert div.field == "winner_id"
+    assert div.py_value == 0
+    assert div.rust_value is None
+    # FORCE STRICT XFAIL: this final raise documents that the test
+    # is intentionally expected-fail. Without it the assertions
+    # above all pass on the actual diverging shape and pytest would
+    # XPASS the strict xfail.
+    pytest.fail("CE12 surface-pin observed as expected (xfail strict)")
+
+
+def test_cross_engine_retaliation_selector_pre_ce12_walks_clean(
+    parity_smoke,
+):
+    """The pre-CE12 walk (steps 0-225) on
+    :func:`multi_blocker_deckspec` with
+    :func:`retaliation_selector` is parity-clean. Pins the contract
+    that CE12 is SPECIFICALLY a winner_id-sticky-vs-derived finding —
+    not a broader divergence in active-player swap, summoning-sick
+    clear, or symmetric combat.
+
+    Walks 226 decisions (one past the last clean step) and asserts
+    every step except the final one is divergence-free. The final
+    (step 225) is the COMBAT_DAMAGE branch's apply_sbas pass on
+    p0's second attack-turn; its post-state is still clean (both
+    engines: is_over=True, is_draw=False, winner_id=0). Step 226's
+    pass_priority is the first step where the (already-diverged)
+    Python-vs-Rust state surfaces through the field-view compare.
+
+    See CE12 in docs/RUST_PARITY_GAPS.md.
+    """
+    from mtg_bot.parity.cross_engine import (
+        retaliation_selector,
+        multi_blocker_deckspec,
+        walk_both,
+    )
+
+    result = walk_both(
+        multi_blocker_deckspec(),
+        n_decisions=226,
+        decision_selector=retaliation_selector,
+    )
+    assert result.error is None
+    for step in result.steps[:226]:
+        assert step.divergences == [], (
+            f"pre-CE12 divergence at step {step.step_index}: "
+            f"action={step.action_dict} "
+            f"{[(d.field, d.py_value, d.rust_value, d.known_gap) for d in step.divergences]}"
+        )
+
+    # Walk shape sanity: confirm BOTH players attacked at least once,
+    # which is the load-bearing change vs multi_block_combat_selector
+    # (which suppressed p1 attacks entirely).
+    declares = [
+        s for s in result.steps
+        if s.action_dict.get("kind") == "declare_attackers"
+    ]
+    p0_attacks = [s for s in declares if s.py_view["active_player"] == 0]
+    p1_attacks = [s for s in declares if s.py_view["active_player"] == 1]
+    assert len(p0_attacks) >= 1, (
+        f"expected at least 1 p0 attack, got {len(p0_attacks)}"
+    )
+    assert len(p1_attacks) >= 1, (
+        f"expected at least 1 p1 attack (the bilateral surface), "
+        f"got {len(p1_attacks)}"
+    )

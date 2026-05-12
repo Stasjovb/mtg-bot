@@ -1980,3 +1980,152 @@ def multi_block_combat_selector(py_state, rust_state, step_index: int) -> dict:
 
     # All non-multi-block branches delegate to combat_selector.
     return combat_selector(py_state, rust_state, step_index)
+
+
+# ---------------------------------------------------------------------------
+# Phase 5 follow-up #7: retaliation_selector — extend
+# multi_block_combat_selector to bilateral combat. After p0's turn-15
+# attack against p1's two-Bears multi-block, the next active-player
+# swap (turn 16, p1 active) should let p1 retaliate with their
+# surviving Bears, with p0 having no blockers (its sole attacker died
+# in the turn-15 combat damage exchange).
+#
+# Surfaces three cross-engine surfaces that multi_block_combat_selector
+# specifically suppressed:
+#
+#   1. **Active-player swap on turn transition.** CLEANUP -> UNTAP wrap
+#      flips active_player_idx and bumps turn_number. Both engines must
+#      compose this swap identically (I20 — advance_phase composition).
+#
+#   2. **Summoning-sick clear on UNTAP entry** for the new active
+#      player. p1's surviving Bears (id 11) was already unsick before
+#      this slice's window (cast turn 10, unsick turn 12), so the
+#      sick-clear on turn 16 UNTAP is a no-op for it. But the UNTAP
+#      sweep itself must fire on Rust's side — `advance_phase` into
+#      PHASE_UNTAP composes the untap-all-for-player + sick-clear
+#      hooks (RUST_PARITY_GAPS I20). If the two engines compose
+#      different orderings, p1's surviving Bears state diverges at
+#      the turn boundary.
+#
+#   3. **Symmetric combat through both engines.** Same
+#      declare_attackers / declare_blockers / combat_damage code
+#      paths, but with reversed attacker/blocker player indices. p1
+#      attacks with its surviving Bears (id 11); p0 has no blockers
+#      (Bears id 5 died in the turn-15 mutual KO), so empty-blockers
+#      walk fires symmetrically.
+#
+# **Selector contract change vs multi_block_combat_selector.**
+# The narrowing change #1 (`active_idx == 0` gate on
+# DECLARE_ATTACKERS) is REMOVED — both players may declare attackers
+# on their respective turns. The DECLARE_BLOCKERS branch's
+# reverse-bf-order multi-block emission stays (gated on
+# >=2 eligible blockers), but on p0's turn 16 defense the surviving
+# attacker count is 1 and p0 has 0 blockers, so the multi-block
+# branch falls through to combat_selector's empty-blockers branch.
+# ---------------------------------------------------------------------------
+
+
+def retaliation_selector(py_state, rust_state, step_index: int) -> dict:
+    """Cross-engine smoke selector that drives bilateral combat to
+    completion on :func:`multi_blocker_deckspec`.
+
+    Differs from :func:`multi_block_combat_selector` in exactly one
+    way: the DECLARE_ATTACKERS branch is no longer gated on
+    ``active_idx == 0``. Either player may declare attackers when
+    active. The DECLARE_BLOCKERS reverse-bf-order multi-block emission
+    is retained for the >=2-blockers case; the 0/1-blocker case falls
+    through to :func:`combat_selector`.
+
+    Expected walk shape on the :func:`multi_blocker_deckspec`:
+
+    * **Turn 15 (p0 active).** p0 attacks with its Bears (id 5). p1
+      multi-blocks reverse-bf with both Bears (ids 9, 11 declared as
+      [[11, 5], [9, 5]]). Post-CE9 closure, both engines walk damage
+      in bf order: id 9 takes the full 2 damage and dies; id 11
+      lives untouched. Blockers' 4 power deals 4 to the attacker;
+      attacker dies. End-of-turn 15 bf state: p0 has 0 creatures,
+      p1 has 1 creature (id 11, tapped from blocking).
+
+    * **Turn 16 (p1 active).** p1's UNTAP step untaps id 11. p1's
+      DECLARE_ATTACKERS step: id 11 is eligible (untapped, unsick,
+      Bears). The selector emits ``declare_attackers`` with [11].
+      p0's DECLARE_BLOCKERS step: p0 has 0 creatures (its Bears
+      died last turn) — the multi-block branch falls through to
+      :func:`combat_selector`'s empty-blockers branch, which emits
+      ``declare_blockers`` with empty assignments + side-channel
+      advance. COMBAT_DAMAGE fires: 2 damage to p0 (unblocked
+      Bears).
+
+    * **Life totals after turn 16.** p0: 20 - 2 = 18. p1: 20
+      (untouched — its blockers took damage but its life didn't).
+
+    Anything not matching the two narrowed branches falls back to
+    :func:`combat_selector`.
+
+    The selector is stateless — every branch is derived from
+    observable state on each call. Same shape as
+    :func:`multi_block_combat_selector`.
+    """
+    from mtg_bot.turn import Step
+
+    cur_step = py_state.step
+    active_idx = py_state.active_player_idx
+
+    if cur_step == Step.DECLARE_ATTACKERS:
+        # Bilateral attack: emit declare_attackers for ANY active
+        # player with eligible attackers. The gate that
+        # multi_block_combat_selector applies (``active_idx == 0``)
+        # is the load-bearing thing removed in this slice.
+        attackers = sorted(
+            int(o.id) for o in py_state.battlefield
+            if o.controller_id == active_idx
+            and "Creature" in o.printing.card_types
+            and not o.tapped
+            and not o.summoning_sick
+            and not getattr(o, "attacking", False)
+        )
+        if attackers:
+            return {
+                "kind": "declare_attackers",
+                "attacker_ids": attackers,
+            }
+        # No eligible attackers — fall through to cast_bears_selector
+        # via combat_selector's normal chain.
+        return cast_bears_selector(py_state, rust_state, step_index)
+
+    if cur_step == Step.DECLARE_BLOCKERS:
+        # Same multi-block logic as multi_block_combat_selector.
+        attackers_present = [
+            o for o in py_state.battlefield
+            if getattr(o, "attacking", False)
+        ]
+        if attackers_present:
+            attacker = attackers_present[0]
+            defender_idx = 1 - active_idx
+            eligible_blocker_objs = [
+                o for o in py_state.battlefield
+                if o.controller_id == defender_idx
+                and "Creature" in o.printing.card_types
+                and not o.tapped
+                and not o.summoning_sick
+            ]
+            if len(eligible_blocker_objs) >= 2:
+                eligible_ids_in_bf_order = [
+                    int(o.id) for o in eligible_blocker_objs
+                ]
+                declare_order = list(reversed(eligible_ids_in_bf_order))
+                assignments = [
+                    [bid, int(attacker.id)] for bid in declare_order
+                ]
+                advance_phase_python(py_state)
+                rust_state.advance_phase()
+                return {
+                    "kind": "declare_blockers",
+                    "assignments": assignments,
+                }
+        # 0 or 1 blockers: fall through to combat_selector's
+        # empty/single-blocker branch.
+
+    # All non-bilateral / non-multi-block branches delegate to
+    # combat_selector.
+    return combat_selector(py_state, rust_state, step_index)
