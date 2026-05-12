@@ -57,6 +57,44 @@ fn take_from_zone(zone: &mut Zone, obj_id: u32) -> Option<GameObject> {
     Some(v.remove(pos))
 }
 
+/// Round-29 EoE Void LTB tracking helper.
+///
+/// Called by every battlefield-exit site (the `move_object` primitive
+/// + every Effect arm that inlines its own `Arc::make_mut`-remove of
+/// a permanent from a battlefield Vec, see `state_ops_resolve.rs` +
+/// `state_ops_sba.rs`). Mirrors Python's
+/// `turn.move_off_battlefield` gate at `src/mtg_bot/turn.py:163-164`:
+///
+/// ```python
+/// if not obj.printing.is_land:
+///     state.permanent_left_battlefield_this_turn = True
+/// ```
+///
+/// The gate is per-object via the printing's `card_types` —
+/// non-lands flip the flag, lands skip silently. Unknown printing
+/// ids (registry miss) are treated as non-lands and flip the flag,
+/// matching the loud-fail-elsewhere / fail-open-here convention used
+/// by neighboring helpers (the synthetic-state harness never
+/// produces dangling printing_ids, but injected-card tests can).
+///
+/// Cheap and idempotent — `bool = true` is fine to set repeatedly.
+/// The reset site is `cleanup_step_for_active_player_inline` in
+/// `state_ops_steps.rs` (entry to PHASE_CLEANUP). See
+/// `docs/RUST_PARITY_GAPS.md` I29 for the full lifecycle invariant.
+pub(crate) fn mark_left_battlefield_if_nonland(
+    state: &mut GameState,
+    printing_id: u32,
+) {
+    let is_land = state
+        .registry
+        .lookup(printing_id)
+        .map(|p| p.card_types.iter().any(|t| t == "Land"))
+        .unwrap_or(false);
+    if !is_land {
+        state.permanent_left_battlefield_this_turn = true;
+    }
+}
+
 #[pymethods]
 impl GameState {
     /// Mirror of `battlefield_sizes` / `hand_sizes` for the graveyard
@@ -141,7 +179,18 @@ impl GameState {
     ) -> bool {
         // Find + remove from source zone (search both players, all five
         // tracked zones — round-14 added exile to the iteration).
+        //
+        // Round-29 EoE Void tracking: also remember whether the source
+        // zone was the battlefield. If it was AND the object isn't a
+        // land (CR 110.4 / EoE Void rule mirror: only nonland permanents
+        // leaving the battlefield enable Void), we flip
+        // `state.permanent_left_battlefield_this_turn = true` after the
+        // remove succeeds. Mirrors Python's
+        // `turn.move_off_battlefield` (turn.py:158-164) which gates the
+        // flag on `not obj.printing.is_land`. See
+        // `docs/RUST_PARITY_GAPS.md` I29 for the full invariant.
         let mut taken: Option<GameObject> = None;
+        let mut source_was_battlefield = false;
         for player in self.players.iter_mut() {
             if let Some(obj) = take_from_zone(&mut player.hand, obj_id) {
                 taken = Some(obj);
@@ -153,6 +202,7 @@ impl GameState {
             }
             if let Some(obj) = take_from_zone(&mut player.battlefield, obj_id) {
                 taken = Some(obj);
+                source_was_battlefield = true;
                 break;
             }
             if let Some(obj) = take_from_zone(&mut player.graveyard, obj_id) {
@@ -167,6 +217,13 @@ impl GameState {
         let Some(mut obj) = taken else {
             return false;
         };
+        // Round-29 Void LTB tracking: flag flips only on
+        // battlefield-exit of a nonland permanent. See
+        // `mark_left_battlefield_if_nonland` for the full
+        // commentary on the gate + reset lifecycle.
+        if source_was_battlefield {
+            mark_left_battlefield_if_nonland(self, obj.printing_id);
+        }
         obj.zone = target_zone;
         obj.controller = target_player;
         // CE4 closure: ETB-stamp the object only when it's entering

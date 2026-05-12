@@ -853,6 +853,28 @@ impl GameState {
     fn is_void_active(&self) -> bool {
         self.permanent_left_battlefield_this_turn || self.spell_warped_this_turn
     }
+
+    /// Read-only getter for the LTB half of the Void predicate.
+    /// Mirrors Python's field of the same name on `GameState`. True
+    /// iff a nonland permanent has left the battlefield this turn
+    /// (set inside `move_object` on battlefield-exit; reset on
+    /// entry to PHASE_CLEANUP via `advance_phase`). See
+    /// `docs/RUST_PARITY_GAPS.md` I29 for the full lifecycle.
+    #[getter]
+    fn permanent_left_battlefield_this_turn(&self) -> bool {
+        self.permanent_left_battlefield_this_turn
+    }
+
+    /// Read-only getter for the warp half of the Void predicate.
+    /// Mirrors Python's field of the same name on `GameState`. Set
+    /// when a spell is cast via its warp alt-cost (no Rust call
+    /// site flips this yet — warp casting is a future slice); reset
+    /// on entry to PHASE_CLEANUP via `advance_phase` alongside the
+    /// LTB half.
+    #[getter]
+    fn spell_warped_this_turn(&self) -> bool {
+        self.spell_warped_this_turn
+    }
 }
 
 fn make_object(id: u32, controller: u8, printing_id: u32) -> GameObject {

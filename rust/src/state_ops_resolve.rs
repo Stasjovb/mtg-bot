@@ -161,7 +161,8 @@ use crate::cards::{parse_printing, Effect, RegistryData, TargetFilter};
 use crate::state::{GameObject, GameState, PendingDecision, StackItem, UeotModifier};
 use crate::state_ops_decisions::auto_resolve_pending;
 use crate::state_ops_zones::{
-    ZONE_BATTLEFIELD, ZONE_EXILE, ZONE_GRAVEYARD, ZONE_HAND, ZONE_LIBRARY,
+    mark_left_battlefield_if_nonland, ZONE_BATTLEFIELD, ZONE_EXILE,
+    ZONE_GRAVEYARD, ZONE_HAND, ZONE_LIBRARY,
 };
 use pyo3::exceptions::{PyIndexError, PyValueError};
 use pyo3::prelude::*;
@@ -478,7 +479,11 @@ fn apply_effect(
                 obj.counters = 0;
                 obj.attached_to = None;
                 obj.exiled_with_source = None;
+                let printing_id = obj.printing_id;
                 Arc::make_mut(&mut state.players[defender].hand).push(obj);
+                // Round-29 Void LTB tracking: bounce is a battlefield-
+                // exit. Flag flips iff the bounced object is nonland.
+                mark_left_battlefield_if_nonland(state, printing_id);
             }
         },
         // Round-10: Mill. Caller's controller (= active_player, first-
@@ -634,7 +639,11 @@ fn apply_effect(
                 obj.counters = 0;
                 obj.attached_to = None;
                 obj.exiled_with_source = None;
+                let printing_id = obj.printing_id;
                 Arc::make_mut(&mut state.players[defender].exile).push(obj);
+                // Round-29 Void LTB tracking: exile is a battlefield-
+                // exit. Flag flips iff the exiled object is nonland.
+                mark_left_battlefield_if_nonland(state, printing_id);
             }
         },
         // Round-12: TapTarget. Twiddle-shaped: tap a target permanent.
@@ -796,7 +805,11 @@ fn apply_effect(
                 obj.counters = 0;
                 obj.attached_to = None;
                 obj.exiled_with_source = None;
+                let printing_id = obj.printing_id;
                 Arc::make_mut(&mut state.players[active].graveyard).push(obj);
+                // Round-29 Void LTB tracking: sacrifice is a
+                // battlefield-exit. Flag flips iff sac'd object is nonland.
+                mark_left_battlefield_if_nonland(state, printing_id);
             }
         },
         // Round-15: AddCounters. Routes through round-2's signed net-
@@ -1043,7 +1056,11 @@ fn apply_effect(
                 obj.counters = 0;
                 obj.attached_to = None;
                 obj.exiled_with_source = None;
+                let printing_id = obj.printing_id;
                 Arc::make_mut(&mut state.players[defender].graveyard).push(obj);
+                // Round-29 Void LTB tracking: destroy is a battlefield-
+                // exit. Flag flips iff destroyed object is nonland.
+                mark_left_battlefield_if_nonland(state, printing_id);
             }
         },
         // Round-17: DamageEachOpponent. CR 701.4 + AOE pattern — the
@@ -2334,6 +2351,7 @@ fn apply_effect(
         // (both players), honoring indestructible (CR 702.12) inline.
         Effect::DestroyAllCreatures => {
             let _ = source_obj_id; // implicit-target AOE; source not relevant
+            let mut any_destroyed = false;
             for pidx in 0..state.players.len() {
                 let destroyable_ids: Vec<u32> = state.players[pidx]
                     .battlefield
@@ -2352,6 +2370,7 @@ fn apply_effect(
                 if destroyable_ids.is_empty() {
                     continue;
                 }
+                any_destroyed = true;
                 let bf_mut: &mut Vec<GameObject> =
                     Arc::make_mut(&mut state.players[pidx].battlefield);
                 let mut destroyed: Vec<GameObject> =
@@ -2376,6 +2395,13 @@ fn apply_effect(
                     obj.exiled_with_source = None;
                     gy_mut.push(obj);
                 }
+            }
+            // Round-29 Void LTB: DestroyAllCreatures is filtered to
+            // Creature-typed permanents only, which are nonland by
+            // definition. If any creature was destroyed, a nonland
+            // permanent left the battlefield this turn.
+            if any_destroyed {
+                state.permanent_left_battlefield_this_turn = true;
             }
         }
         // DestroyTargetNonlandPermanent. CR 701.7 with non-land filter
@@ -2414,7 +2440,11 @@ fn apply_effect(
                 obj.counters = 0;
                 obj.attached_to = None;
                 obj.exiled_with_source = None;
+                let printing_id = obj.printing_id;
                 Arc::make_mut(&mut state.players[defender_idx].graveyard).push(obj);
+                // Round-29 Void LTB: nonland target by filter; helper
+                // re-checks via printing for defense-in-depth.
+                mark_left_battlefield_if_nonland(state, printing_id);
             }
         }
         // DestroyTargetArtifact. CR 701.7 with Artifact filter — Drill
@@ -2457,7 +2487,12 @@ fn apply_effect(
                 obj.counters = 0;
                 obj.attached_to = None;
                 obj.exiled_with_source = None;
+                let printing_id = obj.printing_id;
                 Arc::make_mut(&mut state.players[defender_idx].graveyard).push(obj);
+                // Round-29 Void LTB: artifact target may also be a
+                // land (treasure tokens / artifact lands). Helper gates
+                // on the printing.
+                mark_left_battlefield_if_nonland(state, printing_id);
             }
         }
         // DestroyTargetLand. CR 701.7 with Land filter — Dust Bowl /
@@ -2499,7 +2534,13 @@ fn apply_effect(
                 obj.counters = 0;
                 obj.attached_to = None;
                 obj.exiled_with_source = None;
+                let printing_id = obj.printing_id;
                 Arc::make_mut(&mut state.players[defender_idx].graveyard).push(obj);
+                // Round-29 Void LTB: target is a Land by filter, so the
+                // helper short-circuits to no-op — but call it anyway
+                // for uniformity (the gate lives in one place, every
+                // bf-exit site goes through the same code path).
+                mark_left_battlefield_if_nonland(state, printing_id);
             }
         }
         // DealDamageAnyTarget — Lightning Bolt's "any target" shape
@@ -3681,7 +3722,11 @@ fn apply_effect(
             obj.counters = 0;
             obj.attached_to = None;
             obj.exiled_with_source = None;
+            let printing_id = obj.printing_id;
             Arc::make_mut(&mut state.players[cidx].graveyard).push(obj);
+            // Round-29 Void LTB: optional artifact sac. Artifact target
+            // may also be a land — helper gates on printing.
+            mark_left_battlefield_if_nonland(state, printing_id);
             // Apply inner effect.
             apply_effect(state, inner_effect.as_ref(), source_obj_id)?;
         }
@@ -3750,9 +3795,13 @@ fn apply_effect(
             obj.counters = 0;
             obj.attached_to = None;
             obj.exiled_with_source = None;
+            let printing_id = obj.printing_id;
             let lib_mut: &mut Vec<GameObject> =
                 Arc::make_mut(&mut state.players[owner_idx].library);
             lib_mut.push(obj); // post-CE3: bottom = tail of Vec
+            // Round-29 Void LTB: target is Artifact OR Creature —
+            // either way the helper's nonland gate filters correctly.
+            mark_left_battlefield_if_nonland(state, printing_id);
         }
         // Round-28 EoE Equipment-ETB attach. Locate the source on
         // its controller's battlefield (Equipment ETB resolution
@@ -3906,7 +3955,12 @@ fn apply_effect(
             obj.counters = 0;
             obj.attached_to = None;
             obj.exiled_with_source = None;
+            let printing_id = obj.printing_id;
             Arc::make_mut(&mut state.players[tidx].graveyard).push(obj);
+            // Round-29 Void LTB: destroying an enchanted host. Host
+            // is any permanent (creature / artifact / enchantment /
+            // planeswalker / land); helper gates on the printing.
+            mark_left_battlefield_if_nonland(state, printing_id);
         }
         // Round-28 enchanted-permanent tap. Same `attached_to` lookup
         // as DestroyEnchantedPermanent but mutates the target's
@@ -3989,7 +4043,11 @@ fn apply_effect(
             obj.counters = 0;
             obj.attached_to = None;
             obj.exiled_with_source = Some(source_obj_id);
+            let printing_id = obj.printing_id;
             Arc::make_mut(&mut state.players[owner_idx].exile).push(obj);
+            // Round-29 Void LTB: until-leaves exile. Target is a
+            // Creature by filter → nonland → flag flips.
+            mark_left_battlefield_if_nonland(state, printing_id);
         }
         // Round-28 broader-filter "until leaves" exile. Same shape
         // as ExileTargetCreatureUntilSourceLeaves but filters on
@@ -4036,7 +4094,11 @@ fn apply_effect(
             obj.counters = 0;
             obj.attached_to = None;
             obj.exiled_with_source = Some(source_obj_id);
+            let printing_id = obj.printing_id;
             Arc::make_mut(&mut state.players[owner_idx].exile).push(obj);
+            // Round-29 Void LTB: exile-opps-nonland — target is nonland
+            // by filter. Helper short-circuits on lands defensively.
+            mark_left_battlefield_if_nonland(state, printing_id);
         }
         // Round-28 may-do decision wrapper. "You may [inner_effect]."
         // Pushes a PendingDecision::MayDoChoice onto the queue and
@@ -4723,7 +4785,11 @@ fn apply_effect(
             obj.counters = 0;
             obj.attached_to = None;
             obj.exiled_with_source = None;
+            let printing_id = obj.printing_id;
             Arc::make_mut(&mut state.players[opponent_idx].graveyard).push(obj);
+            // Round-29 Void LTB: each-opponent-sacs-creature — target
+            // is a Creature by filter → nonland → flag flips.
+            mark_left_battlefield_if_nonland(state, printing_id);
         }
         Effect::EachOpponentMillsCards { count } => {
             if *count < 0 {

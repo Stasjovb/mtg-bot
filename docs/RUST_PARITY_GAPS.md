@@ -1302,6 +1302,110 @@ The counter `state.next_etb_timestamp` and the per-object slot
 (transient bookkeeping; mirrors the `mulligan_count` /
 `consecutive_passes` precedent).
 
+### I29. `state.permanent_left_battlefield_this_turn` flips on every nonland battlefield-exit; resets on entry to PHASE_CLEANUP
+
+- **Pinned by**:
+  `tests_rust/test_void.py::test_move_object_creature_from_bf_to_graveyard_flips_flag`,
+  `test_move_object_land_from_bf_to_graveyard_does_not_flip`,
+  `test_move_object_from_hand_does_not_flip_flag`,
+  `test_move_object_to_exile_from_bf_flips_flag`,
+  `test_move_object_to_hand_from_bf_flips_flag`,
+  `test_move_object_flag_is_state_scoped_not_per_player`,
+  `test_move_object_missing_id_does_not_flip_flag`,
+  `test_resolve_destroy_target_creature_flips_void_flag`,
+  `test_resolve_exile_target_creature_flips_void_flag`,
+  `test_resolve_return_to_hand_creature_flips_void_flag`,
+  `test_resolve_sacrifice_creature_flips_void_flag`,
+  `test_resolve_destroy_target_land_does_not_flip_void_flag`,
+  `test_advance_phase_into_cleanup_resets_void_flags`,
+  `test_advance_phase_into_cleanup_resets_via_real_ltb_event`,
+  `test_void_flag_persists_across_non_cleanup_phase_changes`,
+  `test_conditional_if_void_resolves_then_branch_after_production_ltb`,
+  `test_conditional_if_void_resolves_else_branch_when_only_land_moved`.
+
+- **Invariant** (closes the LTB-tracking deferred work documented on
+  the round-29 `feature/rust-effect-conditional-if-void` slice). The
+  `Effect::ConditionalIfVoid` resolver reads `state.is_void_active`
+  (OR of `permanent_left_battlefield_this_turn` and
+  `spell_warped_this_turn`) at resolve time. Before this slice the
+  LTB half had no production setter sites — the predicate always
+  evaluated to false at runtime; tests injected the state via the
+  test-only `set_void_flags` pymethod. This slice wires the
+  production setters so `Effect::ConditionalIfVoid` is load-bearing
+  for real cards (Decode Transmissions, Hymn of the Faller, and the
+  other 4 EoE "Void —" rider cards).
+
+  **Setter sites** (all routed through the
+  `mark_left_battlefield_if_nonland(state, printing_id)` helper in
+  `rust/src/state_ops_zones.rs:60-95`, which gates on `not is_land`
+  per Python's `turn.move_off_battlefield:163-164`):
+  - `state_ops_zones.rs::GameState::move_object` — the chokepoint
+    primitive (Option A). Sets the flag when the source-zone search
+    succeeds against the battlefield Vec.
+  - `state_ops_resolve.rs` — every Effect arm that inlines its own
+    `Arc::make_mut`-remove of a permanent from a battlefield Vec:
+    `ReturnToHand`, `ExileTarget`, `Sacrifice`, `DestroyTarget`,
+    `DestroyTargetNonlandPermanent`, `DestroyTargetArtifact`,
+    `DestroyTargetLand`, `DestroyAllCreatures` (sets unconditionally
+    if any creature destroyed — creatures are nonland by definition),
+    `OptionalSacArtifactForEffect`, `OwnerPutsTargetArtifactOrCreatureOnTopOrBottomOfLibrary`,
+    `DestroyEnchantedPermanent`, `ExileTargetCreatureUntilSourceLeaves`,
+    `ExileOpponentsNonlandPermanentUntilLeaves`,
+    `EachOpponentSacrificesCreature`. Per-slice file-isolation has
+    kept these arms from being refactored onto the `move_object`
+    chokepoint (see the round-11 ExileTarget inline note); this
+    slice does NOT collapse them onto `move_object` — that's a
+    follow-up housekeeping pass. Instead every inline arm calls
+    `mark_left_battlefield_if_nonland` directly with the obj's
+    `printing_id` captured BEFORE the `obj` value moves into the
+    destination zone's push.
+  - `state_ops_sba.rs::apply_sbas` — the SBA destruction loop
+    (CR 704.5f zero-toughness / 704.5g lethal-damage) likewise
+    inlines its own battlefield removal and calls the helper.
+
+  **Reset site**: `state_ops_steps.rs::cleanup_step_for_active_player_inline`
+  (the inline mirror fired by `advance_phase` on entry to
+  PHASE_CLEANUP). Both flags reset unconditionally at the bottom of
+  the cleanup body (step (4) — after the hand-size discard, the
+  damage clear, and the UEOT-modifier drain). Mirrors Python's
+  `turn.run_cleanup_step:1094-1095`. Non-cleanup phase ticks leave
+  the flag alone — the flag's lifetime is the whole turn.
+
+  **State-scoped, not per-player**: the field lives on `GameState`,
+  not on `Player`. Mirrors Python's `GameState.permanent_left_battlefield_this_turn`
+  field declaration (`game.py:2619`). A nonland LTB triggered by
+  either player makes Void active for every consumer regardless of
+  controller — matches Python exactly.
+
+  **Consumer**: `Effect::ConditionalIfVoid` (resolved in
+  `state_ops_resolve.rs::apply_effect`'s ConditionalIfVoid arm)
+  reads the predicate via `state.is_void_active`. The `spell_warped_this_turn`
+  half (the other OR-input) is still substrate-only — no Rust call
+  site flips it; warp casting is a future slice (see the deferred
+  note on the ConditionalIfVoid worklog entry).
+
+  **Why a helper, not a single `move_object` chokepoint**: the
+  Rust resolver was built with per-slice file isolation, so every
+  Effect arm that moves a permanent off the battlefield inlines its
+  own `Arc::make_mut` pop instead of calling the `move_object`
+  pymethod (cross-file `#[pymethods]` private-fn friction —
+  documented in the round-11 ExileTarget docstring and the
+  state_ops_steps.rs module docstring's "Cross-slice composition"
+  section). A single chokepoint per Option A would only catch
+  callers that route through `move_object`; the inline arms would
+  bypass it. The helper free-fn pattern is the established
+  workaround for this class of cross-slice friction (compare
+  `untap_all_for_player_inline` / `draw_card_inline` /
+  `cleanup_step_for_active_player_inline` in `state_ops_steps.rs`).
+
+  **Cross-reference**: I19 documents a similar transient cause-flag
+  lifecycle (`Player.attempted_draw_on_empty` set by every draw
+  entrypoint, transitioned into the sticky `has_lost` by
+  `apply_sbas`). The Void-flag lifecycle is simpler — no
+  SBA-transition step; the flag is both the cause-signal and the
+  read surface, and the reset is a single cleanup-step write rather
+  than a sticky permanent flag.
+
 ### ~~CE5.~~ CLOSED: `cast_spell` cross-engine parity via harness-side `resolve_top_of_stack_python` mirror
 
 Closed by the CE5 closure slice (`feature/ce5-cast-resolve`).
