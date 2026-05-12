@@ -7362,3 +7362,430 @@ def test_cross_engine_counterspell_empty_stack_fizzle(parity_smoke):
         f"(move_source_post_resolve routes Instant to gy regardless "
         f"of effect outcome); got {rust_p1_gy_names}"
     )
+
+
+# ---------------------------------------------------------------------------
+# Phase 5 follow-up #20: flash tests. Pins the flash_selector walk +
+# the predicted CE19 legal_decisions emission divergence. See
+# cross_engine.flash_selector for the full design notes. Test names
+# follow the ``test_cross_engine_flash_`` prefix for parity with the
+# prior keyword probes' naming convention.
+#
+# **Test surface** is ``legal_decisions`` emission, not the walk_both
+# field-view tuple -- same shape CE17 used for the defender legal-
+# emission probe. Three fresh-state direct-call tests probe the
+# three priority-window scenarios; a pre-injection backbone walk
+# pins the upstream parity.
+# ---------------------------------------------------------------------------
+
+
+def _legal_actions_to_dicts(actions):
+    """Convert Python ``legal.legal_actions`` output (a list of
+    ``Action`` dataclasses) to the same dict shape Rust's
+    ``legal_decisions`` returns. Lets us probe Python's emission via
+    a uniform dict-list interface.
+
+    Only the kinds the flash probe cares about (``pass_priority``,
+    ``cast_spell``, ``play_land``) are mapped; other kinds round-trip
+    to ``{"kind": <classname-lowercase>}`` for inclusion in count
+    checks but aren't asserted on by field shape.
+    """
+    from mtg_bot.actions import CastSpell, PassPriority, PlayLand
+
+    out = []
+    for action in actions:
+        if isinstance(action, PassPriority):
+            out.append({"kind": "pass_priority"})
+        elif isinstance(action, CastSpell):
+            out.append({"kind": "cast_spell", "card_id": int(action.card_id)})
+        elif isinstance(action, PlayLand):
+            out.append({"kind": "play_land", "card_id": int(action.card_id)})
+        else:
+            out.append({"kind": type(action).__name__.lower()})
+    return out
+
+
+def test_cross_engine_flash_test_a_surfaces_ce19(parity_smoke):
+    """**Test A — predicted CE19**: legal_decisions for a flash
+    creature on p1's turn (active=p1) with p0 holding priority.
+
+    Setup: walk the retaliation_selector backbone to step 167 (turn
+    13 PRECOMBAT_MAIN, active=p0). Side-channel-advance phases on
+    BOTH engines through to turn 14 PRECOMBAT_MAIN (active=p1).
+    Set ``priority_player`` to 0 on both engines via Python's
+    dataclass attribute write + Rust's ``give_priority_to(0)``.
+    Inject Bear Flash (2/2 + flash keyword) into p0's hand on both
+    engines. Probe ``legal_decisions(0)`` / ``legal_actions(state, 0)``.
+
+    Expected divergence (CE19):
+
+    * **Python**: ``legal.py:217-301`` instant-speed CastSpell block
+      runs BEFORE the sorcery-timing gate at line 303. The filter
+      ``card.printing.is_instant or "flash" in card.printing.keywords``
+      accepts Bear Flash. Emission includes a ``CastSpell(bear_flash_id)``
+      dict.
+    * **Rust**: ``state_ops_legal.rs:759-764`` short-circuits the
+      entire CastSpell block on the sorcery-timing predicate
+      ``active == priority``. With active=1 and priority=0, sorcery
+      timing fails. Emission is just ``[PassPriority]``.
+
+    The assertion shape: Python's emission contains a ``cast_spell``
+    entry naming the flash card; Rust's emission does NOT. This is
+    the CE19 surface.
+    """
+    from mtg_bot.legal import legal_actions
+    from mtg_bot.parity.cross_engine import (
+        advance_phase_python,
+        build_matched_states,
+        flash_side_channel,
+        multi_blocker_deckspec,
+        retaliation_selector,
+        step_both,
+    )
+
+    py_state, rust_state = build_matched_states(multi_blocker_deckspec())
+    # Walk 167 backbone decisions to land at turn 13 PRECOMBAT_MAIN
+    # active=p0 (same setpoint the prior 11 keyword probes use).
+    for i in range(167):
+        action = retaliation_selector(py_state, rust_state, i)
+        step_both(py_state, rust_state, action)
+
+    # Side-channel advance phases until we reach turn 14
+    # PRECOMBAT_MAIN active=p1. From turn 13 PRECOMBAT_MAIN we need
+    # to walk: PRECOMBAT_MAIN -> BEGIN_COMBAT -> DECLARE_ATTACKERS
+    # -> DECLARE_BLOCKERS -> COMBAT_DAMAGE -> END_COMBAT ->
+    # POSTCOMBAT_MAIN -> END_STEP -> CLEANUP (wraps to UNTAP +
+    # turn++ + swap active) -> UPKEEP -> DRAW -> PRECOMBAT_MAIN. 11
+    # advance_phase calls.
+    from mtg_bot.turn import Step
+    safety_cap = 25
+    advances = 0
+    while not (
+        py_state.step == Step.PRECOMBAT_MAIN
+        and py_state.active_player_idx == 1
+    ):
+        advance_phase_python(py_state)
+        rust_state.advance_phase()
+        advances += 1
+        assert advances < safety_cap, (
+            f"failed to reach turn 14 PRECOMBAT_MAIN active=p1 within "
+            f"{safety_cap} advance_phase calls; current "
+            f"step={py_state.step.name} active={py_state.active_player_idx}"
+        )
+
+    # Sanity: both engines agree on the new phase / active player.
+    assert py_state.step == Step.PRECOMBAT_MAIN
+    assert py_state.active_player_idx == 1
+    assert rust_state.active_player_idx == 1, (
+        f"Rust active_player_idx={rust_state.active_player_idx} != Python's 1"
+    )
+
+    # Set priority to p0 on both engines (so we probe the off-active
+    # priority window where flash matters). Python: direct dataclass
+    # field write. Rust: ``give_priority_to`` primitive.
+    py_state.priority_player_idx = 0
+    rust_state.give_priority_to(0)
+
+    # Inject Bear Flash (2/2 + flash) into p0's hand on both engines.
+    py_id, rust_id = flash_side_channel(py_state, rust_state)
+
+    # ---- Probe Python's legal_actions(state, 0) ----
+    py_actions = _legal_actions_to_dicts(legal_actions(py_state, 0))
+    py_cast_card_ids = [
+        a["card_id"] for a in py_actions
+        if a["kind"] == "cast_spell"
+    ]
+    assert py_id in py_cast_card_ids, (
+        f"Python should emit CastSpell for the flash creature (Bear "
+        f"Flash id {py_id}) at p1's turn / p0 priority -- the "
+        f"instant-speed block at legal.py:217-301 accepts "
+        f"'flash' in keywords. Python emission cast_spell ids: "
+        f"{py_cast_card_ids}; full emission kinds: "
+        f"{[a['kind'] for a in py_actions]}"
+    )
+
+    # ---- Probe Rust's legal_decisions(0) ----
+    rust_actions = rust_state.legal_decisions(0)
+    rust_cast_card_ids = [
+        a["card_id"] for a in rust_actions
+        if a.get("kind") == "cast_spell"
+    ]
+    # CE19 SURFACE: Rust does NOT emit CastSpell for the flash
+    # creature because its CastSpell block is gated by sorcery
+    # timing (active == priority), and active=1 / priority=0 fails
+    # that gate. The flash keyword is never read by Rust's
+    # enumerator (see state_ops_legal.rs:60-73 module docstring's
+    # "First slice ignores the instant-speed block" note).
+    assert rust_id not in rust_cast_card_ids, (
+        f"CE19 REGRESSION (or unexpected closure): Rust emitted "
+        f"CastSpell for the flash creature (Bear Flash id {rust_id}) "
+        f"at p1's turn / p0 priority. Pre-CE19 closure Rust's "
+        f"legal_decisions short-circuits the CastSpell block on the "
+        f"sorcery-timing predicate (active=1 != priority=0 -> empty "
+        f"emission). Rust emission cast_spell ids: "
+        f"{rust_cast_card_ids}; full emission kinds: "
+        f"{[a.get('kind') for a in rust_actions]}. If Rust has "
+        f"learned to emit at the instant-speed window, flip this "
+        f"test to a strict-pass equality of Python and Rust emissions."
+    )
+
+    # CE19 shape pin: Rust's emission is essentially just
+    # PassPriority + any sorcery-timing-independent actions (none on
+    # this setup -- no DECLARE_ATTACKERS phase, no PlayLand emission
+    # because the priority gate at state_ops_legal.rs:550-552 bails
+    # for off-priority actors and the rest of the function gates on
+    # sorcery_timing which is false here).
+    rust_kinds = sorted(a.get("kind") for a in rust_actions)
+    assert rust_kinds == ["pass_priority"], (
+        f"CE19 pre-closure shape: Rust's legal_decisions for the "
+        f"non-active priority holder should emit ONLY pass_priority "
+        f"(active=1 != priority=0 fails sorcery_timing; the "
+        f"DECLARE_ATTACKERS / ActivateAbility / CastSpell / PlayLand "
+        f"branches are all sorcery-timing-gated). Got: {rust_kinds}"
+    )
+
+
+def test_cross_engine_flash_test_b_own_turn_main_phase_parity(parity_smoke):
+    """**Test B — parity-clean sanity**: legal_decisions for a flash
+    creature on p0's OWN turn (active=p0) at PRECOMBAT_MAIN, priority=p0.
+
+    Both engines should emit CastSpell for the flash creature:
+
+    * **Python**: instant-speed block at lines 217-301 accepts flash;
+      ALSO the sorcery-speed block at lines 365-445 skips it
+      (line 366: ``if "flash" in card.printing.keywords: continue``)
+      to avoid emitting twice. Net: one CastSpell emitted from the
+      instant-speed block.
+    * **Rust**: sorcery-timing predicate passes
+      (active=0 == priority=0, step=PRECOMBAT_MAIN, stack empty).
+      Sorcery-speed CastSpell block at lines 833-853 walks the hand
+      and emits a base CastSpell for every non-Land card. The flash
+      keyword is ignored (Rust doesn't honor an instant-speed
+      window), but at sorcery timing the cards still emit -- so the
+      flash creature gets a CastSpell emission regardless.
+
+    Both engines: emission contains ``CastSpell(bear_flash_id)``.
+    Parity-clean on the load-bearing axis (presence of the cast in
+    the emission list).
+    """
+    from mtg_bot.legal import legal_actions
+    from mtg_bot.parity.cross_engine import (
+        build_matched_states,
+        flash_side_channel,
+        multi_blocker_deckspec,
+        retaliation_selector,
+        step_both,
+    )
+
+    py_state, rust_state = build_matched_states(multi_blocker_deckspec())
+    for i in range(167):
+        action = retaliation_selector(py_state, rust_state, i)
+        step_both(py_state, rust_state, action)
+
+    # Sanity: we should be at turn 13 PRECOMBAT_MAIN active=p0 (the
+    # retaliation walk's setpoint matching the prior 11 keyword probes).
+    from mtg_bot.turn import Step
+    assert py_state.step == Step.PRECOMBAT_MAIN
+    assert py_state.active_player_idx == 0
+    # Priority is on p0 (the active player) at the start of their own
+    # main phase. Both engines maintain this invariant through the
+    # retaliation walk -- no priority swap happens in the backbone.
+    assert py_state.priority_player_idx == 0
+    assert rust_state.priority_player_idx == 0
+
+    py_id, rust_id = flash_side_channel(py_state, rust_state)
+
+    # ---- Python emission ----
+    py_actions = _legal_actions_to_dicts(legal_actions(py_state, 0))
+    py_cast_card_ids = [
+        a["card_id"] for a in py_actions
+        if a["kind"] == "cast_spell"
+    ]
+    assert py_id in py_cast_card_ids, (
+        f"Python should emit CastSpell for Bear Flash at own-turn main "
+        f"phase (instant-speed block accepts flash; sorcery-speed "
+        f"block skips it to dedupe). Got cast_spell ids: "
+        f"{py_cast_card_ids}"
+    )
+
+    # ---- Rust emission ----
+    rust_actions = rust_state.legal_decisions(0)
+    rust_cast_card_ids = [
+        a["card_id"] for a in rust_actions
+        if a.get("kind") == "cast_spell"
+    ]
+    assert rust_id in rust_cast_card_ids, (
+        f"Rust should emit CastSpell for Bear Flash at own-turn main "
+        f"phase (sorcery-timing gate passes; CastSpell block walks "
+        f"hand and emits for every non-Land). Got cast_spell ids: "
+        f"{rust_cast_card_ids}; full emission: "
+        f"{[a.get('kind') for a in rust_actions]}"
+    )
+
+
+def test_cross_engine_flash_test_c_vanilla_off_turn_negative_parity(parity_smoke):
+    """**Test C — parity-clean NEGATIVE**: legal_decisions for a
+    VANILLA creature (NO flash) on p1's turn with p0 priority.
+
+    Setup mirrors Test A's priority window (turn 14 PRECOMBAT_MAIN
+    active=p1, priority=p0) but injects a Vanilla Bear (no flash
+    keyword) into p0's hand instead of Bear Flash.
+
+    Expected: neither engine emits CastSpell for the vanilla
+    creature.
+
+    * **Python**: the instant-speed block's filter
+      ``card.printing.is_instant or "flash" in card.printing.keywords``
+      rejects the vanilla bear (False on both clauses). The
+      sorcery-speed block at lines 365-445 is gated by
+      ``_is_sorcery_timing`` at line 303, which fails
+      (active=1 != priority=0). Net: no CastSpell for vanilla bear.
+    * **Rust**: sorcery-timing predicate fails (active != priority).
+      Function returns at line 762-764 with just PassPriority. No
+      CastSpell for any card in hand, vanilla or otherwise.
+
+    Parity-clean. If this test DIVERGES, the bug is broader than a
+    flash-keyword gap -- it'd be an instant-speed-window-honored
+    mismatch on vanilla creatures, which would be a different and
+    larger CE.
+    """
+    from mtg_bot.legal import legal_actions
+    from mtg_bot.parity.cross_engine import (
+        advance_phase_python,
+        build_matched_states,
+        multi_blocker_deckspec,
+        retaliation_selector,
+        step_both,
+        vanilla_creature_side_channel,
+    )
+
+    py_state, rust_state = build_matched_states(multi_blocker_deckspec())
+    for i in range(167):
+        action = retaliation_selector(py_state, rust_state, i)
+        step_both(py_state, rust_state, action)
+
+    # Advance to turn 14 PRECOMBAT_MAIN active=p1, same as Test A.
+    from mtg_bot.turn import Step
+    safety_cap = 25
+    advances = 0
+    while not (
+        py_state.step == Step.PRECOMBAT_MAIN
+        and py_state.active_player_idx == 1
+    ):
+        advance_phase_python(py_state)
+        rust_state.advance_phase()
+        advances += 1
+        assert advances < safety_cap
+
+    py_state.priority_player_idx = 0
+    rust_state.give_priority_to(0)
+
+    py_id, rust_id = vanilla_creature_side_channel(py_state, rust_state)
+
+    # ---- Python emission ----
+    py_actions = _legal_actions_to_dicts(legal_actions(py_state, 0))
+    py_cast_card_ids = [
+        a["card_id"] for a in py_actions
+        if a["kind"] == "cast_spell"
+    ]
+    assert py_id not in py_cast_card_ids, (
+        f"Python should NOT emit CastSpell for the vanilla creature "
+        f"(Vanilla Bear id {py_id}) at p1's turn / p0 priority -- "
+        f"the instant-speed filter rejects (no flash + not instant), "
+        f"and the sorcery-speed block is gated by sorcery-timing "
+        f"(active != priority fails). Unexpected emission: "
+        f"cast_spell ids {py_cast_card_ids}; if this fails the "
+        f"Python instant-speed gate has changed."
+    )
+
+    # ---- Rust emission ----
+    rust_actions = rust_state.legal_decisions(0)
+    rust_cast_card_ids = [
+        a["card_id"] for a in rust_actions
+        if a.get("kind") == "cast_spell"
+    ]
+    assert rust_id not in rust_cast_card_ids, (
+        f"Rust should NOT emit CastSpell for the vanilla creature "
+        f"(Vanilla Bear id {rust_id}) at p1's turn / p0 priority -- "
+        f"sorcery-timing gate fails (active=1 != priority=0). "
+        f"Unexpected emission: cast_spell ids {rust_cast_card_ids}. "
+        f"If this fails the Rust enumerator has an instant-speed "
+        f"window that emits vanillas, which is a different / larger "
+        f"divergence than CE19."
+    )
+
+    # Parity-clean sanity: both engines emit only the priority-gate-
+    # independent actions on the off-active priority window. For the
+    # vanilla-bear setup this is exactly PassPriority on both sides.
+    rust_kinds = sorted(a.get("kind") for a in rust_actions)
+    py_kinds = sorted(a["kind"] for a in py_actions)
+    assert rust_kinds == ["pass_priority"], (
+        f"Rust off-priority emission should be ONLY pass_priority; "
+        f"got: {rust_kinds}"
+    )
+    assert py_kinds == ["pass_priority"], (
+        f"Python off-priority emission for vanilla-only hand at "
+        f"non-sorcery-timing window should be ONLY pass_priority; "
+        f"got: {py_kinds}"
+    )
+
+
+def test_cross_engine_flash_selector_pre_injection_walks_clean(parity_smoke):
+    """Pre-injection backbone steps 0-167 are parity-clean.
+
+    Same shape as the corresponding pre-injection test for every
+    prior probe -- confirms the retaliation_selector backbone the
+    flash injection rides on stays divergence-free up to the
+    injection step. Distinguishes between "the flash side-channel
+    itself introduces a divergence" and "something upstream of the
+    side-channel is divergent and the flash probe just inherits it".
+    """
+    from mtg_bot.parity.cross_engine import (
+        build_matched_states,
+        flash_selector,
+        multi_blocker_deckspec,
+        step_both,
+        walk_both,
+    )
+
+    # Walk 168 steps -- the flash injection fires at step 168
+    # itself, so steps 0..167 (168 steps total) are the
+    # backbone-only window.
+    result = walk_both(
+        multi_blocker_deckspec(),
+        n_decisions=168,
+        decision_selector=flash_selector,
+    )
+    assert result.error is None, (
+        f"pre-injection walk aborted at step {result.aborted_at}: "
+        f"{result.error}"
+    )
+    for step in result.steps:
+        assert step.divergences == [], (
+            f"pre-injection divergence at step {step.step_index}: "
+            f"action={step.action_dict} "
+            f"{[(d.field, d.py_value, d.rust_value, d.known_gap) for d in step.divergences]}"
+        )
+
+    # Sanity: the flash injection hasn't fired yet at end of step 167.
+    py_state, rust_state = build_matched_states(multi_blocker_deckspec())
+    for i in range(168):
+        action = flash_selector(py_state, rust_state, i)
+        step_both(py_state, rust_state, action)
+
+    in_any_zone = (
+        any(
+            o.printing.name == "Bear Flash"
+            for p in py_state.players
+            for zone in (p.hand, p.library, p.graveyard, p.exile)
+            for o in zone
+        )
+        or any(
+            o.printing.name == "Bear Flash"
+            for o in py_state.battlefield
+        )
+    )
+    assert not in_any_zone, (
+        "Bear Flash should not yet exist at end of step 167 -- "
+        "flash injection fires at step 168"
+    )
