@@ -243,6 +243,53 @@ means the trunk is built for the full input shape from day one — same
 eng cost as Step 1 alone for the trunk work (adding another token type
 is cheap), with one v-chain break instead of two.
 
+**Skeleton model (landed by `feature/step1-design`):**
+
+A working PyTorch skeleton lives at
+`src/mtg_bot/training/structured_model.py`. It implements all six
+resolved design decisions above:
+
+- 22-entry action-kind vocab + viewer-relative controller + shared
+  printing embedding + token-type-mixed input pipeline (§1).
+- Per-token `public_mask` scalar — the viewer-relative encoding is
+  filled in by the data pipeline (§2); the model just consumes the
+  mask.
+- Configurable `action_history_n` (default 32) (§3).
+- Cross-attention policy decoder over a fixed
+  `ACTION_VOCAB_SIZE × emb_dim` slot-embedding table (§6).
+- Learned `[CLS]` summary token + tanh-activated value head (§6).
+- Aux-head stub for hand-belief: a `(n_printings, emb_dim)` query
+  table that cross-attends to the trunk and emits per-printing
+  P(in-hand) logits. Disabled by default; Step 4 will turn it on.
+
+`forward(batch)` accepts a dict of `{token_type_ids, token_emb_ids,
+token_scalars, attention_mask, ...}` tensors (no engine dependency)
+and returns `{value, policy_logits, hand_belief_logits}`. Tests in
+`tests/training/test_structured_model.py` exercise random batched
+input, output-shape checks, gradient flow, and variable-length
+padding.
+
+**Implementation slices that build on this skeleton:**
+
+1. **Dataset-format conversion** (separate slice): rewrite
+   `data_gen.py` to emit per-token features instead of the 51-dim
+   flat featurizer. Builds per-viewer action streams (§2 redaction
+   rules), applies the §3 filter, packs to the skeleton's batch
+   format.
+2. **Training-loop integration** (separate slice): update
+   `trainer.py` to consume the new batch shape; same masked-CE +
+   value-MSE loss, just routed through `structured_model.forward`.
+3. **SHM eval server compat path** (separate slice): the existing
+   shared-tensor pool assumes fixed-dim per slot; allocate for the
+   max sequence length and propagate the attention mask. See the
+   "Implementation hurdles" bullet above.
+4. **Cache-key migration** (small slice): switch
+   `mcts._cache_key` to drop the slot_fp suffix once the new trunk
+   is wired in (§5).
+5. **Lineage / v-chain naming** (separate slice; explicitly
+   deferred): pick the version label once the trunk passes its
+   smoke and the v-chain break is imminent.
+
 ### Step 2 — Deck-belief model (offline, parallel)
 
 A standalone supervised model trained on 17lands data with no
@@ -331,48 +378,261 @@ believe is plausible. This is the ReBeL / DeepStack pattern in poker
 exactly: maintain a belief distribution over opponent's hidden range,
 sample from it during search.
 
-## Open design questions to nail down before Step 1 starts
+## Resolved design decisions
 
-1. **What is an "action"?** Decisions in MtG are heterogeneous: cast
-   spell, activate ability, pass priority, choose blocker assignment,
-   choose target, scry top of deck. Fixed-shape per-action token shape
-   needs to be decided up front. Probable shape:
-   `(action_kind, source_object_or_emb, target_object_or_emb,
-   mana_cost_paid, controller, turn, step)`. Open: whether to include
-   the value the bot estimated at the time the action was taken — a
-   strong signal, but requires capturing it at data-gen time.
+Each entry below pins a concrete recommendation grounded in the current
+codebase. The skeleton model at `src/mtg_bot/training/structured_model.py`
+implements these decisions; subsequent implementation slices build on
+it without re-litigating.
 
-2. **Action visibility per player.** Some actions are public (cast
-   spell, attack), some have private components (scry reveals the top
-   card only to the scryer). Featurize from each player's perspective —
-   their own private observations + the public history.
+### 1. What is an "action"? — fixed-shape per-action token
 
-3. **N's default and the within-turn density problem.** Last 32 raw
-   actions might cover only 2-3 turns in dense combat phases. Last 8
-   turns might be 100s of actions. Likely answer: filter to
-   strategically-relevant actions (cast / activate / attack / block /
-   discard) and drop raw priority passes from the input. Defaults
-   probably N=16-32 with the filter applied.
+The engine surfaces actions across three call sites:
 
-4. **PIMC integration design.** `mtg_bot iterate` already has a
-   `--use-belief-weighted` flag — survey what its current
-   implementation actually does (uniform? heuristic-weighted?) before
-   designing the new pipeline. The integration point for both
-   deck-belief (Step 2) and hand-belief (Step 4) is where PIMC picks
-   determinizations; replace the current sampler with importance
-   sampling from the learned beliefs.
+- **Priority actions** (`src/mtg_bot/actions.py`): the nine
+  `Action` subclasses — `PassPriority`, `PlayLand`, `CastSpell`,
+  `UnlockRoomHalf`, `ActivateAbility`, `ActivateStation`,
+  `TurnFaceUp`, `DeclareAttackers`, `DeclareBlockers`.
+- **Factored combat decisions** (`src/mtg_bot/search/combat_decisions.py`):
+  `AttackerDecision`, `BlockerDecision` — emitted per pending creature
+  when the adapter has `expose_combat_decisions=True`.
+- **Resolution decisions** (`src/mtg_bot/search/resolution_decisions.py`):
+  11 `Resolution*Decision` types — `Target`, `Discard`, `Mode`,
+  `Sacrifice`, `X`, `Surveil`, `ShockLife`, `CardFromLibrary`,
+  `CardFromOpponentHand`, `YesNo`, `DevourLands`. Surfaced
+  mid-resolution when `expose_resolution_decisions=True`.
 
-5. **Cache key for the new trunk.** The MCTS NN-eval cache assumes
-   fixed-shape input today. Likely answer: hash the canonical-state
-   representation (`canonical_state.py` already provides this) rather
-   than the raw input tensor.
+The action token is a fixed-length feature tuple, with each field
+rendered as a learned embedding (small int-coded categoricals) or
+a normalized scalar (continuous fields):
 
-6. **Pooling strategy for value / policy heads.** Attention output is
-   per-token; the value head needs a single scalar and the policy head
-   needs a fixed action-vocab distribution. Common pooling choices:
-   mean-pool over tokens, attention-pool with a learned query, take a
-   `[CLS]`-style summary token. Worth picking before training starts;
-   wrong choice can cap performance regardless of trunk quality.
+| Field | Encoding | Notes |
+|---|---|---|
+| `action_kind` | embedding | 22-entry vocab: 9 priority + 2 combat + 11 resolution kinds (see `ACTION_KIND_VOCAB` in `structured_model.py`). One-hot rejected (no parameter sharing). |
+| `controller` | embedding | 3-entry vocab: viewer, opponent, NA (resolution YesNo from a non-controller, etc.). Viewer-relative — same physical action gets a different controller code per viewer. |
+| `source_printing` | embedding | Looks up `printing.name` against the same printing-embedding table state tokens use. NA-token (id 0) for actions with no source (pass priority, mode/yes-no without a tied source). Shared table is the whole point of the goal section's "card-2-vec clusters." |
+| `target_printing` | embedding | Same printing-embedding table; NA when no target. Multi-target spells emit multiple tokens (one per target) — keeps the per-token shape fixed. |
+| `target_kind` | embedding | 6-entry vocab: none, player, permanent, stack-item, hand-card, exile-card. Disambiguates `target_printing`. |
+| `variant` | embedding | 8-entry vocab covering the cast-variant + room-half + ability-index axis (`normal` / `kicked` / `warp` / `cast_for_free` / `impending` / `room_half_0` / `room_half_1` / `private_choice`). Mirrors `action_encoding.py`'s slot taxonomy. |
+| `turn` | scalar | `(turn_at_action − current_turn)` clamped to `[−16, 0]` then divided by 16. Negative = how many turns ago. Recency rather than absolute turn — temporal gap matters, absolute turn shouldn't. |
+| `step` | embedding | 12-entry vocab matching `features.py`'s step-index 0..11. |
+| `mana_cost_paid` | scalar | CMC of mana actually spent on this action, divided by 10. Captures "this was a 4-drop" vs "this was a free trigger." 0 for non-cast actions. |
+| `public_mask` | scalar | 0/1 indicator (see §2). 1 = token fully observable to the viewer; 0 = some field has been redacted. Lets the trunk learn "I have less information about this event." |
+
+Total per-token raw shape: 7 embedding ids + 3 scalars = a
+`(seq_len, 7)` long tensor plus a `(seq_len, 3)` float tensor.
+Padded entries get a boolean attention mask (Step 1's input is
+variable-length).
+
+**Value-estimate-at-time-of-action: NOT included in v1.** Capturing
+the bot's MCTS posterior value at every priority moment would plumb
+through `data_gen.py` and bloat per-game logs. The skeleton reserves
+room for it as a future `aux_scalar` field; the data-pipeline slice
+can add it without an architectural change.
+
+### 2. Action visibility per player — viewer-relative tokens
+
+Per-viewer encoding rules. Each token is rendered TWICE during
+data-gen — once per seat — so the dataset has both perspectives of
+every state.
+
+- **Public actions** (cast spell, play land, attack, block, activate
+  visible ability, pass priority): all token fields identical across
+  viewers except `controller` (viewer-relative).
+- **Partially hidden actions** — these are the only ones where any
+  field differs between perspectives:
+  - **Scry / Surveil**: the chosen `mill` / leave-order is private
+    to the scryer. From the non-scryer's perspective, the token's
+    `variant` is masked to `private_choice` (vocab id 7) and
+    `public_mask=0`.
+  - **Discard chosen by controller** (Mind Rot–style "discard a
+    card"): the discarded `card_id` is public once it hits
+    graveyard, so the token has `target_printing` = that printing
+    in both perspectives. Same-turn "look but don't reveal"
+    effects (rare in EoE, none confirmed in pool today) would
+    mask `target_printing` to NA for non-actor viewers.
+  - **CardFromLibrary** (tutor): chosen card is private. From the
+    non-tutorer's perspective `target_printing` is masked to NA
+    and `public_mask=0`. The tutor itself stays observable
+    (source_printing + action_kind).
+  - **CardFromOpponentHand** (Thoughtseize-style): both players
+    see the picked card under current rules conventions. Token is
+    public to both viewers.
+- **Pass-priority tokens** are dropped at the filter step (§3), so
+  visibility doesn't matter for them.
+
+The data pipeline (a separate slice; see "Implementation slices"
+below) materializes per-viewer action streams from a single
+self-play game by maintaining one append-only token log per seat
+and writing per-token redaction at record time.
+
+### 3. N's default and the within-turn density problem — N=32 with filter
+
+**Filter rule (applied at data-gen, before tokens hit the model):**
+
+Keep only "strategically-relevant" actions:
+
+- `CastSpell` (all variants)
+- `PlayLand`
+- `UnlockRoomHalf`
+- `ActivateAbility` for non-mana abilities only (mana abilities
+  drop because the resulting tap is already visible via the next
+  state's structural tokens)
+- `ActivateStation`
+- `TurnFaceUp`
+- `DeclareAttackers` (recorded as one token per attacking creature
+  for fixed shape)
+- `DeclareBlockers` (per-pair token)
+- All `Resolution*Decision`s except `ResolutionXDecision` with
+  X=0 (no-op signal)
+
+**Drop**:
+
+- `PassPriority` — search artifact, especially in dense combat
+  phases; conveys zero strategic info.
+- Mana-ability `ActivateAbility` events — `effective_land_produces`
+  + next state's tap markings already encode this.
+
+**Default `N=32`.** With pass-priority dropped, a typical EoE game
+of ~12-14 turns produces ~120-180 strategic actions. N=32 covers
+~2-4 full turn cycles — long enough for "opponent had counter mana
+open and didn't act" to manifest, short enough that attention cost
+stays bounded. Configurable hyperparameter `action_history_n` on
+the model class.
+
+### 4. PIMC integration design — slot into BeliefWeightedDeterminizer
+
+Survey result. `--use-belief-weighted` (introduced in Phase 6 of the
+ISMCTS migration; see `docs/ISMCTS_MIGRATION.md`) currently:
+
+- Requires `--use-ismcts=True`; `NNPimcConfig.__post_init__`
+  (`src/mtg_bot/training/config.py:241`) rejects the combination
+  otherwise. PIMC has no shared search state to bias, so
+  belief-weighting is ISMCTS-only.
+- Constructs `BeliefWeightedDeterminizer`
+  (`src/mtg_bot/search/belief.py:110`) and wires it into ISMCTS as
+  the `determinize_fn` callback. The determinizer takes
+  `m_candidates=64` uniform draws (via `_uniform_determinize`),
+  scores each particle by the log-likelihood that the opponent
+  would have taken the historical actions under that hidden hand
+  (using the **current main NN's policy logits** as the
+  opponent-policy oracle), normalizes via log-sum-exp, and
+  resamples one particle for ISMCTS to use.
+- The prior `P(H)` is the uniform sampler. The likelihood
+  `P(a_t | s_t, H)` is the masked-softmax of the NN policy head at
+  each reconstructed historical priority moment.
+- Conditionally activates after `min_opponent_moments=3` opponent
+  priority moments have been observed; before that, falls back to
+  uniform.
+
+**Integration point for Step 2 (deck-belief) and Step 4 (hand-belief):**
+all substitution happens inside
+`BeliefWeightedDeterminizer.__call__`. Specifically:
+
+- **Step 2 (deck-belief)**: replace the `_uniform_determinize`
+  candidate-generation step with a deck-belief–weighted sampler.
+  The deck-belief model's output is a `(n_printings,)` posterior
+  over rest-of-deck; sampling K hidden-info hypotheses from it
+  (instead of uniform over the prior deck pool) is the importance-
+  sampling substitution. Same `m_candidates`, same downstream
+  scoring loop.
+- **Step 4 (hand-belief)**: replace the likelihood function. Today
+  it calls the main NN's policy head to score "would opponent have
+  done a_t under hand H?" The hand-belief head produces
+  `P(card_in_hand | trunk_z, deck_belief)` directly — at score
+  time, evaluate each candidate hand against this head's output and
+  use the resulting log-probabilities in place of the policy-head
+  reconstruction. Candidate generation stays whatever Step 2
+  picked.
+
+**Not implemented in this slice.** This section locks the integration
+point so the deck-belief and hand-belief slices know exactly where
+they're inserting. `BeliefWeightedDeterminizer.__init__` will grow
+optional `deck_belief_model` and `hand_belief_model` kwargs; absent
+them, current behavior is preserved.
+
+### 5. Cache key for the new trunk — reuse canonical_state_key
+
+Today's MCTS NN-eval cache key
+(`src/mtg_bot/search/mcts.py:1030 _cache_key`) is
+`(canonical_state_key(state), slot_fp)` where `slot_fp` is a tuple
+of the viewer's raw `card.id` orderings — a workaround for the
+positional_v1 action-encoding slot drift. For canonical_v2
+(the version Step 1 will be built against; already pinned in the
+Constraints section), the slot_fp tuple is redundant: v2
+canonicalizes zone positions before slot assignment, so two states
+sharing a `canonical_state_key` also share their slot mappings.
+
+**Decision.** Step 1's cache key is **just**
+`canonical_state_key(state)` — the 32-byte
+`blake2b(marshal.dumps(canonical_state_tuple))` digest from
+`src/mtg_bot/search/canonical_state.py:628`. The slot_fp suffix is
+dropped because:
+
+- The trunk's input is per-token from the engine state directly;
+  no fixed-shape featurization for `slot_fp` to defend.
+- Action encoding is canonical_v2 throughout Step 1 (Constraints
+  section locks this in).
+- The hash is already content-addressed (cryptographic blake2b),
+  bytes-suitable as a `dict` key, stable across canonically-
+  equivalent transpositions (the file's docstring contract).
+
+Verified `canonical_state_key` is appropriate for this use:
+accepts either an `MtgGameStateAdapter` or a raw `GameState`
+(lines 637-644 of the source docstring), returns 32 bytes, and
+its hashing rules cover the entire forward-relevant state (zones,
+stack, continuous-effects registry, per-player aggregates,
+mid-resolution context). The "equivalent states hash equal,
+inequivalent states hash differently with cryptographic confidence"
+invariant is exactly what the new trunk needs.
+
+### 6. Pooling strategy — learned [CLS] summary token + per-token policy decoding
+
+**Value head**: prepend a learned `[CLS]` token (one trainable
+vector, shape `(emb_dim,)`) to the input sequence. Attention layers
+let it attend to and pool from every state/action token. The CLS
+output position after the trunk is the pooled summary; the value
+head is a 2-layer MLP from `emb_dim` → 1 (tanh-activated for
+`[−1, +1]`).
+
+Rationale vs. alternatives:
+
+- **Mean-pool**: simple but loses positional weight. A do-or-die
+  counterspell on the stack matters more than a back-rank token;
+  mean-pool dilutes both equally.
+- **Attention-pool with a fixed learned query**: equivalent to CLS
+  in expressiveness but adds a separate pooling layer with its own
+  attention; CLS reuses the trunk's attention machinery for free.
+- **CLS** (chosen): zero extra layers, learns its own attention
+  pattern across trunk layers, and is the standard pattern in BERT
+  / ViT / AlphaStar — well-understood failure modes.
+
+**Policy head**: NOT a flat MLP from the CLS pool. Instead a
+**cross-attention decoder**:
+
+- Construct a fixed `(ACTION_VOCAB_SIZE, emb_dim)` learned
+  embedding table — one slot per action-vocab index (517 today).
+- Each action-vocab slot's embedding queries the per-token trunk
+  output via cross-attention.
+- A small MLP turns the attended representation into a single
+  logit per slot.
+- Output: `(batch, ACTION_VOCAB_SIZE)` logits, ready for the same
+  masked log-softmax + cross-entropy loss the current trainer
+  uses.
+
+Rationale: the action vocab is positional in the viewer's zones
+(LAND_FROM_HAND[pos=2] = "the 3rd hand card"). Letting the slot
+embedding attend back to per-token state representations means slot
+[LAND_FROM_HAND, pos=2] can directly read the hand[2] token instead
+of reconstructing it from the pooled summary. This is the "policy
+decoder attends to per-token representations" pattern called out
+in the task description; the literature precedent is the Pointer
+Network / AlphaStar's auto-regressive action head, simplified to a
+single decoding step because the vocab is small.
+
+Aux-head stub (hand-belief, Step 4) follows the same pattern: a
+learned `(n_printings, emb_dim)` query table cross-attends to the
+trunk and emits per-printing P(in hand) logits.
 
 ## Validation strategy per step
 
