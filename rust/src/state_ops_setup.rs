@@ -328,5 +328,6 @@ pub fn make_state(
         pending_decisions: Vec::new(),
         next_etb_timestamp: 0,
         resolving_combat_damage_amount: 0,
+        winner_id_sticky: None,
     })
 }

@@ -224,6 +224,31 @@ impl GameState {
                 p.has_lost = true;
             }
         }
+        // CE12 closure (I34): write-once sticky winner_id. The FIRST
+        // time the SBA pass observes "exactly one player has has_lost
+        // = True" AND `winner_id_sticky` is still None, write the
+        // OTHER player's id into `winner_id_sticky`. Mirrors Python's
+        // turn.py:1387-1393 — the SBA writer gates the assignment on
+        // `state.winner_id is None`, so once written the field is
+        // STICKY. The subsequent alive=1 -> alive=0 transition (the
+        // "bilateral KO after a sole-survivor moment" shape) only
+        // writes `is_draw = True`; it never CLEARS the already-
+        // written `winner_id`. See I34 in docs/RUST_PARITY_GAPS.md.
+        if self.winner_id_sticky.is_none() {
+            let p0_lost = self.players[0].has_lost;
+            let p1_lost = self.players[1].has_lost;
+            match (p0_lost, p1_lost) {
+                (false, true) => self.winner_id_sticky = Some(self.players[0].id),
+                (true, false) => self.winner_id_sticky = Some(self.players[1].id),
+                // (false, false): game ongoing — nothing to write.
+                // (true, true):  bilateral simultaneous loss with no
+                //                prior sole-survivor moment — Python's
+                //                writer sees `len(alive) == 0` first
+                //                and only sets is_draw, leaving
+                //                winner_id at None. Match that here.
+                _ => {}
+            }
+        }
         let victims = self.collect_sba_victims();
         let count = victims.len();
         for (controller, obj_id) in victims {
