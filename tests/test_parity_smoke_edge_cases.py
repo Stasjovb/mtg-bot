@@ -65,30 +65,29 @@ pytestmark = pytest.mark.skipif(
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "NOVEL Phase-5 edge-case finding (CE-pure-derivation-is_over): "
-        "Rust's is_over/winner_id are pure-derivation over the loss-cause "
-        "fields (has_lost || attempted_draw_on_empty || life<=0) and flip "
-        "immediately when draw_card hits an empty library; Python's "
-        "is_over reads winner_id which is only written by an SBA pass. "
-        "The harness's walk does NOT fire SBAs, so the two engines "
-        "diverge on is_over/winner_id while the underlying cause flags "
-        "agree. Pinned strict-xfail until either (a) Python grows pure-"
-        "derivation is_over, (b) the harness fires SBAs between steps, "
-        "or (c) the smoke marks is_over/winner_id as known-gap fields."
-    ),
-)
 def test_cross_engine_empty_library_side_channel_draw_walks_clean():
     """Drive ``play_a_land_selector`` for 2 decisions on a deck whose
     libraries are EMPTY at game start. The selector's step-0 side-channel
-    ``draw_card`` fires on both engines; Rust sets
-    ``attempted_draw_on_empty=True`` and its pure-derivation ``is_over``
-    flips to True with ``winner_id=1``, while Python's ``has_lost=True``
-    on p0 leaves ``is_over=False`` / ``winner_id=None`` (no SBA in this
-    harness). The walk should be clean if both engines derived is_over
-    identically — which they don't, hence the strict-xfail.
+    ``draw_card`` fires on both engines; both engines now agree on the
+    surface ``is_over`` / ``winner_id`` reading because both are SBA-gated.
+
+    **Post-CE10 closure (CE-pure-derivation-is_over, 2026-05-11):**
+    Rust's surface ``is_over`` / ``winner_id`` getters (in
+    ``state_ops_winloss.rs``) were changed from the eager OR'd-three
+    predicate (``has_lost || attempted_draw_on_empty || life<=0`` on
+    any player) to SBA-gated (``has_lost`` only — the sticky flag
+    written by ``apply_sbas``). This matches Python's surface, where
+    ``GameState.is_over`` / ``winner_id`` / ``is_draw`` are written
+    only by ``apply_state_based_actions``. The eager pure-derivation
+    is still available through ``losers()`` / ``winner()`` /
+    ``is_game_over()`` for callers that need pre-SBA loss
+    observability (e.g. the SBA loop itself).
+
+    Post-closure both engines walk parity-clean on this harness: the
+    side-channel ``draw_card`` flips ``attempted_draw_on_empty`` on
+    Rust and ``has_lost`` on Python, but neither side's surface
+    ``is_over`` flips until an SBA pass commits the loss — and the
+    harness does NOT fire SBAs between steps.
     """
     from mtg_bot.parity.cross_engine import (
         CardDef,
@@ -120,19 +119,28 @@ def test_cross_engine_empty_library_side_channel_draw_walks_clean():
         )
 
 
-def test_cross_engine_empty_library_side_channel_draw_surfaces_is_over_divergence():
-    """Companion symptom-present pin for the strict-xfail above.
+def test_cross_engine_empty_library_side_channel_draw_post_closure_both_engines_stay_stale():
+    """Post-CE10 closure (CE-pure-derivation-is_over) inverted-shape
+    pin. Pre-closure, this test pinned the SHAPE of the divergence
+    (Rust True/1 vs Python False/None on is_over/winner_id). Post-
+    closure, both engines stay stale on the surface getters because
+    both are SBA-gated and the harness does not fire SBAs.
 
-    Asserts the SHAPE of the novel finding: an empty-library deck +
-    play_a_land_selector surfaces ``is_over`` and ``winner_id`` as the
-    diverging fields at step 0 (Rust True/1 vs Python False/None),
-    while the underlying loss-cause snapshot (libraries, hands) stays
-    consistent between engines.
+    Asserts the post-closure shape:
+      * The is_over / winner_id fields do NOT diverge at step 0.
+      * BOTH engines report is_over=False, winner_id=None — surface
+        is stale on both sides because no SBA fired.
+      * The underlying loss-cause flag (Python: ``p0.has_lost``,
+        Rust: ``p0.attempted_draw_on_empty``) is still set eagerly
+        on both sides; the surface accessors just don't observe it
+        until SBA commits.
 
-    When the CE-pure-derivation-is_over divergence closes:
-      * The strict-xfail above flips to xpass; remove its marker.
-      * This symptom test starts FAILING because the values would agree.
-        Remove / invert as part of the closure pair contract.
+    If this test ever fails post-closure, the most likely cause is
+    that Rust's surface ``is_over`` / ``winner_id`` regressed to the
+    eager OR'd-three predicate. Mirror invariant pin tests in
+    ``tests_rust/test_winloss.py``:
+      - ``test_winner_id_pre_sba_stale_matches_python_semantics``
+      - ``test_is_over_winner_id_eager_for_empty_library_draw_via_pure_derivation``
     """
     from mtg_bot.parity.cross_engine import (
         CardDef,
@@ -155,19 +163,20 @@ def test_cross_engine_empty_library_side_channel_draw_surfaces_is_over_divergenc
         deck, n_decisions=2, decision_selector=play_a_land_selector
     )
     assert result.error is None
-    # First step's divergences: exactly is_over + winner_id.
+    # First step's divergences: is_over + winner_id MUST NOT appear.
     step_0 = result.steps[0]
     fields = {d.field for d in step_0.divergences}
-    assert fields == {"is_over", "winner_id"}, (
-        f"expected exactly is_over+winner_id; got {sorted(fields)}"
+    assert "is_over" not in fields, (
+        f"post-CE10, is_over should agree (both stale); got fields={sorted(fields)}"
     )
-    by_field = {d.field: d for d in step_0.divergences}
-    # Rust: pure-derivation flips True/1 immediately.
-    assert by_field["is_over"].rust_value is True
-    assert by_field["winner_id"].rust_value == 1
-    # Python: stale until SBA fires.
-    assert by_field["is_over"].py_value is False
-    assert by_field["winner_id"].py_value is None
+    assert "winner_id" not in fields, (
+        f"post-CE10, winner_id should agree (both stale); got fields={sorted(fields)}"
+    )
+    # Both engines report stale surface (no SBA fired in this harness).
+    assert step_0.py_view["is_over"] is False
+    assert step_0.rust_view["is_over"] is False
+    assert step_0.py_view.get("winner_id") is None
+    assert step_0.rust_view.get("winner_id") is None
 
 
 # ---------------------------------------------------------------------------
@@ -296,45 +305,32 @@ def test_cross_engine_asymmetric_deck_sizes_walk_clean():
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "Inline-asymmetry sub-finding CLOSED "
-        "(feature/draw-card-inline-flag): the Rust auto-draw inline "
-        "path (state_ops_steps.rs::draw_card_inline) now flags "
-        "attempted_draw_on_empty on empty pop, mirroring the "
-        "pymethod draw_card / Effect::DrawCards arms. The closure "
-        "surfaces the SAME CE-pure-derivation-is_over divergence "
-        "pinned by the strict-xfail above "
-        "(test_cross_engine_empty_library_side_channel_draw_walks_clean) "
-        "— at step 39 once p0 decks out via the DRAW step, Rust's "
-        "is_over flips eagerly to True (winner_id=0) while Python's "
-        "is_over stays False because no SBA writes winner_id in this "
-        "harness. Xfailed strict until either (a) Python grows pure-"
-        "derivation is_over, (b) the harness fires SBAs between "
-        "steps, or (c) the smoke marks is_over/winner_id as known-"
-        "gap fields."
-    ),
-)
 def test_cross_engine_single_card_libraries_multi_turn_walks_clean():
     """Both players start with 1-card libraries. Drive 100 decisions of
     multi_turn_selector (multiple full turns, with DRAW steps on turn 2+
     that consume the single card and then attempt empty-library draws
     on turn 3+).
 
-    Post-closure status (feature/draw-card-inline-flag, 2026-05-11):
-    the inline-asymmetry sub-finding from the round-up docstring above
-    is CLOSED — Rust's auto-draw inline path now flips
-    attempted_draw_on_empty on empty pop, so the deck-out DOES surface
-    in the advance-phase walk path on Rust side. The closure surfaces
-    the SAME CE-pure-derivation-is_over divergence already pinned by
-    test_cross_engine_empty_library_side_channel_draw_walks_clean
-    above: Rust's is_over/winner_id flip eagerly (turn-3 auto-draw on
-    empty library => attempted_draw_on_empty=True => is_over=True via
-    the OR'd loss-cause predicate), while Python's is_over reads
-    winner_id which only an SBA pass writes. Hence the strict-xfail.
-    The is_over derivation divergence remains the open finding to
-    chase next.
+    **Post-CE10 closure (CE-pure-derivation-is_over, 2026-05-11):**
+    The two engines now agree on the surface ``is_over`` / ``winner_id``
+    reading because both are SBA-gated. The chain is:
+
+      1. The earlier ``feature/draw-card-inline-flag`` closure aligned
+         the cause-flag side: Rust's auto-draw inline path
+         (``state_ops_steps.rs::draw_card_inline``) flips
+         ``attempted_draw_on_empty`` on empty pop, mirroring the
+         pymethod / ``Effect::DrawCards`` arms.
+      2. This (CE10) closure aligned the surface side: Rust's
+         ``is_over`` / ``winner_id`` getters no longer read the eager
+         OR'd-three predicate; they read ``has_lost`` only, matching
+         Python's SBA-written fields.
+
+    With both aligned, the walk stays parity-clean across all 100
+    steps. The deck-out cause-flag fires on both engines (Python:
+    ``p.has_lost = True`` in ``turn.draw_card``; Rust:
+    ``p.attempted_draw_on_empty = true`` in ``draw_card_inline``),
+    but neither side's surface ``is_over`` flips because the harness
+    doesn't fire SBAs.
     """
     from mtg_bot.parity.cross_engine import (
         CardDef,
