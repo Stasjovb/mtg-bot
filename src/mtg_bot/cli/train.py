@@ -24,14 +24,18 @@ or via the eval / capture / iterate subcommands by version label.
 from __future__ import annotations
 
 import argparse
+import re
 import subprocess
 import sys
 import tempfile
 import time
 from pathlib import Path
+from typing import Optional
 
 import numpy as np
 
+from mtg_bot.cli.runs import client as _runs_client
+from mtg_bot.cli.runs import lifecycle as _lifecycle
 from mtg_bot.features import FEATURE_DIM
 from mtg_bot.search.nn_evaluator import (
     ARCHITECTURE_SHARED,
@@ -42,6 +46,23 @@ from mtg_bot.training import (
     auto_device, load_all_datasets, train_value_network,
 )
 from mtg_bot.training.registry import ModelMetadata, Registry
+
+
+# Regex matching the iterate cycle run_id format. When ``mtg_bot
+# iterate`` invokes train via subprocess it threads the cycle_id
+# into ``--notes`` so the resulting training run can be linked back
+# to its parent iterate cycle row.
+_ITER_CYCLE_RE = re.compile(r"\b(iter_\d+_cycle)\b")
+
+
+def _parent_run_id_from_notes(notes: str) -> Optional[str]:
+    """Best-effort extract an iterate cycle_id from a ``--notes``
+    string. Returns ``None`` when nothing matches — standalone
+    ``mtg_bot train`` invocations have no parent."""
+    if not notes:
+        return None
+    match = _ITER_CYCLE_RE.search(notes)
+    return match.group(1) if match else None
 
 
 def _downsample_one_legal_rows(
@@ -127,11 +148,13 @@ def _git_commit() -> str | None:
     return None
 
 
-def main(argv=None) -> None:  # pragma: no cover
+def main(argv=None) -> None:
     # Argparse + training-driver body; previously script-level code
     # under ``scripts/train_nn.py``. The ``_downsample_one_legal_rows``
     # helper is unit-tested directly; this body is mostly argparse
-    # plumbing + a single ``train_value_network(...)`` dispatch.
+    # plumbing + a single ``train_value_network(...)`` dispatch. The
+    # lifecycle wiring (start_run / push_progress / finish_run) is
+    # pinned by ``tests/cli/test_train_runs_db.py``.
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
         "--data-dir", type=Path, required=True,
@@ -452,9 +475,91 @@ def main(argv=None) -> None:  # pragma: no cover
     if progress_path is not None:
         print(f"# Progress JSON: {progress_path}")
 
+    # Phase 1 dual-write: alongside the existing JSON progress
+    # emission, push start_run / per-epoch progress + events /
+    # finish_run into the SQLite run DB. Lifecycle helpers are no-ops
+    # when neither MTG_BOT_RUN_DB_PATH nor MTG_BOT_RUN_DB_URL is set,
+    # so this stays additive on a fresh clone.
+    train_config = {
+        "kind": "training",
+        "data_dir": str(args.data_dir),
+        "registry_root": str(args.registry_root),
+        "epochs": args.epochs,
+        "batch_size": args.batch_size,
+        "lr": args.lr,
+        "val_split": args.val_split,
+        "device": device,
+        "seed": args.seed,
+        "notes": args.notes,
+        "compile_model": args.compile_model,
+        "hidden_sizes": list(hidden_sizes),
+        "policy_hidden_sizes": (
+            list(policy_hidden_sizes)
+            if policy_hidden_sizes is not None else None
+        ),
+        "architecture": args.architecture,
+        "policy_loss_weight": args.policy_loss_weight,
+        "early_stop_patience": args.early_stop_patience,
+        "window_recent": args.window_recent,
+        "one_legal_keep_frac": args.one_legal_keep_frac,
+        "action_encoding_version": args.action_encoding_version,
+        "progress_path": (
+            str(progress_path) if progress_path is not None else None
+        ),
+        "has_any_policy": has_any_policy,
+        "n_samples": int(features.shape[0]),
+        "n_policy_rows": n_policy_rows,
+    }
+    parent_run_id = _parent_run_id_from_notes(args.notes)
+
+    def _on_epoch(payload: dict) -> None:
+        """Per-epoch sink: push a ``run_progress`` upsert keyed by
+        the run_id (no shard_label = aggregate row) and append one
+        ``epoch_completed`` event carrying the per-epoch loss
+        components. ``n_games_done`` reuses the existing field as
+        ``current_epoch`` (mirrors how the JSON producer overloads
+        the same column for training kind)."""
+        _runs_client.push_progress(
+            peeked_version,
+            n_games_done=int(payload["epoch"]),
+            n_games_total=int(payload["total_epochs"]),
+            elapsed_seconds=float(payload["elapsed_seconds"]),
+            extra={
+                "current_epoch": int(payload["epoch"]),
+                "total_epochs": int(payload["total_epochs"]),
+                "train_loss": payload["train_loss"],
+                "val_loss": payload["val_loss"],
+                "train_value_loss": payload["train_value_loss"],
+                "val_value_loss": payload["val_value_loss"],
+                "train_policy_loss": payload["train_policy_loss"],
+                "val_policy_loss": payload["val_policy_loss"],
+                "status": payload["status"],
+            },
+        )
+        _runs_client.push_event(
+            peeked_version,
+            event_type="epoch_completed",
+            payload={
+                "epoch": int(payload["epoch"]),
+                "train_loss": payload["train_loss"],
+                "val_loss": payload["val_loss"],
+                "train_value_loss": payload["train_value_loss"],
+                "val_value_loss": payload["val_value_loss"],
+                "train_policy_loss": payload["train_policy_loss"],
+                "val_policy_loss": payload["val_policy_loss"],
+            },
+        )
+
     # Train into a temp file, then hand off to the registry which
     # copies the bytes into the versioned directory.
-    with tempfile.TemporaryDirectory() as tmp:
+    with tempfile.TemporaryDirectory() as tmp, _lifecycle.run_lifecycle(
+        run_id=peeked_version,
+        kind="training",
+        config=train_config,
+        progress_json_path=progress_path,
+        parent_run_id=parent_run_id,
+        label=args.notes or None,
+    ):
         tmp_weights = Path(tmp) / "weights.pt"
         started = time.perf_counter()
         # Dispatch on schema: if any row carries policy supervision,
@@ -478,6 +583,7 @@ def main(argv=None) -> None:  # pragma: no cover
             "compile_model": args.compile_model,
             "hidden_sizes": hidden_sizes,
             "early_stop_patience": args.early_stop_patience,
+            "epoch_callback": _on_epoch,
         }
         if has_any_policy:
             train_kwargs["policy_targets"] = policy_targets
@@ -531,8 +637,18 @@ def main(argv=None) -> None:  # pragma: no cover
                 "val_value_losses": history.val_value_losses,
                 "train_policy_losses": history.train_policy_losses,
                 "val_policy_losses": history.val_policy_losses,
-                "final_train_loss": history.train_losses[-1],
-                "final_val_loss": history.val_losses[-1],
+                # ``--epochs 0`` (smoke runs that just want a fresh
+                # registered version with no training) produces empty
+                # loss lists; guard the ``[-1]`` accesses so the post-
+                # train summary doesn't IndexError.
+                "final_train_loss": (
+                    history.train_losses[-1]
+                    if history.train_losses else None
+                ),
+                "final_val_loss": (
+                    history.val_losses[-1]
+                    if history.val_losses else None
+                ),
                 "best_val_loss": history.best_val_loss,
                 "best_val_epoch": history.best_val_epoch,
             },
@@ -541,23 +657,76 @@ def main(argv=None) -> None:  # pragma: no cover
         )
         version = registry.register(tmp_weights, metadata)
 
+        # Final post-train DB writes (still inside the lifecycle
+        # context so any failure propagates as status=failed):
+        #   1. Aggregate row carries the full training_history blob
+        #      as ``extra_json["training_history"]``. A sibling slice
+        #      may later add a dedicated ``training_history_json``
+        #      column to ``runs``; until then this is the agreed
+        #      stash location.
+        #   2. Register the registered weights file as an artifact
+        #      so the UI / downstream tooling can locate it without
+        #      walking the registry tree.
+        final_history = {
+            "train_losses": list(history.train_losses),
+            "val_losses": list(history.val_losses),
+            "train_value_losses": list(history.train_value_losses),
+            "val_value_losses": list(history.val_value_losses),
+            "train_policy_losses": list(history.train_policy_losses),
+            "val_policy_losses": list(history.val_policy_losses),
+            "best_val_loss": history.best_val_loss,
+            "best_val_epoch": history.best_val_epoch,
+            "epochs_trained": len(history.train_losses),
+        }
+        if history.train_losses:
+            final_history["final_train_loss"] = history.train_losses[-1]
+        if history.val_losses:
+            final_history["final_val_loss"] = history.val_losses[-1]
+        _runs_client.push_progress(
+            peeked_version,
+            n_games_done=len(history.train_losses),
+            n_games_total=args.epochs,
+            elapsed_seconds=elapsed,
+            extra={
+                "training_history": final_history,
+                "registered_version": version,
+            },
+        )
+        weights_path = registry.weights_path(version)
+        try:
+            weights_bytes = weights_path.stat().st_size
+        except OSError:
+            weights_bytes = None
+        _runs_client.push_artifact(
+            peeked_version,
+            artifact_type="weights",
+            path=str(weights_path),
+            bytes_=weights_bytes,
+        )
+
     print(f"\n# Done in {elapsed:.1f}s. Registered as {version}.")
     print(f"# Weights:  {registry.weights_path(version)}")
-    print(f"# Final train loss: {history.train_losses[-1]:.4f}")
-    print(f"# Final val loss:   {history.val_losses[-1]:.4f}")
-    if has_any_policy:
+    # ``--epochs 0`` short-circuits the post-train summary block: the
+    # registered version exists, but there were no epochs to report
+    # losses for. Don't IndexError on the empty history lists.
+    if history.train_losses:
+        print(f"# Final train loss: {history.train_losses[-1]:.4f}")
+        print(f"# Final val loss:   {history.val_losses[-1]:.4f}")
+        if has_any_policy:
+            print(
+                f"#   value:  train={history.train_value_losses[-1]:.4f} "
+                f"val={history.val_value_losses[-1]:.4f}"
+            )
+            print(
+                f"#   policy: train={history.train_policy_losses[-1]:.4f} "
+                f"val={history.val_policy_losses[-1]:.4f}"
+            )
         print(
-            f"#   value:  train={history.train_value_losses[-1]:.4f} "
-            f"val={history.val_value_losses[-1]:.4f}"
+            f"# Best val loss: {history.best_val_loss:.4f} "
+            f"at epoch {history.best_val_epoch}"
         )
-        print(
-            f"#   policy: train={history.train_policy_losses[-1]:.4f} "
-            f"val={history.val_policy_losses[-1]:.4f}"
-        )
-    print(
-        f"# Best val loss: {history.best_val_loss:.4f} "
-        f"at epoch {history.best_val_epoch}"
-    )
+    else:
+        print("# epochs_trained=0; no per-epoch losses to report")
 
 
 if __name__ == "__main__":

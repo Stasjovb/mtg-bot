@@ -35,7 +35,7 @@ import time
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Optional
+from typing import Any, Callable, Optional
 
 import numpy as np
 import torch
@@ -150,6 +150,7 @@ def train_value_network(
     architecture: str = ARCHITECTURE_SHARED,
     policy_hidden_sizes: Optional[tuple[int, ...]] = None,
     early_stop_patience: Optional[int] = None,
+    epoch_callback: Optional[Callable[[dict[str, Any]], None]] = None,
 ) -> TrainingHistory:
     """Fit a value (or value+policy) network to the supplied
     training data and write the final state_dict to
@@ -207,6 +208,16 @@ def train_value_network(
     isn't implemented yet (but ``early_stop_patience`` will at
     least stop the loop once val loss has stopped improving, so
     the final-epoch weights are typically near the best).
+
+    ``epoch_callback`` (default ``None``) is invoked once at the end
+    of every epoch with a dict snapshot of per-epoch metrics:
+    ``{epoch, total_epochs, elapsed_seconds, train_loss, val_loss,
+    train_value_loss, val_value_loss, train_policy_loss,
+    val_policy_loss, status}``. Used by ``mtg_bot.cli.train`` to push
+    progress to the runs DB alongside the existing JSON write — the
+    callback fires after the trainer's own ``_emit`` so the in-memory
+    history is already updated. Any exception inside the callback is
+    swallowed so a flaky telemetry sink can't break training.
 
     ``early_stop_patience`` (default ``None`` = disabled) caps the
     number of epochs trained AFTER the running-best val_loss epoch.
@@ -566,6 +577,35 @@ def train_value_network(
                 history.best_val_epoch = epoch
 
             _emit("running", current_epoch=epoch + 1)
+            if epoch_callback is not None:
+                # Snapshot per-epoch metrics for the optional external
+                # sink (runs DB push lives in cli/train.py). Swallow any
+                # exception so a flaky telemetry path can't kill an
+                # otherwise-healthy training run.
+                try:
+                    epoch_callback({
+                        "epoch": epoch + 1,
+                        "total_epochs": int(effective_total_epochs),
+                        "elapsed_seconds": (
+                            time.perf_counter() - started_perf
+                            if progress_enabled else 0.0
+                        ),
+                        "train_loss": history.train_losses[-1],
+                        "val_loss": history.val_losses[-1],
+                        "train_value_loss": (
+                            history.train_value_losses[-1]
+                        ),
+                        "val_value_loss": history.val_value_losses[-1],
+                        "train_policy_loss": (
+                            history.train_policy_losses[-1]
+                        ),
+                        "val_policy_loss": (
+                            history.val_policy_losses[-1]
+                        ),
+                        "status": "running",
+                    })
+                except Exception:  # noqa: BLE001
+                    pass
 
             # Patience-based early stopping. Only meaningful when we
             # have val data to track; with no val rows ``best_val_epoch``
