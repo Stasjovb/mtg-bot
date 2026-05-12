@@ -418,6 +418,465 @@ def test_train_main_with_epochs_zero_lands_db_rows(
     assert extra["training_history"]["train_losses"] == []
 
 
+def _write_synthetic_policy_npz(
+    out_dir: Path, n: int = 64, seed: int = 0,
+) -> Path:
+    """Drop a synthetic .npz including policy_targets + action_masks
+    so the trainer takes the dual-head AlphaZero path. Half the rows
+    carry single-slot supervision; the rest are value-only."""
+    from mtg_bot.training.action_encoding import ACTION_VOCAB_SIZE
+
+    rng = np.random.default_rng(seed)
+    features = rng.standard_normal((n, FEATURE_DIM)).astype(np.float32)
+    outcomes = np.tanh(features[:, 0]).astype(np.float32)
+    policy_targets = np.zeros((n, ACTION_VOCAB_SIZE), dtype=np.float32)
+    action_masks = np.zeros((n, ACTION_VOCAB_SIZE), dtype=np.bool_)
+    for i in range(n // 2):
+        slot = i % ACTION_VOCAB_SIZE
+        policy_targets[i, slot] = 1.0
+        action_masks[i, slot] = True
+    out = out_dir / "data_policy.npz"
+    np.savez(
+        out,
+        features=features, outcomes=outcomes,
+        policy_targets=policy_targets, action_masks=action_masks,
+    )
+    return out
+
+
+def test_train_main_dual_head_separate_with_policy_hidden_sizes(
+    monkeypatch, tmp_path,
+):
+    """Dual-head + ``--architecture=separate`` + explicit
+    ``--policy-hidden-sizes`` exercises the
+    ``policy_hidden_sizes is not None`` branch in the
+    train_kwargs assembly."""
+    monkeypatch.delenv("MTG_BOT_RUN_DB_PATH", raising=False)
+    monkeypatch.delenv("MTG_BOT_RUN_DB_URL", raising=False)
+
+    data_dir = tmp_path / "data"
+    data_dir.mkdir()
+    _write_synthetic_policy_npz(data_dir, n=64, seed=29)
+
+    cli_train.main(_common_args(
+        data_dir=data_dir,
+        registry_root=tmp_path / "weights",
+        progress_path=tmp_path / "p" / "t.json",
+        epochs=1,
+        extra=[
+            "--architecture", "separate",
+            "--hidden-sizes", "64,32",
+            "--policy-hidden-sizes", "32,16",
+        ],
+    ))
+
+    meta = json.loads(
+        (tmp_path / "weights" / "v1" / "metadata.json").read_text(
+            encoding="utf-8",
+        )
+    )
+    assert meta["architecture"] == "separate"
+    assert meta["training"]["policy_hidden_sizes"] == [32, 16]
+
+
+def test_train_main_dual_head_policy_path(monkeypatch, tmp_path):
+    """Hit the dual-head AlphaZero branch: data carries policy
+    supervision, so the trainer is dispatched with the policy_targets
+    / action_masks kwargs and the post-train summary prints the
+    per-head loss components."""
+    monkeypatch.delenv("MTG_BOT_RUN_DB_PATH", raising=False)
+    monkeypatch.delenv("MTG_BOT_RUN_DB_URL", raising=False)
+
+    data_dir = tmp_path / "data"
+    data_dir.mkdir()
+    _write_synthetic_policy_npz(data_dir, n=64, seed=11)
+
+    registry_root = tmp_path / "weights"
+    progress_path = tmp_path / "progress" / "train.json"
+
+    cli_train.main(_common_args(
+        data_dir=data_dir,
+        registry_root=registry_root,
+        progress_path=progress_path,
+        epochs=2,
+        extra=["--policy-loss-weight", "3.0"],
+    ))
+
+    meta_path = registry_root / "v1" / "metadata.json"
+    meta = json.loads(meta_path.read_text(encoding="utf-8"))
+    assert meta["with_policy"] is True
+    assert meta["training_history"]["final_train_loss"] is not None
+
+
+@pytest.mark.parametrize("flag,bad_value,expected", [
+    ("--one-legal-keep-frac", "0.0", "--one-legal-keep-frac"),
+    ("--one-legal-keep-frac", "1.5", "--one-legal-keep-frac"),
+    ("--early-stop-patience", "0", "--early-stop-patience"),
+    ("--early-stop-patience", "-1", "--early-stop-patience"),
+    ("--window-recent", "0", "--window-recent"),
+    ("--window-recent", "-1", "--window-recent"),
+])
+def test_train_main_arg_validation_errors(
+    monkeypatch, tmp_path, flag, bad_value, expected,
+):
+    """argparse.error / sys.exit paths for the standalone numeric
+    flag validations."""
+    data_dir = tmp_path / "data"
+    data_dir.mkdir()
+    _write_synthetic_npz(data_dir, n=64, seed=12)
+
+    progress_path = tmp_path / "progress" / "train.json"
+    registry_root = tmp_path / "weights"
+
+    with pytest.raises(SystemExit):
+        cli_train.main(_common_args(
+            data_dir=data_dir,
+            registry_root=registry_root,
+            progress_path=progress_path,
+            epochs=1,
+            extra=[flag, bad_value],
+        ))
+
+
+def test_train_main_hidden_sizes_parse_error(monkeypatch, tmp_path):
+    """``--hidden-sizes`` with a non-int token bails via sys.exit."""
+    data_dir = tmp_path / "data"
+    data_dir.mkdir()
+    _write_synthetic_npz(data_dir, n=64, seed=13)
+
+    with pytest.raises(SystemExit):
+        cli_train.main(_common_args(
+            data_dir=data_dir,
+            registry_root=tmp_path / "weights",
+            progress_path=tmp_path / "p" / "t.json",
+            epochs=1,
+            extra=["--hidden-sizes", "1024,not_an_int,512"],
+        ))
+
+
+def test_train_main_hidden_sizes_empty_error(monkeypatch, tmp_path):
+    """``--hidden-sizes`` parsing produces an empty tuple (e.g. comma
+    only) — must fail loudly."""
+    data_dir = tmp_path / "data"
+    data_dir.mkdir()
+    _write_synthetic_npz(data_dir, n=64, seed=14)
+
+    with pytest.raises((SystemExit, ValueError)):
+        cli_train.main(_common_args(
+            data_dir=data_dir,
+            registry_root=tmp_path / "weights",
+            progress_path=tmp_path / "p" / "t.json",
+            epochs=1,
+            extra=["--hidden-sizes", ""],
+        ))
+
+
+def test_train_main_policy_hidden_sizes_requires_separate(
+    monkeypatch, tmp_path,
+):
+    """``--policy-hidden-sizes`` only valid with
+    ``--architecture=separate``."""
+    data_dir = tmp_path / "data"
+    data_dir.mkdir()
+    _write_synthetic_npz(data_dir, n=64, seed=15)
+
+    with pytest.raises(SystemExit):
+        cli_train.main(_common_args(
+            data_dir=data_dir,
+            registry_root=tmp_path / "weights",
+            progress_path=tmp_path / "p" / "t.json",
+            epochs=1,
+            extra=["--policy-hidden-sizes", "128,64"],
+        ))
+
+
+def test_train_main_policy_hidden_sizes_parse_error(
+    monkeypatch, tmp_path,
+):
+    """``--policy-hidden-sizes`` with non-int token bails via
+    sys.exit when --architecture=separate."""
+    data_dir = tmp_path / "data"
+    data_dir.mkdir()
+    _write_synthetic_npz(data_dir, n=64, seed=16)
+
+    with pytest.raises(SystemExit):
+        cli_train.main(_common_args(
+            data_dir=data_dir,
+            registry_root=tmp_path / "weights",
+            progress_path=tmp_path / "p" / "t.json",
+            epochs=1,
+            extra=[
+                "--architecture", "separate",
+                "--policy-hidden-sizes", "abc",
+            ],
+        ))
+
+
+def test_train_main_data_dir_missing(monkeypatch, tmp_path):
+    """``--data-dir`` that isn't a directory: sys.exit."""
+    bogus = tmp_path / "does_not_exist"
+    with pytest.raises(SystemExit):
+        cli_train.main([
+            "--data-dir", str(bogus),
+            "--registry-root", str(tmp_path / "w"),
+            "--epochs", "1",
+            "--device", "cpu",
+        ])
+
+
+def test_train_main_empty_data_dir(monkeypatch, tmp_path):
+    """Empty data dir (no .npz files) exits."""
+    data_dir = tmp_path / "data"
+    data_dir.mkdir()
+    with pytest.raises(SystemExit):
+        cli_train.main([
+            "--data-dir", str(data_dir),
+            "--registry-root", str(tmp_path / "w"),
+            "--epochs", "1",
+            "--device", "cpu",
+        ])
+
+
+def test_train_main_window_recent_caps_loaded_files(
+    monkeypatch, tmp_path,
+):
+    """``--window-recent`` < len(*.npz): the older files get dropped
+    from the loaded subset; metadata's data_files reflects only the
+    most-recent N."""
+    import time as _time
+    data_dir = tmp_path / "data"
+    data_dir.mkdir()
+    # Three files; touch each so they have distinct mtimes.
+    for i, seed in enumerate([21, 22, 23]):
+        rng = np.random.default_rng(seed)
+        features = rng.standard_normal((32, FEATURE_DIM)).astype(np.float32)
+        outcomes = np.tanh(features[:, 0]).astype(np.float32)
+        path = data_dir / f"data{i}.npz"
+        np.savez(path, features=features, outcomes=outcomes)
+        _time.sleep(0.01)
+
+    cli_train.main(_common_args(
+        data_dir=data_dir,
+        registry_root=tmp_path / "weights",
+        progress_path=tmp_path / "p" / "t.json",
+        epochs=1,
+        extra=["--window-recent", "2"],
+    ))
+
+    meta = json.loads(
+        (tmp_path / "weights" / "v1" / "metadata.json").read_text(
+            encoding="utf-8",
+        )
+    )
+    assert len(meta["training"]["data_files"]) == 2
+    assert meta["training"]["window_recent"] == 2
+
+
+def test_train_main_one_legal_downsample_branch(monkeypatch, tmp_path):
+    """``--one-legal-keep-frac < 1.0`` triggers the downsample branch
+    and logs a kept-N / total-N line."""
+    data_dir = tmp_path / "data"
+    data_dir.mkdir()
+    _write_synthetic_policy_npz(data_dir, n=128, seed=24)
+
+    cli_train.main(_common_args(
+        data_dir=data_dir,
+        registry_root=tmp_path / "weights",
+        progress_path=tmp_path / "p" / "t.json",
+        epochs=1,
+        extra=["--one-legal-keep-frac", "0.5"],
+    ))
+
+    meta = json.loads(
+        (tmp_path / "weights" / "v1" / "metadata.json").read_text(
+            encoding="utf-8",
+        )
+    )
+    assert meta["training"]["one_legal_keep_frac"] == 0.5
+
+
+def test_train_main_explicit_progress_path_override(
+    monkeypatch, tmp_path,
+):
+    """An explicit ``--progress-path`` overrides the
+    training_progress/<peeked>.json default and creates any missing
+    parent dirs."""
+    data_dir = tmp_path / "data"
+    data_dir.mkdir()
+    _write_synthetic_npz(data_dir, n=64, seed=25)
+
+    nested = tmp_path / "deeply" / "nested" / "p.json"
+    assert not nested.parent.exists()
+    cli_train.main(_common_args(
+        data_dir=data_dir,
+        registry_root=tmp_path / "weights",
+        progress_path=nested,
+        epochs=1,
+    ))
+    assert nested.is_file()
+
+
+def test_train_main_progress_path_disabled_branch(monkeypatch, tmp_path):
+    """The helper at cli/train.py supports a sentinel empty-string
+    ``--progress-path`` that disables JSON emission. argparse's
+    ``type=Path`` coerces an empty argv token to ``Path('.')``, so
+    we exercise the branch by stubbing ``parse_args`` to surface a
+    ``Path('')`` namespace value — this mirrors how a direct
+    caller (e.g. iterate.py threading an explicit empty Path) hits
+    the same code path."""
+    import argparse as _ap
+
+    data_dir = tmp_path / "data"
+    data_dir.mkdir()
+    _write_synthetic_npz(data_dir, n=64, seed=26)
+
+    real_parse = _ap.ArgumentParser.parse_args
+
+    def parse_with_empty_path(self, argv=None):
+        ns = real_parse(self, argv)
+        # Stub progress_path to a Path-typed value whose str() is
+        # the empty string — that's the sentinel the elif branch
+        # checks for.
+        class _EmptyPath:
+            def __str__(self):
+                return ""
+        ns.progress_path = _EmptyPath()
+        return ns
+
+    monkeypatch.setattr(
+        _ap.ArgumentParser, "parse_args", parse_with_empty_path,
+    )
+
+    cli_train.main([
+        "--data-dir", str(data_dir),
+        "--registry-root", str(tmp_path / "weights"),
+        "--epochs", "1",
+        "--batch-size", "16",
+        "--device", "cpu",
+        "--progress-path", "anything",
+    ])
+    # The training_progress/ directory should not be created since
+    # progress_path landed in the disabled branch.
+    assert not (tmp_path / "training_progress").exists()
+
+
+def test_train_main_default_progress_path_branch(monkeypatch, tmp_path):
+    """Without ``--progress-path``, the default ``training_progress/
+    <peeked>.json`` path is computed under cwd."""
+    data_dir = tmp_path / "data"
+    data_dir.mkdir()
+    _write_synthetic_npz(data_dir, n=64, seed=27)
+
+    cwd = tmp_path / "runcwd"
+    cwd.mkdir()
+    monkeypatch.chdir(cwd)
+
+    cli_train.main([
+        "--data-dir", str(data_dir),
+        "--registry-root", str(tmp_path / "weights"),
+        "--epochs", "1",
+        "--batch-size", "16",
+        "--device", "cpu",
+    ])
+    progress_file = cwd / "training_progress" / "v1.json"
+    assert progress_file.is_file()
+
+
+def test_train_main_weights_stat_oserror_swallowed(
+    monkeypatch, tmp_path,
+):
+    """If ``weights_path.stat()`` fails (e.g. transient filesystem
+    error between registration and our stat call), the artifact
+    push still lands with bytes=None rather than crashing the
+    run. We force the failure by stubbing
+    ``Registry.weights_path`` to return a non-existent path AFTER
+    registration so the stat() call fails."""
+    db_path = tmp_path / "runs.db"
+    monkeypatch.setenv("MTG_BOT_RUN_DB_PATH", str(db_path))
+    monkeypatch.delenv("MTG_BOT_RUN_DB_URL", raising=False)
+    monkeypatch.setattr(lifecycle, "git_commit_short", lambda: "abc")
+
+    data_dir = tmp_path / "data"
+    data_dir.mkdir()
+    _write_synthetic_npz(data_dir, n=64, seed=28)
+
+    from mtg_bot.training.registry import Registry as _Reg
+
+    real_weights_path = _Reg.weights_path
+    call_count = {"n": 0}
+
+    def patched_weights_path(self, version):
+        call_count["n"] += 1
+        path = real_weights_path(self, version)
+        # The 1st call from train.py's artifact-register block:
+        # redirect to a non-existent path so the inline stat()
+        # raises FileNotFoundError -> the OSError-fallback branch
+        # writes bytes=None to the artifact row.
+        if call_count["n"] == 1:
+            return tmp_path / "nope" / "missing.pt"
+        return path
+
+    monkeypatch.setattr(_Reg, "weights_path", patched_weights_path)
+
+    cli_train.main(_common_args(
+        data_dir=data_dir,
+        registry_root=tmp_path / "weights",
+        progress_path=tmp_path / "p" / "t.json",
+        epochs=1,
+    ))
+
+    conn = runs_db.connect(db_path)
+    try:
+        arts = list(conn.execute(
+            "SELECT artifact_type, bytes FROM run_artifacts "
+            "WHERE artifact_type='weights'"
+        ))
+    finally:
+        conn.close()
+    assert len(arts) == 1
+    assert arts[0]["bytes"] is None
+
+
+def test_train_main_legacy_git_commit_helper_returns_string_or_none(
+    monkeypatch,
+):
+    """The legacy ``_git_commit`` helper (kept for the metadata's
+    ``git_commit`` field — the lifecycle's own git probe is
+    separate) returns either a short SHA or None; the helper must
+    not raise even with git missing."""
+    # Real call — exercises the happy path. In a CI without git it
+    # would hit the except path.
+    result = cli_train._git_commit()
+    assert result is None or isinstance(result, str)
+
+
+def test_train_main_legacy_git_commit_helper_handles_missing_git(
+    monkeypatch,
+):
+    """When ``git`` isn't on PATH, ``_git_commit`` returns None
+    instead of raising — pins the except-branch behavior."""
+    def fake_run(*a, **kw):
+        raise FileNotFoundError("no git binary")
+    monkeypatch.setattr(cli_train.subprocess, "run", fake_run)
+    assert cli_train._git_commit() is None
+
+
+def test_train_main_legacy_git_commit_helper_nonzero_returncode(
+    monkeypatch,
+):
+    """If ``git`` exits non-zero (e.g. not a git checkout), the
+    helper returns None."""
+    class FakeResult:
+        returncode = 128
+        stdout = ""
+
+    monkeypatch.setattr(
+        cli_train.subprocess, "run",
+        lambda *a, **kw: FakeResult(),
+    )
+    assert cli_train._git_commit() is None
+
+
 def test_parent_run_id_from_notes_helper():
     """Direct unit test for the helper — covers the regex paths."""
     assert cli_train._parent_run_id_from_notes("") is None
