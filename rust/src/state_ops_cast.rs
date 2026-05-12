@@ -135,6 +135,15 @@ fn pool_total(pool: &ManaPool) -> u32 {
 /// that ordering against a stray red pip in the pool. A future
 /// slice with hybrid / X / phyrexian costs replaces this best-
 /// effort spend with a proper plan-search.
+/// `pub(crate)` re-export wrapper for the local `pay_mana_cost` so
+/// the CE20 Slice 1 ActivateAbility dispatch in
+/// `state_ops_actions.rs` can pay mana from the same primitive that
+/// spell casts use. Returns the same true-on-success / false-no-
+/// mutation semantics.
+pub(crate) fn pay_mana_cost_pub(pool: &mut ManaPool, cost: &crate::cards::ManaCost) -> bool {
+    pay_mana_cost(pool, cost)
+}
+
 fn pay_mana_cost(pool: &mut ManaPool, cost: &crate::cards::ManaCost) -> bool {
     // Fast-fail on totals. Saves a partial spend + rollback in the
     // common "you don't have enough mana, period" case.

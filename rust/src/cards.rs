@@ -2018,6 +2018,92 @@ pub struct TriggeredAbility {
     pub once_per_turn: bool,
 }
 
+// --- Activated-ability substrate (CE20 Slice 1) ------------------
+//
+// Mirrors Python's `src/mtg_bot/effects/base.py::ActivationCost` +
+// `ActivatedAbility`. **First-slice minimal field set** — covers the
+// load-bearing closure surface (a mana-cost-paying activated ability
+// like Bear Caster's "{1}{G}, T: Draw a card"). Other cost shapes
+// from the Python class (sacrifice_self, exile_self, pay_life,
+// requires_*, etc.) are deferred to follow-up slices that bring
+// their dispatch primitives along — listing them here without a
+// dispatch site would let registry-dict callers stamp activations
+// that silently no-op the cost portion. The Slice 1 surface:
+//
+//   * `mana: ManaCost` — payable from the controller's mana pool.
+//   * `tap_self: bool` — implicit `{T}` cost; sets `obj.tapped = true`
+//     before the effect dispatches.
+//   * `is_mana_ability: bool` — when `true` the effect resolves
+//     immediately (CR 605.3a — mana abilities bypass the stack); when
+//     `false` the ability pushes a `StackItem::TriggeredAbility`-shaped
+//     stack slot whose payload effect resolves on the next
+//     `resolve_top_of_stack` (mirrors Python's `_activate_ability`
+//     stack-push at `actions.py:1928-2002`).
+//
+// **Deferred to follow-up slices** (each lands with its dispatch
+// counterpart, lockstep):
+// - Sacrifice-as-cost (`sacrifice_self`, `sacrifice_another_*`,
+//   `sacrifice_a_land`, `sacrifice_food`, `sacrifice_a_desert`).
+// - Counter-as-cost (`remove_plus_one_counter_from_your_creature`)
+//   and planeswalker loyalty-as-cost (`pay_loyalty`).
+// - Tap-an-untapped-permanent-you-control (Gene Pollinator shape).
+// - Activation-gate predicates (`requires_*` Bonders' Enclave shape).
+// - Sorcery-speed gate (`sorcery_speed`) — already implicit in the
+//   Slice 1 emission position INSIDE the sorcery-timing block; the
+//   per-ability field is a more granular over-ride.
+// - Spacecraft tier / Rooms `room_half` / activate_only_once gates.
+//
+/// Cost composition for an `ActivatedAbility`. First-slice minimal —
+/// payable from the controller's mana pool, plus an optional implicit
+/// `{T}` tap-self.
+#[derive(Clone, Debug, Default)]
+pub struct ActivationCost {
+    /// Mana portion of the cost. An all-zero `ManaCost` (the
+    /// `Default::default()` shape) is a "free" cost — payable with no
+    /// pool requirement. The cost-pay primitive consumes mana from the
+    /// controller's pool via the same `pay_mana_cost` shape spell casts
+    /// use (`state_ops_cast.rs::pay_mana_cost`).
+    pub mana: ManaCost,
+    /// Implicit `{T}` portion of the cost. When `true`, the
+    /// dispatcher sets `obj.tapped = true` on the source after the
+    /// affordability check passes; an already-tapped source rejects
+    /// the activation. Mirrors Python's
+    /// `ActivationCost.tap_self`.
+    pub tap_self: bool,
+}
+
+/// An activated ability on a `CardPrinting`. Mirrors a strict subset
+/// of Python's `ActivatedAbility` dataclass at
+/// `src/mtg_bot/effects/base.py:447`.
+///
+/// **Slice 1 scope.** The dispatcher reads `cost` (pays it), `effect`
+/// (applies it), and `is_mana_ability` (short-circuits the stack push
+/// when true). The richer Python fields — `sorcery_speed`,
+/// `cost_reductions`, `room_half`, `tier_threshold`,
+/// `activate_only_once` — are deferred to follow-up slices that bring
+/// their gates along.
+#[derive(Clone, Debug)]
+pub struct ActivatedAbility {
+    /// Cost to activate the ability. The dispatcher checks
+    /// affordability (mana-pool side) then commits the cost (tap +
+    /// mana drain) before pushing/applying the effect.
+    pub cost: ActivationCost,
+    /// Effect to fire when the ability resolves. For
+    /// `is_mana_ability=true` abilities the effect fires immediately
+    /// on activation (CR 605.3a); for `is_mana_ability=false`
+    /// abilities the effect is wrapped in a `StackItem` and fires
+    /// on the next `resolve_top_of_stack` pop.
+    pub effect: Effect,
+    /// `true` when this is a mana ability (CR 605.1 — produces mana
+    /// AND doesn't target). Mana abilities bypass the stack and
+    /// resolve their effect immediately on activation. For Slice 1
+    /// the load-bearing case is `false` (Bear Caster's draw goes
+    /// through the stack); a future slice will bridge the legacy
+    /// `mana_produced` field into a synthesized `is_mana_ability=true`
+    /// ActivatedAbility, retiring the separate `mana_produced` path.
+    pub is_mana_ability: bool,
+}
+
 #[derive(Clone, Debug)]
 pub struct CardPrinting {
     pub name: Arc<str>,
@@ -2088,6 +2174,25 @@ pub struct CardPrinting {
     /// shape — keeps every existing registry-dict caller working
     /// without modification).
     pub triggered_abilities: Vec<TriggeredAbility>,
+    /// **Activated-ability substrate (CE20 Slice 1).** Cost-paying
+    /// activated abilities on this printing. Empty Vec = no activated
+    /// abilities of this shape (back-compat default — every
+    /// pre-CE20-Slice-1 registry dict implicitly has this empty).
+    ///
+    /// Mirrors Python's `CardPrinting.activated_abilities` tuple at
+    /// `src/mtg_bot/cards/base.py`. The legacy `mana_produced` field
+    /// remains the "free mana ability" hatch — a future slice will
+    /// bridge `mana_produced.is_some()` into a synthesized
+    /// `ActivatedAbility { is_mana_ability: true, ... }` entry and
+    /// retire the side-channel; until then the two paths coexist
+    /// (the legal-decisions emission walks both lists, and the
+    /// apply arm dispatches on `ability_index`).
+    ///
+    /// Missing key in the registry dict = empty Vec (no special
+    /// serde tag needed; the parser's `dict.get_item` returns
+    /// `None`-of-PyAny which the same `match` we use for
+    /// `triggered_abilities` maps to `Vec::new()`).
+    pub activated_abilities: Vec<ActivatedAbility>,
 }
 
 /// Plain Rust container for the printings table. Held behind an
@@ -3542,6 +3647,23 @@ pub fn parse_printing(dict: &Bound<'_, PyDict>) -> PyResult<CardPrinting> {
         }
         None => Vec::new(),
     };
+    // CE20 Slice 1 substrate: `activated_abilities` defaults to empty
+    // Vec when absent (back-compat for every pre-CE20-Slice-1 registry
+    // dict). Same parse shape as `triggered_abilities`.
+    let activated_abilities = match dict.get_item("activated_abilities")? {
+        Some(aa_any) => {
+            let mut out = Vec::new();
+            for item in aa_any.try_iter()? {
+                let item = item?;
+                let aa_dict = item.downcast::<PyDict>().map_err(|_| {
+                    PyValueError::new_err("each activated_ability must be a dict")
+                })?;
+                out.push(parse_activated_ability(aa_dict)?);
+            }
+            out
+        }
+        None => Vec::new(),
+    };
     Ok(CardPrinting {
         name: Arc::from(name),
         mana_cost,
@@ -3553,7 +3675,86 @@ pub fn parse_printing(dict: &Bound<'_, PyDict>) -> PyResult<CardPrinting> {
         keywords,
         etb_effects,
         triggered_abilities,
+        activated_abilities,
     })
+}
+
+/// Parse one `ActivatedAbility` from a registry dict. Dict shape:
+///
+/// ```python
+/// {
+///     "cost": {                         # required; ActivationCost shape
+///         "mana": {"generic": 1, "G": 1},  # optional; default = zero cost
+///         "tap_self": True,                # optional; default = False
+///     },
+///     "effect": {...},                  # required; same shape as parse_effect input
+///     "is_mana_ability": False,         # optional; default = False
+/// }
+/// ```
+///
+/// Slice 1 minimum surface; future slices add richer cost shapes
+/// (sacrifice_self, pay_life, requires_*) in lockstep with their
+/// dispatch counterparts.
+fn parse_activated_ability(
+    dict: &Bound<'_, PyDict>,
+) -> PyResult<ActivatedAbility> {
+    let cost_any = require(dict, "cost")?;
+    let cost_dict = cost_any.downcast::<PyDict>().map_err(|_| {
+        PyValueError::new_err("activated_ability.cost must be a dict")
+    })?;
+    let cost = parse_activation_cost(cost_dict)?;
+    let effect_any = require(dict, "effect")?;
+    let effect_dict = effect_any.downcast::<PyDict>().map_err(|_| {
+        PyValueError::new_err("activated_ability.effect must be a dict")
+    })?;
+    let effect = parse_effect(effect_dict)?;
+    let is_mana_ability = match dict.get_item("is_mana_ability")? {
+        Some(v) => v.extract::<bool>().map_err(|_| {
+            PyValueError::new_err(
+                "activated_ability.is_mana_ability must be a bool",
+            )
+        })?,
+        None => false,
+    };
+    Ok(ActivatedAbility {
+        cost,
+        effect,
+        is_mana_ability,
+    })
+}
+
+/// Parse one `ActivationCost` from a registry dict. Slice 1 supports
+/// `mana` (optional ManaCost dict) + `tap_self` (optional bool).
+/// Unknown keys raise so future field additions surface as parser
+/// errors rather than silent drops.
+fn parse_activation_cost(
+    dict: &Bound<'_, PyDict>,
+) -> PyResult<ActivationCost> {
+    let mut cost = ActivationCost::default();
+    for (key_obj, _) in dict.iter() {
+        let key: String = key_obj.extract()?;
+        match key.as_str() {
+            "mana" | "tap_self" => {}
+            other => {
+                return Err(PyValueError::new_err(format!(
+                    "unknown activation_cost key {other:?}; \
+                     valid (Slice 1): mana, tap_self"
+                )));
+            }
+        }
+    }
+    if let Some(mana_any) = dict.get_item("mana")? {
+        let mana_dict = mana_any.downcast::<PyDict>().map_err(|_| {
+            PyValueError::new_err("activation_cost.mana must be a dict")
+        })?;
+        cost.mana = parse_mana_cost(mana_dict)?;
+    }
+    if let Some(tap_any) = dict.get_item("tap_self")? {
+        cost.tap_self = tap_any.extract::<bool>().map_err(|_| {
+            PyValueError::new_err("activation_cost.tap_self must be a bool")
+        })?;
+    }
+    Ok(cost)
 }
 
 /// Parse one `TriggeredAbility` from a registry dict. Dict shape:

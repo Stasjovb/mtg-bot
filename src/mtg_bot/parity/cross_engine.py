@@ -6422,8 +6422,10 @@ def activated_cost_side_channel(py_state, rust_state) -> tuple[int, int]:
     py_state.battlefield.append(py_obj)
 
     # ---- Rust side ------------------------------------------------------
-    # No mana_produced -- non-mana ability on Python is invisible to
-    # Rust's enumerator + dispatch (CE20 surface).
+    # **CE20 CLOSURE (post-substrate).** Rust's CardPrinting now
+    # carries an ``activated_abilities`` Vec; mirror Python's Bear
+    # Caster ability shape so the same enumerator + dispatch surface
+    # both engines exercise.
     ZONE_BATTLEFIELD = 2
     rust_obj_id = rust_state.register_and_inject_object(
         {
@@ -6431,6 +6433,16 @@ def activated_cost_side_channel(py_state, rust_state) -> tuple[int, int]:
             "card_types": ["Creature"],
             "power": 2,
             "toughness": 2,
+            "activated_abilities": [
+                {
+                    "cost": {
+                        "mana": {"generic": 1, "G": 1},
+                        "tap_self": True,
+                    },
+                    "effect": {"kind": "draw_cards", "count": 1},
+                    "is_mana_ability": False,
+                }
+            ],
         },
         0,  # controller = p0
         ZONE_BATTLEFIELD,

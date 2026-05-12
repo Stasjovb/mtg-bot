@@ -3433,6 +3433,96 @@ the forked branch.
   - Wider Event variants (Dies, Cast, Attacks, DealsDamage).
   - Panharmonicon-shape `etb_trigger_multiplier`.
 
+### I48. `CardPrinting.activated_abilities` substrate — cost-paying activated abilities walk through a per-ability `ActivatedAbility { cost, effect, is_mana_ability }` Vec; `legal_decisions` emits per-ability when affordable + untapped (tap_self) + non-sick (creature tap_self), and the `ActivateAbility` apply arm dispatches by index, pays mana via `state_ops_cast::pay_mana_cost_pub`, taps the source for `tap_self`, and pushes a `StackItem` for `is_mana_ability=false` (CE20 Slice 1 closure)
+
+- **Pinned by**:
+  - `tests/test_parity_smoke.py::test_cross_engine_activated_cost_test_a_emission_parity_post_ce20_closure`
+    (emission-side both-engines-agree pin: Bear Caster `{1}{G}, T:
+    Draw a card` emits ActivateAbility identically on Python and
+    Rust when p0's pool covers the cost).
+  - `tests/test_parity_smoke.py::test_cross_engine_activated_cost_test_c_apply_dispatch_parity_post_ce20_closure`
+    (dispatch-side both-engines-agree pin: apply succeeds on both
+    engines; post-state convergence on Bear-tapped + pool drained
+    of `{1}{G}` + stack carries the draw effect).
+  - `tests/test_parity_smoke.py::test_cross_engine_activated_cost_test_d_python_underpays_silently`
+    (subtler-axis pin: Python's `_activate_ability` primitive
+    doesn't self-gate on affordance, Rust's apply arm DOES;
+    unaffordable cost raises `"unaffordable from controller's mana
+    pool"` on Rust while Python silently under-pays through
+    `auto_tap_for_cost`).
+  - 12 `tests_rust/test_activated.py` substrate pins (parser
+    surface + Bear Caster apply path + emission gate).
+
+- **Invariant**. `CardPrinting.activated_abilities:
+  Vec<ActivatedAbility>` is the canonical Rust-side representation
+  for cost-paying activated abilities. Each entry carries:
+  - `cost: ActivationCost { mana: ManaCost, tap_self: bool }` — Slice
+    1 minimum field set (richer cost shapes — `sacrifice_self`,
+    `pay_life`, `requires_*` — land in follow-up slices alongside
+    their dispatch primitives in lockstep, so the parser surface
+    stays consistent with the dispatcher's coverage).
+  - `effect: Effect` — same closed vocabulary spell-resolve consumes.
+  - `is_mana_ability: bool` — `true` bypasses the stack (CR 605.3a),
+    `false` pushes a `StackItem::new_trigger`-shaped slot whose
+    payload effect fires on the next `resolve_top_of_stack` pop.
+
+  The legacy `mana_produced: Option<Vec<String>>` field stays as the
+  free-mana-ability hatch (`{T}: Add {color(s)}`) and remains the
+  source-of-truth for Forest / Mountain / Llanowar Elves shapes.
+  Both paths coexist:
+  - `state_ops_legal.rs` emits ActivateAbility for `mana_produced.is_some()`
+    sources (legacy path, ability_index=0) AND walks every
+    `activated_abilities[i]` entry (new path) gating each on its
+    own affordability + tap-self state.
+  - `state_ops_actions.rs` `ActivateAbility` apply arm dispatches
+    `printing.activated_abilities[ability_index]` first; if the
+    index is out of range AND `ability_index = 0` AND
+    `mana_produced.is_some()`, falls back to the legacy free-mana-
+    ability behavior; otherwise raises `"has no ability at index N"`.
+
+- **Affordability gate** (emission AND apply): pool-only via
+  `pool_can_cover` (legal.rs) / `pay_mana_cost_pub` (actions.rs).
+  Pool-only is narrower than Python's `can_pay_cost`, which accounts
+  for auto-tap-from-lands headroom — a future slice grows an
+  auto-tap composer to converge the two. Until then, cross-engine
+  smoke pre-populates the controller's pool when driving non-mana-
+  ability activation directly.
+
+- **Tap-self gate** (emission AND apply): tapped source rejects;
+  summoning-sick creature source rejects (CR 302.1 narrows to
+  abilities whose cost requires tapping — non-tap-cost abilities
+  on a fresh creature still emit). The Slice 1 gate is
+  `is_creature && summoning_sick && cost.tap_self`. Mirrors I17.
+
+- **Stack push for non-mana abilities**: `is_mana_ability=false`
+  pushes a `StackItem::new_trigger(source_id, controller, effect,
+  ability_index)`. The trigger-resolver arm in
+  `state_ops_resolve::resolve_top_of_stack` fires the effect via
+  `apply_effect` and skips `move_source_post_resolve` (the source
+  is already on the battlefield — exactly the semantics needed for
+  an activated ability resolving). The `StackItem::TriggeredAbility`
+  discriminant captures both ETB triggers AND activated abilities
+  for Slice 1 — the dedup-key `ability_index` distinguishes the two
+  on a given source.
+
+- **Out of scope** (follow-up slices, each lands with its
+  dispatch counterpart in lockstep):
+  - Spacecraft station-charge specific shapes (charge counters as
+    cost, tier_threshold gate on `effective_activated_abilities`).
+  - Planeswalker loyalty (uses counters as cost, distinct from
+    mana; needs `pay_loyalty` cost primitive).
+  - Equipment equip costs (specific cost shape + target).
+  - Sacrifice-as-cost (`sacrifice_self`, `sacrifice_another_*`,
+    `sacrifice_a_land`, `sacrifice_food`).
+  - Tap-an-untapped-permanent-you-control (Gene Pollinator shape).
+  - Activation-gate predicates (`requires_*` Bonders' Enclave).
+  - Bridging legacy `mana_produced` into a synthesized
+    `ActivatedAbility { is_mana_ability: true, cost: { tap_self:
+    true }, effect: AddManaToPool(...) }` entry (retires the
+    side-channel).
+  - Auto-tap-from-lands composer to match Python's `can_pay_cost`
+    headroom accounting on the Rust side.
+
 ### ~~CE9.~~ CLOSED: Combat damage assignment walks battlefield in bf-ETB order via shared `bf_iter_etb_sorted` helper
 
 Closed by `feature/ce9-blocker-bf-order` (this slice). Per the
@@ -4101,113 +4191,45 @@ injection: backbone has no flash divergence to surface).
 
 See I46 for the post-closure invariant pin.
 
-### CE20. Rust's `legal_decisions` and `ActivateAbility` dispatch ignore non-mana activated abilities entirely (cost-paying activated abilities have no representation in Rust's `CardPrinting`)
+### CE20 — CLOSED by `feature/ce20-activated-substrate`
 
-- **Surfaced by**: Phase 5 follow-up #22 (`feature/phase5-activated-cost`) —
-  `tests/test_parity_smoke.py::test_cross_engine_activated_cost_test_a_surfaces_ce20`
-  (emission-side pin asserting Rust does NOT emit ActivateAbility for
-  a `{1}{G}, T: Draw a card` Bear Caster on p0's bf even with
-  affordance available) and
-  `..._test_c_apply_dispatch_surfaces_ce20`
-  (dispatch-side pin asserting `rust_state.apply_action({"kind":
-  "activate_ability", ...})` raises ValueError("source N has no
-  mana_produced") for the same source). Three parity-clean sanity pins
-  (Test B no-affordance both-engines-don't-emit, Test D no-affordance
-  Python-underpays-Rust-rejects, pre-injection walks-clean) bound the
-  divergence to the non-mana-ability axis.
-- **Rust today**:
-  1. **`parse_printing` (`cards.rs:3437-3556`)** has no
-     `activated_abilities` field on `CardPrinting`; the only
-     ability-shape representation is `mana_produced:
-     Option<Vec<String>>`. Cost-paying activated abilities have no
-     Rust-side representation at all -- a Python
-     `ActivatedAbility(cost=ActivationCost(mana=ManaCost({1}{G}),
-     tap_self=True), effect=DrawCards(1), is_mana_ability=False)`
-     simply cannot be expressed in a Rust printing dict.
-  2. **`state_ops_legal.rs:929-1003`** ActivateAbility emission
-     loop filters battlefield objects on
-     `printing.mana_produced.is_some()`. A printing with no
-     `mana_produced` is silently skipped -- no ActivateAbility ever
-     emits for it, regardless of phase / priority / affordance.
-  3. **`state_ops_actions.rs:440-631`** ActivateAbility dispatch
-     arm hard-rejects any source whose printing lacks
-     `mana_produced` with `"ActivateAbility: source <id> has no
-     mana_produced (only mana abilities supported in first slice)"`.
-     The arm also rejects `ability_index != 0` with a separate
-     error, but the no-mana_produced check fires first for non-mana
-     sources.
-- **CR / Python expected**: Python's `legal.py:612-829`
-  ActivateAbility loop walks each object's
-  `effective_activated_abilities` and per-ability cost-payability
-  checks (`legal.py:653-657` calls `can_pay_cost(state, player_id,
-  effective_mana, spell_kind=...)`; the auto-tap-from-lands
-  accounting makes "is there enough mana in pool + untapped lands"
-  the affordability bar). Python's
-  `actions._activate_ability:1928-2002` pays mana via
-  `auto_tap_for_cost`, optionally taps the source (`tap_self`), and
-  pushes the ability onto the stack (`is_mana_ability=False`) so a
-  later resolve fires the effect. CR 602.5: "To activate an ability
-  is to put it onto the stack and pay its costs, so that it will
-  eventually resolve and have its effect."
-- **Impact**: at every priority window where the agent might
-  activate a cost-paying ability, the Rust-side legal-action
-  enumerator silently DROPS every such ability from the candidate
-  list, and any direct apply_action call into Rust for one of
-  these abilities raises. In real EoE play this affects every
-  printing with an activated ability that has a cost beyond a
-  free `{T}` tap-for-mana: equipment equip costs, planeswalker
-  loyalty activations, Spacecraft station-charge spends,
-  fight-ability creature pumps, sac-for-effect activations,
-  draw-a-card activations. The agent never considers any of these
-  surfaces. The gap also blocks the cross-engine smoke from
-  exercising any non-mana activated ability dispatch -- the trajectory
-  harness's retry loop would catch the no-mana_produced raise and
-  skip, masking the affordability-axis surfaces. Bounded today
-  because the synthetic test deckspec has no non-mana-ability
-  printings; once EoE production printings (equipment +
-  planeswalkers + spacecraft) flow through the cross-engine
-  harness, this gap dominates the activated-ability axis.
-  Additionally, the related axis at apply-side: Python's
-  `_activate_ability` doesn't self-gate on affordance (the gate
-  lives in `legal_actions`), so an out-of-band caller that drives
-  apply_action with an unaffordable cost silently under-pays --
-  Test D pins this as a SUBTLER axis of CE20 distinct from the
-  primary emission + dispatch surfaces.
-- **Closeable**: yes, but spans a larger refactor than CE17 / CE18
-  / CE19. Option A (Rust-side convergence on Python) requires:
-  1. Add `activated_abilities: Vec<ActivatedAbilityDesc>` to Rust's
-     `CardPrinting` struct (`cards.rs:1772+`). Each desc carries
-     cost + effect shape (start with `mana: ManaCost`, `tap_self:
-     bool`, `effect: AbilityEffect` enum; expand as printings
-     demand).
-  2. Update `parse_printing` to read `activated_abilities` from the
-     dict (back-compat: empty Vec when absent).
-  3. Rewrite the `state_ops_legal.rs:929-1003` emission loop to
-     walk `printing.activated_abilities` (every entry, not just
-     index 0) and per-ability call a new `can_pay_ability_cost`
-     primitive (mirrors Python's `can_pay_cost`).
-  4. Rewrite the `state_ops_actions.rs:440-631` dispatch arm to
-     dispatch on `ability_index` into the printing's
-     `activated_abilities`, pay the cost via a new
-     `auto_tap_for_cost` Rust primitive, and -- for
-     non-mana abilities (`is_mana_ability=False`) -- push a stack
-     item (which in turn needs Rust to grow a real stack; CE5
-     today fuses cast+resolve).
-  5. Either convert the existing `mana_produced` shape into a
-     synthesized "free mana ability" desc (cleaner) or keep both
-     paths in parallel during migration.
-  Approximate: ~400-600 line refactor across cards.rs +
-  state_ops_legal.rs + state_ops_actions.rs + a new
-  state_ops_cost.rs for the cost-pay primitive, gated behind a
-  real Rust-side stack landing (currently CE5-mirrored on the
-  harness side). Out of scope of this probe slice (brief says "do
-  NOT fix"). Post-closure the Test A assertion flips from "Rust
-  does NOT emit" to "Python and Rust emissions agree on the bear
-  id"; Test C flips from "Rust raises" to "Rust apply succeeds + 
-  field-view convergence on mana_pool + stack + bf". Test B + D
-  stay parity-clean (Test B always negative on both sides; Test D
-  changes shape -- once Rust self-gates AND Python self-gates,
-  both engines reject the out-of-band call).
+**Status**: closed 2026-05-12 via Option A (Rust-side convergence
+on Python), per Phase 5 convention "converge Rust toward Python,
+never modify Python, regardless of CR-correctness". Closure
+invariant lives at **I48** below.
+
+The two load-bearing shape-pins
+`test_cross_engine_activated_cost_test_a_surfaces_ce20` and
+`test_cross_engine_activated_cost_test_c_apply_dispatch_surfaces_ce20`
+were renamed to
+`test_cross_engine_activated_cost_test_a_emission_parity_post_ce20_closure`
+and
+`test_cross_engine_activated_cost_test_c_apply_dispatch_parity_post_ce20_closure`
+and their assertions flipped from "Rust does NOT emit / Rust
+raises 'has no mana_produced'" to "Rust DOES emit / Rust apply
+succeeds + cross-engine field-view convergence on tap state +
+mana pool + stack". Test D was kept as a pin on the
+"Python-doesn't-self-gate, Rust-DOES-self-gate" axis with the
+raise message updated to the new
+"unaffordable from controller's mana pool" shape. Test B
+(no-affordance both-engines-don't-emit) and the pre-injection
+clean-walk pin continue to pass unchanged.
+
+Twelve new Rust-side regression tests in `tests_rust/test_activated.py`:
+
+- 4 parser-surface pins (default empty Vec, full Bear Caster parse,
+  default zero mana cost, unknown cost-key raise).
+- 4 apply-path pins (succeeds with pool, raises on empty pool,
+  raises on already-tapped source, raises on summoning-sick source).
+- 4 emission-path pins (emits when affordable + untapped + non-sick,
+  no emission when pool empty / tapped / sick).
+
+Four existing `tests_rust/test_actions.py` tests updated to the new
+error-message shape ("has no ability at index N" replaces the old
+"only ability_index=0" / "no mana_produced" raises for Forest at
+non-zero index and Grizzly Bears at any index).
+
+See I48 for the post-closure invariant pin.
 
 ---
 
