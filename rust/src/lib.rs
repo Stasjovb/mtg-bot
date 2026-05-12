@@ -2,6 +2,7 @@ use pyo3::prelude::*;
 
 #[allow(dead_code)]
 mod actions;
+mod bf_iter;
 mod cards;
 mod state;
 

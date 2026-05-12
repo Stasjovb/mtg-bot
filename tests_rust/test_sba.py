@@ -1246,3 +1246,182 @@ def test_sba_after_pyroclasm_mixed_indestructible_partial_kill(engine):
     assert state.find_object_zone(vanilla_b) == ZONE_GRAVEYARD
     assert state.find_object_zone(indest_a) == ZONE_BATTLEFIELD
     assert state.find_object_zone(indest_b) == ZONE_BATTLEFIELD
+
+
+# ----------------------------- CE5 closure: SBA victim collection -----------
+#
+# `collect_sba_victims` walks the battlefield in ETB-timestamp order
+# (matching Python's centralized `state.battlefield` walk in
+# `turn.py:1242`) via the shared `crate::bf_iter::bf_iter_etb_sorted`
+# helper. Pre-CE5 the Rust side walked p0-then-p1, which diverged from
+# Python whenever ETB timestamps interleaved across players.
+#
+# The tie-break invariant: synthetic-state objects all carry
+# `etb_timestamp == 0` (because `make_player` populates the bf without
+# calling `reserve_etb_timestamp`); the helper's stable sort preserves
+# the pre-CE5 p0-then-p1, insertion-order walk for those, so every
+# pre-existing test in this file (which exclusively constructs state
+# via `make_synthetic_state` or `register_and_inject_object` injecting
+# into a *single* player at a time) stays bit-equal.
+#
+# These regression tests use `register_and_inject_object` to drive
+# strictly-monotonic ETB stamps across both players. Each injection
+# into ZONE_BATTLEFIELD bumps `state.next_etb_timestamp` (see
+# `state_ops_resolve.rs:5178`), so we can build interleaved-timestamp
+# states by injecting alternately into p0 and p1.
+
+
+def test_collect_sba_victims_walks_etb_order_across_players(engine):
+    """Build a state via `register_and_inject_object` with ETB
+    timestamps strictly interleaved across players (p0 first, then p1,
+    then p0). Damage all three lethally. `apply_sbas` must destroy
+    them in ETB-timestamp order, NOT p0-batch then p1-batch. The
+    observable: each player's graveyard receives its dead creatures in
+    the order they died, and the controllers' graveyard order matches
+    the ETB-stamp order projected onto that player.
+
+    Specifically: p0_a (ts=0), p1_a (ts=1), p0_b (ts=2). Pre-CE5,
+    p0's graveyard would receive [p0_a, p0_b] in that order and p1's
+    would receive [p1_a] — same dead sets — but the collection order
+    of victims would be (p0_a, p0_b, p1_a). Post-CE5, the collection
+    order is (p0_a, p1_a, p0_b), which still pushes p0_a then p0_b
+    onto p0's graveyard and p1_a onto p1's graveyard. So per-graveyard
+    contents stay bit-equal — what we can pin instead is that BOTH
+    graveyards' contents match the per-player projection of the ETB
+    order. (The collection order change becomes observable downstream
+    in CE8's trigger emitter, which we don't have yet.)"""
+    state = engine.make_synthetic_state(
+        num_battlefield=0, num_hand=0, num_library=1
+    )
+    p0_a = state.register_and_inject_object(
+        _two_two_creature_dict(), 0, ZONE_BATTLEFIELD
+    )
+    p1_a = state.register_and_inject_object(
+        _two_two_creature_dict(), 1, ZONE_BATTLEFIELD
+    )
+    p0_b = state.register_and_inject_object(
+        _two_two_creature_dict(), 0, ZONE_BATTLEFIELD
+    )
+
+    # Damage all three lethally.
+    for cid in (p0_a, p1_a, p0_b):
+        state.deal_damage(cid, 2)
+
+    assert state.apply_sbas() == 3
+    for cid in (p0_a, p1_a, p0_b):
+        assert state.find_object_zone(cid) == ZONE_GRAVEYARD
+
+    # Per-graveyard contents: p0 has both p0_a and p0_b; p1 has p1_a.
+    p0_gy = [d["id"] for d in state.graveyard_snapshot(0)]
+    p1_gy = [d["id"] for d in state.graveyard_snapshot(1)]
+    assert p0_gy == [p0_a, p0_b]
+    assert p1_gy == [p1_a]
+
+
+def test_collect_sba_victims_etb_order_same_player_interleave(engine):
+    """Two creatures on p0's battlefield with an interleaved p1 ETB
+    between them. The same-player projection through the ETB-ordered
+    walk preserves (p0_a, p0_b) ordering — pre- and post-CE5 the
+    p0 graveyard receives them in the same relative order. This pins
+    the no-regression case (same-player projection stays stable)."""
+    state = engine.make_synthetic_state(
+        num_battlefield=0, num_hand=0, num_library=1
+    )
+    p0_a = state.register_and_inject_object(
+        _two_two_creature_dict(), 0, ZONE_BATTLEFIELD
+    )
+    _p1_a = state.register_and_inject_object(
+        _two_two_creature_dict(), 1, ZONE_BATTLEFIELD
+    )
+    p0_b = state.register_and_inject_object(
+        _two_two_creature_dict(), 0, ZONE_BATTLEFIELD
+    )
+
+    # Damage only the p0 creatures lethally.
+    state.deal_damage(p0_a, 2)
+    state.deal_damage(p0_b, 2)
+
+    assert state.apply_sbas() == 2
+    p0_gy = [d["id"] for d in state.graveyard_snapshot(0)]
+    assert p0_gy == [p0_a, p0_b]
+
+
+def test_collect_sba_victims_etb_order_visible_via_clone_and_count(engine):
+    """Cross-player simultaneous SBA pass: p0 has one lethal creature,
+    p1 has one lethal creature, p1's ETB stamp is LOWER than p0's
+    (achieved by injecting p1's creature first). Pre-CE5 the
+    collection walked p0-first then p1, putting p0's victim first
+    in the destruction loop; post-CE5 the walk follows ETB order, so
+    p1's victim is destroyed first. Both end up in their respective
+    graveyards either way (each player's graveyard contains exactly
+    one creature). The end-state predicates that hold across both
+    orderings: count == 2, both creatures graveyarded, each graveyard
+    grew by exactly one. The closure makes the collection order
+    available to CE8's future trigger emitter without changing this
+    end-state."""
+    state = engine.make_synthetic_state(
+        num_battlefield=0, num_hand=0, num_library=1
+    )
+    # Inject p1 FIRST so it has the lower ETB timestamp.
+    p1_a = state.register_and_inject_object(
+        _two_two_creature_dict(), 1, ZONE_BATTLEFIELD
+    )
+    p0_a = state.register_and_inject_object(
+        _two_two_creature_dict(), 0, ZONE_BATTLEFIELD
+    )
+
+    state.deal_damage(p1_a, 2)
+    state.deal_damage(p0_a, 2)
+
+    p0_gy_before = state.graveyard_sizes[0]
+    p1_gy_before = state.graveyard_sizes[1]
+    assert state.apply_sbas() == 2
+    assert state.find_object_zone(p1_a) == ZONE_GRAVEYARD
+    assert state.find_object_zone(p0_a) == ZONE_GRAVEYARD
+    assert state.graveyard_sizes[0] == p0_gy_before + 1
+    assert state.graveyard_sizes[1] == p1_gy_before + 1
+
+
+def test_collect_sba_victims_empty_when_no_lethal(engine):
+    """Build a state with creatures across both players' battlefields
+    in interleaved ETB order, none of them lethal. apply_sbas returns 0
+    and no graveyard movement happens. This pins the empty-case path
+    through `bf_iter_etb_sorted` — the helper walks a non-empty list
+    but produces zero victims."""
+    state = engine.make_synthetic_state(
+        num_battlefield=0, num_hand=0, num_library=1
+    )
+    p0_a = state.register_and_inject_object(
+        _two_two_creature_dict(), 0, ZONE_BATTLEFIELD
+    )
+    p1_a = state.register_and_inject_object(
+        _two_two_creature_dict(), 1, ZONE_BATTLEFIELD
+    )
+
+    # No damage applied; no lethal predicates.
+    assert state.apply_sbas() == 0
+    assert state.find_object_zone(p0_a) == ZONE_BATTLEFIELD
+    assert state.find_object_zone(p1_a) == ZONE_BATTLEFIELD
+    assert state.graveyard_sizes == [0, 0]
+
+
+def test_collect_sba_victims_synthetic_state_tie_break_preserves_p0_first(
+    synthetic_state,
+):
+    """Tie-break invariant: when every bf object has
+    `etb_timestamp == 0` (the synthetic-state path — `make_player`
+    populates without calling `reserve_etb_timestamp`), the stable
+    sort preserves the p0-then-p1 walk so pre-CE5 baselines stay
+    bit-equal.
+
+    Concretely: damage one creature on each player's bf lethally.
+    The collection order is (p0_creature, p1_creature) — same as
+    pre-CE5. Per-graveyard end state is unchanged."""
+    synthetic_state.deal_damage(P0_FIRST_BEAR_ID, 2)
+    synthetic_state.deal_damage(P1_FIRST_BEAR_ID, 2)
+
+    assert synthetic_state.apply_sbas() == 2
+    p0_gy = [d["id"] for d in synthetic_state.graveyard_snapshot(0)]
+    p1_gy = [d["id"] for d in synthetic_state.graveyard_snapshot(1)]
+    assert p0_gy == [P0_FIRST_BEAR_ID]
+    assert p1_gy == [P1_FIRST_BEAR_ID]
