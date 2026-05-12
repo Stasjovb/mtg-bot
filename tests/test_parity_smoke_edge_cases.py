@@ -1,0 +1,445 @@
+"""Phase-5 cross-engine smoke harness — edge-case coverage.
+
+Companion file to ``tests/test_parity_smoke.py``. Lives separately to avoid
+edit conflicts with the parallel CE4 closure work that's actively flipping
+xfail markers in the main parity-smoke test file.
+
+The tests below exercise boundary conditions that the inaugural Phase-5
+smoke harness (in the main test file) doesn't cover:
+
+* **Library boundary** — empty library + 1-card library, exercised via
+  the ``play_a_land_selector`` side-channel ``draw_card`` on step 0 and
+  via the ``multi_turn_selector`` advance-phase composition.
+* **Asymmetric deck sizes** — p0 holds a larger library than p1; the
+  harness should walk parity-clean since the per-player snapshot
+  pathways are independent.
+* **Scale stress** — drive ``play_a_land_selector`` for 200+ decisions
+  on the slightly_bigger_deckspec; checks that the parity-clean walk
+  shape doesn't degrade as the step count grows.
+* **Shuffle seed** — Python uses Mersenne Twister, Rust uses xorshift64.
+  Distinct PRNGs => distinct shuffle permutations on the same seed.
+  This is a documented (and intentionally accepted) bridge limitation;
+  pin it as a strict-xfail at step 0 so any future "we fixed shuffle
+  parity" closure breaks loudly when this test flips to xpass.
+
+NOVEL divergence surfaced (Phase 5 edge-case slice, 2026-05-11):
+
+* **CE-pure-derivation-is_over** — when ``draw_card`` is called on an
+  empty library via the harness side-channel, Rust's ``is_over`` /
+  ``winner_id`` flip immediately (pure-derivation predicate over
+  ``has_lost || attempted_draw_on_empty || life<=0``), but Python's
+  stay stale because Python's ``GameState.is_over`` reads
+  ``winner_id`` which is only written by an SBA pass (no eager
+  derivation). The harness's walk does NOT run SBAs between steps,
+  so the two engines diverge on ``is_over`` / ``winner_id`` even
+  though the underlying loss-cause flags (``has_lost`` /
+  ``attempted_draw_on_empty``) agree on both sides.
+
+  See the strict-xfail test below; this is the first finding of the
+  edge-case slice and is reported back to the user for filing as a
+  formal CE<n> entry in ``docs/RUST_PARITY_GAPS.md`` (kept out of the
+  doc here to avoid conflicting with the parallel CE4 closure agent
+  editing the same file).
+"""
+
+from __future__ import annotations
+
+import importlib.util
+
+import pytest
+
+
+# Skip the whole module if the Rust extension isn't built — mirrors the
+# main test file's policy.
+pytestmark = pytest.mark.skipif(
+    importlib.util.find_spec("mtg_bot_engine") is None,
+    reason="mtg_bot_engine PyO3 extension not installed",
+)
+
+
+# ---------------------------------------------------------------------------
+# Edge case #1: empty-library side-channel draw flags a NOVEL is_over /
+# winner_id divergence. Strict-xfail pin so any future closure (Python
+# growing a pure-derivation is_over OR the harness gaining an SBA pass
+# between steps) flips this to xpass and the maintainer removes the marker.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.xfail(
+    strict=True,
+    reason=(
+        "NOVEL Phase-5 edge-case finding (CE-pure-derivation-is_over): "
+        "Rust's is_over/winner_id are pure-derivation over the loss-cause "
+        "fields (has_lost || attempted_draw_on_empty || life<=0) and flip "
+        "immediately when draw_card hits an empty library; Python's "
+        "is_over reads winner_id which is only written by an SBA pass. "
+        "The harness's walk does NOT fire SBAs, so the two engines "
+        "diverge on is_over/winner_id while the underlying cause flags "
+        "agree. Pinned strict-xfail until either (a) Python grows pure-"
+        "derivation is_over, (b) the harness fires SBAs between steps, "
+        "or (c) the smoke marks is_over/winner_id as known-gap fields."
+    ),
+)
+def test_cross_engine_empty_library_side_channel_draw_walks_clean():
+    """Drive ``play_a_land_selector`` for 2 decisions on a deck whose
+    libraries are EMPTY at game start. The selector's step-0 side-channel
+    ``draw_card`` fires on both engines; Rust sets
+    ``attempted_draw_on_empty=True`` and its pure-derivation ``is_over``
+    flips to True with ``winner_id=1``, while Python's ``has_lost=True``
+    on p0 leaves ``is_over=False`` / ``winner_id=None`` (no SBA in this
+    harness). The walk should be clean if both engines derived is_over
+    identically — which they don't, hence the strict-xfail.
+    """
+    from mtg_bot.parity.cross_engine import (
+        CardDef,
+        DeckSpec,
+        play_a_land_selector,
+        walk_both,
+    )
+
+    forest = CardDef(name="Forest", card_type="Land", mana_produced=("G",))
+    bears = CardDef(
+        name="Grizzly Bears",
+        card_type="Creature",
+        mana_cost_generic=1,
+        mana_cost_colored=(("G", 1),),
+        power=2,
+        toughness=2,
+    )
+    deck = DeckSpec(card_defs=(forest, bears), p0_library=(), p1_library=())
+    result = walk_both(
+        deck, n_decisions=2, decision_selector=play_a_land_selector
+    )
+    assert result.error is None
+    assert result.aborted_at is None
+    # The strict-xfail assertion: divergences empty across the walk.
+    for step in result.steps:
+        assert step.divergences == [], (
+            f"step {step.step_index}: "
+            f"{[(d.field, d.py_value, d.rust_value) for d in step.divergences]}"
+        )
+
+
+def test_cross_engine_empty_library_side_channel_draw_surfaces_is_over_divergence():
+    """Companion symptom-present pin for the strict-xfail above.
+
+    Asserts the SHAPE of the novel finding: an empty-library deck +
+    play_a_land_selector surfaces ``is_over`` and ``winner_id`` as the
+    diverging fields at step 0 (Rust True/1 vs Python False/None),
+    while the underlying loss-cause snapshot (libraries, hands) stays
+    consistent between engines.
+
+    When the CE-pure-derivation-is_over divergence closes:
+      * The strict-xfail above flips to xpass; remove its marker.
+      * This symptom test starts FAILING because the values would agree.
+        Remove / invert as part of the closure pair contract.
+    """
+    from mtg_bot.parity.cross_engine import (
+        CardDef,
+        DeckSpec,
+        play_a_land_selector,
+        walk_both,
+    )
+
+    forest = CardDef(name="Forest", card_type="Land", mana_produced=("G",))
+    bears = CardDef(
+        name="Grizzly Bears",
+        card_type="Creature",
+        mana_cost_generic=1,
+        mana_cost_colored=(("G", 1),),
+        power=2,
+        toughness=2,
+    )
+    deck = DeckSpec(card_defs=(forest, bears), p0_library=(), p1_library=())
+    result = walk_both(
+        deck, n_decisions=2, decision_selector=play_a_land_selector
+    )
+    assert result.error is None
+    # First step's divergences: exactly is_over + winner_id.
+    step_0 = result.steps[0]
+    fields = {d.field for d in step_0.divergences}
+    assert fields == {"is_over", "winner_id"}, (
+        f"expected exactly is_over+winner_id; got {sorted(fields)}"
+    )
+    by_field = {d.field: d for d in step_0.divergences}
+    # Rust: pure-derivation flips True/1 immediately.
+    assert by_field["is_over"].rust_value is True
+    assert by_field["winner_id"].rust_value == 1
+    # Python: stale until SBA fires.
+    assert by_field["is_over"].py_value is False
+    assert by_field["winner_id"].py_value is None
+
+
+# ---------------------------------------------------------------------------
+# Edge case #2: scale stress. play_a_land_selector walks parity-clean to
+# N=10 today (existing test). Crank to N=200 to make sure no long-tail
+# divergence creeps in as the step count grows. Regression-harden if clean.
+# ---------------------------------------------------------------------------
+
+
+def test_cross_engine_play_a_land_selector_walks_clean_at_n_200():
+    """The existing N=10 test pins play_a_land_selector parity-clean on
+    slightly_bigger_deckspec. Scale to N=200 — if some long-tail
+    divergence is lurking past the 10-decision horizon (e.g.
+    accumulated mana-pool state, end-of-turn cleanup, library drain to
+    empty), this test catches it.
+
+    Outcome at landing: clean (Phase-5 edge-case slice). Regression-
+    hardened against any future change that introduces step-count-
+    dependent drift on this selector.
+    """
+    from mtg_bot.parity.cross_engine import (
+        play_a_land_selector,
+        slightly_bigger_deckspec,
+        walk_both,
+    )
+
+    result = walk_both(
+        slightly_bigger_deckspec(),
+        n_decisions=200,
+        decision_selector=play_a_land_selector,
+    )
+    assert result.error is None
+    assert result.aborted_at is None
+    assert len(result.steps) == 200
+    for step in result.steps:
+        assert step.divergences == [], (
+            f"unexpected divergence at step {step.step_index}: "
+            f"{[(d.field, d.py_value, d.rust_value) for d in step.divergences]}"
+        )
+
+
+# ---------------------------------------------------------------------------
+# Edge case #3: asymmetric deck sizes. The harness's per-player snapshot
+# pathway is independent (each side has its own library_pN / hand_pN
+# field-view slot), so a p0-bigger / p1-smaller deck should walk just
+# as cleanly as a symmetric one — but the inaugural smoke only
+# exercised symmetric 3-4 card decks. This is the first asymmetric
+# coverage.
+# ---------------------------------------------------------------------------
+
+
+def test_cross_engine_asymmetric_deck_sizes_walk_clean():
+    """p0 holds 10 cards, p1 holds 1 card. play_a_land_selector
+    side-channel-draws on step 0 (p0 has a card to draw; p1's draw
+    pulls their single Forest), then drives PassPriority for the
+    remaining steps. Both engines should walk parity-clean — there's
+    no cross-player coupling in the snapshot path that an asymmetry
+    could violate.
+
+    Guards against a future refactor that, e.g., accidentally
+    indexes the wrong player's library in a per-player loop on one
+    side. Regression-harden if clean.
+    """
+    from mtg_bot.parity.cross_engine import (
+        CardDef,
+        DeckSpec,
+        play_a_land_selector,
+        walk_both,
+    )
+
+    forest = CardDef(name="Forest", card_type="Land", mana_produced=("G",))
+    bears = CardDef(
+        name="Grizzly Bears",
+        card_type="Creature",
+        mana_cost_generic=1,
+        mana_cost_colored=(("G", 1),),
+        power=2,
+        toughness=2,
+    )
+    deck = DeckSpec(
+        card_defs=(forest, bears),
+        # p0: 8 Forests + 2 Bears = 10 cards. p1: 1 Forest.
+        p0_library=tuple(["Forest"] * 8 + ["Grizzly Bears"] * 2),
+        p1_library=("Forest",),
+    )
+    result = walk_both(
+        deck, n_decisions=15, decision_selector=play_a_land_selector
+    )
+    assert result.error is None
+    assert result.aborted_at is None
+    assert len(result.steps) == 15
+    for step in result.steps:
+        assert step.divergences == [], (
+            f"asymmetric-deck divergence at step {step.step_index}: "
+            f"{[(d.field, d.py_value, d.rust_value) for d in step.divergences]}"
+        )
+
+
+# ---------------------------------------------------------------------------
+# Edge case #4: 1-card libraries + multi_turn_selector. The
+# advance_phase composition on BOTH engines uses an "inline" draw_card
+# variant that is a silent no-op on empty libraries (in Rust:
+# state_ops_steps.rs::draw_card_inline; in Python:
+# advance_phase_python calls turn.draw_card which DOES set has_lost).
+# So the parity here is fragile by construction — Python's
+# advance_phase_python flags has_lost, Rust's advance_phase does NOT
+# set attempted_draw_on_empty. But because Python's is_over needs
+# winner_id (only an SBA writes it), the symptom doesn't surface on
+# the is_over field-view — the two engines stay "consistently wrong
+# in different ways" and the per-field comparison stays clean.
+#
+# This test pins the current "harness-consistent" state: both engines
+# walk the deck through 8+ turns without crashing and without flagging
+# is_over=True. If the harness ever starts running SBAs between steps
+# (a likely future improvement), the divergence would surface and this
+# test would FAIL — at which point the maintainer reads the docstring
+# and either fixes the Rust draw_card_inline OR adds a side-channel
+# SBA fire on the Python harness.
+# ---------------------------------------------------------------------------
+
+
+def test_cross_engine_single_card_libraries_multi_turn_walks_clean():
+    """Both players start with 1-card libraries. Drive 100 decisions of
+    multi_turn_selector (multiple full turns, with DRAW steps on turn 2+
+    that consume the single card and then attempt empty-library draws
+    on turn 3+). The walk should be clean — neither engine surfaces
+    is_over=True (Python because no SBA fires the loss into winner_id;
+    Rust because advance_phase uses draw_card_inline which is a silent
+    no-op on empty, NOT the pymethod that flags attempted_draw_on_empty).
+
+    Documented divergence: the Rust draw_card_inline / draw_card
+    pymethod asymmetry means the deck-out doesn't surface in the
+    advance-phase walk path even though it WOULD surface if the
+    harness side-channeled the pymethod (see the empty-library
+    test above for the side-channel divergence shape).
+
+    If the underlying inline draw is fixed to set
+    attempted_draw_on_empty (or the harness fires an SBA pass between
+    steps), this test starts failing with an is_over/winner_id
+    divergence — at which point either fix Python to derive is_over
+    pure-style OR add the SBA fire on the Python harness.
+    """
+    from mtg_bot.parity.cross_engine import (
+        CardDef,
+        DeckSpec,
+        multi_turn_selector,
+        walk_both,
+    )
+
+    forest = CardDef(name="Forest", card_type="Land", mana_produced=("G",))
+    bears = CardDef(
+        name="Grizzly Bears",
+        card_type="Creature",
+        mana_cost_generic=1,
+        mana_cost_colored=(("G", 1),),
+        power=2,
+        toughness=2,
+    )
+    deck = DeckSpec(
+        card_defs=(forest, bears),
+        p0_library=("Forest",),
+        p1_library=("Forest",),
+    )
+    result = walk_both(
+        deck, n_decisions=100, decision_selector=multi_turn_selector
+    )
+    assert result.error is None
+    assert result.aborted_at is None
+    assert len(result.steps) == 100
+    # Walk should stay parity-clean across all 100 steps (full turn
+    # cycles, both engines deplete their libraries by turn 3 and then
+    # silently no-op on subsequent draw steps).
+    for step in result.steps:
+        assert step.divergences == [], (
+            f"single-card mt divergence at step {step.step_index}: "
+            f"{[(d.field, d.py_value, d.rust_value) for d in step.divergences]}"
+        )
+    # Neither engine surfaces is_over=True — the documented
+    # "consistently wrong in different ways" state.
+    assert result.steps[-1].py_view["is_over"] is False
+    assert result.steps[-1].rust_view["is_over"] is False
+
+
+# ---------------------------------------------------------------------------
+# Edge case #5: shuffle seed produces a documented library order
+# divergence. Python uses Mersenne Twister (random.Random); Rust uses
+# xorshift64 (build_rust_state via mtg_bot_engine.make_state). The two
+# PRNGs share a seed but produce different permutations — by design.
+# Pin this as a strict-xfail at step 0 so any future "we aligned the
+# shuffle PRNG" closure (e.g. landing the Rust-side MT mirror, or
+# adopting an externally-fed RNG stream from Python on both sides) flips
+# this to xpass.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.xfail(
+    strict=True,
+    reason=(
+        "Documented bridge limitation (RUST_PARITY_PLAN.md Decision 1): "
+        "Python shuffles with Mersenne Twister, Rust shuffles with "
+        "xorshift64. Same seed -> different permutation -> library_p0 "
+        "and library_p1 diverge at step 0. Strict-xfail until either "
+        "(a) Rust adopts MT, (b) both engines accept an external RNG "
+        "stream, or (c) the harness disables shuffle entirely on cross-"
+        "engine specs (shuffle_seed=None bypasses this — used by every "
+        "other Phase-5 test)."
+    ),
+)
+def test_cross_engine_shuffle_seed_walks_clean():
+    """Build matched states with ``shuffle_seed=42`` and assert the
+    libraries match at step 0. Today they don't — the Python MT
+    permutation differs from the Rust xorshift64 permutation. Strict-
+    xfail pins this; when shuffle parity lands the test flips to xpass.
+    """
+    from mtg_bot.parity.cross_engine import (
+        DeckSpec,
+        slightly_bigger_deckspec,
+        walk_both,
+    )
+
+    base = slightly_bigger_deckspec()
+    deck = DeckSpec(
+        card_defs=base.card_defs,
+        p0_library=base.p0_library,
+        p1_library=base.p1_library,
+        shuffle_seed=42,
+    )
+    result = walk_both(deck, n_decisions=0)
+    # The strict-xfail assertion: no initial divergence on libraries.
+    fields = {d.field for d in result.initial_divergences}
+    assert "library_p0" not in fields
+    assert "library_p1" not in fields
+
+
+def test_cross_engine_shuffle_seed_surfaces_library_divergence_for_multiple_seeds():
+    """Companion symptom-present pin for the shuffle-seed strict-xfail.
+
+    Confirms the SHAPE of the divergence across multiple seeds:
+    library_p0 AND library_p1 both diverge at step 0 (initial state)
+    for every seed value tested. The divergence is reproducible per-
+    seed (the same seed produces the same Python permutation and the
+    same Rust permutation, just different from each other).
+
+    When shuffle parity lands:
+      * The strict-xfail above flips to xpass; remove its marker.
+      * This symptom test starts FAILING because the values would agree.
+        Remove / invert as part of the closure pair contract.
+    """
+    from mtg_bot.parity.cross_engine import (
+        DeckSpec,
+        slightly_bigger_deckspec,
+        walk_both,
+    )
+
+    base = slightly_bigger_deckspec()
+    # Multiple seeds exercise the PRNG mismatch repeatably; if any seed
+    # accidentally produced the same Python+Rust permutation (the
+    # Birthday-style collision case), the strict-xfail above would
+    # become flaky. Pin three independent seeds to make that collision
+    # astronomically unlikely.
+    for seed in (1, 7, 42, 100):
+        deck = DeckSpec(
+            card_defs=base.card_defs,
+            p0_library=base.p0_library,
+            p1_library=base.p1_library,
+            shuffle_seed=seed,
+        )
+        result = walk_both(deck, n_decisions=0)
+        fields = {d.field for d in result.initial_divergences}
+        assert "library_p0" in fields, (
+            f"seed={seed}: expected library_p0 to diverge; got fields={sorted(fields)}"
+        )
+        assert "library_p1" in fields, (
+            f"seed={seed}: expected library_p1 to diverge; got fields={sorted(fields)}"
+        )
