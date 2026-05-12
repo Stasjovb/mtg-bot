@@ -305,6 +305,129 @@ def test_index_html_contains_force_kill_button_scaffolding(client):
     assert ".badge.force_killed" in body
 
 
+def test_force_kill_creates_aggregate_progress_row_when_absent(
+    tmp_path: Path,
+):
+    """If the DB has a ``runs`` row but no aggregate ``run_progress``
+    row yet (legitimate state during the brief window between
+    ``insert_run`` and the first ``upsert_progress``), force-kill must
+    INSERT a fresh row carrying only the ``original_status`` marker.
+    The UI uses that row to surface the ``force_killed`` label.
+    """
+    progress_dir = tmp_path / "training_progress"
+    progress_dir.mkdir()
+    # Hand-write a runs row + skip the progress row entirely.
+    from mtg_bot.cli.runs import db as runs_db_mod
+    from mtg_bot.cli.runs.models import Run
+    db_path = progress_dir / "runs.db"
+    conn = runs_db_mod.connect(db_path)
+    try:
+        runs_db_mod.insert_run(conn, Run(
+            run_id="iter_no_progress",
+            kind="training",
+            status="running",
+            started_at="2026-05-02T12:00:00+00:00",
+            ended_at=None,
+            git_commit="abcdef0",
+            config_json="{}",
+            parent_run_id=None,
+            label=None,
+            notes=None,
+        ))
+    finally:
+        conn.close()
+
+    app = create_app(progress_dir)
+    app.config["TESTING"] = True
+    c = app.test_client()
+    res = c.post("/api/runs/iter_no_progress/force_kill")
+    assert res.status_code == 200
+    body = res.get_json()
+    assert body["forced"] is True
+
+    # Aggregate row exists post-force-kill with the marker.
+    extra = _read_progress_extra(progress_dir, "iter_no_progress")
+    assert extra is not None
+    assert extra["original_status"] == "force_killed"
+
+
+def _write_db_only_run(
+    progress_dir: Path, run_id: str, status: str = "running",
+    extra_json: str | None = None,
+) -> None:
+    """Seed a runs.db row WITHOUT writing a matching JSON file. This
+    bypasses the request-time backfill (which would re-upsert progress
+    from the JSON and clobber any extra_json we plant) so the test can
+    pin the force-kill endpoint's tolerance for malformed extra_json
+    columns the producer might have written before our codec hardened.
+    """
+    from mtg_bot.cli.runs import db as runs_db_mod
+    from mtg_bot.cli.runs.models import (
+        ProgressUpdate as _ProgressUpdate, Run as _Run,
+    )
+    db_path = progress_dir / "runs.db"
+    conn = runs_db_mod.connect(db_path)
+    try:
+        runs_db_mod.insert_run(conn, _Run(
+            run_id=run_id, kind="training", status=status,
+            started_at="2026-05-02T12:00:00+00:00", ended_at=None,
+            git_commit="abcdef0", config_json="{}",
+            parent_run_id=None, label=None, notes=None,
+        ))
+        runs_db_mod.upsert_progress(conn, _ProgressUpdate(
+            run_id=run_id, shard_label=None,
+            n_games_done=None, n_games_total=None,
+            elapsed_seconds=None, crashed=None, timed_out=None,
+            wins_new=None, wins_old=None, draws=None,
+            extra_json=extra_json,
+        ))
+    finally:
+        conn.close()
+
+
+def test_force_kill_tolerates_malformed_extra_json(tmp_path: Path):
+    """A producer that wrote garbage into ``extra_json`` must not
+    crash force-kill. We swallow the decode error and replace the
+    column with a clean dict carrying just the ``original_status``
+    marker. DB-only seed (no JSON file) so the request-time backfill
+    can't restore the broken value before we assert.
+    """
+    progress_dir = tmp_path / "training_progress"
+    progress_dir.mkdir()
+    _write_db_only_run(
+        progress_dir, "iter_garbage",
+        status="running", extra_json="{not json",
+    )
+    app = create_app(progress_dir)
+    app.config["TESTING"] = True
+    c = app.test_client()
+    res = c.post("/api/runs/iter_garbage/force_kill")
+    assert res.status_code == 200
+    assert res.get_json()["forced"] is True
+    extra = _read_progress_extra(progress_dir, "iter_garbage")
+    assert extra == {"original_status": "force_killed"}
+
+
+def test_force_kill_tolerates_non_dict_extra_json(tmp_path: Path):
+    """A JSON-decodable but non-dict ``extra_json`` (legacy producer
+    that wrote a bare array) is treated as if the field were empty —
+    force-kill replaces it with a clean dict carrying the marker.
+    Pins the parallel ``isinstance(extra, dict)`` branch.
+    """
+    progress_dir = tmp_path / "training_progress"
+    progress_dir.mkdir()
+    _write_db_only_run(
+        progress_dir, "iter_array_extra",
+        status="running", extra_json="[1, 2, 3]",
+    )
+    app = create_app(progress_dir)
+    app.config["TESTING"] = True
+    c = app.test_client()
+    c.post("/api/runs/iter_array_extra/force_kill")
+    extra = _read_progress_extra(progress_dir, "iter_array_extra")
+    assert extra == {"original_status": "force_killed"}
+
+
 def test_force_kill_preserves_existing_extra_json_keys(client):
     """Force-kill merges ``original_status`` into the existing
     ``extra_json``; it must NOT clobber sibling keys the backfill or
