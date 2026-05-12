@@ -307,6 +307,23 @@ prior lookups use the matching slot mapping.
   against it exist yet. The first real v2 training run will
   surface any inference-side wiring gap that the smoke missed.
 
+## NN representation roadmap
+
+The 51-dim hand-engineered featurizer at `src/mtg_bot/features.py` is
+the current input to the value+policy network and is information-lossy
+by construction (no card identity, no mana colors, no structured stack
+contents). The forward-looking plan for replacing it with a learned
+structured representation — per-object transformer/GNN input, learned
+printing embeddings, auxiliary heads (e.g. belief over opponent's
+hand), and the optional MuZero-style learned-dynamics endpoint — is in
+**[`docs/NN_REPRESENTATION_ROADMAP.md`](docs/NN_REPRESENTATION_ROADMAP.md)**.
+
+Read that doc before making any architectural change to the NN input
+or the trunk. It captures the phased plan (Phase 0 aux heads → Phase 1
+structured input → Phase 2 scaled aux supervision → Phase 3 optional
+MuZero), the data-cost analysis, and the decision triggers between
+phases.
+
 ## Documenting deliberate divergences
 
 Any shortcut, heuristic, search optimization, or incorrect / outdated implementation of real MTG comprehensive rules **must be documented in `docs/SEARCH_LIMITATIONS.md`** at the time it lands.
