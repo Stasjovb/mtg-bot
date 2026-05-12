@@ -7055,3 +7055,310 @@ def test_cross_engine_flying_selector_pre_injection_walks_clean(
         "Bear Soarer should not yet exist at end of step 167 — "
         "flying injection fires at step 168"
     )
+
+
+
+# ---------------------------------------------------------------------------
+# Phase 5 follow-up #19: counterspell tests. Pins the counterspell_selector
+# walk + post-resolve structural state. See cross_engine.counterspell_selector
+# for the full design notes. The test names are prefixed with
+# `test_cross_engine_counterspell_` for parity with the prior probes'
+# naming convention (FS / DS / hexproof / flying / etc).
+# ---------------------------------------------------------------------------
+
+
+def test_cross_engine_counterspell_selector_walks_clean(parity_smoke):
+    """Cross-engine counterspell resolution walks parity-clean.
+
+    **Outcome (a) — clean pass**: no novel CE divergence surfaced on
+    this probe. Both engines compose a Counterspell-on-Bait-Bears
+    stack-of-2 the same observable end-state — bait Bears in p0's
+    graveyard (countered, no ETB), Counterspell in p1's graveyard,
+    both stacks empty, the 3 pre-existing creatures untouched on
+    their respective battlefields.
+
+    The two engines implement counter via DIFFERENT mechanisms
+    (Python: flip ``StackItem.countered = True``, route at pop time;
+    Rust: remove from stack + route inline) but converge bit-equal on
+    the cross-engine field-view compare. The counter-mechanism
+    asymmetry is INVISIBLE to the harness's per-step compare because
+    the snapshot is taken AFTER both engines drain to empty stacks.
+    """
+    from mtg_bot.parity.cross_engine import (
+        counterspell_selector,
+        multi_blocker_deckspec,
+        walk_both,
+    )
+
+    result = walk_both(
+        multi_blocker_deckspec(),
+        n_decisions=170,
+        decision_selector=counterspell_selector,
+    )
+    assert result.error is None, (
+        f"walk aborted at step {result.aborted_at}: {result.error}"
+    )
+    for step in result.steps:
+        assert step.divergences == [], (
+            f"unexpected divergence at step {step.step_index}: "
+            f"action={step.action_dict} "
+            f"{[(d.field, d.py_value, d.rust_value, d.known_gap) for d in step.divergences]}"
+        )
+
+
+def test_cross_engine_counterspell_post_resolve_structural_state(parity_smoke):
+    """Direct-read structural assertion AFTER the counter fires
+    (step 168 of the counterspell_selector walk on
+    multi_blocker_deckspec).
+
+    Pins the load-bearing observables that the harness's field-view
+    compare validates implicitly but that benefit from an explicit
+    read-side pin:
+
+    * Both engines: stack is empty after the counter resolves.
+    * Both engines: bait Bears in p0's graveyard (NOT on the
+      battlefield — the countered spell never resolved as a creature).
+    * Both engines: Counterspell in p1's graveyard.
+    * Both engines: the 3 pre-existing creatures (Bears ids 5, 9, 11)
+      are still on their respective battlefields, untouched by the
+      counter.
+
+    Distinct from the walks_clean test in that this asserts the
+    SHAPE of the post-counter state directly, not the cross-engine
+    field-view tuple. If a future change moves the bait Bears to an
+    unexpected zone (battlefield, exile, library), the walks_clean
+    compare would flag it as a divergence too, but the failure mode
+    here is sharper (you'd see e.g. "expected bait in gy got bf"
+    instead of "graveyard_p0 tuple shape diff").
+    """
+    from mtg_bot.parity.cross_engine import (
+        build_matched_states,
+        counterspell_selector,
+        multi_blocker_deckspec,
+        step_both,
+    )
+
+    py_state, rust_state = build_matched_states(multi_blocker_deckspec())
+    for i in range(169):
+        action = counterspell_selector(py_state, rust_state, i)
+        step_both(py_state, rust_state, action)
+
+    # Both stacks empty post-drain.
+    assert len(py_state.stack) == 0, (
+        f"Python stack should be empty post-counter; got "
+        f"{[i.source.printing.name for i in py_state.stack]}"
+    )
+    assert rust_state.stack_size() == 0, (
+        f"Rust stack should be empty post-counter; got "
+        f"size={rust_state.stack_size()}"
+    )
+
+    # Python: bait Bears in p0's graveyard, Counterspell in p1's.
+    py_p0_gy_names = [o.printing.name for o in py_state.players[0].graveyard]
+    py_p1_gy_names = [o.printing.name for o in py_state.players[1].graveyard]
+    assert "Bait Bears" in py_p0_gy_names, (
+        f"expected Bait Bears in Python p0 graveyard "
+        f"(countered spell -> owner gy per CR 701.5a); got {py_p0_gy_names}"
+    )
+    assert "Counterspell" in py_p1_gy_names, (
+        f"expected Counterspell in Python p1 graveyard "
+        f"(post-resolve Instant -> controller gy); got {py_p1_gy_names}"
+    )
+    # The bait Bears was countered — it should NEVER have hit the bf.
+    py_bf_names = [o.printing.name for o in py_state.battlefield]
+    assert "Bait Bears" not in py_bf_names, (
+        f"Bait Bears should NOT be on Python bf — the spell was "
+        f"countered, no ETB / put_into_battlefield should have fired. "
+        f"bf={py_bf_names}"
+    )
+
+    # Rust: same shape via the field-view's gy/bf signatures.
+    rust_view = parity_smoke._build_field_view(rust_state)
+    rust_p0_gy_names = tuple(e[0] for e in rust_view["graveyard_p0"])
+    rust_p1_gy_names = tuple(e[0] for e in rust_view["graveyard_p1"])
+    assert "Bait Bears" in rust_p0_gy_names, (
+        f"expected Bait Bears in Rust p0 graveyard "
+        f"(Effect::CounterTargetSpell inline-routes target source to "
+        f"controller's gy); got {rust_p0_gy_names}"
+    )
+    assert "Counterspell" in rust_p1_gy_names, (
+        f"expected Counterspell in Rust p1 graveyard "
+        f"(post-resolve Instant -> controller's gy via "
+        f"move_source_post_resolve); got {rust_p1_gy_names}"
+    )
+    rust_bf_names = tuple(e[0] for e in rust_view["battlefield"])
+    assert "Bait Bears" not in rust_bf_names, (
+        f"Bait Bears should NOT be on Rust bf — countered spell "
+        f"routes to gy inline. bf={rust_bf_names}"
+    )
+
+    # 3 pre-existing creatures still on bf on both engines.
+    py_grizzly_count = sum(1 for n in py_bf_names if n == "Grizzly Bears")
+    rust_grizzly_count = sum(1 for n in rust_bf_names if n == "Grizzly Bears")
+    assert py_grizzly_count == 3, (
+        f"expected 3 Grizzly Bears still on Python bf "
+        f"(counter doesn't touch resolved creatures); got "
+        f"{py_grizzly_count} (bf={py_bf_names})"
+    )
+    assert rust_grizzly_count == 3, (
+        f"expected 3 Grizzly Bears still on Rust bf; got "
+        f"{rust_grizzly_count} (bf={rust_bf_names})"
+    )
+
+
+def test_cross_engine_counterspell_pre_injection_walks_clean(parity_smoke):
+    """Pre-injection backbone steps 0-167 are parity-clean.
+
+    Same shape as the corresponding pre-injection test for every
+    prior probe — confirms the retaliation_selector backbone the
+    counterspell injection rides on stays divergence-free up to
+    the injection step. Distinguishes between "the counterspell
+    side-channel itself introduces a divergence" and "something
+    upstream of the side-channel is divergent and the counter
+    probe just inherits it".
+    """
+    from mtg_bot.parity.cross_engine import (
+        counterspell_selector,
+        multi_blocker_deckspec,
+        walk_both,
+    )
+
+    # Walk 168 steps — the counter injection fires at step 168
+    # itself, so steps 0..167 (168 steps total) are the
+    # backbone-only window.
+    result = walk_both(
+        multi_blocker_deckspec(),
+        n_decisions=168,
+        decision_selector=counterspell_selector,
+    )
+    assert result.error is None, (
+        f"pre-injection walk aborted at step {result.aborted_at}: "
+        f"{result.error}"
+    )
+    for step in result.steps:
+        assert step.divergences == [], (
+            f"pre-injection divergence at step {step.step_index}: "
+            f"action={step.action_dict} "
+            f"{[(d.field, d.py_value, d.rust_value, d.known_gap) for d in step.divergences]}"
+        )
+
+    # Sanity: the counterspell injection hasn't fired yet at end of
+    # step 167. Confirm no Counterspell or Bait Bears printing exists
+    # in any zone on the Python state.
+    from mtg_bot.parity.cross_engine import build_matched_states, step_both
+    py_state, rust_state = build_matched_states(multi_blocker_deckspec())
+    for i in range(168):
+        action = counterspell_selector(py_state, rust_state, i)
+        step_both(py_state, rust_state, action)
+
+    forbidden = ("Counterspell", "Bait Bears")
+    in_any_zone = (
+        any(
+            o.printing.name in forbidden
+            for p in py_state.players
+            for zone in (p.hand, p.library, p.graveyard, p.exile)
+            for o in zone
+        )
+        or any(
+            o.printing.name in forbidden
+            for o in py_state.battlefield
+        )
+    )
+    assert not in_any_zone, (
+        "Counterspell / Bait Bears should not yet exist at end of "
+        "step 167 — counter injection fires at step 168"
+    )
+
+
+def test_cross_engine_counterspell_empty_stack_fizzle(parity_smoke):
+    """**Test C — counter target with EMPTY stack.** Direct-call
+    fresh-state pin of the empty-stack fizzle parity.
+
+    Inject a Counterspell into p1's hand, push it onto an otherwise-
+    empty stack on both engines, resolve. Expected: both engines
+    short-circuit (Python: `if not targets: return`; Rust:
+    `None => return Ok(())`), the counter source moves to p1's
+    graveyard, the stack ends empty.
+
+    Pins the parity of the no-legal-target fizzle path — narrows the
+    "counterspell pushed without a target on stack" case which the
+    selector walk doesn't directly exercise (the walk always has the
+    bait Bears in front of the Counterspell on the stack).
+    """
+    from mtg_bot.cards.base import CardPrinting, ManaCost
+    from mtg_bot.effects.generic.stack_control import CounterTargetSpell
+    from mtg_bot.game import StackItem, Zone
+    from mtg_bot.parity.cross_engine import (
+        build_matched_states,
+        multi_blocker_deckspec,
+    )
+    from mtg_bot.actions import resolve_top_of_stack
+    from mtg_bot.turn import state_based_actions as py_sba
+
+    py_state, rust_state = build_matched_states(multi_blocker_deckspec())
+
+    # ---- Python side ----
+    counter_printing = CardPrinting(
+        name="Counterspell",
+        mana_cost_str="",
+        mana_cost=ManaCost(),
+        type_line="Instant",
+        supertypes=(),
+        card_types=("Instant",),
+        subtypes=(),
+        power=None,
+        toughness=None,
+        produces=frozenset(),
+        spell_effect=CounterTargetSpell(),
+    )
+    py_counter = py_state.new_object(
+        counter_printing, owner_id=1, zone=Zone.STACK,
+    )
+    py_counter.summoning_sick = False
+    # Push counter on an empty stack with empty targets — the
+    # CounterTargetSpell.resolve `if not targets: return` short-circuit
+    # is the load-bearing path here.
+    py_state.stack.append(
+        StackItem(source=py_counter, controller_id=1, targets=())
+    )
+    resolve_top_of_stack(py_state)
+    py_sba(py_state)
+
+    # Counterspell moved to p1's graveyard; stack empty.
+    assert len(py_state.stack) == 0, (
+        f"Python stack should be empty after counterspell fizzles; "
+        f"got {[i.source.printing.name for i in py_state.stack]}"
+    )
+    py_p1_gy_names = [o.printing.name for o in py_state.players[1].graveyard]
+    assert "Counterspell" in py_p1_gy_names, (
+        f"expected Counterspell in Python p1 graveyard after fizzle "
+        f"(post-resolve mover still routes the source); got "
+        f"{py_p1_gy_names}"
+    )
+
+    # ---- Rust side ----
+    ZONE_HAND = 0
+    counter_rust_id = rust_state.register_and_inject_object(
+        {
+            "name": "Counterspell",
+            "card_types": ["Instant"],
+            "effects": [{"kind": "counter_target_spell"}],
+        },
+        1,
+        ZONE_HAND,
+    )
+    rust_state.push_to_stack(counter_rust_id, 1)
+    rust_state.resolve_top_of_stack()
+    rust_state.apply_sbas()
+
+    assert rust_state.stack_size() == 0, (
+        f"Rust stack should be empty after counterspell fizzles; "
+        f"got size={rust_state.stack_size()}"
+    )
+    rust_view = parity_smoke._build_field_view(rust_state)
+    rust_p1_gy_names = tuple(e[0] for e in rust_view["graveyard_p1"])
+    assert "Counterspell" in rust_p1_gy_names, (
+        f"expected Counterspell in Rust p1 graveyard after fizzle "
+        f"(move_source_post_resolve routes Instant to gy regardless "
+        f"of effect outcome); got {rust_p1_gy_names}"
+    )

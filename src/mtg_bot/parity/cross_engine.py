@@ -5553,3 +5553,233 @@ def flying_selector(py_state, rust_state, step_index: int) -> dict:
                 }
 
     return retaliation_selector(py_state, rust_state, step_index)
+
+
+# ---------------------------------------------------------------------------
+# Phase 5 follow-up #19: counterspell_selector -- extend the cross-engine
+# smoke onto a CR 701.5 ``CounterTargetSpell`` resolution. After
+# :func:`retaliation_selector`'s walk lands the 3-creature bf state at
+# the end of step 167 (turn 13 PRECOMBAT_MAIN: p0=Bears id 5 sick; p1=
+# Bears ids 9, 11 unsick), side-channel-cast a Bait Bears onto the
+# stack on BOTH engines AND simultaneously side-channel-cast a
+# Counterspell from p1 targeting the Bait Bears, then resolve both.
+# Exercises a distinct surface from the eleven combat-keyword probes:
+#
+#   * **Stack composition.** Two stack items composed on both engines
+#     (bait spell at index 0, counterspell at index 1) and resolved in
+#     LIFO order. Tests whether Python's `resolve_top_of_stack` and
+#     Rust's `resolve_top_of_stack` produce the same final field-view
+#     when a counter is on top of a creature spell.
+#
+#   * **Counter mechanism asymmetry.** The two engines implement
+#     "counter target spell" via DIFFERENT mechanisms with the SAME
+#     observable end-state:
+#       - Python `CounterTargetSpell.resolve` (effects/generic/
+#         stack_control.py:217) sets `item.countered = True` on the
+#         target StackItem. The countered flag is later read by
+#         `resolve_top_of_stack` (actions.py:2659) when the BAIT
+#         spell is popped -- it routes the source to its owner's
+#         graveyard via `_send_to_graveyard_or_library` without
+#         firing any effects/ETBs (CR 701.5a).
+#       - Rust `Effect::CounterTargetSpell` (state_ops_resolve.rs:1789)
+#         directly REMOVES the target stack item via `state.stack.
+#         remove(stack_pos)` and routes the source to the target
+#         controller's graveyard IMMEDIATELY inside the counterspell's
+#         own resolve loop. The bait spell never gets a pop-and-route
+#         pass.
+#     Both engines should end with the bait spell in p0's graveyard,
+#     the counterspell in p1's graveyard, both stacks empty.
+#
+#   * **Owner-vs-controller routing.** Python's
+#     `_send_to_graveyard_or_library` reads `card.owner_id`; Rust's
+#     inline counter-mover reads `item.controller`. On the injected
+#     bait spell owner==controller==0, so both engines route to p0's
+#     graveyard symmetrically.
+#
+#   * **Empty-stack fizzle parity (Test C).** Both engines short-circuit
+#     when the counterspell sees an empty stack at resolution time:
+#     Python's `if not targets: return` (effects/generic/stack_control.
+#     py:198); Rust's `None => return Ok(())` (state_ops_resolve.rs:
+#     1803). The counterspell still routes to its own controller's
+#     graveyard via the post-resolve mover; the stack ends empty.
+#
+# **Setup: side-channel inject + side-channel cast.** Rust's
+# `CastSpell` action arm only routes to `cast_creature` -- instants
+# and sorceries cannot be cast through `apply_action({"kind":
+# "cast_spell"})` today, same constraint the mass_removal_selector
+# probe documented.
+#
+# **Trigger detection (stateless).** The injection fires the FIRST
+# time the selector observes 3 creatures on the bf (the
+# retaliation_selector backbone's end-of-step-167 state) AND no
+# Counterspell in any zone yet -- uniquely true at step 168 on the
+# retaliation walk; on every other step at least one clause is false.
+# ---------------------------------------------------------------------------
+
+
+# Names of the synthetic counterspell-probe printings. Distinct from
+# every other Phase-5 probe's printing names so the eleven combat
+# probes + this counterspell probe + the mass_removal probe + the
+# cast-spell baseline all stay mutually independent on the same
+# multi_blocker_deckspec walk.
+_COUNTERSPELL_PRINTING_NAME = "Counterspell"
+_BAIT_SPELL_PRINTING_NAME = "Bait Bears"
+
+
+def counterspell_side_channel(py_state, rust_state) -> None:
+    """Side-channel mirror of a Bait-Bears cast + Counterspell cast +
+    full stack drain.
+
+    Inject a Bait Bears creature into p0's hand and a Counterspell
+    instant into p1's hand on BOTH engines, push both onto the stack
+    (Bait first as p0's "cast", Counterspell second as p1's response),
+    resolve top-to-bottom, and run a final SBA pass. The composition
+    mirrors what `cast_spell -> priority_loop -> resolve_top_of_stack`
+    would do on the production Python engine -- but driven directly
+    from the harness because Rust's `CastSpell` action arm routes
+    only to `cast_creature` today.
+
+    Same side-channel-a-method-neither-engine-reaches-via-apply_action
+    pattern as :func:`mass_removal_side_channel`.
+
+    No return value -- the post-resolve state is the observable.
+    """
+    from mtg_bot.cards.base import CardPrinting, ManaCost
+    from mtg_bot.effects.generic.stack_control import CounterTargetSpell
+    from mtg_bot.game import StackItem, Zone
+    from mtg_bot.turn import state_based_actions
+    from mtg_bot.actions import resolve_top_of_stack
+
+    # ---- Python side ----------------------------------------------------
+    bait_printing = CardPrinting(
+        name=_BAIT_SPELL_PRINTING_NAME,
+        mana_cost_str="",
+        mana_cost=ManaCost(),
+        type_line="Creature",
+        supertypes=(),
+        card_types=("Creature",),
+        subtypes=(),
+        power=2,
+        toughness=2,
+        produces=frozenset(),
+    )
+    bait_obj = py_state.new_object(
+        bait_printing, owner_id=0, zone=Zone.HAND,
+    )
+    bait_obj.summoning_sick = False
+    py_state.players[0].hand.append(bait_obj)
+
+    counter_printing = CardPrinting(
+        name=_COUNTERSPELL_PRINTING_NAME,
+        mana_cost_str="",
+        mana_cost=ManaCost(),
+        type_line="Instant",
+        supertypes=(),
+        card_types=("Instant",),
+        subtypes=(),
+        power=None,
+        toughness=None,
+        produces=frozenset(),
+        spell_effect=CounterTargetSpell(),
+    )
+    counter_obj = py_state.new_object(
+        counter_printing, owner_id=1, zone=Zone.HAND,
+    )
+    counter_obj.summoning_sick = False
+    py_state.players[1].hand.append(counter_obj)
+
+    # Mimic p0's cast: hand -> stack.
+    py_state.players[0].hand.remove(bait_obj)
+    bait_obj.zone = Zone.STACK
+    py_state.stack.append(
+        StackItem(source=bait_obj, controller_id=0)
+    )
+
+    # Mimic p1's cast: hand -> stack targeting bait at stack[0]
+    # (per CounterTargetSpell.resolve's targets[0] = ("stack", idx)
+    # read against state.stack AFTER the counter pops at the top of
+    # resolve_top_of_stack).
+    py_state.players[1].hand.remove(counter_obj)
+    counter_obj.zone = Zone.STACK
+    py_state.stack.append(
+        StackItem(
+            source=counter_obj,
+            controller_id=1,
+            targets=(("stack", 0),),
+        )
+    )
+
+    # Drain the stack top-to-bottom. First resolve pops the
+    # Counterspell -> sets countered=True on the bait stack item +
+    # routes counter source to p1's graveyard. Second resolve pops
+    # the bait Bears -> countered branch routes bait source to p0's
+    # graveyard without firing ETBs.
+    resolve_top_of_stack(py_state)
+    resolve_top_of_stack(py_state)
+    state_based_actions(py_state)
+
+    # ---- Rust side ------------------------------------------------------
+    ZONE_HAND = 0
+    bait_rust_id = rust_state.register_and_inject_object(
+        {
+            "name": _BAIT_SPELL_PRINTING_NAME,
+            "card_types": ["Creature"],
+            "power": 2,
+            "toughness": 2,
+        },
+        0,
+        ZONE_HAND,
+    )
+    counter_rust_id = rust_state.register_and_inject_object(
+        {
+            "name": _COUNTERSPELL_PRINTING_NAME,
+            "card_types": ["Instant"],
+            "effects": [{"kind": "counter_target_spell"}],
+        },
+        1,
+        ZONE_HAND,
+    )
+
+    rust_state.push_to_stack(bait_rust_id, 0)
+    rust_state.push_to_stack(counter_rust_id, 1)
+
+    # One resolve_top_of_stack drains the Counterspell:
+    #   Effect::CounterTargetSpell picks topmost-non-self (bait at
+    #   stack[0]), removes it, routes bait source to p0's graveyard
+    #   inline. Then move_source_post_resolve routes the counter
+    #   source to p1's graveyard. Stack now empty.
+    rust_state.resolve_top_of_stack()
+    rust_state.apply_sbas()
+
+
+def counterspell_selector(py_state, rust_state, step_index: int) -> dict:
+    """Cross-engine smoke selector that drives a Counterspell-resolving
+    sequence on :func:`multi_blocker_deckspec` after
+    :func:`retaliation_selector`'s walk lands the 3-creature bf state.
+
+    Differs from :func:`retaliation_selector` in exactly one way:
+    when the observable state matches the "3 creatures on bf, no
+    Counterspell in any zone yet" window (uniquely step 168 on the
+    retaliation walk), the selector side-channels the bait-cast +
+    counter-cast + full stack drain via
+    :func:`counterspell_side_channel` and returns ``pass_priority``.
+    """
+    counter_already_fired = any(
+        o.printing.name == _COUNTERSPELL_PRINTING_NAME
+        for p in py_state.players
+        for zone_list in (p.hand, p.library, p.graveyard, p.exile)
+        for o in zone_list
+    ) or any(
+        o.printing.name == _COUNTERSPELL_PRINTING_NAME
+        for o in py_state.battlefield
+    )
+    if not counter_already_fired:
+        creature_count = sum(
+            1 for o in py_state.battlefield
+            if "Creature" in o.printing.card_types
+        )
+        if creature_count >= 3:
+            counterspell_side_channel(py_state, rust_state)
+            return {"kind": "pass_priority"}
+
+    return retaliation_selector(py_state, rust_state, step_index)
