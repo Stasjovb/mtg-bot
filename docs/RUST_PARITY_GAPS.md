@@ -209,7 +209,7 @@ because the synthetic seed library is 100% Forest (identical
 printings, distinct ids — shuffle reorders ids but doesn't add
 or remove cards from the library set).
 
-See invariant I35 below for the post-search shuffle contract.
+See invariant I42 below for the post-search shuffle contract.
 
 ### ~~G24.~~ CLOSED: `keep_hand(player_id)` fires a Paris scry-on-keep when `mulligan_count > 0`
 
@@ -2714,7 +2714,7 @@ the action-kind gate.
 > compat fallback. Production cli/bench callers don't need the
 > rewire — the new substrate is opt-in.
 >
-> **Invariant: see I34 below** — pins all 8 gameplay shuffle sites
+> **Invariant: see I41 below** — pins all 8 gameplay shuffle sites
 > as consumers of the `external_rng` substrate.
 >
 > **Out of scope (per the playbook).** G19
@@ -2730,7 +2730,7 @@ the action-kind gate.
 > staging doc's proposed CE7 and took CE10 instead, so this
 > finding shifts from staged-CE9 to filed-CE8.
 
-### I34. All 8 gameplay shuffle sites accept an external `rng` parameter and consume Fisher-Yates draws from the caller-supplied Python `random.Random` via `external_rng::next_below`
+### I41. All 8 gameplay shuffle sites accept an external `rng` parameter and consume Fisher-Yates draws from the caller-supplied Python `random.Random` via `external_rng::next_below`
 
 Post-CE8 (Slice 1 + Slice 2), every Rust gameplay shuffle entry
 takes an optional `rng: Option<&Bound<'_, PyAny>>` kwarg. When
@@ -2787,7 +2787,7 @@ rewired site against Python's MT reference).
   thread an `rng` through `apply_effect`, so the post-search
   shuffle is xorshift64-only. Cross-engine MT parity for this
   one Effect is a follow-up Effect-rng-threading slice. See
-  invariant I35 + the SEARCH_LIMITATIONS follow-up entry.
+  invariant I42 + the SEARCH_LIMITATIONS follow-up entry.
 - **xorshift64 struct deduplication** — three identical
   `XorShift64` struct copies remain (one per file: setup, library,
   mulligan); G19 added an inline xorshift64 in `state_ops_resolve.rs`
@@ -2795,7 +2795,7 @@ rewired site against Python's MT reference).
   Consolidating into `rust/src/rng_internal.rs` is a housekeeping
   follow-up; not load-bearing for parity.
 
-### I35. `Effect::SearchLibraryForBasicLandTapped` shuffles the library after the search per CR 701.19 / 701.22
+### I42. `Effect::SearchLibraryForBasicLandTapped` shuffles the library after the search per CR 701.19 / 701.22
 
 Post-`feature/g19-search-shuffle` (this closure), the
 `Effect::SearchLibraryForBasicLandTapped` resolve arm in
@@ -2806,7 +2806,7 @@ the active player's library after all `count` picks have landed
 regardless of search outcome.
 
 **Shuffle path: inlined xorshift64 only.** Unlike the 8 pymethod
-shuffle sites covered by I34, this Effect arm doesn't yet consume
+shuffle sites covered by I41, this Effect arm doesn't yet consume
 the external_rng substrate — `apply_effect` lacks the `rng`
 parameter that would thread it through, and adding it touches every
 intervening call site (`resolve_top_of_stack`,
@@ -2829,7 +2829,7 @@ get the same permutation twice.
 
 **Cross-engine MT parity for this Effect is deferred.** A follow-up
 slice can thread `Option<&Bound<'_, PyAny>>` through `apply_effect`
-and unify this site with I34's substrate; tracked in
+and unify this site with I41's substrate; tracked in
 `SEARCH_LIMITATIONS.md`'s G19-follow-up entry.
 
 - **Pinned by**:
