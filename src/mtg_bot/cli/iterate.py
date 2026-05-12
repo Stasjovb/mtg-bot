@@ -72,6 +72,8 @@ _SCRIPTS_DIR = _REPO_ROOT / "scripts"
 import os
 
 from mtg_bot.cli import _common
+from mtg_bot.cli.runs import client as _runs_client
+from mtg_bot.cli.runs import lifecycle as _lifecycle
 from mtg_bot.decks import Deck, decks_from_json
 from mtg_bot.training import (
     DataGenProgress,
@@ -148,6 +150,100 @@ def _write_cycle_progress(
     }
     progress_dir.mkdir(parents=True, exist_ok=True)
     atomic_write_json(progress_dir / f"{cycle_id}.json", payload)
+
+
+def _cycle_config_dict(
+    *,
+    args: argparse.Namespace,
+    iter_idx_one_based: int,
+    best_version: str,
+) -> dict:
+    """Build the cycle-level config dict that lands in
+    ``runs.config_json``. Captures the iteration's identity (iter #,
+    bootstrap) plus the salient hyper-parameters (search depth, game
+    count, eval gate, deck pool) so an offline reader can reconstruct
+    the run's parameters from the DB alone."""
+    return {
+        "kind": "cycle",
+        "iter_idx": iter_idx_one_based,
+        "bootstrap_version": args.bootstrap_version,
+        "best_version_at_start": best_version,
+        "games_per_iteration": args.games_per_iteration,
+        "samples": args.samples,
+        "nodes": args.nodes,
+        "epochs": args.epochs,
+        "eval_games": args.eval_games,
+        "acceptance_threshold": args.acceptance_threshold,
+        "deck_pool": str(args.deck_pool),
+        "seed": args.seed,
+        "n_iterations": args.n_iterations,
+    }
+
+
+def _self_play_config_dict(
+    *,
+    args: argparse.Namespace,
+    best_version: str,
+    cycle_seed: int,
+    distributed: bool,
+) -> dict:
+    """Stage config dict for a self-play stage run row."""
+    return {
+        "kind": "self_play",
+        "best_version": best_version,
+        "n_games": args.games_per_iteration,
+        "samples": args.samples,
+        "nodes": args.nodes,
+        "seed": cycle_seed,
+        "enable_mulligans": args.enable_mulligans,
+        "deck_pool": str(args.deck_pool),
+        "distributed": distributed,
+    }
+
+
+def _train_config_dict(
+    *,
+    args: argparse.Namespace,
+    peeked_train_version: str,
+    cycle_seed: int,
+) -> dict:
+    """Stage config dict for a train stage run row."""
+    return {
+        "kind": "training",
+        "peeked_version": peeked_train_version,
+        "epochs": args.epochs,
+        "batch_size": args.batch_size,
+        "learning_rate": args.learning_rate,
+        "val_split": args.val_split,
+        "seed": cycle_seed,
+        "data_dir": str(args.data_dir),
+        "window_recent": args.window_recent,
+        "early_stop_patience": args.early_stop_patience,
+        "architecture": args.architecture,
+    }
+
+
+def _eval_config_dict(
+    *,
+    args: argparse.Namespace,
+    new_version: str,
+    best_version: str,
+    cycle_seed: int,
+    distributed: bool,
+) -> dict:
+    """Stage config dict for an eval-gate stage run row."""
+    return {
+        "kind": "eval",
+        "new": new_version,
+        "old": best_version,
+        "games": args.eval_games,
+        "samples": args.samples,
+        "nodes": args.nodes,
+        "seed": cycle_seed + 7777,
+        "acceptance_threshold": args.acceptance_threshold,
+        "deck_pool": str(args.deck_pool),
+        "distributed": distributed,
+    }
 
 
 class ReconcileError(RuntimeError):
@@ -1665,7 +1761,16 @@ def main(argv=None) -> None:  # pragma: no cover
 
     from datetime import datetime, timezone
     user_stopped = False
-    for iter_idx in range(args.n_iterations):
+    # In-flight cycle id used by the outermost except handler to mark
+    # an unfinished cycle as failed/killed in the run DB when an
+    # exception punches through every nested try-block. The cycle
+    # body sets it immediately after start_run and the inner
+    # ``_finish_cycle`` helper clears it once finish_run lands; if
+    # the helper short-circuits via ``cycle_finished``, the cleared
+    # state already matches reality.
+    _in_flight_cycle = {"id": None}  # mutable holder so closures can clear
+    try:
+      for iter_idx in range(args.n_iterations):
         if user_stopped:
             break
         n_done = state["iterations_completed"]
@@ -1747,8 +1852,58 @@ def main(argv=None) -> None:  # pragma: no cover
             stage="self_play",
         )
 
+        # Phase 1 dual-write: register the cycle in the SQLite run DB
+        # alongside the existing JSON. Multiple early-break paths
+        # (stop-sentinel detected after self-play / train / eval) need
+        # to mark the row ``killed`` rather than ``completed``, which
+        # the ``run_lifecycle`` CM can't express (its else-clause
+        # always overwrites mid-body finish_run calls with ``completed``).
+        # So we use the lower-level ``start_run`` / ``finish_run``
+        # primitives directly and replicate lifecycle's status mapping
+        # in the surrounding try/except. The run is a no-op when the
+        # env vars ``MTG_BOT_RUN_DB_PATH`` / ``MTG_BOT_RUN_DB_URL`` are
+        # unset (Phase 1 invariant — caller's JSON writes already
+        # provide visibility).
+        cycle_config = _cycle_config_dict(
+            args=args,
+            iter_idx_one_based=n_done + 1,
+            best_version=best_version,
+        )
+        cycle_json_path = progress_dir / f"{cycle_id}.json"
+        _runs_client.start_run(
+            cycle_id,
+            kind="iterate",
+            config_json=_lifecycle.serialize_config(cycle_config),
+            git_commit=_lifecycle.git_commit_short(),
+            label=iter_label,
+        )
+        _in_flight_cycle["id"] = cycle_id
+        _lifecycle.register_progress_artifact(cycle_id, cycle_json_path)
+        _runs_client.push_event(
+            cycle_id, "cycle_started",
+            payload={
+                "iter_idx": n_done + 1,
+                "best_version": best_version,
+            },
+        )
+        cycle_finished = False
+
         def _cycle_stop_check() -> bool:
             return stop_requested(progress_dir, cycle_id)
+
+        def _finish_cycle(status: str, *, notes: str | None = None) -> None:
+            """Mark the cycle terminal in the run DB. Idempotent — the
+            sentinel ``cycle_finished`` guards against double-call
+            (which would just be a no-op UPDATE but keeps logs clean).
+            Also clears the outer ``_in_flight_cycle`` holder so the
+            outermost except handler doesn't double-write.
+            """
+            nonlocal cycle_finished
+            if cycle_finished:
+                return
+            cycle_finished = True
+            _runs_client.finish_run(cycle_id, status, notes=notes)
+            _in_flight_cycle["id"] = None
 
         self_play_replay_config: ReplayCaptureConfig | None = None
         if args.capture_every_self_play > 0:
@@ -1766,77 +1921,132 @@ def main(argv=None) -> None:  # pragma: no cover
             str(args.hang_dump_dir / self_play_run_id)
             if str(args.hang_dump_dir) else None
         )
-        if shards_cfg is None:
-            n_samples, n_policy, gen_elapsed = _self_play(
-                weights_path=best_weights,
-                n_games=args.games_per_iteration,
-                samples=args.samples,
-                nodes=args.nodes,
-                seed=cycle_seed,
-                n_workers=args.workers,
-                output=data_path,
-                enable_mulligans=args.enable_mulligans,
-                per_game_timeout_sec=args.per_game_timeout_self_play_sec,
-                hidden_sizes=iter_hidden_sizes,
-                architecture=best_architecture,
-                policy_hidden_sizes=best_policy_hidden_sizes,
-                progress_path=self_play_progress_path,
-                run_id=self_play_run_id,
-                deck_pool=deck_pool,
-                replay_config=self_play_replay_config,
-                hang_dump_dir=sp_hang_dir,
-                heuristics=HeuristicsConfig(
-                    phase_prune_enabled=not args.no_phase_priority_prune,
-                ),
-                cycle_id=cycle_id,
-                stop_check=_cycle_stop_check,
-                action_encoding_version=iter_action_encoding_version,
+        # Phase 1 dual-write: register the self-play stage as its own
+        # run row keyed under the cycle as parent. ``run_lifecycle``'s
+        # try/finally maps a clean exit to ``completed``,
+        # KeyboardInterrupt/SystemExit to ``killed``, and any other
+        # exception to ``failed``. The wrapped body is the existing
+        # self-play call site, unchanged.
+        _runs_client.push_event(
+            cycle_id, "stage_started",
+            payload={"stage": "self_play", "run_id": self_play_run_id},
+        )
+        with _lifecycle.run_lifecycle(
+            run_id=self_play_run_id,
+            kind="self_play",
+            config=_self_play_config_dict(
+                args=args, best_version=best_version,
+                cycle_seed=cycle_seed,
+                distributed=shards_cfg is not None,
+            ),
+            progress_json_path=self_play_progress_path,
+            parent_run_id=cycle_id,
+            label=self_play_run_id,
+        ):
+            if shards_cfg is None:
+                n_samples, n_policy, gen_elapsed = _self_play(
+                    weights_path=best_weights,
+                    n_games=args.games_per_iteration,
+                    samples=args.samples,
+                    nodes=args.nodes,
+                    seed=cycle_seed,
+                    n_workers=args.workers,
+                    output=data_path,
+                    enable_mulligans=args.enable_mulligans,
+                    per_game_timeout_sec=args.per_game_timeout_self_play_sec,
+                    hidden_sizes=iter_hidden_sizes,
+                    architecture=best_architecture,
+                    policy_hidden_sizes=best_policy_hidden_sizes,
+                    progress_path=self_play_progress_path,
+                    run_id=self_play_run_id,
+                    deck_pool=deck_pool,
+                    replay_config=self_play_replay_config,
+                    hang_dump_dir=sp_hang_dir,
+                    heuristics=HeuristicsConfig(
+                        phase_prune_enabled=not args.no_phase_priority_prune,
+                    ),
+                    cycle_id=cycle_id,
+                    stop_check=_cycle_stop_check,
+                    action_encoding_version=iter_action_encoding_version,
+                )
+            else:
+                # Distributed: each shard writes its own npz to args.data_dir
+                # under ``iter_NNN_<bootstrap>_shard_<label>_<utc>.npz``.
+                # train_nn.py globs the dir, so the master sees all shards'
+                # data at training time without any further work here.
+                n_samples, n_policy, gen_elapsed = _self_play_distributed(
+                    shards_config=shards_cfg,
+                    weights_path=best_weights,
+                    samples=args.samples,
+                    nodes=args.nodes,
+                    seed=cycle_seed,
+                    enable_mulligans=args.enable_mulligans,
+                    per_game_timeout_sec=args.per_game_timeout_self_play_sec,
+                    hidden_sizes=iter_hidden_sizes,
+                    architecture=best_architecture,
+                    policy_hidden_sizes=best_policy_hidden_sizes,
+                    deck_pool_path=args.deck_pool,
+                    capture_every=args.capture_every_self_play,
+                    nn_version_label=best_version,
+                    replays_root=args.replays_dir,
+                    hang_dump_root=(
+                        args.hang_dump_dir if str(args.hang_dump_dir) else None
+                    ),
+                    progress_dir=progress_dir,
+                    output_dir=args.data_dir,
+                    run_id_prefix=f"{iter_label}_self_play_{best_version}",
+                    total_games=args.games_per_iteration,
+                    queue_url=args.queue_url,
+                    bundle_url=args.bundle_url,
+                    slack_extra=_compute_slack_extra(
+                        args.games_per_iteration, args.queue_slack_pct,
+                    ),
+                    shard_ssh_timeout_s=args.shard_ssh_timeout_min * 60,
+                    use_ismcts=args.use_ismcts,
+                    use_belief_weighted=args.use_belief_weighted,
+                    heuristics=HeuristicsConfig(
+                        phase_prune_enabled=not args.no_phase_priority_prune,
+                    ),
+                    action_encoding_version=iter_action_encoding_version,
+                    # Self-play SHM: the new --use-shm-self-play flag, OR
+                    # the deprecated --use-shm-server (back-compat alias).
+                    use_shm_server=(
+                        args.use_shm_self_play or args.use_shm_server
+                    ),
+                )
+        # Self-play stage finished — register the produced npz as an
+        # artifact on the self_play stage run and emit a stage_completed
+        # event on the cycle (the lifecycle CM already wrote the stage's
+        # terminal status into the runs row).
+        try:
+            npz_bytes = data_path.stat().st_size if data_path.exists() else None
+        except OSError:
+            npz_bytes = None
+        if npz_bytes is not None:
+            _runs_client.push_artifact(
+                self_play_run_id,
+                artifact_type="npz", path=str(data_path),
+                bytes_=npz_bytes,
             )
-        else:
-            # Distributed: each shard writes its own npz to args.data_dir
-            # under ``iter_NNN_<bootstrap>_shard_<label>_<utc>.npz``.
-            # train_nn.py globs the dir, so the master sees all shards'
-            # data at training time without any further work here.
-            n_samples, n_policy, gen_elapsed = _self_play_distributed(
-                shards_config=shards_cfg,
-                weights_path=best_weights,
-                samples=args.samples,
-                nodes=args.nodes,
-                seed=cycle_seed,
-                enable_mulligans=args.enable_mulligans,
-                per_game_timeout_sec=args.per_game_timeout_self_play_sec,
-                hidden_sizes=iter_hidden_sizes,
-                architecture=best_architecture,
-                policy_hidden_sizes=best_policy_hidden_sizes,
-                deck_pool_path=args.deck_pool,
-                capture_every=args.capture_every_self_play,
-                nn_version_label=best_version,
-                replays_root=args.replays_dir,
-                hang_dump_root=(
-                    args.hang_dump_dir if str(args.hang_dump_dir) else None
-                ),
-                progress_dir=progress_dir,
-                output_dir=args.data_dir,
-                run_id_prefix=f"{iter_label}_self_play_{best_version}",
-                total_games=args.games_per_iteration,
-                queue_url=args.queue_url,
-                bundle_url=args.bundle_url,
-                slack_extra=_compute_slack_extra(
-                    args.games_per_iteration, args.queue_slack_pct,
-                ),
-                shard_ssh_timeout_s=args.shard_ssh_timeout_min * 60,
-                use_ismcts=args.use_ismcts,
-                use_belief_weighted=args.use_belief_weighted,
-                heuristics=HeuristicsConfig(
-                    phase_prune_enabled=not args.no_phase_priority_prune,
-                ),
-                action_encoding_version=iter_action_encoding_version,
-                # Self-play SHM: the new --use-shm-self-play flag, OR
-                # the deprecated --use-shm-server (back-compat alias).
-                use_shm_server=(
-                    args.use_shm_self_play or args.use_shm_server
-                ),
-            )
+        _runs_client.push_progress(
+            self_play_run_id,
+            n_games_done=args.games_per_iteration,
+            n_games_total=args.games_per_iteration,
+            elapsed_seconds=gen_elapsed,
+            extra={
+                "n_samples": int(n_samples),
+                "n_policy_rows": int(n_policy),
+            },
+        )
+        _runs_client.push_event(
+            cycle_id, "stage_completed",
+            payload={
+                "stage": "self_play", "run_id": self_play_run_id,
+                "n_samples": int(n_samples),
+                "n_policy_rows": int(n_policy),
+                "elapsed_seconds": float(gen_elapsed),
+            },
+        )
         print(
             f"[iterate]   gen done in {gen_elapsed/60:.1f}m: "
             f"{n_samples} samples, {n_policy} with policy "
@@ -1866,6 +2076,7 @@ def main(argv=None) -> None:  # pragma: no cover
                 ended=True,
                 notes="stopped via UI sentinel",
             )
+            _finish_cycle("killed", notes="stopped via UI sentinel (self_play)")
             user_stopped = True
             break
 
@@ -1874,29 +2085,76 @@ def main(argv=None) -> None:  # pragma: no cover
         train_progress_path = (
             progress_dir / f"{iter_label}_train_{peeked_train_version}.json"
         )
-        new_version = _train_next(
-            data_dir=args.data_dir,
-            registry_root=args.registry_root,
-            epochs=args.epochs,
-            batch_size=args.batch_size,
-            learning_rate=args.learning_rate,
-            val_split=args.val_split,
-            seed=cycle_seed,
-            notes=(
-                f"iterate_alphazero iteration #{n_done + 1}, "
-                f"self-play driven by {best_version}"
-            ),
-            window_recent=args.window_recent,
-            hidden_sizes=iter_hidden_sizes,
-            progress_path=train_progress_path,
-            policy_loss_weight=args.policy_loss_weight,
-            one_legal_keep_frac=args.one_legal_keep_frac,
-            architecture=iter_architecture,
-            policy_hidden_sizes=iter_policy_hidden_sizes,
-            early_stop_patience=args.early_stop_patience,
-            action_encoding_version=iter_action_encoding_version,
+        # Phase 1 dual-write: wrap the train subprocess call in a
+        # ``training`` stage run row. ``_train_next`` raises
+        # RuntimeError on a non-zero exit, which the lifecycle CM
+        # maps to status=failed.
+        train_run_id = f"{iter_label}_train_{peeked_train_version}"
+        _runs_client.push_event(
+            cycle_id, "stage_started",
+            payload={"stage": "train", "run_id": train_run_id},
         )
+        with _lifecycle.run_lifecycle(
+            run_id=train_run_id,
+            kind="training",
+            config=_train_config_dict(
+                args=args,
+                peeked_train_version=peeked_train_version,
+                cycle_seed=cycle_seed,
+            ),
+            progress_json_path=train_progress_path,
+            parent_run_id=cycle_id,
+            label=train_run_id,
+        ):
+            new_version = _train_next(
+                data_dir=args.data_dir,
+                registry_root=args.registry_root,
+                epochs=args.epochs,
+                batch_size=args.batch_size,
+                learning_rate=args.learning_rate,
+                val_split=args.val_split,
+                seed=cycle_seed,
+                notes=(
+                    f"iterate_alphazero iteration #{n_done + 1}, "
+                    f"self-play driven by {best_version}"
+                ),
+                window_recent=args.window_recent,
+                hidden_sizes=iter_hidden_sizes,
+                progress_path=train_progress_path,
+                policy_loss_weight=args.policy_loss_weight,
+                one_legal_keep_frac=args.one_legal_keep_frac,
+                architecture=iter_architecture,
+                policy_hidden_sizes=iter_policy_hidden_sizes,
+                early_stop_patience=args.early_stop_patience,
+                action_encoding_version=iter_action_encoding_version,
+            )
         new_weights = registry.weights_path(new_version)
+        # Register the produced weights file as an artifact on the
+        # training run. Bytes lookup is best-effort — the weights write
+        # may have raced (it shouldn't, since _train_next returned, but
+        # the OSError fallback keeps the dual-write loud-fail-free).
+        try:
+            weights_bytes = (
+                new_weights.stat().st_size
+                if new_weights.exists() else None
+            )
+        except OSError:
+            weights_bytes = None
+        if weights_bytes is not None:
+            _runs_client.push_artifact(
+                train_run_id,
+                artifact_type="weights",
+                path=str(new_weights),
+                bytes_=weights_bytes,
+            )
+        _runs_client.push_event(
+            cycle_id, "stage_completed",
+            payload={
+                "stage": "train",
+                "run_id": train_run_id,
+                "trained_version": new_version,
+            },
+        )
         print(f"[iterate]   trained: {new_version}")
 
         if _cycle_stop_check():
@@ -1918,6 +2176,7 @@ def main(argv=None) -> None:  # pragma: no cover
                 ended=True,
                 notes="stopped via UI sentinel",
             )
+            _finish_cycle("killed", notes="stopped via UI sentinel (train)")
             user_stopped = True
             break
 
@@ -1960,40 +2219,31 @@ def main(argv=None) -> None:  # pragma: no cover
                 str(args.hang_dump_dir / eval_run_id)
                 if str(args.hang_dump_dir) else None
             )
-            if shards_cfg is None:
-                wins_new, wins_old, draws, eval_elapsed = _eval_match(
-                    new_weights=new_weights,
-                    old_weights=best_weights,
-                    n_games=args.eval_games,
-                    samples=args.samples,
-                    nodes=args.nodes,
-                    n_workers=args.workers,
-                    seed=cycle_seed + 7777,
-                    enable_mulligans=args.enable_mulligans,
-                    per_game_timeout_sec=args.per_game_timeout_eval_sec,
-                    hidden_sizes=iter_hidden_sizes,
-                    new_architecture=iter_architecture,
-                    old_architecture=best_architecture,
-                    policy_hidden_sizes=iter_policy_hidden_sizes,
-                    progress_path=eval_progress_path,
-                    run_id=eval_run_id,
-                    opponent_label=best_version,
-                    deck_pool=deck_pool,
-                    replay_config=eval_replay_config,
-                    hang_dump_dir=eval_hang_dir,
-                    cycle_id=cycle_id,
-                    stop_check=_cycle_stop_check,
-                    action_encoding_version=iter_action_encoding_version,
-                )
-            else:
-                wins_new, wins_old, draws, eval_elapsed = (
-                    _eval_match_distributed(
-                        shards_config=shards_cfg,
+            _runs_client.push_event(
+                cycle_id, "stage_started",
+                payload={"stage": "eval", "run_id": eval_run_id},
+            )
+            with _lifecycle.run_lifecycle(
+                run_id=eval_run_id,
+                kind="eval",
+                config=_eval_config_dict(
+                    args=args, new_version=new_version,
+                    best_version=best_version,
+                    cycle_seed=cycle_seed,
+                    distributed=shards_cfg is not None,
+                ),
+                progress_json_path=eval_progress_path,
+                parent_run_id=cycle_id,
+                label=eval_run_id,
+            ):
+                if shards_cfg is None:
+                    wins_new, wins_old, draws, eval_elapsed = _eval_match(
                         new_weights=new_weights,
                         old_weights=best_weights,
                         n_games=args.eval_games,
                         samples=args.samples,
                         nodes=args.nodes,
+                        n_workers=args.workers,
                         seed=cycle_seed + 7777,
                         enable_mulligans=args.enable_mulligans,
                         per_game_timeout_sec=args.per_game_timeout_eval_sec,
@@ -2001,42 +2251,68 @@ def main(argv=None) -> None:  # pragma: no cover
                         new_architecture=iter_architecture,
                         old_architecture=best_architecture,
                         policy_hidden_sizes=iter_policy_hidden_sizes,
-                        deck_pool_path=args.deck_pool,
-                        capture_every=args.capture_every_eval,
-                        new_version_label=new_version,
-                        old_version_label=best_version,
-                        replays_root=args.replays_dir,
-                        hang_dump_root=(
-                            args.hang_dump_dir
-                            if str(args.hang_dump_dir) else None
-                        ),
-                        progress_dir=progress_dir,
-                        run_id_prefix=eval_run_id,
-                        queue_url=args.queue_url,
-                        bundle_url=args.bundle_url,
+                        progress_path=eval_progress_path,
+                        run_id=eval_run_id,
                         opponent_label=best_version,
-                        slack_extra=_compute_slack_extra(
-                            args.eval_games, args.queue_slack_pct,
-                        ),
-                        shard_ssh_timeout_s=args.shard_ssh_timeout_min * 60,
-                        use_ismcts=args.use_ismcts,
-                        use_belief_weighted=args.use_belief_weighted,
-                        new_action_encoding_version=(
-                            iter_action_encoding_version
-                        ),
-                        old_action_encoding_version=(
-                            best_action_encoding_version
-                        ),
-                        # Eval SHM: the new --use-shm-eval flag, OR
-                        # the deprecated --use-shm-server back-compat
-                        # alias. Default off — see flag help for the
-                        # current perf-regression caveat (todo
-                        # a72f1c8e).
-                        use_shm_server=(
-                            args.use_shm_eval or args.use_shm_server
-                        ),
+                        deck_pool=deck_pool,
+                        replay_config=eval_replay_config,
+                        hang_dump_dir=eval_hang_dir,
+                        cycle_id=cycle_id,
+                        stop_check=_cycle_stop_check,
+                        action_encoding_version=iter_action_encoding_version,
                     )
-                )
+                else:
+                    wins_new, wins_old, draws, eval_elapsed = (
+                        _eval_match_distributed(
+                            shards_config=shards_cfg,
+                            new_weights=new_weights,
+                            old_weights=best_weights,
+                            n_games=args.eval_games,
+                            samples=args.samples,
+                            nodes=args.nodes,
+                            seed=cycle_seed + 7777,
+                            enable_mulligans=args.enable_mulligans,
+                            per_game_timeout_sec=args.per_game_timeout_eval_sec,
+                            hidden_sizes=iter_hidden_sizes,
+                            new_architecture=iter_architecture,
+                            old_architecture=best_architecture,
+                            policy_hidden_sizes=iter_policy_hidden_sizes,
+                            deck_pool_path=args.deck_pool,
+                            capture_every=args.capture_every_eval,
+                            new_version_label=new_version,
+                            old_version_label=best_version,
+                            replays_root=args.replays_dir,
+                            hang_dump_root=(
+                                args.hang_dump_dir
+                                if str(args.hang_dump_dir) else None
+                            ),
+                            progress_dir=progress_dir,
+                            run_id_prefix=eval_run_id,
+                            queue_url=args.queue_url,
+                            bundle_url=args.bundle_url,
+                            opponent_label=best_version,
+                            slack_extra=_compute_slack_extra(
+                                args.eval_games, args.queue_slack_pct,
+                            ),
+                            shard_ssh_timeout_s=args.shard_ssh_timeout_min * 60,
+                            use_ismcts=args.use_ismcts,
+                            use_belief_weighted=args.use_belief_weighted,
+                            new_action_encoding_version=(
+                                iter_action_encoding_version
+                            ),
+                            old_action_encoding_version=(
+                                best_action_encoding_version
+                            ),
+                            # Eval SHM: the new --use-shm-eval flag, OR
+                            # the deprecated --use-shm-server back-compat
+                            # alias. Default off — see flag help for the
+                            # current perf-regression caveat (todo
+                            # a72f1c8e).
+                            use_shm_server=(
+                                args.use_shm_eval or args.use_shm_server
+                            ),
+                        )
+                    )
             n_decided = wins_new + wins_old
             win_rate = wins_new / n_decided if n_decided else 0.0
             eval_summary = {
@@ -2047,12 +2323,49 @@ def main(argv=None) -> None:  # pragma: no cover
                 "win_rate": win_rate,
                 "elapsed_seconds": eval_elapsed,
             }
+            # Push the eval summary as the aggregate progress row and
+            # log the gate-decision event before promotion bookkeeping
+            # so the DB reflects the same wins/draws/win_rate the
+            # eval JSON does (and the UI's runs.db query agrees with
+            # the per-iter eval card).
+            _lifecycle.push_eval_summary(
+                eval_run_id,
+                wins_new=wins_new, wins_old=wins_old, draws=draws,
+                elapsed_seconds=eval_elapsed,
+                extra={
+                    "win_rate": win_rate,
+                    "opponent_label": best_version,
+                },
+            )
+            gate_passed = win_rate >= args.acceptance_threshold
+            _runs_client.push_event(
+                cycle_id, "eval_gate_decision",
+                payload={
+                    "run_id": eval_run_id,
+                    "new": new_version,
+                    "old": best_version,
+                    "win_rate": win_rate,
+                    "threshold": args.acceptance_threshold,
+                    "passed": gate_passed,
+                    "wins_new": int(wins_new),
+                    "wins_old": int(wins_old),
+                    "draws": int(draws),
+                },
+            )
+            _runs_client.push_event(
+                cycle_id, "stage_completed",
+                payload={
+                    "stage": "eval", "run_id": eval_run_id,
+                    "win_rate": win_rate,
+                    "elapsed_seconds": float(eval_elapsed),
+                },
+            )
             print(
                 f"[iterate]   eval result: {new_version} won "
                 f"{wins_new}, {best_version} won {wins_old}, "
                 f"draws {draws} (win_rate={win_rate:.1%})"
             )
-            if win_rate >= args.acceptance_threshold:
+            if gate_passed:
                 promoted = True
                 print(
                     f"[iterate]   promote {new_version} -> best "
@@ -2084,6 +2397,19 @@ def main(argv=None) -> None:  # pragma: no cover
         if promoted:
             state["current_best"] = new_version
         _save_iterate_state(args.registry_root, state)
+        # Mirror the promote/keep decision as a run-DB event so the UI
+        # can pin a "promoted v17 over v16" annotation onto the cycle
+        # row without re-parsing the JSON history. Fired for both
+        # promoted and not-promoted cases; the payload distinguishes.
+        _runs_client.push_event(
+            cycle_id, "promoted",
+            payload={
+                "from_version": best_version,
+                "to_version": new_version,
+                "promoted": promoted,
+                "eval_summary": eval_summary or None,
+            },
+        )
 
         # Cycle complete: finalize the cycle progress JSON so the UI
         # flips the parent card out of 'running'. Stage boundaries
@@ -2101,6 +2427,36 @@ def main(argv=None) -> None:  # pragma: no cover
             status="completed",
             ended=True,
         )
+        # Phase 1 dual-write: mirror the cycle JSON's terminal status
+        # into the run DB so the UI's runs.db query agrees with the
+        # JSON-side card. ``cycle_finished`` is the idempotency guard.
+        _finish_cycle("completed")
+    except (KeyboardInterrupt, SystemExit):
+        # User-triggered abort (Ctrl-C, SystemExit from a stop signal
+        # handler upstream). Mark any in-flight cycle ``killed`` in
+        # the run DB before re-raising; the per-stage lifecycle CMs
+        # already handled their own rows. Phase 1 invariant: this is
+        # purely additive — the existing JSON-side bookkeeping is
+        # unchanged.
+        in_flight = _in_flight_cycle["id"]
+        if in_flight is not None:
+            _runs_client.finish_run(
+                in_flight, "killed",
+                notes="KeyboardInterrupt / SystemExit",
+            )
+        raise
+    except BaseException as _exc:  # noqa: BLE001 — re-raised below
+        # Unexpected exception. Mark the cycle ``failed`` with the
+        # exception type + message in notes; the per-stage lifecycle
+        # CMs already mapped their own rows. Re-raise so the caller
+        # sees the same exception path as before.
+        in_flight = _in_flight_cycle["id"]
+        if in_flight is not None:
+            _runs_client.finish_run(
+                in_flight, "failed",
+                notes=f"{type(_exc).__name__}: {_exc}",
+            )
+        raise
 
     if user_stopped:
         print(
