@@ -232,6 +232,61 @@ def test_progress_failed_status_on_exception(tmp_path: Path):
     assert payload["run_id"] == "v_fail"
 
 
+def test_epoch_callback_fires_once_per_epoch_with_per_epoch_metrics(
+    tmp_path: Path,
+):
+    """``epoch_callback`` is the hook cli/train uses to push runs-DB
+    updates alongside the trainer's own JSON writes. Verify it fires
+    once per epoch with all the per-epoch loss components."""
+    features, outcomes = _synthetic_dataset(64)
+    calls: list[dict] = []
+
+    train_value_network(
+        features=features, outcomes=outcomes,
+        weights_out_path=tmp_path / "w.pt",
+        epochs=3, batch_size=16, device="cpu",
+        progress_path=tmp_path / "p.json",
+        epoch_callback=calls.append,
+    )
+
+    assert len(calls) == 3
+    # Each call must carry the per-epoch shape the cli/train wiring
+    # depends on; pin the keys explicitly.
+    required = {
+        "epoch", "total_epochs", "elapsed_seconds",
+        "train_loss", "val_loss",
+        "train_value_loss", "val_value_loss",
+        "train_policy_loss", "val_policy_loss",
+        "status",
+    }
+    for i, payload in enumerate(calls):
+        assert required <= set(payload.keys())
+        assert payload["epoch"] == i + 1
+        assert payload["total_epochs"] == 3
+        assert payload["status"] == "running"
+        # Losses must be numeric (NaN in policy-only fields is fine).
+        assert isinstance(payload["train_loss"], float)
+
+
+def test_epoch_callback_exception_does_not_kill_training(tmp_path: Path):
+    """A flaky telemetry sink (e.g. the runs DB server is down) must
+    not break a healthy training run. The callback may raise; the
+    trainer eats the exception and keeps going."""
+    features, outcomes = _synthetic_dataset(32)
+
+    def bad_cb(_payload):
+        raise RuntimeError("telemetry sink down")
+
+    history = train_value_network(
+        features=features, outcomes=outcomes,
+        weights_out_path=tmp_path / "w.pt",
+        epochs=2, batch_size=8, device="cpu",
+        epoch_callback=bad_cb,
+    )
+    # Training still completes — losses recorded for both epochs.
+    assert len(history.train_losses) == 2
+
+
 def test_progress_path_none_writes_nothing(tmp_path: Path):
     """No progress_path → no file written. Verifies the default
     path in train_nn.py callers stays additive — old callers that
