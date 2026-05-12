@@ -86,8 +86,16 @@ impl GameState {
     /// convention for void methods).
     ///
     /// Arms:
-    /// - `{"kind": "pass_priority"}` → calls `pass_priority()`
-    ///   (round 22).
+    /// - `{"kind": "pass_priority"}` → **no-op** (CE2 closure).
+    ///   Mirrors Python's `apply_action(PassPriority)` which is a
+    ///   pure `return` — priority management is owned by the
+    ///   composer (`complete_step_via_priority_round`) and by the
+    ///   `pass_priority` primitive when called directly, NOT by
+    ///   `apply_action`. The `consecutive_passes` counter is NOT
+    ///   incremented here (the counter only advances when callers
+    ///   invoke the primitive directly or the composer). See the
+    ///   inline arm comment + invariant I25 in
+    ///   `docs/RUST_PARITY_GAPS.md` for the full rationale.
     /// - `{"kind": "play_land", "card_id": <u32>}` → calls
     ///   `play_land(card_id, priority_player)` (round 23).
     /// - `{"kind": "declare_attackers", "attacker_ids": [<u32>, ...]}`
@@ -143,19 +151,35 @@ impl GameState {
         // resolves" rule) `priority_player = active_player` after a
         // successful dispatch.
         //
-        // PassPriority itself does NOT reset (it INCREMENTS the
-        // counter via the underlying `pass_priority` primitive).
+        // PassPriority itself is a NO-OP (CE2 closure). It does NOT
+        // touch `priority_player`, and it does NOT increment
+        // `consecutive_passes`. The counter only advances when
+        // callers invoke the `pass_priority` primitive directly OR
+        // when the `complete_step_via_priority_round` composer drives
+        // it. This mirrors Python's `apply_action(PassPriority)`
+        // which is a pure `return` (actions.py:990-991) — priority
+        // management is owned by `simulate.priority_loop`, not by
+        // `apply_action`.
+        //
         // Stubs that always raise (TurnFaceUp / UnlockRoomHalf /
         // ActivateStation) never reach the post-arm reset because
         // they short-circuit with `?` propagation.
         let is_pass_priority = matches!(action, Action::PassPriority);
         match action {
             Action::PassPriority => {
-                // Cross-file pymethod dispatch (round-16 pattern):
-                // `pass_priority` lives in state_ops_priority.rs and
-                // is private to that module's `impl GameState` block.
-                // Go through the Python attribute layer to call it.
-                slf.call_method0("pass_priority")?;
+                // CE2 closure: TRUE NO-OP. Matches Python's
+                // `apply_action(PassPriority)` which is literally
+                // `return` (src/mtg_bot/actions.py:990-991). The
+                // `is_pass_priority` flag suppresses the post-arm
+                // reset block below, so this arm leaves
+                // `priority_player`, `active_player`, AND
+                // `consecutive_passes` untouched. The composer
+                // (`complete_step_via_priority_round`) is the
+                // priority-management entrypoint that drives the
+                // underlying `pass_priority` primitive — and that
+                // primitive (not this arm) is the place where the
+                // counter advances. See invariant I25 in
+                // `docs/RUST_PARITY_GAPS.md`.
             }
             Action::PlayLand { card_id } => {
                 // Same cross-file pattern as `pass_priority`, but

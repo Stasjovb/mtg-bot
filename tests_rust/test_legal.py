@@ -351,8 +351,16 @@ def test_legal_decisions_actions_are_round_trip_able_via_apply_action(
 
 def test_legal_decisions_pass_priority_action_round_trips(synthetic_state):
     """The PassPriority emission (always at index 0) round-trips
-    through ``apply_action`` and flips priority — regression that
-    locks in the dict shape matches what round-22 wired."""
+    through ``apply_action`` — regression that locks in the dict shape
+    matches what round-22 wired.
+
+    CE2 closure: ``apply_action({"kind": "pass_priority"})`` is now a
+    no-op (matches Python's ``apply_action(PassPriority)`` which is
+    literally ``return``). The round-trip pin is "the dict shape
+    parses cleanly and apply_action returns without raising" — the
+    priority field stays at its starting value because the arm is a
+    pure no-op. Priority management is owned by the composer
+    (``complete_step_via_priority_round``), not by ``apply_action``."""
     _empty_hand(synthetic_state, 0)
     synthetic_state.set_phase(PHASE_MAIN1)
 
@@ -361,8 +369,10 @@ def test_legal_decisions_pass_priority_action_round_trips(synthetic_state):
     assert pass_priority["kind"] == "pass_priority"
 
     assert synthetic_state.get_priority_player() == 0
-    synthetic_state.apply_action(pass_priority)
-    assert synthetic_state.get_priority_player() == 1
+    result = synthetic_state.apply_action(pass_priority)
+    # No-op arm: returns None, priority unchanged.
+    assert result is None
+    assert synthetic_state.get_priority_player() == 0
 
 
 # --- 10. PassPriority position --------------------------------------

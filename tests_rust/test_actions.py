@@ -29,20 +29,24 @@ from __future__ import annotations
 import pytest
 
 
-def test_apply_action_pass_priority_toggles_priority(synthetic_state):
-    """``apply_action({"kind": "pass_priority"})`` routes to the
-    existing ``pass_priority()`` primitive — priority flips from
-    active player (0) to the other player (1)."""
+def test_apply_action_pass_priority_does_not_flip_priority(synthetic_state):
+    """**CE2 closure**: ``apply_action({"kind": "pass_priority"})`` is
+    a NO-OP — it does NOT flip ``priority_player``. Mirrors Python's
+    ``apply_action(PassPriority)`` which is literally ``return``
+    (src/mtg_bot/actions.py:990-991). Priority management is owned by
+    the composer (``complete_step_via_priority_round``) and by
+    callers driving the ``pass_priority`` primitive directly, NOT by
+    ``apply_action``."""
     assert synthetic_state.get_priority_player() == 0
     synthetic_state.apply_action({"kind": "pass_priority"})
-    assert synthetic_state.get_priority_player() == 1
+    assert synthetic_state.get_priority_player() == 0
 
 
-def test_apply_action_pass_priority_twice_returns_to_original(synthetic_state):
-    """The pass-priority dispatch is involutive — two applies return
-    to the starting priority player. Locks in that the dispatch
-    routes to the toggle primitive (not the give-priority-to
-    primitive with a fixed argument)."""
+def test_apply_action_pass_priority_idempotent(synthetic_state):
+    """**CE2 closure**: PassPriority is a no-op, so any number of
+    applications leaves the state byte-identical on the priority
+    axis. Mirrors Python's pure-``return`` semantics."""
+    synthetic_state.apply_action({"kind": "pass_priority"})
     synthetic_state.apply_action({"kind": "pass_priority"})
     synthetic_state.apply_action({"kind": "pass_priority"})
     assert synthetic_state.get_priority_player() == 0
@@ -76,26 +80,45 @@ def test_apply_action_missing_kind_raises_key_error(synthetic_state):
     assert synthetic_state.get_priority_player() == 0
 
 
-def test_apply_action_does_not_affect_active_player(synthetic_state):
-    """Active player and priority player are independent fields.
-    ``apply_action({"kind": "pass_priority"})`` moves only
-    ``priority_player``; ``active_player`` stays put (mirrors the
-    underlying ``pass_priority()`` primitive's contract)."""
+def test_apply_action_pass_priority_does_not_affect_active_player(synthetic_state):
+    """**CE2 closure**: PassPriority is a no-op, so it cannot affect
+    ``active_player`` (or anything else). Active and priority player
+    are independent fields (invariant I8); this test pins that even
+    the no-op PassPriority arm doesn't accidentally touch
+    ``active_player``."""
     starting_active = synthetic_state.active_player
+    starting_priority = synthetic_state.get_priority_player()
     synthetic_state.apply_action({"kind": "pass_priority"})
     assert synthetic_state.active_player == starting_active
+    assert synthetic_state.get_priority_player() == starting_priority
 
 
-def test_apply_action_on_clone_does_not_affect_original(synthetic_state):
-    """CoW canary via the Action bridge: applying an action to a clone
-    mutates only the clone's priority. The original is untouched.
-    The clone is a by-value copy of the ``priority_player`` u8 field
-    here, but this test pins the behavior so a future slice that
-    moves state into an Arc-backed structure doesn't silently leak
-    mutations back."""
+def test_apply_action_pass_priority_does_not_advance_consecutive_passes(
+    synthetic_state,
+):
+    """**CE2 closure**: ``apply_action({"kind": "pass_priority"})`` is
+    a TRUE no-op — it does NOT increment the ``consecutive_passes``
+    counter. The counter only advances when callers invoke the
+    ``pass_priority`` primitive directly or when the composer
+    (``complete_step_via_priority_round``) drives it. This matches
+    Python, which has no such counter at the apply_action layer
+    (Python's priority loop is owned by ``simulate.priority_loop``)."""
+    assert synthetic_state.get_consecutive_passes() == 0
+    synthetic_state.apply_action({"kind": "pass_priority"})
+    synthetic_state.apply_action({"kind": "pass_priority"})
+    synthetic_state.apply_action({"kind": "pass_priority"})
+    assert synthetic_state.get_consecutive_passes() == 0
+
+
+def test_apply_action_on_clone_pass_priority_is_noop_on_both(synthetic_state):
+    """**CE2 closure**: PassPriority is a no-op on both the clone and
+    the original — the priority field stays at its starting value on
+    both sides. Original CoW canary (mutating the clone shouldn't
+    leak back to the original) is preserved by virtue of the no-op:
+    if neither side mutates, the CoW boundary is trivially intact."""
     cloned = synthetic_state.clone_once()
     cloned.apply_action({"kind": "pass_priority"})
-    assert cloned.get_priority_player() == 1
+    assert cloned.get_priority_player() == 0
     assert synthetic_state.get_priority_player() == 0
 
 
@@ -157,8 +180,12 @@ def test_apply_action_play_land_uses_priority_player_as_actor(synthetic_state):
     player 1, import a Forest into player 1's hand, and verify
     apply_action moves it onto player 1's battlefield — not
     player 0's. Locks in that the dispatcher reads
-    ``priority_player`` rather than a hardcoded 0."""
-    synthetic_state.apply_action({"kind": "pass_priority"})
+    ``priority_player`` rather than a hardcoded 0.
+
+    CE2 closure note: ``apply_action({"kind": "pass_priority"})`` is
+    now a no-op, so we use ``give_priority_to(1)`` to flip priority
+    explicitly for this fixture-prep step."""
+    synthetic_state.give_priority_to(1)
     assert synthetic_state.get_priority_player() == 1
 
     forest_id = _move_forest_into_hand(synthetic_state, 1)
@@ -1145,8 +1172,12 @@ def test_apply_action_cast_spell_uses_priority_player_as_actor(synthetic_state):
     """The actor is implicit (priority player). Flip priority to
     player 1 and cast from player 1's hand — Locks in that the
     dispatcher reads ``priority_player`` rather than a hardcoded 0
-    (mirrors the ``play_land`` actor-resolution convention)."""
-    synthetic_state.apply_action({"kind": "pass_priority"})
+    (mirrors the ``play_land`` actor-resolution convention).
+
+    CE2 closure note: ``apply_action({"kind": "pass_priority"})`` is
+    now a no-op, so we use ``give_priority_to(1)`` to flip priority
+    explicitly for this fixture-prep step."""
+    synthetic_state.give_priority_to(1)
     assert synthetic_state.get_priority_player() == 1
     # Player 1 also has Llanowar Elves in hand at ids 77..83 in the
     # synthetic seed (10..16 are P0's elves; P1's hand starts at 77
