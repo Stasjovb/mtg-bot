@@ -2428,3 +2428,325 @@ def mass_removal_selector(py_state, rust_state, step_index: int) -> dict:
     # Default branch: delegate to retaliation_selector for everything
     # before the wrath fires AND for everything after.
     return retaliation_selector(py_state, rust_state, step_index)
+
+
+# ---------------------------------------------------------------------------
+# Phase 5 follow-up #9: first_strike_selector — extend the cross-engine
+# smoke onto first-strike combat damage timing (CR 510.5 / CR 702.7).
+# After :func:`retaliation_selector`'s walk lands the 3-creature bf
+# state at the end of step 167 (p0=Bears id 5 sick; p1=Bears ids 9, 11
+# unsick), side-channel-inject a 2/2 first-strike attacker onto p0's
+# battlefield with ``summoning_sick=False`` so it can immediately
+# attack. The injection happens at step 168 (the same hook point
+# :func:`mass_removal_selector` uses for its wrath fire), then the
+# selector delegates to :func:`retaliation_selector` to drive the
+# rest of combat: phase advance to DECLARE_ATTACKERS, declare the
+# fresh first-strike creature as attacker, p1 multi-blocks reverse
+# bf-order with both Bears, COMBAT_DAMAGE fires both passes.
+#
+# Surfaces a different cross-engine surface from the prior probes:
+#
+#   * **Damage-step iteration (CR 510.5).** When any combat
+#     participant has first-strike or double-strike, combat damage
+#     splits into TWO substeps: first-strike (CR 702.7) sources emit
+#     in step 1, regular sources emit in step 2. Both engines model
+#     this — Python's ``combat.resolve_combat_damage`` gates the
+#     two-pass branch on ``_any_first_or_double_strike_in_combat``;
+#     Rust's ``deal_combat_damage`` partitions plan entries by
+#     ``Pass::FirstStrike`` vs ``Pass::Regular`` and runs them
+#     sequentially.
+#
+#   * **SBA between steps (CR 704.3).** Python's flow calls
+#     ``state_based_actions(state)`` BETWEEN the two damage steps
+#     (combat.py:317-318); the first-strike-killed blocker enters
+#     the graveyard before the regular damage step runs. Rust's
+#     flow does NOT fire SBAs between steps — it uses an in-
+#     function ``damage < toughness`` alive-predicate on pass 2 to
+#     filter out sources / targets that took lethal first-strike
+#     damage, but the dead creature is NOT moved to graveyard
+#     between passes (per state_ops_combat.rs:1041-1077 "SBAs are
+#     NOT fired between passes"). The harness's per-call SBA pass
+#     after ``deal_combat_damage`` cleans up at the end. End state
+#     should converge — but ANY observable mid-pass state would
+#     diverge.
+#
+#   * **Damage-marking persistence across damage steps.** Per CR
+#     510.2, damage marks persist between the first-strike and
+#     regular damage steps. The first-strike-killed blocker's
+#     `damage` field equals its `toughness` at the moment SBA
+#     fires (both engines). On the surviving blocker / attacker
+#     after pass 2, damage marks come from the regular pass alone.
+#
+#   * **Attacker survival assessment.** The 2/2 FS attacker takes
+#     2 damage from the surviving 2/2 blocker in regular step.
+#     2 >= 2 = lethal. End state: attacker in gy, FS-killed
+#     blocker in gy, surviving blocker on bf with 0 damage
+#     (it wasn't damaged — only the attacker assigned damage in
+#     step 1, and only to the bf-ETB-first blocker).
+#
+# **Setup chosen: Option B (side-channel inject onto bf) rather than
+# Option A (FS creature in the deckspec).** The ``CardDef`` dataclass
+# (cross_engine.py:107) doesn't carry a ``keywords`` field, so adding
+# a first-strike creature to the deckspec would require either:
+#   1. Extending CardDef + its Python/Rust state-builder fanout to
+#      thread keywords through. Multi-file change, larger blast
+#      radius than a single probe slice should ship.
+#   2. Casting a creature on both engines + having Rust's
+#      ``cast_creature`` route preserve keyword printing data. The
+#      cast path exists today but the probe doesn't need to
+#      exercise it (cast parity is already covered by
+#      ``cast_bears_selector``-based probes).
+# The side-channel-inject-onto-bf path lets us reuse
+# ``register_and_inject_object`` with a printing carrying
+# ``keywords=["first_strike"]`` on Rust + a CardPrinting with
+# ``keywords=frozenset({"first strike"})`` on Python. The two
+# keyword spellings reflect each engine's native string convention:
+# Rust's ``battlefield_has_keyword`` predicate matches against the
+# lowercase-underscore form (state_ops_combat.rs:852); Python's
+# ``_deals_in_step`` checks for the lowercase-space form
+# (combat.py:287-288). Same divergence as cast vs etb on Bears —
+# documented as a convention split, not a divergence.
+#
+# **Trigger detection (stateless).** The first-strike injection
+# fires the FIRST time the selector observes the state "3 creatures
+# on bf (1 sick p0 Bears, 2 unsick p1 Bears), no first-strike
+# creature in any zone yet". This is uniquely true at step 168 on
+# the retaliation walk — after p0's turn-13 Bears cast (step 167)
+# but before the multi_turn baseline advances to combat. The "no FS
+# creature yet" gate keeps the selector idempotent on subsequent
+# calls (the FS creature stays on bf or moves to gy, but never out
+# of all zones, so the gate flips after step 168 and stays flipped).
+# ---------------------------------------------------------------------------
+
+
+# Name of the synthetic first-strike printing injected by
+# :func:`first_strike_side_channel`. Kept as a module-level constant
+# so the trigger-detection gate in :func:`first_strike_selector` and
+# the tests can refer to the same name without drift.
+_FIRST_STRIKE_PRINTING_NAME = "Bear Knight"
+
+
+def first_strike_side_channel(py_state, rust_state) -> tuple[int, int]:
+    """Side-channel inject a 2/2 first-strike creature onto BOTH engines'
+    p0 battlefield.
+
+    Builds a synthetic ``"Bear Knight"`` printing with first-strike
+    on each engine, then injects a GameObject into p0's battlefield
+    with ``controller=0``, ``summoning_sick=False``, ``tapped=False``,
+    ``damage=0``. The fresh ETB timestamp is stamped on each side
+    (Python: ``state.next_timestamp`` bump; Rust: handled internally by
+    ``register_and_inject_object`` for ``ZONE_BATTLEFIELD`` injections).
+
+    Returns ``(py_obj_id, rust_obj_id)``. The two ids match in the
+    multi_blocker_deckspec walk because both engines allocate ids in
+    the same order through step 167 (id 0-13 — see
+    :func:`multi_blocker_deckspec` for the breakdown; id 14 is the
+    next available on both sides).
+
+    Same side-channel-inject-onto-bf pattern as
+    :func:`mass_removal_side_channel` but targeting ZONE_BATTLEFIELD
+    instead of ZONE_HAND. Used by :func:`first_strike_selector` at
+    step 168 of the retaliation_selector walk to set up the
+    first-strike combat probe.
+
+    Keyword spelling convention:
+      * Python's ``CardPrinting.keywords`` is a
+        ``frozenset[str]``; ``combat.py:_deals_in_step`` matches
+        the literal string ``"first strike"`` (lowercase with
+        space). See combat.py:287.
+      * Rust's ``register_printing`` accepts a ``keywords`` list
+        and lowercases each entry; ``state_ops_combat.rs:battlefield_has_keyword``
+        matches against ``"first_strike"`` (lowercase with
+        underscore). See state_ops_combat.rs:852.
+    Both engines therefore receive the keyword in their native
+    convention — no divergence from this spelling split.
+    """
+    from mtg_bot.cards.base import CardPrinting, ManaCost
+    from mtg_bot.game import Zone
+
+    # ---- Python side ----
+    # Build a CardPrinting carrying the first-strike keyword (Python's
+    # native spelling: lowercase with space).
+    fs_printing = CardPrinting(
+        name=_FIRST_STRIKE_PRINTING_NAME,
+        mana_cost_str="",
+        mana_cost=ManaCost(),
+        type_line="Creature",
+        supertypes=(),
+        card_types=("Creature",),
+        subtypes=(),
+        power=2,
+        toughness=2,
+        produces=frozenset(),
+        keywords=frozenset({"first strike"}),
+    )
+    py_obj = py_state.new_object(
+        fs_printing, owner_id=0, zone=Zone.BATTLEFIELD,
+    )
+    # Default new_object sets controller_id=owner_id=0 (correct), but
+    # leaves the per-object combat / sick flags at their defaults.
+    # Override to match a "freshly-resolved spell that lost summoning
+    # sickness" shape: untapped, unsick, no damage marks, no counters.
+    py_obj.summoning_sick = False
+    py_obj.tapped = False
+    py_obj.damage = 0
+    # Snapshot a fresh ETB timestamp the same way ``cast_creature`` does
+    # at actions.py:3050. Bumps ``next_timestamp`` past this entry so
+    # subsequent timestamp consumers (continuous effects, layer walks)
+    # land strictly later.
+    py_obj.etb_timestamp = py_state.next_timestamp
+    py_state.next_timestamp += 1
+    # Python's battlefield is the state-level ``state.battlefield`` list
+    # (not a per-player attribute). The object's controller_id is the
+    # source of truth for "whose creature is this".
+    py_state.battlefield.append(py_obj)
+
+    # ---- Rust side ----
+    # Inject via register_and_inject_object onto ZONE_BATTLEFIELD. The
+    # helper allocates a fresh printing_id, picks the next obj_id past
+    # any existing zone object, stamps the fresh etb_timestamp (since
+    # target_zone == ZONE_BATTLEFIELD), and pushes to controller's bf.
+    # The new object's ``summoning_sick`` defaults to false in the
+    # helper — exactly what we want for an immediately-attacking
+    # creature.
+    ZONE_BATTLEFIELD = 2
+    rust_obj_id = rust_state.register_and_inject_object(
+        {
+            "name": _FIRST_STRIKE_PRINTING_NAME,
+            "card_types": ["Creature"],
+            "power": 2,
+            "toughness": 2,
+            "keywords": ["first_strike"],
+        },
+        0,
+        ZONE_BATTLEFIELD,
+    )
+
+    # ---- Side-channel untap of p1's Bears blockers ----
+    # On the retaliation_selector walk, p1 attacked unopposed at turn 12
+    # (declare_attackers [9, 11]) and the bears tapped from attacking.
+    # END_OF_COMBAT cleared the ``attacking`` flag but the ``tapped``
+    # flag persists across phases until p1's next UNTAP (turn 14, after
+    # the FS combat we're about to drive at turn 13). To make Bears 9
+    # and 11 ELIGIBLE blockers right now, side-channel-untap them on
+    # both engines. Without this, retaliation_selector's
+    # DECLARE_BLOCKERS branch filters them out (``not o.tapped``) and
+    # the multi-block branch falls through to empty assignments —
+    # the FS attacker would then hit p1 directly and the first-strike
+    # divergence surface never gets exercised.
+    #
+    # This is a harness-construction normalization, not a real game
+    # state — same flavor as the ``summoning_sick = False`` normalization
+    # on the injected Bear Knight itself. The point of the probe is to
+    # exercise first-strike combat damage timing, NOT to reproduce a
+    # game where blockers happen to be untapped at the right moment.
+    for obj in py_state.battlefield:
+        if (
+            obj.controller_id == 1
+            and obj.printing.name == "Grizzly Bears"
+        ):
+            obj.tapped = False
+    # Rust side: ``untap_object(obj_id)`` is the per-object untap
+    # primitive (state_ops_tap.rs:71). Mirror Python's untap on the
+    # same ids. We re-find the ids by name + controller from the
+    # battlefield_snapshot because the harness doesn't carry around
+    # name->id maps for synthetic-deck objects.
+    for entry in rust_state.battlefield_snapshot():
+        if (
+            entry["controller_id"] == 1
+            and entry["printing_name"] == "Grizzly Bears"
+        ):
+            rust_state.untap_object(int(entry["id"]))
+    return int(py_obj.id), int(rust_obj_id)
+
+
+def first_strike_selector(py_state, rust_state, step_index: int) -> dict:
+    """Cross-engine smoke selector that drives a first-strike combat
+    on :func:`multi_blocker_deckspec` after the multi-creature setup
+    lands at the end of step 167.
+
+    Differs from :func:`retaliation_selector` in exactly one way:
+    when the observable state matches the "3 creatures on bf, no
+    first-strike creature in any zone yet" window (uniquely step
+    168 on the retaliation walk), the selector side-channels a
+    first-strike creature onto p0's battlefield via
+    :func:`first_strike_side_channel` and returns ``pass_priority``.
+    Every subsequent step delegates back to retaliation_selector,
+    which:
+
+    * advances phase past PRECOMBAT_MAIN -> BEGIN_COMBAT ->
+      DECLARE_ATTACKERS,
+    * emits ``declare_attackers`` with the freshly-injected FS
+      creature (Bears id 5 is still sick and filtered out by the
+      ``not o.summoning_sick`` guard),
+    * emits ``declare_blockers`` with BOTH p1 Bears blocking the
+      attacker in reverse-bf-order (the multi-block branch fires
+      because >=2 eligible blockers are present),
+    * fires :func:`resolve_combat_damage_python` +
+      :func:`deal_combat_damage_rust` at COMBAT_DAMAGE — both
+      helpers internally compose the two-pass first-strike timing
+      that this probe is meant to surface.
+
+    Expected walk shape on :func:`multi_blocker_deckspec`:
+
+    * **Steps 0-167** — identical to retaliation_selector's walk.
+      Builds out the 3-creature bf state (p0=Bears id 5 sick,
+      p1=Bears ids 9, 11 unsick) at the end of step 167.
+
+    * **Step 168** — FS injection fires. Side-channel injects a
+      2/2 first-strike creature onto p0's bf (controller=0,
+      sick=False). Selector emits ``pass_priority``. Post-step
+      state: p0 bf has 4 objects (3 Forests + Bears id 5 sick +
+      FS Bear Knight id 14 unsick); p1 bf unchanged.
+
+    * **Steps 169-N** — retaliation_selector takes over. Phase
+      advances through PRECOMBAT_MAIN to DECLARE_ATTACKERS;
+      declare_attackers emitted with [FS id]; declare_blockers
+      emitted with multi-block; COMBAT_DAMAGE fires both passes
+      on both engines; END_OF_COMBAT clears combat state. After
+      combat: FS attacker dies (2 damage from surviving blocker
+      in regular pass), first-strike-killed blocker is in p1's
+      graveyard, surviving blocker remains on p1's bf untouched.
+
+    The selector is stateless — the FS-inject branch is gated on
+    the observable "no first-strike creature in any zone yet"
+    check, which flips after step 168 commits the FS creature to
+    p0's battlefield. Same shape as :func:`mass_removal_selector`.
+    """
+    # Stateless trigger detection. The FS injection fires the FIRST
+    # time we observe:
+    #   1. >= 3 creatures on the bf (the retaliation walk's
+    #      end-of-step-167 state).
+    #   2. No Bear Knight (FS creature) in ANY zone (post-fire, this
+    #      gate flips and we delegate back to retaliation_selector).
+    # The combined gate is uniquely true at step 168 on the retaliation
+    # walk; on every other step at least one clause is false.
+    fs_already_injected = any(
+        obj.printing.name == _FIRST_STRIKE_PRINTING_NAME
+        for obj in py_state.battlefield
+    ) or any(
+        obj.printing.name == _FIRST_STRIKE_PRINTING_NAME
+        for p in py_state.players
+        for zone_list in (p.hand, p.library, p.graveyard, p.exile)
+        for obj in zone_list
+    )
+
+    if not fs_already_injected:
+        creature_count = sum(
+            1 for o in py_state.battlefield
+            if "Creature" in o.printing.card_types
+        )
+        if creature_count >= 3:
+            # Trigger condition met — side-channel inject the FS
+            # creature on both engines, then emit pass_priority so the
+            # harness's per-step compare fires after the injection has
+            # settled. The injection does NOT touch the phase — the
+            # next selector call will see "FS already injected" and
+            # delegate to retaliation_selector which will advance phase
+            # normally toward COMBAT.
+            first_strike_side_channel(py_state, rust_state)
+            return {"kind": "pass_priority"}
+
+    # Default branch: delegate to retaliation_selector for everything
+    # before the FS injection AND for everything after.
+    return retaliation_selector(py_state, rust_state, step_index)
