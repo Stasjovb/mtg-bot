@@ -3462,6 +3462,71 @@ See I40 for the post-closure invariant pin.
 
 ---
 
+### CE18. Double-strike attacker's regular-step damage routes to defender (Python) vs filtered out (Rust) when the sole blocker died in the first-strike substep
+
+- **Surfaced by**: Phase 5 follow-up #18 (`feature/phase5-double-strike`) —
+  `tests/test_parity_smoke.py::test_cross_engine_double_strike_selector_surfaces_ce18_at_step_174`
+  (strict-xfail symptom pin) and
+  `test_cross_engine_double_strike_selector_walks_clean` (xfail-pin
+  on the 200-decision walk; the full clean-walk passes EVERY field
+  EXCEPT `life_p1` from step 174 onward).
+- **Rust today**: When a double-strike (CR 702.4) attacker damages
+  its sole blocker to lethal in the first-strike substep, Rust's
+  `state_ops_combat.rs:1163-1172` pass-2 filter drops the
+  regular-substep damage entry whose `target =
+  DamageTarget::Creature(blocker_id)` because
+  `battlefield_creature_alive(self, target_id)` returns false
+  (blocker has damage >= toughness post-FS-pass; SBAs are NOT
+  fired between passes per the line-1160 docstring, but the
+  in-function alive predicate stands in for the SBA's "move to
+  graveyard" effect for filter purposes). The DS attacker's
+  regular-substep damage is therefore WASTED — no spillover to the
+  defender. p1 life unchanged: 20 → 20 across the COMBAT_DAMAGE step.
+- **CR / Python expected**: Python's `combat.py:_resolve_damage_step`
+  (lines 369-440) is called fresh per substep, with SBAs fired
+  between substeps (`combat.py:317-318`). On the regular substep,
+  Python rebuilds `blockers = [o for o in state.battlefield if
+  o.id in attacker.blocked_by]` (line 389 / 405). Since the
+  blocker is now in `players[1].graveyard` (post-SBA), the list
+  comprehension yields `[]`. Line 413's `if not blockers:`
+  branch then routes the DS attacker's regular-substep damage to
+  the DEFENDING PLAYER as if the attacker were unblocked. p1 life
+  takes 2 damage on the regular substep: 20 → 18.
+- **Real MTG (CR 702.4 + CR 510.1h)**: a creature that's been
+  blocked stays blocked even if all its blockers leave the
+  battlefield mid-combat. Without trample, the attacker's
+  remaining damage is wasted — it doesn't spill to the defender.
+  **Python's behavior is CR-divergent** (over-permissive: routes
+  damage to defender that shouldn't go through). **Rust's behavior
+  is CR-correct** (filters out the wasted entry). The CE divergence
+  is therefore an interesting one — neither engine is "right by
+  Phase 5 convention", but the **Phase 5 convention is "converge
+  Rust toward Python"**, so a future CE18 closure would teach Rust
+  to route the wasted damage to the defender to match Python's
+  shape, NOT teach Python to filter it out.
+- **Impact**: 2 life of divergence per DS-vs-single-vanilla-blocker
+  combat where the DS attacker out-toughs the blocker by exactly
+  enough to kill it in the FS substep. Probably uncommon in real
+  Edge of Eternities decklists (no double-strike printings in the
+  EoE set's keyword distribution as of audit 2026-05-12 — need to
+  re-check via `scripts/scout_keywords.py` if EoE adds any). The
+  divergence is one-axis (life_p1 only), persistent across all
+  subsequent steps, and surfaces every step from 174 onward in the
+  walk_both fingerprint compare.
+- **Closeable**: yes — Option A (Rust-side convergence on Python,
+  per Phase 5 convention). The fix: when the pass-2 filter drops
+  an attacker's creature-target entry due to alive-predicate
+  failure, instead of dropping it, redirect to
+  `DamageTarget::Player(defending_player)` IF the attacker's
+  blocked-by set is now empty (all blockers dead). This re-creates
+  Python's "rebuild blockers list per-substep yields empty →
+  route to defender" shape on Rust's plan-build-upfront
+  architecture. Estimated 20-50 line change in
+  `state_ops_combat.rs:1163-1172`. Out of scope of this slice
+  (probe-only; brief says "do NOT fix").
+
+---
+
 ## Maintenance
 
 When a slice closes one of the gaps above, drop the entry from the
