@@ -396,11 +396,13 @@ fn apply_effect(
             for _ in 0..n {
                 let player = &mut state.players[controller];
                 let lib = Arc::make_mut(&mut player.library);
-                let Some(mut obj) = lib.pop() else {
+                if lib.is_empty() {
                     // CR 704.5b — empty-library draw flags the player.
                     player.attempted_draw_on_empty = true;
                     break;
-                };
+                }
+                // Post-CE3: top of library = lib[0].
+                let mut obj = lib.remove(0);
                 obj.zone = ZONE_HAND;
                 Arc::make_mut(&mut player.hand).push(obj);
             }
@@ -471,9 +473,8 @@ fn apply_effect(
         },
         // Round-10: Mill. Caller's controller (= active_player, first-
         // slice convention) puts the top `count` cards of their
-        // library into their graveyard. "Top" is the LAST element of
-        // the library Vec (mirrors round-1 zones convention used by
-        // DrawCards above).
+        // library into their graveyard. "Top" is lib[0] post-CE3
+        // (mirrors zones convention used by DrawCards above).
         //
         // Empty library mid-mill: stop silently. Real MTG: mill on
         // empty library is NOT a deck-out by itself (unlike a draw
@@ -489,9 +490,11 @@ fn apply_effect(
             for _ in 0..n {
                 let player = &mut state.players[controller];
                 let lib = Arc::make_mut(&mut player.library);
-                let Some(mut obj) = lib.pop() else {
+                if lib.is_empty() {
                     break; // empty library — silent stop
-                };
+                }
+                // Always remove index 0 — top after each prior remove.
+                let mut obj = lib.remove(0);
                 obj.zone = ZONE_GRAVEYARD;
                 Arc::make_mut(&mut player.graveyard).push(obj);
             }
@@ -544,11 +547,11 @@ fn apply_effect(
             if n_to_mill == 0 {
                 // count=0 OR empty target library — silent no-op.
             } else {
+                // Post-CE3: top of library = lib[0]. Remove from head
+                // n_to_mill times.
                 let mut milled: Vec<GameObject> = Vec::with_capacity(n_to_mill);
                 for _ in 0..n_to_mill {
-                    if let Some(obj) = library_mut.pop() {
-                        milled.push(obj);
-                    }
+                    milled.push(library_mut.remove(0));
                 }
                 let gy_mut = Arc::make_mut(&mut state.players[target_idx].graveyard);
                 for mut obj in milled {
@@ -1358,15 +1361,15 @@ fn apply_effect(
             }
             let controller_idx = state.active_player as usize;
             for _ in 0..n {
-                // Locate the topmost basic-land match (Vec iter rev =
-                // top-to-bottom). Inlined here (vs. delegating to the
-                // search-only sibling) so we have the Vec INDEX for
-                // removal, not just the obj_id.
+                // Locate the topmost basic-land match (forward iter
+                // = top-to-bottom post-CE3, lib[0] = top). Inlined
+                // here (vs. delegating to the search-only sibling)
+                // so we have the Vec INDEX for removal, not just the
+                // obj_id.
                 let pos: Option<usize> = {
                     let lib = &state.players[controller_idx].library;
                     let mut found: Option<usize> = None;
-                    for i in (0..lib.len()).rev() {
-                        let obj = &lib[i];
+                    for (i, obj) in lib.iter().enumerate() {
                         let printing = match state.registry.lookup(obj.printing_id) {
                             Some(p) => p,
                             None => continue,
@@ -1546,20 +1549,20 @@ fn apply_effect(
             // Clamp count to library size (CR 701.43 fold).
             let lib_len = state.players[pidx].library.len();
             let n = (*count as usize).min(lib_len);
-            // Pop n cards off library TOP. Round-1 zones convention:
-            // top of library = LAST element of the Vec. So we pop n
-            // times from the back. Order in `cards`: cards[0] is the
-            // topmost card (first popped), cards[1] is second-from-top,
-            // etc. The submit dispatcher preserves this ordering when
-            // routing back to the library top.
+            // Remove n cards off library TOP. Post-CE3 zones
+            // convention: top of library = lib[0]. So we remove from
+            // the head n times. Order in `cards`: cards[0] is the
+            // topmost card (first removed), cards[1] is second-from-
+            // top, etc. The submit dispatcher preserves this ordering
+            // when routing back to the library top.
             let lib_mut: &mut Vec<GameObject> =
                 Arc::make_mut(&mut state.players[pidx].library);
             let mut cards: Vec<GameObject> = Vec::with_capacity(n);
             for _ in 0..n {
-                let popped = lib_mut.pop().expect(
-                    "library length checked above; pop cannot fail",
-                );
-                cards.push(popped);
+                // Always remove index 0 — the new top after each
+                // prior remove shifts down.
+                let removed = lib_mut.remove(0);
+                cards.push(removed);
                 // The card currently lives in NO zone — its `zone`
                 // field is stale until the submit dispatcher writes
                 // the new zone. The submit path rewrites zone before
@@ -2997,14 +3000,14 @@ fn apply_effect(
                 Some(c) => c as usize,
                 None => state.active_player as usize,
             };
-            // Top-to-bottom scan via iter().rev() (lib[len-1] is top).
+            // Top-to-bottom scan via forward iter (post-CE3: lib[0]
+            // is top).
             let max_mv_local = *max_mv;
             let pos: Option<usize> = {
                 let lib = &state.players[cidx].library;
                 let registry = &state.registry;
                 let mut found: Option<usize> = None;
-                for i in (0..lib.len()).rev() {
-                    let obj = &lib[i];
+                for (i, obj) in lib.iter().enumerate() {
                     let printing = match registry.lookup(obj.printing_id) {
                         Some(p) => p,
                         None => continue,
@@ -3156,7 +3159,7 @@ fn apply_effect(
             obj.exiled_with_source = None;
             let lib_mut: &mut Vec<GameObject> =
                 Arc::make_mut(&mut state.players[pidx].library);
-            lib_mut.insert(0, obj); // bottom of library
+            lib_mut.push(obj); // bottom of library (post-CE3: tail)
         }
         // Round-28 Dockworker-Drone-shape counter move. Transfer the
         // source's counters scalar to the first creature on the
@@ -3717,7 +3720,7 @@ fn apply_effect(
             obj.exiled_with_source = None;
             let lib_mut: &mut Vec<GameObject> =
                 Arc::make_mut(&mut state.players[owner_idx].library);
-            lib_mut.insert(0, obj); // lib[0] = bottom (Rust convention)
+            lib_mut.push(obj); // post-CE3: bottom = tail of Vec
         }
         // Round-28 EoE Equipment-ETB attach. Locate the source on
         // its controller's battlefield (Equipment ETB resolution
@@ -4056,10 +4059,9 @@ fn apply_effect(
                 Arc::make_mut(&mut state.players[pidx].library);
             let mut cards: Vec<GameObject> = Vec::with_capacity(count);
             for _ in 0..count {
-                let popped = lib_mut.pop().expect(
-                    "library length checked above; pop cannot fail",
-                );
-                cards.push(popped);
+                // Post-CE3: top = lib[0]. Always remove(0).
+                let removed = lib_mut.remove(0);
+                cards.push(removed);
             }
             state.pending_decisions.push(
                 PendingDecision::PickCardFromExaminedChoice {
@@ -4285,10 +4287,9 @@ fn apply_effect(
                 Arc::make_mut(&mut state.players[pidx].library);
             let mut cards: Vec<GameObject> = Vec::with_capacity(pop_count);
             for _ in 0..pop_count {
-                let popped = lib_mut.pop().expect(
-                    "library length checked above; pop cannot fail",
-                );
-                cards.push(popped);
+                // Post-CE3: top = lib[0]. Remove from head.
+                let removed = lib_mut.remove(0);
+                cards.push(removed);
             }
             state.pending_decisions.push(
                 PendingDecision::ManifestDreadChoice {
@@ -4348,10 +4349,9 @@ fn apply_effect(
                 Arc::make_mut(&mut state.players[cidx].library);
             let mut cards: Vec<GameObject> = Vec::with_capacity(pop_count);
             for _ in 0..pop_count {
-                let popped = lib_mut.pop().expect(
-                    "library length checked above; pop cannot fail",
-                );
-                cards.push(popped);
+                // Post-CE3: top = lib[0]. Remove from head.
+                let removed = lib_mut.remove(0);
+                cards.push(removed);
             }
             state.pending_decisions.push(
                 PendingDecision::ManifestDreadChoice {
@@ -4397,10 +4397,9 @@ fn apply_effect(
                 Arc::make_mut(&mut state.players[pidx].library);
             let mut cards: Vec<GameObject> = Vec::with_capacity(pop_count);
             for _ in 0..pop_count {
-                let popped = lib_mut.pop().expect(
-                    "library length checked above; pop cannot fail",
-                );
-                cards.push(popped);
+                // Post-CE3: top = lib[0]. Remove from head.
+                let removed = lib_mut.remove(0);
+                cards.push(removed);
             }
             state.pending_decisions.push(
                 PendingDecision::LookAtTopNRevealOrCounterChoice {
@@ -4727,15 +4726,17 @@ fn apply_effect(
                 return Ok(()); // source not found: silent fizzle
             };
             // 2-player "each opponent" → "the one opponent". Mill
-            // `count` cards off the opponent's library top.
+            // `count` cards off the opponent's library top (post-
+            // CE3: top = lib[0]).
             let opponent_idx = (1 - controller) as usize;
             let n = *count as usize;
             for _ in 0..n {
                 let lib_mut: &mut Vec<GameObject> =
                     Arc::make_mut(&mut state.players[opponent_idx].library);
-                let Some(mut obj) = lib_mut.pop() else {
+                if lib_mut.is_empty() {
                     break; // empty library: silent stop (CR parity with Effect::Mill)
-                };
+                }
+                let mut obj = lib_mut.remove(0);
                 obj.zone = ZONE_GRAVEYARD;
                 Arc::make_mut(&mut state.players[opponent_idx].graveyard).push(obj);
             }
@@ -5136,18 +5137,33 @@ impl GameState {
         };
 
         let player = &mut self.players[controller as usize];
-        let dest = match target_zone {
-            ZONE_HAND => &mut player.hand,
-            ZONE_LIBRARY => &mut player.library,
-            ZONE_BATTLEFIELD => &mut player.battlefield,
-            ZONE_GRAVEYARD => &mut player.graveyard,
+        // Test-injection convention: for LIBRARY zone, insert at the
+        // TOP of library (lib[0] post-CE3) so injected cards are
+        // immediately reachable by top-N readers (scry, surveil,
+        // search-from-top). Pre-CE3 the push-to-tail landed cards at
+        // the top (which was the tail then); the post-CE3 equivalent
+        // is insert(0, ...). For other zones (HAND, BATTLEFIELD,
+        // GRAVEYARD) append-to-tail is the established pattern and
+        // stays.
+        match target_zone {
+            ZONE_HAND => {
+                Arc::make_mut(&mut player.hand).push(obj);
+            }
+            ZONE_LIBRARY => {
+                Arc::make_mut(&mut player.library).insert(0, obj);
+            }
+            ZONE_BATTLEFIELD => {
+                Arc::make_mut(&mut player.battlefield).push(obj);
+            }
+            ZONE_GRAVEYARD => {
+                Arc::make_mut(&mut player.graveyard).push(obj);
+            }
             other => {
                 return Err(PyValueError::new_err(format!(
                     "register_and_inject_object: unsupported target_zone {other} (valid: 0-3)"
                 )));
             }
-        };
-        Arc::make_mut(dest).push(obj);
+        }
         Ok(next_id)
     }
 

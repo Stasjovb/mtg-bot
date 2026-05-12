@@ -1027,10 +1027,9 @@ def test_resolve_put_card_from_gy_bottom_moves_to_library_bottom(synthetic_state
     synthetic_state.resolve_top_of_stack()
 
     assert synthetic_state.find_object_zone(card_id) == 1  # ZONE_LIBRARY
-    # Bottom = lib[0]. Verify via library_snapshot if it gives ordered list.
+    # Bottom = lib[len-1] post-CE3 (tail = bottom).
     lib_snap = synthetic_state.library_snapshot(0)
-    # lib[0] is bottom per Rust convention.
-    assert lib_snap[0]["id"] == card_id
+    assert lib_snap[-1]["id"] == card_id
 
 
 def test_resolve_put_card_from_gy_bottom_picks_p0_first(synthetic_state):
@@ -1079,10 +1078,10 @@ def test_resolve_put_card_from_gy_bottom_uses_p1_when_p0_empty(synthetic_state):
     synthetic_state.push_to_stack(spell_id, 0)
     synthetic_state.resolve_top_of_stack()
 
-    # p1's card moved to p1's library bottom.
+    # p1's card moved to p1's library bottom (post-CE3: tail).
     assert synthetic_state.find_object_zone(p1_card_id) == 1
     p1_lib_snap = synthetic_state.library_snapshot(1)
-    assert p1_lib_snap[0]["id"] == p1_card_id
+    assert p1_lib_snap[-1]["id"] == p1_card_id
 
 
 # -------------------- Round-28 CreateTokenCopyOfTargetCreatureYouControl --------------------
@@ -1259,9 +1258,9 @@ def test_resolve_owner_puts_aoc_bottom_moves_defender_creature_to_lib_bottom(
     assert synthetic_state.find_object_zone(p1_first_bear_id) == ZONE_LIBRARY
     # Owner's library grew by 1.
     assert synthetic_state.library_sizes[1] == p1_lib_before + 1
-    # Bottom of library (lib[0]) is the target.
+    # Bottom of library (lib[len-1] post-CE3) is the target.
     p1_lib_snap = synthetic_state.library_snapshot(1)
-    assert p1_lib_snap[0]["id"] == p1_first_bear_id
+    assert p1_lib_snap[-1]["id"] == p1_first_bear_id
 
 
 def test_resolve_owner_puts_aoc_bottom_owner_is_controller(synthetic_state):
@@ -1293,9 +1292,9 @@ def test_resolve_owner_puts_aoc_bottom_owner_is_controller(synthetic_state):
     assert state.find_object_zone(artifact_id) == ZONE_LIBRARY
     assert state.library_sizes[0] == p0_lib_before
     assert state.library_sizes[1] == p1_lib_before + 1
-    # Bottom of p1's library.
+    # Bottom of p1's library (post-CE3: tail).
     p1_lib_snap = state.library_snapshot(1)
-    assert p1_lib_snap[0]["id"] == artifact_id
+    assert p1_lib_snap[-1]["id"] == artifact_id
 
 
 def test_resolve_owner_puts_aoc_bottom_no_eligible_fizzles(synthetic_state):

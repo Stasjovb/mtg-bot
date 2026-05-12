@@ -3866,10 +3866,9 @@ def test_resolve_search_library_for_basic_land_tapped_lands_tapped(
     obj_id, dispatch the effect, assert is_tapped(obj_id) returns
     Some(True)."""
     # Library Vec layout: p0 base id = num_battlefield + num_hand
-    # = 10 + 7 = 17, then 50 library Forests at ids 17..67. The Vec
-    # is built sequentially, so the TOP of library (last element) is
-    # the highest id: 17 + 50 - 1 = 66.
-    top_of_library_obj_id = 17 + 50 - 1  # 66
+    # = 10 + 7 = 17, then 50 library Forests at ids 17..67. Post-CE3:
+    # TOP of library = lib[0] = FIRST element of Vec = id 17.
+    top_of_library_obj_id = 17
     spell_obj_id = synthetic_state.register_and_inject_object(
         _rampant_growth_dict(count=1), 0, ZONE_HAND
     )
@@ -3888,11 +3887,11 @@ def test_resolve_search_library_for_basic_land_tapped_picks_topmost(
     synthetic_state,
 ):
     """When the library has multiple basic lands, the topmost is
-    picked (Vec iter rev = top-to-bottom). The synthetic seed's
-    library is 100% Forest, so the deterministic first match is the
-    last Vec element (highest obj_id in the library zone)."""
-    top_id_p0 = 17 + 50 - 1  # 66 — top of p0's library
-    second_top_id_p0 = 17 + 50 - 2  # 65 — second-from-top
+    picked (forward Vec iter = top-to-bottom post-CE3). The synthetic
+    seed's library is 100% Forest, so the deterministic first match
+    is lib[0] (id 17)."""
+    top_id_p0 = 17  # post-CE3: top of p0's library
+    second_top_id_p0 = 18  # second-from-top
     spell_obj_id = synthetic_state.register_and_inject_object(
         _rampant_growth_dict(count=1), 0, ZONE_HAND
     )
@@ -3970,7 +3969,7 @@ def test_resolve_search_library_for_basic_land_tapped_preserves_controller(
     ends up on the active player's battlefield."""
     bf_before_p0 = synthetic_state.battlefield_sizes[0]
     bf_before_p1 = synthetic_state.battlefield_sizes[1]
-    top_of_library_obj_id = 17 + 50 - 1  # p0's top Forest
+    top_of_library_obj_id = 17  # post-CE3: lib[0] = top
 
     spell_obj_id = synthetic_state.register_and_inject_object(
         _rampant_growth_dict(count=1), 0, ZONE_HAND

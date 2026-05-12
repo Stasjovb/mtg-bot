@@ -910,9 +910,8 @@ pub enum Effect {
     /// damage, counters reset on move. summoning_sick=true per r28
     /// CE1 universal default (library zone, gameplay-irrelevant).
     ///
-    /// **"Bottom of library" = `lib[0]`** by Rust's convention
-    /// (lib[len-1] = top, lib[0] = bottom). Insert via
-    /// `lib.insert(0, ...)`.
+    /// **"Bottom of library" = `lib[len-1]`** post-CE3 (lib[0] = top,
+    /// tail = bottom). Append via `lib.push(...)`.
     ///
     /// Empty-graveyards-on-both-sides = silent fizzle.
     PutCardFromGraveyardOnBottomOfLibrary,

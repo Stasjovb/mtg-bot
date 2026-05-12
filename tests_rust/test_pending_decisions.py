@@ -75,7 +75,7 @@ def test_surveil_1_pause_pops_one_card_and_pushes_pending_decision(synthetic_sta
     graveyard_before = synthetic_state.graveyard_sizes[0]
     # The synthetic seed lays p0's library so top-of-library has the
     # highest id in the [17, 67) range.
-    top_id_before = synthetic_state.library_snapshot(0)[-1]["id"]
+    top_id_before = synthetic_state.library_snapshot(0)[0]["id"]
 
     spell_obj_id = synthetic_state.register_and_inject_object(
         _surveil_dict(count=1), 0, ZONE_HAND
@@ -112,7 +112,7 @@ def test_submit_surveil_decision_to_top_returns_card_to_library(synthetic_state)
     library top. After submission, the pending queue is empty and the
     library size is back to its pre-Surveil value."""
     library_before = synthetic_state.library_sizes[0]
-    top_id_before = synthetic_state.library_snapshot(0)[-1]["id"]
+    top_id_before = synthetic_state.library_snapshot(0)[0]["id"]
     spell_obj_id = synthetic_state.register_and_inject_object(
         _surveil_dict(count=1), 0, ZONE_HAND
     )
@@ -128,7 +128,7 @@ def test_submit_surveil_decision_to_top_returns_card_to_library(synthetic_state)
     assert synthetic_state.library_sizes[0] == library_before
     # The card is back in the library, and it's at the top.
     assert synthetic_state.find_object_zone(top_id_before) == ZONE_LIBRARY
-    assert synthetic_state.library_snapshot(0)[-1]["id"] == top_id_before
+    assert synthetic_state.library_snapshot(0)[0]["id"] == top_id_before
 
 
 # --- submit: route to graveyard --------------------------------------
@@ -140,7 +140,7 @@ def test_submit_surveil_decision_to_graveyard_mills_card(synthetic_state):
     stays smaller, and the card lives in graveyard."""
     library_before = synthetic_state.library_sizes[0]
     graveyard_before = synthetic_state.graveyard_sizes[0]
-    top_id_before = synthetic_state.library_snapshot(0)[-1]["id"]
+    top_id_before = synthetic_state.library_snapshot(0)[0]["id"]
     spell_obj_id = synthetic_state.register_and_inject_object(
         _surveil_dict(count=1), 0, ZONE_HAND
     )
@@ -170,8 +170,8 @@ def test_surveil_3_partial_submit_one_top_two_graveyard(engine):
 
     # The surveil pops the top 3 ids; library is laid in push-order so
     # the top of library has the highest id, etc.
-    lib_top_three = [obj["id"] for obj in state.library_snapshot(0)[-3:]]
-    lib_top_three.reverse()  # cards[0] = topmost (popped first)
+    # Post-CE3: lib[:3] is already top-first (cards[0] = topmost).
+    lib_top_three = [obj["id"] for obj in state.library_snapshot(0)[:3]]
 
     spell_obj_id = state.register_and_inject_object(
         _surveil_dict(count=3), 0, ZONE_HAND
@@ -196,7 +196,7 @@ def test_surveil_3_partial_submit_one_top_two_graveyard(engine):
     assert state.graveyard_sizes[0] == graveyard_before + 3
     # The kept card is the new top of library.
     assert state.find_object_zone(lib_top_three[0]) == ZONE_LIBRARY
-    assert state.library_snapshot(0)[-1]["id"] == lib_top_three[0]
+    assert state.library_snapshot(0)[0]["id"] == lib_top_three[0]
     # The milled cards live in graveyard.
     for mid in mill:
         assert state.find_object_zone(mid) == ZONE_GRAVEYARD
@@ -214,7 +214,7 @@ def test_auto_resolve_keep_all_on_top_reproduces_r23_baseline(synthetic_state):
     where the Surveil never paused — same library, same graveyard."""
     library_before = synthetic_state.library_sizes[0]
     graveyard_before = synthetic_state.graveyard_sizes[0]
-    top_id_before = synthetic_state.library_snapshot(0)[-1]["id"]
+    top_id_before = synthetic_state.library_snapshot(0)[0]["id"]
     spell_obj_id = synthetic_state.register_and_inject_object(
         _surveil_dict(count=2), 0, ZONE_HAND
     )
@@ -230,7 +230,7 @@ def test_auto_resolve_keep_all_on_top_reproduces_r23_baseline(synthetic_state):
     # Graveyard gained only the source Sorcery.
     assert synthetic_state.graveyard_sizes[0] == graveyard_before + 1
     # Top of library is the same id as before.
-    assert synthetic_state.library_snapshot(0)[-1]["id"] == top_id_before
+    assert synthetic_state.library_snapshot(0)[0]["id"] == top_id_before
 
 
 def test_auto_resolve_send_all_to_graveyard_mills_surveiled_cards(synthetic_state):
@@ -271,7 +271,7 @@ def test_auto_resolve_with_unknown_strategy_raises(synthetic_state):
 
 def test_submit_surveil_with_unknown_id_raises(synthetic_state):
     """An id not in the pending SurveilChoice raises ValueError."""
-    top_id_before = synthetic_state.library_snapshot(0)[-1]["id"]
+    top_id_before = synthetic_state.library_snapshot(0)[0]["id"]
     spell_obj_id = synthetic_state.register_and_inject_object(
         _surveil_dict(count=1), 0, ZONE_HAND
     )
@@ -379,7 +379,7 @@ def test_resolve_top_of_stack_auto_resolves_surveil(synthetic_state):
     unchanged."""
     library_before = synthetic_state.library_sizes[0]
     graveyard_before = synthetic_state.graveyard_sizes[0]
-    top_id_before = synthetic_state.library_snapshot(0)[-1]["id"]
+    top_id_before = synthetic_state.library_snapshot(0)[0]["id"]
     spell_obj_id = synthetic_state.register_and_inject_object(
         _surveil_dict(count=2), 0, ZONE_HAND
     )
@@ -389,7 +389,7 @@ def test_resolve_top_of_stack_auto_resolves_surveil(synthetic_state):
     assert synthetic_state.has_pending_decision() is False
     assert synthetic_state.library_sizes[0] == library_before
     assert synthetic_state.graveyard_sizes[0] == graveyard_before + 1
-    assert synthetic_state.library_snapshot(0)[-1]["id"] == top_id_before
+    assert synthetic_state.library_snapshot(0)[0]["id"] == top_id_before
 
 
 # --- Fingerprint: pending decision changes the digest ---------------
@@ -811,8 +811,7 @@ def test_look_top_n_resolve_pops_cards_and_pushes_pending_choice(synthetic_state
     library_before = synthetic_state.library_sizes[0]
     graveyard_before = synthetic_state.graveyard_sizes[0]
     hand_before = synthetic_state.hand_sizes[0]
-    top_two = [obj["id"] for obj in synthetic_state.library_snapshot(0)[-2:]]
-    top_two.reverse()  # cards[0] = topmost (popped first)
+    top_two = [obj["id"] for obj in synthetic_state.library_snapshot(0)[:2]]
 
     spell_obj_id = synthetic_state.register_and_inject_object(
         _look_top_n_dict(n=2), 0, ZONE_HAND
@@ -842,8 +841,7 @@ def test_submit_pick_card_picks_topmost_routes_one_to_hand(synthetic_state):
     examined card to graveyard."""
     hand_before = synthetic_state.hand_sizes[0]
     graveyard_before = synthetic_state.graveyard_sizes[0]
-    top_two = [obj["id"] for obj in synthetic_state.library_snapshot(0)[-2:]]
-    top_two.reverse()
+    top_two = [obj["id"] for obj in synthetic_state.library_snapshot(0)[:2]]
 
     spell_obj_id = synthetic_state.register_and_inject_object(
         _look_top_n_dict(n=2), 0, ZONE_HAND
@@ -862,8 +860,7 @@ def test_submit_pick_card_picks_topmost_routes_one_to_hand(synthetic_state):
 
 def test_submit_pick_card_picks_non_topmost(synthetic_state):
     """Picking cards[1] routes it to hand and cards[0] to graveyard."""
-    top_two = [obj["id"] for obj in synthetic_state.library_snapshot(0)[-2:]]
-    top_two.reverse()
+    top_two = [obj["id"] for obj in synthetic_state.library_snapshot(0)[:2]]
 
     spell_obj_id = synthetic_state.register_and_inject_object(
         _look_top_n_dict(n=2), 0, ZONE_HAND
@@ -920,8 +917,7 @@ def test_auto_resolve_pick_top_picks_topmost(synthetic_state):
     card) — matches Python's no-agent-seated fallback."""
     hand_before = synthetic_state.hand_sizes[0]
     graveyard_before = synthetic_state.graveyard_sizes[0]
-    top_two = [obj["id"] for obj in synthetic_state.library_snapshot(0)[-2:]]
-    top_two.reverse()
+    top_two = [obj["id"] for obj in synthetic_state.library_snapshot(0)[:2]]
 
     spell_obj_id = synthetic_state.register_and_inject_object(
         _look_top_n_dict(n=2), 0, ZONE_HAND
@@ -941,8 +937,7 @@ def test_auto_resolve_pick_top_picks_topmost(synthetic_state):
 def test_auto_resolve_default_picks_topmost_for_pick_card_variant(synthetic_state):
     """auto_resolve('default') delivers the same outcome as 'pick_top'
     for PickCardFromExaminedChoice."""
-    top_two = [obj["id"] for obj in synthetic_state.library_snapshot(0)[-2:]]
-    top_two.reverse()
+    top_two = [obj["id"] for obj in synthetic_state.library_snapshot(0)[:2]]
 
     spell_obj_id = synthetic_state.register_and_inject_object(
         _look_top_n_dict(n=2), 0, ZONE_HAND
@@ -961,7 +956,7 @@ def test_resolve_top_of_stack_auto_resolves_look_top_n(synthetic_state):
     """The non-pause resolve_top_of_stack auto-resolves the LookTopN.
     Topmost examined card lands in hand."""
     hand_before = synthetic_state.hand_sizes[0]
-    top_id_before = synthetic_state.library_snapshot(0)[-1]["id"]
+    top_id_before = synthetic_state.library_snapshot(0)[0]["id"]
     spell_obj_id = synthetic_state.register_and_inject_object(
         _look_top_n_dict(n=2), 0, ZONE_HAND
     )
@@ -1026,8 +1021,7 @@ def test_fingerprint_pick_card_pending_differs_from_empty(synthetic_state):
 def test_clone_isolates_pick_card_pending_decisions(synthetic_state):
     """clone_once() deep-clones the PickCardFromExaminedChoice. Resolving
     the clone leaves the source's queue intact (CoW canary)."""
-    top_two = [obj["id"] for obj in synthetic_state.library_snapshot(0)[-2:]]
-    top_two.reverse()
+    top_two = [obj["id"] for obj in synthetic_state.library_snapshot(0)[:2]]
     spell_obj_id = synthetic_state.register_and_inject_object(
         _look_top_n_dict(n=2), 0, ZONE_HAND
     )
@@ -1681,8 +1675,7 @@ def test_manifest_dread_resolve_pops_two_cards_and_pushes_pending_choice(
     library_before = synthetic_state.library_sizes[0]
     graveyard_before = synthetic_state.graveyard_sizes[0]
     hand_before = synthetic_state.hand_sizes[0]
-    top_two = [obj["id"] for obj in synthetic_state.library_snapshot(0)[-2:]]
-    top_two.reverse()  # cards[0] = topmost (popped first)
+    top_two = [obj["id"] for obj in synthetic_state.library_snapshot(0)[:2]]
 
     spell_obj_id = synthetic_state.register_and_inject_object(
         _manifest_dread_dict(count=1), 0, ZONE_HAND
@@ -1712,8 +1705,7 @@ def test_submit_manifest_dread_picks_topmost_routes_one_to_bf(synthetic_state):
     examined card to graveyard."""
     bf_before = synthetic_state.battlefield_sizes[0]
     graveyard_before = synthetic_state.graveyard_sizes[0]
-    top_two = [obj["id"] for obj in synthetic_state.library_snapshot(0)[-2:]]
-    top_two.reverse()
+    top_two = [obj["id"] for obj in synthetic_state.library_snapshot(0)[:2]]
 
     spell_obj_id = synthetic_state.register_and_inject_object(
         _manifest_dread_dict(count=1), 0, ZONE_HAND
@@ -1733,8 +1725,7 @@ def test_submit_manifest_dread_picks_topmost_routes_one_to_bf(synthetic_state):
 
 def test_submit_manifest_dread_picks_non_topmost(synthetic_state):
     """Picking cards[1] routes it to bf and cards[0] to graveyard."""
-    top_two = [obj["id"] for obj in synthetic_state.library_snapshot(0)[-2:]]
-    top_two.reverse()
+    top_two = [obj["id"] for obj in synthetic_state.library_snapshot(0)[:2]]
 
     spell_obj_id = synthetic_state.register_and_inject_object(
         _manifest_dread_dict(count=1), 0, ZONE_HAND
@@ -1794,8 +1785,7 @@ def test_auto_resolve_manifest_top_picks_topmost(synthetic_state):
     card) — matches Python's no-agent-seated fallback."""
     bf_before = synthetic_state.battlefield_sizes[0]
     graveyard_before = synthetic_state.graveyard_sizes[0]
-    top_two = [obj["id"] for obj in synthetic_state.library_snapshot(0)[-2:]]
-    top_two.reverse()
+    top_two = [obj["id"] for obj in synthetic_state.library_snapshot(0)[:2]]
 
     spell_obj_id = synthetic_state.register_and_inject_object(
         _manifest_dread_dict(count=1), 0, ZONE_HAND
@@ -1817,8 +1807,7 @@ def test_auto_resolve_default_picks_topmost_for_manifest_dread_variant(
 ):
     """auto_resolve('default') delivers the same outcome as
     'manifest_top' for ManifestDreadChoice."""
-    top_two = [obj["id"] for obj in synthetic_state.library_snapshot(0)[-2:]]
-    top_two.reverse()
+    top_two = [obj["id"] for obj in synthetic_state.library_snapshot(0)[:2]]
 
     spell_obj_id = synthetic_state.register_and_inject_object(
         _manifest_dread_dict(count=1), 0, ZONE_HAND
@@ -1837,7 +1826,7 @@ def test_resolve_top_of_stack_auto_resolves_manifest_dread(synthetic_state):
     """The non-pause resolve_top_of_stack auto-resolves the ManifestDread.
     Topmost examined card lands on bf."""
     bf_before = synthetic_state.battlefield_sizes[0]
-    top_id_before = synthetic_state.library_snapshot(0)[-1]["id"]
+    top_id_before = synthetic_state.library_snapshot(0)[0]["id"]
     spell_obj_id = synthetic_state.register_and_inject_object(
         _manifest_dread_dict(count=1), 0, ZONE_HAND
     )
@@ -1856,8 +1845,7 @@ def test_manifest_dread_manifested_card_has_etb_state(synthetic_state):
     """The manifested card lands on bf with the standard ETB state
     reset (summoning_sick=true, tapped=false, controller = the
     manifest-dread controller)."""
-    top_two = [obj["id"] for obj in synthetic_state.library_snapshot(0)[-2:]]
-    top_two.reverse()
+    top_two = [obj["id"] for obj in synthetic_state.library_snapshot(0)[:2]]
     top_id = top_two[0]
 
     spell_obj_id = synthetic_state.register_and_inject_object(
@@ -1909,7 +1897,7 @@ def test_manifest_dread_one_card_library_manifests_lone_card(engine):
     state = engine.make_synthetic_state(num_battlefield=0, num_hand=0, num_library=1)
     bf_before = state.battlefield_sizes[0]
     graveyard_before = state.graveyard_sizes[0]
-    lone_id = state.library_snapshot(0)[-1]["id"]
+    lone_id = state.library_snapshot(0)[0]["id"]
 
     spell_obj_id = state.register_and_inject_object(
         _manifest_dread_dict(count=1), 0, ZONE_BATTLEFIELD
@@ -1935,7 +1923,7 @@ def test_manifest_dread_one_card_library_submit_picks_lone(engine):
     """Manual submit on a 1-card-library ManifestDread routes the lone
     card to bf."""
     state = engine.make_synthetic_state(num_battlefield=0, num_hand=0, num_library=1)
-    lone_id = state.library_snapshot(0)[-1]["id"]
+    lone_id = state.library_snapshot(0)[0]["id"]
 
     spell_obj_id = state.register_and_inject_object(
         _manifest_dread_dict(count=1), 0, ZONE_BATTLEFIELD
@@ -1993,8 +1981,7 @@ def test_fingerprint_manifest_dread_pending_differs_from_empty(synthetic_state):
 def test_clone_isolates_manifest_dread_pending_decisions(synthetic_state):
     """clone_once() deep-clones the ManifestDreadChoice. Resolving
     the clone leaves the source's queue intact (CoW canary)."""
-    top_two = [obj["id"] for obj in synthetic_state.library_snapshot(0)[-2:]]
-    top_two.reverse()
+    top_two = [obj["id"] for obj in synthetic_state.library_snapshot(0)[:2]]
     spell_obj_id = synthetic_state.register_and_inject_object(
         _manifest_dread_dict(count=1), 0, ZONE_HAND
     )
@@ -2188,8 +2175,8 @@ def test_look_at_top_n_negative_max_power_raises(engine):
 def test_look_at_top_n_resolve_pops_n_cards_and_pushes_pending(synthetic_state):
     library_before = synthetic_state.library_sizes[0]
     n = 4
-    top_n = [obj["id"] for obj in synthetic_state.library_snapshot(0)[-n:]]
-    top_n.reverse()  # cards[0] = topmost (popped first)
+    # Post-CE3: lib[0] = top, lib[..n] = top-n in top-first order.
+    top_n = [obj["id"] for obj in synthetic_state.library_snapshot(0)[:n]]
 
     spell_obj_id = synthetic_state.register_and_inject_object(
         _living_phone_dict(), 0, ZONE_HAND
@@ -2594,8 +2581,7 @@ def test_manifest_dread_then_attach_self_happy_path_stamps_attached_to(synthetic
     (3) Submit the topmost: it lands on bf as manifested creature.
     (4) source.attached_to is stamped to the manifested card's id.
     """
-    top_two = [obj["id"] for obj in synthetic_state.library_snapshot(0)[-2:]]
-    top_two.reverse()  # cards[0] = topmost
+    top_two = [obj["id"] for obj in synthetic_state.library_snapshot(0)[:2]]
 
     spell_id = synthetic_state.register_and_inject_object(
         _manifest_dread_then_attach_self_dict(count=1), 0, 0  # ZONE_HAND
@@ -2629,8 +2615,7 @@ def test_manifest_dread_then_attach_self_happy_path_stamps_attached_to(synthetic
 def test_manifest_dread_then_attach_self_picks_non_topmost(synthetic_state):
     """Submitting cards[1] (non-topmost) routes it to bf; the source
     Equipment attaches to that picked card (not the topmost)."""
-    top_two = [obj["id"] for obj in synthetic_state.library_snapshot(0)[-2:]]
-    top_two.reverse()
+    top_two = [obj["id"] for obj in synthetic_state.library_snapshot(0)[:2]]
 
     spell_id = synthetic_state.register_and_inject_object(
         _manifest_dread_then_attach_self_dict(count=1), 0, 0
@@ -2649,8 +2634,7 @@ def test_manifest_dread_then_attach_self_picks_non_topmost(synthetic_state):
 
 def test_manifest_dread_then_attach_self_auto_resolve_picks_topmost(synthetic_state):
     """auto_resolve('default') picks cards[0] AND runs the attach."""
-    top_two = [obj["id"] for obj in synthetic_state.library_snapshot(0)[-2:]]
-    top_two.reverse()
+    top_two = [obj["id"] for obj in synthetic_state.library_snapshot(0)[:2]]
 
     spell_id = synthetic_state.register_and_inject_object(
         _manifest_dread_then_attach_self_dict(count=1), 0, 0
@@ -2668,7 +2652,7 @@ def test_manifest_dread_then_attach_self_auto_resolve_picks_topmost(synthetic_st
 
 def test_manifest_dread_then_attach_self_full_resolve_auto(synthetic_state):
     """The non-pause resolve_top_of_stack auto-resolves and attaches."""
-    top_id_before = synthetic_state.library_snapshot(0)[-1]["id"]
+    top_id_before = synthetic_state.library_snapshot(0)[0]["id"]
     spell_id = synthetic_state.register_and_inject_object(
         _manifest_dread_then_attach_self_dict(count=1), 0, 0
     )
@@ -2690,8 +2674,7 @@ def test_manifest_dread_then_attach_self_source_ltb_silent_partial(synthetic_sta
     resolve-push and the submit (e.g. destroyed by a separate effect),
     the manifest step still completes but the attach step is silently
     skipped — no panic, no error."""
-    top_two = [obj["id"] for obj in synthetic_state.library_snapshot(0)[-2:]]
-    top_two.reverse()
+    top_two = [obj["id"] for obj in synthetic_state.library_snapshot(0)[:2]]
 
     spell_id = synthetic_state.register_and_inject_object(
         _manifest_dread_then_attach_self_dict(count=1), 0, 0
@@ -2764,7 +2747,7 @@ def test_manifest_dread_then_attach_self_one_card_library(engine):
     """A 1-card library manifests the lone card; the source attaches
     to it. No graveyard step from the manifest path."""
     state = engine.make_synthetic_state(num_battlefield=0, num_hand=0, num_library=1)
-    lone_id = state.library_snapshot(0)[-1]["id"]
+    lone_id = state.library_snapshot(0)[0]["id"]
     spell_id = state.register_and_inject_object(
         _manifest_dread_then_attach_self_dict(count=1), 0, 2  # ZONE_BATTLEFIELD
     )
@@ -2802,8 +2785,7 @@ def test_plain_manifest_dread_does_not_attach_source(synthetic_state):
     """Regression: the existing Effect::ManifestDread arm sets
     then_attach_to_source=false, so submitting the resulting pending
     must NOT stamp source.attached_to."""
-    top_two = [obj["id"] for obj in synthetic_state.library_snapshot(0)[-2:]]
-    top_two.reverse()
+    top_two = [obj["id"] for obj in synthetic_state.library_snapshot(0)[:2]]
 
     spell_id = synthetic_state.register_and_inject_object(
         _manifest_dread_dict(count=1), 0, 0
@@ -2831,8 +2813,7 @@ def test_clone_isolates_manifest_then_attach_pending(synthetic_state):
     then_attach_to_source flag. Resolving the clone leaves the source's
     queue intact and the source's attached_to unchanged in the source
     state."""
-    top_two = [obj["id"] for obj in synthetic_state.library_snapshot(0)[-2:]]
-    top_two.reverse()
+    top_two = [obj["id"] for obj in synthetic_state.library_snapshot(0)[:2]]
     spell_id = synthetic_state.register_and_inject_object(
         _manifest_dread_then_attach_self_dict(count=1), 0, 0
     )

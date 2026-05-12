@@ -182,13 +182,13 @@ def test_shuffle_clone_does_not_affect_original(synthetic_state):
 
 def test_scry_top_n_returns_n_obj_ids_in_top_order(synthetic_state):
     """``scry(0, 3)`` returns the top 3 obj_ids of player 0's library
-    in top-first order. Top of library = LAST element of the Vec, so
-    the returned list reads the tail in reverse."""
+    in top-first order. Post-CE3: top of library = FIRST element of
+    the Vec, so the returned list reads the head forward."""
     top3 = synthetic_state.scry(0, 3)
     assert len(top3) == 3
-    # Library was built as ids 17..66 in push order, so the LAST 3
-    # pushed are 64, 65, 66; top-first iteration yields 66, 65, 64.
-    assert top3 == [66, 65, 64]
+    # Library was built as ids 17..66 in push order. Post-CE3
+    # lib[0] = top = id 17. Top-first iteration yields 17, 18, 19.
+    assert top3 == [17, 18, 19]
 
 
 def test_scry_more_than_library_size_returns_what_exists(synthetic_state):
@@ -224,26 +224,29 @@ def test_apply_scry_keep_on_top_preserves_order(synthetic_state):
 
 
 def test_apply_scry_send_some_to_bottom_reorders_library(synthetic_state):
-    """Scry top 3 (ids 66, 65, 64), keep 66 + 65 on top, send 64 to
-    the bottom. Library size unchanged; new top-first reads 66, 65,
-    then-the-old-fourth-card (id 63); the bottom card (formerly id
-    17) is now id 64."""
+    """Post-CE3 orientation: scry top 3 (ids 17, 18, 19), keep 17 +
+    18 on top, send 19 to the bottom. Library size unchanged; new
+    top-first reads 17, 18, then-the-old-fourth-card (id 20); the
+    bottom card (formerly id 66) is now still 66 with id 19 just
+    below — actually the bottom slot (lib[len-1]) becomes id 19 by
+    the apply_scry contract (bottom_ids[0] = very bottom)."""
     top3 = synthetic_state.scry(0, 3)
-    assert top3 == [66, 65, 64]
+    assert top3 == [17, 18, 19]
 
-    ok = synthetic_state.apply_scry(0, [66, 65], [64])
+    ok = synthetic_state.apply_scry(0, [17, 18], [19])
     assert ok is True
 
     assert synthetic_state.library_sizes[0] == P0_LIBRARY_SIZE
     new_top3 = synthetic_state.scry(0, 3)
-    assert new_top3 == [66, 65, 63]
+    assert new_top3 == [17, 18, 20]
 
-    # Old bottom card (id 17) is now second-from-bottom; new bottom
-    # is id 64. Read whole library and check the very bottom (= first
-    # element of the Vec, = LAST element of a top-first scry).
+    # Old bottom card (id 66) is now second-from-bottom; new very
+    # bottom is id 19 (the bottom_ids[0] contract). Read whole library
+    # and check the very bottom (= last element of the Vec, = LAST
+    # element of a top-first scry).
     all_ids = synthetic_state.scry(0, P0_LIBRARY_SIZE)
-    assert all_ids[-1] == 64
-    assert all_ids[-2] == 17
+    assert all_ids[-1] == 19
+    assert all_ids[-2] == 66
 
 
 def test_apply_scry_validation_failure_returns_false(synthetic_state):
@@ -251,7 +254,7 @@ def test_apply_scry_validation_failure_returns_false(synthetic_state):
     we peeked at, validation fails and the library is unchanged."""
     before = _library_obj_ids(synthetic_state, 0, P0_LIBRARY_SIZE)
     # Pretend we scryed 2, but pass an id that isn't in the top 2.
-    ok = synthetic_state.apply_scry(0, [66, 999_999], [])
+    ok = synthetic_state.apply_scry(0, [17, 999_999], [])
     assert ok is False
     after = _library_obj_ids(synthetic_state, 0, P0_LIBRARY_SIZE)
     assert after == before
@@ -386,15 +389,16 @@ ELVES_PID = 2
 
 
 def test_search_library_by_type_finds_creature(synthetic_state):
-    """Library laid out (bottom -> top) as [Forest, Forest, Bears, Forest]:
-    top-to-bottom search for "Creature" returns the Bears' obj_id (the
-    Forest at the top is skipped, Bears is the next card down)."""
+    """Library laid out (top -> bottom, post-CE3) as [Forest, Forest,
+    Bears, Forest]: top-to-bottom search for "Creature" returns the
+    Bears' obj_id (the Forests at the top are skipped, Bears is next
+    down)."""
     synthetic_state.load_deck(0, [FOREST_PID, FOREST_PID, BEARS_PID, FOREST_PID])
-    # After load_deck, top-of-library = the LAST input = Forest. Below
-    # that = Bears. Top-to-bottom iteration skips the Forest at the very
-    # top and returns Bears' obj_id.
+    # Post-CE3: top-of-library = the FIRST input = Forest; lib[2] =
+    # Bears. Top-to-bottom iteration skips the two Forests and
+    # returns Bears' obj_id.
     top_first_ids = synthetic_state.scry(0, 4)
-    bears_id = top_first_ids[1]  # second from top
+    bears_id = top_first_ids[2]  # third from top
     assert synthetic_state.printing_name_of(bears_id) == "Grizzly Bears"
 
     found = synthetic_state.search_library_for_first_of_type(0, "Creature")
@@ -404,11 +408,11 @@ def test_search_library_by_type_finds_creature(synthetic_state):
 def test_search_library_by_type_finds_land(synthetic_state):
     """Default synthetic state has 50 Forests in the library. A
     top-to-bottom search for "Land" returns the obj_id of the TOP of
-    the library (id 66 — the last element of the Vec)."""
+    the library (id 17 — the FIRST element of the Vec post-CE3)."""
     found = synthetic_state.search_library_for_first_of_type(0, "Land")
-    # Top of library = last element of Vec; synthetic seeded ids 17..66
-    # so id 66 is the top.
-    assert found == 66
+    # Top of library = lib[0] post-CE3; synthetic seeded ids 17..66
+    # so id 17 is the top.
+    assert found == 17
 
 
 def test_search_library_by_type_unknown_type_returns_none(synthetic_state):
@@ -744,9 +748,10 @@ def test_mill_target_player_resets_state_on_milled_cards(synthetic_state):
     (which works cross-zone) and assert the milled card has counters
     == 0 on arrival in the graveyard. Also asserts the milled card's
     `find_object_zone` reports ZONE_GRAVEYARD."""
-    # Top of library is the LAST element of the Vec (= highest id).
-    # Default synthetic_state.library has ids 17..66 for player 0.
-    top_id = 66
+    # Top of library is the FIRST element of the Vec post-CE3 (=
+    # smallest id). Default synthetic_state.library has ids 17..66
+    # for player 0; top = 17.
+    top_id = 17
     # Stamp counters on the top library card.
     assert synthetic_state.set_counters(top_id, 5) is True
     assert synthetic_state.get_counters(top_id) == 5
@@ -871,14 +876,14 @@ def _basic_land_tapped_dict():
 def test_effect_drawcards_moves_top_of_library_to_hand(synthetic_state):
     """Cross-feature: ``Effect::DrawCards`` dispatch moves the actual
     top-of-library obj_id from the library Vec onto the controller's
-    hand Vec. Top = LAST element of the library Vec (round-1 zones
-    convention). After resolution, the formerly-top library card has
-    ``find_object_zone == ZONE_HAND``.
+    hand Vec. Post-CE3: top = FIRST element of the library Vec
+    (Python pop(0) convention). After resolution, the formerly-top
+    library card has ``find_object_zone == ZONE_HAND``.
 
     The synthetic seed lays p0's library as ids 17..66 push-order, so
-    the top of library is id 66, second-from-top is id 65."""
-    top_id = 17 + P0_LIBRARY_SIZE - 1  # 66
-    second_id = 17 + P0_LIBRARY_SIZE - 2  # 65
+    the top of library is id 17, second-from-top is id 18."""
+    top_id = 17
+    second_id = 18
     assert synthetic_state.find_object_zone(top_id) != ZONE_HAND
 
     obj_id = synthetic_state.register_and_inject_object(
@@ -894,11 +899,12 @@ def test_effect_drawcards_moves_top_of_library_to_hand(synthetic_state):
 
 def test_effect_mill_moves_top_of_library_to_graveyard(synthetic_state):
     """Cross-feature: ``Effect::Mill`` dispatch moves the top-of-library
-    obj_id to the CONTROLLER's graveyard. Round-1 zones convention: top
-    of library = LAST element of the library Vec. After resolution, the
-    formerly-top card has ``find_object_zone == ZONE_GRAVEYARD``."""
-    top_id = 17 + P0_LIBRARY_SIZE - 1  # 66
-    second_id = 17 + P0_LIBRARY_SIZE - 2  # 65
+    obj_id to the CONTROLLER's graveyard. Post-CE3 zones convention:
+    top of library = FIRST element of the library Vec. After
+    resolution, the formerly-top card has ``find_object_zone ==
+    ZONE_GRAVEYARD``."""
+    top_id = 17
+    second_id = 18
     assert synthetic_state.find_object_zone(top_id) != ZONE_GRAVEYARD
 
     obj_id = synthetic_state.register_and_inject_object(
@@ -955,7 +961,7 @@ def test_effect_surveil_first_slice_keeps_library_and_top_id_unchanged(
     observation surface is bit-equal to the pre-r27 path. Real
     surveil-to-graveyard now uses the new `submit_surveil_decision`
     dispatcher — see `tests_rust/test_pending_decisions.py`."""
-    top_id = 17 + P0_LIBRARY_SIZE - 1  # 66
+    top_id = 17  # post-CE3: top = lib[0]
     lib_before = synthetic_state.library_sizes[0]
     gy_before = synthetic_state.graveyard_sizes[0]
 
@@ -992,7 +998,7 @@ def test_effect_search_library_for_basic_land_tapped_enters_tapped(
     shuffle the library after the search (CR 701.19/701.22 would
     require it). Tracked in ``docs/SEARCH_LIMITATIONS.md`` — pending
     RNG-externalization work."""
-    top_id = 17 + P0_LIBRARY_SIZE - 1  # 66 — the searched land
+    top_id = 17  # post-CE3: top = lib[0] = id 17 (first push-order)
 
     obj_id = synthetic_state.register_and_inject_object(
         _basic_land_tapped_dict(), 0, ZONE_HAND
@@ -1162,7 +1168,7 @@ def test_find_object_zone_post_mill_reports_graveyard(synthetic_state):
     Vec-membership are kept in lockstep across the library->graveyard
     move (the obj.zone field is stamped to ZONE_GRAVEYARD on the way
     out per the round-10 mill arm)."""
-    top_id = 17 + P0_LIBRARY_SIZE - 1  # 66 — top of p0's library
+    top_id = 17  # post-CE3: top = lib[0] = id 17
     assert synthetic_state.find_object_zone(top_id) == 1  # ZONE_LIBRARY
 
     milled = synthetic_state.mill_target_player(0, 1)
