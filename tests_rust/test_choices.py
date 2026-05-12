@@ -95,11 +95,11 @@ def test_choose_first_card_in_hand_empty_hand_returns_none(engine):
 
 
 def test_choose_top_of_library_returns_last_element_id(synthetic_state):
-    # Top of library = last per round-1 convention. p0 library is
-    # ids 17..66 ⇒ top = 66.
-    assert synthetic_state.choose_top_of_library_for_player(0) == 66
-    # p1 library: ids 84..133 ⇒ top = 133.
-    assert synthetic_state.choose_top_of_library_for_player(1) == 133
+    # Top of library = lib[0] post-CE3 (Python pop(0) convention).
+    # p0 library is built as ids 17..66 in push order ⇒ top = 17.
+    assert synthetic_state.choose_top_of_library_for_player(0) == 17
+    # p1 library: ids 84..133 ⇒ top = 84.
+    assert synthetic_state.choose_top_of_library_for_player(1) == 84
 
 
 def test_choose_top_of_library_empty_returns_none(engine):
@@ -424,13 +424,13 @@ def test_choose_after_move_object_battlefield_creature_to_graveyard(synthetic_st
 
 
 def test_choose_top_of_library_after_draw_card(synthetic_state):
-    # Top-of-library convention = last element. p0's library top is
-    # id 66 by default. draw_card pops the last element, so the new
-    # top should be id 65.
-    assert synthetic_state.choose_top_of_library_for_player(0) == 66
+    # Top-of-library convention = lib[0] (post-CE3 Python pop(0)
+    # alignment). p0's library top is id 17 by default. draw_card
+    # removes lib[0], so the new top should be id 18.
+    assert synthetic_state.choose_top_of_library_for_player(0) == 17
     drawn = synthetic_state.draw_card(0)
-    assert drawn == 66
-    assert synthetic_state.choose_top_of_library_for_player(0) == 65
+    assert drawn == 17
+    assert synthetic_state.choose_top_of_library_for_player(0) == 18
 
 
 def test_choose_first_card_in_hand_after_draw(synthetic_state):

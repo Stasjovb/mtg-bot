@@ -6,9 +6,11 @@
 //!
 //! First-slice scope: `load_deck(player_id, [printing_id, ...])`
 //! replaces the player's library with fresh GameObjects (one per
-//! printing_id in the input list, in order); top-of-library = LAST
-//! element of the Vec to mirror the round-1 zones convention.
-//! Composes with the round-4 library shuffle and round-1 zones.
+//! printing_id in the input list, in order); top-of-library = FIRST
+//! element of the Vec (= `lib[0]`) per the post-CE3 closure convention
+//! aligned with Python's `library.pop(0)`. So `printing_ids[0]` lands
+//! at the very top of the library — the first card the player would
+//! draw. Composes with the round-4 library shuffle and round-1 zones.
 //!
 //! ## Fresh-id allocation
 //!
@@ -49,8 +51,9 @@ use std::sync::Arc;
 #[pymethods]
 impl GameState {
     /// Replace `player_id`'s library with fresh GameObjects, one per
-    /// entry of `printing_ids` (in input order, last input = top of
-    /// library). Each new object gets a unique id allocated above the
+    /// entry of `printing_ids` (in input order, FIRST input = top of
+    /// library — matches Python's `library.pop(0)` convention post-
+    /// CE3). Each new object gets a unique id allocated above the
     /// current max id across all zones on both players.
     ///
     /// Raises `ValueError` if `player_id` is not 0 or 1, or if any

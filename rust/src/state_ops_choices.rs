@@ -17,9 +17,9 @@
 //! id. Callers that mutate (apply damage, tap the chosen target) are
 //! responsible for their own CoW path.
 //!
-//! **Top of library = last element of the Vec.** This matches the
-//! round-1 zone convention (peek_top / pop_top use the last element
-//! for O(1) access). Callers that want to read "the top card the
+//! **Top of library = `lib[0]` (post-CE3).** This matches Python's
+//! `library.pop(0)` convention — index 0 = top of library, last
+//! element = bottom. Callers that want to read "the top card the
 //! player would draw next" use `choose_top_of_library_for_player`.
 //!
 //! **Out-of-range player_id raises ValueError.** Mirrors the existing
@@ -72,7 +72,7 @@ impl GameState {
     }
 
     /// Return the obj_id of the top of `player_id`'s library
-    /// (`library.last()` per the round-1 top=last convention).
+    /// (`library.first()` per the post-CE3 top=lib[0] convention).
     /// Returns `None` on empty library. Raises `ValueError` on an
     /// out-of-range `player_id`.
     fn choose_top_of_library_for_player(
@@ -80,7 +80,7 @@ impl GameState {
         player_id: u8,
     ) -> PyResult<Option<u32>> {
         let idx = check_player_id(player_id)?;
-        Ok(self.players[idx].library.last().map(|obj| obj.id))
+        Ok(self.players[idx].library.first().map(|obj| obj.id))
     }
 
     /// Return the obj_id of the first permanent on `player_id`'s

@@ -321,22 +321,22 @@ def test_mulligan_to_n_clone_isolation(synthetic_state):
 
 def test_bottom_cards_moves_first_n_to_library_bottom(synthetic_state):
     """`bottom_cards_from_hand(0, 2)` removes hand[0..2] (ids 10, 11)
-    and puts them on the bottom of the library so that lib[0] = 10
-    (bottom-most) and lib[1] = 11 — i.e. hand[0] ends up at the very
-    bottom of the library, hand[1] just above it."""
+    and puts them on the bottom of the library so that hand[0] ends
+    up at the very bottom, hand[1] just above it. Post-CE3:
+    bottom = tail of Vec, so lib[len-1] = 10 and lib[len-2] = 11."""
     synthetic_state.bottom_cards_from_hand(0, 2)
 
     assert synthetic_state.hand_sizes[0] == P0_HAND_SIZE - 2
     assert synthetic_state.library_sizes[0] == P0_LIBRARY_SIZE + 2
 
-    # Read the full library top-first via scry. Last two entries are
-    # the new bottom of the library: scry result is [top, ..., bottom],
-    # so the very last is lib[0] = id 10, second-to-last is lib[1] = 11.
+    # Read the full library top-first via scry. scry returns
+    # [top, ..., bottom]. The very last (= lib[len-1]) is the new
+    # very bottom = id 10 (hand[0]); second-to-last = id 11 (hand[1]).
     full = synthetic_state.scry(0, synthetic_state.library_sizes[0])
     assert full[-1] == 10  # hand[0] now at library bottom
     assert full[-2] == 11  # hand[1] just above it
-    # Library top unchanged: lib's last element was id 66 before, still 66.
-    assert full[0] == 66
+    # Library top unchanged: lib[0] was id 17 before, still 17 (post-CE3).
+    assert full[0] == 17
 
 
 def test_bottom_cards_zero_no_op(synthetic_state):
@@ -372,16 +372,16 @@ def test_bottom_cards_unknown_player_raises(synthetic_state):
 
 
 def test_bottom_cards_preserves_library_top(synthetic_state):
-    """The card on top of the library (last element of the Vec, id 66
-    in the default fixture) is unaffected by bottoming — bottoming
-    inserts at index 0 only."""
+    """The card on top of the library (post-CE3: lib[0] = id 17 in
+    the default fixture) is unaffected by bottoming — bottoming
+    appends to the tail only."""
     top_before = synthetic_state.scry(0, 1)
-    assert top_before == [66]
+    assert top_before == [17]
 
     synthetic_state.bottom_cards_from_hand(0, 3)
 
     top_after = synthetic_state.scry(0, 1)
-    assert top_after == [66]
+    assert top_after == [17]
 
 
 def test_bottom_cards_clone_isolation(synthetic_state):

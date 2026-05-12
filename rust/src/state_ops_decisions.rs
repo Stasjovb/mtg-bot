@@ -484,21 +484,20 @@ fn resolve_look_at_top_n_reveal_yes(
         obj.zone = 0; // ZONE_HAND
         hand_mut.push(obj);
     }
-    // Route the rest to library BOTTOM (Vec.insert at position 0 in
-    // popped order — so cards[0] of the remainder ends up DEEPEST,
-    // cards[-1] of the remainder ends up just above it; the original
-    // order-of-popping is preserved bottom-up). With our Vec
-    // convention (top = Vec.last()), "bottom" = index 0.
+    // Route the rest to library BOTTOM. Post-CE3 convention:
+    // bottom = tail of Vec. Iterate in REVERSE popped-order and
+    // push each: the last-pushed (cards[0], the topmost popped)
+    // ends up at lib[len-1] = very bottom; cards[-1] (the deepest
+    // popped) ends up at the highest of the bottomed batch.
+    // Preserves the "cards[0] ends up DEEPEST" contract from the
+    // pre-CE3 implementation (a deterministic mirror of the
+    // "random order" rider — see SEARCH_LIMITATIONS).
     {
         let lib_mut: &mut Vec<GameObject> =
             Arc::make_mut(&mut state.players[pidx].library);
-        // We push to bottom (index 0) in popped order so that
-        // cards[0] (the topmost popped) ends up DEEPEST below
-        // cards[1]. This is a deterministic mirror of the "random
-        // order" rider — see SEARCH_LIMITATIONS.
-        for mut obj in sorted_cards.into_iter() {
+        for mut obj in sorted_cards.into_iter().rev() {
             obj.zone = 1; // ZONE_LIBRARY
-            lib_mut.insert(0, obj);
+            lib_mut.push(obj);
         }
     }
     Ok(())
@@ -517,13 +516,14 @@ fn resolve_look_at_top_n_reveal_no(
 ) -> PyResult<()> {
     let pidx = controller as usize;
     // Bottom in popped order (cards[0] → deepest, cards[-1] →
-    // just above it).
+    // just above it). Post-CE3: bottom = tail; iterate reverse
+    // and push so the last push (= cards[0]) lands at lib[len-1].
     {
         let lib_mut: &mut Vec<GameObject> =
             Arc::make_mut(&mut state.players[pidx].library);
-        for mut obj in cards.into_iter() {
+        for mut obj in cards.into_iter().rev() {
             obj.zone = 1; // ZONE_LIBRARY
-            lib_mut.insert(0, obj);
+            lib_mut.push(obj);
         }
     }
     // Counter-on-miss rider: if `counter_on_miss` is true and source
@@ -564,18 +564,18 @@ fn resolve_surveil_with_strategy(
     match strategy {
         "keep_all_on_top" => {
             // Return cards to library top in popped order. cards[0]
-            // was popped FIRST (it was the topmost card). To restore
-            // the original ordering we push them back in REVERSE
-            // popped-order so cards[0] ends up on the top (last
-            // position of the Vec) again. With cards = [top, second-
-            // from-top, third-from-top], pushing in reverse means
-            // pushing third, second, top — the final state has top
-            // at Vec.last().
+            // was popped FIRST (it was the topmost card). Post-CE3:
+            // top = lib[0]. To restore the original ordering, insert
+            // each at lib[0] in REVERSE popped-order: the last
+            // insert (cards[0]) lands at lib[0] = top; cards[1]
+            // becomes lib[1]; etc. After the loop, the popped block
+            // sits at lib[..n] in original popped order — identical
+            // to the pre-Surveil library shape.
             let pidx = controller as usize;
             let lib_mut: &mut Vec<GameObject> =
                 Arc::make_mut(&mut state.players[pidx].library);
             for obj in cards.into_iter().rev() {
-                lib_mut.push(obj);
+                lib_mut.insert(0, obj);
             }
             Ok(())
         }
@@ -820,11 +820,11 @@ impl GameState {
             }
         }
         // Route to library top. The submitted order determines
-        // depth: card_ids_to_top[0] is the topmost (Vec.last()),
-        // card_ids_to_top[1] is second-from-top, etc. So push in
-        // REVERSE submitted order: the last id pushed lands on
-        // top (Vec.last()), and that's index 0 of the submitted
-        // list.
+        // depth: card_ids_to_top[0] is the topmost (lib[0] post-
+        // CE3), card_ids_to_top[1] is second-from-top, etc. So
+        // insert each at lib[0] in REVERSE submitted order: the
+        // last insert (card_ids_to_top[0]) lands at lib[0] = top;
+        // card_ids_to_top[1] becomes lib[1]; etc.
         {
             let lib_mut: &mut Vec<GameObject> =
                 Arc::make_mut(&mut self.players[pidx].library);
@@ -835,7 +835,7 @@ impl GameState {
                     .cloned()
                     .expect("validation guarantees membership");
                 obj.zone = 1; // ZONE_LIBRARY
-                lib_mut.push(obj);
+                lib_mut.insert(0, obj);
             }
         }
         Ok(())

@@ -25,9 +25,10 @@
 //!
 //! ## "Top of library" convention
 //!
-//! Inherited from `state_ops_zones.rs`: the LAST element of the
-//! library `Vec` is the top of the library. `scry` reads the tail and
-//! returns ids in top-first order (last element first); `apply_scry`
+//! Inherited from `state_ops_zones.rs` (post-CE3): the FIRST element
+//! of the library `Vec` (index 0) is the top of the library, matching
+//! Python's `library.pop(0)` convention. `scry` reads the head and
+//! returns ids in top-first order (`lib[0]` first); `apply_scry`
 //! treats `top_ids[0]` as the new top of library after the operation.
 //!
 //! ## CoW
@@ -157,9 +158,9 @@ impl GameState {
     }
 
     /// Peek at the top `n` cards of `player_id`'s library and return
-    /// their obj_ids in top-first order (top of library = LAST
-    /// element of the Vec, so the returned list reads the library
-    /// tail in reverse).
+    /// their obj_ids in top-first order (top of library = FIRST
+    /// element of the Vec, so the returned list reads the head
+    /// of the Vec forward).
     ///
     /// Pure read — no library mutation, no Arc clone-on-write.
     /// Returns at most `min(n, library_size)` ids; an empty library
@@ -171,11 +172,10 @@ impl GameState {
         }
         let lib = &self.players[idx].library;
         let take = n.min(lib.len());
-        // Library is stored bottom-first; "top" = end of Vec. Read
-        // the tail in reverse to produce top-first order.
-        let start = lib.len() - take;
+        // Library is stored top-first (post-CE3): "top" = lib[0].
+        // Read the head forward to produce top-first order.
         let mut out = Vec::with_capacity(take);
-        for obj in lib[start..].iter().rev() {
+        for obj in lib[..take].iter() {
             out.push(obj.id);
         }
         Ok(out)
@@ -187,9 +187,9 @@ impl GameState {
     /// printing_id is in the library.
     ///
     /// Pure read — no library mutation, no `Arc::make_mut` clone.
-    /// "First" = first by Vec position (lib[0] = bottom of library);
-    /// for tutor-style effects callers usually only care that *some*
-    /// matching card was found, not which one.
+    /// "First" = first by Vec position (lib[0] = TOP of library
+    /// post-CE3); for tutor-style effects callers usually only care
+    /// that *some* matching card was found, not which one.
     fn search_library_for_first_with_printing(
         &self,
         player_id: u8,
@@ -275,14 +275,14 @@ impl GameState {
     /// `obj_id`. Returns `None` if no card with that type is in the
     /// library.
     ///
-    /// "Top-to-bottom" honors the round-1 zone convention that the
-    /// LAST element of the library Vec is the top of the library —
-    /// this primitive iterates the Vec in reverse so the very top
-    /// card is checked first. Tutor effects that fetch by type
-    /// (Worldly Tutor, Crop Rotation, Demonic Tutor's "any card"
-    /// generalization) usually take the topmost qualifying card so
-    /// the search is deterministic; "first by Vec position" wouldn't
-    /// match player intent on a stacked library.
+    /// "Top-to-bottom" honors the post-CE3 zone convention that
+    /// `lib[0]` is the top of the library — this primitive iterates
+    /// the Vec forward so the very top card is checked first. Tutor
+    /// effects that fetch by type (Worldly Tutor, Crop Rotation,
+    /// Demonic Tutor's "any card" generalization) usually take the
+    /// topmost qualifying card so the search is deterministic;
+    /// "first by Vec position" matches player intent on a stacked
+    /// library when index 0 is the top.
     ///
     /// Pure read — no library mutation, no `Arc::make_mut` clone.
     ///
@@ -302,8 +302,8 @@ impl GameState {
             )));
         }
         let lib = &self.players[idx].library;
-        // Iterate top-to-bottom: top of library = last element of Vec.
-        for obj in lib.iter().rev() {
+        // Iterate top-to-bottom: top of library = lib[0] (post-CE3).
+        for obj in lib.iter() {
             let printing = match self.registry.lookup(obj.printing_id) {
                 Some(p) => p,
                 None => continue,
@@ -342,16 +342,15 @@ impl GameState {
                 "player_id {player_id} out of range (must be 0 or 1)"
             )));
         }
-        // Locate top-to-bottom: scan from the end of the Vec back to
-        // index 0; the first index whose printing has `card_type` in
-        // its `card_types` is our match. Inlined here rather than
+        // Locate top-to-bottom: scan from lib[0] (top, post-CE3)
+        // forward; the first index whose printing has `card_type`
+        // in its `card_types` is our match. Inlined here rather than
         // calling the search-only method because we need the Vec
         // INDEX (to remove), not just the obj_id.
         let pos: Option<usize> = {
             let lib = &self.players[idx].library;
             let mut found: Option<usize> = None;
-            for i in (0..lib.len()).rev() {
-                let obj = &lib[i];
+            for (i, obj) in lib.iter().enumerate() {
                 let printing = match self.registry.lookup(obj.printing_id) {
                     Some(p) => p,
                     None => continue,
@@ -414,16 +413,15 @@ impl GameState {
                 "player_id {player_id} out of range (must be 0 or 1)"
             )));
         }
-        // Locate top-to-bottom: scan from the end of the Vec back to
-        // index 0; first index whose printing has `card_type` in its
+        // Locate top-to-bottom: scan from lib[0] (top, post-CE3)
+        // forward; first index whose printing has `card_type` in its
         // `card_types` is our match. Inlined here (vs. delegating to
         // the no-shuffle sibling) because we need the Vec INDEX for
         // removal and we still want the shuffle to run on a miss.
         let pos: Option<usize> = {
             let lib = &self.players[idx].library;
             let mut found: Option<usize> = None;
-            for i in (0..lib.len()).rev() {
-                let obj = &lib[i];
+            for (i, obj) in lib.iter().enumerate() {
                 let printing = match self.registry.lookup(obj.printing_id) {
                     Some(p) => p,
                     None => continue,
@@ -474,9 +472,9 @@ impl GameState {
     /// Mind Funeral, Tasha's Hideous Laughter — anything that names a
     /// non-controller target).
     ///
-    /// **"Top of library" convention** (inherited from
-    /// `state_ops_zones.rs`): the LAST element of the library `Vec` is
-    /// the top of the library, so each mill `pop()`s the tail.
+    /// **"Top of library" convention** (post-CE3, inherited from
+    /// `state_ops_zones.rs`): `lib[0]` is the top of the library, so
+    /// each mill `remove(0)`s the head.
     ///
     /// **Per-object state reset on zone change** (CR 400.7): each
     /// milled card lands in the graveyard with `tapped`,
@@ -535,14 +533,15 @@ impl GameState {
         let player = &mut self.players[idx];
         let to_mill = n.min(player.library.len());
         let lib = Arc::make_mut(&mut player.library);
-        // Pop top-of-library cards (= tail of Vec), pushing each onto
-        // graveyard with the per-object state reset. Collect first to
-        // release the &mut borrow on `lib` before we touch graveyard.
+        // Remove top-of-library cards (= head of Vec, post-CE3),
+        // pushing each onto graveyard with the per-object state reset.
+        // Collect first to release the &mut borrow on `lib` before we
+        // touch graveyard.
         let mut milled: Vec<GameObject> = Vec::with_capacity(to_mill);
         for _ in 0..to_mill {
-            let mut obj = lib
-                .pop()
-                .expect("library size verified >= to_mill above");
+            // Always remove index 0 — that's the current top after each
+            // prior remove shifts the next-top down to index 0.
+            let mut obj = lib.remove(0);
             obj.zone = crate::state_ops_zones::ZONE_GRAVEYARD;
             obj.tapped = false;
             obj.summoning_sick = false;
@@ -589,12 +588,12 @@ impl GameState {
             return Ok(false);
         }
         // Validate: the multiset of (top_ids + bottom_ids) must equal
-        // the multiset of the top `total` library ids.
+        // the multiset of the top `total` library ids. Post-CE3,
+        // lib[0..total] is the top-N window (head of Vec = top).
         let lib = &self.players[idx].library;
-        let start = lib_len - total;
         // Top-N obj_ids (in arbitrary order — we're checking set/multiset
         // equality, not ordering).
-        let mut top_n: Vec<u32> = lib[start..].iter().map(|o| o.id).collect();
+        let mut top_n: Vec<u32> = lib[..total].iter().map(|o| o.id).collect();
         let mut requested: Vec<u32> =
             top_ids.iter().chain(bottom_ids.iter()).copied().collect();
         top_n.sort_unstable();
@@ -610,10 +609,9 @@ impl GameState {
         let player = &mut self.players[idx];
         let lib = Arc::make_mut(&mut player.library);
         // Snapshot the top-N (drained) objects so we can recompose
-        // them in the new order. Library is bottom-first (lib[0] =
-        // bottom, lib[len-1] = top), so the drained slice is the top
-        // of the library.
-        let drained: Vec<GameObject> = lib.drain(start..).collect();
+        // them in the new order. Library is top-first (lib[0] = top
+        // post-CE3), so the drained head is the top of the library.
+        let drained: Vec<GameObject> = lib.drain(..total).collect();
         let find_obj = |id: u32| -> GameObject {
             // Round-27 (UEOT framework): GameObject lost its `Copy`
             // derive when `ueot_modifiers: Vec<UeotModifier>` landed.
@@ -628,21 +626,33 @@ impl GameState {
                 .expect("validated above: id must be in drained")
                 .clone()
         };
-        // Rebuild the library as (front -> back, bottom -> top):
-        //   [bottom_ids in given order]  (bottom_ids[0] = very bottom)
-        //   [old lib[..start] unchanged] (the below-the-scry portion)
-        //   [reversed top_ids]           (top_ids[0] ends up at the
-        //                                 last index = very top)
-        // Sending a card to the bottom inserts it at index 0 — below
-        // everything else, including the unchanged below-the-scry
-        // portion of the library.
-        let kept_bottom: Vec<GameObject> = lib.drain(..).collect();
+        // Rebuild the library as (front -> back, top -> bottom):
+        //   [top_ids in given order]     (top_ids[0] = very top, lib[0])
+        //   [old lib[total..] unchanged] (the below-the-scry portion)
+        //   [bottom_ids in given order]  (bottom_ids[0] = lib's tail-
+        //                                 most-but-first-of-bottom; the
+        //                                 LAST bottom_id is lib[len-1]
+        //                                 = very bottom)
+        // Sending a card to the bottom = push to the end of the Vec
+        // (tail = bottom post-CE3). The first bottom_id sits just
+        // above the second, etc., so bottom_ids[0] is the FIRST-of-
+        // bottom (closest to the existing library middle); the LAST
+        // bottom_id is the very bottom. To honor "first id = very
+        // bottom" semantics seen in the legacy version, we keep that
+        // contract: bottom_ids[0] = very bottom = lib[len-1].
+        // Implementation: append bottom_ids in REVERSE so the last-
+        // appended (bottom_ids[0]) is at lib.len()-1.
+        let kept_below: Vec<GameObject> = lib.drain(..).collect();
         let mut rebuilt: Vec<GameObject> = Vec::with_capacity(lib_len);
-        for &id in bottom_ids.iter() {
+        // Top portion first.
+        for &id in top_ids.iter() {
             rebuilt.push(find_obj(id));
         }
-        rebuilt.extend(kept_bottom);
-        for &id in top_ids.iter().rev() {
+        // Below-the-scry-window middle.
+        rebuilt.extend(kept_below);
+        // Bottom portion: append in reverse so bottom_ids[0] lands
+        // at the very last index (the bottom).
+        for &id in bottom_ids.iter().rev() {
             rebuilt.push(find_obj(id));
         }
         debug_assert_eq!(rebuilt.len(), lib_len);

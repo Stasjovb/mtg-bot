@@ -172,10 +172,11 @@ fn draw_card_inline(state: &mut GameState, player_id: u8) {
     }
     let player = &mut state.players[idx];
     let lib = Arc::make_mut(&mut player.library);
-    let mut obj = match lib.pop() {
-        Some(o) => o,
-        None => return,
-    };
+    if lib.is_empty() {
+        return;
+    }
+    // Post-CE3: top of library = lib[0].
+    let mut obj = lib.remove(0);
     obj.zone = ZONE_HAND;
     Arc::make_mut(&mut player.hand).push(obj);
 }

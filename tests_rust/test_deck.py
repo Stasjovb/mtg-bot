@@ -64,16 +64,17 @@ def _library_obj_ids(state, player_id, n):
 def test_load_deck_replaces_library(synthetic_state):
     """``load_deck(0, [Forest, Forest, Bears, Elves])`` swaps player
     0's library for 4 fresh GameObjects, one per printing_id in input
-    order. Top of library = LAST element of the input list."""
+    order. Top of library = FIRST element of the input list (post-CE3,
+    matching Python's ``library.pop(0)`` convention)."""
     synthetic_state.load_deck(0, [FOREST_PID, FOREST_PID, BEARS_PID, ELVES_PID])
 
     assert synthetic_state.library_sizes[0] == 4
-    # Top-first dump should resolve to: Elves (last), then Bears, then
-    # Forest, then Forest.
+    # Top-first dump should resolve to: Forest (first), Forest, Bears,
+    # then Elves (last = bottom).
     top4 = synthetic_state.scry(0, 4)
     assert len(top4) == 4
     names = [synthetic_state.printing_name_of(oid) for oid in top4]
-    assert names == ["Llanowar Elves", "Grizzly Bears", "Forest", "Forest"]
+    assert names == ["Forest", "Forest", "Grizzly Bears", "Llanowar Elves"]
 
 
 def test_load_deck_replaces_existing_library(synthetic_state):
@@ -94,15 +95,15 @@ def test_load_deck_replaces_existing_library(synthetic_state):
 
 
 def test_load_deck_top_of_library_is_last_element(synthetic_state):
-    """First call to ``draw_card`` returns the LAST printing_id in the
-    input list (top of library = Vec.last())."""
+    """First call to ``draw_card`` returns the FIRST printing_id in the
+    input list (top of library = lib[0] post-CE3)."""
     # Distinguishable printing_ids so we can verify which one drew.
     synthetic_state.load_deck(0, [FOREST_PID, BEARS_PID, ELVES_PID])
     drawn_id = synthetic_state.draw_card(0)
     assert drawn_id is not None
-    # The drawn card was at the top of the library; per the
-    # convention that's the LAST input — Llanowar Elves.
-    assert synthetic_state.printing_name_of(drawn_id) == "Llanowar Elves"
+    # The drawn card was at the top of the library; per the post-CE3
+    # convention that's the FIRST input — Forest.
+    assert synthetic_state.printing_name_of(drawn_id) == "Forest"
 
 
 def test_load_deck_assigns_unique_ids(synthetic_state):

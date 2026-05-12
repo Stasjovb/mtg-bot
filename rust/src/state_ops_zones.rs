@@ -18,15 +18,19 @@
 //!
 //! ## "Top of library" convention
 //!
-//! `draw_card` pops the LAST element of the library `Vec` and pushes
-//! it onto the hand. This matches `Vec::pop`'s O(1) semantics. The
-//! Python engine uses `library.pop(0)` (front = top) — that's an O(n)
-//! shift on each draw and an artifact of `list` having no fast
-//! pop-from-end-as-top idiom in idiomatic Python. The Rust port flips
-//! the orientation; once a Rust-side initializer for libraries lands
-//! the seed order can be reversed to keep "top of library" intuitive
-//! in production code. For the first slice this is a documented
-//! convention rather than a bug.
+//! `draw_card` removes the FIRST element of the library `Vec` (index 0)
+//! and pushes it onto the hand. This matches Python's
+//! `library.pop(0)` convention exactly — index 0 = top of library;
+//! the last element of the Vec is the bottom. CE3 (round 28 cross-
+//! engine smoke divergence) closure: prior to this slice, Rust used
+//! `Vec::pop` (tail = top) for O(1) cost while Python used
+//! `pop(0)` — same DeckSpec drew opposite cards. Aligned to Python's
+//! convention here so the eventual 1000-game smoke harness sees
+//! matched draws on both engines. See `docs/RUST_PARITY_GAPS.md`
+//! section CE3 for the full closure rationale. The O(n) front-pop
+//! cost is acceptable at the 40-60-card library scale; a follow-up
+//! slice can store libraries back-to-front internally and keep the
+//! `Vec::pop` shape if a bench surfaces real regression.
 
 use crate::state::{GameObject, GameState, Zone};
 use pyo3::exceptions::PyIndexError;
@@ -185,9 +189,9 @@ impl GameState {
     /// player's hand. Returns the drawn object's id, or `None` if
     /// the library was empty.
     ///
-    /// "Top of library" = LAST element of the library `Vec`. See the
-    /// module docstring for why the Python convention (front = top)
-    /// is flipped here.
+    /// "Top of library" = FIRST element of the library `Vec` (index 0),
+    /// matching Python's `library.pop(0)` convention. See the module
+    /// docstring for the CE3 closure rationale.
     ///
     /// **Empty-library side-effect (CR 704.5b).** When the library
     /// is empty the pop returns `None` AND the player's
@@ -200,12 +204,13 @@ impl GameState {
     fn draw_card(&mut self, player_id: u8) -> Option<u32> {
         let player = &mut self.players[player_id as usize];
         let lib = Arc::make_mut(&mut player.library);
-        let Some(mut obj) = lib.pop() else {
+        if lib.is_empty() {
             // CR 704.5b: empty-library draw flags the player for
             // loss on the next SBA pass.
             player.attempted_draw_on_empty = true;
             return None;
-        };
+        }
+        let mut obj = lib.remove(0);
         obj.zone = ZONE_HAND;
         // Round-28 attach foundation: CR 400.7 clears attach state
         // on zone change. A library card can't legally be attached

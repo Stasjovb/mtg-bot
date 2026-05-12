@@ -31,8 +31,9 @@
 //!
 //!   - The xorshift64 RNG + Fisher-Yates shuffle (mirroring
 //!     `state_ops_library.rs::shuffle_library_with_seed`).
-//!   - The pop-from-library-tail + push-to-hand draw step
-//!     (mirroring `state_ops_zones.rs::draw_card`).
+//!   - The remove-from-library-head + push-to-hand draw step
+//!     (mirroring `state_ops_zones.rs::draw_card`, post-CE3:
+//!     index 0 = top of library).
 //!
 //! When a later slice consolidates the public surface, the obvious
 //! refactor is to lift the helpers into a private module both files
@@ -179,15 +180,16 @@ impl GameState {
             }
         }
 
-        // Step 3: draw 7 (or until empty). Top of library = LAST
-        // element of the Vec, matching state_ops_zones.rs's draw_card
+        // Step 3: draw 7 (or until empty). Top of library = lib[0]
+        // (post-CE3), matching state_ops_zones.rs's draw_card
         // convention.
         let hand = Arc::make_mut(&mut player.hand);
         let lib = Arc::make_mut(&mut player.library);
         for _ in 0..7 {
-            let Some(mut obj) = lib.pop() else {
+            if lib.is_empty() {
                 break;
-            };
+            }
+            let mut obj = lib.remove(0);
             obj.zone = ZONE_HAND;
             hand.push(obj);
         }
@@ -271,12 +273,14 @@ impl GameState {
         }
 
         // Step 3: draw exactly n_cards (guarded above to be ≤ lib.len()).
+        // Top of library = lib[0] (post-CE3).
         let hand = Arc::make_mut(&mut player.hand);
         let lib = Arc::make_mut(&mut player.library);
         for _ in 0..n_cards {
-            let Some(mut obj) = lib.pop() else {
+            if lib.is_empty() {
                 break;
-            };
+            }
+            let mut obj = lib.remove(0);
             obj.zone = ZONE_HAND;
             hand.push(obj);
         }
@@ -286,14 +290,13 @@ impl GameState {
     /// Take the FIRST `n` cards in `player_id`'s hand (insertion
     /// order, hand[0..n]) and put them on the BOTTOM of that player's
     /// library. The card at `hand[0]` lands at the very bottom
-    /// (`library[0]`); `hand[1]` lands just above it (`library[1]`);
-    /// and so on. The remaining hand entries (`hand[n..]`) shift down
-    /// to occupy `hand[0..hand_size-n]`.
+    /// (`library[len-1]`); `hand[1]` lands just above it
+    /// (`library[len-2]`); and so on. The remaining hand entries
+    /// (`hand[n..]`) shift down to occupy `hand[0..hand_size-n]`.
     ///
-    /// "Library bottom" = INDEX 0 of the library Vec; "library top" =
-    /// LAST element (matches the round-1 zone convention and `scry`).
-    /// The library top is therefore unaffected by bottoming — only
-    /// indices 0..n are inserted.
+    /// "Library bottom" = LAST element of the library Vec (post-CE3);
+    /// "library top" = `lib[0]`. The library top is therefore
+    /// unaffected by bottoming — only the tail grows by `n` entries.
     ///
     /// This is the second half of the London mulligan (CR 103.4):
     /// round-11's `mulligan(player, seed)` draws 7 cards, and this
@@ -343,15 +346,16 @@ impl GameState {
         let bottoming: Vec<_> = hand.drain(..n).collect();
 
         let lib = Arc::make_mut(&mut player.library);
-        // Insert each card at index 0 IN ORDER. After the loop:
-        //   - hand[0] inserted first → ends up at lib[n-1] of the
-        //     bottomed batch (each later insert pushes it down).
-        //   - hand[n-1] inserted last → sits at lib[0].
-        // That's the OPPOSITE of what we want. We want hand[0] at
-        // lib[0] (very bottom). So insert in REVERSE order: insert
-        // hand[n-1] first (ends up at lib[n-1]), then hand[n-2]
-        // (becomes the new lib[0], pushing hand[n-1] to lib[1]),
-        // ..., finally hand[0] (becomes lib[0], pushing the rest up).
+        // Post-CE3 orientation: bottom = tail of Vec. Want hand[0] at
+        // the very bottom (lib[len-1]); hand[1] just above it; ...;
+        // hand[n-1] at the highest of the bottomed batch. To achieve
+        // this, push in REVERSE order: push hand[n-1] first (ends up
+        // at the lower-most tail slot of the batch), then hand[n-2]
+        // (ends up below hand[n-1] but above the rest — i.e. the new
+        // tail of the library), ..., finally hand[0] (ends up at the
+        // very tail = very bottom). This is the SAME loop shape as
+        // the pre-CE3 insert(0, ...) version (both walk reverse), the
+        // only change is `lib.insert(0, obj)` → `lib.push(obj)`.
         for mut obj in bottoming.into_iter().rev() {
             // Reset per-instance state on the way out of hand. The
             // card is leaving any battlefield-only context (it can't
@@ -366,7 +370,7 @@ impl GameState {
             obj.counters = 0;
             obj.attached_to = None;
             obj.exiled_with_source = None;
-            lib.insert(0, obj);
+            lib.push(obj);
         }
         Ok(())
     }
@@ -495,14 +499,15 @@ impl GameState {
             }
         }
 
-        // Redraw 7 (or until empty). Top of library = LAST element.
+        // Redraw 7 (or until empty). Top of library = lib[0] (post-CE3).
         {
             let hand = Arc::make_mut(&mut player.hand);
             let lib = Arc::make_mut(&mut player.library);
             for _ in 0..7 {
-                let Some(mut obj) = lib.pop() else {
+                if lib.is_empty() {
                     break;
-                };
+                }
+                let mut obj = lib.remove(0);
                 obj.zone = ZONE_HAND;
                 hand.push(obj);
             }
@@ -549,13 +554,13 @@ impl GameState {
         }
 
         // Step 7: remove each chosen id from hand and append it to
-        // the bottom of the library. Per the orientation contract
-        // (`bottom_cards_from_hand`: hand[0] ends up at lib[0] /
-        // very bottom; later ids sit above it), the FIRST id in
-        // `bottom_card_ids` lands at the very bottom (`lib[0]`).
-        // Implementation: walk the ids in REVERSE and insert each at
-        // `lib[0]` — the last-walked (which is the first-supplied)
-        // ends up at the bottom-most slot.
+        // the bottom of the library. Per the post-CE3 orientation
+        // contract (`bottom_cards_from_hand`: hand[0] ends up at
+        // lib[len-1] / very bottom; later ids sit above it), the
+        // FIRST id in `bottom_card_ids` lands at the very bottom
+        // (`lib[len-1]`). Implementation: walk the ids in REVERSE
+        // and push each onto the tail — the last-walked (which is
+        // the first-supplied) ends up at the bottom-most slot.
         let hand = Arc::make_mut(&mut player.hand);
         let lib = Arc::make_mut(&mut player.library);
         for id in bottom_card_ids.iter().rev() {
@@ -574,7 +579,7 @@ impl GameState {
             obj.counters = 0;
             obj.attached_to = None;
             obj.exiled_with_source = None;
-            lib.insert(0, obj);
+            lib.push(obj);
         }
         Ok(())
     }

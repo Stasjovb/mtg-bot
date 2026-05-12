@@ -904,75 +904,63 @@ I25 invariant text below was tightened to reflect that
 PassPriority via apply_action is now bit-equivalent to Python's
 return-fast path.
 
-### CE3. Library pop-orientation divergence — Python pops `library[0]` (head=deck-top), Rust pops `lib.pop()` (tail=deck-top)
+### ~~CE3.~~ CLOSED: Library orientation aligned to Python's `index 0 = top` convention
 
-- **Pinned by**:
-  `tests/test_parity_smoke.py::test_cross_engine_play_a_land_selector_walks_clean`
-  (strict-xfail on the clean-walk assertion);
-  `tests/test_parity_smoke.py::test_cross_engine_play_a_land_selector_reports_ce3_symptom_at_step_0`
-  (positive-direction "symptom present" pin).
-- **Rust today**: `state_ops_zones.rs::draw_card` does
-  `Arc::make_mut(&mut player.library).pop()` — pops the **tail** of
-  the `Vec<GameObject>`. Built from the same `DeckSpec` source order
-  as Python, this means the LAST card listed in the deckspec is the
-  one Rust draws first.
-- **CR / Python expected**: `src/mtg_bot/turn.py::draw_card` does
-  `top = p.library.pop(0)` — pops the **head** of the `list`. The
-  FIRST card listed in the deckspec is the one Python draws first.
-  Python's convention: index 0 = top of library.
-- **Observable symptom on the smoke harness**:
-  `cross_engine.play_a_land_selector` calls `draw_card` once on
-  each engine at step 0 (side-channel — not via `apply_action`), then
-  emits `pass_priority`. The post-step compare reports two divergences:
-    * `hand_p0`: Python has the deckspec's first card; Rust has the
-      deckspec's last card. (For the slightly_bigger_deckspec,
-      Python's p0_library `[Forest, Mountain, Forest, Grizzly Bears]`
-      gives Python `Forest(id=0)` in hand, Rust `Grizzly Bears(id=3)`.)
-    * `library_p0`: per-object 8-tuple sequences differ by which card
-      was popped (Python's library is the deckspec tail-3; Rust's is
-      the deckspec head-3).
-  When the selector subsequently emits a `play_land` action on the
-  Python-side card_id (step 1), Python plays it; Rust's `play_land`
-  silently returns `false` (the card is not in Rust's hand — it's
-  still in Rust's library) and `battlefield` joins the divergence
-  list. Single root cause; the cascade is observable.
-- **Impact**: HIGH on any decision script that draws cards. Every
-  PHASE_DRAW step in the eventual 1000-game smoke would diverge
-  immediately on which card moved from library to hand, and the
-  decision driver would propose action_dicts for card_ids the
-  opposite engine doesn't have in hand. Without closure, the smoke
-  harness can only exercise the no-draw subset of game states —
-  which is essentially "the first untap step of the first turn,
-  forever."
-- **Closeable**: yes — straightforward Rust-side fix in
-  `state_ops_zones.rs::draw_card` (swap `lib.pop()` for
-  `lib.remove(0)`, or equivalently store the library reversed and
-  keep the `.pop()` shape — the latter avoids the O(n) shift cost
-  on long libraries). Two consequences to handle in the closure
-  slice: (1) the `mulligan` / `mulligan_to_n` / `shuffle_library_with_seed`
-  / `make_state` paths that build the library Vec all currently
-  expect index 0 = bottom-of-library; they'd need to be audited /
-  flipped together to keep the convention consistent. (2) The
-  `state_ops_fingerprint.rs::object_signature` iteration order
-  walks the Vec front-to-back; the fingerprint baselines may shift
-  depending on which direction is chosen as canonical. Recommended:
-  align Rust to Python (index 0 = top), even though the .pop() cost
-  goes from O(1) to O(n) — Python's convention is the parity
-  reference and the eventual 1000-game smoke needs convention-
-  matched zones. Alternative: keep Rust's .pop() shape and add a
-  `library_iter()` wrapper on Rust that reverses for serialization,
-  pushing the convention bridge into the parity layer. Either path
-  is in scope for one slice.
-- **Why this wasn't caught sooner**: nothing in the cross-engine
-  harness drove `draw_card` until this slice. The inaugural Phase 5
-  smoke (`tiny_synthetic_deckspec` + 200 PassPriority decisions) and
-  the probe expansion (`slightly_bigger_deckspec` + 200 PassPriority
-  decisions) both started from empty hands and never moved a card
-  out of the library, so the orientation difference was latent. The
-  Rust-only `mulligan` / `shuffle_library_with_seed` test suite uses
-  the same deckspec on both sides of every assertion, so the
-  orientation convention is self-consistent within the Rust tests
-  and the divergence only surfaces when Python is the comparison.
+Closed by the CE3 closure slice (`feature/ce3-library-pop`). Rust now
+treats `lib[0]` as the top of the library (matching Python's
+`library.pop(0)` convention) across every library mutator that
+touches orientation:
+
+- `state_ops_zones.rs::draw_card` — `lib.pop()` → `lib.remove(0)`.
+- `state_ops_steps.rs::draw_card_inline` (the turn-loop draw step
+  inline mirror) — same flip.
+- `state_ops_mulligan.rs`: `mulligan` / `mulligan_to_n` /
+  `mulligan_atomic` all redraw via `lib.remove(0)`;
+  `bottom_cards_from_hand` + `mulligan_atomic`'s bottom-step now
+  append to the tail (post-CE3 bottom = `lib[len-1]`).
+- `state_ops_library.rs`: `scry` reads `lib[..n]` forward;
+  `search_library_for_first_of_type` (and the move/shuffle variants)
+  iterate forward; `mill_target_player` removes from head; `apply_scry`
+  rebuilds with top_ids at the head and bottom_ids at the tail.
+- `state_ops_resolve.rs`: `Effect::DrawCards`, `Effect::Mill`,
+  `Effect::MillTargetPlayer`, `Effect::Surveil`,
+  `Effect::LookTopNPutOneInHandRestToGraveyard`,
+  `Effect::ManifestDread`, `Effect::ManifestDreadThenAttachSelf`,
+  `Effect::LookAtTopNRevealOrCounter`,
+  `Effect::EachOpponentMillsCards`,
+  `Effect::SearchLibraryForBasicLandTapped`, and the broader
+  `Effect::SearchLibraryForCard` family all walk top-first by
+  forward iteration; `Effect::PutCardFromGraveyardOnBottomOfLibrary`
+  and `Effect::OwnerPutsTargetArtifactOrCreatureOnTopOrBottomOfLibrary`
+  push to the tail (bottom).
+- `state_ops_decisions.rs`: `resolve_surveil_with_strategy`
+  (`keep_all_on_top`) restores cards via `lib.insert(0, ...)` in
+  reverse; the look-at-top-N reveal-yes / reveal-no submit paths
+  push to the tail in reverse order so cards[0] (the topmost
+  popped) lands at the very bottom (parity with the pre-CE3
+  contract).
+- `state_ops_choices.rs::choose_top_of_library_for_player` reads
+  `library.first()` instead of `library.last()`.
+- `state_ops_resolve.rs::register_and_inject_object` — the test-
+  injection primitive now inserts injected library cards at `lib[0]`
+  (top) so existing test fixtures that expect injected cards to be
+  reachable by top-N readers continue to work without per-test
+  changes.
+
+The xfail-pinned cross-engine smoke test
+`tests/test_parity_smoke.py::test_cross_engine_play_a_land_selector_walks_clean`
+flipped to expected-pass; the companion symptom-pin
+`test_cross_engine_play_a_land_selector_reports_ce3_symptom_at_step_0`
+was removed alongside the xfail per the closure pair contract. The
+existing Rust tests that pinned the pre-CE3 "top = lib.last()"
+convention (test_zones / test_library / test_deck / test_choices /
+test_mulligan / test_pending_decisions / test_resolve) were
+updated to assert the post-CE3 "top = lib[0]" convention. Pinned
+fingerprint baselines stayed bit-identical — the orientation flip
+changed which end is *named* top but did NOT change the underlying
+Vec construction order (`make_state` and `make_synthetic_state`
+push input order into the Vec; the fingerprint walks that Vec
+front-to-back unchanged).
 
 (Other smoke-flagged divergences may be added by follow-up Phase 5
 slices as the deck pool / decision script grows.)
