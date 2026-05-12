@@ -4295,6 +4295,70 @@ fn apply_effect(
                     source_obj_id,
                     controller,
                     cards,
+                    then_attach_to_source: false,
+                },
+            );
+        }
+        // Round-29 ManifestDreadThenAttachSelf composition. Mirrors
+        // Python's `ManifestDreadThenAttachSelf.resolve` (Conductive-
+        // Machete-family Equipment ETB, freq 3). Same pop-and-package
+        // shape as `Effect::ManifestDread`, but the pending carries
+        // `then_attach_to_source: true` so the submit dispatcher runs
+        // the attach as a follow-up.
+        //
+        // Controller convention DIFFERS from plain ManifestDread: for
+        // ETB-resolution on an Equipment, the source is on the bf at
+        // resolve time. Read the controller off the source rather than
+        // off `state.active_player` so an Equipment-spell cast (or
+        // ETB-triggered) by p1 during p0's turn manifests dread from
+        // p1's library. Mirrors Python's `state.resolving_source`
+        // access (resolving source's `.controller_id` carries the
+        // source's controller).
+        //
+        // Silent fizzle when source isn't on a bf — mirrors Python's
+        // `source is None: return` + `"Equipment" not in subtypes:
+        // return` early-exit gates (same observable behavior as
+        // "source unreachable").
+        //
+        // First-slice: count = 1 ONLY (same gate as ManifestDread).
+        Effect::ManifestDreadThenAttachSelf { count } => {
+            if *count != 1 {
+                return Err(PyValueError::new_err(format!(
+                    "ManifestDreadThenAttachSelf: first-slice supports count = 1 only \
+                     (got count = {count}); count > 1 (multi-iter) and \
+                     count = 0 (no-op) deferred — see \
+                     docs/SEARCH_LIMITATIONS.md"
+                )));
+            }
+            // Locate source on a battlefield → silent fizzle if absent.
+            let mut src_loc: Option<(usize, u8)> = None; // (player_idx, controller)
+            for (pidx, player) in state.players.iter().enumerate() {
+                if let Some(obj) = player.battlefield.iter().find(|o| o.id == source_obj_id) {
+                    src_loc = Some((pidx, obj.controller));
+                    break;
+                }
+            }
+            let Some((_pidx, controller)) = src_loc else {
+                return Ok(()); // source not on bf → silent fizzle
+            };
+            let cidx = controller as usize;
+            let lib_len = state.players[cidx].library.len();
+            let pop_count = lib_len.min(2);
+            let lib_mut: &mut Vec<GameObject> =
+                Arc::make_mut(&mut state.players[cidx].library);
+            let mut cards: Vec<GameObject> = Vec::with_capacity(pop_count);
+            for _ in 0..pop_count {
+                let popped = lib_mut.pop().expect(
+                    "library length checked above; pop cannot fail",
+                );
+                cards.push(popped);
+            }
+            state.pending_decisions.push(
+                PendingDecision::ManifestDreadChoice {
+                    source_obj_id,
+                    controller,
+                    cards,
+                    then_attach_to_source: true,
                 },
             );
         }

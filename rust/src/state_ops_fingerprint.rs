@@ -455,6 +455,7 @@ impl GameState {
                         source_obj_id,
                         controller,
                         cards,
+                        then_attach_to_source,
                     } => Value::Array(vec![
                         Value::String("ManifestDreadChoice".to_string()),
                         json!(*source_obj_id),
@@ -465,6 +466,7 @@ impl GameState {
                                 .map(|o| object_signature(self, o))
                                 .collect(),
                         ),
+                        json!(*then_attach_to_source),
                     ]),
                     // Round-28 look-at-top-N-reveal-or-counter: same
                     // examined-cards-as-object-signatures shape as

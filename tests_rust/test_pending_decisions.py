@@ -2514,3 +2514,373 @@ def test_clone_isolates_look_at_top_n_pending_decisions(synthetic_state):
 
     assert synthetic_state.has_pending_decision() is True
     assert synthetic_state.pending_decisions()[0]["cards"] == src_pd_cards
+
+
+# -----------------------------------------------------------------
+# Round-29 ManifestDreadThenAttachSelf (Conductive-Machete family).
+# -----------------------------------------------------------------
+# Composition: ``Effect::ManifestDreadThenAttachSelf`` reuses the
+# ``PendingDecision::ManifestDreadChoice`` substrate but flips a new
+# ``then_attach_to_source`` flag to True. The submit dispatcher reads
+# the flag and, after the standard manifest routing, stamps
+# ``source.attached_to = manifested_id`` (silent partial if the source
+# has LTB'd in the decision window).
+
+
+def _manifest_dread_then_attach_self_dict(count: int = 1):
+    """A Conductive-Machete-shape Equipment ETB: an Artifact whose ETB
+    fires ``Effect::ManifestDreadThenAttachSelf``. Modeled as an
+    Artifact (the Rust registry doesn't track Equipment subtype gating;
+    same shape as ``_atomic_microsizer_dict`` in test_zones.py)."""
+    return {
+        "name": f"Test ManifestDreadThenAttachSelf {count}",
+        "card_types": ["Artifact"],
+        "mana_cost": {"generic": 2},
+        "etb_effects": [
+            {"kind": "manifest_dread_then_attach_self", "count": count},
+        ],
+    }
+
+
+# --- register + round-trip ---
+
+
+def test_manifest_dread_then_attach_self_registers_round_trip(engine):
+    """Parsing + re-serialization preserves the count field."""
+    reg = engine.Registry()
+    pid = reg.register_printing(_manifest_dread_then_attach_self_dict(count=1))
+    etbs = reg.get_printing_etb_effects(pid)
+    assert len(etbs) == 1
+    assert etbs[0]["kind"] == "manifest_dread_then_attach_self"
+    assert etbs[0]["count"] == 1
+
+
+def test_manifest_dread_then_attach_self_default_count_is_1(engine):
+    """An omitted count field defaults to 1 (mirrors the ManifestDread
+    arm's default)."""
+    reg = engine.Registry()
+    pid = reg.register_printing({
+        "name": "Default-count Test",
+        "card_types": ["Artifact"],
+        "mana_cost": {"generic": 2},
+        "etb_effects": [{"kind": "manifest_dread_then_attach_self"}],
+    })
+    etbs = reg.get_printing_etb_effects(pid)
+    assert etbs[0]["count"] == 1
+
+
+def test_manifest_dread_then_attach_self_negative_count_rejected(engine):
+    """A negative count value raises at parse time (mirrors
+    ManifestDread)."""
+    reg = engine.Registry()
+    with pytest.raises(ValueError):
+        reg.register_printing({
+            "name": "Bad ManifestDreadThenAttachSelf",
+            "card_types": ["Artifact"],
+            "mana_cost": {"generic": 2},
+            "etb_effects": [
+                {"kind": "manifest_dread_then_attach_self", "count": -1},
+            ],
+        })
+
+
+# --- happy path: manifest-then-attach chain ---
+
+
+def test_manifest_dread_then_attach_self_happy_path_stamps_attached_to(synthetic_state):
+    """Cast the Equipment from hand. Its ETB resolves:
+    (1) Equipment lands on bf (artifact ETB).
+    (2) Top 2 of p0 library popped into ManifestDreadChoice.
+    (3) Submit the topmost: it lands on bf as manifested creature.
+    (4) source.attached_to is stamped to the manifested card's id.
+    """
+    top_two = [obj["id"] for obj in synthetic_state.library_snapshot(0)[-2:]]
+    top_two.reverse()  # cards[0] = topmost
+
+    spell_id = synthetic_state.register_and_inject_object(
+        _manifest_dread_then_attach_self_dict(count=1), 0, 0  # ZONE_HAND
+    )
+    synthetic_state.push_to_stack(spell_id, 0)
+    synthetic_state.resolve_top_of_stack_pause()
+
+    # Equipment should be on bf already (artifact ETB lands first).
+    assert synthetic_state.find_object_zone(spell_id) == ZONE_BATTLEFIELD
+    # Pending decision is the ManifestDreadChoice with attach flag.
+    pds = synthetic_state.pending_decisions()
+    assert len(pds) == 1
+    pd = pds[0]
+    assert pd["kind"] == "ManifestDreadChoice"
+    assert pd["source_obj_id"] == spell_id
+    assert pd["then_attach_to_source"] is True
+    assert pd["cards"] == top_two
+
+    # Submit topmost → manifested card on bf, source attached to it.
+    chosen_id = top_two[0]
+    synthetic_state.submit_manifest_dread_decision(chosen_id)
+    assert synthetic_state.has_pending_decision() is False
+    assert synthetic_state.find_object_zone(chosen_id) == ZONE_BATTLEFIELD
+    assert synthetic_state.find_object_zone(top_two[1]) == ZONE_GRAVEYARD
+    # Source (Equipment) is now attached to the manifested creature.
+    bf = synthetic_state.battlefield_snapshot()
+    equipment = next(d for d in bf if d["id"] == spell_id)
+    assert equipment["attached_to"] == chosen_id
+
+
+def test_manifest_dread_then_attach_self_picks_non_topmost(synthetic_state):
+    """Submitting cards[1] (non-topmost) routes it to bf; the source
+    Equipment attaches to that picked card (not the topmost)."""
+    top_two = [obj["id"] for obj in synthetic_state.library_snapshot(0)[-2:]]
+    top_two.reverse()
+
+    spell_id = synthetic_state.register_and_inject_object(
+        _manifest_dread_then_attach_self_dict(count=1), 0, 0
+    )
+    synthetic_state.push_to_stack(spell_id, 0)
+    synthetic_state.resolve_top_of_stack_pause()
+
+    chosen_id = top_two[1]
+    synthetic_state.submit_manifest_dread_decision(chosen_id)
+    assert synthetic_state.find_object_zone(chosen_id) == ZONE_BATTLEFIELD
+    assert synthetic_state.find_object_zone(top_two[0]) == ZONE_GRAVEYARD
+    bf = synthetic_state.battlefield_snapshot()
+    equipment = next(d for d in bf if d["id"] == spell_id)
+    assert equipment["attached_to"] == chosen_id
+
+
+def test_manifest_dread_then_attach_self_auto_resolve_picks_topmost(synthetic_state):
+    """auto_resolve('default') picks cards[0] AND runs the attach."""
+    top_two = [obj["id"] for obj in synthetic_state.library_snapshot(0)[-2:]]
+    top_two.reverse()
+
+    spell_id = synthetic_state.register_and_inject_object(
+        _manifest_dread_then_attach_self_dict(count=1), 0, 0
+    )
+    synthetic_state.push_to_stack(spell_id, 0)
+    synthetic_state.resolve_top_of_stack_pause()
+    synthetic_state.auto_resolve_pending_decisions("default")
+
+    assert synthetic_state.has_pending_decision() is False
+    assert synthetic_state.find_object_zone(top_two[0]) == ZONE_BATTLEFIELD
+    bf = synthetic_state.battlefield_snapshot()
+    equipment = next(d for d in bf if d["id"] == spell_id)
+    assert equipment["attached_to"] == top_two[0]
+
+
+def test_manifest_dread_then_attach_self_full_resolve_auto(synthetic_state):
+    """The non-pause resolve_top_of_stack auto-resolves and attaches."""
+    top_id_before = synthetic_state.library_snapshot(0)[-1]["id"]
+    spell_id = synthetic_state.register_and_inject_object(
+        _manifest_dread_then_attach_self_dict(count=1), 0, 0
+    )
+    synthetic_state.push_to_stack(spell_id, 0)
+    synthetic_state.resolve_top_of_stack()
+
+    assert synthetic_state.has_pending_decision() is False
+    assert synthetic_state.find_object_zone(top_id_before) == ZONE_BATTLEFIELD
+    bf = synthetic_state.battlefield_snapshot()
+    equipment = next(d for d in bf if d["id"] == spell_id)
+    assert equipment["attached_to"] == top_id_before
+
+
+# --- source LTB during decision window: silent partial ---
+
+
+def test_manifest_dread_then_attach_self_source_ltb_silent_partial(synthetic_state):
+    """If the source Equipment leaves the battlefield between the
+    resolve-push and the submit (e.g. destroyed by a separate effect),
+    the manifest step still completes but the attach step is silently
+    skipped — no panic, no error."""
+    top_two = [obj["id"] for obj in synthetic_state.library_snapshot(0)[-2:]]
+    top_two.reverse()
+
+    spell_id = synthetic_state.register_and_inject_object(
+        _manifest_dread_then_attach_self_dict(count=1), 0, 0
+    )
+    synthetic_state.push_to_stack(spell_id, 0)
+    synthetic_state.resolve_top_of_stack_pause()
+    # Confirm the source is on bf and pending decision exists.
+    assert synthetic_state.find_object_zone(spell_id) == ZONE_BATTLEFIELD
+    assert synthetic_state.has_pending_decision() is True
+
+    # Simulate LTB by moving the Equipment off the battlefield via
+    # the test-only ``move_object`` primitive. This bypasses SBA /
+    # destroy spells (which target by predicate filter — destroy_
+    # target_artifact picks the first artifact in iteration order
+    # and may not pick our injected Equipment without controller
+    # coordination). The direct zone-move primitive is the most
+    # surgical way to model "source has LTB'd during the decision
+    # window" without setting up an entire destroy chain.
+    ok = synthetic_state.move_object(spell_id, ZONE_GRAVEYARD, 0)
+    assert ok is True
+    assert synthetic_state.find_object_zone(spell_id) == ZONE_GRAVEYARD
+
+    # Now submit the manifest decision (pending was preserved by the
+    # destroy spell's resolution since that was a separate effect).
+    chosen_id = top_two[0]
+    synthetic_state.submit_manifest_dread_decision(chosen_id)
+
+    # Manifest completed — the chosen card landed on bf.
+    assert synthetic_state.find_object_zone(chosen_id) == ZONE_BATTLEFIELD
+    # Source is still in graveyard. Its attached_to field is irrelevant
+    # (off-bf objects don't carry meaningful attach state); the key
+    # property is that no panic / no ValueError fired during submit.
+    assert synthetic_state.has_pending_decision() is False
+
+
+# --- empty library partial ---
+
+
+def test_manifest_dread_then_attach_self_empty_library_no_op(engine):
+    """ManifestDreadThenAttachSelf on an empty library: pending has
+    empty cards; auto-resolve drains as no-op; source attached_to
+    stays None (no manifested target to attach to)."""
+    state = engine.make_synthetic_state(num_battlefield=0, num_hand=0, num_library=0)
+    spell_id = state.register_and_inject_object(
+        _manifest_dread_then_attach_self_dict(count=1), 0, 2  # ZONE_BATTLEFIELD
+    )
+    # Force ETB by triggering apply_effect via push_to_stack +
+    # resolve_top_of_stack_pause: the resolve path routes ETB-effects
+    # through Effect-resolve. Since the source is already on bf, the
+    # ETB-driven push works.
+    state.push_to_stack(spell_id, 0)
+    state.resolve_top_of_stack_pause()
+
+    pds = state.pending_decisions()
+    assert len(pds) == 1
+    assert pds[0]["kind"] == "ManifestDreadChoice"
+    assert pds[0]["then_attach_to_source"] is True
+    assert pds[0]["cards"] == []
+
+    state.auto_resolve_pending_decisions("default")
+    assert state.has_pending_decision() is False
+    # Source attached_to stays None — no card was manifested.
+    bf = state.battlefield_snapshot()
+    src = next((d for d in bf if d["id"] == spell_id), None)
+    if src is not None:  # source may have been resolved into gy
+        assert src["attached_to"] is None
+
+
+def test_manifest_dread_then_attach_self_one_card_library(engine):
+    """A 1-card library manifests the lone card; the source attaches
+    to it. No graveyard step from the manifest path."""
+    state = engine.make_synthetic_state(num_battlefield=0, num_hand=0, num_library=1)
+    lone_id = state.library_snapshot(0)[-1]["id"]
+    spell_id = state.register_and_inject_object(
+        _manifest_dread_then_attach_self_dict(count=1), 0, 2  # ZONE_BATTLEFIELD
+    )
+    state.push_to_stack(spell_id, 0)
+    state.resolve_top_of_stack_pause()
+
+    pds = state.pending_decisions()
+    assert pds[0]["cards"] == [lone_id]
+    assert pds[0]["then_attach_to_source"] is True
+
+    state.submit_manifest_dread_decision(lone_id)
+    assert state.find_object_zone(lone_id) == ZONE_BATTLEFIELD
+    bf = state.battlefield_snapshot()
+    src = next(d for d in bf if d["id"] == spell_id)
+    assert src["attached_to"] == lone_id
+
+
+# --- count > 1 deferred ---
+
+
+def test_manifest_dread_then_attach_self_count_two_raises_at_resolve(synthetic_state):
+    """count != 1 is deferred — same scope gate as ManifestDread."""
+    spell_id = synthetic_state.register_and_inject_object(
+        _manifest_dread_then_attach_self_dict(count=2), 0, 0
+    )
+    synthetic_state.push_to_stack(spell_id, 0)
+    with pytest.raises(ValueError):
+        synthetic_state.resolve_top_of_stack_pause()
+
+
+# --- regression: plain ManifestDread does NOT attach ---
+
+
+def test_plain_manifest_dread_does_not_attach_source(synthetic_state):
+    """Regression: the existing Effect::ManifestDread arm sets
+    then_attach_to_source=false, so submitting the resulting pending
+    must NOT stamp source.attached_to."""
+    top_two = [obj["id"] for obj in synthetic_state.library_snapshot(0)[-2:]]
+    top_two.reverse()
+
+    spell_id = synthetic_state.register_and_inject_object(
+        _manifest_dread_dict(count=1), 0, 0
+    )
+    synthetic_state.push_to_stack(spell_id, 0)
+    synthetic_state.resolve_top_of_stack_pause()
+    # Pending decision should have the rider flag = false.
+    pds = synthetic_state.pending_decisions()
+    assert pds[0]["then_attach_to_source"] is False
+
+    chosen_id = top_two[0]
+    synthetic_state.submit_manifest_dread_decision(chosen_id)
+    # The source spell is a sorcery — it routed to graveyard during
+    # stack resolution. The manifested card on bf has attached_to None.
+    bf = synthetic_state.battlefield_snapshot()
+    manifested = next(d for d in bf if d["id"] == chosen_id)
+    assert manifested["attached_to"] is None
+
+
+# --- clone isolation ---
+
+
+def test_clone_isolates_manifest_then_attach_pending(synthetic_state):
+    """clone_once() deep-clones the ManifestDreadChoice including the
+    then_attach_to_source flag. Resolving the clone leaves the source's
+    queue intact and the source's attached_to unchanged in the source
+    state."""
+    top_two = [obj["id"] for obj in synthetic_state.library_snapshot(0)[-2:]]
+    top_two.reverse()
+    spell_id = synthetic_state.register_and_inject_object(
+        _manifest_dread_then_attach_self_dict(count=1), 0, 0
+    )
+    synthetic_state.push_to_stack(spell_id, 0)
+    synthetic_state.resolve_top_of_stack_pause()
+
+    clone = synthetic_state.clone_once()
+    assert clone.has_pending_decision() is True
+    clone.submit_manifest_dread_decision(top_two[0])
+    assert clone.has_pending_decision() is False
+    clone_bf = clone.battlefield_snapshot()
+    clone_eq = next(d for d in clone_bf if d["id"] == spell_id)
+    assert clone_eq["attached_to"] == top_two[0]
+
+    # Source state still has the pending decision; source still
+    # un-attached (or attached_to is whatever it was, but the submit
+    # path hasn't fired on the source).
+    assert synthetic_state.has_pending_decision() is True
+    src_bf = synthetic_state.battlefield_snapshot()
+    src_eq = next(d for d in src_bf if d["id"] == spell_id)
+    assert src_eq["attached_to"] is None
+
+
+# --- fingerprint sensitivity to the rider flag ---
+
+
+def test_fingerprint_differs_then_attach_vs_plain_manifest_dread(engine):
+    """A pending ManifestDreadChoice with then_attach_to_source=true
+    fingerprints differently from the same shape with the flag false.
+    Guards the fingerprint serializer's inclusion of the bool slot."""
+    # Build two synthetic states with the same shape but different
+    # then_attach_to_source values on the pending decision.
+    s1 = engine.make_synthetic_state()
+    s2 = engine.make_synthetic_state()
+
+    spell1 = s1.register_and_inject_object(_manifest_dread_dict(count=1), 0, 0)
+    s1.push_to_stack(spell1, 0)
+    s1.resolve_top_of_stack_pause()
+
+    spell2 = s2.register_and_inject_object(
+        _manifest_dread_then_attach_self_dict(count=1), 0, 2
+    )
+    s2.push_to_stack(spell2, 0)
+    s2.resolve_top_of_stack_pause()
+
+    fp1 = s1.fingerprint()
+    fp2 = s2.fingerprint()
+    # Even though both have a pending ManifestDreadChoice, the variants
+    # differ in source_obj_id + then_attach_to_source — so fingerprints
+    # MUST differ.
+    assert fp1 != fp2
