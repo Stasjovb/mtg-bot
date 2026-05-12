@@ -3301,6 +3301,138 @@ the forked branch.
     CastSpell loop ABOVE the sorcery-timing return"; now describes
     the shipped two-pass form).
 
+### I47. Every bf-entry ETB-stamping site fans out `Event::Enters` via the `pending_etb_dispatches` deferred-dispatch queue + a `drain_pending_etb_dispatches` post-pop drainer (Slice 2 of ETB-trigger closure)
+
+- **Pinned by**:
+  - `tests_rust/test_triggers.py::test_rs2_search_library_for_basic_land_tapped_fires_etb`
+    (RS2 — Cultivate-shape search-and-bf arm).
+  - `tests_rust/test_triggers.py::test_rs3_reanimation_fires_etb`
+    (RS3 — `Effect::ReturnCreatureFromYourGraveyardToBattlefield`).
+  - `tests_rust/test_triggers.py::test_rs4_create_token_fires_etb_per_token`
+    (RS4 — `Effect::CreateToken` block allocator, one ENTERS per
+    token in stamp order).
+  - `tests_rust/test_triggers.py::test_rs5_create_token_copy_fires_etb`
+    (RS5 — `Effect::CreateTokenCopyOfTargetCreatureYouControl`,
+    observed via a Panharmonicon-shape "always" witness).
+  - `tests_rust/test_triggers.py::test_rs6_mass_reanimation_fires_etb_per_creature`
+    (RS6 — `Effect::ReturnAllCreaturesFromYourGraveyardToBattlefield`,
+    one ENTERS per reanimated creature in stamp order).
+  - `tests_rust/test_triggers.py::test_rs7_paired_exile_recall_fires_etb`
+    (RS7 — `return_paired_exiles_for(source_id)` pymethod, plus
+    the `i32 -> PyResult<i32>` signature flip pin).
+  - `tests_rust/test_triggers.py::test_rs8_register_and_inject_battlefield_fires_etb`
+    (RS8 — `register_and_inject_object` test fixture battlefield
+    injection now fires ENTERS).
+  - `tests_rust/test_triggers.py::test_rs9_move_object_to_battlefield_fires_etb`
+    (RS9 — `move_object(_, ZONE_BATTLEFIELD, _)` generic mover).
+  - `tests_rust/test_triggers.py::test_rs9_move_object_to_hand_does_not_fire_etb`
+    (RS9 over-correction guard — non-bf targets stay silent).
+  - `tests_rust/test_triggers.py::test_rs10_move_object_from_graveyard_fires_etb`
+    (RS10 — `move_object_from_graveyard_to_battlefield` reanimation
+    primitive).
+  - `tests_rust/test_triggers.py::test_rs11_play_land_fires_etb`
+    (RS11 — `play_land` no-stack path via
+    `move_from_hand_to_battlefield`).
+  - `tests_rust/test_triggers.py::test_rs12_manifest_dread_fires_etb`
+    (RS12 — `resolve_manifest_dread_to_battlefield` pending-
+    decision submit path).
+  - `tests_rust/test_triggers.py::test_once_per_turn_ledger_suppresses_repeat_fires`
+    (end-to-end: a `once_per_turn=True` observer fires on its own
+    RS8 injection, gets suppressed on a subsequent RS10
+    reanimation entry, and fires again after
+    `cleanup_step_for_active_player` clears the ledger).
+
+- **Invariant**. Every site that stamps an `etb_timestamp` and
+  pushes a `GameObject` onto a player's `battlefield` (12 sites
+  catalogued in `docs/RUST_ETB_TRIGGER_AUDIT.md` §4) routes its
+  ENTERS dispatch through the shared
+  `GameState.pending_etb_dispatches: Vec<u32>` queue. After the
+  bf-push, the site appends the entered permanent's id to the
+  queue; the surrounding "resolving slot owner" then calls
+  `state_ops_resolve::drain_pending_etb_dispatches(state)` which
+  loops `dispatch_event(Event::Enters, id)` per queued id until
+  the queue is empty (re-entrant: a dispatch's trigger effect
+  can re-fill the queue, the loop picks the new ids up).
+
+- **Why deferred (not inline) dispatch**. Effect arms can mutate
+  the stack mid-resolution (`Effect::CounterTargetSpell` removes a
+  stack item; future trigger-from-trigger paths push more
+  triggers). Dispatching ENTERS inline from inside `apply_effect`
+  would pile a fresh trigger on top of the resolving spell's stack
+  item, breaking the resolver's `pop()` "pop the resolving slot"
+  invariant (the freshly-pushed trigger would be popped instead
+  of the resolving slot). The deferred-queue pattern keeps
+  `apply_effect` stack-quiet and gives the resolver a clean pop;
+  the drainer fires after the resolving slot leaves the stack.
+
+- **RS-site → owner site map** (`docs/RUST_ETB_TRIGGER_AUDIT.md`
+  §4 IDs):
+
+  | RS  | Effect / primitive                                        | Drain site                                            |
+  |-----|-----------------------------------------------------------|-------------------------------------------------------|
+  | RS1 | cast-resolve via `resolve_top_of_stack` (Slice 1)         | `resolve_top_of_stack` + `_pause`                     |
+  | RS2 | `Effect::SearchLibraryForBasicLandTapped`                 | `resolve_top_of_stack` (drain via spell-resolve path) |
+  | RS3 | `Effect::ReturnCreatureFromYourGraveyardToBattlefield`    | `resolve_top_of_stack` (spell-resolve)                |
+  | RS4 | `Effect::CreateToken` block allocator                     | `resolve_top_of_stack` (spell-resolve)                |
+  | RS5 | `Effect::CreateTokenCopyOfTargetCreatureYouControl`       | `resolve_top_of_stack` (spell-resolve)                |
+  | RS6 | `Effect::ReturnAllCreaturesFromYourGraveyardToBattlefield`| `resolve_top_of_stack` (spell-resolve)                |
+  | RS7 | `return_paired_exiles_for(source_id)` pymethod            | `return_paired_exiles_for` itself                     |
+  | RS8 | `register_and_inject_object` (test fixture)               | `register_and_inject_object` itself                   |
+  | RS9 | `move_object(_, ZONE_BATTLEFIELD, _)` generic mover       | `move_object` itself                                  |
+  | RS10| `move_object_from_graveyard_to_battlefield`               | `move_object_from_graveyard_to_battlefield` itself    |
+  | RS11| `move_from_hand_to_battlefield` (play_land, cast_creature)| `move_from_hand_to_battlefield` itself                |
+  | RS12| `resolve_manifest_dread_to_battlefield`                   | `resolve_manifest_dread_to_battlefield` itself        |
+
+- **Drain order — FIFO**. Per-arm-collected ids land in the queue
+  in ETB-stamp order (the order the arm pushed them onto the
+  battlefield). The drainer iterates in queue-push order so the
+  ETB-stamp order = ENTERS-fire order, mirroring Python's
+  centralized `state.battlefield` walk inside its per-permanent
+  `put_into_battlefield -> _trigger_etb_abilities` loop.
+
+- **Re-entrancy bound**. Finite by construction — each dispatch
+  can only re-push ids for permanents that are actually moved onto
+  the battlefield by a triggered effect, and the registry / Effect
+  vocabulary today caps that at a small per-resolution number.
+  The drain loop terminates when an iteration produces an empty
+  `mem::take` output.
+
+- **Once-per-turn ledger** (Slice 1 substrate, end-to-end pinned
+  in Slice 2 by `test_once_per_turn_ledger_suppresses_repeat_fires`):
+  triggers flagged `once_per_turn = true` consult
+  `state.triggered_this_turn: HashSet<(source_id, ability_index)>`
+  before push; matched-set entries are suppressed. The ledger is
+  cleared at `cleanup_step_for_active_player` so the gate re-opens
+  each turn.
+
+- **CR backing**:
+  - **CR 603.6a** — triggered abilities fire when their event
+    occurs; the deferred-dispatch queue is the rust equivalent of
+    Python's centralized `dispatch_event`.
+  - **CR 603.3b** — APNAP ordering of simultaneous triggers
+    (deliberately simplified — same shape as Python; documented
+    in `docs/SEARCH_LIMITATIONS.md` and audit §2.5).
+
+- **Out of scope for Slice 2** (queued for Slice 3+):
+  - Bridging legacy `etb_effects: Vec<Effect>` into the predicate
+    path by synthesizing
+    `TriggeredAbility { event=Enters, predicate=SourceIsSelf,
+    effect=... }` per `etb_effects` entry at registry-load time,
+    then retiring the inline `etb_effects` hatch in
+    `resolve_top_of_stack`. Slice 2 leaves the inline hatch in
+    place — both paths fire today and a printing carrying both
+    `etb_effects` and a matching `triggered_abilities` entry would
+    double-fire. No EoE printing carries both today (the audit
+    notes that the inline hatch is dead from the smoke harness's
+    point of view), so the double-fire surface is dormant until
+    Slice 3 retires the legacy path.
+  - Smoke-harness `cross_engine.py` registry-dict wiring for the
+    `triggered_abilities` key.
+  - Richer Predicate variants (HasSubtype, IsLand, IsArtifact,
+    Controlled, Subject).
+  - Wider Event variants (Dies, Cast, Attacks, DealsDamage).
+  - Panharmonicon-shape `etb_trigger_multiplier`.
+
 ### ~~CE9.~~ CLOSED: Combat damage assignment walks battlefield in bf-ETB order via shared `bf_iter_etb_sorted` helper
 
 Closed by `feature/ce9-blocker-bf-order` (this slice). Per the

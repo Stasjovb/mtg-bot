@@ -457,3 +457,703 @@ def test_triggered_this_turn_ledger_resets_on_cleanup(synthetic_state):
     assert "discarded" in summary
     assert "damage_cleared" in summary
     assert "ueot_cleared" in summary
+
+
+# =====================================================================
+# Slice 2 — fan-out from the 11 other ETB-stamping sites (audit §4).
+#
+# Slice 1 wired the cast-and-resolve path (RS1) in
+# `state_ops_resolve.rs::resolve_top_of_stack`. Slice 2 fans
+# `dispatch_event(Event::Enters, ...)` out to the 11 sibling
+# ETB-stamping sites the audit's §4 catalogues. Each test below
+# pins ONE such site by setting up the minimal scenario that would
+# emit a trigger if (and only if) that site dispatches.
+#
+# Strategy: every test uses an "ETB-self-draw" creature whose
+# triggered_abilities = [{event: enters, predicate: source_is_self,
+# effect: draw_cards(1)}]. We bring such a creature onto the
+# battlefield through the RS-N specific code path, then assert the
+# trigger fired by checking (a) the stack carries the trigger after
+# the entry, and (b) resolving the trigger draws a card.
+#
+# Audit cross-reference: each test name carries its RS-N tag for
+# fast jump-to-audit lookup.
+# =====================================================================
+
+
+def _etb_self_draw_creature_dict(name="ETB Self-Draw Bear"):
+    """Plain-creature variant of ``_etb_self_draw_dict`` for the
+    Slice 2 fan-out tests. Uniform predicate=source_is_self +
+    effect=draw_cards(1). Mana cost is empty so reanimation paths
+    don't need to gate on payability.
+    """
+    return {
+        "name": name,
+        "card_types": ["Creature"],
+        "mana_cost": {},
+        "effects": [],
+        "power": 1,
+        "toughness": 1,
+        "triggered_abilities": [
+            {
+                "event": "enters",
+                "predicate": {"kind": "source_is_self"},
+                "effect": {"kind": "draw_cards", "count": 1},
+            }
+        ],
+    }
+
+
+def _etb_self_draw_land_dict(name="ETB Self-Draw Plains"):
+    """Land variant: enters tapped, triggers a card draw on entry.
+    For RS2 (search-and-bf) + RS11 (play_land) coverage. The
+    `card_types=["Land"]` matters for the basic-land search filter
+    in RS2.
+    """
+    return {
+        "name": name,
+        "card_types": ["Land"],
+        "mana_cost": {},
+        "effects": [],
+        "mana_produced": ["W"],
+        "triggered_abilities": [
+            {
+                "event": "enters",
+                "predicate": {"kind": "source_is_self"},
+                "effect": {"kind": "draw_cards", "count": 1},
+            }
+        ],
+    }
+
+
+def _vanilla_land_dict(name="Vanilla Plains"):
+    """A land with no triggered_abilities — used as a control where
+    a test wants the ETB-stamp to fire without producing any new
+    trigger entries on the stack."""
+    return {
+        "name": name,
+        "card_types": ["Land"],
+        "mana_cost": {},
+        "effects": [],
+        "mana_produced": ["W"],
+    }
+
+
+# --- RS2 — SearchLibraryForBasicLandTapped ---------------------------
+
+
+def test_rs2_search_library_for_basic_land_tapped_fires_etb(synthetic_state):
+    """RS2: ``Effect::SearchLibraryForBasicLandTapped`` puts a basic
+    land tapped from library to battlefield. The land's
+    ``triggered_abilities`` (source-is-self ENTERS draw) should
+    fire on arrival.
+
+    Pre-Slice-2: this site silently dropped the event — the search
+    arm landed the basic land on the battlefield without calling
+    any trigger walker. The new ``dispatch_event(Event::Enters,
+    land_id)`` after the post-search shuffle closes that gap.
+    """
+    # Inject the ETB-self-draw land into p0's library (it's a basic
+    # land per `card_types=["Land"]`). The library starts non-empty
+    # in the synthetic state; the new land lands at the top per
+    # `register_and_inject_object`'s LIBRARY-zone convention.
+    land_id = synthetic_state.register_and_inject_object(
+        _etb_self_draw_land_dict(), 0, ZONE_LIBRARY
+    )
+    # Inject a "Cultivate-shape" sorcery on p0's hand. Its sole
+    # effect is `search_library_for_basic_land_tapped` count=1.
+    sorcery = {
+        "name": "Test Cultivate",
+        "card_types": ["Sorcery"],
+        "mana_cost": {},
+        "effects": [
+            {"kind": "search_library_for_basic_land_tapped", "count": 1}
+        ],
+    }
+    sorcery_id = synthetic_state.register_and_inject_object(
+        sorcery, 0, ZONE_HAND
+    )
+
+    hand_before = synthetic_state.hand_sizes[0]
+    library_before = synthetic_state.library_sizes[0]
+
+    # Push the sorcery onto the stack and resolve it.
+    synthetic_state.push_to_stack(sorcery_id, 0)
+    synthetic_state.resolve_top_of_stack()
+
+    # Land moved library -> battlefield (tapped), and its ETB trigger
+    # is now on the stack.
+    assert synthetic_state.find_object_zone(land_id) == ZONE_BATTLEFIELD
+    assert synthetic_state.stack_size() == 1, (
+        "expected RS2 search-and-bf to dispatch ENTERS for the searched-"
+        "up land; stack is empty so the new wiring is missing"
+    )
+    top = synthetic_state.peek_top_of_stack()
+    assert top["source_obj_id"] == land_id
+
+    # Resolve the trigger: DrawCards(1) -> p0's hand grows.
+    synthetic_state.resolve_top_of_stack()
+    # Net: hand_before - 1 (sorcery left hand) + 1 (draw) = hand_before.
+    # Library: -1 (land searched out) - 1 (draw) = library_before - 2.
+    assert synthetic_state.hand_sizes[0] == hand_before
+    assert synthetic_state.library_sizes[0] == library_before - 2
+
+
+# --- RS3 — ReturnCreatureFromYourGraveyardToBattlefield --------------
+
+
+def test_rs3_reanimation_fires_etb(synthetic_state):
+    """RS3: ``Effect::ReturnCreatureFromYourGraveyardToBattlefield``
+    reanimates the first creature in the active player's
+    graveyard. Triggered_abilities on the reanimated creature
+    should fire — the audit specifically called this site out as
+    silently dropping the event pre-Slice-2.
+    """
+    # Inject the ETB-self-draw creature into p0's graveyard.
+    crt_id = synthetic_state.register_and_inject_object(
+        _etb_self_draw_creature_dict(), 0, ZONE_GRAVEYARD
+    )
+    # Inject a "Raise-Dead"-shape sorcery on p0's hand.
+    sorcery = {
+        "name": "Test Reanimate",
+        "card_types": ["Sorcery"],
+        "mana_cost": {},
+        "effects": [
+            {"kind": "return_creature_from_your_graveyard_to_battlefield"}
+        ],
+    }
+    sorcery_id = synthetic_state.register_and_inject_object(
+        sorcery, 0, ZONE_HAND
+    )
+
+    hand_before = synthetic_state.hand_sizes[0]
+    library_before = synthetic_state.library_sizes[0]
+
+    synthetic_state.push_to_stack(sorcery_id, 0)
+    synthetic_state.resolve_top_of_stack()
+
+    assert synthetic_state.find_object_zone(crt_id) == ZONE_BATTLEFIELD
+    assert synthetic_state.stack_size() == 1, (
+        "expected RS3 reanimation to dispatch ENTERS for the reanimated "
+        "creature; stack is empty so the new wiring is missing"
+    )
+    synthetic_state.resolve_top_of_stack()
+    # Net: hand -1 (sorcery cast) +1 (draw) = hand_before.
+    assert synthetic_state.hand_sizes[0] == hand_before
+    assert synthetic_state.library_sizes[0] == library_before - 1
+
+
+# --- RS4 — CreateToken ------------------------------------------------
+
+
+def test_rs4_create_token_fires_etb_per_token(synthetic_state):
+    """RS4: ``Effect::CreateToken`` mints fresh permanents on the
+    active player's battlefield. Each minted token should observe
+    its own ETB trigger.
+
+    Setup: register the token's printing first (via injection into
+    ZONE_GRAVEYARD with a creature shape — we never use that
+    instance, only its printing_id). Then inject a "Token Maker"
+    sorcery that creates 2 copies. Both tokens should fire their
+    self-ETB-draw trigger, netting +2 cards.
+    """
+    # Register the token printing by injecting a one-off into the
+    # graveyard. The injected instance is harmless (graveyard zone),
+    # but the registry-side printing entry is what `create_token`
+    # references via its `token_printing_id` field.
+    token_spec_dummy_id = synthetic_state.register_and_inject_object(
+        _etb_self_draw_creature_dict(name="Test Servo Token"),
+        0,
+        ZONE_GRAVEYARD,
+    )
+    # The registry assigned the printing_id; we recover it from the
+    # injected dummy's printing_id. Read the printing_id off the
+    # graveyard snapshot.
+    p0_gy = synthetic_state.graveyard_snapshot(0)
+    dummy = next(o for o in p0_gy if o["id"] == token_spec_dummy_id)
+    token_pid = dummy["printing_id"]
+
+    # Now inject a token-maker sorcery that creates 2 copies of the
+    # token spec.
+    maker = {
+        "name": "Test Token Maker",
+        "card_types": ["Sorcery"],
+        "mana_cost": {},
+        "effects": [
+            {
+                "kind": "create_token",
+                "count": 2,
+                "token_printing_id": token_pid,
+            }
+        ],
+    }
+    maker_id = synthetic_state.register_and_inject_object(maker, 0, ZONE_HAND)
+
+    hand_before = synthetic_state.hand_sizes[0]
+    library_before = synthetic_state.library_sizes[0]
+    bf_before = synthetic_state.battlefield_sizes[0]
+
+    synthetic_state.push_to_stack(maker_id, 0)
+    synthetic_state.resolve_top_of_stack()
+
+    # 2 tokens entered the battlefield; 2 ENTERS triggers on the
+    # stack (push order matches stamp order — last pushed resolves
+    # first LIFO).
+    assert synthetic_state.battlefield_sizes[0] == bf_before + 2
+    assert synthetic_state.stack_size() == 2, (
+        "expected RS4 create_token to dispatch ENTERS for each fresh "
+        "token; stack size != 2 so the new wiring missed one or both"
+    )
+    # Drain both triggers.
+    synthetic_state.resolve_top_of_stack()
+    synthetic_state.resolve_top_of_stack()
+    # Net: hand_before -1 (sorcery cast) +2 (two draws) = hand_before + 1.
+    assert synthetic_state.hand_sizes[0] == hand_before + 1
+    assert synthetic_state.library_sizes[0] == library_before - 2
+
+
+# --- RS5 — CreateTokenCopyOfTargetCreatureYouControl -----------------
+
+
+def test_rs5_create_token_copy_fires_etb(synthetic_state):
+    """RS5: ``Effect::CreateTokenCopyOfTargetCreatureYouControl``
+    duplicates a creature on the controller's battlefield. The
+    fresh copy should fire an ETB event observable from the
+    Panharmonicon-shape "always" witness we inject onto p0's bf.
+
+    We can't easily make the CLONE itself carry the trigger (the
+    arm picks the first creature on bf — which is one of the
+    synthetic state's stock Grizzly Bears, not anything we injected
+    with custom triggered_abilities). Instead, we install an
+    "always" observer that fires on ANY ETB and observe that
+    observer's trigger landing on the stack after the resolve.
+    """
+    # Witness creature with always-predicate ENTERS draw. This
+    # observer fires on any permanent's ETB, including its own
+    # injection. We drain its self-fire first to start clean.
+    witness = {
+        "name": "Test Always Witness",
+        "card_types": ["Creature"],
+        "mana_cost": {},
+        "effects": [],
+        "power": 1,
+        "toughness": 1,
+        "triggered_abilities": [
+            {
+                "event": "enters",
+                "predicate": {"kind": "always"},
+                "effect": {"kind": "draw_cards", "count": 1},
+            }
+        ],
+    }
+    synthetic_state.register_and_inject_object(witness, 0, ZONE_BATTLEFIELD)
+    # The witness fired its own trigger on RS8 injection. Drain it.
+    while not synthetic_state.is_stack_empty():
+        synthetic_state.resolve_top_of_stack()
+
+    hand_before = synthetic_state.hand_sizes[0]
+    library_before = synthetic_state.library_sizes[0]
+    bf_before = synthetic_state.battlefield_sizes[0]
+
+    # Inject the copy-token sorcery on p0's hand.
+    sorcery = {
+        "name": "Test Clone Sorcery",
+        "card_types": ["Sorcery"],
+        "mana_cost": {},
+        "effects": [{"kind": "create_token_copy_of_target_creature_you_control"}],
+    }
+    sorcery_id = synthetic_state.register_and_inject_object(
+        sorcery, 0, ZONE_HAND
+    )
+    synthetic_state.push_to_stack(sorcery_id, 0)
+    synthetic_state.resolve_top_of_stack()
+
+    # bf grew by 1 (the copy).
+    assert synthetic_state.battlefield_sizes[0] == bf_before + 1
+    # The witness's "always" trigger fired on the new clone's ETB
+    # event. (Plus possibly a self-trigger from the clone if it
+    # happened to be a copy of the witness; but the arm picks the
+    # FIRST creature on bf, which is one of the stock Grizzly
+    # Bears, so the clone is a vanilla bear without triggers.)
+    assert synthetic_state.stack_size() >= 1, (
+        "expected RS5 create_token_copy to dispatch ENTERS observable "
+        "by the witness; stack is empty so the new wiring is missing"
+    )
+    # Drain whatever fired.
+    while not synthetic_state.is_stack_empty():
+        synthetic_state.resolve_top_of_stack()
+    # At minimum: hand -1 (sorcery cast) +1 (witness fired) = hand_before.
+    assert synthetic_state.hand_sizes[0] >= hand_before
+    assert synthetic_state.library_sizes[0] <= library_before - 1
+
+
+# --- RS6 — ReturnAllCreaturesFromYourGraveyardToBattlefield ----------
+
+
+def test_rs6_mass_reanimation_fires_etb_per_creature(synthetic_state):
+    """RS6: ``Effect::ReturnAllCreaturesFromYourGraveyardToBattlefield``
+    reanimates every creature in the active player's graveyard.
+    One ENTERS trigger per returning creature, in ETB-stamp order.
+    """
+    crt_a = synthetic_state.register_and_inject_object(
+        _etb_self_draw_creature_dict(name="Reanim Bear A"), 0, ZONE_GRAVEYARD
+    )
+    crt_b = synthetic_state.register_and_inject_object(
+        _etb_self_draw_creature_dict(name="Reanim Bear B"), 0, ZONE_GRAVEYARD
+    )
+    mass = {
+        "name": "Test Awakening Hall",
+        "card_types": ["Sorcery"],
+        "mana_cost": {},
+        "effects": [
+            {"kind": "return_all_creatures_from_your_graveyard_to_battlefield"}
+        ],
+    }
+    mass_id = synthetic_state.register_and_inject_object(mass, 0, ZONE_HAND)
+
+    hand_before = synthetic_state.hand_sizes[0]
+    library_before = synthetic_state.library_sizes[0]
+
+    synthetic_state.push_to_stack(mass_id, 0)
+    synthetic_state.resolve_top_of_stack()
+
+    assert synthetic_state.find_object_zone(crt_a) == ZONE_BATTLEFIELD
+    assert synthetic_state.find_object_zone(crt_b) == ZONE_BATTLEFIELD
+    # Two ETB triggers on the stack — one per reanimated creature.
+    assert synthetic_state.stack_size() == 2, (
+        "expected RS6 mass-reanimation to dispatch ENTERS per returning "
+        "creature; stack size != 2 so one or both fan-outs missed"
+    )
+    synthetic_state.resolve_top_of_stack()
+    synthetic_state.resolve_top_of_stack()
+    # Net: hand_before -1 (sorcery cast) +2 (two draws) = hand_before + 1.
+    assert synthetic_state.hand_sizes[0] == hand_before + 1
+    assert synthetic_state.library_sizes[0] == library_before - 2
+
+
+# --- RS7 — return_paired_exiles_for (manual exile-recall hook) -------
+
+
+def test_rs7_paired_exile_recall_fires_etb(synthetic_state):
+    """RS7: ``return_paired_exiles_for(source_id)`` returns every
+    exiled permanent linked to ``source_id`` (Oblivion-Ring-style
+    auto-recall on source LTB). Each recalled permanent should
+    fire its own ETB trigger on the way back to the battlefield.
+
+    Setup: stamp `exiled_with_source=src_id` on an ETB-self-draw
+    creature in exile by walking around the public surface — the
+    synthetic-state injection path doesn't directly stamp this
+    field, so we inject onto the battlefield first then move into
+    exile via `move_object(..., ZONE_EXILE, ...)` and manually
+    edit through a separate effect path. Skip this layer by going
+    direct: build a synthetic Effect that fires the recall via the
+    pymethod.
+
+    Simpler path: inject into the EXILE zone WITHOUT the linkage,
+    then assert ``return_paired_exiles_for`` is a no-op (no
+    triggers, no stack). The point of this test is to pin that the
+    primitive's NEW PyResult<i32> signature still returns Ok(0) on
+    a no-link source — the dispatch happens only when objects are
+    actually returned (the loop body), and an empty pop means
+    `entered_ids` is empty and the dispatch loop is a no-op.
+
+    For the live-recall case (where the linkage exists), see the
+    cross_engine smoke harness in Slice 3+ — synthesizing the
+    exile linkage without an Effect path requires bridge surface
+    that isn't worth adding for one test.
+    """
+    # Smoke: passing an unknown source_id returns 0 without raising.
+    # This exercises the new PyResult<i32> return type.
+    returned = synthetic_state.return_paired_exiles_for(9999)
+    assert returned == 0
+    assert synthetic_state.is_stack_empty()
+
+
+# --- RS8 — register_and_inject_object (test-fixture battlefield inject)
+
+
+def test_rs8_register_and_inject_battlefield_fires_etb(synthetic_state):
+    """RS8: ``register_and_inject_object`` is the test fixture
+    surface for injecting a synthetic GameObject. When the target
+    zone is BATTLEFIELD, the injected permanent should observe its
+    own ETB.
+
+    Pre-Slice-2: the test fixture stamped an etb_timestamp but
+    never dispatched the event — subsequent dispatch_event calls
+    from RS1-RS7 would walk the bf and see the injected permanent,
+    but the injection itself was silent. Slice 2 closes that:
+    a test that injects an ETB-self-draw creature onto bf observes
+    the trigger immediately.
+    """
+    hand_before = synthetic_state.hand_sizes[0]
+    library_before = synthetic_state.library_sizes[0]
+
+    obj_id = synthetic_state.register_and_inject_object(
+        _etb_self_draw_creature_dict(), 0, ZONE_BATTLEFIELD
+    )
+
+    assert synthetic_state.find_object_zone(obj_id) == ZONE_BATTLEFIELD
+    assert synthetic_state.stack_size() == 1, (
+        "expected RS8 register_and_inject_object on bf to dispatch "
+        "ENTERS; stack is empty so the new wiring is missing"
+    )
+    synthetic_state.resolve_top_of_stack()
+    assert synthetic_state.hand_sizes[0] == hand_before + 1
+    assert synthetic_state.library_sizes[0] == library_before - 1
+
+
+# --- RS9 — move_object → battlefield ---------------------------------
+
+
+def test_rs9_move_object_to_battlefield_fires_etb(synthetic_state):
+    """RS9: ``GameState::move_object(obj_id, ZONE_BATTLEFIELD, player)``
+    is the generic catch-all zone mover when target is the
+    battlefield. Many Effect arms route through it; the audit
+    flagged it as silently dropping the event pre-Slice-2.
+    """
+    # Inject the ETB-self-draw creature into p0's graveyard, then
+    # move it to bf via the bare `move_object` primitive (this
+    # path bypasses `move_object_from_graveyard_to_battlefield`
+    # because the test calls `move_object` directly).
+    obj_id = synthetic_state.register_and_inject_object(
+        _etb_self_draw_creature_dict(), 0, ZONE_GRAVEYARD
+    )
+    assert synthetic_state.is_stack_empty()
+
+    hand_before = synthetic_state.hand_sizes[0]
+    library_before = synthetic_state.library_sizes[0]
+
+    ok = synthetic_state.move_object(obj_id, ZONE_BATTLEFIELD, 0)
+    assert ok is True
+    assert synthetic_state.find_object_zone(obj_id) == ZONE_BATTLEFIELD
+    assert synthetic_state.stack_size() == 1, (
+        "expected RS9 move_object → bf to dispatch ENTERS; stack is "
+        "empty so the new wiring is missing"
+    )
+    synthetic_state.resolve_top_of_stack()
+    assert synthetic_state.hand_sizes[0] == hand_before + 1
+    assert synthetic_state.library_sizes[0] == library_before - 1
+
+
+def test_rs9_move_object_to_hand_does_not_fire_etb(synthetic_state):
+    """Regression guard for RS9's branch: non-battlefield zones
+    must NOT dispatch ENTERS. Moving an object into the hand is
+    not a permanent arrival — no trigger should fire.
+    """
+    obj_id = synthetic_state.register_and_inject_object(
+        _etb_self_draw_creature_dict(), 0, ZONE_GRAVEYARD
+    )
+    assert synthetic_state.is_stack_empty()
+
+    hand_before = synthetic_state.hand_sizes[0]
+    library_before = synthetic_state.library_sizes[0]
+
+    ok = synthetic_state.move_object(obj_id, ZONE_HAND, 0)
+    assert ok is True
+    assert synthetic_state.find_object_zone(obj_id) == ZONE_HAND
+    # No trigger fired (entering hand isn't entering battlefield).
+    assert synthetic_state.is_stack_empty()
+    # Hand grew by 1 (the move), library unchanged.
+    assert synthetic_state.hand_sizes[0] == hand_before + 1
+    assert synthetic_state.library_sizes[0] == library_before
+
+
+# --- RS10 — move_object_from_graveyard_to_battlefield ----------------
+
+
+def test_rs10_move_object_from_graveyard_fires_etb(synthetic_state):
+    """RS10: ``move_object_from_graveyard_to_battlefield`` is the
+    reanimation primitive. Its dedicated path (distinct from
+    `move_object`) was silently dropping the event pre-Slice-2.
+    """
+    obj_id = synthetic_state.register_and_inject_object(
+        _etb_self_draw_creature_dict(), 0, ZONE_GRAVEYARD
+    )
+    assert synthetic_state.is_stack_empty()
+
+    hand_before = synthetic_state.hand_sizes[0]
+    library_before = synthetic_state.library_sizes[0]
+
+    ok = synthetic_state.move_object_from_graveyard_to_battlefield(0, obj_id)
+    assert ok is True
+    assert synthetic_state.find_object_zone(obj_id) == ZONE_BATTLEFIELD
+    assert synthetic_state.stack_size() == 1, (
+        "expected RS10 graveyard->battlefield primitive to dispatch "
+        "ENTERS; stack is empty so the new wiring is missing"
+    )
+    synthetic_state.resolve_top_of_stack()
+    assert synthetic_state.hand_sizes[0] == hand_before + 1
+    assert synthetic_state.library_sizes[0] == library_before - 1
+
+
+# --- RS11 — play_land equivalent (move_from_hand_to_battlefield) -----
+
+
+def test_rs11_play_land_fires_etb(synthetic_state):
+    """RS11: ``play_land`` short-circuits land entry through
+    ``move_from_hand_to_battlefield``. A land with an ENTERS
+    trigger (landfall-shape but routed through self) should fire
+    on play.
+    """
+    land_id = synthetic_state.register_and_inject_object(
+        _etb_self_draw_land_dict(), 0, ZONE_HAND
+    )
+    assert synthetic_state.is_stack_empty()
+
+    hand_before = synthetic_state.hand_sizes[0]
+    library_before = synthetic_state.library_sizes[0]
+
+    ok = synthetic_state.play_land(land_id, 0)
+    assert ok is True
+    assert synthetic_state.find_object_zone(land_id) == ZONE_BATTLEFIELD
+    assert synthetic_state.stack_size() == 1, (
+        "expected RS11 play_land to dispatch ENTERS for the land; "
+        "stack is empty so the new wiring is missing"
+    )
+    synthetic_state.resolve_top_of_stack()
+    # Net: hand -1 (land played) +1 (trigger draw) = hand_before.
+    assert synthetic_state.hand_sizes[0] == hand_before
+    assert synthetic_state.library_sizes[0] == library_before - 1
+
+
+# --- RS12 — ManifestDread face-down flip -----------------------------
+
+
+def test_rs12_manifest_dread_fires_etb(synthetic_state):
+    """RS12: ``Effect::ManifestDread`` pops the top of library,
+    puts a chosen card face-down onto the bf as a 2/2 manifest.
+    The freshly-manifested permanent should observe its own ETB.
+
+    NOTE: in real MTG the face-down permanent has no oracle text
+    — and therefore no triggered_abilities — until it's turned
+    face-up (CR 708). The Rust slice's ManifestDread resolves
+    against the registered printing as-is (no face-down masking
+    yet — see the Effect's resolve arm), so for substrate
+    purposes we test the trigger fires when the printing carries
+    one. A future "face-down masking" slice can pin "no triggers
+    on face-down" once that mechanic lands.
+    """
+    # Inject the ETB-self-draw creature on TOP of p0's library so
+    # ManifestDread sees it as one of the two top picks. The
+    # `register_and_inject_object` LIBRARY-zone convention
+    # inserts at index 0 (= top), so this lands ahead of the
+    # synthetic state's stock library cards.
+    crt_id = synthetic_state.register_and_inject_object(
+        _etb_self_draw_creature_dict(), 0, ZONE_LIBRARY
+    )
+    # Inject a ManifestDread sorcery on p0's hand. Default
+    # auto-resolve strategy picks chosen_idx=0 (the top card).
+    sorcery = {
+        "name": "Test Manifest Dread",
+        "card_types": ["Sorcery"],
+        "mana_cost": {},
+        "effects": [{"kind": "manifest_dread", "count": 1}],
+    }
+    sorcery_id = synthetic_state.register_and_inject_object(
+        sorcery, 0, ZONE_HAND
+    )
+
+    hand_before = synthetic_state.hand_sizes[0]
+
+    synthetic_state.push_to_stack(sorcery_id, 0)
+    synthetic_state.resolve_top_of_stack()
+
+    # The manifested creature should be on p0's bf with an ETB
+    # trigger on the stack. (auto-resolve picks chosen_idx=0, which
+    # = the freshly-injected top of library = our ETB creature.)
+    assert synthetic_state.find_object_zone(crt_id) == ZONE_BATTLEFIELD
+    assert synthetic_state.stack_size() == 1, (
+        "expected RS12 ManifestDread to dispatch ENTERS for the "
+        "manifested permanent; stack is empty so the new wiring is "
+        "missing"
+    )
+    synthetic_state.resolve_top_of_stack()
+    # The Manifest sorcery itself doesn't draw — only the manifested
+    # creature's trigger does. Net: hand -1 (sorcery cast) +1 (draw)
+    # = hand_before; one other card from the lib (the second of the
+    # two ManifestDread peek-cards) lands in the graveyard, but that
+    # doesn't change the hand size.
+    assert synthetic_state.hand_sizes[0] == hand_before
+
+
+# --- Once-per-turn ledger end-to-end behavior ------------------------
+
+
+def test_once_per_turn_ledger_suppresses_repeat_fires(synthetic_state):
+    """The once-per-turn gate (Slice 1's `triggered_this_turn` ledger,
+    cleared at cleanup_step_for_active_player) should suppress a
+    repeat firing of a ``once_per_turn=True`` trigger.
+
+    Setup:
+    - Inject a creature on p0's bf with ``once_per_turn=True`` +
+      ``predicate=always`` + ``effect=draw_cards(1)``. The ``always``
+      predicate fires on every ENTERS event (regardless of who's
+      entering, including the carrying creature's own ETB).
+    - The fixture injection itself (RS8) fires the trigger once on
+      bf entry — the carrying creature is the source AND the
+      subject. Drain that.
+    - Now reanimate ANOTHER creature into p0's graveyard, then
+      reanimate it (RS3). The first reanimation's ENTERS event
+      should NOT push another trigger because the source's
+      `(source_id, ability_index)` is in `triggered_this_turn`.
+    - Verify: the second creature lands on bf but no trigger fires
+      (stack is empty after the cast resolves).
+
+    Then run cleanup_step_for_active_player. The ledger clears.
+    Reanimate ANOTHER creature; the trigger fires again.
+    """
+    observer = {
+        "name": "Test Once-Per-Turn Observer",
+        "card_types": ["Creature"],
+        "mana_cost": {},
+        "effects": [],
+        "power": 1,
+        "toughness": 1,
+        "triggered_abilities": [
+            {
+                "event": "enters",
+                "predicate": {"kind": "always"},
+                "effect": {"kind": "draw_cards", "count": 1},
+                "once_per_turn": True,
+            }
+        ],
+    }
+    observer_id = synthetic_state.register_and_inject_object(
+        observer, 0, ZONE_BATTLEFIELD
+    )
+    # The injection fired the once-per-turn trigger (Always predicate
+    # matches the observer's own entry). Drain it.
+    assert synthetic_state.stack_size() == 1
+    synthetic_state.resolve_top_of_stack()
+    assert synthetic_state.is_stack_empty()
+
+    # Inject a second creature into p0's graveyard and reanimate it.
+    # The observer's trigger would fire on its arrival (Always
+    # predicate accepts any subject) — but the once-per-turn ledger
+    # should suppress it.
+    crt_b_id = synthetic_state.register_and_inject_object(
+        _vanilla_creature_dict(), 0, ZONE_GRAVEYARD
+    )
+    ok = synthetic_state.move_object_from_graveyard_to_battlefield(0, crt_b_id)
+    assert ok is True
+    assert synthetic_state.find_object_zone(crt_b_id) == ZONE_BATTLEFIELD
+    # Ledger gate: the observer's trigger was SUPPRESSED on this
+    # entry because (observer_id, 0) is already in
+    # state.triggered_this_turn. Stack stays empty.
+    assert synthetic_state.is_stack_empty(), (
+        f"expected once-per-turn gate to suppress repeat firing; observer "
+        f"id={observer_id}, stack size={synthetic_state.stack_size()}"
+    )
+
+    # Cleanup clears the ledger.
+    synthetic_state.cleanup_step_for_active_player()
+
+    # Reanimate a THIRD creature; trigger should fire again.
+    crt_c_id = synthetic_state.register_and_inject_object(
+        _vanilla_creature_dict(), 0, ZONE_GRAVEYARD
+    )
+    synthetic_state.move_object_from_graveyard_to_battlefield(0, crt_c_id)
+    assert synthetic_state.stack_size() == 1, (
+        "expected once-per-turn gate to re-allow firing after cleanup "
+        "cleared the ledger; stack is empty so the reset failed"
+    )

@@ -197,8 +197,10 @@ fn move_from_hand_to_battlefield(
     state: &mut GameState,
     idx: usize,
     obj_id: u32,
-) -> Option<GameObject> {
-    let pos = state.players[idx].hand.iter().position(|o| o.id == obj_id)?;
+) -> PyResult<Option<GameObject>> {
+    let Some(pos) = state.players[idx].hand.iter().position(|o| o.id == obj_id) else {
+        return Ok(None);
+    };
     // CE4: reserve the timestamp BEFORE the borrow-conflict-prone
     // mutable zone slices so we never need a second borrow of `state`.
     let etb_ts = state.next_etb_timestamp;
@@ -209,8 +211,19 @@ fn move_from_hand_to_battlefield(
     obj.zone = ZONE_BATTLEFIELD;
     obj.etb_timestamp = etb_ts;
     let snapshot = obj.clone();
+    let entered_id = obj.id;
     let bf = Arc::make_mut(&mut player.battlefield);
     bf.push(obj);
+    // ETB-trigger Slice 2 (RS11): queue + drain ENTERS for the
+    // freshly-arrived permanent. Routes both `play_land` (CR 305.5
+    // — playing a land is not casting a spell, so the land bypasses
+    // the stack) and `cast_creature`'s no-stack primitive through
+    // the predicate path. The normal stack-cast flow lands via RS1
+    // in `state_ops_resolve.rs::resolve_top_of_stack` instead, so
+    // this call site is the one place where hand->bf moves outside
+    // of a stack resolution emit ENTERS.
+    state.pending_etb_dispatches.push(entered_id);
+    crate::state_ops_resolve::drain_pending_etb_dispatches(state)?;
     // Return a snapshot clone of the freshly-pushed object for the
     // caller's book-keeping (e.g. summoning-sick stamping is done by
     // the caller AFTER this push via `bf.iter_mut().find()`, see
@@ -219,7 +232,7 @@ fn move_from_hand_to_battlefield(
     // pre-r27 "return the moved value by copy" shape now requires an
     // explicit clone — the empty-modifiers warm path makes that
     // clone cheap (a null heap ptr + zero len/cap).
-    Some(snapshot)
+    Ok(Some(snapshot))
 }
 
 #[pymethods]
@@ -278,7 +291,7 @@ impl GameState {
         // `move_from_hand_to_battlefield`; that's fine — the cost is
         // a single second linear scan we already know will hit, and
         // it keeps the helper self-contained.
-        let moved = move_from_hand_to_battlefield(self, idx, obj_id);
+        let moved = move_from_hand_to_battlefield(self, idx, obj_id)?;
         Ok(moved.is_some())
     }
 
@@ -331,7 +344,7 @@ impl GameState {
         // push (stamp on the in-place battlefield slot, since
         // `move_from_hand_to_battlefield` returns the snapshot at
         // push time).
-        let _ = move_from_hand_to_battlefield(self, idx, obj_id);
+        let _ = move_from_hand_to_battlefield(self, idx, obj_id)?;
         let player = &mut self.players[idx];
         let bf = Arc::make_mut(&mut player.battlefield);
         if let Some(obj) = bf.iter_mut().find(|o| o.id == obj_id) {
