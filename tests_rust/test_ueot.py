@@ -205,6 +205,8 @@ def test_pump_self_until_eot_resolves_and_pumps_source(synthetic_state):
     )
     synthetic_state.push_to_stack(obj_id, 0)
     synthetic_state.resolve_top_of_stack()
+    # Slice 3 bridge: drain the on-stack ETB pump trigger.
+    synthetic_state.resolve_top_of_stack()
 
     assert synthetic_state.find_object_zone(obj_id) == ZONE_BATTLEFIELD
     assert synthetic_state.effective_power(obj_id) == 5
@@ -238,6 +240,8 @@ def test_pump_self_until_eot_negative_bonus_shrinks_source(synthetic_state):
     )
     synthetic_state.push_to_stack(obj_id, 0)
     synthetic_state.resolve_top_of_stack()
+    # Slice 3 bridge: drain the on-stack ETB pump trigger.
+    synthetic_state.resolve_top_of_stack()
 
     assert synthetic_state.effective_power(obj_id) == 1
     assert synthetic_state.effective_toughness(obj_id) == 0
@@ -256,6 +260,8 @@ def test_pump_self_until_eot_only_pumps_source_not_siblings(synthetic_state):
         _vanilla_bears_dict(), 0, ZONE_BATTLEFIELD
     )
     synthetic_state.push_to_stack(pumped_id, 0)
+    synthetic_state.resolve_top_of_stack()
+    # Slice 3 bridge: drain the on-stack ETB pump trigger.
     synthetic_state.resolve_top_of_stack()
 
     # Pumped: 2 + 2 = 4 / 4
@@ -282,6 +288,8 @@ def test_cleanup_step_clears_ueot_modifier(synthetic_state):
         ZONE_HAND,
     )
     synthetic_state.push_to_stack(obj_id, 0)
+    synthetic_state.resolve_top_of_stack()
+    # Slice 3 bridge: drain the on-stack ETB pump trigger.
     synthetic_state.resolve_top_of_stack()
     # Mid-turn snapshot: pumped.
     assert synthetic_state.effective_power(obj_id) == 5
@@ -310,7 +318,11 @@ def test_clear_ueot_modifiers_all_primitive(synthetic_state):
     )
     synthetic_state.push_to_stack(a_id, 0)
     synthetic_state.resolve_top_of_stack()
+    # Slice 3 bridge: drain the on-stack ETB pump trigger.
+    synthetic_state.resolve_top_of_stack()
     synthetic_state.push_to_stack(b_id, 0)
+    synthetic_state.resolve_top_of_stack()
+    # Slice 3 bridge: drain the on-stack ETB pump trigger.
     synthetic_state.resolve_top_of_stack()
 
     assert synthetic_state.effective_power(a_id) == 3  # 2 + 1
@@ -345,6 +357,8 @@ def test_cleanup_idempotent_for_ueot_clear(synthetic_state):
     )
     synthetic_state.push_to_stack(obj_id, 0)
     synthetic_state.resolve_top_of_stack()
+    # Slice 3 bridge: drain the on-stack ETB pump trigger.
+    synthetic_state.resolve_top_of_stack()
 
     first = synthetic_state.cleanup_step_for_active_player()
     assert first["ueot_cleared"] == 1
@@ -371,6 +385,8 @@ def test_advance_phase_through_cleanup_clears_ueot(synthetic_state):
     )
     synthetic_state.push_to_stack(obj_id, 0)
     synthetic_state.resolve_top_of_stack()
+    # Slice 3 bridge: drain the on-stack ETB pump trigger.
+    synthetic_state.resolve_top_of_stack()
     assert synthetic_state.effective_power(obj_id) == 5
 
     # Walk forward through every phase until we land on CLEANUP.
@@ -393,6 +409,8 @@ def test_end_turn_and_start_next_clears_ueot(synthetic_state):
         ZONE_HAND,
     )
     synthetic_state.push_to_stack(obj_id, 0)
+    synthetic_state.resolve_top_of_stack()
+    # Slice 3 bridge: drain the on-stack ETB pump trigger.
     synthetic_state.resolve_top_of_stack()
     assert synthetic_state.effective_power(obj_id) == 6
 
@@ -459,6 +477,8 @@ def test_clone_then_pump_does_not_affect_original(synthetic_state):
     cloned = synthetic_state.clone_once()
 
     cloned.resolve_top_of_stack()
+    # Slice 3 bridge: drain the on-stack ETB pump trigger on the clone.
+    cloned.resolve_top_of_stack()
 
     # Clone has the pump applied (post-resolve put creature on bf with
     # +2/+2 modifier).
@@ -478,6 +498,8 @@ def test_clone_then_cleanup_does_not_affect_original_ueot(synthetic_state):
         ZONE_HAND,
     )
     synthetic_state.push_to_stack(obj_id, 0)
+    synthetic_state.resolve_top_of_stack()
+    # Slice 3 bridge: drain the on-stack ETB pump trigger.
     synthetic_state.resolve_top_of_stack()
     # Both states agree the modifier is live; clone first.
     assert synthetic_state.effective_power(obj_id) == 5

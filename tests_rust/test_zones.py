@@ -1423,6 +1423,8 @@ def test_resolve_attach_effect_stamps_source_attached_to(synthetic_state):
 
     synthetic_state.push_to_stack(spell_id, 0)
     synthetic_state.resolve_top_of_stack()
+    # Slice 3 bridge: drain the on-stack attach trigger.
+    synthetic_state.resolve_top_of_stack()
 
     # Equipment is now on p0's battlefield (artifact ETB per CR 608.2m).
     assert synthetic_state.find_object_zone(spell_id) == ZONE_BATTLEFIELD
@@ -1457,6 +1459,8 @@ def test_resolve_attach_effect_clone_isolation(synthetic_state):
     synthetic_state.push_to_stack(spell_id, 0)
     cloned = synthetic_state.clone_once()
     cloned.resolve_top_of_stack()
+    # Slice 3 bridge: drain the on-stack attach trigger on the clone.
+    cloned.resolve_top_of_stack()
 
     # Clone: Equipment is attached.
     cloned_bf = cloned.battlefield_snapshot()
@@ -1479,6 +1483,8 @@ def test_attach_zone_change_clears_attached_to_via_destroy(synthetic_state):
         _atomic_microsizer_dict(), 0, ZONE_HAND
     )
     synthetic_state.push_to_stack(eq_id, 0)
+    synthetic_state.resolve_top_of_stack()
+    # Slice 3 bridge: drain the on-stack attach trigger.
     synthetic_state.resolve_top_of_stack()
     # Confirm attach landed.
     bf = synthetic_state.battlefield_snapshot()
@@ -1612,6 +1618,8 @@ def test_resolve_exile_until_source_leaves_stamps_link_and_exiles(synthetic_stat
     )
     synthetic_state.push_to_stack(src_id, 0)
     synthetic_state.resolve_top_of_stack()
+    # Slice 3 bridge: drain the on-stack ETB exile trigger.
+    synthetic_state.resolve_top_of_stack()
 
     # Source on bf.
     assert synthetic_state.find_object_zone(src_id) == ZONE_BATTLEFIELD
@@ -1632,6 +1640,8 @@ def test_return_paired_exiles_for_brings_back_linked_objects(synthetic_state):
         _all_fates_stalker_dict(), 0, ZONE_HAND
     )
     synthetic_state.push_to_stack(src_id, 0)
+    synthetic_state.resolve_top_of_stack()
+    # Slice 3 bridge: drain the on-stack ETB exile trigger.
     synthetic_state.resolve_top_of_stack()
     assert synthetic_state.find_object_zone(p1_first_bear_id) == ZONE_EXILE
 
@@ -1683,6 +1693,8 @@ def test_resolve_exile_until_source_leaves_clone_isolation(synthetic_state):
     synthetic_state.push_to_stack(src_id, 0)
     cloned = synthetic_state.clone_once()
     cloned.resolve_top_of_stack()
+    # Slice 3 bridge: drain the on-stack ETB exile trigger on the clone.
+    cloned.resolve_top_of_stack()
 
     # Clone: target in exile.
     assert cloned.find_object_zone(p1_first_bear_id) == ZONE_EXILE
@@ -1726,6 +1738,8 @@ def test_resolve_exile_opps_nonland_picks_first_non_land(synthetic_state):
     )
     synthetic_state.push_to_stack(src_id, 0)
     synthetic_state.resolve_top_of_stack()
+    # Slice 3 bridge: drain the on-stack ETB exile trigger.
+    synthetic_state.resolve_top_of_stack()
     assert synthetic_state.find_object_zone(p1_first_bear_id) == ZONE_EXILE
 
 
@@ -1758,6 +1772,8 @@ def test_resolve_exile_opps_nonland_works_on_artifact(synthetic_state):
         _hardlight_containment_dict(), 0, ZONE_HAND
     )
     state.push_to_stack(src_id, 0)
+    state.resolve_top_of_stack()
+    # Slice 3 bridge: drain the on-stack ETB exile trigger.
     state.resolve_top_of_stack()
     assert state.find_object_zone(artifact_id) == ZONE_EXILE
 
@@ -1797,6 +1813,8 @@ def test_resolve_exile_opps_nonland_link_returns(synthetic_state):
         _hardlight_containment_dict(), 0, ZONE_HAND
     )
     synthetic_state.push_to_stack(src_id, 0)
+    synthetic_state.resolve_top_of_stack()
+    # Slice 3 bridge: drain the on-stack ETB exile trigger.
     synthetic_state.resolve_top_of_stack()
     assert synthetic_state.find_object_zone(p1_first_bear_id) == ZONE_EXILE
 
@@ -2013,6 +2031,8 @@ def test_resolve_equip_effect_stamps_source_attached_to(synthetic_state):
 
     synthetic_state.push_to_stack(spell_id, 0)
     synthetic_state.resolve_top_of_stack()
+    # Slice 3 bridge: drain the on-stack equip trigger.
+    synthetic_state.resolve_top_of_stack()
 
     # Equipment is now on p0's battlefield (artifact ETB per CR 608.2m).
     assert synthetic_state.find_object_zone(spell_id) == ZONE_BATTLEFIELD
@@ -2050,6 +2070,8 @@ def test_resolve_equip_effect_skips_source_self(synthetic_state):
     )
     synthetic_state.push_to_stack(spell_id, 0)
     synthetic_state.resolve_top_of_stack()
+    # Slice 3 bridge: drain the on-stack equip trigger.
+    synthetic_state.resolve_top_of_stack()
     bf = synthetic_state.battlefield_snapshot()
     equip = next(d for d in bf if d["id"] == spell_id)
     # attached_to is set, and crucially it's NOT the equip itself.
@@ -2065,6 +2087,8 @@ def test_resolve_equip_effect_clone_isolation(synthetic_state):
     )
     synthetic_state.push_to_stack(spell_id, 0)
     cloned = synthetic_state.clone_once()
+    cloned.resolve_top_of_stack()
+    # Slice 3 bridge: drain the on-stack equip trigger on the clone.
     cloned.resolve_top_of_stack()
 
     # Clone: Equipment is attached.
@@ -2119,6 +2143,8 @@ def test_resolve_equip_effect_retargets_existing_attachment(synthetic_state):
         _equip_artifact_dict(), 0, ZONE_HAND
     )
     synthetic_state.push_to_stack(second_spell_id, 0)
+    synthetic_state.resolve_top_of_stack()
+    # Slice 3 bridge: drain the on-stack equip trigger.
     synthetic_state.resolve_top_of_stack()
 
     bf_post = synthetic_state.battlefield_snapshot()

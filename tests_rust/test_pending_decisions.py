@@ -2588,6 +2588,9 @@ def test_manifest_dread_then_attach_self_happy_path_stamps_attached_to(synthetic
     )
     synthetic_state.push_to_stack(spell_id, 0)
     synthetic_state.resolve_top_of_stack_pause()
+    # Slice 3 bridge: drain the on-stack ETB trigger (which pushes the
+    # ManifestDreadChoice pending decision via apply_effect).
+    synthetic_state.resolve_top_of_stack_pause()
 
     # Equipment should be on bf already (artifact ETB lands first).
     assert synthetic_state.find_object_zone(spell_id) == ZONE_BATTLEFIELD
@@ -2622,6 +2625,8 @@ def test_manifest_dread_then_attach_self_picks_non_topmost(synthetic_state):
     )
     synthetic_state.push_to_stack(spell_id, 0)
     synthetic_state.resolve_top_of_stack_pause()
+    # Slice 3 bridge: drain the on-stack ETB trigger.
+    synthetic_state.resolve_top_of_stack_pause()
 
     chosen_id = top_two[1]
     synthetic_state.submit_manifest_dread_decision(chosen_id)
@@ -2641,6 +2646,8 @@ def test_manifest_dread_then_attach_self_auto_resolve_picks_topmost(synthetic_st
     )
     synthetic_state.push_to_stack(spell_id, 0)
     synthetic_state.resolve_top_of_stack_pause()
+    # Slice 3 bridge: drain the on-stack ETB trigger.
+    synthetic_state.resolve_top_of_stack_pause()
     synthetic_state.auto_resolve_pending_decisions("default")
 
     assert synthetic_state.has_pending_decision() is False
@@ -2657,6 +2664,9 @@ def test_manifest_dread_then_attach_self_full_resolve_auto(synthetic_state):
         _manifest_dread_then_attach_self_dict(count=1), 0, 0
     )
     synthetic_state.push_to_stack(spell_id, 0)
+    synthetic_state.resolve_top_of_stack()
+    # Slice 3 bridge: drain the on-stack ETB trigger (auto-resolves
+    # the manifest_dread_then_attach_self pending decision).
     synthetic_state.resolve_top_of_stack()
 
     assert synthetic_state.has_pending_decision() is False
@@ -2680,6 +2690,8 @@ def test_manifest_dread_then_attach_self_source_ltb_silent_partial(synthetic_sta
         _manifest_dread_then_attach_self_dict(count=1), 0, 0
     )
     synthetic_state.push_to_stack(spell_id, 0)
+    synthetic_state.resolve_top_of_stack_pause()
+    # Slice 3 bridge: drain the on-stack ETB trigger.
     synthetic_state.resolve_top_of_stack_pause()
     # Confirm the source is on bf and pending decision exists.
     assert synthetic_state.find_object_zone(spell_id) == ZONE_BATTLEFIELD
@@ -2716,16 +2728,21 @@ def test_manifest_dread_then_attach_self_source_ltb_silent_partial(synthetic_sta
 def test_manifest_dread_then_attach_self_empty_library_no_op(engine):
     """ManifestDreadThenAttachSelf on an empty library: pending has
     empty cards; auto-resolve drains as no-op; source attached_to
-    stays None (no manifested target to attach to)."""
+    stays None (no manifested target to attach to).
+
+    Slice 3 bridge: injecting on BATTLEFIELD via RS8 dispatches the
+    synthesized self-ETB trigger directly, pushing it onto the stack.
+    Resolving the trigger fires the manifest_dread_then_attach_self
+    effect via the predicate-path resolver, which pushes the
+    ManifestDreadChoice pending decision.
+    """
     state = engine.make_synthetic_state(num_battlefield=0, num_hand=0, num_library=0)
     spell_id = state.register_and_inject_object(
         _manifest_dread_then_attach_self_dict(count=1), 0, 2  # ZONE_BATTLEFIELD
     )
-    # Force ETB by triggering apply_effect via push_to_stack +
-    # resolve_top_of_stack_pause: the resolve path routes ETB-effects
-    # through Effect-resolve. Since the source is already on bf, the
-    # ETB-driven push works.
-    state.push_to_stack(spell_id, 0)
+    # Slice 3 bridge: RS8 injection already pushed the self-ETB trigger
+    # onto the stack. Drain it (pause-resolve so pending decision is
+    # preserved for inspection).
     state.resolve_top_of_stack_pause()
 
     pds = state.pending_decisions()
@@ -2745,13 +2762,17 @@ def test_manifest_dread_then_attach_self_empty_library_no_op(engine):
 
 def test_manifest_dread_then_attach_self_one_card_library(engine):
     """A 1-card library manifests the lone card; the source attaches
-    to it. No graveyard step from the manifest path."""
+    to it. No graveyard step from the manifest path.
+
+    Slice 3 bridge: BATTLEFIELD-injection RS8 fires the self-ETB
+    trigger; drain it to surface the pending ManifestDreadChoice.
+    """
     state = engine.make_synthetic_state(num_battlefield=0, num_hand=0, num_library=1)
     lone_id = state.library_snapshot(0)[0]["id"]
     spell_id = state.register_and_inject_object(
         _manifest_dread_then_attach_self_dict(count=1), 0, 2  # ZONE_BATTLEFIELD
     )
-    state.push_to_stack(spell_id, 0)
+    # Slice 3 bridge: drain the RS8-fired self-ETB trigger.
     state.resolve_top_of_stack_pause()
 
     pds = state.pending_decisions()
@@ -2769,11 +2790,21 @@ def test_manifest_dread_then_attach_self_one_card_library(engine):
 
 
 def test_manifest_dread_then_attach_self_count_two_raises_at_resolve(synthetic_state):
-    """count != 1 is deferred — same scope gate as ManifestDread."""
+    """count != 1 is deferred — same scope gate as ManifestDread.
+
+    Slice 3 bridge: the spell resolution itself no longer raises
+    (its `effects` list is empty); the ValueError fires when the
+    synthesized ETB trigger resolves, because that's where the
+    count=2 effect actually dispatches via apply_effect.
+    """
     spell_id = synthetic_state.register_and_inject_object(
         _manifest_dread_then_attach_self_dict(count=2), 0, 0
     )
     synthetic_state.push_to_stack(spell_id, 0)
+    synthetic_state.resolve_top_of_stack_pause()
+    # The Spell resolved; now the synthesized ETB trigger is on the
+    # stack carrying the manifest_dread_then_attach_self count=2
+    # effect — resolving IT raises.
     with pytest.raises(ValueError):
         synthetic_state.resolve_top_of_stack_pause()
 
@@ -2818,6 +2849,8 @@ def test_clone_isolates_manifest_then_attach_pending(synthetic_state):
         _manifest_dread_then_attach_self_dict(count=1), 0, 0
     )
     synthetic_state.push_to_stack(spell_id, 0)
+    synthetic_state.resolve_top_of_stack_pause()
+    # Slice 3 bridge: drain the on-stack ETB trigger.
     synthetic_state.resolve_top_of_stack_pause()
 
     clone = synthetic_state.clone_once()
@@ -3710,6 +3743,8 @@ def test_plain_manifest_dread_then_attach_self_does_not_add_counters(synthetic_s
         _manifest_dread_then_attach_self_dict(count=1), 0, ZONE_HAND
     )
     synthetic_state.push_to_stack(spell_id, 0)
+    synthetic_state.resolve_top_of_stack_pause()
+    # Slice 3 bridge: drain the on-stack ETB trigger.
     synthetic_state.resolve_top_of_stack_pause()
     pds = synthetic_state.pending_decisions()
     assert pds[0]["then_attach_to_source"] is True

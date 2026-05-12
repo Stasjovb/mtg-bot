@@ -844,7 +844,17 @@ def test_etb_triggers_apply_on_creature_resolve(synthetic_state):
     Inject a creature with an ETB-burn trigger onto active player's
     hand, push it on the stack, resolve. Verify (a) the creature
     landed on active player's battlefield (post-resolve worked) AND
-    (b) defending player took 2 damage from the ETB trigger."""
+    (b) defending player took 2 damage from the ETB trigger.
+
+    Slice 3 retired the inline ``etb_effects`` loop. The legacy
+    field is now bridged to a synthesized
+    ``TriggeredAbility { event=Enters, predicate=SourceIsSelf,
+    effect=... }`` at parse time, so the ETB fires through the
+    predicate-path dispatch and lands on the stack as a trigger.
+    Drain it with a second ``resolve_top_of_stack`` to observe the
+    payload — the observable end-state matches the pre-Slice-3
+    inline shape.
+    """
     obj_id = synthetic_state.register_and_inject_object(
         _hill_giant_etb_burn_dict(), 0, ZONE_HAND
     )
@@ -852,6 +862,9 @@ def test_etb_triggers_apply_on_creature_resolve(synthetic_state):
     bf_before = synthetic_state.battlefield_sizes[0]
 
     synthetic_state.push_to_stack(obj_id, 0)
+    synthetic_state.resolve_top_of_stack()
+    # Drain the ETB trigger that landed on the stack post-resolve
+    # (Slice 3 parse-time bridge).
     synthetic_state.resolve_top_of_stack()
 
     # Post-resolve: creature on active player's battlefield (with
@@ -876,6 +889,8 @@ def test_etb_with_draw_cards_effect(synthetic_state):
 
     synthetic_state.push_to_stack(obj_id, 0)
     synthetic_state.resolve_top_of_stack()
+    # Slice 3 bridge: drain the on-stack ETB trigger.
+    synthetic_state.resolve_top_of_stack()
 
     # Source moved out of hand to battlefield (-1), drew 2 (+2) = +1.
     assert synthetic_state.hand_sizes[0] == hand_before - 1 + 2
@@ -892,6 +907,8 @@ def test_etb_with_gain_life_effect(synthetic_state):
     life_before = list(synthetic_state.life_totals)
 
     synthetic_state.push_to_stack(obj_id, 0)
+    synthetic_state.resolve_top_of_stack()
+    # Slice 3 bridge: drain the on-stack ETB trigger.
     synthetic_state.resolve_top_of_stack()
 
     assert synthetic_state.life_totals[0] == life_before[0] + 3
@@ -911,6 +928,11 @@ def test_etb_with_multiple_effects_applies_each_in_order(synthetic_state):
     library_before = synthetic_state.library_sizes[0]
 
     synthetic_state.push_to_stack(obj_id, 0)
+    synthetic_state.resolve_top_of_stack()
+    # Slice 3 bridge: each etb_effects entry becomes a synthesized
+    # TriggeredAbility, so two etb_effects = two triggers on the
+    # stack. Drain both.
+    synthetic_state.resolve_top_of_stack()
     synthetic_state.resolve_top_of_stack()
 
     # First ETB effect: 1 damage to defender.
@@ -993,6 +1015,8 @@ def test_clone_then_resolve_etb_does_not_affect_original(synthetic_state):
     synthetic_state.push_to_stack(obj_id, 0)
     cloned = synthetic_state.clone_once()
 
+    cloned.resolve_top_of_stack()
+    # Slice 3 bridge: drain the on-stack ETB trigger on the clone.
     cloned.resolve_top_of_stack()
 
     # Clone: defender took 2 ETB damage, creature on battlefield.
