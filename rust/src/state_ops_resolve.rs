@@ -5081,12 +5081,14 @@ fn apply_effect(
         // cards for the SOURCE's controller (zone-scan + stack-scan
         // fallback, same shape as DiscardSelf et al.).
         //
-        // **First-slice read-only.** The combat-damage write site in
-        // state_ops_combat.rs is deferred (CE9 closure agent owns the
-        // file); see SEARCH_LIMITATIONS.md. Until that lands, the
-        // amount stays at 0 across normal combat and the Effect
-        // resolves as a no-op. Test harness exercises the read-side
-        // via state.set_resolving_combat_damage_amount(n).
+        // **Write site (I32).** The slot is written per-event inside
+        // `state_ops_combat.rs::apply_damage_pass` — set to
+        // `entry.amount` before per-entry mutations, reset to 0 after.
+        // Mirrors Python's per-event set/reset boundary
+        // (combat.py:618,623 and actions.py:2684,2699). The Effect
+        // reads the slot at resolve time; the apply-loop write keeps
+        // the value live for any trigger that fires during the
+        // event's downstream effects. See RUST_PARITY_GAPS.md I32.
         //
         // amount <= 0 → silent no-op (matches Python).
         Effect::DrawCardsEqualToResolvingCombatDamage => {

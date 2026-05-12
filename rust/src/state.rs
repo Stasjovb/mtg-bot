@@ -809,15 +809,16 @@ pub struct GameState {
     /// combat-damage trigger was fired with. Mirrors Python's
     /// `GameState.resolving_combat_damage_amount` (game.py:2666).
     ///
-    /// **First-slice scope — READ-ONLY in Rust today.** The Rust
-    /// combat-damage assignment (`state_ops_combat.rs`) does NOT
-    /// write this field yet — coordinating with the CE9 closure agent
-    /// editing the same file. The Effect's resolve arm reads it; in
-    /// the absence of a write site the value stays at 0 and the
-    /// Effect resolves as a silent no-op. Test-only setter
-    /// `set_resolving_combat_damage_amount` lets the test harness
-    /// inject the value to exercise the read-side. See
-    /// SEARCH_LIMITATIONS.md for the deferral note.
+    /// **Production write site (I32).**
+    /// `state_ops_combat.rs::GameState::apply_damage_pass` writes the
+    /// slot per-PlanEntry — set to `entry.amount` before the per-entry
+    /// damage / deathtouch / lifelink mutations fire, reset to 0
+    /// after. Mirrors Python's per-event set/reset boundary
+    /// (`combat.py:618,623` granted dealt-damage trigger resolve;
+    /// `actions.py:2684,2699` stack-pushed trigger resolve). The
+    /// `set_resolving_combat_damage_amount` setter remains available
+    /// for harness / cross-engine tests that emulate the apply-loop
+    /// write outside a real combat flow. See RUST_PARITY_GAPS.md I32.
     ///
     /// Not serialized into the fingerprint — like other transient
     /// resolve-time slots, the same observable game state pre- and
