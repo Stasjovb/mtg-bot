@@ -134,52 +134,58 @@ impl GameState {
     /// most once even if both rules would catch it, because the inner
     /// loop short-circuits on the first matching rule.
     fn collect_sba_victims(&self) -> Vec<(u8, u32)> {
+        // CE5 closure: walk battlefield in ETB-timestamp order
+        // (matching Python's centralized `state.battlefield` walk in
+        // `turn.py:1242`) via the shared `bf_iter_etb_sorted` helper.
+        // Pre-CE5 this looped p0-then-p1; that diverged from Python
+        // whenever ETB timestamps interleaved across players. The
+        // helper's stable-sort preserves the pre-CE5 walk for
+        // synthetic-state fixtures (all timestamps == 0), so pinned
+        // baselines stay bit-equal.
         let mut victims = Vec::new();
-        for player in &self.players {
-            for obj in player.battlefield.iter() {
-                let Some(printing) = self.registry.lookup(obj.printing_id) else {
-                    continue;
-                };
-                let Some(toughness) = printing.toughness else {
-                    // Non-creature — neither 704.5f nor 704.5g apply.
-                    continue;
-                };
-                // CR 702.12 — indestructible permanents are exempt
-                // from both destruction-by-damage (704.5g) and
-                // destruction-by-zero-toughness (704.5f). Damage and
-                // counters still track; only the destruction step is
-                // skipped. Round-27 UEOT framework: indestructibility
-                // can also be granted UEOT (Plaza of Heroes), so the
-                // gate folds in any `UeotModifier::GrantKeyword`
-                // entries too.
-                if printing.keywords.iter().any(|k| k == "indestructible")
-                    || obj.ueot_has_keyword("indestructible")
-                {
-                    continue;
-                }
-                // Round-27 UEOT framework: effective_toughness folds
-                // in `ueot_toughness_bonus` (CR 613 layer 7c) on top
-                // of the pre-r27 (printed + counters) calculation, so
-                // an "until end of turn" +N/+M pump shrinks the
-                // lethal-damage and zero-toughness victims correctly.
-                // Round-28: a `UeotModifier::SetBasePT` (CR 613.4
-                // layer 7b) overrides the printed base entirely;
-                // counters + layer-7c bonuses still stack on top.
-                let base_toughness = obj
-                    .ueot_base_pt_override()
-                    .map(|(_, t)| t)
-                    .unwrap_or(toughness as i32);
-                let effective_toughness =
-                    base_toughness + obj.counters + obj.ueot_toughness_bonus();
-                // 704.5f first per CR ordering.
-                if effective_toughness <= 0 {
-                    victims.push((obj.controller, obj.id));
-                    continue;
-                }
-                // 704.5g second — also keyed on effective toughness.
-                if obj.damage as i32 >= effective_toughness {
-                    victims.push((obj.controller, obj.id));
-                }
+        for obj in crate::bf_iter::bf_iter_etb_sorted(self) {
+            let Some(printing) = self.registry.lookup(obj.printing_id) else {
+                continue;
+            };
+            let Some(toughness) = printing.toughness else {
+                // Non-creature — neither 704.5f nor 704.5g apply.
+                continue;
+            };
+            // CR 702.12 — indestructible permanents are exempt
+            // from both destruction-by-damage (704.5g) and
+            // destruction-by-zero-toughness (704.5f). Damage and
+            // counters still track; only the destruction step is
+            // skipped. Round-27 UEOT framework: indestructibility
+            // can also be granted UEOT (Plaza of Heroes), so the
+            // gate folds in any `UeotModifier::GrantKeyword`
+            // entries too.
+            if printing.keywords.iter().any(|k| k == "indestructible")
+                || obj.ueot_has_keyword("indestructible")
+            {
+                continue;
+            }
+            // Round-27 UEOT framework: effective_toughness folds
+            // in `ueot_toughness_bonus` (CR 613 layer 7c) on top
+            // of the pre-r27 (printed + counters) calculation, so
+            // an "until end of turn" +N/+M pump shrinks the
+            // lethal-damage and zero-toughness victims correctly.
+            // Round-28: a `UeotModifier::SetBasePT` (CR 613.4
+            // layer 7b) overrides the printed base entirely;
+            // counters + layer-7c bonuses still stack on top.
+            let base_toughness = obj
+                .ueot_base_pt_override()
+                .map(|(_, t)| t)
+                .unwrap_or(toughness as i32);
+            let effective_toughness =
+                base_toughness + obj.counters + obj.ueot_toughness_bonus();
+            // 704.5f first per CR ordering.
+            if effective_toughness <= 0 {
+                victims.push((obj.controller, obj.id));
+                continue;
+            }
+            // 704.5g second — also keyed on effective toughness.
+            if obj.damage as i32 >= effective_toughness {
+                victims.push((obj.controller, obj.id));
             }
         }
         victims

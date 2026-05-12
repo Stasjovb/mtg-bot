@@ -1058,6 +1058,109 @@ with the `battlefield` field divergence — Python emitting
 Mountain-then-Forest (ETB order), Rust emitting Forest-then-Mountain
 (controller order).
 
+### ~~CE5.~~ CLOSED: `collect_sba_victims` walks the battlefield in ETB-timestamp order (via shared `bf_iter_etb_sorted` helper)
+
+Closed by the CE5 closure slice (`feature/ce5-sba-order`). The
+SBA victim-collection walk in
+`rust/src/state_ops_sba.rs::collect_sba_victims` was a per-player
+`for player in &self.players { for obj in player.battlefield.iter() }`
+loop — p0-first, p1-second, in each player's per-player battlefield
+Vec order. This diverged from Python's `turn.py:1242`
+`_state_based_actions_pass` which walks the centralized
+`state.battlefield` list (ETB-monotone post-CE4). Whenever ETB
+timestamps interleaved across players, the two engines collected
+victims in different orders — observable downstream by death-trigger
+push order once Rust grows a trigger emitter (gated on CE8 substrate
+work).
+
+**Closure shape.** A new shared module
+`rust/src/bf_iter.rs` exposes
+`pub(crate) fn bf_iter_etb_sorted(state: &GameState) -> Vec<&GameObject>`,
+matching the post-CE4 stable-sort precedent already established by
+`state_ops_snapshot.rs::battlefield_snapshot` and
+`state_ops_fingerprint.rs::fingerprint`. The helper collects refs
+across both players' battlefields, then `sort_by_key(|o| o.etb_timestamp)`
+— stable, so synthetic-state ties (every bf object at timestamp 0)
+preserve the pre-CE5 p0-then-p1 walk and pinned baselines stay
+bit-equal. `collect_sba_victims` now consumes the helper:
+
+```rust
+let mut victims = Vec::new();
+for obj in crate::bf_iter::bf_iter_etb_sorted(self) {
+    // ... unchanged 704.5f / 704.5g predicate logic ...
+}
+```
+
+Only the iteration shape changed; the predicate logic (indestructible
+filter, UEOT folds, effective-toughness calculation, 704.5f-before-
+704.5g CR ordering) is bit-equal pre/post.
+
+**Tests.** Five new regression tests in
+`tests_rust/test_sba.py` under the "CE5 closure" section:
+
+- `test_collect_sba_victims_walks_etb_order_across_players` — interleaved
+  ETB stamps across p0/p1, verifies end-state per-graveyard projection
+  (each player's graveyard receives its dead in the relative ETB order
+  they died).
+- `test_collect_sba_victims_etb_order_same_player_interleave` — pins
+  the no-regression case (same-player projection preserves relative
+  ETB order through a cross-player stamp interleave).
+- `test_collect_sba_victims_etb_order_visible_via_clone_and_count` —
+  cross-player simultaneous SBA where p1's creature has a lower ETB
+  stamp than p0's; both end up graveyarded.
+- `test_collect_sba_victims_empty_when_no_lethal` — empty-case path
+  through the helper (no victims emitted).
+- `test_collect_sba_victims_synthetic_state_tie_break_preserves_p0_first`
+  — pins the synthetic-state tie-break (every timestamp == 0 →
+  stable sort preserves p0-then-p1 walk, pre-CE5 baselines bit-equal).
+
+**Fingerprint baselines.** Zero shifts. Synthetic-state bf objects
+all carry `etb_timestamp == 0` (because `make_player` doesn't call
+`reserve_etb_timestamp`), and the stable-sort tie-break preserves
+the pre-CE5 p0-then-p1 walk on those fixtures. Per-graveyard
+contents also stay bit-equal — `apply_sbas` pushes each victim onto
+its controller's graveyard, so the same-player projection of any
+collection order produces the same per-graveyard sequence. The
+CE5 closure becomes observable only downstream: the trigger emitter
+(future CE8) will inherit ETB-ordered death-trigger pushes, and
+cross-engine smoke at interleaved-ETB lethal scenarios will agree
+on the collection order.
+
+Full rust gate (1698 tests) green post-closure. The new shared
+helper is also positioned for CE6 (combat damage assignment) and
+CE7 (cross-player find-first Effect arms) per
+`docs/CE5_CE6_CE7_CLOSURE_PLAYBOOK.md`'s shared-helper proposal —
+those slices will consume `bf_iter_etb_sorted` rather than
+re-inlining the collect-and-sort. The two existing inline sites
+(`state_ops_snapshot.rs:189`, `state_ops_fingerprint.rs:316-327`)
+remain inlined for now; refactoring them to call the helper is a
+follow-up post-CE5 housekeeping pass.
+
+### I27. SBA victim collection walks battlefield in ETB-timestamp order via shared `bf_iter_etb_sorted` helper
+
+Post-CE5, `collect_sba_victims` enumerates battlefield objects via
+the centralized `crate::bf_iter::bf_iter_etb_sorted` helper, which
+stable-sorts refs across both players' battlefields by per-object
+`etb_timestamp`. Tie-break preserves the original p0-then-p1
+insertion-order walk so synthetic-state fixtures (where every bf
+object carries timestamp 0) stay bit-equal with pre-CE5 collection
+order; real ETB-driven flows (`reserve_etb_timestamp` bumps) produce
+strictly-monotonic timestamps and the helper emits the ETB-interleaved
+order Python emits via its centralized `state.battlefield` walk.
+
+The helper is the post-CE4 abstraction step: every battlefield-walking
+reader in the engine that needs ETB-ordered cross-player semantics
+should call `bf_iter_etb_sorted` rather than re-inline a collect-and-
+sort. Today's consumers: `collect_sba_victims` (this invariant).
+Planned consumers per `docs/CE5_CE6_CE7_CLOSURE_PLAYBOOK.md`:
+combat damage assignment (CE6 closure target), cross-player find-first
+Effect arms (CE7 closure target), future trigger emitter (gated on
+CE8 substrate). The two existing inline stable-sort sites
+(`state_ops_snapshot.rs::battlefield_snapshot` line 189 and
+`state_ops_fingerprint.rs::fingerprint` lines 316-327) are CE4-closed
+and produce identical output to the helper; refactoring them to call
+the helper is a follow-up housekeeping pass.
+
 ### I26. `battlefield_snapshot` / fingerprint emit in ETB-timestamp monotonic order
 
 Post-CE4 the observable battlefield order is the per-object
