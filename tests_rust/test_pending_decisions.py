@@ -3311,3 +3311,509 @@ def test_clone_isolates_optional_mana_cost_pending_decisions(synthetic_state):
     # inner-draw value (the cast itself was net zero on hand).
     assert synthetic_state.has_pending_decision() is True
     assert synthetic_state.hand_sizes[0] == hand_before
+
+
+# =====================================================================
+# Round-29 ManifestDreadThenPutPlusOneCountersOnIt substrate (Slimy-
+# Aquarium / Weight-Room Room-door family).
+# =====================================================================
+#
+# Composition strategy mirrors round-29 ManifestDreadThenAttachSelf
+# (Option A): reuses the existing PendingDecision::ManifestDreadChoice
+# substrate but flips a new `then_plus_one_counter_on_manifested` flag
+# to True and carries a `counter_amount` rider. The submit dispatcher
+# reads the flags and, after the standard manifest routing, stamps
+# `manifested.counters += counter_amount` on the just-manifested
+# permanent. Empty library / no-card-manifested → counter step is a
+# natural no-op (mirrors Python's `if not new_ids: return`).
+#
+# Slimy Aquarium prints with counter_amount=1; Weight Room prints with
+# counter_amount=3. Tests exercise both magnitudes.
+
+
+def _manifest_dread_then_counters_dict(
+    count: int = 1, counter_amount: int = 1
+):
+    """A Slimy-Aquarium-shape Room-door trigger: a Sorcery whose body
+    is Effect::ManifestDreadThenPutPlusOneCountersOnIt (the Rust bridge
+    doesn't model Room door-trigger semantics; modeling as a Sorcery
+    exercises the resolve+submit path the same way)."""
+    return {
+        "name": (
+            f"Test ManifestDreadThenCounters c={count} amt={counter_amount}"
+        ),
+        "card_types": ["Sorcery"],
+        "mana_cost": {"B": 1, "U": 1},
+        "effects": [
+            {
+                "kind": "manifest_dread_then_put_plus_one_counters_on_it",
+                "count": count,
+                "counter_amount": counter_amount,
+            },
+        ],
+    }
+
+
+# --- register + round-trip ---
+
+
+def test_manifest_dread_then_counters_registers_round_trip(engine):
+    """Parsing + re-serialization preserves count and counter_amount."""
+    reg = engine.Registry()
+    pid = reg.register_printing(
+        _manifest_dread_then_counters_dict(count=1, counter_amount=3)
+    )
+    effects = reg.get_printing_effects(pid)
+    assert len(effects) == 1
+    assert effects[0]["kind"] == (
+        "manifest_dread_then_put_plus_one_counters_on_it"
+    )
+    assert effects[0]["count"] == 1
+    assert effects[0]["counter_amount"] == 3
+
+
+def test_manifest_dread_then_counters_default_counter_amount_is_1(engine):
+    """An omitted counter_amount field defaults to 1 — mirrors Python's
+    `counter_amount: int = 1` dataclass default."""
+    reg = engine.Registry()
+    pid = reg.register_printing({
+        "name": "Default-counter-amount Test",
+        "card_types": ["Sorcery"],
+        "mana_cost": {"B": 1},
+        "effects": [
+            {"kind": "manifest_dread_then_put_plus_one_counters_on_it"},
+        ],
+    })
+    effects = reg.get_printing_effects(pid)
+    assert effects[0]["count"] == 1
+    assert effects[0]["counter_amount"] == 1
+
+
+def test_manifest_dread_then_counters_negative_count_rejected(engine):
+    """A negative count value raises at parse time (mirrors
+    ManifestDread)."""
+    reg = engine.Registry()
+    with pytest.raises(ValueError):
+        reg.register_printing({
+            "name": "Bad ManifestDreadThenCounters count",
+            "card_types": ["Sorcery"],
+            "mana_cost": {"B": 1},
+            "effects": [
+                {
+                    "kind": (
+                        "manifest_dread_then_put_plus_one_counters_on_it"
+                    ),
+                    "count": -1,
+                },
+            ],
+        })
+
+
+def test_manifest_dread_then_counters_negative_counter_amount_rejected(engine):
+    """A negative counter_amount value raises at parse time."""
+    reg = engine.Registry()
+    with pytest.raises(ValueError):
+        reg.register_printing({
+            "name": "Bad ManifestDreadThenCounters counter_amount",
+            "card_types": ["Sorcery"],
+            "mana_cost": {"B": 1},
+            "effects": [
+                {
+                    "kind": (
+                        "manifest_dread_then_put_plus_one_counters_on_it"
+                    ),
+                    "counter_amount": -2,
+                },
+            ],
+        })
+
+
+# --- happy path: manifest-then-counter chain ---
+
+
+def test_manifest_dread_then_counters_happy_path_stamps_counters(synthetic_state):
+    """Cast the spell from hand. On resolve:
+    (1) Top 2 of p0 library popped into ManifestDreadChoice with
+        then_plus_one_counter_on_manifested=True and counter_amount=1.
+    (2) Submit topmost: it lands on bf as manifested.
+    (3) manifested.counters == 1.
+    """
+    top_two = [obj["id"] for obj in synthetic_state.library_snapshot(0)[:2]]
+
+    spell_id = synthetic_state.register_and_inject_object(
+        _manifest_dread_then_counters_dict(count=1, counter_amount=1),
+        0,
+        ZONE_HAND,
+    )
+    synthetic_state.push_to_stack(spell_id, 0)
+    synthetic_state.resolve_top_of_stack_pause()
+
+    pds = synthetic_state.pending_decisions()
+    assert len(pds) == 1
+    pd = pds[0]
+    assert pd["kind"] == "ManifestDreadChoice"
+    assert pd["then_plus_one_counter_on_manifested"] is True
+    assert pd["then_attach_to_source"] is False
+    assert pd["counter_amount"] == 1
+    assert pd["cards"] == top_two
+
+    chosen_id = top_two[0]
+    synthetic_state.submit_manifest_dread_decision(chosen_id)
+    assert synthetic_state.has_pending_decision() is False
+    assert synthetic_state.find_object_zone(chosen_id) == ZONE_BATTLEFIELD
+    assert (
+        synthetic_state.find_object_zone(top_two[1]) == ZONE_GRAVEYARD
+    )
+    # Manifested creature has +1/+1 counter stamped.
+    bf = synthetic_state.battlefield_snapshot()
+    manifested = next(d for d in bf if d["id"] == chosen_id)
+    assert manifested["counters"] == 1
+
+
+def test_manifest_dread_then_counters_weight_room_three_counters(synthetic_state):
+    """Weight Room emits counter_amount=3 — submit lands +3 counters
+    on the manifested creature."""
+    top_two = [obj["id"] for obj in synthetic_state.library_snapshot(0)[:2]]
+
+    spell_id = synthetic_state.register_and_inject_object(
+        _manifest_dread_then_counters_dict(count=1, counter_amount=3),
+        0,
+        ZONE_HAND,
+    )
+    synthetic_state.push_to_stack(spell_id, 0)
+    synthetic_state.resolve_top_of_stack_pause()
+
+    chosen_id = top_two[0]
+    synthetic_state.submit_manifest_dread_decision(chosen_id)
+    bf = synthetic_state.battlefield_snapshot()
+    manifested = next(d for d in bf if d["id"] == chosen_id)
+    assert manifested["counters"] == 3
+
+
+def test_manifest_dread_then_counters_picks_non_topmost(synthetic_state):
+    """Submitting cards[1] (non-topmost) routes it to bf; the counter
+    lands on that picked card (not the topmost)."""
+    top_two = [obj["id"] for obj in synthetic_state.library_snapshot(0)[:2]]
+
+    spell_id = synthetic_state.register_and_inject_object(
+        _manifest_dread_then_counters_dict(count=1, counter_amount=1),
+        0,
+        ZONE_HAND,
+    )
+    synthetic_state.push_to_stack(spell_id, 0)
+    synthetic_state.resolve_top_of_stack_pause()
+
+    chosen_id = top_two[1]
+    synthetic_state.submit_manifest_dread_decision(chosen_id)
+    assert synthetic_state.find_object_zone(chosen_id) == ZONE_BATTLEFIELD
+    assert synthetic_state.find_object_zone(top_two[0]) == ZONE_GRAVEYARD
+    bf = synthetic_state.battlefield_snapshot()
+    manifested = next(d for d in bf if d["id"] == chosen_id)
+    assert manifested["counters"] == 1
+    # The other examined card is now in graveyard; it should NOT carry
+    # the counter (zone change wipes per the manifest-routing reset; but
+    # the gy-route path doesn't touch counters either).
+    gy = synthetic_state.graveyard_snapshot(0)
+    routed_to_gy = next(d for d in gy if d["id"] == top_two[0])
+    assert routed_to_gy["counters"] == 0
+
+
+def test_manifest_dread_then_counters_auto_resolve_picks_topmost(synthetic_state):
+    """auto_resolve('default') picks cards[0] AND stamps the counter."""
+    top_two = [obj["id"] for obj in synthetic_state.library_snapshot(0)[:2]]
+
+    spell_id = synthetic_state.register_and_inject_object(
+        _manifest_dread_then_counters_dict(count=1, counter_amount=1),
+        0,
+        ZONE_HAND,
+    )
+    synthetic_state.push_to_stack(spell_id, 0)
+    synthetic_state.resolve_top_of_stack_pause()
+    synthetic_state.auto_resolve_pending_decisions("default")
+
+    assert synthetic_state.has_pending_decision() is False
+    assert synthetic_state.find_object_zone(top_two[0]) == ZONE_BATTLEFIELD
+    bf = synthetic_state.battlefield_snapshot()
+    manifested = next(d for d in bf if d["id"] == top_two[0])
+    assert manifested["counters"] == 1
+
+
+def test_manifest_dread_then_counters_full_resolve_auto(synthetic_state):
+    """The non-pause resolve_top_of_stack auto-resolves and counters."""
+    top_id_before = synthetic_state.library_snapshot(0)[0]["id"]
+    spell_id = synthetic_state.register_and_inject_object(
+        _manifest_dread_then_counters_dict(count=1, counter_amount=1),
+        0,
+        ZONE_HAND,
+    )
+    synthetic_state.push_to_stack(spell_id, 0)
+    synthetic_state.resolve_top_of_stack()
+
+    assert synthetic_state.has_pending_decision() is False
+    assert (
+        synthetic_state.find_object_zone(top_id_before)
+        == ZONE_BATTLEFIELD
+    )
+    bf = synthetic_state.battlefield_snapshot()
+    manifested = next(d for d in bf if d["id"] == top_id_before)
+    assert manifested["counters"] == 1
+
+
+# --- source LTB during decision window: counter still lands ---
+
+
+def test_manifest_dread_then_counters_source_ltb_still_counters(synthetic_state):
+    """If the source spell-permanent has LTB'd between resolve-push and
+    submit, the counter add still fires — the counter step targets the
+    just-manifested permanent (not the source). Mirrors Python's class
+    which back-references the manifested face-down, not the source."""
+    top_two = [obj["id"] for obj in synthetic_state.library_snapshot(0)[:2]]
+
+    spell_id = synthetic_state.register_and_inject_object(
+        _manifest_dread_then_counters_dict(count=1, counter_amount=2),
+        0,
+        ZONE_HAND,
+    )
+    synthetic_state.push_to_stack(spell_id, 0)
+    synthetic_state.resolve_top_of_stack_pause()
+    assert synthetic_state.has_pending_decision() is True
+
+    # The source is a Sorcery — it has already routed to graveyard
+    # post-resolve. Confirm and proceed with the submit.
+    assert synthetic_state.find_object_zone(spell_id) == ZONE_GRAVEYARD
+
+    chosen_id = top_two[0]
+    synthetic_state.submit_manifest_dread_decision(chosen_id)
+
+    # Manifest completed AND counter add fired — the counter step is
+    # independent of the source's bf state.
+    assert synthetic_state.find_object_zone(chosen_id) == ZONE_BATTLEFIELD
+    bf = synthetic_state.battlefield_snapshot()
+    manifested = next(d for d in bf if d["id"] == chosen_id)
+    assert manifested["counters"] == 2
+    assert synthetic_state.has_pending_decision() is False
+
+
+# --- empty / 1-card library partials ---
+
+
+def test_manifest_dread_then_counters_empty_library_no_op(engine):
+    """Empty library: pending has empty cards; auto-resolve drains as
+    no-op; no card manifested → no counter add (mirrors Python's
+    `if not new_ids: return` early-exit)."""
+    state = engine.make_synthetic_state(
+        num_battlefield=0, num_hand=0, num_library=0
+    )
+    spell_id = state.register_and_inject_object(
+        _manifest_dread_then_counters_dict(count=1, counter_amount=3),
+        0,
+        ZONE_BATTLEFIELD,
+    )
+    state.push_to_stack(spell_id, 0)
+    state.resolve_top_of_stack_pause()
+
+    pds = state.pending_decisions()
+    assert len(pds) == 1
+    assert pds[0]["kind"] == "ManifestDreadChoice"
+    assert pds[0]["then_plus_one_counter_on_manifested"] is True
+    assert pds[0]["counter_amount"] == 3
+    assert pds[0]["cards"] == []
+
+    state.auto_resolve_pending_decisions("default")
+    assert state.has_pending_decision() is False
+    # No card materialized on bf (library was empty → nothing to
+    # manifest → counter step naturally a no-op). Every object on bf
+    # carries counters == 0 (no new permanent surfaced from the
+    # pending drain).
+    bf_after = state.battlefield_snapshot()
+    for obj in bf_after:
+        assert obj["counters"] == 0
+
+
+def test_manifest_dread_then_counters_one_card_library(engine):
+    """A 1-card library manifests the lone card; the counter lands on
+    it. No graveyard step from the manifest path."""
+    state = engine.make_synthetic_state(
+        num_battlefield=0, num_hand=0, num_library=1
+    )
+    lone_id = state.library_snapshot(0)[0]["id"]
+    spell_id = state.register_and_inject_object(
+        _manifest_dread_then_counters_dict(count=1, counter_amount=1),
+        0,
+        ZONE_BATTLEFIELD,
+    )
+    state.push_to_stack(spell_id, 0)
+    state.resolve_top_of_stack_pause()
+
+    pds = state.pending_decisions()
+    assert pds[0]["cards"] == [lone_id]
+    assert pds[0]["then_plus_one_counter_on_manifested"] is True
+
+    state.submit_manifest_dread_decision(lone_id)
+    assert state.find_object_zone(lone_id) == ZONE_BATTLEFIELD
+    bf = state.battlefield_snapshot()
+    manifested = next(d for d in bf if d["id"] == lone_id)
+    assert manifested["counters"] == 1
+
+
+# --- count > 1 deferred ---
+
+
+def test_manifest_dread_then_counters_count_two_raises_at_resolve(synthetic_state):
+    """count != 1 is deferred — same scope gate as ManifestDread."""
+    spell_id = synthetic_state.register_and_inject_object(
+        _manifest_dread_then_counters_dict(count=2, counter_amount=1),
+        0,
+        ZONE_HAND,
+    )
+    synthetic_state.push_to_stack(spell_id, 0)
+    with pytest.raises(ValueError):
+        synthetic_state.resolve_top_of_stack_pause()
+
+
+# --- regression: plain ManifestDread does NOT add counters ---
+
+
+def test_plain_manifest_dread_does_not_add_counters(synthetic_state):
+    """Regression: the existing Effect::ManifestDread arm sets
+    then_plus_one_counter_on_manifested=false, so submitting the
+    resulting pending must NOT stamp counters on the manifested
+    permanent."""
+    top_two = [obj["id"] for obj in synthetic_state.library_snapshot(0)[:2]]
+
+    spell_id = synthetic_state.register_and_inject_object(
+        _manifest_dread_dict(count=1), 0, ZONE_HAND
+    )
+    synthetic_state.push_to_stack(spell_id, 0)
+    synthetic_state.resolve_top_of_stack_pause()
+    pds = synthetic_state.pending_decisions()
+    assert pds[0]["then_plus_one_counter_on_manifested"] is False
+    assert pds[0]["counter_amount"] == 0
+
+    chosen_id = top_two[0]
+    synthetic_state.submit_manifest_dread_decision(chosen_id)
+    bf = synthetic_state.battlefield_snapshot()
+    manifested = next(d for d in bf if d["id"] == chosen_id)
+    assert manifested["counters"] == 0
+
+
+# --- regression: ManifestDreadThenAttachSelf still works ---
+
+
+def test_plain_manifest_dread_then_attach_self_does_not_add_counters(synthetic_state):
+    """Regression: the ManifestDreadThenAttachSelf path sets
+    then_plus_one_counter_on_manifested=false; the attach still fires
+    but no counters land."""
+    top_two = [obj["id"] for obj in synthetic_state.library_snapshot(0)[:2]]
+
+    spell_id = synthetic_state.register_and_inject_object(
+        _manifest_dread_then_attach_self_dict(count=1), 0, ZONE_HAND
+    )
+    synthetic_state.push_to_stack(spell_id, 0)
+    synthetic_state.resolve_top_of_stack_pause()
+    pds = synthetic_state.pending_decisions()
+    assert pds[0]["then_attach_to_source"] is True
+    assert pds[0]["then_plus_one_counter_on_manifested"] is False
+
+    chosen_id = top_two[0]
+    synthetic_state.submit_manifest_dread_decision(chosen_id)
+    bf = synthetic_state.battlefield_snapshot()
+    manifested = next(d for d in bf if d["id"] == chosen_id)
+    assert manifested["counters"] == 0
+    # Attach still landed — source equipment attached to the manifested.
+    equipment = next(d for d in bf if d["id"] == spell_id)
+    assert equipment["attached_to"] == chosen_id
+
+
+# --- clone isolation ---
+
+
+def test_clone_isolates_manifest_then_counters_pending(synthetic_state):
+    """clone_once() deep-clones the ManifestDreadChoice including the
+    new counter flags. Resolving the clone leaves the source's queue
+    intact and the source's bf-counter state unchanged."""
+    top_two = [obj["id"] for obj in synthetic_state.library_snapshot(0)[:2]]
+    spell_id = synthetic_state.register_and_inject_object(
+        _manifest_dread_then_counters_dict(count=1, counter_amount=1),
+        0,
+        ZONE_HAND,
+    )
+    synthetic_state.push_to_stack(spell_id, 0)
+    synthetic_state.resolve_top_of_stack_pause()
+
+    clone = synthetic_state.clone_once()
+    assert clone.has_pending_decision() is True
+    clone.submit_manifest_dread_decision(top_two[0])
+    assert clone.has_pending_decision() is False
+    clone_bf = clone.battlefield_snapshot()
+    clone_manifested = next(d for d in clone_bf if d["id"] == top_two[0])
+    assert clone_manifested["counters"] == 1
+
+    # Source state still has the pending decision; nothing landed on bf
+    # in the source state from the submit (the submit fired on clone
+    # only).
+    assert synthetic_state.has_pending_decision() is True
+    src_bf = synthetic_state.battlefield_snapshot()
+    src_manifested = next(
+        (d for d in src_bf if d["id"] == top_two[0]), None
+    )
+    # The manifested card hasn't yet been routed to source's bf.
+    assert src_manifested is None
+
+
+# --- fingerprint sensitivity to the counter-rider fields ---
+
+
+def test_fingerprint_differs_then_counter_vs_plain_manifest_dread(engine):
+    """A pending ManifestDreadChoice with
+    then_plus_one_counter_on_manifested=true (+ counter_amount=1)
+    fingerprints differently from the same shape with the flag false.
+    Guards the fingerprint serializer's inclusion of the new slots."""
+    s1 = engine.make_synthetic_state()
+    s2 = engine.make_synthetic_state()
+
+    spell1 = s1.register_and_inject_object(
+        _manifest_dread_dict(count=1), 0, ZONE_HAND
+    )
+    s1.push_to_stack(spell1, 0)
+    s1.resolve_top_of_stack_pause()
+
+    spell2 = s2.register_and_inject_object(
+        _manifest_dread_then_counters_dict(count=1, counter_amount=1),
+        0,
+        ZONE_HAND,
+    )
+    s2.push_to_stack(spell2, 0)
+    s2.resolve_top_of_stack_pause()
+
+    fp1 = s1.fingerprint()
+    fp2 = s2.fingerprint()
+    assert fp1 != fp2
+
+
+def test_fingerprint_differs_by_counter_amount(engine):
+    """Two pending decisions identical except for counter_amount
+    fingerprint differently — the rider scalar must participate in
+    the fingerprint."""
+    s1 = engine.make_synthetic_state()
+    s2 = engine.make_synthetic_state()
+
+    spell1 = s1.register_and_inject_object(
+        _manifest_dread_then_counters_dict(count=1, counter_amount=1),
+        0,
+        ZONE_HAND,
+    )
+    s1.push_to_stack(spell1, 0)
+    s1.resolve_top_of_stack_pause()
+
+    spell2 = s2.register_and_inject_object(
+        _manifest_dread_then_counters_dict(count=1, counter_amount=3),
+        0,
+        ZONE_HAND,
+    )
+    s2.push_to_stack(spell2, 0)
+    s2.resolve_top_of_stack_pause()
+
+    fp1 = s1.fingerprint()
+    fp2 = s2.fingerprint()
+    assert fp1 != fp2

@@ -262,6 +262,8 @@ pub(crate) fn auto_resolve_pending(
                 controller,
                 cards,
                 then_attach_to_source,
+                then_plus_one_counter_on_manifested,
+                counter_amount,
             } => {
                 // "default" / "manifest_top" → pick cards[0] (the
                 // topmost popped — matches Python's no-agent-seated
@@ -272,6 +274,12 @@ pub(crate) fn auto_resolve_pending(
                 // `then_attach_to_source` rider (round-29): after the
                 // manifest routing, if true, stamp source.attached_to
                 // = manifested_id. Silent partial if source LTB'd.
+                //
+                // `then_plus_one_counter_on_manifested` rider (round-29
+                // ManifestDreadThenPutPlusOneCountersOnIt): after the
+                // manifest routing, if true, stamp
+                // `manifested.counters += counter_amount`. No-op when
+                // cards was empty (no manifest happened).
                 resolve_manifest_dread_to_battlefield(
                     state,
                     source_obj_id,
@@ -279,6 +287,8 @@ pub(crate) fn auto_resolve_pending(
                     cards,
                     /*chosen_idx*/ 0,
                     then_attach_to_source,
+                    then_plus_one_counter_on_manifested,
+                    counter_amount,
                 )?;
             }
             PendingDecision::OptionalManaCostChoice {
@@ -459,11 +469,23 @@ fn resolve_pick_card_to_hand(
 /// applied, attach skipped. Mirrors Python's `manifested is None`
 /// fall-through and the implicit "Equipment gone" path.
 ///
+/// **`then_plus_one_counter_on_manifested` + `counter_amount` rider
+/// (round-29 ManifestDreadThenPutPlusOneCountersOnIt).** After the
+/// manifest routing completes, if the flag is `true`, stamp
+/// `manifested.counters += counter_amount` on the just-manifested
+/// permanent (located by the captured local `manifested_id`). When the
+/// cards Vec was empty the early-return path skips both this and the
+/// attach rider — mirrors Python's `if not new_ids: return` early-exit.
+/// (We use the local `manifested_id` rather than a battlefield walk
+/// for the counter step because we JUST routed the card to bf moments
+/// ago — it's reachable on `state.players[pidx].battlefield` and
+/// nothing else has had priority to remove it.)
+///
 /// Out-of-range `chosen_idx` or an empty cards Vec returns Ok(()) —
 /// the empty case is the legitimate library-exhausted no-op path.
 /// (When `then_attach_to_source` is true and the cards Vec is empty,
 /// no manifested permanent exists so the attach step is naturally
-/// skipped.)
+/// skipped. Same for the counter step.)
 fn resolve_manifest_dread_to_battlefield(
     state: &mut GameState,
     source_obj_id: u32,
@@ -471,10 +493,13 @@ fn resolve_manifest_dread_to_battlefield(
     cards: Vec<GameObject>,
     chosen_idx: usize,
     then_attach_to_source: bool,
+    then_plus_one_counter_on_manifested: bool,
+    counter_amount: i32,
 ) -> PyResult<()> {
     if chosen_idx >= cards.len() {
         // Empty cards Vec (library was empty) → no-op success. No
-        // manifested permanent → attach step is naturally a no-op.
+        // manifested permanent → attach + counter steps naturally
+        // no-op.
         return Ok(());
     }
     let pidx = controller as usize;
@@ -534,6 +559,22 @@ fn resolve_manifest_dread_to_battlefield(
             }
         }
         // else: source LTB'd → silent partial (manifest already done).
+    }
+    // Round-29 ManifestDreadThenPutPlusOneCountersOnIt counter follow-up.
+    // The manifested permanent was just routed to bf on
+    // state.players[pidx].battlefield; locate it by the captured
+    // `manifested_id` and stamp `counters += counter_amount`. Net-i32
+    // counter model: positive delta = N net +1/+1 counters (per
+    // state_ops_counters.rs).
+    if then_plus_one_counter_on_manifested && counter_amount != 0 {
+        let bf_mut: &mut Vec<GameObject> =
+            Arc::make_mut(&mut state.players[pidx].battlefield);
+        for obj in bf_mut.iter_mut() {
+            if obj.id == manifested_id {
+                obj.counters += counter_amount;
+                break;
+            }
+        }
     }
     Ok(())
 }
@@ -828,6 +869,8 @@ impl GameState {
                     controller,
                     cards,
                     then_attach_to_source,
+                    then_plus_one_counter_on_manifested,
+                    counter_amount,
                 } => {
                     d.set_item("kind", "ManifestDreadChoice")?;
                     d.set_item("source_obj_id", *source_obj_id)?;
@@ -835,6 +878,11 @@ impl GameState {
                     let card_ids: Vec<u32> = cards.iter().map(|o| o.id).collect();
                     d.set_item("cards", card_ids)?;
                     d.set_item("then_attach_to_source", *then_attach_to_source)?;
+                    d.set_item(
+                        "then_plus_one_counter_on_manifested",
+                        *then_plus_one_counter_on_manifested,
+                    )?;
+                    d.set_item("counter_amount", *counter_amount)?;
                 }
                 PendingDecision::LookAtTopNRevealOrCounterChoice {
                     source_obj_id,
@@ -1287,13 +1335,29 @@ impl GameState {
         };
         // Validation passed — consume the head and route.
         let decision = self.pending_decisions.remove(0);
-        let (source_obj_id, controller, cards, then_attach_to_source) = match decision {
+        let (
+            source_obj_id,
+            controller,
+            cards,
+            then_attach_to_source,
+            then_plus_one_counter_on_manifested,
+            counter_amount,
+        ) = match decision {
             PendingDecision::ManifestDreadChoice {
                 source_obj_id,
                 controller,
                 cards,
                 then_attach_to_source,
-            } => (source_obj_id, controller, cards, then_attach_to_source),
+                then_plus_one_counter_on_manifested,
+                counter_amount,
+            } => (
+                source_obj_id,
+                controller,
+                cards,
+                then_attach_to_source,
+                then_plus_one_counter_on_manifested,
+                counter_amount,
+            ),
             _ => unreachable!("validated above"),
         };
         resolve_manifest_dread_to_battlefield(
@@ -1303,6 +1367,8 @@ impl GameState {
             cards,
             chosen_idx,
             then_attach_to_source,
+            then_plus_one_counter_on_manifested,
+            counter_amount,
         )
     }
 

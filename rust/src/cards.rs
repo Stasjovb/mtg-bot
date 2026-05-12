@@ -1538,6 +1538,70 @@ pub enum Effect {
     /// defaults to 1, parse-accepts any non-negative integer for
     /// forward-compat round-trip.
     ManifestDreadThenAttachSelf { count: i32 },
+    /// **Round-29 manifest-then-counter composition (Moldering-Gym /
+    /// Weight-Room family).** Mirrors Python's
+    /// `ManifestDreadThenPutPlusOneCountersOnIt`
+    /// (`effects/generic/library_lookat.py:451` — Duskmourn Room door
+    /// triggers Slimy Aquarium (`counter_amount = 1`) and Weight Room
+    /// (`counter_amount = 3`)). Oracle text: *"manifest dread, then
+    /// put a +1/+1 counter on that creature"* / *"manifest dread,
+    /// then put three +1/+1 counters on that creature"*.
+    ///
+    /// **Composition strategy (Option A — precedent from
+    /// `ManifestDreadThenAttachSelf`).** Stitches the round-28
+    /// `Effect::ManifestDread` substrate with the existing +1/+1
+    /// counter scalar (`GameObject.counters: i32`). Adds NO new
+    /// `PendingDecision` variant — instead extends
+    /// `PendingDecision::ManifestDreadChoice` with a
+    /// `then_plus_one_counter_on_manifested: bool` flag and a
+    /// `counter_amount: i32` rider. The submit dispatcher reads the
+    /// flag and stamps `obj.counters += counter_amount` on the
+    /// manifested creature as a follow-up.
+    ///
+    /// **Resolve.** Pop top `min(2, library_len)` cards into a
+    /// `ManifestDreadChoice` with `then_plus_one_counter_on_manifested
+    /// = true` and `counter_amount = self.counter_amount`. Controller
+    /// convention matches plain `Effect::ManifestDread`:
+    /// `state.active_player` — these are Room-door triggers cast
+    /// during the controller's turn, so `active_player` is the
+    /// resolving controller. (Differs from `ManifestDreadThenAttachSelf`,
+    /// which has to read the source's bf controller because it's an
+    /// Equipment ETB; this variant doesn't need the source on a bf at
+    /// all — the counter target is the just-manifested face-down, not
+    /// the source.)
+    ///
+    /// **Submit + counter add.** After the existing manifest-dread
+    /// routing completes (chosen → bf with ETB reset, rest →
+    /// graveyard), if `then_plus_one_counter_on_manifested` is true
+    /// AND a card was actually manifested (cards Vec was non-empty
+    /// and a chosen card landed on bf), locate the manifested
+    /// permanent by id and stamp `obj.counters += counter_amount`.
+    /// If the cards Vec was empty (library was exhausted at resolve),
+    /// no manifest happened and the counter step is naturally a no-op
+    /// — mirrors Python's `if not new_ids: return` early-exit. (The
+    /// manifested-id is captured locally inside the submit helper
+    /// rather than searched globally, so an LTB-during-decision-window
+    /// has nothing to defend against here: the helper just-routed the
+    /// chosen card to bf moments earlier, so it's reachable.)
+    ///
+    /// **Empty / 1-card library partials.** Same as `ManifestDread`:
+    /// empty library → pending with empty cards → drain as O(1) no-op
+    /// (no manifest, no counter add — matches Python's "no new_ids →
+    /// return" path). 1-card library → manifest the lone card and
+    /// stamp the counter.
+    ///
+    /// **First-slice scope.** `count = 1` ONLY at the manifest-dread
+    /// iteration level (inherits the `ManifestDread` gate — count > 1
+    /// is the multi-iter shape; no Python printing of this class
+    /// emits count != 1). `counter_amount` accepts arbitrary
+    /// non-negative integers — Slimy Aquarium emits 1, Weight Room
+    /// emits 3, future printings may pick other values.
+    ///
+    /// **Schema.** `count: i32` (manifest-dread iteration count,
+    /// defaults to 1) and `counter_amount: i32` (defaults to 1).
+    /// Both parse-accept any non-negative integer for forward-compat
+    /// round-trip; non-negative gate fires at parse.
+    ManifestDreadThenPutPlusOneCountersOnIt { count: i32, counter_amount: i32 },
     /// **Round-29 coverage extension.** Intervening-if effect keyed
     /// on the EoE "Void" condition. At resolve time, if Void is
     /// active (a nonland permanent left the battlefield this turn
@@ -2482,6 +2546,44 @@ fn parse_effect(dict: &Bound<'_, PyDict>) -> PyResult<Effect> {
             }
             Ok(Effect::ManifestDreadThenAttachSelf { count })
         }
+        "manifest_dread_then_put_plus_one_counters_on_it" => {
+            // Round-29 ManifestDreadThenPutPlusOneCountersOnIt
+            // (Moldering-Gym / Weight-Room family) composition.
+            // Schema mirrors `manifest_dread`'s `count` plus a new
+            // `counter_amount` rider — both default to 1, both must
+            // be non-negative. Slimy Aquarium emits counter_amount=1,
+            // Weight Room emits counter_amount=3.
+            let count: i32 = match dict.get_item("count")? {
+                Some(c) => c.extract().map_err(|e| {
+                    PyValueError::new_err(format!(
+                        "manifest_dread_then_put_plus_one_counters_on_it.count must be an integer (got: {e})"
+                    ))
+                })?,
+                None => 1,
+            };
+            if count < 0 {
+                return Err(PyValueError::new_err(format!(
+                    "manifest_dread_then_put_plus_one_counters_on_it: count must be non-negative, got {count}"
+                )));
+            }
+            let counter_amount: i32 = match dict.get_item("counter_amount")? {
+                Some(c) => c.extract().map_err(|e| {
+                    PyValueError::new_err(format!(
+                        "manifest_dread_then_put_plus_one_counters_on_it.counter_amount must be an integer (got: {e})"
+                    ))
+                })?,
+                None => 1,
+            };
+            if counter_amount < 0 {
+                return Err(PyValueError::new_err(format!(
+                    "manifest_dread_then_put_plus_one_counters_on_it: counter_amount must be non-negative, got {counter_amount}"
+                )));
+            }
+            Ok(Effect::ManifestDreadThenPutPlusOneCountersOnIt {
+                count,
+                counter_amount,
+            })
+        }
         "set_base_pt_until_eot" => {
             // Required `power` and `toughness` integer fields. No
             // defaults — every Python card emission spells both out.
@@ -3067,7 +3169,7 @@ fn parse_effect(dict: &Bound<'_, PyDict>) -> PyResult<Effect> {
             Ok(Effect::Sequence { effects: children })
         }
         other => Err(PyValueError::new_err(format!(
-            "unknown effect kind {other:?}; valid: deal_damage, draw_cards, gain_life, return_to_hand, mill, mill_target_player, exile_target, tap_target, untap_target, sacrifice, add_counters, discard_card, scry_n, destroy_target, damage_each_opponent, damage_each_creature, create_token, add_mana_to_pool, search_library_for_basic_land_tapped, put_plus_one_counter_on_self, surveil, counter_target_spell, return_creature_from_your_graveyard_to_battlefield, discard_self, each_opponent_loses_life, lose_life, target_opponent_loses_life, each_opponent_discards, destroy_all_creatures, destroy_target_nonland_permanent, destroy_target_artifact, destroy_target_land, deal_damage_any_target, pump_self_until_eot, pump_target_creature_until_eot, sequence, pump_creatures_you_control_until_eot, return_creature_from_your_graveyard_to_hand, put_plus_one_counter_on_each_creature_you_control, put_plus_one_counter_on_creature_you_control, add_n_mana_of_chosen_color, search_library_for_card, pump_creatures_opponents_control_until_eot, put_card_from_graveyard_on_bottom_of_library, move_self_counters_to_target_creature_you_control, deal_damage_equal_to_source_power_any_target, tap_target_artifact_or_creature, conditional_on_tapped_creatures, put_plus_one_counter_on_each_of_up_to_n_target_creatures, put_charge_counters_on_self, create_token_copy_of_target_creature_you_control, optional_sac_artifact_for_effect, owner_puts_target_artifact_or_creature_on_top_or_bottom_of_library, attach_to_target_creature_you_control, destroy_enchanted_permanent, tap_enchanted_permanent, exile_target_creature_until_source_leaves, exile_opponents_nonland_permanent_until_leaves, may_do, look_top_n_put_one_in_hand_rest_to_graveyard, choose_one_mode, if_you_do, each_opponent_mills_cards, pump_target_artifact_or_creature_until_eot, each_opponent_sacrifices_creature, grant_keyword_to_target_creature_until_eot, untap_target_other_permanent, tap_another_target_creature, return_all_creatures_from_your_graveyard_to_battlefield, set_base_pt_until_eot, manifest_dread, manifest_dread_then_attach_self, conditional_if_void, deal_damage_to_opponent_creature, optional_mana_cost_then_effect"
+            "unknown effect kind {other:?}; valid: deal_damage, draw_cards, gain_life, return_to_hand, mill, mill_target_player, exile_target, tap_target, untap_target, sacrifice, add_counters, discard_card, scry_n, destroy_target, damage_each_opponent, damage_each_creature, create_token, add_mana_to_pool, search_library_for_basic_land_tapped, put_plus_one_counter_on_self, surveil, counter_target_spell, return_creature_from_your_graveyard_to_battlefield, discard_self, each_opponent_loses_life, lose_life, target_opponent_loses_life, each_opponent_discards, destroy_all_creatures, destroy_target_nonland_permanent, destroy_target_artifact, destroy_target_land, deal_damage_any_target, pump_self_until_eot, pump_target_creature_until_eot, sequence, pump_creatures_you_control_until_eot, return_creature_from_your_graveyard_to_hand, put_plus_one_counter_on_each_creature_you_control, put_plus_one_counter_on_creature_you_control, add_n_mana_of_chosen_color, search_library_for_card, pump_creatures_opponents_control_until_eot, put_card_from_graveyard_on_bottom_of_library, move_self_counters_to_target_creature_you_control, deal_damage_equal_to_source_power_any_target, tap_target_artifact_or_creature, conditional_on_tapped_creatures, put_plus_one_counter_on_each_of_up_to_n_target_creatures, put_charge_counters_on_self, create_token_copy_of_target_creature_you_control, optional_sac_artifact_for_effect, owner_puts_target_artifact_or_creature_on_top_or_bottom_of_library, attach_to_target_creature_you_control, destroy_enchanted_permanent, tap_enchanted_permanent, exile_target_creature_until_source_leaves, exile_opponents_nonland_permanent_until_leaves, may_do, look_top_n_put_one_in_hand_rest_to_graveyard, choose_one_mode, if_you_do, each_opponent_mills_cards, pump_target_artifact_or_creature_until_eot, each_opponent_sacrifices_creature, grant_keyword_to_target_creature_until_eot, untap_target_other_permanent, tap_another_target_creature, return_all_creatures_from_your_graveyard_to_battlefield, set_base_pt_until_eot, manifest_dread, manifest_dread_then_attach_self, manifest_dread_then_put_plus_one_counters_on_it, conditional_if_void, deal_damage_to_opponent_creature, optional_mana_cost_then_effect"
         ))),
     }
 }
@@ -3539,6 +3641,11 @@ pub(crate) fn effect_to_pydict<'py>(
         Effect::ManifestDreadThenAttachSelf { count } => {
             d.set_item("kind", "manifest_dread_then_attach_self")?;
             d.set_item("count", *count)?;
+        }
+        Effect::ManifestDreadThenPutPlusOneCountersOnIt { count, counter_amount } => {
+            d.set_item("kind", "manifest_dread_then_put_plus_one_counters_on_it")?;
+            d.set_item("count", *count)?;
+            d.set_item("counter_amount", *counter_amount)?;
         }
         Effect::ConditionalIfVoid { then_effect, else_effect } => {
             d.set_item("kind", "conditional_if_void")?;
