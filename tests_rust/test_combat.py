@@ -2575,9 +2575,11 @@ def test_multi_block_damage_assignment_picks_etb_first_blocker(synthetic_state):
     synthetic_state.deal_combat_damage()
     # The attacker's 2 power goes to the FIRST blocker in BF-ETB
     # order (bf_first_blocker), not the first-declared one. The
-    # bf-later blocker takes 0 damage from the attacker because the
-    # single-blocker damage simplification (round-5 scope reminder)
-    # assigns the attacker's full power to ONE blocker only.
+    # bf-later blocker takes 0 damage because the bf-first blocker
+    # already absorbs `need = effective_toughness = 2` (Python's
+    # combat.py:419-435 per-blocker loop with `remaining` drained
+    # to 0 after the first assignment — the post-CE14 multi-block
+    # walk).
     assert synthetic_state.get_damage(bf_first_blocker) == 2, (
         "CE9 regression: attacker's damage must go to the "
         "bf-ETB-first blocker, not the declare-first blocker"
@@ -2594,15 +2596,21 @@ def test_multi_block_damage_assignment_picks_etb_first_blocker(synthetic_state):
 
 
 def test_multi_block_damage_back_damage_uses_etb_order(synthetic_state):
-    """CE9 regression: the back-damage walk (each blocker dealing
-    its power to the attacker) also iterates the battlefield in
+    """CE9 + CE14 regression: the back-damage walk (each blocker
+    dealing its power to the attacker) iterates the battlefield in
     bf-ETB-timestamp order via ``bf_iter_etb_sorted``, not the
     ``self.blockers`` Vec push order. The accumulated damage on
-    the attacker is unchanged (2+2=4 vs 2+2=4); the ordering shift
-    is invisible on a symmetric exchange but matters for any
+    the attacker is unchanged (2+1=3 vs 1+2=3); the ordering shift
+    is invisible on the per-attacker total but matters for any
     future variant where the order of accumulation is observable
     (e.g. lifelink life gain on an interleaved bf, deathtouch
     upgrade-then-mark-lethal sequencing).
+
+    Post-CE14 closure, the attacker-side damage distribution also
+    walks all blockers in bf-ETB order per Python's
+    ``combat.py:419-435`` loop: 2 to bf_first_blocker (its
+    ``need = effective_toughness = 2``, is_last=False) then 1 to
+    bf_second_blocker (is_last=True, absorbs remainder).
     """
     attacker_id = synthetic_state.register_and_inject_object(
         _keyword_creature_dict(3, 3, []), 0, ZONE_BATTLEFIELD
@@ -2620,11 +2628,109 @@ def test_multi_block_damage_back_damage_uses_etb_order(synthetic_state):
     synthetic_state.deal_combat_damage()
     # Sum of blocker powers: 2 + 1 = 3 damage to attacker.
     assert synthetic_state.get_damage(attacker_id) == 3
-    # Attacker damage routed to the bf-ETB-first blocker (3 power
-    # to bf_first_blocker, none spilled to bf_second_blocker per
-    # the single-blocker damage simplification).
-    assert synthetic_state.get_damage(bf_first_blocker) == 3
-    assert synthetic_state.get_damage(bf_second_blocker) == 0
+    # Post-CE14: attacker damage walks all blockers in bf-ETB order
+    # per Python's combat.py:419-435 loop. need_0 = 2 (first
+    # blocker's toughness), is_last_0=False, assigned_0=min(3,2)=2;
+    # remaining=1. need_1 = 1, is_last_1=True (no trample),
+    # assigned_1=remaining=1.
+    assert synthetic_state.get_damage(bf_first_blocker) == 2
+    assert synthetic_state.get_damage(bf_second_blocker) == 1
+
+
+# ---------------------------------------------------------------------------
+# CE14 closure regression tests — deathtouch + no-trample multi-block
+# damage assignment walks ALL blockers in bf-ETB order with
+# `need = 1 if deathtouch else effective_toughness - blocker.damage`
+# per blocker (Python's `combat.py:419-435` loop shape). Pins
+# CR 702.2b + CR 510.1c: deathtouch redefines "lethal" to 1 for
+# damage assignment, so a deathtouch attacker against N blockers
+# can distribute 1 damage per blocker and kill all of them.
+# See `docs/RUST_PARITY_GAPS.md` I36 for the post-closure invariant.
+# ---------------------------------------------------------------------------
+
+
+def test_deathtouch_attacker_two_blockers_both_die(synthetic_state):
+    """CE14 regression. A 2/2 deathtouch attacker is blocked by two
+    2/2 vanilla blockers. Per CR 702.2b + CR 510.1c, the attacker
+    assigns 1 damage to each blocker (deathtouch makes 1 == lethal
+    for assignment-order purposes), and the apply-damage pass
+    upgrades each marked-damage to lethal=toughness via the
+    deathtouch-source check.
+
+    Pins the post-CE14 behavior: BOTH blockers' marked damage is
+    >= 2 (lethal). Pre-closure, only the bf-ETB-first blocker took
+    damage; the second blocker survived untouched.
+    """
+    attacker_id = synthetic_state.register_and_inject_object(
+        _keyword_creature_dict(2, 2, ["deathtouch"]), 0, ZONE_BATTLEFIELD
+    )
+    bf_first_blocker = synthetic_state.register_and_inject_object(
+        _keyword_creature_dict(2, 2, []), 1, ZONE_BATTLEFIELD
+    )
+    bf_second_blocker = synthetic_state.register_and_inject_object(
+        _keyword_creature_dict(2, 2, []), 1, ZONE_BATTLEFIELD
+    )
+    assert synthetic_state.declare_attacker(attacker_id) is True
+    assert synthetic_state.declare_blocker(bf_first_blocker, attacker_id) is True
+    assert synthetic_state.declare_blocker(bf_second_blocker, attacker_id) is True
+    synthetic_state.deal_combat_damage()
+    # Both blockers took 1 damage in the assignment, upgraded to
+    # lethal (>= toughness=2) by the deathtouch apply-pass check.
+    assert synthetic_state.get_damage(bf_first_blocker) >= 2, (
+        "CE14: deathtouch attacker assigns 1 to first blocker, "
+        "apply-pass upgrades mark to lethal"
+    )
+    assert synthetic_state.get_damage(bf_second_blocker) >= 2, (
+        "CE14: deathtouch attacker assigns 1 to second blocker (was "
+        "0 pre-closure when no-trample branch only emitted to "
+        "first_blocker), apply-pass upgrades mark to lethal"
+    )
+    # Attacker took back-damage from both blockers (2 + 2 = 4).
+    assert synthetic_state.get_damage(attacker_id) == 4
+
+
+def test_deathtouch_attacker_three_blockers_all_marked_lethal(synthetic_state):
+    """CE14 regression — three-blocker variant. A 3/3 deathtouch
+    attacker against three 2/2 blockers: power=3, n=3, need_i=1
+    per blocker (deathtouch). i=0: is_last=False, assigned=
+    min(3,1)=1, remaining=2. i=1: is_last=False, assigned=
+    min(2,1)=1, remaining=1. i=2: is_last=True, assigned=
+    remaining=1. All three blockers take 1, upgraded to lethal
+    by the apply-pass deathtouch check.
+
+    Defender life unchanged (no trample). Attacker takes 6 back
+    (2 + 2 + 2 from each blocker).
+    """
+    attacker_id = synthetic_state.register_and_inject_object(
+        _keyword_creature_dict(3, 3, ["deathtouch"]), 0, ZONE_BATTLEFIELD
+    )
+    b0 = synthetic_state.register_and_inject_object(
+        _keyword_creature_dict(2, 2, []), 1, ZONE_BATTLEFIELD
+    )
+    b1 = synthetic_state.register_and_inject_object(
+        _keyword_creature_dict(2, 2, []), 1, ZONE_BATTLEFIELD
+    )
+    b2 = synthetic_state.register_and_inject_object(
+        _keyword_creature_dict(2, 2, []), 1, ZONE_BATTLEFIELD
+    )
+    assert synthetic_state.declare_attacker(attacker_id) is True
+    assert synthetic_state.declare_blocker(b0, attacker_id) is True
+    assert synthetic_state.declare_blocker(b1, attacker_id) is True
+    assert synthetic_state.declare_blocker(b2, attacker_id) is True
+    assert synthetic_state.get_life(1) == 20
+    synthetic_state.deal_combat_damage()
+    # All three blockers marked lethal.
+    for bid in (b0, b1, b2):
+        assert synthetic_state.get_damage(bid) >= 2, (
+            f"CE14: blocker {bid} should be marked lethal "
+            f"(deathtouch upgrade on 1-damage assignment)"
+        )
+    # No trample-through to the defender.
+    assert synthetic_state.get_life(1) == 20, (
+        "CE14: no trample on the attacker, defender life unchanged"
+    )
+    # Attacker takes back-damage from all three blockers (2+2+2=6).
+    assert synthetic_state.get_damage(attacker_id) == 6
 
 
 def test_apply_sbas_clears_damage_on_creature_move_to_graveyard(synthetic_state):
