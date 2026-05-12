@@ -325,6 +325,8 @@ def build_python_state(spec: DeckSpec):
       * empty hands / battlefield / graveyard / exile / stack
     """
     from mtg_bot.cards.base import CardPrinting, ManaCost
+    from mtg_bot.effects.generic.mana import AddManaToPool
+    from mtg_bot.effects.base import ActivatedAbility, ActivationCost
     from mtg_bot.game import GameState, Player, Zone
     from mtg_bot.turn import Step
 
@@ -346,6 +348,33 @@ def build_python_state(spec: DeckSpec):
             type_line = card.card_type
             supertypes = ()
             subtypes = ()
+        # Lands with ``mana_produced`` get an explicit ``{T}: Add {C}``
+        # activated ability so ``ActivateAbility(land_id, 0)`` works on
+        # the Python side. Rust's ``ActivateAbility`` dispatch reads the
+        # printing's ``mana_produced`` directly (no per-printing ability
+        # list); Python's ``_activate_ability`` walks the printing's
+        # ``activated_abilities`` tuple. Without this explicit wire-up
+        # the two engines would diverge on the very first
+        # ``activate_ability`` call: Rust would tap the land and credit
+        # the pool, Python would silently no-op (empty ability list →
+        # ability_index out of range → return). That divergence is a
+        # harness construction issue, not a real engine divergence —
+        # ``cards.lands.make_basic_land`` ships the same explicit
+        # ability wire-up for production printings (see
+        # ``cards.lands.Command Bridge`` for a parallel pattern). Mana
+        # abilities flagged ``is_mana_ability=True`` bypass the stack
+        # at resolve time (CR 605), matching Rust's direct-pool-credit
+        # shape on the ``ActivateAbility`` arm.
+        activated_abilities: tuple[ActivatedAbility, ...] = ()
+        if card.card_type == "Land" and card.mana_produced:
+            activated_abilities = tuple(
+                ActivatedAbility(
+                    cost=ActivationCost(tap_self=True),
+                    effect=AddManaToPool(produces=((color, 1),)),
+                    is_mana_ability=True,
+                )
+                for color in card.mana_produced
+            )
         printings[card.name] = CardPrinting(
             name=card.name,
             mana_cost_str="",
@@ -357,6 +386,7 @@ def build_python_state(spec: DeckSpec):
             power=card.power,
             toughness=card.toughness,
             produces=frozenset(card.mana_produced),
+            activated_abilities=activated_abilities,
         )
 
     state = GameState()
@@ -671,17 +701,19 @@ class CrossEngineStep:
 def _dict_to_python_action(action_dict: dict):
     """Convert a Rust-style action dict to a Python ``Action`` instance.
 
-    Mirrors :func:`apply_action`'s dispatch table. Supported kinds in
-    the first slice:
+    Mirrors :func:`apply_action`'s dispatch table. Supported kinds:
 
     * ``pass_priority`` → ``PassPriority()``
     * ``play_land`` → ``PlayLand(card_id=...)``
     * ``cast_spell`` → ``CastSpell(card_id=...)``
+    * ``activate_ability`` → ``ActivateAbility(source_id=..., ability_index=...)``
 
     Unknown kinds raise ``ValueError`` to mirror Rust's strict-parse
     contract.
     """
-    from mtg_bot.actions import CastSpell, PassPriority, PlayLand
+    from mtg_bot.actions import (
+        ActivateAbility, CastSpell, PassPriority, PlayLand,
+    )
 
     kind = action_dict.get("kind")
     if kind == "pass_priority":
@@ -690,6 +722,11 @@ def _dict_to_python_action(action_dict: dict):
         return PlayLand(card_id=int(action_dict["card_id"]))
     if kind == "cast_spell":
         return CastSpell(card_id=int(action_dict["card_id"]))
+    if kind == "activate_ability":
+        return ActivateAbility(
+            source_id=int(action_dict["source_id"]),
+            ability_index=int(action_dict["ability_index"]),
+        )
     raise ValueError(
         f"unsupported action kind for cross-engine step: {kind!r} "
         f"(action dict: {action_dict!r})"
@@ -1139,3 +1176,158 @@ def multi_turn_selector(py_state, rust_state, step_index: int) -> dict:
     advance_phase_python(py_state)
     rust_state.advance_phase()
     return {"kind": "pass_priority"}
+
+
+# ---------------------------------------------------------------------------
+# Phase 5 follow-up #4: cast_bears_selector — extend the harness past
+# land-only play into creature spells + mana abilities + summoning sick.
+# Builds on multi_turn_selector's phase-walk + land-drop foundation.
+#
+# Decision script shape (state-machine, re-derived from observable state on
+# every call so the selector is stateless):
+#
+#   1. If active player has Grizzly Bears in hand AND (untapped Forests on bf)
+#      AND active_player.mana_pool has fewer than 2 G coins AND it's MAIN1
+#      AND haven't cast yet this turn: emit ``activate_ability(forest_id, 0)``
+#      to tap one Forest and credit {G}.
+#   2. If active player has Grizzly Bears in hand AND mana_pool has >= 2 G
+#      coins AND it's MAIN1: emit ``cast_spell(bears_id)`` to spend {1}{G}
+#      and put Bears on stack (Python) / move to bf (Rust).
+#   3. Otherwise: delegate to multi_turn_selector's behavior (play lands in
+#      MAIN1 if available, side-channel advance phase + pass_priority
+#      otherwise).
+#
+# Why no explicit step counter / "have I cast?" flag: Python's ``_cast_spell``
+# removes the Bears from hand at cast time, so after the cast the
+# "Bears in hand" check naturally fails on every subsequent call. The
+# selector then falls through to multi_turn_selector behavior. Rust's
+# ``cast_creature`` likewise removes the card from hand.
+#
+# **Expected behavior on this slice's tiny synthetic deck.** Per the
+# ``slightly_bigger_deckspec`` library:
+#   p0 library: [Forest, Mountain, Forest, Grizzly Bears]
+#   p1 library: [Mountain, Grizzly Bears, Forest, Mountain]
+# Auto-draw is skipped on turn 1 (CR 103.7c) and fires for the new active
+# player every subsequent turn. Combined with land-per-turn + the
+# multi_turn_selector's MAIN1-only land-drop pattern, the first time the
+# active player has Grizzly Bears in hand AND >= 2 untapped basics on bf
+# is turn 5 or later. The selector activates Forests until the pool has
+# {G}{G} (enough to pay {1}{G} since Python's auto_tap_for_cost consumes
+# the {G} coin to satisfy the generic pip first), then casts.
+#
+# **Predicted divergence**. Python's ``_cast_spell`` pushes the Bears
+# StackItem onto ``state.stack`` (CR 601.2 — spells go on the stack
+# before resolution; the resolving step happens later via
+# ``resolve_top_of_stack``). Rust's ``cast_creature`` (state_ops_cast.rs)
+# fuses cast + resolve into one primitive — the card moves directly from
+# hand to battlefield, skipping the stack entirely. After the
+# ``cast_spell`` decision both engines diverge:
+#   * Python: stack=[Bears StackItem], battlefield=[2x Forest], hand=[]
+#   * Rust:   stack=[],                battlefield=[2x Forest, Bears (sick)], hand=[]
+# The harness's per-field compare surfaces this as CE5 candidates on the
+# ``stack`` and ``battlefield`` fields. Whether to file as a single CE5
+# (entry + closure plan) is the slice's outcome question.
+# ---------------------------------------------------------------------------
+
+
+def cast_bears_selector(py_state, rust_state, step_index: int) -> dict:
+    """Cross-engine smoke selector that drives 2 mana-ability activations
+    then a Grizzly Bears cast in MAIN1.
+
+    State machine is re-derived from observable state on every call:
+
+      * If MAIN1 + Bears-in-hand + pool has >= 2 green coins → cast_spell.
+      * If MAIN1 + Bears-in-hand + untapped Forest available + pool has
+        < 2 green coins → activate_ability on the first untapped Forest.
+      * Else delegate to :func:`multi_turn_selector` (play land in MAIN1,
+        side-channel advance + pass on non-MAIN phases).
+
+    The selector reads Python state for the script logic (Python is the
+    parity reference; the harness replays the script on Rust). Once the
+    cast decision is emitted, subsequent calls fall through to the
+    multi_turn_selector branch — there's nothing more to do on this deck
+    after Bears is cast (no further creature in hand, no combat from the
+    selector). The harness's per-step compare on the cast step surfaces
+    the stack/battlefield divergence the slice is meant to probe.
+    """
+    from mtg_bot.turn import Step
+
+    cur_step = py_state.step
+    active_idx = py_state.active_player_idx
+    ap = py_state.players[active_idx]
+
+    # Detect Bears-in-hand on the active player.
+    bears_in_hand = next(
+        (
+            obj for obj in ap.hand
+            if obj.printing.name == "Grizzly Bears"
+        ),
+        None,
+    )
+
+    # Count green coins in the active player's mana pool. Both ``G`` and
+    # ``any`` coins satisfy a green requirement; we count strictly the
+    # ``G``-color coins to match what ``slightly_bigger_deckspec``'s
+    # Forest mana ability produces (no ``any``-color coins available
+    # from the printing's ability list).
+    green_coins = sum(
+        1 for coin in ap.mana_pool
+        if getattr(coin, "color", None) == "G"
+    )
+
+    # The cast/activate sequence is gated to MAIN1 (mirrors Python's
+    # sorcery-speed cast gate for creatures — though the harness's
+    # apply_action bypass means we could in principle cast in any
+    # phase; gating to MAIN1 keeps the script semantically MTG-correct
+    # and avoids surfacing a sorcery-speed-only timing CE that's
+    # well-documented in the gap doc rather than a real divergence).
+    if cur_step == Step.PRECOMBAT_MAIN and bears_in_hand is not None:
+        # Step 2: enough green mana in the pool → cast Bears.
+        if green_coins >= 2:
+            return {
+                "kind": "cast_spell",
+                "card_id": int(bears_in_hand.id),
+            }
+        # Step 1: not enough green yet → tap an untapped Forest.
+        # Walk active player's bf for an untapped basic Forest the
+        # selector controls. Mountain doesn't satisfy {G} requirements
+        # so we filter by ``produces`` set.
+        #
+        # **Sick-land filter.** A land that just entered the battlefield
+        # this turn carries ``summoning_sick=True`` on both engines
+        # (Python's ``make_state``-equivalent path + Rust's CE1
+        # closure both default new objects to sick=True; neither
+        # engine's ``play_land`` clears it). Per CR 302.1 summoning
+        # sickness applies to CREATURES tapping for tap-cost
+        # abilities, NOT to lands — Python's
+        # ``actions._activate_ability`` correctly doesn't gate on it,
+        # but Rust's ``ActivateAbility`` dispatch in
+        # ``state_ops_actions.rs`` rejects ANY summoning-sick source
+        # (creature or land) with a hard ``ValueError``. The selector
+        # filters sick lands here so the harness doesn't abort with
+        # the Rust raise on a freshly-played land; the underlying
+        # divergence is a CE candidate documented in
+        # ``docs/RUST_PARITY_GAPS.md``.
+        untapped_forest = next(
+            (
+                obj for obj in py_state.battlefield
+                if obj.controller_id == active_idx
+                and obj.printing.is_land
+                and not obj.tapped
+                and not obj.summoning_sick
+                and "G" in obj.printing.produces
+            ),
+            None,
+        )
+        if untapped_forest is not None:
+            return {
+                "kind": "activate_ability",
+                "source_id": int(untapped_forest.id),
+                "ability_index": 0,
+            }
+        # Fall through to multi_turn_selector — no untapped Forest yet,
+        # need to advance turns until p0/p1 has drawn + played enough
+        # Forests.
+
+    # Delegate to the multi-turn baseline for everything else.
+    return multi_turn_selector(py_state, rust_state, step_index)

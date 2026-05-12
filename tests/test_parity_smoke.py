@@ -1468,3 +1468,308 @@ def test_cross_engine_multi_turn_selector_turn_2_drawstep_fires(parity_smoke):
     assert len(step_13.py_view["hand_p1"]) == 1
     # Both engines agree (no divergence).
     assert step_13.divergences == []
+
+
+# ---------------------------------------------------------------------------
+# Phase 5 follow-up #4: cast_bears_selector. Extends the harness past the
+# land-only multi_turn_selector slice into creature spells + mana abilities
+# + summoning-sick timing. Drives multi-turn play on the slightly_bigger_deckspec
+# until the active player has Grizzly Bears in hand AND two untapped non-sick
+# Forests on the battlefield, activates each Forest in turn for {G}{G}, then
+# emits cast_spell(Bears).
+#
+# **Outcome (this slice)**: NEW divergence CE5 — Rust's ``cast_creature``
+# primitive fuses cast+resolve into one mutation (no-stack semantics:
+# state_ops_cast.rs:293-297 docstring), while Python's ``_cast_spell``
+# pushes the spell as a ``StackItem`` and defers the bf transition to
+# ``resolve_top_of_stack``. After ``cast_spell`` is applied, Python's
+# stack has the Bears item / battlefield is missing the Bears; Rust's
+# stack is empty / battlefield has the freshly-cast Bears. Pinned
+# strict-xfail below; closure plan in ``docs/RUST_PARITY_GAPS.md`` CE5
+# entry. The cleanly-walking ``activate_ability`` calls (steps 92, 106,
+# 107) before the cast also serve as the first cross-engine pin that
+# mana-ability parity holds — Python's stack-bypass for mana abilities
+# and Rust's direct-pool-credit produce the same observable mana pool
+# + tapped state.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.xfail(
+    strict=True,
+    reason=(
+        "CE5: cast_spell diverges between Python (push StackItem, defer "
+        "resolve) and Rust (cast_creature fuses cast+resolve, no stack). "
+        "Pinned by docs/RUST_PARITY_GAPS.md CE5 entry; closure plan "
+        "two-option (grow Rust stack OR harness-side resolve_top_of_stack "
+        "mirror). This test asserts the eventual clean walk — flipped to "
+        "xfail until either closure path lands."
+    ),
+)
+def test_cross_engine_cast_bears_selector_walks_clean(parity_smoke):
+    """Drive 120 decisions on the slightly_bigger_deckspec with the
+    cast_bears_selector and assert every step walks clean.
+
+    The selector activates 2 Forests for {G}{G} then casts Grizzly Bears
+    at turn 9 PRECOMBAT_MAIN (p0 active). Pre-cast steps walk clean —
+    the activate-ability mana-credit flow is parity-equal across both
+    engines. The cast step itself (step 108) is where CE5 fires:
+    Python pushes a StackItem and leaves the Bears off-battlefield,
+    while Rust's ``cast_creature`` skips the stack and pushes the Bears
+    directly to the battlefield.
+
+    **Expected post-CE5-closure**: every step's ``divergences`` is
+    empty. Walking 120 decisions exercises turns 1-10 including
+    multiple full UNTAP/UPKEEP/DRAW/MAIN/COMBAT/CLEANUP cycles, the
+    Bears cast at step 108, and post-cast battlefield comparisons.
+
+    **Side-effect**: the walk also exercises the I19 empty-library
+    eager-loss divergence at step 119 (p1 drew from empty library on
+    turn 10). The CE5 closure may end the walk earlier (at the cast
+    step), in which case the I19 timing surface won't be exercised by
+    this test. That's acceptable — the CE5 closure-pair contract pins
+    cast-time parity; downstream observers will be probed by future
+    slices.
+    """
+    from mtg_bot.parity.cross_engine import (
+        cast_bears_selector,
+        slightly_bigger_deckspec,
+        walk_both,
+    )
+
+    result = walk_both(
+        slightly_bigger_deckspec(),
+        n_decisions=120,
+        decision_selector=cast_bears_selector,
+    )
+    assert result.error is None, (
+        f"walk aborted at step {result.aborted_at}: {result.error}"
+    )
+    assert result.aborted_at is None
+    assert len(result.steps) == 120
+    for step in result.steps:
+        assert step.divergences == [], (
+            f"unexpected divergence at step {step.step_index}: "
+            f"{[(d.field, d.py_value, d.rust_value, d.known_gap) for d in step.divergences]}"
+        )
+
+
+def test_cross_engine_cast_bears_selector_surfaces_ce5_cast_resolve_at_step_108(
+    parity_smoke,
+):
+    """**CE5 symptom-pin**: at step 108 (turn 9 PRECOMBAT_MAIN p0
+    active) the selector emits ``cast_spell`` for Grizzly Bears. The
+    cast diverges across engines on EXACTLY two fields:
+
+      * ``battlefield`` — Python has 6 objects (pre-cast set), Rust
+        has 7 (the freshly-cast Bears at the tail).
+      * ``stack`` — Python has 1 entry (the Bears StackItem), Rust
+        has 0.
+
+    Companion to the strict-xfail clean-walk pin above. When CE5
+    closes (either by growing Rust's stack OR by adding a Python-
+    side ``resolve_top_of_stack`` harness mirror), the symptom on
+    this step inverts and this test should flip to assert
+    ``divergences == []``. The pair-pin pattern matches the CE3 /
+    CE4 closures.
+    """
+    from mtg_bot.parity.cross_engine import (
+        cast_bears_selector,
+        slightly_bigger_deckspec,
+        walk_both,
+    )
+
+    result = walk_both(
+        slightly_bigger_deckspec(),
+        n_decisions=109,
+        decision_selector=cast_bears_selector,
+    )
+    assert result.error is None
+    step_108 = result.steps[108]
+    # The cast_spell action was emitted at step 108.
+    assert step_108.action_dict["kind"] == "cast_spell"
+    # The Bears was the active player's hand card 3 (per the
+    # slightly_bigger_deckspec deck order: p0 lib =
+    # [Forest(id=0), Mountain(id=1), Forest(id=2), Bears(id=3)] —
+    # by turn 9 p0 has drawn all four).
+    assert step_108.action_dict["card_id"] == 3
+
+    # The divergence list contains both ``battlefield`` and ``stack``
+    # entries. Other fields are parity-equal at this step.
+    div_fields = {d.field for d in step_108.divergences}
+    assert "battlefield" in div_fields, (
+        f"CE5 should surface a battlefield divergence at step 108; "
+        f"got fields {div_fields}"
+    )
+    assert "stack" in div_fields, (
+        f"CE5 should surface a stack divergence at step 108; "
+        f"got fields {div_fields}"
+    )
+
+    # Pin the exact divergence values:
+    bf_div = next(d for d in step_108.divergences if d.field == "battlefield")
+    # Python's battlefield post-cast: 6 objects (no Bears).
+    assert len(bf_div.py_value) == 6
+    py_names = [sig[0] for sig in bf_div.py_value]
+    assert "Grizzly Bears" not in py_names
+    # Rust's battlefield post-cast: 7 objects, last is Bears.
+    assert len(bf_div.rust_value) == 7
+    rust_names = [sig[0] for sig in bf_div.rust_value]
+    assert "Grizzly Bears" in rust_names
+
+    stack_div = next(d for d in step_108.divergences if d.field == "stack")
+    # Python's stack has 1 entry (the in-flight Bears StackItem).
+    assert len(stack_div.py_value) == 1
+    # Rust's stack is empty (cast_creature skipped the stack).
+    assert stack_div.rust_value == ()
+
+
+def test_cross_engine_cast_bears_selector_activate_ability_pre_cast_walks_clean(
+    parity_smoke,
+):
+    """Pre-cast walk parity pin. The first 108 decisions walk through
+    multiple turns of advance_phase + play_land + (steps 92, 106, 107)
+    activate_ability calls without any divergence. This is the
+    counterpart of the post-CE5 clean-walk pin: it asserts that
+    everything EXCEPT the cast step itself walks clean, which means
+    the cross-engine bridge's mana-ability resolution path is
+    parity-equal across engines.
+
+    Step 92 (turn 8 PRECOMBAT_MAIN p1 active) is the first
+    activate_ability call — p1 has Bears + Forest in hand, plays the
+    Forest at step 91, taps the older Mountain (id=4) at step 92...
+    wait, the selector picks a Forest (G-producer), so step 92's
+    source is the Forest p1 just played. Re-read the decision: at
+    step 92 p1 has 1 untapped non-sick Forest (id=6, played turn 6
+    and cleared by turn 8's UNTAP) — that's the source the selector
+    picks. After the activate the pool has {G}:1; the selector wants
+    {G}:2 to cast Bears, and p1 has no second Forest source, so the
+    next selector call falls through to multi_turn_selector and
+    advances phase.
+
+    Step 106 + 107 (turn 9 PRECOMBAT_MAIN p0 active) are the two
+    Forest activations p0 actually needs to cast Bears at step 108.
+    """
+    from mtg_bot.parity.cross_engine import (
+        cast_bears_selector,
+        slightly_bigger_deckspec,
+        walk_both,
+    )
+
+    result = walk_both(
+        slightly_bigger_deckspec(),
+        n_decisions=108,
+        decision_selector=cast_bears_selector,
+    )
+    assert result.error is None
+    assert result.aborted_at is None
+    assert len(result.steps) == 108
+
+    # No divergence anywhere in the pre-cast walk.
+    for step in result.steps:
+        assert step.divergences == [], (
+            f"unexpected pre-cast divergence at step {step.step_index}: "
+            f"action={step.action_dict} "
+            f"{[(d.field, d.py_value, d.rust_value) for d in step.divergences]}"
+        )
+
+    # Verify the activate_ability calls were actually emitted at the
+    # expected steps (the brief asserts the selector's decision shape).
+    activate_steps = [
+        s for s in result.steps
+        if s.action_dict.get("kind") == "activate_ability"
+    ]
+    # Three activate_ability calls: one on p1's turn 8 (single Forest,
+    # builds 1 G but can't cast), two on p0's turn 9 (two Forests,
+    # builds 2 G).
+    assert len(activate_steps) == 3, (
+        f"expected 3 activate_ability calls, got "
+        f"{[(s.step_index, s.action_dict) for s in activate_steps]}"
+    )
+    # Step 92: p1 activates their Forest.
+    assert activate_steps[0].step_index == 92
+    # Steps 106 + 107: p0 activates both their Forests.
+    assert activate_steps[1].step_index == 106
+    assert activate_steps[2].step_index == 107
+
+
+def test_cross_engine_cast_bears_selector_mana_pool_g2_at_step_107(parity_smoke):
+    """After the second activate_ability at step 107 (turn 9
+    PRECOMBAT_MAIN p0 active), p0's mana pool carries exactly 2 G
+    coins on BOTH engines. Pins the mana-ability parity contract
+    that motivated the cast at step 108: Python's stack-bypass for
+    mana abilities and Rust's direct-pool-credit dispatch arm
+    produce byte-equal observable pools.
+
+    Mana pool field shape: a sorted 6-key tuple `((B,0), (C,0),
+    (G,2), (R,0), (U,0), (W,0))`. The harness normalizes Python's
+    ``list[ManaCoin]`` representation to this shape via
+    ``_python_mana_pool_signature`` so both engines emit the same
+    tuple on a green-only pool.
+    """
+    from mtg_bot.parity.cross_engine import (
+        cast_bears_selector,
+        slightly_bigger_deckspec,
+        walk_both,
+    )
+
+    result = walk_both(
+        slightly_bigger_deckspec(),
+        n_decisions=108,
+        decision_selector=cast_bears_selector,
+    )
+    assert result.error is None
+    step_107 = result.steps[107]
+    assert step_107.action_dict["kind"] == "activate_ability"
+    # Both engines agree on the mana pool after the second activate.
+    py_pool = dict(step_107.py_view["mana_pool_p0"])
+    rust_pool = dict(step_107.rust_view["mana_pool_p0"])
+    assert py_pool == rust_pool, (
+        f"mana_pool_p0 diverged at step 107: py={py_pool} rust={rust_pool}"
+    )
+    assert py_pool["G"] == 2
+    assert step_107.divergences == []
+
+
+def test_cross_engine_cast_bears_selector_falls_back_to_multi_turn(parity_smoke):
+    """Selector contract: when the active player does NOT have Grizzly
+    Bears in hand, the selector delegates to multi_turn_selector
+    (play_land in MAIN if available, side-channel advance + pass
+    otherwise). Step 0 (turn 1 ap=0 UPKEEP with empty hand) is the
+    canonical fall-through case — multi_turn_selector advances UPKEEP
+    -> DRAW and emits pass_priority.
+    """
+    from mtg_bot.parity.cross_engine import (
+        cast_bears_selector,
+        slightly_bigger_deckspec,
+        walk_both,
+    )
+
+    result = walk_both(
+        slightly_bigger_deckspec(),
+        n_decisions=1,
+        decision_selector=cast_bears_selector,
+    )
+    assert result.error is None
+    # Step 0: turn 1 UPKEEP, hands empty, no Bears anywhere → fall
+    # through to multi_turn_selector → side-channel advance + pass.
+    assert result.steps[0].action_dict == {"kind": "pass_priority"}
+    assert result.steps[0].divergences == []
+
+
+def test_cross_engine_dict_to_python_action_handles_activate_ability(parity_smoke):
+    """The ``_dict_to_python_action`` shim must convert the
+    ``activate_ability`` dict shape that the new selector emits into a
+    Python ``ActivateAbility`` instance with matching fields. Locks in
+    the action-dict round-trip contract so a future selector that
+    emits a different ability_index doesn't silently fall through to
+    the ``unsupported action kind`` raise.
+    """
+    from mtg_bot.actions import ActivateAbility
+    from mtg_bot.parity.cross_engine import _dict_to_python_action
+
+    action = _dict_to_python_action(
+        {"kind": "activate_ability", "source_id": 42, "ability_index": 0}
+    )
+    assert isinstance(action, ActivateAbility)
+    assert action.source_id == 42
+    assert action.ability_index == 0
