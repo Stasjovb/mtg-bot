@@ -2948,3 +2948,288 @@ def test_cross_engine_mass_removal_selector_post_wrath_bf_state(
         f"Rust p1 bf still has a Grizzly Bears after wrath: "
         f"{rust_bf_p1_names}"
     )
+
+
+# ---------------------------------------------------------------------------
+# Phase 5 follow-up #9: first_strike_selector — extend retaliation_selector
+# with a side-channel-injected 2/2 first-strike creature on p0's
+# battlefield at step 168 (after the multi-creature bf state is set
+# up by p0's turn-13 Bears cast). Probes CR 510.5 (two damage substeps
+# when any participant has first-strike) + CR 702.7 (first-strike
+# timing) + SBA-between-steps semantics + damage-marking persistence.
+#
+# **Outcome on this probe: CLEAN PASS (no novel divergence surfaced).**
+#
+# The walk runs 300+ decisions through the FS combat at turn 13 PRECOMBAT
+# (the side-channel-injected attacker is unsick + untapped + on p0's bf;
+# p1's bears are side-channel-untapped to be eligible blockers since the
+# retaliation walk left them tapped from p1's turn-12 attack). Both engines
+# converge bit-identically through every step, including the COMBAT_DAMAGE
+# step where Python's combat.resolve_combat_damage and Rust's
+# deal_combat_damage internally compose the two-pass first-strike timing.
+#
+# The post-combat state on both engines:
+#   * p0 battlefield: Bears id 5 (sick), Forests, NO Bear Knight
+#   * p1 battlefield: Bears id 11 (untapped, untouched), Forests
+#   * p0 graveyard:   Bear Knight id 14 (the FS attacker — died in
+#                     regular damage step from blocker 11's strike-back)
+#   * p1 graveyard:   Bears id 9 (the first-strike-killed blocker)
+#
+# Which is the exact CR 510.5 expected outcome:
+#   1. First-strike damage step: Bear Knight (FS) assigns 2 damage to
+#      Bears id 9 (bf-ETB-first eligible blocker — both engines pick
+#      the same blocker via the post-CE9-closure bf-ETB-sorted walk).
+#   2. SBA between steps (Python side, combat.py:317-318): Bears id 9
+#      dies, moves to graveyard.
+#   3. Rust side has no SBA between steps but uses an in-function
+#      ``damage < toughness`` alive predicate (state_ops_combat.rs:1066)
+#      to filter out the dead blocker as a SOURCE in pass 2. Effectively
+#      equivalent behavior, different mechanism.
+#   4. Regular damage step: Bears id 11 (surviving blocker) deals 2
+#      damage to Bear Knight. Bears id 9 in gy (Python) / damage-marked
+#      on bf (Rust) deals nothing in either case.
+#   5. SBA after pass 2 (both engines): Bear Knight dies. End state
+#      converges.
+#
+# The end-state convergence is exactly the in-between-passes SBA-firing
+# divergence ABSORBED by Rust's alive-predicate-on-pass-2 fold. Neither
+# engine writes any cross-step-observable damage-marking state that the
+# other engine doesn't also write (since the fingerprint compare runs
+# AFTER the full deal_combat_damage + apply_sbas composition).
+#
+# Why this probe didn't surface a new CE: the candidate divergences the
+# slice was sized to surface (SBA timing between passes; damage-marking
+# carryover between passes; ordering of multi-blocker damage assignment)
+# either:
+#   (a) had already been closed (CE9 closure fixed bf-ETB-sorted blocker
+#       iteration), or
+#   (b) are invisible to the harness's per-step compare because the
+#       fingerprint snapshot is taken AFTER the full combat damage
+#       composition, by which time both engines have absorbed the
+#       mid-pass state divergence into a converged end state.
+#
+# Next-slice candidates to probe a different combat surface:
+#   * **Deathtouch + multi-block.** CR 702.2 — deathtouch lets a creature
+#     assign 1 damage to each blocker as "lethal" for CR 510.1c damage
+#     assignment ordering. Both engines have deathtouch hooks but the
+#     interaction with multi-block + assignment splitting is a candidate
+#     divergence.
+#   * **Trample + multi-block.** CR 702.19 — trample lets a creature spill
+#     unblocked excess damage to the defending player. Rust's combat
+#     plan already handles trample (state_ops_combat.rs:905-921 "lethal
+#     to blocker, excess to defender"). Python's combat.resolve walks a
+#     different assignment shape. Potential divergence.
+#   * **Lifelink.** CR 702.15 — lifelink grants life to the controller
+#     for damage dealt. Both engines have lifelink hooks; the
+#     cross-engine surface is the life-gain SBA composition.
+# ---------------------------------------------------------------------------
+
+
+def test_cross_engine_first_strike_selector_walks_clean(parity_smoke):
+    """Cross-engine first-strike combat walks parity-clean. **Outcome (a)** —
+    no novel divergence surfaced on this probe; first-strike combat
+    damage timing matches between Python and Rust.
+
+    Walks 200 decisions on :func:`multi_blocker_deckspec` with
+    :func:`first_strike_selector`. Asserts every step's
+    ``divergences`` list is empty, including the FS-combat steps at
+    turn 13 (steps 168-177): side-channel inject + phase advance +
+    declare_attackers([14]) + declare_blockers([[11,14], [9,14]]) +
+    COMBAT_DAMAGE (which internally fires the two-pass first-strike
+    timing on both engines) + END_OF_COMBAT.
+
+    If a future change to either engine's combat damage path breaks
+    first-strike parity, this test fires immediately.
+    """
+    from mtg_bot.parity.cross_engine import (
+        first_strike_selector,
+        multi_blocker_deckspec,
+        walk_both,
+    )
+
+    result = walk_both(
+        multi_blocker_deckspec(),
+        n_decisions=200,
+        decision_selector=first_strike_selector,
+    )
+    assert result.error is None, (
+        f"walk aborted at step {result.aborted_at}: {result.error}"
+    )
+    assert result.initial_divergences == [], (
+        f"unexpected initial divergence (pre-step-0): "
+        f"{[(d.field, d.py_value, d.rust_value) for d in result.initial_divergences]}"
+    )
+    for step in result.steps:
+        assert step.divergences == [], (
+            f"unexpected divergence at step {step.step_index}: "
+            f"action={step.action_dict} "
+            f"{[(d.field, d.py_value, d.rust_value, d.known_gap) for d in step.divergences]}"
+        )
+
+
+def test_cross_engine_first_strike_selector_post_combat_state(parity_smoke):
+    """Validate the load-bearing observable AFTER the first-strike combat
+    fires: both engines agree on the post-combat creature distribution
+    and graveyard contents.
+
+    Pins the CR 510.5 expected outcome:
+      * Bear Knight (FS attacker, id 14) dies from regular-step damage
+        and lands in p0's graveyard.
+      * Grizzly Bears id 9 (first-strike-killed blocker) lands in p1's
+        graveyard.
+      * Grizzly Bears id 11 (surviving blocker) stays on p1's
+        battlefield with no damage marked.
+      * Grizzly Bears id 5 (p0's sick Bears) is unchanged on p0's
+        battlefield.
+
+    Reads both Python state and Rust battlefield/graveyard snapshots
+    directly so the assertions are independent of the field-view
+    22-tuple shape. This is the structural assertion — if a future
+    engine change shifts the FS-combat outcome on either side, this
+    test fires.
+    """
+    from mtg_bot.parity.cross_engine import (
+        build_matched_states,
+        first_strike_selector,
+        multi_blocker_deckspec,
+        step_both,
+    )
+
+    py_state, rust_state = build_matched_states(multi_blocker_deckspec())
+    # Walk through step 179 (well past the FS combat at steps 171-177
+    # but before turn 14's combat at steps 184-187). At this point the
+    # FS combat is fully resolved on both engines.
+    for i in range(180):
+        action = first_strike_selector(py_state, rust_state, i)
+        step_both(py_state, rust_state, action)
+
+    # ---- Python side ----
+    py_creatures = sorted(
+        (int(o.id), o.printing.name, o.controller_id, o.damage)
+        for o in py_state.battlefield
+        if "Creature" in o.printing.card_types
+    )
+    # Expected: id 5 (Bears, p0, sick, 0 damage) and id 11 (Bears, p1,
+    # untouched, 0 damage). Bear Knight id 14 in p0_gy, Bears id 9 in
+    # p1_gy.
+    assert py_creatures == [
+        (5, "Grizzly Bears", 0, 0),
+        (11, "Grizzly Bears", 1, 0),
+    ], f"unexpected Python bf creatures post-FS-combat: {py_creatures}"
+
+    py_p0_gy_names = [o.printing.name for o in py_state.players[0].graveyard]
+    py_p1_gy_names = [o.printing.name for o in py_state.players[1].graveyard]
+    assert py_p0_gy_names == ["Bear Knight"], (
+        f"expected Python p0 gy=[Bear Knight] (FS attacker died); "
+        f"got {py_p0_gy_names}"
+    )
+    assert py_p1_gy_names == ["Grizzly Bears"], (
+        f"expected Python p1 gy=[Grizzly Bears] (FS-killed blocker); "
+        f"got {py_p1_gy_names}"
+    )
+
+    # ---- Rust side ----
+    rust_bf = rust_state.battlefield_snapshot()
+    rust_creatures = sorted(
+        (
+            int(entry["id"]),
+            entry["printing_name"],
+            int(entry["controller_id"]),
+            int(entry["damage"]),
+        )
+        for entry in rust_bf
+        if entry["printing_name"] in ("Grizzly Bears", "Bear Knight")
+    )
+    assert rust_creatures == [
+        (5, "Grizzly Bears", 0, 0),
+        (11, "Grizzly Bears", 1, 0),
+    ], f"unexpected Rust bf creatures post-FS-combat: {rust_creatures}"
+
+    rust_gy0_names = [
+        entry["printing_name"]
+        for entry in rust_state.graveyard_snapshot(0)
+    ]
+    rust_gy1_names = [
+        entry["printing_name"]
+        for entry in rust_state.graveyard_snapshot(1)
+    ]
+    assert rust_gy0_names == ["Bear Knight"], (
+        f"expected Rust p0 gy=[Bear Knight]; got {rust_gy0_names}"
+    )
+    assert rust_gy1_names == ["Grizzly Bears"], (
+        f"expected Rust p1 gy=[Grizzly Bears]; got {rust_gy1_names}"
+    )
+
+
+def test_cross_engine_first_strike_selector_pre_injection_walks_clean(
+    parity_smoke,
+):
+    """The pre-injection walk (steps 0-167) on
+    :func:`multi_blocker_deckspec` with :func:`first_strike_selector`
+    is parity-clean. Pins the contract that the FS probe's
+    delegate-to-retaliation_selector backbone is unchanged — steps
+    0-167 are identical to retaliation_selector's walk shape and
+    surface no divergences.
+
+    Step 168 is where the side-channel FS injection fires; steps
+    168-N exercise the FS combat surface. This test asserts ONLY
+    the pre-injection backbone is clean; the full-walk clean-pass is
+    asserted by ``test_cross_engine_first_strike_selector_walks_clean``.
+
+    Validates the load-bearing pre-condition: at the end of step 167,
+    the bf has exactly 3 creatures — p0=1 (sick Bears id 5), p1=2
+    (unsick Bears ids 9, 11). The FS injection at step 168 reads
+    this state and triggers via the ``>=3 creatures, no Bear Knight
+    yet`` gate.
+    """
+    from mtg_bot.parity.cross_engine import (
+        build_matched_states,
+        first_strike_selector,
+        multi_blocker_deckspec,
+        step_both,
+        walk_both,
+    )
+
+    result = walk_both(
+        multi_blocker_deckspec(),
+        n_decisions=168,
+        decision_selector=first_strike_selector,
+    )
+    assert result.error is None
+    for step in result.steps:
+        assert step.divergences == [], (
+            f"pre-injection divergence at step {step.step_index}: "
+            f"action={step.action_dict} "
+            f"{[(d.field, d.py_value, d.rust_value, d.known_gap) for d in step.divergences]}"
+        )
+
+    # Walk shape sanity: rebuild matched states, drive 168 steps, and
+    # confirm the pre-injection bf state.
+    py_state, rust_state = build_matched_states(multi_blocker_deckspec())
+    for i in range(168):
+        action = first_strike_selector(py_state, rust_state, i)
+        step_both(py_state, rust_state, action)
+
+    creatures = [
+        o for o in py_state.battlefield
+        if "Creature" in o.printing.card_types
+    ]
+    assert len(creatures) == 3, (
+        f"expected 3 creatures on bf at end of step 167, got "
+        f"{len(creatures)}: "
+        f"{[(o.id, o.controller_id, o.summoning_sick) for o in creatures]}"
+    )
+    # No Bear Knight in any zone yet (the FS injection hasn't fired).
+    bear_knight_anywhere = (
+        any(o.printing.name == "Bear Knight" for o in py_state.battlefield)
+        or any(
+            o.printing.name == "Bear Knight"
+            for p in py_state.players
+            for zone in (p.hand, p.library, p.graveyard, p.exile)
+            for o in zone
+        )
+    )
+    assert not bear_knight_anywhere, (
+        "Bear Knight should not yet exist at end of step 167 — FS "
+        "injection fires at step 168"
+    )
