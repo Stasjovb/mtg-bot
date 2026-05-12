@@ -277,6 +277,21 @@ fn cleanup_step_for_active_player_inline(state: &mut GameState) {
             obj.ueot_modifiers.clear();
         }
     }
+    // (4) Round-29 EoE Void turn-scoped tracking reset. Mirrors
+    // Python's `run_cleanup_step` in `turn.py:1094-1095`:
+    //
+    //     state.permanent_left_battlefield_this_turn = False
+    //     state.spell_warped_this_turn = False
+    //
+    // Cleanup-step entry is the canonical "this turn" boundary in
+    // Python; we clear both Void-tracking flags here so the next
+    // turn starts fresh. The flags fire `Effect::ConditionalIfVoid`
+    // intervening-if predicates (read via `is_void_active`); see
+    // `docs/RUST_PARITY_GAPS.md` I28 for the lifecycle invariant.
+    // Cheap unconditional reset — both fields are plain `bool` on
+    // GameState (not behind an Arc), so no CoW dance is needed.
+    state.permanent_left_battlefield_this_turn = false;
+    state.spell_warped_this_turn = false;
 }
 
 /// CR 106.4 — "When a phase or step ends, each player's mana pool

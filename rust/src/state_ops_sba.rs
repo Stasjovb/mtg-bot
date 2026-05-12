@@ -107,6 +107,7 @@
 //!   battlefield-scoped).
 
 use crate::state::{GameObject, GameState};
+use crate::state_ops_zones::mark_left_battlefield_if_nonland;
 use pyo3::prelude::*;
 use std::sync::Arc;
 
@@ -251,9 +252,16 @@ impl GameState {
             };
             obj.zone = ZONE_GRAVEYARD;
             obj.controller = controller;
+            let printing_id = obj.printing_id;
             // Push onto the controller's graveyard.
             let target = &mut self.players[controller as usize];
             Arc::make_mut(&mut target.graveyard).push(obj);
+            // Round-29 Void LTB: SBA destruction (704.5f/g — lethal
+            // damage / zero toughness) is a battlefield-exit. Victims
+            // are Creature-typed by filter (collect_sba_victims walks
+            // creatures only), but route through the helper anyway
+            // so the gate-in-one-place invariant holds.
+            mark_left_battlefield_if_nonland(self, printing_id);
         }
         Ok(count)
     }
