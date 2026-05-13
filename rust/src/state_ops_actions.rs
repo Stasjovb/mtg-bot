@@ -799,6 +799,46 @@ impl GameState {
                         )));
                     }
                 }
+                // Phase 3c: CE20 Slice 5 (Walker loyalty Slice C)
+                // once-per-turn-per-walker gate (CR 606.3 — "a player
+                // may activate a loyalty ability of a planeswalker
+                // they control only if no player has activated a
+                // loyalty ability of that planeswalker this turn").
+                // When the source is a planeswalker and the
+                // (controller, source_id) key is already in the
+                // ledger, refuse the activation. Mirrors the
+                // emission-side skip in `state_ops_legal.rs` so a
+                // direct (bypass-emission) caller gets the same
+                // rejection shape.
+                //
+                // **Source-type check on Planeswalker card_type.**
+                // Today this maps 1:1 to "has a loyalty ability"
+                // (Tezzeret-shape walkers carry only loyalty
+                // abilities), so gating on card_type instead of a
+                // per-ability `is_loyalty: bool` is sufficient. A
+                // future walker printing with a non-loyalty
+                // activated ability (rare) would over-gate here —
+                // fix would be a per-ability flag, deferred until a
+                // printing actually carries the mixed shape.
+                let source_is_walker = state
+                    .registry
+                    .lookup(printing_id)
+                    .map(|p| {
+                        p.card_types.iter().any(|t| t == "Planeswalker")
+                    })
+                    .unwrap_or(false);
+                if source_is_walker
+                    && state
+                        .loyalty_activated_this_turn
+                        .contains(&(controller_idx as u8, source_id))
+                {
+                    return Err(PyValueError::new_err(format!(
+                        "ActivateAbility: source {source_id} \
+                         planeswalker has already activated a \
+                         loyalty ability this turn \
+                         (CR 606.3 — once-per-turn-per-walker)"
+                    )));
+                }
                 // Phase 3: cost-pay precheck. tap_self requires the
                 // source untapped and non-sick (creature-only —
                 // CR 302.1, see I17).
@@ -1032,6 +1072,38 @@ impl GameState {
                     // sacrifice_self path), skip — the loyalty
                     // commit's observable effect doesn't apply to an
                     // off-bf object.
+                }
+                // Phase 5e: CE20 Slice 5 (Walker loyalty Slice C)
+                // once-per-turn-per-walker ledger stamp. CR 606.3 is
+                // a per-planeswalker turn limit. Stamp AFTER the
+                // loyalty-counter commit (Phase 5d) so a Phase 3-or-4
+                // failure that returns early leaves no ledger
+                // residue.
+                //
+                // **Stamps on EVERY successful walker activation**,
+                // including the "0" ability (cost.loyalty == 0). The
+                // rule's wording is "activated A loyalty ability" —
+                // the cost value (positive / zero / negative) doesn't
+                // matter; any successful activation locks the walker
+                // for the turn.
+                //
+                // **Gated on Planeswalker card_type** (same gate as
+                // Phase 3c). Non-walker activations don't touch the
+                // ledger.
+                //
+                // Same source-position assumption as Phase 5d: the
+                // source MAY have left the bf at this point (Phase 5b
+                // sacrifice_self path on a hypothetical
+                // walker-with-sacrifice-self cost). The ledger stamp
+                // is still correct in that case — CR 606.3 doesn't
+                // require the walker to still be on the bf to be
+                // "locked"; it's bookkeeping on which walker was
+                // activated this turn. We stamp unconditionally on
+                // source_is_walker.
+                if source_is_walker {
+                    state
+                        .loyalty_activated_this_turn
+                        .insert((controller_idx as u8, source_id));
                 }
                 // Phase 6: dispatch the effect.
                 if resolved.is_mana_ability {

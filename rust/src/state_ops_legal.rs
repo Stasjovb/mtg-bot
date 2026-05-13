@@ -1068,6 +1068,32 @@ impl GameState {
                 continue;
             };
             let is_creature = printing.card_types.iter().any(|t| t == "Creature");
+            // CE20 Slice 5 (Walker loyalty Slice C): CR 606.3 —
+            // "a player may activate a loyalty ability of a
+            // planeswalker they control only if no player has
+            // activated a loyalty ability of that planeswalker this
+            // turn." Per-walker (not per-ability): if the walker has
+            // already had ANY loyalty ability fire this turn, skip
+            // ALL of its activated abilities for the remainder of
+            // the turn. Gate fires BEFORE the per-ability loop so
+            // none of the walker's abilities emit.
+            //
+            // Today every walker's `activated_abilities` are loyalty
+            // abilities by construction (the only walker substrate
+            // landed is Tezzeret-shape, where each ability carries a
+            // `cost.loyalty` value). A future walker printing with
+            // both loyalty + non-loyalty activated abilities (e.g.
+            // The Wanderer's "0: prevent damage" reads as a loyalty
+            // ability, not a non-loyalty activated) would still want
+            // the gate at this granularity per CR 606.3's wording.
+            let is_walker = printing.card_types.iter().any(|t| t == "Planeswalker");
+            if is_walker
+                && self
+                    .loyalty_activated_this_turn
+                    .contains(&(idx as u8, obj.id))
+            {
+                continue;
+            }
             // **Bridge follow-up (post-CE20-Slice-1).** The legacy
             // `mana_produced.is_some()` emission block that USED to
             // live here is gone — `parse_printing` now synthesizes a

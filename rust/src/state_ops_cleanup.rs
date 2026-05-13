@@ -277,6 +277,16 @@ impl GameState {
         // contract.
         self.triggered_this_turn.clear();
 
+        // (5) CE20 Slice 5 (Walker loyalty Slice C) — reset the
+        // once-per-turn-per-walker ledger so every walker becomes
+        // re-activatable next turn. CR 606.3 is "this turn"-scoped;
+        // the cleanup step is the natural reset point (same site as
+        // the ETB once-per-turn ledger above). A walker that died
+        // mid-turn has a stale ledger entry that survives until
+        // here; the clear is unconditional (cheaper than walking
+        // bf to filter-stamp).
+        self.loyalty_activated_this_turn.clear();
+
         let d = PyDict::new(py);
         d.set_item("discarded", discarded)?;
         d.set_item("damage_cleared", damage_cleared)?;

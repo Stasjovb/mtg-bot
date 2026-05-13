@@ -1277,6 +1277,54 @@ pub struct GameState {
     /// state pre- and post-resolve produces the same digest
     /// regardless of intermediate target picks.
     pub current_resolve_payload_target_id: Option<u32>,
+    /// **CE20 follow-up Slice 5 (Walker loyalty Slice C) —
+    /// once-per-turn-per-walker activation ledger.** CR 606.3:
+    /// "A player may activate a loyalty ability of a planeswalker
+    /// they control only if no player has activated a loyalty
+    /// ability of that planeswalker this turn." Keys are
+    /// `(controller_idx, walker_obj_id)` pairs; presence means the
+    /// walker has already had one of its loyalty abilities
+    /// activated this turn.
+    ///
+    /// **Stamp site**: `ActivateAbility` apply Phase 5e (after the
+    /// loyalty-counter mutation in Phase 5d). Only stamped when
+    /// the source has card_type Planeswalker — non-walker
+    /// activations never touch this ledger.
+    ///
+    /// **Gate sites**:
+    ///   - `legal_decisions` emission walk (state_ops_legal.rs):
+    ///     when the source is a walker AND `(controller, source_id)`
+    ///     is in the ledger, skip ALL the source's activated
+    ///     abilities. This is a per-walker gate, not a per-ability
+    ///     gate — the rule says "a loyalty ability", singular, per
+    ///     walker per turn.
+    ///   - `ActivateAbility` apply precheck (Phase 3c): same shape
+    ///     as the emission gate; raises BEFORE any commit on
+    ///     direct-caller bypass.
+    ///
+    /// **Reset**: cleared at the cleanup step
+    /// (`cleanup_step_for_active_player`), same site as
+    /// `triggered_this_turn`. CR 606.3 is "this turn"-scoped.
+    ///
+    /// **Why a tuple key and not just walker_obj_id?** CR 606.3 is
+    /// per-player-per-walker — multiple players can each activate
+    /// their own walker's loyalty ability on the same turn. Today
+    /// only the controller activates their own walker's loyalty
+    /// abilities (CR 606.1), but the (controller, walker_id) key
+    /// shape mirrors `triggered_this_turn` and stays future-proof
+    /// for "your opponent can activate your walker" mechanics that
+    /// don't exist in EoE.
+    ///
+    /// **Not serialized into the fingerprint.** Bookkeeping like
+    /// `triggered_this_turn`. Two states reached via different
+    /// histories that share the same observable battlefield /
+    /// stack / hand / library / graveyard / life MUST produce the
+    /// same fingerprint regardless of which loyalty abilities have
+    /// or haven't been activated — gameplay-observable effect of
+    /// the ledger is "the next ATTEMPT to activate fails" which
+    /// will surface as a legal_decisions emission shape change at
+    /// the priority point that uses the ledger.
+    pub loyalty_activated_this_turn: std::collections::HashSet<(u8, u32)>,
 }
 
 impl Clone for GameState {
@@ -1314,6 +1362,11 @@ impl Clone for GameState {
             pending_dies_dispatches: self.pending_dies_dispatches.clone(),
             pending_leaves_dispatches: self.pending_leaves_dispatches.clone(),
             current_resolve_payload_target_id: self.current_resolve_payload_target_id,
+            // CE20 Slice 5 (Walker loyalty Slice C): clone the once-
+            // per-turn-per-walker ledger. CoW-friendly; HashSet's
+            // clone is O(n) where n is the number of distinct walker
+            // activations this turn (typically 0 or 1 in EoE).
+            loyalty_activated_this_turn: self.loyalty_activated_this_turn.clone(),
         }
     }
 }
@@ -1760,5 +1813,9 @@ pub fn make_synthetic_state(
         // set by the stack resolver before apply_effect for
         // targeted activations, restored after. None by default.
         current_resolve_payload_target_id: None,
+        // CE20 Slice 5 (Walker loyalty Slice C): empty
+        // once-per-turn-per-walker ledger at construction; reset
+        // each turn at cleanup.
+        loyalty_activated_this_turn: std::collections::HashSet::new(),
     }
 }

@@ -4050,9 +4050,9 @@ the forked branch.
   - **Walker damage redirect** (CR 119.5 — Slice B). Combat damage
     targeting a walker requires growing `DeclareAttackers` to accept
     a walker as an attack target.
-  - **Once-per-turn-per-walker ledger** (CR 606.3 — Slice C). Each
-    player can activate at most ONE loyalty ability per walker per
-    turn. Needs a ledger reset at cleanup step.
+  - **Once-per-turn-per-walker ledger** (CR 606.3 — Slice C). **CLOSED**
+    by I57 (`GameState.loyalty_activated_this_turn` ledger + emission
+    gate + Phase 3c precheck + Phase 5e stamp + cleanup reset).
   - **`starting_loyalty` ETB seeding** on `CardPrinting`. Today
     walker tests seed `loyalty_counters` directly via the
     `set_loyalty_counters` test helper. Production wiring needs a
@@ -4060,6 +4060,81 @@ the forked branch.
     walker-entering call site.
   - **Cross-engine smoke probe** for walker activations. Deferred
     until a Tezzeret-shape Python printing surfaces in the harness.
+
+### I57. `GameState.loyalty_activated_this_turn: HashSet<(u8, u32)>` once-per-turn-per-walker ledger; emission gate + Phase 3c apply precheck + Phase 5e stamp + cleanup-step reset (CE20 follow-up Slice 5 Walker loyalty Slice C closure)
+
+- **Pinned by**:
+  - 11 new `tests_rust/test_activated.py` `test_walker_once_per_turn_*`
+    regression pins covering emission lock-out post-activation (3),
+    apply-arm refusal of double-activation (3: locked raises, same
+    ability twice raises, zero-cost still locks), no-residue on
+    failed activation (1: Phase 3b shortfall doesn't stamp), cleanup
+    reset (2: cleanup_step_for_active_player + end_turn_and_start_next),
+    CoW clone isolates the ledger (1), and end-to-end 3-state life
+    cycle (1: activate -> locked -> cleanup -> re-activate).
+
+- **Rule**. CR 606.3: "A player may activate a loyalty ability of a
+  planeswalker they control only if no player has activated a
+  loyalty ability of that planeswalker this turn."
+
+- **Ledger shape**. `GameState.loyalty_activated_this_turn:
+  HashSet<(u8, u32)>` — keys are `(controller_idx, walker_obj_id)`
+  pairs. Mirrors `triggered_this_turn`'s tuple-key shape; the
+  per-controller axis is future-proofed for "your opponent can
+  activate your walker" mechanics that don't exist in EoE today
+  (CR 606.1 — only the walker's controller can activate). Cloned
+  in CoW; initialized empty at construction (state.rs + setup.rs);
+  serialized OUT of fingerprint (bookkeeping, not gameplay-
+  observable digest).
+
+- **Emission gate** (`state_ops_legal.rs`). Per-walker gate at the
+  TOP of the per-printing activated-ability loop (before per-ability
+  tier / loyalty / tap_self / mana checks). When the source has
+  `card_types.contains("Planeswalker")` AND the `(controller, obj.id)`
+  key is in the ledger, skip ALL of the walker's activated abilities
+  for the remainder of the turn. Per-walker, not per-ability:
+  CR 606.3 locks the whole walker after ONE loyalty activation.
+
+- **Apply-arm Phase 3c precheck**. Mirrors the emission filter's
+  shape: raises BEFORE any commit if the walker is already in the
+  ledger. Same source-controller key as the emission walk. Error
+  message: `"ActivateAbility: source N planeswalker has already
+  activated a loyalty ability this turn (CR 606.3 — once-per-
+  turn-per-walker)"`.
+
+- **Apply-arm Phase 5e stamp**. AFTER the loyalty-counter mutation
+  in Phase 5d. Gated on `source_is_walker` (the same Planeswalker
+  card_type check used by Phase 3c). Stamps on EVERY successful
+  walker activation (including the cost-0 ability) — CR 606.3
+  doesn't distinguish by cost value, any successful activation
+  locks the walker. Phase-5e position is load-bearing: a Phase 3
+  / 4 failure that returns early leaves no ledger residue, so the
+  walker stays activatable on retry.
+
+- **Cleanup reset** (`state_ops_cleanup.rs::
+  cleanup_step_for_active_player`). Unconditional `.clear()` of
+  the ledger after the existing `triggered_this_turn.clear()`.
+  CR 606.3 is "this turn"-scoped; cleanup is the natural reset.
+  Composition primitive `end_turn_and_start_next` inherits the
+  reset through its `cleanup_step_for_active_player` delegation.
+
+- **Source-type granularity**. Today the per-walker gate maps 1:1
+  to "the walker has loyalty abilities" (Tezzeret-shape walkers
+  carry only loyalty abilities). A future walker printing with a
+  mixed loyalty + non-loyalty activated-ability shape (rare) would
+  over-gate here — fix would be a per-ability `is_loyalty: bool`
+  flag, deferred until such a printing surfaces.
+
+- **EoE printings affected**: 1 (Tezzeret, Cruel Captain — same
+  walker as I56).
+
+- **Out of scope (deferred to future slices)**:
+  - **Walker damage redirect** (CR 119.5 — Slice B). Unchanged from
+    I56's out-of-scope.
+  - **`starting_loyalty` ETB seeding** on `CardPrinting`. Unchanged
+    from I56.
+  - **Cross-engine smoke probe** for walker activations. Unchanged
+    from I56.
 
 ### I55. `ActivationCost.sacrifice_another_creature_or_artifact / sacrifice_a_land / sacrifice_another_artifact: bool` extend the cost shape; emission target fan-out + apply-arm sacrifice-target validation + Phase 5c targeted-sacrifice commit (CE20 follow-up Slice 6 targeted-sacrifice variants closure)
 
