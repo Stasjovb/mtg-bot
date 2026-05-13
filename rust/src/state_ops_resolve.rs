@@ -1549,11 +1549,30 @@ fn apply_effect(
         // controller deals ``amount`` damage to each of their
         // opponents.
         //
-        // **Two-player engine first slice: damages the defender.** No
-        // explicit target — the controller is implicit
-        // (state.active_player) and the one opponent is the defender
-        // (1 - active_player). Mirrors the DealDamage AnyPlayer arm
-        // with implicit-defender targeting.
+        // **Two-player engine: damages the source-controller's
+        // opponent.** No explicit target — the controller is the
+        // SOURCE's controller (per CR 119.5 / 608.2; mirrors
+        // Python's `DealDamageEachOpponent.resolve(state,
+        // controller_id, targets)` at
+        // `effects/generic/damage.py:152` which iterates
+        // `state.players` and skips `p.id == controller_id`). The
+        // one opponent is `1 - controller`. Mirrors the I59/I60
+        // controller-of-effect pattern: prefer the transient
+        // `state.current_resolve_source_controller` (set by the
+        // stack resolver around each `apply_effect` call), falling
+        // back to `state.active_player` for back-compat with direct
+        // `apply_effect_pub` callers.
+        //
+        // **Why the fix (I62).** Pre-fix this arm hardcoded
+        // `1 - state.active_player` as the defender. Wrong when the
+        // resolving spell / triggered ability has a controller !=
+        // active_player. Example: on p0's turn, p1's creature has
+        // an "ETB → deal 2 damage to each opponent" trigger (e.g.
+        // a flicker-ETB scenario where the creature blinks back
+        // during p0's turn). Pre-fix the trigger damaged p1
+        // (active_player=0's opponent = p1), self-damaging the
+        // trigger's controller. Post-fix the trigger correctly
+        // damages p0 (the SOURCE's opponent).
         //
         // **Negative ``amount`` raises** loudly (mirrors round-3
         // DealDamage's raise-on-negative shape; "deal -2 damage" is
@@ -1565,7 +1584,11 @@ fn apply_effect(
                     "DamageEachOpponent amount must be non-negative, got {amount}"
                 )));
             }
-            let defender = (1 - state.active_player) as usize;
+            let controller = state
+                .current_resolve_source_controller
+                .map(|c| c as usize)
+                .unwrap_or(state.active_player as usize);
+            let defender = 1 - controller;
             state.players[defender].life -= *amount;
         }
         // Round-18: DamageEachCreature. CR 701.4 — Pyroclasm pattern:
