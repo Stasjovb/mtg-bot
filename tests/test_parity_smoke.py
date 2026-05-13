@@ -10464,3 +10464,310 @@ def test_cross_engine_real_eoe_mechan_assembler_another_artifact_parity(
     # Sanity: both stacks are empty after drain.
     assert rust_state.stack_size() == 0
     assert len(py_state.stack) == 0
+
+
+def test_cross_engine_real_eoe_mechan_assembler_once_per_turn_parity(
+    parity_smoke,
+):
+    """Probe E: Mechan Assembler (EoE) `once_per_turn` flag pin —
+    trigger fires once on the first qualifying ENTERS and is
+    suppressed on the second within the same turn.
+
+    Oracle text (`data/edge_of_eternities.json`):
+
+        "Whenever another artifact you control enters, create a 2/2
+         colorless Robot artifact creature token. This ability
+         triggers only once each turn."
+
+    Probe D pinned the predicate algebra's NOT branch (the "another"
+    clause). This probe pins the **`once_per_turn` flag** on the
+    TriggeredAbility shape:
+
+      * Rust: ``TriggeredAbility::once_per_turn: bool`` consumed at
+        ``state_ops_resolve.rs:521`` (predicate-match gate skips the
+        firing when ``state.triggered_this_turn`` contains
+        ``(source_id, ability_index)``); stamped eagerly at push time
+        (``push_triggered_ability`` line 581-585).
+      * Python: ``TriggeredAbility.once_per_turn: bool`` consumed at
+        ``turn.py:should_fire_trigger`` (``state.once_per_turn_fired``
+        ledger; same eager-record semantics). Both eagerly record at
+        the moment the event happens (MTG semantics — the ability has
+        "triggered" the moment its event fires, even if it later
+        fails to find legal targets and fizzles).
+
+    Probe shape (same inject-and-fan-out frame as Probe D, twice):
+
+      1. Pre-place Mechan Assembler with ``once_per_turn=True`` on
+         p0 bf. Its OWN arrival doesn't fire (NOT(IsSelf) suppresses,
+         carried over from Probe D's pin). Ledger empty.
+
+      2. Inject Mechan Drone #1 on p0 bf. ENTERS dispatch: predicate
+         matches all three arms (subject_is_artifact + controlled_by_you
+         + NOT(IsSelf)). The ``once_per_turn`` gate sees an empty ledger
+         for ``(assembler_id, ability_index=0)`` -> fires. Ledger now
+         contains the key. Drain stack: +1 life.
+
+      3. Inject Mechan Drone #2 on p0 bf. ENTERS dispatch: predicate
+         still matches (Drone #2 is a different subject, all arms
+         satisfied). The ``once_per_turn`` gate sees the ledger key
+         -> trigger SKIPPED. No push, no life gain. Stack stays empty.
+
+      4. Cross-engine parity check: BOTH engines fired the trigger
+         exactly ONCE across two qualifying ENTERS in the same turn.
+         p0 life: 20 -> 21 (not 22). Stacks empty post-drain.
+
+    This is the **first** Phase 5 probe to exercise the
+    ``once_per_turn`` flag through the cross-engine bridge — the
+    Rust parser at ``cards.rs:4419`` reads ``once_per_turn`` from the
+    triggered-ability dict; the Python bridge at
+    ``cross_engine.py:275`` mirrors the same field into the Python
+    ``TriggeredAbility`` instance. Both engines' eager-record-at-push
+    semantics agree under this probe.
+
+    The third-arrival recovery (cleanup -> ledger cleared -> trigger
+    fires again on the same turn after) is OUT of scope — the cleanup
+    step's reset path (Rust ``state_ops_cleanup.rs:272`` clears
+    ``state.triggered_this_turn``; Python ``turn.py:1120``
+    ``state.once_per_turn_fired.clear()``) is exercised by existing
+    Rust + Python unit tests, and pinning it through the
+    inject-and-fan-out cross-engine frame would require driving a
+    cleanup phase change on both engines, which is a wider surface
+    than this probe's contract. Future probe: turn-boundary
+    once_per_turn reset via the cleanup path.
+    """
+    from mtg_bot.parity.cross_engine import (
+        CardDef, DeckSpec, build_python_state, build_rust_state,
+    )
+
+    # Same predicate shape as Probe D (pinned to clean PASS there).
+    another_artifact_predicate = {
+        "kind": "and",
+        "left": {
+            "kind": "and",
+            "left": {"kind": "subject_is_artifact"},
+            "right": {"kind": "controlled_by_you"},
+        },
+        "right": {
+            "kind": "not",
+            "inner": {"kind": "source_is_self"},
+        },
+    }
+    mechan_assembler = CardDef(
+        name="Mechan Assembler",
+        card_type="Creature",
+        mana_cost_generic=4,
+        mana_cost_colored=(("U", 1),),
+        power=4,
+        toughness=4,
+        triggered_abilities=(
+            {
+                "event": "enters",
+                "predicate": another_artifact_predicate,
+                "effect": {"kind": "gain_life", "amount": 1},
+                # The flag pin -- this is the new bit this probe
+                # exercises on top of Probe D's predicate algebra.
+                "once_per_turn": True,
+            },
+        ),
+    )
+    mechan_drone = CardDef(
+        name="Mechan Drone",
+        card_type="Creature",
+        mana_cost_generic=2,
+        power=2,
+        toughness=2,
+    )
+    spec = DeckSpec(
+        card_defs=(mechan_assembler, mechan_drone),
+        p0_library=(),
+        p1_library=(),
+    )
+    py_state = build_python_state(spec)
+    rust_state = build_rust_state(spec)
+
+    # ---- Rust side ----
+    ZONE_BATTLEFIELD = 2
+    rust_assembler_dict = {
+        "name": "Mechan Assembler",
+        "card_types": ["Artifact", "Creature"],
+        "mana_cost": {"generic": 4, "U": 1},
+        "effects": [],
+        "power": 4,
+        "toughness": 4,
+        "triggered_abilities": [
+            {
+                "event": "enters",
+                "predicate": another_artifact_predicate,
+                "effect": {"kind": "gain_life", "amount": 1},
+                "once_per_turn": True,
+            }
+        ],
+    }
+    rust_assembler_id = rust_state.register_and_inject_object(
+        rust_assembler_dict, 0, ZONE_BATTLEFIELD
+    )
+    # Assembler's own arrival: NOT(IsSelf) suppresses; stack stays empty
+    # AND the once_per_turn ledger stays empty (the gate only stamps on
+    # successful push, not on predicate-failed firings).
+    assert rust_state.stack_size() == 0
+    assert rust_state.get_life(0) == 20
+
+    rust_drone_dict_base = {
+        "name": "Mechan Drone",
+        "card_types": ["Artifact", "Creature"],
+        "mana_cost": {"generic": 2},
+        "effects": [],
+        "power": 2,
+        "toughness": 2,
+    }
+
+    # Drone #1: first qualifying arrival. Trigger fires, ledger stamps.
+    rust_drone1_id = rust_state.register_and_inject_object(
+        rust_drone_dict_base, 0, ZONE_BATTLEFIELD
+    )
+    assert rust_state.stack_size() == 1, (
+        "Rust: Drone #1 arrival should push Mechan Assembler's trigger "
+        "onto the stack (first fire of the turn)"
+    )
+    # Drain the trigger now (before Drone #2) so we can observe the
+    # +1 life from the first firing in isolation.
+    while rust_state.stack_size() > 0:
+        rust_state.resolve_top_of_stack()
+    rust_p0_life_after_first = rust_state.get_life(0)
+    assert rust_p0_life_after_first == 21, (
+        f"Rust p0 life should be 21 after first trigger; "
+        f"got {rust_p0_life_after_first}"
+    )
+
+    # Drone #2: second qualifying arrival same turn. once_per_turn
+    # gate suppresses the trigger -- stack must stay empty, life
+    # must NOT advance to 22.
+    rust_drone2_id = rust_state.register_and_inject_object(
+        rust_drone_dict_base, 0, ZONE_BATTLEFIELD
+    )
+    assert rust_state.stack_size() == 0, (
+        "Rust: Drone #2 arrival should NOT push a trigger -- "
+        "once_per_turn gate suppresses the second fire within the "
+        f"same turn. Got stack_size={rust_state.stack_size()}"
+    )
+    assert rust_state.get_life(0) == 21, (
+        f"Rust p0 life should still be 21 (no second trigger); "
+        f"got {rust_state.get_life(0)}"
+    )
+
+    # ---- Python side ----
+    from mtg_bot.actions import _trigger_etb_abilities, resolve_top_of_stack
+    from mtg_bot.cards.base import CardPrinting, ManaCost
+    from mtg_bot.effects.base import TriggeredAbility
+    from mtg_bot.effects.generic.life import GainLife
+    from mtg_bot.effects.object_predicates import IsArtifact
+    from mtg_bot.effects.predicates import (
+        And, Controlled, Event, Not, Subject, IsSelf, YOU,
+    )
+    from mtg_bot.game import Zone
+
+    py_predicate = And(
+        left=And(
+            left=Subject(slot=None, inner=IsArtifact()),
+            right=Controlled(by=YOU, subject=None),
+        ),
+        right=Not(inner=IsSelf()),
+    )
+    assembler_printing = CardPrinting(
+        name="Mechan Assembler",
+        mana_cost_str="",
+        mana_cost=ManaCost(generic=4, colored=(("U", 1),)),
+        type_line="Artifact Creature",
+        supertypes=(),
+        card_types=("Artifact", "Creature"),
+        subtypes=(),
+        power=4,
+        toughness=4,
+        produces=frozenset(),
+        triggered_abilities=(
+            TriggeredAbility(
+                event=Event.ENTERS,
+                predicate=py_predicate,
+                effect=GainLife(amount=1),
+                once_per_turn=True,
+            ),
+        ),
+    )
+    py_assembler = py_state.new_object(
+        assembler_printing, owner_id=0, zone=Zone.BATTLEFIELD,
+    )
+    py_assembler.summoning_sick = False
+    py_assembler.tapped = False
+    py_assembler.damage = 0
+    py_assembler.etb_timestamp = py_state.next_timestamp
+    py_state.next_timestamp += 1
+    py_state.battlefield.append(py_assembler)
+    _trigger_etb_abilities(py_state, py_assembler)
+    # Assembler's own arrival suppressed (NOT(IsSelf)).
+    assert len(py_state.stack) == 0
+    assert py_state.players[0].life == 20
+
+    drone_printing = CardPrinting(
+        name="Mechan Drone",
+        mana_cost_str="",
+        mana_cost=ManaCost(generic=2),
+        type_line="Artifact Creature",
+        supertypes=(),
+        card_types=("Artifact", "Creature"),
+        subtypes=(),
+        power=2,
+        toughness=2,
+        produces=frozenset(),
+        triggered_abilities=(),
+    )
+
+    # Drone #1: first qualifying arrival; ledger empty -> fires.
+    py_drone1 = py_state.new_object(
+        drone_printing, owner_id=0, zone=Zone.BATTLEFIELD,
+    )
+    py_drone1.summoning_sick = True
+    py_drone1.tapped = False
+    py_drone1.damage = 0
+    py_drone1.etb_timestamp = py_state.next_timestamp
+    py_state.next_timestamp += 1
+    py_state.battlefield.append(py_drone1)
+    _trigger_etb_abilities(py_state, py_drone1)
+    assert len(py_state.stack) == 1, (
+        "Python: Drone #1 arrival should push Mechan Assembler's "
+        "trigger onto the stack (first fire of the turn)"
+    )
+    # Drain the first firing before Drone #2.
+    while py_state.stack:
+        resolve_top_of_stack(py_state)
+    py_p0_life_after_first = py_state.players[0].life
+    assert py_p0_life_after_first == 21
+
+    # Drone #2: second qualifying arrival same turn; ledger gates off.
+    py_drone2 = py_state.new_object(
+        drone_printing, owner_id=0, zone=Zone.BATTLEFIELD,
+    )
+    py_drone2.summoning_sick = True
+    py_drone2.tapped = False
+    py_drone2.damage = 0
+    py_drone2.etb_timestamp = py_state.next_timestamp
+    py_state.next_timestamp += 1
+    py_state.battlefield.append(py_drone2)
+    _trigger_etb_abilities(py_state, py_drone2)
+    assert len(py_state.stack) == 0, (
+        "Python: Drone #2 arrival should NOT push a trigger -- "
+        "once_per_turn gate suppresses the second fire within the "
+        f"same turn. Got stack={[s.source.printing.name for s in py_state.stack]}"
+    )
+    assert py_state.players[0].life == 21
+
+    # ---- Cross-engine parity ----
+    # Drain (no-op — both stacks already empty), then compare:
+    _drain_stack_both(py_state, rust_state)
+    # BOTH engines: net +1 life on p0 across two qualifying ENTERS
+    # events in the same turn, not +2. p1 unchanged.
+    assert rust_state.get_life(0) == 21
+    assert rust_state.get_life(1) == 20
+    assert py_state.players[0].life == 21
+    assert py_state.players[1].life == 20
+    assert rust_state.get_life(0) == py_state.players[0].life
+    assert rust_state.get_life(1) == py_state.players[1].life
