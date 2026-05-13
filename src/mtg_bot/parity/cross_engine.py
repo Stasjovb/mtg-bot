@@ -1372,6 +1372,92 @@ def _ta_dict_to_python_effect(eff_dict: dict):
         # consistency with what Rust's parser accepts.
         from mtg_bot.effects.generic.draw_mill import MillTargetPlayer
         return MillTargetPlayer(amount=eff_dict.get("count", 1))
+    if kind == "exile_target_creature_until_source_leaves":
+        # "Exile any target creature until SOURCE leaves the
+        # battlefield." Rust's
+        # ``Effect::ExileTargetCreatureUntilSourceLeaves``
+        # (cards.rs:1268) is a UNIT VARIANT — no fields. Its
+        # parse_effect arm at cards.rs:3322-3323 takes no fields. The
+        # resolve arm at state_ops_resolve.rs:5537-5639 carries the
+        # I79 controller-of-effect fix: the target picker is a
+        # deterministic first-slice shortcut that picks the SOURCE'S
+        # controller's opponent's first Creature, where ``defender =
+        # 1 - controller`` and ``controller`` derives from
+        # ``current_resolve_source_controller`` (with active_player
+        # fallback). Sibling closure to I70 / I75 / I76 / I78 —
+        # identical defender-swap shape; differs in destination zone
+        # (exile-with-source-link vs exile / graveyard / hand /
+        # library bottom) and in the round-28 ``exiled_with_source``
+        # bookkeeping that enables manual return via
+        # ``return_paired_exiles_for(source_id)``.
+        #
+        # **Rust target-pick semantics.** The Rust resolve arm scans
+        # the defender's bf top-to-bottom for the first object whose
+        # ``card_types`` contains "Creature"; no eligible creature =
+        # silent fizzle. Stamps ``exiled_with_source =
+        # Some(source_obj_id)`` on the moved object so a follow-up
+        # ``return_paired_exiles_for(source_id)`` can return it
+        # when the source leaves play. CR 400.7 zone-change reset
+        # (tapped, summoning_sick=true per r28 CE1, damage,
+        # counters, attached_to) preserved.
+        #
+        # **Python target-pick semantics.** Python's
+        # ``ExileTargetCreatureUntilSourceLeaves`` class
+        # (effects/generic/exile.py:504) is target-required
+        # (``requires_target() -> True``); its ``legal_targets``
+        # walks every creature on the battlefield (subject to the
+        # ``excluded_subtypes`` / ``opponents_only`` / ``yours_only``
+        # rider flags, which all default to safe-defaults — empty
+        # frozenset / False / False). The targeting pipeline picks
+        # at PUSH time via ``push_triggered_ability`` ->
+        # ``controller.agent.choose_target`` over the legal_targets
+        # pool. Probes that exercise this bridge end-to-end seat a
+        # ``_PickFirstOpponentTargetAgent`` (or a defender-bf-first
+        # creature shim) on the source's controller — the agent's
+        # opponent-controller filter mirrors Rust's defender-side
+        # scan exactly on the 2-player harness.
+        #
+        # **Rider widenings.** Rust's variant has no
+        # ``excluded_subtypes`` / ``opponents_only`` / ``yours_only``
+        # mirrors today — those are Python-side-only rider fields
+        # that fan out to follow-on Rust variants once those EoE
+        # printings need them (mirrors the
+        # ``return_creature_from_your_graveyard_to_hand`` /
+        # ``return_artifact_or_creature_from_your_graveyard_to_hand``
+        # split shape). The bridge constructs the bare default
+        # shape (empty excluded_subtypes, both restrict-flags False),
+        # which observably matches Rust's any-creature scan when
+        # synthetic probes seat only eligible bait.
+        #
+        # **LTB / pairing semantics out of bridge scope.** The Rust
+        # arm pushes the leaving id onto
+        # ``pending_leaves_dispatches`` and stamps
+        # ``exiled_with_source``; the Python class invokes
+        # ``move_off_battlefield`` which fans out LTB triggers
+        # through the standard Python LEAVES dispatch and stamps
+        # ``exiled_by_source``. The bookkeeping field-name differs
+        # (``exiled_with_source`` on Rust, ``exiled_by_source`` on
+        # Python) but observable post-resolve state agrees: the
+        # exiled object is in the owner's exile zone with a link
+        # back to the source. Cross-engine probes that drive this
+        # arm assert on bf / exile membership and source object
+        # presence; the link-name asymmetry is internal to each
+        # engine and not exposed on the bridge surface.
+        #
+        # Mirrors Rust's ``parse_effect`` arm (cards.rs:3322-3323);
+        # the unit variant takes no fields, so the bridge translator
+        # ignores every other key on the dict for round-trip dict-
+        # shape consistency. Forward-compatible with future rider-
+        # widened Rust variants — those would land as separate
+        # ``kind`` arms on this translator (one per Rust Effect
+        # variant), mirroring the
+        # ``return_creature_from_your_graveyard_to_hand`` /
+        # ``return_artifact_or_creature_from_your_graveyard_to_hand``
+        # split convention.
+        from mtg_bot.effects.generic.exile import (
+            ExileTargetCreatureUntilSourceLeaves,
+        )
+        return ExileTargetCreatureUntilSourceLeaves()
     # === PHASE5_BRIDGE_ARMS_INSERT_ABOVE_THIS_LINE ===
     # New `kind` arms go IMMEDIATELY ABOVE this marker. Do NOT delete the marker.
     # Append-only convention prevents merge collisions when multiple agents add arms in parallel.
