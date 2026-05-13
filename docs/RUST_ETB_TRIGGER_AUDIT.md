@@ -1529,8 +1529,80 @@ Effect arm path.
   `Predicate::Subject(slot, inner)` substrate.
 - Multi-subject BLOCKS predicates (Skystinger): same substrate
   dependency.
-- `Effect::DestroyAllCreatures` LTB fan-out (the 14th known site;
-  needs per-victim push loop).
+- ~~`Effect::DestroyAllCreatures` LTB fan-out (the 14th known site;
+  needs per-victim push loop).~~ **CLOSED by Slice 11** — see
+  completion notice below.
+- `HasSubtype(s)` predicate — still blocked on
+  `CardPrinting.subtypes` field.
+- `Effect::DrawCards` controller-of-effect fix — pre-existing
+  divergence, separate workstream.
+
+## Slice 11 completion notice (landed)
+
+Closes the 14th LTB-silent Effect arm: `Effect::DestroyAllCreatures`
+(Wrath of God shape) at `state_ops_resolve.rs:2887`.
+
+**The fix.** Per-victim push loop inside the existing destroyable-
+collection walk. Two adjacent additions land on each iteration AFTER
+the victim is pushed into the controller's graveyard:
+
+```rust
+let leaving_printing_id = obj.printing_id;
+let leaving_obj_id = obj.id;
+Arc::make_mut(&mut state.players[pidx].graveyard).push(obj);
+mark_left_battlefield_if_nonland(state, leaving_printing_id);
+state.pending_leaves_dispatches.push(leaving_obj_id);
+```
+
+Pre-Slice-11 the arm stamped `state.permanent_left_battlefield_this_turn
+= true;` directly after the loop AND pushed NOTHING onto the LEAVES
+queue. Slice 11 routes the void-flag stamping through the shared
+`mark_left_battlefield_if_nonland` helper (same as every other bf-exit
+in the engine) AND queues each victim's id for LEAVES dispatch. The
+drain runs in `resolve_top_of_stack`'s
+`drain_pending_leaves_dispatches` call AFTER the resolving Wrath
+spell's stack pop — same defer-past-pop pattern as the 13 Slice 10
+sites.
+
+**Deletion**: the standalone `let any_destroyed = !destroyable.is_empty();
+if any_destroyed { state.permanent_left_battlefield_this_turn = true; }`
+post-loop block is removed; the helper handles the flag stamp per-
+victim now.
+
+**Wired sites totals after Slice 11:**
+
+- 14 `Effect`-arm bf-exit sites in `state_ops_resolve.rs` (13 single-
+  target Slice 10 + 1 mass-destroy Slice 11).
+- 1 sacrifice-cost path in `state_ops_actions.rs::ActivateAbility`
+  arm (Slice 10).
+
+**Tests** (5 new in `tests_rust/test_triggers.py`):
+
+- `test_ltb_fires_on_destroy_all_creatures_effect_arm` — single
+  victim with SourceIsSelf LTB fires on Wrath; post-pop drain pattern
+  pinned.
+- `test_ltb_fires_for_each_victim_on_mass_destroy` — TWO victims with
+  separate self-LTB triggers both land on the stack post-Wrath (one
+  per victim).
+- `test_ltb_observer_fires_on_destroy_all_creatures_effect_arm` —
+  indestructible observer with `subject_is_creature` LTB fires on
+  victim's bf-exit (observer-side dispatch path pin).
+- `test_void_flag_still_set_on_destroy_all_creatures` — the helper-
+  routed flag stamping preserves the pre-Slice-11 void-flag invariant
+  (CE13 / I29).
+- `test_no_ltb_fired_when_destroy_all_creatures_destroys_nothing` —
+  Wrath on an empty bf is a silent no-op (no LTB triggers, no stack
+  growth).
+
+**Rust gate**: 2068/2068 pass (Slice 10 post-merge baseline 2063 + 5
+new from this slice).
+
+**Out of scope for Slice 11 (queued for Slice 12+):**
+
+- `Event::DealsCombatDamage` — still blocked on
+  `Predicate::Subject(slot, inner)` substrate.
+- Multi-subject BLOCKS predicates (Skystinger): same substrate
+  dependency.
 - `HasSubtype(s)` predicate — still blocked on
   `CardPrinting.subtypes` field.
 - `Effect::DrawCards` controller-of-effect fix — pre-existing

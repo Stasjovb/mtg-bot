@@ -2903,7 +2903,6 @@ fn apply_effect(
                     Some((obj.controller as usize, obj.id))
                 })
                 .collect();
-            let any_destroyed = !destroyable.is_empty();
             for (pidx, target_id) in destroyable {
                 let bf_mut: &mut Vec<GameObject> =
                     Arc::make_mut(&mut state.players[pidx].battlefield);
@@ -2922,14 +2921,36 @@ fn apply_effect(
                 obj.counters = 0;
                 obj.attached_to = None;
                 obj.exiled_with_source = None;
+                let leaving_printing_id = obj.printing_id;
+                let leaving_obj_id = obj.id;
                 Arc::make_mut(&mut state.players[pidx].graveyard).push(obj);
-            }
-            // Round-29 Void LTB: DestroyAllCreatures is filtered to
-            // Creature-typed permanents only, which are nonland by
-            // definition. If any creature was destroyed, a nonland
-            // permanent left the battlefield this turn.
-            if any_destroyed {
-                state.permanent_left_battlefield_this_turn = true;
+                // Slice 11 (DestroyAllCreatures LTB residual). Mirror
+                // the 13 single-target Effect-arm bf-exit sites wired
+                // by ETB Slice 10: route the void-flag stamping
+                // through `mark_left_battlefield_if_nonland` (so the
+                // CE13 / I29 invariant lands the same way on the
+                // mass-destroy path as on every single-target destroy)
+                // AND push the leaving id onto pending_leaves_dispatches
+                // so LTB triggers fire on a Wrath. Pre-Slice-11 this
+                // arm directly set `permanent_left_battlefield_this_turn`
+                // and queued NO LTB triggers — silent on a mass
+                // destroy, the 14th LTB-silent site documented in
+                // ETB Slice 10's report.
+                //
+                // **Ordering**: the per-victim drain is deferred to
+                // `resolve_top_of_stack`'s
+                // `drain_pending_leaves_dispatches` call AFTER the
+                // resolving spell's stack pop. Mirrors the Slice 10
+                // defer-past-pop pattern — draining inline here would
+                // push LTB triggers ABOVE the still-present resolving
+                // spell and the subsequent stack.pop() would pop the
+                // wrong slot. The queue's natural FIFO + LIFO stack-
+                // resolve order land LTB triggers in
+                // bf-ETB-timestamp-collection order (oldest victim's
+                // LTB resolves LAST since LIFO stack pops most-recent-
+                // pushed first).
+                mark_left_battlefield_if_nonland(state, leaving_printing_id);
+                state.pending_leaves_dispatches.push(leaving_obj_id);
             }
         }
         // DestroyTargetNonlandPermanent. CR 701.7 with non-land filter
