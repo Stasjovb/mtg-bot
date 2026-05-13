@@ -703,9 +703,26 @@ def train_structured_model(
     policy_loss_weight: float = 1.0,
     hand_belief_loss_weight: float = 0.05,
     epoch_callback: Optional[Callable[[dict[str, Any]], None]] = None,
+    autocast_dtype: Any = "auto",
+    compile_model: Optional[bool] = None,
 ) -> TrainingHistory:
     """Train a :class:`StructuredModel` over a
     :class:`StructuredDataset`.
+
+    GPU fast path knobs (CUDA-only, no-op elsewhere):
+
+    - ``autocast_dtype``: ``"auto"`` (default) enables bf16 autocast
+      on CUDA / disables on CPU/MPS. Pass ``torch.float16`` /
+      ``torch.bfloat16`` to force a specific precision, or
+      ``False`` / ``None`` to disable. bf16 is preferred for
+      transformers (no GradScaler needed; wider dynamic range than
+      fp16). fp16 requires a GradScaler to avoid underflow during
+      gradient computation.
+    - ``compile_model``: ``None`` (default) enables
+      ``torch.compile(mode='reduce-overhead')`` on CUDA / disables
+      elsewhere. Pass ``True`` / ``False`` to override. First epoch
+      pays a one-time compile cost (~seconds); subsequent epochs
+      amortize.
 
     Sibling of :func:`train_value_network` for the Step 1 NN-
     representation rewrite. The two functions intentionally share the
@@ -796,8 +813,55 @@ def train_structured_model(
         )
 
     model = StructuredModel(config).to(device_obj)
-    optimizer = optim.Adam(model.parameters(), lr=learning_rate)
+
+    # ----- GPU fast path: autocast + torch.compile ------------------
+    # Resolve autocast dtype. ``"auto"`` -> bf16 on CUDA / off
+    # elsewhere. Explicit ``False`` / ``None`` disables. Mirrors
+    # ``SharedTensorNNEvalServer``'s knob shape so train + inference
+    # use a consistent precision policy.
+    is_cuda = device_obj.type == "cuda"
+    resolved_autocast_dtype = autocast_dtype
+    if resolved_autocast_dtype == "auto":
+        resolved_autocast_dtype = torch.bfloat16 if is_cuda else None
+    elif resolved_autocast_dtype is False:
+        resolved_autocast_dtype = None
+    autocast_enabled = is_cuda and resolved_autocast_dtype is not None
+    # GradScaler is only needed for fp16; bf16's wider dynamic range
+    # makes it unnecessary. Build one when the resolved dtype is
+    # fp16 specifically.
+    use_grad_scaler = (
+        autocast_enabled and resolved_autocast_dtype == torch.float16
+    )
+    scaler = torch.amp.GradScaler("cuda") if use_grad_scaler else None
+    # Compile gate: default True on CUDA, False elsewhere.
+    if compile_model is None:
+        compile_model = is_cuda
+    uncompiled_model = model
+    if compile_model and is_cuda:
+        try:
+            model = torch.compile(
+                model, mode="reduce-overhead", dynamic=False,
+            )
+        except Exception as exc:  # noqa: BLE001
+            import warnings
+            warnings.warn(
+                f"torch.compile failed ({exc}); falling back to "
+                f"eager execution.",
+                RuntimeWarning, stacklevel=2,
+            )
+            model = uncompiled_model
+
+    optimizer = optim.Adam(uncompiled_model.parameters(), lr=learning_rate)
     mse = nn.MSELoss()
+
+    import contextlib
+
+    def _autocast_ctx():
+        if autocast_enabled:
+            return torch.autocast(
+                device_type="cuda", dtype=resolved_autocast_dtype,
+            )
+        return contextlib.nullcontext()
 
     history = TrainingHistory()
     progress_enabled = progress_path is not None
@@ -853,35 +917,54 @@ def train_structured_model(
         batch: dict[str, torch.Tensor], *, train: bool,
     ) -> tuple[float, float, float]:
         """Run forward + (optional) backward on one batch. Returns
-        ``(total_loss, value_loss, policy_loss)`` as Python floats."""
-        # Move dict batch to the training device.
-        on_device = {k: v.to(device_obj) for k, v in batch.items()}
-        out = model(on_device)
-        value_pred = out["value"]
-        policy_logits = out["policy_logits"]
-        v_loss = mse(value_pred, on_device["outcome"])
-        has_pol = on_device["has_policy"].float()
-        # If no row in this batch has supervision, the masked-CE
-        # denominator is 1 (clamped) and per-row weights are zero,
-        # so the loss collapses to zero. Keeping the call avoids a
-        # branch and matches the MLP path's behavior.
-        p_loss = _structured_policy_loss(
-            policy_logits,
-            on_device["policy_target"],
-            on_device["action_mask"],
-            has_pol,
-        )
-        # Hand-belief term: the dataset doesn't carry hand-belief
-        # targets yet (Step 4 wires those), so this term contributes
-        # zero. We still touch the head's parameters during the
-        # forward pass when ``enable_hand_belief_head=True`` so the
-        # autograd graph is stable; with the head disabled (default),
-        # the contribution is identically zero.
-        total = v_loss + policy_loss_weight * p_loss
+        ``(total_loss, value_loss, policy_loss)`` as Python floats.
+
+        Forward pass is wrapped in ``torch.autocast`` when the
+        precision policy enables it; the backward + optimizer step
+        run in fp32 (autocast scope ends after the forward), with
+        a ``GradScaler`` injected for the fp16 case to keep
+        gradients from underflowing.
+        """
+        # Move dict batch to the training device. ``non_blocking=True``
+        # is a no-op for CPU tensors and a small win when the
+        # DataLoader pins memory; setting it unconditionally costs
+        # nothing.
+        on_device = {
+            k: v.to(device_obj, non_blocking=True)
+            for k, v in batch.items()
+        }
+        with _autocast_ctx():
+            out = model(on_device)
+            value_pred = out["value"]
+            policy_logits = out["policy_logits"]
+            v_loss = mse(value_pred, on_device["outcome"])
+            has_pol = on_device["has_policy"].float()
+            # If no row in this batch has supervision, the masked-CE
+            # denominator is 1 (clamped) and per-row weights are zero,
+            # so the loss collapses to zero. Keeping the call avoids a
+            # branch and matches the MLP path's behavior.
+            p_loss = _structured_policy_loss(
+                policy_logits,
+                on_device["policy_target"],
+                on_device["action_mask"],
+                has_pol,
+            )
+            # Hand-belief term: the dataset doesn't carry hand-belief
+            # targets yet (Step 4 wires those), so this term contributes
+            # zero. We still touch the head's parameters during the
+            # forward pass when ``enable_hand_belief_head=True`` so the
+            # autograd graph is stable; with the head disabled (default),
+            # the contribution is identically zero.
+            total = v_loss + policy_loss_weight * p_loss
         if train:
             optimizer.zero_grad()
-            total.backward()
-            optimizer.step()
+            if scaler is not None:
+                scaler.scale(total).backward()
+                scaler.step(optimizer)
+                scaler.update()
+            else:
+                total.backward()
+                optimizer.step()
         return total.item(), v_loss.item(), p_loss.item()
 
     try:
@@ -975,7 +1058,10 @@ def train_structured_model(
             pass
         raise
 
-    save_target = model
+    # When ``torch.compile`` wraps the model, save the underlying
+    # module's state_dict so the on-disk format stays compatible with
+    # ``NNEvaluator``'s loader (no ``_orig_mod.`` prefix).
+    save_target = getattr(model, "_orig_mod", uncompiled_model)
     save_target.to("cpu")
     torch.save(save_target.state_dict(), weights_out_path)
     history.weights_path = weights_out_path
