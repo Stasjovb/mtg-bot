@@ -13015,3 +13015,144 @@ def test_untap_target_empty_source_controllers_opponent_bf_fizzles(engine):
     # to assert (both bfs empty).
     assert state.is_stack_empty() is True
     assert state.graveyard_sizes[1] == p1_grave_before + 1
+
+
+# ====================================================================
+# AddCounters controller-of-effect fix — regression pins (I73).
+#
+# Pre-fix `defender = (1 - state.active_player) as usize`. Wrong
+# when the resolving spell / triggered ability has a controller !=
+# active_player — example: on p0's turn, p1 casts a "put a +1/+1
+# counter on target creature" instant aimed at the defender. Pre-
+# fix it self-buffed p1's own bf[0] (defender = 1 - active_player
+# = 1 - 0 = 1); post-fix it correctly places the counter on p0's
+# bf[0] (the source's controller's opponent — per the bounce /
+# exile / tap / untap defender convention).
+#
+# Sibling closure to I64 / I67 / I70 / I71 / I72 — same `defender
+# = 1 - controller` shape, same transient-slot lookup substrate.
+# ====================================================================
+
+
+def _add_counters_dict_for_i73(count=1):
+    """A "put a +1/+1 counter on target creature" instant. Used by
+    I73 regression pins. ``count`` lets a negative-delta variant
+    re-use the same builder (covers the -1/-1 path which writes
+    through the same saturating_add)."""
+    return {
+        "name": "Test +1/+1 I73",
+        "card_types": ["Instant"],
+        "mana_cost": {"G": 1},
+        "effects": [
+            {
+                "kind": "add_counters",
+                "count": count,
+                "target": {"kind": "any_creature"},
+            }
+        ],
+    }
+
+
+def test_add_counters_routes_to_source_controllers_opponent(engine):
+    """**Regression pin for the AddCounters controller-of-effect
+    fix (I73).**
+
+    On p0's turn (active_player=0), a counter instant whose
+    controller is p1 must place its counter on a P0 bf[0] object,
+    NOT a p1 bf[0] object. Pre-fix `defender = 1 - active_player =
+    1 - 0 = 1` => p1's own bf[0] got the counter (self-buff).
+    Post-fix `defender = 1 - controller = 1 - 1 = 0` => counter
+    correctly lands on p0's bf[0].
+
+    Synthetic seed: p0's bf[0] = id 0 (Forest). p1's bf[0] = id
+    67 (Forest). Both start at counters=0.
+    """
+    state = engine.make_synthetic_state()
+    assert state.active_player == 0
+
+    p0_bf_first_id = 0
+    p1_bf_first_id = 67
+    assert state.get_counters(p0_bf_first_id) == 0
+    assert state.get_counters(p1_bf_first_id) == 0
+
+    src_id = state.register_and_inject_object(
+        _add_counters_dict_for_i73(count=1), 1, ZONE_HAND
+    )
+
+    # Push with controller=1 (p1), active_player still 0.
+    state.push_to_stack(src_id, 1)
+    state.resolve_top_of_stack()
+
+    # Post-fix: p0's bf[0] got the +1 counter (p1's opponent's
+    # bf).
+    assert state.get_counters(p0_bf_first_id) == 1
+    # P1's bf[0] untouched (no self-buff).
+    assert state.get_counters(p1_bf_first_id) == 0
+
+
+def test_add_counters_active_player_controlled_still_works(engine):
+    """**Back-compat pin.** An AddCounters instant cast by the
+    active player must still write to the opponent's bf[0] — bug
+    never fired in this case pre-fix because controller ==
+    active_player.
+    """
+    state = engine.make_synthetic_state()
+    assert state.active_player == 0
+
+    p0_bf_first_id = 0
+    p1_bf_first_id = 67
+
+    src_id = state.register_and_inject_object(
+        _add_counters_dict_for_i73(count=1), 0, ZONE_HAND
+    )
+
+    state.push_to_stack(src_id, 0)
+    state.resolve_top_of_stack()
+
+    # P1's bf[0] got the counter (p0's opponent's bf).
+    assert state.get_counters(p1_bf_first_id) == 1
+    # P0's bf[0] untouched.
+    assert state.get_counters(p0_bf_first_id) == 0
+
+
+def test_add_counters_pause_variant_threads_controller(engine):
+    """**`resolve_top_of_stack_pause` parity pin for AddCounters.**
+    Mirrors the I64 / I67 / I68 / I69 / I70 / I71 / I72 pause-
+    variant pins."""
+    state = engine.make_synthetic_state()
+
+    p0_bf_first_id = 0
+    p1_bf_first_id = 67
+
+    src_id = state.register_and_inject_object(
+        _add_counters_dict_for_i73(count=1), 1, ZONE_HAND
+    )
+
+    state.push_to_stack(src_id, 1)
+    state.resolve_top_of_stack_pause()
+
+    # Post-fix: p0's bf[0] got the counter (p1's opponent).
+    assert state.get_counters(p0_bf_first_id) == 1
+    assert state.get_counters(p1_bf_first_id) == 0
+
+
+def test_add_counters_empty_source_controllers_opponent_bf_fizzles(engine):
+    """**Empty-defender fizzle pin for I73.** When the source-
+    controller's opponent has no bf objects, the effect fizzles
+    silently (no panic, no spurious mutation). Uses
+    `num_battlefield=0` so both sides start with empty bfs.
+    """
+    state = engine.make_synthetic_state(num_battlefield=0)
+    p1_grave_before = state.graveyard_sizes[1]
+
+    src_id = state.register_and_inject_object(
+        _add_counters_dict_for_i73(count=1), 1, ZONE_HAND
+    )
+
+    state.push_to_stack(src_id, 1)
+    state.resolve_top_of_stack()
+
+    # Stack popped, source moved to p1's graveyard. No bf mutation
+    # to assert (both bfs empty).
+    assert state.is_stack_empty() is True
+    assert state.graveyard_sizes[1] == p1_grave_before + 1
