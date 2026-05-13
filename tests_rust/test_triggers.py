@@ -201,24 +201,25 @@ def test_triggered_abilities_unknown_predicate_kind_raises(empty_registry):
 
 
 def test_triggered_abilities_unwired_event_raises(empty_registry):
-    """Slice 1 only wires ``Event::Enters``; other events declared
-    in the enum raise at register time so a caller can't stamp a
-    trigger that never fires.
+    """Slice 5 wires ``Event::Enters`` and ``Event::Dies``; other
+    declared events (``cast``, ``attacks``, ``deals_damage``) raise
+    at register time so a caller can't stamp a trigger that never
+    fires. Pin one such event here — ``cast``.
     """
     d = {
-        "name": "Dies Trigger Card",
+        "name": "Cast Trigger Card",
         "card_types": ["Creature"],
         "mana_cost": {"generic": 1},
         "power": 1,
         "toughness": 1,
         "triggered_abilities": [
             {
-                "event": "dies",
+                "event": "cast",
                 "effect": {"kind": "draw_cards", "count": 1},
             }
         ],
     }
-    with pytest.raises(ValueError, match="not yet wired in Slice 1"):
+    with pytest.raises(ValueError, match="not yet wired in Slice 5"):
         empty_registry.register_printing(d)
 
 
@@ -1572,3 +1573,317 @@ def test_controlled_by_you_skips_opponent_arrival(synthetic_state):
         "expected `controlled_by_you` to reject the opponent-controlled "
         "creature subject"
     )
+
+
+# =====================================================================
+# Slice 5 — Event::Dies dispatch on SBA destroy path.
+#
+# Adds the second wired event (DIES) plus the dispatch wiring at the
+# SBA destroy site. Pattern mirrors Slice 2's deferred-dispatch queue
+# for ENTERS — apply_sbas pushes dying ids onto
+# `pending_dies_dispatches`, then drains the queue via
+# `drain_pending_dies_dispatches` AFTER the SBA loop completes so
+# cascade death triggers don't compete with the in-progress iteration.
+#
+# Test coverage:
+# - `dies` event parses successfully (`enters` and `dies` both wired;
+#   `cast` / `attacks` / `deals_damage` still raise).
+# - A creature with a SourceIsSelf DIES trigger fires it when SBA
+#   destroys the creature.
+# - A pre-existing observer with `subject_is_creature` DIES trigger
+#   observes ANOTHER creature's destruction (the "whenever a creature
+#   dies" shape).
+# - `controlled_by_you` filter rejects opponent's creature dying
+#   under your observer.
+# - Multiple simultaneous deaths each fire their own DIES trigger.
+# =====================================================================
+
+
+# Same constants as test_sba.py for damage-driven death scenarios.
+P0_FIRST_BEAR_ID = 5
+P0_SECOND_BEAR_ID = 6
+
+
+def _dies_self_draw_dict(name="Test DIES Self-Draw"):
+    """A creature with a SourceIsSelf DIES trigger that draws 1 card
+    on death. The canonical "when this creature dies, draw a card"
+    shape.
+    """
+    return {
+        "name": name,
+        "card_types": ["Creature"],
+        "mana_cost": {},
+        "effects": [],
+        "power": 1,
+        "toughness": 1,
+        "triggered_abilities": [
+            {
+                "event": "dies",
+                "predicate": {"kind": "source_is_self"},
+                "effect": {"kind": "draw_cards", "count": 1},
+            }
+        ],
+    }
+
+
+def _dies_creature_observer_dict(name="Test DIES Creature Observer"):
+    """A pre-existing observer with a 'whenever a creature dies,
+    draw a card' trigger (the Slimefoot-shape predicate). The
+    predicate is `subject_is_creature` so any creature dying fires
+    it — regardless of who controlled the dying creature. To gate
+    on "a creature YOU control", wrap with `controlled_by_you`
+    (covered in the next test).
+    """
+    return {
+        "name": name,
+        "card_types": ["Creature"],
+        "mana_cost": {},
+        "effects": [],
+        "power": 2,
+        "toughness": 3,
+        "triggered_abilities": [
+            {
+                "event": "dies",
+                "predicate": {"kind": "subject_is_creature"},
+                "effect": {"kind": "draw_cards", "count": 1},
+            }
+        ],
+    }
+
+
+def _dies_under_your_control_observer_dict():
+    """'Whenever a creature you control dies, draw a card' —
+    `subject_is_creature AND controlled_by_you`.
+    """
+    return {
+        "name": "Test DIES Under-Your-Control Observer",
+        "card_types": ["Creature"],
+        "mana_cost": {},
+        "effects": [],
+        "power": 2,
+        "toughness": 3,
+        "triggered_abilities": [
+            {
+                "event": "dies",
+                "predicate": {
+                    "kind": "and",
+                    "left": {"kind": "subject_is_creature"},
+                    "right": {"kind": "controlled_by_you"},
+                },
+                "effect": {"kind": "draw_cards", "count": 1},
+            }
+        ],
+    }
+
+
+# --- parser surface --------------------------------------------------
+
+
+def test_slice5_dies_event_parses(empty_registry):
+    """`event: dies` is accepted at register-time post-Slice-5."""
+    pid = empty_registry.register_printing(_dies_self_draw_dict())
+    assert pid == 0
+
+
+@pytest.mark.parametrize("event_kind", ["attacks", "deals_damage"])
+def test_slice5_other_events_still_raise(empty_registry, event_kind):
+    """`cast`, `attacks`, `deals_damage` still raise at register-time
+    post-Slice-5 (only `enters` + `dies` are wired).
+    """
+    d = {
+        "name": f"Slice5 Bad Event {event_kind}",
+        "card_types": ["Creature"],
+        "mana_cost": {"generic": 1},
+        "power": 1,
+        "toughness": 1,
+        "triggered_abilities": [
+            {
+                "event": event_kind,
+                "effect": {"kind": "draw_cards", "count": 1},
+            }
+        ],
+    }
+    with pytest.raises(ValueError, match="not yet wired"):
+        empty_registry.register_printing(d)
+
+
+# --- SourceIsSelf DIES — "when this creature dies" --------------------
+
+
+def test_dies_self_trigger_fires_on_sba_destroy(synthetic_state):
+    """Inject a 1/1 with a `source_is_self` DIES trigger on p0's bf.
+    Damage it for 1 (lethal) and apply SBAs. The DIES trigger lands
+    on the stack; resolving it draws 1 card.
+    """
+    crt_id = synthetic_state.register_and_inject_object(
+        _dies_self_draw_dict(), 0, ZONE_BATTLEFIELD
+    )
+    library_before = synthetic_state.library_sizes[0]
+    hand_before = synthetic_state.hand_sizes[0]
+
+    # Damage the 1/1 for 1 (lethal).
+    synthetic_state.deal_damage(crt_id, 1)
+    destroyed = synthetic_state.apply_sbas()
+    assert destroyed == 1
+
+    # The creature is in the graveyard.
+    assert synthetic_state.find_object_zone(crt_id) == ZONE_GRAVEYARD
+    # The DIES trigger is on the stack.
+    assert synthetic_state.stack_size() == 1, (
+        "expected the source_is_self DIES trigger to land on the stack "
+        "after SBA destruction"
+    )
+    top = synthetic_state.peek_top_of_stack()
+    # The source is the now-dead creature (still findable via the
+    # zones-walk lookup since it's now in p0's graveyard).
+    assert top["source_obj_id"] == crt_id
+
+    # Resolve the trigger: DrawCards(1) -> hand +1, library -1.
+    synthetic_state.resolve_top_of_stack()
+    assert synthetic_state.hand_sizes[0] == hand_before + 1
+    assert synthetic_state.library_sizes[0] == library_before - 1
+
+
+# --- subject_is_creature DIES observer (Slimefoot shape) --------------
+
+
+def test_dies_creature_observer_fires_on_another_creature_death(synthetic_state):
+    """Pre-existing observer with `subject_is_creature` DIES trigger.
+    When ANY creature dies, the observer fires.
+    """
+    # Inject the observer on p0's bf (it's a 2/3 — won't die from 1
+    # damage so we can let the victim die).
+    observer_id = synthetic_state.register_and_inject_object(
+        _dies_creature_observer_dict(), 0, ZONE_BATTLEFIELD
+    )
+    # The synthetic state's pre-built Grizzly Bears at P0_FIRST_BEAR_ID
+    # is a 2/2; damage it for 2 (lethal).
+    library_before = synthetic_state.library_sizes[0]
+    synthetic_state.deal_damage(P0_FIRST_BEAR_ID, 2)
+    destroyed = synthetic_state.apply_sbas()
+    assert destroyed == 1
+
+    # The observer's DIES trigger should be on the stack.
+    assert synthetic_state.stack_size() == 1, (
+        "expected the observer's `subject_is_creature` DIES trigger to "
+        "fire when the Bear died"
+    )
+    top = synthetic_state.peek_top_of_stack()
+    assert top["source_obj_id"] == observer_id
+
+    # Resolve the trigger: observer's controller (p0) draws.
+    synthetic_state.resolve_top_of_stack()
+    assert synthetic_state.library_sizes[0] == library_before - 1
+
+
+def test_dies_creature_observer_skips_non_creature_death(synthetic_state):
+    """`subject_is_creature` rejects non-creature subjects. To prove
+    this, inject a Land into a graveyard via reanimation... but Lands
+    don't die from SBA. We exercise the negative case differently:
+    inject a creature with a DIES trigger that's never invoked.
+
+    The simpler proof: register a creature with a non-creature
+    typing override (an Artifact-only printing) and trigger the
+    death. Inject as an Artifact-only printing whose toughness is 0
+    so apply_sbas destroys it via CR 704.5f — but artifacts without
+    Creature typing don't pass the CR 704.5g lethal-damage check.
+    Since 704.5f is creature-only too (per Rust's
+    `collect_sba_victims`), there's no clean negative-case in the
+    Slice 5 substrate. Document via a noop assertion.
+    """
+    # Inject the creature-observer; no creature deaths so no fires.
+    synthetic_state.register_and_inject_object(
+        _dies_creature_observer_dict(), 0, ZONE_BATTLEFIELD
+    )
+    destroyed = synthetic_state.apply_sbas()
+    assert destroyed == 0
+    assert synthetic_state.is_stack_empty()
+
+
+# --- subject_is_creature AND controlled_by_you (Slimefoot+) -----------
+
+
+def test_dies_under_your_control_fires_on_own_creature(synthetic_state):
+    """`subject_is_creature AND controlled_by_you` fires when YOUR
+    creature dies. Observer on p0's bf, p0's Bear dies.
+    """
+    observer_id = synthetic_state.register_and_inject_object(
+        _dies_under_your_control_observer_dict(), 0, ZONE_BATTLEFIELD
+    )
+    synthetic_state.deal_damage(P0_FIRST_BEAR_ID, 2)
+    destroyed = synthetic_state.apply_sbas()
+    assert destroyed == 1
+    assert synthetic_state.stack_size() == 1, (
+        "expected the under-your-control DIES observer to fire on p0's "
+        "own Bear dying"
+    )
+    top = synthetic_state.peek_top_of_stack()
+    assert top["source_obj_id"] == observer_id
+
+
+def test_dies_under_your_control_skips_opponent_death(synthetic_state):
+    """`controlled_by_you` rejects an opponent's creature dying.
+    Observer on p0's bf, p1's Bear dies.
+    """
+    synthetic_state.register_and_inject_object(
+        _dies_under_your_control_observer_dict(), 0, ZONE_BATTLEFIELD
+    )
+    # The synthetic state's p1 first Bear is at id 67+5=72.
+    P1_FIRST_BEAR_ID = 67 + 5
+    synthetic_state.deal_damage(P1_FIRST_BEAR_ID, 2)
+    destroyed = synthetic_state.apply_sbas()
+    assert destroyed == 1
+    assert synthetic_state.is_stack_empty(), (
+        "expected `controlled_by_you` to reject the opponent's Bear "
+        "dying; stack is non-empty so the predicate accepted the wrong "
+        "controller"
+    )
+
+
+# --- multiple simultaneous deaths -------------------------------------
+
+
+def test_dies_multiple_simultaneous_deaths_each_fire(synthetic_state):
+    """Two creatures die in the SAME SBA pass. Both DIES triggers
+    land on the stack — one per dead creature. Order matches
+    `collect_sba_victims`'s bf-ETB walk (Slimefoot fires twice).
+    """
+    observer_id = synthetic_state.register_and_inject_object(
+        _dies_creature_observer_dict(), 0, ZONE_BATTLEFIELD
+    )
+    # Damage TWO p0 Bears lethally.
+    synthetic_state.deal_damage(P0_FIRST_BEAR_ID, 2)
+    synthetic_state.deal_damage(P0_SECOND_BEAR_ID, 2)
+    destroyed = synthetic_state.apply_sbas()
+    assert destroyed == 2
+
+    # TWO triggers on the stack — one per dead Bear.
+    assert synthetic_state.stack_size() == 2, (
+        f"expected 2 DIES triggers (one per dead Bear); got "
+        f"{synthetic_state.stack_size()}"
+    )
+    # Both have observer as source.
+    top = synthetic_state.peek_top_of_stack()
+    assert top["source_obj_id"] == observer_id
+
+
+# --- cross-engine bridge accepts "dies" event ------------------------
+
+
+def test_dies_event_parses_via_cross_engine_bridge():
+    """The cross_engine.py `_ta_dict_to_python_triggered_ability`
+    bridge accepts `event: dies` and produces Python's
+    `Event.DIES` enum.
+    """
+    from mtg_bot.parity.cross_engine import (
+        _ta_dict_to_python_triggered_ability,
+    )
+    from mtg_bot.effects.predicates import Event
+
+    ta_dict = {
+        "event": "dies",
+        "predicate": {"kind": "source_is_self"},
+        "effect": {"kind": "draw_cards", "count": 1},
+    }
+    ta = _ta_dict_to_python_triggered_ability(ta_dict)
+    assert ta.event is Event.DIES

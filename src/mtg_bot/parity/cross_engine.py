@@ -252,6 +252,8 @@ def _ta_dict_to_python_triggered_ability(ta_dict: dict):
     event_str = ta_dict["event"]
     if event_str == "enters":
         event = Event.ENTERS
+    elif event_str == "dies":
+        event = Event.DIES
     else:
         raise ValueError(
             f"cross_engine triggered_abilities bridge: event "

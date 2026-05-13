@@ -386,24 +386,31 @@ fn move_source_post_resolve(state: &mut GameState, source_obj_id: u32) -> Option
 /// and pushes matching triggers onto the stack via
 /// `push_triggered_ability`.
 ///
-/// Slice 1 surface accepts `Event::Enters` (the only wired event
-/// today). Other variants raise `PyValueError` loudly — adding
-/// dispatch coverage in lockstep with new variants keeps the
-/// parser surface and the dispatcher's coverage consistent.
+/// Slice 1 surface accepts `Event::Enters`. Slice 5 adds
+/// `Event::Dies`. Other variants raise `PyValueError` loudly so the
+/// parser surface and the dispatcher's coverage stay consistent.
+///
+/// Slice 5 (DIES): the dying object has already been moved to the
+/// graveyard by the caller. The walker still snapshots the
+/// **battlefield** as the observer-set, but DIES dispatch
+/// additionally includes the dying object as an "extra observer" so
+/// `Predicate::SourceIsSelf` triggers (the canonical "when this
+/// creature dies" shape) can match. Mirrors Python's
+/// `dispatch_event(..., extra_observers=[obj])` pattern at
+/// `src/mtg_bot/turn.py:281` for the `move_off_battlefield` site.
 pub(crate) fn dispatch_event(
     state: &mut GameState,
     event: Event,
     subject_id: u32,
 ) -> PyResult<()> {
-    // Defensive: Slice 1 wires only ENTERS. Other events are
-    // declared in the enum so the parser can validate registry
-    // dicts at register time, but no dispatch site fires them yet.
-    // A non-ENTERS call would mean a future caller skipped the
-    // fan-out plan; raise loud rather than silently no-op.
-    if event != Event::Enters {
+    // Defensive: Slice 5 wires ENTERS + DIES. Other events declared
+    // in the enum stay raise-on-dispatch so a future caller who
+    // skipped the fan-out plan surfaces it loudly rather than
+    // silently no-op.
+    if event != Event::Enters && event != Event::Dies {
         return Err(PyValueError::new_err(format!(
-            "dispatch_event: event {event:?} is not yet wired in Slice 1; \
-             only Event::Enters dispatches today"
+            "dispatch_event: event {event:?} is not yet wired in Slice 5; \
+             only Event::Enters and Event::Dies dispatch today"
         )));
     }
 
@@ -414,12 +421,52 @@ pub(crate) fn dispatch_event(
     // tuples — once the bf-snapshot is done we no longer hold an
     // immutable borrow on `state`, so `push_triggered_ability`
     // (which mutates `state.stack`) is free to fire.
+    //
+    // For DIES events, the dying object has been moved to the
+    // graveyard already; we synthesize an EXTRA observer entry for
+    // it (mirroring Python's `extra_observers=[obj]`) so an
+    // `IsSelf`-shape "when this creature dies" trigger can still
+    // see itself as a candidate observer.
     let firings: Vec<(u32, u8, u32, Effect, bool)> = {
         let bf = bf_iter_etb_sorted(state);
+        // Build the observer list: every bf permanent, plus the
+        // dying object (if this is a DIES dispatch and the object is
+        // findable). The extra observer is keyed by id so the
+        // ability-walk lookup uses the same registry lookup the bf
+        // permanents go through.
+        let mut observer_entries: Vec<(u32, u8, u32)> = bf
+            .iter()
+            .map(|o| (o.id, o.controller, o.printing_id))
+            .collect();
+        if event == Event::Dies {
+            // Look up the dying object (now in graveyard) to gather
+            // its printing_id + controller. Skip if not found — the
+            // SBA caller always moves to the controller's graveyard
+            // before dispatching, but the lookup is loud-but-safe to
+            // future-proof against alternate-zone movers.
+            //
+            // Dedup guard: if the dying object somehow still appears
+            // in `bf` (it shouldn't, post-move), don't double-register
+            // it as an observer.
+            if !observer_entries.iter().any(|(id, _, _)| *id == subject_id) {
+                for player in &state.players {
+                    for obj in player.graveyard.iter() {
+                        if obj.id == subject_id {
+                            observer_entries.push((
+                                obj.id,
+                                obj.controller,
+                                obj.printing_id,
+                            ));
+                            break;
+                        }
+                    }
+                }
+            }
+        }
         let mut firings = Vec::new();
-        for source in &bf {
+        for (source_id, source_controller, printing_id) in &observer_entries {
             // Resolve the source's printing -> its triggered_abilities.
-            let printing = match state.registry.lookup(source.printing_id) {
+            let printing = match state.registry.lookup(*printing_id) {
                 Some(p) => p,
                 None => continue,
             };
@@ -431,7 +478,7 @@ pub(crate) fn dispatch_event(
                 }
                 if !ability
                     .predicate
-                    .matches(state, source.id, subject_id)
+                    .matches(state, *source_id, subject_id)
                 {
                     continue;
                 }
@@ -439,13 +486,13 @@ pub(crate) fn dispatch_event(
                 if ability.once_per_turn
                     && state
                         .triggered_this_turn
-                        .contains(&(source.id, ability_index as u32))
+                        .contains(&(*source_id, ability_index as u32))
                 {
                     continue;
                 }
                 firings.push((
-                    source.id,
-                    source.controller,
+                    *source_id,
+                    *source_controller,
                     ability_index as u32,
                     ability.effect.clone(),
                     ability.once_per_turn,
@@ -549,6 +596,26 @@ pub(crate) fn drain_pending_etb_dispatches(state: &mut GameState) -> PyResult<()
         }
         for entered_id in drained {
             dispatch_event(state, Event::Enters, entered_id)?;
+        }
+    }
+}
+
+/// **Slice 5 — DIES sibling of `drain_pending_etb_dispatches`.**
+/// Mirror-shape drainer for `state.pending_dies_dispatches`. Called
+/// by `apply_sbas` after the SBA destroy loop completes; iterates
+/// the queued ids in FIFO order, dispatching `Event::Dies` for each.
+/// Re-entrant fills (a DIES trigger that pushes a permanent onto bf
+/// — Reaper-King-shape — re-enters into the ENTERS queue; a DIES
+/// trigger that schedules ANOTHER death is rarer but the loop
+/// handles it cleanly).
+pub(crate) fn drain_pending_dies_dispatches(state: &mut GameState) -> PyResult<()> {
+    loop {
+        let drained: Vec<u32> = std::mem::take(&mut state.pending_dies_dispatches);
+        if drained.is_empty() {
+            return Ok(());
+        }
+        for dead_id in drained {
+            dispatch_event(state, Event::Dies, dead_id)?;
         }
     }
 }
