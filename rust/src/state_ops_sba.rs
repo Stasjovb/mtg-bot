@@ -297,6 +297,7 @@ impl GameState {
             obj.tapped = false;
             obj.attached_to = None;
             let printing_id = obj.printing_id;
+            let dying_obj_id = obj.id;
             // Push onto the controller's graveyard.
             let target = &mut self.players[controller as usize];
             Arc::make_mut(&mut target.graveyard).push(obj);
@@ -306,7 +307,21 @@ impl GameState {
             // creatures only), but route through the helper anyway
             // so the gate-in-one-place invariant holds.
             mark_left_battlefield_if_nonland(self, printing_id);
+            // Slice 5: dispatch Event::Dies via the deferred-dispatch
+            // queue. The SBA loop is mid-iteration over `victims`, so
+            // calling dispatch_event inline could re-enter via a
+            // trigger that pushes a new SBA victim onto the
+            // battlefield (cascade death triggers etc.). The deferred
+            // queue mirrors Slice 2's ENTERS pattern — push the id
+            // now, drain after the loop. The drain happens at the
+            // end of `apply_sbas` below.
+            self.pending_dies_dispatches.push(dying_obj_id);
         }
+        // Drain pending DIES dispatches AFTER the SBA loop completes.
+        // Order matches push-order — each dying creature's triggers
+        // fire in destruction order (which is bf-ETB-timestamp order
+        // per `collect_sba_victims`'s walk).
+        crate::state_ops_resolve::drain_pending_dies_dispatches(self)?;
         Ok(count)
     }
 

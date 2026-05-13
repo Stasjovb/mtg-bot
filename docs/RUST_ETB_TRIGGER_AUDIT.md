@@ -984,3 +984,71 @@ express the bulk of EoE's ETB-trigger predicate templates from
   predicate ergonomic needs a richer schema.
 - Panharmonicon-shape `etb_trigger_multiplier` (the "your ETB
   triggers fire one extra time" modifier).
+
+---
+
+## Slice 5 completion notice (landed)
+
+`feature/etb-slice-5` adds `Event::Dies` plus its dispatch wiring at
+the SBA destroy site — the load-bearing "creature dies" event for
+combat-shape probes.
+
+**Implementation shape:**
+
+- `Event::Dies` parser arm in `rust/src/cards.rs::parse_triggered_ability`
+  (the previously raise-on-register `"dies"` event now succeeds).
+- `dispatch_event` accepts `Event::Dies` in addition to
+  `Event::Enters`. The DIES branch extends the observer set with the
+  dying object as an "extra observer" so `Predicate::SourceIsSelf`
+  triggers can match the dying creature against itself
+  (mirroring Python's `extra_observers=[obj]` shape at
+  `src/mtg_bot/turn.py:281`). The dying object is found by walking
+  the four-zone lookup — it's now in the graveyard, not on the
+  battlefield.
+- New `GameState.pending_dies_dispatches: Vec<u32>` sibling of
+  `pending_etb_dispatches` — the SBA destroy loop pushes dying ids
+  onto this queue mid-iteration, then drains via
+  `drain_pending_dies_dispatches` AFTER the loop completes.
+- New wiring point: `state_ops_sba.rs::apply_sbas` pushes each dying
+  creature's id onto `pending_dies_dispatches` after the move-to-
+  graveyard, then drains at the end of the destroy loop. Cascade
+  death triggers (a DIES that pushes a new permanent onto bf, then
+  THAT permanent dies on the next pass) compose cleanly with
+  `apply_sbas_until_quiescent`.
+- `cross_engine.py::_ta_dict_to_python_triggered_ability` accepts
+  `event="dies"` and produces Python's `Event.DIES`.
+
+**Tests** (10 new in `tests_rust/test_triggers.py`, 1 new
+`test_dies_event_parses_via_cross_engine_bridge` for the bridge):
+
+- Parser surface: `dies` parses; `cast` / `attacks` / `deals_damage`
+  still raise.
+- SourceIsSelf DIES: a 1/1 with "when this creature dies, draw a
+  card" fires its trigger after SBA destroys it from lethal damage.
+- Subject-creature DIES observer: a Slimefoot-shape observer fires
+  when ANOTHER creature dies.
+- Subject-creature + controlled_by_you: fires on your own creature
+  death, skips opponent's.
+- Multiple simultaneous deaths: two creatures both go lethal in the
+  same SBA pass; both fire the observer's trigger.
+- Cross-engine bridge: `event: dies` round-trips to `Event.DIES`
+  in Python.
+
+**Rust gate**: 1942/1942 pass (Slice 4 baseline 1932 + 10 new).
+
+**Out of scope for Slice 5 (queued for Slice 6+):**
+
+- Other LtB sites that should dispatch `Event::Dies` (or its
+  `Event::LeavesBattlefield` sibling): sacrifice cost-pay,
+  exile-via-bounce, direct destroy-via-Effect, generic move_object
+  to graveyard. These need a finer-grained distinction between
+  "dies" (CR 700.4: creature moves bf->graveyard) and "leaves bf"
+  (any zone change away from bf). For now the SBA destroy path is
+  the load-bearing case for combat-shape probes; broader LtB
+  coverage lands in its own slice.
+- `Event::Cast` + dispatch site in `state_ops_cast.rs` after a
+  successful cast — Slice 6.
+- `Event::Attacks` + dispatch site in `state_ops_combat.rs` per
+  declared attacker — Slice 7.
+- `Event::DealsCombatDamage` — multi-subject event needs richer
+  `Predicate::Subject(slot, inner)` schema.

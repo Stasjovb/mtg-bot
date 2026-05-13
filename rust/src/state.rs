@@ -1114,6 +1114,25 @@ pub struct GameState {
     /// returning to its caller), so the field is observably empty
     /// when fingerprinted.
     pub pending_etb_dispatches: Vec<u32>,
+    /// **DIES-trigger substrate (Slice 5) — deferred dispatch queue.**
+    /// Sibling of `pending_etb_dispatches`: SBA's destroy path moves
+    /// dying creatures into the graveyard mid-loop and queues their
+    /// ids here. `apply_sbas` drains the queue via
+    /// `drain_pending_dies_dispatches` AFTER the SBA loop completes
+    /// so cascade death triggers (a DIES trigger that pushes a stack
+    /// item, in turn potentially adding new SBA victims when it
+    /// resolves) don't compete with the in-progress SBA iteration.
+    ///
+    /// **Drain semantics.** FIFO drain — each dying creature's
+    /// triggers fire in destruction order (which is bf-ETB-timestamp
+    /// order per `collect_sba_victims`'s walk). Mirrors Python's
+    /// `turn.move_off_battlefield` -> `dispatch_event(Event.DIES,
+    /// {"obj": dead}, extra_observers=[dead])` pattern.
+    ///
+    /// Like `pending_etb_dispatches`, not serialized into the
+    /// fingerprint: the queue is empty across stack resolution
+    /// boundaries (every drain site empties it before returning).
+    pub pending_dies_dispatches: Vec<u32>,
 }
 
 impl Clone for GameState {
@@ -1148,6 +1167,7 @@ impl Clone for GameState {
             rng,
             triggered_this_turn: self.triggered_this_turn.clone(),
             pending_etb_dispatches: self.pending_etb_dispatches.clone(),
+            pending_dies_dispatches: self.pending_dies_dispatches.clone(),
         }
     }
 }
@@ -1579,5 +1599,9 @@ pub fn make_synthetic_state(
         // primitive after the resolving slot is removed from the
         // stack.
         pending_etb_dispatches: Vec::new(),
+        // ETB-trigger Slice 5: empty deferred-DIES queue at
+        // construction; drained by `apply_sbas` after the SBA loop
+        // completes.
+        pending_dies_dispatches: Vec::new(),
     }
 }
