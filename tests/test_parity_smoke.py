@@ -13693,3 +13693,384 @@ def test_cross_engine_real_eoe_nova_hellkite_etb_damage_to_opponent_creature_par
     # Stacks empty on both sides.
     assert rust_state.stack_size() == 0
     assert len(py_state.stack) == 0
+
+def test_cross_engine_real_eoe_pinnacle_kill_ship_etb_damage_optional_target_creature_parity(
+    parity_smoke,
+):
+    """Probe: Pinnacle Kill-Ship (EoE) ETB ``deals 10 damage to up to
+    one target creature`` parity -- FIRST real-EoE cross-engine probe
+    with an OPTIONAL-target damage shape, and the third (and last)
+    consumer of the ``deal_damage_any_target`` bridge arm in the EoE
+    pool per ``docs/EOE_PROBE_READINESS_AUDIT.md`` (Nebula Dragon +
+    Debris Field Crusher already probed; Pinnacle Kill-Ship was the
+    remaining ``optional=True`` outlier the audit flagged).
+
+    Oracle text in ``data/edge_of_eternities.json``:
+
+        "When this Spacecraft enters, it deals 10 damage to up to one
+         target creature.
+         Station (...)
+         7+ | Flying"
+
+    Predicate decomposition (identical to Nebula Dragon / Debris
+    Field Crusher / Cryogen Relic):
+
+        SourceIsSelf
+
+    Effect: ``deal_damage_any_target(amount=10, optional=True)`` --
+    the ``optional=True`` flag landed in the companion bridge slice
+    on this branch (3089d88b). Python side translates to
+    ``DealDamageAnyTarget(amount=10, optional=True)``, which flips
+    the slot's ``count_min`` to 0 ("up to one target" semantics --
+    CR 601.2c). Rust's ``Effect::DealDamageAnyTarget`` variant is
+    amount-only; the parser silently drops the ``optional`` key per
+    the broader silent-drop convention. Rust's deterministic at-
+    apply-time pick (scan defender's bf for first creature, fall
+    back to defender-player) is observably equivalent to Python's
+    optional-target shape on probes that drive a SINGLE OPPONENT
+    CREATURE on bf: both engines pick that one creature, neither
+    path exercises the no-creature-fallback divergence.
+
+    **Distinction from Nebula Dragon / Debris Field Crusher probes**:
+    those probes drove an EMPTY opponent bf -- Rust's scan fell back
+    to defender-player, Python's agent picked the p1-player target,
+    both engines dealt damage to the p1 PLAYER. This probe drives a
+    NON-EMPTY opponent bf with exactly one creature -- Rust's scan
+    finds the creature directly, Python's agent picks the only
+    opponent-controlled creature target, both engines deal damage
+    to the CREATURE (SBA-killing it for lethal damage).
+
+    **Target-pick parity contract** (single-creature variant of the
+    Nebula Dragon contract): Rust's
+    ``Effect::DealDamageAnyTarget`` arm picks the target
+    deterministically at apply_effect time (scan defender's bf for
+    first creature -- the bait Bear -- and deal damage to it).
+    Python's targeting pipeline picks at PUSH time via the
+    controller's agent in ``push_triggered_ability``. The
+    ``_PickFirstOpponentTargetAgent`` (defined inline; matches the
+    Nebula Dragon probe's agent shape with one tweak: prefer
+    creatures over players, mirroring Rust's bf-first scan order)
+    filters legal_targets to opponent-controlled entries and
+    returns the first creature -- in this scenario that's the bait
+    creature object on p1's bf.
+
+    Probe shape (inject-and-fire-ENTERS):
+
+      1. Inject a 2/2 bait Bear on p1's bf (give it < 10 toughness
+         so the 10-damage burn is lethal and SBA flips it to gy).
+      2. Inject Pinnacle Kill-Ship on p0's bf via
+         ``register_and_inject_object`` (Rust) / new_object + bf
+         append + ``_trigger_etb_abilities`` (Python). Both engines
+         dispatch ENTERS; the SourceIsSelf predicate matches; one
+         DealDamageAnyTarget(amount=10) lands on the stack.
+      3. Drain. Rust scans p1's bf, finds the Bear (first creature),
+         deals 10 damage. Python's agent picks the Bear (only
+         opponent-side legal creature target), deals 10 damage.
+      4. Run SBAs on both engines; the Bear (toughness 2, damage 10)
+         is lethal-damaged and moves to p1's graveyard.
+
+    Out of scope:
+
+      * Station ability (tap-another-creature cost + charge-counter
+        effect) -- activated-ability cost shape isn't on the
+        bridge; the probe injects with zero charge counters and
+        never triggers the 7+ flip.
+      * 7+ Flying / artifact-creature flip -- the tier threshold
+        isn't reached, so the static is dormant; not exercised.
+      * Cast-from-hand mana cost ({7}) -- the inject-and-dispatch-
+        ENTERS pattern bypasses the mana pipeline (same treatment
+        every prior real-EoE probe gives the cast-cost).
+      * The "no opponent creatures, damages defender-player"
+        fallback case -- covered by the Nebula Dragon / Debris
+        Field Crusher probes already on main (which drove an empty
+        opponent bf).
+
+    Expected post-dispatch + post-drain + post-SBA state on BOTH
+    engines:
+
+      * Pinnacle Kill-Ship on p0's bf (with the Artifact
+        card_type intact; no flip).
+      * Bait Bear NOT on p1's bf (lethal-damaged + SBA'd to gy).
+      * Bait Bear in p1's graveyard.
+      * p0 life: unchanged at 20.
+      * p1 life: unchanged at 20 (damage went to the Bear, not
+        the player).
+      * No residual stack.
+    """
+    from mtg_bot.agents import Agent
+    from mtg_bot.parity.cross_engine import (
+        CardDef, DeckSpec, build_python_state, build_rust_state,
+    )
+
+    pinnacle_kill_ship = CardDef(
+        name="Pinnacle Kill-Ship",
+        card_type="Artifact",
+        mana_cost_generic=7,
+        mana_cost_colored=(),
+        # Spacecraft P/T are dormant below tier threshold (7+ charge
+        # counters); the printing carries them for static-on-flip but
+        # they don't observe here. 7/7 raw printed; the 7+ "Flying /
+        # artifact creature" is a separate static the probe doesn't
+        # exercise.
+        power=7,
+        toughness=7,
+        triggered_abilities=(
+            {
+                "event": "enters",
+                "predicate": {"kind": "source_is_self"},
+                "effect": {
+                    "kind": "deal_damage_any_target",
+                    "amount": 10,
+                    "optional": True,
+                },
+            },
+        ),
+    )
+    # Vanilla 2/2 Bear bait creature on p1's bf -- toughness < 10 so
+    # the 10-damage burn is lethal; SBA flips it to gy post-drain.
+    bait_bear = CardDef(
+        name="Bait Bear",
+        card_type="Creature",
+        mana_cost_generic=2,
+        mana_cost_colored=(),
+        power=2,
+        toughness=2,
+    )
+    spec = DeckSpec(
+        card_defs=(pinnacle_kill_ship, bait_bear),
+        # Libraries empty-but-for-symmetry: probe injects directly
+        # onto bf so libraries aren't observed.
+        p0_library=(),
+        p1_library=(),
+    )
+    py_state = build_python_state(spec)
+    rust_state = build_rust_state(spec)
+
+    # ---- Rust side ----
+    ZONE_BATTLEFIELD = 2
+    # 1. Inject the bait Bear on p1's bf FIRST so it's on bf when
+    # Pinnacle Kill-Ship's ETB fires and scans for a target.
+    rust_bait_dict = {
+        "name": "Bait Bear",
+        "card_types": ["Creature"],
+        "mana_cost": {"generic": 2},
+        "effects": [],
+        "power": 2,
+        "toughness": 2,
+    }
+    rust_bait_id = rust_state.register_and_inject_object(
+        rust_bait_dict, 1, ZONE_BATTLEFIELD
+    )
+    rust_pks_dict = {
+        "name": "Pinnacle Kill-Ship",
+        "card_types": ["Artifact"],
+        "mana_cost": {"generic": 7},
+        "effects": [],
+        "power": 7,
+        "toughness": 7,
+        "triggered_abilities": [
+            {
+                "event": "enters",
+                "predicate": {"kind": "source_is_self"},
+                "effect": {
+                    "kind": "deal_damage_any_target",
+                    "amount": 10,
+                    "optional": True,
+                },
+            }
+        ],
+    }
+    rust_p0_life_before = rust_state.get_life(0)
+    rust_p1_life_before = rust_state.get_life(1)
+    rust_pks_id = rust_state.register_and_inject_object(
+        rust_pks_dict, 0, ZONE_BATTLEFIELD
+    )
+    # ENTERS fires; SourceIsSelf predicate matches; one
+    # DealDamageAnyTarget lands on the stack with target picked
+    # deterministically at apply_effect time (scan defender's bf
+    # for first creature -- the bait Bear).
+    assert rust_state.stack_size() == 1, (
+        "Rust: Pinnacle Kill-Ship's own arrival should fire the "
+        "SourceIsSelf ENTERS trigger and land DealDamageAnyTarget "
+        f"on the stack. Got stack_size={rust_state.stack_size()}"
+    )
+
+    # ---- Python side ----
+    from mtg_bot.actions import _trigger_etb_abilities
+    from mtg_bot.cards.base import CardPrinting, ManaCost
+    from mtg_bot.effects.base import TriggeredAbility
+    from mtg_bot.effects.generic.damage import DealDamageAnyTarget
+    from mtg_bot.effects.predicates import Event, IsSelf
+    from mtg_bot.game import Zone
+    from mtg_bot.turn import state_based_actions
+
+    # Bait Bear printing (vanilla 2/2 Creature) for p1's bf.
+    bait_printing = CardPrinting(
+        name="Bait Bear",
+        mana_cost_str="",
+        mana_cost=ManaCost(generic=2),
+        type_line="Creature",
+        supertypes=(),
+        card_types=("Creature",),
+        subtypes=(),
+        power=2,
+        toughness=2,
+        produces=frozenset(),
+    )
+    # Inject the bait Bear on p1's bf FIRST.
+    py_bait = py_state.new_object(
+        bait_printing, owner_id=1, zone=Zone.BATTLEFIELD,
+    )
+    py_bait.controller_id = 1
+    py_bait.summoning_sick = False
+    py_bait.tapped = False
+    py_bait.damage = 0
+    py_bait.etb_timestamp = py_state.next_timestamp
+    py_state.next_timestamp += 1
+    py_state.battlefield.append(py_bait)
+
+    pks_printing = CardPrinting(
+        name="Pinnacle Kill-Ship",
+        mana_cost_str="",
+        mana_cost=ManaCost(generic=7),
+        type_line="Artifact",
+        supertypes=(),
+        # Pure Artifact-typed carrier (no Creature in card_types --
+        # Spacecraft is a structural subtype of Artifact, not a
+        # separate top-level card type). The 7+ Flying / artifact-
+        # creature flip isn't exercised; below threshold the printing
+        # is Artifact-only.
+        card_types=("Artifact",),
+        subtypes=(),
+        power=7,
+        toughness=7,
+        produces=frozenset(),
+        triggered_abilities=(
+            TriggeredAbility(
+                event=Event.ENTERS,
+                predicate=IsSelf(),
+                effect=DealDamageAnyTarget(amount=10, optional=True),
+            ),
+        ),
+    )
+
+    # Custom agent: mirror Rust's defender-anchored target pick.
+    # Mirrors the Nebula Dragon / Debris Field Crusher probes'
+    # _PickFirstOpponentTargetAgent shape. For the Pinnacle Kill-
+    # Ship probe specifically: with the bait Bear on p1's bf, the
+    # only legal opponent-side target is the bait Bear (the agent
+    # prefers creatures over players, mirroring Rust's bf-first
+    # scan order).
+    class _PickFirstOpponentTargetAgent(Agent):
+        """Pick the first opponent-controlled creature, else the
+        first opponent player.
+
+        Mirrors Rust's ``Effect::DealDamageAnyTarget`` deterministic
+        target selection: scan defender's bf for first creature,
+        else defender-player. For this probe (p0-controlled source,
+        p1's bf has one bait creature), both engines pick the bait
+        creature.
+        """
+
+        def choose_target(self, state, player_id, legal_targets):
+            if not legal_targets:
+                return None
+            for kind, target_id in legal_targets:
+                if kind == "player":
+                    continue  # Prefer creatures over players to
+                              # mirror Rust's bf-first scan order.
+                obj = next(
+                    (
+                        o
+                        for o in state.battlefield
+                        if o.id == target_id
+                    ),
+                    None,
+                )
+                if obj is not None and obj.controller_id != player_id:
+                    return (kind, target_id)
+            # Fall back to first opponent-side player target if no
+            # opponent creature found.
+            for kind, target_id in legal_targets:
+                if kind == "player" and target_id != player_id:
+                    return (kind, target_id)
+            return legal_targets[0]
+
+    py_state.players[0].agent = _PickFirstOpponentTargetAgent()
+
+    py_pks = py_state.new_object(
+        pks_printing, owner_id=0, zone=Zone.BATTLEFIELD,
+    )
+    # Artifacts don't have summoning-sick semantics the same way
+    # creatures do, but matching the prior probes' injection
+    # convention keeps the GameObject fields tidy.
+    py_pks.summoning_sick = False
+    py_pks.tapped = False
+    py_pks.damage = 0
+    py_pks.etb_timestamp = py_state.next_timestamp
+    py_state.next_timestamp += 1
+    py_state.battlefield.append(py_pks)
+    py_p0_life_before = py_state.players[0].life
+    py_p1_life_before = py_state.players[1].life
+    _trigger_etb_abilities(py_state, py_pks)
+    assert len(py_state.stack) == 1, (
+        "Python: Pinnacle Kill-Ship's own arrival should fire the "
+        "IsSelf ENTERS trigger and land DealDamageAnyTarget on the "
+        f"stack. Got stack size={len(py_state.stack)}"
+    )
+
+    # ---- Drain both stacks, then run SBAs (the 10-damage burn
+    # lethal-damages the 2/2 Bear; SBA flips it to gy) ----
+    _drain_stack_both(py_state, rust_state)
+    rust_state.apply_sbas()
+    state_based_actions(py_state)
+
+    # Post-drain + post-SBA: bait Bear DEAD on both sides (10 dmg
+    # >= toughness 2); life totals unchanged on both seats
+    # (damage went to the Bear, not a player).
+    rust_bf_ids = {
+        int(e["id"]) for e in rust_state.battlefield_snapshot()
+    }
+    assert rust_bait_id not in rust_bf_ids, (
+        "Rust: bait Bear should be lethal-damaged + SBA'd to gy; "
+        f"got rust bf ids={rust_bf_ids}"
+    )
+    rust_p1_gy_names = [
+        e["printing_name"] for e in rust_state.graveyard_snapshot(1)
+    ]
+    assert "Bait Bear" in rust_p1_gy_names, (
+        f"Rust: expected Bait Bear in p1 gy; got {rust_p1_gy_names}"
+    )
+
+    py_bait_alive = any(
+        o.id == py_bait.id for o in py_state.battlefield
+    )
+    assert not py_bait_alive, (
+        "Python: bait Bear should be lethal-damaged + SBA'd to gy"
+    )
+    py_p1_gy_names = [
+        o.printing.name for o in py_state.players[1].graveyard
+    ]
+    assert "Bait Bear" in py_p1_gy_names, (
+        f"Python: expected Bait Bear in p1 gy; got {py_p1_gy_names}"
+    )
+
+    # Life totals unchanged on both seats (10 dmg went to the
+    # Bear, not the p1 player).
+    assert rust_state.get_life(0) == rust_p0_life_before, (
+        f"Rust p0 life should be unchanged ({rust_p0_life_before}); "
+        f"got {rust_state.get_life(0)}"
+    )
+    assert rust_state.get_life(1) == rust_p1_life_before, (
+        f"Rust p1 life should be unchanged ({rust_p1_life_before}) "
+        "(damage routed to bait Bear, not p1 player); "
+        f"got {rust_state.get_life(1)}"
+    )
+    assert py_state.players[0].life == py_p0_life_before
+    assert py_state.players[1].life == py_p1_life_before
+    # Cross-engine: same post-drain life totals on both seats.
+    assert rust_state.get_life(0) == py_state.players[0].life
+    assert rust_state.get_life(1) == py_state.players[1].life
+    # Stacks empty on both sides.
+    assert rust_state.stack_size() == 0
+    assert len(py_state.stack) == 0
