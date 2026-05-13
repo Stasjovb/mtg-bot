@@ -918,3 +918,104 @@ def test_rust_parser_accepts_pump_target_creature_until_eot_in_triggered_ability
     }
     pid = reg.register_printing(d)
     assert pid == 0
+
+
+def test_bridge_put_plus_one_counter_on_creature_you_control_translates_to_python():
+    """Phase 5 bridge extension: Rust
+    ``{"kind": "put_plus_one_counter_on_creature_you_control",
+    "amount": N}`` translates to Python
+    ``PutPlusOneCounterOnCreatureYouControl(amount=N)``.
+
+    Unblocks Rayblade-Trooper / Drix-Fatemaker / tail-shape ETB
+    triggers that "put N +1/+1 counter(s) on target creature you
+    control" on the cross-engine bridge. The Rust effect variant
+    already exists at ``rust/src/cards.rs:815``
+    (``Effect::PutPlusOneCounterOnCreatureYouControl``) and its
+    parse_effect arm at ``cards.rs:3848-3864``; the Rust resolve arm
+    at ``state_ops_resolve.rs:4148-4211`` picks the FIRST creature
+    on the source controller's battlefield and adds ``amount`` to
+    its scalar ``counters`` field. This pins the field-name pass-
+    through ``amount -> amount`` (Python's PutPlusOneCounters base
+    class also names the field ``amount`` -- no translation needed,
+    unlike ``mill``'s ``count -> amount`` swap).
+    """
+    from mtg_bot.effects.generic.counters import (
+        PutPlusOneCounterOnCreatureYouControl,
+    )
+    from mtg_bot.parity.cross_engine import _ta_dict_to_python_effect
+
+    e = _ta_dict_to_python_effect(
+        {
+            "kind": "put_plus_one_counter_on_creature_you_control",
+            "amount": 1,
+        }
+    )
+    assert isinstance(e, PutPlusOneCounterOnCreatureYouControl)
+    assert e.amount == 1
+
+
+def test_bridge_put_plus_one_counter_on_creature_you_control_amount_default_one():
+    """Missing ``amount`` defaults to 1 (matching Rust's
+    ``parse_effect`` lenient default and Python's
+    ``PutPlusOneCounters.amount: int = 1`` class default).
+
+    Distinct from the ``gain_life`` / ``damage_each_opponent`` /
+    ``pump_target_creature_until_eot`` arms (which default to 0):
+    the +1/+1 counter shape has a natural unit of 1 (matches the
+    typical "put a +1/+1 counter on X" oracle text without an
+    explicit count). The bridge mirrors the Python class's chosen
+    default so the translator is robust to partial fixtures.
+
+    Rust's parse_effect at cards.rs:3848-3864 requires
+    non-negative ``amount`` (raises on negatives); bridge consumers
+    SHOULD pass ``amount`` explicitly to keep round-trip dict-shape
+    consistency.
+    """
+    from mtg_bot.effects.generic.counters import (
+        PutPlusOneCounterOnCreatureYouControl,
+    )
+    from mtg_bot.parity.cross_engine import _ta_dict_to_python_effect
+
+    e = _ta_dict_to_python_effect(
+        {"kind": "put_plus_one_counter_on_creature_you_control"}
+    )
+    assert isinstance(e, PutPlusOneCounterOnCreatureYouControl)
+    assert e.amount == 1
+
+
+def test_rust_parser_accepts_put_plus_one_counter_on_creature_you_control_in_triggered_ability():
+    """Pin the Rust parser surface for the
+    ``put_plus_one_counter_on_creature_you_control`` effect kind.
+    The bridge's dict shape must register cleanly on the Rust side
+    too; this lockstep gate keeps the Python bridge from drifting
+    away from Rust's parse_effect coverage.
+
+    Mirrors the existing ``mill`` / ``surveil`` /
+    ``pump_target_creature_until_eot`` parser-surface pins -- what's
+    being pinned is parse_effect's
+    ``put_plus_one_counter_on_creature_you_control`` arm accepting a
+    triggered_abilities entry with the ``amount`` field set to 1
+    (Rayblade Trooper's amount).
+    """
+    import mtg_bot_engine
+
+    reg = mtg_bot_engine.Registry()
+    d = {
+        "name": "Phase 5 Bridge Pin -- PutPlusOneCounterOnCreatureYouControl",
+        "card_types": ["Creature"],
+        "mana_cost": {"generic": 2, "W": 1},
+        "power": 2,
+        "toughness": 2,
+        "triggered_abilities": [
+            {
+                "event": "enters",
+                "predicate": {"kind": "source_is_self"},
+                "effect": {
+                    "kind": "put_plus_one_counter_on_creature_you_control",
+                    "amount": 1,
+                },
+            }
+        ],
+    }
+    pid = reg.register_printing(d)
+    assert pid == 0

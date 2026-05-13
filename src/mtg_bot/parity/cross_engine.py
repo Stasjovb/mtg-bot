@@ -487,6 +487,64 @@ def _ta_dict_to_python_effect(eff_dict: dict):
             power_bonus=eff_dict.get("power_bonus", 0),
             toughness_bonus=eff_dict.get("toughness_bonus", 0),
         )
+    if kind == "put_plus_one_counter_on_creature_you_control":
+        # Single-target +1/+1 counter add restricted to "target
+        # creature you control" (CR 122 +1/+1 counter on a single
+        # target permanent, controller-side filter). Rust's
+        # ``Effect::PutPlusOneCounterOnCreatureYouControl { amount:
+        # i32 }`` (cards.rs:815) is the single-target sibling of
+        # ``PutPlusOneCounterOnEachCreatureYouControl``; its resolve
+        # arm at ``state_ops_resolve.rs:4148-4211`` picks the target
+        # DETERMINISTICALLY at apply_effect time: scan the SOURCE
+        # CONTROLLER's battlefield top-to-bottom for the first
+        # object whose ``card_types`` contains "Creature", and add
+        # ``amount`` to its scalar ``counters`` field (the signed
+        # net +1/+1 counter accumulator). Empty bf (or no creatures
+        # on it) is a silent fizzle. ``amount == 0`` short-circuits
+        # before lookup; negative raises (caught at parse time too).
+        #
+        # **Filter direction same as PumpTargetCreatureUntilEOT.**
+        # Both effects scan the source's OWN side (the SOURCE
+        # CONTROLLER's bf), so the same target-pick shim
+        # (``_PickFirstControlledCreatureAgent``) works for both
+        # consumers. The audit's Drix Fatemaker entry says oracle
+        # "target creature" (any creature) -- Rust's caster-side
+        # scan is observably narrower than the oracle text on that
+        # printing too, but matches the Python class's
+        # ``ControlledByYou`` filter exactly. Rayblade Trooper's
+        # "target creature you control" is the direct match.
+        #
+        # Python's ``PutPlusOneCounterOnCreatureYouControl(amount:
+        # int = 1)`` class (effects/generic/counters.py:844) is a
+        # ``PutPlusOneCounters`` subclass with the
+        # ``IsCreature() & ControlledByYou()`` slot filter wired in
+        # ``__post_init__``. Its base-class ``resolve`` walks the
+        # per-slot chosen targets and adds ``amount`` to each one's
+        # ``plus_one_counters`` field (mirrors Rust's scalar
+        # ``counters`` accumulator -- the cross-engine
+        # battlefield_snapshot already round-trips "counters" via
+        # ``object_to_pydict``).
+        #
+        # Unlike Rust's at-apply-time scan, Python picks at PUSH
+        # time via ``push_triggered_ability`` (actions.py:3172);
+        # end-to-end probes seat ``_PickFirstControlledCreatureAgent``
+        # (sibling shape to the pump arm) on the source's
+        # controller -- the first own-side creature pick.
+        #
+        # Mirrors Rust's ``parse_effect`` arm (cards.rs:3848-3864)
+        # which tolerates missing ``amount`` (defaults to 1, matching
+        # the Python class's ``amount: int = 1`` default) and
+        # REQUIRES non-negative ``amount`` (raises on negatives at
+        # parse time; the resolve arm has a defense-in-depth
+        # negative guard too). Bridge consumers SHOULD pass
+        # ``amount`` explicitly so the dict shape stays self-
+        # documenting.
+        from mtg_bot.effects.generic.counters import (
+            PutPlusOneCounterOnCreatureYouControl,
+        )
+        return PutPlusOneCounterOnCreatureYouControl(
+            amount=eff_dict.get("amount", 1),
+        )
     raise ValueError(
         f"cross_engine triggered_abilities bridge: unsupported "
         f"effect kind {kind!r} (extend `_ta_dict_to_python_effect` "
