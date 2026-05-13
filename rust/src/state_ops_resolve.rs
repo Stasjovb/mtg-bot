@@ -816,11 +816,22 @@ fn apply_effect(
                 obj.counters = 0;
                 obj.attached_to = None;
                 obj.exiled_with_source = None;
-                let printing_id = obj.printing_id;
+                let (printing_id, leaving_obj_id) = (obj.printing_id, obj.id);
                 Arc::make_mut(&mut state.players[defender].hand).push(obj);
                 // Round-29 Void LTB tracking: bounce is a battlefield-
                 // exit. Flag flips iff the bounced object is nonland.
                 mark_left_battlefield_if_nonland(state, printing_id);
+            // Slice 10: LTB fan-out at the Effect arm. The bf-exit
+            // bypasses move_object, so the LEAVES dispatch needs to
+            // be wired here (Slice 8 only covered move_object +
+            // SBA destroy). Queue the leaving id; the drain runs in
+            // `resolve_top_of_stack` AFTER the resolving slot is
+            // popped — mirrors how pending_etb_dispatches defers
+            // ENTERS dispatch past the spell's stack pop. Draining
+            // here would push the LTB trigger ABOVE the still-
+            // present resolving spell and the subsequent
+            // `stack.pop()` would pop the wrong slot.
+            state.pending_leaves_dispatches.push(leaving_obj_id);
             }
         },
         // Round-10: Mill. Caller's controller (= active_player, first-
@@ -979,11 +990,22 @@ fn apply_effect(
                 obj.counters = 0;
                 obj.attached_to = None;
                 obj.exiled_with_source = None;
-                let printing_id = obj.printing_id;
+                let (printing_id, leaving_obj_id) = (obj.printing_id, obj.id);
                 Arc::make_mut(&mut state.players[defender].exile).push(obj);
                 // Round-29 Void LTB tracking: exile is a battlefield-
                 // exit. Flag flips iff the exiled object is nonland.
                 mark_left_battlefield_if_nonland(state, printing_id);
+            // Slice 10: LTB fan-out at the Effect arm. The bf-exit
+            // bypasses move_object, so the LEAVES dispatch needs to
+            // be wired here (Slice 8 only covered move_object +
+            // SBA destroy). Queue the leaving id; the drain runs in
+            // `resolve_top_of_stack` AFTER the resolving slot is
+            // popped — mirrors how pending_etb_dispatches defers
+            // ENTERS dispatch past the spell's stack pop. Draining
+            // here would push the LTB trigger ABOVE the still-
+            // present resolving spell and the subsequent
+            // `stack.pop()` would pop the wrong slot.
+            state.pending_leaves_dispatches.push(leaving_obj_id);
             }
         },
         // Round-12: TapTarget. Twiddle-shaped: tap a target permanent.
@@ -1148,11 +1170,22 @@ fn apply_effect(
                 obj.counters = 0;
                 obj.attached_to = None;
                 obj.exiled_with_source = None;
-                let printing_id = obj.printing_id;
+                let (printing_id, leaving_obj_id) = (obj.printing_id, obj.id);
                 Arc::make_mut(&mut state.players[active].graveyard).push(obj);
                 // Round-29 Void LTB tracking: sacrifice is a
                 // battlefield-exit. Flag flips iff sac'd object is nonland.
                 mark_left_battlefield_if_nonland(state, printing_id);
+            // Slice 10: LTB fan-out at the Effect arm. The bf-exit
+            // bypasses move_object, so the LEAVES dispatch needs to
+            // be wired here (Slice 8 only covered move_object +
+            // SBA destroy). Queue the leaving id; the drain runs in
+            // `resolve_top_of_stack` AFTER the resolving slot is
+            // popped — mirrors how pending_etb_dispatches defers
+            // ENTERS dispatch past the spell's stack pop. Draining
+            // here would push the LTB trigger ABOVE the still-
+            // present resolving spell and the subsequent
+            // `stack.pop()` would pop the wrong slot.
+            state.pending_leaves_dispatches.push(leaving_obj_id);
             }
         },
         // Round-15: AddCounters. Routes through round-2's signed net-
@@ -1402,11 +1435,22 @@ fn apply_effect(
                 obj.counters = 0;
                 obj.attached_to = None;
                 obj.exiled_with_source = None;
-                let printing_id = obj.printing_id;
+                let (printing_id, leaving_obj_id) = (obj.printing_id, obj.id);
                 Arc::make_mut(&mut state.players[defender].graveyard).push(obj);
                 // Round-29 Void LTB tracking: destroy is a battlefield-
                 // exit. Flag flips iff destroyed object is nonland.
                 mark_left_battlefield_if_nonland(state, printing_id);
+            // Slice 10: LTB fan-out at the Effect arm. The bf-exit
+            // bypasses move_object, so the LEAVES dispatch needs to
+            // be wired here (Slice 8 only covered move_object +
+            // SBA destroy). Queue the leaving id; the drain runs in
+            // `resolve_top_of_stack` AFTER the resolving slot is
+            // popped — mirrors how pending_etb_dispatches defers
+            // ENTERS dispatch past the spell's stack pop. Draining
+            // here would push the LTB trigger ABOVE the still-
+            // present resolving spell and the subsequent
+            // `stack.pop()` would pop the wrong slot.
+            state.pending_leaves_dispatches.push(leaving_obj_id);
             }
         },
         // Round-17: DamageEachOpponent. CR 701.4 + AOE pattern — the
@@ -2928,11 +2972,22 @@ fn apply_effect(
                 obj.counters = 0;
                 obj.attached_to = None;
                 obj.exiled_with_source = None;
-                let printing_id = obj.printing_id;
+                let (printing_id, leaving_obj_id) = (obj.printing_id, obj.id);
                 Arc::make_mut(&mut state.players[pidx].graveyard).push(obj);
                 // Round-29 Void LTB: nonland target by filter; helper
                 // re-checks via printing for defense-in-depth.
                 mark_left_battlefield_if_nonland(state, printing_id);
+            // Slice 10: LTB fan-out at the Effect arm. The bf-exit
+            // bypasses move_object, so the LEAVES dispatch needs to
+            // be wired here (Slice 8 only covered move_object +
+            // SBA destroy). Queue the leaving id; the drain runs in
+            // `resolve_top_of_stack` AFTER the resolving slot is
+            // popped — mirrors how pending_etb_dispatches defers
+            // ENTERS dispatch past the spell's stack pop. Draining
+            // here would push the LTB trigger ABOVE the still-
+            // present resolving spell and the subsequent
+            // `stack.pop()` would pop the wrong slot.
+            state.pending_leaves_dispatches.push(leaving_obj_id);
             }
         }
         // DestroyTargetArtifact. CR 701.7 with Artifact filter — Drill
@@ -2975,12 +3030,23 @@ fn apply_effect(
                 obj.counters = 0;
                 obj.attached_to = None;
                 obj.exiled_with_source = None;
-                let printing_id = obj.printing_id;
+                let (printing_id, leaving_obj_id) = (obj.printing_id, obj.id);
                 Arc::make_mut(&mut state.players[pidx].graveyard).push(obj);
                 // Round-29 Void LTB: artifact target may also be a
                 // land (treasure tokens / artifact lands). Helper gates
                 // on the printing.
                 mark_left_battlefield_if_nonland(state, printing_id);
+            // Slice 10: LTB fan-out at the Effect arm. The bf-exit
+            // bypasses move_object, so the LEAVES dispatch needs to
+            // be wired here (Slice 8 only covered move_object +
+            // SBA destroy). Queue the leaving id; the drain runs in
+            // `resolve_top_of_stack` AFTER the resolving slot is
+            // popped — mirrors how pending_etb_dispatches defers
+            // ENTERS dispatch past the spell's stack pop. Draining
+            // here would push the LTB trigger ABOVE the still-
+            // present resolving spell and the subsequent
+            // `stack.pop()` would pop the wrong slot.
+            state.pending_leaves_dispatches.push(leaving_obj_id);
             }
         }
         // DestroyTargetLand. CR 701.7 with Land filter — Dust Bowl /
@@ -3023,13 +3089,24 @@ fn apply_effect(
                 obj.counters = 0;
                 obj.attached_to = None;
                 obj.exiled_with_source = None;
-                let printing_id = obj.printing_id;
+                let (printing_id, leaving_obj_id) = (obj.printing_id, obj.id);
                 Arc::make_mut(&mut state.players[pidx].graveyard).push(obj);
                 // Round-29 Void LTB: target is a Land by filter, so the
                 // helper short-circuits to no-op — but call it anyway
                 // for uniformity (the gate lives in one place, every
                 // bf-exit site goes through the same code path).
                 mark_left_battlefield_if_nonland(state, printing_id);
+            // Slice 10: LTB fan-out at the Effect arm. The bf-exit
+            // bypasses move_object, so the LEAVES dispatch needs to
+            // be wired here (Slice 8 only covered move_object +
+            // SBA destroy). Queue the leaving id; the drain runs in
+            // `resolve_top_of_stack` AFTER the resolving slot is
+            // popped — mirrors how pending_etb_dispatches defers
+            // ENTERS dispatch past the spell's stack pop. Draining
+            // here would push the LTB trigger ABOVE the still-
+            // present resolving spell and the subsequent
+            // `stack.pop()` would pop the wrong slot.
+            state.pending_leaves_dispatches.push(leaving_obj_id);
             }
         }
         // DealDamageAnyTarget — Lightning Bolt's "any target" shape
@@ -4222,11 +4299,22 @@ fn apply_effect(
             obj.counters = 0;
             obj.attached_to = None;
             obj.exiled_with_source = None;
-            let printing_id = obj.printing_id;
+            let (printing_id, leaving_obj_id) = (obj.printing_id, obj.id);
             Arc::make_mut(&mut state.players[cidx].graveyard).push(obj);
             // Round-29 Void LTB: optional artifact sac. Artifact target
             // may also be a land — helper gates on printing.
             mark_left_battlefield_if_nonland(state, printing_id);
+            // Slice 10: LTB fan-out at the Effect arm. The bf-exit
+            // bypasses move_object, so the LEAVES dispatch needs to
+            // be wired here (Slice 8 only covered move_object +
+            // SBA destroy). Queue the leaving id; the drain runs in
+            // `resolve_top_of_stack` AFTER the resolving slot is
+            // popped — mirrors how pending_etb_dispatches defers
+            // ENTERS dispatch past the spell's stack pop. Draining
+            // here would push the LTB trigger ABOVE the still-
+            // present resolving spell and the subsequent
+            // `stack.pop()` would pop the wrong slot.
+            state.pending_leaves_dispatches.push(leaving_obj_id);
             // Apply inner effect.
             apply_effect(state, inner_effect.as_ref(), source_obj_id)?;
         }
@@ -4295,13 +4383,24 @@ fn apply_effect(
             obj.counters = 0;
             obj.attached_to = None;
             obj.exiled_with_source = None;
-            let printing_id = obj.printing_id;
+            let (printing_id, leaving_obj_id) = (obj.printing_id, obj.id);
             let lib_mut: &mut Vec<GameObject> =
                 Arc::make_mut(&mut state.players[owner_idx].library);
             lib_mut.push(obj); // post-CE3: bottom = tail of Vec
             // Round-29 Void LTB: target is Artifact OR Creature —
             // either way the helper's nonland gate filters correctly.
             mark_left_battlefield_if_nonland(state, printing_id);
+            // Slice 10: LTB fan-out at the Effect arm. The bf-exit
+            // bypasses move_object, so the LEAVES dispatch needs to
+            // be wired here (Slice 8 only covered move_object +
+            // SBA destroy). Queue the leaving id; the drain runs in
+            // `resolve_top_of_stack` AFTER the resolving slot is
+            // popped — mirrors how pending_etb_dispatches defers
+            // ENTERS dispatch past the spell's stack pop. Draining
+            // here would push the LTB trigger ABOVE the still-
+            // present resolving spell and the subsequent
+            // `stack.pop()` would pop the wrong slot.
+            state.pending_leaves_dispatches.push(leaving_obj_id);
         }
         // Round-28 EoE Equipment-ETB attach. Locate the source on
         // its controller's battlefield (Equipment ETB resolution
@@ -4455,12 +4554,23 @@ fn apply_effect(
             obj.counters = 0;
             obj.attached_to = None;
             obj.exiled_with_source = None;
-            let printing_id = obj.printing_id;
+            let (printing_id, leaving_obj_id) = (obj.printing_id, obj.id);
             Arc::make_mut(&mut state.players[tidx].graveyard).push(obj);
             // Round-29 Void LTB: destroying an enchanted host. Host
             // is any permanent (creature / artifact / enchantment /
             // planeswalker / land); helper gates on the printing.
             mark_left_battlefield_if_nonland(state, printing_id);
+            // Slice 10: LTB fan-out at the Effect arm. The bf-exit
+            // bypasses move_object, so the LEAVES dispatch needs to
+            // be wired here (Slice 8 only covered move_object +
+            // SBA destroy). Queue the leaving id; the drain runs in
+            // `resolve_top_of_stack` AFTER the resolving slot is
+            // popped — mirrors how pending_etb_dispatches defers
+            // ENTERS dispatch past the spell's stack pop. Draining
+            // here would push the LTB trigger ABOVE the still-
+            // present resolving spell and the subsequent
+            // `stack.pop()` would pop the wrong slot.
+            state.pending_leaves_dispatches.push(leaving_obj_id);
         }
         // Round-28 enchanted-permanent tap. Same `attached_to` lookup
         // as DestroyEnchantedPermanent but mutates the target's
@@ -4543,11 +4653,22 @@ fn apply_effect(
             obj.counters = 0;
             obj.attached_to = None;
             obj.exiled_with_source = Some(source_obj_id);
-            let printing_id = obj.printing_id;
+            let (printing_id, leaving_obj_id) = (obj.printing_id, obj.id);
             Arc::make_mut(&mut state.players[owner_idx].exile).push(obj);
             // Round-29 Void LTB: until-leaves exile. Target is a
             // Creature by filter → nonland → flag flips.
             mark_left_battlefield_if_nonland(state, printing_id);
+            // Slice 10: LTB fan-out at the Effect arm. The bf-exit
+            // bypasses move_object, so the LEAVES dispatch needs to
+            // be wired here (Slice 8 only covered move_object +
+            // SBA destroy). Queue the leaving id; the drain runs in
+            // `resolve_top_of_stack` AFTER the resolving slot is
+            // popped — mirrors how pending_etb_dispatches defers
+            // ENTERS dispatch past the spell's stack pop. Draining
+            // here would push the LTB trigger ABOVE the still-
+            // present resolving spell and the subsequent
+            // `stack.pop()` would pop the wrong slot.
+            state.pending_leaves_dispatches.push(leaving_obj_id);
         }
         // Round-28 broader-filter "until leaves" exile. Same shape
         // as ExileTargetCreatureUntilSourceLeaves but filters on
@@ -4594,11 +4715,22 @@ fn apply_effect(
             obj.counters = 0;
             obj.attached_to = None;
             obj.exiled_with_source = Some(source_obj_id);
-            let printing_id = obj.printing_id;
+            let (printing_id, leaving_obj_id) = (obj.printing_id, obj.id);
             Arc::make_mut(&mut state.players[owner_idx].exile).push(obj);
             // Round-29 Void LTB: exile-opps-nonland — target is nonland
             // by filter. Helper short-circuits on lands defensively.
             mark_left_battlefield_if_nonland(state, printing_id);
+            // Slice 10: LTB fan-out at the Effect arm. The bf-exit
+            // bypasses move_object, so the LEAVES dispatch needs to
+            // be wired here (Slice 8 only covered move_object +
+            // SBA destroy). Queue the leaving id; the drain runs in
+            // `resolve_top_of_stack` AFTER the resolving slot is
+            // popped — mirrors how pending_etb_dispatches defers
+            // ENTERS dispatch past the spell's stack pop. Draining
+            // here would push the LTB trigger ABOVE the still-
+            // present resolving spell and the subsequent
+            // `stack.pop()` would pop the wrong slot.
+            state.pending_leaves_dispatches.push(leaving_obj_id);
         }
         // Round-28 may-do decision wrapper. "You may [inner_effect]."
         // Pushes a PendingDecision::MayDoChoice onto the queue and
@@ -5382,11 +5514,22 @@ fn apply_effect(
             obj.counters = 0;
             obj.attached_to = None;
             obj.exiled_with_source = None;
-            let printing_id = obj.printing_id;
+            let (printing_id, leaving_obj_id) = (obj.printing_id, obj.id);
             Arc::make_mut(&mut state.players[opponent_idx].graveyard).push(obj);
             // Round-29 Void LTB: each-opponent-sacs-creature — target
             // is a Creature by filter → nonland → flag flips.
             mark_left_battlefield_if_nonland(state, printing_id);
+            // Slice 10: LTB fan-out at the Effect arm. The bf-exit
+            // bypasses move_object, so the LEAVES dispatch needs to
+            // be wired here (Slice 8 only covered move_object +
+            // SBA destroy). Queue the leaving id; the drain runs in
+            // `resolve_top_of_stack` AFTER the resolving slot is
+            // popped — mirrors how pending_etb_dispatches defers
+            // ENTERS dispatch past the spell's stack pop. Draining
+            // here would push the LTB trigger ABOVE the still-
+            // present resolving spell and the subsequent
+            // `stack.pop()` would pop the wrong slot.
+            state.pending_leaves_dispatches.push(leaving_obj_id);
         }
         Effect::EachOpponentMillsCards { count } => {
             if *count < 0 {
@@ -5795,6 +5938,14 @@ impl GameState {
             // queue; we fan out the events now that the resolving
             // trigger slot has been popped.
             drain_pending_etb_dispatches(self)?;
+            // Slice 10 — drain any LEAVES dispatches a trigger's
+            // effect may have queued (e.g. a trigger that destroys
+            // / bounces / exiles another bf permanent via an Effect
+            // arm in state_ops_resolve.rs). Drain happens AFTER the
+            // trigger slot is popped so the LEAVES trigger goes
+            // onto the now-empty top, mirroring the spell-path's
+            // pop-then-fan-out ordering.
+            drain_pending_leaves_dispatches(self)?;
             // Auto-resolve any pending decisions the trigger effect
             // may have queued (Surveil on ETB, etc.). Matches the
             // spell-path's terminal call below.
@@ -5871,6 +6022,16 @@ impl GameState {
         // the resolving slot, regardless of how many permanents
         // entered during the effect pass.
         drain_pending_etb_dispatches(self)?;
+        // Slice 10 — drain any LEAVES dispatches the spell's Effect
+        // arms deferred via `pending_leaves_dispatches` (bounce /
+        // destroy / exile / sacrifice-as-effect at the 13 bf-exit
+        // sites in `state_ops_resolve.rs` that bypass `move_object`
+        // and call `mark_left_battlefield_if_nonland` directly). The
+        // queue mechanism is the LEAVES counterpart of the Slice 2
+        // ETB queue and follows the same defer-past-pop ordering:
+        // the resolving spell pops first, then LEAVES triggers
+        // pushed during `apply_effect` land on the now-empty top.
+        drain_pending_leaves_dispatches(self)?;
         // Auto-resolve any pending decisions (Round-27 G20 closure).
         // Pre-r27 behavior: Surveil etc. resolved with deterministic
         // "keep all on top". The decision-callback substrate now
@@ -5920,6 +6081,9 @@ impl GameState {
                 .expect("peeked top but pop returned None — stack invariant broken");
             // Slice 2: drain any RS-site deferred dispatches.
             drain_pending_etb_dispatches(self)?;
+            // Slice 10: drain LEAVES sibling — see the matching
+            // comment in `resolve_top_of_stack`'s trigger branch.
+            drain_pending_leaves_dispatches(self)?;
             return Ok(Some(stack_item_to_dict(py, &popped)?));
         }
         let effects: Vec<Effect> = match find_source_printing_id(self, top.source_obj_id)
@@ -5957,6 +6121,9 @@ impl GameState {
         // drain — the `_pause` variant just skips the
         // auto-resolve-pending step, not the ETB fan-out.
         drain_pending_etb_dispatches(self)?;
+        // Slice 10: drain LEAVES sibling — see the matching
+        // comment in `resolve_top_of_stack`'s spell branch.
+        drain_pending_leaves_dispatches(self)?;
         Ok(Some(stack_item_to_dict(py, &popped)?))
     }
 
