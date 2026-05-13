@@ -15532,3 +15532,330 @@ def test_cross_engine_real_eoe_dubious_delicacy_etb_pump_target_creature_parity(
     assert rust_state.get_life(1) == 20
     assert py_state.players[0].life == 20
     assert py_state.players[1].life == 20
+
+
+def test_cross_engine_real_eoe_rayblade_trooper_etb_plus_one_counter_parity(
+    parity_smoke,
+):
+    """Probe: Rayblade Trooper (EoE) ETB ``put a +1/+1 counter on
+    target creature you control`` parity -- FIRST real-EoE cross-
+    engine probe to exercise the
+    ``put_plus_one_counter_on_creature_you_control`` bridge arm.
+
+    Oracle text in ``data/edge_of_eternities.json``:
+
+        "When this creature enters, put a +1/+1 counter on target
+         creature you control.
+         Whenever a nontoken creature you control with a +1/+1
+         counter on it dies, create a 1/1 white Human Soldier
+         creature token.
+         Warp {1}{W} (...)"
+
+    The dies-trigger token-creation rider + Warp clause are out of
+    scope -- this probe exclusively exercises the ETB-trigger
+    surface, the substrate sweet-spot:
+
+      * Event: ``enters``
+      * Predicate: ``source_is_self`` (only the just-entered
+        creature's own ETB fires)
+      * Effect: ``put_plus_one_counter_on_creature_you_control``
+        amount=1 -- NEW on the bridge as of the companion commit
+        on this branch.
+
+    First real-EoE cross-engine probe to exercise the
+    ``Effect::PutPlusOneCounterOnCreatureYouControl`` arm +
+    ``PutPlusOneCounterOnCreatureYouControl`` Python class end-to-
+    end.
+
+    Predicate decomposition (same as Germinating Wurm / Quantum
+    Riddler / Nebula Dragon / Seedship Broodtender / Dubious
+    Delicacy):
+
+        SourceIsSelf
+
+    Effect: ``put_plus_one_counter_on_creature_you_control(amount=1)``
+    -- the bridge arm translates to
+    ``PutPlusOneCounterOnCreatureYouControl(amount=1)``.
+
+    **Target-pick parity contract.** Rust's
+    ``Effect::PutPlusOneCounterOnCreatureYouControl`` arm
+    (rust/src/state_ops_resolve.rs:4148-4211) picks the target
+    DETERMINISTICALLY at apply_effect time: scan the SOURCE
+    CONTROLLER's battlefield top-to-bottom for the FIRST object
+    whose ``card_types`` contains "Creature", and add ``amount`` to
+    its scalar ``counters`` field. SAME caster-side scan as
+    ``PumpTargetCreatureUntilEOT`` -- the same target-pick shim
+    (``_PickFirstControlledCreatureAgent`` from the Dubious Delicacy
+    probe) works here too.
+
+    **Self-target subtlety.** Rayblade Trooper itself is a Creature,
+    so when it enters its own bf the at-apply-time scan COULD pick
+    it as the first creature. The probe scenario stacks a Bait Bear
+    onto p0's bf BEFORE the Trooper so the Bait Bear is the first
+    creature in zone-iteration order -- both engines pick the Bait
+    Bear. This makes the counter delta observable on a different
+    object than the source, separating "trigger fired + applied"
+    from "self-modifier no-op".
+
+    Probe shape (inject-and-fire-ENTERS, same pattern as the
+    Dubious Delicacy probe in this commit's parent):
+
+      1. Inject a Bait Bear onto p0's bf FIRST (so it's at index 0
+         and the deterministic scan picks it before any later-
+         injected creature). Bait bear has printed counters=0; the
+         post-resolve assertion checks counters became 1.
+
+      2. Inject Rayblade Trooper onto p0's bf. ENTERS dispatch +
+         SourceIsSelf predicate => trigger lands on stack with
+         target pre-chosen (Bait Bear on both sides).
+
+      3. Drain both stacks. Resolve walk: Bait Bear's
+         ``counters`` (Rust) / ``plus_one_counters`` (Python)
+         increments from 0 to 1.
+
+      4. Cross-engine assert: both engines show Bait Bear with
+         exactly one +1/+1 counter; Rayblade Trooper has zero
+         counters (the trigger didn't target it).
+
+    Out of scope:
+
+      * The dies-trigger token-creation rider -- needs
+        ``feature/phase5-create-token-bridge`` + the DIES-event
+        harness; neither on main today.
+      * Warp (the alternate cast cost) -- mana pipeline bypass.
+      * Mana cost ({2}{W}) -- inject-and-dispatch-ENTERS bypasses
+        the mana pipeline.
+
+    Expected post-dispatch + post-drain state on BOTH engines:
+
+      * Bait Bear on p0's bf with 1 +1/+1 counter.
+      * Rayblade Trooper on p0's bf with 0 counters.
+      * No life changes.
+      * No residual stack.
+    """
+    from mtg_bot.agents import Agent
+    from mtg_bot.parity.cross_engine import (
+        CardDef, DeckSpec, build_python_state, build_rust_state,
+    )
+
+    rayblade_trooper = CardDef(
+        name="Rayblade Trooper",
+        card_type="Creature",
+        mana_cost_generic=2,
+        mana_cost_colored=(("W", 1),),
+        power=2,
+        toughness=2,
+        triggered_abilities=(
+            {
+                "event": "enters",
+                "predicate": {"kind": "source_is_self"},
+                "effect": {
+                    "kind": "put_plus_one_counter_on_creature_you_control",
+                    "amount": 1,
+                },
+            },
+        ),
+    )
+    # The counter target: a Bait Bear injected BEFORE the Trooper so
+    # it's at index 0 of p0's bf, and the deterministic scan picks
+    # it before the Trooper.
+    bait_bear = CardDef(
+        name="Bait Bear (counter target)",
+        card_type="Creature",
+        mana_cost_generic=1,
+        mana_cost_colored=(("G", 1),),
+        power=2,
+        toughness=2,
+    )
+    spec = DeckSpec(
+        card_defs=(rayblade_trooper, bait_bear),
+        p0_library=(),
+        p1_library=(),
+    )
+    py_state = build_python_state(spec)
+    rust_state = build_rust_state(spec)
+
+    # ---- Rust side ----
+    ZONE_BATTLEFIELD = 2
+    rust_bait_dict = {
+        "name": "Bait Bear (counter target)",
+        "card_types": ["Creature"],
+        "mana_cost": {"generic": 1, "G": 1},
+        "effects": [],
+        "power": 2,
+        "toughness": 2,
+    }
+    rust_bait_id = rust_state.register_and_inject_object(
+        rust_bait_dict, 0, ZONE_BATTLEFIELD,
+    )
+    assert rust_state.stack_size() == 0
+
+    rust_rayblade_dict = {
+        "name": "Rayblade Trooper",
+        "card_types": ["Creature"],
+        "mana_cost": {"generic": 2, "W": 1},
+        "effects": [],
+        "power": 2,
+        "toughness": 2,
+        "triggered_abilities": [
+            {
+                "event": "enters",
+                "predicate": {"kind": "source_is_self"},
+                "effect": {
+                    "kind": "put_plus_one_counter_on_creature_you_control",
+                    "amount": 1,
+                },
+            }
+        ],
+    }
+    rust_rayblade_id = rust_state.register_and_inject_object(
+        rust_rayblade_dict, 0, ZONE_BATTLEFIELD,
+    )
+    assert rust_state.stack_size() == 1, (
+        "Rust: Rayblade Trooper's own arrival should fire the "
+        "SourceIsSelf ENTERS trigger and land "
+        "PutPlusOneCounterOnCreatureYouControl(1) on the stack. "
+        f"Got stack_size={rust_state.stack_size()}"
+    )
+
+    # ---- Python side ----
+    from mtg_bot.actions import _trigger_etb_abilities
+    from mtg_bot.cards.base import CardPrinting, ManaCost
+    from mtg_bot.effects.base import TriggeredAbility
+    from mtg_bot.effects.generic.counters import (
+        PutPlusOneCounterOnCreatureYouControl,
+    )
+    from mtg_bot.effects.predicates import Event, IsSelf
+    from mtg_bot.game import Zone
+
+    bait_printing = CardPrinting(
+        name="Bait Bear (counter target)",
+        mana_cost_str="",
+        mana_cost=ManaCost(generic=1, colored=(("G", 1),)),
+        type_line="Creature",
+        supertypes=(),
+        card_types=("Creature",),
+        subtypes=(),
+        power=2,
+        toughness=2,
+        produces=frozenset(),
+        triggered_abilities=(),
+    )
+    rayblade_printing = CardPrinting(
+        name="Rayblade Trooper",
+        mana_cost_str="",
+        mana_cost=ManaCost(generic=2, colored=(("W", 1),)),
+        type_line="Creature",
+        supertypes=(),
+        card_types=("Creature",),
+        subtypes=(),
+        power=2,
+        toughness=2,
+        produces=frozenset(),
+        triggered_abilities=(
+            TriggeredAbility(
+                event=Event.ENTERS,
+                predicate=IsSelf(),
+                effect=PutPlusOneCounterOnCreatureYouControl(amount=1),
+            ),
+        ),
+    )
+
+    py_bait = py_state.new_object(
+        bait_printing, owner_id=0, zone=Zone.BATTLEFIELD,
+    )
+    py_bait.summoning_sick = False
+    py_bait.tapped = False
+    py_bait.damage = 0
+    py_bait.etb_timestamp = py_state.next_timestamp
+    py_state.next_timestamp += 1
+    py_state.battlefield.append(py_bait)
+    assert py_bait.plus_one_counters == 0
+
+    # Caster-side target-pick shim. Same shape as the Dubious
+    # Delicacy probe's _PickFirstControlledCreatureAgent: filter
+    # legal_targets to creatures controlled by the agent's
+    # player_id and return the first. Mirrors Rust's first-
+    # creature-on-caster-bf scan.
+    class _PickFirstControlledCreatureAgent(Agent):
+        def choose_target(self, state, player_id, legal_targets):
+            if not legal_targets:
+                return None
+            for kind, target_id in legal_targets:
+                if kind != "creature":
+                    continue
+                obj = next(
+                    (
+                        o
+                        for o in state.battlefield
+                        if o.id == target_id
+                    ),
+                    None,
+                )
+                if obj is not None and obj.controller_id == player_id:
+                    return (kind, target_id)
+            return legal_targets[0]
+
+    py_state.players[0].agent = _PickFirstControlledCreatureAgent()
+
+    py_rayblade = py_state.new_object(
+        rayblade_printing, owner_id=0, zone=Zone.BATTLEFIELD,
+    )
+    py_rayblade.summoning_sick = False
+    py_rayblade.tapped = False
+    py_rayblade.damage = 0
+    py_rayblade.etb_timestamp = py_state.next_timestamp
+    py_state.next_timestamp += 1
+    py_state.battlefield.append(py_rayblade)
+    _trigger_etb_abilities(py_state, py_rayblade)
+    assert len(py_state.stack) == 1, (
+        "Python: Rayblade Trooper's own arrival should fire the "
+        "IsSelf ENTERS trigger and land "
+        "PutPlusOneCounterOnCreatureYouControl(1) on the stack. "
+        f"Got stack size={len(py_state.stack)}"
+    )
+
+    # ---- Drain both stacks, then compare ----
+    _drain_stack_both(py_state, rust_state)
+
+    # Stacks empty on both sides.
+    assert rust_state.stack_size() == 0
+    assert len(py_state.stack) == 0
+
+    # Per-engine post-state: Bait Bear has 1 +1/+1 counter; Rayblade
+    # Trooper has 0 (the trigger targeted the bait, not itself, per
+    # the deterministic first-in-bf scan).
+    rust_bf = rust_state.battlefield_snapshot()
+    rust_bait_entry = next(
+        e for e in rust_bf if int(e["id"]) == rust_bait_id
+    )
+    rust_rayblade_entry = next(
+        e for e in rust_bf if int(e["id"]) == rust_rayblade_id
+    )
+    assert rust_bait_entry["counters"] == 1, (
+        f"Rust bait bear should have 1 +1/+1 counter; got "
+        f"{rust_bait_entry['counters']}"
+    )
+    assert rust_rayblade_entry["counters"] == 0, (
+        f"Rust Rayblade Trooper should have 0 counters (it wasn't "
+        f"the target); got {rust_rayblade_entry['counters']}"
+    )
+
+    assert py_bait.plus_one_counters == 1, (
+        f"Python bait bear should have 1 +1/+1 counter; got "
+        f"{py_bait.plus_one_counters}"
+    )
+    assert py_rayblade.plus_one_counters == 0, (
+        f"Python Rayblade Trooper should have 0 counters (it wasn't "
+        f"the target); got {py_rayblade.plus_one_counters}"
+    )
+
+    # Cross-engine: same counter values on the same objects.
+    assert rust_bait_entry["counters"] == py_bait.plus_one_counters
+    assert rust_rayblade_entry["counters"] == py_rayblade.plus_one_counters
+
+    # Lives unchanged.
+    assert rust_state.get_life(0) == 20
+    assert rust_state.get_life(1) == 20
+    assert py_state.players[0].life == 20
+    assert py_state.players[1].life == 20
