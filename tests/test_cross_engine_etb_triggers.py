@@ -1814,5 +1814,175 @@ def test_rust_parser_accepts_put_plus_one_counter_on_each_creature_you_control_i
     assert pid == 0
 
 
+# ===== Phase 5 create_token bridge pins =====
+#
+# Token-spawn ETB shape. Translates ``create_token`` (Rust
+# ``Effect::CreateToken {count, token_printing_id}``) into Python's
+# ``CreateToken(token_printing=..., count=...)``. The dict carries a
+# Rust-registry pid; the bridge looks up the matching Python printing
+# from the probe-time ``register_token_printing`` map (pre-existing
+# substrate added with the bridge arm). Real-EoE consumers: any
+# Spacecraft / Artifact whose ETB prints a vanilla Soldier / Robot
+# token (the I81 cross-controller probe drives the synthetic shape;
+# the bridge unlocks real-EoE token-creation ETB probes too).
+
+
+def test_bridge_create_token_translates_to_python():
+    """Phase 5 create_token bridge: Rust
+    ``{"kind": "create_token", "count": 1, "token_printing_id": pid}``
+    translates to Python
+    ``CreateToken(token_printing=<registered>, count=1)``.
+    """
+    from mtg_bot.cards.base import make_token_creature
+    from mtg_bot.effects.generic.tokens import CreateToken
+    from mtg_bot.parity.cross_engine import (
+        _ta_dict_to_python_effect, clear_token_printings,
+        register_token_printing,
+    )
+
+    clear_token_printings()
+    soldier = make_token_creature(
+        name="Soldier Token (bridge pin)",
+        power=1, toughness=1, subtypes=("Soldier",),
+    )
+    register_token_printing(7, soldier)
+    e = _ta_dict_to_python_effect(
+        {"kind": "create_token", "count": 1, "token_printing_id": 7}
+    )
+    assert isinstance(e, CreateToken)
+    assert e.token_printing is soldier
+    assert e.count == 1
+    # Rider flags default per the dataclass (Rust variant has no
+    # mirror for them; the bridge constructs the bare shape).
+    assert e.tapped is False
+    assert e.attacking is False
+    assert e.each_player is False
+    assert e.schedule_end_of_combat_sacrifice is False
+    clear_token_printings()
+
+
+def test_bridge_create_token_count_default_one():
+    """Missing ``count`` defaults to 1 (mirrors the lenient
+    ``draw_cards`` / ``surveil`` default-convention for partial test
+    fixtures; Rust's parse_effect is STRICTER and would raise
+    ``KeyError`` on a missing field, but the bridge tolerates the
+    omission for round-trip dict-shape consistency on the Python
+    side).
+    """
+    from mtg_bot.cards.base import make_token_creature
+    from mtg_bot.effects.generic.tokens import CreateToken
+    from mtg_bot.parity.cross_engine import (
+        _ta_dict_to_python_effect, clear_token_printings,
+        register_token_printing,
+    )
+
+    clear_token_printings()
+    robot = make_token_creature(
+        name="Robot Token (bridge pin -- count default)",
+        power=2, toughness=1, subtypes=("Robot",), artifact=True,
+    )
+    register_token_printing(11, robot)
+    e = _ta_dict_to_python_effect(
+        {"kind": "create_token", "token_printing_id": 11}
+    )
+    assert isinstance(e, CreateToken)
+    assert e.token_printing is robot
+    assert e.count == 1
+    clear_token_printings()
+
+
+def test_bridge_create_token_missing_registration_raises_keyerror():
+    """``create_token`` with a ``token_printing_id`` not present in
+    the registry raises ``KeyError`` with a clear hint -- silent
+    divergence from a missing setup step would be much harder to
+    debug than an immediate failure at translation time.
+    """
+    import pytest
+
+    from mtg_bot.parity.cross_engine import (
+        _ta_dict_to_python_effect, clear_token_printings,
+    )
+
+    clear_token_printings()
+    with pytest.raises(KeyError, match="token_printing_id=999"):
+        _ta_dict_to_python_effect(
+            {"kind": "create_token", "count": 1, "token_printing_id": 999}
+        )
+
+
+def test_register_token_printing_rejects_conflicting_pid():
+    """``register_token_printing`` raises ``ValueError`` on a
+    conflicting registration (a different Python printing under an
+    existing pid). Idempotent on a repeat (pid, printing) pair.
+    Probes that genuinely want to clear-and-re-register call
+    :func:`clear_token_printings` first.
+    """
+    import pytest
+
+    from mtg_bot.cards.base import make_token_creature
+    from mtg_bot.parity.cross_engine import (
+        clear_token_printings, register_token_printing,
+    )
+
+    clear_token_printings()
+    a = make_token_creature(
+        name="Token A (conflict pin)", power=1, toughness=1,
+    )
+    b = make_token_creature(
+        name="Token B (conflict pin)", power=2, toughness=2,
+    )
+    register_token_printing(42, a)
+    # Idempotent re-register of the SAME printing on the same pid
+    # is a no-op.
+    register_token_printing(42, a)
+    # Conflicting registration raises.
+    with pytest.raises(ValueError, match="already registered"):
+        register_token_printing(42, b)
+    clear_token_printings()
+
+
+def test_rust_parser_accepts_create_token_in_triggered_ability():
+    """Pin the Rust parser surface for ``create_token``. Uses a
+    Creature carrier (matches the I81 synthetic Token Maker Bear's
+    type-line shape) so a future regression that tightens the Rust
+    parse_triggered_ability arm to artifact-only sources surfaces
+    here. The Rust parser requires both ``count`` and
+    ``token_printing_id`` fields; the inner token printing is
+    pre-registered on the same Registry so the pid is valid.
+    """
+    import mtg_bot_engine
+
+    reg = mtg_bot_engine.Registry()
+    # Pre-register the inner Soldier token so the carrier's
+    # triggered-ability dict can reference its pid.
+    soldier_pid = reg.register_printing({
+        "name": "Phase 5 Bridge Pin Soldier",
+        "card_types": ["Creature"],
+        "power": 1,
+        "toughness": 1,
+    })
+    d = {
+        "name": "Phase 5 Bridge Pin -- CreateToken",
+        "card_types": ["Creature"],
+        "mana_cost": {"generic": 2, "W": 1},
+        "power": 2,
+        "toughness": 2,
+        "triggered_abilities": [
+            {
+                "event": "enters",
+                "predicate": {"kind": "source_is_self"},
+                "effect": {
+                    "kind": "create_token",
+                    "count": 1,
+                    "token_printing_id": soldier_pid,
+                },
+            }
+        ],
+    }
+    pid = reg.register_printing(d)
+    # Carrier is the second printing in the registry.
+    assert pid == soldier_pid + 1
+
+
 # === PHASE5_BRIDGE_PIN_TESTS_INSERT_ABOVE_THIS_LINE ===
 # New bridge-arm pin tests go IMMEDIATELY ABOVE this marker.

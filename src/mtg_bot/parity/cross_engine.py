@@ -144,6 +144,64 @@ class CardDef:
 # ---------------------------------------------------------------------------
 
 
+# Probe-time registry mapping a Rust ``token_printing_id`` (the u32 the
+# Rust ``Registry`` returns from ``register_printing``) to the matching
+# Python ``CardPrinting``. Consumed by the ``create_token`` bridge arm
+# in ``_ta_dict_to_python_effect``; populated by probes via
+# :func:`register_token_printing` BEFORE either state is built. Empty
+# by default -- only the ``create_token`` arm consults it, and only on
+# probes that drive that arm cross-engine.
+_TOKEN_PRINTING_BY_PID: dict[int, "CardPrinting"] = {}
+
+
+def register_token_printing(pid: int, py_printing: "CardPrinting") -> None:
+    """Register a Python ``CardPrinting`` against the Rust registry's
+    ``token_printing_id`` for use by the ``create_token`` bridge arm.
+
+    Probes that drive an ETB ``create_token`` trigger cross-engine call
+    this BEFORE building either state, so the bridge translator can
+    look up the matching Python printing for the dict-shape Rust pid
+    when materializing the Python ``CreateToken`` Effect.
+
+    Idempotent on a repeat ``(pid, py_printing)`` pair; raises
+    ``ValueError`` on conflicting registrations (a different printing
+    under an existing pid) so silent shadowing of a prior probe's
+    setup surfaces immediately.
+
+    The registry is module-state on this module (NOT on any per-state
+    context) because the bridge is invoked during
+    ``build_python_state``'s printing materialization, which happens
+    before any state object exists. Test isolation across probes is
+    NOT a concern in practice: each probe registers its own pid value
+    (typically the next free Rust registry pid via
+    ``rust_state.registry_size``); collisions across probes would
+    require two probes to claim the same numeric pid for different
+    printings, which the conflicting-registration check catches.
+    Probes that want explicit cleanup can call
+    :func:`clear_token_printings` in a fixture teardown.
+    """
+    existing = _TOKEN_PRINTING_BY_PID.get(pid)
+    if existing is not None and existing is not py_printing:
+        raise ValueError(
+            f"cross_engine.register_token_printing: pid={pid} is "
+            f"already registered to a DIFFERENT CardPrinting "
+            f"({existing.name!r}); refusing to overwrite with "
+            f"{py_printing.name!r}. Pick a fresh pid (e.g. "
+            f"rust_state.registry_size at probe-setup time) or "
+            f"clear the registry via clear_token_printings()."
+        )
+    _TOKEN_PRINTING_BY_PID[pid] = py_printing
+
+
+def clear_token_printings() -> None:
+    """Drop every entry from the create_token bridge's printing
+    registry. Intended for fixture teardown when a probe wants
+    explicit cross-test isolation. The registry is empty by default
+    on a fresh import; production code never calls this.
+    """
+    _TOKEN_PRINTING_BY_PID.clear()
+
+
 def _ta_dict_to_python_effect(eff_dict: dict):
     """Translate one effect-dict (the same dict shape Rust's
     ``parse_effect`` consumes) into a Python ``Effect`` instance.
@@ -1160,6 +1218,100 @@ def _ta_dict_to_python_effect(eff_dict: dict):
             ReturnCreatureFromYourGraveyardToBattlefield,
         )
         return ReturnCreatureFromYourGraveyardToBattlefield()
+    if kind == "create_token":
+        # "Create N tokens of the given printing under the source's
+        # controller." Rust's ``Effect::CreateToken {count,
+        # token_printing_id}`` (cards.rs:154) carries a
+        # ``token_printing_id: u32`` indexing the Rust ``Registry`` --
+        # the printing was registered ahead-of-time via
+        # ``register_printing`` (typically by an earlier
+        # ``register_and_inject_object`` call that seeded the token's
+        # printing into the registry without instantiating a game
+        # object on the live battlefield, mirroring the
+        # ``_register_soldier_token`` helper pattern in
+        # ``tests_rust/test_resolve.py``). The parse_effect arm
+        # (cards.rs:2918-2922) requires both ``count`` and
+        # ``token_printing_id`` fields; the variant has no
+        # tapped/attacking/each_player flags -- those are
+        # Python-side-only riders on ``CreateToken`` with no Rust
+        # mirror today, so the bridge arm constructs a plain
+        # ``CreateToken(token_printing=..., count=...)`` with all
+        # rider flags at their dataclass defaults (``tapped=False``,
+        # ``each_player=False``, ``attacking=False``,
+        # ``schedule_end_of_combat_sacrifice=False``). The resolve arm
+        # (state_ops_resolve.rs) carries the I81 controller-of-effect
+        # fix: both the recipient battlefield Vec pick AND the
+        # token's ``controller`` byte derive from
+        # ``current_resolve_source_controller`` (with active_player
+        # as the back-compat fallback for direct ``apply_effect_pub``
+        # callers); cross-controller cases (p1's ETB trigger resolves
+        # on p0's turn after a flicker re-ETB) route the spawn
+        # correctly post-I81.
+        #
+        # **Python target-pick semantics.** Python's
+        # ``CreateToken(token_printing, count, ...)``
+        # (effects/generic/tokens.py:168) takes ``controller_id``
+        # explicitly via the standard
+        # ``Effect.resolve(state, controller_id, targets)`` signature
+        # -- no targeting pool, the token is created under the
+        # trigger's resolved controller. The Python class pre-dates
+        # the I81 fix and has always been correct on this surface.
+        # The Moonlit Meditation replacement + Anointed-Procession-
+        # style doublers (CR 614) flow through
+        # ``dispatch_replacement`` regardless of how the Effect was
+        # constructed; they observe the same shape Rust's resolve
+        # arm produces, so cross-engine parity holds on the
+        # replacement-effect surface too (no EoE doublers exist
+        # today, but the bridge is forward-compatible).
+        #
+        # **Printing-id -> Python-CardPrinting lookup.** The dict
+        # ships a Rust-registry-keyed ``token_printing_id: u32``
+        # which has no direct mapping to a Python ``CardPrinting``
+        # at translation time -- the Python side has no equivalent
+        # global registry. The bridge resolves this via a
+        # PROBE-TIME registration map: probes that drive the
+        # ``create_token`` arm cross-engine call
+        # ``register_token_printing(pid, py_printing)`` BEFORE
+        # building either state, where ``pid`` is the Rust
+        # registry pid the probe will pass in the dict and
+        # ``py_printing`` is the matching Python printing the
+        # probe constructs (typically via ``make_token_creature``
+        # to mirror Rust's token-shape registration dict). The
+        # translator looks up the printing from this map; missing
+        # registrations raise ``KeyError`` with a clear hint so
+        # silent divergences from a missing setup step surface
+        # immediately. The map is module-state on this module
+        # (NOT on the GameState) since the bridge is invoked
+        # during ``build_python_state``'s printing materialization,
+        # which happens before any per-state context exists.
+        # Probes that don't drive the arm don't need to register
+        # anything -- the registry is empty by default and only
+        # consulted on this kind.
+        #
+        # Mirrors Rust's ``parse_effect`` arm (cards.rs:2918-2922)
+        # which requires explicit ``count`` and ``token_printing_id``
+        # fields. Missing ``count`` here defaults to 1 (mirrors
+        # the ``draw_cards`` / ``surveil`` lenient-default
+        # convention for partial test fixtures); missing
+        # ``token_printing_id`` raises immediately because there is
+        # no plausible default.
+        from mtg_bot.effects.generic.tokens import CreateToken
+        token_pid = eff_dict["token_printing_id"]
+        try:
+            token_printing = _TOKEN_PRINTING_BY_PID[token_pid]
+        except KeyError as exc:
+            raise KeyError(
+                f"cross_engine create_token bridge: no Python "
+                f"CardPrinting registered for token_printing_id="
+                f"{token_pid!r}. Probes that drive the create_token "
+                f"arm cross-engine must call "
+                f"register_token_printing(pid, py_printing) BEFORE "
+                f"building either state."
+            ) from exc
+        return CreateToken(
+            token_printing=token_printing,
+            count=eff_dict.get("count", 1),
+        )
     # === PHASE5_BRIDGE_ARMS_INSERT_ABOVE_THIS_LINE ===
     # New `kind` arms go IMMEDIATELY ABOVE this marker. Do NOT delete the marker.
     # Append-only convention prevents merge collisions when multiple agents add arms in parallel.
