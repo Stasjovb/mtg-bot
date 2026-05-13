@@ -67,6 +67,10 @@ from mtg_bot.training.gate import EVAL_GATE_THRESHOLD
 from mtg_bot.training.stop_signal import (
     sentinel_path, stop_requested, write_stop,
 )
+from mtg_bot.training_ui.launcher import (
+    build_iterate_schema, find_spawn_for_run, kill_process_tree,
+    spawn_iterate,
+)
 
 
 # ---- DB <-> UI kind translation -------------------------------------------
@@ -399,15 +403,126 @@ def _read_json_cycle_id(progress_dir: Path, run_id: str) -> Optional[str]:
 # ---- Flask app factory ----------------------------------------------------
 
 
-def create_app(progress_dir: Path) -> Flask:
+def _force_kill_matched_spawn(
+    progress_dir: Path,
+    target_run_id: str,
+    conn: sqlite3.Connection,
+) -> dict[str, Any]:
+    """Look up every PID that plausibly belongs to ``target_run_id``
+    and OS-kill its process tree. Two PID sources are consulted in
+    order, both best-effort:
+
+    1. ``runs.pid`` from the target's runs.db row — iterate writes
+       its OWN master PID via runs.lifecycle, which is the most
+       reliable handle on the live process (post any venv/stub
+       re-exec chain). Present once iterate has reached the
+       cycle-start point (~5-15s after spawn).
+    2. ``launched.json``'s ``pid`` from the spawn record matched by
+       ``spawned_at`` proximity to ``started_at``. Covers spawns
+       that died before reaching iterate's own start_run call. May
+       refer to a transient Windows venv stub that's already exited;
+       kill_process_tree handles that case as soft-success.
+
+    Returns a dict the force_kill handler merges into its response.
+    """
+    target_row = conn.execute(
+        "SELECT started_at, pid FROM runs WHERE run_id = ?",
+        (target_run_id,),
+    ).fetchone()
+    target_started = (
+        target_row["started_at"] if target_row is not None else None
+    )
+    iterate_recorded_pid = (
+        target_row["pid"] if target_row is not None else None
+    )
+
+    killed_pids: list[int] = []
+    all_errors: list[str] = []
+    sources: list[str] = []
+    matched_launch_id: Optional[str] = None
+
+    # Source 1: iterate's self-reported master PID (most reliable).
+    if iterate_recorded_pid:
+        outcome = kill_process_tree(int(iterate_recorded_pid))
+        if outcome["ok"]:
+            killed_pids.extend(outcome["killed_pids"])
+            sources.append(f"runs.pid={iterate_recorded_pid}")
+        all_errors.extend(outcome["errors"])
+
+    # Source 2: launched.json spawn PID (initial Popen, may be stub).
+    spawn_match = find_spawn_for_run(
+        progress_dir, run_id=target_run_id,
+        run_started_at=target_started,
+    )
+    if spawn_match is not None:
+        matched_launch_id = spawn_match.get("launch_id")
+        # Skip the dup kill if iterate's PID == spawn's PID (unlikely
+        # on Windows due to the stub re-exec, but cheap to check).
+        spawn_pid = spawn_match["pid"]
+        if spawn_pid != iterate_recorded_pid:
+            outcome = kill_process_tree(int(spawn_pid))
+            if outcome["ok"]:
+                killed_pids.extend(outcome["killed_pids"])
+                sources.append(f"launched.json={spawn_pid}")
+            all_errors.extend(outcome["errors"])
+
+    attempted = bool(iterate_recorded_pid) or spawn_match is not None
+    return {
+        "os_kill_attempted": attempted,
+        "os_kill_ok": (
+            attempted and not all_errors
+            or (attempted and bool(killed_pids))
+        ),
+        "os_killed_pid": (
+            iterate_recorded_pid
+            or (spawn_match["pid"] if spawn_match else None)
+        ),
+        "os_killed_pids": killed_pids,
+        "os_kill_sources": sources,
+        "os_kill_errors": all_errors,
+        "matched_launch_id": matched_launch_id,
+    }
+
+
+def create_app(
+    progress_dir: Path,
+    *,
+    registry_root: Optional[Path] = None,
+    deck_pool_dir: Optional[Path] = None,
+    spawn_cwd: Optional[Path] = None,
+) -> Flask:
     """Build the Flask app. ``progress_dir`` is the directory that
     holds both the per-run progress JSON files (legacy + producer
     dual-write source) AND the ``runs.db`` SQLite file (Phase 2 sole
     source of truth read by the UI). The directory does NOT have to
     exist at app-creation time — every endpoint reads it lazily on
     each request, so a UI started before the first training run still
-    works."""
+    works.
+
+    ``registry_root`` (optional) is the trained-weights registry root
+    used by the launch-iterate form to populate the bootstrap-version
+    dropdown. ``deck_pool_dir`` is the corresponding source for the
+    deck-pool dropdown. When either is ``None``, the matching
+    dropdown shows empty choices and the user can still type any
+    string (which iterate itself validates at spawn time).
+
+    ``spawn_cwd`` (optional) is the directory the launched iterate
+    subprocess starts in. iterate's ``--registry-root``,
+    ``--data-dir``, ``--progress-dir`` etc. all default to relative
+    paths, so this must point at the directory where your
+    ``trained_weights/`` / ``iterate_data/`` / ``training_progress/``
+    live. When ``None``, the launcher falls back to its on-disk
+    location (typically the worktree where ``launcher.py`` lives,
+    which only works if all paths exist relative to that worktree —
+    pass an explicit value when running the UI from a worktree
+    against a main-checkout's data."""
     progress_dir = Path(progress_dir).resolve()
+    if registry_root is not None:
+        registry_root = Path(registry_root).resolve()
+    if deck_pool_dir is not None:
+        deck_pool_dir = Path(deck_pool_dir).resolve()
+    if spawn_cwd is not None:
+        spawn_cwd = Path(spawn_cwd).resolve()
 
     template_dir = Path(__file__).parent / "templates"
     static_dir = Path(__file__).parent / "static"
@@ -417,6 +532,9 @@ def create_app(progress_dir: Path) -> Flask:
         static_folder=str(static_dir),
     )
     app.config["PROGRESS_DIR"] = progress_dir
+    app.config["REGISTRY_ROOT"] = registry_root
+    app.config["DECK_POOL_DIR"] = deck_pool_dir
+    app.config["SPAWN_CWD"] = spawn_cwd
 
     @app.route("/")
     def index():  # noqa: D401 - Flask view
@@ -612,9 +730,15 @@ def create_app(progress_dir: Path) -> Flask:
                 target_row["status"] if target_row is not None else None
             )
             if previous_status != "running":
-                # Idempotent no-op for terminal rows. Return the same
-                # response shape as the success path so the front-end
-                # doesn't need branchy parsing.
+                # Idempotent no-op for the DB-row update — but a
+                # process spawned via the UI launch endpoint may
+                # still be alive (e.g. the user clicked Force Kill
+                # because the cycle row went terminal but the
+                # subprocess didn't drain). Try the OS-kill anyway
+                # and report what happened.
+                kill_outcome = _force_kill_matched_spawn(
+                    progress_dir, target_id, conn,
+                )
                 return jsonify({
                     "ok": True,
                     "run_id": run_id,
@@ -623,6 +747,7 @@ def create_app(progress_dir: Path) -> Flask:
                     "forced": False,
                     "previous_status": previous_status,
                     "sentinel_path": None,
+                    **kill_outcome,
                 })
 
             # 1) Direct DB write — UPDATE status='killed', ended_at=NOW().
@@ -688,10 +813,19 @@ def create_app(progress_dir: Path) -> Flask:
                             ended,
                         ),
                     )
+            # 3) OS-kill any subprocess spawned by the UI launch
+            #    endpoint that matches this run by spawned_at /
+            #    started_at proximity. Must happen INSIDE the
+            #    ``with runs_db.transaction(conn)`` block's outer
+            #    ``try`` so we still get the launched.json read
+            #    even after the DB write commits.
+            kill_outcome = _force_kill_matched_spawn(
+                progress_dir, target_id, conn,
+            )
         finally:
             conn.close()
 
-        # 3) Sentinel write — straggler insurance. A worker that's
+        # 4) Sentinel write — straggler insurance. A worker that's
         #    still alive AND polling will exit cleanly when it sees
         #    this. For true zombies (master dead), the sentinel is
         #    harmless on-disk noise that cleanup_orphans() reaps on
@@ -706,6 +840,7 @@ def create_app(progress_dir: Path) -> Flask:
             "forced": True,
             "previous_status": previous_status,
             "sentinel_path": str(path),
+            **kill_outcome,
         })
 
     @app.route("/api/runs/<run_id>/stop", methods=["GET"])
@@ -733,5 +868,65 @@ def create_app(progress_dir: Path) -> Flask:
             "own_sentinel": own,
             "cycle_sentinel": cycle,
         })
+
+    @app.route("/api/launch/iterate/schema")
+    def api_launch_iterate_schema():
+        """Return the schema describing every iterate CLI argument.
+
+        Rebuilt per request so the bootstrap-version dropdown picks
+        up newly-trained versions without a UI restart. The live
+        ``EVAL_GATE_THRESHOLD`` and per-game-timeout defaults also
+        flow through, but those rarely change.
+        """
+        schema = build_iterate_schema(
+            registry_root=app.config.get("REGISTRY_ROOT"),
+            deck_pool_dir=app.config.get("DECK_POOL_DIR"),
+        )
+        return jsonify({"schema": schema})
+
+    @app.route("/api/launch/iterate", methods=["POST"])
+    def api_launch_iterate():
+        """Spawn ``mtg_bot.cli iterate`` as a detached subprocess.
+
+        Body shape: ``{"args": {<flag_name>: <value>, ...}}``. Flags
+        whose value matches the schema default are dropped at command-
+        build time so the spawned command line stays minimal.
+
+        Returns the spawned PID + the path to the console-log file
+        the subprocess's combined stdout/stderr is teeing to. The
+        process is fully decoupled from the Flask process — restart
+        the UI freely; the iterate run keeps going. To stop it, use
+        the existing ``POST /api/runs/<run_id>/stop`` endpoint once
+        iterate has registered its cycle row in runs.db (typically
+        within a few seconds of spawn).
+        """
+        body = request.get_json(silent=True) or {}
+        submitted = body.get("args") if isinstance(body, dict) else None
+        if not isinstance(submitted, dict):
+            return jsonify({
+                "ok": False,
+                "error": "request body must be JSON with an 'args' object",
+            }), 400
+        try:
+            schema = build_iterate_schema(
+                registry_root=app.config.get("REGISTRY_ROOT"),
+            )
+            result = spawn_iterate(
+                submitted, app.config["PROGRESS_DIR"],
+                schema=schema,
+                repo_root=app.config.get("SPAWN_CWD"),
+            )
+        except ValueError as e:
+            # Schema-validation failure (missing required, unknown key,
+            # bad choice, non-numeric int, ...). 422 = unprocessable
+            # entity so the frontend can surface the message inline.
+            return jsonify({"ok": False, "error": str(e)}), 422
+        except OSError as e:
+            # Subprocess spawn failed (e.g. python_executable missing).
+            return jsonify({
+                "ok": False,
+                "error": f"spawn failed: {e}",
+            }), 500
+        return jsonify(result)
 
     return app
