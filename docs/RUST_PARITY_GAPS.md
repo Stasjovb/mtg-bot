@@ -4208,6 +4208,50 @@ the forked branch.
   - **Cross-engine smoke probe** for walker activations. Unchanged
     from I56.
 
+### I72. `Effect::UntapTarget { AnyCreature }` controller-of-effect fix — reuses I59 transient slot; defender computed as `1 - controller` instead of `1 - active_player` (UntapTarget defender divergence closure)
+
+- **Pinned by**:
+  - 4 new `tests_rust/test_resolve.py`
+    `test_untap_target_*` regression pins covering cross-
+    controller spell resolution (1: p1-controlled Twiddle-shape
+    untap instant on p0's turn → untaps p0's bf[0], NOT p1's),
+    same-controller back-compat (1: p0-controlled source still
+    untaps p1's bf[0]), pause-variant parity (1), and empty-
+    defender fizzle (1).
+
+- **Rule**. CR 119.5 / 608.2 — sibling closure to I71 TapTarget.
+  Same `defender = 1 - controller` shape, same transient-slot
+  lookup substrate. Symmetric counterpart to I71 — same target
+  selection convention, opposite tap-state mutation.
+
+- **Pre-fix Rust behavior**. The
+  `Effect::UntapTarget { AnyCreature }` arm at
+  `state_ops_resolve.rs:1285` (pre-fix line) computed
+  `let defender = (1 - state.active_player) as usize`. Wrong when
+  the resolving spell / triggered ability has a controller !=
+  active_player. Example: p1's Twiddle-shape untap instant on
+  p0's turn pre-fix self-untapped p1's own bf[0]; post-fix it
+  correctly untaps p0's bf[0].
+
+- **Reuses I59 substrate**. Identical to I71 TapTarget — same
+  preamble:
+  `let controller = state.current_resolve_source_controller
+  .map(|c| c as usize).unwrap_or(state.active_player as usize);
+  let defender = 1 - controller;`. The untap site
+  (`Arc::make_mut(&mut state.players[defender].battlefield)`,
+  inner loop on `tapped = false`) reads the resolved `defender`
+  unchanged.
+
+- **Idempotent untap behavior preserved.** Untapping an already-
+  untapped target remains a silent no-op (matches the pre-fix arm
+  shape).
+
+- **Forward inventory (post-I72 remaining defender-shape
+  `(1 - state.active_player)` sites in `state_ops_resolve.rs`):**
+  - AddCounters (1442), DiscardCard (1496), DestroyTarget (1616),
+    several sites in DestroyAllCreatures / ExileAll subarms
+    (4638, 4958, 5022) — per-arm audit pending.
+
 ### I71. `Effect::TapTarget { AnyCreature }` controller-of-effect fix — reuses I59 transient slot; defender computed as `1 - controller` instead of `1 - active_player` (TapTarget defender divergence closure)
 
 - **Pinned by**:

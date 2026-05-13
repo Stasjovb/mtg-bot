@@ -12872,3 +12872,146 @@ def test_tap_target_empty_source_controllers_opponent_bf_fizzles(engine):
     # to assert (both bfs empty).
     assert state.is_stack_empty() is True
     assert state.graveyard_sizes[1] == p1_grave_before + 1
+
+
+# ====================================================================
+# UntapTarget controller-of-effect fix — regression pins (I72).
+#
+# Pre-fix `defender = (1 - state.active_player) as usize`. Wrong
+# when the resolving spell / triggered ability has a controller !=
+# active_player — example: on p0's turn, p1 casts a Twiddle-shape
+# untap instant. Pre-fix it self-untapped p1's own bf[0] (defender
+# = 1 - active_player = 1 - 0 = 1); post-fix it correctly untaps
+# p0's bf[0] (the source's controller's opponent).
+#
+# Sibling closure to I64 / I67 / I70 / I71 — same `defender = 1 -
+# controller` shape, same transient-slot lookup substrate.
+# ====================================================================
+
+
+def _untap_creature_dict_for_i72():
+    """A Twiddle-shape instant whose only effect is
+    UntapTarget(AnyCreature). Used by I72 regression pins."""
+    return {
+        "name": "Test Untwiddle I72",
+        "card_types": ["Instant"],
+        "mana_cost": {"U": 1},
+        "effects": [
+            {
+                "kind": "untap_target",
+                "target": {"kind": "any_creature"},
+            }
+        ],
+    }
+
+
+def test_untap_target_routes_to_source_controllers_opponent(engine):
+    """**Regression pin for the UntapTarget controller-of-effect
+    fix (I72).**
+
+    On p0's turn (active_player=0), a Twiddle-shape untap instant
+    whose controller is p1 must untap a P0 bf[0] object, NOT a p1
+    bf[0] object. Pre-fix `defender = 1 - active_player = 1 - 0 =
+    1` => p1's own bf[0] got untapped (self-untap). Post-fix
+    `defender = 1 - controller = 1 - 1 = 0` => correctly untaps
+    p0's bf[0].
+
+    Synthetic seed: p0's bf[0] = id 0 (Forest). p1's bf[0] = id 67
+    (Forest). Pre-tap BOTH so post-fix we observe p0's bf[0]
+    transitioning tapped -> untapped, p1's bf[0] remaining tapped.
+    """
+    state = engine.make_synthetic_state()
+    assert state.active_player == 0
+
+    p0_bf_first_id = 0
+    p1_bf_first_id = 67
+    # Pre-tap both so the untap is observable.
+    state.tap_object(p0_bf_first_id)
+    state.tap_object(p1_bf_first_id)
+    assert state.is_tapped(p0_bf_first_id) is True
+    assert state.is_tapped(p1_bf_first_id) is True
+
+    src_id = state.register_and_inject_object(
+        _untap_creature_dict_for_i72(), 1, ZONE_HAND
+    )
+
+    # Push with controller=1 (p1), active_player still 0.
+    state.push_to_stack(src_id, 1)
+    state.resolve_top_of_stack()
+
+    # Post-fix: p0's bf[0] got untapped (p1's opponent's bf).
+    assert state.is_tapped(p0_bf_first_id) is False
+    # P1's bf[0] untouched (no self-untap).
+    assert state.is_tapped(p1_bf_first_id) is True
+
+
+def test_untap_target_active_player_controlled_still_works(engine):
+    """**Back-compat pin.** A Twiddle-shape untap instant cast by
+    the active player must still untap the opponent's bf[0] — bug
+    never fired in this case pre-fix because controller ==
+    active_player.
+    """
+    state = engine.make_synthetic_state()
+    assert state.active_player == 0
+
+    p0_bf_first_id = 0
+    p1_bf_first_id = 67
+    state.tap_object(p0_bf_first_id)
+    state.tap_object(p1_bf_first_id)
+
+    src_id = state.register_and_inject_object(
+        _untap_creature_dict_for_i72(), 0, ZONE_HAND
+    )
+
+    state.push_to_stack(src_id, 0)
+    state.resolve_top_of_stack()
+
+    # P1's bf[0] got untapped (p0's opponent's bf).
+    assert state.is_tapped(p1_bf_first_id) is False
+    # P0's bf[0] untouched.
+    assert state.is_tapped(p0_bf_first_id) is True
+
+
+def test_untap_target_pause_variant_threads_controller(engine):
+    """**`resolve_top_of_stack_pause` parity pin for UntapTarget.**
+    Mirrors the I64 / I67 / I68 / I69 / I70 / I71 pause-variant
+    pins."""
+    state = engine.make_synthetic_state()
+
+    p0_bf_first_id = 0
+    p1_bf_first_id = 67
+    state.tap_object(p0_bf_first_id)
+    state.tap_object(p1_bf_first_id)
+
+    src_id = state.register_and_inject_object(
+        _untap_creature_dict_for_i72(), 1, ZONE_HAND
+    )
+
+    state.push_to_stack(src_id, 1)
+    state.resolve_top_of_stack_pause()
+
+    # Post-fix: p0's bf[0] got untapped (p1's opponent).
+    assert state.is_tapped(p0_bf_first_id) is False
+    assert state.is_tapped(p1_bf_first_id) is True
+
+
+def test_untap_target_empty_source_controllers_opponent_bf_fizzles(engine):
+    """**Empty-defender fizzle pin for I72.** When the source-
+    controller's opponent has no bf objects, the effect fizzles
+    silently (no panic, no spurious mutation). Uses
+    `num_battlefield=0` so both sides start with empty bfs.
+    """
+    state = engine.make_synthetic_state(num_battlefield=0)
+    p1_grave_before = state.graveyard_sizes[1]
+
+    src_id = state.register_and_inject_object(
+        _untap_creature_dict_for_i72(), 1, ZONE_HAND
+    )
+
+    state.push_to_stack(src_id, 1)
+    state.resolve_top_of_stack()
+
+    # Stack popped, source moved to p1's graveyard. No bf mutation
+    # to assert (both bfs empty).
+    assert state.is_stack_empty() is True
+    assert state.graveyard_sizes[1] == p1_grave_before + 1
