@@ -545,6 +545,130 @@ def _ta_dict_to_python_effect(eff_dict: dict):
         # backstop, not a contract.
         from mtg_bot.effects.generic.library_lookat import SelfMill
         return SelfMill(amount=eff_dict.get("count", 1))
+    if kind == "pump_target_creature_until_eot":
+        # Targeted "target creature gets +X/+Y until end of turn" (CR
+        # 702.x layer-7c additive bonus, expires at cleanup). Rust's
+        # ``Effect::PumpTargetCreatureUntilEOT { power_bonus: i32,
+        # toughness_bonus: i32 }`` (cards.rs:713) is the target-
+        # creature sibling of ``PumpSelfUntilEOT``; its resolve arm
+        # at ``state_ops_resolve.rs:3927-3988`` picks the target
+        # DETERMINISTICALLY at apply_effect time: scan the SOURCE
+        # CONTROLLER's battlefield top-to-bottom for the first object
+        # whose ``card_types`` contains "Creature", then push a
+        # ``UeotModifier::PowerToughnessBonus { power, toughness }``
+        # onto its ``ueot_modifiers`` Vec. Empty battlefield (or no
+        # creatures on it) is a silent fizzle. ``(0, 0)`` short-
+        # circuits before doing the lookup -- pure no-op without
+        # touching state.
+        #
+        # **Distinct from ``deal_damage_any_target`` in target-pick
+        # direction.** ``deal_damage_any_target`` scans the
+        # DEFENDER's battlefield (the source's opponent's side); this
+        # arm scans the SOURCE CONTROLLER's battlefield (the source's
+        # OWN side). The Rust arm matches the typical Giant-Growth-
+        # style "buff your own creature" oracle flow. EoE consumers:
+        # - Sinister Cryologist's oracle says "target creature an
+        #   opponent controls gets -3/-0 UEOT" -- Rust's same-side
+        #   scan is observably narrower than the oracle text (Rust
+        #   targets caster's own creature), but matches Python's
+        #   ``PumpTargetCreatureUntilEOT(opponents_only=False)``
+        #   default behavior when the scenario forces target selection
+        #   onto the same side. Documented in SEARCH_LIMITATIONS.md.
+        # - Dubious Delicacy's oracle says "up to one target creature
+        #   gets -3/-3 UEOT" -- the unrestricted "any target creature"
+        #   form. Rust picks the FIRST creature on caster's side;
+        #   probes constrain p1 bf to zero creatures so the only
+        #   eligible target is a caster-side creature, observable on
+        #   both engines.
+        #
+        # Python's ``PumpTargetCreatureUntilEOT`` class
+        # (effects/generic/pump.py:258) carries the same fields:
+        # ``power_bonus``, ``toughness_bonus``. No field-name
+        # translation needed -- Python and Rust agree on
+        # ``power_bonus`` / ``toughness_bonus``. Its
+        # ``legal_targets`` walks every creature on the bf (subject
+        # to ``you_control_only`` / ``opponents_only`` flags, both
+        # False by default -- the bridge mirrors the default and does
+        # not yet plumb the narrowing flags through the dict shape).
+        # Unlike Rust's at-apply-time scan, Python picks at PUSH time
+        # via ``push_triggered_ability`` (actions.py:3172); end-to-
+        # end probes seat a ``_PickFirstControlledCreatureAgent``
+        # shim on the source's controller that filters legal_targets
+        # to controller-owned creatures and returns the first --
+        # sibling to ``_PickFirstOpponentTargetAgent`` from the
+        # Nebula-Dragon probe, swapping the controller-filter
+        # direction.
+        #
+        # Mirrors Rust's ``parse_effect`` arm (cards.rs:3125-3147)
+        # which tolerates missing ``power_bonus`` / ``toughness_bonus``
+        # (defaults to 0) and ALLOWS negative bonuses (debuff shapes
+        # like Sinister Cryologist's -3/-0). Both fields are
+        # independent; ``(0, 0)`` is a pure no-op on both engines.
+        from mtg_bot.effects.generic.pump import (
+            PumpTargetCreatureUntilEOT,
+        )
+        return PumpTargetCreatureUntilEOT(
+            power_bonus=eff_dict.get("power_bonus", 0),
+            toughness_bonus=eff_dict.get("toughness_bonus", 0),
+        )
+    if kind == "put_plus_one_counter_on_creature_you_control":
+        # Single-target +1/+1 counter add restricted to "target
+        # creature you control" (CR 122 +1/+1 counter on a single
+        # target permanent, controller-side filter). Rust's
+        # ``Effect::PutPlusOneCounterOnCreatureYouControl { amount:
+        # i32 }`` (cards.rs:815) is the single-target sibling of
+        # ``PutPlusOneCounterOnEachCreatureYouControl``; its resolve
+        # arm at ``state_ops_resolve.rs:4148-4211`` picks the target
+        # DETERMINISTICALLY at apply_effect time: scan the SOURCE
+        # CONTROLLER's battlefield top-to-bottom for the first
+        # object whose ``card_types`` contains "Creature", and add
+        # ``amount`` to its scalar ``counters`` field (the signed
+        # net +1/+1 counter accumulator). Empty bf (or no creatures
+        # on it) is a silent fizzle. ``amount == 0`` short-circuits
+        # before lookup; negative raises (caught at parse time too).
+        #
+        # **Filter direction same as PumpTargetCreatureUntilEOT.**
+        # Both effects scan the source's OWN side (the SOURCE
+        # CONTROLLER's bf), so the same target-pick shim
+        # (``_PickFirstControlledCreatureAgent``) works for both
+        # consumers. The audit's Drix Fatemaker entry says oracle
+        # "target creature" (any creature) -- Rust's caster-side
+        # scan is observably narrower than the oracle text on that
+        # printing too, but matches the Python class's
+        # ``ControlledByYou`` filter exactly. Rayblade Trooper's
+        # "target creature you control" is the direct match.
+        #
+        # Python's ``PutPlusOneCounterOnCreatureYouControl(amount:
+        # int = 1)`` class (effects/generic/counters.py:844) is a
+        # ``PutPlusOneCounters`` subclass with the
+        # ``IsCreature() & ControlledByYou()`` slot filter wired in
+        # ``__post_init__``. Its base-class ``resolve`` walks the
+        # per-slot chosen targets and adds ``amount`` to each one's
+        # ``plus_one_counters`` field (mirrors Rust's scalar
+        # ``counters`` accumulator -- the cross-engine
+        # battlefield_snapshot already round-trips "counters" via
+        # ``object_to_pydict``).
+        #
+        # Unlike Rust's at-apply-time scan, Python picks at PUSH
+        # time via ``push_triggered_ability`` (actions.py:3172);
+        # end-to-end probes seat ``_PickFirstControlledCreatureAgent``
+        # (sibling shape to the pump arm) on the source's
+        # controller -- the first own-side creature pick.
+        #
+        # Mirrors Rust's ``parse_effect`` arm (cards.rs:3848-3864)
+        # which tolerates missing ``amount`` (defaults to 1, matching
+        # the Python class's ``amount: int = 1`` default) and
+        # REQUIRES non-negative ``amount`` (raises on negatives at
+        # parse time; the resolve arm has a defense-in-depth
+        # negative guard too). Bridge consumers SHOULD pass
+        # ``amount`` explicitly so the dict shape stays self-
+        # documenting.
+        from mtg_bot.effects.generic.counters import (
+            PutPlusOneCounterOnCreatureYouControl,
+        )
+        return PutPlusOneCounterOnCreatureYouControl(
+            amount=eff_dict.get("amount", 1),
+        )
     if kind == "return_creature_from_your_graveyard_to_hand":
         # "Return target creature card from your graveyard to your
         # hand." Rust's ``Effect::ReturnCreatureFromYourGraveyardToHand``

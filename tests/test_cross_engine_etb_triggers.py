@@ -904,3 +904,153 @@ def test_rust_parser_accepts_return_creature_from_graveyard_to_hand_in_triggered
     }
     pid = reg.register_printing(d)
     assert pid == 0
+
+
+
+def test_bridge_pump_target_creature_until_eot_translates_to_python():
+    """Phase 5 bridge extension: Rust
+    ``{"kind": "pump_target_creature_until_eot",
+    "power_bonus": N, "toughness_bonus": M}`` translates to Python
+    ``PumpTargetCreatureUntilEOT(power_bonus=N, toughness_bonus=M)``.
+
+    Unblocks Sinister-Cryologist / Dubious-Delicacy-shape ETB triggers
+    that "target creature gets +X/+Y UEOT" on the cross-engine bridge.
+    """
+    from mtg_bot.effects.generic.pump import PumpTargetCreatureUntilEOT
+    from mtg_bot.parity.cross_engine import _ta_dict_to_python_effect
+
+    e = _ta_dict_to_python_effect(
+        {
+            "kind": "pump_target_creature_until_eot",
+            "power_bonus": -3,
+            "toughness_bonus": 0,
+        }
+    )
+    assert isinstance(e, PumpTargetCreatureUntilEOT)
+    assert e.power_bonus == -3
+    assert e.toughness_bonus == 0
+    assert e.opponents_only is False
+    assert e.you_control_only is False
+    assert e.optional is False
+
+
+def test_bridge_pump_target_creature_until_eot_positive_bonus_translates():
+    """Positive bonus arm -- +3/+3 round-trip."""
+    from mtg_bot.effects.generic.pump import PumpTargetCreatureUntilEOT
+    from mtg_bot.parity.cross_engine import _ta_dict_to_python_effect
+
+    e = _ta_dict_to_python_effect(
+        {
+            "kind": "pump_target_creature_until_eot",
+            "power_bonus": 3,
+            "toughness_bonus": 3,
+        }
+    )
+    assert isinstance(e, PumpTargetCreatureUntilEOT)
+    assert e.power_bonus == 3
+    assert e.toughness_bonus == 3
+
+
+def test_bridge_pump_target_creature_until_eot_defaults_to_zero():
+    """Missing ``power_bonus`` / ``toughness_bonus`` default to 0."""
+    from mtg_bot.effects.generic.pump import PumpTargetCreatureUntilEOT
+    from mtg_bot.parity.cross_engine import _ta_dict_to_python_effect
+
+    e = _ta_dict_to_python_effect(
+        {"kind": "pump_target_creature_until_eot"}
+    )
+    assert isinstance(e, PumpTargetCreatureUntilEOT)
+    assert e.power_bonus == 0
+    assert e.toughness_bonus == 0
+
+
+def test_rust_parser_accepts_pump_target_creature_until_eot_in_triggered_ability():
+    """Pin the Rust parser surface for the
+    ``pump_target_creature_until_eot`` effect kind.
+    """
+    import mtg_bot_engine
+
+    reg = mtg_bot_engine.Registry()
+    d = {
+        "name": "Phase 5 Bridge Pin -- PumpTargetCreatureUntilEOT",
+        "card_types": ["Creature"],
+        "mana_cost": {"generic": 2, "U": 1},
+        "power": 2,
+        "toughness": 2,
+        "triggered_abilities": [
+            {
+                "event": "enters",
+                "predicate": {"kind": "source_is_self"},
+                "effect": {
+                    "kind": "pump_target_creature_until_eot",
+                    "power_bonus": -3,
+                    "toughness_bonus": 0,
+                },
+            }
+        ],
+    }
+    pid = reg.register_printing(d)
+    assert pid == 0
+
+
+def test_bridge_put_plus_one_counter_on_creature_you_control_translates_to_python():
+    """Phase 5 bridge extension: Rust
+    ``{"kind": "put_plus_one_counter_on_creature_you_control",
+    "amount": N}`` translates to Python
+    ``PutPlusOneCounterOnCreatureYouControl(amount=N)``.
+    """
+    from mtg_bot.effects.generic.counters import (
+        PutPlusOneCounterOnCreatureYouControl,
+    )
+    from mtg_bot.parity.cross_engine import _ta_dict_to_python_effect
+
+    e = _ta_dict_to_python_effect(
+        {
+            "kind": "put_plus_one_counter_on_creature_you_control",
+            "amount": 1,
+        }
+    )
+    assert isinstance(e, PutPlusOneCounterOnCreatureYouControl)
+    assert e.amount == 1
+
+
+def test_bridge_put_plus_one_counter_on_creature_you_control_amount_default_one():
+    """Missing ``amount`` defaults to 1."""
+    from mtg_bot.effects.generic.counters import (
+        PutPlusOneCounterOnCreatureYouControl,
+    )
+    from mtg_bot.parity.cross_engine import _ta_dict_to_python_effect
+
+    e = _ta_dict_to_python_effect(
+        {"kind": "put_plus_one_counter_on_creature_you_control"}
+    )
+    assert isinstance(e, PutPlusOneCounterOnCreatureYouControl)
+    assert e.amount == 1
+
+
+def test_rust_parser_accepts_put_plus_one_counter_on_creature_you_control_in_triggered_ability():
+    """Pin the Rust parser surface for
+    ``put_plus_one_counter_on_creature_you_control``.
+    """
+    import mtg_bot_engine
+
+    reg = mtg_bot_engine.Registry()
+    d = {
+        "name": "Phase 5 Bridge Pin -- PutPlusOneCounterOnCreatureYouControl",
+        "card_types": ["Creature"],
+        "mana_cost": {"generic": 2, "W": 1},
+        "power": 2,
+        "toughness": 2,
+        "triggered_abilities": [
+            {
+                "event": "enters",
+                "predicate": {"kind": "source_is_self"},
+                "effect": {
+                    "kind": "put_plus_one_counter_on_creature_you_control",
+                    "amount": 1,
+                },
+            }
+        ],
+    }
+    pid = reg.register_printing(d)
+    assert pid == 0
