@@ -67,6 +67,9 @@ from mtg_bot.training.gate import EVAL_GATE_THRESHOLD
 from mtg_bot.training.stop_signal import (
     sentinel_path, stop_requested, write_stop,
 )
+from mtg_bot.training_ui.launcher import (
+    ITERATE_SCHEMA, spawn_iterate,
+)
 
 
 # ---- DB <-> UI kind translation -------------------------------------------
@@ -733,5 +736,57 @@ def create_app(progress_dir: Path) -> Flask:
             "own_sentinel": own,
             "cycle_sentinel": cycle,
         })
+
+    @app.route("/api/launch/iterate/schema")
+    def api_launch_iterate_schema():
+        """Return the schema describing every iterate CLI argument.
+
+        The frontend ("Launch new iterate" panel in index.html)
+        fetches this on tab-open and renders the form from it. The
+        schema is built at server-import time but refers to the live
+        ``EVAL_GATE_THRESHOLD`` / per-game-timeout defaults — restart
+        the UI to pick up changes to those constants.
+        """
+        return jsonify({"schema": ITERATE_SCHEMA})
+
+    @app.route("/api/launch/iterate", methods=["POST"])
+    def api_launch_iterate():
+        """Spawn ``mtg_bot.cli iterate`` as a detached subprocess.
+
+        Body shape: ``{"args": {<flag_name>: <value>, ...}}``. Flags
+        whose value matches the schema default are dropped at command-
+        build time so the spawned command line stays minimal.
+
+        Returns the spawned PID + the path to the console-log file
+        the subprocess's combined stdout/stderr is teeing to. The
+        process is fully decoupled from the Flask process — restart
+        the UI freely; the iterate run keeps going. To stop it, use
+        the existing ``POST /api/runs/<run_id>/stop`` endpoint once
+        iterate has registered its cycle row in runs.db (typically
+        within a few seconds of spawn).
+        """
+        body = request.get_json(silent=True) or {}
+        submitted = body.get("args") if isinstance(body, dict) else None
+        if not isinstance(submitted, dict):
+            return jsonify({
+                "ok": False,
+                "error": "request body must be JSON with an 'args' object",
+            }), 400
+        try:
+            result = spawn_iterate(
+                submitted, app.config["PROGRESS_DIR"],
+            )
+        except ValueError as e:
+            # Schema-validation failure (missing required, unknown key,
+            # bad choice, non-numeric int, ...). 422 = unprocessable
+            # entity so the frontend can surface the message inline.
+            return jsonify({"ok": False, "error": str(e)}), 422
+        except OSError as e:
+            # Subprocess spawn failed (e.g. python_executable missing).
+            return jsonify({
+                "ok": False,
+                "error": f"spawn failed: {e}",
+            }), 500
+        return jsonify(result)
 
     return app
