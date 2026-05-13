@@ -1633,12 +1633,52 @@ mirrors Python's `CardPrinting.subtypes: tuple[str, ...]` at
   smoke probes see matching subtype tuples on both engines.
 
 **Unblocks**:
-- `Predicate::HasSubtype(String)` — the canonical
-  Kavu/Sliver/Equipment-enters predicate. Next slice off this
-  substrate.
+- ~~`Predicate::HasSubtype(String)` — the canonical
+  Kavu/Sliver/Equipment-enters predicate.~~ **Landed** by
+  `feature/subtypes-has-subtype-predicate` (Slice 2). See
+  "Subtypes Slice 2" section below.
 - `CE20_FOLLOWUP_PLAYBOOK.md` §5 subtype-filtered sacrifice
   variants (`sacrifice_food`, `sacrifice_a_desert`) — different
   lane, separate consumer.
 
 **Rust gate**: 2112/2112 (substrate baseline 2104 + 8 round-trip
 + default + error-path + casing tests).
+
+---
+
+## Subtypes Slice 2 — Predicate::SubjectHasSubtype (landed — feature/subtypes-has-subtype-predicate)
+
+Subject-anchored HasSubtype predicate built on the Slice 1 substrate.
+Mirrors Python's `Subject(None, HasSubtype("Kavu"))` from
+`src/mtg_bot/cards/parser/triggers.py:1198`.
+
+**Shape**:
+- `Predicate::SubjectHasSubtype(String)` variant added next to
+  `SubjectIsLand` / `SubjectIsArtifact` / `SubjectIsCreature`.
+- Dispatch reads the subject printing's `subtypes: Vec<String>`
+  via a new `subject_has_subtype` helper that mirrors
+  `object_has_card_type`'s zone-walk shape. Case-sensitive
+  Title Case exact match.
+- Parser: `parse_predicate` accepts
+  `{"kind": "subject_has_subtype", "subtype": "Kavu"}`. Missing
+  `subtype` key raises (loud-fail). Non-string raises.
+- `cross_engine.py::_ta_dict_to_python_predicate` translates the
+  same dict to Python's
+  `Subject(slot=None, inner=HasSubtype(name=...))`.
+
+**Effective-subtypes scope**: reads static `subtypes` directly. The
+Rust side has no `effective_subtypes` (CR 613 layer-3/4) yet —
+symmetric with how the existing card-type predicates read
+`card_types` directly. EoE pool has no Conspiracy-shape
+subtype-granting effects today, so the two paths are observably
+equivalent.
+
+**Side fix landed in same commit**: Slice 1's
+`cross_engine.py::build_rust_state` referenced `card.subtypes`
+without `CardDef` having that attribute, breaking 105 parity smoke
+tests. This slice adds `CardDef.subtypes: tuple[str, ...] = ()` as
+the back-compat default and restores parity smoke to 150/150.
+
+**Rust gate**: 2122/2122 (substrate baseline 2112 + 10 new
+HasSubtype tests). **Parity smoke**: 150/150 (restored from the
+Slice 1 regression).

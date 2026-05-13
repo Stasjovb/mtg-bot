@@ -1970,6 +1970,25 @@ pub enum Predicate {
     /// like "whenever a creature enters under your control" and
     /// "whenever a land enters under your control".
     ControlledByYou,
+    /// Matches when the **subject's** printing carries the given
+    /// subtype string. Mirrors Python's `Subject(None, HasSubtype(s))`
+    /// — the canonical Kavu/Sliver/Equipment-enters predicate from
+    /// `src/mtg_bot/cards/parser/triggers.py:1198`. Case-sensitive
+    /// Title Case match against the subject's
+    /// `CardPrinting.subtypes` Vec.
+    ///
+    /// **Effective-subtypes scope.** Python's `HasSubtype` reads
+    /// through `effective_subtypes` (CR 613 layer-3/4 — Conspiracy
+    /// granting "Sliver", Magus / Dryad layering on lands, etc.).
+    /// The Rust mirror reads the printing's static `subtypes`
+    /// directly — there's no Rust effective-subtypes layer yet,
+    /// and none of the existing card-type predicates
+    /// (`SubjectIsLand` / `SubjectIsCreature` / etc.) compute
+    /// effective types either. The same upgrade-when-layers-land
+    /// note applies symmetrically. EoE pool has no Conspiracy-shape
+    /// subtype-granting effects today, so the direct read is
+    /// observably equivalent.
+    SubjectHasSubtype(String),
     /// Logical negation.
     Not(Box<Predicate>),
     /// Logical AND (short-circuits on the left operand's `false`).
@@ -2023,6 +2042,9 @@ impl Predicate {
                     // the source was evicted mid-dispatch).
                     _ => false,
                 }
+            }
+            Predicate::SubjectHasSubtype(subtype) => {
+                subject_has_subtype(state, subject_id, subtype)
             }
             Predicate::Not(inner) => !inner.matches(state, source_id, subject_id),
             Predicate::And(a, b) => {
@@ -2079,6 +2101,50 @@ fn object_has_card_type(
                             .card_types
                             .iter()
                             .any(|t| t == card_type);
+                    }
+                    return false;
+                }
+            }
+        }
+    }
+    false
+}
+
+/// Look up an object by id across all four tracked zones of both
+/// players and return whether its printing's `subtypes` contains the
+/// given subtype string. Case-sensitive Title Case match (mirrors the
+/// stored shape from the registry-dict parser). Returns `false` when
+/// the object id isn't present or its printing is unregistered (the
+/// same loud-but-safe shape as `object_has_card_type`).
+///
+/// **Effective subtypes scope.** Same caveat as `Predicate::SubjectHasSubtype`'s
+/// doc comment: reads the printing's static `subtypes` directly,
+/// not an `effective_subtypes` layer (which doesn't exist on the
+/// Rust side yet — see Python's `mtg_bot.game.effective_subtypes`
+/// for the CR 613 layer-3/4 reading the rules-correct path uses).
+/// Symmetric with how `object_has_card_type` reads `card_types`
+/// directly.
+fn subject_has_subtype(
+    state: &crate::state::GameState,
+    obj_id: u32,
+    subtype: &str,
+) -> bool {
+    for player in &state.players {
+        for zone in [
+            &player.hand,
+            &player.library,
+            &player.battlefield,
+            &player.graveyard,
+        ] {
+            for obj in zone.iter() {
+                if obj.id == obj_id {
+                    if let Some(printing) =
+                        state.registry.lookup(obj.printing_id)
+                    {
+                        return printing
+                            .subtypes
+                            .iter()
+                            .any(|s| s == subtype);
                     }
                     return false;
                 }
@@ -4442,16 +4508,19 @@ fn parse_triggered_ability(
 /// {"kind": "subject_is_artifact"}    # Slice 4
 /// {"kind": "subject_is_creature"}    # Slice 4
 /// {"kind": "controlled_by_you"}      # Slice 4
+/// {"kind": "subject_has_subtype",    # Subtypes Slice 2
+///  "subtype": "Kavu"}
 /// {"kind": "not", "inner": {...}}
 /// {"kind": "and", "left": {...}, "right": {...}}
 /// ```
 ///
 /// Slice 1 introduced the base algebra (`always`, `source_is_self`,
-/// `source_is_creature`, `not`, `and`). Slice 4 adds the subject-
+/// `source_is_creature`, `not`, `and`). Slice 4 added the subject-
 /// anchored type filters + `controlled_by_you` to unlock landfall /
 /// artifact-enters / "under your control" trigger shapes from
-/// `cards/parser/triggers.py:603-1266`. Future slices add more
-/// variants (HasSubtype once Rust grows a `subtypes` registry, etc.).
+/// `cards/parser/triggers.py:603-1266`. Subtypes Slice 2 added
+/// `subject_has_subtype` for Kavu/Sliver/Equipment-enters shapes
+/// (`cards/parser/triggers.py:1198`).
 fn parse_predicate(dict: &Bound<'_, PyDict>) -> PyResult<Predicate> {
     let kind: String = require(dict, "kind")?.extract()?;
     match kind.as_str() {
@@ -4462,6 +4531,21 @@ fn parse_predicate(dict: &Bound<'_, PyDict>) -> PyResult<Predicate> {
         "subject_is_artifact" => Ok(Predicate::SubjectIsArtifact),
         "subject_is_creature" => Ok(Predicate::SubjectIsCreature),
         "controlled_by_you" => Ok(Predicate::ControlledByYou),
+        // Subtypes substrate Slice 2 — subject-anchored HasSubtype.
+        // Dict shape: `{"kind": "subject_has_subtype", "subtype": "Kavu"}`.
+        // The `subtype` payload is the canonical Title Case string
+        // that lives in `CardPrinting.subtypes`.
+        "subject_has_subtype" => {
+            let subtype: String = require(dict, "subtype")?
+                .extract()
+                .map_err(|e| {
+                    PyValueError::new_err(format!(
+                        "predicate.subject_has_subtype.subtype must be a \
+                         string (got: {e})"
+                    ))
+                })?;
+            Ok(Predicate::SubjectHasSubtype(subtype))
+        }
         "not" => {
             let inner_any = require(dict, "inner")?;
             let inner_dict = inner_any.downcast::<PyDict>().map_err(|_| {
@@ -4487,7 +4571,7 @@ fn parse_predicate(dict: &Bound<'_, PyDict>) -> PyResult<Predicate> {
             "unknown predicate kind {other:?}; \
              valid: always, source_is_self, source_is_creature, \
              subject_is_land, subject_is_artifact, subject_is_creature, \
-             controlled_by_you, not, and (Slice 4)"
+             controlled_by_you, subject_has_subtype, not, and"
         ))),
     }
 }
