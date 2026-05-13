@@ -4176,8 +4176,31 @@ fn apply_effect(
             if amount == 0 {
                 return Ok(());
             }
+            // **Controller resolution (I68 follow-up to the I59 /
+            // I60 / I63 / I64 / I65 / I66 / I67 controller-of-effect
+            // substrate).** Prefer the transient
+            // `state.current_resolve_source_controller`, falling
+            // back to `state.active_player`. Same pattern as
+            // `Effect::DealDamageAnyTarget` (I67) — CR 119.5 /
+            // 608.2: an effect resolves under its source's
+            // controller. "Any target" defaulting to "the
+            // defender" means "the SOURCE'S controller's opponent".
+            //
+            // **Why the fix.** Pre-fix this arm computed
+            // `defender_idx = 1 - state.active_player`. Wrong when
+            // the resolving spell / triggered ability has a
+            // controller != active_player. Example: p1's
+            // Mishra's-Bauble-shape spell ("this creature deals
+            // damage equal to its power to any target") fires on
+            // p0's turn. Pre-fix the trigger self-damaged p1's
+            // first creature. Post-fix it correctly damages p0's
+            // first creature (the source's controller's opponent).
+            let controller = state
+                .current_resolve_source_controller
+                .map(|c| c as usize)
+                .unwrap_or(state.active_player as usize);
             // Reuse DealDamageAnyTarget's selection shape.
-            let defender_idx = (1 - state.active_player) as usize;
+            let defender_idx = 1 - controller;
             let creature_target: Option<u32> = {
                 let bf = &state.players[defender_idx].battlefield;
                 let registry = &state.registry;

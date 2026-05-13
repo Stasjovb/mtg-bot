@@ -4208,6 +4208,64 @@ the forked branch.
   - **Cross-engine smoke probe** for walker activations. Unchanged
     from I56.
 
+### I68. `Effect::DealDamageEqualToSourcePowerAnyTarget` controller-of-effect fix — reuses I59 transient slot; defender computed as `1 - controller` instead of `1 - active_player` (DealDamageEqualToSourcePowerAnyTarget controller divergence closure)
+
+- **Pinned by**:
+  - 4 new `tests_rust/test_resolve.py`
+    `test_deal_damage_eq_source_power_*` regression pins covering
+    cross-controller spell resolution (1: p1-controlled power-
+    damage source on p0's turn → p0's first creature takes the
+    damage, NOT p1's), same-controller back-compat (1: p0-
+    controlled source still damages p1's first creature), cross-
+    controller activation shape (1: p1-controlled source pushed
+    on p0's turn — damage routes to p0's bf, not p1's), and
+    `resolve_top_of_stack_pause` parity (1: pause variant uses
+    the same swap). Mirrors the I67 DealDamageAnyTarget test
+    shape.
+
+- **Rule**. CR 119.5 / 608.2: an effect resolves under its
+  source's controller. DealDamageEqualToSourcePowerAnyTarget
+  (Mishra's-Bauble-shape) routes "any target" damage to the
+  defender's first creature (or defender-as-player) — where
+  defender = the SOURCE'S controller's opponent. Sibling
+  closure to the I67 fix; both reuse DealDamageAnyTarget's
+  selection shape.
+
+- **Pre-fix Rust behavior**. The
+  `Effect::DealDamageEqualToSourcePowerAnyTarget` arm at
+  `state_ops_resolve.rs:4180` (pre-fix line) computed
+  `let defender_idx = (1 - state.active_player) as usize`.
+  Wrong when the resolving spell / activated ability has a
+  controller != active_player. Example: p1's Mishra's-Bauble-
+  shape spell ("this creature deals damage equal to its power
+  to any target") fires on p0's turn. Pre-fix the trigger
+  self-damaged p1's first creature (defender_idx = 1 - 0 = 1).
+  Post-fix it correctly damages p0's first creature (the
+  source's controller's opponent).
+
+- **Reuses I59 substrate**. No new state, no new helper. The
+  arm gains a controller-resolution preamble identical to the
+  I67 DealDamageAnyTarget arm:
+  `let controller = state.current_resolve_source_controller
+  .map(|c| c as usize).unwrap_or(state.active_player as usize);
+  let defender_idx = 1 - controller;`. Source-power lookup
+  (the inline 5-zone-equivalent walk over both battlefields)
+  is unaffected — it locates the source independently to
+  compute effective power. The defender swap is independent.
+
+- **Out of scope (deferred to future slices)**:
+  - **`Effect::DealDamageEachCreature`** — pending audit.
+  - **Search-zone resolvers' "your library" semantics**
+    (`SearchLibraryFor*`, etc) — pending per-arm review.
+
+- **Forward inventory (post-I68 remaining `active_player`-keyed
+  arms in `state_ops_resolve.rs`):**
+  - **`Effect::DealDamageEachCreature`** — pending audit.
+  - **Search-zone resolvers' "your library" semantics**
+    (`SearchLibraryFor*`, etc) — pending per-arm review.
+  - **12+ defender sites across various arms** — per-arm audit
+    pending.
+
 ### I67. `Effect::DealDamageAnyTarget` controller-of-effect fix — reuses I59 transient slot; defender computed as `1 - controller` instead of `1 - active_player` (DealDamageAnyTarget controller divergence closure)
 
 - **Pinned by**:
