@@ -210,6 +210,8 @@ def create_app(
     lease_ttl_sec: int = DEFAULT_LEASE_TTL_SEC,
     max_attempts: int = DEFAULT_MAX_ATTEMPTS,
     monotonic: callable = time.monotonic,
+    janitor_interval_seconds: Optional[float] = None,
+    janitor_stale_after_hours: Optional[float] = None,
 ) -> Flask:
     """Build the master HTTP server. ``progress_dir`` (when set)
     enables Stop-button propagation to remotes: each ``/queue/take``
@@ -235,6 +237,15 @@ def create_app(
     rather than retried indefinitely. ``monotonic`` is the clock
     source for lease accounting; tests inject a fake clock here.
 
+    ``janitor_interval_seconds`` and ``janitor_stale_after_hours``
+    configure the background sweeper that demotes stale ``running``
+    rows to ``killed``. When ``runs_db_path`` is set, a
+    :class:`mtg_bot.cli.runs.janitor.JanitorThread` starts at
+    app-creation time with these knobs (defaults: 5min interval,
+    6h stale threshold). When ``runs_db_path`` is None, no janitor
+    runs. The thread is exposed on ``app.extensions["runs_janitor"]``
+    for tests that need to inspect or stop it explicitly.
+
     Backward compat: ``/queue/take`` requests without a
     ``worker_id`` are served with the legacy take-and-forget
     semantics — no lease tracking, same as before this PR.
@@ -245,6 +256,11 @@ def create_app(
         stop_requested as _stop_requested,
     )
     from mtg_bot.cli.runs import db as _runs_db  # noqa: WPS433
+    from mtg_bot.cli.runs.janitor import (  # noqa: WPS433
+        DEFAULT_INTERVAL_SECONDS as _JANITOR_DEFAULT_INTERVAL,
+        DEFAULT_STALE_AFTER_HOURS as _JANITOR_DEFAULT_STALE,
+        JanitorThread,
+    )
     from mtg_bot.cli.runs.models import (  # noqa: WPS433
         Artifact, Event, ProgressUpdate, Run,
     )
@@ -882,6 +898,34 @@ def create_app(
             )
         return Response(data, mimetype="application/x-git-bundle")
 
+    # ---- runs.db stale-running janitor ---------------------------
+    # When the run-DB is enabled, start a background sweeper that
+    # demotes stale ``running`` rows to ``killed``. Replaces the
+    # UI backfill's stale-running heuristic (removed in this same
+    # cutover slice). Daemon thread — dies with the process; tests
+    # can grab it off ``app.extensions["runs_janitor"]`` for an
+    # explicit ``.stop()``.
+    if runs_db_path is not None:
+        interval = (
+            janitor_interval_seconds
+            if janitor_interval_seconds is not None
+            else _JANITOR_DEFAULT_INTERVAL
+        )
+        stale_hours = (
+            janitor_stale_after_hours
+            if janitor_stale_after_hours is not None
+            else _JANITOR_DEFAULT_STALE
+        )
+        janitor = JanitorThread(
+            runs_db_path,
+            interval_seconds=interval,
+            stale_after_hours=stale_hours,
+        )
+        janitor.start()
+        # Flask's ``app.extensions`` dict is the canonical place to
+        # hang per-app singletons that aren't view-bound.
+        app.extensions["runs_janitor"] = janitor
+
     return app
 
 
@@ -950,6 +994,25 @@ def main(argv=None) -> None:  # pragma: no cover
             "disable the run-DB endpoints entirely."
         ),
     )
+    parser.add_argument(
+        "--janitor-interval-seconds", type=float, default=None,
+        help=(
+            "How often the stale-running janitor sweeps the runs DB, "
+            "in seconds. The janitor demotes rows whose "
+            "``last_progress_at`` (or ``started_at`` when NULL) is "
+            "older than ``--janitor-stale-after-hours`` to "
+            "``status='killed'``. Default 300 (5 minutes). Only fires "
+            "when ``--runs-db-path`` is set."
+        ),
+    )
+    parser.add_argument(
+        "--janitor-stale-after-hours", type=float, default=None,
+        help=(
+            "Stale threshold for the janitor, in hours. Rows with "
+            "``last_progress_at`` (or ``started_at`` fallback) older "
+            "than this get demoted to ``killed``. Default 6.0."
+        ),
+    )
     args = parser.parse_args(argv)
 
     repo_url = args.repo_url or _detect_repo_url(args.repo_root)
@@ -981,6 +1044,8 @@ def main(argv=None) -> None:  # pragma: no cover
         repo_root=args.repo_root,
         progress_dir=args.progress_dir,
         runs_db_path=runs_db_path,
+        janitor_interval_seconds=args.janitor_interval_seconds,
+        janitor_stale_after_hours=args.janitor_stale_after_hours,
     )
     print(
         f"[serve_setup] master={master_tailnet_name} repo={repo_url} "
