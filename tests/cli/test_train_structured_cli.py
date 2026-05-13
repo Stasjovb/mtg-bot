@@ -129,6 +129,57 @@ def test_train_structured_cli_smoke(tmp_path: Path, monkeypatch) -> None:
     assert any("printing_embed" in k for k in state)
 
 
+def test_train_structured_cli_passes_compile_flag(
+    tmp_path: Path, monkeypatch,
+) -> None:
+    """``mtg_bot train --architecture structured`` MUST forward the
+    ``--compile`` flag value into ``train_structured_model``.
+
+    Regression test for the iter_002 train crash: ``_main_structured``
+    constructed the train kwargs without ``compile_model=``, so the
+    trainer's internal ``compile_model: Optional[bool] = None`` default
+    kicked in and tried to torch.compile on CUDA — which crashes on
+    Windows-cu128 (Triton not packaged) at the first forward pass,
+    AFTER the try/except around ``torch.compile()`` itself.
+    """
+    captured = {}
+    real_train = cli_train.train_structured_model
+
+    def spy(*args, **kwargs):
+        captured["compile_model"] = kwargs.get(
+            "compile_model", "<not-passed>",
+        )
+        # Force compile_model=False so the test doesn't try to compile
+        # for real; we only care that the flag was forwarded.
+        kwargs["compile_model"] = False
+        return real_train(*args, **kwargs)
+
+    monkeypatch.setattr(cli_train, "train_structured_model", spy)
+    monkeypatch.delenv("MTG_BOT_RUN_DB_PATH", raising=False)
+    monkeypatch.delenv("MTG_BOT_RUN_DB_URL", raising=False)
+
+    data_dir = tmp_path / "data"
+    data_dir.mkdir()
+    _write_structured_npz(
+        data_dir / "shard_001.npz", n_rows=16, seq_len=4, seed=1,
+    )
+
+    # Without --compile, compile_model defaults to False (action="store_true").
+    cli_train.main([
+        "--data-dir", str(data_dir),
+        "--registry-root", str(tmp_path / "weights"),
+        "--epochs", "1",
+        "--batch-size", "4",
+        "--val-split", "0.25",
+        "--device", "cpu",
+        "--architecture", "structured",
+    ])
+    assert captured["compile_model"] is False, (
+        f"expected compile_model=False (--compile not passed), "
+        f"got {captured['compile_model']!r}"
+    )
+
+
 def test_train_structured_cli_missing_structured_arrays(
     tmp_path: Path, monkeypatch,
 ) -> None:

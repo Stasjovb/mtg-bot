@@ -983,6 +983,15 @@ def _main_structured(args, parser) -> None:
             notes=args.notes,
             policy_loss_weight=args.policy_loss_weight,
             epoch_callback=_on_epoch,
+            # ``--compile`` is opt-in (action="store_true"). Without
+            # this passthrough the structured trainer's internal
+            # default fires (``compile_model=None`` → True on CUDA),
+            # which crashes on Windows-cu128 (Triton not packaged)
+            # because the failure surfaces lazily on the first forward,
+            # AFTER the try/except around ``torch.compile()`` itself.
+            # The flat-feature train path already passes this through
+            # (lines 549, 646 above); structured was the outlier.
+            compile_model=args.compile_model,
         )
         elapsed = time.perf_counter() - started
 
