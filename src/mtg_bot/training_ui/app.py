@@ -1,14 +1,16 @@
 """Flask app showing live progress of NN training runs.
 
-Phase 2 of the runs-DB rollout: this UI now reads run records from
-the SQLite ``runs.db`` as the single source of truth. Producer-side
-JSON writes are still authoritative on disk (``Phase 1 dual-write``
-invariant — see ``CLAUDE.md`` "Run database"); we honor that by
-running an idempotent backfill from ``progress_dir/*.json`` into the
-DB at the top of each ``/api/runs`` request. Subcommands that don't
-yet dual-write (``iterate`` / ``train`` / ``shard`` / ``capture`` /
-``bench``) thus still surface in the UI without manual ops steps —
-their JSONs are folded into the DB on the next request.
+Phase 3 of the runs-DB rollout: this UI reads run records from
+the SQLite ``runs.db`` as the single source of truth, with NO
+JSON-side backfill. Every producer (``iterate``, ``train``,
+``shard``, standalone ``eval``) now pushes its lifecycle directly
+to the DB via ``mtg_bot.cli.runs.client``; the JSON files that
+remain on disk are historical artifacts and ignored by this UI.
+
+Stale ``running`` rows (producer died before ``finish_run``) are
+demoted by the periodic janitor inside ``mtg_bot serve`` — see
+``mtg_bot.cli.runs.janitor``. The previous request-time backfill
+no longer fires.
 
 DB query shape per endpoint:
 
@@ -38,9 +40,8 @@ existing front-end JS keeps working untouched.
 Connection lifecycle: each request opens its own short-lived
 ``sqlite3.Connection`` via :func:`mtg_bot.cli.runs.db.connect`. WAL
 mode (set on connect) lets these reads run concurrently with the
-producer's writes (and with the per-request backfill's writes,
-which serialize through SQLite's own per-file lock). Connections
-are cheap (~hundreds of microseconds) so we don't pool them.
+producer's writes. Connections are cheap (~hundreds of microseconds)
+so we don't pool them.
 
 Write surface: ``POST /api/runs/<run_id>/stop`` drops a
 ``.STOP_<run_id>`` sentinel file in the progress directory — long-
@@ -56,13 +57,12 @@ from __future__ import annotations
 
 import json
 import sqlite3
-import threading
 from pathlib import Path
 from typing import Any, Optional
 
 from flask import Flask, abort, jsonify, render_template, request
 
-from mtg_bot.cli.runs import backfill as runs_backfill, db as runs_db
+from mtg_bot.cli.runs import db as runs_db
 from mtg_bot.training.gate import EVAL_GATE_THRESHOLD
 from mtg_bot.training.stop_signal import (
     sentinel_path, stop_requested, write_stop,
@@ -95,34 +95,6 @@ def _ui_kind_from_db(db_kind: Optional[str]) -> Optional[str]:
     if db_kind is None:
         return None
     return _DB_KIND_TO_UI.get(db_kind, db_kind)
-
-
-# ---- Backfill orchestration ----------------------------------------------
-
-# The backfill runs at the top of each /api/runs request. We guard it
-# with a per-process lock so a burst of polls doesn't spawn N concurrent
-# backfills that all fight over SQLite's writer slot. The lock is
-# briefly held; the backfill itself is bounded by the JSON dir size
-# (currently <300 files, ~50ms wall time on the master).
-_BACKFILL_LOCK = threading.Lock()
-
-
-def _ensure_backfill(progress_dir: Path) -> None:
-    """Run a fresh backfill from ``progress_dir`` into ``runs.db``.
-
-    Idempotent (see ``runs_backfill.backfill_progress_dir``). Catches
-    every exception so a backfill failure can never 500 the listing
-    endpoint — the worst case is the UI shows whatever the DB had at
-    the previous backfill.
-    """
-    db_path = progress_dir / "runs.db"
-    with _BACKFILL_LOCK:
-        try:
-            runs_backfill.backfill_progress_dir(progress_dir, db_path)
-        except Exception:  # noqa: BLE001
-            # Logging is intentionally best-effort; this path runs on
-            # every request and a chatty stderr would spam logs.
-            pass
 
 
 # ---- DB read helpers ------------------------------------------------------
@@ -219,15 +191,13 @@ def _list_runs(progress_dir: Path) -> list[dict[str, Any]]:
     """All runs visible to the UI, newest-first by ``started_at``.
 
     DB-first: every run surfaces here lives in ``runs.db``. The
-    backfill at the top of the request folds new JSONs into the DB
-    so JSON-only producers (today: iterate / train / shard / capture /
-    bench) still appear without delay.
+    All producers push directly to the DB via
+    ``mtg_bot.cli.runs.client``; this read path is pure DB.
 
     Per-shard runs (``shard_label`` populated) are NOT listed here —
     the aggregate (``shard_label IS NULL``) row is the card; per-shard
     rows surface inside the detail endpoint as sub-cards.
     """
-    _ensure_backfill(progress_dir)
     conn = _open_conn(progress_dir)
     if conn is None:
         return []
@@ -272,9 +242,7 @@ def _get_run_detail(
 ) -> Optional[dict[str, Any]]:
     """Per-run detail: DB row + aggregate progress + per-shard rows
     + last 100 events + artifacts. Returns ``None`` if the run is
-    unknown to the DB. The backfill runs first so a JSON-only run
-    that just landed surfaces immediately."""
-    _ensure_backfill(progress_dir)
+    unknown to the DB."""
     conn = _open_conn(progress_dir)
     if conn is None:
         return None
@@ -352,7 +320,6 @@ def _list_recent_runs(
     Uses a single LEFT JOIN against the aggregate progress row so the
     response shape carries the headline counters without an N+1 trip.
     """
-    _ensure_backfill(progress_dir)
     conn = _open_conn(progress_dir)
     if conn is None:
         return []
