@@ -2803,20 +2803,22 @@ def run_shard_pull(
     pending_chunks: list = []
     flush_every = max(1, n_workers)
 
-    # Run-DB shadow writes (Phase 1 dual-write). Same shard_run_id as
-    # ``DataGenProgress`` / ``EventLog`` use for the JSON path, so the
-    # SQLite rows roll up under the iter's parent run cleanly. The
-    # ``client.push_progress`` is a no-op when neither
-    # ``MTG_BOT_RUN_DB_PATH`` nor ``MTG_BOT_RUN_DB_URL`` is set, so
-    # this is zero-cost for ad-hoc CLI invocations.
-    shard_run_id = f"{run_id}_shard_{label}"
-
+    # Run-DB shadow writes (Phase 1 dual-write). Per-shard
+    # ``run_progress`` rows are keyed by ``(run_id, shard_label)`` on
+    # the parent run's ``runs`` row — the FK constraint on
+    # ``run_progress.run_id -> runs.run_id`` means we MUST push under
+    # the master ``run_id`` (no shard suffix); ``shard_label`` is what
+    # distinguishes per-shard rows from the aggregate. A synthesized
+    # ``f"{run_id}_shard_{label}"`` id would FK-fail because no such
+    # ``runs`` row exists. ``client.push_progress`` is a no-op when
+    # neither ``MTG_BOT_RUN_DB_PATH`` nor ``MTG_BOT_RUN_DB_URL`` is
+    # set, so this is zero-cost for ad-hoc CLI invocations.
     def _push_shard_progress_to_db(*, elapsed_s: float) -> None:
         """Mirror the latest counters to the master's runs.db row.
         ``shard_label`` keys the row so concurrent shards don't fight
         for the same (run_id, NULL) aggregate row."""
         _runs_client.push_progress(
-            shard_run_id,
+            run_id,
             shard_label=label,
             n_games_done=n_games_completed,
             n_games_total=iter_total_games,
@@ -3403,13 +3405,12 @@ def run_shard_eval_pull(
     n_dropped_rejected = 0
 
     # Run-DB shadow writes — see ``run_shard_pull`` for the rationale.
-    # Same shard_run_id convention as the JSON progress path so both
-    # storage paths agree on the per-shard row identity.
-    shard_run_id = f"{run_id}_shard_{label}"
-
+    # Per-shard rows are keyed off the master ``run_id`` + ``shard_label``;
+    # a synthesized shard-suffix run_id would FK-fail because no such
+    # ``runs`` row exists.
     def _push_eval_shard_progress_to_db(*, elapsed_s: float) -> None:
         _runs_client.push_progress(
-            shard_run_id,
+            run_id,
             shard_label=label,
             n_games_done=n_games,
             n_games_total=iter_total_games,

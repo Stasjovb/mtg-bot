@@ -1,9 +1,11 @@
 """Tests for the read-only Flask viewer in
 ``mtg_bot.training_ui.app``.
 
-We use Flask's test client, no live server — the route handlers
-read JSON files off disk, so we just seed a tmp directory with
-synthetic progress files and assert on the responses.
+We use Flask's test client, no live server. Phase 3: the UI reads
+from the runs.db SQLite file only (the request-time JSON backfill
+was removed). Tests seed the DB via the backfill helper directly,
+so the JSON-style payloads in this module's ``_write_run`` get
+translated to the canonical DB rows the UI now exclusively reads.
 """
 
 from __future__ import annotations
@@ -13,20 +15,18 @@ from pathlib import Path
 
 import pytest
 
+from mtg_bot.cli.runs import backfill as runs_backfill
 from mtg_bot.training_ui.app import create_app
 
 
 def _write_run(progress_dir: Path, run_id: str, **fields) -> Path:
-    """Drop a synthetic run file in ``progress_dir`` with sensible
-    defaults; ``fields`` overrides individual keys.
+    """Drop a synthetic run file in ``progress_dir`` AND fold it into
+    the DB via ``runs.backfill``. The UI now reads pure DB — tests
+    need the DB rows present before they hit ``/api/runs``.
 
-    Phase 2 invariant: the UI is DB-first and runs the JSON-to-DB
-    backfill at the top of every request. The backfill requires a
-    ``kind`` field to map to the DB's ``runs.kind`` enum, so the
-    default fixture payload now carries ``kind="training"``. Tests
-    that explicitly want a JSON without a ``kind`` (e.g. the
+    Tests that explicitly want a JSON without a ``kind`` (e.g. the
     "skip unknown payloads" path) override via ``kind=None`` and
-    pop the field below.
+    we pop the field before writing.
     """
     payload = {
         "run_id": run_id,
@@ -48,7 +48,47 @@ def _write_run(progress_dir: Path, run_id: str, **fields) -> Path:
         payload.pop("kind", None)
     path = progress_dir / f"{run_id}.json"
     path.write_text(json.dumps(payload), encoding="utf-8")
+    # Fold into the DB so the UI's pure-DB reads see it.
+    runs_backfill.backfill_progress_dir(
+        progress_dir, progress_dir / "runs.db",
+        stale_after_hours=24.0 * 365,  # don't auto-kill in tests
+    )
     return path
+
+
+def _backfill(progress_dir: Path) -> None:
+    """Fold every JSON in ``progress_dir`` into the colocated runs.db.
+    The UI's pure-DB reads need the DB populated; this helper mimics
+    what the removed request-time backfill used to do automatically.
+    Tests that write JSON directly (rather than going through
+    :func:`_write_run`) call this before their ``client.get`` to make
+    the new rows visible.
+    """
+    runs_backfill.backfill_progress_dir(
+        progress_dir, progress_dir / "runs.db",
+        stale_after_hours=24.0 * 365,
+    )
+
+
+class _DBSyncClient:
+    """Wrapper that backfills the JSON->DB before every request, so
+    tests written against the pre-Phase-3 implicit backfill keep
+    passing without manual ``_backfill(...)`` calls sprinkled at
+    each call site. ``client.get/post/...`` proxy through to the
+    underlying Flask test client after refreshing the DB."""
+
+    def __init__(self, flask_client, progress_dir: Path):
+        self._client = flask_client
+        self._progress_dir = progress_dir
+
+    def __getattr__(self, name):
+        attr = getattr(self._client, name)
+        if name in ("get", "post", "put", "patch", "delete", "head"):
+            def _wrapped(*args, **kwargs):
+                _backfill(self._progress_dir)
+                return attr(*args, **kwargs)
+            return _wrapped
+        return attr
 
 
 @pytest.fixture()
@@ -57,7 +97,8 @@ def client(tmp_path: Path):
     progress_dir.mkdir()
     app = create_app(progress_dir)
     app.config["TESTING"] = True
-    return app.test_client(), progress_dir
+    wrapped = _DBSyncClient(app.test_client(), progress_dir)
+    return wrapped, progress_dir
 
 
 def test_index_returns_html_page(client):

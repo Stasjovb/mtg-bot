@@ -8332,3 +8332,129 @@ def test_run_distributed_eval_orchestrator_returns_before_ssh_unblocks(
     # summary as ``ssh_timeout_recovered`` — pinned indirectly via
     # the totals path: hung remote contributes zero counts (no
     # progress JSON written), local provides everything.
+
+
+# ---- runs.db: per-shard push uses master run_id + shard_label -------------
+
+
+def test_run_shard_pull_push_progress_uses_master_run_id_not_synthetic(
+    tmp_path: Path, monkeypatch, capsys,
+):
+    """Regression for Bug 2: per-shard ``push_progress`` from inside
+    ``run_shard_pull`` must target the master ``run_id`` row and use
+    ``shard_label=label`` to distinguish per-shard rows. Synthesizing
+    a ``f"{master}_shard_{label}"`` id would FK-fail because no such
+    ``runs`` row exists for the in-process local shard, and the
+    transaction would roll back (including the
+    ``last_progress_at`` auto-stamp). After the fix:
+
+    - No FK ``IntegrityError`` warning is emitted on stderr.
+    - The ``run_progress`` row lands keyed by
+      ``(master_run_id, shard_label)``.
+    - ``runs.last_progress_at`` on the MASTER row is stamped, since
+      the auto-stamping UPDATE runs in the same transaction.
+    """
+    from mtg_bot.training import distributed as dist
+    from mtg_bot.training.distributed import run_shard_pull
+    from mtg_bot.cli.runs import db as runs_db
+    from mtg_bot.cli.runs.models import Run
+
+    # Seed: only the MASTER run row exists, not a per-shard row.
+    db_path = tmp_path / "runs.db"
+    conn = runs_db.connect(db_path)
+    try:
+        runs_db.insert_run(conn, Run(
+            run_id="iter_test_master",
+            kind="self_play",
+            status="running",
+            started_at=runs_db.now_iso(),
+            git_commit="abc",
+            config_json="{}",
+        ))
+    finally:
+        conn.close()
+
+    monkeypatch.setenv("MTG_BOT_RUN_DB_PATH", str(db_path))
+    monkeypatch.delenv("MTG_BOT_RUN_DB_URL", raising=False)
+
+    _patch_pull_executor_to_threadpool(monkeypatch)
+    _patch_queue_router(monkeypatch, take_responses=[
+        {"games": [0], "remaining": 0, "lease_ttl_sec": 120},
+        {"games": [], "remaining": 0},
+    ])
+
+    def _fast_worker(args):
+        return args[0], _nonempty_chunk(n_samples=2), 0.01
+
+    monkeypatch.setattr(
+        dist, "_play_one_parallel_game_timed", _fast_worker,
+    )
+
+    progress_dir = tmp_path / "training_progress"
+    out_dir = tmp_path / "out"
+    run_shard_pull(
+        _basic_self_play_spec(),
+        queue_url="http://stub",
+        run_id="iter_test_master",
+        n_workers=1,
+        output_dir=out_dir,
+        label="local",
+        stamp="20260512T000000Z",
+        iter_total_games=1,
+        progress_dir=progress_dir,
+        worker_id="alice",
+        heartbeat_interval=1000.0,
+    )
+
+    # No FK warnings on stderr — the WHOLE point of the fix.
+    captured = capsys.readouterr()
+    assert "FOREIGN KEY constraint failed" not in captured.err, (
+        f"unexpected FK warning in stderr:\n{captured.err}"
+    )
+    assert "IntegrityError" not in captured.err, (
+        f"unexpected IntegrityError warning in stderr:\n{captured.err}"
+    )
+
+    # Row landed under (master_run_id, shard_label='local').
+    conn = runs_db.connect(db_path)
+    try:
+        rows = list(conn.execute(
+            "SELECT * FROM run_progress WHERE run_id = ?",
+            ("iter_test_master",),
+        ))
+        # The synthesized id must NOT have any row at all.
+        synth = list(conn.execute(
+            "SELECT * FROM run_progress WHERE run_id = ?",
+            ("iter_test_master_shard_local",),
+        ))
+        synth_runs = list(conn.execute(
+            "SELECT * FROM runs WHERE run_id = ?",
+            ("iter_test_master_shard_local",),
+        ))
+        master_row = conn.execute(
+            "SELECT last_progress_at FROM runs WHERE run_id = ?",
+            ("iter_test_master",),
+        ).fetchone()
+    finally:
+        conn.close()
+
+    assert synth == [], (
+        "no run_progress row should exist under the synthesized "
+        f"shard-suffix id; got {synth}"
+    )
+    assert synth_runs == [], (
+        "no runs row should exist for the synthesized shard-suffix id"
+    )
+    shard_rows = [r for r in rows if r["shard_label"] == "local"]
+    assert len(shard_rows) >= 1, (
+        f"expected at least one run_progress row with shard_label='local' "
+        f"under master run_id; got rows: {[dict(r) for r in rows]}"
+    )
+
+    # And ``last_progress_at`` was stamped on the master row — the
+    # auto-stamping UPDATE in upsert_progress ran inside the same
+    # transaction as the per-shard insert, so a successful insert
+    # implies the column is populated.
+    assert master_row["last_progress_at"] is not None, (
+        "runs.last_progress_at should be auto-stamped by upsert_progress"
+    )

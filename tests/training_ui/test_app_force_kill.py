@@ -29,16 +29,47 @@ from pathlib import Path
 
 import pytest
 
+from mtg_bot.cli.runs import backfill as runs_backfill
 from mtg_bot.training_ui.app import create_app
+
+
+class _DBSyncClient:
+    """Test-only wrapper: backfills ``progress_dir/*.json`` into the DB
+    before every request. Phase 3 removed the request-time backfill
+    from the UI; this preserves the old "write JSON, request, observe
+    in DB" convenience for the existing force-kill tests."""
+
+    def __init__(self, flask_client, progress_dir: Path):
+        self._client = flask_client
+        self._progress_dir = progress_dir
+
+    def _refresh(self) -> None:
+        try:
+            runs_backfill.backfill_progress_dir(
+                self._progress_dir, self._progress_dir / "runs.db",
+                stale_after_hours=24.0 * 365,
+            )
+        except Exception:  # noqa: BLE001
+            pass
+
+    def __getattr__(self, name):
+        attr = getattr(self._client, name)
+        if name in ("get", "post", "put", "patch", "delete", "head"):
+            def _wrapped(*args, **kwargs):
+                self._refresh()
+                return attr(*args, **kwargs)
+            return _wrapped
+        return attr
 
 
 def _write_run(progress_dir: Path, run_id: str, **fields) -> Path:
     """Drop a synthetic run JSON in ``progress_dir`` with sensible
     defaults; ``fields`` overrides individual keys.
 
-    The training UI's idempotent backfill folds these JSONs into the
-    ``runs.db`` on the first request, so by the time the force_kill
-    endpoint runs, the row exists in the DB with the JSON's ``status``.
+    Tests use this with the ``_DBSyncClient`` wrapper which folds
+    JSON files into the colocated runs.db before each request, so
+    by the time the force_kill endpoint runs, the row exists in the
+    DB with the JSON's ``status``.
     """
     payload = {
         "run_id": run_id,
@@ -67,7 +98,7 @@ def client(tmp_path: Path):
     progress_dir.mkdir()
     app = create_app(progress_dir)
     app.config["TESTING"] = True
-    return app.test_client(), progress_dir
+    return _DBSyncClient(app.test_client(), progress_dir), progress_dir
 
 
 def _read_db_row(progress_dir: Path, run_id: str) -> dict | None:

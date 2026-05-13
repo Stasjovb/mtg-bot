@@ -33,11 +33,47 @@ from pathlib import Path
 
 import pytest
 
-from mtg_bot.cli.runs import db as runs_db
+from mtg_bot.cli.runs import backfill as runs_backfill, db as runs_db
 from mtg_bot.cli.runs.models import (
     Artifact, Event, ProgressUpdate, Run,
 )
 from mtg_bot.training_ui.app import create_app
+
+
+class _DBSyncClient:
+    """Test-only wrapper that folds ``progress_dir/*.json`` into the DB
+    before each request. Phase 3 removed the request-time backfill
+    from the UI; this wrapper restores the historical
+    "JSON-becomes-DB-on-next-request" convenience SOLELY for tests
+    so existing assertions on listings produced from JSON fixtures
+    still pass without per-test boilerplate. Production code does NOT
+    go through this path — the UI is pure DB.
+    """
+
+    def __init__(self, flask_client, progress_dir: Path):
+        self._client = flask_client
+        self._progress_dir = progress_dir
+
+    def _refresh(self) -> None:
+        try:
+            runs_backfill.backfill_progress_dir(
+                self._progress_dir, self._progress_dir / "runs.db",
+                stale_after_hours=24.0 * 365,
+            )
+        except Exception:  # noqa: BLE001
+            # Mirror the request-time backfill's swallow-and-warn
+            # contract for test scenarios that intentionally corrupt
+            # the DB or progress dir.
+            pass
+
+    def __getattr__(self, name):
+        attr = getattr(self._client, name)
+        if name in ("get", "post", "put", "patch", "delete", "head"):
+            def _wrapped(*args, **kwargs):
+                self._refresh()
+                return attr(*args, **kwargs)
+            return _wrapped
+        return attr
 
 
 def _open_db(progress_dir: Path) -> sqlite3.Connection:
@@ -150,7 +186,7 @@ def progress_dir(tmp_path: Path) -> Path:
 def client(progress_dir: Path):
     app = create_app(progress_dir)
     app.config["TESTING"] = True
-    return app.test_client()
+    return _DBSyncClient(app.test_client(), progress_dir)
 
 
 # ---- /api/runs : DB + JSON merging ----------------------------------------
@@ -996,40 +1032,11 @@ def test_replays_endpoint_pulls_replays_dir_from_extra_json(
     assert body["replays"][0]["filename"] == "g1.json.gz"
 
 
-def test_concurrent_backfill_lock_serializes_writes(
-    progress_dir: Path,
-):
-    """Burst of concurrent /api/runs requests shouldn't crash on
-    ``database is locked`` — the per-process lock around the backfill
-    serializes its writes. Smoke test by invoking the helper twice
-    in a tight loop and asserting both succeed."""
-    from mtg_bot.training_ui import app as app_mod
-    # Two synchronous calls in a row exercise the lock acquire/release
-    # path without needing an actual thread pool (which is awkward to
-    # set up under pytest's ThreadPool-suspicious sysmon coverage).
-    _write_json(
-        progress_dir, "v1", kind="training", status="completed",
-        started_at="2026-05-04T10:00:00+00:00",
-        ended_at="2026-05-04T11:00:00+00:00",
-    )
-    app_mod._ensure_backfill(progress_dir)
-    app_mod._ensure_backfill(progress_dir)
-    # Idempotent — DB has the row exactly once.
-    conn = _open_db(progress_dir)
-    try:
-        n = conn.execute(
-            "SELECT COUNT(*) AS n FROM runs",
-        ).fetchone()["n"]
-        assert n == 1
-    finally:
-        conn.close()
-
-
 def test_api_runs_recent_does_not_crash_on_corrupt_db(
     progress_dir: Path,
 ):
-    """Defensive: the recent endpoint hits the same backfill path as
-    /api/runs and must also tolerate a corrupt DB."""
+    """Defensive: the recent endpoint must tolerate a corrupt DB —
+    return 200 with an empty list rather than 500."""
     from mtg_bot.training_ui.app import create_app
     (progress_dir / "runs.db").write_bytes(b"not a sqlite db")
     app = create_app(progress_dir)
@@ -1037,38 +1044,6 @@ def test_api_runs_recent_does_not_crash_on_corrupt_db(
     res = client.get("/api/runs/recent")
     assert res.status_code == 200
     assert isinstance(res.get_json()["runs"], list)
-
-
-def test_backfill_failure_does_not_break_listing(
-    progress_dir: Path, monkeypatch,
-):
-    """If the backfill itself raises (e.g. an unforeseen bug), the
-    listing endpoint still returns 200 with whatever the DB had at
-    the previous successful sync."""
-    from mtg_bot.training_ui import app as app_mod
-    from mtg_bot.cli.runs import db as runs_db_mod
-    # Pre-seed a DB row.
-    conn = runs_db_mod.connect(progress_dir / "runs.db")
-    try:
-        _seed_run(
-            conn, "pre_existing", kind="eval", status="completed",
-            started_at="2026-05-04T10:00:00+00:00",
-            ended_at="2026-05-04T11:00:00+00:00",
-        )
-    finally:
-        conn.close()
-
-    def boom(*a, **kw):
-        raise RuntimeError("forced backfill failure")
-
-    monkeypatch.setattr(
-        "mtg_bot.training_ui.app.runs_backfill.backfill_progress_dir",
-        boom,
-    )
-    app = app_mod.create_app(progress_dir)
-    client = app.test_client()
-    runs = client.get("/api/runs").get_json()["runs"]
-    assert [r["run_id"] for r in runs] == ["pre_existing"]
 
 
 def test_extra_json_with_original_status_overrides_status(

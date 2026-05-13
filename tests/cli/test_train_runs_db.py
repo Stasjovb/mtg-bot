@@ -175,8 +175,12 @@ def test_train_main_lifecycle_no_op_when_db_unset(
     monkeypatch, tmp_path,
 ):
     """Without ``MTG_BOT_RUN_DB_PATH`` (and no URL), the lifecycle
-    helpers must be no-ops — the existing JSON + registry write
-    paths still complete and no DB file is created."""
+    helpers must be no-ops — weights still register and no DB file
+    is created. Phase 3 cutover: the per-epoch progress JSON is no
+    longer written either (the DB-backed runs registry is the only
+    sink); a no-DB run is silent on disk apart from the registered
+    weights.
+    """
     monkeypatch.delenv("MTG_BOT_RUN_DB_PATH", raising=False)
     monkeypatch.delenv("MTG_BOT_RUN_DB_URL", raising=False)
 
@@ -194,10 +198,11 @@ def test_train_main_lifecycle_no_op_when_db_unset(
         epochs=2,
     ))
 
-    # Progress JSON written, weights registered — but no DB file.
-    assert progress_path.is_file()
+    # Weights registered; DB file not created.
     assert (registry_root / "v1" / "weights.pt").is_file()
     assert not (tmp_path / "runs.db").exists()
+    # Phase 3: the progress JSON file is no longer written.
+    assert not progress_path.exists()
 
 
 def test_train_main_marks_failed_on_exception(monkeypatch, tmp_path):
@@ -698,9 +703,12 @@ def test_train_main_one_legal_downsample_branch(monkeypatch, tmp_path):
 def test_train_main_explicit_progress_path_override(
     monkeypatch, tmp_path,
 ):
-    """An explicit ``--progress-path`` overrides the
-    training_progress/<peeked>.json default and creates any missing
-    parent dirs."""
+    """An explicit ``--progress-path`` exercises the path-string
+    construction branch and creates any missing parent dirs. Phase 3
+    cutover: the JSON file itself is no longer written, but the parent
+    directory is still created so the path string survives as a
+    registered ``progress_json`` artifact pointer.
+    """
     data_dir = tmp_path / "data"
     data_dir.mkdir()
     _write_synthetic_npz(data_dir, n=64, seed=25)
@@ -713,7 +721,10 @@ def test_train_main_explicit_progress_path_override(
         progress_path=nested,
         epochs=1,
     ))
-    assert nested.is_file()
+    # Parent dirs created so artifact registration sees a well-formed
+    # path; file itself is not written.
+    assert nested.parent.is_dir()
+    assert not nested.exists()
 
 
 def test_train_main_progress_path_disabled_branch(monkeypatch, tmp_path):
@@ -762,7 +773,11 @@ def test_train_main_progress_path_disabled_branch(monkeypatch, tmp_path):
 
 def test_train_main_default_progress_path_branch(monkeypatch, tmp_path):
     """Without ``--progress-path``, the default ``training_progress/
-    <peeked>.json`` path is computed under cwd."""
+    <peeked>.json`` path is computed under cwd. Phase 3 cutover: the
+    JSON file is no longer written, but the parent directory
+    ``training_progress/`` is still created (idempotent mkdir) so the
+    artifact path-string registration sees a well-formed path.
+    """
     data_dir = tmp_path / "data"
     data_dir.mkdir()
     _write_synthetic_npz(data_dir, n=64, seed=27)
@@ -779,7 +794,9 @@ def test_train_main_default_progress_path_branch(monkeypatch, tmp_path):
         "--device", "cpu",
     ])
     progress_file = cwd / "training_progress" / "v1.json"
-    assert progress_file.is_file()
+    # Parent dir created; file itself not written.
+    assert progress_file.parent.is_dir()
+    assert not progress_file.exists()
 
 
 def test_train_main_weights_stat_oserror_swallowed(

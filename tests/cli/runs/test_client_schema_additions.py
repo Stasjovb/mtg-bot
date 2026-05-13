@@ -181,6 +181,86 @@ def test_push_progress_stamps_last_progress_at_direct(
     assert "T" in rec["run"]["last_progress_at"]
 
 
+def test_push_progress_stamps_last_progress_at_within_5s(
+    monkeypatch, tmp_path,
+):
+    """Regression: contract is that ``runs.last_progress_at`` for a
+    run reflects a recent ``push_progress`` call. Stronger than the
+    "not None" check above: assert the stamp is within the last 5
+    seconds of wall clock. Gate for the janitor (which marks rows as
+    ``killed`` once their ``last_progress_at`` exceeds a stale-after
+    threshold) — if the auto-stamp regresses silently to a no-op or
+    a fixed-time value, the janitor would either never fire or fire
+    on healthy rows.
+
+    Covers both the aggregate (``shard_label=None``) and per-shard
+    (``shard_label='local'``) paths because both go through
+    ``upsert_progress`` and BOTH must update the master ``runs`` row's
+    ``last_progress_at`` column. The original FK bug (commit
+    ``6d4bb611``) regressed the per-shard path silently: the FK
+    failure on the synthesized shard run_id rolled back the entire
+    transaction, including the ``UPDATE runs SET last_progress_at``
+    on the legitimate master run row.
+    """
+    import datetime
+
+    _clear_env(monkeypatch)
+    db_path = tmp_path / "runs.db"
+    monkeypatch.setenv("MTG_BOT_RUN_DB_PATH", str(db_path))
+
+    client.start_run(
+        "master", kind="self_play",
+        config_json="{}", git_commit="abc",
+    )
+
+    # Per-shard path first (the path the FK bug regressed).
+    before = datetime.datetime.now(datetime.timezone.utc)
+    client.push_progress(
+        "master", shard_label="local",
+        n_games_done=1, n_games_total=10,
+    )
+    after = datetime.datetime.now(datetime.timezone.utc)
+
+    conn = runs_db.connect(db_path)
+    try:
+        rec = runs_db.get_run(conn, "master")
+    finally:
+        conn.close()
+    stamp = rec["run"]["last_progress_at"]
+    assert stamp is not None, (
+        "per-shard push_progress did NOT stamp runs.last_progress_at; "
+        "the FK-bug regression is back"
+    )
+    parsed = datetime.datetime.fromisoformat(stamp)
+    # Stamp resolution is whole seconds (now_iso uses timespec="seconds"),
+    # so the parsed value can be up to ~1s behind `before`. Allow a 5s
+    # window per the regression spec.
+    assert parsed >= before - datetime.timedelta(seconds=5), (
+        f"last_progress_at {stamp} too far in the past (before={before})"
+    )
+    assert parsed <= after + datetime.timedelta(seconds=5), (
+        f"last_progress_at {stamp} too far in the future (after={after})"
+    )
+
+    # Aggregate path also stamps.
+    before2 = datetime.datetime.now(datetime.timezone.utc)
+    client.push_progress(
+        "master", n_games_done=5, n_games_total=10,
+    )
+    after2 = datetime.datetime.now(datetime.timezone.utc)
+    conn = runs_db.connect(db_path)
+    try:
+        rec = runs_db.get_run(conn, "master")
+    finally:
+        conn.close()
+    stamp2 = rec["run"]["last_progress_at"]
+    parsed2 = datetime.datetime.fromisoformat(stamp2)
+    assert parsed2 >= before2 - datetime.timedelta(seconds=5)
+    assert parsed2 <= after2 + datetime.timedelta(seconds=5)
+    # Aggregate update must advance (or match) the per-shard stamp.
+    assert parsed2 >= parsed
+
+
 # ---- set_stop_requested: direct transport ----------------------------------
 
 
