@@ -23902,6 +23902,362 @@ def test_cross_engine_synthetic_etb_surveil_cross_controller_routes_to_source_co
     )
 
 
+def test_cross_engine_synthetic_etb_deal_damage_to_opponent_creature_cross_controller_routes_to_source_controller_opponent_parity(
+    parity_smoke,
+):
+    """Probe: synthetic ETB ``deal_damage_to_opponent_creature`` trigger
+    fired by a permanent CONTROLLED BY P1 while ACTIVE_PLAYER=P0 -- the
+    cross-controller leg of the existing
+    ``deal_damage_to_opponent_creature`` bridge arm. Both engines must
+    pick the bait creature on P0's bf (P0 is the SOURCE's controller's
+    OPPONENT), NOT P1's own bf (which is also the active player's
+    perspective opponent in the same-controller variant).
+
+    **The substrate.** Per the Nova Hellkite same-controller probe
+    (round 1 on this branch's history,
+    ``test_cross_engine_real_eoe_nova_hellkite_etb_damage_to_opponent_creature_parity``):
+    Rust's ``Effect::DealDamageToOpponentCreature`` resolve arm
+    (state_ops_resolve.rs:6271-6342) performs an INTRINSIC 5-zone
+    walk + stack-scan fallback to recover the source's controller,
+    then iterates that controller's OPPONENTS in ascending player
+    order and picks the first ``"Creature"`` on each opponent's bf.
+    The intrinsic source-controller derivation -- not a
+    ``current_resolve_source_controller`` swap -- is the I-fix
+    family for this arm: it makes the cross-controller case work
+    correctly without any caller plumbing because the resolve walks
+    zones directly to find the source. Python's
+    ``DealDamageToOpponentCreature.resolve`` (constructor sugar over
+    ``DealDamage`` with the ``IsCreature() & ControlledByOpponent()``
+    slot filter) takes the controller from the trigger's
+    ``controller_id`` field at push time, which is the SOURCE's
+    controller -- correct on this surface.
+
+    **Same-controller sister probe** (round 1): Nova Hellkite,
+    burner on P0's bf + bait on P1's bf, ACTIVE_PLAYER=P0. The
+    SOURCE's controller (P0) and the active player (P0) coincide,
+    so the OPPONENT pick (P1) is the same regardless of whether
+    the resolve uses active_player or the source's controller.
+    This probe is the cross-controller leg: burner on P1's bf
+    (controller=1) + bait on P0's bf, ACTIVE_PLAYER=P0. The
+    SOURCE's controller (P1) and the active player (P0) DIFFER,
+    so the OPPONENT pick is P0 if-and-only-if the resolve uses the
+    SOURCE's controller (post-fix). A pre-fix Rust that derived
+    the opponent set from active_player would have looked at P1's
+    bf for an opponent-controlled creature (finding nothing in
+    this probe; a degenerate silent no-op) instead of P0's bf
+    (where the bait sits).
+
+    **Why synthetic, not Nova Hellkite.** The Nova Hellkite probe
+    above already pins the same-controller leg on the real EoE
+    card; spinning up a cross-controller leg on the same card
+    would re-build the same harness with the only delta being the
+    controllers we inject under. A synthetic 2/2 vanilla
+    ("Cross-Controller Burner Bear") with the same trigger keeps
+    the docstring claims of the Nova Hellkite probe intact and
+    mirrors the I81/I82/I83 cross-controller probe shape.
+
+    Probe shape (cross-controller inject-and-fire-ENTERS):
+
+      1. **active_player=P0** (default after ``make_state`` /
+         ``build_python_state``). Confirmed via
+         ``state.active_player`` on Rust and
+         ``state.active_player_idx`` on Python.
+
+      2. **Inject a vanilla 2/2 bait creature ("Bait Bear") onto
+         P0's bf** -- the SOURCE-controller-opponent. Pre-fix Rust
+         would have iterated P1's bf opponents (= P0) but ALSO
+         active-player-opponents (= P1, which is empty here),
+         producing a degenerate silent no-op. Post-fix Rust
+         iterates P1's opponents (= P0) and finds Bait Bear on
+         P0's bf.
+
+      3. **Inject Cross-Controller Burner Bear (the burner) onto
+         P1's bf** with controller=1 (Rust's
+         ``register_and_inject_object``; Python's ``new_object`` +
+         bf append + manual ``_trigger_etb_abilities``). The
+         injection's ENTERS dispatch fires the SourceIsSelf
+         trigger; the trigger lands on the stack with controller=1
+         (the SOURCE's controller).
+
+      4. **Drain both stacks.** The trigger resolves: Rust's
+         intrinsic 5-zone walk finds the burner on P1's bf,
+         derives source-controller=1, iterates P1's opponents in
+         ascending order = [0], scans P0's bf, finds Bait Bear,
+         deals 1 damage. Python's resolve uses the trigger's
+         controller_id=1 directly, the agent's pick comes from the
+         legal_targets list which the slot filter (IsCreature() &
+         ControlledByOpponent() with opponent=P0) restricts to
+         Bait Bear, and the same 1 damage lands.
+
+      5. **Cross-engine assert (post-fix contract):**
+         - Bait Bear on P0's bf carries 1 damage on both engines.
+         - Lives unchanged on both seats (effect targets a
+           creature, never a player).
+         - P1's bf only carries the burner (no degenerate damage
+           landed there).
+         - No residual stack on either engine.
+
+    **Pre-fix vs post-fix observable.**
+    Pre-fix Rust would have:
+      - Derived the opponent set from active_player=P0, iterating
+        P0's opponents = [1]. Scanned P1's bf for a creature,
+        found ONLY the burner itself (which is the source, not a
+        legal-target candidate -- the resolve arm's
+        same-as-source guard rejects it). Silent no-op: Bait Bear
+        carries 0 damage; P0's life unchanged but for the WRONG
+        reason.
+    Post-fix Rust derives source-controller=1 from the burner's
+    location on P1's bf, iterates P1's opponents = [0], scans P0's
+    bf, finds Bait Bear, deals 1 damage. The OBSERVABLE
+    distinguishing the two: post-fix Bait Bear carries 1 damage;
+    pre-fix it carries 0. Python's always-correct behavior makes
+    the cross-engine pin sharp.
+
+    Out of scope:
+
+      * Cast-from-hand mana cost -- the inject-and-dispatch-ENTERS
+        pattern bypasses the mana pipeline.
+      * Multiple bait creatures on P0's bf -- the same-controller
+        Nova Hellkite probe's docstring discusses scan ordering;
+        a single bait keeps the agent's first-legal-target pick
+        observable here.
+      * Lethal-damage SBA flip -- the bait is 2/2 vs 1 damage,
+        well clear of toughness.
+      * The ``deal_damage_to_opponent_player`` / generic burn
+        family -- separate bridge arms / separate I-fix surface.
+
+    Expected post-dispatch + post-drain state on BOTH engines:
+
+      * Cross-Controller Burner Bear on P1's battlefield
+        (controller=1; unchanged from inject).
+      * Bait Bear on P0's battlefield with damage=1 (took the
+        burn).
+      * P0 life: unchanged at 20.
+      * P1 life: unchanged at 20.
+      * No residual stack on either engine.
+    """
+    from mtg_bot.parity.cross_engine import (
+        CardDef, DeckSpec, build_python_state, build_rust_state,
+    )
+    from tests.parity._picker_shims import _PickFirstOpponentTargetAgent
+
+    spec = DeckSpec(
+        card_defs=(),
+        p0_library=(),
+        p1_library=(),
+    )
+    py_state = build_python_state(spec)
+    rust_state = build_rust_state(spec)
+
+    # Confirm pre-condition: active_player=P0 on both engines.
+    assert rust_state.active_player == 0, (
+        f"Probe pre-condition: Rust active_player must be 0; "
+        f"got {rust_state.active_player}"
+    )
+    assert py_state.active_player_idx == 0, (
+        f"Probe pre-condition: Python active_player_idx must be 0; "
+        f"got {py_state.active_player_idx}"
+    )
+
+    # ---- Rust side ----
+    ZONE_BATTLEFIELD = 2
+    # Inject the bait creature on P0's bf FIRST -- the SOURCE-
+    # controller's opponent (since the burner will live on P1).
+    rust_bait_id = rust_state.register_and_inject_object(
+        {
+            "name": "Bait Bear (cross-controller burner-target probe)",
+            "card_types": ["Creature"],
+            "power": 2,
+            "toughness": 2,
+        },
+        0,
+        ZONE_BATTLEFIELD,
+    )
+    rust_burner_dict = {
+        "name": "Cross-Controller Burner Bear",
+        "card_types": ["Creature"],
+        "mana_cost": {"generic": 2, "R": 1},
+        "effects": [],
+        "power": 2,
+        "toughness": 2,
+        "triggered_abilities": [
+            {
+                "event": "enters",
+                "predicate": {"kind": "source_is_self"},
+                "effect": {
+                    "kind": "deal_damage_to_opponent_creature",
+                    "amount": 1,
+                },
+            }
+        ],
+    }
+    rust_p0_life_before = rust_state.get_life(0)
+    rust_p1_life_before = rust_state.get_life(1)
+    rust_p0_bf_before = rust_state.battlefield_sizes[0]
+    rust_p1_bf_before = rust_state.battlefield_sizes[1]
+    # Inject the burner onto P1's bf with controller=1. ENTERS fires
+    # via the deferred-dispatch queue; the SourceIsSelf trigger lands
+    # on the stack with controller=1 (the SOURCE's controller).
+    rust_burner_id = rust_state.register_and_inject_object(
+        rust_burner_dict, 1, ZONE_BATTLEFIELD,
+    )
+    assert rust_state.stack_size() == 1, (
+        "Rust: Cross-Controller Burner Bear's arrival on P1 should "
+        "fire the SourceIsSelf ENTERS trigger and land "
+        "DealDamageToOpponentCreature on the stack. "
+        f"Got stack_size={rust_state.stack_size()}"
+    )
+
+    # ---- Python side ----
+    from mtg_bot.actions import _trigger_etb_abilities
+    from mtg_bot.cards.base import CardPrinting, ManaCost
+    from mtg_bot.effects.base import TriggeredAbility
+    from mtg_bot.effects.generic.damage import (
+        DealDamageToOpponentCreature,
+    )
+    from mtg_bot.effects.predicates import Event, IsSelf
+    from mtg_bot.game import Zone
+
+    # Bait Bear on P0's bf -- the SOURCE-controller-opponent.
+    bait_printing = CardPrinting(
+        name="Bait Bear (cross-controller burner-target probe)",
+        mana_cost_str="",
+        mana_cost=ManaCost(generic=0, colored=()),
+        type_line="Creature",
+        supertypes=(),
+        card_types=("Creature",),
+        subtypes=(),
+        power=2,
+        toughness=2,
+        produces=frozenset(),
+    )
+    py_bait = py_state.new_object(
+        bait_printing, owner_id=0, zone=Zone.BATTLEFIELD,
+    )
+    py_bait.summoning_sick = False
+    py_bait.tapped = False
+    py_bait.damage = 0
+    py_bait.etb_timestamp = py_state.next_timestamp
+    py_state.next_timestamp += 1
+    py_state.battlefield.append(py_bait)
+
+    burner_printing = CardPrinting(
+        name="Cross-Controller Burner Bear",
+        mana_cost_str="",
+        mana_cost=ManaCost(generic=2, colored=(("R", 1),)),
+        type_line="Creature",
+        supertypes=(),
+        card_types=("Creature",),
+        subtypes=(),
+        power=2,
+        toughness=2,
+        produces=frozenset(),
+        triggered_abilities=(
+            TriggeredAbility(
+                event=Event.ENTERS,
+                predicate=IsSelf(),
+                effect=DealDamageToOpponentCreature(amount=1),
+            ),
+        ),
+    )
+    # The trigger's controller is P1 (the SOURCE's controller), so
+    # P1's agent is what choose_target gets called against. Mirror
+    # the Nova Hellkite probe's _PickFirstOpponentTargetAgent shim
+    # but seat it on P1 (NOT P0) -- the slot's filter restricts
+    # legal_targets to P1's opponents = [P0]'s creatures, and the
+    # shim picks the first such target (Bait Bear).
+    py_state.players[1].agent = _PickFirstOpponentTargetAgent()
+
+    py_burner = py_state.new_object(
+        burner_printing, owner_id=1, zone=Zone.BATTLEFIELD,
+    )
+    py_burner.summoning_sick = False
+    py_burner.tapped = False
+    py_burner.damage = 0
+    py_burner.etb_timestamp = py_state.next_timestamp
+    py_state.next_timestamp += 1
+    py_state.battlefield.append(py_burner)
+    py_p0_life_before = py_state.players[0].life
+    py_p1_life_before = py_state.players[1].life
+    _trigger_etb_abilities(py_state, py_burner)
+    assert len(py_state.stack) == 1, (
+        "Python: Cross-Controller Burner Bear's arrival on P1 should "
+        "fire the IsSelf ENTERS trigger and land "
+        "DealDamageToOpponentCreature on the stack. "
+        f"Got stack size={len(py_state.stack)}"
+    )
+
+    # ---- Drain both stacks, then compare ----
+    _drain_stack_both(py_state, rust_state)
+
+    # Stacks empty on both sides.
+    assert rust_state.stack_size() == 0
+    assert len(py_state.stack) == 0
+
+    # Post-drain: lives unchanged on both seats. Bait Bear (on P0's
+    # bf) carries 1 damage on both engines -- the load-bearing
+    # cross-controller routing pin: pre-fix Rust would have iterated
+    # P0's opponents (= P1, where only the burner sits) and the
+    # damage would have landed on nothing (Bait Bear carries 0).
+    assert rust_state.get_life(0) == rust_p0_life_before, (
+        f"Rust p0 life should be unchanged ({rust_p0_life_before}); "
+        f"got {rust_state.get_life(0)}"
+    )
+    assert rust_state.get_life(1) == rust_p1_life_before, (
+        f"Rust p1 life should be unchanged ({rust_p1_life_before}); "
+        f"got {rust_state.get_life(1)}"
+    )
+    assert rust_state.get_damage(rust_bait_id) == 1, (
+        "Rust cross-controller routing contract: Bait Bear on P0's "
+        "bf should carry 1 damage post-resolve (the burner's "
+        "SOURCE-controller is P1, P1's opponent is P0, the scan "
+        "lands on Bait Bear). A pre-fix Rust would have derived the "
+        "opponent set from active_player=P0, scanned P1's bf "
+        "(only the burner itself), and silent-no-opped. "
+        f"Got damage={rust_state.get_damage(rust_bait_id)}"
+    )
+    # P1's bf carries the burner (and only the burner) -- NO
+    # degenerate damage landed on the burner itself.
+    rust_bf_p1_after = rust_state.battlefield_sizes[1]
+    assert rust_bf_p1_after == rust_p1_bf_before + 1, (
+        f"Rust: P1's bf should grow by exactly 1 (the burner). "
+        f"before={rust_p1_bf_before} after={rust_bf_p1_after}"
+    )
+    assert rust_state.get_damage(rust_burner_id) == 0, (
+        "Rust: the burner itself should carry 0 damage (the "
+        "DealDamageToOpponentCreature filter excludes the source's "
+        "own controller's creatures). "
+        f"Got damage={rust_state.get_damage(rust_burner_id)}"
+    )
+
+    # Python observable: same shape.
+    assert py_state.players[0].life == py_p0_life_before
+    assert py_state.players[1].life == py_p1_life_before
+    assert py_bait.damage == 1, (
+        "Python: Bait Bear on P0's bf should carry 1 damage post-"
+        f"resolve. Got {py_bait.damage}"
+    )
+    assert py_burner.damage == 0, (
+        "Python: the burner itself should carry 0 damage. "
+        f"Got {py_burner.damage}"
+    )
+
+    # Cross-engine: same lives, same damage on the bait, same
+    # post-drain bf sizes.
+    assert rust_state.get_life(0) == py_state.players[0].life
+    assert rust_state.get_life(1) == py_state.players[1].life
+    assert rust_state.get_damage(rust_bait_id) == py_bait.damage
+    assert rust_state.get_damage(rust_burner_id) == py_burner.damage
+    py_p0_bf_after = len(
+        [o for o in py_state.battlefield if o.controller_id == 0]
+    )
+    py_p1_bf_after = len(
+        [o for o in py_state.battlefield if o.controller_id == 1]
+    )
+    assert rust_state.battlefield_sizes[0] == py_p0_bf_after
+    assert rust_state.battlefield_sizes[1] == py_p1_bf_after
+
+
 # === PHASE5_PROBES_INSERT_ABOVE_THIS_LINE ===
 # New real-EoE parity probes go IMMEDIATELY ABOVE this marker.
 # Append-only convention prevents merge collisions when multiple agents add probes in parallel.
