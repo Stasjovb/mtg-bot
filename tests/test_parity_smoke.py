@@ -15523,3 +15523,401 @@ def test_cross_engine_synthetic_etb_return_creature_from_graveyard_to_hand_parit
     # Stacks empty on both sides.
     assert rust_state.stack_size() == 0
     assert len(py_state.stack) == 0
+
+
+def test_cross_engine_real_eoe_virus_beetle_etb_each_opponent_discards_parity(
+    parity_smoke,
+):
+    """Probe: Virus Beetle (EoE) ETB ``each opponent discards a card``
+    parity -- FIRST real-EoE cross-engine probe with an
+    ``each_opponent_discards`` ETB trigger.
+
+    Oracle text in ``data/edge_of_eternities.json``:
+
+        "When this creature enters, each opponent discards a card."
+
+    Bridges the ``each_opponent_discards`` effect kind end-to-end on
+    a real EoE card. The audit lists Virus Beetle as the SOLE EoE
+    consumer of this bridge arm; the effect composes directly off
+    the bare arm (no Sequence / IfYouDo nesting), so it is end-to-
+    end probeable from the leaf arm alone.
+
+    Predicate decomposition (same as Germinating Wurm / Nebula
+    Dragon / Starbreach Whale):
+
+        SourceIsSelf
+
+    Effect: ``each_opponent_discards(count=1)`` -- NEW on the
+    bridge as of the companion commit on this branch. The Rust
+    effect variant carries an intrinsic source-controller-of-effect
+    resolution (5-zone walk + stack fallback at
+    state_ops_resolve.rs:3438-3502); the Python side translates to
+    ``EachOpponentDiscards(count=1)``.
+
+    **Cross-engine discard-pick contract.** Both engines pick the
+    discard from the OPPONENT's hand (the discarding player's
+    perspective; the source's controller doesn't pick for them).
+    Rust at state_ops_resolve.rs:3488-3490 pops opponent.hand[0]
+    deterministically. Python at discard.py:155-157 calls
+    ``p.agent.choose_discard(state, p.id, hand_ids)`` and removes
+    whatever id the agent returns. The harness's default Player
+    has ``agent=None`` -- if we drove the empty-hand path that's
+    fine (both engines short-circuit on empty hand), but to
+    observe the cross-engine pick parity end-to-end we seat a
+    deterministic-hand[0] agent on p1 (the opponent who will
+    discard) mirroring Rust's at-resolve hand[0] pick. Each engine
+    then drops the same card.
+
+    Probe shape (inject-and-fire-ENTERS, mirrors
+    Starbreach Whale):
+
+      1. Pre-seed p1's hand with TWO distinct bait creatures (one
+         destined to discard, one to survive) so a single-swap or
+         single-discard divergence between engines surfaces as a
+         per-card name mismatch in p1's graveyard / hand rather
+         than a count-only divergence.
+      2. Inject Virus Beetle on p0's battlefield via
+         ``register_and_inject_object`` (Rust) / new_object + bf
+         append + ``_trigger_etb_abilities`` (Python). Both engines
+         dispatch ENTERS for the just-arrived beetle; the predicate
+         (SourceIsSelf) matches, the trigger lands on the stack
+         with the EachOpponentDiscards(1) effect.
+      3. Seat a deterministic-hand[0] agent on p1 (Python side
+         only; Rust's pick is intrinsic and doesn't read agent).
+      4. Drain both stacks.
+      5. Cross-engine assert: post-drain, p1's hand[0] (Discard
+         Bait Alpha) is gone, in p1's graveyard. Discard Bait Beta
+         remains in p1's hand. Same shape on both engines.
+
+    Out of scope:
+
+      * Driving the empty-hand short-circuit branch -- the audit's
+        explicit unblock is "each opponent discards a card",
+        which means the non-empty path is the load-bearing case
+        for Virus Beetle. The empty-hand parity is covered by the
+        Rust resolve arm's mid-loop guard at
+        state_ops_resolve.rs:3482 + Python's matching guard at
+        discard.py:152, both pinned by their respective unit
+        tests already in the suite.
+      * Multi-opponent fanout -- the 2-player harness reduces
+        "each opponent" to "the one opponent". The N-player
+        per-seat-iteration shape is exercised by the Rust resolve
+        arm's loop body directly; the bridge's leaf translation
+        + 2-player probe pins the substrate end-to-end.
+
+    Expected post-dispatch + post-drain state on BOTH engines:
+
+      * Virus Beetle on p0's battlefield.
+      * p1 hand: Discard Bait Beta only (Alpha was discarded).
+      * p1 graveyard: Discard Bait Alpha.
+      * p0 hand / library / graveyard: unchanged.
+      * p1 library: unchanged.
+      * Lives unchanged on both seats.
+      * No residual stack.
+    """
+    from mtg_bot.agents import Agent
+    from mtg_bot.parity.cross_engine import (
+        CardDef, DeckSpec, build_python_state, build_rust_state,
+    )
+
+    virus_beetle = CardDef(
+        name="Virus Beetle",
+        card_type="Creature",
+        mana_cost_generic=1,
+        mana_cost_colored=(("B", 1),),
+        power=1,
+        toughness=1,
+        triggered_abilities=(
+            {
+                "event": "enters",
+                "predicate": {"kind": "source_is_self"},
+                "effect": {
+                    "kind": "each_opponent_discards",
+                    "count": 1,
+                },
+            },
+        ),
+    )
+    # Two distinct vanilla cards in p1's hand so a single-swap
+    # (alternate-target divergence) between engines surfaces as a
+    # per-card name divergence rather than a count-only divergence.
+    discard_bait_a = CardDef(
+        name="Discard Bait Alpha",
+        card_type="Creature",
+        mana_cost_generic=1,
+        power=1,
+        toughness=1,
+    )
+    discard_bait_b = CardDef(
+        name="Discard Bait Beta",
+        card_type="Creature",
+        mana_cost_generic=2,
+        power=2,
+        toughness=2,
+    )
+    spec = DeckSpec(
+        card_defs=(virus_beetle, discard_bait_a, discard_bait_b),
+        # Libraries empty for symmetry; the probe injects directly
+        # into p0's bf and p1's hand so libraries aren't observed
+        # (matches the Pinnacle Kill-Ship probe shape).
+        p0_library=(),
+        p1_library=(),
+    )
+    py_state = build_python_state(spec)
+    rust_state = build_rust_state(spec)
+
+    # ---- Rust side ----
+    ZONE_HAND = 0
+    ZONE_BATTLEFIELD = 2
+    # 1. Pre-seed p1's hand with the two bait cards FIRST so the
+    # ENTERS trigger has a populated hand to discard from.
+    rust_bait_a_dict = {
+        "name": "Discard Bait Alpha",
+        "card_types": ["Creature"],
+        "mana_cost": {"generic": 1},
+        "effects": [],
+        "power": 1,
+        "toughness": 1,
+    }
+    rust_bait_b_dict = {
+        "name": "Discard Bait Beta",
+        "card_types": ["Creature"],
+        "mana_cost": {"generic": 2},
+        "effects": [],
+        "power": 2,
+        "toughness": 2,
+    }
+    rust_bait_a_id = rust_state.register_and_inject_object(
+        rust_bait_a_dict, 1, ZONE_HAND
+    )
+    rust_bait_b_id = rust_state.register_and_inject_object(
+        rust_bait_b_dict, 1, ZONE_HAND
+    )
+    rust_p1_hand_size_before = rust_state.hand_sizes[1]
+    rust_p1_gy_size_before = rust_state.graveyard_sizes[1]
+    rust_p0_life_before = rust_state.get_life(0)
+    rust_p1_life_before = rust_state.get_life(1)
+    rust_beetle_dict = {
+        "name": "Virus Beetle",
+        "card_types": ["Creature"],
+        "mana_cost": {"generic": 1, "B": 1},
+        "effects": [],
+        "power": 1,
+        "toughness": 1,
+        "triggered_abilities": [
+            {
+                "event": "enters",
+                "predicate": {"kind": "source_is_self"},
+                "effect": {
+                    "kind": "each_opponent_discards",
+                    "count": 1,
+                },
+            }
+        ],
+    }
+    rust_beetle_id = rust_state.register_and_inject_object(
+        rust_beetle_dict, 0, ZONE_BATTLEFIELD
+    )
+    # register_and_inject_object on ZONE_BATTLEFIELD fans out
+    # ENTERS via the deferred-dispatch queue; the beetle's
+    # SourceIsSelf predicate matches its own arrival, so a single
+    # EachOpponentDiscards(1) trigger lands on the stack.
+    assert rust_state.stack_size() == 1, (
+        "Rust: Virus Beetle's own arrival should fire the "
+        "SourceIsSelf ENTERS trigger and land "
+        "EachOpponentDiscards(1) on the stack. Got "
+        f"stack_size={rust_state.stack_size()}"
+    )
+
+    # ---- Python side ----
+    from mtg_bot.actions import _trigger_etb_abilities
+    from mtg_bot.cards.base import CardPrinting, ManaCost
+    from mtg_bot.effects.base import TriggeredAbility
+    from mtg_bot.effects.generic.discard import EachOpponentDiscards
+    from mtg_bot.effects.predicates import Event, IsSelf
+    from mtg_bot.game import Zone
+
+    # Bait printings (vanilla creatures) for p1's hand.
+    bait_a_printing = CardPrinting(
+        name="Discard Bait Alpha",
+        mana_cost_str="",
+        mana_cost=ManaCost(generic=1),
+        type_line="Creature",
+        supertypes=(),
+        card_types=("Creature",),
+        subtypes=(),
+        power=1,
+        toughness=1,
+        produces=frozenset(),
+    )
+    bait_b_printing = CardPrinting(
+        name="Discard Bait Beta",
+        mana_cost_str="",
+        mana_cost=ManaCost(generic=2),
+        type_line="Creature",
+        supertypes=(),
+        card_types=("Creature",),
+        subtypes=(),
+        power=2,
+        toughness=2,
+        produces=frozenset(),
+    )
+    # Inject the two bait creatures into p1's hand FIRST. Order
+    # matters: Discard Bait Alpha at hand[0] so the hand[0]
+    # deterministic-pick agent discards Alpha specifically.
+    py_bait_a = py_state.new_object(
+        bait_a_printing, owner_id=1, zone=Zone.HAND,
+    )
+    py_state.players[1].hand.append(py_bait_a)
+    py_bait_b = py_state.new_object(
+        bait_b_printing, owner_id=1, zone=Zone.HAND,
+    )
+    py_state.players[1].hand.append(py_bait_b)
+
+    beetle_printing = CardPrinting(
+        name="Virus Beetle",
+        mana_cost_str="",
+        mana_cost=ManaCost(generic=1, colored=(("B", 1),)),
+        type_line="Creature",
+        supertypes=(),
+        card_types=("Creature",),
+        subtypes=(),
+        power=1,
+        toughness=1,
+        produces=frozenset(),
+        triggered_abilities=(
+            TriggeredAbility(
+                event=Event.ENTERS,
+                predicate=IsSelf(),
+                effect=EachOpponentDiscards(count=1),
+            ),
+        ),
+    )
+
+    # Custom agent for p1: mirror Rust's deterministic hand[0] pick.
+    # Rust's resolve arm pops opponent.hand[0] (state_ops_resolve.rs
+    # :3489 ``hand_mut.remove(0)``). Python's discard.py:155 calls
+    # ``choose_discard`` with the full hand_ids list; we return the
+    # first id to match Rust's at-resolve pick. The pick is seated
+    # on p1 (the discarding player), NOT on p0 (the source's
+    # controller) -- "each opponent discards" lets each opponent
+    # pick their own discard.
+    class _DiscardFirstAgent(Agent):
+        """Pick the first card in hand to discard.
+
+        Mirrors Rust's ``Effect::EachOpponentDiscards`` deterministic
+        opponent-hand[0] pick (state_ops_resolve.rs:3489).
+        """
+
+        def choose_discard(self, state, player_id, hand_ids):
+            assert hand_ids, "agent called with empty hand"
+            return hand_ids[0]
+
+    py_state.players[1].agent = _DiscardFirstAgent()
+
+    py_p1_hand_size_before = len(py_state.players[1].hand)
+    py_p1_gy_size_before = len(py_state.players[1].graveyard)
+    py_p0_life_before = py_state.players[0].life
+    py_p1_life_before = py_state.players[1].life
+    py_beetle = py_state.new_object(
+        beetle_printing, owner_id=0, zone=Zone.BATTLEFIELD,
+    )
+    py_beetle.summoning_sick = False
+    py_beetle.tapped = False
+    py_beetle.damage = 0
+    py_beetle.etb_timestamp = py_state.next_timestamp
+    py_state.next_timestamp += 1
+    py_state.battlefield.append(py_beetle)
+    # Manually dispatch ENTERS for the just-injected beetle (direct
+    # bf-append doesn't auto-dispatch on the Python side -- same
+    # shape as every prior register_and_inject-style EoE probe).
+    _trigger_etb_abilities(py_state, py_beetle)
+    assert len(py_state.stack) == 1, (
+        "Python: Virus Beetle's own arrival should fire the IsSelf "
+        "ENTERS trigger and land EachOpponentDiscards(1) on the "
+        f"stack. Got stack size={len(py_state.stack)}"
+    )
+
+    # ---- Drain both stacks, then compare ----
+    _drain_stack_both(py_state, rust_state)
+
+    # Post-drain: p1's hand shrank by 1 (Alpha discarded), p1's
+    # graveyard grew by 1 (Alpha landed there). Discard Bait Beta
+    # remains in p1's hand.
+    assert rust_state.hand_sizes[1] == rust_p1_hand_size_before - 1, (
+        f"Rust p1 hand size should be "
+        f"{rust_p1_hand_size_before - 1} after discard; got "
+        f"{rust_state.hand_sizes[1]}"
+    )
+    assert rust_state.graveyard_sizes[1] == rust_p1_gy_size_before + 1, (
+        f"Rust p1 graveyard size should be "
+        f"{rust_p1_gy_size_before + 1} after discard; got "
+        f"{rust_state.graveyard_sizes[1]}"
+    )
+    rust_p1_gy_names = [
+        e["printing_name"] for e in rust_state.graveyard_snapshot(1)
+    ]
+    assert "Discard Bait Alpha" in rust_p1_gy_names, (
+        f"Rust: expected Discard Bait Alpha in p1 gy "
+        f"(hand[0] deterministic pick); got {rust_p1_gy_names}"
+    )
+    assert "Discard Bait Beta" not in rust_p1_gy_names, (
+        f"Rust: Discard Bait Beta should NOT have been discarded "
+        f"(only the hand[0] card was picked); got {rust_p1_gy_names}"
+    )
+    rust_p1_hand_names = [
+        e["printing_name"] for e in rust_state.hand_snapshot(1)
+    ]
+    assert "Discard Bait Beta" in rust_p1_hand_names, (
+        f"Rust: Discard Bait Beta should remain in p1 hand; "
+        f"got {rust_p1_hand_names}"
+    )
+
+    assert len(py_state.players[1].hand) == py_p1_hand_size_before - 1, (
+        f"Python p1 hand size should be "
+        f"{py_p1_hand_size_before - 1} after discard; got "
+        f"{len(py_state.players[1].hand)}"
+    )
+    assert (
+        len(py_state.players[1].graveyard) == py_p1_gy_size_before + 1
+    ), (
+        f"Python p1 graveyard size should be "
+        f"{py_p1_gy_size_before + 1} after discard; got "
+        f"{len(py_state.players[1].graveyard)}"
+    )
+    py_p1_gy_names = [
+        o.printing.name for o in py_state.players[1].graveyard
+    ]
+    assert "Discard Bait Alpha" in py_p1_gy_names, (
+        f"Python: expected Discard Bait Alpha in p1 gy "
+        f"(hand[0] deterministic pick); got {py_p1_gy_names}"
+    )
+    assert "Discard Bait Beta" not in py_p1_gy_names, (
+        f"Python: Discard Bait Beta should NOT have been "
+        f"discarded; got {py_p1_gy_names}"
+    )
+    py_p1_hand_names = [
+        o.printing.name for o in py_state.players[1].hand
+    ]
+    assert "Discard Bait Beta" in py_p1_hand_names, (
+        f"Python: Discard Bait Beta should remain in p1 hand; "
+        f"got {py_p1_hand_names}"
+    )
+
+    # Cross-engine: same post-drain hand-/graveyard-shape on p1.
+    assert rust_state.hand_sizes[1] == len(py_state.players[1].hand)
+    assert (
+        rust_state.graveyard_sizes[1] ==
+        len(py_state.players[1].graveyard)
+    )
+    # Stacks empty on both sides.
+    assert rust_state.stack_size() == 0
+    assert len(py_state.stack) == 0
+    # Lives unchanged (discard isn't a damage / life effect).
+    assert rust_state.get_life(0) == rust_p0_life_before
+    assert rust_state.get_life(1) == rust_p1_life_before
+    assert py_state.players[0].life == py_p0_life_before
+    assert py_state.players[1].life == py_p1_life_before
+    # Cross-engine: same post-drain life totals on both seats.
+    assert rust_state.get_life(0) == py_state.players[0].life
+    assert rust_state.get_life(1) == py_state.players[1].life
