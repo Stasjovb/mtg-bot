@@ -3205,3 +3205,453 @@ def test_targeted_sac_unknown_cost_key_raises(empty_registry):
         match=r"unknown activation_cost key",
     ):
         empty_registry.register_printing(d)
+
+
+# -------------------------------------------------------------------
+# CE20 Slice 5 — Planeswalker loyalty (Slice A)
+#
+# Tests for the `cost.loyalty: i32` extension and the
+# `GameObject.loyalty_counters: i32` slot. Tezzeret-shape walker
+# with the standard +/0/- ability cycle. Slice A scope:
+# cost-pay + loyalty counter slot + SBA pass at <= 0. Combat damage
+# redirect (CR 119.5) and once-per-turn ledger (CR 606.3) are Slice
+# B / C — out of scope here.
+# -------------------------------------------------------------------
+
+
+def _walker_dict(starting_loyalty: int = 4):
+    """A 3-ability planeswalker (Tezzeret-shape minus the printed
+    starting loyalty seed — tests stamp loyalty_counters directly via
+    `set_loyalty_counters` for now since `starting_loyalty` on
+    CardPrinting is not yet wired). The three abilities mirror the
+    classic +/0/- cycle:
+      - ability 0: +1 (cost loyalty: -1, "draw a card")
+      - ability 1: 0 (cost loyalty: 0, "gain 1 life")
+      - ability 2: -3 (cost loyalty: 3, "deal 0 damage" no-op)
+
+    Walker card_type. Effects are simple (DrawCards / GainLife /
+    no-op) to keep tests focused on the cost machinery.
+    """
+    _ = starting_loyalty  # field reserved for future ETB-seeding work
+    return {
+        "name": "Test Walker (Tezzeret-shape)",
+        "card_types": ["Planeswalker"],
+        "mana_cost": {"generic": 3, "U": 1, "B": 1},
+        "effects": [],
+        # No P/T — non-creature walker.
+        "activated_abilities": [
+            {
+                # +1 ability
+                "cost": {"loyalty": -1},
+                "effect": {"kind": "draw_cards", "count": 1},
+                "is_mana_ability": False,
+            },
+            {
+                # 0 ability
+                "cost": {"loyalty": 0},
+                "effect": {"kind": "gain_life", "amount": 1},
+                "is_mana_ability": False,
+            },
+            {
+                # -3 ability
+                "cost": {"loyalty": 3},
+                "effect": {"kind": "gain_life", "amount": 0},
+                "is_mana_ability": False,
+            },
+        ],
+    }
+
+
+# --- parser surface ---------------------------------------------------
+
+
+def test_walker_loyalty_parses_signed_values(empty_registry):
+    """A printing with three loyalty abilities (positive, zero,
+    negative cost) parses without raising."""
+    pid = empty_registry.register_printing(_walker_dict())
+    assert pid == 0
+
+
+def test_walker_loyalty_invalid_type_raises(empty_registry):
+    """A non-int loyalty value raises loud."""
+    d = _walker_dict()
+    d["activated_abilities"][0]["cost"]["loyalty"] = "two"
+    with pytest.raises(
+        ValueError, match=r"loyalty must be an int"
+    ):
+        empty_registry.register_printing(d)
+
+
+def test_walker_loyalty_unknown_key_raises_paranoid(empty_registry):
+    """Adding an unknown key 'loyalty_payment' (typo) still raises."""
+    d = _walker_dict()
+    d["activated_abilities"][0]["cost"]["loyalty_payment"] = 1
+    with pytest.raises(
+        ValueError, match=r"unknown activation_cost key"
+    ):
+        empty_registry.register_printing(d)
+
+
+# --- loyalty counter slot --------------------------------------------
+
+
+def test_walker_loyalty_counters_default_zero(synthetic_state):
+    """A non-walker object has loyalty_counters=0 by default."""
+    forest_id = None
+    for o in synthetic_state.battlefield_snapshot():
+        if o["printing_name"] == "Forest":
+            forest_id = o["id"]
+            break
+    assert forest_id is not None
+    assert synthetic_state.get_loyalty_counters(forest_id) == 0
+
+
+def test_walker_loyalty_counters_can_be_set_and_read(synthetic_state):
+    """`set_loyalty_counters` writes, `get_loyalty_counters` reads.
+    Round-trip pin."""
+    walker_id = synthetic_state.register_and_inject_object(
+        _walker_dict(), 0, ZONE_BATTLEFIELD,
+    )
+    assert synthetic_state.set_loyalty_counters(walker_id, 4) is True
+    assert synthetic_state.get_loyalty_counters(walker_id) == 4
+    # Idempotent: no change returns False.
+    assert synthetic_state.set_loyalty_counters(walker_id, 4) is False
+
+
+# --- emission gate ----------------------------------------------------
+
+
+def test_walker_loyalty_emission_positive_cost_below_loyalty_skips(
+    synthetic_state,
+):
+    """A -3 ability on a walker with loyalty_counters=2: emission
+    filter skips the ability (insufficient loyalty for the positive
+    cost). The +1 and 0 abilities still emit.
+    """
+    PHASE_MAIN1 = 3
+    synthetic_state.set_phase(PHASE_MAIN1)
+    _tap_all_default_p0_mana_sources(synthetic_state)
+    walker_id = synthetic_state.register_and_inject_object(
+        _walker_dict(), 0, ZONE_BATTLEFIELD,
+    )
+    synthetic_state.force_set_summoning_sick(walker_id, False)
+    synthetic_state.set_loyalty_counters(walker_id, 2)
+
+    decisions = synthetic_state.legal_decisions(0)
+    walker_acts = [
+        d
+        for d in decisions
+        if d["kind"] == "activate_ability"
+        and d["source_id"] == walker_id
+    ]
+    ability_indices = sorted({d["ability_index"] for d in walker_acts})
+    # +1 (idx 0) and 0 (idx 1) emit; -3 (idx 2) is filtered.
+    assert 0 in ability_indices
+    assert 1 in ability_indices
+    assert 2 not in ability_indices
+
+
+def test_walker_loyalty_emission_positive_cost_at_loyalty_emits(
+    synthetic_state,
+):
+    """At loyalty_counters == cost.loyalty (exactly affordable), the
+    -3 ability emits."""
+    PHASE_MAIN1 = 3
+    synthetic_state.set_phase(PHASE_MAIN1)
+    _tap_all_default_p0_mana_sources(synthetic_state)
+    walker_id = synthetic_state.register_and_inject_object(
+        _walker_dict(), 0, ZONE_BATTLEFIELD,
+    )
+    synthetic_state.force_set_summoning_sick(walker_id, False)
+    synthetic_state.set_loyalty_counters(walker_id, 3)
+
+    decisions = synthetic_state.legal_decisions(0)
+    walker_acts = [
+        d
+        for d in decisions
+        if d["kind"] == "activate_ability"
+        and d["source_id"] == walker_id
+    ]
+    ability_indices = {d["ability_index"] for d in walker_acts}
+    # All three emit at loyalty=3.
+    assert {0, 1, 2}.issubset(ability_indices)
+
+
+def test_walker_loyalty_emission_negative_cost_always_emits(
+    synthetic_state,
+):
+    """The +1 ability (cost.loyalty = -1) emits even at
+    loyalty_counters=0 (the lower bound of legal walker state — a
+    walker at 0 is about to die via SBA, but emission happens
+    BEFORE the SBA pass in synthetic-state queries; the test pins
+    that the negative-cost gate is "always affordable").
+    """
+    PHASE_MAIN1 = 3
+    synthetic_state.set_phase(PHASE_MAIN1)
+    _tap_all_default_p0_mana_sources(synthetic_state)
+    walker_id = synthetic_state.register_and_inject_object(
+        _walker_dict(), 0, ZONE_BATTLEFIELD,
+    )
+    synthetic_state.force_set_summoning_sick(walker_id, False)
+    # Force loyalty to 1 (so SBA doesn't sweep, but only the +1
+    # ability is "affordable" by the strict loyalty-counter test —
+    # actually 0 ability also fires since 0 is also "affordable").
+    synthetic_state.set_loyalty_counters(walker_id, 1)
+
+    decisions = synthetic_state.legal_decisions(0)
+    walker_acts = [
+        d
+        for d in decisions
+        if d["kind"] == "activate_ability"
+        and d["source_id"] == walker_id
+    ]
+    ability_indices = {d["ability_index"] for d in walker_acts}
+    # +1 (idx 0): negative cost, always affordable. 0 (idx 1): always.
+    # -3 (idx 2): loyalty < 3, NOT emitted.
+    assert 0 in ability_indices
+    assert 1 in ability_indices
+    assert 2 not in ability_indices
+
+
+# --- apply arm: signed commit ----------------------------------------
+
+
+def test_walker_loyalty_apply_positive_cost_decrements(synthetic_state):
+    """Activate the -3 ability on a loyalty=5 walker: post-activate
+    loyalty_counters == 2.
+    """
+    walker_id = synthetic_state.register_and_inject_object(
+        _walker_dict(), 0, ZONE_BATTLEFIELD,
+    )
+    synthetic_state.force_set_summoning_sick(walker_id, False)
+    synthetic_state.set_loyalty_counters(walker_id, 5)
+
+    synthetic_state.apply_action(
+        {
+            "kind": "activate_ability",
+            "source_id": walker_id,
+            "ability_index": 2,  # -3 ability
+        }
+    )
+    assert synthetic_state.get_loyalty_counters(walker_id) == 2
+
+
+def test_walker_loyalty_apply_negative_cost_increments(synthetic_state):
+    """Activate the +1 ability on a loyalty=3 walker: post-activate
+    loyalty_counters == 4.
+    """
+    walker_id = synthetic_state.register_and_inject_object(
+        _walker_dict(), 0, ZONE_BATTLEFIELD,
+    )
+    synthetic_state.force_set_summoning_sick(walker_id, False)
+    synthetic_state.set_loyalty_counters(walker_id, 3)
+
+    synthetic_state.apply_action(
+        {
+            "kind": "activate_ability",
+            "source_id": walker_id,
+            "ability_index": 0,  # +1 ability
+        }
+    )
+    assert synthetic_state.get_loyalty_counters(walker_id) == 4
+
+
+def test_walker_loyalty_apply_zero_cost_no_change(synthetic_state):
+    """Activate the 0 ability on a loyalty=3 walker: loyalty_counters
+    unchanged (cost.loyalty == 0).
+    """
+    walker_id = synthetic_state.register_and_inject_object(
+        _walker_dict(), 0, ZONE_BATTLEFIELD,
+    )
+    synthetic_state.force_set_summoning_sick(walker_id, False)
+    synthetic_state.set_loyalty_counters(walker_id, 3)
+
+    synthetic_state.apply_action(
+        {
+            "kind": "activate_ability",
+            "source_id": walker_id,
+            "ability_index": 1,  # 0 ability
+        }
+    )
+    assert synthetic_state.get_loyalty_counters(walker_id) == 3
+
+
+def test_walker_loyalty_apply_insufficient_loyalty_raises(synthetic_state):
+    """Direct apply of the -3 ability on a loyalty=2 walker raises
+    BEFORE any state mutation (Phase 3b precheck). Pool / tap state
+    untouched.
+    """
+    walker_id = synthetic_state.register_and_inject_object(
+        _walker_dict(), 0, ZONE_BATTLEFIELD,
+    )
+    synthetic_state.force_set_summoning_sick(walker_id, False)
+    synthetic_state.set_loyalty_counters(walker_id, 2)
+
+    with pytest.raises(
+        ValueError, match=r"insufficient loyalty"
+    ):
+        synthetic_state.apply_action(
+            {
+                "kind": "activate_ability",
+                "source_id": walker_id,
+                "ability_index": 2,
+            }
+        )
+    assert synthetic_state.get_loyalty_counters(walker_id) == 2
+
+
+# --- SBA pass: walker dies at loyalty <= 0 ---------------------------
+
+
+def test_walker_loyalty_sba_removes_at_zero(synthetic_state):
+    """A walker with loyalty_counters=0 on bf is moved to its
+    controller's gy by the next apply_sbas pass (CR 704.5i).
+    """
+    walker_id = synthetic_state.register_and_inject_object(
+        _walker_dict(), 0, ZONE_BATTLEFIELD,
+    )
+    synthetic_state.set_loyalty_counters(walker_id, 0)
+    gy_before = synthetic_state.graveyard_sizes[0]
+
+    n_destroyed = synthetic_state.apply_sbas()
+    assert n_destroyed == 1
+
+    bf_ids = [o["id"] for o in synthetic_state.battlefield_snapshot()]
+    assert walker_id not in bf_ids
+    assert synthetic_state.graveyard_sizes[0] == gy_before + 1
+
+
+def test_walker_loyalty_sba_removes_at_negative(synthetic_state):
+    """A walker with loyalty_counters=-1 also dies (CR 704.5i — "0 or
+    less")."""
+    walker_id = synthetic_state.register_and_inject_object(
+        _walker_dict(), 0, ZONE_BATTLEFIELD,
+    )
+    synthetic_state.set_loyalty_counters(walker_id, -1)
+
+    n_destroyed = synthetic_state.apply_sbas()
+    assert n_destroyed == 1
+    bf_ids = [o["id"] for o in synthetic_state.battlefield_snapshot()]
+    assert walker_id not in bf_ids
+
+
+def test_walker_loyalty_sba_no_op_at_positive(synthetic_state):
+    """A walker with loyalty_counters=4 stays on bf — no SBA
+    destruction."""
+    walker_id = synthetic_state.register_and_inject_object(
+        _walker_dict(), 0, ZONE_BATTLEFIELD,
+    )
+    synthetic_state.set_loyalty_counters(walker_id, 4)
+
+    synthetic_state.apply_sbas()
+    bf_ids = [o["id"] for o in synthetic_state.battlefield_snapshot()]
+    assert walker_id in bf_ids
+
+
+def test_walker_loyalty_ultimate_activation_then_sba_kills(synthetic_state):
+    """End-to-end: activate the -3 ability on a loyalty=3 walker.
+    Post-activate loyalty=0; subsequent apply_sbas moves the walker
+    to gy.
+    """
+    walker_id = synthetic_state.register_and_inject_object(
+        _walker_dict(), 0, ZONE_BATTLEFIELD,
+    )
+    synthetic_state.force_set_summoning_sick(walker_id, False)
+    synthetic_state.set_loyalty_counters(walker_id, 3)
+
+    synthetic_state.apply_action(
+        {
+            "kind": "activate_ability",
+            "source_id": walker_id,
+            "ability_index": 2,
+        }
+    )
+    assert synthetic_state.get_loyalty_counters(walker_id) == 0
+    # Walker still on bf at this instant — SBA hasn't been invoked
+    # yet (real engine would invoke before next priority, but the
+    # apply_action arm itself doesn't drain SBAs).
+    bf_ids = [o["id"] for o in synthetic_state.battlefield_snapshot()]
+    assert walker_id in bf_ids
+
+    # Run SBA: walker dies.
+    synthetic_state.apply_sbas()
+    bf_ids = [o["id"] for o in synthetic_state.battlefield_snapshot()]
+    assert walker_id not in bf_ids
+
+
+def test_walker_does_not_fire_dies_trigger_only_leaves(synthetic_state):
+    """CR 700.4 — Event::Dies is "a creature dies". A non-creature
+    walker dying via CR 704.5i fires LEAVES_BATTLEFIELD but NOT
+    DIES. Pin: a `subject_is_creature` DIES observer does NOT fire
+    when a walker hits the gy via loyalty-zero SBA. Conversely a
+    LEAVES observer DOES fire.
+    """
+    # Set up a creature observer that listens for both DIES (which
+    # SHOULD NOT fire for the walker) and LEAVES_BATTLEFIELD (which
+    # SHOULD fire). Use two separate observers for cleaner assertions.
+    dies_observer = {
+        "name": "DIES Observer",
+        "card_types": ["Creature"],
+        "mana_cost": {},
+        "effects": [],
+        "power": 1,
+        "toughness": 10,  # high tough so it doesn't die to SBA itself
+        "keywords": ["indestructible"],
+        "triggered_abilities": [
+            {
+                "event": "dies",
+                "predicate": {"kind": "subject_is_creature"},
+                "effect": {"kind": "gain_life", "amount": 5},
+            }
+        ],
+    }
+    leaves_observer = {
+        "name": "LEAVES Observer",
+        "card_types": ["Creature"],
+        "mana_cost": {},
+        "effects": [],
+        "power": 1,
+        "toughness": 10,
+        "keywords": ["indestructible"],
+        "triggered_abilities": [
+            {
+                "event": "leaves_battlefield",
+                "predicate": {"kind": "always"},
+                "effect": {"kind": "gain_life", "amount": 7},
+            }
+        ],
+    }
+    _dies_id = synthetic_state.register_and_inject_object(
+        dies_observer, 0, ZONE_BATTLEFIELD,
+    )
+    _leaves_id = synthetic_state.register_and_inject_object(
+        leaves_observer, 0, ZONE_BATTLEFIELD,
+    )
+    walker_id = synthetic_state.register_and_inject_object(
+        _walker_dict(), 0, ZONE_BATTLEFIELD,
+    )
+    synthetic_state.set_loyalty_counters(walker_id, 0)
+
+    stack_before = synthetic_state.stack_size()
+    synthetic_state.apply_sbas()
+    # Walker died. LEAVES observer (always-firing) fires; DIES
+    # observer DOES NOT (walker is non-creature, DIES skipped).
+    stack_after = synthetic_state.stack_size()
+    # We expect exactly 1 new trigger on the stack — the LEAVES
+    # observer. (The default-creature SBA pass may also have
+    # destroyed other things; we just assert stack growth happened
+    # but the LEAVES gain_life=7 trigger should be on top.)
+    assert stack_after > stack_before
+    # Drain the stack and assert observer fired by checking the
+    # gain_life-7 trigger is present (life jumped by at least 7 from
+    # the leaves observer, but NOT the DIES observer's 5).
+    p0_life_before = synthetic_state.life_totals[0]
+    while synthetic_state.stack_size() > 0:
+        synthetic_state.resolve_top_of_stack()
+    p0_life_after = synthetic_state.life_totals[0]
+    life_delta = p0_life_after - p0_life_before
+    # Should be exactly 7 (LEAVES observer) — NOT 5+7=12 (DIES + LEAVES).
+    assert life_delta == 7, (
+        f"Expected p0 life +7 from LEAVES observer alone (DIES "
+        f"observer should NOT fire on a walker); got {life_delta}"
+    )

@@ -2303,6 +2303,33 @@ pub struct ActivationCost {
     /// Eligibility: target on activator's bf with `Artifact` card_type,
     /// NOT the source itself ("another" qualifier).
     pub sacrifice_another_artifact: bool,
+    /// **CE20 follow-up Slice 5 — Planeswalker loyalty (Slice A).**
+    /// Signed loyalty cost (CR 606). Positive values are PAY costs
+    /// (the walker LOSES N loyalty counters); negative values are
+    /// ADD costs (the walker GAINS |N| loyalty counters). Defaults
+    /// to `0` (no loyalty cost). Convention: a printed "+2" ability
+    /// stamps `loyalty: -2`; a printed "-3" ability stamps
+    /// `loyalty: 3`; a printed "0" ability stamps `loyalty: 0`.
+    ///
+    /// **Emission gate**: positive `loyalty` values gate
+    /// `legal_decisions` emission on the source's `loyalty_counters`
+    /// — the walker must have at least `cost.loyalty` counters to
+    /// afford the activation. Negative values are always affordable
+    /// (a +N ability can fire at any loyalty value).
+    ///
+    /// **Apply commit** (Phase 5d): `obj.loyalty_counters -=
+    /// cost.loyalty`. Signed subtraction handles both directions
+    /// uniformly. SBA pass at state_ops_sba.rs catches the
+    /// `loyalty_counters <= 0` case and moves the walker to its
+    /// controller's graveyard (CR 704.5i).
+    ///
+    /// **EoE printing affected**: 1 (Tezzeret, Cruel Captain — sole
+    /// walker in EoE).
+    ///
+    /// **Out of scope** of Slice A: combat-damage redirect to
+    /// planeswalkers (CR 119.5 / Slice B), once-per-turn-per-walker
+    /// ledger (CR 606.3 / Slice C).
+    pub loyalty: i32,
 }
 
 /// An activated ability on a `CardPrinting`. Mirrors a strict subset
@@ -3877,6 +3904,7 @@ pub fn apply_mana_produced_bridge(
             sacrifice_another_creature_or_artifact: false,
             sacrifice_a_land: false,
             sacrifice_another_artifact: false,
+            loyalty: 0,
         },
         effect: bridge_effect,
         is_mana_ability: true,
@@ -4157,14 +4185,16 @@ fn parse_activation_cost(
             | "requires_target_creature_you_control"
             | "sacrifice_another_creature_or_artifact"
             | "sacrifice_a_land"
-            | "sacrifice_another_artifact" => {}
+            | "sacrifice_another_artifact"
+            | "loyalty" => {}
             other => {
                 return Err(PyValueError::new_err(format!(
                     "unknown activation_cost key {other:?}; \
                      valid: mana, tap_self, sacrifice_self, \
                      requires_target_creature_you_control, \
                      sacrifice_another_creature_or_artifact, \
-                     sacrifice_a_land, sacrifice_another_artifact"
+                     sacrifice_a_land, sacrifice_another_artifact, \
+                     loyalty"
                 )));
             }
         }
@@ -4227,6 +4257,14 @@ fn parse_activation_cost(
                      must be a bool",
                 )
             })?;
+    }
+    if let Some(loy_any) = dict.get_item("loyalty")? {
+        cost.loyalty = loy_any.extract::<i32>().map_err(|_| {
+            PyValueError::new_err(
+                "activation_cost.loyalty must be an int (signed; \
+                 positive = pay-loyalty, negative = add-loyalty)",
+            )
+        })?;
     }
     Ok(cost)
 }

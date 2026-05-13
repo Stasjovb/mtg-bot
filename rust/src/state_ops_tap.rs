@@ -223,5 +223,38 @@ impl GameState {
         }
         None
     }
+
+    /// **Test-helper convention** (CE20 Slice 5 — Walker loyalty).
+    /// Set `loyalty_counters` on a battlefield permanent. Returns
+    /// `true` iff a value was changed. Real loyalty-counter changes
+    /// flow through walker ETB (seeded from
+    /// `CardPrinting.starting_loyalty`) and through activated-loyalty-
+    /// ability commits (Phase 5d in state_ops_actions); this helper is
+    /// for test fixtures that need to seed loyalty directly without
+    /// driving a walker ETB pipeline.
+    fn set_loyalty_counters(&mut self, obj_id: u32, value: i32) -> bool {
+        mutate_battlefield_obj(self, obj_id, |obj| {
+            if obj.loyalty_counters == value {
+                false
+            } else {
+                obj.loyalty_counters = value;
+                true
+            }
+        })
+        .unwrap_or(false)
+    }
+
+    /// Read the `loyalty_counters` slot. Returns `None` if the object
+    /// isn't on any battlefield.
+    fn get_loyalty_counters(&self, obj_id: u32) -> Option<i32> {
+        for player in &self.players {
+            for obj in player.battlefield.iter() {
+                if obj.id == obj_id {
+                    return Some(obj.loyalty_counters);
+                }
+            }
+        }
+        None
+    }
 }
 

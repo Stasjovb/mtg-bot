@@ -3508,8 +3508,10 @@ the forked branch.
     gate~~ **CLOSED by I53** — see below; the charge-counter-as-cost
     variant (`Pay N charge counters: ...`) stays deferred (no EoE
     printing carries it).
-  - Planeswalker loyalty (uses counters as cost, distinct from
-    mana; needs `pay_loyalty` cost primitive).
+  - ~~Planeswalker loyalty (uses counters as cost, distinct from
+    mana; needs `pay_loyalty` cost primitive).~~ **CLOSED (Slice A)
+    by I56** — see below; combat damage redirect (Slice B) and
+    once-per-turn-per-walker ledger (Slice C) still deferred.
   - ~~Equipment equip costs (specific cost shape + target).~~
     **CLOSED by I54** — see below; the target-pick substrate is
     now in place, which also unblocks the targeted sacrifice
@@ -3993,6 +3995,71 @@ the forked branch.
     synthetic equip printing on BOTH engines and exercise the
     target-fan-out emission shape — deferred to a follow-up that
     also confirms parity-clean walk shapes for the equip dict.
+
+### I56. `ActivationCost.loyalty: i32` (signed) + `GameObject.loyalty_counters: i32` substrate; emission gate + Phase 3b precheck + Phase 5d signed commit + SBA pass at loyalty_counters <= 0 (CE20 follow-up Slice 5 Walker loyalty Slice A closure)
+
+- **Pinned by**:
+  - 17 new `tests_rust/test_activated.py` `test_walker_*` regression
+    pins covering parser surface (3), loyalty-counter slot (2),
+    emission gate (3), apply-arm signed commit (4), SBA pass at
+    loyalty <= 0 (4), DIES-vs-LEAVES gate on walker death (1: walker
+    fires LEAVES but NOT DIES per CR 700.4).
+
+- **Cost shape extension**. `ActivationCost` grows
+  `pub loyalty: i32` field (defaults `0`). Signed convention:
+  printed `+N` ability stamps `loyalty: -N`; printed `-N` stamps
+  `loyalty: N`; printed `0` stamps `loyalty: 0`.
+  `parse_activation_cost` adds `"loyalty"` to the allow-list;
+  unknown keys still raise loud.
+
+- **Per-object counter slot**. `GameObject` grows
+  `pub loyalty_counters: i32` field — DISTINCT from `counters`
+  (+1/+1) and `charge_counters` (Spacecraft). G8 multi-kind counter
+  open gap stays separate. 5 GameObject construction sites updated
+  with `loyalty_counters: 0` initializer. Test helpers
+  `set_loyalty_counters` / `get_loyalty_counters` added in
+  `state_ops_tap.rs` (mirrors Slice 3's charge-counter helpers).
+
+- **Emission gate** (`state_ops_legal.rs`). Positive `cost.loyalty`
+  gates emission on `obj.loyalty_counters >= cost.loyalty`. Negative
+  is always affordable. Zero is no gate. Fires BEFORE tap_self /
+  mana affordability — same ordering as Slice 3's tier gate.
+
+- **Apply-arm Phase 3b loyalty precheck**. Mirrors Phase 3a tier
+  gate: raises BEFORE any commit on positive-cost shortfall.
+
+- **Apply-arm Phase 5d signed loyalty commit**. Single mutation:
+  `obj.loyalty_counters -= cost.loyalty;` (signed). Defensive
+  lookup-by-id; skip if source has already left bf (Phase 5b path).
+
+- **SBA pass at loyalty <= 0** (`state_ops_sba.rs`
+  `collect_sba_victims`). CR 704.5i. Walker filter on
+  `card_types.contains("Planeswalker")` runs BEFORE the
+  zero-toughness / lethal-damage creature checks. Walkers route
+  through the same SBA removal pipeline (zone change + field reset
+  + LTB void flag + LEAVES queue + drain).
+
+- **DIES gate on non-creature walkers** (`state_ops_sba.rs`
+  apply_sbas loop). CR 700.4: Event::Dies is "a creature dies".
+  Walkers fire LEAVES only; creature SBA paths still fire both
+  DIES and LEAVES.
+
+- **EoE printings affected**: 1 (Tezzeret, Cruel Captain).
+
+- **Out of scope (deferred to future slices)**:
+  - **Walker damage redirect** (CR 119.5 — Slice B). Combat damage
+    targeting a walker requires growing `DeclareAttackers` to accept
+    a walker as an attack target.
+  - **Once-per-turn-per-walker ledger** (CR 606.3 — Slice C). Each
+    player can activate at most ONE loyalty ability per walker per
+    turn. Needs a ledger reset at cleanup step.
+  - **`starting_loyalty` ETB seeding** on `CardPrinting`. Today
+    walker tests seed `loyalty_counters` directly via the
+    `set_loyalty_counters` test helper. Production wiring needs a
+    `CardPrinting.starting_loyalty: i32` field + ETB stamp at every
+    walker-entering call site.
+  - **Cross-engine smoke probe** for walker activations. Deferred
+    until a Tezzeret-shape Python printing surfaces in the harness.
 
 ### I55. `ActivationCost.sacrifice_another_creature_or_artifact / sacrifice_a_land / sacrifice_another_artifact: bool` extend the cost shape; emission target fan-out + apply-arm sacrifice-target validation + Phase 5c targeted-sacrifice commit (CE20 follow-up Slice 6 targeted-sacrifice variants closure)
 
