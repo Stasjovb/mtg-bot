@@ -1312,6 +1312,66 @@ def _ta_dict_to_python_effect(eff_dict: dict):
             token_printing=token_printing,
             count=eff_dict.get("count", 1),
         )
+    if kind == "mill_target_player":
+        # "Target player puts the top N cards of their library into
+        # their graveyard." Rust's
+        # ``Effect::MillTargetPlayer { count: i32 }`` (cards.rs:84) is
+        # the explicit-target sibling of ``Effect::Mill`` (the
+        # controller-self mill shortcut, bridged above). Its
+        # ``parse_effect`` arm at cards.rs:2833-2848 requires
+        # ``count`` and rejects negative values at register time.
+        # The resolve arm at state_ops_resolve.rs:1085-1148 carries
+        # the I77 controller-of-effect fix (sibling closure to the
+        # I65 self-mill fix): the target picker is a deterministic
+        # first-slice shortcut that picks ``target_idx = 1 -
+        # controller`` where ``controller`` is derived from
+        # ``current_resolve_source_controller`` (with active_player
+        # fallback). Cross-controller case (P1's ETB trigger
+        # resolves on P0's turn) routes the mill onto P0's library
+        # correctly post-I77.
+        #
+        # **Rust target-pick semantics.** The Rust resolve arm picks
+        # the source-controller's OPPONENT (= ``1 - controller``)
+        # deterministically at apply_effect time -- there is no
+        # real target-player choice plumbing in this first-slice
+        # shape. This is the standard Mind-Funeral / Tome-Scour
+        # "target opponent mills N" oracle shape collapsed onto a
+        # 2-player harness; multi-opponent fanout would require a
+        # real choice callback (deferred per the Rust comment).
+        #
+        # **Python target-pick semantics.** Python's
+        # ``MillTargetPlayer(amount: int = 1)`` class
+        # (effects/generic/draw_mill.py:151) is target-required:
+        # ``requires_target() -> True``, and ``legal_targets`` emits
+        # one ``("player", p.id)`` entry per non-lost player. The
+        # targeting pipeline picks at PUSH time via
+        # ``push_triggered_ability`` -> the source-controller's
+        # ``agent.choose_target`` over the legal_targets pool.
+        # Probes that drive this arm cross-engine seat
+        # ``_PickFirstOpponentTargetAgent`` (the Nebula Dragon
+        # shape) on the source's controller -- the agent's
+        # ``("player", target_id) where target_id != player_id``
+        # filter mirrors Rust's ``1 - controller`` pick exactly on
+        # a 2-player harness.
+        #
+        # Distinct from the bare ``mill`` arm above (the controller-
+        # self self-mill shortcut, no target). Both arms share the
+        # ``count`` field-name convention (Rust's parse_effect uses
+        # ``count`` consistently across the Mill / MillTargetPlayer /
+        # ScryN / Surveil / DrawCards / DamageEachOpponent family);
+        # Python's ``MillTargetPlayer`` uses ``amount`` per its class
+        # constructor (mirrors ``SelfMill``'s ``amount`` field-name
+        # too). Same translation shape as the ``mill`` arm.
+        #
+        # Mirrors Rust's ``parse_effect`` arm (cards.rs:2833-2848)
+        # which requires ``count`` and rejects negatives. Missing
+        # ``count`` defaults to 1 here (matching MillTargetPlayer's
+        # ``amount: int = 1`` default and the mill-arm's lenient-
+        # default convention); bridge consumers SHOULD pass
+        # ``count`` explicitly to keep round-trip dict-shape
+        # consistency with what Rust's parser accepts.
+        from mtg_bot.effects.generic.draw_mill import MillTargetPlayer
+        return MillTargetPlayer(amount=eff_dict.get("count", 1))
     # === PHASE5_BRIDGE_ARMS_INSERT_ABOVE_THIS_LINE ===
     # New `kind` arms go IMMEDIATELY ABOVE this marker. Do NOT delete the marker.
     # Append-only convention prevents merge collisions when multiple agents add arms in parallel.
