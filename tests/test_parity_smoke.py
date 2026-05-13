@@ -16716,3 +16716,8 @@ def test_cross_engine_real_eoe_interceptor_mechan_etb_return_artifact_or_creatur
     # Stacks empty on both sides.
     assert rust_state.stack_size() == 0
     assert len(py_state.stack) == 0
+
+
+# === PHASE5_PROBES_INSERT_ABOVE_THIS_LINE ===
+# New real-EoE parity probes go IMMEDIATELY ABOVE this marker.
+# Append-only convention prevents merge collisions when multiple agents add probes in parallel.

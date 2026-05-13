@@ -808,6 +808,9 @@ def _ta_dict_to_python_effect(eff_dict: dict):
             ReturnCreatureFromYourGraveyardToHand,
         )
         return ReturnCreatureFromYourGraveyardToHand(or_spacecraft=True)
+    # === PHASE5_BRIDGE_ARMS_INSERT_ABOVE_THIS_LINE ===
+    # New `kind` arms go IMMEDIATELY ABOVE this marker. Do NOT delete the marker.
+    # Append-only convention prevents merge collisions when multiple agents add arms in parallel.
     raise ValueError(
         f"cross_engine triggered_abilities bridge: unsupported "
         f"effect kind {kind!r} (extend `_ta_dict_to_python_effect` "
