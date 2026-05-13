@@ -33,6 +33,7 @@ from mtg_bot.search.heuristics_config import HeuristicsConfig
 from mtg_bot.training.distributed import (
     EvalJobSpec, run_distributed_eval,
 )
+from mtg_bot.training.registry import Registry
 
 
 # Trunk shape baked into v13/v15/v16+. If a future architecture change
@@ -40,6 +41,23 @@ from mtg_bot.training.distributed import (
 # version's metadata.json will trump this; keeping it as a default
 # avoids one more required CLI flag for the common case.
 _DEFAULT_HIDDEN_SIZES = (1024, 1024, 512)
+
+
+def _load_version_metadata(registry_root: Path, version: str):
+    """Best-effort metadata load for an eval-side version label.
+
+    Returns ``ModelMetadata`` when ``trained_weights/<version>/metadata.json``
+    exists, else ``None``. Tests construct stub versions that don't
+    have a real registry entry; ``None`` here lets eval fall back to
+    the flat-feature defaults the old code used unconditionally, so
+    those tests keep working. Production callers DO have the metadata
+    on disk, so the structured-architecture dispatch fires for
+    structured-trained weights.
+    """
+    try:
+        return Registry(registry_root).load_metadata(version)
+    except (FileNotFoundError, KeyError, ValueError):
+        return None
 
 
 def main(argv=None) -> None:
@@ -132,6 +150,17 @@ def main(argv=None) -> None:
             "matching self-play flag."
         ),
     )
+    parser.add_argument(
+        "--registry-root", type=Path, default=Path("trained_weights"),
+        help=(
+            "Registry root used to look up each version's "
+            "``metadata.json`` (architecture, action_encoding_version, "
+            "hidden_sizes). Default ``trained_weights/``. Missing "
+            "metadata is tolerated — falls back to the flat-feature "
+            "defaults — so the CLI keeps working for ad-hoc / test "
+            "version labels that haven't been registered."
+        ),
+    )
     args = parser.parse_args(argv)
 
     label = args.label or f"{args.new}_vs_{args.old}_{args.games}g"
@@ -139,6 +168,53 @@ def main(argv=None) -> None:
 
     shards_cfg = load_shards_config(args.shards_config)
     args.progress_dir.mkdir(parents=True, exist_ok=True)
+
+    # Load per-side metadata to thread architecture +
+    # action_encoding_version + hidden_sizes into the spec — same
+    # pattern as ``mtg_bot iterate``'s eval phase. Without this,
+    # structured-architecture weights silently load into the flat-
+    # feature ``_ValuePolicyMLP`` and the shard worker crashes with
+    # a state_dict shape mismatch.
+    new_meta = _load_version_metadata(args.registry_root, args.new)
+    old_meta = (
+        _load_version_metadata(args.registry_root, args.old)
+        if args.old != "heuristic" else None
+    )
+    new_arch = (
+        getattr(new_meta, "architecture", None) if new_meta else None
+    )
+    old_arch = (
+        getattr(old_meta, "architecture", None) if old_meta else None
+    )
+    new_aev = (
+        getattr(new_meta, "action_encoding_version", None)
+        if new_meta else None
+    )
+    old_aev = (
+        getattr(old_meta, "action_encoding_version", None)
+        if old_meta else None
+    )
+    # Per-side hidden_sizes from metadata. EvalJobSpec carries a single
+    # shared ``hidden_sizes`` field, used by both sides' NNPimcConfig.
+    # We pick the new side's value when available (it's the side under
+    # test); structured-architecture metadata has empty hidden_sizes
+    # and the structured trunk ignores the field anyway, so the value
+    # doesn't matter for that path. For flat-feature evals across two
+    # versions of the same trunk shape, this is correct.
+    if new_meta is not None and getattr(new_meta, "hidden_sizes", None):
+        hidden_sizes = tuple(new_meta.hidden_sizes)
+    elif old_meta is not None and getattr(old_meta, "hidden_sizes", None):
+        hidden_sizes = tuple(old_meta.hidden_sizes)
+    else:
+        hidden_sizes = _DEFAULT_HIDDEN_SIZES
+
+    print(
+        f"[eval] {args.new} arch={new_arch or 'flat'} "
+        f"aev={new_aev or 'positional_v1'}; "
+        f"{args.old} arch={old_arch or 'flat'} "
+        f"aev={old_aev or 'positional_v1'}; "
+        f"hidden_sizes={hidden_sizes}"
+    )
 
     # Empty string disables hang dumping; mirrors ``mtg_bot iterate``'s
     # flag semantics so a user can opt out with ``--hang-dump-dir ''``.
@@ -150,7 +226,7 @@ def main(argv=None) -> None:
         old_weights_path=weights_path(args.old),
         samples=args.samples,
         inner_nodes=args.nodes,
-        hidden_sizes=_DEFAULT_HIDDEN_SIZES,
+        hidden_sizes=hidden_sizes,
         base_seed=args.seed,
         enable_mulligans=args.enable_mulligans,
         per_game_timeout_sec=args.per_game_timeout_sec,
@@ -162,6 +238,10 @@ def main(argv=None) -> None:
         opponent_label=label,
         heuristics=HeuristicsConfig.disabled(),
         use_shm_server=args.use_shm_server,
+        new_architecture=new_arch,
+        old_architecture=old_arch,
+        new_action_encoding_version=new_aev or "positional_v1",
+        old_action_encoding_version=old_aev or "positional_v1",
     )
 
     slack_extra = ceil(args.games * args.queue_slack_pct)

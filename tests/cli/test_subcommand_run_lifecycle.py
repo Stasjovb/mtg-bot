@@ -162,6 +162,137 @@ def test_eval_main_marks_failed_on_exception(monkeypatch, tmp_path):
     assert "self-play crashed" in (rows[0]["notes"] or "")
 
 
+def test_eval_main_threads_architecture_from_registry(monkeypatch, tmp_path):
+    """``mtg_bot eval`` must load each version's metadata and thread
+    ``architecture`` / ``action_encoding_version`` into the EvalJobSpec.
+
+    Regression test for the v2-vs-v1 cold-start eval failure: with
+    architecture defaulted to ``None`` (= flat MLP), the shard worker
+    tried to load structured-architecture weights into ``_ValuePolicyMLP``
+    and crashed with a state_dict shape mismatch on every game. This
+    test pins the fix — registry metadata must reach the spec.
+    """
+    db_path = tmp_path / "runs.db"
+    monkeypatch.setenv("MTG_BOT_RUN_DB_PATH", str(db_path))
+    monkeypatch.delenv("MTG_BOT_RUN_DB_URL", raising=False)
+    monkeypatch.setattr(lifecycle, "git_commit_short", lambda: "abc1234")
+
+    # Build a tmp registry with two structured-architecture versions.
+    registry_root = tmp_path / "trained_weights"
+    for v in ("v1", "v2"):
+        version_dir = registry_root / v
+        version_dir.mkdir(parents=True)
+        (version_dir / "weights.pt").write_bytes(b"")
+        (version_dir / "metadata.json").write_text(json.dumps({
+            "version": v,
+            "created_at": "2026-05-13T00:00:00Z",
+            "feature_dim": 0,
+            "hidden_sizes": [],
+            "with_policy": True,
+            "architecture": "structured",
+            "action_encoding_version": "canonical_v2",
+            "training": {},
+            "training_history": {},
+            "evaluation": {},
+        }), encoding="utf-8")
+
+    progress_dir = tmp_path / "training_progress"
+    deck_pool = tmp_path / "decks.json.gz"
+    deck_pool.write_bytes(b"")
+    shards_config = tmp_path / "shards.json"
+    shards_config.write_text("{}", encoding="utf-8")
+
+    captured_spec = {}
+
+    def fake_run_distributed_eval(*args, **kwargs):
+        # The second positional arg is the EvalJobSpec.
+        captured_spec["spec"] = args[1]
+        progress_json = (
+            kwargs["progress_dir"]
+            / f"{kwargs['run_id_prefix']}.json"
+        )
+        progress_json.parent.mkdir(parents=True, exist_ok=True)
+        progress_json.write_text("{}", encoding="utf-8")
+        return {"wins_new": 1, "wins_old": 0, "draws": 0, "crashed": 0}
+
+    with patch.object(
+        cli_eval, "run_distributed_eval", fake_run_distributed_eval,
+    ), patch.object(
+        cli_eval, "load_shards_config", lambda p: {"shards": []},
+    ):
+        cli_eval.main([
+            "--new", "v2", "--old", "v1",
+            "--games", "1",
+            "--shards-config", str(shards_config),
+            "--progress-dir", str(progress_dir),
+            "--deck-pool", str(deck_pool),
+            "--queue-url", "http://master:5099",
+            "--bundle-url", "http://master:5099/repo.bundle",
+            "--registry-root", str(registry_root),
+        ])
+
+    spec = captured_spec["spec"]
+    assert spec.new_architecture == "structured"
+    assert spec.old_architecture == "structured"
+    assert spec.new_action_encoding_version == "canonical_v2"
+    assert spec.old_action_encoding_version == "canonical_v2"
+
+
+def test_eval_main_falls_back_when_metadata_missing(monkeypatch, tmp_path):
+    """When a version label isn't registered (e.g. a test stub), the
+    spec falls back to the pre-fix defaults — architecture=None,
+    aev="positional_v1", hidden_sizes=flat default. This preserves
+    back-compat for ad-hoc invocations against unregistered labels.
+    """
+    db_path = tmp_path / "runs.db"
+    monkeypatch.setenv("MTG_BOT_RUN_DB_PATH", str(db_path))
+    monkeypatch.delenv("MTG_BOT_RUN_DB_URL", raising=False)
+    monkeypatch.setattr(lifecycle, "git_commit_short", lambda: "abc1234")
+
+    registry_root = tmp_path / "trained_weights"  # exists but empty
+
+    progress_dir = tmp_path / "training_progress"
+    deck_pool = tmp_path / "decks.json.gz"
+    deck_pool.write_bytes(b"")
+    shards_config = tmp_path / "shards.json"
+    shards_config.write_text("{}", encoding="utf-8")
+
+    captured_spec = {}
+
+    def fake_run_distributed_eval(*args, **kwargs):
+        captured_spec["spec"] = args[1]
+        progress_json = (
+            kwargs["progress_dir"]
+            / f"{kwargs['run_id_prefix']}.json"
+        )
+        progress_json.parent.mkdir(parents=True, exist_ok=True)
+        progress_json.write_text("{}", encoding="utf-8")
+        return {"wins_new": 1, "wins_old": 0, "draws": 0, "crashed": 0}
+
+    with patch.object(
+        cli_eval, "run_distributed_eval", fake_run_distributed_eval,
+    ), patch.object(
+        cli_eval, "load_shards_config", lambda p: {"shards": []},
+    ):
+        cli_eval.main([
+            "--new", "stub_new", "--old", "stub_old",
+            "--games", "1",
+            "--shards-config", str(shards_config),
+            "--progress-dir", str(progress_dir),
+            "--deck-pool", str(deck_pool),
+            "--queue-url", "http://master:5099",
+            "--bundle-url", "http://master:5099/repo.bundle",
+            "--registry-root", str(registry_root),
+        ])
+
+    spec = captured_spec["spec"]
+    assert spec.new_architecture is None
+    assert spec.old_architecture is None
+    assert spec.new_action_encoding_version == "positional_v1"
+    assert spec.old_action_encoding_version == "positional_v1"
+    assert spec.hidden_sizes == (1024, 1024, 512)
+
+
 def test_eval_main_marks_killed_on_sigint(monkeypatch, tmp_path):
     """KeyboardInterrupt mid-run should land in the DB as
     status=killed (not failed)."""
