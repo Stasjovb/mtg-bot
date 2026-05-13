@@ -2069,5 +2069,103 @@ def test_rust_parser_accepts_mill_target_player_in_triggered_ability():
     assert pid == 0
 
 
+def test_bridge_exile_target_creature_until_source_leaves_translates_to_python():
+    """Phase 5 bridge extension: Rust
+    ``{"kind": "exile_target_creature_until_source_leaves"}``
+    translates to Python
+    ``ExileTargetCreatureUntilSourceLeaves()``.
+
+    Unblocks Banisher-Priest / Fiend-Hunter / All-Fates-Stalker /
+    Hardlight-Containment-shape ETB exile triggers on the cross-
+    engine bridge. The Rust effect variant exists at
+    ``rust/src/cards.rs:1268`` (unit variant
+    ``Effect::ExileTargetCreatureUntilSourceLeaves``); its
+    parse_effect arm at ``cards.rs:3322-3323`` takes no fields; the
+    resolve arm at ``state_ops_resolve.rs:5537-5639`` carries the
+    I79 controller-of-effect fix (defender = 1 - controller, where
+    controller derives from current_resolve_source_controller).
+    Stamps ``exiled_with_source = Some(source_obj_id)`` so the
+    paired return on source-leaves works.
+    """
+    from mtg_bot.effects.generic.exile import (
+        ExileTargetCreatureUntilSourceLeaves,
+    )
+    from mtg_bot.parity.cross_engine import _ta_dict_to_python_effect
+
+    e = _ta_dict_to_python_effect(
+        {"kind": "exile_target_creature_until_source_leaves"}
+    )
+    assert isinstance(e, ExileTargetCreatureUntilSourceLeaves)
+    # Bare-shape defaults: empty excluded_subtypes (no subtype
+    # filter), opponents_only / yours_only both False (no
+    # controller-side filter). The Rust unit variant has no rider
+    # mirrors today; the bridge constructs the bare default shape.
+    assert e.excluded_subtypes == frozenset()
+    assert e.opponents_only is False
+    assert e.yours_only is False
+
+
+def test_bridge_exile_target_creature_until_source_leaves_ignores_extra_fields():
+    """Extra dict fields are ignored — the bridge translator mirrors
+    the Rust unit-variant convention (no fields beyond ``kind``) and
+    constructs the bare-default Python shape regardless of whether
+    the dict carries extra keys. Mirrors the
+    ``return_creature_from_your_graveyard_to_hand`` /
+    ``return_creature_from_your_graveyard_to_battlefield`` arm
+    convention (both unit variants).
+    """
+    from mtg_bot.effects.generic.exile import (
+        ExileTargetCreatureUntilSourceLeaves,
+    )
+    from mtg_bot.parity.cross_engine import _ta_dict_to_python_effect
+
+    e = _ta_dict_to_python_effect({
+        "kind": "exile_target_creature_until_source_leaves",
+        # Extra keys that future rider-widened Rust variants might
+        # carry; the bare-shape arm ignores them.
+        "extra_key_should_be_ignored": True,
+        "another_unused_field": 42,
+    })
+    assert isinstance(e, ExileTargetCreatureUntilSourceLeaves)
+
+
+def test_rust_parser_accepts_exile_target_creature_until_source_leaves_in_triggered_ability():
+    """Pin the Rust parser surface for the
+    ``exile_target_creature_until_source_leaves`` effect kind. The
+    bridge's dict shape must register cleanly on the Rust side too;
+    this lockstep gate keeps the Python bridge from drifting away
+    from Rust's parse_effect coverage.
+
+    Mirrors the existing
+    ``return_creature_from_your_graveyard_to_hand`` parser-surface
+    pin (test_rust_parser_accepts_return_creature_from_graveyard_to_hand_in_triggered_ability)
+    -- both are unit-variant arms with no companion fields. The
+    Rust parse_effect arm at ``cards.rs:3322-3323`` accepts the
+    bare ``{"kind": "exile_target_creature_until_source_leaves"}``
+    shape on a triggered-ability carrier.
+    """
+    import mtg_bot_engine
+
+    reg = mtg_bot_engine.Registry()
+    d = {
+        "name": "Phase 5 Bridge Pin -- ExileUntilSourceLeaves",
+        "card_types": ["Creature"],
+        "mana_cost": {"generic": 2, "W": 1},
+        "power": 2,
+        "toughness": 2,
+        "triggered_abilities": [
+            {
+                "event": "enters",
+                "predicate": {"kind": "source_is_self"},
+                "effect": {
+                    "kind": "exile_target_creature_until_source_leaves",
+                },
+            }
+        ],
+    }
+    pid = reg.register_printing(d)
+    assert pid == 0
+
+
 # === PHASE5_BRIDGE_PIN_TESTS_INSERT_ABOVE_THIS_LINE ===
 # New bridge-arm pin tests go IMMEDIATELY ABOVE this marker.
