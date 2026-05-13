@@ -4208,6 +4208,76 @@ the forked branch.
   - **Cross-engine smoke probe** for walker activations. Unchanged
     from I56.
 
+### I77. `Effect::MillTargetPlayer { count }` controller-of-effect fix — reuses I59 transient slot; target_idx computed as `1 - controller` instead of `1 - active_player` (MillTargetPlayer defender divergence closure)
+
+- **Pinned by**:
+  - 4 new `tests_rust/test_resolve.py`
+    `test_mill_target_player_*` regression pins covering cross-
+    controller spell resolution (1: p1-controlled Tome-Scour-
+    shape instant on p0's turn → mills p0's library, NOT p1's),
+    same-controller back-compat (1: p0-controlled source still
+    mills p1's library), pause-variant parity (1), and empty-
+    target-library no-op (1).
+
+- **Rule**. CR 119.5 / 608.2 — sibling closure to I65 Mill
+  (self-mill). I65 routes to `controller` (the milling player is
+  the source's controller for "you mill" effects); I77 routes to
+  `1 - controller` (the milled player is the source's
+  controller's opponent for "target player mills" effects). Same
+  transient-slot lookup preamble; only the post-resolve index
+  differs.
+
+- **Pre-fix Rust behavior**. The
+  `Effect::MillTargetPlayer { count }` arm at
+  `state_ops_resolve.rs:1094` (pre-fix line) computed
+  `let target_idx = (1 - state.active_player) as usize`. Wrong
+  when the resolving spell / triggered ability has a controller
+  != active_player. Example: p1's Tome-Scour-shape instant on
+  p0's turn pre-fix self-milled p1's own library; post-fix it
+  correctly mills p0's library (the source's controller's
+  opponent — standard Mind Funeral / Tome Scour / Scrabbling
+  Skullcrab shape).
+
+- **Distinct from `Effect::Mill`.** Mill (self-mill, I65) routes
+  to `controller`; MillTargetPlayer (I77) routes to the
+  defender = `1 - controller`. Both share the I59 transient-slot
+  preamble; both arms now resolve correctly when controller !=
+  active_player.
+
+- **Reuses I59 substrate**. Identical to I60 / I65 / I70 / I71 /
+  I72 / I73 / I74 / I75 / I76 — same preamble:
+  `let controller = state.current_resolve_source_controller
+  .map(|c| c as usize).unwrap_or(state.active_player as usize);
+  let target_idx = 1 - controller;`. The mill site (clamp count
+  to library length, pop-N from lib head, CR 400.7 reset on
+  each milled object, push onto target's graveyard) reads the
+  resolved `target_idx` unchanged.
+
+- **Negative-count raise, count=0 no-op, library-clamp shape
+  preserved.** Negative count still raises (defense-in-depth);
+  count=0 and empty-library cases still no-op silently
+  (CR 701.13d "if there aren't enough cards, mill all
+  remaining"). CR 400.7 zone-change reset on each milled object
+  preserved.
+
+- **Real target-player choice plumbing remains deferred.** First-
+  slice still picks the source-controller's opponent
+  deterministically (Mind Funeral, Tome Scour — the standard
+  target shape). A future slice that surfaces multi-target /
+  archenemy / choice-callback semantics will need to thread an
+  explicit target-player parameter through the arm.
+
+- **Forward inventory (post-I77 remaining defender-shape
+  `(1 - state.active_player)` sites in `state_ops_resolve.rs`):**
+  - `Effect::OwnerPutsTargetArtifactOrCreatureOnTopOrBottomOfLibrary`
+    (~4837) — first-slice artifact-or-creature target picker;
+    same defender-swap shape, plus owner-resolution via
+    `obj.controller` (first-slice owner == controller).
+  - `Effect::ExileTargetCreatureUntilSourceLeaves` (~5157) and
+    `Effect::ExileOpponentsNonlandPermanentUntilLeaves` (~5221)
+    — same defender-swap shape for round-28 "until source
+    leaves" exile.
+
 ### I76. `Effect::ReturnToHand { AnyCreature }` controller-of-effect fix — reuses I59 transient slot; defender computed as `1 - controller` instead of `1 - active_player` (ReturnToHand defender divergence closure)
 
 - **Pinned by**:

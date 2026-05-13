@@ -1088,10 +1088,40 @@ fn apply_effect(
                     "MillTargetPlayer count must be non-negative, got {count}"
                 )));
             }
-            // First-slice: defender = 1 - active_player. (Targeted-
-            // player choice plumbing deferred — mirrors existing
-            // single-target first-slice conventions.)
-            let target_idx = (1 - state.active_player) as usize;
+            // **Controller resolution (I77 follow-up to the
+            // I59 / I60 / I63 / I64 / I65 / I66 / I67 / I68 / I69 /
+            // I70 / I71 / I72 / I73 / I74 / I75 / I76 controller-of-
+            // effect substrate).** CR 119.5 / 608.2: an effect
+            // resolves under its source's controller. MillTargetPlayer's
+            // first-slice deterministic target picker chooses the
+            // SOURCE'S controller's opponent (= the source's other
+            // player), where target_idx = 1 - controller.
+            //
+            // **Why the fix.** Pre-fix this arm computed
+            // `target_idx = 1 - state.active_player`. Wrong when the
+            // resolving spell / triggered ability has a controller
+            // != active_player. Example: on p0's turn, p1 casts a
+            // Scrabbling-Skullcrab-shape "target player mills 2"
+            // instant — pre-fix it self-milled p1's own library
+            // (target_idx = 1 - active_player = 1 - 0 = 1).
+            // Post-fix it correctly mills p0's library (the source's
+            // controller's opponent — standard Mind Funeral / Tome
+            // Scour shape).
+            //
+            // Sibling closure to I65 Mill (self-mill, where controller
+            // mills their own library) — I65 routes to controller,
+            // I77 routes to (1 - controller). Both close the
+            // active_player-vs-source's-controller divergence; they
+            // differ only in WHICH side mills (self vs target-player).
+            //
+            // (Real target-player choice plumbing remains deferred
+            // — mirrors existing single-target first-slice
+            // conventions.)
+            let controller = state
+                .current_resolve_source_controller
+                .map(|c| c as usize)
+                .unwrap_or(state.active_player as usize);
+            let target_idx = 1 - controller;
             let library_mut = Arc::make_mut(&mut state.players[target_idx].library);
             let n_to_mill = (*count as usize).min(library_mut.len());
             if n_to_mill == 0 {

@@ -13610,3 +13610,157 @@ def test_return_to_hand_empty_source_controllers_opponent_bf_fizzles(engine):
     assert state.graveyard_sizes[1] == p1_grave_before + 1
     # P0's hand untouched — no spurious bounce push.
     assert state.hand_sizes[0] == p0_hand_before
+
+
+# ====================================================================
+# MillTargetPlayer controller-of-effect fix — regression pins (I77).
+#
+# Pre-fix `target_idx = (1 - state.active_player) as usize`. Wrong
+# when the resolving spell / triggered ability has a controller !=
+# active_player — example: on p0's turn, p1 casts a Mind-Funeral-
+# shape "target player mills N" instant. Pre-fix it self-milled
+# p1's own library (target_idx = 1 - active_player = 1 - 0 = 1);
+# post-fix it correctly mills p0's library (the source's
+# controller's opponent — standard Mind Funeral / Tome Scour /
+# Scrabbling Skullcrab shape).
+#
+# Sibling closure to I65 Mill (self-mill, where controller mills
+# their own library). Both fixes close the active_player-vs-
+# source's-controller divergence; I65 routes to controller, I77
+# routes to (1 - controller). Same transient-slot lookup
+# preamble.
+# ====================================================================
+
+
+def _mill_target_dict_for_i77(count=2):
+    """A Scrabbling-Skullcrab-shape instant whose only effect is
+    MillTargetPlayer(count). Used by I77 regression pins."""
+    return {
+        "name": "Test Tome Scour I77",
+        "card_types": ["Instant"],
+        "mana_cost": {"U": 1},
+        "effects": [
+            {
+                "kind": "mill_target_player",
+                "count": count,
+            }
+        ],
+    }
+
+
+def test_mill_target_player_routes_to_source_controllers_opponent(engine):
+    """**Regression pin for the MillTargetPlayer controller-of-
+    effect fix (I77).**
+
+    On p0's turn (active_player=0), a Tome-Scour-shape instant
+    whose controller is p1 must mill p0's library (the source's
+    controller's opponent), NOT p1's own library. Pre-fix
+    `target_idx = 1 - active_player = 1 - 0 = 1` => p1 self-
+    milled. Post-fix `target_idx = 1 - controller = 1 - 1 = 0` =>
+    correctly mills p0's library.
+    """
+    state = engine.make_synthetic_state()
+    assert state.active_player == 0
+
+    p0_lib_before = state.library_sizes[0]
+    p1_lib_before = state.library_sizes[1]
+    p0_grave_before = state.graveyard_sizes[0]
+    p1_grave_before = state.graveyard_sizes[1]
+
+    src_id = state.register_and_inject_object(
+        _mill_target_dict_for_i77(count=2), 1, ZONE_HAND
+    )
+
+    # Push with controller=1 (p1), active_player still 0.
+    state.push_to_stack(src_id, 1)
+    state.resolve_top_of_stack()
+
+    # Post-fix: p0's library shrank by 2, p0's graveyard grew by
+    # 2 (the mill landed on p0 — the source's controller's
+    # opponent).
+    assert state.library_sizes[0] == p0_lib_before - 2
+    assert state.graveyard_sizes[0] == p0_grave_before + 2
+    # P1's library and graveyard untouched (no self-mill).
+    assert state.library_sizes[1] == p1_lib_before
+    # P1's graveyard grew by 1 (the resolved instant itself).
+    assert state.graveyard_sizes[1] == p1_grave_before + 1
+
+
+def test_mill_target_player_active_player_controlled_still_works(engine):
+    """**Back-compat pin.** A Tome-Scour-shape instant cast by the
+    active player must still mill the opponent's library — bug
+    never fired in this case pre-fix because controller ==
+    active_player.
+    """
+    state = engine.make_synthetic_state()
+    assert state.active_player == 0
+
+    p0_lib_before = state.library_sizes[0]
+    p1_lib_before = state.library_sizes[1]
+    p1_grave_before = state.graveyard_sizes[1]
+
+    src_id = state.register_and_inject_object(
+        _mill_target_dict_for_i77(count=3), 0, ZONE_HAND
+    )
+
+    state.push_to_stack(src_id, 0)
+    state.resolve_top_of_stack()
+
+    # P1's library shrank by 3 (p0's opponent's library).
+    assert state.library_sizes[1] == p1_lib_before - 3
+    # P1's graveyard grew by 3 (milled cards) — the resolved
+    # instant itself moves to p0's graveyard (owner=0).
+    assert state.graveyard_sizes[1] == p1_grave_before + 3
+    # P0's library untouched.
+    assert state.library_sizes[0] == p0_lib_before
+
+
+def test_mill_target_player_pause_variant_threads_controller(engine):
+    """**`resolve_top_of_stack_pause` parity pin for
+    MillTargetPlayer.** Mirrors the I64 / I67 / I68 / I69 / I70 /
+    I71 / I72 / I73 / I74 / I75 / I76 pause-variant pins."""
+    state = engine.make_synthetic_state()
+
+    p0_lib_before = state.library_sizes[0]
+    p1_lib_before = state.library_sizes[1]
+
+    src_id = state.register_and_inject_object(
+        _mill_target_dict_for_i77(count=1), 1, ZONE_HAND
+    )
+
+    state.push_to_stack(src_id, 1)
+    state.resolve_top_of_stack_pause()
+
+    # Post-fix: p0's library shrank by 1 (p1's opponent).
+    assert state.library_sizes[0] == p0_lib_before - 1
+    # P1's library untouched.
+    assert state.library_sizes[1] == p1_lib_before
+
+
+def test_mill_target_player_empty_source_controllers_opponent_library_noops(engine):
+    """**Empty-library no-op pin for I77.** When the source-
+    controller's opponent has an empty library, the mill is a
+    silent no-op (n_to_mill clamps to 0 per CR 701.13d's spirit:
+    "if there aren't enough cards, mill all remaining").
+
+    Build a state with p0's library set to empty via num_library=0,
+    then cast a p1-controlled mill at p0.
+    """
+    state = engine.make_synthetic_state(num_library=0)
+    assert state.library_sizes[0] == 0
+    p0_grave_before = state.graveyard_sizes[0]
+    p1_grave_before = state.graveyard_sizes[1]
+
+    src_id = state.register_and_inject_object(
+        _mill_target_dict_for_i77(count=5), 1, ZONE_HAND
+    )
+
+    state.push_to_stack(src_id, 1)
+    state.resolve_top_of_stack()
+
+    # Stack popped, source moved to p1's graveyard. P0's library
+    # and graveyard untouched (empty library => no mill).
+    assert state.is_stack_empty() is True
+    assert state.graveyard_sizes[1] == p1_grave_before + 1
+    assert state.library_sizes[0] == 0
+    assert state.graveyard_sizes[0] == p0_grave_before
