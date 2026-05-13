@@ -14396,3 +14396,229 @@ def test_cross_engine_real_eoe_starbreach_whale_etb_surveil_2_parity(
         "trigger-path's terminal keep_all_on_top call; "
         "has_pending_decision returned True"
     )
+
+
+def test_cross_engine_real_eoe_wurmwall_sweeper_etb_surveil_2_parity(
+    parity_smoke,
+):
+    """Probe: Wurmwall Sweeper (EoE) ETB ``surveil 2`` parity --
+    adds the Artifact-Spacecraft-typed-carrier × surveil-2 cross-
+    product axis to the bridge.
+
+    Oracle text in ``data/edge_of_eternities.json``:
+
+        "When this Spacecraft enters, surveil 2.
+         Station (...)
+         4+ | Flying"
+
+    Same predicate / effect shape as the Starbreach Whale probe
+    (Slice 2 on this branch's history): ``SourceIsSelf`` ENTERS
+    predicate + ``Surveil(count=2)`` effect. The only new axis is
+    the trigger CARRIER's card-type: Wurmwall Sweeper is an
+    Artifact-typed Spacecraft, while Starbreach Whale was a
+    Creature. Every prior ETB-trigger probe with an Artifact
+    carrier (Cryogen Relic, Mechan Assembler) used the
+    DrawCards / DamageEachOpponent / CreateToken effect shapes;
+    this is the first Artifact-carrier probe whose effect pushes
+    a PendingDecision onto the Rust queue and exercises the
+    auto-resolve keep_all_on_top default end-to-end.
+
+    Predicate decomposition (same as Starbreach Whale):
+
+        SourceIsSelf
+
+    Effect: ``surveil(count=2)`` -- already on the bridge (this
+    branch's bridge-arm commit). The same cross-engine decision-
+    substrate contract applies: both engines default to "keep all
+    observed cards on library top in their original order" when
+    no decision callback is seated.
+
+    Probe shape (inject-and-fire-ENTERS, mirrors Starbreach Whale):
+
+      1. Pre-seed p0's library with TWO distinct vanilla bait
+         cards (different names from the whale probe's bait so
+         a printing-name collision wouldn't mask a probe-vs-probe
+         leakage if both ran in the same fixture lifetime).
+      2. Inject Wurmwall Sweeper onto p0's battlefield via
+         ``register_and_inject_object`` (Rust) / new_object + bf
+         append + manual ``_trigger_etb_abilities`` (Python).
+      3. Drain both stacks. Auto-resolve keep_all_on_top on Rust;
+         p.agent-is-None short-circuit on Python.
+      4. Cross-engine assert: post-drain, BOTH engines have the
+         same library top (the two bait cards in original order)
+         and the same graveyard contents (empty).
+
+    Out of scope:
+
+      * Station ability + the "4+ | Flying" Spacecraft crew
+        threshold -- both are static / activated; not ETB
+        triggers.
+      * Spacecraft type-line modeling -- Wurmwall Sweeper is
+        registered as a plain Artifact in this probe (the
+        Spacecraft subtype isn't on the cross-engine subtype
+        substrate's wired surface today). The ETB trigger fires
+        irrespective of subtype; SourceIsSelf only checks the
+        object identity, not its types. The Starbreach Whale
+        probe's docstring documents the same Creature-carrier-
+        only shape coverage.
+      * The mill path (``choose_surveil → True``) -- same out-
+        of-scope reasoning as the Starbreach Whale probe.
+
+    Expected post-dispatch + post-drain state on BOTH engines:
+
+      * Wurmwall Sweeper on p0's battlefield.
+      * p0 library: unchanged.
+      * p0 graveyard: empty.
+      * p1 library / graveyard: unchanged.
+      * Lives unchanged on both seats.
+      * No residual stack.
+    """
+    from mtg_bot.parity.cross_engine import (
+        CardDef, DeckSpec, build_python_state, build_rust_state,
+    )
+
+    wurmwall_sweeper = CardDef(
+        name="Wurmwall Sweeper",
+        card_type="Artifact",
+        mana_cost_generic=2,
+        mana_cost_colored=(),
+        # Artifact-Spacecraft -- no creature P/T (Spacecraft is
+        # creature-typed only at the Station-driven 4+ counter
+        # threshold; the static ability is out-of-scope here).
+        triggered_abilities=(
+            {
+                "event": "enters",
+                "predicate": {"kind": "source_is_self"},
+                "effect": {"kind": "surveil", "count": 2},
+            },
+        ),
+    )
+    # Distinct bait names from the Starbreach Whale probe so a
+    # cross-probe printing leak would surface (defensive --
+    # parity_smoke fixtures rebuild state per-test, but extra
+    # robustness is cheap).
+    surveil_bait_x = CardDef(
+        name="Surveil Bait Gamma",
+        card_type="Creature",
+        mana_cost_generic=1,
+        power=1,
+        toughness=1,
+    )
+    surveil_bait_y = CardDef(
+        name="Surveil Bait Delta",
+        card_type="Creature",
+        mana_cost_generic=2,
+        power=2,
+        toughness=2,
+    )
+    spec = DeckSpec(
+        card_defs=(wurmwall_sweeper, surveil_bait_x, surveil_bait_y),
+        p0_library=("Surveil Bait Gamma", "Surveil Bait Delta"),
+        p1_library=(),
+    )
+    py_state = build_python_state(spec)
+    rust_state = build_rust_state(spec)
+
+    # ---- Rust side ----
+    ZONE_BATTLEFIELD = 2
+    rust_sweeper_dict = {
+        "name": "Wurmwall Sweeper",
+        "card_types": ["Artifact"],
+        "mana_cost": {"generic": 2},
+        "effects": [],
+        "triggered_abilities": [
+            {
+                "event": "enters",
+                "predicate": {"kind": "source_is_self"},
+                "effect": {"kind": "surveil", "count": 2},
+            }
+        ],
+    }
+    rust_p0_lib_before = [
+        d["printing_id"] for d in rust_state.library_snapshot(0)
+    ]
+    rust_p0_lib_size_before = rust_state.library_sizes[0]
+    rust_p0_gy_size_before = rust_state.graveyard_sizes[0]
+    rust_state.register_and_inject_object(
+        rust_sweeper_dict, 0, ZONE_BATTLEFIELD
+    )
+    assert rust_state.stack_size() == 1, (
+        "Rust: Wurmwall Sweeper's own arrival should fire the "
+        "SourceIsSelf ENTERS trigger and land Surveil(2) on the "
+        f"stack. Got stack_size={rust_state.stack_size()}"
+    )
+
+    # ---- Python side ----
+    from mtg_bot.actions import _trigger_etb_abilities
+    from mtg_bot.cards.base import CardPrinting, ManaCost
+    from mtg_bot.effects.base import TriggeredAbility
+    from mtg_bot.effects.generic.library_lookat import Surveil
+    from mtg_bot.effects.predicates import Event, IsSelf
+    from mtg_bot.game import Zone
+
+    sweeper_printing = CardPrinting(
+        name="Wurmwall Sweeper",
+        mana_cost_str="",
+        mana_cost=ManaCost(generic=2),
+        type_line="Artifact",
+        supertypes=(),
+        card_types=("Artifact",),
+        subtypes=(),
+        # Pure Artifact -- no power / toughness at the resting state.
+        # Spacecraft crew threshold is out-of-scope.
+        power=None,
+        toughness=None,
+        produces=frozenset(),
+        triggered_abilities=(
+            TriggeredAbility(
+                event=Event.ENTERS,
+                predicate=IsSelf(),
+                effect=Surveil(amount=2),
+            ),
+        ),
+    )
+    py_sweeper = py_state.new_object(
+        sweeper_printing, owner_id=0, zone=Zone.BATTLEFIELD,
+    )
+    py_sweeper.summoning_sick = False
+    py_sweeper.tapped = False
+    py_sweeper.damage = 0
+    py_sweeper.etb_timestamp = py_state.next_timestamp
+    py_state.next_timestamp += 1
+    py_state.battlefield.append(py_sweeper)
+    py_p0_lib_before = [o.printing.name for o in py_state.players[0].library]
+    py_p0_gy_size_before = len(py_state.players[0].graveyard)
+    _trigger_etb_abilities(py_state, py_sweeper)
+    assert len(py_state.stack) == 1, (
+        "Python: Wurmwall Sweeper's own arrival should fire the "
+        "IsSelf ENTERS trigger and land Surveil(2) on the stack. "
+        f"Got stack size={len(py_state.stack)}"
+    )
+
+    # ---- Drain both stacks, then compare ----
+    _drain_stack_both(py_state, rust_state)
+
+    rust_p0_lib_after = [
+        d["printing_id"] for d in rust_state.library_snapshot(0)
+    ]
+    py_p0_lib_after = [o.printing.name for o in py_state.players[0].library]
+    assert rust_state.library_sizes[0] == rust_p0_lib_size_before
+    assert rust_state.graveyard_sizes[0] == rust_p0_gy_size_before
+    assert rust_p0_lib_after == rust_p0_lib_before, (
+        f"Rust p0 library top should be unchanged in original order: "
+        f"before={rust_p0_lib_before} after={rust_p0_lib_after}"
+    )
+    assert len(py_state.players[0].library) == len(py_p0_lib_before)
+    assert len(py_state.players[0].graveyard) == py_p0_gy_size_before
+    assert py_p0_lib_after == py_p0_lib_before, (
+        f"Python p0 library top should be unchanged in original "
+        f"order: before={py_p0_lib_before} "
+        f"after={py_p0_lib_after}"
+    )
+    assert rust_state.stack_size() == 0
+    assert len(py_state.stack) == 0
+    assert rust_state.get_life(0) == 20
+    assert rust_state.get_life(1) == 20
+    assert py_state.players[0].life == 20
+    assert py_state.players[1].life == 20
+    assert rust_state.has_pending_decision() is False
