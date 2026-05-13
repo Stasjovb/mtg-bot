@@ -20806,6 +20806,392 @@ def test_cross_engine_synthetic_etb_create_token_cross_controller_routes_to_sour
     assert rust_bf_p1_after == py_bf_p1_after
 
 
+def test_cross_engine_synthetic_etb_return_creature_from_graveyard_to_hand_cross_controller_routes_to_source_controller_parity(
+    parity_smoke,
+):
+    """Probe: synthetic ETB
+    ``return_creature_from_your_graveyard_to_hand`` trigger fired
+    by a permanent CONTROLLED BY P1 while ACTIVE_PLAYER=P0 -- the
+    I82 controller-of-effect fix's cross-engine flicker. Both
+    engines must scan P1's graveyard (the source's controller),
+    pick the bait creature, and return it to P1's hand. Pre-fix
+    Rust scanned P0's graveyard (active_player) and would have
+    pushed any matched creature onto P0's hand.
+
+    **The I82 substrate.** Per worklog
+    ``2026-05-13-controller-of-effect-i81-i82-i83``: pre-I82 the
+    Rust ``Effect::ReturnCreatureFromYourGraveyardToHand`` arm
+    derived ``controller_idx`` from ``state.active_player``. Wrong
+    when the resolving spell / triggered ability has a controller
+    != active_player. The fix routes the graveyard scan AND the
+    destination hand push through ``current_resolve_source_controller``,
+    so both anchor to the SOURCE's controller. Python's
+    ``ReturnCreatureFromYourGraveyardToHand.resolve(state,
+    controller_id, ...)`` (constructor sugar over
+    ``ReturnFromGraveyard`` at ``effects/generic/bounce.py:356``)
+    has always taken ``controller_id`` explicitly. This probe pins
+    the cross-engine observable PARITY of the post-I82 contract
+    end-to-end via a synthetic ETB trigger, closing the
+    "cross-controller probe" gap the I82 forward-notes called out.
+
+    **Why synthetic, not a real EoE card.** The bare unit-variant
+    has no real-EoE consumer with matching shape today (per the
+    canonical happy-path probe's docstring -- Interceptor Mechan
+    + Fell Gravship suffix carry rider widenings). Sister-shape
+    to the canonical happy-path probe; the difference is the
+    SOURCE's controller is P1 instead of P0, so the
+    controller-derivation path that I82 fixed actually fires.
+
+    Probe shape (cross-controller inject-and-fire-ENTERS):
+
+      1. **active_player=P0** (default). Confirmed via
+         ``state.active_player`` on Rust and
+         ``state.active_player_idx`` on Python.
+
+      2. **Seed P1's graveyard** with a single bait creature
+         ("Recur Bait Bear"). Pre-fix would have looked at P0's
+         graveyard (which is empty), found nothing, and silent-
+         no-opped. Post-fix looks at P1's graveyard (where the
+         bait sits) and finds it.
+
+      3. **Inject Token Maker Bear (the recur source) onto P1's
+         bf** with controller=1. ENTERS fires; the trigger lands
+         on the stack with controller=1 (the SOURCE's controller).
+
+      4. **Drain both stacks.** The trigger resolves with
+         ``current_resolve_source_controller = Some(1)``; the
+         post-I82 arm scans P1's graveyard, picks the bait, and
+         pushes it to P1's hand. Python's targeting pipeline
+         picks at PUSH time via the seated
+         ``_PickFirstLegalTargetAgent`` shim on P1.
+
+      5. **Cross-engine assert (post-I82 contract):**
+         - P1's hand grew by 1 (the recurred bait creature).
+         - P1's graveyard shrank by 1 (it lost the bait).
+         - P0's hand and graveyard unchanged (NO crossover into
+           the active player's zones).
+
+    **Pre-I82 vs post-I82 observable.**
+    Pre-fix Rust would have:
+      - Scanned P0's empty graveyard, found no creature card,
+        silent-no-op. Bait stays in P1's graveyard. P1's hand
+        unchanged.
+    Post-fix Rust scans P1's graveyard, picks the bait, returns
+    it to P1's hand -- matching Python's always-correct behavior.
+
+    Out of scope:
+
+      * Cast-from-hand mana cost -- bypassed by inject-and-fire.
+      * Multi-creature graveyard pick -- single bait keeps the
+        agent's first-legal-target pick observable. The
+        canonical multi-creature iterator-order parity probe
+        covers that surface separately.
+      * Empty-graveyard silent-skip on the SOURCE's controller --
+        pinned in the canonical empty-gy sibling (with active
+        player as source-controller). A cross-controller empty-
+        graveyard variant is well-defined but redundant: I82's
+        fix only touches the controller derivation, not the
+        empty-graveyard branch.
+      * Rider widenings (or_artifact / or_spacecraft) -- the
+        post-I82 fix applies to those rider arms too (same
+        controller derivation path), but they have their own
+        bridge arms and EoE consumers; out of scope of this
+        bare-arm cross-controller pin.
+
+    Expected post-dispatch + post-drain state on BOTH engines:
+
+      * Token Maker Bear on P1's battlefield (unchanged from
+        inject; controller=1).
+      * Recur Bait Bear in P1's hand (returned from P1's gy to
+        P1's hand -- the I82 contract).
+      * P1's graveyard empty (bait moved out).
+      * P0's hand and graveyard untouched.
+      * No residual stack on either engine.
+      * Life totals unchanged on both seats.
+    """
+    from mtg_bot.parity.cross_engine import (
+        CardDef, DeckSpec, build_python_state, build_rust_state,
+    )
+    from tests.parity._picker_shims import _PickFirstLegalTargetAgent
+
+    # Bait Bear: vanilla 2/2, no triggered abilities, seeded in
+    # P1's graveyard.
+    bait_bear = CardDef(
+        name="Recur Bait Bear (I82 cross-controller probe)",
+        card_type="Creature",
+        mana_cost_generic=1,
+        mana_cost_colored=(("G", 1),),
+        power=2,
+        toughness=2,
+    )
+    # Token Maker Bear (renamed from Slice 1 for clarity -- here
+    # it's a recur-bear, not a token-maker; the body of the trigger
+    # is `return_creature_from_your_graveyard_to_hand`).
+    recur_bear = CardDef(
+        name="ETB Recur Bear (I82 cross-controller probe)",
+        card_type="Creature",
+        mana_cost_generic=2,
+        mana_cost_colored=(("B", 1),),
+        power=2,
+        toughness=2,
+        triggered_abilities=(
+            {
+                "event": "enters",
+                "predicate": {"kind": "source_is_self"},
+                "effect": {
+                    "kind": "return_creature_from_your_graveyard_to_hand",
+                },
+            },
+        ),
+    )
+    spec = DeckSpec(
+        card_defs=(bait_bear, recur_bear),
+        p0_library=(),
+        p1_library=(),
+    )
+    py_state = build_python_state(spec)
+    rust_state = build_rust_state(spec)
+
+    # Confirm pre-condition: active_player=P0 on both engines.
+    assert rust_state.active_player == 0, (
+        f"Probe pre-condition: Rust active_player must be 0; "
+        f"got {rust_state.active_player}"
+    )
+    assert py_state.active_player_idx == 0, (
+        f"Probe pre-condition: Python active_player_idx must be 0; "
+        f"got {py_state.active_player_idx}"
+    )
+
+    # ---- Rust side ----
+    ZONE_BATTLEFIELD = 2
+    ZONE_GRAVEYARD = 3
+    rust_bait_dict = {
+        "name": "Recur Bait Bear (I82 cross-controller probe)",
+        "card_types": ["Creature"],
+        "mana_cost": {"generic": 1, "G": 1},
+        "effects": [],
+        "power": 2,
+        "toughness": 2,
+    }
+    rust_recur_dict = {
+        "name": "ETB Recur Bear (I82 cross-controller probe)",
+        "card_types": ["Creature"],
+        "mana_cost": {"generic": 2, "B": 1},
+        "effects": [],
+        "power": 2,
+        "toughness": 2,
+        "triggered_abilities": [
+            {
+                "event": "enters",
+                "predicate": {"kind": "source_is_self"},
+                "effect": {
+                    "kind": "return_creature_from_your_graveyard_to_hand",
+                },
+            }
+        ],
+    }
+    rust_p0_life_before = rust_state.get_life(0)
+    rust_p1_life_before = rust_state.get_life(1)
+    rust_p0_hand_before = rust_state.hand_sizes[0]
+    rust_p1_hand_before = rust_state.hand_sizes[1]
+    rust_p0_gy_before = rust_state.graveyard_sizes[0]
+    rust_p1_gy_before = rust_state.graveyard_sizes[1]
+
+    # Seed P1's graveyard with the bait creature (the I82
+    # source-controller-of-effect fix routes the scan to P1's
+    # graveyard).
+    rust_state.register_and_inject_object(
+        rust_bait_dict, 1, ZONE_GRAVEYARD,
+    )
+    # Inject the recur-bear onto P1's bf with controller=1. ENTERS
+    # fires; the trigger lands on the stack carrying controller=1.
+    rust_state.register_and_inject_object(
+        rust_recur_dict, 1, ZONE_BATTLEFIELD,
+    )
+    assert rust_state.stack_size() == 1, (
+        f"Rust: ETB Recur Bear's arrival on P1 should fire the "
+        f"SourceIsSelf ENTERS trigger and land "
+        f"ReturnCreatureFromYourGraveyardToHand on the stack. "
+        f"Got stack_size={rust_state.stack_size()}"
+    )
+
+    # ---- Python side ----
+    from mtg_bot.actions import _trigger_etb_abilities
+    from mtg_bot.cards.base import CardPrinting, ManaCost
+    from mtg_bot.effects.base import TriggeredAbility
+    from mtg_bot.effects.generic.bounce import (
+        ReturnCreatureFromYourGraveyardToHand,
+    )
+    from mtg_bot.effects.predicates import Event, IsSelf
+    from mtg_bot.game import Zone
+
+    bait_printing = CardPrinting(
+        name="Recur Bait Bear (I82 cross-controller probe)",
+        mana_cost_str="",
+        mana_cost=ManaCost(generic=1, colored=(("G", 1),)),
+        type_line="Creature",
+        supertypes=(),
+        card_types=("Creature",),
+        subtypes=(),
+        power=2,
+        toughness=2,
+        produces=frozenset(),
+    )
+    recur_printing = CardPrinting(
+        name="ETB Recur Bear (I82 cross-controller probe)",
+        mana_cost_str="",
+        mana_cost=ManaCost(generic=2, colored=(("B", 1),)),
+        type_line="Creature",
+        supertypes=(),
+        card_types=("Creature",),
+        subtypes=(),
+        power=2,
+        toughness=2,
+        produces=frozenset(),
+        triggered_abilities=(
+            TriggeredAbility(
+                event=Event.ENTERS,
+                predicate=IsSelf(),
+                effect=ReturnCreatureFromYourGraveyardToHand(),
+            ),
+        ),
+    )
+
+    # Seat the first-legal-target picker on P1 (the SOURCE's
+    # controller). The targeting pipeline calls
+    # `controller.agent.choose_target` on P1's agent because the
+    # trigger's controller is P1.
+    py_state.players[1].agent = _PickFirstLegalTargetAgent()
+
+    # Seed P1's graveyard with the bait creature (mirror of the
+    # Rust seed -- the controller-of-effect fix on Python is
+    # implicit: the trigger's controller-id is P1, so legal_targets
+    # walks P1's graveyard).
+    py_bait = py_state.new_object(
+        bait_printing, owner_id=1, zone=Zone.GRAVEYARD,
+    )
+    py_state.players[1].graveyard.append(py_bait)
+
+    # Inject the recur-bear onto P1's bf with owner_id=1, then
+    # manually dispatch ENTERS.
+    py_recur = py_state.new_object(
+        recur_printing, owner_id=1, zone=Zone.BATTLEFIELD,
+    )
+    py_recur.summoning_sick = False
+    py_recur.tapped = False
+    py_recur.damage = 0
+    py_recur.etb_timestamp = py_state.next_timestamp
+    py_state.next_timestamp += 1
+    py_state.battlefield.append(py_recur)
+    py_p0_life_before = py_state.players[0].life
+    py_p1_life_before = py_state.players[1].life
+    py_p0_hand_before = len(py_state.players[0].hand)
+    py_p1_hand_before = len(py_state.players[1].hand)
+    py_p0_gy_before = len(py_state.players[0].graveyard)
+    # py_p1_gy_before is post-seed; it includes the bait (1).
+    py_p1_gy_before_post_seed = len(py_state.players[1].graveyard)
+    assert py_p1_gy_before_post_seed == 1, (
+        f"Python pre-condition: P1 graveyard should hold the "
+        f"seeded bait; got "
+        f"size={py_p1_gy_before_post_seed}"
+    )
+    _trigger_etb_abilities(py_state, py_recur)
+    assert len(py_state.stack) == 1, (
+        f"Python: ETB Recur Bear's arrival on P1 should fire "
+        f"the IsSelf ENTERS trigger and land "
+        f"ReturnCreatureFromYourGraveyardToHand on the stack. "
+        f"Got stack size={len(py_state.stack)}"
+    )
+
+    # ---- Drain both stacks, then compare observable parity. ----
+    _drain_stack_both(py_state, rust_state)
+
+    # Stacks empty post-drain.
+    assert rust_state.stack_size() == 0
+    assert len(py_state.stack) == 0
+
+    # Rust observable (the I82 contract):
+    #   * P1's hand gained the bait creature (+1 from baseline).
+    #   * P1's graveyard is back to baseline (the bait moved
+    #     out; it was +1 from the seed; net 0 from baseline).
+    #   * P0's hand and graveyard are UNCHANGED (no crossover
+    #     into the active player's zones -- pre-fix bug would
+    #     have had it land here).
+    rust_p0_hand_after = rust_state.hand_sizes[0]
+    rust_p1_hand_after = rust_state.hand_sizes[1]
+    rust_p0_gy_after = rust_state.graveyard_sizes[0]
+    rust_p1_gy_after = rust_state.graveyard_sizes[1]
+    assert rust_p0_hand_after == rust_p0_hand_before, (
+        f"Rust I82 contract violation: P0's hand changed despite "
+        f"the source's controller being P1. Pre-fix bug would "
+        f"have routed the recur target here. "
+        f"Got hand_p0_before={rust_p0_hand_before}, "
+        f"hand_p0_after={rust_p0_hand_after}"
+    )
+    assert rust_p1_hand_after == rust_p1_hand_before + 1, (
+        f"Rust I82 contract: P1's hand should gain the recurred "
+        f"bait. Got hand_p1_before={rust_p1_hand_before}, "
+        f"hand_p1_after={rust_p1_hand_after}"
+    )
+    assert rust_p0_gy_after == rust_p0_gy_before, (
+        f"Rust: P0's graveyard should be unchanged. Got "
+        f"gy_p0_before={rust_p0_gy_before}, "
+        f"gy_p0_after={rust_p0_gy_after}"
+    )
+    assert rust_p1_gy_after == rust_p1_gy_before, (
+        f"Rust I82 contract: P1's graveyard should be back to "
+        f"baseline (bait was seeded then returned). Got "
+        f"gy_p1_before={rust_p1_gy_before}, "
+        f"gy_p1_after={rust_p1_gy_after}"
+    )
+
+    # Python observable: same shape on the equivalent zones.
+    py_p0_hand_after = len(py_state.players[0].hand)
+    py_p1_hand_after = len(py_state.players[1].hand)
+    py_p0_gy_after = len(py_state.players[0].graveyard)
+    py_p1_gy_after = len(py_state.players[1].graveyard)
+    assert py_p0_hand_after == py_p0_hand_before, (
+        f"Python: P0's hand should be unchanged. Got "
+        f"hand_p0_before={py_p0_hand_before}, "
+        f"hand_p0_after={py_p0_hand_after}"
+    )
+    assert py_p1_hand_after == py_p1_hand_before + 1, (
+        f"Python: P1's hand should gain the recurred bait. Got "
+        f"hand_p1_before={py_p1_hand_before}, "
+        f"hand_p1_after={py_p1_hand_after}"
+    )
+    py_hand_p1_names = [c.printing.name for c in py_state.players[1].hand]
+    assert "Recur Bait Bear (I82 cross-controller probe)" in py_hand_p1_names, (
+        f"Python: P1's hand should contain the bait by name. Got "
+        f"{py_hand_p1_names}"
+    )
+    assert py_p0_gy_after == py_p0_gy_before, (
+        f"Python: P0's graveyard should be unchanged. Got "
+        f"gy_p0_before={py_p0_gy_before}, "
+        f"gy_p0_after={py_p0_gy_after}"
+    )
+    # Python's gy "before" was post-seed (= 1); after the return
+    # it should be 0.
+    assert py_p1_gy_after == 0, (
+        f"Python I82 contract: P1's graveyard should be empty "
+        f"(seeded bait moved out). Got gy_p1_after={py_p1_gy_after}"
+    )
+
+    # Cross-engine: lives unchanged on both sides.
+    assert rust_state.get_life(0) == rust_p0_life_before
+    assert rust_state.get_life(1) == rust_p1_life_before
+    assert py_state.players[0].life == py_p0_life_before
+    assert py_state.players[1].life == py_p1_life_before
+    assert rust_state.get_life(0) == py_state.players[0].life
+    assert rust_state.get_life(1) == py_state.players[1].life
+
+    # Cross-engine zone-size parity (the post-drain observable).
+    assert rust_p0_hand_after == py_p0_hand_after
+    assert rust_p1_hand_after == py_p1_hand_after
+    assert rust_p0_gy_after == py_p0_gy_after
+    assert rust_p1_gy_after == py_p1_gy_after
+
+
 # === PHASE5_PROBES_INSERT_ABOVE_THIS_LINE ===
 # New real-EoE parity probes go IMMEDIATELY ABOVE this marker.
 # Append-only convention prevents merge collisions when multiple agents add probes in parallel.
