@@ -14622,3 +14622,537 @@ def test_cross_engine_real_eoe_wurmwall_sweeper_etb_surveil_2_parity(
     assert py_state.players[0].life == 20
     assert py_state.players[1].life == 20
     assert rust_state.has_pending_decision() is False
+
+
+def test_cross_engine_real_eoe_seedship_broodtender_etb_mill_parity(
+    parity_smoke,
+):
+    """Probe: Seedship Broodtender (EoE) ETB ``mill three cards``
+    parity -- FIRST real-EoE cross-engine probe with a controller-
+    self mill ETB trigger.
+
+    Oracle text in ``data/edge_of_eternities.json``:
+
+        "When this creature enters, mill three cards. (Put the top
+         three cards of your library into your graveyard.)
+         {3}{B}{G}, Sacrifice this creature: Return target creature
+         or Spacecraft card from your graveyard to the battlefield.
+         Activate only as a sorcery."
+
+    The activated reanimate ability is out of scope -- this probe
+    exclusively exercises the ETB-trigger surface, the substrate
+    sweet-spot:
+
+      * Event: ``enters``
+      * Predicate: ``source_is_self`` (only the just-entered
+        creature's own trigger fires)
+      * Effect: ``mill`` count=3 (controller-self) -- NEW on the
+        bridge as of the companion commit on this branch.
+
+    First real-EoE cross-engine probe to exercise the
+    ``Effect::Mill`` arm + ``SelfMill`` Python class end-to-end.
+
+    Predicate decomposition (same as Germinating Wurm / Quantum
+    Riddler / Cryogen Relic / Nebula Dragon):
+
+        SourceIsSelf
+
+    Effect: ``mill(count=3)`` -- the bridge arm translates to
+    ``SelfMill(amount=3)``. The Rust effect carries the I65
+    controller-of-effect fix (mills the source's controller's
+    library via ``current_resolve_source_controller``, with
+    active_player fallback for direct callers); Python's
+    ``SelfMill.resolve(state, controller_id)`` takes the
+    controller_id directly. Both behaviors agree on this probe
+    where the source's controller IS the active player (p0's
+    bf-arrival on p0's turn).
+
+    **No target-pick agent needed.** Unlike
+    ``deal_damage_any_target`` / ``deal_damage_to_opponent_creature``
+    (which pick at PUSH time via push_triggered_ability), SelfMill
+    has no targets -- the controller is the implicit recipient,
+    derived intrinsically from the resolving context on both
+    engines.
+
+    Probe shape (inject-and-fire-ENTERS, same pattern as Nebula
+    Dragon / Debris Field Crusher):
+
+      1. Stack p0's library with 4 distinct bait creatures (top 3
+         will be milled by the ETB, bottom 1 stays as a witness
+         that the mill stopped at exactly 3 -- not more, not the
+         whole library). Distinct names per slot so we can match
+         the post-drain graveyard contents BY NAME between
+         engines, not just by count.
+
+      2. Inject Seedship Broodtender directly onto p0's
+         battlefield via ``register_and_inject_object`` (Rust) /
+         new_object + bf append + manual ``_trigger_etb_abilities``
+         (Python). Both engines dispatch ENTERS for the just-
+         arrived broodtender; the SourceIsSelf predicate matches,
+         the trigger lands on the stack pre-targeted (no targets
+         to pick).
+
+      3. Both engines: stack carries ONE pending SelfMill(3)
+         trigger. Drain. Resolve walk: p0 library top 3 cards
+         leave for p0 graveyard. p0 library shrinks 4 -> 1; p0
+         graveyard grows 0 -> 3.
+
+      4. Cross-engine assert: both engines milled exactly 3 cards,
+         the post-drain graveyard ordering matches by name (top-
+         of-library popped first lands at index 0 of the graveyard
+         on both sides, per the Python ``library.pop(0)`` /
+         ``graveyard.append`` shape and the matching Rust
+         ``library.remove(0)`` / ``graveyard.push`` shape), and
+         the witness card remains in the library.
+
+    Out of scope:
+
+      * The {3}{B}{G}, Sacrifice activated reanimate ability --
+        activated ability with sac cost + target-graveyard pick +
+        return-to-bf effect; none of the pieces are on the bridge
+        today.
+      * Mana cost ({B}{G}) -- the inject-and-dispatch-ENTERS
+        pattern bypasses the mana pipeline (same treatment every
+        prior real-EoE probe gives the cast cost).
+
+    Expected post-dispatch + post-drain state on BOTH engines:
+
+      * Seedship Broodtender on p0's battlefield.
+      * p0 library: 4 -> 1 (3 milled).
+      * p0 graveyard: 0 -> 3 (the 3 milled cards, top-of-library
+        order: Bait Bear 1, Bait Bear 2, Bait Bear 3).
+      * p0 library tail: Bait Bear 4 (witness).
+      * p1 library / graveyard unchanged.
+      * Lives unchanged (mill doesn't touch life totals).
+      * No residual stack.
+    """
+    from mtg_bot.parity.cross_engine import (
+        CardDef, DeckSpec, build_python_state, build_rust_state,
+    )
+
+    seedship_broodtender = CardDef(
+        name="Seedship Broodtender",
+        card_type="Creature",
+        mana_cost_generic=0,
+        mana_cost_colored=(("B", 1), ("G", 1)),
+        power=2,
+        toughness=3,
+        triggered_abilities=(
+            {
+                "event": "enters",
+                "predicate": {"kind": "source_is_self"},
+                "effect": {"kind": "mill", "count": 3},
+            },
+        ),
+    )
+    # Distinct bait creatures so we can match the post-drain
+    # graveyard contents BY NAME (and verify ordering).
+    bait_1 = CardDef(
+        name="Bait Bear 1",
+        card_type="Creature",
+        mana_cost_generic=1,
+        mana_cost_colored=(("G", 1),),
+        power=2,
+        toughness=2,
+    )
+    bait_2 = CardDef(
+        name="Bait Bear 2",
+        card_type="Creature",
+        mana_cost_generic=1,
+        mana_cost_colored=(("G", 1),),
+        power=2,
+        toughness=2,
+    )
+    bait_3 = CardDef(
+        name="Bait Bear 3",
+        card_type="Creature",
+        mana_cost_generic=1,
+        mana_cost_colored=(("G", 1),),
+        power=2,
+        toughness=2,
+    )
+    bait_4 = CardDef(
+        name="Bait Bear 4",
+        card_type="Creature",
+        mana_cost_generic=1,
+        mana_cost_colored=(("G", 1),),
+        power=2,
+        toughness=2,
+    )
+    spec = DeckSpec(
+        card_defs=(
+            seedship_broodtender, bait_1, bait_2, bait_3, bait_4,
+        ),
+        # Top-of-library is index 0 on both engines: Bait Bear 1
+        # comes off first, then 2, then 3. Bait Bear 4 survives as
+        # the witness.
+        p0_library=(
+            "Bait Bear 1", "Bait Bear 2", "Bait Bear 3", "Bait Bear 4",
+        ),
+        # p1 library unused -- mill is controller-self, only p0's
+        # library is observed.
+        p1_library=(),
+    )
+    py_state = build_python_state(spec)
+    rust_state = build_rust_state(spec)
+
+    # ---- Rust side ----
+    ZONE_BATTLEFIELD = 2
+    rust_broodtender_dict = {
+        "name": "Seedship Broodtender",
+        "card_types": ["Creature"],
+        "mana_cost": {"B": 1, "G": 1},
+        "effects": [],
+        "power": 2,
+        "toughness": 3,
+        "triggered_abilities": [
+            {
+                "event": "enters",
+                "predicate": {"kind": "source_is_self"},
+                "effect": {"kind": "mill", "count": 3},
+            }
+        ],
+    }
+    rust_p0_lib_before = rust_state.library_sizes[0]
+    rust_p0_gy_before = rust_state.graveyard_sizes[0]
+    rust_p1_lib_before = rust_state.library_sizes[1]
+    rust_p1_gy_before = rust_state.graveyard_sizes[1]
+    rust_p0_life_before = rust_state.get_life(0)
+    rust_p1_life_before = rust_state.get_life(1)
+    assert rust_p0_lib_before == 4
+    assert rust_p0_gy_before == 0
+
+    rust_state.register_and_inject_object(
+        rust_broodtender_dict, 0, ZONE_BATTLEFIELD,
+    )
+    # register_and_inject_object on ZONE_BATTLEFIELD fans out ENTERS
+    # via the deferred-dispatch queue; Seedship Broodtender's
+    # SourceIsSelf predicate matches its own arrival, so a single
+    # SelfMill(3) trigger lands on the stack.
+    assert rust_state.stack_size() == 1, (
+        "Rust: Seedship Broodtender's own arrival should fire the "
+        "SourceIsSelf ENTERS trigger and land SelfMill(3) on the "
+        f"stack. Got stack_size={rust_state.stack_size()}"
+    )
+
+    # ---- Python side ----
+    from mtg_bot.actions import _trigger_etb_abilities
+    from mtg_bot.cards.base import CardPrinting, ManaCost
+    from mtg_bot.effects.base import TriggeredAbility
+    from mtg_bot.effects.generic.library_lookat import SelfMill
+    from mtg_bot.effects.predicates import Event, IsSelf
+    from mtg_bot.game import Zone
+
+    broodtender_printing = CardPrinting(
+        name="Seedship Broodtender",
+        mana_cost_str="",
+        mana_cost=ManaCost(generic=0, colored=(("B", 1), ("G", 1))),
+        type_line="Creature",
+        supertypes=(),
+        card_types=("Creature",),
+        subtypes=(),
+        power=2,
+        toughness=3,
+        produces=frozenset(),
+        triggered_abilities=(
+            TriggeredAbility(
+                event=Event.ENTERS,
+                predicate=IsSelf(),
+                effect=SelfMill(amount=3),
+            ),
+        ),
+    )
+    py_p0_lib_before = len(py_state.players[0].library)
+    py_p0_gy_before = len(py_state.players[0].graveyard)
+    py_p1_lib_before = len(py_state.players[1].library)
+    py_p1_gy_before = len(py_state.players[1].graveyard)
+    py_p0_life_before = py_state.players[0].life
+    py_p1_life_before = py_state.players[1].life
+    assert py_p0_lib_before == 4
+    assert py_p0_gy_before == 0
+
+    py_broodtender = py_state.new_object(
+        broodtender_printing, owner_id=0, zone=Zone.BATTLEFIELD,
+    )
+    py_broodtender.summoning_sick = False
+    py_broodtender.tapped = False
+    py_broodtender.damage = 0
+    py_broodtender.etb_timestamp = py_state.next_timestamp
+    py_state.next_timestamp += 1
+    py_state.battlefield.append(py_broodtender)
+    _trigger_etb_abilities(py_state, py_broodtender)
+    assert len(py_state.stack) == 1, (
+        "Python: Seedship Broodtender's own arrival should fire the "
+        "IsSelf ENTERS trigger and land SelfMill(3) on the stack. "
+        f"Got stack size={len(py_state.stack)}"
+    )
+
+    # ---- Drain both stacks, then compare ----
+    _drain_stack_both(py_state, rust_state)
+
+    # Stacks empty on both sides.
+    assert rust_state.stack_size() == 0
+    assert len(py_state.stack) == 0
+
+    # Per-engine post-state: p0 library shrunk by 3, p0 graveyard
+    # grew by 3, p1 untouched, lives untouched.
+    assert rust_state.library_sizes[0] == rust_p0_lib_before - 3, (
+        f"Rust p0 library should shrink by 3 (the mill): "
+        f"before={rust_p0_lib_before} after={rust_state.library_sizes[0]}"
+    )
+    assert rust_state.graveyard_sizes[0] == rust_p0_gy_before + 3, (
+        f"Rust p0 graveyard should grow by 3 (the milled cards): "
+        f"before={rust_p0_gy_before} after={rust_state.graveyard_sizes[0]}"
+    )
+    assert rust_state.library_sizes[1] == rust_p1_lib_before
+    assert rust_state.graveyard_sizes[1] == rust_p1_gy_before
+    assert rust_state.get_life(0) == rust_p0_life_before
+    assert rust_state.get_life(1) == rust_p1_life_before
+
+    assert len(py_state.players[0].library) == py_p0_lib_before - 3
+    assert len(py_state.players[0].graveyard) == py_p0_gy_before + 3
+    assert len(py_state.players[1].library) == py_p1_lib_before
+    assert len(py_state.players[1].graveyard) == py_p1_gy_before
+    assert py_state.players[0].life == py_p0_life_before
+    assert py_state.players[1].life == py_p1_life_before
+
+    # Cross-engine: per-zone parity on sizes.
+    assert rust_state.library_sizes[0] == len(py_state.players[0].library)
+    assert rust_state.graveyard_sizes[0] == len(py_state.players[0].graveyard)
+    assert rust_state.library_sizes[1] == len(py_state.players[1].library)
+    assert rust_state.graveyard_sizes[1] == len(py_state.players[1].graveyard)
+    assert rust_state.get_life(0) == py_state.players[0].life
+    assert rust_state.get_life(1) == py_state.players[1].life
+
+    # Strongest pin: the milled cards are exactly the top-3 of p0's
+    # pre-mill library, in top-of-library order. Bait Bear 1 came off
+    # first -> landed at gy index 0; Bait Bear 2 -> gy index 1;
+    # Bait Bear 3 -> gy index 2. Bait Bear 4 survives in the
+    # library.
+    expected_gy_names = ["Bait Bear 1", "Bait Bear 2", "Bait Bear 3"]
+    rust_p0_gy_names = [
+        entry["printing_name"]
+        for entry in rust_state.graveyard_snapshot(0)
+    ]
+    assert rust_p0_gy_names == expected_gy_names, (
+        f"Rust p0 graveyard contents mismatch: "
+        f"expected {expected_gy_names}, got {rust_p0_gy_names}"
+    )
+    py_p0_gy_names = [
+        o.printing.name for o in py_state.players[0].graveyard
+    ]
+    assert py_p0_gy_names == expected_gy_names, (
+        f"Python p0 graveyard contents mismatch: "
+        f"expected {expected_gy_names}, got {py_p0_gy_names}"
+    )
+    # Cross-engine: same milled cards, same order.
+    assert rust_p0_gy_names == py_p0_gy_names
+
+    # Witness: Bait Bear 4 still in p0 library on both engines.
+    rust_p0_lib_names = [
+        entry["printing_name"]
+        for entry in rust_state.library_snapshot(0)
+    ]
+    py_p0_lib_names = [
+        o.printing.name for o in py_state.players[0].library
+    ]
+    assert rust_p0_lib_names == ["Bait Bear 4"], (
+        f"Rust p0 library should hold only Bait Bear 4 (witness); "
+        f"got {rust_p0_lib_names}"
+    )
+    assert py_p0_lib_names == ["Bait Bear 4"], (
+        f"Python p0 library should hold only Bait Bear 4 (witness); "
+        f"got {py_p0_lib_names}"
+    )
+
+
+def test_cross_engine_real_eoe_seedship_broodtender_empty_library_mid_mill_parity(
+    parity_smoke,
+):
+    """Probe: Seedship Broodtender (EoE) ETB mill silently stops on
+    empty library mid-mill -- pins the I19 / I65-closure shape on
+    the mill arm: mill on empty library is NOT a deck-out by itself
+    (CR 704.5b applies to drawing, not milling). Both engines break
+    out of the mill loop without crashing or registering a loss.
+
+    Same predicate / effect shape as the primary probe (Slice 2
+    above); distinct scenario where p0's library carries FEWER
+    cards than the mill count. Validates the silent-stop branch
+    in:
+
+      * Rust ``Effect::Mill`` resolve arm
+        (state_ops_resolve.rs:1043-1045): ``if lib.is_empty() {
+        break; }``
+      * Python ``SelfMill.resolve``
+        (effects/generic/library_lookat.py:642-643):
+        ``if not p.library: break``
+
+    Probe shape:
+
+      1. Stack p0's library with EXACTLY 2 bait creatures (mill
+         3 will only get 2; the third iteration hits empty
+         library and silently stops).
+
+      2. Inject Seedship Broodtender directly onto p0's bf via
+         ``register_and_inject_object`` (Rust) / new_object + bf
+         append + ``_trigger_etb_abilities`` (Python).
+
+      3. Drain. Resolve walk: p0 milled all 2 of its library; the
+         third mill iteration was a no-op. Library 2 -> 0;
+         graveyard 0 -> 2.
+
+      4. Cross-engine assert: both engines empty p0's library
+         silently (no SBA deck-out, no crash, no win/loss state
+         change). Witness on both sides.
+
+    Expected post-dispatch + post-drain state on BOTH engines:
+
+      * Seedship Broodtender on p0's battlefield (carrier survives).
+      * p0 library: 2 -> 0 (drained by the partial mill).
+      * p0 graveyard: 0 -> 2 (Bait Bear 1, Bait Bear 2).
+      * Lives unchanged (NO deck-out -- mill on empty library
+        doesn't trigger CR 704.5b).
+      * No residual stack.
+    """
+    from mtg_bot.parity.cross_engine import (
+        CardDef, DeckSpec, build_python_state, build_rust_state,
+    )
+
+    seedship_broodtender = CardDef(
+        name="Seedship Broodtender",
+        card_type="Creature",
+        mana_cost_generic=0,
+        mana_cost_colored=(("B", 1), ("G", 1)),
+        power=2,
+        toughness=3,
+        triggered_abilities=(
+            {
+                "event": "enters",
+                "predicate": {"kind": "source_is_self"},
+                "effect": {"kind": "mill", "count": 3},
+            },
+        ),
+    )
+    bait_1 = CardDef(
+        name="Bait Bear 1",
+        card_type="Creature",
+        mana_cost_generic=1,
+        mana_cost_colored=(("G", 1),),
+        power=2,
+        toughness=2,
+    )
+    bait_2 = CardDef(
+        name="Bait Bear 2",
+        card_type="Creature",
+        mana_cost_generic=1,
+        mana_cost_colored=(("G", 1),),
+        power=2,
+        toughness=2,
+    )
+    spec = DeckSpec(
+        card_defs=(seedship_broodtender, bait_1, bait_2),
+        # Library size 2 < mill count 3 -> the third mill iteration
+        # hits empty library and silently stops on both engines.
+        p0_library=("Bait Bear 1", "Bait Bear 2"),
+        p1_library=(),
+    )
+    py_state = build_python_state(spec)
+    rust_state = build_rust_state(spec)
+
+    # ---- Rust side ----
+    ZONE_BATTLEFIELD = 2
+    rust_broodtender_dict = {
+        "name": "Seedship Broodtender",
+        "card_types": ["Creature"],
+        "mana_cost": {"B": 1, "G": 1},
+        "effects": [],
+        "power": 2,
+        "toughness": 3,
+        "triggered_abilities": [
+            {
+                "event": "enters",
+                "predicate": {"kind": "source_is_self"},
+                "effect": {"kind": "mill", "count": 3},
+            }
+        ],
+    }
+    rust_state.register_and_inject_object(
+        rust_broodtender_dict, 0, ZONE_BATTLEFIELD,
+    )
+    assert rust_state.stack_size() == 1
+
+    # ---- Python side ----
+    from mtg_bot.actions import _trigger_etb_abilities
+    from mtg_bot.cards.base import CardPrinting, ManaCost
+    from mtg_bot.effects.base import TriggeredAbility
+    from mtg_bot.effects.generic.library_lookat import SelfMill
+    from mtg_bot.effects.predicates import Event, IsSelf
+    from mtg_bot.game import Zone
+
+    broodtender_printing = CardPrinting(
+        name="Seedship Broodtender",
+        mana_cost_str="",
+        mana_cost=ManaCost(generic=0, colored=(("B", 1), ("G", 1))),
+        type_line="Creature",
+        supertypes=(),
+        card_types=("Creature",),
+        subtypes=(),
+        power=2,
+        toughness=3,
+        produces=frozenset(),
+        triggered_abilities=(
+            TriggeredAbility(
+                event=Event.ENTERS,
+                predicate=IsSelf(),
+                effect=SelfMill(amount=3),
+            ),
+        ),
+    )
+    py_broodtender = py_state.new_object(
+        broodtender_printing, owner_id=0, zone=Zone.BATTLEFIELD,
+    )
+    py_broodtender.summoning_sick = False
+    py_broodtender.tapped = False
+    py_broodtender.damage = 0
+    py_broodtender.etb_timestamp = py_state.next_timestamp
+    py_state.next_timestamp += 1
+    py_state.battlefield.append(py_broodtender)
+    _trigger_etb_abilities(py_state, py_broodtender)
+    assert len(py_state.stack) == 1
+
+    # ---- Drain both stacks, then compare ----
+    _drain_stack_both(py_state, rust_state)
+
+    # Both engines milled all 2 cards (the third iteration was a
+    # silent no-op on empty library).
+    assert rust_state.library_sizes[0] == 0
+    assert rust_state.graveyard_sizes[0] == 2
+    assert len(py_state.players[0].library) == 0
+    assert len(py_state.players[0].graveyard) == 2
+
+    # Cross-engine: same final zone sizes, same gy ordering.
+    assert rust_state.library_sizes[0] == len(py_state.players[0].library)
+    assert rust_state.graveyard_sizes[0] == len(py_state.players[0].graveyard)
+    rust_p0_gy_names = [
+        entry["printing_name"]
+        for entry in rust_state.graveyard_snapshot(0)
+    ]
+    py_p0_gy_names = [
+        o.printing.name for o in py_state.players[0].graveyard
+    ]
+    expected_gy_names = ["Bait Bear 1", "Bait Bear 2"]
+    assert rust_p0_gy_names == expected_gy_names
+    assert py_p0_gy_names == expected_gy_names
+
+    # Lives unchanged -- mill doesn't touch life totals, and an
+    # empty-library mill is NOT a deck-out (CR 704.5b applies to
+    # draws, not mills). I19 / I65-closure: empty-library mill is
+    # a silent no-op, not a game-ending loss-state.
+    assert rust_state.get_life(0) == 20
+    assert rust_state.get_life(1) == 20
+    assert py_state.players[0].life == 20
+    assert py_state.players[1].life == 20
+
+    # No residual stack.
+    assert rust_state.stack_size() == 0
+    assert len(py_state.stack) == 0

@@ -375,6 +375,52 @@ def _ta_dict_to_python_effect(eff_dict: dict):
         return DealDamageToOpponentCreature(
             amount=eff_dict.get("amount", 0),
         )
+    if kind == "mill":
+        # Self-mill: "controller mills N cards" (CR 701.13b — put the
+        # top N cards of your own library into your graveyard). Rust's
+        # ``Effect::Mill { count: i32 }`` (cards.rs:75) is the
+        # controller-target shortcut sibling of MillTargetPlayer (which
+        # takes an explicit target player); its resolve arm at
+        # ``state_ops_resolve.rs:1034-1051`` reads
+        # ``current_resolve_source_controller`` (with active_player
+        # fallback per the I65 controller-of-effect fix) and pops up
+        # to ``count`` cards from that player's library top, pushing
+        # each onto the same player's graveyard. Negative count is
+        # silently clamped to 0 (mirrors DrawCards convention).
+        #
+        # **Empty-library mid-mill**: both engines silently stop. Real
+        # MTG: milling on an empty library is NOT a deck-out by itself
+        # (CR 704.5b applies to DRAWING from an empty library, not
+        # MILLING). So both arms break out of the loop and observably
+        # match on a probe that mills more cards than the library
+        # holds (I19 / I65 closure).
+        #
+        # Python's ``SelfMill(amount: int = 1)``
+        # (effects/generic/library_lookat.py:624) is the matched class:
+        # ``resolve(state, controller_id)`` pops ``amount`` cards from
+        # ``library[0]`` (top = index 0, matching Rust) and pushes them
+        # to the controller's graveyard, breaking on empty library.
+        # The amount/count field-name discrepancy is local to the
+        # bridge translation (Rust uses ``count`` per the parse_effect
+        # convention shared with DrawCards / MillTargetPlayer /
+        # Surveil; Python uses ``amount`` per the SelfMill class's
+        # constructor) — same shape as the ``draw_cards count -> amount``
+        # arm above.
+        #
+        # No target picking, no agent shim required: SelfMill resolves
+        # directly under the effect's source controller, so end-to-end
+        # probes don't need a custom agent on the controller (unlike
+        # ``deal_damage_any_target`` which picks at PUSH time).
+        #
+        # Missing ``count`` defaults to 1 (matching SelfMill's class
+        # default, and the typical oracle text "mill a card" without
+        # an explicit count). The Rust parser at cards.rs:2744 requires
+        # ``count`` explicitly — bridge fixtures should pass it
+        # explicitly to keep round-trip dict-shape consistency with
+        # what Rust accepts; the default is a translator robustness
+        # backstop, not a contract.
+        from mtg_bot.effects.generic.library_lookat import SelfMill
+        return SelfMill(amount=eff_dict.get("count", 1))
     raise ValueError(
         f"cross_engine triggered_abilities bridge: unsupported "
         f"effect kind {kind!r} (extend `_ta_dict_to_python_effect` "
