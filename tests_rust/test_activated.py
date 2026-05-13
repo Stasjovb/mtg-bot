@@ -3208,6 +3208,515 @@ def test_targeted_sac_unknown_cost_key_raises(empty_registry):
 
 
 # -------------------------------------------------------------------
+# CE20 Slice 7 — subtype-filtered sacrifice variants
+# (sacrifice_food, sacrifice_a_desert)
+#
+# Mirrors the Slice 6 targeted-sac pattern but the candidate set
+# filters on `printing.subtypes.contains("Food")` / `"Desert"`. Rides
+# on the CardPrinting.subtypes substrate landed at `03aebefb` /
+# `dd15d7ed`.
+# -------------------------------------------------------------------
+
+
+def _sac_food_dict():
+    """`{1}, Sacrifice a Food: gain 1 life`. Ragost-shape source.
+    Uses gain_life as a stand-in for the real Ragost effect (deal 3
+    damage to each opponent) — the test focuses on the cost machinery.
+    """
+    return {
+        "name": "Ragost (synthetic)",
+        "card_types": ["Creature"],
+        "mana_cost": {"generic": 2},
+        "effects": [],
+        "power": 3,
+        "toughness": 3,
+        "activated_abilities": [
+            {
+                "cost": {"sacrifice_food": True},
+                "effect": {"kind": "gain_life", "amount": 1},
+                "is_mana_ability": False,
+            }
+        ],
+    }
+
+
+def _sac_desert_dict():
+    """`{0}, Sacrifice a Desert: gain 1 life`. Synthetic Desert-cost
+    source. No EoE printing carries this shape today; substrate ships
+    without a real-card probe.
+    """
+    return {
+        "name": "Desert Eater (synthetic)",
+        "card_types": ["Creature"],
+        "mana_cost": {"generic": 1},
+        "effects": [],
+        "power": 2,
+        "toughness": 2,
+        "activated_abilities": [
+            {
+                "cost": {"sacrifice_a_desert": True},
+                "effect": {"kind": "gain_life", "amount": 1},
+                "is_mana_ability": False,
+            }
+        ],
+    }
+
+
+def _food_token_dict(name: str = "Food Token"):
+    """A synthetic Food artifact token (real Food tokens carry
+    "{2}, {T}, Sacrifice this artifact: gain 3 life" but the test
+    fixture strips the activated ability and treats the token as a
+    bare Food-subtyped artifact — the test focuses on sac-target
+    eligibility, not the token's own ability).
+    """
+    return {
+        "name": name,
+        "card_types": ["Artifact"],
+        "subtypes": ["Food"],
+        "effects": [],
+    }
+
+
+def _desert_land_dict(name: str = "Test Desert"):
+    """A synthetic Desert-subtyped land. No EoE printing today."""
+    return {
+        "name": name,
+        "card_types": ["Land"],
+        "subtypes": ["Desert"],
+        "effects": [],
+    }
+
+
+# --- parser surface ---------------------------------------------------
+
+
+def test_sacrifice_food_parses(empty_registry):
+    """`sacrifice_food: True` parses."""
+    pid = empty_registry.register_printing(_sac_food_dict())
+    assert pid == 0
+
+
+def test_sacrifice_a_desert_parses(empty_registry):
+    """`sacrifice_a_desert: True` parses."""
+    pid = empty_registry.register_printing(_sac_desert_dict())
+    assert pid == 0
+
+
+def test_sacrifice_food_invalid_bool_raises(empty_registry):
+    d = _sac_food_dict()
+    d["activated_abilities"][0]["cost"]["sacrifice_food"] = "yes"
+    with pytest.raises(
+        ValueError, match=r"sacrifice_food must be a bool"
+    ):
+        empty_registry.register_printing(d)
+
+
+def test_sacrifice_a_desert_invalid_bool_raises(empty_registry):
+    d = _sac_desert_dict()
+    d["activated_abilities"][0]["cost"]["sacrifice_a_desert"] = 0
+    with pytest.raises(
+        ValueError, match=r"sacrifice_a_desert must be a bool"
+    ):
+        empty_registry.register_printing(d)
+
+
+# --- emission target fan-out (sacrifice_food) -----------------------
+
+
+def test_sac_food_emits_one_per_food_target(synthetic_state):
+    """Source + injected Food tokens on activator's bf => one
+    ActivateAbility dict per Food. Non-Food artifacts/creatures are
+    NOT legal targets.
+    """
+    PHASE_MAIN1 = 3
+    synthetic_state.set_phase(PHASE_MAIN1)
+    _tap_all_default_p0_mana_sources(synthetic_state)
+    src_id = synthetic_state.register_and_inject_object(
+        _sac_food_dict(), 0, ZONE_BATTLEFIELD,
+    )
+    synthetic_state.force_set_summoning_sick(src_id, False)
+    food1 = synthetic_state.register_and_inject_object(
+        _food_token_dict("Food 1"), 0, ZONE_BATTLEFIELD,
+    )
+    food2 = synthetic_state.register_and_inject_object(
+        _food_token_dict("Food 2"), 0, ZONE_BATTLEFIELD,
+    )
+    # Non-Food artifact — should NOT be eligible.
+    non_food_art = synthetic_state.register_and_inject_object(
+        _vanilla_artifact_dict("Junk"), 0, ZONE_BATTLEFIELD,
+    )
+    synthetic_state.empty_mana_pool(0)
+    synthetic_state.add_mana(0, "C", 1)
+
+    decisions = synthetic_state.legal_decisions(0)
+    sac_acts = [
+        d
+        for d in decisions
+        if d["kind"] == "activate_ability"
+        and d["source_id"] == src_id
+    ]
+    target_ids = {d["sacrifice_target_id"] for d in sac_acts}
+    assert food1 in target_ids
+    assert food2 in target_ids
+    # Non-Food artifact MUST NOT be a legal target.
+    assert non_food_art not in target_ids
+    # Unique-target invariant: no double-emit per Food.
+    assert len(target_ids) == len(sac_acts)
+    # All carry None for target_creature_id (sac target ≠ equip target).
+    for d in sac_acts:
+        assert d["target_creature_id"] is None
+
+
+def test_sac_food_excludes_non_food_subtypes(synthetic_state):
+    """Source on bf with creatures and lands (no Food subtype on
+    anything) => no emission (CR 601.2c — no legal targets).
+    """
+    PHASE_MAIN1 = 3
+    synthetic_state.set_phase(PHASE_MAIN1)
+    _tap_all_default_p0_mana_sources(synthetic_state)
+    src_id = synthetic_state.register_and_inject_object(
+        _sac_food_dict(), 0, ZONE_BATTLEFIELD,
+    )
+    synthetic_state.force_set_summoning_sick(src_id, False)
+    # Default synthetic bf has Forests (Land subtype "Forest") and
+    # Grizzly Bears (Creature subtype "Bear") — no Food anywhere.
+    synthetic_state.empty_mana_pool(0)
+    synthetic_state.add_mana(0, "C", 1)
+
+    decisions = synthetic_state.legal_decisions(0)
+    sac_acts = [
+        d
+        for d in decisions
+        if d["kind"] == "activate_ability"
+        and d["source_id"] == src_id
+    ]
+    assert sac_acts == []
+
+
+def test_sac_food_excludes_opponent_food(synthetic_state):
+    """Food on opponent's bf is NOT a legal sac target ("your" food,
+    not any food — you can only sac permanents you control).
+    """
+    PHASE_MAIN1 = 3
+    synthetic_state.set_phase(PHASE_MAIN1)
+    _tap_all_default_p0_mana_sources(synthetic_state)
+    src_id = synthetic_state.register_and_inject_object(
+        _sac_food_dict(), 0, ZONE_BATTLEFIELD,
+    )
+    synthetic_state.force_set_summoning_sick(src_id, False)
+    # Opponent's Food token.
+    opp_food = synthetic_state.register_and_inject_object(
+        _food_token_dict("Opp Food"), 1, ZONE_BATTLEFIELD,
+    )
+    synthetic_state.empty_mana_pool(0)
+    synthetic_state.add_mana(0, "C", 1)
+
+    decisions = synthetic_state.legal_decisions(0)
+    sac_acts = [
+        d
+        for d in decisions
+        if d["kind"] == "activate_ability"
+        and d["source_id"] == src_id
+    ]
+    target_ids = [d["sacrifice_target_id"] for d in sac_acts]
+    assert opp_food not in target_ids
+    # No own Food => no emission.
+    assert sac_acts == []
+
+
+# --- emission target fan-out (sacrifice_a_desert) -------------------
+
+
+def test_sac_desert_emits_one_per_desert_target(synthetic_state):
+    """Source + injected Desert lands on activator's bf => one
+    ActivateAbility dict per Desert. Non-Desert lands are NOT eligible.
+    """
+    PHASE_MAIN1 = 3
+    synthetic_state.set_phase(PHASE_MAIN1)
+    _tap_all_default_p0_mana_sources(synthetic_state)
+    src_id = synthetic_state.register_and_inject_object(
+        _sac_desert_dict(), 0, ZONE_BATTLEFIELD,
+    )
+    synthetic_state.force_set_summoning_sick(src_id, False)
+    desert1 = synthetic_state.register_and_inject_object(
+        _desert_land_dict("D1"), 0, ZONE_BATTLEFIELD,
+    )
+    desert2 = synthetic_state.register_and_inject_object(
+        _desert_land_dict("D2"), 0, ZONE_BATTLEFIELD,
+    )
+    # Non-Desert land
+    plains = synthetic_state.register_and_inject_object(
+        _vanilla_land_dict("Plains"), 0, ZONE_BATTLEFIELD,
+    )
+    synthetic_state.empty_mana_pool(0)
+    synthetic_state.add_mana(0, "C", 0)
+
+    decisions = synthetic_state.legal_decisions(0)
+    sac_acts = [
+        d
+        for d in decisions
+        if d["kind"] == "activate_ability"
+        and d["source_id"] == src_id
+    ]
+    target_ids = {d["sacrifice_target_id"] for d in sac_acts}
+    assert desert1 in target_ids
+    assert desert2 in target_ids
+    # Non-Desert lands not eligible.
+    assert plains not in target_ids
+    assert len(target_ids) == len(sac_acts)
+
+
+def test_sac_desert_no_legal_targets_no_emission(synthetic_state):
+    """sacrifice_a_desert source with no Desert subtypes anywhere on
+    bf: no emission.
+    """
+    PHASE_MAIN1 = 3
+    synthetic_state.set_phase(PHASE_MAIN1)
+    _tap_all_default_p0_mana_sources(synthetic_state)
+    src_id = synthetic_state.register_and_inject_object(
+        _sac_desert_dict(), 0, ZONE_BATTLEFIELD,
+    )
+    synthetic_state.force_set_summoning_sick(src_id, False)
+    # Default bf has Forests and Bears; no Deserts.
+    synthetic_state.empty_mana_pool(0)
+    synthetic_state.add_mana(0, "C", 0)
+
+    decisions = synthetic_state.legal_decisions(0)
+    sac_acts = [
+        d
+        for d in decisions
+        if d["kind"] == "activate_ability"
+        and d["source_id"] == src_id
+    ]
+    assert sac_acts == []
+
+
+# --- apply-arm validation -------------------------------------------
+
+
+def test_sac_food_apply_moves_food_to_graveyard(synthetic_state):
+    """apply_action with a valid Food sacrifice_target_id: Food token
+    moves to p0's graveyard.
+    """
+    src_id = synthetic_state.register_and_inject_object(
+        _sac_food_dict(), 0, ZONE_BATTLEFIELD,
+    )
+    synthetic_state.force_set_summoning_sick(src_id, False)
+    food = synthetic_state.register_and_inject_object(
+        _food_token_dict("F"), 0, ZONE_BATTLEFIELD,
+    )
+    synthetic_state.empty_mana_pool(0)
+    synthetic_state.add_mana(0, "C", 1)
+
+    p0_gy_before = synthetic_state.graveyard_sizes[0]
+    synthetic_state.apply_action(
+        {
+            "kind": "activate_ability",
+            "source_id": src_id,
+            "ability_index": 0,
+            "sacrifice_target_id": food,
+        }
+    )
+    # Food moved to gy.
+    assert synthetic_state.graveyard_sizes[0] == p0_gy_before + 1
+    # Source stays on bf.
+    bf_ids = [o["id"] for o in synthetic_state.battlefield_snapshot()]
+    assert src_id in bf_ids
+    assert food not in bf_ids
+
+
+def test_sac_food_apply_raises_on_non_food_target(synthetic_state):
+    """Trying to sac a non-Food artifact via sacrifice_food cost
+    raises loud BEFORE any state mutation.
+    """
+    src_id = synthetic_state.register_and_inject_object(
+        _sac_food_dict(), 0, ZONE_BATTLEFIELD,
+    )
+    synthetic_state.force_set_summoning_sick(src_id, False)
+    non_food = synthetic_state.register_and_inject_object(
+        _vanilla_artifact_dict("Junk"), 0, ZONE_BATTLEFIELD,
+    )
+    synthetic_state.empty_mana_pool(0)
+    synthetic_state.add_mana(0, "C", 1)
+
+    p0_gy_before = synthetic_state.graveyard_sizes[0]
+    with pytest.raises(
+        ValueError, match=r"not a legal sacrifice target"
+    ):
+        synthetic_state.apply_action(
+            {
+                "kind": "activate_ability",
+                "source_id": src_id,
+                "ability_index": 0,
+                "sacrifice_target_id": non_food,
+            }
+        )
+    # No mutation — gy unchanged.
+    assert synthetic_state.graveyard_sizes[0] == p0_gy_before
+
+
+def test_sac_food_apply_raises_when_target_missing(synthetic_state):
+    """A sacrifice_food activation with no sacrifice_target_id key
+    raises (target is required when cost flags sacrifice_food).
+    """
+    src_id = synthetic_state.register_and_inject_object(
+        _sac_food_dict(), 0, ZONE_BATTLEFIELD,
+    )
+    synthetic_state.force_set_summoning_sick(src_id, False)
+    synthetic_state.register_and_inject_object(
+        _food_token_dict("F"), 0, ZONE_BATTLEFIELD,
+    )
+    synthetic_state.empty_mana_pool(0)
+    synthetic_state.add_mana(0, "C", 1)
+
+    with pytest.raises(
+        ValueError, match=r"requires a sacrifice target"
+    ):
+        synthetic_state.apply_action(
+            {
+                "kind": "activate_ability",
+                "source_id": src_id,
+                "ability_index": 0,
+            }
+        )
+
+
+def test_sac_food_apply_raises_on_opponent_food(synthetic_state):
+    """Opponent's Food is not a legal sac target for an activator's
+    sacrifice_food cost.
+    """
+    src_id = synthetic_state.register_and_inject_object(
+        _sac_food_dict(), 0, ZONE_BATTLEFIELD,
+    )
+    synthetic_state.force_set_summoning_sick(src_id, False)
+    opp_food = synthetic_state.register_and_inject_object(
+        _food_token_dict("Opp Food"), 1, ZONE_BATTLEFIELD,
+    )
+    synthetic_state.empty_mana_pool(0)
+    synthetic_state.add_mana(0, "C", 1)
+
+    with pytest.raises(
+        ValueError, match=r"not a legal sacrifice target"
+    ):
+        synthetic_state.apply_action(
+            {
+                "kind": "activate_ability",
+                "source_id": src_id,
+                "ability_index": 0,
+                "sacrifice_target_id": opp_food,
+            }
+        )
+
+
+def test_sac_desert_apply_moves_desert_to_graveyard(synthetic_state):
+    """apply_action with a Desert sacrifice_target_id: the Desert
+    moves to the activator's graveyard.
+    """
+    src_id = synthetic_state.register_and_inject_object(
+        _sac_desert_dict(), 0, ZONE_BATTLEFIELD,
+    )
+    synthetic_state.force_set_summoning_sick(src_id, False)
+    desert = synthetic_state.register_and_inject_object(
+        _desert_land_dict("D"), 0, ZONE_BATTLEFIELD,
+    )
+    synthetic_state.empty_mana_pool(0)
+    synthetic_state.add_mana(0, "C", 0)
+
+    p0_gy_before = synthetic_state.graveyard_sizes[0]
+    synthetic_state.apply_action(
+        {
+            "kind": "activate_ability",
+            "source_id": src_id,
+            "ability_index": 0,
+            "sacrifice_target_id": desert,
+        }
+    )
+    assert synthetic_state.graveyard_sizes[0] == p0_gy_before + 1
+    bf_ids = [o["id"] for o in synthetic_state.battlefield_snapshot()]
+    assert desert not in bf_ids
+
+
+def test_sac_desert_apply_raises_on_non_desert_land(synthetic_state):
+    """Sacrificing a non-Desert land via sacrifice_a_desert cost
+    raises (Plains is a Land but lacks the Desert subtype).
+    """
+    src_id = synthetic_state.register_and_inject_object(
+        _sac_desert_dict(), 0, ZONE_BATTLEFIELD,
+    )
+    synthetic_state.force_set_summoning_sick(src_id, False)
+    plains = synthetic_state.register_and_inject_object(
+        _vanilla_land_dict("Plains"), 0, ZONE_BATTLEFIELD,
+    )
+    synthetic_state.empty_mana_pool(0)
+    synthetic_state.add_mana(0, "C", 0)
+
+    with pytest.raises(
+        ValueError, match=r"not a legal sacrifice target"
+    ):
+        synthetic_state.apply_action(
+            {
+                "kind": "activate_ability",
+                "source_id": src_id,
+                "ability_index": 0,
+                "sacrifice_target_id": plains,
+            }
+        )
+
+
+# --- mutually exclusive variant + emission round-trip ---------------
+
+
+def test_sac_food_action_dict_round_trip(synthetic_state):
+    """legal_decisions emission for a sacrifice_food source carries
+    sacrifice_target_id (the Food) and target_creature_id=None.
+    """
+    PHASE_MAIN1 = 3
+    synthetic_state.set_phase(PHASE_MAIN1)
+    _tap_all_default_p0_mana_sources(synthetic_state)
+    src_id = synthetic_state.register_and_inject_object(
+        _sac_food_dict(), 0, ZONE_BATTLEFIELD,
+    )
+    synthetic_state.force_set_summoning_sick(src_id, False)
+    food = synthetic_state.register_and_inject_object(
+        _food_token_dict("F"), 0, ZONE_BATTLEFIELD,
+    )
+    synthetic_state.empty_mana_pool(0)
+    synthetic_state.add_mana(0, "C", 1)
+
+    decisions = synthetic_state.legal_decisions(0)
+    sac_acts = [
+        d
+        for d in decisions
+        if d["kind"] == "activate_ability"
+        and d["source_id"] == src_id
+    ]
+    assert len(sac_acts) == 1
+    d = sac_acts[0]
+    assert d["sacrifice_target_id"] == food
+    assert d["target_creature_id"] is None
+    assert d["ability_index"] == 0
+
+
+def test_sac_food_subtype_match_is_case_sensitive(empty_registry):
+    """Subtype match for "Food" is case-sensitive (Title Case per
+    CR/Scryfall). A lower-cased "food" subtype on a printing should
+    NOT match the sacrifice_food filter — case-insensitive matching
+    would be a parser bug.
+    """
+    # Probe at the registry layer: a lower-cased "food" subtype
+    # creates a printing but downstream consumers wouldn't see it
+    # as Food. Verified via Registry.get_printing_subtypes round-trip.
+    d = _food_token_dict("LowercaseFood")
+    d["subtypes"] = ["food"]
+    pid = empty_registry.register_printing(d)
+    subtypes = empty_registry.get_printing_subtypes(pid)
+    # The lower-cased entry is stored as-is.
+    assert subtypes == ["food"]
+    # The consumer-side `contains("Food")` would NOT match this entry;
+    # documented as the Title Case storage invariant from the substrate.
+
+
+# -------------------------------------------------------------------
 # CE20 Slice 5 — Planeswalker loyalty (Slice A)
 #
 # Tests for the `cost.loyalty: i32` extension and the

@@ -3973,12 +3973,13 @@ the forked branch.
 - **Out of scope (deferred to future slices)**:
   - **Targeted sacrifice variants** ~~(`sacrifice_another_creature`,
     `sacrifice_a_land`, `sacrifice_food`,
-    `sacrifice_another_artifact_or_land`, etc.)~~. **PARTIALLY
-    CLOSED by I55** — three variants
-    (`sacrifice_another_creature_or_artifact`, `sacrifice_a_land`,
-    `sacrifice_another_artifact`) shipped; subtype-filtered shapes
-    (`sacrifice_food`, `sacrifice_a_desert`) still need the
-    `CardPrinting.subtypes` registry field (ETB Slice 11 candidate).
+    `sacrifice_another_artifact_or_land`, etc.)~~. **CLOSED**:
+    creature/artifact/land variants closed by I55 (Slice 6);
+    subtype-filtered shapes (`sacrifice_food`, `sacrifice_a_desert`)
+    closed by I61 (Slice 7) once the subtypes substrate landed at
+    `03aebefb` / `dd15d7ed`. Compound variants
+    (`sacrifice_another_artifact_or_land`) remain deferred — no EoE
+    printing exercises this shape.
   - **Multi-target activations** (target a creature AND a player,
     target N creatures, etc.). Single-target Slice 4 scope; the
     payload shape supports only one `target_id` today. Multi-target
@@ -4317,6 +4318,66 @@ the forked branch.
     apply arms (DealDamage defender, PumpCreaturesYouControl,
     search-zone resolvers). Same per-arm parity decision pattern
     as I60's forward inventory.
+
+### I62. `ActivationCost.sacrifice_food: bool` + `ActivationCost.sacrifice_a_desert: bool` extend the cost shape; emission target fan-out + apply-arm sacrifice-target validation share the Slice 6 Phase 2.7 / Phase 5c pipeline; subtype-filtered eligibility consumes the `CardPrinting.subtypes` substrate (CE20 follow-up Slice 7 subtype-filtered sacrifice variants closure)
+
+- **Pinned by**:
+  - 17 new `tests_rust/test_activated.py` `test_sac_food_*` /
+    `test_sac_desert_*` / `test_sacrifice_food_*` /
+    `test_sacrifice_a_desert_*` regression pins covering parser
+    surface (4 — `parses`, `invalid_bool_raises` × 2), emission
+    target fan-out (5 — Food/Desert one-per-target, exclude
+    non-Food-subtype, exclude opponent's Food, no-emission empty
+    candidate set), apply-arm target validation + commit (6 — Food
+    moves to gy, Desert moves to gy, raise on non-Food, raise on
+    missing target, raise on opponent Food, raise on non-Desert
+    land), action-dict round-trip (1), and case-sensitive Title
+    Case subtype storage paranoia (1).
+
+- **Rule**. The Slice 6 targeted-sacrifice pattern at I55 already
+  fans out emission and validates Phase 2.7 on a per-variant filter.
+  Slice 7 adds two SUBTYPE-filtered variants riding on the same
+  `sacrifice_target_id` action-dict slot. The filter shape is
+  `target_printing.subtypes.iter().any(|s| s == "Food")` (or
+  `"Desert"`), case-sensitive Title Case per CR 205.3 / Scryfall
+  convention. The Phase 5c commit is universal across the variants —
+  it reads `validated_sac_target_id` regardless of which flag was set.
+
+- **EoE printings affected**: 1 (`sacrifice_food`: Ragost, Deft
+  Gastronaut — `{1}, {T}, Sacrifice a Food: Ragost deals 3 damage to
+  each opponent.`). Ragost ALSO carries a static
+  artifact-confers-Food ability that's out of scope for this slice;
+  the test fixture uses pre-stamped Food subtypes on synthetic
+  printings rather than running the static through Layer 4.
+  `sacrifice_a_desert`: 0 EoE printings; substrate ships symmetrically
+  with the Food variant so a future Desert-cost printing lands
+  without a structural change.
+
+- **Lenient "a Food" / "a Desert" reading**. Both variants follow the
+  Slice 6 `sacrifice_a_land` precedent: the printed text reads "a Food"
+  / "a Desert" with no "another" qualifier, so the source itself is
+  eligible iff its own subtypes include "Food" / "Desert". No EoE
+  printing today has the source-subtype + cost-flag combination —
+  the test fixture exercises eligibility by injecting a Food-subtyped
+  source with the `sacrifice_food` cost, which is the closest
+  analog to the printed Dust-Bowl reading.
+
+- **Out of scope (deferred to future slices)**:
+  - **Static subtype conferral** (e.g. Ragost's "Artifacts you
+    control are Foods in addition to their other types"). This is a
+    CR 613 Layer 4 / 6 effect that mutates `effective_subtypes` at
+    runtime; the substrate today only consumes the static
+    `printing.subtypes` field. Tests use pre-stamped subtypes.
+  - **Cross-engine smoke probe for sacrifice_food**. Same shape as
+    the I55 deferral — the `activated_cost_side_channel` harness can
+    grow a per-variant probe once a real EoE-pool printing exercises
+    the path; until then the test fixture uses synthetic Food
+    printings.
+  - **`sacrifice_another_food`** (an "another Food" variant). No EoE
+    printing carries this shape; the substrate ships the lenient
+    "a Food" reading only. A future "another Food" variant would
+    add a parallel `sacrifice_another_food: bool` field + matching
+    `is_self && !is_food` exclusion in the cascade.
 
 ### I60. `Effect::GainLife` controller-of-effect fix — reuses I59 transient slot; reader migrated to prefer `current_resolve_source_controller` over `active_player` (GainLife controller divergence closure)
 

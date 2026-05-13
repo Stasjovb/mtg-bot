@@ -547,6 +547,20 @@ impl GameState {
                     /// target MUST be an artifact on the activator's
                     /// bf, NOT the source itself.
                     sacrifice_another_artifact: bool,
+                    /// CE20 Slice 7 (subtype-filtered sacrifice).
+                    /// `true` when the cost flags `sacrifice_food`.
+                    /// The activator MUST submit a `sacrifice_target_id`
+                    /// and the target MUST be on the activator's bf
+                    /// with `subtypes` containing "Food" — the source
+                    /// itself IS eligible (no "another" qualifier).
+                    sacrifice_food: bool,
+                    /// CE20 Slice 7 (subtype-filtered sacrifice).
+                    /// `true` when the cost flags `sacrifice_a_desert`.
+                    /// The activator MUST submit a `sacrifice_target_id`
+                    /// and the target MUST be on the activator's bf
+                    /// with `subtypes` containing "Desert" — the source
+                    /// itself IS eligible.
+                    sacrifice_a_desert: bool,
                     /// CE20 Slice 5 (Walker loyalty Slice A). Signed
                     /// loyalty cost. Positive = pay (decrement
                     /// `loyalty_counters` by N); negative = add
@@ -587,6 +601,8 @@ impl GameState {
                             sacrifice_a_land: ab.cost.sacrifice_a_land,
                             sacrifice_another_artifact:
                                 ab.cost.sacrifice_another_artifact,
+                            sacrifice_food: ab.cost.sacrifice_food,
+                            sacrifice_a_desert: ab.cost.sacrifice_a_desert,
                             loyalty: ab.cost.loyalty,
                         }
                     } else {
@@ -675,13 +691,15 @@ impl GameState {
                         // StackItem / current_resolve_payload_target_id.
                         None
                     };
-                // Phase 2.7: CE20 follow-up Slice 6 sacrifice-target
-                // validation. When the cost flags a
+                // Phase 2.7: CE20 follow-up Slice 6 + Slice 7
+                // sacrifice-target validation. When the cost flags any
+                // of the targeted-sac variants (Slice 6's
                 // `sacrifice_another_creature_or_artifact` /
-                // `sacrifice_a_land` / `sacrifice_another_artifact`
-                // shape, the action dict MUST carry a
-                // `sacrifice_target_id` and that id MUST resolve to a
-                // legal sac target on the activator's battlefield.
+                // `sacrifice_a_land` / `sacrifice_another_artifact`,
+                // or Slice 7's `sacrifice_food` / `sacrifice_a_desert`),
+                // the action dict MUST carry a `sacrifice_target_id`
+                // and that id MUST resolve to a legal sac target on the
+                // activator's battlefield.
                 //
                 // Per-variant eligibility:
                 //   - sacrifice_another_creature_or_artifact: target
@@ -691,6 +709,10 @@ impl GameState {
                 //     "another" qualifier).
                 //   - sacrifice_another_artifact: target has Artifact
                 //     card_type, NOT self.
+                //   - sacrifice_food: target's subtypes contains "Food";
+                //     self IS eligible (no "another" qualifier).
+                //   - sacrifice_a_desert: target's subtypes contains
+                //     "Desert"; self IS eligible.
                 //
                 // Symmetric error shape with Phase 2.5: raise BEFORE
                 // any commit so a malformed dict leaves no state
@@ -700,7 +722,9 @@ impl GameState {
                 let needs_sac_target = resolved
                     .sacrifice_another_creature_or_artifact
                     || resolved.sacrifice_a_land
-                    || resolved.sacrifice_another_artifact;
+                    || resolved.sacrifice_another_artifact
+                    || resolved.sacrifice_food
+                    || resolved.sacrifice_a_desert;
                 let validated_sac_target_id: Option<u32> =
                     if needs_sac_target {
                         let Some(sac_id) = sacrifice_target_id else {
@@ -737,6 +761,17 @@ impl GameState {
                                     .card_types
                                     .iter()
                                     .any(|t| t == "Land");
+                                // Subtype checks (Slice 7) —
+                                // case-sensitive Title Case match per
+                                // CR/Scryfall convention.
+                                let is_food = printing
+                                    .subtypes
+                                    .iter()
+                                    .any(|s| s == "Food");
+                                let is_desert = printing
+                                    .subtypes
+                                    .iter()
+                                    .any(|s| s == "Desert");
                                 if resolved
                                     .sacrifice_another_creature_or_artifact
                                 {
@@ -745,6 +780,10 @@ impl GameState {
                                     is_land
                                 } else if resolved.sacrifice_another_artifact {
                                     !is_self && is_artifact
+                                } else if resolved.sacrifice_food {
+                                    is_food
+                                } else if resolved.sacrifice_a_desert {
+                                    is_desert
                                 } else {
                                     false
                                 }
@@ -962,11 +1001,12 @@ impl GameState {
                         state,
                     )?;
                 }
-                // Phase 5c: CE20 Slice 6 — commit a TARGETED
-                // sacrifice (sacrifice_another_*, sacrifice_a_land).
-                // Same field-reset + LTB-void-flag + LEAVES queue +
-                // drain plumbing as Phase 5b, but the moved object is
-                // the chosen sac target, NOT the source. The activator
+                // Phase 5c: CE20 Slice 6 + Slice 7 — commit a TARGETED
+                // sacrifice (sacrifice_another_*, sacrifice_a_land,
+                // sacrifice_food, sacrifice_a_desert). Same
+                // field-reset + LTB-void-flag + LEAVES queue + drain
+                // plumbing as Phase 5b, but the moved object is the
+                // chosen sac target, NOT the source. The activator
                 // controls the sac target (Phase 2.7 enforced bf
                 // containment on activator's side), so the target's
                 // controller_idx == activator's controller_idx.

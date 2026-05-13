@@ -1224,9 +1224,11 @@ impl GameState {
                 } else if ability.cost.sacrifice_another_creature_or_artifact
                     || ability.cost.sacrifice_a_land
                     || ability.cost.sacrifice_another_artifact
+                    || ability.cost.sacrifice_food
+                    || ability.cost.sacrifice_a_desert
                 {
-                    // CE20 Slice 6 sacrifice target fan-out. Eligibility
-                    // varies per variant:
+                    // CE20 Slice 6 + Slice 7 sacrifice target fan-out.
+                    // Eligibility varies per variant:
                     //
                     // - sacrifice_another_creature_or_artifact: target
                     //   has card_type Creature OR Artifact, NOT self.
@@ -1235,16 +1237,25 @@ impl GameState {
                     //   no "another" qualifier).
                     // - sacrifice_another_artifact: target has
                     //   card_type Artifact, NOT self.
+                    // - sacrifice_food: target's subtypes contains
+                    //   "Food", SELF IS eligible (no "another"
+                    //   qualifier; matches `sacrifice_a_land` reading).
+                    //   Rides on the CardPrinting.subtypes substrate
+                    //   landed in commits `03aebefb` / `dd15d7ed`.
+                    // - sacrifice_a_desert: target's subtypes contains
+                    //   "Desert", SELF IS eligible (same lenient
+                    //   reading as `sacrifice_food`).
                     //
                     // Walk the activator's bf once and emit one dict
                     // per eligible target. Empty result → no emission
                     // (CR 601.2c: can't begin to activate without a
-                    // legal target). The three variants are
-                    // semantically mutually exclusive on a single
-                    // ability per the Python dataclass shape; if a
-                    // future printing carries multiple flags Rust's
-                    // OR-walk would still produce the union of legal
-                    // targets, which is the right behavior.
+                    // legal target). The variants are semantically
+                    // mutually exclusive on a single ability per the
+                    // Python dataclass shape; if a future printing
+                    // carries multiple flags Rust's else-if cascade
+                    // honors the first set flag (priority order:
+                    // creature_or_artifact > land > artifact > food >
+                    // desert) — no real EoE printing combines flags.
                     for target in self.players[idx].battlefield.iter() {
                         let is_self = target.id == obj.id;
                         let Some(t_printing) =
@@ -1264,6 +1275,17 @@ impl GameState {
                             .card_types
                             .iter()
                             .any(|t| t == "Land");
+                        // Subtype-filtered checks (Slice 7).
+                        // Case-sensitive Title Case match per
+                        // CR/Scryfall convention.
+                        let is_food = t_printing
+                            .subtypes
+                            .iter()
+                            .any(|s| s == "Food");
+                        let is_desert = t_printing
+                            .subtypes
+                            .iter()
+                            .any(|s| s == "Desert");
                         let eligible = if ability
                             .cost
                             .sacrifice_another_creature_or_artifact
@@ -1275,6 +1297,14 @@ impl GameState {
                             is_land
                         } else if ability.cost.sacrifice_another_artifact {
                             !is_self && is_artifact
+                        } else if ability.cost.sacrifice_food {
+                            // "a Food" — no "another"; self IS
+                            // eligible iff its own subtypes contain
+                            // "Food".
+                            is_food
+                        } else if ability.cost.sacrifice_a_desert {
+                            // "a Desert" — same lenient reading.
+                            is_desert
                         } else {
                             false
                         };
