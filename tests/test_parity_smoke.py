@@ -11046,3 +11046,399 @@ def test_cross_engine_real_eoe_tannuk_memorial_ensign_landfall_burn_parity(
     # Cross-engine: same post-drain life totals on both seats.
     assert rust_state.get_life(0) == py_state.players[0].life
     assert rust_state.get_life(1) == py_state.players[1].life
+
+
+def test_cross_engine_real_eoe_weftstalker_ardent_or_predicate_burn_parity(
+    parity_smoke,
+):
+    """Probe G: Weftstalker Ardent (EoE) — first real-card consumer of
+    the new ``Predicate::Or`` substrate. The deferred unblock from
+    Probe F's forward notes lands here.
+
+    Oracle text in ``data/edge_of_eternities.json``:
+
+        "Whenever another creature or artifact you control enters,
+         this creature deals 1 damage to each opponent."
+
+    Predicate decomposition:
+
+      * "another" -> ``NOT(SourceIsSelf)`` -- gate self-arrival.
+      * "creature or artifact" -> ``Or(SubjectIsCreature, SubjectIsArtifact)``
+        -- NEW disjunction, landed in the Or-substrate slice.
+      * "you control" -> ``ControlledByYou``.
+
+    Combined shape:
+
+        And(
+            And(
+                Or(SubjectIsCreature, SubjectIsArtifact),
+                ControlledByYou,
+            ),
+            Not(SourceIsSelf),
+        )
+
+    Effect: ``damage_each_opponent(1)`` -- already on the cross-engine
+    bridge as of Probe F.
+
+    Probe shape (mirrors Mechan Assembler's inject-and-fan-out frame):
+
+      1. Pre-place Weftstalker Ardent on p0's bf. Its own arrival is
+         gated by NOT(SourceIsSelf): no fire, no life change. The Or
+         arm WOULD have matched (Weftstalker is a Creature), so this
+         pins the "Not gates Or-true" composition.
+
+      2. Inject a vanilla creature for p0 on the bf. Dispatch fires:
+         (Subject IS Creature -> Or-left true -> Or true) AND
+         (controlled_by_you yes) AND (NOT source_is_self yes).
+         Trigger pushes. Drain stack -> p1 life 20 -> 19.
+
+      3. Inject a vanilla artifact for p0 on the bf. Dispatch fires:
+         (Subject IS Artifact -> Or-right true even though Or-left
+         false -> Or true) AND controlled_by_you AND NOT-self.
+         Trigger pushes. Drain stack -> p1 life 19 -> 18.
+
+      4. Inject a vanilla land for p0 on the bf. Dispatch DOES NOT
+         fire: (Subject IS Land -> Or-left false; Or-right false ->
+         Or false) -> outer And short-circuits. No push, life
+         unchanged.
+
+      5. Cross-engine assert: BOTH engines reduced p1's life to 18
+         after two triggered fires + one rejected (land) arrival.
+         p0 life unchanged at 20 (controller-immune).
+
+    This is the **first** cross-engine probe to exercise
+    ``Predicate::Or`` end-to-end on a real EoE card. All three Or
+    arms (left-match, right-match, neither-match) are pinned in a
+    single inject-and-fan-out sequence.
+
+    Out of scope:
+
+      * Warp cost ({R}) — cast-from-exile alt path is irrelevant to
+        the ETB-trigger contract; pre-place skips the cast pipeline.
+      * Cross-controller controller-of-effect for
+        ``DamageEachOpponent`` — same gap as Probe F's note;
+        follow-up I-slice mirrors I60's shape.
+    """
+    from mtg_bot.parity.cross_engine import (
+        CardDef, DeckSpec, build_python_state, build_rust_state,
+    )
+
+    weftstalker_predicate = {
+        "kind": "and",
+        "left": {
+            "kind": "and",
+            "left": {
+                "kind": "or",
+                "left": {"kind": "subject_is_creature"},
+                "right": {"kind": "subject_is_artifact"},
+            },
+            "right": {"kind": "controlled_by_you"},
+        },
+        "right": {
+            "kind": "not",
+            "inner": {"kind": "source_is_self"},
+        },
+    }
+    weftstalker = CardDef(
+        name="Weftstalker Ardent",
+        card_type="Creature",
+        mana_cost_generic=2,
+        mana_cost_colored=(("R", 1),),
+        power=2,
+        toughness=3,
+        triggered_abilities=(
+            {
+                "event": "enters",
+                "predicate": weftstalker_predicate,
+                "effect": {
+                    "kind": "damage_each_opponent",
+                    "amount": 1,
+                },
+            },
+        ),
+    )
+    bait_creature = CardDef(
+        name="Bait Creature",
+        card_type="Creature",
+        mana_cost_generic=1,
+        power=1,
+        toughness=1,
+    )
+    bait_artifact = CardDef(
+        name="Bait Artifact",
+        card_type="Artifact",
+        mana_cost_generic=1,
+    )
+    bait_land = CardDef(
+        name="Bait Wastes",
+        card_type="Land",
+    )
+    spec = DeckSpec(
+        card_defs=(weftstalker, bait_creature, bait_artifact, bait_land),
+        p0_library=(),
+        p1_library=(),
+    )
+    py_state = build_python_state(spec)
+    rust_state = build_rust_state(spec)
+
+    # ---- Rust side ----
+    ZONE_BATTLEFIELD = 2
+    rust_weftstalker_dict = {
+        "name": "Weftstalker Ardent",
+        "card_types": ["Creature"],
+        "mana_cost": {"generic": 2, "R": 1},
+        "effects": [],
+        "power": 2,
+        "toughness": 3,
+        "triggered_abilities": [
+            {
+                "event": "enters",
+                "predicate": weftstalker_predicate,
+                "effect": {
+                    "kind": "damage_each_opponent",
+                    "amount": 1,
+                },
+            }
+        ],
+    }
+    rust_weftstalker_id = rust_state.register_and_inject_object(
+        rust_weftstalker_dict, 0, ZONE_BATTLEFIELD
+    )
+    # Weftstalker's own arrival: NOT(IsSelf) suppresses; stack empty.
+    assert rust_state.stack_size() == 0, (
+        "Rust: Weftstalker's own arrival should NOT fire its trigger "
+        "(NOT(SourceIsSelf) suppresses even though Or matches creature). "
+        f"Got stack_size={rust_state.stack_size()}"
+    )
+    rust_p0_life_before = rust_state.get_life(0)
+    rust_p1_life_before = rust_state.get_life(1)
+    assert rust_p0_life_before == 20
+    assert rust_p1_life_before == 20
+
+    rust_bait_creature_dict = {
+        "name": "Bait Creature",
+        "card_types": ["Creature"],
+        "mana_cost": {"generic": 1},
+        "effects": [],
+        "power": 1,
+        "toughness": 1,
+    }
+    rust_bait_artifact_dict = {
+        "name": "Bait Artifact",
+        "card_types": ["Artifact"],
+        "mana_cost": {"generic": 1},
+        "effects": [],
+    }
+    rust_bait_land_dict = {
+        "name": "Bait Wastes",
+        "card_types": ["Land"],
+        "effects": [],
+    }
+
+    # Arrival 1: vanilla creature for p0. Or-left true (creature),
+    # ControlledByYou true, NOT-self true -> fires.
+    rust_creature_id = rust_state.register_and_inject_object(
+        rust_bait_creature_dict, 0, ZONE_BATTLEFIELD
+    )
+    assert rust_state.stack_size() == 1, (
+        "Rust: Or-left (subject_is_creature) should fire on p0's "
+        "creature arrival"
+    )
+    while rust_state.stack_size() > 0:
+        rust_state.resolve_top_of_stack()
+    assert rust_state.get_life(1) == 19, (
+        f"Rust: p1 life should be 19 after first burn; "
+        f"got {rust_state.get_life(1)}"
+    )
+
+    # Arrival 2: vanilla artifact for p0. Or-right true (artifact),
+    # Or-left false (not a creature). Outer And succeeds -> fires.
+    rust_artifact_id = rust_state.register_and_inject_object(
+        rust_bait_artifact_dict, 0, ZONE_BATTLEFIELD
+    )
+    assert rust_state.stack_size() == 1, (
+        "Rust: Or-right (subject_is_artifact) should fire on p0's "
+        "artifact arrival (Or-left false, Or-right true)"
+    )
+    while rust_state.stack_size() > 0:
+        rust_state.resolve_top_of_stack()
+    assert rust_state.get_life(1) == 18, (
+        f"Rust: p1 life should be 18 after second burn; "
+        f"got {rust_state.get_life(1)}"
+    )
+
+    # Arrival 3: vanilla land for p0. Neither Or arm matches (not a
+    # creature, not an artifact) -> Or false -> outer And false.
+    # No fire, life unchanged.
+    rust_land_id = rust_state.register_and_inject_object(
+        rust_bait_land_dict, 0, ZONE_BATTLEFIELD
+    )
+    assert rust_state.stack_size() == 0, (
+        "Rust: Or(creature, artifact) should reject a land subject "
+        "(neither arm matches). "
+        f"Got stack_size={rust_state.stack_size()}"
+    )
+    assert rust_state.get_life(1) == 18, (
+        f"Rust: p1 life should stay at 18 (land arrival rejected); "
+        f"got {rust_state.get_life(1)}"
+    )
+
+    # ---- Python side ----
+    from mtg_bot.actions import _trigger_etb_abilities
+    from mtg_bot.cards.base import CardPrinting, ManaCost
+    from mtg_bot.effects.base import TriggeredAbility
+    from mtg_bot.effects.generic.damage import DealDamageEachOpponent
+    from mtg_bot.effects.object_predicates import IsArtifact, IsCreature
+    from mtg_bot.effects.predicates import (
+        And, Controlled, Event, IsSelf, Not, Or, Subject, YOU,
+    )
+    from mtg_bot.game import Zone
+
+    py_predicate = And(
+        left=And(
+            left=Or(
+                left=Subject(slot=None, inner=IsCreature()),
+                right=Subject(slot=None, inner=IsArtifact()),
+            ),
+            right=Controlled(by=YOU, subject=None),
+        ),
+        right=Not(inner=IsSelf()),
+    )
+    weftstalker_printing = CardPrinting(
+        name="Weftstalker Ardent",
+        mana_cost_str="",
+        mana_cost=ManaCost(generic=2, colored=(("R", 1),)),
+        type_line="Creature",
+        supertypes=(),
+        card_types=("Creature",),
+        subtypes=(),
+        power=2,
+        toughness=3,
+        produces=frozenset(),
+        triggered_abilities=(
+            TriggeredAbility(
+                event=Event.ENTERS,
+                predicate=py_predicate,
+                effect=DealDamageEachOpponent(amount=1),
+            ),
+        ),
+    )
+    py_weftstalker = py_state.new_object(
+        weftstalker_printing, owner_id=0, zone=Zone.BATTLEFIELD,
+    )
+    py_weftstalker.summoning_sick = False
+    py_weftstalker.tapped = False
+    py_weftstalker.damage = 0
+    py_weftstalker.etb_timestamp = py_state.next_timestamp
+    py_state.next_timestamp += 1
+    py_state.battlefield.append(py_weftstalker)
+    _trigger_etb_abilities(py_state, py_weftstalker)
+    # NOT(IsSelf) suppresses self-arrival.
+    assert len(py_state.stack) == 0
+    assert py_state.players[1].life == 20
+
+    creature_printing = CardPrinting(
+        name="Bait Creature",
+        mana_cost_str="",
+        mana_cost=ManaCost(generic=1),
+        type_line="Creature",
+        supertypes=(),
+        card_types=("Creature",),
+        subtypes=(),
+        power=1,
+        toughness=1,
+        produces=frozenset(),
+        triggered_abilities=(),
+    )
+    artifact_printing = CardPrinting(
+        name="Bait Artifact",
+        mana_cost_str="",
+        mana_cost=ManaCost(generic=1),
+        type_line="Artifact",
+        supertypes=(),
+        card_types=("Artifact",),
+        subtypes=(),
+        power=None,
+        toughness=None,
+        produces=frozenset(),
+        triggered_abilities=(),
+    )
+    land_printing = CardPrinting(
+        name="Bait Wastes",
+        mana_cost_str="",
+        mana_cost=ManaCost(),
+        type_line="Land",
+        supertypes=(),
+        card_types=("Land",),
+        subtypes=(),
+        power=None,
+        toughness=None,
+        produces=frozenset(),
+        triggered_abilities=(),
+    )
+
+    # Arrival 1: vanilla creature.
+    py_creature = py_state.new_object(
+        creature_printing, owner_id=0, zone=Zone.BATTLEFIELD,
+    )
+    py_creature.summoning_sick = True
+    py_creature.tapped = False
+    py_creature.damage = 0
+    py_creature.etb_timestamp = py_state.next_timestamp
+    py_state.next_timestamp += 1
+    py_state.battlefield.append(py_creature)
+    _trigger_etb_abilities(py_state, py_creature)
+    assert len(py_state.stack) == 1, (
+        "Python: Or-left (IsCreature) should fire on p0's creature "
+        "arrival"
+    )
+    from mtg_bot.actions import resolve_top_of_stack
+    while py_state.stack:
+        resolve_top_of_stack(py_state)
+    assert py_state.players[1].life == 19
+
+    # Arrival 2: vanilla artifact.
+    py_artifact = py_state.new_object(
+        artifact_printing, owner_id=0, zone=Zone.BATTLEFIELD,
+    )
+    py_artifact.summoning_sick = False
+    py_artifact.tapped = False
+    py_artifact.damage = 0
+    py_artifact.etb_timestamp = py_state.next_timestamp
+    py_state.next_timestamp += 1
+    py_state.battlefield.append(py_artifact)
+    _trigger_etb_abilities(py_state, py_artifact)
+    assert len(py_state.stack) == 1, (
+        "Python: Or-right (IsArtifact) should fire on p0's artifact "
+        "arrival"
+    )
+    while py_state.stack:
+        resolve_top_of_stack(py_state)
+    assert py_state.players[1].life == 18
+
+    # Arrival 3: vanilla land — neither Or arm matches.
+    py_land = py_state.new_object(
+        land_printing, owner_id=0, zone=Zone.BATTLEFIELD,
+    )
+    py_land.summoning_sick = False
+    py_land.tapped = False
+    py_land.damage = 0
+    py_land.etb_timestamp = py_state.next_timestamp
+    py_state.next_timestamp += 1
+    py_state.battlefield.append(py_land)
+    _trigger_etb_abilities(py_state, py_land)
+    assert len(py_state.stack) == 0, (
+        "Python: Or(creature, artifact) should reject a land subject"
+    )
+    assert py_state.players[1].life == 18
+
+    # ---- Cross-engine parity ----
+    _drain_stack_both(py_state, rust_state)
+    # Both engines: p0 life unchanged at 20; p1 life 18 (-2 from
+    # two qualifying fires + 1 rejected land arrival).
+    assert rust_state.get_life(0) == 20
+    assert rust_state.get_life(1) == 18
+    assert py_state.players[0].life == 20
+    assert py_state.players[1].life == 18
+    assert rust_state.get_life(0) == py_state.players[0].life
+    assert rust_state.get_life(1) == py_state.players[1].life
