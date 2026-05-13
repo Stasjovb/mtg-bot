@@ -715,15 +715,31 @@ forceKillModalConfirm.addEventListener('click', async () => {
   const runId = _pendingForceKillRunId;
   if (!runId) { hideForceKillModal(); return; }
   try {
-    await fetch(
+    const r = await fetch(
       '/api/runs/' + encodeURIComponent(runId) + '/force_kill',
       { method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ reason: 'ui-force-kill' }) },
     );
-    // No ``pendingForceKills`` tracking — the DB row flips to terminal
-    // synchronously (server-side write happens before the response
-    // returns), so the next /api/runs poll will show the new status
-    // immediately. Unlike /stop, there's no producer-drain wait.
+    const j = await r.json().catch(() => ({}));
+    if (j && j.ok && j.forced === false) {
+      // Already-terminal rows return forced=false with the existing
+      // status. Without this surfacing the click looks like nothing
+      // happened — the DB row was already in a terminal state so
+      // there's no UI update on the next /api/runs poll.
+      const prev = j.previous_status || 'unknown';
+      alert(
+        'Force kill no-op: this run is already in terminal '
+        + 'status (' + prev + '). Nothing to kill server-side.\n\n'
+        + 'If a process is still running on disk, you may need to '
+        + 'taskkill /T /F /PID <pid> manually — the UI does not yet '
+        + 'OS-kill subprocesses for runs whose DB row is already '
+        + 'terminal.'
+      );
+    }
+    // The DB row flips to terminal synchronously (server-side write
+    // happens before the response returns), so the next /api/runs
+    // poll picks up the new status. Unlike /stop, no producer-drain
+    // wait.
   } catch (e) {
     // Best-effort. UI will resync on next poll.
   }

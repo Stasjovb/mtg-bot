@@ -631,6 +631,41 @@ def test_launch_endpoint_validates_schema(app: Flask) -> None:
     assert "bootstrap-version" in body["error"]
 
 
+def test_launch_endpoint_threads_spawn_cwd(tmp_path: Path) -> None:
+    """When the UI is created with ``spawn_cwd``, the launch endpoint
+    must pass it through to ``spawn_iterate`` as ``repo_root``. Without
+    this the subprocess inherits the launcher.py file location which
+    silently breaks iterate's relative-default paths in worktrees."""
+    from unittest import mock
+    progress = tmp_path / "training_progress"
+    progress.mkdir()
+    main_checkout = tmp_path / "main-checkout"
+    main_checkout.mkdir()
+    app = create_app(progress, spawn_cwd=main_checkout)
+    captured = {}
+
+    def fake_spawn(submitted, progress_dir, *, schema=None,
+                   repo_root=None, **kw):
+        captured["repo_root"] = repo_root
+        return {
+            "ok": True, "pid": 1, "command": [], "pretty_command": "",
+            "console_log_path": "", "spawned_at": "",
+        }
+
+    with mock.patch(
+        "mtg_bot.training_ui.app.spawn_iterate", side_effect=fake_spawn,
+    ):
+        r = app.test_client().post(
+            "/api/launch/iterate",
+            json={"args": {
+                "bootstrap-version": "v_test",
+                "deck-pool": "x.json",
+            }},
+        )
+    assert r.status_code == 200
+    assert captured["repo_root"] == main_checkout.resolve()
+
+
 def test_launch_endpoint_spawns_on_valid_request(
     app: Flask, tmp_path: Path,
 ) -> None:

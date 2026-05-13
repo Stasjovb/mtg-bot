@@ -407,6 +407,7 @@ def create_app(
     *,
     registry_root: Optional[Path] = None,
     deck_pool_dir: Optional[Path] = None,
+    spawn_cwd: Optional[Path] = None,
 ) -> Flask:
     """Build the Flask app. ``progress_dir`` is the directory that
     holds both the per-run progress JSON files (legacy + producer
@@ -421,12 +422,25 @@ def create_app(
     dropdown. ``deck_pool_dir`` is the corresponding source for the
     deck-pool dropdown. When either is ``None``, the matching
     dropdown shows empty choices and the user can still type any
-    string (which iterate itself validates at spawn time)."""
+    string (which iterate itself validates at spawn time).
+
+    ``spawn_cwd`` (optional) is the directory the launched iterate
+    subprocess starts in. iterate's ``--registry-root``,
+    ``--data-dir``, ``--progress-dir`` etc. all default to relative
+    paths, so this must point at the directory where your
+    ``trained_weights/`` / ``iterate_data/`` / ``training_progress/``
+    live. When ``None``, the launcher falls back to its on-disk
+    location (typically the worktree where ``launcher.py`` lives,
+    which only works if all paths exist relative to that worktree —
+    pass an explicit value when running the UI from a worktree
+    against a main-checkout's data."""
     progress_dir = Path(progress_dir).resolve()
     if registry_root is not None:
         registry_root = Path(registry_root).resolve()
     if deck_pool_dir is not None:
         deck_pool_dir = Path(deck_pool_dir).resolve()
+    if spawn_cwd is not None:
+        spawn_cwd = Path(spawn_cwd).resolve()
 
     template_dir = Path(__file__).parent / "templates"
     static_dir = Path(__file__).parent / "static"
@@ -438,6 +452,7 @@ def create_app(
     app.config["PROGRESS_DIR"] = progress_dir
     app.config["REGISTRY_ROOT"] = registry_root
     app.config["DECK_POOL_DIR"] = deck_pool_dir
+    app.config["SPAWN_CWD"] = spawn_cwd
 
     @app.route("/")
     def index():  # noqa: D401 - Flask view
@@ -800,6 +815,7 @@ def create_app(
             result = spawn_iterate(
                 submitted, app.config["PROGRESS_DIR"],
                 schema=schema,
+                repo_root=app.config.get("SPAWN_CWD"),
             )
         except ValueError as e:
             # Schema-validation failure (missing required, unknown key,

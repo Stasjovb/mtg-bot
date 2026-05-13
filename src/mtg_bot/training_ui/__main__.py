@@ -85,6 +85,21 @@ def main(argv: Optional[list[str]] = None) -> None:
         ),
     )
     parser.add_argument(
+        "--spawn-cwd", type=Path, default=None,
+        help=(
+            "Directory the launched iterate subprocess starts in "
+            "(default: the cwd of the UI process). iterate's "
+            "argparse defaults are relative paths "
+            "(``trained_weights/``, ``iterate_data/``, "
+            "``training_progress/``); pass this explicitly when "
+            "running the UI from a worktree against a main-checkout's "
+            "data so iterate finds the right directories. The "
+            "registry-root and deck-pool-dir args control the form's "
+            "dropdowns; spawn-cwd controls where the spawned process "
+            "actually runs."
+        ),
+    )
+    parser.add_argument(
         "--debug", action="store_true",
         help="Run Flask with debug=True (auto-reload on edit).",
     )
@@ -94,11 +109,21 @@ def main(argv: Optional[list[str]] = None) -> None:
     progress_dir.mkdir(parents=True, exist_ok=True)
     registry_root = args.registry_root.resolve()
     deck_pool_dir = args.deck_pool_dir.resolve()
+    # Default spawn-cwd to the UI process's own cwd. Setting this
+    # explicitly via the hub entry (or CLI flag) is the load-bearing
+    # case for running the UI from a worktree against a main-
+    # checkout's data.
+    spawn_cwd = (
+        args.spawn_cwd.resolve()
+        if args.spawn_cwd is not None
+        else Path.cwd().resolve()
+    )
 
     app = create_app(
         progress_dir,
         registry_root=registry_root,
         deck_pool_dir=deck_pool_dir,
+        spawn_cwd=spawn_cwd,
     )
 
     print(f"Training-progress UI watching: {progress_dir}")
