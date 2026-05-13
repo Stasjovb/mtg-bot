@@ -1761,6 +1761,112 @@ def _ta_dict_to_python_effect(eff_dict: dict):
             ExileOpponentsNonlandPermanentUntilLeaves,
         )
         return ExileOpponentsNonlandPermanentUntilLeaves()
+    if kind == "return_to_hand":
+        # "Return target creature to its owner's hand." Rust's
+        # ``Effect::ReturnToHand { target: TargetFilter }``
+        # (cards.rs:1417) is the explicit-target bounce arm
+        # (Unsummon / Boomerang / Æther Spellbomb shape). Its
+        # ``parse_effect`` arm at cards.rs:2821-2828 requires a
+        # ``target`` dict (parsed via ``parse_target_filter``). The
+        # resolve arm at state_ops_resolve.rs:1417 carries the I76
+        # controller-of-effect fix: defender = 1 - controller, where
+        # controller derives from
+        # ``current_resolve_source_controller`` (with active_player
+        # fallback). Sibling closure to I70 ExileTarget / I75
+        # DestroyTarget / I78 / I79 / I80 -- identical defender-swap
+        # shape; differs only in destination zone (owner's hand for
+        # I76 vs exile / graveyard / library bottom for the
+        # siblings).
+        #
+        # **Rust target-pick semantics.** The Rust resolve arm is the
+        # AnyCreature first-slice shortcut: scans the resolved
+        # defender's bf for ``bf[0]`` regardless of card-type filter
+        # at this layer (per the I70 docstring, "the current
+        # AnyCreature target shortcut picks ``bf[0]`` regardless of
+        # card-type filter"). Tokens that get bounced cease to exist
+        # per CR 704.5d (a token can't exist outside the
+        # battlefield); the bounce-to-hand call site routes tokens
+        # to the cease-to-exist path. The target moves to the
+        # OWNER's hand (not the controller's) per CR 401.1, mirroring
+        # Python's ``_bounce_to_hand`` implementation.
+        #
+        # **Python target-pick semantics.** Python's ``Bounce`` base
+        # class (effects/generic/bounce.py:31) drives off ``targets:
+        # tuple`` -- a tuple of ``TargetSpec`` slots. For the
+        # AnyCreature filter, the bridge constructs
+        # ``Bounce(targets=(TargetSpec(IsCreature()),))``. The
+        # targeting pipeline picks at PUSH time via
+        # ``push_triggered_ability`` -> the source-controller's
+        # ``agent.choose_target`` over the legal_targets pool (every
+        # creature on the battlefield), and ``Bounce.resolve``
+        # re-verifies the slot's filter at fire time per CR 608.2b
+        # before invoking ``_bounce_to_hand(state, obj)`` (which
+        # handles token cease-to-exist, owner-hand placement, reveal,
+        # and the permanent-left-battlefield-this-turn bookkeeping
+        # for Void). Probes that drive this arm cross-engine seat
+        # ``_PickFirstOpponentTargetAgent`` on the source's
+        # controller -- the agent's opponent-controller filter
+        # mirrors Rust's defender-side scan exactly on the 2-player
+        # harness.
+        #
+        # **Filter narrowness asymmetry note.** Mirrors the
+        # destroy_target / exile_target arm notes: Rust's first-slice
+        # ``AnyCreature`` picker doesn't actually filter to creatures
+        # (picks ``bf[0]`` blindly); Python's ``IsCreature()`` slot
+        # filter does. On synthetic probes that seat only creatures
+        # on the defender's bf, this asymmetry collapses and both
+        # engines pick the same target. A future slice can tighten
+        # Rust's picker to honor ``AnyCreature``; the bridge already
+        # speaks the tightened contract.
+        #
+        # **Token cease-to-exist parity.** Both engines route tokens
+        # to the cease-to-exist path on bounce (CR 704.5d) -- Rust's
+        # bounce arm checks the token flag before pushing to hand;
+        # Python's ``_bounce_to_hand`` does the same. Probes that
+        # exercise token-only baits need to seed the token flag on
+        # both sides; the bare bridge arm doesn't carry rider
+        # behaviors beyond what ``Bounce.resolve`` already does.
+        #
+        # **Distinct from the bounce-from-graveyard family.** This
+        # arm bounces a battlefield permanent to the owner's hand;
+        # the ``return_creature_from_your_graveyard_to_hand`` family
+        # (already on the bridge) returns a graveyard CARD (not a
+        # battlefield object) to the owner's hand. Both share the
+        # "to hand" destination but differ on the source zone.
+        #
+        # Mirrors Rust's ``parse_effect`` arm (cards.rs:2821-2828)
+        # which requires ``target`` and downcasts to a target-filter
+        # dict. Filter-kind allowlist mirrors the destroy_target /
+        # exile_target arms (only ``any_creature`` honored;
+        # ``any_player`` rejected -- bounce doesn't apply to players,
+        # CR 401.1 only allows nonland permanents to move zones via
+        # owner's hand).
+        from mtg_bot.effects.generic.bounce import Bounce
+        from mtg_bot.effects.object_predicates import IsCreature
+        from mtg_bot.effects.targets import TargetSpec
+        target_dict = eff_dict.get("target")
+        # Lenient-default behavior mirrors the destroy_target /
+        # exile_target arms (missing ``target`` defaults to
+        # ``any_creature``); bridge consumers SHOULD pass ``target``
+        # explicitly to keep round-trip dict-shape consistency with
+        # what Rust's parser accepts.
+        target_kind = (
+            target_dict.get("kind", "any_creature")
+            if isinstance(target_dict, dict)
+            else "any_creature"
+        )
+        if target_kind == "any_creature":
+            slot_filter = IsCreature()
+        else:
+            raise ValueError(
+                f"cross_engine return_to_hand bridge: unsupported "
+                f"target filter kind {target_kind!r} (Rust's "
+                f"parse_target_filter at cards.rs:2790-2799 accepts "
+                f"only 'any_player' and 'any_creature'; return_to_hand "
+                f"only honors creature-shaped filters -- players "
+                f"can't move via owner-hand bounce per CR 401.1)"
+            )
+        return Bounce(targets=(TargetSpec(slot_filter),))
     # === PHASE5_BRIDGE_ARMS_INSERT_ABOVE_THIS_LINE ===
     # New `kind` arms go IMMEDIATELY ABOVE this marker. Do NOT delete the marker.
     # Append-only convention prevents merge collisions when multiple agents add arms in parallel.
