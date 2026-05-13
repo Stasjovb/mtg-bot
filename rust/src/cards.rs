@@ -1923,6 +1923,27 @@ pub enum Predicate {
     /// its card_types. Building block for shapes like "when ANOTHER
     /// creature enters — your creature has this ability".
     SourceIsCreature,
+    /// Matches when the **subject's** printing has "Land" in its
+    /// card_types. Mirrors Python's `Subject(None, IsLand())` —
+    /// the canonical "a land enters" filter used by landfall-shape
+    /// triggers (`cards/parser/triggers.py:603-1266`).
+    SubjectIsLand,
+    /// Matches when the **subject's** printing has "Artifact" in its
+    /// card_types. Mirrors Python's `Subject(None, IsArtifact())` —
+    /// "an artifact enters" filter for artifact-enters triggers.
+    SubjectIsArtifact,
+    /// Matches when the **subject's** printing has "Creature" in its
+    /// card_types. Mirrors Python's `Subject(None, IsCreature())` —
+    /// the canonical "a creature enters" filter for
+    /// Panharmonicon-shape triggers. Subject-anchored sibling of
+    /// `SourceIsCreature`.
+    SubjectIsCreature,
+    /// Matches when the **subject** is controlled by the source's
+    /// controller. Mirrors Python's `Controlled(YOU)` — the
+    /// canonical "under your control" qualifier on ETB triggers
+    /// like "whenever a creature enters under your control" and
+    /// "whenever a land enters under your control".
+    ControlledByYou,
     /// Logical negation.
     Not(Box<Predicate>),
     /// Logical AND (short-circuits on the left operand's `false`).
@@ -1946,32 +1967,36 @@ impl Predicate {
             Predicate::Always => true,
             Predicate::SourceIsSelf => source_id == subject_id,
             Predicate::SourceIsCreature => {
-                // Walk all four tracked zones on both players to find
-                // the source object, then look up its printing's
-                // card_types. Mirrors `find_source_printing_id` shape.
-                for player in &state.players {
-                    for zone in [
-                        &player.hand,
-                        &player.library,
-                        &player.battlefield,
-                        &player.graveyard,
-                    ] {
-                        for obj in zone.iter() {
-                            if obj.id == source_id {
-                                if let Some(printing) =
-                                    state.registry.lookup(obj.printing_id)
-                                {
-                                    return printing
-                                        .card_types
-                                        .iter()
-                                        .any(|t| t == "Creature");
-                                }
-                                return false;
-                            }
-                        }
-                    }
+                source_has_card_type(state, source_id, "Creature")
+            }
+            Predicate::SubjectIsLand => {
+                subject_has_card_type(state, subject_id, "Land")
+            }
+            Predicate::SubjectIsArtifact => {
+                subject_has_card_type(state, subject_id, "Artifact")
+            }
+            Predicate::SubjectIsCreature => {
+                subject_has_card_type(state, subject_id, "Creature")
+            }
+            Predicate::ControlledByYou => {
+                // Subject's controller == source's controller. Mirrors
+                // Python's `Controlled(by=YOU)` on a permanent subject:
+                // ``obj.controller_id == source.controller_id``.
+                // Each id is resolved by walking the four tracked zones
+                // on both players; the helper returns `None` when the
+                // id isn't present (the same loud-but-safe shape as
+                // `find_source_printing_id`).
+                let source_controller =
+                    find_object_controller(state, source_id);
+                let subject_controller =
+                    find_object_controller(state, subject_id);
+                match (source_controller, subject_controller) {
+                    (Some(sc), Some(jc)) => sc == jc,
+                    // Either id missing — never match (e.g. the
+                    // subject has already left the battlefield, or
+                    // the source was evicted mid-dispatch).
+                    _ => false,
                 }
-                false
             }
             Predicate::Not(inner) => !inner.matches(state, source_id, subject_id),
             Predicate::And(a, b) => {
@@ -1980,6 +2005,86 @@ impl Predicate {
             }
         }
     }
+}
+
+/// Look up an object by id across all four tracked zones of both
+/// players and return whether its printing's `card_types` contains
+/// the given type. Returns `false` when the object id isn't present
+/// or its printing is unregistered (the loud-but-safe shape used by
+/// `Predicate::SourceIsCreature`'s original inline lookup).
+fn source_has_card_type(
+    state: &crate::state::GameState,
+    obj_id: u32,
+    card_type: &str,
+) -> bool {
+    object_has_card_type(state, obj_id, card_type)
+}
+
+/// Subject-anchored sibling of `source_has_card_type`. Same shape;
+/// the distinct entry point keeps the predicate-arm bodies tidy and
+/// the intent self-documenting at the call site.
+fn subject_has_card_type(
+    state: &crate::state::GameState,
+    obj_id: u32,
+    card_type: &str,
+) -> bool {
+    object_has_card_type(state, obj_id, card_type)
+}
+
+/// Shared body for `source_has_card_type` / `subject_has_card_type`.
+fn object_has_card_type(
+    state: &crate::state::GameState,
+    obj_id: u32,
+    card_type: &str,
+) -> bool {
+    for player in &state.players {
+        for zone in [
+            &player.hand,
+            &player.library,
+            &player.battlefield,
+            &player.graveyard,
+        ] {
+            for obj in zone.iter() {
+                if obj.id == obj_id {
+                    if let Some(printing) =
+                        state.registry.lookup(obj.printing_id)
+                    {
+                        return printing
+                            .card_types
+                            .iter()
+                            .any(|t| t == card_type);
+                    }
+                    return false;
+                }
+            }
+        }
+    }
+    false
+}
+
+/// Look up an object by id across all four tracked zones of both
+/// players and return its controller id. Returns `None` when the
+/// object isn't found in any of those zones (already moved off-bf
+/// in a way the dispatch caller didn't expect, or an id mismatch).
+fn find_object_controller(
+    state: &crate::state::GameState,
+    obj_id: u32,
+) -> Option<u8> {
+    for player in &state.players {
+        for zone in [
+            &player.hand,
+            &player.library,
+            &player.battlefield,
+            &player.graveyard,
+        ] {
+            for obj in zone.iter() {
+                if obj.id == obj_id {
+                    return Some(obj.controller);
+                }
+            }
+        }
+    }
+    None
 }
 
 /// A triggered ability on a `CardPrinting`. Mirrors Python's
@@ -3863,17 +3968,30 @@ fn parse_triggered_ability(
 /// {"kind": "always"}
 /// {"kind": "source_is_self"}
 /// {"kind": "source_is_creature"}
+/// {"kind": "subject_is_land"}        # Slice 4
+/// {"kind": "subject_is_artifact"}    # Slice 4
+/// {"kind": "subject_is_creature"}    # Slice 4
+/// {"kind": "controlled_by_you"}      # Slice 4
 /// {"kind": "not", "inner": {...}}
 /// {"kind": "and", "left": {...}, "right": {...}}
 /// ```
 ///
-/// Slice 1 minimum surface; later slices add more variants.
+/// Slice 1 introduced the base algebra (`always`, `source_is_self`,
+/// `source_is_creature`, `not`, `and`). Slice 4 adds the subject-
+/// anchored type filters + `controlled_by_you` to unlock landfall /
+/// artifact-enters / "under your control" trigger shapes from
+/// `cards/parser/triggers.py:603-1266`. Future slices add more
+/// variants (HasSubtype once Rust grows a `subtypes` registry, etc.).
 fn parse_predicate(dict: &Bound<'_, PyDict>) -> PyResult<Predicate> {
     let kind: String = require(dict, "kind")?.extract()?;
     match kind.as_str() {
         "always" => Ok(Predicate::Always),
         "source_is_self" => Ok(Predicate::SourceIsSelf),
         "source_is_creature" => Ok(Predicate::SourceIsCreature),
+        "subject_is_land" => Ok(Predicate::SubjectIsLand),
+        "subject_is_artifact" => Ok(Predicate::SubjectIsArtifact),
+        "subject_is_creature" => Ok(Predicate::SubjectIsCreature),
+        "controlled_by_you" => Ok(Predicate::ControlledByYou),
         "not" => {
             let inner_any = require(dict, "inner")?;
             let inner_dict = inner_any.downcast::<PyDict>().map_err(|_| {
@@ -3897,7 +4015,9 @@ fn parse_predicate(dict: &Bound<'_, PyDict>) -> PyResult<Predicate> {
         }
         other => Err(PyValueError::new_err(format!(
             "unknown predicate kind {other:?}; \
-             valid: always, source_is_self, source_is_creature, not, and (Slice 1)"
+             valid: always, source_is_self, source_is_creature, \
+             subject_is_land, subject_is_artifact, subject_is_creature, \
+             controlled_by_you, not, and (Slice 4)"
         ))),
     }
 }

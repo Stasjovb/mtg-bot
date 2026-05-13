@@ -908,3 +908,79 @@ pins suppress + cleanup-reset.
   Controlled, Subject).
 - Wider Event variants (Dies, Cast, Attacks, DealsDamage).
 - Panharmonicon-shape `etb_trigger_multiplier`.
+
+---
+
+## Slice 4 completion notice (landed)
+
+`feature/etb-slice-4` extended the `Predicate` algebra with four new
+subject-anchored / controller variants so the Rust parser surface can
+express the bulk of EoE's ETB-trigger predicate templates from
+`src/mtg_bot/cards/parser/triggers.py:603-1266`:
+
+- `Predicate::SubjectIsLand` — Python `Subject(None, IsLand())`.
+  The canonical landfall filter ("whenever a land enters").
+- `Predicate::SubjectIsArtifact` — Python `Subject(None,
+  IsArtifact())`. Artifact-enters triggers.
+- `Predicate::SubjectIsCreature` — Python `Subject(None,
+  IsCreature())`. Panharmonicon-faithful "a creature enters" filter
+  (paired with `ControlledByYou` for "under your control").
+- `Predicate::ControlledByYou` — Python `Controlled(by=YOU,
+  subject=None)`. The "under your control" qualifier that pairs
+  with each subject filter above.
+
+**Implementation shape**:
+
+- New variants in `rust/src/cards.rs::Predicate`. Each evaluates by
+  walking the object-id-to-printing lookup that
+  `Predicate::SourceIsCreature` already used; the helpers
+  (`source_has_card_type` / `subject_has_card_type` /
+  `object_has_card_type` / `find_object_controller`) are factored
+  out of the old inline lookup so the new arms read tidily.
+- `parse_predicate` arms accept the new dict-kind strings
+  (`subject_is_land`, `subject_is_artifact`, `subject_is_creature`,
+  `controlled_by_you`). The error message lists all valid kinds
+  so a stale caller surfaces it at register time.
+- `cross_engine.py::_ta_dict_to_python_predicate` translates each
+  new kind to its Python counterpart so a CE19-shape probe builds
+  the SAME predicate on BOTH engines from one `CardDef`.
+
+**Tests** (15 new in `tests_rust/test_triggers.py`, 6 new in
+`tests/test_cross_engine_etb_triggers.py`):
+
+- Parser surface — each new kind parses without error
+  (`@pytest.mark.parametrize` over the four kinds).
+- `subject_is_land` fires on a searched-up land arrival
+  (RS2 path), doesn't fire on a creature arrival.
+- `subject_is_artifact` fires on a reanimated artifact (RS10
+  path), doesn't fire on a creature arrival.
+- Panharmonicon-faithful `subject_is_creature AND
+  controlled_by_you`: fires on p0's own creature, skips opponent's
+  creature, skips p0's land (creature half fails).
+- Bare `controlled_by_you`: accepts p0's own arrivals (creature
+  + observer-self), rejects opponent's arrivals.
+- Cross-engine bridge: each new kind round-trips
+  `{"kind": "..."}` -> the expected Python `TriggerPredicate`.
+- Cross-engine bridge: `and` composition of `subject_is_creature`
+  + `controlled_by_you` builds the audit's §5.4 Example A
+  Panharmonicon-faithful predicate.
+
+**Rust gate**: 1932/1932 pass (Slice 3 baseline 1902 + 15 new
++ ~15 pre-existing bumps from other landed work = 1932).
+
+**Out of scope for Slice 4 (queued for Slice 5+):**
+
+- `HasSubtype(s)` predicate — needed for Kavu-shape / Sliver-shape
+  / Equipment-enters triggers. Blocked on Rust growing a `subtypes`
+  field on `CardPrinting`; a separate substrate slice (or pulled
+  forward alongside the next Slice 5+ event extension).
+- Wider Event variants (`Dies`, `Cast`, `Attacks`, `DealsDamage`).
+  Each adds new dispatch sites in `state_ops_resolve.rs` /
+  `state_ops_combat.rs` / `state_ops_cast.rs`.
+- `Subject(slot, inner)` for events with multiple subject slots
+  (Blocks: `"blocker"`/`"attacker"`; DealsCombatDamage:
+  `"source"`/`"target"`). Slice 4's defaulted single-subject
+  shape is enough for single-subject events but a multi-subject
+  predicate ergonomic needs a richer schema.
+- Panharmonicon-shape `etb_trigger_multiplier` (the "your ETB
+  triggers fire one extra time" modifier).

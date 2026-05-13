@@ -148,3 +148,122 @@ def test_pre_slice_3_specs_unaffected():
         assert obj.printing.triggered_abilities == ()
     for obj in py_state.players[1].library:
         assert obj.printing.triggered_abilities == ()
+
+
+# =====================================================================
+# Slice 4 — predicate-bridge round-trip pins for the new variants.
+# Pins each Slice 4 predicate's `_ta_dict_to_python_predicate` arm so
+# the harness translates Rust's parser-shape predicate dict into the
+# Python `TriggerPredicate` instance that matches the same firing
+# semantics.
+# =====================================================================
+
+
+def test_slice4_bridge_subject_is_land_translates_to_python():
+    """Rust ``{"kind": "subject_is_land"}`` -> Python ``Subject(slot=None,
+    inner=IsLand())``."""
+    from mtg_bot.effects.predicates import Subject
+    from mtg_bot.effects.object_predicates import IsLand
+    from mtg_bot.parity.cross_engine import _ta_dict_to_python_predicate
+
+    p = _ta_dict_to_python_predicate({"kind": "subject_is_land"})
+    assert isinstance(p, Subject)
+    assert p.slot is None
+    assert isinstance(p.inner, IsLand)
+
+
+def test_slice4_bridge_subject_is_artifact_translates_to_python():
+    """Rust ``{"kind": "subject_is_artifact"}`` -> Python
+    ``Subject(slot=None, inner=IsArtifact())``."""
+    from mtg_bot.effects.predicates import Subject
+    from mtg_bot.effects.object_predicates import IsArtifact
+    from mtg_bot.parity.cross_engine import _ta_dict_to_python_predicate
+
+    p = _ta_dict_to_python_predicate({"kind": "subject_is_artifact"})
+    assert isinstance(p, Subject)
+    assert p.slot is None
+    assert isinstance(p.inner, IsArtifact)
+
+
+def test_slice4_bridge_subject_is_creature_translates_to_python():
+    """Rust ``{"kind": "subject_is_creature"}`` -> Python
+    ``Subject(slot=None, inner=IsCreature())``."""
+    from mtg_bot.effects.predicates import Subject
+    from mtg_bot.effects.object_predicates import IsCreature
+    from mtg_bot.parity.cross_engine import _ta_dict_to_python_predicate
+
+    p = _ta_dict_to_python_predicate({"kind": "subject_is_creature"})
+    assert isinstance(p, Subject)
+    assert p.slot is None
+    assert isinstance(p.inner, IsCreature)
+
+
+def test_slice4_bridge_controlled_by_you_translates_to_python():
+    """Rust ``{"kind": "controlled_by_you"}`` -> Python
+    ``Controlled(by=YOU, subject=None)``."""
+    from mtg_bot.effects.predicates import Controlled, YOU
+    from mtg_bot.parity.cross_engine import _ta_dict_to_python_predicate
+
+    p = _ta_dict_to_python_predicate({"kind": "controlled_by_you"})
+    assert isinstance(p, Controlled)
+    assert p.by == YOU
+    assert p.subject is None
+
+
+def test_slice4_bridge_composes_panharmonicon_faithful_predicate():
+    """The audit's §5.4 Example A Panharmonicon-faithful predicate —
+    `subject_is_creature AND controlled_by_you` — round-trips through
+    the bridge to Python ``And(Subject(...), Controlled(...))``.
+    """
+    from mtg_bot.effects.predicates import (
+        And,
+        Subject,
+        Controlled,
+        YOU,
+    )
+    from mtg_bot.effects.object_predicates import IsCreature
+    from mtg_bot.parity.cross_engine import _ta_dict_to_python_predicate
+
+    pred_dict = {
+        "kind": "and",
+        "left": {"kind": "subject_is_creature"},
+        "right": {"kind": "controlled_by_you"},
+    }
+    p = _ta_dict_to_python_predicate(pred_dict)
+    assert isinstance(p, And)
+    assert isinstance(p.left, Subject)
+    assert isinstance(p.left.inner, IsCreature)
+    assert isinstance(p.right, Controlled)
+    assert p.right.by == YOU
+
+
+def test_slice4_rust_parser_accepts_new_predicate_kinds():
+    """The Rust parser surface accepts each new Slice 4 predicate
+    kind on register. Pin the parser-side coverage to keep the
+    Python bridge + Rust parser in lockstep.
+    """
+    import mtg_bot_engine
+
+    for kind in (
+        "subject_is_land",
+        "subject_is_artifact",
+        "subject_is_creature",
+        "controlled_by_you",
+    ):
+        reg = mtg_bot_engine.Registry()
+        d = {
+            "name": f"Slice4 Bridge Probe {kind}",
+            "card_types": ["Creature"],
+            "mana_cost": {"generic": 1},
+            "power": 1,
+            "toughness": 1,
+            "triggered_abilities": [
+                {
+                    "event": "enters",
+                    "predicate": {"kind": kind},
+                    "effect": {"kind": "draw_cards", "count": 1},
+                }
+            ],
+        }
+        pid = reg.register_printing(d)
+        assert pid == 0, f"failed to register {kind!r}"
