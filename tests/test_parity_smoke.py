@@ -16801,10 +16801,10 @@ def test_cross_engine_real_eoe_uthros_scanship_etb_sequence_draw_discard_parity(
       * Lives unchanged on both seats.
       * No residual stack.
     """
-    from mtg_bot.agents import Agent
     from mtg_bot.parity.cross_engine import (
         CardDef, DeckSpec, build_python_state, build_rust_state,
     )
+    from tests.parity._picker_shims import _DiscardFirstAgent
 
     uthros_scanship = CardDef(
         name="Uthros Scanship",
@@ -16930,15 +16930,6 @@ def test_cross_engine_real_eoe_uthros_scanship_etb_sequence_draw_discard_parity(
             ),
         ),
     )
-
-    class _DiscardFirstAgent(Agent):
-        """Pick hand[0] for discard. Mirrors Rust's deterministic
-        ``DiscardSelf`` hand[0] pick (state_ops_resolve.rs ~2875).
-        """
-
-        def choose_discard(self, state, player_id, hand_ids):
-            assert hand_ids, "agent called with empty hand"
-            return hand_ids[0]
 
     py_state.players[0].agent = _DiscardFirstAgent()
 
@@ -17135,10 +17126,10 @@ def test_cross_engine_real_eoe_melded_moxite_etb_if_you_do_discard_draw_parity(
       * Lives unchanged.
       * No residual stack.
     """
-    from mtg_bot.agents import Agent
     from mtg_bot.parity.cross_engine import (
         CardDef, DeckSpec, build_python_state, build_rust_state,
     )
+    from tests.parity._picker_shims import _DiscardFirstAgent
 
     melded_moxite = CardDef(
         name="Melded Moxite",
@@ -17289,15 +17280,6 @@ def test_cross_engine_real_eoe_melded_moxite_etb_if_you_do_discard_draw_parity(
             ),
         ),
     )
-
-    class _DiscardFirstAgent(Agent):
-        """Pick hand[0] for discard. Mirrors Rust's deterministic
-        ``DiscardSelf`` hand[0] pick.
-        """
-
-        def choose_discard(self, state, player_id, hand_ids):
-            assert hand_ids, "agent called with empty hand"
-            return hand_ids[0]
 
     py_state.players[0].agent = _DiscardFirstAgent()
 
@@ -17484,10 +17466,10 @@ def test_cross_engine_real_eoe_fell_gravship_etb_sequence_mill_return_parity(
       * Lives unchanged.
       * No residual stack.
     """
-    from mtg_bot.agents import Agent
     from mtg_bot.parity.cross_engine import (
         CardDef, DeckSpec, build_python_state, build_rust_state,
     )
+    from tests.parity._picker_shims import _PickFirstLegalTargetAgent
 
     fell_gravship = CardDef(
         name="Fell Gravship",
@@ -17652,16 +17634,6 @@ def test_cross_engine_real_eoe_fell_gravship_etb_sequence_mill_return_parity(
             ),
         ),
     )
-
-    class _PickFirstLegalTargetAgent(Agent):
-        """Pick ``legal_targets[0]``. Mirrors Rust's iterator-order
-        graveyard scan for the return-to-hand effect.
-        """
-
-        def choose_target(self, state, player_id, legal_targets):
-            if not legal_targets:
-                return None
-            return legal_targets[0]
 
     py_state.players[0].agent = _PickFirstLegalTargetAgent()
 
