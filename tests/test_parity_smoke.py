@@ -9886,3 +9886,217 @@ def test_cross_engine_real_eoe_quantum_riddler_etb_draw_parity(
     assert rust_p0_lib_after == py_p0_lib_after
     assert rust_state.hand_sizes[1] == len(py_state.players[1].hand)
     assert rust_state.library_sizes[1] == len(py_state.players[1].library)
+
+
+def test_cross_engine_real_eoe_eumidian_terrabotanist_landfall_parity(
+    parity_smoke,
+):
+    """Probe: Eumidian Terrabotanist (EoE) Landfall trigger
+    fires + parity-matches on a SUBJECT-not-SOURCE predicate path.
+
+    Oracle text in `data/edge_of_eternities.json`:
+
+        "Landfall - Whenever a land you control enters, you gain
+         1 life."
+
+    This is the **first** real-EoE probe that exercises the
+    SUBJECT-vs-SOURCE distinction in the predicate algebra:
+
+      * The TRIGGER SOURCE is the Eumidian Terrabotanist (a
+        creature that's pre-placed on p0's battlefield).
+      * The TRIGGER SUBJECT is a LAND that enters under p0's
+        control (i.e. a Forest played by p0).
+
+    The predicate `subject_is_land AND controlled_by_you`
+    composes two Slice-4 predicate variants: `SubjectIsLand`
+    (filters the event subject to land cards) AND
+    `ControlledByYou` (the subject's controller must equal the
+    trigger source's controller, i.e. p0).
+
+    Both Slice-2's land-play-path dispatch_event fan-out (Rust:
+    one of the 11 ETB-stamping sites threaded in
+    `state_ops_cast.rs`'s `play_land` arm; Python:
+    `actions.py:1139` inside `_play_land`) and the predicate
+    algebra Slice 4 wired must be correct end-to-end for this
+    probe to pass.
+
+    Expected post-cast + post-drain state on BOTH engines:
+
+      * Terrabotanist still on p0's bf (pre-placed; doesn't move).
+      * Forest now on p0's bf (just played).
+      * p0 life: 20 -> 21 (+1 from the landfall trigger).
+      * p1 life: unchanged at 20.
+      * No residual stack.
+
+    Outcome (a) clean pass here proves the substrate dispatches
+    correctly on the Subject-vs-Source distinction -- the same
+    predicate shape covers the entire EoE Landfall surface (16
+    printings counted in `data/edge_of_eternities.json`).
+    """
+    from mtg_bot.parity.cross_engine import (
+        CardDef, DeckSpec, build_python_state, build_rust_state,
+    )
+    terra = CardDef(
+        name="Eumidian Terrabotanist",
+        card_type="Creature",
+        mana_cost_generic=1,
+        mana_cost_colored=(("G", 1),),
+        power=2,
+        toughness=3,
+        triggered_abilities=(
+            {
+                "event": "enters",
+                "predicate": {
+                    "kind": "and",
+                    "left": {"kind": "subject_is_land"},
+                    "right": {"kind": "controlled_by_you"},
+                },
+                "effect": {"kind": "gain_life", "amount": 1},
+            },
+        ),
+    )
+    forest = CardDef(
+        name="Forest", card_type="Land", mana_produced=("G",),
+    )
+    spec = DeckSpec(
+        card_defs=(terra, forest),
+        p0_library=("Forest", "Forest"),
+        p1_library=("Forest", "Forest"),
+    )
+    py_state = build_python_state(spec)
+    rust_state = build_rust_state(spec)
+
+    # ---- Rust side ----
+    ZONE_HAND = 0
+    ZONE_BATTLEFIELD = 2
+    rust_terra_dict = {
+        "name": "Eumidian Terrabotanist",
+        "card_types": ["Creature"],
+        "mana_cost": {"generic": 1, "G": 1},
+        "effects": [],
+        "power": 2,
+        "toughness": 3,
+        "triggered_abilities": [
+            {
+                "event": "enters",
+                "predicate": {
+                    "kind": "and",
+                    "left": {"kind": "subject_is_land"},
+                    "right": {"kind": "controlled_by_you"},
+                },
+                "effect": {"kind": "gain_life", "amount": 1},
+            }
+        ],
+    }
+    rust_terra_id = rust_state.register_and_inject_object(
+        rust_terra_dict, 0, ZONE_BATTLEFIELD
+    )
+    rust_forest_dict = {
+        "name": "Forest",
+        "card_types": ["Land"],
+        "mana_produced": ["G"],
+        "effects": [],
+    }
+    rust_forest_id = rust_state.register_and_inject_object(
+        rust_forest_dict, 0, ZONE_HAND
+    )
+    rust_p0_life_before = rust_state.get_life(0)
+    rust_p1_life_before = rust_state.get_life(1)
+    # play_land(card_id, player_id)
+    rust_state.play_land(rust_forest_id, 0)
+    assert rust_state.find_object_zone(rust_forest_id) == ZONE_BATTLEFIELD, (
+        "Rust: Forest should be on bf after play_land"
+    )
+    assert rust_state.stack_size() == 1, (
+        "Rust: Terrabotanist's landfall trigger should be on the "
+        "stack after the Forest enters"
+    )
+
+    # ---- Python side ----
+    from mtg_bot.actions import _play_land, resolve_top_of_stack as py_resolve
+    from mtg_bot.cards.base import CardPrinting, ManaCost
+    from mtg_bot.effects.base import TriggeredAbility
+    from mtg_bot.effects.generic.life import GainLife
+    from mtg_bot.effects.object_predicates import IsLand
+    from mtg_bot.effects.predicates import (
+        And, Controlled, Event, Subject, YOU,
+    )
+    from mtg_bot.game import Zone
+
+    # Build the Python Terrabotanist printing with the SAME
+    # predicate-path trigger shape.
+    terra_predicate = And(
+        left=Subject(slot=None, inner=IsLand()),
+        right=Controlled(by=YOU, subject=None),
+    )
+    terra_printing = CardPrinting(
+        name="Eumidian Terrabotanist",
+        mana_cost_str="",
+        mana_cost=ManaCost(generic=1, colored=(("G", 1),)),
+        type_line="Creature",
+        supertypes=(),
+        card_types=("Creature",),
+        subtypes=(),
+        power=2,
+        toughness=3,
+        produces=frozenset(),
+        triggered_abilities=(
+            TriggeredAbility(
+                event=Event.ENTERS,
+                predicate=terra_predicate,
+                effect=GainLife(amount=1),
+            ),
+        ),
+    )
+    py_terra = py_state.new_object(
+        terra_printing, owner_id=0, zone=Zone.BATTLEFIELD,
+    )
+    py_terra.summoning_sick = False
+    py_terra.tapped = False
+    py_terra.damage = 0
+    py_terra.etb_timestamp = py_state.next_timestamp
+    py_state.next_timestamp += 1
+    py_state.battlefield.append(py_terra)
+
+    # Move a Forest from library to hand on Python side.
+    py_forest = py_state.players[0].library[0]
+    assert py_forest.printing.name == "Forest"
+    py_state.players[0].library.remove(py_forest)
+    py_forest.zone = Zone.HAND
+    py_state.players[0].hand.append(py_forest)
+
+    py_p0_life_before = py_state.players[0].life
+    py_p1_life_before = py_state.players[1].life
+
+    # Reset Python's "lands_played_this_turn" so _play_land doesn't
+    # gate on the per-turn cap (the rust harness has no such gate
+    # in the inject-and-play substrate path).
+    py_state.players[0].lands_played_this_turn = 0
+    _play_land(py_state, 0, py_forest.id)
+
+    assert any(
+        o.printing.name == "Forest" and o.controller_id == 0
+        for o in py_state.battlefield
+    ), "Python: Forest should be on bf after _play_land"
+    assert len(py_state.stack) == 1, (
+        "Python: Terrabotanist's landfall trigger should be on the "
+        "stack after the Forest enters"
+    )
+
+    # ---- Drain both stacks, then compare ----
+    _drain_stack_both(py_state, rust_state)
+
+    # Post-drain parity: +1 life on p0 from landfall trigger.
+    assert rust_state.get_life(0) == rust_p0_life_before + 1, (
+        f"Rust p0 life should be {rust_p0_life_before + 1} "
+        f"(+1 from landfall); got {rust_state.get_life(0)}"
+    )
+    assert rust_state.get_life(1) == rust_p1_life_before
+    assert py_state.players[0].life == py_p0_life_before + 1, (
+        f"Python p0 life should be {py_p0_life_before + 1} "
+        f"(+1 from landfall); got {py_state.players[0].life}"
+    )
+    assert py_state.players[1].life == py_p1_life_before
+    # Cross-engine: same post-drain life totals.
+    assert rust_state.get_life(0) == py_state.players[0].life
+    assert rust_state.get_life(1) == py_state.players[1].life
