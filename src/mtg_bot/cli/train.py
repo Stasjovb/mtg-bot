@@ -39,11 +39,16 @@ from mtg_bot.cli.runs import lifecycle as _lifecycle
 from mtg_bot.features import FEATURE_DIM
 from mtg_bot.search.nn_evaluator import (
     ARCHITECTURE_SHARED,
+    ARCHITECTURE_STRUCTURED,
     HIDDEN_SIZES,
     SUPPORTED_ARCHITECTURES,
 )
 from mtg_bot.training import (
-    auto_device, load_all_datasets, train_value_network,
+    auto_device,
+    load_all_datasets,
+    load_structured_dataset,
+    train_structured_model,
+    train_value_network,
 )
 from mtg_bot.training.registry import ModelMetadata, Registry
 
@@ -331,6 +336,12 @@ def main(argv=None) -> None:
         ),
     )
     args = parser.parse_args(argv)
+    # Structured architecture has a different data pipeline + model
+    # + loss shape from the flat-feature MLP trainers; dispatch
+    # before any of the flat-feature-specific argument validation.
+    if args.architecture == ARCHITECTURE_STRUCTURED:
+        _main_structured(args, parser)
+        return
     if not (0.0 < args.one_legal_keep_frac <= 1.0):
         parser.error(
             "--one-legal-keep-frac must be in (0.0, 1.0]; got "
@@ -724,6 +735,282 @@ def main(argv=None) -> None:
         print(
             f"# Best val loss: {history.best_val_loss:.4f} "
             f"at epoch {history.best_val_epoch}"
+        )
+    else:
+        print("# epochs_trained=0; no per-epoch losses to report")
+
+
+def _main_structured(args, parser) -> None:
+    """Train + register a :class:`StructuredModel` checkpoint.
+
+    Reached when ``--architecture structured`` is passed. Loads the
+    structured-token npz files from ``--data-dir``, runs
+    :func:`train_structured_model`, and registers the result with
+    ``metadata.architecture='structured'`` so loaders dispatch to the
+    transformer trunk at inference time.
+
+    The flat-feature flags (``--one-legal-keep-frac``,
+    ``--window-recent``, ``--policy-hidden-sizes``,
+    ``--compile``, ``--hidden-sizes``) DO NOT apply to the
+    structured trainer — its capacity is set by
+    :class:`StructuredModelConfig`'s defaults today, not by the
+    flat MLP's trunk shape. We accept them on the namespace but
+    ignore (with a stderr note when they were set non-default) rather
+    than erroring so iterate's shared CLI shim isn't forced to fork
+    its arg-construction path.
+    """
+    from mtg_bot.training.structured_model import StructuredModelConfig
+
+    if not args.data_dir.is_dir():
+        sys.exit(f"--data-dir {args.data_dir} is not a directory")
+    if args.early_stop_patience is not None and args.early_stop_patience < 1:
+        parser.error(
+            "--early-stop-patience must be a positive int (>= 1); got "
+            f"{args.early_stop_patience}"
+        )
+    if args.window_recent is not None and args.window_recent <= 0:
+        parser.error(
+            "--window-recent must be a positive integer; got "
+            f"{args.window_recent}"
+        )
+
+    print(
+        f"# Structured-trainer: loading data from {args.data_dir}"
+    )
+    try:
+        dataset = load_structured_dataset(
+            args.data_dir,
+            max_files=args.window_recent,
+        )
+    except FileNotFoundError as exc:
+        sys.exit(str(exc))
+    except ValueError as exc:
+        # Surface the data-pipeline issue verbatim — most likely "npz
+        # missing structured arrays" which means the data_gen run
+        # wasn't invoked with structured_tokens=True.
+        sys.exit(
+            f"--architecture structured requires npz files written "
+            f"with structured_tokens=True. {exc}"
+        )
+
+    n_samples = len(dataset)
+    if n_samples == 0:
+        sys.exit(f"No samples found in {args.data_dir}")
+    all_npz = sorted(args.data_dir.glob("*.npz"))
+    if args.window_recent is not None and len(all_npz) > args.window_recent:
+        loaded_paths = sorted(
+            all_npz, key=lambda p: p.stat().st_mtime, reverse=True,
+        )[:args.window_recent]
+        data_files = sorted(p.name for p in loaded_paths)
+    else:
+        data_files = [p.name for p in all_npz]
+
+    device = args.device or auto_device()
+    print(
+        f"# Structured-trainer: {n_samples} samples from "
+        f"{len(data_files)} files; device={device}; "
+        f"epochs={args.epochs} batch={args.batch_size}"
+    )
+
+    registry = Registry(args.registry_root)
+    peeked_version = registry.next_version_id()
+    if args.progress_path is None:
+        progress_dir = Path("training_progress")
+        progress_dir.mkdir(parents=True, exist_ok=True)
+        progress_path: Path | None = progress_dir / f"{peeked_version}.json"
+    elif str(args.progress_path) == "":
+        progress_path = None
+    else:
+        progress_path = args.progress_path
+        progress_path.parent.mkdir(parents=True, exist_ok=True)
+    if progress_path is not None:
+        print(f"# Progress JSON: {progress_path}")
+
+    structured_config = StructuredModelConfig()
+
+    train_config = {
+        "kind": "training",
+        "architecture": ARCHITECTURE_STRUCTURED,
+        "data_dir": str(args.data_dir),
+        "registry_root": str(args.registry_root),
+        "epochs": args.epochs,
+        "batch_size": args.batch_size,
+        "lr": args.lr,
+        "val_split": args.val_split,
+        "device": device,
+        "seed": args.seed,
+        "notes": args.notes,
+        "n_samples": n_samples,
+        "window_recent": args.window_recent,
+        "action_encoding_version": args.action_encoding_version,
+        "policy_loss_weight": args.policy_loss_weight,
+        "early_stop_patience": args.early_stop_patience,
+        "progress_path": (
+            str(progress_path) if progress_path is not None else None
+        ),
+        "structured_config": {
+            "emb_dim": structured_config.emb_dim,
+            "n_heads": structured_config.n_heads,
+            "n_layers": structured_config.n_layers,
+            "hidden_dim": structured_config.hidden_dim,
+            "action_history_n": structured_config.action_history_n,
+            "n_printings": structured_config.n_printings,
+        },
+    }
+    parent_run_id = _parent_run_id_from_notes(args.notes)
+
+    def _on_epoch(payload: dict) -> None:
+        _runs_client.push_progress(
+            peeked_version,
+            n_games_done=int(payload["epoch"]),
+            n_games_total=int(payload["total_epochs"]),
+            elapsed_seconds=float(payload["elapsed_seconds"]),
+            extra={
+                "current_epoch": int(payload["epoch"]),
+                "total_epochs": int(payload["total_epochs"]),
+                "train_loss": payload["train_loss"],
+                "val_loss": payload["val_loss"],
+                "train_value_loss": payload["train_value_loss"],
+                "val_value_loss": payload["val_value_loss"],
+                "train_policy_loss": payload["train_policy_loss"],
+                "val_policy_loss": payload["val_policy_loss"],
+                "status": payload["status"],
+                "architecture": ARCHITECTURE_STRUCTURED,
+            },
+        )
+        _runs_client.push_event(
+            peeked_version,
+            event_type="epoch_completed",
+            payload={
+                "epoch": int(payload["epoch"]),
+                "train_loss": payload["train_loss"],
+                "val_loss": payload["val_loss"],
+                "train_value_loss": payload["train_value_loss"],
+                "val_value_loss": payload["val_value_loss"],
+                "train_policy_loss": payload["train_policy_loss"],
+                "val_policy_loss": payload["val_policy_loss"],
+            },
+        )
+
+    with tempfile.TemporaryDirectory() as tmp, _lifecycle.run_lifecycle(
+        run_id=peeked_version,
+        kind="training",
+        config=train_config,
+        progress_json_path=progress_path,
+        parent_run_id=parent_run_id,
+        label=args.notes or None,
+    ):
+        tmp_weights = Path(tmp) / "weights.pt"
+        started = time.perf_counter()
+        history = train_structured_model(
+            dataset,
+            weights_out_path=tmp_weights,
+            config=structured_config,
+            epochs=args.epochs,
+            batch_size=args.batch_size,
+            learning_rate=args.lr,
+            val_split=args.val_split,
+            device=device,
+            rng_seed=args.seed,
+            progress_path=progress_path,
+            run_id=peeked_version,
+            notes=args.notes,
+            policy_loss_weight=args.policy_loss_weight,
+            epoch_callback=_on_epoch,
+        )
+        elapsed = time.perf_counter() - started
+
+        metadata = ModelMetadata(
+            version="",
+            created_at="",
+            feature_dim=FEATURE_DIM,  # legacy field; ignored for structured
+            hidden_sizes=[],
+            with_policy=True,
+            architecture=ARCHITECTURE_STRUCTURED,
+            action_encoding_version=args.action_encoding_version,
+            training={
+                "data_dir": str(args.data_dir),
+                "data_files": data_files,
+                "n_samples": n_samples,
+                "epochs": args.epochs,
+                "batch_size": args.batch_size,
+                "learning_rate": args.lr,
+                "val_split": args.val_split,
+                "device": device,
+                "rng_seed": args.seed,
+                "duration_seconds": elapsed,
+                "window_recent": args.window_recent,
+                "early_stop_patience": args.early_stop_patience,
+                "epochs_trained": len(history.train_losses),
+                "structured_config": train_config["structured_config"],
+            },
+            training_history={
+                "train_losses": history.train_losses,
+                "val_losses": history.val_losses,
+                "train_value_losses": history.train_value_losses,
+                "val_value_losses": history.val_value_losses,
+                "train_policy_losses": history.train_policy_losses,
+                "val_policy_losses": history.val_policy_losses,
+                "final_train_loss": (
+                    history.train_losses[-1]
+                    if history.train_losses else None
+                ),
+                "final_val_loss": (
+                    history.val_losses[-1]
+                    if history.val_losses else None
+                ),
+                "best_val_loss": history.best_val_loss,
+                "best_val_epoch": history.best_val_epoch,
+            },
+            git_commit=_git_commit(),
+            notes=args.notes,
+        )
+        version = registry.register(tmp_weights, metadata)
+
+        final_history = {
+            "train_losses": list(history.train_losses),
+            "val_losses": list(history.val_losses),
+            "train_value_losses": list(history.train_value_losses),
+            "val_value_losses": list(history.val_value_losses),
+            "train_policy_losses": list(history.train_policy_losses),
+            "val_policy_losses": list(history.val_policy_losses),
+            "best_val_loss": history.best_val_loss,
+            "best_val_epoch": history.best_val_epoch,
+            "epochs_trained": len(history.train_losses),
+        }
+        if history.train_losses:
+            final_history["final_train_loss"] = history.train_losses[-1]
+        if history.val_losses:
+            final_history["final_val_loss"] = history.val_losses[-1]
+        _runs_client.push_progress(
+            peeked_version,
+            n_games_done=len(history.train_losses),
+            n_games_total=args.epochs,
+            elapsed_seconds=elapsed,
+            extra={
+                "training_history": final_history,
+                "registered_version": version,
+                "architecture": ARCHITECTURE_STRUCTURED,
+            },
+        )
+        weights_path = registry.weights_path(version)
+        try:
+            weights_bytes = weights_path.stat().st_size
+        except OSError:
+            weights_bytes = None
+        _runs_client.push_artifact(
+            peeked_version,
+            artifact_type="weights",
+            path=str(weights_path),
+            bytes_=weights_bytes,
+        )
+
+    print(f"\n# Done in {elapsed:.1f}s. Registered as {version}.")
+    print(f"# Weights: {registry.weights_path(version)}")
+    if history.train_losses:
+        print(
+            f"# Final train loss: {history.train_losses[-1]:.4f}; "
+            f"val loss: {history.val_losses[-1]:.4f}"
         )
     else:
         print("# epochs_trained=0; no per-epoch losses to report")
