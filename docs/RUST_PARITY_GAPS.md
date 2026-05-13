@@ -4208,6 +4208,73 @@ the forked branch.
   - **Cross-engine smoke probe** for walker activations. Unchanged
     from I56.
 
+### I67. `Effect::DealDamageAnyTarget` controller-of-effect fix — reuses I59 transient slot; defender computed as `1 - controller` instead of `1 - active_player` (DealDamageAnyTarget controller divergence closure)
+
+- **Pinned by**:
+  - 4 new `tests_rust/test_resolve.py`
+    `test_deal_damage_any_target_*` regression pins covering
+    cross-controller spell resolution (1: p1-controlled
+    deal-damage-any-target on p0's turn → p0's first creature takes
+    the damage, NOT p1's), same-controller back-compat (1: p0-
+    controlled spell on p0's turn still damages p1's first
+    creature), cross-controller LTB trigger (1: p1's LTB →
+    deal-damage-any-target trigger fires on bounce by p0's spell,
+    damage lands on p0's creature, NOT p1's — pre-fix this would
+    have hit p1's own bf), and `resolve_top_of_stack_pause`
+    parity (1: pause variant uses the same swap). Mirrors the I64
+    DealDamage / I63 DamageEachOpponent test shape.
+
+- **Rule**. CR 119.5 / 608.2: an effect resolves under its
+  source's controller. DealDamageAnyTarget's "any target"
+  defaulting to "the defender's first creature, else the
+  defender as player" means "the SOURCE'S controller's
+  opponent", not "the active player's opponent". Sibling
+  closure to the I64 DealDamage fix — both use a
+  `defender = 1 - controller` shape.
+
+- **Pre-fix Rust behavior**. The `Effect::DealDamageAnyTarget`
+  arm at `state_ops_resolve.rs:3381` (pre-fix line) computed
+  `let defender_idx = (1 - state.active_player) as usize`.
+  Wrong when the resolving spell / triggered ability has a
+  controller != active_player. Worst-case example: p1's
+  creature has an ETB / LTB "deal X damage to any target"
+  trigger that fires on p0's turn (e.g. via a p0 flicker that
+  re-ETBs p1's creature). Pre-fix the trigger self-damaged p1's
+  first creature — `defender_idx = 1 - 0 = 1`. Post-fix the
+  trigger correctly damages p0's first creature (the trigger's
+  controller's opponent).
+
+- **Reuses I59 substrate**. No new state, no new helper. The
+  `Effect::DealDamageAnyTarget` arm gains a controller-
+  resolution preamble identical to the I64 DealDamage arm:
+  `let controller = state.current_resolve_source_controller
+  .map(|c| c as usize).unwrap_or(state.active_player as usize);
+  let defender_idx = 1 - controller;`. The transient slot is
+  set by the SAME stack-resolver swaps I59 wired
+  (`resolve_top_of_stack` spell + trigger branches and the
+  `_pause` mirrors). Cross-controller-via-pending-decision
+  callers also work because I61 already migrated the
+  dispatcher sites to `apply_effect_pub_with_controller`.
+
+- **Out of scope (deferred to future slices)**:
+  - **`Effect::DealDamageEqualToSourcePowerAnyTarget`** —
+    pending audit (likely same shape if it reads
+    active_player).
+  - **`Effect::DealDamageEachCreature`** — pending audit.
+  - **`Effect::DealDamageToOpponentCreature`** — already uses
+    the 5-zone source-finder pattern (mirrors LoseLife /
+    TargetOpponentLosesLife shape). No migration needed.
+
+- **Forward inventory (post-I67 remaining `active_player`-keyed
+  arms in `state_ops_resolve.rs`):**
+  - **`Effect::DealDamageEqualToSourcePowerAnyTarget`** —
+    pending audit.
+  - **`Effect::DealDamageEachCreature`** — pending audit.
+  - **Search-zone resolvers' "your library" semantics**
+    (`SearchLibraryFor*`, etc) — pending per-arm review.
+  - **12+ defender sites across various arms** — per-arm audit
+    pending.
+
 ### I66. `Effect::Sacrifice` (you-sacrifice) controller-of-effect fix — reuses I59 transient slot; sacrificing player computed from `current_resolve_source_controller` instead of `state.active_player` (Sacrifice self-target controller divergence closure)
 
 - **Pinned by**:

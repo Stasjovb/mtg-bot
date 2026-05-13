@@ -12008,3 +12008,219 @@ def test_sacrifice_pause_variant_threads_controller(engine):
     # p1 (controller) sacrificed; p0 (active_player) untouched.
     assert state.battlefield_sizes[1] == p1_bf_before - 1
     assert state.battlefield_sizes[0] == p0_bf_before
+
+
+# ====================================================================
+# DealDamageAnyTarget controller-of-effect fix — regression pins (I67).
+#
+# Same shape as the I64 DealDamage / I63 DamageEachOpponent fixes.
+# Pre-fix `Effect::DealDamageAnyTarget` at state_ops_resolve.rs
+# computed `defender_idx = 1 - state.active_player` for picking the
+# "first creature on defender's battlefield, else damage defender as
+# player". Wrong when the resolving spell / triggered ability has a
+# controller != active_player — example: p1's ETB trigger fires on
+# p0's turn (via flicker), pre-fix the trigger self-damaged p1
+# (defender_idx = 1 - 0 = 1), post-fix it correctly targets p0
+# (the trigger's controller's opponent).
+# ====================================================================
+
+
+def _deal_damage_any_target_spell_dict(amount: int = 3):
+    """Instant-typed deal-damage-any-target printing for cross-
+    controller regression pins. Sorcery in some other tests; instant
+    here so the spell can be cast on the opponent's turn (mirrors
+    I64's _deal_damage_spell_dict shape)."""
+    return {
+        "name": f"Test DealDamageAnyTarget {amount}",
+        "card_types": ["Instant"],
+        "mana_cost": {"R": 1, "generic": 2},
+        "effects": [{"kind": "deal_damage_any_target", "amount": amount}],
+    }
+
+
+def test_deal_damage_any_target_routes_to_source_controllers_opponent(engine):
+    """**Regression pin for the DealDamageAnyTarget controller-of-
+    effect fix (I67).**
+
+    On p0's turn (active_player=0), an instant
+    deal-damage-any-target spell whose controller is p1 must
+    damage the FIRST creature on p0's bf (or, if no creature, p0
+    as player). NOT p1's. Pre-fix `defender_idx = 1 -
+    active_player = 1 - 0 = 1` => damage went to p1's bf — a
+    friendly-fire bug analogous to the I64 DealDamage closure.
+    """
+    state = engine.make_synthetic_state()
+    assert state.active_player == 0
+
+    spell_id = state.register_and_inject_object(
+        _deal_damage_any_target_spell_dict(amount=2), 1, ZONE_HAND
+    )
+
+    # Defender's first creature lives at p0's bf (synthetic seed
+    # places forests at bf[0..5] then bears at bf[5..]). Index 5 is
+    # the first creature on p0's bf.
+    # Find it dynamically via battlefield_snapshot.
+    snap = state.battlefield_snapshot()
+    p0_first_creature = None
+    for obj in snap:
+        if obj["controller_id"] == 0:
+            # Pull printing id and check via registry
+            p0_first_creature = obj["id"]
+            # We want the first CREATURE — heuristic: bf[0..4] are
+            # Forests (Land), bf[5..] are Bears (Creature). Use
+            # damage tracking on the first id whose power > 0.
+            if obj.get("power", 0) > 0:
+                break
+    # Fallback: just compute the expected target via the same logic
+    # the engine uses — first object on p0's bf whose type is
+    # Creature. The seed places forests at bf[0..4] then bears at
+    # bf[5..9]; bears are id 5..9 on p0, so the first creature is
+    # id 5.
+    expected_target = 5
+    damage_before = state.get_damage(expected_target)
+
+    state.push_to_stack(spell_id, 1)
+    state.resolve_top_of_stack()
+
+    # Damage went to p0's first creature, NOT p1's.
+    assert state.get_damage(expected_target) == damage_before + 2
+    # p1's first creature (id 5 + 10 = 15 in the seed's id allocation)
+    # is untouched. We verify via the battlefield_snapshot that no
+    # p1-controlled creature took the 2 damage.
+    snap_after = state.battlefield_snapshot()
+    for obj in snap_after:
+        if obj["controller_id"] == 1 and obj["id"] != spell_id:
+            assert obj.get("damage", 0) == 0
+
+
+def test_deal_damage_any_target_active_player_controlled_spell_still_works(
+    engine,
+):
+    """**Back-compat pin.** A DealDamageAnyTarget spell whose
+    controller IS the active player must still target the opponent
+    — bug never fired in this case pre-fix because controller ==
+    active_player.
+    """
+    state = engine.make_synthetic_state()
+    assert state.active_player == 0
+
+    spell_id = state.register_and_inject_object(
+        _deal_damage_any_target_spell_dict(amount=3), 0, ZONE_HAND
+    )
+
+    state.push_to_stack(spell_id, 0)
+    state.resolve_top_of_stack()
+
+    # First creature on p1's bf took 3 damage. In the seed, p1's
+    # bf[5] is the first creature.
+    snap = state.battlefield_snapshot()
+    p1_first_creature_with_damage = None
+    for obj in snap:
+        if obj["controller_id"] == 1 and obj.get("damage", 0) > 0:
+            p1_first_creature_with_damage = obj
+            break
+    assert p1_first_creature_with_damage is not None
+    assert p1_first_creature_with_damage["damage"] == 3
+
+
+def test_deal_damage_any_target_via_triggered_ability_routes_to_triggers_controller(
+    engine,
+):
+    """**Cross-controller LTB-trigger pin for DealDamageAnyTarget.**
+
+    Shape: p1's creature has a `source_is_self LEAVES_BATTLEFIELD →
+    deal 2 damage to any target` trigger. p0 casts a bounce spell on
+    p1's creature; when the LTB trigger resolves, the 2 damage routes
+    to p0's first creature (p1's opponent), NOT p1's own bf.
+    """
+    state = engine.make_synthetic_state(
+        num_battlefield=0, num_hand=0, num_library=5
+    )
+    # p0 creature on bf — this is the trigger's intended target post-fix.
+    p0_crt = state.register_and_inject_object(
+        {
+            "name": "P0 Creature",
+            "card_types": ["Creature"],
+            "mana_cost": {"generic": 1},
+            "effects": [],
+            "power": 1,
+            "toughness": 3,
+        },
+        0,
+        ZONE_BATTLEFIELD,
+    )
+    # p1 LTB creature.
+    ltb_creature = {
+        "name": "Test LTB-DealDamageAnyTarget Creature",
+        "card_types": ["Creature"],
+        "mana_cost": {"generic": 2},
+        "effects": [],
+        "power": 1,
+        "toughness": 1,
+        "triggered_abilities": [
+            {
+                "event": "leaves_battlefield",
+                "predicate": {"kind": "source_is_self"},
+                "effect": {
+                    "kind": "deal_damage_any_target",
+                    "amount": 2,
+                },
+            }
+        ],
+    }
+    state.register_and_inject_object(ltb_creature, 1, ZONE_BATTLEFIELD)
+    # p1 also has a vanilla creature so pre-fix damage would have a
+    # target on p1's bf to land on (rather than fizzling to player).
+    p1_crt = state.register_and_inject_object(
+        {
+            "name": "P1 Creature",
+            "card_types": ["Creature"],
+            "mana_cost": {"generic": 1},
+            "effects": [],
+            "power": 1,
+            "toughness": 3,
+        },
+        1,
+        ZONE_BATTLEFIELD,
+    )
+    bounce_id = state.register_and_inject_object(
+        {
+            "name": "Test Bounce (DealDamageAnyTarget LTB)",
+            "card_types": ["Instant"],
+            "mana_cost": {"U": 1},
+            "effects": [
+                {"kind": "return_to_hand", "target": {"kind": "any_creature"}}
+            ],
+        },
+        0,
+        ZONE_HAND,
+    )
+
+    state.push_to_stack(bounce_id, 0)
+    state.resolve_top_of_stack()  # bounce; LTB trigger pushes
+    top = state.peek_top_of_stack()
+    assert top is not None
+    assert top["controller"] == 1
+
+    state.resolve_top_of_stack()  # LTB trigger fires
+
+    # Damage went to p0's creature (p1's opponent's first creature),
+    # NOT p1's.
+    assert state.get_damage(p0_crt) == 2
+    assert state.get_damage(p1_crt) == 0
+
+
+def test_deal_damage_any_target_pause_variant_threads_controller(engine):
+    """**`resolve_top_of_stack_pause` parity pin for DealDamageAnyTarget.**"""
+    state = engine.make_synthetic_state()
+    spell_id = state.register_and_inject_object(
+        _deal_damage_any_target_spell_dict(amount=1), 1, ZONE_HAND
+    )
+    expected_target = 5  # p0's first creature in the seed.
+    damage_before = state.get_damage(expected_target)
+
+    state.push_to_stack(spell_id, 1)
+    state.resolve_top_of_stack_pause()
+
+    # Damage went to p0's first creature (p1's opponent), not p1's bf.
+    assert state.get_damage(expected_target) == damage_before + 1
