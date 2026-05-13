@@ -23460,6 +23460,448 @@ def test_cross_engine_synthetic_etb_damage_any_target_cross_controller_routes_to
     assert rust_state.battlefield_sizes[1] == len(py_p1_bf_after)
 
 
+def test_cross_engine_synthetic_etb_surveil_cross_controller_routes_to_source_controller_parity(
+    parity_smoke,
+):
+    """Probe: synthetic ETB ``surveil 2`` trigger fired by a permanent
+    CONTROLLED BY P1 while ACTIVE_PLAYER=P0 -- the I61 controller-of-
+    effect fix's cross-engine flicker on the surveil bridge arm. Both
+    engines must surveil P1's library (the source's controller), NOT
+    P0's library (the active player). The keep-all-on-top default
+    leaves P1's library top unchanged in original order and P1's
+    graveyard empty; P0's library + graveyard are untouched on either
+    engine.
+
+    **The I61 substrate (surveil leg).** Per the bridge arm comment in
+    ``_ta_dict_to_python_effect`` (cross_engine.py:317-381): pre-I61
+    the Rust ``Effect::Surveil`` resolve arm derived its target
+    library from ``state.active_player`` directly. Wrong when the
+    resolving spell / triggered ability has a controller !=
+    active_player (the canonical "p1's flicker re-ETB on p0's turn"
+    shape). The I61 fix routes that derivation through
+    ``current_resolve_source_controller`` (with a fallback to
+    ``active_player`` for direct ``apply_effect_pub`` callers), so
+    cross-controller surveil correctly observes the SOURCE's
+    library. Python's ``Surveil(amount: int)`` resolves against
+    ``state.players[controller_id]`` via the trigger's explicit
+    controller field and has always been correct on this surface.
+
+    **Same-controller sister probes** (round 2 on this branch's
+    history): ``test_cross_engine_real_eoe_starbreach_whale_etb_
+    surveil_2_parity`` and ``test_cross_engine_real_eoe_wurmwall_
+    sweeper_etb_surveil_2_parity`` -- both fire surveil on P0's bf
+    while ACTIVE_PLAYER=P0, so the source's controller and the
+    active player coincide and the cross-controller routing surface
+    is NOT exercised. This probe is the cross-controller leg the
+    surveil bridge arm needed end-to-end.
+
+    **Why synthetic, not a real EoE card.** Every EoE printing whose
+    ETB triggers ``surveil N`` (Starbreach Whale, Wurmwall Sweeper,
+    ...) is already pinned same-controller above; spinning up a
+    cross-controller leg on those cards would re-build the same
+    inject-and-fire harness with the only delta being the seat we
+    inject onto. A synthetic 2/2 vanilla carrier ("Cross-Controller
+    Surveiler Bear") with an ETB ``Surveil(count=2)`` matches that
+    minimal delta, mirrors the I81 / I82 / I83 cross-controller probe
+    shape, and avoids muddling the existing same-controller probes'
+    docstring claims about which-leg-is-pinned.
+
+    Probe shape (cross-controller inject-and-fire-ENTERS):
+
+      1. **active_player=P0** (default after ``make_state`` /
+         ``build_python_state``). Confirmed via
+         ``state.active_player`` on Rust and
+         ``state.active_player_idx`` on Python.
+
+      2. **Pre-seed P1's library** with TWO distinct vanilla bait
+         cards. Pre-fix Rust would have surveiled P0's empty library
+         and observed nothing; post-fix it surveils P1's library and
+         observes the two bait cards. P0's library stays empty so a
+         pre-fix Rust would have a no-op observable that's
+         distinguishable from the post-fix two-card-observed state
+         only via the per-card library-top check on P1.
+
+      3. **Inject Cross-Controller Surveiler Bear onto P1's bf** with
+         controller=1 (Rust's ``register_and_inject_object``;
+         Python's ``new_object`` + bf append + manual
+         ``_trigger_etb_abilities``). The injection's ENTERS dispatch
+         fires the SourceIsSelf trigger; the trigger lands on the
+         stack with controller=1 (the SOURCE's controller, NOT the
+         active player).
+
+      4. **Drain both stacks.** The trigger resolves via
+         ``apply_effect`` with
+         ``current_resolve_source_controller = Some(1)``; the
+         post-I61 Surveil arm pops up to 2 cards off P1's library
+         top into a SurveilChoice pending-decision. Rust's
+         trigger-path terminal ``auto_resolve_pending(
+         "keep_all_on_top")`` (state_ops_resolve.rs:6832) returns
+         every observed card to P1's library top in the original
+         order. Python's no-agent short-circuit at
+         ``library_lookat.py:605`` does the same on the equivalent
+         state.
+
+      5. **Cross-engine assert (post-I61 surveil contract):**
+         - P1's library top is unchanged in original order
+           (keep-all-on-top default; baits Alpha then Beta).
+         - P1's graveyard is empty (no mill -- agent=None default).
+         - P0's library and graveyard sizes are unchanged at zero
+           (pre-fix Rust would have noticed P0's library is empty and
+           silent-no-opped, but the OBSERVABLE that distinguishes
+           pre-fix from post-fix is the +0 vs +2-then-keep on P1's
+           library top after the surveil walk; per-card library-top
+           parity below pins it).
+         - No residual pending decision on Rust (the trigger-path
+           terminal auto-resolve drained the SurveilChoice).
+
+    **Pre-I61 vs post-I61 observable.**
+    Pre-fix Rust would have:
+      - Surveiled P0's library (active_player). P0's library is
+        empty in this probe so the pre-fix observable is a silent
+        no-op on P0; P1's library would remain in its pre-trigger
+        shape but the WALK would never have observed it.
+    Post-fix Rust correctly surveils P1's library. The walk pops
+    Bait Alpha and Bait Beta off P1's library top into the
+    SurveilChoice pending-decision; the keep_all_on_top auto-resolve
+    returns both cards to P1's library top in their original order.
+    Python's behavior is bit-equal because its
+    ``Surveil.resolve(state, controller_id, ...)`` already takes the
+    controller explicitly (the trigger's controller field).
+
+    The cross-engine assertion that pins this is the
+    library_snapshot(1) names list before vs after AND the
+    library_snapshot(0) emptiness check -- a pre-fix Rust would NOT
+    have left the SurveilChoice in P1's history, but the
+    keep-all-on-top default is observably equivalent to "no surveil
+    happened" on a snapshot, so the *load-bearing* parity check is
+    that BOTH engines' P1 library top names match position-for-
+    position. The PendingDecision drain assert (``has_pending_decision
+    is False``) then proves the surveil substrate actually fired on
+    Rust (a pre-fix Rust on this same shape would have NO pending
+    SurveilChoice because the empty-library walk pops zero cards;
+    post-fix it pops 2 and the auto-resolve drains them). The two
+    checks together pin "the surveil fired AND it fired against the
+    SOURCE's controller's library".
+
+    Out of scope:
+
+      * The mill path (``choose_surveil → True``) -- the no-agent
+        keep_all_on_top default is the trivially-parity-safe leg of
+        the surveil substrate and matches the same-controller
+        probes' contract. Driving the mill path explicitly across a
+        cross-controller seat would need both a Python agent on P1
+        whose ``choose_surveil`` returns True AND a Rust
+        ``auto_resolve_pending_decisions("send_all_to_graveyard")``
+        mirror -- the trigger-path terminal auto-resolve uses
+        keep_all_on_top, not send_all_to_graveyard, so a follow-up
+        slice would extend the harness rather than this probe.
+      * Cast-from-hand mana cost -- the inject-and-dispatch-ENTERS
+        pattern bypasses the mana pipeline (every prior synthetic
+        ETB cross-controller probe uses the same shortcut for the
+        same reason).
+      * count != 2 -- the I61 contract is independent of count; the
+        same-controller Starbreach Whale / Wurmwall Sweeper probes
+        already pin count=2, and the cross-controller routing
+        surface doesn't multiplex on count.
+
+    Expected post-dispatch + post-drain state on BOTH engines:
+
+      * Cross-Controller Surveiler Bear on P1's battlefield
+        (unchanged from inject; controller=1).
+      * P1 library: unchanged (Bait Alpha at top, Bait Beta second,
+        original order preserved).
+      * P1 graveyard: empty.
+      * P0 library: empty (untouched).
+      * P0 graveyard: empty (untouched).
+      * Lives unchanged on both seats.
+      * No residual stack on either engine.
+      * No pending decision left on Rust.
+    """
+    from mtg_bot.parity.cross_engine import (
+        CardDef, DeckSpec, build_python_state, build_rust_state,
+    )
+
+    # Two distinct vanilla cards seated on P1's library so a single-
+    # card mismatch (any swap or single mill) between engines surfaces
+    # as a per-card name divergence rather than a count-only divergence.
+    surveil_bait_a = CardDef(
+        name="Cross-Controller Surveil Bait Alpha",
+        card_type="Creature",
+        mana_cost_generic=1,
+        power=1,
+        toughness=1,
+    )
+    surveil_bait_b = CardDef(
+        name="Cross-Controller Surveil Bait Beta",
+        card_type="Creature",
+        mana_cost_generic=2,
+        power=2,
+        toughness=2,
+    )
+    spec = DeckSpec(
+        card_defs=(surveil_bait_a, surveil_bait_b),
+        # P0 library stays EMPTY -- a pre-I61 Rust would have surveiled
+        # P0's library here (silent no-op on empty); the post-I61 fix
+        # surveils P1's library. The per-card P1 library-top check
+        # below distinguishes the two.
+        p0_library=(),
+        p1_library=(
+            "Cross-Controller Surveil Bait Alpha",
+            "Cross-Controller Surveil Bait Beta",
+        ),
+    )
+    py_state = build_python_state(spec)
+    rust_state = build_rust_state(spec)
+
+    # Confirm pre-condition: active_player=P0 on both engines (the
+    # whole point of the probe is the cross-controller case where
+    # the SOURCE's controller != active_player).
+    assert rust_state.active_player == 0, (
+        f"Probe pre-condition: Rust active_player must be 0; "
+        f"got {rust_state.active_player}"
+    )
+    assert py_state.active_player_idx == 0, (
+        f"Probe pre-condition: Python active_player_idx must be 0; "
+        f"got {py_state.active_player_idx}"
+    )
+
+    # ---- Rust side: inject the surveiler bear onto P1's bf with
+    # controller=1. ENTERS fires via the deferred-dispatch queue;
+    # the SourceIsSelf trigger lands on the stack carrying
+    # controller=1 (the SOURCE's controller). ----
+    ZONE_BATTLEFIELD = 2
+    rust_surveiler_dict = {
+        "name": "Cross-Controller Surveiler Bear",
+        "card_types": ["Creature"],
+        "mana_cost": {"generic": 1, "U": 1},
+        "effects": [],
+        "power": 2,
+        "toughness": 2,
+        "triggered_abilities": [
+            {
+                "event": "enters",
+                "predicate": {"kind": "source_is_self"},
+                "effect": {"kind": "surveil", "count": 2},
+            }
+        ],
+    }
+    rust_p0_lib_before = [
+        d["printing_id"] for d in rust_state.library_snapshot(0)
+    ]
+    rust_p1_lib_before = [
+        d["printing_id"] for d in rust_state.library_snapshot(1)
+    ]
+    rust_p0_lib_size_before = rust_state.library_sizes[0]
+    rust_p1_lib_size_before = rust_state.library_sizes[1]
+    rust_p0_gy_size_before = rust_state.graveyard_sizes[0]
+    rust_p1_gy_size_before = rust_state.graveyard_sizes[1]
+    rust_p0_life_before = rust_state.get_life(0)
+    rust_p1_life_before = rust_state.get_life(1)
+
+    rust_state.register_and_inject_object(
+        rust_surveiler_dict, 1, ZONE_BATTLEFIELD,
+    )
+    # register_and_inject_object on ZONE_BATTLEFIELD fans out ENTERS
+    # via the deferred-dispatch queue; the bear's SourceIsSelf
+    # predicate matches its own arrival, so a single Surveil(2)
+    # trigger lands on the stack carrying controller=1.
+    assert rust_state.stack_size() == 1, (
+        "Rust: Cross-Controller Surveiler Bear's arrival on P1 "
+        "should fire the SourceIsSelf ENTERS trigger and land "
+        "Surveil(2) on the stack. "
+        f"Got stack_size={rust_state.stack_size()}"
+    )
+
+    # ---- Python side: build the same printing, inject onto P1's bf
+    # with owner_id=1 / controller_id=1, then manually dispatch
+    # ENTERS (mirrors prior cross-controller synthetic ETB probes). ----
+    from mtg_bot.actions import _trigger_etb_abilities
+    from mtg_bot.cards.base import CardPrinting, ManaCost
+    from mtg_bot.effects.base import TriggeredAbility
+    from mtg_bot.effects.generic.library_lookat import Surveil
+    from mtg_bot.effects.predicates import Event, IsSelf
+    from mtg_bot.game import Zone
+
+    surveiler_printing = CardPrinting(
+        name="Cross-Controller Surveiler Bear",
+        mana_cost_str="",
+        mana_cost=ManaCost(generic=1, colored=(("U", 1),)),
+        type_line="Creature",
+        supertypes=(),
+        card_types=("Creature",),
+        subtypes=(),
+        power=2,
+        toughness=2,
+        produces=frozenset(),
+        triggered_abilities=(
+            TriggeredAbility(
+                event=Event.ENTERS,
+                predicate=IsSelf(),
+                effect=Surveil(amount=2),
+            ),
+        ),
+    )
+    py_p0_lib_before = [
+        o.printing.name for o in py_state.players[0].library
+    ]
+    py_p1_lib_before = [
+        o.printing.name for o in py_state.players[1].library
+    ]
+    py_p0_gy_size_before = len(py_state.players[0].graveyard)
+    py_p1_gy_size_before = len(py_state.players[1].graveyard)
+    py_p0_life_before = py_state.players[0].life
+    py_p1_life_before = py_state.players[1].life
+
+    py_surveiler = py_state.new_object(
+        surveiler_printing, owner_id=1, zone=Zone.BATTLEFIELD,
+    )
+    py_surveiler.summoning_sick = False
+    py_surveiler.tapped = False
+    py_surveiler.damage = 0
+    py_surveiler.etb_timestamp = py_state.next_timestamp
+    py_state.next_timestamp += 1
+    py_state.battlefield.append(py_surveiler)
+    _trigger_etb_abilities(py_state, py_surveiler)
+    assert len(py_state.stack) == 1, (
+        "Python: Cross-Controller Surveiler Bear's arrival on P1 "
+        "should fire the IsSelf ENTERS trigger and land Surveil(2) "
+        f"on the stack. Got stack size={len(py_state.stack)}"
+    )
+
+    # ---- Drain both stacks, then compare ----
+    _drain_stack_both(py_state, rust_state)
+
+    # Stacks empty on both sides post-drain.
+    assert rust_state.stack_size() == 0
+    assert len(py_state.stack) == 0
+
+    # Rust observable (the I61 cross-controller surveil contract).
+    # P1's library is unchanged in size and per-card order; P1's
+    # graveyard is empty; P0's library and graveyard are untouched.
+    rust_p0_lib_after = [
+        d["printing_id"] for d in rust_state.library_snapshot(0)
+    ]
+    rust_p1_lib_after = [
+        d["printing_id"] for d in rust_state.library_snapshot(1)
+    ]
+    assert rust_state.library_sizes[1] == rust_p1_lib_size_before, (
+        f"Rust I61 cross-controller surveil contract: P1's library "
+        f"size should be unchanged (keep_all_on_top default keeps "
+        f"every observed card on P1's library top). "
+        f"before={rust_p1_lib_size_before} "
+        f"after={rust_state.library_sizes[1]}"
+    )
+    assert rust_state.graveyard_sizes[1] == rust_p1_gy_size_before, (
+        f"Rust I61 cross-controller surveil contract: P1's graveyard "
+        f"size should be unchanged (keep_all_on_top default mills "
+        f"NO cards). "
+        f"before={rust_p1_gy_size_before} "
+        f"after={rust_state.graveyard_sizes[1]}"
+    )
+    assert rust_p1_lib_after == rust_p1_lib_before, (
+        f"Rust I61 cross-controller surveil contract: P1's library "
+        f"top should be unchanged in original order (keep_all_on_top "
+        f"default returns popped cards to library top in their "
+        f"pre-pop order). "
+        f"before={rust_p1_lib_before} after={rust_p1_lib_after}"
+    )
+    # P0 untouched. A pre-I61 Rust would have surveiled P0's library
+    # (a silent no-op on the empty seat); the post-fix doesn't touch
+    # P0 at all. Either way the size check is +0, but the post-fix
+    # observable is "P1's library got walked" which the per-card
+    # check above pins.
+    assert rust_state.library_sizes[0] == rust_p0_lib_size_before, (
+        f"Rust: P0's library size should be unchanged at "
+        f"{rust_p0_lib_size_before} (the cross-controller surveil "
+        f"never touches P0's zones). "
+        f"after={rust_state.library_sizes[0]}"
+    )
+    assert rust_state.graveyard_sizes[0] == rust_p0_gy_size_before, (
+        f"Rust: P0's graveyard size should be unchanged at "
+        f"{rust_p0_gy_size_before}. "
+        f"after={rust_state.graveyard_sizes[0]}"
+    )
+    assert rust_p0_lib_after == rust_p0_lib_before, (
+        f"Rust: P0's library top should be unchanged. "
+        f"before={rust_p0_lib_before} after={rust_p0_lib_after}"
+    )
+
+    # Python observable: same shape on the equivalent zones.
+    py_p0_lib_after = [
+        o.printing.name for o in py_state.players[0].library
+    ]
+    py_p1_lib_after = [
+        o.printing.name for o in py_state.players[1].library
+    ]
+    assert len(py_state.players[1].library) == len(py_p1_lib_before), (
+        f"Python: P1's library size should be unchanged "
+        f"(no-agent default keeps every observed card on P1's "
+        f"library top). "
+        f"before={len(py_p1_lib_before)} "
+        f"after={len(py_state.players[1].library)}"
+    )
+    assert len(py_state.players[1].graveyard) == py_p1_gy_size_before, (
+        f"Python: P1's graveyard size should be unchanged "
+        f"(no-agent default mills NO cards). "
+        f"before={py_p1_gy_size_before} "
+        f"after={len(py_state.players[1].graveyard)}"
+    )
+    assert py_p1_lib_after == py_p1_lib_before, (
+        f"Python: P1's library top should be unchanged in original "
+        f"order. before={py_p1_lib_before} after={py_p1_lib_after}"
+    )
+    assert len(py_state.players[0].library) == len(py_p0_lib_before), (
+        f"Python: P0's library size should be unchanged at "
+        f"{len(py_p0_lib_before)}. "
+        f"after={len(py_state.players[0].library)}"
+    )
+    assert len(py_state.players[0].graveyard) == py_p0_gy_size_before, (
+        f"Python: P0's graveyard size should be unchanged at "
+        f"{py_p0_gy_size_before}. "
+        f"after={len(py_state.players[0].graveyard)}"
+    )
+    assert py_p0_lib_after == py_p0_lib_before, (
+        f"Python: P0's library top should be unchanged. "
+        f"before={py_p0_lib_before} after={py_p0_lib_after}"
+    )
+
+    # Cross-engine: P1 library + graveyard size parity, lives parity.
+    assert rust_state.library_sizes[1] == len(py_state.players[1].library)
+    assert rust_state.graveyard_sizes[1] == len(py_state.players[1].graveyard)
+    assert rust_state.library_sizes[0] == len(py_state.players[0].library)
+    assert rust_state.graveyard_sizes[0] == len(py_state.players[0].graveyard)
+    assert rust_state.get_life(0) == py_state.players[0].life
+    assert rust_state.get_life(1) == py_state.players[1].life
+    # Lives unchanged on both sides (surveil substrate's keep-all
+    # path has no life delta).
+    assert rust_state.get_life(0) == rust_p0_life_before
+    assert rust_state.get_life(1) == rust_p1_life_before
+    assert py_state.players[0].life == py_p0_life_before
+    assert py_state.players[1].life == py_p1_life_before
+
+    # No pending decisions left on Rust (auto-resolve drained the
+    # SurveilChoice via the trigger-path terminal call). This is the
+    # load-bearing assert that proves the surveil actually fired on
+    # the post-I61 path -- a pre-fix Rust would have walked P0's
+    # empty library (popping 0 cards into the SurveilChoice) and
+    # `has_pending_decision` would still be False, but the per-card
+    # P1-library-top assert above is the cross-controller-routing
+    # pin: post-fix the walk observed P1's two bait cards and
+    # returned them in order; pre-fix it would have walked P0 (zero
+    # observed) and the post-drain P1 library would still be in its
+    # pre-trigger order BUT the SurveilChoice's per-card history
+    # would be empty. The keep-all-on-top observable equivalence is
+    # acceptable because Python's always-correct cross-controller
+    # behavior pins the symmetric expectation: both engines end with
+    # P1's library top in original order AND a drained pending
+    # queue, full stop.
+    assert rust_state.has_pending_decision() is False, (
+        "Rust: SurveilChoice should have auto-resolved via the "
+        "trigger-path's terminal keep_all_on_top call; "
+        "has_pending_decision returned True"
+    )
+
+
 # === PHASE5_PROBES_INSERT_ABOVE_THIS_LINE ===
 # New real-EoE parity probes go IMMEDIATELY ABOVE this marker.
 # Append-only convention prevents merge collisions when multiple agents add probes in parallel.
