@@ -1660,6 +1660,107 @@ def _ta_dict_to_python_effect(eff_dict: dict):
                 f"only honors creature-shaped filters)"
             )
         return Exile(targets=(TargetSpec(slot_filter),))
+    if kind == "exile_opponents_nonland_permanent_until_leaves":
+        # "Exile target nonland permanent an opponent controls
+        # until SOURCE leaves the battlefield." Rust's
+        # ``Effect::ExileOpponentsNonlandPermanentUntilLeaves``
+        # (cards.rs:1283) is a UNIT VARIANT — no fields. Its
+        # parse_effect arm at cards.rs:3325-3327 takes no fields.
+        # The resolve arm at state_ops_resolve.rs:5645-5754 carries
+        # the I80 controller-of-effect fix: the target picker is a
+        # deterministic first-slice shortcut that picks the SOURCE'S
+        # controller's opponent's first non-land permanent, where
+        # ``defender = 1 - controller`` and ``controller`` derives
+        # from ``current_resolve_source_controller`` (with
+        # active_player fallback). Sibling closure to I79 — same
+        # broader-shape "until source leaves" exile; differs from
+        # I79 only in the target filter ("not a Land" instead of
+        # "is a Creature").
+        #
+        # **Rust target-pick semantics.** The Rust resolve arm scans
+        # the defender's bf top-to-bottom for the first object whose
+        # printing card_types does NOT contain "Land"; no eligible
+        # non-land permanent = silent fizzle. Stamps
+        # ``exiled_with_source = Some(source_obj_id)`` on the moved
+        # object so a follow-up
+        # ``return_paired_exiles_for(source_id)`` can return it
+        # when the source leaves play. CR 400.7 zone-change reset
+        # (tapped, summoning_sick=true per r28 CE1, damage,
+        # counters, attached_to) preserved.
+        #
+        # **Python target-pick semantics.** Python's
+        # ``ExileOpponentsNonlandPermanentUntilLeaves`` class
+        # (effects/generic/exile.py:587) is target-required
+        # (``requires_target() -> True``); its ``legal_targets``
+        # walks every nonland opponent-controlled permanent on the
+        # battlefield (subject to the optional ``max_mv`` rider --
+        # 0 means no MV cap, which mirrors the Rust unit variant's
+        # no-MV-filter shape). The targeting pipeline picks at
+        # PUSH time via ``push_triggered_ability`` ->
+        # ``controller.agent.choose_target`` over the
+        # legal_targets pool. Probes that exercise this bridge
+        # end-to-end seat a defender-bf-first permanent picker
+        # (the existing
+        # ``_PickFirstOpponentTargetCreaturePreferredAgent`` shim
+        # extends naturally to permanents since its filter walks
+        # ``state.battlefield`` for the controller-side check; see
+        # the cross-controller probe slice's notes for the picker
+        # selection rationale).
+        #
+        # **Rider widenings.** Rust's variant has no ``max_mv``
+        # mirror today — the MV-cap field is a Python-side-only
+        # rider that fans out to a follow-on Rust variant once an
+        # EoE printing needs it (mirrors the
+        # ``return_creature_from_your_graveyard_to_hand`` /
+        # ``return_artifact_or_creature_from_your_graveyard_to_hand``
+        # split shape). The bridge constructs the bare default
+        # shape (max_mv=0 = no cap), which observably matches
+        # Rust's any-non-land-permanent scan when synthetic probes
+        # seat only eligible bait.
+        #
+        # **Filter differences from I79.** I79 filters target
+        # creatures via ``IsCreature`` (Python) /
+        # ``card_types.contains("Creature")`` (Rust). I80 filters
+        # target NON-LAND permanents via the ``is_land`` exclusion
+        # (Python) / ``card_types.iter().any(|t| t == "Land")``
+        # exclusion (Rust). On the Python side, the
+        # ``opponents_only`` rider on the I79 class is hardcoded
+        # for I80 (the printed text always restricts to "an
+        # opponent controls"); the legal_targets walk includes
+        # the ``o.controller_id == controller_id`` exclusion
+        # unconditionally. On Rust, the resolve arm walks
+        # ``players[defender].battlefield`` directly, which is
+        # already the opponent's bf by the defender derivation.
+        #
+        # **LTB / pairing semantics out of bridge scope.** Same
+        # shape as I79: the Rust arm pushes the leaving id onto
+        # ``pending_leaves_dispatches`` and stamps
+        # ``exiled_with_source``; the Python class invokes
+        # ``move_off_battlefield`` which fans out LTB triggers
+        # through the standard Python LEAVES dispatch and stamps
+        # ``exiled_by_source``. The bookkeeping field-name differs
+        # (``exiled_with_source`` on Rust, ``exiled_by_source``
+        # on Python) but observable post-resolve state agrees:
+        # the exiled object is in the owner's exile zone with a
+        # link back to the source. Cross-engine probes that drive
+        # this arm assert on bf / exile membership and source
+        # object presence; the link-name asymmetry is internal
+        # to each engine and not exposed on the bridge surface.
+        #
+        # Mirrors Rust's ``parse_effect`` arm (cards.rs:3325-3327);
+        # the unit variant takes no fields, so the bridge
+        # translator ignores every other key on the dict for
+        # round-trip dict-shape consistency. Forward-compatible
+        # with future MV-cap-widened Rust variants — those would
+        # land as separate ``kind`` arms on this translator (one
+        # per Rust Effect variant), mirroring the
+        # ``return_creature_from_your_graveyard_to_hand`` /
+        # ``return_artifact_or_creature_from_your_graveyard_to_hand``
+        # split convention.
+        from mtg_bot.effects.generic.exile import (
+            ExileOpponentsNonlandPermanentUntilLeaves,
+        )
+        return ExileOpponentsNonlandPermanentUntilLeaves()
     # === PHASE5_BRIDGE_ARMS_INSERT_ABOVE_THIS_LINE ===
     # New `kind` arms go IMMEDIATELY ABOVE this marker. Do NOT delete the marker.
     # Append-only convention prevents merge collisions when multiple agents add arms in parallel.
