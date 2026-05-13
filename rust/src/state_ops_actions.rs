@@ -502,6 +502,9 @@ impl GameState {
                     mana_cost: crate::cards::ManaCost,
                     /// Tap the source as part of cost?
                     tap_self: bool,
+                    /// Sacrifice the source as part of cost
+                    /// (CE20 follow-up Slice 2)?
+                    sacrifice_self: bool,
                     /// Effect to fire on resolution.
                     effect: crate::cards::Effect,
                     /// Mana ability (CR 605.3a — bypass stack)?
@@ -532,6 +535,7 @@ impl GameState {
                         ResolvedAbility {
                             mana_cost: ab.cost.mana.clone(),
                             tap_self: ab.cost.tap_self,
+                            sacrifice_self: ab.cost.sacrifice_self,
                             effect: ab.effect.clone(),
                             is_mana_ability: ab.is_mana_ability,
                             is_creature,
@@ -603,6 +607,64 @@ impl GameState {
                         &mut state.players[controller_idx].battlefield,
                     );
                     bf_mut[bf_pos].tapped = true;
+                }
+                // Phase 5b: commit sacrifice_self (CE20 follow-up
+                // Slice 2). Costs pay BEFORE effect resolves (CR
+                // 117.10 / 119) — the source moves to its
+                // controller's graveyard now, and the effect
+                // dispatched below in Phase 6 fires with the source
+                // already off the battlefield.
+                //
+                // **Source-cleanup shape.** Mirrors
+                // `Effect::Sacrifice` at `state_ops_resolve.rs:1061`
+                // (TargetFilter::AnyCreature variant): zero damage +
+                // counters + attached_to + exiled_with_source on
+                // the way out; preserve `summoning_sick` per the
+                // CE13 I35 closure (sickness is battlefield-only
+                // state, but the field stays as-is in the
+                // graveyard for off-bf bookkeeping). LTB void-flag
+                // (CE13 / I29) stamps via
+                // `mark_left_battlefield_if_nonland`.
+                //
+                // **Self-ETB triggers do NOT fire on sacrifice** —
+                // ETB and LTB are distinct events. The dispatch
+                // event we care about post-sacrifice is `Dies` (for
+                // creatures) or `Leaves` more broadly; ETB-Slice-5
+                // landed `Event::Dies` on the SBA-destroy site
+                // (commit 2fd9aa31). Routing the sacrifice through
+                // `dispatch_event(Event::Dies, ...)` is out of scope
+                // of this slice — the Phase 5b commit only moves
+                // the object; trigger fan-out lives in a future
+                // slice that wires Dies into the sacrifice-cost
+                // path.
+                if resolved.sacrifice_self {
+                    let bf_mut = Arc::make_mut(
+                        &mut state.players[controller_idx].battlefield,
+                    );
+                    // Defensive: bf_pos was captured before any
+                    // mutation; tap_self commit above didn't change
+                    // the Vec layout, so bf_pos is still valid.
+                    let mut obj = bf_mut.remove(bf_pos);
+                    obj.zone = crate::state_ops_zones::ZONE_GRAVEYARD;
+                    obj.tapped = false;
+                    // CE13 I35: summoning_sick stays as-is.
+                    obj.damage = 0;
+                    obj.counters = 0;
+                    obj.attached_to = None;
+                    obj.exiled_with_source = None;
+                    let sac_printing_id = obj.printing_id;
+                    Arc::make_mut(
+                        &mut state.players[controller_idx].graveyard,
+                    )
+                    .push(obj);
+                    // CE13 / I29: stamp the LTB void flag for nonland
+                    // permanents leaving the battlefield. Same
+                    // primitive every other bf-exit uses; the cost
+                    // path doesn't bypass it.
+                    crate::state_ops_zones::mark_left_battlefield_if_nonland(
+                        state,
+                        sac_printing_id,
+                    );
                 }
                 // Phase 6: dispatch the effect.
                 if resolved.is_mana_ability {

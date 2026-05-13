@@ -3509,8 +3509,10 @@ the forked branch.
   - Planeswalker loyalty (uses counters as cost, distinct from
     mana; needs `pay_loyalty` cost primitive).
   - Equipment equip costs (specific cost shape + target).
-  - Sacrifice-as-cost (`sacrifice_self`, `sacrifice_another_*`,
-    `sacrifice_a_land`, `sacrifice_food`).
+  - Sacrifice-as-cost: ~~`sacrifice_self`~~ **CLOSED by I52** —
+    see below; the targeted variants (`sacrifice_another_*`,
+    `sacrifice_a_land`, `sacrifice_food`) stay deferred until
+    Equipment-equip Slice 4 ships the target-pick substrate.
   - Tap-an-untapped-permanent-you-control (Gene Pollinator shape).
   - Activation-gate predicates (`requires_*` Bonders' Enclave).
   - ~~Bridging legacy `mana_produced` into a synthesized
@@ -3694,6 +3696,80 @@ the forked branch.
     {W}" (a hybrid producer). The CHOOSE-ONE variant has no Rust
     representation today — needs a richer Effect shape (mode
     selection) and is a separate slice.
+
+### I52. `ActivationCost.sacrifice_self: bool` extends the cost shape; dispatch commits mana → tap → sacrifice → effect (CE20 follow-up Slice 2 closure)
+
+- **Pinned by**:
+  - 14 new `tests_rust/test_activated.py` `test_sacrifice_self_*`
+    regression pins covering parser surface (3), apply-arm
+    state-mutation (4), tap+sac composition + Phase 3 tap precheck
+    ordering (2), controller-resolution (1), emission gating (2),
+    and the pre-existing `test_activated_abilities_unknown_cost_key_raises`
+    updated to use `pay_life` (still-unmodeled key) instead of the
+    now-allow-listed `sacrifice_self`.
+
+- **Cost shape extension**. `ActivationCost` grows a `pub
+  sacrifice_self: bool` field (defaults `false` via `Default`).
+  `parse_activation_cost` adds `"sacrifice_self"` to the allow-list;
+  unknown keys still raise loud. Mirrors Python's
+  `ActivationCost.sacrifice_self` at `effects/base.py:340-388`.
+
+- **Apply-arm dispatch order** (`state_ops_actions.rs::ActivateAbility`):
+  1. Locate source on battlefield (Phase 1).
+  2. Resolve ability shape (Phase 2).
+  3. Tap-self precheck — already-tapped + creature-sickness gates
+     fire BEFORE any commit (Phase 3). Composes with `sacrifice_self`:
+     if both are set and the source is already tapped, the activation
+     rejects with no state mutation.
+  4. Pay mana cost — pool-only via `pay_mana_cost_pub` (Phase 4).
+     Failure raises with no state mutation (CR 117.10: costs pay
+     atomically, no partial commits).
+  5. Commit tap_self (Phase 5).
+  6. **Commit sacrifice_self** (Phase 5b, NEW). Source moves from
+     bf to its controller's graveyard with the same field-reset
+     shape `Effect::Sacrifice` uses: `tapped=false`, `damage=0`,
+     `counters=0`, `attached_to=None`, `exiled_with_source=None`;
+     preserve `summoning_sick` per CE13 I35. LTB void-flag stamps
+     via `mark_left_battlefield_if_nonland` (CE13 / I29) — the
+     sacrifice rides on the same primitive every other bf-exit
+     uses.
+  7. Dispatch the effect (Phase 6). For `is_mana_ability=false`
+     pushes a StackItem; the stack item resolves with the source
+     already in graveyard (the resolver finds the source_id by
+     scanning all zones, so post-sacrifice resolution works
+     uniformly).
+
+- **CR 117.10 atomicity pin**. The mana cost fails BEFORE the
+  sacrifice commits — `test_sacrifice_self_raises_when_mana_insufficient`
+  asserts that an unaffordable activation leaves the source on bf
+  with no graveyard growth. Phases 4 and 5b are sequenced: 5b only
+  runs after Phase 4 succeeds.
+
+- **Source-controller graveyard pin**. The sacrifice commit moves
+  the source to `state.players[controller_idx].graveyard`, not
+  `state.players[active_player].graveyard`. Matches the bridge
+  slice's source-controller invariant (I51) — pinned by
+  `test_sacrifice_self_credits_correct_controller_graveyard`
+  (player-1-side source on player-0's turn moves to player 1's gy).
+
+- **Emission gating unchanged**. The new-path emission walk
+  (`state_ops_legal.rs:1056+`) doesn't grow a `sacrifice_self`-specific
+  check — sacrifice-self is always payable when the source exists,
+  which the walk implicitly guarantees by iterating
+  `state.players[idx].battlefield`. Pool / tap state / sickness
+  gates still fire for cost ingredients orthogonal to sacrifice.
+
+- **Out of scope of this slice (deferred)**:
+  - Targeted sacrifice variants: `sacrifice_another_creature`,
+    `sacrifice_a_land`, `sacrifice_food`,
+    `sacrifice_another_artifact`, etc. Need target fan-out at
+    `legal_decisions` emission and an optional
+    `target_creature_id`-shaped key on the ActivateAbility dict;
+    they ride on Equipment-equip Slice 4's target-pick substrate.
+  - Routing `dispatch_event(Event::Dies, source_id)` for creature
+    sacrifices. Dies-event wiring landed in ETB Slice 5 (commit
+    2fd9aa31) but the SBA-destroy site is the only existing
+    dispatch — wiring sacrifice into Dies is a separate slice.
 
 ### I49. Legacy `etb_effects: Vec<Effect>` bridged to `triggered_abilities` at parse time + cross_engine.py `printing_dict` wires `triggered_abilities` through to Rust's `register_and_inject_object` (Slice 3 of ETB-trigger closure)
 
