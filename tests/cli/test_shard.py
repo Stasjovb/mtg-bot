@@ -209,10 +209,14 @@ def test_run_eval_shard_writes_per_shard_row_with_kind_eval(
         )
         json_path.parent.mkdir(parents=True, exist_ok=True)
         json_path.write_text("{}", encoding="utf-8")
-        # Echo a push_progress so the run_progress row reflects the
-        # shard_label key as well.
+        # Echo a push_progress under the MASTER run_id (the parent)
+        # with shard_label distinguishing per-shard rows. This is the
+        # post-Bug-2-fix pattern: per-shard run_progress is keyed by
+        # (master_run_id, shard_label), NOT by a synthesized
+        # ``{master}_shard_{label}`` id (which would FK-fail because
+        # no such ``runs`` row exists for in-process local shards).
         runs_client.push_progress(
-            f"{run_id}_shard_{label}",
+            run_id,
             shard_label=label,
             n_games_done=canned_counts["n_games"],
             n_games_total=kwargs["iter_total_games"],
@@ -235,19 +239,21 @@ def test_run_eval_shard_writes_per_shard_row_with_kind_eval(
 
     conn = runs_db.connect(db_path)
     try:
-        run_rows = list(conn.execute(
+        # The shard lifecycle still creates its own runs row for status
+        # tracking. The PROGRESS row, however, lives under the master.
+        shard_run_rows = list(conn.execute(
             "SELECT * FROM runs WHERE run_id = ?",
             ("iter_007_eval_v2_vs_v1_shard_macbook",),
         ))
         progress_rows = list(conn.execute(
             "SELECT * FROM run_progress WHERE run_id = ?",
-            ("iter_007_eval_v2_vs_v1_shard_macbook",),
+            ("iter_007_eval_v2_vs_v1",),
         ))
     finally:
         conn.close()
 
-    assert len(run_rows) == 1
-    row = run_rows[0]
+    assert len(shard_run_rows) == 1
+    row = shard_run_rows[0]
     assert row["run_id"] == "iter_007_eval_v2_vs_v1_shard_macbook"
     assert row["kind"] == "eval"
     assert row["parent_run_id"] == "iter_007_eval_v2_vs_v1"
@@ -255,7 +261,7 @@ def test_run_eval_shard_writes_per_shard_row_with_kind_eval(
     assert row["status"] == "completed"
 
     # The push_progress call inside the fake runner created the
-    # per-shard row keyed by shard_label.
+    # per-shard row keyed by (master_run_id, shard_label).
     assert progress_rows, "expected at least one run_progress row"
     p = progress_rows[0]
     assert p["shard_label"] == "macbook"
