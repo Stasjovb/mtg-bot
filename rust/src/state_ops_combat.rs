@@ -623,21 +623,21 @@ impl GameState {
     /// continuous effects beyond defender, attacked-alone restrictions,
     /// and "doesn't untap during untap step" interactions are deferred —
     /// see module docstring.
-    fn declare_attacker(&mut self, obj_id: u32) -> bool {
+    fn declare_attacker(&mut self, obj_id: u32) -> PyResult<bool> {
         // Read-only validation pass — bail before any mutation if the
         // creature isn't eligible.
         let Some((tapped, summoning_sick)) = read_creature_status(self, obj_id) else {
-            return false;
+            return Ok(false);
         };
         if tapped {
-            return false;
+            return Ok(false);
         }
         // Defender (CR 702.3): a creature with defender can't attack.
         // This is independent of haste / summoning sickness — defender
         // wins over haste even when haste would otherwise bypass the
         // summoning-sickness gate.
         if battlefield_has_keyword(self, obj_id, "defender") {
-            return false;
+            return Ok(false);
         }
         // Haste (CR 702.10) bypasses summoning sickness ONLY. Read the
         // keyword once here so the eligibility gate and the (later)
@@ -647,7 +647,7 @@ impl GameState {
         // the creature is going to be rejected for some other reason.
         let has_haste = battlefield_has_keyword(self, obj_id, "haste");
         if summoning_sick && !has_haste {
-            return false;
+            return Ok(false);
         }
         // Vigilance check: read before mutating so we don't pay the
         // Arc::make_mut clone cost when we're going to skip the tap.
@@ -664,11 +664,27 @@ impl GameState {
                 // Should be unreachable — read_creature_status already
                 // located it. Defensive: if a clone race or other
                 // instability removed it, undo nothing.
-                return false;
+                return Ok(false);
             }
         }
         self.attackers.push(obj_id);
-        true
+        // Slice 7: dispatch Event::Attacks for the just-declared
+        // attacker. The attacker is on the battlefield (it has to be,
+        // per the read_creature_status gate above), so the bf
+        // observer set already contains it — `Predicate::SourceIsSelf`
+        // ("whenever this creature attacks") matches naturally
+        // without needing the DIES/CAST extra-observer pattern.
+        //
+        // Mirrors Python's `combat._fire_attacks_triggers(state, obj)`
+        // call at `src/mtg_bot/combat.py:115` — fired per-attacker
+        // immediately after the attacking flag is set, so triggers
+        // observe each attacker in declaration order.
+        crate::state_ops_resolve::dispatch_event(
+            self,
+            crate::cards::Event::Attacks,
+            obj_id,
+        )?;
+        Ok(true)
     }
 
     /// Declare the battlefield creature with `blocker_id` as a

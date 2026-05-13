@@ -403,14 +403,18 @@ pub(crate) fn dispatch_event(
     event: Event,
     subject_id: u32,
 ) -> PyResult<()> {
-    // Defensive: Slice 6 wires ENTERS + DIES + CAST. Other events
-    // declared in the enum stay raise-on-dispatch so a future caller
-    // who skipped the fan-out plan surfaces it loudly rather than
-    // silently no-op.
-    if event != Event::Enters && event != Event::Dies && event != Event::Cast {
+    // Defensive: Slice 7 wires ENTERS + DIES + CAST + ATTACKS. Other
+    // events declared in the enum stay raise-on-dispatch so a future
+    // caller who skipped the fan-out plan surfaces it loudly rather
+    // than silently no-op.
+    if event != Event::Enters
+        && event != Event::Dies
+        && event != Event::Cast
+        && event != Event::Attacks
+    {
         return Err(PyValueError::new_err(format!(
-            "dispatch_event: event {event:?} is not yet wired in Slice 6; \
-             only Event::Enters, Event::Dies, and Event::Cast dispatch today"
+            "dispatch_event: event {event:?} is not yet wired in Slice 7; \
+             only Event::Enters, Event::Dies, Event::Cast, and Event::Attacks dispatch today"
         )));
     }
 

@@ -201,25 +201,26 @@ def test_triggered_abilities_unknown_predicate_kind_raises(empty_registry):
 
 
 def test_triggered_abilities_unwired_event_raises(empty_registry):
-    """Slice 6 wires ``Event::Enters``, ``Event::Dies``, and
-    ``Event::Cast``; the remaining declared events (``attacks``,
-    ``deals_damage``) raise at register time so a caller can't stamp
-    a trigger that never fires. Pin one such event here — ``attacks``.
+    """Slice 7 wires ``Event::Enters``, ``Event::Dies``,
+    ``Event::Cast``, and ``Event::Attacks``; the remaining declared
+    event (``deals_damage``) raises at register time so a caller
+    can't stamp a trigger that never fires. Pin one such event here
+    — ``deals_damage``.
     """
     d = {
-        "name": "Attacks Trigger Card",
+        "name": "DealsDamage Trigger Card",
         "card_types": ["Creature"],
         "mana_cost": {"generic": 1},
         "power": 1,
         "toughness": 1,
         "triggered_abilities": [
             {
-                "event": "attacks",
+                "event": "deals_damage",
                 "effect": {"kind": "draw_cards", "count": 1},
             }
         ],
     }
-    with pytest.raises(ValueError, match="not yet wired in Slice 6"):
+    with pytest.raises(ValueError, match="not yet wired in Slice 7"):
         empty_registry.register_printing(d)
 
 
@@ -1685,10 +1686,11 @@ def test_slice5_dies_event_parses(empty_registry):
     assert pid == 0
 
 
-@pytest.mark.parametrize("event_kind", ["attacks", "deals_damage"])
+@pytest.mark.parametrize("event_kind", ["deals_damage"])
 def test_slice5_other_events_still_raise(empty_registry, event_kind):
-    """`cast`, `attacks`, `deals_damage` still raise at register-time
-    post-Slice-5 (only `enters` + `dies` are wired).
+    """`deals_damage` still raises at register-time post-Slice-7
+    (Slice 7 wires enters / dies / cast / attacks; only deals_damage
+    is left unwired). Slice 5's name retained for git history.
     """
     d = {
         "name": f"Slice5 Bad Event {event_kind}",
@@ -2153,3 +2155,312 @@ def test_cast_event_parses_via_cross_engine_bridge():
     }
     ta = _ta_dict_to_python_triggered_ability(ta_dict)
     assert ta.event is Event.IS_CAST
+
+
+# ====================================================================
+# Slice 7 — Event::Attacks
+#
+# `Event::Attacks` is the per-attacker event that fires after each
+# attacker is committed via `declare_attacker`. The attacker is on
+# the battlefield (it has to be, for the eligibility gate to admit
+# it), so the bf observer set already contains it — SourceIsSelf
+# ("whenever this creature attacks") matches naturally without
+# needing the DIES/CAST extra-observer pattern.
+#
+# Mirrors Python's `combat._fire_attacks_triggers(state, obj)` call
+# at `src/mtg_bot/combat.py:115` — fired per-attacker immediately
+# after the attacking flag is set, so triggers observe each attacker
+# in declaration order.
+# ====================================================================
+
+
+# --- registry-dict shapes used by the Slice 7 tests -----------------
+
+
+def _attacks_self_draw_dict(name="Test ATTACKS Self-Draw"):
+    """A creature with a `source_is_self` ATTACKS trigger that draws
+    1 card when it attacks. The canonical "whenever this creature
+    attacks, draw a card" shape.
+    """
+    return {
+        "name": name,
+        "card_types": ["Creature"],
+        "mana_cost": {},
+        "effects": [],
+        "power": 2,
+        "toughness": 2,
+        "triggered_abilities": [
+            {
+                "event": "attacks",
+                "predicate": {"kind": "source_is_self"},
+                "effect": {"kind": "draw_cards", "count": 1},
+            }
+        ],
+    }
+
+
+def _attacks_creature_observer_dict():
+    """Pre-existing observer with `subject_is_creature` ATTACKS
+    trigger. Fires when ANY creature attacks — regardless of
+    controller. Hellrider-shape ("whenever a creature attacks").
+    """
+    return {
+        "name": "Test ATTACKS Creature Observer",
+        "card_types": ["Creature"],
+        "mana_cost": {},
+        "effects": [],
+        "power": 1,
+        "toughness": 3,
+        "triggered_abilities": [
+            {
+                "event": "attacks",
+                "predicate": {"kind": "subject_is_creature"},
+                "effect": {"kind": "draw_cards", "count": 1},
+            }
+        ],
+    }
+
+
+# --- parser surface --------------------------------------------------
+
+
+def test_slice7_attacks_event_parses(empty_registry):
+    """`event: attacks` is accepted at register-time post-Slice-7."""
+    pid = empty_registry.register_printing(_attacks_self_draw_dict())
+    assert pid == 0
+
+
+@pytest.mark.parametrize("event_kind", ["deals_damage"])
+def test_slice7_other_events_still_raise(empty_registry, event_kind):
+    """`deals_damage` still raises at register-time post-Slice-7
+    (Slice 7 wires enters / dies / cast / attacks only).
+    """
+    d = {
+        "name": f"Slice7 Bad Event {event_kind}",
+        "card_types": ["Creature"],
+        "mana_cost": {"generic": 1},
+        "power": 1,
+        "toughness": 1,
+        "triggered_abilities": [
+            {
+                "event": event_kind,
+                "effect": {"kind": "draw_cards", "count": 1},
+            }
+        ],
+    }
+    with pytest.raises(ValueError, match="not yet wired"):
+        empty_registry.register_printing(d)
+
+
+# --- SourceIsSelf ATTACKS — "whenever this creature attacks" --------
+
+
+def test_attacks_self_trigger_fires_on_declare_attacker(synthetic_state):
+    """Inject a 2/2 with a `source_is_self` ATTACKS trigger onto p0's
+    bf. Declare it as attacker. The ATTACKS trigger fires; resolving
+    it draws 1 card.
+    """
+    attacker_id = synthetic_state.register_and_inject_object(
+        _attacks_self_draw_dict(), 0, ZONE_BATTLEFIELD
+    )
+    library_before = synthetic_state.library_sizes[0]
+    hand_before = synthetic_state.hand_sizes[0]
+
+    ok = synthetic_state.declare_attacker(attacker_id)
+    assert ok is True
+    # The attacker is tapped (no vigilance).
+    assert synthetic_state.is_tapped(attacker_id) is True
+    # The ATTACKS trigger is on the stack.
+    assert synthetic_state.stack_size() == 1, (
+        "expected the source_is_self ATTACKS trigger to land on the "
+        "stack after declare_attacker succeeded"
+    )
+    top = synthetic_state.peek_top_of_stack()
+    assert top["source_obj_id"] == attacker_id
+
+    # Resolve: DrawCards(1) -> hand +1, library -1.
+    synthetic_state.resolve_top_of_stack()
+    assert synthetic_state.hand_sizes[0] == hand_before + 1
+    assert synthetic_state.library_sizes[0] == library_before - 1
+
+
+# --- subject_is_creature ATTACKS observer (Hellrider-shape) ---------
+
+
+def test_attacks_creature_observer_fires_on_another_attacker(synthetic_state):
+    """Pre-existing observer with `subject_is_creature` ATTACKS
+    trigger. When ANY creature attacks, the observer fires.
+    """
+    observer_id = synthetic_state.register_and_inject_object(
+        _attacks_creature_observer_dict(), 0, ZONE_BATTLEFIELD
+    )
+    # P0_FIRST_BEAR_ID (id=5) is a Grizzly Bear (2/2) on p0's bf.
+    # It's NOT summoning-sick (synthetic seed defaults bf objects to
+    # summoning_sick=false).
+    library_before = synthetic_state.library_sizes[0]
+
+    ok = synthetic_state.declare_attacker(P0_FIRST_BEAR_ID)
+    assert ok is True
+
+    # The observer's ATTACKS trigger should be on the stack.
+    assert synthetic_state.stack_size() == 1, (
+        "expected the observer's `subject_is_creature` ATTACKS trigger "
+        "to fire when the Bear attacked"
+    )
+    top = synthetic_state.peek_top_of_stack()
+    assert top["source_obj_id"] == observer_id
+
+    # Resolve: observer's controller (p0) draws 1.
+    synthetic_state.resolve_top_of_stack()
+    assert synthetic_state.library_sizes[0] == library_before - 1
+
+
+def test_attacks_observer_with_controlled_by_you_fires_on_own_attacker(
+    synthetic_state,
+):
+    """`subject_is_creature AND controlled_by_you` ATTACKS observer
+    fires on p0's own creature attacking.
+    """
+    observer = {
+        "name": "Test ATTACKS Under-Your-Control Observer",
+        "card_types": ["Creature"],
+        "mana_cost": {},
+        "effects": [],
+        "power": 1,
+        "toughness": 3,
+        "triggered_abilities": [
+            {
+                "event": "attacks",
+                "predicate": {
+                    "kind": "and",
+                    "left": {"kind": "subject_is_creature"},
+                    "right": {"kind": "controlled_by_you"},
+                },
+                "effect": {"kind": "draw_cards", "count": 1},
+            }
+        ],
+    }
+    observer_id = synthetic_state.register_and_inject_object(
+        observer, 0, ZONE_BATTLEFIELD
+    )
+
+    ok = synthetic_state.declare_attacker(P0_FIRST_BEAR_ID)
+    assert ok is True
+
+    assert synthetic_state.stack_size() == 1
+    top = synthetic_state.peek_top_of_stack()
+    assert top["source_obj_id"] == observer_id
+
+
+def test_attacks_observer_with_controlled_by_you_skips_opponent_attacker(
+    synthetic_state,
+):
+    """`controlled_by_you` ATTACKS observer on p0's bf does NOT fire
+    when an opponent's creature attacks. Use force_set_summoning_sick
+    + the p1 bear to make the cross-controller case explicit — but
+    actually p1's bears are also unsick in the synthetic seed; their
+    issue is that they belong to player 1 and the observer is on p0.
+    """
+    observer = {
+        "name": "Test ATTACKS Under-Your-Control Observer (skip case)",
+        "card_types": ["Creature"],
+        "mana_cost": {},
+        "effects": [],
+        "power": 1,
+        "toughness": 3,
+        "triggered_abilities": [
+            {
+                "event": "attacks",
+                "predicate": {
+                    "kind": "and",
+                    "left": {"kind": "subject_is_creature"},
+                    "right": {"kind": "controlled_by_you"},
+                },
+                "effect": {"kind": "draw_cards", "count": 1},
+            }
+        ],
+    }
+    # Observer on p0's bf. P1's bear attacks. The observer's
+    # `controlled_by_you` predicate (keyed on the observer's
+    # controller == subject's controller) should reject.
+    _ = synthetic_state.register_and_inject_object(
+        observer, 0, ZONE_BATTLEFIELD
+    )
+    P1_FIRST_BEAR_ID = 67 + 5
+
+    ok = synthetic_state.declare_attacker(P1_FIRST_BEAR_ID)
+    assert ok is True
+    # No triggers on the stack — predicate filtered out the opponent's
+    # attacker.
+    assert synthetic_state.stack_size() == 0
+
+
+def test_attacks_fires_per_attacker_in_declaration_order(synthetic_state):
+    """A `subject_is_creature` ATTACKS observer fires ONCE per
+    attacker. Declare two creatures in sequence; two triggers stack
+    in push order (matches Python's `_fire_attacks_triggers` per-
+    attacker fan-out).
+    """
+    observer_id = synthetic_state.register_and_inject_object(
+        _attacks_creature_observer_dict(), 0, ZONE_BATTLEFIELD
+    )
+    # P0_FIRST_BEAR_ID = 5; the bear at id=6 is the second Grizzly
+    # Bear on p0's bf.
+    second_bear_id = P0_FIRST_BEAR_ID + 1
+
+    ok1 = synthetic_state.declare_attacker(P0_FIRST_BEAR_ID)
+    assert ok1 is True
+    # First attack: 1 trigger on the stack.
+    assert synthetic_state.stack_size() == 1
+    # Resolve before declaring the next (cleaner state assertion).
+    synthetic_state.resolve_top_of_stack()
+    assert synthetic_state.stack_size() == 0
+
+    ok2 = synthetic_state.declare_attacker(second_bear_id)
+    assert ok2 is True
+    assert synthetic_state.stack_size() == 1
+    top = synthetic_state.peek_top_of_stack()
+    assert top["source_obj_id"] == observer_id
+
+
+def test_attacks_skips_when_declare_attacker_fails(synthetic_state):
+    """When `declare_attacker` REJECTS the creature (tapped /
+    summoning-sick / not-on-bf), the ATTACKS dispatch is NOT fired —
+    the failure path bails out before reaching the dispatch line.
+    """
+    observer_id = synthetic_state.register_and_inject_object(
+        _attacks_creature_observer_dict(), 0, ZONE_BATTLEFIELD
+    )
+    # Force the would-be attacker into a sick state so declare_attacker
+    # bails out before dispatching.
+    synthetic_state.force_set_summoning_sick(P0_FIRST_BEAR_ID, True)
+
+    ok = synthetic_state.declare_attacker(P0_FIRST_BEAR_ID)
+    assert ok is False
+    # No trigger on the stack — failure path didn't dispatch.
+    assert synthetic_state.stack_size() == 0
+    # Sanity: observer is still on the bf, just didn't observe anything.
+    assert (
+        synthetic_state.find_object_zone(observer_id) == ZONE_BATTLEFIELD
+    )
+
+
+# --- cross-engine bridge accepts "attacks" event --------------------
+
+
+def test_attacks_event_parses_via_cross_engine_bridge():
+    """The cross_engine.py bridge accepts `event: attacks` and
+    produces Python's `Event.ATTACKS`.
+    """
+    from mtg_bot.parity.cross_engine import (
+        _ta_dict_to_python_triggered_ability,
+    )
+    from mtg_bot.effects.predicates import Event
+
+    ta_dict = {
+        "event": "attacks",
+        "predicate": {"kind": "source_is_self"},
+        "effect": {"kind": "draw_cards", "count": 1},
+    }
+    ta = _ta_dict_to_python_triggered_ability(ta_dict)
+    assert ta.event is Event.ATTACKS
