@@ -38,6 +38,7 @@ from pathlib import Path, PurePosixPath, PureWindowsPath
 from typing import Any, Callable, Optional
 
 from mtg_bot.cli.runs import client as _runs_client
+from mtg_bot.cli.runs import db as _runs_db
 from mtg_bot.search.heuristics_config import HeuristicsConfig
 
 
@@ -60,6 +61,151 @@ def _ensure_master_runs_db_path_default() -> None:
     import os as _os
     if "MTG_BOT_RUN_DB_PATH" not in _os.environ:
         _os.environ["MTG_BOT_RUN_DB_PATH"] = _DEFAULT_MASTER_RUNS_DB_PATH
+
+
+def _resolved_master_db_path() -> Optional[Path]:
+    """Resolve the master's ``runs.db`` path from the env var, or
+    ``None`` if unset / explicitly empty.
+
+    The orchestrator's per-shard readers (``_EarlyStopPoller``,
+    ``_AggregateProgressPoller``, ``_aggregate_eval_counts_from_db``)
+    use this to look up the DB file on disk. Returns ``None`` (rather
+    than raising) when the env var isn't set so tests that don't
+    configure the DB still exercise the readers' no-op paths.
+    """
+    import os as _os
+    raw = _os.environ.get("MTG_BOT_RUN_DB_PATH")
+    if not raw:
+        return None
+    return Path(raw)
+
+
+def _read_shard_progress_rows(
+    db_path: Path, run_id: str,
+) -> list[dict[str, Any]]:
+    """Return the per-shard ``run_progress`` rows for ``run_id``.
+
+    Filters to ``shard_label IS NOT NULL`` — the aggregate row is
+    cluster-wide, not per-shard. Returns an empty list if the DB
+    file doesn't exist, the run is unknown, or any read error fires.
+    All errors are swallowed so a transient SQLite lock blip on one
+    poll cycle doesn't crash the poller; the next tick retries.
+
+    The returned dicts carry the structured columns
+    (``n_games_done``, ``n_games_total``, ``elapsed_seconds``,
+    ``crashed``, ``timed_out``, ``wins_new``, ``wins_old``,
+    ``draws``, ``shard_label``, ``updated_at``, ``extra_json``).
+    Callers needing JSON-flavored fields like ``status`` or
+    ``n_samples`` should ``json.loads`` the ``extra_json`` column
+    (currently unused by the shard writers, kept for forward compat).
+    """
+    if not db_path.is_file():
+        return []
+    try:
+        conn = _runs_db.connect(db_path)
+    except Exception:  # noqa: BLE001
+        return []
+    try:
+        rows = conn.execute(
+            """
+            SELECT shard_label, n_games_done, n_games_total,
+                   elapsed_seconds, crashed, timed_out,
+                   wins_new, wins_old, draws,
+                   extra_json, updated_at
+            FROM run_progress
+            WHERE run_id = ? AND shard_label IS NOT NULL
+            """,
+            (run_id,),
+        ).fetchall()
+    except Exception:  # noqa: BLE001
+        return []
+    finally:
+        try:
+            conn.close()
+        except Exception:  # noqa: BLE001
+            pass
+    return [dict(r) for r in rows]
+
+
+def _ensure_master_run_row(
+    run_id: str, *, kind: str = "self_play",
+) -> None:
+    """Idempotently register a parent ``runs`` row for ``run_id``.
+
+    Most master invocations of ``run_distributed_*`` arrive wrapped
+    in :func:`mtg_bot.cli.runs.lifecycle.run_lifecycle`, which has
+    already called ``start_run``. This helper is a defensive
+    no-op-on-duplicate registration that lets standalone callers
+    (and tests that don't wrap their invocations) push per-shard
+    progress rows without FK-constraint failures. ``client.start_run``
+    is a no-op when the DB isn't configured, so this is also free
+    when ``MTG_BOT_RUN_DB_PATH`` is unset.
+    """
+    db_path = _resolved_master_db_path()
+    if db_path is None:
+        return
+    if db_path.is_file():
+        try:
+            conn = _runs_db.connect(db_path)
+        except Exception:  # noqa: BLE001
+            conn = None
+        if conn is not None:
+            try:
+                row = conn.execute(
+                    "SELECT 1 FROM runs WHERE run_id = ?",
+                    (run_id,),
+                ).fetchone()
+            except Exception:  # noqa: BLE001
+                row = None
+            finally:
+                try:
+                    conn.close()
+                except Exception:  # noqa: BLE001
+                    pass
+            if row is not None:
+                return
+    # Row doesn't exist (or we couldn't check): try to register. The
+    # client swallows IntegrityError on duplicate-id, so a benign
+    # race between this thread and a concurrent ``start_run`` is
+    # harmless.
+    _runs_client.start_run(
+        run_id,
+        kind=kind,
+        config_json="{}",
+        git_commit="unknown",
+    )
+
+
+def _read_run_started_at(
+    db_path: Path, run_id: str,
+) -> Optional[str]:
+    """Return ``runs.started_at`` for ``run_id``, or ``None`` if the
+    run is unknown / the DB is unreachable. Used by orchestrator
+    polling code that wants to skip per-shard rows from prior runs
+    sharing the same iter-level ``run_id`` — though in practice DB
+    rows are pre-cleared by ``iterate``'s namespace logic, so this
+    is defense-in-depth rather than a regularly-fired guard."""
+    if not db_path.is_file():
+        return None
+    try:
+        conn = _runs_db.connect(db_path)
+    except Exception:  # noqa: BLE001
+        return None
+    try:
+        row = conn.execute(
+            "SELECT started_at FROM runs WHERE run_id = ?",
+            (run_id,),
+        ).fetchone()
+    except Exception:  # noqa: BLE001
+        return None
+    finally:
+        try:
+            conn.close()
+        except Exception:  # noqa: BLE001
+            pass
+    if row is None:
+        return None
+    return row["started_at"]
 
 
 # ---- queue HTTP retry policy -------------------------------------
@@ -1154,17 +1300,21 @@ def run_shard_local(
 
 
 class _AggregateProgressPoller:
-    """Periodically reads all per-shard progress JSONs in
-    ``progress_dir`` matching ``<run_id>_shard_*.json`` and writes a
-    rolled-up ``<run_id>.json`` summing the counters across shards.
+    """Periodically reads per-shard ``run_progress`` DB rows and
+    writes a rolled-up ``<run_id>.json`` summing the counters across
+    shards.
 
     The training UI (``training_progress/`` viewer) globs that
     directory for run cards; without this aggregate it would render
     one card per shard, each showing ``X / iter_total`` where X is
     that shard's share. The aggregate gives the user one coherent
-    "iter card" with the cluster-wide totals; individual per-shard
-    files still exist for diagnostic drill-down (the UI filters them
-    out of the top-level listing by the ``_shard_`` substring).
+    "iter card" with the cluster-wide totals.
+
+    Post-runs-db cutover, the UI reads the per-shard breakdown
+    directly from ``run_progress``; this aggregate JSON is kept as a
+    convenience snapshot that some external tooling still consumes.
+    Source-of-truth for per-shard data is the DB; this writer just
+    reformats those rows.
 
     ``kind`` is ``"data_gen"`` for self-play or ``"eval"`` — controls
     which set of summed fields ends up in the JSON. Both share the
@@ -1188,6 +1338,7 @@ class _AggregateProgressPoller:
         *,
         opponent_label: Optional[str] = None,
         interval_s: float = 2.0,
+        db_path: Optional[Path] = None,
     ) -> None:
         self._progress_dir = Path(progress_dir)
         self._run_id = run_id
@@ -1202,6 +1353,11 @@ class _AggregateProgressPoller:
         )
         self._stop_event = threading.Event()
         self._thread: Optional[threading.Thread] = None
+        # DB path: explicit override wins; otherwise fall back to the
+        # env var. ``None`` means "DB not configured" and the aggregate
+        # JSON is written with zero shards (matches the legacy "no
+        # shards yet" behavior).
+        self._db_path = db_path if db_path is not None else _resolved_master_db_path()
 
     def start(self) -> None:
         self._write("running")
@@ -1222,23 +1378,47 @@ class _AggregateProgressPoller:
         while not self._stop_event.wait(self._interval_s):
             self._write("running")
 
+    def _read_shard_rows(self) -> list[dict[str, Any]]:
+        """Pull all per-shard rows for ``self._run_id`` from the DB
+        and reshape them into the same shape the old per-shard JSON
+        readers produced. ``extra_json`` is parsed and merged with
+        the structured columns; the structured columns win on key
+        collision."""
+        if self._db_path is None:
+            return []
+        rows = _read_shard_progress_rows(self._db_path, self._run_id)
+        out: list[dict[str, Any]] = []
+        for r in rows:
+            shard: dict[str, Any] = {}
+            extra_raw = r.get("extra_json")
+            if extra_raw:
+                try:
+                    extra = json.loads(extra_raw)
+                    if isinstance(extra, dict):
+                        shard.update(extra)
+                except (json.JSONDecodeError, TypeError):
+                    pass
+            # Structured columns win — they're the authoritative
+            # counters; extra_json values for the same keys are best-
+            # effort dual-writes from the shard writer.
+            for k in (
+                "n_games_done", "n_games_total", "elapsed_seconds",
+                "crashed", "timed_out", "wins_new", "wins_old", "draws",
+            ):
+                v = r.get(k)
+                if v is not None:
+                    shard[k] = v
+            shard["label"] = r.get("shard_label")
+            out.append(shard)
+        return out
+
     def _write(self, status: str) -> None:
         from mtg_bot.training.progress import atomic_write_json
         sums = {f: 0 for f in self._SUM_FIELDS}
         machines: list[dict[str, Any]] = []
         ended_ats: list[str] = []
         decisions_weighted_total = 0.0
-        pattern = f"{self._run_id}_shard_*.json"
-        for path in sorted(self._progress_dir.glob(pattern)):
-            # Eval shards write a sibling ``..._shard_<label>_result.json``
-            # carrying the same wins/draws/crashed counts. Including it
-            # in the sum would double-count every remote shard's games.
-            if path.stem.endswith("_result"):
-                continue
-            try:
-                shard = json.loads(path.read_text(encoding="utf-8"))
-            except (OSError, json.JSONDecodeError):
-                continue
+        for shard in self._read_shard_rows():
             for f in self._SUM_FIELDS:
                 v = shard.get(f, 0)
                 if isinstance(v, (int, float)):
@@ -1250,7 +1430,7 @@ class _AggregateProgressPoller:
                 and isinstance(shard_avg_dec, (int, float))
             ):
                 decisions_weighted_total += shard_avg_dec * shard_done
-            label = path.stem.split("_shard_", 1)[-1]
+            label = shard.get("label")
             shard_elapsed = shard.get("elapsed_seconds", 0)
             shard_done_int = shard.get("n_games_done", 0)
             # Per-host performance stat: secs/game from THIS shard's own
@@ -1337,7 +1517,7 @@ class _AggregateProgressPoller:
 
 
 class _EarlyStopPoller:
-    """Watches the per-shard progress JSONs and POSTs
+    """Watches the per-shard ``run_progress`` DB rows and POSTs
     ``/queue/close/<run_id>`` once the cluster has accumulated
     ``target_games`` successful completions. "Successful" =
     ``n_games_done - crashed - timed_out`` summed across shards.
@@ -1357,23 +1537,25 @@ class _EarlyStopPoller:
     and gives up (the queue will drain on its own once the slack
     indices are consumed, just slower).
 
-    Read path is filesystem only — no shard liveness check. A hung
-    shard's stale JSON simply stops contributing to the sum; the
+    Read path is the master's ``runs.db`` (the runs-DB single-source-
+    of-truth post-cutover). Per-shard rows live under the master
+    ``run_id`` keyed by ``shard_label``; the shard runners
+    (``run_shard_pull`` / ``run_shard_eval_pull``) push every
+    counters update via :mod:`mtg_bot.cli.runs.client`. A hung shard's
+    stale-but-flushed row simply stops contributing to the sum; the
     other shards' progress carries the threshold over the line.
 
-    Reads only shard JSONs whose ``started_at`` is at or after the
-    poller's instantiation time. Stale JSONs from prior runs with
-    the same ``run_id`` are silently ignored — without this filter,
-    rerunning an iter (e.g. ``iter_003_self_play_v13``) with shard
-    JSONs left over from a previous attempt makes the very first
-    tick read the prior run's ``n_games_done`` and POST close
-    immediately, dropping the new run's shards before they begin
-    (observed 2026-05-05 with ``--queue-slack-pct 0.1``). Shards
-    without a ``started_at`` field are also skipped, since we can't
-    tell which run they belong to.
-    """
+    Stale-row protection: the iter-level ``runs`` row's
+    ``started_at`` is captured at poller construction; we only read
+    progress rows for runs whose ``started_at`` matches what we saw
+    at init. In practice ``iterate`` clears prior-run state before
+    each invocation, so this is defense-in-depth.
 
-    _SUM_FIELDS = ("n_games_done", "crashed", "timed_out")
+    ``db_path`` is resolved fresh on the first read so the poller is
+    cheap to construct from any test that hasn't configured the DB
+    yet — when unconfigured (no path), the poller simply never trips
+    and the run completes via the queue draining naturally.
+    """
 
     def __init__(
         self,
@@ -1384,7 +1566,11 @@ class _EarlyStopPoller:
         *,
         interval_s: float = 3.0,
         urlopen=None,
+        db_path: Optional[Path] = None,
     ) -> None:
+        # ``progress_dir`` kept for backwards-compatible signature
+        # (callers + tests pass it). Not used post-cutover — the DB
+        # is the source of truth.
         self._progress_dir = Path(progress_dir)
         self._run_id = run_id
         self._target_games = int(target_games)
@@ -1396,18 +1582,21 @@ class _EarlyStopPoller:
         self._thread: Optional[threading.Thread] = None
         self._closed = False
         self._close_failed = False
-        # Stale-JSON filter: any shard JSON written before this
-        # timestamp is from a prior run with the same ``run_id`` and
-        # must NOT count toward the early-stop threshold. ISO 8601
-        # with seconds precision matches what DataGenProgress /
-        # EvalProgress write in the per-shard JSON's ``started_at``;
-        # lexical comparison on those strings is order-preserving.
-        self._start_iso = datetime.now(timezone.utc).isoformat(
-            timespec="seconds",
-        )
-        # Set on the first stale-JSON skip so we log once per run
-        # rather than on every tick.
-        self._logged_stale_skip = False
+        # DB path: explicit override wins; otherwise fall back to the
+        # env var. ``None`` means "DB not configured" and the poller
+        # is a no-op.
+        self._db_path = db_path if db_path is not None else _resolved_master_db_path()
+        # Snapshot the iter-level run's ``started_at`` at construction
+        # so we can refuse to count progress rows that belong to a
+        # different run (e.g. an old row left behind that somehow
+        # survived iterate's namespace clear). ``None`` means the
+        # row isn't there yet — we'll start counting once it
+        # appears.
+        self._expected_started_at: Optional[str] = None
+        if self._db_path is not None:
+            self._expected_started_at = _read_run_started_at(
+                self._db_path, self._run_id,
+            )
 
     def start(self) -> None:
         self._thread = threading.Thread(
@@ -1447,48 +1636,48 @@ class _EarlyStopPoller:
 
     def _read_successful(self) -> int:
         """Sum ``n_games_done - crashed - timed_out`` across all
-        ``<run_id>_shard_*.json`` files in ``progress_dir``. Skips
-        unreadable / partially-written files (the next tick will
-        catch them). Skips ``..._result.json`` files to avoid double-
-        counting eval shards (mirrors _AggregateProgressPoller).
+        per-shard ``run_progress`` rows for the master ``run_id``.
 
-        Also skips shard JSONs whose ``started_at`` is missing or
-        predates this poller's instantiation — those are leftovers
-        from a prior run with the same ``run_id`` and would
-        prematurely trip the close (see class docstring)."""
-        sums = {f: 0 for f in self._SUM_FIELDS}
-        pattern = f"{self._run_id}_shard_*.json"
-        stale_paths: list[str] = []
-        for path in self._progress_dir.glob(pattern):
-            if path.stem.endswith("_result"):
-                continue
-            try:
-                shard = json.loads(path.read_text(encoding="utf-8"))
-            except (OSError, json.JSONDecodeError):
-                continue
-            shard_started = shard.get("started_at")
-            # ISO 8601 strings compare lexically. A missing or older
-            # timestamp means this JSON predates the current run.
-            if (
-                not isinstance(shard_started, str)
-                or shard_started < self._start_iso
-            ):
-                stale_paths.append(path.name)
-                continue
-            for f in self._SUM_FIELDS:
-                v = shard.get(f, 0)
-                if isinstance(v, (int, float)):
-                    sums[f] += int(v)
-        if stale_paths and not self._logged_stale_skip:
-            self._logged_stale_skip = True
-            print(
-                f"[early-stop] {self._run_id}: ignoring "
-                f"{len(stale_paths)} stale shard JSON(s) from a prior "
-                f"run (started_at < {self._start_iso}): "
-                f"{', '.join(sorted(stale_paths))}",
-                file=sys.stderr,
+        Returns 0 when the DB isn't configured (no env var), the DB
+        file doesn't exist yet, or no per-shard rows have been
+        written yet — any of those keep the poller in its
+        "waiting for progress" state until the queue drains naturally
+        or shards catch up.
+
+        If the run's ``started_at`` snapshot from init differs from
+        what the DB currently shows (a re-registration of the same
+        ``run_id``), we refuse to count the rows so a re-run doesn't
+        prematurely close on the prior run's snapshot. The expected
+        timestamp is lazily refreshed if it was ``None`` at init
+        time (run row hadn't been written yet)."""
+        if self._db_path is None:
+            return 0
+        # Refresh the expected ``started_at`` once it appears — the
+        # poller may have been constructed before the master's
+        # ``start_run`` call landed.
+        if self._expected_started_at is None:
+            self._expected_started_at = _read_run_started_at(
+                self._db_path, self._run_id,
             )
-        return sums["n_games_done"] - sums["crashed"] - sums["timed_out"]
+            if self._expected_started_at is None:
+                return 0
+        else:
+            current = _read_run_started_at(self._db_path, self._run_id)
+            if current is not None and current != self._expected_started_at:
+                # Same run_id was re-registered (rare; iterate clears
+                # state pre-launch). Don't count the new run's
+                # progress against the old threshold.
+                return 0
+
+        rows = _read_shard_progress_rows(self._db_path, self._run_id)
+        n_done = 0
+        n_crashed = 0
+        n_timed_out = 0
+        for r in rows:
+            n_done += int(r.get("n_games_done") or 0)
+            n_crashed += int(r.get("crashed") or 0)
+            n_timed_out += int(r.get("timed_out") or 0)
+        return n_done - n_crashed - n_timed_out
 
     def _send_close(self) -> None:
         """Best-effort POST to ``/queue/close/<run_id>``. On failure
@@ -1750,6 +1939,12 @@ def run_distributed_self_play(
     # that don't explicitly configure the run DB still land their
     # rows. Never overrides a user-set value.
     _ensure_master_runs_db_path_default()
+    # The shard runners push per-shard ``run_progress`` rows keyed by
+    # this run_id_prefix; the FK constraint on ``run_progress.run_id``
+    # requires the parent ``runs`` row to exist. Idempotent — a no-op
+    # when the row already exists (the common production case where
+    # iterate wraps in ``run_lifecycle``).
+    _ensure_master_run_row(run_id_prefix, kind="self_play")
 
     stamp = _now_stamp()
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -1988,77 +2183,50 @@ def _aggregate_eval_counts_from_progress(
     run_id_prefix: str,
     *,
     started_iso: Optional[str] = None,
+    db_path: Optional[Path] = None,
 ) -> dict[str, int]:
-    """Sum eval counts across every per-shard progress JSON, preferring
-    the cleanly-finished ``..._result.json`` for any shard that wrote
-    one.
+    """Sum eval counts across every per-shard ``run_progress`` DB row.
 
-    For each shard label found in ``progress_dir``:
+    Post-cutover: the orchestrator's ``runs.db`` is the source of
+    truth for shard-level progress. Each shard runner's
+    ``push_progress`` call (see ``run_shard_pull`` /
+    ``run_shard_eval_pull``) keys the row by the master ``run_id``
+    + ``shard_label`` so the master's per-shard rollup is just a
+    SELECT.
 
-    * If a sibling ``..._shard_<label>_result.json`` exists, use those
-      final counts (that means the shard's SSH connection completed
-      cleanly and the orchestrator scp'd the final result file back).
-    * Otherwise, fall back to the live ``..._shard_<label>.json``
-      progress snapshot — its ``wins_new / wins_old / draws /
-      crashed / timed_out`` counters are written every ``record_game``
-      call, so even a hard SSH-kill leaves the most recent N-1 games'
-      results on disk via the master's ``_ProgressPoller``.
+    ``progress_dir`` is kept in the signature for backwards-
+    compatible callers but no longer used. ``started_iso`` is
+    accepted-and-ignored for the same reason: the DB row is
+    pre-cleared by ``iterate`` for each run, so a stale-row filter
+    isn't needed at this layer.
 
-    ``started_iso`` mirrors :class:`_EarlyStopPoller`'s stale-JSON
-    filter: shard JSONs with ``started_at`` predating this value are
-    dropped as leftovers from a prior run with the same ``run_id``.
-    Pass the orchestrator's wall-clock at queue-init time. ``None``
-    disables the filter (used by tests that pre-populate JSONs).
+    ``db_path`` overrides the env-var-resolved master DB path; tests
+    pass it explicitly. When neither is configured, returns the
+    all-zeros dict (matches the legacy "no-shards-yet" behavior).
 
     Returns the standard 6-key dict ``run_distributed_eval`` returns,
     with ``n_games = sum of the five outcome counters``.
     """
+    del progress_dir  # signature-compat only
+    del started_iso  # signature-compat only — DB rows are pre-scoped
     sums = {f: 0 for f in _EVAL_PROGRESS_SUM_FIELDS}
-    pattern = f"{run_id_prefix}_shard_*.json"
-    seen_labels: set[str] = set()
-    # Pass 1: prefer ``_result.json`` for cleanly-finished shards. Result
-    # files are the shard's authoritative final counts (written by
-    # ``mtg_bot shard eval`` after ``run_shard_eval_pull`` returns).
-    for path in sorted(progress_dir.glob(pattern)):
-        if not path.stem.endswith("_result"):
-            continue
-        # Strip the trailing ``_result`` and the ``<run_id>_shard_``
-        # prefix to recover the bare label.
-        label = path.stem[: -len("_result")].split("_shard_", 1)[-1]
-        try:
-            counts = json.loads(path.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError):
-            continue
+    resolved_path = db_path if db_path is not None else _resolved_master_db_path()
+    if resolved_path is None:
+        n_games = sum(sums.values())
+        return {
+            "n_games": n_games,
+            "wins_new": sums["wins_new"],
+            "wins_old": sums["wins_old"],
+            "draws": sums["draws"],
+            "crashed": sums["crashed"],
+            "timed_out": sums["timed_out"],
+        }
+    rows = _read_shard_progress_rows(resolved_path, run_id_prefix)
+    for r in rows:
         for f in _EVAL_PROGRESS_SUM_FIELDS:
-            v = counts.get(f, 0)
-            if isinstance(v, (int, float)):
+            v = r.get(f)
+            if v is not None:
                 sums[f] += int(v)
-        seen_labels.add(label)
-    # Pass 2: fall back to live progress JSON for shards without a
-    # result file (SSH-killed mid-run) — their per-game counters are
-    # the best snapshot available.
-    for path in sorted(progress_dir.glob(pattern)):
-        if path.stem.endswith("_result"):
-            continue
-        label = path.stem.split("_shard_", 1)[-1]
-        if label in seen_labels:
-            continue
-        try:
-            shard = json.loads(path.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError):
-            continue
-        if started_iso is not None:
-            shard_started = shard.get("started_at")
-            if (
-                not isinstance(shard_started, str)
-                or shard_started < started_iso
-            ):
-                continue
-        for f in _EVAL_PROGRESS_SUM_FIELDS:
-            v = shard.get(f, 0)
-            if isinstance(v, (int, float)):
-                sums[f] += int(v)
-        seen_labels.add(label)
     n_games = sum(sums.values())
     return {
         "n_games": n_games,
@@ -2138,6 +2306,7 @@ def run_distributed_eval(
     # explicit MTG_BOT_RUN_DB_PATH still writes runs.db rows. Same
     # treatment as run_distributed_self_play.
     _ensure_master_runs_db_path_default()
+    _ensure_master_run_row(run_id_prefix, kind="eval")
 
     stamp = _now_stamp()
     progress_dir.mkdir(parents=True, exist_ok=True)
@@ -2758,23 +2927,17 @@ def run_shard_pull(
             Path(spec.hang_dump_root) / f"{run_id}_shard_{label}"
         )
 
+    # Pull-mode shards no longer write a per-shard
+    # ``<run_id>_shard_<label>.json`` snapshot — the master's
+    # ``runs.db`` is the single source of truth for shard-level
+    # progress post-cutover. Counters land via
+    # ``_push_shard_progress_to_db`` below; the diagnostic event log
+    # is still emitted to disk under the old filename so a hung
+    # shard can be triaged from per-shard tail logs.
     progress: Optional[DataGenProgress] = None
     events: Optional[EventLog] = None
     if progress_dir is not None:
         progress_dir.mkdir(parents=True, exist_ok=True)
-        progress = DataGenProgress(
-            progress_path=progress_dir / f"{run_id}_shard_{label}.json",
-            run_id=f"{run_id}_shard_{label}",
-            n_games_total=iter_total_games,
-            n_workers=n_workers,
-            command="distributed_self_play (pull-mode shard)",
-            notes=(
-                f"pull-mode shard {label} (one of N workers in iter "
-                f"{run_id})"
-            ),
-            replays_dir=replays_subdir,
-        )
-        progress.begin()
         events = EventLog(
             progress_dir / f"{run_id}_shard_{label}_events.jsonl"
         )
@@ -2800,6 +2963,19 @@ def run_shard_pull(
     n_games_crashed = 0
     n_games_timed_out = 0
     n_dropped_rejected = 0
+    # Self-play-specific stats surfaced into the orchestrator's
+    # rolled-up DB row via ``run_progress.extra_json``. The
+    # structured DB columns (n_games_done, crashed, timed_out) cover
+    # the early-stop math; everything else (n_samples, p0/p1 wins,
+    # draws, n_workers, status) flows through extra_json so the UI's
+    # cluster-summary card has the same shape it had pre-cutover.
+    n_samples_total = 0
+    n_p0_wins = 0
+    n_p1_wins = 0
+    n_draws_self_play = 0
+    shard_started_iso = datetime.now(timezone.utc).isoformat(
+        timespec="seconds",
+    )
     pending_chunks: list = []
     flush_every = max(1, n_workers)
 
@@ -2813,10 +2989,20 @@ def run_shard_pull(
     # ``runs`` row exists. ``client.push_progress`` is a no-op when
     # neither ``MTG_BOT_RUN_DB_PATH`` nor ``MTG_BOT_RUN_DB_URL`` is
     # set, so this is zero-cost for ad-hoc CLI invocations.
-    def _push_shard_progress_to_db(*, elapsed_s: float) -> None:
+    def _push_shard_progress_to_db(
+        *, elapsed_s: float, status: str = "running",
+    ) -> None:
         """Mirror the latest counters to the master's runs.db row.
         ``shard_label`` keys the row so concurrent shards don't fight
-        for the same (run_id, NULL) aggregate row."""
+        for the same (run_id, NULL) aggregate row.
+
+        Self-play-specific extras (n_samples, p0/p1 wins, draws,
+        n_workers, status, started_at, kind) ride in ``extra_json``
+        — the structured columns only carry the early-stop counters.
+        Post-cutover the orchestrator's ``_AggregateProgressPoller``
+        reads these back from the DB instead of the dropped per-shard
+        JSON.
+        """
         _runs_client.push_progress(
             run_id,
             shard_label=label,
@@ -2825,6 +3011,21 @@ def run_shard_pull(
             elapsed_seconds=elapsed_s,
             crashed=n_games_crashed,
             timed_out=n_games_timed_out,
+            # ``draws`` is the structured column we already have —
+            # used for both data_gen seat-ties and eval head-to-head
+            # draws (the JSON aggregator pre-cutover had the same
+            # double-meaning, fine because each shard is one kind
+            # or the other).
+            draws=n_draws_self_play,
+            extra={
+                "kind": "data_gen",
+                "status": status,
+                "n_samples": n_samples_total,
+                "n_workers": n_workers,
+                "p0_wins": n_p0_wins,
+                "p1_wins": n_p1_wins,
+                "started_at": shard_started_iso,
+            },
         )
 
     # Lease + heartbeat. ``worker_id`` opts us into the server's
@@ -3158,6 +3359,20 @@ def run_shard_pull(
                     n_games_crashed += 1
                 elif timed_out:
                     n_games_timed_out += 1
+                else:
+                    # Non-crashed/non-timeout: bookkeeping for the
+                    # extra-json fields the UI reads (n_samples and
+                    # p0/p1/draws breakdown). Stays in lock-step with
+                    # what ``DataGenProgress`` would have written to
+                    # the per-shard JSON pre-cutover.
+                    n_samples_total += n_samples
+                    p0_outcome = _winner_to_p0_outcome(chunk[4])
+                    if p0_outcome > 0.5:
+                        n_p0_wins += 1
+                    elif p0_outcome < -0.5:
+                        n_p1_wins += 1
+                    else:
+                        n_draws_self_play += 1
                 n_games_completed += 1
                 if progress is not None:
                     if crashed:
@@ -3218,6 +3433,13 @@ def run_shard_pull(
                 n_batches=chunk_idx,
                 wall_s=_time.perf_counter() - shard_t0,
             )
+        # Mirror the failed-state into the DB so the orchestrator's
+        # aggregator sees the terminal status (otherwise the row
+        # sticks at "running" until the next-iter clear).
+        _push_shard_progress_to_db(
+            elapsed_s=_time.perf_counter() - shard_t0,
+            status="failed",
+        )
         raise
     finally:
         heartbeat.stop()
@@ -3240,9 +3462,11 @@ def run_shard_pull(
             wall_s=_time.perf_counter() - shard_t0,
         )
     # Final terminal counters into runs.db so a slow trailing batch
-    # doesn't leave the row showing N-1 games_done.
+    # doesn't leave the row showing N-1 games_done. Terminal status
+    # is what ``_AggregateProgressPoller`` and the watchdog read.
     _push_shard_progress_to_db(
         elapsed_s=_time.perf_counter() - shard_t0,
+        status="completed",
     )
     return npz_paths
 
@@ -3346,6 +3570,10 @@ def run_shard_eval_pull(
             Path(spec.hang_dump_root) / f"{run_id}_shard_{label}"
         )
 
+    # Pull-mode eval shards skip the per-shard JSON snapshot post-
+    # cutover (DB is the single source of truth). Diagnostic events
+    # log + per-game heartbeats stay so a wedged shard can still be
+    # triaged from per-shard tail logs.
     progress: Optional[EvalProgress] = None
     events: Optional[EventLog] = None
     # Per-game heartbeats: each worker writes a JSONL file named
@@ -3357,20 +3585,6 @@ def run_shard_eval_pull(
     heartbeats_dir: Optional[Path] = None
     if progress_dir is not None:
         progress_dir.mkdir(parents=True, exist_ok=True)
-        progress = EvalProgress(
-            progress_path=progress_dir / f"{run_id}_shard_{label}.json",
-            run_id=f"{run_id}_shard_{label}",
-            n_games_total=iter_total_games,
-            n_workers=n_workers,
-            opponent_label=spec.opponent_label,
-            command="distributed_eval (pull-mode shard)",
-            notes=(
-                f"pull-mode eval shard {label} (one of N workers in "
-                f"iter {run_id})"
-            ),
-            replays_dir=replays_subdir,
-        )
-        progress.begin()
         events = EventLog(
             progress_dir / f"{run_id}_shard_{label}_events.jsonl"
         )
@@ -3403,12 +3617,20 @@ def run_shard_eval_pull(
     timed_out = 0
     n_games = 0
     n_dropped_rejected = 0
+    eval_shard_started_iso = datetime.now(timezone.utc).isoformat(
+        timespec="seconds",
+    )
 
     # Run-DB shadow writes — see ``run_shard_pull`` for the rationale.
     # Per-shard rows are keyed off the master ``run_id`` + ``shard_label``;
     # a synthesized shard-suffix run_id would FK-fail because no such
-    # ``runs`` row exists.
-    def _push_eval_shard_progress_to_db(*, elapsed_s: float) -> None:
+    # ``runs`` row exists. Eval-specific UI fields (status, n_workers,
+    # opponent_label, started_at, kind) ride in ``extra_json`` so the
+    # orchestrator's aggregator can rebuild the per-machine sub-cards
+    # post-cutover.
+    def _push_eval_shard_progress_to_db(
+        *, elapsed_s: float, status: str = "running",
+    ) -> None:
         _runs_client.push_progress(
             run_id,
             shard_label=label,
@@ -3420,6 +3642,13 @@ def run_shard_eval_pull(
             draws=draws,
             crashed=crashed,
             timed_out=timed_out,
+            extra={
+                "kind": "eval",
+                "status": status,
+                "n_workers": n_workers,
+                "opponent_label": spec.opponent_label,
+                "started_at": eval_shard_started_iso,
+            },
         )
 
     if worker_id is None:
@@ -3792,6 +4021,10 @@ def run_shard_eval_pull(
                 n_dropped_rejected=n_dropped_rejected,
                 wall_s=_time.perf_counter() - shard_t0,
             )
+        _push_eval_shard_progress_to_db(
+            elapsed_s=_time.perf_counter() - shard_t0,
+            status="failed",
+        )
         raise
     finally:
         heartbeat.stop()
@@ -3813,9 +4046,12 @@ def run_shard_eval_pull(
             wall_s=_time.perf_counter() - shard_t0,
         )
     # Final terminal counters into runs.db so the shard row reflects
-    # the same totals as the result JSON the orchestrator scps back.
+    # the same totals as the result the orchestrator returns. Marks
+    # ``status="completed"`` so the orchestrator's aggregator and the
+    # SSH-watchdog see the terminal sentinel.
     _push_eval_shard_progress_to_db(
         elapsed_s=_time.perf_counter() - shard_t0,
+        status="completed",
     )
     return {
         "n_games": n_games,

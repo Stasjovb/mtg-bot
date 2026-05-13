@@ -1830,30 +1830,44 @@ def test_weight_push_failure_returns_failure_report(monkeypatch, tmp_path):
 # ---- _AggregateProgressPoller ----------------------------------
 
 
+def _seed_runs_db_top(
+    db_path: Path,
+    run_id: str,
+    *,
+    kind: str = "self_play",
+    started_at: str | None = None,
+) -> None:
+    """Module-private convenience wrapper: defined below the
+    aggregator tests use it. Forwards to :func:`_seed_runs_db`."""
+    return _seed_runs_db(db_path, run_id, kind=kind, started_at=started_at)
+
+
 def test_aggregate_progress_poller_sums_data_gen_shards(tmp_path: Path):
-    """Aggregator reads all per-shard self-play JSONs in
-    ``progress_dir`` matching ``<run_id>_shard_*.json`` and sums the
-    counters into a single ``<run_id>.json``."""
+    """Aggregator reads per-shard ``run_progress`` rows from the master
+    ``runs.db`` and sums the counters into a single ``<run_id>.json``.
+    Self-play extras (n_samples, p0/p1 wins, n_workers) ride in
+    ``extra_json``; the structured columns carry the early-stop
+    counters."""
     from mtg_bot.training.distributed import _AggregateProgressPoller
 
     pdir = tmp_path
     run_id = "iter_001_self_play_v6"
+    db_path = _early_stop_db_path(tmp_path)
+    _seed_runs_db_top(db_path, run_id)
     # Three shards mid-run, with different progress.
     for label, done, samples, p0, p1, dr, cr, nw in (
         ("local", 30, 4500, 12, 8, 10, 0, 16),
         ("mac", 50, 7200, 25, 20, 5, 0, 14),
         ("win", 5, 600, 2, 2, 1, 0, 4),
     ):
-        (pdir / f"{run_id}_shard_{label}.json").write_text(
-            json.dumps({
-                "run_id": f"{run_id}_shard_{label}",
-                "kind": "data_gen",
-                "status": "running",
-                "n_games_total": 200, "n_games_done": done,
+        _write_shard_db_row(
+            db_path, run_id, label,
+            n_games_done=done, crashed=cr, draws=dr,
+            extra={
+                "kind": "data_gen", "status": "running",
                 "n_samples": samples, "n_workers": nw,
-                "p0_wins": p0, "p1_wins": p1, "draws": dr,
-                "crashed": cr,
-            }), encoding="utf-8",
+                "p0_wins": p0, "p1_wins": p1,
+            },
         )
     poller = _AggregateProgressPoller(
         progress_dir=pdir, run_id=run_id,
@@ -1885,21 +1899,20 @@ def test_aggregate_progress_poller_sums_eval_shards(tmp_path: Path):
 
     pdir = tmp_path
     run_id = "iter_002_eval_v8_vs_v7"
+    db_path = _early_stop_db_path(tmp_path)
+    _seed_runs_db_top(db_path, run_id, kind="eval")
     for label, n, wn, wo, dr in (
         ("local", 30, 12, 18, 0),
         ("mac", 50, 22, 28, 0),
         ("win", 20, 8, 12, 0),
     ):
-        (pdir / f"{run_id}_shard_{label}.json").write_text(
-            json.dumps({
-                "run_id": f"{run_id}_shard_{label}",
-                "kind": "eval",
-                "status": "running",
-                "n_games_total": 100, "n_games_done": n,
-                "n_workers": 4,
-                "wins_new": wn, "wins_old": wo, "draws": dr,
-                "crashed": 0,
-            }), encoding="utf-8",
+        _write_shard_db_row(
+            db_path, run_id, label,
+            n_games_done=n, wins_new=wn, wins_old=wo, draws=dr,
+            extra={
+                "kind": "eval", "status": "running",
+                "n_workers": 4, "opponent_label": "v7",
+            },
         )
     poller = _AggregateProgressPoller(
         progress_dir=pdir, run_id=run_id,
@@ -1918,36 +1931,41 @@ def test_aggregate_progress_poller_sums_eval_shards(tmp_path: Path):
     assert agg["opponent_label"] == "v7"
 
 
-def test_aggregate_progress_poller_skips_eval_result_files(
+def test_aggregate_progress_poller_db_rows_dont_double_count_legacy_result(
     tmp_path: Path,
 ):
-    """Eval shards on remotes write a sibling ``_result.json`` with
-    the same counts as the per-shard progress JSON. The aggregator
-    must skip it; otherwise every remote shard's wins/draws/crashed
-    get double-counted in the cluster total. Reproduced from a real
-    iter run where ``wins_new + wins_old + crashed`` summed to 871
-    on a 500-game eval."""
+    """Pre-cutover, eval shards on remotes wrote a sibling
+    ``_result.json`` mirroring the per-shard progress JSON's counts;
+    the JSON-fan-in aggregator filtered it out so it didn't double-
+    count. Post-cutover the orchestrator reads per-shard
+    ``run_progress`` rows keyed by ``shard_label``; the legacy
+    ``_result.json`` filename has no DB equivalent so double-counting
+    is structurally impossible. This test pins the new shape:
+    three per-shard rows + stray ``_result.json`` files on disk → the
+    aggregator only sees the DB rows, exactly once each."""
     from mtg_bot.training.distributed import _AggregateProgressPoller
 
     pdir = tmp_path
     run_id = "iter_004_eval_v10_vs_v7"
-    # Three shard JSONs (the canonical per-shard EvalProgress output).
+    db_path = _early_stop_db_path(tmp_path)
+    _seed_runs_db_top(db_path, run_id, kind="eval")
     for label, wn, wo in (
         ("local", 80, 50),
         ("mac", 200, 120),
         ("win", 50, 30),
     ):
-        (pdir / f"{run_id}_shard_{label}.json").write_text(
-            json.dumps({
+        _write_shard_db_row(
+            db_path, run_id, label,
+            n_games_done=wn + wo,
+            wins_new=wn, wins_old=wo,
+            extra={
                 "kind": "eval", "status": "completed",
-                "n_games_total": 500, "n_games_done": wn + wo,
                 "n_workers": 4,
-                "wins_new": wn, "wins_old": wo, "draws": 0,
-                "crashed": 0,
-            }), encoding="utf-8",
+            },
         )
-    # Two ``_result.json`` files written by the SSH wrapper for the
-    # remote shards — same numbers as the corresponding shard file.
+    # Stray legacy ``_result.json`` files on disk — should NOT
+    # contribute to the totals because the new aggregator never
+    # reads the filesystem.
     for label, wn, wo in (("mac", 200, 120), ("win", 50, 30)):
         (pdir / f"{run_id}_shard_{label}_result.json").write_text(
             json.dumps({
@@ -1982,23 +2000,34 @@ def test_aggregate_progress_poller_sums_timed_out_across_shards(
 
     pdir = tmp_path
     run_id = "iter_011_self_play_v11"
+    db_path = _early_stop_db_path(tmp_path)
+    _seed_runs_db_top(db_path, run_id)
     for label, done, samples, p0, p1, dr, cr, to_, nw in (
         ("local", 30, 4500, 12, 8, 10, 0, 1, 16),
         ("mac", 50, 7200, 25, 20, 5, 1, 2, 14),
         ("win", 5, 600, 2, 2, 1, 0, 0, 4),
     ):
-        (pdir / f"{run_id}_shard_{label}.json").write_text(
-            json.dumps({
-                "run_id": f"{run_id}_shard_{label}",
-                "kind": "data_gen",
-                "status": "running",
-                "n_games_total": 200, "n_games_done": done,
+        _write_shard_db_row(
+            db_path, run_id, label,
+            n_games_done=done, crashed=cr, timed_out=to_, draws=dr,
+            extra={
+                "kind": "data_gen", "status": "running",
                 "n_samples": samples, "n_workers": nw,
-                "p0_wins": p0, "p1_wins": p1, "draws": dr,
-                "crashed": cr, "timed_out": to_,
-                "elapsed_seconds": 100.0,
-            }), encoding="utf-8",
+                "p0_wins": p0, "p1_wins": p1,
+            },
         )
+        # ``elapsed_seconds`` is also a structured column the
+        # AggregateProgressPoller reads.
+        from mtg_bot.cli.runs import db as _runs_db
+        conn = _runs_db.connect(db_path)
+        try:
+            conn.execute(
+                "UPDATE run_progress SET elapsed_seconds = ? "
+                "WHERE run_id = ? AND shard_label = ?",
+                (100.0, run_id, label),
+            )
+        finally:
+            conn.close()
     poller = _AggregateProgressPoller(
         progress_dir=pdir, run_id=run_id,
         n_games_total=200, kind="data_gen",
@@ -2023,11 +2052,14 @@ def test_aggregate_progress_poller_sums_timed_out_across_shards(
 def test_aggregate_progress_poller_handles_missing_shard_files(
     tmp_path: Path,
 ):
-    """No per-shard files yet (poller fired before any shard wrote
-    its first snapshot) shouldn't crash; aggregate JSON should still
+    """No per-shard rows yet (poller fired before any shard pushed
+    its first row) shouldn't crash; aggregate JSON should still
     appear with zeroed counts."""
     from mtg_bot.training.distributed import _AggregateProgressPoller
 
+    # Don't seed the DB — empty state. The DB file may not even
+    # exist (autouse conftest only sets the env var, doesn't touch
+    # the file).
     poller = _AggregateProgressPoller(
         progress_dir=tmp_path, run_id="iter_x",
         n_games_total=100, kind="data_gen",
@@ -2046,34 +2078,49 @@ def test_aggregate_progress_poller_machines_carry_per_host_perf_stats(
     truth for that grouping, so each entry in ``agg['machines']`` must
     include ``elapsed_seconds`` (raw) and ``per_game_seconds``
     (precomputed elapsed_seconds / n_games_done; ``None`` when
-    n_games_done is 0). The host label is parsed from the shard
-    filename suffix (the part after ``_shard_``)."""
+    n_games_done is 0). The host label comes from the per-shard row's
+    ``shard_label`` column verbatim."""
+    from mtg_bot.cli.runs import db as _runs_db
     from mtg_bot.training.distributed import _AggregateProgressPoller
 
     pdir = tmp_path
     run_id = "iter_007_self_play_v9"
+    db_path = _early_stop_db_path(tmp_path)
+    _seed_runs_db_top(db_path, run_id)
     # Two real-world host suffixes: hyphenated tailnet hostnames; one
     # finished, one mid-run with non-zero crashes.
-    (pdir / f"{run_id}_shard_greggs-macbook-pro.json").write_text(
-        json.dumps({
-            "run_id": f"{run_id}_shard_greggs-macbook-pro",
+    _write_shard_db_row(
+        db_path, run_id, "greggs-macbook-pro",
+        n_games_done=100, crashed=3,
+        extra={
             "kind": "data_gen", "status": "completed",
-            "n_games_total": 200, "n_games_done": 100,
             "n_samples": 12000, "n_workers": 14,
             "p0_wins": 60, "p1_wins": 40, "draws": 0,
-            "crashed": 3, "elapsed_seconds": 600.0,
-        }), encoding="utf-8",
+        },
     )
-    (pdir / f"{run_id}_shard_desktop-j05412i.json").write_text(
-        json.dumps({
-            "run_id": f"{run_id}_shard_desktop-j05412i",
+    _write_shard_db_row(
+        db_path, run_id, "desktop-j05412i",
+        n_games_done=0, crashed=0,
+        extra={
             "kind": "data_gen", "status": "running",
-            "n_games_total": 200, "n_games_done": 0,
             "n_samples": 0, "n_workers": 16,
             "p0_wins": 0, "p1_wins": 0, "draws": 0,
-            "crashed": 0, "elapsed_seconds": 5.0,
-        }), encoding="utf-8",
+        },
     )
+    conn = _runs_db.connect(db_path)
+    try:
+        conn.execute(
+            "UPDATE run_progress SET elapsed_seconds = 600.0 "
+            "WHERE run_id = ? AND shard_label = ?",
+            (run_id, "greggs-macbook-pro"),
+        )
+        conn.execute(
+            "UPDATE run_progress SET elapsed_seconds = 5.0 "
+            "WHERE run_id = ? AND shard_label = ?",
+            (run_id, "desktop-j05412i"),
+        )
+    finally:
+        conn.close()
     poller = _AggregateProgressPoller(
         progress_dir=pdir, run_id=run_id,
         n_games_total=400, kind="data_gen",
@@ -2081,8 +2128,6 @@ def test_aggregate_progress_poller_machines_carry_per_host_perf_stats(
     poller._write("running")
     agg = json.loads((pdir / f"{run_id}.json").read_text())
     by_label = {m["label"]: m for m in agg["machines"]}
-    # Host suffix is parsed from the shard filename, NOT the run_id
-    # field — labels with hyphens round-trip verbatim.
     assert set(by_label) == {"greggs-macbook-pro", "desktop-j05412i"}
     mac = by_label["greggs-macbook-pro"]
     assert mac["n_games_done"] == 100
@@ -2108,43 +2153,47 @@ def test_aggregate_progress_poller_eval_machines_carry_per_host_perf_stats(
     per-host perf fields the data_gen aggregator does, so the UI's
     renderMachines() sub-card row works identically on both card types.
 
-    The aggregator builds ``machines[]`` before branching on kind, so
-    in principle this comes "for free". Pin it explicitly here so a
-    future kind-specific divergence (e.g. moving the build inside the
-    data_gen branch) immediately fails this test instead of silently
-    breaking the eval card's per-machine sub-rows.
-
     Each entry must carry: label, status, n_games_done, n_workers,
     crashed, timed_out, elapsed_seconds, and per_game_seconds (None
     when n_games_done == 0)."""
+    from mtg_bot.cli.runs import db as _runs_db
     from mtg_bot.training.distributed import _AggregateProgressPoller
 
     pdir = tmp_path
     run_id = "iter_007_eval_v9_vs_v8"
-    # Mirror the data_gen perf-stats test but with eval-shape shards:
-    # wins_new/wins_old/draws fields, no n_samples/p0_wins/p1_wins.
-    (pdir / f"{run_id}_shard_greggs-macbook-pro.json").write_text(
-        json.dumps({
-            "run_id": f"{run_id}_shard_greggs-macbook-pro",
+    db_path = _early_stop_db_path(tmp_path)
+    _seed_runs_db_top(db_path, run_id, kind="eval")
+    _write_shard_db_row(
+        db_path, run_id, "greggs-macbook-pro",
+        n_games_done=50, wins_new=30, wins_old=20,
+        crashed=2, timed_out=1,
+        extra={
             "kind": "eval", "status": "completed",
-            "n_games_total": 100, "n_games_done": 50,
             "n_workers": 14,
-            "wins_new": 30, "wins_old": 20, "draws": 0,
-            "crashed": 2, "timed_out": 1,
-            "elapsed_seconds": 600.0,
-        }), encoding="utf-8",
+        },
     )
-    (pdir / f"{run_id}_shard_desktop-j05412i.json").write_text(
-        json.dumps({
-            "run_id": f"{run_id}_shard_desktop-j05412i",
+    _write_shard_db_row(
+        db_path, run_id, "desktop-j05412i",
+        n_games_done=0,
+        extra={
             "kind": "eval", "status": "running",
-            "n_games_total": 100, "n_games_done": 0,
             "n_workers": 16,
-            "wins_new": 0, "wins_old": 0, "draws": 0,
-            "crashed": 0, "timed_out": 0,
-            "elapsed_seconds": 5.0,
-        }), encoding="utf-8",
+        },
     )
+    conn = _runs_db.connect(db_path)
+    try:
+        conn.execute(
+            "UPDATE run_progress SET elapsed_seconds = 600.0 "
+            "WHERE run_id = ? AND shard_label = ?",
+            (run_id, "greggs-macbook-pro"),
+        )
+        conn.execute(
+            "UPDATE run_progress SET elapsed_seconds = 5.0 "
+            "WHERE run_id = ? AND shard_label = ?",
+            (run_id, "desktop-j05412i"),
+        )
+    finally:
+        conn.close()
     poller = _AggregateProgressPoller(
         progress_dir=pdir, run_id=run_id,
         n_games_total=200, kind="eval",
@@ -2200,17 +2249,20 @@ def test_aggregate_progress_poller_emits_games_per_hour_data_gen(
 
     pdir = tmp_path
     run_id = "iter_010_self_play_v3"
+    db_path = _early_stop_db_path(tmp_path)
+    _seed_runs_db_top(db_path, run_id)
     for label, done, samples in (
         ("local", 30, 4500),
         ("mac", 50, 7200),
     ):
-        (pdir / f"{run_id}_shard_{label}.json").write_text(
-            json.dumps({
+        _write_shard_db_row(
+            db_path, run_id, label,
+            n_games_done=done,
+            extra={
                 "kind": "data_gen", "status": "running",
-                "n_games_total": 200, "n_games_done": done,
                 "n_samples": samples, "n_workers": 4,
-                "p0_wins": 0, "p1_wins": 0, "draws": 0, "crashed": 0,
-            }), encoding="utf-8",
+                "p0_wins": 0, "p1_wins": 0, "draws": 0,
+            },
         )
     poller = _AggregateProgressPoller(
         progress_dir=pdir, run_id=run_id,
@@ -2242,18 +2294,19 @@ def test_aggregate_progress_poller_emits_games_per_hour_eval(
 
     pdir = tmp_path
     run_id = "iter_011_eval_v3_vs_v2"
+    db_path = _early_stop_db_path(tmp_path)
+    _seed_runs_db_top(db_path, run_id, kind="eval")
     for label, n, wn, wo in (
         ("local", 30, 12, 18),
         ("mac", 50, 22, 28),
     ):
-        (pdir / f"{run_id}_shard_{label}.json").write_text(
-            json.dumps({
+        _write_shard_db_row(
+            db_path, run_id, label,
+            n_games_done=n, wins_new=wn, wins_old=wo,
+            extra={
                 "kind": "eval", "status": "running",
-                "n_games_total": 100, "n_games_done": n,
-                "n_workers": 4,
-                "wins_new": wn, "wins_old": wo, "draws": 0,
-                "crashed": 0, "avg_decisions": 0.0,
-            }), encoding="utf-8",
+                "n_workers": 4, "avg_decisions": 0.0,
+            },
         )
     poller = _AggregateProgressPoller(
         progress_dir=pdir, run_id=run_id,
@@ -2283,20 +2336,21 @@ def test_aggregate_progress_poller_eval_avg_decisions_weighted(
 
     pdir = tmp_path
     run_id = "iter_012_eval_v4_vs_v3"
+    db_path = _early_stop_db_path(tmp_path)
+    _seed_runs_db_top(db_path, run_id, kind="eval")
     rows = (
         ("local", 30, 11.5),
         ("mac", 50, 14.25),
         ("win", 20, 9.75),
     )
     for label, n, avg_dec in rows:
-        (pdir / f"{run_id}_shard_{label}.json").write_text(
-            json.dumps({
+        _write_shard_db_row(
+            db_path, run_id, label,
+            n_games_done=n,
+            extra={
                 "kind": "eval", "status": "running",
-                "n_games_total": 100, "n_games_done": n,
-                "n_workers": 4,
-                "wins_new": 0, "wins_old": 0, "draws": 0,
-                "crashed": 0, "avg_decisions": avg_dec,
-            }), encoding="utf-8",
+                "n_workers": 4, "avg_decisions": avg_dec,
+            },
         )
     poller = _AggregateProgressPoller(
         progress_dir=pdir, run_id=run_id,
@@ -2329,57 +2383,121 @@ def test_aggregate_progress_poller_eval_avg_decisions_zero_when_empty(
 # ---- _EarlyStopPoller ------------------------------------------
 
 
-def _write_shard_progress(
-    progress_dir: Path,
+def _seed_runs_db(
+    db_path: Path,
+    run_id: str,
+    *,
+    kind: str = "self_play",
+    started_at: str | None = None,
+    extra_runs: tuple[tuple[str, str], ...] = (),
+) -> None:
+    """Insert a parent ``runs`` row for ``run_id`` so per-shard
+    ``run_progress`` rows can land without FK-constraint failures.
+
+    The orchestrator reads ``runs.started_at`` at poller construction
+    to fix the expected run identity; tests that exercise the
+    stale-row filter pass an explicit ``started_at`` value.
+    """
+    from mtg_bot.cli.runs import db as _runs_db
+    from mtg_bot.cli.runs.models import Run
+    conn = _runs_db.connect(db_path)
+    try:
+        _runs_db.insert_run(conn, Run(
+            run_id=run_id,
+            kind=kind,
+            status="running",
+            started_at=started_at or _runs_db.now_iso(),
+            git_commit="test",
+            config_json="{}",
+        ))
+        for rid, rkind in extra_runs:
+            _runs_db.insert_run(conn, Run(
+                run_id=rid,
+                kind=rkind,
+                status="running",
+                started_at=_runs_db.now_iso(),
+                git_commit="test",
+                config_json="{}",
+            ))
+    finally:
+        conn.close()
+
+
+def _write_shard_db_row(
+    db_path: Path,
     run_id: str,
     label: str,
     *,
-    n_games_done: int,
+    n_games_done: int = 0,
     crashed: int = 0,
     timed_out: int = 0,
-    started_at: str | None = None,
+    wins_new: int = 0,
+    wins_old: int = 0,
+    draws: int = 0,
+    extra: dict[str, Any] | None = None,
 ) -> None:
-    """Test helper: emit a per-shard progress JSON in the layout the
-    aggregate poller and the early-stop poller both consume.
+    """Write a per-shard ``run_progress`` row keyed by
+    ``(run_id, shard_label=label)``. Mirror image of the
+    pre-cutover ``_write_shard_progress`` helper that wrote a per-
+    shard JSON; the post-cutover orchestrator readers consume the
+    DB directly.
 
-    ``started_at`` defaults to "now"; the early-stop poller's
-    stale-JSON filter requires a present timestamp at-or-after its
-    own instantiation. Pass an explicit older value to test the
-    stale-skip path."""
-    if started_at is None:
-        # Use a slightly future timestamp so even the most pessimistic
-        # clock drift between this call and the poller's ``__init__``
-        # later in the test still has the JSON read as "fresh".
-        started_at = _iso_offset_seconds(60)
-    payload = {
-        "run_id": run_id,
-        "started_at": started_at,
-        "n_games_done": n_games_done,
-        "crashed": crashed,
-        "timed_out": timed_out,
-    }
-    (progress_dir / f"{run_id}_shard_{label}.json").write_text(
-        json.dumps(payload), encoding="utf-8",
-    )
+    The parent ``runs`` row must already exist (FK constraint) — call
+    :func:`_seed_runs_db` first.
+    """
+    from mtg_bot.cli.runs import db as _runs_db
+    from mtg_bot.cli.runs.models import ProgressUpdate
+    extra_json = json.dumps(extra) if extra else None
+    conn = _runs_db.connect(db_path)
+    try:
+        _runs_db.upsert_progress(conn, ProgressUpdate(
+            run_id=run_id,
+            shard_label=label,
+            n_games_done=n_games_done,
+            crashed=crashed,
+            timed_out=timed_out,
+            wins_new=wins_new,
+            wins_old=wins_old,
+            draws=draws,
+            extra_json=extra_json,
+        ))
+    finally:
+        conn.close()
+
+
+def _early_stop_db_path(tmp_path: Path) -> Path:
+    """Conventional path for the per-test runs DB used by the
+    early-stop / aggregator pollers. Tests that previously dropped
+    JSONs into ``progress_dir`` now seed rows into this DB instead;
+    the orchestrator readers default to the env-var-resolved path
+    that ``conftest`` already points at this same file."""
+    import os as _os
+    raw = _os.environ.get("MTG_BOT_RUN_DB_PATH")
+    if raw:
+        return Path(raw)
+    return tmp_path / "runs.db"
 
 
 def test_early_stop_poller_closes_queue_when_threshold_hit(tmp_path: Path):
-    """500 successful completions in the per-shard JSONs → exactly
-    one POST to /queue/close/<run_id>. "Successful" =
+    """500 successful completions in the per-shard ``run_progress``
+    rows → exactly one POST to /queue/close/<run_id>. "Successful" =
     n_games_done - crashed - timed_out. Crashed and timed_out games
     DON'T count toward the target — those are abandoned slack."""
     from mtg_bot.training.distributed import _EarlyStopPoller
 
     progress_dir = tmp_path / "training_progress"
     progress_dir.mkdir()
-    # Two shards, total successful = 480 + 20 = 500.
-    _write_shard_progress(
-        progress_dir, "r", "A", n_games_done=300, crashed=2, timed_out=1,
+    db_path = _early_stop_db_path(tmp_path)
+    _seed_runs_db(db_path, "r")
+    # Two shards, total successful = (300-2-1) + 203 = 500 — trips
+    # the threshold immediately on the first tick.
+    _write_shard_db_row(
+        db_path, "r", "A",
+        n_games_done=300, crashed=2, timed_out=1,
     )
-    _write_shard_progress(
-        progress_dir, "r", "B", n_games_done=203,
+    _write_shard_db_row(
+        db_path, "r", "B", n_games_done=203,
     )
-    # Successful = (300-2-1) + 203 = 500 — should trip immediately.
     posted: list[str] = []
 
     class FakeResp:
@@ -2414,7 +2532,9 @@ def test_early_stop_poller_does_not_close_below_threshold(tmp_path: Path):
 
     progress_dir = tmp_path / "training_progress"
     progress_dir.mkdir()
-    _write_shard_progress(progress_dir, "r", "A", n_games_done=499)
+    db_path = _early_stop_db_path(tmp_path)
+    _seed_runs_db(db_path, "r")
+    _write_shard_db_row(db_path, "r", "A", n_games_done=499)
     posted: list[str] = []
 
     poller = _EarlyStopPoller(
@@ -2440,8 +2560,10 @@ def test_early_stop_poller_subtracts_crashed_and_timed_out(tmp_path: Path):
 
     progress_dir = tmp_path / "training_progress"
     progress_dir.mkdir()
-    _write_shard_progress(
-        progress_dir, "r", "A",
+    db_path = _early_stop_db_path(tmp_path)
+    _seed_runs_db(db_path, "r")
+    _write_shard_db_row(
+        db_path, "r", "A",
         n_games_done=505, crashed=6, timed_out=4,
     )
     posted: list[str] = []
@@ -2467,7 +2589,9 @@ def test_early_stop_poller_closes_only_once(tmp_path: Path):
 
     progress_dir = tmp_path / "training_progress"
     progress_dir.mkdir()
-    _write_shard_progress(progress_dir, "r", "A", n_games_done=500)
+    db_path = _early_stop_db_path(tmp_path)
+    _seed_runs_db(db_path, "r")
+    _write_shard_db_row(db_path, "r", "A", n_games_done=500)
 
     class FakeResp:
         status = 200
@@ -2490,16 +2614,26 @@ def test_early_stop_poller_closes_only_once(tmp_path: Path):
     assert len(posted) == 1
 
 
-def test_early_stop_poller_skips_eval_result_files(tmp_path: Path):
-    """Eval shards write a sibling ``..._shard_<label>_result.json``
-    with the same wins/draws counts. Including it would double-count.
-    Mirrors _AggregateProgressPoller's filter."""
+def test_early_stop_poller_ignores_legacy_result_filename(tmp_path: Path):
+    """Pre-cutover, eval shards on remotes wrote a sibling
+    ``_shard_<label>_result.json`` mirroring the per-shard progress
+    JSON's counts; the JSON-fan-in aggregator filtered it out so it
+    didn't double-count. Post-cutover the orchestrator reads
+    ``run_progress`` rows keyed by ``shard_label``; a legacy result
+    JSON on disk has no DB equivalent and is silently ignored
+    (the reader never touches the filesystem). This test pins that
+    behavior: a stray ``_result.json`` on disk does NOT contribute
+    to the poller's sum."""
     from mtg_bot.training.distributed import _EarlyStopPoller
 
     progress_dir = tmp_path / "training_progress"
     progress_dir.mkdir()
-    _write_shard_progress(progress_dir, "r", "A", n_games_done=300)
-    # Result file mirrors A's count — must be ignored.
+    db_path = _early_stop_db_path(tmp_path)
+    _seed_runs_db(db_path, "r")
+    _write_shard_db_row(db_path, "r", "A", n_games_done=300)
+    # Stray legacy file on disk — pre-cutover it would have been
+    # double-counted by the JSON fan-in; post-cutover the DB-reader
+    # never sees it.
     (progress_dir / "r_shard_A_result.json").write_text(
         json.dumps({"n_games_done": 300, "crashed": 0, "timed_out": 0}),
         encoding="utf-8",
@@ -2514,42 +2648,35 @@ def test_early_stop_poller_skips_eval_result_files(tmp_path: Path):
     poller.start()
     time.sleep(0.2)
     poller.stop()
-    # 300 < 500, so no close (would be 600 if result file
-    # double-counted).
+    # 300 < 500, so no close (would be 600 if the filesystem read
+    # path were still wired and double-counted).
     assert posted == []
 
 
-def test_early_stop_poller_handles_unreadable_shard_files(tmp_path: Path):
-    """A partially-written progress JSON (mid-atomic-write) must not
-    crash the poller — skip and try again next tick."""
+def test_early_stop_poller_handles_unconfigured_db(tmp_path, monkeypatch):
+    """No DB configured (env var unset) — the poller never trips,
+    matching the legacy behavior where no shard JSONs meant no
+    progress. Subsequent shard-row writes pick up where the poller
+    left off once the DB IS configured."""
     from mtg_bot.training.distributed import _EarlyStopPoller
 
+    # Explicit unset of the autouse conftest default. Without a DB
+    # path resolved at __init__, the poller is a no-op.
+    monkeypatch.delenv("MTG_BOT_RUN_DB_PATH", raising=False)
     progress_dir = tmp_path / "training_progress"
     progress_dir.mkdir()
-    # Half-written JSON — JSONDecodeError on read.
-    (progress_dir / "r_shard_BAD.json").write_text(
-        "{not json", encoding="utf-8",
-    )
-    _write_shard_progress(progress_dir, "r", "OK", n_games_done=500)
-
-    class FakeResp:
-        status = 200
-
     posted: list[str] = []
-
-    def fake_urlopen(req):
-        posted.append(req.full_url)
-        return FakeResp()
 
     poller = _EarlyStopPoller(
         progress_dir=progress_dir, run_id="r",
         target_games=500, queue_url="http://m:5099",
-        interval_s=0.02, urlopen=fake_urlopen,
+        interval_s=0.02, urlopen=lambda req: posted.append(req.full_url),
     )
     poller.start()
     time.sleep(0.2)
     poller.stop()
-    assert len(posted) == 1
+    assert posted == []
+    assert poller.closed is False
 
 
 def test_early_stop_poller_close_post_failure_logs_and_gives_up(
@@ -2563,7 +2690,9 @@ def test_early_stop_poller_close_post_failure_logs_and_gives_up(
 
     progress_dir = tmp_path / "training_progress"
     progress_dir.mkdir()
-    _write_shard_progress(progress_dir, "r", "A", n_games_done=500)
+    db_path = _early_stop_db_path(tmp_path)
+    _seed_runs_db(db_path, "r")
+    _write_shard_db_row(db_path, "r", "A", n_games_done=500)
 
     def boom(req):
         raise ConnectionError("master unreachable")
@@ -2592,7 +2721,9 @@ def test_early_stop_poller_close_non_2xx_logs_and_gives_up(
 
     progress_dir = tmp_path / "training_progress"
     progress_dir.mkdir()
-    _write_shard_progress(progress_dir, "r", "A", n_games_done=500)
+    db_path = _early_stop_db_path(tmp_path)
+    _seed_runs_db(db_path, "r")
+    _write_shard_db_row(db_path, "r", "A", n_games_done=500)
 
     class FakeResp:
         status = 500
@@ -2610,30 +2741,28 @@ def test_early_stop_poller_close_non_2xx_logs_and_gives_up(
     assert "HTTP 500" in err or "early-stop" in err
 
 
-def test_early_stop_poller_ignores_stale_prior_run_jsons(
-    tmp_path: Path, capsys,
+def test_early_stop_poller_ignores_prior_run_with_same_run_id(
+    tmp_path: Path,
 ):
-    """Repro for the 2026-05-05 bug: a previous attempt at the same
-    iter left ``iter_NNN_self_play_v13_shard_*.json`` on disk with
-    ``n_games_done`` already at the target. Without the stale-JSON
-    filter the poller's first tick (no initial wait by design) would
-    read those and POST close immediately, so the new run's shards
-    saw ``closed: true`` on their very first ``/queue/take`` and
-    exited with ``n_games_done=0``.
+    """Post-cutover analog of the legacy stale-JSON filter: if the
+    same ``run_id`` is re-registered between the poller's __init__
+    and a later tick, the new run's started_at differs from the
+    snapshot the poller captured, and any per-shard rows landing
+    under the new identity are NOT counted toward the old
+    threshold.
 
-    Fix: poller filters out shard JSONs whose ``started_at`` predates
-    its own instantiation. This test pre-populates such a stale JSON
-    and asserts the close is NOT posted."""
+    The legacy test set up the same scenario by hand-writing a
+    stale per-shard JSON. The DB-side equivalent: poller init
+    captures started_at=X, then we overwrite the run row with
+    started_at=Y. The next tick refuses to count the rows."""
+    from mtg_bot.cli.runs import db as _runs_db
     from mtg_bot.training.distributed import _EarlyStopPoller
 
     progress_dir = tmp_path / "training_progress"
     progress_dir.mkdir()
-    # Stale JSON from an hour ago — left over from a prior run.
-    _write_shard_progress(
-        progress_dir, "r", "A",
-        n_games_done=500,
-        started_at=_iso_offset_seconds(-3600),
-    )
+    db_path = _early_stop_db_path(tmp_path)
+    _seed_runs_db(db_path, "r", started_at=_iso_offset_seconds(-3600))
+    _write_shard_db_row(db_path, "r", "A", n_games_done=500)
     posted: list[str] = []
 
     poller = _EarlyStopPoller(
@@ -2644,28 +2773,39 @@ def test_early_stop_poller_ignores_stale_prior_run_jsons(
         interval_s=0.02,
         urlopen=lambda req: posted.append(req.full_url),
     )
+    # Mutate the parent ``runs`` row's ``started_at`` between
+    # poller __init__ and ``start()``. The poller refuses to count
+    # the rows because the snapshot it captured at __init__ no
+    # longer matches.
+    conn = _runs_db.connect(db_path)
+    try:
+        conn.execute(
+            "UPDATE runs SET started_at = ? WHERE run_id = ?",
+            (_iso_offset_seconds(60), "r"),
+        )
+    finally:
+        conn.close()
     poller.start()
     time.sleep(0.2)
     poller.stop()
     assert posted == []
     assert poller.closed is False
-    # User-facing log line confirms the skip (only logged once per run).
-    err = capsys.readouterr().err
-    assert "ignoring" in err and "stale" in err
-    assert "r_shard_A.json" in err
 
 
-def test_early_stop_poller_counts_fresh_shard_started_after_init(
+def test_early_stop_poller_counts_rows_once_run_row_appears(
     tmp_path: Path,
 ):
-    """Mirror image: a shard JSON with ``started_at`` AFTER the
-    poller's ``__init__`` is the legitimate current-run case and
-    must count toward the threshold (otherwise the early-stop path
-    would never fire)."""
+    """The orchestrator's start_run sometimes lands AFTER the
+    poller was constructed (the orchestrator calls __init__ on the
+    poller as part of setup and ``start_run`` is registered by the
+    enclosing run_lifecycle on a different thread). The poller's
+    expected started_at is ``None`` until the row appears, then
+    locks to whatever shows up. Per-shard rows count from then on."""
     from mtg_bot.training.distributed import _EarlyStopPoller
 
     progress_dir = tmp_path / "training_progress"
     progress_dir.mkdir()
+    db_path = _early_stop_db_path(tmp_path)
     posted: list[str] = []
 
     class FakeResp:
@@ -2675,6 +2815,7 @@ def test_early_stop_poller_counts_fresh_shard_started_after_init(
         posted.append(req.full_url)
         return FakeResp()
 
+    # Poller constructed BEFORE the parent run row exists.
     poller = _EarlyStopPoller(
         progress_dir=progress_dir,
         run_id="r",
@@ -2683,14 +2824,10 @@ def test_early_stop_poller_counts_fresh_shard_started_after_init(
         interval_s=0.02,
         urlopen=fake_urlopen,
     )
-    # Write the fresh JSON AFTER constructing the poller so its
-    # ``started_at`` lands strictly after ``self._start_iso`` —
-    # plus a 60s future offset for clock-skew slack.
-    _write_shard_progress(
-        progress_dir, "r", "A",
-        n_games_done=500,
-        started_at=_iso_offset_seconds(60),
-    )
+    # NOW seed: run row + per-shard rows.
+    _seed_runs_db(db_path, "r")
+    _write_shard_db_row(db_path, "r", "A", n_games_done=500)
+
     poller.start()
     if poller._thread is not None:
         poller._thread.join(timeout=2.0)
@@ -2699,70 +2836,19 @@ def test_early_stop_poller_counts_fresh_shard_started_after_init(
     assert poller.closed is True
 
 
-def test_early_stop_poller_mixed_stale_and_fresh_only_counts_fresh(
+def test_early_stop_poller_no_rows_below_threshold(
     tmp_path: Path,
 ):
-    """Realistic in-flight scenario: prior-run JSON for shard A
-    (n_games_done=500, hour-old started_at) AND current-run JSON
-    for shard B (n_games_done=10, started_at=now). The stale A is
-    filtered; only B's 10 count → no close."""
+    """A run with zero per-shard rows yet → poller's sum is zero,
+    no close fires. Mirrors the legacy ``no per-shard JSONs yet``
+    case but via the DB."""
     from mtg_bot.training.distributed import _EarlyStopPoller
 
     progress_dir = tmp_path / "training_progress"
     progress_dir.mkdir()
+    db_path = _early_stop_db_path(tmp_path)
+    _seed_runs_db(db_path, "r")
     posted: list[str] = []
-    poller = _EarlyStopPoller(
-        progress_dir=progress_dir,
-        run_id="r",
-        target_games=500,
-        queue_url="http://master:5099",
-        interval_s=0.02,
-        urlopen=lambda req: posted.append(req.full_url),
-    )
-    # Stale: from a prior run.
-    _write_shard_progress(
-        progress_dir, "r", "A",
-        n_games_done=500,
-        started_at=_iso_offset_seconds(-3600),
-    )
-    # Fresh: current run, only 10 games in.
-    _write_shard_progress(
-        progress_dir, "r", "B",
-        n_games_done=10,
-        started_at=_iso_offset_seconds(60),
-    )
-    poller.start()
-    time.sleep(0.2)
-    poller.stop()
-    # Without the filter we'd see 510 successful and POST close;
-    # with the filter only B's 10 count, well below 500.
-    assert posted == []
-    assert poller.closed is False
-
-
-def test_early_stop_poller_skips_shard_missing_started_at(
-    tmp_path: Path,
-):
-    """Edge case: a shard JSON without ``started_at`` is treated as
-    untrustworthy (we can't tell which run it belongs to) and
-    skipped. Otherwise a malformed/legacy JSON could trip a false
-    early close."""
-    from mtg_bot.training.distributed import _EarlyStopPoller
-
-    progress_dir = tmp_path / "training_progress"
-    progress_dir.mkdir()
-    # Hand-write a shard JSON missing ``started_at`` entirely.
-    (progress_dir / "r_shard_A.json").write_text(
-        json.dumps({
-            "run_id": "r",
-            "n_games_done": 500,
-            "crashed": 0,
-            "timed_out": 0,
-        }),
-        encoding="utf-8",
-    )
-    posted: list[str] = []
-
     poller = _EarlyStopPoller(
         progress_dir=progress_dir,
         run_id="r",
@@ -2775,42 +2861,35 @@ def test_early_stop_poller_skips_shard_missing_started_at(
     time.sleep(0.2)
     poller.stop()
     assert posted == []
+    assert poller.closed is False
 
 
-def test_early_stop_poller_stale_skip_log_fires_once_per_run(
-    tmp_path: Path, capsys,
+def test_early_stop_poller_db_unreachable_is_noop(
+    tmp_path: Path,
 ):
-    """Reproducibility / log-volume guard: even after many ticks
-    over the same set of stale + missing JSONs, the
-    ``[early-stop] ... ignoring N stale shard JSON(s)`` line is
-    emitted at most once. This both confirms the filter is
-    deterministic for a fixed (start_iso, files) pair and keeps the
-    orchestrator's stderr from spamming."""
+    """If the DB file is missing entirely (or the connection raises
+    on read), the poller treats the sum as zero rather than crashing.
+    Mirrors the legacy "no JSONs yet" behavior."""
     from mtg_bot.training.distributed import _EarlyStopPoller
 
     progress_dir = tmp_path / "training_progress"
     progress_dir.mkdir()
-    _write_shard_progress(
-        progress_dir, "r", "A",
-        n_games_done=500,
-        started_at=_iso_offset_seconds(-3600),
-    )
+    posted: list[str] = []
 
+    # DB path resolves via the conftest autouse fixture; we never
+    # call _seed_runs_db, so the file doesn't exist.
     poller = _EarlyStopPoller(
         progress_dir=progress_dir,
         run_id="r",
         target_games=500,
         queue_url="http://master:5099",
         interval_s=0.02,
-        urlopen=lambda req: None,
+        urlopen=lambda req: posted.append(req.full_url),
     )
     poller.start()
-    # Several ticks would have run by now.
     time.sleep(0.2)
     poller.stop()
-    err = capsys.readouterr().err
-    # Exactly one "ignoring" line, regardless of how many ticks polled.
-    assert err.count("ignoring") == 1
+    assert posted == []
 
 
 # ---- EventLog + helpers ----------------------------------------
@@ -7490,25 +7569,21 @@ def test_aggregate_eval_counts_from_progress_prefers_result_json(tmp_path):
         _aggregate_eval_counts_from_progress,
     )
 
-    # Shard A: cleanly finished. result.json is the authoritative source.
-    (tmp_path / "iter1_shard_A_result.json").write_text(json.dumps({
-        "wins_new": 5, "wins_old": 3, "draws": 1, "crashed": 0,
-        "timed_out": 0,
-    }), encoding="utf-8")
-    # A's progress JSON has stale counts (e.g. last poll before the
-    # final flush); the aggregator must ignore it because the result
-    # file takes precedence.
-    (tmp_path / "iter1_shard_A.json").write_text(json.dumps({
-        "wins_new": 4, "wins_old": 2, "draws": 1, "crashed": 0,
-        "timed_out": 0, "started_at": _now_iso(),
-    }), encoding="utf-8")
-
-    # Shard B: SSH-killed before a result file could be scp'd back.
-    # Progress JSON is the only source.
-    (tmp_path / "iter1_shard_B.json").write_text(json.dumps({
-        "wins_new": 7, "wins_old": 4, "draws": 0, "crashed": 1,
-        "timed_out": 0, "started_at": _now_iso(),
-    }), encoding="utf-8")
+    db_path = _early_stop_db_path(tmp_path)
+    _seed_runs_db(db_path, "iter1", kind="eval")
+    # Two shards. Pre-cutover, A wrote a ``_result.json`` (clean SSH)
+    # and B only had its per-shard progress JSON (SSH-killed). Post-
+    # cutover both go into the DB and the aggregator sums them
+    # uniformly — the result/progress split is gone (the DB row IS
+    # the authoritative source for each shard).
+    _write_shard_db_row(
+        db_path, "iter1", "A",
+        wins_new=5, wins_old=3, draws=1, crashed=0, timed_out=0,
+    )
+    _write_shard_db_row(
+        db_path, "iter1", "B",
+        wins_new=7, wins_old=4, draws=0, crashed=1, timed_out=0,
+    )
 
     totals = _aggregate_eval_counts_from_progress(tmp_path, "iter1")
     assert totals["wins_new"] == 5 + 7
@@ -7519,42 +7594,44 @@ def test_aggregate_eval_counts_from_progress_prefers_result_json(tmp_path):
     assert totals["n_games"] == (5 + 3 + 1) + (7 + 4 + 1)
 
 
-def test_aggregate_eval_counts_from_progress_skips_stale_progress_json(
+def test_aggregate_eval_counts_from_progress_run_isolation(
     tmp_path,
 ):
-    """Stale-JSON filter: a shard's progress JSON whose
-    ``started_at`` predates the orchestrator's wall-clock at queue
-    init is dropped (leftover from a prior run with the same
-    run_id). Mirrors :class:`_EarlyStopPoller`'s filter."""
+    """Post-cutover, run-id isolation comes for free: the aggregator
+    queries ``WHERE run_id = ?`` so rows under a different parent
+    run can't leak in. Pre-cutover this required the wall-clock
+    stale-JSON filter; with the DB the filter is structural."""
     from mtg_bot.training.distributed import (
         _aggregate_eval_counts_from_progress,
     )
 
-    # Stale shard: wrote 100 wins last run.
-    (tmp_path / "iter1_shard_old.json").write_text(json.dumps({
-        "wins_new": 100, "wins_old": 50,
-        "draws": 0, "crashed": 0, "timed_out": 0,
-        "started_at": _iso_offset_seconds(-3600),
-    }), encoding="utf-8")
-    # Fresh shard.
-    (tmp_path / "iter1_shard_new.json").write_text(json.dumps({
-        "wins_new": 2, "wins_old": 1,
-        "draws": 0, "crashed": 0, "timed_out": 0,
-        "started_at": _iso_offset_seconds(60),
-    }), encoding="utf-8")
-
-    totals = _aggregate_eval_counts_from_progress(
-        tmp_path, "iter1", started_iso=_now_iso(),
+    db_path = _early_stop_db_path(tmp_path)
+    _seed_runs_db(
+        db_path, "iter1", kind="eval",
+        extra_runs=(("iter0_old_run", "eval"),),
     )
+    # Prior-run rows (under a different parent run_id) — must NOT
+    # contribute.
+    _write_shard_db_row(
+        db_path, "iter0_old_run", "old",
+        wins_new=100, wins_old=50, draws=0,
+    )
+    # Current-run rows.
+    _write_shard_db_row(
+        db_path, "iter1", "new",
+        wins_new=2, wins_old=1, draws=0,
+    )
+
+    totals = _aggregate_eval_counts_from_progress(tmp_path, "iter1")
     assert totals["wins_new"] == 2
     assert totals["wins_old"] == 1
     assert totals["n_games"] == 3
 
 
-def test_aggregate_eval_counts_from_progress_no_jsons_returns_zero(
+def test_aggregate_eval_counts_from_progress_no_rows_returns_zero(
     tmp_path,
 ):
-    """No per-shard JSONs at all → returns the all-zeros dict so the
+    """No per-shard rows at all → returns the all-zeros dict so the
     orchestrator's ``totals == 0`` check fires the all-shards-failed
     path."""
     from mtg_bot.training.distributed import (
@@ -7567,54 +7644,42 @@ def test_aggregate_eval_counts_from_progress_no_jsons_returns_zero(
     }
 
 
-def test_aggregate_eval_counts_from_progress_skips_unreadable_files(
-    tmp_path,
+def test_aggregate_eval_counts_from_progress_db_unreachable(
+    tmp_path, monkeypatch,
 ):
-    """Corrupted JSON / partial writes during a poll cycle don't
-    crash the aggregator — they're skipped, the next pass picks up
-    the cleanly-written file."""
+    """DB unreachable (no env var configured) → all-zeros dict. The
+    legacy filesystem path used to handle "no files yet" the same
+    way."""
     from mtg_bot.training.distributed import (
         _aggregate_eval_counts_from_progress,
     )
-    (tmp_path / "iter1_shard_corrupt.json").write_text(
-        "{not valid json", encoding="utf-8",
+    # Explicit unset of the autouse conftest default.
+    monkeypatch.delenv("MTG_BOT_RUN_DB_PATH", raising=False)
+    totals = _aggregate_eval_counts_from_progress(tmp_path, "iter1")
+    assert totals == {
+        "n_games": 0, "wins_new": 0, "wins_old": 0,
+        "draws": 0, "crashed": 0, "timed_out": 0,
+    }
+
+
+def test_aggregate_eval_counts_from_progress_partial_rows(
+    tmp_path,
+):
+    """A subset of shards have written rows; missing shards silently
+    contribute zero. Pre-cutover this was the corrupt-JSON-skip
+    pattern; post-cutover it's just "the row isn't there yet"."""
+    from mtg_bot.training.distributed import (
+        _aggregate_eval_counts_from_progress,
     )
-    (tmp_path / "iter1_shard_ok.json").write_text(json.dumps({
-        "wins_new": 1, "wins_old": 0, "draws": 0,
-        "crashed": 0, "timed_out": 0,
-        "started_at": _now_iso(),
-    }), encoding="utf-8")
+    db_path = _early_stop_db_path(tmp_path)
+    _seed_runs_db(db_path, "iter1", kind="eval")
+    _write_shard_db_row(
+        db_path, "iter1", "ok",
+        wins_new=1, wins_old=0, draws=0,
+    )
 
     totals = _aggregate_eval_counts_from_progress(tmp_path, "iter1")
     assert totals["n_games"] == 1
-
-
-def test_aggregate_eval_counts_from_progress_corrupt_result_file_skipped(
-    tmp_path,
-):
-    """A corrupt result.json is skipped, but its progress JSON is
-    NOT used as a fallback for that label — once we've seen the
-    result file's existence we treat that shard as "tried for clean
-    counts and got nothing." Other shards still aggregate."""
-    from mtg_bot.training.distributed import (
-        _aggregate_eval_counts_from_progress,
-    )
-    # Shard A's result file is corrupt — pass 1 skips it.
-    (tmp_path / "iter1_shard_A_result.json").write_text(
-        "}}}}", encoding="utf-8",
-    )
-    # Shard A's progress JSON is fine — pass 2 picks it up since
-    # pass 1 didn't add A to seen_labels (the corrupt result wasn't
-    # successfully read).
-    (tmp_path / "iter1_shard_A.json").write_text(json.dumps({
-        "wins_new": 3, "wins_old": 2, "draws": 0,
-        "crashed": 0, "timed_out": 0,
-        "started_at": _now_iso(),
-    }), encoding="utf-8")
-    totals = _aggregate_eval_counts_from_progress(tmp_path, "iter1")
-    # A's progress JSON salvages the count.
-    assert totals["wins_new"] == 3
-    assert totals["wins_old"] == 2
 
 
 def test_run_distributed_eval_aggregates_after_remote_ssh_wedge(
@@ -7656,32 +7721,23 @@ def test_run_distributed_eval_aggregates_after_remote_ssh_wedge(
     wedge_release = threading.Event()
 
     def _wedged_remote_runner(shard, *args, **kwargs):
-        """Simulates a remote shard that already wrote some progress
-        JSON contents (the master-side ProgressPoller pulled them
-        back) BEFORE the SSH wrapper hung. The runner blocks until
-        the orchestrator finishes — exactly the failure mode SSH
-        timeout produces in production."""
+        """Simulates a remote shard that already pushed some
+        progress to runs.db (the per-shard row that the shard runner
+        upserts every ``record_game``) BEFORE the SSH wrapper hung.
+        The runner blocks until the orchestrator finishes — exactly
+        the failure mode SSH timeout produces in production."""
         from mtg_bot.training.distributed import ShardEvalReport
-        # Simulate the master-side ProgressPoller having scp'd a
-        # partial progress JSON from the remote at the moment SSH
-        # hung. Counts: 2 wins_new, 1 wins_old (3 games done).
-        progress_path = (
-            progress_dir
-            / f"iter_wedge_test_shard_{shard.display_label}.json"
+        # Push a partial per-shard ``run_progress`` row directly,
+        # standing in for the in-flight upserts the real shard
+        # runner would have made before the SSH wrapper hung.
+        # Counts: 2 wins_new, 1 wins_old (3 games done).
+        _write_shard_db_row(
+            db_path, "iter_wedge_test", shard.display_label,
+            n_games_done=3,
+            wins_new=2, wins_old=1, draws=0,
+            crashed=0, timed_out=0,
+            extra={"kind": "eval", "status": "running"},
         )
-        progress_path.parent.mkdir(parents=True, exist_ok=True)
-        progress_path.write_text(json.dumps({
-            "run_id": (
-                f"iter_wedge_test_shard_{shard.display_label}"
-            ),
-            "kind": "eval",
-            "status": "running",
-            "started_at": _now_iso(),
-            "n_games_total": 4,
-            "n_games_done": 3,
-            "wins_new": 2, "wins_old": 1, "draws": 0,
-            "crashed": 0, "timed_out": 0,
-        }), encoding="utf-8")
         # Block until the orchestrator stops waiting on us. Without
         # Phase 2.5 wiring this would deadlock the test (orchestrator
         # waits for SSH future; future waits for the orchestrator).
@@ -7695,6 +7751,9 @@ def test_run_distributed_eval_aggregates_after_remote_ssh_wedge(
             error="simulated SSH wedge",
             error_stage="eval",
         )
+
+    db_path = _early_stop_db_path(tmp_path)
+    _seed_runs_db(db_path, "iter_wedge_test", kind="eval")
 
     monkeypatch.setattr(
         dist, "run_shard_eval_remote", _wedged_remote_runner,
@@ -7947,14 +8006,18 @@ def test_run_distributed_eval_max_attempts_failures_become_crashed(
             "job_ids": [1, 2, 3],
         })
 
-        # Shard A wrote a progress JSON for the one game it
-        # finished cleanly.
-        (tmp_path / "iter_maxattempts_shard_A.json").write_text(
-            json.dumps({
-                "wins_new": 1, "wins_old": 0, "draws": 0,
-                "crashed": 0, "timed_out": 0,
-                "started_at": _now_iso(),
-            }), encoding="utf-8",
+        # Shard A pushed a per-shard ``run_progress`` row for the
+        # one game it finished cleanly. Pre-cutover this was a per-
+        # shard progress JSON; post-cutover the DB row is the
+        # authoritative source.
+        db_path = _early_stop_db_path(tmp_path)
+        _seed_runs_db(db_path, "iter_maxattempts", kind="eval")
+        _write_shard_db_row(
+            db_path, "iter_maxattempts", "A",
+            n_games_done=1,
+            wins_new=1, wins_old=0, draws=0,
+            crashed=0, timed_out=0,
+            extra={"kind": "eval", "status": "running"},
         )
 
         payload = wait_for_queue_completion(
@@ -8082,23 +8145,21 @@ def test_run_distributed_eval_queue_max_wait_timeout_aggregates_anyway(
 
     block_until_test_done = threading.Event()
 
+    db_path = _early_stop_db_path(tmp_path)
+    _seed_runs_db(db_path, "iter_max_wait_test", kind="eval")
+
     def _hung_local(*args, **kwargs):
         # Local shard simulates a worker that takes a job from the
         # queue but never finishes it (queue inflight stays > 0).
-        # Write a partial progress JSON so the orchestrator has
-        # SOMETHING to aggregate when its max_wait_s fires.
+        # Push a partial DB row so the orchestrator has SOMETHING
+        # to aggregate when its max_wait_s fires.
         label = kwargs.get("label", "A")
-        progress_path = (
-            progress_dir
-            / f"iter_max_wait_test_shard_{label}.json"
+        _write_shard_db_row(
+            db_path, "iter_max_wait_test", label,
+            wins_new=1, wins_old=0, draws=0,
+            crashed=0, timed_out=0,
+            extra={"kind": "eval", "status": "running"},
         )
-        progress_path.parent.mkdir(parents=True, exist_ok=True)
-        progress_path.write_text(json.dumps({
-            "kind": "eval", "status": "running",
-            "started_at": _now_iso(),
-            "wins_new": 1, "wins_old": 0, "draws": 0,
-            "crashed": 0, "timed_out": 0,
-        }), encoding="utf-8")
         block_until_test_done.wait(timeout=30)
         return {
             "n_games": 1, "wins_new": 1, "wins_old": 0,

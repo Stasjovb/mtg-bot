@@ -7,10 +7,13 @@ loop which feeds a pool of N workers from the master's
 ``/queue/take`` endpoint one game at a time.
 
 self-play emits per-batch npzs under ``--output-dir`` and prints
-``{"npz_paths": [...]}``. Eval writes a single result JSON under
-``--progress-dir/{run_id}_shard_<label>_result.json`` and prints
-``{"result_path": "..."}``. The orchestrator scps that file back and
-parses it.
+``{"npz_paths": [...]}``. Eval reports its final counts through
+``runs.db`` (per-shard ``run_progress`` row, master ``run_id`` +
+``shard_label``); the orchestrator's
+``_aggregate_eval_counts_from_progress`` reads them back. The stdout
+line carries the same dict for diagnostic visibility; pre-cutover
+the orchestrator scp'd a sibling ``..._result.json`` and parsed it,
+but post-cutover the DB row is authoritative.
 
 Run-DB lifecycle: wraps each shard's body in
 :func:`mtg_bot.cli.runs.lifecycle.run_lifecycle` so the master's
@@ -165,13 +168,14 @@ def _run_eval_shard(args, shard_dict: dict, spec_dict: dict) -> None:
             iter_total_games=args.iter_total_games,
             progress_dir=args.progress_dir,
         )
-    args.progress_dir.mkdir(parents=True, exist_ok=True)
-    result_path = (
-        args.progress_dir
-        / f"{args.run_id}_shard_{label}_result.json"
-    )
-    result_path.write_text(json.dumps(counts), encoding="utf-8")
-    print(json.dumps({"result_path": str(result_path), **counts}))
+    # The final per-shard ``run_progress`` row already carries the
+    # authoritative counts (see ``run_shard_eval_pull``'s post-loop
+    # ``_push_eval_shard_progress_to_db(status="completed")``). The
+    # stdout line stays so existing diagnostic tooling continues to
+    # see the per-shard summary; the legacy sibling
+    # ``_shard_<label>_result.json`` write was retired with the
+    # runs-db cutover.
+    print(json.dumps(counts))
 
 
 def _parse_args(argv=None) -> argparse.Namespace:
