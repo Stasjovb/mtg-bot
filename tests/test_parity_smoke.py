@@ -21949,6 +21949,492 @@ def test_cross_engine_real_eoe_pinnacle_kill_ship_etb_damage_optional_empty_bf_d
     )
 
 
+def test_cross_engine_synthetic_etb_reanimator_bear_multi_creature_graveyard_iterator_order_parity(
+    parity_smoke,
+):
+    """Probe: ``ETB-Reanimator-Bear`` with THREE creatures in p0
+    graveyard -- iterator-order target-pick parity for the
+    ``return_creature_from_your_graveyard_to_battlefield`` bridge arm.
+
+    Sister probe to:
+      * ``test_cross_engine_synthetic_etb_return_creature_from_graveyard_to_battlefield_cross_controller_routes_to_source_controller_parity``
+        (canonical happy-path / I83 cross-controller flicker, ONE
+        creature in gy)
+      * ``test_cross_engine_synthetic_etb_recur_bear_multi_creature_graveyard_iterator_order_parity``
+        (iterator-order parity for the to-HAND sister arm, THREE
+        creatures in gy)
+
+    Tension-tests ``_PickFirstLegalTargetAgent`` against Rust's
+    iterator-order graveyard scan when MULTIPLE creature cards are
+    eligible -- destination is BATTLEFIELD instead of HAND. The
+    canonical to-bf I83 probe seeded a SINGLE bait so the
+    "first-in-order" pick was unambiguous on either engine; this
+    probe seats THREE distinct vanilla creatures in fixed insertion
+    order (Alpha -> Beta -> Gamma) and asserts both engines pick the
+    SAME card (Alpha, the first-inserted) via their respective
+    deterministic mechanisms:
+
+      * **Rust:** ``state_ops_resolve.rs`` arm for
+        ``ReturnCreatureFromYourGraveyardToBattlefield`` scans
+        ``state.players[cidx].graveyard.iter()`` for the first
+        object whose printing's ``card_types`` contains "Creature".
+        With three creatures seeded in order Alpha/Beta/Gamma, the
+        iterator hits Alpha first; Alpha moves from gy to bf with
+        controller=cidx stamped.
+      * **Python:** ``ReturnFromGraveyard.legal_targets`` walks the
+        controller's graveyard in insertion order and emits one
+        ``("graveyard_creature", card.id)`` per creature card. The
+        seated ``_PickFirstLegalTargetAgent`` returns
+        ``legal_targets[0]``, which is the Alpha entry. The
+        ReturnFromGraveyard substrate is shared with the to-HAND
+        arm (``effects/generic/graveyard.py``); the destination zone
+        is the only difference.
+
+    Both engines pick the first-in-insertion-order creature, leave
+    Beta and Gamma in the graveyard, and stamp controller=0 on the
+    just-arrived Alpha permanent (the source's controller).
+
+    **Why "iterator-order parity" is the load-bearing contract for
+    the to-bf sister arm:** swap Alpha and Gamma in the seed order
+    on either engine and the picked card swaps too. The probe
+    asserts BY printing-id (Rust) and BY name (Python) that both
+    engines picked the same physical card -- this catches:
+
+      * A regression in Rust's graveyard scan that flipped the
+        iteration order (e.g. picked the LAST creature instead of
+        the first) for the to-bf arm specifically. The two arms
+        share the gy-scan substrate but each carries its own
+        resolve-side arm; a regression that touched only one would
+        slip past the to-hand iterator-order probe.
+      * A regression in Python's ``legal_targets`` enumeration
+        order (e.g. accidentally sorting by name / power rather
+        than insertion).
+      * A regression in either engine's
+        ``register_and_inject_object`` / ``new_object`` that built
+        the graveyard in reverse order on this codepath.
+      * A regression in the ``_PickFirstLegalTargetAgent`` shim's
+        first-element pick.
+
+    Probe shape (seed-three / inject-and-fire-ENTERS, p0 self-recur):
+
+      1. Seed p0's graveyard with THREE distinct vanilla creature
+         cards in fixed order: Reanimator Bait Alpha -> Beta ->
+         Gamma. Distinct names so the post-drain assertion
+         identifies the picked card by name (not just count).
+      2. Inject ETB Reanimator Bear directly onto p0's bf with
+         controller=0. ENTERS dispatch fires SourceIsSelf; one
+         ``ReturnCreatureFromYourGraveyardToBattlefield`` trigger
+         lands on the stack with a target resolved deterministically
+         (Rust) or pre-chosen via the agent (Python). Note: this is
+         the SAME-controller (p0) variant; the cross-controller
+         routing contract is exercised by the I83 sibling probe.
+      3. Drain both stacks. The picked creature (Alpha on both
+         sides) moves from p0 graveyard to p0 battlefield with
+         controller=0 stamped. The reanimated Alpha ALSO fires its
+         own ENTERS dispatch -- vanilla 1/1 with no triggers, silent
+         no-op observably.
+      4. Cross-engine assert: both engines have Alpha on p0 bf
+         (controller=0), Beta + Gamma still in p0 graveyard in
+         their original insertion order, ETB Reanimator Bear still
+         on p0 bf as the source.
+
+    Out of scope:
+
+      * The empty-graveyard silent-skip case -- exercised by the
+        sibling empty-gy to-bf probe.
+      * The single-creature happy-path / cross-controller routing
+        -- exercised by the canonical I83 cross-controller probe.
+      * Pick-second / pick-last shims -- the contract pinned here
+        is "first-in-insertion-order" on both engines; alternate
+        picks would be a different probe (and would currently fail
+        because Rust hardcodes first-in-order, no agent-side
+        override).
+      * Rider widenings (or_enchantment, or_artifact) -- carry
+        their own probes; the iterator-order pick contract is
+        identical across riders, but verifying the rider-widened
+        legal_targets pool is a separate axis.
+      * Chained ETB triggers on the reanimated creature -- bait is
+        deliberately vanilla so the chained-ETB surface stays
+        out of scope; that compositional probe would be a separate
+        slice.
+
+    Expected post-dispatch + post-drain state on BOTH engines:
+
+      * Reanimator Bait Alpha on p0 bf (reanimated; controller=0).
+      * Reanimator Bait Beta + Gamma still in p0 graveyard, in
+        original insertion order.
+      * ETB Reanimator Bear still on p0 bf (the source;
+        controller=0).
+      * Lives unchanged on both seats.
+      * No residual stack.
+    """
+    from mtg_bot.parity.cross_engine import (
+        CardDef, DeckSpec, build_python_state, build_rust_state,
+    )
+    from tests.parity._picker_shims import _PickFirstLegalTargetAgent
+
+    # Three distinct vanilla creatures for the gy seed. Distinct
+    # names + distinct mana shapes so a name / cost confusion would
+    # surface on the post-drain assertion.
+    bait_alpha = CardDef(
+        name="Reanimator Bait Alpha",
+        card_type="Creature",
+        mana_cost_generic=1,
+        mana_cost_colored=(("G", 1),),
+        power=1,
+        toughness=1,
+    )
+    bait_beta = CardDef(
+        name="Reanimator Bait Beta",
+        card_type="Creature",
+        mana_cost_generic=2,
+        mana_cost_colored=(("U", 1),),
+        power=2,
+        toughness=2,
+    )
+    bait_gamma = CardDef(
+        name="Reanimator Bait Gamma",
+        card_type="Creature",
+        mana_cost_generic=3,
+        mana_cost_colored=(("R", 1),),
+        power=3,
+        toughness=3,
+    )
+    reanimator_bear = CardDef(
+        name="ETB Reanimator Bear (multi-gy probe)",
+        card_type="Creature",
+        mana_cost_generic=2,
+        mana_cost_colored=(("B", 1),),
+        power=2,
+        toughness=2,
+        triggered_abilities=(
+            {
+                "event": "enters",
+                "predicate": {"kind": "source_is_self"},
+                "effect": {
+                    "kind": "return_creature_from_your_graveyard_to_battlefield",
+                },
+            },
+        ),
+    )
+    spec = DeckSpec(
+        card_defs=(bait_alpha, bait_beta, bait_gamma, reanimator_bear),
+        p0_library=(),
+        p1_library=(),
+    )
+    py_state = build_python_state(spec)
+    rust_state = build_rust_state(spec)
+
+    # ---- Rust side ----
+    ZONE_BATTLEFIELD = 2
+    ZONE_GRAVEYARD = 3
+    rust_bait_alpha_dict = {
+        "name": "Reanimator Bait Alpha",
+        "card_types": ["Creature"],
+        "mana_cost": {"generic": 1, "G": 1},
+        "effects": [],
+        "power": 1,
+        "toughness": 1,
+    }
+    rust_bait_beta_dict = {
+        "name": "Reanimator Bait Beta",
+        "card_types": ["Creature"],
+        "mana_cost": {"generic": 2, "U": 1},
+        "effects": [],
+        "power": 2,
+        "toughness": 2,
+    }
+    rust_bait_gamma_dict = {
+        "name": "Reanimator Bait Gamma",
+        "card_types": ["Creature"],
+        "mana_cost": {"generic": 3, "R": 1},
+        "effects": [],
+        "power": 3,
+        "toughness": 3,
+    }
+    rust_reanimator_dict = {
+        "name": "ETB Reanimator Bear (multi-gy probe)",
+        "card_types": ["Creature"],
+        "mana_cost": {"generic": 2, "B": 1},
+        "effects": [],
+        "power": 2,
+        "toughness": 2,
+        "triggered_abilities": [
+            {
+                "event": "enters",
+                "predicate": {"kind": "source_is_self"},
+                "effect": {
+                    "kind": "return_creature_from_your_graveyard_to_battlefield",
+                },
+            }
+        ],
+    }
+    rust_p0_life_before = rust_state.get_life(0)
+    rust_p1_life_before = rust_state.get_life(1)
+    # Seed p0's graveyard in fixed order: Alpha -> Beta -> Gamma.
+    # Capture the OBJECT ids returned by register_and_inject_object
+    # so the post-drain assertion can identify the picked card
+    # uniquely.
+    rust_bait_alpha_id = rust_state.register_and_inject_object(
+        rust_bait_alpha_dict, 0, ZONE_GRAVEYARD,
+    )
+    rust_bait_beta_id = rust_state.register_and_inject_object(
+        rust_bait_beta_dict, 0, ZONE_GRAVEYARD,
+    )
+    rust_bait_gamma_id = rust_state.register_and_inject_object(
+        rust_bait_gamma_dict, 0, ZONE_GRAVEYARD,
+    )
+    assert rust_state.graveyard_sizes[0] == 3, (
+        f"Rust: p0 gy seed should hold 3 creatures pre-dispatch; "
+        f"got graveyard_size={rust_state.graveyard_sizes[0]}"
+    )
+    # Inject the reanimator-bear -> fires ENTERS. The trigger lands
+    # on the stack with its target resolved deterministically (Rust
+    # scans the gy and finds Alpha as the first creature).
+    rust_state.register_and_inject_object(
+        rust_reanimator_dict, 0, ZONE_BATTLEFIELD,
+    )
+    assert rust_state.stack_size() == 1, (
+        "Rust: ETB Reanimator Bear's arrival should fire "
+        "SourceIsSelf ENTERS and land "
+        "ReturnCreatureFromYourGraveyardToBattlefield on the stack. "
+        f"Got stack_size={rust_state.stack_size()}"
+    )
+
+    # ---- Python side ----
+    from mtg_bot.actions import _trigger_etb_abilities
+    from mtg_bot.cards.base import CardPrinting, ManaCost
+    from mtg_bot.effects.base import TriggeredAbility
+    from mtg_bot.effects.generic.graveyard import (
+        ReturnCreatureFromYourGraveyardToBattlefield,
+    )
+    from mtg_bot.effects.predicates import Event, IsSelf
+    from mtg_bot.game import Zone
+
+    bait_alpha_printing = CardPrinting(
+        name="Reanimator Bait Alpha",
+        mana_cost_str="",
+        mana_cost=ManaCost(generic=1, colored=(("G", 1),)),
+        type_line="Creature",
+        supertypes=(),
+        card_types=("Creature",),
+        subtypes=(),
+        power=1,
+        toughness=1,
+        produces=frozenset(),
+    )
+    bait_beta_printing = CardPrinting(
+        name="Reanimator Bait Beta",
+        mana_cost_str="",
+        mana_cost=ManaCost(generic=2, colored=(("U", 1),)),
+        type_line="Creature",
+        supertypes=(),
+        card_types=("Creature",),
+        subtypes=(),
+        power=2,
+        toughness=2,
+        produces=frozenset(),
+    )
+    bait_gamma_printing = CardPrinting(
+        name="Reanimator Bait Gamma",
+        mana_cost_str="",
+        mana_cost=ManaCost(generic=3, colored=(("R", 1),)),
+        type_line="Creature",
+        supertypes=(),
+        card_types=("Creature",),
+        subtypes=(),
+        power=3,
+        toughness=3,
+        produces=frozenset(),
+    )
+    reanimator_printing = CardPrinting(
+        name="ETB Reanimator Bear (multi-gy probe)",
+        mana_cost_str="",
+        mana_cost=ManaCost(generic=2, colored=(("B", 1),)),
+        type_line="Creature",
+        supertypes=(),
+        card_types=("Creature",),
+        subtypes=(),
+        power=2,
+        toughness=2,
+        produces=frozenset(),
+        triggered_abilities=(
+            TriggeredAbility(
+                event=Event.ENTERS,
+                predicate=IsSelf(),
+                effect=ReturnCreatureFromYourGraveyardToBattlefield(),
+            ),
+        ),
+    )
+
+    # First-legal-target shim on p0 -- mirrors Rust's iterator-order
+    # graveyard scan (the canonical contract for this bridge arm).
+    py_state.players[0].agent = _PickFirstLegalTargetAgent()
+
+    # Seed p0's graveyard in the SAME insertion order as Rust:
+    # Alpha -> Beta -> Gamma.
+    py_bait_alpha = py_state.new_object(
+        bait_alpha_printing, owner_id=0, zone=Zone.GRAVEYARD,
+    )
+    py_state.players[0].graveyard.append(py_bait_alpha)
+    py_bait_beta = py_state.new_object(
+        bait_beta_printing, owner_id=0, zone=Zone.GRAVEYARD,
+    )
+    py_state.players[0].graveyard.append(py_bait_beta)
+    py_bait_gamma = py_state.new_object(
+        bait_gamma_printing, owner_id=0, zone=Zone.GRAVEYARD,
+    )
+    py_state.players[0].graveyard.append(py_bait_gamma)
+    assert len(py_state.players[0].graveyard) == 3
+
+    py_p0_bf_before = len(
+        [o for o in py_state.battlefield if o.controller_id == 0]
+    )
+    py_p1_bf_before = len(
+        [o for o in py_state.battlefield if o.controller_id == 1]
+    )
+    py_reanimator = py_state.new_object(
+        reanimator_printing, owner_id=0, zone=Zone.BATTLEFIELD,
+    )
+    py_reanimator.summoning_sick = False
+    py_reanimator.tapped = False
+    py_reanimator.damage = 0
+    py_reanimator.etb_timestamp = py_state.next_timestamp
+    py_state.next_timestamp += 1
+    py_state.battlefield.append(py_reanimator)
+    py_p0_life_before = py_state.players[0].life
+    py_p1_life_before = py_state.players[1].life
+    _trigger_etb_abilities(py_state, py_reanimator)
+    assert len(py_state.stack) == 1, (
+        "Python: ETB Reanimator Bear's arrival should fire IsSelf "
+        "ENTERS and land "
+        "ReturnCreatureFromYourGraveyardToBattlefield on the stack. "
+        f"Got stack size={len(py_state.stack)}"
+    )
+
+    # ---- Drain both stacks, then compare iterator-order parity ----
+    _drain_stack_both(py_state, rust_state)
+
+    # Stacks empty post-drain.
+    assert rust_state.stack_size() == 0
+    assert len(py_state.stack) == 0
+
+    # Per-engine post-drain (Rust): TWO creatures still in p0 gy
+    # (Beta + Gamma in original insertion order), Alpha now on
+    # p0 bf alongside the source = bf grew by 2 from baseline.
+    assert rust_state.graveyard_sizes[0] == 2, (
+        f"Rust: p0 gy should retain 2 creatures (Beta + Gamma); "
+        f"got graveyard_size={rust_state.graveyard_sizes[0]}"
+    )
+    rust_gy_snap = rust_state.graveyard_snapshot(0)
+    rust_gy_ids = [int(d["id"]) for d in rust_gy_snap]
+    assert rust_gy_ids == [rust_bait_beta_id, rust_bait_gamma_id], (
+        f"Rust: gy should retain Beta then Gamma (object ids "
+        f"{rust_bait_beta_id}, {rust_bait_gamma_id}) in original "
+        f"insertion order; got ids={rust_gy_ids}"
+    )
+    rust_bf_snap = rust_state.battlefield_snapshot()
+    rust_p0_bf_objs = [
+        d for d in rust_bf_snap if d["controller_id"] == 0
+    ]
+    rust_p0_bf_names = sorted(
+        d["printing_name"] for d in rust_p0_bf_objs
+    )
+    assert rust_p0_bf_names == [
+        "ETB Reanimator Bear (multi-gy probe)",
+        "Reanimator Bait Alpha",
+    ], (
+        f"Rust: p0 bf should hold the source AND reanimated Alpha; "
+        f"got {rust_p0_bf_names}"
+    )
+    # Confirm the reanimated Alpha is identified by object id (the
+    # iterator-order pick contract).
+    rust_alpha_on_bf = [
+        d for d in rust_p0_bf_objs
+        if d["printing_name"] == "Reanimator Bait Alpha"
+    ]
+    assert len(rust_alpha_on_bf) == 1
+    assert int(rust_alpha_on_bf[0]["id"]) == rust_bait_alpha_id, (
+        f"Rust: reanimated bf object should be Alpha (id "
+        f"{rust_bait_alpha_id}, the first-inserted gy creature); "
+        f"got id={int(rust_alpha_on_bf[0]['id'])}"
+    )
+    # Both p0 bf objects controller_id=0.
+    for d in rust_p0_bf_objs:
+        assert d["controller_id"] == 0, (
+            f"Rust: p0 bf object {d['printing_name']} should be "
+            f"controller=0; got {d['controller_id']}"
+        )
+    # P1 zones untouched.
+    assert rust_state.battlefield_sizes[1] == 0
+    assert rust_state.graveyard_sizes[1] == 0
+
+    # Per-engine post-drain (Python): same shape on the equivalent
+    # zones.
+    assert len(py_state.players[0].graveyard) == 2, (
+        f"Python: p0 gy should retain 2 creatures (Beta + Gamma); "
+        f"got graveyard_size={len(py_state.players[0].graveyard)}"
+    )
+    py_gy_names = [
+        o.printing.name for o in py_state.players[0].graveyard
+    ]
+    assert py_gy_names == [
+        "Reanimator Bait Beta", "Reanimator Bait Gamma",
+    ], (
+        f"Python: gy should retain Beta then Gamma in original "
+        f"insertion order; got {py_gy_names}"
+    )
+    py_p0_bf_after = [
+        o for o in py_state.battlefield if o.controller_id == 0
+    ]
+    py_p0_bf_names = sorted(o.printing.name for o in py_p0_bf_after)
+    assert py_p0_bf_names == [
+        "ETB Reanimator Bear (multi-gy probe)",
+        "Reanimator Bait Alpha",
+    ], (
+        f"Python: p0 bf should hold the source AND reanimated "
+        f"Alpha; got {py_p0_bf_names}"
+    )
+    # Both p0 bf objects controller_id=0.
+    for o in py_p0_bf_after:
+        assert o.controller_id == 0, (
+            f"Python: p0 bf object {o.printing.name} should be "
+            f"controller=0; got {o.controller_id}"
+        )
+    py_p1_bf_after = [
+        o for o in py_state.battlefield if o.controller_id == 1
+    ]
+    assert len(py_p1_bf_after) == 0
+    assert len(py_state.players[1].graveyard) == 0
+
+    # Cross-engine: lives unchanged.
+    assert rust_state.get_life(0) == rust_p0_life_before
+    assert rust_state.get_life(1) == rust_p1_life_before
+    assert py_state.players[0].life == py_p0_life_before
+    assert py_state.players[1].life == py_p1_life_before
+    assert rust_state.get_life(0) == py_state.players[0].life
+    assert rust_state.get_life(1) == py_state.players[1].life
+
+    # Cross-engine zone-size parity.
+    assert rust_state.battlefield_sizes[0] == len(py_p0_bf_after)
+    assert rust_state.battlefield_sizes[1] == len(py_p1_bf_after)
+    assert (
+        rust_state.graveyard_sizes[0]
+        == len(py_state.players[0].graveyard)
+    )
+    assert (
+        rust_state.graveyard_sizes[1]
+        == len(py_state.players[1].graveyard)
+    )
+    # Bf delta from baseline: +2 on p0 (source + reanimated Alpha),
+    # 0 on p1.
+    assert (
+        rust_state.battlefield_sizes[0]
+        - 0  # baseline (build_rust_state seeds 0)
+        == len(py_p0_bf_after) - py_p0_bf_before
+    )
+
+
 # === PHASE5_PROBES_INSERT_ABOVE_THIS_LINE ===
 # New real-EoE parity probes go IMMEDIATELY ABOVE this marker.
 # Append-only convention prevents merge collisions when multiple agents add probes in parallel.
