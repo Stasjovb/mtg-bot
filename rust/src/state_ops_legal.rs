@@ -1092,6 +1092,22 @@ impl GameState {
             for (ability_index, ability) in
                 printing.activated_abilities.iter().enumerate()
             {
+                // CE20 follow-up Slice 3 (Spacecraft station-charge):
+                // tier_threshold gates usability. The source must
+                // carry at least `tier_threshold` charge counters
+                // for the ability to be activatable. Defaults to 0
+                // (no gate) for every non-Spacecraft printing —
+                // back-compat for every pre-Slice-3 caller.
+                //
+                // Ordering: tier gate fires FIRST (BEFORE tap_self /
+                // mana affordability) — a source below tier is
+                // outright inert; checking its mana / tap state is
+                // wasted work and could leak observable signal.
+                if ability.tier_threshold > 0
+                    && obj.charge_counters < ability.tier_threshold
+                {
+                    continue;
+                }
                 if ability.cost.tap_self {
                     if obj.tapped {
                         continue;

@@ -3504,8 +3504,10 @@ the forked branch.
 
 - **Out of scope** (follow-up slices, each lands with its
   dispatch counterpart in lockstep):
-  - Spacecraft station-charge specific shapes (charge counters as
-    cost, tier_threshold gate on `effective_activated_abilities`).
+  - Spacecraft station-charge specific shapes: ~~`tier_threshold`
+    gate~~ **CLOSED by I53** — see below; the charge-counter-as-cost
+    variant (`Pay N charge counters: ...`) stays deferred (no EoE
+    printing carries it).
   - Planeswalker loyalty (uses counters as cost, distinct from
     mana; needs `pay_loyalty` cost primitive).
   - Equipment equip costs (specific cost shape + target).
@@ -3770,6 +3772,94 @@ the forked branch.
     sacrifices. Dies-event wiring landed in ETB Slice 5 (commit
     2fd9aa31) but the SBA-destroy site is the only existing
     dispatch — wiring sacrifice into Dies is a separate slice.
+
+### I53. `ActivatedAbility.tier_threshold: i32 = 0` extends the substrate with a usability gate; `GameObject.charge_counters: i32 = 0` is the per-object tracker (CE20 follow-up Slice 3 Spacecraft station-charge closure)
+
+- **Pinned by**:
+  - 15 new `tests_rust/test_activated.py` `test_tier_gate_*` /
+    `test_tier_threshold_*` / `test_charge_counters_*` /
+    `test_set_charge_counters_*` / `test_get_charge_counters_*`
+    regression pins covering parser surface (3), emission gating at
+    sub/at/above-threshold (3), apply-arm tier precheck (2), no
+    decrement (1), multi-tier independent gating (2), back-compat
+    zero-default (1), G8 independence pin (1), test-helper return
+    convention (1), test-helper unknown-id (1).
+
+- **Cost shape extension**. `ActivatedAbility` grows
+  `pub tier_threshold: i32` field (defaults `0` — no gate, back-
+  compat with every pre-Slice-3 caller). `parse_activated_ability`
+  accepts optional `tier_threshold: int` (defaults to 0 when key
+  absent); negative values raise loud. Mirrors Python's
+  `ActivatedAbility.tier_threshold: int = 0` at `effects/base.py:447`.
+
+- **Per-object tracker**. `GameObject` grows
+  `pub charge_counters: i32` field (defaults `0`). Distinct from
+  the existing `counters: i32` slot (+1/+1 counters) — G8 multi-kind
+  counter open gap stays as a separate concern; the two fields are
+  observably independent. Test-helpers `set_charge_counters(obj_id,
+  value)` + `get_charge_counters(obj_id) -> Option<i32>` exposed via
+  pyo3 (mirrors `force_set_summoning_sick`'s test-helper
+  convention).
+
+- **Tier gate is a USABILITY gate, NOT a cost**. The source's
+  `charge_counters` is COMPARED against `tier_threshold` at
+  `legal_decisions` emission AND at apply-time precheck; the
+  activation does NOT decrement charge counters (sub-tier
+  activations are simply unavailable). Pinned by
+  `test_tier_gate_does_not_decrement_charge_counters` and
+  `test_tier_gate_apply_at_threshold_succeeds`.
+
+- **Emission gate ordering** (`state_ops_legal.rs:1099+`): the
+  tier check fires FIRST in the per-ability loop, before
+  `tap_self` (already-tapped + sickness) and before
+  `pool_can_cover` (mana affordability). A sub-tier source is
+  outright inert; checking its mana / tap state is wasted work and
+  could leak observable signal (e.g. emission count varying by
+  pool state under a sub-tier source).
+
+- **Apply-arm gate ordering** (`state_ops_actions.rs:557+`): Phase
+  3a (NEW) runs BEFORE Phase 3 (tap precheck), Phase 4 (mana pay),
+  Phase 5 (tap commit), Phase 5b (sacrifice commit), and Phase 6
+  (effect dispatch). A direct (bypass-emission) caller submitting
+  a sub-tier activation raises with `below tier threshold` BEFORE
+  any state mutation.
+
+- **Multi-tier shape**. A printing can carry multiple
+  ActivatedAbility entries with different `tier_threshold`s
+  (Eternity Elevator's shape: tier-3 + tier-10 + tier-20
+  abilities). Each entry gates independently in the
+  per-ability emission walk. Pinned by
+  `test_tier_gate_multi_tier_independent_gating` and
+  `test_tier_gate_multi_tier_above_both_emits_both`.
+
+- **GameObject construction sites updated**. The new
+  `charge_counters: 0` initializer added to 6 `GameObject` literal-
+  construction sites: `state.rs::make_object`,
+  `state_ops_setup.rs`, `state_ops_deck.rs`,
+  `state_ops_resolve.rs` (token creation + clone-target token +
+  register_and_inject_object). The default-0 value is the back-
+  compat shape — every pre-Slice-3 fixture-state object reads its
+  charge_counters as 0 and the tier gate passes for any printing
+  with `tier_threshold=0` (i.e. every pre-Slice-3 printing).
+
+- **Out of scope (deferred to future slices)**:
+  - Charge-counter-as-COST variant (`Pay N charge counters: ...`).
+    No EoE printing carries this shape; a grep of the EoE pool's
+    oracle text for "Pay [0-9]+ charge counter" returns zero hits.
+    Future slice will add `ActivationCost.charge_counters: i32`
+    with a Phase 4b decrement commit if a card actually surfaces.
+  - The station mechanic that ACCRUES charge counters (tap one or
+    more crewing creatures to add charge counters). Out of scope of
+    this slice — needs a "tap multiple creatures" cost primitive
+    that's its own follow-up. Test fixtures seed charge counters
+    directly via the `set_charge_counters` test-helper.
+  - Zone-change reset of `charge_counters`. Per CR 400.7 per-object
+    state should reset when an object changes zones, but the
+    existing `counters = 0` resets at ~14 sites don't yet have a
+    `charge_counters = 0` companion. The gap is benign for
+    Slice 3's test surface (objects stay on bf throughout each
+    test); a future cleanup slice will add the resets in lockstep
+    with sealing the Spacecraft cost-pay variant.
 
 ### I49. Legacy `etb_effects: Vec<Effect>` bridged to `triggered_abilities` at parse time + cross_engine.py `printing_dict` wires `triggered_abilities` through to Rust's `register_and_inject_object` (Slice 3 of ETB-trigger closure)
 

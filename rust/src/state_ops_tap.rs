@@ -180,5 +180,48 @@ impl GameState {
         })
         .unwrap_or(false)
     }
+
+    /// **CE20 follow-up Slice 3 — Spacecraft station-charge.**
+    /// Test-only side-channel: force-set the `charge_counters` value
+    /// on the battlefield permanent with `obj_id`. Returns `true` if
+    /// the state changed (object was found and value differed),
+    /// `false` otherwise.
+    ///
+    /// Why this exists: Spacecraft printings accrue charge counters
+    /// via the "station" mechanic (tap one or more crewing creatures
+    /// to add charge counters); the station mechanic itself is a
+    /// follow-up slice. For Slice 3 test fixtures need to seed
+    /// charge counters directly so tier-gate emission + apply paths
+    /// can be exercised without driving a station-step pipeline.
+    ///
+    /// Mirrors `force_set_summoning_sick`'s test-helper convention —
+    /// not a production primitive; real charge-counter changes will
+    /// flow through a future `Effect::AddChargeCounters` arm + the
+    /// station mechanic's apply path.
+    fn set_charge_counters(&mut self, obj_id: u32, value: i32) -> bool {
+        mutate_battlefield_obj(self, obj_id, |obj| {
+            if obj.charge_counters == value {
+                false
+            } else {
+                obj.charge_counters = value;
+                true
+            }
+        })
+        .unwrap_or(false)
+    }
+
+    /// Read the `charge_counters` slot on a battlefield permanent.
+    /// Returns `None` if the object isn't on any battlefield. Pairs
+    /// with `set_charge_counters` for test assertions.
+    fn get_charge_counters(&self, obj_id: u32) -> Option<i32> {
+        for player in &self.players {
+            for obj in player.battlefield.iter() {
+                if obj.id == obj_id {
+                    return Some(obj.charge_counters);
+                }
+            }
+        }
+        None
+    }
 }
 
