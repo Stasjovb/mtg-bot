@@ -13100,3 +13100,262 @@ def test_cross_engine_real_eoe_nebula_dragon_etb_damage_any_target_parity(
     # Stacks empty on both sides.
     assert rust_state.stack_size() == 0
     assert len(py_state.stack) == 0
+
+
+def test_cross_engine_real_eoe_debris_field_crusher_etb_damage_any_target_parity(
+    parity_smoke,
+):
+    """Probe: Debris Field Crusher (EoE) ETB ``deal 3 damage to any
+    target`` parity -- adds the Artifact-typed-carrier × targeted-
+    damage cross-product axis to the bridge.
+
+    Oracle text in ``data/edge_of_eternities.json``:
+
+        "When this Spacecraft enters, it deals 3 damage to any target.
+         Station (...)
+         8+ | Flying
+         {1}{R}: This Spacecraft gets +2/+0 until end of turn."
+
+    Same predicate / effect shape as the Nebula Dragon probe (Slice 2
+    on this branch's history): ``SourceIsSelf`` ENTERS predicate +
+    ``DealDamageAnyTarget(3)`` effect. The DISTINCT axis this probe
+    adds is the trigger-carrier's card type — Debris Field Crusher
+    registers as ``card_types=["Artifact"]`` (a Spacecraft is a
+    structural subtype of Artifact, not a separate top-level card
+    type). Every prior cross-engine ANY-TARGET probe in this
+    branch's history (Nebula Dragon) used a Creature-typed carrier;
+    every prior Artifact-typed carrier (Cryogen Relic) used an
+    UNTARGETED effect (DrawCards). This probe is the first to
+    register the Artifact × DealDamageAnyTarget combination on
+    the cross-engine bridge.
+
+    Predicate decomposition (identical to Nebula Dragon / Cryogen
+    Relic / Germinating Wurm / Quantum Riddler):
+
+        SourceIsSelf
+
+    Effect: ``deal_damage_any_target(amount=3)`` -- already on the
+    bridge from this branch's prior commit.
+
+    **Target-pick parity contract** (mirrors the Nebula Dragon
+    probe's contract): Rust's
+    ``Effect::DealDamageAnyTarget`` arm picks the target
+    deterministically at apply_effect time (scan defender's bf for
+    first creature, else defender-player). Python picks at PUSH time
+    via the controller's agent in ``push_triggered_ability``. The
+    probe drives a scenario where p1 has NO creatures on its bf, so
+    both engines pick the only opponent-side target (p1 player).
+
+    Probe shape (inject-and-fire-ENTERS, identical to Nebula Dragon):
+
+      1. Inject Debris Field Crusher onto p0's bf via
+         ``register_and_inject_object`` (Rust) / new_object + bf
+         append + ``_trigger_etb_abilities`` (Python). Both engines
+         dispatch ENTERS; the SourceIsSelf predicate matches; one
+         DealDamageAnyTarget lands on the stack.
+
+      2. Drain. Rust scans p1's bf (empty), falls back to p1-player.
+         Python's ``_PickFirstOpponentTargetAgent`` filters
+         legal_targets to opponent-side and picks p1-player as the
+         only legal opponent target.
+
+      3. Both engines: p1 life 20 -> 17. p0 life unchanged.
+
+    Out of scope:
+
+      * Station ability (tap-another-creature cost + charge-counter
+        effect) -- activated-ability cost shape isn't on the bridge;
+        the probe injects with zero charge counters and never
+        triggers the 8+ flip.
+      * 8+ Flying static (tier gate) -- the tier threshold isn't
+        reached, so the static is dormant; not exercised here.
+      * Spacecraft -> Artifact-Creature flip at 8+ charge counters
+        -- the probe stays well below threshold so the flip never
+        triggers.
+      * Activated pump ability ({1}{R}: +2/+0) -- mana-payment +
+        UEOT pump aren't on the bridge today.
+
+    Expected post-dispatch + post-drain state on BOTH engines:
+
+      * Debris Field Crusher on p0's bf (with the Artifact
+        card_type intact; no flip).
+      * p0 life: unchanged at 20.
+      * p1 life: 20 -> 17 (-3 from the ETB any-target burn).
+      * No residual stack.
+    """
+    from mtg_bot.agents import Agent
+    from mtg_bot.parity.cross_engine import (
+        CardDef, DeckSpec, build_python_state, build_rust_state,
+    )
+
+    debris_field_crusher = CardDef(
+        name="Debris Field Crusher",
+        card_type="Artifact",
+        mana_cost_generic=4,
+        mana_cost_colored=(("R", 1),),
+        # Spacecraft P/T are dormant below tier threshold; the
+        # printing carries them for static-on-flip but they don't
+        # observe here. (1/5 raw printed; the 8+ "Flying / artifact
+        # creature" is a separate static the probe doesn't exercise.)
+        power=1,
+        toughness=5,
+        triggered_abilities=(
+            {
+                "event": "enters",
+                "predicate": {"kind": "source_is_self"},
+                "effect": {
+                    "kind": "deal_damage_any_target",
+                    "amount": 3,
+                },
+            },
+        ),
+    )
+    spec = DeckSpec(
+        card_defs=(debris_field_crusher,),
+        # Libraries empty-but-for-symmetry: probe injects directly
+        # onto bf so libraries aren't observed.
+        p0_library=(),
+        p1_library=(),
+    )
+    py_state = build_python_state(spec)
+    rust_state = build_rust_state(spec)
+
+    # ---- Rust side ----
+    ZONE_BATTLEFIELD = 2
+    rust_dfc_dict = {
+        "name": "Debris Field Crusher",
+        "card_types": ["Artifact"],
+        "mana_cost": {"generic": 4, "R": 1},
+        "effects": [],
+        "power": 1,
+        "toughness": 5,
+        "triggered_abilities": [
+            {
+                "event": "enters",
+                "predicate": {"kind": "source_is_self"},
+                "effect": {
+                    "kind": "deal_damage_any_target",
+                    "amount": 3,
+                },
+            }
+        ],
+    }
+    rust_p0_life_before = rust_state.get_life(0)
+    rust_p1_life_before = rust_state.get_life(1)
+    rust_dfc_id = rust_state.register_and_inject_object(
+        rust_dfc_dict, 0, ZONE_BATTLEFIELD
+    )
+    assert rust_state.stack_size() == 1, (
+        "Rust: Debris Field Crusher's own arrival should fire the "
+        "SourceIsSelf ENTERS trigger and land DealDamageAnyTarget on "
+        f"the stack. Got stack_size={rust_state.stack_size()}"
+    )
+
+    # ---- Python side ----
+    from mtg_bot.actions import _trigger_etb_abilities
+    from mtg_bot.cards.base import CardPrinting, ManaCost
+    from mtg_bot.effects.base import TriggeredAbility
+    from mtg_bot.effects.generic.damage import DealDamageAnyTarget
+    from mtg_bot.effects.predicates import Event, IsSelf
+    from mtg_bot.game import Zone
+
+    dfc_printing = CardPrinting(
+        name="Debris Field Crusher",
+        mana_cost_str="",
+        mana_cost=ManaCost(generic=4, colored=(("R", 1),)),
+        type_line="Artifact",
+        supertypes=(),
+        # Pure Artifact-typed carrier (no Creature in card_types).
+        # The Spacecraft subtype is a structural detail not exercised
+        # here; the probe is testing the registration + dispatch
+        # surface on an Artifact-typed carrier specifically.
+        card_types=("Artifact",),
+        subtypes=(),
+        power=1,
+        toughness=5,
+        produces=frozenset(),
+        triggered_abilities=(
+            TriggeredAbility(
+                event=Event.ENTERS,
+                predicate=IsSelf(),
+                effect=DealDamageAnyTarget(amount=3),
+            ),
+        ),
+    )
+
+    # Custom agent: mirror Rust's defender-anchored target pick. See
+    # the Nebula Dragon probe's docstring for the contract.
+    class _PickFirstOpponentTargetAgent(Agent):
+        """Pick the first opponent-controlled / opponent-player
+        target.
+
+        Mirrors Rust's ``Effect::DealDamageAnyTarget`` deterministic
+        target selection: scan defender's bf for first creature, else
+        defender-player. For a probe driven by p0 (active_player) on
+        an empty p1 bf, both engines pick the p1 player.
+        """
+
+        def choose_target(self, state, player_id, legal_targets):
+            if not legal_targets:
+                return None
+            for kind, target_id in legal_targets:
+                if kind == "player":
+                    if target_id != player_id:
+                        return (kind, target_id)
+                else:
+                    obj = next(
+                        (
+                            o
+                            for o in state.battlefield
+                            if o.id == target_id
+                        ),
+                        None,
+                    )
+                    if obj is not None and obj.controller_id != player_id:
+                        return (kind, target_id)
+            return legal_targets[0]
+
+    py_state.players[0].agent = _PickFirstOpponentTargetAgent()
+
+    py_dfc = py_state.new_object(
+        dfc_printing, owner_id=0, zone=Zone.BATTLEFIELD,
+    )
+    # Artifacts don't have summoning-sick semantics the same way
+    # creatures do, but matching the prior Cryogen-Relic probe's
+    # injection convention keeps the GameObject fields tidy.
+    py_dfc.summoning_sick = False
+    py_dfc.tapped = False
+    py_dfc.damage = 0
+    py_dfc.etb_timestamp = py_state.next_timestamp
+    py_state.next_timestamp += 1
+    py_state.battlefield.append(py_dfc)
+    py_p0_life_before = py_state.players[0].life
+    py_p1_life_before = py_state.players[1].life
+    _trigger_etb_abilities(py_state, py_dfc)
+    assert len(py_state.stack) == 1, (
+        "Python: Debris Field Crusher's own arrival should fire the "
+        "IsSelf ENTERS trigger and land DealDamageAnyTarget on the "
+        f"stack. Got stack size={len(py_state.stack)}"
+    )
+
+    # ---- Drain both stacks, then compare ----
+    _drain_stack_both(py_state, rust_state)
+
+    # Post-drain: -3 life on p1 from the ETB any-target burn. p0
+    # unchanged (controller-immune; target picked from p1 side).
+    assert rust_state.get_life(0) == rust_p0_life_before, (
+        f"Rust p0 life should be unchanged ({rust_p0_life_before}); "
+        f"got {rust_state.get_life(0)}"
+    )
+    assert rust_state.get_life(1) == rust_p1_life_before - 3, (
+        f"Rust p1 life should be {rust_p1_life_before - 3} "
+        f"(-3 from the any-target burn); got {rust_state.get_life(1)}"
+    )
+    assert py_state.players[0].life == py_p0_life_before
+    assert py_state.players[1].life == py_p1_life_before - 3
+    # Cross-engine: same post-drain life totals on both seats.
+    assert rust_state.get_life(0) == py_state.players[0].life
+    assert rust_state.get_life(1) == py_state.players[1].life
+    # Stacks empty on both sides.
+    assert rust_state.stack_size() == 0
+    assert len(py_state.stack) == 0
