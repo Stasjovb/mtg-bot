@@ -2477,6 +2477,27 @@ pub struct CardPrinting {
     /// `None`-of-PyAny which the same `match` we use for
     /// `triggered_abilities` maps to `Vec::new()`).
     pub activated_abilities: Vec<ActivatedAbility>,
+    /// **CE20 Slice 5 (Walker loyalty — `starting_loyalty` ETB seeding).**
+    /// Printed starting loyalty for Planeswalker printings (CR 606.5b
+    /// — "as a planeswalker enters the battlefield, its controller
+    /// puts a number of loyalty counters on it equal to the number
+    /// printed in its lower right corner"). Non-walker printings
+    /// carry `0` (the default — no observable effect since the
+    /// loyalty-counter slot is only read by the walker SBA pass and
+    /// the loyalty cost gate, both gated on `card_types.contains(
+    /// "Planeswalker")`).
+    ///
+    /// **Stamped at ETB time** (every bf-entry call site) — see
+    /// `crate::state::seed_starting_loyalty_for_etb`. For non-walker
+    /// printings the helper is a no-op; for walker printings whose
+    /// `loyalty_counters` is 0 (the freshly-cast shape) the helper
+    /// stamps the printed value.
+    ///
+    /// **EoE pool**: 1 walker printing (Tezzeret, Cruel Captain).
+    /// Tezzeret's printed loyalty is 4.
+    ///
+    /// Mirrors Python's `CardPrinting.starting_loyalty: int = 0`.
+    pub starting_loyalty: i32,
 }
 
 /// Plain Rust container for the printings table. Held behind an
@@ -4084,6 +4105,20 @@ pub fn parse_printing(dict: &Bound<'_, PyDict>) -> PyResult<CardPrinting> {
         &mana_produced,
         activated_abilities,
     )?;
+    // CE20 Slice 5 (Walker loyalty — starting_loyalty ETB seeding).
+    // `starting_loyalty` is optional; defaults to 0 when the key is
+    // absent. Stored as i32 (matches `GameObject.loyalty_counters`
+    // shape). Negative values are accepted but observable only if a
+    // pathological registry dict supplies one — production walkers
+    // always print a non-negative starting loyalty.
+    let starting_loyalty: i32 = match dict.get_item("starting_loyalty")? {
+        Some(sl) => sl.extract::<i32>().map_err(|e| {
+            PyValueError::new_err(format!(
+                "starting_loyalty must be an integer (got: {e})"
+            ))
+        })?,
+        None => 0,
+    };
     Ok(CardPrinting {
         name: Arc::from(name),
         mana_cost,
@@ -4096,6 +4131,7 @@ pub fn parse_printing(dict: &Bound<'_, PyDict>) -> PyResult<CardPrinting> {
         etb_effects,
         triggered_abilities,
         activated_abilities,
+        starting_loyalty,
     })
 }
 

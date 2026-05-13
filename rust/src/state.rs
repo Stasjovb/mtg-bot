@@ -243,6 +243,51 @@ pub fn reserve_etb_timestamp(state: &mut GameState) -> u32 {
     ts
 }
 
+/// **CE20 Slice 5 (Walker loyalty — `starting_loyalty` ETB seeding).**
+/// Per CR 606.5b, a planeswalker enters the battlefield with a number
+/// of loyalty counters equal to its printed starting loyalty. This
+/// helper looks up `printing.starting_loyalty` and stamps it onto the
+/// freshly-entering object's `loyalty_counters` field.
+///
+/// **No-op conditions**:
+///   - the printing's `card_types` doesn't contain `"Planeswalker"`
+///     (the field has no observable effect on non-walkers);
+///   - the registry lookup fails (defensive — should never happen
+///     for a properly-registered printing, but a missing entry
+///     leaves the field unchanged rather than panicking);
+///   - the printing's `starting_loyalty == 0` (no observable change
+///     to the default `obj.loyalty_counters == 0`).
+///
+/// **Idempotency**: callers may invoke this helper multiple times on
+/// the same object; the second invocation OVERWRITES the field (it's
+/// not an add). Today every caller stamps exactly once per bf-entry,
+/// so the overwrite case is unreachable in practice — but the
+/// semantics are documented for safety.
+///
+/// **Designed for ETB call sites**. The canonical bf-entry primitive
+/// (`move_source_post_resolve` in `state_ops_resolve.rs`) and every
+/// other ETB-stamping site that hosts a freshly-cast permanent calls
+/// this helper alongside `reserve_etb_timestamp`. Synthetic state
+/// fixtures (test helpers that inject a walker directly onto the bf
+/// without going through cast) keep using the explicit
+/// `set_loyalty_counters` test helper.
+pub fn seed_starting_loyalty_for_etb(
+    state: &GameState,
+    obj: &mut GameObject,
+) {
+    let Some(printing) = state.registry.lookup(obj.printing_id) else {
+        return;
+    };
+    let is_walker = printing
+        .card_types
+        .iter()
+        .any(|t| t == "Planeswalker");
+    if !is_walker {
+        return;
+    }
+    obj.loyalty_counters = printing.starting_loyalty;
+}
+
 impl GameObject {
     /// Sum of UEOT `PowerToughnessBonus` power deltas on this
     /// object. Used by combat-damage / SBA / parity readers to
@@ -1699,6 +1744,7 @@ pub fn make_synthetic_state(
         etb_effects: Vec::new(),
         triggered_abilities: Vec::new(),
         activated_abilities: forest_activated,
+        starting_loyalty: 0,
     });
     // Grizzly Bears: no mana_produced → bridge is a no-op (returns
     // Vec::new() unchanged).
@@ -1718,6 +1764,7 @@ pub fn make_synthetic_state(
         etb_effects: Vec::new(),
         triggered_abilities: Vec::new(),
         activated_abilities: Vec::new(),
+        starting_loyalty: 0,
     });
     // Oversimplification: real Llanowar Elves has the activated
     // ability "{T}: Add {G}". The synthetic state's first-slice
@@ -1748,6 +1795,7 @@ pub fn make_synthetic_state(
         etb_effects: Vec::new(),
         triggered_abilities: Vec::new(),
         activated_abilities: elves_activated,
+        starting_loyalty: 0,
     });
     let registry = builder.snapshot();
 

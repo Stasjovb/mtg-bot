@@ -310,6 +310,11 @@ fn move_source_post_resolve(state: &mut GameState, source_obj_id: u32) -> Option
     // fingerprint only sort-reads `etb_timestamp` for bf entries.
     if dest_zone == ZONE_BATTLEFIELD {
         obj.etb_timestamp = crate::state::reserve_etb_timestamp(state);
+        // CE20 Slice 5 (Walker loyalty — `starting_loyalty` ETB
+        // seeding). CR 606.5b: a planeswalker enters with loyalty
+        // counters equal to its printed starting loyalty. No-op for
+        // non-walker printings.
+        crate::state::seed_starting_loyalty_for_etb(state, &mut obj);
     }
     let player = &mut state.players[controller as usize];
     let dest = match dest_zone {
@@ -2500,6 +2505,25 @@ fn apply_effect(
             // zone=ZONE_BATTLEFIELD.
             // CE4 closure: reserve ETB timestamp before player-mut borrow.
             let etb_ts = crate::state::reserve_etb_timestamp(state);
+            // CE20 Slice 5 (Walker loyalty — starting_loyalty ETB
+            // seeding). Pre-read the printing's walker shape on the
+            // immutable registry BEFORE the player-mut borrow.
+            let starting_loyalty: i32 = {
+                let pos_gy = state.players[controller_idx]
+                    .graveyard
+                    .iter()
+                    .position(|o| o.id == target_id)
+                    .expect("target_id was just found in graveyard");
+                let pid = state.players[controller_idx].graveyard[pos_gy].printing_id;
+                match state.registry.lookup(pid) {
+                    Some(printing)
+                        if printing.card_types.iter().any(|t| t == "Planeswalker") =>
+                    {
+                        printing.starting_loyalty
+                    }
+                    _ => 0,
+                }
+            };
             let graveyard_mut: &mut Vec<GameObject> =
                 Arc::make_mut(&mut state.players[controller_idx].graveyard);
             let pos = graveyard_mut
@@ -2512,6 +2536,10 @@ fn apply_effect(
             obj.summoning_sick = true;
             obj.damage = 0;
             obj.counters = 0;
+            // CE20 Slice 5: walker reanimation — reset loyalty to
+            // printed starting value per CR 613.x (the new object is
+            // distinct from the previous one and starts fresh).
+            obj.loyalty_counters = starting_loyalty;
             obj.attached_to = None;
             obj.exiled_with_source = None;
             obj.etb_timestamp = etb_ts;
