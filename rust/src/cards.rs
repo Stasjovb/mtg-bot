@@ -2285,13 +2285,18 @@ pub struct CardPrinting {
     /// pre-CE20-Slice-1 registry dict implicitly has this empty).
     ///
     /// Mirrors Python's `CardPrinting.activated_abilities` tuple at
-    /// `src/mtg_bot/cards/base.py`. The legacy `mana_produced` field
-    /// remains the "free mana ability" hatch — a future slice will
-    /// bridge `mana_produced.is_some()` into a synthesized
-    /// `ActivatedAbility { is_mana_ability: true, ... }` entry and
-    /// retire the side-channel; until then the two paths coexist
-    /// (the legal-decisions emission walks both lists, and the
-    /// apply arm dispatches on `ability_index`).
+    /// `src/mtg_bot/cards/base.py`.
+    ///
+    /// **Post-bridge invariant (CE20 follow-up).** The legacy
+    /// `mana_produced` field is now SYNTHESIZED into a prepended
+    /// `ActivatedAbility { is_mana_ability: true, cost: tap_self+free,
+    /// effect: AddManaToPool(...) }` entry at parse time (see
+    /// `apply_mana_produced_bridge`). Both the registry dict-input
+    /// path (`parse_printing`) and the synthetic-state direct-construction
+    /// path (`state.rs`) route through the shared helper. The legacy
+    /// emission block in `state_ops_legal.rs` and the legacy
+    /// `is_legacy_mana_produced` branch in `state_ops_actions.rs` are
+    /// gone — single unified path through `activated_abilities`.
     ///
     /// Missing key in the registry dict = empty Vec (no special
     /// serde tag needed; the parser's `dict.get_item` returns
@@ -3644,6 +3649,96 @@ fn parse_mana_produced(any: Bound<'_, PyAny>) -> PyResult<Vec<String>> {
     Ok(out)
 }
 
+/// CE20 follow-up — bridge legacy `mana_produced` into a synthesized
+/// `ActivatedAbility` entry on the printing's `activated_abilities`
+/// Vec. When `mana_produced.is_some()`, prepend one synthesized
+/// entry equivalent to the pre-bridge free-mana-ability:
+///
+///   cost:   ManaCost::default() (free) + tap_self=true
+///   effect: AddManaToPool (single-color) or Sequence of AddManaToPool
+///           per color (multi-color hybrid). Aggregated by color so
+///           `mana_produced=["G","G"]` yields one AddManaToPool with
+///           amount=2.
+///   is_mana_ability: true (CR 605.1 — produces mana, doesn't target).
+///
+/// The synthesized entry is PREPENDED — `ability_index=0` continues
+/// to refer to "the free mana ability". Explicit registry-supplied
+/// `activated_abilities` entries get bumped to indices >= 1. Every
+/// pre-bridge caller of `ActivateAbility(forest_id, 0)` keeps
+/// working bit-equal.
+///
+/// Shared between `parse_printing` (dict-input registry path) and
+/// `make_synthetic_state` (the test-fixture path in `state.rs`) so
+/// both surfaces get the same bridge synthesis without duplicating
+/// the field-counting logic.
+pub fn apply_mana_produced_bridge(
+    mana_produced: &Option<Vec<String>>,
+    existing: Vec<ActivatedAbility>,
+) -> PyResult<Vec<ActivatedAbility>> {
+    let Some(symbols) = mana_produced else {
+        return Ok(existing);
+    };
+    // Build per-color amount totals in W/U/B/R/G/C order.
+    let mut counts: [(&str, i32); 6] = [
+        ("W", 0), ("U", 0), ("B", 0), ("R", 0), ("G", 0), ("C", 0),
+    ];
+    for sym in symbols {
+        let slot = match sym.as_str() {
+            "W" => &mut counts[0].1,
+            "U" => &mut counts[1].1,
+            "B" => &mut counts[2].1,
+            "R" => &mut counts[3].1,
+            "G" => &mut counts[4].1,
+            "C" => &mut counts[5].1,
+            other => {
+                // `parse_mana_produced` already rejected unknown
+                // symbols at parse time; raise loud as a paranoid
+                // double-check that also catches direct callers from
+                // `state.rs` that bypass `parse_mana_produced`.
+                return Err(PyValueError::new_err(format!(
+                    "bridge synth: unknown mana_produced symbol \
+                     {other:?}; expected W/U/B/R/G/C"
+                )));
+            }
+        };
+        *slot += 1;
+    }
+    let mut bridge_effects: Vec<Effect> = Vec::new();
+    for (color, amount) in counts.iter() {
+        if *amount > 0 {
+            bridge_effects.push(Effect::AddManaToPool {
+                color: (*color).to_string(),
+                amount: *amount,
+            });
+        }
+    }
+    let bridge_effect = if bridge_effects.len() == 1 {
+        // Single-color shape (Forest, Mountain, ...) — flat
+        // AddManaToPool matches the existing apply path 1:1.
+        bridge_effects.into_iter().next().unwrap()
+    } else {
+        // Multi-color or multi-pip shape (hybrid producers).
+        // Wrap in Sequence so apply_effect fires each entry.
+        Effect::Sequence { effects: bridge_effects }
+    };
+    let bridge_ability = ActivatedAbility {
+        cost: ActivationCost {
+            mana: ManaCost::default(),
+            tap_self: true,
+        },
+        effect: bridge_effect,
+        is_mana_ability: true,
+    };
+    // Prepend so ability_index=0 still refers to the bridged mana
+    // ability — every pre-bridge ActivateAbility(forest, 0) caller
+    // keeps working.
+    let mut bridged = Vec::with_capacity(existing.len() + 1);
+    bridged.push(bridge_ability);
+    let mut existing = existing;
+    bridged.append(&mut existing);
+    Ok(bridged)
+}
+
 pub fn parse_printing(dict: &Bound<'_, PyDict>) -> PyResult<CardPrinting> {
     let name: String = require(dict, "name")?.extract()?;
     let mana_cost = match dict.get_item("mana_cost")? {
@@ -3785,7 +3880,7 @@ pub fn parse_printing(dict: &Bound<'_, PyDict>) -> PyResult<CardPrinting> {
     // CE20 Slice 1 substrate: `activated_abilities` defaults to empty
     // Vec when absent (back-compat for every pre-CE20-Slice-1 registry
     // dict). Same parse shape as `triggered_abilities`.
-    let activated_abilities = match dict.get_item("activated_abilities")? {
+    let mut activated_abilities = match dict.get_item("activated_abilities")? {
         Some(aa_any) => {
             let mut out = Vec::new();
             for item in aa_any.try_iter()? {
@@ -3799,6 +3894,15 @@ pub fn parse_printing(dict: &Bound<'_, PyDict>) -> PyResult<CardPrinting> {
         }
         None => Vec::new(),
     };
+    // CE20 follow-up — bridge `mana_produced` into
+    // `activated_abilities`. See `apply_mana_produced_bridge` for the
+    // synthesis details. The bridge prepends one synthesized
+    // ActivatedAbility at `ability_index=0` so every pre-bridge
+    // caller of `ActivateAbility(forest_id, 0)` keeps working.
+    activated_abilities = apply_mana_produced_bridge(
+        &mana_produced,
+        activated_abilities,
+    )?;
     Ok(CardPrinting {
         name: Arc::from(name),
         mana_cost,
