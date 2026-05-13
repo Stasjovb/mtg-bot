@@ -4208,6 +4208,88 @@ the forked branch.
   - **Cross-engine smoke probe** for walker activations. Unchanged
     from I56.
 
+### I81. `Effect::CreateToken { count, token_printing_id }` controller-of-effect fix — reuses I59 transient slot; tokens enter under SOURCE'S CONTROLLER (not 1 - controller); first POSITIVE-controller audit-cleared site post-I80 (CreateToken controller-of-effect divergence closure)
+
+- **Pinned by**:
+  - 4 new `tests_rust/test_resolve.py`
+    `test_create_token_*` regression pins covering
+    cross-controller spell resolution (1: p1-controlled
+    Conscript-shape sorcery on p0's turn → tokens enter p1's
+    bf under p1's control, NOT p0's bf; verifies the
+    `battlefield_snapshot()`-reported `controller_id` field on
+    each fresh token), same-controller back-compat (1:
+    p0-controlled source still places tokens on p0's bf with
+    `controller_id == 0`), pause-variant parity (1: mirrors the
+    I64-I80 pause pin chain), and cross-controller zero-count
+    no-op (1: `count=0` short-circuits before the controller
+    resolution path, no tokens spawn anywhere).
+
+- **Rule**. CR 119.5 / 608.2 / 111.4 — an effect resolves under
+  its source's controller. CR 111.4 (the token-specific rule):
+  "A token's owner is the player under whose control it was put
+  onto the battlefield. The player who creates the token is the
+  token's controller." For a CreateToken effect, that's the
+  controller of the spell or ability that's resolving — i.e.,
+  the SOURCE's controller, not the active player.
+
+- **Pre-fix Rust behavior**. The `Effect::CreateToken` arm at
+  `state_ops_resolve.rs:2050` (pre-fix line) computed
+  `let active = state.active_player`, used both for the
+  token's `controller` field on the fresh GameObject AND for
+  the recipient battlefield Vec (`state.players[active as usize]
+  .battlefield`). Wrong when the resolving spell / triggered
+  ability has a controller != active_player. Example: on p0's
+  turn, p1 casts a Servo-Schematic-shape sorcery — pre-fix
+  the tokens entered p0's battlefield under p0's control
+  (active_player=0); post-fix they correctly enter p1's
+  battlefield under p1's control. Mirrors Python's
+  `CreateToken.resolve(state, controller_id, targets)` at
+  `effects/generic/tokens.py:202`, which builds the
+  `recipients` list from `[controller_id]`.
+
+- **Distinct from the defender-shape I59-I80 sites.** I59-I80
+  closed defender-swap-shape sites where the effect reads
+  `1 - controller` (the opponent of the source's controller).
+  CreateToken reads the SOURCE'S CONTROLLER directly — the
+  tokens belong to the player who controlled the spell that
+  made them. Sibling closure to I59 (DrawCards — controller
+  draws) and I65 (Mill — controller mills their own library),
+  where positive-controller arms were migrated to read the
+  transient slot.
+
+- **Reuses I59 substrate**. Identical preamble shape to
+  I59 / I60 / I65 / I77: `let active = state.current_resolve_source_controller
+  .unwrap_or(state.active_player);`. Both the token's
+  `controller` field stamp on each fresh GameObject AND the
+  `state.players[active as usize].battlefield` Vec selector
+  read the resolved `active` unchanged from the existing arm.
+
+- **Out of scope.** The richer CreateToken shapes
+  (CreateTokenAndAttachSelf, CreateTokenPerMulticoloredPermanent,
+  CreateTokenCopyOfTargetCreatureYouControl, the Moonlit
+  Meditation token-creation replacement, CR 614 multipliers
+  like Exalted Sunborn / Anointed Procession, the
+  end-of-combat-sacrifice flag, the `tapped` / `attacking` flag
+  bundle, and the `each_player=True` mode) are not yet plumbed
+  in the Rust arm — the first-slice surface here is the basic
+  "create N tokens of `token_printing_id` under the controller"
+  shape only. Those richer surfaces still resolve through the
+  Python path; this fix only addresses the
+  `active_player`-vs-source's-controller divergence for the
+  basic shape.
+
+- **First POSITIVE-controller audit-cleared site post-I80.**
+  After I80, the defender-swap inventory was exhausted. The
+  remaining candidates flagged by the I77 / I78 / I80 workers
+  were positive-controller arms (effects routed to the
+  source's controller directly, not the opponent). Audit
+  identified CreateToken at ~1924 as needing migration (the
+  pre-fix `state.active_player` read was load-bearing for
+  both the controller stamp AND the recipient bf), and the
+  audit at site ~5626 (`PumpTargetArtifactOrCreatureUntilEOT`)
+  confirmed it was ALREADY CORRECT via the 5-zone source-
+  finder pattern — no migration needed.
+
 ### I80. `Effect::ExileOpponentsNonlandPermanentUntilLeaves` controller-of-effect fix — reuses I59 transient slot; defender computed as `1 - controller` instead of `1 - active_player`; closes the post-I77 forward inventory of defender-shape `(1 - state.active_player)` sites
 
 - **Pinned by**:

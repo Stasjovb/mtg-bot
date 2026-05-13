@@ -2047,7 +2047,50 @@ fn apply_effect(
             if n == 0 {
                 return Ok(()); // legal no-op
             }
-            let active = state.active_player;
+            // **Controller resolution (I81 follow-up to the
+            // I59 / I60 / I63 / I64 / I65 / I66 / I67 / I68 / I69 /
+            // I70 / I71 / I72 / I73 / I74 / I75 / I76 / I77 / I78 /
+            // I79 / I80 controller-of-effect substrate).**
+            // CR 119.5 / 608.2 / 111.4: a token is created under the
+            // controller of the spell or ability that creates it —
+            // which is the SOURCE's controller, not necessarily the
+            // active player.
+            //
+            // **Why the fix.** Pre-fix this arm computed
+            // `active = state.active_player`, used both for the
+            // token's `controller` field and for which player's
+            // battlefield receives the push. Wrong when the resolving
+            // spell / triggered ability has a controller !=
+            // active_player. Example: on p0's turn, p1 casts a
+            // Servo-Schematic-shape instant — pre-fix the tokens
+            // entered under p0's control on p0's battlefield
+            // (active_player=0); post-fix they correctly enter under
+            // p1's control on p1's battlefield. Mirrors Python's
+            // `CreateToken.resolve(state, controller_id, targets)`
+            // at `effects/generic/tokens.py:202`, which builds the
+            // `recipients` list from `[controller_id]` (or every
+            // living player when `each_player=True`).
+            //
+            // Same transient-slot lookup preamble as I59-I80; only
+            // the post-resolve consumer differs (the controller
+            // value is used for the token's `controller` byte AND
+            // for picking the recipient battlefield Vec).
+            //
+            // Each-player and other token shapes (CreateTokenAndAttachSelf,
+            // CreateTokenPerMulticoloredPermanent,
+            // CreateTokenCopyOfTargetCreatureYouControl, the Moonlit
+            // Meditation replacement, CR 614 token-creation
+            // replacements like Exalted Sunborn / Anointed Procession,
+            // the end-of-combat-sacrifice flag, the `tapped`/`attacking`
+            // flag bundle) are not yet plumbed in this Rust arm — the
+            // first-slice surface here is the basic "create N tokens
+            // of `token_printing_id` under the controller" shape only.
+            // Those richer surfaces still resolve through the Python
+            // path; this fix only addresses the active_player-vs-
+            // source's-controller divergence for the basic shape.
+            let active = state
+                .current_resolve_source_controller
+                .unwrap_or(state.active_player);
 
             // Allocate fresh ids: scan every zone on both players for
             // the current max id, allocate starting at max + 1.
