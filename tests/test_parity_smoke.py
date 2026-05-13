@@ -26292,6 +26292,384 @@ def test_cross_engine_real_eoe_knight_luminary_etb_create_soldier_token_parity(
     assert rust_bf_p1_after == py_bf_p1_after
 
 
+def test_cross_engine_synthetic_etb_mill_target_player_cross_controller_routes_to_source_controller_opponent_parity(
+    parity_smoke,
+):
+    """Probe: synthetic ETB ``mill_target_player(count=2)``
+    (MillTargetPlayer) trigger fired by a permanent CONTROLLED BY P1
+    while ACTIVE_PLAYER=P0 -- the I77 controller-of-effect fix's
+    cross-engine flicker on the new ``mill_target_player`` bridge
+    arm. Both engines must mill from P0's library (the source's
+    controller's OPPONENT, = ``1 - controller``), NOT from P1's
+    library (which would happen if the resolve derived target_idx
+    from active_player's opponent or self-milled the source's
+    controller).
+
+    **The I77 substrate.** Per the bridge arm comment in
+    ``_ta_dict_to_python_effect`` (cross_engine.py): pre-I77 Rust's
+    ``Effect::MillTargetPlayer`` resolve arm at
+    ``state_ops_resolve.rs:1085-1148`` derived ``target_idx = 1 -
+    state.active_player`` directly. Wrong when the resolving spell /
+    triggered ability has a controller != active_player. The I77
+    fix routes that derivation through
+    ``current_resolve_source_controller`` (with active_player
+    fallback for direct ``apply_effect_pub`` callers), so cross-
+    controller MillTargetPlayer correctly mills from the SOURCE's
+    controller's OPPONENT. Sibling closure to I65 Mill (self-mill,
+    where I65 routes to controller, I77 routes to ``1 -
+    controller``).
+
+    Python's ``MillTargetPlayer.resolve(state, controller_id,
+    targets)`` (effects/generic/draw_mill.py:151) is target-required
+    via the ``targets[0]`` ``("player", target_id)`` pick. The agent
+    on the source's controller picks the opponent player from
+    ``legal_targets`` (which emits one entry per non-lost player);
+    ``_PickFirstOpponentTargetAgent`` returns
+    ``("player", target_id) where target_id != player_id``,
+    matching Rust's ``1 - controller`` pick on the 2-player harness.
+
+    **Why synthetic, not a real EoE card.** The ``mill_target_player``
+    arm bridges Mind-Funeral / Tome-Scour / Scrabbling-Skullcrab-
+    shape oracle text; EoE doesn't ship a target-player-mill ETB
+    creature today, so a synthetic 2/2 vanilla ("Cross-Controller
+    Skullcrab Bear") with the bridged trigger keeps this probe
+    self-contained and mirrors the I65 Mill cross-controller probe
+    (commit 7f83f029) shape exactly.
+
+    Probe shape (cross-controller inject-and-fire-ENTERS):
+
+      1. **active_player=P0** (default after ``make_state`` /
+         ``build_python_state``). Confirmed via
+         ``state.active_player`` on Rust and
+         ``state.active_player_idx`` on Python.
+
+      2. **Pre-seed P0's library** with THREE distinct vanilla bait
+         cards (Skullcrab Bait Bear 1..3). The mill-2 will pop the
+         first two (Bait Bear 1, 2) into P0's graveyard; Bait Bear 3
+         survives as the witness on top of P0's library.
+
+      3. **Inject Cross-Controller Skullcrab Bear (the source) onto
+         P1's bf** with controller=1 (Rust's
+         ``register_and_inject_object``; Python's ``new_object`` +
+         bf append + manual ``_trigger_etb_abilities``). The
+         injection's ENTERS dispatch fires the SourceIsSelf
+         trigger; the trigger lands on the stack with controller=1
+         (the SOURCE's controller).
+
+      4. **Seat ``_PickFirstOpponentTargetAgent`` on P1** (the source's
+         controller, who picks the target player). The agent's
+         opponent-player filter returns ``("player", 0)`` from the
+         legal_targets pool (which contains both player entries),
+         mirroring Rust's deterministic ``target_idx = 1 -
+         controller = 0`` pick.
+
+      5. **Drain both stacks.** The trigger resolves: Rust's
+         post-I77 MillTargetPlayer arm reads
+         ``current_resolve_source_controller = Some(1)``, computes
+         target_idx = 0, and pops 2 cards off P0's library top into
+         P0's graveyard. Python's
+         ``MillTargetPlayer(amount=2).resolve(state, 1,
+         (("player", 0),))`` does the same on the equivalent
+         state.
+
+      6. **Cross-engine assert (post-I77 contract):**
+         - P0's library shrinks by 2 (top two baits popped).
+         - P0's graveyard grows by 2 (those baits land here).
+         - P1's library unchanged (still empty).
+         - P1's graveyard unchanged (still empty).
+         - Lives unchanged on both seats.
+
+    **Pre-I77 vs post-I77 observable.**
+    Pre-fix Rust would have:
+      - Derived ``target_idx = 1 - active_player = 1 - 0 = 1``,
+        scanned P1's library, found it empty, broken out of the
+        loop. P1's library + graveyard unchanged; P0's library +
+        graveyard unchanged.
+    Post-fix Rust correctly mills from P0 (the SOURCE's
+    controller's opponent). P0's library shrinks by 2, P0's
+    graveyard grows by 2. Python's behavior is bit-equal because
+    its ``MillTargetPlayer.resolve`` takes the target via the
+    targeting pipeline (which reads the trigger's controller field
+    when resolving the source-controller's agent pick). The
+    pre-fix-vs-post-fix divergence is observable on the P0
+    library-and-graveyard delta: pre-fix +0/-0, post-fix +2/-2.
+
+    Out of scope:
+
+      * Cast-from-hand mana cost -- the inject-and-dispatch-ENTERS
+        pattern bypasses the mana pipeline.
+      * Empty-library mid-mill on the SOURCE's controller's
+        opponent's library -- the same-side empty-library probe
+        is out of scope; this probe seats 3 baits so the mill
+        pops cleanly without hitting empty.
+      * count != 2 -- the I77 contract is independent of count;
+        the bare ``mill`` arm's same-controller probe (Seedship
+        Broodtender) already pins count=3, and the cross-
+        controller routing surface doesn't multiplex on count.
+      * Multi-opponent fanout -- the 2-player harness reduces
+        ``1 - controller`` to "the one opponent". The N-player
+        per-seat shape would need a real choice callback (Rust's
+        comment notes this is deferred).
+      * use_controller_life flag (Space-Time Anomaly shape) --
+        the bridge surface's ``count`` field maps to ``amount``;
+        the use_controller_life path requires a separate Effect
+        variant on the Rust side and a separate bridge arm.
+      * Self-target (target_player == controller) -- the Rust
+        first-slice picker forces ``target_idx = 1 - controller``,
+        so target == self never happens on Rust. Python's
+        legal_targets includes self too, but the agent's opponent
+        filter excludes self.
+
+    Expected post-dispatch + post-drain state on BOTH engines:
+
+      * Cross-Controller Skullcrab Bear on P1's battlefield
+        (controller=1; unchanged from inject).
+      * P0 library: 1 (Bait Bear 3 survives on top).
+      * P0 graveyard: 2 (Bait Bears 1, 2 milled in pop order).
+      * P1 library: 0 (untouched).
+      * P1 graveyard: 0 (untouched).
+      * Lives unchanged on both seats.
+      * No residual stack on either engine.
+    """
+    from mtg_bot.parity.cross_engine import (
+        CardDef, DeckSpec, build_python_state, build_rust_state,
+    )
+    from tests.parity._picker_shims import _PickFirstOpponentTargetAgent
+
+    # Three distinct bait cards on P0's library so a mill-2 leaves
+    # exactly Bait Bear 3 on top as a witness (any miscount surfaces
+    # as a witness-name divergence on the post-mill library top).
+    bait_1 = CardDef(
+        name="Cross-Controller Skullcrab Bait Bear 1",
+        card_type="Creature",
+        mana_cost_generic=1,
+        power=1,
+        toughness=1,
+    )
+    bait_2 = CardDef(
+        name="Cross-Controller Skullcrab Bait Bear 2",
+        card_type="Creature",
+        mana_cost_generic=1,
+        power=1,
+        toughness=1,
+    )
+    bait_3 = CardDef(
+        name="Cross-Controller Skullcrab Bait Bear 3",
+        card_type="Creature",
+        mana_cost_generic=1,
+        power=1,
+        toughness=1,
+    )
+    spec = DeckSpec(
+        card_defs=(bait_1, bait_2, bait_3),
+        # P0 library carries the 3 baits; P1 library stays EMPTY --
+        # a pre-I77 Rust would have milled from P1 (silent no-op on
+        # empty), the post-I77 fix mills from P0. Size deltas on P0
+        # below distinguish the two.
+        p0_library=(
+            "Cross-Controller Skullcrab Bait Bear 1",
+            "Cross-Controller Skullcrab Bait Bear 2",
+            "Cross-Controller Skullcrab Bait Bear 3",
+        ),
+        p1_library=(),
+    )
+    py_state = build_python_state(spec)
+    rust_state = build_rust_state(spec)
+
+    # Confirm pre-condition: active_player=P0 on both engines.
+    assert rust_state.active_player == 0, (
+        f"Probe pre-condition: Rust active_player must be 0; "
+        f"got {rust_state.active_player}"
+    )
+    assert py_state.active_player_idx == 0, (
+        f"Probe pre-condition: Python active_player_idx must be 0; "
+        f"got {py_state.active_player_idx}"
+    )
+
+    # ---- Rust side ----
+    ZONE_BATTLEFIELD = 2
+    rust_skullcrab_dict = {
+        "name": "Cross-Controller Skullcrab Bear",
+        "card_types": ["Creature"],
+        "mana_cost": {"generic": 1, "U": 1},
+        "effects": [],
+        "power": 2,
+        "toughness": 2,
+        "triggered_abilities": [
+            {
+                "event": "enters",
+                "predicate": {"kind": "source_is_self"},
+                "effect": {
+                    "kind": "mill_target_player",
+                    "count": 2,
+                },
+            }
+        ],
+    }
+    rust_p0_lib_before = rust_state.library_sizes[0]
+    rust_p0_gy_before = rust_state.graveyard_sizes[0]
+    rust_p1_lib_before = rust_state.library_sizes[1]
+    rust_p1_gy_before = rust_state.graveyard_sizes[1]
+    rust_p0_life_before = rust_state.get_life(0)
+    rust_p1_life_before = rust_state.get_life(1)
+    assert rust_p0_lib_before == 3
+    assert rust_p1_lib_before == 0
+
+    # Inject the source onto P1's bf with controller=1. ENTERS fires
+    # via the deferred-dispatch queue; the SourceIsSelf trigger lands
+    # on the stack with controller=1 (the SOURCE's controller).
+    rust_state.register_and_inject_object(
+        rust_skullcrab_dict, 1, ZONE_BATTLEFIELD,
+    )
+    assert rust_state.stack_size() == 1, (
+        "Rust: Cross-Controller Skullcrab Bear's arrival on P1 "
+        "should fire the SourceIsSelf ENTERS trigger and land "
+        "MillTargetPlayer(count=2) on the stack. "
+        f"Got stack_size={rust_state.stack_size()}"
+    )
+
+    # ---- Python side ----
+    from mtg_bot.actions import _trigger_etb_abilities
+    from mtg_bot.cards.base import CardPrinting, ManaCost
+    from mtg_bot.effects.base import TriggeredAbility
+    from mtg_bot.effects.generic.draw_mill import MillTargetPlayer
+    from mtg_bot.effects.predicates import Event, IsSelf
+    from mtg_bot.game import Zone
+
+    skullcrab_printing = CardPrinting(
+        name="Cross-Controller Skullcrab Bear",
+        mana_cost_str="",
+        mana_cost=ManaCost(generic=1, colored=(("U", 1),)),
+        type_line="Creature",
+        supertypes=(),
+        card_types=("Creature",),
+        subtypes=(),
+        power=2,
+        toughness=2,
+        produces=frozenset(),
+        triggered_abilities=(
+            TriggeredAbility(
+                event=Event.ENTERS,
+                predicate=IsSelf(),
+                effect=MillTargetPlayer(amount=2),
+            ),
+        ),
+    )
+    py_p0_lib_before = len(py_state.players[0].library)
+    py_p0_gy_before = len(py_state.players[0].graveyard)
+    py_p1_lib_before = len(py_state.players[1].library)
+    py_p1_gy_before = len(py_state.players[1].graveyard)
+    py_p0_life_before = py_state.players[0].life
+    py_p1_life_before = py_state.players[1].life
+    assert py_p0_lib_before == 3
+    assert py_p1_lib_before == 0
+
+    # Custom agent for P1 (the source's controller): mirror Rust's
+    # deterministic ``target_idx = 1 - controller`` pick. The agent's
+    # opponent-player filter returns ``("player", 0)`` from the
+    # legal_targets pool [("player", 0), ("player", 1)].
+    py_state.players[1].agent = _PickFirstOpponentTargetAgent()
+
+    py_skullcrab = py_state.new_object(
+        skullcrab_printing, owner_id=1, zone=Zone.BATTLEFIELD,
+    )
+    py_skullcrab.summoning_sick = False
+    py_skullcrab.tapped = False
+    py_skullcrab.damage = 0
+    py_skullcrab.etb_timestamp = py_state.next_timestamp
+    py_state.next_timestamp += 1
+    py_state.battlefield.append(py_skullcrab)
+    _trigger_etb_abilities(py_state, py_skullcrab)
+    assert len(py_state.stack) == 1, (
+        "Python: Cross-Controller Skullcrab Bear's arrival on P1 "
+        "should fire the IsSelf ENTERS trigger and land "
+        "MillTargetPlayer(amount=2) on the stack. "
+        f"Got stack size={len(py_state.stack)}"
+    )
+
+    # ---- Drain both stacks, then compare ----
+    _drain_stack_both(py_state, rust_state)
+
+    # Stacks empty on both sides.
+    assert rust_state.stack_size() == 0
+    assert len(py_state.stack) == 0
+
+    # Per-engine post-state on Rust: P0's library shrinks by 2,
+    # P0's graveyard grows by 2, P1 untouched, lives untouched.
+    # The load-bearing cross-controller routing pin: pre-fix Rust
+    # would have left P0's library AND graveyard at their pre-trigger
+    # sizes (the mill would have hit P1's empty library and silent-
+    # no-opped). Post-fix Rust mills from P0 correctly.
+    assert rust_state.library_sizes[0] == rust_p0_lib_before - 2, (
+        f"Rust I77 cross-controller mill_target_player contract: "
+        f"P0's library should shrink by 2 (target_idx = 1 - "
+        f"controller = 1 - 1 = 0; the source's controller's "
+        f"opponent is P0). Pre-fix would have computed target_idx "
+        f"= 1 - active_player = 1 - 0 = 1, milled P1 (empty -> "
+        f"silent no-op) and left P0's library at "
+        f"{rust_p0_lib_before}. before={rust_p0_lib_before} "
+        f"after={rust_state.library_sizes[0]}"
+    )
+    assert rust_state.graveyard_sizes[0] == rust_p0_gy_before + 2, (
+        f"Rust I77 cross-controller mill_target_player contract: "
+        f"P0's graveyard should grow by 2 (the milled cards land "
+        f"in the target player's gy). before={rust_p0_gy_before} "
+        f"after={rust_state.graveyard_sizes[0]}"
+    )
+    assert rust_state.library_sizes[1] == rust_p1_lib_before, (
+        f"Rust: P1's library should be unchanged at "
+        f"{rust_p1_lib_before} (the mill never touches P1's zones "
+        f"under the post-I77 source-controller-opponent "
+        f"derivation). after={rust_state.library_sizes[1]}"
+    )
+    assert rust_state.graveyard_sizes[1] == rust_p1_gy_before, (
+        f"Rust: P1's graveyard should be unchanged at "
+        f"{rust_p1_gy_before}. after={rust_state.graveyard_sizes[1]}"
+    )
+    assert rust_state.get_life(0) == rust_p0_life_before
+    assert rust_state.get_life(1) == rust_p1_life_before
+
+    # Per-engine post-state on Python: same shape.
+    assert len(py_state.players[0].library) == py_p0_lib_before - 2, (
+        f"Python: P0's library should shrink by 2. "
+        f"before={py_p0_lib_before} "
+        f"after={len(py_state.players[0].library)}"
+    )
+    assert len(py_state.players[0].graveyard) == py_p0_gy_before + 2, (
+        f"Python: P0's graveyard should grow by 2. "
+        f"before={py_p0_gy_before} "
+        f"after={len(py_state.players[0].graveyard)}"
+    )
+    assert len(py_state.players[1].library) == py_p1_lib_before
+    assert len(py_state.players[1].graveyard) == py_p1_gy_before
+    assert py_state.players[0].life == py_p0_life_before
+    assert py_state.players[1].life == py_p1_life_before
+
+    # Per-card witness on P0's library top: Bait Bear 3 survives on
+    # top (any miscount or wrong-pop-order surfaces as a name
+    # divergence here). Library top is index 0 on both engines.
+    py_p0_lib_top_name = py_state.players[0].library[0].printing.name
+    assert py_p0_lib_top_name == "Cross-Controller Skullcrab Bait Bear 3", (
+        f"Python: P0's library top should be Bait Bear 3 (the "
+        f"survivor) after the mill-2 popped Bait Bears 1, 2. "
+        f"Got top={py_p0_lib_top_name!r}"
+    )
+    rust_p0_lib_top_name = rust_state.library_snapshot(0)[0]["printing_name"]
+    assert rust_p0_lib_top_name == "Cross-Controller Skullcrab Bait Bear 3", (
+        f"Rust: P0's library top should be Bait Bear 3 (the "
+        f"survivor) after the mill-2 popped Bait Bears 1, 2. "
+        f"Got top={rust_p0_lib_top_name!r}"
+    )
+
+    # Cross-engine: per-zone parity on sizes + lives.
+    assert rust_state.library_sizes[0] == len(py_state.players[0].library)
+    assert rust_state.graveyard_sizes[0] == len(py_state.players[0].graveyard)
+    assert rust_state.library_sizes[1] == len(py_state.players[1].library)
+    assert rust_state.graveyard_sizes[1] == len(py_state.players[1].graveyard)
+    assert rust_state.get_life(0) == py_state.players[0].life
+    assert rust_state.get_life(1) == py_state.players[1].life
+
+
 # === PHASE5_PROBES_INSERT_ABOVE_THIS_LINE ===
 # New real-EoE parity probes go IMMEDIATELY ABOVE this marker.
 # Append-only convention prevents merge collisions when multiple agents add probes in parallel.
