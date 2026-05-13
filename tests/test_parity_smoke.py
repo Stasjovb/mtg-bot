@@ -16930,3 +16930,338 @@ def test_cross_engine_real_eoe_interceptor_mechan_etb_return_artifact_or_creatur
     # Stacks empty on both sides.
     assert rust_state.stack_size() == 0
     assert len(py_state.stack) == 0
+
+
+def test_cross_engine_real_eoe_uthros_scanship_etb_sequence_draw_discard_parity(
+    parity_smoke,
+):
+    """Probe: Uthros Scanship (EoE) ETB ``draw two cards, then
+    discard a card`` parity -- FIRST real-EoE cross-engine probe
+    with a Sequence-composer ETB trigger.
+
+    Oracle text in ``data/edge_of_eternities.json``:
+
+        "When this Spacecraft enters, draw two cards, then discard
+         a card.
+         Station ({tap} another creature you control: Put charge
+         counters equal to its power on this Spacecraft. Station
+         only as a sorcery. It's an artifact creature at 8+.)
+         Flying"
+
+    The Station activated ability, the Flying static, and the
+    "+8 charge counters → artifact creature" mode are OUT OF SCOPE
+    for this probe -- only the ETB sequence trigger is exercised.
+    Rust and Python both see the same minimal trigger surface.
+
+    First real-EoE cross-engine probe to exercise the
+    ``Effect::Sequence`` arm + Python ``Sequence`` class end-to-end.
+
+    Predicate decomposition: ``SourceIsSelf`` (only the just-arrived
+    Spacecraft's own trigger fires).
+
+    Effect: ``Sequence{[DrawCards{2}, DiscardSelf{1}]}`` -- NEW
+    composer on the bridge as of the companion commits on this
+    branch. The Rust resolve arm (state_ops_resolve.rs:4125-4129)
+    walks children in order under ``apply_effect``; Python's
+    ``Sequence.resolve`` walks ``self.effects`` in order.
+
+    **Net hand-size delta**: +2 (draw) - 1 (discard) = +1. We
+    assert the net delta on both engines plus the discarded card's
+    identity in the graveyard.
+
+    **Cross-engine pick contract.** Discard's pick is the only
+    point of divergence: Rust's ``DiscardSelf`` resolve pops
+    ``hand[0]`` deterministically (state_ops_resolve.rs:2875+);
+    Python calls ``agent.choose_discard``. We seat a
+    ``_DiscardFirstAgent`` on p0 mirroring Rust's at-resolve
+    hand[0] pick. After the draw, hand[0] on the Python side is
+    the SAME card as Rust's hand[0] iff (a) p0 had no cards in
+    hand before the trigger (so hand[0] post-draw is the first
+    drawn card -- top-of-library), and (b) both engines built the
+    library in the same order (which the cross_engine harness
+    guarantees).
+
+    Probe shape (inject-and-fire-ENTERS, mirrors Seedship
+    Broodtender / Virus Beetle):
+
+      1. Pre-seed p0's library top with TWO distinct bait
+         creatures (will be drawn). Top-of-library = index 0
+         is consistent across engines.
+      2. p0's hand starts empty (deterministic post-draw hand[0]
+         = the first drawn card).
+      3. Inject Uthros Scanship onto p0's bf via
+         ``register_and_inject_object``; ENTERS fans out, the
+         SourceIsSelf predicate matches, the Sequence trigger
+         lands on the stack.
+      4. Seat a deterministic-hand[0] discard agent on p0
+         (Python only; Rust's pick is intrinsic).
+      5. Drain both stacks. Both engines: p0 draws 2, then
+         discards hand[0] (= the first drawn card, "Sequence
+         Bait Alpha").
+      6. Cross-engine assert: p0 hand size = 1 (Beta), p0
+         graveyard contains exactly Alpha, p0 library shrank by
+         2.
+
+    Out of scope: Station / Flying / cast cost / multi-card
+    discard fan / library-empty draw fizzle.
+
+    Expected post-dispatch + post-drain state on BOTH engines:
+
+      * Uthros Scanship on p0's battlefield.
+      * p0 hand: ["Sequence Bait Beta"] (Alpha discarded).
+      * p0 graveyard: ["Sequence Bait Alpha"].
+      * p0 library: drained by 2 (both bait cards drawn).
+      * p1 untouched.
+      * Lives unchanged on both seats.
+      * No residual stack.
+    """
+    from mtg_bot.agents import Agent
+    from mtg_bot.parity.cross_engine import (
+        CardDef, DeckSpec, build_python_state, build_rust_state,
+    )
+
+    uthros_scanship = CardDef(
+        name="Uthros Scanship",
+        card_type="Artifact",
+        mana_cost_generic=3,
+        mana_cost_colored=(("U", 1),),
+        # Spacecraft is a subtype carried on the Subtypes substrate.
+        subtypes=("Spacecraft",),
+        triggered_abilities=(
+            {
+                "event": "enters",
+                "predicate": {"kind": "source_is_self"},
+                "effect": {
+                    "kind": "sequence",
+                    "effects": [
+                        {"kind": "draw_cards", "count": 2},
+                        {"kind": "discard_self", "amount": 1},
+                    ],
+                },
+            },
+        ),
+    )
+    bait_a = CardDef(
+        name="Sequence Bait Alpha",
+        card_type="Creature",
+        mana_cost_generic=1,
+        power=1,
+        toughness=1,
+    )
+    bait_b = CardDef(
+        name="Sequence Bait Beta",
+        card_type="Creature",
+        mana_cost_generic=2,
+        power=2,
+        toughness=2,
+    )
+    spec = DeckSpec(
+        card_defs=(uthros_scanship, bait_a, bait_b),
+        # Top-of-library = index 0; Alpha is drawn first (lands at
+        # hand[0]), then Beta (lands at hand[1]). The discard's
+        # hand[0] pick then targets Alpha.
+        p0_library=("Sequence Bait Alpha", "Sequence Bait Beta"),
+        p1_library=(),
+    )
+    py_state = build_python_state(spec)
+    rust_state = build_rust_state(spec)
+
+    # ---- Rust side ----
+    ZONE_BATTLEFIELD = 2
+    rust_scanship_dict = {
+        "name": "Uthros Scanship",
+        "card_types": ["Artifact"],
+        "subtypes": ["Spacecraft"],
+        "mana_cost": {"generic": 3, "U": 1},
+        "effects": [],
+        "triggered_abilities": [
+            {
+                "event": "enters",
+                "predicate": {"kind": "source_is_self"},
+                "effect": {
+                    "kind": "sequence",
+                    "effects": [
+                        {"kind": "draw_cards", "count": 2},
+                        {"kind": "discard_self", "amount": 1},
+                    ],
+                },
+            }
+        ],
+    }
+    rust_p0_lib_before = rust_state.library_sizes[0]
+    rust_p0_hand_before = rust_state.hand_sizes[0]
+    rust_p0_gy_before = rust_state.graveyard_sizes[0]
+    rust_p1_lib_before = rust_state.library_sizes[1]
+    rust_p1_hand_before = rust_state.hand_sizes[1]
+    rust_p1_gy_before = rust_state.graveyard_sizes[1]
+    rust_p0_life_before = rust_state.get_life(0)
+    rust_p1_life_before = rust_state.get_life(1)
+    assert rust_p0_lib_before == 2
+    assert rust_p0_hand_before == 0
+    assert rust_p0_gy_before == 0
+
+    rust_state.register_and_inject_object(
+        rust_scanship_dict, 0, ZONE_BATTLEFIELD,
+    )
+    assert rust_state.stack_size() == 1, (
+        "Rust: Uthros Scanship's own arrival should fire the "
+        "SourceIsSelf ENTERS trigger and land Sequence(DrawCards(2), "
+        f"DiscardSelf(1)) on the stack. Got "
+        f"stack_size={rust_state.stack_size()}"
+    )
+
+    # ---- Python side ----
+    from mtg_bot.actions import _trigger_etb_abilities
+    from mtg_bot.cards.base import CardPrinting, ManaCost
+    from mtg_bot.effects.base import TriggeredAbility
+    from mtg_bot.effects.combinators import Sequence
+    from mtg_bot.effects.generic.discard import DiscardSelf
+    from mtg_bot.effects.generic.draw_mill import DrawCards
+    from mtg_bot.effects.predicates import Event, IsSelf
+    from mtg_bot.game import Zone
+
+    scanship_printing = CardPrinting(
+        name="Uthros Scanship",
+        mana_cost_str="",
+        mana_cost=ManaCost(generic=3, colored=(("U", 1),)),
+        type_line="Artifact - Spacecraft",
+        supertypes=(),
+        card_types=("Artifact",),
+        subtypes=("Spacecraft",),
+        power=None,
+        toughness=None,
+        produces=frozenset(),
+        triggered_abilities=(
+            TriggeredAbility(
+                event=Event.ENTERS,
+                predicate=IsSelf(),
+                effect=Sequence(
+                    effects=(
+                        DrawCards(amount=2),
+                        DiscardSelf(amount=1),
+                    ),
+                ),
+            ),
+        ),
+    )
+
+    class _DiscardFirstAgent(Agent):
+        """Pick hand[0] for discard. Mirrors Rust's deterministic
+        ``DiscardSelf`` hand[0] pick (state_ops_resolve.rs ~2875).
+        """
+
+        def choose_discard(self, state, player_id, hand_ids):
+            assert hand_ids, "agent called with empty hand"
+            return hand_ids[0]
+
+    py_state.players[0].agent = _DiscardFirstAgent()
+
+    py_p0_lib_before = len(py_state.players[0].library)
+    py_p0_hand_before = len(py_state.players[0].hand)
+    py_p0_gy_before = len(py_state.players[0].graveyard)
+    py_p1_lib_before = len(py_state.players[1].library)
+    py_p1_hand_before = len(py_state.players[1].hand)
+    py_p1_gy_before = len(py_state.players[1].graveyard)
+    py_p0_life_before = py_state.players[0].life
+    py_p1_life_before = py_state.players[1].life
+    assert py_p0_lib_before == 2
+    assert py_p0_hand_before == 0
+
+    py_scanship = py_state.new_object(
+        scanship_printing, owner_id=0, zone=Zone.BATTLEFIELD,
+    )
+    py_scanship.summoning_sick = False
+    py_scanship.tapped = False
+    py_scanship.damage = 0
+    py_scanship.etb_timestamp = py_state.next_timestamp
+    py_state.next_timestamp += 1
+    py_state.battlefield.append(py_scanship)
+    _trigger_etb_abilities(py_state, py_scanship)
+    assert len(py_state.stack) == 1, (
+        "Python: Uthros Scanship's own arrival should fire the "
+        "IsSelf ENTERS trigger and land Sequence(DrawCards(2), "
+        f"DiscardSelf(1)) on the stack. Got "
+        f"stack size={len(py_state.stack)}"
+    )
+
+    # ---- Drain both stacks, then compare ----
+    _drain_stack_both(py_state, rust_state)
+
+    # Net hand-size delta: +2 (draw) - 1 (discard) = +1 on both.
+    assert rust_state.hand_sizes[0] == rust_p0_hand_before + 1, (
+        f"Rust p0 hand should grow by 1 (+2 draw - 1 discard); "
+        f"before={rust_p0_hand_before} after={rust_state.hand_sizes[0]}"
+    )
+    assert rust_state.library_sizes[0] == rust_p0_lib_before - 2, (
+        f"Rust p0 library should shrink by 2 (the 2 draws); "
+        f"before={rust_p0_lib_before} after={rust_state.library_sizes[0]}"
+    )
+    assert rust_state.graveyard_sizes[0] == rust_p0_gy_before + 1, (
+        f"Rust p0 graveyard should grow by 1 (the discard); "
+        f"before={rust_p0_gy_before} after={rust_state.graveyard_sizes[0]}"
+    )
+
+    assert len(py_state.players[0].hand) == py_p0_hand_before + 1, (
+        f"Python p0 hand should grow by 1; "
+        f"before={py_p0_hand_before} after={len(py_state.players[0].hand)}"
+    )
+    assert len(py_state.players[0].library) == py_p0_lib_before - 2
+    assert len(py_state.players[0].graveyard) == py_p0_gy_before + 1
+
+    # Strongest pin: discarded card name. With hand[0]-pick agents on
+    # both engines, Alpha (drawn first → landed at hand[0]) is the
+    # discard target; Beta survives in hand.
+    rust_p0_gy_names = [
+        e["printing_name"] for e in rust_state.graveyard_snapshot(0)
+    ]
+    py_p0_gy_names = [o.printing.name for o in py_state.players[0].graveyard]
+    assert rust_p0_gy_names == ["Sequence Bait Alpha"], (
+        f"Rust p0 gy should contain only Sequence Bait Alpha; "
+        f"got {rust_p0_gy_names}"
+    )
+    assert py_p0_gy_names == ["Sequence Bait Alpha"], (
+        f"Python p0 gy should contain only Sequence Bait Alpha; "
+        f"got {py_p0_gy_names}"
+    )
+    rust_p0_hand_names = [
+        e["printing_name"] for e in rust_state.hand_snapshot(0)
+    ]
+    py_p0_hand_names = [o.printing.name for o in py_state.players[0].hand]
+    assert rust_p0_hand_names == ["Sequence Bait Beta"], (
+        f"Rust p0 hand should hold only Sequence Bait Beta (Alpha "
+        f"discarded); got {rust_p0_hand_names}"
+    )
+    assert py_p0_hand_names == ["Sequence Bait Beta"], (
+        f"Python p0 hand should hold only Sequence Bait Beta; "
+        f"got {py_p0_hand_names}"
+    )
+
+    # Cross-engine: per-zone parity.
+    assert rust_state.hand_sizes[0] == len(py_state.players[0].hand)
+    assert rust_state.library_sizes[0] == len(py_state.players[0].library)
+    assert rust_state.graveyard_sizes[0] == len(py_state.players[0].graveyard)
+    assert rust_state.hand_sizes[1] == len(py_state.players[1].hand)
+    assert rust_state.library_sizes[1] == len(py_state.players[1].library)
+    assert rust_state.graveyard_sizes[1] == len(py_state.players[1].graveyard)
+    assert rust_p0_hand_names == py_p0_hand_names
+    assert rust_p0_gy_names == py_p0_gy_names
+
+    # p1 untouched.
+    assert rust_state.hand_sizes[1] == rust_p1_hand_before
+    assert rust_state.library_sizes[1] == rust_p1_lib_before
+    assert rust_state.graveyard_sizes[1] == rust_p1_gy_before
+    assert len(py_state.players[1].hand) == py_p1_hand_before
+    assert len(py_state.players[1].library) == py_p1_lib_before
+    assert len(py_state.players[1].graveyard) == py_p1_gy_before
+
+    # Lives unchanged.
+    assert rust_state.get_life(0) == rust_p0_life_before
+    assert rust_state.get_life(1) == rust_p1_life_before
+    assert py_state.players[0].life == py_p0_life_before
+    assert py_state.players[1].life == py_p1_life_before
+    assert rust_state.get_life(0) == py_state.players[0].life
+    assert rust_state.get_life(1) == py_state.players[1].life
+
+    # Stacks empty on both sides.
+    assert rust_state.stack_size() == 0
+    assert len(py_state.stack) == 0
