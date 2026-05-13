@@ -1052,6 +1052,59 @@ def _ta_dict_to_python_effect(eff_dict: dict):
         return EachOpponentMillsCards(
             amount=eff_dict.get("count", 1),
         )
+    if kind == "put_plus_one_counter_on_each_creature_you_control":
+        # **Phase 5 mass-counter bridge arm.**
+        # Mirrors Rust's
+        # ``Effect::PutPlusOneCounterOnEachCreatureYouControl { amount:
+        # i32 }`` (cards.rs:884). The parse_effect arm
+        # (cards.rs:3256-3272) accepts the dict shape
+        # ``{"kind": "put_plus_one_counter_on_each_creature_you_control",
+        # "amount": N}`` -- ``amount`` is OPTIONAL on the parser
+        # (defaults to 1 to match the Python class's ``amount: int = 1``
+        # default) and REQUIRES non-negative when present (raises at
+        # parse time). The resolve arm
+        # (state_ops_resolve.rs:4207+) carries the source-controller
+        # location dance: it scans every player's zones for
+        # ``source_obj_id`` to derive the source's controller, then
+        # iterates that controller's bf and adds ``amount`` to each
+        # creature's scalar ``counters``. ``amount == 0`` short-
+        # circuits before the scan; negative raises (defense-in-depth,
+        # parser catches first).
+        #
+        # **No targeting.** Unlike the single-target sibling
+        # ``put_plus_one_counter_on_creature_you_control``, this is a
+        # MASS effect: every creature on the source-controller's bf
+        # at resolve time gets the counter, no Target tuple involved.
+        # Probes therefore don't need a target-pick agent shim --
+        # the Python class's ``resolve`` walks ``state.battlefield``
+        # filtered to the controller's creatures and applies in
+        # iteration order. Both engines agree on the recipient set:
+        # all creatures controlled by the source's controller. Note
+        # the bridge mirrors the Rust variant's bare ``amount`` shape
+        # and DOES NOT set Python's optional ``exclude_source`` flag
+        # -- Atmospheric Greenhouse's oracle text is "each creature
+        # you control" (no "other"); the Spacecraft source isn't a
+        # Creature anyway so the include/exclude choice is observably
+        # moot for that consumer.
+        #
+        # Python's ``PutPlusOneCounterOnEachCreatureYouControl(amount:
+        # int = 1, exclude_source: bool = False)`` class
+        # (effects/generic/counters.py:737) iterates the controller's
+        # bf and calls ``add_plus_one_counters`` on each Creature
+        # object; the helper accumulates into the per-object scalar
+        # ``plus_one_counters`` field that round-trips through Rust's
+        # ``object_to_pydict`` ``counters`` key.
+        #
+        # **Real EoE consumer** unblocked by this arm:
+        # - Atmospheric Greenhouse: Artifact - Spacecraft with ETB
+        #   "When this Spacecraft enters, put a +1/+1 counter on each
+        #   creature you control."
+        from mtg_bot.effects.generic.counters import (
+            PutPlusOneCounterOnEachCreatureYouControl,
+        )
+        return PutPlusOneCounterOnEachCreatureYouControl(
+            amount=eff_dict.get("amount", 1),
+        )
     # === PHASE5_BRIDGE_ARMS_INSERT_ABOVE_THIS_LINE ===
     # New `kind` arms go IMMEDIATELY ABOVE this marker. Do NOT delete the marker.
     # Append-only convention prevents merge collisions when multiple agents add arms in parallel.

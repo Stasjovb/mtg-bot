@@ -18922,6 +18922,455 @@ def test_cross_engine_synthetic_etb_each_opponent_mills_cards_parity(
     assert rust_state.get_life(1) == py_state.players[1].life
 
 
+def test_cross_engine_real_eoe_atmospheric_greenhouse_etb_mass_plus_one_counter_parity(
+    parity_smoke,
+):
+    """Probe: Atmospheric Greenhouse (EoE) ETB ``put a +1/+1 counter
+    on each creature you control`` parity -- FIRST real-EoE cross-
+    engine probe to exercise the
+    ``put_plus_one_counter_on_each_creature_you_control`` MASS bridge
+    arm (sister to the single-target Rayblade Trooper probe shape).
+
+    Oracle text in ``data/edge_of_eternities.json``:
+
+        "When this Spacecraft enters, put a +1/+1 counter on each
+         creature you control.
+         Station (...)
+         4+ | Flying"
+
+    Station + 4+/Flying are both Spacecraft static / activated
+    plumbing -- out of scope. This probe exclusively exercises the
+    ETB-trigger surface, the substrate sweet-spot:
+
+      * Event: ``enters``
+      * Predicate: ``source_is_self`` (only the just-entered
+        Spacecraft's own ETB fires).
+      * Effect: ``put_plus_one_counter_on_each_creature_you_control``
+        amount=1 -- NEW on the bridge as of the companion commit on
+        this branch.
+
+    First real-EoE cross-engine probe to exercise the
+    ``Effect::PutPlusOneCounterOnEachCreatureYouControl`` arm +
+    ``PutPlusOneCounterOnEachCreatureYouControl`` Python class end-
+    to-end.
+
+    Predicate decomposition (same as Wurmwall Sweeper / Starbreach
+    Whale / Rayblade Trooper):
+
+        SourceIsSelf
+
+    Effect: ``put_plus_one_counter_on_each_creature_you_control(
+    amount=1)`` -- the bridge arm translates to
+    ``PutPlusOneCounterOnEachCreatureYouControl(amount=1)``.
+
+    **Mass-effect target-pick contract.** Unlike the single-target
+    sibling ``put_plus_one_counter_on_creature_you_control`` (which
+    needs a target-pick agent shim mirroring Rust's at-resolve scan),
+    this MASS effect picks no targets: every creature on the source-
+    controller's bf at resolve time receives the counter.
+
+      * Rust: ``state_ops_resolve.rs:4207+`` derives the source-
+        controller via the cross-zone source_obj_id scan, then
+        iterates ``state.players[cidx].battlefield`` and adds
+        ``amount`` to every Creature object's scalar ``counters``
+        field.
+      * Python: ``PutPlusOneCounterOnEachCreatureYouControl.resolve``
+        iterates ``state.battlefield`` filtered to
+        ``obj.controller_id == controller_id`` and
+        ``obj.printing.is_creature``, calling
+        ``add_plus_one_counters(state, obj, self.amount)`` on each.
+
+    Both engines agree on the recipient set (every p0-controlled
+    Creature on the bf at resolve time) and skip non-creature
+    permanents — Atmospheric Greenhouse itself is an Artifact
+    Spacecraft, not a Creature, so it doesn't self-counter even
+    though it's on p0's bf.
+
+    **Subtype modeling caveat.** Atmospheric Greenhouse's oracle
+    text says "When this Spacecraft enters" -- the "Spacecraft"
+    qualifier is a CR 113 type-condition selector. Both engines
+    today treat the SourceIsSelf ENTERS predicate as "this object
+    just entered", subtype-agnostic at the predicate layer; the
+    Spacecraft subtype substrate is wired into the printing on
+    both sides but neither parse_triggered_ability arm conditions
+    the trigger on a subtype check today. The probe's behavior is
+    correct for "any object with this ETB trigger entering its
+    own bf"; if the EoE rules tighten to require Spacecraft-
+    subtype gating at trigger-fire time, both engines would need
+    to extend in lockstep and this probe would surface the
+    divergence first.
+
+    Probe shape (inject-and-fire-ENTERS, mirrors Wurmwall Sweeper
+    for the Artifact-carrier shape and Rayblade Trooper for the
+    counter-delta assertion):
+
+      1. Pre-seed p0's bf with TWO distinct vanilla bait creatures
+         BEFORE injecting the Greenhouse, so they're already on
+         the bf when the trigger resolves and both pick up the
+         counter. Distinct names to surface a per-recipient bug
+         (e.g. "only the first creature gets the counter") if the
+         resolve walk regresses.
+
+      2. Inject ONE bait creature onto p1's bf. The MASS effect's
+         "you control" filter MUST exclude opponent-controlled
+         creatures; the witness verifies that filter (p1's bear
+         stays at 0 counters post-resolve).
+
+      3. Inject Atmospheric Greenhouse (Artifact carrier) onto p0's
+         bf. ENTERS dispatch + SourceIsSelf predicate => trigger
+         lands on the stack with NO target pre-chosen (mass effect
+         has no targets).
+
+      4. Drain both stacks. Resolve walk: each p0-controlled
+         Creature's ``counters`` (Rust) / ``plus_one_counters``
+         (Python) increments from 0 to 1.
+
+      5. Cross-engine assert: both p0 bait creatures show 1 +1/+1
+         counter on both engines; the p1 witness bear shows 0
+         counters on both engines; Atmospheric Greenhouse itself
+         shows 0 counters (it's an Artifact, not a Creature).
+
+    Out of scope:
+
+      * Station ability + the "4+ | Flying" Spacecraft crew
+        threshold -- both are static / activated; not ETB triggers.
+      * Spacecraft subtype-conditional trigger gating -- documented
+        above; both engines treat ENTERS-on-self subtype-agnostic
+        today, so the probe stays parity-clean.
+      * Mana cost ({4}) -- inject-and-dispatch-ENTERS bypasses the
+        mana pipeline.
+      * The ``exclude_source=True`` variant -- not requested by
+        Atmospheric Greenhouse's oracle text (no "other") and
+        observably moot here because the Spacecraft source isn't
+        a Creature anyway.
+
+    Expected post-dispatch + post-drain state on BOTH engines:
+
+      * Atmospheric Greenhouse on p0's bf with 0 counters.
+      * Both p0-controlled bait creatures with 1 +1/+1 counter.
+      * p1-controlled witness bear with 0 counters.
+      * No life changes on either side.
+      * No residual stack.
+    """
+    from mtg_bot.parity.cross_engine import (
+        CardDef, DeckSpec, build_python_state, build_rust_state,
+    )
+
+    atmospheric_greenhouse = CardDef(
+        name="Atmospheric Greenhouse",
+        card_type="Artifact",
+        mana_cost_generic=4,
+        mana_cost_colored=(),
+        # Artifact-Spacecraft -- no creature P/T at the resting
+        # state (Spacecraft becomes a creature only via Station's
+        # 4+ counter threshold; that path is out-of-scope for the
+        # ETB probe).
+        triggered_abilities=(
+            {
+                "event": "enters",
+                "predicate": {"kind": "source_is_self"},
+                "effect": {
+                    "kind": "put_plus_one_counter_on_each_creature_you_control",
+                    "amount": 1,
+                },
+            },
+        ),
+    )
+    # Distinct bait names on p0's side so a per-recipient bug
+    # ("only the first creature gets the counter") would surface.
+    p0_bait_a = CardDef(
+        name="Mass Counter Bait Alpha",
+        card_type="Creature",
+        mana_cost_generic=1,
+        mana_cost_colored=(("G", 1),),
+        power=2,
+        toughness=2,
+    )
+    p0_bait_b = CardDef(
+        name="Mass Counter Bait Beta",
+        card_type="Creature",
+        mana_cost_generic=2,
+        mana_cost_colored=(("G", 1),),
+        power=3,
+        toughness=3,
+    )
+    # Witness on p1's side for the "you control" filter.
+    p1_witness = CardDef(
+        name="Mass Counter Witness",
+        card_type="Creature",
+        mana_cost_generic=1,
+        mana_cost_colored=(("R", 1),),
+        power=2,
+        toughness=2,
+    )
+    spec = DeckSpec(
+        card_defs=(atmospheric_greenhouse, p0_bait_a, p0_bait_b, p1_witness),
+        p0_library=(),
+        p1_library=(),
+    )
+    py_state = build_python_state(spec)
+    rust_state = build_rust_state(spec)
+
+    # ---- Rust side ----
+    ZONE_BATTLEFIELD = 2
+    rust_p0_bait_a_dict = {
+        "name": "Mass Counter Bait Alpha",
+        "card_types": ["Creature"],
+        "mana_cost": {"generic": 1, "G": 1},
+        "effects": [],
+        "power": 2,
+        "toughness": 2,
+    }
+    rust_p0_bait_b_dict = {
+        "name": "Mass Counter Bait Beta",
+        "card_types": ["Creature"],
+        "mana_cost": {"generic": 2, "G": 1},
+        "effects": [],
+        "power": 3,
+        "toughness": 3,
+    }
+    rust_p1_witness_dict = {
+        "name": "Mass Counter Witness",
+        "card_types": ["Creature"],
+        "mana_cost": {"generic": 1, "R": 1},
+        "effects": [],
+        "power": 2,
+        "toughness": 2,
+    }
+    rust_p0_a_id = rust_state.register_and_inject_object(
+        rust_p0_bait_a_dict, 0, ZONE_BATTLEFIELD,
+    )
+    rust_p0_b_id = rust_state.register_and_inject_object(
+        rust_p0_bait_b_dict, 0, ZONE_BATTLEFIELD,
+    )
+    rust_p1_w_id = rust_state.register_and_inject_object(
+        rust_p1_witness_dict, 1, ZONE_BATTLEFIELD,
+    )
+    assert rust_state.stack_size() == 0
+
+    rust_greenhouse_dict = {
+        "name": "Atmospheric Greenhouse",
+        "card_types": ["Artifact"],
+        "mana_cost": {"generic": 4},
+        "effects": [],
+        "triggered_abilities": [
+            {
+                "event": "enters",
+                "predicate": {"kind": "source_is_self"},
+                "effect": {
+                    "kind": "put_plus_one_counter_on_each_creature_you_control",
+                    "amount": 1,
+                },
+            }
+        ],
+    }
+    rust_greenhouse_id = rust_state.register_and_inject_object(
+        rust_greenhouse_dict, 0, ZONE_BATTLEFIELD,
+    )
+    assert rust_state.stack_size() == 1, (
+        "Rust: Atmospheric Greenhouse's own arrival should fire the "
+        "SourceIsSelf ENTERS trigger and land "
+        "PutPlusOneCounterOnEachCreatureYouControl(1) on the stack. "
+        f"Got stack_size={rust_state.stack_size()}"
+    )
+
+    # ---- Python side ----
+    from mtg_bot.actions import _trigger_etb_abilities
+    from mtg_bot.cards.base import CardPrinting, ManaCost
+    from mtg_bot.effects.base import TriggeredAbility
+    from mtg_bot.effects.generic.counters import (
+        PutPlusOneCounterOnEachCreatureYouControl,
+    )
+    from mtg_bot.effects.predicates import Event, IsSelf
+    from mtg_bot.game import Zone
+
+    p0_bait_a_printing = CardPrinting(
+        name="Mass Counter Bait Alpha",
+        mana_cost_str="",
+        mana_cost=ManaCost(generic=1, colored=(("G", 1),)),
+        type_line="Creature",
+        supertypes=(),
+        card_types=("Creature",),
+        subtypes=(),
+        power=2,
+        toughness=2,
+        produces=frozenset(),
+        triggered_abilities=(),
+    )
+    p0_bait_b_printing = CardPrinting(
+        name="Mass Counter Bait Beta",
+        mana_cost_str="",
+        mana_cost=ManaCost(generic=2, colored=(("G", 1),)),
+        type_line="Creature",
+        supertypes=(),
+        card_types=("Creature",),
+        subtypes=(),
+        power=3,
+        toughness=3,
+        produces=frozenset(),
+        triggered_abilities=(),
+    )
+    p1_witness_printing = CardPrinting(
+        name="Mass Counter Witness",
+        mana_cost_str="",
+        mana_cost=ManaCost(generic=1, colored=(("R", 1),)),
+        type_line="Creature",
+        supertypes=(),
+        card_types=("Creature",),
+        subtypes=(),
+        power=2,
+        toughness=2,
+        produces=frozenset(),
+        triggered_abilities=(),
+    )
+    greenhouse_printing = CardPrinting(
+        name="Atmospheric Greenhouse",
+        mana_cost_str="",
+        mana_cost=ManaCost(generic=4),
+        type_line="Artifact",
+        supertypes=(),
+        card_types=("Artifact",),
+        subtypes=(),
+        # Pure Artifact at resting state.
+        power=None,
+        toughness=None,
+        produces=frozenset(),
+        triggered_abilities=(
+            TriggeredAbility(
+                event=Event.ENTERS,
+                predicate=IsSelf(),
+                effect=PutPlusOneCounterOnEachCreatureYouControl(amount=1),
+            ),
+        ),
+    )
+
+    py_p0_bait_a = py_state.new_object(
+        p0_bait_a_printing, owner_id=0, zone=Zone.BATTLEFIELD,
+    )
+    py_p0_bait_a.summoning_sick = False
+    py_p0_bait_a.tapped = False
+    py_p0_bait_a.damage = 0
+    py_p0_bait_a.etb_timestamp = py_state.next_timestamp
+    py_state.next_timestamp += 1
+    py_state.battlefield.append(py_p0_bait_a)
+
+    py_p0_bait_b = py_state.new_object(
+        p0_bait_b_printing, owner_id=0, zone=Zone.BATTLEFIELD,
+    )
+    py_p0_bait_b.summoning_sick = False
+    py_p0_bait_b.tapped = False
+    py_p0_bait_b.damage = 0
+    py_p0_bait_b.etb_timestamp = py_state.next_timestamp
+    py_state.next_timestamp += 1
+    py_state.battlefield.append(py_p0_bait_b)
+
+    py_p1_witness = py_state.new_object(
+        p1_witness_printing, owner_id=1, zone=Zone.BATTLEFIELD,
+    )
+    py_p1_witness.summoning_sick = False
+    py_p1_witness.tapped = False
+    py_p1_witness.damage = 0
+    py_p1_witness.etb_timestamp = py_state.next_timestamp
+    py_state.next_timestamp += 1
+    py_state.battlefield.append(py_p1_witness)
+
+    assert py_p0_bait_a.plus_one_counters == 0
+    assert py_p0_bait_b.plus_one_counters == 0
+    assert py_p1_witness.plus_one_counters == 0
+
+    py_greenhouse = py_state.new_object(
+        greenhouse_printing, owner_id=0, zone=Zone.BATTLEFIELD,
+    )
+    py_greenhouse.summoning_sick = False
+    py_greenhouse.tapped = False
+    py_greenhouse.damage = 0
+    py_greenhouse.etb_timestamp = py_state.next_timestamp
+    py_state.next_timestamp += 1
+    py_state.battlefield.append(py_greenhouse)
+    _trigger_etb_abilities(py_state, py_greenhouse)
+    assert len(py_state.stack) == 1, (
+        "Python: Atmospheric Greenhouse's own arrival should fire "
+        "the IsSelf ENTERS trigger and land "
+        "PutPlusOneCounterOnEachCreatureYouControl(1) on the stack. "
+        f"Got stack size={len(py_state.stack)}"
+    )
+
+    # ---- Drain both stacks, then compare ----
+    _drain_stack_both(py_state, rust_state)
+
+    # Stacks empty on both sides.
+    assert rust_state.stack_size() == 0
+    assert len(py_state.stack) == 0
+
+    # Per-engine post-state: both p0 bait creatures with 1 counter,
+    # p1 witness with 0, Greenhouse itself with 0.
+    rust_bf = rust_state.battlefield_snapshot()
+    rust_p0_a_entry = next(
+        e for e in rust_bf if int(e["id"]) == rust_p0_a_id
+    )
+    rust_p0_b_entry = next(
+        e for e in rust_bf if int(e["id"]) == rust_p0_b_id
+    )
+    rust_p1_w_entry = next(
+        e for e in rust_bf if int(e["id"]) == rust_p1_w_id
+    )
+    rust_greenhouse_entry = next(
+        e for e in rust_bf if int(e["id"]) == rust_greenhouse_id
+    )
+
+    assert rust_p0_a_entry["counters"] == 1, (
+        f"Rust p0 bait Alpha should have 1 +1/+1 counter; got "
+        f"{rust_p0_a_entry['counters']}"
+    )
+    assert rust_p0_b_entry["counters"] == 1, (
+        f"Rust p0 bait Beta should have 1 +1/+1 counter; got "
+        f"{rust_p0_b_entry['counters']}"
+    )
+    assert rust_p1_w_entry["counters"] == 0, (
+        f"Rust p1 witness should have 0 counters (not under p0's "
+        f"'you control' filter); got {rust_p1_w_entry['counters']}"
+    )
+    assert rust_greenhouse_entry["counters"] == 0, (
+        f"Rust Atmospheric Greenhouse should have 0 counters (it "
+        f"is an Artifact, not a Creature); got "
+        f"{rust_greenhouse_entry['counters']}"
+    )
+
+    assert py_p0_bait_a.plus_one_counters == 1, (
+        f"Python p0 bait Alpha should have 1 +1/+1 counter; got "
+        f"{py_p0_bait_a.plus_one_counters}"
+    )
+    assert py_p0_bait_b.plus_one_counters == 1, (
+        f"Python p0 bait Beta should have 1 +1/+1 counter; got "
+        f"{py_p0_bait_b.plus_one_counters}"
+    )
+    assert py_p1_witness.plus_one_counters == 0, (
+        f"Python p1 witness should have 0 counters (not under p0's "
+        f"'you control' filter); got {py_p1_witness.plus_one_counters}"
+    )
+    assert py_greenhouse.plus_one_counters == 0, (
+        f"Python Atmospheric Greenhouse should have 0 counters "
+        f"(Artifact, not Creature); got "
+        f"{py_greenhouse.plus_one_counters}"
+    )
+
+    # Cross-engine: same counter values on the same objects.
+    assert rust_p0_a_entry["counters"] == py_p0_bait_a.plus_one_counters
+    assert rust_p0_b_entry["counters"] == py_p0_bait_b.plus_one_counters
+    assert rust_p1_w_entry["counters"] == py_p1_witness.plus_one_counters
+    assert (
+        rust_greenhouse_entry["counters"]
+        == py_greenhouse.plus_one_counters
+    )
+
+    # Lives unchanged.
+    assert rust_state.get_life(0) == 20
+    assert rust_state.get_life(1) == 20
+    assert py_state.players[0].life == 20
+    assert py_state.players[1].life == 20
+
+
+
 # === PHASE5_PROBES_INSERT_ABOVE_THIS_LINE ===
 # New real-EoE parity probes go IMMEDIATELY ABOVE this marker.
 # Append-only convention prevents merge collisions when multiple agents add probes in parallel.

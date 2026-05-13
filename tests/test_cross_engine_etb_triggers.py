@@ -1709,5 +1709,110 @@ def test_rust_parser_accepts_each_opponent_mills_cards_in_triggered_ability():
     assert pid == 0
 
 
+# ===== Phase 5 mass-counter bridge pins =====
+#
+# Anthem-shape +1/+1 counter add for the source's controller's bf.
+# Translates ``put_plus_one_counter_on_each_creature_you_control``
+# (Rust ``Effect::PutPlusOneCounterOnEachCreatureYouControl``) into
+# Python's ``PutPlusOneCounterOnEachCreatureYouControl(amount=N)``.
+#
+# Sister arm to ``put_plus_one_counter_on_creature_you_control``
+# (single-target). The MASS variant has no targeting; the bridge
+# constructor mirrors the Rust variant's bare ``amount`` shape.
+# Real EoE consumer: Atmospheric Greenhouse.
+
+
+def test_bridge_put_plus_one_counter_on_each_creature_you_control_translates_to_python():
+    """Phase 5 mass-counter bridge: Rust
+    ``{"kind": "put_plus_one_counter_on_each_creature_you_control",
+    "amount": N}`` translates to Python
+    ``PutPlusOneCounterOnEachCreatureYouControl(amount=N)``.
+    """
+    from mtg_bot.effects.generic.counters import (
+        PutPlusOneCounterOnEachCreatureYouControl,
+    )
+    from mtg_bot.parity.cross_engine import _ta_dict_to_python_effect
+
+    e = _ta_dict_to_python_effect(
+        {
+            "kind": "put_plus_one_counter_on_each_creature_you_control",
+            "amount": 1,
+        }
+    )
+    assert isinstance(e, PutPlusOneCounterOnEachCreatureYouControl)
+    assert e.amount == 1
+    # Default exclude_source is False (matches the Rust variant
+    # which has no exclude-source field; the bridge mirrors the
+    # bare-shape variant).
+    assert e.exclude_source is False
+
+
+def test_bridge_put_plus_one_counter_on_each_creature_you_control_amount_default_one():
+    """Missing ``amount`` defaults to 1 (matches the Python class's
+    ``amount: int = 1`` default and the Rust parser's tolerant arm
+    at cards.rs:3256-3272).
+    """
+    from mtg_bot.effects.generic.counters import (
+        PutPlusOneCounterOnEachCreatureYouControl,
+    )
+    from mtg_bot.parity.cross_engine import _ta_dict_to_python_effect
+
+    e = _ta_dict_to_python_effect(
+        {"kind": "put_plus_one_counter_on_each_creature_you_control"}
+    )
+    assert isinstance(e, PutPlusOneCounterOnEachCreatureYouControl)
+    assert e.amount == 1
+
+
+def test_bridge_put_plus_one_counter_on_each_creature_you_control_amount_two_translates():
+    """Non-default ``amount`` round-trips. The Rust variant carries
+    ``amount: i32`` so larger printings (none in EoE today, but the
+    field is parametric) translate the same way.
+    """
+    from mtg_bot.effects.generic.counters import (
+        PutPlusOneCounterOnEachCreatureYouControl,
+    )
+    from mtg_bot.parity.cross_engine import _ta_dict_to_python_effect
+
+    e = _ta_dict_to_python_effect(
+        {
+            "kind": "put_plus_one_counter_on_each_creature_you_control",
+            "amount": 2,
+        }
+    )
+    assert isinstance(e, PutPlusOneCounterOnEachCreatureYouControl)
+    assert e.amount == 2
+
+
+def test_rust_parser_accepts_put_plus_one_counter_on_each_creature_you_control_in_triggered_ability():
+    """Pin the Rust parser surface for
+    ``put_plus_one_counter_on_each_creature_you_control``. Uses an
+    Artifact carrier (matches Atmospheric Greenhouse's type-line
+    shape) so a future regression that tightens the Rust
+    parse_triggered_ability arm to creature-only sources surfaces
+    here.
+    """
+    import mtg_bot_engine
+
+    reg = mtg_bot_engine.Registry()
+    d = {
+        "name": "Phase 5 Bridge Pin -- PutPlusOneCounterOnEachCreatureYouControl",
+        "card_types": ["Artifact"],
+        "mana_cost": {"generic": 4},
+        "triggered_abilities": [
+            {
+                "event": "enters",
+                "predicate": {"kind": "source_is_self"},
+                "effect": {
+                    "kind": "put_plus_one_counter_on_each_creature_you_control",
+                    "amount": 1,
+                },
+            }
+        ],
+    }
+    pid = reg.register_printing(d)
+    assert pid == 0
+
+
 # === PHASE5_BRIDGE_PIN_TESTS_INSERT_ABOVE_THIS_LINE ===
 # New bridge-arm pin tests go IMMEDIATELY ABOVE this marker.
