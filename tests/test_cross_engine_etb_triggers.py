@@ -786,3 +786,121 @@ def test_rust_parser_accepts_mill_in_triggered_ability():
     }
     pid = reg.register_printing(d)
     assert pid == 0
+
+
+def test_bridge_return_creature_from_graveyard_to_hand_translates_to_python():
+    """Phase 5 bridge extension: Rust
+    ``{"kind": "return_creature_from_your_graveyard_to_hand"}``
+    translates to Python
+    ``ReturnCreatureFromYourGraveyardToHand()``.
+
+    Unblocks Interceptor-Mechan / Fell-Gravship-suffix-shape ETB
+    triggers (the bare unit-variant; the rider-widened EoE-card
+    shapes — or_artifact / or_spacecraft — would surface as
+    separate parametric Rust variants and re-enter the bridge as
+    new arms). The Rust effect variant exists at
+    ``rust/src/cards.rs:782`` (unit variant
+    ``Effect::ReturnCreatureFromYourGraveyardToHand``); its
+    parse_effect arm at ``cards.rs:3148-3151`` takes no fields;
+    the resolve arm at ``state_ops_resolve.rs:2986-3020`` carries
+    the I82 controller-of-effect fix (``controller_idx`` derives
+    from ``current_resolve_source_controller``, not
+    ``active_player``).
+
+    Python's class already exists at
+    ``effects/generic/bounce.py:356`` as constructor sugar over
+    ``ReturnFromGraveyard`` (pins ``creature=True`` +
+    ``destination="hand"``). This pins the bridge translation that
+    wires them up.
+    """
+    from mtg_bot.effects.generic.bounce import (
+        ReturnCreatureFromYourGraveyardToHand,
+    )
+    from mtg_bot.parity.cross_engine import _ta_dict_to_python_effect
+
+    e = _ta_dict_to_python_effect(
+        {"kind": "return_creature_from_your_graveyard_to_hand"}
+    )
+    assert isinstance(e, ReturnCreatureFromYourGraveyardToHand)
+    # The unified base's flags should reflect the unit-variant shape:
+    # primary type = creature, destination = hand, no widening
+    # riders, no MV cap, single-target.
+    assert e.creature is True
+    assert e.destination == "hand"
+    assert e.or_artifact is False
+    assert e.or_spacecraft is False
+    assert e.or_enchantment is False
+    assert e.max_mv == 0
+    assert e.min_n == 1
+    assert e.max_n == 1
+    assert e.target_kind == "graveyard_creature"
+
+
+def test_bridge_return_creature_from_graveyard_to_hand_ignores_extra_fields():
+    """The unit variant has no fields, so the bridge translator
+    silently ignores every key beyond ``kind`` on the dict (matches
+    the Rust parse_effect arm at ``cards.rs:3148-3151`` which only
+    matches on the discriminator and constructs the unit variant
+    without reading any companion fields). Defense-in-depth: keep
+    this lenient pin so partial fixtures don't crash the translator
+    if a downstream slice prepends rider-shape stubs to the dict
+    before the rider arms land.
+    """
+    from mtg_bot.effects.generic.bounce import (
+        ReturnCreatureFromYourGraveyardToHand,
+    )
+    from mtg_bot.parity.cross_engine import _ta_dict_to_python_effect
+
+    e = _ta_dict_to_python_effect(
+        {
+            "kind": "return_creature_from_your_graveyard_to_hand",
+            # Round-trip noise: future rider stubs that aren't yet
+            # plumbed through. The bridge silently ignores them, as
+            # does the Rust unit-variant parser arm.
+            "or_artifact": True,
+            "max_mv": 4,
+        }
+    )
+    assert isinstance(e, ReturnCreatureFromYourGraveyardToHand)
+    # The riders DO NOT carry through — the bare unit variant ignores
+    # them. Probes that need widening must wait for a parametric Rust
+    # variant + companion bridge arm.
+    assert e.or_artifact is False
+    assert e.max_mv == 0
+
+
+def test_rust_parser_accepts_return_creature_from_graveyard_to_hand_in_triggered_ability():
+    """Pin the Rust parser surface for the matched effect kind. The
+    bridge's dict shape must register cleanly on the Rust side too;
+    this lockstep gate keeps the Python bridge from drifting away
+    from Rust's parse_effect coverage.
+
+    Mirrors the existing ``deal_damage_any_target`` /
+    ``damage_each_opponent`` parser-surface pins. The unit variant
+    takes no fields beyond ``kind`` — the predicate-path triggered-
+    ability wrapper is just a carrier; the substrate being pinned
+    is parse_effect's
+    ``return_creature_from_your_graveyard_to_hand`` arm at
+    ``cards.rs:3148-3151``.
+    """
+    import mtg_bot_engine
+
+    reg = mtg_bot_engine.Registry()
+    d = {
+        "name": "Phase 5 Bridge Pin — Return Creature From GY to Hand",
+        "card_types": ["Creature"],
+        "mana_cost": {"generic": 3, "B": 1},
+        "power": 2,
+        "toughness": 2,
+        "triggered_abilities": [
+            {
+                "event": "enters",
+                "predicate": {"kind": "source_is_self"},
+                "effect": {
+                    "kind": "return_creature_from_your_graveyard_to_hand",
+                },
+            }
+        ],
+    }
+    pid = reg.register_printing(d)
+    assert pid == 0
