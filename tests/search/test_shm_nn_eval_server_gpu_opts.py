@@ -868,6 +868,52 @@ def test_compile_fallback_eager_warmup_also_fails(tmp_path: Path):
             server.stop(timeout=2.0)
 
 
+def test_pinned_staging_flat_path_allocated_on_cuda(tmp_path: Path):
+    """Flat-feature MLP server pinned-staging branch. Mirrors the
+    structured test but exercises the ``else`` arm that leaves the
+    structured per-token pinned tensors as None."""
+    pinned_marker = mock.Mock(name="pinned_tensor")
+    pinned_marker.is_pinned.return_value = True
+
+    original_zeros_like = torch.zeros_like
+
+    def _zeros_like_with_pin(*args, **kwargs):
+        t = original_zeros_like(*args, **kwargs)
+        t.pin_memory = mock.Mock(return_value=pinned_marker)
+        return t
+
+    torch.manual_seed(0)
+    ref = NNEvaluator(with_policy=True)
+    weights_path = tmp_path / "v.pt"
+    ref.save(weights_path)
+
+    with mock.patch.object(
+        torch.cuda, "is_available", lambda: True,
+    ), mock.patch(
+        "mtg_bot.search.shm_nn_eval_server.torch.compile",
+        side_effect=lambda m, **kw: m,
+    ), mock.patch(
+        "mtg_bot.search.shm_nn_eval_server.torch.zeros_like",
+        _zeros_like_with_pin,
+    ):
+        server = SharedTensorNNEvalServer(
+            weights_path=weights_path, device="cuda",
+            with_policy=True, batch_size=2,
+            batch_wait_ms=0.0, n_slots=2,
+            autocast_dtype=False, compile_model=False,
+            warmup=False, pin_memory=True,
+        )
+        assert server._pin_memory_enabled is True
+        # Flat-path pinned tensors are populated; per-token tensors
+        # stay None (the ``else`` arm of the structured/flat fork).
+        assert server._pinned_features is not None
+        assert server._pinned_masks is not None
+        assert server._pinned_token_type is None
+        assert server._pinned_token_emb_ids is None
+        assert server._pinned_token_scalars is None
+        assert server._pinned_attention_mask is None
+
+
 def test_pin_memory_flat_path_skipped_when_not_enabled(tmp_path: Path):
     """Flat-feature MLP server: when pin_memory is off, the
     pinned-staging slots stay None. Covers the CPU branch of the
