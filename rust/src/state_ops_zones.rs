@@ -221,8 +221,18 @@ impl GameState {
         // battlefield-exit of a nonland permanent. See
         // `mark_left_battlefield_if_nonland` for the full
         // commentary on the gate + reset lifecycle.
+        //
+        // ETB-trigger Slice 8 (LEAVES_BATTLEFIELD fan-out): queue
+        // the leaving object's id for dispatch. Mirrors Python's
+        // `_fire_leaves_battlefield_triggers` call in
+        // `move_off_battlefield` (turn.py:289) which fires for ALL
+        // bf-exits regardless of card type (lands included). The
+        // deferred dispatch happens after the move-zone mutation
+        // commits and (if there's also a queued ENTERS — e.g.
+        // bounce-then-replay primitive) after the ENTERS drain.
         if source_was_battlefield {
             mark_left_battlefield_if_nonland(self, obj.printing_id);
+            self.pending_leaves_dispatches.push(obj.id);
         }
         obj.zone = target_zone;
         obj.controller = target_player;
@@ -265,6 +275,14 @@ impl GameState {
             self.pending_etb_dispatches.push(id);
             crate::state_ops_resolve::drain_pending_etb_dispatches(self)?;
         }
+        // ETB-trigger Slice 8: drain any queued LEAVES dispatches
+        // AFTER the ENTERS drain so a bounce-and-replay primitive
+        // (LEAVES + ENTERS in one call) sees ENTERS-then-LEAVES
+        // push order — and the stack being LIFO, LEAVES resolves
+        // first. (Today's `move_object` carries either a LEAVES
+        // OR an ENTERS, never both at once; the ordering pin is
+        // defensive for future LTB-into-bounce variants.)
+        crate::state_ops_resolve::drain_pending_leaves_dispatches(self)?;
         Ok(true)
     }
 

@@ -406,5 +406,8 @@ pub fn make_state(
         // ETB-trigger Slice 5: empty deferred-DIES queue at
         // construction.
         pending_dies_dispatches: Vec::new(),
+        // ETB-trigger Slice 8: empty deferred-LEAVES queue at
+        // construction.
+        pending_leaves_dispatches: Vec::new(),
     })
 }

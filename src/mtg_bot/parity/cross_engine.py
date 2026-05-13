@@ -261,6 +261,8 @@ def _ta_dict_to_python_triggered_ability(ta_dict: dict):
         event = Event.IS_CAST
     elif event_str == "attacks":
         event = Event.ATTACKS
+    elif event_str == "leaves_battlefield":
+        event = Event.LEAVES_BATTLEFIELD
     else:
         raise ValueError(
             f"cross_engine triggered_abilities bridge: event "

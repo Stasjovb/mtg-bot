@@ -403,18 +403,20 @@ pub(crate) fn dispatch_event(
     event: Event,
     subject_id: u32,
 ) -> PyResult<()> {
-    // Defensive: Slice 7 wires ENTERS + DIES + CAST + ATTACKS. Other
-    // events declared in the enum stay raise-on-dispatch so a future
-    // caller who skipped the fan-out plan surfaces it loudly rather
-    // than silently no-op.
+    // Defensive: Slice 8 wires ENTERS + DIES + CAST + ATTACKS +
+    // LEAVES_BATTLEFIELD. Other events declared in the enum stay
+    // raise-on-dispatch so a future caller who skipped the fan-out
+    // plan surfaces it loudly rather than silently no-op.
     if event != Event::Enters
         && event != Event::Dies
         && event != Event::Cast
         && event != Event::Attacks
+        && event != Event::LeavesBattlefield
     {
         return Err(PyValueError::new_err(format!(
-            "dispatch_event: event {event:?} is not yet wired in Slice 7; \
-             only Event::Enters, Event::Dies, Event::Cast, and Event::Attacks dispatch today"
+            "dispatch_event: event {event:?} is not yet wired in Slice 8; \
+             only Event::Enters, Event::Dies, Event::Cast, Event::Attacks, \
+             and Event::LeavesBattlefield dispatch today"
         )));
     }
 
@@ -450,14 +452,22 @@ pub(crate) fn dispatch_event(
             .iter()
             .map(|o| (o.id, o.controller, o.printing_id))
             .collect();
-        if event == Event::Dies || event == Event::Cast {
+        if event == Event::Dies
+            || event == Event::Cast
+            || event == Event::LeavesBattlefield
+        {
             // DIES: look up the dying object (now in graveyard).
             // CAST: look up the cast object (still in hand).
-            // Both share the four-zone walk shape. Skip if not
-            // found — the dispatch caller is loud-but-safe.
+            // LEAVES_BATTLEFIELD: look up the leaving object (now
+            // in graveyard / exile / hand / library depending on
+            // the bf-exit primitive that fired the dispatch). The
+            // four-zone walk + library covers each destination.
+            //
+            // All three share the multi-zone walk shape. Skip if
+            // not found — the dispatch caller is loud-but-safe.
             //
             // Dedup guard: if the subject somehow also appears in
-            // `bf` (shouldn't happen for either event's caller),
+            // `bf` (shouldn't happen for these events' callers),
             // don't double-register it as an observer.
             if !observer_entries.iter().any(|(id, _, _)| *id == subject_id) {
                 'outer: for player in &state.players {
@@ -466,6 +476,7 @@ pub(crate) fn dispatch_event(
                         &player.library,
                         &player.battlefield,
                         &player.graveyard,
+                        &player.exile,
                     ] {
                         for obj in zone.iter() {
                             if obj.id == subject_id {
@@ -634,6 +645,30 @@ pub(crate) fn drain_pending_dies_dispatches(state: &mut GameState) -> PyResult<(
         }
         for dead_id in drained {
             dispatch_event(state, Event::Dies, dead_id)?;
+        }
+    }
+}
+
+/// **Slice 8 — LEAVES_BATTLEFIELD sibling of
+/// `drain_pending_etb_dispatches` / `drain_pending_dies_dispatches`.**
+/// Drains `state.pending_leaves_dispatches` in FIFO order,
+/// dispatching `Event::LeavesBattlefield` for each queued id.
+/// Called by every bf-exit primitive AFTER the primitive's mutation
+/// completes (and AFTER any sibling DIES drain, so death-then-leaves
+/// stack-push order matches Python's
+/// `move_off_battlefield` sequence at `turn.py:280-289`).
+///
+/// Re-entrant fills: a LEAVES trigger whose resolution causes
+/// another bf-exit (e.g. exile-on-LTB) re-enters into the queue;
+/// the outer loop drains FIFO until the queue is empty.
+pub(crate) fn drain_pending_leaves_dispatches(state: &mut GameState) -> PyResult<()> {
+    loop {
+        let drained: Vec<u32> = std::mem::take(&mut state.pending_leaves_dispatches);
+        if drained.is_empty() {
+            return Ok(());
+        }
+        for leaving_id in drained {
+            dispatch_event(state, Event::LeavesBattlefield, leaving_id)?;
         }
     }
 }

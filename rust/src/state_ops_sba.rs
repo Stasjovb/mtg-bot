@@ -316,12 +316,25 @@ impl GameState {
             // now, drain after the loop. The drain happens at the
             // end of `apply_sbas` below.
             self.pending_dies_dispatches.push(dying_obj_id);
+            // ETB-trigger Slice 8: every death is also a bf-exit.
+            // Mirror Python's `move_off_battlefield` (turn.py:280-289)
+            // which fires DIES first then LEAVES_BATTLEFIELD. Push
+            // order: DIES first, LEAVES second; the matching drain
+            // order below preserves that stack-push order. LIFO
+            // resolution: LEAVES resolves before DIES.
+            self.pending_leaves_dispatches.push(dying_obj_id);
         }
         // Drain pending DIES dispatches AFTER the SBA loop completes.
         // Order matches push-order — each dying creature's triggers
         // fire in destruction order (which is bf-ETB-timestamp order
         // per `collect_sba_victims`'s walk).
         crate::state_ops_resolve::drain_pending_dies_dispatches(self)?;
+        // ETB-trigger Slice 8: drain LEAVES dispatches AFTER DIES.
+        // Stack push order: DIES then LEAVES; LIFO resolution
+        // resolves LEAVES first, matching Python's
+        // `move_off_battlefield` sequence (turn.py:280-289 fires
+        // DIES then LEAVES; Python's stack is also LIFO).
+        crate::state_ops_resolve::drain_pending_leaves_dispatches(self)?;
         Ok(count)
     }
 

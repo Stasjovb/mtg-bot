@@ -1133,6 +1133,32 @@ pub struct GameState {
     /// fingerprint: the queue is empty across stack resolution
     /// boundaries (every drain site empties it before returning).
     pub pending_dies_dispatches: Vec<u32>,
+    /// **LEAVES_BATTLEFIELD substrate (Slice 8) — deferred dispatch
+    /// queue.** Sibling of `pending_dies_dispatches`. Every
+    /// bf-exit primitive (`move_object` off-bf, SBA destroy)
+    /// queues the leaving object's id here; the natural caller
+    /// drains via `drain_pending_leaves_dispatches` after the
+    /// primitive returns. Mirrors Python's
+    /// `_fire_leaves_battlefield_triggers` call in
+    /// `move_off_battlefield` (turn.py:289), which fires for ALL
+    /// bf-exits (death, exile, bounce, sacrifice).
+    ///
+    /// **Relationship to DIES queue:** SBA-destroyed creatures push
+    /// onto BOTH queues (push order: DIES first, LEAVES second);
+    /// `apply_sbas` drains DIES first then LEAVES so DIES triggers
+    /// land below LEAVES triggers on the stack — and the stack
+    /// being LIFO, LEAVES resolves FIRST. This matches Python's
+    /// `move_off_battlefield` ordering at `turn.py:280-289` (DIES
+    /// dispatch precedes LEAVES dispatch in source order; Python's
+    /// stack is also LIFO so LEAVES resolves first).
+    ///
+    /// **Drain semantics.** FIFO drain — each leaving permanent's
+    /// triggers fire in bf-exit order.
+    ///
+    /// Like the other dispatch queues, not serialized into the
+    /// fingerprint: the queue is empty across stack resolution
+    /// boundaries.
+    pub pending_leaves_dispatches: Vec<u32>,
 }
 
 impl Clone for GameState {
@@ -1168,6 +1194,7 @@ impl Clone for GameState {
             triggered_this_turn: self.triggered_this_turn.clone(),
             pending_etb_dispatches: self.pending_etb_dispatches.clone(),
             pending_dies_dispatches: self.pending_dies_dispatches.clone(),
+            pending_leaves_dispatches: self.pending_leaves_dispatches.clone(),
         }
     }
 }
@@ -1603,5 +1630,10 @@ pub fn make_synthetic_state(
         // construction; drained by `apply_sbas` after the SBA loop
         // completes.
         pending_dies_dispatches: Vec::new(),
+        // ETB-trigger Slice 8: empty deferred-LEAVES queue at
+        // construction; drained by the bf-exit primitive's caller
+        // (move_object, apply_sbas, etc.) after the primitive
+        // returns.
+        pending_leaves_dispatches: Vec::new(),
     }
 }
