@@ -4053,11 +4053,11 @@ the forked branch.
   - **Once-per-turn-per-walker ledger** (CR 606.3 — Slice C). **CLOSED**
     by I57 (`GameState.loyalty_activated_this_turn` ledger + emission
     gate + Phase 3c precheck + Phase 5e stamp + cleanup reset).
-  - **`starting_loyalty` ETB seeding** on `CardPrinting`. Today
-    walker tests seed `loyalty_counters` directly via the
-    `set_loyalty_counters` test helper. Production wiring needs a
-    `CardPrinting.starting_loyalty: i32` field + ETB stamp at every
-    walker-entering call site.
+  - **`starting_loyalty` ETB seeding** on `CardPrinting`. **CLOSED**
+    by I58 (`CardPrinting.starting_loyalty: i32` field +
+    `seed_starting_loyalty_for_etb` helper + wired at 4 canonical
+    bf-entry call sites: cast-and-resolve, cast_creature/play_land,
+    move_object, reanimation).
   - **Cross-engine smoke probe** for walker activations. Deferred
     until a Tezzeret-shape Python printing surfaces in the harness.
 
@@ -4132,6 +4132,77 @@ the forked branch.
   - **Walker damage redirect** (CR 119.5 — Slice B). Unchanged from
     I56's out-of-scope.
   - **`starting_loyalty` ETB seeding** on `CardPrinting`. Unchanged
+    from I56.
+  - **Cross-engine smoke probe** for walker activations. Unchanged
+    from I56.
+
+### I58. `CardPrinting.starting_loyalty: i32 = 0` + `crate::state::seed_starting_loyalty_for_etb` helper; ETB-stamps `GameObject.loyalty_counters` at every bf-entry call site (CE20 follow-up Slice 5 Walker loyalty starting_loyalty ETB seeding closure)
+
+- **Pinned by**:
+  - 8 new `tests_rust/test_activated.py` `test_starting_loyalty_*`
+    regression pins covering parser surface (3: positive value
+    parses, missing key defaults to 0, non-int raises), ETB seeding
+    via cast-and-resolve (3: positive seeds counter, zero seeds
+    zero, non-walker dict carrying the key has no observable
+    effect), ETB seeding via `move_object` (1: hand→bf flicker
+    seeds), end-to-end cast-then-activate without test-helper seed
+    call (1).
+
+- **Rule**. CR 606.5b: "As a planeswalker enters the battlefield,
+  its controller puts a number of loyalty counters on it equal to
+  the number printed in its lower right corner."
+
+- **CardPrinting extension**. `CardPrinting` grows `pub starting_loyalty: i32`
+  field (default 0). `parse_printing` reads the optional
+  `starting_loyalty` key from the registry dict; missing key
+  defaults to 0 (back-compat for every pre-Slice-5 dict).
+  Non-int values raise loud (`starting_loyalty must be an integer`).
+  3 direct-construction sites (`state.rs` Forest/Bears/Elves)
+  updated with `starting_loyalty: 0` initializer.
+
+- **Helper**. `crate::state::seed_starting_loyalty_for_etb(state,
+  obj)`. Takes `&GameState` + `&mut GameObject`. No-op if:
+  printing isn't on the registry (defensive lookup), printing's
+  card_types doesn't contain `"Planeswalker"`, or
+  `starting_loyalty == 0` (the default). Otherwise overwrites
+  `obj.loyalty_counters` with `printing.starting_loyalty`.
+
+- **ETB-stamp call sites wired**:
+  - `state_ops_resolve.rs::move_source_post_resolve` — canonical
+    cast-and-resolve path. Calls the helper directly (owned `obj`
+    + `&mut state` param).
+  - `state_ops_cast.rs::move_from_hand_to_battlefield` — play_land
+    + cast_creature (no-stack primitive). Pre-reads the printing's
+    starting_loyalty BEFORE the player-mut borrow to dodge the
+    borrow checker; inlined rather than calling the helper.
+  - `state_ops_zones.rs::move_object` — generic zone-change
+    primitive. Calls the helper after the timestamp reservation.
+  - `state_ops_resolve.rs:2500` reanimation arm
+    (`Effect::ReanimateTargetCreature`-like) — pre-reads the
+    printing's starting_loyalty BEFORE the gy-mut borrow. The
+    inlined `obj.loyalty_counters = starting_loyalty;` reset is
+    explicit (per CR 613.x the reanimated walker is a new object
+    starting fresh).
+
+- **ETB-stamp call sites NOT wired** (deferred / out-of-scope):
+  - Token-creation ETB paths (`state_ops_resolve.rs:5378, 5939,
+    1886`). Tokens are by construction creatures, not walkers, in
+    EoE today.
+  - `state_ops_decisions.rs:540` (the decision-resolve ETB path).
+    Walker entry via this path isn't exercised by any current
+    fixture. Future "search library, put walker onto battlefield"
+    effect would need this wired.
+
+- **EoE pool**: 1 walker printing (Tezzeret, Cruel Captain). Printed
+  starting loyalty: 4. Pre-Slice-5-starting_loyalty, the parity
+  smoke would have needed a test-helper `set_loyalty_counters` call
+  after every walker ETB. Post-closure, production cast/resolve
+  paths seed the loyalty automatically; the test helper remains
+  available for direct synthetic-state injection where bypassing
+  ETB is intentional.
+
+- **Out of scope (deferred to future slices)**:
+  - **Walker damage redirect** (CR 119.5 — Slice B). Unchanged
     from I56.
   - **Cross-engine smoke probe** for walker activations. Unchanged
     from I56.

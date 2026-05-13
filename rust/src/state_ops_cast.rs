@@ -214,11 +214,34 @@ fn move_from_hand_to_battlefield(
     // mutable zone slices so we never need a second borrow of `state`.
     let etb_ts = state.next_etb_timestamp;
     state.next_etb_timestamp = state.next_etb_timestamp.saturating_add(1);
+    // CE20 Slice 5 (Walker loyalty — starting_loyalty ETB seeding).
+    // Pre-read the printing's walker-and-starting-loyalty shape on
+    // the immutable registry BEFORE taking the player-mutable borrow
+    // below — Rust borrow checker doesn't do field splitting through
+    // method calls so we can't read `state.registry` while holding
+    // `&mut state.players[idx]`. Look up by hand.position's pid.
+    let starting_loyalty: i32 = {
+        let pid = state.players[idx].hand[pos].printing_id;
+        match state.registry.lookup(pid) {
+            Some(printing)
+                if printing.card_types.iter().any(|t| t == "Planeswalker") =>
+            {
+                printing.starting_loyalty
+            }
+            _ => 0,
+        }
+    };
     let player = &mut state.players[idx];
     let hand = Arc::make_mut(&mut player.hand);
     let mut obj = hand.remove(pos);
     obj.zone = ZONE_BATTLEFIELD;
     obj.etb_timestamp = etb_ts;
+    // CR 606.5b ETB seed (continued). For non-walkers
+    // starting_loyalty is 0, leaving loyalty_counters at its current
+    // value (also 0 — the default from make_object).
+    if starting_loyalty != 0 {
+        obj.loyalty_counters = starting_loyalty;
+    }
     let snapshot = obj.clone();
     let entered_id = obj.id;
     let bf = Arc::make_mut(&mut player.battlefield);

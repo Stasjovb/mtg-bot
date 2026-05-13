@@ -241,6 +241,11 @@ impl GameState {
         // player borrow below.
         if target_zone == ZONE_BATTLEFIELD {
             obj.etb_timestamp = crate::state::reserve_etb_timestamp(self);
+            // CE20 Slice 5 (Walker loyalty — starting_loyalty ETB
+            // seeding). For a walker entering the battlefield via
+            // `move_object`, seed `loyalty_counters` from
+            // `printing.starting_loyalty`. No-op for non-walkers.
+            crate::state::seed_starting_loyalty_for_etb(self, &mut obj);
         }
         // ETB-trigger Slice 2 (RS9): capture the obj_id of objects
         // entering the battlefield so we can fan-out

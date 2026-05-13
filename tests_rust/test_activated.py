@@ -4156,3 +4156,194 @@ def test_walker_once_per_turn_end_to_end(synthetic_state):
         }
     )
     assert synthetic_state.get_loyalty_counters(walker_id) == 3
+
+
+# -------------------------------------------------------------------
+# CE20 Slice 5 — Planeswalker starting_loyalty ETB seeding
+#
+# CR 606.5b: a planeswalker enters the battlefield with a number of
+# loyalty counters equal to its printed starting loyalty. The
+# `CardPrinting.starting_loyalty: i32` field on the registry +
+# `crate::state::seed_starting_loyalty_for_etb` helper stamp
+# `obj.loyalty_counters` on every bf-entry call site (cast-and-resolve
+# + reanimation + move_object).
+# -------------------------------------------------------------------
+
+
+def _walker_dict_with_starting_loyalty(starting_loyalty: int):
+    """Tezzeret-shape walker with an explicit `starting_loyalty` key.
+    The 3 abilities mirror the standard +/0/- cycle (gain_life=1 for
+    each so resolution is trivial)."""
+    return {
+        "name": "Test Walker (starting_loyalty)",
+        "card_types": ["Planeswalker"],
+        "mana_cost": {"generic": 1},  # trivially castable
+        "effects": [],
+        "starting_loyalty": starting_loyalty,
+        "activated_abilities": [
+            {
+                "cost": {"loyalty": -1},
+                "effect": {"kind": "gain_life", "amount": 1},
+                "is_mana_ability": False,
+            },
+            {
+                "cost": {"loyalty": 0},
+                "effect": {"kind": "gain_life", "amount": 1},
+                "is_mana_ability": False,
+            },
+            {
+                "cost": {"loyalty": 3},
+                "effect": {"kind": "gain_life", "amount": 1},
+                "is_mana_ability": False,
+            },
+        ],
+    }
+
+
+# --- parser surface --------------------------------------------------
+
+
+def test_starting_loyalty_parses_positive(empty_registry):
+    """A printing with `starting_loyalty: 4` parses without error."""
+    pid = empty_registry.register_printing(
+        _walker_dict_with_starting_loyalty(4)
+    )
+    assert pid == 0
+
+
+def test_starting_loyalty_defaults_to_zero(empty_registry):
+    """A printing WITHOUT the `starting_loyalty` key parses; the field
+    defaults to 0 (back-compat for every pre-Slice-5-C registry dict).
+    """
+    d = _walker_dict_with_starting_loyalty(4)
+    del d["starting_loyalty"]
+    pid = empty_registry.register_printing(d)
+    assert pid == 0
+
+
+def test_starting_loyalty_invalid_type_raises(empty_registry):
+    """A non-int starting_loyalty value raises loud."""
+    d = _walker_dict_with_starting_loyalty(4)
+    d["starting_loyalty"] = "four"
+    with pytest.raises(
+        ValueError, match=r"starting_loyalty must be an integer"
+    ):
+        empty_registry.register_printing(d)
+
+
+# --- ETB seeding via cast-and-resolve --------------------------------
+
+
+def test_starting_loyalty_seeded_on_cast_to_battlefield(synthetic_state):
+    """A walker cast and resolved via the stack-resolution path
+    (`move_source_post_resolve`) enters bf with loyalty_counters ==
+    starting_loyalty. Substrate-direct test using
+    register_and_inject_object to ZONE_HAND + push_to_stack +
+    resolve_top_of_stack to drive the canonical resolve path.
+    """
+    walker_in_hand = synthetic_state.register_and_inject_object(
+        _walker_dict_with_starting_loyalty(4), 0, ZONE_HAND,
+    )
+    synthetic_state.push_to_stack(walker_in_hand, 0)
+    synthetic_state.resolve_top_of_stack()
+    # Walker landed on bf.
+    bf = synthetic_state.battlefield_snapshot()
+    walker_on_bf = next(
+        (o for o in bf if o["id"] == walker_in_hand), None
+    )
+    assert walker_on_bf is not None, "Walker did not enter battlefield"
+    assert synthetic_state.get_loyalty_counters(walker_in_hand) == 4
+
+
+def test_starting_loyalty_zero_seeds_zero(synthetic_state):
+    """A walker with starting_loyalty=0 (degenerate / hypothetical
+    printing) enters with loyalty_counters=0. The SBA pass then sweeps
+    it next tick (CR 704.5i)."""
+    walker_in_hand = synthetic_state.register_and_inject_object(
+        _walker_dict_with_starting_loyalty(0), 0, ZONE_HAND,
+    )
+    synthetic_state.push_to_stack(walker_in_hand, 0)
+    synthetic_state.resolve_top_of_stack()
+    assert synthetic_state.get_loyalty_counters(walker_in_hand) == 0
+
+
+def test_starting_loyalty_non_walker_unaffected(synthetic_state):
+    """A non-walker printing with starting_loyalty in its dict (the
+    field is registered for every printing; for non-walkers it has
+    no observable effect) enters bf with loyalty_counters=0.
+    """
+    creature_dict = {
+        "name": "Test Creature",
+        "card_types": ["Creature"],
+        "mana_cost": {"generic": 1},
+        "effects": [],
+        "starting_loyalty": 7,  # ignored — not a walker
+        "power": 1,
+        "toughness": 1,
+    }
+    obj_id = synthetic_state.register_and_inject_object(
+        creature_dict, 0, ZONE_HAND,
+    )
+    synthetic_state.push_to_stack(obj_id, 0)
+    synthetic_state.resolve_top_of_stack()
+    # Non-walker — loyalty_counters stays at the default 0.
+    assert synthetic_state.get_loyalty_counters(obj_id) == 0
+
+
+# --- ETB seeding via move_object (e.g. zone-change effects) ----------
+
+
+def test_starting_loyalty_seeded_on_move_object_to_battlefield(
+    synthetic_state,
+):
+    """A walker moved onto the battlefield via the generic
+    `move_object` primitive (e.g. a zone-change effect) gets its
+    loyalty seeded.
+
+    Driving path: register the walker into ZONE_HAND, then call
+    `move_object` to relocate it onto p0's battlefield. Mirrors the
+    pattern used by bounce-then-replay / zone-flicker effects.
+    """
+    walker_id = synthetic_state.register_and_inject_object(
+        _walker_dict_with_starting_loyalty(5), 0, ZONE_HAND,
+    )
+    # Walker is in hand — `get_loyalty_counters` returns None for
+    # non-bf objects (the helper only walks battlefields). Pre-move
+    # we just confirm the walker exists in hand.
+    assert synthetic_state.find_object_zone(walker_id) == ZONE_HAND
+    # Move from hand to bf via the generic primitive.
+    synthetic_state.move_object(walker_id, ZONE_BATTLEFIELD, 0)
+    # Now on bf with seeded loyalty.
+    assert synthetic_state.get_loyalty_counters(walker_id) == 5
+
+
+# --- end-to-end: cast walker, activate without test-helper seed ------
+
+
+def test_starting_loyalty_end_to_end_cast_then_activate(synthetic_state):
+    """End-to-end: cast walker -> enters with starting_loyalty -> the
+    +1 ability is activatable next turn (no `set_loyalty_counters`
+    test-helper call needed).
+    """
+    walker_in_hand = synthetic_state.register_and_inject_object(
+        _walker_dict_with_starting_loyalty(4), 0, ZONE_HAND,
+    )
+    synthetic_state.push_to_stack(walker_in_hand, 0)
+    synthetic_state.resolve_top_of_stack()
+    assert synthetic_state.get_loyalty_counters(walker_in_hand) == 4
+
+    # Walker is summoning-sick from the cast (CR 302.1 doesn't apply
+    # to walkers but the engine flags creature-shape `summoning_sick`
+    # on ETB regardless). The loyalty cost machinery doesn't check
+    # sickness — only tap-self costs do. So +1 is activatable on the
+    # turn it enters.
+    synthetic_state.force_set_summoning_sick(walker_in_hand, False)
+
+    synthetic_state.apply_action(
+        {
+            "kind": "activate_ability",
+            "source_id": walker_in_hand,
+            "ability_index": 0,  # +1 — loyalty 4 -> 5
+        }
+    )
+    assert synthetic_state.get_loyalty_counters(walker_in_hand) == 5
