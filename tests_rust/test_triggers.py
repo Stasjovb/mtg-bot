@@ -3818,3 +3818,437 @@ def test_no_ltb_fired_when_destroy_all_creatures_destroys_nothing(engine):
 
     # Stack is empty post-resolve — no LTB triggers (no victims).
     assert state.stack_size() == 0
+
+
+# =====================================================================
+# Subtypes substrate Slice 2 — `Predicate::SubjectHasSubtype(String)`
+#
+# Mirrors Python's `Subject(None, HasSubtype("Kavu"))` from
+# `cards/parser/triggers.py:1198`. The canonical Kavu/Sliver/
+# Equipment-enters predicate. Subject-anchored: matches the event's
+# default subject slot ("obj" for ENTERS) — the subject's printing's
+# `subtypes` Vec is searched for the configured subtype string.
+#
+# Effective-subtypes scope: reads the static `subtypes` field directly,
+# not a CR 613 layer-3/4 effective-subtypes computation. EoE pool has
+# no Conspiracy-shape subtype-granting effects, so the direct read
+# is observably equivalent to the Python `HasSubtype` path.
+# =====================================================================
+
+
+def _bear_observer_dict():
+    """An observer with 'whenever a Bear enters, draw a card'.
+    Uses `subject_has_subtype("Bear")` — the canonical Kavu/Sliver
+    shape (creature-subtype-anchored ETB trigger).
+    """
+    return {
+        "name": "Test Bear Observer",
+        "card_types": ["Creature"],
+        "subtypes": ["Human", "Druid"],
+        "mana_cost": {"generic": 2},
+        "effects": [],
+        "power": 1,
+        "toughness": 1,
+        "triggered_abilities": [
+            {
+                "event": "enters",
+                "predicate": {
+                    "kind": "subject_has_subtype",
+                    "subtype": "Bear",
+                },
+                "effect": {"kind": "draw_cards", "count": 1},
+            }
+        ],
+    }
+
+
+def _vanilla_bear_dict():
+    """A vanilla 2/2 Bear creature — the canonical
+    `subject_has_subtype("Bear")` positive trigger.
+    """
+    return {
+        "name": "Test Grizzly Bears",
+        "card_types": ["Creature"],
+        "subtypes": ["Bear"],
+        "mana_cost": {"G": 1, "generic": 1},
+        "effects": [],
+        "power": 2,
+        "toughness": 2,
+    }
+
+
+# --- parser surface ---------------------------------------------------
+
+
+def test_slice2_subject_has_subtype_predicate_parses(empty_registry):
+    """A printing with `subject_has_subtype` parses without error."""
+    d = {
+        "name": "Slice2 HasSubtype Test",
+        "card_types": ["Creature"],
+        "subtypes": ["Cat"],
+        "mana_cost": {"generic": 1},
+        "power": 1,
+        "toughness": 1,
+        "triggered_abilities": [
+            {
+                "event": "enters",
+                "predicate": {
+                    "kind": "subject_has_subtype",
+                    "subtype": "Bear",
+                },
+                "effect": {"kind": "draw_cards", "count": 1},
+            }
+        ],
+    }
+    pid = empty_registry.register_printing(d)
+    assert pid == 0
+
+
+def test_slice2_subject_has_subtype_missing_subtype_key_raises(empty_registry):
+    """`subject_has_subtype` requires the `subtype` payload key. A
+    dict missing it raises at register time — same loud-fail shape as
+    every other required parser key.
+    """
+    import pytest
+    d = {
+        "name": "Bad HasSubtype",
+        "card_types": ["Creature"],
+        "mana_cost": {"generic": 1},
+        "power": 1,
+        "toughness": 1,
+        "triggered_abilities": [
+            {
+                "event": "enters",
+                "predicate": {"kind": "subject_has_subtype"},
+                "effect": {"kind": "draw_cards", "count": 1},
+            }
+        ],
+    }
+    with pytest.raises(KeyError, match="subtype"):
+        empty_registry.register_printing(d)
+
+
+def test_slice2_subject_has_subtype_non_string_subtype_raises(empty_registry):
+    """`subtype` payload must be a string — int/None/list raise."""
+    import pytest
+    d = {
+        "name": "Bad HasSubtype Int",
+        "card_types": ["Creature"],
+        "mana_cost": {"generic": 1},
+        "power": 1,
+        "toughness": 1,
+        "triggered_abilities": [
+            {
+                "event": "enters",
+                "predicate": {
+                    "kind": "subject_has_subtype",
+                    "subtype": 42,
+                },
+                "effect": {"kind": "draw_cards", "count": 1},
+            }
+        ],
+    }
+    with pytest.raises(ValueError, match="subtype"):
+        empty_registry.register_printing(d)
+
+
+# --- positive: matching subtype fires the trigger ---------------------
+
+
+def test_slice2_bear_observer_fires_on_bear_arrival(synthetic_state):
+    """A pre-existing observer with `subject_has_subtype("Bear")` fires
+    when a Bear creature enters the battlefield. Drives the canonical
+    Kavu/Sliver-shape predicate.
+
+    Setup: observer (non-Bear) on p0's bf + Bear-subtype creature in
+    p0's hand. Cast the Bear -> trigger fires.
+    """
+    observer_id = synthetic_state.register_and_inject_object(
+        _bear_observer_dict(), 0, ZONE_BATTLEFIELD
+    )
+    bear_id = synthetic_state.register_and_inject_object(
+        _vanilla_bear_dict(), 0, ZONE_HAND
+    )
+    synthetic_state.push_to_stack(bear_id, 0)
+    synthetic_state.resolve_top_of_stack()
+
+    # Bear is on bf; observer's trigger is on the stack.
+    assert synthetic_state.find_object_zone(bear_id) == ZONE_BATTLEFIELD
+    assert synthetic_state.stack_size() == 1, (
+        "expected `subject_has_subtype('Bear')` to fire on the Bear's "
+        "arrival; stack is empty so the predicate rejected the Bear"
+    )
+    top = synthetic_state.peek_top_of_stack()
+    assert top["source_obj_id"] == observer_id
+
+
+# --- negative: non-Bear subject doesn't fire ---------------------------
+
+
+def test_slice2_bear_observer_does_not_fire_on_non_bear(synthetic_state):
+    """`subject_has_subtype('Bear')` rejects a creature that has
+    different subtypes. A vanilla creature with no subtypes also
+    rejects.
+    """
+    synthetic_state.register_and_inject_object(
+        _bear_observer_dict(), 0, ZONE_BATTLEFIELD
+    )
+    # Vanilla creature with no subtypes — should not fire.
+    non_bear_id = synthetic_state.register_and_inject_object(
+        _vanilla_creature_dict(), 0, ZONE_HAND
+    )
+    synthetic_state.push_to_stack(non_bear_id, 0)
+    synthetic_state.resolve_top_of_stack()
+
+    assert synthetic_state.find_object_zone(non_bear_id) == ZONE_BATTLEFIELD
+    assert synthetic_state.is_stack_empty(), (
+        "expected `subject_has_subtype('Bear')` to reject a creature "
+        "with empty subtypes; stack is non-empty"
+    )
+
+
+def test_slice2_bear_observer_does_not_fire_on_wrong_subtype(synthetic_state):
+    """`subject_has_subtype('Bear')` rejects a creature carrying a
+    different subtype ('Cat'). Pins case-sensitive exact-string match.
+    """
+    synthetic_state.register_and_inject_object(
+        _bear_observer_dict(), 0, ZONE_BATTLEFIELD
+    )
+    cat_id = synthetic_state.register_and_inject_object(
+        {
+            "name": "Test Vanilla Cat",
+            "card_types": ["Creature"],
+            "subtypes": ["Cat"],
+            "mana_cost": {"generic": 1},
+            "effects": [],
+            "power": 1,
+            "toughness": 1,
+        },
+        0,
+        ZONE_HAND,
+    )
+    synthetic_state.push_to_stack(cat_id, 0)
+    synthetic_state.resolve_top_of_stack()
+
+    assert synthetic_state.find_object_zone(cat_id) == ZONE_BATTLEFIELD
+    assert synthetic_state.is_stack_empty(), (
+        "expected `subject_has_subtype('Bear')` to reject a Cat subject"
+    )
+
+
+# --- composition: AND with ControlledByYou ----------------------------
+
+
+def test_slice2_bear_observer_combined_with_controlled_by_you(synthetic_state):
+    """The canonical Kavu shape from `triggers.py:1198`:
+    `Subject(None, HasSubtype('Bear')) & Controlled(YOU)` — "whenever
+    a Bear you control enters". Composes `subject_has_subtype` with
+    `controlled_by_you` via `and`.
+    """
+    observer_dict = {
+        "name": "Kavu-Shape Bear Observer",
+        "card_types": ["Creature"],
+        "subtypes": ["Human"],
+        "mana_cost": {"generic": 2},
+        "effects": [],
+        "power": 1,
+        "toughness": 1,
+        "triggered_abilities": [
+            {
+                "event": "enters",
+                "predicate": {
+                    "kind": "and",
+                    "left": {
+                        "kind": "subject_has_subtype",
+                        "subtype": "Bear",
+                    },
+                    "right": {"kind": "controlled_by_you"},
+                },
+                "effect": {"kind": "draw_cards", "count": 1},
+            }
+        ],
+    }
+    # Observer controlled by p0.
+    observer_id = synthetic_state.register_and_inject_object(
+        observer_dict, 0, ZONE_BATTLEFIELD
+    )
+    # P0 casts their own Bear — should fire (own Bear + controlled).
+    p0_bear_id = synthetic_state.register_and_inject_object(
+        _vanilla_bear_dict(), 0, ZONE_HAND
+    )
+    synthetic_state.push_to_stack(p0_bear_id, 0)
+    synthetic_state.resolve_top_of_stack()
+
+    assert synthetic_state.find_object_zone(p0_bear_id) == ZONE_BATTLEFIELD
+    assert synthetic_state.stack_size() == 1, (
+        "expected `Subject(HasSubtype('Bear')) AND Controlled(YOU)` to "
+        "fire on the controller's own Bear"
+    )
+    top = synthetic_state.peek_top_of_stack()
+    assert top["source_obj_id"] == observer_id
+
+    # Drain the trigger off the stack to reset for the negative case.
+    synthetic_state.resolve_top_of_stack()
+    assert synthetic_state.is_stack_empty()
+
+    # P1 casts their Bear — Bear matches, but ControlledByYou rejects.
+    p1_bear_id = synthetic_state.register_and_inject_object(
+        _vanilla_bear_dict(), 1, ZONE_HAND
+    )
+    synthetic_state.push_to_stack(p1_bear_id, 1)
+    synthetic_state.resolve_top_of_stack()
+
+    assert synthetic_state.find_object_zone(p1_bear_id) == ZONE_BATTLEFIELD
+    assert synthetic_state.is_stack_empty(), (
+        "expected `Controlled(YOU)` to reject p1's Bear; observer's "
+        "trigger should NOT fire on opponent's Bear"
+    )
+
+
+# --- multi-subtype subject -------------------------------------------
+
+
+def test_slice2_subject_has_subtype_matches_one_of_multiple(synthetic_state):
+    """A creature with multiple subtypes ("Elf Druid") matches
+    `subject_has_subtype` for either of them (set-membership check).
+    """
+    observer_dict = {
+        "name": "Druid-Tribal Observer",
+        "card_types": ["Creature"],
+        "subtypes": [],
+        "mana_cost": {"generic": 2},
+        "effects": [],
+        "power": 1,
+        "toughness": 1,
+        "triggered_abilities": [
+            {
+                "event": "enters",
+                "predicate": {
+                    "kind": "subject_has_subtype",
+                    "subtype": "Druid",
+                },
+                "effect": {"kind": "draw_cards", "count": 1},
+            }
+        ],
+    }
+    synthetic_state.register_and_inject_object(
+        observer_dict, 0, ZONE_BATTLEFIELD
+    )
+    elf_druid_id = synthetic_state.register_and_inject_object(
+        {
+            "name": "Test Elf Druid",
+            "card_types": ["Creature"],
+            "subtypes": ["Elf", "Druid"],
+            "mana_cost": {"G": 1},
+            "effects": [],
+            "power": 1,
+            "toughness": 1,
+        },
+        0,
+        ZONE_HAND,
+    )
+    synthetic_state.push_to_stack(elf_druid_id, 0)
+    synthetic_state.resolve_top_of_stack()
+
+    assert synthetic_state.find_object_zone(elf_druid_id) == ZONE_BATTLEFIELD
+    assert synthetic_state.stack_size() == 1, (
+        "expected `subject_has_subtype('Druid')` to fire on a creature "
+        "carrying ['Elf', 'Druid']; the second-position subtype was "
+        "missed"
+    )
+
+
+# --- case-sensitivity guard ------------------------------------------
+
+
+def test_slice2_subject_has_subtype_is_case_sensitive(synthetic_state):
+    """Subtype match is case-sensitive: registering an observer that
+    looks for "bear" (lowercase) does NOT fire on a Bear-subtype
+    (Title Case) creature. Sanity check that we're not accidentally
+    case-insensitive (which would diverge from Python's behavior).
+    """
+    observer_dict = {
+        "name": "lowercase-bear observer",
+        "card_types": ["Creature"],
+        "subtypes": [],
+        "mana_cost": {"generic": 2},
+        "effects": [],
+        "power": 1,
+        "toughness": 1,
+        "triggered_abilities": [
+            {
+                "event": "enters",
+                "predicate": {
+                    "kind": "subject_has_subtype",
+                    "subtype": "bear",
+                },
+                "effect": {"kind": "draw_cards", "count": 1},
+            }
+        ],
+    }
+    synthetic_state.register_and_inject_object(
+        observer_dict, 0, ZONE_BATTLEFIELD
+    )
+    bear_id = synthetic_state.register_and_inject_object(
+        _vanilla_bear_dict(), 0, ZONE_HAND
+    )
+    synthetic_state.push_to_stack(bear_id, 0)
+    synthetic_state.resolve_top_of_stack()
+
+    assert synthetic_state.find_object_zone(bear_id) == ZONE_BATTLEFIELD
+    assert synthetic_state.is_stack_empty(), (
+        "expected case-sensitive match: lowercase 'bear' should not "
+        "match Title Case 'Bear' subtype"
+    )
+
+
+# --- equipment ETB shape ---------------------------------------------
+
+
+def test_slice2_subject_has_subtype_equipment_arrival_fires(synthetic_state):
+    """The Equipment-anchored ETB shape ("whenever an Equipment
+    enters, do X") fires for an Artifact — Equipment subject.
+    Confirms the predicate works for artifact-subtype use cases
+    too (cards.rs:1511 callsite was waiting on this).
+    """
+    observer_dict = {
+        "name": "Equipment Observer",
+        "card_types": ["Creature"],
+        "subtypes": [],
+        "mana_cost": {"generic": 2},
+        "effects": [],
+        "power": 1,
+        "toughness": 1,
+        "triggered_abilities": [
+            {
+                "event": "enters",
+                "predicate": {
+                    "kind": "subject_has_subtype",
+                    "subtype": "Equipment",
+                },
+                "effect": {"kind": "draw_cards", "count": 1},
+            }
+        ],
+    }
+    synthetic_state.register_and_inject_object(
+        observer_dict, 0, ZONE_BATTLEFIELD
+    )
+    equip_id = synthetic_state.register_and_inject_object(
+        {
+            "name": "Test Sword",
+            "card_types": ["Artifact"],
+            "subtypes": ["Equipment"],
+            "mana_cost": {"generic": 2},
+            "effects": [],
+        },
+        0,
+        ZONE_HAND,
+    )
+    synthetic_state.push_to_stack(equip_id, 0)
+    synthetic_state.resolve_top_of_stack()
+
+    assert synthetic_state.find_object_zone(equip_id) == ZONE_BATTLEFIELD
+    assert synthetic_state.stack_size() == 1, (
+        "expected `subject_has_subtype('Equipment')` to fire on the "
+        "Equipment's arrival"
+    )

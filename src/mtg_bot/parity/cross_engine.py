@@ -133,6 +133,10 @@ class CardDef:
     power: Optional[int] = None
     toughness: Optional[int] = None
     triggered_abilities: tuple[dict, ...] = ()
+    # Subtypes substrate (Slice 1) — Title Case strings (mirrors
+    # Rust's `CardPrinting.subtypes` storage). Empty tuple is the
+    # back-compat default; pre-substrate fixtures don't need to set it.
+    subtypes: tuple[str, ...] = ()
 
 
 # ---------------------------------------------------------------------------
@@ -195,6 +199,7 @@ def _ta_dict_to_python_predicate(pred_dict: dict | None):
         IsCreature,
         IsLand,
         IsArtifact,
+        HasSubtype,
     )
 
     if pred_dict is None:
@@ -225,6 +230,18 @@ def _ta_dict_to_python_predicate(pred_dict: dict | None):
         # observable semantics on single-subject events (ENTERS /
         # DIES / ATTACKS).
         return Controlled(by=YOU, subject=None)
+    if kind == "subject_has_subtype":
+        # Subtypes substrate Slice 2 — Python's
+        # ``Subject(None, HasSubtype("Kavu"))`` from
+        # ``cards/parser/triggers.py:1198``. Rust's
+        # ``SubjectHasSubtype(s)`` reads the subject printing's
+        # static ``subtypes`` Vec; Python's ``HasSubtype`` reads
+        # through ``effective_subtypes`` (CR 613 layer-3/4). The
+        # EoE pool has no Conspiracy-shape subtype-granting effects,
+        # so the two paths are observably equivalent today.
+        return Subject(
+            slot=None, inner=HasSubtype(name=pred_dict["subtype"])
+        )
     if kind == "not":
         return Not(_ta_dict_to_python_predicate(pred_dict["inner"]))
     if kind == "and":
