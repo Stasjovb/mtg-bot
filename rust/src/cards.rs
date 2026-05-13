@@ -1993,6 +1993,16 @@ pub enum Predicate {
     Not(Box<Predicate>),
     /// Logical AND (short-circuits on the left operand's `false`).
     And(Box<Predicate>, Box<Predicate>),
+    /// Logical OR (short-circuits on the left operand's `true`).
+    ///
+    /// Mirrors Python's `Or(left, right)` from
+    /// `src/mtg_bot/effects/predicates.py:300`. Unlocks predicate
+    /// shapes like Weftstalker Ardent / Haliya Guided by Light's
+    /// "whenever a creature or artifact you control enters"
+    /// (`(SubjectIsCreature OR SubjectIsArtifact) AND ControlledByYou
+    /// AND NOT SourceIsSelf`), where Slice 4's `And`-only algebra
+    /// couldn't express the disjunction.
+    Or(Box<Predicate>, Box<Predicate>),
 }
 
 impl Predicate {
@@ -2050,6 +2060,10 @@ impl Predicate {
             Predicate::And(a, b) => {
                 a.matches(state, source_id, subject_id)
                     && b.matches(state, source_id, subject_id)
+            }
+            Predicate::Or(a, b) => {
+                a.matches(state, source_id, subject_id)
+                    || b.matches(state, source_id, subject_id)
             }
         }
     }
@@ -4512,6 +4526,7 @@ fn parse_triggered_ability(
 ///  "subtype": "Kavu"}
 /// {"kind": "not", "inner": {...}}
 /// {"kind": "and", "left": {...}, "right": {...}}
+/// {"kind": "or", "left": {...}, "right": {...}}     # Or-substrate slice
 /// ```
 ///
 /// Slice 1 introduced the base algebra (`always`, `source_is_self`,
@@ -4520,7 +4535,11 @@ fn parse_triggered_ability(
 /// artifact-enters / "under your control" trigger shapes from
 /// `cards/parser/triggers.py:603-1266`. Subtypes Slice 2 added
 /// `subject_has_subtype` for Kavu/Sliver/Equipment-enters shapes
-/// (`cards/parser/triggers.py:1198`).
+/// (`cards/parser/triggers.py:1198`). The Or-substrate slice added
+/// `or` for shapes like Weftstalker Ardent's "whenever a creature
+/// or artifact you control enters"
+/// (`(subject_is_creature OR subject_is_artifact) AND
+/// controlled_by_you`).
 fn parse_predicate(dict: &Bound<'_, PyDict>) -> PyResult<Predicate> {
     let kind: String = require(dict, "kind")?.extract()?;
     match kind.as_str() {
@@ -4567,11 +4586,29 @@ fn parse_predicate(dict: &Bound<'_, PyDict>) -> PyResult<Predicate> {
                 Box::new(parse_predicate(right_dict)?),
             ))
         }
+        // Or-substrate slice — logical disjunction over two sub-
+        // predicates. Mirrors the `and` arm's shape exactly. Unlocks
+        // "creature OR artifact" / "Kavu OR Sliver" predicate shapes
+        // from `cards/parser/triggers.py`.
+        "or" => {
+            let left_any = require(dict, "left")?;
+            let right_any = require(dict, "right")?;
+            let left_dict = left_any.downcast::<PyDict>().map_err(|_| {
+                PyValueError::new_err("predicate.or.left must be a dict")
+            })?;
+            let right_dict = right_any.downcast::<PyDict>().map_err(|_| {
+                PyValueError::new_err("predicate.or.right must be a dict")
+            })?;
+            Ok(Predicate::Or(
+                Box::new(parse_predicate(left_dict)?),
+                Box::new(parse_predicate(right_dict)?),
+            ))
+        }
         other => Err(PyValueError::new_err(format!(
             "unknown predicate kind {other:?}; \
              valid: always, source_is_self, source_is_creature, \
              subject_is_land, subject_is_artifact, subject_is_creature, \
-             controlled_by_you, subject_has_subtype, not, and"
+             controlled_by_you, subject_has_subtype, not, and, or"
         ))),
     }
 }

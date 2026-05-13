@@ -4252,3 +4252,283 @@ def test_slice2_subject_has_subtype_equipment_arrival_fires(synthetic_state):
         "expected `subject_has_subtype('Equipment')` to fire on the "
         "Equipment's arrival"
     )
+
+
+# =====================================================================
+# Or-substrate slice — logical disjunction over two sub-predicates.
+#
+# Slice 1 introduced `not` / `and`; Slice 4 broadened the leaf
+# alphabet. The Or-substrate slice closes the last missing
+# Boolean-connective gap: shapes like Weftstalker Ardent's "whenever
+# a creature or artifact you control enters" need disjunction, not
+# conjunction. Pattern mirrors the existing `and` arm exactly
+# (parse + dispatch + harness translation).
+#
+# Coverage:
+# - Parser accepts `kind: or` with `left` / `right` sub-dicts.
+# - Parser rejects malformed `or` payloads (missing left/right, or
+#   non-dict children).
+# - `Or(SubjectIsCreature, SubjectIsArtifact)` fires on either a
+#   creature OR an artifact subject (and not on a land — neither
+#   side accepts).
+# - Short-circuit: when the LEFT predicate matches, the right side
+#   is irrelevant (verified by stacking a left-true / right-false
+#   combination).
+# - Nesting: `Or` composes inside `And` to express
+#   `(creature OR artifact) AND controlled_by_you` — the Weftstalker
+#   Ardent shape.
+# =====================================================================
+
+
+def _or_creature_or_artifact_observer_dict():
+    """Pre-existing observer with predicate
+    `Or(SubjectIsCreature, SubjectIsArtifact)`. Fires when EITHER a
+    creature OR an artifact arrives — regardless of controller.
+    The canonical "creature or artifact" disjunction shape.
+    """
+    return {
+        "name": "Test Creature-Or-Artifact Observer",
+        "card_types": ["Creature"],
+        "mana_cost": {},
+        "effects": [],
+        "power": 1,
+        "toughness": 1,
+        "triggered_abilities": [
+            {
+                "event": "enters",
+                "predicate": {
+                    "kind": "or",
+                    "left": {"kind": "subject_is_creature"},
+                    "right": {"kind": "subject_is_artifact"},
+                },
+                "effect": {"kind": "draw_cards", "count": 1},
+            }
+        ],
+    }
+
+
+# --- parser surface -------------------------------------------------
+
+
+def test_or_predicate_kind_parses(empty_registry):
+    """The `or` predicate kind parses + registers without error."""
+    pid = empty_registry.register_printing(
+        _or_creature_or_artifact_observer_dict()
+    )
+    assert pid == 0
+
+
+def test_or_predicate_missing_left_raises(empty_registry):
+    """Malformed `or` (missing `left`) raises at register time."""
+    d = {
+        "name": "Bad Or Missing Left",
+        "card_types": ["Creature"],
+        "mana_cost": {"generic": 1},
+        "power": 1,
+        "toughness": 1,
+        "triggered_abilities": [
+            {
+                "event": "enters",
+                "predicate": {
+                    "kind": "or",
+                    "right": {"kind": "subject_is_creature"},
+                },
+                "effect": {"kind": "draw_cards", "count": 1},
+            }
+        ],
+    }
+    with pytest.raises((ValueError, KeyError), match='left'):
+        empty_registry.register_printing(d)
+
+
+def test_or_predicate_missing_right_raises(empty_registry):
+    """Malformed `or` (missing `right`) raises at register time."""
+    d = {
+        "name": "Bad Or Missing Right",
+        "card_types": ["Creature"],
+        "mana_cost": {"generic": 1},
+        "power": 1,
+        "toughness": 1,
+        "triggered_abilities": [
+            {
+                "event": "enters",
+                "predicate": {
+                    "kind": "or",
+                    "left": {"kind": "subject_is_creature"},
+                },
+                "effect": {"kind": "draw_cards", "count": 1},
+            }
+        ],
+    }
+    with pytest.raises((ValueError, KeyError), match='right'):
+        empty_registry.register_printing(d)
+
+
+def test_or_predicate_non_dict_child_raises(empty_registry):
+    """`or` with a non-dict child raises at register time
+    (mirrors `and`'s downcast-failure shape).
+    """
+    d = {
+        "name": "Bad Or Non-Dict Child",
+        "card_types": ["Creature"],
+        "mana_cost": {"generic": 1},
+        "power": 1,
+        "toughness": 1,
+        "triggered_abilities": [
+            {
+                "event": "enters",
+                "predicate": {
+                    "kind": "or",
+                    "left": "not a dict",
+                    "right": {"kind": "subject_is_creature"},
+                },
+                "effect": {"kind": "draw_cards", "count": 1},
+            }
+        ],
+    }
+    with pytest.raises(ValueError, match="must be a dict"):
+        empty_registry.register_printing(d)
+
+
+# --- dispatch — Or(creature, artifact) fires on either subject ------
+
+
+def test_or_fires_on_left_match_creature(synthetic_state):
+    """`Or(SubjectIsCreature, SubjectIsArtifact)` fires on a CREATURE
+    subject — the left arm matches.
+    """
+    observer_id = synthetic_state.register_and_inject_object(
+        _or_creature_or_artifact_observer_dict(), 0, ZONE_BATTLEFIELD
+    )
+    # Drain the observer's self-firing (it's a Creature — the left
+    # arm of its own Or predicate matches its own arrival).
+    assert synthetic_state.stack_size() == 1
+    synthetic_state.resolve_top_of_stack()
+
+    # Cast a vanilla creature for p0; observer fires again.
+    bait_id = synthetic_state.register_and_inject_object(
+        _vanilla_creature_dict(), 0, ZONE_HAND
+    )
+    synthetic_state.push_to_stack(bait_id, 0)
+    synthetic_state.resolve_top_of_stack()
+
+    assert synthetic_state.find_object_zone(bait_id) == ZONE_BATTLEFIELD
+    assert synthetic_state.stack_size() == 1, (
+        "expected `Or(SubjectIsCreature, SubjectIsArtifact)` to fire on "
+        "a creature subject (left arm matches)"
+    )
+    top = synthetic_state.peek_top_of_stack()
+    assert top["source_obj_id"] == observer_id
+
+
+def test_or_fires_on_right_match_artifact(synthetic_state):
+    """`Or(SubjectIsCreature, SubjectIsArtifact)` fires on an ARTIFACT
+    subject — the right arm matches even though the left fails.
+    """
+    synthetic_state.register_and_inject_object(
+        _or_creature_or_artifact_observer_dict(), 0, ZONE_BATTLEFIELD
+    )
+    # Drain the observer's self-firing.
+    assert synthetic_state.stack_size() == 1
+    synthetic_state.resolve_top_of_stack()
+
+    # Reanimate a vanilla artifact for p0 (artifact-only card_types).
+    artifact_id = synthetic_state.register_and_inject_object(
+        _vanilla_artifact_dict(), 0, ZONE_GRAVEYARD
+    )
+    ok = synthetic_state.move_object_from_graveyard_to_battlefield(
+        0, artifact_id
+    )
+    assert ok is True
+    assert synthetic_state.find_object_zone(artifact_id) == ZONE_BATTLEFIELD
+
+    assert synthetic_state.stack_size() == 1, (
+        "expected `Or(SubjectIsCreature, SubjectIsArtifact)` to fire on "
+        "an artifact subject (right arm matches, left arm fails)"
+    )
+
+
+def test_or_does_not_fire_on_neither_match_land(synthetic_state):
+    """`Or(SubjectIsCreature, SubjectIsArtifact)` does NOT fire on a
+    LAND subject — neither arm matches.
+    """
+    synthetic_state.register_and_inject_object(
+        _or_creature_or_artifact_observer_dict(), 0, ZONE_BATTLEFIELD
+    )
+    # Drain self-firing.
+    assert synthetic_state.stack_size() == 1
+    synthetic_state.resolve_top_of_stack()
+
+    # Inject a land directly onto p0's bf — dispatches Enters but
+    # the Or predicate rejects (neither Creature nor Artifact).
+    synthetic_state.register_and_inject_object(
+        _vanilla_land_dict(), 0, ZONE_BATTLEFIELD
+    )
+    assert synthetic_state.is_stack_empty(), (
+        "expected `Or(SubjectIsCreature, SubjectIsArtifact)` to reject "
+        "a land subject (neither arm matches)"
+    )
+
+
+# --- Or composes inside And — Weftstalker-Ardent-shape predicate ---
+
+
+def test_or_composes_under_and_for_weftstalker_shape(synthetic_state):
+    """The Weftstalker Ardent-shape predicate:
+    `(SubjectIsCreature OR SubjectIsArtifact) AND ControlledByYou`.
+    Fires on YOUR creature OR YOUR artifact; rejects OPPONENT's
+    creature or land.
+    """
+    weftstalker_shape = {
+        "name": "Test Weftstalker-Shape Observer",
+        "card_types": ["Creature"],
+        "mana_cost": {},
+        "effects": [],
+        "power": 1,
+        "toughness": 1,
+        "triggered_abilities": [
+            {
+                "event": "enters",
+                "predicate": {
+                    "kind": "and",
+                    "left": {
+                        "kind": "or",
+                        "left": {"kind": "subject_is_creature"},
+                        "right": {"kind": "subject_is_artifact"},
+                    },
+                    "right": {"kind": "controlled_by_you"},
+                },
+                "effect": {"kind": "draw_cards", "count": 1},
+            }
+        ],
+    }
+    observer_id = synthetic_state.register_and_inject_object(
+        weftstalker_shape, 0, ZONE_BATTLEFIELD
+    )
+    # Drain observer's own self-firing (observer is a Creature
+    # controlled by source's controller — predicate matches).
+    assert synthetic_state.stack_size() == 1
+    synthetic_state.resolve_top_of_stack()
+
+    # YOUR creature — fires.
+    bait_id = synthetic_state.register_and_inject_object(
+        _vanilla_creature_dict(), 0, ZONE_HAND
+    )
+    synthetic_state.push_to_stack(bait_id, 0)
+    synthetic_state.resolve_top_of_stack()
+    assert synthetic_state.stack_size() == 1, (
+        "expected (creature OR artifact) AND controlled_by_you to fire "
+        "on YOUR creature"
+    )
+    top = synthetic_state.peek_top_of_stack()
+    assert top["source_obj_id"] == observer_id
+    synthetic_state.resolve_top_of_stack()
+
+    # OPPONENT's creature on p1's bf — `controlled_by_you` rejects.
+    synthetic_state.register_and_inject_object(
+        _vanilla_creature_dict(), 1, ZONE_BATTLEFIELD
+    )
+    assert synthetic_state.is_stack_empty(), (
+        "expected `controlled_by_you` outer guard to reject opponent's "
+        "creature subject"
+    )

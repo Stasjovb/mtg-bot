@@ -214,6 +214,7 @@ def _ta_dict_to_python_predicate(pred_dict: dict | None):
         IsSelf,
         Not,
         And,
+        Or,
         Source,
         Subject,
         Controlled,
@@ -270,6 +271,16 @@ def _ta_dict_to_python_predicate(pred_dict: dict | None):
         return Not(_ta_dict_to_python_predicate(pred_dict["inner"]))
     if kind == "and":
         return And(
+            _ta_dict_to_python_predicate(pred_dict["left"]),
+            _ta_dict_to_python_predicate(pred_dict["right"]),
+        )
+    if kind == "or":
+        # Or-substrate slice — Python's `Or(left, right)` from
+        # `src/mtg_bot/effects/predicates.py:300`. Disjunctive shape
+        # used by Weftstalker Ardent ("creature or artifact you
+        # control") and Haliya Guided by Light. Mirrors `and`'s
+        # bridge translation surface exactly.
+        return Or(
             _ta_dict_to_python_predicate(pred_dict["left"]),
             _ta_dict_to_python_predicate(pred_dict["right"]),
         )
