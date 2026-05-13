@@ -441,6 +441,7 @@ impl GameState {
                 source_id,
                 ability_index,
                 target_creature_id,
+                sacrifice_target_id,
             } => {
                 // CE20 Slice 1 + bridge follow-up dispatch: single
                 // unified path through `printing.activated_abilities`.
@@ -526,6 +527,26 @@ impl GameState {
                     /// `state.current_resolve_payload_target_id`
                     /// transient slot for mana-ability paths).
                     requires_target_creature_you_control: bool,
+                    /// CE20 Slice 6 (targeted-sacrifice variants).
+                    /// `true` when the cost flags
+                    /// `sacrifice_another_creature_or_artifact`. The
+                    /// activator MUST submit a `sacrifice_target_id`
+                    /// and the target MUST be a creature or artifact
+                    /// on the activator's bf, NOT the source itself.
+                    sacrifice_another_creature_or_artifact: bool,
+                    /// CE20 Slice 6. `true` when the cost flags
+                    /// `sacrifice_a_land`. The activator MUST submit
+                    /// a `sacrifice_target_id` and the target MUST be
+                    /// a land on the activator's bf — the source
+                    /// itself IS eligible (Dust-Bowl-style — no
+                    /// "another" qualifier).
+                    sacrifice_a_land: bool,
+                    /// CE20 Slice 6. `true` when the cost flags
+                    /// `sacrifice_another_artifact`. The activator
+                    /// MUST submit a `sacrifice_target_id` and the
+                    /// target MUST be an artifact on the activator's
+                    /// bf, NOT the source itself.
+                    sacrifice_another_artifact: bool,
                 }
                 let resolved: ResolvedAbility = {
                     let printing = state.registry.lookup(printing_id).ok_or_else(|| {
@@ -555,6 +576,11 @@ impl GameState {
                             tier_threshold: ab.tier_threshold,
                             requires_target_creature_you_control:
                                 ab.cost.requires_target_creature_you_control,
+                            sacrifice_another_creature_or_artifact:
+                                ab.cost.sacrifice_another_creature_or_artifact,
+                            sacrifice_a_land: ab.cost.sacrifice_a_land,
+                            sacrifice_another_artifact:
+                                ab.cost.sacrifice_another_artifact,
                         }
                     } else {
                         // ability_index out of range. Loud fail —
@@ -640,6 +666,94 @@ impl GameState {
                         // ignore a stray target_creature_id key. The
                         // payload won't be threaded into the
                         // StackItem / current_resolve_payload_target_id.
+                        None
+                    };
+                // Phase 2.7: CE20 follow-up Slice 6 sacrifice-target
+                // validation. When the cost flags a
+                // `sacrifice_another_creature_or_artifact` /
+                // `sacrifice_a_land` / `sacrifice_another_artifact`
+                // shape, the action dict MUST carry a
+                // `sacrifice_target_id` and that id MUST resolve to a
+                // legal sac target on the activator's battlefield.
+                //
+                // Per-variant eligibility:
+                //   - sacrifice_another_creature_or_artifact: target
+                //     has Creature OR Artifact card_type, NOT self.
+                //   - sacrifice_a_land: target has Land card_type;
+                //     self IS eligible (printed text "a land" with no
+                //     "another" qualifier).
+                //   - sacrifice_another_artifact: target has Artifact
+                //     card_type, NOT self.
+                //
+                // Symmetric error shape with Phase 2.5: raise BEFORE
+                // any commit so a malformed dict leaves no state
+                // mutation. Non-sacrifice activations accept-and-
+                // ignore a stray sacrifice_target_id (parity with
+                // Phase 2.5's stray-target_creature_id handling).
+                let needs_sac_target = resolved
+                    .sacrifice_another_creature_or_artifact
+                    || resolved.sacrifice_a_land
+                    || resolved.sacrifice_another_artifact;
+                let validated_sac_target_id: Option<u32> =
+                    if needs_sac_target {
+                        let Some(sac_id) = sacrifice_target_id else {
+                            return Err(PyValueError::new_err(format!(
+                                "ActivateAbility: source {source_id} \
+                                 requires a sacrifice target \
+                                 (sacrifice_target_id key missing or None)"
+                            )));
+                        };
+                        // Per-variant legality check.
+                        let target_legal: bool = {
+                            let bf = &state.players[controller_idx].battlefield;
+                            let registry = &state.registry;
+                            bf.iter().any(|obj| {
+                                if obj.id != sac_id {
+                                    return false;
+                                }
+                                let Some(printing) = registry
+                                    .printings
+                                    .get(obj.printing_id as usize)
+                                else {
+                                    return false;
+                                };
+                                let is_self = sac_id == source_id;
+                                let is_creature = printing
+                                    .card_types
+                                    .iter()
+                                    .any(|t| t == "Creature");
+                                let is_artifact = printing
+                                    .card_types
+                                    .iter()
+                                    .any(|t| t == "Artifact");
+                                let is_land = printing
+                                    .card_types
+                                    .iter()
+                                    .any(|t| t == "Land");
+                                if resolved
+                                    .sacrifice_another_creature_or_artifact
+                                {
+                                    !is_self && (is_creature || is_artifact)
+                                } else if resolved.sacrifice_a_land {
+                                    is_land
+                                } else if resolved.sacrifice_another_artifact {
+                                    !is_self && is_artifact
+                                } else {
+                                    false
+                                }
+                            })
+                        };
+                        if !target_legal {
+                            return Err(PyValueError::new_err(format!(
+                                "ActivateAbility: source {source_id} \
+                                 sacrifice_target {sac_id} not a legal \
+                                 sacrifice target for this cost variant \
+                                 (must be on activator's bf and match \
+                                 the cost's sacrifice filter)"
+                            )));
+                        }
+                        Some(sac_id)
+                    } else {
                         None
                     };
                 // Phase 3a: CE20 follow-up Slice 3 tier gate. The
@@ -783,6 +897,77 @@ impl GameState {
                     crate::state_ops_resolve::drain_pending_leaves_dispatches(
                         state,
                     )?;
+                }
+                // Phase 5c: CE20 Slice 6 — commit a TARGETED
+                // sacrifice (sacrifice_another_*, sacrifice_a_land).
+                // Same field-reset + LTB-void-flag + LEAVES queue +
+                // drain plumbing as Phase 5b, but the moved object is
+                // the chosen sac target, NOT the source. The activator
+                // controls the sac target (Phase 2.7 enforced bf
+                // containment on activator's side), so the target's
+                // controller_idx == activator's controller_idx.
+                //
+                // **bf_pos validity after Phase 5b sac_self.** If
+                // both sacrifice_self AND a targeted sac flag are
+                // somehow set on the same ability (today no printing
+                // does this), Phase 5b would have moved the source —
+                // and Phase 5c would then look up the target by id,
+                // which is safe (we don't rely on bf_pos here). The
+                // ordering still holds: source dies before target if
+                // the printed text reads "Sacrifice this, sacrifice
+                // another creature: ..." (no EoE shape today).
+                //
+                // **Self-sac via Dust Bowl path.** When the source IS
+                // a land and `sacrifice_a_land` flags true with the
+                // chosen target == source_id, the bf_pos we captured
+                // earlier may still be valid (no Phase 5b mutation
+                // for non-`sacrifice_self` paths). The lookup-by-id
+                // pattern below handles both cases uniformly.
+                if let Some(sac_target_id) = validated_sac_target_id {
+                    let bf_pos_of_target = state.players[controller_idx]
+                        .battlefield
+                        .iter()
+                        .position(|o| o.id == sac_target_id);
+                    if let Some(pos) = bf_pos_of_target {
+                        let bf_mut = Arc::make_mut(
+                            &mut state.players[controller_idx].battlefield,
+                        );
+                        let mut obj = bf_mut.remove(pos);
+                        obj.zone = crate::state_ops_zones::ZONE_GRAVEYARD;
+                        obj.tapped = false;
+                        // CE13 I35: summoning_sick stays as-is.
+                        obj.damage = 0;
+                        obj.counters = 0;
+                        obj.attached_to = None;
+                        obj.exiled_with_source = None;
+                        let sac_printing_id = obj.printing_id;
+                        let sac_obj_id = obj.id;
+                        Arc::make_mut(
+                            &mut state.players[controller_idx].graveyard,
+                        )
+                        .push(obj);
+                        crate::state_ops_zones::mark_left_battlefield_if_nonland(
+                            state,
+                            sac_printing_id,
+                        );
+                        // LTB fan-out (parity with Phase 5b).
+                        state.pending_leaves_dispatches.push(sac_obj_id);
+                        crate::state_ops_resolve::drain_pending_leaves_dispatches(
+                            state,
+                        )?;
+                    } else {
+                        // Defensive: Phase 2.7 already verified the
+                        // target is on the activator's bf; reaching
+                        // here means a concurrent mutation between
+                        // validation and commit (impossible in the
+                        // synchronous apply path). Raise loudly so the
+                        // bug surfaces if invariants drift.
+                        return Err(PyValueError::new_err(format!(
+                            "ActivateAbility: sacrifice_target {sac_target_id} \
+                             vanished between validation and commit \
+                             (invariant violation)"
+                        )));
+                    }
                 }
                 // Phase 6: dispatch the effect.
                 if resolved.is_mana_ability {

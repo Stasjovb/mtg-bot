@@ -3969,13 +3969,14 @@ the forked branch.
   Hylderblade, Meltstrider's Gear, The Dominion Bracelet.
 
 - **Out of scope (deferred to future slices)**:
-  - **Targeted sacrifice variants** (`sacrifice_another_creature`,
+  - **Targeted sacrifice variants** ~~(`sacrifice_another_creature`,
     `sacrifice_a_land`, `sacrifice_food`,
-    `sacrifice_another_artifact_or_land`, etc.). Each variant rides
-    on the Slice 4 target-pick substrate (same
-    `requires_target_*` flag pattern, same `target_creature_id` (or
-    `target_*_id`) key on the dict, same payload-target threading
-    to a new effect arm per sacrifice flavor). Slice 5+ scope.
+    `sacrifice_another_artifact_or_land`, etc.)~~. **PARTIALLY
+    CLOSED by I55** — three variants
+    (`sacrifice_another_creature_or_artifact`, `sacrifice_a_land`,
+    `sacrifice_another_artifact`) shipped; subtype-filtered shapes
+    (`sacrifice_food`, `sacrifice_a_desert`) still need the
+    `CardPrinting.subtypes` registry field (ETB Slice 11 candidate).
   - **Multi-target activations** (target a creature AND a player,
     target N creatures, etc.). Single-target Slice 4 scope; the
     payload shape supports only one `target_id` today. Multi-target
@@ -3992,6 +3993,128 @@ the forked branch.
     synthetic equip printing on BOTH engines and exercise the
     target-fan-out emission shape — deferred to a follow-up that
     also confirms parity-clean walk shapes for the equip dict.
+
+### I55. `ActivationCost.sacrifice_another_creature_or_artifact / sacrifice_a_land / sacrifice_another_artifact: bool` extend the cost shape; emission target fan-out + apply-arm sacrifice-target validation + Phase 5c targeted-sacrifice commit (CE20 follow-up Slice 6 targeted-sacrifice variants closure)
+
+- **Pinned by**:
+  - 24 new `tests_rust/test_activated.py` `test_sac_*` /
+    `test_sacrifice_*` regression pins covering parser surface (6:
+    three happy-path parses + three invalid-bool raises), emission
+    target fan-out + eligibility filters (7: per-variant filter
+    correctness, self-exclusion for "another", self-inclusion for
+    "a land" when source is land, opponent-exclusion, non-eligible-
+    type exclusion, no-emission-when-empty-pool), apply-arm
+    target validation (5: missing target, self-target raise, opponent-
+    target raise, wrong-type raise, self-target succeeds for
+    sacrifice_a_land), apply-arm commit (3: moves target to
+    controller's gy, self-sac via Dust-Bowl, controller-resolution
+    pin), back-compat (2: pre-Slice-6 dict + stray sacrifice_target_id),
+    action-dict round-trip (1).
+  - The pre-existing `test_legal_decisions_activate_ability_dict_shape_is_minimal`
+    updated to the new 5-key dict shape (kind / source_id /
+    ability_index / target_creature_id / sacrifice_target_id) — Slice 6
+    grew the wire shape by one optional field.
+
+- **Cost shape extension**. `ActivationCost` grows three new bool
+  fields, all defaulting `false` via `Default`:
+  - `sacrifice_another_creature_or_artifact` — Umbral Collar Zealot
+    shape; legal sac targets are creatures OR artifacts on the
+    activator's bf that AREN'T the source itself ("another"
+    qualifier).
+  - `sacrifice_a_land` — Dust-Bowl shape; legal sac targets are
+    lands on the activator's bf; the source itself IS eligible if
+    the source is a land (no "another" qualifier in the printed
+    text).
+  - `sacrifice_another_artifact` — Memorial-Vault shape; legal sac
+    targets are artifacts on the activator's bf, NOT the source.
+
+  `parse_activation_cost` adds all three keys to the allow-list;
+  unknown keys still raise loud. Each field gets a non-bool-raises
+  paranoid pin.
+
+- **Action dict shape extension**. `Action::ActivateAbility` grows
+  `pub sacrifice_target_id: Option<u32>` field — DISTINCT from the
+  Slice 4 `target_creature_id` (an effect target). The two target
+  axes don't collide: equip's `target_creature_id` is what the
+  resolved effect attaches to; `sacrifice_target_id` is the
+  permanent the COST sacrifices. EoE has no printing that uses both,
+  so the cross-product emission is deferred. The
+  `parse_action`/`action_to_pydict` round-trip handles both shapes
+  losslessly; `action_to_pydict` always emits the key
+  (`None` → Python `None`).
+
+- **Emission target fan-out** (`state_ops_legal.rs:1147+`). When the
+  ability's cost flags one of the three new variants, the per-ability
+  loop walks the activator's battlefield and emits ONE
+  `ActivateAbility` dict per legal sac target. Per-variant
+  eligibility:
+  - `sacrifice_another_creature_or_artifact`: target has `Creature`
+    OR `Artifact` card_type, NOT self.
+  - `sacrifice_a_land`: target has `Land` card_type; self IS eligible.
+  - `sacrifice_another_artifact`: target has `Artifact` card_type,
+    NOT self.
+  Empty legal-target set → no emission (CR 601.2c — can't begin to
+  activate without a legal target).
+
+- **Apply-arm Phase 2.7 sacrifice-target validation**
+  (`state_ops_actions.rs` — between Phase 2.5 target_creature_id
+  validation and Phase 3a tier gate). Fires BEFORE Phase 3 (tap
+  precheck), Phase 4 (mana pay), Phase 5 (commits). Raises loud
+  BEFORE any state mutation on:
+  - Missing `sacrifice_target_id` for an ability that requires one.
+  - Per-variant eligibility failure (self-target when "another"
+    required, wrong card_type, target on opponent's bf).
+  Non-sacrifice activations silently accept (and ignore) a stray
+  `sacrifice_target_id` — same permissive accept-and-ignore pattern
+  as Phase 2.5.
+
+- **Phase 5c targeted-sacrifice commit** (`state_ops_actions.rs` —
+  immediately after Phase 5b's `sacrifice_self` commit). Symmetric
+  field-reset + LTB-void-flag + LEAVES-queue plumbing to Phase 5b,
+  but moves the CHOSEN target rather than the source. Lookup-by-id
+  (not bf_pos) so the commit composes safely with a hypothetical
+  ability that fires both `sacrifice_self` AND a targeted-sac (no
+  EoE printing today). LTB drain runs inline (same as Phase 5b's
+  Slice-10 cost-path drain) so LEAVES triggers land on the stack
+  before the activation effect pushes on top.
+
+- **Order of operations preserved**: mana (Phase 4) → tap (Phase 5) →
+  sacrifice_self (Phase 5b) → targeted-sacrifice (Phase 5c) → effect
+  dispatch (Phase 6). Each cost step commits BEFORE the next runs
+  per CR 117.10 / 119 — a failure at any cost step leaves prior
+  commits in place (Rust differs from Python here only in that
+  Python's atomic-cost-pay shape is stricter; Rust's behavior matches
+  the existing CE20 substrate pattern).
+
+- **EoE printings affected** (variant counts approximate, based on
+  oracle-text grep): ~10 carry
+  `sacrifice_another_creature_or_artifact` (Umbral Collar Zealot
+  shape); 0 carry `sacrifice_a_land` in EoE (Dust Bowl is a deferred
+  upstream-pool option); a small number carry
+  `sacrifice_another_artifact` (Memorial-Vault style — Cryogen Relic
+  and similar). The Slice 6 closure ships the substrate without
+  requiring a specific EoE printing per variant — the parity
+  cross-engine probe is deferred to a follow-up slice that picks a
+  concrete EoE printing to pin (similar to Slice 4's Bear-Caster
+  probe pattern).
+
+- **Out of scope (deferred to future slices)**:
+  - **Subtype-filtered sacrifice variants** (`sacrifice_food`,
+    `sacrifice_a_desert`). These need `CardPrinting.subtypes` on the
+    Rust registry — currently absent. ETB Slice 11 candidate.
+  - **Sacrifice cross-engine probe**. The
+    `activated_cost_side_channel` harness can grow a per-variant
+    probe analogous to Bear-Caster — deferred until a real EoE-pool
+    printing exercises the path.
+  - **Multi-target sacrifice** (sac two creatures, sac three permanents).
+    Slice 6 ships single-target only. Multi-target needs an array-shaped
+    payload field plus an effect-side multi-target arm; no EoE printing
+    needs this today.
+  - **Combined effect-target + cost-target activation** (a future
+    printing whose effect targets a creature AND whose cost sacrifices
+    an artifact). The action dict already supports BOTH fields
+    independently; the emission walk would need to fan out the
+    cross-product. Deferred until a printing surfaces.
 
 ### I49. Legacy `etb_effects: Vec<Effect>` bridged to `triggered_abilities` at parse time + cross_engine.py `printing_dict` wires `triggered_abilities` through to Rust's `register_and_inject_object` (Slice 3 of ETB-trigger closure)
 

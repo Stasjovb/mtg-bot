@@ -473,12 +473,14 @@ fn activate_ability_dict(
     source_id: u32,
     ability_index: u32,
     target_creature_id: Option<u32>,
+    sacrifice_target_id: Option<u32>,
 ) -> PyResult<Bound<'_, PyDict>> {
     let d = PyDict::new(py);
     d.set_item("kind", "activate_ability")?;
     d.set_item("source_id", source_id)?;
     d.set_item("ability_index", ability_index)?;
     d.set_item("target_creature_id", target_creature_id)?;
+    d.set_item("sacrifice_target_id", sacrifice_target_id)?;
     Ok(d)
 }
 
@@ -1144,6 +1146,15 @@ impl GameState {
                 // nothing to target; CR 601.2c says a player can't
                 // begin to cast a spell or activate an ability
                 // unless they choose legal targets for it).
+                //
+                // **CE20 Slice 6 (targeted-sacrifice variants).** When
+                // the cost flags a `sacrifice_*` target shape, fan out
+                // one ActivateAbility per legal sac target. The two
+                // target axes (target_creature_id for equip,
+                // sacrifice_target_id for sac) are independent in the
+                // action-dict shape but the EoE pool has no printing
+                // that combines both, so emission walks each shape
+                // separately and the cross-product fan-out is deferred.
                 if ability.cost.requires_target_creature_you_control {
                     for target in self.players[idx].battlefield.iter() {
                         if target.id == obj.id {
@@ -1167,6 +1178,75 @@ impl GameState {
                             obj.id,
                             ability_index as u32,
                             Some(target.id),
+                            None,
+                        )?);
+                    }
+                } else if ability.cost.sacrifice_another_creature_or_artifact
+                    || ability.cost.sacrifice_a_land
+                    || ability.cost.sacrifice_another_artifact
+                {
+                    // CE20 Slice 6 sacrifice target fan-out. Eligibility
+                    // varies per variant:
+                    //
+                    // - sacrifice_another_creature_or_artifact: target
+                    //   has card_type Creature OR Artifact, NOT self.
+                    // - sacrifice_a_land: target has card_type Land,
+                    //   SELF IS eligible (printed text reads "a land",
+                    //   no "another" qualifier).
+                    // - sacrifice_another_artifact: target has
+                    //   card_type Artifact, NOT self.
+                    //
+                    // Walk the activator's bf once and emit one dict
+                    // per eligible target. Empty result → no emission
+                    // (CR 601.2c: can't begin to activate without a
+                    // legal target). The three variants are
+                    // semantically mutually exclusive on a single
+                    // ability per the Python dataclass shape; if a
+                    // future printing carries multiple flags Rust's
+                    // OR-walk would still produce the union of legal
+                    // targets, which is the right behavior.
+                    for target in self.players[idx].battlefield.iter() {
+                        let is_self = target.id == obj.id;
+                        let Some(t_printing) =
+                            self.registry.lookup(target.printing_id)
+                        else {
+                            continue;
+                        };
+                        let is_creature = t_printing
+                            .card_types
+                            .iter()
+                            .any(|t| t == "Creature");
+                        let is_artifact = t_printing
+                            .card_types
+                            .iter()
+                            .any(|t| t == "Artifact");
+                        let is_land = t_printing
+                            .card_types
+                            .iter()
+                            .any(|t| t == "Land");
+                        let eligible = if ability
+                            .cost
+                            .sacrifice_another_creature_or_artifact
+                        {
+                            !is_self && (is_creature || is_artifact)
+                        } else if ability.cost.sacrifice_a_land {
+                            // "a land" includes self when self is a
+                            // land (no "another" qualifier).
+                            is_land
+                        } else if ability.cost.sacrifice_another_artifact {
+                            !is_self && is_artifact
+                        } else {
+                            false
+                        };
+                        if !eligible {
+                            continue;
+                        }
+                        actions.push(activate_ability_dict(
+                            py,
+                            obj.id,
+                            ability_index as u32,
+                            None,
+                            Some(target.id),
                         )?);
                     }
                 } else {
@@ -1174,6 +1254,7 @@ impl GameState {
                         py,
                         obj.id,
                         ability_index as u32,
+                        None,
                         None,
                     )?);
                 }

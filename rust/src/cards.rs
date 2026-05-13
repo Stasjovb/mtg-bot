@@ -2263,6 +2263,46 @@ pub struct ActivationCost {
     /// Lightblade, Atomic Microsizer, Illvoi Light Jammer, Hylderblade,
     /// Meltstrider's Gear, The Dominion Bracelet).
     pub requires_target_creature_you_control: bool,
+    /// **CE20 follow-up Slice 6 — targeted-sacrifice variants.**
+    /// "Sacrifice another creature or artifact" — the activator picks
+    /// any non-source creature OR artifact on their bf. Mirrors
+    /// Python's `ActivationCost.sacrifice_another_creature_or_artifact`
+    /// at `effects/base.py:358`. Default `false`.
+    ///
+    /// Rides on the Slice 4 target-pick substrate: emission fans out
+    /// one `ActivateAbility` dict per legal sac target (eligible target
+    /// = on activator's bf, NOT the source itself, has `Creature` OR
+    /// `Artifact` card_type). Apply arm validates the chosen target,
+    /// then commits in Phase 5b — moves the chosen target to its
+    /// controller's graveyard (in practice the activator's gy because
+    /// you can only choose permanents you control). Same field-reset +
+    /// LTB-void-flag + LEAVES queue plumbing as the Slice 2
+    /// `sacrifice_self` commit.
+    ///
+    /// **Composes with `tap_self` + `mana`.** Order:
+    /// mana → tap → sac-another → effect.
+    pub sacrifice_another_creature_or_artifact: bool,
+    /// **CE20 follow-up Slice 6 — targeted-sacrifice variants.**
+    /// "Sacrifice a land" — the activator picks any land they
+    /// control (Dust Bowl shape). Mirrors Python's
+    /// `ActivationCost.sacrifice_a_land` at `effects/base.py:388`.
+    /// Default `false`.
+    ///
+    /// Eligibility: target on activator's bf with `Land` card_type.
+    /// The printed text reads "Sacrifice a land" (no "another"
+    /// qualifier), so when the source IS a land the source itself is
+    /// eligible as the sacrifice target. Python mirrors this lenient
+    /// reading.
+    pub sacrifice_a_land: bool,
+    /// **CE20 follow-up Slice 6 — targeted-sacrifice variants.**
+    /// "Sacrifice another artifact" — strict artifact-only filter
+    /// (Memorial Vault shape). Mirrors Python's
+    /// `ActivationCost.sacrifice_another_artifact` at
+    /// `effects/base.py:364`. Default `false`.
+    ///
+    /// Eligibility: target on activator's bf with `Artifact` card_type,
+    /// NOT the source itself ("another" qualifier).
+    pub sacrifice_another_artifact: bool,
 }
 
 /// An activated ability on a `CardPrinting`. Mirrors a strict subset
@@ -3834,6 +3874,9 @@ pub fn apply_mana_produced_bridge(
             tap_self: true,
             sacrifice_self: false,
             requires_target_creature_you_control: false,
+            sacrifice_another_creature_or_artifact: false,
+            sacrifice_a_land: false,
+            sacrifice_another_artifact: false,
         },
         effect: bridge_effect,
         is_mana_ability: true,
@@ -4111,12 +4154,17 @@ fn parse_activation_cost(
             "mana"
             | "tap_self"
             | "sacrifice_self"
-            | "requires_target_creature_you_control" => {}
+            | "requires_target_creature_you_control"
+            | "sacrifice_another_creature_or_artifact"
+            | "sacrifice_a_land"
+            | "sacrifice_another_artifact" => {}
             other => {
                 return Err(PyValueError::new_err(format!(
                     "unknown activation_cost key {other:?}; \
                      valid: mana, tap_self, sacrifice_self, \
-                     requires_target_creature_you_control"
+                     requires_target_creature_you_control, \
+                     sacrifice_another_creature_or_artifact, \
+                     sacrifice_a_land, sacrifice_another_artifact"
                 )));
             }
         }
@@ -4146,6 +4194,36 @@ fn parse_activation_cost(
             req_any.extract::<bool>().map_err(|_| {
                 PyValueError::new_err(
                     "activation_cost.requires_target_creature_you_control \
+                     must be a bool",
+                )
+            })?;
+    }
+    if let Some(sac_another_any) =
+        dict.get_item("sacrifice_another_creature_or_artifact")?
+    {
+        cost.sacrifice_another_creature_or_artifact =
+            sac_another_any.extract::<bool>().map_err(|_| {
+                PyValueError::new_err(
+                    "activation_cost.sacrifice_another_creature_or_artifact \
+                     must be a bool",
+                )
+            })?;
+    }
+    if let Some(sac_land_any) = dict.get_item("sacrifice_a_land")? {
+        cost.sacrifice_a_land =
+            sac_land_any.extract::<bool>().map_err(|_| {
+                PyValueError::new_err(
+                    "activation_cost.sacrifice_a_land must be a bool",
+                )
+            })?;
+    }
+    if let Some(sac_artifact_any) =
+        dict.get_item("sacrifice_another_artifact")?
+    {
+        cost.sacrifice_another_artifact =
+            sac_artifact_any.extract::<bool>().map_err(|_| {
+                PyValueError::new_err(
+                    "activation_cost.sacrifice_another_artifact \
                      must be a bool",
                 )
             })?;
