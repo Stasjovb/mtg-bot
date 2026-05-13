@@ -22449,6 +22449,386 @@ def test_cross_engine_synthetic_etb_reanimator_bear_multi_creature_graveyard_ite
     )
 
 
+def test_cross_engine_synthetic_etb_reanimator_bear_empty_graveyard_silent_skip_parity(
+    parity_smoke,
+):
+    """Probe: ``ETB-Reanimator-Bear`` with EMPTY p0 graveyard --
+    silent no-op parity for the
+    ``return_creature_from_your_graveyard_to_battlefield`` bridge
+    arm.
+
+    Sister probe to:
+      * ``test_cross_engine_synthetic_etb_return_creature_from_graveyard_to_battlefield_cross_controller_routes_to_source_controller_parity``
+        (canonical happy-path, ONE creature in p1 gy, cross-controller
+        routing).
+      * ``test_cross_engine_synthetic_etb_reanimator_bear_multi_creature_graveyard_iterator_order_parity``
+        (multi-creature iterator-order parity, THREE creatures in
+        p0 gy).
+      * ``test_cross_engine_synthetic_etb_recur_bear_empty_graveyard_silent_skip_parity``
+        (EMPTY-graveyard silent-skip for the to-HAND sister arm).
+
+    Pins the silent-skip half of the substrate's contract for the
+    to-bf arm. The canonical I83 probe drives a populated p1
+    graveyard (single bait) and exercises the happy-path
+    reanimation; this probe seats an EMPTY p0 graveyard so the
+    trigger fires against nothing eligible.
+
+    **Documented engine-internal asymmetry, observable parity.**
+    The two engines reach the SAME post-drain observable state from
+    DIFFERENT intermediate stack shapes (mirrors the to-hand
+    sister probe's contract):
+
+      * **Rust** pushes the trigger onto the stack on the ENTERS
+        dispatch even when no eligible target exists, then resolves
+        it as a silent ``return Ok(())`` no-op (the
+        ``Effect::ReturnCreatureFromYourGraveyardToBattlefield``
+        resolve arm scans the source-controller's graveyard for
+        the first creature, finds none, and exits clean). Stack
+        briefly carries 1 item; post-drain it is empty and zones
+        are unchanged.
+      * **Python** elides the push at PUSH time when
+        ``effect.legal_targets(...)`` returns an empty pool: the
+        targeting pipeline (``push_triggered_ability`` /
+        ``actions.py``) refuses to land a trigger that has no
+        legal target candidate. Stack stays at 0 the entire time.
+
+    Both paths are well-defined silent-skips; both engines agree on
+    the post-drain observable contract:
+
+      * p0 graveyard: still empty (nothing to reanimate).
+      * p0 battlefield: still holds ETB Reanimator Bear (the source);
+        no reanimated creature added.
+      * p1 zones: all unchanged (no crossover).
+      * No life changes.
+      * No residual stack on either engine.
+
+    The probe asserts the post-drain observable parity directly and
+    does NOT assert mid-flight stack equality (which would force a
+    spurious divergence on the documented internal asymmetry).
+
+    Why this probe matters:
+
+      * **Coverage of the substrate's silent-skip branch for the
+        to-bf arm.** The happy-path / cross-controller probe
+        exercises the populated-graveyard pick; without this
+        sibling, a regression that flipped Rust's
+        ``return Ok(())`` early-exit into a hard panic (or
+        Python's ``legal_targets`` no-push elision into a crash on
+        the empty pool) on the to-bf codepath specifically would
+        slip past the existing harness. The to-hand silent-skip
+        sibling ALREADY shipped (round 1, commit c8635b72) but
+        only exercises the to-hand resolve arm; each arm carries
+        its own resolve-side branch and needs its own silent-skip
+        coverage.
+      * **Asymmetric-internal / symmetric-observable contract.**
+        Documents another instance of Phase 5's structural parity
+        contract: the bridge translates the Rust dict to the
+        Python class, and both engines may reach a parity-clean
+        observable state via different internal stack shapes.
+
+    Probe shape (inject-and-fire-ENTERS, NO graveyard seed):
+
+      1. **Skip the gy seed.** The happy-path probe seeds a single
+         bait creature in p1's graveyard; this probe's whole point
+         is to NOT seed, so the trigger fires against an empty
+         graveyard.
+      2. Inject ETB Reanimator Bear directly onto p0's bf
+         (controller=0; the SAME-controller variant, sibling of the
+         I83 cross-controller happy-path probe). The ENTERS
+         dispatch fires the SourceIsSelf trigger.
+      3. Drain both stacks (no-op on Python where the stack stayed
+         at 0; one silent-resolve walk on Rust where the trigger
+         landed and immediately resolved-to-noop).
+      4. Cross-engine assert: post-drain hand/graveyard/bf sizes
+         and life totals match between engines and match the
+         pre-dispatch baseline (only the source persists on bf;
+         no reanimated creature added).
+
+    Out of scope:
+
+      * The populated-graveyard happy path -- exercised by the
+        canonical I83 cross-controller probe.
+      * Multi-creature graveyard pick -- exercised by the
+        iterator-order sibling probe.
+      * Cross-controller routing on the silent-skip path -- the
+        I83 contract is already exercised on the populated path;
+        this probe exercises the silent-skip on the SAME-controller
+        variant for cleanest observable parity (the silent-skip
+        contract doesn't depend on which graveyard is empty -- both
+        empty p0 and empty p1 silent-skip identically on both
+        engines).
+      * Rider widenings (or_enchantment, or_artifact) -- both
+        riders carry their own dedicated probes; their
+        empty-graveyard silent-skip behaviors mirror this probe's
+        contract but the target-pick filter widens, so a
+        rider-specific empty-gy probe would add coverage there too
+        -- separate slice.
+
+    Expected post-dispatch + post-drain state on BOTH engines:
+
+      * p0 graveyard: 0 cards (the silent-skip didn't push or pop).
+      * p0 battlefield: 1 object (ETB Reanimator Bear, the source).
+      * p1 zones: all 0 (untouched).
+      * Life totals: 20 / 20.
+      * Residual stack: 0 on both engines.
+    """
+    from mtg_bot.parity.cross_engine import (
+        CardDef, DeckSpec, build_python_state, build_rust_state,
+    )
+    from tests.parity._picker_shims import _PickFirstLegalTargetAgent
+
+    # Reanimator Bear: vanilla 2/2 + ETB
+    # return-creature-from-gy-to-battlefield. Same shape as the I83
+    # cross-controller probe; the ONLY differences are (a) seated on
+    # p0 not p1 (same-controller silent-skip variant), (b) absent
+    # graveyard seed -- this probe skips it.
+    reanimator_bear = CardDef(
+        name="ETB Reanimator Bear (empty-gy probe)",
+        card_type="Creature",
+        mana_cost_generic=2,
+        mana_cost_colored=(("B", 1),),
+        power=2,
+        toughness=2,
+        triggered_abilities=(
+            {
+                "event": "enters",
+                "predicate": {"kind": "source_is_self"},
+                "effect": {
+                    "kind": "return_creature_from_your_graveyard_to_battlefield",
+                },
+            },
+        ),
+    )
+    spec = DeckSpec(
+        card_defs=(reanimator_bear,),
+        # Libraries empty-but-for-symmetry: probe injects directly
+        # onto bf so libraries aren't observed.
+        p0_library=(),
+        p1_library=(),
+    )
+    py_state = build_python_state(spec)
+    rust_state = build_rust_state(spec)
+
+    # ---- Rust side ----
+    ZONE_BATTLEFIELD = 2
+    rust_reanimator_dict = {
+        "name": "ETB Reanimator Bear (empty-gy probe)",
+        "card_types": ["Creature"],
+        "mana_cost": {"generic": 2, "B": 1},
+        "effects": [],
+        "power": 2,
+        "toughness": 2,
+        "triggered_abilities": [
+            {
+                "event": "enters",
+                "predicate": {"kind": "source_is_self"},
+                "effect": {
+                    "kind": "return_creature_from_your_graveyard_to_battlefield",
+                },
+            }
+        ],
+    }
+    rust_p0_life_before = rust_state.get_life(0)
+    rust_p1_life_before = rust_state.get_life(1)
+    # Pre-dispatch: graveyard EMPTY on both sides (no seed).
+    assert rust_state.graveyard_sizes[0] == 0
+    assert rust_state.graveyard_sizes[1] == 0
+    assert rust_state.battlefield_sizes[0] == 0
+    assert rust_state.battlefield_sizes[1] == 0
+
+    # Inject the reanimator-bear onto p0's battlefield -> fires
+    # ENTERS via the deferred-dispatch queue. SourceIsSelf matches;
+    # Rust pushes ReturnCreatureFromYourGraveyardToBattlefield onto
+    # the stack even with no eligible target (the resolve arm scans
+    # the gy at apply-time and silent-no-ops when no creature card
+    # is found).
+    rust_state.register_and_inject_object(
+        rust_reanimator_dict, 0, ZONE_BATTLEFIELD,
+    )
+    rust_stack_after_dispatch = rust_state.stack_size()
+    # Document Rust's mid-flight push: we do NOT assert this matches
+    # Python's count (Python's legal_targets-empty path elides the
+    # push). The post-drain observable is what we pin.
+    assert rust_stack_after_dispatch == 1, (
+        "Rust: ETB Reanimator Bear's arrival fires SourceIsSelf "
+        "even with empty p0 graveyard; trigger lands on stack and "
+        "resolves to silent no-op. "
+        f"Got mid-flight stack_size={rust_stack_after_dispatch}"
+    )
+
+    # ---- Python side ----
+    from mtg_bot.actions import _trigger_etb_abilities
+    from mtg_bot.cards.base import CardPrinting, ManaCost
+    from mtg_bot.effects.base import TriggeredAbility
+    from mtg_bot.effects.generic.graveyard import (
+        ReturnCreatureFromYourGraveyardToBattlefield,
+    )
+    from mtg_bot.effects.predicates import Event, IsSelf
+    from mtg_bot.game import Zone
+
+    reanimator_printing = CardPrinting(
+        name="ETB Reanimator Bear (empty-gy probe)",
+        mana_cost_str="",
+        mana_cost=ManaCost(generic=2, colored=(("B", 1),)),
+        type_line="Creature",
+        supertypes=(),
+        card_types=("Creature",),
+        subtypes=(),
+        power=2,
+        toughness=2,
+        produces=frozenset(),
+        triggered_abilities=(
+            TriggeredAbility(
+                event=Event.ENTERS,
+                predicate=IsSelf(),
+                effect=ReturnCreatureFromYourGraveyardToBattlefield(),
+            ),
+        ),
+    )
+
+    # Seat the canonical first-legal-target shim on p0 (mirrors the
+    # iterator-order probe's setup). The shim's only behavior of
+    # interest here is its empty-pool branch (returns None when
+    # legal_targets is empty); the targeting pipeline elides the
+    # push without ever calling the shim, so this is defense-in-
+    # depth (a regression that began calling the shim with an empty
+    # pool in this codepath would surface here via the None return).
+    py_state.players[0].agent = _PickFirstLegalTargetAgent()
+
+    # Inject the reanimator-bear onto p0's battlefield, then
+    # manually dispatch ENTERS (same shape as prior probes).
+    py_reanimator = py_state.new_object(
+        reanimator_printing, owner_id=0, zone=Zone.BATTLEFIELD,
+    )
+    py_reanimator.summoning_sick = False
+    py_reanimator.tapped = False
+    py_reanimator.damage = 0
+    py_reanimator.etb_timestamp = py_state.next_timestamp
+    py_state.next_timestamp += 1
+    py_state.battlefield.append(py_reanimator)
+    py_p0_life_before = py_state.players[0].life
+    py_p1_life_before = py_state.players[1].life
+    # Pre-dispatch: graveyards EMPTY on both sides (no seed).
+    assert len(py_state.players[0].graveyard) == 0
+    assert len(py_state.players[1].graveyard) == 0
+    py_p0_bf_pre_dispatch = len(
+        [o for o in py_state.battlefield if o.controller_id == 0]
+    )
+    py_p1_bf_pre_dispatch = len(
+        [o for o in py_state.battlefield if o.controller_id == 1]
+    )
+    _trigger_etb_abilities(py_state, py_reanimator)
+    py_stack_after_dispatch = len(py_state.stack)
+    # Document Python's mid-flight elision: legal_targets-empty
+    # path doesn't push. We pin the post-drain observable, not the
+    # mid-flight stack count.
+    assert py_stack_after_dispatch == 0, (
+        "Python: ETB Reanimator Bear's arrival with empty p0 "
+        "graveyard should trigger the legal_targets-empty push "
+        "elision; the trigger never lands on the stack. "
+        f"Got mid-flight stack size={py_stack_after_dispatch}"
+    )
+
+    # ---- Drain both stacks, then compare observable parity ----
+    _drain_stack_both(py_state, rust_state)
+
+    # Stacks empty on both sides post-drain (Rust: silent-resolve
+    # consumed the no-op trigger; Python: nothing to drain).
+    assert rust_state.stack_size() == 0
+    assert len(py_state.stack) == 0
+
+    # Per-engine post-drain observable (Rust): graveyards still
+    # empty, p0 bf still holds the source (only), p1 untouched.
+    assert rust_state.graveyard_sizes[0] == 0, (
+        f"Rust: p0 graveyard should remain empty; got "
+        f"graveyard_size={rust_state.graveyard_sizes[0]}"
+    )
+    assert rust_state.graveyard_sizes[1] == 0, (
+        f"Rust: p1 graveyard should remain empty; got "
+        f"graveyard_size={rust_state.graveyard_sizes[1]}"
+    )
+    assert rust_state.battlefield_sizes[0] == 1, (
+        f"Rust: p0 bf should hold ONLY ETB Reanimator Bear "
+        f"(no reanimated creature added on the silent-skip path); "
+        f"got bf_size={rust_state.battlefield_sizes[0]}"
+    )
+    assert rust_state.battlefield_sizes[1] == 0, (
+        f"Rust: p1 bf should remain empty; got "
+        f"bf_size={rust_state.battlefield_sizes[1]}"
+    )
+    rust_bf_snap = rust_state.battlefield_snapshot()
+    rust_p0_bf_objs = [
+        d for d in rust_bf_snap if d["controller_id"] == 0
+    ]
+    assert len(rust_p0_bf_objs) == 1
+    assert (
+        rust_p0_bf_objs[0]["printing_name"]
+        == "ETB Reanimator Bear (empty-gy probe)"
+    ), (
+        f"Rust: only object on p0 bf should be the source; "
+        f"got name={rust_p0_bf_objs[0]['printing_name']}"
+    )
+
+    # Per-engine post-drain observable (Python): same shape.
+    assert len(py_state.players[0].graveyard) == 0, (
+        f"Python: p0 graveyard should remain empty; got "
+        f"graveyard_size={len(py_state.players[0].graveyard)}"
+    )
+    assert len(py_state.players[1].graveyard) == 0, (
+        f"Python: p1 graveyard should remain empty; got "
+        f"graveyard_size={len(py_state.players[1].graveyard)}"
+    )
+    py_bf_p0 = [
+        o for o in py_state.battlefield if o.controller_id == 0
+    ]
+    py_bf_p1 = [
+        o for o in py_state.battlefield if o.controller_id == 1
+    ]
+    assert len(py_bf_p0) == 1, (
+        f"Python: p0 bf should hold ONLY ETB Reanimator Bear; "
+        f"got bf_size={len(py_bf_p0)}"
+    )
+    assert (
+        py_bf_p0[0].printing.name
+        == "ETB Reanimator Bear (empty-gy probe)"
+    ), (
+        f"Python: only object on p0 bf should be the source; "
+        f"got name={py_bf_p0[0].printing.name}"
+    )
+    assert len(py_bf_p1) == 0, (
+        f"Python: p1 bf should remain empty; got "
+        f"bf_size={len(py_bf_p1)}"
+    )
+    # Sanity: bf delta from pre-dispatch is 0 (the source was
+    # already pushed onto bf BEFORE the dispatch fired, so the
+    # silent-skip leaves bf size unchanged from the
+    # post-injection-pre-dispatch baseline).
+    assert len(py_bf_p0) == py_p0_bf_pre_dispatch
+    assert len(py_bf_p1) == py_p1_bf_pre_dispatch
+
+    # Cross-engine: lives unchanged on both sides.
+    assert rust_state.get_life(0) == rust_p0_life_before
+    assert rust_state.get_life(1) == rust_p1_life_before
+    assert py_state.players[0].life == py_p0_life_before
+    assert py_state.players[1].life == py_p1_life_before
+    assert rust_state.get_life(0) == py_state.players[0].life
+    assert rust_state.get_life(1) == py_state.players[1].life
+
+    # Cross-engine zone-size parity (the post-drain observable).
+    assert rust_state.battlefield_sizes[0] == len(py_bf_p0)
+    assert rust_state.battlefield_sizes[1] == len(py_bf_p1)
+    assert (
+        rust_state.graveyard_sizes[0]
+        == len(py_state.players[0].graveyard)
+    )
+    assert (
+        rust_state.graveyard_sizes[1]
+        == len(py_state.players[1].graveyard)
+    )
+    assert rust_state.hand_sizes[0] == len(py_state.players[0].hand)
+    assert rust_state.hand_sizes[1] == len(py_state.players[1].hand)
+
+
 # === PHASE5_PROBES_INSERT_ABOVE_THIS_LINE ===
 # New real-EoE parity probes go IMMEDIATELY ABOVE this marker.
 # Append-only convention prevents merge collisions when multiple agents add probes in parallel.
