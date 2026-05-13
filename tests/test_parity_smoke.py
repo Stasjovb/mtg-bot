@@ -20485,6 +20485,355 @@ def test_cross_engine_real_eoe_starbreach_whale_etb_surveil_2_mill_path_parity(
     assert len(py_state.players[1].graveyard) == 0
 
 
+def test_cross_engine_synthetic_etb_create_token_cross_controller_routes_to_source_controller_parity(
+    parity_smoke,
+):
+    """Probe: synthetic ETB ``create_token`` trigger fired by a
+    permanent CONTROLLED BY P1 while ACTIVE_PLAYER=P0 -- the I81
+    controller-of-effect fix's cross-engine flicker. Both engines
+    must route the freshly-spawned token onto P1's battlefield
+    under P1's control, NOT onto P0's bf under P0 (the active
+    player).
+
+    **The I81 substrate.** Per worklog
+    ``2026-05-13-controller-of-effect-i81-i82-i83``: pre-I81 the
+    Rust ``Effect::CreateToken`` arm computed
+    ``active = state.active_player`` and used it both for the
+    token's ``controller`` byte AND for picking the recipient
+    battlefield Vec. Wrong when the resolving spell / triggered
+    ability has a controller != active_player. The fix routes both
+    derivations through ``current_resolve_source_controller``, so
+    the token correctly lands under the source's controller. The
+    Python side (``CreateToken.resolve(state, controller_id, ...)``
+    at ``effects/generic/tokens.py:202``) already takes
+    ``controller_id`` explicitly and has always been correct on this
+    surface. This probe pins the cross-engine observable PARITY of
+    the post-I81 contract end-to-end via a synthetic ETB trigger,
+    closing the "cross-controller probe" gap the I81 forward-notes
+    explicitly called out.
+
+    **Why synthetic, not a real EoE card.** No EoE card today
+    prints an ETB ``create N tokens`` trigger that's parameterized
+    on a registered token printing in a way that's straightforward
+    to drive cross-engine without the rest of the spell's
+    machinery. The Rust regression-pin tests for I81 use a
+    Conscript-shape sorcery cast with ``push_to_stack`` directly;
+    that bypasses the deferred-ETB-dispatch path which is the
+    canonical surface a triggered ability flows through. A
+    synthetic ETB-bearing creature ("Token Maker Bear") with a
+    ``create_token`` trigger exercises the deferred-dispatch path
+    end-to-end, which is the flicker the cross-engine observable
+    is supposed to pin.
+
+    **Why no bridge arm for ``create_token``.** The bridge
+    translator at ``_ta_dict_to_python_effect`` doesn't carry an
+    arm for ``create_token`` -- it would need a printing-id-to-
+    Python-CardPrinting lookup that has no obvious source-of-
+    truth at translation time (the dict ships only a ``u32``
+    ``token_printing_id`` keyed to the Rust registry). The probe
+    sidesteps that by KEEPING Token Maker Bear OUT of
+    ``DeckSpec.card_defs`` entirely; both sides build their
+    printings + inject manually, mirroring the empty-graveyard
+    silent-skip probe's pattern of constructing the trigger-bearing
+    card outside the bridge.
+
+    Probe shape (cross-controller inject-and-fire-ENTERS):
+
+      1. **active_player=P0** (default after ``make_state`` /
+         ``build_python_state``). Confirmed via ``state.active_player``
+         on Rust and ``state.active_player_idx`` on Python.
+
+      2. **Register the Soldier token printing** on the Rust side
+         (so the create_token trigger has a valid
+         ``token_printing_id`` to reference). Mirror the Python
+         side by constructing a matching Python CardPrinting via
+         ``make_token_creature``.
+
+      3. **Inject Token Maker Bear onto P1's bf** with
+         ``controller=1`` (Rust's ``register_and_inject_object``;
+         Python's ``new_object`` + bf append + manual
+         ``_trigger_etb_abilities``). The injection's ENTERS
+         dispatch fires the SourceIsSelf trigger; the trigger
+         lands on the stack with controller=1 (the SOURCE's
+         controller, NOT the active player).
+
+      4. **Drain both stacks.** The trigger resolves via
+         ``apply_effect`` with
+         ``current_resolve_source_controller = Some(1)``; the
+         post-I81 CreateToken arm reads that and routes the token
+         to P1's bf under P1's control.
+
+      5. **Cross-engine assert (post-I81 contract):**
+         - P1's bf grew by exactly 1 (the spawned token).
+         - P0's bf is unchanged (NO token spawned under the
+           active player).
+         - The fresh token's ``controller_id`` is 1 on both
+           engines (Rust via ``battlefield_snapshot()``, Python
+           via the ``GameObject.controller_id`` field).
+
+    **Pre-I81 vs post-I81 observable.**
+    Pre-fix Rust would have:
+      - Spawned the token on P0's bf (active_player), creating a
+        +1 size delta on the WRONG seat.
+      - Stamped ``controller_id = 0`` on the token, making it a
+        permanent under the WRONG player.
+    The Python side has always done the right thing because the
+    ``CreateToken.resolve`` recipient list is built from the
+    explicitly-passed ``controller_id`` (the trigger's controller).
+    Post-I81 the Rust observable matches Python. This probe
+    exercises that match end-to-end.
+
+    Out of scope:
+
+      * Cast-from-hand mana cost -- the inject-and-dispatch-ENTERS
+        pattern bypasses the mana pipeline.
+      * count != 1 -- the I81 contract is independent of count;
+        the regression pins at ``test_create_token_*`` already
+        cover the count multiplication. This probe pins the
+        controller routing on count=1.
+      * Each-player tokens (``each_player=True`` flag) -- a
+        Python-side flag with no Rust mirror today; out of scope
+        of the cross-engine substrate.
+      * Tapped / attacking / end-of-combat-sacrifice riders --
+        not part of the I81 controller-routing surface.
+
+    Expected post-dispatch + post-drain state on BOTH engines:
+
+      * Token Maker Bear on P1's battlefield (unchanged from
+        inject; controller=1).
+      * One Soldier Token on P1's battlefield (newly spawned;
+        controller=1).
+      * P0's battlefield: empty (no token spawned under the
+        active player).
+      * No residual stack on either engine.
+      * Life totals unchanged on both seats.
+    """
+    from mtg_bot.parity.cross_engine import (
+        DeckSpec, build_python_state, build_rust_state,
+    )
+
+    # Empty card_defs: Token Maker Bear is built and injected
+    # manually on both sides (the bridge has no `create_token`
+    # arm -- see docstring).
+    spec = DeckSpec(
+        card_defs=(),
+        p0_library=(),
+        p1_library=(),
+    )
+    py_state = build_python_state(spec)
+    rust_state = build_rust_state(spec)
+
+    # Confirm pre-condition: active_player=P0 on both engines (the
+    # whole point of the probe is the cross-controller case where
+    # the SOURCE's controller != active_player).
+    assert rust_state.active_player == 0, (
+        f"Probe pre-condition: Rust active_player must be 0; "
+        f"got {rust_state.active_player}"
+    )
+    assert py_state.active_player_idx == 0, (
+        f"Probe pre-condition: Python active_player_idx must be 0; "
+        f"got {py_state.active_player_idx}"
+    )
+
+    # ---- Rust side: register Soldier token, then inject Token
+    # Maker Bear onto P1's bf. ----
+    ZONE_LIBRARY = 1
+    ZONE_BATTLEFIELD = 2
+    rust_soldier_token_dict = {
+        "name": "Soldier Token I81 Probe",
+        "card_types": ["Creature"],
+        "power": 1,
+        "toughness": 1,
+    }
+    # Register the token printing into Rust's registry by injecting
+    # a dummy onto P1's library briefly -- mirrors
+    # `_register_soldier_token` in tests_rust/test_resolve.py.
+    rust_token_pid = rust_state.registry_size  # next free printing_id
+    rust_state.register_and_inject_object(
+        rust_soldier_token_dict, 1, ZONE_LIBRARY,
+    )
+
+    rust_token_maker_dict = {
+        "name": "Token Maker Bear (I81 cross-controller probe)",
+        "card_types": ["Creature"],
+        "mana_cost": {"generic": 2, "W": 1},
+        "effects": [],
+        "power": 2,
+        "toughness": 2,
+        "triggered_abilities": [
+            {
+                "event": "enters",
+                "predicate": {"kind": "source_is_self"},
+                "effect": {
+                    "kind": "create_token",
+                    "count": 1,
+                    "token_printing_id": rust_token_pid,
+                },
+            }
+        ],
+    }
+
+    rust_p0_life_before = rust_state.get_life(0)
+    rust_p1_life_before = rust_state.get_life(1)
+    rust_bf_p0_before = rust_state.battlefield_sizes[0]
+    rust_bf_p1_before = rust_state.battlefield_sizes[1]
+
+    # Inject onto P1's bf with controller=1. ENTERS fires via the
+    # deferred-dispatch queue; the trigger lands on the stack
+    # carrying controller=1 (the SOURCE's controller).
+    rust_state.register_and_inject_object(
+        rust_token_maker_dict, 1, ZONE_BATTLEFIELD,
+    )
+
+    # ---- Python side: build Soldier token printing + Token Maker
+    # Bear printing manually, then inject onto P1's bf. ----
+    from mtg_bot.actions import _trigger_etb_abilities
+    from mtg_bot.cards.base import (
+        CardPrinting, ManaCost, make_token_creature,
+    )
+    from mtg_bot.effects.base import TriggeredAbility
+    from mtg_bot.effects.generic.tokens import CreateToken
+    from mtg_bot.effects.predicates import Event, IsSelf
+    from mtg_bot.game import Zone
+
+    py_soldier_token = make_token_creature(
+        name="Soldier Token I81 Probe",
+        power=1,
+        toughness=1,
+        subtypes=("Soldier",),
+    )
+    py_token_maker_printing = CardPrinting(
+        name="Token Maker Bear (I81 cross-controller probe)",
+        mana_cost_str="",
+        mana_cost=ManaCost(generic=2, colored=(("W", 1),)),
+        type_line="Creature",
+        supertypes=(),
+        card_types=("Creature",),
+        subtypes=(),
+        power=2,
+        toughness=2,
+        produces=frozenset(),
+        triggered_abilities=(
+            TriggeredAbility(
+                event=Event.ENTERS,
+                predicate=IsSelf(),
+                effect=CreateToken(token_printing=py_soldier_token, count=1),
+            ),
+        ),
+    )
+    py_p0_life_before = py_state.players[0].life
+    py_p1_life_before = py_state.players[1].life
+    py_bf_p0_before = len(
+        [o for o in py_state.battlefield if o.controller_id == 0]
+    )
+    py_bf_p1_before = len(
+        [o for o in py_state.battlefield if o.controller_id == 1]
+    )
+
+    # Inject Token Maker Bear onto P1's bf with controller_id=1,
+    # then manually dispatch ENTERS (mirrors prior synthetic ETB
+    # probes).
+    py_token_maker = py_state.new_object(
+        py_token_maker_printing, owner_id=1, zone=Zone.BATTLEFIELD,
+    )
+    py_token_maker.summoning_sick = False
+    py_token_maker.tapped = False
+    py_token_maker.damage = 0
+    py_token_maker.etb_timestamp = py_state.next_timestamp
+    py_state.next_timestamp += 1
+    py_state.battlefield.append(py_token_maker)
+    _trigger_etb_abilities(py_state, py_token_maker)
+
+    # ---- Drain both stacks, then compare observable parity. ----
+    _drain_stack_both(py_state, rust_state)
+
+    # Stacks empty on both sides post-drain.
+    assert rust_state.stack_size() == 0
+    assert len(py_state.stack) == 0
+
+    # Rust observable (the I81 contract):
+    #   * P1's bf gained Token Maker Bear (the source) + 1 Soldier
+    #     Token = +2 from baseline.
+    #   * P0's bf is unchanged (NO token under active player).
+    rust_bf_p0_after = rust_state.battlefield_sizes[0]
+    rust_bf_p1_after = rust_state.battlefield_sizes[1]
+    assert rust_bf_p0_after == rust_bf_p0_before, (
+        f"Rust I81 contract violation: P0's bf changed despite "
+        f"the create_token trigger being controlled by P1. "
+        f"Pre-fix bug would route the token here. "
+        f"Got bf_p0_before={rust_bf_p0_before}, "
+        f"bf_p0_after={rust_bf_p0_after}"
+    )
+    assert rust_bf_p1_after == rust_bf_p1_before + 2, (
+        f"Rust I81 contract: P1's bf should gain Token Maker Bear "
+        f"+ 1 Soldier Token = +2 from baseline. Got "
+        f"bf_p1_before={rust_bf_p1_before}, "
+        f"bf_p1_after={rust_bf_p1_after}"
+    )
+
+    # Confirm the freshly-spawned Soldier Token's controller_id=1
+    # via the bf snapshot (catches a regression that flipped the
+    # token controller stamp without changing the bf-Vec routing).
+    rust_bf_snap = rust_state.battlefield_snapshot()
+    rust_soldier_tokens = [
+        d for d in rust_bf_snap
+        if d["printing_name"] == "Soldier Token I81 Probe"
+    ]
+    assert len(rust_soldier_tokens) == 1, (
+        f"Rust: expected exactly 1 Soldier Token on the bf; got "
+        f"{len(rust_soldier_tokens)}"
+    )
+    assert rust_soldier_tokens[0]["controller_id"] == 1, (
+        f"Rust I81 contract: spawned Soldier Token's controller_id "
+        f"must be 1 (source's controller). Got "
+        f"controller_id={rust_soldier_tokens[0]['controller_id']}"
+    )
+
+    # Python observable: same shape on the equivalent zones.
+    py_bf_p0_after = len(
+        [o for o in py_state.battlefield if o.controller_id == 0]
+    )
+    py_bf_p1_after = len(
+        [o for o in py_state.battlefield if o.controller_id == 1]
+    )
+    assert py_bf_p0_after == py_bf_p0_before, (
+        f"Python: P0's bf should be unchanged. Got "
+        f"bf_p0_before={py_bf_p0_before}, "
+        f"bf_p0_after={py_bf_p0_after}"
+    )
+    assert py_bf_p1_after == py_bf_p1_before + 2, (
+        f"Python: P1's bf should gain Token Maker Bear + 1 "
+        f"Soldier Token = +2. Got "
+        f"bf_p1_before={py_bf_p1_before}, "
+        f"bf_p1_after={py_bf_p1_after}"
+    )
+    py_soldier_tokens = [
+        o for o in py_state.battlefield
+        if o.printing.name == "Soldier Token I81 Probe"
+    ]
+    assert len(py_soldier_tokens) == 1, (
+        f"Python: expected exactly 1 Soldier Token on the bf; got "
+        f"{len(py_soldier_tokens)}"
+    )
+    assert py_soldier_tokens[0].controller_id == 1, (
+        f"Python: spawned Soldier Token's controller_id must be 1. "
+        f"Got controller_id={py_soldier_tokens[0].controller_id}"
+    )
+
+    # Cross-engine: lives unchanged on both sides (create_token
+    # doesn't touch life).
+    assert rust_state.get_life(0) == rust_p0_life_before
+    assert rust_state.get_life(1) == rust_p1_life_before
+    assert py_state.players[0].life == py_p0_life_before
+    assert py_state.players[1].life == py_p1_life_before
+    assert rust_state.get_life(0) == py_state.players[0].life
+    assert rust_state.get_life(1) == py_state.players[1].life
+
+    # Cross-engine bf-size parity (the post-drain observable).
+    assert rust_bf_p0_after == py_bf_p0_after
+    assert rust_bf_p1_after == py_bf_p1_after
+
+
 # === PHASE5_PROBES_INSERT_ABOVE_THIS_LINE ===
 # New real-EoE parity probes go IMMEDIATELY ABOVE this marker.
 # Append-only convention prevents merge collisions when multiple agents add probes in parallel.
