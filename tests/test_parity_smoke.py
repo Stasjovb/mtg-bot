@@ -10771,3 +10771,278 @@ def test_cross_engine_real_eoe_mechan_assembler_once_per_turn_parity(
     assert py_state.players[1].life == 20
     assert rust_state.get_life(0) == py_state.players[0].life
     assert rust_state.get_life(1) == py_state.players[1].life
+
+
+def test_cross_engine_real_eoe_tannuk_memorial_ensign_landfall_burn_parity(
+    parity_smoke,
+):
+    """Probe F: Tannuk, Memorial Ensign (EoE) Landfall->burn trigger
+    fires + parity-matches across the newly-bridged
+    ``damage_each_opponent`` effect.
+
+    Oracle text in `data/edge_of_eternities.json`:
+
+        "Landfall -- Whenever a land you control enters, Tannuk
+         deals 1 damage to each opponent. If this is the second
+         time this ability has resolved this turn, draw a card."
+
+    The "second-time-this-turn -> draw a card" rider is OUT of scope
+    -- modeling it requires a per-turn fire-count ledger on the
+    bridge that doesn't exist yet (the existing once_per_turn ledger
+    is a binary skip-gate, not a counted-fires bridge). This probe
+    restricts the surface to the LANDFALL + DAMAGE_EACH_OPPONENT(1)
+    base trigger. Both component clauses are now substrate-resolvable:
+
+      * Predicate shape: ``Subject(IsLand) AND ControlledByYou`` --
+        SAME shape pinned by the Eumidian Terrabotanist probe (the
+        third Phase 5 probe), so the predicate-algebra coverage is
+        already paid for.
+
+      * Effect shape: ``DamageEachOpponent(1)`` -- NEW on the bridge
+        as of the companion commit. The Rust side reads
+        ``damage_each_opponent`` via ``parse_effect`` (cards.rs:2771);
+        the Python bridge's
+        ``_ta_dict_to_python_effect`` arm translates to
+        ``DealDamageEachOpponent(amount=1)`` (effects/generic/damage.py).
+
+    Probe shape (mirrors the Eumidian Terrabotanist Landfall frame):
+
+      1. Pre-place Tannuk, Memorial Ensign on p0's bf. Tannuk's own
+         arrival doesn't fire its predicate (Tannuk is a creature,
+         not a land, so the SUBJECT(IsLand) arm short-circuits even
+         without a NOT(IsSelf) gate -- that's a happy side-effect of
+         the type filter).
+
+      2. Inject a Forest onto p0's bf via ``play_land`` (Rust) /
+         ``_play_land`` (Python). The land-play-path dispatches
+         ENTERS for the Forest; the dispatcher walks every bf
+         permanent and finds Tannuk's predicate matches:
+         subject_is_land (yes), controlled_by_you (yes). Trigger
+         pushes onto the stack.
+
+      3. Drain stack on both engines. DamageEachOpponent(1) resolves:
+         each engine subtracts 1 from p1's life (the only opponent
+         in the 2-player game). p1 life: 20 -> 19.
+
+      4. Cross-engine assert: BOTH engines reduced p1's life to 19.
+         p0 life unchanged at 20 (Tannuk's controller, immune to the
+         each-opponent damage).
+
+    Expected post-drain state on BOTH engines:
+
+      * Tannuk on p0's bf (didn't move).
+      * Forest on p0's bf (just played).
+      * p0 life: unchanged at 20 (controller-immune).
+      * p1 life: 20 -> 19 (-1 from the landfall->burn trigger).
+      * No residual stack.
+
+    Outcome (a): clean pass pins the bridge extension end-to-end on
+    a real-card landfall->burn trigger. Same predicate shape covers
+    every "Landfall: do something to each opponent" trigger in EoE
+    once landed on the bridge's effect surface; this probe is the
+    first one to drive the LANDFALL + (effect-not-life/draw) shape.
+
+    Notes on out-of-scope:
+
+      * Multi-trigger-per-turn count (the "second time this turn"
+        rider) -- needs a counter-based bridge entry, not the binary
+        once_per_turn flag pinned by Probe E. Future probe / future
+        bridge widening.
+
+      * Cross-controller controller-of-effect contract -- this probe
+        drives p0 (active_player) controlled trigger, where Rust's
+        ``state.players[1 - active_player]`` reader and Python's
+        per-source-controller walk agree. The "p1's source resolves
+        on p0's turn" case is gated by the same active_player-keyed
+        Rust reader that DrawCards/GainLife had pre-I59/I60 fixes.
+        A follow-up controller-of-effect fix for
+        ``Effect::DamageEachOpponent`` mirrors the I60 shape.
+    """
+    from mtg_bot.parity.cross_engine import (
+        CardDef, DeckSpec, build_python_state, build_rust_state,
+    )
+
+    landfall_predicate = {
+        "kind": "and",
+        "left": {"kind": "subject_is_land"},
+        "right": {"kind": "controlled_by_you"},
+    }
+    tannuk = CardDef(
+        name="Tannuk, Memorial Ensign",
+        card_type="Creature",
+        mana_cost_generic=1,
+        mana_cost_colored=(("R", 1),),
+        power=2,
+        toughness=2,
+        triggered_abilities=(
+            {
+                "event": "enters",
+                "predicate": landfall_predicate,
+                "effect": {
+                    "kind": "damage_each_opponent",
+                    "amount": 1,
+                },
+            },
+        ),
+    )
+    forest = CardDef(
+        name="Forest", card_type="Land", mana_produced=("G",),
+    )
+    spec = DeckSpec(
+        card_defs=(tannuk, forest),
+        # Forest in p0's library — _play_land path moves it to bf.
+        # p1 library has Forest too so the deckspec is symmetric; we
+        # don't touch p1's resources in this probe.
+        p0_library=("Forest", "Forest"),
+        p1_library=("Forest", "Forest"),
+    )
+    py_state = build_python_state(spec)
+    rust_state = build_rust_state(spec)
+
+    # ---- Rust side ----
+    ZONE_HAND = 0
+    ZONE_BATTLEFIELD = 2
+    rust_tannuk_dict = {
+        "name": "Tannuk, Memorial Ensign",
+        "card_types": ["Creature"],
+        "mana_cost": {"generic": 1, "R": 1},
+        "effects": [],
+        "power": 2,
+        "toughness": 2,
+        "triggered_abilities": [
+            {
+                "event": "enters",
+                "predicate": landfall_predicate,
+                "effect": {
+                    "kind": "damage_each_opponent",
+                    "amount": 1,
+                },
+            }
+        ],
+    }
+    rust_tannuk_id = rust_state.register_and_inject_object(
+        rust_tannuk_dict, 0, ZONE_BATTLEFIELD
+    )
+    # Tannuk's own arrival: predicate is subject_is_land AND
+    # controlled_by_you. Tannuk is a Creature, NOT a Land, so
+    # subject_is_land = FALSE. Trigger does NOT fire on Tannuk's own
+    # arrival -- pin half the parity contract NOW.
+    assert rust_state.stack_size() == 0, (
+        "Rust: Tannuk's own arrival should NOT fire its landfall "
+        "trigger -- subject_is_land filter rejects (Tannuk is a "
+        "Creature). Expected stack_size==0; got "
+        f"{rust_state.stack_size()}"
+    )
+    rust_p0_life_before = rust_state.get_life(0)
+    rust_p1_life_before = rust_state.get_life(1)
+
+    # Inject Forest onto p0's hand, then play it via play_land. The
+    # play_land path dispatches ENTERS; the dispatcher walks every
+    # bf permanent (including Tannuk) and fires matching triggers.
+    rust_forest_dict = {
+        "name": "Forest",
+        "card_types": ["Land"],
+        "mana_produced": ["G"],
+        "effects": [],
+    }
+    rust_forest_id = rust_state.register_and_inject_object(
+        rust_forest_dict, 0, ZONE_HAND
+    )
+    rust_state.play_land(rust_forest_id, 0)
+    assert rust_state.find_object_zone(rust_forest_id) == ZONE_BATTLEFIELD, (
+        "Rust: Forest should be on bf after play_land"
+    )
+    assert rust_state.stack_size() == 1, (
+        "Rust: Tannuk's landfall trigger should be on the stack after "
+        "the Forest enters under p0's control"
+    )
+
+    # ---- Python side ----
+    from mtg_bot.actions import _play_land
+    from mtg_bot.cards.base import CardPrinting, ManaCost
+    from mtg_bot.effects.base import TriggeredAbility
+    from mtg_bot.effects.generic.damage import DealDamageEachOpponent
+    from mtg_bot.effects.object_predicates import IsLand
+    from mtg_bot.effects.predicates import (
+        And, Controlled, Event, Subject, YOU,
+    )
+    from mtg_bot.game import Zone
+
+    py_predicate = And(
+        left=Subject(slot=None, inner=IsLand()),
+        right=Controlled(by=YOU, subject=None),
+    )
+    tannuk_printing = CardPrinting(
+        name="Tannuk, Memorial Ensign",
+        mana_cost_str="",
+        mana_cost=ManaCost(generic=1, colored=(("R", 1),)),
+        type_line="Creature",
+        supertypes=(),
+        card_types=("Creature",),
+        subtypes=(),
+        power=2,
+        toughness=2,
+        produces=frozenset(),
+        triggered_abilities=(
+            TriggeredAbility(
+                event=Event.ENTERS,
+                predicate=py_predicate,
+                effect=DealDamageEachOpponent(amount=1),
+            ),
+        ),
+    )
+    py_tannuk = py_state.new_object(
+        tannuk_printing, owner_id=0, zone=Zone.BATTLEFIELD,
+    )
+    py_tannuk.summoning_sick = False
+    py_tannuk.tapped = False
+    py_tannuk.damage = 0
+    py_tannuk.etb_timestamp = py_state.next_timestamp
+    py_state.next_timestamp += 1
+    py_state.battlefield.append(py_tannuk)
+    # Python: Tannuk wasn't fanned through _trigger_etb_abilities
+    # since we materialized it on bf directly. Stack should remain
+    # empty as we never dispatched ENTERS for Tannuk's own arrival.
+    assert len(py_state.stack) == 0
+
+    # Move a Forest from library to hand on Python side.
+    py_forest = py_state.players[0].library[0]
+    assert py_forest.printing.name == "Forest"
+    py_state.players[0].library.remove(py_forest)
+    py_forest.zone = Zone.HAND
+    py_state.players[0].hand.append(py_forest)
+
+    py_p0_life_before = py_state.players[0].life
+    py_p1_life_before = py_state.players[1].life
+    # Reset the per-turn cap so _play_land doesn't gate (mirrors
+    # the Eumidian Terrabotanist probe's reset pattern).
+    py_state.players[0].lands_played_this_turn = 0
+    _play_land(py_state, 0, py_forest.id)
+    assert any(
+        o.printing.name == "Forest" and o.controller_id == 0
+        for o in py_state.battlefield
+    ), "Python: Forest should be on bf after _play_land"
+    assert len(py_state.stack) == 1, (
+        "Python: Tannuk's landfall trigger should be on the stack "
+        "after Forest enters under p0's control"
+    )
+
+    # ---- Drain both stacks, then compare ----
+    _drain_stack_both(py_state, rust_state)
+
+    # Post-drain: -1 life on p1 from the landfall burn trigger.
+    # p0 unchanged (controller of the source, immune to "each
+    # opponent").
+    assert rust_state.get_life(0) == rust_p0_life_before, (
+        f"Rust p0 life should be unchanged ({rust_p0_life_before}); "
+        f"got {rust_state.get_life(0)}"
+    )
+    assert rust_state.get_life(1) == rust_p1_life_before - 1, (
+        f"Rust p1 life should be {rust_p1_life_before - 1} "
+        f"(-1 from landfall burn); got {rust_state.get_life(1)}"
+    )
+    assert py_state.players[0].life == py_p0_life_before
+    assert py_state.players[1].life == py_p1_life_before - 1
+    # Cross-engine: same post-drain life totals on both seats.
+    assert rust_state.get_life(0) == py_state.players[0].life
+    assert rust_state.get_life(1) == py_state.players[1].life

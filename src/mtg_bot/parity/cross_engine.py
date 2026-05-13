@@ -163,6 +163,30 @@ def _ta_dict_to_python_effect(eff_dict: dict):
     if kind == "gain_life":
         from mtg_bot.effects.generic.life import GainLife
         return GainLife(amount=eff_dict.get("amount", 0))
+    if kind == "damage_each_opponent":
+        # Untargeted "deals N damage to each opponent". Rust's
+        # ``Effect::DamageEachOpponent`` resolves to a single
+        # ``state.players[1 - active_player].life -= amount`` in the
+        # 2-player game (rust/src/state_ops_resolve.rs:1563-1571);
+        # Python's ``DealDamageEachOpponent.resolve(controller_id)``
+        # walks every player whose ``id != controller_id`` and
+        # subtracts (effects/generic/damage.py:152-162). The two
+        # agree in 2-player games whenever the source's controller
+        # == active_player (the common ETB case in this probe lane);
+        # the cross-controller "opponent's trigger resolves on your
+        # turn" case is a separate controller-of-effect divergence
+        # (DamageEachOpponent reads active_player, not the trigger's
+        # controller) already documented in the GainLife-controller-
+        # fix worklog forward-notes as a future per-arm fix — out of
+        # scope for this minimal bridge extension. Trigger probes
+        # drive p0-controlled sources on p0's turn (active_player
+        # default 0), so the parity contract is observable cleanly.
+        from mtg_bot.effects.generic.damage import (
+            DealDamageEachOpponent,
+        )
+        return DealDamageEachOpponent(
+            amount=eff_dict.get("amount", 0),
+        )
     raise ValueError(
         f"cross_engine triggered_abilities bridge: unsupported "
         f"effect kind {kind!r} (extend `_ta_dict_to_python_effect` "

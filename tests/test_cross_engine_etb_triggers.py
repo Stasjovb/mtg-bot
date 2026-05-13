@@ -267,3 +267,69 @@ def test_slice4_rust_parser_accepts_new_predicate_kinds():
         }
         pid = reg.register_printing(d)
         assert pid == 0, f"failed to register {kind!r}"
+
+
+def test_bridge_damage_each_opponent_translates_to_python():
+    """Probe F bridge extension: Rust
+    ``{"kind": "damage_each_opponent", "amount": N}`` translates to
+    Python ``DealDamageEachOpponent(amount=N)``.
+
+    Unblocks Tannuk-Memorial-Ensign / Weftstalker-Ardent-shape
+    "ETB-fan-out + deal 1 to each opponent" triggers on the
+    cross-engine bridge. The Rust effect arm already exists at
+    ``state_ops_resolve.rs:1563`` (``Effect::DamageEachOpponent``);
+    Python's class already exists at
+    ``effects/generic/damage.py:144`` (``DealDamageEachOpponent``).
+    This pins the bridge translation that wires them up.
+    """
+    from mtg_bot.effects.generic.damage import DealDamageEachOpponent
+    from mtg_bot.parity.cross_engine import _ta_dict_to_python_effect
+
+    e = _ta_dict_to_python_effect(
+        {"kind": "damage_each_opponent", "amount": 2}
+    )
+    assert isinstance(e, DealDamageEachOpponent)
+    assert e.amount == 2
+
+
+def test_bridge_damage_each_opponent_amount_default_zero():
+    """Missing ``amount`` defaults to 0 (mirrors the gain_life arm's
+    default-zero convention -- bridge consumers are required to be
+    explicit, but a missing key shouldn't crash the translator).
+    """
+    from mtg_bot.effects.generic.damage import DealDamageEachOpponent
+    from mtg_bot.parity.cross_engine import _ta_dict_to_python_effect
+
+    e = _ta_dict_to_python_effect({"kind": "damage_each_opponent"})
+    assert isinstance(e, DealDamageEachOpponent)
+    assert e.amount == 0
+
+
+def test_rust_parser_accepts_damage_each_opponent_in_triggered_ability():
+    """Pin the Rust parser surface for the matched effect kind. The
+    bridge's dict shape must register cleanly on the Rust side too;
+    this lockstep gate keeps the Python bridge from drifting away
+    from Rust's parse_effect coverage.
+    """
+    import mtg_bot_engine
+
+    reg = mtg_bot_engine.Registry()
+    d = {
+        "name": "Probe F Bridge Pin",
+        "card_types": ["Creature"],
+        "mana_cost": {"generic": 1, "R": 1},
+        "power": 2,
+        "toughness": 2,
+        "triggered_abilities": [
+            {
+                "event": "enters",
+                "predicate": {"kind": "source_is_self"},
+                "effect": {
+                    "kind": "damage_each_opponent",
+                    "amount": 1,
+                },
+            }
+        ],
+    }
+    pid = reg.register_printing(d)
+    assert pid == 0
