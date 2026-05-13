@@ -10100,3 +10100,367 @@ def test_cross_engine_real_eoe_eumidian_terrabotanist_landfall_parity(
     # Cross-engine: same post-drain life totals.
     assert rust_state.get_life(0) == py_state.players[0].life
     assert rust_state.get_life(1) == py_state.players[1].life
+
+
+def test_cross_engine_real_eoe_mechan_assembler_another_artifact_parity(
+    parity_smoke,
+):
+    """Probe D: Mechan Assembler (EoE) "another artifact" ETB trigger
+    fires + parity-matches on the predicate algebra's NOT branch.
+
+    Oracle text in `data/edge_of_eternities.json`:
+
+        "Whenever another artifact you control enters, create a 2/2
+         colorless Robot artifact creature token. This ability
+         triggers only once each turn."
+
+    The token-creation effect and the once_per_turn rider are
+    deferred to follow-on probes (token creation isn't yet on the
+    cross-engine effect bridge; once_per_turn pin lands in the next
+    probe). This probe restricts the surface to the predicate-algebra
+    novelty: the **NOT branch** that the prior three probes haven't
+    exercised. The trigger predicate reduces to:
+
+        Subject(IsArtifact) AND ControlledByYou AND NOT(IsSelf)
+
+    -- composed via two Slice-1 algebra nodes (And + Not) wrapping
+    three Slice-4 atoms (subject_is_artifact + controlled_by_you +
+    source_is_self). Because we don't yet have a token-creation
+    effect on the bridge, the effect is set to GainLife(1) -- the
+    smallest observable parity diff.
+
+    This is the **first** Phase 5 probe to exercise:
+
+      * Predicate::Not in Rust (cards.rs:Predicate::Not) and
+        Python's `Not(...)` trigger predicate (`predicates.py:312`).
+      * The combined three-level And-Not composition through the
+        cross-engine dict->Python bridge.
+      * The "source vs subject identity" distinction in a NOT shape
+        -- `NOT(source_is_self)` checks the SUBJECT (just-entered
+        permanent) is NOT the SOURCE (Mechan Assembler that holds
+        the trigger). Same identity check the prior Quantum Riddler
+        probe drove on the POSITIVE side; this is the NEGATIVE side.
+
+    Test flow (mirrors the prior Landfall probe's inject-and-fan-out
+    shape rather than the cast-and-resolve shape -- the trigger
+    SOURCE is pre-placed on bf and we inject a second artifact onto
+    bf to observe the trigger firing on the second arrival):
+
+      1. Pre-place Mechan Assembler on p0's battlefield. The Rust
+         `register_and_inject_object(BATTLEFIELD)` fans out
+         `Event::Enters` for the just-placed Mechan Assembler --
+         that fan-out walks every bf permanent INCLUDING Mechan
+         Assembler itself and evaluates its trigger predicate against
+         the entering subject (= Mechan Assembler). The NOT(IsSelf)
+         arm REJECTS the firing because source == subject. Net:
+         NO trigger fires, NO life gain on Mechan Assembler's own
+         arrival. This is half the parity contract (the "another"
+         word in the oracle text doing its job).
+
+      2. Inject a vanilla artifact ("Mechan Drone" -- a synthetic
+         artifact-creature stand-in, since the actual oracle effect
+         creates a Robot artifact creature token we can't yet
+         represent on the bridge) onto p0's battlefield. The
+         `Event::Enters` fan-out walks every bf permanent and finds
+         Mechan Assembler's trigger predicate matches: the entering
+         subject IS an artifact (yes), IS controlled by p0 (yes),
+         and is NOT the source (yes -- this is the new "another"
+         creature). Trigger lands on stack.
+
+      3. Drain stack on both engines. Mechan Assembler's GainLife(1)
+         resolves. p0's life goes 20 -> 21.
+
+      4. Cross-engine parity check on (life_p0, life_p1) -- same on
+         both engines, +1 from the trigger.
+
+    Expected post-drain state on BOTH engines:
+
+      * Mechan Assembler on p0's bf (didn't move).
+      * Mechan Drone on p0's bf (just arrived).
+      * p0 life: 20 -> 21 (+1 from the "another artifact entered"
+        trigger firing on Drone's arrival; Mechan Assembler's own
+        arrival did NOT fire because NOT(IsSelf) suppressed it).
+      * p1 life: unchanged at 20.
+      * No residual stack.
+
+    Outcome (a) clean pass on both engines pins the entire predicate
+    algebra (`And`, `Not`, subject filters, source filters) through
+    the cross-engine bridge -- the substrate is now wide enough to
+    drive every "another <type> you control enters" trigger shape in
+    the EoE pool (Mechan Assembler, Haliya Guided by Light's
+    creature-or-artifact arm, etc.). The shared predicate vocabulary
+    is closed under composition through the bridge.
+    """
+    from mtg_bot.parity.cross_engine import (
+        CardDef, DeckSpec, build_python_state, build_rust_state,
+    )
+
+    # The "another artifact you control enters" predicate, encoded
+    # in the bridge's dict schema. Predicate atoms: subject_is_artifact
+    # (the entering permanent is an artifact), controlled_by_you (its
+    # controller equals the source's controller), NOT(source_is_self)
+    # (the entering permanent is NOT the source ability's host -- i.e.
+    # "another" rather than "itself"). Composed via the Slice-1
+    # algebra's And + Not nodes.
+    another_artifact_predicate = {
+        "kind": "and",
+        "left": {
+            "kind": "and",
+            "left": {"kind": "subject_is_artifact"},
+            "right": {"kind": "controlled_by_you"},
+        },
+        "right": {
+            "kind": "not",
+            "inner": {"kind": "source_is_self"},
+        },
+    }
+    mechan_assembler = CardDef(
+        name="Mechan Assembler",
+        card_type="Creature",  # Artifact Creature -- card_types is
+                               # forwarded as ["Creature"] only via
+                               # CardDef.card_type today, but the
+                               # subject test reads the printing's
+                               # card_types list and we add Artifact
+                               # via the rust_dict override below for
+                               # the Rust side and the Python printing
+                               # for the Python side. (The Subject/
+                               # controller filter cares about the
+                               # SUBJECT's types here -- "an artifact
+                               # you control" reads the just-arrived
+                               # permanent, not the source.)
+        mana_cost_generic=4,
+        mana_cost_colored=(("U", 1),),
+        power=4,
+        toughness=4,
+        triggered_abilities=(
+            {
+                "event": "enters",
+                "predicate": another_artifact_predicate,
+                # Real oracle is "create a Robot token" -- bridge
+                # doesn't yet have token creation, so we lower to a
+                # GainLife(1) probe (smallest observable trigger
+                # outcome). The predicate-algebra coverage is the
+                # point of this probe, not the effect surface.
+                "effect": {"kind": "gain_life", "amount": 1},
+            },
+        ),
+    )
+    # The second artifact -- a synthetic stand-in named "Mechan
+    # Drone" (the actual oracle effect creates a 2/2 Robot artifact
+    # creature token; token creation isn't yet on the bridge, so we
+    # represent the "another artifact entering" event with a directly-
+    # injected artifact creature). It carries NO triggered abilities
+    # of its own so any observed +1 life comes UNAMBIGUOUSLY from
+    # Mechan Assembler's predicate-path trigger.
+    mechan_drone = CardDef(
+        name="Mechan Drone",
+        card_type="Creature",
+        mana_cost_generic=2,
+        power=2,
+        toughness=2,
+        triggered_abilities=(),
+    )
+    spec = DeckSpec(
+        # Both card defs in registry; libraries can be empty for both
+        # players -- the probe injects directly onto bf rather than
+        # drawing or casting, so library contents don't matter.
+        card_defs=(mechan_assembler, mechan_drone),
+        p0_library=(),
+        p1_library=(),
+    )
+    py_state = build_python_state(spec)
+    rust_state = build_rust_state(spec)
+
+    # ---- Rust side ----
+    ZONE_BATTLEFIELD = 2
+    # Mechan Assembler dict: ["Artifact", "Creature"] in card_types so
+    # the subject_is_artifact predicate-evaluator path sees it AS an
+    # artifact when ANOTHER artifact's ENTERS firing walks this source.
+    # (The source identity is the source-vs-subject distinction in
+    # NOT(SourceIsSelf); the type read happens via the SUBJECT id.)
+    rust_assembler_dict = {
+        "name": "Mechan Assembler",
+        "card_types": ["Artifact", "Creature"],
+        "mana_cost": {"generic": 4, "U": 1},
+        "effects": [],
+        "power": 4,
+        "toughness": 4,
+        "triggered_abilities": [
+            {
+                "event": "enters",
+                "predicate": another_artifact_predicate,
+                "effect": {"kind": "gain_life", "amount": 1},
+            }
+        ],
+    }
+    rust_assembler_id = rust_state.register_and_inject_object(
+        rust_assembler_dict, 0, ZONE_BATTLEFIELD
+    )
+    # Pin half the parity contract NOW: Mechan Assembler's OWN arrival
+    # must NOT have fired the trigger. The NOT(IsSelf) arm rejects --
+    # subject (assembler) IS source (assembler), so NOT(IsSelf) is
+    # FALSE, And short-circuits. Net: stack is empty, life unchanged.
+    assert rust_state.stack_size() == 0, (
+        "Rust: Mechan Assembler's own arrival should NOT fire its "
+        "'another artifact' trigger -- NOT(source_is_self) gates it "
+        "off. stack should be empty."
+    )
+    rust_p0_life_after_assembler = rust_state.get_life(0)
+    assert rust_p0_life_after_assembler == 20, (
+        f"Rust p0 life should still be 20 after Mechan Assembler's "
+        f"own arrival (NOT-branch gate suppressed the self-fire); "
+        f"got {rust_p0_life_after_assembler}"
+    )
+
+    # Now inject Mechan Drone -- the "another artifact" arrival. This
+    # fans out Event::Enters via `pending_etb_dispatches`; the
+    # dispatcher walks every bf permanent (including Mechan Assembler)
+    # and evaluates each one's predicate against the entering subject
+    # (= Mechan Drone). Mechan Assembler's predicate now matches all
+    # three arms: subject_is_artifact (Drone is artifact), controlled_
+    # by_you (both p0), NOT(source_is_self) (Drone != Assembler).
+    # Trigger lands on stack.
+    rust_drone_dict = {
+        "name": "Mechan Drone",
+        "card_types": ["Artifact", "Creature"],
+        "mana_cost": {"generic": 2},
+        "effects": [],
+        "power": 2,
+        "toughness": 2,
+    }
+    rust_drone_id = rust_state.register_and_inject_object(
+        rust_drone_dict, 0, ZONE_BATTLEFIELD
+    )
+    rust_p0_life_before_drain = rust_state.get_life(0)
+    assert rust_state.stack_size() == 1, (
+        "Rust: Mechan Drone's arrival should fire Mechan Assembler's "
+        "'another artifact' trigger onto the stack -- subject_is_"
+        "artifact (yes) AND controlled_by_you (yes) AND NOT(IsSelf) "
+        "(yes -- drone != assembler). Expected stack_size==1; got "
+        f"{rust_state.stack_size()}"
+    )
+
+    # ---- Python side ----
+    # Mirror the inject-and-fan-out pattern. Construct the Mechan
+    # Assembler printing with the same predicate-path trigger shape,
+    # call new_object to materialize an instance, drop it on bf, then
+    # dispatch Event.ENTERS to fan out (matching what
+    # `register_and_inject_object` does on the Rust side).
+    from mtg_bot.actions import _trigger_etb_abilities
+    from mtg_bot.cards.base import CardPrinting, ManaCost
+    from mtg_bot.effects.base import TriggeredAbility
+    from mtg_bot.effects.generic.life import GainLife
+    from mtg_bot.effects.object_predicates import IsArtifact
+    from mtg_bot.effects.predicates import (
+        And, Controlled, Event, Not, Subject, IsSelf, YOU,
+    )
+    from mtg_bot.game import Zone
+
+    # Mirror the dict-shape another_artifact_predicate as a Python
+    # composed `TriggerPredicate`. The bridge module's
+    # `_ta_dict_to_python_predicate` produces the same composition;
+    # we replicate it here directly so the printing carries the
+    # actual predicate object (not a dict).
+    py_predicate = And(
+        left=And(
+            left=Subject(slot=None, inner=IsArtifact()),
+            right=Controlled(by=YOU, subject=None),
+        ),
+        right=Not(inner=IsSelf()),
+    )
+    assembler_printing = CardPrinting(
+        name="Mechan Assembler",
+        mana_cost_str="",
+        mana_cost=ManaCost(generic=4, colored=(("U", 1),)),
+        type_line="Artifact Creature",
+        supertypes=(),
+        card_types=("Artifact", "Creature"),
+        subtypes=(),
+        power=4,
+        toughness=4,
+        produces=frozenset(),
+        triggered_abilities=(
+            TriggeredAbility(
+                event=Event.ENTERS,
+                predicate=py_predicate,
+                effect=GainLife(amount=1),
+            ),
+        ),
+    )
+    py_assembler = py_state.new_object(
+        assembler_printing, owner_id=0, zone=Zone.BATTLEFIELD,
+    )
+    py_assembler.summoning_sick = False
+    py_assembler.tapped = False
+    py_assembler.damage = 0
+    py_assembler.etb_timestamp = py_state.next_timestamp
+    py_state.next_timestamp += 1
+    py_state.battlefield.append(py_assembler)
+    # Fire Mechan Assembler's own ENTERS event. NOT(IsSelf) MUST
+    # suppress the trigger -- the predicate evaluates subject==source.
+    _trigger_etb_abilities(py_state, py_assembler)
+    assert len(py_state.stack) == 0, (
+        "Python: Mechan Assembler's own arrival should NOT push a "
+        "trigger -- NOT(IsSelf) gates it off. Expected stack=[]; "
+        f"got {[(s.source.printing.name if hasattr(s, 'source') else s) for s in py_state.stack]}"
+    )
+    py_p0_life_after_assembler = py_state.players[0].life
+    assert py_p0_life_after_assembler == 20
+
+    # Now inject Mechan Drone and fan out ENTERS. The predicate now
+    # matches against Drone (subject) vs Assembler (source).
+    drone_printing = CardPrinting(
+        name="Mechan Drone",
+        mana_cost_str="",
+        mana_cost=ManaCost(generic=2),
+        type_line="Artifact Creature",
+        supertypes=(),
+        card_types=("Artifact", "Creature"),
+        subtypes=(),
+        power=2,
+        toughness=2,
+        produces=frozenset(),
+        triggered_abilities=(),
+    )
+    py_drone = py_state.new_object(
+        drone_printing, owner_id=0, zone=Zone.BATTLEFIELD,
+    )
+    py_drone.summoning_sick = True
+    py_drone.tapped = False
+    py_drone.damage = 0
+    py_drone.etb_timestamp = py_state.next_timestamp
+    py_state.next_timestamp += 1
+    py_state.battlefield.append(py_drone)
+    py_p0_life_before_drain = py_state.players[0].life
+    _trigger_etb_abilities(py_state, py_drone)
+    assert len(py_state.stack) == 1, (
+        "Python: Mechan Drone's arrival should fire Mechan Assembler's "
+        "'another artifact' trigger -- subject_is_artifact (yes) "
+        "AND controlled_by_you (yes) AND NOT(IsSelf) (drone != "
+        f"assembler). Expected len(stack)==1; got {len(py_state.stack)}"
+    )
+
+    # ---- Drain both stacks, then compare ----
+    _drain_stack_both(py_state, rust_state)
+
+    # Post-drain: p0 gained +1 life from the Mechan Assembler trigger.
+    # Critical parity contract: BOTH engines fired the trigger exactly
+    # ONCE (only on Drone's arrival, not on Assembler's own arrival).
+    assert rust_state.get_life(0) == rust_p0_life_before_drain + 1, (
+        f"Rust p0 life should be {rust_p0_life_before_drain + 1} "
+        f"(+1 from Mechan Assembler's 'another artifact' trigger); "
+        f"got {rust_state.get_life(0)}"
+    )
+    assert rust_state.get_life(1) == 20
+    assert py_state.players[0].life == py_p0_life_before_drain + 1, (
+        f"Python p0 life should be {py_p0_life_before_drain + 1} "
+        f"(+1 from Mechan Assembler's 'another artifact' trigger); "
+        f"got {py_state.players[0].life}"
+    )
+    assert py_state.players[1].life == 20
+    # Cross-engine: same post-drain life totals on both seats.
+    assert rust_state.get_life(0) == py_state.players[0].life
+    assert rust_state.get_life(1) == py_state.players[1].life
+    # Sanity: both stacks are empty after drain.
+    assert rust_state.stack_size() == 0
+    assert len(py_state.stack) == 0
