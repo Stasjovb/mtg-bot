@@ -1897,6 +1897,20 @@ pub enum Event {
     /// "When X deals damage" / combat-damage triggers. Stub for
     /// Slice 7+; no dispatch site yet.
     DealsDamage,
+    /// "When X leaves the battlefield". Fires from
+    /// `dispatch_event(Event::LeavesBattlefield, leaving_id)` on
+    /// every bf-exit primitive (move_object off-bf + SBA destroy).
+    /// Slice 8 wires this — see RUST_ETB_TRIGGER_AUDIT.md "Slice 8
+    /// completion notice".
+    ///
+    /// **Relationship to DIES:** every creature death is also a bf
+    /// exit, so SBA-destroyed creatures fire BOTH DIES and LEAVES
+    /// (push order: DIES first via `pending_dies_dispatches`,
+    /// LEAVES second via `pending_leaves_dispatches`). Mirrors
+    /// Python's `move_off_battlefield` (turn.py:280-289) which
+    /// invokes both `dispatch_event(DIES)` and
+    /// `_fire_leaves_battlefield_triggers` in sequence.
+    LeavesBattlefield,
 }
 
 /// Predicate algebra over the trigger subject (the GameObject the
@@ -4085,10 +4099,11 @@ fn parse_activation_cost(
 /// ```
 ///
 /// Slice 1 wired `"enters"`; Slice 5 added `"dies"`; Slice 6 added
-/// `"cast"`; Slice 7 adds `"attacks"`. Remaining variants
-/// (`deals_damage`) still raise because their dispatch sites don't
-/// exist yet — allowing them through would let registry-dict callers
-/// stamp triggers that never fire, masking the missing-fanout bug.
+/// `"cast"`; Slice 7 added `"attacks"`; Slice 8 adds
+/// `"leaves_battlefield"`. Remaining variants (`deals_damage`) still
+/// raise because their dispatch sites don't exist yet — allowing
+/// them through would let registry-dict callers stamp triggers that
+/// never fire, masking the missing-fanout bug.
 fn parse_triggered_ability(
     dict: &Bound<'_, PyDict>,
 ) -> PyResult<TriggeredAbility> {
@@ -4100,19 +4115,20 @@ fn parse_triggered_ability(
         "dies" => Event::Dies,
         "cast" => Event::Cast,
         "attacks" => Event::Attacks,
+        "leaves_battlefield" => Event::LeavesBattlefield,
         // Out-of-scope events stay raise-on-register. Each lands
         // alongside its dispatch fan-out so the parser surface stays
         // consistent with the dispatcher's coverage.
         "deals_damage" => {
             return Err(PyValueError::new_err(format!(
-                "triggered_ability.event {event_str:?} is not yet wired in Slice 7; \
-                 only \"enters\", \"dies\", \"cast\", and \"attacks\" dispatch today"
+                "triggered_ability.event {event_str:?} is not yet wired in Slice 8; \
+                 only \"enters\", \"dies\", \"cast\", \"attacks\", and \"leaves_battlefield\" dispatch today"
             )));
         }
         other => {
             return Err(PyValueError::new_err(format!(
                 "unknown triggered_ability.event {other:?}; \
-                 valid: enters, dies, cast, attacks (Slice 7)"
+                 valid: enters, dies, cast, attacks, leaves_battlefield (Slice 8)"
             )));
         }
     };

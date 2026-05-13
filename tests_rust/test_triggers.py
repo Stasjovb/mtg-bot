@@ -201,11 +201,12 @@ def test_triggered_abilities_unknown_predicate_kind_raises(empty_registry):
 
 
 def test_triggered_abilities_unwired_event_raises(empty_registry):
-    """Slice 7 wires ``Event::Enters``, ``Event::Dies``,
-    ``Event::Cast``, and ``Event::Attacks``; the remaining declared
-    event (``deals_damage``) raises at register time so a caller
-    can't stamp a trigger that never fires. Pin one such event here
-    — ``deals_damage``.
+    """Slice 8 wires ``Event::Enters``, ``Event::Dies``,
+    ``Event::Cast``, ``Event::Attacks``, and
+    ``Event::LeavesBattlefield``; the remaining declared event
+    (``deals_damage``) raises at register time so a caller can't
+    stamp a trigger that never fires. Pin one such event here —
+    ``deals_damage``.
     """
     d = {
         "name": "DealsDamage Trigger Card",
@@ -220,7 +221,7 @@ def test_triggered_abilities_unwired_event_raises(empty_registry):
             }
         ],
     }
-    with pytest.raises(ValueError, match="not yet wired in Slice 7"):
+    with pytest.raises(ValueError, match="not yet wired in Slice 8"):
         empty_registry.register_printing(d)
 
 
@@ -2464,3 +2465,327 @@ def test_attacks_event_parses_via_cross_engine_bridge():
     }
     ta = _ta_dict_to_python_triggered_ability(ta_dict)
     assert ta.event is Event.ATTACKS
+
+
+# ====================================================================
+# Slice 8 — Event::LeavesBattlefield
+#
+# `Event::LeavesBattlefield` (LTB) fires from every bf-exit
+# primitive — both bounce-shape (`move_object` off the battlefield)
+# and SBA destroy (combat death / zero-toughness). The dispatch
+# queues onto `state.pending_leaves_dispatches` and drains via
+# `drain_pending_leaves_dispatches` AFTER the bf-exit primitive's
+# mutation commits.
+#
+# Relationship to DIES: every creature death is also a bf exit, so
+# SBA-destroyed creatures fire BOTH DIES and LEAVES_BATTLEFIELD.
+# Push order: DIES first, LEAVES second; the matching drain order
+# preserves that stack-push order. LIFO resolution: LEAVES resolves
+# first, mirroring Python's `move_off_battlefield` (turn.py:280-289)
+# which fires DIES then LEAVES_BATTLEFIELD in source order.
+#
+# Mirrors Python's `_fire_leaves_battlefield_triggers(state, obj)`
+# at `src/mtg_bot/turn.py:289`, called by `move_off_battlefield`
+# for every bf-exit regardless of card type (lands fire LEAVES too).
+# ====================================================================
+
+
+# --- registry-dict shapes used by the Slice 8 tests -----------------
+
+
+def _leaves_self_draw_dict(name="Test LEAVES Self-Draw"):
+    """A creature with a `source_is_self` LEAVES_BATTLEFIELD trigger
+    that draws 1 card when it leaves the battlefield. Cryogen
+    Relic-shape ("when this leaves the battlefield, draw a card").
+    """
+    return {
+        "name": name,
+        "card_types": ["Creature"],
+        "mana_cost": {},
+        "effects": [],
+        "power": 1,
+        "toughness": 1,
+        "triggered_abilities": [
+            {
+                "event": "leaves_battlefield",
+                "predicate": {"kind": "source_is_self"},
+                "effect": {"kind": "draw_cards", "count": 1},
+            }
+        ],
+    }
+
+
+def _leaves_creature_observer_dict():
+    """Pre-existing observer with `subject_is_creature`
+    LEAVES_BATTLEFIELD trigger. Fires when ANY creature leaves the
+    battlefield — Slimefoot-like or Bloodghast-shape.
+    """
+    return {
+        "name": "Test LEAVES Creature Observer",
+        "card_types": ["Creature"],
+        "mana_cost": {},
+        "effects": [],
+        "power": 2,
+        "toughness": 3,
+        "triggered_abilities": [
+            {
+                "event": "leaves_battlefield",
+                "predicate": {"kind": "subject_is_creature"},
+                "effect": {"kind": "draw_cards", "count": 1},
+            }
+        ],
+    }
+
+
+# --- parser surface --------------------------------------------------
+
+
+def test_slice8_leaves_battlefield_event_parses(empty_registry):
+    """`event: leaves_battlefield` is accepted at register-time
+    post-Slice-8.
+    """
+    pid = empty_registry.register_printing(_leaves_self_draw_dict())
+    assert pid == 0
+
+
+@pytest.mark.parametrize("event_kind", ["deals_damage"])
+def test_slice8_other_events_still_raise(empty_registry, event_kind):
+    """`deals_damage` still raises at register-time post-Slice-8
+    (only deals_damage is left unwired).
+    """
+    d = {
+        "name": f"Slice8 Bad Event {event_kind}",
+        "card_types": ["Creature"],
+        "mana_cost": {"generic": 1},
+        "power": 1,
+        "toughness": 1,
+        "triggered_abilities": [
+            {
+                "event": event_kind,
+                "effect": {"kind": "draw_cards", "count": 1},
+            }
+        ],
+    }
+    with pytest.raises(ValueError, match="not yet wired"):
+        empty_registry.register_printing(d)
+
+
+# --- SourceIsSelf LEAVES — "when this leaves the battlefield" ------
+
+
+def test_leaves_self_trigger_fires_on_bounce(synthetic_state):
+    """Inject a 1/1 with a `source_is_self` LEAVES trigger onto p0's
+    bf. Move it to the hand (bounce-shape via `move_object`). The
+    LEAVES trigger fires; resolving it draws 1 card.
+    """
+    crt_id = synthetic_state.register_and_inject_object(
+        _leaves_self_draw_dict(), 0, ZONE_BATTLEFIELD
+    )
+    library_before = synthetic_state.library_sizes[0]
+    hand_before = synthetic_state.hand_sizes[0]
+
+    # Bounce to hand via the generic move_object primitive.
+    ok = synthetic_state.move_object(crt_id, ZONE_HAND, 0)
+    assert ok is True
+
+    # The creature is now in p0's hand.
+    assert synthetic_state.find_object_zone(crt_id) == ZONE_HAND
+    # The LEAVES trigger is on the stack. The bounce primitive
+    # increments hand_size by 1 (the moved object) so we read the
+    # post-bounce delta from hand_before+1 to detect the draw.
+    assert synthetic_state.stack_size() == 1, (
+        "expected the source_is_self LEAVES trigger to land on the "
+        "stack after bf-exit via move_object"
+    )
+    top = synthetic_state.peek_top_of_stack()
+    assert top["source_obj_id"] == crt_id
+
+    # Resolve: DrawCards(1) -> library -1, hand +1 (on top of the
+    # already-bounced creature, so hand_size = hand_before + 2).
+    synthetic_state.resolve_top_of_stack()
+    assert synthetic_state.library_sizes[0] == library_before - 1
+    assert synthetic_state.hand_sizes[0] == hand_before + 2
+
+
+def test_leaves_self_trigger_fires_on_sba_destroy(synthetic_state):
+    """A 1/1 with `source_is_self` LEAVES trigger; lethal damage
+    triggers SBA destroy. The LEAVES trigger fires alongside any
+    DIES trigger would (this fixture has only LEAVES). The
+    self-trigger source is now in the graveyard — the four-zone
+    extra-observer lookup finds it.
+    """
+    crt_id = synthetic_state.register_and_inject_object(
+        _leaves_self_draw_dict(), 0, ZONE_BATTLEFIELD
+    )
+    library_before = synthetic_state.library_sizes[0]
+
+    synthetic_state.deal_damage(crt_id, 1)
+    destroyed = synthetic_state.apply_sbas()
+    assert destroyed == 1
+
+    assert synthetic_state.find_object_zone(crt_id) == ZONE_GRAVEYARD
+    assert synthetic_state.stack_size() == 1, (
+        "expected the source_is_self LEAVES trigger to fire on SBA "
+        "destroy"
+    )
+    top = synthetic_state.peek_top_of_stack()
+    assert top["source_obj_id"] == crt_id
+    synthetic_state.resolve_top_of_stack()
+    assert synthetic_state.library_sizes[0] == library_before - 1
+
+
+# --- subject_is_creature LEAVES observer ---------------------------
+
+
+def test_leaves_creature_observer_fires_on_bounce(synthetic_state):
+    """Pre-existing observer with `subject_is_creature` LEAVES
+    trigger. When ANY creature leaves the battlefield, the observer
+    fires.
+    """
+    observer_id = synthetic_state.register_and_inject_object(
+        _leaves_creature_observer_dict(), 0, ZONE_BATTLEFIELD
+    )
+    library_before = synthetic_state.library_sizes[0]
+
+    # Bounce the P0 Bear (2/2) to its owner's hand.
+    ok = synthetic_state.move_object(P0_FIRST_BEAR_ID, ZONE_HAND, 0)
+    assert ok is True
+
+    assert synthetic_state.stack_size() == 1, (
+        "expected the observer's `subject_is_creature` LEAVES trigger "
+        "to fire when the Bear was bounced"
+    )
+    top = synthetic_state.peek_top_of_stack()
+    assert top["source_obj_id"] == observer_id
+
+    synthetic_state.resolve_top_of_stack()
+    assert synthetic_state.library_sizes[0] == library_before - 1
+
+
+def test_leaves_creature_observer_fires_on_sba_destroy(synthetic_state):
+    """Pre-existing observer with `subject_is_creature` LEAVES
+    trigger fires on SBA destroy (lethal damage path). LEAVES
+    dispatches alongside the DIES dispatch from Slice 5; both stack
+    push but only the LEAVES observer is wired in this fixture.
+    """
+    observer_id = synthetic_state.register_and_inject_object(
+        _leaves_creature_observer_dict(), 0, ZONE_BATTLEFIELD
+    )
+    library_before = synthetic_state.library_sizes[0]
+
+    # Lethal-damage P0's Bear (2/2).
+    synthetic_state.deal_damage(P0_FIRST_BEAR_ID, 2)
+    destroyed = synthetic_state.apply_sbas()
+    assert destroyed == 1
+
+    # Observer's LEAVES trigger lands. (No DIES trigger from this
+    # observer — its predicate is LEAVES-only.)
+    assert synthetic_state.stack_size() == 1
+    top = synthetic_state.peek_top_of_stack()
+    assert top["source_obj_id"] == observer_id
+
+    synthetic_state.resolve_top_of_stack()
+    assert synthetic_state.library_sizes[0] == library_before - 1
+
+
+# --- DIES + LEAVES on same source: LIFO resolves LEAVES first ------
+
+
+def test_dies_and_leaves_both_fire_on_sba_destroy_leaves_resolves_first(
+    synthetic_state,
+):
+    """A creature with BOTH a `source_is_self` DIES trigger AND a
+    `source_is_self` LEAVES trigger: lethal damage triggers SBA
+    destroy. Both triggers fire; push order is DIES first then
+    LEAVES (matching Python's `move_off_battlefield` sequence at
+    turn.py:280-289). The stack is LIFO so LEAVES resolves FIRST,
+    DIES second.
+    """
+    crt = {
+        "name": "Test Both DIES and LEAVES",
+        "card_types": ["Creature"],
+        "mana_cost": {},
+        "effects": [],
+        "power": 1,
+        "toughness": 1,
+        "triggered_abilities": [
+            {
+                "event": "dies",
+                "predicate": {"kind": "source_is_self"},
+                "effect": {"kind": "draw_cards", "count": 1},
+            },
+            {
+                "event": "leaves_battlefield",
+                "predicate": {"kind": "source_is_self"},
+                "effect": {"kind": "gain_life", "amount": 2},
+            },
+        ],
+    }
+    crt_id = synthetic_state.register_and_inject_object(
+        crt, 0, ZONE_BATTLEFIELD
+    )
+    library_before = synthetic_state.library_sizes[0]
+    life_before = synthetic_state.life_totals[0]
+
+    synthetic_state.deal_damage(crt_id, 1)
+    destroyed = synthetic_state.apply_sbas()
+    assert destroyed == 1
+
+    # Two triggers on the stack — DIES + LEAVES.
+    assert synthetic_state.stack_size() == 2
+
+    # Stack-top is LEAVES (last-pushed). Resolve: gain 2 life.
+    synthetic_state.resolve_top_of_stack()
+    assert synthetic_state.life_totals[0] == life_before + 2
+
+    # Then DIES: draw 1.
+    synthetic_state.resolve_top_of_stack()
+    assert synthetic_state.library_sizes[0] == library_before - 1
+    assert synthetic_state.is_stack_empty()
+
+
+# --- LEAVES does NOT fire on non-bf-exit moves ----------------------
+
+
+def test_leaves_does_not_fire_on_non_battlefield_move(synthetic_state):
+    """Moving an object FROM the hand (not the battlefield) does
+    NOT fire a LEAVES_BATTLEFIELD dispatch. Sanity check that the
+    `if source_was_battlefield` gate in `move_object` is tight.
+    """
+    observer_id = synthetic_state.register_and_inject_object(
+        _leaves_creature_observer_dict(), 0, ZONE_BATTLEFIELD
+    )
+    # P0_FIRST_HAND_ID = 10 (Llanowar Elves in p0's hand).
+    P0_FIRST_HAND_ID = 10
+
+    # Move hand[0] -> graveyard. Not a bf-exit; LEAVES shouldn't fire.
+    ok = synthetic_state.move_object(P0_FIRST_HAND_ID, ZONE_GRAVEYARD, 0)
+    assert ok is True
+    assert synthetic_state.stack_size() == 0, (
+        "expected no LEAVES dispatch on hand->graveyard move"
+    )
+    # Observer is still on bf, just didn't observe.
+    assert (
+        synthetic_state.find_object_zone(observer_id) == ZONE_BATTLEFIELD
+    )
+
+
+# --- cross-engine bridge accepts "leaves_battlefield" event --------
+
+
+def test_leaves_battlefield_event_parses_via_cross_engine_bridge():
+    """The cross_engine.py bridge accepts `event: leaves_battlefield`
+    and produces Python's `Event.LEAVES_BATTLEFIELD`.
+    """
+    from mtg_bot.parity.cross_engine import (
+        _ta_dict_to_python_triggered_ability,
+    )
+    from mtg_bot.effects.predicates import Event
+
+    ta_dict = {
+        "event": "leaves_battlefield",
+        "predicate": {"kind": "source_is_self"},
+        "effect": {"kind": "draw_cards", "count": 1},
+    }
+    ta = _ta_dict_to_python_triggered_ability(ta_dict)
+    assert ta.event is Event.LEAVES_BATTLEFIELD

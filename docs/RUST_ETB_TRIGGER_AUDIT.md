@@ -1204,3 +1204,106 @@ new representative unwired event.
   `declare_blocker` primitive; same single-permanent shape, same
   inline dispatch pattern. Tactically defer until a Blocks
   trigger card surfaces in the EoE pool (low-priority).
+
+---
+
+## Slice 8 completion notice (landed)
+
+`feature/etb-slice-8` adds `Event::LeavesBattlefield` (LTB) plus
+its dispatch wiring at the two central bf-exit primitives —
+`move_object` off-bf (bounce / exile / hand-back / generic
+zone-mover) and `apply_sbas` (combat death + zero-toughness SBA).
+LTB fires for ALL bf-exits regardless of card type (lands included,
+mirroring Python's `_fire_leaves_battlefield_triggers` semantics).
+
+**Implementation shape:**
+
+- `Event::LeavesBattlefield` parser arm in `rust/src/cards.rs::parse_triggered_ability`
+  (the previously-unregistered `"leaves_battlefield"` event now
+  succeeds; only `"deals_damage"` still raises).
+- `dispatch_event` accepts `Event::LeavesBattlefield`. Re-uses the
+  Slice 5/6 extra-observer pattern: the leaving object has been
+  moved to its destination zone already (graveyard / hand / exile /
+  library — `move_object` is generic), so the four-zone walk +
+  exile lookup finds it for SourceIsSelf `Predicate` matching.
+  Slice 8 generalizes the lookup from 4 zones (Slice 5/6 pattern)
+  to 5 zones (adds exile, since bounce-to-exile is a valid LTB
+  destination).
+- New `GameState.pending_leaves_dispatches: Vec<u32>` sibling of
+  `pending_etb_dispatches` / `pending_dies_dispatches`. Every
+  bf-exit primitive pushes the leaving id onto this queue; the
+  primitive's caller drains via
+  `drain_pending_leaves_dispatches` AFTER the primitive's mutation
+  completes.
+- Two wiring points wired:
+  1. `state_ops_zones.rs::move_object` — when source_was_battlefield,
+     push obj.id and drain after the destination push completes
+     (and after the ENTERS drain for the bounce-and-replay case).
+  2. `state_ops_sba.rs::apply_sbas` — each destroyed creature
+     pushes onto BOTH `pending_dies_dispatches` and
+     `pending_leaves_dispatches`. Drain order: DIES first, then
+     LEAVES. The matching stack-push order pins LIFO resolution to
+     LEAVES-first, mirroring Python's `move_off_battlefield`
+     (turn.py:280-289 fires DIES then LEAVES_BATTLEFIELD; the
+     Python stack is also LIFO so LEAVES resolves first).
+- `cross_engine.py::_ta_dict_to_python_triggered_ability` accepts
+  `event="leaves_battlefield"` and translates to Python's
+  `Event.LEAVES_BATTLEFIELD`.
+
+**DIES + LEAVES double-fire pin:** an SBA-destroyed creature fires
+BOTH events. This matches Python's source-order semantics, and the
+LIFO stack resolves LEAVES first then DIES — locked in by
+`test_dies_and_leaves_both_fire_on_sba_destroy_leaves_resolves_first`.
+
+**Wired bf-exit sites (Slice 8 scope):** only the two central
+primitives. The 15+ other `mark_left_battlefield_if_nonland` call
+sites in `state_ops_resolve.rs` (Effect-arm-level destroys, exiles,
+bounces, sacrifice-as-effect) are NOT yet wired — those fire LTB
+inline at the Effect arm without routing through `move_object`.
+Slice N+ closes those when an LTB-trigger card pool needs them.
+
+**Tests** (9 new in `tests_rust/test_triggers.py`):
+
+- Parser surface: `leaves_battlefield` parses; only `deals_damage`
+  still raises.
+- SourceIsSelf LEAVES on bounce: 1/1 with "when this leaves, draw"
+  fires when bounced to hand via `move_object`.
+- SourceIsSelf LEAVES on SBA destroy: same trigger fires on
+  lethal-damage path through apply_sbas.
+- subject_is_creature LEAVES observer on bounce: fires when ANY
+  creature is bounced.
+- subject_is_creature LEAVES observer on SBA destroy: fires on
+  combat-death path.
+- DIES + LEAVES on same source: both fire; LIFO resolves LEAVES
+  first (the canonical "either trigger first" cross-engine pin).
+- Non-bf-exit move (hand -> graveyard) does NOT fire LEAVES.
+  Tight gate pinned.
+- Cross-engine bridge: `event: leaves_battlefield` round-trips to
+  Python's `Event.LEAVES_BATTLEFIELD`.
+
+**Rust gate**: 1988/1988 pass (Slice 7 baseline 1979 + 9 new).
+One pre-existing test
+(`test_triggered_abilities_unwired_event_raises`) had its
+regex-match updated from "Slice 7" to "Slice 8".
+
+**Out of scope for Slice 8 (queued for Slice 9+):**
+
+- `Event::DealsCombatDamage` — multi-subject event needs richer
+  `Predicate::Subject(slot, inner)` schema for the (source,
+  target) subject mapping. Substrate slice required first.
+- Fan-out from the 15+ `state_ops_resolve.rs` bf-exit sites that
+  call `mark_left_battlefield_if_nonland` directly (Effect-arm
+  destroys, exiles, bounces, sacrifice-as-effect). Each is a
+  one-line `state.pending_leaves_dispatches.push(obj_id) +
+  drain_pending_leaves_dispatches(...)` insertion. Today's two
+  wiring points (move_object + apply_sbas) cover the load-bearing
+  primitives; the bypass paths fire LTB at their Effect arm
+  inline, which works for the EoE pool's current LTB
+  trigger set but leaves a known divergence surface for
+  future Effect-direct destroys.
+- `HasSubtype(s)` predicate — needed for Kavu-shape / Sliver-shape
+  / Equipment-enters/leaves triggers. Blocked on Rust growing a
+  `subtypes` field on `CardPrinting`; substrate slice.
+- `Event::Blocks` — symmetric of `Event::Attacks` for
+  `declare_blocker`; defer until a Blocks-trigger card lands in
+  the EoE pool.
