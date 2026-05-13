@@ -12736,3 +12736,139 @@ def test_exile_target_empty_source_controllers_opponent_bf_fizzles(engine):
     # touch.
     assert state.exile_sizes[0] == p0_exile_before
     assert state.graveyard_sizes[0] == p0_grave_before
+
+
+# ====================================================================
+# TapTarget controller-of-effect fix — regression pins (I71).
+#
+# Pre-fix `defender = (1 - state.active_player) as usize`. Wrong
+# when the resolving spell / triggered ability has a controller !=
+# active_player — example: on p0's turn, p1 casts a Twiddle-shape
+# tap instant. Pre-fix it self-tapped p1's own bf[0] (defender =
+# 1 - active_player = 1 - 0 = 1); post-fix it correctly taps p0's
+# bf[0] (the source's controller's opponent).
+#
+# Sibling closure to I64 / I67 / I70 — same `defender = 1 -
+# controller` shape, same transient-slot lookup substrate.
+# ====================================================================
+
+
+def _tap_creature_dict_for_i71():
+    """A Twiddle-shape instant whose only effect is
+    TapTarget(AnyCreature). Used by I71 regression pins."""
+    return {
+        "name": "Test Twiddle I71",
+        "card_types": ["Instant"],
+        "mana_cost": {"U": 1},
+        "effects": [
+            {
+                "kind": "tap_target",
+                "target": {"kind": "any_creature"},
+            }
+        ],
+    }
+
+
+def test_tap_target_routes_to_source_controllers_opponent(engine):
+    """**Regression pin for the TapTarget controller-of-effect fix
+    (I71).**
+
+    On p0's turn (active_player=0), a Twiddle-shape tap instant
+    whose controller is p1 must tap a P0 bf[0] object, NOT a p1
+    bf[0] object. Pre-fix `defender = 1 - active_player = 1 - 0 =
+    1` => p1's own bf[0] got tapped (self-tap). Post-fix
+    `defender = 1 - controller = 1 - 1 = 0` => correctly taps p0's
+    bf[0].
+
+    Synthetic seed: p0's bf[0] = id 0 (Forest, untapped). p1's
+    bf[0] = id 67 (Forest, untapped).
+    """
+    state = engine.make_synthetic_state()
+    assert state.active_player == 0
+
+    p0_bf_first_id = 0
+    p1_bf_first_id = 67
+    # Both start untapped in the synthetic seed.
+    assert state.is_tapped(p0_bf_first_id) is False
+    assert state.is_tapped(p1_bf_first_id) is False
+
+    src_id = state.register_and_inject_object(
+        _tap_creature_dict_for_i71(), 1, ZONE_HAND
+    )
+
+    # Push with controller=1 (p1), active_player still 0.
+    state.push_to_stack(src_id, 1)
+    state.resolve_top_of_stack()
+
+    # Post-fix: p0's bf[0] got tapped (p1's opponent's bf).
+    assert state.is_tapped(p0_bf_first_id) is True
+    # P1's bf[0] untouched (no self-tap).
+    assert state.is_tapped(p1_bf_first_id) is False
+
+
+def test_tap_target_active_player_controlled_still_works(engine):
+    """**Back-compat pin.** A Twiddle-shape tap instant cast by the
+    active player must still tap the opponent's bf[0] — bug never
+    fired in this case pre-fix because controller == active_player.
+    """
+    state = engine.make_synthetic_state()
+    assert state.active_player == 0
+
+    p0_bf_first_id = 0
+    p1_bf_first_id = 67
+    assert state.is_tapped(p0_bf_first_id) is False
+    assert state.is_tapped(p1_bf_first_id) is False
+
+    src_id = state.register_and_inject_object(
+        _tap_creature_dict_for_i71(), 0, ZONE_HAND
+    )
+
+    state.push_to_stack(src_id, 0)
+    state.resolve_top_of_stack()
+
+    # P1's bf[0] got tapped (p0's opponent's bf).
+    assert state.is_tapped(p1_bf_first_id) is True
+    # P0's bf[0] untouched.
+    assert state.is_tapped(p0_bf_first_id) is False
+
+
+def test_tap_target_pause_variant_threads_controller(engine):
+    """**`resolve_top_of_stack_pause` parity pin for TapTarget.**
+    Mirrors the I64 / I67 / I68 / I69 / I70 pause-variant pins."""
+    state = engine.make_synthetic_state()
+
+    p0_bf_first_id = 0
+    p1_bf_first_id = 67
+
+    src_id = state.register_and_inject_object(
+        _tap_creature_dict_for_i71(), 1, ZONE_HAND
+    )
+
+    state.push_to_stack(src_id, 1)
+    state.resolve_top_of_stack_pause()
+
+    # Post-fix: p0's bf[0] got tapped (p1's opponent).
+    assert state.is_tapped(p0_bf_first_id) is True
+    assert state.is_tapped(p1_bf_first_id) is False
+
+
+def test_tap_target_empty_source_controllers_opponent_bf_fizzles(engine):
+    """**Empty-defender fizzle pin for I71.** When the source-
+    controller's opponent has no bf objects, the effect fizzles
+    silently (no panic, no spurious mutation). Uses
+    `num_battlefield=0` so both sides start with empty bfs.
+    """
+    state = engine.make_synthetic_state(num_battlefield=0)
+    p1_grave_before = state.graveyard_sizes[1]
+
+    src_id = state.register_and_inject_object(
+        _tap_creature_dict_for_i71(), 1, ZONE_HAND
+    )
+
+    state.push_to_stack(src_id, 1)
+    state.resolve_top_of_stack()
+
+    # Stack popped, source moved to p1's graveyard. No bf mutation
+    # to assert (both bfs empty).
+    assert state.is_stack_empty() is True
+    assert state.graveyard_sizes[1] == p1_grave_before + 1
