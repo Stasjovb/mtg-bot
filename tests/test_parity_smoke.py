@@ -12913,10 +12913,10 @@ def test_cross_engine_real_eoe_nebula_dragon_etb_damage_any_target_parity(
       * p1 life: 20 -> 17 (-3 from the ETB any-target burn).
       * No residual stack.
     """
-    from mtg_bot.agents import Agent
     from mtg_bot.parity.cross_engine import (
         CardDef, DeckSpec, build_python_state, build_rust_state,
     )
+    from tests.parity._picker_shims import _PickFirstOpponentTargetAgent
 
     nebula_dragon = CardDef(
         name="Nebula Dragon",
@@ -13017,42 +13017,8 @@ def test_cross_engine_real_eoe_nebula_dragon_etb_damage_any_target_parity(
     # achieves the same observable pick by filtering legal_targets to
     # opponent-controlled entries and returning the first -- in a 2-
     # player game where the defender == source's opponent, this matches
-    # Rust's scan exactly.
-    class _PickFirstOpponentTargetAgent(Agent):
-        """Pick the first opponent-controlled / opponent-player target.
-
-        Mirrors Rust's ``Effect::DealDamageAnyTarget`` deterministic
-        target selection: scan defender's bf for first creature, else
-        defender-player. For a probe driven by p0 (active_player) on
-        an empty p1 bf, both engines pick the p1 player.
-        """
-
-        def choose_target(self, state, player_id, legal_targets):
-            if not legal_targets:
-                return None
-            for kind, target_id in legal_targets:
-                if kind == "player":
-                    if target_id != player_id:
-                        return (kind, target_id)
-                else:
-                    # Creature / planeswalker / battle / permanent --
-                    # check controller via the battlefield object lookup.
-                    obj = next(
-                        (
-                            o
-                            for o in state.battlefield
-                            if o.id == target_id
-                        ),
-                        None,
-                    )
-                    if obj is not None and obj.controller_id != player_id:
-                        return (kind, target_id)
-            # No opponent-side legal target found. Fall back to the
-            # first legal target (defensive; the harness scenario
-            # always has at least p1 as a player target since
-            # any_target_filter admits players).
-            return legal_targets[0]
-
+    # Rust's scan exactly. Shim hoisted to
+    # tests/parity/_picker_shims.py.
     py_state.players[0].agent = _PickFirstOpponentTargetAgent()
 
     py_nebula = py_state.new_object(
@@ -13183,10 +13149,10 @@ def test_cross_engine_real_eoe_debris_field_crusher_etb_damage_any_target_parity
       * p1 life: 20 -> 17 (-3 from the ETB any-target burn).
       * No residual stack.
     """
-    from mtg_bot.agents import Agent
     from mtg_bot.parity.cross_engine import (
         CardDef, DeckSpec, build_python_state, build_rust_state,
     )
+    from tests.parity._picker_shims import _PickFirstOpponentTargetAgent
 
     debris_field_crusher = CardDef(
         name="Debris Field Crusher",
@@ -13284,37 +13250,8 @@ def test_cross_engine_real_eoe_debris_field_crusher_etb_damage_any_target_parity
     )
 
     # Custom agent: mirror Rust's defender-anchored target pick. See
-    # the Nebula Dragon probe's docstring for the contract.
-    class _PickFirstOpponentTargetAgent(Agent):
-        """Pick the first opponent-controlled / opponent-player
-        target.
-
-        Mirrors Rust's ``Effect::DealDamageAnyTarget`` deterministic
-        target selection: scan defender's bf for first creature, else
-        defender-player. For a probe driven by p0 (active_player) on
-        an empty p1 bf, both engines pick the p1 player.
-        """
-
-        def choose_target(self, state, player_id, legal_targets):
-            if not legal_targets:
-                return None
-            for kind, target_id in legal_targets:
-                if kind == "player":
-                    if target_id != player_id:
-                        return (kind, target_id)
-                else:
-                    obj = next(
-                        (
-                            o
-                            for o in state.battlefield
-                            if o.id == target_id
-                        ),
-                        None,
-                    )
-                    if obj is not None and obj.controller_id != player_id:
-                        return (kind, target_id)
-            return legal_targets[0]
-
+    # the Nebula Dragon probe's docstring for the contract. Shim
+    # hoisted to tests/parity/_picker_shims.py.
     py_state.players[0].agent = _PickFirstOpponentTargetAgent()
 
     py_dfc = py_state.new_object(
@@ -13467,10 +13404,10 @@ def test_cross_engine_real_eoe_nova_hellkite_etb_damage_to_opponent_creature_par
         a player).
       * No residual stack.
     """
-    from mtg_bot.agents import Agent
     from mtg_bot.parity.cross_engine import (
         CardDef, DeckSpec, build_python_state, build_rust_state,
     )
+    from tests.parity._picker_shims import _PickFirstOpponentTargetAgent
 
     nova_hellkite = CardDef(
         name="Nova Hellkite",
@@ -13605,41 +13542,8 @@ def test_cross_engine_real_eoe_nova_hellkite_etb_damage_to_opponent_creature_par
     # legal_targets to opponent-side creatures, so the opponent-
     # filter step in the agent is a no-op for this effect kind --
     # but the shim's first-opponent-target pick still matches Rust's
-    # bf-scan-first-creature behavior. Three call sites of this same
-    # shim shape now (Nebula Dragon + Debris Field Crusher + Nova
-    # Hellkite) is right at the hoist threshold; a follow-up cleanup
-    # slice can lift this to a shared helper in cross_engine.py if
-    # the count grows further.
-    class _PickFirstOpponentTargetAgent(Agent):
-        """Pick the first opponent-controlled / opponent-player target.
-
-        Mirrors Rust's defender-anchored deterministic target
-        selection. For the DealDamageToOpponentCreature variant,
-        the slot filter has already restricted legal_targets to
-        opponent-controlled creatures; the agent's opponent-filter
-        is then a no-op and the first entry is returned.
-        """
-
-        def choose_target(self, state, player_id, legal_targets):
-            if not legal_targets:
-                return None
-            for kind, target_id in legal_targets:
-                if kind == "player":
-                    if target_id != player_id:
-                        return (kind, target_id)
-                else:
-                    obj = next(
-                        (
-                            o
-                            for o in state.battlefield
-                            if o.id == target_id
-                        ),
-                        None,
-                    )
-                    if obj is not None and obj.controller_id != player_id:
-                        return (kind, target_id)
-            return legal_targets[0]
-
+    # bf-scan-first-creature behavior. Shim hoisted to
+    # tests/parity/_picker_shims.py.
     py_state.players[0].agent = _PickFirstOpponentTargetAgent()
 
     py_nova = py_state.new_object(
@@ -13797,9 +13701,11 @@ def test_cross_engine_real_eoe_pinnacle_kill_ship_etb_damage_optional_target_cre
         the player).
       * No residual stack.
     """
-    from mtg_bot.agents import Agent
     from mtg_bot.parity.cross_engine import (
         CardDef, DeckSpec, build_python_state, build_rust_state,
+    )
+    from tests.parity._picker_shims import (
+        _PickFirstOpponentTargetCreaturePreferredAgent,
     )
 
     pinnacle_kill_ship = CardDef(
@@ -13955,48 +13861,15 @@ def test_cross_engine_real_eoe_pinnacle_kill_ship_etb_damage_optional_target_cre
     )
 
     # Custom agent: mirror Rust's defender-anchored target pick.
-    # Mirrors the Nebula Dragon / Debris Field Crusher probes'
-    # _PickFirstOpponentTargetAgent shape. For the Pinnacle Kill-
-    # Ship probe specifically: with the bait Bear on p1's bf, the
-    # only legal opponent-side target is the bait Bear (the agent
-    # prefers creatures over players, mirroring Rust's bf-first
-    # scan order).
-    class _PickFirstOpponentTargetAgent(Agent):
-        """Pick the first opponent-controlled creature, else the
-        first opponent player.
-
-        Mirrors Rust's ``Effect::DealDamageAnyTarget`` deterministic
-        target selection: scan defender's bf for first creature,
-        else defender-player. For this probe (p0-controlled source,
-        p1's bf has one bait creature), both engines pick the bait
-        creature.
-        """
-
-        def choose_target(self, state, player_id, legal_targets):
-            if not legal_targets:
-                return None
-            for kind, target_id in legal_targets:
-                if kind == "player":
-                    continue  # Prefer creatures over players to
-                              # mirror Rust's bf-first scan order.
-                obj = next(
-                    (
-                        o
-                        for o in state.battlefield
-                        if o.id == target_id
-                    ),
-                    None,
-                )
-                if obj is not None and obj.controller_id != player_id:
-                    return (kind, target_id)
-            # Fall back to first opponent-side player target if no
-            # opponent creature found.
-            for kind, target_id in legal_targets:
-                if kind == "player" and target_id != player_id:
-                    return (kind, target_id)
-            return legal_targets[0]
-
-    py_state.players[0].agent = _PickFirstOpponentTargetAgent()
+    # For the Pinnacle Kill-Ship probe specifically: with the bait
+    # Bear on p1's bf, the only legal opponent-side target is the
+    # bait Bear (the agent prefers creatures over players, mirroring
+    # Rust's bf-first scan order). This is the
+    # creature-preferred variant of the Nebula-Dragon shim and is
+    # named distinctly. Hoisted to tests/parity/_picker_shims.py.
+    py_state.players[0].agent = (
+        _PickFirstOpponentTargetCreaturePreferredAgent()
+    )
 
     py_pks = py_state.new_object(
         pks_printing, owner_id=0, zone=Zone.BATTLEFIELD,
@@ -15266,10 +15139,10 @@ def test_cross_engine_synthetic_etb_return_creature_from_graveyard_to_hand_parit
       * Life totals unchanged on both seats (the return effect
         doesn't touch life).
     """
-    from mtg_bot.agents import Agent
     from mtg_bot.parity.cross_engine import (
         CardDef, DeckSpec, build_python_state, build_rust_state,
     )
+    from tests.parity._picker_shims import _PickFirstLegalTargetAgent
 
     # Bait Bear: vanilla 2/2 with no triggered abilities. Seeded
     # in p0's graveyard so the recur trigger has a legal target.
@@ -15403,26 +15276,8 @@ def test_cross_engine_synthetic_etb_return_creature_from_graveyard_to_hand_parit
     )
 
     # Custom agent: pick the first legal target. Mirrors Rust's
-    # iterator-order graveyard scan (Rust picks first creature card
-    # in source-controller's graveyard insertion order). For a
-    # single bait bear in p0's gy, legal_targets is length 1 and
-    # both engines pick the same target.
-    class _PickFirstLegalTargetAgent(Agent):
-        """Pick ``legal_targets[0]``.
-
-        Mirrors Rust's ``Effect::ReturnCreatureFromYourGraveyardToHand``
-        deterministic target selection: first creature card in
-        source-controller's graveyard insertion order. The Python
-        bridge's ``legal_targets`` walks the same graveyard in the
-        same order so ``legal_targets[0]`` is the iterator-order
-        first creature card.
-        """
-
-        def choose_target(self, state, player_id, legal_targets):
-            if not legal_targets:
-                return None
-            return legal_targets[0]
-
+    # iterator-order graveyard scan. Shim hoisted to
+    # tests/parity/_picker_shims.py.
     py_state.players[0].agent = _PickFirstLegalTargetAgent()
 
     # Seed p0's graveyard with the bait creature.
@@ -15615,10 +15470,10 @@ def test_cross_engine_real_eoe_virus_beetle_etb_each_opponent_discards_parity(
       * Lives unchanged on both seats.
       * No residual stack.
     """
-    from mtg_bot.agents import Agent
     from mtg_bot.parity.cross_engine import (
         CardDef, DeckSpec, build_python_state, build_rust_state,
     )
+    from tests.parity._picker_shims import _DiscardFirstAgent
 
     virus_beetle = CardDef(
         name="Virus Beetle",
@@ -15801,18 +15656,8 @@ def test_cross_engine_real_eoe_virus_beetle_etb_each_opponent_discards_parity(
     # first id to match Rust's at-resolve pick. The pick is seated
     # on p1 (the discarding player), NOT on p0 (the source's
     # controller) -- "each opponent discards" lets each opponent
-    # pick their own discard.
-    class _DiscardFirstAgent(Agent):
-        """Pick the first card in hand to discard.
-
-        Mirrors Rust's ``Effect::EachOpponentDiscards`` deterministic
-        opponent-hand[0] pick (state_ops_resolve.rs:3489).
-        """
-
-        def choose_discard(self, state, player_id, hand_ids):
-            assert hand_ids, "agent called with empty hand"
-            return hand_ids[0]
-
+    # pick their own discard. Shim hoisted to
+    # tests/parity/_picker_shims.py.
     py_state.players[1].agent = _DiscardFirstAgent()
 
     py_p1_hand_size_before = len(py_state.players[1].hand)
@@ -16044,10 +15889,10 @@ def test_cross_engine_real_eoe_dubious_delicacy_etb_pump_target_creature_parity(
       * No life changes (the ETB doesn't touch life totals).
       * No residual stack.
     """
-    from mtg_bot.agents import Agent
     from mtg_bot.parity.cross_engine import (
         CardDef, DeckSpec, build_python_state, build_rust_state,
     )
+    from tests.parity._picker_shims import _PickFirstControlledCreatureAgent
 
     dubious_delicacy = CardDef(
         name="Dubious Delicacy",
@@ -16202,43 +16047,10 @@ def test_cross_engine_real_eoe_dubious_delicacy_etb_pump_target_creature_parity(
 
     # Custom agent: mimic Rust's caster-side target pick. Rust's
     # PumpTargetCreatureUntilEOT arm scans the SOURCE CONTROLLER's bf
-    # for the FIRST creature. The Python agent achieves the same
-    # observable pick by filtering legal_targets to creatures whose
-    # controller_id == agent's player_id (== source's controller) and
-    # returning the first. Sibling to the Nebula-Dragon probe's
+    # for the FIRST creature. Sibling to the Nebula-Dragon probe's
     # _PickFirstOpponentTargetAgent (swap controller-filter direction
-    # from opponent to same-side).
-    class _PickFirstControlledCreatureAgent(Agent):
-        """Pick the first own-side creature target.
-
-        Mirrors Rust's ``Effect::PumpTargetCreatureUntilEOT``
-        deterministic target selection: scan the SOURCE CONTROLLER's
-        battlefield for the first creature; silent fizzle if none.
-        For a probe driven by p0 with a single creature on p0's bf,
-        both engines pick that creature.
-        """
-
-        def choose_target(self, state, player_id, legal_targets):
-            if not legal_targets:
-                return None
-            for kind, target_id in legal_targets:
-                if kind != "creature":
-                    continue
-                obj = next(
-                    (
-                        o
-                        for o in state.battlefield
-                        if o.id == target_id
-                    ),
-                    None,
-                )
-                if obj is not None and obj.controller_id == player_id:
-                    return (kind, target_id)
-            # No same-side creature target found. Fall back to the
-            # first legal target (defensive; the probe scenario
-            # always has a same-side creature).
-            return legal_targets[0]
-
+    # from opponent to same-side). Shim hoisted to
+    # tests/parity/_picker_shims.py.
     py_state.players[0].agent = _PickFirstControlledCreatureAgent()
 
     py_dubious = py_state.new_object(
@@ -16399,10 +16211,10 @@ def test_cross_engine_real_eoe_rayblade_trooper_etb_plus_one_counter_parity(
       * No life changes.
       * No residual stack.
     """
-    from mtg_bot.agents import Agent
     from mtg_bot.parity.cross_engine import (
         CardDef, DeckSpec, build_python_state, build_rust_state,
     )
+    from tests.parity._picker_shims import _PickFirstControlledCreatureAgent
 
     rayblade_trooper = CardDef(
         name="Rayblade Trooper",
@@ -16542,26 +16354,8 @@ def test_cross_engine_real_eoe_rayblade_trooper_etb_plus_one_counter_parity(
     # Delicacy probe's _PickFirstControlledCreatureAgent: filter
     # legal_targets to creatures controlled by the agent's
     # player_id and return the first. Mirrors Rust's first-
-    # creature-on-caster-bf scan.
-    class _PickFirstControlledCreatureAgent(Agent):
-        def choose_target(self, state, player_id, legal_targets):
-            if not legal_targets:
-                return None
-            for kind, target_id in legal_targets:
-                if kind != "creature":
-                    continue
-                obj = next(
-                    (
-                        o
-                        for o in state.battlefield
-                        if o.id == target_id
-                    ),
-                    None,
-                )
-                if obj is not None and obj.controller_id == player_id:
-                    return (kind, target_id)
-            return legal_targets[0]
-
+    # creature-on-caster-bf scan. Shim hoisted to
+    # tests/parity/_picker_shims.py.
     py_state.players[0].agent = _PickFirstControlledCreatureAgent()
 
     py_rayblade = py_state.new_object(
@@ -16704,10 +16498,10 @@ def test_cross_engine_real_eoe_interceptor_mechan_etb_return_artifact_or_creatur
       * No residual stack.
       * Life totals unchanged.
     """
-    from mtg_bot.agents import Agent
     from mtg_bot.parity.cross_engine import (
         CardDef, DeckSpec, build_python_state, build_rust_state,
     )
+    from tests.parity._picker_shims import _PickFirstLegalTargetAgent
 
     recur_bait_artifact = CardDef(
         name="Mechan Recur Bait Artifact",
@@ -16827,16 +16621,8 @@ def test_cross_engine_real_eoe_interceptor_mechan_etb_return_artifact_or_creatur
         ),
     )
 
-    class _PickFirstLegalTargetAgent(Agent):
-        """Pick ``legal_targets[0]``. Mirrors Rust's iterator-
-        order graveyard scan for the or_artifact rider arm.
-        """
-
-        def choose_target(self, state, player_id, legal_targets):
-            if not legal_targets:
-                return None
-            return legal_targets[0]
-
+    # Pick-first-legal-target shim for the or_artifact rider arm.
+    # Hoisted to tests/parity/_picker_shims.py.
     py_state.players[0].agent = _PickFirstLegalTargetAgent()
 
     # Seed p0's graveyard with the artifact bait.
@@ -16930,3 +16716,8 @@ def test_cross_engine_real_eoe_interceptor_mechan_etb_return_artifact_or_creatur
     # Stacks empty on both sides.
     assert rust_state.stack_size() == 0
     assert len(py_state.stack) == 0
+
+
+# === PHASE5_PROBES_INSERT_ABOVE_THIS_LINE ===
+# New real-EoE parity probes go IMMEDIATELY ABOVE this marker.
+# Append-only convention prevents merge collisions when multiple agents add probes in parallel.

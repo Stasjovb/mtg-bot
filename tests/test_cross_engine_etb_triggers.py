@@ -1200,3 +1200,7 @@ def test_rust_parser_accepts_return_creature_or_spacecraft_in_triggered_ability(
     }
     pid = reg.register_printing(d)
     assert pid == 0
+
+
+# === PHASE5_BRIDGE_PIN_TESTS_INSERT_ABOVE_THIS_LINE ===
+# New bridge-arm pin tests go IMMEDIATELY ABOVE this marker.
