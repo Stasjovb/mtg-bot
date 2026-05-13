@@ -421,6 +421,72 @@ def _ta_dict_to_python_effect(eff_dict: dict):
         # backstop, not a contract.
         from mtg_bot.effects.generic.library_lookat import SelfMill
         return SelfMill(amount=eff_dict.get("count", 1))
+    if kind == "pump_target_creature_until_eot":
+        # Targeted "target creature gets +X/+Y until end of turn" (CR
+        # 702.x layer-7c additive bonus, expires at cleanup). Rust's
+        # ``Effect::PumpTargetCreatureUntilEOT { power_bonus: i32,
+        # toughness_bonus: i32 }`` (cards.rs:713) is the target-
+        # creature sibling of ``PumpSelfUntilEOT``; its resolve arm
+        # at ``state_ops_resolve.rs:3927-3988`` picks the target
+        # DETERMINISTICALLY at apply_effect time: scan the SOURCE
+        # CONTROLLER's battlefield top-to-bottom for the first object
+        # whose ``card_types`` contains "Creature", then push a
+        # ``UeotModifier::PowerToughnessBonus { power, toughness }``
+        # onto its ``ueot_modifiers`` Vec. Empty battlefield (or no
+        # creatures on it) is a silent fizzle. ``(0, 0)`` short-
+        # circuits before doing the lookup -- pure no-op without
+        # touching state.
+        #
+        # **Distinct from ``deal_damage_any_target`` in target-pick
+        # direction.** ``deal_damage_any_target`` scans the
+        # DEFENDER's battlefield (the source's opponent's side); this
+        # arm scans the SOURCE CONTROLLER's battlefield (the source's
+        # OWN side). The Rust arm matches the typical Giant-Growth-
+        # style "buff your own creature" oracle flow. EoE consumers:
+        # - Sinister Cryologist's oracle says "target creature an
+        #   opponent controls gets -3/-0 UEOT" -- Rust's same-side
+        #   scan is observably narrower than the oracle text (Rust
+        #   targets caster's own creature), but matches Python's
+        #   ``PumpTargetCreatureUntilEOT(opponents_only=False)``
+        #   default behavior when the scenario forces target selection
+        #   onto the same side. Documented in SEARCH_LIMITATIONS.md.
+        # - Dubious Delicacy's oracle says "up to one target creature
+        #   gets -3/-3 UEOT" -- the unrestricted "any target creature"
+        #   form. Rust picks the FIRST creature on caster's side;
+        #   probes constrain p1 bf to zero creatures so the only
+        #   eligible target is a caster-side creature, observable on
+        #   both engines.
+        #
+        # Python's ``PumpTargetCreatureUntilEOT`` class
+        # (effects/generic/pump.py:258) carries the same fields:
+        # ``power_bonus``, ``toughness_bonus``. No field-name
+        # translation needed -- Python and Rust agree on
+        # ``power_bonus`` / ``toughness_bonus``. Its
+        # ``legal_targets`` walks every creature on the bf (subject
+        # to ``you_control_only`` / ``opponents_only`` flags, both
+        # False by default -- the bridge mirrors the default and does
+        # not yet plumb the narrowing flags through the dict shape).
+        # Unlike Rust's at-apply-time scan, Python picks at PUSH time
+        # via ``push_triggered_ability`` (actions.py:3172); end-to-
+        # end probes seat a ``_PickFirstControlledCreatureAgent``
+        # shim on the source's controller that filters legal_targets
+        # to controller-owned creatures and returns the first --
+        # sibling to ``_PickFirstOpponentTargetAgent`` from the
+        # Nebula-Dragon probe, swapping the controller-filter
+        # direction.
+        #
+        # Mirrors Rust's ``parse_effect`` arm (cards.rs:3125-3147)
+        # which tolerates missing ``power_bonus`` / ``toughness_bonus``
+        # (defaults to 0) and ALLOWS negative bonuses (debuff shapes
+        # like Sinister Cryologist's -3/-0). Both fields are
+        # independent; ``(0, 0)`` is a pure no-op on both engines.
+        from mtg_bot.effects.generic.pump import (
+            PumpTargetCreatureUntilEOT,
+        )
+        return PumpTargetCreatureUntilEOT(
+            power_bonus=eff_dict.get("power_bonus", 0),
+            toughness_bonus=eff_dict.get("toughness_bonus", 0),
+        )
     raise ValueError(
         f"cross_engine triggered_abilities bridge: unsupported "
         f"effect kind {kind!r} (extend `_ta_dict_to_python_effect` "

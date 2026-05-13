@@ -786,3 +786,135 @@ def test_rust_parser_accepts_mill_in_triggered_ability():
     }
     pid = reg.register_printing(d)
     assert pid == 0
+
+
+def test_bridge_pump_target_creature_until_eot_translates_to_python():
+    """Phase 5 bridge extension: Rust
+    ``{"kind": "pump_target_creature_until_eot",
+    "power_bonus": N, "toughness_bonus": M}`` translates to Python
+    ``PumpTargetCreatureUntilEOT(power_bonus=N, toughness_bonus=M)``.
+
+    Unblocks Sinister-Cryologist / Dubious-Delicacy-shape ETB triggers
+    that "target creature gets +X/+Y UEOT" on the cross-engine bridge.
+    The Rust effect variant already exists at
+    ``rust/src/cards.rs:713`` (``Effect::PumpTargetCreatureUntilEOT``)
+    and its parse_effect arm at ``cards.rs:3125-3147``; the Rust
+    resolve arm at ``state_ops_resolve.rs:3927-3988`` picks the FIRST
+    creature on the source controller's battlefield and pushes a
+    ``UeotModifier::PowerToughnessBonus``. This pins the field-name
+    pass-through ``power_bonus -> power_bonus``,
+    ``toughness_bonus -> toughness_bonus`` (Python and Rust agree on
+    both field names -- no translation needed, unlike ``mill``'s
+    ``count -> amount`` swap).
+
+    Sinister Cryologist's -3/-0 debuff shape is the canonical
+    consumer; negatives are allowed by both engines.
+    """
+    from mtg_bot.effects.generic.pump import PumpTargetCreatureUntilEOT
+    from mtg_bot.parity.cross_engine import _ta_dict_to_python_effect
+
+    # Sinister Cryologist's -3/-0 ETB debuff (the headline EoE
+    # consumer of this bridge arm).
+    e = _ta_dict_to_python_effect(
+        {
+            "kind": "pump_target_creature_until_eot",
+            "power_bonus": -3,
+            "toughness_bonus": 0,
+        }
+    )
+    assert isinstance(e, PumpTargetCreatureUntilEOT)
+    assert e.power_bonus == -3
+    assert e.toughness_bonus == 0
+    # Defaults on the narrowing flags (the bridge does not yet plumb
+    # opponents_only / you_control_only / optional through the dict
+    # shape -- mirrors Rust today which has no opponent-control
+    # filter on the variant).
+    assert e.opponents_only is False
+    assert e.you_control_only is False
+    assert e.optional is False
+
+
+def test_bridge_pump_target_creature_until_eot_positive_bonus_translates():
+    """Positive bonus arm -- generic Giant-Growth-shape +3/+3.
+
+    Pins that the bridge arm is not signed-specific: positive bonuses
+    pass through unchanged. Pairs the negative-bonus assertion in
+    ``test_bridge_pump_target_creature_until_eot_translates_to_python``
+    with the more common buff-shape consumer for any future EoE
+    printing that buffs (rather than debuffs) a target creature.
+    """
+    from mtg_bot.effects.generic.pump import PumpTargetCreatureUntilEOT
+    from mtg_bot.parity.cross_engine import _ta_dict_to_python_effect
+
+    e = _ta_dict_to_python_effect(
+        {
+            "kind": "pump_target_creature_until_eot",
+            "power_bonus": 3,
+            "toughness_bonus": 3,
+        }
+    )
+    assert isinstance(e, PumpTargetCreatureUntilEOT)
+    assert e.power_bonus == 3
+    assert e.toughness_bonus == 3
+
+
+def test_bridge_pump_target_creature_until_eot_defaults_to_zero():
+    """Missing ``power_bonus`` / ``toughness_bonus`` default to 0
+    (matching Rust's ``parse_effect`` lenient default and Python's
+    ``PumpTargetCreatureUntilEOT`` class-field defaults).
+
+    ``(0, 0)`` is a pure no-op on both engines: Rust short-circuits
+    before doing the lookup (cards.rs:3928-3930) and Python's resolve
+    writes a no-op layer-7c entry that produces no observable delta.
+    Bridge consumers SHOULD pass both fields explicitly so the dict
+    shape stays self-documenting; the defaults are translator-
+    robustness backstops, not a contract.
+    """
+    from mtg_bot.effects.generic.pump import PumpTargetCreatureUntilEOT
+    from mtg_bot.parity.cross_engine import _ta_dict_to_python_effect
+
+    e = _ta_dict_to_python_effect(
+        {"kind": "pump_target_creature_until_eot"}
+    )
+    assert isinstance(e, PumpTargetCreatureUntilEOT)
+    assert e.power_bonus == 0
+    assert e.toughness_bonus == 0
+
+
+def test_rust_parser_accepts_pump_target_creature_until_eot_in_triggered_ability():
+    """Pin the Rust parser surface for the
+    ``pump_target_creature_until_eot`` effect kind. The bridge's dict
+    shape must register cleanly on the Rust side too; this lockstep
+    gate keeps the Python bridge from drifting away from Rust's
+    parse_effect coverage.
+
+    Mirrors the existing ``mill`` / ``surveil`` /
+    ``deal_damage_any_target`` parser-surface pins -- what's being
+    pinned is parse_effect's ``pump_target_creature_until_eot`` arm
+    accepting a triggered_abilities entry with the
+    ``power_bonus`` / ``toughness_bonus`` field pair (negatives
+    allowed, mirrors Sinister Cryologist's -3/-0 shape).
+    """
+    import mtg_bot_engine
+
+    reg = mtg_bot_engine.Registry()
+    d = {
+        "name": "Phase 5 Bridge Pin -- PumpTargetCreatureUntilEOT",
+        "card_types": ["Creature"],
+        "mana_cost": {"generic": 2, "U": 1},
+        "power": 2,
+        "toughness": 2,
+        "triggered_abilities": [
+            {
+                "event": "enters",
+                "predicate": {"kind": "source_is_self"},
+                "effect": {
+                    "kind": "pump_target_creature_until_eot",
+                    "power_bonus": -3,
+                    "toughness_bonus": 0,
+                },
+            }
+        ],
+    }
+    pid = reg.register_printing(d)
+    assert pid == 0
