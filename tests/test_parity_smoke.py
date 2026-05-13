@@ -9462,3 +9462,427 @@ def test_cross_engine_multi_keyword_selector_pre_injection_walks_clean(
         "Bear Inquisitor should not yet exist at end of step 167 -- "
         "injection fires at step 168"
     )
+
+
+# =====================================================================
+# Phase 5 probe lane: real EoE-card ETB-trigger smoke
+# =====================================================================
+#
+# These probes pin that real-EoE-card ETB triggers fire to parity on
+# both engines by leveraging the ETB-trigger substrate (Slices 1-11 in
+# `docs/RUST_ETB_TRIGGER_AUDIT.md`). Each probe:
+#
+#   1. Builds a `CardDef` mirroring a REAL Edge-of-Eternities printing
+#      whose oracle text reduces to one ETB trigger the substrate
+#      already supports (SourceIsSelf + DrawCards / GainLife so far).
+#      Non-ETB oracle text (e.g. Warp, secondary clauses) is OUT of
+#      scope -- the probe's contract is the ETB-trigger surface.
+#
+#   2. Injects the printing onto p0's hand via
+#      `register_and_inject_object` (Rust) / direct GameObject
+#      construction (Python) so the cast path uses the post-resolve
+#      ETB substrate without depending on land/mana plumbing.
+#
+#   3. Casts the spell, drains the stack on both engines, and compares
+#      the post-drain (life_p0, life_p1, hand_p0, hand_p1, bf
+#      contents) tuple. Divergence on ANY axis surfaces a new CE.
+#
+# Outcomes:
+#
+#   (a) Clean pass -- both engines agree post-drain. Logged below;
+#       moves the next probe forward.
+#   (b) CE21 surfaces -- xfail-pin with a CE21 doc entry, switch to
+#       closure-plan mode.
+#   (c) Old-known-gap surfaces -- xfail-pin with cross-reference to
+#       the existing CE entry.
+
+def _build_eoe_etb_state(card_def):
+    """Build matched Python + Rust states for a real-EoE probe.
+
+    The card_def carries the ETB trigger; the deckspec ships one copy
+    on each player's library so both engines materialize the printing
+    on the registry the same way. Caller then injects onto a zone via
+    the standard inject-and-resolve pattern.
+    """
+    from mtg_bot.parity.cross_engine import (
+        DeckSpec, build_python_state, build_rust_state,
+    )
+    spec = DeckSpec(
+        card_defs=(card_def,),
+        p0_library=(card_def.name,),
+        p1_library=(card_def.name,),
+    )
+    py_state = build_python_state(spec)
+    rust_state = build_rust_state(spec)
+    return py_state, rust_state
+
+
+def _drain_stack_both(py_state, rust_state):
+    """Resolve the top of stack on both engines until both stacks are
+    empty. Mirrors the synchronous draining pattern used by
+    `test_rust_state_builder_wires_triggered_abilities` in
+    test_cross_engine_etb_triggers.py.
+    """
+    from mtg_bot.actions import resolve_top_of_stack
+    while rust_state.stack_size() > 0:
+        rust_state.resolve_top_of_stack()
+    while py_state.stack:
+        resolve_top_of_stack(py_state)
+
+
+def test_cross_engine_real_eoe_germinating_wurm_etb_gain_life_parity(
+    parity_smoke,
+):
+    """Probe: Germinating Wurm (EoE) ETB trigger fires + parity-matches.
+
+    Oracle text in `data/edge_of_eternities.json`:
+
+        "When this creature enters, you gain 2 life.
+         Warp {1}{G} (...)"
+
+    The Warp clause is out of scope -- this probe exclusively exercises
+    the ETB-trigger surface, which is the substrate's current
+    sweet-spot:
+
+      * Event: `enters`
+      * Predicate: `source_is_self` (only the just-entered creature's
+        own trigger fires)
+      * Effect: `gain_life` amount=2
+
+    Expected post-cast + post-drain state on BOTH engines:
+
+      * Germinating Wurm on p0's battlefield (the spell's
+        StackItem resolves to a permanent first, then the
+        ETB trigger lands on top of the stack and is resolved
+        next).
+      * p0 life: 20 -> 22 (+2 from the ETB gain_life).
+      * p1 life: unchanged at 20.
+      * No residual stack on either engine.
+      * No residual hand objects.
+
+    This is the simplest cross-engine smoke for a REAL EoE card's
+    ETB trigger -- a clean pass here pins the substrate end-to-end
+    on a printing that lives in the actual draft pool, not just on
+    the synthetic Slice-3 "ETB Draw Bear" fixture. Outcome (a) for
+    this probe means the next probe can pick a more complex
+    predicate / effect shape.
+    """
+    from mtg_bot.parity.cross_engine import CardDef
+    germinating_wurm = CardDef(
+        name="Germinating Wurm",
+        card_type="Creature",
+        mana_cost_generic=4,
+        mana_cost_colored=(("G", 1),),
+        power=5,
+        toughness=5,
+        triggered_abilities=(
+            {
+                "event": "enters",
+                "predicate": {"kind": "source_is_self"},
+                "effect": {"kind": "gain_life", "amount": 2},
+            },
+        ),
+    )
+    py_state, rust_state = _build_eoe_etb_state(germinating_wurm)
+
+    # ---- Rust side ----
+    # Register-and-inject onto p0's hand, then push the spell onto the
+    # stack and resolve. The substrate fires the ETB trigger onto the
+    # stack right after the spell resolves; the trigger lands +2 life.
+    ZONE_HAND = 0
+    ZONE_BATTLEFIELD = 2
+    rust_dict = {
+        "name": "Germinating Wurm",
+        "card_types": ["Creature"],
+        "mana_cost": {"generic": 4, "G": 1},
+        "effects": [],
+        "power": 5,
+        "toughness": 5,
+        "triggered_abilities": [
+            {
+                "event": "enters",
+                "predicate": {"kind": "source_is_self"},
+                "effect": {"kind": "gain_life", "amount": 2},
+            }
+        ],
+    }
+    rust_wurm_id = rust_state.register_and_inject_object(
+        rust_dict, 0, ZONE_HAND
+    )
+    rust_p0_life_before = rust_state.get_life(0)
+    rust_p1_life_before = rust_state.get_life(1)
+    rust_state.push_to_stack(rust_wurm_id, 0)
+    rust_state.resolve_top_of_stack()
+    # Spell resolved -> permanent on bf, ETB trigger now on stack.
+    assert rust_state.find_object_zone(rust_wurm_id) == ZONE_BATTLEFIELD
+    assert rust_state.stack_size() == 1, (
+        "expected Germinating Wurm's ETB trigger to land on the stack "
+        "after the spell resolves"
+    )
+
+    # ---- Python side ----
+    # Mirror the inject-and-resolve pattern: move the obj from library
+    # to hand, then push onto the stack directly (bypassing mana cost
+    # -- the substrate's contract is the resolve-and-fire path, not
+    # the mana-payment path).
+    from mtg_bot.actions import resolve_top_of_stack as py_resolve
+    from mtg_bot.game import StackItem, Zone
+    py_obj = py_state.players[0].library[0]
+    assert py_obj.printing.name == "Germinating Wurm"
+    py_state.players[0].library.remove(py_obj)
+    py_obj.zone = Zone.STACK
+    py_state.stack.append(StackItem(source=py_obj, controller_id=0))
+    py_p0_life_before = py_state.players[0].life
+    py_p1_life_before = py_state.players[1].life
+    py_resolve(py_state)
+    # Spell resolved -> permanent on bf, ETB trigger now on stack.
+    assert any(
+        o.printing.name == "Germinating Wurm"
+        for o in py_state.battlefield
+    ), "Germinating Wurm should be on Python p0's battlefield"
+    assert len(py_state.stack) == 1, (
+        "expected Germinating Wurm's ETB trigger to land on the "
+        "Python stack after the spell resolves"
+    )
+
+    # ---- Drain both stacks, then compare ----
+    _drain_stack_both(py_state, rust_state)
+
+    # Post-drain parity: stacks empty, +2 life to p0, p1 unchanged.
+    assert rust_state.stack_size() == 0
+    assert len(py_state.stack) == 0
+    assert rust_state.get_life(0) == rust_p0_life_before + 2, (
+        f"Rust p0 life should be {rust_p0_life_before + 2}; "
+        f"got {rust_state.get_life(0)}"
+    )
+    assert rust_state.get_life(1) == rust_p1_life_before, (
+        f"Rust p1 life should be unchanged at {rust_p1_life_before}; "
+        f"got {rust_state.get_life(1)}"
+    )
+    assert py_state.players[0].life == py_p0_life_before + 2, (
+        f"Python p0 life should be {py_p0_life_before + 2}; "
+        f"got {py_state.players[0].life}"
+    )
+    assert py_state.players[1].life == py_p1_life_before, (
+        f"Python p1 life should be unchanged at {py_p1_life_before}; "
+        f"got {py_state.players[1].life}"
+    )
+    # Cross-engine: same final life totals.
+    assert rust_state.get_life(0) == py_state.players[0].life
+    assert rust_state.get_life(1) == py_state.players[1].life
+
+
+def test_cross_engine_real_eoe_quantum_riddler_etb_draw_parity(
+    parity_smoke,
+):
+    """Probe: Quantum Riddler (EoE) ETB trigger fires + parity-matches.
+
+    Oracle text in `data/edge_of_eternities.json`:
+
+        "Flying
+         When this creature enters, draw a card.
+         As long as you have one or fewer cards in hand, if you would
+         draw one or more cards, you draw that many cards plus one
+         instead.
+         Warp {1}{U}"
+
+    The flying / replacement / warp clauses are out of scope -- this
+    probe exclusively exercises the ETB-trigger surface
+    (`SourceIsSelf` + `DrawCards(1)`). Note Quantum Riddler is the
+    LITERAL "ETB Draw Bear" of the EoE pool, modulo cost and
+    stats: the substrate's Slice-3 synthetic-fixture motif is a
+    real-card pattern.
+
+    Expected post-cast + post-drain state on BOTH engines:
+
+      * Quantum Riddler on p0's battlefield.
+      * p0 hand grows by exactly 1 (the ETB DrawCards(1) trigger
+        drew a card from p0's library).
+      * p0 library shrinks by exactly 1 (the drawn card).
+      * p1 hand / library unchanged.
+      * No residual stack.
+
+    For the draw to have something to draw from, we ship a second
+    copy of Germinating Wurm in p0's library as the "card to be
+    drawn" fixture. (Using a second printing -- Germinating Wurm --
+    keeps the library card distinct from the cast spell so a
+    "library/hand confusion" bug would surface a clear name
+    divergence.)
+    """
+    from mtg_bot.parity.cross_engine import (
+        CardDef, DeckSpec, build_python_state, build_rust_state,
+    )
+    quantum_riddler = CardDef(
+        name="Quantum Riddler",
+        card_type="Creature",
+        mana_cost_generic=3,
+        mana_cost_colored=(("U", 2),),
+        power=4,
+        toughness=6,
+        triggered_abilities=(
+            {
+                "event": "enters",
+                "predicate": {"kind": "source_is_self"},
+                "effect": {"kind": "draw_cards", "count": 1},
+            },
+        ),
+    )
+    germinating_wurm = CardDef(
+        name="Germinating Wurm",
+        card_type="Creature",
+        mana_cost_generic=4,
+        mana_cost_colored=(("G", 1),),
+        power=5,
+        toughness=5,
+        # NOTE: this copy lives in p0's library purely as a
+        # draw-target. It carries the SAME ETB trigger as in the
+        # prior probe, but the trigger is only relevant if the wurm
+        # itself enters -- which it doesn't on the draw path. The
+        # DrawCards(1) effect moves the wurm from library to hand,
+        # not to bf, so the wurm's own ETB does NOT fire here.
+        triggered_abilities=(
+            {
+                "event": "enters",
+                "predicate": {"kind": "source_is_self"},
+                "effect": {"kind": "gain_life", "amount": 2},
+            },
+        ),
+    )
+    spec = DeckSpec(
+        card_defs=(quantum_riddler, germinating_wurm),
+        p0_library=("Germinating Wurm",),
+        p1_library=("Germinating Wurm",),
+    )
+    py_state = build_python_state(spec)
+    rust_state = build_rust_state(spec)
+
+    # ---- Rust side ----
+    ZONE_HAND = 0
+    ZONE_BATTLEFIELD = 2
+    rust_dict = {
+        "name": "Quantum Riddler",
+        "card_types": ["Creature"],
+        "mana_cost": {"generic": 3, "U": 2},
+        "effects": [],
+        "power": 4,
+        "toughness": 6,
+        "triggered_abilities": [
+            {
+                "event": "enters",
+                "predicate": {"kind": "source_is_self"},
+                "effect": {"kind": "draw_cards", "count": 1},
+            }
+        ],
+    }
+    rust_riddler_id = rust_state.register_and_inject_object(
+        rust_dict, 0, ZONE_HAND
+    )
+    rust_p0_hand_before = rust_state.hand_sizes[0]
+    rust_p0_lib_before = rust_state.library_sizes[0]
+    rust_state.push_to_stack(rust_riddler_id, 0)
+    rust_state.resolve_top_of_stack()
+    assert rust_state.find_object_zone(rust_riddler_id) == ZONE_BATTLEFIELD
+    assert rust_state.stack_size() == 1, (
+        "Quantum Riddler's ETB DrawCards(1) trigger should be on the "
+        "Rust stack post-resolve"
+    )
+
+    # ---- Python side ----
+    from mtg_bot.actions import resolve_top_of_stack as py_resolve
+    from mtg_bot.cards.base import CardPrinting, ManaCost
+    from mtg_bot.effects.base import TriggeredAbility
+    from mtg_bot.effects.generic.draw_mill import DrawCards
+    from mtg_bot.effects.predicates import Event, IsSelf
+    from mtg_bot.game import StackItem, Zone
+
+    # Build a Python CardPrinting for Quantum Riddler that mirrors
+    # the Rust registry's predicate-path trigger shape. (The
+    # cross_engine.build_python_state path only materializes
+    # printings from the DeckSpec's card_defs; injecting a
+    # printing not in the deckspec needs a fresh CardPrinting +
+    # state.new_object, mirroring the existing side-channel pattern
+    # used by `vigilance_side_channel`.)
+    riddler_printing = CardPrinting(
+        name="Quantum Riddler",
+        mana_cost_str="",
+        mana_cost=ManaCost(generic=3, colored=(("U", 2),)),
+        type_line="Creature",
+        supertypes=(),
+        card_types=("Creature",),
+        subtypes=(),
+        power=4,
+        toughness=6,
+        produces=frozenset(),
+        triggered_abilities=(
+            TriggeredAbility(
+                event=Event.ENTERS,
+                predicate=IsSelf(),
+                effect=DrawCards(amount=1),
+            ),
+        ),
+    )
+    py_riddler = py_state.new_object(
+        riddler_printing, owner_id=0, zone=Zone.HAND,
+    )
+    py_state.players[0].hand.append(py_riddler)
+    py_p0_hand_before = len(py_state.players[0].hand)
+    py_p0_lib_before = len(py_state.players[0].library)
+    # Cast: move from hand to stack via direct StackItem push (same
+    # bypass-mana-cost shape as the wurm probe).
+    py_riddler.zone = Zone.STACK
+    py_state.players[0].hand.remove(py_riddler)
+    py_state.stack.append(
+        StackItem(source=py_riddler, controller_id=0)
+    )
+    py_resolve(py_state)
+    assert any(
+        o.printing.name == "Quantum Riddler"
+        for o in py_state.battlefield
+    )
+    assert len(py_state.stack) == 1, (
+        "Python: Quantum Riddler's ETB DrawCards(1) trigger should be "
+        "on the stack post-resolve"
+    )
+
+    # ---- Drain both stacks, then compare ----
+    _drain_stack_both(py_state, rust_state)
+
+    # Post-drain: each engine's p0 hand grew by 1 vs the pre-cast
+    # snapshot (the Riddler itself was injected into the hand and
+    # then went to bf, so its passage through hand is net-zero --
+    # the +1 we see comes from the ETB DrawCards). The pre-cast
+    # snapshots above were taken AFTER the riddler was injected on
+    # both engines, so both deltas are +1 net.
+    rust_p0_hand_after = rust_state.hand_sizes[0]
+    rust_p0_lib_after = rust_state.library_sizes[0]
+    py_p0_hand_after = len(py_state.players[0].hand)
+    py_p0_lib_after = len(py_state.players[0].library)
+
+    # The pre-cast hand snapshot included the riddler; post-cast the
+    # riddler is on bf, BUT the ETB drew exactly 1 card from the
+    # library into the hand. Net delta: hand size unchanged
+    # (-1 for riddler leaving hand, +1 for the draw), library -1.
+    assert rust_p0_hand_after == rust_p0_hand_before, (
+        f"Rust p0 hand should be unchanged (riddler leaves hand "
+        f"to bf, +1 draw replaces it): before={rust_p0_hand_before} "
+        f"after={rust_p0_hand_after}"
+    )
+    assert rust_p0_lib_after == rust_p0_lib_before - 1, (
+        f"Rust p0 library should shrink by 1 (the draw): "
+        f"before={rust_p0_lib_before} after={rust_p0_lib_after}"
+    )
+    assert py_p0_hand_after == py_p0_hand_before, (
+        f"Python p0 hand should be unchanged (riddler leaves hand "
+        f"to bf, +1 draw replaces it): before={py_p0_hand_before} "
+        f"after={py_p0_hand_after}"
+    )
+    assert py_p0_lib_after == py_p0_lib_before - 1, (
+        f"Python p0 library should shrink by 1 (the draw): "
+        f"before={py_p0_lib_before} after={py_p0_lib_after}"
+    )
+
+    # Cross-engine: same final library / hand sizes.
+    assert rust_p0_hand_after == py_p0_hand_after
+    assert rust_p0_lib_after == py_p0_lib_after
+    assert rust_state.hand_sizes[1] == len(py_state.players[1].hand)
+    assert rust_state.library_sizes[1] == len(py_state.players[1].library)
