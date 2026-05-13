@@ -12816,3 +12816,287 @@ def test_cross_engine_real_eoe_cryogen_relic_etb_draw_parity(
     assert rust_state.get_life(1) == 20
     assert py_state.players[0].life == 20
     assert py_state.players[1].life == 20
+
+
+def test_cross_engine_real_eoe_nebula_dragon_etb_damage_any_target_parity(
+    parity_smoke,
+):
+    """Probe: Nebula Dragon (EoE) ETB ``deal 3 damage to any target``
+    parity -- FIRST real-EoE cross-engine probe with a TARGETED-damage
+    ETB trigger.
+
+    Oracle text in ``data/edge_of_eternities.json``:
+
+        "Flying
+         When this creature enters, it deals 3 damage to any target."
+
+    Bridges the ``deal_damage_any_target`` effect kind end-to-end on a
+    real EoE card. Every prior cross-engine ETB-trigger probe used an
+    UNTARGETED effect (DrawCards / GainLife / DamageEachOpponent); this
+    probe is the first to exercise the TARGETED-damage shape where
+    Python's push-time agent.choose_target() must produce the SAME
+    target Rust's deterministic at-apply-time scan picks.
+
+    Predicate decomposition (same as Germinating Wurm / Quantum
+    Riddler / Cryogen Relic):
+
+        SourceIsSelf
+
+    Effect: ``deal_damage_any_target(amount=3)`` -- NEW on the bridge
+    as of the companion commit on this branch. The Rust effect
+    variant carries the I67 controller-of-effect fix
+    (``defender_idx = 1 - source_controller`` via
+    ``current_resolve_source_controller``); the Python side translates
+    to ``DealDamageAnyTarget(amount=3)`` (constructor sugar over
+    ``DealDamage`` with an intrinsic ``any_target_filter()`` slot).
+
+    **Target-pick parity contract.** Rust's
+    ``Effect::DealDamageAnyTarget`` arm
+    (rust/src/state_ops_resolve.rs:3536-3603) picks the target
+    deterministically at apply_effect time: scan the defender's
+    battlefield top-to-bottom for the first object whose
+    ``card_types`` contains "Creature"; if none, the defender-player
+    takes the damage directly. Python's targeting pipeline picks at
+    PUSH time via the controller's agent in
+    ``push_triggered_ability`` (actions.py:3172). To make both
+    engines pick the same target, the probe drives a scenario where
+    Rust's scan produces an UNAMBIGUOUS pick (p1 has NO creatures on
+    its battlefield, so Rust falls back to the defender-player), and
+    installs a custom ``_PickFirstOpponentTargetAgent`` on p0 that
+    filters Python's ``legal_targets`` to opponent-controlled entries
+    and returns the first. With no opponent creatures, the only
+    legal opponent-side target is the p1 player, which matches
+    Rust's defender-player fallback. The opponent-side filter
+    matches Rust's defender-anchored scan: Rust never picks a
+    same-side creature or its own controller.
+
+    Probe shape (inject-and-fire-ENTERS):
+
+      1. Inject Nebula Dragon directly onto p0's battlefield via
+         ``register_and_inject_object`` (Rust) / new_object + bf
+         append + manual ``_trigger_etb_abilities`` (Python). Cast-
+         from-stack is out of scope -- mana payment isn't on the
+         bridge today, and the ``register_and_inject_object`` path
+         is the canonical inject-and-dispatch-ENTERS shape used by
+         every prior EoE probe (Tannuk, Eumidian, Haliya). Both
+         engines dispatch ENTERS for the just-arrived dragon; the
+         predicate (SourceIsSelf) matches, the trigger lands on the
+         stack with its target pre-chosen.
+
+      2. Both engines: stack carries ONE pending DealDamageAnyTarget
+         trigger. Drain. Resolve walk: the chosen target (p1 player
+         on both sides) takes 3 damage. p1 life 20 -> 17.
+
+      3. Cross-engine assert: both engines reduced p1 life to 17;
+         p0 life unchanged (controller-immune, the trigger's
+         deterministic any-target pick targets the defender side).
+
+    Out of scope:
+
+      * Flying keyword (static evasion) -- irrelevant to the ETB-
+        trigger contract; no combat in this probe.
+      * Cast-from-hand mana cost ({6}{R}) -- the inject-and-
+        dispatch-ENTERS pattern bypasses the mana pipeline (same
+        treatment every prior real-EoE probe gives the cast-cost,
+        for the same reason).
+      * "First opponent creature" target arm -- targeting a creature
+        instead of a player is a separate test surface that needs
+        the creature's damage / SBA-death pipeline; covered in a
+        follow-up probe slice. This probe stays on the
+        defender-as-player fallback to keep the cross-engine pick
+        unambiguous on a minimal bf.
+
+    Expected post-dispatch + post-drain state on BOTH engines:
+
+      * Nebula Dragon on p0's battlefield.
+      * p0 life: unchanged at 20.
+      * p1 life: 20 -> 17 (-3 from the ETB any-target burn).
+      * No residual stack.
+    """
+    from mtg_bot.agents import Agent
+    from mtg_bot.parity.cross_engine import (
+        CardDef, DeckSpec, build_python_state, build_rust_state,
+    )
+
+    nebula_dragon = CardDef(
+        name="Nebula Dragon",
+        card_type="Creature",
+        mana_cost_generic=6,
+        mana_cost_colored=(("R", 1),),
+        power=4,
+        toughness=4,
+        triggered_abilities=(
+            {
+                "event": "enters",
+                "predicate": {"kind": "source_is_self"},
+                "effect": {
+                    "kind": "deal_damage_any_target",
+                    "amount": 3,
+                },
+            },
+        ),
+    )
+    spec = DeckSpec(
+        card_defs=(nebula_dragon,),
+        # Libraries empty-but-for-symmetry: probe injects directly
+        # onto bf so libraries aren't observed.
+        p0_library=(),
+        p1_library=(),
+    )
+    py_state = build_python_state(spec)
+    rust_state = build_rust_state(spec)
+
+    # ---- Rust side ----
+    ZONE_BATTLEFIELD = 2
+    rust_nebula_dict = {
+        "name": "Nebula Dragon",
+        "card_types": ["Creature"],
+        "mana_cost": {"generic": 6, "R": 1},
+        "effects": [],
+        "power": 4,
+        "toughness": 4,
+        "triggered_abilities": [
+            {
+                "event": "enters",
+                "predicate": {"kind": "source_is_self"},
+                "effect": {
+                    "kind": "deal_damage_any_target",
+                    "amount": 3,
+                },
+            }
+        ],
+    }
+    rust_p0_life_before = rust_state.get_life(0)
+    rust_p1_life_before = rust_state.get_life(1)
+    rust_nebula_id = rust_state.register_and_inject_object(
+        rust_nebula_dict, 0, ZONE_BATTLEFIELD
+    )
+    # register_and_inject_object on ZONE_BATTLEFIELD fans out ENTERS via
+    # the deferred-dispatch queue; Nebula Dragon's SourceIsSelf
+    # predicate matches its own arrival, so a single DealDamageAnyTarget
+    # trigger lands on the stack with its target deterministically
+    # picked (scan defender's bf for first creature -- none -- fall
+    # back to defender-player).
+    assert rust_state.stack_size() == 1, (
+        "Rust: Nebula Dragon's own arrival should fire the SourceIsSelf "
+        "ENTERS trigger and land DealDamageAnyTarget on the stack. "
+        f"Got stack_size={rust_state.stack_size()}"
+    )
+
+    # ---- Python side ----
+    from mtg_bot.actions import _trigger_etb_abilities
+    from mtg_bot.cards.base import CardPrinting, ManaCost
+    from mtg_bot.effects.base import TriggeredAbility
+    from mtg_bot.effects.generic.damage import DealDamageAnyTarget
+    from mtg_bot.effects.predicates import Event, IsSelf
+    from mtg_bot.game import Zone
+
+    nebula_printing = CardPrinting(
+        name="Nebula Dragon",
+        mana_cost_str="",
+        mana_cost=ManaCost(generic=6, colored=(("R", 1),)),
+        type_line="Creature",
+        supertypes=(),
+        card_types=("Creature",),
+        subtypes=(),
+        power=4,
+        toughness=4,
+        produces=frozenset(),
+        triggered_abilities=(
+            TriggeredAbility(
+                event=Event.ENTERS,
+                predicate=IsSelf(),
+                effect=DealDamageAnyTarget(amount=3),
+            ),
+        ),
+    )
+
+    # Custom agent: mimic Rust's defender-anchored target pick. Rust's
+    # DealDamageAnyTarget arm scans defender's bf for the first
+    # creature, else damages the defender-player. The Python agent
+    # achieves the same observable pick by filtering legal_targets to
+    # opponent-controlled entries and returning the first -- in a 2-
+    # player game where the defender == source's opponent, this matches
+    # Rust's scan exactly.
+    class _PickFirstOpponentTargetAgent(Agent):
+        """Pick the first opponent-controlled / opponent-player target.
+
+        Mirrors Rust's ``Effect::DealDamageAnyTarget`` deterministic
+        target selection: scan defender's bf for first creature, else
+        defender-player. For a probe driven by p0 (active_player) on
+        an empty p1 bf, both engines pick the p1 player.
+        """
+
+        def choose_target(self, state, player_id, legal_targets):
+            if not legal_targets:
+                return None
+            for kind, target_id in legal_targets:
+                if kind == "player":
+                    if target_id != player_id:
+                        return (kind, target_id)
+                else:
+                    # Creature / planeswalker / battle / permanent --
+                    # check controller via the battlefield object lookup.
+                    obj = next(
+                        (
+                            o
+                            for o in state.battlefield
+                            if o.id == target_id
+                        ),
+                        None,
+                    )
+                    if obj is not None and obj.controller_id != player_id:
+                        return (kind, target_id)
+            # No opponent-side legal target found. Fall back to the
+            # first legal target (defensive; the harness scenario
+            # always has at least p1 as a player target since
+            # any_target_filter admits players).
+            return legal_targets[0]
+
+    py_state.players[0].agent = _PickFirstOpponentTargetAgent()
+
+    py_nebula = py_state.new_object(
+        nebula_printing, owner_id=0, zone=Zone.BATTLEFIELD,
+    )
+    py_nebula.summoning_sick = False
+    py_nebula.tapped = False
+    py_nebula.damage = 0
+    py_nebula.etb_timestamp = py_state.next_timestamp
+    py_state.next_timestamp += 1
+    py_state.battlefield.append(py_nebula)
+    py_p0_life_before = py_state.players[0].life
+    py_p1_life_before = py_state.players[1].life
+    # Manually dispatch ENTERS for the just-injected dragon. (Direct
+    # bf-append doesn't auto-dispatch on the Python side; the
+    # `_trigger_etb_abilities` call is the established shape from prior
+    # injection-shape probes like the Cryogen-Relic / Haliya bait-arm
+    # patterns.)
+    _trigger_etb_abilities(py_state, py_nebula)
+    assert len(py_state.stack) == 1, (
+        "Python: Nebula Dragon's own arrival should fire the IsSelf "
+        "ENTERS trigger and land DealDamageAnyTarget on the stack. "
+        f"Got stack size={len(py_state.stack)}"
+    )
+
+    # ---- Drain both stacks, then compare ----
+    _drain_stack_both(py_state, rust_state)
+
+    # Post-drain: -3 life on p1 from the ETB any-target burn. p0
+    # unchanged (controller of the source, defender-anchored target
+    # pick targets the opposite side).
+    assert rust_state.get_life(0) == rust_p0_life_before, (
+        f"Rust p0 life should be unchanged ({rust_p0_life_before}); "
+        f"got {rust_state.get_life(0)}"
+    )
+    assert rust_state.get_life(1) == rust_p1_life_before - 3, (
+        f"Rust p1 life should be {rust_p1_life_before - 3} "
+        f"(-3 from the any-target burn); got {rust_state.get_life(1)}"
+    )
+    assert py_state.players[0].life == py_p0_life_before
+    assert py_state.players[1].life == py_p1_life_before - 3
+    # Cross-engine: same post-drain life totals on both seats.
+    assert rust_state.get_life(0) == py_state.players[0].life
+    assert rust_state.get_life(1) == py_state.players[1].life
+    # Stacks empty on both sides.
+    assert rust_state.stack_size() == 0
+    assert len(py_state.stack) == 0
