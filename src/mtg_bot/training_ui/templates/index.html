@@ -1717,6 +1717,43 @@ setInterval(refresh, REFRESH_MS);
         document.getElementById(id).classList.toggle('open');
       });
     });
+    // Wire linked-field reactivity. Any spec that carries a
+    // ``linked_field_values`` map gets a change listener that
+    // updates the target fields when the source value changes.
+    // Used today by bootstrap-version → architecture (iterate
+    // hard-errors on a mismatch).
+    schema.forEach(section => section.args.forEach(arg => {
+      const links = arg.linked_field_values;
+      if (!links) return;
+      const srcEl = formHost.querySelector(
+        '[data-arg="' + arg.name + '"]',
+      );
+      if (!srcEl) return;
+      srcEl.addEventListener('change', () => {
+        const newSrc = srcEl.value;
+        Object.entries(links).forEach(([targetArg, valueMap]) => {
+          const targetEl = formHost.querySelector(
+            '[data-arg="' + targetArg + '"]',
+          );
+          if (!targetEl) return;
+          const newTarget = valueMap[newSrc];
+          if (newTarget === undefined) return;
+          // <select> only — the only consumer today. Set the
+          // value AND flash the field amber so the user notices
+          // it auto-updated.
+          if (targetEl.tagName === 'SELECT'
+              && Array.from(targetEl.options).some(
+                  o => o.value === newTarget)) {
+            targetEl.value = newTarget;
+            targetEl.style.transition = 'background-color 0.6s';
+            targetEl.style.backgroundColor = '#4c2d1d';
+            setTimeout(() => {
+              targetEl.style.backgroundColor = '';
+            }, 600);
+          }
+        });
+      });
+    }));
     submitBtn.disabled = false;
   }
 

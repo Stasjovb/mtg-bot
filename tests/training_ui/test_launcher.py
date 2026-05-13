@@ -435,7 +435,10 @@ def test_build_schema_populates_versions_newest_first(
 
 def test_build_schema_default_is_current_best(tmp_path: Path) -> None:
     """When iterate_state.json names a current_best, the dropdown
-    pre-selects it AND tags its label."""
+    pre-selects it AND tags its label. The architecture default also
+    tracks the current_best's stored architecture so the form's
+    auto-spawn matches what iterate validates against (architectures
+    aren't cross-loadable)."""
     _make_fake_registry(
         tmp_path,
         versions=[("v1", "shared"),
@@ -451,6 +454,36 @@ def test_build_schema_default_is_current_best(tmp_path: Path) -> None:
     assert labels["v2"] == "v2 (structured, current best)"
     assert labels["v3"] == "v3 (structured)"
     assert labels["v1"] == "v1 (shared)"
+    # Linked-field map present so the frontend can update
+    # --architecture when bootstrap-version changes.
+    linked = spec["linked_field_values"]
+    assert linked == {
+        "architecture": {
+            "v1": "shared",
+            "v2": "structured",
+            "v3": "structured",
+        },
+    }
+    # --architecture default tracks the current_best's arch.
+    arch_spec = next(a for s in schema for a in s["args"]
+                     if a["name"] == "architecture")
+    assert arch_spec["default"] == "structured"
+
+
+def test_build_schema_architecture_default_falls_back_to_shared(
+    tmp_path: Path,
+) -> None:
+    """No current_best (no iterate_state.json) → --architecture
+    default stays at 'shared' (matches iterate's argparse default)."""
+    _make_fake_registry(
+        tmp_path,
+        versions=[("v1", "shared"), ("v2", "structured")],
+        current_best=None,
+    )
+    schema = build_iterate_schema(registry_root=tmp_path)
+    arch_spec = next(a for s in schema for a in s["args"]
+                     if a["name"] == "architecture")
+    assert arch_spec["default"] == "shared"
 
 
 def test_build_schema_missing_registry_is_defensive(

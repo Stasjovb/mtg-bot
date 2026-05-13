@@ -149,8 +149,8 @@ def _is_under(path: Path, root: Path) -> bool:
 
 def _list_registered_versions(
     registry_root: Path,
-) -> tuple[list[str], dict[str, str], Optional[str]]:
-    """Return ``(versions_newest_first, labels, current_best)``.
+) -> tuple[list[str], dict[str, str], Optional[str], dict[str, str]]:
+    """Return ``(versions, labels, current_best, architectures)``.
 
     - ``versions_newest_first`` is the list of complete version IDs in
       the registry, sorted newest first so the dropdown reads top-down
@@ -163,15 +163,19 @@ def _list_registered_versions(
       ``<registry_root>/iterate_state.json``'s ``current_best`` field,
       or ``None`` when iterate_state.json is absent / malformed. Used
       as the default-selected option in the dropdown.
+    - ``architectures`` maps each version to its ``metadata.architecture``
+      string. Used by the frontend to live-update the ``--architecture``
+      dropdown when the user changes the bootstrap-version selection
+      (iterate hard-errors on a mismatch).
 
     Defensive: a missing or unreadable registry directory yields
-    ``([], {}, None)`` rather than raising — the UI can still load,
-    and the user gets an empty dropdown with a help hint to point at
-    the right directory.
+    ``([], {}, None, {})`` rather than raising — the UI can still
+    load, and the user gets an empty dropdown with a help hint to
+    point at the right directory.
     """
     registry_root = Path(registry_root)
     if not registry_root.is_dir():
-        return [], {}, None
+        return [], {}, None, {}
     # Late import: registry depends on the rest of the package, which
     # we don't want pulled in at module import time for tests that
     # only construct schemas.
@@ -181,7 +185,7 @@ def _list_registered_versions(
         registry = Registry(registry_root)
         versions_oldest_first = registry.list_versions()
     except Exception:  # noqa: BLE001 - defensive
-        return [], {}, None
+        return [], {}, None, {}
 
     versions = list(reversed(versions_oldest_first))
 
@@ -200,19 +204,22 @@ def _list_registered_versions(
             pass
 
     labels: dict[str, str] = {}
+    architectures: dict[str, str] = {}
     for v in versions:
         try:
             meta = registry.load_metadata(v)
         except Exception:  # noqa: BLE001 - defensive
             labels[v] = v
+            architectures[v] = "shared"
             continue
         # ``architecture`` may not be set on legacy metadata; default
         # to the canonical "shared" so the label still distinguishes
         # the new structured chain.
         arch = getattr(meta, "architecture", None) or "shared"
+        architectures[v] = arch
         suffix = f"{arch}, current best" if v == current_best else arch
         labels[v] = f"{v} ({suffix})"
-    return versions, labels, current_best
+    return versions, labels, current_best, architectures
 
 
 def build_iterate_schema(
@@ -247,11 +254,13 @@ def build_iterate_schema(
         bootstrap_choices: list[str] = []
         bootstrap_labels: dict[str, str] = {}
         bootstrap_default: Optional[str] = None
+        version_architectures: dict[str, str] = {}
     else:
         (
             bootstrap_choices,
             bootstrap_labels,
             bootstrap_default,
+            version_architectures,
         ) = _list_registered_versions(registry_root)
 
     _PRODUCTION_DECK_POOL = "data/17lands/eoe_decks.json.gz"
@@ -281,13 +290,21 @@ def build_iterate_schema(
         "default": bootstrap_default,
         "choices": bootstrap_choices,
         "choice_labels": bootstrap_labels,
+        # JS-side reactivity: when the user changes the bootstrap
+        # dropdown, the frontend reads this map and updates the
+        # --architecture dropdown to the matching arch. iterate hard-
+        # errors on a mismatch (architectures aren't cross-loadable),
+        # so getting the form to "Just Work" requires this link.
+        "linked_field_values": {
+            "architecture": version_architectures,
+        },
         "help": (
             "Registered version to start from. Iter_001's self-play "
             "uses this as both seats' weights; v_N+1 then competes "
             "against this version in the eval gate. iterate inherits "
-            "hidden_sizes / architecture / action_encoding_version "
-            "from this version's metadata so the trained chain stays "
-            "structurally consistent."
+            "hidden_sizes / action_encoding_version from this "
+            "version's metadata; --architecture must MATCH this "
+            "version's architecture (not cross-loadable)."
         ),
     }
     deck_pool_spec: dict[str, Any] = {
@@ -446,7 +463,18 @@ def build_iterate_schema(
                 {
                     "name": "architecture", "type": "choice",
                     "choices": ["shared", "separate", "structured"],
-                    "default": "shared",
+                    # Default tracks the current_best's architecture
+                    # (when known) so picking the pre-selected
+                    # bootstrap "just works" — architectures aren't
+                    # cross-loadable and iterate hard-errors on a
+                    # mismatch. JS reactivity updates this when the
+                    # bootstrap dropdown changes.
+                    "default": (
+                        version_architectures.get(bootstrap_default,
+                                                  "shared")
+                        if bootstrap_default
+                        else "shared"
+                    ),
                     "help": (
                         "Dual-head model class. 'shared' = single-trunk "
                         "_ValuePolicyMLP. 'separate' = parallel value+"
@@ -454,7 +482,9 @@ def build_iterate_schema(
                         "transformer trunk (per-object tokens + "
                         "printing embeddings + last-N action tokens). "
                         "Not cross-loadable — switching forms a fresh "
-                        "v-chain."
+                        "v-chain. Must match the bootstrap version's "
+                        "architecture; the form auto-updates when "
+                        "you change bootstrap-version."
                     ),
                 },
                 {
