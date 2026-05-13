@@ -99,6 +99,31 @@ RUST_TO_PYTHON_OVERRIDES: dict[str, str] = {
     "DamageEachOpponent": "DealDamageEachOpponent",
     "DamageEachCreature": "DealNDamageToEachCreature",
     "DealDamageAnyTarget": "DealDamageAnyTarget",
+    # Rust ``ChooseOneMode`` is the modal-choice combinator family head;
+    # the Python equivalent is ``ModalChooseOne`` (in
+    # ``effects/combinators.py``). The naming diverged when the
+    # Rust-side parity bridge ported the discriminator first.
+    "ChooseOneMode": "ModalChooseOne",
+    # Rust ``GrantKeywordToTargetCreatureUntilEOT`` is the
+    # parametric grant-arbitrary-keyword-UEOT primitive. Python doesn't
+    # have a 1:1 generic class; the closest in-pool consumer is
+    # ``GrantUnblockableUEOT`` (subclass of the keyword-specific
+    # ``GrantUnblockable``). 1:N — multiple Python classes could match
+    # depending on the keyword being granted; this picks the
+    # highest-frequency one in the EoE pool.
+    "GrantKeywordToTargetCreatureUntilEOT": "GrantUnblockableUEOT",
+    # Rust ``ReturnArtifactOrCreatureFromYourGraveyardToHand`` and
+    # ``ReturnCreatureOrSpacecraftFromYourGraveyardToHand`` are
+    # additive bespoke variants extending the bare
+    # ``ReturnCreatureFromYourGraveyardToHand`` family with rider
+    # widenings (or_artifact, or_spacecraft). Python keeps a single
+    # unified class ``ReturnCreatureFromYourGraveyardToHand`` and
+    # toggles the rider via constructor flags — both Rust variants
+    # share the Python class.
+    "ReturnArtifactOrCreatureFromYourGraveyardToHand":
+        "ReturnCreatureFromYourGraveyardToHand",
+    "ReturnCreatureOrSpacecraftFromYourGraveyardToHand":
+        "ReturnCreatureFromYourGraveyardToHand",
 }
 
 # Rust variants that have NO direct Python counterpart in the current
@@ -112,6 +137,12 @@ RUST_AHEAD_OF_POOL: set[str] = {
     # in-pool sibling). When a pool with scry-bearing cards is added,
     # remove this entry and add an override or 1:1 ``ScryN`` class.
     "ScryN",
+    # Rust ``SetBasePTUntilEOT`` is a base-PT-overwrite primitive (sets
+    # the target's base P/T to a fixed value until end of turn) that
+    # has no in-pool Python consumer yet. The Rust bridge needs it for
+    # parity tests against a future card; add the matching Python class
+    # when an EoE card surfaces a consumer.
+    "SetBasePTUntilEOT",
 }
 
 

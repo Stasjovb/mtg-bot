@@ -483,11 +483,14 @@ def test_build_dual_head_model_dispatch():
     with pytest.raises(ValueError, match="unknown architecture"):
         _build_dual_head_model("nonsense")
     # ``structured`` is recognized but routes through a separate
-    # trainer — this MLP-flavored builder must reject it loudly so a
+    # builder — this MLP-flavored builder must reject it loudly so a
     # future caller can't accidentally instantiate an MLP trunk for a
-    # structured-architecture version.
+    # structured-architecture version. The error message updated from
+    # "train_structured_model" to "_build_structured_model" when the
+    # loader-side dispatch moved out of the trainer into a dedicated
+    # builder; pin the new message.
     with pytest.raises(
-        ValueError, match="train_structured_model",
+        ValueError, match="_build_structured_model",
     ):
         _build_dual_head_model("structured")
 

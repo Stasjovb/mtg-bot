@@ -120,14 +120,22 @@ def test_clone_preserves_registry_lookups():
 
 
 def test_gameobject_byte_size_is_compact():
-    """Regression backstop: the POD GameObject (id, printing_id,
-    controller, zone, tapped, summoning_sick, damage, counters,
-    attached_to, ueot_modifiers) fits in a small fixed-size struct.
-    Bound bumped from 32 -> 64 when Round-27 added
-    ``ueot_modifiers: Vec<UeotModifier>`` (Vec adds 24 bytes —
-    ptr+len+cap header — even when empty) and Round-28 added
-    ``attached_to: Option<u32>`` (8 bytes with alignment). Catches
-    further field-creep that would blow past 64 bytes (e.g. a
+    """Regression backstop: the POD GameObject fits in a small
+    fixed-size struct.
+
+    Growth log:
+    - 32 -> 64: Round-27 added ``ueot_modifiers: Vec<UeotModifier>``
+      (Vec adds 24 bytes — ptr+len+cap header — even when empty) and
+      Round-28 added ``attached_to: Option<u32>`` (8 bytes with
+      alignment).
+    - 64 -> 80: CE20 added ``charge_counters: i32`` (Spacecraft
+      station, +4) and ``loyalty_counters: i32`` (planeswalker, +4),
+      plus Round-28's ``exiled_with_source: Option<u32>`` ("exile
+      until source leaves" linkage, +8). The natural size is now 72
+      bytes; bound the upper to 80 to leave one ``Option<u32>``-shaped
+      slot of headroom before the next bump.
+
+    Catches further field-creep that would blow past 80 bytes (e.g. a
     String, an Arc-of-anything)."""
     sz = mtg_bot_engine.gameobject_byte_size()
-    assert 16 <= sz <= 64, f"GameObject size unexpected: {sz} bytes"
+    assert 16 <= sz <= 80, f"GameObject size unexpected: {sz} bytes"
