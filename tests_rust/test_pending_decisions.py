@@ -3852,3 +3852,413 @@ def test_fingerprint_differs_by_counter_amount(engine):
     fp1 = s1.fingerprint()
     fp2 = s2.fingerprint()
     assert fp1 != fp2
+
+
+# =====================================================================
+# I61 — pending-decision dispatchers route the source's controller
+# through to inner controller-of-effect arms.
+# =====================================================================
+#
+# Before I61 the pending-decision submit / auto-resolve dispatchers
+# called the plain ``apply_effect_pub(state, effect, source_id)``
+# helper, which left ``state.current_resolve_source_controller``
+# untouched. The inner ``DrawCards`` / ``GainLife`` arms then fell
+# back to ``state.active_player`` for the controller-of-effect
+# resolution — wrong when the resolving spell / triggered ability had
+# a controller != active_player.
+#
+# Latent today (current EoE printings happen to have ``active_player
+# == source_controller`` in the regression suite), but real cards
+# emerge — e.g. an opponent's ETB → "you may [draw a card]" trigger
+# resolves during the controller's turn, where the may-do is
+# controlled by the trigger's owner, NOT the active player.
+#
+# Post-I61 every submit / auto-resolve dispatcher calls
+# ``apply_effect_pub_with_controller(state, effect, source_id,
+# pd.controller)`` instead. These tests pin the per-dispatcher
+# routing.
+
+
+def _cross_controller_may_do_draw_dict(count=1):
+    """A MayDo whose inner effect is draw_cards N. Used to verify the
+    inner draw routes to the source's controller, not active_player."""
+    return {
+        "name": f"Test Cross-Ctrl MayDo Draw {count}",
+        "card_types": ["Instant"],
+        "mana_cost": {"U": 1},
+        "effects": [
+            {
+                "kind": "may_do",
+                "inner_effect": {"kind": "draw_cards", "count": count},
+            }
+        ],
+    }
+
+
+def _cross_controller_may_do_gain_dict(amount=2):
+    """A MayDo whose inner effect is gain_life N. Used to verify the
+    inner gain-life routes to the source's controller."""
+    return {
+        "name": f"Test Cross-Ctrl MayDo Gain {amount}",
+        "card_types": ["Instant"],
+        "mana_cost": {"W": 1},
+        "effects": [
+            {
+                "kind": "may_do",
+                "inner_effect": {"kind": "gain_life", "amount": amount},
+            }
+        ],
+    }
+
+
+def test_submit_may_do_yes_routes_draw_to_source_controller_not_active_player(
+    engine,
+):
+    """**I61 regression pin.** On p0's turn (active_player=0), a
+    cross-controller MayDo(DrawCards) controlled by p1 resolves
+    via ``resolve_top_of_stack_pause`` → ``submit_may_do_decision(True)``.
+    Pre-I61 the inner DrawCards would have fallen back to
+    ``state.active_player`` → p0; post-I61 it threads p1
+    (the source's controller) and the card lands in p1's hand.
+    """
+    state = engine.make_synthetic_state(
+        num_battlefield=0, num_hand=0, num_library=5
+    )
+    assert state.active_player == 0
+
+    spell_id = state.register_and_inject_object(
+        _cross_controller_may_do_draw_dict(count=1), 1, ZONE_HAND
+    )
+    p0_lib_before = state.library_sizes[0]
+    p1_lib_before = state.library_sizes[1]
+
+    state.push_to_stack(spell_id, 1)  # controller=1, NOT active_player
+    state.resolve_top_of_stack_pause()
+    # The MayDo pushed a PendingDecision; the inner draw has NOT
+    # fired yet.
+    assert state.has_pending_decision() is True
+    pd = state.pending_decisions()[0]
+    assert pd["kind"] == "MayDoChoice"
+    assert pd["controller"] == 1
+
+    # Submit "yes" — inner draw must route to p1.
+    state.submit_may_do_decision(True)
+
+    # Post-I61: p1 (source controller) drew 1; p0 (active_player) did NOT.
+    assert state.library_sizes[1] == p1_lib_before - 1
+    assert state.library_sizes[0] == p0_lib_before
+
+
+def test_auto_resolve_may_do_yes_routes_draw_to_source_controller(engine):
+    """**I61 regression pin — auto-resolve path.** The
+    ``auto_resolve_pending_decisions("default" | "may_do_yes")`` arm
+    must thread the source's controller through to the inner draw,
+    same as the manual submit dispatcher.
+    """
+    state = engine.make_synthetic_state(
+        num_battlefield=0, num_hand=0, num_library=5
+    )
+    spell_id = state.register_and_inject_object(
+        _cross_controller_may_do_draw_dict(count=1), 1, ZONE_HAND
+    )
+    p0_lib_before = state.library_sizes[0]
+    p1_lib_before = state.library_sizes[1]
+
+    state.push_to_stack(spell_id, 1)
+    # Use the auto-resolving entry — exercises the auto-resolve match
+    # arm at the top of the file, NOT the manual submit dispatcher.
+    state.resolve_top_of_stack()
+
+    assert state.has_pending_decision() is False
+    assert state.library_sizes[1] == p1_lib_before - 1
+    assert state.library_sizes[0] == p0_lib_before
+
+
+def test_submit_may_do_yes_routes_gain_life_to_source_controller(engine):
+    """**I61 regression pin — GainLife sibling.** Same cross-controller
+    shape as the DrawCards pin above but the inner effect is
+    ``gain_life``. Validates that the controller threading covers
+    both controller-of-effect arms migrated under I59 / I60.
+    """
+    state = engine.make_synthetic_state()
+    assert state.active_player == 0
+
+    spell_id = state.register_and_inject_object(
+        _cross_controller_may_do_gain_dict(amount=2), 1, ZONE_HAND
+    )
+    p0_life_before = state.life_totals[0]
+    p1_life_before = state.life_totals[1]
+
+    state.push_to_stack(spell_id, 1)
+    state.resolve_top_of_stack_pause()
+    assert state.pending_decisions()[0]["controller"] == 1
+
+    state.submit_may_do_decision(True)
+
+    # Post-I61: p1 (source controller) gained 2; p0 did NOT.
+    assert state.life_totals[1] == p1_life_before + 2
+    assert state.life_totals[0] == p0_life_before
+
+
+def test_submit_may_do_no_does_not_leak_swap(engine):
+    """**I61 hygiene pin.** A ``submit_may_do_decision(False)`` drops
+    the inner effect — the controller swap is never set in this
+    case (no apply_effect call). A subsequent direct
+    ``apply_effect_pub`` call should still fall back to
+    active_player (no leaked Some(controller) from a never-fired
+    swap).
+    """
+    state = engine.make_synthetic_state(
+        num_battlefield=0, num_hand=0, num_library=5
+    )
+    spell_id = state.register_and_inject_object(
+        _cross_controller_may_do_draw_dict(count=1), 1, ZONE_HAND
+    )
+    p0_lib_before = state.library_sizes[0]
+    p1_lib_before = state.library_sizes[1]
+
+    state.push_to_stack(spell_id, 1)
+    state.resolve_top_of_stack_pause()
+
+    state.submit_may_do_decision(False)
+
+    # No draw fired anywhere.
+    assert state.library_sizes[0] == p0_lib_before
+    assert state.library_sizes[1] == p1_lib_before
+    assert state.has_pending_decision() is False
+
+
+def _cross_controller_if_you_do_dict(draw_count=1, gain_amount=1):
+    """An IfYouDo(MayDo(draw_cards), gain_life) variant — both inner
+    actions are controller-of-effect arms so we can pin BOTH route
+    correctly when the source's controller differs from active_player.
+
+    Note: the first-slice IfYouDo expects ``do_action`` to be a MayDo
+    (collapses to a single yes/no). On the yes path the dispatcher
+    applies do_action then then_action; the inner MayDo pushes a
+    NESTED MayDoChoice onto the queue, which the test then drains to
+    fire the inner draw.
+    """
+    return {
+        "name": f"Test Cross-Ctrl IfYouDo Draw{draw_count} Gain{gain_amount}",
+        "card_types": ["Instant"],
+        "mana_cost": {"U": 1, "W": 1},
+        "effects": [
+            {
+                "kind": "if_you_do",
+                "do_action": {
+                    "kind": "may_do",
+                    "inner_effect": {"kind": "draw_cards", "count": draw_count},
+                },
+                "then_action": {"kind": "gain_life", "amount": gain_amount},
+            }
+        ],
+    }
+
+
+def test_submit_if_you_do_yes_routes_both_inner_actions_to_source_controller(
+    engine,
+):
+    """**I61 regression pin.** Cross-controller IfYouDo(MayDo(draw),
+    gain_life) controlled by p1 on p0's turn: post-I61 the
+    then-gain lands on p1 (immediate); the do-action's nested
+    MayDoChoice is pushed with controller=1 (so when drained it
+    also routes to p1).
+    """
+    state = engine.make_synthetic_state(
+        num_battlefield=0, num_hand=0, num_library=5
+    )
+    spell_id = state.register_and_inject_object(
+        _cross_controller_if_you_do_dict(draw_count=1, gain_amount=1),
+        1,
+        ZONE_HAND,
+    )
+    p0_lib_before = state.library_sizes[0]
+    p1_lib_before = state.library_sizes[1]
+    p0_life_before = state.life_totals[0]
+    p1_life_before = state.life_totals[1]
+
+    state.push_to_stack(spell_id, 1)
+    state.resolve_top_of_stack_pause()
+    assert state.pending_decisions()[0]["kind"] == "IfYouDoChoice"
+    assert state.pending_decisions()[0]["controller"] == 1
+
+    state.submit_if_you_do_decision(True)
+
+    # then_action (gain_life) fired immediately; do_action (MayDo)
+    # pushed a NESTED MayDoChoice with controller=1.
+    assert state.life_totals[1] == p1_life_before + 1
+    assert state.life_totals[0] == p0_life_before
+    assert state.has_pending_decision() is True
+    nested = state.pending_decisions()[0]
+    assert nested["kind"] == "MayDoChoice"
+    assert nested["controller"] == 1
+
+    # Drain the nested may-do — the inner draw must also route to p1.
+    state.submit_may_do_decision(True)
+    assert state.library_sizes[1] == p1_lib_before - 1
+    assert state.library_sizes[0] == p0_lib_before
+
+
+def _cross_controller_choose_mode_dict():
+    """A ChooseOneMode(draw_cards, gain_life) variant — picks
+    modes[0]=draw via the auto-resolve / submit_choose_mode_decision(0)
+    path. Used to pin cross-controller mode routing.
+    """
+    return {
+        "name": "Test Cross-Ctrl Modal Draw|Gain",
+        "card_types": ["Instant"],
+        "mana_cost": {"U": 1},
+        "effects": [
+            {
+                "kind": "choose_one_mode",
+                "modes": [
+                    {"kind": "draw_cards", "count": 1},
+                    {"kind": "gain_life", "amount": 2},
+                ],
+            }
+        ],
+    }
+
+
+def test_submit_choose_mode_routes_chosen_mode_to_source_controller(engine):
+    """**I61 regression pin.** A modal spell with two
+    controller-of-effect modes (draw vs gain) controlled by p1 on
+    p0's turn — submitting choice 0 (draw) routes to p1.
+    """
+    state = engine.make_synthetic_state(
+        num_battlefield=0, num_hand=0, num_library=5
+    )
+    spell_id = state.register_and_inject_object(
+        _cross_controller_choose_mode_dict(), 1, ZONE_HAND
+    )
+    p0_lib_before = state.library_sizes[0]
+    p1_lib_before = state.library_sizes[1]
+
+    state.push_to_stack(spell_id, 1)
+    state.resolve_top_of_stack_pause()
+    assert state.pending_decisions()[0]["kind"] == "ChooseModeChoice"
+    assert state.pending_decisions()[0]["controller"] == 1
+
+    state.submit_choose_mode_decision(0)  # draw mode
+
+    assert state.library_sizes[1] == p1_lib_before - 1
+    assert state.library_sizes[0] == p0_lib_before
+
+
+def test_submit_choose_mode_gain_life_branch_routes_to_source_controller(engine):
+    """**I61 regression pin — second mode.** Symmetric pin to the
+    draw-mode test above: picking modes[1]=gain_life routes the gain
+    to the source's controller, not active_player.
+    """
+    state = engine.make_synthetic_state()
+    spell_id = state.register_and_inject_object(
+        _cross_controller_choose_mode_dict(), 1, ZONE_HAND
+    )
+    p0_life_before = state.life_totals[0]
+    p1_life_before = state.life_totals[1]
+
+    state.push_to_stack(spell_id, 1)
+    state.resolve_top_of_stack_pause()
+
+    state.submit_choose_mode_decision(1)  # gain_life mode
+
+    assert state.life_totals[1] == p1_life_before + 2
+    assert state.life_totals[0] == p0_life_before
+
+
+def _cross_controller_optional_mana_cost_dict(generic_cost=1, draw_count=1):
+    """An OptionalManaCostThenEffect(draw_cards) printing — the inner
+    effect is a controller-of-effect arm so pre-I61 the draw would
+    have routed to active_player on a pay=True from a cross-
+    controller source.
+    """
+    return {
+        "name": f"Test Cross-Ctrl OptionalCost Draw{draw_count}",
+        "card_types": ["Instant"],
+        "mana_cost": {"U": 1},
+        "effects": [
+            {
+                "kind": "optional_mana_cost_then_effect",
+                "cost": {"generic": generic_cost},
+                "inner_effect": {"kind": "draw_cards", "count": draw_count},
+            }
+        ],
+    }
+
+
+def test_submit_optional_mana_cost_pay_routes_inner_to_source_controller(engine):
+    """**I61 regression pin.** A cross-controller
+    OptionalManaCost(DrawCards) variant — p1 pays the cost and the
+    inner draw routes to p1, not active_player p0.
+    """
+    state = engine.make_synthetic_state(
+        num_battlefield=0, num_hand=0, num_library=5
+    )
+    # Give p1 the generic mana to pay.
+    state.add_mana(1, "C", 1)
+    p1_pool_before = state.get_mana_pool(1)
+    assert p1_pool_before["C"] == 1
+
+    spell_id = state.register_and_inject_object(
+        _cross_controller_optional_mana_cost_dict(generic_cost=1, draw_count=1),
+        1,
+        ZONE_HAND,
+    )
+    p0_lib_before = state.library_sizes[0]
+    p1_lib_before = state.library_sizes[1]
+
+    state.push_to_stack(spell_id, 1)
+    state.resolve_top_of_stack_pause()
+    assert state.pending_decisions()[0]["kind"] == "OptionalManaCostChoice"
+    assert state.pending_decisions()[0]["controller"] == 1
+
+    state.submit_optional_mana_cost_decision(True)
+
+    # p1's pool drained, p1 drew, p0 unaffected.
+    assert state.get_mana_pool(1)["C"] == 0
+    assert state.library_sizes[1] == p1_lib_before - 1
+    assert state.library_sizes[0] == p0_lib_before
+
+
+def test_submit_may_do_swap_restores_after_resolution(engine):
+    """**I61 hygiene pin.** The
+    ``apply_effect_pub_with_controller`` helper saves and restores
+    ``state.current_resolve_source_controller`` around the inner
+    apply. After a complete ``submit_may_do_decision`` resolution
+    the swap must be back to its prior value (None at the top-
+    frame caller), so a SUBSEQUENT direct ``apply_effect_pub``
+    falls back to ``state.active_player`` again.
+
+    Implementation pin: ensures no observable state leaks across
+    the helper call boundary.
+    """
+    state = engine.make_synthetic_state(
+        num_battlefield=0, num_hand=0, num_library=10
+    )
+    # First: resolve a p1-controlled MayDo(draw) — swap goes Some(1)
+    # during the inner apply, then restores.
+    spell_id = state.register_and_inject_object(
+        _cross_controller_may_do_draw_dict(count=1), 1, ZONE_HAND
+    )
+    state.push_to_stack(spell_id, 1)
+    state.resolve_top_of_stack_pause()
+    state.submit_may_do_decision(True)
+    p1_lib_after_first = state.library_sizes[1]
+    p0_lib_after_first = state.library_sizes[0]
+
+    # Now resolve a p0-controlled draw spell — if the swap leaked
+    # Some(1), the draw would route to p1. Post-fix it correctly
+    # falls back to active_player (= the new spell's controller = 0).
+    draw_dict = {
+        "name": "Test Plain Draw",
+        "card_types": ["Instant"],
+        "mana_cost": {"U": 1},
+        "effects": [{"kind": "draw_cards", "count": 1}],
+    }
+    spell2_id = state.register_and_inject_object(draw_dict, 0, ZONE_HAND)
+    state.push_to_stack(spell2_id, 0)
+    state.resolve_top_of_stack()
+
+    assert state.library_sizes[0] == p0_lib_after_first - 1
+    assert state.library_sizes[1] == p1_lib_after_first

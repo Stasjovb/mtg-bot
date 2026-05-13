@@ -4207,6 +4207,117 @@ the forked branch.
   - **Cross-engine smoke probe** for walker activations. Unchanged
     from I56.
 
+### I61. Pending-decision dispatchers + push sites migrated to thread the source's controller — `apply_effect_pub_with_controller` is now live; six push-site readers in `state_ops_resolve.rs` swap-aware; `#[allow(dead_code)]` retired (pending-decision controller-of-effect closure)
+
+- **Pinned by**:
+  - 9 new `tests_rust/test_pending_decisions.py` regression pins
+    covering cross-controller routing for every push-site /
+    submit dispatcher pair:
+    - `test_submit_may_do_yes_routes_draw_to_source_controller_not_active_player`
+      — p1 MayDo(draw) on p0's turn: post-fix the draw lands on p1.
+    - `test_auto_resolve_may_do_yes_routes_draw_to_source_controller`
+      — same shape via `resolve_top_of_stack` (auto-resolve match
+      arm, not manual submit).
+    - `test_submit_may_do_yes_routes_gain_life_to_source_controller`
+      — GainLife sibling pin.
+    - `test_submit_may_do_no_does_not_leak_swap` — hygiene pin
+      that the no-path doesn't leak any swap state.
+    - `test_submit_if_you_do_yes_routes_both_inner_actions_to_source_controller`
+      — IfYouDo(MayDo(draw), gain) on p1: then-gain immediate
+      to p1, nested MayDoChoice carries controller=1.
+    - `test_submit_choose_mode_routes_chosen_mode_to_source_controller`
+      — modal spell, mode 0 (draw) routes to source controller.
+    - `test_submit_choose_mode_gain_life_branch_routes_to_source_controller`
+      — symmetric mode-1 (gain_life) pin.
+    - `test_submit_optional_mana_cost_pay_routes_inner_to_source_controller`
+      — OptionalManaCost(draw): pay routes to source controller's
+      pool and draw lands on source controller.
+    - `test_submit_may_do_swap_restores_after_resolution` —
+      transient-field hygiene mirror of the I59 pin.
+
+- **Rule (same as I59 / I60)**. CR 119.5 / 608.2: an effect
+  resolves under its source's controller. For pending-decision
+  effects (MayDo / IfYouDo / ChooseOneMode / Surveil /
+  LookTopNPutOneInHandRestToGraveyard / ManifestDread /
+  ManifestDreadThenPutPlusOneCountersOnIt / LookAtTopNRevealOrCounter
+  / OptionalManaCostThenEffect) the PendingDecision must be PUSHED
+  with the source's controller, and the dispatcher / submit /
+  auto-resolve sites must thread that controller through to inner
+  apply_effect calls so any controller-of-effect arms inside the
+  inner effect (DrawCards / GainLife / future) read it correctly.
+
+- **Pre-fix Rust behavior**. Two layers of the bug:
+
+  1. **Push-site layer.** Every `Effect::*` arm that pushed a
+     PendingDecision hardcoded `controller = state.active_player`.
+     When the resolver swapped in
+     `current_resolve_source_controller = Some(stack_controller)`
+     around `apply_effect`, those arms still read
+     `state.active_player` — the swap wasn't observed at push
+     time. Result: a p1-controlled MayDo on p0's turn pushed a
+     `MayDoChoice { controller: 0, ... }` (wrong).
+
+  2. **Dispatcher layer.** The submit / auto-resolve dispatchers
+     in `state_ops_decisions.rs` called the plain
+     `apply_effect_pub(state, &effect, source_id)` helper, which
+     LEFT the swap untouched. Even if the PendingDecision had the
+     right controller, the inner DrawCards / GainLife arm fell
+     back to `state.active_player`. So both layers had to be
+     fixed: push the right controller, AND thread it through to
+     the inner apply.
+
+- **Fix (two coordinated edits per push-site/dispatcher pair):**
+
+  - **Push sites (6 total)** in `state_ops_resolve.rs`:
+    `Effect::Surveil`, `Effect::MayDo`,
+    `Effect::LookTopNPutOneInHandRestToGraveyard`,
+    `Effect::ChooseOneMode`, `Effect::IfYouDo`,
+    `Effect::ManifestDread`,
+    `Effect::ManifestDreadThenPutPlusOneCountersOnIt`,
+    `Effect::LookAtTopNRevealOrCounter`,
+    `Effect::OptionalManaCostThenEffect`. All migrate the
+    `let controller = state.active_player;` line to
+    `let controller = state.current_resolve_source_controller.unwrap_or(state.active_player);`
+    so the push reads the in-flight stack resolver's swap.
+    `Effect::ManifestDreadThenAttachSelf` already reads the
+    controller off the source object on bf — left untouched.
+
+  - **Dispatch sites (11 total)** in `state_ops_decisions.rs`:
+    every `apply_effect_pub(state, effect, source_id)` call
+    after popping a PendingDecision becomes
+    `apply_effect_pub_with_controller(state, effect, source_id, pd.controller)`.
+    Migrated dispatchers: `auto_resolve_pending_decisions`
+    (MayDo / ChooseMode / IfYouDo / OptionalManaCost arms);
+    `submit_may_do_decision`; `submit_choose_mode_decision`;
+    `submit_if_you_do_decision`;
+    `submit_optional_mana_cost_decision`.
+
+- **`apply_effect_pub_with_controller` now live**. The helper
+  shipped at I59 with `#[allow(dead_code)]` because the in-tree
+  resolver branches inlined the swap. As of I61, every
+  pending-decision dispatcher routes through it — the attribute
+  is removed and the helper's docstring updated to list its real
+  callers. The in-tree stack-resolver branches still set the slot
+  manually around their `apply_effect` loops (avoids an extra
+  function-call layer for the hot stack-resolve path) — the
+  helper is the cleaner route only for the one-shot
+  pending-decision path where readability beats nano-perf.
+
+- **Why the latent bug went uncaught**. Every existing EoE
+  printing that uses MayDo / IfYouDo / ChooseOneMode / OptionalManaCost
+  today fires its PendingDecision on a stack item whose
+  `controller == state.active_player` (own-turn ETB / sorcery /
+  end-of-turn trigger). The I60 forward-inventory called this out
+  as the next-slice recommendation; I61 closes it preemptively
+  before a real cross-controller MayDo + DrawCards/GainLife parity
+  case surfaces.
+
+- **Out of scope (deferred to future slices)**:
+  - Generalizing the swap to the OTHER `state.active_player`-keyed
+    apply arms (DealDamage defender, PumpCreaturesYouControl,
+    search-zone resolvers). Same per-arm parity decision pattern
+    as I60's forward inventory.
+
 ### I60. `Effect::GainLife` controller-of-effect fix — reuses I59 transient slot; reader migrated to prefer `current_resolve_source_controller` over `active_player` (GainLife controller divergence closure)
 
 - **Pinned by**:
