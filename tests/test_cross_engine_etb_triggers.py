@@ -2374,5 +2374,109 @@ def test_rust_parser_accepts_exile_target_in_triggered_ability():
     assert pid == 0
 
 
+def test_bridge_exile_opponents_nonland_permanent_until_leaves_translates_to_python():
+    """Phase 5 bridge extension: Rust
+    ``{"kind": "exile_opponents_nonland_permanent_until_leaves"}``
+    translates to Python
+    ``ExileOpponentsNonlandPermanentUntilLeaves()``.
+
+    Unblocks Banishing-Light / Oblivion-Ring / Hardlight-
+    Containment-shape ETB exile-non-land triggers on the cross-
+    engine bridge. The Rust effect variant exists at
+    ``rust/src/cards.rs:1283`` (unit variant
+    ``Effect::ExileOpponentsNonlandPermanentUntilLeaves``); its
+    parse_effect arm at ``cards.rs:3325-3327`` takes no fields;
+    the resolve arm at ``state_ops_resolve.rs:5645-5754`` carries
+    the I80 controller-of-effect fix (defender = 1 - controller,
+    where controller derives from
+    current_resolve_source_controller). Stamps
+    ``exiled_with_source = Some(source_obj_id)`` so the paired
+    return on source-leaves works. Sibling closure to I79 -- same
+    "until source leaves" exile shape; differs only in the target
+    filter ("not a Land" vs "is a Creature").
+    """
+    from mtg_bot.effects.generic.exile import (
+        ExileOpponentsNonlandPermanentUntilLeaves,
+    )
+    from mtg_bot.parity.cross_engine import _ta_dict_to_python_effect
+
+    e = _ta_dict_to_python_effect(
+        {"kind": "exile_opponents_nonland_permanent_until_leaves"}
+    )
+    assert isinstance(e, ExileOpponentsNonlandPermanentUntilLeaves)
+    # Bare-shape default: max_mv=0 (no MV cap). The Rust unit
+    # variant has no field mirror today; the bridge constructs
+    # the bare default shape, matching Rust's any-non-land scan.
+    assert e.max_mv == 0
+
+
+def test_bridge_exile_opponents_nonland_permanent_until_leaves_ignores_extra_fields():
+    """Extra dict fields are ignored -- the bridge translator
+    mirrors the Rust unit-variant convention (no fields beyond
+    ``kind``) and constructs the bare-default Python shape
+    regardless of whether the dict carries extra keys. Mirrors the
+    ``exile_target_creature_until_source_leaves`` /
+    ``return_creature_from_your_graveyard_to_hand`` /
+    ``return_creature_from_your_graveyard_to_battlefield`` arm
+    convention (all unit variants).
+    """
+    from mtg_bot.effects.generic.exile import (
+        ExileOpponentsNonlandPermanentUntilLeaves,
+    )
+    from mtg_bot.parity.cross_engine import _ta_dict_to_python_effect
+
+    e = _ta_dict_to_python_effect({
+        "kind": "exile_opponents_nonland_permanent_until_leaves",
+        # Extra keys that future MV-cap-widened Rust variants
+        # might carry; the bare-shape arm ignores them.
+        "max_mv": 4,
+        "extra_key_should_be_ignored": True,
+        "another_unused_field": 42,
+    })
+    assert isinstance(e, ExileOpponentsNonlandPermanentUntilLeaves)
+    # Bare-shape arm constructs max_mv=0 even when the dict
+    # carries an explicit max_mv -- the rider field has no Rust
+    # mirror yet, so the bridge surface drops it for round-trip
+    # dict-shape consistency with what Rust's parser accepts.
+    assert e.max_mv == 0
+
+
+def test_rust_parser_accepts_exile_opponents_nonland_permanent_until_leaves_in_triggered_ability():
+    """Pin the Rust parser surface for the
+    ``exile_opponents_nonland_permanent_until_leaves`` effect
+    kind. The bridge's dict shape must register cleanly on the
+    Rust side too; this lockstep gate keeps the Python bridge
+    from drifting away from Rust's parse_effect coverage.
+
+    Mirrors the existing
+    ``exile_target_creature_until_source_leaves`` parser-surface
+    pin (test_rust_parser_accepts_exile_target_creature_until_
+    source_leaves_in_triggered_ability) -- both are unit-variant
+    arms with no companion fields. The Rust parse_effect arm at
+    ``cards.rs:3325-3327`` accepts the bare ``{"kind":
+    "exile_opponents_nonland_permanent_until_leaves"}`` shape on
+    a triggered-ability carrier.
+    """
+    import mtg_bot_engine
+
+    reg = mtg_bot_engine.Registry()
+    d = {
+        "name": "Phase 5 Bridge Pin -- ExileOppsNonlandUntilLeaves",
+        "card_types": ["Enchantment"],
+        "mana_cost": {"generic": 2, "W": 1},
+        "triggered_abilities": [
+            {
+                "event": "enters",
+                "predicate": {"kind": "source_is_self"},
+                "effect": {
+                    "kind": "exile_opponents_nonland_permanent_until_leaves",
+                },
+            }
+        ],
+    }
+    pid = reg.register_printing(d)
+    assert pid == 0
+
+
 # === PHASE5_BRIDGE_PIN_TESTS_INSERT_ABOVE_THIS_LINE ===
 # New bridge-arm pin tests go IMMEDIATELY ABOVE this marker.
