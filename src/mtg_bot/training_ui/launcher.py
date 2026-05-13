@@ -555,7 +555,13 @@ def _normalize_value(
     if t == "bool_tristate":
         # BooleanOptionalAction: --flag / --no-flag. Always emit the
         # explicit form so the spawned subprocess never inherits the
-        # platform-dependent default by accident.
+        # platform-dependent default by accident. When the user
+        # didn't submit any value (raw is None), fall back to the
+        # schema default — NOT bool(None)=False, which silently
+        # flipped --use-shm-self-play to --no-use-shm-self-play on
+        # Windows where the default is True.
+        if raw is None:
+            return bool(spec.get("default", False))
         if isinstance(raw, str):
             return raw.strip().lower() in ("1", "true", "on", "yes")
         return bool(raw)

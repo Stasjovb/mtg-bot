@@ -216,21 +216,33 @@ def test_build_command_bad_choice_raises() -> None:
 
 def test_build_command_bool_tristate_omitted_uses_default() -> None:
     """When the user doesn't submit a bool_tristate value, the
-    spawned command line still emits the explicit form derived from
-    the schema default (never inherits the platform-dependent
-    default at runtime)."""
+    spawned command line emits the explicit form matching the
+    schema default. Previously (pre-fix) bool(None) collapsed every
+    omitted tristate to ``--no-flag`` which silently disabled the
+    SHM eval-server on Windows where the default is on."""
     argv = build_iterate_command({
         "bootstrap-version": "v3",
         "deck-pool": "data/17lands/eoe_decks.json.gz",
     })
-    # Exactly one of the pair must be present for each tristate flag.
-    self_play = [a for a in argv
-                 if a in ("--use-shm-self-play",
-                          "--no-use-shm-self-play")]
-    eval_flag = [a for a in argv
-                 if a in ("--use-shm-eval", "--no-use-shm-eval")]
-    assert len(self_play) == 1
-    assert len(eval_flag) == 1
+    # Find the SHM tristate specs to know which polarity matches
+    # the schema default on this platform.
+    flat = {arg["name"]: arg
+            for section in ITERATE_SCHEMA for arg in section["args"]}
+    sp_default = bool(flat["use-shm-self-play"]["default"])
+    ev_default = bool(flat["use-shm-eval"]["default"])
+    expected_sp = ("--use-shm-self-play"
+                   if sp_default else "--no-use-shm-self-play")
+    expected_ev = ("--use-shm-eval"
+                   if ev_default else "--no-use-shm-eval")
+    assert expected_sp in argv
+    assert expected_ev in argv
+    # Pinning polarity also pins absence of the opposite form.
+    opposite_sp = ("--no-use-shm-self-play"
+                   if sp_default else "--use-shm-self-play")
+    opposite_ev = ("--no-use-shm-eval"
+                   if ev_default else "--use-shm-eval")
+    assert opposite_sp not in argv
+    assert opposite_ev not in argv
 
 
 def test_build_command_int_string_coercion() -> None:
