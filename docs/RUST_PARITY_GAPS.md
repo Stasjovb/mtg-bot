@@ -4208,6 +4208,93 @@ the forked branch.
   - **Cross-engine smoke probe** for walker activations. Unchanged
     from I56.
 
+### I62. `Effect::DamageEachOpponent` controller-of-effect fix — reuses I59 transient slot; defender computed as `1 - controller` instead of `1 - active_player` (DamageEachOpponent controller divergence closure)
+
+- **Pinned by**:
+  - 4 new `tests_rust/test_resolve.py` `test_damage_each_opponent_*`
+    regression pins covering cross-controller spell resolution
+    (1: p1-controlled DamageEachOpponent on p0's turn → p0 takes
+    the damage, NOT p1), same-controller back-compat (1: p0-
+    controlled DamageEachOpponent on p0's turn still damages p1),
+    cross-controller LTB trigger (1: p1's LTB → damage-each-
+    opponent trigger fires on bounce by p0's spell, damage lands
+    on p0 — pre-fix this would have HIT p1 itself), and
+    `resolve_top_of_stack_pause` parity (1: pause variant uses the
+    same swap). Mirrors the I60 GainLife test shape exactly.
+
+- **Rule**. CR 119.5 / 608.2: an effect resolves under its
+  source's controller. DamageEachOpponent's "each opponent"
+  means "each opponent OF THE SOURCE'S CONTROLLER", not "each
+  opponent of the active player". Mirrors Python's
+  `DealDamageEachOpponent.resolve(state, controller_id, targets)`
+  at `effects/generic/damage.py:152` which iterates
+  `state.players` and `continue`s on `p.id == controller_id`.
+
+- **Pre-fix Rust behavior**. The `Effect::DamageEachOpponent` arm
+  at `state_ops_resolve.rs:1568` (pre-fix line) computed
+  `let defender = (1 - state.active_player) as usize`. Wrong
+  when the resolving spell / triggered ability had a controller
+  != active_player. Worst-case example: a p1 creature's
+  "ETB → deal 2 damage to each opponent" trigger fires during
+  p0's turn (e.g. via a p0 flicker effect that re-ETBs p1's
+  creature). Pre-fix the trigger SELF-DAMAGED p1 — `defender =
+  1 - 0 = 1`. Post-fix the trigger correctly damages p0
+  (the trigger's controller's opponent).
+
+- **Reuses I59 substrate**. No new state, no new helper. The
+  `Effect::DamageEachOpponent` arm gains a controller-resolution
+  preamble identical to the I60 GainLife arm:
+  `let controller = state.current_resolve_source_controller
+  .map(|c| c as usize).unwrap_or(state.active_player as usize);
+  let defender = 1 - controller;`. The transient slot is set by
+  the SAME stack-resolver swaps I59 wired (`resolve_top_of_stack`
+  spell + trigger branches and the `_pause` mirrors).
+  Cross-controller-via-pending-decision callers also work because
+  I61 already migrated the dispatcher sites to
+  `apply_effect_pub_with_controller`.
+
+- **Out of scope (deferred to future slices)**:
+  - **`Effect::DealDamage` defender field cross-controller
+    semantics.** The DealDamage AnyPlayer arm at
+    `state_ops_resolve.rs:~960` also reads
+    `1 - state.active_player` as the implicit defender. In 2-
+    player land, when the source has controller != active_player,
+    "the opponent of the active player" coincidentally equals
+    "the source's controller". The semantic intent for DealDamage
+    is "the opponent of the SOURCE'S controller" — same direction
+    as I62. End-state is identical in 2-player today, so the
+    only behavioral difference would appear in 3+-player formats
+    or if some later AnyTarget refinement makes the SOURCE-vs-
+    active distinction observable. Migrate when a real-card
+    divergence surfaces.
+  - **`Effect::PumpCreaturesYouControl` "your" semantics.** Same
+    shape — "your creatures" = source-controller's creatures.
+    Per-arm parity decision + pin. (I64-candidate.)
+  - **Search-zone resolvers' "your library" semantics.**
+    SearchLibraryFor* / Mill / etc — pending per-arm review.
+  - **DamageEachOpponent + EachOpponentLosesLife shape
+    convergence.** EachOpponentLosesLife (I26-shape) already
+    uses a 5-zone source-finder walk to find the source's
+    controller. DamageEachOpponent now uses the cheaper
+    transient-slot reader — both produce the same end state in
+    every reachable scenario today (the transient slot is set
+    around the same stack-resolver call frames that produce the
+    StackItem the source-finder would walk). If a future
+    push-site adds DamageEachOpponent emission OUTSIDE the
+    stack resolver, it must either set the transient slot OR
+    fall back to the source-finder. Inventory note.
+
+- **Forward inventory (post-I62 remaining `active_player`-keyed
+  arms in `state_ops_resolve.rs`):**
+  - **`Effect::DealDamage` defender** (line ~960): see Out of
+    Scope above. Same direction as I62, end-state identical in
+    2-player. Defer.
+  - **`Effect::PumpCreaturesYouControl`**: pumps "your"
+    creatures, today reads `state.active_player`. Per-arm pin
+    required (I64-candidate).
+  - **`Effect::SearchLibraryFor*` / `Mill*` "your" resolvers**:
+    pending audit.
+
 ### I61. Pending-decision dispatchers + push sites migrated to thread the source's controller — `apply_effect_pub_with_controller` is now live; six push-site readers in `state_ops_resolve.rs` swap-aware; `#[allow(dead_code)]` retired (pending-decision controller-of-effect closure)
 
 - **Pinned by**:

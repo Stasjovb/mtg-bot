@@ -11203,3 +11203,164 @@ def test_gainlife_pause_variant_threads_controller(engine):
 
     assert state.life_totals[1] == p1_life_before + 1
     assert state.life_totals[0] == p0_life_before
+
+
+# ====================================================================
+# DamageEachOpponent controller-of-effect fix — regression pins (I62).
+#
+# Same shape as the I59 DrawCards / I60 GainLife fixes above. Pre-fix
+# `Effect::DamageEachOpponent` at state_ops_resolve.rs computed the
+# defender as `1 - state.active_player`. Wrong when the resolving
+# spell / triggered ability has a controller != active_player —
+# the trigger's controller would self-damage. Post-fix the arm
+# reads the transient `current_resolve_source_controller` (set by
+# the stack resolver), falling back to active_player for direct
+# apply_effect_pub callers, then computes defender as
+# `1 - controller`.
+#
+# Python: `DealDamageEachOpponent.resolve(state, controller_id,
+# targets)` at `effects/generic/damage.py:152` iterates
+# `state.players`, skipping `p.id == controller_id`. Each non-
+# controller opponent's life is reduced.
+# ====================================================================
+
+
+def _damage_each_opponent_spell_dict(amount=2):
+    """Earthquake-shape DamageEachOpponent-N printing for cross-
+    controller regression pins."""
+    return {
+        "name": f"Test Damage Each Opponent {amount}",
+        "card_types": ["Sorcery"],
+        "mana_cost": {"R": 1, "generic": 1},
+        "effects": [{"kind": "damage_each_opponent", "amount": amount}],
+    }
+
+
+def test_damage_each_opponent_routes_to_source_controllers_opponent(engine):
+    """**Regression pin for the DamageEachOpponent controller-of-
+    effect fix (I62).**
+
+    On p0's turn (active_player=0), a DamageEachOpponent-2 spell
+    whose controller is p1 (e.g. an instant-speed response from the
+    non-active player) must damage PLAYER 0 (p1's opponent), NOT
+    player 1 (the trigger's own controller). Pre-fix this
+    incorrectly damaged player 1 because `defender = 1 -
+    active_player = 1`.
+    """
+    state = engine.make_synthetic_state()
+    assert state.active_player == 0
+
+    spell_id = state.register_and_inject_object(
+        _damage_each_opponent_spell_dict(amount=2), 1, ZONE_HAND
+    )
+    p0_life_before = state.life_totals[0]
+    p1_life_before = state.life_totals[1]
+
+    state.push_to_stack(spell_id, 1)
+    state.resolve_top_of_stack()
+
+    # p0 (the source-controller's opponent) lost 2 life.
+    # p1 (the source's controller) UNTOUCHED.
+    assert state.life_totals[0] == p0_life_before - 2
+    assert state.life_totals[1] == p1_life_before
+
+
+def test_damage_each_opponent_active_player_controlled_spell_still_works(engine):
+    """**Back-compat pin.** A DamageEachOpponent spell whose
+    controller IS the active player must keep working — defender =
+    1 - controller = 1 - active_player = 1, identical to pre-fix.
+    """
+    state = engine.make_synthetic_state()
+    spell_id = state.register_and_inject_object(
+        _damage_each_opponent_spell_dict(amount=3), 0, ZONE_HAND
+    )
+    p0_life_before = state.life_totals[0]
+    p1_life_before = state.life_totals[1]
+
+    state.push_to_stack(spell_id, 0)
+    state.resolve_top_of_stack()
+
+    # p1 (the one opponent) took 3 damage; p0 (controller) untouched.
+    assert state.life_totals[0] == p0_life_before
+    assert state.life_totals[1] == p1_life_before - 3
+
+
+def test_damage_each_opponent_via_triggered_ability_routes_to_triggers_opponent(
+    engine,
+):
+    """**Cross-controller ETB-trigger pin for DamageEachOpponent.**
+    A triggered-ability StackItem carries its own `controller`; the
+    resolver swaps that controller in for the DamageEachOpponent
+    apply.
+
+    Shape: p1's creature has a `source_is_self LEAVES_BATTLEFIELD →
+    deal 2 damage to each opponent` trigger. p0 casts a bounce spell
+    on p1's creature. When the LTB trigger resolves, p0 (p1's
+    opponent — the trigger's controller's opponent) takes 2 damage,
+    NOT p1.
+    """
+    state = engine.make_synthetic_state(
+        num_battlefield=0, num_hand=0, num_library=5
+    )
+    ltb_creature = {
+        "name": "Test LTB-DamageEachOpponent Creature",
+        "card_types": ["Creature"],
+        "mana_cost": {"generic": 2},
+        "effects": [],
+        "power": 1,
+        "toughness": 1,
+        "triggered_abilities": [
+            {
+                "event": "leaves_battlefield",
+                "predicate": {"kind": "source_is_self"},
+                "effect": {"kind": "damage_each_opponent", "amount": 2},
+            }
+        ],
+    }
+    crt_id = state.register_and_inject_object(
+        ltb_creature, 1, ZONE_BATTLEFIELD
+    )
+    bounce_id = state.register_and_inject_object(
+        {
+            "name": "Test Bounce (DamageEachOpponent LTB)",
+            "card_types": ["Instant"],
+            "mana_cost": {"U": 1},
+            "effects": [
+                {"kind": "return_to_hand", "target": {"kind": "any_creature"}}
+            ],
+        },
+        0,
+        ZONE_HAND,
+    )
+    p0_life_before = state.life_totals[0]
+    p1_life_before = state.life_totals[1]
+
+    state.push_to_stack(bounce_id, 0)
+    state.resolve_top_of_stack()  # bounce; LTB trigger pushes
+    top = state.peek_top_of_stack()
+    assert top["controller"] == 1
+
+    state.resolve_top_of_stack()  # LTB trigger fires
+
+    # Post-fix: p0 (trigger's controller's opponent) took 2 damage.
+    # Pre-fix this would have hit p1 (active_player=0's opponent) —
+    # self-damaging the trigger's controller.
+    assert state.life_totals[0] == p0_life_before - 2
+    assert state.life_totals[1] == p1_life_before
+
+
+def test_damage_each_opponent_pause_variant_threads_controller(engine):
+    """**`resolve_top_of_stack_pause` parity pin for
+    DamageEachOpponent.**"""
+    state = engine.make_synthetic_state()
+    spell_id = state.register_and_inject_object(
+        _damage_each_opponent_spell_dict(amount=1), 1, ZONE_HAND
+    )
+    p0_life_before = state.life_totals[0]
+    p1_life_before = state.life_totals[1]
+
+    state.push_to_stack(spell_id, 1)
+    state.resolve_top_of_stack_pause()
+
+    assert state.life_totals[0] == p0_life_before - 1
+    assert state.life_totals[1] == p1_life_before
