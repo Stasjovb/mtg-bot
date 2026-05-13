@@ -1157,3 +1157,418 @@ def test_once_per_turn_ledger_suppresses_repeat_fires(synthetic_state):
         "expected once-per-turn gate to re-allow firing after cleanup "
         "cleared the ledger; stack is empty so the reset failed"
     )
+
+
+# =====================================================================
+# Slice 4 — predicate-algebra extensions for landfall, artifact-enters,
+# Panharmonicon-shape, and "under your control" triggers.
+#
+# Slices 1-3 wired the substrate plus `source_is_self` / `source_is_creature`
+# predicates. Slice 4 adds four new predicate kinds that close the gap to
+# the bulk of EoE's ETB-trigger predicate templates from
+# `src/mtg_bot/cards/parser/triggers.py:603-1266`:
+#
+# - `subject_is_land`     -> Python `Subject(None, IsLand())`
+# - `subject_is_artifact` -> Python `Subject(None, IsArtifact())`
+# - `subject_is_creature` -> Python `Subject(None, IsCreature())`
+# - `controlled_by_you`   -> Python `Controlled(by=YOU, subject=None)`
+#
+# Each test below pins ONE predicate variant by setting up the minimal
+# scenario that fires (and the negative case that doesn't).
+# =====================================================================
+
+
+def _landfall_observer_dict():
+    """Pre-existing observer with a 'whenever a land enters, draw a
+    card' trigger. Uses `subject_is_land` so any land arrival fires
+    it — regardless of whose land it is. The canonical landfall
+    shape from `cards/parser/triggers.py`.
+    """
+    return {
+        "name": "Test Landfall Observer",
+        "card_types": ["Creature"],
+        "mana_cost": {},
+        "effects": [],
+        "power": 1,
+        "toughness": 1,
+        "triggered_abilities": [
+            {
+                "event": "enters",
+                "predicate": {"kind": "subject_is_land"},
+                "effect": {"kind": "draw_cards", "count": 1},
+            }
+        ],
+    }
+
+
+def _artifact_enters_observer_dict():
+    """Pre-existing observer with a 'whenever an artifact enters,
+    draw a card' trigger. Uses `subject_is_artifact`.
+    """
+    return {
+        "name": "Test Artifact-Enters Observer",
+        "card_types": ["Creature"],
+        "mana_cost": {},
+        "effects": [],
+        "power": 1,
+        "toughness": 1,
+        "triggered_abilities": [
+            {
+                "event": "enters",
+                "predicate": {"kind": "subject_is_artifact"},
+                "effect": {"kind": "draw_cards", "count": 1},
+            }
+        ],
+    }
+
+
+def _panharmonicon_under_your_control_dict():
+    """The Panharmonicon-faithful predicate shape from the audit's
+    §5.4 Example A: "whenever a CREATURE enters UNDER YOUR CONTROL,
+    draw a card". Predicate = `subject_is_creature AND
+    controlled_by_you`. Slice 1's substrate could only express the
+    weaker `source_is_creature AND NOT source_is_self`; this is the
+    true Panharmonicon shape now that we have subject-anchored
+    predicates.
+    """
+    return {
+        "name": "Test Panharmonicon",
+        "card_types": ["Artifact"],
+        "mana_cost": {},
+        "effects": [],
+        "triggered_abilities": [
+            {
+                "event": "enters",
+                "predicate": {
+                    "kind": "and",
+                    "left": {"kind": "subject_is_creature"},
+                    "right": {"kind": "controlled_by_you"},
+                },
+                "effect": {"kind": "draw_cards", "count": 1},
+            }
+        ],
+    }
+
+
+def _vanilla_artifact_dict():
+    """A vanilla artifact (no triggered_abilities). Used as the
+    artifact-enters probe's bait."""
+    return {
+        "name": "Test Vanilla Artifact",
+        "card_types": ["Artifact"],
+        "mana_cost": {},
+        "effects": [],
+    }
+
+
+# --- parser surface -------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "predicate_kind",
+    [
+        "subject_is_land",
+        "subject_is_artifact",
+        "subject_is_creature",
+        "controlled_by_you",
+    ],
+)
+def test_slice4_predicate_kinds_parse(empty_registry, predicate_kind):
+    """All four Slice 4 predicate kinds parse without error."""
+    d = {
+        "name": f"Slice4 Test {predicate_kind}",
+        "card_types": ["Creature"],
+        "mana_cost": {"generic": 1},
+        "power": 1,
+        "toughness": 1,
+        "triggered_abilities": [
+            {
+                "event": "enters",
+                "predicate": {"kind": predicate_kind},
+                "effect": {"kind": "draw_cards", "count": 1},
+            }
+        ],
+    }
+    pid = empty_registry.register_printing(d)
+    assert pid == 0
+
+
+# --- subject_is_land — landfall ------------------------------------
+
+
+def test_landfall_observer_fires_on_land_arrival(synthetic_state):
+    """A pre-existing observer with `subject_is_land` fires when ANY
+    land enters the battlefield. Drives Slice 4's landfall predicate.
+
+    Setup: observer on p0's bf + ETB-self-draw LAND on p0's library
+    + Cultivate-shape sorcery in p0's hand. Cast sorcery -> land
+    enters -> two triggers stack (observer's landfall AND land's
+    self-draw both fire).
+    """
+    observer_id = synthetic_state.register_and_inject_object(
+        _landfall_observer_dict(), 0, ZONE_BATTLEFIELD
+    )
+    land_id = synthetic_state.register_and_inject_object(
+        _vanilla_land_dict("Test Plains"), 0, ZONE_LIBRARY
+    )
+    sorcery = {
+        "name": "Test Cultivate (Slice 4)",
+        "card_types": ["Sorcery"],
+        "mana_cost": {},
+        "effects": [
+            {"kind": "search_library_for_basic_land_tapped", "count": 1}
+        ],
+    }
+    sorcery_id = synthetic_state.register_and_inject_object(
+        sorcery, 0, ZONE_HAND
+    )
+
+    library_before = synthetic_state.library_sizes[0]
+
+    synthetic_state.push_to_stack(sorcery_id, 0)
+    synthetic_state.resolve_top_of_stack()
+
+    # Land landed on bf; observer's landfall trigger is on the stack.
+    assert synthetic_state.find_object_zone(land_id) == ZONE_BATTLEFIELD
+    assert synthetic_state.stack_size() == 1, (
+        "expected the landfall observer's `subject_is_land` trigger to "
+        "fire on the searched-up land's arrival"
+    )
+    top = synthetic_state.peek_top_of_stack()
+    assert top["source_obj_id"] == observer_id
+
+    # Resolve the landfall trigger -> draw 1.
+    synthetic_state.resolve_top_of_stack()
+    # Library: -1 (land moved) - 1 (draw) = library_before - 2.
+    assert synthetic_state.library_sizes[0] == library_before - 2
+
+
+def test_landfall_observer_does_not_fire_on_non_land(synthetic_state):
+    """`subject_is_land` rejects creatures / artifacts / etc. The
+    landfall observer DOES NOT fire when a creature enters.
+    """
+    synthetic_state.register_and_inject_object(
+        _landfall_observer_dict(), 0, ZONE_BATTLEFIELD
+    )
+    # The injection above fired no observer trigger (observer's own
+    # entry is the subject — observer is a Creature, not a Land).
+    # Cast a vanilla creature; observer should not fire.
+    bait_id = synthetic_state.register_and_inject_object(
+        _vanilla_creature_dict(), 0, ZONE_HAND
+    )
+    synthetic_state.push_to_stack(bait_id, 0)
+    synthetic_state.resolve_top_of_stack()
+
+    assert synthetic_state.find_object_zone(bait_id) == ZONE_BATTLEFIELD
+    # Stack empty: observer's `subject_is_land` rejected the creature
+    # subject; no trigger fired.
+    assert synthetic_state.is_stack_empty(), (
+        "expected `subject_is_land` to reject the creature subject; "
+        "stack is non-empty so the predicate accepted the wrong subject"
+    )
+
+
+# --- subject_is_artifact — artifact-enters --------------------------
+
+
+def test_artifact_observer_fires_on_artifact_arrival(synthetic_state):
+    """An observer with `subject_is_artifact` fires when an artifact
+    enters. Reanimation path -> deterministic bf entry.
+    """
+    synthetic_state.register_and_inject_object(
+        _artifact_enters_observer_dict(), 0, ZONE_BATTLEFIELD
+    )
+    # Inject vanilla artifact into p0's graveyard (not technically a
+    # "creature" reanim, but `move_object_from_graveyard_to_battlefield`
+    # is type-agnostic — see state_ops_zones.rs).
+    artifact_id = synthetic_state.register_and_inject_object(
+        _vanilla_artifact_dict(), 0, ZONE_GRAVEYARD
+    )
+    ok = synthetic_state.move_object_from_graveyard_to_battlefield(
+        0, artifact_id
+    )
+    assert ok is True
+    assert synthetic_state.find_object_zone(artifact_id) == ZONE_BATTLEFIELD
+
+    assert synthetic_state.stack_size() == 1, (
+        "expected `subject_is_artifact` observer to fire on the artifact's "
+        "reanimation"
+    )
+
+
+def test_artifact_observer_does_not_fire_on_creature(synthetic_state):
+    """`subject_is_artifact` rejects a creature subject."""
+    synthetic_state.register_and_inject_object(
+        _artifact_enters_observer_dict(), 0, ZONE_BATTLEFIELD
+    )
+    crt_id = synthetic_state.register_and_inject_object(
+        _vanilla_creature_dict(), 0, ZONE_HAND
+    )
+    synthetic_state.push_to_stack(crt_id, 0)
+    synthetic_state.resolve_top_of_stack()
+
+    assert synthetic_state.find_object_zone(crt_id) == ZONE_BATTLEFIELD
+    assert synthetic_state.is_stack_empty(), (
+        "expected `subject_is_artifact` to reject the creature subject"
+    )
+
+
+# --- subject_is_creature + controlled_by_you (Panharmonicon-faithful) -
+
+
+def test_panharmonicon_faithful_fires_on_your_creature(synthetic_state):
+    """The audit's §5.4 Example A — Panharmonicon-faithful predicate:
+    `subject_is_creature AND controlled_by_you`. Fires when YOUR
+    creature enters; doesn't fire on opponent's.
+    """
+    # Inject the Panharmonicon on p0's bf. controller = 0.
+    pan_id = synthetic_state.register_and_inject_object(
+        _panharmonicon_under_your_control_dict(), 0, ZONE_BATTLEFIELD
+    )
+    # Cast a vanilla creature for p0 — should fire.
+    bait_id = synthetic_state.register_and_inject_object(
+        _vanilla_creature_dict(), 0, ZONE_HAND
+    )
+    synthetic_state.push_to_stack(bait_id, 0)
+    synthetic_state.resolve_top_of_stack()
+
+    assert synthetic_state.find_object_zone(bait_id) == ZONE_BATTLEFIELD
+    assert synthetic_state.stack_size() == 1, (
+        "expected the Panharmonicon trigger to fire on p0's own creature "
+        "entering (subject_is_creature + controlled_by_you both true)"
+    )
+    top = synthetic_state.peek_top_of_stack()
+    assert top["source_obj_id"] == pan_id
+
+
+def test_panharmonicon_faithful_skips_opponent_creature(synthetic_state):
+    """Inverse: the Panharmonicon does NOT fire when an OPPONENT's
+    creature enters — `controlled_by_you` rejects the subject whose
+    controller differs from the source's controller.
+    """
+    pan_id = synthetic_state.register_and_inject_object(
+        _panharmonicon_under_your_control_dict(), 0, ZONE_BATTLEFIELD
+    )
+    # Inject an opponent (controller=1) creature directly onto p1's
+    # battlefield via the RS8 test fixture path — this fires
+    # dispatch_event for the entering creature.
+    opp_crt_id = synthetic_state.register_and_inject_object(
+        _vanilla_creature_dict(), 1, ZONE_BATTLEFIELD
+    )
+
+    assert synthetic_state.find_object_zone(opp_crt_id) == ZONE_BATTLEFIELD
+    # Stack is empty because the Panharmonicon's `controlled_by_you`
+    # predicate rejected the opponent's creature subject. The unused
+    # `pan_id` documents which observer would have fired had the
+    # controller match passed.
+    _ = pan_id
+    assert synthetic_state.is_stack_empty(), (
+        "expected `controlled_by_you` to reject the opponent's creature "
+        "subject; stack is non-empty so the predicate accepted"
+    )
+
+
+def test_panharmonicon_faithful_skips_non_creature(synthetic_state):
+    """The Panharmonicon's predicate ANDs `subject_is_creature`
+    with `controlled_by_you`. A LAND entering under your control
+    fails the creature half and doesn't fire.
+    """
+    synthetic_state.register_and_inject_object(
+        _panharmonicon_under_your_control_dict(), 0, ZONE_BATTLEFIELD
+    )
+    # Inject a vanilla land directly on p0's bf.
+    synthetic_state.register_and_inject_object(
+        _vanilla_land_dict(), 0, ZONE_BATTLEFIELD
+    )
+    # No trigger: subject is a land, not a creature.
+    assert synthetic_state.is_stack_empty(), (
+        "expected `subject_is_creature AND controlled_by_you` to reject "
+        "a land subject (creature half fails)"
+    )
+
+
+# --- controlled_by_you alone (no type filter) -----------------------
+
+
+def test_controlled_by_you_fires_on_any_owned_arrival(synthetic_state):
+    """A bare `controlled_by_you` predicate accepts any subject the
+    source controls — creature, land, artifact, whatever. Pin the
+    predicate as a unit by exercising one such subject (a creature).
+    """
+    bare_observer = {
+        "name": "Test Bare Controlled-By-You",
+        "card_types": ["Creature"],
+        "mana_cost": {},
+        "effects": [],
+        "power": 1,
+        "toughness": 1,
+        "triggered_abilities": [
+            {
+                "event": "enters",
+                "predicate": {"kind": "controlled_by_you"},
+                "effect": {"kind": "draw_cards", "count": 1},
+            }
+        ],
+    }
+    observer_id = synthetic_state.register_and_inject_object(
+        bare_observer, 0, ZONE_BATTLEFIELD
+    )
+    # The observer's own arrival is `controlled_by_you` w.r.t. itself
+    # (subject_controller == source_controller == 0) — fires once.
+    assert synthetic_state.stack_size() == 1
+    synthetic_state.resolve_top_of_stack()
+    assert synthetic_state.is_stack_empty()
+
+    # Cast a vanilla creature for p0; observer fires again.
+    bait_id = synthetic_state.register_and_inject_object(
+        _vanilla_creature_dict(), 0, ZONE_HAND
+    )
+    synthetic_state.push_to_stack(bait_id, 0)
+    synthetic_state.resolve_top_of_stack()
+
+    assert synthetic_state.find_object_zone(bait_id) == ZONE_BATTLEFIELD
+    assert synthetic_state.stack_size() == 1, (
+        "expected `controlled_by_you` to accept p0's own creature "
+        "entering"
+    )
+    top = synthetic_state.peek_top_of_stack()
+    assert top["source_obj_id"] == observer_id
+
+
+def test_controlled_by_you_skips_opponent_arrival(synthetic_state):
+    """`controlled_by_you` rejects a subject whose controller doesn't
+    match the source's controller. Inject opponent's permanent
+    directly on p1's bf; observer on p0 silently skips.
+    """
+    bare_observer = {
+        "name": "Test Bare Controlled-By-You (skip case)",
+        "card_types": ["Creature"],
+        "mana_cost": {},
+        "effects": [],
+        "power": 1,
+        "toughness": 1,
+        "triggered_abilities": [
+            {
+                "event": "enters",
+                "predicate": {"kind": "controlled_by_you"},
+                "effect": {"kind": "draw_cards", "count": 1},
+            }
+        ],
+    }
+    synthetic_state.register_and_inject_object(
+        bare_observer, 0, ZONE_BATTLEFIELD
+    )
+    # Drain the observer's self-firing on its own injection.
+    assert synthetic_state.stack_size() == 1
+    synthetic_state.resolve_top_of_stack()
+
+    # Inject opponent's creature directly on p1's bf — observer should
+    # NOT fire.
+    opp_crt_id = synthetic_state.register_and_inject_object(
+        _vanilla_creature_dict(), 1, ZONE_BATTLEFIELD
+    )
+    assert synthetic_state.find_object_zone(opp_crt_id) == ZONE_BATTLEFIELD
+    assert synthetic_state.is_stack_empty(), (
+        "expected `controlled_by_you` to reject the opponent-controlled "
+        "creature subject"
+    )

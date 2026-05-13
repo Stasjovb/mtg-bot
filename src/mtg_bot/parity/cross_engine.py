@@ -172,11 +172,30 @@ def _ta_dict_to_python_predicate(pred_dict: dict | None):
     into a Python ``TriggerPredicate``.
 
     Slice 1 substrate kinds: ``always``, ``source_is_self``,
-    ``source_is_creature``, ``not``, ``and``. Future predicate
-    variants land in lockstep with the Rust side.
+    ``source_is_creature``, ``not``, ``and``.
+
+    Slice 4 adds the subject-anchored type filters
+    (``subject_is_land``, ``subject_is_artifact``,
+    ``subject_is_creature``) and ``controlled_by_you`` — unlocking
+    the landfall / artifact-enters / Panharmonicon-shape trigger
+    predicates from ``src/mtg_bot/cards/parser/triggers.py:603-1266``.
+    Future predicate variants land in lockstep with the Rust side.
     """
-    from mtg_bot.effects.predicates import Always, IsSelf, Not, And, Source
-    from mtg_bot.effects.object_predicates import IsCreature
+    from mtg_bot.effects.predicates import (
+        Always,
+        IsSelf,
+        Not,
+        And,
+        Source,
+        Subject,
+        Controlled,
+        YOU,
+    )
+    from mtg_bot.effects.object_predicates import (
+        IsCreature,
+        IsLand,
+        IsArtifact,
+    )
 
     if pred_dict is None:
         return Always()
@@ -188,6 +207,24 @@ def _ta_dict_to_python_predicate(pred_dict: dict | None):
     if kind == "source_is_creature":
         # Python's "the source is a creature" reads via Source(IsCreature()).
         return Source(inner=IsCreature())
+    if kind == "subject_is_land":
+        # Python's ``Subject(None, IsLand())`` — the default-subject
+        # path uses the event's only declared slot (``"obj"`` for
+        # ENTERS). Rust's ``SubjectIsLand`` likewise reads the
+        # event's subject id directly.
+        return Subject(slot=None, inner=IsLand())
+    if kind == "subject_is_artifact":
+        return Subject(slot=None, inner=IsArtifact())
+    if kind == "subject_is_creature":
+        return Subject(slot=None, inner=IsCreature())
+    if kind == "controlled_by_you":
+        # Python's ``Controlled(by=YOU, subject=None)`` — defaults to
+        # the event's only declared subject slot. Rust's
+        # ``ControlledByYou`` checks subject_controller ==
+        # source_controller directly on the event subject. Same
+        # observable semantics on single-subject events (ENTERS /
+        # DIES / ATTACKS).
+        return Controlled(by=YOU, subject=None)
     if kind == "not":
         return Not(_ta_dict_to_python_predicate(pred_dict["inner"]))
     if kind == "and":
