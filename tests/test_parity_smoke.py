@@ -26670,6 +26670,385 @@ def test_cross_engine_synthetic_etb_mill_target_player_cross_controller_routes_t
     assert rust_state.get_life(1) == py_state.players[1].life
 
 
+def test_cross_engine_synthetic_etb_create_robot_artifact_creature_token_cross_controller_routes_to_source_controller_parity(
+    parity_smoke,
+):
+    """Probe: synthetic ETB ``create_token`` trigger fired by an
+    Artifact -- Spacecraft permanent CONTROLLED BY P1 while
+    ACTIVE_PLAYER=P0, spawning a 2/2 colorless Robot ARTIFACT-
+    CREATURE token (Wedgelight Rammer's token shape). Both engines
+    must route the freshly-spawned Robot token onto P1's
+    battlefield under P1's control -- the I81 controller-of-effect
+    contract, exercised via a DIFFERENT token shape than the
+    canonical Soldier-token cross-controller probe at line 20460.
+
+    Sister probes on the create_token bridge arm:
+
+      * ``test_cross_engine_synthetic_etb_create_token_cross_controller_routes_to_source_controller_parity``
+        (tests/test_parity_smoke.py:20460) -- I81 cross-controller
+        flicker pinning the Soldier-creature-token shape (1/1
+        Creature only).
+      * ``test_cross_engine_real_eoe_wedgelight_rammer_etb_create_robot_artifact_creature_token_parity``
+        (tests/test_parity_smoke.py:25117) -- SAME-controller
+        Robot-artifact-creature token shape pinning the Wedgelight
+        Rammer real-EoE printing.
+      * ``test_cross_engine_synthetic_etb_create_token_same_controller_routes_to_source_controller_parity``
+        (tests/test_parity_smoke.py:22832) -- SAME-controller
+        Soldier-creature-token shape (Honored-Knight-Captain).
+      * ``test_cross_engine_real_eoe_knight_luminary_etb_create_soldier_token_parity``
+        (tests/test_parity_smoke.py) -- second real-EoE
+        Soldier-creature-token consumer.
+
+    **Why this slice.** The I81 cross-controller probe at line
+    20460 pins the ROUTING surface (token spawned under source's
+    controller) using the canonical Soldier creature-token shape.
+    This probe extends that ROUTING claim to a DIFFERENT token-
+    shape substrate: a 2/2 colorless Robot ARTIFACT-CREATURE token
+    whose dict carries BOTH ``Creature`` AND ``Artifact`` in
+    ``card_types`` plus the Robot subtype, paired with an Artifact
+    -- Spacecraft CARRIER (NOT a Creature). The Wedgelight Rammer
+    sister at line 25117 pins this token shape on the
+    same-controller leg; this probe pins it on the cross-controller
+    leg, closing the 2x2 matrix:
+
+        | leg                | Soldier (1/1 Creature) | Robot (2/2 Artifact-Creature) |
+        | ------------------ | ---------------------- | ----------------------------- |
+        | same-controller    | Honored Knight-Captain | Wedgelight Rammer             |
+        |                    | Knight Luminary        |                               |
+        | cross-controller   | I81 (Token Maker Bear) | THIS PROBE                    |
+
+    This pair-probe pattern is the same shape used to PIN the I81
+    Soldier-token routing across multiple real-EoE Soldier-token
+    printings; here it pins the routing's SHAPE-AGNOSTICISM on
+    the cross-controller leg (Rust's CreateToken arm derives
+    routing from ``current_resolve_source_controller`` regardless
+    of the spawned token's card_types -- this probe pins that the
+    Robot-artifact-creature shape doesn't accidentally hit a
+    different code path that re-derives controller from
+    active_player).
+
+    **Why synthetic, not Wedgelight Rammer-the-real-EoE-card.**
+    The cross-controller leg requires injecting the carrier onto
+    P1's battlefield under controller=1; Wedgelight Rammer's
+    real-EoE oracle is invariant to controller seat (it's
+    "When this Spacecraft enters, create a 2/2 colorless Robot
+    artifact creature token" regardless of who controls it), so
+    a SECOND Wedgelight Rammer probe on the cross-controller leg
+    would over-parameterize the existing same-controller probe
+    (the carrier-name field stays ``Wedgelight Rammer`` either
+    way, so the cross-controller probe's docstring would have to
+    explain why an identical-name carrier appears in two probes).
+    Naming the cross-controller carrier ``Robot Maker Spacecraft``
+    keeps the per-probe identity distinct and matches the I81
+    probe's naming convention (``Token Maker Bear``).
+
+    Trigger shape (mirrors the Wedgelight Rammer + I81 sisters,
+    only the carrier-name + controller-seat differ):
+
+        Event: enters
+        Predicate: source_is_self
+        Effect: create_token(count=1, token_printing_id=<robot pid>)
+
+    Probe shape (cross-controller inject-and-fire-ENTERS):
+
+      1. **active_player=P0** (default). The SOURCE's controller
+         is P1, so ``current_resolve_source_controller`` resolves
+         to ``Some(1)`` and the active-player fallback DISAGREES
+         at 0 -- this is the cross-controller routing surface I81
+         fixed.
+
+      2. **Register Robot artifact-creature token printing** on
+         Rust (gets a pid via ``rust_state.registry_size``);
+         register the matching Python ``CardPrinting`` (built via
+         ``make_token_creature(..., artifact=True,
+         subtypes=("Robot",))``) against that pid via
+         ``register_token_printing(pid, py_robot)``.
+
+      3. **Inject Robot Maker Spacecraft onto P1's bf** with
+         controller=1. ENTERS fires; the trigger lands on the
+         stack carrying controller=1 (the SOURCE's controller,
+         NOT the active player).
+
+      4. **Drain both stacks.** The trigger resolves; the post-I81
+         CreateToken arm reads
+         ``current_resolve_source_controller=Some(1)`` and routes
+         the spawn to P1's bf under P1's control on Rust, and
+         Python's ``CreateToken.resolve(state, controller_id=1,
+         ...)`` spawns under P1 the same way.
+
+      5. **Cross-engine assert (post-I81 contract on Robot-shape):**
+         - P1's bf grew by exactly +2 (Robot Maker Spacecraft +
+           freshly-spawned Robot token).
+         - P0's bf is unchanged (NO token under active player).
+         - The fresh token's ``controller_id`` is 1 on both
+           engines.
+         - The fresh token's printing name matches across engines.
+
+    Out of scope:
+
+      * Station + 7+ tier abilities -- not modeled today (charge-
+        counter substrate; no bridge arm).
+      * Cast-from-hand mana cost -- bypassed by inject-and-fire.
+      * count != 1 -- the I81 contract is independent of count;
+        this probe pins the controller routing on count=1.
+      * Tapped / attacking / each_player riders -- Python-only
+        flags with no Rust mirror today; the bridge constructs the
+        bare shape with all riders defaulted off.
+
+    Expected post-dispatch + post-drain state on BOTH engines:
+
+      * Robot Maker Spacecraft on P1's battlefield (unchanged from
+        inject; controller=1).
+      * One Robot Token on P1's battlefield (newly spawned;
+        controller=1; printing name matches across engines).
+      * P0's battlefield: empty.
+      * No residual stack on either engine.
+      * Life totals unchanged on both seats.
+    """
+    from mtg_bot.parity.cross_engine import (
+        DeckSpec, build_python_state, build_rust_state,
+    )
+
+    spec = DeckSpec(
+        card_defs=(),
+        p0_library=(),
+        p1_library=(),
+    )
+    py_state = build_python_state(spec)
+    rust_state = build_rust_state(spec)
+
+    # Pre-condition: active_player=P0 on both engines (the whole
+    # point of the probe is the cross-controller case where the
+    # SOURCE's controller != active_player).
+    assert rust_state.active_player == 0, (
+        f"Probe pre-condition: Rust active_player must be 0; "
+        f"got {rust_state.active_player}"
+    )
+    assert py_state.active_player_idx == 0, (
+        f"Probe pre-condition: Python active_player_idx must be 0; "
+        f"got {py_state.active_player_idx}"
+    )
+
+    # ---- Rust side: register Robot artifact-creature token, then
+    # inject Robot Maker Spacecraft onto P1's bf. ----
+    ZONE_LIBRARY = 1
+    ZONE_BATTLEFIELD = 2
+    rust_robot_token_dict = {
+        "name": (
+            "Robot Token I81 Cross-Controller Probe"
+        ),
+        # 2/2 colorless Robot artifact creature -- the dict
+        # registers BOTH Creature AND Artifact card_types per
+        # CR 111.4 (the resulting token is a creature AND an
+        # artifact).
+        "card_types": ["Artifact", "Creature"],
+        "subtypes": ["Robot"],
+        "power": 2,
+        "toughness": 2,
+    }
+    rust_token_pid = rust_state.registry_size  # next free pid
+    rust_state.register_and_inject_object(
+        rust_robot_token_dict, 1, ZONE_LIBRARY,
+    )
+
+    rust_carrier_trigger_dict = {
+        "event": "enters",
+        "predicate": {"kind": "source_is_self"},
+        "effect": {
+            "kind": "create_token",
+            "count": 1,
+            "token_printing_id": rust_token_pid,
+        },
+    }
+    rust_carrier_dict = {
+        "name": (
+            "Robot Maker Spacecraft "
+            "(I81 cross-controller probe)"
+        ),
+        # Artifact -- Spacecraft (mirrors Wedgelight Rammer's
+        # carrier shape on the SAME-controller sister; on the
+        # cross-controller leg the carrier-shape choice is
+        # irrelevant to routing -- the bridge ENTERS dispatch is
+        # type-agnostic on both engines -- but we keep the
+        # Spacecraft shape to make the 2x2-matrix docstring claim
+        # observable in the probe body).
+        "card_types": ["Artifact"],
+        "subtypes": ["Spacecraft"],
+        "mana_cost": {"generic": 2},
+        "effects": [],
+        "triggered_abilities": [rust_carrier_trigger_dict],
+    }
+
+    rust_p0_life_before = rust_state.get_life(0)
+    rust_p1_life_before = rust_state.get_life(1)
+    rust_bf_p0_before = rust_state.battlefield_sizes[0]
+    rust_bf_p1_before = rust_state.battlefield_sizes[1]
+
+    # Inject onto P1's bf with controller=1. ENTERS fires; the
+    # trigger lands on the stack carrying controller=1.
+    rust_state.register_and_inject_object(
+        rust_carrier_dict, 1, ZONE_BATTLEFIELD,
+    )
+    assert rust_state.stack_size() == 1, (
+        "Rust: Robot Maker Spacecraft's arrival should fire the "
+        "SourceIsSelf ENTERS trigger and land CreateToken on the "
+        f"stack. Got stack_size={rust_state.stack_size()}"
+    )
+
+    # ---- Python side: register the Python token printing against
+    # Rust's pid via the bridge, build Robot Maker Spacecraft's
+    # printing using the bridge translator on the SAME trigger
+    # dict, then inject onto P1's bf and dispatch ENTERS. ----
+    from mtg_bot.actions import _trigger_etb_abilities
+    from mtg_bot.cards.base import (
+        CardPrinting, ManaCost, make_token_creature,
+    )
+    from mtg_bot.game import Zone
+    from mtg_bot.parity.cross_engine import (
+        _ta_dict_to_python_triggered_ability,
+        clear_token_printings, register_token_printing,
+    )
+
+    py_robot_token = make_token_creature(
+        name="Robot Token I81 Cross-Controller Probe",
+        power=2,
+        toughness=2,
+        subtypes=("Robot",),
+        artifact=True,
+    )
+    clear_token_printings()
+    register_token_printing(rust_token_pid, py_robot_token)
+    py_carrier_trigger = _ta_dict_to_python_triggered_ability(
+        rust_carrier_trigger_dict
+    )
+    py_carrier_printing = CardPrinting(
+        name=(
+            "Robot Maker Spacecraft "
+            "(I81 cross-controller probe)"
+        ),
+        mana_cost_str="",
+        mana_cost=ManaCost(generic=2),
+        type_line="Artifact -- Spacecraft",
+        supertypes=(),
+        card_types=("Artifact",),
+        subtypes=("Spacecraft",),
+        power=None,
+        toughness=None,
+        produces=frozenset(),
+        triggered_abilities=(py_carrier_trigger,),
+    )
+    py_p0_life_before = py_state.players[0].life
+    py_p1_life_before = py_state.players[1].life
+    py_bf_p0_before = len(
+        [o for o in py_state.battlefield if o.controller_id == 0]
+    )
+    py_bf_p1_before = len(
+        [o for o in py_state.battlefield if o.controller_id == 1]
+    )
+
+    # Inject onto P1's bf with owner_id=1 (controller is set to
+    # owner by new_object).
+    py_carrier = py_state.new_object(
+        py_carrier_printing, owner_id=1, zone=Zone.BATTLEFIELD,
+    )
+    py_carrier.summoning_sick = False
+    py_carrier.tapped = False
+    py_carrier.damage = 0
+    py_carrier.etb_timestamp = py_state.next_timestamp
+    py_state.next_timestamp += 1
+    py_state.battlefield.append(py_carrier)
+    _trigger_etb_abilities(py_state, py_carrier)
+    assert len(py_state.stack) == 1, (
+        "Python: Robot Maker Spacecraft's arrival should fire the "
+        "IsSelf ENTERS trigger and land CreateToken on the stack. "
+        f"Got stack size={len(py_state.stack)}"
+    )
+
+    # Drain both stacks.
+    _drain_stack_both(py_state, rust_state)
+
+    # Stacks empty.
+    assert rust_state.stack_size() == 0
+    assert len(py_state.stack) == 0
+
+    # Rust observable: P1's bf gained carrier + 1 token = +2;
+    # P0's bf unchanged (the I81 contract on the Robot-shape).
+    rust_bf_p0_after = rust_state.battlefield_sizes[0]
+    rust_bf_p1_after = rust_state.battlefield_sizes[1]
+    assert rust_bf_p0_after == rust_bf_p0_before, (
+        f"Rust I81 contract violation (Robot-shape): P0's bf "
+        f"changed despite the create_token trigger being "
+        f"controlled by P1. Pre-fix bug would route the token "
+        f"here. Got bf_p0_before={rust_bf_p0_before}, "
+        f"bf_p0_after={rust_bf_p0_after}"
+    )
+    assert rust_bf_p1_after == rust_bf_p1_before + 2, (
+        f"Rust I81 contract (Robot-shape): P1's bf should gain "
+        f"Robot Maker Spacecraft + 1 Robot Token = +2 from "
+        f"baseline. Got bf_p1_before={rust_bf_p1_before}, "
+        f"bf_p1_after={rust_bf_p1_after}"
+    )
+
+    rust_bf_snap = rust_state.battlefield_snapshot()
+    rust_robot_tokens = [
+        d for d in rust_bf_snap
+        if d["printing_name"]
+        == "Robot Token I81 Cross-Controller Probe"
+    ]
+    assert len(rust_robot_tokens) == 1, (
+        f"Rust: expected exactly 1 Robot Token on the bf; got "
+        f"{len(rust_robot_tokens)}"
+    )
+    assert rust_robot_tokens[0]["controller_id"] == 1, (
+        f"Rust I81 contract (Robot-shape): spawned Robot Token's "
+        f"controller_id must be 1 (source's controller). Got "
+        f"controller_id={rust_robot_tokens[0]['controller_id']}"
+    )
+
+    # Python observable: same shape.
+    py_bf_p0_after = len(
+        [o for o in py_state.battlefield if o.controller_id == 0]
+    )
+    py_bf_p1_after = len(
+        [o for o in py_state.battlefield if o.controller_id == 1]
+    )
+    assert py_bf_p0_after == py_bf_p0_before, (
+        f"Python: P0's bf should be unchanged. Got "
+        f"bf_p0_before={py_bf_p0_before}, "
+        f"bf_p0_after={py_bf_p0_after}"
+    )
+    assert py_bf_p1_after == py_bf_p1_before + 2, (
+        f"Python: P1's bf should gain Robot Maker Spacecraft + 1 "
+        f"Robot Token = +2. Got bf_p1_before={py_bf_p1_before}, "
+        f"bf_p1_after={py_bf_p1_after}"
+    )
+    py_robot_tokens = [
+        o for o in py_state.battlefield
+        if o.printing.name
+        == "Robot Token I81 Cross-Controller Probe"
+    ]
+    assert len(py_robot_tokens) == 1, (
+        f"Python: expected exactly 1 Robot Token on the bf; got "
+        f"{len(py_robot_tokens)}"
+    )
+    assert py_robot_tokens[0].controller_id == 1, (
+        f"Python: spawned Robot Token's controller_id must be 1. "
+        f"Got controller_id={py_robot_tokens[0].controller_id}"
+    )
+
+    # Cross-engine: lives unchanged on both sides.
+    assert rust_state.get_life(0) == rust_p0_life_before
+    assert rust_state.get_life(1) == rust_p1_life_before
+    assert py_state.players[0].life == py_p0_life_before
+    assert py_state.players[1].life == py_p1_life_before
+    assert rust_state.get_life(0) == py_state.players[0].life
+    assert rust_state.get_life(1) == py_state.players[1].life
+
+    # Cross-engine bf-size parity (the post-drain observable).
+    assert rust_bf_p0_after == py_bf_p0_after
+    assert rust_bf_p1_after == py_bf_p1_after
+
+
 # === PHASE5_PROBES_INSERT_ABOVE_THIS_LINE ===
 # New real-EoE parity probes go IMMEDIATELY ABOVE this marker.
 # Append-only convention prevents merge collisions when multiple agents add probes in parallel.
