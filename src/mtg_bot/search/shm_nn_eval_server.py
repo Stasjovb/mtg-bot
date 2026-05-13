@@ -309,6 +309,17 @@ class SharedTensorServerHandle:
     token_emb_ids: Optional[torch.Tensor] = None
     token_scalars: Optional[torch.Tensor] = None
     attention_mask: Optional[torch.Tensor] = None
+    # Tokenizer hyperparameters the client threads into
+    # ``state_tokenizer.tokenize_state`` so the emitted ids land in
+    # the model's embedding tables instead of overflowing. Set from
+    # the server's loaded ``StructuredModel.config`` at construction
+    # time. ``n_printings_cap`` mirrors ``StructuredModelConfig
+    # .n_printings`` (default 320); ``action_history_n`` mirrors
+    # ``StructuredModelConfig.action_history_n`` (default 32).
+    # Both default to 0 for non-structured handles so the field is
+    # always present.
+    structured_n_printings_cap: int = 0
+    structured_action_history_n: int = 0
 
 
 class SharedTensorNNEvalServer:
@@ -605,6 +616,16 @@ class SharedTensorNNEvalServer:
         self.stop()
 
     def handle(self) -> SharedTensorServerHandle:
+        # Resolve the structured tokenizer knobs from the loaded
+        # model's config so the client's tokenize calls produce ids
+        # the model's embedding tables can index without overflow.
+        if self._is_structured:
+            cfg = self._model.config
+            n_printings_cap = int(cfg.n_printings)
+            action_history_n = int(cfg.action_history_n)
+        else:
+            n_printings_cap = 0
+            action_history_n = 0
         return SharedTensorServerHandle(
             free_slots=self._free_slots,
             request_queue=self._request_queue,
@@ -625,6 +646,8 @@ class SharedTensorNNEvalServer:
             token_emb_ids=self._token_emb_ids,
             token_scalars=self._token_scalars,
             attention_mask=self._attention_mask,
+            structured_n_printings_cap=n_printings_cap,
+            structured_action_history_n=action_history_n,
         )
 
     # ---- dispatcher --------------------------------------------------------
@@ -662,13 +685,43 @@ class SharedTensorNNEvalServer:
 
     def _dispatch_batch(self, slot_indices: list[int]) -> None:
         """Gather inputs from the shared tensors, run the forward,
-        scatter outputs back, signal response events."""
+        scatter outputs back, signal response events.
+
+        If the forward pass raises (out-of-range embedding id, NaN,
+        OOM, ...), we MUST still set every slot's response_event +
+        ``server_stopped`` — otherwise the worker thread parked in
+        ``_await_response`` waits forever and the whole eval shard
+        deadlocks at cleanup. The dispatcher's swallowed exception
+        is re-raised by the loop's caller via the dispatcher thread
+        log; the cross-process worker observes a ``server_stopped``
+        wake and raises ``RuntimeError`` from its call site, which
+        is the loud-failure path callers already handle.
+        """
         if not slot_indices:
             return
-        if self._is_structured:
-            self._dispatch_structured(slot_indices)
-        else:
-            self._dispatch_flat(slot_indices)
+        try:
+            if self._is_structured:
+                self._dispatch_structured(slot_indices)
+            else:
+                self._dispatch_flat(slot_indices)
+        except BaseException:
+            # Forward-pass failure: log, signal shutdown so any worker
+            # blocked on a per-slot event wakes and observes
+            # ``server_stopped``, set every event so no one stays
+            # parked. Re-raise so the dispatcher thread dies cleanly
+            # with a stack-trace in stderr; the loop will not retry
+            # (we expect ``stop()`` to be called via the parent).
+            self._logger.exception(
+                "SharedTensorNNEvalServer dispatch failed; signaling "
+                "workers and re-raising"
+            )
+            self._server_stopped.set()
+            for ev in self._response_events:
+                try:
+                    ev.set()
+                except Exception:  # noqa: BLE001
+                    pass
+            raise
         # Telemetry.
         self.batches_dispatched += 1
         self.requests_served += len(slot_indices)
@@ -1242,16 +1295,32 @@ class SharedTensorNNEvalClient(Evaluator):
         empty (same first-pass-acceptable choice the direct
         ``NNEvaluator(architecture='structured')`` path makes — see
         the docstring there). Action-history threading is a separate
-        followup once the engine grows a public action log."""
+        followup once the engine grows a public action log.
+
+        ``n_printings_cap`` is threaded from the handle's
+        ``structured_n_printings_cap`` (resolved from the loaded
+        model's ``StructuredModelConfig.n_printings`` at handle
+        time). Without this, the tokenizer would default to its own
+        constant (320) and an EoE-style large-card-pool deployment
+        with a smaller-than-default model n_printings would overflow
+        the embedding table mid-dispatch.
+        """
         import importlib
         tokenizer = importlib.import_module(
             "mtg_bot.training.state_tokenizer",
         )
         engine = _engine_state(state)
+        n_cap = self._h.structured_n_printings_cap
+        action_n = self._h.structured_action_history_n
+        kwargs: dict[str, Any] = {}
+        if n_cap > 0:
+            kwargs["n_printings_cap"] = n_cap
+        if action_n > 0:
+            return tokenizer.tokenize_state(
+                engine, int(viewer_id), (), action_n, **kwargs,
+            )
         return tokenizer.tokenize_state(
-            engine,
-            int(viewer_id),
-            (),
+            engine, int(viewer_id), (), **kwargs,
         )
 
     def _validate_seq_len(self, token_dict: dict[str, np.ndarray]) -> None:
