@@ -612,3 +612,92 @@ def test_rust_parser_accepts_optional_key_on_deal_damage_any_target():
     }
     pid = reg.register_printing(d)
     assert pid == 0
+
+
+def test_bridge_surveil_translates_to_python():
+    """Phase 5 bridge extension: Rust
+    ``{"kind": "surveil", "count": N}`` translates to Python
+    ``Surveil(amount=N)``.
+
+    Unblocks Starbreach-Whale / Wurmwall-Sweeper / Thawbringer-ETB
+    surveil-on-enters triggers on the cross-engine bridge. The Rust
+    effect variant already exists at ``rust/src/cards.rs:274``
+    (``Effect::Surveil { count: i32 }``) and its parse_effect arm at
+    ``cards.rs:2894-2911``; the Rust resolve arm at
+    ``state_ops_resolve.rs:2610-2649`` pushes a
+    ``PendingDecision::SurveilChoice`` onto
+    ``state.pending_decisions`` with the popped cards + source's
+    controller (derived from ``current_resolve_source_controller``
+    per the I61 controller-of-effect fix). Python's class already
+    exists at ``effects/generic/library_lookat.py:569`` (``Surveil``).
+    This pins the bridge translation that wires them up.
+
+    Note the dict-key rename: Rust's parser uses ``count`` (mirrors
+    ScryN's count-shape parser arm); Python's constructor spells the
+    same value ``amount``. The bridge translates count -> amount.
+    """
+    from mtg_bot.effects.generic.library_lookat import Surveil
+    from mtg_bot.parity.cross_engine import _ta_dict_to_python_effect
+
+    e = _ta_dict_to_python_effect({"kind": "surveil", "count": 2})
+    assert isinstance(e, Surveil)
+    assert e.amount == 2
+    # The use_artifact_count flag stays at its default False (the
+    # dynamic-X "surveil X where X is artifact count" shape is
+    # specific to Cerebral Download and isn't part of the EoE pool's
+    # straight surveil-N triggers).
+    assert e.use_artifact_count is False
+
+
+def test_bridge_surveil_count_default_one():
+    """Missing ``count`` defaults to 1 (mirrors Python's Surveil
+    default of 1; the draw_cards arm uses the same default-one
+    convention for its missing-count fallback).
+
+    Rust's parse_effect is STRICTER (raises KeyError on a missing
+    ``count`` field); the Python bridge's lenient default exists for
+    partial test fixtures only and is out-of-band relative to the
+    production parser path.
+    """
+    from mtg_bot.effects.generic.library_lookat import Surveil
+    from mtg_bot.parity.cross_engine import _ta_dict_to_python_effect
+
+    e = _ta_dict_to_python_effect({"kind": "surveil"})
+    assert isinstance(e, Surveil)
+    assert e.amount == 1
+
+
+def test_rust_parser_accepts_surveil_in_triggered_ability():
+    """Pin the Rust parser surface for the matched effect kind. The
+    bridge's dict shape must register cleanly on the Rust side too;
+    this lockstep gate keeps the Python bridge from drifting away
+    from Rust's parse_effect coverage.
+
+    Mirrors the existing ``deal_damage_any_target`` parser-surface
+    pin. Required field is ``count`` (non-negative i32); the
+    predicate-path triggered-ability wrapper is just a carrier — the
+    substrate being pinned is parse_effect's ``surveil`` arm
+    (cards.rs:2894-2911).
+    """
+    import mtg_bot_engine
+
+    reg = mtg_bot_engine.Registry()
+    d = {
+        "name": "Phase 5 Bridge Pin — Surveil",
+        "card_types": ["Creature"],
+        "mana_cost": {"generic": 4, "U": 1},
+        "power": 4,
+        "toughness": 4,
+        "triggered_abilities": [
+            {
+                "event": "enters",
+                "predicate": {"kind": "source_is_self"},
+                "effect": {
+                    "kind": "surveil",
+                    "count": 2,
+                },
+            }
+        ],
+    }
+    pid = reg.register_printing(d)
+    assert pid == 0

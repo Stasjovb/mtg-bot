@@ -256,6 +256,71 @@ def _ta_dict_to_python_effect(eff_dict: dict):
             amount=eff_dict.get("amount", 0),
             optional=bool(eff_dict.get("optional", False)),
         )
+    if kind == "surveil":
+        # Surveil N (CR 701.43) — look at the top N cards of your
+        # library, then put any number of them into your graveyard
+        # and the rest on top of your library in any order. Rust's
+        # ``Effect::Surveil { count: i32 }`` variant (cards.rs:274)
+        # has existed since the I61 controller-of-effect substrate
+        # landed; its resolve arm (state_ops_resolve.rs:2610-2649)
+        # pops min(count, library.len()) cards off the controller's
+        # library top and pushes a ``PendingDecision::SurveilChoice``
+        # carrying those cards plus the source's controller. The
+        # controller is derived from
+        # ``current_resolve_source_controller`` (I61) with a fallback
+        # to ``active_player`` for direct ``apply_effect_pub``
+        # callers, so the cross-controller "opponent's trigger
+        # resolves on your turn" case (p1's ETB trigger fires on
+        # p0's turn after a flicker re-ETB) surveils p1's library
+        # correctly.
+        #
+        # Python's ``Surveil(amount: int)`` class
+        # (effects/generic/library_lookat.py:569) walks the top N
+        # cards in order; for each one, the controller's
+        # ``agent.choose_surveil`` callback returns True (mill to
+        # graveyard) or False (keep on top of library in original
+        # order). The decision callback substrate is symmetric
+        # across engines: Rust queues a PendingDecision and waits
+        # for the caller to drain (``submit_surveil_decision`` for
+        # explicit choices, ``auto_resolve_pending_decisions`` for
+        # batched fallback); Python's resolve walks the agent
+        # callback in-line.
+        #
+        # **Cross-engine default-strategy contract.** Both engines'
+        # no-decision defaults agree: every observed card stays on
+        # the library in its original order, NO cards mill. On the
+        # Rust side this is the auto-resolve "keep_all_on_top"
+        # strategy, which the
+        # ``resolve_top_of_stack``-after-triggered-ability path
+        # invokes terminally at state_ops_resolve.rs:6832. On the
+        # Python side this is the ``p.agent is None`` short-circuit
+        # at library_lookat.py:605 — the ``choose_surveil`` call is
+        # skipped, the card is NOT removed from the library, and
+        # the keep-list captures it. Probes that don't seat a
+        # custom agent on the source's controller will observe the
+        # SAME post-resolve library top + graveyard contents on
+        # both engines: library top unchanged, graveyard empty.
+        # Probes that want to drive the mill path explicitly seat
+        # an agent whose ``choose_surveil`` returns True, then
+        # invoke Rust's ``auto_resolve_pending_decisions(
+        # "send_all_to_graveyard")`` to mirror — out of scope for
+        # the first probe slice on this branch, which exercises
+        # the keep_all_on_top default that's bit-equal across
+        # engines without any agent setup.
+        #
+        # Mirrors Rust's ``parse_effect`` arm (cards.rs:2894-2911)
+        # which requires an explicit non-negative ``count`` field.
+        # The dict-shape key here is ``count`` (Rust's terminology),
+        # NOT ``amount`` — the Python ``Surveil`` constructor
+        # spells the same value ``amount``, so the bridge
+        # translates count -> amount. Missing ``count`` defaults to
+        # 1 (mirrors Python's Surveil default of 1; Rust's
+        # parse_effect is STRICTER and raises ``KeyError`` on a
+        # missing field — the lenient default here exists for
+        # partial test fixtures only, same convention as the
+        # ``draw_cards`` arm's count default of 1).
+        from mtg_bot.effects.generic.library_lookat import Surveil
+        return Surveil(amount=eff_dict.get("count", 1))
     if kind == "deal_damage_to_opponent_creature":
         # Targeted "deals N damage to target creature an opponent
         # controls" — restricted to the
