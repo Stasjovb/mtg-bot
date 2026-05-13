@@ -201,25 +201,25 @@ def test_triggered_abilities_unknown_predicate_kind_raises(empty_registry):
 
 
 def test_triggered_abilities_unwired_event_raises(empty_registry):
-    """Slice 5 wires ``Event::Enters`` and ``Event::Dies``; other
-    declared events (``cast``, ``attacks``, ``deals_damage``) raise
-    at register time so a caller can't stamp a trigger that never
-    fires. Pin one such event here — ``cast``.
+    """Slice 6 wires ``Event::Enters``, ``Event::Dies``, and
+    ``Event::Cast``; the remaining declared events (``attacks``,
+    ``deals_damage``) raise at register time so a caller can't stamp
+    a trigger that never fires. Pin one such event here — ``attacks``.
     """
     d = {
-        "name": "Cast Trigger Card",
+        "name": "Attacks Trigger Card",
         "card_types": ["Creature"],
         "mana_cost": {"generic": 1},
         "power": 1,
         "toughness": 1,
         "triggered_abilities": [
             {
-                "event": "cast",
+                "event": "attacks",
                 "effect": {"kind": "draw_cards", "count": 1},
             }
         ],
     }
-    with pytest.raises(ValueError, match="not yet wired in Slice 5"):
+    with pytest.raises(ValueError, match="not yet wired in Slice 6"):
         empty_registry.register_printing(d)
 
 
@@ -1887,3 +1887,269 @@ def test_dies_event_parses_via_cross_engine_bridge():
     }
     ta = _ta_dict_to_python_triggered_ability(ta_dict)
     assert ta.event is Event.DIES
+
+
+# =====================================================================
+# Slice 6 — Event::Cast dispatch on cast_creature site.
+#
+# Adds the third wired event family. After mana payment commits in
+# `cast_creature` (the no-stack cast primitive), dispatch_event fires
+# Event::Cast with the still-in-hand spell as subject. CAST fires
+# BEFORE the move-to-bf step's ENTERS dispatch, matching Python's
+# cast-then-resolve ordering.
+#
+# Test coverage:
+# - `cast` event parses; `attacks` / `deals_damage` still raise.
+# - A creature with a SourceIsSelf CAST trigger fires it when cast.
+# - A pre-existing observer with `subject_is_creature` CAST trigger
+#   observes ANOTHER creature being cast.
+# - `controlled_by_you` filter on a CAST trigger.
+# - CAST fires BEFORE ENTERS — when both are wired on the same source,
+#   the stack-resolve order is CAST -> ENTERS.
+# =====================================================================
+
+
+def _cast_self_draw_dict(name="Test CAST Self-Draw"):
+    """A free-cast creature with a `source_is_self` CAST trigger
+    that draws 1 card when cast. mana_cost = empty so the cast
+    payment is free (no mana pool setup needed).
+    """
+    return {
+        "name": name,
+        "card_types": ["Creature"],
+        "mana_cost": {},
+        "effects": [],
+        "power": 1,
+        "toughness": 1,
+        "triggered_abilities": [
+            {
+                "event": "cast",
+                "predicate": {"kind": "source_is_self"},
+                "effect": {"kind": "draw_cards", "count": 1},
+            }
+        ],
+    }
+
+
+def _cast_creature_observer_dict():
+    """Pre-existing observer with `subject_is_creature` CAST trigger.
+    Fires when ANY creature is cast — regardless of who cast it.
+    """
+    return {
+        "name": "Test CAST Creature Observer",
+        "card_types": ["Creature"],
+        "mana_cost": {},
+        "effects": [],
+        "power": 1,
+        "toughness": 1,
+        "triggered_abilities": [
+            {
+                "event": "cast",
+                "predicate": {"kind": "subject_is_creature"},
+                "effect": {"kind": "draw_cards", "count": 1},
+            }
+        ],
+    }
+
+
+def _free_vanilla_creature_dict(name="Test Free Vanilla Creature"):
+    """A free-cast vanilla creature (no triggered abilities). Used
+    as the bait in CAST observer tests so the cast payment is free.
+    """
+    return {
+        "name": name,
+        "card_types": ["Creature"],
+        "mana_cost": {},
+        "effects": [],
+        "power": 1,
+        "toughness": 1,
+    }
+
+
+# --- parser surface --------------------------------------------------
+
+
+def test_slice6_cast_event_parses(empty_registry):
+    """`event: cast` is accepted at register-time post-Slice-6."""
+    pid = empty_registry.register_printing(_cast_self_draw_dict())
+    assert pid == 0
+
+
+# --- SourceIsSelf CAST — "when you cast this creature" --------------
+
+
+def test_cast_self_trigger_fires_on_cast(synthetic_state):
+    """Inject a free-cast creature with a `source_is_self` CAST
+    trigger into p0's hand. Cast it. The CAST trigger fires; the
+    creature lands on the bf (any ENTERS trigger would too, but
+    this fixture only has CAST).
+    """
+    crt_id = synthetic_state.register_and_inject_object(
+        _cast_self_draw_dict(), 0, ZONE_HAND
+    )
+    library_before = synthetic_state.library_sizes[0]
+
+    ok = synthetic_state.cast_creature(crt_id, 0)
+    assert ok is True
+    # The CAST trigger is on the stack (no ENTERS trigger fires
+    # because the creature only has a CAST one).
+    assert synthetic_state.stack_size() == 1, (
+        "expected the source_is_self CAST trigger to fire when "
+        "cast_creature succeeded"
+    )
+    top = synthetic_state.peek_top_of_stack()
+    assert top["source_obj_id"] == crt_id
+    # The creature is on the bf (cast_creature is no-stack so
+    # move-to-bf already happened).
+    assert synthetic_state.find_object_zone(crt_id) == ZONE_BATTLEFIELD
+
+    # Resolve the CAST trigger -> draw 1.
+    synthetic_state.resolve_top_of_stack()
+    assert synthetic_state.library_sizes[0] == library_before - 1
+
+
+# --- subject_is_creature CAST observer (Talrand-shape) --------------
+
+
+def test_cast_creature_observer_fires_on_another_creature_cast(synthetic_state):
+    """Pre-existing observer with `subject_is_creature` CAST trigger.
+    Cast a different vanilla creature and the observer fires.
+    """
+    observer_id = synthetic_state.register_and_inject_object(
+        _cast_creature_observer_dict(), 0, ZONE_BATTLEFIELD
+    )
+    # Cast a free vanilla creature; observer fires.
+    bait_id = synthetic_state.register_and_inject_object(
+        _free_vanilla_creature_dict(), 0, ZONE_HAND
+    )
+    library_before = synthetic_state.library_sizes[0]
+
+    ok = synthetic_state.cast_creature(bait_id, 0)
+    assert ok is True
+
+    assert synthetic_state.stack_size() == 1, (
+        "expected the `subject_is_creature` CAST observer to fire on "
+        "the vanilla creature being cast"
+    )
+    top = synthetic_state.peek_top_of_stack()
+    assert top["source_obj_id"] == observer_id
+
+    # Resolve -> p0 draws 1.
+    synthetic_state.resolve_top_of_stack()
+    assert synthetic_state.library_sizes[0] == library_before - 1
+
+
+def test_cast_observer_with_controlled_by_you_fires_on_own_cast(synthetic_state):
+    """`subject_is_creature AND controlled_by_you` CAST observer
+    fires on p0's own cast.
+    """
+    observer = {
+        "name": "Test CAST Under-Your-Control Observer",
+        "card_types": ["Creature"],
+        "mana_cost": {},
+        "effects": [],
+        "power": 1,
+        "toughness": 1,
+        "triggered_abilities": [
+            {
+                "event": "cast",
+                "predicate": {
+                    "kind": "and",
+                    "left": {"kind": "subject_is_creature"},
+                    "right": {"kind": "controlled_by_you"},
+                },
+                "effect": {"kind": "draw_cards", "count": 1},
+            }
+        ],
+    }
+    observer_id = synthetic_state.register_and_inject_object(
+        observer, 0, ZONE_BATTLEFIELD
+    )
+    bait_id = synthetic_state.register_and_inject_object(
+        _free_vanilla_creature_dict(), 0, ZONE_HAND
+    )
+    ok = synthetic_state.cast_creature(bait_id, 0)
+    assert ok is True
+    assert synthetic_state.stack_size() == 1
+    top = synthetic_state.peek_top_of_stack()
+    assert top["source_obj_id"] == observer_id
+
+
+# --- CAST fires BEFORE ENTERS ------------------------------------
+
+
+def test_cast_fires_before_enters_when_both_on_same_source(synthetic_state):
+    """A creature with BOTH a CAST trigger AND an ENTERS trigger:
+    the CAST trigger fires first (chronologically), then the ENTERS
+    trigger fires when the creature lands on the bf.
+
+    Both triggers go on the stack. The stack is LIFO so the
+    LAST-pushed (ENTERS) resolves first. CAST is pushed FIRST
+    (mana-paid moment), ENTERS is pushed AFTER (move-to-bf moment).
+    So the resolution order is ENTERS-first, CAST-second.
+    """
+    crt = {
+        "name": "Test Both CAST and ENTERS",
+        "card_types": ["Creature"],
+        "mana_cost": {},
+        "effects": [],
+        "power": 1,
+        "toughness": 1,
+        "triggered_abilities": [
+            {
+                "event": "cast",
+                "predicate": {"kind": "source_is_self"},
+                "effect": {"kind": "draw_cards", "count": 1},
+            },
+            {
+                "event": "enters",
+                "predicate": {"kind": "source_is_self"},
+                "effect": {"kind": "gain_life", "amount": 2},
+            },
+        ],
+    }
+    crt_id = synthetic_state.register_and_inject_object(crt, 0, ZONE_HAND)
+    life_before = synthetic_state.life_totals[0]
+    library_before = synthetic_state.library_sizes[0]
+
+    ok = synthetic_state.cast_creature(crt_id, 0)
+    assert ok is True
+
+    # Both triggers on stack — push order: CAST first, ENTERS second
+    # (cast_creature dispatches CAST in phase 2, ENTERS in phase 3).
+    # Stack is LIFO so top is the ENTERS trigger.
+    assert synthetic_state.stack_size() == 2, (
+        f"expected 2 triggers (CAST + ENTERS); got "
+        f"{synthetic_state.stack_size()}"
+    )
+
+    # Resolve top: ENTERS -> gain 2 life.
+    synthetic_state.resolve_top_of_stack()
+    assert synthetic_state.life_totals[0] == life_before + 2
+
+    # Resolve next: CAST -> draw 1.
+    synthetic_state.resolve_top_of_stack()
+    assert synthetic_state.library_sizes[0] == library_before - 1
+    assert synthetic_state.is_stack_empty()
+
+
+# --- cross-engine bridge accepts "cast" event ------------------------
+
+
+def test_cast_event_parses_via_cross_engine_bridge():
+    """The cross_engine.py bridge accepts `event: cast` and produces
+    Python's `Event.IS_CAST` (note Python's enum spells it
+    `IS_CAST`; Rust uses `Cast`).
+    """
+    from mtg_bot.parity.cross_engine import (
+        _ta_dict_to_python_triggered_ability,
+    )
+    from mtg_bot.effects.predicates import Event
+
+    ta_dict = {
+        "event": "cast",
+        "predicate": {"kind": "source_is_self"},
+        "effect": {"kind": "draw_cards", "count": 1},
+    }
+    ta = _ta_dict_to_python_triggered_ability(ta_dict)
+    assert ta.event is Event.IS_CAST

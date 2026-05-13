@@ -4007,11 +4007,11 @@ fn parse_activation_cost(
 /// }
 /// ```
 ///
-/// Slice 1 wired `"enters"`; Slice 5 adds `"dies"`. Other variants
-/// (cast, attacks, deals_damage) still raise loudly because their
-/// dispatch sites don't exist yet — allowing them through would let
-/// registry-dict callers stamp triggers that never fire, masking
-/// the missing-fanout bug.
+/// Slice 1 wired `"enters"`; Slice 5 added `"dies"`; Slice 6 adds
+/// `"cast"`. Remaining variants (`attacks`, `deals_damage`) still
+/// raise because their dispatch sites don't exist yet — allowing
+/// them through would let registry-dict callers stamp triggers that
+/// never fire, masking the missing-fanout bug.
 fn parse_triggered_ability(
     dict: &Bound<'_, PyDict>,
 ) -> PyResult<TriggeredAbility> {
@@ -4021,19 +4021,20 @@ fn parse_triggered_ability(
     let event = match event_str.as_str() {
         "enters" => Event::Enters,
         "dies" => Event::Dies,
+        "cast" => Event::Cast,
         // Out-of-scope events stay raise-on-register. Each lands
         // alongside its dispatch fan-out so the parser surface stays
         // consistent with the dispatcher's coverage.
-        "cast" | "attacks" | "deals_damage" => {
+        "attacks" | "deals_damage" => {
             return Err(PyValueError::new_err(format!(
-                "triggered_ability.event {event_str:?} is not yet wired in Slice 5; \
-                 only \"enters\" and \"dies\" dispatch today"
+                "triggered_ability.event {event_str:?} is not yet wired in Slice 6; \
+                 only \"enters\", \"dies\", and \"cast\" dispatch today"
             )));
         }
         other => {
             return Err(PyValueError::new_err(format!(
                 "unknown triggered_ability.event {other:?}; \
-                 valid: enters, dies (Slice 5)"
+                 valid: enters, dies, cast (Slice 6)"
             )));
         }
     };
