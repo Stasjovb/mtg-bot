@@ -1209,7 +1209,29 @@ fn apply_effect(
                 ));
             }
             TargetFilter::AnyCreature => {
-                let defender = (1 - state.active_player) as usize;
+                // **Controller resolution (I71 follow-up to the
+                // I59 / I60 / I63 / I64 / I65 / I66 / I67 / I68 /
+                // I69 / I70 controller-of-effect substrate).**
+                // Same pattern as I70 ExileTarget — CR 119.5 /
+                // 608.2: an effect resolves under its source's
+                // controller. "AnyCreature" first-slice target
+                // shortcut picks the FIRST object on the
+                // DEFENDING side, where defender = the SOURCE'S
+                // controller's opponent.
+                //
+                // **Why the fix.** Pre-fix this arm computed
+                // `defender = 1 - state.active_player`. Wrong when
+                // the resolving spell / triggered ability has a
+                // controller != active_player. Example: on p0's
+                // turn, p1 casts a Twiddle-shape tap instant —
+                // pre-fix it tapped p1's own bf[0] (self-tap).
+                // Post-fix it correctly taps p0's bf[0] (the
+                // source's controller's opponent).
+                let controller = state
+                    .current_resolve_source_controller
+                    .map(|c| c as usize)
+                    .unwrap_or(state.active_player as usize);
+                let defender = 1 - controller;
                 let bf = &state.players[defender].battlefield;
                 if bf.is_empty() {
                     return Ok(()); // fizzle silently
