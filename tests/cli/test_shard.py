@@ -268,11 +268,22 @@ def test_run_eval_shard_writes_per_shard_row_with_kind_eval(
     assert p["wins_new"] == 3 and p["wins_old"] == 1
     assert p["n_games_total"] == 4
 
-    # The result JSON file lands on disk and stdout summary fires.
+    # Post-cutover the sibling ``_shard_<label>_result.json`` write
+    # is dropped — the per-shard ``run_progress`` row is the
+    # authoritative source. Stdout still carries the counts dict for
+    # diagnostic visibility, but no ``result_path`` key.
     out = capsys.readouterr().out
     payload = json.loads(out.strip())
     assert payload["wins_new"] == 3
-    assert "result_path" in payload
+    assert "result_path" not in payload
+    legacy_result = (
+        progress_dir
+        / "iter_007_eval_v2_vs_v1_shard_macbook_result.json"
+    )
+    assert not legacy_result.exists(), (
+        "legacy _result.json must not be written post-cutover; "
+        f"found at {legacy_result}"
+    )
 
 
 def test_run_pull_shard_marks_failed_on_exception(

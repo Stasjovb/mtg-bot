@@ -45,6 +45,32 @@ def _swap_card_source_from_env():
         set_active_source(original)
 
 
+@pytest.fixture(autouse=True)
+def _isolate_runs_db_env(tmp_path, monkeypatch):
+    """Per-test isolation of the runs-DB env vars.
+
+    ``_ensure_master_runs_db_path_default()`` (in
+    ``mtg_bot.training.distributed``) sets ``MTG_BOT_RUN_DB_PATH``
+    to ``training_progress/runs.db`` (relative to CWD) at the top of
+    ``run_distributed_*``. Without isolation that bleeds into other
+    tests in the same process and points at the developer's actual
+    runs.db file.
+
+    We default to a per-test path so any code that auto-defaults the
+    env var lands rows in an isolated DB. Individual tests that want
+    to assert against the no-DB code path call
+    ``monkeypatch.delenv("MTG_BOT_RUN_DB_PATH", raising=False)``;
+    tests that pre-seed a master run row override the path explicitly.
+
+    The default DB is created lazily (no file is written if no run is
+    registered), so most tests pay zero cost.
+    """
+    monkeypatch.setenv(
+        "MTG_BOT_RUN_DB_PATH", str(tmp_path / "runs.db"),
+    )
+    monkeypatch.delenv("MTG_BOT_RUN_DB_URL", raising=False)
+
+
 @pytest.fixture(scope="session", autouse=True)
 def _flip_heuristic_defaults_off_for_tests():
     """Wrap ``MtgGameStateAdapter.__init__`` so the ``heuristics``
