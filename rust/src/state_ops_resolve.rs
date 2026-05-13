@@ -952,10 +952,34 @@ fn apply_effect(
             state.pending_leaves_dispatches.push(leaving_obj_id);
             }
         },
-        // Round-10: Mill. Caller's controller (= active_player, first-
-        // slice convention) puts the top `count` cards of their
-        // library into their graveyard. "Top" is lib[0] post-CE3
-        // (mirrors zones convention used by DrawCards above).
+        // Round-10: Mill. Caller's controller puts the top `count`
+        // cards of their library into their graveyard. "Top" is
+        // lib[0] post-CE3 (mirrors zones convention used by
+        // DrawCards above).
+        //
+        // **Controller resolution (I65 follow-up to the I59 / I60 /
+        // I63 / I64 controller-of-effect substrate).** Prefer the
+        // transient `state.current_resolve_source_controller` (set
+        // by the stack resolver around each `apply_effect` call),
+        // falling back to `state.active_player` for back-compat
+        // with direct `apply_effect_pub` callers. Same pattern as
+        // `Effect::DrawCards` / `Effect::GainLife` /
+        // `Effect::DamageEachOpponent` / `Effect::DealDamage` —
+        // CR 119.5 / 608.2: an effect resolves under its source's
+        // controller. For Mill (self-mill), the milling player is
+        // the SOURCE'S controller, not the active player.
+        //
+        // **Why the fix.** Pre-fix this arm hardcoded
+        // `state.active_player`. Wrong when the resolving spell /
+        // triggered ability has a controller != active_player.
+        // Example: on p0's turn, p1 casts an instant Mill-2 self-
+        // mill in response (e.g. a graveyard-fueling reactive
+        // spell) — pre-fix the cards left p0's library (active_-
+        // player), post-fix they leave p1's library (the spell's
+        // controller). Mirrors Python's analogous self-mill
+        // handling (drawn off `MillTargetPlayer` with target =
+        // controller; the Rust `Effect::Mill` arm is the
+        // controller-target shortcut).
         //
         // Empty library mid-mill: stop silently. Real MTG: mill on
         // empty library is NOT a deck-out by itself (unlike a draw
@@ -966,7 +990,10 @@ fn apply_effect(
         // Negative `count` is silently clamped to 0 (same shape as
         // DrawCards), which is also the count-0 no-op path.
         Effect::Mill { count } => {
-            let controller = state.active_player as usize;
+            let controller = state
+                .current_resolve_source_controller
+                .map(|c| c as usize)
+                .unwrap_or(state.active_player as usize);
             let n = (*count).max(0) as usize;
             for _ in 0..n {
                 let player = &mut state.players[controller];

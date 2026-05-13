@@ -4208,6 +4208,68 @@ the forked branch.
   - **Cross-engine smoke probe** for walker activations. Unchanged
     from I56.
 
+### I65. `Effect::Mill` (self-mill) controller-of-effect fix — reuses I59 transient slot; milling player computed from `current_resolve_source_controller` instead of `state.active_player` (Mill self-mill controller divergence closure)
+
+- **Pinned by**:
+  - 4 new `tests_rust/test_resolve.py` `test_mill_*` regression
+    pins covering cross-controller spell resolution (1: p1-
+    controlled Mill-2 self-mill on p0's turn → p1's library
+    loses 2, NOT p0's), same-controller back-compat (1: p0-
+    controlled Mill-3 on p0's turn still mills p0), cross-
+    controller LTB trigger (1: p1's LTB → mill-2 trigger fires on
+    bounce by p0's spell, milling lands on p1), and
+    `resolve_top_of_stack_pause` parity (1: pause variant uses
+    the same swap). Mirrors the I59 / I60 / I63 / I64 test shape
+    exactly.
+
+- **Rule**. CR 119.5 / 608.2: an effect resolves under its
+  source's controller. For Mill (the self-mill arm, where the
+  controller mills THEIR OWN library), the milling player is the
+  SOURCE'S controller. Distinct from `MillTargetPlayer` which
+  takes an explicit target player. Mirrors Python's self-mill
+  handling (via `MillTargetPlayer(target=controller_id)`; the
+  Rust `Effect::Mill` arm is the controller-target shortcut).
+
+- **Pre-fix Rust behavior**. The `Effect::Mill` arm at
+  `state_ops_resolve.rs:968` (pre-fix line) used
+  `let controller = state.active_player as usize`. Wrong when
+  the resolving spell / triggered ability has a controller !=
+  active_player. Example: on p0's turn, p1 casts an instant
+  Mill-2 self-mill in response (graveyard-fueling reactive
+  spell) — pre-fix the 2 cards left p0's library (active_player),
+  post-fix they leave p1's library (the spell's controller).
+
+- **Reuses I59 substrate**. No new state, no new helper. The
+  `Effect::Mill` arm gains a controller-resolution preamble
+  identical to the I59 DrawCards arm:
+  `let controller = state.current_resolve_source_controller
+  .map(|c| c as usize).unwrap_or(state.active_player as usize);`.
+  The transient slot is set by the same stack-resolver swaps
+  I59 wired (`resolve_top_of_stack` spell + trigger branches
+  and the `_pause` mirrors). Cross-controller-via-pending-
+  decision callers also work because I61 already migrated the
+  dispatcher sites to `apply_effect_pub_with_controller`.
+
+- **Out of scope (deferred to future slices)**:
+  - **`Effect::Sacrifice` "you sacrifice"** at
+    `state_ops_resolve.rs:~1289`. Reads `state.active_player`
+    as the sacrificing player. Same shape as Mill (self-target
+    convention) but distinct fix surface (the AnyCreature arm
+    inside Sacrifice). Inventory note (I66-candidate).
+  - **`Effect::DiscardSelf` / other "you do X to yourself"
+    arms** that already use the 5-zone source-finder pattern
+    (DiscardSelf does) are unaffected. The 5-zone walk
+    independently locates the source's controller and doesn't
+    rely on the transient slot.
+
+- **Forward inventory (post-I65 remaining `active_player`-keyed
+  arms in `state_ops_resolve.rs`):**
+  - **`Effect::Sacrifice`**: "you sacrifice" — same self-target
+    shape as Mill, today reads `state.active_player` as the
+    sacrificing player. Per-arm pin required (I66-candidate).
+  - **12+ defender sites across various arms** — per-arm audit
+    pending.
+
 ### I63. `Effect::DamageEachOpponent` controller-of-effect fix — reuses I59 transient slot; defender computed as `1 - controller` instead of `1 - active_player` (DamageEachOpponent controller divergence closure)
 
 - **Pinned by**:
