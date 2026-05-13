@@ -3018,9 +3018,54 @@ fn apply_effect(
             obj.exiled_with_source = None;
             Arc::make_mut(&mut state.players[controller_idx].hand).push(obj);
         }
+        // **Controller resolution (I83 follow-up to the
+        // I59 / I60 / I63 / I64 / I65 / I66 / I67 / I68 / I69 /
+        // I70 / I71 / I72 / I73 / I74 / I75 / I76 / I77 / I78 /
+        // I79 / I80 / I81 / I82 controller-of-effect substrate).**
+        // Sibling closure to I82 (ReturnCreatureFromYourGraveyard-
+        // ToHand) — same "your graveyard" reanimation shape;
+        // differs only in destination zone (battlefield vs hand).
+        // "Your" pronouns bind to the source's controller, not
+        // the active player. CR 119.5 / 608.2.
+        //
+        // **Why the fix.** Pre-fix this arm computed
+        // `controller_idx = state.active_player as usize`, used
+        // for the source graveyard scan, the post-find Vec
+        // position re-scan, the planeswalker starting-loyalty
+        // pre-read, the graveyard-pop, AND the destination
+        // battlefield push. Wrong when the resolving spell /
+        // triggered ability has a controller != active_player.
+        // Example: on p0's turn, p1 casts a Zombify-shape
+        // sorcery — pre-fix it scanned p0's graveyard for a
+        // creature and reanimated it on p0's battlefield under
+        // p0's control (active_player=0); post-fix it correctly
+        // scans p1's graveyard and reanimates on p1's battlefield
+        // under p1's control. Mirrors Python's
+        // `ReturnFromGraveyard.resolve(state, controller_id,
+        // targets)` at `effects/generic/graveyard.py:195` and
+        // its `_move_one(state, controller_id, card)` helper,
+        // which both pin "your graveyard"/"your battlefield"
+        // zones to `state.player_by_id(controller_id)`. The
+        // reanimated permanent's GameObject.controller field
+        // (preserved as the existing obj.controller from the
+        // pre-pop state) is left unchanged by this fix — the
+        // CR-correct semantics here are that the reanimated
+        // permanent enters under the reanimation effect's
+        // controller, which is what the post-fix
+        // controller_idx now correctly resolves to.
+        //
+        // Same transient-slot lookup preamble as I59-I82; the
+        // controller_idx value cascades into all five readers
+        // (scan, position re-scan, walker pre-read, graveyard-
+        // pop, bf-push). The ETB-trigger dispatch
+        // (`pending_etb_dispatches`) sees the reanimated id
+        // regardless of recipient bf, so the trigger fan-out
+        // shape is unaffected.
         Effect::ReturnCreatureFromYourGraveyardToBattlefield => {
             let _ = source_obj_id; // controller-targeted, not source-relative
-            let controller_idx = state.active_player as usize;
+            let controller_idx = state
+                .current_resolve_source_controller
+                .unwrap_or(state.active_player) as usize;
             // Find first creature in controller's graveyard (front =
             // smallest Vec index = top of the iteration order). Drop
             // registry borrow before mutating.
@@ -3084,6 +3129,23 @@ fn apply_effect(
             obj.attached_to = None;
             obj.exiled_with_source = None;
             obj.etb_timestamp = etb_ts;
+            // I83 controller-of-effect fix: stamp the reanimated
+            // permanent's `controller` byte with the
+            // reanimation-effect's controller. CR 110.2 / 614.x —
+            // when an object enters the battlefield from another
+            // zone, its controller becomes the player whose effect
+            // moved it (or the player who put it there). For the
+            // typical "return target creature card from YOUR
+            // graveyard" reanimation, that's the source-controller
+            // we just resolved. Pre-fix this byte was left as the
+            // pre-move value (owner-keyed in graveyard, which
+            // happened to match `state.active_player` only when
+            // controller == active_player and the original owner
+            // was the active player). Post-fix, the new
+            // battlefield permanent is correctly controlled by the
+            // reanimating effect's controller regardless of where
+            // the card came from.
+            obj.controller = controller_idx as u8;
             let entered_id = obj.id;
             Arc::make_mut(&mut state.players[controller_idx].battlefield).push(obj);
             // ETB-trigger Slice 2 (RS3): queue ENTERS dispatch for

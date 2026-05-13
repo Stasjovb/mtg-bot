@@ -14656,3 +14656,199 @@ def test_create_token_zero_count_under_cross_controller_still_no_ops(engine):
     bf_after = list(state.battlefield_sizes)
     assert bf_after == bf_before
     assert state.is_stack_empty() is True
+
+
+# ====================================================================
+# ReturnCreatureFromYourGraveyardToBattlefield controller-of-effect
+# fix — regression pins (I83).
+#
+# Sibling closure to I82 (ReturnCreatureFromYourGraveyardToHand) —
+# same "your graveyard" reanimation shape; differs only in
+# destination zone (battlefield vs hand). Pre-fix
+# `controller_idx = state.active_player as usize`, used for source
+# graveyard scan AND destination battlefield push AND walker
+# starting-loyalty re-read. Wrong when controller != active_player
+# — example: on p0's turn, p1 casts a Zombify-shape sorcery; pre-
+# fix scanned p0's graveyard and put the creature on p0's bf
+# under p0's control; post-fix correctly scans p1's graveyard and
+# puts the creature on p1's bf under p1's control.
+#
+# Mirrors Python's `ReturnFromGraveyard.resolve(state,
+# controller_id, targets)` at `effects/generic/graveyard.py:195`
+# and the put_into_battlefield call at line 279, which both pin
+# "your graveyard"/"your battlefield" to
+# `state.player_by_id(controller_id)`.
+#
+# Also pins the I83 GameObject.controller byte stamp — the
+# reanimated permanent enters under the reanimation effect's
+# controller (CR 110.2 / 614.x); pre-fix the byte was left at
+# the pre-move value, which only happened to match the
+# reanimation effect's controller when controller == active_player
+# AND the original owner was the active player. Post-fix the byte
+# is stamped to `controller_idx` regardless.
+# ====================================================================
+
+
+def _zombify_dict_for_i83():
+    """A Zombify-shape sorcery — single-effect 'return target
+    creature card from your graveyard to the battlefield'. Used
+    by I83 regression pins."""
+    return {
+        "name": "Test Zombify I83",
+        "card_types": ["Sorcery"],
+        "mana_cost": {"B": 1, "generic": 2},
+        "effects": [
+            {"kind": "return_creature_from_your_graveyard_to_battlefield"}
+        ],
+    }
+
+
+def _vanilla_creature_dict_for_i83():
+    """A vanilla 2/2 creature printing for graveyard injection.
+    Self-contained so the I83 section doesn't depend on the round-
+    27 helper's exact shape."""
+    return {
+        "name": "Test Creature I83",
+        "card_types": ["Creature"],
+        "power": 2,
+        "toughness": 2,
+        "mana_cost": {"generic": 2},
+    }
+
+
+def test_return_creature_to_bf_routes_to_source_controllers_graveyard(engine):
+    """**Regression pin for the ReturnCreatureFromYourGraveyard-
+    ToBattlefield controller-of-effect fix (I83).**
+
+    On p0's turn (active_player=0), a Zombify-shape sorcery
+    whose controller is p1 must scan p1's graveyard for a
+    creature and reanimate it on p1's battlefield, NOT p0's
+    graveyard / bf. Pre-fix `controller_idx = active_player = 0`
+    => scanned p0's graveyard and reanimated on p0's bf.
+    Post-fix `controller_idx = controller = 1` => correctly
+    scans p1's graveyard and reanimates on p1's bf.
+
+    Also pins the I83 GameObject.controller byte stamp — the
+    reanimated permanent has `controller_id == 1`, not the
+    pre-move owner value or the active_player value.
+    """
+    state = engine.make_synthetic_state()
+    assert state.active_player == 0
+
+    # Inject a vanilla creature into EACH player's graveyard, so
+    # the pre-fix and post-fix targets are distinct ids.
+    p0_creature_id = state.register_and_inject_object(
+        _vanilla_creature_dict_for_i83(), 0, ZONE_GRAVEYARD
+    )
+    p1_creature_id = state.register_and_inject_object(
+        _vanilla_creature_dict_for_i83(), 1, ZONE_GRAVEYARD
+    )
+
+    src_id = state.register_and_inject_object(
+        _zombify_dict_for_i83(), 1, ZONE_HAND
+    )
+
+    # Push with controller=1 (p1), active_player still 0.
+    state.push_to_stack(src_id, 1)
+    state.resolve_top_of_stack()
+
+    # Post-fix: p1's creature reanimated onto p1's battlefield.
+    assert state.find_object_zone(p1_creature_id) == ZONE_BATTLEFIELD
+    # P0's creature untouched (still in p0's graveyard).
+    assert state.find_object_zone(p0_creature_id) == ZONE_GRAVEYARD
+
+    # Reanimated permanent has controller_id == 1 (p1).
+    snap = state.battlefield_snapshot()
+    reanimated_snap = next(d for d in snap if d["id"] == p1_creature_id)
+    assert reanimated_snap["controller_id"] == 1
+
+
+def test_return_creature_to_bf_active_player_controlled_still_works(engine):
+    """**Back-compat pin.** A Zombify-shape source cast by the
+    active player must still scan the active player's graveyard
+    and reanimate onto the active player's battlefield — bug
+    never fired in this case pre-fix because controller ==
+    active_player.
+    """
+    state = engine.make_synthetic_state()
+    assert state.active_player == 0
+
+    p0_creature_id = state.register_and_inject_object(
+        _vanilla_creature_dict_for_i83(), 0, ZONE_GRAVEYARD
+    )
+    p1_creature_id = state.register_and_inject_object(
+        _vanilla_creature_dict_for_i83(), 1, ZONE_GRAVEYARD
+    )
+
+    src_id = state.register_and_inject_object(
+        _zombify_dict_for_i83(), 0, ZONE_HAND
+    )
+
+    state.push_to_stack(src_id, 0)
+    state.resolve_top_of_stack()
+
+    # P0's creature reanimated onto p0's bf.
+    assert state.find_object_zone(p0_creature_id) == ZONE_BATTLEFIELD
+    # P1's creature untouched.
+    assert state.find_object_zone(p1_creature_id) == ZONE_GRAVEYARD
+
+    # Reanimated permanent's controller_id is 0.
+    snap = state.battlefield_snapshot()
+    reanimated_snap = next(d for d in snap if d["id"] == p0_creature_id)
+    assert reanimated_snap["controller_id"] == 0
+
+
+def test_return_creature_to_bf_pause_variant_threads_controller(engine):
+    """**`resolve_top_of_stack_pause` parity pin for
+    ReturnCreatureFromYourGraveyardToBattlefield.** Mirrors the I64
+    / I67 / I68 / I69 / I70 / I71 / I72 / I73 / I74 / I75 / I76 /
+    I77 / I78 / I79 / I80 / I81 / I82 pause-variant pins."""
+    state = engine.make_synthetic_state()
+
+    p0_creature_id = state.register_and_inject_object(
+        _vanilla_creature_dict_for_i83(), 0, ZONE_GRAVEYARD
+    )
+    p1_creature_id = state.register_and_inject_object(
+        _vanilla_creature_dict_for_i83(), 1, ZONE_GRAVEYARD
+    )
+
+    src_id = state.register_and_inject_object(
+        _zombify_dict_for_i83(), 1, ZONE_HAND
+    )
+
+    state.push_to_stack(src_id, 1)
+    state.resolve_top_of_stack_pause()
+
+    # Post-fix: p1's creature reanimated onto p1's bf.
+    assert state.find_object_zone(p1_creature_id) == ZONE_BATTLEFIELD
+    # P0's creature untouched.
+    assert state.find_object_zone(p0_creature_id) == ZONE_GRAVEYARD
+
+
+def test_return_creature_to_bf_empty_source_controllers_graveyard_fizzles(engine):
+    """**Empty source-controller's graveyard no-op pin for I83.**
+    When the source-controller's graveyard has no creature, the
+    spell fizzles silently. Pre-fix it would have scanned p0's
+    graveyard and grabbed p0's creature; post-fix it correctly
+    ignores p0's graveyard, finds nothing in p1's graveyard, and
+    silently fizzles. P0's creature stays in p0's graveyard. The
+    src itself routes to p1's graveyard post-resolve per CR 608.2m.
+    """
+    state = engine.make_synthetic_state()
+    p0_creature_id = state.register_and_inject_object(
+        _vanilla_creature_dict_for_i83(), 0, ZONE_GRAVEYARD
+    )
+    # No creature in p1's graveyard.
+
+    src_id = state.register_and_inject_object(
+        _zombify_dict_for_i83(), 1, ZONE_HAND
+    )
+
+    state.push_to_stack(src_id, 1)
+    state.resolve_top_of_stack()
+
+    # P0's creature untouched.
+    assert state.find_object_zone(p0_creature_id) == ZONE_GRAVEYARD
+    # Src in p1's graveyard.
+    snap_p1_gy_ids = {c["id"] for c in state.graveyard_snapshot(1)}
+    assert src_id in snap_p1_gy_ids
