@@ -733,6 +733,81 @@ def _ta_dict_to_python_effect(eff_dict: dict):
             ReturnCreatureFromYourGraveyardToHand,
         )
         return ReturnCreatureFromYourGraveyardToHand()
+    if kind == "return_artifact_or_creature_from_your_graveyard_to_hand":
+        # **Phase 5 rider-widened bridge arm (or_artifact).**
+        # Mirrors Rust's
+        # ``Effect::ReturnArtifactOrCreatureFromYourGraveyardToHand``
+        # (cards.rs new variant). The Rust arm is a unit variant —
+        # the artifact-or-creature disjunction is baked into the
+        # variant identity, so no companion fields beyond ``kind``.
+        # parse_effect (cards.rs:3236-3245) accepts the dict shape
+        # ``{"kind": "return_artifact_or_creature_from_your_graveyard_to_hand"}``
+        # with no other fields. The resolve arm
+        # (state_ops_resolve.rs:3021-3079) inherits the I82
+        # controller-of-effect fix: ``controller_idx`` derives from
+        # ``current_resolve_source_controller``, so the scan reads
+        # the SOURCE's controller's graveyard and pushes to the
+        # SOURCE's controller's hand. Cross-controller case routes
+        # correctly.
+        #
+        # **Rust target-pick semantics.** Rust scans the source-
+        # controller's graveyard top-to-bottom for the first object
+        # whose printing's ``card_types`` contains "Creature" OR
+        # "Artifact". Artifact-creatures match on the creature
+        # branch at the first hit. Empty / no-match graveyard
+        # fizzles silently.
+        #
+        # **Python target-pick semantics.** Python's
+        # ``ReturnCreatureFromYourGraveyardToHand(or_artifact=True)``
+        # widens the legal-target pool via ``_gy_card_matches``
+        # (graveyard.py:46 — the ``or_artifact`` flag admits
+        # artifact-typed cards alongside the creature primary).
+        # The bridge constructs the Python effect with the
+        # ``or_artifact=True`` rider, so legal_targets includes
+        # both creature and artifact cards. The targeting pipeline
+        # picks at PUSH time via
+        # ``controller.agent.choose_target``; the canonical probe
+        # agent returns ``legal_targets[0]``, which observably
+        # matches Rust's first-in-graveyard-order pick in 2-player
+        # games where both engines build graveyards in the same
+        # order.
+        #
+        # **Real EoE consumer.** Interceptor Mechan (EoE):
+        # "When this creature enters, return target artifact or
+        # creature card from your graveyard to your hand."
+        from mtg_bot.effects.generic.bounce import (
+            ReturnCreatureFromYourGraveyardToHand,
+        )
+        return ReturnCreatureFromYourGraveyardToHand(or_artifact=True)
+    if kind == "return_creature_or_spacecraft_from_your_graveyard_to_hand":
+        # **Phase 5 rider-widened bridge arm (or_spacecraft).**
+        # Mirrors Rust's
+        # ``Effect::ReturnCreatureOrSpacecraftFromYourGraveyardToHand``
+        # (cards.rs new variant). Sister bridge arm to or_artifact.
+        # Unit variant — no companion fields beyond ``kind``.
+        #
+        # **Filter delta vs or_artifact.** Spacecraft is a SUBTYPE
+        # (artifact subtype on the type line), not a card type. The
+        # Rust filter reads ``printing.subtypes.contains("Spacecraft")``,
+        # not ``card_types``. Python's mirror is
+        # ``printing.is_spacecraft`` which reads off the Subtypes
+        # substrate (Subtypes landed earlier today — printing.subtypes
+        # is on CardPrinting). The ``or_spacecraft=True`` rider on
+        # ``ReturnCreatureFromYourGraveyardToHand`` flows through
+        # ``_gy_card_matches`` (graveyard.py:46 — admits
+        # ``p.is_spacecraft`` alongside creature primary). A plain
+        # Artifact card (no Spacecraft subtype) is NOT admitted by
+        # this rider — discriminating it from the or_artifact arm.
+        #
+        # **Real EoE consumer.** Fell Gravship (EoE) suffix: "...
+        # then return a creature or Spacecraft card from your
+        # graveyard to your hand." (Composed inside a Sequence
+        # with mill-3 in the full trigger; the bare leaf arm here
+        # is the substrate.)
+        from mtg_bot.effects.generic.bounce import (
+            ReturnCreatureFromYourGraveyardToHand,
+        )
+        return ReturnCreatureFromYourGraveyardToHand(or_spacecraft=True)
     raise ValueError(
         f"cross_engine triggered_abilities bridge: unsupported "
         f"effect kind {kind!r} (extend `_ta_dict_to_python_effect` "
