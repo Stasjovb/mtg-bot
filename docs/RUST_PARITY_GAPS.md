@@ -3510,11 +3510,15 @@ the forked branch.
     printing carries it).
   - Planeswalker loyalty (uses counters as cost, distinct from
     mana; needs `pay_loyalty` cost primitive).
-  - Equipment equip costs (specific cost shape + target).
+  - ~~Equipment equip costs (specific cost shape + target).~~
+    **CLOSED by I54** — see below; the target-pick substrate is
+    now in place, which also unblocks the targeted sacrifice
+    variants.
   - Sacrifice-as-cost: ~~`sacrifice_self`~~ **CLOSED by I52** —
     see below; the targeted variants (`sacrifice_another_*`,
-    `sacrifice_a_land`, `sacrifice_food`) stay deferred until
-    Equipment-equip Slice 4 ships the target-pick substrate.
+    `sacrifice_a_land`, `sacrifice_food`) can now ride on the
+    Equipment-equip target-pick substrate (closed by I54) — next
+    slice candidate.
   - Tap-an-untapped-permanent-you-control (Gene Pollinator shape).
   - Activation-gate predicates (`requires_*` Bonders' Enclave).
   - ~~Bridging legacy `mana_produced` into a synthesized
@@ -3860,6 +3864,134 @@ the forked branch.
     Slice 3's test surface (objects stay on bf throughout each
     test); a future cleanup slice will add the resets in lockstep
     with sealing the Spacecraft cost-pay variant.
+
+### I54. `ActivationCost.requires_target_creature_you_control: bool` extends the cost shape; emission fan-out + apply-arm target validation + StackItem payload-target threading (CE20 follow-up Slice 4 Equipment-equip closure)
+
+- **Pinned by**:
+  - 21 new `tests_rust/test_activated.py` `test_equip_*` /
+    `test_non_target_*` regression pins covering parser surface (3),
+    emission target fan-out + eligibility filters (5: per-target,
+    self-exclusion, opponent-exclusion, non-creature-exclusion,
+    affordability), apply-arm target validation (6: happy-path,
+    retarget, missing-target, self-target, opponent-target,
+    non-creature-target, unknown-id), mana-cost debit (1),
+    back-compat non-target dict shape (3: omitted key / explicit
+    None / spurious target ignored), resolve-arm payload-target
+    pick (1).
+  - The pre-existing `test_legal_decisions_activate_ability_dict_shape_is_minimal`
+    updated to assert the new 4-key dict shape (kind / source_id /
+    ability_index / target_creature_id) — Slice 4 grew the wire
+    shape by one field.
+
+- **Cost shape extension**. `ActivationCost` grows
+  `pub requires_target_creature_you_control: bool` field (defaults
+  `false` via `Default`). `parse_activation_cost` adds
+  `"requires_target_creature_you_control"` to the allow-list;
+  unknown keys still raise loud. Mirrors Python's Equipment-equip
+  shape at `effects/generic/attach.py` (Python flag-fields the
+  cost; Rust mirrors via the bool).
+
+- **Action dict shape extension**. `Action::ActivateAbility` grows
+  `pub target_creature_id: Option<u32>` field. The
+  `parse_action`/`action_to_pydict` round-trip handles both shapes
+  losslessly: missing key OR explicit `None` map to `None` (the
+  pre-Slice-4 wire format stays accepted as-is); `Some(id)` carries
+  the chosen target. `action_to_pydict` always emits the key for
+  symmetric round-trip (`None` → Python `None`).
+
+- **Emission target fan-out** (`state_ops_legal.rs:1131+`). When the
+  ability's cost flags `requires_target_creature_you_control = true`,
+  the per-ability loop walks the activator's battlefield and emits
+  ONE `ActivateAbility` dict per legal target creature. Eligibility
+  per CR 702.6c: target must be a creature on the activator's bf
+  AND not the source itself. Target's summoning sickness is NOT a
+  barrier (equip is mana-only — the target's tap state is
+  irrelevant). Non-target activations (the pre-Slice-4 shape) emit
+  one dict per source as before with `target_creature_id = None`.
+
+- **Apply-arm target validation** (`state_ops_actions.rs:572+`,
+  Phase 2.5 NEW). Fires BEFORE Phase 3a (tier gate) / Phase 3
+  (tap precheck) / Phase 4 (mana pay) / Phase 5 (commits). Raises
+  loud BEFORE any state mutation on:
+  - Missing `target_creature_id` for an ability that requires one.
+  - `target_creature_id == source_id` (self-target).
+  - Target not on the activator's bf, or target's printing isn't
+    a Creature.
+  Non-target activations silently accept (and ignore) a stray
+  `target_creature_id` — matches Python's permissive
+  accept-and-ignore for spurious kwargs.
+
+- **StackItem payload-target threading**. `TriggerPayload` grows
+  `pub target_id: Option<u32>` field; `StackItem::new_trigger`
+  (legacy, pre-Slice-4) sets it `None`; new
+  `StackItem::new_trigger_with_target` constructor carries
+  `Some(target_id)` for targeted activations. The non-mana
+  activation arm picks the constructor based on
+  `validated_target_id`. The is_mana_ability arm seeds
+  `state.current_resolve_payload_target_id` directly via swap
+  (same pattern as the Slice 1 bridge `active_player` swap).
+
+- **Resolve-time payload-target pickup** (`state_ops_resolve.rs:4361+`).
+  `Effect::EquipToTargetCreatureYouControl` now reads
+  `state.current_resolve_payload_target_id` (swapped in by the
+  stack resolver from `trigger_payload.target_id` before
+  `apply_effect` fires, restored after). When `Some(id)` and the
+  target is still legal (CR 608.2b — recheck legality at
+  resolve), stamp it. When `Some(id)` but the target has become
+  illegal (e.g. left the battlefield), silently fizzle. When
+  `None` (no payload-target was seeded — pre-Slice-4 callers, or
+  the ETB-attach sibling variant), fall back to the prior
+  first-eligible-creature walk for back-compat.
+
+- **Transient resolver field**. `GameState.current_resolve_payload_target_id:
+  Option<u32>` is the resolver's stash slot for the chosen target.
+  Mirrors the `state.active_player` swap pattern (the Slice 1
+  bridge follow-up's solution to source-controller resolution).
+  NOT serialized into the fingerprint — same transient bookkeeping
+  shape as `consecutive_passes`, `next_etb_timestamp`,
+  `resolving_combat_damage_amount`. Restored to its prior value
+  after each apply so no observable state leaks across resolution
+  boundaries.
+
+- **Foundation that pre-existed**: `GameObject.attached_to:
+  Option<u32>` (`state.rs:58`), `Effect::EquipToTargetCreatureYouControl`
+  variant (round-29), the attach mutation at
+  `state_ops_resolve.rs:4279-4326` (the AttachToTargetCreatureYouControl
+  sibling — Equipment ETB path). The Slice 4 closure plumbs the
+  ACTIVATED equip-ability path through these primitives without
+  modifying the underlying attach mutation; only the
+  target-pick policy at the resolve site grows from
+  "first-eligible" to "payload-target with first-eligible
+  fallback".
+
+- **7 EoE Equipment printings affected**: Auxiliary Boosters,
+  Squire's Lightblade, Atomic Microsizer, Illvoi Light Jammer,
+  Hylderblade, Meltstrider's Gear, The Dominion Bracelet.
+
+- **Out of scope (deferred to future slices)**:
+  - **Targeted sacrifice variants** (`sacrifice_another_creature`,
+    `sacrifice_a_land`, `sacrifice_food`,
+    `sacrifice_another_artifact_or_land`, etc.). Each variant rides
+    on the Slice 4 target-pick substrate (same
+    `requires_target_*` flag pattern, same `target_creature_id` (or
+    `target_*_id`) key on the dict, same payload-target threading
+    to a new effect arm per sacrifice flavor). Slice 5+ scope.
+  - **Multi-target activations** (target a creature AND a player,
+    target N creatures, etc.). Single-target Slice 4 scope; the
+    payload shape supports only one `target_id` today. Multi-target
+    needs `target_ids: Vec<u32>` and an effect-side multi-target
+    arm.
+  - **Walker loyalty target redirect** (CR 119.5 — combat damage
+    targeting a planeswalker). Separate slice (Walker Slice B per
+    the playbook); needs DeclareAttackers growth, not
+    ActivateAbility growth.
+  - **The cross-engine smoke harness's
+    `activated_cost_side_channel` Bear-Caster probe**. Bear Caster
+    is not a targeted activation; the probe stays unchanged. A
+    future Equipment-equip cross-engine probe would inject a
+    synthetic equip printing on BOTH engines and exercise the
+    target-fan-out emission shape — deferred to a follow-up that
+    also confirms parity-clean walk shapes for the equip dict.
 
 ### I49. Legacy `etb_effects: Vec<Effect>` bridged to `triggered_abilities` at parse time + cross_engine.py `printing_dict` wires `triggered_abilities` through to Rust's `register_and_inject_object` (Slice 3 of ETB-trigger closure)
 

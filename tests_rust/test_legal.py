@@ -1640,11 +1640,18 @@ def test_legal_decisions_activate_ability_emission_order_after_cast_spell(
 def test_legal_decisions_activate_ability_dict_shape_is_minimal(
     synthetic_state,
 ):
-    """Every ActivateAbility dict carries exactly three keys: kind,
-    source_id, ability_index. Mirrors `actions.rs:action_to_pydict`'s
-    `Action::ActivateAbility` arm so a future-slice regression that
-    adds a wire key here but forgets the parse_action side trips
-    loudly."""
+    """Every ActivateAbility dict carries exactly four keys: kind,
+    source_id, ability_index, target_creature_id. Mirrors
+    `actions.rs:action_to_pydict`'s `Action::ActivateAbility` arm so a
+    future-slice regression that adds a wire key here but forgets the
+    parse_action side trips loudly.
+
+    **CE20 follow-up Slice 4 (Equipment-equip)**: the dict shape grew
+    an optional `target_creature_id` key (`None` for every non-target
+    activation — the synthetic state's Forests / Llanowar Elves emit
+    in this shape). Slice 4 also bumped the value-side invariant: a
+    non-target activation carries `target_creature_id is None`.
+    """
     _empty_hand(synthetic_state, 0)
     synthetic_state.set_phase(PHASE_MAIN1)
 
@@ -1652,7 +1659,15 @@ def test_legal_decisions_activate_ability_dict_shape_is_minimal(
     aas = [a for a in actions if a["kind"] == "activate_ability"]
     assert len(aas) >= 1
     for a in aas:
-        assert set(a.keys()) == {"kind", "source_id", "ability_index"}
+        assert set(a.keys()) == {
+            "kind",
+            "source_id",
+            "ability_index",
+            "target_creature_id",
+        }
+        # Non-target activations (the synthetic state's mana-ability
+        # bridge entries on Forests / Llanowar Elves) carry None.
+        assert a["target_creature_id"] is None
 
 
 def test_legal_decisions_activate_ability_apply_action_taps_and_credits_pool(

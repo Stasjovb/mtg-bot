@@ -438,6 +438,14 @@ pub enum StackItemKind {
 ///
 /// Slice 1 minimum field set. Future slices (target selection,
 /// fixed_targets, combat-damage aggregator dedup) extend.
+///
+/// **CE20 follow-up Slice 4 (Equipment-equip)** grows the payload
+/// with `target_id: Option<u32>` to carry the chosen target for
+/// activated abilities whose cost flags
+/// `requires_target_creature_you_control = true`. The
+/// `Effect::EquipToTargetCreatureYouControl` resolve arm reads this
+/// field at resolve-time (replacing the first-eligible-creature
+/// walk for the payload-target path).
 #[derive(Clone, Debug)]
 pub struct TriggerPayload {
     /// The effect to fire when this trigger resolves.
@@ -447,6 +455,14 @@ pub struct TriggerPayload {
     /// `GameState.triggered_this_turn`. `ability_index` is the
     /// index into `source.printing.triggered_abilities`.
     pub ability_index: u32,
+    /// **CE20 follow-up Slice 4 (Equipment-equip).** Chosen target
+    /// for activations whose cost flags
+    /// `requires_target_creature_you_control = true`. The
+    /// `Effect::EquipToTargetCreatureYouControl` resolve arm reads
+    /// this field. `None` for every non-target trigger /
+    /// activation (the pre-Slice-4 shape — ETB triggers, Bear-Caster-
+    /// style draw activations, sacrifice-self activations).
+    pub target_id: Option<u32>,
 }
 
 /// One pending entry on the stack. Two kinds today: spells and
@@ -487,7 +503,12 @@ impl StackItem {
 
     /// Convenience constructor for the trigger shape (Slice 1).
     /// Used by `dispatch_event` / `push_triggered_ability` in
-    /// `state_ops_resolve`.
+    /// `state_ops_resolve`. Pre-Slice-4 callers (every existing
+    /// ETB / dies / cast / attacks dispatch site, plus the CE20
+    /// Slice 1 activated-ability dispatch arm for non-target
+    /// activations) leave `target_id` as `None` via this
+    /// constructor; the Slice 4 target-carrying call site uses
+    /// `new_trigger_with_target` below.
     pub(crate) fn new_trigger(
         source_obj_id: u32,
         controller: u8,
@@ -501,6 +522,35 @@ impl StackItem {
             trigger_payload: Some(TriggerPayload {
                 effect,
                 ability_index,
+                target_id: None,
+            }),
+        }
+    }
+
+    /// **CE20 follow-up Slice 4 (Equipment-equip).** Trigger-shape
+    /// constructor for activated abilities that carry a chosen
+    /// target (cost flags
+    /// `requires_target_creature_you_control = true`). The
+    /// `target_id` is read at resolve-time by the
+    /// `Effect::EquipToTargetCreatureYouControl` arm. Non-equip
+    /// targeted activations (future slices for targeted sacrifice,
+    /// pump-target-creature activations, etc.) reuse this same
+    /// constructor.
+    pub(crate) fn new_trigger_with_target(
+        source_obj_id: u32,
+        controller: u8,
+        effect: crate::cards::Effect,
+        ability_index: u32,
+        target_id: u32,
+    ) -> Self {
+        Self {
+            source_obj_id,
+            controller,
+            kind: StackItemKind::TriggeredAbility,
+            trigger_payload: Some(TriggerPayload {
+                effect,
+                ability_index,
+                target_id: Some(target_id),
             }),
         }
     }
@@ -1153,6 +1203,34 @@ pub struct GameState {
     /// fingerprint: the queue is empty across stack resolution
     /// boundaries (every drain site empties it before returning).
     pub pending_dies_dispatches: Vec<u32>,
+    /// **CE20 follow-up Slice 4 (Equipment-equip) — payload-target
+    /// resolve-time slot.** Optional `target_id` swapped in by the
+    /// stack resolver (and the CE20 activated-ability dispatch
+    /// arm for is_mana_ability=true paths) BEFORE `apply_effect`
+    /// fires, restored to its prior value after.
+    /// `Effect::EquipToTargetCreatureYouControl` (and future
+    /// targeted-activation arms — sacrifice-target, pump-target,
+    /// etc.) reads this field to find the activator's chosen
+    /// target; absent the swap (every pre-Slice-4 caller) the field
+    /// stays `None` and the affected arms fall back to their
+    /// pre-Slice-4 first-eligible-creature walk.
+    ///
+    /// **Why a transient field instead of threading through
+    /// apply_effect?** Mirrors the `state.active_player` swap
+    /// pattern already used by the CE20 Slice 1 bridge follow-up
+    /// for source-controller resolution (`state_ops_actions.rs:725`).
+    /// Apply-effect has ~90 arms; threading an `Option<u32>`
+    /// parameter through every signature would be invasive for
+    /// surfaces that don't care. A transient field is additive,
+    /// localized to the resolver, and restored after each apply
+    /// (so no observable state leaks across resolution boundaries).
+    ///
+    /// **Not serialized into the fingerprint.** Transient like
+    /// `consecutive_passes`, `next_etb_timestamp`, and
+    /// `resolving_combat_damage_amount` — same observable game
+    /// state pre- and post-resolve produces the same digest
+    /// regardless of intermediate target picks.
+    pub current_resolve_payload_target_id: Option<u32>,
 }
 
 impl Clone for GameState {
@@ -1188,6 +1266,7 @@ impl Clone for GameState {
             triggered_this_turn: self.triggered_this_turn.clone(),
             pending_etb_dispatches: self.pending_etb_dispatches.clone(),
             pending_dies_dispatches: self.pending_dies_dispatches.clone(),
+            current_resolve_payload_target_id: self.current_resolve_payload_target_id,
         }
     }
 }
@@ -1624,5 +1703,9 @@ pub fn make_synthetic_state(
         // construction; drained by `apply_sbas` after the SBA loop
         // completes.
         pending_dies_dispatches: Vec::new(),
+        // CE20 follow-up Slice 4: transient payload-target slot;
+        // set by the stack resolver before apply_effect for
+        // targeted activations, restored after. None by default.
+        current_resolve_payload_target_id: None,
     }
 }
