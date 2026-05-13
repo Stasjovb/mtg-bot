@@ -11442,3 +11442,322 @@ def test_cross_engine_real_eoe_weftstalker_ardent_or_predicate_burn_parity(
     assert py_state.players[1].life == 18
     assert rust_state.get_life(0) == py_state.players[0].life
     assert rust_state.get_life(1) == py_state.players[1].life
+
+
+def test_cross_engine_real_eoe_kav_landseeker_has_subtype_kavu_probe_parity(
+    parity_smoke,
+):
+    """Probe H: First cross-engine probe to exercise
+    ``Predicate::SubjectHasSubtype`` end-to-end on a real EoE-printed
+    subtype-carrying subject.
+
+    Kav Landseeker (EoE 138) — a real EoE creature whose printed
+    type_line is "Creature -- Kavu Soldier". Its own oracle text
+    ("When this creature enters, create a Lander token...") is OUT
+    of scope: the bridge doesn't carry ``create_token`` and EoE has
+    no Kavu/Sliver/Equipment ETB trigger whose effect is already on
+    the substrate-bridged effect surface (draw_cards / gain_life /
+    damage_each_opponent). The probe strips Kav Landseeker's own
+    triggered ability and uses it strictly as the SUBJECT carrying
+    the real EoE-printed ``["Kavu", "Soldier"]`` subtypes. Same
+    shape as Tannuk's probe, which stripped the "second-time-this-
+    turn -> draw" rider for the same reason.
+
+    Probe shape (inject-and-fan-out, mirrors the artifact/creature
+    arrival pattern from the Or-substrate consumer probe):
+
+      1. Pre-place a synthetic Kavu-observer on p0's bf. Its
+         predicate is ``Subject(HasSubtype("Kavu")) AND
+         ControlledByYou`` -- the simplest unit-pin for HasSubtype
+         on a real-EoE-typed subject. Effect: ``gain_life(1)``
+         (already on the bridge per Probes B/D/E). Self-arrival
+         doesn't fire because the observer's own ``subtypes`` is
+         empty -- HasSubtype("Kavu") rejects.
+
+      2. Inject Kav Landseeker (real EoE printing-shape; subtypes
+         ["Kavu", "Soldier"]) onto p0's bf. Dispatch fires:
+         HasSubtype("Kavu") TRUE (first-position subtype match),
+         ControlledByYou TRUE. Trigger pushes. Drain -> p0 life
+         20 -> 21.
+
+      3. Inject a vanilla non-Kavu creature for p0 onto bf.
+         HasSubtype("Kavu") FALSE -> trigger doesn't fire. Life
+         unchanged.
+
+      4. Cross-engine assert: BOTH engines fire the Kavu trigger
+         exactly once and reject the vanilla creature. p0 life: 21.
+
+    This is the **first** cross-engine probe to pin the
+    ``Predicate::SubjectHasSubtype`` arm (landed in Subtypes Slice
+    2, ``CardPrinting.subtypes: Vec<String>`` +
+    ``Predicate::SubjectHasSubtype``) on a real EoE-printed subject.
+    The substrate-side unit tests in
+    ``tests_rust/test_triggers.py`` (Subtypes Slice 2's Equipment /
+    Kavu / Bear arrival pins) cover the predicate dispatch in
+    isolation; this probe ties it to the cross-engine bridge.
+
+    Out of scope:
+
+      * Kav Landseeker's own ``create_token`` ETB -- needs bridge
+        widening for ``create_token`` effect, follow-up probe.
+      * Effective subtypes (CR 613 layer-3/4 -- Conspiracy granting
+        "Kavu", etc.) -- both engines read static subtypes, so the
+        layer-aware semantics drift is irrelevant for EoE's pool.
+      * Multi-Kavu cascade (a Kavu fires the observer, the
+        observer's effect causes another Kavu to enter, etc.) --
+        out of probe scope.
+    """
+    from mtg_bot.parity.cross_engine import (
+        CardDef, DeckSpec, build_python_state, build_rust_state,
+    )
+
+    kavu_observer_predicate = {
+        "kind": "and",
+        "left": {
+            "kind": "subject_has_subtype",
+            "subtype": "Kavu",
+        },
+        "right": {"kind": "controlled_by_you"},
+    }
+    kavu_observer = CardDef(
+        name="Test Kavu Observer",
+        card_type="Creature",
+        mana_cost_generic=2,
+        power=1,
+        toughness=1,
+        # Empty subtypes — observer's own arrival doesn't match its
+        # own predicate (HasSubtype("Kavu") false).
+        subtypes=(),
+        triggered_abilities=(
+            {
+                "event": "enters",
+                "predicate": kavu_observer_predicate,
+                "effect": {"kind": "gain_life", "amount": 1},
+            },
+        ),
+    )
+    # Kav Landseeker — real EoE 138; type_line "Creature -- Kavu
+    # Soldier", so subtypes = ("Kavu", "Soldier"). Strip the printed
+    # ETB ability (create-Lander-token is out of bridge scope) but
+    # KEEP the printed name + subtypes so the parity contract reads
+    # the real EoE-printed subtype tuple end-to-end.
+    kav_landseeker = CardDef(
+        name="Kav Landseeker",
+        card_type="Creature",
+        mana_cost_generic=3,
+        mana_cost_colored=(("R", 1),),
+        power=4,
+        toughness=3,
+        subtypes=("Kavu", "Soldier"),
+        triggered_abilities=(),
+    )
+    vanilla_non_kavu = CardDef(
+        name="Test Vanilla Non-Kavu",
+        card_type="Creature",
+        mana_cost_generic=1,
+        power=1,
+        toughness=1,
+        subtypes=(),
+    )
+    spec = DeckSpec(
+        card_defs=(kavu_observer, kav_landseeker, vanilla_non_kavu),
+        p0_library=(),
+        p1_library=(),
+    )
+    py_state = build_python_state(spec)
+    rust_state = build_rust_state(spec)
+
+    # ---- Rust side ----
+    ZONE_BATTLEFIELD = 2
+    rust_observer_dict = {
+        "name": "Test Kavu Observer",
+        "card_types": ["Creature"],
+        "mana_cost": {"generic": 2},
+        "effects": [],
+        "power": 1,
+        "toughness": 1,
+        "subtypes": [],
+        "triggered_abilities": [
+            {
+                "event": "enters",
+                "predicate": kavu_observer_predicate,
+                "effect": {"kind": "gain_life", "amount": 1},
+            }
+        ],
+    }
+    rust_observer_id = rust_state.register_and_inject_object(
+        rust_observer_dict, 0, ZONE_BATTLEFIELD
+    )
+    # Observer's own arrival: HasSubtype("Kavu") false (observer has
+    # empty subtypes); trigger does NOT fire.
+    assert rust_state.stack_size() == 0, (
+        "Rust: Kavu observer's own arrival should NOT fire its "
+        "trigger -- observer's subtypes is empty so HasSubtype('Kavu') "
+        f"rejects. Got stack_size={rust_state.stack_size()}"
+    )
+    rust_p0_life_before = rust_state.get_life(0)
+    assert rust_p0_life_before == 20
+
+    rust_kav_dict = {
+        "name": "Kav Landseeker",
+        "card_types": ["Creature"],
+        "mana_cost": {"generic": 3, "R": 1},
+        "effects": [],
+        "power": 4,
+        "toughness": 3,
+        "subtypes": ["Kavu", "Soldier"],
+    }
+    rust_kav_id = rust_state.register_and_inject_object(
+        rust_kav_dict, 0, ZONE_BATTLEFIELD
+    )
+    assert rust_state.stack_size() == 1, (
+        "Rust: HasSubtype('Kavu') AND ControlledByYou should fire on "
+        "Kav Landseeker's arrival (subtypes=['Kavu','Soldier'], "
+        f"controller=0). Got stack_size={rust_state.stack_size()}"
+    )
+    while rust_state.stack_size() > 0:
+        rust_state.resolve_top_of_stack()
+    assert rust_state.get_life(0) == 21, (
+        f"Rust: p0 life should be 21 after Kavu arrival; "
+        f"got {rust_state.get_life(0)}"
+    )
+
+    # Inject a vanilla non-Kavu creature for p0. HasSubtype('Kavu')
+    # false -> trigger doesn't fire.
+    rust_vanilla_dict = {
+        "name": "Test Vanilla Non-Kavu",
+        "card_types": ["Creature"],
+        "mana_cost": {"generic": 1},
+        "effects": [],
+        "power": 1,
+        "toughness": 1,
+        "subtypes": [],
+    }
+    rust_vanilla_id = rust_state.register_and_inject_object(
+        rust_vanilla_dict, 0, ZONE_BATTLEFIELD
+    )
+    assert rust_state.stack_size() == 0, (
+        "Rust: HasSubtype('Kavu') should reject a non-Kavu creature "
+        f"subject. Got stack_size={rust_state.stack_size()}"
+    )
+    assert rust_state.get_life(0) == 21, (
+        f"Rust: p0 life should stay at 21 (non-Kavu rejected); "
+        f"got {rust_state.get_life(0)}"
+    )
+
+    # ---- Python side ----
+    from mtg_bot.actions import _trigger_etb_abilities, resolve_top_of_stack
+    from mtg_bot.cards.base import CardPrinting, ManaCost
+    from mtg_bot.effects.base import TriggeredAbility
+    from mtg_bot.effects.generic.life import GainLife
+    from mtg_bot.effects.object_predicates import HasSubtype
+    from mtg_bot.effects.predicates import (
+        And, Controlled, Event, Subject, YOU,
+    )
+    from mtg_bot.game import Zone
+
+    py_predicate = And(
+        left=Subject(slot=None, inner=HasSubtype(name="Kavu")),
+        right=Controlled(by=YOU, subject=None),
+    )
+    observer_printing = CardPrinting(
+        name="Test Kavu Observer",
+        mana_cost_str="",
+        mana_cost=ManaCost(generic=2),
+        type_line="Creature",
+        supertypes=(),
+        card_types=("Creature",),
+        subtypes=(),
+        power=1,
+        toughness=1,
+        produces=frozenset(),
+        triggered_abilities=(
+            TriggeredAbility(
+                event=Event.ENTERS,
+                predicate=py_predicate,
+                effect=GainLife(amount=1),
+            ),
+        ),
+    )
+    py_observer = py_state.new_object(
+        observer_printing, owner_id=0, zone=Zone.BATTLEFIELD,
+    )
+    py_observer.summoning_sick = False
+    py_observer.tapped = False
+    py_observer.damage = 0
+    py_observer.etb_timestamp = py_state.next_timestamp
+    py_state.next_timestamp += 1
+    py_state.battlefield.append(py_observer)
+    _trigger_etb_abilities(py_state, py_observer)
+    # Observer's own arrival: HasSubtype("Kavu") false (empty
+    # subtypes); no fire.
+    assert len(py_state.stack) == 0
+    assert py_state.players[0].life == 20
+
+    kav_printing = CardPrinting(
+        name="Kav Landseeker",
+        mana_cost_str="",
+        mana_cost=ManaCost(generic=3, colored=(("R", 1),)),
+        type_line="Creature — Kavu Soldier",
+        supertypes=(),
+        card_types=("Creature",),
+        subtypes=("Kavu", "Soldier"),
+        power=4,
+        toughness=3,
+        produces=frozenset(),
+        triggered_abilities=(),
+    )
+    py_kav = py_state.new_object(
+        kav_printing, owner_id=0, zone=Zone.BATTLEFIELD,
+    )
+    py_kav.summoning_sick = True
+    py_kav.tapped = False
+    py_kav.damage = 0
+    py_kav.etb_timestamp = py_state.next_timestamp
+    py_state.next_timestamp += 1
+    py_state.battlefield.append(py_kav)
+    _trigger_etb_abilities(py_state, py_kav)
+    assert len(py_state.stack) == 1, (
+        "Python: HasSubtype('Kavu') AND ControlledByYou should fire "
+        "on Kav Landseeker's arrival"
+    )
+    while py_state.stack:
+        resolve_top_of_stack(py_state)
+    assert py_state.players[0].life == 21
+
+    vanilla_printing = CardPrinting(
+        name="Test Vanilla Non-Kavu",
+        mana_cost_str="",
+        mana_cost=ManaCost(generic=1),
+        type_line="Creature",
+        supertypes=(),
+        card_types=("Creature",),
+        subtypes=(),
+        power=1,
+        toughness=1,
+        produces=frozenset(),
+        triggered_abilities=(),
+    )
+    py_vanilla = py_state.new_object(
+        vanilla_printing, owner_id=0, zone=Zone.BATTLEFIELD,
+    )
+    py_vanilla.summoning_sick = True
+    py_vanilla.tapped = False
+    py_vanilla.damage = 0
+    py_vanilla.etb_timestamp = py_state.next_timestamp
+    py_state.next_timestamp += 1
+    py_state.battlefield.append(py_vanilla)
+    _trigger_etb_abilities(py_state, py_vanilla)
+    assert len(py_state.stack) == 0, (
+        "Python: HasSubtype('Kavu') should reject a non-Kavu subject"
+    )
+    assert py_state.players[0].life == 21
+
+    # ---- Cross-engine parity ----
+    _drain_stack_both(py_state, rust_state)
+    assert rust_state.get_life(0) == 21
+    assert rust_state.get_life(1) == 20
+    assert py_state.players[0].life == 21
+    assert py_state.players[1].life == 20
+    assert rust_state.get_life(0) == py_state.players[0].life
+    assert rust_state.get_life(1) == py_state.players[1].life
