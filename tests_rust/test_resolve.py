@@ -11060,3 +11060,146 @@ def test_drawcards_controller_swap_restores_after_resolution(engine):
 
     assert state.library_sizes[0] == p0_lib_after_first - 1
     assert state.library_sizes[1] == p1_lib_after_first
+
+
+# ====================================================================
+# GainLife controller-of-effect fix — regression pins (I60).
+#
+# Same shape as the DrawCards I59 fix above. Pre-fix `Effect::GainLife`
+# at state_ops_resolve.rs read `state.active_player` as the gaining
+# player; post-fix it reads the transient
+# `current_resolve_source_controller` (set by the stack resolver),
+# falling back to active_player for direct apply_effect_pub callers.
+# Python: `GainLife.resolve(state, controller_id, targets)` at
+# `effects/generic/life.py:33` takes the source's controller
+# explicitly.
+# ====================================================================
+
+
+def _gain_life_spell_dict(amount=2):
+    """Instant-typed GainLife-N printing for cross-controller
+    regression pins."""
+    return {
+        "name": f"Test Gain Life {amount}",
+        "card_types": ["Instant"],
+        "mana_cost": {"W": 1},
+        "effects": [{"kind": "gain_life", "amount": amount}],
+    }
+
+
+def test_gainlife_routes_to_source_controller_not_active_player(engine):
+    """**Regression pin for the GainLife controller-of-effect fix.**
+
+    On p0's turn (active_player=0), a GainLife-2 spell whose
+    controller is p1 (e.g. an instant response from the non-active
+    player) must increase PLAYER 1's life by 2. Pre-fix this
+    incorrectly routed to player 0.
+    """
+    state = engine.make_synthetic_state()
+    assert state.active_player == 0
+
+    spell_id = state.register_and_inject_object(
+        _gain_life_spell_dict(amount=2), 1, ZONE_HAND
+    )
+    p0_life_before = state.life_totals[0]
+    p1_life_before = state.life_totals[1]
+
+    state.push_to_stack(spell_id, 1)
+    state.resolve_top_of_stack()
+
+    # p1 (the spell's controller) gained 2; p0 (active_player) did NOT.
+    assert state.life_totals[1] == p1_life_before + 2
+    assert state.life_totals[0] == p0_life_before
+
+
+def test_gainlife_active_player_controlled_spell_still_works(engine):
+    """**Back-compat pin.** A GainLife spell whose controller IS the
+    active player must keep working (the bug never fired in this case
+    pre-fix because controller == active_player).
+    """
+    state = engine.make_synthetic_state()
+    spell_id = state.register_and_inject_object(
+        _gain_life_spell_dict(amount=3), 0, ZONE_HAND
+    )
+    p0_life_before = state.life_totals[0]
+    p1_life_before = state.life_totals[1]
+
+    state.push_to_stack(spell_id, 0)
+    state.resolve_top_of_stack()
+
+    assert state.life_totals[0] == p0_life_before + 3
+    assert state.life_totals[1] == p1_life_before
+
+
+def test_gainlife_via_triggered_ability_routes_to_triggers_controller(engine):
+    """**Cross-controller LTB-trigger pin for GainLife.** A
+    triggered-ability StackItem carries its own `controller`; the
+    resolver swaps that controller in for the GainLife apply.
+
+    Shape: p1's creature has a `source_is_self LEAVES_BATTLEFIELD →
+    gain 2 life` trigger. p0 casts a bounce spell on p1's creature.
+    When the LTB trigger resolves, p1 (the trigger's controller)
+    gains the 2 life.
+    """
+    # Empty-bf synthetic state so the bounce target picking lands on
+    # the LTB creature deterministically (first bf object on p1).
+    state = engine.make_synthetic_state(
+        num_battlefield=0, num_hand=0, num_library=5
+    )
+    ltb_creature = {
+        "name": "Test LTB-GainLife Creature",
+        "card_types": ["Creature"],
+        "mana_cost": {"generic": 2},
+        "effects": [],
+        "power": 1,
+        "toughness": 1,
+        "triggered_abilities": [
+            {
+                "event": "leaves_battlefield",
+                "predicate": {"kind": "source_is_self"},
+                "effect": {"kind": "gain_life", "amount": 2},
+            }
+        ],
+    }
+    crt_id = state.register_and_inject_object(ltb_creature, 1, ZONE_BATTLEFIELD)
+    bounce_id = state.register_and_inject_object(
+        {
+            "name": "Test Bounce (GainLife)",
+            "card_types": ["Instant"],
+            "mana_cost": {"U": 1},
+            "effects": [
+                {"kind": "return_to_hand", "target": {"kind": "any_creature"}}
+            ],
+        },
+        0,
+        ZONE_HAND,
+    )
+    p0_life_before = state.life_totals[0]
+    p1_life_before = state.life_totals[1]
+
+    state.push_to_stack(bounce_id, 0)
+    state.resolve_top_of_stack()  # bounce; LTB trigger pushes
+    top = state.peek_top_of_stack()
+    assert top["controller"] == 1
+
+    state.resolve_top_of_stack()  # LTB trigger fires
+
+    # Post-fix: p1 (trigger's controller) gained 2.
+    assert state.life_totals[1] == p1_life_before + 2
+    assert state.life_totals[0] == p0_life_before
+
+
+def test_gainlife_pause_variant_threads_controller(engine):
+    """**`resolve_top_of_stack_pause` parity pin for GainLife.**"""
+    state = engine.make_synthetic_state()
+    spell_id = state.register_and_inject_object(
+        _gain_life_spell_dict(amount=1), 1, ZONE_HAND
+    )
+    p0_life_before = state.life_totals[0]
+    p1_life_before = state.life_totals[1]
+
+    state.push_to_stack(spell_id, 1)
+    state.resolve_top_of_stack_pause()
+
+    assert state.life_totals[1] == p1_life_before + 1
+    assert state.life_totals[0] == p0_life_before

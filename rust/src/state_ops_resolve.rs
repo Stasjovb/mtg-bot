@@ -828,8 +828,29 @@ fn apply_effect(
         // tripping the round-1 raise-on-negative guard. No real MTG
         // card today wants this, but the lowest-friction shape for
         // first slice is "don't validate, just write".
+        //
+        // **Controller resolution (post-I59 follow-up — I60)**:
+        // prefer the transient
+        // `state.current_resolve_source_controller` (set by the
+        // stack resolver around each `apply_effect` call), falling
+        // back to `state.active_player` for back-compat with every
+        // direct `apply_effect_pub` caller that hasn't migrated.
+        // Same pattern as `Effect::DrawCards` above — GainLife
+        // resolves to the SOURCE's controller per CR 119.5 /
+        // 608.2, NOT necessarily the active player. Mirrors
+        // Python's `GainLife.resolve(state, controller_id, ...)`
+        // at `effects/generic/life.py:33`. The example failure
+        // mode pre-fix: on p0's turn, p1's Germinating Wurm
+        // (ETB → you gain 2 life) ETBs (perhaps because p1 cast
+        // it on its own end-of-turn step that got skipped, or
+        // because of a more-exotic timing), trigger fires with
+        // controller=p1 — pre-fix p0 gained the 2 life, post-fix
+        // p1 does.
         Effect::GainLife { amount } => {
-            let controller = state.active_player as usize;
+            let controller = state
+                .current_resolve_source_controller
+                .map(|c| c as usize)
+                .unwrap_or(state.active_player as usize);
             state.players[controller].life += *amount;
         }
         // Round-10: ReturnToHand. Bounce a target permanent back to

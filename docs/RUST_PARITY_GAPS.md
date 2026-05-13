@@ -4207,6 +4207,83 @@ the forked branch.
   - **Cross-engine smoke probe** for walker activations. Unchanged
     from I56.
 
+### I60. `Effect::GainLife` controller-of-effect fix — reuses I59 transient slot; reader migrated to prefer `current_resolve_source_controller` over `active_player` (GainLife controller divergence closure)
+
+- **Pinned by**:
+  - 4 new `tests_rust/test_resolve.py` `test_gainlife_*`
+    regression pins covering cross-controller spell resolution
+    (1: p1-controlled GainLife on p0's turn routes the life gain
+    to p1), same-controller back-compat (1: p0-controlled
+    GainLife on p0's turn still routes to p0), cross-controller
+    LTB trigger (1: p1's LTB → gain-life trigger fires on
+    bounce by p0's spell, life lands on p1), and
+    `resolve_top_of_stack_pause` parity (1: pause variant uses
+    the same swap). Mirrors the I59 test shape on a parallel
+    effect arm.
+
+- **Rule**. CR 119.5 / 608.2: an effect resolves under its
+  source's controller. GainLife's gaining player is the
+  EFFECT's controller — for a spell, the spell's controller;
+  for a triggered ability, the triggered ability's controller.
+  Mirrors Python's `GainLife.resolve(state, controller_id, targets)`
+  at `src/mtg_bot/effects/generic/life.py:33` which receives
+  the source's controller explicitly.
+
+- **Pre-fix Rust behavior**. The `Effect::GainLife` arm at
+  `state_ops_resolve.rs:831` resolved using `state.active_player`
+  as the gaining player. Wrong when the resolving spell /
+  triggered ability had a controller != active_player. Same
+  divergence shape as I59's DrawCards bug — both arms received
+  the same first-slice "controller = active_player" shortcut
+  at the same landing. No I60-shape pinning failure had
+  surfaced before because the EoE pool's existing GainLife
+  shapes all happened to fire on the active player's turn
+  (Germinating Wurm ETB → controller is the active player by
+  construction). The cross-controller-LTB-trigger shape (p1's
+  creature dies on p0's turn → p1 gains life) was the latent
+  bug this slice closes.
+
+- **Reuses I59 substrate**. No new state, no new helper. The
+  `Effect::GainLife` arm becomes a copy of the I59 DrawCards
+  reader:
+  `state.current_resolve_source_controller.map(|c| c as usize)
+  .unwrap_or(state.active_player as usize)`.
+  The transient slot is set by the SAME stack-resolver swaps
+  I59 wired (`resolve_top_of_stack` spell + trigger branches
+  and the `_pause` mirrors). All-in-one substrate, opt-in
+  reader pattern — adding more I59-family arms is a one-line
+  reader migration per arm.
+
+- **Out of scope (deferred to future slices)**:
+  - Generalizing the swap to the OTHER `state.active_player`-
+    keyed apply arms. Inventory of remaining arms that read
+    `state.active_player` (from the post-I60 grep — see
+    `state_ops_resolve.rs`):
+    - `Effect::DealDamage` defender = `1 - state.active_player`
+      → semantically "the opponent of the active player",
+      which is wrong for a cross-controller spell too (a p1
+      DealDamage instant during p0's turn should hit p0, not
+      p1's opponent = p0 → coincidentally correct by
+      symmetry today; would be wrong in 3+-player formats).
+    - `Effect::PumpCreaturesYouControl` reads
+      `state.active_player` as "your" → wrong for
+      cross-controller triggers (a p1 trigger should pump
+      p1's creatures, not p0's).
+    - Various `SearchLibraryFor*` / `Mill` / `ReturnFromGYToHand`
+      / etc.
+    Each arm needs a per-arm parity decision + pin. Migrate as
+    real-card divergences surface in the smoke (one arm at a
+    time keeps each slice testable).
+  - `Effect::GainLife` has zero EoE printings shaped as a
+    cross-controller LTB trigger today (Germinating Wurm and
+    other ETB GainLife cards all fire on the active player's
+    creature ETB). The smoke-pin for this fix is synthetic-
+    only at I60; a real-EoE cross-controller GainLife probe
+    would require waiting for a card-pool expansion or
+    constructing a multi-trigger scenario where a non-active-
+    player has a creature on bf that triggers when something
+    happens on the active player's turn.
+
 ### I59. `Effect::DrawCards` controller-of-effect fix — `state.current_resolve_source_controller: Option<u8>` transient + `apply_effect_pub_with_controller` variant + stack-resolver swap on both spell + trigger branches (DrawCards controller divergence closure)
 
 - **Pinned by**:
