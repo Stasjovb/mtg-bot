@@ -3061,13 +3061,25 @@ fn parse_effect(dict: &Bound<'_, PyDict>) -> PyResult<Effect> {
             Ok(Effect::DestroyTargetLand)
         }
         "deal_damage_any_target" => {
-            // Python's `DealDamageAnyTarget(DealDamage)` carries only
-            // the inherited `amount` field; the "any target" filter is
-            // intrinsic to the variant (no `target` dict to parse —
-            // distinct from `deal_damage`'s required `target` field).
-            // Missing `amount` is a KeyError at register time;
-            // negative amount surfaces at register time (defense-in-
-            // depth; `apply_effect` re-checks).
+            // Python's `DealDamageAnyTarget(DealDamage)` carries the
+            // inherited `amount` field plus an `optional: bool` slot
+            // flag (added for Pinnacle Kill-Ship's "up to one target
+            // creature" shape — flips Python's slot count_min to 0).
+            // The "any target" filter is intrinsic to the variant
+            // (no `target` dict to parse — distinct from
+            // `deal_damage`'s required `target` field). Missing
+            // `amount` is a KeyError at register time; negative
+            // amount surfaces at register time (defense-in-depth;
+            // `apply_effect` re-checks). The `optional` key is
+            // tolerated as an ignored extra field — Rust's
+            // deterministic at-apply-time target pick (scan
+            // defender's bf for first creature, fall back to
+            // defender-player) is observably equivalent to Python's
+            // optional-target "no-target fizzle" only on probes that
+            // drive a single opponent creature on bf, but the dict-
+            // shape round-trip needs both sides to accept the same
+            // keyset for a clean register-on-both-engines contract
+            // (silent-drop convention matches the broader parser).
             let amount: i32 = require(dict, "amount")?.extract()?;
             if amount < 0 {
                 return Err(PyValueError::new_err(format!(

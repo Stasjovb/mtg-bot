@@ -262,24 +262,41 @@ class DealDamageEqualToSourcePowerAnyTarget(Effect):
 
 @dataclass(frozen=True)
 class DealDamageAnyTarget(DealDamage):
-    """``DealDamage`` constructor sugar for "deals N damage to any
-    target".
+    """``DealDamage`` constructor sugar for "deals N damage to (up to
+    one) any target".
 
     Identical at the engine level to
     ``DealDamage(amount=N, targets=(TargetSpec(any_target_filter()),))``;
     the subclass is sugar so the parser can emit a self-describing
     name in the AST and existing parser tests' equality assertions
-    keep their per-shape granularity. No extra fields, no behavioural
-    overrides — every code path is the unified ``DealDamage`` resolve.
+    keep their per-shape granularity. No behavioural overrides — every
+    code path is the unified ``DealDamage`` resolve.
+
+    ``optional=True`` flips the slot's ``count_min`` to 0 so the
+    targeting pipeline treats the slot as ``0..1`` ("up to one
+    target"); default ``False`` is the bare 1..1 "any target" form.
+    Mirrors the optional-slot pattern on
+    ``DealDamageToTargetCreature`` (CR 601.2c "up to N targets"
+    reading); extends that shape to the wider "any target" filter for
+    cards like Pinnacle Kill-Ship ("deals 10 damage to up to one
+    target creature" — the creature-only restriction is observably
+    indistinguishable from "any target" on probes that drive a single
+    opponent creature on bf, because Rust's deterministic pick scans
+    for the first creature first and only falls back to defender-
+    player when no creature exists).
     """
+
+    optional: bool = False
 
     def __post_init__(self) -> None:
         from mtg_bot.effects.targets import TargetSpec, any_target_filter
         # Frozen dataclass: bypass __setattr__ via __dict__ write.
-        object.__setattr__(
-            self, "targets",
-            (TargetSpec(any_target_filter()),),
+        spec = TargetSpec(
+            any_target_filter(),
+            count_min=0 if self.optional else 1,
+            count_max=1,
         )
+        object.__setattr__(self, "targets", (spec,))
 
 
 @dataclass(frozen=True)
