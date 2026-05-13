@@ -4208,6 +4208,82 @@ the forked branch.
   - **Cross-engine smoke probe** for walker activations. Unchanged
     from I56.
 
+### I76. `Effect::ReturnToHand { AnyCreature }` controller-of-effect fix — reuses I59 transient slot; defender computed as `1 - controller` instead of `1 - active_player` (ReturnToHand defender divergence closure)
+
+- **Pinned by**:
+  - 4 new `tests_rust/test_resolve.py`
+    `test_return_to_hand_*` regression pins covering cross-
+    controller spell resolution (1: p1-controlled Unsummon-shape
+    instant on p0's turn → bounces p0's bf[0], NOT p1's),
+    same-controller back-compat (1: p0-controlled source still
+    bounces p1's bf[0] back to p1's hand), pause-variant parity
+    (1), and empty-defender fizzle (1).
+
+- **Rule**. CR 119.5 / 608.2 — sibling closure to I70 ExileTarget /
+  I75 DestroyTarget. Same `defender = 1 - controller` shape, same
+  transient-slot lookup substrate, same target-selection path
+  (`bf[0]` of defender). Differs from I70 / I75 only in destination
+  zone (defender's HAND vs exile / graveyard). The LTB fan-out
+  path (`pending_leaves_dispatches.push(leaving_obj_id)`) is
+  unchanged by the controller fix.
+
+- **Pre-fix Rust behavior**. The
+  `Effect::ReturnToHand { AnyCreature }` arm at
+  `state_ops_resolve.rs:906` (pre-fix line) computed
+  `let defender = (1 - state.active_player) as usize`. Wrong when
+  the resolving spell / triggered ability has a controller !=
+  active_player. Example: p1's Unsummon-shape instant on p0's
+  turn pre-fix self-bounced p1's own bf[0] back to p1's hand;
+  post-fix it correctly bounces p0's bf[0] back to p0's hand
+  (the source's controller's opponent — standard Unsummon /
+  Boomerang / Vapor Snag shape).
+
+- **First-slice owner-vs-controller convention preserved.**
+  Target's controller == owner, so the bounce destination is the
+  DEFENDER's hand (where the target's owner's hand lives). The
+  controller fix only changes which side `defender` refers to;
+  the destination-is-defender's-hand semantics are unchanged.
+  This mirrors I70 / I75 where the destroyed / exiled object
+  also goes to the defender's owner-side zone.
+
+- **LTB fan-out preserved.** `pending_leaves_dispatches` still
+  receives the leaving id after the bounce mutation, so the
+  drain runs in `resolve_top_of_stack` AFTER the resolving slot
+  pops.
+
+- **Reuses I59 substrate**. Identical to I70 / I71 / I72 / I73 /
+  I74 / I75 — same preamble:
+  `let controller = state.current_resolve_source_controller
+  .map(|c| c as usize).unwrap_or(state.active_player as usize);
+  let defender = 1 - controller;`. The bounce site
+  (`Arc::make_mut(&mut state.players[defender].battlefield)`,
+  `bf_mut.remove(pos)`, CR 400.7 reset block excluding
+  summoning_sick per I35 / CE13,
+  `Arc::make_mut(&mut state.players[defender].hand).push(obj)`,
+  `mark_left_battlefield_if_nonland(...)`,
+  `pending_leaves_dispatches.push(leaving_obj_id)`) reads the
+  resolved `defender` unchanged.
+
+- **Object-state reset on zone change preserved** (CR 400.7) —
+  tapped / damage / counters / attached_to / exiled_with_source
+  all reset on the way to hand. `summoning_sick` deliberately
+  NOT reset (CR 302.1 / I35 closure — sickness is battlefield-
+  only state and re-ETB restamps it).
+
+- **Forward inventory (post-I76 remaining defender-shape
+  `(1 - state.active_player)` sites in `state_ops_resolve.rs`):**
+  - `Effect::MillTargetPlayer { count }` (~1052) — first-slice
+    target-player picker, same defender-swap shape. I77+
+    candidate.
+  - `Effect::OwnerPutsTargetArtifactOrCreatureOnTopOrBottomOfLibrary`
+    (~4837) — first-slice artifact-or-creature target picker;
+    same defender-swap shape, plus owner-resolution via
+    `obj.controller` (first-slice owner == controller).
+  - `Effect::ExileTargetCreatureUntilSourceLeaves` (~5157) and
+    `Effect::ExileOpponentsNonlandPermanentUntilLeaves` (~5221)
+    — same defender-swap shape for round-28 "until source
+    leaves" exile.
+
 ### I75. `Effect::DestroyTarget { AnyCreature }` controller-of-effect fix — reuses I59 transient slot; defender computed as `1 - controller` instead of `1 - active_player` (DestroyTarget defender divergence closure)
 
 - **Pinned by**:
