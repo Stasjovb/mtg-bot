@@ -11761,3 +11761,415 @@ def test_cross_engine_real_eoe_kav_landseeker_has_subtype_kavu_probe_parity(
     assert py_state.players[1].life == 20
     assert rust_state.get_life(0) == py_state.players[0].life
     assert rust_state.get_life(1) == py_state.players[1].life
+
+
+def test_cross_engine_real_eoe_haliya_guided_by_light_or_predicate_self_inclusive_parity(
+    parity_smoke,
+):
+    """Probe I: Haliya, Guided by Light (EoE 19) — second real-card
+    consumer of the new ``Predicate::Or`` substrate, this time
+    exercising the SELF-INCLUSIVE Or-shape (no outer ``Not(IsSelf)``)
+    and adding ``ControlledByYou``'s negative-arm coverage (an
+    OPPONENT-controlled creature must be rejected by the same
+    predicate).
+
+    Oracle text in ``data/edge_of_eternities.json``:
+
+        "Whenever Haliya or another creature or artifact you control
+         enters, you gain 1 life. ..."
+
+    Note the contrast with Weftstalker Ardent (Probe G), whose
+    "another creature or artifact you control" was wrapped in an
+    outer ``Not(SourceIsSelf)`` so the source's own arrival
+    suppressed the trigger. Haliya's text explicitly *includes*
+    herself by name ("Haliya or ..."), so the predicate has NO
+    self-exclusion gate. The natural decomposition is just
+
+        And(
+            Or(SubjectIsCreature, SubjectIsArtifact),
+            ControlledByYou,
+        )
+
+    Haliya's own arrival satisfies this on its own (she IS a
+    creature you control). The Or substrate fires the same way on
+    self-arrival as on any other qualifying arrival.
+
+    Probe shape (inject-and-fan-out with TWO new axes vs Probe G):
+
+      1. Pre-place Haliya on p0's bf. Self-arrival fires the trigger:
+         Subject IS Creature -> Or-left true -> Or true; controlled
+         by you. Trigger pushes. Drain -> p0 life 20 -> 21.
+         **First** cross-engine probe to pin Or firing on a
+         self-arrival without ``Not(IsSelf)`` gating it.
+
+      2. Inject a vanilla creature for p0 on the bf. Or-left true,
+         ControlledByYou true -> fires -> p0 life 21 -> 22.
+
+      3. Inject a vanilla artifact for p0 on the bf. Or-right true,
+         Or-left false; ControlledByYou true -> fires -> p0 life
+         22 -> 23.
+
+      4. Inject a vanilla land for p0 on the bf. Neither Or arm
+         matches -> no fire. Life unchanged at 23.
+
+      5. **NEW axis vs Probe G:** Inject a vanilla creature for
+         **p1** on the bf. Or-left TRUE (it is a creature), but
+         ControlledByYou FALSE (subject_controller=1 !=
+         source_controller=0). Outer And rejects -> no fire. Life
+         unchanged at 23. Pins ControlledByYou's negative-arm
+         contract on the Or-substrate path -- Probe G only fanned
+         out p0-controlled subjects, so the ``subject_controller ==
+         source_controller`` check was only exercised on its
+         positive side.
+
+      6. Cross-engine assert: BOTH engines end with p0 life 23
+         (Haliya self-arrival + creature + artifact = +3) and p1
+         life 20 unchanged.
+
+    Out of scope:
+
+      * Warp cost ({W}) — cast-from-exile alt path is irrelevant to
+        the ETB-trigger contract; pre-place skips the cast pipeline.
+      * Haliya's second clause ("At the beginning of your end step,
+        draw a card if you've gained 3 or more life this turn") --
+        a turn-structure trigger guarded by a per-turn life-gain
+        state predicate; not in the ENTERS-event scope of this
+        probe lane.
+      * Legendary uniqueness on the battlefield -- the harness
+        injects only one Haliya, so the state-based "legend rule"
+        sacrifice never triggers.
+    """
+    from mtg_bot.parity.cross_engine import (
+        CardDef, DeckSpec, build_python_state, build_rust_state,
+    )
+
+    haliya_predicate = {
+        "kind": "and",
+        "left": {
+            "kind": "or",
+            "left": {"kind": "subject_is_creature"},
+            "right": {"kind": "subject_is_artifact"},
+        },
+        "right": {"kind": "controlled_by_you"},
+    }
+    haliya = CardDef(
+        name="Haliya, Guided by Light",
+        card_type="Creature",
+        mana_cost_generic=2,
+        mana_cost_colored=(("W", 1),),
+        power=3,
+        toughness=3,
+        triggered_abilities=(
+            {
+                "event": "enters",
+                "predicate": haliya_predicate,
+                "effect": {"kind": "gain_life", "amount": 1},
+            },
+        ),
+    )
+    bait_creature = CardDef(
+        name="Bait Creature",
+        card_type="Creature",
+        mana_cost_generic=1,
+        power=1,
+        toughness=1,
+    )
+    bait_artifact = CardDef(
+        name="Bait Artifact",
+        card_type="Artifact",
+        mana_cost_generic=1,
+    )
+    bait_land = CardDef(
+        name="Bait Wastes",
+        card_type="Land",
+    )
+    spec = DeckSpec(
+        card_defs=(haliya, bait_creature, bait_artifact, bait_land),
+        p0_library=(),
+        p1_library=(),
+    )
+    py_state = build_python_state(spec)
+    rust_state = build_rust_state(spec)
+
+    # ---- Rust side ----
+    ZONE_BATTLEFIELD = 2
+    rust_haliya_dict = {
+        "name": "Haliya, Guided by Light",
+        "card_types": ["Creature"],
+        "mana_cost": {"generic": 2, "W": 1},
+        "effects": [],
+        "power": 3,
+        "toughness": 3,
+        "triggered_abilities": [
+            {
+                "event": "enters",
+                "predicate": haliya_predicate,
+                "effect": {"kind": "gain_life", "amount": 1},
+            }
+        ],
+    }
+    rust_haliya_id = rust_state.register_and_inject_object(
+        rust_haliya_dict, 0, ZONE_BATTLEFIELD
+    )
+    # Self-arrival fires: Haliya is a creature you control; no
+    # Not(IsSelf) gate. Drain -> p0 life 20 -> 21.
+    assert rust_state.stack_size() == 1, (
+        "Rust: Haliya's own arrival SHOULD fire (no Not(IsSelf) "
+        "gate; Or-left matches creature). "
+        f"Got stack_size={rust_state.stack_size()}"
+    )
+    while rust_state.stack_size() > 0:
+        rust_state.resolve_top_of_stack()
+    assert rust_state.get_life(0) == 21, (
+        f"Rust: p0 life should be 21 after Haliya self-fire; "
+        f"got {rust_state.get_life(0)}"
+    )
+    assert rust_state.get_life(1) == 20
+
+    rust_bait_creature_dict = {
+        "name": "Bait Creature",
+        "card_types": ["Creature"],
+        "mana_cost": {"generic": 1},
+        "effects": [],
+        "power": 1,
+        "toughness": 1,
+    }
+    rust_bait_artifact_dict = {
+        "name": "Bait Artifact",
+        "card_types": ["Artifact"],
+        "mana_cost": {"generic": 1},
+        "effects": [],
+    }
+    rust_bait_land_dict = {
+        "name": "Bait Wastes",
+        "card_types": ["Land"],
+        "effects": [],
+    }
+
+    # Arrival 2: vanilla creature for p0 -> fires.
+    rust_state.register_and_inject_object(
+        rust_bait_creature_dict, 0, ZONE_BATTLEFIELD
+    )
+    assert rust_state.stack_size() == 1, (
+        "Rust: Or-left (subject_is_creature) should fire on p0's "
+        "creature arrival"
+    )
+    while rust_state.stack_size() > 0:
+        rust_state.resolve_top_of_stack()
+    assert rust_state.get_life(0) == 22
+
+    # Arrival 3: vanilla artifact for p0 -> fires.
+    rust_state.register_and_inject_object(
+        rust_bait_artifact_dict, 0, ZONE_BATTLEFIELD
+    )
+    assert rust_state.stack_size() == 1, (
+        "Rust: Or-right (subject_is_artifact) should fire on p0's "
+        "artifact arrival"
+    )
+    while rust_state.stack_size() > 0:
+        rust_state.resolve_top_of_stack()
+    assert rust_state.get_life(0) == 23
+
+    # Arrival 4: vanilla land for p0 -> no fire (neither Or arm
+    # matches).
+    rust_state.register_and_inject_object(
+        rust_bait_land_dict, 0, ZONE_BATTLEFIELD
+    )
+    assert rust_state.stack_size() == 0, (
+        "Rust: Or(creature, artifact) should reject a land subject. "
+        f"Got stack_size={rust_state.stack_size()}"
+    )
+    assert rust_state.get_life(0) == 23
+
+    # Arrival 5 (NEW axis): vanilla creature for p1 -> no fire
+    # because ControlledByYou rejects (subject_controller=1 !=
+    # source_controller=0). Pins ControlledByYou's negative arm on
+    # the Or-substrate path; Probe G only exercised it positively.
+    rust_state.register_and_inject_object(
+        rust_bait_creature_dict, 1, ZONE_BATTLEFIELD
+    )
+    assert rust_state.stack_size() == 0, (
+        "Rust: ControlledByYou should reject an opponent-controlled "
+        "creature even though Or-left matches IsCreature. "
+        f"Got stack_size={rust_state.stack_size()}"
+    )
+    assert rust_state.get_life(0) == 23
+
+    # ---- Python side ----
+    from mtg_bot.actions import _trigger_etb_abilities, resolve_top_of_stack
+    from mtg_bot.cards.base import CardPrinting, ManaCost
+    from mtg_bot.effects.base import TriggeredAbility
+    from mtg_bot.effects.generic.life import GainLife
+    from mtg_bot.effects.object_predicates import IsArtifact, IsCreature
+    from mtg_bot.effects.predicates import (
+        And, Controlled, Event, Or, Subject, YOU,
+    )
+    from mtg_bot.game import Zone
+
+    py_predicate = And(
+        left=Or(
+            left=Subject(slot=None, inner=IsCreature()),
+            right=Subject(slot=None, inner=IsArtifact()),
+        ),
+        right=Controlled(by=YOU, subject=None),
+    )
+    haliya_printing = CardPrinting(
+        name="Haliya, Guided by Light",
+        mana_cost_str="",
+        mana_cost=ManaCost(generic=2, colored=(("W", 1),)),
+        type_line="Legendary Creature -- Human Soldier",
+        supertypes=(),
+        card_types=("Creature",),
+        subtypes=(),
+        power=3,
+        toughness=3,
+        produces=frozenset(),
+        triggered_abilities=(
+            TriggeredAbility(
+                event=Event.ENTERS,
+                predicate=py_predicate,
+                effect=GainLife(amount=1),
+            ),
+        ),
+    )
+    py_haliya = py_state.new_object(
+        haliya_printing, owner_id=0, zone=Zone.BATTLEFIELD,
+    )
+    py_haliya.summoning_sick = False
+    py_haliya.tapped = False
+    py_haliya.damage = 0
+    py_haliya.etb_timestamp = py_state.next_timestamp
+    py_state.next_timestamp += 1
+    py_state.battlefield.append(py_haliya)
+    _trigger_etb_abilities(py_state, py_haliya)
+    # No Not(IsSelf) gate -> Haliya's own arrival fires.
+    assert len(py_state.stack) == 1, (
+        "Python: Haliya's own arrival SHOULD fire (no Not(IsSelf); "
+        "Or-left matches IsCreature)"
+    )
+    while py_state.stack:
+        resolve_top_of_stack(py_state)
+    assert py_state.players[0].life == 21
+
+    creature_printing = CardPrinting(
+        name="Bait Creature",
+        mana_cost_str="",
+        mana_cost=ManaCost(generic=1),
+        type_line="Creature",
+        supertypes=(),
+        card_types=("Creature",),
+        subtypes=(),
+        power=1,
+        toughness=1,
+        produces=frozenset(),
+        triggered_abilities=(),
+    )
+    artifact_printing = CardPrinting(
+        name="Bait Artifact",
+        mana_cost_str="",
+        mana_cost=ManaCost(generic=1),
+        type_line="Artifact",
+        supertypes=(),
+        card_types=("Artifact",),
+        subtypes=(),
+        power=None,
+        toughness=None,
+        produces=frozenset(),
+        triggered_abilities=(),
+    )
+    land_printing = CardPrinting(
+        name="Bait Wastes",
+        mana_cost_str="",
+        mana_cost=ManaCost(),
+        type_line="Land",
+        supertypes=(),
+        card_types=("Land",),
+        subtypes=(),
+        power=None,
+        toughness=None,
+        produces=frozenset(),
+        triggered_abilities=(),
+    )
+
+    # Arrival 2: vanilla creature for p0 -> fires.
+    py_creature = py_state.new_object(
+        creature_printing, owner_id=0, zone=Zone.BATTLEFIELD,
+    )
+    py_creature.summoning_sick = True
+    py_creature.tapped = False
+    py_creature.damage = 0
+    py_creature.etb_timestamp = py_state.next_timestamp
+    py_state.next_timestamp += 1
+    py_state.battlefield.append(py_creature)
+    _trigger_etb_abilities(py_state, py_creature)
+    assert len(py_state.stack) == 1, (
+        "Python: Or-left (IsCreature) should fire on p0's creature "
+        "arrival"
+    )
+    while py_state.stack:
+        resolve_top_of_stack(py_state)
+    assert py_state.players[0].life == 22
+
+    # Arrival 3: vanilla artifact for p0 -> fires.
+    py_artifact = py_state.new_object(
+        artifact_printing, owner_id=0, zone=Zone.BATTLEFIELD,
+    )
+    py_artifact.summoning_sick = False
+    py_artifact.tapped = False
+    py_artifact.damage = 0
+    py_artifact.etb_timestamp = py_state.next_timestamp
+    py_state.next_timestamp += 1
+    py_state.battlefield.append(py_artifact)
+    _trigger_etb_abilities(py_state, py_artifact)
+    assert len(py_state.stack) == 1, (
+        "Python: Or-right (IsArtifact) should fire on p0's artifact "
+        "arrival"
+    )
+    while py_state.stack:
+        resolve_top_of_stack(py_state)
+    assert py_state.players[0].life == 23
+
+    # Arrival 4: vanilla land for p0 -> no fire.
+    py_land = py_state.new_object(
+        land_printing, owner_id=0, zone=Zone.BATTLEFIELD,
+    )
+    py_land.summoning_sick = False
+    py_land.tapped = False
+    py_land.damage = 0
+    py_land.etb_timestamp = py_state.next_timestamp
+    py_state.next_timestamp += 1
+    py_state.battlefield.append(py_land)
+    _trigger_etb_abilities(py_state, py_land)
+    assert len(py_state.stack) == 0, (
+        "Python: Or(creature, artifact) should reject a land subject"
+    )
+    assert py_state.players[0].life == 23
+
+    # Arrival 5 (NEW axis): vanilla creature for p1 -> no fire
+    # (ControlledByYou negative arm).
+    py_p1_creature = py_state.new_object(
+        creature_printing, owner_id=1, zone=Zone.BATTLEFIELD,
+    )
+    py_p1_creature.summoning_sick = True
+    py_p1_creature.tapped = False
+    py_p1_creature.damage = 0
+    py_p1_creature.etb_timestamp = py_state.next_timestamp
+    py_state.next_timestamp += 1
+    py_state.battlefield.append(py_p1_creature)
+    _trigger_etb_abilities(py_state, py_p1_creature)
+    assert len(py_state.stack) == 0, (
+        "Python: ControlledByYou should reject an opponent-controlled "
+        "creature even though Or-left matches IsCreature"
+    )
+    assert py_state.players[0].life == 23
+
+    # ---- Cross-engine parity ----
+    _drain_stack_both(py_state, rust_state)
+    # Both engines: p0 life 23 (Haliya self-fire + creature + artifact);
+    # land + p1's creature rejected. p1 life unchanged at 20.
+    assert rust_state.get_life(0) == 23
+    assert rust_state.get_life(1) == 20
+    assert py_state.players[0].life == 23
+    assert py_state.players[1].life == 20
+    assert rust_state.get_life(0) == py_state.players[0].life
+    assert rust_state.get_life(1) == py_state.players[1].life
