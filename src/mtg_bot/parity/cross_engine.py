@@ -133,6 +133,16 @@ class CardDef:
     power: Optional[int] = None
     toughness: Optional[int] = None
     triggered_abilities: tuple[dict, ...] = ()
+    # Subtypes substrate (sibling subtypes-substrate lane Slice 1):
+    # ``build_rust_state`` reads ``card.subtypes`` and forwards a
+    # ``subtypes`` list to the Rust registry so subtype-anchored
+    # consumers (Predicate::HasSubtype follow-up, subtype-filtered
+    # sacrifice variants) see matching subtypes on both engines. The
+    # producer side of that bridge landed in commit b45c3a01 without
+    # adding the corresponding ``CardDef`` field; this default-empty
+    # tuple closes that gap so the entire cross-engine smoke suite
+    # builds again. Title Case strings per CR/Scryfall convention.
+    subtypes: tuple[str, ...] = ()
 
 
 # ---------------------------------------------------------------------------
