@@ -421,6 +421,70 @@ def _ta_dict_to_python_effect(eff_dict: dict):
         # backstop, not a contract.
         from mtg_bot.effects.generic.library_lookat import SelfMill
         return SelfMill(amount=eff_dict.get("count", 1))
+    if kind == "return_creature_from_your_graveyard_to_hand":
+        # "Return target creature card from your graveyard to your
+        # hand." Rust's ``Effect::ReturnCreatureFromYourGraveyardToHand``
+        # is a UNIT VARIANT (cards.rs:782) — no fields beyond ``kind``.
+        # The parse_effect arm (cards.rs:3148-3151) accepts the dict
+        # shape ``{"kind": "return_creature_from_your_graveyard_to_hand"}``
+        # with no companion fields. The resolve arm
+        # (state_ops_resolve.rs:2986-3020) carries the I82 controller-
+        # of-effect fix: ``controller_idx`` derives from
+        # ``current_resolve_source_controller`` (falls back to
+        # ``active_player`` for direct ``apply_effect_pub`` callers),
+        # so the scan reads the SOURCE's controller's graveyard and
+        # pushes to the SOURCE's controller's hand. Cross-controller
+        # case (p1's ETB trigger resolves on p0's turn) routes
+        # correctly post-I82.
+        #
+        # **Rust target-pick semantics.** Rust picks the returned
+        # card deterministically at apply_effect time: scan the
+        # source-controller's graveyard top-to-bottom (insertion
+        # order; ``state.players[controller_idx].graveyard.iter()``)
+        # for the FIRST object whose printing's ``card_types``
+        # contains "Creature". No eligible card → silent no-op (the
+        # arm returns ``Ok(())`` and leaves the graveyard / hand
+        # untouched). This empty-graveyard / no-creature-cards case
+        # is the well-defined silent-skip both engines agree on.
+        #
+        # **Python target-pick semantics.** Python's
+        # ``ReturnCreatureFromYourGraveyardToHand`` is constructor
+        # sugar over ``ReturnFromGraveyard`` (bounce.py:356-404) that
+        # pins ``creature=True`` + ``destination="hand"``. The base's
+        # ``legal_targets`` walks the controller's graveyard and
+        # emits one ``("graveyard_creature", card.id)`` entry per
+        # creature card. The targeting pipeline picks at PUSH time
+        # via ``push_triggered_ability`` (actions.py:3172) →
+        # ``controller.agent.choose_target`` on the enumerated
+        # ``effect.legal_targets`` pool. Probes that exercise this
+        # bridge end-to-end must therefore set an agent on the
+        # source's controller (the harness's default Player has
+        # ``agent=None``) that mimics Rust's "first creature card
+        # in graveyard insertion order" pick — the simplest agent
+        # returns the first legal_target entry, which observably
+        # matches Rust's iterator-order scan in 2-player games where
+        # both engines build their graveyards in the same order.
+        # Empty-graveyard / no-creature-cards case: both engines
+        # silently no-op (Python's ``ReturnFromGraveyard.resolve``
+        # returns early when ``targets`` is empty; the targeting
+        # pipeline doesn't push the trigger when ``legal_targets``
+        # is empty — same observable outcome as Rust's
+        # ``return Ok(())`` early-exit).
+        #
+        # Mirrors Rust's ``parse_effect`` arm (cards.rs:3148-3151);
+        # the unit variant takes no fields, so the bridge translator
+        # ignores every other key on the dict for round-trip dict-
+        # shape consistency. The Rust unit variant doesn't carry
+        # the EoE-card widening riders (or_artifact for Interceptor
+        # Mechan, or_spacecraft for Fell Gravship suffix); those
+        # would surface as separate parametric Effect variants in
+        # Rust (mirror Python's ``ReturnCreatureFromYourGraveyardToHand``
+        # rider fields) and re-enter the bridge as new arms — out
+        # of scope for the bare-shape extension.
+        from mtg_bot.effects.generic.bounce import (
+            ReturnCreatureFromYourGraveyardToHand,
+        )
+        return ReturnCreatureFromYourGraveyardToHand()
     raise ValueError(
         f"cross_engine triggered_abilities bridge: unsupported "
         f"effect kind {kind!r} (extend `_ta_dict_to_python_effect` "
