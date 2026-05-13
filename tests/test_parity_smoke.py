@@ -19684,6 +19684,441 @@ def test_cross_engine_synthetic_etb_recur_bear_empty_graveyard_silent_skip_parit
 
 
 
+def test_cross_engine_synthetic_etb_recur_bear_multi_creature_graveyard_iterator_order_parity(
+    parity_smoke,
+):
+    """Probe: ``ETB-Recur-Bear`` with THREE creatures in p0
+    graveyard -- iterator-order target-pick parity for the
+    ``return_creature_from_your_graveyard_to_hand`` bridge arm.
+
+    Sister probe to:
+      * ``test_cross_engine_synthetic_etb_return_creature_from_graveyard_to_hand_parity``
+        (canonical happy-path, ONE creature in gy)
+      * ``test_cross_engine_synthetic_etb_recur_bear_empty_graveyard_silent_skip_parity``
+        (silent-skip case, ZERO creatures in gy)
+
+    Tension-tests ``_PickFirstLegalTargetAgent`` against Rust's
+    iterator-order graveyard scan when MULTIPLE creature cards are
+    eligible. The happy-path probe explicitly carved this out:
+
+        > Multi-creature graveyard pick -- with only one creature
+        > seeded in the graveyard, both engines pick the same
+        > unambiguous target. The "Rust picks first-in-order vs
+        > Python's agent picks via legal_targets[0]" parity
+        > contract observably collapses on a one-element pool but
+        > stays well-defined for follow-up probes that seed
+        > multiple creatures.
+
+    This probe seeds three distinct vanilla creatures in p0's
+    graveyard in a fixed insertion order (A -> B -> C) and asserts
+    both engines pick the SAME card (Bait A, the first-inserted)
+    via their respective deterministic mechanisms:
+
+      * **Rust:** ``state_ops_resolve.rs:2986-3020`` scans
+        ``state.players[cidx].graveyard.iter()`` for the first
+        object whose printing's ``card_types`` contains "Creature".
+        With three creatures seeded in order A/B/C, the iterator
+        hits A first; A moves from gy to hand.
+      * **Python:** ``ReturnFromGraveyard.legal_targets`` walks the
+        controller's graveyard in insertion order and emits one
+        ``("graveyard_creature", card.id)`` per creature card. The
+        seated ``_PickFirstLegalTargetAgent`` returns
+        ``legal_targets[0]``, which is the A entry.
+
+    Both engines pick the first-in-insertion-order creature and
+    leave B and C in the graveyard.
+
+    **Why "iterator-order parity" is the load-bearing contract:**
+    swap A and C in the seed order on either engine and the picked
+    card swaps too. The probe asserts BY printing-id (Rust) and BY
+    name (Python) that both engines picked the same physical card --
+    this catches:
+
+      * A regression in Rust's graveyard scan that flipped the
+        iteration order (e.g. picked the LAST creature instead of
+        the first).
+      * A regression in Python's ``legal_targets`` enumeration
+        order (e.g. accidentally sorting by name / power rather
+        than insertion).
+      * A regression in either engine's ``register_and_inject_object``
+        / ``new_object`` that built the graveyard in reverse order.
+      * A regression in the ``_PickFirstLegalTargetAgent`` shim's
+        first-element pick.
+
+    Probe shape (seed-three / inject-and-fire-ENTERS):
+
+      1. Seed p0's graveyard with THREE distinct vanilla creature
+         cards in fixed order: Bait A -> Bait B -> Bait C. Distinct
+         names so the post-drain assertion identifies the picked
+         card by name (not just count).
+      2. Inject ETB Recur Bear directly onto p0's bf. ENTERS
+         dispatch fires SourceIsSelf; one
+         ReturnCreatureFromYourGraveyardToHand trigger lands on
+         the stack with a target resolved deterministically (Rust)
+         or pre-chosen via the agent (Python).
+      3. Drain both stacks. The picked creature (Bait A on both
+         sides) moves from p0 graveyard to p0 hand.
+      4. Cross-engine assert: both engines have Bait A in p0 hand
+         and Bait B + Bait C still in p0 graveyard, in their
+         original insertion order.
+
+    Out of scope:
+
+      * The empty-graveyard silent-skip case -- exercised by the
+        sibling empty-gy probe.
+      * The single-creature happy-path -- exercised by the
+        canonical happy-path probe.
+      * Pick-second / pick-last shims -- the contract pinned here
+        is "first-in-insertion-order" on both engines; alternate
+        picks would be a different probe (and would currently
+        fail because Rust hardcodes first-in-order, no
+        agent-side override).
+      * Rider widenings (or_artifact / or_spacecraft) -- carry
+        their own probes; the iterator-order pick contract is
+        identical across riders, but verifying the rider-widened
+        legal_targets pool is a separate axis.
+
+    Expected post-dispatch + post-drain state on BOTH engines:
+
+      * Bait A in p0 hand (moved from gy by the recur trigger).
+      * Bait B + Bait C still in p0 graveyard, in original order.
+      * ETB Recur Bear still on p0 bf (the source).
+      * Lives unchanged on both seats.
+      * No residual stack.
+    """
+    from mtg_bot.parity.cross_engine import (
+        CardDef, DeckSpec, build_python_state, build_rust_state,
+    )
+    from tests.parity._picker_shims import _PickFirstLegalTargetAgent
+
+    # Three distinct vanilla creatures for the gy seed. Distinct
+    # names + distinct mana shapes so a name / cost confusion
+    # would surface on the post-drain assertion.
+    bait_a = CardDef(
+        name="Multi GY Bait Alpha",
+        card_type="Creature",
+        mana_cost_generic=1,
+        mana_cost_colored=(("G", 1),),
+        power=1,
+        toughness=1,
+    )
+    bait_b = CardDef(
+        name="Multi GY Bait Beta",
+        card_type="Creature",
+        mana_cost_generic=2,
+        mana_cost_colored=(("U", 1),),
+        power=2,
+        toughness=2,
+    )
+    bait_c = CardDef(
+        name="Multi GY Bait Gamma",
+        card_type="Creature",
+        mana_cost_generic=3,
+        mana_cost_colored=(("R", 1),),
+        power=3,
+        toughness=3,
+    )
+    recur_bear = CardDef(
+        name="ETB Recur Bear (multi-gy probe)",
+        card_type="Creature",
+        mana_cost_generic=2,
+        mana_cost_colored=(("B", 1),),
+        power=2,
+        toughness=2,
+        triggered_abilities=(
+            {
+                "event": "enters",
+                "predicate": {"kind": "source_is_self"},
+                "effect": {
+                    "kind": "return_creature_from_your_graveyard_to_hand",
+                },
+            },
+        ),
+    )
+    spec = DeckSpec(
+        card_defs=(bait_a, bait_b, bait_c, recur_bear),
+        p0_library=(),
+        p1_library=(),
+    )
+    py_state = build_python_state(spec)
+    rust_state = build_rust_state(spec)
+
+    # ---- Rust side ----
+    ZONE_BATTLEFIELD = 2
+    ZONE_GRAVEYARD = 3
+    rust_bait_a_dict = {
+        "name": "Multi GY Bait Alpha",
+        "card_types": ["Creature"],
+        "mana_cost": {"generic": 1, "G": 1},
+        "effects": [],
+        "power": 1,
+        "toughness": 1,
+    }
+    rust_bait_b_dict = {
+        "name": "Multi GY Bait Beta",
+        "card_types": ["Creature"],
+        "mana_cost": {"generic": 2, "U": 1},
+        "effects": [],
+        "power": 2,
+        "toughness": 2,
+    }
+    rust_bait_c_dict = {
+        "name": "Multi GY Bait Gamma",
+        "card_types": ["Creature"],
+        "mana_cost": {"generic": 3, "R": 1},
+        "effects": [],
+        "power": 3,
+        "toughness": 3,
+    }
+    rust_recur_dict = {
+        "name": "ETB Recur Bear (multi-gy probe)",
+        "card_types": ["Creature"],
+        "mana_cost": {"generic": 2, "B": 1},
+        "effects": [],
+        "power": 2,
+        "toughness": 2,
+        "triggered_abilities": [
+            {
+                "event": "enters",
+                "predicate": {"kind": "source_is_self"},
+                "effect": {
+                    "kind": "return_creature_from_your_graveyard_to_hand",
+                },
+            }
+        ],
+    }
+    rust_p0_life_before = rust_state.get_life(0)
+    rust_p1_life_before = rust_state.get_life(1)
+    # Seed p0's graveyard in fixed order: A -> B -> C. Capture the
+    # OBJECT ids returned by register_and_inject_object so the
+    # post-drain assertion can identify the picked card uniquely
+    # (printing_id is allocated fresh per register_and_inject_object
+    # call -- spec's card_defs prefill the registry at slots
+    # 0..len(card_defs)-1 and these injection sites add new slots
+    # beyond that, so printing_id values aren't predictable from
+    # the spec alone; object id IS predictable: per-state
+    # incrementing counter starting at 0).
+    rust_bait_a_id = rust_state.register_and_inject_object(
+        rust_bait_a_dict, 0, ZONE_GRAVEYARD,
+    )
+    rust_bait_b_id = rust_state.register_and_inject_object(
+        rust_bait_b_dict, 0, ZONE_GRAVEYARD,
+    )
+    rust_bait_c_id = rust_state.register_and_inject_object(
+        rust_bait_c_dict, 0, ZONE_GRAVEYARD,
+    )
+    assert rust_state.graveyard_sizes[0] == 3, (
+        f"Rust: p0 gy seed should hold 3 creatures pre-dispatch; "
+        f"got graveyard_size={rust_state.graveyard_sizes[0]}"
+    )
+    # Inject the recur-bear -> fires ENTERS. The trigger lands on
+    # the stack with its target resolved deterministically (Rust
+    # scans the gy and finds Bait A as the first creature).
+    rust_state.register_and_inject_object(
+        rust_recur_dict, 0, ZONE_BATTLEFIELD,
+    )
+    assert rust_state.stack_size() == 1, (
+        "Rust: ETB Recur Bear's arrival should fire SourceIsSelf "
+        "ENTERS and land "
+        "ReturnCreatureFromYourGraveyardToHand on the stack. "
+        f"Got stack_size={rust_state.stack_size()}"
+    )
+
+    # ---- Python side ----
+    from mtg_bot.actions import _trigger_etb_abilities
+    from mtg_bot.cards.base import CardPrinting, ManaCost
+    from mtg_bot.effects.base import TriggeredAbility
+    from mtg_bot.effects.generic.bounce import (
+        ReturnCreatureFromYourGraveyardToHand,
+    )
+    from mtg_bot.effects.predicates import Event, IsSelf
+    from mtg_bot.game import Zone
+
+    bait_a_printing = CardPrinting(
+        name="Multi GY Bait Alpha",
+        mana_cost_str="",
+        mana_cost=ManaCost(generic=1, colored=(("G", 1),)),
+        type_line="Creature",
+        supertypes=(),
+        card_types=("Creature",),
+        subtypes=(),
+        power=1,
+        toughness=1,
+        produces=frozenset(),
+    )
+    bait_b_printing = CardPrinting(
+        name="Multi GY Bait Beta",
+        mana_cost_str="",
+        mana_cost=ManaCost(generic=2, colored=(("U", 1),)),
+        type_line="Creature",
+        supertypes=(),
+        card_types=("Creature",),
+        subtypes=(),
+        power=2,
+        toughness=2,
+        produces=frozenset(),
+    )
+    bait_c_printing = CardPrinting(
+        name="Multi GY Bait Gamma",
+        mana_cost_str="",
+        mana_cost=ManaCost(generic=3, colored=(("R", 1),)),
+        type_line="Creature",
+        supertypes=(),
+        card_types=("Creature",),
+        subtypes=(),
+        power=3,
+        toughness=3,
+        produces=frozenset(),
+    )
+    recur_printing = CardPrinting(
+        name="ETB Recur Bear (multi-gy probe)",
+        mana_cost_str="",
+        mana_cost=ManaCost(generic=2, colored=(("B", 1),)),
+        type_line="Creature",
+        supertypes=(),
+        card_types=("Creature",),
+        subtypes=(),
+        power=2,
+        toughness=2,
+        produces=frozenset(),
+        triggered_abilities=(
+            TriggeredAbility(
+                event=Event.ENTERS,
+                predicate=IsSelf(),
+                effect=ReturnCreatureFromYourGraveyardToHand(),
+            ),
+        ),
+    )
+
+    # First-legal-target shim on p0 -- mirrors Rust's iterator-order
+    # graveyard scan (the canonical contract for this bridge arm).
+    py_state.players[0].agent = _PickFirstLegalTargetAgent()
+
+    # Seed p0's graveyard in the SAME insertion order as Rust:
+    # A -> B -> C.
+    py_bait_a = py_state.new_object(
+        bait_a_printing, owner_id=0, zone=Zone.GRAVEYARD,
+    )
+    py_state.players[0].graveyard.append(py_bait_a)
+    py_bait_b = py_state.new_object(
+        bait_b_printing, owner_id=0, zone=Zone.GRAVEYARD,
+    )
+    py_state.players[0].graveyard.append(py_bait_b)
+    py_bait_c = py_state.new_object(
+        bait_c_printing, owner_id=0, zone=Zone.GRAVEYARD,
+    )
+    py_state.players[0].graveyard.append(py_bait_c)
+    assert len(py_state.players[0].graveyard) == 3
+
+    py_recur = py_state.new_object(
+        recur_printing, owner_id=0, zone=Zone.BATTLEFIELD,
+    )
+    py_recur.summoning_sick = False
+    py_recur.tapped = False
+    py_recur.damage = 0
+    py_recur.etb_timestamp = py_state.next_timestamp
+    py_state.next_timestamp += 1
+    py_state.battlefield.append(py_recur)
+    py_p0_life_before = py_state.players[0].life
+    py_p1_life_before = py_state.players[1].life
+    _trigger_etb_abilities(py_state, py_recur)
+    assert len(py_state.stack) == 1, (
+        "Python: ETB Recur Bear's arrival should fire IsSelf "
+        "ENTERS and land "
+        "ReturnCreatureFromYourGraveyardToHand on the stack. "
+        f"Got stack size={len(py_state.stack)}"
+    )
+
+    # ---- Drain both stacks, then compare iterator-order parity ----
+    _drain_stack_both(py_state, rust_state)
+
+    # Stacks empty.
+    assert rust_state.stack_size() == 0
+    assert len(py_state.stack) == 0
+
+    # Per-engine post-drain: ONE card in p0 hand (Bait A, the
+    # first-inserted creature), TWO cards remaining in p0 graveyard
+    # (Bait B and Bait C, in original insertion order).
+    assert rust_state.hand_sizes[0] == 1, (
+        f"Rust: p0 hand should hold 1 returned creature; got "
+        f"hand_size={rust_state.hand_sizes[0]}"
+    )
+    assert rust_state.graveyard_sizes[0] == 2, (
+        f"Rust: p0 gy should retain 2 creatures (B + C); got "
+        f"graveyard_size={rust_state.graveyard_sizes[0]}"
+    )
+    rust_hand_snap = rust_state.hand_snapshot(0)
+    rust_hand_id = int(rust_hand_snap[0]["id"])
+    assert rust_hand_id == rust_bait_a_id, (
+        f"Rust: hand-returned card should be Bait Alpha "
+        f"(object id {rust_bait_a_id}, the first-inserted gy "
+        f"creature); got id={rust_hand_id} "
+        f"(name={rust_hand_snap[0]['printing_name']})"
+    )
+    rust_gy_snap = rust_state.graveyard_snapshot(0)
+    rust_gy_ids = [int(d["id"]) for d in rust_gy_snap]
+    assert rust_gy_ids == [rust_bait_b_id, rust_bait_c_id], (
+        f"Rust: gy should retain Beta then Gamma (object ids "
+        f"{rust_bait_b_id}, {rust_bait_c_id}) in original insertion "
+        f"order; got ids={rust_gy_ids}"
+    )
+
+    assert len(py_state.players[0].hand) == 1, (
+        f"Python: p0 hand should hold 1 returned creature; got "
+        f"hand_size={len(py_state.players[0].hand)}"
+    )
+    py_hand_name = py_state.players[0].hand[0].printing.name
+    assert py_hand_name == "Multi GY Bait Alpha", (
+        f"Python: hand-returned card should be Bait Alpha (the "
+        f"first-inserted gy creature); got {py_hand_name}"
+    )
+    assert len(py_state.players[0].graveyard) == 2, (
+        f"Python: p0 gy should retain 2 creatures (B + C); got "
+        f"graveyard_size={len(py_state.players[0].graveyard)}"
+    )
+    py_gy_names = [
+        o.printing.name for o in py_state.players[0].graveyard
+    ]
+    assert py_gy_names == [
+        "Multi GY Bait Beta", "Multi GY Bait Gamma",
+    ], (
+        f"Python: gy should retain Beta then Gamma in original "
+        f"insertion order; got {py_gy_names}"
+    )
+
+    # ETB Recur Bear still on p0 bf (the source).
+    assert rust_state.battlefield_sizes[0] == 1
+    py_bf_p0 = [
+        o for o in py_state.battlefield if o.controller_id == 0
+    ]
+    assert len(py_bf_p0) == 1
+    assert (
+        py_bf_p0[0].printing.name == "ETB Recur Bear (multi-gy probe)"
+    )
+
+    # Cross-engine: lives unchanged.
+    assert rust_state.get_life(0) == rust_p0_life_before
+    assert rust_state.get_life(1) == rust_p1_life_before
+    assert py_state.players[0].life == py_p0_life_before
+    assert py_state.players[1].life == py_p1_life_before
+    assert rust_state.get_life(0) == py_state.players[0].life
+    assert rust_state.get_life(1) == py_state.players[1].life
+
+    # Cross-engine zone-size parity.
+    assert rust_state.hand_sizes[0] == len(py_state.players[0].hand)
+    assert (
+        rust_state.graveyard_sizes[0]
+        == len(py_state.players[0].graveyard)
+    )
+    assert rust_state.battlefield_sizes[0] == len(py_bf_p0)
+    # p1 zones untouched on both sides.
+    assert rust_state.hand_sizes[1] == 0
+    assert len(py_state.players[1].hand) == 0
+    assert rust_state.graveyard_sizes[1] == 0
+    assert len(py_state.players[1].graveyard) == 0
+
+
+
 # === PHASE5_PROBES_INSERT_ABOVE_THIS_LINE ===
 # New real-EoE parity probes go IMMEDIATELY ABOVE this marker.
 # Append-only convention prevents merge collisions when multiple agents add probes in parallel.
