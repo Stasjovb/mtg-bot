@@ -1566,6 +1566,100 @@ def _ta_dict_to_python_effect(eff_dict: dict):
                 f"only honors creature-shaped filters)"
             )
         return Destroy(targets=(TargetSpec(slot_filter),))
+    if kind == "exile_target":
+        # "Exile target creature." Rust's
+        # ``Effect::ExileTarget { target: TargetFilter }``
+        # (cards.rs:1110) is the explicit-target removal-to-exile arm
+        # (Path-to-Exile / Swords-to-Plowshares / Anguished
+        # Unmaking shape, without the destruction's indestructible-
+        # gate). Its ``parse_effect`` arm at cards.rs:2849-2856
+        # requires a ``target`` dict (parsed via
+        # ``parse_target_filter``). The resolve arm at
+        # state_ops_resolve.rs:1110 carries the I70 controller-of-
+        # effect fix: defender = 1 - controller, where controller
+        # derives from ``current_resolve_source_controller`` (with
+        # active_player fallback). Sibling closure to I75
+        # DestroyTarget / I76 ReturnToHand / I78 / I79 / I80 --
+        # identical defender-swap shape; differs only in destination
+        # zone (exile for I70 vs graveyard / hand / library bottom
+        # for the siblings).
+        #
+        # **Rust target-pick semantics.** The Rust resolve arm is the
+        # AnyCreature first-slice shortcut: scans the resolved
+        # defender's bf for ``bf[0]`` regardless of card-type filter
+        # at this layer (per the I70 docstring, "the current
+        # AnyCreature target shortcut picks ``bf[0]`` regardless of
+        # card-type filter"). Tokens that get exiled cease to exist
+        # per CR 704.5d. No indestructible gate (exile bypasses
+        # destruction-replacement and indestructible per CR 702.12c).
+        #
+        # **Python target-pick semantics.** Python's ``Exile`` base
+        # class (effects/generic/exile.py:29) drives off ``targets:
+        # tuple`` -- a tuple of ``TargetSpec`` slots. For the
+        # AnyCreature filter, the bridge constructs
+        # ``Exile(targets=(TargetSpec(IsCreature()),))``. The
+        # targeting pipeline picks at PUSH time via
+        # ``push_triggered_ability`` -> the source-controller's
+        # ``agent.choose_target`` over the legal_targets pool (every
+        # creature on the battlefield), and ``Exile.resolve``
+        # re-verifies the slot's filter at fire time per CR 608.2b
+        # before invoking ``move_off_battlefield(state, obj,
+        # destination="exile")``. Probes that drive this arm cross-
+        # engine seat ``_PickFirstOpponentTargetAgent`` on the
+        # source's controller -- the agent's opponent-controller
+        # filter mirrors Rust's defender-side scan exactly on the
+        # 2-player harness.
+        #
+        # **Filter narrowness asymmetry note.** Mirrors the
+        # destroy_target arm's note: Rust's first-slice ``AnyCreature``
+        # picker doesn't actually filter to creatures (picks ``bf[0]``
+        # blindly); Python's ``IsCreature()`` slot filter does. On
+        # synthetic probes that seat only creatures on the defender's
+        # bf, this asymmetry collapses and both engines pick the same
+        # target. A future slice can tighten Rust's picker to honor
+        # ``AnyCreature``; the bridge already speaks the tightened
+        # contract.
+        #
+        # **Distinct from
+        # ``exile_target_creature_until_source_leaves``.** That
+        # sibling arm (the I79 fix) stamps ``exiled_with_source =
+        # Some(source_obj_id)`` so the paired return on source-leaves
+        # works; the bare ``exile_target`` arm permanently exiles
+        # (no paired return). The two arms share the same defender-
+        # swap controller-of-effect substrate but differ on whether
+        # the exile is reversible via source-leaves.
+        #
+        # Mirrors Rust's ``parse_effect`` arm (cards.rs:2849-2856)
+        # which requires ``target`` and downcasts to a target-filter
+        # dict. Filter-kind allowlist mirrors the destroy_target arm
+        # (only ``any_creature`` honored; ``any_player`` rejected --
+        # exile doesn't apply to players in Rust's first-slice
+        # picker).
+        from mtg_bot.effects.generic.exile import Exile
+        from mtg_bot.effects.object_predicates import IsCreature
+        from mtg_bot.effects.targets import TargetSpec
+        target_dict = eff_dict.get("target")
+        # Lenient-default behavior mirrors the destroy_target arm
+        # (missing ``target`` defaults to ``any_creature``); bridge
+        # consumers SHOULD pass ``target`` explicitly to keep round-
+        # trip dict-shape consistency with what Rust's parser
+        # accepts.
+        target_kind = (
+            target_dict.get("kind", "any_creature")
+            if isinstance(target_dict, dict)
+            else "any_creature"
+        )
+        if target_kind == "any_creature":
+            slot_filter = IsCreature()
+        else:
+            raise ValueError(
+                f"cross_engine exile_target bridge: unsupported "
+                f"target filter kind {target_kind!r} (Rust's "
+                f"parse_target_filter at cards.rs:2790-2799 accepts "
+                f"only 'any_player' and 'any_creature'; exile_target "
+                f"only honors creature-shaped filters)"
+            )
+        return Exile(targets=(TargetSpec(slot_filter),))
     # === PHASE5_BRIDGE_ARMS_INSERT_ABOVE_THIS_LINE ===
     # New `kind` arms go IMMEDIATELY ABOVE this marker. Do NOT delete the marker.
     # Append-only convention prevents merge collisions when multiple agents add arms in parallel.
