@@ -1286,16 +1286,43 @@ fn apply_effect(
                 ));
             }
             TargetFilter::AnyCreature => {
-                let active = state.active_player as usize;
-                let bf = &state.players[active].battlefield;
+                // **Controller resolution (I66 follow-up to the I59 /
+                // I60 / I63 / I64 / I65 controller-of-effect
+                // substrate).** Prefer the transient
+                // `state.current_resolve_source_controller` (set by
+                // the stack resolver around each `apply_effect` call),
+                // falling back to `state.active_player` for back-
+                // compat with direct `apply_effect_pub` callers. Same
+                // pattern as `Effect::DrawCards` / `Effect::GainLife`
+                // / `Effect::DamageEachOpponent` / `Effect::DealDamage`
+                // / `Effect::Mill` — CR 119.5 / 608.2: an effect
+                // resolves under its source's controller. For
+                // Sacrifice (the "you sacrifice" arm), the
+                // sacrificing player is the SOURCE'S controller, not
+                // the active player.
+                //
+                // **Why the fix.** Pre-fix this arm hardcoded
+                // `state.active_player`. Wrong when the resolving
+                // spell / triggered ability has a controller !=
+                // active_player. Example: on p0's turn, p1 casts an
+                // instant Altar's-Reap-shape spell ("sacrifice a
+                // creature, draw two cards") — pre-fix the spell
+                // sacrificed p0's first battlefield permanent
+                // (active_player), post-fix it correctly sacrifices
+                // p1's (the spell's controller).
+                let controller = state
+                    .current_resolve_source_controller
+                    .map(|c| c as usize)
+                    .unwrap_or(state.active_player as usize);
+                let bf = &state.players[controller].battlefield;
                 if bf.is_empty() {
                     return Ok(()); // fizzle silently
                 }
                 let target_id = bf[0].id;
-                // Pop from active player's battlefield. Use
+                // Pop from sacrificing player's battlefield. Use
                 // Arc::make_mut for CoW safety.
                 let bf_mut: &mut Vec<GameObject> =
-                    Arc::make_mut(&mut state.players[active].battlefield);
+                    Arc::make_mut(&mut state.players[controller].battlefield);
                 let pos = bf_mut
                     .iter()
                     .position(|o| o.id == target_id)
@@ -1303,7 +1330,7 @@ fn apply_effect(
                 let mut obj = bf_mut.remove(pos);
                 // Stamp graveyard zone + reset per-object state. First-
                 // slice: target's controller == owner, so push onto
-                // active player's graveyard (where the sacrificed
+                // sacrificing player's graveyard (where the sacrificed
                 // permanent's owner lives).
                 obj.zone = ZONE_GRAVEYARD;
                 obj.tapped = false;
@@ -1316,7 +1343,7 @@ fn apply_effect(
                 obj.attached_to = None;
                 obj.exiled_with_source = None;
                 let (printing_id, leaving_obj_id) = (obj.printing_id, obj.id);
-                Arc::make_mut(&mut state.players[active].graveyard).push(obj);
+                Arc::make_mut(&mut state.players[controller].graveyard).push(obj);
                 // Round-29 Void LTB tracking: sacrifice is a
                 // battlefield-exit. Flag flips iff sac'd object is nonland.
                 mark_left_battlefield_if_nonland(state, printing_id);
