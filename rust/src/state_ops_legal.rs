@@ -455,21 +455,30 @@ fn cast_spell_dict(py: Python<'_>, card_id: u32) -> PyResult<Bound<'_, PyDict>> 
 }
 
 /// Build a `{"kind": "activate_ability", "source_id": <id>,
-/// "ability_index": <u32>}` dict. Mirrors
-/// `actions.rs:action_to_pydict`'s `Action::ActivateAbility` arm so a
-/// dict produced here round-trips through `parse_action` and back
-/// without key drift. Post-CE20-Slice-1: callers can pass any
+/// "ability_index": <u32>, "target_creature_id": <Option<u32>>}` dict.
+/// Mirrors `actions.rs:action_to_pydict`'s `Action::ActivateAbility`
+/// arm so a dict produced here round-trips through `parse_action` and
+/// back without key drift. Post-CE20-Slice-1: callers can pass any
 /// `ability_index` in the printing's `activated_abilities` range
 /// (legacy `mana_produced` path always uses `ability_index = 0`).
+///
+/// CE20 follow-up Slice 4 (Equipment-equip): the dict shape grows an
+/// optional `target_creature_id` key. `None` for every non-target
+/// activation (the pre-Slice-4 shape — bridge-synthesized mana
+/// abilities, Bear-Caster-style draw abilities, sacrifice-self
+/// abilities). `Some(id)` for activations whose cost flags
+/// `requires_target_creature_you_control = true` (Equipment-equip).
 fn activate_ability_dict(
     py: Python<'_>,
     source_id: u32,
     ability_index: u32,
+    target_creature_id: Option<u32>,
 ) -> PyResult<Bound<'_, PyDict>> {
     let d = PyDict::new(py);
     d.set_item("kind", "activate_ability")?;
     d.set_item("source_id", source_id)?;
     d.set_item("ability_index", ability_index)?;
+    d.set_item("target_creature_id", target_creature_id)?;
     Ok(d)
 }
 
@@ -1119,7 +1128,55 @@ impl GameState {
                 if !pool_can_cover(&headroom_pool, &ability.cost.mana) {
                     continue;
                 }
-                actions.push(activate_ability_dict(py, obj.id, ability_index as u32)?);
+                // CE20 follow-up Slice 4 (Equipment-equip): when the
+                // cost requires a target creature you control, fan
+                // out one ActivateAbility per legal target. The
+                // target is any creature on the activator's
+                // battlefield that ISN'T the source itself (CR
+                // 702.6c — an Equipment can't equip itself). Target's
+                // summoning sickness is NOT a barrier — equip is a
+                // mana-only cost so the target's tap-state is
+                // irrelevant.
+                //
+                // **No legal targets → no emission.** A bare
+                // Equipment on bf with no other creatures emits
+                // zero ActivateAbility dicts (the activation has
+                // nothing to target; CR 601.2c says a player can't
+                // begin to cast a spell or activate an ability
+                // unless they choose legal targets for it).
+                if ability.cost.requires_target_creature_you_control {
+                    for target in self.players[idx].battlefield.iter() {
+                        if target.id == obj.id {
+                            // Can't target self.
+                            continue;
+                        }
+                        let Some(t_printing) =
+                            self.registry.lookup(target.printing_id)
+                        else {
+                            continue;
+                        };
+                        if !t_printing
+                            .card_types
+                            .iter()
+                            .any(|t| t == "Creature")
+                        {
+                            continue;
+                        }
+                        actions.push(activate_ability_dict(
+                            py,
+                            obj.id,
+                            ability_index as u32,
+                            Some(target.id),
+                        )?);
+                    }
+                } else {
+                    actions.push(activate_ability_dict(
+                        py,
+                        obj.id,
+                        ability_index as u32,
+                        None,
+                    )?);
+                }
             }
         }
 

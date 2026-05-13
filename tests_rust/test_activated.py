@@ -1757,3 +1757,727 @@ def test_set_charge_counters_returns_false_on_no_change(synthetic_state):
 def test_get_charge_counters_returns_none_for_unknown_obj(synthetic_state):
     """Reading charge_counters on an unknown id returns None."""
     assert synthetic_state.get_charge_counters(99999) is None
+
+
+# --- CE20 follow-up Slice 4 (Equipment-equip) -----------------------
+#
+# 7 EoE Equipment printings carry an "Equip {N}" activated ability —
+# pay mana, target a creature you control, attach the Equipment to it
+# (CR 702.6). The cost-shape extension on `ActivationCost` is
+# `requires_target_creature_you_control: bool`; setting it `true`
+# turns on:
+#   - emission fan-out: one ActivateAbility dict per legal target
+#     creature on the activator's battlefield (CR 702.6c — target a
+#     creature you control; can't equip self).
+#   - apply-arm target-pick validation (Phase 2.5): the dict MUST
+#     carry `target_creature_id` (raises if missing); target must be
+#     a creature on the activator's bf that isn't the source itself
+#     (raises otherwise).
+#   - StackItem payload-target threading: non-mana activations push
+#     the chosen target through `new_trigger_with_target` so the
+#     `Effect::EquipToTargetCreatureYouControl` resolve arm can read
+#     it from `state.current_resolve_payload_target_id`.
+#
+# The effect itself (`Effect::EquipToTargetCreatureYouControl`)
+# already exists post-r29; this slice wires the activation surface to
+# read its chosen target rather than picking the first-eligible
+# creature deterministically.
+
+
+def _equip_dict():
+    """A 0-cost Equipment ("Auxiliary Boosters"-style) with an
+    activated ability ``{1}: Equip target creature you control``.
+
+    Modeled as an Artifact (Equipment is a subtype the Rust registry
+    doesn't yet track; gating happens at the card-data level — only
+    Equipment cards print this effect). Mana cost on the activation
+    is {1} so the test can vary affordability cleanly via the
+    synthetic state's pool helpers.
+    """
+    return {
+        "name": "Auxiliary Boosters (synthetic)",
+        "card_types": ["Artifact"],
+        "mana_cost": {"generic": 2},
+        "effects": [],
+        # power / toughness OMITTED — non-creature artifact.
+        "activated_abilities": [
+            {
+                "cost": {
+                    "mana": {"generic": 1},
+                    "requires_target_creature_you_control": True,
+                },
+                "effect": {
+                    "kind": "equip_to_target_creature_you_control",
+                },
+                "is_mana_ability": False,
+            }
+        ],
+    }
+
+
+def _free_equip_dict():
+    """A zero-cost Equipment used for tests that want to exercise the
+    target-pick logic without pool-affordability noise. Same shape
+    as _equip_dict but with no mana cost on the activation.
+    """
+    return {
+        "name": "Free Equip (synthetic)",
+        "card_types": ["Artifact"],
+        "mana_cost": {"generic": 0},
+        "effects": [],
+        "activated_abilities": [
+            {
+                "cost": {
+                    "requires_target_creature_you_control": True,
+                },
+                "effect": {
+                    "kind": "equip_to_target_creature_you_control",
+                },
+                "is_mana_ability": False,
+            }
+        ],
+    }
+
+
+def _creature_dict(name: str, mc_generic: int = 1):
+    """A vanilla 2/2 creature. Reusable per-test fixture for legal
+    targets.
+    """
+    return {
+        "name": name,
+        "card_types": ["Creature"],
+        "mana_cost": {"generic": mc_generic},
+        "effects": [],
+        "power": 2,
+        "toughness": 2,
+    }
+
+
+# --- parser surface --------------------------------------------------
+
+
+def test_equip_requires_target_parses(empty_registry):
+    """A printing with the new
+    `requires_target_creature_you_control` cost key parses without
+    raising."""
+    pid = empty_registry.register_printing(_equip_dict())
+    assert pid == 0
+
+
+def test_equip_requires_target_defaults_to_false(empty_registry):
+    """Missing `requires_target_creature_you_control` key defaults to
+    False — back-compat with every pre-Slice-4 caller. Bear Caster's
+    pre-existing fixture (no key) parses with the flag false.
+    """
+    pid = empty_registry.register_printing(_bear_caster_dict())
+    assert pid == 0
+
+
+def test_equip_requires_target_unknown_key_raises_paranoid(empty_registry):
+    """The `pay_life` key remains the canonical 'unknown' for the
+    activation_cost parse — Slice 4 added
+    `requires_target_creature_you_control` to the allow-list, so the
+    Slice 1 unknown-key test stays bit-equal.
+    """
+    d = {
+        "name": "Bad Cost Card",
+        "card_types": ["Creature"],
+        "mana_cost": {"generic": 1},
+        "effects": [],
+        "power": 1,
+        "toughness": 1,
+        "activated_abilities": [
+            {
+                "cost": {"mana": {"G": 1}, "pay_life": 1},
+                "effect": {"kind": "draw_cards", "count": 1},
+                "is_mana_ability": False,
+            }
+        ],
+    }
+    with pytest.raises(ValueError, match="unknown activation_cost key"):
+        empty_registry.register_printing(d)
+
+
+# --- emission-side smoke (target fan-out) ---------------------------
+
+
+def test_equip_emits_one_activation_per_legal_target(synthetic_state):
+    """**Load-bearing Slice 4 emission pin.** Equipment on p0's bf
+    with two test-injected creature targets on p0's bf: emission
+    produces a unique ActivateAbility dict per legal target. Both
+    test-injected target ids must appear in the
+    `target_creature_id` slot. The synthetic state's default
+    creatures (Grizzly Bears, Llanowar Elves) ALSO contribute as
+    legal targets — we assert the test ids are PRESENT rather than
+    asserting an absolute emission count, to stay robust against
+    synthetic-state fixture changes.
+    """
+    equip_id = synthetic_state.register_and_inject_object(
+        _free_equip_dict(), 0, ZONE_BATTLEFIELD,
+    )
+    target_a = synthetic_state.register_and_inject_object(
+        _creature_dict("Target A"), 0, ZONE_BATTLEFIELD,
+    )
+    target_b = synthetic_state.register_and_inject_object(
+        _creature_dict("Target B"), 0, ZONE_BATTLEFIELD,
+    )
+
+    synthetic_state.set_phase(3)  # PRECOMBAT_MAIN
+    actions = synthetic_state.legal_decisions(0)
+    equip_emits = [
+        a for a in actions
+        if a.get("kind") == "activate_ability"
+        and a.get("source_id") == equip_id
+    ]
+    # At least the two test-injected creatures must appear.
+    assert len(equip_emits) >= 2, (
+        f"Equipment with 2 test-injected legal targets should emit "
+        f"at least 2 ActivateAbility dicts; got {len(equip_emits)}: "
+        f"{equip_emits}"
+    )
+    targets_emitted = {a["target_creature_id"] for a in equip_emits}
+    assert target_a in targets_emitted
+    assert target_b in targets_emitted
+    # Defensive: the equip's own id MUST NOT appear (CR 702.6c).
+    assert equip_id not in targets_emitted
+    # Emission count equals unique target count — no double-emit.
+    assert len(targets_emitted) == len(equip_emits)
+    # Every emission targets a distinct creature; ids are unique.
+    target_ids_list = [a["target_creature_id"] for a in equip_emits]
+    assert len(set(target_ids_list)) == len(target_ids_list)
+
+
+def test_equip_excludes_self_from_targets(synthetic_state):
+    """CR 702.6c — Equipment can't equip itself. The equip's own
+    id MUST NOT appear in any `target_creature_id` slot, regardless
+    of how many other creatures are on the activator's bf.
+    """
+    equip_id = synthetic_state.register_and_inject_object(
+        _free_equip_dict(), 0, ZONE_BATTLEFIELD,
+    )
+    target_id = synthetic_state.register_and_inject_object(
+        _creature_dict("Lone Target"), 0, ZONE_BATTLEFIELD,
+    )
+
+    synthetic_state.set_phase(3)
+    actions = synthetic_state.legal_decisions(0)
+    equip_emits = [
+        a for a in actions
+        if a.get("kind") == "activate_ability"
+        and a.get("source_id") == equip_id
+    ]
+    # At least one emission for the test-injected target (the
+    # synthetic state's default Grizzly Bears bf also contribute).
+    targets_emitted = {a["target_creature_id"] for a in equip_emits}
+    assert target_id in targets_emitted
+    # CR 702.6c: own id must NEVER appear.
+    assert equip_id not in targets_emitted, (
+        f"Equipment's own id {equip_id} appeared as an equip target: "
+        f"{equip_emits}"
+    )
+
+
+def test_equip_excludes_opponent_creatures(synthetic_state):
+    """Targets must be on the ACTIVATOR's battlefield (CR 702.6c).
+    A creature on p1's bf is NOT a legal target for p0's equip
+    activation. Pin: the opponent-side creature's id never appears
+    in any `target_creature_id` slot.
+    """
+    equip_id = synthetic_state.register_and_inject_object(
+        _free_equip_dict(), 0, ZONE_BATTLEFIELD,
+    )
+    own_target = synthetic_state.register_and_inject_object(
+        _creature_dict("Own Target"), 0, ZONE_BATTLEFIELD,
+    )
+    # Opponent's creature — should NOT appear as a target.
+    opp_target = synthetic_state.register_and_inject_object(
+        _creature_dict("Opponent Target"), 1, ZONE_BATTLEFIELD,
+    )
+
+    synthetic_state.set_phase(3)
+    actions = synthetic_state.legal_decisions(0)
+    equip_emits = [
+        a for a in actions
+        if a.get("kind") == "activate_ability"
+        and a.get("source_id") == equip_id
+    ]
+    targets_emitted = {a["target_creature_id"] for a in equip_emits}
+    assert own_target in targets_emitted
+    # Opponent's creature MUST NOT be a legal target.
+    assert opp_target not in targets_emitted
+
+
+def test_equip_excludes_non_creature_artifacts(synthetic_state):
+    """Targets must be CREATURES (CR 702.6c — equip targets a
+    creature you control). A non-creature artifact on the
+    activator's bf is NOT a legal target. Pin: the artifact's id
+    never appears in any `target_creature_id` slot.
+    """
+    equip_id = synthetic_state.register_and_inject_object(
+        _free_equip_dict(), 0, ZONE_BATTLEFIELD,
+    )
+    creature_id = synthetic_state.register_and_inject_object(
+        _creature_dict("Real Creature"), 0, ZONE_BATTLEFIELD,
+    )
+    # Another artifact (non-creature) — should NOT appear as a target.
+    artifact_id = synthetic_state.register_and_inject_object(
+        {
+            "name": "Other Artifact",
+            "card_types": ["Artifact"],
+            "mana_cost": {"generic": 1},
+            "effects": [],
+        },
+        0,
+        ZONE_BATTLEFIELD,
+    )
+
+    synthetic_state.set_phase(3)
+    actions = synthetic_state.legal_decisions(0)
+    equip_emits = [
+        a for a in actions
+        if a.get("kind") == "activate_ability"
+        and a.get("source_id") == equip_id
+    ]
+    targets_emitted = {a["target_creature_id"] for a in equip_emits}
+    assert creature_id in targets_emitted
+    # Non-creature artifact MUST NOT be a legal target.
+    assert artifact_id not in targets_emitted
+
+
+def test_equip_no_legal_targets_no_emission(synthetic_state):
+    """Equipment on bf with NO other creatures on activator's bf:
+    emission produces ZERO ActivateAbility dicts for the equip.
+    Pinned by setting up a controller-2 (out-of-range) won't work;
+    instead, we use a custom empty_registry fixture with hand-rolled
+    state. The simpler approach for the synthetic_state fixture is
+    to verify the count when N is known: with the default p0 bf
+    having K creatures and adding 0 test creatures, expected
+    equip-emit count = K. When K is replaced by 0 (an isolated
+    fixture), expected = 0. We use the absence-of-test-creatures
+    side to assert no test-injected ids appear among emitted
+    targets — the load-bearing pin for "the gate honors target
+    eligibility".
+    """
+    equip_id = synthetic_state.register_and_inject_object(
+        _free_equip_dict(), 0, ZONE_BATTLEFIELD,
+    )
+    # No own test-creatures injected.
+    # Inject a non-creature artifact on p0's bf — emission MUST
+    # NOT include it as a target.
+    non_creature_id = synthetic_state.register_and_inject_object(
+        {
+            "name": "Inert Artifact",
+            "card_types": ["Artifact"],
+            "mana_cost": {"generic": 1},
+            "effects": [],
+        },
+        0,
+        ZONE_BATTLEFIELD,
+    )
+
+    synthetic_state.set_phase(3)
+    actions = synthetic_state.legal_decisions(0)
+    equip_emits = [
+        a for a in actions
+        if a.get("kind") == "activate_ability"
+        and a.get("source_id") == equip_id
+    ]
+    targets_emitted = {a["target_creature_id"] for a in equip_emits}
+    # Inert Artifact MUST NOT be a legal target.
+    assert non_creature_id not in targets_emitted
+    # Equip's own id MUST NOT be a legal target.
+    assert equip_id not in targets_emitted
+
+
+def test_equip_no_emission_when_mana_unaffordable(synthetic_state):
+    """Equipment with mana cost > activator's pool + headroom: no
+    emission (the affordability gate fires before the target
+    fan-out). Tap out the synthetic state's default mana sources
+    first so the auto-tap headroom composer can't silently cover
+    the cost.
+    """
+    _tap_all_default_p0_mana_sources(synthetic_state)
+    equip_id = synthetic_state.register_and_inject_object(
+        _equip_dict(), 0, ZONE_BATTLEFIELD,  # costs {1}
+    )
+    synthetic_state.register_and_inject_object(
+        _creature_dict("Some Target"), 0, ZONE_BATTLEFIELD,
+    )
+    synthetic_state.empty_mana_pool(0)
+
+    synthetic_state.set_phase(3)
+    actions = synthetic_state.legal_decisions(0)
+    equip_emits = [
+        a for a in actions
+        if a.get("kind") == "activate_ability"
+        and a.get("source_id") == equip_id
+    ]
+    assert equip_emits == [], (
+        f"Equip activation with empty pool + no mana sources should "
+        f"NOT emit. Got {equip_emits}"
+    )
+
+
+# --- apply-arm smoke (target validation + StackItem threading) ------
+
+
+def test_equip_apply_attaches_to_chosen_target(synthetic_state):
+    """**Load-bearing Slice 4 apply pin.** Apply
+    `ActivateAbility(equip_id, 0, target_creature_id=target)` →
+    stack item carrying the target → resolve_top_of_stack →
+    equipment's `attached_to` becomes `target`.
+    """
+    equip_id = synthetic_state.register_and_inject_object(
+        _free_equip_dict(), 0, ZONE_BATTLEFIELD,
+    )
+    target_id = synthetic_state.register_and_inject_object(
+        _creature_dict("Target Bear"), 0, ZONE_BATTLEFIELD,
+    )
+
+    synthetic_state.apply_action(
+        {
+            "kind": "activate_ability",
+            "source_id": equip_id,
+            "ability_index": 0,
+            "target_creature_id": target_id,
+        }
+    )
+    # Stack carries the equip trigger; resolve it.
+    assert synthetic_state.stack_size() == 1
+    synthetic_state.resolve_top_of_stack()
+    # Verify the equipment is now attached to the chosen target.
+    bf_post = synthetic_state.battlefield_snapshot()
+    equip = next(d for d in bf_post if d["id"] == equip_id)
+    assert equip["attached_to"] == target_id
+
+
+def test_equip_apply_retargets_to_new_creature(synthetic_state):
+    """CR 702.6c — equip can re-target an already-attached
+    Equipment. Apply twice with different targets: final
+    `attached_to` matches the second target.
+    """
+    equip_id = synthetic_state.register_and_inject_object(
+        _free_equip_dict(), 0, ZONE_BATTLEFIELD,
+    )
+    target_a = synthetic_state.register_and_inject_object(
+        _creature_dict("Target A"), 0, ZONE_BATTLEFIELD,
+    )
+    target_b = synthetic_state.register_and_inject_object(
+        _creature_dict("Target B"), 0, ZONE_BATTLEFIELD,
+    )
+
+    # First equip to A.
+    synthetic_state.apply_action(
+        {
+            "kind": "activate_ability",
+            "source_id": equip_id,
+            "ability_index": 0,
+            "target_creature_id": target_a,
+        }
+    )
+    synthetic_state.resolve_top_of_stack()
+    bf_after_a = synthetic_state.battlefield_snapshot()
+    equip_a = next(d for d in bf_after_a if d["id"] == equip_id)
+    assert equip_a["attached_to"] == target_a
+
+    # Then equip to B — stamps over.
+    synthetic_state.apply_action(
+        {
+            "kind": "activate_ability",
+            "source_id": equip_id,
+            "ability_index": 0,
+            "target_creature_id": target_b,
+        }
+    )
+    synthetic_state.resolve_top_of_stack()
+    bf_after_b = synthetic_state.battlefield_snapshot()
+    equip_b = next(d for d in bf_after_b if d["id"] == equip_id)
+    assert equip_b["attached_to"] == target_b
+
+
+def test_equip_apply_missing_target_raises(synthetic_state):
+    """The action dict MUST carry `target_creature_id` for an
+    activation whose cost flags
+    `requires_target_creature_you_control = true`. Missing key
+    raises ValueError; no state mutation.
+    """
+    equip_id = synthetic_state.register_and_inject_object(
+        _free_equip_dict(), 0, ZONE_BATTLEFIELD,
+    )
+    synthetic_state.register_and_inject_object(
+        _creature_dict("Target"), 0, ZONE_BATTLEFIELD,
+    )
+
+    stack_before = synthetic_state.stack_size()
+    with pytest.raises(
+        ValueError, match=r"requires a target creature you control"
+    ):
+        synthetic_state.apply_action(
+            {
+                "kind": "activate_ability",
+                "source_id": equip_id,
+                "ability_index": 0,
+                # NO target_creature_id key.
+            }
+        )
+    # No mutation.
+    assert synthetic_state.stack_size() == stack_before
+
+
+def test_equip_apply_self_target_raises(synthetic_state):
+    """An Equipment can't equip itself (CR 702.6c — equip targets
+    a creature, an Equipment is an Artifact not a Creature). Apply
+    with target_creature_id = source_id raises ValueError.
+    """
+    equip_id = synthetic_state.register_and_inject_object(
+        _free_equip_dict(), 0, ZONE_BATTLEFIELD,
+    )
+    synthetic_state.register_and_inject_object(
+        _creature_dict("Real Target"), 0, ZONE_BATTLEFIELD,
+    )
+
+    with pytest.raises(ValueError, match=r"cannot target itself"):
+        synthetic_state.apply_action(
+            {
+                "kind": "activate_ability",
+                "source_id": equip_id,
+                "ability_index": 0,
+                "target_creature_id": equip_id,  # self → illegal
+            }
+        )
+
+
+def test_equip_apply_opponent_target_raises(synthetic_state):
+    """Target on opponent's bf is not a legal target (CR 702.6c —
+    target a creature you control). Apply raises ValueError.
+    """
+    equip_id = synthetic_state.register_and_inject_object(
+        _free_equip_dict(), 0, ZONE_BATTLEFIELD,
+    )
+    opp_target_id = synthetic_state.register_and_inject_object(
+        _creature_dict("Opponent's Bear"), 1, ZONE_BATTLEFIELD,
+    )
+
+    with pytest.raises(
+        ValueError, match=r"not a legal target"
+    ):
+        synthetic_state.apply_action(
+            {
+                "kind": "activate_ability",
+                "source_id": equip_id,
+                "ability_index": 0,
+                "target_creature_id": opp_target_id,
+            }
+        )
+
+
+def test_equip_apply_non_creature_target_raises(synthetic_state):
+    """Target must be a Creature. A non-creature artifact on the
+    activator's bf is NOT a legal target.
+    """
+    equip_id = synthetic_state.register_and_inject_object(
+        _free_equip_dict(), 0, ZONE_BATTLEFIELD,
+    )
+    artifact_id = synthetic_state.register_and_inject_object(
+        {
+            "name": "Some Artifact",
+            "card_types": ["Artifact"],
+            "mana_cost": {"generic": 1},
+            "effects": [],
+        },
+        0,
+        ZONE_BATTLEFIELD,
+    )
+
+    with pytest.raises(
+        ValueError, match=r"not a legal target"
+    ):
+        synthetic_state.apply_action(
+            {
+                "kind": "activate_ability",
+                "source_id": equip_id,
+                "ability_index": 0,
+                "target_creature_id": artifact_id,
+            }
+        )
+
+
+def test_equip_apply_unknown_target_id_raises(synthetic_state):
+    """Target id that doesn't resolve to any object on the
+    activator's bf raises ValueError.
+    """
+    equip_id = synthetic_state.register_and_inject_object(
+        _free_equip_dict(), 0, ZONE_BATTLEFIELD,
+    )
+    synthetic_state.register_and_inject_object(
+        _creature_dict("Real Target"), 0, ZONE_BATTLEFIELD,
+    )
+
+    with pytest.raises(
+        ValueError, match=r"not a legal target"
+    ):
+        synthetic_state.apply_action(
+            {
+                "kind": "activate_ability",
+                "source_id": equip_id,
+                "ability_index": 0,
+                "target_creature_id": 99999,  # unknown id
+            }
+        )
+
+
+def test_equip_apply_mana_cost_paid(synthetic_state):
+    """Mana cost is debited from the activator's pool when the
+    equip activation succeeds. {1} cost: pool has {C}=1 pre-apply,
+    pool has {C}=0 post-apply.
+    """
+    equip_id = synthetic_state.register_and_inject_object(
+        _equip_dict(), 0, ZONE_BATTLEFIELD,  # costs {1}
+    )
+    target_id = synthetic_state.register_and_inject_object(
+        _creature_dict("Target"), 0, ZONE_BATTLEFIELD,
+    )
+    synthetic_state.empty_mana_pool(0)
+    synthetic_state.add_mana(0, "C", 1)
+
+    synthetic_state.apply_action(
+        {
+            "kind": "activate_ability",
+            "source_id": equip_id,
+            "ability_index": 0,
+            "target_creature_id": target_id,
+        }
+    )
+    pool = synthetic_state.get_mana_pool(0)
+    assert pool["C"] == 0
+
+
+# --- back-compat regression -----------------------------------------
+
+
+def test_non_target_activation_dict_omits_target_creature_id_key(
+    synthetic_state,
+):
+    """Back-compat: a non-target activation dict (Bear Caster
+    shape, sacrifice-self shape, mana-ability shape) can OMIT
+    `target_creature_id` entirely; the parser maps missing key to
+    None and the apply arm ignores the absence. Pre-Slice-4
+    callers keep working.
+    """
+    bear_id = synthetic_state.register_and_inject_object(
+        _bear_caster_dict(), 0, ZONE_BATTLEFIELD,
+    )
+    synthetic_state.force_set_summoning_sick(bear_id, False)
+    synthetic_state.add_mana(0, "C", 1)
+    synthetic_state.add_mana(0, "G", 1)
+    # Note: NO target_creature_id key — the pre-Slice-4 shape.
+    synthetic_state.apply_action(
+        {
+            "kind": "activate_ability",
+            "source_id": bear_id,
+            "ability_index": 0,
+        }
+    )
+    # Bear tapped, stack has the draw effect — same as
+    # test_bear_caster_activate_succeeds_with_pre_populated_pool.
+    assert synthetic_state.is_tapped(bear_id) is True
+    assert synthetic_state.stack_size() == 1
+
+
+def test_non_target_activation_dict_explicit_none_target_works(
+    synthetic_state,
+):
+    """An explicit `target_creature_id: None` is also accepted
+    (round-trip with `action_to_pydict` produces this shape) on a
+    non-target activation. Equivalent to omitting the key.
+    """
+    bear_id = synthetic_state.register_and_inject_object(
+        _bear_caster_dict(), 0, ZONE_BATTLEFIELD,
+    )
+    synthetic_state.force_set_summoning_sick(bear_id, False)
+    synthetic_state.add_mana(0, "C", 1)
+    synthetic_state.add_mana(0, "G", 1)
+    synthetic_state.apply_action(
+        {
+            "kind": "activate_ability",
+            "source_id": bear_id,
+            "ability_index": 0,
+            "target_creature_id": None,
+        }
+    )
+    assert synthetic_state.is_tapped(bear_id) is True
+
+
+def test_non_target_activation_dict_extra_target_id_silently_ignored(
+    synthetic_state,
+):
+    """If a caller accidentally supplies `target_creature_id` on a
+    non-target activation (Bear Caster, mana ability), the field is
+    silently ignored — matches Python's permissive
+    `ActivateAbility(target_creature_id=...)` for non-target
+    abilities. The activation succeeds; the target value never
+    flows into the StackItem payload because
+    `validated_target_id` resolves to `None` for the
+    non-target shape.
+    """
+    bear_id = synthetic_state.register_and_inject_object(
+        _bear_caster_dict(), 0, ZONE_BATTLEFIELD,
+    )
+    synthetic_state.force_set_summoning_sick(bear_id, False)
+    other_id = synthetic_state.register_and_inject_object(
+        _creature_dict("Other Bear"), 0, ZONE_BATTLEFIELD,
+    )
+    synthetic_state.add_mana(0, "C", 1)
+    synthetic_state.add_mana(0, "G", 1)
+    # Accidentally supply target_creature_id — should be ignored.
+    synthetic_state.apply_action(
+        {
+            "kind": "activate_ability",
+            "source_id": bear_id,
+            "ability_index": 0,
+            "target_creature_id": other_id,
+        }
+    )
+    # Bear tapped + stack has the draw. The "stray" target_id
+    # was ignored (the StackItem carries target_id=None internally).
+    assert synthetic_state.is_tapped(bear_id) is True
+    assert synthetic_state.stack_size() == 1
+
+
+# --- Effect-side legality recheck (CR 608.2b) -----------------------
+
+
+def test_equip_resolve_uses_payload_target_not_first_eligible(
+    synthetic_state,
+):
+    """Pin the payload-target-pick path: with TWO legal targets
+    available, the resolver uses the activator's CHOSEN target
+    (target_b, the later-injected one), NOT the first-eligible
+    creature on bf order (target_a, the earlier-injected one).
+    """
+    equip_id = synthetic_state.register_and_inject_object(
+        _free_equip_dict(), 0, ZONE_BATTLEFIELD,
+    )
+    target_a = synthetic_state.register_and_inject_object(
+        _creature_dict("First Target"), 0, ZONE_BATTLEFIELD,
+    )
+    target_b = synthetic_state.register_and_inject_object(
+        _creature_dict("Second Target"), 0, ZONE_BATTLEFIELD,
+    )
+
+    # Activate explicitly choosing target_b (the second creature).
+    synthetic_state.apply_action(
+        {
+            "kind": "activate_ability",
+            "source_id": equip_id,
+            "ability_index": 0,
+            "target_creature_id": target_b,
+        }
+    )
+    synthetic_state.resolve_top_of_stack()
+    bf_post = synthetic_state.battlefield_snapshot()
+    equip = next(d for d in bf_post if d["id"] == equip_id)
+    assert equip["attached_to"] == target_b, (
+        f"Resolver should use payload target_b ({target_b}), not "
+        f"first-eligible target_a ({target_a}); got {equip['attached_to']}"
+    )

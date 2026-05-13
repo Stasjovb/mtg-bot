@@ -2228,6 +2228,41 @@ pub struct ActivationCost {
     /// wiring needed — sacrifice rides on the same LTB primitive
     /// every other bf-exit uses.
     pub sacrifice_self: bool,
+    /// **CE20 follow-up — Equipment-equip Slice 4.** When `true`, the
+    /// activated ability requires the activator to pick a target
+    /// creature they control (CR 702.6c — equip targets a creature
+    /// you control). Flows into emission as a fan-out (one
+    /// `ActivateAbility` dict per legal target creature on the
+    /// activator's bf) and into apply as a required
+    /// `target_creature_id` key on the action dict.
+    ///
+    /// Default `false` keeps every pre-Slice-4 caller working: the
+    /// dict shape stays {kind, source_id, ability_index} for
+    /// non-target activations, and the emission walk emits one
+    /// dict-per-source as before.
+    ///
+    /// **Eligibility** (mirrors Python's `EquipTargetSelector` at
+    /// `effects/generic/attach.py` + CR 702.6c):
+    ///   - target must be a creature on the activator's battlefield,
+    ///   - target must NOT be the source itself (an Equipment can't
+    ///     equip itself),
+    ///   - target's summoning sickness is NOT a barrier (CR 702.6
+    ///     gates the activator's source — equip is a tap-cost-free
+    ///     ability so the target's sickness is irrelevant).
+    ///
+    /// **Retarget shape** (CR 702.6c): activating equip on an
+    /// already-attached Equipment with a new target re-stamps
+    /// `attached_to`. The dispatch fires the underlying
+    /// `Effect::EquipToTargetCreatureYouControl` arm which reads the
+    /// payload `target_id` and stamps it (overwriting any prior
+    /// `attached_to`). Mana cost paid both times — the activation is
+    /// a valid game action even when its observable mutation is a
+    /// no-op (idempotent retarget to the same creature is legal).
+    ///
+    /// **EoE printings affected**: 7 (Auxiliary Boosters, Squire's
+    /// Lightblade, Atomic Microsizer, Illvoi Light Jammer, Hylderblade,
+    /// Meltstrider's Gear, The Dominion Bracelet).
+    pub requires_target_creature_you_control: bool,
 }
 
 /// An activated ability on a `CardPrinting`. Mirrors a strict subset
@@ -3798,6 +3833,7 @@ pub fn apply_mana_produced_bridge(
             mana: ManaCost::default(),
             tap_self: true,
             sacrifice_self: false,
+            requires_target_creature_you_control: false,
         },
         effect: bridge_effect,
         is_mana_ability: true,
@@ -4060,8 +4096,11 @@ fn parse_activated_ability(
 /// Parse one `ActivationCost` from a registry dict. Slice 1 supports
 /// `mana` (optional ManaCost dict) + `tap_self` (optional bool).
 /// CE20 follow-up Slice 2 adds `sacrifice_self` (optional bool).
-/// Unknown keys raise so future field additions surface as parser
-/// errors rather than silent drops.
+/// CE20 follow-up Slice 4 adds `requires_target_creature_you_control`
+/// (optional bool — flags target fan-out at emission + a required
+/// `target_creature_id` key on the apply dict). Unknown keys raise so
+/// future field additions surface as parser errors rather than silent
+/// drops.
 fn parse_activation_cost(
     dict: &Bound<'_, PyDict>,
 ) -> PyResult<ActivationCost> {
@@ -4069,11 +4108,15 @@ fn parse_activation_cost(
     for (key_obj, _) in dict.iter() {
         let key: String = key_obj.extract()?;
         match key.as_str() {
-            "mana" | "tap_self" | "sacrifice_self" => {}
+            "mana"
+            | "tap_self"
+            | "sacrifice_self"
+            | "requires_target_creature_you_control" => {}
             other => {
                 return Err(PyValueError::new_err(format!(
                     "unknown activation_cost key {other:?}; \
-                     valid: mana, tap_self, sacrifice_self"
+                     valid: mana, tap_self, sacrifice_self, \
+                     requires_target_creature_you_control"
                 )));
             }
         }
@@ -4095,6 +4138,17 @@ fn parse_activation_cost(
                 "activation_cost.sacrifice_self must be a bool",
             )
         })?;
+    }
+    if let Some(req_any) =
+        dict.get_item("requires_target_creature_you_control")?
+    {
+        cost.requires_target_creature_you_control =
+            req_any.extract::<bool>().map_err(|_| {
+                PyValueError::new_err(
+                    "activation_cost.requires_target_creature_you_control \
+                     must be a bool",
+                )
+            })?;
     }
     Ok(cost)
 }

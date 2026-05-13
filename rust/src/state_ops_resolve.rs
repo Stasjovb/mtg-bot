@@ -4361,14 +4361,24 @@ fn apply_effect(
             }
         }
         // Round-29 Equip activated-ability resolution (CR 702.6).
-        // Identical mutation to AttachToTargetCreatureYouControl —
-        // re-stamps `source.attached_to` to the first creature on
-        // the controller's bf that isn't the source itself. The
-        // distinct variant exists for logging/diagnostics parity
-        // with Python's EquipToTargetCreatureYouControl, which
-        // overrides only `describe`. CR 702.6c: equip can re-target
-        // an Equipment that's already attached — stamping over an
-        // existing `attached_to` is the expected behavior.
+        // Re-stamps `source.attached_to` to the chosen target
+        // creature. CR 702.6c: equip can re-target an Equipment
+        // that's already attached — stamping over an existing
+        // `attached_to` is the expected behavior.
+        //
+        // **CE20 follow-up Slice 4 (Equipment-equip) target-pick:**
+        // Reads the activator's chosen target from
+        // `state.current_resolve_payload_target_id` (swapped in by
+        // the stack resolver from the StackItem's
+        // `trigger_payload.target_id` for activated-ability call
+        // sites). When the field is `Some(id)`, stamp that as the
+        // target. Pre-Slice-4 callers (any direct
+        // `apply_effect(EquipToTargetCreatureYouControl)` driven
+        // through a path that doesn't seed the slot) fall back to
+        // the first-eligible-creature walk for back-compat —
+        // matches the prior single-slice behavior. The fall-back is
+        // load-bearing for the ETB-shape attach probe, where the
+        // ETB trigger fires before any activator picks a target.
         Effect::EquipToTargetCreatureYouControl => {
             // Locate source on a battlefield + capture its controller.
             let mut src_loc: Option<(usize, u32)> = None;
@@ -4381,23 +4391,59 @@ fn apply_effect(
             let Some((cidx, src_id)) = src_loc else {
                 return Ok(()); // source not on bf → silent fizzle
             };
-            // Pick the first creature on source-controller's bf
-            // that ISN'T the source itself. Mirrors the Attach
-            // variant's deterministic first-slice choice.
-            let target_id: Option<u32> = {
-                let bf = &state.players[cidx].battlefield;
-                let registry = &state.registry;
-                bf.iter().find_map(|obj| {
-                    if obj.id == src_id {
-                        return None; // can't attach to self
-                    }
-                    let printing = registry.printings.get(obj.printing_id as usize)?;
-                    if printing.card_types.iter().any(|t| t == "Creature") {
-                        Some(obj.id)
-                    } else {
-                        None
-                    }
-                })
+            // CE20 follow-up Slice 4: prefer the payload target_id
+            // when the resolver has seeded it (targeted-activation
+            // path). Validate target is still legal at resolve time
+            // (CR 608.2b — fizzle if the target has become illegal
+            // since cost-pay): target must be on the activator's bf
+            // AND a creature AND not the source itself. Illegal
+            // target at resolve → silent fizzle (CR 608.2b).
+            let target_id: Option<u32> = match state
+                .current_resolve_payload_target_id
+            {
+                Some(payload_target) => {
+                    // Resolve-time legality check.
+                    let bf = &state.players[cidx].battlefield;
+                    let registry = &state.registry;
+                    bf.iter().find_map(|obj| {
+                        if obj.id != payload_target {
+                            return None;
+                        }
+                        if obj.id == src_id {
+                            return None; // can't attach to self
+                        }
+                        let printing =
+                            registry.printings.get(obj.printing_id as usize)?;
+                        if printing.card_types.iter().any(|t| t == "Creature") {
+                            Some(obj.id)
+                        } else {
+                            None
+                        }
+                    })
+                }
+                None => {
+                    // Pre-Slice-4 first-eligible walk. Kept for
+                    // back-compat with any caller path that drives
+                    // the variant without seeding the target slot
+                    // (no current production caller, but the
+                    // fall-back is load-bearing for safety + parity
+                    // with the AttachToTargetCreatureYouControl
+                    // sibling variant).
+                    let bf = &state.players[cidx].battlefield;
+                    let registry = &state.registry;
+                    bf.iter().find_map(|obj| {
+                        if obj.id == src_id {
+                            return None; // can't attach to self
+                        }
+                        let printing =
+                            registry.printings.get(obj.printing_id as usize)?;
+                        if printing.card_types.iter().any(|t| t == "Creature") {
+                            Some(obj.id)
+                        } else {
+                            None
+                        }
+                    })
+                }
             };
             let Some(target_id) = target_id else {
                 return Ok(()); // no eligible creature → silent fizzle
@@ -5784,7 +5830,19 @@ impl GameState {
                 .as_ref()
                 .expect("StackItemKind::TriggeredAbility must carry trigger_payload");
             let trigger_effect = payload.effect.clone();
-            apply_effect(self, &trigger_effect, top.source_obj_id)?;
+            // CE20 follow-up Slice 4: swap in payload target_id so
+            // targeted-activation effect arms (today only
+            // `Effect::EquipToTargetCreatureYouControl`) can read
+            // the activator's chosen target. Restored after the
+            // apply so no observable state leaks across resolution
+            // boundaries. Mirrors the `state.active_player` swap
+            // pattern at state_ops_actions.rs:725 (Slice 1 bridge
+            // follow-up).
+            let saved_target = self.current_resolve_payload_target_id;
+            self.current_resolve_payload_target_id = payload.target_id;
+            let apply_result = apply_effect(self, &trigger_effect, top.source_obj_id);
+            self.current_resolve_payload_target_id = saved_target;
+            apply_result?;
             let popped = self
                 .stack
                 .pop()
@@ -5913,7 +5971,14 @@ impl GameState {
                 .as_ref()
                 .expect("StackItemKind::TriggeredAbility must carry trigger_payload");
             let trigger_effect = payload.effect.clone();
-            apply_effect(self, &trigger_effect, top.source_obj_id)?;
+            // CE20 follow-up Slice 4: same payload-target swap as
+            // `resolve_top_of_stack` above. See the longer comment
+            // there for the rationale.
+            let saved_target = self.current_resolve_payload_target_id;
+            self.current_resolve_payload_target_id = payload.target_id;
+            let apply_result = apply_effect(self, &trigger_effect, top.source_obj_id);
+            self.current_resolve_payload_target_id = saved_target;
+            apply_result?;
             let popped = self
                 .stack
                 .pop()

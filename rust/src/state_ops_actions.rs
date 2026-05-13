@@ -440,6 +440,7 @@ impl GameState {
             Action::ActivateAbility {
                 source_id,
                 ability_index,
+                target_creature_id,
             } => {
                 // CE20 Slice 1 + bridge follow-up dispatch: single
                 // unified path through `printing.activated_abilities`.
@@ -517,6 +518,14 @@ impl GameState {
                     /// must have to be eligible (CE20 follow-up Slice 3
                     /// Spacecraft station-charge). 0 = no gate.
                     tier_threshold: i32,
+                    /// CE20 follow-up Slice 4 (Equipment-equip): when
+                    /// `true`, the activator MUST submit a
+                    /// `target_creature_id` in the action dict, and
+                    /// the dispatch arm validates the target then
+                    /// threads it into the StackItem payload (or the
+                    /// `state.current_resolve_payload_target_id`
+                    /// transient slot for mana-ability paths).
+                    requires_target_creature_you_control: bool,
                 }
                 let resolved: ResolvedAbility = {
                     let printing = state.registry.lookup(printing_id).ok_or_else(|| {
@@ -544,6 +553,8 @@ impl GameState {
                             is_mana_ability: ab.is_mana_ability,
                             is_creature,
                             tier_threshold: ab.tier_threshold,
+                            requires_target_creature_you_control:
+                                ab.cost.requires_target_creature_you_control,
                         }
                     } else {
                         // ability_index out of range. Loud fail —
@@ -558,6 +569,79 @@ impl GameState {
                         )));
                     }
                 };
+                // Phase 2.5: CE20 follow-up Slice 4 target-pick
+                // validation. When the ability's cost flags
+                // `requires_target_creature_you_control = true` (today
+                // only Equipment-equip), the action dict MUST carry a
+                // `target_creature_id` and that id MUST resolve to a
+                // legal target on the activator's battlefield. Legal
+                // target: a creature on the activator's bf that
+                // ISN'T the source itself (CR 702.6c — an Equipment
+                // can't equip itself). Target's summoning sickness is
+                // not a barrier (equip costs nothing target-side).
+                //
+                // **Symmetric error shape with the rest of the apply
+                // pipeline**: raise BEFORE any commit so a malformed
+                // dict leaves no state mutation. Emission walks
+                // already pre-filter to only legal targets, so this
+                // raise only fires for direct callers that build a
+                // dict with an illegal target (test / synthetic path).
+                //
+                // **Conversely** for non-target activations, an
+                // accidentally-supplied target_creature_id is
+                // silently ignored (matches Python's permissive
+                // accept-and-ignore for spurious kwargs on
+                // `ActivateAbility(target_creature_id=...)`).
+                let validated_target_id: Option<u32> =
+                    if resolved.requires_target_creature_you_control {
+                        let Some(target_id) = target_creature_id else {
+                            return Err(PyValueError::new_err(format!(
+                                "ActivateAbility: source {source_id} \
+                                 requires a target creature you control \
+                                 (target_creature_id key missing or None)"
+                            )));
+                        };
+                        if target_id == source_id {
+                            return Err(PyValueError::new_err(format!(
+                                "ActivateAbility: source {source_id} \
+                                 cannot target itself (CR 702.6c — \
+                                 Equipment can't equip itself)"
+                            )));
+                        }
+                        // Target must be on the activator's
+                        // (controller's) battlefield AND a creature.
+                        let target_legal: bool = {
+                            let bf = &state.players[controller_idx].battlefield;
+                            let registry = &state.registry;
+                            bf.iter().any(|obj| {
+                                if obj.id != target_id {
+                                    return false;
+                                }
+                                let Some(printing) = registry
+                                    .printings
+                                    .get(obj.printing_id as usize)
+                                else {
+                                    return false;
+                                };
+                                printing.card_types.iter().any(|t| t == "Creature")
+                            })
+                        };
+                        if !target_legal {
+                            return Err(PyValueError::new_err(format!(
+                                "ActivateAbility: source {source_id} \
+                                 target {target_id} not a legal target \
+                                 (must be a creature on activator's bf, \
+                                 not the source itself)"
+                            )));
+                        }
+                        Some(target_id)
+                    } else {
+                        // Non-target activation: accept None or
+                        // ignore a stray target_creature_id key. The
+                        // payload won't be threaded into the
+                        // StackItem / current_resolve_payload_target_id.
+                        None
+                    };
                 // Phase 3a: CE20 follow-up Slice 3 tier gate. The
                 // source must have at least `tier_threshold` charge
                 // counters for the ability to be usable. This is a
@@ -724,11 +808,24 @@ impl GameState {
                     // produces AddManaToPool / Sequence(AddManaToPool).
                     let saved_active = state.active_player;
                     state.active_player = controller_idx as u8;
+                    // CE20 follow-up Slice 4: also seed the
+                    // payload-target slot so the
+                    // EquipToTargetCreatureYouControl arm reads the
+                    // chosen target. For mana-ability activations
+                    // the payload target shouldn't normally be set
+                    // (mana abilities don't target), but the swap is
+                    // harmless when validated_target_id is None
+                    // (None overwrites None).
+                    let saved_target =
+                        state.current_resolve_payload_target_id;
+                    state.current_resolve_payload_target_id =
+                        validated_target_id;
                     let dispatch_result = crate::state_ops_resolve::apply_effect_pub(
                         state,
                         &resolved.effect,
                         source_id,
                     );
+                    state.current_resolve_payload_target_id = saved_target;
                     state.active_player = saved_active;
                     dispatch_result?;
                 } else {
@@ -746,13 +843,32 @@ impl GameState {
                     // `ability_index` rides through as the payload's
                     // dedup key — matches what Python's
                     // `StackItem.ability` reference encodes.
+                    //
+                    // **CE20 follow-up Slice 4**: when the activation
+                    // carries a chosen target, push the
+                    // `new_trigger_with_target` shape so the
+                    // resolver seeds
+                    // `current_resolve_payload_target_id` before
+                    // firing `apply_effect`. Non-target activations
+                    // push the legacy `new_trigger` shape (target_id
+                    // = None in the payload).
                     let controller = controller_idx as u8;
-                    state.stack.push(crate::state::StackItem::new_trigger(
-                        source_id,
-                        controller,
-                        resolved.effect.clone(),
-                        ability_index,
-                    ));
+                    let stack_item = match validated_target_id {
+                        Some(tid) => crate::state::StackItem::new_trigger_with_target(
+                            source_id,
+                            controller,
+                            resolved.effect.clone(),
+                            ability_index,
+                            tid,
+                        ),
+                        None => crate::state::StackItem::new_trigger(
+                            source_id,
+                            controller,
+                            resolved.effect.clone(),
+                            ability_index,
+                        ),
+                    };
+                    state.stack.push(stack_item);
                 }
                 // Round-27 G4 closure: priority reset after the
                 // activate happens at the post-arm reset block

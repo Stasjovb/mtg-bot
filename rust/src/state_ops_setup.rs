@@ -410,5 +410,9 @@ pub fn make_state(
         // ETB-trigger Slice 8: empty deferred-LEAVES queue at
         // construction.
         pending_leaves_dispatches: Vec::new(),
+        // CE20 follow-up Slice 4: transient payload-target slot;
+        // None by default. Set by the resolver during targeted
+        // activation dispatch, cleared after each apply.
+        current_resolve_payload_target_id: None,
     })
 }

@@ -131,7 +131,22 @@ pub enum Action {
     /// pay mana costs), `apply_action` raises `ValueError` for this
     /// variant; the variant + bridge round-trip ship now, so a
     /// follow-up slice only needs to flip the dispatch arm.
-    ActivateAbility { source_id: u32, ability_index: u32 },
+    ///
+    /// **CE20 follow-up Slice 4 (Equipment-equip).** The optional
+    /// `target_creature_id` carries the chosen target for activations
+    /// whose cost flags `requires_target_creature_you_control = true`
+    /// (CR 702.6c — equip targets a creature you control). Default
+    /// `None` for every pre-Slice-4 caller (the legacy 2-int shape) —
+    /// the bridge round-trips `parse_action` ↔ `action_to_pydict`
+    /// losslessly on both shapes. Apply-arm logic raises if the cost
+    /// requires a target and the field is `None`, OR if the target
+    /// fails the legality check (must be a creature on the
+    /// activator's bf and not the source itself).
+    ActivateAbility {
+        source_id: u32,
+        ability_index: u32,
+        target_creature_id: Option<u32>,
+    },
     /// Cast a spell from hand (CR 601). `card_id` is the GameObject
     /// id in the priority player's hand. The 5 optional fields carry
     /// alt-cost / mode metadata mirrored bit-for-bit from Python's
@@ -358,11 +373,24 @@ pub fn parse_action(dict: &Bound<'_, PyDict>) -> PyResult<Action> {
             // `play_land`'s `card_id` extraction — missing either key
             // → `KeyError` via `require`; wrong type → `TypeError` /
             // `ValueError` from PyO3's `extract::<u32>` machinery.
+            //
+            // CE20 follow-up Slice 4 (Equipment-equip): optional
+            // `target_creature_id` carries the chosen target for
+            // activations whose cost flags
+            // `requires_target_creature_you_control = true`. Missing
+            // key OR explicit `None` map to `None` (matches Python's
+            // `ActivateAbility(target_creature_id=None)` default).
             let source_id: u32 = require(dict, "source_id")?.extract()?;
             let ability_index: u32 = require(dict, "ability_index")?.extract()?;
+            let target_creature_id: Option<u32> =
+                match dict.get_item("target_creature_id")? {
+                    Some(v) if !v.is_none() => Some(v.extract()?),
+                    _ => None,
+                };
             Ok(Action::ActivateAbility {
                 source_id,
                 ability_index,
+                target_creature_id,
             })
         }
         "cast_spell" => {
@@ -502,10 +530,24 @@ pub fn action_to_pydict<'py>(
         Action::ActivateAbility {
             source_id,
             ability_index,
+            target_creature_id,
         } => {
             d.set_item("kind", "activate_ability")?;
             d.set_item("source_id", *source_id)?;
             d.set_item("ability_index", *ability_index)?;
+            // CE20 follow-up Slice 4: always emit
+            // `target_creature_id` so round-trip is symmetric — a
+            // parse-then-serialize pair lands on a dict that exactly
+            // equals the canonical "all-fields-present" shape.
+            // Callers that emit the minimal {kind, source_id,
+            // ability_index} shape get a slightly-richer dict back,
+            // but the re-parsed Action is bit-identical (None default
+            // for non-target activations).
+            //
+            // `Option<u32>` round-trips as `None` → Python None /
+            // `Some(id)` → Python int via PyO3's `IntoPy` impl on
+            // `Option<T>`.
+            d.set_item("target_creature_id", *target_creature_id)?;
         }
         Action::CastSpell {
             card_id,
