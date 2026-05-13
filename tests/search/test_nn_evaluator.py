@@ -482,6 +482,14 @@ def test_build_dual_head_model_dispatch():
     assert isinstance(separate, _ValuePolicyMLPSeparate)
     with pytest.raises(ValueError, match="unknown architecture"):
         _build_dual_head_model("nonsense")
+    # ``structured`` is recognized but routes through a separate
+    # trainer — this MLP-flavored builder must reject it loudly so a
+    # future caller can't accidentally instantiate an MLP trunk for a
+    # structured-architecture version.
+    with pytest.raises(
+        ValueError, match="train_structured_model",
+    ):
+        _build_dual_head_model("structured")
 
 
 def test_nn_evaluator_separate_architecture_uses_separate_class():
