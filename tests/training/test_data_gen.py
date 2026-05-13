@@ -799,7 +799,7 @@ def test_play_one_game_recording_captures_visits_at_sample_points():
     p1 = _FakeStrategyWithVisits()
     rng = random.Random(7)
 
-    _, samples = _play_one_game_recording(
+    _, samples, _struct = _play_one_game_recording(
         adapter, {0: p0, 1: p1}, rng,
         decision_cap=200, sample_every=1,
     )
@@ -896,7 +896,7 @@ def test_play_one_game_recording_filters_illegal_pimc_visits():
     p1 = _StrategyWithIllegalVisit()
     rng = random.Random(7)
 
-    _, samples = _play_one_game_recording(
+    _, samples, _struct = _play_one_game_recording(
         adapter, {0: p0, 1: p1}, rng,
         decision_cap=200, sample_every=1,
     )
@@ -947,7 +947,7 @@ def test_play_one_game_recording_falls_back_when_visits_empty():
     rs0 = random_choice_factory(0)
     rs1 = random_choice_factory(0)
 
-    _, samples = _play_one_game_recording(
+    _, samples, _struct = _play_one_game_recording(
         adapter, {0: rs0, 1: rs1}, rng,
         decision_cap=200, sample_every=1,
     )
@@ -1212,7 +1212,7 @@ def test_outcome_labels_correct_under_seat_alternation():
             sample_every=1,
             deck_pool=pool,
         )
-        features, outcomes, _policy, _mask, winner, _kind = chunk
+        features, outcomes, _policy, _mask, winner, _kind, _struct = chunk
         if winner is None:
             continue  # draws label both viewers 0 — covered by other tests
         # Samples alternate viewer=0, viewer=1 (data-doubling order in

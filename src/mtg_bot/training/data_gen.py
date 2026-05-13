@@ -32,6 +32,37 @@ Optional replay capture: pass a ``ReplayCaptureConfig`` to either
 driver to write a per-game replay file alongside the training-data
 arrays. Useful for debugging engine gaps — see
 ``mtg_bot.training.replay_capture``.
+
+Structured-token opt-in (Step 1 NN representation)
+==================================================
+
+The Step 1 roadmap (``docs/NN_REPRESENTATION_ROADMAP.md``) replaces
+the 51-dim flat featurizer with a per-token structured input matching
+the shape pinned in ``mtg_bot.training.structured_model``. The
+trainer-side consumer for that input lives in a separate slice that
+conflicts with the running runs-db cutover; this writer opts into
+emitting the new shape alongside the legacy 51-dim features so the
+dataset-format change can land independently.
+
+When ``structured_tokens=True`` is passed to
+``generate_training_data`` / ``generate_training_data_parallel``,
+each sample row records the tokenized state via
+``state_tokenizer.tokenize_state`` and the resulting arrays are
+packed into the npz under four additional keys:
+
+- ``structured_token_type``     int64   ``(N, max_seq_len)``
+- ``structured_token_emb_ids``  int64   ``(N, max_seq_len, N_EMB_FIELDS=7)``
+- ``structured_token_scalars``  float32 ``(N, max_seq_len, N_SCALAR_FIELDS=3)``
+- ``structured_attention_mask`` bool    ``(N, max_seq_len)``
+
+``max_seq_len`` is computed per-file as the longest row's emitted
+length — shorter rows are right-padded with zeros (and
+``structured_attention_mask=False`` on the padded slots). The model's
+``[CLS]`` is NOT emitted here — ``StructuredModel.forward`` prepends
+it itself.
+
+Default is OFF for backwards compatibility: existing self-play paths
+that don't opt in produce the exact same files they always have.
 """
 
 from __future__ import annotations
@@ -87,6 +118,118 @@ _DTYPE_OUTCOMES = np.float32
 # needs. Must match the dtype the AlphaZero trainer feeds into
 # the loss function — float64 would be a wasteful upcast.
 _DTYPE_POLICY = np.float32
+
+# Structured-token dtypes — must match what the StructuredModel
+# forward path expects (LongTensor for ids / FloatTensor for scalars
+# / BoolTensor for the mask). Stored at the dataset level so the
+# pad/stack helper and the npz reader agree.
+_DTYPE_STRUCT_TOKEN_TYPE = np.int64
+_DTYPE_STRUCT_EMB_IDS = np.int64
+_DTYPE_STRUCT_SCALARS = np.float32
+_DTYPE_STRUCT_MASK = np.bool_
+
+# Keys used in the saved npz when structured-tokens are enabled.
+_STRUCT_NPZ_KEYS = (
+    "structured_token_type",
+    "structured_token_emb_ids",
+    "structured_token_scalars",
+    "structured_attention_mask",
+)
+
+
+def _pad_and_stack_structured_rows(
+    rows: list[dict[str, np.ndarray]],
+) -> dict[str, np.ndarray]:
+    """Right-pad variable-length per-row token dicts to the longest
+    row and stack into ``(N, max_seq_len, ...)`` arrays.
+
+    Each input dict is the output of
+    ``state_tokenizer.tokenize_state`` (or a sentinel with seq_len=0
+    for rows that opted out of structured tokenization). Padded
+    slots get zeros for ids / scalars and ``False`` for the
+    attention mask, matching the StructuredModel's
+    ``key_padding_mask`` semantics (True = real token; padding is
+    suppressed).
+    """
+    if not rows:
+        return {
+            "structured_token_type": np.zeros(
+                (0, 0), dtype=_DTYPE_STRUCT_TOKEN_TYPE,
+            ),
+            "structured_token_emb_ids": np.zeros(
+                (0, 0, 0), dtype=_DTYPE_STRUCT_EMB_IDS,
+            ),
+            "structured_token_scalars": np.zeros(
+                (0, 0, 0), dtype=_DTYPE_STRUCT_SCALARS,
+            ),
+            "structured_attention_mask": np.zeros(
+                (0, 0), dtype=_DTYPE_STRUCT_MASK,
+            ),
+        }
+    n_rows = len(rows)
+    max_len = max(
+        int(r["token_type"].shape[0]) for r in rows
+    )
+    # All rows share the same per-token field widths (defined by
+    # structured_model). Pull from the first non-empty row; fall back
+    # to the standard widths if every row is empty (rare — would
+    # mean every state had zero tokens).
+    from mtg_bot.training.structured_model import (
+        N_EMB_FIELDS, N_SCALAR_FIELDS,
+    )
+    emb_width = N_EMB_FIELDS
+    scalar_width = N_SCALAR_FIELDS
+    for r in rows:
+        if r["token_emb_ids"].size:
+            emb_width = int(r["token_emb_ids"].shape[1])
+            scalar_width = int(r["token_scalars"].shape[1])
+            break
+    token_type = np.zeros(
+        (n_rows, max_len), dtype=_DTYPE_STRUCT_TOKEN_TYPE,
+    )
+    emb_ids = np.zeros(
+        (n_rows, max_len, emb_width), dtype=_DTYPE_STRUCT_EMB_IDS,
+    )
+    scalars = np.zeros(
+        (n_rows, max_len, scalar_width), dtype=_DTYPE_STRUCT_SCALARS,
+    )
+    attention_mask = np.zeros(
+        (n_rows, max_len), dtype=_DTYPE_STRUCT_MASK,
+    )
+    for i, r in enumerate(rows):
+        n = int(r["token_type"].shape[0])
+        if n == 0:
+            continue
+        token_type[i, :n] = r["token_type"]
+        emb_ids[i, :n, :] = r["token_emb_ids"]
+        scalars[i, :n, :] = r["token_scalars"]
+        attention_mask[i, :n] = r["attention_mask"]
+    return {
+        "structured_token_type": token_type,
+        "structured_token_emb_ids": emb_ids,
+        "structured_token_scalars": scalars,
+        "structured_attention_mask": attention_mask,
+    }
+
+
+def _empty_structured_row() -> dict[str, np.ndarray]:
+    """Per-row sentinel for "no structured token captured at this
+    sample point." Used so the parallel rows-array has stable length
+    when structured_tokens is disabled but a downstream consumer
+    asks for the arrays anyway."""
+    from mtg_bot.training.structured_model import (
+        N_EMB_FIELDS, N_SCALAR_FIELDS,
+    )
+    return {
+        "token_type": np.zeros((0,), dtype=_DTYPE_STRUCT_TOKEN_TYPE),
+        "token_emb_ids": np.zeros(
+            (0, N_EMB_FIELDS), dtype=_DTYPE_STRUCT_EMB_IDS,
+        ),
+        "token_scalars": np.zeros(
+            (0, N_SCALAR_FIELDS), dtype=_DTYPE_STRUCT_SCALARS,
+        ),
+        "attention_mask": np.zeros((0,), dtype=_DTYPE_STRUCT_MASK),
+    }
 
 
 @dataclass(frozen=True)
@@ -219,6 +362,7 @@ def generate_training_data(
     per_game_timeout_sec: Optional[float] = None,
     hang_dump_dir: Optional[str] = None,
     heuristics: Optional[HeuristicsConfig] = None,
+    structured_tokens: bool = False,
 ) -> tuple[np.ndarray, ...]:
     """Play ``n_games`` and return training arrays.
 
@@ -245,12 +389,23 @@ def generate_training_data(
     Deterministic in ``base_seed`` — same call produces the same
     arrays. Trainer code should detect "no policy supervision" via
     ``policy_targets.sum(-1) > 0.5`` per row.
+
+    ``structured_tokens=True`` records the per-state structured token
+    representation alongside each row (see module docstring). When
+    enabled, the return value grows to a 6-tuple
+    ``(features, outcomes, policy_targets, action_masks,
+    structured_token_type, structured_token_emb_ids,
+    structured_token_scalars, structured_attention_mask)`` and
+    ``with_policy=True`` is implied (callers asking for structured
+    tokens always want policy supervision too — the Step 1 trainer
+    is masked-CE + value-MSE + aux on the same row).
     """
     if heuristics is None:
         heuristics = HeuristicsConfig()
     if progress is not None:
         progress.begin()
     chunks: list[_GameChunk] = []
+    struct_rows_chunks: list[list[dict[str, np.ndarray]]] = []
     for i in range(n_games):
         chunk = _generate_one_game_data(
             game_idx=i,
@@ -263,14 +418,28 @@ def generate_training_data(
             per_game_timeout_sec=per_game_timeout_sec,
             hang_dump_dir=hang_dump_dir,
             heuristics=heuristics,
+            structured_tokens=structured_tokens,
         )
-        chunks.append(chunk)
+        chunks.append(chunk[:6])
+        struct_rows_chunks.append(chunk[6] if len(chunk) > 6 else [])
         if progress is not None:
             progress.record_game(
                 n_samples=int(chunk[0].shape[0]),
                 outcome_p0=_winner_to_p0_outcome(chunk[4]),
             )
     f, o, p, m = _concat_chunks([c[:4] for c in chunks])
+    if structured_tokens:
+        flat_rows: list[dict[str, np.ndarray]] = []
+        for rows in struct_rows_chunks:
+            flat_rows.extend(rows)
+        struct_arrays = _pad_and_stack_structured_rows(flat_rows)
+        return (
+            f, o, p, m,
+            struct_arrays["structured_token_type"],
+            struct_arrays["structured_token_emb_ids"],
+            struct_arrays["structured_token_scalars"],
+            struct_arrays["structured_attention_mask"],
+        )
     if with_policy:
         return f, o, p, m
     return f, o
@@ -297,6 +466,7 @@ def generate_training_data_parallel(
     pool_initializer: Optional[Callable[..., None]] = None,
     pool_initargs: tuple = (),
     pool_mp_context: Optional["mp.context.BaseContext"] = None,
+    structured_tokens: bool = False,
 ) -> tuple[np.ndarray, ...]:
     """Same contract as ``generate_training_data`` but distributes
     games across a ``multiprocessing.Pool``. Same ``with_policy``
@@ -354,6 +524,15 @@ def generate_training_data_parallel(
         raise ValueError(f"n_workers must be >= 1, got {n_workers}")
     if n_games == 0:
         f, o, p, m = _empty_arrays()
+        if structured_tokens:
+            empty_struct = _pad_and_stack_structured_rows([])
+            return (
+                f, o, p, m,
+                empty_struct["structured_token_type"],
+                empty_struct["structured_token_emb_ids"],
+                empty_struct["structured_token_scalars"],
+                empty_struct["structured_attention_mask"],
+            )
         return (f, o, p, m) if with_policy else (f, o)
 
     args_list = [
@@ -361,7 +540,7 @@ def generate_training_data_parallel(
             i, p0_factory, p1_factory, base_seed,
             decision_cap, sample_every, replay_config, deck_pool,
             enable_mulligans, per_game_timeout_sec, hang_dump_dir,
-            heuristics, action_encoding_version,
+            heuristics, action_encoding_version, structured_tokens,
         )
         for i in range(n_games)
     ]
@@ -470,6 +649,22 @@ def generate_training_data_parallel(
         # supported (caller may want extra metadata) — that's a
         # no-op idempotent overwrite.
         progress.finalize(status="stopped")
+    if structured_tokens:
+        # Each chunk's 7th element (index 6) is the list of per-row
+        # structured-token dicts. Crashed / timed-out chunks emit an
+        # empty list — safe to extend.
+        flat_rows: list[dict[str, np.ndarray]] = []
+        for c in chunks:
+            if len(c) > 6:
+                flat_rows.extend(c[6])
+        struct_arrays = _pad_and_stack_structured_rows(flat_rows)
+        return (
+            f, o, p, m,
+            struct_arrays["structured_token_type"],
+            struct_arrays["structured_token_emb_ids"],
+            struct_arrays["structured_token_scalars"],
+            struct_arrays["structured_attention_mask"],
+        )
     if with_policy:
         return f, o, p, m
     return f, o
@@ -511,13 +706,26 @@ def _play_one_parallel_game(
     # per-game policy-target encoder. Older callers that pre-date the
     # field (none in tree, but for forward-compat with hand-built tuples
     # in tests) fall through to the v1 default.
-    if len(args) == 13:
+    #
+    # ``structured_tokens`` was appended (this slice) to the same tuple
+    # so ``generate_training_data_parallel`` can opt-in to the Step 1
+    # structured-token writer path without breaking existing 12-/13-
+    # element callers.
+    if len(args) == 14:
+        (
+            game_idx, p0_factory, p1_factory, base_seed,
+            decision_cap, sample_every, replay_config, deck_pool,
+            enable_mulligans, per_game_timeout_sec, hang_dump_dir,
+            heuristics, action_encoding_version, structured_tokens,
+        ) = args
+    elif len(args) == 13:
         (
             game_idx, p0_factory, p1_factory, base_seed,
             decision_cap, sample_every, replay_config, deck_pool,
             enable_mulligans, per_game_timeout_sec, hang_dump_dir,
             heuristics, action_encoding_version,
         ) = args
+        structured_tokens = False
     else:
         (
             game_idx, p0_factory, p1_factory, base_seed,
@@ -526,6 +734,7 @@ def _play_one_parallel_game(
             heuristics,
         ) = args
         action_encoding_version = "positional_v1"
+        structured_tokens = False
     try:
         chunk = _generate_one_game_data(
             game_idx=game_idx,
@@ -539,6 +748,7 @@ def _play_one_parallel_game(
             hang_dump_dir=hang_dump_dir,
             heuristics=heuristics,
             action_encoding_version=action_encoding_version,
+            structured_tokens=structured_tokens,
         )
     except TimeoutError as exc:
         import sys
@@ -548,7 +758,7 @@ def _play_one_parallel_game(
             file=sys.stderr,
         )
         f, o, p, m = _empty_arrays()
-        chunk = (f, o, p, m, None, "timed_out")
+        chunk = (f, o, p, m, None, "timed_out", [])
     except Exception as exc:  # noqa: BLE001 - intentional broad catch
         import sys
         import traceback
@@ -560,7 +770,7 @@ def _play_one_parallel_game(
         )
         traceback.print_exc(file=sys.stderr)
         f, o, p, m = _empty_arrays()
-        chunk = (f, o, p, m, None, "crashed")
+        chunk = (f, o, p, m, None, "crashed", [])
     return game_idx, chunk
 
 
@@ -589,7 +799,8 @@ def _generate_one_game_data(
     hang_dump_dir: Optional[str] = None,
     heuristics: Optional[HeuristicsConfig] = None,
     action_encoding_version: str = "positional_v1",
-) -> _GameChunk:
+    structured_tokens: bool = False,
+) -> tuple:
     """Play one game and return its 4-tuple training arrays.
 
     The single source of truth for per-game data extraction; both
@@ -684,11 +895,11 @@ def _generate_one_game_data(
         from mtg_bot.training._hang_progress import HangProgress
         progress = HangProgress()
         try:
-            winner, samples = run_with_timeout(
+            winner, samples, struct_rows = run_with_timeout(
                 _play_one_game_recording,
                 (adapter, strategies, rng, decision_cap, sample_every,
                  recorder, progress, tree_depth, tree_top_k,
-                 action_encoding_version),
+                 action_encoding_version, structured_tokens),
                 per_game_timeout_sec,
             )
         except TimeoutError as exc:
@@ -718,11 +929,12 @@ def _generate_one_game_data(
                 )
             raise
     else:
-        winner, samples = _play_one_game_recording(
+        winner, samples, struct_rows = _play_one_game_recording(
             adapter, strategies, rng, decision_cap, sample_every,
             replay_recorder=recorder,
             tree_depth=tree_depth, tree_top_k=tree_top_k,
             action_encoding_version=action_encoding_version,
+            structured_tokens=structured_tokens,
         )
 
     if recorder is not None and replay_config is not None:
@@ -739,7 +951,7 @@ def _generate_one_game_data(
 
     if not samples:
         f, o, p, m = _empty_arrays()
-        return f, o, p, m, winner, "completed"
+        return f, o, p, m, winner, "completed", []
     outcome_label = _outcome_label(winner)
     features = np.stack(
         [f for f, _, _, _ in samples], axis=0,
@@ -756,7 +968,7 @@ def _generate_one_game_data(
     ).astype(np.bool_)
     return (
         features, outcomes, policy_targets, action_masks, winner,
-        "completed",
+        "completed", struct_rows,
     )
 
 
@@ -804,9 +1016,11 @@ def _play_one_game_recording(
     tree_depth: int = 1,
     tree_top_k: Optional[int] = None,
     action_encoding_version: str = "positional_v1",
+    structured_tokens: bool = False,
 ) -> tuple[
     PlayerID | None,
     list[tuple[np.ndarray, PlayerID, np.ndarray, np.ndarray]],
+    list[dict[str, np.ndarray]],
 ]:
     """Play one game with the decision cap, recording features at
     every Nth non-chance decision from both player perspectives.
@@ -840,10 +1054,28 @@ def _play_one_game_recording(
     from mtg_bot.training.action_encoding import (
         ACTION_VOCAB_SIZE, EncodingOverflowError, encode, legal_action_mask,
     )
+    if structured_tokens:
+        # Local import — state_tokenizer pulls in the entire model
+        # constant surface and ndarray construction helpers; only worth
+        # it when the structured-token flag is enabled.
+        from mtg_bot.training.state_tokenizer import (
+            ActionEvent, tokenize_state,
+        )
 
     samples: list[
         tuple[np.ndarray, PlayerID, np.ndarray, np.ndarray]
     ] = []
+    # Parallel list of structured-token dicts; one row per sample row
+    # (two viewers per sample point, in the order they were appended
+    # to ``samples``). Empty when structured_tokens=False — the caller
+    # checks the flag rather than the list's content.
+    struct_rows: list[dict[str, np.ndarray]] = []
+    # Cumulative action history (only populated when
+    # structured_tokens=True). Each appended entry captures the
+    # pre-apply engine snapshot, the action that was about to apply,
+    # the turn, the step, and the actor — the tokenizer will use this
+    # to render the recent-action token sequence at sample points.
+    action_history: list["ActionEvent"] = []
     zero_policy = np.zeros(ACTION_VOCAB_SIZE, dtype=_DTYPE_POLICY)
     zero_mask = np.zeros(ACTION_VOCAB_SIZE, dtype=np.bool_)
     # Skip the per-decision adapter clone for observe_action wiring
@@ -1020,6 +1252,19 @@ def _play_one_game_recording(
                         samples.append(
                             (feats, viewer, zero_policy, zero_mask)
                         )
+                    if structured_tokens:
+                        # Tokenize per-viewer with the filtered history;
+                        # the tokenizer applies the §3 filter + truncation
+                        # internally. Snapshot is the current engine
+                        # state (sample is taken pre-apply, so the
+                        # caller's view is "state right now, with this
+                        # decision about to be made").
+                        struct_rows.append(
+                            tokenize_state(
+                                engine, viewer_id=viewer,
+                                recent_actions=action_history,
+                            )
+                        )
             else:
                 decision = strategies[active].choose(adapter, active)
         # Snapshot the pre-apply state so observe_action can be fed
@@ -1031,7 +1276,33 @@ def _play_one_game_recording(
             pre_apply_state = adapter.clone()
         else:
             pre_apply_state = None
+        # Capture the pre-apply state for structured-token history.
+        # We need a snapshot (the engine state mutates in-place during
+        # ``apply``), but cloning every decision is expensive — reuse
+        # the observe_action clone if it was already made, otherwise
+        # take an explicit clone only when structured-tokens are on.
+        action_pre_state = None
+        action_turn_capture = None
+        action_step_capture = None
+        if structured_tokens and active != CHANCE_PLAYER:
+            engine_now = adapter.engine_state
+            if pre_apply_state is not None:
+                action_pre_state = pre_apply_state.engine_state
+            else:
+                action_pre_state = adapter.clone().engine_state
+            action_turn_capture = engine_now.turn_number
+            action_step_capture = engine_now.step
         adapter.apply(decision)
+        if (
+            structured_tokens and action_pre_state is not None
+        ):
+            action_history.append(ActionEvent(
+                action=decision,
+                state_snapshot=action_pre_state,
+                turn=action_turn_capture,
+                step=action_step_capture,
+                actor_player_id=active,
+            ))
         if pre_apply_state is not None:
             for seat in (0, 1):
                 strategy = strategies.get(seat)
@@ -1088,7 +1359,7 @@ def _play_one_game_recording(
                 # Diagnostic capture must never break the game loop.
                 pass
     winner = adapter.winner() if adapter.is_terminal() else None
-    return winner, samples
+    return winner, samples, struct_rows
 
 
 def save_dataset(
@@ -1098,11 +1369,16 @@ def save_dataset(
     *,
     policy_targets: Optional[np.ndarray] = None,
     action_masks: Optional[np.ndarray] = None,
+    structured_token_type: Optional[np.ndarray] = None,
+    structured_token_emb_ids: Optional[np.ndarray] = None,
+    structured_token_scalars: Optional[np.ndarray] = None,
+    structured_attention_mask: Optional[np.ndarray] = None,
 ) -> None:
     """Save ``(features, outcomes)`` plus optional policy
-    supervision arrays to a single ``.npz`` file.
+    supervision and structured-token arrays to a single ``.npz``
+    file.
 
-    Schema (the policy keys exist only when supplied):
+    Schema (the policy + structured keys exist only when supplied):
 
     - ``features``       : ``(N, FEATURE_DIM)`` float32
     - ``outcomes``       : ``(N,)`` float32 in ``{-1, 0, +1}``
@@ -1116,6 +1392,10 @@ def save_dataset(
       where the slot was legal at the sample point. Rows with no
       policy supervision get all-False (trainer doesn't need the
       mask there).
+    - ``structured_token_type``     : ``(N, max_seq_len)`` int64
+    - ``structured_token_emb_ids``  : ``(N, max_seq_len, N_EMB_FIELDS)`` int64
+    - ``structured_token_scalars``  : ``(N, max_seq_len, N_SCALAR_FIELDS)`` float32
+    - ``structured_attention_mask`` : ``(N, max_seq_len)`` bool
 
     Compressed — datasets are small even with policy supervision
     (zeros + bool masks compress aggressively).
@@ -1153,6 +1433,25 @@ def save_dataset(
             )
         arrays["policy_targets"] = policy_targets
         arrays["action_masks"] = action_masks
+    struct_provided = [
+        structured_token_type, structured_token_emb_ids,
+        structured_token_scalars, structured_attention_mask,
+    ]
+    n_struct_provided = sum(1 for a in struct_provided if a is not None)
+    if n_struct_provided not in (0, 4):
+        raise ValueError(
+            "All four structured-token arrays (token_type, "
+            "token_emb_ids, token_scalars, attention_mask) must be "
+            f"provided together or omitted together; got "
+            f"{n_struct_provided}/4."
+        )
+    if n_struct_provided == 4:
+        for name, arr in zip(_STRUCT_NPZ_KEYS, struct_provided):
+            if arr.shape[0] != n:
+                raise ValueError(
+                    f"{name} rows {arr.shape[0]} != features rows {n}"
+                )
+            arrays[name] = arr
     np.savez_compressed(path, **arrays)
 
 
@@ -1160,6 +1459,7 @@ def load_dataset(
     path: Path,
     *,
     with_policy: bool = False,
+    with_structured: bool = False,
 ) -> tuple[np.ndarray, ...]:
     """Load a single ``.npz`` saved by ``save_dataset``.
 
@@ -1170,20 +1470,42 @@ def load_dataset(
     ``policy_targets`` key in the npz), the policy arrays come
     back as ``None``; ``load_all_datasets`` is the helper that
     handles the value-only ↔ value+policy mixing transparently.
+
+    Pass ``with_structured=True`` to also pull the structured-token
+    arrays. Returns 8-tuple in this case:
+    ``(features, outcomes, policy_targets, action_masks,
+    structured_token_type, structured_token_emb_ids,
+    structured_token_scalars, structured_attention_mask)``. For
+    files written without the structured-token flag the four
+    structured arrays come back as ``None`` so the trainer can
+    differentiate "not in this file" from "all-zeros for these
+    rows."
     """
     with np.load(path) as data:
         features = data["features"]
         outcomes = data["outcomes"]
-        if not with_policy:
+        if not with_policy and not with_structured:
             return features, outcomes
-        if "policy_targets" in data.files:
-            return (
-                features,
-                outcomes,
-                data["policy_targets"],
-                data["action_masks"],
+        policy_targets: Optional[np.ndarray] = (
+            data["policy_targets"]
+            if "policy_targets" in data.files else None
+        )
+        action_masks: Optional[np.ndarray] = (
+            data["action_masks"]
+            if "action_masks" in data.files else None
+        )
+        if not with_structured:
+            return features, outcomes, policy_targets, action_masks
+        struct_arrays: list[Optional[np.ndarray]] = []
+        for key in _STRUCT_NPZ_KEYS:
+            struct_arrays.append(
+                data[key] if key in data.files else None
             )
-        return features, outcomes, None, None
+        return (
+            features, outcomes, policy_targets, action_masks,
+            struct_arrays[0], struct_arrays[1],
+            struct_arrays[2], struct_arrays[3],
+        )
 
 
 def load_all_datasets(
