@@ -333,3 +333,87 @@ def test_rust_parser_accepts_damage_each_opponent_in_triggered_ability():
     }
     pid = reg.register_printing(d)
     assert pid == 0
+
+
+def test_bridge_deal_damage_any_target_translates_to_python():
+    """Phase 5 bridge extension: Rust
+    ``{"kind": "deal_damage_any_target", "amount": N}`` translates to
+    Python ``DealDamageAnyTarget(amount=N)``.
+
+    Unblocks Nebula-Dragon / Nova-Hellkite-shape ETB triggers that
+    "deal N damage to any target" on the cross-engine bridge. The
+    Rust effect variant already exists at
+    ``rust/src/cards.rs:631`` (``Effect::DealDamageAnyTarget``) and
+    its parse_effect arm at ``cards.rs:3063-3078``; the Rust resolve
+    arm at ``state_ops_resolve.rs:3536-3603`` carries the I67
+    controller-of-effect fix (defender derives from
+    ``current_resolve_source_controller``, not ``active_player``).
+    Python's class already exists at
+    ``effects/generic/damage.py:264`` (``DealDamageAnyTarget``).
+    This pins the bridge translation that wires them up.
+    """
+    from mtg_bot.effects.generic.damage import DealDamageAnyTarget
+    from mtg_bot.parity.cross_engine import _ta_dict_to_python_effect
+
+    e = _ta_dict_to_python_effect(
+        {"kind": "deal_damage_any_target", "amount": 3}
+    )
+    assert isinstance(e, DealDamageAnyTarget)
+    assert e.amount == 3
+    # The any-target filter is intrinsic to the subclass; verify the
+    # constructor sugar's __post_init__ wired the TargetSpec (used by
+    # ``effect.legal_targets`` at push time).
+    assert len(e.targets) == 1
+
+
+def test_bridge_deal_damage_any_target_amount_default_zero():
+    """Missing ``amount`` defaults to 0 (mirrors the gain_life /
+    damage_each_opponent arms' default-zero convention -- bridge
+    consumers are required to be explicit, but a missing key
+    shouldn't crash the translator). Rust's parse_effect is STRICTER
+    (raises ``KeyError`` on missing ``amount``); the Python bridge's
+    lenient default exists for partial test fixtures only and is
+    out-of-band relative to the production parser path.
+    """
+    from mtg_bot.effects.generic.damage import DealDamageAnyTarget
+    from mtg_bot.parity.cross_engine import _ta_dict_to_python_effect
+
+    e = _ta_dict_to_python_effect({"kind": "deal_damage_any_target"})
+    assert isinstance(e, DealDamageAnyTarget)
+    assert e.amount == 0
+
+
+def test_rust_parser_accepts_deal_damage_any_target_in_triggered_ability():
+    """Pin the Rust parser surface for the matched effect kind. The
+    bridge's dict shape must register cleanly on the Rust side too;
+    this lockstep gate keeps the Python bridge from drifting away
+    from Rust's parse_effect coverage.
+
+    Mirrors the existing ``damage_each_opponent`` parser-surface pin
+    (which closed Probe F's bridge contract end-to-end). Required
+    field is ``amount`` (non-negative i32); the predicate-path
+    triggered-ability wrapper is just a carrier — the substrate
+    being pinned is parse_effect's ``deal_damage_any_target`` arm.
+    """
+    import mtg_bot_engine
+
+    reg = mtg_bot_engine.Registry()
+    d = {
+        "name": "Phase 5 Bridge Pin — Any Target",
+        "card_types": ["Creature"],
+        "mana_cost": {"generic": 6, "R": 1},
+        "power": 4,
+        "toughness": 4,
+        "triggered_abilities": [
+            {
+                "event": "enters",
+                "predicate": {"kind": "source_is_self"},
+                "effect": {
+                    "kind": "deal_damage_any_target",
+                    "amount": 3,
+                },
+            }
+        ],
+    }
+    pid = reg.register_printing(d)
+    assert pid == 0

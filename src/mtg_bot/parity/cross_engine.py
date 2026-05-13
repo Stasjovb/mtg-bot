@@ -187,6 +187,53 @@ def _ta_dict_to_python_effect(eff_dict: dict):
         return DealDamageEachOpponent(
             amount=eff_dict.get("amount", 0),
         )
+    if kind == "deal_damage_any_target":
+        # Targeted "deals N damage to any target" (CR 115.4 — the
+        # legal-target kinds are creature / planeswalker / battle /
+        # player). Rust's ``Effect::DealDamageAnyTarget``
+        # (cards.rs:631) is a unit-amount variant; its resolve arm
+        # (state_ops_resolve.rs:3536-3603) picks the target
+        # DETERMINISTICALLY at apply_effect time: scan the defender's
+        # battlefield top-to-bottom for the first object whose
+        # ``card_types`` contains "Creature"; if none, the defender-
+        # player takes the damage directly. The defender is derived
+        # from the source's controller via the I67 controller-of-
+        # effect fix (``current_resolve_source_controller`` falls back
+        # to ``active_player`` for direct ``apply_effect_pub``
+        # callers); ``defender_idx = 1 - source_controller``. So the
+        # cross-controller case (p1's ETB trigger resolves on p0's
+        # turn after a flicker re-ETB) targets p0's side correctly.
+        #
+        # Python's ``DealDamageAnyTarget`` is constructor sugar over
+        # ``DealDamage`` carrying the same any-target filter
+        # (effects/generic/damage.py:264-282); its
+        # ``DealDamage.resolve`` walks the per-slot chosen targets and
+        # applies the damage to each. Unlike Rust's intrinsic auto-
+        # pick, Python's targeting pipeline picks the target at PUSH
+        # time via ``push_triggered_ability`` (actions.py:3172),
+        # which calls ``controller.agent.choose_target`` on the
+        # enumerated ``effect.legal_targets`` pool. Probes that
+        # exercise this bridge end-to-end must therefore set an agent
+        # on the source's controller (the harness's default Player
+        # has ``agent=None``) that mimics Rust's "first opponent-side
+        # creature, else opponent-player" pick — the simplest agent
+        # filters ``legal_targets`` to opponent-controlled entries
+        # and returns the first, which observably matches Rust's
+        # defender-bf scan + defender-player fallback in 2-player
+        # games. The companion bridge-pin unit tests below don't
+        # drive the trigger end-to-end, so they don't need an agent.
+        #
+        # Mirrors Rust's ``parse_effect`` arm (cards.rs:3063-3078)
+        # which requires an explicit non-negative ``amount`` field.
+        # Missing ``amount`` here defaults to 0 (same convention as
+        # ``gain_life`` / ``damage_each_opponent``) so partial
+        # fixtures don't crash the translator.
+        from mtg_bot.effects.generic.damage import (
+            DealDamageAnyTarget,
+        )
+        return DealDamageAnyTarget(
+            amount=eff_dict.get("amount", 0),
+        )
     raise ValueError(
         f"cross_engine triggered_abilities bridge: unsupported "
         f"effect kind {kind!r} (extend `_ta_dict_to_python_effect` "
