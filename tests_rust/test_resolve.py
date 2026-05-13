@@ -11364,3 +11364,281 @@ def test_damage_each_opponent_pause_variant_threads_controller(engine):
 
     assert state.life_totals[0] == p0_life_before - 1
     assert state.life_totals[1] == p1_life_before
+
+
+# -------------------------------------------------------------------
+# I64 — DealDamage controller-of-effect fix
+#
+# The Effect::DealDamage arm at state_ops_resolve.rs picks its
+# `defender` as `1 - state.active_player` (the deterministic
+# "defending player" first-slice convention). Pre-fix this was wrong
+# when the resolving spell's controller != active_player (e.g.
+# opponent's instant on your turn). Fix: derive
+# `defender = 1 - source_controller` where `source_controller` reads
+# the same `current_resolve_source_controller` transient slot
+# I59/I60/I63 introduced. Mirrors Python's
+# `DealDamageTargetPlayer.resolve(state, controller_id, targets)`.
+# -------------------------------------------------------------------
+
+
+def _deal_damage_spell_dict(amount: int = 3):
+    """A {R} Lightning-Bolt-shape instant that deals N damage to the
+    defending player. Target = `any_player` deterministic-pick.
+    """
+    return {
+        "name": "Test Lightning Bolt",
+        "card_types": ["Instant"],
+        "mana_cost": {"R": 1},
+        "effects": [
+            {
+                "kind": "deal_damage",
+                "amount": amount,
+                "target": {"kind": "any_player"},
+            }
+        ],
+    }
+
+
+def _deal_damage_creature_spell_dict(amount: int = 2):
+    """A {R} instant that deals N damage to the defending player's
+    first creature (deterministic any_creature pick).
+    """
+    return {
+        "name": "Test Shock Creature",
+        "card_types": ["Instant"],
+        "mana_cost": {"R": 1},
+        "effects": [
+            {
+                "kind": "deal_damage",
+                "amount": amount,
+                "target": {"kind": "any_creature"},
+            }
+        ],
+    }
+
+
+def test_dealdamage_routes_to_source_controllers_opponent_not_active_players_opponent(
+    engine,
+):
+    """**Regression pin for the DealDamage controller-of-effect fix.**
+
+    On p0's turn (active_player=0), a Lightning Bolt whose controller
+    is p1 (an instant response from the non-active player) must deal
+    its damage to p0, NOT to p1.
+
+    Pre-fix: `defender = 1 - active_player = 1 - 0 = 1` => damage went
+    to p1 (the spell's OWN controller — a friendly-fire bug).
+    Post-fix: `defender = 1 - source_controller = 1 - 1 = 0` => damage
+    correctly goes to p0 (the spell controller's opponent).
+    """
+    state = engine.make_synthetic_state()
+    assert state.active_player == 0
+
+    spell_id = state.register_and_inject_object(
+        _deal_damage_spell_dict(amount=3), 1, ZONE_HAND,
+    )
+    p0_life_before = state.life_totals[0]
+    p1_life_before = state.life_totals[1]
+
+    state.push_to_stack(spell_id, 1)
+    state.resolve_top_of_stack()
+
+    # Damage went to p0 (the spell's controller's opponent), NOT to p1.
+    assert state.life_totals[0] == p0_life_before - 3
+    assert state.life_totals[1] == p1_life_before
+
+
+def test_dealdamage_active_player_controlled_spell_still_works(engine):
+    """**Back-compat pin.** A DealDamage spell whose controller IS the
+    active player must still route to the opponent — the bug never
+    fired in this case pre-fix because controller == active_player.
+    """
+    state = engine.make_synthetic_state()
+    assert state.active_player == 0
+
+    spell_id = state.register_and_inject_object(
+        _deal_damage_spell_dict(amount=2), 0, ZONE_HAND,
+    )
+    p0_life_before = state.life_totals[0]
+    p1_life_before = state.life_totals[1]
+
+    state.push_to_stack(spell_id, 0)
+    state.resolve_top_of_stack()
+
+    # Damage went to p1 (defender = opponent of p0).
+    assert state.life_totals[1] == p1_life_before - 2
+    assert state.life_totals[0] == p0_life_before
+
+
+def test_dealdamage_via_triggered_ability_routes_to_triggers_controller(
+    engine,
+):
+    """**Cross-controller trigger pin for DealDamage.** A
+    triggered-ability StackItem carries its own `controller`; the
+    resolver swaps that controller in for the DealDamage apply.
+
+    Shape: p1's creature has a `source_is_self LEAVES_BATTLEFIELD →
+    deal 2 damage to defending player` trigger. p0 casts a bounce on
+    p1's creature; when the LTB trigger resolves, the 2 damage routes
+    to p0 (p1's opponent), NOT to p1 (active-player-relative
+    defender).
+    """
+    state = engine.make_synthetic_state(
+        num_battlefield=0, num_hand=0, num_library=5,
+    )
+    ltb_creature = {
+        "name": "Test LTB-Damage Creature",
+        "card_types": ["Creature"],
+        "mana_cost": {"generic": 2},
+        "effects": [],
+        "power": 1,
+        "toughness": 1,
+        "triggered_abilities": [
+            {
+                "event": "leaves_battlefield",
+                "predicate": {"kind": "source_is_self"},
+                "effect": {
+                    "kind": "deal_damage",
+                    "amount": 2,
+                    "target": {"kind": "any_player"},
+                },
+            }
+        ],
+    }
+    crt_id = state.register_and_inject_object(
+        ltb_creature, 1, ZONE_BATTLEFIELD,
+    )
+    bounce_id = state.register_and_inject_object(
+        {
+            "name": "Test Bounce (DealDamage)",
+            "card_types": ["Instant"],
+            "mana_cost": {"U": 1},
+            "effects": [
+                {"kind": "return_to_hand", "target": {"kind": "any_creature"}}
+            ],
+        },
+        0,
+        ZONE_HAND,
+    )
+    p0_life_before = state.life_totals[0]
+    p1_life_before = state.life_totals[1]
+
+    state.push_to_stack(bounce_id, 0)
+    state.resolve_top_of_stack()  # bounce; LTB trigger pushes
+    top = state.peek_top_of_stack()
+    assert top["controller"] == 1
+
+    state.resolve_top_of_stack()  # LTB trigger fires
+
+    # Damage went to p0 (p1's opponent), NOT to p1 (active-player-
+    # relative defender).
+    assert state.life_totals[0] == p0_life_before - 2
+    assert state.life_totals[1] == p1_life_before
+
+
+def test_dealdamage_pause_variant_threads_controller(engine):
+    """**`resolve_top_of_stack_pause` parity pin for DealDamage.**"""
+    state = engine.make_synthetic_state()
+    spell_id = state.register_and_inject_object(
+        _deal_damage_spell_dict(amount=1), 1, ZONE_HAND,
+    )
+    p0_life_before = state.life_totals[0]
+    p1_life_before = state.life_totals[1]
+
+    state.push_to_stack(spell_id, 1)
+    state.resolve_top_of_stack_pause()
+
+    # Damage went to p0 (opponent of spell controller p1).
+    assert state.life_totals[0] == p0_life_before - 1
+    assert state.life_totals[1] == p1_life_before
+
+
+def test_dealdamage_any_creature_target_routes_to_source_controllers_opponent(
+    engine,
+):
+    """**any_creature target variant.** DealDamage with target =
+    any_creature picks the FIRST creature on the defender's
+    battlefield. Defender = 1 - source_controller, so the chosen
+    creature is on the spell controller's opponent's bf.
+
+    Shape: p0's turn; p1 casts the spell. p0 has a creature on bf,
+    p1 also has a creature on bf. Damage lands on p0's creature
+    (p1's opponent's first bf creature).
+    """
+    state = engine.make_synthetic_state(num_battlefield=0)
+    # p0 creature on bf.
+    p0_crt = state.register_and_inject_object(
+        {
+            "name": "P0 Creature",
+            "card_types": ["Creature"],
+            "mana_cost": {"generic": 1},
+            "effects": [],
+            "power": 1,
+            "toughness": 3,
+        },
+        0,
+        ZONE_BATTLEFIELD,
+    )
+    # p1 creature on bf.
+    p1_crt = state.register_and_inject_object(
+        {
+            "name": "P1 Creature",
+            "card_types": ["Creature"],
+            "mana_cost": {"generic": 1},
+            "effects": [],
+            "power": 1,
+            "toughness": 3,
+        },
+        1,
+        ZONE_BATTLEFIELD,
+    )
+    spell_id = state.register_and_inject_object(
+        _deal_damage_creature_spell_dict(amount=2), 1, ZONE_HAND,
+    )
+
+    state.push_to_stack(spell_id, 1)
+    state.resolve_top_of_stack()
+
+    # p0's creature took 2 damage. p1's creature is untouched.
+    snap = state.battlefield_snapshot()
+    p0_target = next(o for o in snap if o["id"] == p0_crt)
+    p1_target = next(o for o in snap if o["id"] == p1_crt)
+    assert p0_target["damage"] == 2
+    assert p1_target["damage"] == 0
+
+
+def test_dealdamage_controller_swap_restores_after_resolution(engine):
+    """**Transient-field hygiene pin.** After a cross-controller
+    DealDamage resolves, the `current_resolve_source_controller`
+    transient slot must be restored so a subsequent same-active-
+    player-controlled spell still routes via active_player.
+
+    Symmetric pin to the I59/I60 swap-restore test. First resolve a
+    p1-controlled bolt (swap set to Some(1), then restored to None).
+    Then resolve a p0-controlled bolt (no leaked swap; defender =
+    1 - 0 = 1, damage to p1).
+    """
+    state = engine.make_synthetic_state()
+    # First resolve a p1-controlled bolt — sets swap to Some(1) then
+    # restores.
+    spell1_id = state.register_and_inject_object(
+        _deal_damage_spell_dict(amount=1), 1, ZONE_HAND,
+    )
+    state.push_to_stack(spell1_id, 1)
+    state.resolve_top_of_stack()
+    p0_life_mid = state.life_totals[0]
+    p1_life_mid = state.life_totals[1]
+    # p0 took 1 damage (p1's opponent).
+    assert p0_life_mid == 19
+    assert p1_life_mid == 20
+
+    # Now resolve a p0-controlled bolt. If the swap leaked Some(1),
+    # this would route damage to p0 again (1 - 1 = 0). Post-fix it
+    # restores to None, so defender = 1 - active_player = 1, damage to p1.
+    spell2_id = state.register_and_inject_object(
+        _deal_damage_spell_dict(amount=2), 0, ZONE_HAND,
+    )
+    state.push_to_stack(spell2_id, 0)
+    state.resolve_top_of_stack()
+    assert state.life_totals[0] == p0_life_mid
+    assert state.life_totals[1] == p1_life_mid - 2
