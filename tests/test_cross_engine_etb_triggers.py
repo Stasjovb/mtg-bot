@@ -1425,5 +1425,115 @@ def test_rust_parser_accepts_if_you_do_in_triggered_ability():
     assert pid == 0
 
 
+def test_bridge_pump_creatures_opponents_control_until_eot_translates_to_python():
+    """Phase 5 bridge extension: Rust
+    ``{"kind": "pump_creatures_opponents_control_until_eot",
+    "power_bonus": N, "toughness_bonus": M}`` translates to Python
+    ``PumpCreaturesOpponentsControlUntilEOT(power_bonus=N,
+    toughness_bonus=M)``.
+
+    Mass-debuff "creatures your opponents control get +X/+Y UEOT"
+    on the cross-engine bridge -- the opponent-side mirror of the
+    (not-yet-on-the-bridge) ``pump_creatures_you_control_until_eot``
+    arm. EoE consumer Mouth of the Storm uses the extended
+    ``until your next turn`` duration which has no Rust counterpart;
+    the bare ``until end of turn`` arm has no real-EoE consumer
+    today and is exercised end-to-end via a synthetic probe.
+    """
+    from mtg_bot.effects.generic.pump import (
+        PumpCreaturesOpponentsControlUntilEOT,
+    )
+    from mtg_bot.parity.cross_engine import _ta_dict_to_python_effect
+
+    e = _ta_dict_to_python_effect(
+        {
+            "kind": "pump_creatures_opponents_control_until_eot",
+            "power_bonus": -3,
+            "toughness_bonus": 0,
+        }
+    )
+    assert isinstance(e, PumpCreaturesOpponentsControlUntilEOT)
+    assert e.power_bonus == -3
+    assert e.toughness_bonus == 0
+    # The Python-only ``until_caster_next_turn`` extended-duration
+    # flag stays at its default False (the Rust variant has no
+    # equivalent field; the bridge mirrors Rust's bare-EOT shape).
+    assert e.until_caster_next_turn is False
+    # Granted-keywords rider stays at its empty default (Rust's
+    # variant has no equivalent field).
+    assert e.granted_keywords == frozenset()
+
+
+def test_bridge_pump_creatures_opponents_control_until_eot_positive_bonus_translates():
+    """Positive-bonus arm -- ``+2/+2`` round-trips. Same shape as the
+    debuff form; the Rust parse_effect arm imposes no sign constraint
+    (cards.rs:3844-3862)."""
+    from mtg_bot.effects.generic.pump import (
+        PumpCreaturesOpponentsControlUntilEOT,
+    )
+    from mtg_bot.parity.cross_engine import _ta_dict_to_python_effect
+
+    e = _ta_dict_to_python_effect(
+        {
+            "kind": "pump_creatures_opponents_control_until_eot",
+            "power_bonus": 2,
+            "toughness_bonus": 2,
+        }
+    )
+    assert isinstance(e, PumpCreaturesOpponentsControlUntilEOT)
+    assert e.power_bonus == 2
+    assert e.toughness_bonus == 2
+
+
+def test_bridge_pump_creatures_opponents_control_until_eot_defaults_to_zero():
+    """Missing ``power_bonus`` / ``toughness_bonus`` default to 0 in
+    the bridge translator (translator-robustness backstop for direct
+    unit-test calls; Rust's parse_effect REQUIRES both keys present so
+    end-to-end Rust callers must supply them explicitly)."""
+    from mtg_bot.effects.generic.pump import (
+        PumpCreaturesOpponentsControlUntilEOT,
+    )
+    from mtg_bot.parity.cross_engine import _ta_dict_to_python_effect
+
+    e = _ta_dict_to_python_effect(
+        {"kind": "pump_creatures_opponents_control_until_eot"}
+    )
+    assert isinstance(e, PumpCreaturesOpponentsControlUntilEOT)
+    assert e.power_bonus == 0
+    assert e.toughness_bonus == 0
+
+
+def test_rust_parser_accepts_pump_creatures_opponents_control_until_eot_in_triggered_ability():
+    """Pin the Rust parser surface for the
+    ``pump_creatures_opponents_control_until_eot`` effect kind in a
+    triggered_ability dict. Rust's parse_effect at cards.rs:3844-3862
+    requires both ``power_bonus`` and ``toughness_bonus`` keys
+    explicitly.
+    """
+    import mtg_bot_engine
+
+    reg = mtg_bot_engine.Registry()
+    d = {
+        "name": "Phase 5 Bridge Pin -- PumpCreaturesOpponentsControlUntilEOT",
+        "card_types": ["Creature"],
+        "mana_cost": {"generic": 6, "U": 1},
+        "power": 6,
+        "toughness": 6,
+        "triggered_abilities": [
+            {
+                "event": "enters",
+                "predicate": {"kind": "source_is_self"},
+                "effect": {
+                    "kind": "pump_creatures_opponents_control_until_eot",
+                    "power_bonus": -3,
+                    "toughness_bonus": 0,
+                },
+            }
+        ],
+    }
+    pid = reg.register_printing(d)
+    assert pid == 0
+
+
 # === PHASE5_BRIDGE_PIN_TESTS_INSERT_ABOVE_THIS_LINE ===
 # New bridge-arm pin tests go IMMEDIATELY ABOVE this marker.

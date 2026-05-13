@@ -17769,6 +17769,399 @@ def test_cross_engine_real_eoe_fell_gravship_etb_sequence_mill_return_parity(
     assert len(py_state.stack) == 0
 
 
+def test_cross_engine_synthetic_etb_pump_creatures_opponents_control_until_eot_parity(
+    parity_smoke,
+):
+    """Probe: synthetic ``ETB Mass Debuff Ogre`` exercising the freshly
+    landed ``pump_creatures_opponents_control_until_eot`` bridge arm
+    end-to-end.
+
+    Why synthetic rather than a real EoE card: the only EoE consumer
+    of this effect-shape is Mouth of the Storm (``creatures your
+    opponents control get -3/-0 UNTIL YOUR NEXT TURN``). The "until
+    your next turn" extended duration routes through Python's
+    ``until_caster_next_turn=True`` flag which has NO Rust counterpart
+    -- Rust's ``Effect::PumpCreaturesOpponentsControlUntilEOT`` variant
+    only carries ``power_bonus`` / ``toughness_bonus`` fields, no
+    extended-duration field. Translating Mouth of the Storm to the
+    bare arm would observably diverge at the start of the controller's
+    NEXT turn (Python keeps the debuff; Rust has already cleared it
+    at the casting turn's cleanup). The bare ``until end of turn``
+    shape has no real-EoE consumer with matching fields today; a
+    synthetic creature card with the bare-EOT trigger is the canonical
+    way to exercise this substrate end-to-end on the bridge until a
+    parametric extended-duration Rust variant lands.
+
+    Trigger shape:
+
+        Event: enters
+        Predicate: source_is_self
+        Effect: pump_creatures_opponents_control_until_eot
+                power_bonus=-3, toughness_bonus=-3
+
+    **Rust resolve semantics.** Rust's
+    ``Effect::PumpCreaturesOpponentsControlUntilEOT`` arm
+    (state_ops_resolve.rs:4514-4577) is UNTARGETED -- it walks
+    ``state.players[1 - controller].battlefield`` (the source-
+    controller's opponent's bf, two-player simplification) and
+    pushes a ``UeotModifier::PowerToughnessBonus { power: -3,
+    toughness: -3 }`` onto every creature object's ``ueot_modifiers``
+    Vec. The source controller derives from the standard 5-zone
+    walk for ``source_obj_id``; ``(0, 0)`` short-circuits;
+    no-creatures-on-opponent-bf fizzles silently.
+
+    **Python resolve semantics.** Python's
+    ``PumpCreaturesOpponentsControlUntilEOT`` (effects/generic/
+    pump.py:779) walks ``state.battlefield`` and stamps
+    ``grant_pt_pump_ueot`` onto every creature whose
+    ``controller_id != controller_id`` (the source controller's id).
+    No ``legal_targets`` method -- the targeting pipeline never
+    picks; the trigger lands on the stack with empty targets and
+    resolves in one pass. Same observable: each opponent creature
+    on the bf gets a ``-3/-3`` UEOT bonus.
+
+    **Untargeted -- no agent shim required.** Unlike the
+    ``pump_target_creature_until_eot`` family which needs a
+    ``_PickFirstControlledCreatureAgent`` shim, this probe drives
+    the trigger with empty targets on both engines and observes the
+    en-masse delta on every opponent creature.
+
+    Probe shape (inject-and-fire-ENTERS):
+
+      1. Inject TWO 4/4 Bait Bears onto p1's battlefield BEFORE
+         injecting the Ogre. Printed P/T 4/4 so the -3/-3 debuff
+         leaves them at observable 1/1 (positive toughness, no
+         SBA-death after cleanup, no disambiguation against a
+         dies-trigger path).
+
+      2. Inject ALSO one 4/4 Bait Bear on p0's battlefield. Same
+         controller as the Ogre, so this bear must NOT receive the
+         debuff (it's the source-controller's OWN creature, on the
+         wrong side of the opponent-only filter). Pin that the
+         filter direction is correct on both engines.
+
+      3. Inject ``ETB Mass Debuff Ogre`` directly onto p0's
+         battlefield via ``register_and_inject_object`` (Rust) /
+         new_object + bf append + manual ``_trigger_etb_abilities``
+         (Python). Both engines dispatch ENTERS for the just-arrived
+         Ogre; the SourceIsSelf predicate matches; one
+         ``PumpCreaturesOpponentsControlUntilEOT(-3, -3)`` trigger
+         lands on the stack with empty targets.
+
+      4. Drain both stacks. Resolve walk: each of p1's two bait
+         bears gets a ``-3/-3`` UEOT modifier. p0's bear and the
+         Ogre itself are untouched.
+
+      5. Cross-engine assert: both p1 bears at effective P/T 1/1;
+         p0's bear at effective P/T 4/4 (unchanged); the Ogre
+         itself at its printed P/T (also unchanged -- it's on the
+         caster's side).
+
+    Out of scope:
+
+      * Cast-from-hand mana cost -- inject-and-dispatch-ENTERS
+        bypasses the mana pipeline.
+      * Cleanup-step expiry -- not driven here. Both engines record
+        the UEOT modifier on the affected objects; cleanup-step
+        removal is already pinned by other tests.
+      * Mouth of the Storm's "until your next turn" extended
+        duration -- documented Rust substrate gap; out of scope of
+        the bare-EOT bridge arm.
+      * Three-or-more-player engine -- the Rust resolve at
+        ``state_ops_resolve.rs:4549`` uses the two-player
+        simplification ``opponent_idx = 1 - controller``; both
+        engines are two-player today, observably identical.
+
+    Expected post-dispatch + post-drain state on BOTH engines:
+
+      * ETB Mass Debuff Ogre on p0's bf at printed P/T (unchanged).
+      * Bait Bear on p0's bf at effective P/T 4/4 (unchanged --
+        it's on the caster's side, filter direction is opponent).
+      * Both Bait Bears on p1's bf at effective P/T 1/1 (printed
+        4/4 + (-3, -3) UEOT modifier).
+      * No life changes (the ETB doesn't touch life totals).
+      * No residual stack.
+    """
+    from mtg_bot.parity.cross_engine import (
+        CardDef, DeckSpec, build_python_state, build_rust_state,
+    )
+
+    ogre = CardDef(
+        name="ETB Mass Debuff Ogre",
+        card_type="Creature",
+        mana_cost_generic=6,
+        mana_cost_colored=(("U", 1),),
+        power=6,
+        toughness=6,
+        triggered_abilities=(
+            {
+                "event": "enters",
+                "predicate": {"kind": "source_is_self"},
+                "effect": {
+                    "kind": "pump_creatures_opponents_control_until_eot",
+                    "power_bonus": -3,
+                    "toughness_bonus": -3,
+                },
+            },
+        ),
+    )
+    # Bait Bear: vanilla 4/4 with no triggered abilities. Two copies
+    # land on p1's bf (the debuff targets) and one copy lands on p0's
+    # bf (the same-side control: must NOT receive the debuff).
+    bait_bear = CardDef(
+        name="Mass Debuff Bait Bear (4/4)",
+        card_type="Creature",
+        mana_cost_generic=3,
+        mana_cost_colored=(("G", 1),),
+        power=4,
+        toughness=4,
+    )
+    spec = DeckSpec(
+        card_defs=(ogre, bait_bear),
+        # Empty libraries -- probe injects directly onto bf.
+        p0_library=(),
+        p1_library=(),
+    )
+    py_state = build_python_state(spec)
+    rust_state = build_rust_state(spec)
+
+    # ---- Rust side ----
+    ZONE_BATTLEFIELD = 2
+    rust_bait_dict = {
+        "name": "Mass Debuff Bait Bear (4/4)",
+        "card_types": ["Creature"],
+        "mana_cost": {"generic": 3, "G": 1},
+        "effects": [],
+        "power": 4,
+        "toughness": 4,
+    }
+    # Two p1-side bears (will get the -3/-3 debuff).
+    rust_p1_bear_a_id = rust_state.register_and_inject_object(
+        rust_bait_dict, 1, ZONE_BATTLEFIELD,
+    )
+    rust_p1_bear_b_id = rust_state.register_and_inject_object(
+        rust_bait_dict, 1, ZONE_BATTLEFIELD,
+    )
+    # One p0-side bear (must NOT get the debuff -- same controller as
+    # the Ogre).
+    rust_p0_bear_id = rust_state.register_and_inject_object(
+        rust_bait_dict, 0, ZONE_BATTLEFIELD,
+    )
+    # None of the bears have triggered abilities, so no stack growth.
+    assert rust_state.stack_size() == 0
+
+    # Capture pre-debuff effective P/T for each bear.
+    assert rust_state.effective_power(rust_p1_bear_a_id) == 4
+    assert rust_state.effective_toughness(rust_p1_bear_a_id) == 4
+    assert rust_state.effective_power(rust_p1_bear_b_id) == 4
+    assert rust_state.effective_toughness(rust_p1_bear_b_id) == 4
+    assert rust_state.effective_power(rust_p0_bear_id) == 4
+    assert rust_state.effective_toughness(rust_p0_bear_id) == 4
+
+    rust_ogre_dict = {
+        "name": "ETB Mass Debuff Ogre",
+        "card_types": ["Creature"],
+        "mana_cost": {"generic": 6, "U": 1},
+        "effects": [],
+        "power": 6,
+        "toughness": 6,
+        "triggered_abilities": [
+            {
+                "event": "enters",
+                "predicate": {"kind": "source_is_self"},
+                "effect": {
+                    "kind": "pump_creatures_opponents_control_until_eot",
+                    "power_bonus": -3,
+                    "toughness_bonus": -3,
+                },
+            }
+        ],
+    }
+    rust_ogre_id = rust_state.register_and_inject_object(
+        rust_ogre_dict, 0, ZONE_BATTLEFIELD,
+    )
+    # ENTERS dispatch via deferred-dispatch queue; SourceIsSelf
+    # matches the just-arrived Ogre -> one
+    # PumpCreaturesOpponentsControlUntilEOT(-3, -3) trigger lands on
+    # the stack with empty targets (untargeted mass-debuff).
+    assert rust_state.stack_size() == 1, (
+        "Rust: ETB Mass Debuff Ogre's arrival should fire the "
+        "SourceIsSelf ENTERS trigger and land "
+        "PumpCreaturesOpponentsControlUntilEOT(-3, -3) on the stack. "
+        f"Got stack_size={rust_state.stack_size()}"
+    )
+
+    # ---- Python side ----
+    from mtg_bot.actions import _trigger_etb_abilities
+    from mtg_bot.cards.base import CardPrinting, ManaCost
+    from mtg_bot.effects.base import TriggeredAbility
+    from mtg_bot.effects.generic.pump import (
+        PumpCreaturesOpponentsControlUntilEOT,
+    )
+    from mtg_bot.effects.predicates import Event, IsSelf
+    from mtg_bot.game import Zone, effective_power, effective_toughness
+
+    bait_printing = CardPrinting(
+        name="Mass Debuff Bait Bear (4/4)",
+        mana_cost_str="",
+        mana_cost=ManaCost(generic=3, colored=(("G", 1),)),
+        type_line="Creature",
+        supertypes=(),
+        card_types=("Creature",),
+        subtypes=(),
+        power=4,
+        toughness=4,
+        produces=frozenset(),
+        triggered_abilities=(),
+    )
+    ogre_printing = CardPrinting(
+        name="ETB Mass Debuff Ogre",
+        mana_cost_str="",
+        mana_cost=ManaCost(generic=6, colored=(("U", 1),)),
+        type_line="Creature",
+        supertypes=(),
+        card_types=("Creature",),
+        subtypes=(),
+        power=6,
+        toughness=6,
+        produces=frozenset(),
+        triggered_abilities=(
+            TriggeredAbility(
+                event=Event.ENTERS,
+                predicate=IsSelf(),
+                effect=PumpCreaturesOpponentsControlUntilEOT(
+                    power_bonus=-3, toughness_bonus=-3,
+                ),
+            ),
+        ),
+    )
+
+    def _inject_bf(printing, owner_id):
+        obj = py_state.new_object(
+            printing, owner_id=owner_id, zone=Zone.BATTLEFIELD,
+        )
+        obj.summoning_sick = False
+        obj.tapped = False
+        obj.damage = 0
+        obj.etb_timestamp = py_state.next_timestamp
+        py_state.next_timestamp += 1
+        py_state.battlefield.append(obj)
+        return obj
+
+    # Inject the bait bears in the same order as Rust.
+    py_p1_bear_a = _inject_bf(bait_printing, owner_id=1)
+    py_p1_bear_b = _inject_bf(bait_printing, owner_id=1)
+    py_p0_bear = _inject_bf(bait_printing, owner_id=0)
+    # Pre-debuff sanity check.
+    assert effective_power(py_state, py_p1_bear_a) == 4
+    assert effective_toughness(py_state, py_p1_bear_a) == 4
+    assert effective_power(py_state, py_p1_bear_b) == 4
+    assert effective_toughness(py_state, py_p1_bear_b) == 4
+    assert effective_power(py_state, py_p0_bear) == 4
+    assert effective_toughness(py_state, py_p0_bear) == 4
+
+    # Inject the Ogre, then manually dispatch ENTERS.
+    py_ogre = _inject_bf(ogre_printing, owner_id=0)
+    _trigger_etb_abilities(py_state, py_ogre)
+    assert len(py_state.stack) == 1, (
+        "Python: ETB Mass Debuff Ogre's arrival should fire the "
+        "IsSelf ENTERS trigger and land "
+        "PumpCreaturesOpponentsControlUntilEOT(-3, -3) on the stack. "
+        f"Got stack size={len(py_state.stack)}"
+    )
+
+    # ---- Drain both stacks, then compare ----
+    _drain_stack_both(py_state, rust_state)
+
+    # Stacks empty on both sides.
+    assert rust_state.stack_size() == 0
+    assert len(py_state.stack) == 0
+
+    # Per-engine post-state: each p1 bear's effective P/T is 1/1
+    # (printed 4/4 + (-3, -3) UEOT modifier). The p0 bear and the
+    # Ogre itself are unchanged (filter direction = opponent-only).
+    assert rust_state.effective_power(rust_p1_bear_a_id) == 1, (
+        "Rust p1 bear A effective power should be 1 after the -3 "
+        "debuff (printed 4 + (-3) UEOT); got "
+        f"{rust_state.effective_power(rust_p1_bear_a_id)}"
+    )
+    assert rust_state.effective_toughness(rust_p1_bear_a_id) == 1, (
+        "Rust p1 bear A effective toughness should be 1 after the "
+        "-3 debuff; got "
+        f"{rust_state.effective_toughness(rust_p1_bear_a_id)}"
+    )
+    assert rust_state.effective_power(rust_p1_bear_b_id) == 1
+    assert rust_state.effective_toughness(rust_p1_bear_b_id) == 1
+    # p0 bear unchanged (caster-side, opponent filter excludes it).
+    assert rust_state.effective_power(rust_p0_bear_id) == 4, (
+        "Rust p0 bear should be UNAFFECTED by the opponent-only "
+        "debuff (caster-side filter); got effective power "
+        f"{rust_state.effective_power(rust_p0_bear_id)}"
+    )
+    assert rust_state.effective_toughness(rust_p0_bear_id) == 4
+    # Ogre unchanged (also caster-side).
+    assert rust_state.effective_power(rust_ogre_id) == 6
+    assert rust_state.effective_toughness(rust_ogre_id) == 6
+
+    # Python: same shape on the equivalent objects.
+    assert effective_power(py_state, py_p1_bear_a) == 1, (
+        "Python p1 bear A effective power should be 1 after the -3 "
+        f"debuff; got {effective_power(py_state, py_p1_bear_a)}"
+    )
+    assert effective_toughness(py_state, py_p1_bear_a) == 1
+    assert effective_power(py_state, py_p1_bear_b) == 1
+    assert effective_toughness(py_state, py_p1_bear_b) == 1
+    # p0 bear unchanged on Python too.
+    assert effective_power(py_state, py_p0_bear) == 4, (
+        "Python p0 bear should be UNAFFECTED by the opponent-only "
+        f"debuff; got {effective_power(py_state, py_p0_bear)}"
+    )
+    assert effective_toughness(py_state, py_p0_bear) == 4
+    # Ogre unchanged.
+    assert effective_power(py_state, py_ogre) == 6
+    assert effective_toughness(py_state, py_ogre) == 6
+
+    # Cross-engine: every per-object effective P/T agrees.
+    assert (
+        rust_state.effective_power(rust_p1_bear_a_id)
+        == effective_power(py_state, py_p1_bear_a)
+    )
+    assert (
+        rust_state.effective_toughness(rust_p1_bear_a_id)
+        == effective_toughness(py_state, py_p1_bear_a)
+    )
+    assert (
+        rust_state.effective_power(rust_p1_bear_b_id)
+        == effective_power(py_state, py_p1_bear_b)
+    )
+    assert (
+        rust_state.effective_toughness(rust_p1_bear_b_id)
+        == effective_toughness(py_state, py_p1_bear_b)
+    )
+    assert (
+        rust_state.effective_power(rust_p0_bear_id)
+        == effective_power(py_state, py_p0_bear)
+    )
+    assert (
+        rust_state.effective_toughness(rust_p0_bear_id)
+        == effective_toughness(py_state, py_p0_bear)
+    )
+    assert (
+        rust_state.effective_power(rust_ogre_id)
+        == effective_power(py_state, py_ogre)
+    )
+    assert (
+        rust_state.effective_toughness(rust_ogre_id)
+        == effective_toughness(py_state, py_ogre)
+    )
+
+    # Lives unchanged -- the ETB debuff doesn't touch life totals.
+    assert rust_state.get_life(0) == 20
+    assert rust_state.get_life(1) == 20
+    assert py_state.players[0].life == 20
+    assert py_state.players[1].life == 20
+
+
 # === PHASE5_PROBES_INSERT_ABOVE_THIS_LINE ===
 # New real-EoE parity probes go IMMEDIATELY ABOVE this marker.
 # Append-only convention prevents merge collisions when multiple agents add probes in parallel.

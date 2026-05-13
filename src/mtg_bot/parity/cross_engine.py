@@ -878,6 +878,72 @@ def _ta_dict_to_python_effect(eff_dict: dict):
         do_action = _ta_dict_to_python_effect(eff_dict["do_action"])
         then_action = _ta_dict_to_python_effect(eff_dict["then_action"])
         return IfYouDo(do_action=do_action, then_action=then_action)
+    if kind == "pump_creatures_opponents_control_until_eot":
+        # Mass-debuff "creatures your opponents control get +X/+Y until
+        # end of turn" (CR 702.x layer-7c additive bonus, expires at
+        # cleanup; controller-of-effect is the SOURCE's controller, and
+        # the bonus lands on every creature the SOURCE's controller's
+        # OPPONENTS control). Rust's
+        # ``Effect::PumpCreaturesOpponentsControlUntilEOT { power_bonus,
+        # toughness_bonus }`` (cards.rs:982) is the opponent-side
+        # mirror of ``PumpCreaturesYouControlUntilEOT``; its resolve
+        # arm at ``state_ops_resolve.rs:4514-4577`` walks
+        # ``state.players[1 - controller].battlefield`` (two-player
+        # simplification) and pushes a ``UeotModifier::PowerToughness
+        # Bonus { power, toughness }`` onto every creature object's
+        # ``ueot_modifiers`` Vec. ``(0, 0)`` short-circuits before the
+        # walk; empty opponent bf or no creatures fizzles silently
+        # (``return Ok(())``).
+        #
+        # **Untargeted -- no agent shim required.** Unlike
+        # ``pump_target_creature_until_eot``, this arm does NOT pick a
+        # target; it hits every opponent creature en masse. Python's
+        # ``PumpCreaturesOpponentsControlUntilEOT`` (effects/generic/
+        # pump.py:779) carries the same shape: its ``resolve`` walks
+        # ``state.battlefield`` and stamps ``grant_pt_pump_ueot`` onto
+        # every creature whose ``controller_id != controller_id``
+        # (the source controller's id). No ``legal_targets`` method --
+        # the targeting pipeline never picks; the trigger lands on the
+        # stack with empty targets and resolves in one pass.
+        #
+        # **Negative bonuses model debuffs.** The bridge accepts
+        # negative ``power_bonus`` / ``toughness_bonus`` on both engines
+        # (Rust's parse_effect at cards.rs:3844-3862 imposes no sign
+        # constraint). The canonical EoE shape is ``-3/-0`` /  ``-2/-2``
+        # debuffs on opponent creatures.
+        #
+        # **EoE consumer gap (substrate-side).** Mouth of the Storm
+        # (EoE) has the ETB ``creatures your opponents control get
+        # -3/-0 UNTIL YOUR NEXT TURN``, NOT the bare ``until end of
+        # turn`` form. The "until your next turn" extended duration
+        # routes through Python's ``until_caster_next_turn=True`` flag
+        # which has no Rust counterpart (Rust's
+        # ``Effect::PumpCreaturesOpponentsControlUntilEOT`` variant has
+        # only ``power_bonus`` / ``toughness_bonus`` fields -- no
+        # extended-duration field). Rust does not currently ship any
+        # parametric extension of this variant for "until your next
+        # turn". Translating Mouth of the Storm to the bare arm would
+        # observably diverge at the start of the controller's NEXT turn
+        # (Python keeps the debuff; Rust has already cleared it at the
+        # casting turn's cleanup). The bare-EOT arm has no real-EoE
+        # consumer with matching shape today; the synthetic mass-debuff
+        # probe in test_parity_smoke.py exercises this substrate
+        # end-to-end with the bare ``until end of turn`` shape until
+        # the parametric extended-duration variant lands.
+        #
+        # Mirrors Rust's ``parse_effect`` arm (cards.rs:3844-3862)
+        # which tolerates missing ``power_bonus`` / ``toughness_bonus``
+        # (defaults to 0 in the bridge -- Rust's parse REQUIRES the
+        # keys present, so end-to-end Rust callers must supply both
+        # explicitly; the bridge default is a translator robustness
+        # backstop for direct-call unit tests).
+        from mtg_bot.effects.generic.pump import (
+            PumpCreaturesOpponentsControlUntilEOT,
+        )
+        return PumpCreaturesOpponentsControlUntilEOT(
+            power_bonus=eff_dict.get("power_bonus", 0),
+            toughness_bonus=eff_dict.get("toughness_bonus", 0),
+        )
     # === PHASE5_BRIDGE_ARMS_INSERT_ABOVE_THIS_LINE ===
     # New `kind` arms go IMMEDIATELY ABOVE this marker. Do NOT delete the marker.
     # Append-only convention prevents merge collisions when multiple agents add arms in parallel.
