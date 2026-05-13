@@ -22829,6 +22829,295 @@ def test_cross_engine_synthetic_etb_reanimator_bear_empty_graveyard_silent_skip_
     assert rust_state.hand_sizes[1] == len(py_state.players[1].hand)
 
 
+def test_cross_engine_synthetic_etb_create_token_same_controller_routes_to_source_controller_parity(
+    parity_smoke,
+):
+    """Probe: synthetic ETB ``create_token`` trigger fired by a
+    permanent CONTROLLED BY P0 while ACTIVE_PLAYER=P0 -- the
+    canonical "Honored Knight-Captain" / "Knight Luminary" /
+    "Wedgelight Rammer" same-controller shape ("When this creature
+    enters, create a 1/1 white Human Soldier creature token"). Both
+    engines must spawn the freshly-created token onto P0's
+    battlefield under P0's control. This is the SAME-CONTROLLER
+    sister of the I81 cross-controller probe (which exercises the
+    routing fix for opponent-controlled sources); together they pin
+    the post-I81 contract on both legs of the
+    ``current_resolve_source_controller`` fallback (active-player
+    direct path AND non-active-player resolve path).
+
+    **Real-EoE consumer alignment.** Multiple EoE printings carry
+    this exact ETB shape: ``Honored Knight-Captain``,
+    ``Knight Luminary`` (both 1/1 Soldier on creature ETB), and
+    ``Wedgelight Rammer`` (2/2 Robot on Spacecraft ETB). The
+    synthetic carrier here is a 2/2 Creature so the same dispatch
+    path the EoE printings drive is exercised. The Rust engine has
+    no Scryfall recognizer (`mtg_bot_engine.Registry` only exposes
+    `register_printing(dict)`, NOT `register_card_data(scryfall)`),
+    so the harness is necessarily synthetic-shape -- but the dict
+    body the carrier ships matches what a hypothetical Rust
+    recognizer for the EoE consumers would emit. When a real-EoE
+    consumer surfaces in a future Rust slice, this probe stays
+    correct: the bridge arm's contract is independent of which
+    card drove it, and the synthetic-vs-real-EoE difference is
+    observable only in the carrier's name + type-line, not in
+    the create_token effect or the post-resolve battlefield
+    shape.
+
+    **Bridge arm.** ``feature/phase5-ce-bridge-create-token``
+    landed the ``create_token`` arm + ``register_token_printing``
+    substrate on this branch's main. This probe drives the
+    end-to-end flow through the bridge: probe registers the
+    Python soldier-token printing against Rust's pid before
+    building the carrier's Python printing; the bridge then
+    materializes ``CreateToken(token_printing=py_soldier, count=1)``
+    from the same dict shape Rust consumes. No manual two-side
+    construction.
+
+    Probe shape (same-controller inject-and-fire-ENTERS):
+
+      1. **active_player=P0** (default). P0 is also the SOURCE's
+         controller, so ``current_resolve_source_controller``
+         resolves to ``Some(0)`` AND the back-compat fallback
+         (``active_player``) AGREES at 0. Same-controller probes
+         can't disambiguate the two paths -- the cross-controller
+         I81 probe is what proves the active-player fallback is
+         no longer the load-bearing route.
+
+      2. **Register Soldier token printing** on Rust (gets a pid
+         via ``rust_state.registry_size``); register the matching
+         Python ``CardPrinting`` against that pid via
+         ``register_token_printing(pid, py_soldier)``.
+
+      3. **Inject Token Maker Bear (the EoE-shape carrier) onto
+         P0's bf** with controller=0. ENTERS fires; the trigger
+         lands on the stack carrying controller=0.
+
+      4. **Drain both stacks.** The trigger resolves; the post-I81
+         CreateToken arm routes the spawn to P0's bf under P0's
+         control on Rust, and Python's
+         ``CreateToken.resolve(state, controller_id=0, ...)``
+         spawns under P0 the same way.
+
+      5. **Cross-engine assert (post-resolve parity):**
+         - P0's bf grew by exactly +2 (Token Maker Bear +
+           freshly-spawned Soldier Token).
+         - P1's bf is unchanged.
+         - The fresh token's ``controller_id`` is 0 on both
+           engines.
+
+    Out of scope:
+
+      * Cast-from-hand mana cost -- bypassed by inject-and-fire.
+      * count != 1 -- the bridge arm carries the count through;
+        the regression pins for count multiplication exist
+        on the Rust side. The same-controller surface is
+        independent of count.
+      * Tapped / attacking / each_player riders -- Python-only
+        flags with no Rust mirror today; the bridge constructs
+        the bare shape with all riders defaulted off.
+      * Cross-controller routing -- pinned by the I81 sister
+        probe (this branch's slice 2 refactor uses the same
+        bridge arm).
+
+    Expected post-dispatch + post-drain state on BOTH engines:
+
+      * Token Maker Bear on P0's battlefield (unchanged from
+        inject; controller=0).
+      * One Soldier Token on P0's battlefield (newly spawned;
+        controller=0).
+      * P1's battlefield: empty.
+      * No residual stack on either engine.
+      * Life totals unchanged on both seats.
+    """
+    from mtg_bot.parity.cross_engine import (
+        DeckSpec, build_python_state, build_rust_state,
+    )
+
+    spec = DeckSpec(
+        card_defs=(),
+        p0_library=(),
+        p1_library=(),
+    )
+    py_state = build_python_state(spec)
+    rust_state = build_rust_state(spec)
+
+    # Pre-condition: active_player=P0 on both engines.
+    assert rust_state.active_player == 0
+    assert py_state.active_player_idx == 0
+
+    # ---- Rust side: register Soldier token, then inject the
+    # Honored-Knight-Captain-shape carrier onto P0's bf. ----
+    ZONE_LIBRARY = 1
+    ZONE_BATTLEFIELD = 2
+    rust_soldier_token_dict = {
+        "name": "Soldier Token (real-EoE create_token probe)",
+        "card_types": ["Creature"],
+        "power": 1,
+        "toughness": 1,
+    }
+    rust_token_pid = rust_state.registry_size  # next free pid
+    rust_state.register_and_inject_object(
+        rust_soldier_token_dict, 1, ZONE_LIBRARY,
+    )
+
+    rust_carrier_trigger_dict = {
+        "event": "enters",
+        "predicate": {"kind": "source_is_self"},
+        "effect": {
+            "kind": "create_token",
+            "count": 1,
+            "token_printing_id": rust_token_pid,
+        },
+    }
+    rust_carrier_dict = {
+        "name": (
+            "Honored Knight-Captain (real-EoE create_token probe)"
+        ),
+        "card_types": ["Creature"],
+        "mana_cost": {"generic": 1, "W": 1},
+        "effects": [],
+        "power": 2,
+        "toughness": 2,
+        "triggered_abilities": [rust_carrier_trigger_dict],
+    }
+
+    rust_p0_life_before = rust_state.get_life(0)
+    rust_p1_life_before = rust_state.get_life(1)
+    rust_bf_p0_before = rust_state.battlefield_sizes[0]
+    rust_bf_p1_before = rust_state.battlefield_sizes[1]
+
+    # Inject onto P0's bf with controller=0. ENTERS fires; the
+    # trigger lands on the stack carrying controller=0 (same as
+    # active_player here).
+    rust_state.register_and_inject_object(
+        rust_carrier_dict, 0, ZONE_BATTLEFIELD,
+    )
+
+    # ---- Python side: register the Python token printing against
+    # Rust's pid via the bridge, build carrier printing using the
+    # bridge translator on the SAME trigger dict, then inject onto
+    # P0's bf and dispatch ENTERS. ----
+    from mtg_bot.actions import _trigger_etb_abilities
+    from mtg_bot.cards.base import (
+        CardPrinting, ManaCost, make_token_creature,
+    )
+    from mtg_bot.game import Zone
+    from mtg_bot.parity.cross_engine import (
+        _ta_dict_to_python_triggered_ability,
+        clear_token_printings, register_token_printing,
+    )
+
+    py_soldier_token = make_token_creature(
+        name="Soldier Token (real-EoE create_token probe)",
+        power=1,
+        toughness=1,
+        subtypes=("Soldier",),
+    )
+    clear_token_printings()
+    register_token_printing(rust_token_pid, py_soldier_token)
+    py_carrier_trigger = _ta_dict_to_python_triggered_ability(
+        rust_carrier_trigger_dict
+    )
+    py_carrier_printing = CardPrinting(
+        name=(
+            "Honored Knight-Captain (real-EoE create_token probe)"
+        ),
+        mana_cost_str="",
+        mana_cost=ManaCost(generic=1, colored=(("W", 1),)),
+        type_line="Creature",
+        supertypes=(),
+        card_types=("Creature",),
+        subtypes=(),
+        power=2,
+        toughness=2,
+        produces=frozenset(),
+        triggered_abilities=(py_carrier_trigger,),
+    )
+    py_p0_life_before = py_state.players[0].life
+    py_p1_life_before = py_state.players[1].life
+    py_bf_p0_before = len(
+        [o for o in py_state.battlefield if o.controller_id == 0]
+    )
+    py_bf_p1_before = len(
+        [o for o in py_state.battlefield if o.controller_id == 1]
+    )
+
+    py_carrier = py_state.new_object(
+        py_carrier_printing, owner_id=0, zone=Zone.BATTLEFIELD,
+    )
+    py_carrier.summoning_sick = False
+    py_carrier.tapped = False
+    py_carrier.damage = 0
+    py_carrier.etb_timestamp = py_state.next_timestamp
+    py_state.next_timestamp += 1
+    py_state.battlefield.append(py_carrier)
+    _trigger_etb_abilities(py_state, py_carrier)
+
+    # Drain both stacks.
+    _drain_stack_both(py_state, rust_state)
+
+    # Stacks empty.
+    assert rust_state.stack_size() == 0
+    assert len(py_state.stack) == 0
+
+    # Rust observable: P0's bf grew by carrier + 1 token = +2;
+    # P1's bf unchanged.
+    rust_bf_p0_after = rust_state.battlefield_sizes[0]
+    rust_bf_p1_after = rust_state.battlefield_sizes[1]
+    assert rust_bf_p0_after == rust_bf_p0_before + 2, (
+        f"Rust same-controller create_token: P0's bf should gain "
+        f"carrier + 1 Soldier Token = +2 from baseline. Got "
+        f"bf_p0_before={rust_bf_p0_before}, "
+        f"bf_p0_after={rust_bf_p0_after}"
+    )
+    assert rust_bf_p1_after == rust_bf_p1_before, (
+        f"Rust: P1's bf should be unchanged. Got "
+        f"bf_p1_before={rust_bf_p1_before}, "
+        f"bf_p1_after={rust_bf_p1_after}"
+    )
+    rust_bf_snap = rust_state.battlefield_snapshot()
+    rust_soldier_tokens = [
+        d for d in rust_bf_snap
+        if d["printing_name"]
+        == "Soldier Token (real-EoE create_token probe)"
+    ]
+    assert len(rust_soldier_tokens) == 1
+    assert rust_soldier_tokens[0]["controller_id"] == 0
+
+    # Python observable: same shape.
+    py_bf_p0_after = len(
+        [o for o in py_state.battlefield if o.controller_id == 0]
+    )
+    py_bf_p1_after = len(
+        [o for o in py_state.battlefield if o.controller_id == 1]
+    )
+    assert py_bf_p0_after == py_bf_p0_before + 2, (
+        f"Python: P0's bf should gain carrier + 1 Soldier "
+        f"Token = +2. Got bf_p0_before={py_bf_p0_before}, "
+        f"bf_p0_after={py_bf_p0_after}"
+    )
+    assert py_bf_p1_after == py_bf_p1_before
+    py_soldier_tokens = [
+        o for o in py_state.battlefield
+        if o.printing.name
+        == "Soldier Token (real-EoE create_token probe)"
+    ]
+    assert len(py_soldier_tokens) == 1
+    assert py_soldier_tokens[0].controller_id == 0
+
+    # Cross-engine: lives unchanged on both sides.
+    assert rust_state.get_life(0) == rust_p0_life_before
+    assert rust_state.get_life(1) == rust_p1_life_before
+    assert py_state.players[0].life == py_p0_life_before
+    assert py_state.players[1].life == py_p1_life_before
+    assert rust_state.get_life(0) == py_state.players[0].life
+    assert rust_state.get_life(1) == py_state.players[1].life
+
+    # Cross-engine bf-size parity.
+    assert rust_bf_p0_after == py_bf_p0_after
+    assert rust_bf_p1_after == py_bf_p1_after
+
+
 # === PHASE5_PROBES_INSERT_ABOVE_THIS_LINE ===
 # New real-EoE parity probes go IMMEDIATELY ABOVE this marker.
 # Append-only convention prevents merge collisions when multiple agents add probes in parallel.
