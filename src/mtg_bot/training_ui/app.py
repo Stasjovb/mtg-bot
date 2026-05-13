@@ -68,7 +68,8 @@ from mtg_bot.training.stop_signal import (
     sentinel_path, stop_requested, write_stop,
 )
 from mtg_bot.training_ui.launcher import (
-    build_iterate_schema, spawn_iterate,
+    build_iterate_schema, find_spawn_for_run, kill_process_tree,
+    spawn_iterate,
 )
 
 
@@ -402,6 +403,56 @@ def _read_json_cycle_id(progress_dir: Path, run_id: str) -> Optional[str]:
 # ---- Flask app factory ----------------------------------------------------
 
 
+def _force_kill_matched_spawn(
+    progress_dir: Path,
+    target_run_id: str,
+    conn: sqlite3.Connection,
+) -> dict[str, Any]:
+    """Look up the spawn record that plausibly belongs to
+    ``target_run_id`` via timestamp proximity (see
+    :func:`mtg_bot.training_ui.launcher.find_spawn_for_run`) and
+    OS-kill the process tree. Returns a dict of fields to merge into
+    the force_kill response so the frontend can surface what happened:
+
+    - ``os_kill_attempted`` (bool)
+    - ``os_kill_ok`` (bool)
+    - ``os_killed_pid`` (int or None)
+    - ``os_kill_errors`` (list[str])
+    - ``matched_launch_id`` (str or None) — for log/audit trail
+
+    Any failure (no matching spawn, kill error) is reported as
+    data, NOT raised — the DB-write side of force_kill is the
+    authoritative status; OS-kill is best-effort cleanup.
+    """
+    target_row = conn.execute(
+        "SELECT started_at FROM runs WHERE run_id = ?",
+        (target_run_id,),
+    ).fetchone()
+    target_started = (
+        target_row["started_at"] if target_row is not None else None
+    )
+    match = find_spawn_for_run(
+        progress_dir, run_id=target_run_id,
+        run_started_at=target_started,
+    )
+    if match is None:
+        return {
+            "os_kill_attempted": False,
+            "os_kill_ok": False,
+            "os_killed_pid": None,
+            "os_kill_errors": [],
+            "matched_launch_id": None,
+        }
+    outcome = kill_process_tree(match["pid"])
+    return {
+        "os_kill_attempted": True,
+        "os_kill_ok": outcome["ok"],
+        "os_killed_pid": match["pid"],
+        "os_kill_errors": outcome["errors"],
+        "matched_launch_id": match.get("launch_id"),
+    }
+
+
 def create_app(
     progress_dir: Path,
     *,
@@ -648,9 +699,15 @@ def create_app(
                 target_row["status"] if target_row is not None else None
             )
             if previous_status != "running":
-                # Idempotent no-op for terminal rows. Return the same
-                # response shape as the success path so the front-end
-                # doesn't need branchy parsing.
+                # Idempotent no-op for the DB-row update — but a
+                # process spawned via the UI launch endpoint may
+                # still be alive (e.g. the user clicked Force Kill
+                # because the cycle row went terminal but the
+                # subprocess didn't drain). Try the OS-kill anyway
+                # and report what happened.
+                kill_outcome = _force_kill_matched_spawn(
+                    progress_dir, target_id, conn,
+                )
                 return jsonify({
                     "ok": True,
                     "run_id": run_id,
@@ -659,6 +716,7 @@ def create_app(
                     "forced": False,
                     "previous_status": previous_status,
                     "sentinel_path": None,
+                    **kill_outcome,
                 })
 
             # 1) Direct DB write — UPDATE status='killed', ended_at=NOW().
@@ -724,10 +782,19 @@ def create_app(
                             ended,
                         ),
                     )
+            # 3) OS-kill any subprocess spawned by the UI launch
+            #    endpoint that matches this run by spawned_at /
+            #    started_at proximity. Must happen INSIDE the
+            #    ``with runs_db.transaction(conn)`` block's outer
+            #    ``try`` so we still get the launched.json read
+            #    even after the DB write commits.
+            kill_outcome = _force_kill_matched_spawn(
+                progress_dir, target_id, conn,
+            )
         finally:
             conn.close()
 
-        # 3) Sentinel write — straggler insurance. A worker that's
+        # 4) Sentinel write — straggler insurance. A worker that's
         #    still alive AND polling will exit cleanly when it sees
         #    this. For true zombies (master dead), the sentinel is
         #    harmless on-disk noise that cleanup_orphans() reaps on
@@ -742,6 +809,7 @@ def create_app(
             "forced": True,
             "previous_status": previous_status,
             "sentinel_path": str(path),
+            **kill_outcome,
         })
 
     @app.route("/api/runs/<run_id>/stop", methods=["GET"])

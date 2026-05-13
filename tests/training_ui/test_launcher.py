@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import subprocess
 import sys
 import time
 from pathlib import Path
@@ -25,8 +26,9 @@ from flask import Flask
 
 from mtg_bot.training_ui.app import create_app
 from mtg_bot.training_ui.launcher import (
-    ITERATE_SCHEMA, build_iterate_command, build_iterate_schema,
-    spawn_iterate,
+    ITERATE_SCHEMA, _read_launched_records, build_iterate_command,
+    build_iterate_schema, find_spawn_for_run, kill_process_tree,
+    record_spawn, spawn_iterate,
 )
 
 
@@ -655,6 +657,213 @@ def test_build_command_rejects_unknown_version_with_choices(
 # Flask integration.
 # ---------------------------------------------------------------------
 
+# ---------------------------------------------------------------------
+# Spawn-PID persistence + matching + OS-kill.
+# ---------------------------------------------------------------------
+
+def test_record_spawn_appends_to_launched_json(tmp_path: Path) -> None:
+    """record_spawn writes the spawn metadata to launched.json with
+    a launch_id derived from the console-log filename."""
+    progress = tmp_path / "training_progress"
+    progress.mkdir()
+    meta = {
+        "ok": True, "pid": 12345,
+        "spawned_at": "2026-05-13T22:46:38+00:00",
+        "console_log_path": str(
+            progress / "launched_20260513T224638Z_iterate.console.log"
+        ),
+        "command": ["python", "-m", "mtg_bot.cli", "iterate"],
+        "pretty_command": "python -m mtg_bot.cli iterate",
+    }
+    entry = record_spawn(progress, meta)
+    assert entry["launch_id"] == "launched_20260513T224638Z"
+    assert entry["pid"] == 12345
+    records = _read_launched_records(progress)
+    assert len(records) == 1
+    assert records[0]["pid"] == 12345
+
+
+def test_launched_json_appends_across_spawns(tmp_path: Path) -> None:
+    """Multiple spawns add to launched.json without clobbering."""
+    progress = tmp_path / "training_progress"
+    progress.mkdir()
+    for i in range(3):
+        record_spawn(progress, {
+            "pid": 1000 + i,
+            "spawned_at": f"2026-05-13T22:46:{38 + i:02d}+00:00",
+            "console_log_path": str(
+                progress / f"launched_2026_{i}_iterate.console.log"
+            ),
+            "command": ["python"], "pretty_command": "python",
+        })
+    records = _read_launched_records(progress)
+    assert [r["pid"] for r in records] == [1000, 1001, 1002]
+
+
+def test_launched_json_tail_trim(tmp_path: Path) -> None:
+    """launched.json is bounded to keep a long-running UI from
+    growing the file unboundedly."""
+    from mtg_bot.training_ui.launcher import (
+        _LAUNCHED_RECORD_CAP, _write_launched_records,
+    )
+    progress = tmp_path / "training_progress"
+    progress.mkdir()
+    # Pre-seed with cap+50 fake records, then ask record_spawn to
+    # add one more — the file should still have at most cap entries.
+    bulk = [
+        {"pid": i, "spawned_at": f"2026-05-13T22:46:{i:02d}+00:00"}
+        for i in range(_LAUNCHED_RECORD_CAP + 50)
+    ]
+    _write_launched_records(progress, bulk)
+    record_spawn(progress, {
+        "pid": 99999, "spawned_at": "2026-05-13T22:50:00+00:00",
+        "console_log_path": str(
+            progress / "launched_2026X_iterate.console.log"
+        ),
+        "command": [], "pretty_command": "",
+    })
+    records = _read_launched_records(progress)
+    assert len(records) <= _LAUNCHED_RECORD_CAP
+    # Latest write must be retained (the tail).
+    assert records[-1]["pid"] == 99999
+
+
+def test_find_spawn_for_run_matches_by_proximity(tmp_path: Path) -> None:
+    """A run that started just after a spawn matches that spawn —
+    the most likely linkage."""
+    progress = tmp_path / "training_progress"
+    progress.mkdir()
+    record_spawn(progress, {
+        "pid": 1234,
+        "spawned_at": "2026-05-13T22:46:38+00:00",
+        "console_log_path": str(
+            progress / "launched_AAA_iterate.console.log"
+        ),
+        "command": [], "pretty_command": "",
+    })
+    # Run registers ~7s later.
+    match = find_spawn_for_run(
+        progress,
+        run_id="iter_003_cycle_abc",
+        run_started_at="2026-05-13T22:46:45+00:00",
+    )
+    assert match is not None
+    assert match["pid"] == 1234
+
+
+def test_find_spawn_outside_window_returns_none(tmp_path: Path) -> None:
+    """Spawn happened 10 minutes before run → no match (window is
+    5 minutes)."""
+    progress = tmp_path / "training_progress"
+    progress.mkdir()
+    record_spawn(progress, {
+        "pid": 9999,
+        "spawned_at": "2026-05-13T22:00:00+00:00",
+        "console_log_path": str(
+            progress / "launched_OLD_iterate.console.log"
+        ),
+        "command": [], "pretty_command": "",
+    })
+    match = find_spawn_for_run(
+        progress, run_id="iter_xyz",
+        run_started_at="2026-05-13T22:30:00+00:00",
+    )
+    assert match is None
+
+
+def test_find_spawn_prefers_before(tmp_path: Path) -> None:
+    """When two spawns are equidistant — one before, one after —
+    prefer the BEFORE spawn (the natural ordering)."""
+    progress = tmp_path / "training_progress"
+    progress.mkdir()
+    # Spawn A: 10s before run started
+    record_spawn(progress, {
+        "pid": 111,
+        "spawned_at": "2026-05-13T22:46:30+00:00",
+        "console_log_path": str(
+            progress / "launched_BEFORE_iterate.console.log"
+        ),
+        "command": [], "pretty_command": "",
+    })
+    # Spawn B: 10s after run started (someone else launched another
+    # iterate just after)
+    record_spawn(progress, {
+        "pid": 222,
+        "spawned_at": "2026-05-13T22:46:50+00:00",
+        "console_log_path": str(
+            progress / "launched_AFTER_iterate.console.log"
+        ),
+        "command": [], "pretty_command": "",
+    })
+    match = find_spawn_for_run(
+        progress, run_id="iter_x",
+        run_started_at="2026-05-13T22:46:40+00:00",
+    )
+    assert match is not None
+    assert match["pid"] == 111
+
+
+def test_kill_process_tree_real_subprocess(tmp_path: Path) -> None:
+    """End-to-end: spawn a python sleep loop, kill it via
+    kill_process_tree, assert it's gone. Uses the same detach
+    semantics as spawn_iterate so the kill targets the right
+    process group on POSIX."""
+    proc = subprocess.Popen(
+        [sys.executable, "-c", "import time; time.sleep(60)"],
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        creationflags=(
+            subprocess.CREATE_NEW_PROCESS_GROUP
+            if sys.platform == "win32" else 0
+        ),
+        start_new_session=(sys.platform != "win32"),
+    )
+    assert proc.poll() is None, "subprocess died immediately"
+    outcome = kill_process_tree(proc.pid)
+    assert outcome["ok"] is True, outcome
+    # Give the OS a moment to reap.
+    proc.wait(timeout=10)
+    assert proc.poll() is not None
+
+
+def test_kill_process_tree_already_dead_is_soft_ok() -> None:
+    """Killing a PID that's already dead returns ok=True (the goal
+    is 'process is gone', not 'we signalled successfully')."""
+    proc = subprocess.Popen(
+        [sys.executable, "-c", "pass"],
+        stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+    proc.wait(timeout=10)
+    outcome = kill_process_tree(proc.pid)
+    assert outcome["ok"] is True
+
+
+def test_spawn_iterate_records_launched_json(tmp_path: Path) -> None:
+    """End-to-end: spawn_iterate writes a launched.json entry that
+    later find_spawn_for_run can read. Uses the same
+    non-existent-bootstrap fast-fail config the existing
+    test_spawn_iterate_runs_subprocess uses."""
+    progress = tmp_path / "training_progress"
+    progress.mkdir()
+    result = spawn_iterate(
+        {
+            "bootstrap-version": "v_test_only",
+            "deck-pool": str(tmp_path / "no_such.json"),
+            "n-iterations": "0",
+        },
+        progress,
+    )
+    assert result["ok"] is True
+    records = _read_launched_records(progress)
+    assert any(r["pid"] == result["pid"] for r in records)
+
+
+# ---------------------------------------------------------------------
+# Flask integration.
+# ---------------------------------------------------------------------
+
 def test_schema_endpoint_returns_iterate_schema(app: Flask) -> None:
     client = app.test_client()
     r = client.get("/api/launch/iterate/schema")
@@ -758,6 +967,80 @@ def test_launch_endpoint_spawns_on_valid_request(
     cmd = body["pretty_command"]
     assert "iterate" in cmd
     assert "--bootstrap-version v_nonexistent_test_only" in cmd
+
+
+def test_force_kill_endpoint_os_kills_matched_spawn(
+    tmp_path: Path,
+) -> None:
+    """End-to-end: launched.json carries a PID for a live subprocess;
+    runs.db has a 'running' cycle whose started_at is within the
+    match window; force_kill POST flips the DB row to killed AND
+    OS-kills the process tree."""
+    progress = tmp_path / "training_progress"
+    progress.mkdir()
+    app = create_app(progress)
+
+    # Start a real long-sleep subprocess so we have something to
+    # kill. Use the same detach pattern spawn_iterate uses so the
+    # POSIX killpg path targets the right process group.
+    proc = subprocess.Popen(
+        [sys.executable, "-c", "import time; time.sleep(120)"],
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        creationflags=(
+            subprocess.CREATE_NEW_PROCESS_GROUP
+            if sys.platform == "win32" else 0
+        ),
+        start_new_session=(sys.platform != "win32"),
+    )
+    try:
+        # Hand-craft a launched.json record pointing at our live
+        # subprocess.
+        record_spawn(progress, {
+            "pid": proc.pid,
+            "spawned_at": "2026-05-13T22:00:00+00:00",
+            "console_log_path": str(
+                progress / "launched_TEST_iterate.console.log",
+            ),
+            "command": [sys.executable, "-c", "sleep"],
+            "pretty_command": "fake",
+        })
+        # And a runs.db row whose started_at is within the match
+        # window. The endpoint uses ``runs_db.connect`` so we go
+        # through the same module to seed.
+        from mtg_bot.cli.runs import db as runs_db
+        db_path = progress / "runs.db"
+        conn = runs_db.connect(db_path)
+        try:
+            with runs_db.transaction(conn):
+                conn.execute(
+                    "INSERT INTO runs(run_id, kind, status, "
+                    "started_at, git_commit, config_json) VALUES "
+                    "('test_cycle', 'iterate', 'running', "
+                    "'2026-05-13T22:00:10+00:00', 'deadbeef', '{}')"
+                )
+        finally:
+            conn.close()
+
+        r = app.test_client().post(
+            "/api/runs/test_cycle/force_kill",
+            json={"reason": "test"},
+        )
+        assert r.status_code == 200, r.get_data(as_text=True)
+        body = r.get_json()
+        assert body["ok"] is True
+        assert body["forced"] is True
+        assert body["os_kill_attempted"] is True
+        assert body["os_kill_ok"] is True
+        assert body["os_killed_pid"] == proc.pid
+        # And the live process should actually be dead now.
+        proc.wait(timeout=10)
+        assert proc.poll() is not None
+    finally:
+        if proc.poll() is None:
+            proc.kill()
+            proc.wait(timeout=5)
 
 
 def test_schema_endpoint_includes_dropdown_choices(

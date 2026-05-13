@@ -27,10 +27,12 @@ from __future__ import annotations
 
 import copy
 import json
+import os
 import shlex
+import signal
 import subprocess
 import sys
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Optional
 
@@ -994,7 +996,7 @@ def spawn_iterate(
     # The parent doesn't need the log handle once Popen has it.
     log_file.close()
 
-    return {
+    result = {
         "ok": True,
         "pid": proc.pid,
         "command": argv,
@@ -1002,11 +1004,233 @@ def spawn_iterate(
         "console_log_path": str(log_path),
         "spawned_at": datetime.now(timezone.utc).isoformat(),
     }
+    # Persist to launched.json so force_kill can OS-kill this PID
+    # later. Defensive: a failure here doesn't sink the spawn
+    # response — the kill capability degrades but the spawn already
+    # succeeded.
+    try:
+        record_spawn(progress_dir, result)
+    except OSError:
+        pass
+    return result
+
+
+# ---------------------------------------------------------------------
+# Spawn-PID persistence + OS-kill helpers.
+#
+# spawn_iterate appends a record to ``<progress_dir>/launched.json`` so
+# force_kill can OS-kill the process tree later. The link between a
+# spawned process and the cycle ``run_id`` it later registers in
+# runs.db is recovered by timestamp proximity — iterate generates its
+# own run_id, so we can't pass it in via env without modifying
+# iterate.py (out of scope here). The match window is generous (5min)
+# but tie-broken by closest-before-or-equal spawn.
+# ---------------------------------------------------------------------
+
+_LAUNCHED_JSON_NAME = "launched.json"
+# Spawn records are appended; keep the file's tail bounded so a long-
+# running UI doesn't grow the file unboundedly. 200 is well past any
+# realistic in-flight count.
+_LAUNCHED_RECORD_CAP = 200
+# Max gap between a spawn's ``spawned_at`` and a cycle's
+# ``started_at`` for them to be considered the same launch. iterate's
+# startup wall time (orphan sweep, imports) is typically 5-20s; a
+# 5min ceiling absorbs slow Windows imports / antivirus + leaves
+# room for legitimately-different concurrent spawns to not collide.
+_LAUNCH_MATCH_WINDOW = timedelta(minutes=5)
+
+
+def _read_launched_records(progress_dir: Path) -> list[dict[str, Any]]:
+    """Return the contents of launched.json, or [] if missing /
+    malformed. Defensive — every consumer falls back to [] rather
+    than raising."""
+    path = Path(progress_dir) / _LAUNCHED_JSON_NAME
+    if not path.is_file():
+        return []
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return []
+    if not isinstance(data, list):
+        return []
+    return [r for r in data if isinstance(r, dict)]
+
+
+def _write_launched_records(
+    progress_dir: Path, records: list[dict[str, Any]],
+) -> None:
+    """Persist ``records`` to launched.json with tail-trim. Atomic via
+    tempfile + os.replace so a crash mid-write doesn't leave the file
+    half-written."""
+    path = Path(progress_dir) / _LAUNCHED_JSON_NAME
+    path.parent.mkdir(parents=True, exist_ok=True)
+    trimmed = records[-_LAUNCHED_RECORD_CAP:]
+    tmp = path.with_suffix(".json.tmp")
+    tmp.write_text(
+        json.dumps(trimmed, indent=2), encoding="utf-8",
+    )
+    os.replace(tmp, path)
+
+
+def record_spawn(
+    progress_dir: Path, meta: dict[str, Any],
+) -> dict[str, Any]:
+    """Append ``meta`` (the spawn_iterate result dict) to
+    launched.json so force_kill can find this PID later.
+
+    Adds ``launch_id`` (the timestamp portion of the console log
+    name) so callers can match later. Returns the recorded entry.
+    """
+    log_path = Path(meta["console_log_path"])
+    # ``launched_<stamp>_iterate.console.log`` → ``launched_<stamp>``
+    launch_id = log_path.stem.replace("_iterate.console", "")
+    entry = {
+        "launch_id": launch_id,
+        "pid": meta["pid"],
+        "spawned_at": meta["spawned_at"],
+        "console_log_path": meta["console_log_path"],
+        "command": meta["command"],
+        "pretty_command": meta.get("pretty_command", ""),
+    }
+    records = _read_launched_records(progress_dir)
+    records.append(entry)
+    _write_launched_records(progress_dir, records)
+    return entry
+
+
+def _parse_iso(s: Optional[str]) -> Optional[datetime]:
+    """Best-effort ISO-8601 parse. Returns None on failure (caller
+    falls back to skipping the match candidate)."""
+    if not s:
+        return None
+    try:
+        # Python 3.11+ accepts ``Z`` suffix in fromisoformat; for
+        # older saved timestamps without a tz we fall through.
+        return datetime.fromisoformat(s.replace("Z", "+00:00"))
+    except (TypeError, ValueError):
+        return None
+
+
+def find_spawn_for_run(
+    progress_dir: Path,
+    *,
+    run_id: str,
+    run_started_at: Optional[str],
+) -> Optional[dict[str, Any]]:
+    """Return the launched.json record that most plausibly belongs to
+    ``run_id``, or ``None`` if no spawn within the match window.
+
+    Matching strategy:
+
+    1. Filter spawns whose ``|spawned_at - run_started_at|`` is within
+       ``_LAUNCH_MATCH_WINDOW``. iterate's startup wall sits well
+       under 5min; spawns farther out are unrelated.
+    2. Prefer spawns BEFORE the run started (the natural ordering —
+       spawn comes first, the iterate registers a cycle row a few
+       seconds later). Among those, pick the closest.
+    3. If no before-match exists (clock skew, unusual ordering), fall
+       back to the closest within the window regardless of direction.
+    """
+    run_at = _parse_iso(run_started_at)
+    if run_at is None:
+        return None
+    records = _read_launched_records(progress_dir)
+    candidates: list[tuple[timedelta, bool, dict[str, Any]]] = []
+    for r in records:
+        spawned = _parse_iso(r.get("spawned_at"))
+        if spawned is None:
+            continue
+        delta = run_at - spawned
+        if abs(delta) > _LAUNCH_MATCH_WINDOW:
+            continue
+        # is_before = spawn happened at or before the run started.
+        candidates.append(
+            (abs(delta), delta >= timedelta(0), r),
+        )
+    if not candidates:
+        return None
+    # Sort: prefer is_before=True, then smallest |delta|.
+    candidates.sort(key=lambda t: (not t[1], t[0]))
+    return candidates[0][2]
+
+
+def kill_process_tree(pid: int) -> dict[str, Any]:
+    """OS-kill ``pid`` and all descendants. Returns a dict
+    ``{ok, killed_pids, errors}`` describing the outcome.
+
+    Cross-platform implementation:
+
+    - Windows: ``taskkill /T /F /PID <pid>`` (synchronous, force,
+      walks the tree). The killed PIDs are not enumerated by
+      taskkill's output in any structured form, so we just report
+      ``[pid]`` and let the caller poll if it wants the full count.
+    - POSIX: ``os.killpg(os.getpgid(pid), SIGKILL)`` — spawn_iterate
+      sets ``start_new_session=True`` so the spawned process has its
+      own process group, and SIGKILL'ing the group reaps all
+      descendants atomically.
+
+    Already-dead PIDs are treated as success (no error) — the goal
+    is "ensure this process is no longer running", not "report that
+    we sent the signal".
+    """
+    if sys.platform == "win32":
+        try:
+            result = subprocess.run(  # noqa: S603 - pid is int-typed
+                ["taskkill", "/T", "/F", "/PID", str(int(pid))],
+                capture_output=True, text=True, timeout=10,
+                check=False,
+            )
+        except subprocess.TimeoutExpired:
+            return {
+                "ok": False,
+                "killed_pids": [],
+                "errors": [f"taskkill timeout for pid {pid}"],
+            }
+        # Exit code 128 means "process not found" — that's a soft
+        # success for our purposes.
+        if result.returncode == 0:
+            return {"ok": True, "killed_pids": [pid], "errors": []}
+        if result.returncode == 128:
+            return {
+                "ok": True, "killed_pids": [],
+                "errors": [f"pid {pid} not found (already dead)"],
+            }
+        return {
+            "ok": False,
+            "killed_pids": [],
+            "errors": [
+                f"taskkill exit {result.returncode}: "
+                f"{(result.stderr or result.stdout or '').strip()}"
+            ],
+        }
+    # POSIX: kill the process group.
+    try:
+        pgid = os.getpgid(int(pid))
+    except ProcessLookupError:
+        return {
+            "ok": True, "killed_pids": [],
+            "errors": [f"pid {pid} not found (already dead)"],
+        }
+    except OSError as e:
+        return {"ok": False, "killed_pids": [], "errors": [str(e)]}
+    try:
+        os.killpg(pgid, signal.SIGKILL)
+    except ProcessLookupError:
+        return {
+            "ok": True, "killed_pids": [],
+            "errors": [f"pgid {pgid} not found (already dead)"],
+        }
+    except OSError as e:
+        return {"ok": False, "killed_pids": [], "errors": [str(e)]}
+    return {"ok": True, "killed_pids": [pid], "errors": []}
 
 
 __all__ = [
     "ITERATE_SCHEMA",
     "build_iterate_command",
     "build_iterate_schema",
+    "find_spawn_for_run",
+    "kill_process_tree",
+    "record_spawn",
     "spawn_iterate",
 ]

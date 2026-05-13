@@ -721,25 +721,45 @@ forceKillModalConfirm.addEventListener('click', async () => {
         body: JSON.stringify({ reason: 'ui-force-kill' }) },
     );
     const j = await r.json().catch(() => ({}));
-    if (j && j.ok && j.forced === false) {
-      // Already-terminal rows return forced=false with the existing
-      // status. Without this surfacing the click looks like nothing
-      // happened — the DB row was already in a terminal state so
-      // there's no UI update on the next /api/runs poll.
-      const prev = j.previous_status || 'unknown';
-      alert(
-        'Force kill no-op: this run is already in terminal '
-        + 'status (' + prev + '). Nothing to kill server-side.\n\n'
-        + 'If a process is still running on disk, you may need to '
-        + 'taskkill /T /F /PID <pid> manually — the UI does not yet '
-        + 'OS-kill subprocesses for runs whose DB row is already '
-        + 'terminal.'
-      );
+    // Summarize what actually happened — both the DB-write side
+    // (forced=true means the row flipped to ``killed``) and the
+    // OS-kill side (os_kill_attempted + os_kill_ok + os_killed_pid)
+    // are independent. The user wants to see both: did the row
+    // change in the UI, and did the actual process die.
+    if (j && j.ok) {
+      const lines = [];
+      if (j.forced === false) {
+        const prev = j.previous_status || 'unknown';
+        lines.push('Row is already in terminal status (' + prev + ').');
+      } else {
+        lines.push('Row flipped to status=killed.');
+      }
+      if (j.os_kill_attempted) {
+        if (j.os_kill_ok) {
+          lines.push('OS-killed PID ' + j.os_killed_pid
+            + ' (launched via UI as ' + (j.matched_launch_id || '?')
+            + ').');
+        } else {
+          lines.push('Tried to OS-kill PID ' + j.os_killed_pid
+            + ' but: ' + (j.os_kill_errors || []).join('; '));
+        }
+      } else if (j.forced === false) {
+        // No spawn match AND row already terminal → genuine no-op.
+        lines.push(
+          'No UI-launched process found for this run. If a process '
+          + 'is still running, you may need taskkill /T /F /PID '
+          + '<pid> manually.'
+        );
+      }
+      // Only show alert when something noteworthy needs surfacing.
+      // A clean kill (forced=true + os_kill_ok) is the happy path
+      // and shouldn't pop a modal.
+      const cleanKill = (j.forced === true && j.os_kill_attempted
+        && j.os_kill_ok);
+      if (!cleanKill) {
+        alert(lines.join('\n'));
+      }
     }
-    // The DB row flips to terminal synchronously (server-side write
-    // happens before the response returns), so the next /api/runs
-    // poll picks up the new status. Unlike /stop, no producer-drain
-    // wait.
   } catch (e) {
     // Best-effort. UI will resync on next poll.
   }
