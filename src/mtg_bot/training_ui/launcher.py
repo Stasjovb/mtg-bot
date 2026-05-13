@@ -983,9 +983,22 @@ def spawn_iterate(
     else:
         start_new_session = True
 
+    # Set MTG_BOT_RUN_DB_PATH so iterate's runs_client.start_run /
+    # push_progress / finish_run calls actually write to runs.db.
+    # Without this, the producer's lifecycle calls are silent
+    # no-ops, no cycle row ever appears in the DB, and the UI's
+    # force_kill (keyed on run_id) can't match the spawn. The path
+    # mirrors the convention CLAUDE.md documents:
+    # ``training_progress/runs.db``.
+    env = os.environ.copy()
+    env.setdefault(
+        "MTG_BOT_RUN_DB_PATH",
+        str(progress_dir / "runs.db"),
+    )
     proc = subprocess.Popen(  # noqa: S603 - inputs are schema-typed
         argv,
         cwd=str(repo_root),
+        env=env,
         stdin=subprocess.DEVNULL,
         stdout=log_file,
         stderr=subprocess.STDOUT,
