@@ -808,6 +808,76 @@ def _ta_dict_to_python_effect(eff_dict: dict):
             ReturnCreatureFromYourGraveyardToHand,
         )
         return ReturnCreatureFromYourGraveyardToHand(or_spacecraft=True)
+    if kind == "sequence":
+        # **Phase 5 composer bridge arm (sequence).**
+        # Mirrors Rust's ``Effect::Sequence { effects: Vec<Effect> }``
+        # (cards.rs); the parse_effect arm at cards.rs:4046-4075
+        # accepts the dict shape
+        # ``{"kind": "sequence", "effects": [<effect_dict>, ...]}``
+        # and recursively parses each child via the same
+        # ``parse_effect`` function. Empty ``effects`` list is legal
+        # (a no-op Sequence) and round-trips on both engines.
+        #
+        # Python's ``Sequence(effects: tuple[Effect, ...])`` from
+        # ``effects/combinators.py:1313`` carries the same shape:
+        # resolves each child effect in order under one composite
+        # trigger. ``Sequence.__post_init__`` enforces at most one
+        # targeting sub-effect (parity-wise, Rust's resolve walks
+        # children in order without that guard, but every probe we
+        # plan against this composer respects the constraint).
+        #
+        # **Recursive translation.** Each ``effects[i]`` is itself
+        # an effect-dict; we recurse into ``_ta_dict_to_python_effect``
+        # to translate it. This unlocks nested composers
+        # (Sequence-in-Sequence, Sequence inside IfYouDo, ...) for
+        # free as long as each leaf arm is on the bridge.
+        #
+        # **Real EoE consumers** unblocked by this arm:
+        # - Uthros Scanship: Sequence{[DrawCards{2}, DiscardSelf{1}]}
+        # - Fell Gravship suffix: Sequence{[Mill{3},
+        #   ReturnCreatureFromYourGraveyardToHand]} (combined with
+        #   the or_spacecraft rider already on the bridge).
+        from mtg_bot.effects.combinators import Sequence
+        children_dicts = eff_dict.get("effects", ())
+        children = tuple(
+            _ta_dict_to_python_effect(child) for child in children_dicts
+        )
+        return Sequence(effects=children)
+    if kind == "if_you_do":
+        # **Phase 5 composer bridge arm (if_you_do).**
+        # Mirrors Rust's ``Effect::IfYouDo { do_action: Box<Effect>,
+        # then_action: Box<Effect> }`` (cards.rs); the parse_effect
+        # arm at cards.rs:3610-3640 accepts the dict shape
+        # ``{"kind": "if_you_do", "do_action": <effect_dict>,
+        # "then_action": <effect_dict>}`` and recursively parses
+        # both nested effects via the same ``parse_effect``
+        # function. Both fields are REQUIRED on the Rust side
+        # (parse raises on missing); the bridge mirrors that
+        # contract — missing either field raises KeyError here.
+        #
+        # Python's ``IfYouDo(do_action: Effect, then_action: Effect)``
+        # from ``effects/combinators.py:560`` carries the same
+        # shape: resolves ``do_action`` first; if it returns False
+        # (signaling the optional / costly side failed), skips
+        # ``then_action``. ``DiscardSelf`` and ``Optional`` already
+        # signal completion via the True/False return — this is
+        # how the IfYouDo gate fires.
+        #
+        # **Recursive translation.** Both ``do_action`` and
+        # ``then_action`` are themselves effect-dicts; we recurse
+        # into ``_ta_dict_to_python_effect`` for each. As with
+        # ``sequence``, this unlocks composer nesting for free.
+        #
+        # **Real EoE consumer** unblocked by this arm:
+        # - Melded Moxite: IfYouDo{cost=DiscardSelf,
+        #   then=DrawCards{2}} -- "Discard a card. If you do, draw
+        #   two cards." The DiscardSelf side returns False on
+        #   empty hand; the then-side fires only when the discard
+        #   succeeded.
+        from mtg_bot.effects.combinators import IfYouDo
+        do_action = _ta_dict_to_python_effect(eff_dict["do_action"])
+        then_action = _ta_dict_to_python_effect(eff_dict["then_action"])
+        return IfYouDo(do_action=do_action, then_action=then_action)
     # === PHASE5_BRIDGE_ARMS_INSERT_ABOVE_THIS_LINE ===
     # New `kind` arms go IMMEDIATELY ABOVE this marker. Do NOT delete the marker.
     # Append-only convention prevents merge collisions when multiple agents add arms in parallel.

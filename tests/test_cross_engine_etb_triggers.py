@@ -1202,5 +1202,228 @@ def test_rust_parser_accepts_return_creature_or_spacecraft_in_triggered_ability(
     assert pid == 0
 
 
+# ===== Phase 5 composer bridge pins (sequence) =====
+#
+# Rust's ``Effect::Sequence { effects: Vec<Effect> }`` carries an
+# ordered list of nested effects; the parse_effect arm at
+# rust/src/cards.rs:4046-4075 recursively parses each child. The
+# bridge mirrors that shape: ``_ta_dict_to_python_effect`` recurses
+# into each ``effects[i]`` dict and wraps the resulting list in
+# ``Sequence([...])``.
+#
+# Real EoE consumers unblocked by this composer:
+#
+#   * Uthros Scanship: Sequence{[DrawCards{2}, DiscardSelf{1}]}
+#   * Fell Gravship suffix: Sequence{[Mill{3},
+#     ReturnCreatureFromYourGraveyardToHand]}
+
+
+def test_bridge_sequence_empty_translates_to_python():
+    """Phase 5 composer bridge: an empty Sequence (no children) is
+    a legal no-op on both engines and round-trips through the bridge.
+    """
+    from mtg_bot.effects.combinators import Sequence
+    from mtg_bot.parity.cross_engine import _ta_dict_to_python_effect
+
+    e = _ta_dict_to_python_effect({"kind": "sequence", "effects": []})
+    assert isinstance(e, Sequence)
+    assert e.effects == ()
+
+
+def test_bridge_sequence_two_children_translates_to_python():
+    """Phase 5 composer bridge: a 2-element Sequence with leaf
+    children translates each child via the same bridge function and
+    preserves order.
+
+    Uthros Scanship's ETB shape: Sequence{[DrawCards{2}, DiscardSelf{1}]}.
+    """
+    from mtg_bot.effects.combinators import Sequence
+    from mtg_bot.effects.generic.discard import DiscardSelf
+    from mtg_bot.effects.generic.draw_mill import DrawCards
+    from mtg_bot.parity.cross_engine import _ta_dict_to_python_effect
+
+    e = _ta_dict_to_python_effect(
+        {
+            "kind": "sequence",
+            "effects": [
+                {"kind": "draw_cards", "count": 2},
+                {"kind": "discard_self", "amount": 1},
+            ],
+        }
+    )
+    assert isinstance(e, Sequence)
+    assert len(e.effects) == 2
+    assert isinstance(e.effects[0], DrawCards)
+    assert e.effects[0].amount == 2
+    assert isinstance(e.effects[1], DiscardSelf)
+    assert e.effects[1].amount == 1
+
+
+def test_bridge_sequence_nested_translates_to_python():
+    """Phase 5 composer bridge: Sequence-in-Sequence nesting works
+    (the recursive translator descends into nested composer dicts).
+    """
+    from mtg_bot.effects.combinators import Sequence
+    from mtg_bot.effects.generic.draw_mill import DrawCards
+    from mtg_bot.effects.generic.life import GainLife
+    from mtg_bot.parity.cross_engine import _ta_dict_to_python_effect
+
+    e = _ta_dict_to_python_effect(
+        {
+            "kind": "sequence",
+            "effects": [
+                {"kind": "gain_life", "amount": 1},
+                {
+                    "kind": "sequence",
+                    "effects": [
+                        {"kind": "draw_cards", "count": 1},
+                        {"kind": "gain_life", "amount": 2},
+                    ],
+                },
+            ],
+        }
+    )
+    assert isinstance(e, Sequence)
+    assert len(e.effects) == 2
+    assert isinstance(e.effects[0], GainLife)
+    assert e.effects[0].amount == 1
+    inner = e.effects[1]
+    assert isinstance(inner, Sequence)
+    assert len(inner.effects) == 2
+    assert isinstance(inner.effects[0], DrawCards)
+    assert inner.effects[0].amount == 1
+    assert isinstance(inner.effects[1], GainLife)
+    assert inner.effects[1].amount == 2
+
+
+def test_rust_parser_accepts_sequence_in_triggered_ability():
+    """Lockstep pin: Rust's parse_effect arm accepts a sequence
+    composer (with nested children) inside a triggered_ability dict.
+    """
+    import mtg_bot_engine
+
+    reg = mtg_bot_engine.Registry()
+    d = {
+        "name": "Phase 5 Bridge Pin — Sequence Composer",
+        "card_types": ["Creature"],
+        "mana_cost": {"generic": 2},
+        "power": 1,
+        "toughness": 1,
+        "triggered_abilities": [
+            {
+                "event": "enters",
+                "predicate": {"kind": "source_is_self"},
+                "effect": {
+                    "kind": "sequence",
+                    "effects": [
+                        {"kind": "draw_cards", "count": 2},
+                        {"kind": "discard_self", "amount": 1},
+                    ],
+                },
+            }
+        ],
+    }
+    pid = reg.register_printing(d)
+    assert pid == 0
+
+
+# ===== Phase 5 composer bridge pins (if_you_do) =====
+#
+# Rust's ``Effect::IfYouDo { do_action: Box<Effect>, then_action:
+# Box<Effect> }`` is the gate-on-completion composer. parse_effect
+# at rust/src/cards.rs:3610-3640 REQUIRES both ``do_action`` and
+# ``then_action`` (no defaults — missing either field raises
+# ValueError). The bridge mirrors that contract: missing fields
+# raise KeyError out of ``_ta_dict_to_python_effect``.
+#
+# Python's ``IfYouDo(do_action: Effect, then_action: Effect)``
+# from ``effects/combinators.py:560`` resolves do_action first; if
+# it returns False (signaling failure / decline), then_action is
+# skipped. ``DiscardSelf`` and ``Optional`` already signal
+# completion via the True/False return — this is how the gate fires.
+#
+# Real EoE consumer unblocked by this composer:
+#
+#   * Melded Moxite: IfYouDo{cost=DiscardSelf, then=DrawCards{2}}
+#     -- "Discard a card. If you do, draw two cards."
+
+
+def test_bridge_if_you_do_translates_to_python():
+    """Phase 5 composer bridge: a basic IfYouDo with simple cost +
+    then-side translates each branch via the recursive translator.
+
+    Melded Moxite's ETB shape: IfYouDo{cost=DiscardSelf{1},
+    then=DrawCards{2}}.
+    """
+    from mtg_bot.effects.combinators import IfYouDo
+    from mtg_bot.effects.generic.discard import DiscardSelf
+    from mtg_bot.effects.generic.draw_mill import DrawCards
+    from mtg_bot.parity.cross_engine import _ta_dict_to_python_effect
+
+    e = _ta_dict_to_python_effect(
+        {
+            "kind": "if_you_do",
+            "do_action": {"kind": "discard_self", "amount": 1},
+            "then_action": {"kind": "draw_cards", "count": 2},
+        }
+    )
+    assert isinstance(e, IfYouDo)
+    assert isinstance(e.do_action, DiscardSelf)
+    assert e.do_action.amount == 1
+    assert isinstance(e.then_action, DrawCards)
+    assert e.then_action.amount == 2
+
+
+def test_bridge_if_you_do_missing_then_action_raises():
+    """Phase 5 composer bridge: missing ``then_action`` field raises
+    out of the bridge — mirrors Rust's parse_effect requiring the
+    field (no default). Same contract for missing ``do_action``;
+    one direction pins the surface symmetrically.
+    """
+    import pytest
+    from mtg_bot.parity.cross_engine import _ta_dict_to_python_effect
+
+    with pytest.raises(KeyError):
+        _ta_dict_to_python_effect(
+            {
+                "kind": "if_you_do",
+                "do_action": {"kind": "discard_self", "amount": 1},
+                # then_action intentionally absent
+            }
+        )
+
+
+def test_rust_parser_accepts_if_you_do_in_triggered_ability():
+    """Lockstep pin: Rust's parse_effect arm accepts an if_you_do
+    composer (with both do/then children) inside a triggered_ability
+    dict.
+    """
+    import mtg_bot_engine
+
+    reg = mtg_bot_engine.Registry()
+    d = {
+        "name": "Phase 5 Bridge Pin — IfYouDo Composer",
+        "card_types": ["Artifact"],
+        "mana_cost": {"generic": 2},
+        "triggered_abilities": [
+            {
+                "event": "enters",
+                "predicate": {"kind": "source_is_self"},
+                "effect": {
+                    "kind": "if_you_do",
+                    "do_action": {
+                        "kind": "discard_self", "amount": 1,
+                    },
+                    "then_action": {
+                        "kind": "draw_cards", "count": 2,
+                    },
+                },
+            }
+        ],
+    }
+    pid = reg.register_printing(d)
+    assert pid == 0
+
+
 # === PHASE5_BRIDGE_PIN_TESTS_INSERT_ABOVE_THIS_LINE ===
 # New bridge-arm pin tests go IMMEDIATELY ABOVE this marker.
